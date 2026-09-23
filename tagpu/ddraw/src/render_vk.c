@@ -11,7 +11,7 @@
  * the `ss` offscreen target and moves TA's surface upload into the backend, 4d
  * deletes route D's window. See research/notes/vulkan-only-plan.md landing 4.
  *
- * WHY THE PRESENT WORKS ON A WINDOW ROUTE A CALLED DEAD. `tools/vkcoexist.c`
+ * WHY THE PRESENT WORKS ON A WINDOW ROUTE A CALLED DEAD. The coexistence probe's
  * route A -- a GL context current on an HWND, then Vulkan on the same one --
  * reads "API ok, pixels dead" on wine 9.0, and that verdict is about GL: its
  * VULKAN half presented 10 of 10 frames. This backend creates no GL context, so
@@ -196,12 +196,6 @@ DWORD WINAPI vk_render_main(void)
             f.game_width    = g_ddraw.width;
             f.game_height   = g_ddraw.height;
             f.vp_x          = g_ddraw.render.viewport.x;
-            /* AND NO `opengl_y_align`, which is the one field the GL lane adds
-               to and this one must not. It is the extra scanline `dd.c:1120`
-               gives WGL so the driver cannot take exclusive mode; a Vulkan
-               frame carrying it would be offset by a pixel. It is also why a
-               previous-build A/B is only valid where that align is 0 -- see
-               render_vk.h. */
             f.vp_y          = g_ddraw.render.viewport.y;
             f.vp_w          = g_ddraw.render.viewport.width;
             f.vp_h          = g_ddraw.render.viewport.height;
@@ -211,14 +205,6 @@ DWORD WINAPI vk_render_main(void)
             f.hdc           = g_ddraw.render.hdc;
             f.frame_counter = fc;
             f.bpp           = g_ddraw.bpp;
-            /* THERE IS NO GL TEXTURE, so this is 0 and every consumer of it
-               must stand down rather than sample name 0. It is the engine's own
-               8-bit frame as an R8 index texture, uploaded by the GL backend
-               before any pass runs; the backend taking that upload over is 4c,
-               and until then `tagpu_terrown.c` and anything else reading it has
-               nothing. 0 is what the fork already hands a non-8bpp frame, so
-               the value is in-contract rather than a sentinel of ours. */
-            f.surface_tex   = 0;
             /* The frame packet, taken ONCE here and handed to every pass
                through the struct; both pointers die at `frame_end`, which is
                unconditional for the reason the reclaim bracket's is. */

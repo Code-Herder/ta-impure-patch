@@ -1099,15 +1099,6 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
         g_ddraw.mouse.rc.bottom = g_ddraw.render.viewport.height + g_ddraw.mouse.y_adjust;
     }
 
-    /* ALWAYS 0 NOW, AND THAT IS AN IDENTITY [landing 11-2]. The extra scanline
-       existed so WGL could not take fullscreen-exclusive mode. The local
-       `nonexclusive` above was assigned in exactly two places, both under
-       `renderer == ogl_render_main`, and the third term of the old condition
-       was that same test -- so on gdi and on Vulkan this branch was already
-       never taken and the field was already 0. render_vk.h says a Vulkan frame
-       carrying the align would be off by a pixel; now nothing can set it. */
-    g_ddraw.render.opengl_y_align = 0;
-
     //dbg_dump_wnd_styles(real_GetWindowLongA(g_ddraw.hwnd, GWL_STYLE), real_GetWindowLongA(g_ddraw.hwnd, GWL_EXSTYLE));
     if (g_config.windowed)
     {
@@ -1239,7 +1230,7 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
 
         if (GetMenu(g_ddraw.hwnd))
         {
-            if (1) // g_config.remove_menu || !g_config.nonexclusive)
+            if (1) // g_config.remove_menu)
             {
                 SetMenu(g_ddraw.hwnd, NULL);
             }
@@ -1867,35 +1858,13 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
             TRACE("     proc_affinity=%08X, system_affinity=%08X\n", proc_affinity, system_affinity);
         }
 
-        
-        if (_strcmpi(g_config.renderer, "openglcore") == 0)
-        {
-            g_config.opengl_core = TRUE;
-        }
-
-        if (tolower(g_config.renderer[0]) == 'd') /* direct3d9, direct3d9on12 */
-        {
-            /* THE DIRECT3D9 LANE IS GONE [the vulkan-only plan, landing 11-1].
-               An ini that still asks for it gets GDI and a log line rather than
-               a null renderer: `renderer=` is read from a file the player owns
-               and old files outlive the code that read them. */
-            {
-                FILE* f = fopen("tagpu.log", "a");
-                if (f) {
-                    fprintf(f, "ddraw: renderer=%s is no longer built -- using gdi\n",
-                            g_config.renderer);
-                    fclose(f);
-                }
-            }
-            g_ddraw.renderer = gdi_render_main;
-        }
-        else if (tolower(g_config.renderer[0]) == 's' || tolower(g_config.renderer[0]) == 'g') /* gdi */
+        if (tolower(g_config.renderer[0]) == 's' || tolower(g_config.renderer[0]) == 'g') /* gdi */
         {
             g_ddraw.renderer = gdi_render_main;
         }
         else if (tolower(g_config.renderer[0]) == 'v') /* vulkan */
         {
-            /* NOTHING IS PROBED HERE, unlike the 'o' case's `oglu_load_dll()`.
+            /* NOTHING IS PROBED HERE.
                Loading an ICD is what `vkCreateInstance` does and it must not
                happen on this path: this runs from the engine's DirectDraw
                creation, under the loader lock on some paths, which is the
@@ -1905,25 +1874,15 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
                still reaching the screen. See render_vk.c. */
             g_ddraw.renderer = vk_render_main;
         }
-        else /* 'o' (opengl, openglcore), auto, and anything unrecognised */
+        else /* auto, and any value this switch does not name */
         {
-            /* THE OPENGL LANE IS GONE AND `auto` IS THE VULKAN ONE [the
-               vulkan-only plan, landing 11-2]. Both spellings used to call
-               oglu_load_dll() here and fall back to GDI; there is no GL
-               backend to load for any more.
-
-               NOTHING IS PROBED, for the reason the 'v' arm above gives at
-               length: bringing up an ICD is vkCreateInstance's job and this
-               path runs from the engine's DirectDraw creation, under the
-               loader lock on some routes. vk_render_main hands the session to
-               gdi_render_main if the lane will not come up, and route F
-               measured that GDI still reaches the screen afterwards -- so the
-               fallback GL took eagerly here is taken late there instead, and
-               an unrecognised `renderer=` still ends at a working picture. */
-            if (tolower(g_config.renderer[0]) == 'o') {
+            /* The Vulkan lane, probed by nothing here for the reason the 'v'
+               arm gives. A value that is not a renderer is logged rather than
+               refused: the game still starts, on the default. */
+            if (_strcmpi(g_config.renderer, "auto") != 0) {
                 FILE* f = fopen("tagpu.log", "a");
                 if (f) {
-                    fprintf(f, "ddraw: renderer=%s is no longer built -- using vulkan\n",
+                    fprintf(f, "ddraw: renderer=%s is not a renderer (auto, vulkan, gdi) -- using vulkan\n",
                             g_config.renderer);
                     fclose(f);
                 }

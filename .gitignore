@@ -37,7 +37,6 @@
 *.o
 *.obj
 *.d
-/tagpu/tagpu.dll
 /tagpu/ddraw/ddraw.dll
 
 # Local Claude session state

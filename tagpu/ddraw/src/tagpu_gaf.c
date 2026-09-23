@@ -34,19 +34,6 @@ static void glog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* THIS FILE NAMES NO GL ENTRY POINT AND MAKES NO GL CALL (11-5e-2b). It held
-   the last one: `glReadPixels`, typedef'd `PFN_READPIXELS` and resolved by
-   `getgl` -- `xwglGetProcAddress` first, then `GetModuleHandleA("opengl32.dll")`
-   -- behind a `fetch_gl` that ran once. Its only consumer was
-   `tagpu_gaf_atlas_mirror_rgb`, the restored twin's read-back, which went with
-   the last lane that published its texels. That `xwglGetProcAddress` was this
-   file's single remaining GL call site, so the file is GL-free now on the
-   narrow AND the wide count (`tools/gl-sites.py`).
-   [The mip-generation and float-parameter typedefs that stood here went in
-   11-5e-2 with `twin_mips`, and the GL_TEXTURE_MAX_LEVEL /
-   GL_TEXTURE_MAX_ANISOTROPY_EXT fallbacks and the TWIN_ANISO alias with the
-   `glTexParameter` calls that were their only users.] */
-
 /* one scratch plane for every atlas: decoding happens only inside
    tagpu_gaf_atlas_get, on the render thread, and the bytes are consumed by
    the upload before the call returns */

@@ -19,9 +19,8 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f);
    All four had NO CALLER in this build [masked scan, 11-5e-1]: their caller was
    render_ogl.c's present loop, deleted in 11-2.
 
-   THE VERB WENT WITH THEM AND IS NOT COMING BACK. `tacli glshot` is a retired
-   stub that fails loudly (`tools/tacli`, `cmd_glshot`), retired by 11-2 for
-   the same reason: it captured a GL framebuffer this process no longer has.
+   THE VERB WENT WITH THEM AND IS NOT COMING BACK. `tacli glshot` no longer
+   exists, for the same reason: it captured a GL framebuffer this process no longer has.
    An earlier draft of this tombstone said it had "a Vulkan answer" -- it does
    not, and a reader acting on that sentence gets a hard error [the 11-5e-1
    review's MEDIUM-4]. What DOES read the offscreen game-res target is

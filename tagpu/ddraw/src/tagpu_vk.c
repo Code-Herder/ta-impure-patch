@@ -3,7 +3,7 @@
 
    ------------------------------------------------------------------ G19a ---
    COEXISTENCE IS SETTLED, AND ONLY ONE OF THE ROADMAP'S THREE ROUTES SURVIVES
-   [MEASURED 2026-09-15, tools/vkcoexist.c + tools/vkcoexist-pixels.sh].
+   [MEASURED 2026-09-15, roadmap §G19a].
    Phase G's kill rule asked whether Vulkan can present on the window
    cnc-ddraw's GL renderer already owns -- `GetDC(hwnd)`, a `SetPixelFormat` on
    it (dd.c) and a 3.3 core context on that DC (render_ogl.c `ogl_create`). The

@@ -202,10 +202,9 @@ per stop. Run it with the venv's python (numpy + PIL):
 ../.venv-undither/bin/python tools/uiwalk.py --inst <i> --res 1024x768 --window 1536x1152 --device --out /tmp/uiwalk-k
 ```
 
-- **The frame-parity mode (`--layer`) cannot run today**: it takes its GL half through
-  `tacli glshot`, which is retired, and the walk fails at the first stop. The inventory walk, the
-  `--device` hit check and `--cycles N` do not depend on it. Moving the parity capture to a window
-  grab is a tool change, not a doc change.
+- **There is no frame-parity mode.** The walk measures the census, the `--device` hit check and
+  `--cycles N`; comparing the presented frame against the engine's surface would be a new mode
+  built on a window grab.
 - `--side core` walks `CORMAIN2`/`CORCOM1`/`2` with the `COR*` pagers on
   `scenarios/tascene-parity-core.json`; the in-game menu is `ARMOPT.GUI` on both sides. After the
   screens the walk types `+clock` and `+bps`, holds SPACE over the commander, opens the menu,

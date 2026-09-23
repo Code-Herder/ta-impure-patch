@@ -3104,10 +3104,7 @@ static int __cdecl before_flip(void* entry_esp)
             gf.game_width    = g_ddraw.width;
             gf.game_height   = g_ddraw.height;
             gf.vp_x          = g_ddraw.render.viewport.x;
-            /* the GL lane draws one row down when `nonexclusive`; render_ogl.c
-               adds this and the snapshot's "viewport" is what `tacli ui click
-               --device` maps through, so dropping it costs a pixel there */
-            gf.vp_y          = g_ddraw.render.viewport.y + g_ddraw.render.opengl_y_align /* provably 0 since landing 11-2 */;
+            gf.vp_y          = g_ddraw.render.viewport.y;
             gf.vp_w          = g_ddraw.render.viewport.width;
             gf.vp_h          = g_ddraw.render.viewport.height;
             gf.win_width     = g_ddraw.render.width;

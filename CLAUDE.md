@@ -7,7 +7,7 @@ in progress. **Landing** — fast-forwarding local `main` — is the act with a 
 
 - **Land one finished unit of work, not one commit.** If the next thing you would do is "…and
   now correct what I just landed", it was not finished. Batch the commits and land once.
-- **Verified by running it**, not by reading it. Both DLLs compiling is not evidence the change
+- **Verified by running it**, not by reading it. The DLL compiling is not evidence the change
   works. For documentation, check the claims against the source *before* landing — no build gate
   catches a wrong statement.
 - **Nothing half-done left behind** — no debug instrumentation, no counters added to chase a bug.
@@ -94,8 +94,7 @@ work" is not an escalation, it is a status update.
 ## Review engine changes before they land
 
 Once per landing (not per commit), on the accumulated branch diff, review at
-**`medium`** when the landing touches **`tagpu/ddraw/**`**, **`tagpu/src/**`** or
-**`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, is
+**`medium`** when the landing touches **`tagpu/ddraw/**`** or **`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, is
 sim-adjacent, **or changes the synchronisation between the game thread and the render thread**.
 
 That last one is not covered by the others and is the reason this line was amended. A change to a

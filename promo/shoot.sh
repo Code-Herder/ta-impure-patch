@@ -84,21 +84,11 @@ fi
 echo "-- window $WIN on $DISPLAY_ID, ${W}x${H}"
 
 # The frame the capture starts on, so the moment can be judged before the clip is
-# spent. `glshot` reads an FBO the fork owns, so it is correct even off-screen.
-# The gamedir comes from tacli, never from a path built here: instances live in
-# the main checkout, so `tagpu/instances/...` resolved against a linked worktree
-# is simply absent -- which is how this quietly wrote no screenshot at all.
-PPM=$("$TACLI" ls --json | python3 -c '
-import json, sys
-for i in json.load(sys.stdin):
-    if i["name"] == sys.argv[1]:
-        print(i["gamedir"] + "/tagpu_gl.ppm")
-        break
-' "$INSTANCE")
-if "$TACLI" glshot "$INSTANCE" >/dev/null 2>&1 && [ -f "$PPM" ]; then
-  ffmpeg -y -v error -i "$PPM" -vf scale=1024:-1 "$OUTDIR/$CLIP-settle.png"
+# spent: the client window itself, grabbed by id, the same pixels x11grab takes.
+if DISPLAY="$DISPLAY_ID" import -window "$WIN" -resize 1024x "$OUTDIR/$CLIP-settle.png" 2>/dev/null; then
+  :
 else
-  echo "-- no settle shot (glshot failed)" >&2
+  echo "-- no settle shot (window grab failed)" >&2
 fi
 
 # 60 fps, not 30: the game presents ~34 unique frames a second, so a 30 fps grab

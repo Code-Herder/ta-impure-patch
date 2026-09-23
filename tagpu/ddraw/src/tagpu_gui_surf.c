@@ -798,23 +798,12 @@ static int atlas_setup(void)
 }
 
 /* WHETHER THIS FRAME CARRIES TA's OWN SURFACE, which is what the mirror's
-   `eng` copy, the strict guard and the layer's guard all really ask. On the GL
-   lane the fork has uploaded it and `f->surface_tex` names that upload; on a
-   lane with no GL there is no texture to name, but the BYTES are where they
-   always were -- `g_ddraw.primary->surface`, which `mir_finish` copies out
-   under g_ddraw.cs and validates against the primary's own geometry. Keying on
-   the texture left the Vulkan twin with no engine frame and it composited
-   nothing at all on the vulkan-only lane, saying so every time: "the hand-over
-   carries no copy of the engine's own frame". [Vulkan-only plan, 4b-3.] */
+   `eng` copy, the strict guard and the layer's guard all really ask. The bytes
+   are `g_ddraw.primary->surface`, which `mir_finish` copies out under
+   g_ddraw.cs and validates against the primary's own geometry, so every frame
+   that reaches this file carries one. */
 static int have_engine_frame(const TAGPU_FRAME* f)
 {
-    /* The `|| tagpu_vk_owns_present()` term was the whole point of 4b-3's fix and
-       it is now the whole function: this file is reached only through
-       `tagpu_overlay_draw`, which runs only from `render_vk.c` after the present
-       latch is set [landing 11-4b]. `f->surface_tex` is kept as the first term
-       because it is the honest question -- a caller that DOES carry an engine
-       frame answers yes for the original reason -- but nothing can make this
-       return 0 today. */
     (void)f;
     return 1;
 }
@@ -3042,9 +3031,8 @@ static void mir_finish(const TAGPU_FRAME* f)
     s_mHand.shadeSerial = s_shadeSerial;
 
     /* THE ENGINE'S OWN FRAME. The composite's bottom layer and its
-       stale-mirror guard both sample it, as `f->surface_tex` -- a GL texture,
-       which is exactly what a second backend cannot have. The bytes behind it
-       are the fork's primary, and they are read HERE under `g_ddraw.cs` for
+       stale-mirror guard both sample it. The bytes are the fork's primary,
+       and they are read HERE under `g_ddraw.cs` for
        the lifetime reason tagpu_pal.c gives for the palette: the game thread
        NULLs `g_ddraw.primary` inside that section and frees the object only
        after leaving it, so a pointer read AND dereferenced inside it is a live

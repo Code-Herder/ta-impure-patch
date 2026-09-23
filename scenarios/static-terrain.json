@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "A frame that does not move: one immobile tower per side parked in opposite corners, camera on empty ground in the middle of the map. Two consecutive glshots are pixel-identical, which is what makes it the oracle for any A/B whose subject is the terrain, the features or the zoom — nothing animates, so every differing pixel is the change under test. Built 2026-09-09 for the 4K zoom-out budget fix.",
+  "description": "A frame that does not move: one immobile tower per side parked in opposite corners, camera on empty ground in the middle of the map. Two consecutive captures of the presented frame are pixel-identical, which is what makes it the oracle for any A/B whose subject is the terrain, the features or the zoom — nothing animates, so every differing pixel is the change under test. Built 2026-09-09 for the 4K zoom-out budget fix.",
   "seed": 20260909,
   "on_error": "abort",
 

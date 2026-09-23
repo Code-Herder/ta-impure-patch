@@ -16,7 +16,7 @@
 
    Debug outputs (G12a exit evidence):
      - colour overlay: scaffold pixels tinted far(blue)->near(red), 55% alpha,
-       drawn over the live frame (capture with tagpu_glshot.trigger);
+       drawn over the live frame (capture it with a window grab);
      - per-unit occlusion PREDICTION in tagpu.log ("scaffold: uNNN ... occl=P%"):
        fraction of the unit's composite rect covered by scaffold pixels nearer
        than the unit's row key. The engine frame must agree.

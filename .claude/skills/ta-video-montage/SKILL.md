@@ -794,7 +794,7 @@ promo/survey-map.py surveyA <outdir> --step 1400 --x0 1600 --x1 5200 \
     --y0 800 --y1 3600 --cell 200
 ```
 
-It walks the camera, `glshot`s each position, classifies every pixel, and prints a
+It walks the camera, grabs the game window at each position, classifies every pixel, and prints a
 world-coordinate grid. **Anteer Strait, measured 2026-09-11: the central island is
 x 3000-4000, y 800-1700, and everything south of y = 1800 is open water.** The
 note in `research/notes/` that said water runs at y 1680-2280 was describing the
@@ -809,8 +809,8 @@ Three traps in doing this at all, each of which produced a confidently wrong map
   `eye 4200 4200` reads back as `(4072, 4210)`.
 * **Survey with `clear_existing: false`.** An empty scenario has no units alive,
   TA declares the game over instantly and drops to the 640x480 shell, and every
-  `glshot` is then a picture of the menu — reported as "0 % water" at every
-  position. The script now refuses a glshot that is not the instance's resolution.
+  grab is then a picture of the menu — reported as "0 % water" at every
+  position. The script refuses a grab that is not the instance's resolution.
 * **Survey with as few units as possible.** Units, wrecks and explosions are not
   blue, so they classify as land: the first attempt at reading the shoreline out
   of a battle screenshot mapped the fleet, and put the island's southern edge 500

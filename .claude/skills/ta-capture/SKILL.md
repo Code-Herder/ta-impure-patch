@@ -12,44 +12,34 @@ sessions. **Fold new lessons back into this file.**
 windowed mode, silence, keys, clicks, camera, skirmish presets. This file covers only
 *observing* what a running instance draws.
 
-> **`tacli glshot` IS RETIRED — read this before following any procedure below.** The OpenGL
-> lane was deleted (the vulkan-only plan, landing 11-2), so there is no GL framebuffer in the
-> process and the verb now fails loudly instead of timing out. **Every `glshot` step in this
-> file is a historical record of how a measurement was taken, not an instruction you can run.**
->
-> What to use instead, in order of preference:
->
-> * **`tacli shot`** — the engine's own 8bpp surface. It was GL-only too and is not any more:
->   since landing 11-2a it is polled from the engine's flip and answers on **every** renderer,
->   gdi and Vulkan included. It shows the engine's frame — UI, and the flat key fill inside the
->   world viewport — so it is the right tool for reading the UI, the shell or a dialog, and the
->   wrong one for judging what a pass drew.
->
->   **On a screen presented exactly ONCE — a loading screen — treat it as unproven.** The
->   trigger is polled at the flip's ENTRY, before the engine copies back buffer → primary, so
->   the poll only ARMS and the capture happens on the trigger family's NEXT pass, one flip
->   later (`screenshot.h` has the two hosts that were tried for it and why both were worse).
->   That costs one pass of latency, bounded by the family's 16 ms gate — and it means a screen
->   that never gets a second flip may never be captured. The single-present case has **not been
->   measured**: a 120-shot sweep through a `scenario load` caught nine distinct live frames and
->   never the loading screen itself.
-> * **recording the live window** (ffmpeg x11grab, below) — the only way to see the composited
->   frame now, on either lane. This is what the "pictures come from the live display" rule in
->   the visual-verification notes already said.
->
-> A measurement that needs "what was actually presented" therefore goes through the display,
-> and the A/B harness paths inside the Vulkan backend (`tagpu_vk_shot.c`), which no `tacli`
-> verb reaches.
+There are two things to capture, and one tool for each:
+
+* **`tacli shot`** — the engine's own 8bpp surface, on every renderer. It shows the engine's
+  frame — UI, and the flat key fill inside the world viewport — so it is the right tool for
+  reading the UI, the shell or a dialog, and the wrong one for judging what a pass drew.
+
+  **On a screen presented exactly ONCE — a loading screen — treat it as unproven.** The
+  trigger is polled at the flip's ENTRY, before the engine copies back buffer → primary, so
+  the poll only ARMS and the capture happens on the trigger family's NEXT pass, one flip
+  later (`screenshot.h` has the two hosts that were tried for it and why both were worse).
+  That costs one pass of latency, bounded by the family's 16 ms gate — and it means a screen
+  that never gets a second flip may never be captured. The single-present case has **not been
+  measured**: a 120-shot sweep through a `scenario load` caught nine distinct live frames and
+  never the loading screen itself.
+* **the window, grabbed by its client id** — the presented frame, our passes included. One
+  frame is `import -window 0x<client>` on the instance's display; video is ffmpeg x11grab
+  `-window_id` (rule 5). There is no in-process capture of the presented frame that a `tacli`
+  verb reaches; the Vulkan backend's own (`tagpu_vk_shot.c`) serves the per-pass A/B levers.
 
 Game dir: an instance's `tagpu/instances/<name>/gamedir/` (cwd of that game; the older
 single-gamedir path `tagpu/gamedir/` still works for a hand-launched run). Trigger files
-are created there; `tacli shot` / `tacli glshot` wrap the two screenshot triggers and
-return the file path, which is preferable to poking triggers by hand.
+are created there; `tacli shot` wraps the screenshot trigger and returns the file path,
+which is preferable to poking the trigger by hand.
 
 Two facts that shape every capture:
 
 - **NATIVE UNITS ARE INVISIBLE IN SURFACE SHOTS** (the engine draws nothing for them) —
-  judge our renderer from GL shots, and engine state (menus, UI, placement boxes) from
+  judge our renderer from window grabs, and engine state (menus, UI, placement boxes) from
   surface shots.
 - **Archive `tagpu.log` before relaunching** (`mv tagpu.log tagpu.runN.log`): numeric
   evidence such as a sub-pixel filmstrip dies with an `rm`.
@@ -58,8 +48,8 @@ Two facts that shape every capture:
 
 | Path | Trigger | What it sees | Output |
 |---|---|---|---|
-| Surface shot | `tagpu_shot.trigger` | the 8bpp ENGINE frame only (pre-GL, no overlays) | `<gamedir>/Screenshots/*.png` at the surface size (640×480 in the shell, the game mode in play). **Broken in game between the window-title landing and 2026-09-07**: the title's `:` and `\|` made an illegal filename and the PNG never appeared; fixed in `screenshot.c` |
-| GL shot | `tagpu_glshot.trigger` | the composed GL frame incl. our overlays | `tagpu/gamedir/tagpu_gl.ppm`, window-sized |
+| Surface shot | `tagpu_shot.trigger` | the 8bpp ENGINE frame only (none of our passes) | `<gamedir>/Screenshots/*.png` at the surface size (640×480 in the shell, the game mode in play). **Broken in game between the window-title landing and 2026-09-07**: the title's `:` and `\|` made an illegal filename and the PNG never appeared; fixed in `screenshot.c` |
+| Window grab | `import -window 0x<client>` (rule 5) | the presented frame, our passes included | png, client-sized |
 | Video | ffmpeg x11grab `-window_id` (below) | the window's OWN content, occluded or not | mkv |
 
 Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
@@ -76,17 +66,14 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
 2. **Never inject keys or clicks with xdotool** — use `tacli keys` / `tacli click`
    (in-process, reliable, session-state-proof). X injection has landed keystrokes in
    the user's unlock dialog. xdotool stays fine for reading geometry and for capture.
-3. **A `glshot` is always whole.** It used to come back mangled — the game in the
-   bottom-left corner of an otherwise garbage frame — whenever the window was not fully
-   on the visible desktop, because `glReadPixels` on the default framebuffer is
-   undefined outside the region that passes the pixel-ownership test, and `tacli`'s
-   tiler used to march windows off the bottom of the screen. Both are fixed (the tiler
-   reads the real display size and wraps; the capture owns its target), so a wrong-
-   looking `glshot` is now evidence of a real rendering bug, not of window placement.
+3. **Every window stays on the visible desktop.** `tacli`'s tiler reads the real display
+   size and wraps into overlapping cells when it runs out, rather than marching windows
+   off an edge (`tile_for` in `tools/tacli`). Keep it that way when placing an instance by
+   hand: the presented frame is only ever captured through the window.
 4. **Geometry: windowed instances are 1:1** — the client area *is* the game
    resolution, so game px == window px and no letterbox maths is needed, and
    `-video_size <w>x<h>` is simply the instance's `res` (grab it by window id, rule 5).
-   `tagpu_gl.ppm` is the same size as the client area. (Legacy fullscreen runs letterbox 4:3 inside 3840×2160 at
+   (Legacy fullscreen runs letterbox 4:3 inside 3840×2160 at
    `+480,0`, scale 4.5, i.e. game px → window px = `(480 + gx*4.5, gy*4.5)`; those
    numbers are 640×480-only and must be recalibrated after any resolution change.)
 5. **Recording video: grab the WINDOW, not a screen region** (2026-09-08).
@@ -101,7 +88,7 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    ```
 
    Measured at 1920×1080 with the game window fully covered by another application and
-   stacked `below` everything: against a `tacli glshot` of the same instance the side
+   stacked `below` everything: against an in-process capture of the same frame the side
    panel and the top bar differ by **0.000 %**, the viewport by 0.02 % — which is the
    fraction of a second between the two captures, not the capture. Take `<display>`
    from `tacli ls --json`'s `display` field; it is per session (`:0` here, `:1` in the
@@ -121,7 +108,7 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    **Lossless, for flicker work**: `libx264rgb -qp 0` costs ~1.8 MB/s at 1080p60 on game
    content and keeps a one-frame artifact from being smeared by the encoder, which
    matters when the detector thresholds on small differences.
-   **CAPTURE AT 60 fps** for flicker hunts — the GL present runs at 60 Hz and a
+   **CAPTURE AT 60 fps** for flicker hunts — the present runs at 60 Hz and a
    one-present dropout (16 ms) aliases invisibly into a 30 fps capture (this
    exact miss produced two false "all clean" verdicts). The user seeing an
    artifact your 30 fps analysis doesn't show = raise the framerate first.
@@ -136,20 +123,12 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    display — so say so before you record. `LockedHint` is **not** a sufficient check: a
    switched-away session reports `LockedHint=no` while GNOME's `mutter guard window`
    (full-screen, `IsViewable`) covers everything, and the capture comes back as blurred
-   wallpaper. Test with one `-frames:v 1 -update 1` grab diffed against a `tacli glshot`;
+   wallpaper. Test with one `-frames:v 1 -update 1` grab diffed against a `-window_id` grab of the same window;
    a mean abs difference of ~1 means you have the window, ~40 the guard. And the client
    rect from `xwininfo -id <client>` (`Absolute upper-left`) is the one to grab, **not**
    the `tacli ls --json` rect, which is the frame — they differed by (14, 49) here.
    **`xwd -id <window>` returns full window content even while the session is locked**
-   (3.1 MB for 1024×768, verified) — the escape hatch when the screen is unavailable, and
-   the reason an in-process `glReadPixels` recorder would make locked 60 Hz capture
-   possible.
-   **None of this applies to `tacli glshot` (2026-09-02).** It renders the frame into an
-   FBO the fork owns and reads *that*, so it never touches the window's back buffer and is
-   correct whether the window is off-screen, covered, or the session is locked or switched
-   away. Verified by moving an instance 49 px off the bottom of the desktop: **0 differing
-   pixels** in the rows that were off-screen. It is the reference a video grab is checked
-   against, and the thing to reach for first when the screen is unavailable.
+   (3.1 MB for 1024×768, verified) — the escape hatch when the screen is unavailable.
 6. **Marker-verified pairs** (engine vs ours): `echo "STRIP <phase> $(date +%s)"
    >> tagpu/gamedir/tagpu.log` before each capture, match PNG mtimes with
    `ls --time-style=+%s`. Blind alternation mislabels rows. Compose panels with

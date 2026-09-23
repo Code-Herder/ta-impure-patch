@@ -140,7 +140,7 @@ int tagpu_vk_armed(void);
      the machinery that used to put it on a window of the lane's own existed
      because "two backends must not both present to one window in one frame";
      with one backend there was nothing to separate, and landing 4d-1 deleted
-     it. Measured as route E in `tools/vkcoexist.c` -- a top-level window that
+     it. Measured as route E of the coexistence probe -- a top-level window that
      never had a GL context or a pixel format presents, on wine 9.0 and on
      Proton 11 (roadmap §G19a).
    * `tagpu_vk.on` STOPS ARMING THE LANE, because the renderer choice already

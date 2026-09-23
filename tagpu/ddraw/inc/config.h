@@ -20,7 +20,6 @@ typedef struct CNCDDRAWCONFIG
     char dll_file_ext[MAX_PATH];
     char game_section[MAX_PATH];
     INIFILE ini;
-    BOOL opengl_core;
 
     /* Optional settings */
 
@@ -32,7 +31,6 @@ typedef struct CNCDDRAWCONFIG
     int maxfps;
     BOOL vsync;
     BOOL adjmouse;
-    char shader[MAX_PATH];
     char renderer[256];
     BOOL devmode;
     BOOL border;
@@ -53,7 +51,6 @@ typedef struct CNCDDRAWCONFIG
     int maxgameticks;
     int limiter_type;
     int minfps;
-    BOOL nonexclusive;
     BOOL singlecpu;
     int resolutions;
     int fixchilds;
