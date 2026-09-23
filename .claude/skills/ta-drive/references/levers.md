@@ -257,7 +257,7 @@ verb except `eye`, `wheel` and `gui` still works.
 
 | lever | what |
 |---|---|
-| `vk.on` | not needed to run the lane; read for `color=r,g,b`, the clear colour (magenta by default; `0,0,0` for a capture) |
+| `vk.on` | not needed to run the lane; read for `color=r,g,b`, the clear colour (black by default; `255,0,255` makes every undrawn pixel a magenta sentinel) |
 | `vk.off` | **ignored** under `renderer=vulkan` (the log says so) |
 | `tagpu_vk.gpus`, `tagpu_vk.cfg` | the GPU row's device list (one launch behind) and choice (`gpu=<name>`) — `references/modules.md` |
 | `ss.off` | the 2x supersample off: the world target is `gw*ss x gh*ss` and is built where the lever is not re-read, so settle it before the launch |

@@ -502,10 +502,13 @@ static void ab_drop(const char* why, int idle)
 }
 
 
-/* The clear colour, `color=r,g,b` in the lever file. Magenta by default: no
-   pixel of TA's palette is pure magenta, so "is the Vulkan lane on screen?" is
-   answered by looking rather than by measuring. */
-static float s_clear[3] = { 1.0f, 0.0f, 1.0f };
+/* The clear colour, `color=r,g,b` in the lever file. BLACK by default, because
+   it is what a player sees wherever nothing draws -- off the map's edge at a
+   zoom-out wider than the map above all, which the engine itself never shows
+   and would leave black. It was magenta until 2026-09-23, a bring-up sentinel
+   (no pixel of TA's palette is pure magenta, so "is the lane on screen?" was
+   answered by looking); that is now opt-in, `tagpu_vk.on=color=255,0,255`. */
+static float s_clear[3] = { 0.0f, 0.0f, 0.0f };
 
 /* ---- the window the surface goes on ---------------------------------------
    THERE IS ONE, AND IT IS THE GAME'S. [The vulkan-only plan, landing 4d-1.]

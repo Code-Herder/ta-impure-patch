@@ -461,7 +461,8 @@ built over its own window.
 
 **Not closed.** At zoom < 1 the eye range is deliberately the engine's own (§2.3c: `d = 0` at
 `z <= 1`), so a view wider than the map can sit past its edge; off-map there is the swapchain
-clear, which is magenta (`tagpu_vk.c`'s `s_clear`). Nothing about that is new — the world passes
+clear, which is black (`tagpu_vk.c`'s `s_clear`; magenta until 2026-09-23, when the owner ruled that
+what a player sees past the map's edge is black). Nothing about that is new — the world passes
 take their level from `tagpu_zoom_lever()`, which never read `s_live` — but the wheel is now a way
 to reach it in one gesture, at `0.25` with the eye against a map edge.
 
@@ -3385,7 +3386,7 @@ failing rather than by saying anything.
 
 | file | what |
 |---|---|
-| `tagpu_vk.on` | arms the lane. Optional token `color=r,g,b` moves the clear colour off the default magenta |
+| `tagpu_vk.on` | arms the lane. Optional token `color=r,g,b` moves the clear colour off the default black (`color=255,0,255` is the bring-up magenta, the "is the lane on screen?" sentinel) |
 | `tagpu_vk.off` | turns the WHOLE module off, the GPU enumeration included — the control for an A/B against a pre-G19 DLL, and it beats `.on` |
 | `tagpu_vk.gpus` | written by the enumeration worker: one line per device, `<flag> <name>`, where the flag is 1 for `DISCRETE_GPU` and 0 otherwise. The menu reads it at the NEXT attach |
 | `tagpu_vk.cfg` | `gpu=<name>` — the player's choice, by NAME so adding or removing a card cannot silently re-point it |
@@ -15099,10 +15100,12 @@ No part of the route reads a pixel.
 
 #### What the frame shows where nothing draws
 
-The lane's clear colour, which is **magenta** (`s_clear` = 1,0,1) unless `color=` in `tagpu_vk.on`
-says otherwise. The plan argued for black as the honest answer; magenta is the louder one and it
-is what the lane already had, so nothing was changed. An operator who wants black arms
-`tagpu_vk.on=color=0,0,0`.
+The lane's clear colour, which is **black** (`s_clear` = 0,0,0) unless `color=` in `tagpu_vk.on`
+says otherwise. It was magenta — the louder answer, and what the lane had from its bring-up — until
+2026-09-23, when the owner ruled for black: the clear is what a player sees past the map's edge at a
+zoom-out wider than the map, where the engine would leave black. An operator who wants the sentinel
+back arms `tagpu_vk.on=color=255,0,255`. Measured the same day at `z = 0.25` with the eye pinned at
+(0,0) on Two Continents, the play defaults on: 0 magenta pixels of 786 432, the off-map field black.
 
 #### Still open, and the first one is a correctness bug in the instrument
 
