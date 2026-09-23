@@ -209,6 +209,28 @@ static void read_cfg(void)
                 amb = (float)atof(p + 4);
             } else if (!_strnicmp(p, "shadows=", 8)) {
                 int m = atoi(p + 8);          /* 0 none, 1 soft, 2 hard (G18b) */
+                /* A PERSISTED `shadows=1` IS MIGRATED TO HARD RATHER THAN
+                   HONOURED, and the distinction matters. Honouring it would
+                   draw nothing (SOFT has had no producer since landing 11 D2,
+                   see shadow_defaults above) and the render-options row, which
+                   no longer offers a Soft stage, would read Off -- so every
+                   player whose cfg was written while SOFT was the default
+                   would silently lose their shadows on upgrading, which is the
+                   opposite of what changing the default was for. A `1` in a
+                   file today is a stale value from a build where Soft existed,
+                   not a choice among the stages this build offers, so it is
+                   carried forward to the nearest thing that draws. Said once,
+                   because a cfg is re-read on every poll.
+                   [Named by the landing review, 2026-09-22.] */
+                if (m == TAGPU_SHADOWS_SOFT) {
+                    static int said;
+                    m = TAGPU_SHADOWS_HARD;
+                    if (!said) {
+                        said = 1;
+                        cplog("classicpp: cfg: shadows=1 (soft) has no producer "
+                              "on this lane -- migrated to hard");
+                    }
+                }
                 if (m >= TAGPU_SHADOWS_OFF && m <= TAGPU_SHADOWS_HARD) s_light.shadows = m;
                 else bad(p);                  /* out of range: the default stands */
             } else if (!_strnicmp(p, "shadowsun=", 10)) {

@@ -633,14 +633,47 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             if (!(st & ST_ALIVE) || (st & ST_EXCLUDED)) continue;
             ue = &s_uScratch[nu];
             fill_unit(ue, ta, u, i, udefCount, udefs);
-            /* the ground cell under the anchor: the shadow's height, and the
-               one feature-grid read a unit needs */
+            /* the ground height under the anchor: the shadow's height, and the
+               one feature-grid read a unit needs.
+
+               IT IS THE ENGINE'S BILINEAR BLEND, NOT THE NEAREST CELL, and the
+               difference is the shadow's whole vertical accuracy on a slope.
+               The engine takes this height from `GetPosHeight 0x485070`, which
+               `0x459252` calls immediately before it blits the shadow; that
+               function splits the position into tile (`sar 4`) and sub-tile
+               fraction (`and 0xF`) on both axes and blends the 2x2
+               neighbourhood, with each of its three steps dividing by 16
+               TOWARD ZERO (`cdq / and edx,0xf / add / sar 4`, which is what C's
+               int `/` does). Publishing the nearest cell instead put the
+               silhouette and the slant up to half a tile's height out on any
+               sloped ground, and made `gy == ay` -- the claim the unit pass
+               rests its zero shift on -- true only on the flat.
+
+               THE BOUND IS THE ENGINE'S OWN, one cell stricter than a plain
+               index check because the blend reads `tx+1` and `ty+1`. Outside
+               it the engine returns -1 and its caller draws the shadow at a
+               nonsense height; we fall back to the nearest cell, which is what
+               this code published before and is a height rather than a
+               sentinel. [Named by the landing review, 2026-09-22.] */
             {
                 int wx = (int)(short)(ue->pos[0] >> 16);
                 int wy = (int)(short)(ue->pos[2] >> 16);
                 int tx = wx >> 4, ty = wy >> 4;
                 if (ptr_ok(fmap) && tx >= 0 && ty >= 0 && tx < mapW && ty < mapH) {
-                    ue->ground_h = *(const unsigned char*)(fmap + ((size_t)ty * mapW + tx) * FT_STRIDE + FT_HEIGHT);
+                    const unsigned char* h00 =
+                        (const unsigned char*)(fmap + ((size_t)ty * mapW + tx) * FT_STRIDE + FT_HEIGHT);
+                    if (tx + 1 < mapW && ty + 1 < mapH) {
+                        int fx = wx & 0xF, fz = wy & 0xF;
+                        int a  = h00[0],            b = h00[FT_STRIDE];
+                        int c  = h00[(size_t)mapW * FT_STRIDE],
+                            d  = h00[(size_t)mapW * FT_STRIDE + FT_STRIDE];
+                        int r0 = a + (b - a) * fx / 16;
+                        int r1 = c + (d - c) * fx / 16;
+                        int hv = r0 + (r1 - r0) * fz / 16;
+                        ue->ground_h = (unsigned char)(hv < 0 ? 0 : hv > 255 ? 255 : hv);
+                    } else {
+                        ue->ground_h = h00[0];
+                    }
                     ue->flags |= TAGPU_PK_U_GROUND;
                 }
                 if (wx >= inL && wx <= inR && wy >= inT && wy <= inB)

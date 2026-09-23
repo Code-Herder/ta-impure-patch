@@ -150,15 +150,15 @@ Resolved from the command table at `.data 0x501D44` (records
 | 2 | 0x0004 | **Shadow** | `0x416550` | `0x459295` — master gate of the whole unit-shadow section |
 | 3 | 0x0008 | **TShadow** | `0x416630` | `0x459324` — required for the completed-unit (translucent) shadow |
 | 4 | 0x0010 | **FShadow** | `0x416660` | `0x46A6ED` — feature shadows |
-
-**Bits 2, 3 and 4 are ONE control from the player's side** [MEASURED 2026-09-22]. TA's own
-Options → Visuals has a single `Shadows` checkbox and it moves all three: the word goes
-`0x000C003F` → `0x000C0023` when it is cleared and back when it is set. So the three gates below
-can never disagree in a game; reproducing the engine's branch (bit2 for everything, bit3 also for
-the completed-unit silhouette) and honouring the player's toggle are the same thing.
 | 5 | 0x0020 | **Shading** | `0x416420` | `0x45874A` — builder picks the shaded/nanoframe rasteriser `0x459C70` |
 | 6 | 0x0040 | Dither | `0x416590` | terrain |
 | 8 | 0x0100 | SwitchAlt | `0x4165C0` | — |
+
+**Bits 2, 3 and 4 are ONE control from the player's side** [MEASURED 2026-09-22]. TA's own
+Options → Visuals has a single `Shadows` checkbox and it moves all three: the word goes
+`0x000C003F` → `0x000C0023` when it is cleared and back when it is set. So the three gates above
+can never disagree in a game; reproducing the engine's branch (bit2 for everything, bit3 also for
+the completed-unit silhouette) and honouring the player's toggle are the same thing.
 
 ### `UnitDefStruct+0x241` (`UnitTypeMask_0`) — FBI boolean bit map
 From the FBI parser run at `0x42C6xx–0x42C8xx` (`GetBool(name)` then

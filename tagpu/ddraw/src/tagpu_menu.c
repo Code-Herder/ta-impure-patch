@@ -922,8 +922,10 @@ static void read_state(void)
     s_stage[R_SS]      = exists(SS_OFF) ? 0 : 1;
     s_stage[R_FPS]     = exists(FPS_ON) ? 1 : 0;
 
-    /* 0 (Off) when the cfg names a value this row does not offer, which is
-       `shadows=1` -- see SHADOW_VAL. Off is what such a cfg draws. */
+    /* 0 (Off) when the cfg names a value this row does not offer. Since the
+       landing review that is no longer reachable for `shadows=1`, which
+       tagpu_classicpp.c's parse migrates to HARD before it ever gets here; the
+       fallback stands for a hand-edited value out of range. */
     s_stage[R_SHADOWS] = 0;
     for (i = 0; i < 2; i++) if (L && SHADOW_VAL[i] == L->shadows) s_stage[R_SHADOWS] = i;
 

@@ -242,8 +242,12 @@ typedef struct TAGPU_GUIQ {
        oscillated and the layer composited nothing at all (a magenta frame).
        This counter asks for the engine's repaint alone, which is the half
        that redraws every gadget as sprites and so carries colour.
-       Monotone, never reset; `repaint_arm` shadows it exactly as it shadows
-       `resets`. */
+       RAISED ON THE RENDER THREAD, shadowed on the GAME thread in
+       `repaint_arm` -- unlike `resets`, which never leaves the game thread, so
+       the two are not the same shape however alike the code reads. Safe by its
+       own construction rather than by that analogy: one writer, one aligned
+       word, monotone, never reset, and read as an inequality against the
+       shadow, so the game thread can be one repaint late and never wrong. */
     volatile unsigned colarm;
     /* GAF ops that fell back to their box's bytes because the sprite's decoded
        plane was not in hand at publish -- which since G19f-7 can only mean the

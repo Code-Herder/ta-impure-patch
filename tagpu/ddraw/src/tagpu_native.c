@@ -2664,8 +2664,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 mask = pu->def_mask;
                 /* a digger never reaches the cached branch: path A tests the
                    structure bit first and then sends a digger to the
-                   COMPLETED branch (0x4592C8), path B tests digger before the
-                   structure bit (0x4594D0) and clips a silhouette inline */
+                   COMPLETED branch at 0x459324 (the digger test itself is
+                   0x4592C8), path B tests digger before the structure bit
+                   (0x4594D0) and clips a silhouette inline */
                 n2->slant = (st & ST_STRUCT) != 0 && !(mask & UD_DIGGER);
                 if (n2->slant) {
                     /* `tagpu_owndraw_structshadow_ours()` WAS THE FIRST TERM
@@ -2750,7 +2751,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            pixels and is what the hand-over carries as `shOffY`. It was deleted
            by landing 11 D3, whose only reader had been the replacement-mesh
            branch; a structure at rest has `gy == ay` and the shift is 0, which
-           is why the field looked inert.
+           is why the field looked inert. That equality holds on a SLOPE only
+           because the packet publishes the engine's own bilinear ground height
+           (`GetPosHeight 0x485070`'s blend) rather than the nearest cell --
+           with the nearest cell it was true on flat ground alone, which is how
+           the landing review found it.
 
            `gnd` is the raw height byte, not a projection of it, and still has
            no reader. Left alone: it is older than this work. */
@@ -3124,14 +3129,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        marker pass reads `damagebars` out of. Bit 2 "Shadow" is the master: a
        player who turns Shadows off in TA's own Options gets none from us
        either. Bit 3 "TShadow" is the SILHOUETTE's alone -- the engine tests it
-       only on the completed-unit branch (0x4592C8) and never on the structure
-       branch, so a structure's slant survives it. Bit 4 "FShadow" is the
+       only on the completed-unit branch, at `0x459324 shr al,0x3 / test al,1`,
+       and never on the structure branch, so a structure's slant survives it. Bit 4 "FShadow" is the
        FEATURE pass's and is not touched here.
 
        THE CLASSIC++ KEY IS THE INNER ONE. `shadows=2` (HARD) is Classic's own
        pair and is the shipped default; `shadows=1` (SOFT) asks for the
        map-anchored depth map instead, which has no producer on this lane --
-       see the note by `s_hardOnly` below. `shadows=0` draws neither. With the
+       see `shadow_defaults()` in tagpu_classicpp.c, which says why and is why
+       HARD is the default. `shadows=0` draws neither. With the
        Classic++ switch OFF the engine's option bits rule alone, exactly as
        they did before Classic++ existed. */
     const TAGPU_LIGHT* cppL = tagpu_classicpp_light();

@@ -237,6 +237,9 @@ static int    s_colReady = 0;
    does not rather than a rate limit -- a repaint that introduces a new entry is
    allowed, 32 in a row is a bug and says so once. */
 static unsigned s_colSettled = 0, s_colSettledSeen = 0, s_colRepaints = 0;
+/* the palette generation `s_colRepaints` was granted for: the budget below is
+   per GENERATION, not per validity edge (see col_ask_repaint) */
+static unsigned s_colRepaintsGen = (unsigned)-1;
 #define COL_REPAINT_MAX 32
 /* THE PALETTE THE RESTORED ART IS RIGHT FOR, and the settle counter of 3.4.
    `s_colPalSeen` distinguishes "never armed" from "armed against serial 0". */
@@ -1117,9 +1120,19 @@ void tagpu_gui_col_ready(int have, unsigned settled)
    colours.
 
    `g_guiq.colarm` IS THE ASK, and it asks for the ENGINE's repaint alone --
-   `tagpu_gui_hook.c`'s `repaint_arm` shadows it exactly as it shadows
-   `g_guiq.resets`, and the repaint redraws every gadget through the leaves, as
-   sprites, which is what carries colour.
+   `tagpu_gui_hook.c`'s `repaint_arm` shadows it and the repaint redraws every
+   gadget through the leaves, as sprites, which is what carries colour.
+
+   IT IS THE ONE COUNTER OF THAT PAIR THAT CROSSES A THREAD, and the earlier
+   wording here ("shadows it exactly as it shadows `g_guiq.resets`") hid that:
+   `resets` is raised and shadowed by the SAME thread, the game thread, while
+   this one is raised HERE, on the render thread, and shadowed on the game
+   thread. What makes that safe is not the `resets` analogy but its own shape:
+   one writer, a single aligned `volatile unsigned`, monotone and never reset,
+   consumed as an inequality against the shadow rather than as a count. The
+   reader can therefore only be one repaint late, never wrong, and a late
+   repaint is the direction that costs nothing -- the art stays indexed one
+   screen longer. [Named by the landing review, 2026-09-22.]
    IT IS NOT A RESEED, and that is a fix rather than a preference: a reseed
    resets the twin store and the UI atlas, which re-arms the restore list,
    which clears the consumer's restored image, which clears this very flag --
@@ -1129,6 +1142,38 @@ void tagpu_gui_col_ready(int have, unsigned settled)
 
    ONCE PER EDGE, never per frame. It fires on 0 -> 1 only, so a session pays
    for one repaint at the arm and one more per palette re-arm. */
+/* ONE REPAINT OUT OF A BUDGET THAT IS PER PALETTE GENERATION, and that is
+   where the bound lives. It used to be reset to 1 on every 0 -> 1 validity
+   edge, which bounded the ordinary settle loop (a repaint adds atlas ENTRIES,
+   the list is appended to, `rlistGen` does not move) and did NOT bound the
+   other one: a repaint that makes the atlas RESEED bumps `rlistGen`, which
+   frees the job, which drops `s_arHave`, which drops validity to 0 and back to
+   1 -- refilling the budget on the way and asking again. That is the same
+   shape as the reseed loop this module already fixed once, and it is why the
+   budget is now keyed to `s_rearms` instead: a validity edge inside one
+   generation spends from the same 32, and only a genuine palette re-arm grants
+   a fresh one. Returns 1 when it actually asked. [Landing review, 2026-09-22.] */
+static int col_ask_repaint(void)
+{
+    if (s_rearms != s_colRepaintsGen) {
+        s_colRepaintsGen = s_rearms;
+        s_colRepaints = 0;
+    }
+    if (s_colRepaints >= COL_REPAINT_MAX) {
+        if (s_colRepaints == COL_REPAINT_MAX) {
+            s_colRepaints++;
+            slog("gui: the restored UI atlas has settled 32 times in one palette "
+                 "generation and the art is still drawing ahead of it - no further "
+                 "repaints are asked for, and whatever is on screen now keeps the "
+                 "indices it has");
+        }
+        return 0;
+    }
+    s_colRepaints++;
+    g_guiq.colarm++;
+    return 1;
+}
+
 static void col_valid_edge(int on)
 {
     static int was = 0;
@@ -1136,10 +1181,9 @@ static void col_valid_edge(int on)
         was = on;
         if (!on) return;
         s_colSettledSeen = s_colSettled;
-        s_colRepaints = 1;
-        g_guiq.colarm++;
-        slog("gui: Classic++ colour is valid - asking the engine for a repaint, because "
-             "art already on a surface keeps the indices it was drawn with");
+        if (col_ask_repaint())
+            slog("gui: Classic++ colour is valid - asking the engine for a repaint, because "
+                 "art already on a surface keeps the indices it was drawn with");
         return;
     }
     if (!on) return;
@@ -1151,17 +1195,7 @@ static void col_valid_edge(int on)
        bounded anyway. */
     if (s_colSettled == s_colSettledSeen) return;
     s_colSettledSeen = s_colSettled;
-    if (s_colRepaints >= COL_REPAINT_MAX) {
-        if (s_colRepaints == COL_REPAINT_MAX) {
-            s_colRepaints++;
-            slog("gui: " "the restored UI atlas has settled " "32" " times and the art is still "
-                 "drawing ahead of it - no further repaints are asked for, and whatever is "
-                 "on screen now keeps the indices it has");
-        }
-        return;
-    }
-    s_colRepaints++;
-    g_guiq.colarm++;
+    col_ask_repaint();
 }
 
 static void restore_step(void)

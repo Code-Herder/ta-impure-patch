@@ -105,6 +105,18 @@
    hand-over counts any draw the published window does not carry and the pass
    stands down on a non-zero count.
 
+   THE HARD SHADOW DOES NOT CHECK THAT THERE IS GROUND UNDER IT, which only
+   shows under a partial arm. The blend is `ONE / ONE_MINUS_SRC_ALPHA` with
+   `depthTest LESS` against a target cleared to 1.0, so it passes wherever the
+   depth buffer is still clear -- and with `native.on` armed and `terr.on` not,
+   that is everywhere the terrain would have been, leaving half-alpha
+   silhouettes hanging over the clear colour. Under the play defaults the
+   terrain always draws, so this is a bench artefact rather than a player's
+   bug, and it is left as one deliberately: the alternative is a depth or
+   stencil dependency between two passes that are otherwise independent, which
+   costs more than it buys for a configuration that exists only to measure.
+   [Named by the landing review, 2026-09-22.]
+
    AND NO PASS HERE DRAWS THE SOFT SHADOW. `tagpu_vk_shadow.c`'s map has had no
    producer since the GL backend went, so `uShadowOn` is 0 on every frame and
    the cast-shadow half of this file's fragment stage is unreachable; the pair

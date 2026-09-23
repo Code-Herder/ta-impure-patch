@@ -1678,7 +1678,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
                 if (took < n)
                     plog(d, "gui: %d of %d new UI restore frames were refused by the "
                             "restorer - they stay indexed until the next generation",
-                         n - took, took);
+                         n - took, n);
             }
         }
         tagpu_gui_col_ready(s_arHave, s_arSettled);
