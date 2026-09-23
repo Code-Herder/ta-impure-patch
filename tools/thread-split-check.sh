@@ -1,6 +1,6 @@
 #!/bin/bash
 # thread-split-check.sh — the build rule of the frame packet exchange
-# (research/notes/frame-packet-exchange.html §10), in census mode since landing 1.
+# (research/notes/frame-packet-exchange.html §10).
 #
 #   tools/thread-split-check.sh [tagpu/ddraw]        # the check: exit 0 clean, 1 offender(s)
 #   tools/thread-split-check.sh --census [tagpu/ddraw]  # print every file that hits, and why
@@ -8,11 +8,10 @@
 # RULE. Only a file on tagpu/ddraw/thread-split.allow may (a) name an engine virtual
 # address, (b) include inc/tagpu_engine.h, (c) probe with IsBad*Ptr, or (d) add an
 # offset to the engine's main pointer. Everything else under src/ and inc/ is checked
-# with its comments stripped, and one hit fails the build. The list is DEFAULT-DENY
-# and started FULL (every file that named engine memory on 2026-09-12, each with its
-# class and its argument); it only shrinks, one line per landing that converts a file,
-# so a conversion's diff shows what left the render thread. Adding a line is the
-# owner's decision, made in a review, never a session's fix for a red build.
+# with its comments stripped, and one hit fails the build. The list is DEFAULT-DENY,
+# each line carrying its file's class and its argument; it only shrinks, one line per
+# converted file, so a conversion's diff shows what left the render thread. Adding a
+# line is the owner's decision, made in a review, never a session's fix for a red build.
 #
 # PATTERNS (perl, case-insensitive, after `/* */` and `//` comments and "string literals"
 # are removed — a log line that names an address dereferences nothing):

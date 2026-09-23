@@ -1,6 +1,6 @@
 #ifndef TAGPU_SUPPRESS_H
 #define TAGPU_SUPPRESS_H
-/* tagpu_suppress.c — G5 render-suppression detour on TA's per-unit draw.
+/* tagpu_suppress.c — a render-suppression detour on TA's per-unit draw.
 
    Installs a single 5-byte E9 JMP detour on DrawUnit 0x45AC20 (pristine TotalA.exe,
    ImageBase 0x400000, md5 8e74a1dffa1f5988624c52048f5b20cd) that makes ONE chosen

@@ -57,7 +57,7 @@ VkImageView tagpu_vk_shadow_view(unsigned frame, uint32_t slot);
 
 /* THE FORMAT THE MAP IS IN, asked of the device and cached. A consumer needs
    it for two things and must not guess at either: whether its COMPARE sampler
-   may be LINEAR (the GL twin's PCF is bilinear, and linear filtering of a depth
+   may be LINEAR (taShadowAt's PCF is bilinear, and linear filtering of a depth
    format is a feature bit, not a given), and what format to give the dummy
    image its descriptor set names on a frame with no map -- which has to be one
    the same sampler is valid against. Exposed rather than re-derived so that the
@@ -69,8 +69,8 @@ VkImageView tagpu_vk_shadow_view(unsigned frame, uint32_t slot);
 VkFormat tagpu_vk_shadow_format(const TAGPU_VKPASS* d, int* linearOk);
 
 /* The map's edge in texels this frame, or 0. The consumers' uShScale carries
-   1/res and comes from the GL twin, so this is for logging and for the A/B
-   dump rather than for arithmetic. */
+   1/res in their own hand-overs (tagpu_terr.h `shScale`), so this is not for
+   arithmetic; nothing in the DLL calls it. */
 int  tagpu_vk_shadow_res(void);
 
 /* Give everything back. Called by the seam from `vk_down`, after its
@@ -110,8 +110,9 @@ void tagpu_vk_shadow_down_paid(const TAGPU_VKPASS* d);
 typedef struct TAGPU_SHADOWHAND {
     unsigned frame;
     int      res;                /* the map's edge in texels, this frame     */
-    float    mat[16];            /* uShadowMat, column-major, as GL got it   */
-    /* the heightfield caster, and the exact index range the GL draw used */
+    float    mat[16];            /* uShadowMat, column-major, as the
+                                    consumers' shaders take it             */
+    /* the heightfield caster, and the exact index range of it to draw */
     const float*    hv;   size_t hnv;
     const unsigned* hi;   size_t hni;
     unsigned        hillsSerial;

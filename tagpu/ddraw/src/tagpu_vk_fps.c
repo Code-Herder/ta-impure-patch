@@ -3,25 +3,23 @@
    buffer, a texture, a shader and a draw with nothing depending on it.
 
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS, and that is the whole point.
-   The geometry comes from tagpu_fps.c through `tagpu_fps_quads` -- the same
-   vertices the GL lane just drew, handed over once -- the texels come from
-   tagpu_text.c's atlas bytes, the same 128 KB the GL texture is uploaded from,
-   and the shader is the same GLSL, translated by tools/spirv-gen.py and
-   compiled to the SPIR-V in inc/spirv/tagpu_fps.spv.h. The frame size and the
-   ink are the same numbers. So when the two captures are compared, what is
-   being compared is two RASTERISERS and nothing else; if this file rebuilt the
-   quads, a 0-px result would only mean two pieces of arithmetic agreed.
+   The geometry comes from tagpu_fps.c through `tagpu_fps_quads` -- the
+   vertices that file built, handed over once -- the texels come from
+   tagpu_text.c's atlas bytes (128 KB), and the shader is tagpu_fps.c's GLSL,
+   translated by tools/spirv-gen.py and compiled to the SPIR-V in
+   inc/spirv/tagpu_fps.spv.h. So this file is the rasteriser and nothing else;
+   if it rebuilt the quads, there would be two pieces of arithmetic to keep in
+   agreement.
 
-   THE Y FLIP IS PIPELINE STATE, NEVER A SOURCE EDIT. GL's clip space has +Y up
-   and Vulkan's has +Y down, so the vertex shader -- which is byte-identical to
-   the GL one below the declarations -- puts the readout at the bottom of the
-   frame, mirrored. The fix is a NEGATIVE VIEWPORT HEIGHT (VK_KHR_maintenance1,
-   core in Vulkan 1.1), which flips the whole clip space once and leaves every
-   shader alone. Flipping the geometry instead would mirror each glyph, because
-   the texture coordinates travel with the vertices; flipping the shader would
-   make it disagree with the twin that is its oracle. If the device does not
-   offer the extension this pass does not arm and says so -- there is no third
-   way that is still a fair comparison.
+   THE Y FLIP IS PIPELINE STATE, NEVER A SOURCE EDIT. The GLSL is written in
+   GL 3.3's clip convention, +Y up, and Vulkan's has +Y down, so the vertex
+   shader puts the readout at the bottom of the frame, mirrored. The fix is a
+   NEGATIVE VIEWPORT HEIGHT (VK_KHR_maintenance1, core in Vulkan 1.1), which
+   flips the whole clip space once and leaves every shader alone. Flipping the
+   geometry instead would mirror each glyph, because the texture coordinates
+   travel with the vertices; flipping the shader would need an edit
+   tools/spirv-gen.py's mechanical transform does not make. If the device does
+   not offer the extension this pass does not arm and says so.
 
    THE ATLAS UPLOAD WAITS FOR THE DEVICE, and that is a fence rather than a
    hope. The atlas changes when a string is rasterised into it for the first
@@ -108,7 +106,7 @@ enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 
 static int s_state;
 static int s_nvThis;                      /* vertices `prepare` left for `record` */
-static int s_abFrame;                     /* this frame is the A/B's (from the GL twin) */
+static int s_abFrame;                     /* this frame is the A/B's (tagpu_fps.c's claim) */
 
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout      s_plo;
@@ -220,9 +218,9 @@ static int build_image(const TAGPU_VKPASS* d)
     VkMemoryRequirements req;
     int type;
 
-    /* R8_UNORM SAMPLED, ASKED FOR RATHER THAN ASSUMED. The GL twin uploads the
-       atlas as GL_R8 and samples `.r`, so the format has to be the single-
-       channel one or the comparison is not of the same texels. It is mandatory
+    /* R8_UNORM SAMPLED, ASKED FOR RATHER THAN ASSUMED. The atlas is one byte
+       per texel and the shader samples `.r`, so the format has to be the
+       single-channel one. It is mandatory
        in the specification's format table, so this has never fired; the day it
        does, the log names it instead of the pass drawing nothing. */
     vkGetPhysicalDeviceFormatProperties(d->pd, VK_FORMAT_R8_UNORM, &fp);
@@ -263,11 +261,9 @@ static int build_image(const TAGPU_VKPASS* d)
     ivi.subresourceRange.layerCount = 1;
     if (vkCreateImageView(d->dev, &ivi, NULL, &s_view) != VK_SUCCESS) return 0;
 
-    /* NEAREST AND CLAMP_TO_EDGE, WHICH IS WHAT THE GL TWIN SETS. A texel of
-       this atlas is a coverage bit and a filtered half of one is neither --
-       tagpu_text.c says so where it sets the GL sampler, and a comparison
-       between two lanes that filtered differently would differ on every glyph
-       edge for a reason that has nothing to do with either rasteriser. */
+    /* NEAREST AND CLAMP_TO_EDGE. A texel of this atlas is a coverage bit
+       (tagpu_text.c writes 255 over 0) and a filtered half of one is neither,
+       so a filtering sampler would move every glyph edge. */
     sci.magFilter = VK_FILTER_NEAREST;
     sci.minFilter = VK_FILTER_NEAREST;
     sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -343,8 +339,8 @@ static int build_pipeline(const TAGPU_VKPASS* d)
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
     /* NO CULLING, which is not laziness: the negative viewport height flips the
-       winding of every triangle, so a cull mode that was right under GL would
-       throw the whole readout away here. The GL twin does not cull either. */
+       winding of every triangle, so a cull mode chosen for the shader's own
+       convention would throw the whole readout away here. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
@@ -352,10 +348,8 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
     memset(&cba, 0, sizeof cba);
-    /* NO BLENDING, because the GL twin does not blend: it `discard`s a texel
-       whose coverage is below a half and writes opaque ink everywhere else.
-       Leaving blending on with whatever state the frame happened to carry is
-       exactly the kind of difference a 0-px comparison exists to catch. */
+    /* NO BLENDING, because the shader does not need it: it `discard`s a texel
+       whose coverage is below a half and writes opaque ink everywhere else. */
     cba.blendEnable = VK_FALSE;
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -372,8 +366,8 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     /* A DEPTH STATE THAT TESTS NOTHING AND WRITES NOTHING, and it is required
        rather than tidy: the seam's render pass carries a depth attachment, and
        a pipeline built against a subpass that has one may not leave
-       pDepthStencilState null. This pass's GL twin calls neither
-       glEnable(GL_DEPTH_TEST) nor glDepthMask, so all three flags are off. */
+       pDepthStencilState null. The readout is a screen-space overlay with no
+       depth of its own, so all three flags are off. */
     memset(&ds, 0, sizeof ds);
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_FALSE;
@@ -523,7 +517,7 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     /* The two uniform blocks, at the std140 offsets the generated header
        prints: `vec2 uFrame` at 0 in the vertex block, `vec3 uInk` at 0 in the
-       fragment one. White ink, which is what the GL twin passes. */
+       fragment one. White ink. */
     ub[0] = (float)fw; ub[1] = (float)fh; ub[2] = 0.0f; ub[3] = 0.0f;
     memcpy(s_umap + (size_t)slot * s_ustride, ub, 16);
     ub[0] = 1.0f; ub[1] = 1.0f; ub[2] = 1.0f; ub[3] = 0.0f;
@@ -609,11 +603,11 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        a build that failed, the vertex bound, a device that would not go idle for
        the atlas upload, an atlas never uploaded -- would leave it claimed while
        this pass drew NOTHING. The seam would then capture a bare clear and
-       report every text pixel as differing: a port failure that is really an
-       oracle failure, which is the worst kind of
-       answer an oracle can give. Claimed here, the flag means "this pass is
-       about to draw this frame" and nothing weaker; a frame that cannot draw
-       simply loses its half, and `tools/vk-ab.py` says which one is missing. */
+       the diff would report every text pixel as differing: a pass failure
+       that is really a capture failure, which is the worst kind of answer a
+       comparison can give. Claimed here, the flag means "this pass is about
+       to draw this frame" and nothing weaker; a frame that cannot draw simply
+       writes no capture. */
     s_abFrame = ab;
     s_nvThis = nv;
     return 1;
@@ -630,8 +624,8 @@ void tagpu_vk_fps_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (s_state != ST_READY || !s_nvThis) return;
 
     /* THE FLIP, AND IT IS THE WHOLE OF IT. y starts at the bottom and the
-       height is negative, so clip space is turned over once and every ported
-       shader keeps GL's convention without a character changing. */
+       height is negative, so clip space is turned over once and the shader
+       keeps GL 3.3's convention without a character changing. */
     vp.x = 0.0f;
     vp.y = (float)h;
     vp.width = (float)w;
@@ -654,7 +648,7 @@ void tagpu_vk_fps_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_nvThis = 0;
 }
 
-/* 1 on the one frame the GL twin captured its half of the A/B, consumed here so
+/* 1 on the one frame tagpu_fps.c latched the A/B claim for, consumed here so
    the seam captures that frame and no other. See tagpu_fps.h. */
 int tagpu_vk_fps_ab_frame(void)
 {

@@ -5,7 +5,7 @@
    `tagpu_terr_handover` (tagpu_terr.h): the instances are the array the
    gather filled, the uniforms are the numbers the gather computed, the texels
    are tagpu_terr.c's CPU mirrors of the tile atlas and the height grid, and
-   the shader is the same GLSL through tools/spirv-gen.py.
+   the shader is tagpu_terr.c's GLSL through tools/spirv-gen.py.
 
    ---- THE DESIGN, ITEM BY ITEM ----
 
@@ -63,12 +63,13 @@
           frames it takes to clear rather than starting a second retire -- at
           most `slots` frames, and only for back-to-back map changes.
 
-   4. DEPTH. Terrain is the frame's implicit far plane: it tests GL_LESS and
-      WRITES, and everything above it is tested against what it wrote. The
-      range answer is §2.28's: a
+   4. DEPTH. Terrain is the frame's implicit far plane: it tests
+      VK_COMPARE_OP_LESS and WRITES, and everything above it is tested against
+      what it wrote. The range answer is §2.28's: a
       viewport with `minDepth 0.5` / `maxDepth 1.0`, which maps clip z in [0, 1]
-      onto exactly GL's `(z+1)/2`, values and precision included. Never a shader
-      edit -- an edited shader would disagree with the twin that is its oracle.
+      onto exactly GL's `(z+1)/2`, the values the OpenGL renderer this replaced
+      wrote, precision included. Never a shader edit -- tools/spirv-gen.py's
+      transform is mechanical and touches no line of a shader body.
       The pass refuses to arm when the seam's render pass carries no depth
       attachment.
 
@@ -92,12 +93,13 @@
 
    ---- WHAT IT REFUSES ----
 
-   A frame whose twin reports the cast-shadow map on is refused when THIS
-   frame's Vulkan map was not drawn. tagpu_vk_shadow.c draws the map into an
+   A frame whose hand-over reports the cast-shadow map on is refused when THIS
+   frame's map was not drawn. tagpu_vk_shadow.c draws the map into an
    offscreen depth image of its own and this pass SAMPLES it, through bindings
    46 and 47, bound to that slot's view during this slot's own `prepare`; the
-   shadow pass refuses a map it cannot reproduce, which is every frame with a
-   unit caster in it until the unit pass lands. The 1x1 dummy stays, because
+   shadow pass has no producer today (tagpu_vk_shadow.h) and tagpu_terr.c
+   publishes `shadowOn` as 0, so no frame reaches this refusal. The 1x1 dummy
+   stays, because
    the descriptors must still be valid on a frame with no map.
 
    The Classic++ restored tile atlas is NOT a refusal: a frame this lane has
@@ -188,7 +190,7 @@ static VkDeviceMemory s_qmem;
    its format still has to be one the compare sampler is legal against, which is
    why `build_samplers` asks about this one as well as the map's. */
 #define SHADOW_DUMMY_FMT VK_FORMAT_D16_UNORM
-static int            s_cmpLinear;     /* the compare sampler is the twin's   */
+static int            s_cmpLinear;     /* the compare sampler filters LINEAR  */
 static VkImage        s_shImg;
 static VkDeviceMemory s_shMem;
 static VkImageView    s_shView;
@@ -316,8 +318,8 @@ static SLOT s_slot[TAGPU_VK_SLOTS];
    three above do. tagpu_terr.c clamps its gather to INST_MAX_BYTES / a cell,
    which is this number -- stated here in the terms this file allocates in, so
    that neither file has to be read to trust the other. IT MUST NOT BE TIGHTER
-   THAN THE PRODUCER'S: a pass that refused a cell count the GL twin drew would
-   make the A/B report a rasteriser difference over the whole viewport. */
+   THAN THE PRODUCER'S: a pass that refused a cell count the gather legitimately
+   published would drop the terrain from the whole viewport. */
 #define CELL_MAXBYTES (24u * 1024u * 1024u)
 #define CELL_MAX      ((int)(CELL_MAXBYTES / (TAGPU_TERR_ICOMP * sizeof(short))))
 /* ONE STAGING BUFFER CARRIES ALL THREE SMALL UPLOADS: the palette (256 x 1
@@ -712,8 +714,7 @@ static int build_samplers(const TAGPU_VKPASS* d)
             return 0;
         }
     }
-    /* NEAREST AND CLAMP_TO_EDGE, WHICH IS WHAT EVERY ONE OF THE GL TWIN'S
-       TEXTURES IS SET TO. The atlas is the only one the shader reaches through
+    /* NEAREST AND CLAMP_TO_EDGE. The atlas is the only one the shader reaches through
        the sampler at all -- the palette, the fog grid, the fog LUT and the
        height grid are all texelFetch -- and its texels are palette INDICES,
        which interpolate into numbers that mean nothing in the table. */
@@ -726,9 +727,8 @@ static int build_samplers(const TAGPU_VKPASS* d)
     sci.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     sci.maxLod = 0.0f;
     if (vkCreateSampler(d->dev, &sci, NULL, &s_samp) != VK_SUCCESS) return 0;
-    /* THE COMPARE SAMPLER. The twin's is GL_COMPARE_REF_TO_TEXTURE +
-       GL_LEQUAL with MIN and MAG **LINEAR** --
-       taShadowAt's 16-tap PCF is bilinear, and that filtering is half of what
+    /* THE COMPARE SAMPLER: compare LESS_OR_EQUAL, with MIN and MAG **LINEAR**
+       -- taShadowAt's 16-tap PCF is bilinear, and that filtering is half of what
        makes the penumbra smooth -- so this one is LINEAR too.
        LINEAR FILTERING OF A DEPTH FORMAT IS A FEATURE BIT, NOT A GIVEN, and it
        is asked of BOTH formats this sampler is ever used against: the map's
@@ -737,8 +737,8 @@ static int build_samplers(const TAGPU_VKPASS* d)
        on every frame with no map. A device that will not filter either keeps a
        NEAREST compare sampler -- still a valid descriptor, which is all the
        dummy ever needed -- and `s_cmpLinear` 0 stands the pass down on a frame
-       that would actually sample it, because a NEAREST PCF is a different
-       picture from the twin's and the A/B would call it a port failure. */
+       that would actually sample it, because a NEAREST PCF is a blockier
+       penumbra than the one taShadowAt is written to draw. */
     {
         VkFormat mapfmt = tagpu_vk_shadow_format(d, NULL);
         int ok = 1;
@@ -872,9 +872,8 @@ static int build_pipeline(const TAGPU_VKPASS* d)
 
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    /* GL_LESS AND DEPTH WRITES ON, which is what the native pass sets around
-       this draw and what makes terrain the frame's far plane: everything above
-       it is tested against what it wrote. */
+    /* LESS AND DEPTH WRITES ON, which is what makes terrain the frame's far
+       plane: everything above it is tested against what it wrote. */
     memset(&ds, 0, sizeof ds);
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_TRUE;
@@ -1138,15 +1137,15 @@ static int build(const TAGPU_VKPASS* d)
 
 /* THE SCISSOR, in Vulkan framebuffer pixels. Item 6 of the file header: the
    rect arrives in GAME-FRAME pixels measured from the TOP of the frame (the
-   engine's own viewport rect, what the native pass hands glScissor), and a
-   Vulkan framebuffer row 0 is clip-space y = +1, which for this pass is the
-   BOTTOM of the world. So the rect is mirrored vertically on the way in.
+   engine's own viewport rect, as the native pass publishes it), and under this
+   pass's positive viewport height (item 7) a framebuffer's row 0 is the game
+   frame's top row too. So the rect goes in unmirrored.
 
-   It is also SCALED, by the attachment's extent over the game frame's. At the
-   sizes an A/B is run at those are the same number, but the Vulkan window
-   tracks the client rect and the GL lane's own render target need not match it;
-   scaling here keeps the clip on the same part of the world when they differ,
-   which is the same thing the vertex shader's division by uGame does. */
+   It is SCALED, by the attachment's extent over the game frame's. The
+   attachment is the world target (`gw*ss`) or, without one, the swapchain
+   image at client resolution, and neither need be the game frame's size;
+   scaling here keeps the clip on the same part of the world, which is the same
+   thing the vertex shader's division by uGame does. */
 static void terr_scissor(uint32_t w, uint32_t h)
 {
     float sx = s_hGw > 0.0f ? (float)w / s_hGw : 1.0f;
@@ -1157,7 +1156,7 @@ static void terr_scissor(uint32_t w, uint32_t h)
     int hh = (int)(s_hVh * sy + 0.5f);
     int y0 = ytop;                          /* NOT mirrored: item 6 */
 
-    /* NO CLIP WHERE THE GL LANE HAS NONE. `scissorOn` is what the native pass
+    /* NO CLIP WHERE THE NATIVE PASS HAS NONE. `scissorOn` is what the native pass
        actually did, not what it would have liked to. */
     if (!s_hScissorOn || ww <= 0 || hh <= 0) {
         s_scX = 0; s_scY = 0; s_scW = (int)w; s_scH = (int)h;
@@ -1184,8 +1183,8 @@ static void terr_scissor(uint32_t w, uint32_t h)
    frame is spent waiting for it.
 
    A CHANGE OF SERIAL IS A NEW JOB, not a re-feed. The serial moves when the
-   atlas stopped being the one the frame list describes -- a new map, a GL
-   reset, a repaint -- and in every one of those cases the rectangles, the
+   atlas stopped being the one the frame list describes -- a new map, a dropped
+   list, a repaint -- and in every one of those cases the rectangles, the
    palette or the destination is different. Rebuilding is also how the repaint
    reaches the restorer at all. */
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
@@ -1255,8 +1254,8 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
        compare on every frame after the first. */
     if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; s_rgbAtlas.have = 0; return; }
     /* A REPAINT ONLY OVER SOMETHING THIS PASS ACTUALLY PAINTED. The producer's
-       flag says the GL twin's destination already holds a restore; ours is a
-       different image and may have been created moments ago by the resize
+       flag says the destination it describes already holds a restore; ours
+       may have been created moments ago by the resize
        above, in which case there is nothing to recolour and a repaint would
        leave every tile it has not reached yet undefined. `have` is the local
        fact, so it is the one that decides. */
@@ -1378,8 +1377,8 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        memcpy, and a bound that lives in the file that produced the number is a
        bound only while both files are read together. */
     if (!t.atlas) {
-        /* SAID ONCE. The mirrors are asked for on the GL twin's 30-frame poll
-           and cannot be had before the tile set is loaded, so the first frames
+        /* SAID ONCE. The mirrors are asked for on tagpu_terr.c's 30-frame
+           poll and cannot be had before the tile set is loaded, so the first frames
            of a session legitimately arrive without one. */
         if (!s_saidNoMirror) {
             s_saidNoMirror = 1;
@@ -1553,8 +1552,8 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     memcpy(s->smallMap + SMALL_PALOFF, t.pal, 256 * 4);
     memcpy(s->smallMap + SMALL_LUTOFF, t.fogLut, 256);
     /* The grid is one `unsigned short` a cell and the image is RG8: the same
-       two bytes in the same order, which is exactly what the GL twin uploads
-       (GL_RG / GL_UNSIGNED_BYTE over this very buffer). With no grid this frame
+       two bytes in the same order, so the buffer goes up as it is. With no
+       grid this frame
        the image is one zero cell, which the shader never reads -- taFog is
        called only on the `uFog & 1` branch. */
     if (t.fogGrid) memcpy(s->smallMap + SMALL_FOGOFF, t.fogGrid,
@@ -1639,9 +1638,10 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     s_hScissorOn = t.scissorOn;
 
     /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST. A
-       frame claimed and then not drawn would have the seam capture a bare clear
-       against a GL half that has the terrain in it, and report every terrain
-       pixel as differing: a port failure that is really an oracle failure. */
+       frame claimed and then not drawn would have the seam capture a bare
+       clear, and a diff against another build's capture would report every
+       terrain pixel as differing: a pass failure that is really a capture
+       failure. */
     s_abFrame = t.ab;
     s_drawThis = 1;
     return 1;
@@ -1706,13 +1706,13 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* NO Y FLIP, AND THE DEPTH RANGE, AND THEY ARE TWO SEPARATE QUESTIONS.
        This pass writes `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's
        screen-space y, which grows DOWNWARD, so clip -1 is the game frame's top
-       row and a POSITIVE height puts it on row 0 -- where the game's top row is
-       under both APIs. A NEGATIVE height would turn the frame over a second
-       time (item 7).
+       row and a POSITIVE height puts it on row 0, the framebuffer's top row.
+       A NEGATIVE height would turn the frame over a second time (item 7).
        minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1]
-       onto GL's own (z+1)/2 -- see item 4 of the file header; without it every
-       depth VALUE here is twice GL's and the far plane terrain writes is not
-       the one the passes above it are tested against. */
+       onto (z+1)/2 -- see item 4 of the file header. Every world pass maps
+       depth the same way; without it every depth VALUE here would be on a
+       different scale from theirs and the far plane terrain writes would not
+       be the one the passes above it are tested against. */
     vp.x = 0.0f;
     vp.y = 0.0f;
     vp.width = (float)w;

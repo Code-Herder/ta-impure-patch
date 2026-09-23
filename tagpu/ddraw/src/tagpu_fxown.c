@@ -148,7 +148,7 @@ void tagpu_fxown_set_skip(int on)
 }
 
 /* the native effects pass reports each frame it actually gathered; if it
-   stops (overlay off, GL failure, a frame path that never reaches it) the
+   stops (overlay off, a frame path that never reaches it) the
    engine's draw comes back after 90 present frames instead of vanishing */
 static unsigned g_beat = 0, g_beatSfx = 0;
 void tagpu_fxown_beat(unsigned int frame_counter) { g_beat = frame_counter; }

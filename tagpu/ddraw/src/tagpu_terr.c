@@ -32,7 +32,7 @@
 
    The tile set is built by LoadMap and never changes after, so the atlas is
    built ONCE per map — a single R8 texture of 32x32 cells on a 34-texel pitch,
-   64 per row (a GL_TEXTURE_2D_ARRAY is not viable: 5062 tiles on Two Continents
+   64 per row (a 2D array image is not viable: 5062 tiles on Two Continents
    against the usual 2048-layer cap). The spare texel on each side is a
    replicated edge guard, not padding — see CELL_PITCH. A map change is the TILE_SET pointer or its
    count moving. */
@@ -67,8 +67,8 @@
 /* Cells are laid out one texel apart, and that texel is a COPY of the cell's
    last row/column — it is not padding, it is a guard rail. A fragment centre
    that lands exactly on a quad's far edge interpolates u (or v) to exactly u1,
-   and GL_NEAREST resolves that to floor(u1*W) = the FIRST texel of the next
-   cell: at zoom 0.25 with ss=2 a tile is 16 FBO px, so a tile boundary lands
+   and a NEAREST sampler resolves that to floor(u1*W) = the FIRST texel of the next
+   cell: at zoom 0.25 with ss=2 a tile is 16 target px, so a tile boundary lands
    on a pixel centre whenever the cell's game-space top edge is odd, and every
    such row sampled the unrelated tile 64 cells later in the atlas — the blue
    hairlines along tile edges. Duplicating the edge texel makes that sample the
@@ -109,10 +109,10 @@ static int s_log = 0, s_passive = 0, s_over = 0, s_key = DEFAULT_KEY;
 static unsigned s_armCheck = 0;
 
 /* ---- the hand-over to the Vulkan edition, and the A/B lever ----
-   `tagpu_terr.ab` makes this pass draw over a black frame with a cleared depth
-   buffer and read it back ONCE; `s_abFrame` travels to the Vulkan lane with the
-   instances rather than being polled twice on two cadences, so both lanes
-   capture the same frame. See tagpu_terr.h and tagpu_vk_terr.c. */
+   `tagpu_terr.ab` claims ONE Vulkan capture of this pass; `s_abFrame` travels
+   to the Vulkan pass with the instances rather than being polled again on a
+   cadence of its own, so the capture is of the frame the claim was made on.
+   See tagpu_terr.h and tagpu_vk_terr.c. */
 #define ABFILE   "tagpu_terr.ab"
 static int s_ab, s_abDone, s_abFrame;
 static int s_pubHave;                  /* this frame's hand-over is waiting   */
@@ -261,12 +261,12 @@ int tagpu_terr_armed(unsigned frame_counter)
 int tagpu_terr_on(void) { return s_armed > 0; }
 
 /* ---- the atlas -----------------------------------------------------------
-   THE ATLAS IS BUILT WHEN THIS SAYS SO, and nothing else answers that:
-   keying `ensure_atlas`'s already-built test on a GL texture name would
-   rebuild the whole atlas EVERY FRAME on a lane with no GL -- a 5.9 MB
-   calloc and free, the per-tile copy loop, an `IsBadReadPtr` over the tile
-   set, a log line a frame, and an `s_atlasMirrorSerial++` that makes the
-   Vulkan twin re-upload the entire atlas image every frame. */
+   THE ATLAS IS BUILT WHEN THIS SAYS SO, and nothing else answers that: an
+   already-built test that never came true would rebuild the whole atlas EVERY
+   FRAME -- a 5.9 MB calloc and free, the per-tile copy loop, an
+   `IsBadReadPtr` over the tile set, a log line a frame, and an
+   `s_atlasMirrorSerial++` that makes tagpu_vk_terr.c re-upload the entire
+   atlas image every frame. */
 static int    s_atlasBuilt;
 static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
@@ -309,11 +309,12 @@ static unsigned s_hFrame;              /* the frame of that attempt          */
 static int    s_hMeshW, s_hMeshH;      /* the grid it was built from: a failed
                                           rebuild leaves the old mesh, and this
                                           is what keeps it undrawn */
-/* THE CASTER MESH'S CPU MIRROR (Phase G, the shadow pass). The same
+/* THE CASTER MESH'S CPU MIRROR, for the shadow pass. The same
    answer as the atlas's and the height grid's: the very buffers build_hills
-   filled, kept instead of freed, so the Vulkan shadow pass draws the SAME
-   vertices and the SAME index order rather than a second evaluation of
-   build_hills' arithmetic. 19.3 MB on Two Continents (6.4 vertices + 12.9
+   filled, kept instead of freed, so a Vulkan shadow pass would draw these
+   vertices in this index order rather than a second evaluation of
+   build_hills' arithmetic -- but nothing takes them: tagpu_terr_hills_draw
+   has no caller (tagpu_terr.h). 19.3 MB on Two Continents (6.4 vertices + 12.9
    indices) and paid for only while the Vulkan lane is armed --
    `s_mirrorWant`, set from `tagpu_vk_owns_present()` on the arm beat.
    The serial says when they last changed, so the Vulkan lane uploads on a map
@@ -366,7 +367,7 @@ typedef char terr_atlas_consts_unchanged[
    against six vertices of six floats — and that is what lets one frame's
    budget cover a 3840x2160 view at the zoom floor. */
 /* THIS PASS'S TWO SHADERS, AND NEITHER HAS A C REFERENCE. They are a
-   BUILD INPUT, not dead GL code: `tools/spirv-gen.py` reads them out of the
+   BUILD INPUT, not dead code: `tools/spirv-gen.py` reads them out of the
    PREPROCESSED translation unit under the manifest names tagpu_terr::VS and
    tagpu_terr::FS, and generates the SPIR-V `tagpu_vk_terr.c` draws the terrain
    with -- so deleting either fails the build, and editing one edits the
@@ -582,13 +583,14 @@ static void build_height(const char* ta, unsigned frame)
    Static: the map's heights never change. Two Continents: 537,600 vertices
    (6.4 MB), 3.2 M indices (12.9 MB), once per map.
 
-   ==== TODO (IMPORTANT): 19 MB of VRAM per map for a pass that is
-   OFF BY DEFAULT and normally never draws. ====
+   ==== TODO (IMPORTANT): 19 MB per map for a mesh nothing draws. ====
    `terrainshadow` defaults to 0 (tagpu_classicpp.c shadow_defaults --
-   the ground self-shadowed itself, renderers.md 2.7b), and the only caller of
-   tagpu_terr_hills_draw was gated on it. This function is
-   NOT gated: build_height calls it unconditionally, so every map pays 6.4 MB
-   of vertices and 12.9 MB of indices that nothing reads.
+   the ground self-shadowed itself, renderers.md 2.7b), and
+   tagpu_terr_hills_draw, the mesh's only reader, has no caller at all
+   (tagpu_terr.h). This function is NOT gated: build_height calls it
+   unconditionally, so every map builds 6.4 MB of vertices and 12.9 MB of
+   indices, kept as the CPU mirror while the Vulkan lane is armed, that
+   nothing reads.
 
    Do NOT fix it by gating the build on the flag. The flag is live -- the cfg
    is re-read while the game runs (read_cfg, and the render-options screen
@@ -1099,8 +1101,8 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
         if (m <= 0) return terr_bail();
         /* AND A CHANGED BOUND INVALIDATES THE ATLAS. The accessor re-asks when
            the GPU picker re-picks a physical device; if the new one is smaller,
-           an atlas laid out against the old bound is one the twin's image
-           creation will refuse, and `s_atlasBuilt` would otherwise keep it for
+           an atlas laid out against the old bound is one tagpu_vk_terr.c's
+           image creation will refuse, and `s_atlasBuilt` would otherwise keep it for
            the session. */
         if (s_maxTex > 0 && m != s_maxTex) s_atlasBuilt = 0;
         /* AND A DEVICE THAT CANNOT HOLD THE ATLAS AT ALL IS REFUSED ONCE,
@@ -1253,8 +1255,8 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
    the upload took, or the buffer a texture was uploaded from. */
 /* THE FOG GRID IS COPIED, NOT ALIASED. `v->fogGrid` points INSIDE a frame-packet
    slot, and tagpu_packet.h gives both packet pointers a lifetime that ends at
-   tagpu_packet_frame_end() -- which render_ogl.c calls BEFORE it runs the
-   Vulkan lane, so a pointer handed on from here is read past its contract. An
+   tagpu_packet_frame_end() -- which render_vk.c calls BEFORE it runs
+   `tagpu_vk_frame`, so a pointer handed on from here is read past its contract. An
    alias would hold only because the give-back happens at the next acquire,
    which is also where the `poison` lever fills the slot: the one stale read
    that lever cannot see, and outside frame_end's tail==head check as well.
@@ -1262,9 +1264,9 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
    the copy makes the fog grid the same, and makes the file header's "a pass
    reads no engine state" true of the whole hand-over.
 
-   `cells * 2` is the size the GL lane's own glTexImage2D was given for this
-   grid, so the read is bounded by the bound the GL upload already trusts; the
-   1024-a-side cap bounds the ALLOCATION, and the pass re-checks it (FOG_MAXDIM)
+   `cells * 2` is the grid's exact length: the packet's acquire refuses a grid
+   whose length is not `cols * rows * 2` (tagpu_packet.c), so the read is
+   bounded by that check; the 1024-a-side cap bounds the ALLOCATION, and the pass re-checks it (FOG_MAXDIM)
    because a bound in one file is a bound only while both are read together. */
 #define FOG_COPY_MAXDIM 1024
 static unsigned short* s_fogCopy;
@@ -1332,8 +1334,8 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     }
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     /* the grid as the fragment shader will read it, and only when it will:
-       `uFog` 0 means taFog is never called and uFogGrid never sampled, which
-       is why the GL lane can leave its own (possibly stale) texture bound. */
+       `uFog` 0 means taFog is never called and uFogGrid never sampled, so no
+       grid is published then. */
     if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&
         v->fogCols <= FOG_COPY_MAXDIM && v->fogRows <= FOG_COPY_MAXDIM) {
         int cells = v->fogCols * v->fogRows;
@@ -1354,23 +1356,22 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        `fog` 1 with a NULL grid would have the Vulkan lane sample a 1x1 image
        while `uFogDim` carried the real size and draw wrong fog, silently.
        Clearing `fog` instead would be just as silent a difference the other
-       way (a lit ring where the twin has none), so the answer is the one this
-       file already gives for the restored atlas and the shadow map: stand down
-       for the frame. The GL lane is untouched either way -- it draws from its
-       own texture and never reads this struct. */
+       way (unfogged ground where the engine's frame is fogged), so the answer
+       is the one this file already gives for the restored atlas and the shadow
+       map: stand down for the frame. */
     fogBad = (s_pub.fog && !s_pub.fogGrid);
     s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists -- the feature
        pass's reasoning (tagpu_feat.c), and terrain covers the whole viewport,
-       so an unclipped Vulkan lane would differ in the entire margin the zoom's
+       so an unclipped Vulkan draw would paint the entire margin the zoom's
        widened gather reaches past it. */
     s_pub.scissorOn = tagpu_native_scissor_on();
     s_pub.ss = v->ss;
     /* THE A/B FLAG LIVES EXACTLY ONE FRAME. The Vulkan lane takes the hand-over
        later in this same render-thread iteration, so a flag that was not taken
        was not taken because the lane is down -- and a claim left standing would
-       pair a fresh Vulkan capture with a GL one from some earlier frame. */
+       ride with a later frame's hand-over and capture the wrong frame. */
     s_pub.ab = s_abFrame; s_abFrame = 0;
     /* THE STAMP IS WHAT MAKES THE POINTERS ABOVE SAFE (tagpu_terr.h). Every one
        of them aliases a buffer this file owns and rebuilds, so the hand-over is
@@ -1399,7 +1400,7 @@ int tagpu_terr_handover(TAGPU_TERRHAND* out, unsigned now)
 void tagpu_terr_render(const TAGPU_FXVIEW* v)
 {
     /* THIS PASS DOES NOT DRAW; IT GATHERS AND HANDS OVER. The instances, the
-       numbers and the texels below are the gather's; the Vulkan twin draws them.
+       numbers and the texels below are the gather's; tagpu_vk_terr.c draws them.
        The scaffold (tagpu_scaffold.c) has the same shape. */
     int restored;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous

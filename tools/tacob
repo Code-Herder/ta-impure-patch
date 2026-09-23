@@ -4,15 +4,15 @@
     tools/tacob compile   unit.bos -o unit.cob [-I dir]
     tools/tacob decompile unit.cob -o unit.bos           # or a stock unit: armpw
     tools/tacob dump      unit.cob [Script]              # opcode listing
-    tools/tacob roundtrip --all [--out DIR] [--json]     # the landing-1 gate
-    tools/tacob run       --all                          # the landing-3 gate (VM + director)
+    tools/tacob roundtrip --all [--out DIR] [--json]     # every stock COB, byte for byte
+    tools/tacob run       --all                          # every fixture (VM + director)
     tools/tacob serve     armpw                          # the editor, on a port of its own
     tools/tacob gui       [unit]                         # the same page in a window
 
 BOS is the source and COB the build artifact (research/notes/tacob-design.md).
 Formats: research/notes/file-formats.md §2; the engine the VM reproduces is
 research/notes/exe-reverse-engineering.md §"The COB engine", every rule read
-out of the retail binary. `run` replays landing 2's fixtures under
+out of the retail binary. `run` replays the cobtrace fixtures under
 research/notes/evidence/cobtrace/ and diffs both oracles — the output file is
 byte-identical to the log the game wrote. The code shapes below were
 measured over the 278 stock COBs on 2026-09-07 and are what `roundtrip`
@@ -56,7 +56,7 @@ from pathlib import Path
 #
 # Two layouts. In the checkout this file sits next to everything it ships and
 # one directory below what it writes. In the packaged folder (PyInstaller
-# onedir, landing 5) the shipped files are extracted beside the executable and
+# onedir) the shipped files are extracted beside the executable and
 # `sys._MEIPASS` names that directory, while a project written under
 # `Program Files` would not be writable at all. So: everything the tool *ships*
 # hangs off HERE, everything the *user* writes hangs off `user_dir()`.
@@ -2544,7 +2544,7 @@ class ReplayWorld(UnitWorld):
 # `get` reaches the COB object's `vt+0x44` = 0x480770 and `set` its `vt+0x40` =
 # 0x480B20. Both open with `id - 1 > 0x13 -> return`, so the value ids really are
 # 1..20 and anything else is 0 (get) or nothing at all (set). Every rule below was
-# read out of the retail binary this landing; the per-id arithmetic, the field
+# read out of the retail binary; the per-id arithmetic, the field
 # offsets and the helper addresses are in exe-reverse-engineering.md
 # §"`get` and `set` — the twenty value ids".
 
@@ -2916,7 +2916,7 @@ class EditorWorld(UnitWorld):
         self.bits[VALUE_NAMES[vid].lower()] = value & 1
 # --------------------------------------------------------------------------- the lints
 
-# Every rule here is a snag that cost a live run, and each says which note holds
+# Every rule here is a snag a live run hits, and each says which note holds
 # the measurement. They run on the AST, so they see the source the modder typed,
 # not the bytecode; the two the compiler itself refuses (`play-sound`,
 # `map-command`) arrive as errors instead and are listed in LINT_RULES for the
@@ -3168,7 +3168,7 @@ def _err_line(err):
     return int(match.group(1)) if match else 0
 # --------------------------------------------------------------------------- the live director
 
-# Landing 3's director *replays* a fixture's E lines. This one *generates* them:
+# The replay director above *replays* a fixture's E lines. This one *generates* them:
 # a per-class motion sketch drives the unit, and every event it produces is
 # issued through ENGINE_STARTS above, so a synthesised `StartMoving` takes the
 # same entry, with the same runNow, at the same point in the frame as the
@@ -3459,7 +3459,7 @@ class Director:
                 # the whole slew — and its own `signal` kills any earlier copy. Start
                 # one every tick and each new one kills the last before it can arrive,
                 # which is the `full` row of extra-weapons.md snag 1 reproduced
-                # exactly (and what an earlier version of this director did). So:
+                # exactly. So:
                 # one in flight at a time, and a fresh one only once it has answered —
                 # or once the solution has moved further than the module's own
                 # tolerance, which is what AutoAim re-calls the script for. A slow
@@ -3541,7 +3541,7 @@ CLASSES = ["kbot", "tank", "building", "death", "fighter", "gunship", "bomber", 
 
 
 def fixtures_dir() -> Path:
-    """Landing 2's traces, which `run`, `fit-world` and `pose-check` diff against.
+    """The cobtrace fixtures, which `run`, `fit-world` and `pose-check` diff against.
 
     They are a *developer* gate: they live in the checkout and the packaged folder
     does not carry them (they are the game's own output, tens of megabytes, and a
@@ -3631,8 +3631,8 @@ def run_class(cls, pose=True):
         report["pose_note"] = report_note
 
     end = max(ln.tick for ln in lines)
-    # nothing is masked: `Killed`'s uninitialised second argument (the design note
-    # expected to mask it) is one of the E line's own words, so it replays verbatim
+    # nothing is masked: `Killed`'s uninitialised second argument is one of the
+    # E line's own words, so it replays verbatim
     want = [ln.raw for ln in lines]
     got = [l for l in out[1:] if int(l.split("\t")[1]) <= end]
     report["trace_diff"] = first_diff(want, got)
@@ -3950,9 +3950,9 @@ def fbi_float(fbi, key, fallback):
 def fbi_speed(fbi, fallback):
     """World units a second, from the unit's own `MaxVelocity`.
 
-    The class plans below carry ONE speed per class, so every kbot moved at the
-    same pace: ARMPW is 1.8 and ARMCOM 1.2, and the commander was being walked
-    50% too fast. The ratio between units is exact -- it is the field the engine
+    The class plans below carry ONE speed per class, which would walk every kbot
+    at the same pace: ARMPW is 1.8 and ARMCOM 1.2, so a class speed walks the
+    commander 50% too fast. The ratio between units is exact -- it is the field the engine
     itself reads. The **scale** is inferred: `MaxVelocity x SIM_RATE` puts ARMPW
     at 54 against the 60 that was hand-chosen for kbots here, which is the only
     correspondence we have. TA's unit for the field is not documented in these
@@ -4020,8 +4020,8 @@ def slots_from_fbi(fbi, weapons):
         # `commandfire=1` is TA's manual-fire tag -- the D-Gun and its kin. The
         # engine's AutoAim never calls their Aim/Fire scripts; only an explicit
         # player order does. ARMCOM's Weapon3 is ARM_DISINTEGRATOR, so a director
-        # that drives every slot it finds had the commander D-gunning on a loop
-        # forever, which no unit does in a game.
+        # that drove every slot it finds would have the commander D-gunning on a
+        # loop forever, which no unit does in a game.
         if str(spec.get("commandfire", "0")).strip() not in ("0", ""):
             continue
         try:
@@ -4041,9 +4041,9 @@ def weapon_template(n, mount, gun, flare, yaw="<300>", pitch="<200>", flash=150)
     evenly on slots 4..7 (19/18/25/19 shots; extra-weapons.md snag 1).
 
     It turns and returns inside its own tick — no `wait-for-turn`, and therefore
-    no `signal` pair to protect a thread that is not there. The guarantee the wait
-    used to give is `tagpu_weapons.c`'s own arrival gate, which holds fire until
-    the muzzle piece really points at the target."""
+    no `signal` pair to protect a thread that is not there. What the wait would
+    guarantee comes from `tagpu_weapons.c`'s own arrival gate, which holds fire
+    until the muzzle piece really points at the target."""
     return f"""
 // Weapon {n} — the slew-and-return shape (research/notes/extra-weapons.md snag 1).
 // AimWeapon{n} must return inside its tick: a wait here parks one of the eight
@@ -4232,7 +4232,7 @@ class Session:
         try:
             # `ta3do.die()` prints to stderr and raises SystemExit, which
             # `except Exception` lets straight past — so a missing game directory or
-            # an unresolvable model used to take `tacob serve` down with it. Keep
+            # an unresolvable model would take `tacob serve` down with it. Keep
             # what it said; it is the only explanation of why there is no model.
             with contextlib.redirect_stderr(said):
                 ta3do = load_ta3do()
@@ -4659,7 +4659,7 @@ class Server:
         # Whether the picker's answer also becomes the install target. The *page*
         # may say which game folder (a real install, checked before anything is
         # saved); whether `pack` installs into it at all stays the operator's,
-        # which is landing 4's rule that a request may not name where we write.
+        # by the rule that a request may not name where we write.
         self.follow_gamedir = follow_gamedir
         self.httpd = ThreadingHTTPServer((host, port), Handler)
         self.host, self.port = host, self.httpd.server_address[1]
@@ -4765,8 +4765,8 @@ class Server:
                     # unit's own script in whatever state it had reached: after any
                     # aiming, ARMPW's `aiming` static stays 1 and MotionControl keeps
                     # calling `walklegs` (torso locked for the gun) instead of `walk`
-                    # for the rest of the session, so `forward` showed the aim-while-
-                    # moving cycle and looked like it was still fighting. Nothing
+                    # for the rest of the session, so `forward` would show the aim-
+                    # while-moving cycle and look like it is still fighting. Nothing
                     # short of re-running from Create clears a static the script only
                     # clears on its own events.
                     was_playing = s.playing
@@ -4919,13 +4919,12 @@ def read_posedump_vertices(path):
     other half.
 
     `body` is the unit's body turn in AXIS order (x, y, z), ready to hand to
-    `piece_vertex`. A dump written since 2026-09-08 carries it as `body=` — the
-    CACHED triple `Object3do+0x18/+0x1A/+0x1C`, which is what the compose folds
-    into the base piece at `0x45B0DB`. An older dump carries only `yaw=`, the
-    live `unit+0x66`, and `(0, yaw, 0)` is then the best that file supports:
-    that is exactly the omission this checker used to make, so a legacy fixture
-    still reports the residual it always did and `pose_check` says which kind
-    of file it read.
+    `piece_vertex`. A current dump carries it as `body=` — the CACHED triple
+    `Object3do+0x18/+0x1A/+0x1C`, which is what the compose folds into the base
+    piece at `0x45B0DB`. A legacy dump carries only `yaw=`, the live
+    `unit+0x66`, and `(0, yaw, 0)` is then the best that file supports, so a
+    legacy fixture reports a residual and `pose_check` says which kind of file
+    it read.
     """
     body, legacy, pieces, cur = (0, 0, 0), True, [], None
     for line in Path(path).read_text(encoding="latin-1").splitlines():
@@ -4959,20 +4958,17 @@ def pose_check(cls):
     """Rebuild the fixture's posed vertices and diff them against the engine's own.
 
     The residual is in world units, and on a dump that records `body=` it is
-    **zero on every class**. It used to be 4.1 / 7.0 / 48.4 / 77.2 on the tank,
-    fighter, gunship and bomber, and that was blamed on the vertex buffer being
-    a frame or two behind the pose the dump sampled. It was not: this checker
-    passed `(0, yaw, 0)` while the engine folds all three cached body words into
-    the base piece at `0x45B0DB`, and `tagpu_native.c`'s `pose_dump` made the
-    same omission — which is why the two agreed and the agreement looked like
-    corroboration. `[MEASURED 2026-09-08]` recovering the missing pitch and roll
-    from each fixture's own base piece (Kabsch on its recorded `node=`/`vbuf=`
-    pairs) takes all eight classes to exactly 0, and independently reproduces
-    the recorded `yaw` on the five that were already 0.
+    **zero on every class**. The engine folds all three cached body words into
+    the base piece at `0x45B0DB`, so `(0, yaw, 0)` alone leaves 4.1 / 7.0 /
+    48.4 / 77.2 on the tank, fighter, gunship and bomber — a residual that looks
+    like the vertex buffer running a frame or two behind the pose and is not.
+    `[MEASURED 2026-09-08]` recovering the missing pitch and roll from each
+    fixture's own base piece (Kabsch on its recorded `node=`/`vbuf=` pairs)
+    takes all eight classes to exactly 0, and independently reproduces the
+    recorded `yaw` on the five that were already 0.
 
-    A fixture written before that date carries no `body=`; it is reported as
-    `legacy` and still measured with `(0, yaw, 0)`, because that is all the file
-    can support."""
+    A fixture with no `body=` is reported as `legacy` and still measured with
+    `(0, yaw, 0)`, because that is all the file can support."""
     folder = fixtures_dir() / cls
     _header, lines = read_cobtrace(folder / "cobtrace.log")
     unit = (lines[0].fields[3] if lines and lines[0].kind == "S" else cls).lower()

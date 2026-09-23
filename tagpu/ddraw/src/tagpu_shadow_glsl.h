@@ -1,5 +1,4 @@
-/* The GLSL of the shadow depth programs: shader source only, with no GL calls
-   beside it.
+/* The GLSL of the shadow depth programs: shader source only.
 
    WHY A HEADER AND NOT A `.c`. `tools/spirv-gen.py` reads its shader sources by
    preprocessing one translation unit per entry in `SOURCES` -- `src/<name>.c` by
@@ -20,7 +19,8 @@
 #define TAGPU_SHADOW_GLSL_H
 
 /* ---- the depth program for the native stream: attributes 4 (world x,
-   PROJECTED z) and 5 (posed height) of tagpu_native.c's VAO, and the
+   PROJECTED z) and 5 (posed height) of tagpu_native.c's unit vertex
+   shader, and the
    caster's three numbers. The world point is the one the unit shader's
    vShW derives -- the same expression, so a unit is consistent with itself
    (renderers.md 2.11): real z = projected z + (altitude + height)/2, and the

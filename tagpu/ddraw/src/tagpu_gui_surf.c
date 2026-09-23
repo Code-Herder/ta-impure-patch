@@ -3,25 +3,30 @@
    Design: research/notes/gui-renderer.md 3.2-3.6.
 
    RENDER THREAD ONLY. Every engine surface the publisher has seeded gets a
-   twin: an RG8 texture the surface's size (R = the palette index, G = the
-   coverage: 1 where a replayed op wrote, 0 where the viewport's key fill
-   erased) behind an FBO. The queue's ops are drained at every present, in
-   order: SEED uploads the bytes, PIXELS uploads a box, SPRITE draws a quad
-   from the UI atlas with the colour key discarded, COPY draws a quad sampling
-   another twin, CLEAR clears a box to coverage 0, FREE drops the twin, RESET
-   drops them all. Then the presented surface's twin is drawn over the frame,
-   palette-resolved through the live palette, wherever its coverage is set —
-   after the world's composite, so UI is above the world and the engine's own
-   pixels remain the fallback beneath (the composite's key rule, unchanged).
+   twin. HERE a twin is a table entry (`TWIN`); its image is tagpu_vk_gui.c's,
+   an R8G8 image the surface's size (R = the palette index, G = the coverage:
+   1 where a replayed op wrote, 0 where none has or a CLEAR erased). The
+   queue's ops are drained at every present, in order, and each one this file
+   applies is recorded as a `TAGPU_GUIOP` in the frame's hand-over, which
+   tagpu_vk_gui.c replays onto its images: SEED makes the twin empty (the
+   engine's bytes do not cross), ASSET seeds it with the loader's bytes,
+   SPRITE draws a quad from the UI atlas with the colour key discarded, STRING
+   stamps TA's glyphs, COPY draws a quad sampling another twin, BAR/RECT/TINT
+   fill, outline and remap a box, CLEAR clears a box to coverage 0, FREE drops
+   the twin, RESET drops them all; PIXELS is dropped and counted. Then the
+   presented surface's twin is
+   drawn over the frame, palette-resolved through the live palette, wherever
+   its coverage is set -- above the world passes, and discarded everywhere
+   else, so the world shows through; nothing of the engine's frame is beneath
+   it (LAY_FS).
 
-   `strict` turns the fallback off for the harness: where the engine's surface
-   holds a UI pixel (outside the viewport, or a non-key pixel inside it) and
-   the twin holds nothing, magenta; the cursor's rect is exempt.
+   `strict` is parsed and published on the hand-over, and the Vulkan layer
+   reads neither it nor `guard`: LAY_FS has no strict harness.
 
    CLASSIC++. Beside the index twin every surface may carry a COLOUR
-   twin -- GL_RGBA8, the same size, COLOR_ATTACHMENT1 on the same FBO -- into
-   which a sprite op writes the UI atlas's RESTORED texel where the atlas has
-   one (alpha 1) and zero elsewhere. A copy carries both channels, which is
+   twin -- VK_FORMAT_R8G8B8A8_UNORM, the same size, attachment 1 of the same
+   framebuffer (tagpu_vk_gui.c `fb2`) -- into which a sprite op writes the UI
+   atlas's RESTORED texel where the atlas has one (alpha 1) and zero elsewhere. A copy carries both channels, which is
    what makes restored art survive the panel's `panel+0xBC` -> frame blit
    (gui-renderer.md 13.2: colour has to be per surface, because art is drawn
    into a retained surface long before it has a screen position). A seed or a
@@ -80,8 +85,7 @@
 #include "tagpu_overlay.h"
 #include "tagpu_pal.h"
 #include "tagpu_surf.h"                    /* the one resolution of the presented palette */
-#include "tagpu_vk.h"                 /* tagpu_vk_owns_present, tagpu_vk_ab_arm:
-                                         which lane this is, and the A/B's arming */
+#include "tagpu_vk.h"                 /* tagpu_vk_ab_arm: the A/B's arming */
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
 #include "ddsurface.h"                  /* g_ddraw.primary->surface/pitch, the composite's
                                            bottom layer as BYTES (dd.h only forward-declares it) */
@@ -240,20 +244,21 @@ static unsigned s_colOps = 0;
 static int    s_sharpW, s_sharpH;       /* its size, = the frame's viewport in window px               */
 static int    s_sharpOn = 0;            /* it exists and may be sampled this frame                     */
 /* ...AND WHETHER ANYTHING IS ACTUALLY IN IT. `s_sharpOn` says the layer
-   exists and is bound, which it is on every frame once it has been made -- so
-   it is the wrong question for a port that does not carry the layer's CONTENT.
-   An EMPTY layer and a DISABLED one composite identically (it is taken only
-   where its alpha says it has coverage, and a cleared one has none anywhere),
-   so the Vulkan lane may draw a frame whose layer is empty and must refuse one
-   whose layer is not. */
+   exists this frame, which it does on every frame that reaches `sharp_begin`'s
+   tail -- so it is the wrong question for a consumer that needs the layer's
+   CONTENT. An EMPTY layer and a DISABLED one composite identically (it is
+   taken only where its alpha says it has coverage, and a cleared one has none
+   anywhere); this is what the hand-over's `sharpOn` carries, and
+   tagpu_vk_gui.c refuses a frame that says coverage and brings no quad for
+   it. */
 static int    s_sharpInk = 0;
 static int    s_sharptest = 0;          /* the harness lever that proves the layer is wired            */
-/* OUR CURSOR'S ANSWER FOR THIS PRESENT, latched here and taken once per frame
-   by the render_ogl.c bracket (tagpu_gui.h has the whole argument). Set only
-   at the tail of a successful sharp_cursor; cleared by the take, so a frame
-   that never reaches this module answers 0 and the engine keeps its cursor. */
-static int s_curInLayer = 0;            /* drawn into the sharp FBO                      */
-static int s_curDrew = 0;               /* ...and that FBO was composited to the screen  */
+/* OUR CURSOR'S ANSWER FOR THIS PRESENT, latched here for
+   `tagpu_gui_cursor_drew_take`, which nothing calls (inc/tagpu_gui.h says why
+   the reader went). Set only at the tail of a successful sharp_cursor; cleared
+   by the take. */
+static int s_curInLayer = 0;            /* recorded into the sharp layer                 */
+static int s_curDrew = 0;               /* ...and that record reached the hand-over      */
 
 int tagpu_gui_cursor_drew_take(void)
 {
@@ -267,12 +272,10 @@ static unsigned s_strMiss = 0;          /* glyphs the cache would not give (the 
 static unsigned s_strReseed = 0;        /* strings that stamped NOTHING and asked for a fresh seed     */
 static unsigned s_strRepack = 0;        /* gathers restarted because the glyph atlas repacked under them */
 /* the TNT's own 252-px minimap picture, uploaded once per map load */
-static unsigned s_mmGenSeen;            /* the generation s_mmTex holds; 0 = nothing        */
-/* THE BAKE HAPPENED, which is not the same as the GL texture existing: the
-   resolve lands in `s_mmPicRgb` for the Vulkan twin whether or not there is a
-   GL lane to upload it on. NOT cleared on a context loss -- the bytes survive
-   one, and `s_mmGenSeen = 0` there already re-enters the block that re-creates
-   the texture. */
+static unsigned s_mmGenSeen;            /* the generation s_mmPicRgb holds; 0 = nothing     */
+/* THE BAKE HAPPENED: the resolve is in `s_mmPicRgb`, which `mir_finish` hands
+   over as `mmPic` for tagpu_vk_gui.c to upload. Never cleared once set; the
+   generation and palette keys beside it are what invalidate a bake. */
 static int      s_mmBaked;
 static int      s_mmTW, s_mmTH;         /* its size in texels                               */
 static int      s_mmBoxSeen[2];         /* the mm_box the standing bake was cropped to      */
@@ -311,7 +314,7 @@ static float  s_k = 1.0f;               /* device px per twin texel: 13.1's k, a
 static float  s_hudS = 1.0f;            /* HUD scale in force this frame (20); 1.0 is the feature off */
 
 /* ----------------------------------------------------------------- shaders */
-/* a quad in surface pixels -> the twin's FBO (row 0 = surface row 0) */
+/* a quad in surface pixels -> the twin's framebuffer (row 0 = surface row 0) */
 /* THESE TEN ARE A BUILD INPUT, NOT CODE THIS FILE RUNS. Nothing here
    references them -- but `tools/spirv-gen.py` reads them out of the
    PREPROCESSED translation unit and generates `inc/spirv/tagpu_gui_surf.spv.h`,
@@ -465,7 +468,7 @@ static const char* CPY_FS =
    `uSrc` IS A SNAPSHOT OF THE TWIN, NOT THE TWIN. `0x4CC8DF` does
    `dst = LUT[row*256 + dst]`, a read-modify-write of the very texels this
    draw writes, and sampling an attachment a draw is writing is undefined in
-   both APIs -- the same rule that makes a self-`PK_COPY` a refusal one file
+   Vulkan -- the same rule that makes a self-`PK_COPY` a refusal one file
    over. So the caller copies the box out first and this samples the copy, at
    the SAME COORDINATES, which is why there is no offset uniform: `gl_FragCoord`
    indexes both.
@@ -568,7 +571,8 @@ static const char* LAY_FS =
     "  if (g.g <= 0.5) return vec4(0.0);\n"
     /* THE KEY IS NOT UI, AND INSIDE THE VIEWPORT IT IS ALL WE EVER MIRROR.
        The publisher hands us a box's bytes verbatim (pub_surface_bytes) and
-       twin_upload stamps coverage 255 on every one of them, key included -- so
+       tagpu_vk_gui.c's upload of them (the SEED/PIXELS case) stamps coverage
+       255 on every one, key included -- so
        any engine drawer still running inside the world viewport publishes a
        rectangle of tagpu_terrown's fill, and without this rule the layer
        resolves index 254 through the palette and paints BRIGHT CYAN, opaque,
@@ -677,20 +681,20 @@ static const char* LAY_FS =
     "  discard; }\n";
 #pragma GCC diagnostic pop
 
-/* THE UI ATLAS IS NOT A GL OBJECT. It is the CPU table every sprite op
+/* THE UI ATLAS IS A CPU TABLE, NOT AN IMAGE. It is what every sprite op
    resolves against -- with no atlas every sprite is `lost` and the surface
    re-seeds (measured: sprites=0, atlas=0/0, lost=816878) -- and
-   `tagpu_gaf_atlas_create` keys on `made` rather than on a GL name, so it is
-   safe to ask for on any lane. Idempotent: the `made` test comes before the
+   `tagpu_gaf_atlas_create` keys on `made`, not on any image existing; the
+   texels reach tagpu_vk_gui.c as the atlas's CPU mirror. Idempotent: the `made` test comes before the
    memset that would clear it, and the memset's other casualty -- the one heap
    buffer `free_buffers` owns -- is handed back rather than dropped; see that
    function's own comment for the one it does NOT own. */
 static int atlas_setup(void)
 {
     if (s_atlas.made) return 1;
-    /* the memset drops `mirror` and `rlist`, which `_lost` keeps across a
-       context loss -- so this hands back BOTH heap buffers first, and clears
-       `rlistWant`/`rlistFailed` with them, or each loss leaks them. The GUI
+    /* the memset drops `mirror` and `rlist`, which `_lost` keeps -- so this
+       hands back BOTH heap buffers first, and clears `rlistWant`/`rlistFailed`
+       with them, or the memset leaks them. The GUI
        atlas never arms a list, so `rlist` is NULL on this path either way, and
        this is the only call site -- `tagpu_gaf_atlas_restore_vk` has three
        callers and none is in this file. `tagpu_gaf_atlas_free_buffers` and
@@ -731,12 +735,11 @@ static void twin_drop(TWIN* t)
     *t = s_twins[--s_ntwins];
 }
 
-/* The colour twin, made by the first op that has colour to put in it: RGBA8
-   at COLOR_ATTACHMENT1 of the same FBO, so one MRT draw writes the index and
-   the colour together and they can never disagree about what a texel holds.
-   Cleared to alpha 0 — nothing is restored until an op says so. */
-/* Indices arrived for the box and they say nothing about colour: drop the
-   colour there so the layer falls back to the palette. */
+/* The colour twin is tagpu_vk_gui.c's, made by the first op that carries
+   `TAGPU_GUICOL_DST`: RGBA8 at attachment 1 of the twin's framebuffer, so one
+   draw writes the index and the colour together and they can never disagree
+   about what a texel holds. Cleared to alpha 0 — nothing is restored until an
+   op says so. */
 static TWIN* twin_make(unsigned surf, int w, int h)
 {
     TWIN* t = twin_find(surf);
@@ -746,19 +749,17 @@ static TWIN* twin_make(unsigned surf, int w, int h)
     t = &s_twins[s_ntwins++];
     memset(t, 0, sizeof *t);
     t->surf = surf; t->w = w; t->h = h;
-    /* THE TEXTURE AND ITS FBO ARE GL; THE ENTRY IS THE TABLE. A twin
-       exists when the table says so, and the Vulkan twin keeps images of
-       its own -- so on a lane with no GL the entry is made, `tex`/`fbo`
-       stay 0, and every `if (t)` that gates a `mir_op` still passes. */
+    /* THE ENTRY IS THE TABLE, AND THE IMAGES ARE THE CONSUMER'S. A twin
+       exists when the table says so -- every `if (t)` that gates a `mir_op`
+       asks this -- and tagpu_vk_gui.c makes its images from the SEED this
+       entry's op carries. */
     return t;
 }
 
-/* rows of indices -> (index, 255) pairs -> the twin's box */
-/* The return is this op's TAGPU_GUIOP::col -- what this
-   function decided about colour, for the mirror to carry rather than decide
-   again. `twin_colour` can refuse (no MRT entry points, an incomplete FBO), so
-   "restored" and "the destination has a colour twin" are two different facts
-   and both are recorded. */
+/* The return is this op's TAGPU_GUIOP::col -- what this function decided
+   about colour, for the mirror to carry rather than decide again: `DST` asks
+   the consumer for a colour plane, `ON` says the texels are restored, and the
+   two are recorded as separate facts. */
 static unsigned char twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
 {
     /* THE DECISION IS ONE FLAG. `s_colValid` carries all three terms (see its
@@ -931,15 +932,6 @@ static unsigned char twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
     return col;
 }
 
-/* THE BOX, ONE PALETTE INDEX, FULLY COVERED. `twin_clear`'s shape with two
-   differences: the index goes in the RED channel (the twin is RG -- index and
-   coverage, see `twin_upload`) and GREEN is 1, because this op COVERS what it
-   fills where a clear uncovers it. */
-/* FOUR INCLUSIVE EDGES, ONE PALETTE INDEX, INTERIOR UNTOUCHED. `twin_fill`'s
-   shape four times over, one scissor per edge, because that is exactly what
-   `0x4BF8C0` does -- and doing it as one fill plus a smaller clear would be
-   wrong, not merely slower: the interior is whatever was already in the twin
-   and the op never wrote it. */
 static void twins_reset(void)
 {
     while (s_ntwins) twin_drop(&s_twins[0]);
@@ -1078,7 +1070,7 @@ static void restore_step(void)
        compare once the list exists -- and `assets=0 -> 1` from the
        render-options row arms it on the next present. */
     if (!tagpu_gaf_atlas_restore_vk(&s_atlas)) { s_colValid = 0; col_valid_edge(0); return; }
-    /* AND THE OTHER LANE HAS TO HAVE SOMETHING TO SAMPLE. Saying restored to a
+    /* AND THE CONSUMER HAS TO HAVE SOMETHING TO SAMPLE. Saying restored to a
        consumer with no restored image is a frame it must refuse WHOLE -- the
        op would write alpha 0 into a twin that keeps it -- so the first two
        seconds of every level would be the store thrashing instead of the art
@@ -1119,20 +1111,20 @@ static void restore_step(void)
 
 /* ------------------------------------------------------------------ drain */
 /* ============================================================================
-   THE VULKAN LANE'S MIRROR of this present's op stream. tagpu_gui.h carries
-   the contract and the reason it is a COPY rather than a pointer into the
-   queue; here is the machinery.
+   THE MIRROR of this present's op stream, which tagpu_vk_gui.c replays.
+   tagpu_gui.h carries the contract and the reason it is a COPY rather than a
+   pointer into the queue; here is the machinery.
 
    RECORDED WHERE EACH OP IS APPLIED, not where it is read. The hand-over says
    what the render half DID -- a sprite whose atlas entry could not be resolved
-   drew nothing here and must draw nothing there, and recording it at the top of
-   the switch would publish an op the GL lane skipped. So every `mir_*` call
-   below sits beside the GL call it mirrors.
+   is applied to nothing here and must draw nothing there, and recording it at
+   the top of the switch would publish an op this file declined. So every
+   `mir_*` call below sits where the op is applied to the twin table.
 
    A FRAME IS ALL OR NOTHING. If the arena or the op array will not grow, the
-   frame's record is abandoned and nothing is published: a truncated op stream
-   applied to a twin store is a DIFFERENT PICTURE, not a smaller one, and the
-   A/B would report it as a rasteriser difference. `s_mirLost` counts it. */
+   frame's record is abandoned and published as `lost`: a truncated op stream
+   applied to a twin store is a DIFFERENT PICTURE, not a smaller one.
+   `s_mirLost` counts it. */
 
 static int       s_mirWant = 0;        /* the Vulkan pass asked for one       */
 /* THE ASSET TOKEN THIS RECORD CARRIES, held back until the record is actually
@@ -1183,7 +1175,7 @@ static TAGPU_GUISDRAW s_mSDraw[TAGPU_GUI_SDRAW_MAX];
 static int       s_mStrAny;            /* a string op was recorded this frame  */
 static unsigned  s_mStrGen;            /* ...at this glyph-atlas generation     */
 /* THE SAME QUESTION ABOUT THE UI ATLAS. A sprite's record carries the atlas
-   rect this lane RESOLVED, and the cursor quad carries one too -- both valid
+   rect this file RESOLVED, and the cursor quad carries one too -- both valid
    only for the generation they were read in. `tagpu_gaf_atlas_put` runs INSIDE
    the drain, so a sprite that fills the atlas recycles it (`atlas_drop`,
    `a->gen++`) in the middle of the very present whose earlier sprites are
@@ -1301,9 +1293,9 @@ static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
     m->nglyph = (unsigned short)n;
     m->alen = (unsigned)n * 8;           /* four shorts a glyph */
     /* THE GENERATION THESE CELLS WERE RESOLVED AT. `twin_string` retries around
-       a repack of ITS OWN string and is correct for itself -- it drew into the
-       GL twin from the texture as it stood. This record does not draw until the
-       drain is over, against the atlas as it stands THEN, so a repack caused by
+       a repack of ITS OWN string and is correct for itself -- it resolved its
+       cells against the glyph atlas as it stood. This record does not draw until
+       the drain is over, against the atlas as it stands THEN, so a repack caused by
        a LATER string in the same present leaves these cells naming cleared
        texels. `mir_finish` compares and loses the frame. */
     if (!s_mStrAny) { s_mStrAny = 1; s_mStrGen = tagpu_text_glyph_gen(); }
@@ -1459,11 +1451,10 @@ static void drain(void)
             if (t) { TAGPU_GUIOP* m;
                      m = mir_op(); if (m) { m->kind = TAGPU_GUIOP_CLEAR; mir_box(m, o); }
                      /* COUNTED HERE, beside the mirror op, as `s_bars`/`s_rects`/
-                        `s_pixels`/`s_seeds` already are -- not inside `twin_clear`,
-                        below that function's lane gate, where the heartbeat would
-                        print `clears=0` while CLEAR ops are mirrored every frame.
-                        An instrument that is pinned at 0 beside live traffic sends
-                        the next session to the wrong function. */
+                        `s_pixels`/`s_seeds` already are: this is the only place
+                        in this file a CLEAR is applied, so a counter anywhere
+                        else would print `clears=0` while CLEAR ops are mirrored
+                        every frame. */
                      s_clears++; }
             break;
         case PK_PIXELS:
@@ -1608,10 +1599,9 @@ static void drain(void)
               if (m) {
                   m->kind = TAGPU_GUIOP_SPRITE; mir_box(m, o);
                   m->ck = o->ck; m->fw = o->fw; m->fh = o->fh; m->col = col;
-                  /* THE RECT THE GL LANE JUST RESOLVED, carried rather than
+                  /* THE RECT THIS FILE JUST RESOLVED, carried rather than
                      looked up again on the other side: a second lookup could
-                     answer differently after a repack and the A/B would be
-                     comparing two atlases. */
+                     answer differently after a repack. */
                   m->u0 = e->u0; m->v0 = e->v0; m->u1 = e->u1; m->v1 = e->v1;
                   mir_atlas_seen();
               } }
@@ -1713,9 +1703,8 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
        `strict`'s exemption) needs it on every path, including the ones below
        that decline to own the cursor */
     cursor_rect(pk, s_curEng);
-    /* `s_atlas.made`: ownership is latched on the ATLAS (see above), not on a
-       GL bring-up -- a lane that brings no GL up would never claim the cursor
-       at all (measured: curs=0,0x0,drawn=0). */
+    /* `s_atlas.made`: ownership is latched on the ATLAS (see above), which is
+       a CPU table and exists whether or not any image does. */
     if (!s_on || s_nocursor || !s_atlas.made) return;
     if (!pk || !pk->cur_rec) return;
     /* the sprite record IS a GAF frame header -- size, hotspot, colour key and
@@ -1744,22 +1733,18 @@ int tagpu_gui_cursor_own(float* r)
 }
 
 /* ------------------------------------------------------------ sharp layer */
-/* THE SCREEN-SPACE HALF OF 13.2's SHARP LAYER. One RGBA8 texture the size of
-   the frame's viewport in WINDOW pixels — everything of ours at the device's
+/* THE SCREEN-SPACE HALF OF 13.2's SHARP LAYER. One RGBA8 image (tagpu_vk_gui.c)
+   the size of the frame's viewport in WINDOW pixels — everything of ours at the device's
    resolution (13.1) — cleared at every present and composited above the 1x
    mirror wherever its alpha says it has coverage.
 
    ROW 0 IS THE VIEWPORT'S TOP ROW, and it is the LAYER SHADER that makes it
-   so: it samples this texture with the same top-down `uv` it indexes the twin
-   with. Nothing about an FBO flips anything -- glScissor's y is measured from
-   the framebuffer origin here exactly as it is on the window, and that origin
-   is attachment row 0, which is also where NDC y = -1 lands. So a scissor box
-   and a client's geometry agree without help, and a client uses QVS, the very
-   mapping the twins use.
-   `sharptest` checks it (MEASURED 2026-09-09): a square scissored at
-   `h - 64`, on the assumption that a scissor is bottom-up like the window's,
-   comes out at the foot of the screen, and so does a quad through a shader
-   that adds a flip. There is no flip.
+   so: it samples this image with the same top-down `uv` it indexes the twin
+   with. Attachment row 0 is where NDC y = -1 lands, so a client's geometry
+   needs no flip, and a client uses QVS, the very mapping the twins use.
+   `sharptest` checks it: its square belongs at the top-left. [MEASURED
+   2026-09-09 on the OpenGL layer this replaced: a quad through a shader that
+   adds a flip comes out at the foot of the screen.] There is no flip.
 
    Its clients are the cursor (13.5) and the minimap (13.6). `sharptest` is
    what makes an empty layer testable — without it the gate cannot tell a
@@ -1778,19 +1763,18 @@ int tagpu_gui_cursor_own(float* r)
    the first message) it falls back to the engine's own position at the centre
    of its logical pixel, which is exactly where the engine draws.
 
-   Called from sharp_begin with the layer's FBO bound and cleared. It runs on
-   the warm-up frame too, one frame BEFORE it may draw, because atlasing the
+   Called from sharp_begin, which records into a layer the consumer clears
+   at every present. It runs on the warm-up frame too, one frame BEFORE it may draw, because atlasing the
    shape here is what lets the next tagpu_gui_cursor_frame own it. */
 static void sharp_cursor(const TAGPU_FRAME* f)
 {
     const TAGPU_GAFENT* e;
     float kx, ky;
     int cx = 0, cy = 0, dx, dy, x0, y0, w, h;
-    /* THIS IS A CLIENT OF THE SHARP LAYER, NOT A PURE GL FUNCTION: it resolves
-       the cursor's rect from a mouse position read on THIS thread at THIS
-       instant and records it with `mir_sdraw` for the Vulkan twin, which is
-       the only copy of that answer anyone gets. The quad is GL; the rect, the
-       record and `s_curInLayer` are the lane's. */
+    /* THIS IS A CLIENT OF THE SHARP LAYER: it resolves the cursor's rect from
+       a mouse position read on THIS thread at THIS instant and records it with
+       `mir_sdraw` for tagpu_vk_gui.c, which is the only copy of that answer
+       anyone gets. */
     if (!s_curFrame || !s_sharpW || !s_sharpH) return;
     e = tagpu_gaf_atlas_get(&s_atlas, s_curFrame);
     if (!e) {
@@ -1870,12 +1854,12 @@ static void sharp_cursor(const TAGPU_FRAME* f)
               (float)(x0 + w), (float)(y0 + h),
               e->u0, e->v0, e->u1, e->v1, NULL, (int)e->ck);
     s_curDrawn++;
-    /* OUR CURSOR IS IN THE SHARP FBO FROM HERE — which is NOT the same as
-       being on screen, and the difference is what decides whether the engine
-       may draw its own. Only draw_layer samples this layer, and draw_layer
-       returns early when there is no presented twin or its size disagrees with
-       the frame's (a mode change, a context reset, before the first PK_FRAME
-       op drains). On those frames our cursor sits in an FBO nobody reads, so
+    /* OUR CURSOR IS IN THE SHARP LAYER'S RECORD FROM HERE — which is NOT the
+       same as being on screen, and the difference is what decides whether the
+       engine may draw its own. Only the layer composite samples this layer, and
+       draw_layer returns early when there is no presented twin or its size
+       disagrees with the frame's (a mode change, before the first PK_FRAME op
+       drains). On those frames our cursor sits in a layer nobody reads, so
        telling tagpu_cursown the engine may stand down would leave NO cursor at
        all. The layer's own comment already warns that a client here must not
        assume draw_layer ran; this is that warning obeyed. The screen answer is
@@ -1913,8 +1897,8 @@ static void sharp_cursor(const TAGPU_FRAME* f)
    FIRST in-play packet and in no other — carrying 63 KB in every packet of a
    900-a-second stream to serve one bake would be absurd — so the consumer
    copies it out of that packet and keys the copy on the level generation.
-   That copy is also what a GL re-init re-bakes from, which is why it has to
-   outlive the packet that brought it either way.
+   That copy is also what a palette change re-bakes from, which is why it has
+   to outlive the packet that brought it.
 
    The publisher decodes it on the game thread, on the first in-play draw of
    the level -- not on the LOADER thread, which "never publish outside the
@@ -1955,12 +1939,11 @@ static int minimap_pic(const TAGPU_PACKET* pk, const unsigned char** pix,
 
 static void sharp_minimap(const TAGPU_FRAME* f)
 {
-    /* THIS IS A CLIENT OF THE SHARP LAYER, NOT A PURE GL FUNCTION. Two things
-       here are the Vulkan twin's and not GL's: the `mir_sdraw` records, and
-       the CPU BAKE of the minimap picture through the presented palette --
-       `s_mmPicRgb`, which `mir_finish` hands over as `mmPic` and
-       tagpu_vk_gui.c uploads into an image of its own. Baking it only when a
-       GL texture exists would hand the twin a picture it never gets. */
+    /* THIS IS A CLIENT OF THE SHARP LAYER. It produces two things for
+       tagpu_vk_gui.c: the `mir_sdraw` records, and the CPU BAKE of the minimap
+       picture through the presented palette -- `s_mmPicRgb`, which
+       `mir_finish` hands over as `mmPic` and the consumer uploads into an image
+       of its own. */
     const TAGPU_PACKET* pk = f->packet;
     const unsigned char* pic = NULL;
     unsigned gen = 0;
@@ -2035,9 +2018,8 @@ static void sharp_minimap(const TAGPU_FRAME* f)
            it. The combination is a harness one and this is two lines. */
         tagpu_gui_set_minimap_have(pk->level_gen + 1u);
     }
-    /* `s_mmBaked`, NOT `s_mmTex`: the question is whether THIS palette's
-       resolve of THIS map is in `s_mmPicRgb`, and the GL texture is one of
-       the two places that answer is put. */
+    /* the question is whether THIS palette's resolve of THIS map is in
+       `s_mmPicRgb` */
     if (s_mmbase && (gen != s_mmGenSeen || tagpu_pal_serial() != s_mmPalSeen || !s_mmBaked)) {
         /* THE PALETTE THE SCREEN IS SHOWN WITH, not main+0x143A7: tagpu_pal.h
            owns that resolution for the whole DLL, and its serial above is the
@@ -2048,8 +2030,8 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         /* resolved HERE, once per map load and once per palette change, rather
            than per fragment: the sampler has to see colour for the filter above
            to mean anything, and a fade is a run of palette changes that costs a
-           190 KB re-upload each — against 13 356 texels of engine surface this
-           module already uploads every single frame */
+           190 KB re-upload each — against the 126-px engine pair `mir_finish`
+           copies on every frame the minimap is drawn */
         /* THE PICTURE IS PADDED AND THE BOX IS NOT, and drawn whole the right
            of the minimap is a flat blue band. The level's minimap is
            a GAF frame at `main+0x1426B` whose header is a SQUARE 252x252, but
@@ -2116,9 +2098,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         s_mmGenSeen = gen; s_mmPalSeen = tagpu_pal_serial();
         s_mmBaked = 1;
     }
-    /* the program, its uniforms and every texture unit are set by whichever
-       block below actually draws -- `s_mmProg` for the picture, `s_sharpProg`
-       for the box. Only the array bindings are shared. */
     /* THE WHOLE PICTURE INTO THE WHOLE BOX, and that is the engine's own
        mapping rather than a guess: 0x466845 builds a context for the box-sized
        surface and 0x46685F hands the picture straight to the stretch
@@ -2146,9 +2125,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
            climbing — the publisher refused the descriptors, and its own
            `gui: … refused=` counter says so. */
         if (!rg) { s_mmNoEng++; return; }
-        /* `mir_finish` re-reads this pair from the packet for the twin, so the
-           GL texture below is the GL lane's copy and nothing else depends on
-           it. */
         /* how much of the map the engine is hiding right now, in its own
            texels — the number that says whether a run had any fog to mask at
            all. A fully-mapped skirmish reads 0 and proves nothing about the
@@ -2217,24 +2193,18 @@ static void sharp_minimap(const TAGPU_FRAME* f)
 
 static void sharp_begin(const TAGPU_FRAME* f)
 {
-    /* THIS FUNCTION IS THE SHARP LAYER'S FRAME, NOT ITS GL TARGET. It decides
-       `s_sharpOn`/`s_sharpInk` -- which draw_layer hands the Vulkan twin -- and
-       it runs the two clients whose `mir_sdraw` records ARE the twin's copy of
-       the layer. Only the FBO and the clear are GL. */
+    /* THIS FUNCTION IS THE SHARP LAYER'S FRAME. It decides
+       `s_sharpOn`/`s_sharpInk` -- which draw_layer and mir_finish hand to
+       tagpu_vk_gui.c -- and it runs the two clients whose `mir_sdraw` records
+       ARE the layer. The image and its clear are the consumer's. */
     int w = f->vp_w, h = f->vp_h;
     s_sharpOn = 0;
     /* ...AND THE INK WITH IT, on every call. Left standing, a session that once
-       had coverage and then took one of the early returns below (an FBO
-       re-create failing latches `s_sharpFailed`) would publish `sharpOn = 1`
-       with no quads for ever -- which the Vulkan pass reads as "the GL lane has
-       coverage I did not produce" and stops compositing for the session.
-       Re-decided from the two clients' own counters at the tail. */
+       had coverage and then took the early return below would publish
+       `sharpOn = 1` with no quads for ever -- which tagpu_vk_gui.c reads as
+       "coverage I was given no quad for" and composites nothing on every such
+       frame. Re-decided from the two clients' own counters at the tail. */
     s_sharpInk = 0;
-    /* A FAILURE LATCHED here, in `init_gl`'s `s_gl = 2` shape; `sharp_drop()`
-       so without this every present would re-enter the allocation below --
-       generating, sizing and deleting a vp_w x vp_h texture and appending a log
-       line 60 times a second for the rest of the session, which buries the
-       heartbeat. The layer is additive, so staying off costs sharpness only. */
     if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return;
     /* the layer's SPACE is the frame's viewport, and that is true with no
        target to hold it: the clients clamp to it and record device-pixel
@@ -2246,7 +2216,7 @@ static void sharp_begin(const TAGPU_FRAME* f)
            device x = 100. Between them they prove the five things the gate
            cannot otherwise see — the layer exists at the device resolution, it
            composites ABOVE the mirror, alpha is what gates it, row 0 is the
-           top, and SHARP_VS puts a client's GEOMETRY the right way up. It is
+           top, and QVS puts a client's GEOMETRY the right way up. It is
            drawn as quads rather than scissored clears precisely because
            geometry is what the layer's clients use, and a scissor box would
            prove the convention for the one client kind that never needs it. */
@@ -2270,17 +2240,8 @@ static void sharp_begin(const TAGPU_FRAME* f)
         sharp_cursor(f);                /* 13.5's cursor: the layer's first real client */
         s_sharpInk = (s_sharptest || s_curDrawn != c0 || s_mmDrawn != m0) ? 1 : 0;
     }
-    /* THE CLEAR COLOUR IS MODULE-WIDE STATE AND WE OWN IT AT (0,0,0,0).
-       Nothing reads it today; the property is about THIS module's exit
-       condition, not about who consumes it: any future painter inherits
-       whatever we leave.
-       The clear above already ends at (0,0,0,0) on the normal path; this is
-       the statement of the invariant, not a second setter.
-       `sharp_begin` also leaves the VIEWPORT at (0,0,w,h) with the scissor
-       test off and the default framebuffer bound. That is safe only because
-       tagpu_gui_present rebinds the target FBO and the frame's viewport after
-       draw_layer -- which can return early -- so a future client drawing here
-       must not assume draw_layer ran. */
+    /* a future client recording here must not assume draw_layer ran: it can
+       return early */
     s_sharpOn = 1;
 }
 
@@ -2291,13 +2252,12 @@ static void draw_layer(const TAGPU_FRAME* f)
     int L = 0, T = 0, W = 0, H = 0, key;
     int hudPw = 0, hudBh = 0, hudQ8 = 256;
     if (!t || t->w != f->game_width || t->h != f->game_height) return;
-    /* the palette was uploaded in tagpu_gui_present, BEFORE restore_step
-       decided s_colValid. Uploading it again here -- after a drain that can be
-       thousands of ops long, during which the game thread may have set a new
-       one -- would show restored texels resolved through the palette their
-       restore snapshotted beside indexed texels resolved through a NEWER one,
-       which is the "wrong art" 3.4 exists to prevent. One upload per frame,
-       and it is the one s_colValid was decided against. */
+    /* THE PALETTE IS NOT TAKEN HERE. It crosses on the hand-over, read by
+       `mir_finish` (`tagpu_pal_live`/`tagpu_pal_serial`) -- which runs AFTER
+       the drain, while restore_step decided s_colValid against the serial
+       BEFORE it. A drain can be thousands of ops long and the game thread may
+       set a new palette during it, so the two can differ for one frame; see
+       gui-renderer.md 3.4 for why they must not. */
     /* THE TRUE VIEWPORT, from this frame's packet — the rect the game thread
        published, the same one the world composite keyed on this frame. On a
        frame with no in-game packet the LAST one seen stands: the level's tail
@@ -2332,21 +2292,19 @@ static void draw_layer(const TAGPU_FRAME* f)
        whatever the Screen Size row says, resolves to stock and the map is the
        identity there without a signal of its own.
 
-       DERIVED ONCE, HERE, AND OUTSIDE THE GL BLOCK. It is a property of the
-       FRAME, and two things want it: the layer's uniform and the hand-over's
-       `hud[]`. Derived inside the draw, `s_hudS` would stay unwritten on a lane
-       that does not draw, and the 300-frame heartbeat would print `s=1.000`
-       for the life of the process however the HUD was scaled: an instrument
-       that is only true on one lane sends the next session to the wrong
-       function. It is also the one derivation, rather than a second thing that
-       can drift from the draw it is supposed to describe. */
+       DERIVED ONCE, HERE, AND BEFORE THE RECORD TEST BELOW. It is a property
+       of the FRAME, and two things want it: the hand-over's `hud[]` and the
+       300-frame heartbeat's `s=`. Derived inside the `s_mirRec` block, `s_hudS`
+       would stay unwritten on a frame that records nothing, and the heartbeat
+       would print a scale the HUD does not have. It is also the one
+       derivation, rather than a second thing that can drift from the composite
+       it is supposed to describe. */
     if (!tagpu_hud_live(&hudPw, &hudBh, &hudQ8)) { hudPw = hudBh = 0; hudQ8 = 256; }
     s_hudS = (float)hudQ8 / 256.0f;
-    /* THE COMPOSITE IS GL; THE HAND-OVER BELOW IS THE VULKAN TWIN'S, and it
-       is the whole reason this function may not simply return on a lane with
-       no GL. `s_mHand` describes the composite the twin is to run, derived
-       from this frame's own locals -- skipping it would leave the twin with
-       no UI at all. */
+    /* THE HAND-OVER BELOW IS THE WHOLE OUTPUT of this function: `s_mHand`
+       describes the composite tagpu_vk_gui.c is to run, derived from this
+       frame's own locals -- skipping it would leave the consumer with no UI
+       at all. */
     /* THE COMPOSITE HAS RUN, so anything the sharp layer carried is now on the
        frame the player sees. This — not the draw into the layer — is what lets
        the engine's own cursor blit stand down (tagpu_cursown.h). Every early
@@ -2366,10 +2324,9 @@ static void draw_layer(const TAGPU_FRAME* f)
        function's own heartbeat (gpu-status.md §2.57). */
     if (s_sharpOn && s_curInLayer && s_mirRec) s_curDrew = 1;
 
-    /* The uniforms this composite just ran with, for the Vulkan mirror.
-       Taken HERE rather than recomputed in the publish: every one of them is a
-       local this function derived, and a second derivation is a second thing
-       that can drift from the draw it is supposed to describe. */
+    /* The composite's uniforms, for tagpu_vk_gui.c. Taken HERE rather than
+       recomputed in the publish: every one of them is a local this function
+       derived, and a second derivation is a second thing that can drift. */
     if (s_mirRec) {
         s_mHand.presented = s_presented;
         s_mHand.surfW = t->w; s_mHand.surfH = t->h;
@@ -2384,22 +2341,20 @@ static void draw_layer(const TAGPU_FRAME* f)
         s_mHand.guard = have_engine_frame(f) ? 1 : 0;
         s_mHand.scaleX = s_k; s_mHand.scaleY = ky;
         s_mHand.sharpOn = s_sharpInk ? 1 : 0;   /* COVERAGE, not existence */
-        /* `s_colValid` is pinned at 0 (see its declaration), so this publishes
-           0 -- correctly: this lane has no colour twins for `tagpu_vk_gui.c` to
-           sample. */
+        /* `s_colValid` is this frame's answer to "may an op say restored"
+           (see its declaration); the consumer reads it as whether the
+           presented twin's colour image may be composited. */
         s_mHand.colourTwins = s_colValid ? 1 : 0;
         s_mHand.vpX = f->vp_x; s_mHand.vpY = f->vp_y;
         s_mHand.vpW_gl = f->vp_w; s_mHand.vpH_gl = f->vp_h;
-        /* the same four numbers the uniform above ran with, not a second
-           reading of tagpu_hud_live() */
+        /* the same four numbers derived above, not a second reading of
+           tagpu_hud_live() */
         s_mHand.hud[0] = (float)hudPw; s_mHand.hud[1] = (float)hudBh;
         s_mHand.hud[2] = 256.0f / (float)hudQ8; s_mHand.hud[3] = s_hudS;
         s_mLayer = 1;
     }
 }
 
-/* leave nothing of ours bound: the drain binds twin FBOs, the atlas, the
-   copy source and our VAO/program, and draw_layer may not have run */
 /* ---------------------------------------------------------------- present */
 static void poll(void)
 {
@@ -2453,14 +2408,8 @@ static void poll(void)
 void tagpu_gui_present(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;
-    /* NOTHING IS CLEARED HERE. `s_curDrew` is cleared by the TAKE, once per
-       frame, from the render_ogl.c bracket — so a present that returns early
-       below, and a frame that never calls this function at all, both answer 0
-       through exactly the same path. Clearing on entry and setting on the draw
-       looks equivalent and is not: the engine draws its cursor from inside the
-       flip, on another thread, while this present runs, so a window that reads
-       0 while we composite lets one engine draw per frame through — the bug
-       wearing the counters of a fix (measured 2026-09-13 at 60/s). */
+    /* NOTHING IS CLEARED HERE. `s_curDrew` is cleared only by the TAKE,
+       `tagpu_gui_cursor_drew_take`, and nothing calls it (see `s_curInLayer`). */
     if (!tagpu_gui_installed() || !f) return;
     poll();
     if (!s_on) {
@@ -2468,8 +2417,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         g_guiq.qTail = g_guiq.qHead; g_guiq.aTail = g_guiq.aHead;
         return;
     }
-    /* the atlas alone: the sprite table this module resolves against, which
-       is the Vulkan twin's as much as the GL lane's */
+    /* the atlas alone: the sprite table this module resolves against, and
+       whose CPU mirror the hand-over carries */
     if (!atlas_setup()) return;
     /* No palette is uploaded here: it crosses to the consuming lane as bytes on
        the hand-over. `restore_step` runs before the drain, so the sprites it
@@ -2489,10 +2438,9 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
        by the paint. */
     mir_begin();            /* the Vulkan mirror records this drain */
     drain();
-    /* AFTER the drain, which binds twin FBOs and leaves one bound, and before
-       the layer that samples it: the sharp layer is cleared for this frame
-       (and, under `sharptest`, filled) while nothing of the composite has
-       been written yet. */
+    /* AFTER the drain and before the layer: the sharp layer's quads for this
+       frame are recorded (and, under `sharptest`, the pattern) before
+       draw_layer decides what the composite carries. */
     sharp_begin(f);
     {
         /* ONE LEVER, ONE FRAME, AND THE FLAG TRAVELS WITH THE DATA (the
@@ -2500,8 +2448,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
            arrived on rather than whichever one its own poll landed on --
            `mir_finish` hands it over with the ops. */
         int taking = s_ab && !s_abDone;
-        /* THE VULKAN HALF IS ARMED BY ITS OWN UNLINK. `tagpu_vk_ab_arm` is the
-           shape the five world passes use: it unlinks the target and grants the
+        /* THE CAPTURE IS ARMED BY ITS OWN UNLINK. `tagpu_vk_ab_arm` is the
+           shape the world passes use: it unlinks the target and grants the
            claim only when the file is gone, so a stale capture is never paired
            with a fresh one. */
         draw_layer(f);
@@ -2521,10 +2469,6 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         }
     }
     mir_finish(f);          /* close and publish the frame's record */
-    /* sharp_begin left the default framebuffer bound and the viewport at the
-       layer's size; this puts the frame's target and viewport back for
-       whatever draws after us. Both are GL state and there is none to restore
-       on a lane with no context. */
     if (f->frame_counter - last >= 300) {
         /* THE BUFFER: 438 literal characters and 72 conversions, worst case
            1232 with the terminator, against 1280 bytes -- 48 bytes of headroom,
@@ -2566,9 +2510,8 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
                      what `nostring` is A/B'd on (13.4: ~40 bytes where a text op
                      carried ~968) and what §7's cadence note is about */
                   g_guiq.aHead, s_mirLost, s_mmDrawn,
-                  /* THE PAIR'S SIZE AS READ, not as uploaded: the GL texture's
-                     `s_mmEngW * s_mmEngH` reads 0 on a lane that makes no
-                     texture. The packet is where both lanes get it. */
+                  /* THE PAIR'S SIZE AS READ from the packet, which is where
+                     `mir_finish` gets it too */
                   s_mmFogged,
                   f->packet ? (unsigned)(f->packet->mm_w * f->packet->mm_h) : 0u,
                   s_mmNoEng,
@@ -2581,14 +2524,13 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
 /* The frame's record is closed and published. Everything the port
    needs that is NOT an op goes in here -- the atlas texels, the palette, the
    engine's own frame -- each of them a copy or a mirror this module owns,
-   because the Vulkan lane does not run until after `tagpu_packet_frame_end`
-   and cannot read a GL texture at all. */
+   because the Vulkan lane does not run until after `tagpu_packet_frame_end`. */
 static void mir_finish(const TAGPU_FRAME* f)
 {
     /* PUBLISHED EVEN WHEN THE COMPOSITE DID NOT DRAW. `draw_layer` returns
        early when the presented surface has no twin or its size has moved --
-       and on those frames the drain still APPLIED this frame's ops to the GL
-       twins. Withholding the record leaves the Vulkan store behind by exactly
+       and on those frames the drain still APPLIED this frame's ops to the twin
+       table. Withholding the record leaves the Vulkan store behind by exactly
        those ops, for the session, which is the same hole the consumer is built
        to close.
        `presented = 0` is how the consumer is told the composite state is not
@@ -2693,7 +2635,7 @@ static void mir_finish(const TAGPU_FRAME* f)
     s_mHand.mmPicGen = s_mmPicSerial;
     /* THE ENGINE'S PAIR IS COPIED, NOT ALIASED: it is packet memory, and the
        packet's rule is stricter than the hand-over's, which is the FRAME. It
-       is given back inside `tagpu_packet_frame_end`, which `render_ogl.c`
+       is given back inside `tagpu_packet_frame_end`, which `render_vk.c`
        calls BEFORE `tagpu_vk_frame` in the same iteration -- so a consumer of
        an alias would read it after its owner has released it, and
        `tagpu_packet.poison` fires at that give-back, which means the lever
@@ -2702,8 +2644,7 @@ static void mir_finish(const TAGPU_FRAME* f)
        the atlas and the palette are all copies. 47 KB a frame, and only when
        an MM quad was recorded.
        THE DIMENSIONS COME FROM THE SAME READ as the bytes, so the two cannot
-       disagree -- `s_mmEngW/H` are the GL texture's and persist across a frame
-       that produced no pair at all. */
+       disagree. */
     s_mHand.mmEng = NULL; s_mHand.mmEngW = 0; s_mHand.mmEngH = 0;
     if (s_mNSDraw > 0 && s_mNSDraw <= TAGPU_GUI_SDRAW_MAX && f->packet) {
         const unsigned char* eng = tagpu_pk_minimap(f->packet);

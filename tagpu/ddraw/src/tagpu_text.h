@@ -87,7 +87,7 @@ int  tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff
 /* Find or rasterise ONE character of `font` in the glyph atlas. The engine's
    own blitter advances x by the glyph's width byte and nothing else, so a run
    of these at those offsets reproduces its string blit exactly rather than
-   approximating it — which is what the GL UI renderer's `PK_STRING` needs and
+   approximating it — which is what the UI renderer's `PK_STRING` needs and
    what tagpu_text_place cannot give it: the UI's text is metal readouts and a
    clock, a new STRING every tick, against a 64-entry string cache.
    Its atlas is separate from the string one: different lifetimes (a font change

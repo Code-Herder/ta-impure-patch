@@ -3,19 +3,18 @@
  * `g_ddraw.hwnd` through `tagpu_vk_frame`. See
  * research/notes/vulkan-only-plan.md landing 4.
  *
- * WHY THE PRESENT WORKS ON A WINDOW ROUTE A CALLED DEAD. The coexistence probe's
- * route A -- a GL context current on an HWND, then Vulkan on the same one --
- * reads "API ok, pixels dead" on wine 9.0, and that verdict is about GL: its
- * VULKAN half presented 10 of 10 frames. This backend creates no GL context, so
- * the half that failed is not in the process. Measured as route E, 98.5 % of the
- * window showing Vulkan's own frame against a GL and a GDI control at the same
- * 98.5 % -- roadmap Phase G / G19a has the table.
+ * WHY A VULKAN SURFACE ON THE GAME'S HWND PRESENTS. The coexistence probe's
+ * "API ok, pixels dead" verdict on wine 9.0 was about an OpenGL context sharing
+ * the HWND: the Vulkan half presented 10 of 10 frames. No OpenGL context exists
+ * in this process. Measured as route E, 98.5 % of the window showing Vulkan's
+ * own frame, the same 98.5 % as the GDI control -- roadmap Phase G / G19a has
+ * the table.
  *
  * AND WHY THE FALLBACK IS ALLOWED TO BE LATE. This hands the session to
  * `gdi_render_main` on `tagpu_vk_failed()`. That is only safe because route F
  * measured it: GDI still reaches the screen after a surface has existed on the
- * HWND, so winevulkan's takeover is specific to GL's drawable rather than to
- * the window.
+ * HWND, so winevulkan's takeover is specific to an OpenGL drawable rather than
+ * to the window.
  * Had it not been, the fallback would have to be taken before the surface
  * was ever created and a later failure would be terminal.
  */
@@ -45,7 +44,7 @@
    and the same test in tagpu_fx.c and tagpu_posedraw.c). Equality against a
    counter that restarts is not a freshness test: a record published on the
    frame the old thread died, never consumed, would match again the same number
-   of frames into the new thread's life and hand a twin pointers into buffers
+   of frames into the new thread's life and hand a pass pointers into buffers
    that were freed and rebuilt in between.
 
    SO IT IS A FILE STATIC. */
@@ -116,7 +115,7 @@ DWORD WINAPI vk_render_main(void)
 
         /* ONE NUMBER FOR THE WHOLE FRAME, TAKEN BEFORE ANYTHING USES IT. Every
            pass's hand-over is stamped with `TAGPU_FRAME::frame_counter` and the
-           Vulkan twin refuses one published on any other frame -- a safety
+           Vulkan pass refuses one published on any other frame -- a safety
            property and not tidiness (tagpu_vk_pass.h) -- so the driver below
            and the present call must be given the SAME value, and a
            post-increment inside either call would silently differ by one. */

@@ -27,13 +27,14 @@
    applied, and the cumulative anchor delta applied by then). Same eleven strings plus "PK", "T", "E", "A", "D", "," and "-",
    so it costs the atlas nothing per frame either.
 
-   THE VULKAN LANE DRAWS THIS PASS FROM THE QUADS BUILT HERE. Its edition
+   THE VULKAN PASS DRAWS THIS READOUT FROM THE QUADS BUILT HERE. It
    (tagpu_vk_fps.c) does not rebuild the geometry; it takes the vertices this
    file just built, through `tagpu_fps_quads`, and samples the same atlas bytes.
 
    `tagpu_fps_quads` CONSUMES what it returns, and here is exactly what that
-   buys. The Vulkan lane presents from `ogl_render` while this runs inside the
-   overlay, and the overlay does not run on every path that reaches the swap.
+   buys. The Vulkan pass records in render_vk.c's `tagpu_vk_frame`, after the
+   overlay, and the overlay does not reach this file on every frame that is
+   presented (`tagpu_overlay.off`, a level teardown).
    Consuming makes it impossible for one frame's vertices to be drawn TWICE --
    which is the case that matters, because the second draw would be of a frame
    whose readout has already been superseded. It does not make it impossible for
@@ -55,7 +56,7 @@
 #include <string.h>
 #include "tagpu_fps.h"
 #include "tagpu_text.h"
-#include "tagpu_vk.h"      /* tagpu_vk_owns_present: is there a GL lane at all? */
+#include "tagpu_vk.h"      /* tagpu_vk_ab_arm: the A/B claim */
 
 #define TRIGGER   "tagpu_fps.on"
 #define PKSHOW    "tagpu_packet.show"
@@ -80,7 +81,7 @@ static int      s_fps = -1;
 
 /* THE SHADER PAIR IS A BUILD INPUT, NOT CODE THIS FILE RUNS. Nothing here
    references them -- tools/spirv-gen.py reads them out of the PREPROCESSED
-   translation unit and generates the SPIR-V the Vulkan twin draws with, so deleting
+   translation unit and generates the SPIR-V tagpu_vk_fps.c draws with, so deleting
    them fails the build with "the manifest names <pass>::VS and the source does not
    have it". The pragma below is paired and its `pop` was PROVED with a planted
    probe rather than read: a `pop` inside a comment is text and not a directive. */
@@ -176,7 +177,7 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
        LATER frame's vertices -- a capture of the wrong frame, which is the one
        thing the design exists to prevent. A capture the lane never collected is
        simply not written, and `tools/vk-ab.py` says so. */
-    /* THIS PASS BUILDS QUADS; THE VULKAN TWIN DRAWS THEM. The poll, the
+    /* THIS PASS BUILDS QUADS; THE VULKAN PASS DRAWS THEM. The poll, the
        frame-rate window, the font latch and the vertex array are the pass, and
        they run unconditionally. */
 

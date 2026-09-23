@@ -47,7 +47,8 @@
    shadow is drawn by the ALP-blend blit 0x4B8500, and inside a key-filled
    viewport (terrown) the blend darkens palette 254's cyan into an opaque teal
    silhouette that sits at the 1x position whatever the zoom. MEASURED
-   2026-09-18 on renderer=openglcore: with the gate down, four structures put
+   2026-09-18 on the OpenGL renderer this fork had then (renderer=openglcore):
+   with the gate down, four structures put
    8779 px of exactly (0,128,128) on the screen. The native pass draws the
    slant shadow in its place (tagpu_native.c, `slant`).
 
@@ -232,26 +233,23 @@ static unsigned char          g_ssPass = 0;
 
 /* HOW LONG THE GATE MAY STAND WITHOUT A PUBLISH before `tagpu_owndraw_flush`
    lowers it. The publisher is NOT reached on every frame the lane presents:
-   `tagpu_overlay_draw` gates it behind `tagpu_overlay.off`, an overlay init
-   that failed, and a level teardown, and the first of those is a live lever a
-   human can create mid-session. Without this the flag would freeze raised
+   `tagpu_overlay_draw` gates it behind `tagpu_overlay.off` and a level
+   teardown, and the first of those is a live lever a human can create
+   mid-session. Without this the flag would freeze raised
    across any of them and the engine's structure shadow would stay suppressed
    with nothing painting it -- the exact fault the gate exists to remove,
    reached by another door.
 
-   `tagpu_owndraw_flush` runs ABOVE those three (`tagpu_overlay.c:365`), which
-   is what makes it the right place. It does NOT cover the frame-ABI check at
-   `tagpu_overlay.c:306`, which sits above the flush. Nothing is owed for it:
-   both call sites fill `f.abi` from the same header in the same DLL and pass
-   `&f`, so it cannot fire.
+   `tagpu_owndraw_flush` runs ABOVE both of those in `tagpu_overlay_draw`,
+   which is what makes it the right place. It does NOT cover the frame-ABI
+   check at the top of that function, which sits above the flush. Nothing is
+   owed for it: the one call site, render_vk.c, fills `f.abi` from the same
+   header in the same DLL and passes `&f`, so it cannot fire.
 
    `tagpu_fxown.c` solves the same problem the same way, at 90 frames. Eight is
    used here because a missing shadow is a picture the player sees, not a
-   counter. It is measured against the lane's own frame counter, so a LANE
-   SWITCH (render_ogl.c counts `g_tagpu_frames`, render_vk.c counts `s_frames`,
-   two independent counters) can make the subtraction large and fire it once --
-   in the safe direction, and the publisher re-raises in the same frame because
-   the flush at `:365` runs before `tagpu_native_frame` at `:464`. */
+   counter. It is measured against `f->frame_counter`, which is render_vk.c's
+   `s_frames`. */
 #define SS_BEAT_FRAMES 8
 
 static int               g_armed      = 0;
@@ -392,9 +390,9 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
     if (!skip) { g_passed++; return 0; }
     /* Decision B of gpu-posing.md §4. Skipping the engine's own rasterise is
        only safe while something replaces it, and the only thing of ours that
-       draws a unit is the posed program. If it cannot run — a missing GL entry
-       point, a shader that will not link, a uniform block under PD_BLOCK — then
-       skipping here would mean NO UNITS AT ALL, because these detours are
+       draws a unit is the posed program. If it cannot run — a device whose
+       maxUniformBufferRange is under PD_BLOCK, a Vulkan pass that stands down —
+       then skipping here would mean NO UNITS AT ALL, because these detours are
        installed at DLL attach and cannot be uninstalled.
 
        AND THE FALLBACK IS CURRENTLY BROKEN ON ONE LANE, which is worth having
@@ -416,14 +414,12 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
        once that is fixed. Mechanism not established; the lead is written up at
        `tagpu_posedraw_live()`'s definition.
 
-       So the classifier asks first. This runs on the GAME thread and reads a
-       word only the render thread writes; it is safe by DIRECTION, not by
-       timing. The word says "live" only after the programs have linked, and is
-       cleared before a context change invalidates them, so a stale read can
-       only be stale in the direction of NOT skipping — the engine draws a unit
-       we also draw, for the frames before the pass first runs, which is the
-       near-invisible 8bpp-under-RGB double draw. The reverse, skipping when
-       nothing will draw, has no write order that produces it. */
+       So the classifier asks first. This runs on the GAME thread, and the
+       answer it reads must only ever be wrong in the direction of NOT
+       skipping — the engine draws a unit we also draw, the near-invisible
+       8bpp-under-RGB double draw. `tagpu_posedraw_live()` meets that by
+       construction: it is the constant 0, so skipping when nothing will draw
+       cannot happen. */
     {
         extern int tagpu_posedraw_live(void);
         extern int tagpu_posedraw_refused(void);

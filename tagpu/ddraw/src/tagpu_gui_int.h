@@ -14,7 +14,7 @@
 
 enum {
     PK_FRAME = 1,   /* a flip: `surf` is the presented surface                */
-    PK_RESET,       /* forget every twin (re-arm, GL context change)          */
+    PK_RESET,       /* forget every twin (TAGPU_GUI_WHY_*: re-arm, overflow)  */
     PK_SEED,        /* `surf` w x h: its bytes follow in the arena            */
     PK_FREE,        /* `surf` is gone                                          */
     PK_CLEAR,       /* transparent over the box (the viewport's key fill)     */
@@ -220,7 +220,7 @@ typedef struct TAGPU_GUIQ {
     volatile unsigned reseed;                /* consumer asks the producer to seed everything */
     volatile unsigned why;                   /* the last reason `reseed` (or an overflow) was raised: TAGPU_GUI_WHY_* */
     volatile unsigned overflows;             /* the producer ran out of queue or arena  */
-    volatile unsigned resets;                /* fresh starts published (re-arm, GL, overflow, a lost frame) */
+    volatile unsigned resets;                /* fresh starts published (TAGPU_GUI_WHY_*) */
     /* ASK THE ENGINE TO REDRAW ITS SCREENS, AND NOTHING ELSE. Raised by the
        render half when Classic++ colour becomes valid: colour reaches a twin
        only through the op that DRAWS the art, so a surface already painted

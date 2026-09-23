@@ -2,7 +2,7 @@
 #define TAGPU_RECLAIM_H
 /* tagpu_reclaim.h — deferred reclamation of the engine's Object3do.
 
-   The fork's GL render thread gathers a unit's (or wreck's) Object3do and
+   The fork's render thread gathers a unit's (or wreck's) Object3do and
    dereferences it later in the same frame, while the engine's game thread
    frees it on death — a cross-thread use-after-free that faulted `200v200`
    about 95 s in, two runs in three (research/notes/thread-safe-destruction.md).
@@ -20,7 +20,7 @@
 
    Installed once at DllMain, byte-matched, all-or-nothing; a different exe
    arms nothing and `tagpu_reclaim.off` disables it. The render thread brackets
-   the overlay driver with pass_begin / pass_end (render_ogl.c), and the
+   the overlay driver with pass_begin / pass_end (render_vk.c), and the
    driver skips its engine reads while teardown_active() says a level is
    being freed. */
 

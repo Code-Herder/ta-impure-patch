@@ -144,7 +144,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            own cursor, into its own surface, which is where the reference frame
            wants it. */
 
-        /* tagpu: the flip observer AND the GL UI renderer's leaves (Phase E,
+        /* tagpu: the flip observer AND the UI renderer's leaves (Phase E,
            tagpu_gui.h). TWO INSTALLS: the observer of the flip 0x4C63A0 goes
            in whenever the engine's bytes match there, with NO trigger, because
            it is the only host of the on-demand trigger family and therefore of

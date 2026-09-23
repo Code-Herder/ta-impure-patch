@@ -37,7 +37,7 @@ struct TAGPU_CMD;
    screen-space readers of that poll (the edge scroll's equality on the
    outermost screen pixel) keep working at every zoom.
 
-   THREE THREADS, ONE OWNER PER WORD (since the frame packet's landing 2).
+   THREE THREADS, ONE OWNER PER WORD.
    The render thread owns the LEVEL — it reads the two levers, eases the wheel,
    works out the cursor anchor's eye delta and publishes the live view for the
    input path — and it writes NOTHING into engine memory: everything the zoom
@@ -262,8 +262,8 @@ int   tagpu_zoom_drop_mouse(UINT msg, LPARAM lparam);
    queued on the engine's event ring and dispatched whenever the game loop gets
    to it, so the transform is applied here, at the press. A move is not queued —
    it lands in `[obj+0x196]`, which is also where the cursor sprite is drawn
-   from — and rewriting it is what used to throw the sprite across the frame
-   (see carries_point() in tagpu_zoom.c).
+   from — and rewriting it would throw the sprite across the frame (see
+   carries_point() in tagpu_zoom.c).
 
    The rewrite belongs at the door and not at the many places that write
    g_ddraw.cursor: cnc-ddraw's PeekMessage rewriter and its wndproc both

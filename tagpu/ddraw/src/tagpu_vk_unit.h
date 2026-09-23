@@ -1,9 +1,9 @@
 #ifndef TAGPU_VK_UNIT_H
 #define TAGPU_VK_UNIT_H
 /* The posed unit bodies and their cast-shadow depth twins, drawn by Vulkan
-   (Phase G, the SIXTH world pass).
-   Implementation: tagpu_vk_unit.c. The GL edition is tagpu_posedraw.c and
-   stays the source of the vertices, the pose, the uniforms and the shader.
+   (the SIXTH world pass).
+   Implementation: tagpu_vk_unit.c. The gather is tagpu_posedraw.c and is
+   the source of the vertices, the pose, the uniforms and the shader.
 
    IT IS THE FIRST PASS WITH FOUR HOOKS, and every one of them is forced by the
    same fact: this pass BOTH FEEDS AND SAMPLES the cast-shadow depth map.
@@ -17,10 +17,6 @@
      prepare()   after the map is drawn -- point this slot's descriptor set at
                  it (and at the scaffold), decide whether to draw at all.
      record()    inside the SEAM's render pass -- bind and draw the bodies.
-
-   The GL twin has exactly this shape and for exactly this reason: its depth
-   twin draws into the shadow FBO at tagpu_native.c:3936, long before its
-   bodies sample the finished map at :4238.
 
    A SET IS WRITTEN ONLY DURING ITS OWN SLOT'S `prepare`, which is the one
    instant the seam's fence proves it is not in flight -- so `cast` binds a
@@ -55,7 +51,7 @@ int  tagpu_vk_unit_cast(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
                         VkRenderPass rp);
 
 /* How many posed casters this pass is READY to put in the map this frame: the
-   units it has vertices for whose twin drew them into the GL map. Valid after
+   posed units it has vertices for. Valid after
    `upload` and before `cast`, which is where the shadow pass needs it -- its
    own census of casters it has no copy of is taken before it begins its render
    pass, and this is the part of that census this pass answers for.
@@ -63,8 +59,9 @@ int  tagpu_vk_unit_cast(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
    THE TWO COUNTS ARE COMPARABLE BY CONSTRUCTION AND THIS ONE CAN ONLY BE
    SMALLER. tagpu_native.c counts every posed unit with `castSkip` clear; this
    counts the subset of those that reached the hand-over AND still have a bake
-   mirror. So `otherCasters - casters()` is 0 exactly when every caster in the
-   GL map has a copy here, and positive otherwise -- never negative. */
+   mirror. So `otherCasters - casters()` is 0 exactly when every caster
+   `otherCasters` counts has a copy here, and positive otherwise -- never
+   negative. */
 int  tagpu_vk_unit_casters(void);
 
 /* Point this slot's set at the map and the scaffold, and say whether to draw.
@@ -75,9 +72,8 @@ int  tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                           uint32_t w, uint32_t h);
 
-/* The build ghosts, drawn AFTER the effects pass because that is where the GL
-   twin draws them (`tagpu_native.c`: units, then `tagpu_fx_render`, then
-   `ghost_pass`). Both pipelines blend premultiplied `over`, which is not
+/* The build ghosts, drawn AFTER the effects pass. Both pipelines blend
+   premultiplied `over`, which is not
    commutative, so a ghost recorded in the body stage composites differently
    against any translucent effect that overlaps it. The seam calls this one
    immediately after `tagpu_vk_fx_record`, and it is what ends the pass's frame
@@ -88,9 +84,8 @@ void tagpu_vk_unit_record_ghosts(const TAGPU_VKPASS* d, VkCommandBuffer cb,
 /* 1 on the ONE frame `tagpu_posedraw.ab` latched its claim and `tagpu_vk_ab_arm`
    got the `_vk.ppm` target unlinked -- so the seam captures THAT frame rather
    than whichever one its own lever poll landed on. It does NOT mean a file was
-   written: there is no GL half, and the capture the seam
-   then records is this lane's own. Consumed by the call. Valid after
-   `prepare`. */
+   written: the seam records the capture after the draw. Consumed by the call.
+   Valid after `prepare`. */
 int  tagpu_vk_unit_ab_frame(void);
 
 /* Give everything back. Called by the seam from `vk_down`, after its

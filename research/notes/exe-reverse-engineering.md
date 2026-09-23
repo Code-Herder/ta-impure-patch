@@ -2686,7 +2686,7 @@ left edge. `0x4C2380` — which the previous pass listed as the record-drawing p
 **`0x4C67C0` IS THE SHELL'S PUBLISH POINT — observed since 2026-09-13** (`tagpu_packet_pub.c`,
 the shell cursor channel; the *why* is the frame packet's: the GL UI layer needs the drawn
 cursor's rect on every frame it composites, and the packet's in-play gate never runs in the
-shell). **Its cursor BLIT — the `call` at `0x4C687D`, not this function — is one of the four `tagpu_cursown.c` skips (GUI renderer §24.1).** A flag-gated leaf on the whole function was tried on 2026-09-13 and withdrawn: this function's caller restores the background it saves, unconditionally, so taking it over unpaired the restore and froze `+0x1B6/+0x1BA`. Full prologue `56 8B 74 24 08 8B 86 CE 01 00 00` — `push esi; mov esi,[esp+8]; mov
+shell). **Its cursor BLIT — the `call` at `0x4C687D`, not this function — was one of the four `tagpu_cursown.c` skips (GUI renderer §24.1); that module is deleted and nothing patches the blit now.** A flag-gated leaf on the whole function was tried on 2026-09-13 and withdrawn: this function's caller restores the background it saves, unconditionally, so taking it over unpaired the restore and froze `+0x1B6/+0x1BA`. Full prologue `56 8B 74 24 08 8B 86 CE 01 00 00` — `push esi; mov esi,[esp+8]; mov
 eax,[esi+0x1CE]` — 11 bytes, resuming at `0x4C67CB`; `stdcall(globals, surface)`, `ret 8`, so
 `entry_esp[1]` is `*(0x51FBD0)` itself. **The three early-out words are the gate an observer must
 reproduce**: `+0x1CE` then `+0x1D2` then `+0x1B2`, each `test`ed against zero with a jump to the

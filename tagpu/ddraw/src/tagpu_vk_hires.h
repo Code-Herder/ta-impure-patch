@@ -11,8 +11,8 @@
    body is not this pass's; only its casters are.
 
    WHAT IT IS FED (TAGPU_HIHAND, at the foot): the triangles as CPU bytes, the
-   per-unit anchor, yaw/enc and cast triple, and the pose rows. No GL name
-   crosses.
+   per-unit anchor, yaw/enc and cast triple, and the pose rows. No device
+   handle crosses.
 
    THE ALBEDO DOES NOT CROSS, AND `cutoutSeen` IS WHY THAT IS HONEST. The depth
    path samples the albedo for one purpose -- the alpha cutout -- and every
@@ -100,18 +100,18 @@ typedef struct TAGPU_HIUREC {
     int   npose;                    /* pieces `rows` carries    */
     unsigned rowOff;                /* first of npose*3 vec4 in `rows` */
     float anchor[4];                /* ax, ay, world x, projected world z */
-    float yawEnc[3];                /* cos(yaw), sin(yaw), enc -- AS THE GL
-                                       pass computes them, so the port does no
-                                       trigonometry of its own to disagree in */
+    float yawEnc[3];                /* cos(yaw), sin(yaw), enc -- AS THE
+                                       producer computes them, so this pass does
+                                       no trigonometry of its own to disagree in */
     float cast[3];                  /* altitude, ground + throw, length scale */
 } TAGPU_HIUREC;
 
 typedef struct TAGPU_HIHAND {
     unsigned frame;
-    /* 1 = the GL depth pass ran this frame. 0 means the map has no replacement
-       mesh in it, which is NOT the same as "no unit had one": the pass returns
-       early when it is not ready, and a consumer that read the unit records
-       alone would draw casters the oracle did not. */
+    /* 1 = the producer's depth pass ran this frame. 0 means the map has no
+       replacement mesh in it, which is NOT the same as "no unit had one": a
+       producer returns early when it is not ready, and a consumer that read
+       the unit records alone would draw casters the producer did not. */
     int   depthOn;
     float shadowMat[16];
     const TAGPU_HIUREC* units;  int nunit;
@@ -123,8 +123,8 @@ typedef struct TAGPU_HIHAND {
        (`if (uCutoff >= 0.0 && tex.a * uBase.a < uCutoff) discard;`) -- and
        every material of the shipped replacement is alphaMode OPAQUE, so
        `cutoff` is negative for every group and the sampled value is discarded.
-       1 here means a group with a real cutoff was drawn into the GL map, and
-       the Vulkan pass must then draw NOTHING rather than a map with the holes
+       1 here means the producer met a group with a real cutoff, and the
+       Vulkan pass must then draw NOTHING rather than a map with the holes
        missing. Deferring the textures is only honest while this is checked. */
     int   cutoutSeen;
 } TAGPU_HIHAND;

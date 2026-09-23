@@ -1,16 +1,16 @@
 #ifndef TAGPU_VK_GUI_H
 #define TAGPU_VK_GUI_H
-/* tagpu_vk_gui.c -- the GL UI layer's 1x mirror, drawn by Vulkan.
-   gpu-status.md 2.3e is the pass being ported and research/notes/g19f-plan.md
+/* tagpu_vk_gui.c -- the UI layer's 1x mirror, drawn by Vulkan.
+   gpu-status.md 2.3e describes the pass and research/notes/g19f-plan.md
    is why it is cut this way.
 
-   IT IS NOT A SECOND IMPLEMENTATION OF THE UI. Everything it draws arrives
-   through `tagpu_gui_handover` (tagpu_gui.h): the op stream the GL lane's own
-   drain APPLIED, the atlas rect it resolved for each sprite, the atlas texels,
-   the palette, and the engine's own frame as bytes. The shaders are a
-   translation of the same GLSL. The twin store evolves identically on both
-   sides because the op stream is identical -- which is the only claim a 0-px
-   comparison can make.
+   THE UI IS DECIDED IN THE DRAIN AND DRAWN HERE. Everything it draws arrives
+   through `tagpu_gui_handover` (tagpu_gui.h): the op stream the drain
+   (tagpu_gui_surf.c) APPLIED, the atlas rect it resolved for each sprite, the
+   atlas texels, the palette, and the engine's own frame as bytes. The shaders
+   are tagpu_gui_surf.c's GLSL through tools/spirv-gen.py. The drain's twin
+   table and this pass's twin images evolve together because both follow the
+   one op stream.
 
    TWO HOOKS, AND THE REPLAY IS IN `prepare`. A twin is drawn into with its own
    render pass and render passes may not nest, so the whole op replay happens in
@@ -21,11 +21,10 @@
    THE FLIP IS A PROPERTY OF PRESENTATION (gpu-status 2.32), and this pass is
    the clearest case of it. The twin draws take NO viewport flip: their target
    is sampled, not presented, and `QVS`'s `y / uSize.y * 2 - 1` puts quad y = 0
-   at attachment row 0 under both APIs. `CPY_FS` reads `gl_FragCoord`, and with
-   no flip GL measures it from NDC -1 and Vulkan from the upper left -- which
-   for an unflipped viewport is the same row index, so it ports unchanged and
-   2.33's stand-down does not arise here. The COMPOSITE does flip, because it
-   is presented. */
+   at attachment row 0. `CPY_FS` reads `gl_FragCoord`, which Vulkan measures
+   from the upper left -- for an unflipped viewport that is attachment row 0,
+   the row QVS puts quad y = 0 at, so the two agree and 2.33's stand-down does
+   not arise here. The COMPOSITE does flip, because it is presented. */
 #include "tagpu_vk_pass.h"
 
 /* The op replay and this slot's descriptor set. Outside the seam's render

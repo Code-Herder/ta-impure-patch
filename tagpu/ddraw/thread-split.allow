@@ -1,10 +1,10 @@
 # thread-split.allow — the files that may name engine memory, each with its class and
 # the argument for it (tools/thread-split-check.sh; frame-packet-exchange §10).
 #
-# DEFAULT-DENY, STARTED FULL ON 2026-09-12 (landing 1 of the frame packet exchange): every
-# file that named an engine address, included the engine header, probed with IsBad*Ptr or
-# added an offset to the main pointer, with comments stripped. The list only SHRINKS: a
-# landing that converts a file to the packet removes its line in the same diff. Adding a
+# DEFAULT-DENY: only a file listed here may name an engine address, include the engine
+# header, probe with IsBad*Ptr or add an offset to the main pointer, with comments
+# stripped. The list only SHRINKS: a change that converts a file to the packet removes
+# its line in the same diff. Adding a
 # line loosens the rule for every future edit of that file and is the owner's decision,
 # taken in a review — never a session's way past a red build.
 #
@@ -19,12 +19,10 @@
 #                     the decision after landing 5
 #   tooling           trigger-gated readers (peek, catalogues, the GUI snapshot, the
 #                     weapon dump, scenario detection); out of the exchange's scope.
-#                     SINCE LANDING 10c-1 THEY RUN ON THE GAME THREAD, from the engine's
-#                     own flip (tagpu_gui_hook.c's before_flip) rather than from
-#                     tagpu_overlay_draw -- which is what let them reach renderer=gdi at
-#                     all. The documented caveat that went with the old placement is
-#                     therefore discharged, not merely tolerated: they read engine memory
-#                     from the thread that owns it.
+#                     THEY RUN ON THE GAME THREAD, from the engine's own flip
+#                     (tagpu_gui_hook.c's before_flip) rather than from
+#                     tagpu_overlay_draw -- which is what lets them reach renderer=gdi
+#                     -- so they read engine memory from the thread that owns it.
 #   pure-engine-code  render thread executes an engine FUNCTION over our buffers, with
 #                     the disassembly range that shows it reads only its arguments and
 #                     writes only its destination
@@ -34,36 +32,36 @@
 #
 # The argument after `#` is what the reviewer checks, not what the script checks.
 
-inc/tagpu_engine.h       engine-map          # the addresses, for publisher files only (started landing 1)
+inc/tagpu_engine.h       engine-map          # the addresses, for publisher files only
 src/tagpu_packet_pub.c   publisher           # the frame packet's fill, from DrawGameScreen's `after` at 0x4969D2; the font copy at hook 8; the level-end packet
 src/tagpu_markown.c      publisher           # the marker block's call-site redirects on the game thread; hook 8 latches the font through the publisher
 src/tagpu_menu.c         publisher           # the render-options screen: GUI calls on the game thread from the DrawGameScreen observer
-src/tagpu_hud.c          publisher           # HUD scale (G18f): an observer on the loading-screen flip 0x4288D0 gated on the return address 0x498242 writes the viewport rect's R/B/W/H on the game thread; the one word it publishes is its own
+src/tagpu_hud.c          publisher           # HUD scale: an observer on the loading-screen flip 0x4288D0 gated on the return address 0x498242 writes the viewport rect's R/B/W/H on the game thread; the one word it publishes is its own
 src/tagpu_reclaim.c      publisher           # FreeObjectState and the teardown wrap on the game thread; the fence itself
-src/tagpu_gui_hook.c     publisher           # the GL UI observers and the flip publisher on the game thread; the probes are on its own arena
-src/tagpu_gui_leaves.h   publisher           # observers on the game thread, all of them since landing 4c: before_minimap was the one that was not (it ran on the LOADER thread) and it is DELETED — the minimap picture main+0x1426B is alive for the whole level, not only inside BuildMinimapSurface 0x466780 as this file used to say, so the packet's publisher decodes it on the level's first in-play draw. Nothing of ours runs on the loader thread any more
-src/tagpu_order.c        publisher           # the order-marker snapshot at 0x469BFC, game thread: it resolves every unit pointer to an array SLOT and every def and weapon field to a number in the record, so the present half reads the packet's units, GUI colours and palette and dereferences nothing (landing 3). The GAF sequences it carries are session assets tagpu_gaf.c resolves
+src/tagpu_gui_hook.c     publisher           # the UI observers and the flip publisher on the game thread; the probes are on its own arena
+src/tagpu_gui_leaves.h   publisher           # observers on the game thread, all of them. The minimap picture main+0x1426B is alive for the whole level, not only inside BuildMinimapSurface 0x466780, so the packet's publisher decodes it on the level's first in-play draw. Nothing of ours runs on the loader thread
+src/tagpu_order.c        publisher           # the order-marker snapshot at 0x469BFC, game thread: it resolves every unit pointer to an array SLOT and every def and weapon field to a number in the record, so the present half reads the packet's units, GUI colours and palette and dereferences nothing. The GAF sequences it carries are session assets tagpu_gaf.c resolves
 src/tagpu_owndraw.c      publisher           # the composite detours' classifier on the game thread (0x459830/0x459C70)
 src/tagpu_fxown.c        publisher           # effects call-site redirects and leaf detours on the game thread
 src/tagpu_featown.c      publisher           # the feature leaf detour 0x46A610 on the game thread
 src/tagpu_terrown.c      publisher           # the terrain and fog-overlay detours; the fog grid's lazy rebuild on the game thread
-src/tagpu_fogwide.c      publisher           # the wide fog grid: built on the GAME thread at the engine's own fog site, which is where the engine's builder reads the same LOS and MAPPED maps — a pointer we could not read there is one the engine could not read either. Since landing 4b it hands over nothing: the packet's publisher copies the grid out of it on this thread, in the same draw, so the three buffers, the critical section and the retire ring are gone
+src/tagpu_fogwide.c      publisher           # the wide fog grid: built on the GAME thread at the engine's own fog site, which is where the engine's builder reads the same LOS and MAPPED maps — a pointer we could not read there is one the engine could not read either. It hands over nothing: the packet's publisher copies the grid out of it on this thread, in the same draw, so it needs no hand-over buffer, critical section or retire ring
 src/tagpu_patches.c      publisher           # byte patches applied at attach, before the engine runs
 src/tagpu_suppress.c     publisher           # the DrawUnit detour's classifier on the game thread
-src/tagpu_tracer.c       publisher           # the G4 draw tracer's detours on the game thread
+src/tagpu_tracer.c       publisher           # the draw tracer's detours on the game thread
 src/tagpu_cobtrace.c     publisher           # the COB oracle's five sites inside the script engine, game thread
 src/tagpu_weapons.c      publisher           # the extra-weapons module: sim-side sites on the game thread; the weapon dump is tooling
-src/tagpu_scenario.c     tooling             # both halves on the game thread since 10c-1: the applier on the tick detour, detection on the flip
+src/tagpu_scenario.c     tooling             # both halves on the game thread: the applier on the tick detour, detection on the flip
 src/tagpu_cat.c          tooling             # unit/feature catalogues behind tagpu_units.trigger / tagpu_features.trigger
 src/tagpu_gui_snap.c     tooling             # the gadget-tree snapshot behind tagpu_ui.trigger
 src/tagpu_zoom.c         publisher           # the camera clamp 0x41C3C0, the follow clamp 0x41CAF7, the minimap-rect and ScrollSpeed-save redirects, and the command apply at the top of every in-play draw: every engine word here is read and written on the game thread; the render half (the levers, the anchor arithmetic, the predicted eye) reads only the packet
 src/tagpu_vpwide.c       publisher           # the 0x498DA0 mouse->world redirect and the clip guard inside DrawGameScreen; the rect is widened and restored from the command apply, game thread; the true rect is read on the game thread only
-src/tagpu_native.c       fenced              # the unit array, the poses, the option bits and the ground heights all come from the packet since landing 3; what is left is per-LEVEL assets under tagpu_reclaim's teardown fence — the model templates behind MODEL_PTRS (whose base and bound the packet carries) and, until landing 4b, the engine's screen fog descriptor — both fog grids now come out of the packet. tagpu_native_owns_unit/owns_obj read the unit record and its def on the GAME thread, for the publisher and the owndraw classifier
-src/tagpu_scaffold.c     fenced              # the units, the feature anchors, the map and sweep dimensions all come from the packet since landing 3; the FeatureDef records and the GAF frames it stamps from are per-MAP assets under the fence
-src/tagpu_render3do.c    fenced              # the write-back is deleted (landing 3) and the shade table and build-state formulas take the packet's copies; the face material helpers still read the model template's face records and their GAF frames, per level, under the fence
-src/tagpu_feat.c         fenced              # the anchors, their six height bytes, the map dimensions and the player and option bytes come from the packet since landing 3; the FeatureDef records and the wreck records it draws GAF frames out of are per-MAP assets under the fence
-src/tagpu_text.c         pure-engine-code    # the glyph blitter 0x4CCF60..0x4CD00E over ONE-GLYPH FONT OBJECTS OF OURS: it reads its arguments and writes its destination. Both text paths hand it a copy now — the marker font's glyphs come in the frame packet (landing 1) and the GL UI's come as bits in the string op (landing 4c) — so this file dereferences no engine font and carries no probe
+src/tagpu_native.c       fenced              # the unit array, the poses, the option bits and the ground heights all come from the packet; what is left is per-LEVEL assets under tagpu_reclaim's teardown fence — the model templates behind MODEL_PTRS (whose base and bound the packet carries). Both fog grids come out of the packet. tagpu_native_owns_unit/owns_obj read the unit record and its def on the GAME thread, for the publisher and the owndraw classifier
+src/tagpu_scaffold.c     fenced              # the units, the feature anchors, the map and sweep dimensions all come from the packet; the FeatureDef records and the GAF frames it stamps from are per-MAP assets under the fence
+src/tagpu_render3do.c    fenced              # there is no write-back, and the shade table and build-state formulas take the packet's copies; the face material helpers still read the model template's face records and their GAF frames, per level, under the fence
+src/tagpu_feat.c         fenced              # the anchors, their six height bytes, the map dimensions and the player and option bytes come from the packet; the FeatureDef records and the wreck records it draws GAF frames out of are per-MAP assets under the fence
+src/tagpu_text.c         pure-engine-code    # the glyph blitter 0x4CCF60..0x4CD00E over ONE-GLYPH FONT OBJECTS OF OURS: it reads its arguments and writes its destination. Both text paths hand it a copy — the marker font's glyphs come in the frame packet and the UI's come as bits in the string op — so this file dereferences no engine font and carries no probe
 src/tagpu_terr.c         fenced              # the tile set, the tile map and the height byte of every cell, per map under the fence; the level packet decides its fate
 src/tagpu_posebake.c     fenced              # the per-type geometry bake walks the model template tree on the render thread
 src/tagpu_r3dcache.c     fenced              # the unit atlas resolves template textures and GAF frames on the render thread
-src/tagpu_gaf.c          session-reader      # GAF banks and the cursor table: loaded once, never rewritten. The "fx" bank the effects and particle passes draw from is one of them [VERIFIED 2026-09-12]: 0x429870 loads it and resolves every named sequence into main+0x147AB.., and its only caller is 0x49134D inside 0x491200, whose only caller is WinMain's 0x49EA62 — so those sequences are a SESSION asset, not a per-level one. Since landing 4a this file also reads the frame HEADER for its callers (tagpu_gaf_frame_geom / _subframe), so a pass that only places a sprite dereferences nothing of its own
+src/tagpu_gaf.c          session-reader      # GAF banks and the cursor table: loaded once, never rewritten. The "fx" bank the effects and particle passes draw from is one of them [VERIFIED 2026-09-12]: 0x429870 loads it and resolves every named sequence into main+0x147AB.., and its only caller is 0x49134D inside 0x491200, whose only caller is WinMain's 0x49EA62 — so those sequences are a SESSION asset, not a per-level one. This file also reads the frame HEADER for its callers (tagpu_gaf_frame_geom / _subframe), so a pass that only places a sprite dereferences nothing of its own

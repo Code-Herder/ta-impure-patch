@@ -7,9 +7,9 @@
    THE SHAPE IN ONE LINE. `RENDER.GUI` is a real TA `.GUI` screen in a `.ufo`
    the DLL writes itself, pushed by copying Cavedog's own idiom at `0x495207`,
    with six live rows and no Apply, non-modal, never pausing. The engine does
-   the hit-testing, the dispatch, the plate art, the fonts, the save-under and
-   the G15/G17 twins; we supply two bytes of gadget state, one frame's pixels,
-   one 28x28 trigger and one small archive.
+   the hit-testing, the dispatch, the plate art, the fonts and the save-under;
+   we supply two bytes of gadget state, one frame's pixels, one 28x28 trigger
+   and one small archive.
 
    ARMING. The archive is written at `DLL_PROCESS_ATTACH` unconditionally, with
    a version stamp, so it can never be stale after a DLL upgrade. The screen
@@ -44,7 +44,7 @@ int  tagpu_menu_owns_point(int gx, int gy);
    hit-test on either alone works for exactly half its users. */
 int  tagpu_menu_click(int gx, int gy, int down);
 
-/* The render thread's frame, from render_ogl.c. Does the DEFERRED WRITE: a row
+/* The render thread's frame, from render_vk.c. Does the DEFERRED WRITE: a row
    click sets an in-memory value on the game thread and the cfg is written
    here, off it. TA is lockstep and a synchronous write inside `OnCommand` is
    an unbounded stall — a slow disk, a scanner touching a just-written file, a

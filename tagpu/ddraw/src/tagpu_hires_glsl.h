@@ -81,8 +81,9 @@ static const char* VS =
     /* Classic++ shadows: the depth pass takes the posed point in the WORLD --
        real z = projected z + (altitude + height)/2, the height the ground
        plus the throw plus the scaled model height -- the expression
-       tagpu_shadow.c's program uses for a 3DO, so a replacement mesh casts
-       from where its 3DO would (renderers.md 2.4, 2.11) */
+       tagpu_posedraw.c's vertex shader uses for a 3DO (`vShW`), so a
+       replacement mesh casts from where its 3DO would (renderers.md 2.4,
+       2.11) */
     "  if (uDepthPass == 1) {\n"
     "    vec3 W = vec3(uAnchor.z + m.x, uCast.y + uCast.z * m.y,\n"
     "                  uAnchor.w + pm.y + (uCast.x + m.y) * 0.5);\n"

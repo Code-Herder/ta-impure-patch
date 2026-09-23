@@ -32,14 +32,14 @@
 
    Here: models are handed to the native pass (same face/atlas/palette path,
    unshaded like the engine's GAF_DrawTransformed); lines and sprites are
-   rendered by this module into the native FBO right after the unit bodies,
+   gathered here and drawn by tagpu_vk_fx.c right after the unit bodies,
    at a depth band above every ground row and below the airborne band. GAF
    frames (raw or TA-RLE, sub-frame lists) are decoded into a private atlas.
    ALP alpha = 50% blend; the LHT flash = additive, per-level colour derived
    from the live table. Armed by tagpu_fx.on; tokens: log, nolines, nomodels,
    nosprites, noexpl, nodebris, passive (gather + log, engine draws).
    The particle sfx pass (tagpu_sfx.c, armed by tagpu_sfx.on) rides the same
-   buckets and program: layers 0..6 are emitted before the projectiles so the
+   buckets and shaders: layers 0..6 are emitted before the projectiles so the
    engine's order (smoke under weapon sprites) survives, layers 7..9 after
    the explosions; each sprite carries its own depth key. Read-only over sim. */
 
@@ -163,8 +163,8 @@ static void read_arm(unsigned frame_counter)
     if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
         s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
     /* AND THE RESTORE LIST. Under Classic++ `assets=1` the Vulkan lane
-       restores for itself, which is the only way the restored twin reaches it
-       at all. Polled
+       restores the atlas itself, from this list; it is the only route by
+       which a restored twin exists at all. Polled
        on every beat until it takes, exactly as the mirror is, because the
        knob is allowed to move mid-session. */
     if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
@@ -215,7 +215,7 @@ static unsigned s_lhtStamp = 0;
    `s_lhtInit` is what says whether it has ever been built. */
 static unsigned char s_lhtRGB[32 * 3];
 
-/* THE SHADER PAIR IS A BUILD INPUT, NOT DEAD GL CODE, and no C in this file
+/* THE SHADER PAIR IS A BUILD INPUT, NOT DEAD CODE, and no C in this file
    references it -- `tools/spirv-gen.py` reads both strings
    out of the PREPROCESSED translation unit and generates the SPIR-V that
    `tagpu_vk_fx.c` draws with, so deleting them fails the build with "the
@@ -281,23 +281,23 @@ static const char* FS =
     "      if (mode == 2) a = 0.5;\n"
     "    }\n"
     "  }\n"
-    /* premultiplied FBO: flashes are pure additive light (alpha 0) */
+    /* premultiplied target: flashes are pure additive light (alpha 0) */
     "  if (mode == 3) frag = vec4(rgb, 0.0); else frag = vec4(rgb * a, a);\n"
     "}\n";
 #pragma GCC diagnostic pop
 
 /* THE ATLAS IS THE PASS, NOT THE BACKEND -- the feature pass's shape and the
-   same reason (tagpu_feat.c). Nothing in here is GL: `atlas_create` gates its
-   own texture and keys the atlas's existence on `made` rather than on a GL name
-   (tagpu_gaf.h). Anywhere a lane might not call it would leave `dim` at 0,
-   and every sprite lookup would return NULL. */
+   same reason (tagpu_feat.c). `atlas_create` makes no texture: it lays out the
+   shelf and keys the atlas's existence on `made` (tagpu_gaf.h). A path that
+   skipped it would leave `dim` at 0, and every sprite lookup would return
+   NULL. */
 static void atlas_setup(void)
 {
-    tagpu_gaf_atlas_lost(&s_atlas);      /* its texture is made on first use */
+    tagpu_gaf_atlas_lost(&s_atlas);      /* the struct describes nothing yet */
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "fx";
     s_atlas.prio = 2;                   /* restored after terrain and features */
-    tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
+    tagpu_gaf_atlas_create(&s_atlas);   /* laid out now, not on first use */
 }
 
 /* ---- emission ---- */
@@ -808,9 +808,9 @@ static void gather_fx(const TAGPU_FXVIEW* v)
                 rgb[L*3+1] = (unsigned char)(sg < 0 ? 0 : sg > 255 ? 255 : sg);
                 rgb[L*3+2] = (unsigned char)(sb < 0 ? 0 : sb > 255 ? 255 : sb);
             }
-            /* THE TABLE IS THE PASS. `s_pub.lht` hands the bytes to the twin,
-               which builds its own image from them, so the table reaching `rgb`
-               IS the work. */
+            /* THE TABLE IS THE PASS. `s_pub.lht` hands the bytes to the
+               Vulkan pass, which builds its own image from them, so the
+               table reaching `rgb` IS the work. */
             s_lhtInit = 1; s_lhtStamp = v->frame_counter;
         }
     }
@@ -884,12 +884,12 @@ int tagpu_fx_nmodels(void) { return s_nm; }
 const TAGPU_FXMODEL* tagpu_fx_model(int i) { return (i >= 0 && i < s_nm) ? &s_models_[i] : NULL; }
 
 /* ---- the Vulkan hand-over (the fourth world pass) -------------------------
-   tagpu_fx.h is the contract. Published AFTER the GL draw, from the very
-   arrays, numbers and texels that draw used.
+   tagpu_fx.h is the contract. Published AFTER the gather, from the very
+   arrays, numbers and texels it built.
 
    THE FOG GRID IS COPIED, never aliased. `v->fogGrid` points into the frame
    packet, whose declared lifetime ends at tagpu_packet_frame_end() -- earlier
-   in render_ogl.c's iteration than the tagpu_vk_frame that would read it.
+   in render_vk.c's iteration than the tagpu_vk_frame that would read it.
    tagpu_terr.c has the argument in full; this is the same one. */
 #define FOG_COPY_MAXDIM 1024
 static unsigned short* s_fogCopy;
@@ -899,16 +899,15 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
 {
     int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     int b;
-    /* NOTHING IS PUBLISHED UNTIL THE VULKAN LANE HAS BEEN ARMED. `s_mirrorAsked`
-       is the latch the arm beat sets the first time `tagpu_vk_armed()` says yes;
-       while it is 0 -- which is every session that never arms the lane, i.e.
-       every shipped one -- the stores below are pure cost that is not paid.
-       IT IS A ONE-WAY LATCH: clearing `tagpu_vk.on` brings the lane down but
-       does not take this cost back off until the GL context is lost
-       (`tagpu_fx_glreset`). That is deliberate on the cheap side of a trade --
-       the mirror it guards is already allocated by then, so re-testing per beat
-       would buy back a memcpy and nothing else -- and `tagpu_feat.c` does the
-       same, which is the reason not to make this one file differ. */
+    /* NOTHING IS PUBLISHED UNTIL A VULKAN PASS WILL RUN. `s_mirrorAsked` is
+       the latch the arm beat sets the first time `tagpu_vk_owns_present()`
+       says yes and the mirror is allocated; while it is 0 nothing will ever
+       take the hand-over, and the stores below are pure cost that is not paid.
+       IT IS A ONE-WAY LATCH: nothing clears it for the life of the process.
+       That is deliberate on the cheap side of a trade -- the mirror it guards
+       is already allocated by then, so re-testing per beat would buy back a
+       memcpy and nothing else -- and `tagpu_feat.c` does the same, which is
+       the reason not to make this one file differ. */
     if (!s_mirrorAsked) { s_pubHave = 0; s_abFrame = 0; return; }
     memset(&s_pub, 0, sizeof s_pub);
     for (b = 0; b < NBUCKET; b++) { s_pub.vert[b] = s_verts[b]; s_pub.n[b] = s_nv[b]; }
@@ -916,12 +915,12 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
     s_pub.depthScale = v->depthScale > 1.0f ? v->depthScale : 512.0f;
-    /* THE ROUTE IS THE PUBLISHED LIST, NOT A GL TEXTURE NAME. `s_atlas.rgb`
+    /* THE ROUTE IS THE PUBLISHED LIST, NOT A TEXTURE NAME. `s_atlas.rgb`
        has one writer in the tree -- `tagpu_gaf.c:643 a->rgb = 0` -- so it is
        always 0. `rlistWant` is what says a restore route exists; it is latched
        by the arm. */
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
-    /* the number the GL draw passed, bit1 and all: effects hide in grey */
+    /* bit1 set as well: effects hide in grey rather than darkening */
     s_pub.fog = (v->fogMode & 1) | 2;
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
@@ -948,9 +947,8 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     }
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     /* THE LIGHT TABLE ONLY WHEN IT HAS BEEN BUILT. A frame with flash vertices
-       and no table is one the GL twin drew through an incomplete texture, and
-       the port cannot reproduce that -- so it is refused below rather than
-       drawn differently. */
+       and no table has no colour for its flashes, so tagpu_vk_fx.c refuses it
+       rather than guess one. */
     s_pub.lht = s_lhtInit ? s_lhtRGB : NULL;
     /* the grid as the fragment shader will read it, and only when it will:
        uFog bit0 clear means taFog never samples uFogGrid. */
@@ -974,7 +972,7 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
-       pass enables the scissor only when it resolved glScissor. */
+       pass decides it (tagpu_native.c `s_scissorOn`). */
     s_pub.scissorOn = tagpu_native_scissor_on();
     s_pub.ss = v->ss;
     /* THE A/B FLAG LIVES EXACTLY ONE FRAME (tagpu_feat.c has the argument). */
@@ -1012,8 +1010,8 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
        nothing at all. `total` is the whole refusal. */
     if (total == 0) { s_pubHave = 0; s_abFrame = 0; return; }
 
-    /* OUTSIDE ANY DRAW, because on the vulkan-only lane the A/B is armed
-       without one. Read once so the two arms cannot disagree about
+    /* OUTSIDE ANY DRAW, because this pass issues none: the A/B is armed
+       from the gather. Read once so the two arms cannot disagree about
        which frame is the capture frame. */
     taking = s_ab && !s_abDone;
     /* NO `ss` BOUND ON THIS A/B: the Vulkan lane draws the world into a gw*ss
@@ -1022,8 +1020,8 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
        in the lane that can see the target: if there is none that frame,
        tagpu_vk.c says so by name and captures nothing. [tagpu_vk_world.h.] */
 
-    /* Everything above is the GATHER; `fx_publish` below hands the vertices,
-       and the numbers to the Vulkan twin, which draws them. */
+    /* Everything above is the GATHER; `fx_publish` below hands the vertices
+       and the numbers to the Vulkan pass (tagpu_vk_fx.c), which draws them. */
     if (taking) {
         /* THE A/B CLAIM. The lever claims the VULKAN capture: `tagpu_vk_ab_arm`
            unlinks the target `_vk.ppm` at the instant the claim latches, which is what

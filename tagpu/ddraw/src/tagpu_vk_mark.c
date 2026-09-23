@@ -1,21 +1,23 @@
 /* tagpu_vk_mark.c -- the UI MARKERS, drawn by Vulkan.
    Contract: tagpu_vk_mark.h.
 
-   WHAT THE ORACLE IS. `tagpu_mark_render` in tagpu_mark.c, and this pass is fed
-   by the DRAW LIST that function records as it issues its draws
-   (`tagpu_mark_handover`). The list matters more here than in any pass before
-   it: this is seven draws, not one, and they differ only in `uText`, `uFog` and
-   which texture feeds `uLayer` -- the order markers and their labels first, then
-   the bars over them, then the group digit, then the captured layer, and the
-   build cursor last of all with fog OFF because the engine draws it after the
-   fog overlay and never darkens it. Every one of those is a decision the GL
-   pass made from state this side cannot see, so it is carried rather than
+   WHAT FEEDS IT. `tagpu_mark_render` in tagpu_mark.c records a DRAW LIST as it
+   gathers, and this pass draws exactly that list (`tagpu_mark_handover`). The
+   list matters more here than in any pass before it: this is seven draws, not
+   one, and they differ only in `uText`, `uFog` and which texture feeds
+   `uLayer` -- the order markers and their labels first, then the bars over
+   them, then the group digit, then the captured layer, and the build cursor
+   last of all with fog OFF because the engine draws it after the fog overlay
+   and never darkens it. Every one of those is a decision the
+   gather made from state this side cannot see, so it is carried rather than
    re-derived.
 
-   NO DEPTH, NO BLEND, and that is the twin's rule rather than a shortcut:
-   tagpu_mark.h says the pass "expects depth test and blending OFF (the markers
-   are the frame's top layer and every fragment is opaque)". A pipeline that
-   blended here would be a different picture on every anti-aliased glyph edge.
+   NO BLEND, AND NO DEPTH EXCEPT UNDER THE SELECTION RECTS, and that is the
+   layer's rule rather than a shortcut: the markers are the frame's top layer
+   and every fragment is opaque (tagpu_mark.h). A pipeline that blended here
+   would be a different picture on every anti-aliased glyph edge. The
+   selection rects alone test depth, because the engine draws each one inside
+   the unit sweep, under its own unit (tagpu_mark.c).
 
    THE LINES ARE `ss` DEVICE PIXELS WIDE, which is one SCREEN pixel at any
    supersample -- the same rule tagpu_vk_fx.c follows, and the reason a marker
@@ -170,7 +172,7 @@ static VkDeviceSize s_ualign = 256;
 static uint32_t s_slot;
 static int s_abFrame;
 static int s_saidLine, s_saidWide, s_saidFog, s_saidLut, s_saidRoom, s_saidHand, s_saidDrew, s_saidIn;
-static float s_lineW = 1.0f;   /* glLineWidth(ss) for THIS frame's target */
+static float s_lineW = 1.0f;   /* line width: THIS frame's target's `ss`  */
 /* whether THIS frame's selection rects can be drawn -- settled in `prepare`,
    read in `record`. A frame whose rects cannot be is not refused whole the way
    an order-line frame is: the rects are dropped and every other marker still
@@ -419,7 +421,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     }
     /* NEAREST on all four, and it is not a style choice: uLayer's texel IS a
        palette index and interpolating two of them gives a colour that is in
-       neither, which is the GL twin's own comment on the same sampler. */
+       neither. */
     si.magFilter = si.minFilter = VK_FILTER_NEAREST;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -485,8 +487,8 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
     /* NO DEPTH. The render pass has a depth attachment, so a pipeline must
-       still declare the state -- with testing and writes OFF, which is what the
-       GL twin runs with. */
+       still declare the state -- with testing and writes OFF: the markers are
+       the frame's top layer. */
     memset(&ds, 0, sizeof ds);
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_FALSE;
@@ -494,7 +496,7 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
     ds.maxDepthBounds = 1.0f;
 
-    /* NO BLEND, for the twin's own reason: every fragment here is opaque. */
+    /* NO BLEND: every fragment here is opaque. */
     memset(&ba, 0, sizeof ba);
     ba.blendEnable = VK_FALSE;
     ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -522,13 +524,14 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeTri) != VK_SUCCESS)
         goto done;
 
-    /* THE ORDER LINES, AND THE ONE PIECE OF STATE THAT MAKES THEM THE TWIN'S.
-       BRESENHAM is the diamond-exit rule GL's non-antialiased lines already
-       follow; Vulkan's DEFAULT mode is not it, and the difference is whole
-       fragments along every diagonal. MEASURED without the chain: 4 900 pixels
-       the Vulkan lane drew and the GL twin did not, on 436 segments of route
-       line and range circle, with the GL half a near-perfect SUBSET of the
-       Vulkan one. `tagpu_vk_fx.c` carries the same state for the same reason.
+    /* THE ORDER LINES, AND THE ONE PIECE OF STATE THAT FIXES THEIR FRAGMENTS.
+       BRESENHAM is the diamond-exit rule these lines are specified by; Vulkan's
+       DEFAULT mode is not it, and the difference is whole fragments along
+       every diagonal. MEASURED without the chain: 4 900 pixels the default
+       mode drew and the OpenGL renderer this replaced (diamond-exit lines) did
+       not, on 436 segments of route line and range circle, with the OpenGL
+       picture a near-perfect SUBSET of the default one.
+       `tagpu_vk_fx.c` carries the same state for the same reason.
 
        Built ONLY when the device gave us the mode, which is what makes the
        refusal in `prepare` a refusal rather than a fallback: with `lineok`
@@ -735,11 +738,11 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
              s_h.text ? "yes" : "NULL", s_h.textW, s_h.textH,
              s_h.key, s_h.gw, s_h.gh, s_h.zoom, s_h.ss);
     }
-    /* EVERY BAIL-OUT FROM HERE DOWN SAYS WHY. A silent one leaves an A/B that
-       reads "GL 297 px, Vulkan 0" with the log holding not one word about the
-       cause -- which is the exact shape of failure this project keeps paying
-       for. Each latches SEPARATELY so a refusal is said once and not at the
-       frame rate -- and so that one refusal cannot silence a different one. */
+    /* EVERY BAIL-OUT FROM HERE DOWN SAYS WHY. A silent one leaves a frame with
+       no markers on it and the log holding not one word about the cause --
+       which is the exact shape of failure this project keeps paying for.
+       Each latches SEPARATELY so a refusal is said once and not at the frame
+       rate -- and so that one refusal cannot silence a different one. */
     /* NO PALETTE, NO FRAME. Binding 41 falls back to the STAND-IN's view rather
        than leaving a hole in the set, and the fragment shader's LAST line is
        `texelFetch(uPal, ivec2(pi, 0), 0)` on EVERY path -- the flat one and the
@@ -792,8 +795,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             needSel = 1;
         } else if (g->lines) needLines = 1;
         /* A DRAW THAT WANTED FOG AND HAS NO GRID IS REFUSED, not drawn clear:
-           the GL twin sampled a grid this lane would not have, and an unfogged
-           marker over fogged ground is a different picture. */
+           an unfogged marker over fogged ground is a different picture. */
         if (g->fog && !s_h.fogGrid) {
             if (!s_saidFog) {
                 s_saidFog = 1;
@@ -833,12 +835,13 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* THE TWO BOUNDS ON A LINE FRAME, and they are different features.
 
        `lineok` is VK_EXT_line_rasterization with `bresenhamLines` -- the
-       diamond-exit rule the GL twin's lines already follow. Without it the
-       line pipeline is not built at all (build_pipelines), so this is a
-       refusal and not a fallback.
+       diamond-exit rule these lines are specified by. Without it the line
+       pipeline is not built at all (build_pipelines), so this is a refusal and
+       not a fallback.
 
-       The WIDTH is the other one. The GL twin calls `glLineWidth(ss)`, and a
-       Vulkan `lineWidth` other than 1.0 needs the `wideLines` device feature
+       The WIDTH is the other one. A line is one SCREEN pixel wide, `ss` pixels
+       of the target, and a Vulkan `lineWidth` other than 1.0 needs the
+       `wideLines` device feature
        enabled at device creation -- which is the seam's business, not a
        pass's. THE SEAM ASKS FOR IT, because the world is drawn into a target
        `ss` times the game resolution and a 1.0 line there is `ss` times too
@@ -858,21 +861,19 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
         return 0;
     }
-    /* THE LINE WIDTH. The twin calls `glLineWidth(ss)` and the world is drawn
-       into a target `ss` times the game resolution, so `ss` is the width that
-       matches the oracle and `record` below sets exactly that. Refused rather
-       than clamped, for tagpu_vk_fx.c's reason: a clamped width is a line a
-       different thickness from its own twin. */
+    /* THE LINE WIDTH. The world is drawn into a target `ss` times the game
+       resolution, so `ss` is the width of one screen pixel and `record` below
+       sets exactly that. Refused rather than clamped: a clamped width is a
+       line thinner than the one screen pixel it is specified at. */
     /* THE WIDTH FOLLOWS THE TARGET, NOT THE HAND-OVER -- tagpu_vk_fx.c carries
-       the argument. `s_h.ss` says what the GL lane did; this says what this
-       frame's target is, and on the fallback path (no offscreen target, the
-       world going into the swapchain image at 1:1) they differ. */
+       the argument. `s_h.ss` says what the gather was handed; this says what
+       this frame's target is, and on the fallback path (no offscreen target,
+       the world going into the swapchain image at 1:1) they differ. */
     s_lineW = (float)tagpu_vk_world_scale();
     /* THE SELECTION RECTS NEED THE SAME TWO FEATURES AND ARE NOT REFUSED WITH
-       THE FRAME. The order lines' refusal exists because they had a GL twin to
-       be a different picture from; the rects have none, and a selection is on
-       screen far more often than an order line -- refusing the whole marker
-       layer whenever a unit is selected would take the health bars with it.
+       THE FRAME, as the order lines are: a selection is on screen far more
+       often than an order line, and refusing the whole marker layer whenever a
+       unit is selected would take the health bars with it.
        So on a device without Bresenham lines the rects alone are dropped, and
        said so once; the WIDTH they need is `record`'s to check, because it
        follows the target's real extent. */
@@ -1079,9 +1080,10 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        viewport height puts it on row 0 of the swapchain image -- which is where
        the game's top row is. A negative height turns it over a second time and
        presents the markers upside down; `tagpu_vk_fx.c` item 6 has the whole
-       argument. minDepth 0.5 / maxDepth 1.0 still maps clip z in [0, 1] onto
-       GL's own (z+1)/2 -- the depth range is a separate question from the
-       flip. */
+       argument. minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1] onto
+       [0.5, 1], the range every depth-testing world pass shares
+       (tagpu_vk_feat.c item 1) -- the depth range is a separate question from
+       the flip. */
     vp.x = 0.0f;
     vp.y = 0.0f;
     vp.width = (float)w;
@@ -1145,7 +1147,7 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           g->depth ? s_pipeLineZ :
                           g->lines ? s_pipeLine : s_pipeTri);
-        /* `glLineWidth(ss)`: the seam enables `wideLines` and the world is
+        /* A line width of `ss`: the seam enables `wideLines` and the world is
            drawn into a target that many times the game resolution. `s_lineW`
            is the TARGET's scale, settled in `prepare`, not the hand-over's --
            the two differ on the frame the target refused. */

@@ -2,7 +2,7 @@
 
    The design and the reasoning are research/notes/gpu-posing.md §3 and §4;
    tagpu_posebake.h carries the contract. What is here is the walk that turns a
-   `Model3DONode` template into two GL vertex buffers, the two caches over them,
+   `Model3DONode` template into two vertex streams, the two caches over them,
    the four things that invalidate an entry, and the lever.
 
    THE WALK IS THE POINT. `emit_node`, `emit_slant_at` and `emit_wire` each walk
@@ -35,9 +35,8 @@
 
 /* A 69-unit inventory of 67 distinct types filled a 64-entry table and started
    evicting, so both are set clear of a busy screen rather than at it. A stock
-   model bakes to ~2000 vertices: 128 geometry entries is about 8 MB of static
-   VBO and 256 material streams about 10 MB, against the 2.75 MB of vertices
-   this pass re-uploads EVERY FRAME today. */
+   model bakes to ~2000 vertices: 128 geometry entries is about 8 MB of
+   geometry mirror and 256 material streams about 10 MB. */
 #define PB_MAXGEOM  128          /* types cached at once                     */
 #define PB_MAXMAT   256          /* (type, owner) streams cached at once     */
 #define PB_MAXVERT 49152         /* vertices one model may bake to           */
@@ -93,9 +92,10 @@ static int          s_ngeom;
 static TAGPU_PBMAT  s_mat[PB_MAXMAT];
 static unsigned char* s_matSkip[PB_MAXMAT];   /* per vertex, for the predictor */
 /* ---- THE VULKAN LANE'S MIRRORS (Phase G, the unit pass) ----
-   The very buffers `glBufferData` was handed, kept while the lane is armed --
-   tagpu_posebake.h says why, and tagpu_terr.c's `s_mirrorWant` is the pattern.
-   Indexed by the same slot as the entry, freed by the same drop. */
+   The bake's own output, copied out of the walk's scratch in the same call,
+   once the latch below has armed -- tagpu_posebake.h says why, and
+   tagpu_terr.c's `s_mirrorWant` is the pattern. Indexed by the same slot as
+   the entry, freed by the same drop. */
 static float*       s_geomMirror[PB_MAXGEOM];
 static float*       s_matMirror[PB_MAXMAT];
 static int          s_mirrorWant;             /* the Vulkan lane asked for them */
@@ -326,8 +326,9 @@ static void geom_drop(TAGPU_PBGEOM* g)
     memset(g, 0, sizeof *g);
 }
 
-/* evict the entry least recently asked for; GL deletion is render-thread only,
-   and every caller of this is on it */
+/* evict the entry least recently asked for; the drop frees a mirror the
+   Vulkan unit pass reads on the render thread, and every caller of this is on
+   it */
 static int geom_slot(void)
 {
     int i, worst = 0;
@@ -380,7 +381,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
            the level, inflating `refused=` with it. Remembering the refusal costs
            one flag and makes the count mean "models refused", not "frames".
            The entry is dropped by the ordinary generation checks like any
-           other, so a level or context change re-tries. */
+           other, so a level change re-tries. */
         g->refused = 1;
         g->nvert = 0;
         s_refused++;
@@ -391,7 +392,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
     /* THE BAKE IS THE PASS, AND THE MIRROR IS WHERE IT LANDS. `c` above is the
        walk's own scratch; the mirror takes it verbatim, in the same call, so
        there is no second evaluation of the bake to drift from the first. It is
-       the only destination the bake has: the Vulkan twin reads it through
+       the only destination the bake has: the Vulkan unit pass reads it through
        `tagpu_posebake_geom_mirror`. A refused malloc leaves the slot NULL,
        which the accessor reports as "no mirror" and the Vulkan pass stands
        down on, visibly. */
@@ -495,7 +496,7 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
         pb_walk(nd, g->nparts, r, mat_emit, &c, NULL);
     /* THE INVARIANT the split rests on. If this ever fires, the two walks have
        drifted apart and the material stream would be read against the wrong
-       vertices — refuse rather than upload a buffer that lies. */
+       vertices — refuse rather than publish a stream that lies. */
     if (c.over || c.nv != g->nvert) {
         _snprintf(b, sizeof b,
                   "posebake: REFUSED material root=%p owner=%d — %d vertices against the "
@@ -517,11 +518,12 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
         s_matMirror[slot] = (float*)malloc(nb);
         if (s_matMirror[slot]) memcpy(s_matMirror[slot], s_scratchM, nb);
     }
-    /* WHAT THE VERTEX LAYOUT IS, recorded because the twin has to reproduce it
-       and nothing else in this file states it. Locations 0-3 come off the
-       geometry stream (the type's), 4-6 off this material stream -- the same
-       split the two mirrors have, so either can be re-baked without touching
-       the other. The twin builds its own binding from the two mirrors. */
+    /* WHAT THE VERTEX LAYOUT IS, recorded because the consumer has to
+       reproduce it and nothing else in this file states it. Locations 0-3 come
+       off the geometry stream (the type's), 4-6 off this material stream -- the
+       same split the two mirrors have, so either can be re-baked without
+       touching the other. tagpu_vk_unit.c builds its own binding from the two
+       mirrors. */
     s_matSkip[slot] = (unsigned char*)malloc((size_t)c.nv ? (size_t)c.nv : 1);
     if (s_matSkip[slot]) memcpy(s_matSkip[slot], s_scratchSkip, (size_t)c.nv);
     s_matBaked++;
@@ -542,10 +544,11 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
 }
 
 /* ---- the four invalidations --------------------------------------------- */
-/* level teardown (node pointers are recycled by the next level), GL context
-   loss (every id dies), an atlas recycle (every UV moves) and the owner (part
-   of the material key). The first three are checked here, once per frame,
-   because every lookup below is on the render thread inside the native pass. */
+/* level teardown (node pointers are recycled by the next level), the mirror
+   latch's first arming (below), an atlas recycle (every UV moves) and the
+   owner (part of the material key). The first three are checked here, once per
+   frame, because every lookup below is on the render thread inside the native
+   pass. */
 void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
 {
     unsigned lvl = level_gen;
@@ -590,8 +593,9 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
     if (dg || dm || s_dropCascade) {
         char b[192];
         /* the cascade is reported separately or the line reads "0 material" on
-           a GL reset that dropped every stream there was: a material goes with
-           the geometry it was walked beside, before this loop ever sees it */
+           a level change that dropped every stream there was: a material goes
+           with the geometry it was walked beside, before this loop ever sees
+           it */
         _snprintf(b, sizeof b,
                   "posebake: dropped %d geometry (taking %d material with them) and %d material "
                   "in its own right — level %u, atlas %u",
@@ -672,9 +676,10 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
        cascade, not by any unit's destructor, so nothing else would notice its
        address being handed out again (thread-safe-destruction.md §6a). The
        ghost flag splits the entry in two: the ghost's synthesized run walks
-       the tree in its own order, so its VBO piece indices and `parent[]` do
-       not line up with a live unit's prim-ordered run, and a shared entry
-       would pose a building's parts with the wrong pieces' matrices. */
+       the tree in its own order, so its geometry stream's piece indices and
+       `parent[]` do not line up with a live unit's prim-ordered run, and a
+       shared entry would pose a building's parts with the wrong pieces'
+       matrices. */
     for (i = 0; i < s_ngeom; i++)
         if (s_geom[i].root == nd[0] && s_geom[i].levelGen == lvl &&
             s_geom[i].nparts == nparts &&

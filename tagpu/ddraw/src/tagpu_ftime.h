@@ -2,12 +2,11 @@
 #define TAGPU_FTIME_H
 /* tagpu_ftime.h -- WHAT A FRAME COSTS, in GPU time.
 
-   WALL CLOCK CANNOT ANSWER "frame time no worse than GL". What is comparable
-   is the GPU time the lane spends on its own passes, measured on the device by
-   the device. The only lane polled here is the Vulkan one, from render_vk.c.
+   WALL CLOCK CANNOT ANSWER "what does this change cost a frame". What is
+   comparable is the GPU time the Vulkan lane spends on its own passes,
+   measured on the device by the device, polled from render_vk.c.
    **What the numbers support is a CROSS-BUILD comparison**: this build's
-   Vulkan GPU time against a previous build's, or against a GL figure taken
-   from a build that still had the GL renderer.
+   Vulkan GPU time against a previous build's.
 
    TIMESTAMPS, NOT SCOPED QUERIES: two `vkCmdWriteTimestamp` counters a frame.
 

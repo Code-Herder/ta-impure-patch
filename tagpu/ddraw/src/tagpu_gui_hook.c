@@ -2150,8 +2150,8 @@ static void publish(unsigned flipSurf)
 
        `tagpu_gui_surf.c`'s UI atlas matches entries on `(o->frame, o->pix,
        fw, fh)` -- the frame's ADDRESS and its content hash -- and its only
-       resets are `twins_reset`, the atlas filling, and a GL context loss.
-       NONE of those is a level boundary. The engine frees a level's GAF banks
+       resets are `twins_reset` and the atlas filling. NEITHER of those is a
+       level boundary. The engine frees a level's GAF banks
        and the next level's loader may hand a new frame an old one's address;
        `frame_key` hashes only the plane's first 64 bytes plus the hotspot, so
        UI art whose first RLE row is one transparent run can collide by

@@ -1,30 +1,26 @@
 #!/usr/bin/env python3
-"""G19c -- the shader pipeline: the fork's GLSL, translated to SPIR-V.
+"""The shader pipeline: the fork's GLSL, translated to SPIR-V.
 
 WHY THIS TOOL EXISTS AT ALL, AND WHY IT DOES NOT SIMPLY COMPILE A DIRECTORY OF
-`.vert` / `.frag` FILES. The GL renderer's shaders live where they are used --
-as C string literals inside the pass that owns them, next to the comment that
-explains the maths. That is the one copy. A Vulkan lane that carried its own
-edition of each shader would be a second copy of the fork's programs that
-nothing forces to agree, and they would drift within a landing or two: the whole
-point of Phase G is that the GL lane is the ORACLE for the Vulkan one, and two
-shaders that disagree cannot be each other's oracle.
+`.vert` / `.frag` FILES. The fork's shaders live as C string literals in the
+source of the pass that owns them, next to the comment that explains the maths.
+That is the one copy. A second edition of each shader in its own file would be
+a copy of the fork's programs that nothing forces to agree with the first, and
+the restorer's text is shared with tools/tascene's browser lab besides.
 
-So the GLSL source of truth does not move. This tool READS the shaders back out
-of the C sources -- through the C preprocessor, so a spliced macro like
-`TAGPU_EDGE_NUDGE` expands exactly as the compiler expands it -- applies a
-documented, mechanical GL-330-to-Vulkan transform, and compiles the result with
-glslang. Editing a shader means editing the C string, as it always did; the
-Vulkan edition follows on the next `spirv-gen`.
+So the GLSL source of truth does not move. The shaders are written in GL 3.3
+GLSL; this tool READS them back out of the C sources -- through the C
+preprocessor, so a spliced macro like `TAGPU_EDGE_NUDGE` expands exactly as the
+compiler expands it -- applies a documented, mechanical GL-330-to-Vulkan
+transform, and compiles the result with glslang. Editing a shader means editing
+the C string; the Vulkan edition follows on the next `spirv-gen`.
 
   the C string  --(cc -E)-->  GL 3.3 GLSL  --(transform)-->  Vulkan GLSL
                                                     --(glslang)--> SPIR-V
                                                     --(this)--> uint32_t[] .h
 
-WHERE THE TRANSLATION RUNS: NOT IN THE BUILD. The roadmap's gate asked for
-build-time translation and named the fallback in the same breath, and the
-fallback is what this is -- deliberately, not because CI could not be taught to
-install glslang. The build has four entry points (this Makefile, the CI job that
+WHERE THE TRANSLATION RUNS: NOT IN THE BUILD -- deliberately, not because CI
+could not be taught to install glslang. The build has four entry points (this Makefile, the CI job that
 runs it, `build.cmd`, and the MSVC project), and only the first two are ours. A
 compiler in the build would break the other two outright and would put a 30 MB
 toolchain between a contributor and a DLL, to translate text that changes when a
@@ -83,8 +79,8 @@ THE TRANSFORM, in full. Each item is mechanical and applies to every shader:
      two different vertex stages -- `tagpu_native`'s fragment shader is shared
      with `tagpu_posedraw`'s vertex stage -- both mappings are computed and
      must agree, which is a real check on a real pairing.
-  6. FRAGMENT OUTPUTS take locations in declaration order, which is the order
-     `glDrawBuffers` addresses them in under GL.
+  6. FRAGMENT OUTPUTS take locations in declaration order, unless the source
+     already gives one a `layout(location=)`.
   7. `gl_VertexID` / `gl_InstanceID` become `gl_VertexIndex` /
      `gl_InstanceIndex`. These are the same value for every draw the fork
      issues (`firstVertex` and `firstInstance` are 0 everywhere), and the day
@@ -98,30 +94,30 @@ than source ones -- they belong to the pass being ported, not here:
 
   * THE Y FLIP. GL's clip space has +Y up and Vulkan's has +Y down, so the same
     `gl_Position` draws the frame upside down. The fix is a negative-height
-    viewport (core since Vulkan 1.1), NOT a source edit, because a source edit
-    would make the Vulkan shader disagree with its own GL oracle.
+    viewport (core since Vulkan 1.1), NOT a source edit, because the transform
+    touches declarations only (see `residual()` below) and a shader body stays
+    written in GL's convention.
   * THE DEPTH RANGE. GL maps clip z [-1, 1] to [0, 1]; Vulkan takes [0, 1]
     directly. Every shader here writes a z already in [0, 1] (they all
-    `clamp(1.0 - enc/uDepthScale, 0.0, 1.0)`), so under GL the near half of
-    that range is thrown away and under Vulkan it is not. Passes that depth-
-    test must account for it; `tagpu_fps` does not depth-test at all, which is
-    part of why it is G19d's pass.
+    `clamp(1.0 - enc/uDepthScale, 0.0, 1.0)`), which GL's convention would
+    halve and Vulkan uses whole. Passes that depth-test must account for it;
+    `tagpu_fps` does not depth-test at all.
   * `gl_FragCoord`. GL's origin is the lower left and Vulkan's the upper left.
     A flipped viewport puts it back, but a pass that reads it (the GUI sharp
     layer, the restorer) should say so where it sets its viewport up.
 
-THE RESTORER IS HERE SINCE LANDING 7, and it is the one VARIANT set. Its five
-shaders live in `tagpu_restore_glsl.h` and are compiled at runtime under a prefix
-the DEVICE decides -- `NK` is `GL_MAX_UNIFORM_BLOCK_SIZE` and
-`GL_MAX_DRAW_BUFFERS` divided by the weights' widest k-block, and `WMAX` is `NK`
-times that same number. `NK` changes how many fragment outputs the conv pass
+THE RESTORER is the one VARIANT set. Its five shaders live in
+`tagpu_restore_glsl.h` as macros under a prefix the DEVICE decides -- `NK` is
+the device's `maxUniformBufferRange` divided by the weights' widest k-block,
+clamped to its colour-attachment limit (`tagpu_rcore_pick_nk`), and `WMAX` is
+`NK` times that same k-block. `NK` changes how many fragment outputs the conv pass
 declares, so it cannot be a specialisation constant, and a variant is therefore
 an (`NK`, `kmax`) PAIR -- `WMAX` cannot be compiled once at the largest `kmax`
 and shared, because `NK` is derived from the very limit the block has to fit.
 `kmax` is READ OUT OF THE WEIGHT BINARIES (`restore_kmax`) rather than written
 down, so the weights are part of what these headers are generated from. The
 consequence is a constraint on the project and is stated in
-research/notes/vulkan-only-plan.md landing 7 rather than here: the Vulkan lane
+research/notes/vulkan-only-plan.md landing 7 rather than here: the restorer
 restores with the shipped models and no others.
 
 THE ONE INVARIANT THAT MAKES THIS SAFE, and it is checked on every run rather
@@ -152,20 +148,20 @@ GLSLANG = REPO / "tools" / "glslang" / "bin" / "glslang"
 
 # ---------------------------------------------------------------- the manifest
 #
-# THE PROGRAMS, as the C code links them. This table is the one thing here that
+# THE PROGRAMS, as the C code pairs them. This table is the one thing here that
 # is not derived: which vertex stage goes with which fragment stage is a fact
-# about `mkprog` call sites, and there is no honest way to read it out of the
-# source. Each entry is (program name, vertex "file::symbol", fragment one).
-# The line number beside each group is where that pairing is made.
+# about the pipelines the `tagpu_vk_*.c` files build, and there is no honest way
+# to read it out of the source. Each entry is (program name, vertex
+# "file::symbol", fragment one). Where a group names a `tagpu_vk_*.c`, that is
+# where its pairing is made; the one-pass-each group pairs in its own
+# `tagpu_vk_<pass>.c`.
 PROGRAMS = [
-    # tagpu_gui_surf.c -- two vertex stages (QVS and LAY_VS) and eight fragment
-    # stages, from ten GLSL strings in that file. RESTORED
-    # by the UI rebuild: the clean cut took these with the composite, and the
-    # composite is what is not coming back. `LAY_FS` no longer samples TA's
-    # frame, so none of the eight puts an engine pixel anywhere -- `TINT_FS`
-    # included: what it samples is a copy of OUR OWN twin, made one command
-    # earlier, and the table it indexes through is the engine's palette-derived
-    # LUT and not a picture.
+    # tagpu_gui_surf.c (paired in tagpu_vk_gui.c) -- two vertex stages (QVS and
+    # LAY_VS) and eight fragment stages, from ten GLSL strings in that file.
+    # `LAY_FS` does not sample TA's frame, so none of the eight puts an engine
+    # pixel anywhere -- `TINT_FS` included: what it samples is a copy of OUR OWN
+    # twin, made one command earlier, and the table it indexes through is the
+    # engine's palette-derived LUT and not a picture.
     ("gui_spr",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::SPR_FS"),
     ("gui_cpy",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::CPY_FS"),
     ("gui_tint",     "tagpu_gui_surf::QVS",     "tagpu_gui_surf::TINT_FS"),
@@ -174,23 +170,21 @@ PROGRAMS = [
     ("gui_curs",     "tagpu_gui_surf::QVS",     "tagpu_gui_surf::CURS_FS"),
     ("gui_str",      "tagpu_gui_surf::QVS",     "tagpu_gui_surf::STR_FS"),
     ("gui_mm",       "tagpu_gui_surf::QVS",     "tagpu_gui_surf::MM_FS"),
-    # THE FORK'S OWN BASE BLIT IS NOT RESTORED WITH THEM, and that is the whole
-    # distinction the rebuild rests on. `surf_pal` -- PASSTHROUGH_VERT_SHADER +
-    # PALETTE_FRAG_SHADER out of `inc/openglshader.h` -- resolved TA's entire
-    # 8-bit frame through the palette and put it on the screen as the bottom
-    # layer. That is an engine pixel by definition and it stays deleted, with
-    # `openglshader` out of SOURCES and ATTR_LOCATIONS empty.
-    # tagpu_native.c:686,734,754
+    # No program here resolves TA's 8-bit frame through the palette onto the
+    # screen: that would be an engine pixel by definition.
+    # tagpu_native.c (native_d paired in tagpu_vk_world.c; no tagpu_vk_*.c
+    # builds native_unit or native_c)
     ("native_unit",  "tagpu_native::VS",        "tagpu_native::FS"),
     ("native_c",     "tagpu_native::CVS",       "tagpu_native::CFS"),
     ("native_d",     "tagpu_native::DVS",       "tagpu_native::DFS"),
-    # tagpu_shadow.c:174-175 -- both depth-only, one empty fragment stage
+    # src/tagpu_shadow_glsl.h (paired in tagpu_vk_shadow.c, which builds
+    # shadow_hires only) -- both depth-only, one empty fragment stage
     ("shadow_unit",  "tagpu_shadow::VS_U",      "tagpu_shadow::FS_NONE"),
     ("shadow_hires", "tagpu_shadow::VS_H",      "tagpu_shadow::FS_NONE"),
-    # tagpu_terr.c:441
+    # tagpu_terr.c (paired in tagpu_vk_terr.c)
     ("terr",         "tagpu_terr::VS",          "tagpu_terr::FS"),
-    # tagpu_posedraw.c:432-434 -- the fragment stage is tagpu_native's, shared
-    # deliberately (tagpu_native_unit_fs()), which is why item 5 above checks
+    # tagpu_posedraw.c (paired in tagpu_vk_unit.c) -- the fragment stage is
+    # tagpu_native's, shared deliberately, which is why item 5 above checks
     # that two vertex stages agree about the varyings.
     ("pose_unit",    "tagpu_posedraw::VS",      "tagpu_native::FS"),
     ("pose_depth",   "tagpu_posedraw::VS",      "tagpu_posedraw::DFS"),
@@ -209,11 +203,10 @@ PROGRAMS = [
 #
 # THE ONE VARIANT SHADER SET, and the only one read out of a HEADER rather than a
 # .c. `tagpu_restore_glsl.h` holds five shaders as macros under a prefix the
-# consumer builds. SINCE 11-5e-2 NO C FILE INCLUDES IT: the GLSL backend that
-# compiled these was deleted, so the macros' only readers are this tool (which
-# turns them into the SPIR-V the Vulkan restorer runs) and `tools/tascene`
-# (which extracts the same macros for the browser lab). The GLSL is the
-# SOURCE OF TRUTH for both, and neither lane compiles it as GLSL any more:
+# consumer builds. NO C FILE INCLUDES IT: the macros' only readers are this tool
+# (which turns them into the SPIR-V the Vulkan restorer runs) and `tools/tascene`
+# (which extracts the same macros for the browser lab). The GLSL is the SOURCE
+# OF TRUTH for both:
 #
 #     #define NK   <n>    output channel-tiles per conv draw
 #     #define WMAX <m>    mat4s in the bound weight range = NK * kmax
@@ -222,37 +215,35 @@ PROGRAMS = [
 # interface and cannot be a specialisation constant. `WMAX` is only the declared
 # length of `uniform WBlock { mat4 w[WMAX]; }` -- but it CANNOT be compiled at the
 # largest kmax and shared, because `NK` is derived from the device limit that
-# block has to fit: nk = MAX_UNIFORM_BLOCK_SIZE / (kmax*64), clamped to
-# MAX_DRAW_BUFFERS and rounded down to a power of two. Inflating kmax declares a
+# block has to fit: nk = maxUniformBufferRange / (kmax*64), clamped to the
+# colour-attachment limit and rounded down to a power of two. Inflating kmax declares a
 # block past the very limit that chose NK. So a variant is an (NK, kmax) PAIR.
 #
 # KMAX IS A PROPERTY OF THE SHIPPED WEIGHTS, read out of the binaries rather than
 # taken from a comment (`unditherer/models/{tiny,full}.w32.bin`, the layer table's
 # widest kstride / 4). THE CONSEQUENCE IS A CONSTRAINT ON THE PROJECT and is
 # stated in research/notes/vulkan-only-plan.md landing 7 rather than here: the
-# Vulkan lane restores with these two models and no others, and a third needs its
+# restorer restores with these two models and no others, and a third needs its
 # four variants generated and committed.
 # THE SWITCH THAT WIRES THE RESTORER INTO SOURCES AND PROGRAMS, and it is True.
-# It exists because the two shapes CONV_FS needs had to be taught to `transform`
-# before the set could be generated at all, and a commit that leaves `make`
-# failing its own shader gate is a trap rather than a checkpoint -- so the
-# machinery landed gated and this went True in the change that taught them:
+# A variant set can need shapes `transform` does not yet read, and a commit that
+# leaves `make` failing its own shader gate is a trap rather than a checkpoint --
+# so a set's machinery lands behind a switch like this one, which goes True in
+# the change that teaches the transform its shapes. CONV_FS needs two:
 #
 #   1. `uniform highp sampler2DArray uAct;` -- a precision qualifier AFTER the
-#      storage qualifier. `_VAR` took `highp uniform ...` and not
-#      `uniform highp ...`, so the declaration did not match, passed through
-#      unchanged, and glslang refused it: "sampler/texture/image requires
-#      layout(binding=X)". It is its own capture group now, re-emitted where it
-#      was read.
+#      storage qualifier. `_VAR` captures it as its own group and re-emits it
+#      where it was read; unmatched, the declaration would pass through with no
+#      binding and glslang would refuse it: "sampler/texture/image requires
+#      layout(binding=X)".
 #   2. `layout(std140) uniform WBlock { mat4 w[WMAX]; };` -- a named block
-#      written on ONE line, which `_BLOCK_OPEN` never saw. `normalise_blocks`
+#      written on ONE line, which `_BLOCK_OPEN` does not see. `normalise_blocks`
 #      splits it on the way in.
 #
-# Both were the tool's to learn rather than the shader's to reformat:
+# Both are the tool's to handle rather than the shader's to reformat:
 # `tagpu_restore_glsl.h` is the ONE copy of that text, shared with
 # tools/tascene's browser pack, and reflowing it for a generator's convenience is
-# the sort of thing its own header forbids. Kept as a named switch because the
-# next variant set will want the same staging.
+# the sort of thing its own header forbids.
 RESTORE_READY = True
 
 RESTORE_HDR   = "tagpu_restore_glsl"
@@ -270,15 +261,12 @@ def restore_kmax():
     moves, `--check` stays green, and the committed SPIR-V declares a block of
     the wrong length -- found on a device, months later. Reading the file makes
     the weights part of what the headers are generated FROM, so changing them
-    fails the build until the headers are regenerated. [Landing 7's review,
-    2026-09-17, which found the literal and named exactly that failure.]
+    fails the build until the headers are regenerated.
 
     The format is `unditherer/weights.py`: u32 magic, then u32 depth, ch, ntex,
     then `depth` x {offset, jin, kout, kstride} in vec4 texels. kmax is the
     widest k-block in mat4s, `max(kstride) / 4` -- the same reduction
-    `tagpu_restore_core.c:139` does at load time. (It was cited as
-    `tagpu_restoreglsl.c:268` until 11-5e-2 deleted that file; the loader is
-    backend-neutral and never moved.)
+    `tagpu_restore_core.c:139` does at load time.
     """
     import struct
     out = []
@@ -317,22 +305,11 @@ def restore_keys(name):
 
 def _restore_programs():
     out = []
-    # `restore_mip` IS GENERATED BEFORE ITS VULKAN CONSUMER EXISTS, and that is
-    # this manifest's rule rather than an exception to it: a shader in
-    # `tagpu_restore_glsl.h` that no program uses fails the gate, precisely so
-    # that a shader and its consumer cannot drift apart while one of them is
-    # unwritten. The emitted header is text nothing #includes until landing
-    # 7e-2 wires it, at a cost of one small array in the tree and none at run
-    # time.
-    #
-    # THE JUSTIFICATION USED TO READ "the shader is real -- the GL lane draws it
-    # as of landing 7e-1". That lane is gone: the vulkan-only plan's 11-5e-2
-    # deleted `tagpu_restoreglsl.c`, which was the only code that compiled these
-    # shaders at run time. `tagpu_restore_glsl.h` itself is untouched and stays
-    # the ONE copy of the text -- this tool reads the five shaders straight out
-    # of the header (see extract_restore) rather than out of any .c, and
-    # tools/tascene extracts the same macros for the browser pack -- so nothing
-    # about this manifest changes. Only the reason does.
+    # EVERY SHADER IN `tagpu_restore_glsl.h` IS A PROGRAM HERE: one that no
+    # program uses fails the gate, precisely so that a shader and its consumer
+    # cannot drift apart while one of them is unwritten. This tool reads the
+    # five straight out of the header (see extract_restore) rather than out of
+    # any .c; tagpu_vk_restore.c builds the pipelines from the result.
     for prog, vs, fs in (("restore_fill", "FS_VS", "FILL_FS"),
                          ("restore_conv", "FS_VS", "CONV_FS"),
                          ("restore_out",  "OUT_VS", "OUT_FS"),
@@ -352,37 +329,21 @@ SOURCES = ["tagpu_gui_surf", "tagpu_native", "tagpu_shadow", "tagpu_terr",
 
 # WHERE A VERTEX ATTRIBUTE'S LOCATION COMES FROM WHEN THE GLSL DOES NOT SAY.
 # Our passes all write `layout(location = N) in ...` and need nothing here, so
-# this table is empty -- and since the clean cut it has nothing that could fill
-# it either. Its one entry was the upstream fork's `PASSTHROUGH_VERT_SHADER`,
-# `#version 130` with no location qualifiers, where `render_ogl.c` asked the
-# LINKER where each attribute landed and Vulkan needed the answer written down.
-# The pass that drew it was the engine's frame on the screen; the cut deleted
-# it. Kept rather than removed because the difference it documents is real --
-# in GL the linker chooses and the C side queries, in Vulkan whoever builds the
-# pipeline chooses -- and the next vendored `#version 130` shader will need a
-# row here. [The vulkan-only plan, landing 4c-1 and THE CLEAN CUT.]
+# this table is empty. It stays because GLSL written for GL may leave the choice
+# to the linker, and Vulkan has no linker to ask: whoever builds the pipeline
+# chooses, so a shader without location qualifiers needs a row here, keyed by
+# shader, giving each attribute's location.
 ATTR_LOCATIONS = {}
 
 # Sources that are not `src/<name>.c`. `tagpu_restore_glsl` is a header because
 # its shaders are macros (see extract_restore).
-#
-# `openglshader` -- the UPSTREAM fork's own shader collection in `inc/` -- USED
-# TO BE HERE, because the Vulkan lane drew one pair out of it: the base blit
-# that put TA's 8-bit surface on the frame through the palette. The clean cut
-# deleted that draw, so no Vulkan pass reads a shader out of the fork's header
-# any more and nothing is generated from it. `inc/openglshader.h` itself is
-# untouched -- it is vendored, and this tool only ever read it.
-# [The vulkan-only plan, landing 4c-1 and THE CLEAN CUT.]
-HEADER_SOURCES = {# LIFTED SO THE GL FILE CAN GO AND THE SHADERS CAN STAY.
-                  # `tagpu_shadow.c` and `tagpu_hires_draw.c` are deleted by
-                  # landing 11; their GLSL is not, because the Vulkan lane
-                  # draws it. `SOURCES` and `PROGRAMS` are UNCHANGED on
-                  # purpose -- removing a name there stops generating the
-                  # `inc/spirv/*.spv.h` that the surviving `tagpu_vk_*.c`
-                  # files include. Both headers sit in `src/` because the
-                  # hires fragment shader pulls `TAGPU_GLSL_*` out of
-                  # `src/tagpu_glsl.h` and this preprocess runs `-Iinc` only.
-                  # [The vulkan-only plan, landing 11 D1.]
+HEADER_SOURCES = {# THE SHADOW AND HIRES SHADERS HAVE NO .c OF THEIR OWN.
+                  # Their names stay `tagpu_shadow` and `tagpu_hires_draw` in
+                  # `SOURCES` and `PROGRAMS` on purpose -- the name is what
+                  # generates the `inc/spirv/*.spv.h` that `tagpu_vk_shadow.c`
+                  # and `tagpu_vk_hires.c` include. Both headers sit in `src/`
+                  # because the hires fragment shader pulls `TAGPU_GLSL_*` out
+                  # of `src/tagpu_glsl.h` and this preprocess runs `-Iinc` only.
                   "tagpu_shadow":     "src/tagpu_shadow_glsl.h",
                   "tagpu_hires_draw": "src/tagpu_hires_glsl.h"}
 
@@ -413,12 +374,12 @@ def preprocess(cfile):
 # SKIPS a shader is worse than one that refuses it, and the "a shader no program
 # uses" guard below is what forces every new shader through the pipeline: a
 # shader the extractor cannot see escapes that guard too.
-# BOTH SPELLINGS OF "a string literal at file scope". Our passes write
-# `static const char* NAME =`; the upstream fork's `inc/openglshader.h` writes
-# `static char NAME[] =`. This only ever matches MORE declarations, and a
+# BOTH SPELLINGS OF "a string literal at file scope": `static const char* NAME =`,
+# which our passes write, and `static char NAME[] =`, which upstream-style
+# shader collections write. This only ever matches MORE declarations, and a
 # declaration that is not a shader is still ignored -- the caller requires a
 # `#version` literal on the line or the next one, and the census counts exactly
-# those. [Widened for the vulkan-only plan's landing 4c-1.]
+# those.
 _DECL = re.compile(r'static\s+(?:const\s+)?char\s*(?:\*\s*)?(\w+)\s*'
                    r'(?:\[\s*\]\s*)?=\s*(.*)$')
 _LIT = re.compile(r'"((?:[^"\\]|\\.)*)"')
@@ -497,15 +458,13 @@ def pp_expand(src, key):
     guesses is worse than none: `#else`, `#elif`, a nested `#if`, any other
     directive or any surviving `#` line but `#version` is an error that names
     itself, so a shader edit that reaches for one fails the build here instead of
-    silently compiling a different interface than GL does."""
+    silently compiling a different interface than a GLSL preprocessor would."""
     defs, out, depth = {}, [], []
     for ln in src.split("\n"):
         # THE REGION TEST COMES FIRST, for every directive and not only for
-        # text. A `#define` inside a FALSE `#if` used to be honoured -- it was
-        # matched and consumed before the test below -- which is the one hole in
-        # this function's promise to refuse what it does not understand, and it
-        # would have been silent. Nothing in the header triggers it today.
-        # [Landing 7's review, 2026-09-17.]
+        # text. A `#define` inside a FALSE `#if` must not be honoured, and
+        # matching it before this test would be the one hole in this function's
+        # promise to refuse what it does not understand -- a silent one.
         if depth and not depth[0]:
             if re.match(r'^\s*#if\b', ln):
                 die("%s: nested `#if` is not supported: %s" % (key, ln.strip()))
@@ -586,9 +545,7 @@ def extract(cfile):
     # Every `"#version` in the preprocessed text is the start of a shader's first
     # literal (the preprocessor has already removed the comments, and none of
     # these files ASSEMBLES a version line at run time -- they all carry it in
-    # the literal. `tagpu_restoreglsl.c` did assemble one, which is why it was
-    # deliberately kept out of SOURCES; 11-5e-2 deleted it, so the exclusion is
-    # history rather than a live exception). So the count must equal the number
+    # the literal). So the count must equal the number
     # of shaders extracted, and a shader written in a shape this tool cannot read
     # is an ERROR rather than a silent omission.
     seen = sum(len(_VERSION_LIT.findall(l)) for l in lines if not l.startswith("#"))
@@ -614,10 +571,8 @@ OPAQUE = re.compile(r'^(sampler|isampler|usampler|image|iimage|uimage|texture|'
 # both: the varyings use `flat out vec2`, and `tagpu_restore_glsl.h` writes
 # `uniform highp sampler2DArray uAct`. Folding the second into `quals` would put
 # it back in the FIRST position, which is legal but is not what the shader said,
-# and the rewriter below re-emits each group where it was read.
-# [Landing 7, 2026-09-17: CONV_FS is the first shader here to use this order, and
-# until now the declaration simply did not match, passed through untouched and
-# reached glslang with no binding on it.]
+# and the rewriter below re-emits each group where it was read. Unmatched, the
+# declaration would pass through untouched and reach glslang with no binding.
 _VAR = re.compile(r'^\s*((?:(?:flat|smooth|noperspective|centroid|highp|mediump|lowp)\s+)*)'
                   r'(in|out|uniform)\s+'
                   r'((?:(?:highp|mediump|lowp)\s+)?)'
@@ -631,10 +586,9 @@ _BLOCK_OPEN = re.compile(r'^\s*layout\s*\(\s*(std140|std430)\s*\)\s*uniform\s+(\
 # The same block written on ONE line, `{ members } ;` and all. Split rather than
 # parsed in place: every reader below already handles the multi-line spelling, and
 # one normalisation is a smaller thing to get right than a second code path in the
-# parser, the transform and the emitter.
-# [Landing 7, 2026-09-17. `tagpu_restore_glsl.h`'s `layout(std140) uniform WBlock
-# { mat4 w[WMAX]; };` is the first in this tree; before this the block was never
-# seen at all and so never got its set/binding.]
+# parser, the transform and the emitter. `tagpu_restore_glsl.h`'s
+# `layout(std140) uniform WBlock { mat4 w[WMAX]; };` is one; unsplit, the block
+# would never be seen and would never get its set/binding.
 _BLOCK_1LINE = re.compile(
     r'^(\s*layout\s*\(\s*(?:std140|std430)\s*\)\s*uniform\s+\w+\s*\{)'
     r'(.+?)'
@@ -642,9 +596,7 @@ _BLOCK_1LINE = re.compile(
 
 # The same thing with an INSTANCE name -- `... { mat4 w[N]; } wb;`. No shader here
 # writes one, and the point of matching it is to REFUSE it: without this it slips
-# past `_BLOCK_1LINE`, past `_BLOCK_OPEN`, and out to glslang with no set/binding,
-# which is precisely the failure landing 7 spent a run diagnosing.
-# [Landing 7's review, 2026-09-17.]
+# past `_BLOCK_1LINE`, past `_BLOCK_OPEN`, and out to glslang with no set/binding.
 _BLOCK_1LINE_INST = re.compile(
     r'^\s*layout\s*\(\s*(?:std140|std430)\s*\)\s*uniform\s+\w+\s*\{.+?\}\s*\w+\s*;\s*$')
 
@@ -655,8 +607,8 @@ def normalise_blocks(src):
     THE SHADER TEXT IS NOT EDITED ON DISK, and that is the point: this header is
     the one copy of it and is shared with tools/tascene's browser pack, so
     reflowing it to suit a generator is what its own header forbids. The
-    normalisation happens on the way IN, to both the GL side and the translation,
-    so `residual()` still compares like with like."""
+    normalisation happens on the way IN, before the source is parsed or
+    translated, so `residual()` still compares like with like."""
     out = []
     for ln in src.split("\n"):
         if _BLOCK_1LINE_INST.match(ln):
@@ -965,12 +917,11 @@ def transform(sh, varying_loc):
                     pieces.append(st)
             if changed:
                 joined = " ".join(p.strip() for p in pieces if p.strip())
-                # THE DEPTH IS UPDATED ON THIS PATH TOO. It is a `continue`, and
-                # an earlier version skipped the count -- so a line carrying both
-                # a declaration and a brace would have left every later line
-                # looking like global scope. No shader does that today; the
-                # reason to fix it is that the failure would be silent and would
-                # rewrite something inside a function body.
+                # THE DEPTH IS UPDATED ON THIS PATH TOO, though it is a
+                # `continue`: skipping the count would let a line carrying both
+                # a declaration and a brace leave every later line looking like
+                # global scope. No shader does that today; the failure would be
+                # silent and would rewrite something inside a function body.
                 depth += line.count("{") - line.count("}")
                 if joined.strip():
                     out.append(joined)
@@ -1000,15 +951,11 @@ def tool_hash():
     return hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:16]
 
 
-# EVERY SHADER THIS TOOL SEES IS A PROGRAM AGAIN, so the exemption list is
-# empty. The rule -- a shader with no program fails the gate -- exists so our
-# two lanes cannot drift apart while one of them is unwritten, and it holds for
-# every shader WE own. The exemptions were all `inc/openglshader.h`'s: the
-# upstream fork's collection, read here because one pair of it put TA's 8-bit
-# surface on the Vulkan frame, with the GL-110 editions and the fork's
-# upscaling filters exempted beside it. The clean cut deleted that draw and the
-# header left `SOURCES` with it, so there is nothing left to exempt.
-# [The vulkan-only plan, landing 4c-1 and THE CLEAN CUT.]
+# EVERY SHADER THIS TOOL SEES IS A PROGRAM, so the exemption list is empty.
+# The rule -- a shader with no program fails the gate -- exists so a shader and
+# its consumer cannot drift apart while one of them is unwritten. A shader read
+# here that is deliberately never a program goes in this set, and the reason
+# goes beside it.
 NOT_PROGRAMS = frozenset()
 
 
@@ -1154,13 +1101,12 @@ def emit(cfile, shaders, words):
             for name, ty, arr, at in sh.offsets:
                 L.append(" *   %4d  %-6s %s%s" % (at, ty, name,
                                                   "[%d]" % arr if arr else ""))
-        # NAMED BLOCKS ARE REPORTED TOO, and until landing 7 they were not --
-        # because until landing 7 no shader in this tree had one. The header is
-        # the CONTRACT for the C side (that is what the offsets above are for),
-        # and `tagpu_restore_glsl`'s `WBlock` had its binding written down
+        # NAMED BLOCKS ARE REPORTED TOO. The header is the CONTRACT for the C
+        # side (that is what the offsets above are for), and without this line a
+        # block's binding -- `tagpu_restore_glsl`'s `WBlock` -- is written down
         # nowhere: the allocation rule is in this file's own header comment, so
-        # the only way to learn it was to read the generator or to decode the
-        # module by hand. Both were done before this line existed.
+        # the only way to learn it would be to read the generator or to decode
+        # the module by hand.
         # The block's SIZE is deliberately not reported: `WBlock` is
         # `mat4 w[WMAX]` and WMAX is NK x kmax, which varies per variant and
         # which the C side already computes to size its buffer.
@@ -1221,12 +1167,10 @@ def committed_hashes():
                 tool[cfile] = m.group(1)
                 continue
             # THE SHADER'S OWN COMMENT LINE, `/* <file>::<NAME> -- <stage>...`.
-            # This used to test for the `tagpu_` prefix, which quietly made the
-            # reader blind to any source not named that way: every hash in the
-            # header was then attributed to no key, and the shader reported as
-            # "has no `words` hash -- regenerate" however freshly it had been
-            # generated. Found when `openglshader` joined SOURCES.
-            # [The vulkan-only plan, landing 4c-1.]
+            # Matched by its shape, not by a `tagpu_` prefix: a prefix test is
+            # blind to any source not named that way -- every hash in its header
+            # would be attributed to no key, and the shader reported as "has no
+            # `words` hash -- regenerate" however freshly it had been generated.
             if line.startswith("/* ") and "::" in line and " -- " in line:
                 key = line[3:].split(" --")[0]
                 continue

@@ -14,9 +14,9 @@
    put a 2-px line -- so tagpu_vk_fx.c and tagpu_vk_mark.c refuse the WHOLE
    pass on any frame carrying line vertices:
 
-       vk: fx: ss=2 makes the GL twin's lines 2 px wide and this device's
-               pipelines are built at 1.0 (wideLines is not enabled) - nothing
-               drawn while there are line vertices
+       vk: fx: the target is 2x supersampled, which makes a line 2 px wide,
+               and this device offers no wideLines at all - nothing drawn
+               while there are line vertices
 
    MEASURED ON THE LANE 2026-09-18, in a live game on `renderer=vulkan` with
    `fx.on` and no ss target. The census read `fx=1` on frames without lasers
@@ -46,12 +46,12 @@
    AND THE EXTENT IS THE ONLY THING THEY NEEDED. Every world pass already scales
    the engine's game-space rect into whatever target it is handed --
    `terr_scissor` computes `sx = w / uGame.x`, so handing it `gw * ss` yields
-   exactly GL's `glScissor(vpL * ss, vpT * ss, vw * ss, vh * ss)` -- and the
+   exactly the scissor `(vpL * ss, vpT * ss, vw * ss, vh * ss)` -- and the
    vertex shaders divide by `uGame` rather than by the target.
 
    ORIENTATION: NO FLIP, and the argument needs to know which way up neither
    image is. `tagpu_native::DVS` pairs `uv = 0` with clip `y = -1`, which maps
-   source row 0 to destination row 0 under BOTH APIs when the viewport height is
+   source row 0 to destination row 0 when the viewport height is
    positive. The world passes write the engine's screen-space y, which grows
    DOWNWARD, under a positive height -- so the game's top row is row 0 of this
    image for exactly the reason it is row 0 of the swapchain image.
@@ -91,10 +91,11 @@ int  tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 
 /* HOW MANY SAMPLES PER GAME PIXEL THIS FRAME'S TARGET ACTUALLY HAS, or 1 when
    there is none and the world is going into the swapchain image at client
-   resolution. A pass whose GL twin scales something by `ss` -- the line width
+   resolution. A pass that scales something by `ss` -- the line width
    is the only one today -- must ask THIS rather than read `ss` out of its own
-   hand-over, because the hand-over says what the GL lane did and this says what
-   this frame's target is, and on the fallback path those differ. Valid only
+   hand-over, because the hand-over says what the gather was told (tagpu_native.c's
+   `ss`) and this says what this frame's target is, and on the fallback path
+   those differ. Valid only
    after `tagpu_vk_world_prepare` has run for this frame, which is why the seam
    calls it before any pass's `prepare`. */
 int  tagpu_vk_world_scale(void);

@@ -1,9 +1,10 @@
 #ifndef TAGPU_VK_SCAFFOLD_H
 #define TAGPU_VK_SCAFFOLD_H
 /* The scene-depth scaffold overlay, drawn by Vulkan (Phase G, the first
-   world pass). Implementation: tagpu_vk_scaffold.c. The GL edition is
-   tagpu_scaffold.c and stays the source of the bytes, the rect, the row count
-   and the shader.
+   world pass). Implementation: tagpu_vk_scaffold.c. Its producer is
+   tagpu_scaffold.c, the gather that publishes the bytes, the rect and the row
+   count, and the file whose GLSL tools/spirv-gen.py compiles into this pass's
+   shader.
 
    THE TWO-PHASE CONTRACT is tagpu_vk_fps.h's and for the same reason: a texture
    upload is a transfer and a transfer may not be recorded inside a render pass.
@@ -31,16 +32,15 @@ void tagpu_vk_scaffold_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
 /* 1 on the ONE frame `tagpu_scaffold.ab` latched its claim and `tagpu_vk_ab_arm`
    got the `_vk.ppm` target unlinked -- so the seam captures THAT frame rather
    than whichever one its own lever poll landed on. It does NOT mean a file was
-   written: there is no GL half, and the capture the seam
-   then records is this lane's own. Consumed by the call. Valid after
-   `prepare`. */
+   written: the capture the seam then records is this lane's own. Consumed by
+   the call. Valid after `prepare`. */
 int  tagpu_vk_scaffold_ab_frame(void);
 
 /* ---- THE OVERLAY AS A TEXTURE OTHER PASSES SAMPLE (the unit pass) ----
 
-   The overlay is not only drawn: the unit, hi-res and effects fragment
-   shaders sample it through `uScaf` whenever `uScafOn` is 1, which is the same
-   GL texture this pass's twin fills. So this pass exposes what it uploaded,
+   The overlay is not only drawn: the unit fragment shader samples it through
+   `uScaf` whenever `uScafOn` is 1 (the hi-res and effects shaders declare
+   `uScaf` too, and neither samples it). So this pass exposes what it uploaded,
    in exactly the shape tagpu_vk_shadow.h settled on for the depth map, and for
    the same reasons.
 

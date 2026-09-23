@@ -1413,7 +1413,7 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 }
 
 
-/* ==================== THE GL UI'S RENDER HALF =============================
+/* ==================== THE UI'S RENDER HALF ================================
    The four engine reads tagpu_gui_surf.c needs every present. The queue
    itself is untouched: it carries an op STREAM into retained twins and stays
    a queue (the plan's §9). What is taken here is the per-frame state the
@@ -1723,7 +1723,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the two fog grids ---- */
     e = fill_fog(p, ta, &cursor);
     if (e > need) need = e;
-    /* ---- the GL UI's render half ---- */
+    /* ---- the UI's render half ---- */
     e = fill_gui(p, ta, &cursor);
     if (e > need) need = e;
     shd_snapshot();
@@ -1772,7 +1772,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         user's.
 
    They are emitted here, on the game thread, and not by a renderer: only
-   render_ogl.c and render_vk.c reach the overlay, so on `renderer=gdi` a log
+   render_vk.c reaches the overlay, so on `renderer=gdi` a log
    there would never appear, `tacli roster` would answer nothing and `tacli
    scenario load` would TIME OUT -- with the game behind it running perfectly
    well. That was measured rather than assumed: `tacli scenario apply` against
@@ -1803,8 +1803,8 @@ static int ros_due(const LARGE_INTEGER* last, unsigned ms)
 
 /* WHY THE PUBLISH BELOW IS SOMETIMES FORCED. `fill_frame` runs only when a
    publish is not skipped, and the FRESH gate skips whenever the renderer has
-   not taken the last packet. `tagpu_packet_acquire` has exactly two call
-   sites -- render_vk.c and render_ogl.c -- so on `renderer=gdi` NOTHING
+   not taken the last packet. `tagpu_packet_acquire` has exactly one call
+   site -- render_vk.c -- so on `renderer=gdi` NOTHING
    takes, every unforced publish is skipped, and `fill_frame` runs about once
    per level. Hanging the roster off the packet without this would produce
    nothing on `renderer=gdi`, and produce it silently.
@@ -2325,14 +2325,13 @@ static void* __cdecl after_teardown(unsigned int* regs)
 
 /* ---- the shell's cursor channel ------------------------------------------
 
-   THE PROBLEM IT SOLVES. The GL UI layer draws a twin of the engine's
-   presented surface over the composite and, on a frame whose packet carries a
-   cursor, DISCARDS its own fragment at that rect so the engine's cursor comes
-   through (tagpu_gui_surf.c, the layer shader's `cur` test). That rect comes
-   from the packet, and the in-play fill publishes the cursor fields on the
-   in-play gate alone — so without this channel, on a shell frame the layer
-   has no rect, discards nothing, and paints its twin over the engine's
-   cursor. MEASURED on the
+   THE PROBLEM IT SOLVES. Nothing of the engine's frame is underneath the UI
+   layer, so the only cursor on screen is the one the layer draws itself, in
+   its sharp layer -- and it draws one only once `tagpu_gui_cursor_frame`
+   (tagpu_gui_surf.c) has found the cursor's record and rect in the packet.
+   The in-play fill publishes the cursor fields on the in-play gate alone — so
+   without this channel a shell frame carries no cursor record, the layer owns
+   no cursor, and the shell shows none. MEASURED on the
    reference setup 2026-09-13, main menu, pointer over the window: `gui off`
    presents the cursor at (320,240) and `gui on` does not, and the two frames
    differ by 288 px whose box contains it.
@@ -2397,8 +2396,8 @@ static void* __cdecl after_teardown(unsigned int* regs)
    edge: 0x4C67C0 early-outs unless +0x1CE, +0x1D2 and +0x1B2 are all
    non-zero, and on those frames it writes nothing at all — so `before`
    publishes cursor_live = 0 instead of leaving the last visible rect standing,
-   which would have the layer discard its twin over a cursor that is no longer
-   drawn. An edge-triggered publish cannot be used here: a publish the FRESH
+   which would have the layer go on drawing a cursor the engine has hidden.
+   An edge-triggered publish cannot be used here: a publish the FRESH
    gate drops is not an edge that comes again, and the render thread would hold
    the stale state until the cursor happened to change once more. */
 static const unsigned char CURSOR_STOLEN[11] = { 0x56, 0x8B, 0x74, 0x24, 0x08,

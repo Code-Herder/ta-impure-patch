@@ -31,7 +31,7 @@
 #include "tagpu_scaffold.h"
 #include "tagpu_zoom.h"      /* the predicted eye every pass draws from */
 #include "tagpu_packet.h"    /* the true viewport, from this frame's packet */
-#include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
+#include "tagpu_vk.h"        /* tagpu_vk_ab_arm: the A/B claim */
 
 /* ---- engine layout (terrain-depth.md, binary-verified) ----
    This file reads no per-frame engine field of its own. The view, the map
@@ -81,15 +81,15 @@ static int    s_lastR0 = 0, s_lastRows = 0;
 static unsigned s_lastFrame = 0;
 
 /* ---- the A/B, and what this frame hands the Vulkan lane ----
-   `tagpu_scaffold.ab` makes this pass draw over a black frame and read it back
-   once; the Vulkan lane captures the same frame because `s_abFrame` travels
-   with the scaffold below rather than being polled a second time. See
+   `tagpu_scaffold.ab` claims one Vulkan capture of this pass, and it is of the
+   frame the claim latched on because `s_abFrame` travels with the scaffold
+   below rather than being polled a second time. See
    inc/tagpu_scaffold.h. */
 #define ABFILE  "tagpu_scaffold.ab"
 static int s_ab, s_abDone, s_abFrame;
 
-/* Published AFTER the GL draw, taken exactly once, and every field of it is
-   what the draw above actually used. `s_pubBuf` is `s_buf`, which this file
+/* Published AFTER the gather, taken exactly once, and every field of it is
+   what the gather built. `s_pubBuf` is `s_buf`, which this file
    owns and rebuilds only on the render thread. */
 static const unsigned char* s_pubBuf;
 static int   s_pubW, s_pubH;
@@ -97,8 +97,8 @@ static float s_pubRect[4], s_pubRows;
 
 /* THE SHADER PAIR IS A BUILD INPUT, NOT CODE THIS FILE RUNS. Nothing here
    references them -- tools/spirv-gen.py
-   reads them out of the PREPROCESSED translation unit and generates the SPIR-V the
-   Vulkan twin draws with, so deleting them fails the build with "the manifest names
+   reads them out of the PREPROCESSED translation unit and generates the SPIR-V
+   tagpu_vk_scaffold.c draws with, so deleting them fails the build with "the manifest names
    <pass>::VS and the source does not have it". The pragma below is paired and its
    `pop` is PROVED with a planted probe rather than read: a `pop` inside a
    comment is text, not a directive. */
@@ -224,12 +224,10 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
        goes with it. Every return below leaves both clear, which is what stops
        the flag LATCHING: set once and cleared only on consumption, it would
        survive a frame the Vulkan lane never collected and ride a LATER frame's
-       scaffold, so the two captures would be of different frames -- the one
-       thing the design exists to prevent. */
-    /* THIS PASS GATHERS; THE TWIN DRAWS. The Vulkan lane owns the present and
-       there is no GL context anywhere in the process; tagpu_vk_scaffold.c
-       draws the same buffer out of the hand-over at the bottom of this
-       function. The gather is unconditional: it is the pass, and there is no
+       scaffold, so the capture would be of a different frame than the claim --
+       the one thing the design exists to prevent. */
+    /* THIS PASS GATHERS; tagpu_vk_scaffold.c DRAWS, out of the hand-over at
+       the bottom of this function. The gather is unconditional: it is the pass, and there is no
        second way through here. */
 
     s_pubBuf = NULL; s_abFrame = 0;
@@ -413,18 +411,11 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
         slog(b);
     }
 
-    /* ---- the debug overlay quad's rect, for the Vulkan twin ----
+    /* ---- the debug overlay quad's rect, for the Vulkan pass ----
        Everything above is the GATHER: the packet's anchors walked over the
        engine's own sweep rect into `s_buf`, and the per-unit occlusion
-       prediction read back out of it. Below are the four NDC numbers the twin
-       draws the quad at.
-
-       THERE IS NO GL DRAW, NOT A GL DRAW LEFT TO NO-OP. With no context
-       current most GL calls do nothing, and "most" is the whole objection -- a
-       bring-up that branches on a compile or link status it reads back takes
-       whichever branch the loader's stubs produce, and both are wrong, one
-       logging a failure that never happened and the other latching a failed
-       state that kills the pass for the process. */
+       prediction read back out of it. Below are the four NDC numbers
+       tagpu_vk_scaffold.c draws the quad at. */
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
     float x0 = (float)vpL        / gw * 2.f - 1.f;

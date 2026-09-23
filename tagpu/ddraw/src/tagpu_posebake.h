@@ -3,7 +3,7 @@
 /* tagpu_posebake.h — the per-type geometry bake and its caches.
 
    research/notes/gpu-posing.md is the design; this is the half of it that
-   turns a `Model3DONode` TEMPLATE into two GL vertex buffers that a posed
+   turns a `Model3DONode` TEMPLATE into two vertex streams that a posed
    shader can draw a unit from without ever reading the engine's posed vertex
    buffer `prim+0x22`.
 
@@ -12,19 +12,19 @@
 
      GEOMETRY, per type — rest position, the rest normal of the vertex's own
        triangle, its piece index, and a flags word. Static: it survives a team
-       change and an atlas recycle, and it dies only with the LEVEL or the GL
-       context.
+       change and an atlas recycle, and it dies only with the LEVEL or when the
+       cache evicts it.
      MATERIAL, per (type, owner, atlas generation) — the UV, the flat colour
        and colour key, and a SKIP flag. `face_texframe` picks
        `tab + owner*0x18` for team-coloured faces, and every UV in the atlas
        moves when the shelf recycles, so both belong in the key.
 
-   THE TWO BUFFERS ALWAYS HOLD THE SAME NUMBER OF VERTICES, which is what makes
+   THE TWO STREAMS ALWAYS HOLD THE SAME NUMBER OF VERTICES, which is what makes
    them independently rebuildable: a face the engine's rasteriser paints nothing
    for is baked anyway and collapsed by its skip flag, rather than changing the
    vertex count.
 
-   THREE RANGES IN ONE GEOMETRY BUFFER (decision 10), because all three walk the
+   THREE RANGES IN ONE GEOMETRY STREAM (decision 10), because all three walk the
    same tree and differ only in which faces and which corners they take:
 
        [ body triangles ][ slant triangles ][ wire lines ]
@@ -42,13 +42,13 @@
 
 enum { TAGPU_PB_BODY = 0, TAGPU_PB_SLANT, TAGPU_PB_WIRE, TAGPU_PB_NRANGE };
 
-/* THE POSED PROGRAM'S `Pose` BLOCK, std140, SHARED BY BOTH LANES. It lives
-   here rather than in tagpu_posedraw.h because every number in it is the
-   bake's piece ceiling: 3 rows of a 4x3 per piece, then two packed per-piece
-   words four to a vec4. tagpu_posedraw.c builds the GLSL declaration from
-   these and tagpu_vk_unit.c fills the buffer from them, so the two cannot
-   drift -- which is rule 4 of this lane ("re-check every bound in the
-   consuming file, and share the constant through the header"). */
+/* THE POSED PROGRAM'S `Pose` BLOCK, std140, SHARED BY THE SHADER AND ITS
+   FILLER. It lives here rather than in tagpu_posedraw.h because every number
+   in it is the bake's piece ceiling: 3 rows of a 4x3 per piece, then two
+   packed per-piece words four to a vec4. tagpu_posedraw.c builds the GLSL
+   declaration from these and tagpu_vk_unit.c fills the buffer from them, so
+   the two cannot drift -- which is rule 4 of this lane ("re-check every bound
+   in the consuming file, and share the constant through the header"). */
 #define TAGPU_PD_ROWS    (TAGPU_PBMAXPIECE * 3)              /* 768 vec4     */
 #define TAGPU_PD_FLAGV   (TAGPU_PBMAXPIECE / 4)              /*  64 vec4     */
 #define TAGPU_PD_FLAGOFF (TAGPU_PD_ROWS * 16)                /* bytes        */
@@ -61,8 +61,8 @@ typedef struct TAGPU_PBGEOM {
     int          nparts;
     int          ghost;                       /* 1 = baked from the ghost's
         synthesized piece run. Its walk order is the template tree's, which is
-        NOT the prim order a live unit's packet run carries, and the VBO's
-        per-vertex piece indices plus `parent[]` are laid out in that order —
+        NOT the prim order a live unit's packet run carries, and the geometry
+        stream's per-vertex piece indices plus `parent[]` are laid out in that order —
         so a ghost entry and a unit entry of the same model are DIFFERENT
         geometry and must never share a cache slot. */
     /* the topology, cached per type: `pose_accum_body` rebuilds parent links by
@@ -76,7 +76,7 @@ typedef struct TAGPU_PBGEOM {
     int          nvert;
     /* ONE MONOTONIC NUMBER PER BAKE, never reused (Phase G, the unit
        pass). A cache slot IS reused -- `geom_slot` evicts the least recently
-       asked-for entry and re-bakes another type into it -- so a second backend
+       asked-for entry and re-bakes another type into it -- so a consumer
        that keyed its own vertex buffer on the slot, or on this pointer, would
        hand the new model the old model's vertices. The serial makes "the same
        geometry" a property of the bake rather than of where it landed. */
@@ -125,8 +125,9 @@ typedef struct TAGPU_PBMAT {
 } TAGPU_PBMAT;
 
 /* Render thread, once per frame, before any tagpu_posebake_unit: drops every
-   entry whose level generation, GL generation or atlas generation has moved,
-   deleting its GL buffers (which is why this is render-thread only). */
+   entry whose level generation or atlas generation has moved, freeing its
+   mirrors (which is why this is render-thread only: the Vulkan unit pass reads
+   them there). */
 /* `level_gen` is THE PACKET'S — it advances at every level end whoever
    published it, where tagpu_reclaim's own counter moves only when reclaim is
    armed. */
@@ -137,8 +138,9 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen);
    piece list — each entry's `node` is the TYPE's template, so the entry is
    shared by every unit of it. `ghost` is 1 for the build ghost's synthesized
    run and keys the geometry entry APART from the units' (see the field).
-   Returns 0 when the template could not be read or GL is not ready; a caller
-   that gets 0 keeps whatever it was doing. */
+   Returns 0 when the template could not be read or the unit atlas is not
+   ready (tagpu_r3d_ready); a caller that gets 0 keeps whatever it was
+   doing. */
 struct TAGPU_PK_PIECE;
 int  tagpu_posebake_unit(const struct TAGPU_PK_PIECE* pc, int nparts, int owner,
                          int ghost,
@@ -152,12 +154,12 @@ int  tagpu_posebake_armed(void);         /* tagpu_posebake.on                 */
 
 /* ---- THE VULKAN LANE'S MIRRORS (Phase G, the UNIT pass) -----------------
 
-   A second backend cannot read a GL buffer, so the two streams `glBufferData`
-   is handed are KEPT while the Vulkan lane is armed -- the same latch and the
-   same reasoning as tagpu_terr.c's `s_mirrorWant` and tagpu_gaf.c's atlas
-   mirror. The mirror is the very buffer the upload above it was given, in the
-   same call, so it is correct from the instant it exists and there is no
-   second evaluation of the bake's arithmetic to drift from the first.
+   The two streams the bake produces are KEPT as mirrors once the latch has
+   armed -- the same latch and the same reasoning as tagpu_terr.c's
+   `s_mirrorWant` and tagpu_gaf.c's atlas mirror. The mirror is a copy of the
+   walk's own output, taken in the same call, so it is correct from the instant
+   it exists and there is no second evaluation of the bake's arithmetic to
+   drift from the first.
 
    ASK FOR THE BYTES WITH THE SERIAL YOU WERE PUBLISHED, and this is the whole
    of the lifetime argument. The entry a `TAGPU_PBGEOM*` points at is a slot in

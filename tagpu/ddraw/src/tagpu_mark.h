@@ -62,8 +62,9 @@ int  tagpu_mark_gather(const TAGPU_FXVIEW* v);
    a PALETTE index, as gui[] holds — not a GUI slot number. 0 = the bucket is
    full and nothing was emitted, so the caller can count the drop.
 
-   Lines are drawn GL_LINES at glLineWidth(ss), i.e. one SCREEN pixel at any
-   zoom; triangles carry no such trick and must be sized by the caller. */
+   Lines are drawn as a line list `ss` device pixels wide (tagpu_vk_mark.c),
+   i.e. one SCREEN pixel at any zoom; triangles carry no such trick and must
+   be sized by the caller. */
 int  tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
                           int colidx, float wx, float wz);
 int  tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
@@ -89,8 +90,8 @@ int  tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
 int  tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
                           float wx, float wz);
 /* Gather the marker layer and publish it through `tagpu_mark_handover`. This
-   issues NO draw and touches NO GL state. The markers are the frame's top layer
-   with every fragment opaque; it is the twin that honours that. */
+   issues NO draw. The markers are the frame's top layer with every fragment
+   opaque; tagpu_vk_mark.c honours that. */
 void tagpu_mark_render(const TAGPU_FXVIEW* v);
 /* ---- the hand-over to the Vulkan lane ----
 
@@ -101,8 +102,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v);
    overlay), each with its own `uText` and `uFog`, and the last two with fog
    forced OFF because the engine draws them after its fog overlay and never
    darkens them. A consumer that re-derived which buckets are non-empty from
-   the counts would be free to disagree with the pass that drew them, so what
-   crosses is the DRAW LIST `tagpu_mark_render` issued, built as it issues it.
+   the counts would be free to disagree with the pass that gathered them, so
+   what crosses is the DRAW LIST `tagpu_mark_render` builds.
 
    NOTHING HERE NEEDS A NEW MIRROR: the vertices are this file's own arrays and
    `tagpu_text_atlas` exists for exactly this. */
@@ -134,12 +135,12 @@ typedef struct TAGPU_MKHAND {
     /* tagpu_text.c's atlas: one coverage byte a texel. `textGen` moves when a
        raster lands, which is how a backend holding its own copy is told. */
     const unsigned char* text; unsigned textGen; int textW, textH;
-    /* THE THREE SHARED TEXTURES, AS BYTES, because a GL name may not cross.
-       They come over in the shapes `tagpu_fx.h` already uses for the same three,
-       so the two consumers agree about what they are:
+    /* THE THREE SHARED TEXTURES, AS BYTES: the consumer builds its own
+       images from them. They come over in the shapes `tagpu_fx.h` already uses
+       for the same three, so the two consumers agree about what they are:
        the palette is 256 RGBA8 texels of `tagpu_pal_live()`, the fog grid is
-       cols x rows of RG8, and the LUT is 256 R8. A frame whose GL draw sampled
-       fog and whose grid did not cross is refused rather than drawn unfogged. */
+       cols x rows of RG8, and the LUT is 256 R8. A draw that wants fog and
+       whose grid did not cross is refused rather than drawn unfogged. */
     const unsigned char*  pal;        /* 256 x RGBA8 */
     unsigned              palSerial;
     const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
@@ -154,7 +155,7 @@ typedef struct TAGPU_MKHAND {
        captures THAT frame rather than whichever one its own lever poll landed
        on. It does NOT mean a capture file was written. */
     int   ab;
-    /* THE VIEWPORT THE GL DRAW WAS CLIPPED TO, in game-frame pixels measured
+    /* THE VIEWPORT THE MARKERS ARE CLIPPED TO, in game-frame pixels measured
        from the TOP. The consumer needs it for its scissor, and `scissorOn` is
        what the native pass ACTUALLY did rather than what it would have liked
        to -- tagpu_vk_fx.c's rule, and its `fx_scissor` is the shape to follow. */

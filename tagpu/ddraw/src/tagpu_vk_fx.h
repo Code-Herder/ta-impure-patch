@@ -2,7 +2,7 @@
 #define TAGPU_VK_FX_H
 /* The effects pass -- weapon fire, explosions, debris and the ten particle
    layers -- drawn by Vulkan (the FOURTH world pass).
-   Implementation: tagpu_vk_fx.c. The GL edition is tagpu_fx.c and stays the
+   Implementation: tagpu_vk_fx.c. The gather is tagpu_fx.c and is the
    source of the vertices, the uniforms, the texels and the shader.
 
    THE TWO-PHASE CONTRACT is tagpu_vk_feat.h's, for the same reason: a texture
@@ -11,14 +11,14 @@
      prepare()   before vkCmdBeginRenderPass -- build what is missing, upload
                  this frame's geometry and texels, fill this slot's uniforms
      record()    inside the render pass -- bind and draw, the four buckets in
-                 the GL lane's own order
+                 TAGPU_FXB_* order (tagpu_fx.h)
 
    Both on the render thread, on the command buffer the seam is recording, in
    that order, in one frame. `prepare` returning 0 means there is nothing to
    draw and `record` must not be called.
 
    IT IS THE FIRST PASS THAT NEEDS MORE THAN ONE PIPELINE FOR ONE SHADER. The
-   GL twin draws four buckets with one program but three different pieces of
+   four buckets share one shader but need three different pieces of
    fixed-function state -- a LINE_LIST for the lasers and the lightning, and
    additive blending for the flashes -- and all three of those are pipeline
    state in Vulkan. See the implementation's header for what that costs and for
@@ -38,9 +38,8 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
 /* 1 on the ONE frame `tagpu_fx.ab` latched its claim and `tagpu_vk_ab_arm`
    got the `_vk.ppm` target unlinked -- so the seam captures THAT frame rather
    than whichever one its own lever poll landed on. It does NOT mean a file was
-   written: there is no GL half, and the capture the seam
-   then records is this lane's own. Consumed by the call. Valid after
-   `prepare`. */
+   written: the seam records the capture after the draw. Consumed by the call.
+   Valid after `prepare`. */
 int  tagpu_vk_fx_ab_frame(void);
 
 /* Give everything back. Called by the seam from `vk_down`, after its

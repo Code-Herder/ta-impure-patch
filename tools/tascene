@@ -80,9 +80,9 @@ ATLAS_COLS = 64                      # tagpu_terr.c: 64 tiles per atlas row
 # cell -- the unrelated tile 64 cells later in the atlas, i.e. blue hairlines
 # along tile edges. The quad still spans exactly TILE_PX texels, so sampling at
 # 1:1 is bit-identical to the un-padded atlas; it is the cases that are NOT 1:1
-# that this saves. The parity lane never hit it (its quads are integer-aligned);
+# that this saves. The parity lane never hits it (its quads are integer-aligned);
 # the exploration lane displaces y by relief*h/2, which is a half-pixel whenever
-# the height is odd, and the hairlines came straight back.
+# the height is odd, and that is where the hairlines appear without the rail.
 CELL_BORDER = 1
 CELL_PITCH = TILE_PX + 2 * CELL_BORDER   # 34
 ATLAS_W = ATLAS_COLS * CELL_PITCH        # 2176
@@ -318,7 +318,7 @@ GLSL_ES_HEADER = ("#version 300 es\n"
                   "precision highp float;\n"
                   "precision highp int;\n"
                   "precision highp sampler2D;\n"
-                  "precision highp sampler2DShadow;\n")   # the Classic++ shadow map's compare view (G14i)
+                  "precision highp sampler2DShadow;\n")   # the Classic++ shadow map's compare view
 
 
 def _unescape(lit: str) -> str:
@@ -339,11 +339,11 @@ def read_glsl_macros(header: Path):
     # `TAGPU_\w+`, not `TAGPU_GLSL_\w+`: shader bodies also use plain value
     # macros from the same header — `TAGPU_EDGE_NUDGE` ("0.03125", the sub-pixel
     # tile-seam nudge) sits inside terrain VS's `vec2(...)`. Matching only the
-    # GLSL_ prefix dropped it and emitted `vec2()`, which does not compile.
+    # GLSL_ prefix would drop it and emit `vec2()`, which does not compile.
     #
     # `[ \t]*` and not `\s+`: a macro body must be on the #define's own line.
-    # With `\s+` the guard `#define TAGPU_GLSL_H` (empty body) swallowed the
-    # NEXT macro's text, and that macro then silently ceased to exist.
+    # With `\s+` the guard `#define TAGPU_GLSL_H` (empty body) would swallow the
+    # NEXT macro's text, and that macro would silently cease to exist.
     for m in re.finditer(r"#define[ \t]+(TAGPU_\w+)(\([^)]*\))?[ \t]*(.*)", text):
         name, args, body = m.group(1), m.group(2), m.group(3)
         params = [a.strip() for a in args[1:-1].split(",")] if args else None
@@ -478,9 +478,9 @@ def restore_weights():
 
 CACHE_ENV = "TASCENE_CACHE"
 UNDITHER_BATCH = 256                  # frames per unditherer process
-# TSU2 since 2026-09-05: TSU1 entries were restored by torch on CUDA with
-# cuDNN's default TF32 convolutions, which differ from fp32 by one level on
-# ~0.6 % of bytes (unditherer/infer.py); bumping the magic makes them misses.
+# TSU2, not TSU1: TSU1 entries were restored by torch on CUDA with cuDNN's
+# default TF32 convolutions, which differ from fp32 by one level on ~0.6 % of
+# bytes (unditherer/infer.py); the new magic makes them misses.
 CACHE_MAGIC = b"TSU2"
 
 
@@ -1314,11 +1314,11 @@ def cmd_serve(args):
         server.close()
 
 
-# The viewer is STAGED into the pack (same-origin fetches), so an edit to
-# tools/tascene-view.html reached a running server only by restarting it — and
-# then only after a manual browser reload. Both steps were easy to forget and
-# the failure mode is silent: you look at the old code and believe the result.
-# So the serving copy is re-staged whenever the source changes, and the token
+# The viewer is STAGED into the pack (same-origin fetches), so without this an
+# edit to tools/tascene-view.html would reach a running server only by
+# restarting it — and then only after a manual browser reload. Both steps are
+# easy to forget and the failure mode is silent: you look at the old code and
+# believe the result. So the serving copy is re-staged whenever the source changes, and the token
 # below is what the page polls to know it should reload itself.
 RELOAD_TOKEN = "__reload"
 
@@ -1723,7 +1723,7 @@ def cmd_featdiff(args):
 
 
 def cmd_unitdiff(args):
-    """The unit atlas's twin (tagpu_render3do.c, G14g) against the pack's
+    """The unit atlas's twin (tagpu_render3do.c) against the pack's
     units/atlas.rgba.bin. The DLL pads every unit frame by the same UNIT_PAD
     the pack does, so the ring check covers the whole 4-texel border."""
     pack, units, PW, PH, pr8, prgba = _pack_atlas(args, "units", "units/atlas.rgba.bin")
@@ -1736,12 +1736,11 @@ def cmd_unitdiff(args):
     _atlasdiff(args, pack, _read_dump(args.prefix), frames, units["atlas"].get("pad", UNIT_PAD))
 
 
-# The UI atlas's twin (tagpu_gui_surf.c, G15e) against the SAME restorer run
-# offline on the same cells — gui-renderer.md §3.11's Q2 diff, the measurement
-# G15-0 could not make: it restored UI frames in isolation, and what has never
-# been measured on UI art is the halo the GAME's GLSL path leaves at a keyed
-# edge (§4c's near band, 0.41 levels on features), which panels and buttons are
-# made of.
+# The UI atlas's twin (tagpu_gui_surf.c) against the SAME restorer run offline
+# on the same cells — gui-renderer.md §3.11's Q2 diff. What it measures on UI
+# art is the halo the GAME's GLSL path leaves at a keyed edge (§4c's near band,
+# 0.41 levels on features), which panels and buttons are made of; restoring UI
+# frames in isolation cannot show it.
 #
 # There is no UI pack to reference and no sequence-name registry to match
 # entries by name, so the reference is built out of the dump itself: every
@@ -1787,7 +1786,7 @@ def _palette_file(path):
 
 
 # The near band is reported, not barred, so it has to be judged by eye — and the
-# strip the owner judged the FEATURES' near band on (renderers.md §4c) is what
+# strip the FEATURES' near band was judged on (renderers.md §4c) is what
 # makes the two comparable: indexed, ours, the reference, and the difference
 # amplified, one row per frame, worst first.
 

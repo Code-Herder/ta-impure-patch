@@ -2,7 +2,7 @@
 #define TAGPU_SHIELD_H
 #include <windows.h>
 
-/* tagpu input firewall ("the shield") — phase 1.1.
+/* tagpu input firewall ("the shield").
 
    Armed by the trigger file `tagpu_shield.on` next to the exe (tacli arms it by
    default), same idiom as tagpu_nowarp.on. While armed:
@@ -16,7 +16,7 @@
      - GetCursorPos/GetKeyState/GetAsyncKeyState report the injected state
        instead of the real devices. That last part is what makes ctrl/shift
        combos land: TA *polls* modifier state rather than reading it off the
-       message, which is why posted combos never worked before.
+       message, which is why posted messages alone cannot deliver a combo.
 
    The tagged messages are honoured whether or not the shield is armed — arming
    only decides whether hardware input is let through alongside them. */
@@ -41,7 +41,7 @@ enum {
 
 /* OR into the code: x,y are CLIENT-AREA (device) pixels, not the engine's
    logical screen, and are converted by `mouse_client_to_game` -- the same
-   function a hardware click goes through (G17b).
+   function a hardware click goes through.
 
    Why it exists: every other injected event is delivered in the engine's own
    coordinates, so none of them ever traverses the pointer unscale. That is
@@ -50,21 +50,17 @@ enum {
    gadget at every k"). With this, the harness clicks where a player's mouse
    would be and the engine has to arrive at the right gadget by itself.
    Outside the letterboxed viewport the conversion yields the centre of the
-   engine's screen, which is what a hardware click there has always done. */
+   engine's screen, which is what a hardware click there does. */
 #define TAGPU_M_DEV     0x100
 
 BOOL tagpu_shield_on(void);
 
 /* Re-read the trigger file and release keys whose hold has expired.
 
-   CALL THIS ON THE GAME THREAD -- the wndproc's thread. Since the vulkan-only
-   plan's landing 10c-2 it is, from the engine's flip 0x4C63A0 through
-   tagpu_triggers_frame; before that it was the render thread's present hook,
-   and that was a latent bug rather than a licence.
+   CALL THIS ON THE GAME THREAD -- the wndproc's thread. It is called from the
+   engine's flip 0x4C63A0 through tagpu_triggers_frame.
 
-   IT IS NOT THREAD-FREE, and this line used to say it was [landing review of
-   10c-2, round 2: the header asserted "game thread not required" while the .c
-   file it pointed at explained why that is false]. The big one: on the disarm
+   IT IS NOT THREAD-FREE. The big one: on the disarm
    edge this function calls clear_state(), which memsets s_down/s_async/
    s_release -- and s_down/s_async are written by the wndproc, per key, through
    set_one(). Off the wndproc's thread that memset races those writes, and what
@@ -72,7 +68,7 @@ BOOL tagpu_shield_on(void);
    log. The release sweep is smaller but not nothing either: it writes
    s_release[vk] = 0, which the injector also writes when it sets a deadline --
    one aligned dword against the memset's 768 bytes, but the same kind of
-   exposure [round 3]. Re-host this and both come back. */
+   exposure. Call this from any other thread and both races are open. */
 void tagpu_shield_frame(HWND hwnd);
 
 /* TRUE when the message was consumed: either a tagged injection (delivered to

@@ -79,9 +79,9 @@ int tagpu_featown_installed(void) { return g_installed; }
 void tagpu_featown_flush(unsigned int frame_counter)
 {
     if (!g_installed) return;
-    /* if the native pass stops running (overlay off, GL failure, a frame path
-       that never reaches it) the engine's features come back rather than the
-       map going bare */
+    /* if the native pass stops running (overlay off, a frame path that never
+       reaches it) the engine's features come back rather than the map going
+       bare */
     if (g_featown_skip && frame_counter - g_beat > 90) {
         flog("featown: feature pass silent for 90 frames");
         tagpu_featown_set_skip(0);

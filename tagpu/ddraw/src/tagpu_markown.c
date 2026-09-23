@@ -411,8 +411,8 @@ void tagpu_markown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
 void tagpu_markown_flush(unsigned int frame_counter)
 {
     if (!g_installed) return;
-    /* if the native pass stops running (overlay off, GL failure, a frame path
-       that never reaches it) the engine's markers come back rather than the
+    /* if the native pass stops running (overlay off, a level teardown, a frame
+       path that never reaches it) the engine's markers come back rather than the
        health bars and order lines simply vanishing */
     if ((g_markown_skipBars || g_selbox || g_cursor || g_orders ||
          g_digits) &&

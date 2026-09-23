@@ -4,7 +4,7 @@
 // build` and compiled here under GLSL ES 3.00; the weights are
 // unditherer/weights.py's file. Nothing in here is a second implementation of
 // the model: this file is the DRIVER — batching frames into slots, binding the
-// weight ranges, sequencing the passes — and tagpu_restoreglsl.c is the same
+// weight ranges, sequencing the passes — and tagpu_restore_core.c is the same
 // driver in C. `restore=glsl` in the viewer runs it on the pack's own R8
 // terrain atlas in place of the pack's pre-restored one, and on the feature
 // atlas (colour-keyed, non-square frames — the lazy GAF restore's shape);
@@ -111,7 +111,7 @@ export function featureFrames(features, atlas, pal) {
   return frames;
 }
 
-// the batcher, shared with tagpu_restoreglsl.c: -> [{S, cols, frames}]
+// the batcher, shared with tagpu_restore_core.c: -> [{S, cols, frames}]
 export function batchFrames(frames, depth) {
   let rest = frames.map((f) => {
     let wrap = !!f.wrap, S = Math.max(f.w, f.h) + (wrap ? 2 * depth : 0);

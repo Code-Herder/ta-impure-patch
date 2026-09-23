@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetch the pinned glslang that tools/spirv-gen.py compiles the fork's shaders
-# with (Phase G / G19c). tools/glslang-vendor.json is the manifest; the unpacked
+# with (roadmap.md Phase G). tools/glslang-vendor.json is the manifest; the unpacked
 # tree lands in tools/glslang/, which is gitignored.
 #
 # NOTHING IN ANY BUILD CALLS THIS. The SPIR-V headers are generated here and

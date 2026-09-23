@@ -4,9 +4,9 @@
 /* In-process input injection: tagpu_keys.txt (one-shot key tokens posted to
    the game window) + tagpu_eye.txt (camera eye hold). Session-proof — no X.
 
-   THE TWO HALVES RUN ON DIFFERENT THREADS SINCE LANDING 10c-2, and the split is
-   along the packet: the token half needs none and drives the game, the hold
-   half dereferences f->packet and feeds the render thread's command record. */
+   THE TWO HALVES RUN ON DIFFERENT THREADS, and the split is along the packet:
+   the token half needs none and drives the game, the hold half dereferences
+   f->packet and feeds the render thread's command record. */
 
 /* The token half: keys, clicks, the shield's expiries. GAME THREAD, from
    tagpu_gui_hook.c's before_flip via tagpu_triggers_frame — which is what lets
@@ -29,7 +29,7 @@ int  tagpu_input_eye_held(void);
    where. Render thread, from tagpu_zoom_frame_end(); the game thread clamps
    the point into the camera's range and writes the eye and its scroll target
    at the top of every in-play draw for as long as the file stands. This
-   module writes no engine memory itself since the frame packet's landing 2. */
+   module writes no engine memory itself. */
 struct TAGPU_CMD;
 void tagpu_input_cmd(struct TAGPU_CMD* rec);
 #endif

@@ -452,10 +452,11 @@ static int build_pipeline(const TAGPU_VKPASS* d, VkRenderPass rp)
     vertex_layout(vb, va, &vi);
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    /* GL'S CLIP-SPACE Z, for the same reason the posed caster pipeline needs
-       it: tagpu_shadow.c's matrix fills [-1, 1] by construction, so without
-       this the near half of every caster is clipped away. The caller has
-       already refused to get here without `zclipok`. */
+    /* CLIP-SPACE Z IN [-1, 1], for the same reason the posed caster pipeline
+       needs it: the shadow matrix's contract is a [-1, 1] depth range that the
+       consumers read back as `p.z * 0.5 + 0.5` (tagpu_vk_shadow.c item 2), so
+       without this the near half of every caster is clipped away. The caller
+       has already refused to get here without `zclipok`. */
     zc.negativeOneToOne = VK_TRUE;
     vp.pNext = &zc;
     vp.viewportCount = 1; vp.scissorCount = 1;
@@ -689,7 +690,7 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 
     /* THE ONE FRAME SHAPE THIS PASS CANNOT REPRODUCE. See the file header: the
        albedo does not cross, and a group that actually cuts out is a hole in
-       the GL map this lane would leave filled. */
+       the map that this pass, sampling a white stand-in, would leave filled. */
     if (s_h.cutoutSeen) {
         if (!s_saidCutout) {
             s_saidCutout = 1;

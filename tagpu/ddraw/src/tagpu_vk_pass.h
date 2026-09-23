@@ -53,13 +53,12 @@ typedef struct {
        so a pass that does not test depth still declares one with testing and
        writes off. A pass that DOES test must refuse to arm when this is
        UNDEFINED rather than draw untested.
-       24-bit fixed point by construction, because the GL lane's world FBO is
-       GL_DEPTH24_STENCIL8 and a comparison against it is a comparison of two
-       quantisations as much as of two rasterisers. */
+       24-bit fixed point by construction (`stencilok` below names the two
+       formats). */
     VkFormat                  dfmt;
     /* 1 when `dfmt` CARRIES A STENCIL PLANE and the render passes clear it --
        both the seam's and tagpu_vk_world.c's offscreen one -- so a pass may
-       build a pipeline with `stencilTestEnable`. The 24-bit format the lane
+       build a pipeline with `stencilTestEnable`. The 24-bit format the seam
        prefers is D24_UNORM_S8_UINT and has one; its fallback,
        X8_D24_UNORM_PACK32, has none, and a device that offers only that gets a
        0 here. Same shape as `flipok` and `lineok`: a capability a pass asks
@@ -70,85 +69,83 @@ typedef struct {
        surface -- see build_shadow_pipelines. */
     int                       stencilok;
     uint32_t                  slots;    /* <= TAGPU_VK_SLOTS                   */
-    /* VK_KHR_maintenance1, and so a NEGATIVE VIEWPORT HEIGHT. GL's clip space
-       has +Y up and Vulkan's has +Y down, so a shader written in GL's window
-       convention draws its frame upside down -- and the shaders are ported
-       unchanged on purpose, because a source edit would make each one disagree
-       with the GL twin that is its oracle. The flip is therefore pipeline state,
-       and this is whether the device will do it. 0 means a pass that needs it
-       must not arm; it may not fall back to flipping geometry, which would
-       mirror every glyph.
+    /* VK_KHR_maintenance1, and so a NEGATIVE VIEWPORT HEIGHT. OpenGL's window
+       convention has +Y up and Vulkan's clip space has +Y down, so a shader
+       written in the y-up convention draws its frame upside down. Those shaders
+       keep that convention and the flip is pipeline state; this is whether the
+       device will do it. 0 means a pass that needs it must not arm; it may not
+       fall back to flipping geometry, which would mirror every glyph.
 
        WHICH PASSES NEED IT IS NOT "ALL OF THEM", and assuming it is draws the
        picture upside down. It depends on the SHADER's y convention, and this
        tree has two:
 
          * `1 - y*2`, or an NDC rect built y-up -- tagpu_vk_gui.c's composite,
-           tagpu_vk_fps.c, tagpu_vk_scaffold.c. These speak GL's WINDOW
-           convention, so they need the flip and still take it.
+           tagpu_vk_fps.c, tagpu_vk_scaffold.c. These speak the y-up WINDOW
+           convention, so they need the flip and take it.
          * `p.y/uGame.y*2 - 1` on the engine's screen-space y, which grows
            DOWNWARD -- tagpu_vk_terr.c, _feat.c, _fx.c, _unit.c, _mark.c. Clip
            -1 is the game frame's TOP row, which is row 0 under Vulkan already.
            These must NOT flip, and do not ask for this at all.
 
        The two are distinguishable in one line of each pass's vertex shader, and
-       the A/B cannot tell them apart: it compares the lanes to each other, and a
-       flip they share cancels. The screen is the oracle for this one. */
+       the A/B cannot tell them apart: it compares two captures of the same
+       pass, and a flip both share cancels. The screen is the only check for
+       this one. */
     int                       flipok;
     /* VK_EXT_line_rasterization WITH `bresenhamLines`, ENABLED ON THE DEVICE.
-       A pass that draws LINES needs it and may not draw without it.
-       MEASURED 2026-09-15 (the effects pass): under Vulkan's DEFAULT
-       lineRasterizationMode the ported lasers came out a strict SUPERSET of
-       their GL twin's -- all 126 of the twin's pixels plus exactly one extra
-       fragment at the END of each line segment. GL's non-antialiased lines
-       follow the diamond-exit rule; Vulkan's default mode does not and
-       BRESENHAM does. It is the same shape as `flipok`: a rule the GL twin
-       already obeys, adopted as pipeline state rather than worked around, and
-       a pass whose device will not offer it stands down instead of drawing a
-       picture four pixels away from its own oracle. */
+       A pass that draws LINES needs it and may not draw without it: the lines
+       follow the diamond-exit rule, which BRESENHAM mode gives and Vulkan's
+       default mode does not. MEASURED 2026-09-15 (the effects pass, against
+       the OpenGL renderer this replaced): under Vulkan's DEFAULT
+       lineRasterizationMode the lasers came out a strict SUPERSET of the
+       diamond-exit lines -- all 126 of their pixels plus exactly one extra
+       fragment at the END of each line segment. It is the same shape as
+       `flipok`: a rule adopted as pipeline state rather than worked around,
+       and a pass whose device will not offer it stands down instead of drawing
+       those extra fragments. */
     int                       lineok;
     /* `wideLines` WAS ENABLED ON THE DEVICE, and the widest line it will
        rasterise. A pass that draws lines into a SUPERSAMPLED target needs
-       it: the GL twin calls `glLineWidth(ss)` so that a line one game pixel
-       wide is `ss` pixels of the target, and a Vulkan pipeline fixed at 1.0
-       draws a line `ss` times too thin. Same shape as `flipok` and
-       `lineok`: a rule the GL twin already obeys, adopted as pipeline state.
+       it: a line one game pixel wide is `ss` pixels of the target, and a
+       pipeline fixed at 1.0 draws it `ss` times too thin. Same shape as
+       `flipok` and `lineok`: a rule adopted as pipeline state.
        `maxLineWidth` is `lineWidthRange[1]`, and a width past it is refused
        rather than clamped: a clamped width is a line a different thickness
-       from its own oracle, which is the thing this family of flags exists
-       to prevent. 0 means the device does not offer it. */
+       from one game pixel, which is the thing this family of flags exists to
+       prevent. 0 means the device does not offer it. */
     int                       wideok;
     float                     maxLineWidth;
     /* VK_EXT_depth_clip_control WITH `depthClipControl`, ENABLED ON THE DEVICE,
-       and so a pipeline may ask for GL'S OWN CLIP-SPACE Z RANGE. GL maps clip z
-       in [-1, 1] onto the depth range; Vulkan takes [0, 1] and CLIPS the rest.
-       The other world passes write a z already in [0, 1], so `minDepth 0.5 /
-       maxDepth 1.0` reproduces GL exactly and none of them needs this. THE
-       SHADOW PASS IS THE EXCEPTION: its orthographic light matrix is built to
-       fill [-1, 1] (tagpu_shadow.c `mrow`), so without this the near half of
-       every caster is clipped away and the depth map is WRONG rather than
-       merely different -- and the depths it stores are what the consumers'
-       taShadowAt compares against. Same shape as `flipok` and `lineok`: a rule
-       the GL twin already obeys, adopted as pipeline state rather than worked
-       around, and a pass whose device will not offer it stands down instead of
-       drawing a map its own oracle would not recognise. */
+       and so a pipeline may ask for OpenGL's CLIP-SPACE Z RANGE: clip z in
+       [-1, 1] mapped onto the depth range, where Vulkan takes [0, 1] and CLIPS
+       the rest. The other world passes write a z already in [0, 1], so
+       `minDepth 0.5 / maxDepth 1.0` reproduces the (z + 1) / 2 mapping exactly
+       and none of them needs this. THE SHADOW PASS IS THE EXCEPTION: its
+       orthographic light matrix fills [-1, 1] (tagpu_vk_shadow.h,
+       TAGPU_SHADOWHAND `mat`, which nothing produces today), so without this
+       the near half of every caster is clipped away and the depth map is WRONG
+       rather than merely different -- and the depths it stores are what the
+       consumers' taShadowAt compares against. Same shape as `flipok` and
+       `lineok`: a rule adopted as pipeline state rather than worked around,
+       and a pass whose device will not offer it stands down instead of drawing
+       a map with its casters' near halves missing. */
     int                       zclipok;
     /* `samplerAnisotropy` WAS ENABLED ON THE DEVICE, and the largest ratio it
        will apply. This fork filters exactly one class of texture -- the
        Classic++ restored twins, the only ones holding true colour rather than
-       palette indices -- and tagpu_gaf.c gives those GL_LINEAR_MIPMAP_LINEAR
-       with GL_TEXTURE_MAX_ANISOTROPY_EXT 4. Same shape as `flipok` and
-       `zclipok`: a rule the GL twin already obeys, adopted rather than worked
-       around, and a pass whose device will not offer it stands down on the
-       frames that would sample one instead of drawing art its own oracle
-       filtered differently. */
+       palette indices -- and the unit pass's sampler for them (tagpu_vk_unit.c)
+       is VK_FILTER_LINEAR with VK_SAMPLER_MIPMAP_MODE_LINEAR and the anisotropy
+       `aniso=` asks for (tagpu_classicpp.h, default 4). A device without it,
+       or with a lower ceiling, gets a sampler with anisotropy off: the unit
+       pass draws on rather than standing down. */
     int                       anisook;
     float                     maxAniso;
     /* WHICH RENDER-THREAD FRAME THIS IS -- the fork's own monotonic counter,
-       the same number the GL lane stamped its hand-over with earlier in this
-       iteration of render_ogl.c's loop.
+       the same number the gathers stamped their hand-overs with earlier in
+       this iteration of render_vk.c's loop.
        A pass uses it to REFUSE a hand-over that is not this frame's, and that
-       refusal is the whole point: the GL modules' hand-overs alias buffers
+       refusal is the whole point: the gather modules' hand-overs alias buffers
        those modules own and rebuild (the tile atlas, the height grid, the
        vertex arrays), so a hand-over left standing from an earlier frame can
        name memory that has since been freed. The publishing function clearing

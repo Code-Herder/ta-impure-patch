@@ -1,5 +1,5 @@
 #!/bin/bash
-# spirv-check.sh -- the build rule of the shader pipeline (Phase G / G19c).
+# spirv-check.sh -- the build rule of the shader pipeline (roadmap.md Phase G).
 #
 #   tools/spirv-check.sh [tagpu/ddraw]     # exit 0 current, 1 stale, 2 could not run
 #
@@ -15,8 +15,8 @@
 #      tool, fails the build and names what moved.
 #   2. THE HEADERS COMPILE AS C. Only the shaders a ported pass actually uses are
 #      #included anywhere, so most of these arrays are never seen by the compiler and
-#      a malformed one would sit there until G19e reached it. Each header is
-#      syntax-checked standalone.
+#      a malformed one would sit there until a pass first included it. Each header
+#      is syntax-checked standalone.
 #
 # WHAT IT DOES NOT ASSERT: that the SPIR-V is what glslang would emit TODAY. That
 # would need glslang, which is deliberately not a build dependency (tools/spirv-gen.py's
@@ -35,9 +35,9 @@ cc="${CC:-i686-w64-mingw32-gcc}"
 command -v python3 >/dev/null 2>&1 || { echo "spirv-check: no python3" >&2; exit 2; }
 
 # THE EXIT CODE IS PASSED THROUGH, NOT FLATTENED. spirv-gen exits 1 for "stale"
-# and 2 for "could not run at all" (no preprocessor, a shader it cannot read),
-# and `|| exit 1` used to report the second as the first -- which would send
-# someone to regenerate headers that are perfectly current.
+# and 2 for "could not run at all" (no preprocessor, a shader it cannot read);
+# `|| exit 1` would report the second as the first, and send someone to
+# regenerate headers that are perfectly current.
 CC="$cc" python3 "$here/spirv-gen.py" --check || exit $?
 
 shopt -s nullglob

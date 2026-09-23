@@ -349,9 +349,9 @@ void tagpu_terrown_latch(int own)
 void tagpu_terrown_flush(unsigned int frame_counter)
 {
     if (!g_installed) return;
-    /* if the native pass stops running (overlay off, GL failure, a frame path
-       that never reaches it) the engine's terrain comes back rather than the
-       viewport going flat key-colour */
+    /* if the native pass stops running (overlay off, a level teardown, a
+       frame path that never reaches it) the engine's terrain comes back
+       rather than the viewport going flat key-colour */
     if (g_terrown_skip && frame_counter - g_beat > 90) {
         flog("terrown: terrain pass silent for 90 frames");
         tagpu_terrown_set_skip(0);

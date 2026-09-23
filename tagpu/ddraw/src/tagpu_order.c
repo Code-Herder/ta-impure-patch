@@ -123,7 +123,7 @@
    WHAT WE DO DIFFERENTLY, AND WHY IT IS ON PURPOSE.
 
    - Circles are real arcs at a segment count chosen for the zoom, not sixteen
-     chords, and lines are one SCREEN pixel wide (glLineWidth(ss)) rather than
+     chords, and lines are one SCREEN pixel wide (line width `ss`) rather than
      one game pixel magnified.
    - Route dots and the waypoint sprite are drawn procedurally — a round dot
      and a pulsing crosshair — in the ink read out of the GAF frame the engine

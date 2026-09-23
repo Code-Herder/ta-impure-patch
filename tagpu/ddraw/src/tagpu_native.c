@@ -2,8 +2,9 @@
 
    Chosen unit types leave the 8bpp composite path entirely: their composites
    are wiped to ColorKey (engine keeps pose/AABB/alloc/blit — of nothing) and
-   the units are rendered here, in the present hook, as RGB into a
-   game-resolution FBO composited over the frame:
+   the units are gathered here, in the present hook, and handed over to
+   tagpu_vk_unit.c, which draws them as RGB into the offscreen world target
+   (tagpu_vk_world.c) that is resolved onto the frame:
 
      - geometry: the same engine-posed PrimitiveStruct walk as render3do,
        positioned in VIEWPORT coordinates with the live viewport rect;
@@ -13,9 +14,9 @@
        tagpu_terr.c. Re-reading it is free and survives whatever does write it);
      - occlusion: per-fragment test against the scene-depth scaffold
        (painter's row keys; a tall feature in a nearer row hides the unit),
-       plus a real GL depth buffer for self/inter-unit occlusion;
+       plus the world target's depth buffer for self/inter-unit occlusion;
      - fog: per-fragment sample of the LOS counter map + MAPPED bits
-       (32-px tiles, uploaded as R8 textures each frame), LosType-aware;
+       (32-px tiles, handed over each frame), LosType-aware;
      - shadow: engine rules (shadows-cloak.md): the unit silhouette, 50%
        black, +5px x, at ground height, options-gated, drawn before the body,
        and blended ONCE PER SILHOUETTE PIXEL through a stencil mask -- the
@@ -48,16 +49,16 @@
        (scratch fake-unit *(main+0x1420F) -> DrawUnit) is suppressed by the
        owndraw classifier when tagpu_native_wrecks_armed().
      - 2x SUPERSAMPLING (default on, killed by tagpu_ss.off): geometry renders
-       into a 2x-game-res FBO, box-downsampled (LINEAR quad) into the 1x FBO,
-       which composites NEAREST as before — game-res look, antialiased edges,
-       visual parity with the composite path's SS.
+       into a 2x-game-res world target, resolved onto the frame through a
+       LINEAR sampler (DVS/DFS below, drawn by tagpu_vk_world.c) — at k = 1
+       an exact 2:1 box filter, so edges are antialiased.
      - SUB-PIXEL MOTION (default on, killed by tagpu_subpix.off): engine
        positions are integer shorts at sim rate; anchors interpolate between
        the last two sim samples per unit slot (render-side only), so walkers
        glide at present rate instead of stepping at sim rate.
 
-   RESOLUTION RULE: the FBO is game_width x game_height (the game's requested
-   mode, from the frame struct); every viewport quantity is a live engine
+   RESOLUTION RULE: the world target is game_width x game_height times the
+   supersample factor (the game's requested mode, from the frame struct); every viewport quantity is a live engine
    read. Nothing here knows 640x480. */
 
 #include <windows.h>
@@ -83,7 +84,7 @@
 #include "tagpu_owndraw.h"   /* set_structshadow; structshadow_ours has no caller */
 #include "tagpu_reclaim.h"   /* the teardown fence this file's template reads stand behind */
 #include "tagpu_posebake.h"
-#include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
+#include "tagpu_vk.h"        /* nothing of it is used in this file */
 #include "tagpu_posedraw.h"  /* the per-type geometry bake and its caches */
 #include "tagpu_lerp.h"      /* smooth-motion.md option A: the pose between two sim ticks */
 #include "crc32.h"          /* the tagpu_posecrc.on gate oracle */
@@ -274,11 +275,11 @@ static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
 static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
 static TAGPU_WORLDTGT s_wt;            /* the world target, published per frame */
 static int    s_wtHave = 0;
-/* the 256-byte fog shade table as this frame built it, for the Vulkan twins
+/* the 256-byte fog shade table as this frame built it, for the Vulkan passes
    (tagpu_native.h) */
 static unsigned char s_fogLutBytes[256];
 static int s_fogLutHave;
-/* whether this frame's world FBO pass is actually scissored to the viewport
+/* whether this frame's world passes are actually scissored to the viewport
    (tagpu_native.h) */
 static int s_scissorOn;
 static float  s_zoom = 1.0f;
@@ -328,9 +329,10 @@ static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
 static const float SH_L[3] = { -0.35f, 0.80f, -0.49f };
 
 /* SIX SHADERS, AND FIVE OF THEM HAVE NO C REFERENCE. They are a BUILD
-   INPUT, not dead GL code: `tools/spirv-gen.py` reads every one out of the
+   INPUT, not dead code: `tools/spirv-gen.py` reads every one out of the
    PREPROCESSED translation unit and generates the SPIR-V that
-   `tagpu_vk_unit.c` and `tagpu_vk_world.c` draw with -- the manifest names
+   `tagpu_vk_unit.c` (VS/FS) and `tagpu_vk_world.c` (DVS/DFS) draw with;
+   CVS/CFS are compiled and drawn by nothing. The manifest names
    tagpu_native::VS/FS, ::CVS/::CFS and ::DVS/::DFS, and deleting any of them
    fails the build. `FS` is the exception with a live C caller:
    `tagpu_native_unit_fs()` hands it to `tagpu_posedraw.c`, which is exactly
@@ -365,8 +367,8 @@ static const char* VS =
     /* Classic++ shadows: the vertex's SHADOW-SPACE point, derived here rather
        than carried (renderers.md 2.11): real z = projected z + (altitude +
        height)/2, the height the ground plus the throw plus the model height
-       scaled by the length rule. The same expression tagpu_shadow.c's depth
-       program evaluates, so a unit's own shadow lookup lands on its own
+       scaled by the length rule. The same expression the shadow depth
+       program evaluates (tagpu_shadow_glsl.h, VS_U), so a unit's own shadow lookup lands on its own
        caster (self-shadowing, unit on unit). */
     "  vShW = vec3(aWorld.x, uCast.y + uCast.z * aVY, aWorld.y + (uCast.x + aVY) * 0.5);\n"
     "}\n";
@@ -436,8 +438,8 @@ static const char* FS =
        divergence from the engine, which keeps the whole model's heights in
        the depth plane whatever the fill has reached and tests the wireframe
        against them, so its back edges do not show. We cannot have both: the
-       engine's depth plane is PER SPRITE, ours is the one shared GL depth
-       buffer, so an erased fragment that writes depth is an invisible
+       engine's depth plane is PER SPRITE, ours is the world target's one
+       shared depth buffer, so an erased fragment that writes depth is an invisible
        occluder for everything drawn after it -- and at p >= 201, the first
        fifth of every build, nano_stage erases all but a thin band, so that
        occluder is very nearly the whole model. It cost a factory its own far
@@ -482,8 +484,8 @@ static const char* FS =
     "    if (uWaterMode == 1) discard;\n"
     "    rgb = rgb * 0.5 + vec3(0.0, 0.0, 50.0/255.0);\n"
     "  }\n"
-    /* the FBO is PREMULTIPLIED: additive content (effects flashes) can then
-       ride the same composite as (rgb, alpha 0) */
+    /* the world target is PREMULTIPLIED: additive content (effects flashes)
+       can then ride the same composite as (rgb, alpha 0) */
     "  frag = vec4(rgb * uAlpha, uAlpha);\n"
     "}\n";
 
@@ -493,7 +495,8 @@ static const char* FS =
    they share. */
 const char* tagpu_native_unit_fs(void) { return FS; }
 
-/* composite: the game-res FBO over the frame, NEAREST (game-res look kept) */
+/* composite: the game-res world image over the frame, NEAREST. Compiled and
+   drawn by nothing: tagpu_vk_world.c resolves the world with DVS/DFS below. */
 static const char* CVS =
     "#version 330 core\n"
     "layout(location=0) in vec2 p;\n"
@@ -535,8 +538,8 @@ static const char* CFS =
     /* THE CURSOR'S RECT COUNTS AS KEY. The engine blits its cursor into
        the back buffer inside the flip, after everything we observe, so those
        pixels are not the key and the discard above would let them through —
-       under the cursor the GL UI renderer already draws its own into the sharp
-       layer, and the screen would carry two. The rect is empty (w = h = 0)
+       under the cursor the UI layer (tagpu_gui_surf.c) draws its own into the
+       sharp layer, and the screen would carry two. The rect is empty (w = h = 0)
        unless tagpu_gui_cursor_own says ours is being drawn this frame, so this
        is inert whenever the engine's cursor is the one on screen.
        The cost is the engine's own in-viewport pixels inside that rect for one
@@ -551,9 +554,9 @@ static const char* CFS =
        for "no world", rather than be blended over what is behind us.
 
        Emitting `c` and letting the blend do it only works when c.a is 1. Every
-       partially covered pixel (the FBO is premultiplied and the 2x downsample
-       gives fractional alpha along any edge terrain does not reach — the map
-       boundary is a full-length one) would otherwise come out as
+       partially covered pixel (the world target is premultiplied and the 2x
+       downsample gives fractional alpha along any edge terrain does not reach
+       — the map boundary is a full-length one) would otherwise come out as
        `c.rgb + (1 - c.a) * key`: a cyan-tinted line at exactly the zoom levels
        where the world's edge lands off the pixel grid. Opaque `c.rgb` is that
        same composite against black, and it subsumes the empty case (c.rgb is
@@ -564,8 +567,10 @@ static const char* CFS =
     "  frag = c;\n"
     "}\n";
 
-/* downsample: 2x FBO -> 1x FBO, same orientation, LINEAR sampler at the 1x
-   texel centres = exact 2:1 box filter; fractional edge alpha is the AA */
+/* the resolve: the supersampled world target onto the frame
+   (tagpu_vk_world.c), same orientation, LINEAR sampler -- at ss = 2 and k = 1
+   each destination centre is a 2x2 block's corner, so the tap is the exact
+   2:1 box filter; fractional edge alpha is the AA */
 static const char* DVS =
     "#version 330 core\n"
     "layout(location=0) in vec2 p;\n"
@@ -1196,7 +1201,7 @@ static void piece_local(const unsigned short* turn, const float* d, float* o)
    stale entries. Checked once per frame rather than per lookup: every one of
    these caches is consulted only from tagpu_native_frame's own call tree.
 
-   Such a cache holds no GL objects, so dropping it is resetting one count and
+   Such a cache holds no device objects, so dropping it is resetting one count and
    the entries rebuild on the next frame that asks. */
 static unsigned s_cacheGen;              /* the level the template-keyed caches describe */
 static unsigned s_lastLevelGen;          /* the last packet's, carried over a frame with none */
@@ -1571,8 +1576,8 @@ void tagpu_native_set_want_builds(int want, unsigned int frame_counter)
    decay inside the setter cannot see. As in tagpu_fxown, the decay runs from
    tagpu_overlay.c's unconditional flush run,
    which sits in front of the `tagpu_overlay.off` early-return, so a render
-   thread that is STILL RUNNING but has stopped polling — a context loss,
-   `tagpu_overlay.off` — stops charging the publisher for a table nothing will
+   thread that is STILL RUNNING but has stopped polling — `tagpu_overlay.off`
+   — stops charging the publisher for a table nothing will
    read. What it does NOT cover, because it cannot: a render thread that has
    EXITED stops calling this flush too, so the flag keeps its last value. That
    is the same hole fxown's watchdog has and is not worth a second mechanism —
@@ -2015,8 +2020,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     tagpu_r3d_atlas_level(s_lastLevelGen);
     /* the geometry bake's caches take the same three generations one frame
        later than they are bumped, for the same reason and on the same thread —
-       and it holds GL objects, so its drop has to be here, on the render
-       thread, and not wherever the generation moved */
+       and its drop frees the mirrors the Vulkan unit pass reads on the render
+       thread, so it has to be here, and not wherever the generation moved */
     tagpu_posebake_frame(f->frame_counter, s_lastLevelGen);
     pose_rest_block_init();      /* the degradation's block, once per session */
     tagpu_mark_frame(f->frame_counter);       /* the marker hand-over's frame */
@@ -2132,7 +2137,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     s_zoom = tagpu_zoom_lever();
 
     /* the effects pass (tagpu_fx.on) rides this frame: it needs the view,
-       fog and palette set up here and draws into this FBO */
+       fog and palette set up here and draws into the same world target */
     int fxOn = tagpu_fx_armed(f->frame_counter);
     int sfxOn = tagpu_sfx_armed(f->frame_counter);
     /* the publisher fills the packet's effect tables only while a pass is
@@ -2151,8 +2156,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) { SSHADOW_NONE(); return; }
     /* THE 3DO ATLAS AND THE SHADE LUT ARE THE PASS'S, not the backend's, and
        are asked unconditionally: the unit pass needs the atlas laid out and the
-       LUT mirrored whichever rasteriser draws it, and the atlas exists without
-       a GL name (tagpu_gaf.h). */
+       LUT mirrored, and the atlas's existence is its `made` flag
+       (tagpu_gaf.h). */
     if (!tagpu_r3d_ensure()) { SSHADOW_NONE(); return; }
 
     char* ta = *(char**)TA_MAINPP;
@@ -2208,10 +2213,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* A SANITY BOUND ON ENGINE DATA, NOT A SUPPORTED-RESOLUTION LIMIT. The
        viewport is read out of engine memory and everything below sizes itself
        from it, so a garbage pair must not be believed — but nothing here
-       assumes a number: the FBO is the game's own size, the gather rect is the
-       viewport over the zoom, and the terrain staging is reserved from the
-       viewport. 16384 is the largest 2D texture common hardware will hold,
-       which is the real ceiling on the FBO the frame is drawn into. */
+       assumes a number: the world target is the game's own size, the gather
+       rect is the viewport over the zoom, and the terrain staging is reserved
+       from the viewport. 16384 is the largest 2D image common hardware will
+       hold, which is the real ceiling on the target the frame is drawn into. */
     if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) { SSHADOW_NONE(); return; }
 /* The macro captures `f` from its expansion site, so it is confined to the one
    function that has an `f` to capture. This is its last use. */
@@ -2245,10 +2250,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        construction rather than by argument: any path that does not reach the
        painter -- the seven `SSHADOW_NONE(); return;` sites above, a refused
        map -- leaves 0 behind and the next frame lowers the gate.
-
-       NO `gl_draws` TERM. With one lane there is no seam to guard, and such a
-       term would PIN THE GATE AT 0 -- the engine would keep drawing its slant
-       shadows underneath ours and nothing would report it.
 
        THE COST IS ONE FRAME, IN BOTH DIRECTIONS, and it is the same shape the
        cursor hand-over already uses (`tagpu_cursown_publish` /
@@ -2372,7 +2373,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         if (buf && cols > 0 && rows > 0) {
             /* The statics below are what `tagpu_terr_render`'s hand-over
-               carries to the Vulkan twin (`fogGrid`/`fogGridCols`/`fogGridRows`
+               carries to the Vulkan pass (`fogGrid`/`fogGridCols`/`fogGridRows`
                there). */
             s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
             s_fogCells = bufCells;
@@ -2415,7 +2416,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
     }
 
-    /* ---- the live palette (it does NOT cycle -- terr.c): each Vulkan twin
+    /* ---- the live palette (it does NOT cycle -- terr.c): each Vulkan pass
        uploads `tagpu_pal_live()`'s bytes itself, which `tagpu_pal_frame` fills
        from this frame's packet before any pass runs. `pal` above is read only
        by the `if (!pal)` early-out; a reader deciding whether `pal` can go
@@ -2840,8 +2841,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
     /* THE POSE VIEW IS THE GATHER'S. Every number in it comes from a local
        assigned well above this line -- the viewport, `gw`/`gh`, `s_zoom`,
-       `depthScale`, `ss`, `scafOn`, the fog origin and the Classic++ light --
-       and none of it is GL. It is stored in `s_pv`, which the unit hand-over
+       `depthScale`, `ss`, `scafOn`, the fog origin and the Classic++ light.
+       It is stored in `s_pv`, which the unit hand-over
        and the build ghost's dependency check both read. */
     {
         TAGPU_PDVIEW pv;
@@ -2923,7 +2924,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
        THE CLASSIC++ KEY IS THE INNER ONE. `shadows=2` (HARD) is Classic's own
        pair and is the shipped default; `shadows=1` (SOFT) asks for the
-       map-anchored depth map instead, which has no producer on this lane --
+       map-anchored depth map instead, which has no producer --
        see `shadow_defaults()` in tagpu_classicpp.c, which says why and is why
        HARD is the default. `shadows=0` draws neither. With the
        Classic++ switch OFF the engine's option bits rule alone. */
@@ -3092,12 +3093,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* WHETHER TERRAIN IS CLIPPED TO THE VIEWPORT IS THE PASS'S DECISION, and
        this line is where it is said. The engine clips unit blits to the
        viewport rect and this pass matches it; the hand-over carries that as
-       `scissorOn` and the Vulkan twin's `terr_scissor` honours it. Left 0,
-       the twin draws terrain over the whole frame instead of the viewport. */
+       `scissorOn` and tagpu_vk_terr.c's `terr_scissor` honours it. Left 0,
+       that pass draws terrain over the whole frame instead of the viewport. */
     s_scissorOn = 1;
     /* IN THE WORLD'S ORDER: terrain is the bottom layer and the features
        follow it, which is the order tagpu_vk.c records the passes in. Each
-       twin owns its own blend state, so there is nothing to set here. */
+       Vulkan pass owns its own blend state, so there is nothing to set here. */
     if (nterr) tagpu_terr_render(&fv);
     if (nfeat) tagpu_feat_render(&fv);
     /* the effects are the LAST of the world, after the features and the

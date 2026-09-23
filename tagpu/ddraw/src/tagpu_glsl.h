@@ -11,7 +11,7 @@
     "uniform float uSS;\n"            /* supersample factor (1 or 2)      */ \
     "uniform float uZoomF;\n"         /* view zoom + centre, to undo      */ \
     "uniform vec2 uZoomCF;\n"
-/* VS maps game py 0 -> NDC -1 -> FBO window y 0, so gl_FragCoord.xy/uSS IS
+/* VS maps game py 0 -> NDC -1 -> world-target row 0, so gl_FragCoord.xy/uSS IS
    the game-frame pixel; scaffold texture row 0 = viewport top (top-down). */
 #define TAGPU_GLSL_SCAF_TEST \
     "  if (uScafOn == 1) {\n" \
@@ -143,8 +143,11 @@
    texels out and missed the commander's head and gun (30 texels across)
    on every frame, so they cast nothing; a caster on the receiver's own ray
    is the one blocker that must not go unfound.
-   The map, its samplers on units 12 and 13, and the uniforms' values are
-   tagpu_shadow.c's (tagpu_shadow_locate / _apply).
+   The map is drawn by tagpu_vk_shadow.c; its two samplers (uShadowCmp,
+   uShadowRaw) and the uniforms' values reach each consumer through its
+   hand-over (TAGPU_TERRHAND in tagpu_terr.h). Nothing produces them today:
+   `shadowOn` is published as 0, so taShadowAt returns 1.0 at its first line
+   (tagpu_vk_shadow.h, TAGPU_SHADOWHAND).
 
    uSun is the unit vector TOWARD the light in map space (x east, y up,
    z south); uAmb 1.0 is "no sun" -- the rule is then exactly 1.0 with no
@@ -224,8 +227,8 @@
    a quad's far edge lands EXACTLY on a fragment centre. The rasteriser gives
    that fragment to one of the two quads sharing the edge -- measured on this
    stack, to the upper/left one -- and its interpolated u (or v) is then
-   exactly u1, which GL_NEAREST resolves to the first texel of the NEXT atlas
-   cell. On terrain that is the unrelated tile 64 cells later (the blue
+   exactly u1, which VK_FILTER_NEAREST resolves to the first texel of the NEXT
+   atlas cell. On terrain that is the unrelated tile 64 cells later (the blue
    hairlines along tile edges at zoom 0.25); on a GAF sprite it is the packer's
    gutter (the black hairline down the right of every tree).
 

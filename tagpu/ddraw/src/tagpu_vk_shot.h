@@ -2,12 +2,11 @@
 #define TAGPU_VK_SHOT_H
 /* One frame of the Vulkan lane, as a file. Implementation: tagpu_vk_shot.c.
 
-   WHY IT IS NOT `tacli glshot`. That reads the GL framebuffer, and under route
-   D the Vulkan lane draws into a window of its own that GL knows nothing about
-   -- so the only thing that can say what Vulkan put on the screen is Vulkan.
-   This is that, and it is the oracle half of every "0 px against its GL twin"
-   claim: it is compared against tagpu_fps.c's own capture of the same frame,
-   and against each ported pass's.
+   WHY THE LANE WRITES IT ITSELF. The only thing that can say what Vulkan put
+   on the screen is Vulkan: this copies out of the image the lane drew, inside
+   the command buffer the seam is recording. It is the file every ported
+   pass's A/B lever claims (`tagpu_vk_ab_arm`), and two of them -- the same
+   pass from two builds -- are what `tools/vk-ab.py a.ppm b.ppm` diffs.
 
    ONE FRAME, ONCE, UNDER A LEVER. It allocates a host-visible buffer the size
    of the frame, records the copy into the command buffer the seam is already
