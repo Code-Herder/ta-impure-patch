@@ -1221,11 +1221,13 @@ static void commit_one(int row)
     }
 }
 
-/* THE RENDER KEYS FIRST AND THE STYLE LAST. While the style is Classic or
-   Classic++ the store answers the preset for the render keys, whatever they
-   hold, so writing them first changes nothing a reader sees; the style's one
-   store is then the moment the pinned values take over. The other order would
-   let a reader see `custom` with the previous values for a poll.
+/* THE RENDER KEYS FIRST AND THE STYLE LAST. Leaving a preset for Custom, the
+   store answers the preset for the render keys until the style changes, so
+   writing them first changes nothing a reader sees, and the style's one store
+   is the moment the pinned values take over. Going back from Custom to a
+   preset, a reader can see one generation of a mixed custom set; every set
+   bumps the generation after its value and marks the store again, so the
+   renderer and the file both end on the full set.
 
    A render row carries the style with it even when a lever holds the Renderer
    row: `tagpu_classicpp.on` decides on or off, and the store's `custom` is
@@ -1700,7 +1702,12 @@ static const VisStock s_visStock[VIS_STOCK_N] = {
 enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_GPU, VD_COUNT,
        /* not a row: a second message the Display mode row posts to itself, so
           the frame restore lands after the style restore the fork posts */
-       VD_RESTORE_FRAME };
+       VD_RESTORE_FRAME,
+       /* not a row: Undo's UI scale, the exact value the screen opened with --
+          a stage cannot carry "off" (s_scaleOpen) */
+       VD_UNDO_SCALE };
+static volatile LONG s_scaleOpen = -1;  /* the UI scale in force at open, -1 off */
+static int vrow_held(int row);
 
 #define VD_MONMAX 8
 static char s_monText[VD_MONMAX * 20];
@@ -2115,12 +2122,17 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
                               SWP_NOZORDER | SWP_NOACTIVATE);
         break;
     case VD_MON:   move_to_monitor(s_vstage[VD_MON]);              break;
+    case VD_UNDO_SCALE:
+        if (!tagpu_hud_held()) tagpu_hud_store_pct((int)s_scaleOpen);
+        break;
     /* HUD scale touches no window, and it touches no engine memory either --
        the store puts it in force as it writes it, so the next composited frame
        is already at the new scale. Writing it on the window thread keeps every
        row of this screen on one thread, which is the contract the comment
        above apply_display states. */
-    case VD_SCALE: tagpu_hud_store_pct(SCALE_VAL[s_vstage[VD_SCALE]]); break;
+    case VD_SCALE:
+        if (!tagpu_hud_held()) tagpu_hud_store_pct(SCALE_VAL[s_vstage[VD_SCALE]]);
+        break;
     case VD_FPS:
         /* fpsl_init reads g_config.maxfps and computes tick_length, so the cap
            is live from the next presented frame rather than the next launch. */
@@ -2134,7 +2146,12 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
        reach an object the other thread is using, because nothing here reaches
        an object at all. It rides this message with the rest for the reason the
        comment above `apply_display` gives -- one screen, one thread. */
-    case VD_GPU:   tagpu_vk_gpu_select(s_vstage[VD_GPU]);          break;
+    /* The store's flag is raised AFTER the select, so the render thread's
+       exchange of it orders its read of the chosen name after the choice. */
+    case VD_GPU:
+        tagpu_vk_gpu_select(s_vstage[VD_GPU]);
+        if (!vrow_held(VD_GPU)) InterlockedExchange(&s_vkDirty, 1);
+        break;
     }
     *result = 0;
     return TRUE;
@@ -2233,8 +2250,9 @@ static void push_display(void* gi)
 }
 
 /* The WINDOW rows into the store. UI scale is not here: `tagpu_hud_store_pct`
-   records it as it puts it in force, on the window thread. The GPU's value is
-   a name and goes through the render thread (`tagpu_menu_present`). */
+   records it as it puts it in force, on the window thread. Nor is the GPU: its
+   value is a name, handed over by the render thread (`tagpu_menu_present`)
+   once the window thread's select has run. */
 static void commit_display(int d)
 {
     if (vrow_held(d)) return;
@@ -2242,7 +2260,6 @@ static void commit_display(int d)
     case VD_MODE: tagpu_settings_set(TS_DISPLAY, s_vstage[VD_MODE] ? 1 : 0); break;
     case VD_MON:  tagpu_settings_set(TS_MONITOR, s_vstage[VD_MON]); break;
     case VD_FPS:  tagpu_settings_set(TS_MAXFPS, FPS_VAL[s_vstage[VD_FPS]]); break;
-    case VD_GPU:  InterlockedExchange(&s_vkDirty, 1); break;
     default:      break;
     }
 }
@@ -2284,11 +2301,15 @@ static const char* vis_actuated(void* gi)
 }
 
 /* Every WINDOW row re-applied, because a restored model is only a picture
-   until the window is actually changed to match it. */
+   until the window is actually changed to match it -- except a row a lever
+   holds, whose plate shows the lever's value and must not be put in force over
+   it. UI scale goes back as the exact value it had, not as its stage. */
 static void apply_display_all(void)
 {
     int i;
-    for (i = 0; i < VD_COUNT; i++) apply_display(i);
+    for (i = 0; i < VD_COUNT; i++)
+        if (!vrow_held(i))
+            apply_display(i == VD_SCALE ? VD_UNDO_SCALE : i);
 }
 
 /* UNDO -- back to what the screen opened with, every row, the two that move
@@ -2297,12 +2318,16 @@ static void apply_display_all(void)
    ARE put back. */
 static void vis_undo(void)
 {
-    int i;
+    int i, moved[VD_COUNT];
+    /* Only a window row the visit MOVED goes back into the store: the plates
+       show a resolved value -- the window's own monitor for a store that names
+       none -- and committing that would pin what the player never chose. */
+    for (i = 0; i < VD_COUNT; i++) moved[i] = s_vstage[i] != s_vstageOpen[i];
     memcpy(s_stage,  s_stageOpen,  sizeof s_stage);
     memcpy(s_vstage, s_vstageOpen, sizeof s_vstage);
     apply_display_all();
     commit_all_rows();
-    for (i = 0; i < VD_COUNT; i++) commit_display(i);
+    for (i = 0; i < VD_COUNT; i++) if (moved[i]) commit_display(i);
     s_visKeep = 1;
 }
 
@@ -2459,6 +2484,7 @@ static void* __cdecl vis_build_after(unsigned int* regs)
             read_display_state();
             memcpy(s_stageOpen,  s_stage,  sizeof s_stageOpen);
             memcpy(s_vstageOpen, s_vstage, sizeof s_vstageOpen);
+            InterlockedExchange(&s_scaleOpen, tagpu_hud_stored_pct());
         }
         push_stages(main_p + OFF_GUIINFO);
         push_display(main_p + OFF_GUIINFO);

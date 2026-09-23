@@ -41,7 +41,11 @@ static int          s_cfgSeen = 0;        /* a cfg was read (or its absence logg
 static FILETIME     s_cfgTime;
 static DWORD        s_cfgSize;
 static int          s_cfgPresent = -1;    /* -1 never checked, 0 absent, 1 present */
-static unsigned     s_held;               /* TAGPU_HELD_*: the menu keys the cfg names */
+/* TAGPU_HELD_*: the menu keys the cfg names. Read by the menu on the game
+   thread while a poll may be re-reading the cfg on the render thread, so it
+   is built in a local and PUBLISHED whole -- a reader never sees the empty
+   mask a rebuild starts from. */
+static volatile LONG s_held;
 static long         s_storeGen = -1;      /* the store generation last applied   */
 
 /* the lab's sunVector(az, el): degrees to the unit vector toward the light */
@@ -152,13 +156,14 @@ static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float am
 /* The settings store's value for every menu key the cfg did NOT name: the cfg
    is the lever and wins, the store ranks next, and when the store has no say
    (tagpu_defaults.off) the defaults set above stand -- renderers.md 2.10b. */
-static void from_store(void)
+static void from_store(unsigned held)
 {
     int v;
-    if (!(s_held & TAGPU_HELD_ASSETS) && tagpu_settings_get(TS_ASSETS, &v)) s_assets = v != 0;
-    if (!(s_held & TAGPU_HELD_LIGHT)  && tagpu_settings_get(TS_LIGHT, &v))  s_lit = v != 0;
-    if (!(s_held & TAGPU_HELD_SHADOWS) && tagpu_settings_get(TS_SHADOWS, &v)) s_light.shadows = v;
-    if (!(s_held & TAGPU_HELD_SHADOWRES) && tagpu_settings_get(TS_SHADOWRES, &v)) s_light.shadowres = v;
+    InterlockedExchange(&s_held, (LONG)held);
+    if (!(held & TAGPU_HELD_ASSETS) && tagpu_settings_get(TS_ASSETS, &v)) s_assets = v != 0;
+    if (!(held & TAGPU_HELD_LIGHT)  && tagpu_settings_get(TS_LIGHT, &v))  s_lit = v != 0;
+    if (!(held & TAGPU_HELD_SHADOWS) && tagpu_settings_get(TS_SHADOWS, &v)) s_light.shadows = v;
+    if (!(held & TAGPU_HELD_SHADOWRES) && tagpu_settings_get(TS_SHADOWRES, &v)) s_light.shadowres = v;
 }
 
 static void bad(const char* p)
@@ -170,24 +175,19 @@ static void bad(const char* p)
 static void read_cfg(void)
 {
     HANDLE h;
-    /* 2048 to match tagpu_menu.c's write_cfg `in[2048]`, and it must: that
-       function copies through every token it does not own and appends its own
-       four (assets/light/shadows/shadowres) LAST, so a reader with a smaller
-       window loses the menu's own settings first -- silently: the player's rows
-       apply for the session and then vanish on the next poll. write_cfg refuses
-       to rewrite at all past its own buffer, so matching it is the whole fix. */
+    /* 2048: the cfg is hand-written knobs; a longer file's tail is not read */
     char buf[2048]; DWORD n = 0;
     float sunAz = DEF_SUN_AZ, sunEl = DEF_SUN_EL, usunAz = DEF_USUN_AZ, usunEl = DEF_USUN_EL;
     float amb = DEF_AMB;
     float ssunAz = DEF_SSUN_AZ, ssunEl = DEF_SSUN_EL;
     int off = 0;
+    unsigned held = 0;
     s_assets = 1; s_lit = 1;              /* the switch undivided: every part on */
-    s_held = 0;
     shadow_defaults(&s_light);
     h = CreateFileA(CFG_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (h == INVALID_HANDLE_VALUE) {
-        from_store();
+        from_store(held);
         apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, 0, "no cfg");
         return;
     }
@@ -210,12 +210,12 @@ static void read_cfg(void)
             *q = 0;
             if (!_strnicmp(p, "assets=", 7)) {
                 s_assets = atoi(p + 7) != 0;
-                s_held |= TAGPU_HELD_ASSETS;
+                held |= TAGPU_HELD_ASSETS;
             } else if (!_strnicmp(p, "light=", 6)) {
                 s_lit = atoi(p + 6) != 0;
-                s_held |= TAGPU_HELD_LIGHT;
+                held |= TAGPU_HELD_LIGHT;
             } else if (!_strnicmp(p, "sun=", 4)) {
-                if (!lstrcmpiA(p + 4, "off")) { off = 1; s_held |= TAGPU_HELD_LIGHT; }
+                if (!lstrcmpiA(p + 4, "off")) { off = 1; held |= TAGPU_HELD_LIGHT; }
                 else if (sscanf(p + 4, "%f,%f", &a, &e) == 2) { sunAz = a; sunEl = e; }
                 else { char b[160]; _snprintf(b, sizeof b, "classicpp: cfg: bad token \"%s\" ignored", p); cplog(b); }
             } else if (!_strnicmp(p, "unitsun=", 8)) {
@@ -246,7 +246,7 @@ static void read_cfg(void)
                 }
                 if (m >= TAGPU_SHADOWS_OFF && m <= TAGPU_SHADOWS_HARD) {
                     s_light.shadows = m;
-                    s_held |= TAGPU_HELD_SHADOWS;
+                    held |= TAGPU_HELD_SHADOWS;
                 } else bad(p);                /* out of range: the default stands */
             } else if (!_strnicmp(p, "shadowsun=", 10)) {
                 if (sscanf(p + 10, "%f,%f", &a, &e) == 2) { ssunAz = a; ssunEl = e; }
@@ -270,7 +270,7 @@ static void read_cfg(void)
                 if (r < 256) r = 256;
                 if (r > 4096) r = 4096;
                 s_light.shadowres = r;
-                s_held |= TAGPU_HELD_SHADOWRES;
+                held |= TAGPU_HELD_SHADOWRES;
             } else if (!_strnicmp(p, "aniso=", 6)) {
                 float a = (float)atof(p + 6);
                 if (a < 1.0f) a = 1.0f;
@@ -289,7 +289,7 @@ static void read_cfg(void)
         }
     }
     CloseHandle(h);
-    from_store();
+    from_store(held);
     apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, off, CFG_FILE);
 }
 
@@ -320,7 +320,7 @@ static void poll(void)
 unsigned tagpu_classicpp_held(void)
 {
     poll();
-    return s_held;
+    return (unsigned)s_held;
 }
 
 int tagpu_classicpp_on(void)

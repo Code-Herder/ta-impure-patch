@@ -426,8 +426,8 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
         # make it per-instance by construction.
         if name in ("Screenshots", "_triggers_off", "ErrorLog.txt") or low.endswith(".log"):
             continue
-        if low.endswith(".migrated"):
-            continue   # the DLL's first-run backups: the template's own, never shared
+        if low.endswith(".migrated") or low == "impure-migration.txt":
+            continue   # the DLL's first-run backups and their record: the template's own
         if name == "music" and not sound:
             continue   # Steam MP3 soundtrack: audiere cannot play what is absent
         dst = inst.gamedir / name

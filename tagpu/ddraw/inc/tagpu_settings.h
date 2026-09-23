@@ -21,10 +21,15 @@
    InterlockedExchange and BOUNDED against its key's own table on every read,
    so a racing read returns the old value or the new one and never an index
    nobody validated. `tagpu_settings_gen` is bumped AFTER the value, so a
-   reader that caches can compare it. The two strings (the GPU name, the
-   window rect's monitor names) never cross a thread: see the functions. The
-   FILE is written by `tagpu_settings_flush`, on the render thread only: TA is
-   lockstep, and a disk write on the game thread is an unbounded stall. */
+   reader that caches can compare it. The strings -- the GPU name, the
+   window frame, the keys another build wrote -- are written and serialised
+   only under one lock; the monitor names are immutable after attach.
+
+   WHO WRITES THE FILE. While the game runs, only the render thread
+   (`tagpu_settings_flush`, from `tagpu_menu_present` on either lane): TA is
+   lockstep, and a disk write on the game thread is an unbounded stall. At
+   attach and at exit, when nothing is in lockstep, the loader and the exiting
+   thread write it too (the first-run defaults, `tagpu_settings_final`). */
 
 typedef enum {
     TS_STYLE,       /* TS_STYLE_*                                         */
@@ -45,7 +50,10 @@ enum { TS_STYLE_CLASSIC, TS_STYLE_PP, TS_STYLE_CUSTOM };
 
 /* Called from cfg_init (config.c), BEFORE ddraw.ini is parsed and before any
    other thread exists: the first-run migration may strip keys from that very
-   file. Migrates when `impure.cfg` is absent, then loads it. Idempotent. */
+   file. With no `impure.cfg`, migrates -- once per directory, recorded in
+   `impure-migration.txt` -- and writes the defaults; otherwise loads it. A
+   store that exists and cannot be read is never written this session.
+   Idempotent. */
 void tagpu_settings_attach(const char* ini_path);
 
 /* 1 and the value in *out when the store supplies one; 0 when it has no say
@@ -69,8 +77,19 @@ int  tagpu_settings_preset(TagpuSetting key);
 
 /* RENDER THREAD ONLY: writes `impure.cfg` if anything changed since the last
    write. Temporary file renamed over the target, so a reader never sees a
-   stub. */
+   stub. A failed write keeps the change and is retried, at most once a
+   second. */
 void tagpu_settings_flush(void);
+
+/* The last write, from the exiting thread. ONLY once no other thread can be
+   inside the store: after the render thread is joined (dd_Release), or at
+   process detach. It never waits on the lock -- one still held then belongs
+   to a dead thread. */
+void tagpu_settings_final(void);
+
+/* Process detach has begun: every other thread is gone, so the store's lock
+   is only tried from here on, never waited on. */
+void tagpu_settings_detaching(void);
 
 /* The monitor list, by device name (`\\.\DISPLAY2`). Registered ONCE at
    attach, before any other thread exists, and immutable after -- which is
@@ -78,17 +97,18 @@ void tagpu_settings_flush(void);
    thread. The stored name is resolved against it here. */
 void tagpu_settings_monitors(const char* const* names, int n);
 
-/* The stored GPU name, "" for none. Read at attach only. */
+/* The stored GPU name, "" for none. Read at attach only, before the name can
+   change. */
 const char* tagpu_settings_gpu(void);
-/* RENDER THREAD ONLY: the GPU the lane will bind, by name. The string is
-   written and read (by the flush) on this one thread. */
+/* RENDER THREAD ONLY: the GPU the lane will bind, by name. Under the store's
+   lock, which the serialiser takes too. */
 void tagpu_settings_set_gpu(const char* name);
 
 /* The windowed frame, as ddraw.ini's posX/posY/width/height carry it. 0 when
    the store has none or no say. Read at attach (tagpu_cfg.c). */
 int  tagpu_settings_window(int* x, int* y, int* w, int* h);
-/* At shutdown: remember the windowed frame and write the store now -- the
-   render thread is gone by then, so this is the one write off it. */
+/* At shutdown (cfg_save): remember the windowed frame. It only records; the
+   write is `tagpu_settings_final`'s. */
 void tagpu_settings_save_window(int x, int y, int w, int h);
 
 /* Supersampling (1 | 2) and the frame-rate readout (0 | 1), in precedence

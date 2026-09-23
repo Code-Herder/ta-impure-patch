@@ -8,6 +8,7 @@
 #include "hook.h"
 #include "debug.h"
 #include "config.h"
+#include "tagpu_menu.h"
 
 
 DWORD WINAPI gdi_render_main(void)
@@ -50,6 +51,10 @@ DWORD WINAPI gdi_render_main(void)
 #endif
 
         fpsl_frame_start();
+
+        /* tagpu: the settings store is written from the render thread on
+           either lane (tagpu_settings.h) */
+        tagpu_menu_present();
 
         EnterCriticalSection(&g_ddraw.cs);
 

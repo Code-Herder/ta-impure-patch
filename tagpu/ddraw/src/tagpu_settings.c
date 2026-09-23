@@ -12,6 +12,9 @@
 #define STORE_TMP  "impure.cfg.tmp"
 #define MASTER_OFF "tagpu_defaults.off"
 #define MIGRATED   ".migrated"
+#define RECORD     "impure-migration.txt"
+#define EXTRA_LEN  1024
+#define RETRY_MS   1000
 #define GPU_LEN    128
 #define MON_MAX    8
 #define MON_LEN    40
@@ -87,6 +90,12 @@ static volatile LONG s_gen;
 static volatile LONG s_dirty;
 static int  s_ignored;                  /* tagpu_defaults.off, latched at attach */
 static int  s_attached;
+/* The store exists and could not be read: the session runs at the defaults and
+   NEVER writes, because a write would replace the player's file with them. */
+static int  s_unreadable;
+static DWORD s_retryAt;                 /* flushing thread only: see flush */
+static int   s_failing;
+static volatile LONG s_detaching;       /* process detach: see tagpu_settings_detaching */
 
 /* The strings. Written at attach, then only under s_io, which every reader
    also takes -- so no half-written name is ever serialised. */
@@ -96,6 +105,10 @@ static char s_monName[MON_MAX][MON_LEN];
 static int  s_monCount;
 static char s_monStored[MON_LEN];      /* the name the file held            */
 static int  s_win[4], s_winSet;
+/* Keys this build does not know, verbatim, so a file an other build wrote
+   keeps them. Filled at attach, read by serialise under s_io. */
+static char s_extra[EXTRA_LEN];
+static int  s_extraLen;
 
 /* A windowed frame as ddraw.ini carries one: a position, and a client size
    that is either 0,0 -- the size the game asks for, cnc-ddraw's own meaning of
@@ -221,42 +234,85 @@ static int serialise(char* b, int cap)
         if (k < 0 || k >= cap - at) return -1;
         at += k;
     }
+    if (s_extraLen) {
+        if (s_extraLen >= cap - at) return -1;
+        memcpy(b + at, s_extra, s_extraLen);
+        at += s_extraLen;
+    }
     return at;
 }
 
 /* Temporary and RENAME: CREATE_ALWAYS truncates first, so a write in place
-   leaves the player an empty file if we die between the two. Under s_io. */
-static void write_store(void)
+   leaves the player an empty file if we die between the two. Under s_io.
+   Returns 0 when STORE is left as it was. The failures are logged once per
+   run of them, since the caller retries. */
+static int write_store(void)
 {
-    char b[2048];
+    char b[3072];
     HANDLE h;
     DWORD wrote = 0;
+    const char* why = NULL;
     int len = serialise(b, sizeof b);
 
-    if (len < 0) { slog("the store does not fit its buffer - NOT written"); return; }
-    h = CreateFileA(STORE_TMP, GENERIC_WRITE, FILE_SHARE_READ, 0, CREATE_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) { slog("cannot write " STORE_TMP); return; }
-    if (!WriteFile(h, b, (DWORD)len, &wrote, 0) || wrote != (DWORD)len) {
-        CloseHandle(h);
-        DeleteFileA(STORE_TMP);
-        slog("short write to " STORE_TMP " - " STORE " left as it was");
-        return;
+    if (len < 0) why = "the store does not fit its buffer";
+    else {
+        h = CreateFileA(STORE_TMP, GENERIC_WRITE, FILE_SHARE_READ, 0, CREATE_ALWAYS,
+                        FILE_ATTRIBUTE_NORMAL, 0);
+        if (h == INVALID_HANDLE_VALUE) why = "cannot create " STORE_TMP;
+        else {
+            int ok = WriteFile(h, b, (DWORD)len, &wrote, 0) && wrote == (DWORD)len;
+            CloseHandle(h);
+            if (!ok) why = "short write to " STORE_TMP;
+            else if (!MoveFileExA(STORE_TMP, STORE, MOVEFILE_REPLACE_EXISTING))
+                why = "cannot replace " STORE;
+            if (why) DeleteFileA(STORE_TMP);
+        }
     }
-    CloseHandle(h);
-    if (!MoveFileExA(STORE_TMP, STORE, MOVEFILE_REPLACE_EXISTING)) {
-        DeleteFileA(STORE_TMP);
-        slog("cannot replace " STORE " - left as it was");
+    if (why) {
+        if (!s_failing) slog("%s (error %lu) - " STORE " left as it was, retried", why, GetLastError());
+        s_failing = 1;
+        return 0;
     }
+    if (s_failing) slog(STORE " written after a failed attempt");
+    s_failing = 0;
+    return 1;
 }
 
-void tagpu_settings_flush(void)
+/* A FAILED WRITE RE-ARMS THE FLAG, so the change is not lost: it is retried on
+   a later frame (at most once a second -- a file a scanner holds should not be
+   hammered at the frame rate) and by the final flush. The flag is cleared
+   BEFORE serialise reads the values, so a set racing this one is either in
+   the file or leaves the flag set; it cannot be dropped. */
+static void flush(int final)
 {
-    if (!s_attached || !InterlockedExchange(&s_dirty, 0)) return;
-    EnterCriticalSection(&s_io);
-    write_store();
+    if (!s_attached || s_unreadable) return;
+    if (!final && s_retryAt && (LONG)(GetTickCount() - s_retryAt) < 0) return;
+    if (!InterlockedExchange(&s_dirty, 0)) return;
+    if (final) {
+        /* Only ever called once no other thread can be inside s_io: after the
+           render thread is joined, or at process detach, when every other
+           thread is gone. So a lock that is taken here is ORPHANED -- a thread
+           killed inside a write -- and waiting on it would hang the exit. */
+        if (!TryEnterCriticalSection(&s_io)) {
+            slog("the store's lock was left held by a dead thread - the last change is NOT written");
+            return;
+        }
+    } else {
+        EnterCriticalSection(&s_io);
+    }
+    if (!write_store()) {
+        InterlockedExchange(&s_dirty, 1);
+        s_retryAt = GetTickCount() + RETRY_MS;
+        if (!s_retryAt) s_retryAt = 1;
+    } else {
+        s_retryAt = 0;
+    }
     LeaveCriticalSection(&s_io);
 }
+
+void tagpu_settings_flush(void) { flush(0); }
+void tagpu_settings_final(void) { flush(1); }
+void tagpu_settings_detaching(void) { InterlockedExchange(&s_detaching, 1); }
 
 static char* trim(char* s)
 {
@@ -305,7 +361,17 @@ static void parse_line(char* line)
              s_key[i].name, v, spelling((TagpuSetting)i, s_key[i].def));
         return;
     }
-    slog("unknown key \"%s\" ignored", k);
+    /* kept verbatim: another build wrote it, and this one does not own it */
+    {
+        int n = _snprintf(s_extra + s_extraLen, sizeof s_extra - s_extraLen, "%s=%s\r\n", k, v);
+        if (n > 0 && n < (int)sizeof s_extra - s_extraLen) {
+            s_extraLen += n;
+            slog("unknown key \"%s\" kept as it is", k);
+        } else {
+            s_extra[s_extraLen] = 0;
+            slog("unknown key \"%s\" DROPPED: no room to keep it", k);
+        }
+    }
 }
 
 static void load(void)
@@ -317,8 +383,13 @@ static void load(void)
 
     h = CreateFileA(STORE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) return;
-    if (!ReadFile(h, buf, sizeof buf - 1, &n, 0)) n = 0;
+    if (h == INVALID_HANDLE_VALUE || !ReadFile(h, buf, sizeof buf - 1, &n, 0)) {
+        s_unreadable = 1;
+        slog(STORE " exists and could NOT be read (error %lu) - this session runs at the "
+             "defaults and will not write it", GetLastError());
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        return;
+    }
     CloseHandle(h);
     buf[n] = 0;
     if (n >= sizeof buf - 1) slog(STORE " is larger than the read buffer - the tail was IGNORED");
@@ -337,7 +408,30 @@ static void load(void)
    Everything an earlier menu wrote is a lever under the new precedence, and a
    lever holds its row greyed -- so a file v0.2..v0.2.2 left behind would pin a
    row for good. Renamed, never deleted: a bad migration is undone by hand.
-   Nothing is IMPORTED; the store starts at the defaults (renderers.md 2.10b). */
+   Nothing is IMPORTED; the store starts at the defaults (renderers.md 2.10b).
+
+   ONCE PER DIRECTORY, BY RECORD. A missing store is not proof of a first run --
+   a player resets by deleting it -- and anything they have typed since is
+   theirs. So the migration leaves RECORD behind, listing what it did, and a
+   directory that has one only gets the defaults written. No backup is ever
+   overwritten either: a backup that already exists means the thing it would
+   back up is not the original, and the step is refused. */
+static char s_rec[1024];
+static int  s_recLen;
+
+static void record(const char* fmt, ...)
+{
+    va_list ap;
+    int n;
+    va_start(ap, fmt);
+    n = _vsnprintf(s_rec + s_recLen, sizeof s_rec - s_recLen - 2, fmt, ap);
+    va_end(ap);
+    if (n < 0 || n >= (int)sizeof s_rec - s_recLen - 2) return;
+    s_recLen += n;
+    s_rec[s_recLen++] = '\r';
+    s_rec[s_recLen++] = '\n';
+    s_rec[s_recLen] = 0;
+}
 
 static void rename_aside(const char* path)
 {
@@ -345,8 +439,10 @@ static void rename_aside(const char* path)
     if (!exists(path)) return;
     _snprintf(to, sizeof to, "%s" MIGRATED, path);
     to[sizeof to - 1] = 0;
-    if (MoveFileExA(path, to, MOVEFILE_REPLACE_EXISTING))
+    if (MoveFileExA(path, to, 0)) {
         slog("migrated: %s -> %s", path, to);
+        record("renamed %s -> %s", path, to);
+    }
     else
         slog("migration could not rename %s (error %lu) - it still holds its row",
              path, GetLastError());
@@ -401,13 +497,14 @@ static void strip_classicpp_cfg(void)
     }
     if (!dropped) return;
 
-    if (!CopyFileA(CFG, "tagpu_classicpp.cfg" MIGRATED, FALSE)) {
+    if (!CopyFileA(CFG, "tagpu_classicpp.cfg" MIGRATED, TRUE)) {
         slog("migration: could not back up %s - left untouched", CFG);
         return;
     }
     if (!at) {
         DeleteFileA(CFG);
         slog("migration: %s held only menu keys - removed (backup %s" MIGRATED ")", CFG, CFG);
+        record("removed %s, which held only the menu's keys (backup %s" MIGRATED ")", CFG, CFG);
         return;
     }
     h = CreateFileA("tagpu_classicpp.cfg.tmp", GENERIC_WRITE, 0, 0, CREATE_ALWAYS,
@@ -419,9 +516,11 @@ static void strip_classicpp_cfg(void)
         return;
     }
     CloseHandle(h);
-    if (MoveFileExA("tagpu_classicpp.cfg.tmp", CFG, MOVEFILE_REPLACE_EXISTING))
+    if (MoveFileExA("tagpu_classicpp.cfg.tmp", CFG, MOVEFILE_REPLACE_EXISTING)) {
         slog("migration: %d menu key(s) stripped from %s, its knobs kept (backup %s" MIGRATED ")",
              dropped, CFG, CFG);
+        record("stripped the menu's keys from %s (backup %s" MIGRATED ")", CFG, CFG);
+    }
     else
         DeleteFileA("tagpu_classicpp.cfg.tmp");
 }
@@ -450,7 +549,7 @@ static void strip_ini(const char* ini_path)
 
     _snprintf(back, sizeof back, "%s" MIGRATED, full);
     back[sizeof back - 1] = 0;
-    if (!CopyFileA(full, back, FALSE)) {
+    if (!CopyFileA(full, back, TRUE)) {
         slog("migration: could not back up %s - its window keys stay", full);
         return;
     }
@@ -459,6 +558,7 @@ static void strip_ini(const char* ini_path)
             WritePrivateProfileStringA(SECT[i], KEYS[j], NULL, full);
     WritePrivateProfileStringA(NULL, NULL, NULL, full);   /* flush the cache */
     slog("migration: display/frame-cap/window keys removed from %s (backup %s)", full, back);
+    record("removed maxfps/windowed/fullscreen/posX/posY/width/height from ddraw.ini (backup ddraw.ini" MIGRATED ")");
 }
 
 static void migrate(const char* ini_path)
@@ -468,12 +568,26 @@ static void migrate(const char* ini_path)
         "tagpu_hud.on", "tagpu_hud.off", "tagpu_vk.cfg",
     };
     int i;
+    HANDLE h;
+    DWORD wrote = 0;
+
+    InterlockedExchange(&s_dirty, 1);   /* written by attach: every key, at its default */
+    if (exists(RECORD)) {
+        slog("no " STORE ", and " RECORD " says this directory was migrated - writing the defaults");
+        return;
+    }
     slog("no " STORE " - first run: moving the files an earlier menu wrote aside, "
          "and writing the defaults");
+    record("# The first launch with impure.cfg moved these aside. Every setting");
+    record("# starts at its default; rename a file back to undo its step.");
     for (i = 0; i < N(LEVERS); i++) rename_aside(LEVERS[i]);
     strip_classicpp_cfg();
     strip_ini(ini_path);
-    InterlockedExchange(&s_dirty, 1);   /* written below: every key, at its default */
+    h = CreateFileA(RECORD, GENERIC_WRITE, 0, 0, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
+    if (h == INVALID_HANDLE_VALUE || !WriteFile(h, s_rec, (DWORD)s_recLen, &wrote, 0))
+        slog("could not write " RECORD " (error %lu) - a later launch with no " STORE
+             " refuses any step whose backup exists", GetLastError());
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
 }
 
 void tagpu_settings_attach(const char* ini_path)
@@ -495,12 +609,9 @@ void tagpu_settings_attach(const char* ini_path)
     if (first && !s_ignored) migrate(ini_path);
     else load();
     s_attached = 1;
-    if (first && !s_ignored) {
-        EnterCriticalSection(&s_io);
-        write_store();
-        LeaveCriticalSection(&s_io);
-        InterlockedExchange(&s_dirty, 0);
-    }
+    /* The defaults are written now; if that fails the flag stays set and the
+       render thread retries, as for any click. */
+    if (first && !s_ignored) flush(0);
 
     at = _snprintf(b, sizeof b, "%s%s:", STORE,
                    s_ignored ? " IGNORED (" MASTER_OFF " present: every setting is the "
@@ -561,19 +672,25 @@ int tagpu_settings_window(int* x, int* y, int* w, int* h)
     return 1;
 }
 
+/* Records only: the write is the final flush's, once the render thread is
+   joined (dd_Release) or at detach. */
 void tagpu_settings_save_window(int x, int y, int w, int h)
 {
     int f[4];
     f[0] = x; f[1] = y; f[2] = w; f[3] = h;
     if (!s_attached || s_ignored || !frame_ok(f)) return;
-    EnterCriticalSection(&s_io);
+    /* at detach a held lock is an orphan (tagpu_settings_final) */
+    if (s_detaching) {
+        if (!TryEnterCriticalSection(&s_io)) return;
+    } else {
+        EnterCriticalSection(&s_io);
+    }
     if (!s_winSet || memcmp(s_win, f, sizeof f)) {
         memcpy(s_win, f, sizeof f);
         s_winSet = 1;
         InterlockedExchange(&s_dirty, 1);
         slog("the windowed frame %d,%d %dx%d is kept for the next launch", x, y, w, h);
     }
-    if (InterlockedExchange(&s_dirty, 0)) write_store();
     LeaveCriticalSection(&s_io);
 }
 

@@ -61,9 +61,10 @@
    panel exactly fills the screen height, which §3.4a measured to be both the
    natural target and the hard ceiling (the panel block is a fixed 128x480 that
    does not stretch). It is exactly 1.0 at 640x480, TA's shipped mode, so an
-   untouched install is unchanged. The store is the lever file `tagpu_hud.on`
-   with a `scale=auto` / `scale=<percent>` token; the front-end Visuals row
-   writes it, and — see the latch above — it takes effect at the next game.
+   untouched install is unchanged. The front-end Visuals row keeps it in the
+   settings store (`hudscale=`, tagpu_settings.h); the lever file
+   `tagpu_hud.on` with a `scale=auto` / `scale=<percent>` token overrides the
+   store and greys the row.
 
    WHAT MAKES A STALE VALUE SAFE. Exactly one word crosses threads: the
    percentage in force, written by the row (message thread) and read by the

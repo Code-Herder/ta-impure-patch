@@ -18,6 +18,7 @@
 #include "versionhelpers.h"
 #include "tagpu_title.h"
 #include "tagpu_cfg.h"
+#include "tagpu_settings.h"
 
 
 CNCDDRAW g_ddraw;
@@ -1679,6 +1680,11 @@ ULONG dd_Release()
                 g_ddraw.render.thread = NULL;
             }
         }
+
+        /* tagpu: the store's last write -- a click the render thread had not
+           flushed yet, and the frame cfg_save recorded above. After the join,
+           so no other thread is inside the store. */
+        tagpu_settings_final();
 
         if (!g_config.windowed)
         {

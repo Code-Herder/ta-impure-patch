@@ -127,9 +127,11 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
 - **Under `tagpu_defaults.off` (every launch without `--defaults`) the store has no say and every
   row is greyed.** Test the menu with `--defaults`.
 - **tacli creates an empty `impure.cfg` before every launch.** A missing store is the DLL's
-  first-run signal: it renames the files an older menu wrote to `*.migrated` and strips `ddraw.ini`.
-  To test that migration, launch the exe by hand in the gamedir (`WINEPREFIX=<prefix> DISPLAY=<d>
-  WINEDLLOVERRIDES=ddraw=n,b wine TotalA.exe`) on a private Xvfb — it goes fullscreen.
+  first-run signal: it renames the files an older menu wrote to `*.migrated`, strips `ddraw.ini`,
+  and leaves `impure-migration.txt`, after which a missing store only gets the defaults. To test the
+  migration, delete the store and the record, then launch the exe by hand in the gamedir
+  (`WINEPREFIX=<prefix> DISPLAY=<d> WINEDLLOVERRIDES=ddraw=n,b wine TotalA.exe`) on a private
+  Xvfb — it goes fullscreen. A migrated instance has lost its tile keys from `ddraw.ini`.
 
 - **The GPU list is one launch behind.** The captions live in a generated `.GUI` written at DLL
   attach, and a Vulkan instance cannot be created there, so a worker enumerates after the render

@@ -1203,17 +1203,25 @@ were spread over five files with a default in each module. Nothing answered "wha
 player's settings", and a fresh install started at 640×480.
 
 **One store.** `impure.cfg` beside `TotalA.exe`: plain `key=value`, one per line. Only the menu
-writes it, from the render thread, through a temporary file renamed over the target (the §2.10
-deferred write; TA is lockstep, so the game thread never touches a disk). It is loaded once at
-attach and held in memory. **Every key is bounded against its own stage table on the way in**:
-an unknown key is ignored, and an out-of-range value takes that key's default and is logged,
-so a hand-edited file cannot index anything.
+changes it. While the game runs it is written from the render thread, on either lane, through a
+temporary file renamed over the target (the §2.10 deferred write; TA is lockstep, so the game
+thread never writes a file mid-session). The two other writes are at the ends, where nothing is
+in lockstep: the first-run defaults at attach, and a final flush in `dd_Release` once the render
+thread is joined (and at process detach) — a click not yet flushed, and the windowed frame. A
+failed write keeps the change and is retried, at most once a second. It is loaded once at attach
+and held in memory. **Every key is bounded against its own stage table on the way in**: an
+out-of-range value takes that key's default and is logged, so a hand-edited file cannot index
+anything. A key this build does not know is kept verbatim and written back, so a file a newer
+build wrote survives an older one. A store that exists and **cannot be read** is logged and
+never written that session, which runs at the defaults — a write would replace the player's
+file with them.
 
 **Precedence: a lever beats the store, and the store beats the compiled default.**
 
 1. A **lever file** that names the setting (`tagpu_classicpp.on/.off`, a menu key inside
-   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`, `ddraw.ini`'s
-   `fullscreen`/`maxfps`) wins. The row shows the lever's value **greyed**, so a click can
+   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`, and in
+   `ddraw.ini` `windowed`/`fullscreen` for Display mode, `maxfps` for Frame cap and
+   `posX`/`posY`/`width`/`height` for the window and the Monitor row) wins. The row shows the lever's value **greyed**, so a click can
    never silently lose to a file.
 2. **`impure.cfg`.**
 3. **The compiled default** — the Classic++ table below.
@@ -1267,7 +1275,14 @@ of `tagpu_classicpp.cfg` with every other token left in place, and `maxfps`, `wi
 matter: under the precedence above, a file v0.2–v0.2.2's menu left behind is indistinguishable
 from a lever and would hold its row greyed forever — and **every release shipped `maxfps=60` in
 its `ddraw.ini`**, which would have held the Frame cap row on every player's install. Nothing is
-deleted, so a bad migration is undone by hand. MEASURED 2026-09-23 on a hand-staged v0.2 gamedir:
+deleted, so a bad migration is undone by hand.
+
+**It runs once per directory.** A missing `impure.cfg` is not proof of a first run — deleting it
+is how a player resets — and what they have typed into `ddraw.ini` since is theirs. So the
+migration leaves `impure-migration.txt`, listing each step, and a directory that has one only
+gets the defaults written. No backup is ever overwritten either: a `*.migrated` that already
+exists means the file it would back up is not the original, and that step is refused.
+MEASURED 2026-09-23 on a hand-staged v0.2 gamedir:
 every file renamed, `penumbra=0.1` kept alone in the cfg, the ini stripped, the game up
 borderless-fullscreen from the store.
 
@@ -1279,13 +1294,14 @@ into a lever after one session. The windowed frame is saved to the store instead
 on the way out: `window=x,y,w,h`, where `w,h = 0,0` is cnc-ddraw's "the size the game asks for".
 A saved frame on no attached monitor is re-centred (`dd.c`, `MonitorFromRect`).
 
-**tacli never meets the migration.** It creates an **empty** `impure.cfg` in every instance and
-in the template before a launch, so the one trigger ("no `impure.cfg`") never fires there and
+**tacli never meets the migration.** It creates an **empty** `impure.cfg` in every instance
+before a launch (and never mirrors `*.migrated` or the record from the template), so the one trigger ("no `impure.cfg`") never fires there and
 the levers a measurement armed survive. Empty means every key at its compiled default.
 
-**Restore defaults** resets every key except `display`, `monitor` and `window`, for §2.10's
-reason: it must not move the window somewhere the player cannot see the button. **Undo** puts
-every row back to what the screen opened with, those three included.
+**Restore defaults** resets every key except `display`, `monitor`, `window` and `gpu`, for §2.10's
+reason: it must not move the window somewhere the player cannot see the button, nor rebind the
+device under them. **Undo** puts every row back to what the screen opened with, those included —
+UI scale to its exact value, `off` too. Neither touches a row a lever holds.
 
 **The engine's values** (landing 2):
 
@@ -1328,6 +1344,15 @@ RTX 4070 and llvmpipe both listed:
 - the migration above; Display mode and Frame cap live once `ddraw.ini` lets go (a 640×480
   window, `maxfps=120`), the windowed frame saved on exit and restored, a frame at 5000,5000
   re-centred; Restore and Undo; the GPU row rebinding to llvmpipe and binding it again at launch.
+- after the landing review's fixes: the migration writes its record, and a store deleted
+  afterwards gets the defaults with `maxfps=144` typed into `ddraw.ini` kept (the row held), a
+  re-created `tagpu_fps.on` kept, and `ddraw.ini.migrated` byte-identical; unknown keys
+  (`gamma=12`, `futurekey=abc`) survive a write; the GPU row stores the device it bound
+  (`llvmpipe` for row 1, back to the RTX on Undo); Undo puts UI scale back to `off` and leaves the
+  held Frame cap and the unchosen Monitor alone; a window moved to 300,200 is written by the final
+  flush on a menu Exit (`window=300,200,0,0`); an unreadable store (`chmod 000`) logs *could NOT be
+  read* and is byte-identical after a click; with `renderer=gdi` (no Vulkan device up) a click is
+  in the store mid-session.
 
 **Not verified:** the Monitor row's click on two real monitors. Xvfb offers one monitor, and a
 two-head Xinerama Xvfb (`:94`) stopped the game at bring-up — once with this build, then with a
