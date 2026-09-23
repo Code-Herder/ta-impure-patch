@@ -4236,3 +4236,20 @@ have been re-used between enqueue and the OUT pass.
 **NOT CLOSED HERE.** Whether any *other* atlas (unit, feature, effects, terrain) can show the same
 thing is unmeasured, and with the mechanism unidentified it cannot be argued either way. A
 cursor-local fix does not reach them; nothing says one is needed.
+
+### 24.3 Our cursor is the sharp layer's LAST quad  [MEASURED 2026-09-23]
+
+The sharp layer's quads are replayed by the Vulkan pass in the order `sharp_begin` records them,
+so that order is the layer's depth order: a later quad covers an earlier one where they overlap.
+The cursor was recorded **first** and the minimap after it, so the minimap's base quad covered
+the pointer, and the cursor disappeared whenever it crossed the minimap. Two code comments
+described that order as "load-bearing"; they were wrong, and the engine settles the question:
+its own cursor is drawn inside the flip (`0x4C67C0`), after every surface the frame composed.
+
+`sharp_begin` now records `sharp_minimap` (base, then view box — `0x466B44` then `0x466B5E`)
+and then `sharp_cursor`. Measured at 1280×720 in a 1920×1080 window (`k = 1.5`, play defaults,
+`one-unit` on Anteer Strait) with the pointer parked at device (120,120) through `dmove:`: the
+previous build shows no cursor over the minimap, and this one draws it on top.
+
+**The rule for a future client of the layer**: record it before `sharp_cursor`. Anything
+recorded after the cursor covers it.

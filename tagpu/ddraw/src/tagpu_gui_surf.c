@@ -1326,9 +1326,10 @@ static void mir_string(const TAGPU_PUBOP* o, const short cell[][4], int n,
 
 /* A SHARP-LAYER QUAD, RECORDED WHERE IT IS DRAWN AND WITH WHAT IT RESOLVED.
    The layer's three clients draw in a fixed order and this preserves it, which
-   matters: the minimap is drawn AFTER the cursor and so covers it where they
-   overlap, and its view box after its base for the same reason the engine draws
-   them that way (0x466B44 then 0x466B5E).
+   matters: the cursor is drawn LAST and so covers the minimap where they
+   overlap (the engine draws its own inside the flip, 0x4C67C0), and the view
+   box after its base for the same reason the engine draws them that way
+   (0x466B44 then 0x466B5E).
 
    THE LIST OVERFLOWING IS NOT A `behind`. Unlike an op, a sharp-layer quad
    mutates no state that persists into the next frame -- the layer is cleared to
@@ -2288,8 +2289,13 @@ static void sharp_begin(const TAGPU_FRAME* f)
        own counters answer it, so neither function grows a flag of its own. */
     {
         unsigned c0 = s_curDrawn, m0 = s_mmDrawn;
-        sharp_cursor(f);                /* 13.5's cursor: the layer's first real client */
+        /* THE CURSOR LAST, because that is where the engine puts it: its own
+           draw is inside the flip (0x4C67C0), after every surface the frame
+           composed. Recorded before the minimap, the minimap's quad covered it
+           and the pointer vanished whenever it crossed the minimap.
+           [FOUND 2026-09-23, the owner's report.] */
         sharp_minimap(f);               /* 13.6's base, behind `mmbase` while it is alone */
+        sharp_cursor(f);                /* 13.5's cursor: the layer's first real client */
         s_sharpInk = (s_sharptest || s_curDrawn != c0 || s_mmDrawn != m0) ? 1 : 0;
     }
     /* THE CLEAR COLOUR IS MODULE-WIDE STATE AND WE OWN IT AT (0,0,0,0).
