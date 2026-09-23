@@ -1134,7 +1134,8 @@ side of the `je`s at `0x4592C6` and `0x45952C`, and those are exactly the two br
 `tagpu_owndraw.c` takes over under target `all` (flipped to `EB` until 2026-09-18, detoured from
 `0x4592BF`/`0x459522` behind a runtime flag since). **Unpatched, a husk reaches only `0x4594DB`**
 (itself gated at `0x4594D0` on `[[scratch+0x92]+0x241] & 0x40000000`, where `+0x92` is
-`[main+0x1439B]`, the UnitInfo array base — so that test reads `UnitInfo[0]`'s flags, an
+`[main+0x1439B]`, the UnitInfo array base, copied in once at feature init by `0x422003`
+(`mov ecx,[eax+0x1439B]`) and `0x422009` (`mov [edx+0x92],ecx`) — so that test reads `UnitInfo[0]`'s flags, an
 arbitrary loaded def with nothing to do with wrecks).
 
 **`Object3do+0x0C` on a husk is a real pointer, to the shared scratch** — not to a unit record,
@@ -2746,8 +2747,8 @@ second was wrong in a way that hid the first.]
 
 `stdcall(mouseObj)`, `ret 4` (epilogue `0x4C2864`), prologue `83 EC 58 56 8B 74 24 60`. Two
 early-outs to `0x4C2860`: `test [+0x1D2]` zero, and the context acquire `0x4C5FF0` answering
-zero. Past them: `GetCursorPos` (IAT `0x4FC2E4`), write the RECORD `+0x196/+0x19A` from that
-answer, subtract the hotspot into `edi`/`ebx`, fill the saved-background descriptors at `+0x1C2`
+zero. Past them: `GetCursorPos` (IAT `0x4FC2E4`, called at `0x4C2610`), write the RECORD
+`+0x196/+0x19A` from that answer at `0x4C2624`/`0x4C262A`, subtract the hotspot into `edi`/`ebx`, fill the saved-background descriptors at `+0x1C2`
 and `+0x1C6`, **blit the sprite at `0x4C2732` into the private context `[obj+0x1C6]`** (not the
 screen), and store `+0x1B6/+0x1BA`.
 
