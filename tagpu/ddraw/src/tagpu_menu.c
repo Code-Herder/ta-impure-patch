@@ -67,6 +67,25 @@
 #include "tagpu_cfg.h"
 #include "tagpu_settings.h"
 
+/* the engine's Visuals options: the section "owned by the store" below */
+static void eng_push(int what);
+enum { ENG_GAMMA = 1, ENG_BITS = 2, ENG_RES = 4, ENG_ALL = 7 };
+#define OFF_OPTWORD       0x37F06u      /* WORD                                 */
+#define OFF_GAMMA         0x37F08u      /* signed dword, 0..20                  */
+#define OFF_INGAME        0x2A44u       /* & 4: a game is in progress           */
+#define OFF_BAKEHEAP      0x1437Bu      /* this for the re-bake 0x437C80        */
+#define OPT_AA            0x0002u
+#define OPT_SHADOWS       0x001Cu       /* Shadow | TShadow | FShadow           */
+#define OPT_SHADING       0x0020u
+#define OPT_DITHERFOG     0x0040u
+#define VA_OPT_LOAD       0x0042F9A0u   /* registry options load, void          */
+#define VA_OPT_STASHBACK  0x0045CAE0u   /* the stash -> main, void              */
+#define VA_SETGAMMA       0x004BA590u   /* stdcall(float factor), ret 4         */
+#define VA_REBAKE         0x00437C80u   /* thiscall, this = [main+0x1437B]      */
+#define VA_GAMMA_CB       0x0045BD20u   /* GAMMA's slider callback, stdcall ret 8 */
+#define VA_VIDSLDR_CB     0x0045BBF0u   /* VIDSLDR's, the same shape            */
+#define G_SLIDER_CB       0x144u        /* a gadget's slider callback [DISASSEMBLED 0x4A42DF] */
+
 /* ---- the engine ---------------------------------------------------------- */
 #define TA_MAIN         0x00511DE8u     /* TAdynmemStruct**                    */
 #define OFF_GUIINFO         0x519u      /* main + this = GUIInfo               */
@@ -897,16 +916,16 @@ static int build_gui(char* b, int cap, int rows)
 /* Classic++ is every row the switch OWNS at its Classic++ value; anything else
    is Custom, which is why Custom is derived and never chosen.
 
-   R_SS IS NOT ONE OF THEM. Supersampling is orthogonal to the lane -- the native
-   pass reads it under Classic as well as Classic++, which is why
-   `row_greyed` exempts it and why the Classic++ preset in `tagpu_menu_oncommand`
-   deliberately leaves it alone. In this test it would make a player who turned
-   supersampling off see the Renderer row read "Custom" on the next visit with
-   nothing in the lane actually customised. */
+   R_SS AND R_SHADOWS ARE NOT AMONG THEM. Supersampling is orthogonal to the
+   lane -- the native pass reads it under Classic as well as Classic++. Shadows
+   is the ENGINE's shadow switch as well as ours (it drives the option word's
+   bits 2..4, tagpu_engopt.h), so it has to work under Classic too. Both are
+   exempt from `row_greyed`'s lane rule and left alone by the Classic++ preset;
+   in this test either would make a player who turned it off see "Custom" with
+   nothing in the lane customised. */
 static int derive_style(void)
 {
-    return (s_stage[R_ASSETS] != 1 || s_stage[R_LIGHT] != 1 ||
-            s_stage[R_SHADOWS] != SHADOWS_HARD_STAGE || s_stage[R_SHADOWQ] != 2)
+    return (s_stage[R_ASSETS] != 1 || s_stage[R_LIGHT] != 1 || s_stage[R_SHADOWQ] != 2)
            ? STYLE_CUSTOM : STYLE_PP;
 }
 
@@ -962,11 +981,12 @@ static int row_held(int row)
 static int row_greyed(int row)
 {
     if (row_held(row)) return 1;
-    /* R_SS and R_FPS are orthogonal to the Classic/Classic++ lane, so neither
-       is one of the switch's dependants: supersampling is a resolution choice
-       and the FPS counter is a diagnostic drawn OVER the finished frame. Grey
-       them with the lane and a player on Classic could not turn either on. */
-    if (row == R_STYLE || row == R_SS || row == R_FPS) return 0;
+    /* R_SS, R_FPS and R_SHADOWS are orthogonal to the Classic/Classic++ lane,
+       so none is one of the switch's dependants: supersampling is a resolution
+       choice, the FPS counter a diagnostic drawn OVER the finished frame, and
+       Shadows is the engine's shadow switch too. Grey them with the lane and a
+       player on Classic could not reach them. */
+    if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_SHADOWS) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
@@ -1213,7 +1233,10 @@ static void commit_one(int row)
     switch (row) {
     case R_ASSETS:  tagpu_settings_set(TS_ASSETS, s_stage[R_ASSETS]); break;
     case R_LIGHT:   tagpu_settings_set(TS_LIGHT, s_stage[R_LIGHT]); break;
-    case R_SHADOWS: tagpu_settings_set(TS_SHADOWS, SHADOW_VAL[s_stage[R_SHADOWS]]); break;
+    case R_SHADOWS:
+        tagpu_settings_set(TS_SHADOWS, SHADOW_VAL[s_stage[R_SHADOWS]]);
+        eng_push(ENG_BITS);         /* the engine's shadows are this row too */
+        break;
     case R_SHADOWQ: tagpu_settings_set(TS_SHADOWRES, SHADOWQ_VAL[s_stage[R_SHADOWQ]]); break;
     case R_SS:      tagpu_settings_set(TS_SS, s_stage[R_SS] ? 2 : 1); break;
     case R_FPS:     tagpu_settings_set(TS_FPS, s_stage[R_FPS]); break;
@@ -1233,18 +1256,17 @@ static void commit_one(int row)
    row: `tagpu_classicpp.on` decides on or off, and the store's `custom` is
    what pins the row the player just changed. Under `.off` those rows are greyed
    (row_greyed), so no click reaches here to write Classic over the store. */
-/* A RENDER ROW COMMITS ALL FOUR, not only itself. The store's render slots
+/* A LOOK ROW COMMITS ALL THREE (assets, light, shadow quality), not only
+   itself. The store's render slots
    keep whatever the last Custom session left in them while the style is a
    preset, so going Custom on one click would bring the others' old values back
    to life under plates that show the preset's. The plates are what the player
    is looking at, so they are what is committed. */
 static void commit_row(int row)
 {
-    if (row == R_STYLE || row == R_ASSETS || row == R_LIGHT || row == R_SHADOWS ||
-        row == R_SHADOWQ) {
+    if (row == R_STYLE || row == R_ASSETS || row == R_LIGHT || row == R_SHADOWQ) {
         commit_one(R_ASSETS);
         commit_one(R_LIGHT);
-        commit_one(R_SHADOWS);
         commit_one(R_SHADOWQ);
         if (row == R_STYLE && row_held(R_STYLE)) return;
         tagpu_settings_set(TS_STYLE, style_value());
@@ -1270,11 +1292,10 @@ void __stdcall tagpu_menu_oncommand(void* gi)
            a destination -- from Custom the click goes to Classic++ */
         s_stage[R_STYLE] = (s_stage[R_STYLE] == STYLE_PP) ? STYLE_CLASSIC : STYLE_PP;
         if (s_stage[R_STYLE] == STYLE_PP) {
-            /* NOT R_SS: supersampling is orthogonal to the lane -- row_greyed
-               deliberately exempts it from the switch's dependants -- so the
-               preset must not silently undo a player who turned it off. */
-            s_stage[R_ASSETS] = 1; s_stage[R_LIGHT] = 1;
-            s_stage[R_SHADOWS] = SHADOWS_HARD_STAGE; s_stage[R_SHADOWQ] = 2;
+            /* NOT R_SS OR R_SHADOWS: both are orthogonal to the lane (see
+               derive_style), so the preset must not silently undo a player
+               who turned either off. */
+            s_stage[R_ASSETS] = 1; s_stage[R_LIGHT] = 1; s_stage[R_SHADOWQ] = 2;
         }
     } else {
         s_stage[row] = (s_stage[row] + 1) % s_row[row].stages;
@@ -1287,7 +1308,7 @@ void __stdcall tagpu_menu_oncommand(void* gi)
            THAT RULE SUBSUMES AN R_FPS EXEMPTION. The counter is not part of
            the look -- it draws a diagnostic OVER the frame and changes no
            pixel the game rendered -- and neither is supersampling; deriving
-           from the four rows that ARE the lane leaves both out by
+           from the three rows that ARE the lane leaves both out by
            construction, on the way in and on the way out, instead of by a list
            that has to be kept in step in two places. */
         if (s_stage[R_STYLE] != STYLE_CLASSIC) s_stage[R_STYLE] = derive_style();
@@ -1585,8 +1606,8 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
 #define VIS_GAF       "anims/visuals.gaf"
 #define ART_VISBG     "VISBG"       /* the one ground frame, VP_W x VP_H       */
 
-/* the control positions, in screen coordinates: the WINDOW column's four
-   buttons and two sliders, then the RENDERER column's nine on one pitch */
+/* the control positions, in screen coordinates: the WINDOW column's five
+   buttons and two sliders, then the RENDERER column's rows on one pitch */
 /* The Gamma slider ends at 352 and the panel runs to VP_Y + VP_H = 474, so the
    GPU row's caption at 364 and its control at 380 sit in free space -- no
    stock control moves and the panel does not grow.
@@ -1604,7 +1625,6 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
 static const short VC0_BTN[5] = { 96, 140, 184, 292, 380 };
 #define VC0_BTN_N (int)(sizeof VC0_BTN / sizeof VC0_BTN[0])
 static const short VC0_SLD[2] = { 244, 336 };
-#define VC1_ROWS  9
 
 /* ONE GROUND, NOT FIFTEEN RECESSES. A small recess frame behind each control,
    with the stock background showing between them, cannot work: STARTOPT's
@@ -1653,14 +1673,14 @@ static void draw_visbg(unsigned char* f, int w, int h)
     for (i = 0; i < 2; i++)
         recess(&s, VC0_X - VP_X - VPAD, VC0_SLD[i] - VP_Y - VPAD,
                VSLD_W + 2 * VPAD, VSLD_H + 2 * VPAD);
-    for (i = 0; i < VC1_ROWS; i++)
+    for (i = 0; i < s_nrows; i++)       /* the RENDERER column: one per row */
         recess(&s, VC1_X - VP_X - VPAD,
                VROW_Y0 + VCTL_DY + VPITCH * i - VP_Y - VPAD,
                VCOL_W + 2 * VPAD, VCTL_H + 2 * VPAD);
 }
 
 
-#define VIS_STOCK_N   11
+#define VIS_STOCK_N    5
 
 typedef struct {
     int         id, assoc, x, y, w, h, attribs, colorf, cattr;
@@ -1669,9 +1689,14 @@ typedef struct {
     int         a, b;           /* button: quickkey, stages. slider: range, thick */
 } VisStock;
 
-/* The stock gadgets, verbatim from the shipped VISUALS.GUI (extracted with
-   tools/hpipack.py) except for x and y, in their own order -- so anything in
-   the engine that dispatches by index rather than by name sees what it saw.
+/* The stock gadgets the store still leaves the engine, verbatim from the
+   shipped VISUALS.GUI (extracted with tools/hpipack.py) except for x and y, in
+   their own order. SHADING, ANTI and BSHADOWS and their captions are GONE:
+   their bits are the store's (the engine options section), and `0x45E5E0`
+   looks each up with `0x49FDF0`, which answers -1 for a missing name and is
+   skipped [DISASSEMBLED 0x45E96A, 0x45E99E, 0x45E9D3]. GAMMA and VIDSLDR must
+   stay, under those names: their lookup, `0x4A0200`, ends the process on a
+   miss.
 
    ONLY x AND y MOVE. Every other field is the stock one, `assoc` included:
    243 is what binds the synthesized scroll arrows to VIDSLDR rather than to
@@ -1680,17 +1705,11 @@ typedef struct {
    frame; that moves its knob track by one pixel and nothing else. */
 static const VisStock s_visStock[VIS_STOCK_N] = {
     /* id  asc      x    y       w       h  att  cf  ca   name        text            a    b   */
-    { 1,   0, VC1_X, 316, VCOL_W,     20,  1,  0,   0, "SHADING",  "Off|On",       79, 2 },
-    { 1,   0, VC1_X, 360, VCOL_W,     20,  1,  0,   0, "ANTI",     "Off|On",      102, 2 },
     { 4,   0, VC0_X, 336, VSLD_W, VSLD_H,  1,  4,   0, "GAMMA",    NULL,          114, 20 },
     { 5,   0, VC0_X, 320, VCOL_W, VLBL_H, 18, 15, 104, "TEXT",     "Gamma",         0, 0 },
     { 4, 243, VC0_X, 244, VSLD_W, VSLD_H,  1,  4,   0, "VIDSLDR",  NULL,          114, 26 },
     { 5, 243, VC0_X, 228, VCOL_W, VLBL_H, 18, 15,   0, "VIDVAL",   "640x480",       0, 0 },
     { 5, 243, VC0_X, 212, VCOL_W, VLBL_H, 18, 15, 104, "VIDTEXT",  "Screen Size",   0, 0 },
-    { 1,   0, VC1_X, 404, VCOL_W,     20,  1,  0, 109, "BSHADOWS", "Off|On",      124, 2 },
-    { 5,   0, VC1_X, 388, VCOL_W, VLBL_H, 18, 15, 104, "TEXT",     "Engine shadows", 0, 0 },
-    { 5,   0, VC1_X, 344, VCOL_W, VLBL_H, 18, 15, 104, "TEXT",     "Anti-aliasing", 0, 0 },
-    { 5,   0, VC1_X, 300, VCOL_W, VLBL_H, 18, 15, 104, "TEXT",     "Shading",       0, 0 },
 };
 
 /* ---- the WINDOW rows ----------------------------------------------------
@@ -1711,6 +1730,8 @@ static volatile LONG s_scaleOpen = -1;  /* the UI scale in force at open, -1 off
    store's Monitor then (-1 none) -- what Undo puts back (vis_undo). */
 static int s_vtouched[VD_COUNT];
 static int s_monOpen = -1;
+/* the store's Gamma and screen size at open: what Undo puts back */
+static int s_gammaOpen = 12, s_resOpen;
 static int vrow_held(int row);
 
 #define VD_MONMAX 8
@@ -1969,14 +1990,9 @@ static int build_visuals_gui(char* b, int cap, int rows)
         }
     }
 
-    /* ---- the RENDERER rows ------------------------------------------------
-       The column is nine slots and OUR rows are not all of them: the three
-       stock controls placed above sit at slots 5, 6 and 7, so Supersampling --
-       the last of ours -- goes to slot 8 and not to slot 5, where it would land
-       exactly on top of Shading. `vslot` is that mapping and nothing else. */
+    /* ---- the RENDERER rows: one slot each, top down ---------------------- */
     for (i = 0; i < rows; i++) {
-        int vslot = (i < rows - 1) ? i : rows + 2;
-        int y = VROW_Y0 + VPITCH * vslot;
+        int y = VROW_Y0 + VPITCH * i;
         at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
         at = common(b, cap, at, 5, 0, "TEXT", VC1_X, y, VCOL_W, VLBL_H, 18, 15, 104);
         at = gput(b, cap, at, "\ttext=%s;\r\n\tlink=;\r\n\t}\r\n", s_row[i].label);
@@ -1991,6 +2007,95 @@ static int build_visuals_gui(char* b, int cap, int rows)
     return at;
 }
 
+
+
+/* ---- the in-game Visuals screen, VISUALRT.GUI -----------------------------
+   The stock screen is Gamma, three toggles and Restore/Undo on the shared
+   `commongui.visualsrt` art, whose recesses ARE its layout (gui-gadgets.md
+   10.3). The three toggles are the store's now -- Shadows is the sprocket
+   panel's row, Shading and Anti-alias are pinned (the engine options section)
+   -- so the screen keeps Gamma and the two actions, on a ground of our own:
+   left on the stock art, their three recesses would be empty bands.
+
+   THE SAME RECT AND THE SAME NAMES as stock: the header at (128,128) 150x352,
+   GAMMA, RESTORE and UNDO where the stock file puts them. `0x45E5E0` finds
+   GAMMA by name through `0x4A0200`, which is FATAL on a miss ("Error in GUI
+   layout"), so that name is not ours to change; the three it skips when
+   absent (`0x49FDF0` returns -1) are simply not here. The ground is `id=12`
+   VRTBG in `anims/visualrt.gaf` -- the screen's own GAF, which stock does not
+   ship, so nothing is shadowed. */
+#define VRT_W      150
+#define VRT_H      352
+#define ART_VRTBG  "VRTBG"
+#define VRT_FILE   "guis/visualrt.gui"
+#define VRT_GAF    "anims/visualrt.gaf"
+
+static void draw_vrtbg(unsigned char* f, int w, int h)
+{
+    Surf s; int y;
+    s.p = f; s.w = w; s.h = h;
+    for (y = 0; y < h; y++) {
+        int t = y * 3 / h;
+        fillrect(&s, 0, y, w, 1,
+                 (unsigned char)(t == 0 ? IX_GROUND_HI :
+                                 t == 1 ? IX_GROUND_MID : IX_GROUND_LO));
+    }
+    hline(&s, 0, w - 1, 0, IX_EDGE);
+    hline(&s, 0, w - 1, h - 1, IX_EDGE);
+    vline(&s, 0, 0, h - 1, IX_EDGE);
+    vline(&s, w - 1, 0, h - 1, IX_EDGE);
+    hline(&s, 1, w - 2, 1, IX_BEVEL_HI);
+    vline(&s, 1, 1, h - 2, IX_BEVEL_HI);
+    hline(&s, 1, w - 2, h - 2, IX_BEVEL_LO);
+    vline(&s, w - 2, 1, h - 2, IX_BEVEL_LO);
+    bolt(&s, 6, 6);
+    bolt(&s, w - 7, 6);
+    bolt(&s, 6, h - 7);
+    bolt(&s, w - 7, h - 7);
+    recess(&s, 13 - VPAD, 24 - VPAD, 120 + 2 * VPAD, 16 + 2 * VPAD);    /* GAMMA   */
+    recess(&s, 13 - VPAD, 269 - VPAD, 120 + 2 * VPAD, 20 + 2 * VPAD);   /* RESTORE */
+    recess(&s, 13 - VPAD, 304 - VPAD, 120 + 2 * VPAD, 20 + 2 * VPAD);   /* UNDO    */
+}
+
+static int build_visualrt_gui(char* b, int cap)
+{
+    int at = 0, g = 1;
+    at = gput(b, cap, at, "[GADGET0]\r\n\t{\r\n");
+    at = common(b, cap, at, 0, 0, "HEADER", 128, 128, VRT_W, VRT_H, 0, 0, 1);
+    at = gput(b, cap, at,
+        "\ttotalgadgets=%d;\r\n"
+        "\t[VERSION]\r\n\t\t{\r\n\t\tmajor=1;\r\n\t\tminor=0;\r\n\t\trevision=1;\r\n\t\t}\r\n"
+        "\tpanel=;\r\n\tcrdefault=;\r\n\tescdefault=;\r\n\tdefaultfocus=;\r\n\t}\r\n", 7);
+
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 12, 0, ART_VRTBG, 0, 0, VRT_W, VRT_H, 0, 15, 0);
+    at = gput(b, cap, at, "\t}\r\n");
+
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 5, 0, "TEXT", 13, 8, 114, 14, 1, 15, 0);
+    at = gput(b, cap, at, "\ttext=Gamma;\r\n\tlink=;\r\n\t}\r\n");
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 4, 0, "GAMMA", 13, 24, 120, 16, 1, 4, 0);
+    at = gput(b, cap, at, "\trange=104;\r\n\tthick=20;\r\n\tknobpos=0;\r\n\tknobsize=10;\r\n\t}\r\n");
+
+    /* where the rest went: the render rows live on the sprocket panel */
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 5, 0, "TEXT", 13, 60, 120, 14, 1, 15, 0);
+    at = gput(b, cap, at, "\ttext=Rendering:;\r\n\tlink=;\r\n\t}\r\n");
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 5, 0, "TEXT", 13, 76, 120, 14, 1, 15, 0);
+    at = gput(b, cap, at, "\ttext=the cog, top right;\r\n\tlink=;\r\n\t}\r\n");
+
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 1, 0, "RESTORE", 13, 269, 120, 20, 2, 15, -56);
+    at = gput(b, cap, at, "\tstatus=0;\r\n\ttext=Restore Defaults;\r\n\tquickkey=99;\r\n"
+                          "\tgrayedout=0;\r\n\tstages=0;\r\n\t}\r\n");
+    at = gput(b, cap, at, "[GADGET%d]\r\n\t{\r\n", g++);
+    at = common(b, cap, at, 1, 0, "UNDO", 13, 304, 120, 20, 2, 15, -56);
+    at = gput(b, cap, at, "\tstatus=0;\r\n\ttext=Undo Changes;\r\n\tquickkey=99;\r\n"
+                          "\tgrayedout=0;\r\n\tstages=0;\r\n\t}\r\n");
+    return (g == 8) ? at : -1;
+}
 
 /* ---- applying a WINDOW row ----------------------------------------------
    ON THE THREAD THAT OWNS THE WINDOW, ALWAYS. Every one of these ends in a
@@ -2328,6 +2433,11 @@ static void vis_undo(void)
         else commit_display(i);
     }
     memset(s_vtouched, 0, sizeof s_vtouched);
+    /* the engine's two, as the store held them at open, and in force before
+       the rebuild seeds their sliders from memory */
+    tagpu_settings_set(TS_GAMMA, s_gammaOpen);
+    tagpu_settings_set(TS_RESOLUTION, s_resOpen);
+    eng_push(ENG_ALL);
     s_visKeep = 1;
 }
 
@@ -2369,6 +2479,16 @@ static void vis_restore(void)
         tagpu_hud_store_pct(-1);
         s_vstage[VD_SCALE] = 1;
     }
+    /* The engine's own defaults, as its RESTORE had them (0x45E331) -- Gamma
+       12 and, off the front end's screen only, dithered fog off -- except the
+       screen size, which is the store's `native` rather than 640x480. */
+    tagpu_settings_set(TS_GAMMA, 12);
+    tagpu_settings_set(TS_RESOLUTION, 0);
+    {
+        char* m = *(char**)TA_MAIN;
+        if (m) *(unsigned short*)(m + OFF_OPTWORD) &= (unsigned short)~OPT_DITHERFOG;
+    }
+    eng_push(ENG_ALL);
     s_visKeep = 1;
 }
 
@@ -2421,6 +2541,261 @@ static int vis_row_of(void* gi)
     return -1;
 }
 
+/* ---- the engine's Visuals options, owned by the store --------------------
+   renderers.md 2.10b; every address in exe-reverse-engineering.md, "The
+   Visuals options the store owns".
+
+   FOUR FIELDS OF `main`:
+     +0x37F08  Gamma, a signed dword 0..20; the option screens apply
+               0.5 + Gamma/24 through SetGamma 0x4BA590 [DISASSEMBLED 0x45BD86]
+     +0x37F06  the option WORD. Bits 2..4 (Shadow, TShadow, FShadow) follow the
+               Shadows row -- one stock click set all three (0x45E1CB). Bits 1
+               (Anti-alias) and 5 (Shading) are PINNED ON: their only readers
+               are the engine's own unit bake (0x459830, 0x459C70, 0x4586A0),
+               which no Vulkan pass presents -- MEASURED 2026-09-23, 0 world
+               pixels changed toggling either, Classic and Classic++ -- and on
+               the GDI lane, which presents that bake, on is the stock default.
+     +0x37F1B / +0x37F1F  the in-game screen size, dwords at odd offsets;
+               written on the front end only, as every stock writer does.
+   The registry is only a mirror: the engine loads it (0x42F9A0) and writes it
+   back on its own (0x430F00 -- game entry, Options Done, the console toggles).
+
+   WHEN. After the FIRST registry load the store is pushed: that is startup,
+   0x4913F6 inside UIPipelinesInit, whose SetGamma at 0x49147C then applies
+   ours. The two later loads (0x4273E8 reloads WITHOUT saving; 0x47BB52 saves
+   first) put back what memory held before them, so a reload never changes an
+   owned value -- which is also what keeps the battleroom's screen size and a
+   `+gamma` session-only, exactly as stock. CANCEL restores the engine's stash
+   through 0x45CAE0 (taken when Options opened); the store is pushed again
+   after it, because a Visuals row commits on its click, as ours always have.
+
+   GAME THREAD ONLY: the loader, the slider callbacks, OnCommand and 0x45CAE0
+   all run on it. Under tagpu_defaults.off nothing here is installed. */
+
+static const unsigned char OPT_LOAD_STOLEN[6]  = { 0x81, 0xEC, 0x24, 0x01, 0x00, 0x00 }; /* sub esp,0x124 */
+static const unsigned char STASHBACK_STOLEN[6] = { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }; /* mov ecx,[0x511DE8] */
+
+typedef void (__stdcall *setgamma_fn)(float factor);
+typedef void (__fastcall *rebake_fn)(void* self);   /* thiscall: ecx = self, no stack args */
+typedef void (__stdcall *slider_cb_fn)(void* gi, int arg);
+
+static int  s_engArmed;                 /* the loader observer is in            */
+static int  s_engLoads;                 /* registry loads seen                  */
+static void* s_engRet[4];
+static int   s_engRetDepth;
+/* what memory held before a reload, put back after it */
+static unsigned short s_snapOpt;
+static int  s_snapGamma, s_snapW, s_snapH;
+
+static char* eng_main(void) { return *(char**)TA_MAIN; }
+
+static int eng_in_game(const char* m) { return (*(const unsigned char*)(m + OFF_INGAME) & 4) != 0; }
+
+static int rd32(const char* p) { int v; memcpy(&v, p, 4); return v; }
+static void wr32(char* p, int v) { memcpy(p, &v, 4); }
+
+static int eng_resolve(int stored, int* w, int* h)
+{
+    RECT r;
+    int nw, nh;
+    if (!util_target_monitor(&r)) return 0;
+    nw = r.right - r.left;
+    nh = r.bottom - r.top;
+    if (nw < 640 || nh < 480) return 0;
+    /* a stored size the selected monitor cannot show falls back to its own */
+    if (stored && TS_RES_W(stored) <= nw && TS_RES_H(stored) <= nh) {
+        *w = TS_RES_W(stored);
+        *h = TS_RES_H(stored);
+    } else {
+        *w = nw;
+        *h = nh;
+    }
+    return 1;
+}
+
+/* The Shadows row's value IN FORCE: the store's, or the lever's where
+   `tagpu_classicpp.cfg` names `shadows=` -- the value the row shows. */
+static int eng_shadows_on(void)
+{
+    const TAGPU_LIGHT* L = tagpu_classicpp_light();
+    int v;
+    if (tagpu_classicpp_held() & TAGPU_HELD_SHADOWS) return L && L->shadows != TAGPU_SHADOWS_OFF;
+    return tagpu_settings_get(TS_SHADOWS, &v) ? v != 0 : 1;
+}
+
+static void eng_push(int what)
+{
+    char* m = eng_main();
+    int v;
+    if (!s_engArmed || !m || tagpu_settings_ignored()) return;
+
+    if ((what & ENG_GAMMA) && tagpu_settings_get(TS_GAMMA, &v)) {
+        wr32(m + OFF_GAMMA, v);
+        ((setgamma_fn)VA_SETGAMMA)(0.5f + (float)v / 24.0f);
+    }
+    if (what & ENG_BITS) {
+        unsigned short was = *(unsigned short*)(m + OFF_OPTWORD), now = was;
+        now |= OPT_AA | OPT_SHADING;
+        now = eng_shadows_on() ? (unsigned short)(now | OPT_SHADOWS)
+                               : (unsigned short)(now & ~OPT_SHADOWS);
+        *(unsigned short*)(m + OFF_OPTWORD) = now;
+        /* The engine re-bakes after a stock toggle in game (0x45E26B); a unit
+           baked under the old bits would otherwise keep them. */
+        if (now != was && eng_in_game(m)) {
+            void* heap = *(void**)(m + OFF_BAKEHEAP);
+            if (heap) ((rebake_fn)VA_REBAKE)(heap);
+        }
+    }
+    if ((what & ENG_RES) && !eng_in_game(m) && tagpu_settings_get(TS_RESOLUTION, &v)) {
+        int w, h;
+        if (eng_resolve(v, &w, &h)) {
+            wr32(m + OFF_SELW, w);
+            wr32(m + OFF_SELH, h);
+        }
+    }
+}
+
+static int __cdecl opt_load_before(void* esp)
+{
+    char* m = eng_main();
+    if (s_engRetDepth >= 4) return 0;
+    if (s_engLoads && m) {
+        s_snapOpt   = *(unsigned short*)(m + OFF_OPTWORD);
+        s_snapGamma = rd32(m + OFF_GAMMA);
+        s_snapW     = rd32(m + OFF_SELW);
+        s_snapH     = rd32(m + OFF_SELH);
+    }
+    s_engRet[s_engRetDepth++] = ((void**)esp)[0];
+    return 1;
+}
+
+static void* __cdecl opt_load_after(unsigned int* regs)
+{
+    char* m = eng_main();
+    (void)regs;
+    if (m && s_engArmed) {
+        if (!s_engLoads) {
+            /* no SetGamma here: UIPipelinesInit applies +0x37F08 next */
+            int v;
+            char b[160];
+            if (tagpu_settings_get(TS_GAMMA, &v)) wr32(m + OFF_GAMMA, v);
+            eng_push(ENG_BITS | ENG_RES);
+            _snprintf(b, sizeof b, "menu: engine options from the store: gamma=%d optword=0x%04X screen=%dx%d",
+                      rd32(m + OFF_GAMMA), *(unsigned short*)(m + OFF_OPTWORD),
+                      rd32(m + OFF_SELW), rd32(m + OFF_SELH));
+            b[sizeof b - 1] = 0;
+            mlog(b);
+        } else {
+            /* THE WHOLE WORD, not only the owned bits: a reload of anything
+               else in it -- damage bars, dithered fog -- is the registry's
+               copy of a value memory already held, since every writer of the
+               word saves it (0x430F00's callers). */
+            char b[200];
+            _snprintf(b, sizeof b, "menu: registry reload %d: the engine read gamma=%d optword=0x%04X "
+                      "screen=%dx%d; memory's kept (gamma=%d optword=0x%04X screen=%dx%d)",
+                      s_engLoads, rd32(m + OFF_GAMMA), *(unsigned short*)(m + OFF_OPTWORD),
+                      rd32(m + OFF_SELW), rd32(m + OFF_SELH),
+                      s_snapGamma, s_snapOpt, s_snapW, s_snapH);
+            b[sizeof b - 1] = 0;
+            mlog(b);
+            *(unsigned short*)(m + OFF_OPTWORD) = s_snapOpt;
+            wr32(m + OFF_GAMMA, s_snapGamma);
+            wr32(m + OFF_SELW, s_snapW);
+            wr32(m + OFF_SELH, s_snapH);
+        }
+        s_engLoads++;
+    }
+    return s_engRetDepth > 0 ? s_engRet[--s_engRetDepth] : NULL;
+}
+
+static void* s_stashRet[4];
+static int   s_stashDepth;
+
+static int __cdecl stashback_before(void* esp)
+{
+    if (s_stashDepth >= 4) return 0;
+    s_stashRet[s_stashDepth++] = ((void**)esp)[0];
+    return 1;
+}
+
+static void* __cdecl stashback_after(unsigned int* regs)
+{
+    (void)regs;
+    eng_push(ENG_ALL);
+    return s_stashDepth > 0 ? s_stashRet[--s_stashDepth] : NULL;
+}
+
+/* ---- the two sliders into the store --------------------------------------
+   A slider has no OnCommand branch: a move fires the gadget's own callback at
+   +0x144 [DISASSEMBLED 0x4A42F5], which writes the field and applies it. The
+   builder stores the callback per visit (GAMMA at 0x45EA92), so it is wrapped
+   per visit, and only when it is still the engine's own. */
+static void __stdcall gamma_moved(void* gi, int arg)
+{
+    char* m;
+    ((slider_cb_fn)VA_GAMMA_CB)(gi, arg);
+    m = eng_main();
+    if (m) tagpu_settings_set(TS_GAMMA, rd32(m + OFF_GAMMA));   /* bounded by the set */
+}
+
+static void __stdcall vidsldr_moved(void* gi, int arg)
+{
+    char* m;
+    int w, h, nw, nh;
+    ((slider_cb_fn)VA_VIDSLDR_CB)(gi, arg);
+    m = eng_main();
+    if (!m) return;
+    w = rd32(m + OFF_SELW);
+    h = rd32(m + OFF_SELH);
+    /* the monitor's own mode is stored as `native`, so it follows the monitor */
+    if (eng_resolve(0, &nw, &nh) && w == nw && h == nh)
+        tagpu_settings_set(TS_RESOLUTION, 0);
+    else if (w > 0 && h > 0 && w < 32768 && h < 32768)
+        tagpu_settings_set(TS_RESOLUTION, TS_RES(w, h));
+}
+
+static void eng_wrap_sliders(void)
+{
+    char* m = eng_main();
+    char* top = m ? *(char**)(m + OFF_TOPGUI) : 0;
+    char* ctrls = top ? *(char**)(top + GM_CTRLS) : 0;
+    int n, i;
+    if (!s_engArmed || !ctrls) return;
+    n = *(short*)(ctrls + 0xB6);
+    for (i = 1; i <= n && i < 256; i++) {
+        char* g = ctrls + (size_t)i * STRIDE;
+        void** cb = (void**)(g + G_SLIDER_CB);
+        if (!memcmp(g + G_NAME, "GAMMA", 6) && *cb == (void*)VA_GAMMA_CB)
+            *cb = (void*)gamma_moved;
+        else if (!memcmp(g + G_NAME, "VIDSLDR", 8) && *cb == (void*)VA_VIDSLDR_CB)
+            *cb = (void*)vidsldr_moved;
+    }
+}
+
+static void engopt_install(void)
+{
+    if (tagpu_settings_ignored()) {
+        mlog("menu: engine options NOT taken over (tagpu_defaults.off: the registry's, as stock)");
+        return;
+    }
+    int stash;
+    /* armed FIRST: the observer's after-hook tests it, and the first load is
+       the one that must see it */
+    s_engArmed = 1;
+    if (!tagpu_detour_bytes_ok(VA_OPT_LOAD, OPT_LOAD_STOLEN, sizeof OPT_LOAD_STOLEN) ||
+        !tagpu_detour_observe(VA_OPT_LOAD, OPT_LOAD_STOLEN, sizeof OPT_LOAD_STOLEN,
+                              opt_load_before, opt_load_after)) {
+        s_engArmed = 0;
+        mlog("menu: engine options NOT taken over - the registry load 0x42F9A0 is not as expected");
+        return;
+    }
+    stash = tagpu_detour_bytes_ok(VA_OPT_STASHBACK, STASHBACK_STOLEN, sizeof STASHBACK_STOLEN) &&
+            tagpu_detour_observe(VA_OPT_STASHBACK, STASHBACK_STOLEN, sizeof STASHBACK_STOLEN,
+                                 stashback_before, stashback_after);
+    mlog(stash ? "menu: engine options owned by the store (the registry load 0x42F9A0, the stash restore 0x45CAE0)"
+               : "menu: engine options owned by the store, but NOT after CANCEL - the stash restore 0x45CAE0 is not as expected");
+}
+
 /* ---- the two observers --------------------------------------------------- */
 
 static int s_visArmed = 0;
@@ -2452,6 +2827,50 @@ static oncmd_fn s_visPrevOnCmd = 0;
 
 static void __stdcall tagpu_vis_oncommand(void* gi);
 
+/* Is the screen on top our VISUALRT? By its ground's name, which no stock
+   screen carries. */
+static int screen_is_vrt(void)
+{
+    char* main_p = *(char**)TA_MAIN;
+    char* top    = main_p ? *(char**)(main_p + OFF_TOPGUI) : 0;
+    char* ctrls  = top ? *(char**)(top + GM_CTRLS) : 0;
+    int n, i;
+    if (!ctrls) return 0;
+    n = *(short*)(ctrls + 0xB6);
+    for (i = 1; i <= n && i < 256; i++)
+        if (!memcmp(ctrls + (size_t)i * STRIDE + G_NAME, ART_VRTBG, sizeof ART_VRTBG))
+            return 1;
+    return 0;
+}
+
+/* THE IN-GAME SCREEN'S OnCommand, chained the way the front end's is. Its
+   RESTORE and UNDO are Gamma's alone -- the sprocket panel has its own -- and
+   they are not forwarded, for the reason tagpu_vis_oncommand gives. The
+   rebuild is the engine's own idiom again: `0x45E5E0` builds VISUALRT while
+   `main+0x37EBE & 1` stands, which only the screen's -1 branch clears. */
+static oncmd_fn s_vrtPrevOnCmd = 0;
+static int      s_vrtKeep;
+static int      s_vrtGammaOpen = 12;
+
+static void vrt_rebuild(void* gi)
+{
+    s_vrtKeep = 1;
+    ((gui_pop_fn)VA_GUI_POP)(gi);
+    ((vis_build_fn)VA_VIS_BUILD)(0);
+}
+
+static void __stdcall tagpu_vrt_oncommand(void* gi)
+{
+    const char* n = vis_actuated(gi);
+    if (n && (!memcmp(n, "RESTORE", 8) || !memcmp(n, "UNDO", 5))) {
+        tagpu_settings_set(TS_GAMMA, n[0] == 'R' ? 12 : s_vrtGammaOpen);
+        eng_push(ENG_GAMMA);
+        vrt_rebuild(gi);
+        return;
+    }
+    if (s_vrtPrevOnCmd) s_vrtPrevOnCmd(gi);
+}
+
 static int __cdecl vis_build_before(void* esp)
 {
     if (s_visRetDepth >= 8) return 0;          /* recursion guard, not a queue */
@@ -2464,6 +2883,18 @@ static int __cdecl vis_build_before(void* esp)
 static void* __cdecl vis_build_after(unsigned int* regs)
 {
     (void)regs;
+    eng_wrap_sliders();
+    if (screen_is_vrt()) {
+        char* main_p = *(char**)TA_MAIN;
+        char* top    = *(char**)(main_p + OFF_TOPGUI);
+        oncmd_fn cur = top ? *(oncmd_fn*)(top + GM_ONCMD) : 0;
+        if (cur && cur != tagpu_vrt_oncommand) {
+            s_vrtPrevOnCmd = cur;
+            *(oncmd_fn*)(top + GM_ONCMD) = tagpu_vrt_oncommand;
+        }
+        if (s_vrtKeep) s_vrtKeep = 0;
+        else if (!tagpu_settings_get(TS_GAMMA, &s_vrtGammaOpen)) s_vrtGammaOpen = 12;
+    }
     if (screen_has_row()) {
         char* main_p = *(char**)TA_MAIN;
         char* top    = *(char**)(main_p + OFF_TOPGUI);
@@ -2487,6 +2918,8 @@ static void* __cdecl vis_build_after(unsigned int* regs)
             InterlockedExchange(&s_scaleOpen, tagpu_hud_stored_pct());
             memset(s_vtouched, 0, sizeof s_vtouched);
             if (!tagpu_settings_get(TS_MONITOR, &s_monOpen)) s_monOpen = -1;
+            if (!tagpu_settings_get(TS_GAMMA, &s_gammaOpen)) s_gammaOpen = 12;
+            if (!tagpu_settings_get(TS_RESOLUTION, &s_resOpen)) s_resOpen = 0;
         }
         push_stages(main_p + OFF_GUIINFO);
         push_display(main_p + OFF_GUIINFO);
@@ -2552,18 +2985,24 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
         /* The Monitor row changes what the Screen Size list may contain, so it
            rebuilds the screen instead of just re-plating it. Nothing after the
            call may touch `gi`'s screen: the old GUIMEMSTRUCT is freed inside. */
-        if (d == VD_MON) { vis_relist(gi); return; }
+        if (d == VD_MON) {
+            eng_push(ENG_RES);      /* `native` is the NEW monitor's mode */
+            vis_relist(gi);
+            return;
+        }
         push_display(gi);
         menu_accept(gi);
         return;
     }
     {
+        /* UNDO AND RESTORE ARE OURS AND NOT FORWARDED. Every value the
+           engine's two branches reset (0x45E2FD, 0x45E331) is now the store's,
+           so forwarding would put the engine's copies -- the stash, 640x480 --
+           back over it. The screen is rebuilt the way both branches end. */
         const char* n = vis_actuated(gi);
-        if (n && !memcmp(n, "UNDO", 5))    vis_undo();
-        if (n && !memcmp(n, "RESTORE", 8)) vis_restore();
+        if (n && !memcmp(n, "UNDO", 5))    { vis_undo();    vis_relist(gi); return; }
+        if (n && !memcmp(n, "RESTORE", 8)) { vis_restore(); vis_relist(gi); return; }
     }
-    /* forwarded either way: the engine still has its own options to reset, and
-       its rebuild is what puts the restored model back on the plates */
     if (s_visPrevOnCmd) s_visPrevOnCmd(gi);
 }
 
@@ -2583,12 +3022,19 @@ void tagpu_menu_init(void)
        gadget's own name (`0x4A8537`): anims\\RENDER.GAF and anims\\VISUALS.GAF */
     static unsigned char gaf[64 + 0x28 + 8 + 0x18 + PANEL_W * PANEL_H];
     static unsigned char vgaf[64 + 0x28 + 8 + 0x18 + VP_W * VP_H];
+    static char rtgui[4096];
+    static unsigned char rtgaf[64 + 0x28 + 8 + 0x18 + VRT_W * VRT_H];
+    static const GafEnt RTENTS[1] = { { ART_VRTBG, VRT_W, VRT_H, draw_vrtbg } };
     static const GafEnt ENTS[1]  = { { ART_NAME,  PANEL_W, PANEL_H, draw_panel_frame } };
     static const GafEnt VENTS[1] = { { ART_VISBG, VP_W,    VP_H,    draw_visbg       } };
-    TAGPU_UFO_FILE f[4];
+    TAGPU_UFO_FILE f[6];
     char b[300];
-    int len, vlen, wrote, armed;
-    unsigned glen, vglen;
+    int len, vlen, rtlen, wrote, armed;
+    unsigned glen, vglen, rtglen;
+
+    /* first, and whether or not the menu arms: the first registry load, the
+       one the store replaces, is still ahead */
+    engopt_install();
 
     read_tokens();
     enum_monitors();        /* the Monitor row's captions go into the file */
@@ -2612,6 +3058,10 @@ void tagpu_menu_init(void)
        upgrade is the confusing failure, exactly as for render.gui above. */
     vlen = build_visuals_gui(vgui, sizeof vgui, s_nrows);
     if (vlen < 0) { mlog("menu: NOT armed - the generated VISUALS.GUI does not fit"); return; }
+    rtlen = build_visualrt_gui(rtgui, sizeof rtgui);
+    if (rtlen < 0) { mlog("menu: NOT armed - the generated VISUALRT.GUI does not fit"); return; }
+    rtglen = build_gaf(rtgaf, sizeof rtgaf, RTENTS, 1, s_nrows);
+    if (!rtglen) { mlog("menu: NOT armed - the in-game Visuals ground does not fit"); return; }
     f[0].path = "guis/render.gui";
     f[0].data = gui;
     f[0].size = (unsigned)len;
@@ -2624,7 +3074,13 @@ void tagpu_menu_init(void)
     f[3].path = VIS_GAF;
     f[3].data = vgaf;
     f[3].size = vglen;
-    wrote = tagpu_ufo_write(UFO_FILE, f, 4);
+    f[4].path = VRT_FILE;
+    f[4].data = rtgui;
+    f[4].size = (unsigned)rtlen;
+    f[5].path = VRT_GAF;
+    f[5].data = rtgaf;
+    f[5].size = rtglen;
+    wrote = tagpu_ufo_write(UFO_FILE, f, 6);
 
     armed = wrote && !exists(OFF_FILE) &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&

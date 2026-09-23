@@ -500,7 +500,7 @@ def set_defaults(inst: Instance, meta: dict, want) -> "str | None":
     return None
 
 
-def ensure_store(inst: Instance) -> None:
+def ensure_store(inst: Instance, res=None) -> None:
     """The DLL's settings store, `impure.cfg`, created EMPTY when it is missing.
 
     An absent store is the DLL's first-run signal: it renames the lever files an
@@ -509,11 +509,23 @@ def ensure_store(inst: Instance) -> None:
     always has one before it launches. Empty means every key at its compiled
     default; under tagpu_defaults.off the DLL ignores the store altogether
     (renderers.md 2.10b). An existing store is left alone -- a --defaults
-    instance keeps what its menu was set to."""
+    instance keeps what its menu was set to -- except for `resolution=`.
+
+    `res` IS THE INSTANCE'S SCREEN SIZE, AND THE STORE IS WHERE THE DLL READS IT.
+    The store's own default is the monitor's native mode and it replaces the
+    registry's `DisplaymodeWidth/Height` at startup, so without this line a
+    --defaults launch would run at the monitor's size whatever `--res` said. The
+    registry keys stay written as well, for a control launch, where the store is
+    ignored and the engine's own load is what stands."""
     path = inst.gamedir / "impure.cfg"
     if not path.exists():
         inst.gamedir.mkdir(parents=True, exist_ok=True)
         path.write_text("")
+    if res:
+        lines = [ln for ln in path.read_text().splitlines()
+                 if not ln.strip().lower().startswith("resolution=")]
+        lines.append(f"resolution={int(res[0])}x{int(res[1])}")
+        path.write_text("\n".join(lines) + "\n")
 
 
 def write_title(inst: Instance, label: str) -> str:
@@ -1206,7 +1218,7 @@ def _launch(args) -> dict:
     terrown_note = _ensure_terrown_for_terr(inst)
     markown_note = _ensure_markown_for_mark(inst)
     defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
-    ensure_store(inst)
+    ensure_store(inst, tuple(meta["res"]))
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.

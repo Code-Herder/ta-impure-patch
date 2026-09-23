@@ -1335,5 +1335,29 @@ class WindowTiling(unittest.TestCase):
         self.assertEqual(tacli.tile_for(7, (4000, 3000), self.SCREEN), (0, 0))
 
 
+
+class SettingsStore(unittest.TestCase):
+    """`ensure_store`: an instance always has a store, and its `resolution=` is
+    the instance's --res, whatever else the store holds."""
+
+    def _inst(self, tmp):
+        return types.SimpleNamespace(gamedir=Path(tmp) / "gamedir")
+
+    def test_a_missing_store_is_created_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            tacli.ensure_store(inst)
+            self.assertEqual((inst.gamedir / "impure.cfg").read_text(), "")
+
+    def test_res_replaces_only_the_resolution_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            (inst.gamedir / "impure.cfg").write_text("gamma=15\nresolution=native\nshadows=off\n")
+            tacli.ensure_store(inst, (1024, 768))
+            lines = (inst.gamedir / "impure.cfg").read_text().splitlines()
+            self.assertEqual(lines, ["gamma=15", "shadows=off", "resolution=1024x768"])
+
+
 if __name__ == "__main__":
     unittest.main()

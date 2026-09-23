@@ -21,7 +21,7 @@
 
 static void slog(const char* fmt, ...)
 {
-    char b[400];
+    char b[700];
     va_list ap;
     FILE* f;
     va_start(ap, fmt);
@@ -63,11 +63,16 @@ static const Opt O_MAXFPS[]  = { {"60", 60}, {"120", 120}, {"uncapped", 0}, {"0"
 static const Opt O_HUD[]     = { {"off", -1}, {"auto", 0}, {"100", 100}, {"150", 150},
                                  {"200", 200}, {"300", 300}, {"400", 400} };
 static const Opt O_DISPLAY[] = { {"fullscreen", 1}, {"window", 0} };
+static const Opt O_GAMMA[]   = { {"12", 12}, {"0", 0}, {"1", 1}, {"2", 2}, {"3", 3}, {"4", 4},
+                                 {"5", 5}, {"6", 6}, {"7", 7}, {"8", 8}, {"9", 9}, {"10", 10},
+                                 {"11", 11}, {"13", 13}, {"14", 14}, {"15", 15}, {"16", 16},
+                                 {"17", 17}, {"18", 18}, {"19", 19}, {"20", 20} };
 
 #define N(a) (int)(sizeof a / sizeof a[0])
 
-/* TS_MONITOR is not in this table: it is stored by device NAME and resolved to
-   an index against the registered list (`tagpu_settings_monitors`). */
+/* TS_MONITOR and TS_RESOLUTION have no option list: the monitor is stored by
+   device NAME and resolved to an index against the registered list
+   (`tagpu_settings_monitors`), the resolution as `native` or `WxH`. */
 static const Key s_key[TS_NKEYS] = {
     { "style",     O_STYLE,   N(O_STYLE),   TS_STYLE_PP },
     { "assets",    O_BOOL,    N(O_BOOL),    1 },
@@ -83,6 +88,10 @@ static const Key s_key[TS_NKEYS] = {
     { "hudscale",  O_HUD,     N(O_HUD),     -1 },
     { "display",   O_DISPLAY, N(O_DISPLAY), 1 },
     { "monitor",   NULL,      0,            -1 },
+    /* 12 is the engine's own default (0x4301C0) and its factor 1.0: the slider
+       applies 0.5 + Gamma/24 (exe-reverse-engineering.md, SetGamma 0x4BA590) */
+    { "gamma",     O_GAMMA,   N(O_GAMMA),   12 },
+    { "resolution", NULL,     0,            0 },
 };
 
 static volatile LONG s_val[TS_NKEYS];
@@ -124,10 +133,19 @@ static int frame_ok(const int w[4])
            w[0] > -32000 && w[1] > -32000 && w[0] < 32000 && w[1] < 32000;
 }
 
+/* A size TA can run at: its own 640x480 floor, and a ceiling far past any
+   monitor. Whether the selected monitor offers it is `tagpu_engopt`'s test. */
+static int res_ok(int v)
+{
+    int w = TS_RES_W(v), h = TS_RES_H(v);
+    return v == 0 || (w >= 640 && w <= 16384 && h >= 480 && h <= 16384);
+}
+
 static int valid(TagpuSetting k, int v)
 {
     int i;
     if (k == TS_MONITOR) return v == -1 || (v >= 0 && v < s_monCount);
+    if (k == TS_RESOLUTION) return res_ok(v);
     for (i = 0; i < s_key[k].nopts; i++)
         if (s_key[k].opts[i].value == v) return 1;
     return 0;
@@ -146,7 +164,6 @@ int tagpu_settings_preset(TagpuSetting key)
     switch (key) {
     case TS_ASSETS:    return 1;
     case TS_LIGHT:     return 1;
-    case TS_SHADOWS:   return 2;
     case TS_SHADOWRES: return 2048;
     default:           return s_key[key].def;
     }
@@ -154,7 +171,7 @@ int tagpu_settings_preset(TagpuSetting key)
 
 static int is_render_key(TagpuSetting k)
 {
-    return k == TS_ASSETS || k == TS_LIGHT || k == TS_SHADOWS || k == TS_SHADOWRES;
+    return k == TS_ASSETS || k == TS_LIGHT || k == TS_SHADOWRES;
 }
 
 /* BOUNDED ON EVERY READ, not only on the way in: the value crossed a thread,
@@ -214,6 +231,10 @@ static int serialise(char* b, int cap)
             const char* name = m >= 0 ? s_monName[m] : s_monStored;
             if (!name[0]) continue;               /* nobody has chosen one */
             k = _snprintf(b + at, cap - at, "monitor=%s\r\n", name);
+        } else if (i == TS_RESOLUTION) {
+            int v = read_val(TS_RESOLUTION);
+            k = v ? _snprintf(b + at, cap - at, "resolution=%dx%d\r\n", TS_RES_W(v), TS_RES_H(v))
+                  : _snprintf(b + at, cap - at, "resolution=native\r\n");
         } else {
             /* the value IN FORCE: under Classic or Classic++ a render key is the
                preset's, whatever a custom session left in the slot */
@@ -359,8 +380,19 @@ static void parse_line(char* line)
         }
         return;
     }
+    if (!lstrcmpiA(k, "resolution")) {
+        int w, h;
+        if (!lstrcmpiA(v, "native")) { s_val[TS_RESOLUTION] = 0; return; }
+        if (sscanf(v, "%dx%d", &w, &h) == 2 && w > 0 && h > 0 && w < 32768 && h < 32768 &&
+            res_ok(TS_RES(w, h))) {
+            s_val[TS_RESOLUTION] = TS_RES(w, h);
+            return;
+        }
+        slog("resolution=%s is not a screen size - native stands", v);
+        return;
+    }
     for (i = 0; i < TS_NKEYS; i++) {
-        if (i == TS_MONITOR || lstrcmpiA(k, s_key[i].name)) continue;
+        if (!s_key[i].opts || lstrcmpiA(k, s_key[i].name)) continue;
         for (j = 0; j < s_key[i].nopts; j++)
             if (!lstrcmpiA(v, s_key[i].opts[j].text)) {
                 s_val[i] = s_key[i].opts[j].value;
@@ -603,7 +635,7 @@ static void migrate(const char* ini_path)
 void tagpu_settings_attach(const char* ini_path)
 {
     int i, first;
-    char b[400];
+    char b[512];
     int at;
 
     if (s_attached) return;
@@ -630,7 +662,11 @@ void tagpu_settings_attach(const char* ini_path)
         int k;
         if (i == TS_MONITOR)
             k = _snprintf(b + at, sizeof b - at, " monitor=%s", s_monStored[0] ? s_monStored : "-");
-        else
+        else if (i == TS_RESOLUTION) {
+            int v = read_val(TS_RESOLUTION);
+            k = v ? _snprintf(b + at, sizeof b - at, " resolution=%dx%d", TS_RES_W(v), TS_RES_H(v))
+                  : _snprintf(b + at, sizeof b - at, " resolution=native");
+        } else
             k = _snprintf(b + at, sizeof b - at, " %s=%s", s_key[i].name,
                           spelling((TagpuSetting)i, read_val((TagpuSetting)i)));
         if (k < 0) break;

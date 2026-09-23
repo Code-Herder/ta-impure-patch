@@ -43,10 +43,18 @@ typedef enum {
     TS_HUDSCALE,    /* -1 off | 0 auto | 100 150 200 300 400              */
     TS_DISPLAY,     /* 0 window | 1 fullscreen (borderless)               */
     TS_MONITOR,     /* -1 none chosen | an index into the registered list */
+    TS_GAMMA,       /* 0..20, the engine's own Gamma scale (12 = factor 1.0)  */
+    TS_RESOLUTION,  /* 0 native | TS_RES(w, h): the in-game screen size       */
     TS_NKEYS
 } TagpuSetting;
 
 enum { TS_STYLE_CLASSIC, TS_STYLE_PP, TS_STYLE_CUSTOM };
+
+/* A screen size packed into one LONG, so it crosses threads like every other
+   value. 0 is "native": the selected monitor's own mode. */
+#define TS_RES(w, h)  (((w) << 16) | (h))
+#define TS_RES_W(v)   ((v) >> 16)
+#define TS_RES_H(v)   ((v) & 0xFFFF)
 
 /* Called from cfg_init (config.c), BEFORE ddraw.ini is parsed and before any
    other thread exists: the first-run migration may strip keys from that very
@@ -58,8 +66,10 @@ void tagpu_settings_attach(const char* ini_path);
 
 /* 1 and the value in *out when the store supplies one; 0 when it has no say
    (tagpu_defaults.off), in which case the caller's own default stands. Any
-   thread. While style is Classic or Classic++, the four render keys answer
-   the Classic++ preset, whatever the file holds (renderers.md 2.10b). */
+   thread. While style is Classic or Classic++, the three look keys (assets,
+   light, shadowres) answer the Classic++ preset, whatever the file holds
+   (renderers.md 2.10b). Shadows is not one of them: it is also the engine's
+   shadow switch, so it is the player's under every style. */
 int  tagpu_settings_get(TagpuSetting key, int* out);
 
 /* 1 when the store has no say at all: tagpu_defaults.off is present. */
@@ -72,7 +82,7 @@ void tagpu_settings_set(TagpuSetting key, int value);
 /* Bumped after every set, for readers that cache what they derived. */
 long tagpu_settings_gen(void);
 
-/* The Classic++ preset's value for one of the four render keys. */
+/* The Classic++ preset's value for one of the three look keys. */
 int  tagpu_settings_preset(TagpuSetting key);
 
 /* RENDER THREAD ONLY: writes `impure.cfg` if anything changed since the last
