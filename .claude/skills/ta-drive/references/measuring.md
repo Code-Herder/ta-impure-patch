@@ -197,8 +197,9 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
 - **A/B-ing any live lever: wait for a FRESH heartbeat before the second shot.** The `native:`
   line is written every 300 frames; a lever flipped and shot three seconds later is read against
   the previous setting's counters. Count the lines, flip, wait until the count has moved by two.
-- **Slice `tagpu.log` by byte offset** to attribute a run (`stat -c %s` before, `tail -c +N`
-  after); a grep over the whole file can hand you the previous game's lines after a reload.
+- **Slice the log with a cursor** to attribute a run: `M=$(tools/talog.py mark <gamedir>)`
+  before, `tools/talog.py since <gamedir> "$M"` after. A byte offset breaks at the first
+  rotation, and a grep over the whole run can hand you the previous game's lines after a reload.
 
 ## The restore-dump byte oracle
 

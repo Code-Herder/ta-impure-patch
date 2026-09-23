@@ -35,9 +35,11 @@
    second process started from the same folder cannot take it and logs nothing for its run.
 
    THREADS. Any thread may call any of these. One critical section covers both streams (the
-   total cap spans them); it is held for the size checks, a rotation and one WriteFile, never
-   while formatting. It is never deleted and the files are never closed at detach: the render
-   thread can still log while the process exits, and the OS closes the handles.
+   total cap spans them); it is held for the size checks, a rotation and one WriteFile. A
+   caller's line is formatted before it is taken; nothing under it allocates, logs or takes
+   another lock, so it is a leaf and cannot close a lock cycle. It is never deleted and the
+   files are never closed at detach: the render thread can still log while the process
+   exits, and the OS closes the handles.
 
    Before tagpu_log_init, in the config tool's load (cnc_ddraw_config_init), and in a process
    that does not own `log\`, every call returns without writing. */

@@ -81,8 +81,10 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
 
 WHAT IT WRITES
 
-  tagpu.log next to TotalA.exe: one "ARMED" line per pass at start, the options
-  line ("opt: play defaults ON ..."), and timings. Attach it to a bug report.
+  log\tagpu.log in the game folder: one "ARMED" line per pass at start, the
+  options line ("opt: play defaults ON ..."), and timings. Attach it to a bug
+  report. Each launch starts a new file and keeps the previous ones as
+  tagpu.1.log, tagpu.2.log and so on; the logs never take more than 128 MB.
   Nothing else is written unless you ask for a dump.
 
 
