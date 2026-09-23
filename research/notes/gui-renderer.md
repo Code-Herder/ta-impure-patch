@@ -304,6 +304,14 @@ already held takes no new entry, and one whose plane `gaf_capture` skipped (the 
 is replayed from the held plane. The residual is the asset's own: an unhooked write after the
 snapshot leaves it older than the surface.
 
+**A remap is a sprite; only a blend is not (2026-09-23).** `0x4B8310`'s RLE arm writes
+`row[src]` and never reads what is under it, so the post-game names cross as `PK_SPRITE`s of the
+*remapped* plane (`gafb_capture`) rather than as a new op. The rule it generalises: an op that
+transforms its SOURCE's colours is still a stamp, and only one that reads its DESTINATION
+(`PK_TINT`, the raw arm's `table[src·256 + dst]`) needs the consumer to read its own twin. The
+key of such a stamp is picked from what the transform CAN produce, not from what one plane
+happens to contain, so that it holds for every sight of the frame.
+
 **The consumer needed no new case.** `PK_ASSET` mirrors as `TAGPU_GUIOP_SEED` *with* its bytes —
 the shape the Vulkan lane's SEED already has (`o->alen` optional, validated as `w * h`), a path
 that existed and had never been exercised because the GL drain always set `alen = 0`. Zero Vulkan

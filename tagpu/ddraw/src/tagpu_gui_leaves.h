@@ -147,10 +147,27 @@ static int __cdecl before_gafa(void* e) { if (on_game_thread()) gaf_box(e, OP_GA
    NOT the same shape as 0x4B7F90: stdcall with FIVE args (ret 0x14), it draws
    nothing unless that bit is set, and it BLENDS -- a raw frame goes to
    0x4CBF2C, which writes dst = [globals+0xC8][src * 256 + dst] for every src
-   pixel other than arg 5. The first four args are 0x4B7F90's, which is all
-   `gaf_box` reads; publish sends the op as box bytes, which the drain drops.
+   pixel other than arg 5, and an RLE frame to 0x4CC3D0, which writes
+   `[globals+0xC8][arg5 * 256 + src]` over each texel it draws and reads no
+   destination. The first four args are 0x4B7F90's, which is all `gaf_box`
+   reads; the RLE arm is then carried as the remapped sprite `gafb_capture`
+   builds from arg 5, and the raw arm, which reads its destination, keeps the
+   box path, which the drain drops.
    [VERIFIED 2026-09-23 by disassembly; the engine map's leaf table.] */
-static int __cdecl before_gafb(void* e) { if (on_game_thread()) gaf_box(e, OP_GAFB); return 0; }
+static int __cdecl before_gafb(void* e)
+{
+    const char* g;
+    if (!on_game_thread()) return 0;
+    /* THE ENGINE'S OWN GATE, so an op exists exactly when a draw does: with
+       bit 7 clear `0x4B832D` jumps straight to the epilogue. */
+    g = *(const char* const*)TA_GFX_PP;
+    if (!ptr_ok(g) || !(*(const unsigned char*)(g + PROG_CAPS) & 0x80u)) return 0;
+    s_lastOp = NULL;
+    gaf_box(e, OP_GAFB);
+    if (s_lastOp && s_lastOp->kind == OP_GAFB && (s_census || g_gui_draw))
+        gafb_capture(s_lastOp, (const unsigned char*)(size_t)ARG(e, 2), ARG(e, 5));
+    return 0;
+}
 
 /* ---- 0x4CCF60 glyph blitter, cdecl 9 args -----------------------------
    (base, pitch, font, str, x, y, fg, bg, transparent): writes rows=font[0]

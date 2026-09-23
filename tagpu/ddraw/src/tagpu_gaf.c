@@ -347,7 +347,18 @@ const char* tagpu_gaf_seq_name(const char* seq)
     return seq + TAGPU_SQ_NAME;
 }
 
+static int gaf_decode(const unsigned char* g, int w, int h, unsigned char* out, unsigned char* cov);
 int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out)
+{
+    return gaf_decode(g, w, h, out, NULL);
+}
+
+int tagpu_gaf_decode_cov(const unsigned char* g, int w, int h, unsigned char* out, unsigned char* cov)
+{
+    return gaf_decode(g, w, h, out, cov);
+}
+
+static int gaf_decode(const unsigned char* g, int w, int h, unsigned char* out, unsigned char* cov)
 {
     unsigned char ck, comp;
     const unsigned char* px;
@@ -370,9 +381,12 @@ int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out)
     if (comp == 0) {
         if (IsBadReadPtr(px, (SIZE_T)w * h)) return 0;
         for (y = 0; y < h; y++) memcpy(out + (size_t)y * w, px + (size_t)y * w, (size_t)w);
+        if (cov) memset(cov, 1, (size_t)w * h);   /* a raw frame writes every texel;
+                                                    the KEY is its caller's test */
         return 1;
     }
     memset(out, ck, (size_t)w * h);
+    if (cov) memset(cov, 0, (size_t)w * h);
     p = px;
     for (y = 0; y < h; y++) {
         int rowlen, x = 0;
@@ -390,12 +404,12 @@ int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out)
                 unsigned char v;
                 if (q >= p + rowlen) break;
                 v = *q++;
-                for (i = 0; i < n && x < w; i++) row[x++] = v;
+                for (i = 0; i < n && x < w; i++) { if (cov) cov[(size_t)y * w + x] = 1; row[x++] = v; }
             } else {
                 int n = (b >> 2) + 1, i;
                 for (i = 0; i < n && q < p + rowlen; i++) {
                     unsigned char v = *q++;
-                    if (x < w) row[x] = v;
+                    if (x < w) { row[x] = v; if (cov) cov[(size_t)y * w + x] = 1; }
                     x++;
                 }
             }

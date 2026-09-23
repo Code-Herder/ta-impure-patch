@@ -1769,6 +1769,78 @@ static void gaf_capture(OP* o, const unsigned char* fr)
     if (s_gafUsed > g_guiq.gafhigh) g_guiq.gafhigh = s_gafUsed;
 }
 
+/* THE BLENDED BLIT'S RLE ARM, CARRIED AS THE SPRITE IT DRAWS. `0x4B8310` hands
+   an RLE frame to `0x4CC3D0` with `[globals+0xC8] + row*256` (row = its fifth
+   argument), and that loop writes `row_base[src]` for every texel the frame
+   draws and leaves every skip alone (`0x4CC4AD`..`0x4CC4B7` and the three arms
+   like it). It never reads the destination -- so what it puts on screen is a
+   fixed picture, the frame remapped through one row of the lighten table, and
+   an ordinary keyed sprite of THAT picture is exact. It is what the post-game
+   screen's player names are: 6x8..6x10 font glyphs, row 15, measured
+   2026-09-23. The RAW arm (`0x4CBF2C`, `dst = T[src*256 + dst]`) does read its
+   destination and is not this; `o->fkey` stays 0 for it and the op keeps the
+   box path, as do sub-frame stacks (`0x4B8500`).
+
+   THE KEY IS CHOSEN FROM THE ROW, NOT FROM THE PLANE: a value the row cannot
+   produce from ANY source byte, so no drawn texel can be mistaken for it, and
+   a later sight that skips the decode (the consumer already has it) still
+   knows it. The frame's own key when the row cannot produce that, else the
+   lowest free value; a row that reaches all 256 values cannot be keyed and
+   publishes nothing, which is what it did before this existed.
+
+   THE IDENTITY folds the row's BYTES into `frame_key`'s hash, not its number:
+   the engine rewrites this table in place (`0x42E2AB`, see `pub_shade`), and
+   a different row content is a different picture. Read here, on the game
+   thread inside the engine's own call that reads the same bytes -- the ordering
+   `gaf_capture` argues, and the table is an init-time allocation besides.
+   `row` is BOUNDED here and not by the engine: `0x4B84AB` shifts it unmasked,
+   and the table is 32 rows (`TAGPU_GUI_SHADE_ROWS`). */
+static unsigned char s_gafbCov[TAGPU_GAF_DECMAX * TAGPU_GAF_DECMAX];
+static void gafb_capture(OP* o, const unsigned char* fr, unsigned row)
+{
+    const char* g;
+    const unsigned char* t;
+    unsigned char img[256];
+    unsigned hh = 2166136261u, n, i, k;
+    unsigned char* dst;
+    const void* fk;
+    o->fkey = 0; o->goff = o->glen = 0; o->sgen = s_seenGen;
+    if (o->fcomp == 0 || o->fsub != 0) return;
+    if (!o->fw || !o->fh || o->fw > TAGPU_GAF_DECMAX || o->fh > TAGPU_GAF_DECMAX) return;
+    if (row >= TAGPU_GUI_SHADE_ROWS) return;
+    g = *(const char* const*)TA_GFX_PP;
+    if (!ptr_ok(g)) return;
+    t = *(const unsigned char* const*)(g + PROG_LHT);
+    if (!ptr_ok(t)) return;
+    t += row * 256u;
+    memset(img, 0, sizeof img);
+    for (i = 0; i < 256; i++) { img[t[i]] = 1; hh = (hh ^ t[i]) * 16777619u; }
+    if (img[o->ck]) {
+        for (k = 0; k < 256 && img[k]; k++) ;
+        if (k == 256) return;
+        o->ck = (unsigned char)k;
+    }
+    fk = frame_key(fr, o->pix, o->fw, o->fh);
+    if (!fk) return;
+    hh ^= (unsigned)(size_t)fk * 2654435761u;
+    hh ^= row * 0x9E3779B9u;
+    o->fkey = hh ? hh : 1u;
+    if (seen_frame(fr, (const void*)(size_t)o->fkey, 0)) return;
+    n = (unsigned)o->fw * (unsigned)o->fh;
+    i = o->fkey & (GCAP_N - 1);
+    if (s_gcap[i].fr == (const void*)fr && s_gcap[i].key == o->fkey && s_gcap[i].len == n) {
+        o->goff = s_gcap[i].off; o->glen = s_gcap[i].len; return;
+    }
+    if (n > GAF_SCRATCH - s_gafUsed) { g_guiq.gaflost++; return; }
+    dst = s_gafBuf + s_gafUsed;
+    if (!tagpu_gaf_decode_cov(fr, o->fw, o->fh, dst, s_gafbCov)) { g_guiq.gafbaddec++; return; }
+    for (k = 0; k < n; k++) dst[k] = s_gafbCov[k] ? t[dst[k]] : o->ck;
+    o->goff = s_gafUsed; o->glen = n;
+    s_gcap[i].fr = (const void*)fr; s_gcap[i].key = o->fkey; s_gcap[i].off = o->goff; s_gcap[i].len = n;
+    s_gafUsed += n;
+    if (s_gafUsed > g_guiq.gafhigh) g_guiq.gafhigh = s_gafUsed;
+}
+
 /* A TRANSFORMED GAF FRAME, RESAMPLED TO ITS DESTINATION HERE rather than in the
    renderer. `GAF_DrawTransformed 0x4C7580` maps a frame onto a parallelogram, and
    the one the in-game HUD uses is the player's colour badge: a 32x32 frame onto
@@ -2368,7 +2440,7 @@ static void publish(unsigned flipSurf)
            and a world op, which is dropped rather than published -- is a draw
            the rebuild would not contain, so the snapshot goes first, before
            `pub_seed` could send it. */
-        if (s->snap && !(op->kind == OP_GAF && !op->world && op->frame && op->fw && op->fh &&
+        if (s->snap && !((op->kind == OP_GAF || op->kind == OP_GAFB) && !op->world && op->frame && op->fw && op->fh &&
                          op->fw <= TAGPU_GAF_DECMAX && op->fh <= TAGPU_GAF_DECMAX &&
                          op->fkey && (op->glen || ovl_plane_of(s, op))))
             snap_free(s);
@@ -2377,7 +2449,11 @@ static void publish(unsigned flipSurf)
         /* a plain keyed blit of a frame the atlas can hold is a sprite; a frame
            past the decoder's edge (TAGPU_GAF_DECMAX, the shell's 640-wide title
            art) is its box's bytes like everything else */
-        if (op->kind == OP_GAF && op->frame && op->fw && op->fh &&
+        /* `OP_GAFB` rides here once `gafb_capture` has keyed it: its plane is
+           the remapped picture and `fkey`/`ck` are that picture's, so from this
+           point on it IS a keyed sprite. Uncaptured (`fkey` 0) it takes the
+           `as_pixels` exit below, as it always did. */
+        if ((op->kind == OP_GAF || op->kind == OP_GAFB) && op->frame && op->fw && op->fh &&
             op->fw <= TAGPU_GAF_DECMAX && op->fh <= TAGPU_GAF_DECMAX) {
             const void* key;
             /* ---- THE ASSET THIS OP NAMES CANNOT GO AWAY, BECAUSE NOTHING
@@ -3289,7 +3365,8 @@ static int __cdecl before_flip(void* entry_esp)
                    `PK_SPRITE` only when its resampled plane was captured, and a
                    kind that is sometimes semantic cannot be summed as though it
                    always were. It stays in `raw`, which over-reports it -- the
-                   direction an honest gap should err in. */
+                   direction an honest gap should err in. `OP_GAFB` stays out
+                   for the same reason: only its RLE arm is a sprite. */
                 if (k == OP_GAF || k == OP_TEXT || k == OP_BAR ||
                     k == OP_RECT || k == OP_LINE || k == OP_COPY ||
                     k == OP_FOCUS || k == OP_FILL) sem += s_kindArea[k];

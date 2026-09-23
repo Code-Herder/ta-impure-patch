@@ -383,6 +383,12 @@ const unsigned char* tagpu_gaf_subframe(const void* g, int k);
 /* Decode a frame's colour plane (raw or TA-RLE) into `out`, which must hold
    w*h bytes; unwritten texels are left at the colour key. 0 if unreadable. */
 int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out);
+/* ...and which texels the frame actually DRAWS, 1 in `cov` (w*h bytes). An RLE
+   frame's skip runs leave `out` at the key, and so does a literal texel whose
+   value IS the key -- the engine draws that one and `out` alone cannot tell
+   the two apart. A raw frame covers every texel: its transparency is the
+   blitter's compare against a key, not a property of the plane. */
+int tagpu_gaf_decode_cov(const unsigned char* g, int w, int h, unsigned char* out, unsigned char* cov);
 
 /* Atlas: entry for a frame, decoding and uploading it on first sight. NULL
    when the frame is unreadable or the atlas is full (it then flags itself and
