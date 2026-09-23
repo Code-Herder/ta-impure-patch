@@ -127,7 +127,7 @@ rerasterise:
 0x459670  call 0x4586A0(cargo_obj, 1, -1)   ; rebuild cargo composite EVERY frame
 0x459686  call 0x458DD0(cargo_composite, cargo_obj)     ; scaffold on the cargo
           call 0x4B90A0(cargo_comp, scratch, dx, dy, bias)  ; z-merge (depth <=)
-; then: underwater erase 0x4BA1B0 / tint 0x4B96E0, aircraft ground clip
+; then: underwater erase 0x4BA1B0 / tint 0x4B96E0, digger clip
 ;   0x4BA1B0(scratch,0x7D) if UnitDef+0x241 bit30, cloak alpha vs CopyGafToContext
 ```
 
@@ -231,7 +231,7 @@ for (i = 0; i < W*H; i++) {
 }
 ```
 
-**Depth plane untouched** — so later passes (wireframe, underwater/aircraft clips,
+**Depth plane untouched** — so later passes (wireframe, underwater/digger clips,
 cargo z-merge) still see the full model's heights even where colour was erased.
 The cutoff is a plain per-pixel height threshold over the *whole model* — there is
 no per-piece cutoff.
@@ -337,7 +337,7 @@ map**: byte = model-space height + 50, or +125 for UnitDef+0x241 bit 30 (the
 digger bit, `tagpu_native.c` `UD_DIGGER`; the base leaves room below the origin for the
 0x7D clip to erase — not "airborne": an ARMATLAS reads `0x00808889`, bit 30 clear). Cleared to 0 at alloc. This is what the scaffold threshold, the underwater
 erase/tint (`0x4BA1B0`/`0x4B96E0`, level = `sealevel(0x1427F) − unitY + bias`),
-the aircraft ground clip (`0x4BA1B0(frame, 0x7D)`), and the cargo z-merge
+the digger clip (`0x4BA1B0(frame, 0x7D)`, run at `0x45976E` only when UnitDef+0x241 bit 30 is set), and the cargo z-merge
 (`0x4B90A0`, `dstDepth <= srcDepth + bias`) all consume.
 
 In 2× supersample mode (below), `sx`,`sy` double but `d` does **not**.
@@ -438,7 +438,7 @@ Anti-aliased nanoframe bakes, option-gated.
 | `0x4C8760` → `0x4C7A20` | opaque quad walker → scanline | — |
 | `0x4C0C70` / `0x4C1000` | colour-fill n-gon, lit / opaque | — |
 | `0x4B90A0` | z-merge blit (cargo → scratch, `dst<=src+bias`) | (src, dst, dx, dy, bias) |
-| `0x4BA1B0` | erase where `depth <= level` (underwater hide, aircraft clip 0x7D) | (frame, level) |
+| `0x4BA1B0` | erase where `depth <= level` (underwater hide, digger clip 0x7D) | (frame, level) |
 | `0x4B96E0` | tint via `*(TAProgram+0xD0)` where `depth <= level` | (frame, level) |
 | `0x4B95A0` | 2×→1× colour downsample via blend LUT `+0xC0` | (scratch2x, dst) |
 | `0x41BA60` | build tick: `Nanoframe -= work/buildtime`, sets `0x110|=0x2000` | stores `0x41BC16/0x41BC96` |
@@ -463,7 +463,7 @@ composite: colour = full textured render (all visible pieces, texture frame 0),
 UnitDef+0x241-bit30 units). TA will then copy, stage-recolour, wireframe,
 water-clip and z-merge exactly as retail. If the depth plane is left zero the
 scaffold degrades badly (every pixel classifies as "below threshold": stages C/D
-render solid-blue/plain-texture with no rise, and the water/aircraft clips
+render solid-blue/plain-texture with no rise, and the water/digger clips
 misfire) — filling depth is not optional. Detect the case with
 `unit+0x110 & 0x20000000 && *(float*)(unit+0x104) != 0`.
 
