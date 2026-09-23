@@ -3479,9 +3479,13 @@ the "replay runs on frames the composite cannot" section. Not covered: `0x4B8310
 sub-frame stacks, which were not reached on any screen measured. **A crash entering a second
 skirmish while zoomed out is CLOSED, 2026-09-23**: the widened viewport rect reached the engine's
 own terrain blit before our terrain pass had taken it back. The rect now widens only on draws the
-game thread has latched as ours. [GPU status](gpu-status.html) §2.3b. Found on the way
-and left open: past `TAGPU_PD_MAXHAND`'s 512 posed units on screen the unit pass draws NO bodies
-for the frame (`500v500`). (This entry also said the UI op PUBLISHER was unreachable,
+game thread has latched as ours. [GPU status](gpu-status.html) §2.3b. **The 512-posed-unit cap is
+CLOSED, 2026-09-23**: past it the unit pass drew no bodies at all (`500v500` zoomed out). The poses
+are one storage buffer a frame now, and every cap that scales with the unit count is grown to the
+frame or fixed at the design point of 10 players × 1024 units (`TAGPU_PK_DESIGN_SLOTS`, asserted at
+compile time): 610 posed units drawn on `500v500` where `main` drew none, and 0 px against `main` on
+`selbox-facings`. [GPU status](gpu-status.html) §2.85. Not covered: nothing ran past stock's 5 001
+slots, and frame time at 10 000 units is unmeasured. (This entry also said the UI op PUBLISHER was unreachable,
 `g_gui_draw` having no writer. The UI-layer rebuild put `tagpu_gui_surf.c` back with that writer
 in it, so the queue is filled, the arena is written and `tagpu_gui.on` buys the layer; the
 publisher's heartbeat reads `draw=1`.) Still open: the SOFT shadow half is escalation

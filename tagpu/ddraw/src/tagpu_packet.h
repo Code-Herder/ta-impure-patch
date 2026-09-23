@@ -157,9 +157,9 @@ typedef struct TAGPU_PK_PIECE {
     uint32_t node;           /* prim+0x00 P_NODE, the type's template node      */
 } TAGPU_PK_PIECE;
 
-/* 36 B, one per live wreck record the anchor rect names. Posed exactly as a
-   unit is — the engine draws a husk through a scratch fake unit — so it
-   carries the same pose fields. */
+/* 44 B (asserted in tagpu_packet_pub.c), one per live wreck record the anchor
+   rect names. Posed exactly as a unit is — the engine draws a husk through a
+   scratch fake unit — so it carries the same pose fields. */
 typedef struct TAGPU_PK_WRECK {
     int32_t  pos[3];         /* record+0x08 / +0x0C / +0x10, 16.16              */
     uint32_t o3_key;         /* record+0x04, KEY                                */
