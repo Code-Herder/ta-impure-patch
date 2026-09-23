@@ -5255,7 +5255,8 @@ gates in `0x459200`), bit 4 at `0x46A6ED`, `0x46A784`, `0x46A7E0` (feature shado
 **What the DLL does with it** (observers, no byte patch): `0x42F9A0` is watched — after the
 first load the store is pushed (Gamma, the shadow bits, the pins, the resolved screen size);
 after each later load what memory held before it is put back, so a reload never changes an
-owned value and the battleroom's size and `+gamma` stay session-only. `0x45CAE0` is watched and
+owned value, and the battleroom's size and `+gamma` — which stock saves, at `0x4462FC` and
+`0x4172CE` — last only until the next launch pushes the store. `0x45CAE0` is watched and
 the store pushed after it. The two slider callbacks are replaced per visit in the gadget's
 `+0x144`, only while they are still the engine's, by wrappers that call them and then record the
 field. The in-game `VISUALRT.GUI` is replaced by a generated one carrying `GAMMA`, `RESTORE` and

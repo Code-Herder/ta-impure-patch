@@ -126,7 +126,9 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
   greyed in every instance** — the tile is the lever. `tacli arm` still drives the others for A/Bs.
 - **Under `tagpu_defaults.off` (every launch without `--defaults`) the store has no say and every
   row but Shadows is greyed.** Shadows is then the engine's own shadow switch. Test the menu with
-  `--defaults`.
+  `--defaults`. The engine's Gamma, size and option word come from the one shared `user.reg`, which
+  a `--defaults` instance saves its store's values into at every game entry — peek them before
+  treating a control launch as stock.
 - **The store also owns the engine's Gamma, screen size and shadow bits** under `--defaults`: the
   registry is still loaded and saved, but memory is the store's after the startup load, and a
   later reload (a `scenario load`) keeps memory's (`tacli log <i> -g 'registry reload'`). tacli

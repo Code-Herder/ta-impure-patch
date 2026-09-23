@@ -134,7 +134,7 @@ static int frame_ok(const int w[4])
 }
 
 /* A size TA can run at: its own 640x480 floor, and a ceiling far past any
-   monitor. Whether the selected monitor offers it is `tagpu_engopt`'s test. */
+   monitor. Whether the selected monitor offers it is tagpu_menu.c's `eng_resolve`. */
 static int res_ok(int v)
 {
     int w = TS_RES_W(v), h = TS_RES_H(v);

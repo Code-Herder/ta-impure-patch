@@ -68,7 +68,7 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
 
   tagpu_defaults.off turns the whole list off at once, and ignores impure.cfg:
   the menu's rows are greyed while it is there, except Shadows, which is then
-  the game's own shadow option, saved by the game as before. Two things stay on because
+  the game's own shadow option, kept with the game's other options as before. Two things stay on because
   they are fixes rather than modes, each with its own switch:
 
     tagpu_reclaim.off   a crash fix: the engine's model frees are deferred so the

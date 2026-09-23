@@ -1325,8 +1325,8 @@ owns"):
   fields are snapshotted before and put back after: a reload reads the registry, which is at
   best the store's value one save ago and at worst a value `+gamma` or the battleroom set for one
   session. Each is logged (`menu: registry reload N: the engine read …; memory's kept …`).
-- **After the stash restore `0x45CAE0`** — UNDO's and CANCEL's copy of what the Options screen
-  opened with — the store is pushed again.
+- **After the stash restore `0x45CAE0`** — CANCEL's copy of what the Options screen opened with
+  (UNDO's too in stock, but UNDO is ours here) — the store is pushed again.
 - The **sliders** keep their stock callbacks; a wrapper at the gadget's `+0x144` calls the
   engine's and records the value it wrote. Screen Size stores `native` when the pick equals the
   monitor's size, so a store written on one monitor stays right on another.
@@ -1342,14 +1342,17 @@ What each value does:
   changed **0 world pixels** with the bits verified to flip (`0x3E` → `0x1E` → `0x1C`). Pinned to
   on, the stock default, because the GDI lane presents that bake: its behaviour there is the
   stock game's by construction. GDI was not A/B'd — `scenario load` forces `renderer=vulkan`.
-- **`gamma=`** is bounded to 0..20 and applied through `SetGamma 0x4BA590`. `+gamma N` stays
-  session-only.
+- **`gamma=`** is bounded to 0..20 and applied through `SetGamma 0x4BA590`. `+gamma N` is
+  session-only: stock saves it to the registry (`0x4172CE`), and so does this build, but the store
+  never records it and the next launch pushes the store over it. A CANCEL after it puts the
+  store's Gamma back.
 - **`resolution=`** is resolved against the target monitor (`util_target_monitor`); a stored size
-  larger than the monitor falls back to native, and the Monitor row re-resolves it. It is written
+  larger than the monitor falls back to native — unless it is the ini's `inject_resolution`, which
+  the picker offers whatever the monitor — and the Monitor row re-resolves it. It is written
   on the front end only — in game the size is the running game's.
-- **The battleroom mode picker stays session-only**, as stock: `0x446310`/`0x4461D0` write the
-  pair and broadcast `PlayerInfo+0x8B/+0x8D`, never the store, and the next reload puts memory
-  back. The store is pushed before the battleroom builds its list, so the first broadcast is
+- **The battleroom mode picker is session-only**: `0x446310`/`0x4461D0` write the pair and
+  broadcast `PlayerInfo+0x8B/+0x8D`, and stock saves it (`0x4462FC`), but never to the store, so
+  the next launch pushes the store over it. The store is pushed before the battleroom builds its list, so the first broadcast is
   already the store's.
 - **In-game Options → Visuals (`VISUALRT.GUI`) is replaced** on the front end's mechanism — a
   generated `.GUI` in `impure-patch.ufo`, OnCommand chained at `GUIMEMSTRUCT+0x08` — carrying
@@ -1362,7 +1365,11 @@ What each value does:
   what the store held at open. Neither is forwarded to the engine's branches, which would reset
   the engine's options from its own defaults.
 - **`tagpu_defaults.off` leaves all of it alone**: nothing is installed and the registry's values
-  are the game's, as stock (`menu: engine options NOT taken over`). The screen is still ours, so
+  are the game's, as stock (`menu: engine options NOT taken over`) — the registry holds whatever
+  the last launch saved, which after a launch under the store is the store's values. Neither is
+  anything installed under `tagpu_menu.off`, or on an exe the dialog-build observer does not
+  match: without the screens that write the store it must not own the values, and the `.ufo`
+  then carries neither Visuals file, so the stock screens and their toggles are the ones found. The screen is still ours, so
   the stock behaviour is kept by hand: **Shadows is the one row left live**, plated from bit 2 and
   setting bits 2–4 directly as `BSHADOWS` did (the engine's saver keeps it) — without it nothing
   on either screen could switch the engine's shadows back on, and the registry is one file every
@@ -1418,6 +1425,8 @@ RTX 4070 and llvmpipe both listed:
   (`0x22` ↔ `0x3E` on both screens, the in-game one re-baking without a crash), Restore giving
   the engine's Gamma 12 and 640×480 and Undo the opened 16 and 1024×768, on the front end and on
   the in-game Visuals screen, and `impure.cfg` never written.
+- `tagpu_menu.off`: the stock Visuals screen with its `SHADING`, `ANTI` and `BSHADOWS` toggles,
+  no engine-options line in the log, and the registry's Gamma kept through a CANCEL.
 
 **Not verified:** the Monitor row's click on two real monitors, and so the screen size's
 re-resolution on a second monitor. Xvfb offers one monitor, and a

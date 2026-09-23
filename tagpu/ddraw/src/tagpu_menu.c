@@ -922,7 +922,7 @@ static int build_gui(char* b, int cap, int rows)
    R_SS AND R_SHADOWS ARE NOT AMONG THEM. Supersampling is orthogonal to the
    lane -- the native pass reads it under Classic as well as Classic++. Shadows
    is the ENGINE's shadow switch as well as ours (it drives the option word's
-   bits 2..4, tagpu_engopt.h), so it has to work under Classic too. Both are
+   bits 2..4, `eng_push`), so it has to work under Classic too. Both are
    exempt from `row_greyed`'s lane rule and left alone by the Classic++ preset;
    in this test either would make a player who turned it off see "Custom" with
    nothing in the lane customised. */
@@ -2569,16 +2569,20 @@ static int vis_row_of(void* gi)
    back on its own (0x430F00 -- game entry, Options Done, the console toggles).
 
    WHEN. After the FIRST registry load the store is pushed: that is startup,
-   0x4913F6 inside UIPipelinesInit, whose SetGamma at 0x49147C then applies
+   0x4913F6 inside UIPipelinesInit, whose SetGamma at 0x4914A7 then applies
    ours. The two later loads (0x4273E8 reloads WITHOUT saving; 0x47BB52 saves
    first) put back what memory held before them, so a reload never changes an
-   owned value -- which is also what keeps the battleroom's screen size and a
-   `+gamma` session-only, exactly as stock. CANCEL restores the engine's stash
-   through 0x45CAE0 (taken when Options opened); the store is pushed again
-   after it, because a Visuals row commits on its click, as ours always have.
+   owned value. The battleroom's screen size and a `+gamma` are written to
+   memory and saved to the registry (0x4462FC, 0x4172CE) but never reach the
+   store, so they last until the next launch pushes it: session-only, which
+   stock is not. CANCEL restores the engine's stash through 0x45CAE0 (taken
+   when Options opened); the store is pushed again after it, because a Visuals
+   row commits on its click, as ours always have.
 
    GAME THREAD ONLY: the loader, the slider callbacks, OnCommand and 0x45CAE0
-   all run on it. Under tagpu_defaults.off nothing here is installed. */
+   all run on it. Installed only with the menu's screens (tagpu_menu_init),
+   which are the only way to write the store's copy; under tagpu_defaults.off,
+   or without them, nothing here is. */
 
 static const unsigned char OPT_LOAD_STOLEN[6]  = { 0x81, 0xEC, 0x24, 0x01, 0x00, 0x00 }; /* sub esp,0x124 */
 static const unsigned char STASHBACK_STOLEN[6] = { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 }; /* mov ecx,[0x511DE8] */
@@ -2586,6 +2590,10 @@ static const unsigned char STASHBACK_STOLEN[6] = { 0x8B, 0x0D, 0xE8, 0x1D, 0x51,
 typedef void (__stdcall *setgamma_fn)(float factor);
 typedef void (__fastcall *rebake_fn)(void* self);   /* thiscall: ecx = self, no stack args */
 typedef void (__stdcall *slider_cb_fn)(void* gi, int arg);
+/* plays a sound by name [role INFERRED]; stdcall, ret 8. The engine's UNDO and
+   RESTORE branches call it with "Options" first (0x45E313, 0x45E34B). */
+typedef void (__stdcall *opt_sound_fn)(const char* name, int arg);
+#define VA_OPT_SOUND 0x0047F1A0u
 
 static int  s_engArmed;                 /* the loader observer is in            */
 static int  s_engLoads;                 /* registry loads seen                  */
@@ -2603,6 +2611,13 @@ static int eng_in_game(const char* m) { return (*(const unsigned char*)(m + OFF_
 static int rd32(const char* p) { int v; memcpy(&v, p, 4); return v; }
 static void wr32(char* p, int v) { memcpy(p, &v, 4); }
 
+static int eng_injected(int stored)
+{
+    char* p = g_config.inject_resolution;
+    unsigned long w = strtoul(p, &p, 0), h = (*p ? strtoul(p + 1, &p, 0) : 0);
+    return w && h && (int)w == TS_RES_W(stored) && (int)h == TS_RES_H(stored);
+}
+
 static int eng_resolve(int stored, int* w, int* h)
 {
     RECT r;
@@ -2611,8 +2626,10 @@ static int eng_resolve(int stored, int* w, int* h)
     nw = r.right - r.left;
     nh = r.bottom - r.top;
     if (nw < 640 || nh < 480) return 0;
-    /* a stored size the selected monitor cannot show falls back to its own */
-    if (stored && TS_RES_W(stored) <= nw && TS_RES_H(stored) <= nh) {
+    /* a stored size the selected monitor cannot show falls back to its own --
+       except the ini's `inject_resolution`, which the picker offers whatever
+       the monitor (dd.c) and so stays the player's to make */
+    if (stored && ((TS_RES_W(stored) <= nw && TS_RES_H(stored) <= nh) || eng_injected(stored))) {
         *w = TS_RES_W(stored);
         *h = TS_RES_H(stored);
     } else {
@@ -2714,10 +2731,11 @@ static void* __cdecl opt_load_after(unsigned int* regs)
             b[sizeof b - 1] = 0;
             mlog(b);
         } else {
-            /* THE WHOLE WORD, not only the owned bits: a reload of anything
-               else in it -- damage bars, dithered fog -- is the registry's
-               copy of a value memory already held, since every writer of the
-               word saves it (0x430F00's callers). */
+            /* THE WHOLE WORD, not only the owned bits: memory is the value in
+               force and the registry at best its last save. Not every writer
+               saves -- the bit-7 hotkey at 0x4963B8 does not -- so a reload
+               that took the rest of the word from the registry would undo an
+               unsaved toggle, as stock's does. */
             char b[200];
             _snprintf(b, sizeof b, "menu: registry reload %d: the engine read gamma=%d optword=0x%04X "
                       "screen=%dx%d; memory's kept (gamma=%d optword=0x%04X screen=%dx%d)",
@@ -2756,7 +2774,7 @@ static void* __cdecl stashback_after(unsigned int* regs)
 /* ---- the two sliders into the store --------------------------------------
    A slider has no OnCommand branch: a move fires the gadget's own callback at
    +0x144 [DISASSEMBLED 0x4A42F5], which writes the field and applies it. The
-   builder stores the callback per visit (GAMMA at 0x45EA92), so it is wrapped
+   builder stores the callback per visit (GAMMA's at 0x45EA29), so it is wrapped
    per visit, and only when it is still the engine's own. */
 static void __stdcall gamma_moved(void* gi, int arg)
 {
@@ -2892,6 +2910,7 @@ static void __stdcall tagpu_vrt_oncommand(void* gi)
 {
     const char* n = vis_actuated(gi);
     if (eng_owned() && n && (!memcmp(n, "RESTORE", 8) || !memcmp(n, "UNDO", 5))) {
+        ((opt_sound_fn)VA_OPT_SOUND)("Options", 0);
         tagpu_settings_set(TS_GAMMA, n[0] == 'R' ? 12 : s_vrtGammaOpen);
         eng_push(ENG_GAMMA);
         vrt_rebuild(gi);
@@ -3035,7 +3054,11 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
         int undo = n && !memcmp(n, "UNDO", 5), restore = n && !memcmp(n, "RESTORE", 8);
         if (undo || restore) {
             if (undo) vis_undo(); else vis_restore();
-            if (eng_owned()) { vis_relist(gi); return; }
+            if (eng_owned()) {
+                ((opt_sound_fn)VA_OPT_SOUND)("Options", 0);
+                vis_relist(gi);
+                return;
+            }
         }
     }
     if (s_visPrevOnCmd) s_visPrevOnCmd(gi);
@@ -3064,12 +3087,8 @@ void tagpu_menu_init(void)
     static const GafEnt VENTS[1] = { { ART_VISBG, VP_W,    VP_H,    draw_visbg       } };
     TAGPU_UFO_FILE f[6];
     char b[300];
-    int len, vlen, rtlen, wrote, armed;
+    int len, vlen, rtlen, wrote, armed, visOk;
     unsigned glen, vglen, rtglen;
-
-    /* first, and whether or not the menu arms: the first registry load, the
-       one the store replaces, is still ahead */
-    engopt_install();
 
     read_tokens();
     enum_monitors();        /* the Monitor row's captions go into the file */
@@ -3115,7 +3134,15 @@ void tagpu_menu_init(void)
     f[5].path = VRT_GAF;
     f[5].data = rtgaf;
     f[5].size = rtglen;
-    wrote = tagpu_ufo_write(UFO_FILE, f, 6);
+    /* THE TWO VISUALS SCREENS SHIP ONLY WITH THEIR HANDLERS. They drop the
+       stock toggles and route Restore/Undo to us, so without the dialog-build
+       observer (tagpu_menu.off, or an exe whose bytes differ) the stock files
+       must stay the ones the engine finds. Checked before the write, and the
+       install below uses the same test. */
+    visOk = !exists(OFF_FILE) &&
+            tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
+            tagpu_detour_bytes_ok(VA_VIS_BUILD, VIS_BUILD_STOLEN, sizeof VIS_BUILD_STOLEN);
+    wrote = tagpu_ufo_write(UFO_FILE, f, visOk ? 6 : 2);
 
     armed = wrote && !exists(OFF_FILE) &&
             tagpu_detour_bytes_ok(VA_DRAWSCREEN, DRAW_STOLEN, sizeof DRAW_STOLEN) &&
@@ -3130,6 +3157,9 @@ void tagpu_menu_init(void)
             tagpu_detour_observe(VA_POSTGUI, POST_STOLEN, sizeof POST_STOLEN,
                                  before_postgui, NULL);
         vis_install();
+        /* the store owns the engine's options only where the screens that
+           write it are in; the first registry load is still ahead */
+        if (s_visArmed) engopt_install();
     }
 
     _snprintf(b, sizeof b,
