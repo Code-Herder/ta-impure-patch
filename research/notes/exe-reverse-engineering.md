@@ -1021,7 +1021,11 @@ plain immediate — `add eax,0x37e3f` — so the grep that "proved" the claim wa
 search to run is `grep 37e3f`, unanchored.* It is a display memo, not sim state.
 
 **Which bytes are read back and which are not.** Byte 0 of the local is written at `0x468E7F` from
-`cl`, a byte taken out of the player record, and is never read from the memo. Bytes 1..4 ARE read
+`cl`, a byte taken out of the player record, and is never read from the memo. The byte is
+**`PlayerStruct+0x146`** of the local player: `0x468E4B` takes p = `main[0x2A43]`, and
+`0x468E6C` loads `[main + p + 330p + 0x1CA9]`, i.e. `main + 0x1B63 + 331p + 0x146` — TADR's
+`PlayerAryIndex` *[INFERRED name]*; it read **0x00** for player 0 (MEASURED 2026-09-23, the memo
+read back after a draw). p is used unbounded. Bytes 1..4 ARE read
 from it — `flds 0x79(%esp)` at `0x468E7B`, before byte 0 is written — and are the displayed
 number's animation state: `0x468E83`/`0x468E90` convert the old and new values and `0x468E9F`/
 `0x468EB3` divide the difference by 8, so the number eases toward its target over frames. That

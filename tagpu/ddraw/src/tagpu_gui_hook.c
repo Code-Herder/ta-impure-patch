@@ -206,6 +206,10 @@ static int  s_nsurf = 0;
    `+0x01`. That third one does NOT touch byte 0, so byte 0 is ours alone to
    poison. It is a display memo, not sim state. */
 #define HUD_MEMO       0x37E3Fu
+#define HUD_PLRREC     0x1B63u        /* main+ : PlayerStruct[10], stride 331  */
+#define HUD_PLRBYTE    0x146u         /* record+ : what 0x468E6C loads into the
+                                         memo's byte 0                        */
+#define HUD_NPLAYERS   10
 #define CHROME_PLAYER  0x2A43u        /* main+ : the local player index      */
 #define CHROME_PLRTBL  0x1B8Au        /* main+ : records, stride 331         */
 #define CHROME_STRIDE  331
@@ -3515,12 +3519,22 @@ static void panel_emit(const char* ctrls, int n0)
    every field from the player record regardless. Poisoning the animated bytes
    would have made the numbers converge from a value we invented.
 
-   BOUNDED, AND NOT BY LUCK. A poison equal to the byte the block would compute
-   compares equal and skips, so the debt is kept and the poison is COMPLEMENTED
-   on the retry: the fresh byte cannot equal both x and ~x, so the second attempt
-   must differ. At most two pokes per reset, and the debt clears as soon as the
-   memo stops reading back as our poison -- which is the engine having written
-   its own fresh state over it, i.e. having drawn.
+   THE POISON IS THE COMPLEMENT OF THE BYTE THE BLOCK WILL COMPUTE, read from
+   the same field the block reads it from: `0x468E6C` loads byte 0 from
+   `main + 0x1CA9 + 331*p` with p = `main[0x2A43]`, i.e. `PlayerStruct+0x146`
+   (`PlayerAryIndex` [INFERRED from TADR's layout], 0x00 for player 0,
+   MEASURED). A poison equal to that byte compares equal and the block skips,
+   and nothing here pokes twice for one debt (below), so a poison that merely
+   toggled between two constants would deadlock on every debt whose constant
+   happened to be the live byte -- which is 0x00 for player 0 on every other
+   reset. `x ^ 0xFF` cannot equal x, so the next block run differs by
+   construction; the only way it compares equal is the field being rewritten
+   to exactly its complement before that run, on this same thread. The debt
+   clears as soon as the memo stops reading back as our poison -- which is the
+   engine having written its own fresh state over it, i.e. having drawn.
+
+   `p` IS BOUNDED BEFORE IT INDEXES. The engine indexes the ten records with
+   it unchecked; a value that is not a slot is data we refuse, not an offset.
 
    ORDERING, NOT TIMING. This runs at the flip's RETURN, on the game thread --
    which is INSIDE `DrawGameScreen`, after its resource block has already run
@@ -3559,7 +3573,12 @@ static void hud_invalidate(void)
         if (*memo != s_hudPoison) { s_hudPend = 0; s_hudPoked = 0; }
         return;
     }
-    s_hudPoison = (unsigned char)(s_hudPoison ^ 0xFFu);
+    {
+        unsigned p = *(const unsigned char*)(ta + CHROME_PLAYER);
+        if (p >= HUD_NPLAYERS) { s_hudPend = 0; s_hudRefused++; return; }
+        s_hudPoison = (unsigned char)(*(const unsigned char*)
+            (ta + HUD_PLRREC + p * CHROME_STRIDE + HUD_PLRBYTE) ^ 0xFFu);
+    }
     *memo = s_hudPoison;
     s_hudPoked = 1;
     s_hudPokes++;
