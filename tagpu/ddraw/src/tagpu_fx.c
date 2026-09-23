@@ -59,6 +59,7 @@
 #include "tagpu_packet.h"
 #include "tagpu_native.h"   /* tagpu_native_foglut/scissor_on, for the hand-over */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
+#include "tagpu_log.h"
 
 
 
@@ -77,8 +78,7 @@
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* the shared shelf atlas (tagpu_gaf.c). Its entries are keyed on the frame
@@ -470,7 +470,6 @@ static DWORD WINAPI fog_alarm_thread(LPVOID p)
 static void fog_alarm(const char* why, const unsigned short* grid, int cols,
                       int rows, int orgX, int orgY, int wx, int wzp)
 {
-    FILE* f;
     /* The LOG fires every trip (throttled); only the DIALOG is one-shot. The
        two checks below catch different faults — a moved buffer and dims that
        have come apart from it — and with a root cause still open the second,
@@ -480,12 +479,8 @@ static void fog_alarm(const char* why, const unsigned short* grid, int cols,
     DWORD now = GetTickCount();
     if (now - tick > 1000) {
         tick = now;
-        f = fopen("tagpu.log", "a");
-        if (f) {
-            fprintf(f, "FOGGUARD %s grid=%p cols=%d rows=%d org=(%d,%d) world=(%d,%d)\n",
-                    why, (const void*)grid, cols, rows, orgX, orgY, wx, wzp);
-            fclose(f);
-        }
+        tagpu_logf("FOGGUARD %s grid=%p cols=%d rows=%d org=(%d,%d) world=(%d,%d)",
+                   why, (const void*)grid, cols, rows, orgX, orgY, wx, wzp);
     }
     if (InterlockedCompareExchange(&s_fogAlarmed, 1, 0) != 0) return;
     _snprintf(s_fogAlarm, sizeof s_fogAlarm,

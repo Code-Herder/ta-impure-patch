@@ -63,6 +63,7 @@
 #include "tagpu_packet_pub.h"
 #include "tagpu_detour.h"
 #include "dd.h"                            /* g_ddraw.gui_thread_id: the game thread */
+#include "tagpu_log.h"
 
 #define FREEOBJ_VA    0x0045AAA0u          /* FreeObjectState: stdcall, 1 arg, ret 4      */
 #define FREEOBJ_RESUME (FREEOBJ_VA + 5u)
@@ -166,8 +167,7 @@ static volatile unsigned s_cDeferred, s_cDrained, s_cOverflow, s_cForeign,
 
 static void rlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* Every entry is freed through here, so the two classes can share one ring,

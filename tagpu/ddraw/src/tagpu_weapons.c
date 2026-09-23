@@ -12,6 +12,7 @@
 #include <stdarg.h>
 #include "tagpu_weapons.h"
 #include "tagpu_opt.h"
+#include "tagpu_log.h"
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -137,13 +138,11 @@ static void wlog(const char* fmt, ...)
 {
     char b[512];
     va_list ap;
-    FILE* f;
     va_start(ap, fmt);
     _vsnprintf(b, sizeof b, fmt, ap);
     va_end(ap);
     b[sizeof b - 1] = 0;
-    f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "weapons: %s\n", b); fclose(f); }
+    tagpu_logf("weapons: %s", b);
 }
 
 /* =========================================================================

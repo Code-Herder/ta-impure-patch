@@ -10,6 +10,7 @@
 #include "tagpu_fogwide.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_log.h"
 
 /* the engine fields the builder reads, all in the TAdynmem block */
 #define OFF_LOSTYPE  0x14281       /* u16; bit1 = true LOS, bit3 = grid current */
@@ -51,8 +52,7 @@
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
@@ -674,8 +674,8 @@ void tagpu_fogwide_tick(char* ta, int rebuilt)
    Continents) and **3200-4900** on a sparse Town & Country skirmish. So a
    block of 300 ticks is anywhere from a tenth of a second to a second — a
    count per block is a RATIO that reads like a rate, and no two runs compare —
-   and a line per 300 ticks is 11-16 fopen/fprintf/fclose a second on the game
-   thread, in a session that never zooms out. Five seconds of wall time is one
+   and a line per 300 ticks is 11-16 log writes a second on the game thread,
+   in a session that never zooms out. Five seconds of wall time is one
    line per five seconds whatever the scene is doing, and the line carries the
    rate rather than leaving it to be reconstructed. */
 static void fogw_heartbeat(int cols, int rows)

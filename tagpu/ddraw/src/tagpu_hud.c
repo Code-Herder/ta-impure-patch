@@ -20,6 +20,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_settings.h"
 #include "tagpu_detour.h"
+#include "tagpu_log.h"
 
 /* The panel's logical width and the bars' logical height: the two immediates
    at 0x4981C9 / 0x4981D9, and the 128x480 block §3.4a measured. PANEL_ROWS is
@@ -46,8 +47,7 @@ static volatile LONG s_pctLive = -1;
 
 static void hlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int dims_ok(int w, int h)

@@ -42,6 +42,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_opt.h"
 #include "tagpu_detour.h"
+#include "tagpu_log.h"
 
 #define SITE_PROJ_VA   0x00469B22u
 #define SITE_EXPL_VA   0x00469B2Cu
@@ -69,8 +70,7 @@ static unsigned g_last = 0;
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* the stub/patch helpers are shared with tagpu_featown.c (tagpu_detour.c) */

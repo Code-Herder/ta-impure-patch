@@ -42,6 +42,7 @@
 #include "tagpu_packet.h"
 #include "tagpu_model3do.h"      /* TAGPU_PBMAXPIECE */
 #include "tagpu_opt.h"
+#include "tagpu_log.h"
 
 /* id -> index in the PREV packet's units table, rebuilt once per frame and
    cleared only over the ids it used. 64 K entries of 2 bytes: the id is a u16
@@ -60,8 +61,7 @@ static int      s_have;                       /* a usable pair this frame    */
 
 static void llog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static LONGLONG qpc_of(const TAGPU_PACKET* p)

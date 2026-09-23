@@ -31,6 +31,7 @@ TAG="${2:?usage: gatec.sh <instance> <tag> [outdir]}"
 OUT="${3:-/tmp/gatec}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TACLI="$REPO/tools/tacli"
+TALOG="$REPO/tools/talog.py"   # the DLL's log across its rotations
 mkdir -p "$OUT"
 
 read -r WID PID GD DISP < <("$TACLI" ls --json | python3 -c "
@@ -51,7 +52,7 @@ LEGS=8; LEG_S=7.8            # 8 traverses of ~7 s, four of them southward, over
 "$TACLI" keys  "$INST" mouse:60,900 >/dev/null 2>&1   # the cursor sprite OUT of the world band
 sleep 9
 
-OFF=$(stat -c %s "$GD/tagpu.log")                     # slice this run's own log out by offset
+MARK=$("$TALOG" mark "$GD")                           # slice this run's own log out by cursor
 
 # The spinners are BUSY LOOPS and the game is pinned to one core: if this
 # script dies between here and the cleanup below (Ctrl-C, an ffmpeg failure),
@@ -86,7 +87,7 @@ wait $FF
 
 gatec_release
 
-tail -c +$((OFF + 1)) "$GD/tagpu.log" | tr -d '\000' > "$OUT/log-$TAG.txt"
+"$TALOG" since "$GD" "$MARK" | tr -d '\000' > "$OUT/log-$TAG.txt"
 echo "== gate C, $TAG =="
 grep -ao 'guard=[0-9]*' "$OUT/log-$TAG.txt" | cut -d= -f2 | paste -sd+ | bc \
     | xargs echo "  guard trips over the run:"

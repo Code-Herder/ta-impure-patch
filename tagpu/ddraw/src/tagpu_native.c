@@ -88,6 +88,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_packet.h"  /* the view every pass draws from */
 #include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
+#include "tagpu_log.h"
 #include "tagpu_settings.h"
 
 /* ---- engine layout (all binary-verified) ---- */
@@ -228,8 +229,7 @@ static int grow_room(void** p, unsigned* cap, unsigned need, size_t elem)
 
 static void nlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* units skipped because their object pointer moved between gather and emit

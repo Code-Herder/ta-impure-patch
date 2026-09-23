@@ -97,6 +97,7 @@
 #include "tagpu_fogwide.h"   /* the wide fog grid, built in THIS draw on this thread */
 #include "tagpu_terrown.h"   /* the eye the engine's own fog grid is anchored at */
 #include "tagpu_gui.h"       /* whether the render half wants the minimap surfaces */
+#include "tagpu_log.h"
 #include "tagpu_order.h"     /* tagpu_order_copy_builds: the build-ghost table,
                                 out of the snapshot the squares draw from        */
 #include "tagpu_surf.h"      /* the golden source: TA's composed frame, copied on
@@ -112,8 +113,7 @@ static const unsigned char LOADER_STOLEN[5] = { 0x55, 0x8B, 0xEC, 0x6A, 0xFF };
 
 static void plog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
@@ -1834,7 +1834,7 @@ static void roster_log(const TAGPU_PACKET* pk)
     const TAGPU_PK_UNIT* uu;
     unsigned i;
     int alive = 0, onscreen = 0, eyeX, eyeY, gw, gh, me, wantHdr, wantDump;
-    FILE* dump;
+    TLOG_BLOCK* dump;
 
     if (!s_rosFreq.QuadPart || !s_rosNow.QuadPart) return;
     /* STAMPED BEFORE THE in_game GUARD, AND THAT ORDER IS LOAD-BEARING. It
@@ -1871,25 +1871,22 @@ static void roster_log(const TAGPU_PACKET* pk)
     if (!wantHdr && !wantDump) return;   /* the walk is only for these two */
     if (wantHdr)  s_rosHdr  = s_rosNow;
 
-    /* ONE OPEN FOR THE WHOLE DUMP, not one per unit. plog() is
-       fopen/fprintf/fclose, and this loop is bounded only by
-       TAGPU_PK_MAX_UNITS (16384) -- at the reference setup's own 200v200 that
-       would be ~400 opens every 5 s, on the GAME thread, where a stall costs
-       sim time rather than a dropped frame. Closed before the `units:`
-       line below so the two never hold the file at once. */
-    dump = wantDump ? fopen("tagpu.log", "a") : NULL;
-    /* THE CLOCK IS STAMPED BY THE OPEN, NOT BY THE INTENT. Stamping before
-       the fopen would let a failed open drop a whole block silently and put
-       the next attempt 5 s away, while the `units:` line below still prints --
-       so `tacli roster` would see a header with no roster lines and report "no
-       roster lines yet (needs a running game)" for a game that is running. A
-       failure leaves the gate due and the next fill retries, and it says once
-       that it happened. */
+    /* ONE BLOCK FOR THE WHOLE DUMP: one write on the GAME thread, where a stall
+       costs sim time, and never split across a rotation, so `tacli roster`
+       finds the whole dump in one file. The loop is bounded by
+       TAGPU_PK_MAX_UNITS (16384), far inside a block's cap. */
+    dump = wantDump ? tagpu_log_block_begin(TLOG_MAIN) : NULL;
+    /* THE CLOCK IS STAMPED BY THE BLOCK, NOT BY THE INTENT. A block that could
+       not start (no memory) leaves the gate due and the next fill retries,
+       instead of putting the next attempt 5 s away while the `units:` line
+       below still prints -- which `tacli roster` would read as a header with
+       no roster lines, "no roster lines yet (needs a running game)", for a
+       game that is running. It says once that it happened. */
     if (wantDump) {
         if (dump) s_rosDump = s_rosNow;
         else {
             static int moaned;
-            if (!moaned) { moaned = 1; plog("roster: cannot open tagpu.log for the unit dump"); }
+            if (!moaned) { moaned = 1; plog("roster: no block for the unit dump"); }
         }
     }
     uu = tagpu_pk_units(pk);
@@ -1906,18 +1903,15 @@ static void roster_log(const TAGPU_PACKET* pk)
            never a public identity -- but it is what `tacli scenario` reports
            per spawned entity, so the roster has to speak the same number for
            the two to be comparable. */
-        if (dump) {
-            char db[192]; _snprintf(db, sizeof db,
+        if (dump)
+            tagpu_log_blockf(dump,
                 "  u%03d %-12.12s own=%d idx=%d world=(%d,%d,%d) screen=(%d,%d) nano=%.2f",
                 alive, u->name[0] ? u->name : "?", (int)u->owner, (int)u->id,
                 wx, wy, wz, sx, sy, u->nano);
-            db[sizeof db - 1] = 0;
-            fprintf(dump, "%s\n", db);
-        }
         if (sx >= -gw / 40 && sx <= gw + gw / 40 && sy >= -gh / 40 && sy <= gh + gh / 40)
             onscreen++;
     }
-    if (dump) fclose(dump);
+    tagpu_log_block_end(dump);
     if (wantHdr) {
         char b[160]; _snprintf(b, sizeof b, "units: alive=%d onscreen=%d eye=(%d,%d) me=%d",
                                alive, onscreen, eyeX, eyeY, (int)me);

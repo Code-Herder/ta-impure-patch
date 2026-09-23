@@ -33,6 +33,7 @@
 #include "tagpu_featown.h"
 #include "tagpu_opt.h"
 #include "tagpu_detour.h"
+#include "tagpu_log.h"
 
 #define LEAF_FEAT_VA  0x0046A610u   /* ret 0x10 */
 static const unsigned char FEAT_STOLEN[5] = { 0x8B, 0x4C, 0x24, 0x08, 0x53 };
@@ -43,8 +44,7 @@ static unsigned g_beat = 0, g_last = 0;
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 void tagpu_featown_init(void)

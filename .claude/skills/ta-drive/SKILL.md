@@ -332,10 +332,10 @@ Design and engine recipe: `research/notes/scenario-format.md`.
   `+0x1431F`/`+0x14323`, scroll target `+0x14327`/`+0x1432B`, view size `+0x37E37`/`+0x37E3B`,
   screen size `+0x37E1F`/`+0x37E23`, mouse `+0x2C76`/`+0x2C7A` (y is at `+0x2C7A`).
 - **`tacli log <name> -g <regex>`** (a Python regex: `(a|b)`, not `a\|b`) and
-  **`tacli wait <name> <regex>`**. `tagpu.log` contains binary bytes: `grep -a` when reading it
-  yourself, and `tacli log` returns a tail — count in the raw file. Slice it by byte offset
-  (`stat -c %s` before, `tail -c +N` after) to attribute a run; a grep can hand you the previous
-  game's lines after a reload.
+  **`tacli wait <name> <regex>`**. The log is `gamedir/log/tagpu.log` and **rotates** (every
+  launch, and at 16 MB; `tagpu.1.log` … `.10.log` behind it): read a run with
+  `tools/talog.py run <gamedir>`, slice one with `talog.py mark`/`since`, never by byte offset
+  (`research/notes/logging.md`). It holds binary bytes: `grep -a`.
 - Video and frame-by-frame analysis: the **ta-capture** skill.
 
 ## The input firewall (on by default)
@@ -443,7 +443,7 @@ under zoom, `wheel.off` and `zoomedge.off`: `references/levers.md` §"Camera, vi
 - **Instances live in the MAIN checkout's `tagpu/instances/`**, never under a worktree. Read the
   gamedir out of `tacli ls --json`.
 - **`--shield on` is not a flag** — it is bare `--shield` / `--no-shield`. A failed launch leaves
-  the previous run's `tagpu.log` in place; check the `launched <name> pid=` line first.
+  the previous run's `log/tagpu.log` in place; check the `launched <name> pid=` line first.
 - **`--res` does not always reach the game.** `tacli` records what the game actually came up at,
   so a dropped value becomes sticky; fix `res` in `instance.json`, or drive Screen Size from
   Options > Visuals.

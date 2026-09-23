@@ -51,6 +51,7 @@
 #include "tagpu_native.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirrors */
+#include "tagpu_log.h"
 
 /* ---- engine layout (terrain-depth.md 1, byte-confirmed) ---- */
 #define OFF_TILEMAP  0x1428B   /* u16 per 32-px cell, stride mapW16/2         */
@@ -99,8 +100,7 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ---- arming ---- */

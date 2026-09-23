@@ -89,6 +89,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "tagpu_suppress.h"
+#include "tagpu_log.h"
 
 /* ---- target + engine layout (all G3/G4/tamem.h-verified) --------------------------- */
 #define DRAWUNIT_VA      0x0045AC20u   /* DrawUnit entry                                */
@@ -117,8 +118,7 @@ static unsigned          g_last_summary = 0;
 
 static void slog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* sim/heap pointers live well above 0x600000 (matches overlay/tracer guards) */

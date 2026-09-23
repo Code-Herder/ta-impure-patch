@@ -300,7 +300,7 @@ that map's size.
 
 | lever | what |
 |---|---|
-| `cobtrace.on=<TYPE>` | every COB thread start/refuse/return/kill/random to `gamedir/tagpu_cobtrace.log` (`references/modules.md`) |
+| `cobtrace.on=<TYPE>` | every COB thread start/refuse/return/kill/random to `gamedir/log/tagpu_cobtrace.log` (`references/modules.md`) |
 | `posedump.on` | one-shot, self-deleting: dumps the engine's pose fields of the first unit the native pass draws, header `posedump: tick= idx=` |
 | `posebake.on=log` | a line per baked model and per material stream. The bake runs without it; the file alone does nothing |
 | `surfdump.on` | one-shot: writes the golden source as `tagpu_surf.ppm` and logs `surf: re-read check at draw N: 0 byte(s) of M differ` — must be 0 |

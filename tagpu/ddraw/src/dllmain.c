@@ -35,6 +35,7 @@
 #include "versionhelpers.h"
 #include "delay_imports.h"
 #include "keyboard.h"
+#include "tagpu_log.h"
 
 
 /* export for cncnet cnc games */
@@ -62,6 +63,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
             cfg_load();
             return TRUE;
         }
+
+        /* tagpu: the log sink (tagpu_log.h) before anything that logs -- cfg_load does.
+           After the config tool's return above, so opening the tool never rotates the
+           player's logs. */
+        tagpu_log_init();
 
 #ifdef _DEBUG 
         dbg_init();
@@ -331,8 +337,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         TRACE("cnc-ddraw DLL_PROCESS_DETACH\n");
 
-        /* tagpu: every other thread is gone, so the store is written without
-           waiting on its lock (tagpu_settings.h) */
+        /* tagpu: every other thread is gone, so neither the log (tagpu_log.h) nor the
+           store (tagpu_settings.h) waits on its lock from here */
+        tagpu_log_detaching();
         tagpu_settings_detaching();
         cfg_save();
         tagpu_settings_final();

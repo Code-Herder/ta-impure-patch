@@ -22,13 +22,13 @@
 #include "IDirectDrawPalette.h"
 #include "tagpu_pal.h"
 #include "tagpu_packet.h"
+#include "tagpu_log.h"
 
 #define LOG_MS         1000         /* a campaign fade is a change a step  */
 
 static void plog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static unsigned char s_pal[1024];       /* R,G,B,255 — what the screen shows  */

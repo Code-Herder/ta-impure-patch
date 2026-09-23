@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "tagpu_ftime.h"
+#include "tagpu_log.h"
 
 #define RING     256            /* frames kept for the percentiles            */
 #define REPORT_FRAMES 300       /* one line per this many ARMED frames        */
@@ -12,8 +13,7 @@
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int      s_on;

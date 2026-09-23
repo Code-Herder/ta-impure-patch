@@ -36,13 +36,13 @@
 #include "tagpu_pal.h"
 #include "tagpu_surf.h"
 #include "tagpu_fps.h"
+#include "tagpu_log.h"
 
 static int   s_said;        /* the one-shot below has logged */
 
 static void olog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* THERE IS NOTHING TO BRING UP, SO THIS IS A ONE-SHOT LOG AND NOT A

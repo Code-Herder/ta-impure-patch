@@ -130,6 +130,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tagpu_log.h"
 
 #include "hook.h"
 #include "tagpu_vk.h"
@@ -216,13 +217,11 @@ static void vklog(const char* fmt, ...)
 {
     char b[512];
     va_list ap;
-    FILE* f;
     va_start(ap, fmt);
     _vsnprintf(b, sizeof b - 1, fmt, ap);
     va_end(ap);
     b[sizeof b - 1] = 0;
-    f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "vk: %s\n", b); fclose(f); }
+    tagpu_logf("vk: %s", b);
 }
 
 static int exists(const char* p) { return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES; }

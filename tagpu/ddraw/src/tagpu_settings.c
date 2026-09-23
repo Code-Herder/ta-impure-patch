@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tagpu_log.h"
 
 #include "tagpu_settings.h"
 
@@ -23,13 +24,11 @@ static void slog(const char* fmt, ...)
 {
     char b[400];
     va_list ap;
-    FILE* f;
     va_start(ap, fmt);
     _vsnprintf(b, sizeof b, fmt, ap);
     va_end(ap);
     b[sizeof b - 1] = 0;
-    f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "settings: %s\n", b); fclose(f); }
+    tagpu_logf("settings: %s", b);
 }
 
 static int exists(const char* p)

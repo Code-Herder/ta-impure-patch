@@ -78,6 +78,7 @@
 #include "tagpu_pal.h"
 #include "tagpu_surf.h"                    /* the one resolution of the presented palette */
 #include "tagpu_vk.h"                 /* tagpu_vk_ab_arm: the A/B's arming */
+#include "tagpu_log.h"
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
 #include "mouse.h"                      /* mouse_last_client: the pointer at the DEVICE's resolution (13.5) */
 
@@ -99,8 +100,7 @@ extern volatile int g_gui_draw;         /* tagpu_gui_hook.c: the publisher's gat
 
 static void slog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ------------------------------------------------------------------ state */

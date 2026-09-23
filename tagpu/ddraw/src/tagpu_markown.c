@@ -13,6 +13,7 @@
 #include "tagpu_terr.h"
 #include "tagpu_native.h"
 #include "tagpu_detour.h"
+#include "tagpu_log.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -99,8 +100,7 @@ static unsigned g_beat = 0, g_last = 0;
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 

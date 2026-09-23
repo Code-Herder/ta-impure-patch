@@ -1,6 +1,7 @@
 /* tagpu_title — window title suffix from tagpu_title.txt. See inc/tagpu_title.h */
 #include <windows.h>
 #include <stdio.h>
+#include "tagpu_log.h"
 
 #include "tagpu_title.h"
 
@@ -15,8 +16,7 @@
 
 static void tlog(const char* m)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", m); fclose(f); }
+    tagpu_log(m);
 }
 
 /* tagpu_title.txt -> one line of printable ASCII, or 0 when there is nothing

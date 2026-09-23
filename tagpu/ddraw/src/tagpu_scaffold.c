@@ -32,6 +32,7 @@
 #include "tagpu_zoom.h"      /* the predicted eye every pass draws from */
 #include "tagpu_packet.h"    /* the true viewport, from this frame's packet */
 #include "tagpu_vk.h"        /* tagpu_vk_ab_arm: the A/B claim */
+#include "tagpu_log.h"
 
 /* ---- engine layout (terrain-depth.md, binary-verified) ----
    This file reads no per-frame engine field of its own. The view, the map
@@ -70,8 +71,7 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0
 
 static void slog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int    s_armed = -1;        /* re-checked every 30 frames          */

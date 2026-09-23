@@ -77,6 +77,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "tagpu_tracer.h"
+#include "tagpu_log.h"
 
 /* ---- engine layout (all verified, see frame-composition.md / this file's header) */
 #define TA_MAINPP        0x00511DE8u  /* TAdynmemStruct**            */
@@ -270,8 +271,7 @@ static int install_hook(unsigned int target_va, const unsigned char* stolen, int
 
 static void tlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ---- init: arm only if the trigger file exists ------------------------------------- */
@@ -326,19 +326,19 @@ void tagpu_tracer_init(void)
 /* ---- flush: all file I/O + engine reads happen here (render thread, per frame) ------ */
 static void dump_raw_events(void)
 {
-    FILE* f = fopen("tagpu.log", "a");
+    TLOG_BLOCK* f = tagpu_log_block_begin(TLOG_MAIN);
     unsigned n, i;
     if (!f) return;
     n = g_ring_head; if (n > RAW_DUMP) n = RAW_DUMP;
-    fprintf(f, "TR_RAW begin count=%u (format: idx f site ret unit arg0 sx sy)\n", n);
+    tagpu_log_blockf(f, "TR_RAW begin count=%u (format: idx f site ret unit arg0 sx sy)", n);
     for (i = 0; i < n; i++) {
         volatile tr_event* e = &g_ring[i & RING_MASK];
-        fprintf(f, "TR_EV %u f=%u site=%s ret=%08X unit=%08X arg0=%08X sx=%d sy=%d\n",
-                i, e->frame, e->site == SITE_DRAWUNIT ? "DU" : "BL",
-                e->retaddr, e->unit, e->arg0, e->sx, e->sy);
+        tagpu_log_blockf(f, "TR_EV %u f=%u site=%s ret=%08X unit=%08X arg0=%08X sx=%d sy=%d",
+                         i, e->frame, e->site == SITE_DRAWUNIT ? "DU" : "BL",
+                         e->retaddr, e->unit, e->arg0, e->sx, e->sy);
     }
-    fprintf(f, "TR_RAW end\n");
-    fclose(f);
+    tagpu_log_blockf(f, "TR_RAW end");
+    tagpu_log_block_end(f);
 }
 
 /* Sample the two composite-buffer candidates from live engine state (read-only, guarded):

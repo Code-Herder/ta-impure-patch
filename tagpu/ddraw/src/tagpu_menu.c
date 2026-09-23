@@ -51,6 +51,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "tagpu_log.h"
 
 #include "dd.h"
 #include "config.h"
@@ -284,8 +285,7 @@ static unsigned char s_trigFrame[TS_COUNT][0x18];
 
 static void mlog(const char* m)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", m); fclose(f); }
+    tagpu_log(m);
 }
 
 static int exists(const char* p)

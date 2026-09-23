@@ -94,6 +94,7 @@
 #include "tagpu_pal.h"
 #include "tagpu_vk.h"      /* tagpu_vk_ab_arm, for the A/B claim */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables */
+#include "tagpu_log.h"
 
 /* ---- what the marker block reads, and where it comes from ----------------
    This file reads no engine memory at all.
@@ -149,8 +150,7 @@
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ---- arming ---- */
