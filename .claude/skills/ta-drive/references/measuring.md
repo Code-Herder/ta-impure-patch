@@ -130,7 +130,7 @@ the UI-side passes are the window's size. Compare two builds' files with
 for a `_gl.ppm` that nothing writes). Its exit status is 0 only when every pixel agrees.
 
 ```bash
-tools/tacli arm <i> terr.on 'vk.on=color=0,0,0'                     # ONE pass, a black field
+tools/tacli arm <i> terr.on                                          # ONE pass; the clear is black
 tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
 sleep 10
 G=<main checkout>/tagpu/instances/<i>/gamedir
@@ -152,8 +152,9 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
   and writes it only after `vk: shot: wrote …`. Every refusal names itself (`could not be removed
   (error N) - this arming is REFUSED` — usually an image viewer holding the last capture;
   `a capture is already in flight`; `outside 1..8192`; `the N-byte staging buffer was refused`).
-- **`color=0,0,0` matters**: the default clear is magenta and differs from black in every pixel
-  that is not ink.
+- **Both captures need the same clear colour**: it is black by default, and a `vk.on=color=` on one
+  side only differs in every pixel that is not ink. A DLL built before the default became black
+  clears magenta: arm `vk.on=color=0,0,0` on that side.
 - **The effects pass cannot be compared across two runs** — it draws transient projectiles, and
   two captures agree only if the same ones are alive. Arm the `.ab` about four seconds after the
   apply, while `fx: … flashq=` is non-zero.
