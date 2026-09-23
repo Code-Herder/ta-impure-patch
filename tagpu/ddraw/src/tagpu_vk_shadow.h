@@ -31,8 +31,8 @@
 /* Draw this frame's map. Returns 1 when a complete map now stands in
    `tagpu_vk_shadow_view(slot)`, 0 when nothing was drawn -- no map this frame,
    a device refusal, or a map holding casters the hand-over carries no copy of
-   (`otherCasters`, in the TAGPU_SHADOWHAND block below, which is every unit until the unit pass
-   lands). `slot` is the frame slot the seam's fence has proved free.
+   (`otherCasters`, in the TAGPU_SHADOWHAND block below). `slot` is the frame
+   slot the seam's fence has proved free.
 
    IT DRAWS NO FRAME PIXEL, so the seam must NOT count it among the passes that
    drew into the frame: that count exists to catch two passes contaminating one
@@ -68,11 +68,6 @@ VkImageView tagpu_vk_shadow_view(unsigned frame, uint32_t slot);
    and before anything is built; it resolves the one entry point it needs. */
 VkFormat tagpu_vk_shadow_format(const TAGPU_VKPASS* d, int* linearOk);
 
-/* The map's edge in texels this frame, or 0. The consumers' uShScale carries
-   1/res in their own hand-overs (tagpu_terr.h `shScale`), so this is not for
-   arithmetic; nothing in the DLL calls it. */
-int  tagpu_vk_shadow_res(void);
-
 /* Give everything back. Called by the seam from `vk_down`, after its
    vkDeviceWaitIdle and before the device is destroyed. Safe when nothing was
    ever built. */
@@ -101,10 +96,11 @@ void tagpu_vk_shadow_down_paid(const TAGPU_VKPASS* d);
    render thread that owns the light basis and the map extent, fills the struct
    below and publishes it for `d->frame`. That is a feature landing with its own
    measurement.
-   THE POINTERS ARE THE TERRAIN MODULE'S and name the CPU mirror of the caster
-   mesh, which that module frees and rebuilds on a map change. `frame` is the
-   fork's monotonic render-thread counter and the hand-over refuses
-   any other frame's, exactly as the terrain and feature hand-overs do: it is
+   THE POINTERS NAME A CPU COPY OF THE HEIGHTFIELD CASTER MESH that the
+   producer has to own: no terrain module builds one, so whoever writes the
+   producer owns that mesh and its rebuild on a map change as well. `frame` is
+   the fork's monotonic render-thread counter and the hand-over refuses any
+   other frame's, exactly as the terrain and feature hand-overs do: it is
    what makes "these pointers are alive" a property of the frame number rather
    than of which functions happened to run. */
 typedef struct TAGPU_SHADOWHAND {
@@ -115,8 +111,8 @@ typedef struct TAGPU_SHADOWHAND {
     /* the heightfield caster, and the exact index range of it to draw */
     const float*    hv;   size_t hnv;
     const unsigned* hi;   size_t hni;
-    unsigned        hillsSerial;
-    unsigned        firstIndex, indexCount;   /* 0 = the hills did not draw  */
+    unsigned        hillsSerial;              /* bumped by each mesh rebuild */
+    unsigned        firstIndex, indexCount;   /* 0 = no heightfield to draw  */
     int             otherCasters;             /* see above; 0 = complete     */
 } TAGPU_SHADOWHAND;
 

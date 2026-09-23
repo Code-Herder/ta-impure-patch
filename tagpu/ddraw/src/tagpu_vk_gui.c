@@ -20,7 +20,6 @@
    it is a fact about the queue rather than a claim about timing. */
 
 #include "tagpu_vk_pass.h"
-#include "tagpu_vk_surf.h"   /* the engine frame's one upload lives there */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -2578,8 +2577,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 }
                 /* `uRestored` / `uSrcHasCol` ARE THE DRAIN'S DECISION, carried
                    as `TAGPU_GUICOL_ON`. Deriving them here would be asking
-                   `s_colValid && s_atlas.rgb` a second time, of a module that
-                   settled it before the drain -- and the whole hand-over exists
+                   `s_colValid` (tagpu_gui_surf.c) a second time, of a module
+                   that settled it before the drain -- and the whole hand-over exists
                    because a second derivation is a second thing that can drift.
                    A frame whose ops say ON and whose restored atlas never
                    arrived was refused above; this is belt to that brace, and it

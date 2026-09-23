@@ -5,10 +5,7 @@
 /* The material layer the native and posed passes share. */
 
 /* shared material resources for the native pass */
-/* The unit atlas's `rgb` field, which has no writer and is 0 for the life of
-   the process (tagpu_gaf.c); nothing calls this. Whether a Classic++ restore
-   route exists is `_restore_armed`. */
-unsigned int tagpu_r3d_atlas_rgbref(void);
+/* Whether a Classic++ restore route exists for the unit atlas. */
 int          tagpu_r3d_atlas_restore_armed(void);
 /* The unit atlas's generation (tagpu_gaf.h): every recycle and every level
    drop (tagpu_r3d_atlas_level) moves every UV, so anything that BAKES a UV rather than re-reading it

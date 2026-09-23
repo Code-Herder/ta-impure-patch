@@ -11,7 +11,6 @@ void tagpu_fxown_beat(unsigned int frame_counter);   /* "we drew this frame" */
 /* the particle layers (tagpu_sfx.on): one more detour, its own skip byte */
 void tagpu_fxown_set_skip_sfx(int on);
 void tagpu_fxown_beat_sfx(unsigned int frame_counter);
-int  tagpu_fxown_installed(void);
 /* WHETHER THE PACKET'S PUBLISHER FILLS THE EFFECT TABLES. The
    render thread raises these from its arming check — once per gathered frame,
    PASSIVE OR NOT, because a passive pass still counts and logs what it would

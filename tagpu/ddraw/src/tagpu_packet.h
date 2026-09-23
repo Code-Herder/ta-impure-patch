@@ -143,12 +143,12 @@ typedef struct TAGPU_PK_UNIT {
    `node` IS DEREFERENCED, and that is deliberate: it is the per-TYPE
    Model3DONode template, which the level teardown cascade frees (0x42DB90)
    and no unit's destructor touches, so its lifetime is tagpu_reclaim's
-   teardown fence — the same argument tagpu_posebake.c and tagpu_r3dcache.c
-   stand on (the plan's row 3: "the template ones stay, they are the
-   fence's"). What the packet carries instead is the per-UNIT read: the
-   PrimitiveStruct lives inside the Object3do, which FreeObjectState 0x45AAA0
-   frees while the render thread may be mid-frame, and it is that read — not
-   the template one — that the game thread makes on our behalf. */
+   teardown fence — the same argument tagpu_posebake.c stands on (the plan's
+   row 3: "the template ones stay, they are the fence's"). What the packet
+   carries instead is the per-UNIT read: the PrimitiveStruct lives inside the
+   Object3do, which FreeObjectState 0x45AAA0 frees while the render thread may
+   be mid-frame, and it is that read — not the template one — that the game
+   thread makes on our behalf. */
 typedef struct TAGPU_PK_PIECE {
     int32_t  pos[3];         /* prim+0x04 P_POS, the COB MOVE delta, 16.16      */
     uint16_t turn[3];        /* prim+0x10 P_TURN, 65536 = 360 degrees           */
@@ -641,24 +641,11 @@ typedef struct TAGPU_PACKET {
     uint32_t fogsh_off, fogsh_len;    /* the grey band's 256-byte palette remap */
 
     /* ---- the UI layer's render half ---- */
-    int32_t  cur_pos[2];              /* graphics+0x1B6 / +0x1BA, where the
-                                         engine last drew the cursor            */
-    int32_t  cur_w, cur_h;            /* its sprite's size; 64x64 when the
-                                         record could not be read               */
     uint32_t cur_rec;                 /* graphics+0x1B2, the sprite record — a
                                          GAF frame header in the SESSION cursor
-                                         table. A KEY: only tagpu_gaf.c reads it */
-    uint32_t cursor_live;             /* the three fields above are THIS FRAME's.
-                                         An in-play packet implies it (in_game),
-                                         so this exists for the SHELL: a shell
-                                         frame's packet is in_game=0 — it must
-                                         stay so, every world pass reads in_game
-                                         to decide whether to draw at all — and
-                                         still carries a cursor, which is what
-                                         the layer needs to erase the engine's
-                                         (tagpu_packet_pub.c). 0 on
-                                         the level-end packet and while the
-                                         engine's own cursor is not being drawn */
+                                         table. A KEY: only tagpu_gaf.c reads it.
+                                         0 = no cursor this frame, in play and in
+                                         the shell alike (tagpu_packet_pub.c) */
     int32_t  mm_box[4];               /* main+0x142E7/E9/EB/ED, the box the
                                          engine fitted the minimap into, ITS px */
     int32_t  mm_view[4];              /* main+0x142CB, the view box, screen px,

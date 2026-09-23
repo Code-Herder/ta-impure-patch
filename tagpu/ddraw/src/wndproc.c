@@ -782,12 +782,9 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         {
             if (!g_config.windowed)
             {
-                if (1) /* always: there is no Direct3D9 lane */
-                {
-                    ChangeDisplaySettings(&g_ddraw.render.mode, CDS_FULLSCREEN);
-                    real_ShowWindow(g_ddraw.hwnd, SW_RESTORE);
-                    mouse_lock();
-                }
+                ChangeDisplaySettings(&g_ddraw.render.mode, CDS_FULLSCREEN);
+                real_ShowWindow(g_ddraw.hwnd, SW_RESTORE);
+                mouse_lock();
             }
             else if (g_config.fullscreen && real_GetForegroundWindow() == g_ddraw.hwnd)
             {
@@ -808,11 +805,8 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
             if (!g_config.windowed)
             {
-                if (1) /* always: there is no Direct3D9 lane */
-                {
-                    real_ShowWindow(g_ddraw.hwnd, SW_MINIMIZE);
-                    ChangeDisplaySettings(NULL, g_ddraw.bnet_active ? CDS_FULLSCREEN : 0);
-                }
+                real_ShowWindow(g_ddraw.hwnd, SW_MINIMIZE);
+                ChangeDisplaySettings(NULL, g_ddraw.bnet_active ? CDS_FULLSCREEN : 0);
             }
         }
 

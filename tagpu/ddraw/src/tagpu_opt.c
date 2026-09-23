@@ -12,9 +12,10 @@
 #define MASTER_OFF "tagpu_defaults.off"
 
 /* `needs`: the pass this one is only useful with, so that its default follows that
-   pass -- the pairing tacli's launch makes when it auto-arms the `*own` half (a
-   stale owndraw with no native pass skips the engine's rasterise and nothing draws
-   the unit at all), and vpwide with zoom (the ta-drive skill, "the wide viewport"). */
+   pass -- the pairing tacli's launch makes when it auto-arms the `*own` half
+   (owndraw's skips make room for passes of ours, the native pass above all, and
+   without them it has nothing to stand aside for), and vpwide with zoom (the
+   ta-drive skill, "the wide viewport"). */
 typedef struct { const char* on; const char* tokens; const char* needs; const char* needs2; } Def;
 
 /* The table: the ta-drive skill's default arm set, Classic++ and the extra weapons.
@@ -26,10 +27,10 @@ typedef struct { const char* on; const char* tokens; const char* needs; const ch
    The engine's frame reaches no pixel of the screen, so there is nothing for
    them to cover. What those three suppressions do is damage the reference.
    `tagpu_surf_capture` takes the engine's composed frame as the golden source,
-   and with them armed that capture holds a viewport with no trees, no effects
-   and no units -- it is not the picture the 1997 software rasteriser draws, it
-   is the picture it draws with its passes removed, which is worth nothing to
-   compare against. Measured with them armed: `FEATOWN skip=1`,
+   and with them armed that capture holds a viewport with no trees, no effects,
+   no husks and no build-state effects -- it is not the picture the 1997 software
+   rasteriser draws, it is the picture it draws with its passes removed, which
+   is worth nothing to compare against. Measured with them armed: `FEATOWN skip=1`,
    `OWND target=all skipped=0 passed=5311`.
 
    WHAT THEY COST is the CPU the engine spends rasterising a frame nobody sees,

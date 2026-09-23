@@ -61,7 +61,6 @@
 
 /* ---- arming (present thread) ---- */
 int  tagpu_order_armed(unsigned frame_counter);  /* re-reads tagpu_order.on (30f) */
-int  tagpu_order_on(void);                       /* armed state, no re-read       */
 
 /* ---- game thread: the snapshot at 0x469BFC ---- */
 /* Apply the driver's selection rules, walk each selected unit's order list,

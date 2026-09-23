@@ -5,30 +5,17 @@
 #include <windows.h>
 #include <stdio.h>
 #include <math.h>
-#include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
+#include "tagpu_model3do.h"   /* F_COLORTAB: the Model3DOFace layout */
 #include "tagpu_render3do.h"
 #include "tagpu_pal.h"
 #include "tagpu_gaf.h"
 #include "tagpu_vk.h"         /* tagpu_vk_owns_present: will a Vulkan pass run at all? */
 #include "tagpu_classicpp.h"  /* tagpu_classicpp_assets: the restored twin is only worth mirroring while it is what the twin samples */
-#include "tagpu_r3dcache.h"
 
 /* The Object3do piece array, PrimitiveStruct and Model3DONode layouts are in
    research/notes/exe-reverse-engineering.md; the pieces this file needs
-   arrive in the packet's PK_PIECE table. */
-#define N_FACES       0x28     /* Model3DONode.pFaceArray                  */
-#define FACE_STRIDE   0x20     /* Model3DOFace                             */
-#define F_COLORTAB    0x00     /* PaletteEntry resolved to a table pointer */
-#define F_VCOUNT      0x04     /* vertex indices in this face              */
-#define F_TEXNAME     0x08     /* char* GAF frame name, 0 = flat colour    */
-#define F_INDICES     0x0C     /* u16* vertex indices                      */
-#define GF_WIDTH      0x00     /* GAFFrame u16                             */
-#define GF_HEIGHT     0x02
-#define GF_HOTX       0x04     /* s16 model-origin pixel inside the sprite */
-#define GF_HOTY       0x06
-#define GF_PTRCOLOR   0x10     /* u8* colour plane, top-down, stride=W     */
-
-#define MAXVERTS  24576        /* triangulated vertices per unit per frame */
+   arrive in the packet's PK_PIECE table, and the face offsets it reads are
+   tagpu_model3do.h's. */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 
@@ -241,7 +228,6 @@ static void r3d_init(void)
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "unit";
     s_atlas.pad = ATLAS_PAD; s_atlas.align = ATLAS_PAD; s_atlas.mip = ATLAS_MIP;
-    s_atlas.prio = 3;                 /* restored after terrain, features, effects */
     if (!tagpu_gaf_atlas_create(&s_atlas)) { rlog("render3do: atlas texture FAILED"); s_state = 2; return; }
 
     /* the shade LUT is built lazily from the packet's table on first use
@@ -359,11 +345,8 @@ static const char* face_texframe(const char* fa, int owner)
 
 /* ---- exports for the native pass (tagpu_native.c): share the atlas,
    shade LUT and calibration so both paths draw identical materials ---- */
-unsigned int tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
 /* IS THERE A RESTORE ROUTE AT ALL. The route is the published list, and this
-   is what says it exists. `rgbref` above cannot answer it: `a->rgb = 0` in
-   tagpu_gaf.c is its only writer in the tree. Latched by the arm, so it does
-   not flicker. */
+   is what says it exists. Latched by the arm, so it does not flicker. */
 int tagpu_r3d_atlas_restore_armed(void) { return s_atlas.rlistWant ? 1 : 0; }
 unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
 /* ---- THE LEVEL BOUNDARY ------------------------------------------------
@@ -465,8 +448,8 @@ void tagpu_r3d_atlas_restore_want(void)
        writer, and the consumer stands a frame down when it disagrees with the
        ratio its sampler was built at.
 
-       IT IS THE KNOB, NOT THE CONSTANT, AND NOT THE CLAMP. Publishing
-       `TAGPU_GAF_TWIN_ANISO` would stand the pass down on any device without
+       IT IS THE KNOB, NOT A CONSTANT, AND NOT THE CLAMP. Publishing a fixed
+       default ratio would stand the pass down on any device without
        anisotropic filtering, because there `s_twinAniso` is 0.0f. Publishing
        what the consumer actually applies would make the test compare a value
        against itself. The knob is the one thing both ends read independently

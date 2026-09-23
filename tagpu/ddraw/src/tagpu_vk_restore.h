@@ -63,10 +63,6 @@ typedef struct TAGPU_VKRJOB TAGPU_VKRJOB;
    is the shipped fallback, not a fault. */
 int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
 
-/* NK as this backend settled it, and the uniform-block bytes one conv draw binds
-   -- for the log and for a consumer that wants to report them. 0 before `up`. */
-int  tagpu_vk_restore_nk(void);
-
 /* A job: frames read from `srcView` (the consumer's R8 indexed atlas, srcW x
    srcH) with the palette `pal` (256 x R,G,B,pad; snapshotted now), painted
    into `dstImg`/`dstView` (RGBA8, dstW x dstH). The destination MUST have been
@@ -114,15 +110,9 @@ int  tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
                                 int mips, int dim,
                                 const VkImageView* attach, const VkImageView* sample);
 
-/* Re-point a live job at a new palette -- a lazy job outlives its atlas's
-   entries, so it is re-palettable rather than replaceable. */
-void tagpu_vk_restore_job_repalette(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
-                                    const unsigned char* pal);
 /* Queue frames (copied) behind what is already queued; they restore in order.
    The count taken, 0 if none was. */
 int  tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, int count);
-/* Drop everything queued or in flight and clear the destination again. */
-void tagpu_vk_restore_job_clear(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
 /* 1 when nothing is queued or in flight -- every frame added is painted, once
    the GPU drains, i.e. before any later draw samples the destination. */
 int  tagpu_vk_restore_job_idle(const TAGPU_VKRJOB* j);

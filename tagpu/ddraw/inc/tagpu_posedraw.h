@@ -9,13 +9,14 @@
    of the ~2.75 MB of CPU-built vertices a per-frame stream re-uploads.
 
    A TWIN OF THE NATIVE PROGRAM, NOT A MODE SWITCH (§4, "[mine]"). The native
-   program's attributes arrive already in frame-pixel space and are shared with
-   the selection lines and the effects models, which stay CPU-built; a uniform
-   switch would leave one path reading attributes the other's vertex input
-   does not supply.
+   program's vertex stage (tagpu_native.c `VS`) takes attributes already in
+   frame-pixel space; no game pass draws it, and tools/tascene extracts it as
+   the browser lab's unit program. A uniform switch would leave one path
+   reading attributes the other's vertex input does not supply.
 
-   THE FRAGMENT SHADER IS THE NATIVE PASS'S OWN, taken through
-   `tagpu_native_unit_fs()` rather than copied, so the two programs cannot
+   THE FRAGMENT SHADER IS THE NATIVE PASS'S OWN: the `pose_unit` row of
+   tools/spirv-gen.py's manifest pairs this vertex stage with
+   `tagpu_native::FS` rather than a copy, so this program and the lab's cannot
    drift in the half of the pipeline this pass does not change. What the vertex
    shader takes over is tagpu_native.c's `emit_node`: the piece transform, the
    engine's projection, the depth key, the world x/z the fog samples, the
@@ -91,12 +92,9 @@ typedef struct {
     float alpha;                /* 0.5 while cloaked; the build ghost rides   */
                                 /* the same blend at its own alpha            */
     int   ghost;                /* 1 = a build-ghost preview: it draws through*/
-                                /* the same entry point but is NOT a unit, so */
-                                /* the per-frame unit and triangle counters   */
-                                /* skip it (they feed the `posed=N/` stats    */
-                                /* and the queued-vs-drawn heartbeat, which a */
-                                /* ghost would otherwise fire as a false      */
-                                /* positive every frame it draws)             */
+                                /* the same entry point but is NOT a unit: no */
+                                /* shadow, no nanoframe wire, and the Vulkan  */
+                                /* pass draws it in its own stage             */
     int   fog;                  /* uFog bits, as the native shader takes them */
     float waterT, digT;
     int   waterMode;
@@ -131,36 +129,21 @@ typedef struct {
 #define TAGPU_PDSH_SIL    1
 #define TAGPU_PDSH_SLANT  2
 
-/* "SOMETHING WILL DRAW THE UNIT, SO THE ENGINE NEED NOT." Published because
-   `owndraw` must not skip the engine's unit rasterise unless that is true —
-   gpu-posing.md §4, decision B. Safe to call from the GAME thread: the render
-   thread is the only writer and the word only ever promises in the safe
-   direction.
-
-   IT IS 0, because this pass hands over rather than draws and cannot promise
-   the consumer ran. Two things follow that a reader should have before
-   relying on it, both MEASURED 2026-09-19 and written up at the definition in
-   tagpu_posedraw.c: the engine therefore rasterises every unit every frame
-   (`OWND … skipped=0`), and NONE of that reaches the presented frame — so the
-   engine is not a fallback, and a frame our unit pass stands down on is blank
-   rather than 8bpp. */
-int  tagpu_posedraw_live(void);
-/* ...and whether it has TRIED and failed, as opposed to not having run yet.
-   Only the first is a reason to say anything: `!live` is also the ordinary
-   state of the first frames. */
+/* Whether the pass has TRIED to arm and refused, as opposed to not having
+   run yet. Safe to call from the GAME thread, where `owndraw`'s classifier
+   reads it to log the refusal once: the render thread is the only writer. */
 int  tagpu_posedraw_refused(void);
-unsigned tagpu_posedraw_drawn(void);  /* units drawn this frame */
+
 /* once per frame, before anything else. `frame_counter` is the fork's
    monotonic render-thread counter and stamps this frame's hand-over. */
 void tagpu_posedraw_frame(unsigned frame_counter);
 
 /* 0 when the pass cannot arm: a device whose `maxStorageBufferRange` will not
    hold one unit's pose at the piece ceiling, which is the whole of bring-up.
-   There is no CPU emitter to leave those units to, so the caller instead stops
-   skipping the engine's own unit rasterise and they are drawn by the engine at
-   8bpp. A 0 ALSO MEANS "NO DEVICE YET" for the first frames —
-   the state goes back to untried rather than latching a refusal — so a caller
-   that latches on the first answer latches the wrong one. */
+   There is no CPU emitter to leave those units to. A 0 ALSO MEANS "NO DEVICE
+   YET" for the first frames — the state goes back to untried rather than
+   latching a refusal — so a caller that latches on the first answer latches
+   the wrong one. */
 int  tagpu_posedraw_ready(void);
 
 /* bodies: begin, then one call per unit, then end. It binds nothing and leaves
@@ -203,12 +186,6 @@ void tagpu_posedraw_end(void);
    tagpu_vk_shadow.c's `shadow_handover` has no producer and returns 0 on every
    frame, so its `otherCasters` census never runs either. */
 
-/* the highest posed model y of one unit's BODY range, from each piece's rest
-   AABB through its pose matrix (gpu-posing.md §4). Returns 0 when the unit
-   has no baked body geometry. */
-float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
-
-
 /* ---- THE VULKAN PASS'S HAND-OVER ----------------------------------------
 
    tagpu_vk_unit.c draws the units from this and the bake. This is everything
@@ -247,8 +224,8 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
    alone, for a comparison across builds.
 
    IT DOES NOT COUNT THE REST OF THE FRAME, and that is not an oversight:
-   nothing else draws a unit (the replacement meshes and the native 3DO stream
-   draw nothing). THE SILHOUETTE, THE SLANT AND THE NANOFRAME WIRE ARE INSIDE
+   nothing else draws a unit (the native 3DO stream draws nothing, and there
+   is no other unit renderer). THE SILHOUETTE, THE SLANT AND THE NANOFRAME WIRE ARE INSIDE
    IT: they are drawn from the very records this hand-over carries, out of
    the same bake, by the same consumer -- so a unit the hand-over drops loses its shadow with its body
    rather than leaving a shadow behind, which is what makes the refusal still
@@ -353,7 +330,7 @@ typedef struct TAGPU_PDHAND {
        `ncast` is how many records carry `casts`.
 
        ALL THREE ARE PERMANENTLY ZERO AND HAVE NO PRODUCER; the full chain is
-       in the block above `tagpu_posedraw_top`. Read this field as "not yet",
+       in the NO POSED UNIT CASTS block above the hand-over. Read this field as "not yet",
        never as "no casters this frame" -- the two are indistinguishable here and only
        the first is true.
 
@@ -455,7 +432,4 @@ int  tagpu_posedraw_slant_take(void);
    Vulkan pass draws no unit rather than some of them. Render thread, after
    `tagpu_posedraw_frame` and before the frame's last window closes. */
 void tagpu_posedraw_uncarried(void);
-
-/* one `posed=` field for the native: line; writes nothing when disarmed */
-int  tagpu_posedraw_stats(char* out, int n);
 #endif

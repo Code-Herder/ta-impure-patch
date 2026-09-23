@@ -55,7 +55,6 @@ int  tagpu_vk_scaffold_ab_frame(void);
    even though its `record` comes late, because the overlay is drawn OVER the
    world. Prepare order and record order are not the same order, and the seam
    says so at both call sites. */
-int  tagpu_vk_scaffold_ready(unsigned frame);
 VkImageView tagpu_vk_scaffold_view(unsigned frame, uint32_t slot);
 
 /* Give everything back. Called by the seam from `vk_down`, after its

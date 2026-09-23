@@ -163,8 +163,6 @@ void tagpu_fxown_set_skip_sfx(int on)
     }
 }
 
-int tagpu_fxown_installed(void) { return g_installed; }
-
 /* the render thread's standing request for the packet's effect tables. Written
    on the render thread, read on the game thread, one writer, no ordering owed:
    a frame either side of the change costs one frame of empty or unused tables

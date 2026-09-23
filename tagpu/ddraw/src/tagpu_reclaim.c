@@ -500,21 +500,6 @@ int tagpu_reclaim_level_tracked(void) { return s_levelTracked; }
 
 int tagpu_reclaim_armed(void) { return s_installed; }
 
-/* ---- the fence, for other modules (tagpu_reclaim.h) ---------------------- */
-/* Callable from either thread. The barrier is the game side's half of the
-   Dekker pair described in ORDERING: the caller's store that unreachabled the
-   pointer must be globally visible before the pass counter we snapshot. */
-long tagpu_reclaim_pass_stamp(void)
-{
-    MemoryBarrier();
-    return (long)s_started;
-}
-
-int tagpu_reclaim_pass_passed(long stamp)
-{
-    return (LONG)(s_completed - (LONG)stamp) >= 0;
-}
-
 /* --------------------------------------------------------------- install ---- */
 
 /* Redirect one `call MEM_Free` to `fn`. The rel32 is computed against the

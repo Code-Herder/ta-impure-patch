@@ -20,7 +20,6 @@
 #include "tagpu_pal.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
-#include "tagpu_vk.h"      /* nothing of it is used in this file */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 
@@ -283,12 +282,6 @@ const unsigned char* tagpu_gaf_state_frame(const char* st)
     if (!ptr_ok(st) || IsBadReadPtr(st, 0x0C)) return NULL;
     seq = *(const char* const*)(st + TAGPU_AS_SEQ);
     return tagpu_gaf_seq_frame(seq, *(const unsigned short*)(st + TAGPU_AS_FRAME));
-}
-
-const char* tagpu_gaf_seq_name(const char* seq)
-{
-    if (!ptr_ok(seq) || IsBadReadPtr(seq, 0x2C)) return "?";
-    return seq + TAGPU_SQ_NAME;
 }
 
 static int gaf_decode(const unsigned char* g, int w, int h, unsigned char* out, unsigned char* cov);
@@ -577,7 +570,7 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 {
     /* `made` goes: the layout describes nothing any more, so the next create
        must lay it out again. */
-    a->tex = 0; a->made = 0;
+    a->made = 0;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     a->gen++;                   /* every UV in the atlas has just moved */
     /* and so is everything it held, so the mirror of it says nothing. (The
@@ -585,11 +578,6 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
        stale for the frames between a loss and the next create.) */
     if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
     memset(a->hash, 0, sizeof a->hash);
-    /* `rgb` and `restoreFailed` have no writer and are 0 for the life of the
-       process. Cleared here anyway, because this function's contract is "the
-       struct describes nothing that exists", and a field left alone on the
-       strength of an argument made elsewhere is how a stale value survives. */
-    a->rgb = 0; a->restoreFailed = 0;
     /* THE CONSUMER'S DESTINATION DID NOT DIE -- ITS SOURCE DID. Nothing here
        is a Vulkan object, so a consumer's twin still holds the colours of an
        atlas whose every entry has just been dropped. The generation is what
@@ -616,13 +604,8 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
     if (a->dim <= 0 || a->max <= 0 || !a->ents) return 0;
     /* THERE IS NO TEXTURE HERE; THE LAYOUT IS THE ATLAS. The shelf packer, the
        entry table and the CPU mirror below are what an atlas is in this build,
-       and the consuming Vulkan pass uploads the mirror. `a->tex` is set to 0
-       rather than left alone so that a re-created atlas cannot carry a stale
-       name, and it
-       is 0 for the life of the process: nothing gives it a name. `a->made`,
-       not `a->tex`, is what says the layout exists -- keyed on the name, every
-       create would refuse, which reads downstream as `atlas=0` and no sprite
-       texels at all. */
+       and the consuming Vulkan pass uploads the mirror. `a->made` is what says
+       the layout exists. */
     /* A FRESH ATLAS IS A FRESH MIRROR, AND THE MEMSET IS WHAT MAKES IT INDEX 0
        -- the assumption the border comment in `atlas_paint` rests on. A mirror
        that kept the previous atlas's texels would be a copy of something that
@@ -630,7 +613,6 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
        texels alone and lets re-inserted entries overwrite them, and the mirror
        follows exactly because it follows the paints. */
     if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
-    a->tex = 0;
     a->made = 1;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
@@ -671,9 +653,8 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
     int i, hb, x = 0, y = 0, sh = 0, kept = 0, w;
     int wanted = 0, wanted_skip = 0;
 
-    /* `made`, not `tex`, which is 0 for the life of the process
-       (tagpu_gaf_atlas_create): a repack re-lays the ENTRIES and the paints
-       that follow it feed the CPU mirror. */
+    /* `made` (tagpu_gaf_atlas_create): a repack re-lays the ENTRIES and the
+       paints that follow it feed the CPU mirror. */
     if (before <= 0 || before > ORD_MAX || !a->made || !a->ents) return 0;
 
     /* Only what is still being ASKED FOR is re-laid. An entry nothing has
@@ -762,10 +743,11 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
     a->full = 0;
     a->gen++;                           /* every UV in the atlas has just moved */
     a->repacks++;
-    /* the twin's rects moved with them: back to unpainted (job_clear clears
-       level 0), and whatever was queued is dropped -- it re-queues as each
-       reserved entry is painted. Unlike the recycle this happens once, which
-       is what lets the twin converge at all while zoomed out. */
+    /* the twin's rects moved with them: back to unpainted (a new list
+       generation, which the consumer blanks its twin on), and whatever was
+       queued is dropped -- it re-queues as each reserved entry is painted.
+       Unlike the recycle this happens once, which is what lets the twin
+       converge at all while zoomed out. */
     job_clear_dest(a);
 
     /* The branch that says a second page is the only thing left.

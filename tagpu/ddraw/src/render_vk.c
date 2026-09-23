@@ -28,7 +28,6 @@
 #include "config.h"
 #include "tagpu.h"
 #include "tagpu_overlay.h"
-#include "tagpu_gui.h"
 #include "tagpu_packet.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_menu.h"

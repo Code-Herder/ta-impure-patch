@@ -57,7 +57,6 @@ The boot line says which case you are in; **grep for `no tacli verb can answer`*
 ```bash
 tools/tacli gui <i> on            # arm BEFORE launch (the leaves install at attach); the draw follows the file live
 tools/tacli gui <i> off           # writes `off`: leaves installed, layer not drawn — the live A/B
-tools/tacli gui <i> strict        # the harness mode
 tools/tacli gui <i> census        # = 'gui.on=census log pgm trace'
 tools/tacli gui <i> remove        # unlink the file — NOT an un-arm under --defaults (the default re-applies)
 tools/tacli gui <i>               # report
@@ -68,7 +67,7 @@ Two families of tokens live in `tagpu_gui.on`, and they are read at different ti
 
 | read once, at attach (`tagpu_gui_hook.c`) | read live, on the poll (`tagpu_gui_surf.c`) |
 |---|---|
-| `census`, `log`, `pgm`, `trace`, `norepaint`, `nostring`, `key=`, `probe=` | `off`, `strict`, `norestore`, `sharptest`, `mmbase`, `nominimap`, `nocursor`, `cursorscale=` |
+| `census`, `log`, `pgm`, `trace`, `norepaint`, `nostring`, `key=`, `probe=` | `off`, `norestore`, `sharptest`, `mmbase`, `nominimap`, `nocursor`, `cursorscale=` |
 
 Arming an attach-time token on a running instance silently does nothing.
 
@@ -81,7 +80,7 @@ Arming an attach-time token on a running instance silently does nothing.
   measurement.
 - **`sharptest`** — paints a 64x64 opaque green square at the viewport's top-left and a one-device-
   pixel white column at device x = 100, as geometry: the proof the device-resolution sharp layer
-  is wired. Harness only, like `strict`; never hand a player an instance with it armed.
+  is wired. Harness only; never hand a player an instance with it armed.
 - **`mark.on=noselbox`** (a different file) takes our selection rects off the window and hands
   the box to the engine, which draws it at the unzoomed projection into `tacli shot` only.
   Confirm with `tacli log <i> -g 'markown: engine selection'`; remove it afterwards.

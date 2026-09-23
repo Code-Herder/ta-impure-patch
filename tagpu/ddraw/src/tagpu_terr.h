@@ -21,46 +21,12 @@
 #include "tagpu_restoreglsl.h"  /* TAGPU_RGLSL_FRAME -- a CPU struct, no GL in it */
 
 int  tagpu_terr_armed(unsigned frame_counter);   /* re-reads tagpu_terr.on (30f) */
-int  tagpu_terr_on(void);
 /* build this frame's quads; returns the CELL count (0 = nothing to draw) —
    one instanced quad each, see the vertex shader in tagpu_terr.c */
 int  tagpu_terr_gather(const TAGPU_FXVIEW* v);
 /* GATHER AND HAND OVER: despite the name it draws nothing; it finishes the
    frame's hand-over and publishes it. */
 void tagpu_terr_render(const TAGPU_FXVIEW* v);
-
-/* Classic++ shadows (renderers.md 2.8): the heightfield as a
-   caster. One world-space vertex per 16-px grid point of the height grid,
-   built with it, row-major indices.
-
-   IT DRAWS NOTHING. What it does is CLAMP the requested cell rows r0..r1 to
-   the mesh and PUBLISH the mesh and that range, and the return is "the range
-   is valid and `out` was filled", not "something was drawn".
-
-   `out`, when given, comes back with THE CPU MIRROR OF THE MESH AND THE
-   CLAMPED RANGE -- the very buffers build_hills filled,
-   retained instead of freed while the Vulkan lane is armed -- so a Vulkan
-   shadow pass would draw the same indices rather than re-deriving the clamp.
-   Zeroed, and `v`/`idx` left NULL, whenever there is no mirror; pass NULL when
-   there is no Vulkan lane to feed. The pointers are the terrain module's and
-   live until the next map change -- a consumer takes them through a hand-over
-   that carries the frame they were published on.
-
-   NOTHING CALLS THIS: there is no call site at all.
-
-   THE COST THIS WASTES is the heightfield CPU mirror `s_hMeshV`/`s_hMeshI` --
-   19.3 MB on Two Continents by `build_hills`' arithmetic, built
-   unconditionally -- because this function is its ONLY reader, so the two go
-   together. `TAGPU_TERRHILLS` has no consumer outside this header either. */
-typedef struct TAGPU_TERRHILLS {
-    const float*    v;          /* nv * 3 floats: the world point per vertex */
-    size_t          nv;
-    const unsigned* idx;        /* ni indices, cell-row major                */
-    size_t          ni;
-    unsigned        serial;     /* bumped when the mesh is rebuilt           */
-    unsigned        firstIndex, indexCount;   /* the range actually drawn    */
-} TAGPU_TERRHILLS;
-int  tagpu_terr_hills_draw(int r0, int r1, TAGPU_TERRHILLS* out);
 
 /* RESERVE FOR THIS VIEWPORT, then trim a would-be gather rect (game px) to
    what this pass can actually draw in one frame. Called once a frame by

@@ -48,7 +48,7 @@ cd "$DIR" || exit 2
 command -v perl >/dev/null 2>&1 || { echo "thread-split: perl is required" >&2; exit 2; }
 
 # third-party headers carried by the fork: not ours, never scanned
-EXCLUDE='^inc/(glcorearb|wglext|d3d9shader|d3dcaps|ddraw|KHR/.*)\.h$'
+EXCLUDE='^inc/(d3dcaps|ddraw)\.h$'
 
 scan() {   # $1 = file; prints "line: TAG: text" for every hit, comments stripped
     perl -0777 -ne '

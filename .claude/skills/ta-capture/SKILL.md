@@ -183,8 +183,9 @@ the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when with
 3. Metric per frame — count "structure" pixels (grey/bright: `r>90 and b>90
    and |r−b|<60` on every 3rd pixel), then flag frames <70% of the average;
    assemble suspect±1 frames into a strip with Pillow and eyeball them.
-4. A unit vanishing = empty-composite flicker (see r3dcache); pieces missing =
-   partial render; a pose that is **wrong for one frame and right on both
+4. A unit vanishing = a frame the Vulkan unit pass stood down on (the engine's
+   own copy does not reach the Vulkan frame, so nothing covers it —
+   `tagpu_owndraw_classify`'s note); pieces missing = partial render; a pose that is **wrong for one frame and right on both
    neighbours** is the render thread reading the engine's posed vertex buffer
    while the game thread rewrites it (gpu-status §2.9) — not aliasing, and not
    cosmetic: at rest orientation it is ~1400 changed pixels at 2× zoom.

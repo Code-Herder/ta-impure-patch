@@ -84,10 +84,10 @@ THE TRANSFORM, in full. Each item is mechanical and applies to every shader:
      `in` of the same name takes the NUMBER ITS VERTEX STAGE GAVE IT, so a
      fragment stage that declares a subset, or declares them in another order,
      still matches. A fragment `in` with no matching vertex `out` is an error
-     here rather than a link failure in a driver. Where one shader is used with
-     two different vertex stages -- `tagpu_native`'s fragment shader is shared
-     with `tagpu_posedraw`'s vertex stage -- both mappings are computed and
-     must agree, which is a real check on a real pairing.
+     here rather than a link failure in a driver. Where one fragment shader is
+     used with two different vertex stages, both mappings are computed and
+     must agree. No pairing in the manifest does that today: `tagpu_native`'s
+     fragment shader is paired with `tagpu_posedraw`'s vertex stage alone.
   6. FRAGMENT OUTPUTS take locations in declaration order, unless the source
      already gives one a `layout(location=)`.
   7. `gl_VertexID` / `gl_InstanceID` become `gl_VertexIndex` /
@@ -181,20 +181,17 @@ PROGRAMS = [
     ("gui_mm",       "tagpu_gui_surf::QVS",     "tagpu_gui_surf::MM_FS"),
     # No program here resolves TA's 8-bit frame through the palette onto the
     # screen: that would be an engine pixel by definition.
-    # tagpu_native.c (native_d paired in tagpu_vk_world.c; no tagpu_vk_*.c
-    # builds native_unit or native_c)
-    ("native_unit",  "tagpu_native::VS",        "tagpu_native::FS"),
-    ("native_c",     "tagpu_native::CVS",       "tagpu_native::CFS"),
+    # tagpu_native.c (paired in tagpu_vk_world.c: the world target's resolve)
     ("native_d",     "tagpu_native::DVS",       "tagpu_native::DFS"),
-    # src/tagpu_shadow_glsl.h (paired in tagpu_vk_shadow.c, which builds
-    # shadow_hires only) -- both depth-only, one empty fragment stage
-    ("shadow_unit",  "tagpu_shadow::VS_U",      "tagpu_shadow::FS_NONE"),
+    # src/tagpu_shadow_glsl.h (paired in tagpu_vk_shadow.c) -- the heightfield
+    # caster, depth-only, with an empty fragment stage
     ("shadow_hires", "tagpu_shadow::VS_H",      "tagpu_shadow::FS_NONE"),
     # tagpu_terr.c (paired in tagpu_vk_terr.c)
     ("terr",         "tagpu_terr::VS",          "tagpu_terr::FS"),
     # tagpu_posedraw.c (paired in tagpu_vk_unit.c) -- the fragment stage is
-    # tagpu_native's, shared deliberately, which is why item 5 above checks
-    # that two vertex stages agree about the varyings.
+    # tagpu_native's, shared deliberately: tools/tascene pairs the same FS with
+    # tagpu_native's own VS for the browser lab, so the two unit programs share
+    # the half they do not replace.
     ("pose_unit",    "tagpu_posedraw::VS",      "tagpu_native::FS"),
     ("pose_depth",   "tagpu_posedraw::VS",      "tagpu_posedraw::DFS"),
     # one pass each
@@ -205,7 +202,6 @@ PROGRAMS = [
     ("scaffold",     "tagpu_scaffold::VS",      "tagpu_scaffold::FS"),
     ("fx",           "tagpu_fx::VS",            "tagpu_fx::FS"),
     ("feat",         "tagpu_feat::VS",          "tagpu_feat::FS"),
-    ("hires",        "tagpu_hires_draw::VS",    "tagpu_hires_draw::FS"),
 ]
 
 # ---------------------------------------------------------------- the restorer
@@ -234,11 +230,8 @@ PROGRAMS = [
 # stated in research/notes/vulkan-only-plan.md landing 7 rather than here: the
 # restorer restores with these two models and no others, and a third needs its
 # four variants generated and committed.
-# THE SWITCH THAT WIRES THE RESTORER INTO SOURCES AND PROGRAMS, and it is True.
-# A variant set can need shapes `transform` does not yet read, and a commit that
-# leaves `make` failing its own shader gate is a trap rather than a checkpoint --
-# so a set's machinery lands behind a switch like this one, which goes True in
-# the change that teaches the transform its shapes. CONV_FS needs two:
+# THE SHAPES THE RESTORER NEEDS FROM `transform`. CONV_FS has two that no
+# other shader here writes:
 #
 #   1. `uniform highp sampler2DArray uAct;` -- a precision qualifier AFTER the
 #      storage qualifier. `_VAR` captures it as its own group and re-emits it
@@ -253,8 +246,6 @@ PROGRAMS = [
 # `tagpu_restore_glsl.h` is the ONE copy of that text, shared with
 # tools/tascene's browser pack, and reflowing it for a generator's convenience is
 # the sort of thing its own header forbids.
-RESTORE_READY = True
-
 RESTORE_HDR   = "tagpu_restore_glsl"
 RESTORE_NK    = (1, 2, 4, 8)
 RESTORE_MODELS = ("tiny", "full")
@@ -334,7 +325,7 @@ def _restore_programs():
 # Every C source a shader is read out of, in the order the headers are emitted.
 SOURCES = ["tagpu_gui_surf", "tagpu_native", "tagpu_shadow", "tagpu_terr",
            "tagpu_posedraw", "tagpu_fps", "tagpu_mark", "tagpu_scaffold",
-           "tagpu_fx", "tagpu_feat", "tagpu_hires_draw"]
+           "tagpu_fx", "tagpu_feat"]
 
 # WHERE A VERTEX ATTRIBUTE'S LOCATION COMES FROM WHEN THE GLSL DOES NOT SAY.
 # Our passes all write `layout(location = N) in ...` and need nothing here, so
@@ -346,22 +337,17 @@ ATTR_LOCATIONS = {}
 
 # Sources that are not `src/<name>.c`. `tagpu_restore_glsl` is a header because
 # its shaders are macros (see extract_restore).
-HEADER_SOURCES = {# THE SHADOW AND HIRES SHADERS HAVE NO .c OF THEIR OWN.
-                  # Their names stay `tagpu_shadow` and `tagpu_hires_draw` in
-                  # `SOURCES` and `PROGRAMS` on purpose -- the name is what
-                  # generates the `inc/spirv/*.spv.h` that `tagpu_vk_shadow.c`
-                  # and `tagpu_vk_hires.c` include. Both headers sit in `src/`
-                  # because the hires fragment shader pulls `TAGPU_GLSL_*` out
-                  # of `src/tagpu_glsl.h` and this preprocess runs `-Iinc` only.
-                  "tagpu_shadow":     "src/tagpu_shadow_glsl.h",
-                  "tagpu_hires_draw": "src/tagpu_hires_glsl.h"}
+HEADER_SOURCES = {# THE SHADOW SHADERS HAVE NO .c OF THEIR OWN. Their name
+                  # stays `tagpu_shadow` in `SOURCES` and `PROGRAMS` on purpose
+                  # -- the name is what generates the `inc/spirv/*.spv.h` that
+                  # `tagpu_vk_shadow.c` includes.
+                  "tagpu_shadow": "src/tagpu_shadow_glsl.h"}
 
 # The restorer's pairings are appended rather than written out: eight of the ten
 # are the same conv program at a different (NK, kmax), and spelling them by hand
 # is how the list and `restore_keys` would drift apart.
-if RESTORE_READY:
-    SOURCES.append(RESTORE_HDR)
-    PROGRAMS += _restore_programs()
+SOURCES.append(RESTORE_HDR)
+PROGRAMS += _restore_programs()
 
 CC = os.environ.get("CC", "i686-w64-mingw32-gcc")
 
@@ -378,19 +364,13 @@ def preprocess(cfile):
     return r.stdout.split("\n")
 
 
-# The literal may begin on the declaration's own line. It never does today --
-# the fork's style puts `#version` on the next one -- but a tool that silently
-# SKIPS a shader is worse than one that refuses it, and the "a shader no program
-# uses" guard below is what forces every new shader through the pipeline: a
-# shader the extractor cannot see escapes that guard too.
-# BOTH SPELLINGS OF "a string literal at file scope": `static const char* NAME =`,
-# which our passes write, and `static char NAME[] =`, which upstream-style
-# shader collections write. This only ever matches MORE declarations, and a
-# declaration that is not a shader is still ignored -- the caller requires a
-# `#version` literal on the line or the next one, and the census counts exactly
-# those.
-_DECL = re.compile(r'static\s+(?:const\s+)?char\s*(?:\*\s*)?(\w+)\s*'
-                   r'(?:\[\s*\]\s*)?=\s*(.*)$')
+# ONE SPELLING: `static const char* NAME =` alone on its line, with the
+# `"#version` literal opening the next one. Every shader source here is written
+# that way. A declaration that is not a shader is ignored -- the caller requires
+# the `#version` literal on the next line -- and a shader written in any other
+# shape is not skipped in silence: the census in `extract` counts every
+# `"#version` literal and refuses a source whose count and extraction differ.
+_DECL = re.compile(r'^static\s+const\s+char\s*\*\s*(\w+)\s*=$')
 _LIT = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _VERSION_LIT = re.compile(r'"#version')
 
@@ -524,33 +504,20 @@ def extract(cfile):
     lines = preprocess(cfile)
     found, i = {}, 0
     while i < len(lines):
-        m = _DECL.search(lines[i].strip())
-        here = bool(m) and "#version" in m.group(2)
-        nxt = bool(m) and i + 1 < len(lines) and "#version" in lines[i + 1]
-        if here or nxt:
+        m = _DECL.match(lines[i].strip())
+        if m and i + 1 < len(lines) and "#version" in lines[i + 1]:
             name, lits = m.group(1), []
-            if here:
-                lits.extend(_LIT.findall(m.group(2)))
-                if not lines[i].rstrip().endswith(";"):
-                    i += 1
-                    while i < len(lines):
-                        if not lines[i].startswith("#"):
-                            lits.extend(_LIT.findall(lines[i]))
-                        if lines[i].rstrip().endswith(";"):
-                            break
-                        i += 1
-            else:
+            i += 1
+            while i < len(lines):
+                if not lines[i].startswith("#"):
+                    lits.extend(_LIT.findall(lines[i]))
+                if lines[i].rstrip().endswith(";"):
+                    break
                 i += 1
-                while i < len(lines):
-                    if not lines[i].startswith("#"):
-                        lits.extend(_LIT.findall(lines[i]))
-                    if lines[i].rstrip().endswith(";"):
-                        break
-                    i += 1
             found[name] = "".join(unescape(x) for x in lits)
         i += 1
 
-    # THE CENSUS, AND IT IS WHY THE SHAPE ABOVE DOES NOT HAVE TO BE EXHAUSTIVE.
+    # THE CENSUS, AND IT IS WHY THE ONE SHAPE ABOVE IS ENOUGH.
     # Every `"#version` in the preprocessed text is the start of a shader's first
     # literal (the preprocessor has already removed the comments, and none of
     # these files ASSEMBLES a version line at run time -- they all carry it in
@@ -974,12 +941,16 @@ def tool_hash():
     return hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()[:16]
 
 
-# EVERY SHADER THIS TOOL SEES IS A PROGRAM, so the exemption list is empty.
 # The rule -- a shader with no program fails the gate -- exists so a shader and
 # its consumer cannot drift apart while one of them is unwritten. A shader read
 # here that is deliberately never a program goes in this set, and the reason
 # goes beside it.
-NOT_PROGRAMS = frozenset()
+NOT_PROGRAMS = frozenset({
+    # the unposed unit vertex stage: no pass draws it, and it stays in the
+    # source because tools/tascene extracts it (with tagpu_native::FS) as the
+    # browser lab's unit program.
+    "tagpu_native::VS",
+})
 
 
 def build_all():

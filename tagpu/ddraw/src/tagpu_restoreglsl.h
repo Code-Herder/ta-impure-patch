@@ -19,8 +19,8 @@
    jobs share the backend's device resources and one per-frame budget; the one holding
    a batch in flight keeps it, otherwise the lowest `prio` with work runs, so
    the terrain (0) goes before features (1) before effects (2). A job's
-   destination is cleared to alpha 0 when the job starts (and on job_clear),
-   and the out pass writes alpha 1 over every texel it paints -- a consumer
+   destination is cleared to alpha 0 when the job starts (unless the job
+   repaints in place), and the out pass writes alpha 1 over every texel it paints -- a consumer
    samples the restored colour where the alpha says so and stays indexed
    elsewhere, which is how the progressive reveal and the mixed-mode atlases
    both work with no flag texture.

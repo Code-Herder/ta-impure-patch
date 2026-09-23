@@ -258,8 +258,6 @@ int tagpu_terr_armed(unsigned frame_counter)
     return 1;
 }
 
-int tagpu_terr_on(void) { return s_armed > 0; }
-
 /* ---- the atlas -----------------------------------------------------------
    THE ATLAS IS BUILT WHEN THIS SAYS SO, and nothing else answers that: an
    already-built test that never came true would rebuild the whole atlas EVERY
@@ -306,28 +304,6 @@ static int    s_hW, s_hH;              /* 0 while there is no usable grid    */
 static const void* s_hGrid;            /* the inputs the texture was built  */
 static const void* s_hSet;             /* from, or last attempted from      */
 static unsigned s_hFrame;              /* the frame of that attempt          */
-static int    s_hMeshW, s_hMeshH;      /* the grid it was built from: a failed
-                                          rebuild leaves the old mesh, and this
-                                          is what keeps it undrawn */
-/* THE CASTER MESH'S CPU MIRROR, for the shadow pass. The same
-   answer as the atlas's and the height grid's: the very buffers build_hills
-   filled, kept instead of freed, so a Vulkan shadow pass would draw these
-   vertices in this index order rather than a second evaluation of
-   build_hills' arithmetic -- but nothing takes them: tagpu_terr_hills_draw
-   has no caller (tagpu_terr.h). 19.3 MB on Two Continents (6.4 vertices + 12.9
-   indices) and paid for only while the Vulkan lane is armed --
-   `s_mirrorWant`, set from `tagpu_vk_owns_present()` on the arm beat.
-   The serial says when they last changed, so the Vulkan lane uploads on a map
-   change and not per frame. */
-static float*    s_hMeshV;             /* s_hMeshVN * 3 floats, or NULL       */
-static unsigned* s_hMeshI;             /* s_hMeshIN indices, or NULL          */
-static size_t    s_hMeshVN, s_hMeshIN;
-static unsigned  s_hMeshSerial;
-/* 1 when build_hills ran under `s_mirrorWant` and produced no mirror anyway --
-   a grid too small to mesh, or a malloc that failed. It is what stops
-   ensure_height's mirror term from asking for the same rebuild every frame for
-   the life of the map; cleared wherever the mesh itself is. */
-static int       s_hMeshNoMirror;
 
 /* THIS FRAME'S CELLS, one record each: the cell's column and row in the
    gather's own grid, then its tile's column and row in the atlas. Everything
@@ -521,7 +497,6 @@ static const char* FS =
    until it succeeds or the inputs change. Without a grid Classic++ terrain
    draws UNLIT -- the restored colour and the grey rule stay, only the
    lambert is skipped (uHDim 0 in the shader). */
-static void build_hills(const unsigned char* buf, int w, int h);
 static void build_height(const char* ta, unsigned frame)
 {
     const char* grid = *(const char* const*)(ta + OFF_FEATMAP);
@@ -550,9 +525,6 @@ static void build_height(const char* ta, unsigned frame)
         for (c = 0; c < w; c++)
             buf[(size_t)r * w + c] =
                 *(const unsigned char*)(grid + ((size_t)r * w + c) * FT_STRIDE + FT_HEIGHT);
-    build_hills(buf, w, h);          /* TODO: unconditional -- 19 MB even when
-                                        terrainshadow=0, which is the default.
-                                        See build_hills' header. */
     /* THE MIRROR IS THE BUFFER, exactly as the atlas's: the
        memory the loop above filled, kept instead of freed, so the Vulkan lane's
        uHeight is those texels rather than a second read of the engine's grid.
@@ -575,117 +547,6 @@ static void build_height(const char* ta, unsigned frame)
     flog(b);
 }
 
-/* ---- the heightfield as a caster (renderers.md 2.8, 2.12) ----
-   One vertex per grid point at the world point the lab's terrain vertex
-   depicts -- (c*16, h, r*16 + h/2) -- and two triangles per cell on the
-   diagonal taTerrN interpolates across ((1,0)-(0,1)), indices ordered by
-   cell row so the rows under the light window are one contiguous range.
-   Static: the map's heights never change. Two Continents: 537,600 vertices
-   (6.4 MB), 3.2 M indices (12.9 MB), once per map.
-
-   ==== TODO (IMPORTANT): 19 MB per map for a mesh nothing draws. ====
-   `terrainshadow` defaults to 0 (tagpu_classicpp.c shadow_defaults --
-   the ground self-shadowed itself, renderers.md 2.7b), and
-   tagpu_terr_hills_draw, the mesh's only reader, has no caller at all
-   (tagpu_terr.h). This function is NOT gated: build_height calls it
-   unconditionally, so every map builds 6.4 MB of vertices and 12.9 MB of
-   indices, kept as the CPU mirror while the Vulkan lane is armed, that
-   nothing reads.
-
-   Do NOT fix it by gating the build on the flag. The flag is live -- the cfg
-   is re-read while the game runs (read_cfg, and the render-options screen
-   triggers it) -- so `terrainshadow=1` mid-session must still produce a mesh,
-   and that is the fixture the eventual shadow fix gets measured in.
-
-   Build it LAZILY instead, on the first tagpu_terr_hills_draw after the grid
-   changed. The obstacle is that `buf` is freed at the end of build_height, so
-   the lazy path needs the bytes: either keep that w*h byte buffer alive (0.5 MB
-   on Two Continents, 3 % of what it replaces) or re-read the engine grid at
-   OFF_FEATMAP with the same ptr_ok/IsBadReadPtr guard build_height uses. Keep
-   the existing s_hMeshW/s_hMeshH == s_hW/s_hH check in the draw so a failed
-   rebuild still refuses rather than indexing past the old mesh. */
-static void build_hills(const unsigned char* buf, int w, int h)
-{
-    size_t nv = (size_t)w * (size_t)h, ni = (size_t)(w - 1) * (size_t)(h - 1) * 6, k = 0;
-    float* vb; unsigned* ib;
-    int r, c;
-    char b[160];
-    /* THE TWO EXITS THAT LEAVE NO MESH LEAVE NO MIRROR EITHER, and say so, or
-       ensure_height's mirror term would ask for this rebuild on every frame of
-       the map. */
-    if (w < 2 || h < 2) { s_hMeshNoMirror = 1; return; }
-    vb = (float*)malloc(nv * 3 * sizeof(float));
-    ib = (unsigned*)malloc(ni * sizeof(unsigned));
-    if (!vb || !ib) { free(vb); free(ib); flog("terr: hills: out of memory");
-                      s_hMeshNoMirror = 1; return; }
-    for (r = 0; r < h; r++)
-        for (c = 0; c < w; c++) {
-            float hh = (float)buf[(size_t)r * w + c];
-            float* o = vb + ((size_t)r * w + c) * 3;
-            o[0] = (float)(c * 16); o[1] = hh; o[2] = (float)(r * 16) + hh * 0.5f;
-        }
-    for (r = 0; r < h - 1; r++)
-        for (c = 0; c < w - 1; c++) {
-            unsigned i00 = (unsigned)(r * w + c), i10 = i00 + 1u;
-            unsigned i01 = i00 + (unsigned)w, i11 = i01 + 1u;
-            ib[k++] = i00; ib[k++] = i10; ib[k++] = i01;
-            ib[k++] = i11; ib[k++] = i01; ib[k++] = i10;
-        }
-    /* THE MESH IS THE PASS, exactly as the atlas and the height grid are: `vb`
-       and `ib` are what the consumer draws, and `s_hMeshSerial` is what it
-       checks, so they are kept rather than freed and only while the Vulkan lane
-       is armed. Every exit above this point has already returned, so "the
-       pointers are non-NULL" and "they are s_hMeshVN/s_hMeshIN long" are one
-       fact rather than two. */
-    free(s_hMeshV); free(s_hMeshI);
-    if (s_mirrorWant) {
-        s_hMeshV = vb; s_hMeshI = ib;
-        s_hMeshVN = nv; s_hMeshIN = ni;
-        s_hMeshSerial++;
-        s_hMeshNoMirror = 0;
-    } else {
-        s_hMeshV = NULL; s_hMeshI = NULL;
-        s_hMeshVN = s_hMeshIN = 0;
-        free(vb); free(ib);
-    }
-    s_hMeshW = w; s_hMeshH = h;
-    _snprintf(b, sizeof b, "terr: hills mesh %dx%d grid points, %u cells (Classic++ shadows)",
-              w, h, (unsigned)((w - 1) * (h - 1)));
-    flog(b);
-}
-
-int tagpu_terr_hills_draw(int r0, int r1, TAGPU_TERRHILLS* out)
-{
-    int cells = s_hMeshW - 1, rows = s_hMeshH - 1;
-    size_t first, count;
-    if (out) memset(out, 0, sizeof *out);
-    /* ONLY THE MESH BUILT FROM THIS GRID: after a map change whose rebuild
-       failed (too small, out of memory) the old mesh is still what the arrays
-       hold, and the new grid's size would index past it. Both terms are the
-       MESH's own. */
-    if (s_hMeshW < 2 || s_hMeshH < 2) return 0;
-    if (s_hMeshW != s_hW || s_hMeshH != s_hH) return 0;
-    if (r0 < 0) r0 = 0;
-    if (r1 > rows - 1) r1 = rows - 1;
-    if (r1 < r0) return 0;
-    first = (size_t)r0 * (size_t)cells * 6u;
-    count = (size_t)(r1 - r0 + 1) * (size_t)cells * 6u;
-    /* THE RANGE, computed once, here, by the code that owns the mesh: the
-       Vulkan shadow pass draws this and nothing else, so the clamp is not
-       evaluated a second time at the far end. Only published with the mirror the range
-       indexes into, and only when the range is inside it -- `first + count`
-       is at most `rows * cells * 6` by the clamp above, and the bound is
-       re-checked rather than argued because the two are separate mallocs. */
-    if (out && s_hMeshV && s_hMeshI && first + count <= s_hMeshIN) {
-        out->v = s_hMeshV;   out->nv = s_hMeshVN;
-        out->idx = s_hMeshI; out->ni = s_hMeshIN;
-        out->serial = s_hMeshSerial;
-        out->firstIndex = (unsigned)first;
-        out->indexCount = (unsigned)count;
-    }
-    return 1;
-}
-
 /* once per frame after the atlas is known: (re)build when the inputs moved,
    or when the last attempt failed and 60 frames have passed */
 static void ensure_height(const char* ta, unsigned frame)
@@ -696,7 +557,7 @@ static void ensure_height(const char* ta, unsigned frame)
     /* the mirror term is `ensure_atlas`'s, for the same reason: the only way to
        obtain one for a grid that is already uploaded is to build it again, once */
     if (s_hW > 0 && same && s_hW == w && s_hH == h &&
-        (!s_mirrorWant || (s_hMirror && (s_hMeshV || s_hMeshNoMirror)))) return;
+        (!s_mirrorWant || s_hMirror)) return;
     if (s_hW == 0 && same && s_hFrame != 0 && frame - s_hFrame < 60) return;
     build_height(ta, frame);
 }

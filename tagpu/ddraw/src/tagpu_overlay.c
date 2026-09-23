@@ -11,12 +11,10 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
 #include "tagpu_overlay.h"
 #include "tagpu_trigger.h"
 #include "dd.h"          /* g_ddraw.primary, the fork's own surface        */
 #include "screenshot.h"  /* ss_take_screenshot: `tacli shot`, now on the flip */
-#include "tagpu_vk.h"       /* tagpu_vk_owns_present(): whether Vulkan owns the present */
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
 #include "tagpu_owndraw.h"

@@ -1448,10 +1448,10 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 #define MM_FOGBASE   0x142DF      /* the base WITH the engine's fog shading   */
 #define MM_SCALEDMAP 0x142E3      /* the same base WITHOUT it                 */
 #define MM_PICFRAME  0x1426B      /* the level's minimap picture, a GAF frame */
-/* GFX_CUR_REC / GFX_CUR_X / GFX_CUR_Y / GFX_CUR_ON / GFX_CUR_OK / GFX_MOUSE_X
-   are in tagpu_engine.h with the rest of the graphics globals, because the
-   shell's cursor channel and this file's in-play fill read the same six words
-   and a second copy is how they would come to disagree. */
+/* GFX_CUR_REC / GFX_CUR_ON / GFX_CUR_OK are in tagpu_engine.h with the rest
+   of the graphics globals, because the shell's cursor channel and this file's
+   in-play fill read the same words and a second copy is how they would come to
+   disagree. */
 
 /* the interleave, per frame, per row */
 static unsigned char s_mmRg[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP * 3];
@@ -1461,34 +1461,18 @@ static int s_mmPicW, s_mmPicH, s_mmPicGen = -1;
 static volatile unsigned s_cMmCopies, s_cMmRefused, s_cMmPic;
 static volatile int s_lastMmW, s_lastMmH;
 
-/* The three values the render half's `cursor_rect` needs from the graphics
-   globals, in exactly its shape: an unreadable globals block is
-   (-1, -1, 0, 0) — no rect, erase nothing — and a readable one with an
-   unreadable sprite record is the position with the 64x64 fallback size. The
-   out-of-game packet zeroes the header and never reaches here, so the consumer
-   also treats a zero size as "no cursor state this frame". */
+/* The cursor's sprite record, as a KEY (tagpu_gaf.c is its only reader).
+   0 when the graphics globals or the record cannot be read; the caller zeroed
+   the header, so every path that does not set it leaves it 0, which the
+   consumer reads as "no cursor this frame". */
 static void fill_cursor(TAGPU_PACKET* p)
 {
     const char* g = *(const char* const*)TA_GFX_PP;
     const unsigned short* rec;
-    /* the fields below are THIS frame's however they come out — the consumer
-       distinguishes "no cursor this frame" (-1,-1,0,0) from "no cursor state
-       in this packet" by `cursor_live` alone, so it is set before the reads
-       that can leave the fields at their no-cursor values. The header was
-       zeroed by the caller, so cur_rec is 0 on every path that does not set
-       it. */
-    p->cursor_live = 1;
-    p->cur_pos[0] = -1; p->cur_pos[1] = -1;
-    p->cur_w = 0; p->cur_h = 0;
     if (!ptr_ok(g)) return;
-    p->cur_pos[0] = RD32(g, GFX_CUR_X);
-    p->cur_pos[1] = RD32(g, GFX_CUR_Y);
     rec = *(const unsigned short* const*)(g + GFX_CUR_REC);
-    if (!ptr_ok(rec)) { p->cur_w = 64; p->cur_h = 64; return; }
-    /* the record IS a GAF frame header, so its first two u16 are the size the
-       render half needs from it; the frame itself crosses as a key */
+    if (!ptr_ok(rec)) return;
     p->cur_rec = (unsigned)(size_t)rec;
-    p->cur_w = rec[0]; p->cur_h = rec[1];
 }
 
 /* THE BUILD-ORDERS TABLE — the queued builds the order pass is showing site
@@ -2207,17 +2191,6 @@ static void* __cdecl after_loader(unsigned int* regs)
 unsigned tagpu_packet_pub_draw_seq(void)  { return s_cDraws; }
 unsigned tagpu_packet_pub_level_gen(void) { return s_levelGen; }
 int      tagpu_packet_pub_level_open(void) { return s_levelOpen; }
-/* `s_levelEndBy` IS NOT THE WHOLE ANSWER. It is only ever assigned inside
-   `if (!s_countOnly)`, and `s_countOnly` is `!tagpu_packet_armed()` -- so
-   under `tagpu_packet.off` it stays 0 while the generation goes on moving
-   perfectly well, because `tagpu_packet_pub_level_end` bumps `s_levelGen` as
-   its FIRST statement, above every gate, and reclaim's stub calls it
-   unconditionally. A consumer keyed on this alone would refuse every frame for
-   the whole session. */
-int tagpu_packet_pub_level_tracked(void)
-{
-    return s_levelEndBy != 0 || tagpu_reclaim_level_tracked();
-}
 
 /* ---- the heartbeat's producer half --------------------------------------- */
 
@@ -2275,9 +2248,9 @@ static void extra(char* buf, unsigned cap, double secs)
            thread had not taken yet — expected throughout on a shell that flips
            thousands of times a second, since the gate is what keeps this
            channel off the in-play publisher's slot. The engine's cursor BLIT
-           is skipped elsewhere (tagpu_cursown.c) and leaves no mark here on
-           purpose: that module patches a call site, not this one's function,
-           so `draws` keeps counting the draws that really run. */
+           is not skipped: the engine's cursor goes into its own surface,
+           where the reference wants it (tagpu_gui.h `tagpu_gui_cursor_frame`),
+           so `draws` counts every draw that runs. */
         _snprintf(buf + n, cap > n ? cap - n : 0,
                   " | cursor: draws=%u owned=%u hidden=%u pub=%u skip=%u foreign=%u stuck=%u",
                   s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
@@ -2330,8 +2303,8 @@ static void* __cdecl after_teardown(unsigned int* regs)
    THE PROBLEM IT SOLVES. Nothing of the engine's frame is underneath the UI
    layer, so the only cursor on screen is the one the layer draws itself, in
    its sharp layer -- and it draws one only once `tagpu_gui_cursor_frame`
-   (tagpu_gui_surf.c) has found the cursor's record and rect in the packet.
-   The in-play fill publishes the cursor fields on the in-play gate alone — so
+   (tagpu_gui_surf.c) has found the cursor's record in the packet.
+   The in-play fill publishes that record on the in-play gate alone — so
    without this channel a shell frame carries no cursor record, the layer owns
    no cursor, and the shell shows none. MEASURED on the
    reference setup 2026-09-13, main menu, pointer over the window: `gui off`
@@ -2387,18 +2360,16 @@ static void* __cdecl after_teardown(unsigned int* regs)
    exactly like the level-end packet's own forced publish.
 
    WHAT CROSSES is what the in-play fill already crosses, on the same trust:
-   the record pointer as a KEY (tagpu_gaf.c is its only reader), the position
-   and the size as the engine's own numbers. `cursor_live` is the one new
-   field, and what it is for is that the shell's packet MUST stay in_game = 0 —
-   every world pass reads that field to decide whether to draw at all — so
-   `in_game` could not tell the consumer that a non-play packet nonetheless
-   carries a cursor. See tagpu_packet.h.
+   the record pointer as a KEY (tagpu_gaf.c is its only reader). The shell's
+   packet stays in_game = 0 — every world pass reads that field to decide
+   whether to draw at all — and carries the cursor through `cur_rec` alone.
 
    THE HIDDEN CASE IS PUBLISHED TOO, and on every such frame rather than on the
    edge: 0x4C67C0 early-outs unless +0x1CE, +0x1D2 and +0x1B2 are all
    non-zero, and on those frames it writes nothing at all — so `before`
-   publishes cursor_live = 0 instead of leaving the last visible rect standing,
-   which would have the layer go on drawing a cursor the engine has hidden.
+   publishes a packet with `cur_rec` 0 instead of leaving the last cursor
+   standing, which would have the layer go on drawing a cursor the engine has
+   hidden.
    An edge-triggered publish cannot be used here: a publish the FRESH
    gate drops is not an edge that comes again, and the render thread would hold
    the stale state until the cursor happened to change once more. */
@@ -2475,27 +2446,22 @@ static int __cdecl before_cursor(void* entry_esp)
     g = *(const char* const*)TA_GFX_PP;
     if (!ptr_ok(g)) return 0;
     if (RDU32(g, GFX_CUR_ON) && RDU32(g, GFX_CUR_OK) && RDU32(g, GFX_CUR_REC)) {
-        /* it WILL draw: hijack the return so `after` reads the position this
-           draw wrote (+0x1B6/+0x1BA), not the one the last draw left there —
-           which on a frame the pointer moved is a whole frame stale, and the
-           rect the layer discards at is exactly this number.
+        /* it WILL draw: hijack the return so the publish follows the draw it
+           reports. The packet carries the record alone (`cur_rec`), so
+           `after` reads no word this draw writes.
 
-           AND THE ORDERING THAT MAKES THAT READ SAFE IS A LOCK, not the hijack.
-           The sentence above only rules out the GAME thread's own previous
-           draw; +0x1B6/+0x1BA have a SECOND writer — 0x4C284C and 0x4C2852,
-           inside 0x4C25E0, the body of the engine's mouse thread, which loops
-           every ~1 ms and is up precisely in the shell, where this channel
-           runs. Two plain dword reads against a live writer would be a race.
-           They are not, because the engine serialises the two: the flip takes
-           its tagged mutex at 0x52A4E8 before anything else (0x4C63CC
-           `mov edi,'MAIN'`, `push 0x52A4E8`, `call ebp` at 0x4C63D7) and holds
-           it across 0x4C67C0 and this hijack, releasing only at 0x4C6641; the
-           mouse thread takes the SAME lock around its own draw (0x4C29C8
-           `mov edi,'MOUS'`, `push 0x52A4E8`, `call ebx` at 0x4C29D3). Same
-           lock, so the two never overlap — an ORDERING, which is what
-           CLAUDE.md asks the argument to be. Verified by disassembly
-           2026-09-14. It is load-bearing: a future hook that
-           reads these words from outside the flip does NOT inherit it. */
+           THE DRAWN POSITION +0x1B6/+0x1BA IS NOT READ HERE, and a hook that
+           wants it needs the engine's lock: those words have a SECOND writer —
+           0x4C284C and 0x4C2852, inside 0x4C25E0, the body of the engine's
+           mouse thread, which loops every ~1 ms and is up precisely in the
+           shell. The engine serialises the two: the flip takes its tagged
+           mutex at 0x52A4E8 before anything else (0x4C63CC `mov edi,'MAIN'`,
+           `push 0x52A4E8`, `call ebp` at 0x4C63D7) and holds it across
+           0x4C67C0 and this hijack, releasing only at 0x4C6641; the mouse
+           thread takes the SAME lock around its own draw (0x4C29C8
+           `mov edi,'MOUS'`, `push 0x52A4E8`, `call ebx` at 0x4C29D3).
+           Verified by disassembly 2026-09-14. A read made inside this hijack
+           inherits that ordering; one made from outside the flip does not. */
         if (InterlockedCompareExchangePointer((void* volatile*)&s_cursorRet,
                                               (void*)(size_t)((unsigned*)entry_esp)[0], NULL) != NULL) {
             /* THE SLOT WAS ALREADY TAKEN, which should be impossible: this

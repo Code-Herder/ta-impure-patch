@@ -45,7 +45,6 @@
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_gaf.h"
-#include "tagpu_terrown.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_packet_pub.h"
 #include "../inc/tagpu_engine.h"
@@ -91,7 +90,7 @@ static int      s_census = 0, s_log = 0, s_pgm = 0, s_trace = 0;
    some font.
    READ AT ATTACH, LIKE EVERY OTHER TOKEN THIS FILE OWNS — `read_tokens` runs
    once, from `tagpu_gui_init`, so `census`, `log`, `pgm`, `trace` and this one
-   must be armed BEFORE the launch. Only the surf module's tokens (`strict`,
+   must be armed BEFORE the launch. Only the surf module's tokens (`off`,
    `norestore`, `sharptest`, `nocursor`, `cursorscale=`) follow the file live,
    because only the DRAW can change mid-session; the publisher's shape cannot
    without leaving the twins holding ops of the other kind. Arming it on a

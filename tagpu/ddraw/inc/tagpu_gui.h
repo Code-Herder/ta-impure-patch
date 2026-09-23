@@ -1,45 +1,43 @@
 #ifndef TAGPU_GUI_H
 #define TAGPU_GUI_H
-/* tagpu_gui -- the engine's UI, OBSERVED (research/notes/gui-renderer.md).
+/* tagpu_gui -- the engine's UI, observed on the game thread and redrawn by us
+   on the render thread (research/notes/gui-renderer.md).
 
-   WHAT IT IS NOW. Observer detours on the engine's pixel-writing leaves record
-   what the UI draws -- which sprite, which string, at which coordinates, into
-   which surface -- while the engine goes on drawing its own 8bpp surface
-   exactly as it always did. That record is the engine's UI stated
-   SEMANTICALLY, and it is what a native UI pass will be built from.
+   THE OBSERVERS. Detours on the engine's pixel-writing leaves record what the
+   UI draws -- which sprite, which string, at which coordinates, into which
+   surface -- while the engine goes on drawing its own 8bpp surface exactly as
+   it always did. That record is the engine's UI stated SEMANTICALLY, and the
+   publisher hands it to the render thread as an op queue (tagpu_gui_int.h).
 
-   IT NO LONGER DRAWS ANYTHING. Until the clean cut this module also owned the
-   other half: `tagpu_gui_surf.c` replayed those ops into retained twins and
-   composited them -- with our own device-resolution sharp layer, through one
-   quad -- over the frame. That was the engine's pixels reaching the screen, so
-   the cut deleted the file, the composite, the twins, the sharp layer and the
-   GLSL behind them. There is no lever to bring it back and no UI on screen: no
-   side panel, no bars, no minimap, no cursor, no dialogs. That is the cut's
-   cost, and the UI returns as a pass of ours rather than as a replay of the
-   engine's.
+   THE LAYER. `tagpu_gui_present` (tagpu_gui_surf.c) drains that queue at every
+   present into retained twins, one per engine surface, and fills the
+   hand-over `tagpu_vk_gui.c` replays on the device: the presented surface's
+   twin is drawn over the world passes, palette-resolved wherever an op wrote
+   and discarded everywhere else, under a device-resolution sharp layer whose
+   clients are the cursor and the minimap. Nothing of the engine's own frame
+   is beneath it: `LAY_FS` declares no sampler for TA's surface.
 
-   WHY THE CAPTURE SURVIVED IT. Two reasons, and the first is not about the UI
-   at all: `tagpu_gui_hook.c`'s `before_flip` is the only host of
-   `tagpu_triggers_frame`, so every `tacli` verb in the fork is dispatched from
-   inside it -- deleting the file would take the whole harness with it. The
-   second is that capture is not compositing. The golden source -- the engine's
-   own composed frame, captured by `tagpu_surf_capture` on the game thread and
-   sampled by nothing -- is kept for exactly the same reason.
+   THE HOOK ALSO HOSTS THE HARNESS. `tagpu_gui_hook.c`'s `before_flip` is the
+   only host of `tagpu_triggers_frame`, so every `tacli` verb in the fork is
+   dispatched from inside it. The golden source -- the engine's own composed
+   frame, captured by `tagpu_surf_capture` on the game thread -- is not this
+   module's and is drawn nowhere (tagpu_vk_surf.c).
 
    Family: tagpu_gui_hook.c (the observers, the census, the publisher),
-   tagpu_gui_snap.c (the gadget-tree snapshot behind `tacli ui`, contract
-   inc/tagpu_ui.h). One trigger, gamedir/tagpu_gui.on;
+   tagpu_gui_surf.c (the twins, the UI atlas, the replay), tagpu_vk_gui.c (the
+   Vulkan pass), tagpu_gui_snap.c (the gadget-tree snapshot behind `tacli ui`,
+   contract inc/tagpu_ui.h). One trigger, gamedir/tagpu_gui.on;
    the detours install at DllMain when it exists then.
 
    Tokens in tagpu_gui.on: `census` (the census diff; costs a 1024x768 compare
    per 5 ms), `log`, `pgm`, `trace`, `key=N` (census diagnostics,
-   tagpu_gui_hook.c). The tokens that named the draw -- `strict`, `norestore`,
-   `sharptest`, `nocursor`, `mmbase`, `nominimap`, `cursorscale=` -- went with
-   it.
+   tagpu_gui_hook.c, read at attach). The draw's tokens -- `off`,
+   `norestore`, `sharptest`, `nocursor`, `mmbase`, `nominimap`,
+   `cursorscale=` -- are tagpu_gui_surf.c's and follow the file live.
 
    THREADS. The observers and the publisher run on the game thread inside the
-   engine's own calls. Nothing consumes the queue, so it is drained where it is
-   filled (tagpu_gui_int.h).
+   engine's own calls; the render thread drains the queue at every present.
+   One producer, one consumer, no lock (tagpu_gui_int.h).
 
    Every observer calls the original, so the engine's behaviour is
    byte-identical with the module armed. */#include <windows.h>
@@ -71,11 +69,11 @@ void tagpu_gui_present(const TAGPU_FRAME* f);
    reference wants it, and ours is the sharp layer's. */
 void tagpu_gui_cursor_frame(const struct TAGPU_PACKET* packet);
 
-/* THE ENGINE'S CURSORS PULSE (gui-renderer.md 13.5, 17 and 23), and that is
-   the bound a cursor rect needs: the move cursor cycles 27x27 to 35x35, one
-   pixel per side per step, and the rect a frame holds can be one animation
-   step behind the sprite the engine blits next. A cursor pass needs the
-   cursor table's animation extent, not a margin. */
+/* THE ENGINE'S CURSORS PULSE (gui-renderer.md 13.5, 17 and 23): the move
+   cursor cycles 27x27 to 35x35, one pixel per side per step, so a rect taken
+   from one frame's sprite can be one animation step behind the sprite the
+   engine blits next. Anything that bounds the cursor needs the cursor table's
+   animation extent, not a margin. */
 struct TAGPU_PACKET;
 
 /* WHETHER THE PACKET CARRIES THE THREE MINIMAP SURFACES. The sharp minimap
@@ -198,9 +196,8 @@ typedef struct TAGPU_GUIOP {
     /* ---- CLASSIC++. WHAT THE RENDER HALF DID ABOUT COLOUR, carried rather
        than re-derived, and here the reason is a lifetime rather than a moving
        input: whether the drain (`twin_sprite`, `twin_copy`) gave the
-       destination a colour attachment depends on `s_colValid` and on
-       `s_atlas.rgb`, both of which the render half settles in `restore_step`
-       BEFORE the drain -- so a consumer asking again later would be asking a
+       destination a colour attachment depends on `s_colValid`, which the
+       render half settles in `restore_step` BEFORE the drain -- so a consumer asking again later would be asking a
        different question about the same frame.
          TAGPU_GUICOL_DST   the destination twin HAS a colour attachment after
                             this op (the drain gave it one, or it already had
@@ -221,8 +218,9 @@ typedef struct TAGPU_GUIOP {
    One RGBA8 at DEVICE resolution, row 0 the viewport's TOP, cleared to
    (0,0,0,0) every frame and composited above the mirror where its alpha says
    it has coverage. It is not a twin and not an op stream: it has three clients
-   drawn in a FIXED order -- the harness's flat quads, the cursor, then the
-   minimap (base, then its view box) -- so what crosses is the short ORDERED
+   drawn in a FIXED order -- the harness's flat quads, the minimap (base, then
+   its view box), then the cursor, which covers the minimap where the two
+   overlap -- so what crosses is the short ORDERED
    list of quads they produced, at most `TAGPU_GUI_SDRAW_MAX` of them.
 
    EVERY FIELD HERE IS RESOLVED BY THE RENDER HALF AND NONE IS RE-DERIVED,
@@ -353,20 +351,9 @@ typedef struct TAGPU_GUIHAND {
     const unsigned char* shade;
     unsigned             shadeSerial;
 
-    /* THE ENGINE'S OWN FRAME, which the composite samples as its bottom layer
-       and its stale-mirror guard compares against, copied here from the
-       fork's primary under `g_ddraw.cs` -- the same lock and the same
-       argument tagpu_pal.c makes for the palette (the game thread NULLs the
-       primary inside that section). NULL when there is none this frame, which
-       is what turns the guard off. 8bpp, `engPitch` bytes a row. */
-    const unsigned char* eng;
-    int                  engW, engH, engPitch;
-
     /* ---- the composite's uniforms, as the render half settled them ---- */
-    int   strict, key, vpKey;
+    int   vpKey;
     float vpL, vpT, vpW, vpH;       /* the TRUE viewport, from the packet     */
-    float curEng[4];                /* the engine cursor's rect to erase      */
-    int   curOurs, guard;
     float scaleX, scaleY;           /* k, and the ramp's width with it        */
     float hud[4];
     int   vpX, vpY, vpW_gl, vpH_gl; /* the viewport the composite draws into  */

@@ -96,14 +96,10 @@ struct TAGPU_RGLSL_JOB;
 #define TAGPU_GAF_HASH 8192     /* power of two, > 2x any atlas's max      */
 
 typedef struct TAGPU_GAFATLAS {
-    /* THE ATLAS EXISTS WHEN `made` SAYS SO; `tex` IS 0 FOR THE LIFE OF THE
-       PROCESS. Nothing gives it a texture name (tagpu_gaf.c zeroes it in
-       create and lost). The entries, the shelf packer and the CPU mirror are
-       the atlas, and the Vulkan passes upload the mirror themselves. Keying
-       existence on `tex` would make every sprite pass gather geometry and find
-       `atlas=0` there. */
+    /* THE ATLAS EXISTS WHEN `made` SAYS SO. There is no texture on this side:
+       the entries, the shelf packer and the CPU mirror are the atlas, and the
+       Vulkan passes upload the mirror themselves. */
     int           made;         /* the atlas is laid out and usable          */
-    unsigned int  tex;          /* [PINNED 0] a texture name nothing assigns */
     int           dim;          /* square edge in texels                     */
     int           max;          /* entries in `ents`                         */
     TAGPU_GAFENT* ents;
@@ -164,51 +160,17 @@ typedef struct TAGPU_GAFATLAS {
        -- see `rgbAniso` below for the other half of that contract. */
     int           pad, align, mip;
     /* Classic++ (renderers.md 4b Option 4): the RESTORED TWIN -- same dim,
-       same shelf, VK_FORMAT_R8G8B8A8_UNORM -- painted lazily from a queue that
-       every miss feeds, so a frame draws indexed for the frame or two before
-       its restore lands. A sprite shader samples the twin where its alpha is 1
-       and stays on the index elsewhere; a recycle clears it. `prio` orders the
-       queue against the other jobs (the terrain's is 0).
-
-       `rgb` IS 0 FOR THE LIFE OF THE PROCESS: nothing in the tree writes it
-       non-zero. So EVERY pass that gates
-       its restored branch on `rgb` publishes 0 every frame, and there are
-       THREE of them, not one:
-           tagpu_feat.c      `s_pub.restored = (s_atlas.rgb && ...)`
-           tagpu_fx.c        `s_pub.restored = (s_atlas.rgb && ...)`
-           tagpu_posedraw.c  `s_pub.restored = (tagpu_r3d_atlas_rgbref() && ...)`
-                             -- and that accessor returns `s_atlas.rgb` too.
-       (`tagpu_terr.c` also publishes `restored`, from its own local and its
-       own fixed-list restore; it is not gated on this field and is the one
-       that is actually live.)
-       THIS IS THE PIN UNDER THE PIN. Feeding the published restore list is
-       not enough to make the Vulkan lane's restore run: with `restored` 0 its
-       consumers take the "no restore" arm before they ever look at the list.
-       The field is kept so the consumers can be unwound with their producer
-       in view. */
-    unsigned int  rgb;
-    /* BUMPED EVERY TIME `rgb` IS CREATED, and never otherwise: a re-arm frees
-       the texture and makes it again, resetting the restorer's painted count
-       to 0 -- so a painted count alone is not a content key across that seam.
-       This is the discontinuity such a count cannot see. Pinned with `rgb`,
-       which nothing creates; kept for the same reason. */
-    unsigned      rgbGen;
-    int           prio;
+       same shelf, RGBA8 -- is the Vulkan lane's image, painted lazily from the
+       published restore list below, which every miss feeds, so a frame draws
+       indexed for the frame or two before its restore lands. A sprite shader
+       samples the twin where its alpha is 1 and stays on the index elsewhere.
+       Whether a pass's twin is live at all is keyed on `rlistWant` (the arm):
+       that is what each pass's hand-over `restored` is published from. */
     /* frames whose shorter edge is under this are never queued for restore:
        below the model's receptive field there is nothing to restore, so the
        work returns approximately its input (gui-renderer.md 3.9). 0 = no
        floor, which is every atlas but the UI's. */
     int           restoreMinEdge;
-    int           restoreFailed;
-    /* THE NEXT THREE HAVE NO WRITER AND NO READER IN THE TREE. They are 0 and
-       NULL for the life of the process. Kept, not deleted, because this
-       struct's restore half is to be unwound as one piece and a field removed
-       early is a field whose consumers are found by the compiler one at a
-       time. The tileability test `pal` names takes its palette from its caller
-       (`tagpu_rglsl_tileable(px, w, h, pal, key)`), never from here. */
-    int           dumpedN;      /* [PINNED 0] entries when the dump last wrote */
-    const unsigned char* pal;   /* [PINNED NULL] the tileability palette       */
-    unsigned      palSerial;    /* [PINNED 0] pal serial the twin was made at  */
     /* THE CPU MIRROR, which is what the Vulkan lane uploads. `dim` x `dim`
        bytes holding every texel the atlas has painted, written by atlas_paint
        and by nothing else, so the Vulkan passes upload these texels rather
@@ -270,20 +232,14 @@ typedef struct TAGPU_GAFATLAS {
        destination), `tagpu_gaf_atlas_lost`, a palette move, and the overflow
        restart below. A consumer that sees a new
        generation drops its own job and starts from index 0.
-       `rlistRepaint` is 1 only for the palette-move generation, where the
-       destination already holds a restore and is recoloured in place.
-
-       AND IT HAS NO WRITER THAT PASSES 1. The only assignment is
-       `rlist_restart`'s parameter, and both call sites pass 0 -- the arm and
-       the overflow restart. So the palette-move generation
-       this paragraph describes does not exist yet, `rlistRepaint` is a
-       constant 0, and every consumer's `repaint` term is dead. The consequence
-       is real rather than cosmetic: `if (!repaint) s_arHave = 0;` means every
-       generation change blanks the destination, which is why the consumers do
-       not treat "no twin" as "draw nothing" (see `tagpu_vk_unit.c`'s restored
-       gate). Either give it the palette-move writer it describes, or
-       delete the term; it is documented as live here so the next reader does
-       not re-derive that it is not.
+       `rlistRepaint` is 1 only for the palette-move generation
+       (`tagpu_gaf_atlas_restore_repalette`), where the destination already
+       holds a restore and is recoloured in place. Only the UI atlas takes that
+       path (tagpu_gui_surf.c, when the presented palette settles); for the
+       feature, effects and unit atlases it is 0 on every generation, so their
+       consumers blank the destination on each one, which is why they do not
+       treat "no twin" as "draw nothing" (see `tagpu_vk_unit.c`'s restored
+       gate).
 
        BOUNDED, because an append-only list fed for a session's length is not.
        The cap is four times the atlas's entry ceiling; reaching it RESTARTS
@@ -320,7 +276,6 @@ const unsigned char* tagpu_gaf_frame_sane(const void* g);
 const unsigned char* tagpu_gaf_seq_frame(const char* seq, int idx);
 int                  tagpu_gaf_seq_nframes(const char* seq);
 const unsigned char* tagpu_gaf_state_frame(const char* animstate);
-const char*          tagpu_gaf_seq_name(const char* seq);
 
 /* THE HEADER FIELDS A CALLER NEEDS TO PLACE A SPRITE, read inside this module
    so that a pass which only places sprites dereferences no engine byte of its
@@ -444,28 +399,6 @@ void tagpu_gaf_atlas_restore_repalette(TAGPU_GAFATLAS* a);
    the whole chain is `tagpu_gaf_mip_chain` bytes. These two are the layout
    contract: `tagpu_vk_restore.c` sizes its dump with them, and the consuming
    lane knows its own chain depth from `restoreMips`. */
-/* THE ANISOTROPY A RESTORED TWIN IS FILTERED WITH. `rgbAniso` below carries it
-   and carries the CONFIGURED ratio rather than an applied one:
-   `tagpu_classicpp_light()->aniso`, the same knob the consumer's own sampler is
-   built from. Written every arm beat, so a knob edited mid-session is seen.
-
-   WHY NOT THE APPLIED VALUE. The lane that reads this list paints the twin
-   itself, with its own sampler, so "what was actually applied" is the
-   consumer's own value and the test would compare it against itself. What
-   can still go wrong is the two ends being CONFIGURED apart, and the knob is
-   what catches that. */
-/* [NO CONSUMER] The default ratio. The Vulkan lane reads
-   `tagpu_classicpp_light()->aniso`, which has the same default and is a knob
-   rather than a constant.
-
-   `rgbAniso` DOES NOT CARRY THIS CONSTANT, on purpose. Publishing a constant
-   means standing the unit pass down on every device without anisotropic
-   filtering, where the consumer's applied value is
-   0.0f and can be nothing else -- drawing no unit at all rather than an
-   unfiltered one, over a feature the machine does not have. The knob is
-   published instead. Kept as the documented default and as the number the
-   two ends agree on when nobody has touched the knob. */
-#define TAGPU_GAF_TWIN_ANISO 4.0f
 
 size_t tagpu_gaf_mip_bytes(int dim, int level);
 size_t tagpu_gaf_mip_off(int dim, int level);

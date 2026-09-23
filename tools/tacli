@@ -920,12 +920,15 @@ def cmd_create(args):
 
 
 def _ensure_owndraw_for_native(inst) -> "str | None":
-    """The native GPU pass (tagpu_native.on) needs the owndraw detours to wipe the
-    engine's 8bpp composite, or the engine keeps rasterising the same unit and you get
-    a near-invisible double draw. But owndraw installs its engine-code detours ONCE at
-    DllMain and only if tagpu_owndraw.on exists THEN — it has no per-frame re-arm (unlike
-    the native pass and the .off toggles), because patching live engine bytes off the
-    frame loop is racy; the tracer and suppressor install the same way. So arming owndraw
+    """The native GPU pass (tagpu_native.on) needs the owndraw detours for the engine
+    draws it replaces: the build-state effect of a unit it owns (else a second scaffold
+    at the unzoomed projection), a husk while its wreck pass is armed, and the cached
+    structure shadow once ours is live. It never needs a unit skipped -- the engine
+    rasterises every unit either way (tagpu_owndraw_classify). But owndraw installs its
+    engine-code detours ONCE at DllMain and only if tagpu_owndraw.on exists THEN — it
+    has no per-frame re-arm (unlike the native pass and the .off toggles), because
+    patching live engine bytes off the frame loop is racy; the tracer and suppressor
+    install the same way. So arming owndraw
     after launch silently does nothing. Close the footgun here, at the one moment it
     matters: if this launch will bring up the native pass, make sure owndraw is armed to
     match before the process starts. Returns a human note, or None if nothing was done.
@@ -936,14 +939,16 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
     nat = inst.gamedir / "tagpu_native.on"
     own = inst.gamedir / "tagpu_owndraw.on"
     if not nat.exists():
-        # A stale owndraw.on is worse than none: its detours skip the engine's
-        # rasterisers while the native pass that would supply the pixels is not
-        # running, so the engine draws NO units at all (OWND ... repaint=0
-        # miss=<everything>) and an engine-side A/B silently measures nothing.
+        # A stale owndraw.on without native.on skips no unit: tagpu_owndraw_classify
+        # never does, a husk is skipped only while the native wreck pass is armed
+        # and the build effect only for a unit that pass owns. Its structure-shadow
+        # skip is the one another pass can raise (the terrain key-fill, through
+        # tagpu_owndraw_set_structshadow_terr). Dropping it keeps detours out of a
+        # launch where the pass they serve is not running.
         if own.exists():
             own.unlink()
-            return ("dropped owndraw.on (native.on is not set; its detours would skip "
-                    "the engine's unit rasterisers with nothing drawing in their place)")
+            return ("dropped owndraw.on (native.on is not set, and its detours serve "
+                    "only the native pass)")
         return None
     # native.on is "TYPE [extra tokens]" (e.g. "all wrecks"); owndraw.on is just "TYPE".
     tok = (nat.read_text().split() or ["all"])[0]
@@ -951,12 +956,8 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
         own.write_text(tok + "\n")
         return (f"auto-armed owndraw.on={tok} (native.on is set and owndraw must be "
                 f"installed at launch, not after)")
-    have = (own.read_text().split() or [""])[0]
-    if have != tok:
-        return (f"warning: owndraw.on={have or '(empty)'} but native.on={tok} — the "
-                f"native pass will only be suppressed for {have!r}; other types will "
-                f"double-draw. Set them to match, or `tacli arm {inst.name} "
-                f"owndraw.on={tok}` and relaunch.")
+    # A type that differs from native.on's is harmless: owndraw skips no unit by
+    # type, so its target only scopes the posed program's refusal warning.
     return None
 
 
@@ -1449,14 +1450,14 @@ def cmd_gui(args):
         elif args.state == "remove":
             path.unlink(missing_ok=True)
         else:
-            tokens = {"on": "", "strict": "strict", "census": "census log pgm trace"}[args.state]
+            tokens = {"on": "", "census": "census log pgm trace"}[args.state]
             extra = " ".join(args.tokens or [])
             path.write_text((tokens + " " + extra).strip() + "\n")
     present = path.exists()
     content = path.read_text().strip() if present else ""
     state = ("absent (the DLL's default applies unless the instance has "
              "tagpu_defaults.off)") if not present else ("armed, draw OFF" if "off" in content.split() else
-            f"armed, draw ON{' STRICT' if 'strict' in content else ''}{' + census' if 'census' in content else ''}")
+            f"armed, draw ON{' + census' if 'census' in content else ''}")
     out({"name": args.name, "gui": present, "tokens": content}, args.json,
         human=f"{args.name}: tagpu_gui.on {state}" + (f" [{content}]" if content else ""))
 
@@ -4541,10 +4542,10 @@ def build_parser():
     e.add_argument("--release", action="store_true")
     e.set_defaults(func=cmd_eye)
 
-    gu = sub.add_parser("gui", help="the UI layer: on | strict | census | off | remove (Phase E)")
+    gu = sub.add_parser("gui", help="the UI layer: on | census | off | remove (Phase E)")
     add_common(gu)
     gu.add_argument("name")
-    gu.add_argument("state", nargs="?", choices=["on", "strict", "census", "off", "remove"],
+    gu.add_argument("state", nargs="?", choices=["on", "census", "off", "remove"],
                     help="omit to report; `off` keeps the detours armed but stops the draw")
     gu.add_argument("tokens", nargs="*", help="extra tokens for the file (log, pgm, trace, key=N)")
     gu.set_defaults(func=cmd_gui)

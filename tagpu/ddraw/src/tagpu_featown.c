@@ -74,8 +74,6 @@ void tagpu_featown_set_skip(int on)
 
 void tagpu_featown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
 
-int tagpu_featown_installed(void) { return g_installed; }
-
 void tagpu_featown_flush(unsigned int frame_counter)
 {
     if (!g_installed) return;

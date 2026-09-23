@@ -144,7 +144,6 @@
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_restore.h"
 #include "tagpu_vk_unit.h"
-#include "tagpu_vk_hires.h"
 #include "tagpu_vk_mark.h"
 #include "tagpu_vk_shot.h"
 
@@ -379,8 +378,8 @@ typedef struct {
     /* samplerAnisotropy, a CORE feature bit rather than an extension, and the
        largest ratio this device will apply. The Classic++ restored twins are
        the only textures this fork filters at all, and they are specified at
-       the Classic++ `aniso` knob's ratio (4x by default, tagpu_gaf.h
-       `TAGPU_GAF_TWIN_ANISO`) -- so a lane without this draws minified
+       the Classic++ `aniso` knob's ratio (4x by default, tagpu_classicpp.c)
+       -- so a lane without this draws minified
        restored art differently from its specification. */
     int              anisook;
     float            maxAniso;
@@ -1826,7 +1825,6 @@ static void vk_down(void)
         tagpu_vk_fx_down(&s_pass);
         tagpu_vk_shadow_down(&s_pass);
         tagpu_vk_unit_down(&s_pass);
-        tagpu_vk_hires_down(&s_pass);
         tagpu_vk_mark_down(&s_pass);
         tagpu_vk_surf_down(&s_pass);
         tagpu_vk_world_down(&s_pass);
@@ -2492,9 +2490,8 @@ static int vk_present(void)
     if (tagpu_vk_terr_down_owed() || tagpu_vk_feat_down_owed() ||
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
-        tagpu_vk_hires_down_owed() || tagpu_vk_mark_down_owed() ||
-        tagpu_vk_surf_down_owed() || tagpu_vk_gui_down_owed() ||
-        tagpu_vk_world_down_owed()) {
+        tagpu_vk_mark_down_owed() || tagpu_vk_surf_down_owed() ||
+        tagpu_vk_gui_down_owed() || tagpu_vk_world_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
@@ -2510,7 +2507,6 @@ static int vk_present(void)
         if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
         if (tagpu_vk_shadow_down_owed())   tagpu_vk_shadow_down_paid(&s_pass);
         if (tagpu_vk_unit_down_owed())     tagpu_vk_unit_down_paid(&s_pass);
-        if (tagpu_vk_hires_down_owed())    tagpu_vk_hires_down_paid(&s_pass);
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
         if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
         if (tagpu_vk_gui_down_owed())      tagpu_vk_gui_down_paid(&s_pass);
@@ -2669,7 +2665,7 @@ static int vk_present(void)
             tagpu_vk_surf_prepare(&s_pass, cb, fi);
 
             /* THE SCAFFOLD'S UPLOAD IS FIRST OF OURS, though its DRAW is nearly last.
-               The overlay is a texture the unit, hi-res and effects
+               The overlay is a texture the unit and effects
                fragment shaders sample (`uScafOn`), so the pass that fills it
                has to have filled it before a consumer points a descriptor set
                at it -- and a consumer does that in its own `prepare`.
@@ -2684,11 +2680,6 @@ static int vk_present(void)
                yet and its own descriptor set is not written here -- that is
                `tagpu_vk_unit_prepare`, below the map. */
             tagpu_vk_unit_upload(&s_pass, cb, fi);
-            /* AND THE REPLACEMENT MESHES' CASTERS, beside it and for the same
-               reason: they are geometry the shadow map is about to draw, so
-               they have to be on the device before it is. It draws nothing
-               here either. */
-            tagpu_vk_hires_upload(&s_pass, cb, fi);
 
             tagpu_vk_shadow_prepare(&s_pass, cb, fi);
 
@@ -3011,7 +3002,6 @@ static int vk_resize(int w, int h)
     tagpu_vk_fx_down(&s_pass);
     tagpu_vk_shadow_down(&s_pass);
     tagpu_vk_unit_down(&s_pass);
-    tagpu_vk_hires_down(&s_pass);
     tagpu_vk_surf_down(&s_pass);
     tagpu_vk_world_down(&s_pass);
     /* AND ON A RESIZE TOO, though the device survives one: the restorer's

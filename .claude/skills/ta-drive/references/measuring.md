@@ -127,8 +127,9 @@ scores 0 magenta and shows no game.
 `fps`, `gui`) makes the Vulkan lane write one frame as `tagpu_<pass>_vk.ppm`. World passes are
 captured from the world target, `gw*ss x gh*ss` — 2048x1536 at 1024x768 with the shipped `ss=2`;
 the UI-side passes are the window's size. Compare two builds' files with
-`tools/vk-ab.py <old.ppm> <new.ppm>` (the two-file form; the `--pass <tag> <gamedir>` form looks
-for a `_gl.ppm` that nothing writes). Its exit status is 0 only when every pixel agrees.
+`tools/vk-ab.py <old.ppm> <new.ppm>`, which reports them as `A` and `B` (a gamedir argument is
+refused). Its exit status is 0 only when every pixel agrees. It does not check that a capture is
+from this run, so remove the old `.ppm` before re-arming, as below.
 
 ```bash
 tools/tacli arm <i> terr.on                                          # ONE pass; the clear is black

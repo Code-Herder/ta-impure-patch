@@ -70,7 +70,6 @@
 #include "tagpu_glsl.h"
 #include "tagpu_featown.h"
 #include "tagpu_gaf.h"
-#include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_native.h"
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables */
@@ -271,8 +270,6 @@ int tagpu_feat_armed(unsigned frame_counter)
     return 1;
 }
 
-int tagpu_feat_on(void) { return s_armed > 0; }
-
 /* the map the atlas's entries belong to (see tagpu_feat_gather) */
 static const char* s_mapGrid;
 static int         s_mapW, s_mapH;
@@ -395,7 +392,6 @@ static void atlas_setup(void)
     tagpu_gaf_atlas_lost(&s_atlas);          /* laid out again on the create below */
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "feat";
-    s_atlas.prio = 1;                        /* restored after the terrain, before effects */
     /* Every frame in here is a feature standing on the map, so nothing in it
        ever stops being wanted: when it fills, re-lay it tallest-first and
        keep it rather than drop it (tagpu_gaf.h `repack`). Without it the
@@ -924,11 +920,8 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
     s_pub.depthScale = v->depthScale > 1.0f ? v->depthScale : 512.0f;
-    /* THE ROUTE IS THE PUBLISHED LIST, NOT AN IMAGE NAME. `s_atlas.rgb`
-       is 0 for the life of the process (tagpu_gaf.h), so keyed on it this
-       would publish 0 on every frame and the consumer would stand every
-       restored frame down. `rlistWant` is what says a restore route exists;
-       it is latched by the arm. */
+    /* THE ROUTE IS THE PUBLISHED LIST: `rlistWant` is what says a restore
+       route exists; it is latched by the arm. */
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
     s_pub.lit = s_cpp ? 1 : 0;
     s_pub.fog = v->fogMode & 1;

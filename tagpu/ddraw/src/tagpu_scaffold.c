@@ -39,12 +39,12 @@
    unit it stamps for come out of the packet; what is left below is the
    FeatureDef record's own layout and the one LIVE read of its base. Those
    records are the per-MAP asset the teardown cascade frees, so their lifetime
-   is tagpu_reclaim's fence — the same standing tagpu_terr.c and
-   tagpu_r3dcache.c have, and not the per-frame sim state the packet exists to
-   copy. The base is READ LIVE rather than taken from the packet because the
-   cascade frees the array at 0x42227D and then NULLS main+0x1426F at
-   0x42228B, and that null is this pass's only refusal afterwards; a base
-   copied into a packet and held for a frame reads past it. */
+   is tagpu_reclaim's fence — the same standing tagpu_terr.c has, and not
+   the per-frame sim state the packet exists to copy. The base is READ LIVE
+   rather than taken from the packet because the cascade frees the array at
+   0x42227D and then NULLS main+0x1426F at 0x42228B, and that null is this
+   pass's only refusal afterwards; a base copied into a packet and held for a
+   frame reads past it. */
 #define TA_MAINPP    0x00511DE8u
 #define OFF_FEATDEF  0x1426F   /* FeatureDef array, stride 0x100                */
 #define OFF_FEATCOUNT 0x14253  /* i32 NumFeatureDefs: read LIVE beside the base  */

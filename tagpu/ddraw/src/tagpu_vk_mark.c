@@ -969,10 +969,8 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        Created and left there -- no clear, no transition -- its descriptor would
        claim SHADER_READ_ONLY_OPTIMAL while the image sat in UNDEFINED with
        undefined contents, and sampling that is undefined behaviour: the pass
-       draws its vertices and the frame comes back black. `tagpu_vk_hires.c`
-       carries a comment about the same fault ("an image whose contents are
-       UNDEFINED ... is not a mistake to make twice"). The upload is what puts
-       it in the layout the descriptor promises. */
+       draws its vertices and the frame comes back black. The upload is what
+       puts it in the layout the descriptor promises. */
     if (!s_img[slot][IMG_NONE].have) {
         static const unsigned char ONE = 0xFF;
         if (!img_size(d, &s_img[slot][IMG_NONE], 1, 1, VK_FORMAT_R8_UNORM) ||

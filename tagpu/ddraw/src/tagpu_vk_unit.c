@@ -132,9 +132,8 @@
 
    THE NATIVE 3DO STREAM HAS NO UNIT VERTICES. tagpu_native.c builds no
    vertices for an ordinary unit -- `nv` is 0 for the whole of its unit loop --
-   so both the body draw and the caster draw that read
-   `firstv[i+1] - firstv[i]` are unreachable, and `tagpu_shadow_unit`, whose
-   only call site is behind that same test, is never called.
+   so every unit body and every unit caster comes from the posed hand-over
+   this pass draws.
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
    A PASS READS NO ENGINE STATE: every value comes from the gather's
@@ -154,8 +153,7 @@
 #include "tagpu_posedraw.h"
 #include "tagpu_posebake.h"
 #include "tagpu_packet.h"    /* tagpu_grow_stress, and nothing else of it */
-#include "tagpu_gaf.h"
-#include "tagpu_classicpp.h" /* aniso=: the knob the producer publishes too */   /* tagpu_gaf_mip_off/_bytes: the restored twin's chain layout */
+#include "tagpu_classicpp.h" /* aniso=: the knob the producer publishes too */
 #include "spirv/tagpu_posedraw.spv.h"
 #include "spirv/tagpu_native.spv.h"
 
@@ -1863,10 +1861,8 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.f[20] = r->cast[0]; b.f[21] = r->cast[1];
     b.f[22] = r->cast[2];                              /* uCast       vec3 @80 */
     b.i[23] = 0;                                       /* uDepthPass   int @92 */
-    /* uShadowMat @96 -- the same hand-over matrix the fragment block carries
-       at @176. It is never READ here (the shader reaches it only on the
-       uDepthPass branch); it is written anyway. */
-    memcpy(&b.f[24], h->shadowMat, 64);
+    /* uShadowMat @96 stays at the memset's zero: the shader reaches it only
+       on the uDepthPass branch. */
     b.i[40] = 0;                                       /* uRange       int @160*/
     b.f[41] = 0.0f;                                    /* uWire      float @164*/
     b.i[42] = base[0];                                 /* uRowBase     int @168*/
@@ -1890,8 +1886,8 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        unit's visibility words. Everything else is the BODY range over again, which IS the
        blackened composite: the same triangles, the same pose, shifted.
 
-       uDepthPass STAYS 0 and uShadowMat is carried as the body block carries
-       it -- the shader reaches it only on the depth branch. */
+       uDepthPass STAYS 0 and uShadowMat stays zero, as in the body block --
+       the shader reaches it only on the depth branch. */
     b.f[2] = 5.0f; b.f[3] = r->shOffY;                 /* uOffset     vec2 @8  */
     b.i[40] = (r->shKind == TAGPU_PDSH_SLANT) ? 1 : 0; /* uRange               */
     memcpy(ub + vglOff3, b.f, VGL_SZ);
@@ -2292,8 +2288,9 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* AN UNPAINTED TWIN DRAWS INDEXED, ON BOTH BRANCHES. A stand-down
            here, with five one-way `s_rjTried` latches above it, would blank
            every unit for the rest of the SESSION on any restorer refusal, and
-           -- because `rlistRepaint` is a constant 0, so `if (!repaint)
-           s_arHave = 0;` fires on every generation change -- for the length of
+           -- because the unit atlas's `rlistRepaint` is 0 on every
+           generation (tagpu_gaf.h), so `if (!repaint) s_arHave = 0;` fires on
+           every generation change -- for the length of
            a repaint on every level boundary, recycle and map change. `!feed`
            is the rare half: a generation change satisfies all three feed terms.
 
@@ -2332,7 +2329,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        overlay is another pass's image, and tagpu_vk_scaffold.h exposes a
        FRAME-STAMPED per-slot view in exactly the shape tagpu_vk_shadow.h
        settled on, which `bind_main` points binding 44 at. That is the part
-       the effects and hi-res passes will reuse.
+       any other consumer of the overlay would reuse.
 
        THE `gl_FragCoord` HALF IS CLOSED.
 

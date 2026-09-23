@@ -585,7 +585,7 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
 
     /* THE OVERLAY A CONSUMER MAY SAMPLE IS NOT THIS FRAME'S UNTIL THE UPLOAD
        BELOW HAS BEEN RECORDED. Cleared first so that every exit path leaves
-       `tagpu_vk_scaffold_ready` saying no rather than yes for an older frame. */
+       `tagpu_vk_scaffold_view` saying no rather than yes for an older frame. */
     s_liveHave = 0;
 
     if (s_state == ST_REFUSED) return 0;
@@ -716,11 +716,6 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
     s_liveHave = 1;
     s_liveFrame = d->frame;
     return 1;
-}
-
-int tagpu_vk_scaffold_ready(unsigned frame)
-{
-    return s_liveHave && s_liveFrame == frame;
 }
 
 VkImageView tagpu_vk_scaffold_view(unsigned frame, uint32_t slot)

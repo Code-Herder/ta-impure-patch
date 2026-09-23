@@ -34,5 +34,4 @@ void tagpu_owndraw_set_structshadow(int ours, unsigned frame);
    it publishes its own skip byte and lower it AFTER -- the ordering is the
    safety argument, and tagpu_owndraw.c's `g_ssTerr` note has the reasoning. */
 void tagpu_owndraw_set_structshadow_terr(int on);
-int  tagpu_owndraw_structshadow_ours(void);
 #endif

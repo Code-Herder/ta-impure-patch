@@ -5,11 +5,6 @@
    armcom). Owned units leave the composite path: writeback must skip+wipe
    them, the owndraw stub wipes instead of restoring. */
 void tagpu_native_frame(const TAGPU_FRAME* f);
-/* THE UNIT FRAGMENT SHADER, so the posed program (tagpu_posedraw.c) is a
-   twin of this pass rather than a copy of it: the vertex stage is what the
-   posed program replaces, and sharing the fragment stage is what stops the two
-   drifting in the half it does not touch. */
-const char* tagpu_native_unit_fs(void);
 /* Is this unit natively owned right now? GAME THREAD ONLY: it reads the unit record and its UnitDef, and the
    publisher is what calls it per unit per frame — the answer travels to the
    render thread as TAGPU_PK_U_NATIVE in the packet, so the marker pass, the

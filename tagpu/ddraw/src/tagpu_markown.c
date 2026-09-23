@@ -9,12 +9,10 @@
 #include "tagpu_markown.h"
 #include "tagpu_opt.h"
 #include "tagpu_order.h"
-#include "tagpu_text.h"
 #include "tagpu_packet_pub.h"
 #include "tagpu_terr.h"
 #include "tagpu_native.h"
 #include "tagpu_detour.h"
-#include "tagpu_vpwide.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -80,7 +78,6 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
 #define CTX_CLIP_T   8
 #define CTX_CLIP_R   9
 #define CTX_CLIP_B   10
-#define CTX_FIELDS   11          /* how much of it we read                    */
 
 volatile unsigned char g_markown_skipBars = 0;
 

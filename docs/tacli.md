@@ -141,13 +141,12 @@ A test is a scenario, a few tacli commands and an assertion on what they return.
 
 - The nine `cob-*` scenarios put one unit of each class through its script (walk, aim and fire, die, take off, dive, etc.) with the COB trace armed. `tools/cobtrace_fixtures.py` runs all nine and keeps the traces as fixtures for the COB editor's virtual machine.
 - `warlordex-groundattack` gives one ship a ground attack order with nothing else in range. `tacli weapons` reading fire counts on slots 4 to 7 is the whole test of whether the extra weapons obey a ground order.
-- `hires-crowd` puts twelve ordinary unit types on screen before the one with a replacement mesh. Pass is one line in `tacli log`. A two-unit scenario could never see the bug this one caught.
 - `shootall-ab` is six idle Peewees, an enemy building in range and one engine bit. Flip it, wait, count wrecks.
 
 ```bash
-tools/tacli scenario load t1 hires-crowd
-tools/tacli wait t1 'pose bound 12 of 12' --timeout 30
-tools/tacli shot t1 -o /tmp/crowd.png
+tools/tacli scenario load t1 one-unit
+tools/tacli wait t1 'native: vulkan lane handed over .* posed=1 ' --timeout 30
+tools/tacli shot t1 -o /tmp/one-unit.png
 tools/tacli stop t1
 ```
 
@@ -175,10 +174,6 @@ Everything in `scenarios/` was written to answer a question. What each one was f
 | `shadow-mix` | A ground unit, a building, a hovercraft and a wreck. Shadow dedupe. |
 | `shadow-air` | Five aircraft patrolling lanes across a coastline over a row of ground units. Aircraft shadows. |
 | `shadow-air-fx` | Aircraft crossing burning buildings on a known lane. Whether shadows composite above live effects. |
-| `hires-one` | One Peewee with a replacement mesh beside an engine-drawn AK, at facing 45. The yaw regression test. |
-| `hires-peewee` | 20 Peewees with the mesh against 20 AKs. The replacement mesh in a crowd. |
-| `hires-crowd` | Twelve ordinary types on screen before the one with a mesh. The replacement slot regression. |
-| `hires-wreck` | Four replaced units and four husks. Wrecks must not inherit a replacement mesh. |
 
 **The browser lab (tascene)**
 
@@ -237,7 +232,7 @@ Every command takes an instance name first and `--json` anywhere.
 | `ui` | snapshot and drive the on-screen gadgets: `show`, `click`, `set`, `check`, `uncheck`, `select`, `hover`, `fill`, `press`, `wait`; `--page` walks a paged build menu |
 | `shield` | the input firewall: `on`, `off`, or omit to report |
 | `arm` | set or clear the patch's trigger files, e.g. `native.on=all owndraw.on zoom.on classicpp.on`, `native.on=off` |
-| `gui` | the UI renderer: `on`, `strict`, `census`, `off`, `remove` |
+| `gui` | the UI renderer: `on`, `census`, `off`, `remove` |
 | `switches` | read or set the engine switches: `shootall=on noshake=on` … |
 | `shot` | screenshot of the engine's surface (PNG) |
 | `roster` | the latest unit roster and the camera eye |

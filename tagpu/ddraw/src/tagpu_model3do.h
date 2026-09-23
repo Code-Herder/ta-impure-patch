@@ -21,9 +21,7 @@
    "The repose" and "The 3DO model tree". */
 
 /* The piece-count bound every reader of an Object3do uses. Nothing in the
-   engine bounds a model's piece count; 64 was an array size in tagpu_native.c
-   and 48 is the replacement-mesh program's GLSL uniform array (TAGPU_HMAXPIECE,
-   a different constraint, deliberately left alone). Measured over all 608 models
+   engine bounds a model's piece count. Measured over all 608 models
    of the stock objects3d tree the largest has 36 pieces, so this sits an order
    of magnitude above anything stock content asks for and above any plausible
    mod — which is the point: it stops being a number the design has to reason

@@ -287,8 +287,6 @@ static int s_build = 1, s_dots = 1, s_circle = 1, s_sprite = 1, s_ranges = 1;
 static int s_labels = 1;
 static unsigned s_armCheck = 0;
 
-int tagpu_order_on(void) { return s_armed == 1; }
-
 int tagpu_order_armed(unsigned frame_counter)
 {
     int was;

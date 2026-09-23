@@ -55,7 +55,6 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_fogwide.h"
 #include "tagpu_packet_pub.h"
-#include "tagpu_zoom.h"
 
 #define TERRAIN_VA   0x00483FA0u   /* stdcall(ctx), ret 4  */
 #define FOG_VA       0x004848E0u   /* stdcall(ctx), ret 4  */
@@ -320,11 +319,6 @@ void tagpu_terrown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
 int tagpu_terrown_installed(void) { return g_installed; }
 
 int tagpu_terrown_filled(void) { return g_terrown_skip && g_filled; }
-
-/* The fog overlay is ours exactly while the LATCH is set: that is the flag the
-   leaf_call detour on 0x4848E0 tests, so terr_fogtick above runs on precisely
-   these ticks and on no others. */
-int tagpu_terrown_owns_fog(void) { return g_terrown_own != 0; }
 
 int tagpu_terrown_request(void) { return g_terrown_skip != 0; }
 

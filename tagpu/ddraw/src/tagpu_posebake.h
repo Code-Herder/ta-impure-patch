@@ -99,18 +99,6 @@ typedef struct TAGPU_PBGEOM {
        hand the new model the old model's vertices. The serial makes "the same
        geometry" a property of the bake rather than of where it landed. */
     unsigned     serial;
-    /* the BODY range's rest AABB per piece, and whether the piece contributed
-       any body vertex at all. The shadow top is a CPU walk of these 8 corners
-       through the piece's pose matrix (gpu-posing.md §4, "What stops being
-       true"). Two stated deviations from the posed vertices themselves: an
-       AABB carried through a rotation BOUNDS the posed points rather than
-       hitting them, so the top is an over-estimate; and it covers every body
-       face, including the ones whose material the stream collapses. It feeds
-       the shadow height of WRECKS only — a unit with a record prefers
-       `model_aabb`. */
-    float        pmn[TAGPU_PBMAXPIECE][3];
-    float        pmx[TAGPU_PBMAXPIECE][3];
-    unsigned char pbody[TAGPU_PBMAXPIECE];   /* 0 = no body vertex baked      */
     /* THREE COUNTS, NOT ONE. gpu-posing.md §3 listed "a face with neither a
        texture nor a colour", "a node whose vertex array does not read" and "a
        piece whose parent never resolves" together as the anomaly to log once
@@ -138,7 +126,6 @@ typedef struct TAGPU_PBMAT {
     unsigned     serial;         /* as the geometry entry's, and for the same
                                     reason: `mat_slot` recycles slots too      */
     int          nvert, nskip;   /* nskip: vertices the skip flag collapses    */
-    int          noMaterial;     /* faces with neither a texture nor a colour  */
     unsigned     lastFrame;
 } TAGPU_PBMAT;
 
@@ -163,12 +150,6 @@ struct TAGPU_PK_PIECE;
 int  tagpu_posebake_unit(const struct TAGPU_PK_PIECE* pc, int nparts, int owner,
                          int ghost,
                          const TAGPU_PBGEOM** geom, const TAGPU_PBMAT** mat);
-
-/* The vertex count `emit_geom` should produce for THIS unit out of this bake:
-   the body range, minus the faces whose material the engine has nothing for,
-   minus the pieces this unit is not showing. The lever compares the two. */
-
-int  tagpu_posebake_armed(void);         /* tagpu_posebake.on                 */
 
 /* ---- THE VULKAN LANE'S MIRRORS (Phase G, the UNIT pass) -----------------
 
@@ -198,7 +179,4 @@ const float* tagpu_posebake_geom_mirror(const TAGPU_PBGEOM* g, unsigned serial,
                                         int* nvert);
 const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
                                        int* nvert);
-
-/* one `bake=` field for the native: line; writes nothing when disarmed */
-int  tagpu_posebake_stats(char* out, int n);
 #endif

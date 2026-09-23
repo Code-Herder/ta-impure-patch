@@ -66,11 +66,10 @@
 
    ---- WHAT IT DOES NOT DO ----
 
-   ONLY THE HEIGHTFIELD CASTS FROM THIS FILE. A map has four kinds of caster
-   -- the native 3DO stream, the posed bodies, the replacement meshes and the
-   heightfield -- and the hand-over carries a copy of the heightfield alone;
-   the posed bodies and the replacement meshes are the unit and hi-res
-   passes' to draw into this pass's render pass, and neither has any today
+   ONLY THE HEIGHTFIELD CASTS FROM THIS FILE. A map has three kinds of caster
+   -- the native 3DO stream, the posed bodies and the heightfield -- and the
+   hand-over carries a copy of the heightfield alone; the posed bodies are the
+   unit pass's to draw into this pass's render pass, and it has none today
    (see `prepare`). A map missing a caster is a different map, so the
    hand-over's `otherCasters` counts the casters it carries no copy of and
    this pass REFUSES the frame outright rather than draw an incomplete one.
@@ -87,7 +86,6 @@
 
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_unit.h"
-#include "tagpu_vk_hires.h"   /* the posed casters, drawn inside our render pass */
 #include "spirv/tagpu_shadow.spv.h"   /* generated from src/tagpu_shadow_glsl.h */
 
 #define UBLK 64                            /* std140: one mat4, the generated  */
@@ -139,7 +137,6 @@ static int s_saidRes;
 /* what stands after `prepare`, for the consumers to ask about */
 static unsigned s_liveFrame;               /* the frame the map was drawn for   */
 static int      s_liveHave;                /* ...and whether one was            */
-static int      s_res;                     /* its edge in texels                */
 
 static VkRenderPass          s_rp;         /* depth only, ours                  */
 static VkFormat              s_dfmt = VK_FORMAT_UNDEFINED;
@@ -773,7 +770,6 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        SUCCEEDS. Cleared first so that every exit path leaves the consumers'
        `tagpu_vk_shadow_ready` saying no rather than yes for an older frame. */
     s_liveHave = 0;
-    s_res = 0;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -813,9 +809,8 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 
     /* THE MAP MAY BE INCOMPLETE ON THIS SIDE OF THE SEAM. `otherCasters` is
        the producer's count of everything the map holds that the hand-over
-       carries no copy of: the native 3DO stream, the posed bodies, the
-       replacement meshes -- and the heightfield itself when its mirror is
-       missing.
+       carries no copy of: the native 3DO stream, the posed bodies -- and
+       the heightfield itself when its mirror is missing.
 
        THE POSED BODIES ARE COVERED BY THE UNIT PASS, and this is where that
        is accounted for. `tagpu_vk_unit_casters` is the subset of
@@ -825,24 +820,18 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        frame the lane could have drawn, where an under-count would draw a map
        with a caster missing.
 
-       WHAT IS LEFT OVER IS THE REPLACEMENT MESHES, THE NATIVE 3DO STREAM AND
-       THE HEIGHTFIELD WHOSE MIRROR WENT MISSING.
+       WHAT IS LEFT OVER IS THE NATIVE 3DO STREAM AND THE HEIGHTFIELD WHOSE
+       MIRROR WENT MISSING.
 
        The unit pass's `upload` has already run for this slot -- the seam calls
        it before this function and says so -- which is what makes the number
        available before the render pass begins. */
-    /* THE REPLACEMENT MESHES ARE THE SECOND TERM. Both passes
-       count the same way -- the subset of the map's casters they are ready
-       to draw this frame -- so the sum is comparable to `otherCasters` by the
-       same construction, and both can only UNDER-count, which refuses a frame
-       the lane could have drawn rather than drawing a map with a caster
-       missing. */
-    ours = tagpu_vk_unit_casters() + tagpu_vk_hires_casters();
+    ours = tagpu_vk_unit_casters();
     if (h.otherCasters - ours > 0) {
         if (!s_saidCasters) {
             s_saidCasters = 1;
             plog(d, "shadow: the gather holds %d caster(s) this lane has no copy "
-                    "of (%d of them the unit and hi-res passes carry). Nothing "
+                    "of (%d of them the unit pass carries). Nothing "
                     "drawn while there are, and the passes that sample the map "
                     "stand down with it", h.otherCasters, ours);
         }
@@ -860,13 +849,13 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         return 0;
     }
     s_saidRes = 0;
-    /* AN EMPTY MAP IS A MAP. `terrainshadow` defaults to 0
-       (tagpu_classicpp.c), so on a frame with no unit caster either nothing
-       is drawn into the map and the clear at 1.0 IS the map -- every receiver
-       then finds no blocker and is lit. Refusing that frame would stand the
-       consumers down over a map this pass makes with a render pass and no
-       draw call, which is the Classic++ default configuration. So `casters` decides whether anything is bound and drawn
-       below, not whether the map is written. */
+    /* AN EMPTY MAP IS A MAP. On a frame whose hand-over carries no
+       heightfield and no unit caster either, nothing is drawn into the map and
+       the clear at 1.0 IS the map -- every receiver then finds no blocker and
+       is lit. Refusing that frame would stand the consumers down over a map
+       this pass makes with a render pass and no draw call. So `casters`
+       decides whether anything is bound and drawn below, not whether the map
+       is written. */
     casters = h.hv && h.hi && h.indexCount > 0;
     if (casters) {
         if (h.hnv < 1 || h.hnv > MESH_MAXV || h.hni < 1 || h.hni > MESH_MAXI) {
@@ -876,8 +865,8 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
             return 0;
         }
         /* AND THE RANGE INSIDE THE MESH, which is the bound the draw itself
-           uses. The producer clamps it (tagpu_terr.c) and this re-checks it,
-           for the same reason every other bound here is re-checked. */
+           uses. A producer has to clamp it, and this re-checks it for the
+           same reason every other bound here is re-checked. */
         if ((VkDeviceSize)h.firstIndex + h.indexCount > h.hni) {
             plog(d, "shadow: the draw range %u+%u is outside a %u-index mesh - "
                     "nothing drawn", h.firstIndex, h.indexCount, (unsigned)h.hni);
@@ -905,9 +894,9 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 
     /* NOTHING IS KEPT ONCE THERE IS NOTHING TO DRAW -- the file header's own
        rule, applied to the empty-map path too. The caster mesh is the largest
-       thing this pass owns (10 MB on Town & Country, 19 on Two Continents) and
-       `terrainshadow` is a LIVE knob, so a map that drew hills and then stopped
-       would otherwise hold the whole pair for the rest of the session. Through
+       thing this pass owns (a whole-map heightfield measured 10 MB on Town &
+       Country, 19 on Two Continents), so a hand-over that carried one and then
+       stopped would otherwise hold the whole pair for the rest of the session. Through
        the retire rather than a destroy, because other slots' submitted command
        buffers may still name the buffers. */
     if (!casters) mesh_retire(d);
@@ -922,8 +911,9 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         return 0;
     }
 
-    /* THE UPLOAD, ON THE SERIAL AND NOT PER FRAME. The mesh is built once per
-       map; `hillsSerial` is bumped by the build that produced these bytes. */
+    /* THE UPLOAD, ON THE SERIAL AND NOT PER FRAME. A producer builds the mesh
+       once per map and bumps `hillsSerial` with the build that produced these
+       bytes. */
     if (casters && (!s_mesh.have || s_mesh.serial != h.hillsSerial)) {
         VkBufferMemoryBarrier bb[2];
         VkBufferCopy cp[2];
@@ -1022,21 +1012,11 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        every consumer stands down and the picture nobody draws is the one that
        would have been wrong. */
     drew = tagpu_vk_unit_cast(d, cb, slot, s_rp);
-    {
-        /* AND THE REPLACEMENT MESHES, into the same render pass, before it
-           ends. A -1 from either is the same refusal, and it must not be
-           allowed to cancel the other's count: summing a -1 into a positive
-           would read as a short count and land on the same branch by accident
-           rather than on purpose. */
-        int hi = tagpu_vk_hires_cast(d, cb, slot, s_rp);
-        if (drew < 0 || hi < 0) drew = -1;
-        else drew += hi;
-    }
     vkCmdEndRenderPass(cb);
     if (drew < 0 || drew != ours) {
         if (!s_saidUnitShort) {
             s_saidUnitShort = 1;
-            plog(d, "shadow: the caster passes put %d of the %d caster(s) they "
+            plog(d, "shadow: the unit pass put %d of the %d caster(s) it "
                     "owed into the map - the map is incomplete and nothing "
                     "samples it this frame", drew, ours);
         }
@@ -1046,7 +1026,6 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 
     s_liveHave = 1;
     s_liveFrame = d->frame;
-    s_res = h.res;
     return 1;
 }
 
@@ -1069,8 +1048,6 @@ VkImageView tagpu_vk_shadow_view(unsigned frame, uint32_t slot)
     return s_slot[slot].view;
 }
 
-int tagpu_vk_shadow_res(void) { return s_res; }
-
 void tagpu_vk_shadow_down(const TAGPU_VKPASS* d)
 {
     VkDevice dev = d->dev;
@@ -1080,7 +1057,6 @@ void tagpu_vk_shadow_down(const TAGPU_VKPASS* d)
     int owed = s_downPaying;
     s_downOwed = 0;
     s_liveHave = 0;
-    s_res = 0;
     if (!dev || !vkDestroyBuffer) { s_state = owed ? ST_REFUSED : ST_UNBUILT; return; }
 
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {

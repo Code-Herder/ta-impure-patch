@@ -68,9 +68,8 @@
    unit rather than a size every unit pays. The pass arms only on a device
    that can hold one unit at that ceiling (`tagpu_posedraw_ready`); the
    consumer checks each frame's packed size against the device's own limit.
-   When the pass refuses to arm it says so (`tagpu_posedraw_live`), and
-   `owndraw` stops skipping the engine's own unit rasterise -- the engine draws
-   those units, rather than nothing drawing them.
+   When the pass refuses to arm it says so (`tagpu_posedraw_refused`), and
+   `owndraw` repeats the refusal once in its own words.
 
    A HIDDEN PIECE ARRIVES AS AN ALL-ZERO MATRIX and collapses its triangles onto
    the model origin; a face the material stream has nothing for carries the skip
@@ -118,91 +117,23 @@ static void plog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-static int    s_state;          /* 0 untried, 1 ready, 2 refused */
-
 /* ---- readiness ----------------------------------------------------------
    This pass is THE unit renderer and there is no lever: the one question is
    whether it can run at all, which `tagpu_posedraw_ready()` answers, and
    re-asks when the device changes.
 
-   THAT ANSWER IS PUBLISHED, because `owndraw` needs it. Its detours skip the
-   engine's own unit rasterisers, so if this pass cannot arm and the skip
-   still happens, no units are drawn at all. `tagpu_owndraw_classify` therefore
-   asks before it skips (gpu-posing.md §4, decision B) — and reads `s_state`
-   from the GAME thread while only the render thread writes it. That is safe by
-   DIRECTION rather than by timing: `s_state` is one aligned int, set to 1
-   only once the device has answered, and a later device cannot make it
-   wrong: the consumer re-checks the whole frame against the current device's
-   limit on every frame. A stale "not ready" costs a double draw for a frame (the engine's 8bpp under our RGB); a stale
-   "ready" is the unsafe direction and no write order produces it. */
-/* "THIS PASS WILL DRAW THE UNIT, SO THE ENGINE NEED NOT" -- and that is a
-   promise to the GAME thread, which acts on it by skipping the engine's own
-   rasterise and wiping its composite (tagpu_owndraw.c's `classify`, then
-   `tagpu_r3dcache_wipe`). The comment there states the invariant this answer
-   has to keep: it may only ever be wrong in the direction of NOT skipping,
-   because skipping when nothing will draw must not happen.
-
-   `s_state == 1` WOULD BREAK IT. `ready()` arms without a program of its own,
-   so `s_state == 1` alone would promise a draw this pass cannot guarantee: the
-   Vulkan unit pass stands down whenever a mirror is missing, the hand-over is
-   short or the lane is not READY, and after the retry budget `render_vk.c`
-   degrades to GDI
-   while `tagpu_vk_owns_present()` stays latched -- so the game thread would go
-   on skipping and wiping for the life of the process and every covered unit
-   would be invisible.
-
-   SO THE ANSWER IS NO, by construction rather than by checking whether the
-   Vulkan pass happened to draw. The engine keeps its own rasterise and its own
-   composite; the Vulkan unit pass draws the same units into the world target
-   from the hand-over, which is independent of this.
-
-   AND THE FALLBACK IT PROMISES IS BROKEN ON THIS LANE -- not wrong as a
-   design, BROKEN AS AN IMPLEMENTATION. "The engine keeps its own rasterise"
-   reads as "so a unit our lane failed to draw is still on the screen in
-   8bpp". On `renderer=vulkan` it is not.
-
-   MEASURED 2026-09-19, `one-unit` on Two Continents, 1024x768 on a private
-   display, one ARMCOM at screen (512,384), on BOTH lanes:
-
-     * the engine rasterises every unit, every frame. `OWND target=all
-       skipped=0 passed=55991` and climbing on the Vulkan lane; on gdi the
-       detours are armed too (`owndraw: ARMED target="all"`) and this predicate
-       is a literal `return 0`, so `classify` cannot skip on either.
-     * `tacli shot` -- TA's own surface -- carries that commander in colour,
-       with its drop shadow, in every configuration tried on both lanes.
-     * `renderer=gdi`: THE PRESENTED FRAME HAS IT. The window capture and the
-       engine-surface capture are the same picture. The fallback works.
-     * `renderer=vulkan`: THE PRESENTED FRAME DOES NOT. With `native.on` off so
-       nothing of ours draws a unit, the commander is absent from the window;
-       with `terr.on` off as well, TA's own terrain DOES reach the frame (it
-       comes up green) and the commander is still absent.
-
-   SO THE LOSS IS OURS AND IT IS IN THE VULKAN COMPOSITE PATH. The gdi control
-   is what settles that: the engine's rasterise is not inherently invisible
-   work, and the same engine output reaches the player perfectly well one lane
-   over.
-
-   WHAT THAT MEANS FOR THIS PREDICATE. Returning 0 is not just safe, it is
-   LOAD-BEARING: while the composite drops TA's units, a `live()` of 1 would
-   take away the engine's copy as well and a stood-down frame would have
-   nothing at all on it. Once the composite bug is fixed the engine really is
-   the fallback, as it already is on gdi.
-
-   THE MECHANISM IS NOT ESTABLISHED. A torn reference snapshot is ruled out as
-   a confound -- the copy runs on the game thread from the packet publisher's
-   `after_draw`, past the flip, and `tagpu_surf.h` carries the ordering -- but
-   it was never shown to be the mechanism, and nothing here claims it was.
-
-   WHICH IS WHY THIS IS `return 0`. `s_state` is deliberately not
-   consulted: the pass arming has never been the question this answers. */
-int tagpu_posedraw_live(void) { return 0; }
+   ONE HALF OF THAT ANSWER IS PUBLISHED TO THE GAME THREAD: whether the pass
+   has tried and refused, which `tagpu_owndraw_classify` reads to log the
+   refusal once. `s_state` is one aligned int that only the render thread
+   writes, and the game thread's read decides nothing but whether a log line
+   is written, so a stale value moves that line by a frame and cannot change
+   a draw. */
+static int    s_state;          /* 0 untried, 1 ready, 2 refused, 3 building */
 
 /* 1 only once the pass has TRIED and failed — a driver this build cannot run
-   on. Distinct from `!live`, which is also true for the frame or two before
-   the render thread has built anything, and which is not a problem. */
+   on. `s_state` is also 0 for the frame or two before the render thread has
+   built anything, and that is not a refusal. */
 int tagpu_posedraw_refused(void) { return s_state == 2; }
-
-static unsigned s_units, s_tris, s_overPiece;
 
 /* ---- THE VULKAN LANE'S HAND-OVER -----------------------------------------
    The contract is tagpu_posedraw.h's; this is the state behind it.
@@ -289,10 +220,6 @@ static int arena_room(void** p, unsigned* cap, unsigned need, size_t elem)
     return 1;
 }
 
-/* units the pass actually drew this frame, for the caller to hold its own
-   queued count against — a queued unit that is not drawn is a missing one */
-unsigned tagpu_posedraw_drawn(void) { return s_units; }
-
 /* the consumer's report that it painted at least one structure slant this
    frame, and the producer's read-and-clear of it -- tagpu_posedraw.h states
    the ordering that makes the one-frame lag a property of the loop rather than
@@ -321,7 +248,7 @@ int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; ret
    PREPROCESSED translation unit under the manifest names tagpu_posedraw::VS
    and tagpu_posedraw::DFS, and generates the SPIR-V the two posed pipelines
    are built from -- `pose_unit` pairs this vertex stage with
-   tagpu_native::FS, `pose_depth` with the DFS below (spirv-gen.py:186-187).
+   tagpu_native::FS, `pose_depth` with the DFS below (spirv-gen.py's manifest).
    Deleting either fails the build, and editing one edits the units the player
    sees. `tools/spirv-check.sh` re-extracts them through the preprocessor on
    every link and compares the hashes.
@@ -876,7 +803,7 @@ static const TAGPU_PBGEOM* unit_ok(const TAGPU_PDUNIT* u, const TAGPU_PBMAT** mo
        geometry and agrees with it about the vertex count */
     if (m->geom != g || m->nvert != g->nvert) return NULL;
     if (u->npose < g->nparts) return NULL;
-    if (g->nparts > TAGPU_PBMAXPIECE) { s_overPiece++; return NULL; }
+    if (g->nparts > TAGPU_PBMAXPIECE) return NULL;
     if (g->count[range] <= 0) return NULL;
     *mo = m;
     return g;
@@ -888,17 +815,6 @@ void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
     const TAGPU_PBGEOM* g = unit_ok(u, &m, TAGPU_PB_BODY);
     if (!g) return;
     pd_record(u, g, m);
-    /* A GHOST IS NOT A UNIT. It rides this same entry point on purpose — that
-       is the whole of its draw — but the two counters below feed the `posed=N`
-       stats and the queued-vs-drawn heartbeat, which reads their inequality as
-       "units queued but not drawn". Counting ghosts there fires that alarm
-       every frame one draws and inflates the unit and triangle totals, so the
-       record says which it is and only the units are counted. The ghost pass
-       has its own `drawn=` counter for what it drew. */
-    if (!u->ghost) {
-        s_units++;
-        s_tris += (unsigned)g->count[TAGPU_PB_BODY] / 3;
-    }
 }
 
 /* ---- closing the window -------------------------------------------------- */
@@ -954,40 +870,6 @@ void tagpu_posedraw_end(void)
        of the session. */
     s_pub.ab = s_abClaim;
     s_pubHave = 1;
-}
-
-/* ---- the model top ------------------------------------------------------ */
-/* The highest posed y. Nothing here writes posed vertices to take it from, so
-   it comes off each piece's baked rest AABB through that piece's pose matrix
-   (gpu-posing.md §4). The two documented
-   deviations are on the AABB itself — see tagpu_posebake.h. */
-float tagpu_posedraw_top(const TAGPU_PDUNIT* u)
-{
-    const TAGPU_PBGEOM* g = (const TAGPU_PBGEOM*)u->geom;
-    float top = -1e9f;
-    int p, c, np;
-    if (!g || !u->pose) return 0.0f;
-    np = g->nparts;
-    if (np > u->npose) np = u->npose;
-    if (np > TAGPU_PBMAXPIECE) np = TAGPU_PBMAXPIECE;
-    for (p = 0; p < np; p++) {
-        const float* M = u->pose + (size_t)p * 12;
-        /* an all-zero matrix is a piece the unit is not showing: emit_node
-           never reached its vertices either */
-        if (!g->pbody[p]) continue;
-        if (M[0] == 0.0f && M[1] == 0.0f && M[2] == 0.0f && M[3] == 0.0f &&
-            M[4] == 0.0f && M[5] == 0.0f && M[6] == 0.0f && M[7] == 0.0f &&
-            M[8] == 0.0f && M[9] == 0.0f && M[10] == 0.0f && M[11] == 0.0f)
-            continue;
-        for (c = 0; c < 8; c++) {
-            float x = (c & 1) ? g->pmx[p][0] : g->pmn[p][0];
-            float y = (c & 2) ? g->pmx[p][1] : g->pmn[p][1];
-            float z = (c & 4) ? g->pmx[p][2] : g->pmn[p][2];
-            float wy = M[4] * x + M[5] * y + M[6] * z + M[7];
-            if (wy > top) top = wy;
-        }
-    }
-    return top > 0.0f ? top : 0.0f;
 }
 
 /* ---- the Vulkan lane's hand-over ---------------------------------------- */
@@ -1111,10 +993,9 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
     return 1;
 }
 
-/* ---- frame, reset, stats ------------------------------------------------ */
+/* ---- frame and reset ---------------------------------------------------- */
 void tagpu_posedraw_frame(unsigned frame_counter)
 {
-    s_units = s_tris = 0;
     /* THE HAND-OVER'S FRAME, and everything that is per-frame about it. The
        previous frame's publish is dropped here rather than left standing: the
        stamp would refuse it anyway, and clearing it is what makes that a
@@ -1143,17 +1024,4 @@ void tagpu_posedraw_frame(unsigned frame_counter)
         s_ab = GetFileAttributesA(PD_ABFILE) != INVALID_FILE_ATTRIBUTES;
         if (!s_ab) s_abDone = 0;
     }
-}
-
-int tagpu_posedraw_stats(char* out, int n)
-{
-    int k;
-    if (s_state != 1 || n <= 0) { if (out && n > 0) out[0] = 0; return 0; }
-    k = _snprintf(out, n, " posed=%u/%utri", s_units, s_tris);
-    if (k < 0 || k >= n) return k;
-    /* NOTHING CALLS THIS FUNCTION: the only tree-wide references are its
-       declaration and this definition, so ` posed=` is never printed. */
-    if (s_overPiece)
-        k += _snprintf(out + k, n - k, " OVER-PIECE");
-    return k;
 }

@@ -1257,8 +1257,7 @@ struct TAGPU_VKRJOB {
        licenses the driver to discard every texel of it, so the repaint would
        blank exactly the world it exists to avoid blanking. Set from `repaint`
        at creation -- the consumer's statement that the atlas already holds a
-       restore -- and then by `dst_ready` itself, so a clear and a re-queue
-       keep it. */
+       restore -- and then by `dst_ready` itself. */
     int            dstHas;
     /* THE BYTE DUMP (`dump_step`). It lives here rather than in each consumer
        because the destination, its size and the moment it is finished are all
@@ -1743,9 +1742,9 @@ static void upload_pal(struct TAGPU_VKRJOB* g)
     mb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     mb.subresourceRange.levelCount = 1;
     mb.subresourceRange.layerCount = 1;
-    mb.oldLayout = g->palDue > 1 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    mb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     mb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    mb.srcAccessMask = g->palDue > 1 ? VK_ACCESS_SHADER_READ_BIT : 0;
+    mb.srcAccessMask = 0;
     mb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          0, 0, NULL, 0, NULL, 1, &mb);
@@ -1908,9 +1907,6 @@ static const TAGPU_RBACKEND s_be = {
     vk_state_pop,
     vk_may_draw
 };
-
-
-int tagpu_vk_restore_nk(void) { return s_sched.nk; }
 
 /* ======================== THE PUBLIC JOB API ======================== */
 
@@ -2097,31 +2093,10 @@ int tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
     return 1;
 }
 
-void tagpu_vk_restore_job_repalette(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
-                                    const unsigned char* pal)
-{
-    (void)d;
-    if (!j || !j->core || !j->core->used || !j->palMap || !pal) return;
-    pal_pack(j->palMap, pal);
-    j->palDue = 2;                  /* 2: already SHADER_READ, not UNDEFINED */
-}
-
 int tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, int count)
 {
     if (!j || !j->core) return 0;
     return tagpu_rcore_job_add(&s_sched, j->core, frames, count);
-}
-
-void tagpu_vk_restore_job_clear(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
-{
-    (void)d;
-    if (!j || !j->core || !j->core->used) return;
-    tagpu_rcore_job_drop(j->core);
-    /* THE CLEAR IS DEFERRED to the next draw rather than recorded here: this is
-       called from a consumer's own code, which has no command buffer of ours,
-       and a clear needs one. `dstReady` going back to 0 is what re-runs the
-       UNDEFINED -> cleared -> SHADER_READ sequence. */
-    if (!j->core->failed) { j->dstReady = 0; j->clearDue = 1; }
 }
 
 int tagpu_vk_restore_job_idle(const TAGPU_VKRJOB* j)

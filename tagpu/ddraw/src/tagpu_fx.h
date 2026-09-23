@@ -37,9 +37,6 @@ typedef struct TAGPU_FXVIEW {
     int fogCols, fogRows;           /* its dims (view-anchored 32-px cells)    */
     int fogCells;                   /* cells the BUFFER holds — the real bound */
     int fogOrgX, fogOrgY;           /* world x, projected z of its cell (0,0)  */
-    /* NO WRITER AND NO READER. Do not plumb anything into them believing
-       there is a consumer: there is not. */
-    unsigned int fogTex, fogLut;    /* RG8 grid; 256x1 grey palette remap      */
     unsigned int frame_counter;
 } TAGPU_FXVIEW;
 
@@ -76,7 +73,6 @@ int  tagpu_fx_emit_frame(const unsigned char* g, int sx, int sy, int mode,
                          float wx, float wz, float enc, int under);
 int  tagpu_fx_emit_dot(int x, int y, int colidx, float wx, float wz, float enc, int under);
 void tagpu_fx_set_mute(int on);                 /* passive: count, emit nothing */
-void tagpu_fx_trace(int n);                     /* log the next n sprite emissions */
 unsigned tagpu_fx_caps(void);                   /* the PACKET's copy of TAProgram+0xF0:
                                                    bit5 ALP built, bit7 LHT built      */
 int  tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp);   /* engine LOS gate */

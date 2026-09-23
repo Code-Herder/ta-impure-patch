@@ -506,7 +506,7 @@ failed to coincide.
    and are not tested by us for it either. A `digger` structure is not slanted
    — the engine never gives one the cached shadow — and takes the silhouette
    rule. Rule now: structures `shadow = structshadow_ours && !noshadow`, the
-   rest as before. Measured over the
+   rest as before (`tagpu_owndraw_structshadow_ours` is gone since 2026-09-23). Measured over the
    engine's own terrain (`terr.on=passive`) against the pre-fix engine shadow,
    same frame position, four buildings: the only differences are the rotating
    pieces (drill arms, rotor) caught at other animation phases and a **strip

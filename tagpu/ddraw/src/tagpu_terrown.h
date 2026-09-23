@@ -31,9 +31,6 @@ int  tagpu_terrown_installed(void);
    skip — the composite must not invert on the frame the skip is first set,
    when the engine's surface still holds a real terrain blit */
 int  tagpu_terrown_filled(void);
-/* 1 while the engine's fog overlay 0x4848E0 is ours -- the game thread's
-   latch, which is what its stub tests. (No caller at present.) */
-int  tagpu_terrown_owns_fog(void);
 /* The render thread's request -- 1 while it wants the engine's terrain and
    fog skipped. Read by the game thread's latch below, never by the stubs. */
 int  tagpu_terrown_request(void);

@@ -18,7 +18,6 @@
 #include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the restore request */
 
 int  tagpu_feat_armed(unsigned frame_counter);   /* re-reads tagpu_feat.on (30f) */
-int  tagpu_feat_on(void);                        /* armed state, no re-read      */
 /* walk the sweep rect and build this frame's quads; returns the vertex count
    built (0 = nothing to draw, which is all the caller uses it for) */
 int  tagpu_feat_gather(const TAGPU_FXVIEW* v);

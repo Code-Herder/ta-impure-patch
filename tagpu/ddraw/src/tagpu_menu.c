@@ -1230,9 +1230,9 @@ void __stdcall tagpu_menu_oncommand(void* gi)
    through untouched (write_cfg), which is what keeps a researcher's
    `penumbra=`, `shadowsun=`, `shade=` and so on alive across a click.
    `terrainshadow=` is deliberately NOT here and has no row: the ground casting
-   on itself is a known defect (renderers.md 2.7b) whose default is now 0, so
-   there must be no path through this screen that turns it back on. Adding a row
-   for it means first fixing the defect. */
+   on itself is a known defect (renderers.md 2.7b), and no heightfield caster is
+   built, so the key changes nothing (tagpu_classicpp.c). Adding a row for it
+   means first building the caster and fixing the defect. */
 static int ours(const char* tok)
 {
     return !_strnicmp(tok, "assets=", 7) || !_strnicmp(tok, "light=", 6) ||
@@ -2613,5 +2613,3 @@ void tagpu_menu_init(void)
     b[sizeof b - 1] = 0;
     mlog(b);
 }
-
-int tagpu_menu_installed(void) { return s_installed; }

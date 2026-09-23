@@ -96,18 +96,6 @@ unsigned tagpu_packet_pub_draw_seq(void);
    per-level state stamps it beside the draw counter, so the latch cannot
    outlive its level. */
 unsigned tagpu_packet_pub_level_gen(void);
-/* GAME THREAD. 1 when SOMETHING moves the generation above on a level end --
-   this module's own observer on the teardown 0x491B60, or `tagpu_reclaim`'s
-   wrap, which calls `tagpu_packet_pub_level_end` from a hard-wired stub whether
-   or not THIS module is armed. It is deliberately NOT `s_levelEndBy != 0`: that
-   is assigned only when the publisher itself is armed, so under
-   `tagpu_packet.off` it reads 0 while the generation moves correctly, and a
-   consumer keyed on it refuses everything for the session.
-   A caller using the generation as a SAFETY argument must check this and refuse
-   when it is 0 -- 0 means no ordering is available, which is a reason to refuse
-   a read rather than to take it. */
-int tagpu_packet_pub_level_tracked(void);
-
 /* GAME THREAD: 1 once this level's FIRST in-play packet has published, 0 again
    from the level end. It is the producer-side reading of the packet's `in_game`,
    and it is the gate a producer uses to ask "is a level actually on screen" --

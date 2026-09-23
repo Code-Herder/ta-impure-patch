@@ -20,9 +20,6 @@
    else, so the world shows through; nothing of the engine's frame is beneath
    it (LAY_FS).
 
-   `strict` is parsed and published on the hand-over, and the Vulkan layer
-   reads neither it nor `guard`: LAY_FS has no strict harness.
-
    CLASSIC++. Beside the index twin every surface may carry a COLOUR
    twin -- VK_FORMAT_R8G8B8A8_UNORM, the same size, attachment 1 of the same
    framebuffer (tagpu_vk_gui.c `fb2`) -- into which a sprite op writes the UI
@@ -51,14 +48,12 @@
    something marks it dirty.
 
    THE SEAM (gui-renderer.md 13.2-13.3). The twin stays 1:1 with the engine's
-   surface — same ops, same seeds, same census, so phase 1's `strict` walk goes
-   on meaning what it meant. The composite is three layers, top down: the
-   SHARP LAYER (one
-   RGBA8 texture at the DEVICE resolution, drawn from live state at present
-   time — empty until the cursor and the string op fill it), then the mirror
-   scaled by a SHARP-BILINEAR ramp one device pixel wide, then the engine's own
-   frame as the fallback. k is device pixels per twin texel, read off the frame
-   rather than configured, and it is 1.0 wherever the engine's screen IS the
+   surface — same ops, same seeds, same census. The composite is two layers,
+   top down: the SHARP LAYER (one RGBA8 texture at the DEVICE resolution,
+   drawn from live state at present time — its clients are the cursor and the
+   minimap), then the mirror scaled by a SHARP-BILINEAR ramp one device pixel
+   wide. Nothing of the engine's own frame is beneath them. k is device pixels
+   per twin texel, read off the frame rather than configured, and it is 1.0 wherever the engine's screen IS the
    window. It is NOT always 1: `resizable` defaults TRUE (config.c) and
    `maintas` fits the viewport to the window (dd.c), so a player who drags the
    window off the game resolution is
@@ -77,18 +72,13 @@
 #include "tagpu_gaf.h"
 #include "tagpu_text.h"                 /* the glyph atlas the string op stamps from (13.4) */
 #include "tagpu_classicpp.h"
-#include "tagpu_restoreglsl.h"
-#include "tagpu_vpwide.h"
 #include "tagpu_hud.h"
 #include "tagpu_terr.h"
 #include "tagpu_terrown.h"           /* is the world viewport carrying our key fill right now? */
-#include "tagpu_overlay.h"
 #include "tagpu_pal.h"
 #include "tagpu_surf.h"                    /* the one resolution of the presented palette */
 #include "tagpu_vk.h"                 /* tagpu_vk_ab_arm: the A/B's arming */
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
-#include "ddsurface.h"                  /* g_ddraw.primary->surface/pitch, the composite's
-                                           bottom layer as BYTES (dd.h only forward-declares it) */
 #include "mouse.h"                      /* mouse_last_client: the pointer at the DEVICE's resolution (13.5) */
 
 /* The minimap's box, its three surfaces and the view box over them are packet
@@ -101,7 +91,6 @@
 #define TINT_LOST_MAX  32       /* dropped PK_PIXELS boxes remembered per twin */
 #define ATLAS_DIM      2048
 #define ATLAS_MAX      4096
-#define UI_RESTORE_PRIO 4       /* terrain 0, features 1, effects 2, 3DO units 3 */
 #define UI_RESTORE_MIN 12       /* nothing under 12x12 is restored */
 #define PAL_SETTLE     30       /* frames the palette must hold still before a re-arm */
 
@@ -155,7 +144,7 @@ static unsigned s_presented = 0;        /* the last PK_FRAME's surface         *
 static TAGPU_GAFATLAS s_atlas;
 static TAGPU_GAFENT   s_ents[ATLAS_MAX];
 
-static int    s_on = 0, s_strict = 0;
+static int    s_on = 0;
 static DWORD  s_lastPoll = 0;
 static unsigned s_drained = 0, s_sprites = 0, s_copies = 0, s_pixels = 0, s_seeds = 0, s_clears = 0, s_lostSprites = 0;
 /* PK_PIXELS OPS THE DRAIN REFUSED TO CARRY -- the engine's own composed
@@ -253,19 +242,6 @@ static int    s_sharpOn = 0;            /* it exists and may be sampled this fra
    it. */
 static int    s_sharpInk = 0;
 static int    s_sharptest = 0;          /* the harness lever that proves the layer is wired            */
-/* OUR CURSOR'S ANSWER FOR THIS PRESENT, latched here for
-   `tagpu_gui_cursor_drew_take`, which nothing calls (inc/tagpu_gui.h says why
-   the reader went). Set only at the tail of a successful sharp_cursor; cleared
-   by the take. */
-static int s_curInLayer = 0;            /* recorded into the sharp layer                 */
-static int s_curDrew = 0;               /* ...and that record reached the hand-over      */
-
-int tagpu_gui_cursor_drew_take(void)
-{
-    int v = s_curDrew;
-    s_curDrew = s_curInLayer = 0;
-    return v;
-}
 static unsigned s_strings = 0;          /* string ops stamped                                          */
 static unsigned s_glyphs = 0;           /* glyph quads drawn                                           */
 static unsigned s_strMiss = 0;          /* glyphs the cache would not give (the engine drew them)      */
@@ -278,7 +254,6 @@ static unsigned s_mmGenSeen;            /* the generation s_mmPicRgb holds; 0 = 
    generation and palette keys beside it are what invalidate a bake. */
 static int      s_mmBaked;
 static int      s_mmTW, s_mmTH;         /* its size in texels                               */
-static int      s_mmBoxSeen[2];         /* the mm_box the standing bake was cropped to      */
 static int      s_mmbase = 0;           /* the minimap is ours (see the k rule in sharp_minimap) */
 static int      s_mmforce = 0;          /* token `mmbase`: draw it at k = 1 too, for the harness */
 static unsigned s_mmDrawn = 0;
@@ -295,17 +270,14 @@ static unsigned s_mmPalSeen;            /* tagpu_pal_serial() when it was last r
 static unsigned s_mmFogged;             /* engine texels where fogged != unfogged, this frame  */
 
 /* THE CURSOR (gui-renderer.md 13.5). Decided ONCE per frame, in
-   tagpu_gui_cursor_frame, because the world composite reads the decision
-   before this module's present runs: tagpu_overlay.c calls the native pass
-   first, and the two must not disagree about whether the engine's own cursor
-   is being erased. Everything here is render-thread state. */
+   tagpu_gui_cursor_frame, from that frame's packet; sharp_cursor draws from
+   the decision. Everything here is render-thread state. */
 static int    s_nocursor = 0;           /* token: keep phase 1's engine cursor          */
 static float  s_cursorScale = 1.0f;     /* token cursorscale=, device px per frame px   */
 static const unsigned char* s_curFrame; /* the GAF frame the engine is blitting          */
 static int    s_curW, s_curH;           /* its size, frame px                            */
 static int    s_curHX, s_curHY;         /* its hotspot, frame px, may be negative        */
 static unsigned char s_curCK;           /* its colour key                                */
-static float  s_curEng[4];              /* the engine's own rect, GAME px: what to erase */
 static int    s_curOwn = 0;             /* ours is drawn this frame                      */
 static unsigned s_curDrawn = 0;         /* frames ours was drawn                         */
 static unsigned s_curWarm = 0;          /* frames spent atlasing a shape we had not seen */
@@ -499,8 +471,8 @@ static const char* TINT_FS =
     "  int i = int(g.r * 255.0 + 0.5);\n"
     "  oIdx = vec4(texelFetch(uShade, ivec2(i, uRow), 0).r, g.g, 0.0, 0.0);\n"
     "  oCol = vec4(0.0); }\n";
-/* the layer over the frame: uv.y = 0 at the top of the screen, like the
-   native composite's CVS; the twin's row 0 is the surface's row 0 */
+/* the layer over the frame: uv.y = 0 at the top of the screen; the twin's
+   row 0 is the surface's row 0 */
 static const char* LAY_VS =
     "#version 330 core\n"
     "layout(location=0) in vec4 a;\n"
@@ -581,9 +553,8 @@ static const char* LAY_FS =
        axis-aligned BOUNDING BOX, so one rotated rect published four boxes whose
        union is a ~44 px cyan square with a hole -- 15 frames in 3600 of
        ordinary play, and 12 of 12 with the engine's rects forced on.]
-       The composite makes the same judgement one layer down (tagpu_native.c
-       CFS, "THE KEY FILL MUST NEVER REACH THE SCREEN"); this is that rule for
-       the layer above it. Coverage 0 is exactly the right answer: it is what
+       The key fill must never reach the screen, from this layer or any
+       other. Coverage 0 is exactly the right answer: it is what
        "no UI here" already means to every reader of the twin, so the ramp
        blends it as absence rather than dragging cyan into its neighbours.
        uVpKey is -1 whenever the viewport is NOT ours (tagpu_terrown_filled),
@@ -597,19 +568,14 @@ static const char* LAY_FS =
     "  return vec4(texture(uPal, vec2((g.r * 255.0 + 0.5) / 256.0, 0.5)).rgb, 1.0); }\n"
     "void main(){\n"
     /* d IS THE DESTINATION POINT, in engine pixels, and stays that. The HUD
-       map below moves only where the MIRROR IS SAMPLED; the cursor rect and
-       `strict` both ask about the engine's own frame, which is at the
-       destination — the engine blits its cursor and holds its UI pixels at
-       screen positions, not at the twin positions we magnify from. */
+       map below moves only where the MIRROR IS SAMPLED. */
     "  vec2 d = uv * vec2(uSize);\n"
     /* THE HUD'S REGION MAP RUNS FIRST, and `p`/`f` below are the SOURCE texel
        it chose, not the dest fragment. Everything downstream of here indexes
-       the engine's own surface -- `uCursor` is "the engine's own rect, GAME
-       px", `uVp` is the engine's viewport rect, and uTwin/uSurf are the twin
-       and the primary -- so all of them have to be asked about the texel the
+       the engine's own surface -- `uVp` is the engine's viewport rect and
+       uTwin is the twin -- so both have to be asked about the texel the
        colour actually came from. At s == 1 `sd` IS `d` and this is the
-       identity, which is why the s = 1 gate and main's stale-mirror guard are
-       untouched by it. */
+       identity, which is why the s = 1 gate is untouched by it. */
     "  vec2 sd = d; float ramp = 1.0;\n"
     "  if (uHud.w > 1.0) {\n"
     "    float H = float(uSize.y);\n"
@@ -670,10 +636,10 @@ static const char* LAY_FS =
     "  ivec2 ib = ivec2(b);\n"
     "  vec4 c = mix(mix(tap(ib),                tap(ib + ivec2(1, 0)), w.x),\n"
     "               mix(tap(ib + ivec2(0, 1)), tap(ib + ivec2(1, 1)), w.x), w.y);\n"
-    /* NO STALE-MIRROR GUARD AND NO `strict` HARNESS. Both compared the twin
-       against the engine's composed frame, and that frame is not underneath
-       us. A twin that is never seeded starts EMPTY, coverage 0, so a region
-       the publisher never observed is a region we simply do not paint -- the
+    /* NO STALE-MIRROR GUARD: the engine's composed frame is not underneath
+       us, so there is nothing here to compare the twin against. A twin that
+       is never seeded starts EMPTY, coverage 0, so a region the publisher
+       never observed is a region we simply do not paint -- the
        hole is closed at the source rather than tested for. The golden source
        is still reachable (`tagpu_vk_surf_engine_view`) for a comparison that
        wants one; it is not this shader's business. */
@@ -703,20 +669,8 @@ static int atlas_setup(void)
     memset(&s_atlas, 0, sizeof s_atlas);
     s_atlas.ents = s_ents; s_atlas.max = ATLAS_MAX; s_atlas.dim = ATLAS_DIM; s_atlas.tag = "gui";
     s_atlas.pad = 0; s_atlas.align = 0; s_atlas.mip = 0;      /* 1:1, NEAREST, the 1-texel border */
-    s_atlas.prio = UI_RESTORE_PRIO;
     s_atlas.restoreMinEdge = UI_RESTORE_MIN;
     return tagpu_gaf_atlas_create(&s_atlas) ? 1 : 0;
-}
-
-/* WHETHER THIS FRAME CARRIES TA's OWN SURFACE, which is what the mirror's
-   `eng` copy, the strict guard and the layer's guard all really ask. The bytes
-   are `g_ddraw.primary->surface`, which `mir_finish` copies out under
-   g_ddraw.cs and validates against the primary's own geometry, so every frame
-   that reaches this file carries one. */
-static int have_engine_frame(const TAGPU_FRAME* f)
-{
-    (void)f;
-    return 1;
 }
 
 /* ------------------------------------------------------------------ twins */
@@ -1651,58 +1605,27 @@ static void drain(void)
    pass, the layer after it) are separate calls with separate chances to be
    skipped. NULL is "no packet this frame" — a shell frame or a load — and
    every consumer below declines. */
-static void cursor_rect(const TAGPU_PACKET* pk, float* r)
-{
-    /* THE FOUR OUTCOMES THE LIVE READ HAD, reproduced exactly: no rect at all
-       (the globals unreadable — the publisher writes (-1,-1,0,0) itself); the
-       position with a 64x64 fallback (globals readable, sprite record not);
-       the position with the record's own size; and the position with a ZERO
-       size, which a readable record of zero extent gives -- not "no rect".
-
-       The gate is a flag, not the size: the level-end packet zeroes the whole
-       header, and (0,0) is a real cursor position. Nor is it `in_game`: the
-       shell's packet must be in_game=0 (every world pass reads that field to
-       decide whether to draw at all), so that field cannot distinguish "a
-       shell frame that carries a cursor" from "a level-end packet that
-       carries none". `cursor_live` is that distinction, and it is only ever
-       set by the two publishers that read the cursor: the in-play fill and
-       the shell's own channel. An in-play packet implies it. */
-    r[0] = r[1] = -1.0f; r[2] = r[3] = 0.0f;
-    if (!pk) return;
-    if (!pk->in_game && !pk->cursor_live) return;
-    r[0] = (float)pk->cur_pos[0];
-    r[1] = (float)pk->cur_pos[1];
-    r[2] = (float)pk->cur_w;
-    r[3] = (float)pk->cur_h;
-}
 
 /* ------------------------------------------------------------- the cursor */
-/* ONE DECISION PER FRAME, TAKEN BEFORE THE WORLD PASS (13.5).
-   tagpu_overlay.c calls this, then tagpu_native_frame, then tagpu_gui_present.
-   That order is forced: erasing the engine's cursor takes BOTH modules — over
-   the panel this module's twin covers it once the layer stops discarding, but
-   over the world the composite discards our fragment wherever the engine's
-   surface is not the terrain key, and a cursor pixel is not the key, so the
-   engine's cursor survives underneath. The composite therefore has to know
-   the rect, and it runs first. Reading the globals twice would let the two
-   halves disagree by a mouse move and leave a sliver of the engine's cursor
-   standing, so the state is read ONCE, here, and both halves use it.
+/* ONE DECISION PER FRAME (13.5). tagpu_overlay.c calls this after
+   tagpu_native_frame and before tagpu_gui_present, and the decision is read
+   ONCE, here, from this frame's packet: sharp_cursor, the one reader, draws
+   from it.
+
+   The engine's own cursor is drawn inside the flip, where the observer leaves
+   drop every op (tagpu_gui_hook.c), so it never reaches a twin, and the
+   composite has none of the engine's frame beneath it: nothing here erases
+   it, and the sharp layer's is the only cursor the composite carries.
 
    OWNERSHIP IS LATCHED ON THE ATLAS. A shape we have not uploaded yet is not
-   owned: the sharp pass atlases it this frame and the NEXT frame draws it,
-   which costs one frame of the engine's own cursor per new shape and never a
-   frame with no cursor at all. Getting that backwards is the one failure this
-   gate can ship invisibly -- the erase is unconditional, the draw is not. */
+   owned: the sharp pass atlases it this frame and the NEXT frame draws it, so
+   a new shape costs one frame on which the sharp layer holds no cursor. */
 void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
 {
     const unsigned char* fr;
     const void* pix;
     s_curOwn = 0;
     s_curFrame = NULL;
-    /* the engine's rect first and unconditionally: draw_layer's discard (and
-       `strict`'s exemption) needs it on every path, including the ones below
-       that decline to own the cursor */
-    cursor_rect(pk, s_curEng);
     /* `s_atlas.made`: ownership is latched on the ATLAS (see above), which is
        a CPU table and exists whether or not any image does. */
     if (!s_on || s_nocursor || !s_atlas.made) return;
@@ -1710,8 +1633,8 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
     /* the sprite record IS a GAF frame header -- size, hotspot, colour key and
        a pixel pointer at +0x10 -- and it comes out of the cursor TABLE, loaded
        once and never rewritten, which is why it may cross as a key at all. The
-       publisher read the position and the size beside it; tagpu_gaf.c is the
-       only file that dereferences the frame. */
+       publisher sends the record alone; the size and the hotspot are read
+       here, off the frame `tagpu_gaf_frame_sane` has vetted. */
     fr = tagpu_gaf_frame_sane((const void*)(size_t)pk->cur_rec);
     if (!fr) return;
     s_curW  = *(const unsigned short*)(fr + TAGPU_GF_W);
@@ -1723,13 +1646,6 @@ void tagpu_gui_cursor_frame(const TAGPU_PACKET* pk)
     pix = *(const void* const*)(fr + TAGPU_GF_PIX);
     if (tagpu_gaf_atlas_find(&s_atlas, fr, pix, s_curW, s_curH, 0u)) s_curOwn = 1;  /* the cursor is never windowed */
     else s_curWarm++;
-}
-
-int tagpu_gui_cursor_own(float* r)
-{
-    if (!s_curOwn) return 0;
-    if (r) { r[0] = s_curEng[0]; r[1] = s_curEng[1]; r[2] = s_curEng[2]; r[3] = s_curEng[3]; }
-    return 1;
 }
 
 /* ------------------------------------------------------------ sharp layer */
@@ -1780,13 +1696,12 @@ static void sharp_cursor(const TAGPU_FRAME* f)
     if (!e) {
         /* Unreachable in practice -- tagpu_gui_cursor_frame only owns a frame
            tagpu_gaf_atlas_find already answered for, and atlas_get consults
-           the same index first. Kept because ownership was published to the
-           world composite a whole module ago: if it ever does happen, one
-           frame with no cursor over the world beats a stale claim. */
+           the same index first. If it ever does happen, the frame is
+           disowned rather than drawn from an entry the atlas no longer has. */
         s_curOwn = 0;
         return;
     }
-    if (!s_curOwn) return;               /* the warm-up frame: the engine's is on screen */
+    if (!s_curOwn) return;               /* the warm-up frame: atlased above, drawn from the next */
     kx = (f->game_width  > 0) ? (float)f->vp_w / (float)f->game_width  : 1.0f;
     ky = (f->game_height > 0) ? (float)f->vp_h / (float)f->game_height : 1.0f;
     if (mouse_last_client(&cx, &cy)) {
@@ -1854,17 +1769,6 @@ static void sharp_cursor(const TAGPU_FRAME* f)
               (float)(x0 + w), (float)(y0 + h),
               e->u0, e->v0, e->u1, e->v1, NULL, (int)e->ck);
     s_curDrawn++;
-    /* OUR CURSOR IS IN THE SHARP LAYER'S RECORD FROM HERE — which is NOT the
-       same as being on screen, and the difference is what decides whether the
-       engine may draw its own. Only the layer composite samples this layer, and
-       draw_layer returns early when there is no presented twin or its size
-       disagrees with the frame's (a mode change, before the first PK_FRAME op
-       drains). On those frames our cursor sits in a layer nobody reads, so
-       telling tagpu_cursown the engine may stand down would leave NO cursor at
-       all. The layer's own comment already warns that a client here must not
-       assume draw_layer ran; this is that warning obeyed. The screen answer is
-       set at the tail of draw_layer instead. */
-    s_curInLayer = 1;
 }
 
 /* THE MINIMAP'S BASE AT ITS NATIVE SIZE (13.6).
@@ -2019,7 +1923,9 @@ static void sharp_minimap(const TAGPU_FRAME* f)
         tagpu_gui_set_minimap_have(pk->level_gen + 1u);
     }
     /* the question is whether THIS palette's resolve of THIS map is in
-       `s_mmPicRgb` */
+       `s_mmPicRgb`. The box is NOT part of the key, though the crop below is
+       derived from it: a box that changed within one level and one palette
+       would leave a bake of the old size standing. */
     if (s_mmbase && (gen != s_mmGenSeen || tagpu_pal_serial() != s_mmPalSeen || !s_mmBaked)) {
         /* THE PALETTE THE SCREEN IS SHOWN WITH, not main+0x143A7: tagpu_pal.h
            owns that resolution for the whole DLL, and its serial above is the
@@ -2089,12 +1995,6 @@ static void sharp_minimap(const TAGPU_FRAME* f)
             s_mmPicSerial++;
             s_mmTW = vw; s_mmTH = vh;
         }
-        /* THE BOX IS PART OF THE KEY. `s_mmTW`/`s_mmTH` are derived from
-           `pk->mm_box` just above, so a box that changed without the generation
-           or the palette changing would leave a bake of the wrong size standing.
-           Constant per level today; keyed so it does not have to stay
-           that way. */
-        s_mmBoxSeen[0] = pk->mm_box[2]; s_mmBoxSeen[1] = pk->mm_box[3];
         s_mmGenSeen = gen; s_mmPalSeen = tagpu_pal_serial();
         s_mmBaked = 1;
     }
@@ -2305,40 +2205,15 @@ static void draw_layer(const TAGPU_FRAME* f)
        describes the composite tagpu_vk_gui.c is to run, derived from this
        frame's own locals -- skipping it would leave the consumer with no UI
        at all. */
-    /* THE COMPOSITE HAS RUN, so anything the sharp layer carried is now on the
-       frame the player sees. This — not the draw into the layer — is what lets
-       the engine's own cursor blit stand down (tagpu_cursown.h). Every early
-       return above leaves it 0 and the engine keeps its cursor.
-
-       THIS FLAG IS WEAKER THAN IT LOOKS, AND THE CONSUMER IS WHERE THAT IS
-       MADE GOOD. There is no composite here to have run: `s_mirRec` says the
-       RECORD survived to this point, which is not the same as the twin having
-       drawn it, and `tagpu_vk_gui_prepare` and `tagpu_vk_gui_record` between
-       them can still refuse the frame afterwards.
-
-       SO THIS IS NOT THE WHOLE ANSWER: `tagpu_cursown_publish` runs AFTER
-       `tagpu_vk_frame` in render_vk.c and is
-       `cur_drew && tagpu_vk_ui_composited()` -- this flag is the first half and
-       the seam's own "the composite reached the command buffer" is the second.
-       The frames where the two disagree are counted, as `held=` in this
-       function's own heartbeat (gpu-status.md §2.57). */
-    if (s_sharpOn && s_curInLayer && s_mirRec) s_curDrew = 1;
-
     /* The composite's uniforms, for tagpu_vk_gui.c. Taken HERE rather than
        recomputed in the publish: every one of them is a local this function
        derived, and a second derivation is a second thing that can drift. */
     if (s_mirRec) {
         s_mHand.presented = s_presented;
         s_mHand.surfW = t->w; s_mHand.surfH = t->h;
-        s_mHand.strict = (s_strict && have_engine_frame(f)) ? 1 : 0;
-        s_mHand.key = key;
         s_mHand.vpKey = tagpu_terrown_filled() ? key : -1;
         s_mHand.vpL = (float)L; s_mHand.vpT = (float)T;
         s_mHand.vpW = (float)W; s_mHand.vpH = (float)H;
-        s_mHand.curEng[0] = s_curEng[0]; s_mHand.curEng[1] = s_curEng[1];
-        s_mHand.curEng[2] = s_curEng[2]; s_mHand.curEng[3] = s_curEng[3];
-        s_mHand.curOurs = s_curOwn ? 1 : 0;
-        s_mHand.guard = have_engine_frame(f) ? 1 : 0;
         s_mHand.scaleX = s_k; s_mHand.scaleY = ky;
         s_mHand.sharpOn = s_sharpInk ? 1 : 0;   /* COVERAGE, not existence */
         /* `s_colValid` is this frame's answer to "may an op say restored"
@@ -2369,7 +2244,6 @@ static void poll(void)
     /* `off` inside the file also turns the draw off, so the detours can stay
        installed (they need the file at attach) while the layer is A/B'd */
     if (on && strstr(buf, "off")) on = 0;
-    s_strict = on && strstr(buf, "strict") != NULL;
     /* the lever is its own file, polled on this cadence like every other pass's */
     s_ab = GetFileAttributesA(AB_FILE) != INVALID_FILE_ATTRIBUTES;
     if (!s_ab) s_abDone = 0;
@@ -2408,8 +2282,6 @@ static void poll(void)
 void tagpu_gui_present(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;
-    /* NOTHING IS CLEARED HERE. `s_curDrew` is cleared only by the TAKE,
-       `tagpu_gui_cursor_drew_take`, and nothing calls it (see `s_curInLayer`). */
     if (!tagpu_gui_installed() || !f) return;
     poll();
     if (!s_on) {
@@ -2493,9 +2365,9 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%d/%d colops=%u prescol=%d k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%d/%d colops=%u prescol=%d k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_bars, s_rects, s_tints, s_shadeSerial, s_tintDrop, s_tintStale, s_clears,
-                  s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
+                  s_atlas.n, s_atlas.max, s_lostSprites, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,
                   tagpu_classicpp_lit() ? 1 : 0,
@@ -2568,7 +2440,7 @@ static void mir_finish(const TAGPU_FRAME* f)
     s_handAssetTok = s_mirAssetTok; s_mirAssetTok = 0;
     if (!s_mLayer) {
         s_mHand.presented = 0; s_mHand.surfW = s_mHand.surfH = 0;
-        s_mHand.strict = 0; s_mHand.guard = 0; s_mHand.sharpOn = 0;
+        s_mHand.sharpOn = 0;
         s_mHand.colourTwins = 0;
     }
 
@@ -2640,8 +2512,8 @@ static void mir_finish(const TAGPU_FRAME* f)
        an alias would read it after its owner has released it, and
        `tagpu_packet.poison` fires at that give-back, which means the lever
        built to catch exactly this could not see it. An alias would be safe
-       only by the rotation, which is not a bound. It is why `eng`, `mmPic`,
-       the atlas and the palette are all copies. 47 KB a frame, and only when
+       only by the rotation, which is not a bound. It is why `mmPic`, the
+       atlas and the palette are all copies. 47 KB a frame, and only when
        an MM quad was recorded.
        THE DIMENSIONS COME FROM THE SAME READ as the bytes, so the two cannot
        disagree. */
@@ -2681,40 +2553,6 @@ static void mir_finish(const TAGPU_FRAME* f)
        arrived, which is a state no tint op can be published into. */
     s_mHand.shade = s_shadeHave ? s_shade : NULL;
     s_mHand.shadeSerial = s_shadeSerial;
-
-    /* THE ENGINE'S OWN FRAME. The composite's bottom layer and its
-       stale-mirror guard both sample it. The bytes are the fork's primary,
-       and they are read HERE under `g_ddraw.cs` for
-       the lifetime reason tagpu_pal.c gives for the palette: the game thread
-       NULLs `g_ddraw.primary` inside that section and frees the object only
-       after leaving it, so a pointer read AND dereferenced inside it is a live
-       object or NULL, never a freed one. Copied rather than aliased, because
-       the Vulkan lane runs two calls later. */
-    s_mHand.eng = NULL; s_mHand.engW = s_mHand.engH = s_mHand.engPitch = 0;
-    if (have_engine_frame(f)) {
-        /* TAKEN BY tagpu_surf.c, NOT COPIED AGAIN HERE. The snapshot lives
-           there because the Vulkan lane needs the same bytes as its BOTTOM
-           layer, and a base layer that exists only while the UI pass runs would
-           couple the two. The lifetime is a copy rather than an alias of
-           anything short-lived: the buffer is tagpu_surf.c's, written once per
-           frame at the top of `tagpu_overlay_draw`, so it is stable for the
-           whole window in which this hand-over is valid, with exactly one
-           writer at exactly one point in the frame. */
-        TAGPU_SURFFRAME sf;
-        if (tagpu_surf_frame(&sf)) {
-            s_mHand.eng = sf.bytes;
-            s_mHand.engW = sf.w; s_mHand.engH = sf.h; s_mHand.engPitch = sf.w;
-        }
-    }
-    /* the guard has nothing to compare against without those bytes */
-    if (!s_mHand.eng) { s_mHand.guard = 0; s_mHand.strict = 0; }
-    /* AND THAT IS ALL `eng` IS: A FLAG. The Vulkan lane borrows the image
-       `tagpu_vk_surf.c` already uploaded from the same `tagpu_surf_frame`
-       (`tagpu_vk_surf_engine_view`) rather than copying these bytes, so nothing
-       downstream dereferences this pointer and the lifetime paragraph above is
-       about a read nothing makes. The pointer is still what says whether a
-       frame exists at all, which is what the two lines above turn into `guard`
-       and `strict`. */
 
     s_mFrame = f->frame_counter;
     s_mHave = 1; s_mTaken = 0;
@@ -2774,4 +2612,3 @@ int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now)
     return 1;
 }
 
-int tagpu_gui_drawing(void) { return s_on; }

@@ -55,9 +55,7 @@
 #include "tagpu_sfx.h"
 #include "tagpu_glsl.h"
 #include "tagpu_gaf.h"
-#include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
-#include "tagpu_fogwide.h"
 #include "tagpu_packet.h"
 #include "tagpu_native.h"   /* tagpu_native_foglut/scissor_on, for the hand-over */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
@@ -296,7 +294,6 @@ static void atlas_setup(void)
     tagpu_gaf_atlas_lost(&s_atlas);      /* the struct describes nothing yet */
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "fx";
-    s_atlas.prio = 2;                   /* restored after terrain and features */
     tagpu_gaf_atlas_create(&s_atlas);   /* laid out now, not on first use */
 }
 
@@ -311,8 +308,6 @@ static void put_vert(int b, float x, float y, float u, float v, float c, int mod
 
 static int s_cLines = 0, s_cSprites = 0, s_cFlash = 0, s_cAtlasFail = 0;
 static int s_cOverflow = 0, s_cQuads = 0;
-static int s_traceN = 0;              /* emission trace lines left (sfx log) */
-void tagpu_fx_trace(int n) { s_traceN = n; }
 
 static void put_quad(int b, float x0, float y0, float x1, float y1,
                      float u0, float v0, float u1, float v1, float c, int mode,
@@ -374,12 +369,6 @@ static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float 
     float y0 = (float)(sy - gm.hoty);
     float x1 = x0 + (float)w, y1 = y0 + (float)h;
     float c = (float)e->ck / 255.0f;
-    if (s_traceN > 0) {
-        char tb[160]; s_traceN--;
-        _snprintf(tb, sizeof tb, "fx: emit b=%d mode=%d at=(%.0f,%.0f) %dx%d enc=%.1f ck=%u uv=(%.3f,%.3f) nv=%d",
-                  b, mode, x0, y0, w, h, s_encCur, (unsigned)e->ck, e->u0, e->v0, s_nv[b]);
-        flog(tb);
-    }
     put_quad(b, x0, y0, x1, y1, e->u0, e->v0, e->u1, e->v1, c, mode, wx, wz);
 }
 
@@ -915,10 +904,8 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
     s_pub.depthScale = v->depthScale > 1.0f ? v->depthScale : 512.0f;
-    /* THE ROUTE IS THE PUBLISHED LIST, NOT A TEXTURE NAME. `s_atlas.rgb`
-       has one writer in the tree -- `tagpu_gaf.c:643 a->rgb = 0` -- so it is
-       always 0. `rlistWant` is what says a restore route exists; it is latched
-       by the arm. */
+    /* THE ROUTE IS THE PUBLISHED LIST: `rlistWant` is what says a restore
+       route exists; it is latched by the arm. */
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
     /* bit1 set as well: effects hide in grey rather than darkening */
     s_pub.fog = (v->fogMode & 1) | 2;
