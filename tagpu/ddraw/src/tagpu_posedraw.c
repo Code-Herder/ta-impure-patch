@@ -302,7 +302,12 @@ unsigned tagpu_posedraw_drawn(void) { return s_units; }
 static int s_slantDrew;
 void tagpu_posedraw_slant_drew(void) { s_slantDrew = 1; }
 
-void tagpu_posedraw_uncarried(void) { if (s_state == 1) s_other++; }
+/* NOT GATED ON THE ARM STATE: `tagpu_posedraw_ready` first arms the pass later
+   in the same frame than the packet is checked, so a gate here would let the
+   arming frame -- the one most likely to be truncated, at load -- through.
+   The count is reset by `tagpu_posedraw_frame` and read only by this frame's
+   publish. */
+void tagpu_posedraw_uncarried(void) { s_other++; }
 
 /* TAGPU_PD_MAXHAND is every record the producer can make (tagpu_posedraw.h),
    so a frame is never refused for its count while the packet's tables are the

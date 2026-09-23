@@ -780,11 +780,13 @@ void tagpu_packet_init(void);
 int  tagpu_packet_armed(void);
 
 /* THE GROWTH-STRESS LEVER, `tagpu_grow.stress` in the gamedir, read once at
-   attach like the packet's own. Every render-side array that grows with the
-   unit count moves on every frame under it: the per-frame ones are freed and
-   allocated again at exactly the size asked for, the hand-over's arenas grow
-   to the exact size on every append, and the Vulkan unit pass rebuilds its
-   slot buffers. A pointer that outlives a move then reads freed memory at the
+   attach like the packet's own. The arrays whose caps this sizes for the
+   design point move on every frame under it: the native gather's and the
+   marker pass's are freed and allocated again at exactly the size asked for,
+   the posed hand-over's arenas grow to the exact size on every append, and
+   the Vulkan unit pass rebuilds its two slot buffers. Other growable arrays
+   (the unit pass's draw list and staging, the marker hand-over) keep their
+   ordinary doubling. A pointer that outlives a move then reads freed memory at the
    unit counts a stock game reaches, rather than only in a game large enough to
    grow the arrays for real. A measurement lever: it costs an allocation per
    array per frame. */

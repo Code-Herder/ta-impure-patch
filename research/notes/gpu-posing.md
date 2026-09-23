@@ -281,7 +281,7 @@ rather than by luck:
 
 | refusal today | what it actually is | after step 8 | the invariant |
 |---|---|---|---|
-| `npd >= MAXU` | our per-frame array | **cannot happen.** The gather already stops at `nu < MAXU` and every non-hires unit takes exactly one `pdu` slot, so `npd <= nu <= MAXU` | a counting bound, established at the loop that fills it |
+| `npd >= pduCap` | our per-frame array | **cannot happen.** `pdu` is grown to the gather's count and every unit takes exactly one slot, so `npd < nu <= pduCap`; a failed grow refuses the hand-over | a counting bound, established at the loop that fills it |
 | the pose arena is full | our arena | **degrade: that unit draws AT REST for that frame** — right geometry, right material, right position, fog, shadow and depth. **Not only "animation frozen"**: the shared block gives every one of the 256 piece slots an identity matrix and `pvis = 3`, and body visibility is normally carried by an ALL-ZERO matrix, so under the degradation the pieces the unit is *not* showing (flares, muzzle pieces, anything HIDden) are drawn too, and non-`cached` pieces cast a slant shadow. Right unit, wrong pose — visibly, not just statically | the rest block is **one shared static identity block**, so the degradation consumes no arena and cannot itself fail |
 | a piece's parent link never resolves (`!done[i]`) | the piece tree, not the renderer | **degrade: THAT PIECE at rest**, the rest of the unit posed. `hires_pose` has always done exactly this | identity is a valid matrix for any piece; the unit's other pieces are unaffected |
 | `nparts != g->nparts` | a cache-identity re-read | **redundant.** `tagpu_posebake_unit` already matches the cache entry on `nparts`, so equality holds at every call site. It becomes the loop bound it always was | established by the lookup, one call earlier |
@@ -340,10 +340,10 @@ each bound does when it is reached, at that scale:
 | bound | today | what it limits | at 10 000 units |
 |---|---|---|---|
 | `MAXNV` / `s_vtrunc` | 49152 verts | the shared CPU vertex stream | **gone for units** — and it was already truncating at 281 units on screen (§4 step 7), which is the whole reason the CPU path is both slower and drawing less |
-| the pose arena | **98 304 piece-slots** (`PD_ARENA = MAXU * 48`, `tagpu_native.c`) | poses buffered per frame | **not** the first thing to fill, and the earlier claim that it was is withdrawn: 2048 on-screen units at stock's worst 36 pieces is 73 728, which is *below* 98 304, so with stock content `MAXU` binds first and the arena cannot exhaust. Step 8 sizes it from `MAXU` rather than a magic 64; its exhaustion is the rest-pose degradation above rather than a fallback, and it becomes reachable only for content averaging over 48 pieces a unit |
-| `MAXU` | 2048 | units gathered per frame — **on screen only**, not alive | reachable zoomed out. Exhaustion today is a silent **drop** (the gather loop just stops), which is the one place §3's rule is still violated; raising it multiplies a dozen per-unit arrays, and `tagpu_native.o` already carries 5.1 MB of BSS. **Named here, not fixed by step 8** |
-| `PB_MAXMAT` | 256 | `(type, owner, atlas gen)` material streams | **the binding cache**: a stream is per OWNER, so ten players fielding thirty types each want ~300. Over the limit `mat_slot()` evicts and rebakes — a performance cliff, not a correctness bug, but it belongs in the same patch as the unit limit |
-| `PB_MAXGEOM` | 128 | model types baked at once | 279 unit types exist; a varied ten-player game can pass it, with the same eviction behaviour |
+| the pose arena | grown each frame to the gathered pieces (`tagpu_native.c`) | poses buffered per frame | exact: the bake keys its entry on the unit's own `nparts`, so the sum is what the loop can ask for; only a failed allocation reaches the rest-pose degradation above |
+| the unit gather | grown each frame to `n_units + n_wrecks` | units gathered per frame — **on screen only**, not alive | cannot drop a unit: a failed grow refuses the hand-over whole ([GPU status](gpu-status.html) §2.85) |
+| `PB_MAXMAT` | 1 024 | `(type, owner, atlas gen)` material streams | a stream is per OWNER, so it is sized for ten players at ~100 types on screen each. An entry evicted mid-frame leaves a record naming a stale serial and the Vulkan pass refuses the frame |
+| `PB_MAXGEOM` | 256 | model types baked at once | 279 unit types exist; sized so one frame of a varied ten-player game fits |
 
 **Only the first two are step 8's.** The other three are named with their failure mode so the
 unit-limit patch has a list rather than a surprise; `MAXU`'s silent drop is the one that is a
@@ -833,8 +833,7 @@ before suspecting a miss; `q=` is the field that would actually say one had happ
 `posed_pose` reads the pose fields on the render thread with no interlock, so a unit can be drawn
 with its pieces mixed across one tick. Gate C looked for it and found nothing visible; it is not
 proved absent. The **anchor** is the other half and has never been checked — the unit's 16.16
-position is three dwords read without an interlock. `PB_MAXMAT`, `PB_MAXGEOM` and `MAXU` are still
-the sizes the budget table names, and `MAXU`'s exhaustion is still a silent drop.
+position is three dwords read without an interlock.
 
 ## 5. What cannot be byte-exact, and the gates that follow
 

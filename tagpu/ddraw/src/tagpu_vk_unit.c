@@ -2162,9 +2162,9 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* THE PACKED POSE'S SIZE, from the hand-over's own two counts, before
        anything is sized from it. `nflag` is in floats and each unit's word run
        is a whole vec4, so a count that is not a multiple of 4 is not a
-       hand-over this file understands. The limit is the device's own, and a
-       frame under it also keeps every base index below 2^27 vec4, so the
-       `int` bases the shader takes cannot overflow. */
+       hand-over this file understands. The limit is the device's own, a 32-bit
+       field, so a frame under it keeps every base index below 2^28 vec4 and
+       the `int` bases the shader takes cannot overflow. */
     poseBytes = ((VkDeviceSize)h.nrow + (VkDeviceSize)(h.nflag / 4) * 2) * 16;
     if ((h.nflag & 3u) || h.nrow < 3 || h.nflag < 4 || poseBytes > s_ssboMax) {
         if ((d->frame % 300u) == 0u)
@@ -2395,8 +2395,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        body's, the caster's, the hard shadow's, the nanoframe wire's) and three
        fragment-stage (the body's, the hard shadow's, the wire's). The wire's
        pair is written for every unit, nanoframe or not, because the window is
-       per unit and fixed-stride: 512 bytes a unit on the reference device's
-       64-byte alignment (192 + 320). */
+       per unit and fixed-stride: 512 bytes a unit of the 1 728 on the
+       reference device's 64-byte alignment (192 + 320). */
     {
         VkDeviceSize vgl = align_up(VGL_SZ, s_ualign);
         VkDeviceSize fgl = align_up(FGL_SZ, s_ualign);
