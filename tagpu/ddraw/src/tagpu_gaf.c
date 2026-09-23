@@ -610,6 +610,15 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
     return 1;
 }
 
+/* tagpu_gaf.h. `rlist_restart(a, 1)` and nothing else: the frames are the same
+   rectangles, and the only thing that changed is the palette the restorer
+   reads them through. */
+void tagpu_gaf_atlas_restore_repalette(TAGPU_GAFATLAS* a)
+{
+    if (!a || !a->rlistWant || !a->rlist) return;
+    rlist_restart(a, 1);
+}
+
 /* GIVE BACK EVERY HEAP BUFFER AN ATLAS OWNS, for a caller that is about to lay
    the struct out again from zero. That is two: `mirror` (dim*dim) and `rlist`
    (the published restore list). `mirrorRgb`, the restored twin's mip chain,

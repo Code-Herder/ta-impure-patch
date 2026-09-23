@@ -230,6 +230,21 @@ typedef struct TAGPU_GUIQ {
     volatile unsigned why;                   /* the last reason `reseed` (or an overflow) was raised: TAGPU_GUI_WHY_* */
     volatile unsigned overflows;             /* the producer ran out of queue or arena  */
     volatile unsigned resets;                /* fresh starts published (re-arm, GL, overflow, a lost frame) */
+    /* ASK THE ENGINE TO REDRAW ITS SCREENS, AND NOTHING ELSE. Raised by the
+       render half when Classic++ colour becomes valid: colour reaches a twin
+       only through the op that DRAWS the art, so a surface already painted
+       keeps its indices until something repaints it -- in game that is the
+       whole sidebar, which the engine draws once per selection change.
+       DELIBERATELY NOT `reseed`. A reseed resets the twin store and the UI
+       atlas, which re-arms the restore list, which clears the consumer's
+       `arHave`, which clears colour validity -- and raising a reseed on the
+       validity EDGE then closes that loop: measured 2026-09-22, the UI
+       oscillated and the layer composited nothing at all (a magenta frame).
+       This counter asks for the engine's repaint alone, which is the half
+       that redraws every gadget as sprites and so carries colour.
+       Monotone, never reset; `repaint_arm` shadows it exactly as it shadows
+       `resets`. */
+    volatile unsigned colarm;
     /* GAF ops that fell back to their box's bytes because the sprite's decoded
        plane was not in hand at publish -- which since G19f-7 can only mean the
        observe-time scratch was full when the blit was seen (`gaf_capture`).

@@ -125,6 +125,15 @@ static void slog(const char* s)
 typedef struct TWIN {
     unsigned surf;                      /* the engine surface's pixel base     */
     int w, h;
+    /* THIS SURFACE HAS A COLOUR PLANE. The one piece of the GL ids that came
+       back: it is not an object name but the RECORD of a decision -- the op
+       that first carried `TAGPU_GUICOL_DST` is what made the consumer's
+       colour image, so the two stores hold colour for the same surfaces by
+       construction rather than by two modules agreeing. Never cleared once
+       set (a `PK_PIXELS` box invalidates the colour WITHIN the box, which is
+       the consumer's `tw_col_drop`, not the plane's existence); it goes with
+       the twin, and `s_colTwins` is the live count. */
+    int col;
     /* THE BOXES THIS PASS DROPPED A `PK_PIXELS` FOR [FROM REVIEW, landing 8d].
        Only the tint reads them, and only because the tint is the one op whose
        result depends on what the twin already holds. Cleared at the top of
@@ -199,17 +208,47 @@ static int    s_skipToReset = 0;        /* after a GL context change: the queue'
 static unsigned s_skipped = 0;
 /* Classic++ (G15e) */
 static int    s_norestore = 0;          /* `norestore` in the trigger: the A/B lever   */
-/* PINNED AT 0 SINCE [landing 11-4b], AND KEPT DELIBERATELY. `restore_step`, which
-   was the only thing that raised it, went with the draw half. That makes it the
-   same shape as landing 11-4a's `s_state` -- with one difference that decides it:
-   `s_state` was a READINESS GATE, so a future `if (s_state != 1) return;` would
-   have silently stopped the pass publishing anything. This is a VALUE that is
-   published (`s_mHand.colourTwins`) and logged, and 0 is the correct value --
-   there are no colour twins on this lane. Removing it would change the hand-over's
-   shape, which is a protocol change for `tagpu_vk_gui.c` rather than a deletion,
-   so it is out of this landing's scope and named here instead of done quietly. */
-static int    s_colValid = 0;           /* no colour twins on this lane; see above     */
+/* WHETHER AN OP MAY SAY "RESTORED" THIS FRAME (gui-renderer.md 3.4). Written
+   by `restore_step` below, which is the present's first statement again. Three
+   things have to hold and each one is a fact rather than a hope:
+     - Classic++ `assets=` is on, so there is a restorer running at all;
+     - the UI atlas has armed its published frame list;
+     - the CONSUMER says it has a restored image with at least one painted
+       frame in it (`tagpu_gui_col_ready`), and the presented palette is still
+       the one that image was painted against.
+   The third is what keeps this from being a race with the lane that paints:
+   an op that says restored to a consumer holding no restored atlas is a frame
+   the consumer must refuse whole, which would thrash the store for the two
+   seconds a first restore takes. It cannot say restored before the consumer
+   has said it can. */
+static int    s_colValid = 0;
+/* THE CONSUMER'S ANSWER, one frame old by construction: `tagpu_vk_gui.c` calls
+   `tagpu_gui_col_ready` from its own prepare, which runs LATER in the same
+   iteration of the render loop than this module's present. Both are the render
+   thread, so this is a plain static and not a handshake. One frame of lag on
+   the way ON, which costs nothing, and none on the way off that matters -- the
+   consumer stands the op down for itself if it ever disagrees. */
+static int    s_colReady = 0;
+/* ...AND HOW OFTEN THE RESTORE HAS GONE QUIET HAVING PAINTED SOMETHING NEW.
+   Each one is a repaint's worth of art that was drawn too early to take the
+   colour it should have. `s_colRepaints` is the BOUND on how many repaints one
+   palette generation may ask for: the set of atlas entries a screen uses is
+   finite so the loop converges by itself, and this is the guard for the day it
+   does not rather than a rate limit -- a repaint that introduces a new entry is
+   allowed, 32 in a row is a bug and says so once. */
+static unsigned s_colSettled = 0, s_colSettledSeen = 0, s_colRepaints = 0;
+#define COL_REPAINT_MAX 32
+/* THE PALETTE THE RESTORED ART IS RIGHT FOR, and the settle counter of 3.4.
+   `s_colPalSeen` distinguishes "never armed" from "armed against serial 0". */
+static unsigned s_colPalSerial = 0, s_colPalLast = 0;
+static int      s_colPalSeen = 0, s_colPalStill = 0;
 static unsigned s_rearms = 0, s_colTwins = 0;
+/* OPS THAT ACTUALLY CARRIED `TAGPU_GUICOL_ON` since the last heartbeat, and it
+   is the field that says whether restored art is reaching the screen rather
+   than merely being painted. `colvalid=1` says this side would say yes;
+   `colops=0` beside it says nothing ASKED -- which is the difference between
+   the restorer being off and the ops that would sample it never running. */
+static unsigned s_colOps = 0;
 /* Phase 2's seam (G17a) */
 static int    s_sharpW, s_sharpH;       /* its size, = the frame's viewport in window px               */
 static int    s_sharpOn = 0;            /* it exists and may be sampled this frame                     */
@@ -793,6 +832,7 @@ static void twin_drop(TWIN* t)
        `if` away from running without a context. The RECORD below is the whole
        function now: the twin's slot is recycled so `twin_find` stops resolving
        this surface, which is what the mirror's FREE op pairs with. */
+    if (t->col && s_colTwins) s_colTwins--;
     *t = s_twins[--s_ntwins];
 }
 
@@ -829,19 +869,32 @@ static TWIN* twin_make(unsigned surf, int w, int h)
    and both are recorded. */
 static unsigned char twin_sprite(TWIN* t, const TAGPU_GAFENT* e, const TAGPU_PUBOP* o)
 {
-    /* ALWAYS 0, AND THAT IS 4b-3's ANSWER MADE EXPLICIT [landing 11-4b]. The two
-       bits were `t->rgb ? DST : 0` and `(restored && t->rgb) ? ON : 0`, over
-       `restored = s_colValid && s_atlas.rgb != 0`. Every term is a GL object name
-       or a latch only the GL bring-up could raise, and all of them went with the
-       draw -- so the expression could no longer evaluate to anything but 0, while
-       still reading like a decision. 4b-3 already said what this lane records:
-       "the ops this lane records say indexed, which is what its twin will draw."
-       Computing that from three flags nothing can set would be the `s_state` trap
-       of landing 11-4a at record scale -- the value is right, and the next reader
-       would believe the inputs still moved. */
-    (void)t; (void)e; (void)o;
+    /* THE DECISION IS BACK, AND IT IS ONE FLAG NOW. It used to be
+       `restored = s_colValid && s_atlas.rgb != 0` over a GL texture name, and
+       between 11-4b and this landing it was a hard 0 with the whole expression
+       written out in prose. `s_colValid` carries all three terms (see its
+       declaration), so there is one input and it moves.
+
+       `e` IS NOT TESTED HERE AND THE FLOOR IS NOT LOST. An entry below
+       `UI_RESTORE_MIN` is simply never put in the published list, so its texels
+       in the restored image stay alpha 0 and `SPR_FS` takes the palette for
+       them -- per texel, which is stricter than per sprite and needs no second
+       copy of the rule. */
+    unsigned char col = 0;
+    (void)e; (void)o;
     s_sprites++;
-    return 0;
+    if (s_colValid) {
+        if (!t->col) { t->col = 1; s_colTwins++; }
+        col = TAGPU_GUICOL_DST | TAGPU_GUICOL_ON;
+        s_colOps++;
+    }
+    /* AND NO `DST` WITHOUT `ON`. The bit means "make the colour plane", and a
+       twin that already has one needs nothing made; an indexed sprite over a
+       twin that HAS colour still writes `oCol = vec4(0)` through the
+       two-attachment pipeline, which the consumer selects from its own
+       `colImg` rather than from this bit -- so the colour under that sprite is
+       correctly dropped without this op asking for anything. */
+    return col;
 }
 
 /* A STRING OP INTO ITS TWIN, glyph by glyph (13.4, G17d).
@@ -952,8 +1005,13 @@ static void twin_string(TWIN* t, const TAGPU_PUBOP* o)
         s_glyphs++;
     }
     s_strings++;
-    /* 0 for the reason `twin_sprite` gives: `t->rgb` is a GL texture name and
-       nothing creates one here any more [landing 11-4b]. */
+    /* NO COLOUR BIT, AND THE ERASE STILL HAPPENS. A string never RESTORES
+       anything -- `STR_FS` writes `oCol = vec4(0.0)`, so it erases the colour
+       under every glyph it stamps and leaves it standing between them -- and
+       the consumer runs that write whenever the destination has a colour plane,
+       which it picks from its own `colImg`. So this op asks for nothing and
+       gets the erase for free; asking for `DST` would only make a colour plane
+       on a twin that text is the first thing to touch. */
     mir_string(o, cell, n, (int)o->sl, top, 0);
     return;
 
@@ -981,10 +1039,20 @@ static unsigned char twin_copy(TWIN* t, const TWIN* src, const TAGPU_PUBOP* o)
        restored art reaches the screen through here or not at all. A source
        with no colour twin writes zero, which invalidates the destination's
        colour over the box — a copy from indexed art means indexed art. */
-    /* 0, for `twin_sprite`'s reason: both terms were GL texture names and the
-       twin performs the same copy from the same op. [landing 11-4b] */
+    unsigned char col = 0;
+    (void)o;
     s_copies++;
-    return 0;
+    /* THE SOURCE'S COLOUR IS THE WHOLE QUESTION, not `s_colValid`: a copy
+       carries what is already in the source twin, and that art was restored
+       (or not) when it was drawn. Gating this on the live validity would blank
+       the destination's colour for the duration of a fade and leave it blank
+       afterwards, because nothing re-copies. */
+    if (src && src->col) {
+        if (!t->col) { t->col = 1; s_colTwins++; }
+        col = TAGPU_GUICOL_DST | TAGPU_GUICOL_ON;
+        s_colOps++;
+    }
+    return col;
 }
 
 /* THE BOX, ONE PALETTE INDEX, FULLY COVERED. `twin_clear`'s shape with two
@@ -1019,6 +1087,134 @@ static void twins_reset(void)
    still for PAL_SETTLE frames the job is rebuilt against the new one and
    every colour twin is invalidated, so the art comes back restored as the
    engine redraws it. */
+
+/* tagpu_gui.h: the consuming lane's own answer, taken on its prepare. */
+void tagpu_gui_col_ready(int have, unsigned settled)
+{
+    s_colReady = have ? 1 : 0;
+    s_colSettled = settled;
+}
+
+/* Once per present, BEFORE the drain, because the sprite ops it replays ask
+   whether colour is valid and the answer has to be one frame's answer.
+
+   WHAT THIS DOES NOT DO ANY MORE, and it matters for the next reader: it does
+   not start, step or own a restore. The list is armed on the atlas and the
+   painting is the Vulkan pass's, exactly as the terrain, feature and effects
+   atlases work -- so what is left here is the one decision this side owns,
+   which is whether an op may claim its texels are restored. */
+/* THE ART HAS TO BE REDRAWN TO GAIN COLOUR, AND THIS IS WHAT ASKS FOR IT.
+   Colour reaches a twin only through the op that DRAWS the art -- a sprite
+   writes the restored texel beside the index, a copy carries both -- so a
+   surface painted before the restore landed keeps its indexed pixels for as
+   long as nothing repaints it. In the shell that is invisible (every gadget is
+   redrawn on every flip); IN GAME IT IS THE WHOLE SIDEBAR, which the engine
+   draws once when the selection changes and then leaves alone. MEASURED
+   2026-09-22 on `pose-inventory` at 1024x768: with the panel left standing,
+   `assets=0` and `assets=1` were 0 differing pixels of 82 944 over
+   (0,120)-(128,768) and 273 colours either way; deselecting and reselecting the
+   commander -- one repaint, nothing else -- took the same region to 23 662
+   colours.
+
+   `g_guiq.colarm` IS THE ASK, and it asks for the ENGINE's repaint alone --
+   `tagpu_gui_hook.c`'s `repaint_arm` shadows it exactly as it shadows
+   `g_guiq.resets`, and the repaint redraws every gadget through the leaves, as
+   sprites, which is what carries colour.
+   IT IS NOT A RESEED, and that is a fix rather than a preference: a reseed
+   resets the twin store and the UI atlas, which re-arms the restore list,
+   which clears the consumer's restored image, which clears this very flag --
+   so raising a reseed HERE closed a loop. Measured 2026-09-22: the validity
+   flag oscillated, the atlas re-armed every few frames and the layer
+   composited nothing at all, which the harness shows as a magenta frame.
+
+   ONCE PER EDGE, never per frame. It fires on 0 -> 1 only, so a session pays
+   for one repaint at the arm and one more per palette re-arm. */
+static void col_valid_edge(int on)
+{
+    static int was = 0;
+    if (on != was) {
+        was = on;
+        if (!on) return;
+        s_colSettledSeen = s_colSettled;
+        s_colRepaints = 1;
+        g_guiq.colarm++;
+        slog("gui: Classic++ colour is valid - asking the engine for a repaint, because "
+             "art already on a surface keeps the indices it was drawn with");
+        return;
+    }
+    if (!on) return;
+    /* AND AGAIN EVERY TIME THE RESTORE SETTLES HAVING PAINTED MORE. The sprites
+       drawn by the last repaint may have put entries in the atlas that had no
+       restored texels yet, and those draws took alpha 0; one more repaint draws
+       them against the atlas as it now is. Finite by construction -- a repaint
+       that adds no entry adds no frame, and no frame is no settle -- and
+       bounded anyway. */
+    if (s_colSettled == s_colSettledSeen) return;
+    s_colSettledSeen = s_colSettled;
+    if (s_colRepaints >= COL_REPAINT_MAX) {
+        if (s_colRepaints == COL_REPAINT_MAX) {
+            s_colRepaints++;
+            slog("gui: " "the restored UI atlas has settled " "32" " times and the art is still "
+                 "drawing ahead of it - no further repaints are asked for, and whatever is "
+                 "on screen now keeps the indices it has");
+        }
+        return;
+    }
+    s_colRepaints++;
+    g_guiq.colarm++;
+}
+
+static void restore_step(void)
+{
+    unsigned live;
+
+    /* `norestore` is the A/B lever: the UI layer with the art it would have
+       had before Classic++, while the world goes on restoring. */
+    if (s_norestore || !tagpu_classicpp_assets()) { s_colValid = 0; col_valid_edge(0); return; }
+    /* ARMING IS POLLED, NOT LATCHED AT START-UP. `tagpu_gaf_atlas_restore_vk`
+       is idempotent and answers 1 on every call after the first, so this is a
+       compare once the list exists -- and `assets=0 -> 1` from the
+       render-options row arms it on the next present. */
+    if (!tagpu_gaf_atlas_restore_vk(&s_atlas)) { s_colValid = 0; col_valid_edge(0); return; }
+    /* AND THE OTHER LANE HAS TO HAVE SOMETHING TO SAMPLE. Saying restored to a
+       consumer with no restored image is a frame it must refuse WHOLE -- the
+       op would write alpha 0 into a twin that keeps it -- so the first two
+       seconds of every level would be the store thrashing instead of the art
+       arriving. */
+    if (!s_colReady) { s_colValid = 0; col_valid_edge(0); return; }
+
+    live = tagpu_pal_serial();
+    if (!s_colPalSeen) {
+        s_colPalSeen = 1;
+        s_colPalSerial = live; s_colPalLast = live; s_colPalStill = 0;
+        s_colValid = 1; col_valid_edge(1);
+        return;
+    }
+    if (live == s_colPalSerial) {            /* the art is right for the screen */
+        s_colPalLast = live; s_colPalStill = 0;
+        s_colValid = 1; col_valid_edge(1);
+        return;
+    }
+    /* THE PALETTE MOVED OUT FROM UNDER THE RESTORED TEXELS. Dithered art for
+       the duration, never wrong art: the layer falls back to the palette for
+       every texel while this is 0. */
+    s_colValid = 0; col_valid_edge(0);
+    if (live != s_colPalLast) { s_colPalLast = live; s_colPalStill = 0; return; }
+    if (++s_colPalStill < PAL_SETTLE) return;
+    /* ...AND IT HAS SETTLED. Re-arm against the new one: the list is restarted
+       as a REPAINT (the rectangles have not moved, only the palette they are
+       read through), and `s_rearms` tells the consumer to invalidate every
+       colour plane it holds -- so nothing composites stale colour while the
+       repaint walks the atlas, and the art comes back as the engine redraws
+       each gadget. */
+    s_colPalStill = 0;
+    s_colPalSerial = live;
+    s_rearms++;
+    tagpu_gaf_atlas_restore_repalette(&s_atlas);
+    slog("gui: the presented palette settled - the UI atlas is restored against it "
+         "again and every colour plane was invalidated");
+}
+
 /* ------------------------------------------------------------------ drain */
 /* ==================================================================== G19f ==
    THE VULKAN LANE'S MIRROR of this present's op stream. tagpu_gui.h carries
@@ -2453,12 +2649,13 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
     /* the atlas alone: the sprite table this module resolves against, which
        is the Vulkan twin's as much as the GL lane's */
     if (!atlas_setup()) return;
-    /* `upload_palette()` and `restore_step()` STOOD HERE, the present's first two
-       statements [the vulkan-only plan, landing 11-4b]. Both opened with
-       `if (tagpu_vk_owns_present()) return;` -- landing 4b-3 had already found them
-       PURE GL, feeding the twin nothing. `restore_step` leaving `s_colValid` at 0 is
-       not a loss: that is what the record's `restored` term reads, and "indexed" is
-       the honest answer for a lane with no restored GL twin to sample. */
+    /* `upload_palette()` STOOD BESIDE THIS and did not come back: it uploaded a
+       GL texture, and the palette crosses to the consuming lane as bytes on the
+       hand-over. `restore_step` DID come back, at the place it always occupied
+       -- before the drain, so the sprites it replays ask one frame's question
+       about whether their texels are restored. What it decides is only that;
+       the painting is the Vulkan pass's. */
+    restore_step();
     /* THE STEP THAT STOOD HERE WAS THE GL RESTORER'S and it went in 11-5e-2
        with the backend it stepped. It was already unreachable: the block was
        gated on `s_atlas.job`, which is the GL job, and no atlas has had one
@@ -2570,13 +2767,15 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%u k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%d/%d colops=%u prescol=%d k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_bars, s_rects, s_tints, s_shadeSerial, s_tintDrop, s_tintStale, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
                   s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,
                   tagpu_classicpp_lit() ? 1 : 0,
-                  s_colTwins, s_ntwins, s_colValid, s_rearms, s_atlas.rgb,
+                  s_colTwins, s_ntwins, s_colValid, s_rearms,
+                  s_atlas.rlistWant ? s_atlas.rlistN : 0, s_atlas.n,
+                  s_colOps, twin_find(s_presented) && twin_find(s_presented)->col ? 1 : 0,
                   s_k, s_hudS, s_sharpW, s_sharpH,
                   s_curOwn, s_curW, s_curH, s_curDev, s_cursorScale, s_curDrawn, s_curWarm,
                   s_strings, s_glyphs, s_strMiss, s_strReseed, s_strRepack, gCached, gDrops, gFonts,
@@ -2711,8 +2910,27 @@ static void mir_finish(const TAGPU_FRAME* f)
        THE PUBLICATION ITSELF WENT IN 11-5e-2b. `atlasRgb`/`atlasRgbRows`/
        `atlasRgbSerial` were filled from `s_atlas.mirrorRgb` here; that mirror
        is `glReadPixels` and is never armed, so all three were NULL/0 on every
-       frame. Nothing replaces them: this lane arms no restore list, so there
-       is no route to Classic++ colour in the UI until one is built. */
+       frame.
+
+       WHAT REPLACES THEM IS THE FRAME LIST, and it is the WORK rather than the
+       picture: the consuming lane paints a restored image of its own from these
+       rectangles. `rlist` is one `malloc` with no `realloc` and no second free
+       (tagpu_gaf.c), so its address is fixed for the life of the atlas and may
+       be aliased here; a consumer copies the frames it takes inside the same
+       call. The three counters beside it are the cursor's -- see tagpu_gui.h.
+       GATED ON `rlistN`, so "a list exists but is empty" cannot reach a
+       consumer as a generation with nothing in it. */
+    if (s_atlas.rlistWant && s_atlas.rlist && s_atlas.rlistN > 0) {
+        s_mHand.restoreFrames  = s_atlas.rlist;
+        s_mHand.restoreN       = s_atlas.rlistN;
+        s_mHand.restoreGen     = s_atlas.rlistGen;
+        s_mHand.restoreRepaint = s_atlas.rlistRepaint;
+        s_mHand.restoreBlanks  = s_atlas.rlistBlanks;
+    } else {
+        s_mHand.restoreFrames = NULL; s_mHand.restoreN = 0;
+        s_mHand.restoreGen = 0; s_mHand.restoreRepaint = 0;
+        s_mHand.restoreBlanks = 0;
+    }
     s_mHand.colRearm = s_rearms;
 
     /* ---- THE SHARP LAYER. `sharpOn` above already says whether anything has

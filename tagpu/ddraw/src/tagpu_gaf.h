@@ -470,6 +470,16 @@ int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
    reading back as before. Render thread only. */
 int  tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a);
 
+/* THE PALETTE MOVED UNDER THE RESTORED TEXELS, so every frame of the list has
+   to be painted again against the new one -- the path `rlistRepaint`'s comment
+   above describes and which had no caller until the UI atlas needed it.
+   A REPAINTING generation: the destination KEEPS what it holds and the
+   restorer overwrites it frame by frame, so nothing is blanked and the art
+   does not flash through a cleared image on the way. `rlistBlanks` therefore
+   does not move, which is exactly the fact a consumer's `repaint` test reads.
+   A no-op on an atlas with no list. Render thread only. */
+void tagpu_gaf_atlas_restore_repalette(TAGPU_GAFATLAS* a);
+
 /* `tagpu_gl_rgba_readback` was declared here -- an RGBA8 GL texture read back
    through a caller-owned FBO -- and went in 11-5e-2 with its only two callers,
    which were the level-0 and mip halves of the step above. There is no texture
