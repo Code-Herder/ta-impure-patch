@@ -2490,7 +2490,18 @@ static void publish(unsigned flipSurf)
         }
     as_pixels:
         if (op->kind == OP_COPY) {
-            SURF* src = surf_by_base(op->src);
+            SURF* src;
+            /* AN IDENTITY SELF-COPY IS NOT AN OP. The engine blits a surface
+               onto itself at the same origin -- the post-game DEFEAT/VICTORY
+               screen (ENDMSN.GUI) does it over the whole 640x480 frame on every
+               present -- and that writes each pixel with its own value, index
+               and colour alike. The consumer refuses ANY self-copy, because one
+               with a different origin reads and writes one image in one draw;
+               sent this one, it fell behind on every frame of that screen and
+               the window stayed black until the next screen. Not publishing it
+               is exact: no twin byte differs from what the copy would leave. */
+            if (op->src == s->base && op->sl == op->l && op->st == op->t) continue;
+            src = surf_by_base(op->src);
             /* THE ASSET'S BYTES, ONCE, AND AHEAD OF THE COPY THAT NEEDS THEM.
                Not at `after_alloc`, where the surface is still blank and the
                loader has not run; not as a `PK_SEED`, whose payload the drain

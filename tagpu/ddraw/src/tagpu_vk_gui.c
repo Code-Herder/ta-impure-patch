@@ -1742,7 +1742,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 {
     TAGPU_GUIHAND h;
     SLOT* s;
-    unsigned i;
+    unsigned i, first;
+    int carries;
     int ndraw = 0, nquad = 0, quads = 0;
     int glUp = 0;
     VkDeviceSize glOff = 0;
@@ -1962,11 +1963,28 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        rebuild.] */
     if (!h.pal || !h.presented || h.surfW < 1 || h.surfH < 1 ||
         h.surfW > SURF_MAXDIM || h.surfH > SURF_MAXDIM) compose = 0;
+    /* WHILE BEHIND, THE FRAME STARTS AT ITS RESET, for pass 1 as for pass 2.
+       Pass 2 skips every op before the RESET; pass 1 used to validate them
+       anyway, so one it refused threw away the frame that carried the fresh
+       start -- and `behind` does not ask again while already behind, so the
+       pass waited for a RESET the producer had already sent, composited
+       nothing, and never recovered. [FOUND 2026-09-23: the post-game screen
+       went black for good.] Validating only what pass 2 will apply is the
+       same rule both passes now state.
+
+       `carries` IS THE LOST-FRAME RULE APPLIED TO A REFUSAL. A refusal in
+       this frame is the answer provably not applied, exactly as `h.lost` is,
+       so every refusal below re-asks through `behind_ex`. */
+    first = 0; carries = 0;
+    if (s_behind) {
+        while (first < h.nops && h.ops[first].kind != TAGPU_GUIOP_RESET) first++;
+        carries = first < h.nops;
+    }
     if (h.atlas && (h.atlasDim < 1 || h.atlasDim > ATLAS_MAXDIM ||
                     h.atlasRows < 1 || h.atlasRows > h.atlasDim)) {
         /* the atlas is what a sprite samples: without a sane one the replay
            itself cannot run */
-        if (!behind(d, "an atlas outside what this pass carries")) goto refuse;
+        if (!behind_ex(d, "an atlas outside what this pass carries", carries)) goto refuse;
         return 0;
     }
     /* THE GLYPH ATLAS'S DIMENSIONS, BOUNDED IN THIS FILE'S OWN TERMS. They are
@@ -1977,34 +1995,34 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        against is this refusal. */
     if (h.glyphs && (h.glyphW < 1 || h.glyphH < 1 ||
                      h.glyphW > ATLAS_MAXDIM || h.glyphH > ATLAS_MAXDIM)) {
-        if (!behind(d, "a glyph atlas outside what this pass carries")) goto refuse;
+        if (!behind_ex(d, "a glyph atlas outside what this pass carries", carries)) goto refuse;
         return 0;
     }
 
     /* ---- pass 1: validate every op and count what the frame needs ----
        IN THIS FILE'S OWN TERMS. A bound that lives in the file that produced
        the number is a bound only while both files are read together. */
-    for (i = 0; i < h.nops; i++) {
+    for (i = first; i < h.nops; i++) {
         const TAGPU_GUIOP* o = &h.ops[i];
         int bw = o->r - o->l + 1, bh = o->b - o->t + 1;
         switch (o->kind) {
         case TAGPU_GUIOP_SEED:
-            if (o->w < 1 || o->h < 1 || o->w > SURF_MAXDIM || o->h > SURF_MAXDIM) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+            if (o->w < 1 || o->h < 1 || o->w > SURF_MAXDIM || o->h > SURF_MAXDIM) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             if (o->alen) {
-                if (o->alen != (unsigned)o->w * (unsigned)o->h) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
-                if (o->aoff > h.alen || o->aoff + o->alen > h.alen) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+                if (o->alen != (unsigned)o->w * (unsigned)o->h) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
+                if (o->aoff > h.alen || o->aoff + o->alen > h.alen) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
                 stNeed += (VkDeviceSize)o->alen * 2;
             }
             break;
         case TAGPU_GUIOP_PIXELS:
-            if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
-            if (o->alen != (unsigned)bw * (unsigned)bh) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
-            if (o->aoff > h.alen || o->aoff + o->alen > h.alen) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+            if (bw < 1 || bh < 1) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
+            if (o->alen != (unsigned)bw * (unsigned)bh) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
+            if (o->aoff > h.alen || o->aoff + o->alen > h.alen) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             stNeed += (VkDeviceSize)o->alen * 2;
             break;
         case TAGPU_GUIOP_SPRITE:
-            if (o->fw < 1 || o->fh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
-            if (!h.atlas) { if (!behind(d, "a sprite with no atlas")) goto refuse; return 0; }
+            if (o->fw < 1 || o->fh < 1) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
+            if (!h.atlas) { if (!behind_ex(d, "a sprite with no atlas", carries)) goto refuse; return 0; }
             /* THE PRODUCER SAMPLED THE RESTORED ATLAS AND WE HAVE NONE. Drawing
                anyway writes alpha 0 where it wrote restored colour, into a twin
                that keeps it -- so it is a `behind` and not a `compose = 0`.
@@ -2015,7 +2033,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                has -- and that frame moves the flag the safe way, from off to
                on. What this catches is the day something else sets the bit. */
             if ((o->col & TAGPU_GUICOL_ON) && !s_arHave) {
-                if (!behind(d, "a restored sprite and no restored atlas on this lane")) goto refuse;
+                if (!behind_ex(d, "a restored sprite and no restored atlas on this lane", carries)) goto refuse;
                 return 0;
             }
             ndraw++; nquad++;
@@ -2028,17 +2046,17 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (o->nglyph < 1 || o->nglyph > 256 ||
                 o->alen != (unsigned)o->nglyph * 8 ||
                 o->aoff > h.alen || o->aoff + o->alen > h.alen) {
-                if (!behind(d, "a malformed string op")) goto refuse;
+                if (!behind_ex(d, "a malformed string op", carries)) goto refuse;
                 return 0;
             }
-            if (!h.glyphs) { if (!behind(d, "a string with no glyph atlas")) goto refuse; return 0; }
+            if (!h.glyphs) { if (!behind_ex(d, "a string with no glyph atlas", carries)) goto refuse; return 0; }
             ndraw++; nquad += o->nglyph;
             break;
         case TAGPU_GUIOP_COPY:
             /* A SELF-COPY IS REFUSED rather than guessed at: the GL lane reads
                and writes one texture in one draw there, which is undefined in
                both APIs, and reproducing undefined behaviour is not parity. */
-            if (o->surf == o->src) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+            if (o->surf == o->src) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             ndraw++; nquad++;
             break;
         case TAGPU_GUIOP_CLEAR:
@@ -2049,7 +2067,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                set and are not counted against DRAW_MAX/QUAD_MAX. RECT clears
                four rects in ONE call rather than four, which is why it is here
                and not with the quads. [BAR: landing 8a; RECT: landing 8b.] */
-            if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
+            if (bw < 1 || bh < 1) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             break;
         case TAGPU_GUIOP_TINT:
             /* THE TINT IS A DRAW, unlike the other three geometric ops: there
@@ -2064,16 +2082,16 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                tint arriving here with `h.shade == NULL` means the two halves
                disagree, and a store that quietly skips ops the other half
                applied is the silent divergence this pass exists to avoid. */
-            if (bw < 1 || bh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
-            if (o->fg >= TAGPU_GUI_SHADE_ROWS) { if (!behind(d, "a tint row past the table")) goto refuse; return 0; }
-            if (!h.shade) { if (!behind(d, "a tint with no shade table")) goto refuse; return 0; }
+            if (bw < 1 || bh < 1) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
+            if (o->fg >= TAGPU_GUI_SHADE_ROWS) { if (!behind_ex(d, "a tint row past the table", carries)) goto refuse; return 0; }
+            if (!h.shade) { if (!behind_ex(d, "a tint with no shade table", carries)) goto refuse; return 0; }
             ndraw++; nquad++;
             break;
         case TAGPU_GUIOP_FREE:
         case TAGPU_GUIOP_RESET:
             break;
         default:
-            if (!behind(d, "an op kind this pass does not know")) goto refuse;
+            if (!behind_ex(d, "an op kind this pass does not know", carries)) goto refuse;
             return 0;
         }
     }
@@ -2085,7 +2103,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             plog(d, "gui: %d draws / %d quads in one frame, past this pass's "
                     "bounds of %d / %d - the store cannot follow, asking for a "
                     "fresh start", ndraw, nquad, DRAW_MAX, QUAD_MAX); }
-        if (!behind(d, "more draws or quads in one frame than the bound")) goto refuse;
+        if (!behind_ex(d, "more draws or quads in one frame than the bound", carries)) goto refuse;
         return 0;
     }
     s_saidRoom = 0;

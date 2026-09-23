@@ -5364,6 +5364,34 @@ for the rest of the session waiting for a RESET that will never be sent. Publish
 therefore invalidates an outstanding request. That is not "the window is small": it is a message
 provably not delivered, re-sent.
 
+**A REFUSED FRAME THAT CARRIES THE RESET RE-ASKS TOO, and pass 1 now starts where pass 2 does**
+(2026-09-23). Pass 2 skips every op before the RESET while behind; pass 1 validated all of them
+anyway, so one op it refused discarded the frame that carried the fresh start, and `behind` stays
+silent while already behind. Seen as the post-game DEFEAT screen (`ENDMSN.GUI`) staying black for
+good: the render thread restarts for the 640x480 shell, the rebuilt pass asks for a fresh start,
+and every frame of that screen carries a **whole-surface identity self-copy** (surface onto itself
+at the same origin), which pass 1 refuses because a self-copy with a *different* origin reads
+and writes one image in one draw. Two changes:
+
+- `tagpu_gui_hook.c`'s `publish` does not emit an identity self-copy. It writes every pixel with
+  its own value, so not sending it leaves every twin byte exactly as the copy would. **This is the
+  one that fixes this screen**: the self-copy also follows the RESET, so the change below alone
+  would re-ask on every fresh start until `BEHIND_ASKS_MAX` muted the pass.
+- `tagpu_vk_gui.c`'s pass 1 starts at the frame's first RESET while behind, and every refusal in
+  it goes through `behind_ex(…, carries)`. A refusal on a frame that carries the RESET is the
+  answer provably not applied, the same as `h.lost`, so it asks again. This closes the general
+  hole: an op refused ahead of the RESET no longer strands the pass, and one refused after it is
+  retried and ends in the mute's log line rather than in silence.
+
+Measured on `scenarios/mex-ghost.json` at 1920x1080 by self-destructing the Commander: before,
+the census read `gui=0` on every frame of `ENDMSN.GUI`; after, `gui=1`, and the stats rows, the
+buttons and the cursor composite. **Not closed: the screen's backdrop, title and column labels are
+still black.** The engine loads the backdrop from a PCX and then draws into it through unhooked
+paths (census: `unexplained=304135` of `307054` changed on that surface), so the asset claim is
+revoked before its bytes cross. It is then composed pixels, which the clean cut never carries
+(`op_add`'s revocation comment records the refused alternative). Lifting that is a decision about
+the cut, not a fix.
+
 **Three `continue`s were doing the same thing quietly, since landing 1.** An op naming a surface
 this store never seeded, and a pixel op outside its own twin, were skipped — the GL lane applies
 them and we never do. The composite's own `tw_find(h.presented)` catches that for the **presented**
