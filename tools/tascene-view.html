@@ -46,10 +46,11 @@
                      zoom; only zoom 1 carries a parity claim (tagpu
                      resamples differently at other zooms — no A/B has been
                      done there)
-       cam=<rules>   CAMERA: `game` (default) or `bar` — both rules below
-                     at once; naming one of them as well overrides it
+       cam=<rules>   CAMERA: `game` (default) or `bar` — all three rules
+                     below at once; naming one of them as well overrides it
        clamp=<how>   CAMERA: `window` (game) or `centre` (bar)
        zoomout=<how> CAMERA: `cursor` (game) or `centre` (bar)
+       ease=<how>    CAMERA: `game`, `bar`, or `off` (a notch lands at once)
        ss=<n>        supersample factor for the offscreen. DEFAULT 2, THE
                      GAME'S OWN: tagpu renders its native unit FBO at 2x and
                      box-downsamples (tagpu_native.c, `tagpu_ss.off` turns it
@@ -219,11 +220,11 @@
      Unit normals are dotted in map space (3DO z flipped), so unitsun and
      sun mean the same compass. sun=off turns all three off.
 
-     CAMERA: TWO RULES, THE GAME'S AND BAR'S (Beyond All Reason, on the Recoil
-     engine: its Spring and TA cameras agree on both). Global, because the
-     wipe shares one camera; toggled live in the status bar, which writes
-     them back into the address bar. Zooming IN holds the world point under
-     the pointer under both.
+     CAMERA: THE GAME'S RULES AND BAR'S (Beyond All Reason, on the Recoil
+     engine: its Spring and TA cameras agree on the first two). Global,
+     because the wipe shares one camera; toggled live in the status bar, which
+     writes them back into the address bar. Zooming IN holds the world point
+     under the pointer under both.
        clamp=window  the game's range (tagpu_zoom.c zoom_eye_range): the
                      engine's own [0, map - W] up to 1x — so zoomed out, the
                      map's edge stops W/2 from the screen centre — widened
@@ -236,8 +237,17 @@
        zoomout=cursor  the game's: out holds the point under the pointer too
        zoomout=centre  BAR's default (CamSpringZoomOutFromMousePos off, and
                      the TA camera always): the camera pulls straight back
+       ease=game     tagpu_zoom.c: x1.1 a notch on a target level, and every
+                     frame a quarter of the remaining log-distance — a notch
+                     lands in thirteen frames, 0.22 s at 60 Hz, and the pointer's
+                     point is held on every one of them
+       ease=bar      Recoil's default transition: a notch is 14 % of the
+                     camera's distance (x1.163 in, x0.877 out, so in-then-out
+                     does not come back), and the drawn camera tweens to the new
+                     pose in 0.25 s along 1 - (1 - t)^4 — fast, then settling
      A pointer off the world viewport zooms about the centre. Drag and the
-     arrow keys move the world by the pointer's own distance at every zoom.
+     arrow keys move the world by the pointer's own distance at every zoom;
+     grabbing the map mid-zoom lands the zoom first.
 
      EDGE: WHAT IS PAST THE MAP. The game draws black. BAR's Map Edge Extension
      widget draws the map mirrored past each edge, from the minimap texture,
@@ -249,8 +259,11 @@
      crosses in world texels, so the pattern scales with the zoom like the
      art's own. Indexed colour stays inside the palette: every band is a
      256-entry remap to the nearest palette colour. Unlit, because mirrored art
-     is lit from wherever the reflection sent the painted light. Terrain only;
-     features and units stay on the map.
+     is lit from wherever the reflection sent the painted light. The map's own
+     features (the TNT's anchors, not a scenario's) are mirrored with the
+     terrain: flipped with it across a side edge, upright across the top and
+     bottom, standing where the reflected art puts them, in the same tone, and
+     never drawn over the map itself. Units stay on the map.
 
      THE COORDINATE CONVENTION IS TAGPU'S, DELIBERATELY. The extracted vertex
      shader maps game py 0 -> NDC -1, i.e. the offscreen's row 0 is the game
@@ -341,15 +354,15 @@ const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q
 // which is what makes `?eye=X,Y&a=engine&b=relief` share the camera and differ
 // only in the look, i.e. the same pixel coordinates on both sides.
 const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug", "zoom",
-                        "cam", "clamp", "zoomout"]);
+                        "cam", "clamp", "zoomout", "ease"]);
 const zoomClamp = (z) => (Number.isNaN(z) ? 1 : Math.max(0.25, Math.min(8, z)));
 let zoom = zoomClamp(parseFloat(Q.get("zoom") || "1"));
 
 // THE CAMERA RULES (header, CAMERA). Global, because the wipe shares one
 // camera. `cam` picks both rules at once; `clamp` and `zoomout` override it.
 const CAM_RULES = {
-  game: { clamp: "window", zoomout: "cursor" },
-  bar:  { clamp: "centre", zoomout: "centre" },
+  game: { clamp: "window", zoomout: "cursor", ease: "game" },
+  bar:  { clamp: "centre", zoomout: "centre", ease: "bar" },
 };
 function camRule(key, allowed) {
   const cam = Q.get("cam") || "game";
@@ -363,6 +376,7 @@ function camRule(key, allowed) {
 const CAMERA = {
   clamp: camRule("clamp", ["window", "centre"]),
   zoomout: camRule("zoomout", ["cursor", "centre"]),
+  ease: camRule("ease", ["game", "bar", "off"]),
 };
 const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 // naming any of these IS choosing the exploration lane; saying lane=parity as
@@ -991,39 +1005,97 @@ void main(){
   gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0, 0.0, 1.0);
   vUV = aUV; vWorld = aWorld;
 }`;
+// The mirror's tone, shared by its terrain and its features so the two cannot
+// drift: the band a drawn point falls in, from its distance to the map on the
+// tile grid, and what that band does to a colour or to a palette index.
+const EDGE_TONE = `
+uniform sampler2D uPal;
+uniform sampler2D uEdgeLUT;  // indexed: row l maps an index to its band-l grey
+uniform vec2 uMapPx;         // the map's extent on the tile grid, px
+uniform vec4 uEdge;          // brightness at the edge, grey, fade px, bands
+uniform int uDither;
+const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
+                                  3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+float edgeT(vec2 w) {
+  vec2 o = max(max(-w, w - uMapPx), vec2(0.0));
+  return clamp(length(o) / uEdge.z, 0.0, 1.0);
+}
+float edgeBand(vec2 w, float t) {
+  float f = t * uEdge.w;
+  if (uDither == 1) {
+    ivec2 q = ivec2(floor(w)) & 3;
+    f += (BAYER[q.y * 4 + q.x] + 0.5) / 16.0;
+  }
+  return clamp(floor(f), 0.0, uEdge.w);
+}
+vec3 edgeRGB(vec3 c, vec2 w) {
+  float t = edgeT(w), band = edgeBand(w, t), S = uEdge.w;
+  c = mix(c, vec3(dot(c, vec3(1.0/3.0))), uEdge.y);
+  return c * uEdge.x * (S > 0.0 ? 1.0 - band / S : 1.0 - t);
+}
+vec3 edgeIndexed(int i, vec2 w) {
+  float band = edgeBand(w, edgeT(w));
+  int j = int(texelFetch(uEdgeLUT, ivec2(i, int(band)), 0).r * 255.0 + 0.5);
+  return texelFetch(uPal, ivec2(j, 0), 0).rgb;
+}`;
 const EDGE_FS = `#version 300 es
 precision highp float;
 in vec2 vUV; in vec2 vWorld;
 out vec4 frag;
 uniform sampler2D uAtlas;    // R8 palette indices
 uniform sampler2D uRGB;      // restored colour, same layout
-uniform sampler2D uPal;
-uniform sampler2D uEdgeLUT;  // indexed: row l maps an index to its band-l grey
 uniform int uUndither;
-uniform vec2 uMapPx;         // the map's extent on the tile grid, px
-uniform vec4 uEdge;          // brightness at the edge, grey, fade px, bands
-uniform int uDither;
-const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
-                                  3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+${EDGE_TONE}
 void main(){
-  vec2 o = max(max(-vWorld, vWorld - uMapPx), vec2(0.0));
-  float t = clamp(length(o) / uEdge.z, 0.0, 1.0);
-  float S = uEdge.w, f = t * S;
-  if (uDither == 1) {
-    ivec2 q = ivec2(floor(vWorld)) & 3;
-    f += (BAYER[q.y * 4 + q.x] + 0.5) / 16.0;
-  }
-  float band = clamp(floor(f), 0.0, S);
+  frag = vec4(uUndither == 1 ? edgeRGB(texture(uRGB, vUV).rgb, vWorld)
+                             : edgeIndexed(int(texture(uAtlas, vUV).r * 255.0 + 0.5), vWorld),
+              1.0);
+}`;
+// The map's own features, mirrored with the terrain under them: the sprite
+// format of tagpu_feat.c (so the depth keys sort them against the map's own
+// features), but slot 3 is the point each corner is DRAWN at on the tile grid,
+// which is what the tone's distance and dither read.
+const EDGE_SPR_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;    // game px x, y, depth key
+layout(location=1) in vec2 aUV;
+layout(location=2) in vec2 aCM;     // colour key /255, mode
+layout(location=3) in vec2 aWorld;  // the drawn point on the tile grid
+uniform vec2 uGame;
+uniform float uDepthScale;
+uniform float uZoom; uniform vec2 uZoomC;
+out vec2 vUV; flat out vec2 vCM; out vec2 vWorld;
+void main(){
+  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;
+  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,
+                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
+  vUV = aUV; vCM = aCM; vWorld = aWorld;
+}`;
+const EDGE_SPR_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; flat in vec2 vCM; in vec2 vWorld;
+out vec4 frag;
+uniform sampler2D uAtlas;
+uniform sampler2D uRGB;
+uniform int uUndither;
+${EDGE_TONE}
+void main(){
+  // the mirror is scenery beyond the map and never covers the map itself: a
+  // mirrored tree just south of the edge stands IN FRONT of the last rows by
+  // the painter's order, and its top would hide their own features
+  if (all(greaterThanEqual(vWorld, vec2(0.0))) && all(lessThan(vWorld, uMapPx))) discard;
+  vec3 rgb;
   if (uUndither == 1) {
-    vec3 c = texture(uRGB, vUV).rgb;
-    c = mix(c, vec3(dot(c, vec3(1.0/3.0))), uEdge.y);
-    float b = S > 0.0 ? 1.0 - band / S : 1.0 - t;
-    frag = vec4(c * uEdge.x * b, 1.0);
+    vec4 t = texture(uRGB, vUV);
+    if (t.a < 0.5) discard;
+    rgb = edgeRGB(t.rgb, vWorld);
   } else {
-    int i = int(texture(uAtlas, vUV).r * 255.0 + 0.5);
-    int j = int(texelFetch(uEdgeLUT, ivec2(i, int(band)), 0).r * 255.0 + 0.5);
-    frag = vec4(texelFetch(uPal, ivec2(j, 0), 0).rgb, 1.0);
+    float idx = texture(uAtlas, vUV).r;
+    if (abs(idx - vCM.x) < 0.5/255.0) discard;
+    rgb = edgeIndexed(int(idx * 255.0 + 0.5), vWorld);
   }
+  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;
+  frag = vec4(rgb * a, a);
 }`;
 
 // ---- the composite: FBO -> canvas, flipped, and the wipe --------------------
@@ -1404,14 +1476,30 @@ async function main() {
     edgeLUTs.set(key, t);
     return t;
   }
+  // EDGE_TONE's uniforms, on whichever mirror program is in use
+  function edgeTone(U, L) {
+    // built BEFORE the unit is selected: a first build uploads through tex2D,
+    // which leaves unit 0 selected, and the bind would then land on the atlas
+    const lut = edgeLUT(L);
+    gl.activeTexture(gl.TEXTURE15); gl.bindTexture(gl.TEXTURE_2D, lut);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(U.uEdgeLUT, 15);
+    gl.uniform1i(U.uPal, 1);
+    gl.uniform2f(U.uMapPx, map.tilemap.w * 32, map.tilemap.h * 32);
+    // the indexed lane has no smooth fade: its bands are LUT rows, 32 of them
+    gl.uniform4f(U.uEdge, L.edgeDim, L.edgeGrey, L.edgeFade,
+                 L.undither ? L.edgeSteps : (L.edgeSteps || 32));
+    gl.uniform1i(U.uDither, L.edgeDither ? 1 : 0);
+  }
 
   // ---- feature (sprite) pass — tagpu_feat.c's shaders and vertex format, plus
   // the lab's one extra float (the anchor's ground lambert)
   const SVST = 9;                                   // x,y,enc, u,v, ck,mode, wx,wz
   const LSVST = 10;                                 // ... + lam
   let sprProg = null, sprVAO = null, lsProg = null, lsVAO = null, sprVBO = null;
-  let SU = {}, LSU = {}, anchors = [];
-  let sprVerts = null;
+  let SU = {}, LSU = {}, anchors = [], mapAnchors = [];
+  let sprVerts = null, esProg = null, esVAO = null, esVBO = null, ESU = {};
+  let esVerts = new Float32Array(1);
   if (hasFeat) {
     const featTex = tex2D(gl, 5, gl.R8, scene.features.atlas.w, scene.features.atlas.h,
                           gl.RED, gl.UNSIGNED_BYTE, featAtlas);
@@ -1479,7 +1567,26 @@ async function main() {
                                  featInst.byteLength >> 1);
     for (let i = 0; i < inst.length; i += 3)
       anchors[inst[i + 1] * map.w16 + inst[i]] = inst[i + 2];
+    // the same, for the MAP's own anchors only — the TNT's, which come first
+    // in the list: the mirror carries what the map is, not what a scenario
+    // placed on it. A pack built before the split says nothing, and then every
+    // anchor counts as the map's.
+    const nMap = scene.features.map ?? inst.length / 3;
+    for (let i = 0; i < nMap * 3; i += 3)
+      mapAnchors[inst[i + 1] * map.w16 + inst[i]] = inst[i + 2];
     sprVerts = new Float32Array(65536 * LSVST);
+    esProg = program(gl, EDGE_SPR_VS, EDGE_SPR_FS, "edge-sprite");
+    esVAO = gl.createVertexArray(); esVBO = gl.createBuffer();
+    gl.bindVertexArray(esVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, esVBO);
+    const sizes = [3, 2, 2, 2], offs = [0, 12, 20, 28];
+    for (let i = 0; i < 4; i++) {
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, SVST * 4, offs[i]);
+    }
+    gl.bindVertexArray(null);
+    ESU = uniforms(gl, esProg, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uAtlas", "uRGB",
+                                "uUndither", "uPal", "uEdgeLUT", "uMapPx", "uEdge", "uDither"]);
   }
   if (restorer) {
     restorer.dispose();
@@ -1989,23 +2096,12 @@ async function main() {
     const n = buildEdge();
     L.stats.mirror = n / 6;
     if (!n) return;
-    const rgb = L.undither;
     gl.useProgram(edgeProg);
     gl.uniform2f(EU.uGame, GW, GH);
     gl.uniform1f(EU.uZoom, zoom); gl.uniform2f(EU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
-    gl.uniform1i(EU.uAtlas, 0); gl.uniform1i(EU.uRGB, 8); gl.uniform1i(EU.uPal, 1);
-    // built BEFORE the unit is selected: a first build uploads through tex2D,
-    // which leaves unit 0 selected, and the bind would then land on the atlas
-    const lut = edgeLUT(L);
-    gl.activeTexture(gl.TEXTURE15); gl.bindTexture(gl.TEXTURE_2D, lut);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(EU.uEdgeLUT, 15);
-    gl.uniform1i(EU.uUndither, rgb ? 1 : 0);
-    gl.uniform2f(EU.uMapPx, map.tilemap.w * 32, map.tilemap.h * 32);
-    // the indexed lane has no smooth fade: its bands are LUT rows, 32 of them
-    gl.uniform4f(EU.uEdge, L.edgeDim, L.edgeGrey, L.edgeFade,
-                 rgb ? L.edgeSteps : (L.edgeSteps || 32));
-    gl.uniform1i(EU.uDither, L.edgeDither ? 1 : 0);
+    gl.uniform1i(EU.uAtlas, 0); gl.uniform1i(EU.uRGB, 8);
+    gl.uniform1i(EU.uUndither, L.undither ? 1 : 0);
+    edgeTone(EU, L);
     gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
     gl.bindVertexArray(edgeVAO);
     gl.drawArrays(gl.TRIANGLES, 0, n);
@@ -2025,12 +2121,19 @@ async function main() {
     const lab = L.lane === "explore";
     const VST = lab ? LSVST : SVST;
     const D = scene.depth, defs = scene.features.defs;
+    // Under the mirror the sweep runs past the map as well, so the mirrored
+    // features take their depth keys from the SAME base and formula as the
+    // map's own and sort against them; without it, the engine's own rect.
+    const mirror = L.edge === "mirror";
     let r0 = rowBase(), nRows = (W[1] >> 4) + 32;
     let c0 = (E[0] >> 4) - 10, nCols = (W[0] >> 4) + 12;
-    if (r0 < 0) { nRows += r0; r0 = 0; }
-    if (r0 + nRows > h16 - 1) nRows = h16 - r0 - 1;
-    if (c0 < 0) { nCols += c0; c0 = 0; }
-    if (c0 + nCols > w16 - 1) nCols = w16 - c0 - 1;
+    if (!mirror) {
+      if (r0 < 0) { nRows += r0; r0 = 0; }
+      if (r0 + nRows > h16 - 1) nRows = h16 - r0 - 1;
+      if (c0 < 0) { nCols += c0; c0 = 0; }
+      if (c0 + nCols > w16 - 1) nCols = w16 - c0 - 1;
+    }
+    L.edgeFeat = null;
     if (nRows <= 0 || nCols <= 0) return [0, 0];
     const flatSpan = nRows * nCols;
     const iw = 1 / scene.features.atlas.w, ih = 1 / scene.features.atlas.h;
@@ -2047,22 +2150,53 @@ async function main() {
         if (lab) into.push(lam);
       }
     };
+    // the mirrored ones: the sprite flipped with the terrain on an x
+    // reflection and never on a y one (a tree stands up either way), and slot
+    // 3 the point each corner is DRAWN at on the tile grid, for the tone
+    const mshadow = [], mbody = [];
+    const mquad = (into, rect, sx, sy, enc, mode, flip) => {
+      const x0 = sx - (flip ? rect.w - rect.hx : rect.hx), y0 = sy - rect.hy;
+      const x1 = x0 + rect.w, y1 = y0 + rect.h;
+      let u0 = rect.x * iw, u1 = (rect.x + rect.w) * iw;
+      if (flip) [u0, u1] = [u1, u0];
+      const v0 = rect.y * ih, v1 = (rect.y + rect.h) * ih;
+      const ck = rect.ck / 255;
+      for (const [x, y, u, v] of [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1],
+                                  [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]])
+        into.push(x, y, enc, u, v, ck, mode, x - vpL + E[0], y - vpT + E[1]);
+    };
     for (let row = r0; row < r0 + nRows; row++) {
+      const offRow = row < 0 || row >= h16;
+      const [srow, flipY] = offRow ? reflect(row, h16) : [row, false];
       for (let col = c0; col < c0 + nCols; col++) {
-        const idx = anchors[row * w16 + col];
+        const off = offRow || col < 0 || col >= w16;
+        const [scol, flipX] = off ? reflect(col, w16) : [col, false];
+        // the engine's sweep never reaches the last row or column (the clamps
+        // above), so nothing anchored there is drawn — nor mirrored
+        if (srow >= h16 - 1 || scol >= w16 - 1) continue;
+        // off the map, the MAP's anchor at the cell this one mirrors
+        const idx = off ? mapAnchors[srow * w16 + scol] : anchors[row * w16 + col];
         if (idx === undefined) continue;
         const d = defs[idx];
         if (!d) continue;
-        const h00 = heightBuf[row * w16 + col];
-        const h01 = (col + 1 < w16) ? heightBuf[row * w16 + col + 1] : h00;
+        const h00 = heightBuf[srow * w16 + scol];
+        const h01 = (scol + 1 < w16) ? heightBuf[srow * w16 + scol + 1] : h00;
         let h10 = h00, h11 = h01;
-        if (row + 1 < h16) {
-          h10 = heightBuf[(row + 1) * w16 + col];
-          h11 = (col + 1 < w16) ? heightBuf[(row + 1) * w16 + col + 1] : h10;
+        if (srow + 1 < h16) {
+          h10 = heightBuf[(srow + 1) * w16 + scol];
+          h11 = (scol + 1 < w16) ? heightBuf[(srow + 1) * w16 + scol + 1] : h10;
         }
-        // the engine's projection: screenY is worldZ minus half the height
-        const wax = col * 16 + ((d.footx * 16) / 2 | 0);
-        const waz = row * 16 + ((d.footz * 16) / 2 | 0) - ((h00 + h01 + h10 + h11) >> 3);
+        // the engine's projection: screenY is worldZ minus half the height.
+        // A reflection reverses the cells a footprint spans, so a mirrored
+        // feature ENDS on the cell its source begins on. The mirrored terrain
+        // is the tile ART reflected, and the art has the height baked in, so a
+        // y reflection mirrors where the source is DRAWN: the half height is
+        // added, not taken off (taken off, a tree on a hill lands the hill's
+        // height short of the art it stood on)
+        const hx = (d.footx * 16) / 2 | 0, hz = (d.footz * 16) / 2 | 0;
+        const lift = (h00 + h01 + h10 + h11) >> 3;
+        const wax = flipX ? (col + 1) * 16 - hx : col * 16 + hx;
+        const waz = flipY ? (row + 1) * 16 - hz + lift : row * 16 + hz - lift;
         const sx = wax + 128 - E[0], sy = waz + 32 - E[1];
         const rel0 = row - r0;
         let enc;
@@ -2078,10 +2212,15 @@ async function main() {
           enc = D.tall0 + rel * D.rowStep +
                 (lab ? labD.tallCol : 1.5) * ((col - c0) / nCols);
         }
+        const shEnc = enc - (d.flat ? D.shadowFlat : D.shadowTall);
+        if (off) {
+          if (d.shadow) mquad(mshadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, flipX);
+          if (d.body) mquad(mbody, d.body, sx, sy, enc, d.animtrans ? 2 : 1, flipX);
+          continue;
+        }
         const lam = lab ? lambertAt(col, row, L) : 1;
         if (d.shadow)
-          quad(shadow, d.shadow, sx, sy, enc - (d.flat ? D.shadowFlat : D.shadowTall),
-               d.shadtrans ? 2 : 1, wax, waz, lam);
+          quad(shadow, d.shadow, sx, sy, shEnc, d.shadtrans ? 2 : 1, wax, waz, lam);
         if (d.body)
           quad(body, d.body, sx, sy, enc, d.animtrans ? 2 : 1, wax, waz, lam);
       }
@@ -2092,7 +2231,38 @@ async function main() {
     gl.bindBuffer(gl.ARRAY_BUFFER, sprVBO);
     gl.bufferData(gl.ARRAY_BUFFER, sprVerts.subarray(0, all.length), gl.DYNAMIC_DRAW);
     L.stats.feat = (shadow.length + body.length) / 6 / VST;
+    if (mirror) {
+      const mall = mshadow.concat(mbody);
+      if (mall.length > esVerts.length) esVerts = new Float32Array(mall.length);
+      esVerts.set(mall);
+      gl.bindBuffer(gl.ARRAY_BUFFER, esVBO);
+      gl.bufferData(gl.ARRAY_BUFFER, esVerts.subarray(0, mall.length), gl.DYNAMIC_DRAW);
+      L.edgeFeat = [mshadow.length / SVST, mbody.length / SVST];
+      L.stats.mfeat = mall.length / SVST / 6;
+    }
     return [shadow.length / VST, body.length / VST];
+  }
+
+  // The mirrored features: after the map's own, depth-tested against them with
+  // the keys buildFeatures gave both; shadows first with no depth writes, as
+  // drawSprites does, then the bodies.
+  function drawEdgeSprites(L) {
+    const [ns, nb] = L.edgeFeat;
+    if (!ns && !nb) return;
+    gl.useProgram(esProg);
+    gl.uniform2f(ESU.uGame, GW, GH);
+    gl.uniform1f(ESU.uZoom, zoom); gl.uniform2f(ESU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+    gl.uniform1f(ESU.uDepthScale, scene.depth.scale);
+    gl.uniform1i(ESU.uAtlas, 5); gl.uniform1i(ESU.uRGB, 9);
+    gl.uniform1i(ESU.uUndither, L.undither ? 1 : 0);
+    edgeTone(ESU, L);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);   // the shader premultiplies
+    gl.bindVertexArray(esVAO);
+    if (ns) { gl.depthMask(false); gl.drawArrays(gl.TRIANGLES, 0, ns); }
+    if (nb) { gl.depthMask(true);  gl.drawArrays(gl.TRIANGLES, ns, nb); }
+    gl.bindVertexArray(null);
+    gl.disable(gl.BLEND);
   }
 
   function drawSprites(L, nShadow, nBody, bodyBase) {
@@ -2501,6 +2671,7 @@ async function main() {
     if (hasFeat && L.features) {
       const [ns, nb] = buildFeatures(L);
       drawSprites(L, L.feat === "body" ? 0 : ns, L.feat === "shadow" ? 0 : nb, ns);
+      if (L.edgeFeat) drawEdgeSprites(L);
     }
     if (nu) drawUnits(L, nu);
   }
@@ -2545,14 +2716,17 @@ async function main() {
   function cameraRow() {
     const edge = sides.every((L) => L.edge === "mirror") ? "mirror"
                : sides.every((L) => L.edge === "black") ? "black" : "";
-    const is = (c, z, e) => CAMERA.clamp === c && CAMERA.zoomout === z && edge === e;
+    // a preset is lit when every rule it sets holds, the edge it sets included
+    const is = (name, e) => edge === e &&
+      ["clamp", "zoomout", "ease"].every((r) => CAMERA[r] === CAM_RULES[name][r]);
     const knob = (k, v, cur) =>
       `<button data-knob="${k}" data-val="${v}" class="${cur === v ? "on" : ""}">${v}</button>`;
     return `<div class="row modes"><span>camera</span>` +
-      `<button data-cam="game" class="${is("window", "cursor", "black") ? "on" : ""}">Game</button>` +
-      `<button data-cam="bar" class="${is("centre", "centre", "mirror") ? "on" : ""}">BAR</button>` +
+      `<button data-cam="game" class="${is("game", "black") ? "on" : ""}">Game</button>` +
+      `<button data-cam="bar" class="${is("bar", "mirror") ? "on" : ""}">BAR</button>` +
       `<span>clamp</span>${knob("clamp", "window", CAMERA.clamp)}${knob("clamp", "centre", CAMERA.clamp)}` +
       `<span>zoom out</span>${knob("zoomout", "cursor", CAMERA.zoomout)}${knob("zoomout", "centre", CAMERA.zoomout)}` +
+      `<span>ease</span>${knob("ease", "game", CAMERA.ease)}${knob("ease", "bar", CAMERA.ease)}${knob("ease", "off", CAMERA.ease)}` +
       `<span>edge</span>${knob("edge", "black", edge)}${knob("edge", "mirror", edge)}` +
       `</div>`;
   }
@@ -2619,7 +2793,8 @@ async function main() {
           : "") +
         `<span>cells</span><b>${st.cells}</b>` +
         `<span>off-map</span><b>${st.skipped}</b>` +
-        (st.mirror !== undefined ? `<span>mirrored</span><b>${st.mirror}</b>` : "") +
+        (st.mirror !== undefined ? `<span>mirrored</span><b>${st.mirror}` +
+          (L.edgeFeat ? ` + ${st.mfeat} features` : "") + `</b>` : "") +
         (st.feat !== undefined ? `<span>features</span><b>${st.feat}</b>` : "") +
         (st.units !== undefined ? `<span>unit tris</span><b>${st.units}</b>` : "") +
         `</div>`);
@@ -2637,11 +2812,13 @@ async function main() {
       const set = e.target.closest("button[data-cam], button[data-knob]");
       if (set) {
         const want = set.dataset.cam
-          ? { game: { clamp: "window", zoomout: "cursor", edge: "black" },
-              bar:  { clamp: "centre", zoomout: "centre", edge: "mirror" } }[set.dataset.cam]
+          ? { game: { ...CAM_RULES.game, edge: "black" },
+              bar:  { ...CAM_RULES.bar, edge: "mirror" } }[set.dataset.cam]
           : { [set.dataset.knob]: set.dataset.val };
+        settle();
         if (want.clamp) CAMERA.clamp = want.clamp;
         if (want.zoomout) CAMERA.zoomout = want.zoomout;
+        if (want.ease) CAMERA.ease = want.ease;
         if (want.edge) for (const L of sides) {
           L.edge = want.edge;
           const q = new URLSearchParams(L.query);
@@ -2649,7 +2826,7 @@ async function main() {
           L.query = q.toString();
         }
         writeCameraQuery(want.edge);
-        clamp(); draw();
+        clamp(); kick();
         return;
       }
       const btn = e.target.closest("button[data-mode]");
@@ -2688,11 +2865,11 @@ async function main() {
     //   centre: BAR's (Recoil SpringController / OverheadController Update) —
     //     the ground point at the screen centre is clamped to the map, so the
     //     map's edge can reach the middle of the screen at every zoom.
-    const range = () => {
+    const range = (z = zoom) => {
       if (CAMERA.clamp === "centre")
         return [-vw / 2, mapW - vw / 2, -vh / 2, mapH - vh / 2];
-      const dx = zoom > 1 ? Math.round(vw / 2 * (1 - 1 / zoom)) : 0;
-      const dy = zoom > 1 ? Math.round(vh / 2 * (1 - 1 / zoom)) : 0;
+      const dx = z > 1 ? Math.round(vw / 2 * (1 - 1 / z)) : 0;
+      const dy = z > 1 ? Math.round(vh / 2 * (1 - 1 / z)) : 0;
       const loX = -dx, loY = -dy;
       return [loX, Math.max(loX, mapW - vw + dx), loY, Math.max(loY, mapH - vh + dy)];
     };
@@ -2705,11 +2882,12 @@ async function main() {
     // the camera rules and the edge, written back into the address bar so the
     // look stays a link; `cam` names the pair when it is one of the two
     const cameraQuery = (q) => {
-      q.delete("cam"); q.delete("clamp"); q.delete("zoomout");
+      q.delete("cam"); q.delete("clamp"); q.delete("zoomout"); q.delete("ease");
       const name = Object.keys(CAM_RULES).find((k) =>
-        CAM_RULES[k].clamp === CAMERA.clamp && CAM_RULES[k].zoomout === CAMERA.zoomout);
+        ["clamp", "zoomout", "ease"].every((r) => CAM_RULES[k][r] === CAMERA[r]));
       if (name === "bar") q.set("cam", "bar");
-      else if (!name) { q.set("clamp", CAMERA.clamp); q.set("zoomout", CAMERA.zoomout); }
+      else if (!name)
+        for (const r of ["clamp", "zoomout", "ease"]) q.set(r, CAMERA[r]);
     };
     const writeCameraQuery = (edge) => {
       const q = new URLSearchParams(location.search);
@@ -2722,39 +2900,111 @@ async function main() {
       const r = cv.getBoundingClientRect();
       return [(e.clientX - r.left) / r.width * GW, (e.clientY - r.top) / r.height * GH];
     };
-    // tagpu_zoom.c's wheel: geometric, 1.1 per notch, 0.25..8, and land
-    // exactly on 1 when the notches cancel (1x is what the parity claim
-    // tests by equality). No easing here — a lab wants the level it asked for.
-    // Zooming IN holds the world point under the pointer, as both the game and
-    // BAR do: the view is a similarity about the viewport centre c, so the eye
-    // moves by d = (a - c)(1/z_was - 1/z_now). Zooming OUT does the same under
-    // zoomout=cursor (the game) and holds the centre under zoomout=centre (BAR's
-    // default: the camera pulls straight back). A pointer off the world
-    // viewport has no world point, so the step is about the centre there.
+    // THE WHEEL (header, CAMERA). A notch only says where the view is going;
+    // the frame loop below moves it there. Zooming IN holds the world point
+    // under the pointer under both rule sets; zooming OUT holds it under
+    // zoomout=cursor (the game) and holds the centre under zoomout=centre (BAR).
+    // The view is a similarity about the viewport centre c, so holding the
+    // point a is one step of the centre: (a - c)(1/z_was - 1/z_now). A pointer
+    // off the world viewport has no world point: the step is about the centre.
+    //   ease=game  tagpu_zoom.c: x1.1 a notch on a target LEVEL, landing
+    //              exactly on 1 when the notches cancel, and every frame a
+    //              quarter of the remaining log-distance, snapping at 0.0025,
+    //              the anchor's step on each: a notch is four fifths done in
+    //              six frames and lands in thirteen. The game steps once per
+    //              presented frame; the lab scales the step to 60 Hz of those
+    //   ease=bar   Recoil's default transition (CamTransitionMode 0): a notch
+    //              is 14 % of the camera's distance (BAR's ScrollWheelSpeed 20
+    //              x SpringController's 0.007), the controller takes the new
+    //              pose at once, and the DRAWN camera tweens to it from where it
+    //              is over 0.25 s along 1 - (1 - t)^4, an ease-out. The pose is
+    //              lerped as centre and 1/zoom, which is the 3D camera position
+    //              here: on a ray through the pointer it keeps the point still
+    //   ease=off   the level at once, x1.1 a notch (the lab's old wheel)
+    const cx = vpL + vw / 2, cy = vpT + vh / 2;
+    let gameTo = null;          // ease=game: { z, a } — the target level, the anchor
+    let tween = null;           // ease=bar: { c0, iz0, c1, iz1, t0 } in centre, 1/zoom
+    const hold = (a, zWas, zNow) => {
+      if (!a || !(zNow > zWas || CAMERA.zoomout === "cursor")) return;
+      const k = 1 / zWas - 1 / zNow;
+      cam[0] += (a[0] - cx) * k; cam[1] += (a[1] - cy) * k;
+    };
+    const snapOne = (z) => (z > 0.999 && z < 1.001 ? 1 : z);
+    function stepGame(dt) {
+      const lc = Math.log(zoom), lt = Math.log(gameTo.z);
+      let ln = lc + (lt - lc) * (1 - Math.pow(0.75, dt * 60 / 1000));
+      if (Math.abs(lt - ln) < 0.0025) ln = lt;
+      const z = ln === lt ? gameTo.z : Math.exp(ln);
+      hold(gameTo.a, zoom, z);
+      zoom = z; clamp();
+      if (zoom === gameTo.z) gameTo = null;
+    }
+    function stepTween(now) {
+      const f = Math.min(1, Math.max(0, (now - tween.t0) / 250));
+      const g = 1 - Math.pow(1 - f, 4);
+      const iz = tween.iz0 + (tween.iz1 - tween.iz0) * g;
+      zoom = 1 / iz;
+      cam[0] = tween.c0[0] + (tween.c1[0] - tween.c0[0]) * g - vw / 2;
+      cam[1] = tween.c0[1] + (tween.c1[1] - tween.c0[1]) * g - vh / 2;
+      clamp();
+      if (f >= 1) { zoom = 1 / tween.iz1; tween = null; clamp(); }
+    }
+    // finish whatever the wheel started, at once: grabbing the map or switching
+    // a rule mid-zoom lands where the zoom was going
+    function settle() {
+      if (gameTo) { hold(gameTo.a, zoom, gameTo.z); zoom = gameTo.z; gameTo = null; clamp(); }
+      if (tween) stepTween(Infinity);
+    }
+    let raf = 0, last = 0;
+    const kick = () => { if (!raf) raf = requestAnimationFrame(frame); };
+    function frame(now) {
+      raf = 0;
+      const dt = last ? Math.min(100, now - last) : 1000 / 60;
+      if (gameTo) stepGame(dt);
+      if (tween) stepTween(now);
+      draw();
+      if (gameTo || tween) { last = now; kick(); } else last = 0;
+    }
     cv.addEventListener("wheel", (e) => {
       e.preventDefault();
-      let z = zoomClamp(zoom * Math.pow(1.1, -e.deltaY / 100));
-      if (z > 0.999 && z < 1.001) z = 1;
-      if (z === zoom) return;
+      const n = -e.deltaY / 100;                      // notches, + = in
+      if (!n) return;
       const [ax, ay] = gamePoint(e);
-      const inView = ax >= vpL && ax < vpL + vw && ay >= vpT && ay < vpT + vh;
-      if (inView && (z > zoom || CAMERA.zoomout === "cursor")) {
-        const k = 1 / zoom - 1 / z;
-        cam[0] += (ax - vpL - vw / 2) * k;
-        cam[1] += (ay - vpT - vh / 2) * k;
+      const a = ax >= vpL && ax < vpL + vw && ay >= vpT && ay < vpT + vh ? [ax, ay] : null;
+      if (CAMERA.ease === "bar") {
+        if (gameTo) settle();
+        // the controller's pose: the tween's target while one is in flight
+        const c = tween ? tween.c1.slice() : [cam[0] + vw / 2, cam[1] + vh / 2];
+        const iz0 = tween ? tween.iz1 : 1 / zoom;
+        const iz = Math.min(4, Math.max(0.125, iz0 * Math.max(0.1, 1 - 0.14 * n)));
+        if (a && (iz < iz0 || CAMERA.zoomout === "cursor")) {
+          c[0] += (a[0] - cx) * (iz0 - iz); c[1] += (a[1] - cy) * (iz0 - iz);
+        }
+        const [loX, hiX, loY, hiY] = range(1 / iz);
+        c[0] = Math.max(loX, Math.min(c[0] - vw / 2, hiX)) + vw / 2;
+        c[1] = Math.max(loY, Math.min(c[1] - vh / 2, hiY)) + vh / 2;
+        tween = { c0: [cam[0] + vw / 2, cam[1] + vh / 2], iz0: 1 / zoom,
+                  c1: c, iz1: iz, t0: performance.now() };
+      } else {
+        if (tween) settle();
+        const from = gameTo ? gameTo.z : zoom;
+        const z = snapOne(zoomClamp(from * Math.pow(1.1, n)));
+        if (CAMERA.ease === "game") gameTo = { z, a };
+        else { hold(a, zoom, z); zoom = z; clamp(); }
       }
-      zoom = z; clamp(); draw();
+      kick();
     }, { passive: false });
     // a scroll step is world px, so it is divided by the zoom: the SCREEN moves
     // at the same rate at every zoom (the game scales ScrollSpeed by 1/z)
     addEventListener("keydown", (e) => {
       const step = (e.shiftKey ? 256 : 32) / zoom;
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+      settle();
       if (e.key === "ArrowLeft")  cam[0] -= step;
       else if (e.key === "ArrowRight") cam[0] += step;
       else if (e.key === "ArrowUp")    cam[1] -= step;
-      else if (e.key === "ArrowDown")  cam[1] += step;
-      else return;
-      e.preventDefault(); clamp(); draw();
+      else cam[1] += step;
+      e.preventDefault(); clamp(); kick();
     });
     const canvasX = (e) => {
       const r = cv.getBoundingClientRect();
@@ -2763,7 +3013,7 @@ async function main() {
     let drag = null;
     cv.addEventListener("pointerdown", (e) => {
       if (sides.length > 1 && Math.abs(canvasX(e) - wipe) * GW < 8) drag = { wipe: true };
-      else drag = { x: e.clientX, y: e.clientY, cx: cam[0], cy: cam[1] };
+      else { settle(); drag = { x: e.clientX, y: e.clientY, cx: cam[0], cy: cam[1] }; }
       cv.setPointerCapture(e.pointerId);
     });
     cv.addEventListener("pointermove", (e) => {
@@ -2781,7 +3031,7 @@ async function main() {
         cam[1] = drag.cy - (e.clientY - drag.y) * s;
         clamp();
       }
-      draw();
+      kick();
     });
     cv.addEventListener("pointerup", () => { drag = null; });
   }

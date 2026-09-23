@@ -637,6 +637,7 @@ def build_features(tnt, defs, gafs, out, restore=None, scenario=None):
     build_units, exactly as the engine hands it to its 3DO renderer."""
     names = tnt.feature_names()
     anchors = list(tnt.feature_indices())
+    nmap = len(anchors)                        # the map's own; the scenario's follow
     used = {}                                  # def index -> name
     for _col, _row, idx in anchors:
         if idx < len(names):
@@ -701,13 +702,15 @@ def build_features(tnt, defs, gafs, out, restore=None, scenario=None):
     rgba_file = paint_rgba(frames, place, aw, ah, restore,
                            out / "features/atlas.rgba.bin")
     inst = bytearray()
-    kept = 0
-    for col, row, idx in anchors:
+    kept = kept_map = 0
+    for i, (col, row, idx) in enumerate(anchors):
         entry = table.get(idx)
         if not entry or (entry["body"] is None and entry["shadow"] is None):
             continue
         inst += struct.pack("<3H", col, row, idx)
         kept += 1
+        if i < nmap:
+            kept_map += 1
     (out / "features/instances.bin").write_bytes(bytes(inst))
 
     defs_out = {}
@@ -720,7 +723,9 @@ def build_features(tnt, defs, gafs, out, restore=None, scenario=None):
             "animtrans": entry["animtrans"], "shadtrans": entry["shadtrans"],
             "body": rects.get(entry["body"]), "shadow": rects.get(entry["shadow"]),
         }
-    return {"count": kept, "instances": "features/instances.bin",
+    # the first `map` instances are the map's own anchors (the TNT's), the
+    # rest the scenario's: the viewer's mirrored edge carries only the map's
+    return {"count": kept, "map": kept_map, "instances": "features/instances.bin",
             "atlas": {"w": aw, "h": ah, "file": "features/atlas.r8.bin",
                       "rgba": rgba_file},
             "defs": defs_out}
