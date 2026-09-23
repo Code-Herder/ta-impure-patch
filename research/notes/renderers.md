@@ -366,10 +366,11 @@ grey; unexplored stays palette-0 black; the unit and effect discards in the band
 they are. One rule, one place.
 
 ### 2.7 The shadow map is anchored to the map
-The viewer rebuilds its light-space bounds every frame from the eye and the visible height
-range, with no texel snapping (`shadowFrame` **[SOURCE `tools/tascene-view.html`]**). A still
-shot cannot show it; in the game every scroll would move the texel grid under the PCF kernel
-and every edge would crawl. **Decided: a map-anchored texel grid with a fixed depth range.**
+Bounds rebuilt every frame from the eye and the visible height range, with no texel snapping,
+move the texel grid under the PCF kernel on every scroll and every frame of a zoom, and every
+shadow edge crawls. A still shot cannot show it; the lab measured it (2026-09-23, before its
+`shadowFrame` took this rule): a 1 px pan changed ~2 500 pixels by up to 39 levels, where the
+anchored grid changes 0–17 by one. **Decided: a map-anchored texel grid with a fixed depth range.**
 World-per-texel is a function of zoom only, the map origin sits on a texel corner, the
 window over the grid moves by whole texels, and the depth range is the map's full height
 range plus the caster allowance, held constant — so the per-frame height scan goes too.
@@ -384,6 +385,10 @@ caster margins, over `shadowres`; the texel is `base·2^k` with the smallest int
 margin; `res` is `shadowres` at zoom ≥ 1 and twice it, capped at 4096, below. So the grid
 changes only at octave boundaries (about 1× and 0.42× at the defaults), an ease between them
 moves the window by whole texels, and the density is never worse than §2.9's original sketch.
+The lab's `shadowFrame` **[SOURCE `tools/tascene-view.html`]** is this rule, ported from
+`tagpu_shadow.c`'s `frame()` (which went with the GL backend): through a 12-notch ease from 1×
+to 0.32× its texel changes once, at 0.418×. The Vulkan shadow pass has no producer yet
+(`tagpu_vk_shadow.h`); this section is what that producer has to build.
 The depth range is the map's full 0..255 plus a 256-unit caster allowance (an aircraft under
 `physical` at CruiseAlt 200 still fits), constant per map; the window's depth *offset* moves
 with the window, which is a translation both sides of every compare share.
@@ -692,13 +697,11 @@ which is the sharpest statement of the defect anywhere in this section.
 **What is still unexplained, stated as gaps rather than covered over.** The remaining ten-fold
 is not accounted for. Two candidates, neither tested:
 
-- **The lab's light frame is not the game's.** `shadowFrame` fits the box to the *visible*
-  height range (`[h0, h1+128]`) where `frame()` in `tagpu_shadow.c` uses a fixed `[0, Y_TOP]`
-  = `[0, 511]`; the lab's window is the **1x** viewport whatever `zoom` says, where the game
-  uses the zoomed one (`evw`/`evh`); and the lab has no octave, no `res*2 <= 4096` doubling and
-  **no map-anchored lattice snap** (`u0 = floor(u0/texel)*texel`), all three of which the game
-  has and §2.7 describes. The game's measurement was taken at **zoom 0.564**, which is exactly
-  the regime the lab cannot express. This is the next thing to mirror.
+- **The lab's light frame was not the game's.** It fitted the box to the *visible* height
+  range where `frame()` used a fixed `[0, 511]`, and had no octave, no `res*2 <= 4096` doubling
+  and no map-anchored lattice snap. **Since 2026-09-23 it is `frame()`** (§2.7), so the game's
+  measurement at **zoom 0.564** can now be repeated in the lab. It has not been; this candidate
+  is untested.
 - **The scene.** The acne is driven by the receiver's curvature across the 24-unit search, and
   no lab eye tried so far has the game sample's seabed. Matching the camera would settle how
   much of the gap is geometry.
@@ -1975,12 +1978,14 @@ the graph itself is that stable.
   the lighting model and the shadow read-back stay deferred — a replacement mesh casts and
   does not receive.
 - **The soft edge and the ridge haze are lattice noise, on both sides** (G14i). The two
-  lattices — the lab's view-anchored, the game's map-anchored — put texel centres in
+  lattices — the lab's then view-anchored, the game's map-anchored — put texel centres in
   different places, so the PCF's bilinear compares round differently along every shadow edge
   and on every near-grazing slope: on the parity fixture the hills stage has 156 game-only
   pixels (11 of them darker than 5 %, 1 darker than 10 %) and 60 lab-only ones of the same
   kind at 0.988. Invisible, counted, not closed; a larger constant bias would trade it for
-  peter-panning at the shadow's root.
+  peter-panning at the shadow's root. The lab's lattice is map-anchored too since 2026-09-23,
+  so at the same viewport the two now put texel centres in the same places; not re-measured,
+  and there is no game producer to measure against until the Vulkan one is written.
 - **A ground unit's caster sits on the height byte, not on the engine's own y** (G14i,
   `tagpu_native.c`): the engine interpolates the ground under a unit, the receiver is drawn
   from the byte, and a caster floating the difference above its receiver throws a shadow
@@ -1992,9 +1997,8 @@ the graph itself is that stable.
 - ~~**The lab's Classic++ lane is zoom 1 only**~~ — **stale, it zooms** since `7b45ee1`: all
   three lab shaders take `uZoom`/`uZoomC` (`tascene-view.html` 467, 598, 647) and the lab draws
   set them, and `shadowFrame` derives its bounds from the zoomed viewport extent, so the
-  zoom-out look of §2.9 *can* be looked at today. What the lab still cannot show is §2.7's
-  map-anchored texel grid: it rebuilds light-space bounds every frame, and crawl is only
-  visible in motion anyway, so that one wants a capture in the game.
+  zoom-out look of §2.9 *can* be looked at today, and since 2026-09-23 so can §2.7's
+  map-anchored texel grid, in motion: the lab's `shadowFrame` is that rule.
 - **Nanoframe wireframe back edges** show through the unbuilt part — inherited from G13l,
   needs a stencil pass per nanoframe.
 - **The restorer has run on one adapter.** The GLSL passes need GL 3.0 array textures, 3.1

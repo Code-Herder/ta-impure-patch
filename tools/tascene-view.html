@@ -161,8 +161,12 @@
        terrainshadow=<b>  EXPLORE: the heightfield casts too (hills shadow
                      the valley), default 1. The art has slope shading but
                      no cast shadows, so this adds and does not double-count
-       shadowres=<n> EXPLORE: depth map size, default 2048 (about half a
-                     world unit per texel over the view plus its margin)
+       shadowres=<n> EXPLORE: depth map size, default 2048 (1.28 world units
+                     a texel on a 1920x1080 frame: the 1x view plus its
+                     margins). The texel grid is anchored to the map and
+                     sized by zoom octave, and below 1x the map doubles to
+                     4096 — the game's rule (renderers.md 2.7), so a scroll
+                     or a zoom does not make shadow edges crawl
        castsplit=<b> EXPLORE: mirror the GAME's caster/receiver split, default
                      1. The game's terrain gather emits screen-space quads with
                      no height in them, so its fragment shader rebuilds the
@@ -621,18 +625,21 @@ function tex2D(gl, unit, internal, w, h, format, type, data, filter) {
 // premultiplied output, no zoom (the lab runs at zoom 1 by construction).
 const LAB_TERR_VS = `#version 300 es
 precision highp float;
-layout(location=0) in vec3 aPos;    // game px x, game px y, depth key
+layout(location=0) in vec3 aPos;    // tile-grid x, y (relief applied), grid row
 layout(location=1) in vec2 aUV;
 layout(location=2) in vec3 aNrm;    // heightfield normal, world (x, elev, z)
 layout(location=7) in vec3 aWorld;  // the world point this vertex DEPICTS
 uniform vec2 uGame;
 uniform float uDepthScale;
 uniform float uZoom; uniform vec2 uZoomC;   // tagpu's own: scale about uZoomC
+uniform vec2 uShift;   // game px of tile-grid (0, 0): the viewport origin less the window's
+uniform vec4 uKey;     // depth key: base, first row, rows kept, per-row step (0 = flat)
 out vec2 vUV; out vec3 vNrm; out vec3 vWorld;
 void main(){
-  vec2 p = (aPos.xy - uZoomC) * uZoom + uZoomC;
+  vec2 p = (aPos.xy + uShift - uZoomC) * uZoom + uZoomC;
+  float key = uKey.x + clamp(aPos.z - uKey.y, 0.0, uKey.z) * uKey.w;
   gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,
-                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);
+                     clamp(1.0 - key/uDepthScale, 0.0, 1.0), 1.0);
   vUV = aUV; vNrm = aNrm; vWorld = aWorld;
 }`;
 // The exploration lane's ONE lighting rule, spliced into every lab fragment
@@ -1402,25 +1409,16 @@ async function main() {
   }
 
   // ---- terrain, exploration: the 16-px heightfield
-  const LTVST = 11;                     // x,y,enc, u,v, nx,ny,nz, WX,WY,WZ
-  let ltProg = null, ltVAO = null, ltVBO = null, LTU = {};
-  let ltVerts = new Float32Array(1);
+  const LTVST = 11;                     // x,gy,row, u,v, nx,ny,nz, WX,WY,WZ
+  let ltProg = null, LTU = {};
+  // each side keeps its own chunks (buildTerrainLab)
+  const ltStore = (L) => L.lt || (L.lt = { chunks: new Map(), knobs: "", frame: 0, draw: [] });
   if (wantLab) {
     ltProg = program(gl, LAB_TERR_VS, LAB_TERR_FS, "lab-terrain");
-    ltVAO = gl.createVertexArray();
-    ltVBO = gl.createBuffer();
-    gl.bindVertexArray(ltVAO);
-    gl.bindBuffer(gl.ARRAY_BUFFER, ltVBO);
-    // the world point at location 7, where SHADOW_VS reads it in every VAO
-    const sizes = [3, 2, 3, 3], offs = [0, 12, 20, 32], locs = [0, 1, 2, 7];
-    for (let i = 0; i < 4; i++) {
-      gl.enableVertexAttribArray(locs[i]);
-      gl.vertexAttribPointer(locs[i], sizes[i], gl.FLOAT, false, LTVST * 4, offs[i]);
-    }
-    gl.bindVertexArray(null);
     LTU = uniforms(gl, ltProg, ["uGame", "uDepthScale", "uAtlas", "uRGB", "uPal",
                                 "uUndither", "uSun", "uAmb", "uNorm", "uZoom", "uZoomC",
-                                "uHeight", "uHDim", "uCastSplit", ...SHADOW_U]);
+                                "uHeight", "uHDim", "uCastSplit", "uShift", "uKey",
+                                ...SHADOW_U]);
     // the height grid the game's fragment shader reads (tagpu_terr.c
     // build_height): R8, one byte per 16-px cell, NEAREST, clamped
     tex2D(gl, 14, gl.R8, map.w16, map.h16, gl.RED, gl.UNSIGNED_BYTE, heightBuf);
@@ -1650,16 +1648,28 @@ async function main() {
   }
 
   // ---- the shadow map: one depth texture, re-rendered per side, read through
-  // two sampler objects (compare+bilinear for PCF, raw for the blocker search)
+  // two sampler objects (compare+bilinear for PCF, raw for the blocker search).
+  // Its edge is the light frame's `res`, which the octave rule doubles below
+  // 1x (shadowFrame), so the image is re-specified when that changes; two
+  // sides with different shadowres re-specify it on every side's pass.
   let shProg = null, shFBO = null, shTex = null, shCmp = null, shRaw = null, SHU = {};
-  const SH_RES = Math.max(...sides.map((L) => L.shadowres || 0), 0);
-  if (wantLab && SH_RES) {
+  let shRes = 0;
+  const SH_ON = sides.some((L) => L.shadowres > 0);
+  const SH_MAXTEX = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  function shadowTex(res) {
+    if (res === shRes) return;
+    gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, shTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, res, res, 0,
+                  gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.activeTexture(gl.TEXTURE0);
+    shRes = res;
+  }
+  if (wantLab && SH_ON) {
     shProg = program(gl, SHADOW_VS, SHADOW_FS, "shadow");
     SHU = uniforms(gl, shProg, ["uShadowMat"]);
     shTex = gl.createTexture();
+    shadowTex(Math.min(Math.max(...sides.map((L) => L.shadowres || 0)), SH_MAXTEX));
     gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, shTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, SH_RES, SH_RES, 0,
-                  gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.activeTexture(gl.TEXTURE13); gl.bindTexture(gl.TEXTURE_2D, shTex);
@@ -1685,49 +1695,78 @@ async function main() {
     gl.bindSampler(12, shCmp); gl.bindSampler(13, shRaw);
   }
 
-  // Orthographic light space over the world box the view can see shadows in:
-  // the viewport plus a margin for casters outside it (shadows are at most
-  // Y/tan(el) long) and for the depicted Z reaching G + h/2. Depth increases
-  // away from the light. Returns the matrix and the world-per-texel scales.
-  function shadowFrame(L) {
-    const lz = L.shadowSun;
+  // The light frame is renderers.md §2.7's, as the game's producer built it
+  // (tagpu_shadow.c frame(), deleted with the GL backend; the Vulkan pass's
+  // producer is still to be written). The texel GRID IS ANCHORED TO THE MAP:
+  // refitting the box to the view every frame re-cuts the lattice under the
+  // PCF kernel on every scroll and every frame of a zoom, and every shadow
+  // edge crawls — measured here as ~2 500 pixels changing on a 1 px pan.
+  //  - the texel is base * 2^k. `base` is the 1x viewport's light-space extent,
+  //    with the caster margins, over shadowres — the same every frame; k is
+  //    the smallest octave whose map covers this frame's window. So the
+  //    lattice changes only at octave boundaries (about 1x and 0.42x at the
+  //    defaults), and below 1x the map doubles, to 4096, before the texel does
+  //  - the map's origin is floored onto the lattice, so the window moves over
+  //    it by whole texels
+  //  - the depth range is the map's whole height range plus the caster
+  //    allowance, [0, 511] (an aircraft at CruiseAlt 200 still fits); only
+  //    its offset follows the window, a translation both sides of a compare
+  //    share
+  // The margins: casters outside the view (a shadow is at most Y/tan(el)
+  // long), and the depicted Z reaching G + h/2. Depth increases away from the
+  // light.
+  const SH_MARGIN = 192, SH_YTOP = 255 + 256;
+  function shadowBasis(lz) {
     let lx = [lz[2], 0, -lz[0]];                      // up x sun, then normalise
-    let ll = Math.hypot(lx[0], lx[2]);
+    const ll = Math.hypot(lx[0], lx[2]);
     lx = ll < 1e-4 ? [1, 0, 0] : [lx[0] / ll, 0, lx[2] / ll];
     const ly = [lz[1] * lx[2] - lz[2] * lx[1], lz[2] * lx[0] - lz[0] * lx[2],
                 lz[0] * lx[1] - lz[1] * lx[0]];
-    // the height range the view can hold, not the byte's: it sets the u/v
-    // extent and so the texel density, which halves for every 128 wasted
-    const M = 192;
-    let h0 = 255, h1 = 0;
-    const c0 = Math.max(0, (E[0] - M) >> 4), c1 = Math.min(w16 - 1, (E[0] + W[0] + M) >> 4);
-    const r0 = Math.max(0, (E[1] - M) >> 4), r1 = Math.min(h16 - 1, (E[1] + W[1] + 128 + M) >> 4);
-    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-      const h = heightBuf[r * w16 + c];
-      if (h < h0) h0 = h; if (h > h1) h1 = h;
-    }
-    const bx = [E[0] - M, E[0] + W[0] + M], by = [h0, h1 + 128],
-          bz = [E[1] - M, E[1] + W[1] + 128 + M];
-    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity,
-        d0 = Infinity, d1 = -Infinity;
+    return [lx, ly];
+  }
+  // the light-space extent of a world box over its eight corners:
+  // [u0, u1, v0, v1, d0, d1]
+  function shadowExtent(lx, ly, lz, bx, by, bz) {
+    const e = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
     for (const X of bx) for (const Y of by) for (const Z of bz) {
       const u = X * lx[0] + Y * lx[1] + Z * lx[2];
       const v = X * ly[0] + Y * ly[1] + Z * ly[2];
       const d = -(X * lz[0] + Y * lz[1] + Z * lz[2]);
-      u0 = Math.min(u0, u); u1 = Math.max(u1, u);
-      v0 = Math.min(v0, v); v1 = Math.max(v1, v);
-      d0 = Math.min(d0, d); d1 = Math.max(d1, d);
+      e[0] = Math.min(e[0], u); e[1] = Math.max(e[1], u);
+      e[2] = Math.min(e[2], v); e[3] = Math.max(e[3], v);
+      e[4] = Math.min(e[4], d); e[5] = Math.max(e[5], d);
     }
-    const du = u1 - u0, dv = v1 - v0, dd = d1 - d0;
+    return e;
+  }
+  function shadowFrame(L) {
+    const lz = L.shadowSun, M = SH_MARGIN, by = [0, SH_YTOP];
+    const [lx, ly] = shadowBasis(lz);
+    // an extent is translation-invariant, so the 1x box can sit at the origin
+    const e1 = shadowExtent(lx, ly, lz, [-M, vw + M], by, [-M, vh + 128 + M]);
+    const base = Math.max(1e-3, Math.max(e1[1] - e1[0], e1[3] - e1[2]) / L.shadowres);
+    const e = shadowExtent(lx, ly, lz, [E[0] - M, E[0] + W[0] + M], by,
+                           [E[1] - M, E[1] + W[1] + 128 + M]);
+    const need = Math.max(e[1] - e[0], e[3] - e[2]);
+    let res = L.shadowres;
+    let k = Math.ceil(Math.log2(need / (res * base)) - 1e-4);
+    if (k > 0 && res * 2 <= SH_MAXTEX) { res *= 2; k -= 1; }
+    while (res > SH_MAXTEX) { res /= 2; k += 1; }
+    k = Math.max(-4, Math.min(8, k));
+    const texel = base * 2 ** k, span = res * texel;
+    // the map centred on the window, then its origin floored onto the lattice
+    // (the multiples of the texel from light-space (0, 0), where the world
+    // origin projects)
+    const u0 = Math.floor((e[0] - (span - (e[1] - e[0])) / 2) / texel) * texel;
+    const v0 = Math.floor((e[2] - (span - (e[3] - e[2])) / 2) / texel) * texel;
     const m = new Float32Array(16);                   // column-major
     const row = (r, a, s, lo) => {                    // ndc = 2(a.W - lo)/s - 1
       m[r] = 2 * a[0] / s; m[4 + r] = 2 * a[1] / s; m[8 + r] = 2 * a[2] / s;
       m[12 + r] = -1 - 2 * lo / s;
     };
-    row(0, lx, du, u0); row(1, ly, dv, v0);
-    row(2, [-lz[0], -lz[1], -lz[2]], dd, d0);
+    row(0, lx, span, u0); row(1, ly, span, v0);
+    row(2, [-lz[0], -lz[1], -lz[2]], e[5] - e[4], e[4]);
     m[15] = 1;
-    return { m, texel: Math.max(du, dv) / SH_RES, depth: dd };
+    return { m, texel, depth: e[5] - e[4], res, k };
   }
 
   function setShadowUniforms(U, L, frame) {
@@ -1738,7 +1777,7 @@ async function main() {
     if (!frame) return;
     gl.uniformMatrix4fv(U.uShadowMat, false, frame.m);
     gl.uniform3f(U.uShadowSun, L.shadowSun[0], L.shadowSun[1], L.shadowSun[2]);
-    gl.uniform3f(U.uShScale, frame.texel, frame.depth, 1 / SH_RES);
+    gl.uniform3f(U.uShScale, frame.texel, frame.depth, 1 / frame.res);
     gl.uniform1f(U.uPenumbra, L.penumbra); gl.uniform1f(U.uShade, L.shade);
     gl.uniform1f(U.uBSlack, L.bslack);
     gl.uniform1f(U.uBFloor, L.bfloor);
@@ -1825,8 +1864,9 @@ async function main() {
   // The depth pass: everything with geometry, along the sun, into the map
   function shadowPass(L, nterr, nu) {
     const frame = shadowFrame(L);
+    shadowTex(frame.res);
     gl.bindFramebuffer(gl.FRAMEBUFFER, shFBO);
-    gl.viewport(0, 0, SH_RES, SH_RES);
+    gl.viewport(0, 0, frame.res, frame.res);
     gl.disable(gl.SCISSOR_TEST);
     gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LESS); gl.depthMask(true);
     gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
@@ -1845,7 +1885,7 @@ async function main() {
         hillsDraw();
         gl.disable(gl.POLYGON_OFFSET_FILL);
       } else if (nterr) {
-        gl.bindVertexArray(ltVAO); gl.drawArrays(gl.TRIANGLES, 0, nterr);
+        drawTerrainLab(L);
       }
     }
     if (nu) {
@@ -1955,6 +1995,28 @@ async function main() {
   // lab exists to answer (tascene-design.md: "the art already contains the
   // hill"). relief=0 keeps the art where it is painted and still lights it by
   // the real gradient, which is the control.
+  //
+  // The mesh is KEPT between frames, in chunks of LT_CHUNK x LT_CHUNK tiles,
+  // each built the first time it comes into view. Positions are the tile
+  // grid's, not the screen's (uShift carries the window), and the depth key's
+  // row is resolved in the shader (uKey), because rowBase() moves with the
+  // eye — so a scroll or a zoom draws the same chunks from a new origin and
+  // builds only the strip that came into view. Re-emitting the view every
+  // frame cost ~25 ms at 0.3x (20 000 tiles, 480 000 vertices), on every
+  // frame of a zoom's ease. A tile is nine shared vertices, its 3 x 3 grid
+  // points, and four quads of indices over them.
+  const LT_CHUNK = 16, LT_KEEP = 512;       // tiles a side; chunks kept per side
+  let ltNrm = null, ltNrmSlope = NaN;
+  // normalAt at every grid point (0..w16 x 0..h16), once per slope
+  function gridNormals(slope) {
+    if (ltNrm && ltNrmSlope === slope) return ltNrm;
+    const gw = w16 + 1, gh = h16 + 1;
+    ltNrm = new Float32Array(gw * gh * 3);
+    for (let gr = 0; gr < gh; gr++)
+      for (let gc = 0; gc < gw; gc++) normalAt(gc, gr, slope, ltNrm, (gr * gw + gc) * 3);
+    ltNrmSlope = slope;
+    return ltNrm;
+  }
   function buildTerrainLab(L) {
     const stride = map.tilemap.w, mrows = map.tilemap.h;
     const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
@@ -1969,72 +2031,129 @@ async function main() {
     const rows = ceil32(W[1] + fy) + (L.relief > 0 ? 5 : 1);
     const rAbove = L.relief > 0 && L.datum > 0
                  ? Math.ceil(L.relief * L.datum * 0.5 / 32) + 1 : 0;
-    const need = cols * (rows + rAbove) * 24 * LTVST;
-    if (ltVerts.length < need) ltVerts = new Float32Array(need);
-    const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
-    const D = scene.depth, r0 = rowBase(), relMax = (W[1] >> 4) + 40;
-    const k = L.relief * 0.5, dat = L.datum;
-    let n = 0, skipped = 0, junk = 0;
-    const nrm = [0, 0, 0];
-    const put = (gc, gr, u, v) => {
-      const o = n * LTVST;
-      let rel = gr - r0;
-      if (rel < 0) rel = 0; else if (rel > relMax) rel = relMax;
-      const h = H(gc, gr);
-      ltVerts[o]     = vpL + gc * 16 - E[0];
-      ltVerts[o + 1] = vpT + gr * 16 - k * (h - dat) - E[1];
-      // Per-row keys only when relief can lift a southern cell over a
-      // northern unit. With relief=0 nothing rises, and per-row keys would
-      // put the ground of every row south of a unit's anchor IN FRONT of the
-      // unit's parts that reach into those rows — the kbot lab lost its
-      // whole south wall to the grass (found by the shadow the roof cast on
-      // that grass). Flat, the terrain is parity's one band behind everything.
-      ltVerts[o + 2] = L.relief > 0 ? labD.terrain + rel * D.rowStep : labD.terrain;
-      ltVerts[o + 3] = u; ltVerts[o + 4] = v;
-      normalAt(gc, gr, L.slope, ltVerts, o + 5);
-      // The world point this vertex DEPICTS, not where it is drawn: the art
-      // at grid row G shows the ground the engine projects there, and the
-      // engine projects world Z at screen Z - Y/2, so the depicted point is
-      // Z = G + h/2 (less whatever relief already moved the vertex). A unit
-      // standing at wz is drawn at wz - wy/2, i.e. on the art of grid row
-      // wz - wy/2, which depicts Z = wz: its shadow lands at its feet.
-      ltVerts[o + 8] = gc * 16;
-      ltVerts[o + 9] = h;
-      ltVerts[o + 10] = gr * 16 + h * 0.5 - k * (h - dat);
-      n++;
-    };
-    for (let r = -rAbove; r < rows; r++) {
-      const my = ty0 + r;
-      if (my < 0 || my >= mrows) { skipped += cols; continue; }
-      for (let c = 0; c < cols; c++) {
-        const mx = tx0 + c;
-        if (mx < 0 || mx >= stride) { skipped++; continue; }
-        const idx = tilemap[my * stride + mx];
-        if (idx >= map.atlas.tiles) { junk++; continue; }
-        const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
-        const tu = cx * PITCH + BORDER, tv = cy * PITCH + BORDER;
-        for (let sy = 0; sy < 2; sy++) {
-          for (let sx = 0; sx < 2; sx++) {
-            const gc = mx * 2 + sx, gr = my * 2 + sy;
-            // the OUTER edges land on the guard; the interior boundary between
-            // two quadrants is inside the same tile, so it needs none
-            const u0 = (tu + sx * 16) * iw, u1 = u0 + 16 * iw;
-            const v0 = (tv + sy * 16) * ih, v1 = v0 + 16 * ih;
-            put(gc,     gr,     u0, v0);
-            put(gc + 1, gr,     u1, v0);
-            put(gc,     gr + 1, u0, v1);
-            put(gc + 1, gr,     u1, v0);
-            put(gc + 1, gr + 1, u1, v1);
-            put(gc,     gr + 1, u0, v1);
-          }
+    // the view's tiles, half-open, clipped to the map
+    const x0 = Math.max(0, tx0), x1 = Math.min(stride, tx0 + cols);
+    const y0 = Math.max(0, ty0 - rAbove), y1 = Math.min(mrows, ty0 + rows);
+    const D = scene.depth;
+    // Per-row keys only when relief can lift a southern cell over a northern
+    // unit. With relief=0 nothing rises, and per-row keys would put the ground
+    // of every row south of a unit's anchor IN FRONT of the unit's parts that
+    // reach into those rows — the kbot lab lost its whole south wall to the
+    // grass (found by the shadow the roof cast on that grass). Flat, the
+    // terrain is parity's one band behind everything.
+    gl.useProgram(ltProg);
+    gl.uniform2f(LTU.uShift, vpL - E[0], vpT - E[1]);
+    gl.uniform4f(LTU.uKey, labD.terrain, rowBase(), (W[1] >> 4) + 40,
+                 L.relief > 0 ? D.rowStep : 0);
+    const lt = ltStore(L), knobs = `${L.relief} ${L.datum} ${L.slope}`;
+    if (lt.knobs !== knobs) {
+      for (const c of lt.chunks.values()) freeChunk(c);
+      lt.chunks.clear(); lt.knobs = knobs;
+    }
+    lt.frame++;
+    lt.draw = [];
+    let n = 0;
+    if (x1 > x0 && y1 > y0)
+      for (let cy = Math.floor(y0 / LT_CHUNK); cy * LT_CHUNK < y1; cy++)
+        for (let cx = Math.floor(x0 / LT_CHUNK); cx * LT_CHUNK < x1; cx++) {
+          const id = cy * 65536 + cx;
+          let c = lt.chunks.get(id);
+          if (!c) lt.chunks.set(id, (c = emitChunk(L, cx, cy)));
+          c.used = lt.frame;
+          if (c.n) { lt.draw.push(c); n += c.n; }
         }
+    // least recently drawn first; never one this frame draws
+    if (lt.chunks.size > LT_KEEP) {
+      const old = [...lt.chunks].filter(([, c]) => c.used !== lt.frame)
+                                .sort((a, b) => a[1].used - b[1].used);
+      for (const [id, c] of old.slice(0, lt.chunks.size - LT_KEEP)) {
+        freeChunk(c); lt.chunks.delete(id);
       }
     }
-    gl.bindBuffer(gl.ARRAY_BUFFER, ltVBO);
-    gl.bufferData(gl.ARRAY_BUFFER, ltVerts.subarray(0, n * LTVST), gl.DYNAMIC_DRAW);
-    L.stats = { cols, rows: rows + rAbove, tx0, ty0, fx, fy,
-                cells: n / 24, skipped, junk };
+    let cells = 0, junk = 0;
+    for (let my = y0; my < y1; my++)
+      for (let mx = x0; mx < x1; mx++)
+        if (tilemap[my * stride + mx] >= map.atlas.tiles) junk++; else cells++;
+    L.stats = { cols, rows: rows + rAbove, tx0, ty0, fx, fy, cells,
+                skipped: cols * (rows + rAbove) - cells - junk, junk };
     return n;
+  }
+  function drawTerrainLab(L) {
+    for (const c of L.lt.draw) {
+      gl.bindVertexArray(c.vao);
+      gl.drawElements(gl.TRIANGLES, c.n, gl.UNSIGNED_SHORT, 0);
+    }
+    gl.bindVertexArray(null);
+  }
+  function freeChunk(c) {
+    gl.deleteVertexArray(c.vao); gl.deleteBuffer(c.vbo); gl.deleteBuffer(c.ibo);
+  }
+  function emitChunk(L, cx, cy) {
+    const stride = map.tilemap.w, mrows = map.tilemap.h;
+    const x0 = cx * LT_CHUNK, x1 = Math.min(stride, x0 + LT_CHUNK);
+    const y0 = cy * LT_CHUNK, y1 = Math.min(mrows, y0 + LT_CHUNK);
+    const vb = new Float32Array((x1 - x0) * (y1 - y0) * 9 * LTVST);
+    const ib = new Uint16Array((x1 - x0) * (y1 - y0) * 24);
+    const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
+    const k = L.relief * 0.5, dat = L.datum;
+    const N = gridNormals(L.slope), gw = w16 + 1;
+    let nv = 0, ni = 0;
+    for (let my = y0; my < y1; my++) {
+      for (let mx = x0; mx < x1; mx++) {
+        const idx = tilemap[my * stride + mx];
+        if (idx >= map.atlas.tiles) continue;
+        const cxa = idx % map.atlas.cols, cya = (idx / map.atlas.cols) | 0;
+        const tu = cxa * PITCH + BORDER, tv = cya * PITCH + BORDER;
+        const base = nv;
+        // the tile's 3 x 3 grid points: the OUTER ones land on the guard; the
+        // middle row and column are inside the same tile, so they need none
+        for (let j = 0; j < 3; j++) {
+          for (let i = 0; i < 3; i++) {
+            const gc = mx * 2 + i, gr = my * 2 + j;
+            const o = nv * LTVST, q = (gr * gw + gc) * 3;
+            const h = H(gc, gr);
+            vb[o]     = gc * 16;
+            vb[o + 1] = gr * 16 - k * (h - dat);
+            vb[o + 2] = gr;
+            vb[o + 3] = (tu + i * 16) * iw;
+            vb[o + 4] = (tv + j * 16) * ih;
+            vb[o + 5] = N[q]; vb[o + 6] = N[q + 1]; vb[o + 7] = N[q + 2];
+            // The world point this vertex DEPICTS, not where it is drawn: the
+            // art at grid row G shows the ground the engine projects there,
+            // and the engine projects world Z at screen Z - Y/2, so the
+            // depicted point is Z = G + h/2 (less whatever relief already
+            // moved the vertex). A unit standing at wz is drawn at wz - wy/2,
+            // i.e. on the art of grid row wz - wy/2, which depicts Z = wz: its
+            // shadow lands at its feet.
+            vb[o + 8] = gc * 16;
+            vb[o + 9] = h;
+            vb[o + 10] = gr * 16 + h * 0.5 - k * (h - dat);
+            nv++;
+          }
+        }
+        // the four quads, each on the diagonal (1,0)-(0,1)
+        for (let sy = 0; sy < 2; sy++)
+          for (let sx = 0; sx < 2; sx++) {
+            const a = base + sy * 3 + sx;
+            ib[ni++] = a; ib[ni++] = a + 1; ib[ni++] = a + 3;
+            ib[ni++] = a + 1; ib[ni++] = a + 4; ib[ni++] = a + 3;
+          }
+      }
+    }
+    const vao = gl.createVertexArray(), vbo = gl.createBuffer(), ibo = gl.createBuffer();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, vb.subarray(0, nv * LTVST), gl.STATIC_DRAW);
+    // the world point at location 7, where SHADOW_VS reads it in every VAO
+    const sizes = [3, 2, 3, 3], offs = [0, 12, 20, 32], locs = [0, 1, 2, 7];
+    for (let i = 0; i < 4; i++) {
+      gl.enableVertexAttribArray(locs[i]);
+      gl.vertexAttribPointer(locs[i], sizes[i], gl.FLOAT, false, LTVST * 4, offs[i]);
+    }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, ib.subarray(0, ni), gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    return { vao, vbo, ibo, n: ni, used: 0 };
   }
 
   // The mirror: the parity grid's own sweep over the zoomed window, keeping
@@ -2650,7 +2769,7 @@ async function main() {
         gl.uniform2f(LTU.uHDim, map.w16, map.h16);
         gl.uniform1i(LTU.uCastSplit, L.castsplit ? 1 : 0);
         setShadowUniforms(LTU, L, L.shadowFrame);
-        gl.bindVertexArray(ltVAO);
+        drawTerrainLab(L);
       } else {
         gl.useProgram(terrProg);
         gl.uniform2f(U.uGame, GW, GH);
@@ -2663,9 +2782,9 @@ async function main() {
         gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
         gl.uniform1i(U.uFog, 0);
         gl.bindVertexArray(terrVAO);
+        gl.drawArrays(gl.TRIANGLES, 0, nterr);
+        gl.bindVertexArray(null);
       }
-      gl.drawArrays(gl.TRIANGLES, 0, nterr);
-      gl.bindVertexArray(null);
     }
 
     if (hasFeat && L.features) {
@@ -2788,7 +2907,8 @@ async function main() {
                 ? ` ·${Math.min(L.aniso, ANISO_MAX || 1)}x` : ""}</b>` +
             `<span>shadows</span><b>${L.shadows
                 ? `pen ${L.penumbra} shade ${L.shade}${L.terrainshadow ? " +hills" : ""}` +
-                  (L.shadowlen ? ` len ${L.shadowlen[0]}+${L.shadowlen[1]}h` : " len physical")
+                  (L.shadowlen ? ` len ${L.shadowlen[0]}+${L.shadowlen[1]}h` : " len physical") +
+                  (L.shadowFrame ? ` map ${L.shadowFrame.res} texel ${L.shadowFrame.texel.toFixed(2)}` : "")
                 : "off"}</b>`
           : "") +
         `<span>cells</span><b>${st.cells}</b>` +
