@@ -47,7 +47,8 @@
        and emitted at FEATURE depth (3+rel*4). The engine's own wreck draw
        (scratch fake-unit *(main+0x1420F) -> DrawUnit) is suppressed by the
        owndraw classifier when tagpu_native_wrecks_armed().
-     - 2x SUPERSAMPLING (default on, killed by tagpu_ss.off): geometry renders
+     - 2x SUPERSAMPLING (the Supersampling row, tagpu_settings_ss; tagpu_ss.off
+       is its lever): geometry renders
        into a 2x-game-res FBO, box-downsampled (LINEAR quad) into the 1x FBO,
        which composites NEAREST as before — game-res look, antialiased edges,
        visual parity with the composite path's SS.
@@ -95,6 +96,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_hud.h"
 #include "tagpu_log.h"
+#include "tagpu_settings.h"
 
 /* ---- engine layout (all binary-verified) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -299,7 +301,7 @@ static volatile int s_armed = -1;
 
 static char   s_type[32] = "armcom";
 static int    s_wrecks = 0;            /* "wrecks" token present            */
-static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
+static int    s_ss     = 1;            /* 2x supersample (tagpu_settings_ss) */
 static int    s_subpix = 1;            /* sub-pixel motion (tagpu_subpix.off)*/
 static int    s_spxlog = 0;            /* anchor filmstrip (tagpu_spxlog.on) */
 /* Nothing reads `prim+0x22`: the pose comes off the FIELDS, so the pose race
@@ -2130,7 +2132,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         s_wrecks = wrecks;
         s_armed  = armed;                    /* the one store a reader can see */
-        s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
+        s_ss     = tagpu_settings_ss() == 2;
         /* THE DEVICE-RESOLUTION WORLD IS OPT-IN (`tagpu_devres.on`). The
            selection rect (`selbox_emit`, drawn by tagpu_vk_mark.c) does not
            thin under it: the rect's fragment stage keeps whole GAME pixels on

@@ -152,6 +152,9 @@ def ere_quote(s: str) -> str:
 PRIVATE_FILES = {
     "ddraw.dll", "ddraw.ini", "totala.ini",
     "TotalA.exe",  # symlinked to Steam, but listed so we handle it explicitly
+    # The DLL's settings store (renderers.md 2.10b), per instance: a symlink
+    # to the template's would be one store shared by every instance.
+    "impure.cfg", "impure.cfg.tmp",
 }
 # Intro movies: omitted from the mirror unless --intro (find-file gate skips playback).
 INTRO_MOVIES = {"1.zrb", "2.zrb"}
@@ -428,6 +431,8 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
         # DLL at attach; a template that carries one must not share it.
         if name in ("Screenshots", "_triggers_off", "ErrorLog.txt") or low == "log" or low.endswith(".log"):
             continue
+        if low.endswith(".migrated") or low == "impure-migration.txt":
+            continue   # the DLL's first-run backups and their record: the template's own
         if name == "music" and not sound:
             continue   # Steam MP3 soundtrack: audiere cannot play what is absent
         dst = inst.gamedir / name
@@ -456,6 +461,7 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
 
     write_ddraw_ini(inst, tile, window, maxfps=maxfps)
     write_totala_ini(inst, sound)
+    ensure_store(inst)
     # Never steal the human's pointer: the game snaps and fences the real cursor on
     # activation otherwise (fork honours this trigger, see mouse.c).
     (inst.gamedir / "tagpu_nowarp.on").write_text("")
@@ -497,6 +503,22 @@ def set_defaults(inst: Instance, meta: dict, want) -> "str | None":
                 "with no arm file; `arm <i> <pass>.off` turns one off")
     path.write_text("")
     return None
+
+
+def ensure_store(inst: Instance) -> None:
+    """The DLL's settings store, `impure.cfg`, created EMPTY when it is missing.
+
+    An absent store is the DLL's first-run signal: it renames the lever files an
+    earlier menu wrote to `*.migrated` and strips ddraw.ini's display keys, and in
+    an instance those files are the levers a measurement armed. So an instance
+    always has one before it launches. Empty means every key at its compiled
+    default; under tagpu_defaults.off the DLL ignores the store altogether
+    (renderers.md 2.10b). An existing store is left alone -- a --defaults
+    instance keeps what its menu was set to."""
+    path = inst.gamedir / "impure.cfg"
+    if not path.exists():
+        inst.gamedir.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
 
 
 def write_title(inst: Instance, label: str) -> str:
@@ -1194,6 +1216,7 @@ def _launch(args) -> dict:
     terrown_note = _ensure_terrown_for_terr(inst)
     markown_note = _ensure_markown_for_mark(inst)
     defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
+    ensure_store(inst)
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.

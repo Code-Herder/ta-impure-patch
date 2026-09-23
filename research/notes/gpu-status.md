@@ -1569,10 +1569,10 @@ way back to the racing build). Design, proof and the object catalogue:
 
 ### 2.8 The play defaults (`tagpu_opt.c`, `tagpu_defaults.off`) — since 2026-09-08
 
-Every pass is armed by a file beside `TotalA.exe`, `tagpu_<x>.on`, whose contents are its tokens;
-[renderers](renderers.html) §2.10 makes those files the store the in-game menu will drive when it
-exists. Until it does, one table stands in for the menu: **with no file at all, the play set is
-on.** `tagpu_opt.c` answers two questions for the seventeen files below — *is the pass on*
+Every pass is armed by a file beside `TotalA.exe`, `tagpu_<x>.on`, whose contents are its tokens.
+**With no file at all, the play set is on.** A pass that is also a menu row (only
+`tagpu_classicpp.on`, the Renderer row) asks the settings store in between: its own `.on`/`.off`
+first, then `impure.cfg`, then this table ([renderers](renderers.html) §2.10b). `tagpu_opt.c` answers two questions for the seventeen files below — *is the pass on*
 (`tagpu_opt_on`) and *what are its tokens* (`tagpu_opt_read`) — and every reader of those files,
 at attach and on its per-frame poll, asks it instead of the file system. Nothing else changed:
 the parsers, the polls, the `*own` install-at-attach rule.
@@ -2087,7 +2087,8 @@ Four things this rests on, each measured rather than assumed:
   the devices once the render thread is up and writes `tagpu_vk.gpus`, and the menu reads that
   cache at the *next* attach. It is the same bargain the Monitor row already makes for a
   hot-plugged monitor. The row's **model** is not one launch behind: the choice is stored by
-  name in `tagpu_vk.cfg`, and `read_display_state` plates `tagpu_vk_gpu_active()` — the device
+  name as `gpu=` in the settings store (`impure.cfg`, [renderers](renderers.html) §2.10b), and
+  `read_display_state` plates `tagpu_vk_gpu_active()` — the device
   the render thread actually bound — whenever the lane is up, so a request that could not be
   honoured shows as the device that was.
 
@@ -2231,10 +2232,11 @@ patch, no engine read at all** — it counts our own presents and draws over the
 |---|---|---|
 | `tagpu_overlay_draw`, after the UI flush | `tagpu_fps_present()` — the readout, drawn **above** the UI layer so the side panel and dialogs could not hide it. **Since the clean cut there is no UI layer and no `tagpu_gui_present`** (§2.81), so this is the last thing drawn over the world and the only 2D overlay left in the frame; its position in the order is now arbitrary rather than load-bearing | render |
 | `tagpu_overlay_draw`, the context-change branch | `tagpu_fps_glreset()` alongside the other modules' | render |
-| `tagpu_menu.c` `write_levers()` | create or delete `tagpu_fps.on` — the deferred write, off the game thread, exactly as `tagpu_ss.off` is written | render |
+| `tagpu_menu.c` `commit_one(R_FPS)` | records `fps=` in the settings store; the store's own file is written from `tagpu_menu_present`, off the game thread | game (the click), render (the write) |
 
-**Files.** `tagpu_fps.on`, positive sense (present = on), polled every 30 frames on the render
-thread. The row and the file are one setting, so either can drive it.
+**Settings.** The row is `fps=` in `impure.cfg` ([renderers](renderers.html) §2.10b), read through
+`tagpu_settings_fps()` every 30 frames on the render thread. `tagpu_fps.on` is its lever: present,
+it turns the readout on whatever the row says, and greys the row.
 
 **Why not the one that already exists.** cnc-ddraw's own `dbg_draw_frame_info_start` sits behind
 `tagpu_fpsosd.on`, but it is compiled only under `_DEBUG` and GDI-draws into the engine's 8bpp
@@ -3422,7 +3424,7 @@ failing rather than by saying anything.
 | `tagpu_vk.on` | arms the lane. Optional token `color=r,g,b` moves the clear colour off the default black (`color=255,0,255` is the bring-up magenta, the "is the lane on screen?" sentinel) |
 | `tagpu_vk.off` | turns the WHOLE module off, the GPU enumeration included — the control for an A/B against a pre-G19 DLL, and it beats `.on` |
 | `tagpu_vk.gpus` | written by the enumeration worker: one line per device, `<flag> <name>`, where the flag is 1 for `DISCRETE_GPU` and 0 otherwise. The menu reads it at the NEXT attach |
-| `tagpu_vk.cfg` | `gpu=<name>` — the player's choice, by NAME so adding or removing a card cannot silently re-point it |
+| `impure.cfg` `gpu=` | the player's choice, by NAME so adding or removing a card cannot silently re-point it. The settings store's key ([renderers](renderers.html) §2.10b); `tagpu_vk.cfg` held it until 2026-09-23 and a first run renames an old one to `.migrated` |
 
 **G19b's row is in §2.12's front-end table.** Two bounds are worth repeating because both were
 found by building it. A device name is canonicalised and truncated on the way in — it comes from

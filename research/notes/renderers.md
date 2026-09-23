@@ -502,8 +502,8 @@ things were wrong in the paragraphs that follow, and all three are measurement e
 rather than anything about the renderer:
 
 1. **`penumbra`.** The instance the in-game numbers came from (`g18acne`) carries a
-   `tagpu_classicpp.cfg` reading `sun=225,35  amb=0.35  penumbra=2.5` — the menu writes only
-   `assets/light/shadows/shadowres` and *preserves* those three, so they were put there by hand
+   `tagpu_classicpp.cfg` reading `sun=225,35  amb=0.35  penumbra=2.5` — the menu never wrote
+   those three (it wrote only `assets/light/shadows/shadowres`, and today writes none), so they were put there by hand
    during the investigation and are not what a player gets. **The shipped default is
    `penumbra=0.05`**, and the lab was being run at it. The penumbra is the **amplifier**: the
    PCSS kernel radius is `penumbra × the blocker distance`, so a bias failure that is a
@@ -781,8 +781,8 @@ player's install, so nothing is regenerated when it changes).*
 | 90 | **Dynamic lighting** | Off \| On | `light=` — done, G18a |
 | 118 | **Shadows** | Off \| Hard | `shadows=` — G18b; **Soft was the third stage and was dropped 2026-09-22**, because the soft map has no producer and the stage was Off under another name ([GPU status](gpu-status.html) §2.83). Hard is the Classic++ preset |
 | 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=` — it sizes the soft map and nothing else, so with no soft map the row is **greyed unconditionally**. It is kept rather than removed: one line un-greys it the day the map's producer is written |
-| 174 | **Supersampling** | Off \| 2× | `tagpu_ss.off` |
-| 202 | **FPS counter** | Off \| On | `tagpu_fps.on` — the readout, [GPU status](gpu-status.html) §2.14 |
+| 174 | **Supersampling** | Off \| 2× | `ss=` in the store (§2.10b); `tagpu_ss.off` is its lever |
+| 202 | **FPS counter** | Off \| On | `fps=` in the store; `tagpu_fps.on` is its lever — the readout, [GPU status](gpu-status.html) §2.14 |
 
 **Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
 was the seventh row and was **cut**: `tagpu_zoom_init()` runs *once* from `dllmain.c:130` and
@@ -1187,6 +1187,184 @@ non-empty pixels over the engine's frame outside the viewport, the top-right ~40
 already swallows the wheel, and our pixels cover the engine's cursor. That last set is
 exactly what a DLL overlay forwarding the trigger click would rest on, which is why the open
 question above has two answers and not one.
+
+### 2.10b The settings store: every value on the Visual screens is ours  [DECIDED 2026-09-23]
+
+Interviewed with the owner 2026-09-23. **Every control on the Visual screens is backed by one
+store the DLL owns, `impure.cfg`, and none by the engine's registry or the fork's `ddraw.ini`.**
+The defaults are Classic++. Three landings build it (the table at the end); this section is the
+decision record, and the rows' own mechanics stay where §2.10 puts them.
+
+**Why.** Before this, the Visual tab mixed three owners. Five stock controls (Screen Size, Gamma,
+Shading, Anti-aliasing, Engine shadows) were the engine's and persisted in the registry, which
+under tacli is one `user.reg` inode shared by every instance, so a Gamma set in one instance
+moved all of them. Display mode and Frame cap were the fork's, in `ddraw.ini`. Our own rows
+were spread over five files with a default in each module. Nothing answered "what are the
+player's settings", and a fresh install started at 640×480.
+
+**One store.** `impure.cfg` beside `TotalA.exe`: plain `key=value`, one per line. Only the menu
+changes it. While the game runs it is written from the render thread, on either lane, through a
+temporary file renamed over the target (the §2.10 deferred write; TA is lockstep, so the game
+thread never writes a file mid-session). The two other writes are at the ends, where nothing is
+in lockstep: the first-run defaults at attach, and a final flush in `dd_Release` once the render
+thread is joined (and at process detach) — a click not yet flushed, and the windowed frame. A
+failed write keeps the change and is retried, at most once a second: the change count is
+cleared only by a compare-exchange against the count the write covered, after it landed. It is loaded once at attach
+and held in memory. **Every key is bounded against its own stage table on the way in**: an
+out-of-range value takes that key's default and is logged, so a hand-edited file cannot index
+anything. A key this build does not know is kept verbatim and written back, so a key a newer
+build added survives an older one; a new *value* of a known key does not — it reads as out of
+range, and the next write puts the default in its place. A store that exists and **cannot be read** is logged and
+never written that session, which runs at the defaults — a write would replace the player's
+file with them.
+
+**Precedence: a lever beats the store, and the store beats the compiled default.**
+
+1. A **lever file** that names the setting (`tagpu_classicpp.on/.off`, a menu key inside
+   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`, and in
+   `ddraw.ini` `windowed`/`fullscreen` for Display mode, `maxfps` for Frame cap and
+   `posX`/`posY`/`width`/`height` for the window and the Monitor row) wins. The row shows the lever's value **greyed**, so a click can
+   never silently lose to a file.
+2. **`impure.cfg`.**
+3. **The compiled default** — the Classic++ table below.
+
+`tagpu_defaults.off` (every tacli control launch) **skips tier 2 as well as the play defaults**:
+the behaviour is exactly what it was before the store existed, so a measurement arms what it
+names and nothing a player once clicked in that instance.
+
+**The lever files stay, and the menu stops writing them.** They are the interface tacli and the
+`ta-drive` skill drive A/Bs through (`tacli arm <i> 'classicpp.cfg=assets=0'`, `ss.off`,
+`fps.on`, `hud.on=scale=150`), and `tagpu_classicpp.cfg` also holds the developer knobs that
+have no row (`sun`, `amb`, `penumbra`, `shadowlen`, `terrainshadow`, …). `tagpu_vk.cfg` is the
+exception: nothing but the menu ever wrote it and it was never released, so it is absorbed into
+`gpu=` and stops existing.
+
+**The defaults** — a fresh install, and "Restore defaults":
+
+| key | default | note |
+|---|---|---|
+| `style` | `classic++` | `classic`, `classic++` or `custom` — see *the preset* below |
+| `assets` | 1 | undithered |
+| `light` | 1 | |
+| `shadows` | `hard` | also drives the engine's Shadow bits (landing 2) |
+| `shadowres` | 2048 | greyed until the soft map has a producer; stored anyway |
+| `ss` | 2 | **every resolution** — the owner's call; an Auto-by-resolution stage was proposed and declined |
+| `fps` | 0 | a diagnostic |
+| `maxfps` | `refresh` | a new stage: the monitor's refresh rate (landing 3). Until landing 3 the default is **60**, the stock cap |
+| `hudscale` | `off` | the pass unarmed, which the UI scale row plates as 100 % — the stock size it draws at. **Not Auto**, as the interview first had it: `tagpu_hud.on` is off the play defaults because whether HUD scale is on by default is the owner's call, and its composite does not magnify today (`tagpu_opt.c`). Found while building landing 1 |
+| `gamma` | 12 | a factor of exactly 1.0 (landing 2) |
+| `resolution` | `native` | resolved against the selected monitor (landing 2) |
+| `display` | `fullscreen` | borderless |
+| `monitor` | the primary | stored by device name (`\\.\DISPLAY2`), never by index |
+| `window` | — | the windowed frame rect, once there has been one |
+| `gpu` | `auto` | discrete > integrated > virtual > CPU, then the largest `DEVICE_LOCAL` heap (landing 3). Until landing 3 an absent `gpu=` is `pick_device`'s first `DISCRETE_GPU` |
+
+**The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
+or `classic++`, the render keys (`assets`, `light`, `shadows`, `shadowres`) are **rewritten from
+the DLL's current preset on every load**: a player on Classic++ always gets today's Classic++,
+and the day `shadows` moves to Soft they get Soft without touching anything. Only
+`style=custom` pins those four. The window and system keys default to values that follow the
+hardware (`native`, `auto`, `refresh`), so writing them out freezes nothing; `gamma` and `fps`
+are literal and are not expected to move. A key the file lacks takes the compiled default.
+
+**The first run migrates by renaming, and imports nothing.** When `impure.cfg` does not exist
+(and `tagpu_defaults.off` does not either), the files an earlier menu wrote are renamed
+`*.migrated` — `tagpu_classicpp.on/.off`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`,
+`tagpu_vk.cfg` — the four menu keys and `sun=off` (the old spelling of `light=0`) are stripped out
+of `tagpu_classicpp.cfg` with every other token left in place, and `maxfps`, `windowed`,
+`fullscreen`, `posX`, `posY`, `width` and `height` are removed from `ddraw.ini` (after copying it to
+`ddraw.ini.migrated`). Then `impure.cfg` is written from the defaults. The renames are what
+matter: under the precedence above, a file v0.2–v0.2.2's menu left behind is indistinguishable
+from a lever and would hold its row greyed forever — and **every release shipped `maxfps=60` in
+its `ddraw.ini`**, which would have held the Frame cap row on every player's install. Nothing is
+deleted, so a bad migration is undone by hand.
+
+**It runs once per directory.** A missing `impure.cfg` is not proof of a first run — deleting it
+is how a player resets — and what they have typed into `ddraw.ini` since is theirs. So the
+migration leaves `impure-migration.txt`, listing each step, and a directory that has one only
+gets the defaults written. No backup is ever overwritten either: a `*.migrated` that already
+exists means the file it would back up is not the original, and that step is refused.
+MEASURED 2026-09-23 on a hand-staged v0.2 gamedir:
+every file renamed, `penumbra=0.1` kept alone in the cfg, the ini stripped, the game up
+borderless-fullscreen from the store.
+
+**The shipped files stop carrying the store's keys.** `tagpu/release/ddraw.ini` no longer has
+`maxfps`, and cnc-ddraw's generated template has `width`/`height`/`posX`/`posY`/`maxfps` commented
+out and `savesettings=0` — a present key would be a lever. cnc-ddraw's own save-on-exit is forced
+off (`tagpu_cfg.c`), because it wrote those keys back and would have turned the player's window
+into a lever after one session. The windowed frame is saved to the store instead, by `cfg_save`
+on the way out: `window=x,y,w,h`, where `w,h = 0,0` is cnc-ddraw's "the size the game asks for".
+A saved frame on no attached monitor is re-centred (`dd.c`, `MonitorFromRect`).
+
+**tacli never meets the migration.** It creates an **empty** `impure.cfg` in every instance
+before a launch (and never mirrors `*.migrated` or the record from the template), so the one trigger ("no `impure.cfg`") never fires there and
+the levers a measurement armed survive. Empty means every key at its compiled default.
+
+**Restore defaults** resets every key except `display`, `monitor`, `window` and `gpu`, for §2.10's
+reason: it must not move the window somewhere the player cannot see the button, nor rebind the
+device under them. **Undo** puts the render rows back to what the screen opened with, and the
+window rows the visit touched back to what the store held — the Monitor to "none" if it named
+none, UI scale to its exact value, `off` too — so an untouched row is never pinned to the value
+its plate resolved. Neither touches a row a lever holds.
+
+**The engine's values** (landing 2):
+
+- **Engine shadows is folded into our Shadows row**, which drives `main+0x37F06` bits 2–4. Our
+  hard shadows were already gated on those bits (`tagpu_native.c`, and bit 4 in `tagpu_feat.c`),
+  so there were two switches for one thing.
+- **Shading (bit 5) and Anti-aliasing (bit 1) leave the screen, pinned**, but only after an A/B
+  on both lanes shows neither changes a presented pixel. None of our passes reads either bit.
+- **`gamma=`** is pushed into `main+0x37F08` and through `SetGamma 0x4BA590` right after the
+  registry loader `0x42F9A0`. `+gamma N` stays session-only.
+- **`resolution=`** is pushed into `main+0x37F1B/F` at the same site, with `native` already
+  resolved to a concrete mode, and re-resolved when the Monitor row changes. A stored `WxH`
+  the monitor does not offer falls back to native. The slider keeps concrete stages.
+- **The battleroom mode picker stays session-only**, as stock: `0x446310`/`0x4461D0` write the
+  pair and broadcast `PlayerInfo+0x8B/+0x8D`, and never write the store. Because the store is
+  pushed before the battleroom builds its list, the first broadcast is already the truth.
+- **In-game Options → Visuals (`VISUALRT.GUI`) is replaced on the front end's mechanism** — a
+  generated `.GUI` in `impure-patch.ufo`, OnCommand chained at `GUIMEMSTRUCT+0x08` — carrying
+  Gamma only, with Restore and Undo routed to ours. The sprocket panel is the in-game home of
+  the render rows and already shares the front end's model.
+
+| landing | what | status |
+|---|---|---|
+| 1 | the store: load, bounds, precedence, preset, migration, deferred write; every row that was already ours moved onto it (render rows, SS, FPS, UI scale, frame cap, display mode, monitor by name, the window rect, GPU); the menu stops writing levers; tacli creates the empty store | built 2026-09-23 (`tagpu_settings.c`) |
+| 2 | the engine's values: gamma, resolution and the battleroom, the Shadows fold, the Shading/AA A/B and removal, `VISUALRT.GUI` — and **the front end's layout**, which is wrong today: the renderer column puts Supersampling on Shading's slot (both at `402,326`) and the FPS counter at `y = 502`, below the 480-high shell, because the slot map predates the seventh row. Removing the three stock toggles frees exactly the slots it needs | planned |
+| 3 | GPU Auto and its ranking; the Refresh frame-cap stage | planned |
+
+**Landing 1, verified 2026-09-23** on a private 1920×1080 Xvfb (`:93`), the reference setup's
+RTX 4070 and llvmpipe both listed:
+
+- an empty store loads as Classic++ (`settings: impure.cfg: style=classic++ …`), and tacli's
+  `ddraw.ini` holds the three window settings (`cfg: from the store: display=HELD by the ini …`);
+- a click on either screen is in the store within one present and in force within Classic++'s
+  half-second poll: `assets=0` → `classicpp: assets=0`, Supersampling → `2048x1536 target (1024x768
+  at ss=2)`, FPS → `fps=1` in the census; Renderer cycles Custom → Classic++ → Classic and
+  `opt: … classicpp=OFF` comes back from the store after a relaunch;
+- a lever beats the store and greys its row (`classicpp.cfg=assets=0`, `ss.off`), the store is
+  untouched, and removing the lever brings the store's value back live;
+- `tagpu_defaults.off`: `impure.cfg IGNORED`, every row greyed, the compiled defaults as before;
+- the migration above; Display mode and Frame cap live once `ddraw.ini` lets go (a 640×480
+  window, `maxfps=120`), the windowed frame saved on exit and restored, a frame at 5000,5000
+  re-centred; Restore and Undo; the GPU row rebinding to llvmpipe and binding it again at launch.
+- after the landing review's fixes: the migration writes its record, and a store deleted
+  afterwards gets the defaults with `maxfps=144` typed into `ddraw.ini` kept (the row held), a
+  re-created `tagpu_fps.on` kept, and `ddraw.ini.migrated` byte-identical; unknown keys
+  (`gamma=12`, `futurekey=abc`) survive a write; the GPU row stores the device it bound
+  (`llvmpipe` for row 1, back to the RTX on Undo); Undo puts UI scale back to `off` and leaves the
+  held Frame cap and the unchosen Monitor alone; a window moved to 300,200 is written by the final
+  flush on a menu Exit (`window=300,200,0,0`); an unreadable store (`chmod 000`) logs *could NOT be
+  read* and is byte-identical after a click; with `renderer=gdi` (no Vulkan device up) a click is
+  in the store mid-session.
+
+**Not verified:** the Monitor row's click on two real monitors. Xvfb offers one monitor, and a
+two-head Xinerama Xvfb (`:94`) stopped the game at bring-up — once with this build, then with a
+stale wineserver left by that run, so the display's own first failure is unexplained rather than
+proven to be the display's. What was checked is the name's handling in the store: a stored
+`\\.\DISPLAY9` logs *not attached* and survives the next write, so the choice comes back when the
+monitor does.
+
 ### 2.11 Two small calls made by the implementer
 - **The unit vertex stream** grows from 11 to 15 floats: the map-space normal and the
   world height join `x, y, depthEnc, u, v, flat, ck, shadeRow, wx, wzp, vy`. Face normals are

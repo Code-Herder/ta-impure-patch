@@ -38,6 +38,15 @@ INSTALL
 
 OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
 
+  THE SETTINGS are the in-game menu's: the cog at the top right of the screen
+  in a game, and Options > Visuals in the main menu. They are saved in
+  impure.cfg next to TotalA.exe and start at the Classic++ look. If you ran an
+  earlier version, the first start of this one renames the files its menu wrote
+  to *.migrated, takes the display, frame-cap and window lines out of ddraw.ini
+  (the old file is kept as ddraw.ini.migrated), lists what it did in
+  impure-migration.txt, and starts from the defaults. Delete impure.cfg to go
+  back to the defaults later; that does not repeat the migration.
+
   Everything is ON by default. A pass is turned off by an empty file next to
   TotalA.exe named tagpu_<pass>.off, and back on by deleting that file. The
   passes:
@@ -54,9 +63,11 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
                 off = the original palette look, still drawn by the patch
     weapons     the extra weapon slots
 
-  e.g. tagpu_classicpp.off for the classic look, tagpu_zoom.off for no zoom.
+  e.g. tagpu_zoom.off for no zoom. (The classic look is the menu's Renderer row;
+  tagpu_classicpp.off also works, and holds that row until it is deleted.)
 
-  tagpu_defaults.off turns the whole list off at once. Two things stay on because
+  tagpu_defaults.off turns the whole list off at once, and ignores impure.cfg:
+  the menu's rows are greyed while it is there. Two things stay on because
   they are fixes rather than modes, each with its own switch:
 
     tagpu_reclaim.off   a crash fix: the engine's model frees are deferred so the
@@ -81,11 +92,15 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
 
 WHAT IT WRITES
 
+  impure.cfg next to TotalA.exe: the menu's settings, one key=value per line.
+  On the first start only, impure-migration.txt and the *.migrated backups.
+
   log\tagpu.log in the game folder: one "ARMED" line per pass at start, the
-  options line ("opt: play defaults ON ..."), and timings. Attach it to a bug
-  report. Each launch starts a new file and keeps the previous ones as
-  tagpu.1.log, tagpu.2.log and so on; the logs never take more than 128 MB.
-  Nothing else is written unless you ask for a dump.
+  options line ("opt: play defaults ON ..."), the settings line ("settings:
+  impure.cfg: ..."), and timings. Attach it to a bug report. Each launch starts
+  a new file and keeps the previous ones as tagpu.1.log, tagpu.2.log and so on;
+  the logs never take more than 128 MB. Nothing else is written unless you ask
+  for a dump.
 
 
 MULTIPLAYER

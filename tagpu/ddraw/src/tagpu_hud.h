@@ -61,9 +61,10 @@
    panel exactly fills the screen height, which §3.4a measured to be both the
    natural target and the hard ceiling (the panel block is a fixed 128x480 that
    does not stretch). It is exactly 1.0 at 640x480, TA's shipped mode, so an
-   untouched install is unchanged. The store is the lever file `tagpu_hud.on`
-   with a `scale=auto` / `scale=<percent>` token; the front-end Visuals row
-   writes it, and — see the latch above — it takes effect at the next game.
+   untouched install is unchanged. The front-end Visuals row keeps it in the
+   settings store (`hudscale=`, tagpu_settings.h); the lever file
+   `tagpu_hud.on` with a `scale=auto` / `scale=<percent>` token overrides the
+   store and greys the row.
 
    WHAT MAKES A STALE VALUE SAFE. Exactly one word crosses threads: the
    percentage in force, written by the row (message thread) and read by the
@@ -91,12 +92,15 @@ void tagpu_hud_geom(int screenW, int screenH, int pct,
 /* The largest percentage this screen can honour (>= 100). */
 int  tagpu_hud_ceiling_pct(int screenW, int screenH);
 
-/* The setting as stored, for the front-end row: the percentage, or 0 for Auto,
-   or -1 when the pass is off altogether. Reads the lever, so front end only. */
+/* The setting in force at the next game entry: the percentage, or 0 for Auto,
+   or -1 when the pass is off altogether. `tagpu_hud.on` / `.off` first, then the
+   settings store. Reads a file attribute, so not per frame. */
 int  tagpu_hud_stored_pct(void);
-/* Write it, and put it in force. -1 turns the pass off, 0 is Auto, otherwise
-   a percentage. */
+/* Record it in the store and put it in force. -1 turns the pass off, 0 is
+   Auto, otherwise a percentage. */
 void tagpu_hud_store_pct(int pct);
+/* 1 while `tagpu_hud.on` or `.off` exists: the lever holds the UI scale row. */
+int  tagpu_hud_held(void);
 
 /* 1 while HUD scale is in force on the surface the fork is presenting, with
    the geometry it is in force with. 0 — outputs untouched — in the shell and

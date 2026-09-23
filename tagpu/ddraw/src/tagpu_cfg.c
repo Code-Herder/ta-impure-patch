@@ -41,6 +41,7 @@
 #include "config.h"
 #include "ini.h"
 #include "tagpu_cfg.h"
+#include "tagpu_settings.h"
 
 /* TA's "DISPLAY MODES" buffer: 0x4B0 / 12 = 100 entries, and the count itself
    lives in a different allocation, so all 100 are usable. Our counter counts
@@ -70,6 +71,10 @@ static const Def s_def[] = {
 #define I_FULLSCREEN 3
 
 static int s_mayInject;                 /* the player left inject_resolution to us */
+
+/* A ddraw.ini key that holds a menu row (tagpu_settings.h, tier 1). Latched
+   here, at attach, because the parsed ini is freed straight after. */
+static int s_displayHeld, s_maxfpsHeld, s_windowHeld;
 
 static void cfglog(const char* s)
 {
@@ -121,6 +126,41 @@ void tagpu_cfg_defaults(void)
 
     s_mayInject = !typed("inject_resolution");
 
+    /* ---- the store's three (renderers.md 2.10b) --------------------------
+       Display mode, frame cap and the windowed frame are menu rows now, kept in
+       impure.cfg. A key the ini carries is the lever and wins -- tacli writes
+       all of them, which is what keeps an instance on its tile. */
+    s_displayHeld = pair_is_theirs;
+    s_maxfpsHeld  = typed("maxfps");
+    s_windowHeld  = typed("posX") || typed("posY") || typed("width") || typed("height");
+    {
+        int v, x, y, w, h;
+        char c[200];
+        if (!s_displayHeld && tagpu_settings_get(TS_DISPLAY, &v)) {
+            g_config.windowed   = TRUE;             /* the pair stays atomic: borderless */
+            g_config.fullscreen = v ? TRUE : FALSE; /* or a window                        */
+        }
+        if (!s_maxfpsHeld && tagpu_settings_get(TS_MAXFPS, &v))
+            g_config.maxfps = v;
+        if (!s_windowHeld && tagpu_settings_window(&x, &y, &w, &h)) {
+            g_config.window_rect.left   = x;
+            g_config.window_rect.top    = y;
+            g_config.window_rect.right  = w;
+            g_config.window_rect.bottom = h;
+        }
+        _snprintf(c, sizeof c, "cfg: from %s: display=%s maxfps=%s window=%s",
+                  tagpu_settings_ignored() ? "the ini (the store is ignored)" : "the store",
+                  s_displayHeld ? "HELD by the ini" : g_config.fullscreen ? "fullscreen" : "window",
+                  s_maxfpsHeld ? "HELD by the ini" : "set",
+                  s_windowHeld ? "HELD by the ini" : g_config.window_rect.left != -32000 ? "set" : "default");
+        c[sizeof c - 1] = 0;
+        cfglog(c);
+    }
+    /* cnc-ddraw's own save wrote the window keys back into ddraw.ini on exit,
+       where they would read as a lever on the next launch and pin the rows.
+       impure.cfg keeps the frame instead (cfg_save), so the fork's save is off. */
+    g_config.save_settings = 0;
+
     /* THE BOUND, applied whatever the ini said and whoever set it. 0 is not a
        preference here -- it is cnc-ddraw's "no cap", which is precisely the
        value TA's unchecked callback cannot survive on a machine with more than
@@ -169,3 +209,7 @@ void tagpu_cfg_inject_native(unsigned int w, unsigned int h)
         cfglog(c);
     }
 }
+
+int tagpu_cfg_display_held(void) { return s_displayHeld; }
+int tagpu_cfg_maxfps_held(void)  { return s_maxfpsHeld; }
+int tagpu_cfg_window_held(void)  { return s_windowHeld; }

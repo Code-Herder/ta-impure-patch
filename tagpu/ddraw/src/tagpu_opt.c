@@ -9,6 +9,7 @@
 #include <string.h>
 #include "tagpu_opt.h"
 #include "tagpu_log.h"
+#include "tagpu_settings.h"
 
 #define MASTER_OFF "tagpu_defaults.off"
 
@@ -16,7 +17,21 @@
    pass -- the pairing tacli's launch makes when it auto-arms the `*own` half (a
    stale owndraw with no native pass skips the engine's rasterise and nothing draws
    the unit at all), and vpwide with zoom (the ta-drive skill, "the wide viewport"). */
-typedef struct { const char* on; const char* tokens; const char* needs; const char* needs2; } Def;
+/* `store`: the settings store's say on this pass (tagpu_settings.h) -- 1 on,
+   0 off, -1 no say -- for a pass that is a menu row. It ranks below the pass's
+   own .on/.off files and above the table's default. */
+typedef struct {
+    const char* on; const char* tokens; const char* needs; const char* needs2;
+    int (*store)(void);
+} Def;
+
+/* The Renderer row: Classic is the one style that leaves Classic++ off. */
+static int store_classicpp(void)
+{
+    int v;
+    if (!tagpu_settings_get(TS_STYLE, &v)) return -1;
+    return v != TS_STYLE_CLASSIC;
+}
 
 /* The table: the ta-drive skill's default arm set, Classic++ and the extra weapons.
    Order is the order the log line lists them in. */
@@ -105,7 +120,7 @@ static const Def s_defs[] = {
        `gui.off` therefore still gives a fully drivable instance with no UI,
        which is the A/B. */
     { "tagpu_gui.on",       "", 0, 0 },                     /* the UI: panel, bars, minimap, cursor, shell */
-    { "tagpu_classicpp.on", "", 0, 0 },                     /* restored true colour, lit, shadowed */
+    { "tagpu_classicpp.on", "", 0, 0, store_classicpp },    /* restored true colour, lit, shadowed */
     { "tagpu_weapons.on",   "", 0, 0 },                     /* 0..N weapons per unit               */
     /* HUD SCALE IS NOT A PLAY DEFAULT because nobody has decided it: it
        changes the look of every screen at every resolution, the top bar's
@@ -149,8 +164,12 @@ static const Def* applies(const char* on)
     for (i = 0; i < NDEFS; i++)
         if (!strcmp(s_defs[i].on, on)) break;
     if (i == NDEFS) return NULL;
-    if (exists(MASTER_OFF)) return NULL;
     if (off_name(on, off, sizeof off) && exists(off)) return NULL;
+    if (s_defs[i].store) {
+        int say = s_defs[i].store();
+        if (say >= 0) return say ? &s_defs[i] : NULL;
+    }
+    if (exists(MASTER_OFF)) return NULL;
     /* the pass it serves must be on -- by file or by its own default (one level:
        nothing on the table needs a pass that itself needs another) */
     if (s_defs[i].needs && !tagpu_opt_on(s_defs[i].needs) &&

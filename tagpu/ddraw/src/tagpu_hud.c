@@ -18,6 +18,7 @@
 #include "dd.h"
 #include "tagpu_hud.h"
 #include "tagpu_opt.h"
+#include "tagpu_settings.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 
@@ -82,14 +83,28 @@ void tagpu_hud_geom(int screenW, int screenH, int pct, int* q8, int* panelW, int
     if (barH)   *barH   = (HUD_BAR_H  * q) >> 8;
 }
 
-/* ---- the store: the lever file the front-end row writes ------------------ */
+/* ---- the store ------------------------------------------------------------
+   The UI scale row lives in the settings store (renderers.md 2.10b), and
+   `tagpu_hud.on` / `.off` are its lever: either file beats the store, and the
+   menu greys the row while one is there. */
+
+int tagpu_hud_held(void)
+{
+    return GetFileAttributesA(LEVER) != INVALID_FILE_ATTRIBUTES ||
+           GetFileAttributesA(LEVER_OFF) != INVALID_FILE_ATTRIBUTES;
+}
 
 int tagpu_hud_stored_pct(void)
 {
     char buf[128];
     const char* k;
-    int n = tagpu_opt_read(LEVER, buf, sizeof buf);
-    if (n < 0) return -1;                          /* off: .off, or defaults off */
+    int n;
+    if (GetFileAttributesA(LEVER) == INVALID_FILE_ATTRIBUTES) {
+        if (GetFileAttributesA(LEVER_OFF) != INVALID_FILE_ATTRIBUTES) return -1;
+        return tagpu_settings_get(TS_HUDSCALE, &n) ? n : -1;
+    }
+    n = tagpu_opt_read(LEVER, buf, sizeof buf);
+    if (n < 0) return -1;
     k = strstr(buf, "scale=");
     if (!k) return 0;                              /* armed and silent means Auto */
     if (!_strnicmp(k + 6, "auto", 4)) return 0;
@@ -97,36 +112,13 @@ int tagpu_hud_stored_pct(void)
     return (n >= 100 && n <= 800) ? n : 0;
 }
 
-/* BOTH FILES, always. tagpu_opt.c's precedence is that an `.on` wins and an
-   `.off` only defeats a pass that was on BY DEFAULT, so driving one file fails
-   in one direction or the other depending on how the install was armed — the
-   bug tagpu_menu.c's write_levers() documents at length.
-
-   The live word is set from the SAME call, so the row takes effect on the next
-   frame and the file is only how it survives a restart. Nothing here reaches
-   engine memory, so there is no game-entry ordering to respect: what the first
-   build needed the observer for was the viewport rect, and there is no longer
-   a viewport rect to write. */
+/* The live word is set from the SAME call, so the row takes effect on the
+   next frame and the store is only how it survives a restart. Nothing here
+   reaches engine memory, so there is no game-entry ordering to respect. */
 void tagpu_hud_store_pct(int pct)
 {
-    HANDLE h;
-    char body[64];
-    DWORD wrote = 0;
     InterlockedExchange(&s_pctLive, pct < 0 ? -1 : pct);
-    if (pct < 0) {
-        DeleteFileA(LEVER);
-        h = CreateFileA(LEVER_OFF, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
-        return;
-    }
-    DeleteFileA(LEVER_OFF);
-    if (pct == 0) lstrcpynA(body, "scale=auto\r\n", sizeof body);
-    else          _snprintf(body, sizeof body, "scale=%d\r\n", pct);
-    body[sizeof body - 1] = 0;
-    h = CreateFileA(LEVER, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) return;
-    WriteFile(h, body, (DWORD)strlen(body), &wrote, 0);
-    CloseHandle(h);
+    tagpu_settings_set(TS_HUDSCALE, pct < 0 ? -1 : pct);
 }
 
 /* ---- what the consumers ask ---------------------------------------------- */

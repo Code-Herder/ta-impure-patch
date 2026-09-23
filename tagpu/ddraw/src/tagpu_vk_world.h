@@ -9,7 +9,8 @@
    rect of the window.
 
    WHY IT IS NOT MERELY A QUALITY LEVER. Two of the lane's passes stand DOWN on
-   the shipped default without it. `ss` is 2 unless `tagpu_ss.off` is there,
+   the shipped default without it. `ss` is 2 unless the Supersampling row or
+   its lever says Off (tagpu_settings_ss),
    lines are drawn `ss` pixels wide, and with no ss target there is nowhere to
    put a 2-px line -- so tagpu_vk_fx.c and tagpu_vk_mark.c refuse the WHOLE
    pass on any frame carrying line vertices:
@@ -123,8 +124,8 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
    WHY THE CAPTURE READS THIS IMAGE. It is `gw*ss, gh*ss` and holds the world
    alone over a transparent clear, so a world A/B is the same size and the
    same content at every `ss`. The SWAPCHAIN image at the window's client rect
-   matches that only at `ss = 1` with no letterbox, and `ss` is 2 unless
-   `tagpu_ss.off` is there. */
+   matches that only at `ss = 1` with no letterbox, and `ss` is 2 unless the
+   Supersampling row or its lever says Off. */
 int  tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h,
                          VkFormat* fmt);
 
