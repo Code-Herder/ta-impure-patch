@@ -41,10 +41,15 @@
                      The viewport shows vw/z x vh/z world units centred where
                      the zoom-1 view is centred; the eye stays the zoom-1
                      top-left, as in the game. The WHEEL changes it live,
-                     x1.1 per notch like the game, landing exactly on 1.
-                     Both renderers zoom; only zoom 1 carries a parity claim
-                     (tagpu resamples differently at other zooms — no A/B
-                     has been done there)
+                     x1.1 per notch like the game, landing exactly on 1, and
+                     moves the eye by the camera rules below. Both renderers
+                     zoom; only zoom 1 carries a parity claim (tagpu
+                     resamples differently at other zooms — no A/B has been
+                     done there)
+       cam=<rules>   CAMERA: `game` (default) or `bar` — both rules below
+                     at once; naming one of them as well overrides it
+       clamp=<how>   CAMERA: `window` (game) or `centre` (bar)
+       zoomout=<how> CAMERA: `cursor` (game) or `centre` (bar)
        ss=<n>        supersample factor for the offscreen. DEFAULT 2, THE
                      GAME'S OWN: tagpu renders its native unit FBO at 2x and
                      box-downsamples (tagpu_native.c, `tagpu_ss.off` turns it
@@ -66,6 +71,14 @@
        pass=<list>   comma-separated passes: terrain,features,units
        feat=<what>   features: both (default), body, shadow — a debug split
        lane=<lane>   classic | classicpp (parity | explore still accepted)
+       edge=<what>   EDGE, both lanes: `black` (default, the game's) or
+                     `mirror`, with its knobs:
+       edgedim=<b>   brightness of the mirror at the map's edge, default 0.5
+       edgegrey=<g>  0 = the mirrored colour, 1 = the fog's grey; default 0.75
+       edgefade=<px> world px from the edge to black, default 1536
+       edgesteps=<n> bands of the fade, default 4; 0 = smooth, which the
+                     indexed colour cannot do and takes as 32 bands
+       edgedither=<b> ordered-dither across each band, default 1
        relief=<k>    EXPLORE: displacement scale. DEFAULT 0 — the art left
                      exactly where the engine paints it, lit by the real
                      gradient. 1 = the engine's own h/2, which MISREGISTERS
@@ -206,6 +219,39 @@
      Unit normals are dotted in map space (3DO z flipped), so unitsun and
      sun mean the same compass. sun=off turns all three off.
 
+     CAMERA: TWO RULES, THE GAME'S AND BAR'S (Beyond All Reason, on the Recoil
+     engine: its Spring and TA cameras agree on both). Global, because the
+     wipe shares one camera; toggled live in the status bar, which writes
+     them back into the address bar. Zooming IN holds the world point under
+     the pointer under both.
+       clamp=window  the game's range (tagpu_zoom.c zoom_eye_range): the
+                     engine's own [0, map - W] up to 1x — so zoomed out, the
+                     map's edge stops W/2 from the screen centre — widened
+                     above 1x to put the view's edge on the map's edge. It
+                     narrows as the zoom comes down, so a zoom-out at an
+                     edge walks the eye back in
+       clamp=centre  BAR's: the point at the screen centre is clamped to the
+                     map (Recoil Spring/OverheadController Update), so the
+                     edge can reach the middle of the screen at every zoom
+       zoomout=cursor  the game's: out holds the point under the pointer too
+       zoomout=centre  BAR's default (CamSpringZoomOutFromMousePos off, and
+                     the TA camera always): the camera pulls straight back
+     A pointer off the world viewport zooms about the centre. Drag and the
+     arrow keys move the world by the pointer's own distance at every zoom.
+
+     EDGE: WHAT IS PAST THE MAP. The game draws black. BAR's Map Edge Extension
+     widget draws the map mirrored past each edge, from the minimap texture,
+     at 30 % brightness, bending away and fading out. edge=mirror is that idea
+     in TA's own terms: the same tiles, texel for texel (a cell reflects
+     across every edge it is past, and its texels flip), in the fog of war's
+     grey — the engine's grey is (R+G+B)/3 then the nearest palette colour —
+     dimmed, and fading to black in whole bands that an ordered dither
+     crosses in world texels, so the pattern scales with the zoom like the
+     art's own. Indexed colour stays inside the palette: every band is a
+     256-entry remap to the nearest palette colour. Unlit, because mirrored art
+     is lit from wherever the reflection sent the painted light. Terrain only;
+     features and units stay on the map.
+
      THE COORDINATE CONVENTION IS TAGPU'S, DELIBERATELY. The extracted vertex
      shader maps game py 0 -> NDC -1, i.e. the offscreen's row 0 is the game
      frame's TOP row and gl_FragCoord.xy is the game-frame pixel — which is what
@@ -294,9 +340,30 @@ const ceil32 = (v) => { const q = div32trunc(v); return (v - q * 32) ? q + 1 : q
 // top-level query overridden by its own a= / b= query overridden by nothing —
 // which is what makes `?eye=X,Y&a=engine&b=relief` share the camera and differ
 // only in the look, i.e. the same pixel coordinates on both sides.
-const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug", "zoom"]);
+const GLOBAL = new Set(["shot", "ss", "eye", "wipe", "a", "b", "debug", "zoom",
+                        "cam", "clamp", "zoomout"]);
 const zoomClamp = (z) => (Number.isNaN(z) ? 1 : Math.max(0.25, Math.min(8, z)));
 let zoom = zoomClamp(parseFloat(Q.get("zoom") || "1"));
+
+// THE CAMERA RULES (header, CAMERA). Global, because the wipe shares one
+// camera. `cam` picks both rules at once; `clamp` and `zoomout` override it.
+const CAM_RULES = {
+  game: { clamp: "window", zoomout: "cursor" },
+  bar:  { clamp: "centre", zoomout: "centre" },
+};
+function camRule(key, allowed) {
+  const cam = Q.get("cam") || "game";
+  if (!(cam in CAM_RULES)) fail(`cam must be game or bar, not "${cam}"`);
+  let v = Q.get(key);
+  if (v === "center") v = "centre";
+  if (v === null) return CAM_RULES[cam][key];
+  if (!allowed.includes(v)) fail(`${key} must be ${allowed.join(" or ")}, not "${v}"`);
+  return v;
+}
+const CAMERA = {
+  clamp: camRule("clamp", ["window", "centre"]),
+  zoomout: camRule("zoomout", ["cursor", "centre"]),
+};
 const DEBUG = Q.get("debug") || "";      // "shadow": show side A's depth map
 // naming any of these IS choosing the exploration lane; saying lane=parity as
 // well is a contradiction and an error rather than a silent winner
@@ -469,6 +536,18 @@ function readLook(p, label) {
     })(),
     nk: p.get("nk") === null ? null : Math.max(1, num("nk", 1) | 0),
     restorediff: p.get("restorediff") === "1",
+    // past the map's edge (header, EDGE): black, as the game draws it, or the
+    // map mirrored across the edge in the fog's grey, dimmed and faded
+    edge: (() => {
+      const v = p.get("edge") || "black";
+      if (!["black", "mirror"].includes(v)) fail(`${label}: edge must be black or mirror`);
+      return v;
+    })(),
+    edgeDim: Math.min(1, Math.max(0, num("edgedim", 0.5))),
+    edgeGrey: Math.min(1, Math.max(0, num("edgegrey", 0.75))),
+    edgeFade: Math.max(32, num("edgefade", 1536)),
+    edgeSteps: Math.max(0, Math.min(32, num("edgesteps", 4) | 0)),
+    edgeDither: p.get("edgedither") !== "0",
     stats: {},
   };
 }
@@ -889,6 +968,64 @@ void main(){
   frag = vec4(rgb * lambert(vNrm, vWorld), 1.0);
 }`;
 
+// ---- past the map's edge: the mirror (header, EDGE) ------------------------
+// A cell off the map draws the tile of the cell it mirrors, texels flipped on
+// each axis the reflection crossed. It takes TA's own fog-of-war grey — the
+// engine's grey table is (R+G+B)/3 then the nearest palette colour (0x4BAD30,
+// exe-reverse-engineering.md), which TAGPU_GLSL_FOG_GREY_RGB reproduces as the
+// plain RGB mean — dimmed, and faded toward black with the distance from the
+// map in whole bands, ordered-dithered across each band in WORLD texels so the
+// pattern scales with the zoom the way the art's own dithering does. Unlit: the
+// art is painted lit from the north-west, and its mirror image is lit from
+// wherever the reflection sent that light, which no sun direction agrees with.
+const EDGE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aPos;    // game px, where the grid places the cell
+layout(location=1) in vec2 aUV;     // the mirrored cell's texels
+layout(location=2) in vec2 aWorld;  // the off-map grid point it stands on
+uniform vec2 uGame;
+uniform float uZoom; uniform vec2 uZoomC;
+out vec2 vUV; out vec2 vWorld;
+void main(){
+  vec2 p = (aPos - uZoomC) * uZoom + uZoomC;
+  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0, 0.0, 1.0);
+  vUV = aUV; vWorld = aWorld;
+}`;
+const EDGE_FS = `#version 300 es
+precision highp float;
+in vec2 vUV; in vec2 vWorld;
+out vec4 frag;
+uniform sampler2D uAtlas;    // R8 palette indices
+uniform sampler2D uRGB;      // restored colour, same layout
+uniform sampler2D uPal;
+uniform sampler2D uEdgeLUT;  // indexed: row l maps an index to its band-l grey
+uniform int uUndither;
+uniform vec2 uMapPx;         // the map's extent on the tile grid, px
+uniform vec4 uEdge;          // brightness at the edge, grey, fade px, bands
+uniform int uDither;
+const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
+                                  3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+void main(){
+  vec2 o = max(max(-vWorld, vWorld - uMapPx), vec2(0.0));
+  float t = clamp(length(o) / uEdge.z, 0.0, 1.0);
+  float S = uEdge.w, f = t * S;
+  if (uDither == 1) {
+    ivec2 q = ivec2(floor(vWorld)) & 3;
+    f += (BAYER[q.y * 4 + q.x] + 0.5) / 16.0;
+  }
+  float band = clamp(floor(f), 0.0, S);
+  if (uUndither == 1) {
+    vec3 c = texture(uRGB, vUV).rgb;
+    c = mix(c, vec3(dot(c, vec3(1.0/3.0))), uEdge.y);
+    float b = S > 0.0 ? 1.0 - band / S : 1.0 - t;
+    frag = vec4(c * uEdge.x * b, 1.0);
+  } else {
+    int i = int(texture(uAtlas, vUV).r * 255.0 + 0.5);
+    int j = int(texelFetch(uEdgeLUT, ivec2(i, int(band)), 0).r * 255.0 + 0.5);
+    frag = vec4(texelFetch(uPal, ivec2(j, 0), 0).rgb, 1.0);
+  }
+}`;
+
 // ---- the composite: FBO -> canvas, flipped, and the wipe --------------------
 // The offscreen holds the game frame with row 0 at the BOTTOM (see the header
 // comment). Canvas NDC +1 is the top, so the top of the canvas samples v = 0.
@@ -1216,6 +1353,56 @@ async function main() {
     // build_height): R8, one byte per 16-px cell, NEAREST, clamped
     tex2D(gl, 14, gl.R8, map.w16, map.h16, gl.RED, gl.UNSIGNED_BYTE, heightBuf);
     gl.activeTexture(gl.TEXTURE0);        // tex2D leaves its own unit selected
+  }
+
+  // ---- past the map's edge: the mirror, in both lanes (EDGE_VS/FS). Always
+  // compiled, because the status bar toggles it live. Same vertex layout as
+  // the parity terrain: x,y, u,v, wx,wz.
+  const edgeProg = program(gl, EDGE_VS, EDGE_FS, "edge");
+  const edgeVAO = gl.createVertexArray(), edgeVBO = gl.createBuffer();
+  gl.bindVertexArray(edgeVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, edgeVBO);
+  for (let i = 0; i < 3; i++) {
+    gl.enableVertexAttribArray(i);
+    gl.vertexAttribPointer(i, 2, gl.FLOAT, false, TVST * 4, i * 8);
+  }
+  gl.bindVertexArray(null);
+  const EU = uniforms(gl, edgeProg, ["uGame", "uZoom", "uZoomC", "uAtlas", "uRGB", "uPal",
+                                     "uEdgeLUT", "uUndither", "uMapPx", "uEdge", "uDither"]);
+  // The indexed mirror's colours, one row per band, so it stays inside the 256
+  // colours the art is painted in: the engine's grey, (R+G+B)/3 in integers,
+  // mixed back toward the colour by 1 - grey, scaled by the band's brightness,
+  // then the nearest palette colour by squared RGB distance. The engine's own
+  // search (0x4BA9D0) prefilters to a +-0x28 band on R+G+B first; this one
+  // searches all 256, so an index can differ where the two nearests disagree.
+  const edgeLUTs = new Map();
+  function edgeLUT(L) {
+    const S = L.edgeSteps || 32;
+    const key = `${L.edgeDim},${L.edgeGrey},${S}`;
+    let t = edgeLUTs.get(key);
+    if (t) return t;
+    const lut = new Uint8Array(256 * (S + 1));
+    for (let l = 0; l <= S; l++) {
+      const b = L.edgeDim * (1 - l / S);
+      for (let i = 0; i < 256; i++) {
+        const r = palBuf[i * 4], g = palBuf[i * 4 + 1], bl = palBuf[i * 4 + 2];
+        const m = Math.floor((r + g + bl) / 3);
+        const tr = (r + (m - r) * L.edgeGrey) * b;
+        const tg = (g + (m - g) * L.edgeGrey) * b;
+        const tb = (bl + (m - bl) * L.edgeGrey) * b;
+        let best = 0, bd = Infinity;
+        for (let k = 0; k < 256; k++) {
+          const dr = palBuf[k * 4] - tr, dg = palBuf[k * 4 + 1] - tg, db = palBuf[k * 4 + 2] - tb;
+          const d = dr * dr + dg * dg + db * db;
+          if (d < bd) { bd = d; best = k; }
+        }
+        lut[l * 256 + i] = best;
+      }
+    }
+    t = tex2D(gl, 15, gl.R8, 256, S + 1, gl.RED, gl.UNSIGNED_BYTE, lut);
+    gl.activeTexture(gl.TEXTURE0);
+    edgeLUTs.set(key, t);
+    return t;
   }
 
   // ---- feature (sprite) pass — tagpu_feat.c's shaders and vertex format, plus
@@ -1743,6 +1930,89 @@ async function main() {
     return n;
   }
 
+  // The mirror: the parity grid's own sweep over the zoomed window, keeping
+  // only the cells OFF the map. Each reflects across every edge it is past — a
+  // triangle wave, so a view wider than the map still lands on real tiles, and
+  // a cell two maps out is the map again the right way round.
+  let edgeVerts = new Float32Array(1);
+  const reflect = (m, n) => {
+    const p = ((m % (2 * n)) + 2 * n) % (2 * n);
+    return p < n ? [p, false] : [2 * n - 1 - p, true];
+  };
+  function buildEdge() {
+    const stride = map.tilemap.w, mrows = map.tilemap.h;
+    const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
+    const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
+    const cols = ceil32(W[0] + fx), rows = ceil32(W[1] + fy);
+    const need = cols * rows * 6 * TVST;
+    if (edgeVerts.length < need) edgeVerts = new Float32Array(need);
+    const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
+    let n = 0;
+    const put = (x, y, u, v, wx, wz) => {
+      const o = n * TVST;
+      edgeVerts[o] = x; edgeVerts[o + 1] = y; edgeVerts[o + 2] = u;
+      edgeVerts[o + 3] = v; edgeVerts[o + 4] = wx; edgeVerts[o + 5] = wz; n++;
+    };
+    for (let r = 0; r < rows; r++) {
+      const my = ty0 + r, [sy, flipY] = reflect(my, mrows);
+      for (let c = 0; c < cols; c++) {
+        const mx = tx0 + c;
+        if (mx >= 0 && mx < stride && my >= 0 && my < mrows) continue;
+        const [sx, flipX] = reflect(mx, stride);
+        const idx = tilemap[sy * stride + sx];
+        if (idx >= map.atlas.tiles) continue;
+        const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
+        const tu = cx * PITCH + BORDER, tv = cy * PITCH + BORDER;
+        // swapping a quad's two u (or v) flips its texels exactly: a pixel
+        // centre at i + 0.5 samples texel 31 - i, never the guard column
+        let u0 = tu * iw, u1 = (tu + TILE_PX) * iw;
+        let v0 = tv * ih, v1 = (tv + TILE_PX) * ih;
+        if (flipX) [u0, u1] = [u1, u0];
+        if (flipY) [v0, v1] = [v1, v0];
+        const x0 = vpL + c * 32 - fx, y0 = vpT + r * 32 - fy;
+        const wx0 = mx * 32, wz0 = my * 32;
+        put(x0,      y0,      u0, v0, wx0,      wz0);
+        put(x0 + 32, y0,      u1, v0, wx0 + 32, wz0);
+        put(x0,      y0 + 32, u0, v1, wx0,      wz0 + 32);
+        put(x0 + 32, y0,      u1, v0, wx0 + 32, wz0);
+        put(x0 + 32, y0 + 32, u1, v1, wx0 + 32, wz0 + 32);
+        put(x0,      y0 + 32, u0, v1, wx0,      wz0 + 32);
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, edgeVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, edgeVerts.subarray(0, n * TVST), gl.DYNAMIC_DRAW);
+    return n;
+  }
+  // Drawn first, under everything, with no depth: off the map there is nothing
+  // for it to sort against, and relief rising over the top edge covers it.
+  function drawEdge(L) {
+    const n = buildEdge();
+    L.stats.mirror = n / 6;
+    if (!n) return;
+    const rgb = L.undither;
+    gl.useProgram(edgeProg);
+    gl.uniform2f(EU.uGame, GW, GH);
+    gl.uniform1f(EU.uZoom, zoom); gl.uniform2f(EU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
+    gl.uniform1i(EU.uAtlas, 0); gl.uniform1i(EU.uRGB, 8); gl.uniform1i(EU.uPal, 1);
+    // built BEFORE the unit is selected: a first build uploads through tex2D,
+    // which leaves unit 0 selected, and the bind would then land on the atlas
+    const lut = edgeLUT(L);
+    gl.activeTexture(gl.TEXTURE15); gl.bindTexture(gl.TEXTURE_2D, lut);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(EU.uEdgeLUT, 15);
+    gl.uniform1i(EU.uUndither, rgb ? 1 : 0);
+    gl.uniform2f(EU.uMapPx, map.tilemap.w * 32, map.tilemap.h * 32);
+    // the indexed lane has no smooth fade: its bands are LUT rows, 32 of them
+    gl.uniform4f(EU.uEdge, L.edgeDim, L.edgeGrey, L.edgeFade,
+                 rgb ? L.edgeSteps : (L.edgeSteps || 32));
+    gl.uniform1i(EU.uDither, L.edgeDither ? 1 : 0);
+    gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
+    gl.bindVertexArray(edgeVAO);
+    gl.drawArrays(gl.TRIANGLES, 0, n);
+    gl.bindVertexArray(null);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(true);
+  }
+
   // tagpu_feat.c's gather: the engine's own sweep rect, its projection with
   // +128/+32 baked in, and the depth keys the painter's order implies.
   // Shadows and bodies go to separate buckets because the shadow is drawn with
@@ -2192,6 +2462,8 @@ async function main() {
     gl.depthMask(true);
     gl.disable(gl.BLEND);
 
+    L.stats.mirror = undefined;
+    if (L.terrain && L.edge === "mirror") drawEdge(L);
     if (L.terrain) {
       if (L.lane === "explore") {
         gl.useProgram(ltProg);
@@ -2268,6 +2540,23 @@ async function main() {
     if (!SHOT) report();
   }
 
+  // The camera rules and the edge, live: Game and BAR set all three at once;
+  // each pair toggles one. The edge is per look, so these set it on every side.
+  function cameraRow() {
+    const edge = sides.every((L) => L.edge === "mirror") ? "mirror"
+               : sides.every((L) => L.edge === "black") ? "black" : "";
+    const is = (c, z, e) => CAMERA.clamp === c && CAMERA.zoomout === z && edge === e;
+    const knob = (k, v, cur) =>
+      `<button data-knob="${k}" data-val="${v}" class="${cur === v ? "on" : ""}">${v}</button>`;
+    return `<div class="row modes"><span>camera</span>` +
+      `<button data-cam="game" class="${is("window", "cursor", "black") ? "on" : ""}">Game</button>` +
+      `<button data-cam="bar" class="${is("centre", "centre", "mirror") ? "on" : ""}">BAR</button>` +
+      `<span>clamp</span>${knob("clamp", "window", CAMERA.clamp)}${knob("clamp", "centre", CAMERA.clamp)}` +
+      `<span>zoom out</span>${knob("zoomout", "cursor", CAMERA.zoomout)}${knob("zoomout", "centre", CAMERA.zoomout)}` +
+      `<span>edge</span>${knob("edge", "black", edge)}${knob("edge", "mirror", edge)}` +
+      `</div>`;
+  }
+
   function report() {
     const s0 = sides[0].stats, on = new Set(sides.map((L) => L.lane));
     const rows = [
@@ -2275,6 +2564,7 @@ async function main() {
       `<button data-mode="parity" class="${on.has("parity") ? "on" : ""}">Classic</button>` +
       `<button data-mode="explore" class="${on.has("explore") ? "on" : ""}">Classic++</button>` +
       `</div>`,
+      cameraRow(),
       `<div class="row"><b>${map.name}</b> <span>${map.w16}x${map.h16} cells</span>` +
       `<span>eye</span><b>${eye[0]},${eye[1]}</b>` +
       `<span>grid</span><b>${s0.cols}x${s0.rows}</b>` +
@@ -2329,6 +2619,7 @@ async function main() {
           : "") +
         `<span>cells</span><b>${st.cells}</b>` +
         `<span>off-map</span><b>${st.skipped}</b>` +
+        (st.mirror !== undefined ? `<span>mirrored</span><b>${st.mirror}</b>` : "") +
         (st.feat !== undefined ? `<span>features</span><b>${st.feat}</b>` : "") +
         (st.units !== undefined ? `<span>unit tris</span><b>${st.units}</b>` : "") +
         `</div>`);
@@ -2343,6 +2634,24 @@ async function main() {
     // on screen keeps its side's own parameters; a new one comes in at its
     // defaults; the live eye, ss, debug and the wipe position carry over.
     bar.addEventListener("click", (e) => {
+      const set = e.target.closest("button[data-cam], button[data-knob]");
+      if (set) {
+        const want = set.dataset.cam
+          ? { game: { clamp: "window", zoomout: "cursor", edge: "black" },
+              bar:  { clamp: "centre", zoomout: "centre", edge: "mirror" } }[set.dataset.cam]
+          : { [set.dataset.knob]: set.dataset.val };
+        if (want.clamp) CAMERA.clamp = want.clamp;
+        if (want.zoomout) CAMERA.zoomout = want.zoomout;
+        if (want.edge) for (const L of sides) {
+          L.edge = want.edge;
+          const q = new URLSearchParams(L.query);
+          if (want.edge === "black") q.delete("edge"); else q.set("edge", want.edge);
+          L.query = q.toString();
+        }
+        writeCameraQuery(want.edge);
+        clamp(); draw();
+        return;
+      }
       const btn = e.target.closest("button[data-mode]");
       if (!btn) return;
       const want = new Set(sides.map((L) => L.lane)), mode = btn.dataset.mode;
@@ -2356,6 +2665,7 @@ async function main() {
       for (const k of ["ss", "debug"]) if (Q.get(k) !== null) q.set(k, Q.get(k));
       q.set("eye", `${eye[0]},${eye[1]}`);
       if (zoom !== 1) q.set("zoom", String(zoom));
+      cameraQuery(q);
       const modes = ["parity", "explore"].filter((m) => want.has(m));
       if (modes.length === 1) {
         for (const [k, v] of new URLSearchParams(own(modes[0]))) q.set(k, v);
@@ -2365,28 +2675,84 @@ async function main() {
       }
       location.search = "?" + q.toString();
     });
-    // keep the ZOOMED view on the map: E >= 0 and E + W <= the map, in eye terms
+    // THE CAMERA (header, CAMERA). `cam` is the eye in floats — the game keeps
+    // an integer eye and carries the remainder, which is the same thing — and
+    // `eye` its rounding, which is all the builders ever see.
+    const cam = eye.slice();
+    const mapW = map.w16 * 16, mapH = map.h16 * 16;
+    // The range the eye may take at the current zoom, [loX, hiX, loY, hiY].
+    //   window: the game's (tagpu_zoom.c zoom_eye_range) — the engine's own
+    //     [0, map - W] up to 1x, widened above 1x by d = (W/2)(1 - 1/z), which
+    //     puts the zoomed view's edge exactly on the map's. It narrows as the
+    //     zoom comes back down, so a zoom-out at an edge walks the eye home.
+    //   centre: BAR's (Recoil SpringController / OverheadController Update) —
+    //     the ground point at the screen centre is clamped to the map, so the
+    //     map's edge can reach the middle of the screen at every zoom.
+    const range = () => {
+      if (CAMERA.clamp === "centre")
+        return [-vw / 2, mapW - vw / 2, -vh / 2, mapH - vh / 2];
+      const dx = zoom > 1 ? Math.round(vw / 2 * (1 - 1 / zoom)) : 0;
+      const dy = zoom > 1 ? Math.round(vh / 2 * (1 - 1 / zoom)) : 0;
+      const loX = -dx, loY = -dy;
+      return [loX, Math.max(loX, mapW - vw + dx), loY, Math.max(loY, mapH - vh + dy)];
+    };
     const clamp = () => {
-      const mx = (vw - vw / zoom) / 2, my = (vh - vh / zoom) / 2;
-      const maxX = map.w16 * 16 - vw + mx, maxY = map.h16 * 16 - vh + my;
-      eye[0] = Math.round(Math.max(-mx, Math.min(eye[0], maxX)));
-      eye[1] = Math.round(Math.max(-my, Math.min(eye[1], maxY)));
+      const [loX, hiX, loY, hiY] = range();
+      cam[0] = Math.max(loX, Math.min(cam[0], hiX));
+      cam[1] = Math.max(loY, Math.min(cam[1], hiY));
+      eye[0] = Math.round(cam[0]); eye[1] = Math.round(cam[1]);
+    };
+    // the camera rules and the edge, written back into the address bar so the
+    // look stays a link; `cam` names the pair when it is one of the two
+    const cameraQuery = (q) => {
+      q.delete("cam"); q.delete("clamp"); q.delete("zoomout");
+      const name = Object.keys(CAM_RULES).find((k) =>
+        CAM_RULES[k].clamp === CAMERA.clamp && CAM_RULES[k].zoomout === CAMERA.zoomout);
+      if (name === "bar") q.set("cam", "bar");
+      else if (!name) { q.set("clamp", CAMERA.clamp); q.set("zoomout", CAMERA.zoomout); }
+    };
+    const writeCameraQuery = (edge) => {
+      const q = new URLSearchParams(location.search);
+      cameraQuery(q);
+      if (edge === "black") q.delete("edge"); else if (edge) q.set("edge", edge);
+      history.replaceState(null, "", "?" + q.toString());
+    };
+    // the game-space point under the pointer: the canvas is the game frame 1:1
+    const gamePoint = (e) => {
+      const r = cv.getBoundingClientRect();
+      return [(e.clientX - r.left) / r.width * GW, (e.clientY - r.top) / r.height * GH];
     };
     // tagpu_zoom.c's wheel: geometric, 1.1 per notch, 0.25..8, and land
     // exactly on 1 when the notches cancel (1x is what the parity claim
-    // tests by equality). No easing here — a lab wants the level it asked for
+    // tests by equality). No easing here — a lab wants the level it asked for.
+    // Zooming IN holds the world point under the pointer, as both the game and
+    // BAR do: the view is a similarity about the viewport centre c, so the eye
+    // moves by d = (a - c)(1/z_was - 1/z_now). Zooming OUT does the same under
+    // zoomout=cursor (the game) and holds the centre under zoomout=centre (BAR's
+    // default: the camera pulls straight back). A pointer off the world
+    // viewport has no world point, so the step is about the centre there.
     cv.addEventListener("wheel", (e) => {
       e.preventDefault();
       let z = zoomClamp(zoom * Math.pow(1.1, -e.deltaY / 100));
       if (z > 0.999 && z < 1.001) z = 1;
+      if (z === zoom) return;
+      const [ax, ay] = gamePoint(e);
+      const inView = ax >= vpL && ax < vpL + vw && ay >= vpT && ay < vpT + vh;
+      if (inView && (z > zoom || CAMERA.zoomout === "cursor")) {
+        const k = 1 / zoom - 1 / z;
+        cam[0] += (ax - vpL - vw / 2) * k;
+        cam[1] += (ay - vpT - vh / 2) * k;
+      }
       zoom = z; clamp(); draw();
     }, { passive: false });
+    // a scroll step is world px, so it is divided by the zoom: the SCREEN moves
+    // at the same rate at every zoom (the game scales ScrollSpeed by 1/z)
     addEventListener("keydown", (e) => {
-      const step = e.shiftKey ? 256 : 32;
-      if (e.key === "ArrowLeft")  eye[0] -= step;
-      else if (e.key === "ArrowRight") eye[0] += step;
-      else if (e.key === "ArrowUp")    eye[1] -= step;
-      else if (e.key === "ArrowDown")  eye[1] += step;
+      const step = (e.shiftKey ? 256 : 32) / zoom;
+      if (e.key === "ArrowLeft")  cam[0] -= step;
+      else if (e.key === "ArrowRight") cam[0] += step;
+      else if (e.key === "ArrowUp")    cam[1] -= step;
+      else if (e.key === "ArrowDown")  cam[1] += step;
       else return;
       e.preventDefault(); clamp(); draw();
     });
@@ -2397,7 +2763,7 @@ async function main() {
     let drag = null;
     cv.addEventListener("pointerdown", (e) => {
       if (sides.length > 1 && Math.abs(canvasX(e) - wipe) * GW < 8) drag = { wipe: true };
-      else drag = { x: e.clientX, y: e.clientY, ex: eye[0], ey: eye[1] };
+      else drag = { x: e.clientX, y: e.clientY, cx: cam[0], cy: cam[1] };
       cv.setPointerCapture(e.pointerId);
     });
     cv.addEventListener("pointermove", (e) => {
@@ -2408,10 +2774,11 @@ async function main() {
       }
       if (drag.wipe) wipe = Math.min(1, Math.max(0, canvasX(e)));
       else {
-        // pointer deltas are CSS px; one canvas px is k/dpr of those
-        const s = GW / cv.getBoundingClientRect().width;
-        eye[0] = drag.ex - Math.round((e.clientX - drag.x) * s);
-        eye[1] = drag.ey - Math.round((e.clientY - drag.y) * s);
+        // pointer deltas are CSS px; one canvas px is k/dpr of those, and one
+        // world px is `zoom` canvas px — so the ground stays under the pointer
+        const s = GW / cv.getBoundingClientRect().width / zoom;
+        cam[0] = drag.cx - (e.clientX - drag.x) * s;
+        cam[1] = drag.cy - (e.clientY - drag.y) * s;
         clamp();
       }
       draw();
