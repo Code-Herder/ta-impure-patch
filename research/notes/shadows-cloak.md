@@ -150,6 +150,12 @@ Resolved from the command table at `.data 0x501D44` (records
 | 2 | 0x0004 | **Shadow** | `0x416550` | `0x459295` — master gate of the whole unit-shadow section |
 | 3 | 0x0008 | **TShadow** | `0x416630` | `0x459324` — required for the completed-unit (translucent) shadow |
 | 4 | 0x0010 | **FShadow** | `0x416660` | `0x46A6ED` — feature shadows |
+
+**Bits 2, 3 and 4 are ONE control from the player's side** [MEASURED 2026-09-22]. TA's own
+Options → Visuals has a single `Shadows` checkbox and it moves all three: the word goes
+`0x000C003F` → `0x000C0023` when it is cleared and back when it is set. So the three gates below
+can never disagree in a game; reproducing the engine's branch (bit2 for everything, bit3 also for
+the completed-unit silhouette) and honouring the player's toggle are the same thing.
 | 5 | 0x0020 | **Shading** | `0x416420` | `0x45874A` — builder picks the shaded/nanoframe rasteriser `0x459C70` |
 | 6 | 0x0040 | Dither | `0x416590` | terrain |
 | 8 | 0x0100 | SwitchAlt | `0x4165C0` | — |
@@ -466,6 +472,14 @@ failed to coincide.
    `0x45958C`, `0x4594DB`), so the guarantee is an instruction rather than an
    inheritance: `exe-reverse-engineering.md` §"The completed-unit shadow's three
    emit sites", `tagpu_owndraw.c`, and `gpu-status.md` §2.1.]
+   **AND ON THE SHIPPED LANE THIS IS `tagpu_vk_unit.c`'s, not a GL pass's** [2026-09-22]. The
+   GL twin described above is deleted; the same stencil pair, the same 5-px shift, the same
+   `(gy - ay)` ground shift and the same 50 % blend are two Vulkan pipelines recorded before the
+   bodies, fed by `TAGPU_PDUREC.shKind`. The mask is measurable in the same way and gives the
+   same answer: the darkening is a single mode at **median 0.509** of the bare terrain, where an
+   unmasked version is bimodal. There was NO unit or structure shadow at all between landing
+   11-2 and then — `gpu-status.md` §2.83 has the whole measurement and the gap's history.
+
    The `0x20000000`-path shadow (structures: the cached slant projection at
    `Object3do+0x14`, built from the posed prims) and the `FShadow` feature
    shadow of a 3D wreck survive the wipe and keep drawing — the native pass

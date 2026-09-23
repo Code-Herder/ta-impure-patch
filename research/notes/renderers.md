@@ -779,8 +779,8 @@ player's install, so nothing is regenerated when it changes).*
 | 34 | **Renderer Style** | Classic \| Classic++ \| Custom | sets every row below it |
 | 62 | **Undithered assets** | Off \| On | `assets=` — done, G18a |
 | 90 | **Dynamic lighting** | Off \| On | `light=` — done, G18a |
-| 118 | **Shadows** | Off \| Hard \| Soft | `shadows=` — done, G18b |
-| 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=`, live only at Soft |
+| 118 | **Shadows** | Off \| Hard | `shadows=` — G18b; **Soft was the third stage and was dropped 2026-09-22**, because the soft map has no producer and the stage was Off under another name ([GPU status](gpu-status.html) §2.83). Hard is the Classic++ preset |
+| 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=` — it sizes the soft map and nothing else, so with no soft map the row is **greyed unconditionally**. It is kept rather than removed: one line un-greys it the day the map's producer is written |
 | 174 | **Supersampling** | Off \| 2× | `tagpu_ss.off` |
 | 202 | **FPS counter** | Off \| On | `tagpu_fps.on` — the readout, [GPU status](gpu-status.html) §2.14 |
 
@@ -926,9 +926,10 @@ just not player-facing options.
 **State is still the trigger files and the cfg** (unchanged from the original decision):
 on/off is a file the screen creates and deletes, polled per frame; numbers are `key=value`
 in `gamedir/tagpu_classicpp.cfg`, re-read on mtime change, keyed like the lab's URL
-parameters. The shadow keys are §2.12's, and the depth map still runs only when
-`shadows=1` **and** the engine's own Shadow option bit is set (`main+0x37F06` bit 2;
-`tagpu_shadow.c:359` reads it) — the player's in-game Shadows toggle keeps its meaning.
+parameters. The shadow keys are §2.12's. **The depth map is gone with `tagpu_shadow.c`** and
+`shadows=1` draws nothing; what `shadows=2` draws is Classic's own pair, and it is gated on the
+engine's `main+0x37F06` bit2 exactly as the depth map was — the player's in-game Shadows toggle
+keeps its meaning either way ([GPU status](gpu-status.html) §2.83).
 
 **How it is assembled** [DECIDED 2026-09-09, with the owner]. The governing rule the owner set
 is **use TA's gadget/UI mechanism as much as possible**, and every choice below was taken under it.
@@ -1055,7 +1056,14 @@ seconds with the panel open and **2147 → 2147** with TA's own `ARMOPT` open, w
 non-modal claim measured rather than asserted; every row reports the engine's own `stage N →
 M` confirmation and the cfg on disk follows; `Shadow quality` greys at `Shadows ≠ Soft` and
 the engine then **refuses the click**; and the sprocket opens and closes the menu while a
-click at (500,400) does neither.
+click at (500,400) does neither. *(`Shadow quality` is greyed unconditionally since 2026-09-22 —
+the same refusal, for a reason that no longer depends on the Shadows stage.)*
+
+**Re-measured 2026-09-22, the Shadows row end to end.** Opened over a live game with
+`tagpu_menu.open`, the row reads `on` (Hard) with no cfg on disk; one click writes `shadows=0`
+and the viewport changes by **5 016 px** of 630 784 within the poll; a second writes `shadows=2`
+and changes it back by **5 004 px**, to a frame **23 px** from the one before the pair — which is
+the fixture's own noise floor between two grabs. No relaunch, both stages visibly distinct.
 
 **Still open after the spike.** The panel is torn down and re-pushed on every world click, so
 a click costs one frame of the panel being rebuilt — cheap, but visible if you look for it,

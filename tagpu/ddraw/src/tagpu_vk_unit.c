@@ -87,14 +87,28 @@
       share. The capture takes TAGPU_ABSHOT_TOPDOWN now. VK_KHR_maintenance1 was
       needed only for the negative height, so this pass no longer requires it.
 
+   5. THE CLASSIC HARD SHADOW, AND WHY IT IS TWO PIPELINES [2026-09-22]. The
+      body range is not the only one drawn here any more: a third record stage,
+      before the bodies, draws the Classic SILHOUETTE (the body range again,
+      shifted) and the structure SLANT (the bake's own slant range) out of
+      `TAGPU_PDUREC.shKind`. Both are one 50% blend PER PIXEL rather than per
+      surface, which needs a stencil mask and therefore two pipelines and a
+      stencil plane in the target -- `build_shadow_pipelines` is the whole
+      argument. Nothing about the shadow is DECIDED here: the engine's option
+      word, the unit-type bits and the Classic++ `shadows=` key are engine and
+      lever state, and this file may read neither (see the last paragraph).
+
    ---- WHAT IT DOES NOT DO ----
 
-   THE BODY RANGE ONLY. The nanoframe WIRE (`uRange` 2, GL_LINES), the Classic
-   SILHOUETTE and the structure SLANT are the same program and the same bake
-   and are not ported here; the hand-over counts any of them that drew inside
-   the published window and the pass stands down. On a Classic++ soft-shadow
-   frame -- which is the configuration the shadow work is measured in --
-   tagpu_native.c draws none of them.
+   THE NANOFRAME WIRE IS NOT PORTED. `uRange` 2, GL_LINES, the same program and
+   the same bake; a unit under construction has no wireframe on this lane. The
+   hand-over counts any draw the published window does not carry and the pass
+   stands down on a non-zero count.
+
+   AND NO PASS HERE DRAWS THE SOFT SHADOW. `tagpu_vk_shadow.c`'s map has had no
+   producer since the GL backend went, so `uShadowOn` is 0 on every frame and
+   the cast-shadow half of this file's fragment stage is unreachable; the pair
+   above is what `shadows=` means today.
 
    CLASSIC++'s RESTORED ATLAS IS DRAWN SINCE GATE 3 of the Vulkan-only plan, so
    a frame whose twin reports `uRestored` 1 is DRAWN, through the twin's own
@@ -2550,6 +2564,14 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         w->shKind = s_shOk ? r->shKind : TAGPU_PDSH_NONE;
         w->shFirst = (uint32_t)r->shFirst;
         w->shCount = (uint32_t)r->shCount;
+        /* AND THE RANGE IS BOUNDED AGAINST THE BUFFER THIS DRAW READS, which
+           was sized from `r->nvert` a few lines up. The body range is trusted
+           because the bake lays both down together; this one is checked because
+           it is a SECOND range out of the same buffer and the two arrive from
+           different fields, so a mismatch would read past the allocation rather
+           than draw the wrong triangles. Costs two compares a unit. */
+        if (r->shFirst < 0 || r->shCount < 0 ||
+            r->shFirst + r->shCount > r->nvert) w->shKind = TAGPU_PDSH_NONE;
         if (w->shCount == 0) w->shKind = TAGPU_PDSH_NONE;
         if (w->shKind == TAGPU_PDSH_SLANT)    s_nslant++;
         else if (w->shKind == TAGPU_PDSH_SIL) s_nsil++;

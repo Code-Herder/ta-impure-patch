@@ -210,15 +210,19 @@ void tagpu_posedraw_end(void);
                                   review, which was right that "PORTED" is the
                                   sentence most likely to stop the next session
                                   looking.
-     the other eight              NOT PORTED. `tagpu_vk_unit.c` draws the BODY
-                                  range only, and says so under "WHAT IT DOES
-                                  NOT DO" (:90): the wire, the silhouette and
-                                  the slant are the same program and the same
-                                  bake, and this lane does not draw them. The
-                                  hand-over counts any of them that drew inside
-                                  the published window and the pass stands
-                                  down; on a Classic++ soft-shadow frame none
-                                  of them draws at all.
+     _shadow_* and _slant_*       PORTED 2026-09-22, and not by restoring these
+                                  entry points. `TAGPU_PDUREC.shKind` carries
+                                  which of the engine's two shadow branches a
+                                  unit takes and `shFirst`/`shCount` the range
+                                  it draws, and tagpu_vk_unit.c records them as
+                                  a stage of its own, stencil-masked, before the
+                                  bodies. The stencil dance the six GL entry
+                                  points existed to express is two pipelines
+                                  there.
+     _wire_begin / _wire_unit     NOT PORTED. The nanoframe wireframe is the
+                                  same program and the same bake (`uRange` 2,
+                                  GL_LINES) and this lane does not draw it, so
+                                  a unit under construction has no wire.
 
    SO THIS IS A TOMBSTONE, NOT A MIGRATION, for all ten. The gap is the Vulkan
    unit pass's, not this header's — whoever closes it ports the ranges into
@@ -313,10 +317,13 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
    comparison.
 
    IT DOES NOT COUNT THE REST OF THE FRAME, and that is not an oversight. The
-   nanoframe wire, the Classic silhouette, the slant, the replacement meshes
-   and the native 3DO stream all draw OUTSIDE this window. THREE OF THOSE FIVE
-   NO LONGER DRAW AT ALL -- the wire, the silhouette and the slant, per the
-   tombstone above -- which makes the term narrower still rather than wrong.
+   nanoframe wire, the replacement meshes and the native 3DO stream all draw
+   OUTSIDE this window, and none of the three draws at all any more. THE
+   SILHOUETTE AND THE SLANT ARE INSIDE IT SINCE 2026-09-22: they are drawn from
+   the very records this hand-over carries, out of the same bake, by the same
+   consumer -- so a unit the hand-over drops loses its shadow with its body
+   rather than leaving a shadow behind, which is what makes the refusal still
+   whole.
    And the one place where the rest of the frame really does make a wrong
    picture rather than a partial one is the cast-shadow MAP, whose census in
    tagpu_shadow.h's `otherCasters` CANNOT CURRENTLY FIRE: see the depth twin's

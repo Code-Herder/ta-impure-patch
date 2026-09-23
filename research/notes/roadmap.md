@@ -3460,13 +3460,16 @@ delivered as one, and a comparison that needs them paired checks `stamp` ([GPU
 status](gpu-status.html) §2.82). **The same continuous probe at the new site is 0 of 21 669 reads
 torn**, across two levels and a teardown. `tagpu_surfdump.on` is the
 oracle. **The shell has no golden source** — it never calls `DrawGameScreen` — and `tacli shot` is
-the answer there. Also open: no structure draws its slant shadow on this lane — landing 11-2 took
-the draw with the GL tail, which is older than the cut and true on `main`; and the UI op
+the answer there. **The Classic hard shadow is CLOSED, 2026-09-22**: no unit and no structure had drawn one since
+landing 11-2 took the draw with the GL tail — older than the cut and true on `main` — and
+`tagpu_vk_unit.c` draws both again, stencil-masked, out of the bake's BODY and SLANT ranges, with
+`shadows=` defaulting to HARD and the render-options row reduced to `Off|Hard`. [GPU
+status](gpu-status.html) §2.83. Also open: the UI op
 PUBLISHER is unreachable (`g_gui_draw` has no writer), so `tagpu_gui.on` buys the leaves and the
-census and nothing else. And the shadow half is still escalation
-reason 1, and now known to be more than a preference — `tagpu_shadow_begin` has no caller
-anywhere in the tree, so that pass is already dead and the question is whether the two files are
-scaffolding for a Vulkan-side producer or debris. See the plan's
+census and nothing else. And the SOFT shadow half is still escalation
+reason 1 — `tagpu_shadow.c` is deleted, so `tagpu_vk_shadow.c` has had no hand-over since, and
+reviving the map means writing that producer (the light basis, the map extent, the heightfield
+caster mesh) rather than re-arming anything. See the plan's
 item 11 for the parts; 11-1 is the D3D9 renderer, the one member of the deletion set with no
 producer half, and **11-2 is the OpenGL lane itself** — moved in front of the sixteen passes'
 GL draw halves rather than behind them, because lane-last leaves `renderer=openglcore`
