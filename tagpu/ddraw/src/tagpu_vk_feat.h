@@ -2,8 +2,9 @@
 #define TAGPU_VK_FEAT_H
 /* The feature pass -- trees, rocks, metal patches, splats and GAF wreckage --
    drawn by Vulkan (the second world pass). Implementation:
-   tagpu_vk_feat.c. The GL edition is tagpu_feat.c and stays the source of the
-   vertices, the uniforms, the texels and the shader.
+   tagpu_vk_feat.c. Its producer is tagpu_feat.c, the gather that publishes
+   the vertices, the uniforms and the texels, and the file whose GLSL
+   tools/spirv-gen.py compiles into this pass's shader.
 
    THE TWO-PHASE CONTRACT is tagpu_vk_scaffold.h's, for the same reason: a
    texture upload is a transfer and a transfer may not be recorded inside a
@@ -35,9 +36,8 @@ void tagpu_vk_feat_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 /* 1 on the ONE frame `tagpu_feat.ab` latched its claim and `tagpu_vk_ab_arm`
    got the `_vk.ppm` target unlinked -- so the seam captures THAT frame rather
    than whichever one its own lever poll landed on. It does NOT mean a file was
-   written: there is no GL half, and the capture the seam then records is this
-   lane's own. Consumed by the call. Valid after
-   `prepare`. */
+   written: the capture the seam then records is this lane's own. Consumed by
+   the call. Valid after `prepare`. */
 int  tagpu_vk_feat_ab_frame(void);
 
 /* Give everything back. Called by the seam from `vk_down`, after its

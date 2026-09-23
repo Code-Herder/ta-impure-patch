@@ -9,5 +9,4 @@ void tagpu_featown_init(void);
 void tagpu_featown_flush(unsigned int frame_counter);
 void tagpu_featown_set_skip(int on);
 void tagpu_featown_beat(unsigned int frame_counter);   /* "we drew this frame" */
-int  tagpu_featown_installed(void);
 #endif

@@ -45,13 +45,13 @@
 #include "tagpu_detour.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_gaf.h"
-#include "tagpu_terrown.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_packet_pub.h"
 #include "../inc/tagpu_engine.h"
 #include "../inc/dd.h"
 #include "../inc/tagpu.h"
 #include "tagpu_trigger.h"
+#include "tagpu_log.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define OFF_GUI_TOP   0x531           /* GUIInfo.TheActive_GUIMEM               */
@@ -91,7 +91,7 @@ static int      s_census = 0, s_log = 0, s_pgm = 0, s_trace = 0;
    some font.
    READ AT ATTACH, LIKE EVERY OTHER TOKEN THIS FILE OWNS — `read_tokens` runs
    once, from `tagpu_gui_init`, so `census`, `log`, `pgm`, `trace` and this one
-   must be armed BEFORE the launch. Only the surf module's tokens (`strict`,
+   must be armed BEFORE the launch. Only the surf module's tokens (`off`,
    `norestore`, `sharptest`, `nocursor`, `cursorscale=`) follow the file live,
    because only the DRAW can change mid-session; the publisher's shape cannot
    without leaving the twins holding ops of the other kind. Arming it on a
@@ -108,8 +108,7 @@ static int      s_winL = 0x7FFF, s_winT = 0x7FFF, s_winR = -1, s_winB = -1;
 
 static void glog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 
@@ -2150,8 +2149,8 @@ static void publish(unsigned flipSurf)
 
        `tagpu_gui_surf.c`'s UI atlas matches entries on `(o->frame, o->pix,
        fw, fh)` -- the frame's ADDRESS and its content hash -- and its only
-       resets are `twins_reset`, the atlas filling, and a GL context loss.
-       NONE of those is a level boundary. The engine frees a level's GAF banks
+       resets are `twins_reset` and the atlas filling. NEITHER of those is a
+       level boundary. The engine frees a level's GAF banks
        and the next level's loader may hand a new frame an old one's address;
        `frame_key` hashes only the plane's first 64 bytes plus the hotspot, so
        UI art whose first RLE row is one transparent run can collide by

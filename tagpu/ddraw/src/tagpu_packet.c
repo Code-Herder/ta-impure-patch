@@ -108,6 +108,7 @@
 #include "tagpu_packet.h"
 #include "tagpu_packet_pub.h"
 #include "crc32.h"
+#include "tagpu_log.h"
 
 #define PK_MAXSLOTS   5                    /* the frame instance's 5; cmd's 4 */
 #define PK_RESERVE    (16u << 20)          /* address space per FRAME slot    */
@@ -216,8 +217,7 @@ static TAGPU_CMD s_lastPosted;
 
 static void plog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int s_growStress;               /* tagpu_grow.stress (tagpu_packet.h) */
@@ -582,7 +582,7 @@ static const char* frame_valid(const void* rec)
     if (p->fogsh_len && (p->fogsh_len != TAGPU_PK_FOGSHADE_BYTES ||
                          !area_ok(p, p->fogsh_off, p->fogsh_len)))
         return "fog shade area";
-    /* THE GL UI's TWO AREAS, bounded the same way the fog grids
+    /* THE UI's TWO MINIMAP AREAS, bounded the same way the fog grids
        are: the length has to be exactly what the dimensions describe, so the
        largest index a consumer can form is inside the bytes it was handed. */
     if (p->mm_len || p->mm_w || p->mm_h) {

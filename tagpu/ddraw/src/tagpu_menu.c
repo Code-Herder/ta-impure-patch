@@ -51,6 +51,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "tagpu_log.h"
 
 #include "dd.h"
 #include "config.h"
@@ -155,9 +156,8 @@ static const unsigned char DRAW_STOLEN[6] = { 0x81, 0xEC, 0x14, 0x02, 0x00, 0x00
 /* 0x46A308: `mov edx,ds:0x511de8`, immediately after DrawGameScreen's own GUI
    draw (0x46A303 calls 0x4AB170) and before the flip. That is where the
    trigger goes: over the finished bar, through the engine's own blitter, so
-   it lands in the back buffer every flip presents and every twin already
-   watches -- rather than in a GL layer the engine's surface, `tacli
-   shot` and the twins would all miss. */
+   it lands in the back buffer every flip presents -- rather than in a layer
+   of our own that the engine's surface and `tacli shot` would both miss. */
 static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
@@ -189,7 +189,7 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
    light green and change no pixel until the next launch. The
    menu keeps the invariant that NO ROW NEEDS A RESTART (renderers.md 2.10), and
    the FPS counter honours it: tagpu_fps.c polls its trigger on the render
-   thread and builds its GL objects on first use. */
+   thread and tagpu_vk_fps.c builds its pipeline on first use. */
 enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_COUNT };
 
 typedef struct {
@@ -307,8 +307,7 @@ static unsigned char s_trigFrame[TS_COUNT][0x18];
 
 static void mlog(const char* m)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", m); fclose(f); }
+    tagpu_log(m);
 }
 
 static int exists(const char* p)
@@ -997,8 +996,8 @@ static int row_greyed(int row)
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
-       drawn from the unit bake at the frame's own resolution -- and there is no
-       soft map on this lane. Left in place rather than removed: it is one line
+       drawn from the unit bake at the frame's own resolution -- and nothing
+       produces the soft map. Left in place rather than removed: it is one line
        to un-grey the day the map's producer is written, and a row that vanishes
        and comes back is worse for the player than one that is plainly
        unavailable. */
@@ -1779,11 +1778,8 @@ typedef struct {
 } VisRow;
 
 /* THE GPU ROW'S LABEL SAYS "(Vulkan)" AND THAT IS THE STATED LIMIT, not a
-   decoration. The row binds the VULKAN device and nothing else: OpenGL cannot
-   be retargeted in-process (`WGL_NV_gpu_affinity` is Quadro-only), so under the
-   GL lane -- which is still the default through Phase G -- the GPU is a
-   launcher-level setting: `DRI_PRIME` / `__NV_PRIME_RENDER_OFFLOAD` through
-   tacli's `Instance.env()`, or the per-application driver profile on Windows.
+   decoration. The row binds the VULKAN device and nothing else, and under
+   `renderer=gdi` there is no device for it to bind.
    `vrow_greyed` greys the row whenever the Vulkan lane is not armed, so it
    never looks live while it cannot bite -- which is also what keeps the
    one-stage "(not listed yet)" row inert, since the engine REWRITES a
@@ -2349,9 +2345,9 @@ static int vrow_greyed(int row)
     if (vrow_held(row))  return 1;
     if (row == VD_MON)   return s_monCount < 2;
     /* Greyed unless there is a choice to make AND something that would act on
-       it. Under the GL lane -- still the default through Phase G -- the row
-       cannot retarget anything in-process, and a live-looking row that changes
-       no pixel is exactly what this rule exists to prevent. */
+       it. `tagpu_vk_armed()` is 0 under `renderer=gdi` with no `tagpu_vk.on`
+       (tagpu_vk.h), where the row retargets nothing, and a live-looking row
+       that changes no pixel is exactly what this rule exists to prevent. */
     if (row == VD_GPU)   return tagpu_vk_gpu_count() < 2 || !tagpu_vk_armed();
     /* VD_SCALE IS LIVE IN BOTH MODES: HUD scale is inside the picture and
        means the same thing windowed or not (gui-renderer.md 22.2, "Row"). */
@@ -3171,5 +3167,3 @@ void tagpu_menu_init(void)
     b[sizeof b - 1] = 0;
     mlog(b);
 }
-
-int tagpu_menu_installed(void) { return s_installed; }

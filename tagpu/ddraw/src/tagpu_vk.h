@@ -70,19 +70,18 @@
 
 /* ---- the render thread -------------------------------------------------- */
 
-/* Called from `ogl_render`, immediately before the GL swap, on the render
-   thread and on no other. Returns 1 when Vulkan presented this frame -- the
-   caller must then skip `SwapBuffers` -- and 0 every other time, including
-   every frame while the lever is off, while the bring-up worker is still
-   running, and after a bring-up that failed.
+/* Called from `vk_render_main` (render_vk.c), once per iteration after
+   `tagpu_overlay_draw`, on the render thread and on no other. Returns 1 when
+   Vulkan presented this frame, and 0 every other time, including while the
+   bring-up worker is still running and after a bring-up that failed.
 
    `w`/`h` are the render target's size; a change tears the swapchain down and
-   builds it again. `vsync` picks the present mode, matching what the GL lane
-   does with `wglSwapIntervalEXT`.
+   builds it again. `vsync` picks the present mode: FIFO when set, IMMEDIATE
+   when it is clear and the surface offers it.
 
    `frame_counter` is the fork's own monotonic render-thread frame number --
-   the SAME number the GL lane stamped its hand-overs with earlier in this
-   iteration of render_ogl.c's loop. It reaches a pass as TAGPU_VKPASS::frame,
+   the SAME number the gathers stamped their hand-overs with earlier in this
+   iteration of render_vk.c's loop. It reaches a pass as TAGPU_VKPASS::frame,
    and a pass uses it to refuse a hand-over published on any other frame; see
    tagpu_vk_pass.h for why that refusal is a safety property and not tidiness. */
 int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter);
@@ -107,10 +106,9 @@ void tagpu_vk_render_stop(void);
    changes no other message's path. */
 void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
-/* Called once from the render thread's start-up. Kicks the enumeration worker
-   that refreshes `tagpu_vk.gpus` for the next launch's menu, whether or not the
-   Vulkan lane is armed -- the GPU row is the player-facing half of Phase G and
-   must work under the GL lane too. Returns immediately. */
+/* Called once from the render thread's start-up, in `vk_render_main`. Kicks
+   the enumeration worker that refreshes `tagpu_vk.gpus` for the next launch's
+   menu. Returns immediately. */
 void tagpu_vk_enum_start(void);
 
 /* 1 when `tagpu_vk.on` is present: the row's "can this bite?" test. */
@@ -127,8 +125,8 @@ int tagpu_vk_armed(void);
      the coexistence probe -- a top-level window that never had a GL context or a
      pixel format presents, on wine 9.0 and on Proton 11 (roadmap §G19a).
    * `tagpu_vk.on` STOPS ARMING THE LANE, because the renderer choice already
-     did. `tagpu_vk.off` stops disarming it for the same reason: with no GL
-     lane behind it, a disarmed Vulkan lane is a black window rather than a
+     did. `tagpu_vk.off` stops disarming it for the same reason: with no other
+     backend behind it, a disarmed Vulkan lane is a black window rather than a
      fallback. The ON file is read for its `color=`.
 
    A ONE-WAY LATCH: which backend the process has is settled at `dd.c`'s
@@ -137,8 +135,9 @@ int tagpu_vk_armed(void);
    the gather mirrors ask to decide whether a consumer exists at all. */
 void tagpu_vk_own_present(void);
 
-/* 1 when the latch above is set. Read by every GL draw site that stands down
-   on this lane, and by the A/B arming. Safe from any thread. */
+/* 1 when the latch above is set. Read by the gathers, to decide whether a
+   Vulkan consumer exists and their CPU mirrors are worth keeping. Safe from
+   any thread. */
 int tagpu_vk_owns_present(void);
 
 
@@ -148,7 +147,7 @@ int tagpu_vk_owns_present(void);
    `tagpu_vk_ab_arm("gui")` returns 0, and that lever file is read by nobody.)
    A pass calls this AT THE INSTANT IT LATCHES A CLAIM and
    nowhere else -- the placement is the whole guarantee, and tagpu_vk.c states it
-   at length. Safe on either lane and on a lane that is not up.
+   at length. Safe whether or not the lane is up.
 
    RETURNS 1 ONLY WHEN THE TARGET IS GONE, and a pass must not claim the Vulkan
    half on anything else: a file that could not be removed -- held open by a
@@ -157,7 +156,7 @@ int tagpu_vk_owns_present(void);
 int tagpu_vk_ab_arm(const char* tag);
 
 /* The bound device's `maxImageDimension2D`, or 0 while no device is up --
-   GL_MAX_TEXTURE_SIZE's counterpart for a ported pass sizing an atlas.
+   the bound a pass sizing an atlas must fit.
    0 MEANS "NOT YET", NEVER A LIMIT: the lane takes ~200 ms to come up while the
    gathers run from the first frame, so a caller must refuse the frame and ask
    again rather than treat 0 as a bound. */

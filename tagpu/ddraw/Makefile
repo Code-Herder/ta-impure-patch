@@ -11,15 +11,12 @@ CFLAGS   ?= -Iinc -O2 -Wall -std=c99
 # leaves every object that includes it compiled against the OLD declarations —
 # and objects that disagree about a struct's layout link without a murmur.
 #
-# This is not hypothetical. G13d (0e6b6b7) inserted four ints (evpL/evpT/evw/evh)
-# into the MIDDLE of TAGPU_FXVIEW; tagpu_sfx.o had been built hours earlier and
-# was never rebuilt, so tagpu_sfx_gather went on reading fogGrid 16 bytes early —
-# where evpT now lives. At zoom < 1 that field is a small negative int, the
-# `!v->fogGrid` test passes because it is non-zero, and the render thread
-# dereferences it: a hard crash that froze the game with the process still up.
-# It survived for a day because the mis-read gate (fogMode <- evpL) is only ODD
-# at some zoom levels and is EVEN at 1x, so it looked intermittent and
-# zoom-dependent rather than like a build fault.
+# A field inserted into the MIDDLE of a shared struct shifts every field after
+# it, and a stale object keeps reading the old offsets: a pointer read 16 bytes
+# early lands on a small int, passes a non-NULL test, and the render thread
+# dereferences it — a hard crash with the process still up. The mis-read values
+# are wrong only at some settings, so the fault looks intermittent and
+# setting-dependent rather than like a build fault.
 #
 # -MMD writes a .d per object listing the headers it used; -MP adds phony targets
 # so a DELETED header does not wedge the build. Both are appended to CPPFLAGS,
@@ -58,13 +55,13 @@ SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix .o, $(basename $(SRCS)))
 DEPS     := $(filter %.d, $(OBJS:.o=.d))
 
-.PHONY: clean all thread-split spirv
+.PHONY: clean all thread-split spirv log-check logtest
 all: $(TARGET)
 
 %.o: %.rc
 	$(WINDRES) -J rc $< $@ || windres -J rc $< $@
 
-# THE THREAD-SPLIT RULE (frame-packet-exchange §10, landing 1): a source file that is
+# THE THREAD-SPLIT RULE (frame-packet-exchange §10): a source file that is
 # not on thread-split.allow may not name an engine address, include tagpu_engine.h,
 # probe with IsBad*Ptr or add an offset to the main pointer. Checked before the link
 # so `make` here and the CI job (.github/workflows/build.yml runs exactly this
@@ -73,7 +70,7 @@ all: $(TARGET)
 thread-split:
 	../../tools/thread-split-check.sh .
 
-# THE SHADER RULE (Phase G / G19c): inc/spirv/ is GENERATED from the GLSL string
+# THE SHADER RULE (roadmap.md Phase G): inc/spirv/ is GENERATED from the GLSL string
 # literals in src/*.c by tools/spirv-gen.py and committed as text, so no build
 # needs a GLSL compiler. Generated code that is committed rots, so the build
 # re-derives each shader's hash -- the C preprocessor and python3, never glslang
@@ -87,10 +84,24 @@ thread-split:
 spirv:
 	../../tools/spirv-check.sh .
 
-$(TARGET): $(OBJS) | thread-split spirv
+# THE LOG RULE: only tagpu_log.c opens a log file, because its caps hold only while it
+# is the one writer (inc/tagpu_log.h). Same placement as the two rules above.
+log-check:
+	../../tools/log-check.sh .
+
+$(TARGET): $(OBJS) | thread-split spirv log-check
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
+# THE SINK'S STRESS TEST (tests/logtest.c, driven by tests/logtest.py under Wine): the
+# real tagpu_log.c with caps small enough that rotation and eviction happen in seconds.
+# Not part of `all` or of CI -- it needs Wine to run.
+logtest: tests/logtest.exe
+
+tests/logtest.exe: tests/logtest.c src/tagpu_log.c inc/tagpu_log.h
+	$(CC) -Iinc -O2 -Wall -std=c99 -DTLOG_FILE_CAP=65536 -DTLOG_TOTAL_CAP=524288 -DTLOG_KEEP=10 -DTLOG_SELFTEST \
+	    -static -o $@ tests/logtest.c src/tagpu_log.c
+
 clean:
-	$(RM) $(TARGET) $(OBJS) $(DEPS) || del $(TARGET) $(subst /,\\,$(OBJS))
+	$(RM) $(TARGET) $(OBJS) $(DEPS) tests/logtest.exe || del $(TARGET) $(subst /,\\,$(OBJS))
 
 -include $(DEPS)

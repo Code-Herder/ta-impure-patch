@@ -41,8 +41,9 @@ Two facts that shape every capture:
 - **NATIVE UNITS ARE INVISIBLE IN SURFACE SHOTS** (the engine draws nothing for them) —
   judge our renderer from window grabs, and engine state (menus, UI, placement boxes) from
   surface shots.
-- **Archive `tagpu.log` before relaunching** (`mv tagpu.log tagpu.runN.log`): numeric
-  evidence such as a sub-pixel filmstrip dies with an `rm`.
+- **Copy the run's log out before it ages out**: `tools/talog.py run <gamedir> > $OUT/run.log`.
+  `log/` keeps the last ten parts of each stream and deletes older ones, so numeric evidence
+  such as a sub-pixel filmstrip is gone a few launches later.
 
 ## The three capture paths
 
@@ -130,8 +131,9 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    **`xwd -id <window>` returns full window content even while the session is locked**
    (3.1 MB for 1024×768, verified) — the escape hatch when the screen is unavailable.
 6. **Marker-verified pairs** (engine vs ours): `echo "STRIP <phase> $(date +%s)"
-   >> tagpu/gamedir/tagpu.log` before each capture, match PNG mtimes with
-   `ls --time-style=+%s`. Blind alternation mislabels rows. Compose panels with
+   >> $OUT/markers.txt` before each capture, match PNG mtimes with
+   `ls --time-style=+%s`. The marker goes in your own file, never into `log/tagpu.log`: the DLL
+   is that file's only writer and its caps count only its own bytes. Blind alternation mislabels rows. Compose panels with
    `tools/sbs.py out.png label1 img1 label2 img2` (needs Pillow).
 7. **Establish the noise floor before trusting any A/B number.** An engine-vs-ours
    diff is only meaningful on a frozen scene: capture the SAME arm state twice, a
@@ -153,7 +155,7 @@ Surface trigger fires at most once per 8 frames (~0.26 s) — burst loops need
    will carry over from a previous launch — or dilate the difference mask by ~8 px
    and measure what survives outside it. Here that left 90.6 % of the viewport with
    **zero** differing pixels, which is the number worth reporting.
-8. **`grep -a` on tagpu.log, always** — stray binary bytes make grep treat it
+8. **`grep -a` on `log/tagpu.log`, always** — stray binary bytes make grep treat it
    as a binary file and silently print nothing.
 9. **Sim speed**: TA's own `+`/`-` keys via `tacli keys <name> plus` / `minus`
    (up to +10, down to −9; minus stretches builds ~10× for capture). Verify
@@ -183,8 +185,9 @@ the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when with
 3. Metric per frame — count "structure" pixels (grey/bright: `r>90 and b>90
    and |r−b|<60` on every 3rd pixel), then flag frames <70% of the average;
    assemble suspect±1 frames into a strip with Pillow and eyeball them.
-4. A unit vanishing = empty-composite flicker (see r3dcache); pieces missing =
-   partial render; a pose that is **wrong for one frame and right on both
+4. A unit vanishing = a frame the Vulkan unit pass stood down on (the engine's
+   own copy does not reach the Vulkan frame, so nothing covers it —
+   `tagpu_owndraw_classify`'s note); pieces missing = partial render; a pose that is **wrong for one frame and right on both
    neighbours** is the render thread reading the engine's posed vertex buffer
    while the game thread rewrites it (gpu-status §2.9) — not aliasing, and not
    cosmetic: at rest orientation it is ~1400 changed pixels at 2× zoom.

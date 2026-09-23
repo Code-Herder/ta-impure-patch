@@ -45,7 +45,8 @@ tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
 
 `tagpu_cobtrace.on` at DLL attach makes the DLL log every COB thread the engine starts, refuses,
 returns, kills or draws a random number for — one tab-separated line each, stamped with the sim
-tick — to `gamedir/tagpu_cobtrace.log`. The value is a unit-type filter. Line contract:
+tick — to `gamedir/log/tagpu_cobtrace.log`, the log sink's second stream (it rotates like
+`tagpu.log`; `tools/talog.py run <gamedir> --stream tagpu_cobtrace` joins a run's parts). The value is a unit-type filter. Line contract:
 `research/notes/tacob-design.md` §"The trace contract"; the engine seam:
 `exe-reverse-engineering.md` §"The COB engine".
 
@@ -53,8 +54,8 @@ tick — to `gamedir/tagpu_cobtrace.log`. The value is a unit-type filter. Line 
 tools/tacli arm c1 cobtrace.on=ARMPW native.on=all   # native.on because the pose oracle lives in that pass
 tools/tacli scenario load c1 cob-kbot --restart
 sleep 8; tools/tacli arm c1 posedump.on              # one pose dump, header `posedump: tick= idx=`
-grep -a 'cobtrace:' tagpu/instances/c1/gamedir/tagpu.log      # ARMED … filter=,ARMPW,
-cut -f1-8 tagpu/instances/c1/gamedir/tagpu_cobtrace.log | head
+tools/tacli log c1 -g 'cobtrace:'                              # ARMED … filter=,ARMPW,
+tools/talog.py run tagpu/instances/c1/gamedir --stream tagpu_cobtrace | cut -f1-8 | head
 ```
 
 - **`tools/cobtrace_fixtures.py`** runs the nine class scenarios (`scenarios/cob-*.json`) this way

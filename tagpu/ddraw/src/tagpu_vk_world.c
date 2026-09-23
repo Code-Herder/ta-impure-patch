@@ -8,7 +8,7 @@
 
 #include "tagpu_vk_world.h"
 #include "tagpu_native.h"                  /* TAGPU_WORLDTGT: gw, gh, ss, the rect */
-#include "spirv/tagpu_native.spv.h"        /* DVS / DFS -- the GL lane's own resolve */
+#include "spirv/tagpu_native.spv.h"        /* DVS / DFS -- tagpu_native.c's resolve */
 
 #define IFNS(X) \
     X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties)
@@ -49,7 +49,7 @@ enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
    value that is not what it claims to be -- refused, and said once. */
 #define WORLD_MAXDIM 8192
 /* AND A BOUND ON THE FACTOR TOO, so that `gw * ss` cannot overflow before the
-   bound above is applied to it. TAGPU_SS_MAX is 4 on the GL side; this is
+   bound above is applied to it. TAGPU_SS_MAX (tagpu_native.c) is 4; this is
    deliberately its own number rather than that one, because it guards a
    DIFFERENT thing -- what this module will allocate -- and coupling the two
    would make a change to the supersample ceiling silently change an
@@ -167,9 +167,9 @@ static int mk_att(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt, int depth,
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
     /* THE COLOUR IMAGE IS SAMPLED AND THE DEPTH ONE IS NOT, which is the whole
-       difference between them here. GL's `s_depTex2` is a texture because a GL
-       FBO attachment is one; nothing reads it, and asking for SAMPLED on a
-       depth image narrows the formats a device will give us for no gain.
+       difference between them here. Nothing reads the depth image, and asking
+       for SAMPLED on a depth image narrows the formats a device will give us
+       for no gain.
 
        AND THE COLOUR IMAGE CARRIES TRANSFER_SRC, WHICH IS THE A/B's. This is
        the image a world capture reads (`tagpu_vk_world_shot`), and
@@ -217,9 +217,7 @@ static int mk_att(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt, int depth,
     /* THE STENCIL ASPECT COMES WITH THE FORMAT, NOT WITH A WISH. The seam's
        depth format is whatever it found; D24_UNORM_S8_UINT and D32_SFLOAT_S8
        carry a stencil plane and a view of them must name it, or the framebuffer
-       is refused. The world FBO's GL original is GL_DEPTH24_STENCIL8 and
-       tagpu_native.c clears GL_STENCIL_BUFFER_BIT with the depth, so the plane
-       is there on that side too. */
+       is refused. */
     ivi.subresourceRange.aspectMask =
         depth ? (VK_IMAGE_ASPECT_DEPTH_BIT |
                  ((fmt == VK_FORMAT_D24_UNORM_S8_UINT ||
@@ -310,8 +308,7 @@ static int build_renderpass(const TAGPU_VKPASS* d)
     at[0].format = d->fmt;
     at[0].samples = VK_SAMPLE_COUNT_1_BIT;
     /* CLEARED TO TRANSPARENT, not loaded: this image is the world alone and the
-       composite blends it over TA's frame. GL clears the same FBO with
-       `x_glClearBufferfv(GL_COLOR, 0, {0,0,0,0})`. */
+       composite blends it over what is beneath it. */
     at[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     at[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -322,10 +319,10 @@ static int build_renderpass(const TAGPU_VKPASS* d)
     at[1].format = d->dfmt;
     at[1].samples = VK_SAMPLE_COUNT_1_BIT;
     at[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    /* NOTHING READS THE DEPTH AFTER THE PASS. GL keeps `s_depTex2` because it
-       blits it down for `selAt1x`; that is not ported here, so the
-       store is a write nobody reads and DONT_CARE is the honest declaration.
-       The day `selAt1x` is ported this becomes STORE and the plan says so. */
+    /* NOTHING READS THE DEPTH AFTER THE PASS, so a store would be a write
+       nobody reads and DONT_CARE is the honest declaration. Anything that
+       comes to read it (a 1x depth for `selAt1x`, which the header says this
+       target cannot express) makes this STORE. */
     at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -417,8 +414,8 @@ static int build_sampler(const TAGPU_VKPASS* d)
        PREFERS VK_FORMAT_B8G8R8A8_UNORM but falls back to `fmts[0]`, so `d->fmt`
        is not guaranteed linear. Drawing the world into an sRGB intermediate
        would make the passes blend against a DECODED value and the composite
-       decode again on sample, where the GL twin's world FBO is GL_RGBA8 and
-       linear -- a different picture, arrived at silently. Refusing leaves the
+       decode again on sample -- a different picture from the linear RGBA8 one
+       every pass's blend is written for, arrived at silently. Refusing leaves the
        world on the swapchain image, which is the same one round trip the lane
        has without a target. */
     if (d->fmt == VK_FORMAT_B8G8R8A8_SRGB || d->fmt == VK_FORMAT_R8G8B8A8_SRGB ||
@@ -439,8 +436,8 @@ static int build_sampler(const TAGPU_VKPASS* d)
     }
     /* LINEAR, AND IT IS THE DOWNSAMPLE RATHER THAN A SMOOTHING. At ss = 2 and
        k = 1 a destination centre maps to the exact corner of a 2x2 source
-       block, so the bilinear tap IS that block's average -- the 2:1 box filter
-       GL gets from `GL_LINEAR` on `s_colTex2`, whose own comment says so.
+       block, so the bilinear tap IS that block's average -- the exact 2:1 box
+       filter tagpu_native.c's comment on DVS/DFS names.
        CLAMP_TO_EDGE because the quad addresses [0,1] exactly and a sample at
        the very edge must not wrap to the far side of the world. */
     sci.magFilter = VK_FILTER_LINEAR;
@@ -515,8 +512,7 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
     vi.vertexAttributeDescriptionCount = 1; vi.pVertexAttributeDescriptions = &va;
 
-    /* A STRIP OF FOUR, which is what the GL lane draws through `s_cvao`:
-       `glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)` over `{0,0, 1,0, 0,1, 1,1}`. */
+    /* A STRIP OF FOUR, over `{0,0, 1,0, 0,1, 1,1}` -- the quad in `build`. */
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
 
     vp.viewportCount = 1; vp.scissorCount = 1;
@@ -538,11 +534,11 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     ds.depthWriteEnable = VK_FALSE;
     ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
 
-    /* PREMULTIPLIED, AND IT IS HALF OF WHY TA'S FRAME STILL SHOWS. The GL
-       composite is `glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)` over an FBO
-       cleared to {0,0,0,0}; both halves are copied, because either one alone is
-       a different picture -- ONE/ZERO would black out every pixel the world did
-       not cover, and an opaque clear would do the same through this blend. */
+    /* PREMULTIPLIED, over a target cleared to {0,0,0,0}, so a pixel the world
+       did not cover leaves what is beneath it untouched. Both halves are
+       needed, because either one alone is a different picture -- ONE/ZERO
+       would overwrite every pixel the world did not cover, and an opaque clear
+       would do the same through this blend. */
     memset(&cba, 0, sizeof cba);
     cba.blendEnable = VK_TRUE;
     cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -617,12 +613,11 @@ static int build(const TAGPU_VKPASS* d)
     VkMemoryRequirements req;
     void* p = NULL;
     int type;
-    /* THE GL LANE'S OWN QUAD, the literal at tagpu_native.c's `s_cvao`:
-       `{0,0, 1,0, 0,1, 1,1}` as a triangle strip, in UNIT-SQUARE space because
-       DVS is what maps it to clip (`p * 2 - 1`) and to texcoords (`uv = p`).
-       Copying the numbers rather than deriving them is the point: the quad and
-       the flip are ONE choice, and porting half of either draws the world
-       upside down. */
+    /* THE QUAD: `{0,0, 1,0, 0,1, 1,1}` as a triangle strip, in UNIT-SQUARE
+       space because DVS is what maps it to clip (`p * 2 - 1`) and to texcoords
+       (`uv = p`). The quad and the flip are ONE choice (the header's
+       ORIENTATION paragraph): changing either alone draws the world upside
+       down. */
     static const float quad[NV * 2] = { 0.f,0.f,  1.f,0.f,  0.f,1.f,  1.f,1.f };
 
     if (d->slots == 0 || d->slots > TAGPU_VK_SLOTS) {
@@ -765,11 +760,10 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 
     if (d->frame - s_saidAt >= 300) {
         s_saidAt = d->frame;
-        /* `devres` IS REPORTED BECAUSE IT CHANGES WHAT THIS DRAW IS. Under it
-           the GL lane skips its 1x resolve entirely and composites straight out
-           of the supersampled buffer -- which is what this module does on every
-           path -- so a reader comparing the two lanes needs to know which of
-           GL's two shapes is in force. */
+        /* `devres` IS REPORTED BECAUSE IT IS WHY `ss` CAN BE ABOVE 2: under it
+           tagpu_native.c raises `ss` to ceil(k) so the target reaches the
+           device resolution, and this draw composites straight out of it, as it
+           does on every path. */
         plog(d, "world: frame %u: %dx%d target (%dx%d at ss=%d%s) -> (%d,%d %dx%d), "
                 "%u frame(s), %u build(s)", d->frame, s_lastW, s_lastH,
              t.gw, t.gh, s_lastSS, s_lastDevres ? " devres" : "",
@@ -846,10 +840,10 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 
     /* NO FLIP, AND THE ARGUMENT NEEDS TO KNOW WHICH WAY UP NEITHER IMAGE IS.
        DVS pairs `uv = 0` with clip `y = -1`; under a POSITIVE height that sends
-       source row 0 to destination row 0, which is what GL does with the same
-       quad. The world passes put the game's top row at row 0 of the source for
-       the same reason they put it at row 0 of the swapchain image, so the two
-       agree and a negative height here would be a third turn. */
+       source row 0 to destination row 0. The world passes put the game's top
+       row at row 0 of the source for the same reason they put it at row 0 of
+       the swapchain image, so the two agree and a negative height here would
+       be a third turn. */
     vp.x = (float)rx;
     vp.y = (float)ry;
     vp.width = (float)rw;

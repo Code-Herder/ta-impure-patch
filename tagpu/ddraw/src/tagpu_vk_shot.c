@@ -14,8 +14,8 @@
    same format, which is why the caller passes the format the image was BUILT
    with rather than the one the surface reports.) Both orders are handled and
    anything else is refused by name rather than written in the wrong colour --
-   a capture that differs from its twin in every pixel because the channels
-   were swapped reads as a broken port.
+   a capture that differs from another build's in every pixel because the
+   channels were swapped reads as a broken pass.
 
    NOTHING SURVIVES THE CAPTURE. The staging buffer is the size of the frame --
    8.3 MB at 1920x1080, which is real money in a 32-bit address space the lane
@@ -227,11 +227,9 @@ void tagpu_vk_shot_finish(const TAGPU_VKPASS* d, const char* path)
         return;
     }
     fprintf(f, "P6\n%u %u\n255\n", s_w, s_h);
-    /* ROW 0 IS THE TOP ROW HERE, and in a PPM too, so the rows go out in order.
-       Unlike a glReadPixels capture, which hands back the bottom row first,
-       nothing is turned over -- and that asymmetry is exactly the kind of thing
-       that produces a capture differing from its twin in every text pixel and
-       nothing else. */
+    /* ROW 0 IS THE TOP ROW HERE, and in a PPM too, so the rows go out in order
+       and nothing is turned over. A flip here would produce a capture differing
+       from another build's in every text pixel and nothing else. */
     /* ONE fwrite A ROW. This runs on the render thread, and a stdio call per
        pixel is two million of them at 1080p -- most of the one frame a capture
        costs, for nothing. */

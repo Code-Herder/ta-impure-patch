@@ -1,9 +1,10 @@
 /* tagpu_owndraw.c — Phase B "own the draw": TA keeps its per-unit pipeline
-   (pose sync, AABB, composite alloc, hotspots, blit) but the SOFTWARE
-   RASTERISATION of the composite planes is skipped for chosen unit types —
-   the GPU thread (tagpu_render3do via writeback) is then the only writer of
-   those pixels. Two 5-byte detours cover all three rasterise call sites
-   (evidence: research/notes/own-the-draw.md):
+   (pose sync, AABB, composite alloc, hotspots, blit), and the SOFTWARE
+   RASTERISATION of the composite planes is detoured so that a draw we own can
+   skip it. The one draw skipped is a 3D wreck while the native wreck pass is
+   armed, whose composite is also wiped; every unit is rasterised by the
+   engine (`tagpu_owndraw_classify` says why). Two 5-byte detours cover all
+   three rasterise call sites (evidence: research/notes/own-the-draw.md):
 
      0x459830  opaque rasteriser   (called from builder 0x45878B and from the
                                     blit's build-state path 0x459641)
@@ -47,7 +48,8 @@
    shadow is drawn by the ALP-blend blit 0x4B8500, and inside a key-filled
    viewport (terrown) the blend darkens palette 254's cyan into an opaque teal
    silhouette that sits at the 1x position whatever the zoom. MEASURED
-   2026-09-18 on renderer=openglcore: with the gate down, four structures put
+   2026-09-18 on the OpenGL renderer this fork had then (renderer=openglcore):
+   with the gate down, four structures put
    8779 px of exactly (0,128,128) on the screen. The native pass draws the
    slant shadow in its place (tagpu_native.c, `slant`).
 
@@ -71,9 +73,8 @@
 
    Classification: Object3do+0x0C -> UnitStruct -> +0x92 UnitDefStruct, match
    the token against Name@0x00 / UnitName@0x20 / ObjectName@0x80 (all three;
-   same rule as suppress/writeback); token "all" skips every unit. Read-only
-   over sim. NOTE: a type armed here but NOT armed in tagpu_writeback.on
-   renders as an invisible sprite (blank planes are all ColorKey). */
+   same rule as suppress/writeback); token "all" covers every unit. Read-only
+   over sim. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -81,7 +82,7 @@
 #include <stdint.h>
 #include "tagpu_owndraw.h"
 #include "tagpu_opt.h"
-#include "tagpu_r3dcache.h"
+#include "tagpu_log.h"
 
 #define RAST_OPAQUE_VA   0x00459830u
 #define RAST_OPAQUE_RES  0x00459835u
@@ -112,7 +113,7 @@ static const unsigned char BFX_STOLEN[6]  = { 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x0C
    play default, and on a lane where `tagpu_overlay_draw` is never called --
    `render_gdi.c` contains no `tagpu_` call at all -- nothing of ours ever
    draws the shadow the flip took away. Every OTHER suppression here already
-   asks a flag a live lane sets (`tagpu_posedraw_live`,
+   asks a flag a live lane sets (`tagpu_native_wrecks_armed`,
    `tagpu_native_owns_obj`), so every other one stands down on that lane by
    itself.
 
@@ -183,7 +184,7 @@ static const unsigned char SSB_STOLEN[12] =
    runs" -- it does not:
 
      * `tagpu_native_frame` publishes on every frame it REACHES, including 0 on
-       each of the nine early returns and 0 whenever no painter reported one the
+       each of the seven early returns and 0 whenever no painter reported one the
        frame before (`s_ssSuppress`, tagpu_native.c);
      * terrown lowers `g_ssTerr` when it hands the ground back;
      * and the heartbeat below, for the frames the pass does not reach at all --
@@ -232,26 +233,23 @@ static unsigned char          g_ssPass = 0;
 
 /* HOW LONG THE GATE MAY STAND WITHOUT A PUBLISH before `tagpu_owndraw_flush`
    lowers it. The publisher is NOT reached on every frame the lane presents:
-   `tagpu_overlay_draw` gates it behind `tagpu_overlay.off`, an overlay init
-   that failed, and a level teardown, and the first of those is a live lever a
-   human can create mid-session. Without this the flag would freeze raised
+   `tagpu_overlay_draw` gates it behind `tagpu_overlay.off` and a level
+   teardown, and the first of those is a live lever a human can create
+   mid-session. Without this the flag would freeze raised
    across any of them and the engine's structure shadow would stay suppressed
    with nothing painting it -- the exact fault the gate exists to remove,
    reached by another door.
 
-   `tagpu_owndraw_flush` runs ABOVE those three (`tagpu_overlay.c:365`), which
-   is what makes it the right place. It does NOT cover the frame-ABI check at
-   `tagpu_overlay.c:306`, which sits above the flush. Nothing is owed for it:
-   both call sites fill `f.abi` from the same header in the same DLL and pass
-   `&f`, so it cannot fire.
+   `tagpu_owndraw_flush` runs ABOVE both of those in `tagpu_overlay_draw`,
+   which is what makes it the right place. It does NOT cover the frame-ABI
+   check at the top of that function, which sits above the flush. Nothing is
+   owed for it: the one call site, render_vk.c, fills `f.abi` from the same
+   header in the same DLL and passes `&f`, so it cannot fire.
 
    `tagpu_fxown.c` solves the same problem the same way, at 90 frames. Eight is
    used here because a missing shadow is a picture the player sees, not a
-   counter. It is measured against the lane's own frame counter, so a LANE
-   SWITCH (render_ogl.c counts `g_tagpu_frames`, render_vk.c counts `s_frames`,
-   two independent counters) can make the subtraction large and fire it once --
-   in the safe direction, and the publisher re-raises in the same frame because
-   the flush at `:365` runs before `tagpu_native_frame` at `:464`. */
+   counter. It is measured against `f->frame_counter`, which is render_vk.c's
+   `s_frames`. */
 #define SS_BEAT_FRAMES 8
 
 static int               g_armed      = 0;
@@ -268,8 +266,7 @@ static unsigned          g_skip_total = 0, g_pass_total = 0, g_last = 0;
 
 static void olog2(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 /* The one writer of `g_ssSkip`. `g_sshadow` is the install and cannot change
    after DllMain, so a stranded stub can never be reached with a raised gate.
@@ -286,6 +283,38 @@ static void ss_recompute(void)
 
 static int ptr_ok(unsigned int p) { return p > 0x00600000u && p < 0x7FFF0000u; }
 
+/* Wipe a composite's planes to the ColorKey (index 1) and far depth (0). The
+   engine keeps building and blitting the composite, and an empty plane makes
+   that colour-keyed blit a no-op. GAME thread, from the classifier only.
+
+   Safe by construction rather than by the probes: it runs synchronously inside
+   the engine's own call to rasterise THIS frame, into the w x h planes the
+   engine allocated for it and was about to fill itself. The dimension bound is
+   the check on the header's values; `IsBadWritePtr` is a sanity filter, never
+   the argument. */
+#define GF_WIDTH      0x00
+#define GF_HEIGHT     0x02
+#define GF_COMPRESSED 0x09
+#define GF_PTRCOLOR   0x10
+#define GF_PTRDEPTH   0x14
+
+static void wipe_composite(unsigned int frame)
+{
+    int w, h;
+    unsigned char *c, *d;
+    if (!ptr_ok(frame)) return;
+    if (*(unsigned char*)(frame + GF_COMPRESSED) != 0) return;
+    w = *(unsigned short*)(frame + GF_WIDTH);
+    h = *(unsigned short*)(frame + GF_HEIGHT);
+    if (w <= 0 || h <= 0 || w > 1280 || h > 1280) return;
+    c = *(unsigned char**)(frame + GF_PTRCOLOR);
+    d = *(unsigned char**)(frame + GF_PTRDEPTH);
+    if (ptr_ok((unsigned int)(size_t)c) && !IsBadWritePtr(c, (SIZE_T)w * h))
+        memset(c, 1, (size_t)w * h);
+    if (ptr_ok((unsigned int)(size_t)d) && !IsBadWritePtr(d, (SIZE_T)w * h))
+        memset(d, 0, (size_t)w * h);
+}
+
 static int name_matches(const char* field)
 {
     int i;
@@ -300,16 +329,11 @@ static int name_matches(const char* field)
 }
 
 /* DOES owndraw's OWN TARGET COVER THIS OBJECT? `tagpu_owndraw.on`'s token —
-   `all`, or a name to match against the def's three name fields. ONE
-   definition, because there are two callers and they must not drift: the
-   classifier, which decides whether to skip the engine's rasterise, and
-   preshadow, which decides whether to empty the composite at the shadow.
-
-   Both must ask. With `owndraw.on=armcom` and `native.on=all` — both legal — a
-   classifier-only answer leaves a non-armcom unit to the engine and preshadow
-   then empties that unit's composite anyway, taking its BODY with the shadow
-   (path A blits the body from the same plane at 0x4593A2). The play defaults
-   would not show it, because the default target IS `all`.
+   `all`, or a name to match against the def's three name fields. The
+   classifier asks it only after the wreck test: a husk's Object3do+0x0C is the
+   SHARED SCRATCH feature-unit, whose +0x92 is the UnitInfo array BASE
+   (0x422003/0x422009), so a husk would be name-matched against UnitInfo[0],
+   an arbitrary loaded def.
 
    A bad pointer answers NO, which is the same answer as a name that does not
    match, and both mean "the engine keeps this one" — so for the classifier
@@ -328,8 +352,7 @@ static int target_covers(unsigned int obj3do)
            name_matches((const char*)(def + UD_OBJNAME));
 }
 
-/* IS THIS DRAW A 3D WRECK (a husk)? One definition; the classifier and
-   preshadow both ask it.
+/* IS THIS DRAW A 3D WRECK (a husk)? The classifier's first question.
 
    How a husk is drawn [BINARY-VERIFIED 2026-09-14]: the feature draw 0x46A610
    splits wreck cells at 0x46A6B5 and GAF wrecks from 3D ones at 0x46A6DC; the
@@ -369,95 +392,59 @@ static int is_wreck_draw(unsigned int obj3do)
 
 int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
 {
-    int skip = 0;
     if (!ptr_ok(obj3do)) { g_passed++; return 0; }
     /* 3D-wreck draws come through the scratch feature-unit *(main+0x1420F)
        (terrain-depth 3.4): during the draw its +0x9E holds THIS obj3do.
-       They are NOT covered by "all" — the engine keeps painting husks unless
-       the native wreck pass is armed, which then owns their pixels (skip the
-       rasterise + wipe the composite, exactly like native units). Without
-       this branch, "all" would skip a fresh husk's FIRST rasterise with
-       nothing cached to restore = invisible corpse. */
+       They are NOT covered by the target — the engine keeps painting husks
+       unless the native wreck pass is armed, which then owns their pixels:
+       skip the rasterise and wipe the composite. */
     if (is_wreck_draw(obj3do)) {
         extern int tagpu_native_wrecks_armed(void);
         if (tagpu_native_wrecks_armed()) {
             g_skipped++;
-            tagpu_r3dcache_wipe(frame);
+            wipe_composite(frame);
             return 1;
         }
         g_passed++;
         return 0;
     }
-    skip = target_covers(obj3do);
-    if (!skip) { g_passed++; return 0; }
-    /* Decision B of gpu-posing.md §4. Skipping the engine's own rasterise is
-       only safe while something replaces it, and the only thing of ours that
-       draws a unit is the posed program. If it cannot run — a missing GL entry
-       point, a shader that will not link, a uniform block under PD_BLOCK — then
-       skipping here would mean NO UNITS AT ALL, because these detours are
-       installed at DLL attach and cannot be uninstalled.
+    if (!target_covers(obj3do)) { g_passed++; return 0; }
+    /* A UNIT IS NEVER SKIPPED, covered or not: the engine rasterises every
+       unit into its composite. Skipping is only safe while something of ours
+       is certain to draw the unit instead (gpu-posing.md §4, decision B), and
+       nothing the game thread can read promises that: the Vulkan unit pass
+       stands down whenever a mirror is missing, the hand-over is short or the
+       lane is not ready, and these detours are installed at DLL attach and
+       cannot be uninstalled.
 
-       AND THE FALLBACK IS CURRENTLY BROKEN ON ONE LANE, which is worth having
-       here because this paragraph is where the next reader will look for it.
-       `tagpu_posedraw_live()` is 0, so this branch is the one every unit takes
-       and the engine rasterises all of them -- measured `OWND target=all
-       skipped=0 passed=55991` on `one-unit`, 2026-09-19, and the detours are
-       armed on gdi too. On `renderer=gdi` that engine copy REACHES THE PLAYER:
-       the window capture and `tacli shot` are the same picture. On
-       `renderer=vulkan` it does not -- the commander is on TA's own surface in
-       colour and absent from the presented frame, with our unit pass disarmed
-       and with our terrain pass disarmed as well, so nothing of ours is
-       covering it.
+       THE ENGINE'S COPY IS NOT A FALLBACK ON EVERY LANE. Measured on
+       `one-unit`, 2026-09-19: `OWND target=all skipped=0 passed=55991`, and
+       the detours are armed on gdi too. On `renderer=gdi` that engine copy
+       REACHES THE PLAYER: the window capture and `tacli shot` are the same
+       picture. On `renderer=vulkan` it does not -- the commander is on TA's
+       own surface in colour and absent from the presented frame, with our
+       unit pass disarmed and with our terrain pass disarmed as well, so
+       nothing of ours is covering it. The loss is in the Vulkan composite
+       path; its mechanism is not established.
 
-       SO THE GUARD'S PREMISE IS SOUND AND OUR COMPOSITE IS NOT: the gdi
-       control shows the engine is a real fallback. While the Vulkan composite
-       drops TA's units, this branch is doing MORE work than it looks -- it is
-       the only reason a stood-down frame still has an engine copy to recover
-       once that is fixed. Mechanism not established; the lead is written up at
-       `tagpu_posedraw_live()`'s definition.
-
-       So the classifier asks first. This runs on the GAME thread and reads a
-       word only the render thread writes; it is safe by DIRECTION, not by
-       timing. The word says "live" only after the programs have linked, and is
-       cleared before a context change invalidates them, so a stale read can
-       only be stale in the direction of NOT skipping — the engine draws a unit
-       we also draw, for the frames before the pass first runs, which is the
-       near-invisible 8bpp-under-RGB double draw. The reverse, skipping when
-       nothing will draw, has no write order that produces it. */
+       What a covered unit still gets is the warning below, said ONLY when the
+       posed program has tried and failed. Not having run yet is the ordinary
+       state of the first frames, before the render thread has built anything,
+       and logging that would dress a one-frame state up as a broken driver. */
     {
-        extern int tagpu_posedraw_live(void);
         extern int tagpu_posedraw_refused(void);
-        if (!tagpu_posedraw_live()) {
-            /* Say something ONLY when the pass has tried and failed. `!live`
-               is also the ordinary state of the first frames, before the
-               render thread has built anything — logging that would dress a
-               one-frame double draw up as a broken driver. */
-            static int said = 0;
-            if (!said && tagpu_posedraw_refused()) {
-                said = 1;
-                olog2("owndraw: the posed unit program REFUSED to arm — the engine's "
-                      "own unit rasterise is NOT being skipped. On renderer=gdi that "
-                      "means units are drawn by the engine at 8bpp; on renderer=vulkan "
-                      "the engine's copy does not currently reach the presented frame, "
-                      "so expect NO units rather than 8bpp ones. The posedraw: line "
-                      "above says why the program refused.");
-            }
-            g_passed++;
-            return 0;
+        static int said = 0;
+        if (!said && tagpu_posedraw_refused()) {
+            said = 1;
+            olog2("owndraw: the posed unit program REFUSED to arm. "
+                  "On renderer=gdi that means units are drawn by the engine at 8bpp; on renderer=vulkan "
+                  "the engine's copy does not currently reach the presented frame, "
+                  "so expect NO units rather than 8bpp ones. The posedraw: line "
+                  "above says why the program refused.");
         }
     }
-    g_skipped++;
-    /* engine just (re)built this composite and we are about to skip its
-       rasterise — repaint our last render NOW so this frame's blit shows the
-       unit (no one-frame empty window = no flicker on movers/builders).
-       Natively-owned units get a WIPE instead: their pixels come from the
-       native pass, the composite must blit nothing. */
-    {
-        extern int tagpu_native_owns_obj(unsigned int obj3do);
-        if (tagpu_native_owns_obj(obj3do)) tagpu_r3dcache_wipe(frame);
-        else                               tagpu_r3dcache_restore(obj3do, frame);
-    }
-    return 1;
+    g_passed++;
+    return 0;
 }
 
 /* The build-state effect 0x458DD0 is skipped for exactly the units the native
@@ -656,11 +643,6 @@ void tagpu_owndraw_set_structshadow_terr(int on)
     ss_recompute();
 }
 
-/* What WE will do this frame -- 1 means the slant is ours and the engine is
-   skipping it. The native pass reads it so its geometry agrees with the branch.
-   The gate, not the install. */
-int tagpu_owndraw_structshadow_ours(void) { return g_ssSkip != 0; }
-
 static void read_target(void)
 {
     int    n;
@@ -698,226 +680,10 @@ static void restore_one(unsigned int va, const unsigned char* stolen)
     FlushInstructionCache(GetCurrentProcess(), t, 5);
 }
 
-/* ---- the fourth detour: the engine's completed-unit silhouette shadow -----
-
-   The third thing the engine still draws for a unit we own is its SHADOW, and
-   it draws it from the unit's own composite. Inside the per-unit blit 0x459200
-   there are three sites that emit the completed-unit silhouette, one per path:
-
-     0x459335  push esi          ; esi = Object3do+0x10, the unit's composite
-     0x459336  mov  ecx,edi      ; this
-     0x459338  call 0x45A470     ; scratch := the composite, every non-ColorKey
-                                 ;   texel -> palette index 0 (0x4B96A0)
-     ...                         ; path B then clips the scratch (waterline,
-                                 ;   digger) and every path blits it through
-                                 ;   0x4B8500, the 50 % ALP blend, at sx+0x85.
-
-     0x45958C  path B (colour+depth composite) — same three instructions
-     0x4594DB  path B, the inline digger branch — same three instructions
-
-   0x45A470 writes the SCRATCH (this+0x10) and never the composite, so the
-   shadow is nothing more than the composite's own silhouette — which is why
-   the design calls it ours: for a unit the native pass draws, "the engine's
-   completed-unit shadow is built from the composite, so it comes out empty"
-   (shadows-cloak.md §4, measured 2026-09-02).
-
-   THAT ONLY HOLDS WHILE THE COMPOSITE IS EMPTY, and the classifier is not the
-   thing that keeps it empty on every frame. Measured 2026-09-13: at map entry
-   the commander keeps ONE teal (0,128,128) silhouette — cyan halved, i.e. the
-   ALP blend over terrown's palette-254 key fill — sitting on its own body and
-   surviving until the unit's pose changes, and 557 px of the composite's plane
-   are back at every classify (an empty plane reads 0 NON-KEY bytes — the wipe
-   fills it with the ColorKey, index 1 — and the wipe's own read-back after the
-   memset read 0). Whatever refills it, the engine's shadow cannot be allowed to
-   depend on it. So the shadow's source is emptied
-   HERE, at the shadow, on every frame we draw the unit — a wipe the engine
-   cannot undo between the call and the read, because the two are adjacent
-   instructions of the same call.
-
-   THE GATE IS NOT THE CLASSIFIER'S WHOLE ANSWER. Two gaps, both still open —
-   read this as the statement of a known defect, not as an argument that the
-   wipe is correct:
-
-     - IT OMITS THE TARGET. The classifier gates on `g_all || name_matches(
-       g_target)` (the `tagpu_owndraw.on` token); preshadow never asks. With
-       `owndraw=armcom` and `native=all` — both valid — the classifier leaves a
-       non-armcom unit to the engine and this wipes its composite anyway, taking
-       the body with the shadow. Masked under the play default only because that
-       default target IS `all`. The three-site install is likewise ungated on
-       `g_all` while the structure-shadow pair below is correctly `g_armed &&
-       g_all`.
-
-     - IT READS AT THE WRONG TIME, AND THAT IS A NEW WINDOW, not merely a
-       second reader. The classifier runs only when the
-       engine REBUILDS a composite — `Object3do+0x04` (TimeVisible) tested at
-       0x458870, branch 0x4588F2, `inc [edi+4]` after each blit — while
-       preshadow runs on EVERY blit of every frame. On a non-rebuild frame
-       preshadow runs and the classifier does not run at all; for an idle unit
-       the gap is seconds, and nothing on the composite records which answer
-       built it. Worse, what actually gates OUR draw per unit is the packet flag
-       TAGPU_PK_U_NATIVE, stamped at publish, and the publish is skipped while
-       the cell still holds a fresh packet — so this wipe can act on an
-       ownership answer up to one present NEWER than the one the pass is drawing
-       from. The `s_state` 0->1 chain does NOT produce it (that store happens
-       inside the render frame that then draws, so the pass covers the wipe),
-       but an `s_armed` 0->1 does — a mid-session re-arm flips it on the render
-       thread while the in-flight packet still has every PK_U_NATIVE clear, and
-       for that packet's life every owned unit on screen loses body and shadow.
-       Reachable from the lever-editing loop and at the session's first arm, NOT
-       from play input, which is why play has never shown it. THE FIX IS AN
-       ORDERING — gate the wipe on the same published flag the draw used, not on
-       a live re-read — and it is not built yet.
-
-   `tagpu_posedraw_live()` is exactly the question the
-   classifier asks before it skips; while it is false the engine is the only
-   renderer, and emptying the composite would take the unit's BODY with the
-   shadow (the body blits from the composite too, 0x459373), which is the
-   invisible-unit failure the classifier's fallback exists to avoid. And a 3D
-   WRECK is not covered by the target: the classifier recognises one by the
-   scratch feature-unit `*(main+0x1420F)`'s `+0x9E` and hands the husk back to
-   the engine unless `tagpu_native_wrecks_armed()`, while the unit predicate
-   `tagpu_native_owns_obj` answers YES to a husk under `target="all"` exactly as
-   it does to a unit. Wiping here without that branch would blank a husk's body
-   for the whole of a `native=all` arm that does not carry the `wrecks` token
-   (the play defaults do carry it, which is why this was not seen in play). So
-   this asks the wrecks question too, in the classifier's own order. RESIDUAL, stated rather than hidden: while the posed program is down
-   the engine's own shadow is left alone, and with `target="all"` that is the
-   only window in which the engine draws a unit at all. Measured over a 129-frame
-   burst spanning one map entry — the load, the context change and the first
-   seconds of play — no teal reached the screen; those frames are composited
-   before our surface is up, so the engine's frame is not the one on screen.
-
-   The register. `ebp` is the blit's Object3do — the blit's SECOND stack
-   argument (`mov ebp,[esp+0x30]` at 0x459205, before the remaining two pushes:
-   0x20 + push ebx + push ebp puts it at entry esp + 8) — and it is never
-   reloaded on any path that reaches the three sites; every use of it before
-   them is a read or a push. Path A's cargo loop is the ONLY reload of ebp in
-   the function (0x459415 `mov ebp,[edx+0x8A]`, 0x459489 `mov ebp,[ebp+0x8E]`),
-   and its exit is the function's OWN epilogue — `pop ebp` at 0x459495 with
-   `ret 0x18` at 0x45949A; path B is entered at 0x45949D by the `jne` at
-   0x459282 and so never runs it. Path B's own cargo loop, at 0x459649, walks
-   the same list in ESI (`mov esi,[edx+0x8A]`) and does not touch ebp at all.
-   A register that "happens to survive" is not an argument,
-   so the stub passes it and tagpu_owndraw_preshadow CHECKS it:
-   `*(Object3do + 0x10)` must be the very composite the site is about to read, or
-   it does nothing. A wrong ebp is then a no-op, never a wipe of somebody else's
-   plane.
-
-   Stub (entered by jmp from the site, so the composite is at [esp] and the
-   blit's frame is untouched):
-     pushad
-     push [esp+0x20]            ; the composite (entry esp + 0 after pushad)
-     push ebp                   ; the Object3do
-     call tagpu_owndraw_preshadow   ; cdecl(obj3do, composite)
-     add esp,8 ; popad
-     E8 <rel32>                 ; the stolen call 0x45A470, replayed
-     E9 <rel32>                 ; resume at site+5
-   The callee is `ret 4`, so the composite the site pushed is consumed by the
-   replayed call exactly as the original did and esp leaves the stub unchanged. */
-#define SHADOW_A_VA   0x00459338u   /* path A: push esi; mov ecx,edi; call  */
-#define SHADOW_A_RES  0x0045933Du
-#define SHADOW_B_VA   0x0045958Cu   /* path B                                 */
-#define SHADOW_B_RES  0x00459591u
-#define SHADOW_C_VA   0x004594DBu   /* path B, the inline digger branch        */
-#define SHADOW_C_RES  0x004594E0u
-#define SHADOW_VA     0x0045A470u   /* scratch := blackened composite, ret 4   */
-#define O3_COMPOSITE  0x10
-
-static const unsigned char SHAD_A_STOLEN[5] = { 0xE8, 0x33, 0x11, 0x00, 0x00 };
-static const unsigned char SHAD_B_STOLEN[5] = { 0xE8, 0xDF, 0x0E, 0x00, 0x00 };
-static const unsigned char SHAD_C_STOLEN[5] = { 0xE8, 0x90, 0x0F, 0x00, 0x00 };
-
-static int g_shadow = 0;   /* all three sites patched */
-
-/* cdecl, called from the stub: empty the composite the engine is about to
-   build an owned unit's shadow from. See the block above for the gate. */
-void __cdecl tagpu_owndraw_preshadow(unsigned int obj3do, unsigned int frame)
-{
-    extern int tagpu_posedraw_live(void);
-    extern int tagpu_native_owns_obj(unsigned int obj3do);
-    if (!ptr_ok(obj3do) || !ptr_ok(frame)) return;
-    if (*(volatile unsigned int*)(obj3do + O3_COMPOSITE) != frame) return;
-    if (!tagpu_posedraw_live()) return;
-    /* A HUSK IS NOT OURS UNLESS THE WRECK PASS IS ARMED — the classifier's own
-       first branch, and the only place the two answers can differ. It
-       recognises a wreck draw by the scratch feature-unit *(main+0x1420F)
-       holding THIS Object3do at +0x9E. MEASURED 2026-09-13 on `one-wreck`
-       (armalab_dead, Two Continents) with `tagpu_native.on` = "all" and no
-       `wrecks` token: with this clause disabled in a test build the husk still
-       renders, so the unit predicate does not in fact answer yes to a husk
-       today, and the clause changes nothing on that fixture. It stays because
-       the wipe's predicate should BE the classifier's answer, not a fact about
-       what the wreck builder happens to leave at Object3do+0x0C — a fact
-       nothing here establishes. */
-    /* A HUSK IS ANSWERED HERE AND NOWHERE ELSE, exactly as the classifier
-       answers it: wrecks armed -> ours, wipe and stop; not armed -> the
-       engine's, leave it alone. Neither branch may fall through to
-       target_covers, and that is not a style point: a husk's Object3do+0x0C is
-       the SHARED SCRATCH feature-unit, whose +0x92 is the UnitInfo array BASE
-       (0x422003/0x422009), so target_covers would name-match every husk against
-       UnitInfo[0] — an arbitrary loaded def — and refuse under any named
-       target. The classifier reaches its own wipe before that test; this does
-       too. */
-    if (is_wreck_draw(obj3do)) {
-        extern int tagpu_native_wrecks_armed(void);
-        if (!tagpu_native_wrecks_armed()) return;
-        tagpu_r3dcache_wipe(frame);
-        return;
-    }
-    /* OUR TARGET, THE CLASSIFIER'S OWN QUESTION. Without it,
-       `owndraw.on=armcom` + `native.on=all` would empty the composite of every
-       unit the classifier had deliberately left to the engine, body and all. */
-    if (!target_covers(obj3do)) return;
-    if (!tagpu_native_owns_obj(obj3do)) return;
-    tagpu_r3dcache_wipe(frame);
-}
-
-static int install_shadow(unsigned int va, unsigned int resume,
-                          const unsigned char* stolen)
-{
-    unsigned char* t = (unsigned char*)va;
-    unsigned char* s;
-    unsigned char* p;
-    DWORD old;
-    int32_t rel;
-
-    if (memcmp(t, stolen, 5) != 0) return 0;
-    s = (unsigned char*)VirtualAlloc(NULL, 0x80,
-            MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!s) return 0;
-    p = s;
-
-    *p++ = 0x60;                                            /* pushad             */
-    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x20;     /* push [esp+0x20]    */
-    *p++ = 0x55;                                            /* push ebp           */
-    *p++ = 0xE8;                                            /* call preshadow     */
-    rel = (int32_t)((unsigned int)&tagpu_owndraw_preshadow - ((unsigned int)p + 4));
-    memcpy(p, &rel, 4); p += 4;
-    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;                  /* add esp,8          */
-    *p++ = 0x61;                                            /* popad              */
-    *p++ = 0xE8;                                            /* call 0x45A470      */
-    rel = (int32_t)(SHADOW_VA - ((unsigned int)p + 4));
-    memcpy(p, &rel, 4); p += 4;
-    *p++ = 0xE9;                                            /* jmp resume         */
-    rel = (int32_t)(resume - ((unsigned int)p + 4));
-    memcpy(p, &rel, 4); p += 4;
-
-    if (!VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old)) {
-        VirtualFree(s, 0, MEM_RELEASE);  /* nothing was written; keep nothing */
-        return 0;
-    }
-    t[0] = 0xE9;
-    rel = (int32_t)((unsigned int)s - (va + 5));
-    memcpy(t + 1, &rel, 4);
-    VirtualProtect(t, 5, old, &old);
-    FlushInstructionCache(GetCurrentProcess(), t, 5);
-    return 1;
-}
-
 void tagpu_owndraw_init(void)
 {
-    /* worst case is 328 chars: the arm token is capped at 31 and every field
-       takes its longest value ("not armed", "SKIP" x4, "HOOKED"). _snprintf
+    /* worst case is 289 chars: the arm token is capped at 31 and every field
+       takes its longest value ("not armed", "SKIP" x3, "HOOKED"). _snprintf
        does NOT terminate a truncation, so the tail is forced rather than
        assumed. */
     char b[384];
@@ -928,8 +694,9 @@ void tagpu_owndraw_init(void)
     /* all-or-nothing: both sites checked before either is written, so a
        different build arms nothing rather than half of it. Half would be
        worse than nothing here: a detoured opaque site with g_armed clear
-       still skips the engine's rasterise under "all" (classify never reads
-       g_armed) while buildfx and the structure shadows stay the engine's. */
+       still skips a husk's rasterise once the wreck pass is armed (classify
+       never reads g_armed) while buildfx and the structure shadows stay the
+       engine's. */
     if (memcmp((void*)RAST_OPAQUE_VA, OPQ_STOLEN, 5) != 0 ||
         memcmp((void*)RAST_NANO_VA,   NANO_STOLEN, 5) != 0) {
         olog2("owndraw: NOT armed -- engine bytes differ at 0x459830 / 0x459C70 (nothing written)");
@@ -945,23 +712,11 @@ void tagpu_owndraw_init(void)
     }
     g_armed = a && c;
     if (g_armed) g_buildfx = install_buildfx();
-    /* the completed-unit shadow's three emit sites: all three or none, for the
-       same reason the structure-shadow pair is all-or-nothing — one path
-       emptied and not the others would make a unit's shadow depend on whether
-       it was moving when the frame was drawn */
-    if (g_armed) {
-        int sa = install_shadow(SHADOW_A_VA, SHADOW_A_RES, SHAD_A_STOLEN);
-        int sb = sa && install_shadow(SHADOW_B_VA, SHADOW_B_RES, SHAD_B_STOLEN);
-        int sc = sb && install_shadow(SHADOW_C_VA, SHADOW_C_RES, SHAD_C_STOLEN);
-        if (sa && !sc) {
-            if (sb) restore_one(SHADOW_B_VA, SHAD_B_STOLEN);
-            restore_one(SHADOW_A_VA, SHAD_A_STOLEN);
-        }
-        g_shadow = sa && sb && sc;
-    }
-    /* structure shadows: only with "all" (every composite blank), and only
-       as a pair -- one path redirected and not the other would leave a
-       building's shadow depending on which composite it was given.
+    /* structure shadows: only with "all" -- `g_ssSkip` is one byte for every
+       building, so it may drop the engine's shadow only when the native pass
+       draws every building's -- and only as a pair: one path redirected and
+       not the other would leave a building's shadow depending on which
+       composite it was given.
        Installing the detour does NOT suppress anything: `g_ssSkip` decides,
        and it is 0 until the native pass says otherwise. */
     if (g_armed && g_all) {
@@ -982,17 +737,15 @@ void tagpu_owndraw_init(void)
 
     _snprintf(b, sizeof b,
         "owndraw: %s target=\"%s\" opaque@0x459830=%s nano@0x459C70=%s "
-        "buildfx@0x458DD0=%s structshadow@0x4592BF+0x459522=%s shadow@0x459338+0x45958C+0x4594DB=%s "
+        "buildfx@0x458DD0=%s structshadow@0x4592BF+0x459522=%s "
         "(hooks INSTALLED; every skip is decided per draw against a flag a live "
         "lane sets, so this line does not say anything was skipped)",
         g_armed ? "ARMED" : "not armed", g_target,
         a ? "OK" : "SKIP", c ? "OK" : "SKIP",
         g_buildfx ? "OK" : "SKIP",
-        /* each flag under ITS OWN label: g_sshadow is the structure pair (the
-           two branch detours, installed only under `all`, hence its "engine"
-           case), g_shadow is the three-site detour. */
-        g_sshadow ? "HOOKED" : (g_all ? "SKIP" : "engine"),
-        g_shadow ? "OURS" : "SKIP");
+        /* the structure pair is installed only under `all`, hence its
+           "engine" case */
+        g_sshadow ? "HOOKED" : (g_all ? "SKIP" : "engine"));
     b[sizeof b - 1] = 0;
     olog2(b);
 }
@@ -1024,14 +777,9 @@ void tagpu_owndraw_flush(unsigned int frame_counter)
         char b[224];
         g_skipped = 0; g_passed = 0;
         g_skip_total += s; g_pass_total += pa;
-        unsigned rs, ms;
-        extern volatile unsigned g_rc_calls, g_rc_off, g_rc_badptr;
-        tagpu_r3dcache_stats(&rs, &ms);
         _snprintf(b, sizeof b,
-            "OWND target=%s skipped=%u passed=%u repaint=%u miss=%u rcall=%u off=%u bad=%u (total skipped=%u passed=%u)",
-            g_target, s, pa, rs, ms, g_rc_calls, g_rc_off, g_rc_badptr,
-            g_skip_total, g_pass_total);
-        g_rc_calls = 0; g_rc_off = 0; g_rc_badptr = 0;
+            "OWND target=%s skipped=%u passed=%u (total skipped=%u passed=%u)",
+            g_target, s, pa, g_skip_total, g_pass_total);
         olog2(b);
         g_last = frame_counter;
     }

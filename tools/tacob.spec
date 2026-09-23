@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for tacob — the Windows folder that needs no Python (landing 5).
+"""PyInstaller spec for tacob — the Windows folder that needs no Python.
 
     tools/tacob-build.py build          # what actually runs this, under Wine
 

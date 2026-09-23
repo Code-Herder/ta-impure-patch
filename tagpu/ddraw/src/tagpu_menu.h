@@ -7,9 +7,9 @@
    THE SHAPE IN ONE LINE. `RENDER.GUI` is a real TA `.GUI` screen in a `.ufo`
    the DLL writes itself, pushed by copying Cavedog's own idiom at `0x495207`,
    with six live rows and no Apply, non-modal, never pausing. The engine does
-   the hit-testing, the dispatch, the plate art, the fonts, the save-under and
-   the G15/G17 twins; we supply two bytes of gadget state, one frame's pixels,
-   one 28x28 trigger and one small archive.
+   the hit-testing, the dispatch, the plate art, the fonts and the save-under;
+   we supply two bytes of gadget state, one frame's pixels, one 28x28 trigger
+   and one small archive.
 
    ARMING. The archive is written at `DLL_PROCESS_ATTACH` unconditionally, with
    a version stamp, so it can never be stale after a DLL upgrade. The screen
@@ -25,9 +25,6 @@ void __stdcall tagpu_menu_oncommand(void* gi);
 
 /* DLL_PROCESS_ATTACH: write the archive, install the observer. */
 void tagpu_menu_init(void);
-
-/* 1 when the observer is installed and the screen can be opened. */
-int  tagpu_menu_installed(void);
 
 /* Is this GAME-space point one the render-options UI owns -- the sprocket, or
    the panel while it is open? The zoom asks, because a click inside the world

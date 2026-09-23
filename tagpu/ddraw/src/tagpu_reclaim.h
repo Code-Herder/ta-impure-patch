@@ -2,7 +2,7 @@
 #define TAGPU_RECLAIM_H
 /* tagpu_reclaim.h — deferred reclamation of the engine's Object3do.
 
-   The fork's GL render thread gathers a unit's (or wreck's) Object3do and
+   The fork's render thread gathers a unit's (or wreck's) Object3do and
    dereferences it later in the same frame, while the engine's game thread
    frees it on death — a cross-thread use-after-free that faulted `200v200`
    about 95 s in, two runs in three (research/notes/thread-safe-destruction.md).
@@ -20,7 +20,7 @@
 
    Installed once at DllMain, byte-matched, all-or-nothing; a different exe
    arms nothing and `tagpu_reclaim.off` disables it. The render thread brackets
-   the overlay driver with pass_begin / pass_end (render_ogl.c), and the
+   the overlay driver with pass_begin / pass_end (render_vk.c), and the
    driver skips its engine reads while teardown_active() says a level is
    being freed. */
 
@@ -69,34 +69,6 @@ int  tagpu_reclaim_level_closing(void);
    0 here means "no ordering is available", which is a reason to refuse the read,
    never a reason to take it. */
 int  tagpu_reclaim_level_tracked(void);
-
-/* THE QUIESCENCE FENCE, for other modules with the same problem. This module
-   owns the only published fact about whether the render thread is inside the
-   region that reads memory the game thread may free, and that fact is worth
-   more than one client: tagpu_fogwide's grid buffers are the second.
-
-   The rule is THE RULE above, exposed as two calls so that it is written down
-   once rather than re-derived:
-
-       p = old;  old = new;                       // unreachable to a new reader
-       stamp = tagpu_reclaim_pass_stamp();        // fence, then snapshot
-       ...
-       if (tagpu_reclaim_pass_passed(stamp)) free(p);
-
-   Take the stamp AFTER the store that made the pointer unreachable and on the
-   thread that made it — the call issues the same MemoryBarrier the drain does,
-   so that store is globally visible before any pass the stamp can be passed by.
-   Then poll; never spin, and never free under doubt.
-
-   BOTH ARE MEANINGLESS UNLESS tagpu_reclaim_armed(), and the failure is not the
-   one you would guess. On a build where the install did not happen the two pass
-   counters are never written, so they are equal for ever and
-   tagpu_reclaim_pass_passed() answers TRUE from the very first call — an
-   immediate, unfenced free. The caller must ask armed() FIRST and keep the
-   block for ever when the answer is no. That is not a degradation to work
-   around: a block that is never freed faults nothing. */
-long tagpu_reclaim_pass_stamp(void);
-int  tagpu_reclaim_pass_passed(long stamp);
 
 /* THE LEVEL GENERATION. Bumped once per level teardown, on the game thread, in
    the POST hook — after the cascade has freed the templates, and before the

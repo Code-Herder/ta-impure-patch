@@ -100,8 +100,8 @@
        slope=<k>     EXPLORE: exaggerate the heightfield's gradient, default 1
        filter=<f>    EXPLORE: how the RESTORED unit textures are sampled.
                      linear = trilinear (bilinear + mipmaps, levels 0..2)
-                     with `aniso` taps — what the game's own hires path does
-                     (GL_LINEAR_MIPMAP_LINEAR, as the deleted tagpu_hires.c did). nearest = one
+                     with `aniso` taps — what the deleted replacement-mesh path
+                     did (GL_LINEAR_MIPMAP_LINEAR, tagpu_hires.c). nearest = one
                      texel, the stock look. DEFAULT linear when the pack's
                      unit atlas is padded for it (`build` since UNIT_PAD),
                      nearest otherwise; filter=linear on an unpadded pack
@@ -154,9 +154,10 @@
                      no height in them, so its fragment shader rebuilds the
                      world point and the normal from the height grid per
                      fragment (tagpu_terr.c taTerrW/taTerrN), while the CASTER
-                     is a separate world-space mesh built from the same bytes
-                     (build_hills). One surface described twice. castsplit=1
-                     does both here; castsplit=0 is the lab's older single
+                     was a separate world-space mesh built from the same bytes
+                     (build_hills, deleted from the game 2026-09-23; the game
+                     builds no terrain caster now). One surface described
+                     twice. castsplit=1 does both here; castsplit=0 is the lab's older single
                      buffer, cast and shaded, and is byte-identical to what the
                      lab drew before the knob existed. MEASURED 2026-09-09: the
                      two differ by 0.001 std of the shadow term, which is what
@@ -438,8 +439,8 @@ function readLook(p, label) {
     castsmooth: Math.max(0, Math.min(8, num("castsmooth", 0) | 0)),
     noff: Math.max(0, num("noff", 0)),
     pofac: num("pofac", 0), pounits: num("pounits", 0),
-    // castsplit: mirror the GAME's split — a separate world-space caster
-    // mesh (build_hills) and a receiver that reconstructs its world point
+    // castsplit: mirror the split the GAME had — a separate world-space
+    // caster mesh (build_hills, deleted from the game) and a receiver that reconstructs its world point
     // per fragment, instead of casting and shading one buffer. Default ON:
     // what the lab shows should be what the game does (renderers.md 2.7b).
     castsplit: p.get("castsplit") !== "0",
@@ -729,8 +730,8 @@ ${LAB_LIGHT}
 // ---- castsplit: tagpu_terr.c's OWN reconstruction, copied verbatim ----------
 // The game's terrain gather emits screen-space quads with no height in them, so
 // its fragment shader rebuilds the world point and the normal from the height
-// grid per fragment, while the CASTER is a separate world-space mesh
-// (build_hills). Same bytes, two pipelines. Under castsplit the lab does the
+// grid per fragment, while the CASTER was a separate world-space mesh
+// (build_hills, deleted from the game 2026-09-23). Same bytes, two pipelines. Under castsplit the lab does the
 // same, so the shadow it reads back is the shadow the game reads back.
 float taH(ivec2 p){
   p = clamp(p, ivec2(0), ivec2(uHDim) - 1);
@@ -1452,7 +1453,7 @@ async function main() {
     gl.uniform1f(U.uNOff, L.noff);
   }
 
-  // ---- castsplit: the game's own caster, tagpu_terr.c build_hills ----------
+  // ---- castsplit: the caster tagpu_terr.c's build_hills built (deleted) ----
   // One vertex per grid point at the world point the terrain art depicts,
   // (c*16, h, r*16 + h/2), two triangles per cell on the diagonal (1,0)-(0,1),
   // indices ordered by cell row so the rows under the light window are one
@@ -1514,8 +1515,8 @@ async function main() {
     gl.bindVertexArray(null);
     hCells = w - 1; hRows = h - 1; hSmooth = smooth;
   }
-  // tagpu_terr_hills_draw's row window: the same 192-unit margin the light
-  // frame uses, plus the 128 the shear can reach south
+  // the row window the deleted tagpu_terr_hills_draw used: the same 192-unit
+  // margin the light frame uses, plus the 128 the shear can reach south
   function hillsDraw() {
     let r0 = Math.floor((E[1] - 192) / 16);
     let r1 = Math.ceil((E[1] + W[1] + 128 + 192) / 16);   // W is ALREADY the zoomed window

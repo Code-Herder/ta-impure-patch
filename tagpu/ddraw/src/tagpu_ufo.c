@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tagpu_log.h"
 
 #include "tagpu_ufo.h"
 
@@ -34,8 +35,7 @@ static const char TRAILER[] = "Copyright 1997 Cavedog Entertainment";
 
 static void ulog(const char* m)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", m); fclose(f); }
+    tagpu_log(m);
 }
 
 /* ---- a growable byte buffer -------------------------------------------- */

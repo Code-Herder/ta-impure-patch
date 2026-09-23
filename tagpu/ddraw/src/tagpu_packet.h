@@ -35,8 +35,8 @@
    mouse and the build cursor, the engine's shade table); the four effect
    tables — projectiles, explosions, flying debris and the ten particle
    layers' sub-particles — with the LHT ramp, the ALP/LHT capability bits and
-   the whole 256-byte GUI colour LUT they need; the two fog grids; and the GL
-   UI's render half. Every table has its `off`/`n` here. The acquire is
+   the whole 256-byte GUI colour LUT they need; the two fog grids; and the UI
+   layer's render half. Every table has its `off`/`n` here. The acquire is
    tick-aware, so the two packets the consumer holds always span two distinct
    sim ticks. The effect tables' gather is CACHED PER SIM TICK in the
    publisher: the engine's two effect passes read their arrays and write
@@ -127,8 +127,8 @@ typedef struct TAGPU_PK_UNIT {
     uint8_t  flags;          /* TAGPU_PK_U_* below                              */
     uint8_t  ground_h;       /* the feature cell's height byte under the anchor */
     char     name[16];       /* UnitDef+0x20 UnitName, LOWERCASED and NUL-padded:
-                                what the glTF replacement pass looks a mesh up by
-                                and what the roster line prints. 16 is the FBI
+                                what the roster and scaffold log lines print.
+                                16 is the FBI
                                 field's own width; a longer name is truncated    */
 } TAGPU_PK_UNIT;
 
@@ -143,12 +143,12 @@ typedef struct TAGPU_PK_UNIT {
    `node` IS DEREFERENCED, and that is deliberate: it is the per-TYPE
    Model3DONode template, which the level teardown cascade frees (0x42DB90)
    and no unit's destructor touches, so its lifetime is tagpu_reclaim's
-   teardown fence — the same argument tagpu_posebake.c and tagpu_r3dcache.c
-   stand on (the plan's row 3: "the template ones stay, they are the
-   fence's"). What the packet carries instead is the per-UNIT read: the
-   PrimitiveStruct lives inside the Object3do, which FreeObjectState 0x45AAA0
-   frees while the render thread may be mid-frame, and it is that read — not
-   the template one — that the game thread makes on our behalf. */
+   teardown fence — the same argument tagpu_posebake.c stands on (the plan's
+   row 3: "the template ones stay, they are the fence's"). What the packet
+   carries instead is the per-UNIT read: the PrimitiveStruct lives inside the
+   Object3do, which FreeObjectState 0x45AAA0 frees while the render thread may
+   be mid-frame, and it is that read — not the template one — that the game
+   thread makes on our behalf. */
 typedef struct TAGPU_PK_PIECE {
     int32_t  pos[3];         /* prim+0x04 P_POS, the COB MOVE delta, 16.16      */
     uint16_t turn[3];        /* prim+0x10 P_TURN, 65536 = 360 degrees           */
@@ -369,11 +369,11 @@ typedef struct TAGPU_PK_PART {
    the game thread has not applied yet — would put the lattice off its own
    bytes whenever something is unacknowledged. (The pass also takes the wide
    grid whenever anything is unacknowledged.) */
-/* ---- THE GL UI'S RENDER HALF --------------------------------------------
+/* ---- THE UI LAYER'S RENDER HALF -----------------------------------------
    The four engine reads tagpu_gui_surf.c's render half needs, every
-   present: the cursor's position and sprite through the graphics globals, the
+   present: the cursor's sprite record through the graphics globals, the
    minimap's box, its three 8bpp surfaces and the view box drawn over them. The
-   GL UI's op QUEUE is untouched and stays a queue — it carries an op stream
+   UI layer's op QUEUE is untouched and stays a queue — it carries an op stream
    into retained twins and a latest-wins snapshot cannot do that (the plan's
    §9). What crosses here is the per-frame STATE the render half reads beside it.
 
@@ -390,8 +390,7 @@ typedef struct TAGPU_PK_PART {
    whole copy would be paid for nothing.
 
    THE PICTURE ARRIVES IN THE LEVEL'S FIRST IN-PLAY PACKET and in no other, so
-   the consumer keeps its own copy keyed on the level generation — which is also
-   what a GL re-init needs. */
+   the consumer keeps its own copy keyed on the level generation. */
 #define TAGPU_PK_MM_DIMCAP  512    /* A SANITY CEILING OF OURS on a minimap
                                       surface's dimension, and on the picture's.
                                       It is NOT an engine bound — the engine
@@ -483,7 +482,7 @@ typedef struct TAGPU_PACKET {
     int32_t  cmd_ack_dy;        /* game thread had applied by this draw: the
                                    render thread's own cumulative minus these
                                    is what it draws ahead of `eye` (prediction) */
-    uint32_t gui_flips;         /* the GL UI publisher's flip counter, so the
+    uint32_t gui_flips;         /* the UI layer's count of engine flips, so the
                                    twin-to-packet skew can be counted           */
     uint32_t draw_seq;          /* the observer's in-play draw count            */
     int32_t  eye[2];            /* the camera's eye, world px, as this frame
@@ -641,25 +640,12 @@ typedef struct TAGPU_PACKET {
     uint32_t fogw_off, fogw_len;
     uint32_t fogsh_off, fogsh_len;    /* the grey band's 256-byte palette remap */
 
-    /* ---- the GL UI's render half ---- */
-    int32_t  cur_pos[2];              /* graphics+0x1B6 / +0x1BA, where the
-                                         engine last drew the cursor            */
-    int32_t  cur_w, cur_h;            /* its sprite's size; 64x64 when the
-                                         record could not be read               */
+    /* ---- the UI layer's render half ---- */
     uint32_t cur_rec;                 /* graphics+0x1B2, the sprite record — a
                                          GAF frame header in the SESSION cursor
-                                         table. A KEY: only tagpu_gaf.c reads it */
-    uint32_t cursor_live;             /* the three fields above are THIS FRAME's.
-                                         An in-play packet implies it (in_game),
-                                         so this exists for the SHELL: a shell
-                                         frame's packet is in_game=0 — it must
-                                         stay so, every world pass reads in_game
-                                         to decide whether to draw at all — and
-                                         still carries a cursor, which is what
-                                         the layer needs to erase the engine's
-                                         (tagpu_packet_pub.c). 0 on
-                                         the level-end packet and while the
-                                         engine's own cursor is not being drawn */
+                                         table. A KEY: only tagpu_gaf.c reads it.
+                                         0 = no cursor this frame, in play and in
+                                         the shell alike (tagpu_packet_pub.c) */
     int32_t  mm_box[4];               /* main+0x142E7/E9/EB/ED, the box the
                                          engine fitted the minimap into, ITS px */
     int32_t  mm_view[4];              /* main+0x142CB, the view box, screen px,
@@ -750,7 +736,7 @@ static __inline const unsigned short* tagpu_pk_fogw(const TAGPU_PACKET* p)
 /* the grey band's palette remap, 256 bytes, or NULL */
 static __inline const unsigned char* tagpu_pk_fogshade(const TAGPU_PACKET* p)
 { return p->fogsh_len == TAGPU_PK_FOGSHADE_BYTES ? (const unsigned char*)p + p->fogsh_off : (const unsigned char*)0; }
-/* ---- the GL UI's render half ---- */
+/* ---- the UI layer's render half ---- */
 /* the three minimap surfaces interleaved, mm_w * mm_h RGB triples, or NULL */
 static __inline const unsigned char* tagpu_pk_minimap(const TAGPU_PACKET* p)
 { return p->mm_len ? (const unsigned char*)p + p->mm_off : (const unsigned char*)0; }
@@ -794,7 +780,7 @@ int  tagpu_grow_stress(void);
 
 /* ---- render thread ---- */
 /* Exactly once per frame, at the top of the overlay frame, by the driver
-   (render_ogl.c) and nobody else. Takes the fresh packet if there is one,
+   (render_vk.c) and nobody else. Takes the fresh packet if there is one,
    else keeps the one it holds. Returns NULL when no packet has ever arrived,
    when the module is off, or when the packet fails its structural bounds
    (counted as a violation).

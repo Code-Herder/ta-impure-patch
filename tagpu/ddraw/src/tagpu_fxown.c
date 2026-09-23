@@ -42,6 +42,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_opt.h"
 #include "tagpu_detour.h"
+#include "tagpu_log.h"
 
 #define SITE_PROJ_VA   0x00469B22u
 #define SITE_EXPL_VA   0x00469B2Cu
@@ -69,8 +70,7 @@ static unsigned g_last = 0;
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* the stub/patch helpers are shared with tagpu_featown.c (tagpu_detour.c) */
@@ -148,7 +148,7 @@ void tagpu_fxown_set_skip(int on)
 }
 
 /* the native effects pass reports each frame it actually gathered; if it
-   stops (overlay off, GL failure, a frame path that never reaches it) the
+   stops (overlay off, a frame path that never reaches it) the
    engine's draw comes back after 90 present frames instead of vanishing */
 static unsigned g_beat = 0, g_beatSfx = 0;
 void tagpu_fxown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
@@ -162,8 +162,6 @@ void tagpu_fxown_set_skip_sfx(int on)
         flog(v ? "fxown: engine particle draw SKIPPED (ours live)" : "fxown: engine particle draw restored");
     }
 }
-
-int tagpu_fxown_installed(void) { return g_installed; }
 
 /* the render thread's standing request for the packet's effect tables. Written
    on the render thread, read on the game thread, one writer, no ordering owed:

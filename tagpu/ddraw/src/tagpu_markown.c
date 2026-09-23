@@ -9,12 +9,11 @@
 #include "tagpu_markown.h"
 #include "tagpu_opt.h"
 #include "tagpu_order.h"
-#include "tagpu_text.h"
 #include "tagpu_packet_pub.h"
 #include "tagpu_terr.h"
 #include "tagpu_native.h"
 #include "tagpu_detour.h"
-#include "tagpu_vpwide.h"
+#include "tagpu_log.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -80,7 +79,6 @@ static const unsigned char BARS_STOLEN[5] = { 0x83, 0xEC, 0x10, 0x53, 0x55 };
 #define CTX_CLIP_T   8
 #define CTX_CLIP_R   9
 #define CTX_CLIP_B   10
-#define CTX_FIELDS   11          /* how much of it we read                    */
 
 volatile unsigned char g_markown_skipBars = 0;
 
@@ -102,8 +100,7 @@ static unsigned g_beat = 0, g_last = 0;
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 
@@ -411,8 +408,8 @@ void tagpu_markown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
 void tagpu_markown_flush(unsigned int frame_counter)
 {
     if (!g_installed) return;
-    /* if the native pass stops running (overlay off, GL failure, a frame path
-       that never reaches it) the engine's markers come back rather than the
+    /* if the native pass stops running (overlay off, a level teardown, a frame
+       path that never reaches it) the engine's markers come back rather than the
        health bars and order lines simply vanishing */
     if ((g_markown_skipBars || g_selbox || g_cursor || g_orders ||
          g_digits) &&

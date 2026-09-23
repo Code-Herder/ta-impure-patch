@@ -423,6 +423,7 @@ replaced each part:
 The lever, the refusal-is-a-`return 0` rule, the TAang short way round and the fixed-point blend
 (7i) are all unchanged. `lerp=` on the `native:` line reads `lerp=<blended>/<snapped>
 span=<ms>ms u=<weight>` with `miss=<n>` when a unit had no partner in the previous packet.
+(Gone since 2026-09-23: nothing called `tagpu_lerp_stats` any more, and it was deleted.)
 
 ### 7d. Option A, built — `tagpu_lerp.c` (2026-09-09) — SUPERSEDED IN PART BY 7j
 
@@ -448,7 +449,7 @@ lever off the function reads the live fields with the code it always had. Everyt
 | table | 4096 records, open-addressed on the pointer, probe 8, swept 256/frame and dropped after 180 frames unseen |
 | arena | fixed blocks of **48 pieces** × 2048 blocks × 2 banks = **3.4 MB**, less than the 4.7 MB pose arena beside it. 48 is above every stock model (36, ARMSCORP/CORSCORP) and below `TAGPU_PBMAXPIECE` 256, so a bigger model gets no history and draws stepped, counted as `big=` |
 | banks | a new sample is written into the bank the record is *not* pointing at and the index flips — the "shift" costs nothing |
-| line | `lerp=<blended>/<snapped> p=<ms> u=<weight>` on `native:`, and **nothing at all** when the lever is off |
+| line | `lerp=<blended>/<snapped> p=<ms> u=<weight>` on `native:`, and **nothing at all** when the lever is off (the field is gone since 2026-09-23, with `tagpu_lerp_stats`) |
 
 **The degradation is a `return 0`, never a blend at weight 1.0** — and that distinction is not
 pedantry. `a + (b - a) * 1.0f` is *not* `b` in floating point, so "blend with weight 1" would have

@@ -25,6 +25,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_input.h"
 #include "tagpu_packet.h"
+#include "tagpu_log.h"
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -140,9 +141,9 @@ static float wheel_level(void)
     }
     else if (s_wheelPend) {
         /* ONE line per gesture, at the end of it, not one per frame that
-           carried notches. zlog is an fopen/fprintf/fclose and this runs on the
-           render thread, so a sustained spin would otherwise open the log every
-           frame for as long as it lasted — and unlike every other per-frame log
+           carried notches. zlog is a file write and this runs on the render
+           thread, so a sustained spin would otherwise write a line every frame
+           for as long as it lasted — and unlike every other per-frame log
            in this stack (tagpu_spxlog.on and friends) there is no flag file to
            turn it off. Deferring to the settle costs nothing diagnostically: the
            total and the level it landed on are what the line was ever read for. */
@@ -511,8 +512,7 @@ static int  s_eyeOff;                     /* tagpu_zoomedge.off, polled on the r
 
 static void zlog(const char* m)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", m); fclose(f); }
+    tagpu_log(m);
 }
 
 static int ta_ok(const char* ta)

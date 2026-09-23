@@ -8,15 +8,15 @@
    the memory it reads — may include this header. `tools/thread-split-check.sh`
    fails the build for any file outside `tagpu/ddraw/thread-split.allow` that
    includes it, names a virtual address, probes with IsBad*Ptr or adds an
-   offset to the main pointer. The list only shrinks: each landing that
+   offset to the main pointer. The list only shrinks: each change that
    converts a render-thread reader to the packet removes its line.
 
-   Started with landing 1 (the frame packet's header). The other modules
-   still carry their own `#define`s; they move here as they are converted,
-   not before, so a conversion's diff shows exactly what left the render
-   thread. Every value here is established in
-   research/notes/exe-reverse-engineering.md, by disassembly of the pristine
-   3.1 exe or by a live measurement that the note quotes. */
+   Not every engine address is here yet. The other modules still carry their
+   own `#define`s; they move here as they are converted, not before, so a
+   conversion's diff shows exactly what left the render thread. Every value
+   here is established in research/notes/exe-reverse-engineering.md, by
+   disassembly of the pristine 3.1 exe or by a live measurement that the note
+   quotes. */
 
 /* ---- the root ------------------------------------------------------------ */
 #define TA_MAIN_PP         0x00511DE8u  /* TAdynmemStruct**: `mov eax,ds:0x511de8` */
@@ -55,14 +55,13 @@
    was covering.] */
 #define VA_CURSOR_DRAW     0x004C67C0u
 
-/* THE IN-GAME CURSOR DRAW, AND NOT THE FLIP'S. MEASURED 2026-09-13, while
-   retiring the engine's cursor: in play the flip's draw above is ENTERED ~5900
-   times a second and never once draws (its siblings' gates leave it nothing to
-   do), while THIS one is what writes +0x1B6/+0x1BA — the pair our composite's
-   erase rect was built from. Its fingerprint is exact and is what identified
-   it: it writes the pair from the POLL's answer with NO hotspot subtraction,
-   where the flip's draw subtracts it (0x4C683C), so in play the pair equalled
-   the mouse record to the pixel while our rect assumed a hotspot offset.
+/* THE IN-GAME CURSOR DRAW, AND NOT THE FLIP'S. MEASURED 2026-09-13: in play the
+   flip's draw above is ENTERED ~5900 times a second and never once draws (its
+   siblings' gates leave it nothing to do), while THIS one is what writes
+   +0x1B6/+0x1BA. It writes the RECORD +0x196/+0x19A from its own poll's
+   answer (0x4C2624), then subtracts the hotspot at 0x4C2638/0x4C2645 and
+   stores the pair at 0x4C284C/0x4C2852 — pos minus hotspot, as the flip's
+   draw computes it too (GFX_CUR_X below has the measurement).
 
    `stdcall(mouseObj)`, `ret 4` (epilogue 0x4C2864), prologue `83 EC 58 56 8B 74
    24 60` (8 bytes, resuming 0x4C25E8). Two early-outs, both to 0x4C2860:
@@ -74,16 +73,12 @@
    INDIRECTLY (no `call 0x4C2990` in the image), the mouse object's per-frame
    update.
 
-   THE OTHER TWO DRAW PATHS ARE ALSO PATCHED SINCE 2026-09-14 — at their
-   blit call (0x4C297E, 0x4C258C), like these two, by tagpu_cursown.c.
-   0x4C2870 really is inert while the mouse thread is up (its first gate
-   is `cmp [+0x1CE], 1` — 0x4C287D loads edi = 1 — and +0x1CE is 1 for
-   exactly as long as that thread lives), and 0x4C24B0 has no call site
-   at all; both are covered anyway, because "cannot run" is a claim about
-   a configuration and the cost of being wrong about one is a second
-   cursor. An earlier revision of this block said they were left alone
-   deliberately; that stopped being true when the patch moved from the
-   function to the blit.
+   NOTHING PATCHES OR OBSERVES THIS FUNCTION, nor the other two draw paths
+   (blit calls at 0x4C297E and 0x4C258C); the only cursor site hooked is
+   VA_CURSOR_DRAW above (tagpu_packet_pub.c). 0x4C2870 is inert while the
+   mouse thread is up (its first gate is `cmp [+0x1CE], 1` — 0x4C287D loads
+   edi = 1 — and +0x1CE is 1 for exactly as long as that thread lives), and
+   0x4C24B0 has no call site at all.
    */
 #define VA_CURSOR_POLL     0x004C25E0u
 
@@ -131,15 +126,14 @@
 #define OFF_WATCHED        0x2A42       /* u8: the order-marker driver's player      */
 #define OFF_SEALEVEL       0x1427F      /* u8: water level, elevation units          */
 
-/* ---- the world tables (landing 3) ---------------------------------------
-   Every one of these was read on the RENDER thread until landing 3, from nine
-   files; the publisher makes them here, on the thread that stores them, once
-   per presented frame. The derivations are in the exe note ("The unit array at
+/* ---- the world tables -----------------------------------------------------
+   The publisher reads these on the thread that stores them, once per
+   presented frame. The derivations are in the exe note ("The unit array at
    level load", "The 3DO model tree", "The feature grid and its defs", "The
    wreck records"). */
 #define OFF_UNIT_BEGIN     0x14357     /* UnitStruct* the array starts at, the  */
-#define OFF_UNIT_END       0x1435B     /* pair whose unsynchronised read was    */
-                                       /* the audit's open hazard: begin is     */
+#define OFF_UNIT_END       0x1435B     /* pair that is unsafe to read           */
+                                       /* unsynchronised: begin is              */
                                        /* stored at 0x485525 and end only at    */
                                        /* 0x4855D6, with a memset between       */
 #define UNIT_STRIDE        0x118
@@ -233,7 +227,7 @@
                                           OFF_BUILDRECT matched its def.]    */
 #define OFF_REGIONFL       0x2CC6      /* u8, bit3 band box, bit6 site OK       */
 
-/* ---- the effects: the four per-frame arrays (landing 4a) ------------------
+/* ---- the effects: the four per-frame arrays -------------------------------
    All four are SIM state: the tick moves them, the two engine draw passes
    (0x49BE60 projectiles, 0x420B00 explosions, 0x471F90 particle layers) read
    and write nothing. research/notes/effects.md has the decompiled rules. */
@@ -335,9 +329,8 @@
 #define GFX_TEXTFG         0x208        /* its foreground index: SetTextColors 0x4C13A0 */
 #define GFX_SHD            0x0C4        /* u8[32][256] PALETTE.SHD: the shade   */
                                         /* table the Gouraud rasteriser 0x459C70 */
-                                        /* uses. "Never rebuilt" was WRONG       */
-                                        /* [2026-09-21]: 0x4BAB00 rewrites it IN */
-                                        /* PLACE behind caps bit 6, from         */
+                                        /* uses. 0x4BAB00 rewrites it IN PLACE   */
+                                        /* behind caps bit 6, from               */
                                         /* 0x42E21B — the same shape as the LHT's */
                                         /* 0x4BAB30. How often that path runs is */
                                         /* NOT established; what is established  */
@@ -356,28 +349,21 @@
                                         /* hotspot; the three polling paths          */
                                         /* (0x4C2870, 0x4C24B0, 0x4C25E0) write the   */
                                         /* same pair, ALSO pos-hotspot, from their own */
-                                        /* poll's answer. [CORRECTED 2026-09-14: a     */
-                                        /* previous revision claimed 0x4C25E0 stored   */
-                                        /* the raw answer and made that difference a   */
-                                        /* "fingerprint". It does not — 0x4C2638 and   */
-                                        /* 0x4C2645 subtract the movsx'd hotspot into  */
-                                        /* edi/ebx, which are what 0x4C284C/0x4C2852   */
-                                        /* store. Measured live as well: the pair sits */
-                                        /* 13..17 px off the record, which is exactly  */
-                                        /* the pulsing move cursor's hotspot.]         */
+                                        /* poll's answer. In 0x4C25E0 the code at      */
+                                        /* 0x4C2638 and 0x4C2645 subtracts the movsx'd */
+                                        /* hotspot into edi/ebx, which are what        */
+                                        /* 0x4C284C/0x4C2852 store. Measured live as   */
+                                        /* well: the pair sits 13..17 px off the       */
+                                        /* record, which is exactly the pulsing move   */
+                                        /* cursor's hotspot.                           */
 #define GFX_CUR_ON         0x1CE        /* u32: THE MOUSE THREAD IS RUNNING. Set to 1  */
                                         /* at 0x4C2AAE, immediately after the          */
                                         /* _beginthread at 0x4C2A9A succeeds, and 0 at */
                                         /* 0x4C2C72 when it is torn down; the thread   */
-                                        /* handle lands beside it at +0x1CA.           */
-                                        /* [CORRECTED 2026-09-14: called "the cursor's */
-                                        /* hide counter" here and "an engine           */
-                                        /* display-mode word, not ours to flip" in the */
-                                        /* notes. It is neither, and the mistake       */
-                                        /* mattered: it is what made 0x4C2870 look     */
-                                        /* unreachable.] 0x4C67C0 draws only when it   */
-                                        /* is non-zero, i.e. only while that thread    */
-                                        /* exists.                                     */
+                                        /* handle lands beside it at +0x1CA. It is not */
+                                        /* a hide counter or a display-mode word.      */
+                                        /* 0x4C67C0 draws only when it is non-zero,    */
+                                        /* i.e. only while that thread exists.         */
 #define GFX_CUR_OK         0x1D2        /* u32: and this one                           */
 
 #endif

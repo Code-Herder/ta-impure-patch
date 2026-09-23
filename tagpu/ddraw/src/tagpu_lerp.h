@@ -61,8 +61,4 @@ int tagpu_lerp_unit(const struct TAGPU_PK_UNIT* u,
                     const struct TAGPU_PK_PIECE* cur, int nparts,
                     const int** pos, const unsigned short** turn);
 
-/* " lerp=<blended>/<snapped>[ miss=<n>]" for the native: line, or "" when the
-   lever is off. Resets the window's counters. */
-void tagpu_lerp_stats(char* buf, unsigned cap);
-
 #endif

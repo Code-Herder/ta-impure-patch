@@ -506,7 +506,8 @@ VBOs with its whole pose in a uniform block, and **no vertices are built for it 
 
 **A twin, not a mode switch**, as §4 requires. Its VERTEX stage is the port of `emit_node`; its
 FRAGMENT stage is the native pass's own, handed over by `tagpu_native_unit_fs()` rather than copied,
-so the two programs cannot drift in the half step 5 does not touch. The shadow-depth twin is that
+so the two programs cannot drift in the half step 5 does not touch. (Since 2026-09-23 that accessor
+is gone: `tools/spirv-gen.py`'s `pose_unit` row pairs this vertex stage with `tagpu_native::FS`.) The shadow-depth twin is that
 same vertex shader with an empty fragment shader and `uDepthPass = 1` — which is what
 `tagpu_shadow.c`'s own `VS_U`/`FS_NONE` pair does for the CPU stream, so a colour-keyed texel casts
 a shadow on both paths rather than one of them discarding it.
@@ -542,6 +543,8 @@ the posed points rather than hitting them, so the top is an **over-estimate**; a
 body face, including the ones whose material the stream collapses, which `emit_node` skipped before
 it ever looked at their y. It feeds the shadow height of **wrecks** only — a unit with a record
 prefers `model_aabb`.
+**Gone since 2026-09-23:** `tagpu_posedraw_top` and the per-piece AABB it read had no caller once
+the Vulkan lane took the units, so both were deleted.
 
 **The Classic silhouette shadow is routed through the posed program too.** It reuses the body
 geometry, so a posed unit would otherwise silently lose its shadow whenever Classic++ is off. Its

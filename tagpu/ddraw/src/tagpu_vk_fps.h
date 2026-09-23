@@ -30,8 +30,8 @@ void tagpu_vk_fps_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 /* 1 on the ONE frame `tagpu_fps.ab` latched its claim, so that the seam
    captures THAT frame instead of whichever one its own lever poll landed on --
    the readout changes its number twice a second, so which frame is captured
-   matters here more than anywhere. It does not mean a file was written: there
-   is no GL half. Consumed. Valid after `prepare`. */
+   matters here more than anywhere. It does not mean a file was written: the
+   seam writes the capture after it records. Consumed. Valid after `prepare`. */
 int  tagpu_vk_fps_ab_frame(void);
 
 /* Give everything back. Called by the seam from `vk_down`, after its

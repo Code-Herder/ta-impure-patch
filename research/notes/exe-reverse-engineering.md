@@ -1134,7 +1134,8 @@ side of the `je`s at `0x4592C6` and `0x45952C`, and those are exactly the two br
 `tagpu_owndraw.c` takes over under target `all` (flipped to `EB` until 2026-09-18, detoured from
 `0x4592BF`/`0x459522` behind a runtime flag since). **Unpatched, a husk reaches only `0x4594DB`**
 (itself gated at `0x4594D0` on `[[scratch+0x92]+0x241] & 0x40000000`, where `+0x92` is
-`[main+0x1439B]`, the UnitInfo array base — so that test reads `UnitInfo[0]`'s flags, an
+`[main+0x1439B]`, the UnitInfo array base, copied in once at feature init by `0x422003`
+(`mov ecx,[eax+0x1439B]`) and `0x422009` (`mov [edx+0x92],ecx`) — so that test reads `UnitInfo[0]`'s flags, an
 arbitrary loaded def with nothing to do with wrecks).
 
 **`Object3do+0x0C` on a husk is a real pointer, to the shared scratch** — not to a unit record,
@@ -2143,9 +2144,14 @@ build-state path `0x459641`) and `0x459C70` (nanoframe, called from the builder 
 Both open `mov eax,imm32` (5 bytes) before `call __chkstk`, which is the detour boundary;
 evidence and the classify-then-`ret 0x10` stub: `own-the-draw.md`, `tagpu_owndraw.c`.
 
-**The completed-unit shadow's three emit sites — the fourth `owndraw` detour.**
+**The completed-unit shadow's three emit sites — `owndraw`'s fourth detour until 2026-09-23.**
 [MEASURED 2026-09-13, from play: the commander kept one teal silhouette on its own body from
 map entry until it first moved. Read here off `objdump` of the pristine build.]
+
+**We no longer patch `0x459338`, `0x45958C`, `0x4594DB` or touch `0x45A470`'s callers:** the
+detour's wipe was gated on `tagpu_posedraw_live()`, which is the constant 0, so it replayed the
+engine's call and did nothing else — the three sites keep the engine's original bytes. The
+engine facts below stand; the detour paragraphs are its record.
 
 Under `owndraw all` the engine's completed-unit shadow is supposed to be nothing: the
 COMPLETED branch is the one every unit takes after the two `je`s are flipped, and with the
@@ -2690,7 +2696,7 @@ left edge. `0x4C2380` — which the previous pass listed as the record-drawing p
 **`0x4C67C0` IS THE SHELL'S PUBLISH POINT — observed since 2026-09-13** (`tagpu_packet_pub.c`,
 the shell cursor channel; the *why* is the frame packet's: the GL UI layer needs the drawn
 cursor's rect on every frame it composites, and the packet's in-play gate never runs in the
-shell). **Its cursor BLIT — the `call` at `0x4C687D`, not this function — is one of the four `tagpu_cursown.c` skips (GUI renderer §24.1).** A flag-gated leaf on the whole function was tried on 2026-09-13 and withdrawn: this function's caller restores the background it saves, unconditionally, so taking it over unpaired the restore and froze `+0x1B6/+0x1BA`. Full prologue `56 8B 74 24 08 8B 86 CE 01 00 00` — `push esi; mov esi,[esp+8]; mov
+shell). **Its cursor BLIT — the `call` at `0x4C687D`, not this function — was one of the four `tagpu_cursown.c` skips (GUI renderer §24.1); that module is deleted and nothing patches the blit now.** A flag-gated leaf on the whole function was tried on 2026-09-13 and withdrawn: this function's caller restores the background it saves, unconditionally, so taking it over unpaired the restore and froze `+0x1B6/+0x1BA`. Full prologue `56 8B 74 24 08 8B 86 CE 01 00 00` — `push esi; mov esi,[esp+8]; mov
 eax,[esi+0x1CE]` — 11 bytes, resuming at `0x4C67CB`; `stdcall(globals, surface)`, `ret 8`, so
 `entry_esp[1]` is `*(0x51FBD0)` itself. **The three early-out words are the gate an observer must
 reproduce**: `+0x1CE` then `+0x1D2` then `+0x1B2`, each `test`ed against zero with a jump to the
@@ -2741,8 +2747,8 @@ second was wrong in a way that hid the first.]
 
 `stdcall(mouseObj)`, `ret 4` (epilogue `0x4C2864`), prologue `83 EC 58 56 8B 74 24 60`. Two
 early-outs to `0x4C2860`: `test [+0x1D2]` zero, and the context acquire `0x4C5FF0` answering
-zero. Past them: `GetCursorPos` (IAT `0x4FC2E4`), write the RECORD `+0x196/+0x19A` from that
-answer, subtract the hotspot into `edi`/`ebx`, fill the saved-background descriptors at `+0x1C2`
+zero. Past them: `GetCursorPos` (IAT `0x4FC2E4`, called at `0x4C2610`), write the RECORD
+`+0x196/+0x19A` from that answer at `0x4C2624`/`0x4C262A`, subtract the hotspot into `edi`/`ebx`, fill the saved-background descriptors at `+0x1C2`
 and `+0x1C6`, **blit the sprite at `0x4C2732` into the private context `[obj+0x1C6]`** (not the
 screen), and store `+0x1B6/+0x1BA`.
 
@@ -3439,7 +3445,8 @@ the tags, the compare and the release — not the callee's semantics.
 (`0x4C683C`/`0x4C684E`) and `0x4C25E0` at `0x4C284C`/`0x4C2852`, the mouse thread's body, which
 loops every ~1 ms and is up precisely in the shell. Anything reading that pair as two plain
 dwords is racing the mouse thread unless it is inside the flip's hold, which spans `0x4C67C0`
-and runs to `0x4C6641`. `tagpu_packet_pub.c`'s shell cursor channel is inside it; its landing
+and runs to `0x4C6641`. `tagpu_packet_pub.c`'s shell cursor channel is inside it (and since
+2026-09-23 reads neither word — the packet carries `+0x1B2` alone); its landing
 (2026-09-13) shipped with a different and insufficient argument — "read the position *this* draw
 wrote" — which rules out only the game thread's own previous draw. Corrected 2026-09-14. **A
 future reader of these words outside the flip does not inherit this ordering.**
@@ -3680,7 +3687,7 @@ above are what establish the mapping).
 | the minimap's three 8bpp surfaces | `main+0x142DF` the fog base, `+0x142E3` the unshaded base, `+0x142DB` the fog+dots composite; each a `{i32 w, i32 h, i32 pitch, u8* base}` descriptor | the minimap build `0x4669B0`, from the level load at `0x4919C3`, stores all three once; `0x466AA0` frees and NULLS them inside the teardown cascade. A descriptor carries a base AND a pitch, so a torn one is a wild read and not a stale picture: the publisher cross-checks `w`/`h` across all three and refuses a pitch below the width or past 4096 |
 | the minimap's box and view rect | `main+0x142E7`/`+0x142E9`/`+0x142EB`/`+0x142ED` the box the engine fitted it into (i16, ITS screen px), `+0x142CB` the view box (4 × i32, screen px, edges inclusive), `+0xDD9` its palette index | values. `+0x142F1` bit 1 is NOT a gate: it is `DrawMinimap 0x466B00`'s dirty flag and `0x466B16` clears it in the same breath |
 | the level's minimap picture | `main+0x1426B`, a GAF frame (TED_GENERATED_PIC) | **alive for the WHOLE LEVEL** [CORRECTED 2026-09-12, objdump of the pristine build — this fork's own notes said it was alive only inside `BuildMinimapSurface 0x466780`, and that is false]. LoadMap loads it (`0x4838F5` → `0x4B8DA0`) and stores it at `0x483900`, or stores NULL at `0x483936` when the file is absent; `0x466780` reads it at `0x46684F` and does NOT null it; the only thing that frees it is `0x483DFE` (`MEM_Free 0x4D85A0`) inside `0x483DD0`, followed by the null at `0x483E0B` — and `0x483DD0`'s only caller is `0x491BB3`, inside the level teardown cascade `0x491B60`. So the packet's publisher can decode it itself on the level's first in-play draw, and that is what let the fork delete its last loader-thread observer |
-| the cursor | `[0x51FBD0]+0x1B2` the sprite record — itself a GAF frame header — and `+0x1B6`/`+0x1BA` where it was last drawn | the record comes out of the cursor table, loaded once per session |
+| the cursor | `[0x51FBD0]+0x1B2` the sprite record — itself a GAF frame header — and `+0x1B6`/`+0x1BA` where it was last drawn (not copied since 2026-09-23: the packet carries the record alone, as `cur_rec`) | the record comes out of the cursor table, loaded once per session |
 
 **The FeatureDef array grows one record at a time, and the count is written LAST.** `0x422520`
 reallocs `main+0x1426F` to `(NumFeatureDefs + 1) · 0x100` (`0x422543`, through `0x4D84A0`), stores

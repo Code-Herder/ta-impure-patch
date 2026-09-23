@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_scenario.h"
+#include "tagpu_log.h"
 
 #define SCN_TRIGGER   "tagpu_scenario.trigger"
 #define SCN_OUT       "tagpu_scenario.json"
@@ -245,8 +246,7 @@ static unsigned g_armed_at;                       /* frame the arena went ARMED 
 
 static void scnlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static void scnlogf(const char* fmt, ...)

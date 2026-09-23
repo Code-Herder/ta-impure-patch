@@ -5,10 +5,10 @@
    digits, and the captured post-fog layer. Contract only; tagpu_vk_mark.c is
    the pass.
 
-   IT IS THE FRAME'S TOP LAYER. The GL twin's own header says it expects depth
-   test and blending OFF -- every fragment is opaque and nothing behind it
-   matters -- so this pass tests no depth and blends nothing either. That is
-   not a simplification of the twin, it is the twin's own rule.
+   IT IS THE FRAME'S TOP LAYER. tagpu_mark.h states the rule: every fragment
+   is opaque and nothing behind it matters -- so this pass blends nothing and
+   tests no depth, except for the one marker that header declares
+   depth-tested, the selection rect (`s_pipeLineZ`).
 
    WHAT IT IS FED: `tagpu_mark_handover` (tagpu_mark.h), which is a DRAW LIST
    rather than a set of counts, because this pass is seven draws with different

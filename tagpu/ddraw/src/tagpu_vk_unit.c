@@ -2,13 +2,12 @@
    drawn by Vulkan. Contract: tagpu_vk_unit.h.
 
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
-   `tagpu_posedraw_handover` (tagpu_posedraw.h): the vertices are the two
-   streams the GL bake uploaded, reached through tagpu_posebake.h's mirrors;
-   the draw ranges are the `first`/`count` the GL glDrawArrays used; the poses
-   are the hand-over's three arenas, copied whole; the
-   uniforms are the numbers the GL draws passed; the texels are the bytes each
-   GL texture was uploaded from; and the shaders are the same GLSL through
-   tools/spirv-gen.py. What a 0-px comparison then compares is two rasterisers.
+   `tagpu_posedraw_handover` (tagpu_posedraw.h): the vertices are the bake's
+   two streams, reached through tagpu_posebake.h's mirrors; the draw ranges are
+   the bake's `first`/`count`; the poses are the hand-over's three arenas,
+   copied whole; the uniforms are the gather's numbers; the texels are the
+   producers' CPU mirrors; and the shaders are tagpu_posedraw.c's and
+   tagpu_native.c's GLSL through tools/spirv-gen.py.
 
    ---- WHAT THIS PASS HAS TO ANSWER, AND WHERE EACH ANSWER IS ----
 
@@ -69,12 +68,11 @@
       sampled and not presented, and its viewport is the shadow pass's own. The
       body writes `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's
       screen-space y, which grows DOWNWARD, so clip +1 is the BOTTOM of the game
-      frame. The Vulkan lane has no composite quad to turn the frame over -- the
-      ported passes draw STRAIGHT INTO THE SWAPCHAIN IMAGE -- so a negative
-      viewport height would turn it over a SECOND time and present the world
-      upside down. The viewport is positive and clip -1 lands on row 0, the
-      game's top row under both. An A/B that compares the lanes to each other
-      is blind to a flip they share; the capture takes TAGPU_ABSHOT_TOPDOWN.
+      frame. Nothing downstream turns the frame over -- the passes draw into
+      the world target or the swapchain image, and neither is flipped after
+      (tagpu_vk_world.h, ORIENTATION) -- so a negative viewport height would
+      present the world upside down. The viewport is positive and clip -1 lands
+      on row 0, the game's top row. The capture takes TAGPU_ABSHOT_TOPDOWN.
       VK_KHR_maintenance1 is needed only for a negative height, so this pass
       does not require it.
 
@@ -95,12 +93,12 @@
    `uRange` 2 over the bake's WIRE range, the same program, drawn after every
    body with uNanoOn 0 (the outline carries its own colour and must not be
    re-classified by the recolour it is drawn beside), uWaterMode 0, uAlpha 1,
-   uCast (0, 0, 1). THE WIDTH IS THE TARGET'S SCALE: GL's glLineWidth(ss) is
-   clamped by the driver to one supersample, which draws the wire at half the
-   engine's intensity (build-state.md 7). Here `wideLines` gives it the full game
-   pixel. A device without it, or with a narrower maximum, draws the wire at
-   the widest it offers rather than not at all -- the wire is one part of a
-   unit's look, and refusing the frame would lose the unit.
+   uCast (0, 0, 1). THE WIDTH IS THE TARGET'S SCALE: a line one supersample
+   wide draws the wire at half the engine's intensity (build-state.md 7), so
+   `wideLines` gives it the full game pixel. A device without it, or with a
+   narrower maximum, draws the wire at the widest it offers rather than not at
+   all -- the wire is one part of a unit's look, and refusing the frame would
+   lose the unit.
 
 
    THE HARD SHADOW DOES NOT CHECK THAT THERE IS GROUND UNDER IT, which only
@@ -119,13 +117,14 @@
    the cast-shadow half of this file's fragment stage is unreachable; the pair
    above is what `shadows=` means today.
 
-   CLASSIC++'s RESTORED ATLAS IS DRAWN: a frame whose twin reports
+   CLASSIC++'s RESTORED ATLAS IS DRAWN: a frame whose hand-over reports
    `uRestored` 1 is DRAWN, through the twin's own colours at binding 43. It
    reaches this lane as the producer's frame LIST, which the restorer below
    paints into `s_arImg` here on the device. Until a restore has painted
    anything the frame draws the indexed atlas, and that is not latched for the
-   session. MEASURED: on the fixture this pass's A/B uses, 0 px with the
-   cast-shadow map off, 1 px with it on -- and that 1 px is the shadow PCF's
+   session. MEASURED against the OpenGL renderer this pass replaced, on the
+   fixture this pass's A/B uses: 0 px with the cast-shadow map off, 1 px with
+   it on -- and that 1 px is the shadow PCF's
    (gpu-status §2.37).
 
    THERE ARE NO REPLACEMENT MESHES: glTF replacement models are disabled and
@@ -133,12 +132,12 @@
 
    THE NATIVE 3DO STREAM HAS NO UNIT VERTICES. tagpu_native.c builds no
    vertices for an ordinary unit -- `nv` is 0 for the whole of its unit loop --
-   so both the body draw and the caster draw that read
-   `firstv[i+1] - firstv[i]` are unreachable, and `tagpu_shadow_unit`, whose
-   only call site is behind that same test, is never called.
+   so every unit body and every unit's hard-shadow silhouette comes from the
+   posed hand-over this pass draws (no posed unit casts into the cast-shadow
+   map: tagpu_posedraw.h).
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
-   A PASS READS NO ENGINE STATE: every value comes from the GL lane's
+   A PASS READS NO ENGINE STATE: every value comes from the gather's
    hand-over, so this file is not on thread-split.allow and must never be. */
 
 #include "tagpu_vk_pass.h"
@@ -155,8 +154,7 @@
 #include "tagpu_posedraw.h"
 #include "tagpu_posebake.h"
 #include "tagpu_packet.h"    /* tagpu_grow_stress, and nothing else of it */
-#include "tagpu_gaf.h"
-#include "tagpu_classicpp.h" /* aniso=: the one knob both lanes filter by */   /* tagpu_gaf_mip_off/_bytes: the restored twin's chain layout */
+#include "tagpu_classicpp.h" /* aniso=: the knob the producer publishes too */
 #include "spirv/tagpu_posedraw.spv.h"
 #include "spirv/tagpu_native.spv.h"
 
@@ -165,7 +163,7 @@
 #define VGL_SZ  192                        /* tagpu_posedraw::VS  _Globals    */
 #define FGL_SZ  272                        /* tagpu_native::FS    _Globals    */
 
-/* the two vertex bindings, which are the GL VAO's two buffers */
+/* the two vertex bindings, which are the bake's two streams */
 #define GEOM_STRIDE (TAGPU_PB_GEOMST * 4)  /* 32 */
 #define MAT_STRIDE  (TAGPU_PB_MATST * 4)   /* 20 */
 
@@ -268,8 +266,7 @@ static int            s_atRows;
    IT IS THE ATLAS'S FULL SQUARE, `dim x dim`, AND NOT THE ROWS A PRODUCER
    HAS COVERED. That is not a memory decision, it is the only extent that can
    be right: the UVs the vertex stream carries are normalised against the whole
-   atlas (`tagpu_gaf.c`: `u0 = x / a->dim`, `v0 = y / a->dim`), the GL twin they
-   were computed for is `glTexImage2D(..., a->dim, a->dim, ...)`, and there is
+   atlas (`tagpu_gaf.c`: `u0 = x / a->dim`, `v0 = y / a->dim`), and there is
    no scale uniform between them. An image of `dim x rows` makes `v = 1.0` mean
    row `rows` instead of row `dim`, so every restored texel is sampled from the
    wrong place -- by a factor of `dim / rows`, which on a half-filled shelf is
@@ -404,7 +401,7 @@ static DRAW*    s_draw;
 static unsigned s_drawCap, s_ndraw, s_ncast;
 static int      s_scissorOn, s_vpL, s_vpT, s_vw, s_vh;
 static float    s_gw, s_gh;            /* the game frame those four are in */
-static int      s_shadowOn;            /* the twin drew these against a map  */
+static int      s_shadowOn;            /* the hand-over's `shadowOn`         */
 /* the strides and offsets `upload` settled and the three draw hooks bind with.
    They are the device's alignment applied to two block sizes, so they cannot
    change inside a frame -- but they are recomputed every `upload` rather than
@@ -495,10 +492,10 @@ static void kill_buffer(const TAGPU_VKPASS* d, VkBuffer* buf, VkDeviceMemory* me
 
 /* `mips` is the number of MIP LEVELS, not the top level index: 1 is an image
    with level 0 alone, which is what every caller but the Classic++ restored
-   twin wants. The twin is mipped because ITS GL ORIGINAL IS -- tagpu_gaf.c
-   gives it GL_LINEAR_MIPMAP_LINEAR to GL_TEXTURE_MAX_LEVEL -- and a single
-   level sampled against that is a different picture wherever a unit is
-   minified, which at ordinary zoom is everywhere. */
+   twin wants. The twin is mipped because the atlas is laid out for a chain
+   (tagpu_gaf.h `mip`) and it is sampled trilinearly: a single level is a
+   different picture wherever a unit is minified, which at ordinary zoom is
+   everywhere. */
 static int mk_image(const TAGPU_VKPASS* d, int w, int h, int mips, VkFormat fmt,
                     VkImageUsageFlags use, VkImageAspectFlags aspect,
                     VkImage* img, VkDeviceMemory* mem, VkImageView* view)
@@ -811,13 +808,12 @@ static int slot_vstage(const TAGPU_VKPASS* d, SLOT* s, VkDeviceSize bytes)
 static int build_samplers(const TAGPU_VKPASS* d)
 {
     VkSamplerCreateInfo si = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    /* THE TWIN'S: every INDEXED texture this shader samples is GL_NEAREST with
-       GL_CLAMP_TO_EDGE -- the atlas, the shade LUT, the palette, the scaffold
-       and the fog pair -- because every one of them is looked up by an exact
-       texel and a filtered fetch would blend two palette indices.
+    /* NEAREST AND CLAMP_TO_EDGE for every INDEXED texture this shader samples
+       -- the atlas, the shade LUT, the palette, the scaffold and the fog pair --
+       because every one of them is looked up by an exact texel and a filtered
+       fetch would blend two palette indices.
        THE RESTORED TWIN IS THE EXCEPTION AND GETS ITS OWN SAMPLER BELOW: it
-       holds true colour, so the GL twin filters it, and NEAREST against that is
-       a different picture. */
+       holds true colour, so it is filtered. */
     si.magFilter = VK_FILTER_NEAREST;
     si.minFilter = VK_FILTER_NEAREST;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -828,9 +824,9 @@ static int build_samplers(const TAGPU_VKPASS* d)
     si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     if (vkCreateSampler(d->dev, &si, NULL, &s_samp) != VK_SUCCESS) return 0;
 
-    /* THE COMPARE SAMPLER IS THE SHADOW MAP'S, and it is LINEAR because the GL
-       twin's is (GL_COMPARE_REF_TO_TEXTURE + GL_LEQUAL + MIN/MAG LINEAR): the
-       bilinear filtering is half of what makes the penumbra smooth. Linear
+    /* THE COMPARE SAMPLER IS THE SHADOW MAP'S -- LESS_OR_EQUAL -- and it is
+       LINEAR: the bilinear filtering is half of what makes the penumbra
+       smooth. Linear
        filtering of a DEPTH format is a feature bit, so it is asked of the
        format the shadow pass actually chose rather than assumed -- and a device
        that will not offer it keeps a NEAREST sampler and stands the pass down
@@ -847,25 +843,24 @@ static int build_samplers(const TAGPU_VKPASS* d)
     si.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     if (vkCreateSampler(d->dev, &si, NULL, &s_sampCmp) != VK_SUCCESS) return 0;
 
-    /* THE CLASSIC++ RESTORED TWIN'S SAMPLER, AND IT IS THE GL TWIN'S SETTINGS
-       READ OFF tagpu_gaf.c RATHER THAN CHOSEN. That texture is the only one
-       here holding true colour instead of palette indices, and `tagpu_gaf.c`
-       gives it GL_LINEAR magnification, GL_LINEAR_MIPMAP_LINEAR minification to
-       GL_TEXTURE_MAX_LEVEL = `mip`, 4x anisotropy where the extension answers,
-       and GL_CLAMP_TO_EDGE.
+    /* THE CLASSIC++ RESTORED TWIN'S SAMPLER. That image is the only one here
+       holding true colour instead of palette indices, so it is sampled with
+       LINEAR magnification, LINEAR mipmapped minification over its own chain
+       (tagpu_gaf.h `mip`), anisotropy at the `aniso=` ratio where the device
+       offers it, and CLAMP_TO_EDGE.
 
-       MEASURED WHAT NEAREST COSTS: 2 126 of 2 132 unit pixels differing at
+       MEASURED WHAT NEAREST COSTS, against the OpenGL renderer this pass
+       replaced: 2 126 of 2 132 unit pixels differing at
        1024x768 and 1 523 of 1 528 at 640x480 -- the same ~99.7 %, the same
        worst channel 155, the same first pixel -- which is the signature of a
        MAGNIFICATION filter and not of a mip level, because it does not move
        with the sampling rate.
 
-       THE LOD IS NOT CLAMPED HERE, AND THAT IS DELIBERATE. GL bounds the twin
-       with GL_TEXTURE_MAX_LEVEL; the equivalent is the IMAGE's own level count,
-       which is exactly the levels the read-back produced, and Vulkan clamps
-       sampling to it. Putting the same number in the sampler as well would be
-       two places to keep in step for no gain -- and the wrong one of the two
-       would be silent.
+       THE LOD IS NOT CLAMPED HERE, AND THAT IS DELIBERATE. The bound is the
+       IMAGE's own level count, which is exactly the levels this lane's
+       restorer reduces, and Vulkan clamps sampling to it. Putting the same
+       number in the sampler as well would be two places to keep in step for no
+       gain -- and the wrong one of the two would be silent.
 
        ANISOTROPY IS ASKED FOR AT THE TWIN'S OWN RATIO, and what this sampler
        actually got is remembered SEPARATELY from what was asked for. `prepare`
@@ -881,8 +876,9 @@ static int build_samplers(const TAGPU_VKPASS* d)
     si.minLod = 0.0f;
     si.maxLod = VK_LOD_CLAMP_NONE;
     {
-        /* THE SAME KNOB THE GL SIDE READS (`aniso=`, tagpu_classicpp.h), so the
-           two lanes cannot be configured apart by accident. It is read ONCE,
+        /* THE SAME KNOB THE PRODUCER PUBLISHES (`aniso=`, tagpu_classicpp.h;
+           tagpu_gaf.h `rgbAniso`), so the two ends cannot be configured apart
+           by accident. It is read ONCE,
            here, because a sampler cannot be rebuilt mid-frame for the reason
            the shared images cannot -- every other slot's submit still names it.
            A knob changed mid-session therefore makes the two disagree, and that
@@ -950,9 +946,8 @@ static int build_layouts(const TAGPU_VKPASS* d)
     return 1;
 }
 
-/* The two vertex bindings, which are the GL VAO's two buffers and its seven
-   attributes at the very strides and offsets tagpu_posebake.c's
-   glVertexAttribPointer calls use. */
+/* The two vertex bindings, which are the bake's two streams (GEOM_STRIDE,
+   MAT_STRIDE), and the seven attributes at the locations the shaders declare. */
 static void vertex_layout(VkVertexInputBindingDescription* vb,
                           VkVertexInputAttributeDescription* va,
                           VkPipelineVertexInputStateCreateInfo* vi)
@@ -1010,8 +1005,7 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
     vp.viewportCount = 1; vp.scissorCount = 1;
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    /* CULL OFF: the GL lane never enables GL_CULL_FACE, so a unit's back faces
-       are rasterised there too. */
+    /* CULL OFF: a unit's back faces are rasterised. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
@@ -1019,16 +1013,14 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
 
     memset(&ds, 0, sizeof ds);
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    /* glEnable(GL_DEPTH_TEST) + glDepthFunc(GL_LESS), and the mask is back ON
-       for the bodies (tagpu_native.c restores it before the body loop). */
+    /* depth tested LESS and WRITTEN for the bodies */
     ds.depthTestEnable = VK_TRUE;
     ds.depthWriteEnable = VK_TRUE;
     ds.depthCompareOp = VK_COMPARE_OP_LESS;
     ds.maxDepthBounds = 1.0f;
 
-    /* glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA) -- the GL FBO is
-       premultiplied -- and glBlendFunc sets the alpha factors as well as the
-       colour ones, so both pairs are set here. */
+    /* ONE / ONE_MINUS_SRC_ALPHA on both factor pairs: the target is
+       premultiplied. */
     memset(&cba, 0, sizeof cba);
     cba.blendEnable = VK_TRUE;
     cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -1057,9 +1049,9 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
     gp.subpass = 0;
     ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
                                    &s_pipeBody) == VK_SUCCESS;
-    /* THE GHOST PIPELINE, AND IT DIFFERS IN ONE BIT. The GL twin brackets its
-       build ghosts in glDepthMask(GL_FALSE)/glDepthMask(GL_TRUE) and changes
-       nothing else -- so ghosts blend with each other (the usual case is the
+    /* THE GHOST PIPELINE, AND IT DIFFERS IN ONE BIT. Build ghosts are drawn
+       with depth WRITES off and nothing else changed -- so ghosts blend with
+       each other (the usual case is the
        cursor ghost standing on a queued ghost's own site) while units drawn
        earlier still occlude them, because the depth TEST stays on. Same
        shaders, same blend, same layout; `depthWriteEnable` alone moves. */
@@ -1070,11 +1062,10 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
         ds.depthWriteEnable = VK_TRUE;
     }
     /* THE WIRE PIPELINE, and it differs in the topology and the width. Depth
-       is the body's own -- tested LESS and WRITTEN, as the GL twin left the
-       mask on across its wire loop -- and the shader's one-notch-nearer bias
-       (+0.15 on the key, `uRange == 2`) is what lets an edge win against the
-       surface it traces. NOT A REASON TO REFUSE THE PASS: without it a
-       nanoframe keeps its recolour and loses only the outline. */
+       is the body's own -- tested LESS and WRITTEN -- and the shader's
+       one-notch-nearer bias (+0.15 on the key, `uRange == 2`) is what lets an
+       edge win against the surface it traces. NOT A REASON TO REFUSE THE PASS:
+       without it a nanoframe keeps its recolour and loses only the outline. */
     if (ok) {
         VkDynamicState dynw[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
                                    VK_DYNAMIC_STATE_LINE_WIDTH };
@@ -1099,13 +1090,14 @@ done:
    the model covers twice is still darkened once. We re-use the body's 3-D
    geometry, and without a mask the blend compounds -- from above an aircraft is
    a two-sided shell over its whole area, and a building's slant projection
-   overlaps itself wherever two faces land on the same ground. MEASURED on the
-   GL twin 2026-09-04, engine against ours on one fixture and camera: the
+   overlaps itself wherever two faces land on the same ground. MEASURED
+   2026-09-04 on the OpenGL renderer this pass replaced, engine against ours on
+   one fixture and camera: the
    engine's shadow is a single sharp mode at 0.44-0.52 of bare ground, ours was
    BIMODAL at 0.25 (two surfaces) and 0.50 (one) with a 0.125 tail for three,
    and four airframes read 0.252-0.255 against the engine's 0.487.
 
-   THE FIX IS THE GL TWIN'S OWN AND IS A STENCIL MASK. Draw the silhouette into
+   THE FIX IS A STENCIL MASK. Draw the silhouette into
    the stencil with colour writes off, then blend where the mark is with the op
    that ZEROES it, so a second fragment on that pixel fails EQUAL 1. Both draws
    see the same depth buffer -- depth writes are off for both -- so they cover
@@ -1163,7 +1155,7 @@ static int build_shadow_pipelines(const TAGPU_VKPASS* d)
     vp.viewportCount = 1; vp.scissorCount = 1;
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = VK_CULL_MODE_NONE;          /* the GL lane never culls        */
+    rs.cullMode = VK_CULL_MODE_NONE;          /* the body pipeline's rule       */
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -1171,17 +1163,17 @@ static int build_shadow_pipelines(const TAGPU_VKPASS* d)
     memset(&ds, 0, sizeof ds);
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_TRUE;
-    ds.depthWriteEnable = VK_FALSE;           /* glDepthMask(GL_FALSE)          */
+    ds.depthWriteEnable = VK_FALSE;           /* see the block above            */
     ds.depthCompareOp = VK_COMPARE_OP_LESS;
     ds.maxDepthBounds = 1.0f;
     ds.stencilTestEnable = VK_TRUE;
-    /* BOTH FACES, because GL's glStencilFunc/glStencilOp set both and this
-       pipeline does not cull. */
+    /* BOTH FACES, because this pipeline does not cull: a back face must mark
+       and clear exactly as a front face does. */
     memset(&so, 0, sizeof so);
     so.failOp = VK_STENCIL_OP_KEEP;
     so.depthFailOp = VK_STENCIL_OP_KEEP;
-    so.passOp = VK_STENCIL_OP_REPLACE;        /* glStencilOp(KEEP, KEEP, REPLACE)*/
-    so.compareOp = VK_COMPARE_OP_ALWAYS;      /* glStencilFunc(ALWAYS, 1, 0xFF) */
+    so.passOp = VK_STENCIL_OP_REPLACE;        /* mark the pixel with 1          */
+    so.compareOp = VK_COMPARE_OP_ALWAYS;      /* whatever it held before        */
     so.compareMask = 0xFF; so.writeMask = 0xFF; so.reference = 1;
     ds.front = so; ds.back = so;
 
@@ -1193,7 +1185,7 @@ static int build_shadow_pipelines(const TAGPU_VKPASS* d)
     cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     cba.alphaBlendOp = VK_BLEND_OP_ADD;
-    cba.colorWriteMask = 0;                   /* glColorMask(0,0,0,0)           */
+    cba.colorWriteMask = 0;                   /* the mark draws no colour       */
     cb.attachmentCount = 1; cb.pAttachments = &cba;
 
     dy.dynamicStateCount = 2; dy.pDynamicStates = dyn;
@@ -1214,8 +1206,7 @@ static int build_shadow_pipelines(const TAGPU_VKPASS* d)
                                    &s_pipeShMark) == VK_SUCCESS;
     if (ok) {
         /* the blending half: only where the mark is, and it takes the mark down
-           with it -- glStencilFunc(GL_EQUAL, 1, 0xFF), glStencilOp(KEEP, KEEP,
-           GL_ZERO), colour writes back on */
+           with it -- EQUAL 1, then ZERO on pass, colour writes back on */
         so.passOp = VK_STENCIL_OP_ZERO;
         so.compareOp = VK_COMPARE_OP_EQUAL;
         ds.front = so; ds.back = so;
@@ -1273,10 +1264,11 @@ static int build_cast_pipeline(const TAGPU_VKPASS* d, VkRenderPass rp)
     vertex_layout(vb, va, &vi);
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    /* GL'S CLIP-SPACE Z. The shadow matrix fills [-1, 1] by construction
-       (tagpu_shadow.c `mrow`), so without this the near half of every caster is
-       clipped away -- §2.32 at length. The caller has already refused to get
-       here without `zclipok`. */
+    /* CLIP-SPACE Z IN [-1, 1]. The shadow matrix's contract is a [-1, 1]
+       depth range that the consumers read back as `p.z * 0.5 + 0.5`
+       (tagpu_vk_shadow.c item 2), so without this the near half of every
+       caster is clipped away -- §2.32 at length. The caller has already refused
+       to get here without `zclipok`. */
     zc.negativeOneToOne = VK_TRUE;
     vp.pNext = &zc;
     vp.viewportCount = 1; vp.scissorCount = 1;
@@ -1378,14 +1370,16 @@ static int build_descriptors(const TAGPU_VKPASS* d)
    from `first`. A frame names a rect of the INDEXED atlas, and this lane reads
    that atlas out of an image IT uploaded -- `s_atRows` rows of it. A frame
    below that line is read as zeros, and palette index 0 is opaque black, so the
-   restore paints a black cell over art that is perfectly fine on the GL lane,
-   whose source is the live texture `atlas_paint` writes as entries are added.
+   restore paints a black cell over art the atlas does hold: the producer queues
+   a frame the moment `atlas_paint` writes it, before this lane's upload has
+   reached its rows.
 
-   MEASURED, and it is the whole reason this function exists: an oracle run
-   with the unit chain differing in rows 0..71 -- the first shelf -- with the
-   Vulkan side holding (0,0,0,255) in 55 213 texels and the GL side holding
-   art. Those were the 25 frames of the first batch, queued in the same frame
-   as an upload that had covered fewer rows than they sit in.
+   MEASURED, and it is the whole reason this function exists: an A/B against
+   the OpenGL renderer this pass replaced, with the unit chain differing in rows
+   0..71 -- the first shelf -- the Vulkan side holding (0,0,0,255) in 55 213
+   texels and the other side holding art. Those were the 25 frames of the first
+   batch, queued in the same frame as an upload that had covered fewer rows than
+   they sit in.
 
    The count is a PREFIX because the producer appends in shelf order, so the
    first uncovered frame bounds every frame after it. Stopping there rather than
@@ -1419,9 +1413,8 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
             s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
             s_rjChain = 0; s_rjSrcView = VK_NULL_HANDLE; s_rjDstView = VK_NULL_HANDLE;
             /* AND WHAT IT PAINTED IS NO LONGER A PICTURE -- the list dying is
-               the producer's out-of-memory drop, and the read-back cannot take
-               over because both arm latches are one-way and the mirror was
-               freed when the list armed. */
+               the producer's out-of-memory drop, and nothing but this job
+               paints the twin. */
             s_arHave = 0;
         }
         return;
@@ -1579,9 +1572,10 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
        `job_free` retires them on the mask a submitted command buffer is bound
        by; `kill_image` below does not defer. `restore_want`'s "the twin moved"
        check is the backstop and cannot be the fix: it runs LATER in the frame,
-       when the handles are already dead. Reachable because `tagpu_gaf.c`
-       demotes the atlas's `mip` to 0 at runtime when `glGenerateMipmap` does
-       not resolve, and the producer publishes that unfiltered. */
+       when the handles are already dead. Reachable only if the producer
+       publishes a different `restoreDim` or `restoreMips`; both are constants
+       of tagpu_render3do.c's atlas (ATLAS_DIM, ATLAS_MIP), so this is a guard
+       rather than a path. */
     if (s_arImg && s_rjob) {
         plog(d, "unit: the restored twin is being rebuilt (%dx%d mip %d -> %dx%d "
                 "mip %d) and a restore is live on the old one - dropping the job "
@@ -1597,11 +1591,10 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
     s_arLvlN = 0;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
     s_arDim = 0; s_arMips = 0; s_arHave = 0;
-    /* COLOR_ATTACHMENT, and it costs nothing when unused:
-       the restorer paints level 0 into this image through a render pass and
-       reduces the rest into it the same way, so every level is a colour
-       attachment at some point. The mirror path never uses it and the usage
-       flag does not change how the image is sampled. */
+    /* COLOR_ATTACHMENT: the restorer paints level 0 into this image through a
+       render pass and reduces the rest into it the same way, so every level is
+       a colour attachment at some point. The usage flag does not change how
+       the image is sampled. */
     if (!mk_image(d, dim, dim, mips + 1, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
@@ -1616,12 +1609,11 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
        `s_arLvlN` 0 and the twin is restored at level 0 only -- which the
        consumer then refuses to draw from, because a trilinear fetch into
        undefined levels is a wrong picture rather than a missing one. The image
-       itself is kept: the mirror path uses the same one and does not need
-       these. */
+       itself is kept. */
     /* `mips >= 0`, NOT `>= 1`. The caller admits `restoreMips == 0` by name
-       (`h.restoreMips >= 0` at the build site) and that is a real
-       configuration: the atlas demotes `mip` to 0 whenever `glGenerateMipmap`
-       did not resolve. A level-0-only twin needs no chain, but the OUT pass
+       (`h.restoreMips >= 0` at the build site): an atlas laid out with `mip`
+       0 is a valid producer (tagpu_gaf.h), though the unit atlas's ATLAS_MIP
+       is 2. A level-0-only twin needs no chain, but the OUT pass
        still paints THROUGH `s_arLvl[0]`, so it needs that one view -- starting
        this loop at 1 would leave none, `job_new` would refuse the null
        `dstView` silently, `s_rjTried` would latch for the session and the unit
@@ -1870,12 +1862,8 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.f[20] = r->cast[0]; b.f[21] = r->cast[1];
     b.f[22] = r->cast[2];                              /* uCast       vec3 @80 */
     b.i[23] = 0;                                       /* uDepthPass   int @92 */
-    /* uShadowMat @96 -- in GL the vertex and fragment stages share ONE uniform
-       of this name, so the body program's vertex copy holds what
-       tagpu_shadow_apply wrote. It is never READ here (the shader reaches it
-       only on the uDepthPass branch), and it is written anyway because the two
-       lanes are being compared and not merely made to agree. */
-    memcpy(&b.f[24], h->shadowMat, 64);
+    /* uShadowMat @96 stays at the memset's zero: the shader reaches it only
+       on the uDepthPass branch. */
     b.i[40] = 0;                                       /* uRange       int @160*/
     b.f[41] = 0.0f;                                    /* uWire      float @164*/
     b.i[42] = base[0];                                 /* uRowBase     int @168*/
@@ -1899,9 +1887,8 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        unit's visibility words. Everything else is the BODY range over again, which IS the
        blackened composite: the same triangles, the same pose, shifted.
 
-       uDepthPass STAYS 0 and uShadowMat is carried for the same reason the
-       body block carries it -- the shader reaches it only on the depth branch,
-       and the two lanes are being compared rather than merely made to agree. */
+       uDepthPass STAYS 0 and uShadowMat stays zero, as in the body block --
+       the shader reaches it only on the depth branch. */
     b.f[2] = 5.0f; b.f[3] = r->shOffY;                 /* uOffset     vec2 @8  */
     b.i[40] = (r->shKind == TAGPU_PDSH_SLANT) ? 1 : 0; /* uRange               */
     memcpy(ub + vglOff3, b.f, VGL_SZ);
@@ -1933,8 +1920,8 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.f[12] = r->anchor[0]; b.f[13] = r->anchor[1];
     b.f[14] = r->anchor[2]; b.f[15] = r->anchor[3];
     b.f[16] = r->enc;
-    /* uShd is NOT set on the depth program either: the twin leaves it at a
-       freshly linked program's zero, and nothing the caster writes reads it. */
+    /* uShd is NOT set on the depth program either: it stays at the memset's
+       zero, and nothing the caster writes reads it. */
     b.f[20] = r->cast[0]; b.f[21] = r->cast[1]; b.f[22] = r->cast[2];
     b.i[23] = 1;                                       /* uDepthPass           */
     memcpy(&b.f[24], h->castMat, 64);                  /* uShadowMat           */
@@ -1985,10 +1972,10 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        which against `ONE, ONE_MINUS_SRC_ALPHA` is exactly `dst * 0.5` -- and
        returns before the SHD row, the build-state recolour and the Classic++
        light, so none of the rest of this block is read on this draw. It is
-       written anyway, unchanged, because the twin's program held it: the
-       fragment reaches the fog discard and the scaffold test BEFORE the shadow
-       return, so a shadow inside fog or under a stamped scaffold row goes with
-       them, and those two do read this block.
+       written anyway, unchanged, because the fragment reaches the fog discard
+       and the scaffold test BEFORE the shadow return, so a shadow inside fog or
+       under a stamped scaffold row goes with them, and those two do read this
+       block.
 
        uAlpha IS SET TO 0.5 AND IS NOT READ: the shader's shadow branch
        hard-codes the same number, and carrying it keeps
@@ -2066,12 +2053,11 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        is the same instant, and the same ownership, that the rest of this
        function writes it in. */
     if (!tagpu_posedraw_handover(&h, d->frame)) {
-        /* AND IT SAYS SO, ONCE. On the vulkan-only lane this is the stand-down
-           that fires, and every other refusal below carries a `plog` with a
-           one-shot latch, so a silent one here would leave an absent capture
-           with an empty log. Throttled the same way they are: the ordinary case
-           is a frame the GL twin drew no posed unit on, which is most frames in
-           the shell. */
+        /* AND IT SAYS SO, ONCE. This is the stand-down that fires most, and
+           every other refusal below carries a `plog` with a one-shot latch, so
+           a silent one here would leave an absent capture with an empty log.
+           Throttled the same way they are: the ordinary case is a frame with
+           no posed unit, which is most frames in the shell. */
         if (!s_saidNoHand) {
             s_saidNoHand = 1;
             plog(d, "unit: no hand-over for frame %u - the pass published "
@@ -2102,10 +2088,10 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        there is nothing to draw", and this is where it holds for a refused frame
        as well as an empty one. */
 
-    /* A COMPARE SAMPLER THAT IS NOT THE TWIN'S, AND THE DECISION IS TAKEN
-       HERE. The GL PCF is bilinear and linear filtering of a depth format is a
-       feature bit; a device that will not offer it would draw a harder penumbra
-       than the oracle's, so a frame that samples the map must not be drawn.
+    /* A COMPARE SAMPLER THAT IS NOT LINEAR, AND THE DECISION IS TAKEN HERE.
+       The PCF is meant to be bilinear, and linear filtering of a depth format
+       is a feature bit; a device that will not offer it would draw a harder
+       penumbra, so a frame that samples the map must not be drawn.
 
        IT IS DECIDED IN `upload` AND NOT IN `prepare` BECAUSE OF WHEN THE MAP IS
        DRAWN. `prepare` runs AFTER `cast` has put this frame's posed casters
@@ -2175,7 +2161,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         goto standdown;
     }
 
-    /* THE TEXELS. The mirrors are asked for on the twin's own beat and cannot
+    /* THE TEXELS. The mirrors are asked for on the producer's beat and cannot
        be there before the atlas has its dimensions, so the first frames of a
        session legitimately arrive without one. Said once. */
     if (!h.atlas || h.atlasDim < 1 || h.atlasDim > 8192 || !h.lut || !h.pal ||
@@ -2244,13 +2230,14 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             }
         }
     }
-    /* AND THE FILTER HAS TO BE THE TWIN'S, not merely a filter. The restored
-       atlas is the only texture this pass samples that holds true colour rather
-       than palette indices, so it is the only one GL filters -- trilinear to
-       its MAX_LEVEL with anisotropy where the extension answered. The mip
-       levels are carried across as bytes, so those match by construction; the
-       ANISOTROPY is carried as the CONFIGURED ratio on both ends, so it
-       matches unless the two have been edited apart. A ratio that differs is
+    /* AND THE FILTER HAS TO BE THE CONFIGURED ONE, not merely a filter. The
+       restored atlas is the only texture this pass samples that holds true
+       colour rather than palette indices, so it is the only one filtered --
+       trilinear over its own chain, with anisotropy where the device offers
+       it. The chain depth comes from the producer (`restoreMips`), so it
+       matches by construction; the ANISOTROPY is carried as the CONFIGURED
+       ratio on both ends, so it matches unless the two have been edited
+       apart. A ratio that differs is
        a different picture wherever a unit is minified at an angle, which is
        ordinary play, so the frame stands down rather than draw one. Same rule,
        and the same shape, as `s_cmpLinear` above.
@@ -2259,9 +2246,9 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        below the knob. The producer cannot know this device's ceiling, and
        standing down for it means drawing no units at all rather than slightly
        differently filtered ones. */
-    /* `atlasRgbAniso` IS THE RATIO: a fact about what the producer's twin is
-       filtered at, published on the list path, so a restore this lane runs for
-       itself is held to the filter test. */
+    /* `atlasRgbAniso` IS THE RATIO the producer read off the knob, published
+       on the list path, so a restore this lane runs for itself is held to the
+       filter test. */
     if (h.restored && h.restoreFrames && h.atlasRgbAniso != s_twinAnisoWant) {
         if (!s_saidAniso) {
             s_saidAniso = 1;
@@ -2302,16 +2289,16 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* AN UNPAINTED TWIN DRAWS INDEXED, ON BOTH BRANCHES. A stand-down
            here, with five one-way `s_rjTried` latches above it, would blank
            every unit for the rest of the SESSION on any restorer refusal, and
-           -- because `rlistRepaint` is a constant 0, so `if (!repaint)
-           s_arHave = 0;` fires on every generation change -- for the length of
+           -- because the unit atlas's `rlistRepaint` is 0 on every
+           generation (tagpu_gaf.h), so `if (!repaint) s_arHave = 0;` fires on
+           every generation change -- for the length of
            a repaint on every level boundary, recycle and map change. `!feed`
            is the rare half: a generation change satisfies all three feed terms.
 
-           THERE IS NO OTHER LANE TO SHOW A DIFFERENT PICTURE FROM:
-           `render_vk.c:232` is the only caller of `tagpu_overlay_draw`. Indexed
-           art is not a disagreement with anybody, it is Classic++ restore off
-           for one frame. A bound on what the flag may promise, not a timing
-           fix. */
+           NOTHING ELSE DRAWS THESE UNITS: `render_vk.c` is the only caller of
+           `tagpu_overlay_draw`. Indexed art is not a disagreement with
+           anybody, it is Classic++ restore off for one frame. A bound on what
+           the flag may promise, not a timing fix. */
         h.restored = 0;
     } else s_saidRestored = 0;
 
@@ -2343,31 +2330,29 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        overlay is another pass's image, and tagpu_vk_scaffold.h exposes a
        FRAME-STAMPED per-slot view in exactly the shape tagpu_vk_shadow.h
        settled on, which `bind_main` points binding 44 at. That is the part
-       the effects and hi-res passes will reuse.
+       any other consumer of the overlay would reuse.
 
        THE `gl_FragCoord` HALF IS CLOSED.
 
        TAGPU_GLSL_SCAF_TEST (tagpu_glsl.h) locates the fragment in the game
-       frame with `gl_FragCoord.xy / uSS`, and the two APIs measure that from
-       opposite edges: GL's origin is the LOWER left, Vulkan's is the UPPER left
-       and `OriginUpperLeft` is the only execution mode Vulkan permits. A
-       NEGATIVE viewport height would make them exact mirrors; this pass takes
-       a positive one (item 4). The GL twin's VS
-       maps game row 0 to FBO window y 0, which tagpu_glsl.h states outright, so
-       GL reads `g + 0.5` for game row g; with a positive height this lane
-       stores game row g at image row g and reads `g + 0.5` as well. THE TWO
-       AGREE, and the same is true of any later pass that reads `gl_FragCoord`.
+       frame with `gl_FragCoord.xy / uSS`, and Vulkan measures that from the
+       UPPER left -- `OriginUpperLeft` is the only execution mode it permits.
+       The VS maps game row 0 to clip -1 and this pass takes a positive
+       viewport height (item 4), so game row g lands on image row g and reads
+       `g + 0.5`: the game-frame pixel, as tagpu_glsl.h assumes. A NEGATIVE
+       height would mirror it. The same is true of any later pass that reads
+       `gl_FragCoord`.
 
        WHAT STILL STANDS THE PASS DOWN IS THE OTHER HALF, and it is a real
        bound rather than a restatement. `tagpu_vk_scaffold_view` hands back
        VK_NULL_HANDLE for a frame or slot that is not its own, and `bind_main`
-       then points binding 44 at the 1x1 stand-in. A frame whose twin sampled a
-       real overlay while this lane sampled one texel is a DIFFERENT PICTURE,
-       so it is refused. Turning the refusal into `scafOn && !scaffold_view(...)`
-       is now a small, bounded change -- but it enables a drawing path this lane
-       has never measured, and it needs its own A/B, which is awkward because
-       the overlay's own Vulkan pass draws in the same frame. Left open until
-       something measures it.
+       then points binding 44 at the 1x1 stand-in. A frame whose gather asks
+       for a real overlay while this lane samples one texel is a DIFFERENT
+       PICTURE, so it is refused. Turning the refusal into
+       `scafOn && !scaffold_view(...)` is now a small, bounded change -- but it
+       enables a drawing path this lane has never measured, and it needs its
+       own A/B, which is awkward because the overlay's own Vulkan pass draws in
+       the same frame. Left open until something measures it.
 
        It costs nothing in play either way: `scaffold.on` is not in the default
        arm set and its own note says to leave it disarmed. */
@@ -2673,8 +2658,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     memcpy(s->smallMap + SMALL_SHDOFF, h.lut, 256 * 32);
     memcpy(s->smallMap + SMALL_FLTOFF, h.fogLut, 256);
     /* The grid is one `unsigned short` a cell and the image is RG8: the same
-       two bytes in the same order, which is exactly what the GL twin uploads
-       (GL_RG / GL_UNSIGNED_BYTE over this very buffer). With no grid this frame
+       two bytes in the same order. With no grid this frame
        the image is one zero cell, which the shader never reads -- taFog is
        called only on the `uFog & 1` branch, and a frame that wanted one and had
        none was refused above. */
@@ -2731,9 +2715,10 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_shadowOn = h.shadowOn;
 
     /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST. A
-       frame claimed and then not drawn would have the seam capture a bare clear
-       against a GL half that has the units in it, and report every unit pixel
-       as differing: a port failure that is really an oracle failure. */
+       frame claimed and then not drawn would have the seam capture a bare
+       clear, and a diff against another build's capture would report every
+       unit pixel as differing: a failure of this pass that is really a failure
+       of the capture. */
     s_abFrame = h.ab;
     s_drawThis = 1;
     /* the offsets `cast`, `prepare` and `record` bind with */
@@ -2958,11 +2943,10 @@ int tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (s_state != ST_READY || !s_drawThis) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
 
-    /* THE MAP THE GL TWIN SAMPLED HAS TO BE THE MAP WE SAMPLE. `uShadowOn` came
-       from the twin's own tagpu_shadow_apply, so if it is 1 and this frame's
-       Vulkan map is not complete, every shadowed fragment would be lit here and
-       dark there -- which the A/B would report as a rasteriser difference. The
-       terrain pass stands down on exactly this. */
+    /* A UNIT DRAWN AGAINST A MAP NEEDS THIS FRAME'S MAP. If the hand-over's
+       `uShadowOn` is 1 and this frame's map is not complete, every shadowed
+       fragment would sample a map that is not this frame's. The terrain pass
+       stands down on exactly this. */
     if (s_shadowOn && !tagpu_vk_shadow_ready(d->frame)) {
         if (!s_saidShadow) {
             s_saidShadow = 1;
@@ -2983,9 +2967,9 @@ int tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     return 1;
 }
 
-/* the world scissor, the SAME rectangle the GL twin clips to rather than its
-   vertical mirror: this pass's framebuffer row 0 is the game frame's top row
-   under both APIs (tagpu_vk_feat.c argues it at length). Getting it wrong shows
+/* the world scissor, the viewport rect itself rather than its vertical
+   mirror: this pass's framebuffer row 0 is the game frame's top row
+   (tagpu_vk_feat.c argues it at length). Getting it wrong shows
    up as the world clipped against the wrong edge rather than as anything
    subtle. */
 static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
@@ -2993,12 +2977,12 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
     int x = 0, y = 0, cw = (int)w, ch = (int)h;
     /* AND IT IS SCALED, by the attachment's extent over the game frame's, for
        the same reason tagpu_vk_feat.c's is: the rect arrives in GAME-FRAME
-       pixels -- it is the rect the native pass hands glScissor -- while this
+       pixels -- it is the viewport rect the gather hands over -- while this
        pass's viewport covers the whole attachment and its vertex shader
        divides by `uGame`. At the 1:1 sizes an A/B is run at the two are the
        same number, so a measurement there cannot see this; the
-       Vulkan window tracks the client rect and the GL lane's own render target
-       need not match it. Unscaled, a 640x480 game frame in a 1920x1080 window
+       Vulkan window tracks the client rect, which need not match the game
+       frame. Unscaled, a 640x480 game frame in a 1920x1080 window
        clips every unit to the left third of the bottom quarter of the world. */
     float sx = s_gw > 0.0f ? (float)w / s_gw : 1.0f;
     float sy = s_gh > 0.0f ? (float)h / s_gh : 1.0f;
@@ -3022,15 +3006,14 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
 }
 
 /* ONE STAGE OF THIS PASS: the bodies, or the build ghosts. They are separate
-   calls because the GL twin draws them at DIFFERENT POINTS OF THE FRAME and
-   both blend -- `tagpu_native.c` draws the units, then the effects, then
-   `ghost_pass`. Recording the ghosts inside the body stage would put them
-   BEFORE the effects on this lane and after them on the GL one, and
-   premultiplied `over` is not commutative: any translucent effect overlapping a
-   ghost (nano spray on a queued site, an explosion under the placement cursor)
-   composites to a different colour, by up to the ghost's own alpha share of the
-   effect. The seam's own comment states that rule as the reason the body stage
-   sits where it does. */
+   calls because the two are recorded at DIFFERENT POINTS OF THE FRAME and
+   both blend -- the world is units, then effects, then ghosts (tagpu_vk.c
+   `world_records`). Recording the ghosts inside the body stage would put them
+   BEFORE the effects, and premultiplied `over` is not commutative: any
+   translucent effect overlapping a ghost (nano spray on a queued site, an
+   explosion under the placement cursor) composites to a different colour, by
+   up to the ghost's own alpha share of the effect. The seam's own comment
+   states that rule as the reason the body stage sits where it does. */
 /* THE THREE STAGES, and the numbers are the order they are recorded in.
    RS_SHADOW is first inside `tagpu_vk_unit_record` because the engine draws a
    unit's shadow before its body (0x459200 blits the blackened composite and
@@ -3052,9 +3035,10 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     /* NO Y FLIP: this pass writes the engine's screen-space y,
        which grows downward, so clip -1 is the game frame's top row and a
-       POSITIVE height puts it on row 0 -- where the game's top row is under
-       both APIs. minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1] onto GL's
-       own (z+1)/2 -- the vertex shader writes `clamp(1.0 - enc/uDepthScale, 0,
+       POSITIVE height puts it on row 0 -- where the game's top row is.
+       minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1] onto [0.5, 1], the
+       range every world pass shares (tagpu_vk_feat.c item 1) -- the vertex
+       shader writes `clamp(1.0 - enc/uDepthScale, 0,
        1)`, which is already in [0, 1], so this needs no extension and must not
        use one. Both stages set it: the effects pass runs between them and sets
        its own. */
@@ -3069,9 +3053,9 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     vkCmdSetScissor(cb, 0, 1, &sc);
 
     /* THE PIPELINE IS BOUND PER DRAW KIND, NOT ONCE. The records arrive in the
-       GL twin's own draw order -- every unit, then every ghost, because
-       ghost_pass runs after the unit loop and `pd_record` appends as each draw
-       is issued -- so in practice this switches once. It is written as a
+       gather's order -- every unit, then every ghost, because tagpu_native.c
+       calls `ghost_record` after its unit loop and `pd_record` appends as each
+       is recorded -- so in practice this switches once. It is written as a
        compare rather than as two loops so that it stays correct if that order
        ever stops holding. */
     bound = VK_NULL_HANDLE;
@@ -3088,11 +3072,11 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        stack. So this is per unit and the pipeline alternates -- two binds a
        caster, which is what the state change costs when it is not dynamic.
 
-       THE SILHOUETTES GO BEFORE THE SLANTS, the GL twin's own order (two loops,
-       `_shadow_begin` then `_slant_begin`). Both blend the same constant black
-       at the same alpha, so the order is visible only where a mobile's
-       silhouette and a building's slant overlap -- and premultiplied `over` of
-       two identical colours is not commutative in the alpha channel. */
+       THE SILHOUETTES GO BEFORE THE SLANTS (the `kind` loop below). Both blend
+       the same constant black at the same alpha, so the order is visible only
+       where a mobile's silhouette and a building's slant overlap -- and
+       premultiplied `over` of two identical colours is not commutative in the
+       alpha channel. */
     if (stage == RS_SHADOW) {
         int kind;
         for (kind = TAGPU_PDSH_SIL; kind <= TAGPU_PDSH_SLANT; kind++) {
@@ -3119,8 +3103,8 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
 
     /* ---- the nanoframe wires ----
-       After every body, the GL twin's order: `_wire_begin` ran once the unit
-       loop was done. Depth-tested against the bodies and writing its own, so
+       After every body, so that every body is in the depth buffer first.
+       Depth-tested against the bodies and writing its own, so
        an edge behind another unit is hidden and one on its own model wins by
        the shader's +0.15. THE WIDTH IS SET ON EVERY BIND OF A PIPELINE THAT
        DECLARED IT DYNAMIC, whatever its value -- an unset dynamic state is
@@ -3195,8 +3179,8 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (s_nslant) tagpu_posedraw_slant_drew();
 }
 
-/* The build ghosts, AFTER the effects -- the GL twin's own order, and the whole
-   reason this is a second entry point. It also ends the pass's frame. */
+/* The build ghosts, AFTER the effects (tagpu_vk.c `world_records`), and the
+   whole reason this is a second entry point. It also ends the pass's frame. */
 void tagpu_vk_unit_record_ghosts(const TAGPU_VKPASS* d, VkCommandBuffer cb,
                                  uint32_t slot, uint32_t w, uint32_t h)
 {

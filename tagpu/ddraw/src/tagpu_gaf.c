@@ -6,33 +6,32 @@
    RLE rows (TA's own): a u16 byte length, then codes — `b&1` skips `b>>1`
    texels, `b&2` repeats the next byte `(b>>2)+1` times, otherwise `(b>>2)+1`
    literals follow. Uncompressed frames are w*h top-down bytes. Either way a
-   texel IS a palette index: the atlas is GL_R8 sampled NEAREST, so the shader
-   gets the index back exactly and does its own colour-key discard and palette
-   lookup. Read-only over the engine. */
+   texel IS a palette index: the atlas is VK_FORMAT_R8_UNORM sampled
+   VK_FILTER_NEAREST, so the shader gets the index back exactly and does its
+   own colour-key discard and palette lookup. Read-only over the engine. */
 
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-/* `tagpu_restoreglsl.h` below is NOT GL -- it declares `TAGPU_RGLSL_FRAME`
-   and `tagpu_rglsl_tileable`, both of which this file uses. */
+#include "tagpu_log.h"
+/* `tagpu_restoreglsl.h` below declares `TAGPU_RGLSL_FRAME` and
+   `tagpu_rglsl_tileable`, both of which this file uses. */
 #include "tagpu_gaf.h"
 #include "tagpu_pal.h"
 #include "tagpu_restoreglsl.h"
 #include "tagpu_classicpp.h"
-#include "tagpu_vk.h"      /* tagpu_vk_owns_present: is there a GL lane at all? */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 
 static void glog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* one scratch plane for every atlas: decoding happens only inside
    tagpu_gaf_atlas_get, on the render thread, and the bytes are consumed by
-   the upload before the call returns */
+   the paint before the call returns */
 static unsigned char s_dec[TAGPU_GAF_DECMAX * TAGPU_GAF_DECMAX];
 /* the frame re-emitted with its replicated border (up to PADMAX texels) on
    all four sides */
@@ -49,7 +48,7 @@ static int cell_up(const TAGPU_GAFATLAS* a, int v)
 /* The frame the restorer is asked for, from the entry that was just painted:
    the R8 atlas is the source, the twin the destination, same rect, the border
    -- and the cell's alignment slack past it -- painted as a copy of the edge,
-   as the R8 upload painted them. 0 when this frame is below the model's floor
+   as atlas_paint painted them. 0 when this frame is below the model's floor
    and is never restored at all.
    ONE BUILDER ON PURPOSE: the whole claim of the published list is that its
    frames are exactly the frames this atlas painted, so they are built here
@@ -109,7 +108,7 @@ static void rlist_reset(TAGPU_GAFATLAS* a, int repaint)
     /* AND THE BLANK IS COUNTED, not just flagged (tagpu_gaf.h `rlistBlanks`):
        a consumer sees only the LATEST generation, so a blanking reset followed
        by a repainting one in the same frame would hand it "keep what you have"
-       over a destination this lane has cleared. */
+       over a destination it was told to clear. */
     if (!repaint) a->rlistBlanks++;
 }
 
@@ -285,12 +284,6 @@ const unsigned char* tagpu_gaf_state_frame(const char* st)
     return tagpu_gaf_seq_frame(seq, *(const unsigned short*)(st + TAGPU_AS_FRAME));
 }
 
-const char* tagpu_gaf_seq_name(const char* seq)
-{
-    if (!ptr_ok(seq) || IsBadReadPtr(seq, 0x2C)) return "?";
-    return seq + TAGPU_SQ_NAME;
-}
-
 static int gaf_decode(const unsigned char* g, int w, int h, unsigned char* out, unsigned char* cov);
 int tagpu_gaf_decode(const unsigned char* g, int w, int h, unsigned char* out)
 {
@@ -381,15 +374,15 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
     int wasFull = a->full;
     /* Re-lay what is here instead of throwing it away. Only for an
        atlas that asked (`repack`), only when it actually filled -- a restart
-       that is not "full" is the UI atlas re-arming or a context change, and
-       both want the entries gone -- and only while a re-lay can still gain
+       that is not "full" is the UI atlas's PK_RESET, which wants the entries
+       gone -- and only while a re-lay can still gain
        something. atlas_repack owns the log line and leaves the atlas usable. */
     if (wasFull && a->repack) {
         if (a->repackWall) return;      /* held: nothing a rebuild can improve */
         if (atlas_repack(a)) return;
     }
-    /* the sprite atlases reset when full; the UI atlas also on a re-arm or a
-       GL context change (tagpu_gui_surf.c twins_reset), which is not "full" */
+    /* the sprite atlases reset when full; the UI atlas also on a PK_RESET
+       (tagpu_gui_surf.c twins_reset), which is not "full" */
     atlas_drop(a, wasFull ? "full" : "restart");
 }
 
@@ -410,7 +403,7 @@ void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a)
 /* The CPU mirror (tagpu_gaf.h). Correct from the instant it exists because
    every entry that has already been painted is put back into the state a
    repack leaves one in -- the rect assigned, nothing uploaded -- so the next
-   atlas_get repaints it where it sits, into GL and the mirror together. */
+   atlas_get repaints it where it sits, into the mirror. */
 int tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a)
 {
     char b[160];
@@ -441,8 +434,9 @@ int tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a)
    is measurable. The three functions below are the LAYOUT contract between
    the producer's chain and the Vulkan restorer's dump -- `tagpu_vk_restore.c`
    calls `_off` and `_chain`. The restored twin is mipped and sampled
-   LINEAR_MIPMAP_LINEAR to its top level, so a consumer holding only level 0
-   draws a different picture wherever the art is minified. On the unit
+   VK_FILTER_LINEAR with VK_SAMPLER_MIPMAP_MODE_LINEAR to its top level
+   (tagpu_vk_unit.c), so a consumer holding only level 0 draws a different
+   picture wherever the art is minified. On the unit
    atlas a 32-texel cell lands on a ~23 px sprite at 1024x768 -- LOD around 0.5,
    which is a blend of levels 0 and 1 -- so "wherever it is minified" is
    ordinary play. MEASURED with level 0 alone: 2 126 of 2 132 unit pixels
@@ -517,7 +511,7 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
     }
     a->rlistWant = 1;
     /* SEEDED WITH WHAT IS HERE NOW, which is what makes it correct from the
-       instant it exists: whatever this lane has already restored, a consumer
+       instant it exists: whatever this atlas already holds, a consumer
        starting at index 0 restores the same rectangles for itself. */
     rlist_restart(a, 0);
     _snprintf(b, sizeof b, "%s: restorevk -- the restore is the other lane's to run, so"
@@ -554,7 +548,7 @@ void tagpu_gaf_atlas_restore_repalette(TAGPU_GAFATLAS* a)
 
    `mirror` is not freed by `_lost`, which keeps it
    deliberately so that a mirror is never stale for the frames between a
-   context loss and the next create. A caller that re-arms by zeroing the
+   `_lost` and the next create. A caller that re-arms by zeroing the
    struct would therefore drop the pointer and leak it; every writer already
    guards on the pointer and `_mirror` re-arms on demand, so handing it back
    here costs nothing the memset was not already costing functionally. */
@@ -574,29 +568,24 @@ void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a)
 
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
 {
-    /* `made` goes with the name: the layout described a texture that no longer
-       exists, so the next create must lay it out again. */
-    a->tex = 0; a->made = 0;
+    /* `made` goes: the layout describes nothing any more, so the next create
+       must lay it out again. */
+    a->made = 0;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
-    a->gen++;                   /* ...and again: the texture itself is gone */
+    a->gen++;                   /* every UV in the atlas has just moved */
     /* and so is everything it held, so the mirror of it says nothing. (The
        re-create zeroes it again; doing it here as well means a mirror is never
        stale for the frames between a loss and the next create.) */
     if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
     memset(a->hash, 0, sizeof a->hash);
-    /* `rgb` and `restoreFailed` have no writer and are 0 for the life of the
-       process. Cleared here anyway, because this function's contract is "the
-       struct describes nothing that exists", and a field left alone on the
-       strength of an argument made elsewhere is how a stale value survives. */
-    a->rgb = 0; a->restoreFailed = 0;
-    /* THE OTHER LANE'S DESTINATION DID NOT DIE -- ITS SOURCE DID. Nothing here
+    /* THE CONSUMER'S DESTINATION DID NOT DIE -- ITS SOURCE DID. Nothing here
        is a Vulkan object, so a consumer's twin still holds the colours of an
        atlas whose every entry has just been dropped. The generation is what
        tells it to blank and start over; without this it would keep painting
        the old layout's rects for the rest of the session. */
     rlist_reset(a, 0);
-    /* the entries went with the texture, so the wall the last fill hit says
-       nothing about the next one */
+    /* the entries went, so the wall the last fill hit says nothing about the
+       next one */
     a->repackWall = 0;
 }
 
@@ -615,12 +604,8 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
     if (a->dim <= 0 || a->max <= 0 || !a->ents) return 0;
     /* THERE IS NO TEXTURE HERE; THE LAYOUT IS THE ATLAS. The shelf packer, the
        entry table and the CPU mirror below are what an atlas is in this build,
-       and the Vulkan twin uploads the mirror. `a->tex` is set to 0 rather than
-       left alone so that a re-created atlas cannot carry a stale name, and it
-       is 0 for the life of the process: nothing gives it a name. `a->made`,
-       not `a->tex`, is what says the layout exists -- keyed on the name, every
-       create would refuse, which reads downstream as `atlas=0` and no sprite
-       texels at all. */
+       and the consuming Vulkan pass uploads the mirror. `a->made` is what says
+       the layout exists. */
     /* A FRESH ATLAS IS A FRESH MIRROR, AND THE MEMSET IS WHAT MAKES IT INDEX 0
        -- the assumption the border comment in `atlas_paint` rests on. A mirror
        that kept the previous atlas's texels would be a copy of something that
@@ -628,7 +613,6 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
        texels alone and lets re-inserted entries overwrite them, and the mirror
        follows exactly because it follows the paints. */
     if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
-    a->tex = 0;
     a->made = 1;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
@@ -643,10 +627,9 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
 /* THE REPACK. Re-lay every entry the atlas holds, tallest cell first, and
    leave each one RESERVED: the rect is assigned, nothing is uploaded, and
    the next atlas_get for that frame paints it in place (atlas_insert's probe
-   below). We cannot move the texels ourselves -- an entry records the
-   frame's address and its size, never the decoded bytes, and GL 3.3 core has
-   no glCopyImageSubData to shuffle them with -- so the pixels come back the
-   way they arrived the first time, by RLE decode on demand. That is the same
+   below). The texels are not moved -- an entry records the frame's address
+   and its size, never the decoded bytes -- so the pixels come back the way
+   they arrived the first time, by RLE decode on demand. That is the same
    work one recycle does, done ONCE when the page fills instead
    of once per frame for as long as it stays full.
 
@@ -670,8 +653,8 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
     int i, hb, x = 0, y = 0, sh = 0, kept = 0, w;
     int wanted = 0, wanted_skip = 0;
 
-    /* `made`, not `tex`: a repack re-lays the ENTRIES and the paints that follow
-       it feed the CPU mirror, both of which a lane with no GL name still needs. */
+    /* `made` (tagpu_gaf_atlas_create): a repack re-lays the ENTRIES and the
+       paints that follow it feed the CPU mirror. */
     if (before <= 0 || before > ORD_MAX || !a->made || !a->ents) return 0;
 
     /* Only what is still being ASKED FOR is re-laid. An entry nothing has
@@ -760,10 +743,11 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
     a->full = 0;
     a->gen++;                           /* every UV in the atlas has just moved */
     a->repacks++;
-    /* the twin's rects moved with them: back to unpainted (job_clear clears
-       level 0), and whatever was queued is dropped -- it re-queues as each
-       reserved entry is painted. Unlike the recycle this happens once, which
-       is what lets the twin converge at all while zoomed out. */
+    /* the twin's rects moved with them: back to unpainted (a new list
+       generation, which the consumer blanks its twin on), and whatever was
+       queued is dropped -- it re-queues as each reserved entry is painted.
+       Unlike the recycle this happens once, which is what lets the twin
+       converge at all while zoomed out. */
     job_clear_dest(a);
 
     /* The branch that says a second page is the only thing left.
@@ -810,14 +794,14 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
     /* THE PAINT IS THE ATLAS, AND THE MIRROR IS THE PAINT: the mirror write
        below is the only destination the art has. Nothing here is gated on a
        backend, and nothing may become so: a cell that is packed but not
-       mirrored is a hole the Vulkan twin samples as index 0. */
+       mirrored is a hole the Vulkan pass samples as index 0. */
     /* Re-emit the frame with its outermost row and column repeated all
        round, `pad` deep. The border is what any sampler that reaches past
-       the frame must land on: under GL_NEAREST that is the fragment whose
-       centre falls exactly on the quad's far edge (its u interpolates to
-       exactly u1, and floor(u1*dim) is one texel past the frame) — left
-       unwritten that texel is whatever glTexImage2D(NULL) leaves, i.e.
-       index 0, a real palette entry (black) rather than the frame's colour
+       the frame must land on: under VK_FILTER_NEAREST that is the fragment
+       whose centre falls exactly on the quad's far edge (its u interpolates
+       to exactly u1, and floor(u1*dim) is one texel past the frame) — left
+       unwritten that texel is whatever a fresh mirror holds, which
+       tagpu_gaf_atlas_create zeroes, i.e. index 0, a real palette entry (black) rather than the frame's colour
        key, which is the black hairline down the right of every tree at
        zoom 0.25. Under a filtered sampler it is every edge fragment, which
        is why the border is on all four sides and not just two; under a mipmapped one it is the
@@ -827,8 +811,8 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
        far-edge sample of a frame whose width is 3 mod 4 takes a quarter
        of its weight from the level-2 texel that covers the slack, so
        unwritten slack would darken that column by a sixteenth. The whole
-       cell is uploaded, and the frame published for the other lane's
-       restore covers the same rect, so its OUT pass paints the slack the
+       cell is mirrored, and the frame published for the Vulkan restorer
+       covers the same rect, so its OUT pass paints the slack the
        same way. */
     {
         const int pw = cw, pr = cw - p - w, pb = ch - p - h;   /* right/bottom: p + slack */
@@ -874,7 +858,7 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
         e->wrap = art ? (char)tagpu_rglsl_tileable(pixels, w, h, art, e->ck) : 0;
     }
     e->ok = 1; e->resv = 0;
-    /* AND ONTO THE PUBLISHED LIST, WHICH IS THE OTHER LANE'S ONLY FEED. This
+    /* AND ONTO THE PUBLISHED LIST, WHICH IS THE VULKAN RESTORER'S ONLY FEED. This
        is the one place an entry's texels become correct, so the append
        belongs here and nowhere else: "painted" and "published" are then the
        same event and cannot drift apart.

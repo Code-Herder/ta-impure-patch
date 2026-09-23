@@ -2,7 +2,7 @@
 
    The design and the reasoning are research/notes/gpu-posing.md §3 and §4;
    tagpu_posebake.h carries the contract. What is here is the walk that turns a
-   `Model3DONode` template into two GL vertex buffers, the two caches over them,
+   `Model3DONode` template into two vertex streams, the two caches over them,
    the four things that invalidate an entry, and the lever.
 
    THE WALK IS THE POINT. `emit_node`, `emit_slant_at` and `emit_wire` each walk
@@ -32,6 +32,7 @@
 #include "tagpu_render3do.h"
 #include "tagpu_packet.h"   /* the piece run the bake keys on */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirrors */
+#include "tagpu_log.h"
 
 /* The two cache sizes are tagpu_posebake.h's, which says why. Entries are
    allocated as they are baked and kept until evicted, so a session pays for
@@ -47,25 +48,22 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0
 
 static void blog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ---- the lever ---------------------------------------------------------
-   `tagpu_posebake.on` bakes for every unit the native pass draws and reports
-   in the `native:` line. `check` adds the cross-check against the emitters
-   (below), which costs a second walk per unit per frame and is a measurement,
-   not a play setting. Re-read on the same cadence as the pass's other levers. */
-static int s_armed, s_log, s_polled;
+   The bake runs whether or not `tagpu_posebake.on` exists. The lever only
+   carries the `log` token, which writes a line per baked model and per
+   material stream. Re-read on the same cadence as the pass's other levers. */
+static int s_log, s_polled;
 
 static void lever_read(void)
 {
     char v[64];
     DWORD n;
     HANDLE h;
-    s_armed = s_log = 0;
+    s_log = 0;
     if (GetFileAttributesA("tagpu_posebake.on") == INVALID_FILE_ATTRIBUTES) return;
-    s_armed = 1;
     h = CreateFileA("tagpu_posebake.on", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -76,8 +74,6 @@ static void lever_read(void)
     }
     CloseHandle(h);
 }
-
-int tagpu_posebake_armed(void)    { return s_armed; }
 
 /* THERE IS NO `check` TOKEN: there is no CPU emitter left to compare the bake
    against. Gates B and D (gpu-posing.md §4 step 6) are the record that the
@@ -93,9 +89,10 @@ static int          s_ngeom;
 static TAGPU_PBMAT  s_mat[PB_MAXMAT];
 static unsigned char* s_matSkip[PB_MAXMAT];   /* per vertex, for the predictor */
 /* ---- THE VULKAN LANE'S MIRRORS (Phase G, the unit pass) ----
-   The very buffers `glBufferData` was handed, kept while the lane is armed --
-   tagpu_posebake.h says why, and tagpu_terr.c's `s_mirrorWant` is the pattern.
-   Indexed by the same slot as the entry, freed by the same drop. */
+   The bake's own output, copied out of the walk's scratch in the same call,
+   once the latch below has armed -- tagpu_posebake.h says why, and
+   tagpu_terr.c's `s_mirrorWant` is the pattern. Indexed by the same slot as
+   the entry, freed by the same drop. */
 static float*       s_geomMirror[PB_MAXGEOM];
 static float*       s_matMirror[PB_MAXMAT];
 static int          s_mirrorWant;             /* the Vulkan lane asked for them */
@@ -114,7 +111,6 @@ static unsigned     s_frame;
    bug the generation exists to prevent. cache_gen_check latches once per frame
    for exactly this reason, and this matches it. */
 static unsigned     s_lvlGen, s_atlasGen;
-static int          s_anomTotal, s_oddTotal, s_collapsed, s_refused, s_baked, s_matBaked;
 
 /* the bake's scratch: one model at a time, render thread only */
 static float s_scratchG[PB_MAXVERT * TAGPU_PB_GEOMST];
@@ -192,7 +188,7 @@ static int pb_walk(const char* const* nd, int nparts, int range,
 }
 
 /* ---- the geometry bake -------------------------------------------------- */
-typedef struct { int nv; int over; TAGPU_PBGEOM* g; } PBGEOMCTX;
+typedef struct { int nv; int over; } PBGEOMCTX;
 
 static void geom_emit(void* vctx, int range, int p, const char* nd,
                       const int* rv, int nvert, const char* fa, int fvc,
@@ -238,25 +234,6 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
         o[3] = nx; o[4] = ny; o[5] = nz;
         o[6] = (float)p;
         o[7] = shaded ? (float)TAGPU_PBF_SHADED : 0.0f;
-    }
-    /* the body range's rest AABB per piece, the source of the shadow top
-       (tagpu_posebake.h) */
-    if (range == TAGPU_PB_BODY && c->g && p >= 0 && p < TAGPU_PBMAXPIECE) {
-        TAGPU_PBGEOM* g = c->g;
-        for (t = 0; t < n; t++) {
-            /* `pbody` is the SEEDED flag and must not be set until all three
-               axes have been seeded from this first vertex. Setting it inside
-               the r loop would seed x only: y and z would then compare against
-               the zeroed struct, so every piece's box would be unioned with the
-               origin plane and `tagpu_posedraw_top` could only read too tall — a
-               wreck's shadow thrown too far, worst where the pose has
-               M[5] < 0. */
-            for (r = 0; r < 3; r++) {
-                if (!g->pbody[p] || V[t][r] < g->pmn[p][r]) g->pmn[p][r] = V[t][r];
-                if (!g->pbody[p] || V[t][r] > g->pmx[p][r]) g->pmx[p][r] = V[t][r];
-            }
-            g->pbody[p] = 1;
-        }
     }
     c->nv += n;
 }
@@ -326,8 +303,9 @@ static void geom_drop(TAGPU_PBGEOM* g)
     memset(g, 0, sizeof *g);
 }
 
-/* evict the entry least recently asked for; GL deletion is render-thread only,
-   and every caller of this is on it */
+/* evict the entry least recently asked for; the drop frees a mirror the
+   Vulkan unit pass reads on the render thread, and every caller of this is on
+   it */
 static int geom_slot(void)
 {
     int i, worst = 0;
@@ -361,7 +339,6 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
     memset(g, 0, sizeof *g);
     g->root = nd[0]; g->levelGen = lvl; g->nparts = nparts;
     g->ghost = ghost;
-    c.g = g;                    /* the per-piece rest AABB accumulates here */
     for (r = 0; r < TAGPU_PB_NRANGE; r++) {
         g->first[r] = c.nv;
         pb_walk(nd, nparts, r, geom_emit, &c, r == 0 ? &st : NULL);
@@ -377,13 +354,11 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
         /* KEEP THE ENTRY, marked. Dropping it would leave `root == NULL`, which
            the lookup never matches — so the next frame would miss, take a fresh
            slot and walk the whole model again, once per frame for the life of
-           the level, inflating `refused=` with it. Remembering the refusal costs
-           one flag and makes the count mean "models refused", not "frames".
-           The entry is dropped by the ordinary generation checks like any
-           other, so a level or context change re-tries. */
+           the level, and log this line with it. Remembering the refusal costs
+           one flag. The entry is dropped by the ordinary generation checks like any
+           other, so a level change re-tries. */
         g->refused = 1;
         g->nvert = 0;
-        s_refused++;
         return NULL;
     }
     g->nvert = c.nv;
@@ -391,7 +366,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
     /* THE BAKE IS THE PASS, AND THE MIRROR IS WHERE IT LANDS. `c` above is the
        walk's own scratch; the mirror takes it verbatim, in the same call, so
        there is no second evaluation of the bake to drift from the first. It is
-       the only destination the bake has: the Vulkan twin reads it through
+       the only destination the bake has: the Vulkan unit pass reads it through
        `tagpu_posebake_geom_mirror`. A refused malloc leaves the slot NULL,
        which the accessor reports as "no mirror" and the Vulkan pass stands
        down on, visibly. */
@@ -400,9 +375,6 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
         s_geomMirror[slot] = (float*)malloc(nb);
         if (s_geomMirror[slot]) memcpy(s_geomMirror[slot], s_scratchG, nb);
     }
-    s_baked++;
-    s_anomTotal += g->badNode + g->orphan;
-    s_oddTotal  += g->oddFace;
     if (s_log) {
         _snprintf(b, sizeof b,
                   "posebake: root=%p %d piece(s) -> %d vert (body %d, slant %d, wire %d) odd-faces=%d",
@@ -495,14 +467,13 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
         pb_walk(nd, g->nparts, r, mat_emit, &c, NULL);
     /* THE INVARIANT the split rests on. If this ever fires, the two walks have
        drifted apart and the material stream would be read against the wrong
-       vertices — refuse rather than upload a buffer that lies. */
+       vertices — refuse rather than publish a stream that lies. */
     if (c.over || c.nv != g->nvert) {
         _snprintf(b, sizeof b,
                   "posebake: REFUSED material root=%p owner=%d — %d vertices against the "
                   "geometry's %d; the two walks disagree",
                   (const void*)g->root, owner, c.nv, g->nvert);
         blog(b);
-        s_refused++;
         return NULL;
     }
     slot = mat_slot();
@@ -510,22 +481,21 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     memset(m, 0, sizeof *m);
     m->geom = g; m->root = g->root; m->owner = owner; m->atlasGen = atlasGen;
     m->levelGen = lvl;
-    m->nvert = c.nv; m->nskip = c.nskip; m->noMaterial = c.anom;
+    m->nvert = c.nv; m->nskip = c.nskip;
     m->serial = s_serial++;
     if (s_mirrorWant && c.nv > 0) {
         size_t nb = (size_t)c.nv * TAGPU_PB_MATST * sizeof(float);
         s_matMirror[slot] = (float*)malloc(nb);
         if (s_matMirror[slot]) memcpy(s_matMirror[slot], s_scratchM, nb);
     }
-    /* WHAT THE VERTEX LAYOUT IS, recorded because the twin has to reproduce it
-       and nothing else in this file states it. Locations 0-3 come off the
-       geometry stream (the type's), 4-6 off this material stream -- the same
-       split the two mirrors have, so either can be re-baked without touching
-       the other. The twin builds its own binding from the two mirrors. */
+    /* WHAT THE VERTEX LAYOUT IS, recorded because the consumer has to
+       reproduce it and nothing else in this file states it. Locations 0-3 come
+       off the geometry stream (the type's), 4-6 off this material stream -- the
+       same split the two mirrors have, so either can be re-baked without
+       touching the other. tagpu_vk_unit.c builds its own binding from the two
+       mirrors. */
     s_matSkip[slot] = (unsigned char*)malloc((size_t)c.nv ? (size_t)c.nv : 1);
     if (s_matSkip[slot]) memcpy(s_matSkip[slot], s_scratchSkip, (size_t)c.nv);
-    s_matBaked++;
-    s_collapsed += m->noMaterial;
     /* A FACE WITH NO MATERIAL IS ORDINARY, and measuring said so: all 67 models
        of the pose inventory have some (the footprint quad the slant raster
        fills and the body raster does not, among others), 2.7% of every baked
@@ -535,17 +505,18 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
         _snprintf(b, sizeof b,
                   "posebake: material root=%p owner=%d atlas gen %u -> %d vert, "
                   "%d face(s) with no material collapsing %d vert",
-                  (const void*)g->root, owner, atlasGen, m->nvert, m->noMaterial, m->nskip);
+                  (const void*)g->root, owner, atlasGen, m->nvert, c.anom, m->nskip);
         blog(b);
     }
     return m;
 }
 
 /* ---- the four invalidations --------------------------------------------- */
-/* level teardown (node pointers are recycled by the next level), GL context
-   loss (every id dies), an atlas recycle (every UV moves) and the owner (part
-   of the material key). The first three are checked here, once per frame,
-   because every lookup below is on the render thread inside the native pass. */
+/* level teardown (node pointers are recycled by the next level), the mirror
+   latch's first arming (below), an atlas recycle (every UV moves) and the
+   owner (part of the material key). The first three are checked here, once per
+   frame, because every lookup below is on the render thread inside the native
+   pass. */
 void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
 {
     unsigned lvl = level_gen;
@@ -590,8 +561,9 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
     if (dg || dm || s_dropCascade) {
         char b[192];
         /* the cascade is reported separately or the line reads "0 material" on
-           a GL reset that dropped every stream there was: a material goes with
-           the geometry it was walked beside, before this loop ever sees it */
+           a level change that dropped every stream there was: a material goes
+           with the geometry it was walked beside, before this loop ever sees
+           it */
         _snprintf(b, sizeof b,
                   "posebake: dropped %d geometry (taking %d material with them) and %d material "
                   "in its own right — level %u, atlas %u",
@@ -672,9 +644,10 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
        cascade, not by any unit's destructor, so nothing else would notice its
        address being handed out again (thread-safe-destruction.md §6a). The
        ghost flag splits the entry in two: the ghost's synthesized run walks
-       the tree in its own order, so its VBO piece indices and `parent[]` do
-       not line up with a live unit's prim-ordered run, and a shared entry
-       would pose a building's parts with the wrong pieces' matrices. */
+       the tree in its own order, so its geometry stream's piece indices and
+       `parent[]` do not line up with a live unit's prim-ordered run, and a
+       shared entry would pose a building's parts with the wrong pieces'
+       matrices. */
     for (i = 0; i < s_ngeom; i++)
         if (s_geom[i].root == nd[0] && s_geom[i].levelGen == lvl &&
             s_geom[i].nparts == nparts &&
@@ -698,13 +671,4 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
     if (geomOut) *geomOut = g;
     if (matOut)  *matOut  = m;
     return 1;
-}
-
-int tagpu_posebake_stats(char* out, int n)
-{
-    if (!s_armed || n <= 0) { if (out && n > 0) out[0] = 0; return 0; }
-    _snprintf(out, n, " bake=%d/%d anom=%d odd=%d nomat=%d refused=%d",
-              s_ngeom, s_nmat, s_anomTotal, s_oddTotal, s_collapsed, s_refused);
-    out[n - 1] = 0;             /* _snprintf does not terminate on truncation */
-    return (int)strlen(out);
 }

@@ -42,6 +42,7 @@
 #include "tagpu_packet.h"
 #include "tagpu_model3do.h"      /* TAGPU_PBMAXPIECE */
 #include "tagpu_opt.h"
+#include "tagpu_log.h"
 
 /* id -> index in the PREV packet's units table, rebuilt once per frame and
    cleared only over the ids it used. 64 K entries of 2 bytes: the id is a u16
@@ -53,21 +54,14 @@ static unsigned       s_nIdUsed;
 static int            s_idInit;
 
 static int      s_armed = -1;                 /* -1 = never polled           */
-static unsigned s_frame;
 static const TAGPU_PACKET* s_pk;              /* this frame's later tick     */
 static const TAGPU_PACKET* s_prev;            /* ...and its earlier one      */
 static int      s_w16;                        /* the weight, 16.16, [0,65535]*/
 static int      s_have;                       /* a usable pair this frame    */
-static float    s_lastU;
-static float    s_lastSpanMs;
-
-/* window counters, printed on the native: line and reset with it */
-static unsigned s_nblend, s_nsnap, s_nmiss;
 
 static void llog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static LONGLONG qpc_of(const TAGPU_PACKET* p)
@@ -80,7 +74,6 @@ void tagpu_lerp_frame(unsigned frameCounter, const TAGPU_PACKET* pk, const TAGPU
     int was = s_armed;
     unsigned i;
 
-    s_frame = frameCounter;
     s_pk = NULL; s_prev = NULL; s_have = 0; s_w16 = 0;
 
     /* the lever, on the pass's own 30-frame cadence -- tagpu_opt is stateless
@@ -116,7 +109,6 @@ void tagpu_lerp_frame(unsigned frameCounter, const TAGPU_PACKET* pk, const TAGPU
            would smear one pose across seconds of wall clock. */
         if (freq.QuadPart > 0) {
             double ms = (double)span * 1000.0 / (double)freq.QuadPart;
-            s_lastSpanMs = (float)ms;
             if (!(ms > 0.5 && ms < 500.0)) return;
         }
         if (el < 0) return;                 /* the stamp is in our future     */
@@ -124,7 +116,6 @@ void tagpu_lerp_frame(unsigned frameCounter, const TAGPU_PACKET* pk, const TAGPU
         if (!(u >= 0.0)) return;            /* NaN fails this, as it must     */
         if (u >= 1.0) { return; }           /* weight 1.0 is a refusal, never
                                                an extrapolation past the tick */
-        s_lastU = (float)u;
         s_w16 = (int)(u * 65536.0);
         if (s_w16 < 0) s_w16 = 0;
         if (s_w16 > 65535) s_w16 = 65535;   /* the turn multiply below has only
@@ -206,15 +197,15 @@ int tagpu_lerp_unit(const TAGPU_PK_UNIT* u, const TAGPU_PK_PIECE* cur, int npart
 
     if (!s_have || !u || !cur || nparts <= 0 || nparts > TAGPU_PBMAXPIECE) return 0;
     idx = s_prevOf[u->id];
-    if (idx == 0xFFFFu || idx >= s_prev->n_units) { s_nmiss++; return 0; }
+    if (idx == 0xFFFFu || idx >= s_prev->n_units) return 0;
     pu = tagpu_pk_units(s_prev) + idx;
     /* the same unit, the same model, the same run length: anything else is a
        recycled id or a model swapped under it, and the answer is the packet's
        own pose rather than a sweep between two different things */
     if (pu->id != u->id || pu->o3_key != u->o3_key ||
-        pu->type_row != u->type_row || (int)pu->piece_n != nparts) { s_nmiss++; return 0; }
+        pu->type_row != u->type_row || (int)pu->piece_n != nparts) return 0;
     old = tagpu_pk_pieces(s_prev, pu->piece_off, pu->piece_n);
-    if (!old) { s_nsnap++; return 0; }
+    if (!old) return 0;
 
     /* THE DEGRADATION IS A `return 0`, NOT A LERP AT WEIGHT 1. `a+(b-a)*1.0f`
        is not `b` in floating point, so "blend with weight 1" would be off by
@@ -224,21 +215,5 @@ int tagpu_lerp_unit(const TAGPU_PK_UNIT* u, const TAGPU_PK_PIECE* cur, int npart
     blend(old, cur, nparts, s_w16, obuf, otbuf);
     *pos = obuf;
     *turn = otbuf;
-    s_nblend++;
     return 1;
-}
-
-void tagpu_lerp_stats(char* buf, unsigned cap)
-{
-    int n;
-    if (cap == 0) return;
-    buf[0] = 0;
-    if (s_armed != 1) return;
-    n = _snprintf(buf, cap, " lerp=%u/%u span=%.1fms u=%.2f",
-                  s_nblend, s_nsnap, s_lastSpanMs, s_lastU);
-    if (n < 0 || (unsigned)n >= cap) { buf[cap - 1] = 0; return; }
-    if (s_nmiss)
-        _snprintf(buf + n, cap - (unsigned)n, " miss=%u", s_nmiss);
-    buf[cap - 1] = 0;
-    s_nblend = s_nsnap = s_nmiss = 0;
 }

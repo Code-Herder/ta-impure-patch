@@ -1,9 +1,9 @@
 #ifndef TAGPU_VK_TERR_H
 #define TAGPU_VK_TERR_H
 /* The terrain pass -- the 32x32 pre-rendered map tiles -- drawn by Vulkan
-   Implementation: tagpu_vk_terr.c. The
-   GL edition is tagpu_terr.c and stays the source of the instances, the
-   uniforms, the texels and the shader.
+   Implementation: tagpu_vk_terr.c. Its producer is tagpu_terr.c, the gather
+   that publishes the instances, the uniforms and the texels, and the file
+   whose GLSL tools/spirv-gen.py compiles into this pass's shader.
 
    THE TWO-PHASE CONTRACT is tagpu_vk_scaffold.h's, for the same reason: a
    texture upload is a transfer and a transfer may not be recorded inside a

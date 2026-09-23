@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include "tagpu_cat.h"
+#include "tagpu_log.h"
 
 #define UNITS_TRIGGER "tagpu_units.trigger"
 #define UNITS_OUT     "tagpu_units.json"
@@ -50,8 +51,7 @@
 
 static void catlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* Committed, not guard/no-access. A wrong pointer must cost a log line, never

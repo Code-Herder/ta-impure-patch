@@ -127,8 +127,9 @@ scores 0 magenta and shows no game.
 `fps`, `gui`) makes the Vulkan lane write one frame as `tagpu_<pass>_vk.ppm`. World passes are
 captured from the world target, `gw*ss x gh*ss` — 2048x1536 at 1024x768 with the shipped `ss=2`;
 the UI-side passes are the window's size. Compare two builds' files with
-`tools/vk-ab.py <old.ppm> <new.ppm>` (the two-file form; the `--pass <tag> <gamedir>` form looks
-for a `_gl.ppm` that nothing writes). Its exit status is 0 only when every pixel agrees.
+`tools/vk-ab.py <old.ppm> <new.ppm>`, which reports them as `A` and `B` (a gamedir argument is
+refused). Its exit status is 0 only when every pixel agrees. It does not check that a capture is
+from this run, so remove the old `.ppm` before re-arming, as below.
 
 ```bash
 tools/tacli arm <i> terr.on                                          # ONE pass; the clear is black
@@ -197,8 +198,9 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
 - **A/B-ing any live lever: wait for a FRESH heartbeat before the second shot.** The `native:`
   line is written every 300 frames; a lever flipped and shot three seconds later is read against
   the previous setting's counters. Count the lines, flip, wait until the count has moved by two.
-- **Slice `tagpu.log` by byte offset** to attribute a run (`stat -c %s` before, `tail -c +N`
-  after); a grep over the whole file can hand you the previous game's lines after a reload.
+- **Slice the log with a cursor** to attribute a run: `M=$(tools/talog.py mark <gamedir>)`
+  before, `tools/talog.py since <gamedir> "$M"` after. A byte offset breaks at the first
+  rotation, and a grep over the whole run can hand you the previous game's lines after a reload.
 
 ## The restore-dump byte oracle
 

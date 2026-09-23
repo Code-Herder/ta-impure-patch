@@ -5,13 +5,10 @@
 /* The material layer the native and posed passes share. */
 
 /* shared material resources for the native pass */
-/* Classic++: the unit atlas's restored RGBA8 twin, mipmapped to
-   level 2 -- 0 until the switch has been seen on and the restorer's job
-   made; a shader samples it only where its alpha says the texel is painted */
-unsigned int tagpu_r3d_atlas_rgbref(void);
+/* Whether a Classic++ restore route exists for the unit atlas. */
 int          tagpu_r3d_atlas_restore_armed(void);
-/* The unit atlas's generation (tagpu_gaf.h): every recycle and every context
-   loss moves every UV, so anything that BAKES a UV rather than re-reading it
+/* The unit atlas's generation (tagpu_gaf.h): every recycle and every level
+   drop (tagpu_r3d_atlas_level) moves every UV, so anything that BAKES a UV rather than re-reading it
    each frame has to be keyed on this. The geometry bake's material stream is
    (tagpu_posebake.c). */
 unsigned int tagpu_r3d_atlas_gen(void);
@@ -23,7 +20,7 @@ void tagpu_r3d_atlas_frame(void);
    when the level changes, because the atlas keys on frame addresses the next
    level's loader may reuse. */
 void tagpu_r3d_atlas_level(unsigned level_gen);
-/* Build the shade LUT and its CPU mirror, once per GL context. `shd` is the
+/* Build the shade LUT and its CPU mirror, once. `shd` is the
    frame packet's copy of the engine's PALETTE.SHD table (tagpu_pk_shd), or
    NULL to use our own computed ramp — this module does not read the graphics
    globals itself. */
@@ -45,13 +42,12 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
 
 /* ---- THE VULKAN LANE'S TEXELS (Phase G, the unit pass) ------------------
 
-   The unit fragment shader samples the unit atlas on texture unit 0 and the
-   shade LUT on unit 1; a second backend cannot read either GL texture, so both
-   are mirrored on the CPU. The atlas takes tagpu_gaf.h's mechanism unchanged
-   -- the mirror is written by the same atlas_paint that writes GL, and asking
-   for one marks every painted entry for repaint so that it is correct from the
-   instant it exists. The LUT is 8 KB built once per context and is simply
-   kept.
+   The unit fragment shader samples the unit atlas and the shade LUT, and
+   both exist on this side only as CPU bytes, which the Vulkan unit pass
+   uploads. The atlas takes tagpu_gaf.h's mechanism unchanged -- the mirror is
+   written by atlas_paint, and asking for one marks every painted entry for
+   repaint so that it is correct from the instant it exists. The LUT is 8 KB
+   and is simply kept.
 
    `_want` is idempotent and costs nothing until it is called. `_mirror`
    returns NULL while there is none, which a pass treats as "stand down this
@@ -76,7 +72,7 @@ const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned
                                                       int* repaint, unsigned* blanks,
                                                       int* mips, float* aniso);
 /* 256 x 32 R8, the bytes `shade_upload` last stored. The serial
-   moves when the table is rebuilt -- which happens once per context, and again
-   the first time the engine's own PALETTE.SHD arrives after a frame with none. */
+   moves when the table is rebuilt -- which happens once, and again the first
+   time the engine's own PALETTE.SHD arrives after a frame with none. */
 const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial);
 #endif

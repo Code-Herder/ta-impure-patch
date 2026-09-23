@@ -127,6 +127,9 @@ anywhere — a mission script or a menu transition was not tested — only that 
 play. The per-frame re-upload stays, as insurance rather than as a mechanism.
 
 ### 2.4 Hires glb units: they cast, they do not receive
+*The replacement pipeline was deleted 2026-09-19 and its Vulkan caster half (`tagpu_vk_hires.c`)
+on 2026-09-23. The decision below is the record.*
+
 `tagpu_hires_draw.c` lights in linear space with a GGX lobe; Classic++ is a lambert in sRGB
 space, and hires meshes were in no depth pass. ~~**Decided: not a Classic++ concern.** Revisit
 after the port.~~ **Revised 2026-09-06 (the owner: "if it's not going to be too expensive —
@@ -607,7 +610,8 @@ renderers generally do:
   shadowing becomes a texture lookup: correct hill-over-valley, **no bias anywhere, no acne,
   no per-frame cost**. Units keep the shadow map for their own shadows. Fits this project
   unusually well — the heightfield is static per map, the shadow sun is fixed, and there is
-  already a per-map build step next to it (`build_hills`, §2.8), and the map is 672x800 R8.
+  already a per-map build step next to it (`build_height`, which mirrors the height grid; the
+  `build_hills` caster of §2.8 is deleted), and the map is 672x800 R8.
 - **Ray-march the heightfield in the receiver.** The same thing live, a short march through the
   height texture along the light. Exact, handles a moving sun, costs per fragment.
 
@@ -719,6 +723,10 @@ differ, of which 64 934 are the menu panel the landing added; 2 247 lie outside 
 made the knob reachable, which is how it was found.
 
 ### 2.8 Hills cast: a static per-map heightfield mesh
+*Gone since 2026-09-23: `build_hills` and `tagpu_terr_hills_draw` were deleted (19 MB per map for a
+mesh nothing drew). The Vulkan shadow pass is kept with no producer (`tagpu_vk_shadow.h`), and
+`terrainshadow=` is parsed and logged only. The decision below is the record.*
+
 The terrain gather emits screen-space quads with no height **[SOURCE `tagpu_terr.c`]**, so
 the depth pass has nothing of the ground to draw. **Decided: one world-space VBO of the whole
 heightfield at the engine's 16-px cells, built when the map loads** from the height byte the

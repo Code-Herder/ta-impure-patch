@@ -85,6 +85,7 @@ PAGES = [
     ("smooth-motion",              "Smooth unit movement & animation", "Renderer"),
 
     ("tacli-design",               "tacli — launcher & driver",   "Tooling"),
+    ("logging",                    "Logs: the capped sink",       "Tooling"),
     ("model-export",               "Model export (3DO → glTF)",   "Tooling"),
     ("model-import",               "Model import (glTF → engine)","Tooling"),
     ("input-firewall",             "The input firewall",          "Tooling"),

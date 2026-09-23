@@ -165,7 +165,7 @@ fixed static arrays with caps, never allocations:
 
 The eight surviving `malloc` sites are all amortised, not per-frame churn: the scaffold buffer
 reallocs only when the viewport size changes (`tagpu_scaffold.c:368`), the 3DO cache grows only
-`if (need > v->cap)` and converges (`tagpu_r3dcache.c:68`), the marker blend table is built once
+`if (need > v->cap)` and converges (`tagpu_r3dcache.c:68`; the module is deleted since 2026-09-23), the marker blend table is built once
 (`tagpu_markown.c:207`), the terrain atlas is per tile-set load (`tagpu_terr.c:345`), and the
 capture buffer is behind a trigger file (`tagpu_overlay.c:160`).
 

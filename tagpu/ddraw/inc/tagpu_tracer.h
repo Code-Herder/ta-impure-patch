@@ -1,6 +1,6 @@
 #ifndef TAGPU_TRACER_H
 #define TAGPU_TRACER_H
-/* tagpu_tracer.c — G4 in-process tracer.
+/* tagpu_tracer.c — the in-process unit-draw tracer (roadmap G4).
    Installs 5-byte E9 JMP detours on TA's unit-draw path (DrawUnit 0x45AC20 and the
    composite blit 0x459200) that log — with zero file I/O in the hot path — enough to
    prove "function X draws unit N at (sx,sy)", to measure per-call-site cadence, and to

@@ -19,10 +19,9 @@
      * DETECT and REPORT run on the GAME thread, from the engine's own flip
        (tagpu_gui_hook.c's before_flip, time-gated), where the fork already does
        its file I/O. Parsing a stale or truncated file costs a result line,
-       never a sim tick. [Landing 10c-1 moved them there from the present path,
-       tagpu_overlay_draw, which renderer=gdi never enters -- so on that lane
-       detection never ran at all. Both halves are now the same thread, which
-       makes the handshake below redundant rather than insufficient.]
+       never a sim tick. The flip, not the present path (tagpu_overlay_draw),
+       is what reaches renderer=gdi. Both halves are on the same thread, which
+       makes the state machine's interlocks redundant rather than insufficient.
      * APPLY runs from a detour inside Game_MainLoopTick, never mid-render: the
        render path walks the sort grid, and creating a unit relinks it. Every
        entity lands in ONE visit, so the situation is reproducible.

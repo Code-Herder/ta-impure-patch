@@ -349,7 +349,7 @@ see it. Making the OUT shader report the index it had read is what found it.
   half-lit smear; the Vulkan lane has `wideLines` and gets its 2 px. ~100 px on lasers, 34 on order
   lines, every one of them a pixel GL left black. **Left alone — making them agree changes a
   shipped picture and is the owner's call** (escalation reason 1).
-* **`tagpu_vk_restore_job_repalette` and `..._job_clear` have no callers** while the GL side's do
+* **[Both deleted 2026-09-23, still with no caller.]** **`tagpu_vk_restore_job_repalette` and `..._job_clear` have no callers** while the GL side's do
   (`tagpu_gaf.c:1050` and `:272`), so on `renderer=vulkan` neither the atlas clear nor the palette
   follow happens. `repaint`, the blank counter, the cleared-picture flag and the out-of-memory
   list drop are all unexercised.
@@ -585,7 +585,7 @@ that a count which grows is the plan catching up with the work.) The row was
      |---|---|---|
      | behaviour today | unchanged — both are already unreachable | unchanged |
      | what it says | the features are gone until rebuilt on Vulkan | the features are coming back |
-     | what follows | `tagpu_vk_shadow.c` and part of `tagpu_vk_hires.c` become deletable too | both stay, waiting for a producer |
+     | what follows | `tagpu_vk_shadow.c` and part of `tagpu_vk_hires.c` become deletable too | both stay, waiting for a producer (`tagpu_vk_hires.c` went after all on 2026-09-23; `tagpu_vk_shadow.c` stays) |
 
      **11-3 lands with the six that fit the rule.** The two are untouched and named here rather
      than decided quietly.
@@ -1696,7 +1696,8 @@ that a count which grows is the plan catching up with the work.) The row was
        material grouping — and it is given up to `git`, not lost: it is in the tree until
        this landing's parent, and this paragraph is the pointer a reviver needs.
 
-       **`tagpu_vk_hires.c` is KEPT**, as Decision 1 said, and it is a shell after this: its
+       **`tagpu_vk_hires.c` is KEPT** *(deleted 2026-09-23 with its six entry points' call sites:
+       nothing produced its hand-over)*, as Decision 1 said, and it is a shell after this: its
        hand-over producer goes with `tagpu_hires_draw.c` and its mesh source with
        `tagpu_hires.c`. It stays because `tagpu_vk_shadow.c` and `tagpu_vk.c` call six of its
        entry points, and deleting it is a cascade this gate has no reason to start.
@@ -2050,7 +2051,7 @@ that a count which grows is the plan catching up with the work.) The row was
    | kept because … | the symbols, and who calls them |
    |---|---|
    | the frame packet's publisher runs on every lane | `tagpu_native_owns_unit`, `tagpu_native_want_builds` ← `tagpu_packet_pub.c` |
-   | the engine-suppression layer runs on every lane | `tagpu_native_owns_obj`, `tagpu_native_wrecks_armed`, `tagpu_posedraw_live`, `tagpu_posedraw_refused` ← `tagpu_owndraw.c` |
+   | the engine-suppression layer runs on every lane | `tagpu_native_owns_obj`, `tagpu_native_wrecks_armed`, `tagpu_posedraw_live` (deleted 2026-09-23: a constant 0), `tagpu_posedraw_refused` ← `tagpu_owndraw.c` |
    | the marker/order passes read unit state | `tagpu_native_unit_pos` ← `tagpu_mark.c`, `tagpu_order.c`; `tagpu_native_selbox_complete` ← `tagpu_markown.c` |
    | the sound pass drives the effect emitters | `tagpu_fx_caps`, `tagpu_fx_emit_dot`, `tagpu_fx_emit_frame`, `tagpu_fx_set_mute`, `tagpu_fx_tile_visible` ← `tagpu_sfx.c` |
    | the terrain key is the composite's own constant | `tagpu_terr_key` ← `tagpu_gui_surf.c`, `tagpu_markown.c`, `tagpu_terrown.c` |
@@ -2253,6 +2254,7 @@ does not change — but almost every one of these suppressors decides *per draw*
 only a live lane sets:
 
 * **The opaque and nano rasterise** (`0x459830`, `0x459C70`) and the **pre-shadow composite wipe**
+  (both the predicate and the wipe deleted 2026-09-23; units are never skipped now)
   ask `tagpu_posedraw_live()`, which is `s_state == 1 && !tagpu_vk_owns_present()` — true only
   after the posed program has linked. `tagpu_owndraw.c` already argues its own safety by
   DIRECTION: *"a stale read can only be stale in the direction of NOT skipping"*.

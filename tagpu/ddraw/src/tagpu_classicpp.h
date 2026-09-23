@@ -19,8 +19,8 @@
                            it, so both at 1 with the .on file present is
                            exactly the switch alone:
                              aniso=N        restored-twin anisotropy, default 4
-                                            (1 = off, which is what the
-                                            Vulkan A/B is taken at);
+                                            (1 = off, which is what a pixel
+                                            comparison is taken at);
                              assets=0|1     the restored atlases, default 1;
                                             0 draws Classic++ from the 8bpp
                                             indices, and pauses the restore
@@ -34,7 +34,7 @@
                                             and does exactly that
                              unitsun=AZ,EL  the units' sun
                              amb=A          the ambient floor, 0..1
-                           and the shadows' (renderers.md 2.12; tagpu_shadow.c):
+                           and the shadows' (renderers.md 2.12, tagpu_vk_shadow.h):
                              shadows=0|1|2      0 none, 1 SOFT (the map-anchored
                                                 depth map of 2.12, which HAS NO
                                                 PRODUCER on this lane and draws
@@ -54,10 +54,11 @@
                                                 14,0.25; off = physical
                              shade=S            the direct light a shadow
                                                 removes, 1
-                             terrainshadow=0|1  the hills cast too, DEFAULT 0
-                                                -- it self-shadows the ground
-                                                (renderers.md 2.7b); 1 is the
-                                                fixture for fixing it
+                             terrainshadow=0|1  parsed and logged, and changes
+                                                nothing: no heightfield caster
+                                                is built (tagpu_vk_shadow.h).
+                                                DEFAULT 0, because the ground
+                                                self-shadows (renderers.md 2.7b)
                              shadowres=N        the map's edge at zoom >= 1,
                                                 2048 (256..4096)
                              airshadow=len|physical|drop   an airborne caster
@@ -136,12 +137,12 @@ typedef struct {
     int   airshadow;        /* TAGPU_AIRSHADOW_*                          */
     /* THE ANISOTROPY THE RESTORED TWINS ARE FILTERED WITH, `aniso=` (default 4,
        1 = off). It is a knob rather than a constant because ANISOTROPIC SAMPLE
-       PLACEMENT IS IMPLEMENTATION-DEFINED and GL and Vulkan do it differently
-       on the same hardware: MEASURED 2026-09-16, restored unit art is 0 px
-       apart between the two lanes at `aniso=1` and up to 9 levels apart on 27 %
-       of unit pixels at 4x. PLAY keeps 4x on both lanes and the A/B is
-       taken at `aniso=1` as a stated substitution -- so the oracle still
-       catches every porting mistake and excludes only the one thing the specs
+       PLACEMENT IS IMPLEMENTATION-DEFINED, so two implementations differ on the
+       same hardware: MEASURED 2026-09-16 against the OpenGL renderer this
+       replaced, restored unit art was 0 px apart at `aniso=1` and up to 9
+       levels apart on 27 % of unit pixels at 4x. PLAY keeps 4x, and a pixel
+       comparison against another implementation is taken at `aniso=1` as a
+       stated substitution -- it then excludes only the one thing the specs
        leave free. That is what this knob is for; it is not a quality setting
        to reach for. [gpu-status 2.37.] */
     float aniso;

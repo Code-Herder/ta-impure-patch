@@ -44,6 +44,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_restore_core.h"
+#include "tagpu_log.h"
 
 #define MAX_PATH_B        260
 #define TILEABLE_THR      12.0
@@ -60,8 +61,7 @@ static const int s_classes[] = { 32, 48, 64, 96, 128, 192, 256, 384, 512 };
 
 static void rlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 /* "<lane>: <what>", the shape every line in this module has */
 static void rlog_2(const char* who, const char* what)
@@ -118,11 +118,11 @@ static int load_weights(const char* who, const char* model)
             /* AND BOTH TERMS OF THE BIND OFFSET ARE ALIGNED, which is a bound on
                a value read from a FILE and therefore belongs here rather than at
                the bind site. A conv draw binds the weight block at
-               `(offset + group x kstride) x 16` bytes, and both APIs require that
-               to be a multiple of the device's uniform-buffer offset alignment:
-               GL refuses above 256 in the backend, and the reference setup's
-               Vulkan device reports 64 (16 on llvmpipe; measured through
-               winevulkan 2026-09-17). `kstride & 15` below already makes the
+               `(offset + group x kstride) x 16` bytes, and Vulkan requires that
+               to be a multiple of the device's minUniformBufferOffsetAlignment,
+               which the spec caps at 256: the reference setup's device reports
+               64 (16 on llvmpipe; measured through winevulkan 2026-09-17).
+               `kstride & 15` below already makes the
                group term a multiple of 256; `offset & 15` is what makes the
                base term one. Both shipped models pass it by construction --
                the exporter lays layers back to back from 0, so every offset is
@@ -178,15 +178,11 @@ static void read_options(void)
     CloseHandle(h);
 }
 
-/* RE-READ BOTH, which a backend does from its own init -- so the options are
-   picked up once per CONTEXT, not once per process: a `tiny` or `budget=`
-   edited between two contexts takes effect. `load_weights` re-reads only when
+/* RE-READ BOTH, which the backend does from its own init -- so the options
+   are picked up once per bring-up, not once per process: a `tiny` or `budget=`
+   edited between two bring-ups takes effect. `load_weights` re-reads only when
    the model NAME changed, so flipping `tiny` reloads and a plain reload does
-   not touch the 4 MB body.
-
-   Two lanes calling this is harmless and is also the point: one weight file
-   and one option file, so both lanes restore with the same model or the two
-   pictures would not be comparable. */
+   not touch the 4 MB body. */
 int tagpu_rcore_reload(const char* who)
 {
     read_options();

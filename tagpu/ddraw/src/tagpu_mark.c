@@ -94,6 +94,7 @@
 #include "tagpu_pal.h"
 #include "tagpu_vk.h"      /* tagpu_vk_ab_arm, for the A/B claim */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables */
+#include "tagpu_log.h"
 
 /* ---- what the marker block reads, and where it comes from ----------------
    This file reads no engine memory at all.
@@ -149,8 +150,7 @@
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ---- arming ---- */
@@ -438,8 +438,8 @@ static const char* SFS =
 /* THE SHADER SOURCES ABOVE ARE THE SOURCE OF TRUTH for the Vulkan shaders.
    The build reads them out of this file (tools/spirv-gen.py, the `mark` entry
    of its PROGRAMS table), translates them, and `make` fails if
-   `inc/spirv/tagpu_mark.spv.h` has drifted from them. They are GLSL strings,
-   not a GL object; nothing compiles them at run time. The gather below fills
+   `inc/spirv/tagpu_mark.spv.h` has drifted from them. They are GLSL strings
+   and nothing compiles them at run time. The gather below fills
    the vertex arrays and `mk_push` / `mk_draw` publish them to
    `tagpu_vk_mark.c`, which is what draws them with exactly these shaders. */
 
@@ -1092,9 +1092,9 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     textBase = total + s_nordt + s_nordl;
 
     /* ONE CONCATENATION, PUSHED ONCE, so every `first` below indexes the block
-       the twin receives. Pushed here rather than per draw because the buckets
-       are contiguous and re-slicing them per draw is how the offsets and the
-       geometry drift apart. The record IS the vertex block. */
+       tagpu_vk_mark.c receives. Pushed here rather than per draw because the
+       buckets are contiguous and re-slicing them per draw is how the offsets
+       and the geometry drift apart. The record IS the vertex block. */
     mk_push(s_verts, BARBASE);
     if (s_nbar) mk_push(s_barv, s_nbar);
     if (s_nordt) mk_push(s_ordt, s_nordt);
@@ -1132,7 +1132,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         }
     }
     if (s_nordx) {
-        /* the twin gets the atlas bytes through the hand-over
+        /* tagpu_vk_mark.c gets the atlas bytes through the hand-over
            (`text`/`textGen`/`textW`/`textH`) and uploads its own */
         if (s_nordxOrd) {
             mk_draw(textBase, s_nordxOrd, 0, 1, v->fogMode & 1, TAGPU_MK_TEX_TEXT, 0);
@@ -1174,7 +1174,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         s_mkPub.draws = s_mkD; s_mkPub.ndraw = s_mkDn;
         s_mkPub.text = tagpu_text_atlas(&s_mkPub.textGen);
         tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
-        /* the three the twin binds as textures, as bytes -- same shapes
+        /* the three tagpu_vk_mark.c binds as textures, as bytes -- same shapes
            tagpu_fx.h uses for the same three */
         s_mkPub.pal = tagpu_pal_live(); s_mkPub.palSerial = tagpu_pal_serial();
         s_mkPub.fogGrid = (v->fogMode & 1) ? v->fogGrid : NULL;

@@ -35,6 +35,7 @@
 #include "tagpu_input.h"
 #include "tagpu_shield.h"
 #include "tagpu_packet.h"  /* the command record the hold rides on */
+#include "tagpu_log.h"
 #include "mouse.h"        /* the fork's own mouse-lock (wndproc drops mouse
                              messages while unlocked — the "clicks never work
                              under a locked session" root cause) */
@@ -47,8 +48,7 @@ extern BOOL g_mouse_locked;
 
 static void ilog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int token_vk(const char* t)

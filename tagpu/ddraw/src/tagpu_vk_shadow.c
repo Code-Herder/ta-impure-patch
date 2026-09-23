@@ -1,6 +1,7 @@
 /* tagpu_vk_shadow.c -- the Classic++ cast-shadow depth map, drawn by Vulkan.
-   The FIFTH world pass. The GL twin is tagpu_shadow.c and is
-   the oracle; the header tagpu_vk_shadow.h has the contract.
+   The FIFTH world pass. NOTHING PUBLISHES ITS HAND-OVER, so it draws
+   nothing; the header tagpu_vk_shadow.h has the contract and, at its foot,
+   what a producer has to supply.
 
    ---- WHAT THIS PASS DOES THAT THE OTHERS DO NOT, AND WHY ----
 
@@ -15,39 +16,39 @@
       `prepare` -- legal precisely because `prepare` is the hook the seam calls
       OUTSIDE its own vkCmdBeginRenderPass, and render passes may not nest.
 
-   2. GL'S CLIP-SPACE Z RANGE, AND THIS IS THE PASS THAT NEEDS IT.
+   2. A [-1, 1] CLIP-SPACE Z, AND THIS IS THE PASS THAT NEEDS IT.
       Every other world pass writes a clip z already in [0, 1], so
-      `minDepth 0.5 / maxDepth 1.0` reproduces GL's (z+1)/2 exactly and nothing
-      is clipped (tagpu_vk_feat.c item 1, which says this extension would be
-      the answer only if a shader were ever found writing a z below 0).
-      The shadow matrix IS that shader: tagpu_shadow.c's `mrow` builds an
-      orthographic projection that fills [-1, 1] by construction, so under
-      Vulkan's own convention the near half of every caster is CLIPPED AWAY and
-      the map is wrong rather than merely offset. `VK_EXT_depth_clip_control`
-      with `negativeOneToOne` adopts GL's rule for this pipeline; the seam
-      queries the feature and publishes it as TAGPU_VKPASS::zclipok, and this
-      pass stands down without it. And the values matter as much as the
-      geometry: the consumers' taShadowAt compares `p.z * 0.5 + 0.5` against
-      what is STORED here, so the viewport transform has to be GL's arithmetic
-      and the format has to be GL's quantisation (24-bit fixed point, because
-      the GL map is GL_DEPTH_COMPONENT24).
+      `minDepth 0.5 / maxDepth 1.0` maps it and nothing is clipped
+      (tagpu_vk_feat.c item 1, which says this extension would be the answer
+      only if a shader were ever found writing a z below 0).
+      The shadow matrix IS that shader: the consumers' taShadowAt
+      (tagpu_glsl.h) maps its output by `* 0.5 + 0.5`, so the hand-over's
+      `mat` is an orthographic projection that fills [-1, 1], and under
+      Vulkan's own convention the near half of every caster would be CLIPPED
+      AWAY -- the map wrong rather than merely offset.
+      `VK_EXT_depth_clip_control` with `negativeOneToOne` keeps [-1, 1] for
+      this pipeline; the seam queries the feature and publishes it as
+      TAGPU_VKPASS::zclipok, and this pass stands down without it. And the
+      values matter as much as the geometry: taShadowAt compares
+      `p.z * 0.5 + 0.5` against what is STORED here, so the viewport transform
+      has to store (z+1)/2, and the format is 24-bit fixed point.
 
    3. THERE IS NO Y FLIP HERE, AND THAT IS NOT AN OMISSION.
       This target is SAMPLED, not presented, and that alone settles it.
       [For the other passes, being presented is not the question either; the
-      SHADER's y convention is. A pass whose shader writes GL's window
+      SHADER's y convention is. A pass whose shader writes a y-up
       convention (`1 - y*2`) flips; one that writes the engine's screen-space
       y, which grows downward, does not, because clip -1 is already the game
       frame's top row. That second group -- terrain, features, effects, units,
       markers -- takes a POSITIVE height too, for a different reason than this
       pass does. tagpu_vk_pass.h's `flipok` carries the whole table.]
-      In GL, clip y = -1 is window row 0, which is texel row 0, which is v = 0.
+      The consumers sample at v = clip y * 0.5 + 0.5, so clip y = -1 is v = 0.
       In Vulkan with a positive viewport height, clip y = -1 is framebuffer row
       0, which is texel row 0, which is v = 0. The two agree already, and
       flipping would put every shadow in the wrong half of the map. The flip is
       a property of presentation, not of Vulkan.
-      Cull is off on both sides (the GL twin disables GL_CULL_FACE), so the
-      winding a flip would also have inverted is not in play either.
+      Cull is off (`build_pipeline` says why), so the winding a flip would
+      also have inverted is not in play either.
 
    4. THE MAP IS PER FRAME SLOT. It is written every frame and sampled in the
       same frame by the consumers; with frames in flight, one image would have
@@ -65,18 +66,17 @@
 
    ---- WHAT IT DOES NOT DO ----
 
-   ONLY THE HEIGHTFIELD CASTS. The GL map is drawn from four kinds of geometry
-   -- the native 3DO stream, the posed program's depth twin, the replacement
-   meshes and the heightfield -- and only the heightfield has a CPU mirror on
-   this side of the seam today. A map missing a caster is a different map, so
-   tagpu_shadow.c counts the casters it drew that the hand-over carries no copy
-   of and this pass REFUSES the frame outright rather than draw an incomplete
-   one. The unit pass is the landing that closes it. In practice that means a
-   fixture with no unit on screen, which `static-terrain` is.
+   ONLY THE HEIGHTFIELD CASTS FROM THIS FILE. A map has three kinds of caster
+   -- the native 3DO stream, the posed bodies and the heightfield -- and the
+   hand-over carries a copy of the heightfield alone; the posed bodies are the
+   unit pass's to draw into this pass's render pass, and it has none today
+   (see `prepare`). A map missing a caster is a different map, so the
+   hand-over's `otherCasters` counts the casters it carries no copy of and
+   this pass REFUSES the frame outright rather than draw an incomplete one.
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
-   A PASS READS NO ENGINE STATE: every value comes from the GL lane's
-   hand-over, so this file is not on thread-split.allow and must never be. */
+   A PASS READS NO ENGINE STATE: every value comes from the hand-over, so
+   this file is not on thread-split.allow and must never be. */
 
 #include "tagpu_vk_pass.h"
 #include <windows.h>
@@ -86,7 +86,6 @@
 
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_unit.h"
-#include "tagpu_vk_hires.h"   /* the posed casters, drawn inside our render pass */
 #include "spirv/tagpu_shadow.spv.h"   /* generated from src/tagpu_shadow_glsl.h */
 
 #define UBLK 64                            /* std140: one mat4, the generated  */
@@ -138,7 +137,6 @@ static int s_saidRes;
 /* what stands after `prepare`, for the consumers to ask about */
 static unsigned s_liveFrame;               /* the frame the map was drawn for   */
 static int      s_liveHave;                /* ...and whether one was            */
-static int      s_res;                     /* its edge in texels                */
 
 static VkRenderPass          s_rp;         /* depth only, ours                  */
 static VkFormat              s_dfmt = VK_FORMAT_UNDEFINED;
@@ -192,13 +190,12 @@ static SLOT s_slot[TAGPU_VK_SLOTS];
 /* THE BOUNDS ARE RE-CHECKED HERE, because a bound that lives in the file that
    produced the number is a bound only while both files are read together.
    `res` sizes an image and both draw ranges size a buffer and a memcpy.
-   tagpu_shadow.c clamps its own resolution to 256..4096 (`shadowres`, and the
-   octave loop bounded by GL_MAX_TEXTURE_SIZE); the vertex count is one per
+   tagpu_classicpp.c clamps `shadowres` to 256..4096; the vertex count is one per
    16-px grid point of a map tagpu_terr.c already refuses past 4096 a side, so
    4097*4097 is the ceiling and 6 indices per cell the multiplier. Stated in
    the terms THIS file allocates in, so that neither file has to be read to
    trust the other. They must not be TIGHTER than the producer's: a pass that
-   refused a mesh the GL twin drew would leave the consumers sampling a map
+   refused a mesh the producer drew would leave the consumers sampling a map
    that is missing the ground. */
 #define RES_MIN     256
 #define RES_MAX     4096
@@ -299,8 +296,8 @@ static int mk_target(const TAGPU_VKPASS* d, int res, SLOT* s)
     ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     ivi.format = s_dfmt;
     /* THE DEPTH ASPECT ALONE, even when the format carries stencil: a view a
-       consumer samples through must name exactly one aspect, and the GL map is
-       GL_DEPTH_COMPONENT24 with no stencil at all. */
+       consumer samples through must name exactly one aspect, and the map
+       uses no stencil at all. */
     ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     ivi.subresourceRange.levelCount = 1;
     ivi.subresourceRange.layerCount = 1;
@@ -353,11 +350,9 @@ static int resolve(const TAGPU_VKPASS* d)
    once and neither is guaranteed: it must be a depth-stencil attachment AND a
    sampled image, and the consumers' PCF taps it through a LINEAR compare
    sampler, which is a third feature bit again.
-   24-BIT FIXED POINT OR NOTHING. The GL map is GL_DEPTH_COMPONENT24 and the
-   consumer compares a float it computed against what is stored here, so a
-   32-bit float attachment would disagree with the GL twin in the last bits of
-   every tap -- which is exactly the kind of difference a 0-px oracle exists to
-   catch and cannot be argued away. */
+   24-BIT FIXED POINT OR NOTHING. The map is specified as 24-bit fixed point
+   and the consumer compares a float it computed against what is stored here,
+   so a 32-bit float attachment would quantise every tap differently. */
 static VkFormat s_fmtCache = VK_FORMAT_UNDEFINED;
 static int      s_fmtLinear;
 static int      s_fmtAsked;
@@ -365,7 +360,7 @@ static int      s_fmtAsked;
 VkFormat tagpu_vk_shadow_format(const TAGPU_VKPASS* d, int* linearOk)
 {
     static const VkFormat want[2] = {
-        VK_FORMAT_X8_D24_UNORM_PACK32,      /* GL_DEPTH_COMPONENT24 exactly */
+        VK_FORMAT_X8_D24_UNORM_PACK32,      /* 24-bit depth, no stencil     */
         VK_FORMAT_D24_UNORM_S8_UINT         /* the same 24 bits, plus stencil */
     };
     const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |
@@ -399,10 +394,9 @@ VkFormat tagpu_vk_shadow_format(const TAGPU_VKPASS* d, int* linearOk)
 }
 
 /* ---- the render pass ----------------------------------------------------
-   One depth attachment and no colour one at all -- which is what makes it the
-   Vulkan spelling of the GL twin's `glDrawBuffers(GL_NONE)` + `glReadBuffer
-   (GL_NONE)` FBO. CLEAR at 1.0 in (the twin's glClear) and STORE out, because
-   unlike the frame's depth buffer this one IS read afterwards. */
+   One depth attachment and no colour one at all. CLEAR at 1.0 in -- the far
+   plane, so a texel no caster reaches holds no blocker -- and STORE out,
+   because unlike the frame's depth buffer this one IS read afterwards. */
 static int build_rp(const TAGPU_VKPASS* d)
 {
     VkAttachmentDescription at;
@@ -505,8 +499,8 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     st[1] = st[0];
     st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fs;
 
-    /* the mesh: one vec3 world point per vertex, tightly packed, exactly the
-       GL VAO's `glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, 0)` */
+    /* the mesh: one vec3 world point per vertex, tightly packed, as the
+       hand-over's `hv` carries it (three floats a vertex) */
     memset(&vb, 0, sizeof vb);
     vb.binding = 0; vb.stride = 12; vb.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
     memset(&va, 0, sizeof va);
@@ -516,15 +510,15 @@ static int build_pipeline(const TAGPU_VKPASS* d)
 
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    /* GL'S CLIP-SPACE Z, item 2 of the file header. The caller has already
+    /* THE [-1, 1] CLIP-SPACE Z, item 2 of the file header. The caller has already
        refused to get here without `zclipok`. */
     zc.negativeOneToOne = VK_TRUE;
     vp.pNext = &zc;
     vp.viewportCount = 1; vp.scissorCount = 1;
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    /* CULL OFF, as the GL twin's glDisable(GL_CULL_FACE): a caster's back faces
-       write depth there too, and a shadow map that culled them would let the
+    /* CULL OFF: a caster's back faces write depth too, and a shadow map
+       that culled them would let the
        light through the far side of every closed body. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
@@ -536,7 +530,7 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_TRUE;
     ds.depthWriteEnable = VK_TRUE;
-    ds.depthCompareOp = VK_COMPARE_OP_LESS;     /* the twin's glDepthFunc(GL_LESS) */
+    ds.depthCompareOp = VK_COMPARE_OP_LESS;     /* the nearest caster wins */
     ds.maxDepthBounds = 1.0f;
 
     /* NO COLOUR ATTACHMENT, so no blend state entries -- the subpass has none
@@ -633,7 +627,7 @@ static int build(const TAGPU_VKPASS* d)
     if (!linearOk && !s_saidFormat) {
         s_saidFormat = 1;
         /* NOT A REFUSAL, AND SAID ANYWAY. The consumer's own compare sampler is
-           what needs LINEAR (the twin's PCF is bilinear); this pass only writes
+           what needs LINEAR (taShadowAt's PCF is bilinear); this pass only writes
            the image. A consumer that finds it missing stands down itself, and
            knowing which of the two it was starts here. */
         plog(d, "shadow: the chosen depth format does not support LINEAR "
@@ -776,7 +770,6 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        SUCCEEDS. Cleared first so that every exit path leaves the consumers'
        `tagpu_vk_shadow_ready` saying no rather than yes for an older frame. */
     s_liveHave = 0;
-    s_res = 0;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -800,7 +793,7 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         return 0;
     }
 
-    /* GL'S CLIP-SPACE Z OR NOTHING (item 2 of the file header). Refused before
+    /* THE [-1, 1] CLIP-SPACE Z OR NOTHING (item 2 of the file header). Refused before
        anything is built, because without it every pipeline this pass could make
        would clip half of every caster away. */
     if (!d->zclipok) {
@@ -814,43 +807,31 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         return 0;
     }
 
-    /* THE MAP IS INCOMPLETE ON THIS SIDE OF THE SEAM. `otherCasters` is
-       tagpu_native.c's count of everything it drew into the GL map that the
-       terrain hand-over carries no copy of: the native 3DO stream, the posed
-       bodies, the replacement meshes -- and the heightfield itself when its
-       mirror is missing.
+    /* THE MAP MAY BE INCOMPLETE ON THIS SIDE OF THE SEAM. `otherCasters` is
+       the producer's count of everything the map holds that the hand-over
+       carries no copy of: the native 3DO stream, the posed bodies -- and
+       the heightfield itself when its mirror is missing.
 
        THE POSED BODIES ARE COVERED BY THE UNIT PASS, and this is where that
        is accounted for. `tagpu_vk_unit_casters` is the subset of
        that count this frame's unit pass is ready to draw into the map below,
        and it can only be SMALLER than the posed bodies' share of it -- the
        header says why, and an over-count is the safe direction: it refuses a
-       frame the lane could have drawn, where an under-count would draw a
-       different map from the oracle's.
+       frame the lane could have drawn, where an under-count would draw a map
+       with a caster missing.
 
-       WHAT IS LEFT OVER IS THE REPLACEMENT MESHES, AND THE HEIGHTFIELD WHOSE
-       MIRROR WENT MISSING. The native 3DO stream is not a third.
-       `tagpu_shadow_unit`'s only call site is behind
-       `firstv[i+1] == firstv[i]`, and `nv` is 0 for the whole of that loop
-       because the posed program is the path -- so no ordinary unit has native
-       vertices and that counter never moves.
+       WHAT IS LEFT OVER IS THE NATIVE 3DO STREAM AND THE HEIGHTFIELD WHOSE
+       MIRROR WENT MISSING.
 
        The unit pass's `upload` has already run for this slot -- the seam calls
        it before this function and says so -- which is what makes the number
        available before the render pass begins. */
-    /* THE REPLACEMENT MESHES ARE THE SECOND TERM. Both passes
-       count the same way -- the subset of the GL map's casters they are ready
-       to draw this frame -- so the sum is comparable to `otherCasters` by the
-       same construction, and both can only UNDER-count, which refuses a frame
-       the lane could have drawn rather than drawing a map the oracle does not
-       have. What is left over is the heightfield whose mirror went
-       missing, which is an out-of-memory path and not a caster kind. */
-    ours = tagpu_vk_unit_casters() + tagpu_vk_hires_casters();
+    ours = tagpu_vk_unit_casters();
     if (h.otherCasters - ours > 0) {
         if (!s_saidCasters) {
             s_saidCasters = 1;
             plog(d, "shadow: the gather holds %d caster(s) this lane has no copy "
-                    "of (%d of them the unit and hi-res passes carry). Nothing "
+                    "of (%d of them the unit pass carries). Nothing "
                     "drawn while there are, and the passes that sample the map "
                     "stand down with it", h.otherCasters, ours);
         }
@@ -868,14 +849,13 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         return 0;
     }
     s_saidRes = 0;
-    /* AN EMPTY MAP IS A MAP, AND IT IS REPRODUCIBLE EXACTLY. `terrainshadow`
-       defaults to 0, so on a frame with no unit caster either the GL twin
-       draws NOTHING into its depth texture and the clear at 1.0 IS the map --
-       every receiver then finds no blocker and is lit. Refusing that frame
-       would stand the consumers down over a map this lane can reproduce with a
-       render pass and no draw call, which is the Classic++ default
-       configuration. So `casters` decides whether anything is bound and drawn
-       below, not whether the map is written. */
+    /* AN EMPTY MAP IS A MAP. On a frame whose hand-over carries no
+       heightfield and no unit caster either, nothing is drawn into the map and
+       the clear at 1.0 IS the map -- every receiver then finds no blocker and
+       is lit. Refusing that frame would stand the consumers down over a map
+       this pass makes with a render pass and no draw call. So `casters`
+       decides whether anything is bound and drawn below, not whether the map
+       is written. */
     casters = h.hv && h.hi && h.indexCount > 0;
     if (casters) {
         if (h.hnv < 1 || h.hnv > MESH_MAXV || h.hni < 1 || h.hni > MESH_MAXI) {
@@ -885,8 +865,8 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
             return 0;
         }
         /* AND THE RANGE INSIDE THE MESH, which is the bound the draw itself
-           uses. The producer clamps it (tagpu_terr.c) and this re-checks it,
-           for the same reason every other bound here is re-checked. */
+           uses. A producer has to clamp it, and this re-checks it for the
+           same reason every other bound here is re-checked. */
         if ((VkDeviceSize)h.firstIndex + h.indexCount > h.hni) {
             plog(d, "shadow: the draw range %u+%u is outside a %u-index mesh - "
                     "nothing drawn", h.firstIndex, h.indexCount, (unsigned)h.hni);
@@ -914,9 +894,9 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 
     /* NOTHING IS KEPT ONCE THERE IS NOTHING TO DRAW -- the file header's own
        rule, applied to the empty-map path too. The caster mesh is the largest
-       thing this pass owns (10 MB on Town & Country, 19 on Two Continents) and
-       `terrainshadow` is a LIVE knob, so a map that drew hills and then stopped
-       would otherwise hold the whole pair for the rest of the session. Through
+       thing this pass owns (a whole-map heightfield measured 10 MB on Town &
+       Country, 19 on Two Continents), so a hand-over that carried one and then
+       stopped would otherwise hold the whole pair for the rest of the session. Through
        the retire rather than a destroy, because other slots' submitted command
        buffers may still name the buffers. */
     if (!casters) mesh_retire(d);
@@ -931,8 +911,9 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         return 0;
     }
 
-    /* THE UPLOAD, ON THE SERIAL AND NOT PER FRAME. The mesh is built once per
-       map; `hillsSerial` is bumped by the build that produced these bytes. */
+    /* THE UPLOAD, ON THE SERIAL AND NOT PER FRAME. A producer builds the mesh
+       once per map and bumps `hillsSerial` with the build that produced these
+       bytes. */
     if (casters && (!s_mesh.have || s_mesh.serial != h.hillsSerial)) {
         VkBufferMemoryBarrier bb[2];
         VkBufferCopy cp[2];
@@ -978,11 +959,11 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
         slot_drop_stage(d, s);
     }
 
-    /* this slot's uniform block: the matrix, exactly as GL got it */
+    /* this slot's uniform block: the matrix, exactly as the hand-over carries it */
     memcpy(s_umap + slot * s_ustride, h.mat, sizeof h.mat);
 
     /* ---- the draw, in a render pass of our own ---- */
-    cv.depthStencil.depth = 1.0f;           /* the twin's glClear value */
+    cv.depthStencil.depth = 1.0f;           /* the far plane: no blocker */
     cv.depthStencil.stencil = 0;
     rbi.renderPass = s_rp;
     rbi.framebuffer = s->fb;
@@ -993,7 +974,8 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
     vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
 
     /* NO Y FLIP: a positive height, item 3 of the file header. minDepth 0 /
-       maxDepth 1 with `negativeOneToOne` on is GL's own (z+1)/2. */
+       maxDepth 1 with `negativeOneToOne` on stores (z+1)/2, the value
+       taShadowAt compares against (item 2). */
     memset(&vp, 0, sizeof vp);
     vp.x = 0.0f; vp.y = 0.0f;
     vp.width = (float)h.res; vp.height = (float)h.res;
@@ -1024,27 +1006,17 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 
        A SHORT COUNT IS A REFUSAL, not a partial map. `ours` was taken before
        the render pass began and is what the census above was reconciled
-       against; if fewer arrive, the map is missing a caster the GL map has and
+       against; if fewer arrive, the map is missing a caster the census counted and
        nothing may sample it. The draws already recorded stay -- they are in a
        submitted command buffer either way -- but `s_liveHave` is not set, so
        every consumer stands down and the picture nobody draws is the one that
        would have been wrong. */
     drew = tagpu_vk_unit_cast(d, cb, slot, s_rp);
-    {
-        /* AND THE REPLACEMENT MESHES, into the same render pass, before it
-           ends. A -1 from either is the same refusal, and it must not be
-           allowed to cancel the other's count: summing a -1 into a positive
-           would read as a short count and land on the same branch by accident
-           rather than on purpose. */
-        int hi = tagpu_vk_hires_cast(d, cb, slot, s_rp);
-        if (drew < 0 || hi < 0) drew = -1;
-        else drew += hi;
-    }
     vkCmdEndRenderPass(cb);
     if (drew < 0 || drew != ours) {
         if (!s_saidUnitShort) {
             s_saidUnitShort = 1;
-            plog(d, "shadow: the caster passes put %d of the %d caster(s) they "
+            plog(d, "shadow: the unit pass put %d of the %d caster(s) it "
                     "owed into the map - the map is incomplete and nothing "
                     "samples it this frame", drew, ours);
         }
@@ -1054,7 +1026,6 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
 
     s_liveHave = 1;
     s_liveFrame = d->frame;
-    s_res = h.res;
     return 1;
 }
 
@@ -1077,8 +1048,6 @@ VkImageView tagpu_vk_shadow_view(unsigned frame, uint32_t slot)
     return s_slot[slot].view;
 }
 
-int tagpu_vk_shadow_res(void) { return s_res; }
-
 void tagpu_vk_shadow_down(const TAGPU_VKPASS* d)
 {
     VkDevice dev = d->dev;
@@ -1088,7 +1057,6 @@ void tagpu_vk_shadow_down(const TAGPU_VKPASS* d)
     int owed = s_downPaying;
     s_downOwed = 0;
     s_liveHave = 0;
-    s_res = 0;
     if (!dev || !vkDestroyBuffer) { s_state = owed ? ST_REFUSED : ST_UNBUILT; return; }
 
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {

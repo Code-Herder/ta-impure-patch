@@ -63,6 +63,7 @@
 #include "tagpu_packet_pub.h"
 #include "tagpu_detour.h"
 #include "dd.h"                            /* g_ddraw.gui_thread_id: the game thread */
+#include "tagpu_log.h"
 
 #define FREEOBJ_VA    0x0045AAA0u          /* FreeObjectState: stdcall, 1 arg, ret 4      */
 #define FREEOBJ_RESUME (FREEOBJ_VA + 5u)
@@ -166,8 +167,7 @@ static volatile unsigned s_cDeferred, s_cDrained, s_cOverflow, s_cForeign,
 
 static void rlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* Every entry is freed through here, so the two classes can share one ring,
@@ -499,21 +499,6 @@ int tagpu_reclaim_level_closing(void) { return s_levelTracked && s_teardown != 0
 int tagpu_reclaim_level_tracked(void) { return s_levelTracked; }
 
 int tagpu_reclaim_armed(void) { return s_installed; }
-
-/* ---- the fence, for other modules (tagpu_reclaim.h) ---------------------- */
-/* Callable from either thread. The barrier is the game side's half of the
-   Dekker pair described in ORDERING: the caller's store that unreachabled the
-   pointer must be globally visible before the pass counter we snapshot. */
-long tagpu_reclaim_pass_stamp(void)
-{
-    MemoryBarrier();
-    return (long)s_started;
-}
-
-int tagpu_reclaim_pass_passed(long stamp)
-{
-    return (LONG)(s_completed - (LONG)stamp) >= 0;
-}
 
 /* --------------------------------------------------------------- install ---- */
 

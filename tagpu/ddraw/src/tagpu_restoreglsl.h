@@ -1,7 +1,7 @@
 #ifndef TAGPU_RESTOREGLSL_H
 #define TAGPU_RESTOREGLSL_H
-/* THE SHARED CONTRACT OF THE CLASSIC++ RESTORER -- the frame struct both
-   backends and tools/tascene are written against, and the tileability test.
+/* THE SHARED CONTRACT OF THE CLASSIC++ RESTORER -- the frame struct the
+   restorer and tools/tascene are written against, and the tileability test.
    The restorer that runs is `tagpu_vk_restore.c` under `tagpu_restore_core.c`.
 
    WHAT THE RESTORER IS, for a reader arriving here first: the unditherer's
@@ -16,18 +16,19 @@
    is a fixed list of every tile, added once; a GAF atlas's is an open QUEUE
    that tagpu_gaf.c feeds on every miss (renderers.md 4b Option 4), so a
    sprite draws indexed for the frame or two before its restore lands. All
-   jobs share one set of GL objects and one per-frame budget; the one holding
+   jobs share the backend's device resources and one per-frame budget; the one holding
    a batch in flight keeps it, otherwise the lowest `prio` with work runs, so
    the terrain (0) goes before features (1) before effects (2). A job's
-   destination is cleared to alpha 0 when the job starts (and on job_clear),
-   and the out pass writes alpha 1 over every texel it paints -- a consumer
+   destination is cleared to alpha 0 when the job starts (unless the job
+   repaints in place), and the out pass writes alpha 1 over every texel it paints -- a consumer
    samples the restored colour where the alpha says so and stays indexed
    elsewhere, which is how the progressive reveal and the mixed-mode atlases
    both work with no flag texture.
 
    gamedir files it reads: <model>.w32.bin beside TotalA.exe (unditherer
    export-weights; full by default), and the options trigger
-   tagpu_restoreglsl.on -- tokens, read once per GL context:
+   tagpu_restoreglsl.on -- tokens, read at each restorer bring-up
+   (tagpu_rcore_reload):
      tiny        the 6x24 model (tiny.w32.bin) instead of 12x64
      fp16        RGBA16F activations (fp32 is the default and the one that
                  meets the correctness bar; renderers.md 4c Q4)
@@ -57,10 +58,10 @@ typedef struct TAGPU_RGLSL_FRAME_S {
 } TAGPU_RGLSL_FRAME;
 
 /* WHAT THIS HEADER HOLDS. `TAGPU_RGLSL_FRAME` above -- a plain CPU struct
-   with no GL in it -- and `tagpu_rglsl_tileable` below. Twelve files include
-   this header and almost all of them want only those two; the name stays
-   because the struct's name is the contract both restorer backends and
-   tools/tascene are written against. */
+   with no rendering API in it -- and `tagpu_rglsl_tileable` below. Almost
+   every file that includes this header wants only those two; the name stays
+   because the struct's name is the contract the restorer and tools/tascene
+   are written against. */
 /* classical.is_tileable on palette colours: opposite edges agree within 12
    levels on average, over the three channels. A frame with its colour key
    `key` on an edge is never tileable (tagpu_restore_glsl.h says why);

@@ -1,45 +1,43 @@
 #ifndef TAGPU_GUI_H
 #define TAGPU_GUI_H
-/* tagpu_gui -- the engine's UI, OBSERVED (research/notes/gui-renderer.md).
+/* tagpu_gui -- the engine's UI, observed on the game thread and redrawn by us
+   on the render thread (research/notes/gui-renderer.md).
 
-   WHAT IT IS NOW. Observer detours on the engine's pixel-writing leaves record
-   what the UI draws -- which sprite, which string, at which coordinates, into
-   which surface -- while the engine goes on drawing its own 8bpp surface
-   exactly as it always did. That record is the engine's UI stated
-   SEMANTICALLY, and it is what a native UI pass will be built from.
+   THE OBSERVERS. Detours on the engine's pixel-writing leaves record what the
+   UI draws -- which sprite, which string, at which coordinates, into which
+   surface -- while the engine goes on drawing its own 8bpp surface exactly as
+   it always did. That record is the engine's UI stated SEMANTICALLY, and the
+   publisher hands it to the render thread as an op queue (tagpu_gui_int.h).
 
-   IT NO LONGER DRAWS ANYTHING. Until the clean cut this module also owned the
-   other half: `tagpu_gui_surf.c` replayed those ops into retained twins and
-   composited them -- with our own device-resolution sharp layer, through one
-   quad -- over the frame. That was the engine's pixels reaching the screen, so
-   the cut deleted the file, the composite, the twins, the sharp layer and the
-   GLSL behind them. There is no lever to bring it back and no UI on screen: no
-   side panel, no bars, no minimap, no cursor, no dialogs. That is the cut's
-   cost, and the UI returns as a pass of ours rather than as a replay of the
-   engine's.
+   THE LAYER. `tagpu_gui_present` (tagpu_gui_surf.c) drains that queue at every
+   present into retained twins, one per engine surface, and fills the
+   hand-over `tagpu_vk_gui.c` replays on the device: the presented surface's
+   twin is drawn over the world passes, palette-resolved wherever an op wrote
+   and discarded everywhere else, under a device-resolution sharp layer whose
+   clients are the cursor and the minimap. Nothing of the engine's own frame
+   is beneath it: `LAY_FS` declares no sampler for TA's surface.
 
-   WHY THE CAPTURE SURVIVED IT. Two reasons, and the first is not about the UI
-   at all: `tagpu_gui_hook.c`'s `before_flip` is the only host of
-   `tagpu_triggers_frame`, so every `tacli` verb in the fork is dispatched from
-   inside it -- deleting the file would take the whole harness with it. The
-   second is that capture is not compositing. The golden source -- the engine's
-   own composed frame, captured by `tagpu_surf_capture` on the game thread since
-   2026-09-20 and sampled by nothing -- is kept for exactly the same reason.
+   THE HOOK ALSO HOSTS THE HARNESS. `tagpu_gui_hook.c`'s `before_flip` is the
+   only host of `tagpu_triggers_frame`, so every `tacli` verb in the fork is
+   dispatched from inside it. The golden source -- the engine's own composed
+   frame, captured by `tagpu_surf_capture` on the game thread -- is not this
+   module's and is drawn nowhere (tagpu_vk_surf.c).
 
    Family: tagpu_gui_hook.c (the observers, the census, the publisher),
-   tagpu_gui_snap.c (the gadget-tree snapshot behind `tacli ui`, was
-   tagpu_ui.c, contract inc/tagpu_ui.h). One trigger, gamedir/tagpu_gui.on;
+   tagpu_gui_surf.c (the twins, the UI atlas, the replay), tagpu_vk_gui.c (the
+   Vulkan pass), tagpu_gui_snap.c (the gadget-tree snapshot behind `tacli ui`,
+   contract inc/tagpu_ui.h). One trigger, gamedir/tagpu_gui.on;
    the detours install at DllMain when it exists then.
 
-   Tokens in tagpu_gui.on: `census` (the G15a diff; costs a 1024x768 compare
+   Tokens in tagpu_gui.on: `census` (the census diff; costs a 1024x768 compare
    per 5 ms), `log`, `pgm`, `trace`, `key=N` (census diagnostics,
-   tagpu_gui_hook.c). The tokens that named the draw -- `strict`, `norestore`,
-   `sharptest`, `nocursor`, `mmbase`, `nominimap`, `cursorscale=` -- went with
-   it.
+   tagpu_gui_hook.c, read at attach). The draw's tokens -- `off`,
+   `norestore`, `sharptest`, `nocursor`, `mmbase`, `nominimap`,
+   `cursorscale=` -- are tagpu_gui_surf.c's and follow the file live.
 
    THREADS. The observers and the publisher run on the game thread inside the
-   engine's own calls. Nothing consumes the queue, so it is drained where it is
-   filled (tagpu_gui_int.h).
+   engine's own calls; the render thread drains the queue at every present.
+   One producer, one consumer, no lock (tagpu_gui_int.h).
 
    Every observer calls the original, so the engine's behaviour is
    byte-identical with the module armed. */#include <windows.h>
@@ -51,57 +49,35 @@ int  tagpu_gui_installed(void);
 unsigned tagpu_gui_flips(void);                     /* the publisher's flip count, game thread */
 
 /* RENDER THREAD, PER PRESENT: poll the trigger, drain the queue into the twins
-   and fill the Vulkan lane's hand-over. It APPLIES the op stream -- resolving
+   and fill the Vulkan pass's hand-over. It APPLIES the op stream -- resolving
    each sprite to its atlas rect and stamping each string from the glyph atlas
    -- and draws nothing itself; `tagpu_vk_gui.c` replays the result on the
-   device. No `gl*` call has been on this path since landing 11-4b.
+   device.
 
-   WHAT IT NO LONGER DOES is composite the engine's own frame underneath. That
-   was the clean cut, and the rebuild keeps it: `LAY_FS` does not declare a
-   sampler for TA's surface, so nothing on this path can put an engine pixel on
-   the screen. The golden source is captured separately and drawn nowhere. */
+   IT DOES NOT composite the engine's own frame underneath: `LAY_FS` does not
+   declare a sampler for TA's surface, so nothing on this path can put an
+   engine pixel on the screen. The golden source is captured separately and drawn nowhere. */
 void tagpu_gui_present(const TAGPU_FRAME* f);
 
 /* THE CURSOR'S ONE DECISION FOR THIS FRAME, taken before anything reads it
-   (gui-renderer.md 13.5, G17c). Called from `tagpu_overlay_draw` ahead of the
+   (gui-renderer.md 13.5). Called from `tagpu_overlay_draw` ahead of the
    world pass and `tagpu_gui_present`, so every reader of the cursor state in
    one frame agrees about it; it latches THIS frame's packet for the whole of
-   the UI's render half, which is where the position and the sprite come from
-   since the frame packet's landing 4c.
+   the UI's render half, which is where the position and the sprite come from.
 
-   `tagpu_gui_cursor_own` AND `tagpu_gui_cursor_drew_take` ARE NOT DECLARED
-   BESIDE IT ANY MORE, and both were the composite's. The first handed
-   `tagpu_native.c` the engine's cursor rect to treat as key, because the
-   composite dropped our fragment wherever the engine's surface was not the
-   terrain key and a cursor pixel is not; the second told `tagpu_cursown`
-   whether to suppress the engine's blit. There is no engine frame under us and
-   no `tagpu_cursown`, so neither question exists. The engine's cursor goes
-   into its own surface, which is where the reference wants it, and ours is the
-   sharp layer's. */
+   The engine's cursor goes into its own surface, which is where the
+   reference wants it, and ours is the sharp layer's. */
 void tagpu_gui_cursor_frame(const struct TAGPU_PACKET* packet);
 
-/* THE CURSOR DECISION AND ITS TWO READERS ARE GONE. G17c latched, once a
-   frame, whether OUR cursor was being drawn, so that the composite and the
-   world pass could erase the engine's from the same rect and not ship two.
-   With nothing of ours on screen there is nothing to erase for: the engine
-   draws its own cursor into its own surface, and the reference frame is
-   complete because of it. [This said `tagpu_cursown_publish(0)` in
-   `render_vk.c` "keeps it that way unconditionally" until the landing review
-   of 2026-09-20 -- that call and the whole `tagpu_cursown` module are deleted,
-   so there is nothing keeping anything: the engine's blit was simply never
-   patched again.] What the player sees is no cursor at all, which is
-   the cut's cost rather than a defect to work around.
-
-   WHAT THAT WORK ESTABLISHED IS WORTH KEEPING and is written down in
-   gui-renderer.md 13.5, 17 and 23 -- above all the bound the rect never had:
-   the engine's cursors PULSE (the move cursor cycles 27x27 to 35x35, one pixel
-   per side per step) and the rect a frame holds can be one animation step
-   behind the sprite the engine blits next. A native cursor pass needs the
-   cursor table's animation extent, not a margin. */
+/* THE ENGINE'S CURSORS PULSE (gui-renderer.md 13.5, 17 and 23): the move
+   cursor cycles 27x27 to 35x35, one pixel per side per step, so a rect taken
+   from one frame's sprite can be one animation step behind the sprite the
+   engine blits next. Anything that bounds the cursor needs the cursor table's
+   animation extent, not a margin. */
 struct TAGPU_PACKET;
 
-/* WHETHER THE PACKET CARRIES THE THREE MINIMAP SURFACES (landing 4c). The
-   sharp minimap raises it from its own frame — once per present, whenever it
+/* WHETHER THE PACKET CARRIES THE THREE MINIMAP SURFACES. The sharp minimap
+   raises it from its own frame — once per present, whenever it
    would draw — and `tagpu_gui_flush`'s watchdog drops it after 90 silent
    frames, the same shape tagpu_fxown uses for the effect tables. It costs the
    publisher an ew x eh x 3 interleave per publish when set, and at k = 1 the
@@ -111,32 +87,30 @@ struct TAGPU_PACKET;
    of the engine's own minimap. */
 void tagpu_gui_set_want_minimap(int on, unsigned int frame_counter);
 int  tagpu_gui_want_minimap(void);
-/* THE LEVEL'S MINIMAP PICTURE IS ACKNOWLEDGED, NOT ASSUMED (landing 4c, and its
-   review). The publisher puts it in a packet and the mailbox is latest-wins:
-   a packet the render thread never takes is a counted statistic, not an error,
-   so "it went into one packet" is not "the consumer has it". The render half
-   raises this to `level_gen + 1` the moment it has copied that level's picture,
-   and the publisher keeps sending until it does — which is normally one extra
-   packet and never more than the frames it takes the consumer to run once.
-   0 = nothing held. Written on the render thread, read on the game thread; one
-   writer, monotone within a level. */
+/* THE LEVEL'S MINIMAP PICTURE IS ACKNOWLEDGED, NOT ASSUMED. The publisher puts
+   it in a packet and the mailbox is latest-wins: a packet the render thread
+   never takes is a counted statistic, not an error, so "it went into one
+   packet" is not "the consumer has it". The render half raises this to
+   `level_gen + 1` the moment it has copied that level's picture, and the
+   publisher keeps sending until it does — which is normally one extra packet
+   and never more than the frames it takes the consumer to run once. 0 = nothing
+   held. Written on the render thread, read on the game thread; one writer,
+   monotone within a level. */
 void     tagpu_gui_set_minimap_have(unsigned level_gen_plus_1);
 unsigned tagpu_gui_minimap_have(void);
 
-/* ==================================================================== G19f ==
-   THE VULKAN LANE'S HAND-OVER — the op stream this present applied, copied
+/* ===========================================================================
+   THE VULKAN PASS'S HAND-OVER — the op stream this present applied, copied
    while it was live.
 
-   WHY A COPY AND NOT A POINTER INTO THE QUEUE. render_ogl.c's iteration is
+   WHY A COPY AND NOT A POINTER INTO THE QUEUE. render_vk.c's iteration is
    `tagpu_packet_acquire` -> `tagpu_overlay_draw` (inside which
    `tagpu_gui_present` drains) -> `tagpu_packet_frame_end` -> `tagpu_vk_frame`.
    `drain()` advances the queue's arena tail PER OP, so the moment it returns
    the game thread may overwrite the bytes those ops point into -- and the
-   Vulkan lane does not run until two calls later. A pass reading
-   `g_guiq.arena + aoff` would be tagpu_terr.c's fog-grid bug on a 16 MB
-   buffer. So the render half copies what the port needs, as it applies each
-   op, into an arena of its own. tagpu_terr.c keeps the buffer glTexImage2D was
-   handed and tagpu_gaf.c grows a CPU mirror for exactly the same reason.
+   Vulkan pass does not run until two calls later. So the render half copies
+   what the port needs, as it applies each op, into an arena of its own, as
+   tagpu_terr.c copies its fog grid out of the packet for the same reason.
 
    IT IS OPT IN. Nothing is copied until `tagpu_gui_mirror_want(1)` is called,
    which the Vulkan pass does when its lever is armed and undoes when it is
@@ -146,7 +120,7 @@ unsigned tagpu_gui_minimap_have(void);
    THIS IS NOT THE PRODUCER'S QUEUE STRUCT. `TAGPU_PUBOP` is private to the
    tagpu_gui_* family (tagpu_gui_int.h) and describes what the GAME thread
    published; this describes what the RENDER half actually did with it, which
-   is the only thing a second backend has to reproduce. Keeping them separate
+   is the only thing the Vulkan pass has to reproduce. Keeping them separate
    means a change to the queue cannot silently change the port's contract.  */
 
 /* THE LIGHTEN TABLE'S SHAPE, AND THE SHAPE IS THE BOUND. `0x4CC8DF` indexes it
@@ -170,12 +144,12 @@ enum {
     TAGPU_GUIOP_COPY,       /* twin -> twin, the source's box at (sl, st)     */
     TAGPU_GUIOP_RESET,      /* forget every twin                              */
     TAGPU_GUIOP_STRING,     /* TA's own glyphs, stamped into the twin         */
-    TAGPU_GUIOP_BAR,        /* landing 8a: the box filled with palette index
-                               `fg`, fully covered. No arena bytes.            */
-    TAGPU_GUIOP_RECT,       /* landing 8b: the box's four INCLUSIVE EDGES in
-                               palette index `fg`, one pixel wide, interior
-                               untouched. No arena bytes.                      */
-    TAGPU_GUIOP_TINT        /* landing 8d: the box, one pixel thick, REMAPPED
+    TAGPU_GUIOP_BAR,        /* the box filled with palette index `fg`, fully
+                               covered. No arena bytes.                        */
+    TAGPU_GUIOP_RECT,       /* the box's four INCLUSIVE EDGES in palette index
+                               `fg`, one pixel wide, interior untouched. No
+                               arena bytes.                                    */
+    TAGPU_GUIOP_TINT        /* the box, one pixel thick, REMAPPED
                                THROUGH ROW `fg` of `TAGPU_GUIHAND::shade` --
                                `idx = shade[fg * 256 + idx]`, coverage
                                unchanged. No arena bytes.
@@ -185,7 +159,7 @@ enum {
                                plan for rather than discover: the box must be
                                snapshotted before the draw that rewrites it,
                                because sampling an attachment a draw is writing
-                               is undefined in both APIs (the same rule that
+                               is undefined in Vulkan (the same rule that
                                makes `TAGPU_GUIOP_COPY` refuse a self-copy).
 
                                AND THE ORDER OF THESE OPS IS LOAD-BEARING where
@@ -207,54 +181,54 @@ typedef struct TAGPU_GUIOP {
     short          sl, st;          /* copy: source top-left; sprite: dst pos */
     int            w, h;            /* seed: the surface's geometry           */
     unsigned       aoff, alen;      /* into TAGPU_GUIHAND::arena              */
-    /* ---- STRING (landing 2). The three colour arguments of 0x4CCF60 as
-       BYTES, and `sl`/`st` are the PEN the GL lane started from -- already
-       past the font's own y offset, which the blitter subtracts.
+    /* ---- STRING. The three colour arguments of 0x4CCF60 as BYTES, and
+       `sl`/`st` are the PEN the render half started from -- already past the
+       font's own y offset, which the blitter subtracts.
        `aoff`/`alen` carry `nglyph` cells of four `short` each: the atlas x, y,
-       w and h the GL lane RESOLVED. They are carried rather than looked up
+       w and h the render half RESOLVED. They are carried rather than looked up
        again for a harder reason than the sprite's: `twin_string` resolves
        against an atlas that can REPACK mid-string -- it retries once for
        exactly that -- so a second lookup here could name texels that have
-       moved since, and the A/B would be comparing two atlases. */
+       moved since. */
     unsigned char  fg, bg, tr;
     unsigned short nglyph;
 
-    /* ---- CLASSIC++ (landing 4). WHAT THE GL LANE DID ABOUT COLOUR, carried
-       for the fourth time on this pass rather than re-derived, and here the
-       reason is a lifetime rather than a moving input: whether `twin_colour`
-       made the destination's colour attachment depends on `s_colValid` and on
-       `s_atlas.rgb`, both of which the render half settles in `restore_step`
-       BEFORE the drain -- so a consumer asking again later would be asking a
+    /* ---- CLASSIC++. WHAT THE RENDER HALF DID ABOUT COLOUR, carried rather
+       than re-derived, and here the reason is a lifetime rather than a moving
+       input: whether the drain (`twin_sprite`, `twin_copy`) gave the
+       destination a colour attachment depends on `s_colValid`, which the
+       render half settles in `restore_step` BEFORE the drain -- so a consumer asking again later would be asking a
        different question about the same frame.
          TAGPU_GUICOL_DST   the destination twin HAS a colour attachment after
-                            this op (`twin_colour` ran, or it already had one)
+                            this op (the drain gave it one, or it already had
+                            one)
          TAGPU_GUICOL_ON    the program's own `uRestored` (SPRITE) or
                             `uSrcHasCol` (COPY) was 1
        Both are 0 on every op of a session that is not restoring, which is what
-       makes this landing free when Classic++ is off. */
+       makes this field free when Classic++ is off. */
     unsigned char  col;
 
-    /* THE ATLAS RECT THE GL LANE RESOLVED, not one this pass looks up again.
-       "The port must not re-derive the pass's inputs" (roadmap, How a ported
-       pass is A/B'd): a second lookup could answer differently after a repack
-       and the A/B would then be comparing two atlases. Valid for SPRITE. */
+    /* THE ATLAS RECT THE RENDER HALF RESOLVED, not one this pass looks up
+       again: a second lookup could answer differently after a repack. Valid
+       for SPRITE. */
     float          u0, v0, u1, v1;
 } TAGPU_GUIOP;
 
-/* ---- THE SHARP LAYER (landing 3) ----------------------------------------
+/* ---- THE SHARP LAYER -----------------------------------------------------
    One RGBA8 at DEVICE resolution, row 0 the viewport's TOP, cleared to
    (0,0,0,0) every frame and composited above the mirror where its alpha says
    it has coverage. It is not a twin and not an op stream: it has three clients
-   drawn in a FIXED order -- the harness's flat quads, the cursor, then the
-   minimap (base, then its view box) -- so what crosses is the short ORDERED
+   drawn in a FIXED order -- the harness's flat quads, the minimap (base, then
+   its view box), then the cursor, which covers the minimap where the two
+   overlap -- so what crosses is the short ORDERED
    list of quads they produced, at most `TAGPU_GUI_SDRAW_MAX` of them.
 
-   EVERY FIELD HERE IS RESOLVED BY THE GL LANE AND NONE IS RE-DERIVED, which
-   on this client is not a nicety: `sharp_cursor` takes the pointer position
-   from `mouse_last_client()` AT DRAW TIME, and the Vulkan pass runs later in
-   the same iteration of render_ogl.c's loop -- so re-reading it would place
-   the cursor where the mouse has moved to since. Same rule as the sprite's
-   atlas rect and the string's glyph cells, and the third landing it decides.
+   EVERY FIELD HERE IS RESOLVED BY THE RENDER HALF AND NONE IS RE-DERIVED,
+   which on this client is not a nicety: `sharp_cursor` takes the pointer
+   position from `mouse_last_client()` AT RECORD TIME, and the Vulkan pass runs
+   later in the same iteration of render_vk.c's loop -- so re-reading it would
+   place the cursor where the mouse has moved to since. Same rule as the
+   sprite's atlas rect and the string's glyph cells.
    The minimap's box (the packet's, through the HUD map and the `hq8` scale)
    and its view rect (`main+0x142CB`, four edges at one GAME pixel each, in the
    colour the palette gives `mm_viewcol`) are resolved for the same reason. */
@@ -285,35 +259,21 @@ typedef struct TAGPU_GUIHAND {
     unsigned             alen;
 
     /* THE SURFACE THE COMPOSITE DRAWS, and its geometry. 0 when the drain left
-       none presented, which is a frame the GL lane drew nothing on either. */
+       none presented. */
     unsigned             presented;
     int                  surfW, surfH;
 
-    /* The UI atlas's texels, as bytes: a second backend cannot read a GL
-       texture. `atlasSerial` says when they last moved, so the port uploads on
-       a change and not per frame -- tagpu_feat.h's `atlasSerial` exactly. */
+    /* The UI atlas's texels, as bytes. `atlasSerial` says when they last
+       moved, so the port uploads on a change and not per frame --
+       tagpu_feat.h's `atlasSerial` exactly. */
     const unsigned char* atlas;
     int                  atlasDim, atlasRows;
     unsigned             atlasSerial;
 
-    /* ---- THE RESTORED UI ATLAS IS NOT CARRIED (landing 11-5e-2b). `atlasRgb`,
-       `atlasRgbRows` and `atlasRgbSerial` stood here from landing 4: the texels
-       the GL lane's restorer had painted, read back out of its twin, because
-       the five shaders that produce them are the one thing G19c did not
-       translate and the port does not run them. The read-back was
-       `tagpu_gaf_atlas_mirror_rgb`, which is `glReadPixels` and nothing else,
-       and `oglu_load_dll` has no caller -- so it never produced a row in any
-       process and this pointer was NULL on every frame it was ever published.
-       NOTHING REPLACES IT. The world atlases moved to a published frame LIST
-       that the consuming lane paints for itself; this one has no such list,
-       because `tagpu_gui_surf.c` never arms `tagpu_gaf_atlas_restore_vk`. So
-       the UI has no route to Classic++ colour, and giving it one is new work
-       rather than a deletion -- see the Vulkan-only plan, 11-5e-2b.
-
-       THAT WORK IS DONE AND THE FIVE FIELDS BELOW ARE IT. The UI atlas now
-       arms `tagpu_gaf_atlas_restore_vk` like the feature and effects atlases
-       do, so what crosses is the WORK and not the picture: a list of
-       rectangles the consuming lane paints into a restored image of its own.
+    /* ---- THE RESTORED UI ATLAS, and these five fields are its route. The UI
+       atlas arms `tagpu_gaf_atlas_restore_vk` like the feature and effects
+       atlases do, so what crosses is the WORK and not the picture: a list of
+       rectangles the consuming pass paints into a restored image of its own.
        The shape is `tagpu_feat.h`'s, field for field, and the same three rules
        hold --
          - `restoreFrames` aliases the producer's `rlist`, whose address is
@@ -335,11 +295,9 @@ typedef struct TAGPU_GUIHAND {
        presented palette moved out from under the restored art and settled
        somewhere else, so `restore_step` frees the job, re-arms it against the
        new palette and clears every colour twin whole. It happens BEFORE the
-       drain, so a consumer applies it before this frame's ops. It used to be
-       stated as "cannot be inferred from `atlasRgbSerial`, which also moves
-       for an ordinary paint"; that serial is gone with the read-back, so this
-       is now the only thing that says a colour twin was invalidated.
-       Monotone, never reset. */
+       drain, so a consumer applies it before this frame's ops. This is the
+       only thing that says a colour twin was invalidated. Monotone, never
+       reset. */
     unsigned             colRearm;
 
     /* ---- the sharp layer's draws, BY VALUE. 16 x 60 bytes is small enough
@@ -393,31 +351,20 @@ typedef struct TAGPU_GUIHAND {
     const unsigned char* shade;
     unsigned             shadeSerial;
 
-    /* THE ENGINE'S OWN FRAME, which the composite samples as its bottom layer
-       and its stale-mirror guard compares against, copied here from the
-       fork's primary under `g_ddraw.cs` -- the same lock and the same
-       argument tagpu_pal.c makes for the palette (the game thread NULLs the
-       primary inside that section). NULL when there is none this frame, which
-       is what turns the guard off. 8bpp, `engPitch` bytes a row. */
-    const unsigned char* eng;
-    int                  engW, engH, engPitch;
-
-    /* ---- the composite's uniforms, as draw_layer set them ---- */
-    int   strict, key, vpKey;
+    /* ---- the composite's uniforms, as the render half settled them ---- */
+    int   vpKey;
     float vpL, vpT, vpW, vpH;       /* the TRUE viewport, from the packet     */
-    float curEng[4];                /* the engine cursor's rect to erase      */
-    int   curOurs, guard;
     float scaleX, scaleY;           /* k, and the ramp's width with it        */
     float hud[4];
-    int   vpX, vpY, vpW_gl, vpH_gl; /* the GL viewport the composite drew into */
+    int   vpX, vpY, vpW_gl, vpH_gl; /* the viewport the composite draws into  */
 
-    /* WHAT THIS LANDING DOES NOT CARRY, counted rather than dropped silently.
+    /* WHAT THIS RECORD DOES NOT CARRY, counted rather than dropped silently.
        A frame with any of these is refused whole, in the shape every world
        pass refuses what it has no copy of: drawing the rest would be a
-       different picture and the A/B would call it a rasteriser difference. */
+       different picture. */
     /* THIS RECORD DOES NOT CARRY THIS FRAME'S OPS AND REPLAYING IT WILL NOT
        CATCH THE STORE UP. Published rather than withheld, because withholding
-       is indistinguishable from "the lane is not armed" and leaves the consumer
+       is indistinguishable from "the pass is not armed" and leaves the consumer
        believing it is level when it is a frame behind -- silently, for the rest
        of the session. Two causes today: the mirror's op array or arena refused
        to grow mid-frame, and the glyph atlas REPACKED between one string op
@@ -426,16 +373,16 @@ typedef struct TAGPU_GUIHAND {
        behind state, not a refusal. */
     int   lost;
     int   otherOps;                 /* ops still not carried, if any ever are */
-    /* `uColOn` AS `draw_layer` SET IT: the presented surface has a colour twin
-       AND the palette-validity rule (gui-renderer.md 3.4) says it may be read
-       this frame. Landing 3 and before could only stand the composite down on
-       it; landing 4 composites it. */
+    /* `uColOn` AS THE RENDER HALF SETS IT: the presented surface has a colour
+       twin AND the palette-validity rule (gui-renderer.md 3.4) says it may be
+       read this frame. */
     int   colourTwins;
     int   sharpOn;                  /* the sharp layer had COVERAGE this frame
                                        -- not merely that it exists, which it
                                        does on every frame once it is made */
 
-    /* 1 on the ONE frame the GL half captured its half of the A/B. */
+    /* the A/B claim: nonzero on the ONE frame `tagpu_gui.ab` latched it, the
+       frame the Vulkan pass captures. */
     int   ab;
 } TAGPU_GUIHAND;
 
@@ -443,7 +390,7 @@ typedef struct TAGPU_GUIHAND {
 void tagpu_gui_mirror_want(int on);
 
 /* THE ONE FACT THAT TRAVELS THE OTHER WAY about Classic++ colour: the consuming
-   lane says whether it holds a restored UI atlas with at least one painted
+   pass says whether it holds a restored UI atlas with at least one painted
    frame in it. Until it does, no op may carry `TAGPU_GUICOL_ON` -- such an op
    is a frame the consumer has to refuse whole, and the store would thrash for
    the two seconds a first restore takes rather than the art simply arriving
@@ -463,9 +410,9 @@ void tagpu_gui_mirror_want(int on);
    is finite: a repaint that introduces no new entry produces no new settle. */
 void tagpu_gui_col_ready(int have, unsigned settled);
 
-/* ASK THE PRODUCER FOR A FRESH START, through the very flag the GL consumer
-   raises for itself. The mirror's consumer keeps a twin store of its own, and
-   any frame it refuses leaves that store behind the GL one -- so the next op
+/* ASK THE PRODUCER FOR A FRESH START, through the very flag the drain raises
+   for itself. The mirror's consumer keeps a twin store of its own, and any
+   frame it refuses leaves that store behind the render half's -- so the next op
    naming a twin it never made would apply to nothing, silently, for the rest
    of the session. This is the same request `drain()` makes when a sprite
    arrives without its bytes: the producer publishes a RESET and re-seeds every

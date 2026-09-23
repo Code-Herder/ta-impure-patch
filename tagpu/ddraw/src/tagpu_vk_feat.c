@@ -2,68 +2,54 @@
    drawn by Vulkan. Contract: tagpu_vk_feat.h. A world pass that depth-tests.
 
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
-   `tagpu_feat_handover` (tagpu_feat.h): the vertices are the two arrays the GL
-   gather filled and the GL upload took, the uniforms are the numbers the GL
-   draw passed, the texels are the bytes each GL texture was uploaded FROM --
-   the atlas through tagpu_gaf.c's CPU mirror, which is written by the same
-   atlas_paint that writes the texture and from the same buffer -- and the
-   shader is the same GLSL through tools/spirv-gen.py. What a 0-px comparison
-   then compares is two rasterisers.
+   `tagpu_feat_handover` (tagpu_feat.h): the vertices are the two arrays the
+   gather filled, the uniforms are the view's numbers, the texels are CPU-side
+   bytes -- the atlas through tagpu_gaf.c's CPU mirror, which `atlas_paint`
+   writes as the art's only destination -- and the shader is tagpu_feat.c's
+   GLSL through tools/spirv-gen.py.
 
    ---- WHAT A DEPTH-TESTING PASS HAS TO ANSWER, AND WHERE EACH ANSWER IS ----
 
-   1. DEPTH (the GL/Vulkan depth-range question, gpu-status §2.28).
+   1. DEPTH (the depth-range question, gpu-status §2.28).
 
-        GL maps clip z from [-1, 1] onto the depth range, Vulkan takes [0, 1].
-        Every shader here writes a z already in [0, 1], so under GL the near
-        half of the range is thrown away and under Vulkan it is not: the
-        ORDERING is identical (both mappings are affine and increasing, so every
-        depth test comes out the same) but the VALUES are not, and Vulkan would
-        get a bit more precision out of a fixed-point buffer than GL does --
-        enough to settle a z-fight the other way and put 0 px out of reach.
-
-      The fix is PIPELINE STATE, never a shader edit: a viewport with
-      `minDepth = 0.5` and `maxDepth = 1.0` maps clip z in [0, 1] onto exactly
-      GL's `(z+1)/2`, values and precision included, and needs no extension.
-      `VK_EXT_depth_clip_control` would do it the other way by adopting GL's
-      convention outright, and is the answer only if a shader is ever found
-      writing a z below 0 -- Vulkan clips those and GL does not. These do not:
+      Every shader here writes a z already in [0, 1], and the viewport maps it
+      onto [0.5, 1] with `minDepth = 0.5` and `maxDepth = 1.0` -- PIPELINE
+      STATE, never a shader edit. The range is SHARED: the terrain, unit,
+      effects and marker passes set the same one, and each depth test compares
+      values the other passes wrote, so a pass that changed its range alone
+      would settle z-fights differently from the rest. It needs no extension.
+      `VK_EXT_depth_clip_control` is the answer only if a shader is ever found
+      writing a z below 0 -- Vulkan clips those. These do not:
       `clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0)` is the whole of it.
-      The attachment's FORMAT matters for the same reason and is the seam's
-      (tagpu_vk.c `vk_depth_format`): 24-bit fixed point, because the GL FBO is
-      GL_DEPTH24_STENCIL8 and a comparison against it is a comparison of two
-      quantisations as much as of two rasterisers.
+      The attachment's FORMAT is the seam's (tagpu_vk.c `vk_depth_format`):
+      24-bit fixed point, D24_UNORM_S8_UINT or X8_D24_UNORM_PACK32.
 
-   2. TWO DEPTH-WRITE MODES, AND SO TWO PIPELINES. The GL twin draws shadows
-      with `glDepthMask(GL_FALSE)` and bodies with it true -- shadows are ground
-      decals and must occlude nothing -- and that is pipeline state in Vulkan.
+   2. TWO DEPTH-WRITE MODES, AND SO TWO PIPELINES. Shadows are drawn with
+      depth writes off and bodies with them on -- shadows are ground decals and
+      must occlude nothing -- and that is pipeline state in Vulkan.
       Two pipelines off one layout is the answer that needs no extension;
       VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE is Vulkan 1.3 or an extension and buys
       one object.
 
-   3. THE SCISSOR is the world viewport, the SAME rectangle on both sides and
-      not its vertical mirror (`offset.y = H - (vpT + vh)`), because of item 4:
+   3. THE SCISSOR is the world viewport, the engine's own rectangle and not
+      its vertical mirror (`offset.y = H - (vpT + vh)`), because of item 4:
       with a positive viewport height row 0 of the Vulkan image is the game
-      frame's top row, the same row the GL FBO hands back first, so `offset.y`
-      is just the viewport top. Getting it wrong shows up as the world clipped
-      against the wrong edge rather than as anything subtle.
+      frame's top row, so `offset.y` is just the viewport top. Getting it
+      wrong shows up as the world clipped against the wrong edge rather than
+      as anything subtle.
 
    4. NO Y FLIP. This pass writes `gl_Position.y = p.y/uGame.y*2 - 1` on the
       engine's screen-space y, which grows DOWNWARD, so clip +1 is the BOTTOM of
-      the game frame. The Vulkan lane has no composite quad to turn the frame
-      over -- the ported passes draw STRAIGHT INTO THE SWAPCHAIN IMAGE -- so a
-      negative viewport height would turn it over a SECOND time and present the
-      world upside down. The viewport is positive and clip -1 lands on row 0,
-      which is the game's top row under both APIs.
-      An A/B that compares the lanes to each other is structurally blind to a
-      flip they share; the capture takes TAGPU_ABSHOT_TOPDOWN.
+      the game frame. Nothing downstream turns the frame over, so a negative
+      viewport height would present the world upside down. The viewport is
+      positive and clip -1 lands on row 0, which is the game's top row.
       (VK_KHR_maintenance1 is needed only for a negative height, so this pass
       does not require it; `tagpu_vk_gui.c`, `_fps.c` and `_scaffold.c` do,
       because their shaders are y-UP and their flip is correct.)
 
-   5. BLENDING is glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA) -- the GL FBO is
-      premultiplied -- and glBlendFunc sets the alpha factors as well as the
-      colour ones, so both pairs are set here.
+   5. BLENDING is ONE, ONE_MINUS_SRC_ALPHA -- the fragment shader writes
+      premultiplied colour (`frag = vec4(rgb * a, a)`) -- on the alpha factors
+      as well as the colour ones, so both pairs are set here.
 
    ---- THE UPLOADS, AND WHY ONE OF THEM IS SHARED ----
 
@@ -106,23 +92,21 @@
    per slot while it does.
 
    AND NOTHING IS KEPT ONCE THERE IS NOTHING TO DRAW, exactly as §2.28's
-   scaffold: a frame the GL twin handed nothing over gives that slot back.
+   scaffold: a frame the gather handed nothing over gives that slot back.
 
    ---- WHAT IT DOES NOT DO ----
 
-   CLASSIC++'s RESTORED ATLAS **IS** MIRRORED SINCE GATE 2 of the Vulkan-only
-   plan, so a frame whose twin reports `uRestored` 1 is DRAWN -- through the
-   twin's own colours, read back off tagpu_restoreglsl.c's RGBA8 surface by
-   tagpu_gaf.c's step and uploaded to binding 42 here. What is left of the old
-   refusal is "has the read-back produced rows YET": until it has, the GL twin
-   is sampling colours this lane does not have, so the frame is refused rather
-   than drawn with `uRestored` 0 -- that would be a different picture from the
-   twin's and the A/B would report it as a rasteriser difference, which is the
-   one answer an oracle must never give. The refusal is no longer latched: the
-   condition clears by itself within a few frames of the restorer starting.
+   IT DOES NOT SAMPLE AN UNPAINTED RESTORE. Classic++'s restored atlas is
+   painted HERE: when the producer publishes a restore list (tagpu_feat.h
+   `restoreFrames`), `restore_want` feeds this lane's own restore job
+   (tagpu_vk_restore.h), which paints the RGBA8 twin at binding 42 from the
+   indexed atlas. Until the job has painted a frame, a frame with `uRestored`
+   1 is drawn from the indexed atlas with `uRestored` 0 (`prepare`). That is
+   not latched: it clears by itself within a few frames of the restorer
+   starting.
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
-   A PASS READS NO ENGINE STATE: every value comes from the GL lane's
+   A PASS READS NO ENGINE STATE: every value comes from the gather's
    hand-over, so this file is not on thread-split.allow and must never be. */
 
 #include "tagpu_vk_pass.h"
@@ -136,7 +120,7 @@
 #include "tagpu_feat.h"
 #include "spirv/tagpu_feat.spv.h"
 
-#define VST TAGPU_FEAT_VST                 /* floats per vertex, the twin's    */
+#define VST TAGPU_FEAT_VST                 /* floats per vertex, the gather's  */
 #define UBLK 32                            /* bytes in each std140 block below */
 
 /* ---- the entry points ----------------------------------------------------
@@ -216,9 +200,9 @@ static int            s_arHave;
    a serial, which is what a lazy queue needs:
 
      s_rjGen    the producer's generation this job belongs to. A new one is a
-                discontinuity a cursor cannot survive -- a recycle, a repack, a
-                context loss, a palette move -- so the job is rebuilt and the
-                cursor goes back to 0.
+                discontinuity a cursor cannot survive -- a recycle, a repack,
+                the atlas laid out afresh, a palette move -- so the job is
+                rebuilt and the cursor goes back to 0.
      s_rjTaken  how many of that generation's frames are already queued here.
                 The producer retains the whole array, so a frame on which this
                 pass took nothing costs nothing: the next one takes more.
@@ -238,7 +222,7 @@ static VkImageView    s_rjSrcView;
 static int s_nShadow, s_nBody;
 static int s_scX, s_scY, s_scW, s_scH;     /* the scissor, in Vulkan framebuffer px */
 /* The scissor's INPUTS, kept as numbers rather than as a copy of the hand-over.
-   TAGPU_FEATHAND is full of pointers into the GL lane's own frame memory, and a
+   TAGPU_FEATHAND is full of pointers into the gather's own frame memory, and a
    static holding those past the frame they were handed over on is a dangling
    read waiting for someone to add a line that follows one. */
 static float s_hGw, s_hGh;
@@ -590,10 +574,10 @@ static int build_sampler(const TAGPU_VKPASS* d)
             return 0;
         }
     }
-    /* NEAREST AND CLAMP_TO_EDGE, WHICH IS WHAT EVERY ONE OF THE GL TWIN'S FIVE
-       TEXTURES IS SET TO. Every texel here is an INDEX -- a palette entry, a
-       fog corner mask, a shade-table slot -- and interpolating two of them
-       produces a number that means nothing in any of the three tables. */
+    /* NEAREST AND CLAMP_TO_EDGE, one sampler for every binding. Every indexed
+       texel here -- a palette entry, a fog corner mask, a shade-table slot --
+       is an INDEX, and interpolating two of them produces a number that means
+       nothing in any of the three tables. */
     sci.magFilter = VK_FILTER_NEAREST;
     sci.minFilter = VK_FILTER_NEAREST;
     sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -665,10 +649,9 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fs; st[1].pName = "main";
 
-    /* ONE TABLE, TWO LANES: tagpu_feat.h TAGPU_FEAT_ATTRS is what the GL VAO is
-       built from too, so a layout change cannot reach one lane and miss the
-       other -- which would make the A/B compare two different meshes and call
-       it a rasteriser difference. */
+    /* ONE TABLE: tagpu_feat.h TAGPU_FEAT_ATTRS is the layout the gather writes
+       the vertices in, so a layout change cannot reach the writer and miss
+       this reader. */
     memset(&vb, 0, sizeof vb);
     vb.binding = 0; vb.stride = VST * sizeof(float);
     vb.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
@@ -686,21 +669,21 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     vi.vertexAttributeDescriptionCount = TAGPU_FEAT_NATTR;
     vi.pVertexAttributeDescriptions = va;
 
-    /* A LIST, which is what the GL twin draws: put_quad emits six vertices. */
+    /* A LIST: tagpu_feat.c's emit_frame writes six vertices a quad. */
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     vp.viewportCount = 1; vp.scissorCount = 1;     /* both dynamic, set per frame */
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    /* NO CULLING: THE GL TWIN DOES NOT CULL, and nothing here should. */
+    /* NO CULLING. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
 
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    /* GL_LESS, which is what the native pass sets around this draw
-       (glDepthFunc(GL_LESS), glEnable(GL_DEPTH_TEST)). The WRITE half is what
-       the two pipelines differ in. */
+    /* LESS, the compare every depth-testing world pass uses (tagpu_vk_terr.c,
+       tagpu_vk_unit.c, tagpu_vk_fx.c). The WRITE half is what the two
+       pipelines differ in. */
     memset(&ds, 0, sizeof ds);
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_TRUE;
@@ -709,9 +692,8 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     ds.stencilTestEnable = VK_FALSE;
 
     memset(&cba, 0, sizeof cba);
-    /* glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA) -- the GL FBO is
-       premultiplied -- and glBlendFunc sets the alpha factors as well as the
-       colour ones, so both pairs are set. */
+    /* ONE, ONE_MINUS_SRC_ALPHA on colour and alpha alike -- the fragment
+       shader writes premultiplied colour; item 5 of the file header. */
     cba.blendEnable = VK_TRUE;
     cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
@@ -915,9 +897,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
 
     if (!h->restoreFrames || h->restoreGen == 0) {
         /* No request: the lever was never on, or the producer's list was
-           dropped. Either way this job describes nothing now -- and what it
-           painted is left standing, because the mirror path is what takes over
-           and it uploads over the same image. */
+           dropped. Either way this job describes nothing now. */
         if (s_rjob) {
             tagpu_vk_restore_job_free(d, s_rjob);
             s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
@@ -925,13 +905,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
             /* AND WHAT IT PAINTED IS NO LONGER A PICTURE. The request going
                away while a job existed means the producer's list DIED -- its
                only such path is the out-of-memory drop -- and nothing will
-               feed this twin again: the read-back cannot take over, because
-               both arm latches are one-way and the mirror was freed when the
-               list armed. Leaving `s_arHave` set would have this pass draw a
-               frozen twin while the GL lane goes on restoring, which is a
-               silent divergence rather than a stand-down. Only inside the
-               `if` -- with the lever off there is no job and this branch runs
-               every frame, where clearing it would break the mirror path. */
+               feed this twin again. Leaving `s_arHave` set would have this
+               pass draw a frozen twin of an atlas that goes on changing, which
+               is a silent divergence rather than a stand-down. */
             s_arHave = 0;
         }
         return;
@@ -951,8 +927,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
     if (s_rjob && s_rjGen == h->restoreGen) {
         int painted = tagpu_vk_restore_job_painted(s_rjob);
         /* ONE PAINTED FRAME IS WHAT MAKES THIS A PICTURE, and `s_arHave` is
-           what the pass's restored refusal reads -- the same role the mirror
-           upload gives it. */
+           what `prepare`'s restored check reads. */
         if (painted > 0) s_arHave = 1;
         if (painted != s_rjPainted) {
             s_rjPainted = painted;
@@ -1016,15 +991,15 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        its verdict, so this is one integer compare per frame after the first. */
     if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
     /* A REPAINT ONLY OVER SOMETHING THIS PASS ACTUALLY PAINTED. The producer's
-       flag says the GL twin's destination holds a restore; ours is a different
-       image and may hold nothing, in which case a repaint would leave every
-       cell it has not reached undefined. `s_arHave` is the local fact. */
+       flag says the destination may keep what it holds; this pass's image may
+       hold nothing, in which case a repaint would leave every cell it has not
+       reached undefined. `s_arHave` is the local fact. */
     /* A REPAINT ONLY IF NOTHING WAS BLANKED SINCE THIS PASS LAST LOOKED.
        `restoreRepaint` describes the LATEST generation and a consumer sees
        only that one, so a recycle followed in the same producer frame by a
        palette move (which `tagpu_feat.c` does: it recycles a full atlas and
        calls `tagpu_gaf_atlas_restore` on the next line) would hand this pass
-       "keep what you have" over an atlas the other lane has just cleared.
+       "keep what you have" over an atlas the producer has just cleared.
        The blank COUNT cannot be hidden that way. */
     repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
     s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, repaint,
@@ -1059,7 +1034,7 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
        set rather than the one slot we own. It is safe because it happens on the
        first prepare after `build`, before any of those sets has ever been
        bound -- so a later change of the atlas's dimensions is refused here
-       rather than silently rewriting sets that are in flight. The GL twin's
+       rather than silently rewriting sets that are in flight. tagpu_feat.c's
        ATLAS_DIM is a compile-time constant, so this cannot fire; it is the
        guard that keeps that true if it ever stops being one. */
     if (s_atDim != h->atlasDim) {
@@ -1127,14 +1102,14 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
 
 /* THE SCISSOR, in Vulkan framebuffer pixels. Item 3 of the file header: the
    rect arrives in GAME-FRAME pixels measured from the TOP of the frame (the
-   engine's own viewport rect, what the native pass hands glScissor), and this
-   pass's framebuffer row 0 IS that top row -- so the rect goes in unchanged.
+   engine's own viewport rect), and this pass's framebuffer row 0 IS that top
+   row -- so the rect goes in unchanged.
 
-   It is also SCALED, by the attachment's extent over the game frame's. At the
-   sizes an A/B is run at those are the same number, but the Vulkan window
-   tracks the client rect and the GL lane's own render target need not match it;
-   scaling here keeps the clip on the same part of the world when they differ,
-   which is the same thing the vertex shader's division by uGame does. */
+   It is also SCALED, by the attachment's extent over the game frame's. The
+   attachment need not be the game frame's size -- the world target is `ss`
+   times it -- and scaling here keeps the clip on the same part of the world
+   when they differ, which is the same thing the vertex shader's division by
+   uGame does. */
 static void feat_scissor(uint32_t w, uint32_t h)
 {
     float sx = s_hGw > 0.0f ? (float)w / s_hGw : 1.0f;
@@ -1145,10 +1120,9 @@ static void feat_scissor(uint32_t w, uint32_t h)
     int hh = (int)(s_hVh * sy + 0.5f);
     int y0 = ytop;                          /* NOT mirrored: see above   */
 
-    /* NO CLIP WHERE THE GL LANE HAS NONE. `scissorOn` is what the native pass
-       actually did, not what it would have liked to; a Vulkan lane that clipped
-       while GL did not would differ in every feature the gather's margin
-       reaches past the viewport. */
+    /* NO CLIP WHERE THE NATIVE PASS SAYS NONE. `scissorOn` is its decision
+       (tagpu_native.c `s_scissorOn`); clipping when it says not to would cut
+       every feature the gather's margin reaches past the viewport. */
     if (!s_hScissorOn || ww <= 0 || hh <= 0) {
         s_scX = 0; s_scY = 0; s_scW = (int)w; s_scH = (int)h;
         return;
@@ -1205,23 +1179,18 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        the producer published a frame LIST, this lane painted its own twin from
        it, and `s_arHave` says so.
 
-       WHY IT IS A REFUSAL AT ALL: drawing with `uRestored` 0 against a twin
-       that drew with 1 is a different picture, and an A/B would read it as a
-       rasteriser difference rather than a missing input. So the frames before
-       the first paint are refused and the rest are drawn.
+       BEFORE THE FIRST PAINT THE FRAME IS DRAWN INDEXED (`h.restored = 0`
+       below) rather than sampling a twin that holds nothing -- and it is
+       DRAWN, not returned from: the restore needs THIS frame's indexed atlas
+       uploaded before it can paint anything, and the upload is below, so
+       returning on the frames before the first paint would be a deadlock --
+       nothing drawn because nothing painted, nothing painted because the atlas
+       never arrived. `feed` only picks which case the log line names.
 
        IT IS NOT LATCHED. gpu-status 2.35 measured what a latch costs -- a pass
        that refuses once stays dark for the process even after the condition
        clears. This one clears within a few frames of the restorer starting, so
-       `s_saidRestored` gates the LOG LINE only and is cleared again below.
-
-       AND A REFUSAL HERE IS NOT ALWAYS A `return`. When the restore is this
-       lane's own it needs THIS frame's indexed atlas uploaded before it can
-       paint anything, and the upload is below -- so returning on the frames
-       before the first paint would be a deadlock, not a stand-down: nothing
-       drawn because nothing painted, nothing painted because the atlas never
-       arrived. `feed` is that case, and it runs the uploads and then returns
-       without claiming the frame. */
+       `s_saidRestored` gates the LOG LINE only and is cleared again below. */
     feed = 0;
     if (h.restored && !(s_arImg && h.restoreFrames && s_arHave)) {
         if (h.restoreFrames && s_arImg && !s_rjTried) feed = 1;
@@ -1236,9 +1205,9 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            generation on every map or level change, so this is the routine path
            and not only the failure one -- and clearing the flag on `!feed`
            alone is the rare half: a generation change satisfies every feed term
-           and would return without drawing. Same argument as the unit pass --
-           there is no second lane to disagree with, so indexed art is Classic++
-           restore off for one frame rather than a disagreement with anybody. */
+           and would return without drawing. Same argument as the unit pass:
+           indexed art is Classic++ restore off for a few frames, not a wrong
+           picture. */
         h.restored = 0;
     } else s_saidRestored = 0;
 
@@ -1280,7 +1249,7 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 
     vbytes = (VkDeviceSize)(h.nShadow + h.nBody) * VST * sizeof(float);
     if (!slot_verts(d, s, vbytes)) goto refuse;
-    /* the two buckets, contiguous and in the twin's own draw order */
+    /* the two buckets, contiguous and in draw order: shadows, then bodies */
     if (h.nShadow) memcpy(s->vmap, h.shadow, (size_t)h.nShadow * VST * sizeof(float));
     if (h.nBody)   memcpy(s->vmap + (size_t)h.nShadow * VST * sizeof(float),
                           h.body, (size_t)h.nBody * VST * sizeof(float));
@@ -1303,8 +1272,8 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     memcpy(s->smallMap + SMALL_PALOFF, h.pal, 256 * 4);
     memcpy(s->smallMap + SMALL_LUTOFF, h.fogLut, 256);
     /* The grid is one `unsigned short` a cell and the image is RG8: the same
-       two bytes in the same order, which is exactly what the GL twin uploads
-       (GL_RG / GL_UNSIGNED_BYTE over this very buffer). With no grid this frame
+       two bytes in the same order, so the buffer is copied as it stands into
+       the VK_FORMAT_R8G8_UNORM image. With no grid this frame
        the image is one zero cell, which the shader never reads -- taFog is
        called only on the `uFog & 1` branch. */
     if (h.fogGrid) memcpy(s->smallMap + SMALL_FOGOFF, h.fogGrid,
@@ -1336,7 +1305,7 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
     /* The two uniform blocks, at the std140 offsets the generated header
-       prints -- the same numbers the GL draw passed to its uniforms. */
+       prints -- the numbers the hand-over carries. */
     memset(&ub, 0, sizeof ub);
     ub.f[0] = h.gw; ub.f[1] = h.gh;                    /* uGame       vec2 @0  */
     ub.f[2] = h.zoom;                                  /* uZoom      float @8  */
@@ -1358,9 +1327,9 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     s_hScissorOn = h.scissorOn;
 
     /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST. A
-       frame claimed and then not drawn would have the seam capture a bare clear
-       against a GL half that has the features in it, and report every feature
-       pixel as differing: a port failure that is really an oracle failure. */
+       frame claimed and then not drawn would have the seam capture a bare
+       clear, and a diff against another build's capture would report every
+       feature pixel as differing: a capture failure read as a pass failure. */
     s_abFrame = h.ab;
     s_drawThis = 1;
     return 1;
@@ -1401,11 +1370,12 @@ void tagpu_vk_feat_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* NO Y FLIP, AND THE DEPTH RANGE, AND THEY ARE TWO SEPARATE QUESTIONS.
        This pass writes `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's
        screen-space y, which grows DOWNWARD, so clip -1 is the game frame's top
-       row and a POSITIVE height puts it on row 0 -- where the game's top row is
-       under both APIs; a NEGATIVE height would turn the frame over a second
-       time. minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1]
-       onto GL's own (z+1)/2 -- see item 1 of the file header; without it every
-       depth VALUE here is twice GL's and a z-fight settles the other way. */
+       row and a POSITIVE height puts it on row 0 -- where the game's top row
+       is; a NEGATIVE height would turn the frame upside down. minDepth 0.5 /
+       maxDepth 1.0 maps clip z in [0, 1] onto [0.5, 1], the range every
+       depth-testing world pass shares -- see item 1 of the file header;
+       without it every depth VALUE here differs from theirs and a z-fight
+       settles the other way. */
     vp.x = 0.0f;
     vp.y = 0.0f;
     vp.width = (float)w;

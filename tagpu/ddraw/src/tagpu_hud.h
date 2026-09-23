@@ -45,8 +45,11 @@
    size and nothing else derives a projection from — so the engine's own
    viewport becomes the window the player is actually looking at, while L and T
    keep the values the baked immediates assume. The world block is then
-   translated by (128s − 128, 32s − 32) in exactly three places: the composite,
-   the world layer's glViewport, and the pointer map's world branch. Because
+   translated by (128s − 128, 32s − 32) in three places: the composite, the
+   world layer's viewport, and the pointer map's world branch. The Vulkan
+   world layer does NOT apply it yet -- tagpu_native.c says so where it
+   publishes the world target -- so under HUD scale the world is drawn where
+   the engine put it. Because
    the rect is what the camera clamp and the map loader read, the eye
    reaches mapW − viewW / mapH − viewH and the corner of the map is reachable.
 
@@ -113,9 +116,11 @@ void tagpu_hud_true_inset(const char* ta, int* L, int* T, int* rInset, int* bIns
 
 /* The vector from a point in the ENGINE's surface to the same point on the
    screen, inside the WORLD region: (128s - 128, 32s - 32). 0 - and both
-   outputs 0 - whenever the pass is inert. The composite subtracts it, the
-   world layer's viewport adds it, and the pointer map's world branch
-   subtracts it; those three are the whole of the translation. */
+   outputs 0 - whenever the pass is inert. The composite subtracts the same
+   vector (from its uHud, in tagpu_gui_surf.c's shader) and the pointer map's
+   world branch subtracts it; the world layer's viewport, which should add it,
+   does not on Vulkan (tagpu_native.c, at the world-target publish). The one
+   caller is tagpu_menu.c's panel_rect. */
 int  tagpu_hud_shift(int* dx, int* dy);
 
 /* The point maps, between the engine's 1x HUD coordinates and the screen the

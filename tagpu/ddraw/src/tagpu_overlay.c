@@ -6,18 +6,15 @@
    services run on the game thread -- see tagpu_triggers_frame at the end of
    this file -- and the live roster tacli reads is roster_log in
    tagpu_packet_pub.c.
-   tagpu_overlay.off is the kill switch for everything we draw.
-   THIS FILE REACHES NO GL ENTRY POINT and includes no GL header. */
+   tagpu_overlay.off is the kill switch for everything we draw. */
 
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
 #include "tagpu_overlay.h"
 #include "tagpu_trigger.h"
 #include "dd.h"          /* g_ddraw.primary, the fork's own surface        */
 #include "screenshot.h"  /* ss_take_screenshot: `tacli shot`, now on the flip */
-#include "tagpu_vk.h"       /* tagpu_vk_owns_present(): whether GL may be drawn */
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
 #include "tagpu_owndraw.h"
@@ -39,13 +36,13 @@
 #include "tagpu_pal.h"
 #include "tagpu_surf.h"
 #include "tagpu_fps.h"
+#include "tagpu_log.h"
 
 static int   s_said;        /* the one-shot below has logged */
 
 static void olog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* THERE IS NOTHING TO BRING UP, SO THIS IS A ONE-SHOT LOG AND NOT A
@@ -115,21 +112,12 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        render_vk.c. */
     if (tagpu_reclaim_teardown_active()) { tagpu_zoom_frame_end(); return; }
 
-    /* EVERYTHING ABOVE THIS POINT IS API-INDEPENDENT AND RUNS ON EVERY BACKEND.
-       The four entry points below that DRAW -- `tagpu_scaffold_frame`,
-       `tagpu_native_frame`, `tagpu_gui_present`, `tagpu_fps_present` -- are
-       called unconditionally, and each gates its own GL objects, uploads, draws
-       and state restore.
-
-       WHY NOT JUST LET THE GL CALLS BE NO-OPS. Because that is not a pass
-       standing down, it is a pass relying on undefined behaviour: any of these
-       that reads GL state back -- a shader compile status, an FBO completeness
-       check, `glGetIntegerv` -- would branch on whatever the loader returns
-       with no context current, and the failure would be a wrong picture rather
-       than an error. A pass that is not called publishes nothing, so its Vulkan
-       twin stands down and SAYS SO, which is a refusal that names itself.
-       That is why the gate is a gate at each of those sites rather than an
-       absent context quietly doing nothing. */
+    /* THE FOUR PASSES BELOW DRAW NOTHING THEMSELVES. `tagpu_scaffold_frame`,
+       `tagpu_native_frame`, `tagpu_gui_present` and `tagpu_fps_present` are
+       called unconditionally; each gathers its frame and fills a hand-over,
+       and its Vulkan pass records the draw from it after this function
+       returns. A pass that is not called publishes nothing, so its Vulkan pass
+       stands down and SAYS SO, which is a refusal that names itself. */
 
     /* the palette the screen is shown with, once for every pass that resolves
        an 8-bit index this frame -- the world's and the UI layer's alike
@@ -175,20 +163,15 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        nowhere else, so no two passes can draw one frame from two eyes. */
     tagpu_zoom_read_lever(f->packet);
 
-    /* scene-depth scaffold debug overlay (tagpu_scaffold.on). Own GL
-       state block; leaves program/VAO at 0.
-       CALLED ON BOTH LANES: its gather is the pass and is API-independent, and
-       it gates its own upload and draw on `tagpu_vk_owns_present` -- so under
-       `renderer=vulkan` this builds the scaffold, publishes it and lets the
-       Vulkan twin draw it. */
+    /* scene-depth scaffold debug overlay (tagpu_scaffold.on). Its gather is
+       the pass: this builds the scaffold and publishes it, and
+       tagpu_vk_scaffold.c draws it. */
     tagpu_scaffold_frame(f);
 
     /* native unit pass (tagpu_native.on) — needs this frame's scaffold.
-       CALLED ON BOTH LANES: its arm poll, view, fog and palette
-       copies, four world gathers and vertex emission are the pass, and it gates
-       its own GL. On the vulkan-only lane it stops after the gathers and calls
-       the renders that have been taught to hand over without drawing — the GL
-       world composite has no counterpart there until 4c. */
+       Its arm poll, view, fog and palette copies, four world gathers and
+       vertex emission are the pass; it stops after the gathers and hands
+       each of them over for the Vulkan world passes to draw. */
     tagpu_native_frame(f);
 
     /* the cursor's ONE decision for this frame, before the world pass
@@ -218,9 +201,9 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        the finished frame and must not be hidden by the side panel or a dialog.
        Off unless the render-options screen's FPS row (the settings store) or
        the `tagpu_fps.on` lever turns it on -- see tagpu_fps.c for why this is
-       not cnc-ddraw's own OSD.
-       CALLED ON BOTH LANES, like the scaffold: the averaging window, the font
-       latch and the quads are the pass, and it gates its own draw. */
+       not cnc-ddraw's own OSD. Like the scaffold, it builds and does not draw:
+       the averaging window, the font latch and the quads are the pass, and
+       tagpu_vk_fps.c draws them. */
     tagpu_fps_present(f);
 
     /* If the native pass did not publish a view this frame, nothing zoomed was
@@ -268,9 +251,9 @@ void tagpu_triggers_frame(const TAGPU_FRAME* f)
     tagpu_input_frame(f);
     /* THE ENGINE-SURFACE SCREENSHOT (tagpu_shot.trigger) -- `tacli shot`.
        It is here because the flip is what every renderer reaches: gdi
-       reaches no tagpu_ call at all and render_vk.c polls no trigger file. It
-       is not a GL capture -- `ss_take_screenshot(g_ddraw.primary)` reads the
-       fork's own DirectDraw primary.
+       reaches no tagpu_ call at all and render_vk.c polls no trigger file.
+       `ss_take_screenshot(g_ddraw.primary)` reads the fork's own DirectDraw
+       primary, not what the Vulkan backend presented.
 
        THE THREAD IS ALREADY PROVEN FOR IT. keyboard.c:96 and :102 call the
        same function from the game thread on the PrintScreen path, which is

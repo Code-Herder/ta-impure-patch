@@ -27,6 +27,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import talog  # noqa: E402  the DLL's logs across their rotations (tools/talog.py)
+
 # --------------------------------------------------------------------------- paths
 
 def repo_root() -> Path:
@@ -424,7 +427,9 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
         # instance would share a single file. TA writes it next to the EXE, and the exe is symlinked
         # into each gamedir, so leaving it out of the mirror is all it takes to
         # make it per-instance by construction.
-        if name in ("Screenshots", "_triggers_off", "ErrorLog.txt") or low.endswith(".log"):
+        # log/ is the DLL's log directory (tagpu_log.h): one per gamedir, created by the
+        # DLL at attach; a template that carries one must not share it.
+        if name in ("Screenshots", "_triggers_off", "ErrorLog.txt") or low == "log" or low.endswith(".log"):
             continue
         if low.endswith(".migrated") or low == "impure-migration.txt":
             continue   # the DLL's first-run backups and their record: the template's own
@@ -954,12 +959,15 @@ def cmd_create(args):
 
 
 def _ensure_owndraw_for_native(inst) -> "str | None":
-    """The native GPU pass (tagpu_native.on) needs the owndraw detours to wipe the
-    engine's 8bpp composite, or the engine keeps rasterising the same unit and you get
-    a near-invisible double draw. But owndraw installs its engine-code detours ONCE at
-    DllMain and only if tagpu_owndraw.on exists THEN — it has no per-frame re-arm (unlike
-    the native pass and the .off toggles), because patching live engine bytes off the
-    frame loop is racy; the tracer and suppressor install the same way. So arming owndraw
+    """The native GPU pass (tagpu_native.on) needs the owndraw detours for the engine
+    draws it replaces: the build-state effect of a unit it owns (else a second scaffold
+    at the unzoomed projection), a husk while its wreck pass is armed, and the cached
+    structure shadow once ours is live. It never needs a unit skipped -- the engine
+    rasterises every unit either way (tagpu_owndraw_classify). But owndraw installs its
+    engine-code detours ONCE at DllMain and only if tagpu_owndraw.on exists THEN — it
+    has no per-frame re-arm (unlike the native pass and the .off toggles), because
+    patching live engine bytes off the frame loop is racy; the tracer and suppressor
+    install the same way. So arming owndraw
     after launch silently does nothing. Close the footgun here, at the one moment it
     matters: if this launch will bring up the native pass, make sure owndraw is armed to
     match before the process starts. Returns a human note, or None if nothing was done.
@@ -970,14 +978,16 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
     nat = inst.gamedir / "tagpu_native.on"
     own = inst.gamedir / "tagpu_owndraw.on"
     if not nat.exists():
-        # A stale owndraw.on is worse than none: its detours skip the engine's
-        # rasterisers while the native pass that would supply the pixels is not
-        # running, so the engine draws NO units at all (OWND ... repaint=0
-        # miss=<everything>) and an engine-side A/B silently measures nothing.
+        # A stale owndraw.on without native.on skips no unit: tagpu_owndraw_classify
+        # never does, a husk is skipped only while the native wreck pass is armed
+        # and the build effect only for a unit that pass owns. Its structure-shadow
+        # skip is the one another pass can raise (the terrain key-fill, through
+        # tagpu_owndraw_set_structshadow_terr). Dropping it keeps detours out of a
+        # launch where the pass they serve is not running.
         if own.exists():
             own.unlink()
-            return ("dropped owndraw.on (native.on is not set; its detours would skip "
-                    "the engine's unit rasterisers with nothing drawing in their place)")
+            return ("dropped owndraw.on (native.on is not set, and its detours serve "
+                    "only the native pass)")
         return None
     # native.on is "TYPE [extra tokens]" (e.g. "all wrecks"); owndraw.on is just "TYPE".
     tok = (nat.read_text().split() or ["all"])[0]
@@ -985,12 +995,14 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
         own.write_text(tok + "\n")
         return (f"auto-armed owndraw.on={tok} (native.on is set and owndraw must be "
                 f"installed at launch, not after)")
+    # owndraw's target decides whether the structure-shadow pair is installed at
+    # all: only "all" installs it (tagpu_owndraw.c, g_all), so a narrower owndraw
+    # under native.on=all leaves the engine's cached slant under ours.
     have = (own.read_text().split() or [""])[0]
     if have != tok:
-        return (f"warning: owndraw.on={have or '(empty)'} but native.on={tok} — the "
-                f"native pass will only be suppressed for {have!r}; other types will "
-                f"double-draw. Set them to match, or `tacli arm {inst.name} "
-                f"owndraw.on={tok}` and relaunch.")
+        return (f"warning: owndraw.on={have or '(empty)'} but native.on={tok} — "
+                f"owndraw installs its structure-shadow detours only for 'all'. Set "
+                f"them to match: `tacli arm {inst.name} owndraw.on={tok}` and relaunch.")
     return None
 
 
@@ -1190,15 +1202,20 @@ def _launch(args) -> dict:
     # to give it away. Measured 2026-09-09: a 20-minute-old fault was read as five
     # consecutive fresh crashes, and cob1's file holds 17 reports whose fields
     # `tacli crash` stitches into one line from four different faults.
-    for stale in ("tagpu.log", "ErrorLog.txt"):
-        p = inst.gamedir / stale
-        # a legacy instance carries this as a symlink into the TEMPLATE gamedir;
-        # unlink rather than rotate, or the next fault re-creates the shared
-        # target through the dangling link and re-shares it across all of them
-        if p.is_symlink():
-            p.unlink()
-        elif p.exists():
-            p.rename(inst.gamedir / f"{stale}.prev")
+    # The DLL's own logs need nothing here: it rotates log/ itself at attach.
+    errlog = inst.gamedir / "ErrorLog.txt"
+    # a legacy instance carries this as a symlink into the TEMPLATE gamedir;
+    # unlink rather than rotate, or the next fault re-creates the shared
+    # target through the dangling link and re-shares it across all of them
+    if errlog.is_symlink():
+        errlog.unlink()
+    elif errlog.exists():
+        errlog.rename(inst.gamedir / "ErrorLog.txt.prev")
+    # log/ must be the instance's own: a symlink into the template would give every
+    # instance one log directory, and its lock would silence all but the first
+    logdir = inst.gamedir / "log"
+    if logdir.is_symlink():
+        logdir.unlink()
     # A trigger the previous run never consumed fires the moment this one reaches
     # a game — measured 2026-09-01, when a leftover scenario spawned itself into a
     # fresh skirmish. Triggers are requests, not state, and the same goes for the
@@ -1484,14 +1501,14 @@ def cmd_gui(args):
         elif args.state == "remove":
             path.unlink(missing_ok=True)
         else:
-            tokens = {"on": "", "strict": "strict", "census": "census log pgm trace"}[args.state]
+            tokens = {"on": "", "census": "census log pgm trace"}[args.state]
             extra = " ".join(args.tokens or [])
             path.write_text((tokens + " " + extra).strip() + "\n")
     present = path.exists()
     content = path.read_text().strip() if present else ""
     state = ("absent (the DLL's default applies unless the instance has "
              "tagpu_defaults.off)") if not present else ("armed, draw OFF" if "off" in content.split() else
-            f"armed, draw ON{' STRICT' if 'strict' in content else ''}{' + census' if 'census' in content else ''}")
+            f"armed, draw ON{' + census' if 'census' in content else ''}")
     out({"name": args.name, "gui": present, "tokens": content}, args.json,
         human=f"{args.name}: tagpu_gui.on {state}" + (f" [{content}]" if content else ""))
 
@@ -1528,17 +1545,14 @@ def _peek(inst: Instance, specs, timeout: float):
     """
     if not inst.running():
         die(f"{inst.name} is not running")
-    log = inst.gamedir / "tagpu.log"
-    start = log.stat().st_size if log.exists() else 0
+    cursor = talog.Cursor(inst.gamedir)
     (inst.gamedir / "tagpu_peek.trigger").write_text("\n".join(specs) + "\n")
 
     deadline = time.time() + timeout
     rows = []
     while time.time() < deadline and len(rows) < len(specs):
-        if log.exists():
-            with open(log, "rb") as f:
-                f.seek(start)
-                chunk = f.read().decode("utf-8", "replace")
+        chunk = cursor.text()
+        if chunk:
             rows = []
             for line in chunk.splitlines():
                 m = PEEK_RX.match(line)
@@ -1766,14 +1780,16 @@ def cmd_shot(args):
 
 def cmd_log(args):
     inst = Instance(args.name)
-    path = inst.gamedir / "tagpu.log"
-    if not path.exists():
-        die("no tagpu.log yet")
-    data = path.read_bytes().decode("utf-8", "replace").splitlines()  # binary-safe
+    if not talog.current(inst.gamedir).exists():
+        die("no log/tagpu.log yet")
+    # this run only, across its rotated parts; a grep needs the whole run, a tail only
+    # as many parts as hold its lines
     if args.grep:
         rx = re.compile(args.grep)
-        data = [line for line in data if rx.search(line)]
-    data = data[-args.tail:]
+        data = [line for line in talog.run_text(inst.gamedir).splitlines() if rx.search(line)]
+        data = data[-args.tail:]
+    else:
+        data = talog.tail_lines(inst.gamedir, args.tail)
     out({"name": args.name, "lines": data}, args.json, human="\n".join(data))
 
 
@@ -1790,10 +1806,15 @@ ROSTER_RX = re.compile(r"\s*u(\d+)\s+(\S+)\s+own=(\d+)(?:\s+idx=(-?\d+))?"
 def cmd_roster(args):
     """Parse the newest roster block tagpu_packet_pub.c logs every 5 s."""
     inst = Instance(args.name)
-    path = inst.gamedir / "tagpu.log"
-    if not path.exists():
-        die("no tagpu.log yet")
-    lines = path.read_bytes().decode("utf-8", "replace").splitlines()
+    if not talog.current(inst.gamedir).exists():
+        die("no log/tagpu.log yet")
+    # Newest part first, and one more part only while no block has been found: a dump
+    # is never split, but its `units:` header can land in the file after a rotation.
+    has_roster = lambda parts: any(ROSTER_RX.match(line) for line in
+                                   parts[-1].decode("utf-8", "replace").splitlines())
+    lines = []
+    for data in talog.run_parts_newest_first(inst.gamedir, enough=has_roster):
+        lines = data.decode("utf-8", "replace").splitlines() + lines
     units, eye = [], None
     for line in reversed(lines):
         m = ROSTER_RX.match(line)
@@ -1843,18 +1864,15 @@ def cmd_crash(args):
 
 
 def cmd_wait(args):
-    """Block until a regex appears in tagpu.log (new lines only)."""
+    """Block until a regex appears in log/tagpu.log (new lines only, across rotations)."""
     inst = Instance(args.name)
-    path = inst.gamedir / "tagpu.log"
     rx = re.compile(args.pattern)
-    start = path.stat().st_size if path.exists() else 0
+    cursor = talog.Cursor(inst.gamedir)
     watch = CrashWatch(inst, f"/{args.pattern}/")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
-        if path.exists():
-            with open(path, "rb") as f:
-                f.seek(start)
-                chunk = f.read().decode("utf-8", "replace")
+        chunk = cursor.text()
+        if chunk:
             for line in chunk.splitlines():
                 if rx.search(line):
                     out({"name": args.name, "matched": line}, args.json, human=line)
@@ -4195,17 +4213,14 @@ def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
 
 def _scn_wait_live(inst: Instance, timeout: float) -> int:
     """Wait for a world: the overlay's own count of living units goes non-zero."""
-    path = inst.gamedir / "tagpu.log"
-    start = path.stat().st_size if path.exists() else 0
+    cursor = talog.Cursor(inst.gamedir)
     deadline = time.time() + timeout
     while True:
         if not inst.running():
             die(f"{inst.name} exited while its map was loading "
                 f"(tacli log {inst.name} -n 40)")
-        if path.exists():
-            with open(path, "rb") as f:
-                f.seek(start)
-                chunk = f.read().decode("utf-8", "replace")
+        chunk = cursor.text()
+        if chunk:
             for line in chunk.splitlines():
                 m = SCN_LIVE_RX.search(line)
                 if m:
@@ -4576,10 +4591,10 @@ def build_parser():
     e.add_argument("--release", action="store_true")
     e.set_defaults(func=cmd_eye)
 
-    gu = sub.add_parser("gui", help="the UI layer: on | strict | census | off | remove (Phase E)")
+    gu = sub.add_parser("gui", help="the UI layer: on | census | off | remove (Phase E)")
     add_common(gu)
     gu.add_argument("name")
-    gu.add_argument("state", nargs="?", choices=["on", "strict", "census", "off", "remove"],
+    gu.add_argument("state", nargs="?", choices=["on", "census", "off", "remove"],
                     help="omit to report; `off` keeps the detours armed but stops the draw")
     gu.add_argument("tokens", nargs="*", help="extra tokens for the file (log, pgm, trace, key=N)")
     gu.set_defaults(func=cmd_gui)
@@ -4625,7 +4640,7 @@ def build_parser():
     cr.add_argument("name")
     cr.set_defaults(func=cmd_crash)
 
-    lg = sub.add_parser("log", help="tail tagpu.log")
+    lg = sub.add_parser("log", help="tail this run of log/tagpu.log")
     add_common(lg)
     lg.add_argument("name")
     lg.add_argument("-n", "--tail", type=int, default=40)
@@ -4637,7 +4652,7 @@ def build_parser():
     r.add_argument("name")
     r.set_defaults(func=cmd_roster)
 
-    w = sub.add_parser("wait", help="wait for a regex in tagpu.log")
+    w = sub.add_parser("wait", help="wait for a regex in log/tagpu.log")
     add_common(w)
     w.add_argument("name")
     w.add_argument("pattern")

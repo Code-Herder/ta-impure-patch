@@ -467,11 +467,14 @@ failed to coincide.
    **the composite's plane non-empty at every classify** (7047 of 7047
    wipes in a 60-frame window, the sampled plane holding 557 non-Key bytes — palette indices,
    not the zeros a blackened shadow leaves), while reading 0 non-Key bytes immediately after the
-   wipe's own `memset`. `owndraw` now empties
+   wipe's own `memset`. `owndraw` then emptied
    the composite at the shadow itself, at all three emit sites (`0x459338`,
-   `0x45958C`, `0x4594DB`), so the guarantee is an instruction rather than an
+   `0x45958C`, `0x4594DB`), so the guarantee was an instruction rather than an
    inheritance: `exe-reverse-engineering.md` §"The completed-unit shadow's three
-   emit sites", `tagpu_owndraw.c`, and `gpu-status.md` §2.1.]
+   emit sites", and `gpu-status.md` §2.1.]
+   **Neither wipe runs on a unit today:** the classifier skips no unit's rasterise, so every
+   unit's composite is filled, and the three emit sites keep the engine's bytes (the detour's
+   gate had become the constant 0 with the OpenGL strip, and it is deleted).
    **AND ON THE SHIPPED LANE THIS IS `tagpu_vk_unit.c`'s, not a GL pass's** [2026-09-22]. The
    GL twin described above is deleted; the same stencil pair, the same 5-px shift, the same
    `(gy - ay)` ground shift and the same 50 % blend are two Vulkan pipelines recorded before the
@@ -506,7 +509,7 @@ failed to coincide.
    and are not tested by us for it either. A `digger` structure is not slanted
    — the engine never gives one the cached shadow — and takes the silhouette
    rule. Rule now: structures `shadow = structshadow_ours && !noshadow`, the
-   rest as before. Measured over the
+   rest as before (`tagpu_owndraw_structshadow_ours` is gone since 2026-09-23). Measured over the
    engine's own terrain (`terr.on=passive`) against the pre-fix engine shadow,
    same frame position, four buildings: the only differences are the rotating
    pieces (drill arms, rotor) caught at other animation phases and a **strip

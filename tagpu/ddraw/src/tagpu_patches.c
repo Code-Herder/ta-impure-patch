@@ -4,11 +4,11 @@
 #include <windows.h>
 #include <stdio.h>
 #include "tagpu_patches.h"
+#include "tagpu_log.h"
 
 static void plog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* Write `val` at absolute `addr` iff it currently holds `expect`. Returns 1 on patch,

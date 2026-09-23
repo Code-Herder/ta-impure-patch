@@ -3,10 +3,10 @@
 /* The Classic++ RESTORER, drawn by Vulkan.
    Contract only; tagpu_vk_restore.c is the backend.
 
-   IT IS THE SECOND BACKEND OF tagpu_restore_core.c, not a second restorer.
+   IT IS THE BACKEND OF tagpu_restore_core.c, not a restorer of its own.
    The scheduler -- the job queues, batch formation, the pass sequencer, the
-   cost model and the GPU-time budget -- is shared, and this file implements
-   the twelve-entry TAGPU_RBACKEND against it. Everything below is therefore
+   cost model and the GPU-time budget -- is the core's, and this file
+   implements the twelve-entry TAGPU_RBACKEND against it. Everything below is therefore
    about DEVICE RESOURCES and THREE DRAWS, and nothing below decides when to
    draw.
 
@@ -59,13 +59,9 @@ typedef struct TAGPU_VKRJOB TAGPU_VKRJOB;
      RGBA8 not colour-attachment                               no destination
    The timestamp one is the only soft refusal: without a GPU timer the core
    falls back to a fixed draw count per slice, which is slower and safe. Every
-   other one stands the pass down, and Classic++ then stays indexed on this
-   lane -- which is the shipped fallback, not a fault. */
+   other one stands the pass down, and Classic++ then stays indexed -- which
+   is the shipped fallback, not a fault. */
 int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
-
-/* NK as this lane settled it, and the uniform-block bytes one conv draw binds
-   -- for the log and for a consumer that wants to report them. 0 before `up`. */
-int  tagpu_vk_restore_nk(void);
 
 /* A job: frames read from `srcView` (the consumer's R8 indexed atlas, srcW x
    srcH) with the palette `pal` (256 x R,G,B,pad; snapshotted now), painted
@@ -98,16 +94,13 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
    i+1 and level i of `dstImg`, each naming EXACTLY ONE LEVEL. That is what
    makes reducing level i into level i+1 sound with no copy and no second
    image: the source view cannot reach the level being written, which is the
-   guarantee GL buys with GL_TEXTURE_BASE_LEVEL and this buys with
-   `levelCount = 1`. The destination image needs COLOR_ATTACHMENT usage, as it
+   guarantee `levelCount = 1` buys. The destination image needs COLOR_ATTACHMENT usage, as it
    already does for the OUT pass.
 
    The levels are then reduced ONCE PER SLICE that painted -- and once over an
    unpainted twin at the start, because a Vulkan image's levels begin UNDEFINED
-   and the consumer samples the whole chain. The arithmetic is the GL lane's
-   own: the exact integer (sum + 1) / 4 of gpu-status 2.45 and 2.46, from one
-   shader string compiled for both APIs, so the chains are identical by
-   construction rather than by two drivers agreeing.
+   and the consumer samples the whole chain. The arithmetic is the exact
+   integer (sum + 1) / 4 of gpu-status 2.45 and 2.46.
 
    1 when the chain was registered. 0 leaves the job chainless -- it still
    restores level 0, and the consumer must then decide whether a twin with no
@@ -117,15 +110,9 @@ int  tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
                                 int mips, int dim,
                                 const VkImageView* attach, const VkImageView* sample);
 
-/* Re-point a live job at a new palette -- a lazy job outlives its atlas's
-   entries, so it is re-palettable rather than replaceable. */
-void tagpu_vk_restore_job_repalette(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
-                                    const unsigned char* pal);
 /* Queue frames (copied) behind what is already queued; they restore in order.
    The count taken, 0 if none was. */
 int  tagpu_vk_restore_job_add(TAGPU_VKRJOB* j, const TAGPU_RGLSL_FRAME* frames, int count);
-/* Drop everything queued or in flight and clear the destination again. */
-void tagpu_vk_restore_job_clear(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
 /* 1 when nothing is queued or in flight -- every frame added is painted, once
    the GPU drains, i.e. before any later draw samples the destination. */
 int  tagpu_vk_restore_job_idle(const TAGPU_VKRJOB* j);
@@ -138,8 +125,8 @@ void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
 
 /* `srcImg` IS THE IMAGE `srcView` NAMES, and it is here for the oracle rather
    than for the drawing: under `tagpu_restoredump.on` the source is written out
-   beside the destination, so a pair that differs can be read as "the two lanes
-   restored different bytes" or "the two lanes restored the same bytes
+   beside the destination, so two dumps that differ -- two builds, say -- can
+   be read as "the sources differed" or "the same source was restored
    differently" without another run: the destination alone cannot tell the
    two apart. */
 

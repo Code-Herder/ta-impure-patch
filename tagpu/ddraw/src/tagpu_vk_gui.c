@@ -1,6 +1,6 @@
-/* tagpu_vk_gui.c -- the GL UI layer's 1x mirror, drawn by Vulkan (Phase G).
+/* tagpu_vk_gui.c -- the UI layer's 1x mirror, drawn by Vulkan.
    The header states the contract; this file is the machinery. gpu-status.md
-   2.3e is the pass being ported.
+   2.3e describes the pass.
 
    THE TWIN STORE IS ONE STORE AND THE FRAMES OVERLAP, which is the one
    synchronisation question this pass has that no world pass had. Every world
@@ -20,7 +20,6 @@
    it is a fact about the queue rather than a claim about timing. */
 
 #include "tagpu_vk_pass.h"
-#include "tagpu_vk_surf.h"   /* the engine frame's one upload lives there */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -68,8 +67,8 @@
    present that batches FREE + SEED + COPY claims one per surface GENERATION --
    which nothing bounds by TW_MAX. What IS by construction is the consequence:
    `set_claim` answers 0 deterministically, the replay goes to `standdown`,
-   `behind` drops OUR store and asks once, and nothing of the GL lane's is
-   touched. Sized for the case that has to work, degrading predictably past
+   `behind` drops OUR store and asks once, and nothing of the producer's is
+   touched beyond that ask. Sized for the case that has to work, degrading predictably past
    it. */
 #define SET_MAX     (2 * TW_MAX + 3)
 /* objects waiting for every slot to turn over once before they are destroyed.
@@ -124,14 +123,15 @@ typedef struct {
     VkImageLayout   layout;         /* what it is in RIGHT NOW               */
     int             needClear;      /* created this frame, not yet cleared   */
     /* ---- CLASSIC++: THE COLOUR TWIN, made by the first op that
-       had colour to put in it, exactly as `twin_colour` makes the GL one.
+       carries `TAGPU_GUICOL_DST` (the drain's `twin_sprite` or `twin_copy`
+       decides it).
        It is a SECOND ATTACHMENT of the same draws and not a second pass: one
        MRT draw writes the index and the colour together, so the two can never
-       disagree about what a texel holds -- which is the whole reason the GL
-       lane made it an attachment rather than a second program.
-       A framebuffer is immutable in Vulkan where `glDrawBuffers` is a switch on
-       a live FBO, so a twin that gains colour gains a SECOND framebuffer over
-       both views and every later draw on it uses that one and `s_twRp2`.
+       disagree about what a texel holds -- which is the whole reason it is an
+       attachment rather than a second program.
+       A framebuffer is immutable, so a twin that gains colour gains a SECOND
+       framebuffer over both views and every later draw on it uses that one
+       and `s_twRp2`.
        `colLayout` is tracked apart from `layout`: the two images are barriered
        together at every point they are used together, but a colour twin made
        mid-frame starts UNDEFINED while its index twin is already somewhere. */
@@ -140,7 +140,7 @@ typedef struct {
     VkImageView     colView;
     VkFramebuffer   fb2;            /* [index, colour], against s_twRp2      */
     VkImageLayout   colLayout;
-    int             colNeedClear;   /* GL clears attachment 1 on creation    */
+    int             colNeedClear;   /* colour made this frame, not cleared   */
 } TWIN;
 
 typedef struct {
@@ -204,8 +204,8 @@ static int              s_ntw;
 
 static VkRenderPass     s_twRp;          /* one R8G8 colour attachment, LOAD  */
 /* ...and the Classic++ edition: R8G8 plus the RGBA8 colour twin, both LOAD.
-   A framebuffer is immutable, so where GL flips `glDrawBuffers` between 1 and 2
-   on one FBO this lane has two framebuffers and two render passes. */
+   A framebuffer is immutable, so a twin with one attachment and a twin with
+   two need two framebuffers and two render passes. */
 static VkRenderPass     s_twRp2;
 static VkDescriptorSetLayout s_dslTwin, s_dslLay;
 static VkPipelineLayout s_ploTwin, s_ploLay;
@@ -229,7 +229,7 @@ static VkPipeline       s_pipeCurs, s_pipeMM, s_pipeFlat;
 static VkRenderPass     s_layRp;         /* what s_pipeLay was built against  */
 static VkDescriptorPool s_dpool;
 static VkSampler        s_samp;
-/* the one exception: the minimap picture, minified LINEAR as its GL twin is */
+/* the one exception: the minimap picture, minified LINEAR (MM_FS says why) */
 static VkSampler        s_sampMin;
 static VkDeviceSize     s_ualign;
 
@@ -284,8 +284,8 @@ static unsigned         s_tintOps;
 /* ---- THE RESTORED UI ATLAS, PAINTED RATHER THAN READ BACK. The UI atlas
    publishes a frame LIST, exactly as the feature and effects atlases do
    (tagpu_gui.h `restoreFrames`), and this pass paints `s_arImg` from `s_atImg`
-   with `tagpu_vk_restore.c`. Nothing is read back and no GL entry point is
-   named: what crosses the hand-over is the work.
+   with `tagpu_vk_restore.c`. Nothing is read back: what crosses the
+   hand-over is the work.
 
    `s_arHave` IS THE ONLY THING THAT SAYS THIS IS A PICTURE, and it is what
    `tagpu_gui_col_ready` reports back to the producer -- so an op cannot claim
@@ -356,10 +356,10 @@ static int              s_behind, s_cantReplay;
    transition REPEATS: a RESET clears `s_behind`, and a condition that is
    structural rather than transient fires again inside the same frame that
    answered it -- so "once on the transition" is once PER FRAME for exactly the
-   conditions that never go away. That is a reseed storm, and it changes the
-   ORACLE. After this many fruitless asks the pass stops asking: it keeps its
-   store dropped and composites nothing, which is a capability statement and
-   costs the GL lane nothing. */
+   conditions that never go away. That is a reseed storm (see `behind_ex`).
+   After this many fruitless asks the pass stops asking: it keeps its store
+   dropped and composites nothing, which is a capability statement, and the
+   log says so. */
 #define BEHIND_ASKS_MAX 8
 /* ...and the cap counts FRUITLESS asks, not asks. A map change is a legitimate
    reason to fall behind once, and a long session can hold several; muting the
@@ -376,7 +376,7 @@ static unsigned         s_presented;
 static int              s_surfW, s_surfH;
 static VkDeviceSize     s_uStride, s_fStride;
 static VkDeviceSize     s_layQuad;       /* the composite's quad in the vb    */
-static int              s_layVp[4];      /* the GL viewport it ran in         */
+static int              s_layVp[4];      /* the frame's viewport, y from below */
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -707,19 +707,18 @@ static TWIN* tw_make(const TAGPU_VKPASS* d, unsigned surf, int w, int h)
     }
     t->surf = surf; t->w = w; t->h = h;
     t->layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    /* A FRESH TWIN IS CLEARED, because GL's `twin_make` clears one
-       (`glClearColor(0,0,0,0); glClear`) and a texel neither lane's seed
-       covers must read the same in both. Ours would otherwise load whatever
-       device memory it was handed, through a LOAD_OP_LOAD render pass, and
-       keep it. Cheap, and it removes the question rather than resting on "the
-       producer always sends the bytes". */
+    /* A FRESH TWIN IS CLEARED, so a texel no seed covers is EMPTY, coverage 0
+       -- what tagpu_gui_surf.c says a never-seeded twin is. Ours would
+       otherwise load whatever device memory it was handed, through a
+       LOAD_OP_LOAD render pass, and keep it. Cheap, and it removes the question
+       rather than resting on "the producer always sends the bytes". */
     t->needClear = 1;
     s_ntw++;
     return t;
 }
 
 /* A TWIN CREATED THIS FRAME IS CLEARED BEFORE ANYTHING READS OR LOADS IT.
-   GL's `twin_make` clears; ours must, or the LOAD_OP_LOAD render pass loads
+   It must be, or the LOAD_OP_LOAD render pass loads
    whatever memory the allocator handed us and keeps it in the twin. Done at
    the first touch rather than at creation, because creation happens outside a
    command buffer. */
@@ -739,8 +738,8 @@ static void tw_fresh(VkCommandBuffer cb, TWIN* t)
                              &cv, 1, &rg);
     }
     /* AND THE COLOUR TWIN IS CLEARED TO ALPHA 0 THE SAME WAY, because
-       `twin_colour` clears it (`glClearBufferfv` with the zero vector) and
-       alpha 0 is the restorer's own "nothing restored here". A colour twin
+       alpha 0 is the restorer's own "nothing restored here" -- nothing is
+       restored until an op says so (tagpu_gui_surf.c). A colour twin
        that loaded whatever memory it was handed would composite that memory as
        restored art wherever a byte of it read alpha > 0.5. */
     if (t->colNeedClear && t->colImg) {
@@ -750,11 +749,12 @@ static void tw_fresh(VkCommandBuffer cb, TWIN* t)
     }
 }
 
-/* THE COLOUR TWIN, MADE BY THE OP THAT SAID THE GL LANE MADE ONE. Never on
-   this pass's own judgement: `TAGPU_GUICOL_DST` is what `twin_colour` actually
-   did, refusals included, so the two stores hold colour for the same surfaces.
-   0 is a stand-down and not a shrug -- a twin the GL lane gave colour and this
-   one did not composites indexed art under a `uColOn` that says otherwise. */
+/* THE COLOUR TWIN, MADE BY THE OP THAT ASKS FOR ONE. Never on this pass's
+   own judgement: `TAGPU_GUICOL_DST` is what the drain decided (`twin_sprite`,
+   `twin_copy`, tagpu_gui_surf.c), so the drain's table and this store hold
+   colour for the same surfaces. 0 is a stand-down and not a shrug -- a twin
+   the drain gave colour and this one did not composites indexed art under a
+   `uColOn` that says otherwise. */
 static int tw_colour(const TAGPU_VKPASS* d, TWIN* t)
 {
     VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
@@ -788,10 +788,9 @@ static int tw_colour(const TAGPU_VKPASS* d, TWIN* t)
     return 1;
 }
 
-/* `twin_col_drop`: INDICES ARRIVED FOR THE BOX AND THEY SAY NOTHING ABOUT
+/* INDICES ARRIVED FOR THE BOX AND THEY SAY NOTHING ABOUT
    COLOUR, so the colour there goes and the layer falls back to the palette.
-   The GL lane does it with a scissored `glClearBufferfv` on buffer 1; here it
-   is a one-attachment clear inside a render pass instance of its own, because
+   It is a one-attachment clear inside a render pass instance of its own, because
    `vkCmdClearAttachments` is the only rect clear Vulkan has and it needs one.
    Called from outside any open pass -- the seed and pixel ops are transfers. */
 static void tw_col_drop(VkCommandBuffer cb, TWIN* t, int x, int y, int w, int h)
@@ -952,7 +951,7 @@ static int build_layouts(const TAGPU_VKPASS* d)
     return 1;
 }
 
-/* every quad is one vec4 attribute: x, y, u, v -- the GL lane's own vertex */
+/* every quad is one vec4 attribute: x, y, u, v -- QVS's `a` */
 static void quad_layout(VkVertexInputBindingDescription* vb,
                         VkVertexInputAttributeDescription* at)
 {
@@ -963,7 +962,7 @@ static void quad_layout(VkVertexInputBindingDescription* vb,
 }
 
 /* the twin pipelines. NO FLIP: the target is SAMPLED, not presented, and
-   QVS puts quad y = 0 at attachment row 0 under both APIs (the header). */
+   QVS puts quad y = 0 at attachment row 0 (the header). */
 /* THE SHARP LAYER'S RENDER PASS: one RGBA8, CLEARED. The opposite of the
    twins' LOAD, and for the opposite reason -- `sharp_begin` clears this layer
    to (0,0,0,0) at every present, so nothing in it survives a frame and there is
@@ -1049,8 +1048,8 @@ static int build_twin_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw
     rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rs.lineWidth = 1.0f;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    /* the GL lane draws these with blending OFF: a sprite discards its keyed
-       texels and writes the rest whole, which is what coverage means here */
+    /* blending OFF: a sprite discards its keyed texels and writes the rest
+       whole, which is what coverage means here */
     cba[0].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
     /* THE COLOUR ATTACHMENT TAKES ALL FOUR CHANNELS, ALPHA ABOVE ALL: alpha is
        "this texel has restored colour" to every reader of a colour twin, so a
@@ -1113,9 +1112,10 @@ static int build_lay_pipe(const TAGPU_VKPASS* d, VkRenderPass rp)
     rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rs.lineWidth = 1.0f;
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    /* the GL lane composites with BLEND and DEPTH off; the seam's render pass
-       has a depth attachment, so a state must still be declared for it
-       (tagpu_vk_pass.h) -- testing and writing both off. */
+    /* BLEND and DEPTH off: LAY_FS writes opaque colour where the mirror has
+       coverage and discards everywhere else, so there is nothing to blend. The
+       seam's render pass has a depth attachment, so a state must still be
+       declared for it (tagpu_vk_pass.h) -- testing and writing both off. */
     dss.depthTestEnable = VK_FALSE; dss.depthWriteEnable = VK_FALSE;
     dss.depthCompareOp = VK_COMPARE_OP_ALWAYS;
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -1138,7 +1138,8 @@ static int build_lay_pipe(const TAGPU_VKPASS* d, VkRenderPass rp)
 /* the same pipeline as the twins', with three differences and no more: it
    writes all four channels (the twins are RG8 and the composite gates on this
    one's ALPHA), it is built against the sharp render pass, and it takes the
-   three-sampler layout. Blending stays OFF because the GL lane disables it. */
+   three-sampler layout. Blending stays OFF, as for the twins: a draw writes
+   its texels whole, and the composite gates on the layer's alpha. */
 static int build_sharp_pipe(const TAGPU_VKPASS* d, const uint32_t* fs, size_t fsw,
                             VkPipeline* out)
 {
@@ -1244,22 +1245,21 @@ static int build(const TAGPU_VKPASS* d)
     /* EVERY TEXTURE THIS MODULE SAMPLES IS NEAREST -- WITH EXACTLY ONE
        EXCEPTION. The twin, the atlas, the palette, the engine's frame and the
        ramp's own texelFetch taps are all nearest. The MINIMAP PICTURE is not:
-       the GL texture is created `MIN_FILTER = GL_LINEAR, MAG_FILTER =
-       GL_NEAREST` and `MM_FS`'s own comment says why -- at the scales the
-       minimap is drawn at the destination box is usually SMALLER than the
-       252-px picture, so the fragments take the MINIFICATION filter and a
-       downsample wants one. (Not at every k: past k of about 2.4 the box is
-       the bigger of the two and the magnification filter, nearest in both
-       lanes, is what runs -- "the blow-up at k > 2 stays crisp", as the GL
-       comment puts it.) GL blends four texels there; a nearest sampler takes
-       one, so this is a second sampler. The A/B cannot see the difference:
-       MM_FS reaches the picture only where a 3x3 neighbourhood is unfogged. */
+       it is sampled MIN linear, MAG nearest, and `MM_FS`'s own comment says
+       why -- at the scales the minimap is drawn at the destination box is
+       usually SMALLER than the 252-px picture, so the fragments take the
+       MINIFICATION filter and a downsample wants one. (Not at every k: past k
+       of about 2.4 the box is the bigger of the two and the magnification
+       filter, nearest, is what runs -- "the blow-up at k > 2 stays crisp", as
+       that comment puts it.) A linear minification blends four texels where a
+       nearest sampler takes one, so this is a second sampler. MM_FS reaches
+       the picture only where a 3x3 neighbourhood is unfogged. */
     si.magFilter = VK_FILTER_NEAREST; si.minFilter = VK_FILTER_NEAREST;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxLod = 0.0f; si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     if (vkCreateSampler(d->dev, &si, NULL, &s_samp) != VK_SUCCESS) return 0;
-    si.minFilter = VK_FILTER_LINEAR;          /* MAG stays nearest, as in GL */
+    si.minFilter = VK_FILTER_LINEAR;          /* MAG stays nearest (MM_FS)   */
     /* AND maxLod MUST LEAVE ROOM, OR minFilter IS DEAD CODE. Vulkan clamps the
        level-of-detail to [minLod, maxLod] and only THEN asks whether this is a
        magnification (lambda <= 0) or a minification -- so with both 0 the
@@ -1274,9 +1274,8 @@ static int build(const TAGPU_VKPASS* d)
     /* TWO OF EACH, one per render pass, and the SPIR-V is the same module for
        both: `SPR_FS`, `CPY_FS` and `STR_FS` all declare `layout(location=1) out`
        already -- against a one-attachment pass, a write to a location the
-       subpass has no attachment for is discarded, which is exactly what
-       `glDrawBuffers(1)` does on the GL side. So the colour edition is the same
-       shader against a pass that HAS the second attachment. */
+       subpass has no attachment for is discarded. So the colour edition is the
+       same shader against a pass that HAS the second attachment. */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4,
                          s_twRp, 1, &s_pipeSpr)) return 0;
@@ -1413,7 +1412,7 @@ static void set_viewport(VkCommandBuffer cb, int w, int h)
 {
     VkViewport vp;
     /* NO FLIP. The target is sampled, not presented, and QVS puts quad y = 0
-       at attachment row 0 under both APIs -- the file header argues it. */
+       at attachment row 0 -- the file header argues it. */
     vp.x = 0.0f; vp.y = 0.0f;
     vp.width = (float)w; vp.height = (float)h;
     vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
@@ -1480,7 +1479,8 @@ static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v, VkImageView 
 /* THE STORE IS BEHIND: drop it, ask the producer for the fresh start, and
    composite nothing until its RESET arrives. Every path that cannot apply a
    frame's ops goes through here, and there is exactly one way out -- which is
-   what makes "our twins equal the GL lane's" checkable rather than hoped for.
+   what makes "our store is in step with the producer's" checkable rather than
+   hoped for.
    A drop the retire will not take leaves the pass owing a teardown instead. */
 /* `reask` -- THE PRESENT THAT WOULD HAVE CARRIED THE ANSWER WAS LOST, SO ASK
    AGAIN. `g_guiq.reseed` is ONE-SHOT: the producer clears it the instant it
@@ -1498,10 +1498,9 @@ static int behind_ex(const TAGPU_VKPASS* d, const char* why, int reask)
        `tagpu_gui_mirror_reseed` raises the PRODUCER's flag, and the producer
        answers it by dropping every `seeded` mark and re-seeding every surface —
        megabytes into a 16 MB arena. Raising it on every call, from a condition
-       that holds every frame, reseeds the GL lane's own twin store at the frame
-       rate: `tagpu_gui_hook.c` calls that a reseed storm and measured 2 749
-       resets in one walk the last time something caused one. **The GL lane is
-       the oracle and this port may not change it.** */
+       that holds every frame, reseeds the producer at the frame rate:
+       `tagpu_gui_hook.c` calls that a reseed storm and measured 2 749 resets in
+       one walk the last time something caused one. */
     if (!s_behind || reask) {
         s_behind = 1;
         s_goodRun = 0;
@@ -1722,17 +1721,17 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        must still clear this slot's bit or the retire stalls for ever. */
     ret_slot_done(d, slot);
 
-    /* ASK FOR THE MIRROR, and keep asking. The GL half copies nothing until
-       something wants it, and its drain runs EARLIER in this same iteration of
-       render_ogl.c's loop than we do -- so the first frame this pass runs, the
+    /* ASK FOR THE MIRROR, and keep asking. The drain copies nothing until
+       something wants it, and it runs EARLIER in this same iteration of
+       render_vk.c's loop than we do -- so the first frame this pass runs, the
        answer is always "nothing handed over", and the one after it is the first
        with a record. One frame of warm-up, once, and it costs an unarmed
        session nothing at all. */
     tagpu_gui_mirror_want(1);
 
     if (!tagpu_gui_handover(&h, d->frame)) {
-        /* nothing handed over: the GL lane drew no composite either, and
-           nothing is kept once there is nothing to draw (2.28) */
+        /* nothing handed over: nothing to composite, and nothing is kept
+           once there is nothing to draw (2.28) */
         if (s_state == ST_READY) slot_free(d, s);
         return 0;
     }
@@ -1755,9 +1754,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     /* ---- WHAT THIS PASS DOES NOT CARRY, AND WHY IT DOES NOT RETURN HERE.
        These three gate the COMPOSITE and nothing else. The op stream still has
-       to be applied, because our twin store must equal the GL lane's or it is
-       worth nothing: the GL lane applied these ops whatever it drew, and a
-       frame we skip leaves our twins behind ITS twins for the rest of the
+       to be applied, because our twin store must follow the producer's or it is
+       worth nothing: the drain applied these ops to its table whatever we draw,
+       and a frame we skip leaves our twins behind ITS twins for the rest of the
        session, silently. So `compose` is cleared and the replay runs anyway:
        an early return here would take the frame's ops with it. ---- */
     /* `otherOps` is 0 for every op kind that exists today. The machinery stays,
@@ -1783,9 +1782,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     /* CLASSIC++ IS CARRIED, so `colourTwins` is not a stand-down: it IS
        `uColOn`, exactly as `draw_layer` set it, and it is read where the
        composite's block is filled. The one thing still refused here is a frame
-       whose colour twins the GL lane can sample and whose restored atlas never
-       reached us -- the replay would then write alpha 0 where the GL lane
-       wrote restored colour, silently and cumulatively. */
+       whose twins the drain has given colour while this pass has no restored
+       atlas -- the replay would then write alpha 0 where the ops ask for
+       restored colour, silently and cumulatively. */
     if (h.colourTwins && !s_arHave) {
         if (!s_saidColour) { s_saidColour = 1;
             plog(d, "gui: the other lane is compositing Classic++ colour and "
@@ -1795,8 +1794,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     } else s_saidColour = 0;
     /* EVERY COLOUR TWIN WAS INVALIDATED, and it happened BEFORE this frame's
        ops (`restore_step` runs ahead of the drain), so it is applied before
-       them. The GL lane clears each colour attachment whole and keeps the
-       twin; ours does the same by asking for the clear again. */
+       them: each colour twin is kept and cleared whole, by asking for its clear
+       again. */
     if (h.colRearm != s_colRearm || !s_colRearmSeen) {
         if (s_colRearmSeen && h.colRearm != s_colRearm) {
             int k;
@@ -1859,9 +1858,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                         "copy of it is %s - nothing composited",
                      h.mmPic ? "outside what this pass carries" : "absent"); }
         }
-        /* the GL lane HAS coverage and we produced no quad for it: that is a
-           client this pass does not carry, and it composites nothing rather
-           than a layer missing a piece. */
+        /* the producer says the layer HAS coverage and we produced no quad
+           for it: that is a client this pass does not carry, and it composites
+           nothing rather than a layer missing a piece. */
         if (h.sharpOn && !shOn) compose = 0;
         /* THE LATCH IS CLEARED ONLY BY A GOOD FRAME. Cleared at the top of this
            branch, `if (!s_saidSharp)` would be true on every present, so a
@@ -1951,7 +1950,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             break;
         case TAGPU_GUIOP_STRING:
             /* A STRING IS ONE UNIFORM WINDOW AND `nglyph` QUADS. Its cells were
-               resolved by the GL lane against an atlas that can repack
+               resolved by the drain (`twin_string`) against an atlas that can repack
                mid-string, so they are carried rather than looked up again --
                and bounded here in this file's own terms all the same. */
             if (o->nglyph < 1 || o->nglyph > 256 ||
@@ -1964,9 +1963,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             ndraw++; nquad += o->nglyph;
             break;
         case TAGPU_GUIOP_COPY:
-            /* A SELF-COPY IS REFUSED rather than guessed at: the GL lane reads
-               and writes one texture in one draw there, which is undefined in
-               both APIs, and reproducing undefined behaviour is not parity. */
+            /* A SELF-COPY IS REFUSED rather than guessed at: it would read and
+               write one image in one draw, which is undefined behaviour. */
             if (o->surf == o->src) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             ndraw++; nquad++;
             break;
@@ -2320,7 +2318,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        ITS NEXT OP. `tw_fresh` is the per-twin path and every draw arm calls it,
        which is enough for a twin an op touches -- and a twin nothing touches
        this frame is still one the composite may PRESENT, and `uColOn` would
-       then read colour the GL lane threw away three frames ago. The sweep costs
+       then read colour the producer invalidated three frames ago. The sweep costs
        one early-return per twin on every other frame. */
     {
         int k;
@@ -2334,7 +2332,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        fresh start names twins this store never made, and applying it would
        build a picture out of half a history. */
 
-    /* ---- pass 2: the ops, in the order the GL lane applied them ---- */
+    /* ---- pass 2: the ops, in the order the drain applied them ---- */
     for (i = 0; i < h.nops; i++) {
         const TAGPU_GUIOP* o = &h.ops[i];
         TWIN* t;
@@ -2352,18 +2350,19 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             o->kind == TAGPU_GUIOP_BAR    || o->kind == TAGPU_GUIOP_RECT) {
             TWIN* src = NULL;
             t = tw_find(o->surf);
-            /* THE GL LANE HAD A TWIN AND WE DO NOT, WHICH IS THE DEFINITION OF
-               BEHIND. Skipping would be silent divergence: the op applied over
-               there and never here, for the session. The composite's own
+            /* THE DRAIN HAD A TWIN AND WE DO NOT, WHICH IS THE DEFINITION OF
+               BEHIND. Skipping would be silent divergence: the op applied to
+               the drain's table and never here, for the session. The composite's own
                `tw_find(h.presented)` catches it only for the PRESENTED surface
                and only on a frame the composite is drawn on -- and `compose` is
                0 on most real frames. */
             if (!t) { sdWhy = "an op names a surface this store never seeded"; goto standdown; }
-            /* CLASSIC++: THE OP SAYS THE GL LANE GAVE THIS TWIN COLOUR, so this
+            /* CLASSIC++: THE OP SAYS THE DRAIN GAVE THIS TWIN COLOUR, so this
                one gets it too, and the open render pass closes because the
                framebuffer this twin draws into is about to change. A twin that
-               HAS colour never loses it short of being dropped, which is the GL
-               lane's lifetime exactly (`twin_colour` only ever creates). */
+               HAS colour never loses it short of being dropped, which is the
+               drain's lifetime exactly (`twin_sprite` and `twin_copy` only ever
+               set `col`). */
             if ((o->col & TAGPU_GUICOL_DST) && !t->colImg) {
                 if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                 if (!tw_colour(d, t)) {
@@ -2381,16 +2380,16 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (o->kind == TAGPU_GUIOP_COPY) {
                 src = tw_find(o->src);
                 if (!src) {
-                    /* OUR STORE HAS FALLEN BEHIND. Ask for the fresh start the
-                       GL consumer asks for in the same situation and stop
-                       drawing until it arrives -- applying the rest would put a
+                    /* OUR STORE HAS FALLEN BEHIND. Ask the producer for a
+                       fresh start and stop drawing until it arrives --
+                       applying the rest would put a
                        wrong picture in a twin that the NEXT frame inherits. */
                     /* THE ASK IS `behind`'s, NOT THIS SITE'S. Raising the
                        producer's flag here and then falling into `standdown`
                        -- which calls `behind`, which raises it again -- is two
                        reseeds per occurrence, and it walks straight past the
-                       cap that stops a recurring condition reseeding the GL
-                       lane's own store at the frame rate. One door. */
+                       cap that stops a recurring condition reseeding the
+                       producer at the frame rate. One door. */
                     if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                     sdWhy = "a copy names a source twin this store never made";
                     goto standdown;
@@ -2405,8 +2404,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (!rpOpen) {
                 VkRenderPassBeginInfo rb = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
                 tw_to(cb, t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-                /* one attachment or two, which is `glDrawBuffers(1)` against
-                   `glDrawBuffers(2)` on the GL lane's one FBO */
+                /* one attachment or two: a twin with colour draws through
+                   its second framebuffer, against `s_twRp2` */
                 rb.renderPass = t->colImg ? s_twRp2 : s_twRp;
                 rb.framebuffer = t->colImg ? t->fb2 : t->fb;
                 rb.renderArea.extent.width = (uint32_t)t->w;
@@ -2415,10 +2414,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 set_viewport(cb, t->w, t->h);
                 rpOpen = 1; cur = t;
             }
-            /* THE STRING SETS NO SCISSOR, which is the GL lane's own
-               behaviour: `twin_string` disables the scissor test outright
-               where the sprite and the copy enable it. Clipping here would cut
-               glyphs the GL twin has. */
+            /* THE STRING SETS NO SCISSOR: its glyph quads are bounded by the
+               twin alone, where the sprite and the copy are scissored to
+               their op box. */
             if (o->kind == TAGPU_GUIOP_STRING) set_scissor(cb, 0, 0, t->w, t->h, t->w, t->h);
             else                               set_scissor(cb, o->l, o->t, bw, bh, t->w, t->h);
             /* THE SCISSOR ABOVE DOES NOT BOUND RECT'S EDGES.
@@ -2429,16 +2427,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
             if (o->kind == TAGPU_GUIOP_CLEAR || o->kind == TAGPU_GUIOP_BAR ||
                 o->kind == TAGPU_GUIOP_RECT) {
-                /* CLEAR: THE GL LANE'S SCISSORED glClear TO COVERAGE 0 -- AND IT
-                   CLEARS BOTH ATTACHMENTS ON A COLOUR TWIN, because
-                   `glClear(GL_COLOR_BUFFER_BIT)` clears every buffer
-                   `glDrawBuffers` named and `twin_colour` left that at two.
-                   Clearing only the index here would leave restored colour
-                   standing under a box the engine erased. */
+                /* CLEAR: THE BOX TO COVERAGE 0 -- AND BOTH ATTACHMENTS ON A
+                   COLOUR TWIN. Clearing only the index here would leave
+                   restored colour standing under a box the engine erased. */
                 /* BAR: the same rect, but the INDEX attachment
                    takes the engine's palette index with coverage 1 instead of
-                   zeros -- `twin_fill` is the GL twin's half of exactly this.
-                   The colour attachment still goes to ZERO on both, and for the
+                   zeros. The colour attachment still goes to ZERO on both, and for the
                    same reason: a solid engine fill has no restored art, so
                    leaving the old colour standing would show it through a box
                    the engine just painted over. The index is `o->fg`, one byte,
@@ -2556,9 +2550,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     dyn[1] = (uint32_t)((VkDeviceSize)drawn * fStride);
                     /* STR_FS WRITES `oCol = vec4(0.0)`, so on a colour twin a
                        string ERASES the restored colour under every glyph it
-                       stamps and leaves it standing between them -- which is
-                       what the GL comment calls the whole difference from
-                       publishing the box's bytes. The two-attachment pipeline
+                       stamps and leaves it standing between them -- one of
+                       the gains the drain's string-op comment (13.4) claims
+                       over publishing the box's bytes. The two-attachment pipeline
                        is how that write lands. */
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                       t->colImg ? s_pipeStr2 : s_pipeStr);
@@ -2581,10 +2575,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     drawn++;
                     continue;
                 }
-                /* `uRestored` / `uSrcHasCol` ARE THE GL LANE'S OWN, carried
+                /* `uRestored` / `uSrcHasCol` ARE THE DRAIN'S DECISION, carried
                    as `TAGPU_GUICOL_ON`. Deriving them here would be asking
-                   `s_colValid && s_atlas.rgb` a second time, of a module that
-                   settled it before the drain -- and the whole hand-over exists
+                   `s_colValid` (tagpu_gui_surf.c) a second time, of a module
+                   that settled it before the drain -- and the whole hand-over exists
                    because a second derivation is a second thing that can drift.
                    A frame whose ops say ON and whose restored atlas never
                    arrived was refused above; this is belt to that brace, and it
@@ -2654,7 +2648,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         switch (o->kind) {
         case TAGPU_GUIOP_RESET:
             /* the retire refusing is the pass stopping, not a drop to shrug
-               off: keeping twins the GL lane has destroyed is divergence */
+               off: keeping twins the producer has reset is divergence */
             if (!tw_reset(d)) goto refuse;
             s_behind = 0;
             break;
@@ -2683,8 +2677,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (!o->alen) break;
             if (ux < 0 || uy < 0 || ux + uw > t->w || uy + uh > t->h) {
                 sdWhy = "a pixel op outside its own twin"; goto standdown; }
-            /* THE SAME INTERLEAVE THE GL LANE DOES: R = the palette index,
-               G = 255 for covered. tagpu_gui_surf.c's twin_upload. */
+            /* THE TWIN'S INTERLEAVE: R = the palette index, G = 255 for
+               covered -- what LAY_FS's `tap` reads (tagpu_gui_surf.c). */
             n = (unsigned)uw * (unsigned)uh;
             idx = h.arena + o->aoff;
             dst = s->stMap + stOff;
@@ -2692,8 +2686,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             tw_to(cb, t, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             copy_rect(cb, s->stage, stOff, t->img, ux, uy, uw, uh);
             stOff += (VkDeviceSize)n * 2;
-            /* AND THE COLOUR UNDER THE BOX GOES WITH IT -- `twin_upload` ends
-               in `twin_col_drop` and this is the same statement: bytes the
+            /* AND THE COLOUR UNDER THE BOX GOES WITH IT: bytes the
                engine published are indexed art by definition, so restored
                colour left standing under them would show through a panel the
                engine has just repainted. */
@@ -2738,7 +2731,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             int si_ = 0;
             int x0 = o->l, y0 = o->t, x1 = o->r, y1 = o->b;
             t = tw_find(o->surf);
-            /* THE SAME REFUSAL EVERY OTHER DRAW MAKES: the GL lane had a twin
+            /* THE SAME REFUSAL EVERY OTHER DRAW MAKES: the drain had a twin
                and this store does not, which is the definition of behind. */
             if (!t) { sdWhy = "an op names a surface this store never seeded"; goto standdown; }
             if (!s_lutHave) { sdWhy = "a tint before the shade table was uploaded"; goto standdown; }
@@ -2882,8 +2875,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        applies NOTHING -- it skips every op waiting for a RESET -- so those
        frames are exactly the ones on which the store is provably NOT level.
        Counting them would let a pass waiting for a fresh start that never
-       comes climb to the threshold, refund the budget, and go on asking the GL
-       ORACLE for a full reseed for the rest of the session with the mute
+       comes climb to the threshold, refund the budget, and go on asking the
+       producer for a full reseed for the rest of the session with the mute
        unable to latch. */
     if (!s_behind && !s_behindMute && s_behindAsks && ++s_goodRun >= BEHIND_GOOD_RUN) {
         s_behindAsks = 0; s_goodRun = 0;
@@ -2895,8 +2888,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     pres = tw_find(h.presented);
     if (!pres || pres->w != h.surfW || pres->h != h.surfH) goto standdown;
-    /* `uColOn` IS THE GL LANE'S AND THE IMAGE UNDER IT HAS TO BE OURS. The two
-       agree by construction -- `TAGPU_GUICOL_DST` is what made both -- so this
+    /* `uColOn` IS THE PRODUCER'S (`colourTwins`) AND THE IMAGE UNDER IT HAS TO
+       BE OURS. The two agree by construction -- `TAGPU_GUICOL_DST` is what made
+       both the drain's `col` mark and our colour image -- so this
        is the belt to that brace, and the alternative to it is compositing
        indexed art through a branch that says it is restored. */
     if (h.colourTwins && !pres->colImg) {
@@ -2916,9 +2910,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        samples it, and it is: this is recorded earlier in the same buffer.
 
        NO FLIP (2.32). The layer is SAMPLED by the composite, not presented, and
-       `QVS` puts quad y = 0 at attachment row 0 under both APIs -- which is
-       what "row 0 is the viewport's TOP" already means on the GL side. Only the
-       composite flips, because only the composite is presented. */
+       `QVS` puts quad y = 0 at attachment row 0 -- which is what "row 0 is the
+       viewport's TOP" means. Only the composite flips, because only the
+       composite is presented. */
     if (shOn) {
         VkRenderPassBeginInfo rb = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         VkClearValue cv;
@@ -3031,9 +3025,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         memset(b, 0, LAY_SZ);
         /* `uColOn` AS `draw_layer` SET IT: the presented twin has a
            colour attachment AND the palette-validity rule says it may be read
-           this frame. `&& pres->colImg` is not redundant -- the GL lane's flag
-           is about ITS twin, and a frame where ours has none would sample the
-           dummy image through a live branch. The two agree by construction and
+           this frame. `&& pres->colImg` is not redundant -- `colourTwins` is
+           the producer's flag, about ITS table, and a frame where our twin has
+           no colour image would sample the dummy image through a live branch. The two agree by construction and
            this is what says so out loud. */
         /* THE OFFSETS ARE THE GENERATED HEADER'S, and the block is 80 bytes.
            `inc/spirv/tagpu_gui_surf.spv.h` prints the table this must match --
@@ -3152,10 +3146,10 @@ int tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         s_layRp = d->rp;
     }
 
-    /* THE GL LANE'S OWN VIEWPORT, turned over -- and this pass is one of the
-       THREE that turn it over. GL's y counts from the BOTTOM of the window and
-       Vulkan's from the top, and LAY_VS writes `1 - a.y*2`, which is GL's
-       window convention: so the negative height is what puts its row 0 back at
+    /* THE FRAME'S VIEWPORT, turned over -- and this pass is one of the
+       THREE that turn it over. The viewport's y counts from the BOTTOM of the
+       window and Vulkan's from the top, and LAY_VS writes `1 - a.y*2`, a y-up
+       clip convention: so the negative height is what puts its row 0 back at
        attachment row 0 (the file header). It is NOT a rule for every presented
        pass on this lane. The world passes are presented too and write the
        engine's screen-space y, which grows downward, so they take a positive
@@ -3201,7 +3195,7 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     s_downOwed = 0;
     s_drawThis = 0; s_abFrame = 0;
     s_presented = 0;
-    /* nothing is kept once nothing asks for it -- the GL half's copy of the op
+    /* nothing is kept once nothing asks for it -- the drain's copy of the op
        stream is the largest thing this lane costs when it is not drawing */
     tagpu_gui_mirror_want(0);
 

@@ -18,40 +18,40 @@
 #include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the restore request */
 
 int  tagpu_feat_armed(unsigned frame_counter);   /* re-reads tagpu_feat.on (30f) */
-int  tagpu_feat_on(void);                        /* armed state, no re-read      */
 /* walk the sweep rect and build this frame's quads; returns the vertex count
    built (0 = nothing to draw, which is all the caller uses it for) */
 int  tagpu_feat_gather(const TAGPU_FXVIEW* v);
-/* draw into the currently bound FBO (depth test on; shadows without depth
-   writes, bodies with). Uses its own program/VAO and leaves the program,
-   VAO and texture bindings dirty. */
+/* draws nothing: latches this frame's `tagpu_feat.ab` claim and publishes the
+   gather for the Vulkan pass (tagpu_feat_handover below), which draws the
+   shadows without depth writes and the bodies with. */
 void tagpu_feat_render(const TAGPU_FXVIEW* v);
 
 /* ---- the Vulkan edition of this pass (the second world pass)
    ----------------------------------------------------------------------------
 
-   Everything the GL lane just drew this pass FROM, so that the Vulkan lane
-   draws the same thing rather than a second implementation of it. Nothing here
-   is re-derived: the vertices are the two arrays the gather filled and the GL
-   upload took, the uniforms are the numbers the GL draw passed, the texels are
-   the bytes each texture was uploaded from, and the shader is the same GLSL
-   through tools/spirv-gen.py.
+   Everything this pass built this frame, so that tagpu_vk_feat.c draws it
+   rather than a second implementation of it. Nothing here is re-derived: the
+   vertices are the two arrays the gather filled, the uniforms are the view's
+   numbers, the texels are the CPU-side bytes (the atlas's mirror and the
+   tables below), and the shader is tagpu_feat.c's GLSL through
+   tools/spirv-gen.py.
 
    HANDED OVER EXACTLY ONCE, like the scaffold's, so one frame's geometry can
    never be drawn twice; a frame this pass skipped hands over nothing and the
-   Vulkan lane draws nothing, which is what the GL lane did.
+   Vulkan pass draws nothing.
 
    THE POINTERS ARE THIS FILE'S AND THE ATLAS MODULE'S, and they are valid until
-   the next frame rebuilds them. That is safe for one reason worth naming: both
-   lanes run on the RENDER THREAD, and the whole of the native pass -- this one
-   included -- happens earlier in the same iteration of render_ogl.c's loop than
-   the tagpu_vk_frame that consumes this. The game thread never touches them. */
+   the next frame rebuilds them. That is safe for one reason worth naming: the
+   gather and the Vulkan pass both run on the RENDER THREAD, and the whole of
+   the native pass -- this one included -- happens earlier in the same
+   iteration of render_vk.c's loop than the tagpu_vk_frame that consumes this.
+   The game thread never touches them. */
 
-/* FLOATS PER VERTEX, AND THE ATTRIBUTE TABLE, DEFINED ONCE FOR BOTH LANES.
-   A vertex layout copied into a second file is two things that can drift, and
-   the whole worth of a 0-px comparison is that only the rasteriser differs.
-   Each entry is {location, components, byte offset}; the GL VAO and the Vulkan
-   VkVertexInputAttributeDescription array are both built from it. */
+/* FLOATS PER VERTEX, AND THE ATTRIBUTE TABLE, DEFINED ONCE: the gather that
+   writes the vertices and the pass that reads them share this header, and a
+   vertex layout copied into a second file is two things that can drift. Each
+   entry is {location, components, byte offset}; tagpu_vk_feat.c builds its
+   VkVertexInputAttributeDescription array from it. */
 #define TAGPU_FEAT_VST    10       /* x,y,enc, u,v, ck,mode, wx,wz, lam */
 #define TAGPU_FEAT_NATTR  5
 #define TAGPU_FEAT_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28}, {4,1,36} }
@@ -61,8 +61,8 @@ typedef struct TAGPU_FEATHAND {
        -- see there, and tagpu_terr.h for the failure it bounds. */
     unsigned frame;
 
-    /* The geometry, in the GL lane's own two buckets and its own draw order:
-       shadows first (they test depth and never write it), bodies second. */
+    /* The geometry, in the gather's two buckets and in draw order: shadows
+       first (they test depth and never write it), bodies second. */
     const float* shadow;  int nShadow;     /* vertices, TAGPU_FEAT_VST floats each */
     const float* body;    int nBody;
 
@@ -77,9 +77,9 @@ typedef struct TAGPU_FEATHAND {
     int   restored, lit, fog;
     float fogOrgX, fogOrgY, fogCols, fogRows;
 
-    /* The texels, as bytes rather than as GL names -- a second backend cannot
-       read a GL texture. Each carries the serial that says when it last
-       changed, so the Vulkan lane re-uploads on a change and not per frame. */
+    /* The texels, as CPU-side bytes. Each carries the serial that says when
+       it last changed, so the Vulkan pass re-uploads on a change and not per
+       frame. */
     const unsigned char*  atlas;      /* dim x dim R8, tagpu_gaf.c's mirror  */
     int                   atlasDim;
     /* THE ROWS IN USE, which is what a second backend needs to upload and is
@@ -91,9 +91,8 @@ typedef struct TAGPU_FEATHAND {
     unsigned              atlasSerial;
 
     /* ...AND THE WORK ITSELF IS THE ONLY FORM IT COMES IN. There is no
-       read-back picture of the twin (opengl32.dll is never loaded):
-       the twin reaches a consumer as the list below and is painted on the
-       device.
+       restored picture on the CPU side: the restored copy of the atlas reaches
+       a consumer as the list below and is painted on the device.
 
        IT IS AN APPEND-ONLY LIST WITH A CURSOR, not terrain's whole list per
        serial, because a feature atlas is a lazy QUEUE: tagpu_gaf.c adds one
@@ -101,9 +100,9 @@ typedef struct TAGPU_FEATHAND {
        index into `restoreFrames` and takes `[cursor, restoreN)`; a frame on
        which it takes nothing costs nothing, because the entries are still
        there on the next one. `restoreGen` is the discontinuity a cursor cannot
-       survive -- the arm, a recycle, a repack, a GL context loss, a palette
-       move, a GL job made over a fresh twin
-       -- and a consumer that sees a new one drops its job and starts at 0.
+       survive -- the arm, an overflow restart, a recycle, a repack, the atlas
+       being laid out afresh, a palette move -- and a consumer that sees a new
+       one drops its job and starts at 0.
        `restoreRepaint` is 1 only for the palette-move generation, where the
        destination keeps what it holds and is recoloured in place.
 
@@ -130,18 +129,18 @@ typedef struct TAGPU_FEATHAND {
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame -- the engine's own viewport rect.
-       The GL lane is clipped to it and so must the Vulkan one be, and the two
+       The Vulkan pass is clipped to it when `scissorOn` says so, and the two
        coordinate systems disagree about which way y runs: see
        tagpu_vk_feat.c, where the flip is done and argued. */
     int   vpL, vpT, vw, vh;
-    int   scissorOn;                  /* the GL lane actually enabled it     */
-    int   ss;                         /* the FBO's supersample factor        */
+    int   scissorOn;                  /* the native pass enabled the clip    */
+    int   ss;                         /* the world target's supersampling   */
 
     /* 1 on the ONE frame `tagpu_feat.ab` latched its claim and
        `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane
        captures THAT frame rather than whichever one its own lever poll landed
-       on. It does NOT mean a capture file was written -- there is no GL half
-       to write one. */
+       on. It does NOT mean a capture file was written: the Vulkan pass
+       writes it, and only when it has a target to read. */
     int   ab;
 } TAGPU_FEATHAND;
 

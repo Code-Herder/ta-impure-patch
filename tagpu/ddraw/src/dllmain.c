@@ -35,6 +35,7 @@
 #include "versionhelpers.h"
 #include "delay_imports.h"
 #include "keyboard.h"
+#include "tagpu_log.h"
 
 
 /* export for cncnet cnc games */
@@ -62,6 +63,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
             cfg_load();
             return TRUE;
         }
+
+        /* tagpu: the log sink (tagpu_log.h) before anything that logs -- cfg_load does.
+           After the config tool's return above, so opening the tool never rotates the
+           player's logs. */
+        tagpu_log_init();
 
 #ifdef _DEBUG 
         dbg_init();
@@ -97,10 +103,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         /* tagpu: Phase B own-the-draw — skip the engine's software rasterise of
            the per-unit composite for chosen types (GPU thread paints instead).
-           No-op unless "tagpu_owndraw.on" exists; byte-match guarded. Six sites,
+           No-op unless "tagpu_owndraw.on" exists; byte-match guarded. Five sites,
            all disjoint from the suppress/tracer detours: the two rasterisers
-           0x459830/0x459C70, the build-state effect 0x458DD0, the three
-           composite-wipe sites 0x459338/0x45958C/0x4594DB, and the two
+           0x459830/0x459C70, the build-state effect 0x458DD0, and the two
            structure-shadow branches 0x4592BF/0x459522. EVERY ONE OF THEM
            DECIDES PER DRAW against a flag a live lane sets — installing them
            suppresses nothing. */
@@ -145,7 +150,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            own cursor, into its own surface, which is where the reference frame
            wants it. */
 
-        /* tagpu: the flip observer AND the GL UI renderer's leaves (Phase E,
+        /* tagpu: the flip observer AND the UI renderer's leaves (Phase E,
            tagpu_gui.h). TWO INSTALLS: the observer of the flip 0x4C63A0 goes
            in whenever the engine's bytes match there, with NO trigger, because
            it is the only host of the on-demand trigger family and therefore of
@@ -332,8 +337,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         TRACE("cnc-ddraw DLL_PROCESS_DETACH\n");
 
-        /* tagpu: every other thread is gone, so the store is written without
-           waiting on its lock (tagpu_settings.h) */
+        /* tagpu: every other thread is gone, so neither the log (tagpu_log.h) nor the
+           store (tagpu_settings.h) waits on its lock from here */
+        tagpu_log_detaching();
         tagpu_settings_detaching();
         cfg_save();
         tagpu_settings_final();

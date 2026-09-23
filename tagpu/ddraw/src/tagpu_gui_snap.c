@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include "tagpu_ui.h"
+#include "tagpu_log.h"
 
 #define UI_TRIGGER  "tagpu_ui.trigger"
 #define UI_OUT      "tagpu_ui.json"
@@ -84,8 +85,7 @@
 
 static void ulog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* Committed, not guard/no-access. A wrong pointer must cost a log line, never

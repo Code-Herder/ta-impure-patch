@@ -1120,7 +1120,7 @@ could pair the new block with the old set's descriptor — a grid read at the wr
 `tagpu_reclaim` exports the fence as `pass_stamp`/`pass_passed`, with the trap stated in the
 header: both counters start at 0 and stay there when the install did not happen, so
 `pass_passed` answers **true** from the first call and a caller that does not check `armed()` first
-gets an immediate unfenced free. `fogw_retire` checks it and strands instead.
+gets an immediate unfenced free. `fogw_retire` checks it and strands instead. (The export is gone since 2026-09-23: `fogw_retire` was its only caller and left with the frame packet's landing 4b.)
 
 **Measured** on `200v200` / Two Continents:
 

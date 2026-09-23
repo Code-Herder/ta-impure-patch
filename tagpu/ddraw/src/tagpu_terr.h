@@ -6,7 +6,7 @@
    The engine's pass is 0x483FA0(OFFSCREEN* ctx): a flat grid blit of 8bpp
    tiles indexed by a u16 tile map, with no height, no LOS and no depth
    (research/notes/terrain-depth.md 2). This module reproduces it from the same
-   two stores, into the native pass's FBO, at a depth key BELOW every other
+   two stores, into the world target, at a depth key BELOW every other
    band — terrain is the frame's implicit far plane.
 
    Because it covers the whole viewport it also inherits the fog overlay's
@@ -21,46 +21,12 @@
 #include "tagpu_restoreglsl.h"  /* TAGPU_RGLSL_FRAME -- a CPU struct, no GL in it */
 
 int  tagpu_terr_armed(unsigned frame_counter);   /* re-reads tagpu_terr.on (30f) */
-int  tagpu_terr_on(void);
 /* build this frame's quads; returns the CELL count (0 = nothing to draw) —
    one instanced quad each, see the vertex shader in tagpu_terr.c */
 int  tagpu_terr_gather(const TAGPU_FXVIEW* v);
 /* GATHER AND HAND OVER: despite the name it draws nothing; it finishes the
    frame's hand-over and publishes it. */
 void tagpu_terr_render(const TAGPU_FXVIEW* v);
-
-/* Classic++ shadows (tagpu_shadow.c, renderers.md 2.8): the heightfield as a
-   caster. One world-space vertex per 16-px grid point of the height grid,
-   built with it, row-major indices.
-
-   IT DRAWS NOTHING. What it does is CLAMP the requested cell rows r0..r1 to
-   the mesh and PUBLISH the mesh and that range, and the return is "the range
-   is valid and `out` was filled", not "something was drawn".
-
-   `out`, when given, comes back with THE CPU MIRROR OF THE MESH AND THE
-   CLAMPED RANGE (Phase G) -- the very buffers build_hills filled,
-   retained instead of freed while the Vulkan lane is armed -- so the Vulkan
-   shadow pass draws the same indices rather than re-deriving the clamp.
-   Zeroed, and `v`/`idx` left NULL, whenever there is no mirror; pass NULL when
-   there is no Vulkan lane to feed. The pointers are the terrain module's and
-   live until the next map change -- a consumer takes them through a hand-over
-   that carries the frame they were published on.
-
-   NOTHING CALLS THIS: there is no call site at all.
-
-   THE COST THIS WASTES is the heightfield CPU mirror `s_hMeshV`/`s_hMeshI` --
-   19.3 MB on Two Continents by `build_hills`' arithmetic, built
-   unconditionally -- because this function is its ONLY reader, so the two go
-   together. `TAGPU_TERRHILLS` has no consumer outside this header either. */
-typedef struct TAGPU_TERRHILLS {
-    const float*    v;          /* nv * 3 floats: the world point per vertex */
-    size_t          nv;
-    const unsigned* idx;        /* ni indices, cell-row major                */
-    size_t          ni;
-    unsigned        serial;     /* bumped when the mesh is rebuilt           */
-    unsigned        firstIndex, indexCount;   /* the range actually drawn    */
-} TAGPU_TERRHILLS;
-int  tagpu_terr_hills_draw(int r0, int r1, TAGPU_TERRHILLS* out);
 
 /* RESERVE FOR THIS VIEWPORT, then trim a would-be gather rect (game px) to
    what this pass can actually draw in one frame. Called once a frame by
@@ -106,25 +72,26 @@ void tagpu_terr_clamp_span(int vw, int vh, int* w, int* h);
    frame as "an overlay the engine still draws, and we must not cover it" */
 int  tagpu_terr_key(void);
 
-/* ---- the Vulkan edition of this pass (Phase G, the THIRD world pass)
+/* ---- the Vulkan edition of this pass
    ----------------------------------------------------------------------------
 
-   Everything the GL lane just drew this pass FROM, so that the Vulkan lane
-   draws the same thing rather than a second implementation of it. Nothing here
-   is re-derived: the instances are the array the gather filled and the GL
-   upload took, the uniforms are the numbers the GL draw passed, the texels are
-   the bytes each texture was uploaded from, and the shader is the same GLSL
-   through tools/spirv-gen.py.
+   Everything the gather built for this pass, so that tagpu_vk_terr.c draws it
+   without re-deriving any of it: the instances are the array the gather
+   filled, the uniforms are the numbers the gather computed, the texels are
+   buffers this file owns (the atlas, the height grid, the fog copy) and the
+   live palette, and the shader is tagpu_terr.c's GLSL through
+   tools/spirv-gen.py.
 
    HANDED OVER EXACTLY ONCE, like the scaffold's and the feature pass's, so one
    frame's geometry can never be drawn twice; a frame this pass skipped hands
-   over nothing and the Vulkan lane draws nothing, which is what the GL lane did.
+   over nothing and the Vulkan pass draws no terrain.
 
    THE POINTERS ARE THIS FILE'S, AND THEY ARE VALID FOR THE FRAME THAT
-   PUBLISHED THEM AND NO LONGER. Both lanes run on the RENDER THREAD and the
-   whole of the native pass -- this one included -- happens earlier in the same
-   iteration of render_ogl.c's loop than the tagpu_vk_frame that consumes this,
-   so the game thread never touches them and there is no lock to take.
+   PUBLISHED THEM AND NO LONGER. Producer and consumer run on the RENDER THREAD
+   and the whole of the native pass -- this one included -- happens earlier in
+   the same iteration of render_vk.c's loop than the tagpu_vk_frame that
+   consumes this, so the game thread never touches them and there is no lock to
+   take.
 
    THAT IS NOT BY ITSELF ENOUGH. `ensure_atlas` FREES `s_atlasMirror`
    and `build_height` frees `s_hMirror` whenever the map changes, so a
@@ -193,19 +160,18 @@ typedef struct TAGPU_TERRHAND {
        written and that has never left VK_IMAGE_LAYOUT_UNDEFINED. */
     int   restored, lit, lambert, fog, shadowOn;
     /* THE REST OF THE CAST-SHADOW BLOCK, and it is only meaningful while
-       `shadowOn` is 1 -- tagpu_shadow_apply writes uShadowOn and then RETURNS
-       when no map is live, so on such a frame the GL program keeps whatever it
-       had (zero, for a freshly linked one) and these are published as zero to
-       match. The numbers are the shadow module's own: the matrix it drew the
-       map with, the sun the knobs name, uShScale = (texel, depth span, 1/res),
-       and the two shading scalars. */
+       `shadowOn` is 1. NOTHING PRODUCES IT: tagpu_terr.c publishes `shadowOn`
+       0 and never writes these, so they reach the consumer as zero (see
+       `terr_publish`). What they would carry: the matrix the shadow map was
+       drawn with, the sun the knobs name, uShScale = (texel, depth span,
+       1/res), and the two shading scalars. */
     float shadowMat[16], shadowSun[3], shScale[3], penumbra, shade;
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float hDimW, hDimH;       /* uHDim: 0 while there is no usable grid */
     float sun[3], amb, norm;
 
-    /* The texels, as bytes rather than as GL names -- a second backend cannot
-       read a GL texture. Each carries the serial that says when it last
+    /* The texels, as bytes: the Vulkan pass uploads them into images of its
+       own. Each carries the serial that says when it last
        changed, so the Vulkan lane re-uploads on a change and not per frame.
        The atlas and the height grid are built ONCE PER MAP and their buffers
        are RETAINED rather than freed (tagpu_terr.c `s_mirrorWant`), which is
@@ -224,8 +190,7 @@ typedef struct TAGPU_TERRHAND {
        centre-out rank over the live tile map. Both are engine-memory reads, so
        both belong on this side of the hand-over; what crosses is their result.
        `restoreFrames` therefore points at the list `restore_publish` built,
-       in the order it built it. There is no second lane to compare it against
-       byte-for-byte.
+       in the order it built it.
 
        LIFETIME: the frame list is retained for the map, not for the frame, but
        a consumer must still copy on the frame it takes it (as
@@ -258,18 +223,18 @@ typedef struct TAGPU_TERRHAND {
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame -- the engine's own viewport rect.
-       The GL lane is clipped to it and so must the Vulkan one be, and the two
-       coordinate systems disagree about which way y runs: see
-       tagpu_vk_feat.c, where the flip is done and argued. */
+       The Vulkan draw must be clipped to it, and the two coordinate systems
+       disagree about which way y runs: see tagpu_vk_feat.c, where the flip is
+       done and argued. */
     int   vpL, vpT, vw, vh;
-    int   scissorOn;                  /* the GL lane actually enabled it     */
-    int   ss;                         /* the FBO's supersample factor        */
+    int   scissorOn;                  /* the native pass has the clip on     */
+    int   ss;                         /* the world's supersample factor      */
 
     /* 1 on the ONE frame `tagpu_terr.ab` latched its claim and
        `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane
        captures THAT frame rather than whichever one its own lever poll landed
-       on. It does NOT mean a capture file was written -- there is no GL half
-       to write one. */
+       on. It does NOT mean a capture file was written -- the seam writes it
+       after the draw. */
     int   ab;
 } TAGPU_TERRHAND;
 

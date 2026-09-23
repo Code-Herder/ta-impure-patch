@@ -17,6 +17,7 @@
 #include "tagpu_menu.h"
 #include "mouse.h"
 #include "tagpu_zoom.h"
+#include "tagpu_log.h"
 
 #define SHIELD_TRIGGER  "tagpu_shield.on"
 
@@ -31,8 +32,7 @@ static volatile LONG s_downpolls[256];  /* ...and was told "down" */
 
 static void slog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static BOOL trigger_present(void)
@@ -259,10 +259,11 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     else
     {
         /* An injected point is the engine's LOGICAL grid with no pointer
-           behind it. Dropping the recorded client point is what keeps the GL
-           UI renderer's cursor on the injected position instead of leaving it
-           at the human's real pointer, where it would disagree with every
-           gadget the engine thinks is under the mouse. */
+           behind it. Dropping the recorded client point is what keeps the UI
+           layer's cursor (tagpu_gui_surf.c sharp_cursor) on the injected
+           position instead of leaving it at the human's real pointer, where
+           it would disagree with every gadget the engine thinks is under the
+           mouse. */
         mouse_forget_client();
     }
 

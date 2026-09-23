@@ -2,7 +2,9 @@
 #define TAGPU_RESTORE_GLSL_H
 /* The GLSL restorer's shaders -- the unditherer's residual CNN as fragment
    passes (research/notes/renderers.md 4c). This header is the ONE copy of the
-   shader text: tagpu_restoreglsl.c compiles it under "#version 330 core", and
+   shader text, and no C file includes it: tools/spirv-gen.py reads the macros
+   under "#version 330 core" and turns them into the SPIR-V the Vulkan restorer
+   runs (inc/spirv/tagpu_restore_glsl.spv.h, tagpu_vk_restore.c), and
    tools/tascene extracts the same macros into the pack for the browser lab,
    which compiles them under "#version 300 es". Neither side may carry its own
    edition. Two prefix lines are supplied by the compiler side, not here:
@@ -58,15 +60,15 @@
 /* MIP: one level of the restored twin from the level above it, as an EXACT
    INTEGER 2x2 BOX AVERAGE.
 
-   WHY THIS EXISTS AT ALL, when glGenerateMipmap is one call: the twin is
-   sampled GL_LINEAR_MIPMAP_LINEAR, so a second backend that paints level 0
-   must produce the same levels 1.. -- and gpu-status 2.45 measured what this
-   driver's glGenerateMipmap actually does. It is an unweighted 2x2 box average
+   WHY A SHADER AND NOT THE DRIVER'S OWN REDUCTION: the twin is sampled
+   trilinear, so levels 1.. are part of the picture, and gpu-status 2.45
+   measured what a driver's reduction actually does (glGenerateMipmap, on the
+   OpenGL renderer this replaced). It is an unweighted 2x2 box average
    (alpha-weighting and gamma are ruled out by maximum errors of 57 and 54
    levels) with a rounding rule no candidate reproduced exactly, and every
    candidate within +/-1 per RGB channel. A per-driver +/-1 is not something a
-   note can pin down, so BOTH LANES DO THE REDUCTION THEMSELVES and the levels
-   are identical by construction rather than by driver luck.
+   note can pin down, so THE REDUCTION IS OURS and the levels are the same bytes
+   on every driver by construction rather than by driver luck.
 
    IT IS INTEGER ARITHMETIC ON EXACT VALUES, which is what makes that claim
    hold on any conformant driver: a texel of an RGBA8 texture reads as exactly
@@ -78,15 +80,16 @@
    THREE THINGS THE CALLER OWES IT, and they are the whole reason the fetch is
    exact rather than nearly exact:
 
-     * the SOURCE LEVEL, through GL_TEXTURE_BASE_LEVEL and GL_TEXTURE_MAX_LEVEL
-       both set to it. There is no level argument here because the destination
-       is another level of the SAME texture, and clamping the sampler to the one
-       level being read is what keeps that out of a feedback loop.
-     * the FILTER pinned to GL_NEAREST for the duration. With a non-mipmap
-       minification filter only the base level is ever sampled, so the fetch
-       cannot drift to a neighbouring level however the implementation computes
-       its level of detail -- and NEAREST returns the texel itself rather than a
-       bilinear blend that merely happens to weight one texel 1.0.
+     * the SOURCE LEVEL, through an image view that names that level alone.
+       There is no level argument here because the destination is another level
+       of the SAME image, attached through a view of its own level, and a
+       source view that cannot reach the level being written is what keeps that
+       out of a feedback loop with no copy.
+     * a NEAREST sampler with maxLod 0. Only the one level the view names is
+       ever sampled, so the fetch cannot drift to a neighbouring level however
+       the implementation computes its level of detail -- and NEAREST returns
+       the texel itself rather than a bilinear blend that merely happens to
+       weight one texel 1.0.
      * the source's WIDTH in `uSrcDim` rather than textureSize(). Both would
        work, but the uniform says in the C what the shader reads, and it is a
        power of two here, so 1.0 / uSrcDim and every texel centre are exact in
@@ -94,8 +97,8 @@
 
    `uSrcDim` is one int because these twins are square (tagpu_gaf_mip_chain
    takes one dimension for the same reason), and the caller refuses the whole
-   chain rather than reducing an odd level: GL's own rule for an odd level is a
-   weighted three-tap, not a 2x2 average, and this shader must not pretend
+   chain rather than reducing an odd level: an odd level needs a weighted
+   three-tap, not a 2x2 average, and this shader must not pretend
    otherwise. */
 #define TAGPU_RESTORE_MIP_FS \
     "uniform sampler2D uSrc;\n" \

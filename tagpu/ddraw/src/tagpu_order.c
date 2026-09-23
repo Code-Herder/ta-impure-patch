@@ -123,7 +123,7 @@
    WHAT WE DO DIFFERENTLY, AND WHY IT IS ON PURPOSE.
 
    - Circles are real arcs at a segment count chosen for the zoom, not sixteen
-     chords, and lines are one SCREEN pixel wide (glLineWidth(ss)) rather than
+     chords, and lines are one SCREEN pixel wide (line width `ss`) rather than
      one game pixel magnified.
    - Route dots and the waypoint sprite are drawn procedurally — a round dot
      and a pulsing crosshair — in the ink read out of the GAF frame the engine
@@ -158,6 +158,7 @@
 #include "tagpu_markown.h"
 #include "tagpu_gaf.h"
 #include "tagpu_native.h"
+#include "tagpu_log.h"
 
 /* ---- engine layout ---- */
 #define TA_MAINPP     0x00511DE8u
@@ -275,8 +276,7 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ---- arming ---------------------------------------------------------- */
@@ -286,8 +286,6 @@ static int s_log = 0, s_passive = 0, s_trace = 0;
 static int s_build = 1, s_dots = 1, s_circle = 1, s_sprite = 1, s_ranges = 1;
 static int s_labels = 1;
 static unsigned s_armCheck = 0;
-
-int tagpu_order_on(void) { return s_armed == 1; }
 
 int tagpu_order_armed(unsigned frame_counter)
 {

@@ -1,12 +1,11 @@
 /* tagpu_vk.c -- the Vulkan backend. API and contract: tagpu_vk.h.
 
    ------------------------------------------------------------- the window ---
-   COEXISTENCE WITH A GL CONTEXT ON ONE WINDOW
+   THE SURFACE GOES STRAIGHT ON THE GAME WINDOW
    [MEASURED 2026-09-15, roadmap §G19a].
-   The probe brings GL up the way cnc-ddraw's GL renderer did -- `GetDC(hwnd)`,
-   a `SetPixelFormat` on it and a 3.3 core context on that DC -- and then tries
-   all three routes, and the second script asks the question that decides it:
-   after the route, does a GL frame still REACH THE SCREEN?
+   The coexistence probe measured a Vulkan surface beside the OpenGL renderer
+   this backend replaced -- a 3.3 core context on `GetDC(hwnd)` -- over four
+   routes, and asked of each whether a GL frame still REACHED THE SCREEN:
 
      route                                    wine 9.0            Proton 11
      A  same HWND, GL context left current    API ok, PIXELS DEAD   ok
@@ -17,25 +16,15 @@
      D  route 3: Vulkan on its OWN            ok                    ok
         top-level window
 
-   THIS FILE PUTS THE SURFACE STRAIGHT ON THE GAME WINDOW, which is the
-   table's route A, and the row above marks route A PIXELS DEAD on wine. THE
-   REASON THAT IS SAFE HERE IS NOT IN THE TABLE: route A's failure is
-   winevulkan taking an HWND over so that GL can never draw to it again, and on
-   this path THERE IS NEVER A GL CONTEXT IN THE PROCESS to lose.
+   THIS FILE IS ROUTE A, AND "PIXELS DEAD" IS THE GL HALF'S VERDICT. Routes A
+   and B return VK_SUCCESS for every call and present 10 of 10 Vulkan frames;
+   what dies is OpenGL: once winevulkan has put a surface on an HWND, GL can
+   never draw to it again for the life of the process, though every GL call
+   still succeeds and the window keeps showing Vulkan's last frame. This
+   process creates no GL context, so there is nothing on the window to lose.
    `renderer=vulkan` is dispatched at `dd.c` and cannot change afterwards. The
    table matters again for the out-of-process 64-bit renderer, which will own a
    window of its own.
-
-   THE API LIES, AND THAT IS THE POINT OF THE SECOND SCRIPT. Routes A and B
-   return VK_SUCCESS for every call, present 10 of 10 frames, and then accept
-   every GL call afterwards: `SwapBuffers` returns TRUE and `glGetError` is
-   clean. The window keeps showing Vulkan's last frame anyway. Measured in the
-   game as well: with the lever armed and then cleared, the window stayed
-   magenta while `tacli glshot` read 168 distinct colours off the GL framebuffer
-   -- GL rendering correct frames that nothing would ever see -- and it SURVIVED
-   A FULL VIDEO-MODE CHANGE and the new GL context that comes with it. Once
-   winevulkan has put a surface on an HWND, that HWND is finished for GL for
-   the life of the process.
 
    WHAT IS NOT ESTABLISHED, and it is the honest limit: every row of that table
    is the linux NVIDIA ICD under wine. No Windows box has run it. The cell that
@@ -124,11 +113,8 @@
    present falls back to the discrete default and logs that it did.
 
    WHAT THE ROW CANNOT DO, stated in the UI and not hidden: it binds the VULKAN
-   device only. OpenGL cannot be retargeted in-process -- `WGL_NV_gpu_affinity`
-   is Quadro-only -- so under the GL lane the GPU is a launcher-level setting
-   (`DRI_PRIME` / `__NV_PRIME_RENDER_OFFLOAD` through tacli's `Instance.env()`,
-   or the per-application driver profile on Windows). The row is greyed when the
-   Vulkan lane is not armed, for exactly that reason. */
+   device only, so it is greyed when the Vulkan lane is not armed
+   (`renderer=gdi`), where no device is being chosen. */
 
 /* VK_NO_PROTOTYPES: every entry point here is resolved through
    vkGetInstanceProcAddr / vkGetDeviceProcAddr and held in a variable of the
@@ -144,6 +130,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tagpu_log.h"
 
 #include "hook.h"
 #include "tagpu_vk.h"
@@ -159,27 +146,26 @@
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_restore.h"
 #include "tagpu_vk_unit.h"
-#include "tagpu_vk_hires.h"
 #include "tagpu_vk_mark.h"
 #include "tagpu_vk_shot.h"
 
 #define ON_FILE    "tagpu_vk.on"
 /* THE CONTROL, and the module needs one because half of it runs with the lever
    off. The GPU enumeration is deliberately not gated on `tagpu_vk.on` -- the
-   picker outlives the lane -- so an instance that wants the GL build's exact
-   behaviour, thread for thread and file for file, has to be able to say so.
+   picker outlives the lane -- so an instance that wants none of this module,
+   thread for thread and file for file, has to be able to say so.
    `tagpu_vk.off` is that: with it present nothing in this file runs, the
    enumeration worker included, and the row plates whatever the cache last
    said. It is what an A/B against a DLL without the lane arms. */
 #define OFF_FILE   "tagpu_vk.off"
-/* THE A/B. `tagpu_fps.c` owns the lever (`tagpu_fps.ab`): it
-   clears the GL frame to black, writes `tagpu_fps_gl.ppm` and hands the flag
+/* THE A/B. `tagpu_fps.c` owns the lever (`tagpu_fps.ab`): it hands the flag
    over with the vertices, and this file writes `tagpu_fps_vk.ppm` out of the
-   swapchain image it presents THAT frame. Set `color=0,0,0` in the lever file
-   so the two backgrounds match, or the comparison is of two different fields
-   with the same text on them. */
-/* ONE FILE PER PORTED PASS, because each pass has its own GL twin and its own
-   lever. `s_abPath` below carries whichever one claimed the pending frame. */
+   swapchain image it presents THAT frame. Set `color=0,0,0` in `tagpu_vk.on`
+   so the background is a known field, or two captures from two builds are
+   of different fields with the same text on them. */
+/* ONE FILE PER PORTED PASS, because each pass has its own lever and its
+   capture is diffed alone. `s_abPath` below carries whichever one claimed the
+   pending frame. */
 #define AB_GUI     "tagpu_gui_vk.ppm"
 #define AB_FPS     "tagpu_fps_vk.ppm"
 #define AB_SCAF    "tagpu_scaffold_vk.ppm"
@@ -231,13 +217,11 @@ static void vklog(const char* fmt, ...)
 {
     char b[512];
     va_list ap;
-    FILE* f;
     va_start(ap, fmt);
     _vsnprintf(b, sizeof b - 1, fmt, ap);
     va_end(ap);
     b[sizeof b - 1] = 0;
-    f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "vk: %s\n", b); fclose(f); }
+    tagpu_logf("vk: %s", b);
 }
 
 static int exists(const char* p) { return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES; }
@@ -391,9 +375,10 @@ typedef struct {
     int              zclipok;              /* VK_EXT_depth_clip_control, -1..1 z */
     /* samplerAnisotropy, a CORE feature bit rather than an extension, and the
        largest ratio this device will apply. The Classic++ restored twins are
-       the only textures this fork filters at all, and tagpu_gaf.c asks GL for
-       4x on them -- so a lane without this draws minified restored art
-       differently from its own oracle. */
+       the only textures this fork filters at all, and they are specified at
+       the Classic++ `aniso` knob's ratio (4x by default, tagpu_classicpp.c)
+       -- so a lane without this draws minified
+       restored art differently from its specification. */
     int              anisook;
     float            maxAniso;
     int              wideok;
@@ -667,9 +652,9 @@ void tagpu_vk_own_present(void)
     vklog("this backend owns the present - the surface goes on the game window");
 }
 
-/* 1 when this backend owns the present, i.e. there is no GL context in the
-   process. Every GL draw in the tree is gated on its negation, while the
-   gather half beside it runs unconditionally. Safe from any thread -- the latch is interlocked. */
+/* 1 when this backend owns the present, i.e. a Vulkan pass will run in this
+   process. A pass pays for a mirror only a Vulkan consumer reads when this is
+   1, while its gather runs unconditionally. Safe from any thread -- the latch is interlocked. */
 int tagpu_vk_owns_present(void)
 {
     return s_ownWin != 0;
@@ -690,10 +675,7 @@ int tagpu_vk_armed(void)
        exactly the configuration where the lane is the ONLY renderer -- and
        `tagpu_menu.c`'s `vrow_greyed(VD_GPU)` would grey the GPU picker, the
        row whose whole purpose is choosing the Vulkan device, in the only mode
-       where Vulkan draws.
-
-       It also re-arms the GL halves' mirror latches (`tagpu_fx.c`,
-       `tagpu_feat.c`, `tagpu_terr.c`, `tagpu_posebake.c`, `tagpu_posedraw.c`). */
+       where Vulkan draws. */
     return s_ownWin || (exists(ON_FILE) && !exists(OFF_FILE));
 }
 
@@ -930,8 +912,8 @@ static VkInstance vk_instance(void)
 
     /* VK_KHR_get_physical_device_properties2, WHEN THE LOADER HAS IT, AND IT IS
        A DEPENDENCY RATHER THAN A WANT. This instance asks for Vulkan 1.0, where
-       VK_EXT_line_rasterization -- which the effects pass needs for GL's own
-       line rule -- depends on it, and chaining
+       VK_EXT_line_rasterization -- which the effects pass needs for the
+       diamond-exit line rule -- depends on it, and chaining
        VkPhysicalDeviceLineRasterizationFeaturesEXT into VkDeviceCreateInfo is
        only defined with it enabled. The reference setup's loader tolerates the
        omission; a stricter one refuses vkCreateDevice, the retry there clears
@@ -1015,8 +997,7 @@ static LONG lane_state(void)
 }
 
 /* THE DEVICE'S LARGEST 2D IMAGE, or 0 while there is no device yet.
-   `GL_MAX_TEXTURE_SIZE`'s counterpart, and a ported pass needs it for the same
-   reason the GL one did: an atlas is sized against the limit of the device that
+   A pass needs it because an atlas is sized against the limit of the device that
    will sample it, and a pass that guessed would either waste memory or build
    something the driver refuses. Asked of the device we actually BOUND, not of
    row 0 of the enumeration -- the player can pick another.
@@ -1294,11 +1275,11 @@ static int vk_swapchain(int w, int h)
             s_vk.fmt = fmts[i].format; s_vk.cspace = fmts[i].colorSpace; break;
         }
 
-    /* PARITY WITH GL's wglSwapIntervalEXT(vsync ? 1 : 0). FIFO is the only mode the specification guarantees and is what vsync
+    /* `vsync` PICKS FIFO OR IMMEDIATE. FIFO is the only mode the specification guarantees and is what vsync
        means; IMMEDIATE is the unlocked one. MAILBOX IS NOT OFFERED on the
        reference setup's 4070 under wine (roadmap, Phase G), so nothing here may
        be designed around triple buffering -- `fps_limiter.c` and `maxfps`
-       remain the pacing mechanism, exactly as under GL. */
+       remain the pacing mechanism. */
     if (!s_vk.vsync) {
         vkGetPhysicalDeviceSurfacePresentModesKHR(s_vk.pd, s_vk.surf, &nm, NULL);
         if (nm > 8) nm = 8;
@@ -1449,11 +1430,11 @@ static int vk_swapchain(int w, int h)
    build a pipeline against it and keep that pipeline across a resize; only the
    framebuffers follow the swapchain. */
 /* THE DEPTH FORMAT IS 24-BIT FIXED POINT OR THERE IS NONE, and that is a
-   parity decision rather than a preference. The GL lane's world FBO is
-   GL_DEPTH24_STENCIL8, so every depth value a ported pass is tested against
-   there is quantised to 24 bits; a D32_SFLOAT attachment here would resolve a
-   z-fight the other way in exactly the cases that are too close to call, and
-   those are the cases a 0-px comparison is made of. A device that offers
+   specification rather than a preference. The depth-testing passes were
+   measured to 0 px against the OpenGL renderer this replaced, whose depth was
+   24-bit fixed point, so that quantisation is part of the picture they are
+   specified to draw; a D32_SFLOAT attachment would resolve a z-fight the
+   other way in exactly the cases that are too close to call. A device that offers
    neither 24-bit format gets no depth attachment at all -- the passes that do
    not test go on working and the ones that do refuse to arm and say so, which
    is a stated gap rather than a silently different picture. */
@@ -1471,7 +1452,7 @@ static int vk_depth_has_stencil(VkFormat f)
 static VkFormat vk_depth_format(void)
 {
     static const VkFormat want[2] = {
-        VK_FORMAT_D24_UNORM_S8_UINT,        /* what the GL FBO is */
+        VK_FORMAT_D24_UNORM_S8_UINT,        /* 24-bit depth, with stencil */
         VK_FORMAT_X8_D24_UNORM_PACK32       /* the same 24 bits, no stencil */
     };
     int i;
@@ -1509,9 +1490,9 @@ static int vk_renderpass(void)
     at[0].initialLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     at[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-    /* CLEARED BY THE RENDER PASS AND NEVER STORED. The GL lane clears depth at
-       the top of the world FBO (glClear(GL_DEPTH_BUFFER_BIT), clear value 1.0)
-       and this is the same thing in the same place; DONT_CARE on the way out
+    /* CLEARED BY THE RENDER PASS AND NEVER STORED. Depth is cleared to 1.0,
+       the far plane, at the top of the frame, before any pass tests against
+       it; DONT_CARE on the way out
        says the contents do not outlive the frame, which is what lets the driver
        skip writing them back. UNDEFINED in, because a CLEAR discards whatever
        was there -- so no layout has to be carried between frames and no barrier
@@ -1634,9 +1615,8 @@ static int vk_depth_image(uint32_t i)
     ivi.format = s_vk.dfmt;
     /* THE STENCIL ASPECT COMES WITH THE FORMAT: tagpu_vk_world.c's own
        attachment names both aspects for the same reason -- "a view of them
-       must name it, or the framebuffer is refused" -- and the GL original of
-       this attachment is GL_DEPTH24_STENCIL8, whose stencil plane
-       tagpu_native.c clears with the depth. The unit pass's Classic hard
+       must name it, or the framebuffer is refused" -- and the render pass
+       clears the stencil plane with the depth. The unit pass's Classic hard
        shadow tests stencil, and it needs the plane on whichever target it
        lands in. */
     ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT |
@@ -1806,7 +1786,6 @@ static void vk_down(void)
         tagpu_vk_fx_down(&s_pass);
         tagpu_vk_shadow_down(&s_pass);
         tagpu_vk_unit_down(&s_pass);
-        tagpu_vk_hires_down(&s_pass);
         tagpu_vk_mark_down(&s_pass);
         tagpu_vk_surf_down(&s_pass);
         tagpu_vk_world_down(&s_pass);
@@ -1970,12 +1949,12 @@ static DWORD WINAPI up_worker(LPVOID arg)
         VkPhysicalDeviceFeatures feat;      /* must outlive every vkCreateDevice below */
 
         /* VK_KHR_maintenance1 IS ASKED FOR AND NOT ASSUMED, AND IT BUYS EXACTLY
-           ONE THING: a NEGATIVE VIEWPORT HEIGHT. GL's clip space has +Y up and
-           Vulkan's has +Y down, so a shader written in GL's WINDOW convention
-           would draw its frame upside down -- and the shaders are ported
-           UNCHANGED on purpose, because a source edit would make each one
-           disagree with the GL twin that is its oracle (tools/spirv-gen.py's
-           header). So the flip is pipeline state, and this is the state.
+           ONE THING: a NEGATIVE VIEWPORT HEIGHT. The fork's GLSL is written in
+           GL 3.3's clip convention, +Y up, and Vulkan's has +Y down, so a
+           shader in that WINDOW convention would draw its frame upside down --
+           and tools/spirv-gen.py's transform is mechanical and touches no line
+           of a shader body. So the flip is pipeline state, and this is the
+           state.
 
            NOT EVERY PORTED SHADER. Only `gui`'s composite, `fps` and
            `scaffold` write that convention. The world passes write the
@@ -2017,15 +1996,16 @@ static DWORD WINAPI up_worker(LPVOID arg)
                             s_vk.flipok = 1;
                         }
                         /* VK_EXT_line_rasterization, AND IT BUYS EXACTLY ONE
-                           THING TOO: `BRESENHAM` line rasterisation, which is
-                           the rule GL's non-antialiased lines already follow.
-                           MEASURED 2026-09-15, and this is why it is here: with
-                           Vulkan's DEFAULT mode the effects pass's lasers came
-                           out a strict SUPERSET of the GL twin's -- every one of
-                           its 126 pixels plus exactly one extra fragment at the
-                           end of each line segment, 4 px on the fixture. That is
-                           the diamond-exit rule, which DEFAULT does not
-                           implement and BRESENHAM does.
+                           THING TOO: `BRESENHAM` line rasterisation, the
+                           diamond-exit rule the effects pass's lines are
+                           specified by. MEASURED 2026-09-15 against the OpenGL
+                           renderer this replaced, whose non-antialiased lines
+                           follow that rule: with Vulkan's DEFAULT mode the
+                           lasers came out a strict SUPERSET of GL's -- every
+                           one of its 126 pixels plus exactly one extra fragment
+                           at the end of each line segment, 4 px on the fixture.
+                           DEFAULT does not implement the diamond-exit rule and
+                           BRESENHAM does.
                            A pass that draws lines refuses the frame when this is
                            off rather than drawing those four pixels. */
                         if (!strcmp(ext[k].extensionName,
@@ -2075,22 +2055,24 @@ static DWORD WINAPI up_worker(LPVOID arg)
                         /* VK_EXT_depth_clip_control, AND IT BUYS EXACTLY ONE
                            THING: GL'S CLIP-SPACE Z RANGE. GL maps clip z in
                            [-1, 1] onto the depth range and Vulkan takes [0, 1],
-                           CLIPPING anything below 0. Every world pass ported so
-                           far writes a z already in [0, 1] -- so the feature
-                           pass's `minDepth 0.5 / maxDepth 1.0` reproduces GL's
-                           (z+1)/2 exactly and nothing is clipped, and
-                           tagpu_vk_feat.c's header says this extension is the
-                           answer only if a shader is ever found writing a z
-                           below 0.
+                           CLIPPING anything below 0. Every world pass writes a
+                           z already in [0, 1] -- so the world passes'
+                           `minDepth 0.5 / maxDepth 1.0` maps it onto (z+1)/2,
+                           the values the OpenGL renderer this replaced wrote
+                           and was measured to 0 px against, and nothing is
+                           clipped; tagpu_vk_feat.c's header says this
+                           extension is the answer only if a shader is ever
+                           found writing a z below 0.
                            The SHADOW pass is that shader. Its orthographic
-                           light matrix is built to fill [-1, 1] (tagpu_shadow.c
-                           `mrow`), so under Vulkan's own convention the whole
-                           near half of every caster would be clipped away and
-                           the map would be wrong rather than merely different.
-                           With `negativeOneToOne` the viewport transform IS
-                           GL's, values and quantisation included, and the
-                           depths the consumer's taShadowAt compares against are
-                           the same numbers.
+                           light matrix fills [-1, 1] (tagpu_vk_pass.h
+                           `zclipok`; the pass has no producer today,
+                           tagpu_vk_shadow.h), so under Vulkan's own convention
+                           the whole near half of every caster would be clipped
+                           away and the map would be wrong rather than merely
+                           different. With `negativeOneToOne` the stored depth
+                           is (z+1)/2, which is exactly what the consumers'
+                           taShadowAt reads it as (`* 0.5 + 0.5`,
+                           tagpu_glsl.h).
                            Queried, never inferred, for the reason the line
                            feature's comment above gives at length. */
                         if (!strcmp(ext[k].extensionName,
@@ -2168,9 +2150,9 @@ static DWORD WINAPI up_worker(LPVOID arg)
                ladder below -- the ladder drops EXTENSIONS, and this is asked
                for only when the device has just said it has it.
                WHY THE LANE WANTS IT: the world is drawn into a target `ss`
-               times the game resolution, and the GL twin calls
-               `glLineWidth(ss)` so a line one game pixel wide is `ss` pixels
-               there. Without this the ported passes can only draw a 1.0 line,
+               times the game resolution, so a line one game pixel wide has to
+               be `ss` pixels wide there. Without this the passes can only draw
+               a 1.0 line,
                which is `ss` times too thin -- so tagpu_vk_fx.c and
                tagpu_vk_mark.c refuse the whole pass instead, and on the
                shipped default (`ss` = 2) the effects pass would drop every
@@ -2363,13 +2345,13 @@ fail:
    back -- so the release semaphore has to follow the image and not the frame.
    `nimg` frames in flight, one per swapchain image: the fence wait at the top
    is what makes frame `n` wait for frame `n - nimg` and nothing sooner. */
-/* THE WORLD'S FIVE PASSES, IN THE GL LANE'S OWN ORDER, INTO WHATEVER TARGET IS
+/* THE WORLD'S FIVE PASSES, IN THE WORLD'S LAYER ORDER, INTO WHATEVER TARGET IS
    OPEN. One copy called from two places: the offscreen world pass
    when there is a target, and the frame's own render pass when there is not.
 
-   IT IS ONE FUNCTION BECAUSE THE ORDER IS THE FRAGILE PART. tagpu_native.c
-   draws terrain, features, units, effects, ghosts, markers, and two passes that
-   blend are not commutative -- so an order that drifted between the two arms
+   IT IS ONE FUNCTION BECAUSE THE ORDER IS THE FRAGILE PART. The world's
+   layers go terrain, features, units, effects, ghosts, markers, and two passes
+   that blend are not commutative -- so an order that drifted between the two arms
    would be a picture that changes when the offscreen target happens to fail.
    Nothing here decides anything; the `draw_*` flags are their own `prepare`s'
    answers and `w`/`h` are the caller's target.
@@ -2469,9 +2451,8 @@ static int vk_present(void)
     if (tagpu_vk_terr_down_owed() || tagpu_vk_feat_down_owed() ||
         tagpu_vk_fx_down_owed() || tagpu_vk_scaffold_down_owed() ||
         tagpu_vk_shadow_down_owed() || tagpu_vk_unit_down_owed() ||
-        tagpu_vk_hires_down_owed() || tagpu_vk_mark_down_owed() ||
-        tagpu_vk_surf_down_owed() || tagpu_vk_gui_down_owed() ||
-        tagpu_vk_world_down_owed()) {
+        tagpu_vk_mark_down_owed() || tagpu_vk_surf_down_owed() ||
+        tagpu_vk_gui_down_owed() || tagpu_vk_world_down_owed()) {
         if (!vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) != VK_SUCCESS) {
             vklog("vkDeviceWaitIdle refused before an owed pass teardown - down");
             return -2;
@@ -2487,7 +2468,6 @@ static int vk_present(void)
         if (tagpu_vk_scaffold_down_owed()) tagpu_vk_scaffold_down_paid(&s_pass);
         if (tagpu_vk_shadow_down_owed())   tagpu_vk_shadow_down_paid(&s_pass);
         if (tagpu_vk_unit_down_owed())     tagpu_vk_unit_down_paid(&s_pass);
-        if (tagpu_vk_hires_down_owed())    tagpu_vk_hires_down_paid(&s_pass);
         if (tagpu_vk_mark_down_owed())     tagpu_vk_mark_down_paid(&s_pass);
         if (tagpu_vk_surf_down_owed())     tagpu_vk_surf_down_paid(&s_pass);
         if (tagpu_vk_gui_down_owed())      tagpu_vk_gui_down_paid(&s_pass);
@@ -2589,13 +2569,13 @@ static int vk_present(void)
         uint32_t abw = 0, abh = 0;
         VkRenderPassBeginInfo rbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         if (s_vk.rp && s_vk.fb[idx]) {
-            /* THE PORTED PASSES, IN THE GL LANE'S OWN ORDER. tagpu_overlay.c
-               draws the scaffold before the readout, and two passes that blend
-               are not commutative -- so the order here is that order, not the
-               order the files were written in. */
+            /* THE PASSES, IN LAYER ORDER. The scaffold goes under the readout,
+               and two passes that blend are not commutative -- so the order
+               here is the layer order, not the order the files were written
+               in. */
             /* Terrain is the world's bottom layer and the frame's far plane --
-               tagpu_native.c draws it first of all and everything after it is
-               depth-tested against what it wrote -- so it goes first here too.
+               everything after it is depth-tested against what it wrote -- so
+               it goes first.
                The features are the WORLD as well and follow it, before the
                scaffold overlay and long before the readout. */
             /* THE SHADOW MAP IS FIRST, AND IT IS NOT ONE OF THE FRAME'S
@@ -2614,7 +2594,7 @@ static int vk_present(void)
                capture taken while Classic++ shadows are on -- which is exactly
                the configuration the shadow work is measured in. */
             /* ---- AND `prepare` ORDER IS NOT `record` ORDER. Three of the hooks below run in an order the DATA
-               forces, and the draws still happen in the GL lane's order inside
+               forces, and the draws still happen in layer order inside
                the render pass further down. ---- */
 
             /* TA'S OWN SCREEN IS UPLOADED BEFORE ANYTHING OF OURS, because it
@@ -2623,7 +2603,7 @@ static int vk_present(void)
                 contract rather than a preference. It is not a pass and depends
                 on none of them -- it reads the geometry tagpu_native.c
                 published from this frame's gather -- but the passes depend on
-                IT: any pass whose GL twin scales something by `ss` asks
+                IT: any pass that scales something by `ss` asks
                 `tagpu_vk_world_scale()` during its own `prepare`, and that
                 answer does not exist until this has run -- after them, the
                 effects and marker passes would set an `ss`-wide line from their
@@ -2646,7 +2626,7 @@ static int vk_present(void)
             tagpu_vk_surf_prepare(&s_pass, cb, fi);
 
             /* THE SCAFFOLD'S UPLOAD IS FIRST OF OURS, though its DRAW is nearly last.
-               The overlay is a texture the unit, hi-res and effects
+               The overlay is a texture the unit and effects
                fragment shaders sample (`uScafOn`), so the pass that fills it
                has to have filled it before a consumer points a descriptor set
                at it -- and a consumer does that in its own `prepare`.
@@ -2661,11 +2641,6 @@ static int vk_present(void)
                yet and its own descriptor set is not written here -- that is
                `tagpu_vk_unit_prepare`, below the map. */
             tagpu_vk_unit_upload(&s_pass, cb, fi);
-            /* AND THE REPLACEMENT MESHES' CASTERS, beside it and for the same
-               reason: they are geometry the shadow map is about to draw, so
-               they have to be on the device before it is. It draws nothing
-               here either. */
-            tagpu_vk_hires_upload(&s_pass, cb, fi);
 
             tagpu_vk_shadow_prepare(&s_pass, cb, fi);
 
@@ -2680,14 +2655,14 @@ static int vk_present(void)
             draw_feat = tagpu_vk_feat_prepare(&s_pass, cb, fi);
             ab_feat = tagpu_vk_feat_ab_frame();
             /* The effects are the LAST of the world, after the features and
-               the units -- tagpu_native.c draws them there so that lasers and
-               explosions sit over everything the world put down and under the
-               UI. Two passes that blend are not commutative, so this order is
-               the GL lane's and not the order the files were written in. */
+               the units, so that lasers and explosions sit over everything the
+               world put down and under the UI. Two passes that blend are not
+               commutative, so this order is the layer order and not the order
+               the files were written in. */
             draw_fx = tagpu_vk_fx_prepare(&s_pass, cb, fi);
             ab_fx = tagpu_vk_fx_ab_frame();
             /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below
-               the UI -- where tagpu_native.c draws them. */
+               the UI. */
             draw_mark = tagpu_vk_mark_prepare(&s_pass, cb, fi);
             ab_mark = tagpu_vk_mark_ab_frame();
             /* THE UI LAYER, WITHOUT THE ENGINE'S COMPOSITE. The engine's half
@@ -2770,7 +2745,7 @@ static int vk_present(void)
            same way. What it changes for the five passes inside it is the EXTENT
            they are handed and nothing else: they scale the engine's game-space
            rect into whatever target they get (`terr_scissor`'s `sx = w/uGame.x`
-           yields GL's own `glScissor(vpL*ss, ...)` at `tw = gw*ss`) and their
+           yields a scissor at `vpL*ss` when `tw = gw*ss`) and their
            vertex shaders divide by `uGame` rather than by the target. The
            offscreen render pass is format-compatible with `s_vk.rp`, so the
            same pipelines draw into either. */
@@ -2787,13 +2762,12 @@ static int vk_present(void)
             /* cv[0] is never used -- the colour attachment's loadOp is LOAD and
                the vkCmdClearColorImage above is what applies the lever's
                colour -- but the array has to reach the index of the attachment
-               that DOES clear, which is the depth one. cv[1] is 1.0, the value
-               glClear(GL_DEPTH_BUFFER_BIT) uses on the GL side. */
+               that DOES clear, which is the depth one. cv[1] is 1.0, the far
+               plane. */
             cv[1].depthStencil.depth = 1.0f;
             /* AND THE STENCIL PLANE WITH IT, so the unit pass's shadow mask
                starts every frame at 0 rather than at whatever the last one
-               left. `glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)` is
-               what the GL twin's world FBO does. */
+               left. */
             cv[1].depthStencil.stencil = 0;
             rbi.renderPass = s_vk.rp;
             rbi.framebuffer = s_vk.fb[idx];
@@ -2809,15 +2783,15 @@ static int vk_present(void)
                the one draw that puts it on the frame, over TA's own surface and
                under the UI -- which is exactly where tagpu_native.c's composite
                sits. Without one the five passes draw straight into the
-               swapchain image at client resolution. Both arms call `world_records`, so the GL lane's
+               swapchain image at client resolution. Both arms call `world_records`, so the passes'
                ORDER is written down once and cannot drift between them. */
             if (draw_world)
                 tagpu_vk_world_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
             else
                 world_records(cb, fi, s_vk.ext.width, s_vk.ext.height,
                               draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
-            /* THE UI GOES OVER THE WORLD AND UNDER THE READOUT, which is where
-               the GL lane drew it: the readout has to sit above the side panel
+            /* THE UI GOES OVER THE WORLD AND UNDER THE READOUT: the readout
+               has to sit above the side panel
                and the dialogs or they hide it. The return is not kept: the
                engine's own cursor blit reaches only the golden source, and
                suppressing it would just put a hole in the reference. */
@@ -2839,19 +2813,17 @@ static int vk_present(void)
                                  VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &b);
         }
 
-        /* THE A/B CAPTURE, ONE FRAME, UNDER THE LEVER THE CLAIMING PASS SHARES
-           WITH ITS GL TWIN. Recorded last so that what it reads is the finished
-           frame, and it leaves the image in PRESENT_SRC so the present below is
-           unaffected.
+        /* THE A/B CAPTURE, ONE FRAME, UNDER THE CLAIMING PASS'S LEVER.
+           Recorded last so that what it reads is the finished frame, and it
+           leaves the image in PRESENT_SRC so the present below is unaffected.
 
-           ONE PASS IN THE FRAME, OR NO CAPTURE. Each GL twin captures
-           its own half by blacking the frame, drawing ITSELF and reading back
-           immediately -- so a GL half contains exactly one pass. This side is
-           one frame with every armed pass drawn into it. With two A/B levers
-           armed at once the Vulkan half would therefore hold two passes and
-           each GL half one, and the diff would report every pixel of the OTHER
-           pass as a difference: an oracle failure that reads exactly like a
-           broken port, which is the worst answer an oracle can give. Both
+           ONE PASS IN THE FRAME, OR NO CAPTURE. A capture is diffed against the
+           same pass's capture from another build, so it must hold that pass
+           alone -- and this is one frame with every armed pass drawn into it.
+           With two A/B levers armed at once the capture would hold two passes,
+           and the diff would report every pixel of the OTHER pass as a
+           difference: a comparison failure that reads exactly like a broken
+           pass, which is the worst answer a comparison can give. Both
            conditions are checked, not just the claim count -- a second pass
            that drew without claiming contaminates the frame just as much. */
         /* THE LANE'S OWN PER-FRAME CENSUS, throttled. The refusals below say
@@ -2870,19 +2842,18 @@ static int vk_present(void)
                   draw_unit, draw_fx, draw_mark, draw_scaf, draw_gui, draw_fps);
         /* WHICH IMAGE THE CAPTURE READS, AND IT IS NOT ALWAYS THE FRAME.
 
-           A WORLD PASS'S GL HALF IS THE WORLD FBO, NOT THE WINDOW: `gw*ss` by
-           `gh*ss` -- the game's own resolution times the supersample factor --
-           and never the window's client rect. The swapchain image matches it
-           only at `ss = 1` with no letterbox, and `ss` is 2 unless the
+           A WORLD PASS'S CAPTURE IS THE WORLD TARGET, NOT THE WINDOW: `gw*ss`
+           by `gh*ss` -- the game's own resolution times the supersample factor
+           -- and never the window's client rect. The swapchain image matches
+           that only at `ss = 1` with no letterbox, and `ss` is 2 unless the
            Supersampling row or its lever says Off (tagpu_settings_ss).
 
-           This lane's world target is a `gw*ss, gh*ss` image holding the world
-           alone over a transparent clear, which is what GL's FBO is. Reading it
-           makes the two halves the same size and the same kind of picture at
-           every `ss`, so a world A/B runs on the SHIPPED configuration. It also
-           makes the capture independent of everything the
-           swapchain image carries -- TA's own frame included -- which is the
-           divergence the `nclaim == 0` line above exists for.
+           The world target holds the world alone over a transparent clear.
+           Reading it makes a world capture the same size and the same kind of
+           picture at every `ss` and every window, so a world A/B runs on the
+           SHIPPED configuration. It also makes the capture independent of
+           everything the swapchain image carries -- TA's own frame included --
+           which is the divergence the `nclaim == 0` line above exists for.
 
            `tagpu_vk_world_shot` answers about THIS frame's command buffer: it
            names the slot the world render pass was actually opened on, so a
@@ -2935,7 +2906,7 @@ static int vk_present(void)
     }
     /* BOTTOM_OF_PIPE, paired with the TOP_OF_PIPE above: between them lies
        every stage of everything this buffer recorded, which is this lane's
-       whole frame -- the same span the GL bracket takes on its side. */
+       whole frame. */
     if (s_vk.tsPool && s_vk.tsPend[fi])
         vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_vk.tsPool, fi * 2u + 1u);
     vkEndCommandBuffer(cb);
@@ -2992,7 +2963,6 @@ static int vk_resize(int w, int h)
     tagpu_vk_fx_down(&s_pass);
     tagpu_vk_shadow_down(&s_pass);
     tagpu_vk_unit_down(&s_pass);
-    tagpu_vk_hires_down(&s_pass);
     tagpu_vk_surf_down(&s_pass);
     tagpu_vk_world_down(&s_pass);
     /* AND ON A RESIZE TOO, though the device survives one: the restorer's
@@ -3018,7 +2988,7 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
 
 
     /* THIS FRAME'S NUMBER, BEFORE ANY PASS CAN ASK FOR IT. Every `prepare`
-       below reaches a GL module's hand-over through it, and refuses one that
+       below reaches its gather's hand-over through it, and refuses one that
        was published on a different frame. */
     s_pass.frame = frame_counter;
 

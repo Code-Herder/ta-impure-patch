@@ -17,17 +17,15 @@
    conv -> out, with the group/ping-pong advance), the cost model, the budget
    arithmetic and every counter and log line. A backend owns device resources
    and the calls that draw -- and it is told WHICH draw to make rather than
-   working it out, so a second backend cannot get the sequence subtly wrong in
-   a way no A/B would show.
+   working it out, so it cannot get the sequence subtly wrong. The one backend
+   is tagpu_vk_restore.c.
 
    ONE SCHEDULER PER BACKEND, not one shared. Each backend declares its own
-   TAGPU_RSCHED, so a lane's slicing is the same whether or not another lane is
-   alive; a shared budget would change one lane's behaviour the moment a second
-   lane came up.
+   TAGPU_RSCHED, so a backend's slicing never depends on whether another is
+   alive.
 
    THE MODEL AND THE OPTIONS ARE PROCESS-WIDE: one weight file, one
-   `tagpu_restoreglsl.on`, whatever lanes are running. Both lanes must restore
-   with the same model or the two pictures are not comparable. */
+   `tagpu_restoreglsl.on`, whatever backends are running. */
 
 #include "tagpu_restoreglsl.h"      /* TAGPU_RGLSL_FRAME, the public contract */
 
@@ -58,7 +56,7 @@ typedef struct {
 typedef struct { int tiny, fp16, nk, log; double budget; } TAGPU_ROPT;
 
 /* Re-read the options and the model, from a backend's own init, so that both
-   are picked up once per CONTEXT. 0 with the
+   are picked up once per DEVICE. 0 with the
    reason in tagpu.log when the weight file is unusable -- Classic++ then stays
    indexed, which is the shipped fallback and not a failure. */
 int                tagpu_rcore_reload(const char* who);
@@ -72,7 +70,7 @@ const TAGPU_ROPT*   tagpu_rcore_opt(void);
 /* Settle NK and WMAX from the device's limits: `nk` is the most k-blocks one
    draw can bind, clamped down to a power of two, and overridden by `nk=N` when
    that is no larger. 0, with the reason logged, when not even one k-block fits
-   the uniform block -- the lane then cannot restore at all. */
+   the uniform block -- the backend then cannot restore at all. */
 int tagpu_rcore_pick_nk(TAGPU_RSCHED* s, int maxUniformBlockBytes,
                         int maxAttachments);
 
@@ -109,8 +107,8 @@ typedef struct {
        laid out as the shaders index them. Owned by the core and rebuilt on the
        FILL of each batch, so FILL is where a backend uploads them and the CONV
        and OUT draws of the same batch see the same contents -- only one batch
-       is ever in flight, so nothing else can write them in between. Both
-       backends therefore upload on FILL and read the device copy afterwards;
+       is ever in flight, so nothing else can write them in between. A
+       backend therefore uploads on FILL and reads the device copy afterwards;
        the pointers are handed to every kind so that a backend which keeps no
        device copy could read them on any draw. */
     const float* rect;                 /* padded w,h at .zw                    */
@@ -125,7 +123,7 @@ typedef struct {
 
 /* ---- what a backend implements ---- */
 typedef struct {
-    const char* name;                        /* log prefix: "restoreglsl"      */
+    const char* name;                        /* log prefix: "restorevk"        */
     /* 1 when the backend's programs and tables are up: the core counts a step
        either way, so a pass can tell nothing stepped, but draws nothing */
     int    (*ready)(void);
@@ -157,13 +155,13 @@ typedef struct {
     /* stop timing for good: the core calls this when a result has not come
        back for 300 slices, which means the device does not really time */
     void   (*timer_off)(void);
-    /* the state a slice disturbs and the caller expects back (GL's enables and
-       write masks; a Vulkan backend has nothing to do here). `slice` is the
-       slice about to run, for the backends that report first-slice diagnostics. */
+    /* the state a slice disturbs and the caller expects back; both are empty
+       in tagpu_vk_restore.c. `slice` is the slice about to run, for a backend
+       that reports first-slice diagnostics. */
     void   (*state_push)(unsigned slice);
     void   (*state_pop)(unsigned slice);
-    /* 1 when the lane may draw at all this frame -- the renderer switch the
-       jobs pause under. The queues keep filling while it is 0. */
+    /* 1 when the backend may draw at all this frame -- the renderer switch
+       the jobs pause under. The queues keep filling while it is 0. */
     int    (*may_draw)(void);
 } TAGPU_RBACKEND;
 
@@ -172,7 +170,7 @@ struct TAGPU_RSCHED_s {
     const TAGPU_RBACKEND* be;
     TAGPU_RCORE  jobs[TAGPU_R_MAXJOBS];
     int      nk, wmax;
-    unsigned slice;                      /* slices issued in this context      */
+    unsigned slice;                      /* slices issued since the last lost  */
     unsigned calls;                      /* frames stepped, ready or not       */
     int      idle;                       /* consecutive slices with nothing    */
     /* the budget: double-buffered timing, so nothing ever waits on a result */
@@ -201,8 +199,8 @@ void tagpu_rcore_job_drop(TAGPU_RCORE* j);
    not it draws -- `tagpu_rglsl_calls` is how a pass learns nothing stepped. */
 void tagpu_rcore_step(TAGPU_RSCHED* s);
 
-/* Everything the backend owned died with its context: forget the jobs without
-   freeing device resources. The backend clears its own ids. */
+/* Everything the backend owned died with its device: forget the jobs without
+   freeing device resources. The backend clears its own handles. */
 void tagpu_rcore_lost(TAGPU_RSCHED* s);
 
 #endif

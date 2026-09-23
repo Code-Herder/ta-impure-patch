@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
-"""The Vulkan lane against its GL twin, pixel for pixel.
+"""Two captures of one Vulkan pass, pixel for pixel.
 
-    tools/vk-ab.py <gamedir>                 # the fps pair in an instance
-    tools/vk-ab.py <gamedir> --pass scaffold # another ported pass's pair
     tools/vk-ab.py a.ppm b.ppm [--out d.png] # two files
+    tools/vk-ab.py <gamedir>                 # refused, and says what to do
 
 WHAT IT COMPARES, AND WHY IT REFUSES RATHER THAN SCALES. `tagpu_<pass>.ab` in an
-instance's gamedir makes both backends capture ONE frame of that pass over a
-black field -- the GL lane writes `tagpu_<pass>_gl.ppm` from `glReadPixels`, the
-Vulkan lane writes `tagpu_<pass>_vk.ppm` out of the swapchain image it just
-presented. Same inputs, same shader, same frame size, two rasterisers. So the
-only honest verdict is "identical" or "not", and two captures of different sizes
-are a setup fault (the fork letterboxing, or the window not matching the render
-target) rather than something to resample: a scaled comparison cannot be 0 px by
-construction, so it would turn a real mismatch into a plausible-looking number.
+instance's gamedir makes the Vulkan lane capture ONE frame of that pass to
+`tagpu_<pass>_vk.ppm`. The pair is two such captures of the same scene from two
+BUILDS: same inputs, same frame size. So the only honest verdict is "identical"
+or "not", and two captures of different sizes are a setup fault (the fork
+letterboxing, or the window not matching the render target) rather than
+something to resample: a scaled comparison cannot be 0 px by construction, so
+it would turn a real mismatch into a plausible-looking number.
 
-ARM ONE PASS'S `.ab` AT A TIME. Each GL capture holds one pass, because its twin
-blacks the frame and reads back around its own draw; the Vulkan capture is one
-frame and holds every armed pass at once. The lane refuses to capture at all
-when more than one pass drew into the frame it was asked for, and says so in
-tagpu.log, so a contaminated pair is not written rather than being written and
-believed.
+ARM ONE PASS'S `.ab` AT A TIME. The capture is one frame and holds every armed
+pass at once, so the lane refuses to capture at all when more than one pass
+drew into the frame it was asked for, and says so in tagpu.log -- a
+contaminated capture is not written rather than being written and believed.
 
 The exit status is 0 only when every pixel agrees -- including the pixels the
-GL capture left black, because a pass that draws MORE than its twin differs
-only there. `on GL ink` / `on GL black` split the difference up for reading;
-neither of them softens the verdict.
+FIRST capture left black, because a build that draws MORE differs only there.
+The report labels the first file `A` and the second `B`; `on A ink` /
+`on A black` split the difference up by what the first file drew, for
+reading, and neither of them softens the verdict.
 """
 
 import argparse
@@ -69,75 +66,50 @@ def main():
     ap.add_argument("args", nargs="+")
     ap.add_argument("--out", help="write a difference image (PPM) here")
     ap.add_argument("--pass", dest="which", default="fps",
-                    help="which ported pass's pair to compare in a gamedir "
-                         "(fps, scaffold, ...); default fps")
+                    help="the pass the captures are of, named in the "
+                         "blank-capture hint (fps, scaffold, ...); default fps")
     a = ap.parse_args()
 
-    lever = None
     if len(a.args) == 1:
-        # THE GAMEDIR FORM IS WITHDRAWN, AND IT HAS TO SAY SO RATHER THAN SEND
-        # THE OPERATOR LOOKING FOR A FILE NOTHING WRITES: it paired
-        # `tagpu_<tag>_gl.ppm` with `tagpu_<tag>_vk.ppm`, and no `_gl.ppm` is
-        # written by anything.
-        raise SystemExit("""vk-ab: the gamedir form is withdrawn.
-  It diffed the GL lane's capture against the Vulkan lane's, and the
-  vulkan-only plan's landings 4d-1/4d-2 deleted the GL half -- no
-  tagpu_<pass>_gl.ppm is written any more, by anything.
-  What replaced it: launch with renderer=vulkan, arm ONE pass's .ab (the seam
-  refuses a frame that several passes drew into), and diff the _vk.ppm against
-  one kept from an earlier BUILD:
-      vk-ab.py <old>/tagpu_<pass>_vk.ppm <new>/tagpu_<pass>_vk.ppm
-  The banked two-lane figures are in research/notes/gpu-status.md.""")
+        # THE GAMEDIR FORM IS REFUSED, AND SAYS SO RATHER THAN SEND THE
+        # OPERATOR LOOKING FOR A FILE NOTHING WRITES: a gamedir holds one
+        # `_vk.ppm` per pass, and the pair is two builds' captures.
+        raise SystemExit("""vk-ab: give two .ppm files, not a gamedir.
+  A gamedir holds one capture per pass, and the pair is two BUILDS' captures:
+  launch with renderer=vulkan, arm ONE pass's .ab (the seam refuses a frame
+  that several passes drew into), and diff the _vk.ppm against one kept from
+  an earlier build:
+      vk-ab.py <old>/tagpu_<pass>_vk.ppm <new>/tagpu_<pass>_vk.ppm""")
     elif len(a.args) == 2:
-        gl, vk = pathlib.Path(a.args[0]), pathlib.Path(a.args[1])
+        pa, pb = pathlib.Path(a.args[0]), pathlib.Path(a.args[1])
     else:
-        raise SystemExit("give a gamedir, or two .ppm files")
+        raise SystemExit("give two .ppm files")
 
-    for p in (gl, vk):
+    for p in (pa, pb):
         if not p.exists():
             raise SystemExit("%s is not there -- did `tagpu_<pass>.ab` fire? "
                              "tagpu.log says: look for `vk: shot: wrote ...`, "
                              "and for the refusal lines above it." % p)
 
-    # THE CAPTURES MUST BE NEWER THAN THE LEVER THAT ASKED FOR THEM.
-    # Existence is not freshness: every way a capture silently does not fire
-    # this run -- the `.ab` file not re-armed (`touch` on a file that is
-    # already there does nothing), the lane down, `ss != 1`, the seam's
-    # "N levers claimed this frame" refusal -- leaves the PREVIOUS run's PPMs
-    # lying on the disk, and this tool would read them and print that run's
-    # verdict for the binary in front of you. The verdict is this number, so
-    # it refuses instead.
-    if lever is not None and lever.exists():
-        arm = lever.stat().st_mtime
-        stale = [p for p in (gl, vk) if p.stat().st_mtime < arm - 1.0]
-        if stale:
-            raise SystemExit(
-                "REFUSED: %s predate%s tagpu_%s.ab -- these are an EARLIER run's "
-                "captures.\nThe lever did not fire this time (`touch` on a file "
-                "that already exists does not re-arm).\nrm the .ab and the "
-                "_gl/_vk .ppm files, sleep, then touch the .ab again."
-                % (", ".join(p.name for p in stale),
-                   "" if len(stale) > 1 else "s", a.which))
-
-    gw, gh, gp = read_ppm(gl)
-    vw, vh, vp = read_ppm(vk)
-    print("GL     %s  %dx%d" % (gl, gw, gh))
-    print("Vulkan %s  %dx%d" % (vk, vw, vh))
+    gw, gh, gp = read_ppm(pa)
+    vw, vh, vp = read_ppm(pb)
+    print("A  %s  %dx%d" % (pa, gw, gh))
+    print("B  %s  %dx%d" % (pb, vw, vh))
     if (gw, gh) != (vw, vh):
         print("\nREFUSED: the two captures are different sizes.")
-        print("The GL capture is the render target's viewport and the Vulkan one is")
-        print("the game window's client rect, so this means the fork is letterboxing")
-        print("(a --window size the render target does not match, or k != 1).")
-        print("Run both at a size where they agree; scaling one would make a 0 px")
-        print("result impossible and a mismatch look plausible.")
+        print("The two runs did not capture the same frame size: a different")
+        print("--window size or `ss`, or the fork letterboxing in one of them")
+        print("(a window the render target does not match, or k != 1).")
+        print("Re-run both at one size; scaling one would make a 0 px result")
+        print("impossible and a mismatch look plausible.")
         return 2
 
     n = gw * gh
     diff = 0
     worst = 0
     first = None
-    ink_gl = ink_vk = 0
-    # WHERE THE GL CAPTURE ACTUALLY DREW, counted separately -- see the report
+    ink_a = ink_b = 0
+    # WHERE THE FIRST CAPTURE ACTUALLY DREW, counted separately -- see the report
     # below for why this is not a softer bar but a different question.
     diff_ink = 0
     first_ink = None
@@ -159,19 +131,19 @@ def main():
         # tuple would always be unequal and count every pixel as ink, which
         # would hide the "both captures are blank" case this exists to catch.
         if a3 != BLACK:
-            ink_gl += 1
+            ink_a += 1
         if b3 != BLACK:
-            ink_vk += 1
+            ink_b += 1
 
-    print("\nnon-black px   GL %d   Vulkan %d" % (ink_gl, ink_vk))
+    print("\nnon-black px   A %d   B %d" % (ink_a, ink_b))
     print("differing px   %d of %d" % (diff, n))
     if diff:
-        print("  on GL ink    %d of %d" % (diff_ink, ink_gl))
-        print("  on GL black  %d" % (diff - diff_ink))
+        print("  on A ink     %d of %d" % (diff_ink, ink_a))
+        print("  on A black   %d" % (diff - diff_ink))
         print("worst channel  %d" % worst)
-        print("first at       (%d, %d)  GL %s  Vulkan %s" % first)
+        print("first at       (%d, %d)  A %s  B %s" % first)
         if first_ink:
-            print("first on ink   (%d, %d)  GL %s  Vulkan %s" % first_ink)
+            print("first on ink   (%d, %d)  A %s  B %s" % first_ink)
 
     if a.out and diff:
         out = bytearray(b"P6\n%d %d\n255\n" % (gw, gh))
@@ -181,26 +153,26 @@ def main():
         pathlib.Path(a.out).write_bytes(bytes(out))
         print("difference     %s (red where they disagree)" % a.out)
 
-    if diff == 0 and ink_gl == 0:
+    if diff == 0 and ink_a == 0:
         print("\nBOTH CAPTURES ARE BLANK -- that is not a pass. Two empty frames")
         print("agree perfectly and prove nothing. Check that `tagpu_%s.on` is" % a.which)
         print("there, that the pass had something to draw on the captured frame,")
         print("and -- for the readout -- that `mark.on` is there too, because the")
         print("font reaches the render thread in the frame packet at hook 8 and")
-        print("without it every string is refused and BOTH lanes draw nothing.")
+        print("without it every string is refused and BOTH builds draw nothing.")
         return 1
     print("\n%s" % ("0 px apart" if diff == 0 else "NOT identical"))
     # THE EXIT CODE NEVER SAYS "PASS" ON A RUN THAT DIFFERS. A run whose every
     # difference falls on a pixel the first capture left black sounds like
     # "the pass agrees" and is not: `diff_ink` is blind to a pass that draws
-    # MORE than its twin -- a line rasterisation that adds one fragment at the
-    # END of each segment (tagpu_vk_pass.h), a terrain or feature pass painting
-    # outside the scissor, or over fog its twin refused. Every one of those
-    # lands on a pixel the first capture left black.
+    # MORE than the first capture did -- a line rasterisation that adds one
+    # fragment at the END of each segment (tagpu_vk_pass.h), a terrain or
+    # feature pass painting outside the scissor, or over fog the first refused.
+    # Every one of those lands on a pixel the first capture left black.
     # The split is still worth printing -- it is what an over-draw looks like --
     # but it is a thing to READ, not a verdict.
     if diff and diff_ink == 0:
-        print("...but 0 of the %d pixels the FIRST capture DREW." % ink_gl)
+        print("...but 0 of the %d pixels the FIRST capture DREW." % ink_a)
         print("Every difference is a pixel the first one left black, i.e. the")
         print("second OVER-DRAWS it. On a cross-build diff that is a change in")
         print("what the pass covers -- a wider line, a looser scissor, fog it no")

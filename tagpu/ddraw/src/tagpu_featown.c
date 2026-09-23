@@ -33,6 +33,7 @@
 #include "tagpu_featown.h"
 #include "tagpu_opt.h"
 #include "tagpu_detour.h"
+#include "tagpu_log.h"
 
 #define LEAF_FEAT_VA  0x0046A610u   /* ret 0x10 */
 static const unsigned char FEAT_STOLEN[5] = { 0x8B, 0x4C, 0x24, 0x08, 0x53 };
@@ -43,8 +44,7 @@ static unsigned g_beat = 0, g_last = 0;
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 void tagpu_featown_init(void)
@@ -74,14 +74,12 @@ void tagpu_featown_set_skip(int on)
 
 void tagpu_featown_beat(unsigned int frame_counter) { g_beat = frame_counter; }
 
-int tagpu_featown_installed(void) { return g_installed; }
-
 void tagpu_featown_flush(unsigned int frame_counter)
 {
     if (!g_installed) return;
-    /* if the native pass stops running (overlay off, GL failure, a frame path
-       that never reaches it) the engine's features come back rather than the
-       map going bare */
+    /* if the native pass stops running (overlay off, a frame path that never
+       reaches it) the engine's features come back rather than the map going
+       bare */
     if (g_featown_skip && frame_counter - g_beat > 90) {
         flog("featown: feature pass silent for 90 frames");
         tagpu_featown_set_skip(0);

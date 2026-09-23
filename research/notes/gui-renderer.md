@@ -813,6 +813,10 @@ load-time rewrite the engine does to slider geometry or synthesised scroll arrow
 divergence to chase).
 
 ### 3.3 Composite: the twin wins, the engine's surface is the fallback, `strict` removes it
+
+*`strict` is gone since 2026-09-23 (the trigger token and `tacli gui strict`): nothing of the
+engine's frame is beneath the Vulkan layer, so there is no fallback for it to remove. The section
+is the phase-1 design record.*
 Three layers, in order: **the UI twin where its coverage is set**, everywhere, viewport included
 — that is how mirrored chat, `ARMOPT`, `EXITMENU` and the F4 dialog land over the world at 1:1,
 untouched by zoom, which also closes the open note in [GPU status](gpu-status.html) that dialogs
@@ -965,7 +969,7 @@ The restorer was trained on ground textures and has never seen a bevel, a button
 
 ### 3.10 One module, one trigger, one seam
 The UI is a subsystem, not a surface. Family `tagpu_gui_*.c`, contract `tagpu_gui.h`, trigger
-`gamedir/tagpu_gui.on` with tokens (`strict` and `off` now — `off` keeps the detours installed
+`gamedir/tagpu_gui.on` with tokens (`strict` — gone since 2026-09-23 — and `off` now — `off` keeps the detours installed
 for the next launch while nothing is published or drawn, the live A/B; `scale=`, `nocursor` in
 phase 2). §4.
 
@@ -979,7 +983,7 @@ phase 2). §4.
   our Classic UI, pixel-identical; both on → restored art under `uirestore`. The §2.10 Options
   menu of [renderers](renderers.html) later gets an "engine / GL" UI switch that creates or
   deletes the trigger — front end, not store.
-- **tacli**: a `gui on|strict|census|off|remove` verb (G15b) and `gui.on` in the default arm
+- **tacli**: a `gui on|strict|census|off|remove` verb (G15b; `strict` gone since 2026-09-23) and `gui.on` in the default arm
   set of the ta-drive skill, so the pass is armed at launch for anyone using the driver.
 
 ### 3.11 Verification: the engine's surface is the oracle
@@ -1015,7 +1019,7 @@ phase 2). §4.
 | file | role | when |
 |---|---|---|
 | `tagpu_gui.h` | the only public contract: install, per-present step, GL reset, and `tagpu_gui_layer()` handing the composite its two textures and one flag | phase 1 |
-| `tagpu_gui_surf.c` | the twins, the queue replay, seed, **the UI GAF atlas** (an instance of the shared `TAGPU_GAFATLAS`), the layer draw, the trigger poll, `strict` | phase 1 — **built, G15b** |
+| `tagpu_gui_surf.c` | the twins, the queue replay, seed, **the UI GAF atlas** (an instance of the shared `TAGPU_GAFATLAS`), the layer draw, the trigger poll, `strict` (gone since 2026-09-23) | phase 1 — **built, G15b** |
 | `tagpu_gui_int.h` | the SPSC queue between the two halves: 65 536 ops and a 16 MB arena, private to the family | phase 1 — **built, G15b** |
 | `tagpu_gui_hook.c` | the observer detours, the census, the publisher | phase 1 — **built, G15a + G15b** |
 | `tagpu_gui_art.c` | the sequence-name registry and the `uirestore` policy — G15e; the atlas the plan put here lives in `tagpu_gui_surf.c` as built, and G15e may split it back out | G15e |
@@ -3978,7 +3982,7 @@ per-frame STATE the render half read beside it.
 
 | what it was | what it is | why that shape |
 |---|---|---|
-| the cursor's position and sprite, read from `[0x51FBD0]+0x1B6`/`+0x1BA`/`+0x1B2` in `tagpu_gui_cursor_frame` | header fields, plus the sprite record as a **key** | the record IS a GAF frame header and it comes out of the cursor table, loaded once per session and never rewritten — the `session-reader` class. Only `tagpu_gaf.c` dereferences it, which is where that argument lives. The position and size ride as values |
+| the cursor's position and sprite, read from `[0x51FBD0]+0x1B6`/`+0x1BA`/`+0x1B2` in `tagpu_gui_cursor_frame` | the sprite record alone, as a **key** (`cur_rec`) | the record IS a GAF frame header and it comes out of the cursor table, loaded once per session and never rewritten — the `session-reader` class. Only `tagpu_gaf.c` dereferences it, which is where that argument lives. Nothing reads the position or size, so they do not cross |
 | the minimap's box (`main+0x142E7`..), its view rect (`+0x142CB`) and its colour byte (`+0xDD9`) | header fields | values; nothing to argue about |
 | the three 8bpp minimap surfaces, walked row by row here to interleave into RGB | **one copy**, interleaved by the publisher, gated on `tagpu_gui_want_minimap` | their DESCRIPTORS are what made the read dangerous rather than merely stale: each carries a base AND a pitch, so a torn one is a wild read of `eh × pitch` bytes. Every cross-check moved with them. The gate is because at k = 1 the sharp minimap is deliberately the engine's own (§19), so an unarmed frame must not pay for an `ew × eh × 3` interleave per publish |
 | the level's minimap picture, read through `tagpu_gui_minimap_pic` from a buffer the LOADER thread filled | the **level's first in-play packet**, and no other; the render half keeps its own copy keyed on the level generation | the copy is what a GL re-init needs anyway. **The loader-thread observer is DELETED** — the plan's row 4c asked for that and it turned out to be possible for a reason this note had wrong: `main+0x1426B` is alive for the whole level, not only inside `BuildMinimapSurface 0x466780`. LoadMap stores it at `0x483900`, `0x466780` reads it at `0x46684F` without nulling it, and the only free is `0x483DFE` inside `0x483DD0`, whose only caller is `0x491BB3` in the teardown cascade. So the publisher decodes it itself on the level's first in-play draw, and nothing of ours runs on the loader thread any more |
@@ -4124,7 +4128,8 @@ each cursor draw, in all four of them (`0x4C687D`, `0x4C2732`, `0x4C297E`, `0x4C
 is a flag compare and either `ret 0x10` — the callee's own stdcall pop — or a tail `jmp` to the
 real blit. The patch is **the same length as the instruction it replaces**, so there are no stolen
 bytes, no instruction boundary to land on and no trampoline; this is the shape `tagpu_fxown.c` has
-used since G13, lifted into `tagpu_detour_call_site`.
+used since G13, lifted into `tagpu_detour_call_site` (deleted 2026-09-23: `cursown` was its only
+caller and went in the clean cut).
 
 Everything §24.0 broke stops being reachable rather than being fixed:
 

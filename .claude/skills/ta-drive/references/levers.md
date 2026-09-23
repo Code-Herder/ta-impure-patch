@@ -81,16 +81,14 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
 | `sfx.on` | `log passive nosmoke nofire nowake nonano` | `fxown.on` | `sfx: ARMED (smoke= fire= wake= nano= log= passive=)` |
 
 - **`native.on`** is the unit renderer (`tagpu_posedraw.c` is its posed program; no other
-  lever names it). A stale `owndraw.on` with `native.on` cleared makes the engine draw no units at
-  all; `launch` drops it and says so. The `native:` heartbeat every 300 frames carries the fog
-  grid (`fog=<mode>(CxR) bare=N`, `bare` must be 0), the bake (`bake=<types>/<streams> anom=
-  odd= nomat= refused=`), and four fields that print only when they caught something: `rest=`
-  (units drawn at rest for a frame), `unpl=` (pieces the pose walk could not place), `nobake=`
-  (types that would not bake and draw nothing — over 256 pieces or 49 152 vertices), `q=`
-  (queued against drawn, when they disagree), plus `SELHANDBACK=<n>` (frames the selection rects
-  were handed back to the engine whole; it must not climb). A unit count lower than expected is
-  usually the **hires** path: `gamedir/hires/<unit>.glb` draws that type through the replacement-
-  mesh renderer (`hires/off/` beside it is a parking directory, not a lever).
+  lever names it). The engine rasterises every unit whatever `owndraw.on` says; its detours skip
+  only a husk while `wrecks` is armed, the build-state effect of a unit this pass owns, and the
+  cached structure shadow once ours is live. A stale `owndraw.on` with `native.on` cleared is
+  dropped by `launch`, which says so. The `native:` heartbeat every 300 frames is `native: vulkan
+  lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=` — what
+  was handed over to the Vulkan passes, not what they drew. A model that will not bake (over 256
+  pieces or 49 152 vertices) logs a `posebake: REFUSED` line and draws nothing. Nothing reads
+  `gamedir/hires/`: a `.glb` there changes nothing, because replacement meshes are not in this build.
 - **`terr.on`** owns the terrain and the fog overlay; `key=N` moves the palette index the engine's
   viewport is filled with (254). Without `terrown.on` it emits nothing and its `terr:` line says why: our terrain is opaque
   over the whole viewport, so drawing it with no key fill to invert against would hide every
@@ -293,7 +291,6 @@ that map's size.
 | `curs.off` | attach | the engine's own contextual-cursor behaviour at `Interface Type=1` back (the DLL otherwise patches the cursor on at any type; `curs: ARMED — contextual cursors on at any Interface Type`) |
 | `nano.off` | live | the build-state (nanoframe) look off: a unit under construction draws unstaged, as if finished, with no wire |
 | `subpix.off` | live | sub-pixel unit motion off |
-| `r3dcache.off` | live (re-checked every 256 frames) | the 3D-model cache's restores off, an A/B |
 | `overlay.off` | per present | the whole per-present GPU pass returns early |
 | `menu.off` | attach | the render-options screen off (`references/modules.md`) |
 | `hud.on`, `hud.off` | attach | HUD scale (`references/ui-layer.md`) |
@@ -305,9 +302,9 @@ that map's size.
 
 | lever | what |
 |---|---|
-| `cobtrace.on=<TYPE>` | every COB thread start/refuse/return/kill/random to `gamedir/tagpu_cobtrace.log` (`references/modules.md`) |
+| `cobtrace.on=<TYPE>` | every COB thread start/refuse/return/kill/random to `gamedir/log/tagpu_cobtrace.log` (`references/modules.md`) |
 | `posedump.on` | one-shot, self-deleting: dumps the engine's pose fields of the first unit the native pass draws, header `posedump: tick= idx=` |
-| `posebake.on` | the per-type geometry bake's report; `log` gives a line per model and per material stream. Draws nothing |
+| `posebake.on=log` | a line per baked model and per material stream. The bake runs without it; the file alone does nothing |
 | `surfdump.on` | one-shot: writes the golden source as `tagpu_surf.ppm` and logs `surf: re-read check at draw N: 0 byte(s) of M differ` — must be 0 |
 | `surfcheck.on` | continuous: re-reads the golden source on every capture while present; `surf: the continuous re-read check is ARMED …`, silent while 0, a cumulative tally in the heartbeat, the total printed when removed. It roughly doubles the capture cost and holds the surface lock across the compare — arm it for a run, take it away again |
 | `ftime.on` | `ftime: vk p50 <ms> p99 <ms> (n=…)`, the GPU frame time |
@@ -322,7 +319,7 @@ that map's size.
 | line | every | must read 0 | notes |
 |---|---|---|---|
 | `packet: pub= skip= overrun= foreign= … viol= pviol= crcbad= nopkt= \| … \| cmd: … \| draws= … \| world: … dup= trunc= relbad= woob= …` | 300 render frames | `viol`, `pviol`, `crcbad`, `foreign`, `commitfail`, `vpwh` (both exchanges); `dup` (the stable-id collision oracle), `relbad` (the engine's `end == begin + (count−1)·0x118` relation), `woob` (wreck records outside the 2048-record pool); `trunc` past each slot's first fill; `layerbad`, `subbad` in the `fx:` segment; `refused` in the `fog:` and `gui:` segments | `skip` is the FRESH gate doing its job; `overrun`/`gap` count only under `stress` or across a level end; `unacked=(0,0)` whenever no wheel gesture is in flight; `hold=1` while `tagpu_eye.txt` is in force; `tps` is 3 × `speed`; `font=` non-zero when text can draw; `levelend=reclaim` names who published the level-end packet |
-| `native: …` | 300 | `bare`; `rest`, `unpl`, `nobake`, `q` print only when non-zero; `SELHANDBACK` must not climb | `bake=` fields; `fog=<mode>(CxR)` |
+| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=` | 300 | | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen |
 | `reclaim: def= drn= ovf= … tmpl=<queued>/<freed by the epoch>/<leaked>` | 300 | `ovf`, the third `tmpl` field | a level change logs `reclaim: level teardown: flushed N …` then `reclaim: teardown post: freed N block(s)` |
 | `fogwide: …`, `fogwide check: … differ=` | 5 s / 120 ticks | `differ`; on the grow path's line `strand`, and `held` must fall back to 0 | |
 | `gui: twins= …` | 300 | `overflows`, `lost`, `miss`, `reseed` | `references/ui-layer.md` |

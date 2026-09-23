@@ -49,6 +49,8 @@ import sys
 import time
 from pathlib import Path
 
+import talog  # the DLL's logs across their rotations (tools/talog.py)
+
 HERE = Path(__file__).resolve().parent
 TACLI = HERE / "tacli"
 TREE = HERE.parent
@@ -199,44 +201,34 @@ class Walk:
         self.out.mkdir(parents=True, exist_ok=True)
         self.rows = []
         self.gamedir = None
-        self.log_seen = 0
+        self.census_cursor = None       # where the next census_lines() starts
         self.restore = restore
         self.scenario = scenario
         self.W, self.H = [int(v) for v in res.lower().split("x")]
 
-    def log_size(self):
-        p = self.gamedir / "tagpu.log" if self.gamedir else None
-        return p.stat().st_size if p and p.exists() else 0
+    def log_cursor(self):
+        return talog.Cursor(self.gamedir) if self.gamedir else None
 
-    def log_since(self, offset, rx):
-        """Lines matching `rx` written to the instance's tagpu.log after byte `offset`
-        (a `tacli log` grep sees the previous game's lines too)."""
-        p = self.gamedir / "tagpu.log" if self.gamedir else None
-        if not p or not p.exists():
+    @staticmethod
+    def log_since(cursor, rx=None):
+        """Lines written to the instance's log/tagpu.log since `cursor`, those matching `rx`
+        when one is given (a `tacli log` grep sees the previous game's lines too)."""
+        if cursor is None:
             return []
-        with p.open("rb") as f:
-            f.seek(offset)
-            data = f.read()
-        return [l for l in data.decode("latin-1", "replace").splitlines() if re.search(rx, l)]
+        lines = cursor.read().decode("latin-1", "replace").splitlines()
+        return [l for l in lines if re.search(rx, l)] if rx else lines
 
     def t(self, *args, **kw):
         return tacli(self.inst, *args, **kw) if args and args[0] not in ("launch", "stop", "arm", "scenario") else tacli(*args, **kw)
 
     def census_lines(self):
         """New `gui census:` lines since the last call, read straight from the
-        instance's tagpu.log by byte offset (a tacli `log` tail slides)."""
+        instance's log/tagpu.log through a cursor (a tacli `log` tail slides)."""
         if not self.gamedir:
             return []
-        path = self.gamedir / "tagpu.log"
-        if not path.exists():
-            return []
-        size = path.stat().st_size
-        if size < self.log_seen:          # a relaunch truncated it
-            self.log_seen = 0
-        with path.open("rb") as f:
-            f.seek(self.log_seen)
-            data = f.read()
-        self.log_seen = size
+        if self.census_cursor is None:
+            self.census_cursor = talog.Cursor.run_start(self.gamedir)
+        data = self.census_cursor.read(advance=True)
         return [l for l in data.decode("latin-1", "replace").splitlines() if "gui census:" in l]
 
     def top_gui(self):
@@ -492,22 +484,21 @@ class Walk:
         """The loading screen, held until the world is alive. It is presented exactly
         ONCE: the game entry handler paints it (`0x4288D0("loadgame2bg")`) and flips, and
         nothing presents again until the map is loaded and the mode switches."""
-        start = self.log_size()
+        start = self.log_cursor()
         rc, out = tacli("ui", self.inst, "click", "Start")
         if rc != 0:
             print(f"  [{label}] Start -> rc={rc}: {out.strip().splitlines()[-1] if out.strip() else ''}", file=sys.stderr)
         t0 = time.time()
         alive = False
-        switched = None                  # log offset of the game's mode switch
         while time.time() - t0 < timeout:
             # "alive" is read only after the game's mode switch: the overlay's `units:` line
             # keeps reporting the dead game's array from the shell (MEASURED 2026-09-07:
             # `alive=4` two seconds after Start), so the switch -- the Vulkan lane coming
             # up again at the game's resolution -- is the first sign the map has loaded,
             # and the roster after it the second
-            if switched is None and self.log_since(start, r"^vk: up in \d+ ms"):
-                switched = self.log_size() - 4096
-            if switched is not None and self.log_since(max(switched, 0), r"units: alive=[1-9]"):
+            lines = self.log_since(start)
+            at = next((i for i, l in enumerate(lines) if re.search(r"^vk: up in \d+ ms", l)), None)
+            if at is not None and any(re.search(r"units: alive=[1-9]", l) for l in lines[at:]):
                 alive = True
                 break
             time.sleep(0.5)
@@ -673,7 +664,7 @@ def main():
                         timeout=600, check=True)
         print(out.strip().splitlines()[-1] if out.strip() else "", file=sys.stderr)
         w.gamedir = w.gamedir or instance_dir(a.inst) or (TREE / "tagpu" / "instances" / a.inst / "gamedir")
-        w.log_seen = 0
+        w.census_cursor = None                 # the census window starts with the new run
         time.sleep(3.0)
         walk = game_walk(a.side)
         if a.screens_only:
@@ -687,7 +678,7 @@ def main():
             for label, actions in shell_stops:
                 w.stop_at(label, actions)
             w.stop_loading(f"loading#{k}")
-            w.log_seen = w.log_size()          # the census window restarts with the game
+            w.census_cursor = w.log_cursor()   # the census window restarts with the game
             time.sleep(3.0)
             for label, actions in game_stops:
                 w.stop_at(label, actions, in_game=True)

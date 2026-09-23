@@ -55,7 +55,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_fogwide.h"
 #include "tagpu_packet_pub.h"
-#include "tagpu_zoom.h"
+#include "tagpu_log.h"
 
 #define TERRAIN_VA   0x00483FA0u   /* stdcall(ctx), ret 4  */
 #define FOG_VA       0x004848E0u   /* stdcall(ctx), ret 4  */
@@ -114,8 +114,7 @@ static unsigned g_beat = 0, g_last = 0;
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
@@ -321,11 +320,6 @@ int tagpu_terrown_installed(void) { return g_installed; }
 
 int tagpu_terrown_filled(void) { return g_terrown_skip && g_filled; }
 
-/* The fog overlay is ours exactly while the LATCH is set: that is the flag the
-   leaf_call detour on 0x4848E0 tests, so terr_fogtick above runs on precisely
-   these ticks and on no others. */
-int tagpu_terrown_owns_fog(void) { return g_terrown_own != 0; }
-
 int tagpu_terrown_request(void) { return g_terrown_skip != 0; }
 
 void tagpu_terrown_latch(int own)
@@ -349,9 +343,9 @@ void tagpu_terrown_latch(int own)
 void tagpu_terrown_flush(unsigned int frame_counter)
 {
     if (!g_installed) return;
-    /* if the native pass stops running (overlay off, GL failure, a frame path
-       that never reaches it) the engine's terrain comes back rather than the
-       viewport going flat key-colour */
+    /* if the native pass stops running (overlay off, a level teardown, a
+       frame path that never reaches it) the engine's terrain comes back
+       rather than the viewport going flat key-colour */
     if (g_terrown_skip && frame_counter - g_beat > 90) {
         flog("terrown: terrain pass silent for 90 frames");
         tagpu_terrown_set_skip(0);

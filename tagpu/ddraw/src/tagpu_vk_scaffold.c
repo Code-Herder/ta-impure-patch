@@ -4,12 +4,11 @@
    open.
 
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. The scaffold bytes come from
-   tagpu_scaffold.c through `tagpu_scaffold_overlay` -- the very buffer the GL
-   lane just uploaded to its own texture, handed over once -- the quad is the
-   one literal both lanes are built from (TAGPU_SCAF_QUAD), the NDC rect and the
-   row count are the numbers the GL draw used, and the shader is the same GLSL,
-   translated by tools/spirv-gen.py into inc/spirv/tagpu_scaffold.spv.h. What a
-   0-px comparison then compares is two RASTERISERS.
+   tagpu_scaffold.c through `tagpu_scaffold_overlay`, handed over once; the quad
+   is the literal in inc/tagpu_scaffold.h (TAGPU_SCAF_QUAD); the NDC rect and
+   the row count are the gather's numbers; and the shader is tagpu_scaffold.c's
+   GLSL, translated by tools/spirv-gen.py into inc/spirv/tagpu_scaffold.spv.h.
+   This file owns the Vulkan objects and the draw, and nothing else.
 
    ---- THE PER-FRAME UPLOAD ----
 
@@ -69,18 +68,16 @@
    deferred free, no second wait.
 
    THE Y FLIP IS PIPELINE STATE, exactly as in tagpu_vk_fps.c: a negative
-   viewport height (VK_KHR_maintenance1), never a source edit, because an edited
-   shader would disagree with the GL twin that is its oracle.
+   viewport height (VK_KHR_maintenance1), never a source edit: tagpu_scaffold.c's
+   GLSL is written for a +Y-up clip space, and the viewport turns it over once.
 
    BLENDING IS PIPELINE STATE TOO -- the readout has none.
-   The GL twin sets glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA), which in
-   GL sets the RGB *and* the alpha factors, so both are set here. Over the black
-   field both lanes clear to, the result is the shader's colour times 0.55 on
-   each side; if the two ever differ by a least significant bit this is the
-   first place to look, and the A/B will say so rather than hide it.
+   SRC_ALPHA / ONE_MINUS_SRC_ALPHA on the colour AND the alpha factors: the
+   shader writes alpha 0.55, so the overlay is 55 % of the ramp colour over
+   whatever is behind it.
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
-   A PASS READS NO ENGINE STATE: every value comes from the GL lane's hand-over,
+   A PASS READS NO ENGINE STATE: every value comes from the gather's hand-over,
    so this file is not on thread-split.allow and must never need to be. */
 
 #include "tagpu_vk_pass.h"
@@ -326,20 +323,17 @@ static int build_sampler(const TAGPU_VKPASS* d)
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     VkFormatProperties fp;
 
-    /* R8_UNORM SAMPLED, ASKED FOR RATHER THAN ASSUMED. The GL twin uploads the
-       scaffold as GL_R8 and the shader reads `.r` and multiplies by 255 to get
-       the row key back, so the format has to be the single-channel one or the
-       comparison is not of the same texels. */
+    /* R8_UNORM SAMPLED, ASKED FOR RATHER THAN ASSUMED. The scaffold is one
+       byte a texel and the shader reads `.r` and multiplies by 255 to get the
+       row key back, so the format has to be the single-channel one. */
     vkGetPhysicalDeviceFormatProperties(d->pd, VK_FORMAT_R8_UNORM, &fp);
     if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
         plog(d, "scaf: this device cannot sample R8_UNORM - the pass stays down");
         return 0;
     }
-    /* NEAREST AND CLAMP_TO_EDGE, WHICH IS WHAT THE GL TWIN SETS. A texel here is
-       a row KEY, not a colour: a filtered half of one is a depth that belongs to
-       no row, and the shader's `(v - 3.0) / 4.0` would decode it as a different
-       band. Filtering differently between the lanes would differ on every
-       silhouette edge for a reason that is neither rasteriser's. */
+    /* NEAREST AND CLAMP_TO_EDGE. A texel here is a row KEY, not a colour: a
+       filtered half of one is a depth that belongs to no row, and the shader's
+       `(v - 3.0) / 4.0` would decode it as a different band. */
     sci.magFilter = VK_FILTER_NEAREST;
     sci.minFilter = VK_FILTER_NEAREST;
     sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -413,19 +407,18 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
     vi.vertexAttributeDescriptionCount = 1; vi.pVertexAttributeDescriptions = &va;
 
-    /* A STRIP, WHICH IS WHAT THE GL TWIN DRAWS. Four vertices as a strip and six
-       as a list cover the same quad, but they do not necessarily cover it with
-       the same two triangles in the same order, and a diagonal that ran the
-       other way would put every pixel on it on the other side of a rounding
-       decision. The oracle is a 0-px comparison; this is not a place to
-       paraphrase. */
+    /* A STRIP, because TAGPU_SCAF_QUAD is in strip order. Four vertices as a
+       strip and six as a list cover the same quad, but they do not necessarily
+       cover it with the same two triangles in the same order, and a diagonal
+       that ran the other way would put every pixel on it on the other side of
+       a rounding decision. */
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     vp.viewportCount = 1; vp.scissorCount = 1;     /* both dynamic, set per frame */
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
     /* NO CULLING: the negative viewport height flips the winding of every
-       triangle, so a cull mode that was right under GL would throw the whole
-       quad away. The GL twin does not cull either. */
+       triangle, so a cull mode chosen for the shader's +Y-up winding would
+       throw the whole quad away. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
@@ -433,11 +426,10 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
     memset(&cba, 0, sizeof cba);
-    /* BLENDING, BECAUSE THE GL TWIN BLENDS -- and on both factor pairs, because
-       glBlendFunc sets the alpha factors as well as the colour ones. The
-       fragment shader writes a 0.55 alpha and `discard`s where the scaffold is
-       free, so what reaches the frame is 55% of the ramp colour over whatever
-       is behind it; over the A/B's black field that is 0.55 * c on both lanes. */
+    /* BLENDING, on both factor pairs. The fragment shader writes a 0.55 alpha
+       and `discard`s where the scaffold is free, so what reaches the frame is
+       55% of the ramp colour over whatever is behind it; over a black field
+       that is 0.55 * c. */
     cba.blendEnable = VK_TRUE;
     cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
@@ -460,9 +452,9 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     /* A DEPTH STATE THAT TESTS NOTHING AND WRITES NOTHING, and it is required
        rather than tidy: the seam's render pass carries a depth attachment, and
        a pipeline built against a subpass that has one may not leave
-       pDepthStencilState null. This pass's GL twin calls neither
-       glEnable(GL_DEPTH_TEST) nor glDepthMask, so all three flags are off and
-       the attachment changes nothing in the picture. */
+       pDepthStencilState null. The overlay is drawn over the finished world
+       and is not occluded by it, so all three flags are off and the attachment
+       changes nothing in the picture. */
     memset(&ds, 0, sizeof ds);
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_FALSE;
@@ -477,7 +469,7 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     gp.renderPass = d->rp;
     gp.subpass = 0;
     /* THE DEPTH STATE IS OFF, not absent -- see where `ds` is filled above. The
-       seam's render pass carries a depth attachment, and the GL/Vulkan
+       seam's render pass carries a depth attachment, and the
        depth-range answer the depth-testing passes need
        (minDepth 0.5 / maxDepth 1.0, gpu-status §2.28) is in tagpu_vk_feat.c;
        this pass does not test, so it does not need it. */
@@ -562,8 +554,8 @@ static int build(const TAGPU_VKPASS* d)
     s_ustride = ualign * 2;
 
     /* THE QUAD IS UPLOADED ONCE AND NEVER AGAIN, so it needs no per-slot copy:
-       nothing writes it after this. It is the same literal the GL lane builds
-       its own buffer from (TAGPU_SCAF_QUAD in inc/tagpu_scaffold.h). */
+       nothing writes it after this. It is TAGPU_SCAF_QUAD, the literal in
+       inc/tagpu_scaffold.h. */
     if (!mk_buffer(d, sizeof quad, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                    &s_vbuf, &s_vmem, &vmap)) return 0;
@@ -593,7 +585,7 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
 
     /* THE OVERLAY A CONSUMER MAY SAMPLE IS NOT THIS FRAME'S UNTIL THE UPLOAD
        BELOW HAS BEEN RECORDED. Cleared first so that every exit path leaves
-       `tagpu_vk_scaffold_ready` saying no rather than yes for an older frame. */
+       `tagpu_vk_scaffold_view` saying no rather than yes for an older frame. */
     s_liveHave = 0;
 
     if (s_state == ST_REFUSED) return 0;
@@ -610,7 +602,7 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
        Giving slot `slot` back at this point needs no new argument and no timer:
        it is the same instant, and the same ownership, that the rest of this
        function writes that slot in. The lever cleared, the shell, a level
-       teardown and a frame the GL twin skipped all arrive here, so after one
+       teardown and a frame the gather skipped all arrive here, so after one
        turn of the slots the pass holds nothing but its pipeline, its sampler,
        its descriptor sets and a 512-byte uniform buffer -- none of which scales
        with anything. The cost of being wrong about that is one vkCreateImage a
@@ -699,17 +691,17 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
 
     /* The two uniform blocks, at the std140 offsets the generated header prints:
        `vec4 uRect` at 0 in the vertex block, `float uRows` at 0 in the fragment
-       one -- the same four numbers and the same row count the GL draw used. */
+       one -- the four numbers and the row count the gather handed over. */
     ub[0] = rect[0]; ub[1] = rect[1]; ub[2] = rect[2]; ub[3] = rect[3];
     memcpy(s_umap + (size_t)slot * s_ustride, ub, 16);
     ub[0] = rows; ub[1] = ub[2] = ub[3] = 0.0f;
     memcpy(s_umap + (size_t)slot * s_ustride + s_ustride / 2, ub, 16);
 
     /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST. A
-       frame claimed and then not drawn would have the seam capture a bare clear
-       against a GL half that has the overlay in it, and report every overlay
-       pixel as differing: a port failure that is really an oracle failure, which
-       is the worst answer an oracle can give. */
+       frame claimed and then not drawn would have the seam capture a bare
+       clear, and a diff against another build's capture would report every
+       overlay pixel as differing: a failure of this pass that is really a
+       failure of the capture. */
     s_abFrame = ab;
     s_drawThis = 1;
     /* THE OVERLAY IS ALSO A TEXTURE OTHER PASSES SAMPLE (the unit pass). It
@@ -724,11 +716,6 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
     s_liveHave = 1;
     s_liveFrame = d->frame;
     return 1;
-}
-
-int tagpu_vk_scaffold_ready(unsigned frame)
-{
-    return s_liveHave && s_liveFrame == frame;
 }
 
 VkImageView tagpu_vk_scaffold_view(unsigned frame, uint32_t slot)
@@ -750,8 +737,8 @@ void tagpu_vk_scaffold_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
     s_drawThis = 0;
 
     /* THE FLIP, AND IT IS THE WHOLE OF IT: y starts at the bottom and the height
-       is negative, so clip space is turned over once and the ported shader keeps
-       GL's convention without a character changing. */
+       is negative, so clip space is turned over once and the shader keeps its
+       +Y-up convention without a character changing. */
     vp.x = 0.0f;
     vp.y = (float)h;
     vp.width = (float)w;

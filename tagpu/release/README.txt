@@ -98,10 +98,12 @@ WHAT IT WRITES
   its registry keys as before.
   On the first start only, impure-migration.txt and the *.migrated backups.
 
-  tagpu.log next to TotalA.exe: one "ARMED" line per pass at start, the options
-  line ("opt: play defaults ON ..."), the settings line ("settings: impure.cfg:
-  ..."), and timings. Attach it to a bug report. Nothing else is written unless
-  you ask for a dump.
+  log\tagpu.log in the game folder: one "ARMED" line per pass at start, the
+  options line ("opt: play defaults ON ..."), the settings line ("settings:
+  impure.cfg: ..."), and timings. Attach it to a bug report. Each launch starts
+  a new file and keeps the previous ones as tagpu.1.log, tagpu.2.log and so on;
+  the logs never take more than 128 MB. Nothing else is written unless you ask
+  for a dump.
 
 
 MULTIPLAYER

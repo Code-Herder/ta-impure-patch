@@ -5,37 +5,24 @@
 #include <windows.h>
 #include <stdio.h>
 #include <math.h>
-#include "tagpu_model3do.h"   /* TAGPU_PBMAXPIECE: the piece-count bound */
+#include "tagpu_model3do.h"   /* F_COLORTAB: the Model3DOFace layout */
 #include "tagpu_render3do.h"
 #include "tagpu_pal.h"
 #include "tagpu_gaf.h"
-#include "tagpu_vk.h"         /* tagpu_vk_owns_present: is there a GL lane at all? */
+#include "tagpu_vk.h"         /* tagpu_vk_owns_present: will a Vulkan pass run at all? */
 #include "tagpu_classicpp.h"  /* tagpu_classicpp_assets: the restored twin is only worth mirroring while it is what the twin samples */
-#include "tagpu_r3dcache.h"
+#include "tagpu_log.h"
 
 /* The Object3do piece array, PrimitiveStruct and Model3DONode layouts are in
    research/notes/exe-reverse-engineering.md; the pieces this file needs
-   arrive in the packet's PK_PIECE table. */
-#define N_FACES       0x28     /* Model3DONode.pFaceArray                  */
-#define FACE_STRIDE   0x20     /* Model3DOFace                             */
-#define F_COLORTAB    0x00     /* PaletteEntry resolved to a table pointer */
-#define F_VCOUNT      0x04     /* vertex indices in this face              */
-#define F_TEXNAME     0x08     /* char* GAF frame name, 0 = flat colour    */
-#define F_INDICES     0x0C     /* u16* vertex indices                      */
-#define GF_WIDTH      0x00     /* GAFFrame u16                             */
-#define GF_HEIGHT     0x02
-#define GF_HOTX       0x04     /* s16 model-origin pixel inside the sprite */
-#define GF_HOTY       0x06
-#define GF_PTRCOLOR   0x10     /* u8* colour plane, top-down, stride=W     */
-
-#define MAXVERTS  24576        /* triangulated vertices per unit per frame */
+   arrive in the packet's PK_PIECE table, and the face offsets it reads are
+   tagpu_model3do.h's. */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 
 static void rlog(const char* s)
 {
-    FILE* fl = fopen("tagpu.log", "a");
-    if (fl) { fprintf(fl, "%s\n", s); fclose(fl); }
+    tagpu_log(s);
 }
 
 
@@ -99,7 +86,7 @@ static unsigned      s_lutSerial;
 
 static void shade_upload(const unsigned char* lut)
 {
-    /* `s_lutMirror` is what the Vulkan twin samples. */
+    /* `s_lutMirror` is what the Vulkan unit pass samples. */
     memcpy(s_lutMirror, lut, sizeof s_lutMirror);
     s_lutSerial++;
     s_lutBuilt = 1;
@@ -200,9 +187,9 @@ static void nano_stage(int p, float b1, float b2, float* t, float c[3])
     else               { *t = (float)(p*255/30);                    c[0]=-1; c[1]=b1; c[2]=-1; }
 }
 
-/* The whole build-state decision for one unit, in the engine's own terms, so
-   the two renderers that stage the scaffold (this one into a composite plane,
-   the native pass into the GL frame) cannot drift apart on the formulas.
+/* The whole build-state decision for one unit, in the engine's own terms, in
+   one place, so whatever stages the scaffold (the native pass, tagpu_native.c)
+   cannot drift from the engine's formulas.
 
    Fills `t` (the height threshold, in composite depth-plane bytes), `c`
    (cAbove, cBand, cBelow: -2 erase, -1 keep the texture, else a palette index
@@ -236,26 +223,26 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
 static void r3d_init(void)
 {
     /* 8bpp index atlas (R8, NEAREST both ways: sampled texel == palette
-       index), created now so the unit program never samples texture 0 */
+       index), laid out now, before the unit pass's first lookup */
     tagpu_gaf_atlas_lost(&s_atlas);
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "unit";
     s_atlas.pad = ATLAS_PAD; s_atlas.align = ATLAS_PAD; s_atlas.mip = ATLAS_MIP;
-    s_atlas.prio = 3;                 /* restored after terrain, features, effects */
     if (!tagpu_gaf_atlas_create(&s_atlas)) { rlog("render3do: atlas texture FAILED"); s_state = 2; return; }
 
     /* the shade LUT is built lazily from the packet's table on first use
-       (tagpu_r3d_lut_want). The atlas above is laid out on either lane (its
-       existence is `made`, not a GL name) and `s_state = 1` means "the atlas
+       (tagpu_r3d_lut_want). The atlas above is laid out whether or not a
+       Vulkan pass will consume it (its existence is `made`, tagpu_gaf.h) and
+       `s_state = 1` means "the atlas
        and the shade LUT are ready", which is what `tagpu_r3d_ensure` answers
        for the unit pass. */
     s_state = 1;
     /* THE MIRROR IS ASKED FOR HERE, BEFORE THE FIRST PAINT, and that ordering is
        the whole of it. A mirror allocated after the atlas has filled only marks
-       the frames already painted to re-decode "on their next use" -- and on the
-       vulkan-only lane the bake is cached and nothing asks the atlas again, so
-       that next use never arrives and the twin stands down on a mirror that
-       never converges. Measured: 25 s of settled play with the census still
+       the frames already painted to re-decode "on their next use" -- and the
+       bake is cached, so nothing asks the atlas again, that next use never
+       arrives and the Vulkan unit pass stands down on a mirror that never
+       converges. Measured: 25 s of settled play with the census still
        reading `unit=0`. Asked at arm time, every paint from the first one lands
        in the mirror and nothing needs re-decoding at all. `s_atlas.dim` is set
        a few lines above, which is the precondition `_want` tests, and the call
@@ -263,7 +250,7 @@ static void r3d_init(void)
     /* ASKED OF THE CONSUMER, NOT OF THE LEVER. These latches are one-way, so
     once asked the memory is held for the process's life, and
     `tagpu_vk_armed()` is true whenever `tagpu_vk.on` exists -- including under
-    `renderer=openglcore`, where the lever arms nothing and the mirror would be
+    `renderer=gdi`, where the lever arms nothing and the mirror would be
     paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
     "a Vulkan pass will run in this process", which is the question. */
     if (tagpu_vk_owns_present()) tagpu_r3d_atlas_mirror_want();
@@ -358,11 +345,8 @@ static const char* face_texframe(const char* fa, int owner)
 
 /* ---- exports for the native pass (tagpu_native.c): share the atlas,
    shade LUT and calibration so both paths draw identical materials ---- */
-unsigned int tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
 /* IS THERE A RESTORE ROUTE AT ALL. The route is the published list, and this
-   is what says it exists. `rgbref` above cannot answer it: `a->rgb = 0` in
-   tagpu_gaf.c is its only writer in the tree. Latched by the arm, so it does
-   not flicker. */
+   is what says it exists. Latched by the arm, so it does not flicker. */
 int tagpu_r3d_atlas_restore_armed(void) { return s_atlas.rlistWant ? 1 : 0; }
 unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
 /* ---- THE LEVEL BOUNDARY ------------------------------------------------
@@ -376,8 +360,8 @@ unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
    valid, the UV is in range, the picture is simply wrong.
 
    `tagpu_fx.c` and `tagpu_feat.c` drop theirs at this boundary for exactly
-   this reason. The atlas's other resets -- when FULL, and on a GL context
-   loss -- are not level boundaries.
+   this reason. The atlas's other reset -- when FULL -- is not a level
+   boundary.
 
    It is called from `tagpu_native_frame` beside `cache_gen_check` and
    `tagpu_posebake_frame`, the other two level-keyed caches, rather than from
@@ -404,14 +388,14 @@ void tagpu_r3d_atlas_frame(void)
 {
     if (s_state != 1) return;
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
-    /* No palette here: this atlas's restore is the other lane's --
+    /* No palette here: this atlas's restore is the Vulkan restorer's --
        `tagpu_gaf_atlas_restore_vk` publishes the frame list and
        `tagpu_vk_restore.c` paints it, each reading the palette for itself. */
 }
 /* `shd` is the packet's copy of PALETTE.SHD, or NULL: the LUT is built once
-   per GL context out of whichever the caller has. Called every frame from
-   tagpu_native.c; it is what keeps `s_lutMirror` current for the Vulkan
-   twin. */
+   out of whichever the caller has, and again when the engine's table first
+   arrives. Called every frame from tagpu_native.c; it is what keeps
+   `s_lutMirror` current for the Vulkan unit pass. */
 void tagpu_r3d_lut_want(const unsigned char* shd)
 {
     /* build once — and REBUILD the first time the engine's own table arrives
@@ -449,8 +433,8 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
 }
 
 /* THE LIST, THE ONLY ANSWER TO THE QUESTION (the shape features and effects
-   use). Under Classic++ `assets=1` the other lane restores the twin for
-   itself. Polled on every beat until it takes, because the lever may appear
+   use). Under Classic++ `assets=1` the Vulkan restorer (tagpu_vk_restore.c)
+   paints the twin from it. Polled on every beat until it takes, because the lever may appear
    mid-session. */
 static int s_rlistAsked;
 
@@ -464,8 +448,8 @@ void tagpu_r3d_atlas_restore_want(void)
        writer, and the consumer stands a frame down when it disagrees with the
        ratio its sampler was built at.
 
-       IT IS THE KNOB, NOT THE CONSTANT, AND NOT THE CLAMP. Publishing
-       `TAGPU_GAF_TWIN_ANISO` would stand the pass down on any device without
+       IT IS THE KNOB, NOT A CONSTANT, AND NOT THE CLAMP. Publishing a fixed
+       default ratio would stand the pass down on any device without
        anisotropic filtering, because there `s_twinAniso` is 0.0f. Publishing
        what the consumer actually applies would make the test compare a value
        against itself. The knob is the one thing both ends read independently
@@ -530,7 +514,7 @@ int tagpu_r3d_atlas_uv(const char* g, float uv[4], float* ck)
     return 1;
 }
 int tagpu_r3d_ready(void) { return s_state == 1; }
-int tagpu_r3d_ensure(void)             /* init on demand (GL context current) */
+int tagpu_r3d_ensure(void)             /* init on demand */
 {
     if (s_state == 0) r3d_init();
     return s_state == 1;

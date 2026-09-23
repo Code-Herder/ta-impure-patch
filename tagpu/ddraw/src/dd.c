@@ -18,6 +18,7 @@
 #include "versionhelpers.h"
 #include "tagpu_title.h"
 #include "tagpu_cfg.h"
+#include "tagpu_log.h"
 #include "tagpu_settings.h"
 
 
@@ -1892,12 +1893,8 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
                arm gives. A value that is not a renderer is logged rather than
                refused: the game still starts, on the default. */
             if (_strcmpi(g_config.renderer, "auto") != 0) {
-                FILE* f = fopen("tagpu.log", "a");
-                if (f) {
-                    fprintf(f, "ddraw: renderer=%s is not a renderer (auto, vulkan, gdi) -- using vulkan\n",
-                            g_config.renderer);
-                    fclose(f);
-                }
+                tagpu_logf("ddraw: renderer=%s is not a renderer (auto, vulkan, gdi) -- using vulkan",
+                           g_config.renderer);
             }
             g_ddraw.renderer = vk_render_main;
         }
