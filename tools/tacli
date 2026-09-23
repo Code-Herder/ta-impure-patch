@@ -505,7 +505,7 @@ def set_defaults(inst: Instance, meta: dict, want) -> "str | None":
     return None
 
 
-def ensure_store(inst: Instance, res=None) -> None:
+def ensure_store(inst: Instance, res=None, default_res=None) -> None:
     """The DLL's settings store, `impure.cfg`, created EMPTY when it is missing.
 
     An absent store is the DLL's first-run signal: it renames the lever files an
@@ -514,24 +514,42 @@ def ensure_store(inst: Instance, res=None) -> None:
     always has one before it launches. Empty means every key at its compiled
     default; under tagpu_defaults.off the DLL ignores the store altogether
     (renderers.md 2.10b). An existing store is left alone -- a --defaults
-    instance keeps what its menu was set to -- except for `resolution=` when
-    the caller passes `res` (an explicit --res, or a store being created).
+    instance keeps what its menu was set to -- except for `resolution=`:
 
-    `res` IS THE INSTANCE'S SCREEN SIZE, AND THE STORE IS WHERE THE DLL READS IT.
-    The store's own default is the monitor's native mode and it replaces the
-    registry's `DisplaymodeWidth/Height` at startup, so without this line a
-    --defaults launch would run at the monitor's size whatever `--res` said. The
-    registry keys stay written as well, for a control launch, where the store is
-    ignored and the engine's own load is what stands."""
+      res          an explicit --res: replaces whatever the store holds.
+      default_res  the instance's recorded size: written only when the store has
+                   no `resolution=` line yet, because the store's own default is
+                   the monitor's native mode, which would override --res on a new
+                   instance. A size the player picked in the menu is kept.
+
+    The registry keys stay written as well, for a control launch, where the store
+    is ignored and the engine's own load is what stands."""
     path = inst.gamedir / "impure.cfg"
     if not path.exists():
         inst.gamedir.mkdir(parents=True, exist_ok=True)
         path.write_text("")
-    if res:
-        lines = [ln for ln in path.read_text().splitlines()
-                 if not ln.strip().lower().startswith("resolution=")]
-        lines.append(f"resolution={int(res[0])}x{int(res[1])}")
+    lines = path.read_text().splitlines()
+    has = any(ln.strip().lower().startswith("resolution=") for ln in lines)
+    want = res or (default_res if not has else None)
+    if want:
+        lines = [ln for ln in lines if not ln.strip().lower().startswith("resolution=")]
+        lines.append(f"resolution={int(want[0])}x{int(want[1])}")
         path.write_text("\n".join(lines) + "\n")
+
+
+def store_res(inst: Instance):
+    """The store's `resolution=WxH` as a pair, or None for `native`, absent or
+    unreadable -- the size a --defaults launch opens at when the menu picked one."""
+    try:
+        text = (inst.gamedir / "impure.cfg").read_text()
+    except OSError:
+        return None
+    for ln in text.splitlines():
+        k, _, v = ln.partition("=")
+        if k.strip().lower() == "resolution":
+            m = re.fullmatch(r"\s*(\d+)x(\d+)\s*", v)
+            return (int(m.group(1)), int(m.group(2))) if m else None
+    return None
 
 
 def write_title(inst: Instance, label: str) -> str:
@@ -1144,9 +1162,19 @@ def _launch(args) -> dict:
             meta["maxfps"] = args.maxfps
             inst.save_meta(meta)
         write_ddraw_ini(inst, tuple(meta["tile"]), win, maxfps=meta["maxfps"])
-    if args.res or getattr(args, "window", None) is not None:
-        if args.res:
-            meta["res"] = list(args.res)
+    # A size the player picked in the menu is the store's, and a --defaults
+    # launch opens at it: follow it, so the tile, the registry keys and what this
+    # reports are the game's size rather than an old --res.
+    picked = None
+    defaults_on = (args.defaults if getattr(args, "defaults", None) is not None
+                   else meta.get("defaults"))
+    if not args.res and defaults_on:
+        picked = store_res(inst)
+        if picked and list(picked) == list(meta.get("res") or []):
+            picked = None
+    if args.res or picked or getattr(args, "window", None) is not None:
+        if args.res or picked:
+            meta["res"] = list(args.res or picked)
         meta["tile"] = list(tile_for(meta.get("slot", 0),
                                      client_box(meta["res"], win), screen=screen))
         inst.save_meta(meta)
@@ -1237,10 +1265,9 @@ def _launch(args) -> dict:
     markown_note = _ensure_markown_for_mark(inst)
     defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
     # The size goes into the store when it is asked for on THIS launch, or when
-    # the store is new; otherwise the store keeps what its menu was set to --
-    # a recorded --res rewritten every launch would undo the player's pick.
-    store_new = not (inst.gamedir / "impure.cfg").exists()
-    ensure_store(inst, tuple(args.res) if args.res else (tuple(meta["res"]) if store_new else None))
+    # the store has none yet; a recorded --res rewritten every launch would undo
+    # the player's pick (ensure_store).
+    ensure_store(inst, tuple(args.res) if args.res else None, default_res=tuple(meta["res"]))
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.
