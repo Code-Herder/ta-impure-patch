@@ -1,10 +1,10 @@
-/* tagpu_packet.c — the frame packet exchange: the primitive (landings 1, 2).
-   Contract: tagpu_packet.h (consumer), tagpu_packet_pub.h (producer). Design
-   and the four reviews it survived: research/notes/frame-packet-exchange.html.
+/* tagpu_packet.c — the frame packet exchange: the primitive.
+   Contract: tagpu_packet.h (consumer), tagpu_packet_pub.h (producer). Design:
+   research/notes/frame-packet-exchange.html.
 
    THE EXCHANGE. N slots with roles, not owners fixed for life: W is the one
    the producer is filling, the consumer holds two or three (READ, PREV and —
-   for the frame packet since landing 3 — a SPARE), and one sits in the CELL —
+   for the frame packet — a SPARE), and one sits in the CELL —
    fresh (published, not yet taken) or stale (returned, waiting to be reused).
    The cell is ONE aligned 32-bit word in our static storage: `idx (3 bits) |
    FRESH (bit 3)`, the reserved bits asserted zero. Each side exchanges a slot
@@ -12,7 +12,7 @@
    permutation of the slots without a lock — and the init below makes them one
    to begin with: zeroed statics would put both threads on slot 0.
 
-   THE ROTATION, AND WHY THERE IS A THIRD CONSUMER SLOT (landing 3). The engine
+   THE ROTATION, AND WHY THERE IS A THIRD CONSUMER SLOT. The engine
    draws several times per sim tick, so consecutive packets often carry the
    same tick; a consumer that handed PREV back on every take would then hold
    two records of one tick and the pose blend would refuse — stepped motion,
@@ -46,8 +46,8 @@
 
    HEAD BEFORE, TAIL AFTER. `head_seq` is stored before the fill and
    `tail_seq` after it; the consumer latches the head at acquire and compares
-   the tail at frame_end. Both written after the fill would be a blind check
-   (the protocol review's finding): with them on either side, any fill that
+   the tail at frame_end. Both written after the fill would be a blind check:
+   with them on either side, any fill that
    overlaps a consumer frame — the one thing the permutation forbids — is
    caught by the consumer that saw it, on the frame it saw it.
 
@@ -59,8 +59,8 @@
    grows the write slot first; a commit that fails keeps the current size and
    retries later, never pins it. So no block ever moves, a pointer into a
    slot can never dangle, and a rule-breaking cached pointer reaches a slot's
-   current bytes and never freed memory. Reference counting was rejected: a
-   count cannot see the raw pointer a module copies.
+   current bytes and never freed memory. Not reference counting: a count
+   cannot see the raw pointer a module copies.
 
    WAIT-FREE, BOTH SIDES. Neither exchange can fail or block. A stuck consumer
    costs the producer one relaxed load per attempt (the FRESH gate skips the
@@ -88,7 +88,7 @@
                           hands back, so a pointer cached across frames
                           reads 0xDD instead of plausible stale data
 
-   INSTANTIABLE, AND INSTANTIATED TWICE (landing 2). Every piece of state
+   INSTANTIABLE, AND INSTANTIATED TWICE. Every piece of state
    lives in a PKX and the four operations take one. A record is anything
    that starts with the three-dword prefix {head_seq, cap_bytes, used_bytes}
    and ends with {crc, tail_seq}; what lies between is the instance's
@@ -96,8 +96,7 @@
    here. The frame packet (s_frame: game thread -> render thread, 8 MB
    slots, FIVE of them, PREV handed out for the pose blend) and the command
    record (s_cmd: render thread -> game thread, 64 KB slots, four of them,
-   latest wins with `force`, no PREV) are the two instances; the wide fog grid
-   (landing 4b) is the next. The proof above is written once and holds for
+   latest wins with `force`, no PREV) are the two instances. The proof above is written once and holds for
    each, with `nslots`/`holds` the only numbers that differ. */
 
 #include <windows.h>
@@ -450,7 +449,7 @@ static const char* frame_valid(const void* rec)
         if (p->shd_len != TAGPU_PK_SHD_BYTES || !area_ok(p, p->shd_off, p->shd_len))
             return "shade table area";
     }
-    /* THE FOUR WORLD TABLES (landing 3). Each is checked ONCE, here, against
+    /* THE FOUR WORLD TABLES. Each is checked ONCE, here, against
        the record's own committed extent, so every consumer indexes with its
        `n_` and nothing else. `area_ok` does the 4-alignment, the "starts after
        the header" and the "off + len does not wrap and fits in used_bytes"
@@ -497,7 +496,7 @@ static const char* frame_valid(const void* rec)
             if (w[k].base_piece != 0xFFFFu && w[k].base_piece >= w[k].nparts) return "wreck base piece";
         }
     }
-    /* THE FOUR EFFECT TABLES (landing 4a). Each count is bounded by what the
+    /* THE FOUR EFFECT TABLES. Each count is bounded by what the
        ENGINE's own array allows — 300 projectile slots, 300 explosion records,
        100 debris slots — so a consumer's loop can never run past the array the
        publisher walked even if the record were corrupt. The particle table's
@@ -522,9 +521,8 @@ static const char* frame_valid(const void* rec)
         if (sum != p->n_part) return "particle layer counts do not sum";
     }
     /* THE PARTICLE TABLE'S TWO INDEX BYTES. `kind` indexes a consumer's
-       six-row class table and `layer` a ten-row one; every other index a
-       consumer forms out of this packet is bounded here, and these two were
-       the exception [found by the landing review]. */
+       six-row class table and `layer` a ten-row one; every index a consumer
+       forms out of this packet is bounded here, these two included. */
     {
         const TAGPU_PK_PART* q = tagpu_pk_part(p);
         unsigned k;
@@ -533,7 +531,7 @@ static const char* frame_valid(const void* rec)
             if (q[k].layer >= TAGPU_PK_NLAYER) return "particle layer";
         }
     }
-    /* THE TWO FOG GRIDS (landing 4b). The bound a consumer needs is not a cap
+    /* THE TWO FOG GRIDS. The bound a consumer needs is not a cap
        on the dimensions — it is that the bytes it was given hold every index it
        can form. `len == cols * rows * 2`, checked here against the record's own
        extent, IS that bound: the largest index is cols*rows - 1 and the area is
@@ -559,7 +557,7 @@ static const char* frame_valid(const void* rec)
     if (p->fogsh_len && (p->fogsh_len != TAGPU_PK_FOGSHADE_BYTES ||
                          !area_ok(p, p->fogsh_off, p->fogsh_len)))
         return "fog shade area";
-    /* THE GL UI's TWO AREAS (landing 4c), bounded the same way the fog grids
+    /* THE GL UI's TWO AREAS, bounded the same way the fog grids
        are: the length has to be exactly what the dimensions describe, so the
        largest index a consumer can form is inside the bytes it was handed. */
     if (p->mm_len || p->mm_w || p->mm_h) {
@@ -688,9 +686,8 @@ static const void* pkx_acquire(PKX* m, const void** prev)
                exchange safe — producer's W, consumer's held set, the cell —
                is broken, and carrying on would leave our held set with a
                duplicate and one slot owned by nobody, i.e. a reader and the
-               writer in the same bytes. Counting it and continuing was a
-               timing argument dressed as recovery (landing review,
-               2026-09-12). */
+               writer in the same bytes. Counting it and continuing would be a
+               timing argument dressed as recovery. */
             violation(m, "permutation broken — the exchange is STOPPED", got, give);
             m->fatal = 1;
             m->inFrame = 0;

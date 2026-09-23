@@ -1,6 +1,5 @@
 /* tagpu_detour.c — shared stub/patch helpers for the own-the-draw modules.
-   Extracted from tagpu_fxown.c when the feature pass needed the same
-   flag-gated prologue detour (G13a). See tagpu_detour.h. */
+   See tagpu_detour.h. */
 
 #include <windows.h>
 #include <string.h>
@@ -50,7 +49,7 @@ int tagpu_detour_write(unsigned int va, const unsigned char* bytes, int n)
    site the first one owns instead of overwriting its jmp: the observer
    (tagpu_detour_observe) hooks the earlier stub's copy of the stolen bytes.
    fxown holds CopyGafToContext 0x4B7F90 and the UI census needs to watch it —
-   that is the case this exists for (Phase E, G15a). */
+   that is the case this exists for. */
 typedef struct LANDED { unsigned va; unsigned char* stub; int stolenOff; int nst; int hijacks; } LANDED;
 static LANDED s_landed[64];
 static int    s_nlanded = 0;
@@ -68,7 +67,7 @@ static void detour_record(unsigned int va, unsigned char* stub, int stolenOff, i
 /* does the newest stub on `va` replace the return address (an observer with
    an `after`)? A later observer chained onto it would read that stub's
    trampoline as "the return address" and any gate on it would silently fail,
-   so tagpu_detour_observe refuses the chain instead (landing review). */
+   so tagpu_detour_observe refuses the chain instead. */
 static int detour_landed_hijacks(unsigned int va)
 {
     int i;
@@ -221,15 +220,15 @@ int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
 }
 
 /* ---------------------------------------------------------- call-site skip */
-/* SKIP ONE `call`, NOT THE FUNCTION IT CALLS. The shape tagpu_fxown.c has
-   open-coded twice since G13: byte-match the 5-byte `E8 rel32`, build a stub
+/* SKIP ONE `call`, NOT THE FUNCTION IT CALLS. The shape tagpu_fxown.c
+   open-codes twice: byte-match the 5-byte `E8 rel32`, build a stub
    that either unwinds as the callee would or tail-jumps to it, and repoint the
    call. Shared here because the cursor's blit needs the same thing and three
    copies of a stack-unwind is three chances to get `ret n` wrong.
 
    WHY A CALL SITE AND NOT THE CALLEE'S PROLOGUE. A leaf detour on the function
    takes the WHOLE function over, including whatever bookkeeping it does for
-   its caller. The engine's cursor draw 0x4C67C0 is the case that taught us:
+   its caller. The engine's cursor draw 0x4C67C0 is the case:
    it fills the saved-background descriptor, writes +0x1B6/+0x1BA, calls the
    background SAVE and only then blits — and its caller restores that
    background unconditionally afterwards (0x4C6585, gated only on +0x1CE and

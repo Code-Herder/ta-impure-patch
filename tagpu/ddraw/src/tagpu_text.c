@@ -1,4 +1,4 @@
-/* tagpu_text.c — TA's own glyphs, rasterised into an atlas of ours (G13p).
+/* tagpu_text.c — TA's own glyphs, rasterised into an atlas of ours.
    See tagpu_text.h for why the engine's blitter can be called with our
    destination and why the font travels as BYTES in the frame packet rather
    than as a pointer.
@@ -7,9 +7,8 @@
    at `0x4C1527` and the blitter `0x4CCF60`; both read the same four fields):
 
      font+0x00  u8    glyph height in ROWS. `0x4C1659` also adds it to y to make
-                      the measured box's bottom edge, which is why an earlier
-                      note here called it a "baseline offset" — it is the row
-                      count, used as both.
+                      the measured box's bottom edge, so it reads like a
+                      "baseline offset" — it is the row count, used as both.
      font+0x02  s8    a row offset the blitter SUBTRACTS from the y it is given
                       (`sub eax,ebx` at `0x4CCF87` after `movsx ebx,[esi+2]`)
      font+0x03  u8    first character code
@@ -24,15 +23,14 @@
    and the blit itself, per pixel: `colour = bit ? fg : bg; if (colour !=
    transparent) *dst = colour`. With (255, 0, 0) that is a coverage mask — 255
    rather than 1 because the texel reaches the shader as `r/255`, and a mask of
-   1 samples as 0.004 and fails any sane threshold. (It did: the first live run
-   drew every glyph and discarded every fragment of it.)
+   1 samples as 0.004 and fails any sane threshold.
 
    IT DOES NOT CLIP — no OFFSCREEN, no clip rect, not even a width — so it
    writes exactly `sum(widths) x rows` pixels and it is on US to have measured
    that first. The measure below is the engine's own loop, character for
    character, so the two cannot disagree about how much lands.
 
-   THE COPY (frame packet exchange, landing 1). tagpu_packet_pub.c builds, on
+   THE COPY (frame packet exchange). tagpu_packet_pub.c builds, on
    the game thread at hook 8, one such object PER GLYPH — `[rows][0][yoff]
    [code][u16 6][w][bits]`, a font whose only character is the one being drawn
    — and every packet carries the 95 of them. tagpu_text_frame() copies the
@@ -45,8 +43,7 @@
    `0x4CCF60..0x4CD00E` is pure — reads its arguments, writes its destination,
    no global, no allocation — which is the whole argument for running engine
    code on the present thread, and why this file is the allow-list's one
-   "pure engine code" entry. The GLYPH cache below (the GL UI's string op)
-   still dereferences an engine font behind probes: that is landing 4c. */
+   "pure engine code" entry. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -110,18 +107,12 @@ static int   s_nremem;                     /* ...of which we remember the text *
 static unsigned s_builtGen;                /* the font generation the atlas holds */
 static unsigned s_fontGen;                 /* bumped whenever the copy changes */
 static unsigned char s_atlas[ATLAS_W * ATLAS_H];
-/* THE ATLAS CONTENT'S COUNTER, AND IT IS THE ONLY ONE NOW. Since G19d there
-   were two consumers of the same 128 KB -- a GL texture here and a Vulkan one
-   in tagpu_vk_fps.c -- and the GL half kept a `s_dirty` flag that its own
-   upload CONSUMED, so whichever consumer ran second would never see a raster
-   land. This ticks when the PIXELS change and is never cleared; a consumer
-   keeps the value it last uploaded and compares.
-
-   THE FLAG IS GONE WITH THE GL UPLOAD IT FED (11-5e-1) and the counter is what
-   a second backend was already told to use, so nothing here changes for the
-   Vulkan lane. The consumed-flag trap is written down because it is a property
-   of flags and not of GL: the next upload that keys on one, for any backend,
-   breaks the same way the moment a second reader appears. */
+/* THE ATLAS CONTENT'S COUNTER. This ticks when the PIXELS change and is never
+   cleared; a consumer (tagpu_vk_fps.c) keeps the value it last uploaded and
+   compares. NOT A DIRTY FLAG: a flag an upload CONSUMES means whichever of two
+   readers runs second never sees a raster land. That is a property of flags
+   and not of any backend: the next upload that keys on one breaks the same way
+   the moment a second reader appears. */
 static unsigned s_agen = 1;
 
 void tagpu_text_frame(const TAGPU_PACKET* pk)
@@ -171,13 +162,13 @@ static const unsigned char* glyph_obj(unsigned c, unsigned* w)
 
    These two must agree about every character or the blit writes past the width
    we reserved — and they cannot be made to agree by bounding the CHARACTER on
-   our side alone, which is what the first revision did: `0x4CCF60` skips a code
+   our side alone: `0x4CCF60` skips a code
    below `first` and a zero table entry and NOTHING ELSE (`0x4CCFAA`,
    `0x4CCFB9`), so a byte outside our `[CH_LO, CH_HI]` window with a non-zero
    offset entry is measured as nothing here and blitted as a glyph there. Every
-   string this pass has is an ASCII literal, so it was not reachable — but the
-   invariant was held by the call sites rather than by the code, in a function
-   whose contract is "hand me any string".
+   string this pass has is an ASCII literal, so that is not reachable — but the
+   invariant would then be held by the call sites rather than by the code, in a
+   function whose contract is "hand me any string".
 
    So the filter is applied to the STRING: `out` is the subsequence the raster
    will draw, and `total` is its width. Rasterise `out`, not `s`, and the two
@@ -236,8 +227,7 @@ static void drop(const char* s)
         if (!strcmp(s_drop[i], s)) return;                 /* already counted */
     /* A string we cannot remember is not counted either. Remembering is what
        makes the count DISTINCT strings, so incrementing past the memory would
-       put the per-frame call tally back — which is the defect this counter was
-       rewritten to remove, reappearing only in the degraded state where nobody
+       put the per-frame call tally back, in the degraded state where nobody
        would look for it. Two strings that do not fit in the memory are reported
        as one; that is a known undercount and it is the honest half. */
     if (s_nremem >= MAXDROP || strlen(s) >= STRMAX) return;
@@ -302,8 +292,8 @@ int tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff)
     return 1;
 }
 
-/* The atlas as bytes, for a backend that does not have our GL texture
-   (Phase G / G19d). Render thread, exactly like every other entry point here. */
+/* The atlas as bytes, for a backend to upload. Render thread, exactly like
+   every other entry point here. */
 const unsigned char* tagpu_text_atlas(unsigned* gen)
 {
     if (gen) *gen = s_agen;
@@ -313,7 +303,7 @@ const unsigned char* tagpu_text_atlas(unsigned* gen)
 void tagpu_text_dims(int* w, int* h) { *w = ATLAS_W; *h = ATLAS_H; }
 
 /* ================================================================= glyphs */
-/* THE GLYPH CACHE (G17d), and why the string atlas above cannot serve the UI.
+/* THE GLYPH CACHE, and why the string atlas above cannot serve the UI.
 
    That atlas is keyed on the whole STRING, which is right for the world's
    markers: a range label and a group digit are a fixed set of a dozen texts
@@ -332,8 +322,7 @@ void tagpu_text_dims(int* w, int* h) { *w = ATLAS_W; *h = ATLAS_H; }
 
    Its atlas is separate from the string one on purpose: they have different
    lifetimes (a font change repacks the string atlas and must not throw the UI's
-   glyphs away) and different key spaces, and the marker path is a landed gate
-   that should not move to make room for this one. */
+   glyphs away) and different key spaces. */
 
 #define GA_W       512
 #define GA_H       256
@@ -348,12 +337,11 @@ void tagpu_text_dims(int* w, int* h) { *w = ATLAS_W; *h = ATLAS_H; }
 #define GCH_HI     0xFF
 #define GA_NCH     (GCH_HI - CH_LO + 1)
 
-/* KEYED ON AN ID, NEVER ON A FONT ADDRESS (landing 4c). The string op used to
-   carry the engine's font object and this cache keyed on the pointer and its
-   signature — which meant dereferencing that pointer here, on the present
-   thread, up to a queue backlog after the observer saw it, behind probes, with
-   no note establishing a UI font's lifetime. The producer assigns a number per
-   (font, signature) now and sends the GLYPH BITS with the first string that
+/* KEYED ON AN ID, NEVER ON A FONT ADDRESS. Keying on the engine's font pointer
+   would mean dereferencing it here, on the present thread, up to a queue
+   backlog after the observer saw it, with no note establishing a UI font's
+   lifetime. The producer assigns a number per (font, signature) and sends the
+   GLYPH BITS with the first string that
    needs each code; an id is never reused, so a recycled font address cannot
    serve the old font's cells. Nothing in this file dereferences a font. */
 typedef struct {
@@ -373,7 +361,7 @@ static unsigned s_gglyphs, s_gdrops;
    far stops being valid. A caller that gathers a run of cells before it draws
    them has to check this across the gather.
 
-   IT IS ALSO READ ON THE GAME THREAD (landing 4c, and its review). The producer
+   IT IS ALSO READ ON THE GAME THREAD. The producer
    of the string ops sends each glyph's bits once, on first sight of a (font,
    code) pair, and marks the pair sent for ever — so a reset here would leave
    every already-sent glyph missing from the atlas and never re-sent, and
@@ -385,13 +373,10 @@ static volatile unsigned s_ggen;
    resets below -- because that is what a caller holding a fistful of cells
    needs to know. It says NOTHING about an ordinary glyph being rasterised into
    a fresh shelf, which changes the atlas's BYTES and leaves every cell valid.
-   The GL lane re-uploaded on a dirty flag and so never noticed the difference
-   (that flag went with it in 11-5e-1); a second backend keying its own upload
-   on `s_ggen` would upload once and then miss every glyph seen afterwards --
-   invisible text, permanently, for the session. [FOUND 2026-09-16, the G19f landing-2 review: BOTH reviewers led
-   with it independently.] Bumped wherever `s_gatlas`'s bytes change and
-   nowhere else -- not when the GL TEXTURE is recreated, which is liveness
-   rather than content. */
+   A backend keying its upload on `s_ggen` would upload once and then miss
+   every glyph seen afterwards -- invisible text, permanently, for the session.
+   Bumped wherever `s_gatlas`'s bytes change and nowhere else -- not when the
+   TEXTURE is recreated, which is liveness rather than content. */
 static volatile unsigned s_gserial;
 
 /* The slot for this font id, or NULL when the table is full and had to start
@@ -545,11 +530,8 @@ const unsigned char* tagpu_text_glyph_atlas(int* w, int* h)
     return s_gatlas;
 }
 
-/* WHETHER THE CACHE HAS RASTERISED ANYTHING. It was written in 4b-3 as the
-   context-free twin of `tagpu_text_glyph_tex`'s first line, for a caller that
-   only needs to know there is text to stamp; with that function deleted in
-   11-5e-1 it is simply the question, asked the only way it can now be asked.
-   The cells are CPU-side and always were. */
+/* WHETHER THE CACHE HAS RASTERISED ANYTHING, for a caller that only needs to
+   know there is text to stamp. The cells are CPU-side. */
 int tagpu_text_glyph_have(void) { return s_gglyphs != 0; }
 
 int tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts)

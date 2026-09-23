@@ -1,6 +1,5 @@
 /* The offscreen world target and the draw that puts it on the frame.
-   The header carries the argument; this is the mechanism.
-   [The vulkan-only plan, landing 4c-2.] */
+   The header carries the argument; this is the mechanism. */
 
 #include <windows.h>
 #include <stdarg.h>
@@ -67,7 +66,7 @@ static int s_openSlot = -1;             /* the slot `begin` opened, -1 = none */
    asking it would always be told there is no target. This is set where the
    render pass is opened and cleared where the frame's decision is taken, so it
    is a statement about what the command buffer contains rather than about what
-   the module intended. [The vulkan-only plan, landing 4c-3.] */
+   the module intended. */
 static int s_drewSlot = -1;
 static int s_drawThis;                  /* `record` may composite this frame  */
 static int s_saidBig;                   /* the per-factor bound said once  */
@@ -82,7 +81,7 @@ static int s_lastW, s_lastH, s_lastSS, s_lastDevres;
    `vk_resize` re-runs `vk_swapchain`, which re-picks `s_vk.fmt` and refreshes
    only `s_pass.slots` -- so the two can in principle part company, and the A/B
    capture decides its channel order from a format. Recording it here makes that
-   decision a question about THIS image. [FROM THE 4c-3 LANDING REVIEW.] */
+   decision a question about THIS image. */
 static VkFormat              s_colFmt = VK_FORMAT_UNDEFINED;
 
 static VkRenderPass          s_rp;      /* the OFFSCREEN pass, not the seam's */
@@ -175,10 +174,8 @@ static int mk_att(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt, int depth,
        AND THE COLOUR IMAGE CARRIES TRANSFER_SRC, WHICH IS THE A/B's. This is
        the image a world capture reads (`tagpu_vk_world_shot`), and
        `vkCmdCopyImageToBuffer` requires the usage to have been asked for AT
-       CREATION -- no layout transition confers it. The same finding was made
-       against the swapchain images in the 2026-09-15 review, where the
-       reference ICD copied anyway and a whole 0-px result rested on undefined
-       behaviour; asking here is that lesson applied rather than re-learned.
+       CREATION -- no layout transition confers it, and a driver that copies
+       anyway is undefined behaviour a whole 0-px result can rest on unseen.
 
        UNCONDITIONAL, on purpose, AND IT IS NOT FREE. The alternative is a second
        build key so the flag is only present while a lever is armed -- which
@@ -191,11 +188,10 @@ static int mk_att(const TAGPU_VKPASS* d, int w, int h, VkFormat fmt, int depth,
        framebuffer compression for the life of the image, and this image is
        written by five passes and sampled by the composite EVERY frame. So a
        steady-state cost is being paid to serve a lever that fires on one frame.
-       It has not been measured. The swapchain images are a weaker precedent than
-       the first draft of this comment claimed (tagpu_vk.c: `if (s_vk.cansrc)
-       swci.imageUsage |= ...`) -- that flag is conditional on what the SURFACE
-       offers, not on a build key, so it is not the same trade.
-       [THE COST AND THE CORRECTION ARE FROM THE 4c-3 LANDING REVIEW.]
+       It has not been measured. The swapchain images are no precedent
+       (tagpu_vk.c: `if (s_vk.cansrc) swci.imageUsage |= ...`) -- that flag is
+       conditional on what the SURFACE offers, not on a build key, so it is not
+       the same trade.
 
        A device that refuses the combination fails vkCreateImage, which this
        function reports as a refusal and the seam answers by leaving the world
@@ -327,7 +323,7 @@ static int build_renderpass(const TAGPU_VKPASS* d)
     at[1].samples = VK_SAMPLE_COUNT_1_BIT;
     at[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     /* NOTHING READS THE DEPTH AFTER THE PASS. GL keeps `s_depTex2` because it
-       blits it down for `selAt1x`; this landing does not port that, so the
+       blits it down for `selAt1x`; that is not ported here, so the
        store is a write nobody reads and DONT_CARE is the honest declaration.
        The day `selAt1x` is ported this becomes STORE and the plan says so. */
     at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -366,8 +362,7 @@ static int build_renderpass(const TAGPU_VKPASS* d)
        states this argument in terms and carries these masks; leaving them off
        here is the class of omission a validation layer catches and a correct
        picture does not -- and the fence wait making it work in practice is
-       safety by timing, which CLAUDE.md refuses as an argument.
-       [FROM THE 4c-2 LANDING REVIEW.] */
+       safety by timing, which CLAUDE.md refuses as an argument. */
     dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
@@ -388,8 +383,7 @@ static int build_renderpass(const TAGPU_VKPASS* d)
        dependency would therefore under-synchronise exactly the reads that cross
        a tile edge -- a hazard that produces a seam on some devices and nothing
        at all on others, which is the failure mode CLAUDE.md's synchronisation
-       rule exists for. Both dependencies are global.
-       [Found before the 4c-2 review, having been written by-region first.] */
+       rule exists for. Both dependencies are global. */
     dep[0].dependencyFlags = 0;
 
     dep[1].srcSubpass = 0;
@@ -426,7 +420,7 @@ static int build_sampler(const TAGPU_VKPASS* d)
        decode again on sample, where the GL twin's world FBO is GL_RGBA8 and
        linear -- a different picture, arrived at silently. Refusing leaves the
        world on the swapchain image, which is the same one round trip the lane
-       has always had. [FROM THE 4c-2 LANDING REVIEW.] */
+       has without a target. */
     if (d->fmt == VK_FORMAT_B8G8R8A8_SRGB || d->fmt == VK_FORMAT_R8G8B8A8_SRGB ||
         d->fmt == VK_FORMAT_A8B8G8R8_SRGB_PACK32) {
         plog(d, "world: the surface gave us an sRGB format (%d) and the GL twin's "
@@ -627,8 +621,8 @@ static int build(const TAGPU_VKPASS* d)
        `{0,0, 1,0, 0,1, 1,1}` as a triangle strip, in UNIT-SQUARE space because
        DVS is what maps it to clip (`p * 2 - 1`) and to texcoords (`uv = p`).
        Copying the numbers rather than deriving them is the point: the quad and
-       the flip are ONE choice and porting half of either is how this lane drew
-       the world upside down for eight landings. */
+       the flip are ONE choice, and porting half of either draws the world
+       upside down. */
     static const float quad[NV * 2] = { 0.f,0.f,  1.f,0.f,  0.f,1.f,  1.f,1.f };
 
     if (d->slots == 0 || d->slots > TAGPU_VK_SLOTS) {
@@ -692,8 +686,7 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     /* PULLED, NOT HANDED. Every module here reads what it needs from the module
        that owns the answer; the seam passes a device, a command buffer and a
        slot and nothing else. `tagpu_native_worldtgt` publishes the ONE ss
-       decision, above its own `!gl_draws` return, so this is the same number
-       the GL twin would have used. */
+       decision, so this is the same number the gather drew with. */
     if (!tagpu_native_worldtgt(&t)) return 0;
     /* NOT THIS FRAME'S, SO NOT OURS. The rule every hand-over in this tree
        carries: a target left standing from an earlier frame describes a
@@ -725,7 +718,7 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     if (w > WORLD_MAXDIM || h > WORLD_MAXDIM) {
         /* ITS OWN LATCH. Sharing one with the check above would let whichever
            refusal fired first silence the other for the life of the process,
-           and they mean different things. [FROM THE 4c-2 LANDING REVIEW.] */
+           and they mean different things. */
         if (!s_saidBigProduct) {
             s_saidBigProduct = 1;
             plog(d, "world: a %dx%d target (%dx%d at ss=%d) is outside what this "
@@ -741,9 +734,8 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
             /* ASKED FOR, NOT TAKEN. `s_downOwed` is a REQUEST that the seam
                tear this module down once it has drained the device -- it is not
                "there is something to free", and setting it on the success path
-               made the seam destroy and rebuild the whole target every frame
-               behind a vkDeviceWaitIdle (40 builds in one minute of play,
-               measured 2026-09-18 before this was fixed). A partial build has
+               would make the seam destroy and rebuild the whole target every
+               frame behind a vkDeviceWaitIdle. A partial build has
                allocated objects no submit names yet, but the drain is the
                contract and paying it here would fork the teardown into two
                shapes for no gain. */
@@ -777,8 +769,7 @@ int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
            the GL lane skips its 1x resolve entirely and composites straight out
            of the supersampled buffer -- which is what this module does on every
            path -- so a reader comparing the two lanes needs to know which of
-           GL's two shapes is in force. It was published and never shown until
-           the 4c-2 review asked what read it. */
+           GL's two shapes is in force. */
         plog(d, "world: frame %u: %dx%d target (%dx%d at ss=%d%s) -> (%d,%d %dx%d), "
                 "%u frame(s), %u build(s)", d->frame, s_lastW, s_lastH,
              t.gw, t.gh, s_lastSS, s_lastDevres ? " devres" : "",
@@ -839,13 +830,12 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     s_drawThis = 0;
     if (slot >= TAGPU_VK_SLOTS || !s_slot[slot].w) return;
 
-    /* CLAMPED TO THE RENDER AREA WE ARE HANDED, for tagpu_vk_surf.c's reason
-       and with its history: the rect was published by the gather at the top of
+    /* CLAMPED TO THE RENDER AREA WE ARE HANDED, for tagpu_vk_surf.c's reason:
+       the rect was published by the gather at the top of
        this iteration, and tagpu_vk_frame may have rebuilt the swapchain since,
        so on the frame a window shrinks the rect is the old viewport and `w`/`h`
        are the new extent. An unclamped scissor would lie partly outside the
-       render area, which the spec leaves undefined.
-       [THE SHAPE OF THIS IS FROM THE 4c-1 LANDING REVIEW.] */
+       render area, which the spec leaves undefined. */
     rx = s_vx < 0 ? 0 : s_vx;
     ry = s_vy < 0 ? 0 : s_vy;
     if (rx >= (int)w || ry >= (int)h) return;
@@ -858,8 +848,8 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
        DVS pairs `uv = 0` with clip `y = -1`; under a POSITIVE height that sends
        source row 0 to destination row 0, which is what GL does with the same
        quad. The world passes put the game's top row at row 0 of the source for
-       the same reason they put it at row 0 of the swapchain image (landing 5b),
-       so the two agree and a negative height here would be a third turn. */
+       the same reason they put it at row 0 of the swapchain image, so the two
+       agree and a negative height here would be a third turn. */
     vp.x = (float)rx;
     vp.y = (float)ry;
     vp.width = (float)rw;
@@ -899,7 +889,7 @@ void tagpu_vk_world_down(const TAGPU_VKPASS* d)
        because `tagpu_vk_world_shot`'s image check happens to cover it. The
        header promises `s_drewSlot` is valid from `begin` until the next frame's
        `prepare`; a teardown between the two is exactly the gap that promise has
-       to survive. [FROM THE 4c-3 LANDING REVIEW.] */
+       to survive. */
     s_drewSlot = -1;
     s_colFmt = VK_FORMAT_UNDEFINED;
     if (s_state != ST_REFUSED) s_state = ST_UNBUILT;

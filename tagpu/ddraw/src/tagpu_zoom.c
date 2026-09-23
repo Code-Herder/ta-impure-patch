@@ -1,7 +1,7 @@
 /* tagpu_zoom.c — the view transform shared by the render pass and the input
    path. See tagpu_zoom.h for the contract and why it is lock-free.
 
-   TWO HALVES, ONE FILE (since the frame packet's landing 2). The RENDER half
+   TWO HALVES, ONE FILE. The RENDER half
    owns the level and the arithmetic — the levers, the wheel's ease, the
    cursor anchor's eye delta, the predicted eye every pass draws from — and
    writes NOTHING into engine memory: its whole output is the command record
@@ -437,7 +437,7 @@ static void apply_scroll_rate(char* ta)
    `d` short of a map edge. Nothing fights and nothing churns (the eye arrives at
    a target that is inside our range and both stop), it is simply the old
    behaviour on the paths the detour does not sit on. The follow's clamp is the
-   one of the three that has been closed (zoom_follow_clamp below).
+   one of the three that is closed (zoom_follow_clamp below).
 
    MECHANISM: a `leaf_call` detour on the clamp itself, on a flag raised only
    while a zoomed-IN world is live. With it clear the engine's own function runs
@@ -603,11 +603,9 @@ static int zoom_eye_range(const char* ta, float z,
         dx = iround((float)W * 0.5f * (1.0f - 1.0f / z));
         dy = iround((float)H * 0.5f * (1.0f - 1.0f / z));
     }
-    /* HUD SCALE NEEDS NOTHING HERE (gui-renderer.md 22.6). It briefly did --
-       the range was widened by what the magnified HUD covered -- but the
-       viewport the engine clamps about IS the visible window now, so the
-       engine's own range is already the right one and a second correction
-       would be a double one. */
+    /* HUD SCALE NEEDS NOTHING HERE (gui-renderer.md 22.6): the viewport the
+       engine clamps about IS the visible window, so the engine's own range is
+       already the right one and a second correction would be a double one. */
     *loX = -dx; *hiX = mapW - W + dx;
     *loY = -dy; *hiY = mapH - H + dy;
     /* A map smaller than the viewport inverts the ENGINE's range too — it then
@@ -675,7 +673,7 @@ static void __cdecl zoom_eye_clamp(void* arg)
 }
 
 /* THE FOLLOW'S OWN CLAMP, MADE ZOOM-AWARE — the third of the three inline ones
-   this module's range never reached, and the first to be closed.
+   this module's range does not reach, and the one closed here.
 
    The per-frame stepper `0x41CA10` recomputes the scroll target from whatever
    is being followed (`want = unit - view/2`, `0x41CA95`..`0x41CAD2`) and then
@@ -685,8 +683,7 @@ static void __cdecl zoom_eye_clamp(void* arg)
    the player is looking at is only `W/z` wide. Ctrl+C on a commander inside
    that band therefore takes the follow, aims the camera, and stops short --
    with the unit off screen entirely once `W/2 - W/(2z)` exceeds the distance.
-   Reported from play 2026-09-12: "when zoomed in to the maximum possible zoom
-   level, ctrl-c does not manage to focus on the commander". Measured there, at
+   MEASURED 2026-09-12 (Ctrl+C at maximum zoom not reaching the commander), at
    1920x1080 with the HUD at 225% (view 1632x936) on a 4064x3968 map, z = 8,
    commander at world (3808,3600): the follow asked for (2992,3132), the
    engine's clamp cut it to (2432,3032), and the visible window was world
@@ -792,10 +789,10 @@ static unsigned char* build_follow_stub(void)
    x86 access that crosses a line is not atomic. A cross-thread store of ZERO
    would therefore be torn in about one launch in twenty — and torn into a
    slot the stepper DEREFERENCES, at `0x41CA58` and `0x41CA95`: half a pointer
-   passes `cmp eax, ebp` and is then read through. Since landing 2 the eye and
-   the scroll target are written from this thread too, for the same reason
-   plus one more: a torn COORDINATE was bounded by `clamp_pair()`, but a lost
-   update discarded a camera move rather than delaying it.
+   passes `cmp eax, ebp` and is then read through. The eye and the scroll
+   target are written from this thread too, for the same reason plus one
+   more: a torn COORDINATE would be bounded by `clamp_pair()`, but a lost
+   update discards a camera move rather than delaying it.
 
    Called from the apply, on the draw that applies a NEW delta from a gesture
    that asked for the camera — the same ordering the engine's own scroll poll
@@ -878,7 +875,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c)
     /* A record of an OLDER epoch — posted before the render thread saw the
        level end — carries the old level's sum and applies nothing; the render
        thread's first record after seeing the new epoch starts from zero, as
-       the applied sum did at the level end (landing review). */
+       the applied sum did at the level end. */
     if (c && c->cmd_seq != s_appliedSeq && c->epoch == s_epoch) {
         int dx = c->cum_dx - s_appliedDx, dy = c->cum_dy - s_appliedDy;
         if (dx || dy) {
@@ -887,7 +884,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c)
             /* the target moves with the eye, always: the two disagreeing is
                what the per-frame stepper reads as "a camera move is in
                flight", and it would drag the eye back and rebuild the fog
-               grid every frame for as long as the disagreement lasted (G13g) */
+               grid every frame for as long as the disagreement lasted */
             scr[0] += dx; scr[1] += dy;
             moved = 1; clampIt = 1;
         }
@@ -896,8 +893,8 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c)
 
     /* THE HOLD, a level: the camera is where tagpu_eye.txt says, every draw,
        clamped into the camera's range — not into [0, map - view], which at
-       zoom > 1 would pull a scripted camera back off every map edge (the
-       same bug the engine's own clamp had). Written only when it differs, so
+       zoom > 1 would pull a scripted camera back off every map edge (what
+       the engine's own clamp does). Written only when it differs, so
        the invalidation below is paid only when the camera actually moved. */
     if (c && c->hold_on && haveRange) {
         int x = c->hold_x, y = c->hold_y;
@@ -1071,7 +1068,7 @@ static int options_gui_owns_input(void)
    would then be wrong, a CLICK on that 1x point, is what
    tagpu_zoom_drop_mouse() throws away.
 
-   Nothing about the CURSOR is decided here any more. The engine is told the
+   Nothing about the CURSOR is decided here. The engine is told the
    truth by fake_GetCursorPos and draws its sprite under the pointer; this
    transform reaches it only through a button message and through the
    mouse->world repair in tagpu_vpwide.c. */
@@ -1116,18 +1113,17 @@ int tagpu_zoom_to_engine(int* x, int* y)
    this stack that a later pointer sample cannot reconstruct. So the transform
    is applied there, at the door, and the ring keeps it.
 
-   A MOVE MUST NOT BE REWRITTEN, and that is the whole reason the sprite used to
-   jump. `0x4B5E51` does not queue: it copies its record into `[obj+0x196]`
-   (`0x4C2360`), which is both the dispatch's fallback record AND the position
-   the engine draws its cursor from on the path that does not poll — `0x4C67C0`,
-   called twice out of the surface present machinery.
-   A rewritten move therefore puts `u` where the sprite is read from, and
-   whichever of the message and the next GetCursorPos poll ran last decides
-   where the cursor appears — measured at 1920x1080 / 0.25x: the sprite tracked
-   `u` across the frame at 4x the pointer's speed and off the left edge, exactly
-   the artefact this was supposed to remove. The move's own position is not
-   needed as `u` by anything: the world point is recomputed from the pointer in
-   vpw_mouse_world() (tagpu_vpwide.c), which is where it is actually used.
+   A MOVE MUST NOT BE REWRITTEN. `0x4B5E51` does not queue: it copies its
+   record into `[obj+0x196]` (`0x4C2360`), which is both the dispatch's
+   fallback record AND the position the engine draws its cursor from on the
+   path that does not poll — `0x4C67C0`, called twice out of the surface
+   present machinery. A rewritten move therefore puts `u` where the sprite is
+   read from, and whichever of the message and the next GetCursorPos poll ran
+   last decides where the cursor appears — measured at 1920x1080 / 0.25x: the
+   sprite tracks `u` across the frame at 4x the pointer's speed and off the
+   left edge. The move's own position is not needed as `u` by anything: the
+   world point is recomputed from the pointer in vpw_mouse_world()
+   (tagpu_vpwide.c), which is where it is actually used.
 
    WM_MOUSEWHEEL is not in the list either — the engine's jump table covers only
    0x200..0x206 and drops the wheel to DefWindowProcA — and tagpu_zoom_wheel()
@@ -1245,7 +1241,7 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    exactly zero, so at steady state — which is almost every frame — this
    function posts NOTHING new and there is no interference to reason about.
 
-   HOW IT REACHES THE EYE (landing 2). The render thread never writes the eye.
+   HOW IT REACHES THE EYE. The render thread never writes the eye.
    The step is added to a CUMULATIVE sum that rides the command record; the
    game thread applies the difference from what it applied last, at the top of
    its next in-play draw, releasing the follow first when the gesture asked —
@@ -1264,7 +1260,7 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
 
    THREE PROPERTIES FALL OUT OF THE DELTA FORM, and the tests lean on all three.
    With the pointer at the viewport centre `a - c` is zero, so the eye never
-   moves and the behaviour is what it was before this existed, bit for bit —
+   moves and the behaviour is that of a centre-anchored zoom, bit for bit —
    that is the A/B control, and it is why this needs no lever. The steps
    TELESCOPE, so the total displacement over a gesture is
    `(a - c)(1/z_start - 1/z_end)` however many frames the ease took and whatever
@@ -1301,9 +1297,9 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    engine grid's slack collapses to 32 px at z -> 1 (exe note), so a frame
    whose predicted eye is ahead of the packet's takes the WIDE grid
    (tagpu_zoom_unacked, tagpu_native.c) — built every tick from the live eye
-   with a margin that covers any one anchored step. The old gate on terrown
-   owning the fog draw is gone with the old handshake: the request is no
-   longer ours to route, the invalidation is the engine's own mechanism.
+   with a margin that covers any one anchored step. Nothing here depends on
+   terrown owning the fog draw: the invalidation is the engine's own
+   mechanism.
 
    A FOLLOWED CAMERA IS RELEASED RATHER THAN FOUGHT. The stepper recomputes the
    scroll target from the followed unit every frame (`0x41CAF7`) and clamps it
@@ -1315,7 +1311,7 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    pointer on the viewport centre — releases nothing, so the A/B control still
    holds exactly.
 
-   AND WHAT IS STILL NOT COVERED. `0x41C4C0` (the smooth SetCamera) and
+   AND WHAT IS NOT COVERED. `0x41C4C0` (the smooth SetCamera) and
    `0x41C7F7` (the smooth centre-on) also compute the scroll target and clamp it
    INLINE against `[0, map - W]` without going through our clamp, so a target we
    stepped can be recomputed there without our delta and the stepper eases the
@@ -1333,8 +1329,7 @@ static float s_residX, s_residY;
    construction, so at rest `|resid| <= 0.5` and anything above it is
    displacement that was owed and never taken — which nothing else would ever
    spend (every later frame returns at `zNow == s_zStep`) until the next notch
-   anywhere on the map discharged it in one frame as a silent camera jump
-   [landing review, 2026-09-10]. */
+   anywhere on the map discharged it in one frame as a silent camera jump. */
 static void drop_claim(void)
 {
     if (s_residX > 0.5f || s_residX < -0.5f) s_residX = 0.0f;
@@ -1427,8 +1422,7 @@ static void anchor_step(float zNow, int fromWheel, const TAGPU_PACKET* pk)
        [-0.5, +0.5], whose -0.5 endpoint is the common one — there `nx` is -1
        for ever with nothing feeding it, and a centred wheel would step a pixel
        and release the follow. Asking what THIS gesture is owed closes it by
-       construction rather than by how often the float lands on a half.
-       [landing review, 2026-09-10] */
+       construction rather than by how often the float lands on a half. */
     if (ax == cx && ay == cy) return;
 
     /* the step, taken against the eye this frame is drawn from — the packet's
@@ -1459,7 +1453,7 @@ static void predict(const TAGPU_PACKET* pk)
        carry) dies with it. The level-end packet carries the new epoch, and so
        does every packet of the next level, so this is seen at the latest on
        the new level's first frame — before any record of it could carry a
-       delta the game thread would accept (landing review). */
+       delta the game thread would accept. */
     if (pk->cmd_epoch != s_epochSeen) {
         s_epochSeen = pk->cmd_epoch;
         s_cumX = s_cumY = 0; s_ackX = s_ackY = 0;
@@ -1476,7 +1470,7 @@ static void predict(const TAGPU_PACKET* pk)
        whatever moved it — an unacknowledged delta, or the range walking the
        eye home before the game thread has (a zoom-out at a map edge): either
        way the engine's grid spans the packet's eye and this frame must take
-       the wide one (landing review) */
+       the wide one */
     s_unacked = (ex != pk->eye[0] || ey != pk->eye[1]);
 }
 

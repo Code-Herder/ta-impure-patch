@@ -6,7 +6,7 @@
    pixels. Armed by tagpu_owndraw.on (first token = type, or "all"). */
 void tagpu_owndraw_init(void);
 void tagpu_owndraw_flush(unsigned int frame_counter);
-/* THE STRUCTURE-SHADOW GATE (the vulkan-only plan, landing 10b).
+/* THE STRUCTURE-SHADOW GATE.
 
    `set` is the publish: the native pass says, once per frame from the render
    thread, whether it will paint structures' cached slant shadows. While it
@@ -17,8 +17,7 @@ void tagpu_owndraw_flush(unsigned int frame_counter);
 
    `ours` reads back what WE said, not what the engine will do -- 1 means the
    slant is ours and the engine is skipping it, 0 means the engine draws its
-   own. (An earlier version of this line said "what the ENGINE will do", which
-   is the same sentence with the sense reversed.) The pass reads it so its
+   own. The pass reads it so its
    geometry agrees with the branch. It is the GATE, not the install: the hooks
    can be in and this still 0.
 
@@ -26,9 +25,7 @@ void tagpu_owndraw_flush(unsigned int frame_counter);
    it goes eight frames without one, because the publisher is NOT reached on
    every frame a lane presents -- `tagpu_overlay_draw` gates it behind
    `tagpu_overlay.off`, a failed overlay init and a level teardown, and the
-   flush runs above all three. [Found by the landing review of 10b, which also
-   pointed at the two comments in `render_ogl.c` and `render_vk.c` that record
-   the same lesson for the cursor.] */
+   flush runs above all three. */
 void tagpu_owndraw_set_structshadow(int ours, unsigned frame);
 
 /* The gate's OTHER input: the viewport is key-filled, so anything the engine

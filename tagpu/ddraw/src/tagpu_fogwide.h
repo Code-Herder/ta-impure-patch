@@ -45,14 +45,12 @@
    a frame whenever the zoom eased outward; sizing for the whole range means no
    step of any lever can outrun the grid.
 
-   HANDING IT OVER — IT DOES NOT, ANY MORE (frame packet exchange, landing 4b).
-   This was three buffers swapped under a critical section, with a retire ring
-   behind tagpu_reclaim's fence for the grow, because the render thread held a
-   raw pointer into the set for a whole frame. It holds none now: the packet's
-   publisher copies the grid out of this module on THIS thread, in the same
-   DrawGameScreen the build ran in, and the render thread reads its own packet.
-   One buffer, no lock, nothing retired, and no liveness test to answer — a
-   frame either has a wide grid in its packet or it has not.
+   HANDING IT OVER — IT DOES NOT (frame packet exchange). The render thread
+   holds no pointer into this module: the packet's publisher copies the grid
+   out of it on THIS thread, in the same DrawGameScreen the build ran in, and
+   the render thread reads its own packet. One buffer, no lock, nothing
+   retired, and no liveness test to answer — a frame either has a wide grid in
+   its packet or it has not.
 
    HOW BIG. Sized from the window the screen asks for, not from a constant — see
    THE STATE in tagpu_fogwide.c for why the size is taken at the worst eye
@@ -65,12 +63,12 @@
    struct been corrupted", not "how big may a grid be". It stays fixed and
    generous: the engine builds one cell per 32 px of ITS viewport plus two, so
    this is a viewport 32,000 px wide and cannot be reached by a screen. What
-   bounds the CONSUMER is not this at all since landing 4b — it is the packet's
+   bounds the CONSUMER is not this at all — it is the packet's
    own `len == cols * rows * 2`, checked once at acquire, which is exact. */
 #define FOGW_ENGINE_DIMCAP 1024
 
-/* DllMain only. There is nothing left to create — the critical section went
-   with the hand-over — but the module stays inert until this has run. */
+/* DllMain only. It creates nothing, but the module stays inert until this
+   has run. */
 void tagpu_fogwide_init(void);
 
 /* Game thread, from the fog-overlay call site, once per engine frame. `ta` is
@@ -91,7 +89,7 @@ void tagpu_fogwide_init(void);
    the sim rate is the REBUILD, because `rebuilt` is cleared by LOS stamps and
    nothing stamps while the sim is stopped.
 
-   AT EVERY ZOOM, since G13s. It does not ask what the level is: the level is
+   AT EVERY ZOOM. It does not ask what the level is: the level is
    the render thread's to publish, and that thread is the one that decides,
    mid-frame, to draw the first zoomed-out frame of a gesture — so a producer
    gated on it is a producer that is always one tick late exactly when it
@@ -102,9 +100,9 @@ void tagpu_fogwide_tick(char* ta, int rebuilt);
    above ran in. Hands back the grid to copy into this frame's packet, or 0 when
    there is none: the module is off (`tagpu_fogwide.off`), attach did not run,
    nothing has been built yet, or a bail-out withdrew it. The consumer then uses
-   the engine's own grid exactly as before.
+   the engine's own grid.
 
-   WHICH GRID A FRAME USES IS STILL THE CONSUMER'S DECISION and is unchanged:
+   WHICH GRID A FRAME USES IS THE CONSUMER'S DECISION:
    the packet carries both, and the native pass takes the wide one only while it
    is drawing at zoom < 1 or from an eye the game thread has not acknowledged.
    At zoom >= 1 the engine's own grid spans the frame by construction. */

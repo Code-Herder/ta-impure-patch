@@ -21,23 +21,21 @@ enum {
     PK_SPRITE,      /* a plain keyed GAF blit: frame identity, first sight carries its bytes */
     PK_COPY,        /* twin -> twin, the source's box at (l, t)               */
     PK_PIXELS,      /* the box's bytes follow in the arena (everything else)  */
-    PK_STRING,      /* G17d: TA's own glyphs, stamped by us — the string        */
+    PK_STRING,      /* TA's own glyphs, stamped by us — the string              */
                     /* follows in the arena and the font/colours ride along     */
-    PK_BAR,         /* landing 8a: a SOLID rectangle of one palette index --
-                       `fg` is the index, the box is `l,t,r,b` inclusive, and
-                       NOTHING follows in the arena. That last part is the point:
-                       as `PK_PIXELS` this op copied its whole box out of the
-                       surface, and did so AT THE FLIP, so anything drawn over it
-                       in between was what got published. A colour and a box are
-                       both smaller and correct. */
-    PK_RECT         /* landing 8b: a HOLLOW rectangle of one palette index --
-                       `fg` is the index, `l,t,r,b` are the OUTER box and every
-                       edge is inclusive, and the INTERIOR IS NOT TOUCHED. As
-                       `PK_PIXELS` this op published its whole box, interior
-                       included, read out of the surface at the flip: it carried
-                       pixels the op never wrote, from a moment after it ran.
-                       `0x4BF7B0` does NOT produce this -- it tints, and since
-                       landing 8d it produces `PK_TINT` below. */,
+    PK_BAR,         /* a SOLID rectangle of one palette index -- `fg` is the
+                       index, the box is `l,t,r,b` inclusive, and NOTHING follows
+                       in the arena. That last part is the point: a box of bytes
+                       copied out of the surface AT THE FLIP would publish
+                       whatever was drawn over it in between. A colour and a box
+                       are both smaller and correct. */
+    PK_RECT         /* a HOLLOW rectangle of one palette index -- `fg` is the
+                       index, `l,t,r,b` are the OUTER box and every edge is
+                       inclusive, and the INTERIOR IS NOT TOUCHED. As `PK_PIXELS`
+                       this op would publish its whole box, interior included,
+                       read out of the surface at the flip: pixels the op never
+                       wrote, from a moment after it ran. `0x4BF7B0` does NOT
+                       produce this -- it tints, and produces `PK_TINT` below. */,
     PK_ASSET        /* a DECODED ASSET SURFACE, whole: `w`/`h`/`pitch` as a seed,
                        and its bytes follow in the arena. It is NOT `PK_SEED`,
                        and the difference is the whole reason it may cross where
@@ -50,9 +48,7 @@ enum {
                        clears that the instant an op covers a pixel of the
                        surface as a DESTINATION.
 
-                       WHAT THAT CHECKS AND WHAT IT DOES NOT, stated because the
-                       shorter version of this sentence was an overclaim: the
-                       check is over the SEVENTEEN LEAVES, so it says no
+                       WHAT THAT CHECKS AND WHAT IT DOES NOT: the check is over the SEVENTEEN LEAVES, so it says no
                        OBSERVED draw named the surface. The loader that fills it
                        is itself an unhooked write path -- that is the whole
                        premise -- so an engine path that re-filled a claimed
@@ -68,8 +64,7 @@ enum {
                        hole is named and bounded rather than papered over. Being stable is
                        also what makes reading it AT THE FLIP exact, where the
                        same read for `PK_PIXELS` is a box of bytes from a moment
-                       later than the draw it stands for. [Landing: the shell
-                       backdrop, 2026-09-21.] */,
+                       later than the draw it stands for. */,
     PK_SHADE,       /* the engine's LIGHTEN table, `globals+0xC8`, 32 rows of
                        256 bytes, in the arena. It is a palette-derived REMAP
                        and not a picture -- the same category as the palette
@@ -90,14 +85,11 @@ enum {
                        half keeps, which the hand-over then carries by pointer
                        every frame, so an abandoned mirror frame cannot lose
                        it. */
-    PK_TINT         /* landing 8d: ONE EDGE of a focus rectangle -- the box is
-                       `l,t,r,b` inclusive and one pixel thick, `fg` is the ROW
-                       of the lighten table, and NOTHING follows in the arena.
+    PK_TINT         /* ONE EDGE of a focus rectangle -- the box is `l,t,r,b`
+                       inclusive and one pixel thick, `fg` is the ROW of the
+                       lighten table, and NOTHING follows in the arena.
 
-                       It is a READ-MODIFY-WRITE, which is what kept `0x4BF7B0`
-                       on `PK_PIXELS` through landings 8a-8c and therefore off
-                       the screen entirely since the clean cut: the writer
-                       `0x4CC8DF` does `dst = LUT[row*256 + dst]` per pixel, so
+                       It is a READ-MODIFY-WRITE: the writer `0x4CC8DF` does `dst = LUT[row*256 + dst]` per pixel, so
                        there is no colour to name. What crosses instead is the
                        OPERATION -- a box, a row, and (once) the table -- and
                        the consumer applies it to its own twin. No engine pixel
@@ -108,7 +100,7 @@ enum {
                        `0x4BEC70` calls, each clipped on its own by `0x4BEA20`,
                        and the four CORNERS are therefore tinted TWICE --
                        `LUT[row][LUT[row][x]]`. Publishing the box would have
-                       had to carry both the clip rect and that overlap rule;
+                       to carry both the clip rect and that overlap rule;
                        four ops carry them by construction, in the engine's own
                        order, and `op_add`'s existing clip drops an edge that
                        falls outside exactly as `0x4BEA20` does. */
@@ -117,7 +109,7 @@ enum {
 typedef struct TAGPU_PUBOP {
     unsigned char  kind;
     unsigned char  ck;              /* sprite: colour key                      */
-    /* string (G17d): the three colour arguments of 0x4CCF60, as BYTES — the
+    /* string: the three colour arguments of 0x4CCF60, as BYTES — the
        blitter takes all three with `mov al/ah, BYTE PTR [ebp+…]` and compares
        them 8-bit (`cmp al,ah` at 0x4CCFE2), so the low byte is the whole of
        what it uses and storing an int here would only invite a wider compare
@@ -132,16 +124,16 @@ typedef struct TAGPU_PUBOP {
                                        (y before the font's own -font[2])       */
     int            w, h, pitch;     /* seed: the surface's geometry             */
     const void*    frame;           /* sprite: the key (header, pixel ptr).
-                                       NOT USED BY A STRING any more: it held
-                                       the engine's FONT OBJECT, which the
-                                       render thread then dereferenced up to a
-                                       queue backlog later, behind probes and
-                                       with no note establishing a UI font's
-                                       lifetime. Landing 4c replaced it with
-                                       `font_id` and the glyph BITS below.      */
+                                       NOT USED BY A STRING: the engine's FONT
+                                       OBJECT must not cross, because the
+                                       render thread would dereference it up
+                                       to a queue backlog later with nothing
+                                       establishing a UI font's lifetime. A
+                                       string carries `font_id` and the glyph
+                                       BITS below instead.                      */
     const void*    pix;
     unsigned       aoff, alen;      /* arena bytes: seed / pixels / a sprite's first sight / a string's block */
-    /* ---- string (landing 4c): the font as an identity and its glyphs as bits.
+    /* ---- string: the font as an identity and its glyphs as bits.
        The arena block is `gcount` glyph records followed by the NUL-terminated
        string; each record is `{u8 code, u8 w, u16 nbytes, u8 bits[nbytes]}`,
        4-byte aligned, with nbytes = (rows * w + 7) / 8 — the same packed rows
@@ -150,8 +142,8 @@ typedef struct TAGPU_PUBOP {
        again, so a steady screen's ops carry the string alone.
 
        `font_id` is a number this fork assigns per (font pointer, signature),
-       never an address: the consumer's glyph cache keys on it and no longer
-       has anything to dereference. */
+       never an address: the consumer's glyph cache keys on it and has nothing
+       to dereference. */
     unsigned       font_id;
     unsigned short gcount;          /* glyph records at the head of the block   */
     unsigned char  font_rows;       /* font[0], the rows the blitter writes     */
@@ -162,7 +154,7 @@ typedef struct TAGPU_PUBOP {
        It exists because `GAF_DrawTransformed 0x4C7580` can map a SUB-rectangle
        of a frame -- SKIRMISH.GUI's player swatches take (1,1)..(31,31) of a
        32x32 frame -- and the consumer's atlas key (frame, pix, w, h) cannot
-       tell two such windows apart. [Landing 8e.] */
+       tell two such windows apart. */
     unsigned       swin;
     unsigned       assetTok;        /* PK_ASSET: the offer's one-time token     */
     unsigned       flip;            /* the flip this belongs to (diagnostics)   */
@@ -187,19 +179,18 @@ typedef struct TAGPU_GUIQ {
        large, so the producer must know whether it LANDED rather than assume it
        did -- the consumer's mirror is not recording on every frame (it follows
        the Vulkan pass) and `mir_bytes` refuses silently when it is not, which
-       lost the shell backdrop on the one frame that mattered.
+       can lose the shell backdrop on the one frame that matters.
 
        WHAT THE CONSUMER ECHOES IS A ONE-TIME TOKEN, NOT THE SURFACE'S BASE, and
-       that is the whole safety of it. The first cut echoed the base, and a base
-       is not an identity here: this module frees a surface and the engine's next
-       `0x4C69F0` lands on the same block (MEASURED -- see `surf_drop_offscreens`),
-       so an ack left standing from a DEAD surface was matched by the live one
-       that inherited its address, the offer was skipped, and the screen that
-       replaced it drew black. The same word also let an in-flight echo from the
-       PREVIOUS episode land after a reseed had cleared it. A token is issued
-       once per offer and never reissued, so neither a recycled base nor a late
-       echo can satisfy an offer that was not made. [Both found by the landing
-       review of this commit; both were the pre-landing symptom coming back.]
+       that is the whole safety of it. A base is not an identity here: this
+       module frees a surface and the engine's next `0x4C69F0` lands on the same
+       block (MEASURED -- see `surf_drop_offscreens`), so an ack left standing
+       from a DEAD surface would be matched by the live one that inherited its
+       address, the offer skipped, and the screen that replaced it drawn black.
+       The same word would also let an in-flight echo from the PREVIOUS episode
+       land after a reseed had cleared it. A token is issued once per offer and
+       never reissued, so neither a recycled base nor a late echo can satisfy an
+       offer that was not made.
 
        ONE WRITER EACH WAY: the consumer writes `assetAck`, the producer only
        reads it. The producer does NOT clear it -- it does not need to, because a
@@ -212,8 +203,8 @@ typedef struct TAGPU_GUIQ {
        clock. The consumer publishes `mirArmed` from the ONE place that arms or
        disarms its mirror (`tagpu_gui_mirror_want`), and the producer refuses to
        compose an offer while it reads 0. Without it, a shell sitting in front of
-       an unarmed Vulkan lane re-published a 300 KB backdrop every present until
-       the try count ran out -- up to ~72 MB of game-thread memcpy per episode
+       an unarmed Vulkan lane re-publishes a 300 KB backdrop every present until
+       the try count runs out -- up to ~72 MB of game-thread memcpy per episode
        for bytes with no consumer. A STALE READ COSTS AT MOST ONE FRAME: armed
        read as disarmed skips that present's offer and the next one makes it
        again; disarmed read as armed spends one offer nobody acks, which is the
@@ -250,23 +241,12 @@ typedef struct TAGPU_GUIQ {
        shadow, so the game thread can be one repaint late and never wrong. */
     volatile unsigned colarm;
     /* GAF ops that fell back to their box's bytes because the sprite's decoded
-       plane was not in hand at publish -- which since G19f-7 can only mean the
-       observe-time scratch was full when the blit was seen (`gaf_capture`).
-       **THIS REPLACES `gafstale`**, which counted the level-generation gate that
-       used to stand on this path. That gate existed to stop `publish`
-       dereferencing a freed GAF bank; the hash and the plane are now both taken
-       inside the engine's own blit, `publish` dereferences nothing, and a gate
-       with nothing left to protect was refusing ops -- 215 of them at a single
-       level end, each losing its sprite identity for no remaining reason. The
-       name changed with the meaning on purpose: `gafstale=215` is the figure
-       landing 5's A/B is stated in, and a counter that keeps its name while
-       measuring something else is how those numbers would quietly stop meaning
-       what the notes say they mean.
+       plane was not in hand at publish -- which can only mean the observe-time
+       scratch was full when the blit was seen (`gaf_capture`). The hash and
+       the plane are both taken inside the engine's own blit and `publish`
+       dereferences nothing, so no gate refuses a sprite on this path.
        It lives here, beside the other producer counters, because this is what
-       the render half's heartbeat prints: the first version put it in a `gui
-       census:` line that an ordinary run never emits, so the one figure that
-       says the mechanism is behaving was invisible.
-       [gafstale FOUND 2026-09-16, the landing-5 review; replaced the same day.] */
+       the render half's heartbeat prints. */
     volatile unsigned gafnoplane;
     /* the observe-time scratch, so its bound can be judged rather than assumed:
        `gafhigh` is the most bytes any one census window has wanted and `gaflost`
@@ -276,8 +256,7 @@ typedef struct TAGPU_GUIQ {
     volatile unsigned gafhigh, gaflost;
     /* frames the DECODER refused (unreadable or malformed), counted apart from
        `gaflost` because that one is a statement about the scratch's BOUND and
-       this one is not. They shared a counter until the landing review read the
-       declaration against its two call sites. */
+       this one is not. */
     volatile unsigned gafbaddec;
     /* sprite ops that published their box because a RESET cleared the seen table
        between the blit and the flip. CHEAP, not free: each costs a PK_PIXELS
@@ -285,28 +264,21 @@ typedef struct TAGPU_GUIQ {
        that is already re-seeding every surface whole, so nothing is on screen
        that would not have been, and it self-heals next window. Counted apart
        from `gafnoplane` so the one number that means a real failure keeps
-       meaning it. ["free" corrected by the landing review.] */
+       meaning it. */
     volatile unsigned gafreseed;
     /* text ops that published their box because the glyph `sent[]` table was
        re-armed between the capture and the flip -- the OP_TEXT twin of
        `gafreseed`, and cheap in the same way (a PK_PIXELS box, one window
-       without its stamped glyphs, self-healing next window). It replaces
-       `strstale`, which counted the LEVEL-generation refusals of the gate that
-       stood in for the font's lifetime until G19f-8 moved the reads into the
-       observer; the name changed with the meaning, as `gafstale`'s did, so that
-       a figure quoted in the notes cannot quietly start measuring something
-       else. */
+       without its stamped glyphs, self-healing next window). */
     volatile unsigned strrearm;
     /* the glyph scratch, so its bound can be judged rather than assumed:
        `glyhigh` is the most bytes any one census window has TAKEN of it -- a
        refused block is counted in `glylost` and contributes nothing here, so
-       the two are read together and `glyhigh` alone is not demand [the word
-       was "wanted", which contradicted the code, found by the landing review]
-       -- and `glylost` the blocks it could not take whole. A settled session should
+       the two are read together and `glyhigh` alone is not demand -- and
+       `glylost` the blocks it could not take whole. A settled session should
        hold both still -- `sent[]` means a (font, code) pair is captured once -- 
        and `glylost` at 0 is what says the 128 KB is not a guess that happens to
-       hold. A block the scratch refuses publishes its box, exactly as a text op
-       did before G17d. */
+       hold. A block the scratch refuses publishes its box. */
     volatile unsigned glyhigh, glylost;
     volatile unsigned stalls;                /* episodes where the consumer took nothing for TAGPU_GUI_STALL_MS
                                                 while work was queued (a display-mode switch kills the render
@@ -319,11 +291,10 @@ typedef struct TAGPU_GUIQ {
 void tagpu_gui_font_stats(unsigned* glyphs, unsigned* resends, unsigned* refused, unsigned* recycles);
 
 /* why a fresh start was raised — logged by the producer with every reset it
-   publishes (`log`), so a count of resets is never a mystery again */
+   publishes (`log`), so a count of resets is never a mystery */
 enum {
     TAGPU_GUI_WHY_NONE = 0,
     TAGPU_GUI_WHY_ARM,        /* the trigger (re)appeared: the twins start from the surfaces as they are */
-    TAGPU_GUI_WHY_GLCTX,      /* the GL context changed (a display-mode switch)                          */
     TAGPU_GUI_WHY_QUEUE,      /* the op ring was full                                                    */
     TAGPU_GUI_WHY_ARENA,      /* the byte arena was full                                                 */
     TAGPU_GUI_WHY_BOX,        /* a recorded box no longer fits its surface                              */

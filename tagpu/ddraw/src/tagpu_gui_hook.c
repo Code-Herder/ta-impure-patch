@@ -1,12 +1,11 @@
-/* tagpu_gui_hook.c — the observers, the census and the publisher (Phase E,
-   G15a + G15b). Contract: inc/tagpu_gui.h. Design: research/notes/gui-renderer.md
-   3.5, 3.6, 10.
+/* tagpu_gui_hook.c — the observers, the census and the publisher. Contract:
+   inc/tagpu_gui.h. Design: research/notes/gui-renderer.md 3.5, 3.6, 10.
 
    NOTHING HERE CHANGES WHAT THE ENGINE DRAWS. Every detour is an observer
    (tagpu_detour_observe): the original runs unchanged, we read its arguments
    off the stack on the way in and, where we need its result, on the way out.
 
-   THE PUBLISHER (G15b). While the layer is on (g_gui_draw, the render thread's
+   THE PUBLISHER. While the layer is on (g_gui_draw, the render thread's
    poll of tagpu_gui.on), the same ring the census reads is turned into queue
    ops for tagpu_gui_surf.c at the census cadence, inside the flip observer:
    a seed for every surface first seen, a sprite for a plain keyed GAF blit
@@ -87,16 +86,16 @@ static const unsigned char FLIP_STOLEN[6] = { 0x81, 0xEC, 0xF4, 0x00, 0x00, 0x00
 
 static int      s_installed = 0;
 static int      s_census = 0, s_log = 0, s_pgm = 0, s_trace = 0;
-/* `nostring` (G17d): text stays a box of captured pixels, as it was through
-   the whole of phase 1. The A/B for the arena saving, and the escape if the
-   stamp ever disagrees with the engine's blit on some font.
+/* `nostring`: text stays a box of captured pixels. The A/B for the arena
+   saving, and the escape if the stamp ever disagrees with the engine's blit on
+   some font.
    READ AT ATTACH, LIKE EVERY OTHER TOKEN THIS FILE OWNS — `read_tokens` runs
    once, from `tagpu_gui_init`, so `census`, `log`, `pgm`, `trace` and this one
    must be armed BEFORE the launch. Only the surf module's tokens (`strict`,
    `norestore`, `sharptest`, `nocursor`, `cursorscale=`) follow the file live,
    because only the DRAW can change mid-session; the publisher's shape cannot
    without leaving the twins holding ops of the other kind. Arming it on a
-   running instance silently does nothing, which cost one A/B to notice. */
+   running instance silently does nothing. */
 static int      s_nostring = 0;
 static int      s_key = KEY_DEFAULT;
 static int      s_probeX = -1, s_probeY = -1;   /* trace: ops touching this pixel */
@@ -169,11 +168,11 @@ static int  s_nsurf = 0;
 /* ---- THE HUD CHROME: the one producer the engine never re-offers ---------
    The side panel, top bar and bottom bar are painted by 0x467D70, called once
    per mode switch from 0x49842A and never again. Every other op producer can be
-   asked to repeat itself -- landing 9 asks the gadget stage directly -- but this
-   one cannot: 0x467D70 clears its destination (0x4C6890) and PRESENTS A FRAME
-   (0x4C63A0 at 0x467E41), so re-firing it is not a repaint. Issuing its blits
-   ourselves is no better: their destination is *(main+0x37E1B), the engine's
-   offscreen, which is the golden source.
+   asked to repeat itself -- `repaint_service` asks the gadget stage directly --
+   but this one cannot: 0x467D70 clears its destination (0x4C6890) and PRESENTS
+   A FRAME (0x4C63A0 at 0x467E41), so re-firing it is not a repaint. Issuing its
+   blits ourselves is no better: their destination is *(main+0x37E1B), the
+   engine's offscreen, which is the golden source.
 
    So we re-derive it instead. The recipe is small because the positions are
    constants: 0x467D70 adds 0x81 to the frame's own HotX and 0x4B7F90 lands the
@@ -202,14 +201,11 @@ static int  s_nsurf = 0;
    and then never again -- and a twin reset loses them for the rest of the level.
    [DISASSEMBLED 2026-09-21.]
 
-   THREE references, not two -- and the third was missed until the landing
-   review disassembled for it. `0x468E51` seeds the local and `0x468FC6`
+   THREE references. `0x468E51` seeds the local and `0x468FC6`
    compares and updates, both inside this block; `0x4679A6` (in the function at
    `0x4679A0`) zeroes four DWORDs of it, at `+0x1D`, `+0x19`, `+0x0D` and
-   `+0x01`. That third one does NOT touch byte 0, so byte 0 is still ours alone
-   to poison and the argument below stands -- but "nowhere else in the binary"
-   was false, and it was the kind of claim that only a search can support.
-   It is a display memo, not sim state. */
+   `+0x01`. That third one does NOT touch byte 0, so byte 0 is ours alone to
+   poison. It is a display memo, not sim state. */
 #define HUD_MEMO       0x37E3Fu
 #define CHROME_PLAYER  0x2A43u        /* main+ : the local player index      */
 #define CHROME_PLRTBL  0x1B8Au        /* main+ : records, stride 331         */
@@ -272,13 +268,13 @@ static void surf_drop(int i)
    0x4D85A0 at 0x491AB8 (leaving a game) and 0x49838C (the game's mode switch),
    and the next 0x4C69F0("OFFSCREEN", w, h) may land on the same base (a
    same-base size change, surf_get) or on another (MEASURED 2026-09-07, both).
-   In the second case the old entry stayed: a dead 1024x768 the census walked
-   at every flip — an access violation at its base once the heap had returned
-   the block (the census run's crash on the first game -> shell switch) — and
-   one MAX_SURF slot leaked per cycle. The engine has exactly one main
-   offscreen at a time, so a new one retires every other. Keyed on the base,
-   NOT a SURF* — surf_drop swap-removes (s_surf[i] = s_surf[--s_nsurf]), so a
-   pointer to the kept entry moves if it was the last slot; the base is stable. */
+   Left standing, the old entry in the second case is a dead surface the census
+   walks at every flip — an access violation at its base once the heap has
+   returned the block — and one MAX_SURF slot leaked per cycle. The engine has
+   exactly one main offscreen at a time, so a new one retires every other. Keyed
+   on the base, NOT a SURF* — surf_drop swap-removes (s_surf[i] =
+   s_surf[--s_nsurf]), so a pointer to the kept entry moves if it was the last
+   slot; the base is stable. */
 static void surf_drop_offscreens(unsigned keepBase)
 {
     int i;
@@ -302,11 +298,10 @@ static void surf_drop_offscreens(unsigned keepBase)
 
    EVERY OFF-THREAD FREE IS PUSHED, unfiltered, and that is deliberate. The
    obvious optimisation — scan the table off-thread and push only on a match —
-   is NOT safe and was caught being unsafe: `MEM_Free` fires once per block, so
-   a scan that races a swap-remove and misses (the moved entry lands in a slot
-   the scan has already passed) queues nothing, the game thread never hears
-   about it, and the entry stands for ever. A filter would have been
-   load-bearing, not an optimisation.
+   is NOT safe: `MEM_Free` fires once per block, so a scan that races a
+   swap-remove and misses (the moved entry lands in a slot the scan has already
+   passed) queues nothing, the game thread never hears about it, and the entry
+   stands for ever. A filter would be load-bearing, not an optimisation.
 
    THE DRAIN ONLY EVER READS A QUIESCENT RING. A producer claims a slot with
    `s_freeqN`, stores into it, and only THEN bumps `s_freeqIn`; the consumer
@@ -314,11 +309,8 @@ static void surf_drop_offscreens(unsigned keepBase)
    makes the two disagree and it does not read the window at all. That is what
    makes the slots trustworthy: every index in [done, head) was stored by its
    own claimant, so no stale value from an earlier lap can be read as a live
-   one. (The third review found exactly that hole in the version before this:
-   a flush skipped slots without clearing them, so a stale pointer survived a
-   lap and was taken as real while the pointer that should have been there was
-   written after the consumer had moved past. The zero-on-take below is kept as
-   an assertion — a 0 now means a bug — and is NOT the argument.)
+   one. (The zero-on-take below is an assertion — a 0 means a bug — and is
+   NOT the argument.)
 
    EVERY WAY THIS RING CAN LOSE AN ENTRY ENDS IN THE SAME PLACE: retire the
    WHOLE table and let the surfaces re-register from the engine's own draws.
@@ -398,8 +390,8 @@ static SURF* surf_get(unsigned base, int w, int h, int pitch, unsigned owner)
                    OFFSCREEN is freed by 0x4D85A0 directly (0x491AB8 on the way
                    back to the shell, 0x49838C at the game's mode switch), never
                    through SurfaceFree 0x4C6AC0, so before_free never sees it —
-                   the next publish then found a box past the new surface and
-                   called it an overflow (MEASURED 2026-09-07, one per switch) */
+                   and the next publish would find a box past the new surface
+                   and call it an overflow (MEASURED 2026-09-07, one per switch) */
                 ops_forget_base(base);
                 s_surf[i].w = w; s_surf[i].h = h; s_surf[i].pitch = pitch;
                 s_surf[i].copyValid = 0;
@@ -426,15 +418,15 @@ static SURF* surf_of_ctx(const int* ctx)
     if (!ptr_ok(ctx)) return NULL;
     base = (unsigned)ctx[CTX_BASE];
     /* THE OWNER IS DERIVED FROM THE BASE, NOT FROM THE CONTEXT POINTER.
-       `SurfaceCreateNamed 0x4C69F0` asks MEM_Alloc for w*h+0x30 bytes and points
-       the object's base field at block+0x30 (0x4C6A01..0x4C6A14), so the block
-       MEM_Free will be handed is `base - 0x30` — and that holds however we
-       reached the surface. The CONTEXT is not usable for this: `GetContext
+       `SurfaceCreateNamed 0x4C69F0` asks MEM_Alloc for w*h+0x30 bytes and
+       points the object's base field at block+0x30 (0x4C6A01..0x4C6A14), so the
+       block MEM_Free will be handed is `base - 0x30` — and that holds however
+       we reached the surface. The CONTEXT is not usable for this: `GetContext
        0x4C5E70` rep-movs a 12-dword copy into the caller's stack frame, so most
        blits hand us a copy whose address has nothing to do with the block.
-       (MEASURED 2026-09-12, and it is why the first cut of this rule was wrong:
-       keying on the context refused 1235 draws in one game while registering
-       the same surfaces through `after_alloc`, where the context IS the object.)
+       (MEASURED 2026-09-12: keying on the context refused 1235 draws in one
+       game while registering the same surfaces through `after_alloc`, where the
+       context IS the object.)
 
        WHAT THIS DOES NOT COVER, stated rather than assumed: `SurfaceAttach
        0x4C6A60` — one caller, `0x4B5897` — lays the same header over the locked
@@ -447,9 +439,8 @@ static SURF* surf_of_ctx(const int* ctx)
 }
 
 /* ---- the ops recorded since the last flip ------------------------------ */
-/* `OP_FOCUS` IS SPLIT OFF `OP_RECT` BY LANDING 8b, and the split is the whole
-   reason 8b can port anything: the two leaves that were both `OP_RECT` are not
-   the same operation. `0x4BF8C0` draws four inclusive edges through the
+/* `OP_FOCUS` IS SPLIT OFF `OP_RECT`, because the two leaves are not the same
+   operation. `0x4BF8C0` draws four inclusive edges through the
    STORE-ONLY Bresenham `0x4CC7AB` -- a hollow rectangle of one palette index,
    which ports as geometry. `0x4BF7B0` draws FOUR edges of ONE box through
    `0x4BEC70` -- the two groups of four calls at `0x4BF7F3`..`0x4BF839` and
@@ -462,12 +453,12 @@ static SURF* surf_of_ctx(const int* ctx)
    was under it. It keeps the `PK_PIXELS` path until something can carry a
    read-modify-write across the seam.
    [DISASSEMBLED 2026-09-18; exe-reverse-engineering.md has both.] */
-/* `OP_DIAG` IS SPLIT OFF `OP_LINE` BY LANDING 8c, for `OP_FOCUS`'s reason one
-   kind along: an AXIS-ALIGNED line's bounding box IS the line, one pixel thick,
-   so it is a solid fill and ports exactly as `OP_BAR` does; a DIAGONAL's
-   bounding box is the square the line crosses, and replaying it would paint the
-   whole square. Keeping them as two kinds means `GUI kinds:` counts them apart,
-   so the ratio is read rather than guessed. */
+/* `OP_DIAG` IS SPLIT OFF `OP_LINE`, for `OP_FOCUS`'s reason one kind along: an
+   AXIS-ALIGNED line's bounding box IS the line, one pixel thick, so it is a
+   solid fill and ports exactly as `OP_BAR` does; a DIAGONAL's bounding box is
+   the square the line crosses, and replaying it would paint the whole square.
+   Keeping them as two kinds means `GUI kinds:` counts them apart, so the ratio
+   is read rather than guessed. */
 enum { OP_GAF = 1, OP_GAFA, OP_GAFB, OP_GAFD, OP_SCALE, OP_TEXT, OP_LINE, OP_BAR, OP_RECT, OP_FRAME, OP_FILL, OP_COPY,
        OP_FLIP, OP_FOCUS, OP_DIAG, OP_NKIND };
 static const char* const OP_NAME[OP_NKIND] = { "?", "gaf", "gafa", "gafb", "gafd", "scale", "text", "line", "bar", "rect", "frame", "fill", "copy", "flip", "focus", "diag" };
@@ -477,7 +468,7 @@ typedef struct OP {
     unsigned char ck; unsigned short fw, fh;    /* sprite: key, frame size    */
     const void* frame; const void* pix;         /* sprite: identity -- KEYS,
                                                    never dereferenced again   */
-    /* THE SPRITE IS RESOLVED AT OBSERVE TIME, NOT AT PUBLISH (G19f-7).
+    /* THE SPRITE IS RESOLVED AT OBSERVE TIME, NOT AT PUBLISH.
        `fkey` is `frame_key`'s content hash and `goff`/`glen` the decoded plane
        in `s_gafBuf`, both taken in `gaf_box` while the engine is inside its own
        blit of that frame. See `gaf_capture`. `publish` uses these and reads no
@@ -487,10 +478,9 @@ typedef struct OP {
     unsigned goff, glen;                        /* the decoded plane, 0 = none   */
     /* the three header bytes the `gui probe:` trace prints, taken with the rest
        in `gaf_box`. They are here so that `publish` needs NO pointer into
-       engine art at all -- the probe was the last read left, and a debug path
-       that dereferences what the release path no longer does is exactly the
-       sort of thing that survives until it crashes someone.
-       [FOUND 2026-09-16 by BOTH landing reviewers, independently.] */
+       engine art at all -- a debug path that dereferences what the release
+       path does not is exactly the sort of thing that survives until it
+       crashes someone. */
     unsigned char fcomp, fsub, fsubn;
     unsigned sgen;                              /* the seen table `glen` was decided against */
     short dx, dy;                               /* sprite: unclipped top-left */
@@ -502,11 +492,9 @@ typedef struct OP {
        world content may not cross into the UI replay whatever leaf it came
        through. The erase's own gate is NOT here: it is `s_winGameFlip`, a
        window flag, because an op record is not guaranteed to exist (see the
-       `PK_CLEAR` emit in `publish`). `seq` was here and is gone with it — it
-       was `tagpu_terrown_fill_seq()`, and it made `terrown` the publisher's
-       only signal that the viewport was ours. */
+       `PK_CLEAR` emit in `publish`). */
     unsigned char world;
-    /* text (G17d): the string is copied into a game-thread scratch AT OBSERVE
+    /* text: the string is copied into a game-thread scratch AT OBSERVE
        TIME, not read again at publish. The argument routinely points at a
        caller's stack temp, which is gone by the flip — the same reason a
        sprite's pixels are copied rather than pointed at (gui-renderer.md 3.5).
@@ -523,9 +511,7 @@ typedef struct OP {
        therefore the engine's own width for `OP_BAR`, not a narrowing of ours.
 
        THE OTHER THREE MEAN SOMETHING ELSE AND THIS FIELD DOES NOT DESCRIBE
-       THEM [CORRECTED 2026-09-18 by landing 8a's review; the first version of
-       this comment claimed all four went through `0x4CCDEA`, and disassembly
-       of the pristine build says none of the other three does]:
+       THEM -- none of them goes through `0x4CCDEA`:
          - `OP_FRAME` / `0x4BF4D0` is a SHADE, not a fill. The argument is a
            SIGNED level clamped to [-0x20, +0x1F] that selects one of 32 rows
            of a 256-byte remap table -- `globals+0xC4` for negative, `+0xC8`
@@ -536,12 +522,11 @@ typedef struct OP {
            NOT palette index 232.
          - `OP_RECT` / `0x4BF8C0` writes four edges through the store-only
            Bresenham `0x4CC7AB`, whose colour is `[ebp+0x1C]` stored
-           `stos BYTE al` -- the low byte, a palette index. ESTABLISHED by
-           landing 8b, which is why `publish` reads `col` for `OP_RECT` too.
+           `stos BYTE al` -- the low byte, a palette index, which is why
+           `publish` reads `col` for `OP_RECT` too.
          - `OP_FOCUS` / `0x4BF7B0` writes through `0x4BEC70` and is a TINT: its
            argument is a shade level into `globals+0xC8`, not a colour.
-       [exe-reverse-engineering.md has all four, disassembled.
-       The vulkan-only plan, landing 8a.] */
+       [exe-reverse-engineering.md has all four, disassembled.] */
     unsigned char col;
     /* DID `clip_ctx` MOVE AN EDGE? Only `OP_RECT` reads it, and it is the
        difference between a hollow figure we may describe and one we may not.
@@ -554,9 +539,9 @@ typedef struct OP {
        `PK_PIXELS` path, whose bytes come from the surface and are therefore
        exact whatever the engine did -- a fallback by construction, not a
        heuristic. `OP_BAR` does not need it: a clipped solid fill is the same
-       fill restricted to the clip rect. [FOUND BY LANDING 8b'S REVIEW.] */
+       fill restricted to the clip rect. */
     unsigned char clipped;
-    /* AND THE FONT IS RESOLVED AT OBSERVE TIME TOO (G19f-8), for the reason
+    /* AND THE FONT IS RESOLVED AT OBSERVE TIME TOO, for the reason
        the sprite's plane is: `publish` runs up to CENSUS_MS after the draw and
        the font object is engine memory whose lifetime nothing here can state.
        `fid` is the slot id the consumer caches on (0: the font would not read,
@@ -564,19 +549,19 @@ typedef struct OP {
        `s_glyBuf`, `frows`/`fyoff` the two header bytes the consumer needs, and
        `fgen` the `sent[]` generation those records were decided against.
        `frame` keeps the font's ADDRESS as an identity -- `op_same` tells two
-       fonts apart with it and the probe prints it -- and after this landing
-       nothing dereferences it. See `text_capture`. */
+       fonts apart with it and the probe prints it -- and nothing dereferences
+       it. See `text_capture`. */
     unsigned fid;
     unsigned gboff; unsigned short gblen;
     unsigned char frows; signed char fyoff;
     unsigned fgen;
     /* WHICH OF THE FOUR EDGES OF ITS FOCUS RECTANGLE THIS IS (0..3), and it
-       exists to be part of the op's IDENTITY [FROM REVIEW, landing 8d].
+       exists to be part of the op's IDENTITY.
        `0x4BF7B0` draws four edges of one box, and at `t == b` the top edge
        (l,t)-(r,t) and the bottom edge (l,b)-(r,b) carry byte-identical
        boxes -- the engine draws both, and since a tint READS its destination
        (`0x4CC8DF` stores `LUT[row*256 + dst]`) two of them are `LUT[LUT[x]]`
-       and not a slower route to `LUT[x]`. Without this `dedup` collapsed them.
+       and not a slower route to `LUT[x]`. Without this `dedup` would collapse them.
        Only `OP_FOCUS` sets or reads it. */
     unsigned char edge;
     /* OP_SCALE: THE SOURCE WINDOW the transformed draw takes out of its frame,
@@ -588,30 +573,26 @@ typedef struct OP {
     unsigned       swin;
     unsigned char dup;                          /* an identical op follows: dropped */
 } OP;
-/* ---- THE UI FONTS, AS IDENTITIES AND BITS (landing 4c) -------------------
-   The string op used to carry the engine's FONT OBJECT and the render thread
-   dereferenced it — the header, the offset table and every glyph's packed rows
-   — up to a queue backlog later, behind IsBadReadPtr, with no note anywhere
-   establishing a UI font's lifetime. A probe is not a lifetime argument, so the
-   bits cross instead: on FIRST SIGHT of a (font, code) pair, here, on the game
+/* ---- THE UI FONTS, AS IDENTITIES AND BITS -------------------------------
+   No note establishes a UI font's lifetime, and a probe is not a lifetime
+   argument, so the render thread never dereferences a font object: the bits
+   cross instead, on FIRST SIGHT of a (font, code) pair, here, on the game
    thread, inside the flip the observer recorded the draw in.
 
-   THE BOUND IS THE FORMAT, as the marker font's copy already had it (landing
-   1): the object is the `.fnt` file image — `u16 height; u16 yoff; u16
-   offset[256]; glyphs` (tools/guifont.py, decoded over the twenty stock faces)
-   — so the offset table has 256 entries and an entry is a file offset into the
-   block the loader read the file into.
+   THE BOUND IS THE FORMAT, as for the marker font's copy: the object is the
+   `.fnt` file image — `u16 height; u16 yoff; u16 offset[256]; glyphs`
+   (tools/guifont.py, decoded over the twenty stock faces) — so the offset table
+   has 256 entries and an entry is a file offset into the block the loader read
+   the file into.
 
-   `f[3]` IS THE FIRST CODE, not "the high byte of the y-offset word" as this
-   comment said until landing 4c's review corrected it: `0x4CCF77` loads
-   `[esi+3]` and `0x4CCFAA` does `sub ebx,first / jb`, which is the blitter's
-   only lower bound on a character. It is 0 for every stock face, which is what
-   makes `f[3] != 0` a usable "this is not that format" test — but it is a
-   REFUSAL of an unusual font and not a statement about the format, and a font
-   with a real non-zero `first` would be refused with it. Refused means the op
-   falls back to its box's captured pixels, which is what every text draw was
-   before G17d, so the cost of being wrong here is a slower path and never a
-   wrong glyph.
+   `f[3]` IS THE FIRST CODE, not the high byte of the y-offset word: `0x4CCF77`
+   loads `[esi+3]` and `0x4CCFAA` does `sub ebx,first / jb`, which is the
+   blitter's only lower bound on a character. It is 0 for every stock face,
+   which is what makes `f[3] != 0` a usable "this is not that format" test — but
+   it is a REFUSAL of an unusual font and not a statement about the format, and
+   a font with a real non-zero `first` would be refused with it. Refused means
+   the op falls back to its box's captured pixels, so the cost of being wrong
+   here is a slower path and never a wrong glyph.
 
    A SLOT IS KEYED ON THE POINTER AND THE SIGNATURE. An allocator that hands the
    same address to a different font would otherwise serve the old font's glyphs;
@@ -631,15 +612,14 @@ typedef struct {
 static GFONT    s_gfont[GF_SLOTS];
 static int      s_ngfont;
 static unsigned s_gfontNext = 1;
-/* `volatile` because `tagpu_gui_font_stats` reads them from the RENDER thread for the
-   heartbeat while only the game thread writes them -- the convention every other
-   producer counter follows in `g_guiq`. Aligned 32-bit stores on x86 cannot tear, so
-   what this buys is that the render thread sees a figure rather than a cached one.
-   [FOUND 2026-09-16 by the landing review: the reader is what G19f-8 added.] */
+/* `volatile` because `tagpu_gui_font_stats` reads them from the RENDER thread
+   for the heartbeat while only the game thread writes them -- the convention
+   every other producer counter follows in `g_guiq`. Aligned 32-bit stores on
+   x86 cannot tear, so what this buys is that the render thread sees a figure
+   rather than a cached one. */
 static volatile unsigned s_gfontRecycles, s_gfontRefused, s_gfontGlyphs, s_gfontResends;
 /* ...and a reader for them, because a counter the heartbeat does not print is a
-   measurement nobody ever reads -- which these four were from landing 4c until
-   G19f-8 made them the way to see this mechanism work. */
+   measurement nobody ever reads. */
 void tagpu_gui_font_stats(unsigned* glyphs, unsigned* resends, unsigned* refused, unsigned* recycles)
 {
     *glyphs = s_gfontGlyphs; *resends = s_gfontResends;
@@ -653,14 +633,11 @@ static unsigned s_gfontGenSeen;
    would be missing from every string for the rest of the session — the string
    drawn with the characters dropped and the rest closed up. The generation is
    the render thread's, read here, monotone; when it moves every slot's `sent[]`
-   is cleared and the next string re-sends what it needs [found by the landing
-   review, twice]. */
-/* THE GENERATION EVERY `sent[]` DECISION IS TAKEN AGAINST (G19f-8). `sent[]`
+   is cleared and the next string re-sends what it needs. */
+/* THE GENERATION EVERY `sent[]` DECISION IS TAKEN AGAINST. `sent[]`
    says "the consumer already has this glyph", and TWO things clear it: the
    render thread throwing its glyph atlas away (below) and a publisher reseed
-   skipping whole windows (`publish`). Until this landing both were safe by
-   POSITION -- the decision was taken inside `publish`, after either clear had
-   already happened in the same call. The capture now runs at OBSERVE time, so
+   skipping whole windows (`publish`). The capture runs at OBSERVE time, so
    a clear can land between the decision and the flip, and a block that carries
    no records BECAUSE they were already sent would then be a string with
    characters missing from it for the rest of the session -- the exact failure
@@ -668,18 +645,17 @@ static unsigned s_gfontGenSeen;
    publish, and a mismatch publishes the box instead. Same shape, and the same
    reason, as the sprite path's `s_seenGen`.
 
-   A SLOT RECYCLE NEEDS NO BUMP OF ITS OWN, AND THE REASON IS NOT THE ONE THIS
-   COMMENT GAVE. It said "nothing in flight is invalidated", which is backwards:
-   both tables are eight deep, so the ninth `(font, sig)` that makes US recycle
-   is also the ninth ID the CONSUMER sees, and `tagpu_text.c`'s own `gfont_slot`
-   answers that with `memset(s_gf)` + `memset(s_gatlas)` + `s_ggen++` -- every
-   cell under every old id, gone. A recycle therefore RELIABLY CAUSES a consumer
-   clear rather than leaving everything valid. What makes it safe anyway is the
-   generation: that `s_ggen++` is what the poll above sees, one window later at
-   worst, and it re-arms every `sent[]` through the same path a shelf overflow
-   does. `gfont=` prints the recycles and the resends side by side, so the two
-   moving together is a cross-check on this paragraph rather than a hope.
-   [CORRECTED 2026-09-16 by the cross-thread reviewer.] */
+   A SLOT RECYCLE NEEDS NO BUMP OF ITS OWN, though it does invalidate what is in
+   flight: both tables are eight deep, so the ninth `(font, sig)` that makes US
+   recycle is also the ninth ID the CONSUMER sees, and `tagpu_text.c`'s own
+   `gfont_slot` answers that with `memset(s_gf)` + `memset(s_gatlas)` +
+   `s_ggen++` -- every cell under every old id, gone. A recycle therefore
+   RELIABLY CAUSES a consumer clear rather than leaving everything valid. What
+   makes it safe anyway is the generation: that `s_ggen++` is what the poll
+   above sees, one window later at worst, and it re-arms every `sent[]` through
+   the same path a shelf overflow does. `gfont=` prints the recycles and the
+   resends side by side, so the two moving together is a cross-check on this
+   paragraph rather than a hope. */
 static unsigned s_sentGen = 1;
 static void gfont_sent_clear(void)
 {
@@ -743,9 +719,7 @@ static const unsigned char* gfont_glyph(const unsigned char* f, int code, int* w
    code this font has not sent yet and this block does not already carry. It
    marks NOTHING: an op that never reaches the queue must not take its glyphs
    with it, so `glyph_block_mark` does the marking at publish, from the bytes
-   that actually went into the arena. (Two publish-time walks, `glyph_block_size`
-   then `glyph_block_fill`, did this before G19f-8; sizing first is pointless
-   once the destination is a scratch we can bound per record.)
+   that actually went into the arena.
 
    OUR READ SET IS A SUBSET OF THE ENGINE'S, BYTE FOR BYTE. `0x4CCF60` has no
    clip and no destination bound: it reads `font[0]`, `font[2]`, `font[3]`, the
@@ -777,7 +751,7 @@ static unsigned glyph_block_capture(GFONT* g, const unsigned char* f,
         if (c < GF_LO || c > GF_HI) continue;
         if (g->sent[c - GF_LO]) continue;
         /* `seen` is cleared on the FIRST unsent code and not before: this walk
-           now runs inside the engine's blit rather than at the flip, and a
+           runs inside the engine's blit rather than at the flip, and a
            settled screen -- every code of every label already sent -- must cost
            the walk and nothing else. */
         if (!any) { memset(seen, 0, sizeof seen); any = 1; }
@@ -847,7 +821,7 @@ static unsigned s_strLost;                      /* strings the scratch could not
 #define GAF_SCRATCH (2u << 20)
 static unsigned char s_gafBuf[GAF_SCRATCH];
 static unsigned s_gafUsed;
-/* AND THE BATCH'S GLYPH RECORDS (G19f-8), for the same reason and dropped by
+/* AND THE BATCH'S GLYPH RECORDS, for the same reason and dropped by
    the same reset. A SETTLED SESSION WRITES NOTHING HERE: `sent[]` means a
    (font, code) pair is captured once and never again, so what has to fit is the
    glyphs a screen's first window introduces -- about 16 bytes a code for a
@@ -860,13 +834,13 @@ static unsigned s_gafUsed;
    overflow, an untwinned surface). The sprite path can share a decode through
    `s_gcap` because its consumer keys on the frame and one copy serves every op;
    a glyph record is only ever read out of the op that carries it. What the
-   scratch cannot take publishes its box's bytes instead, which is what a text
-   op did before G17d -- slower, never wrong. */
+   scratch cannot take publishes its box's bytes instead -- slower, never
+   wrong. */
 #define GLY_SCRATCH (128u << 10)
 static unsigned char s_glyBuf[GLY_SCRATCH];
 static unsigned s_glyUsed;
 /* `gaflost` and `gafhigh` live in g_guiq rather than here for the reason
-   `gafstale` was moved there: a counter the heartbeat does not print is a
+   `gafstale` does: a counter the heartbeat does not print is a
    measurement nobody ever reads. */
 static OP* s_lastOp = NULL;                     /* the op op_add just recorded */
 #define MAX_OPS 65536
@@ -876,15 +850,15 @@ static int      s_nops = 0;
    new surface may be allocated over the same bytes before the next census, and
    neither the census nor the publisher may apply an old box to it.
 
-   A COPY'S SOURCE IS A BASE TOO, and it was not being forgotten. The
-   destination alone was cleared, so an op whose destination is still alive and
-   whose SOURCE was freed kept naming the dead address -- and this module's own
-   measurement is that the engine's next `0x4C69F0` lands on the freed block, so
-   `publish`'s `surf_by_base(op->src)` resolved a stranger. That is a wrong
-   picture (the copy samples whatever now lives there) and, since `PK_ASSET`,
-   potentially a wrong 300 KB offer made in the dead surface's name. Clearing it
-   makes the source unresolvable instead, and an unresolved source falls through
-   to the box's own bytes, which is the honest answer. [The landing review's.] */
+   A COPY'S SOURCE IS A BASE TOO. An op whose destination is still alive and
+   whose SOURCE was freed would keep naming the dead address -- and this
+   module's own measurement is that the engine's next `0x4C69F0` lands on the
+   freed block, so `publish`'s `surf_by_base(op->src)` would resolve a
+   stranger. That is a wrong picture (the copy samples whatever now lives
+   there) and potentially a wrong 300 KB `PK_ASSET` offer made in the dead
+   surface's name. Clearing it makes the source unresolvable instead, and an
+   unresolved source falls through to the box's own bytes, which is the honest
+   answer. */
 static void ops_forget_base(unsigned base)
 {
     int k;
@@ -909,12 +883,11 @@ static unsigned s_nullCtx[OP_NKIND];        /* ops whose ctx was NULL/unknown */
    `publish`'s, and this measures what the engine DREW. */
 static unsigned s_kindArea[OP_NKIND];
 /* THE SEMANTIC HALF OF `OP_SCALE`, which is the one kind that is semantic for
-   SOME of its ops and not others [landing 8e]. A transformed draw crosses as a
+   SOME of its ops and not others. A transformed draw crosses as a
    `PK_SPRITE` when its plane was captured -- an axis-aligned, keyable window of
    a single-plane frame -- and as nothing at all otherwise. Summing the whole
-   kind into `raw` was right while the capture almost never fired; with the
-   shell's swatches closed it reported `raw=0.21 pct` for a screen whose
-   residual is zero, which is a measure that has stopped measuring. Counted
+   kind into `raw` would report `raw=0.21 pct` for a shell screen whose
+   residual is zero. Counted
    here, against the SAME box `s_kindArea` took, so the two are subtractable. */
 static unsigned s_scaleSem;
 static unsigned s_assetSends = 0;     /* PK_ASSET ops published                   */
@@ -923,7 +896,7 @@ static unsigned s_assetAcked = 0;     /* assets the consumer echoed back        
 static unsigned s_assetDrift = 0;     /* pixels that moved in an ACKED asset -- the
                                          residual the claim names, measured under
                                          `census.on` and expected to read 0        */
-/* ---- THE FOCUS TINT'S THREE (landing 8d) --------------------------------
+/* ---- THE FOCUS TINT'S THREE ----------------------------------------------
    `s_tints` is what crossed as `PK_TINT`; `s_focusRowBad` is a shade level
    outside the table's 32 rows, refused by `before_focus` (the engine passes it
    through unmasked and reads off the end -- see there); `s_tintNoTable` is a
@@ -946,14 +919,13 @@ static unsigned asset_token(void)
 
 /* ---- THE WORLD PHASE: WHERE AN OP CAME FROM, NOT WHAT IT LOOKS LIKE ------
 
-   Every op in this file is an OBSERVATION of an engine draw, and until this
-   section nothing in the channel distinguished a UI draw from a WORLD draw.
-   That is not a cosmetic gap: the engine's feature pass `0x46A610` blits its
-   trees through `0x4B7F90`/`0x4B8500`, the same two GAF blitters the side panel
-   and the dialogs use, so the trees published as `PK_SPRITE` and were replayed
-   over our own world. `featown` papered over it by stopping the engine drawing
-   at all, which holes the reference frame — the thing the clean cut exists to
-   keep whole.
+   Every op in this file is an OBSERVATION of an engine draw, and nothing about
+   the leaf distinguishes a UI draw from a WORLD draw: the engine's feature pass
+   `0x46A610` blits its trees through `0x4B7F90`/`0x4B8500`, the same two GAF
+   blitters the side panel and the dialogs use, so without the phase the trees
+   would publish as `PK_SPRITE` and replay over our own world. Stopping the
+   engine drawing instead would hole the reference frame — the thing the clean
+   cut exists to keep whole.
 
    A LIST OF GUILTY DRAWERS IS NOT A FIX, because the next one nobody has
    enumerated leaks exactly the same way. What is recorded here instead is the
@@ -983,16 +955,15 @@ static unsigned asset_token(void)
                                the debug line, the clock, the retained GUI
                                blit, the profiler bars, the LIGHTBAR wipe   UI
 
-   WHY THESE FOUR ADDRESSES AND NOT THE OBVIOUS ONES. The handoff proposed
-   `0x468DB0` as the single opener — "the first thing in the world draw" — and
-   the disassembly refuses it: the resource block and the minimap come AFTER the
-   terrain blit, so one span from there to the tail would take the metal
-   readout and the minimap off the screen. Both closers are reached on EVERY
-   call of `DrawGameScreen`, which is what keeps the flag from leaking out of
-   the function: `0x468E3A` is the join of the `main+0x14280 == 2` branch
-   (`0x468DFF jne 0x468E35`), and `0x469F36` is the join of the whole build-
-   cursor block (`0x469E0D je 0x469F30`, and the drawn path falls through
-   `0x469F23` to the same label). Neither is inside a loop.
+   WHY THESE FOUR ADDRESSES AND NOT THE OBVIOUS ONES. `0x468DB0` as the single
+   opener — "the first thing in the world draw" — does not work: the resource
+   block and the minimap come AFTER the terrain blit, so one span from there to
+   the tail would take the metal readout and the minimap off the screen. Both
+   closers are reached on EVERY call of `DrawGameScreen`, which is what keeps
+   the flag from leaking out of the function: `0x468E3A` is the join of the
+   `main+0x14280 == 2` branch (`0x468DFF jne 0x468E35`), and `0x469F36` is the
+   join of the whole build- cursor block (`0x469E0D je 0x469F30`, and the drawn
+   path falls through `0x469F23` to the same label). Neither is inside a loop.
 
    OBSERVERS, NOT SUPPRESSIONS. Each site is a 5-byte `call rel32` repointed at
    a thunk that sets the flag and then calls the engine's own function with the
@@ -1002,9 +973,8 @@ static unsigned asset_token(void)
    still runs. Nothing the engine does changes.
 
    IT FAILS OPEN, DELIBERATELY. A build whose bytes differ arms nothing, the
-   flag stays 0, no op is ever dropped, and the leak is back — which is the
-   state every build was in until this landing. Failing the other way would
-   take the HUD off the screen on an exe we do not recognise. */
+   flag stays 0, no op is ever dropped, and the leak is back. Failing the other
+   way would take the HUD off the screen on an exe we do not recognise. */
 static volatile unsigned char s_world = 0;   /* inside an engine world span      */
 static int      s_phaseLive = 0;             /* the four redirects are installed */
 static unsigned s_worldOps = 0;              /* ops stamped WORLD                */
@@ -1184,30 +1154,28 @@ static void op_add(int kind, SURF* s, int l, int t, int r, int b)
        that already crossed are not un-sent, and the ops now arriving will paint
        over them, which is exactly the right outcome.
 
-       AFTER THE CLIP, NOT BEFORE IT, and the move is a fix rather than a
-       tidy-up. Revoking on an op that clipped to nothing revoked a claim about
-       bytes the engine never touched, and it cost the picture: the surface was
-       no longer an asset, `publish` seeds only DESTINATIONS it has an op for,
-       and a surface that is only ever a copy SOURCE therefore had no path left
-       to any content at all -- the copy fell through to `PK_PIXELS`, which the
-       drain drops, and the screen drew black. Past this line every remaining
+       AFTER THE CLIP, NOT BEFORE IT. Revoking on an op that clipped to nothing
+       would revoke a claim about bytes the engine never touched, and it costs
+       the picture: the surface is no longer an asset, `publish` seeds only
+       DESTINATIONS it has an op for, and a surface that is only ever a copy
+       SOURCE therefore has no path left to any content at all -- the copy falls
+       through to `PK_PIXELS`, which the drain drops, and the screen draws
+       black. Past this line every remaining
        path either records the op or drops it for want of room, and both mean
        pixels are being written, so the claim is exactly as strong as it was.
-       [FOUND by the landing review.]
 
        IT IS PERMANENT, AND THE RECOVERIES AROUND IT ARE PER-EPISODE, so a
        revocation that lands on a surface whose bytes have already crossed says
        nothing now and goes black at the NEXT RESEED: the reseed clears
        `seeded`, the offer branch is refused on `isAsset`, no `PK_COPY` is
-       emitted, and `PK_PIXELS` is dropped. **The review proposed restoring the
-       claim at the reseed (a `wasAsset` bit) and that is REFUSED, because it
-       would breach the clean cut**: a surface something drew into holds
-       COMPOSED pixels, and composed pixels are the one thing that may not
-       cross. There is no by-design repair that respects the cut -- the honest
-       outcome for a copy whose source is composed is that we do not carry it --
-       so what is added instead is that the case cannot happen QUIETLY. It fires
-       at most once per surface, because this is the line that clears the flag.
-       [The landing review's M2, second half; the first half rejected above.] */
+       emitted, and `PK_PIXELS` is dropped. **Restoring the claim at the reseed
+       (a `wasAsset` bit) is REFUSED, because it would breach the clean cut**: a
+       surface something drew into holds COMPOSED pixels, and composed pixels
+       are the one thing that may not cross. There is no by-design repair that
+       respects the cut -- the honest outcome for a copy whose source is
+       composed is that we do not carry it -- so what is added instead is that
+       the case cannot happen QUIETLY. It fires at most once per surface,
+       because this is the line that clears the flag. */
     if (s->isAsset) {
         if (s->assetSent || s->assetTok) {
             char rb[160];
@@ -1263,10 +1231,9 @@ static int on_game_thread(void)
 /* The flip counter, for the frame packet to echo (tagpu_packet_pub.c): the
    twin travels on this module's queue and the packet on the exchange, at
    different cadences, and the heartbeat counts the skew between them. Game
-   thread reads only. It counts wherever the flip OBSERVER installed, which
-   since landing 10c-2 is not the same thing as the layer being armed -- this
-   line said "0 for ever when the layer is not armed" and that is no longer
-   true (landing review, round 2). Nothing reads it but the packet dump. */
+   thread reads only. It counts wherever the flip OBSERVER installed, which is
+   not the same thing as the layer being armed. Nothing reads it but the
+   packet dump. */
 unsigned tagpu_gui_flips(void) { return s_flips; }
 
 /* ---- the publisher (game thread -> tagpu_gui_surf.c) ------------------- */
@@ -1277,26 +1244,12 @@ static unsigned char* s_arena;
 /* `g_gui_draw` IS THE CONSUMER SAYING IT IS THERE: 0 means nothing drains the
    queue, so `publish()` returns on its first line, `g_guiq` receives no op, the
    arena is never written, and `gaf_capture` / `text_capture` are reached only
-   through the census's half of their `(s_census || g_gui_draw)` gate.
+   through the census's half of their `(s_census || g_gui_draw)` gate. The
+   writer is `tagpu_gui_surf.c` (`g_gui_draw = on`).
 
-   THIS COMMENT USED TO SAY THE WORD HAD NO WRITER AT ALL, and that it was 0 for
-   the life of every process because `tagpu_gui_surf.c` had been deleted with
-   the clean cut. Both halves are false and have been since the renderer was
-   restored: the file exists, `tagpu_gui_surf.c` writes this word (`g_gui_draw =
-   on`), and an ordinary boot measures `published=4653791 bytes=902287148
-   draw=1`. Every consequence drawn from the old claim went with it -- the
-   transport is not "unreachable, not wrong", the queue's tail pointers are not
-   writerless, and no future landing has to "bring a drain in the same landing"
-   because the drain is already here. The paragraph outlived the restore by
-   several commits, was corrected in the heartbeat's comment 200 lines below
-   first, and is corrected here second, which is the wrong order and the reason
-   it is worth saying plainly: a stale note is worse than no note, and the big
-   authoritative copy is the one that gets believed.
-   [FOUND by the landing review of 381465c, 2026-09-21.]
-
-   WHAT THE LEVER BUYS WITHOUT A CONSUMER is still true and still useful: the 17
-   leaves record ops into `s_ops`, and the census diffs each surface against its
-   own copy and reports what no op explains. That is the harness mode, which is
+   WHAT THE LEVER BUYS WITHOUT A CONSUMER: the 17 leaves record ops into
+   `s_ops`, and the census diffs each surface against its own copy and reports
+   what no op explains. That is the harness mode, which is
    why `census` is a token of its own.
 
    THE TRANSPORT IS ALSO THE ONLY RECORD IN THE TREE of how UI art is decoded at
@@ -1319,9 +1272,8 @@ static const void* s_seenP[SEEN_N];
    bytes were sent, and after the clear they are not. Those ops publish their
    box instead, which costs nothing at all because a reset re-seeds every
    surface whole in the same publish -- but it is a different event from "the
-   scratch was full", and one counter for both would have read as 3923 failures
-   on the first session that measured it. [MEASURED 2026-09-16: 3923 of them,
-   15 resets, and `gaflost` 0.] */
+   scratch was full", and one counter for both would read the former as
+   failures. [MEASURED 2026-09-16: 3923 of them, 15 resets, and `gaflost` 0.] */
 static unsigned s_seenGen = 1;
 static unsigned hash_ptr(const void* a, const void* b)
 {
@@ -1439,8 +1391,7 @@ static void ovl_add(SURF* s, const OP* op)
     if (!s->snap) return;
     /* THE SAME SPRITE AT THE SAME PLACE IS THE SAME PIXELS: a redraw replaces
        nothing, so it takes no entry. Without this every repaint that redraws
-       a title would spend one, and eight would drop the snapshot.
-       [The review of 878d7bf, finding 3.] */
+       a title would spend one, and eight would drop the snapshot. */
     for (k = 0; k < s->novl; k++) {
         v = &s->ovl[k];
         if (v->frame == op->frame && v->key == op->fkey && v->fw == op->fw && v->fh == op->fh &&
@@ -1482,7 +1433,7 @@ static int pub_seed(SURF* s)
     return 1;
 }
 
-/* ---- THE LIGHTEN TABLE, `globals+0xC8` (landing 8d) ---------------------
+/* ---- THE LIGHTEN TABLE, `globals+0xC8` ----------------------------------
    What a focus tint remaps through: 32 rows of 256 bytes, built by the engine
    at init. `tagpu_packet_pub.c` latches the same table for the world's flash
    blit (`lht_snapshot`) and the shade table beside it the same way; this is
@@ -1506,7 +1457,7 @@ static int pub_seed(SURF* s)
    `PROG_CAPS`), not from private copies here. This file is a `publisher` in
    `thread-split.allow`, so it may include that header, and a second spelling
    of `0x51FBD0` in a file that already reaches it twice is how two copies of
-   one fact drift apart. [FROM REVIEW, landing 8d.] */
+   one fact drift apart. */
 static unsigned char s_lht[TAGPU_GUI_SHADE_BYTES];
 static int      s_lhtOk = 0;
 static int      s_lhtSent = 0;        /* crossed since the last reset          */
@@ -1524,8 +1475,8 @@ static int pub_shade(void)
     unsigned char* dst;
     g = *(const char* const*)TA_GFX_PP;
     if (!ptr_ok(g)) return 0;
-    /* THE ENGINE'S OWN PRECONDITION, AND IT IS A BOUND AND NOT A PROBE
-       [FROM REVIEW, landing 8d]. `PROG_CAPS` bit 7 is the graphics globals'
+    /* THE ENGINE'S OWN PRECONDITION, AND IT IS A BOUND AND NOT A PROBE.
+       `PROG_CAPS` bit 7 is the graphics globals'
        "the lighten table is there" flag, and it is the engine's own gate on
        this exact buffer: the in-place setter `0x4BAB30` tests `[globals+0xF0]`
        bit 7 and returns without writing when it is clear, exactly as
@@ -1534,18 +1485,14 @@ static int pub_shade(void)
        means. Without this test an allocation that exists but has not been
        filled yet -- `0x4BA660` allocates the 8192 bytes and returns 1 without
        touching the caps word, so the two are separate events -- is copied as
-       though it were a table, and because the latch below used to key on the
-       POINTER the mistake was permanent: the engine fills the same buffer, so
-       a re-read never fired and every focus glow for the session remapped
-       through whatever those bytes held. `tagpu_packet_pub.c`'s
-       `lht_snapshot` has always had this test; this function was written from
-       it and dropped it. `0x4BEC70` itself does NOT test the bit -- it null-
+       though it were a table. `tagpu_packet_pub.c`'s `lht_snapshot` has the
+       same test. `0x4BEC70` itself does NOT test the bit -- it null-
        checks and draws -- so the engine will happily draw through an unbuilt
        table and we deliberately will not. */
     if (!(*(const unsigned short*)(g + PROG_CAPS) & 0x80u)) return 0;
     t = *(const unsigned char* const*)(g + PROG_LHT);
     if (!ptr_ok(t)) return 0;
-    /* KEYED ON THE CONTENT, NOT ON THE POINTER [FROM REVIEW, landing 8d].
+    /* KEYED ON THE CONTENT, NOT ON THE POINTER.
        `0x4BAB30` is reached from `0x42E2AB`, which loads PALETTE.LHT into a
        heap buffer, `rep movsd`s 0x800 dwords of it straight into
        `[globals+0xC8]` and frees the source at `0x42E2B1` -- an IN-PLACE
@@ -1570,9 +1517,8 @@ static int pub_shade(void)
     memcpy(dst, s_lht, sizeof s_lht);
     pub_commit();
     /* AFTER THE COMMIT, NEVER BEFORE IT. Marking it sent on the way in would
-       have claimed a table that a full arena threw away -- the same shape of
-       mistake as acking an asset at publish rather than at hand-over, which
-       cost this lane a whole episode's backdrop one landing ago. */
+       claim a table that a full arena threw away -- the same shape of mistake
+       as acking an asset at publish rather than at hand-over. */
     s_lhtSent = 1;
     return 1;
 }
@@ -1589,15 +1535,13 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
 {
     const unsigned char* px = (const unsigned char*)pix;
     unsigned hh = 2166136261u, i, n = 0;
-    /* `fr` IS CHECKED, AND IT WAS NOT. This function guarded the PIXEL pointer
-       and then dereferenced the FRAME HEADER on the next line, where every
-       other caller of the GAF resolvers in this tree -- tagpu_fx.c,
-       tagpu_feat.c, tagpu_render3do.c, tagpu_gui_surf.c -- puts the header
-       through `tagpu_gaf_frame_sane` first. It is a BOUND on a value and it is
-       NOT the reason this read is safe: that is the caller's ordering against
-       the level teardown (see `publish`). This is the parity the module already
-       had everywhere else, kept so a header that is merely garbage rather than
-       unmapped is refused rather than hashed. */
+    /* `fr` IS CHECKED, as every other caller of the GAF resolvers in this
+       tree -- tagpu_fx.c, tagpu_feat.c, tagpu_render3do.c, tagpu_gui_surf.c --
+       puts the header through `tagpu_gaf_frame_sane` first. It is a BOUND on a
+       value and it is NOT the reason this read is safe: that is the caller's
+       ordering against the level teardown (see `publish`). It is here so a
+       header that is merely garbage rather than unmapped is refused rather
+       than hashed. */
     if (!tagpu_gaf_frame_sane(fr)) return NULL;
     if (!ptr_ok(px)) return NULL;
     if (fr[0x09] == 0) {                             /* raw: w*h bytes exist */
@@ -1622,23 +1566,21 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
     return (const void*)(size_t)(hh ? hh : 1u);
 }
 
-/* ---- THE SPRITE, RESOLVED WHERE IT IS PROVABLY ALIVE (G19f-7) ------------
-   `publish` used to take the identity hash AND the decoded plane out of engine
-   memory, up to CENSUS_MS after the blit that recorded the op. Between those
-   two moments the engine is free to release the art, and it does: the level
+/* ---- THE SPRITE, RESOLVED WHERE IT IS PROVABLY ALIVE --------------------
+   Taking the identity hash and the decoded plane out of engine memory at
+   `publish`, up to CENSUS_MS after the blit that recorded the op, would read
+   art the engine is free to release in between, and it does: the level
    teardown's cascade frees the per-level GAF banks, and `GUI_Pop 0x4A9660`
    frees a popped screen's from 39 call sites with no flag and no generation at
-   all. Landing 5 closed the teardown with an ordering against the level
-   generation and left the pop open, covered only by a BOUND -- which this
-   module says twice over is not a safety argument.
+   all. A level-generation ordering cannot cover the pop, and a BOUND is not a
+   safety argument.
 
-   THE ORDERING IS ON THE ENGINE'S TIMELINE, AND IT COVERS LIFETIME ONLY.
-   State it precisely, because the first version of this comment did not. This
+   THE ORDERING IS ON THE ENGINE'S TIMELINE, AND IT COVERS LIFETIME ONLY. This
    runs from `gaf_box`, a `before_` detour on the blit leaf, so:
 
        our read  <  the engine's blit  <  the engine's free
 
-   The free routes that opened this window -- the teardown cascade and
+   The free routes -- the teardown cascade and
    `GUI_Pop 0x4A9660` -- all run AFTER the blit they follow, and the caller
    holds the art alive across the call it is currently making. Our read
    precedes that call. That is the ordering, and it needs no flag, no
@@ -1648,42 +1590,36 @@ static const void* frame_key(const unsigned char* fr, const void* pix, int w, in
 
    **It is NOT the claim that "the engine would fault if this were dead".**
    The detour runs BEFORE the engine's read, so if the memory were dead WE
-   would fault first; that phrasing was a counterfactual dressed as a proof and
-   the landing review was right to say so.
+   would fault first; that phrasing is a counterfactual dressed as a proof.
 
    **AND IT DOES NOT BOUND THE EXTENT.** The engine reads the CLIPPED sub-rect;
    `tagpu_gaf_decode` reads all `w*h`, or every RLE row. So a header whose `w`/
    `h` exceed the plane the loader actually allocated is not covered by anything
    above -- only by `tagpu_gaf_frame_sane`, which is a SHAPE test (w,h <= 512),
    and the decoder's own `IsBadReadPtr`, which this file says everywhere is not
-   a safety argument. That residual is unchanged by this landing: the same
-   decode read the same bytes at publish before it, over memory that might also
-   have been freed. Moving it strictly removes the lifetime half and leaves the
-   extent half exactly where it was. Named, not fixed: bounding it needs the
-   plane's allocated length, and the plane is not a block start, so `MEM_Size`
-   cannot answer it either. [Extent residual raised by the landing review.]
+   a safety argument. Named, not fixed: bounding it needs the plane's
+   allocated length, and the plane is not a block start, so `MEM_Size` cannot
+   answer it either.
 
-   After this, `publish` dereferences no engine asset memory on this path at
-   all -- the `gui probe:` trace included, which was the last one left.
+   `publish` dereferences no engine asset memory on this path at all -- the
+   `gui probe:` trace included.
    `frame`/`pix` survive in the op as the consumer's atlas KEY, a value compared
    against a table and never followed.
 
-   IT ALSO FIXES A WRONG-ART CASE THE GENERATION GATE COULD NOT SEE. The key is
-   a hash of the plane's first bytes precisely because the shell hands a freed
-   screen's addresses to the next screen's art. Taken at publish time, that hash
-   was read from whatever the address held THEN -- so art freed and replaced
-   inside one census window hashed the NEW content under the OLD op, and the
-   consumer matched a key that named pixels the op never drew. Taken here, the
+   IT ALSO CLOSES A WRONG-ART CASE. The key is a hash of the plane's first
+   bytes precisely because the shell hands a freed screen's addresses to the
+   next screen's art. Taken at publish time, that hash would be read from
+   whatever the address held THEN -- so art freed and replaced inside one
+   census window would hash the NEW content under the OLD op, and the consumer
+   would match a key that named pixels the op never drew. Taken here, the
    hash is of the bytes the engine is about to blit, which is the only content
    the op ever meant.
 
-   The plane is decoded only on FIRST SIGHT, exactly as `publish` did it -- a
-   settled session decodes nothing -- and `s_gcap` keeps one window from
+   The plane is decoded only on FIRST SIGHT -- a settled session decodes
+   nothing -- and `s_gcap` keeps one window from
    decoding the same new frame once per gadget that shares it. The scratch is a
    bound: what it cannot take publishes its box's bytes instead, which is what
-   an undecodable frame has always done. Slower, never wrong.
-   [BUILT 2026-09-16, after the landing-5 re-review named the pop window and
-   said the by-design fix wanted a block size. It wanted a different hook.] */
+   an undecodable frame has always done. Slower, never wrong. */
 #define GCAP_N 256
 static struct { const void* fr; unsigned key, off, len; } s_gcap[GCAP_N];  /* this window's decodes */
 
@@ -1691,9 +1627,7 @@ static struct { const void* fr; unsigned key, off, len; } s_gcap[GCAP_N];  /* th
    an op's `soff`/`goff`/`gboff` are offsets into them and an op that outlived
    its bytes would publish whatever now sits at that offset. `s_gcap` MUST go
    too: its entries are offsets into `s_gafBuf`. The three call sites set
-   `s_nops = 0` and call this; the string scratch used to be reset beside
-   `s_nops` at each of them instead, which is one more place for the next
-   scratch to be forgotten. */
+   `s_nops = 0` and call this, so the next scratch has one place to be reset. */
 /* HOW FAR `publish` GOT THROUGH THIS WINDOW: every op below this index was
    handled (published, or deliberately skipped), every op from it on was not.
    0 when `publish` never ran or returned before its loop. */
@@ -1707,8 +1641,7 @@ static void ops_window_reset(void)
        running at all -- drew pixels the rebuild would not replay, so the
        snapshot goes with the window. By construction rather than by the
        stall being rare: `consumer_stalled` fires on exactly the way out of a
-       game, which is when the post-game screen builds.
-       [The review of 878d7bf, finding 1.] */
+       game, which is when the post-game screen builds. */
     int k;
     for (k = s_pubReached; k < s_nops; k++) {
         SURF* sv = surf_by_base(s_ops[k].base);
@@ -1727,9 +1660,8 @@ static void ops_window_reset(void)
    A snapshot surface (see `snap_take`) needs every sprite drawn onto it WITH
    its plane, because `ovl` must be able to replay it after a reset has emptied
    the consumer's atlas -- and without one the precheck in `publish` drops the
-   snapshot, which put the post-game backdrop back to black whenever its title
-   frame had already crossed from another surface. [The landing review of
-   878d7bf..e8a05b1.] */
+   snapshot, which puts the post-game backdrop back to black whenever its title
+   frame has already crossed from another surface. */
 static void gaf_capture(OP* o, const unsigned char* fr, int force)
 {
     const void* key = frame_key(fr, o->pix, o->fw, o->fh);
@@ -1742,20 +1674,17 @@ static void gaf_capture(OP* o, const unsigned char* fr, int force)
     if (!force && seen_frame(fr, key, 0)) return;   /* the consumer already has it */
     /* the same new frame twice in one window -- 39 gadgets sharing one button
        face -- reuses the first decode. Direct-mapped, and matched on ALL THREE
-       of the frame pointer, the key and the length. The first version matched
-       the key and the length only, and the comment over it claimed the length
-       test made the reuse "safe whatever the hash does" -- which was true of
-       the SIZE and of nothing else: two distinct frames of equal `fw*fh`
-       colliding in `frame_key` inside one window would have had the second op
-       handed the first's plane and published under its own address key, and the
-       consumer would have atlased the wrong pixels. Comparing `fr` costs one
+       of the frame pointer, the key and the length: on the key and the length
+       alone, two distinct frames of equal `fw*fh` colliding in `frame_key`
+       inside one window would hand the second op the first's plane, published
+       under its own address key, and the consumer would atlas the wrong
+       pixels. Comparing `fr` costs one
        load and makes the reuse exact, so a collision can only ever cost a
        second decode. (Matching the pointer is sound HERE and only here:
        `s_gcap` lives for one census window and is cleared with it, so an
        address cannot be recycled inside its lifetime -- which is exactly why
        the ATLAS, which lives for a session, may not match on one.)
-       `frame_key` never returns 0, so 0 is a free empty marker.
-       [FOUND 2026-09-16 by the landing review.] */
+       `frame_key` never returns 0, so 0 is a free empty marker. */
     n = (unsigned)o->fw * (unsigned)o->fh;
     i = o->fkey & (GCAP_N - 1);
     if (s_gcap[i].fr == (const void*)fr && s_gcap[i].key == o->fkey && s_gcap[i].len == n) {
@@ -1767,8 +1696,7 @@ static void gaf_capture(OP* o, const unsigned char* fr, int force)
        statement about the bound, and folding an undecodable frame into it would
        make a sizing figure move for a reason that has nothing to do with size.
        An unreadable or malformed frame is the decoder's own refusal and has
-       always fallen through to the box's bytes. [FOUND 2026-09-16, the landing
-       review, which noticed the declaration and the two call sites disagreed.] */
+       always fallen through to the box's bytes. */
     if (!tagpu_gaf_decode(fr, o->fw, o->fh, dst)) { g_guiq.gafbaddec++; return; }
     o->goff = s_gafUsed; o->glen = n;
     s_gcap[i].fr = (const void*)fr; s_gcap[i].key = o->fkey; s_gcap[i].off = o->goff; s_gcap[i].len = n;
@@ -1793,7 +1721,7 @@ static void gaf_capture(OP* o, const unsigned char* fr, int force)
    a later sight that skips the decode (the consumer already has it) still
    knows it. The frame's own key when the row cannot produce that, else the
    lowest free value; a row that reaches all 256 values cannot be keyed and
-   publishes nothing, which is what it did before this existed.
+   publishes nothing.
 
    THE IDENTITY folds the row's BYTES into `frame_key`'s hash, not its number:
    the engine rewrites this table in place (`0x42E2AB`, see `pub_shade`), and
@@ -1854,9 +1782,8 @@ static void gafb_capture(OP* o, const unsigned char* fr, unsigned row, int force
    `(132,5)-(152,25)`, measured 2026-09-21 as a SINGLE call whose FOUR vertices
    are origin, +u, +u+v and +v -- `xy=(132,5)(152,5)(152,25)(132,25)` with
    `uv=(0,0)(32,0)(32,32)(0,32)` -- so it is an axis-aligned uniform downscale and
-   nothing more. [This said "three vertices ... origin, +u and +u+v" until 8e's
-   review; the loop at `0x4C763D..0x4C7679` walks FOUR at stride 8, and the badge
-   is the WHOLE-FRAME case of a uv quad that is in general a window.]
+   nothing more. [The loop at `0x4C763D..0x4C7679` walks FOUR at stride 8, and
+   the badge is the WHOLE-FRAME case of a uv quad that is in general a window.]
 
    WHY NOT IN THE RENDERER. The Vulkan lane draws a sprite over
    `(sl,st)-(sl+fw,st+fh)`, the FRAME's size, not the op's box, and it does that
@@ -1866,13 +1793,11 @@ static void gafb_capture(OP* o, const unsigned char* fr, unsigned row, int force
    the atlas keys on `(frame, pix, fw, fh)` plus the source WINDOW, so the scaled
    variant is a different entry from any 1:1 use of the same art.
 
-   THAT LAST CLAUSE USED TO READ "and cannot collide with it", FULL STOP, and it
-   was true only while a transformed draw had to be the whole frame [corrected by
-   landing 8e's review]. Once the source can be a sub-rectangle, two windows of
-   ONE frame resampled to one destination size are the same `(frame, pix, fw, fh)`
-   with different texels -- and `atlas_find` runs before `atlas_put`, so the second
-   would silently wear the first one's pixels. The window is part of the key now
-   (`swin`, 0 meaning "the whole frame"), which is what restores the sentence.
+   THE WINDOW IS PART OF THE KEY (`swin`, 0 meaning "the whole frame"): two
+   windows of ONE frame resampled to one destination size are the same `(frame,
+   pix, fw, fh)` with different texels -- and `atlas_find` runs before
+   `atlas_put`, so without it the second would silently wear the first one's
+   pixels.
 
    NEAREST, AND SAID PLAINLY: this reproduces the engine's affine map by sampling
    `src[(y*sh)/dh][(x*sw)/dw]`, which is the same rule its rasteriser steps but not
@@ -1931,14 +1856,13 @@ static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
        but `sw`/`sh` come from a frame header, which is engine DATA: the clamp is
        what makes that a fact rather than an argument about the arithmetic. */
     {
-        /* THE WINDOW IS THE SOURCE, AND IT IS WHAT THE STEP DIVIDES [landing
-           8e]. `sw`/`sh` above are the FRAME's dimensions, which is what the
-           decode fills and what a row is indexed by; the resample walks only
-           the rectangle the uv corners named, starting at its origin. For the
-           whole-frame case -- the in-game badge, and every caller that existed
-           before the swatches -- (su, sv) is (0, 0) and (sww, swh) is
-           (sw, sh), so every value below is what it was and the badge's
-           measured texels are untouched. */
+        /* THE WINDOW IS THE SOURCE, AND IT IS WHAT THE STEP DIVIDES. `sw`/`sh`
+           above are the FRAME's dimensions, which is what the decode fills and
+           what a row is indexed by; the resample walks only the rectangle the
+           uv corners named, starting at its origin. For the whole-frame case --
+           the in-game badge -- (su, sv) is (0, 0) and (sww, swh) is (sw, sh),
+           so the window changes nothing and the badge's measured texels hold.
+           */
         unsigned stepx = ((unsigned)ww << 16) / (unsigned)dw;
         unsigned stepy = ((unsigned)wh << 16) / (unsigned)dh;
         unsigned accy = (unsigned)sv << 16;
@@ -1963,16 +1887,14 @@ static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
 
 
 /* ---- THE FONT THIS OP NAMES CANNOT GO AWAY, BECAUSE NOTHING NAMES IT LATER
-   (G19f-8, the same move as G19f-7 made for the sprite).
+   (the same move `gaf_capture` makes for the sprite).
 
-   `publish` used to take the font slot, the offset table and every unsent
-   glyph's packed rows out of the object at the flip -- `gfont_slot`,
-   `glyph_block_size` and `glyph_block_fill`, up to CENSUS_MS after the draw
-   that recorded the op. What stood in for a lifetime there was a level
-   generation and `ptr_ok`, and neither is one: the generation says the level
-   has not ENDED, which is not the same as the font still being mapped, and a
-   range test on a value is a filter and never an ordering. The note said so and
-   left the window open rather than let the line above it look closed.
+   Taking the font slot, the offset table and every unsent glyph's packed rows
+   out of the object at the flip -- up to CENSUS_MS after the draw that
+   recorded the op -- would need a lifetime, and neither a level generation nor
+   `ptr_ok` is one: the generation says the level has not ENDED, which is not
+   the same as the font still being mapped, and a range test on a value is a
+   filter and never an ordering.
 
    THE ORDERING, ON THE ENGINE'S OWN TIMELINE. This runs from the detour at the
    head of `0x4CCF60`, the glyph blitter, with the engine's own `font` and `str`
@@ -1984,8 +1906,7 @@ static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
 
    holds by the engine's sequencing rather than by our hope. It is NOT "the
    engine would fault if this were dead" -- the detour runs FIRST, so we would
-   fault first; that phrasing was a counterfactual dressed as a proof when the
-   G19f-7 review found it on the sprite path, and it is no better here. What
+   fault first; that phrasing is a counterfactual dressed as a proof. What
    makes the read safe is that the engine has already decided to make it.
 
    AND THE EXTENT HALF IS CLOSED TOO, which it is not on the sprite path: we
@@ -1994,7 +1915,7 @@ static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
    sub-rect while we decode all `w*h` -- has no counterpart here, because
    `0x4CCF60` has no clip at all.
 
-   AFTER THIS, `publish` DEREFERENCES NO PER-LEVEL ENGINE ASSET ON ANY PATH --
+   `publish` DEREFERENCES NO PER-LEVEL ENGINE ASSET ON ANY PATH --
    no GAF bank and no font object, the two whose lifetimes nothing here can
    state. It is NOT "no engine memory at all", which would be an overclaim: it
    still reads the graphics globals through `TA_MAINPP` for the true viewport
@@ -2003,16 +1924,14 @@ static void scale_capture(OP* o, const unsigned char* fr, int dw, int dh)
    FORK's, freed in their own Release (see `surf_of_ctx`) -- which is exactly
    what a GAF bank and a font do not have. `frame` survives in a text op as the
    font's address, an identity `op_same` compares and the probe prints, never
-   followed. `op->lgen` and `strstale` are gone with the gate they existed for,
-   and `tagpu_packet_pub_level_tracked` and `tagpu_reclaim_level_closing` have
-   no caller left in the tree.
+   followed.
 
    NOT COVERED. A font whose header lies -- a table entry pointing outside the
    loaded file image, a width byte that runs the bits past its end -- is refused
-   only by `f[3] != 0`, `f[0] == 0` and `gfont_glyph`'s zero tests, exactly as
-   before; the engine would read the same wrong bytes one instruction later, so
-   this landing neither adds nor removes that. `ptr_ok(font)` in `before_text`
-   is a BOUND on the value and is not the safety argument; the ordering is. */
+   only by `f[3] != 0`, `f[0] == 0` and `gfont_glyph`'s zero tests; the engine
+   would read the same wrong bytes one instruction later. `ptr_ok(font)` in
+   `before_text` is a BOUND on the value and is not the safety argument; the
+   ordering is. */
 static void text_capture(OP* o, const unsigned char* f, const unsigned char* str, int n)
 {
     GFONT* g;
@@ -2058,9 +1977,9 @@ static SURF* surf_by_base(unsigned base)
    in the op set is the COPY: dropping an earlier duplicate is safe unless a
    copy that READ its surface lies between the two with none after the
    survivor — then the replay would run the copy before the write it read.
-   (A per-surface epoch bumped by every copy was tried first and defeated the
-   whole dedup in the shell, whose panel is copied to the frame on every one
-   of its ~12 000 flips a second: a reseed storm, 2 749 resets in one walk.) */
+   (A per-surface epoch bumped by every copy defeats the whole dedup in the
+   shell, whose panel is copied to the frame on every one of its ~12 000 flips
+   a second: MEASURED as a reseed storm, 2 749 resets in one walk.) */
 /* open addressing over the batch: 2x the ring's capacity keeps the load
    under a half, and a probe that runs long stops and calls the op distinct
    (a stray duplicate costs one idempotent replay, not a stall on the game
@@ -2091,46 +2010,42 @@ static int op_same(const OP* a, const OP* b)
        without this a UI draw that happened to match a later world draw — same
        kind, same surface, same box, same frame — would be collapsed into an op
        `publish` then refuses, and the UI draw would simply vanish. The odds are
-       small and the failure is silent, which is the pair this file has been
-       caught by before (`OP::edge`, and for the same reason: an identity that
-       left out what actually distinguishes two draws). */
+       small and the failure is silent -- `OP::edge` exists for the same
+       reason: an identity that leaves out what actually distinguishes two
+       draws. */
     if (a->world != b->world) return 0;
     if (!(a->kind == b->kind && a->base == b->base && a->l == b->l && a->t == b->t && a->r == b->r && a->b == b->b &&
           a->frame == b->frame && a->pix == b->pix && a->src == b->src && a->sl == b->sl && a->st == b->st))
         return 0;
-    /* G17d: TWO STRINGS IN ONE BOX ARE NOT THE SAME OP. Until the string op
-       existed a text draw published its box's bytes, read at publish time, so
-       collapsing two draws over the same rectangle was exactly right — the
-       later read carried both. A string op carries the string, so dropping the
-       earlier one would drop whatever ink of it the later one does not cover. */
-    /* A TINT COLLAPSES ACROSS FLIPS AND NEVER WITHIN ONE CALL [FROM REVIEW,
-       landing 8d]. Across flips the collapse is right for the same reason it
-       is right for every other kind: the engine REPAINTS the gadget before it
-       tints it again, so the last flip's paint-then-tint is the whole of what
-       the batch leaves on screen. What must not collapse is two edges of the
-       SAME call, which have no repaint between them -- so the edge ordinal is
-       part of the identity. `col` is here too: it is the shade ROW, and two
-       rings at different levels over one box are two different pictures.
-       (Measured both ways: exempting `OP_FOCUS` from `dedup` outright put
-       SINGLE.GUI at 99.75 %, over-tinting a gadget whose repaint collapsed
-       while its tints did not.) */
+    /* TWO STRINGS IN ONE BOX ARE NOT THE SAME OP. A string op carries the
+       string, not the box's bytes read at publish, so dropping the earlier one
+       would drop whatever ink of it the later one does not cover. */
+    /* A TINT COLLAPSES ACROSS FLIPS AND NEVER WITHIN ONE CALL. Across flips the
+       collapse is right for the same reason it is right for every other kind:
+       the engine REPAINTS the gadget before it tints it again, so the last
+       flip's paint-then-tint is the whole of what the batch leaves on screen.
+       What must not collapse is two edges of the SAME call, which have no
+       repaint between them -- so the edge ordinal is part of the identity.
+       `col` is here too: it is the shade ROW, and two rings at different levels
+       over one box are two different pictures. (Measured both ways: exempting
+       `OP_FOCUS` from `dedup` outright put SINGLE.GUI at 99.75 %, over-tinting
+       a gadget whose repaint collapsed while its tints did not.) */
     if (a->kind == OP_FOCUS)
         return a->edge == b->edge && a->col == b->col;
-    /* TWO WINDOWS OF ONE FRAME ARE NOT ONE OP [FROM REVIEW, landing 8e]. The
+    /* TWO WINDOWS OF ONE FRAME ARE NOT ONE OP. The
        prefix above compares the frame and the plane, which are equal for every
        window of a frame, so without this a windowed stamp and a whole-frame one
        over the same box collapse. Collapsing is right for an op that OVERWRITES
        its box and these mostly do -- but a colour-keyed sprite leaves its
        transparent texels alone, so the survivor does not write what both would
        have written. Same shape as the `edge` field above: make the identity
-       finer rather than exempt the kind, which 8d measured to be the wrong
-       instrument in the other direction. */
+       finer rather than exempt the kind (the tint above measures why). */
     if (a->kind == OP_SCALE)
         return a->swin == b->swin;
     if (a->kind == OP_TEXT)
         return a->slen == b->slen && a->dx == b->dx && a->dy == b->dy &&
                a->fg == b->fg && a->bg == b->bg && a->tr == b->tr &&
-               /* G19f-8: and the SLOT, not just the address the prefix above
+               /* And the SLOT, not just the address the prefix above
                   compared. A font reloaded at its old address takes a new slot
                   and a new id, and the consumer caches on the id -- so two ops
                   whose only difference is which of them the consumer has the
@@ -2168,7 +2083,7 @@ static void dedup(void)
 }
 
 static const char* const WHY_NAME[TAGPU_GUI_WHY_N] =
-    { "?", "arm", "gl-context", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over", "string-empty", "level-changed" };
+    { "?", "arm", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over", "string-empty", "level-changed" };
 
 /* THE CONSUMER CAN DIE, OR CRAWL. cnc-ddraw stops its render thread inside
    every SetDisplayMode and starts a new one with a new GL context (dd.c);
@@ -2231,9 +2146,7 @@ static void publish(unsigned flipSurf)
     if (!g_gui_draw) return;
     if (consumer_stalled()) return;
     dedup();
-    /* ---- THE LEVEL BOUNDARY, FOR THE CONSUMER'S ATLAS (G19f-7, found by the
-       landing review -- BOTH reviewers, independently, the eleventh such pair
-       on this lane).
+    /* ---- THE LEVEL BOUNDARY, FOR THE CONSUMER'S ATLAS.
 
        `tagpu_gui_surf.c`'s UI atlas matches entries on `(o->frame, o->pix,
        fw, fh)` -- the frame's ADDRESS and its content hash -- and its only
@@ -2245,13 +2158,9 @@ static void publish(unsigned flipSurf)
        CONSTRUCTION rather than by 2^-32 luck, and then `atlas_find` hits the
        old entry and the twin draws the previous level's texels.
 
-       THE GATE THIS LANDING REMOVED WAS NEVER THE COVER FOR THIS, which is
-       worth saying plainly because it would be the obvious thing to assume:
-       `op->lgen != level_gen` refused ops RECORDED before a boundary and
-       RESOLVED after one -- a ~5 ms window -- and did nothing at all about
-       entries already sitting in the consumer's atlas from the previous
-       level. Those survived it. So this is a hole the old code had too, and
-       the fix is a drop rather than a refusal.
+       A REFUSAL OF OPS AT THE BOUNDARY WOULD NOT COVER THIS: entries already
+       sitting in the consumer's atlas from the previous level survive any
+       refusal. The fix is a drop.
 
        A reseed is the whole of it: `PK_RESET` makes the consumer call
        `twins_reset`, which calls `tagpu_gaf_atlas_reset` on that atlas, and
@@ -2274,33 +2183,31 @@ static void publish(unsigned flipSurf)
         /* `assetSent` DIES WITH THE TWIN IT DESCRIBES. It is not a fact about
            this side -- it records that the CONSUMER holds the asset's bytes --
            so a reseed, which is the consumer saying it threw its twins away,
-           un-sends it exactly as it un-seeds everything else. Missing this made
-           the backdrop come back black after the first reset and stay that way,
-           because the surface re-seeded EMPTY (a `PK_SEED`'s payload is dropped
-           by design) while `assetSent` still claimed the bytes had landed. The
-           first-sight tables two lines below are re-armed for the same reason
-           and were the model for this. */
+           un-sends it exactly as it un-seeds everything else. Missing this, the
+           backdrop comes back black after the first reset and stays that way,
+           because the surface re-seeds EMPTY (a `PK_SEED`'s payload is dropped
+           by design) while `assetSent` still claims the bytes landed. The
+           first-sight tables two lines below are re-armed for the same
+           reason. */
         for (i = 0; i < s_nsurf; i++) {
             s_surf[i].seeded = 0;
             s_surf[i].assetSent = 0; s_surf[i].assetTries = 0; s_surf[i].assetTok = 0;
         }
         /* `assetTok` GOES WITH THEM, and clearing it is what retires every echo
            still in flight: the next offer issues a NEW token, and a token that
-           was never issued for it cannot satisfy it. The first cut cleared
-           `g_guiq.assetAck` here instead, which made the producer a second
-           writer of the consumer's word AND still lost the race -- an in-flight
-           `PK_ASSET` from the previous episode could be drained after the clear
-           and before the read a few hundred microseconds later, re-marking the
-           debt paid with nothing across. Retiring the token is the same
-           statement with no window in it. [The landing review's.] */
+           was never issued for it cannot satisfy it. Clearing `g_guiq.assetAck`
+           here instead would make the producer a second writer of the
+           consumer's word AND still lose the race -- an in-flight `PK_ASSET`
+           from the previous episode could be drained after the clear and before
+           the read, re-marking the debt paid with nothing across. Retiring the
+           token is the same statement with no window in it. */
         memset(s_seenF, 0, sizeof s_seenF); memset(s_seenP, 0, sizeof s_seenP);
         s_seenGen++;
         /* AND THE GLYPHS. A reseed is the consumer saying it threw state away,
            and the ops in flight when it did are skipped whole — so every
            first-sight glyph record in them is lost while our `sent[]` still
            says it was published. This is the same re-arm the sprite and pixel
-           tables above get, and it was missing [found by the review of the
-           review's fixes]. */
+           tables above get. */
         gfont_sent_clear();
         /* AND THE LIGHTEN TABLE. Same rule as the glyphs and the asset: a
            reseed is the consumer saying it threw state away, and whatever was
@@ -2329,7 +2236,7 @@ static void publish(unsigned flipSurf)
            redraw for us. It is emitted at the TOP of the next window rather than
            into this one, because that is what puts it UNDER the gadgets: the
            window is empty at that point, so the three ops take slots 0..2, and
-           landing 9's repaint runs later still (after_flip) and lands behind
+           the repaint runs later still (after_flip) and lands behind
            them. Ordering by position in the op array, not by a rule. */
         s_chromePend = 1;
         s_panelPend = 1;
@@ -2363,17 +2270,9 @@ static void publish(unsigned flipSurf)
        and absent from the screen (one grab, against a baseline DLL built from
        `main` as the control -- not a per-frame census).
 
-       THE OLD `seq` GATE HID THIS BY NEVER FIRING. It asked whether
-       `tagpu_terrown_fill_seq()` had advanced between this flip and the next,
-       and read `nextSeq` for the LAST flip of the window at publish time —
-       the same instant the marker's own `seq` was taken, one statement earlier
-       — so the two were always equal and the last flip emitted nothing. At the
-       ~60 flips a second an in-play frame runs at, a 5 ms window holds exactly
-       one flip (the shell, at its far higher flip rate, can hold several — the
-       flag above is raised by any of them), so the erase was DEAD in play and `uVpKey` was carrying the
-       viewport alone. That is what made `terrown` load-bearing (gpu-status.md
-       §2.81) and it is why removing the gate could not simply be a matter of
-       widening it.
+       At the ~60 flips a second an in-play frame runs at, a 5 ms window holds
+       exactly one flip; the shell, at its far higher flip rate, can hold
+       several, and the flag below is raised by any of them.
 
        THE GATE IS ARM STATE, NOT A COUNTER, and it is a WINDOW FLAG rather
        than a field of the flip op. `s_winGameFlip` is `ret == FLIP_RET_GAME`
@@ -2413,15 +2312,13 @@ static void publish(unsigned flipSurf)
         if (!s) continue;
         if (s_probeX >= 0 && s->base == flipSurf && op->l <= s_probeX && s_probeX <= op->r && op->t <= s_probeY && s_probeY <= op->b) {
             char b[300];
-            /* THE HEADER BYTES CAME WITH THE OP. This read the engine's frame
-               header here until G19f-7 -- the last dereference of engine art
-               left in `publish`, on the same freed-bank window the rest of this
-               function stopped taking, and behind `frame_sane`'s probe alone.
-               A debug path that dereferences what the release path no longer
-               does is how a fixed crash comes back. `fcomp`/`fsub`/`fsubn` are
+            /* THE HEADER BYTES CAME WITH THE OP: reading the engine's frame
+               header here would dereference engine art on the freed-bank window,
+               and a debug path that dereferences what the release path does not
+               is how a fixed crash comes back. `fcomp`/`fsub`/`fsubn` are
                stamped in `gaf_box`; a non-GAF op prints 0 for them, which is
-               honest, where reading a FONT object as a GAF header was not.
-               [FOUND 2026-09-16 by BOTH landing reviewers, independently.] */
+               honest, where reading a FONT object as a GAF header would not
+               be. */
             _snprintf(b, sizeof b, "gui probe: %s box=(%d,%d)-(%d,%d) at (%d,%d) frame=%08X %ux%u ck=%u comp=%u sub=%u/%u src=%08X (%d,%d)",
                       OP_NAME[op->kind], op->l, op->t, op->r, op->b, op->dx, op->dy, (unsigned)(size_t)op->frame,
                       (unsigned)op->fw, (unsigned)op->fh, (unsigned)op->ck,
@@ -2464,44 +2361,35 @@ static void publish(unsigned flipSurf)
             op->fw <= TAGPU_GAF_DECMAX && op->fh <= TAGPU_GAF_DECMAX) {
             const void* key;
             /* ---- THE ASSET THIS OP NAMES CANNOT GO AWAY, BECAUSE NOTHING
-               HERE NAMES IT ANY MORE.
+               HERE NAMES IT.
 
-               `frame`/`pix` point into a per-LEVEL GAF bank, and this function
-               used to take both the identity hash and the decoded plane out of
-               that bank -- up to CENSUS_MS after the blit that recorded the op.
-               Two engine routes free it inside that window: the level
-               teardown's cascade, and `GUI_Pop 0x4A9660`, which frees a popped
-               screen's art from 39 call sites with no flag and no generation.
+               `frame`/`pix` point into a per-LEVEL GAF bank, and two engine
+               routes free it within CENSUS_MS of the blit that recorded the op:
+               the level teardown's cascade, and `GUI_Pop 0x4A9660`, which frees
+               a popped screen's art from 39 call sites with no flag and no
+               generation.
 
-               G19f-7 MOVED BOTH READS INTO `gaf_box`, where the engine is
-               inside its own blit of the same frame and the art is alive by the
-               engine's ordering rather than by ours -- see `gaf_capture`. So
-               this path now dereferences NO engine asset memory: `op->fkey` is
-               a number, `op->goff`/`glen` index our own scratch, and
-               `op->frame`/`op->pix` survive only as the consumer's atlas key, a
-               value compared against a table and never followed.
+               BOTH READS ARE IN `gaf_box`, where the engine is inside its own
+               blit of the same frame and the art is alive by the engine's
+               ordering rather than by ours -- see `gaf_capture`. So this path
+               dereferences NO engine asset memory: `op->fkey` is a number,
+               `op->goff`/`glen` index our own scratch, and `op->frame`/`op->pix`
+               survive only as the consumer's atlas key, a value compared
+               against a table and never followed.
 
-               WHAT STOOD HERE BEFORE, AND WHY IT IS GONE. Landing 5 put a
-               level-generation gate here -- refuse while a teardown is in
-               flight, refuse an op whose observed generation is stale -- and it
-               was a correct ordering for the reads it guarded. It could not
-               cover the pop: `0x460647 call 0x4a9660` runs three instructions
-               after the teardown returns, so the generation has already moved
-               and those ops pass the test. With the reads gone the gate had
-               nothing left to protect, and it was not free: it refused 215 ops
-               at a single measured level end, each falling back to its box's
-               bytes and losing its sprite identity. A gate that guards nothing
-               and costs something is removed, not kept as belt.
+               NO LEVEL-GENERATION GATE, deliberately. It could not cover the
+               pop: `0x460647 call 0x4a9660` runs three instructions after the
+               teardown returns, so the generation has already moved and those
+               ops pass the test. With no read left to guard it would guard
+               nothing and cost something: MEASURED at one level end, such a
+               gate refused 215 ops, each falling back to its box's bytes and
+               losing its sprite identity.
 
-               [The crash that bought all this, MEASURED 2026-09-16: quitting a
+               [The crash this prevents, MEASURED 2026-09-16: quitting a
                skirmish to the main menu at 1920x1080 took an access violation
                in `frame_key` reading the frame header's `TAGPU_GF_COMP` byte
                out of a bank the cascade had just freed (279 blocks), and the
-               process then spun. Reproduced with the Vulkan lane OFF, so it is
-               the GL publisher's own and nothing to do with the port. The
-               landing-5 re-review then named the pop window this closes and
-               said the by-design fix wanted `MEM_Free`'s block size, which the
-               observer is not handed. It wanted a different hook instead.] */
+               process then spun.] */
             int have;
             const OVL* held = NULL;
             key = (const void*)(size_t)op->fkey;
@@ -2516,11 +2404,10 @@ static void publish(unsigned flipSurf)
                a RESET cleared the seen table after this op decided it needed no
                plane, or the scratch was full when the blit was seen -- the
                latter being the only real failure, and it should read 0. The
-               reset case is CHEAP rather than free, which is the honest word:
-               it costs this op a PK_PIXELS box in the arena and one window
-               without its atlas identity, in a publish that is already seeding
-               every surface whole, and it self-heals on the next window.
-               ["free" corrected by the landing review.] */
+               reset case is CHEAP rather than free: it costs this op a
+               PK_PIXELS box in the arena and one window without its atlas
+               identity, in a publish that is already seeding every surface
+               whole, and it self-heals on the next window. */
             if (!have && !op->glen && !held) {
                 if (op->sgen != s_seenGen) g_guiq.gafreseed++;
                 else                       g_guiq.gafnoplane++;
@@ -2541,22 +2428,20 @@ static void publish(unsigned flipSurf)
             if (s->snap) ovl_add(s, op);
             continue;
         }
-        /* G17d: a text draw whose string we captured is a STRING op — TA's own
+        /* A text draw whose string we captured is a STRING op — TA's own
            glyphs, stamped by the render thread from the coverage atlas, instead
            of ~968 arena bytes of a box that has already blended with whatever
            art it was drawn onto. A text op with no string (the scratch was
-           full, or the font would not read) falls through to its box's bytes,
-           which is exactly what it was before this gate. */
+           full, or the font would not read) falls through to its box's
+           bytes. */
         if (op->kind == OP_TEXT && op->slen && op->fid && !s_nostring) {
             unsigned char* dst;
             const unsigned char* str = s_strBuf + op->soff;
-            /* NO FONT IS READ HERE ANY MORE (G19f-8). The slot, the two header
+            /* NO FONT IS READ HERE. The slot, the two header
                bytes and every unsent glyph's rows were taken in `text_capture`,
                inside the engine's own call to the glyph blitter; this branch
                copies our own bytes out of our own scratch. `op->fid` being set
-               IS the statement that the capture succeeded, so the old
-               `op->frame` test, the level generation and `ptr_ok` are all gone
-               with the reads they were standing in for.
+               IS the statement that the capture succeeded.
 
                ONE THING CAN STILL HAVE CHANGED: the `sent[]` table. The block
                omits the codes this font had already published, and both the
@@ -2569,16 +2454,10 @@ static void publish(unsigned flipSurf)
                `gafreseed`, and counted apart for the same reason. */
             /* POLLED HERE, PER OP, AND NOT ONCE AT THE TOP OF THIS FUNCTION.
                `gfont_check_gen` reads the RENDER thread's glyph generation and
-               clears every `sent[]` when it has moved. The first version of this
-               landing called it once on entry and the comment claimed that made
-               the test below "a comparison against NOW" -- it made it a
-               comparison against the top of `publish`, and the render thread can
-               drop its atlas in the middle of the loop. That WIDENED a window
-               the code already had: before G19f-8 the poll was inside
-               `gfont_slot`, one statement before the decision it guards, which
-               is what this restores.
-               [FOUND 2026-09-16 by the cross-thread reviewer, with the
-               interleaving spelled out.] */
+               clears every `sent[]` when it has moved. Called once on entry, the
+               test below would be a comparison against the top of `publish`, and
+               the render thread can drop its atlas in the middle of the loop;
+               polled here it is one statement before the decision it guards. */
             gfont_check_gen();
             if (op->fgen != s_sentGen) { g_guiq.strrearm++; goto as_pixels; }
             o = pub_op(PK_STRING, s->base); if (!o) return;
@@ -2604,12 +2483,12 @@ static void publish(unsigned flipSurf)
             pub_commit();
             continue;
         }
-        /* A SOLID RECTANGLE IS A COLOUR AND A BOX. [The vulkan-only plan,
-           landing 8a.] `DrawBar 0x4BF6F0` fills its rect with one palette index
-           through `0x4CCDEA`, so publishing the box's BYTES -- which is what
-           `as_pixels` below does, read out of the surface at the FLIP -- was
-           both larger than the op and later than it: anything drawn over the
-           box in between is what those bytes held. `op->col` was taken while the
+        /* A SOLID RECTANGLE IS A COLOUR AND A BOX. `DrawBar 0x4BF6F0` fills
+           its rect with one palette index through `0x4CCDEA`, so publishing the
+           box's BYTES -- which is what `as_pixels` below does, read out of the
+           surface at the FLIP -- would be both larger than the op and later
+           than it: anything drawn over the box in between is what those bytes
+           hold. `op->col` was taken while the
            engine was inside the call. */
         if (op->kind == OP_BAR) {
             o = pub_op(PK_BAR, s->base); if (!o) return;
@@ -2620,13 +2499,13 @@ static void publish(unsigned flipSurf)
         }
         /* A WHOLE-SURFACE FILL IS A BAR THE SIZE OF THE SURFACE. `0x4C6890`
            writes one palette index over every pixel, which is `PK_BAR`'s exact
-           shape -- same packet, same `twin_fill`, coverage 1. It had no branch
-           here at all, so it fell to `as_pixels` and, since the clean cut, was
-           dropped: the engine's clear of the offscreen never reached the twin,
-           and every pixel the engine left at index 0 presented as the lane's
-           magenta clear. The viewport's own erase still uncovers the world after
-           this, because the FLIP op that emits it is recorded after these and
-           publishes later in the same window. [2026-09-21.] */
+           shape -- same packet, same `twin_fill`, coverage 1. Sent as
+           `as_pixels` it would be dropped by the drain: the engine's clear of
+           the offscreen would never reach the twin, and every pixel the engine
+           left at index 0 would present as the lane's magenta clear. The
+           viewport's own erase still uncovers the world after this, because the
+           FLIP op that emits it is recorded after these and publishes later in
+           the same window. */
         if (op->kind == OP_FILL) {
             /* AND IT IS CUT ROUND THE VIEWPORT RATHER THAN UNDONE AFTERWARDS.
                The fill that matters here is the HUD chrome's: `0x467D70` calls
@@ -2670,16 +2549,16 @@ static void publish(unsigned flipSurf)
             pub_commit();
             continue;
         }
-        /* A HOLLOW RECTANGLE IS FOUR EDGES AND A COLOUR. [The vulkan-only
-           plan, landing 8b.] `DrawTranspRectangle 0x4BF8C0` is named for its
+        /* A HOLLOW RECTANGLE IS FOUR EDGES AND A COLOUR.
+           `DrawTranspRectangle 0x4BF8C0` is named for its
            hollow centre and NOT for translucency: its four edges go through
            the store-only Bresenham `0x4CC7AB`, which reads nothing of the
            destination and writes `stos BYTE al` from the low byte of its
            colour argument. So the op is a box, a palette index, and the fact
-           that the MIDDLE IS UNTOUCHED -- which is what publishing the box's
-           bytes got wrong twice over: it copied the interior the op never
-           wrote, and it copied it at the flip.
-           `0x4BF7B0` is NOT here: it is `OP_FOCUS` now, and it tints.
+           that the MIDDLE IS UNTOUCHED -- which publishing the box's bytes
+           would get wrong twice over: it copies the interior the op never
+           wrote, and it copies it at the flip.
+           `0x4BF7B0` is NOT here: it is `OP_FOCUS`, and it tints.
            A CLIPPED rect falls through to `as_pixels` instead -- see
            `OP::clipped` for why, which is the `&& !op->clipped` below. */
         if (op->kind == OP_RECT && !op->clipped) {
@@ -2689,8 +2568,8 @@ static void publish(unsigned flipSurf)
             pub_commit();
             continue;
         }
-        /* AN AXIS-ALIGNED LINE IS A SOLID FILL ONE PIXEL THICK. [The
-           vulkan-only plan, landing 8c.] `before_line` has already decided
+        /* AN AXIS-ALIGNED LINE IS A SOLID FILL ONE PIXEL THICK.
+           `before_line` has already decided
            axis-aligned from the ENDPOINTS, so the box here is the line itself
            and `PK_BAR` describes it exactly -- same packet, same twin fill,
            same `vkCmdClearAttachments`, and NO new op kind for either consumer
@@ -2706,14 +2585,12 @@ static void publish(unsigned flipSurf)
             pub_commit();
             continue;
         }
-        /* A TINT IS A BOX, A ROW, AND -- ONCE -- THE TABLE. [The vulkan-only
-           plan, landing 8d.] `0x4BF7B0`'s edges go through `0x4BEC70` to
-           `0x4CC8DF`, which READS the destination byte and writes back
-           `LUT[row*256 + byte]`: there is no colour in the op at all, which is
-           why it could not be a `PK_BAR` or a `PK_RECT` and stayed on
-           `PK_PIXELS` -- i.e. off the screen entirely -- from the clean cut
-           until here. What crosses is the OPERATION; the consumer applies it
-           to its own twin and no engine pixel is involved.
+        /* A TINT IS A BOX, A ROW, AND -- ONCE -- THE TABLE. `0x4BF7B0`'s edges
+           go through `0x4BEC70` to `0x4CC8DF`, which READS the destination byte
+           and writes back `LUT[row*256 + byte]`: there is no colour in the op
+           at all, which is why it cannot be a `PK_BAR` or a `PK_RECT`. What
+           crosses is the OPERATION; the consumer applies it to its own twin and
+           no engine pixel is involved.
 
            `before_focus` has already split the rectangle into its four edges
            and clipped each as the engine does, so this is one edge and the box
@@ -2739,24 +2616,20 @@ static void publish(unsigned flipSurf)
         /* THE TRANSFORMED FRAME, already resampled to its box by `scale_capture`.
            It carries its plane every time on purpose (see there), so there is no
            `seen_frame` arm here and no first-sight case to get wrong. Without
-           this branch `OP_SCALE` fell to `as_pixels` -> `PK_PIXELS`, which the
-           drain drops since the clean cut: the player's colour badge, and every
-           other transformed GAF draw, rendered NOTHING at all. */
+           this branch `OP_SCALE` falls to `as_pixels` -> `PK_PIXELS`, which the
+           drain drops: the player's colour badge, and every other transformed
+           GAF draw, would render NOTHING at all. */
         if (op->kind == OP_SCALE && op->glen && op->fw && op->fh) {
             unsigned char* dst;
             /* THE CONTENT HASH, NOT THE PLANE POINTER -- the same key the 1:1
-               branch above publishes [FROM REVIEW, landing 8e]. `pix` is in the
-               atlas key precisely because "freed sequences get their address
-               reused" (tagpu_gaf.h), and this branch was handing over the raw
-               address, so for every scaled sprite that defence was not in
-               force: the shell frees a popped screen's art, the allocator hands
-               a DIFFERENT frame the same header and plane addresses, the same
-               window at the same destination size is drawn, `atlas_find` hits
-               and `atlas_put` never runs -- the old texels for the rest of the
-               session. `scale_capture` has always computed the right value and
-               `publish` simply never read it. Pre-existing, but 8e multiplies
-               the entries per frame address and lengthens their lives, so it is
-               fixed here rather than noted. */
+               branch above publishes. `pix` is in the atlas key precisely
+               because "freed sequences get their address reused" (tagpu_gaf.h),
+               and the raw address would take that defence out of force for
+               every scaled sprite: the shell frees a popped screen's art, the
+               allocator hands a DIFFERENT frame the same header and plane
+               addresses, the same window at the same destination size is drawn,
+               `atlas_find` hits and `atlas_put` never runs -- the old texels
+               for the rest of the session. */
             const void* skey = (const void*)(size_t)op->fkey;
             if (!skey) goto as_pixels;       /* unreadable when drawn: box it */
             o = pub_op(PK_SPRITE, s->base); if (!o) return;
@@ -2765,7 +2638,7 @@ static void publish(unsigned flipSurf)
             o->frame = op->frame; o->pix = skey;
             /* the atlas's extra key: 0 for a whole-frame stamp, the packed
                window for a sub-rectangle. Without it two windows of one frame
-               at one destination size are the same entry. [Landing 8e.] */
+               at one destination size are the same entry. */
             o->swin = op->swin;
             dst = pub_bytes(o, op->glen);
             if (!dst) return;
@@ -2782,8 +2655,8 @@ static void publish(unsigned flipSurf)
                present -- and that writes each pixel with its own value, index
                and colour alike. The consumer refuses ANY self-copy, because one
                with a different origin reads and writes one image in one draw;
-               sent this one, it fell behind on every frame of that screen and
-               the window stayed black until the next screen. Not publishing it
+               sent this one, it would fall behind on every frame of that screen
+               and leave the window black until the next screen. Not publishing it
                is exact: no twin byte differs from what the copy would leave. */
             if (op->src == s->base && op->sl == op->l && op->st == op->t) continue;
             src = surf_by_base(op->src);
@@ -2812,9 +2685,9 @@ static void publish(unsigned flipSurf)
                premise. An engine path that re-filled a claimed surface without
                passing a leaf would leave the twin holding the older bytes, and
                nothing would re-offer. Wrong picture, never a crash; stated as
-               the residual rather than papered over. [The landing review's.] Ordering is the queue's own: this commits before the
-               `PK_COPY` below, so the consumer has the source before it is
-               asked to sample it. */
+               the residual rather than papered over. Ordering is the queue's
+               own: this commits before the `PK_COPY` below, so the consumer has
+               the source before it is asked to sample it. */
             /* ACKED, NOT MERELY SENT -- and acked by the TOKEN THIS SURFACE'S
                OFFER CARRIED, not by its address. `assetSent` is set by the
                consumer's echo and never by the act of publishing (the lesson the
@@ -2830,19 +2703,19 @@ static void publish(unsigned flipSurf)
                all is pure game-thread memcpy. Reading it stale is harmless in
                both directions -- a missed present re-offers on the next one, a
                spurious one goes unacked -- because nothing but the echo retires
-               an offer. [The landing review's: the try count was a ~1.2 s
-               timeout standing in for a state, and 240 x 300 KB is ~72 MB.] */
+               an offer. (A try count would be a ~1.2 s timeout standing in for a
+               state, and 240 x 300 KB is ~72 MB.) */
             if (src && src->isAsset && !src->assetSent && src->w > 0 && src->h > 0 &&
                 g_guiq.mirArmed &&
                 src->assetTries < TAGPU_GUI_ASSET_TRIES) {
                 /* THE TOKEN IS STAMPED ON THE OP AND ADOPTED BY THE SURFACE
                    ONLY ONCE THE OFFER IS COMMITTED. Writing `src->assetTok`
-                   first retired the previous token on the arena-full path --
-                   `pub_surface_bytes` returns without committing -- so an echo
-                   already on its way for the offer that DID go out could no
-                   longer match it, costing a re-offer for no reason. A local
+                   first would retire the previous token on the arena-full path
+                   -- `pub_surface_bytes` returns without committing -- so an
+                   echo already on its way for the offer that DID go out could
+                   no longer match it, costing a re-offer for no reason. A local
                    until `pub_commit`, and `assetTok` then describes only offers
-                   that actually left. [The landing review's L5.] */
+                   that actually left. */
                 unsigned tok = asset_token();
                 TAGPU_PUBOP* a = pub_op(PK_ASSET, src->base);
                 if (!a) return;
@@ -2870,19 +2743,18 @@ static void publish(unsigned flipSurf)
                 continue;
             }
             /* A THROTTLED ASSET PUBLISHES NOTHING, NOT A PACKET THE DRAIN WILL
-               DROP -- and without this the `mirArmed` throttle saves no bytes
-               at all, which is what the landing review measured against the
-               claim. Skipping the offer leaves `seeded` at 0, so this copy fell
-               through to the `PK_PIXELS` below, which copies THE DESTINATION'S
-               WHOLE BOX -- for the shell backdrop the same 307 200 bytes, into
-               the same arena, for a drain that has dropped every `PK_PIXELS`
-               since the clean cut. Same cost, different packet kind.
+               DROP -- without this the `mirArmed` throttle saves no bytes at
+               all. Skipping the offer leaves `seeded` at 0, so this copy would
+               fall through to the `PK_PIXELS` below, which copies THE
+               DESTINATION'S WHOLE BOX -- for the shell backdrop the same 307 200
+               bytes, into the same arena, for a drain that drops every
+               `PK_PIXELS`. Same cost, different packet kind.
 
                EMITTING NOTHING IS INDISTINGUISHABLE IN THE PICTURE: a dropped
                packet leaves the destination twin holding what it already had,
                and so does no packet. Only the memcpy differs. The surface is
                re-offered as soon as `mirArmed` reads 1, because nothing here
-               retires an offer. [The landing review's M3.] */
+               retires an offer. */
             if (src && src->isAsset && !src->seeded) continue;
         }
         /* everything else — and a copy from a source we do not twin — is its
@@ -3022,7 +2894,7 @@ static unsigned s_builds, s_buildFlags;     /* GUI_StageUpdateDraw calls since t
 
 /* 1 once leaves_install() has been reached, i.e. the op machinery and the
    surface table have their detours. NOT s_installed, which a partial install
-   leaves 0 while detours are live (landing review, round 2). */
+   leaves 0 while detours are live. */
 static int s_opsLive = 0;
 static volatile int s_inFlip = 0;      /* between the flip's entry and its return */
 static void* s_retStack[32];           /* hijacked returns, LIFO (alloc, flip)    */
@@ -3051,12 +2923,10 @@ static int __cdecl before_flip(void* entry_esp)
         glog(b);
     }
 
-    /* THE ON-DEMAND TRIGGERS, ON THE GAME THREAD AND ON EVERY LANE [the
-       vulkan-only plan, landing 10c]. They used to be called from
-       `tagpu_overlay_draw`, whose only callers are render_ogl.c and
-       render_vk.c -- so on `renderer=gdi`, which makes no `tagpu_` call at all,
-       not one of them ever ran and no `tacli` verb could see the game. Here
-       they run wherever the engine flips, which is every lane.
+    /* THE ON-DEMAND TRIGGERS, ON THE GAME THREAD AND ON EVERY LANE.
+       `renderer=gdi` makes no `tagpu_` call at all, so hung off a renderer's
+       present not one of them would run there and no `tacli` verb could see
+       the game. Here they run wherever the engine flips, which is every lane.
 
        IT SITS ABOVE THIS FUNCTION'S THREE EARLY RETURNS on purpose: those are
        about the GUI census having nothing to do, which says nothing about
@@ -3066,17 +2936,16 @@ static int __cdecl before_flip(void* entry_esp)
        counter -- CENSUS_MS above says the shell flips ~5000 times
        a second, and the op census measured ~12 000/s on MAINMENU. The family
        was written against the PRESENT (60/s): its `% 5` throttles and
-       `SCN_ARM_FRAMES 600` are all in that unit. Handing it `s_flips` raised
-       its file-stat rate about a hundredfold, on the game thread, inside the
-       engine's flip, under Wine -- and turned the scenario applier's ten-second
-       arm watchdog into about a tenth of a second. [The landing review of 10c-1
-       found this; the number it needed was three lines above the block.]
+       `SCN_ARM_FRAMES 600` are all in that unit. Handing it `s_flips` would
+       raise its file-stat rate about a hundredfold, on the game thread, inside
+       the engine's flip, under Wine -- and turn the scenario applier's
+       ten-second arm watchdog into about a tenth of a second.
 
        TRIG_MS is the bound, and it is a clock rather than a rate assumption
        about a renderer: the family sees ~60 frames a second on EVERY lane, so
-       `% 5` is ~83 ms exactly as it was at 60 fps and the arm watchdog is ~9.6 s
-       again. One QueryPerformanceCounter per flip is orders of magnitude
-       cheaper than the 1.27 GetFileAttributes calls per flip it replaces.
+       `% 5` is ~83 ms and the arm watchdog is ~9.6 s. One
+       QueryPerformanceCounter per flip is orders of magnitude cheaper than
+       1.27 GetFileAttributes calls per flip.
 
        IT FAILS CLOSED, DELIBERATELY. If QueryPerformanceFrequency ever refuses,
        `s_trigFreq` stays 0 and the block never runs -- every trigger verb goes
@@ -3120,9 +2989,9 @@ static int __cdecl before_flip(void* entry_esp)
     }
 #undef TRIG_MS
 
-    /* AND NOTHING BELOW THIS LINE RUNS WITHOUT THE LEAVES [landing review of
-       10c-2, round 2]. Everything from here on is the UI layer's op machinery,
-       and all of it is paired with a leaf detour:
+    /* AND NOTHING BELOW THIS LINE RUNS WITHOUT THE LEAVES. Everything from here
+       on is the UI layer's op machinery, and all of it is paired with a leaf
+       detour:
 
          - `surf_of_ctx` REGISTERS a surface in s_surf, and the only thing that
            RETIRES one is `before_memfree`, leaf #15. Installing the registrar
@@ -3131,20 +3000,17 @@ static int __cdecl before_flip(void* entry_esp)
            match") and splitting it silently is how a table grows stale.
          - `ops_window_reset()` on the early return below memsets 4 KB on EVERY
            flip, and the shell flips thousands of times a second. A bare
-           instance was paying that for nothing at all, since with no leaves
+           instance would pay that for nothing at all, since with no leaves
            there is never an op to reset.
 
-           [CORRECTED by round 3 of the review: the first draft of this said
-           "the ARMED configuration does not pay that -- it resets once per
-           census". It does pay it, in two supported configurations, because
-           the reset sits on the `!s_census && !g_gui_draw` exit and
-           `g_gui_draw` is 0 whenever the layer is armed but not DRAWING:
-           `gui.on=off`, which is the documented live A/B, and any armed
-           instance on `renderer=gdi`, where `tagpu_gui_present` -- the only
-           writer of that word -- is never called because render_gdi.c makes no
-           `tagpu_` call. Both are pre-existing and neither is made worse here,
-           but armed+gdi is newly interesting now that gdi is meant to be the
-           stock lane, and it is not closed by this landing.]
+           [The ARMED configuration pays it too, in two supported
+           configurations, because the reset sits on the `!s_census &&
+           !g_gui_draw` exit and `g_gui_draw` is 0 whenever the layer is armed
+           but not DRAWING: `gui.on=off`, which is the documented live A/B, and
+           any armed instance on `renderer=gdi`, where `tagpu_gui_present` --
+           the only writer of that word -- is never called because render_gdi.c
+           makes no `tagpu_` call. Armed+gdi matters because gdi is meant to be
+           the stock lane, and it is open.]
          - the return hijack exists for `s_inFlip`, which only the leaf sites
            read, and for `before_alloc_push`, which is a leaf.
          - `surf_of_ctx` dereferences four dwords behind `ptr_ok` ALONE, and
@@ -3237,14 +3103,12 @@ static int __cdecl before_flip(void* entry_esp)
                it, and `op_add` can only enforce the half that comes through the
                17 leaves -- an engine path that re-filled one without passing a
                leaf would leave the twin holding older bytes and nothing would
-               re-offer. That was written down as a residual; this MEASURES it,
-               for free, because the census already diffs every tracked surface
-               against its own shadow. A surface still claiming `isAsset` whose
-               bytes crossed (`assetSent`) and then moved is precisely the hole.
-               DIAGNOSTIC, NOT A GUARD: the census runs only under `census.on`,
-               so this says whether the residual is real, it does not close it.
-               [The landing review's: cheap enough that not measuring it was the
-               only thing making it unmeasurable.] */
+               re-offer. This MEASURES that residual, for free, because the
+               census already diffs every tracked surface against its own
+               shadow. A surface still claiming `isAsset` whose bytes crossed
+               (`assetSent`) and then moved is precisely the hole. DIAGNOSTIC,
+               NOT A GUARD: the census runs only under `census.on`, so this says
+               whether the residual is real, it does not close it. */
             if (s_surf[i].isAsset && s_surf[i].assetSent && c2) s_assetDrift += c2;
             if (u2 && s_log && s_surf[i].h > 1) {
                 int k, onThis = 0, shown = 0;
@@ -3275,11 +3139,10 @@ static int __cdecl before_flip(void* entry_esp)
        and leaves a `SURF*` that pointed at the last slot one past `s_nsurf`.
        The loop skips the flip surface itself, so it is always still in the
        table -- only its address can have changed, which is exactly what
-       `surf_by_base` is for and why `s_frameBase` exists. Today the swapped-out
-       bytes survive and every read still returns the right value; the pointer
-       comparison `&s_surf[i] != s` below is already wrong when it happens, and
-       a later insert into that slot would alias a different surface.
-       [The landing review's.] */
+       `surf_by_base` is for and why `s_frameBase` exists. The swapped-out bytes
+       survive, so a stale pointer would still read the right values -- but the
+       pointer comparison `&s_surf[i] != s` below would be wrong, and a later
+       insert into that slot would alias a different surface. */
     if (s) s = surf_by_base(s->base);
     if (s && s_trace && unexpl > 256) {
         /* the ops that touched the residual's box, up to 96 — the rest of the
@@ -3301,10 +3164,9 @@ static int __cdecl before_flip(void* entry_esp)
     if (s && (unexpl > 256 || s_censuses - s_lastLog >= (unsigned)(s_log ? LOG_EVERY : LOG_EVERY * 20))) {
         s_lastLog = s_censuses;
         {
-            /* PRE-EXISTING, and the same trap as the `gui area:` block below:
-               unguarded `n +=`, sized 200 against a 255-byte worst case, and
-               never terminated. Fixed here rather than noted because this
-               landing edited the block it sits in. */
+            /* THE SAME GUARD as the `gui area:` block below: `_snprintf`'s -1
+               is tested rather than added to `n`, the buffer is sized past the
+               255-byte worst case, and it is always terminated. */
             char ops[288]; int k, n = 0, w; unsigned nullc = 0;
             for (k = 1; k < OP_NKIND; k++) {
                 nullc += s_nullCtx[k];
@@ -3341,30 +3203,24 @@ static int __cdecl before_flip(void* entry_esp)
            coverage mask per kind, which is the census's `pgm` job and not a
            per-op tally's. Read it as weight, not as a footprint. */
         if (s_log) {
-            /* THE SAME GUARD `repaint_service` CARRIES, and this block shipped
-               without it. mingw's `_snprintf` returns -1 on truncation rather
-               than the length it wanted, so a bare `n += _snprintf(...)` makes
-               `n` negative and `sizeof ar - (size_t)n` wrap to a size that
-               writes BEFORE the buffer. `ar` was also sized 240 for a worst
-               case of fifteen kinds x (five-char name + space + ten digits +
-               separator) = 255, and was read by `%s` without ever being
-               terminated -- including when no kind had area and the loop never
-               ran at all. `full` stops the TEXT while the totals keep
-               accruing, so `sem`/`raw`/`pct` stay exact either way.
-               [The landing review's; the same trap, fifty lines from its own
-               warning.] */
+            /* THE SAME GUARD `repaint_service` CARRIES. mingw's `_snprintf`
+               returns -1 on truncation rather than the length it wanted, so a
+               bare `n += _snprintf(...)` makes `n` negative and
+               `sizeof ar - (size_t)n` wrap to a size that writes BEFORE the
+               buffer. `ar` is sized past the worst case of fifteen kinds x
+               (five-char name + space + ten digits + separator) = 255, and is
+               terminated even when no kind had area and the loop never ran at
+               all. `full` stops the TEXT while the totals keep accruing, so
+               `sem`/`raw`/`pct` stay exact either way. */
             char ar[288]; int k, n = 0, w, full = 0;
             unsigned raw = 0, sem = 0, tot;
             for (k = 1; k < OP_NKIND; k++) {
                 if (!s_kindArea[k]) continue;
-                /* `OP_FOCUS` JOINED THIS SET WITH LANDING 8d and it is what
-                   moves the shell's figure: it was the whole of `raw` on
-                   MAINMENU (`raw=1156164` against a `focus` of exactly that),
-                   and `PK_TINT` is its semantic op. `OP_FILL` joined it in the
-                   same pass as a correction rather than a change -- it has
-                   crossed as a `PK_BAR` since the whole-surface fill branch
-                   went in, and counting it as raw under-reported what this lane
-                   can already reproduce.
+                /* `OP_FOCUS` IS IN THIS SET because `PK_TINT` is its semantic
+                   op, and it is what moves the shell's figure: counted as raw
+                   it is the whole of `raw` on MAINMENU (`raw=1156164` against
+                   a `focus` of exactly that). `OP_FILL` is in it because it
+                   crosses as a `PK_BAR` (the whole-surface fill branch).
                    `OP_SCALE` is NOT here and that is deliberate: it publishes a
                    `PK_SPRITE` only when its resampled plane was captured, and a
                    kind that is sometimes semantic cannot be summed as though it
@@ -3374,14 +3230,14 @@ static int __cdecl before_flip(void* entry_esp)
                 if (k == OP_GAF || k == OP_TEXT || k == OP_BAR ||
                     k == OP_RECT || k == OP_LINE || k == OP_COPY ||
                     k == OP_FOCUS || k == OP_FILL) sem += s_kindArea[k];
-                /* SPLIT, NOT PROMOTED. `OP_SCALE` is still not a kind that can
-                   be summed as though it were always semantic -- a rotated or
+                /* SPLIT, NOT PROMOTED. `OP_SCALE` is not a kind that can be
+                   summed as though it were always semantic -- a rotated or
                    sheared stamp, a sub-frame stack, a window too large to key
-                   and a clipped draw all still publish nothing. What changed is
-                   that the captured ones are now the common case, so the two
-                   halves are counted apart instead of the whole being charged
-                   to `raw`. `s_scaleSem` can never exceed `s_kindArea` because
-                   both take the same box from the same op. */
+                   and a clipped draw all publish nothing. The captured ones are
+                   the common case, so the two halves are counted apart instead
+                   of the whole being charged to `raw`. `s_scaleSem` can never
+                   exceed `s_kindArea` because both take the same box from the
+                   same op. */
                 else if (k == OP_SCALE) {
                     /* the min is a BOUND and not an expectation: both sides take
                        the op's own clamped box, so they are equal or `s_scaleSem`
@@ -3424,7 +3280,7 @@ static int __cdecl before_flip(void* entry_esp)
     return hijack;
 }
 
-/* ---- landing 9: the engine redraws, instead of us seeding its bytes -----
+/* ---- the engine redraws, instead of us seeding its bytes ----------------
    A surface whose contents we did not watch arrive can only be published as
    `PK_SEED` -- its raw bytes -- because nothing here knows how they got
    there, and a reseed (a level boundary, an arena overflow) re-publishes
@@ -3437,9 +3293,7 @@ static int __cdecl before_flip(void* entry_esp)
    WHY THE FLAG IS EXACTLY 0x40 AND NOTHING ELSE [DISASSEMBLED 2026-09-18]:
    `0x4A82F0` computes `eax = flags & 1` -- the BUILD bit -- and `0x4A82F7`
    `je 0x4A90D1`, which is past BOTH allocations (`0x4A907C`, `0x4A90B5`).
-   The frees are SIX sites and not the two this comment first named -- the
-   search was for `0x4C69F0`/`0x4C6AC0` and stopped at the symbols it
-   expected [CORRECTED by the landing review]: `0x4C6AC0` at `0x4A9537` and
+   The frees: `0x4C6AC0` at `0x4A9537` and
    `0x4A9549`, and the RAW free `0x4D85A0` at `0x4A9575` and `0x4A95A7`,
    which walk the gadget array freeing each record's own pointers. All four
    are inside one block gated by `0x4A950A test bl,0x2 / je 0x4A95C2`, and
@@ -3459,14 +3313,14 @@ static int __cdecl before_flip(void* entry_esp)
    leak.
 
    WHAT A 0x40 REDRAW ACTUALLY DOES, IN ORDER [DISASSEMBLED 2026-09-18], because
-   "every pixel arrives as an op" is NOT the whole truth and the plan said it
-   was: `0x4A90F4` reads `gi->TheActive_GUIMEM->[0x24]` and, when it is set,
-   repaints the WHOLE panel surface from it with `0x4C6B70(panel+0xBC, that,
-   0, 0)` -- a surface-to-surface copy, not a description of a draw. When it
-   is NULL the fallback at `0x4A911D` is `0x4B0230(gi, 0, panel+0xC4)`, the
-   picture handler, which is a bitmap too. Only THEN does the gadget loop at
-   `0x4A9135` run. So the chrome arrives as ops and the WALLPAPER arrives as a
-   copy, which is a win only while that copy's source is a surface we twin.
+   "every pixel arrives as an op" is NOT the whole truth: `0x4A90F4` reads
+   `gi->TheActive_GUIMEM->[0x24]` and, when it is set, repaints the WHOLE panel
+   surface from it with `0x4C6B70(panel+0xBC, that, 0, 0)` -- a
+   surface-to-surface copy, not a description of a draw. When it is NULL the
+   fallback at `0x4A911D` is `0x4B0230(gi, 0, panel+0xC4)`, the picture handler,
+   which is a bitmap too. Only THEN does the gadget loop at `0x4A9135` run. So
+   the chrome arrives as ops and the WALLPAPER arrives as a copy, which is a win
+   only while that copy's source is a surface we twin.
 
    WHERE IT IS CALLED FROM, AND WHY THAT IS AN ORDERING AND NOT A HOPE: at
    the flip's RETURN, on the game thread, with `s_inFlip` already cleared --
@@ -3477,7 +3331,7 @@ static int __cdecl before_flip(void* entry_esp)
    the engine's gadget handlers do not do.
 
    WHAT THE REDRAW WRITES BESIDES PIXELS, AND WHY IT DOES NOT RUN AWAY
-   [FOUND by the landing review, then MEASURED 2026-09-18]. On the `0x40`
+   [MEASURED 2026-09-18]. On the `0x40`
    path `0x4A943B` reads the focus index at `GUIMEM+0x20`; if it is not -1
    and `gi+0xA2` is set, `0x4A947B` calls `0x4A16F0(gi, idx, 8)`, which
    writes `gi+0xCCA = 1` unconditionally at `0x4A1708` and stamps gadget
@@ -3487,10 +3341,9 @@ static int __cdecl before_flip(void* entry_esp)
    `0x4A81E0(gi, GUIMEM->flags | 0x40)` at `0x4AA0CD`. So each repaint can
    provoke a further engine redraw.
 
-   `builds=` CANNOT ANSWER IT AT THIS SAMPLE SIZE, and the first version of this
-   paragraph quoted the one pair of boots that looked supportive. Three boots per
-   arm, `gui.on=census`, `renderer=vulkan`: shipped gave means of **1.0, 72.0,
-   69.1** redraws per census window and `norepaint` gave **28.1, 21.8, 62.1** --
+   `builds=` CANNOT ANSWER IT AT THIS SAMPLE SIZE. Three boots per arm,
+   `gui.on=census`, `renderer=vulkan`: shipped gave means of **1.0, 72.0, 69.1**
+   redraws per census window and `norepaint` gave **28.1, 21.8, 62.1** --
    overlapping, dominated by something other than the repaint (how long a boot
    lingers on which screen), and no direction. So the amplification question is
    **NOT settled by this measurement** and no number here should be read as
@@ -3532,8 +3385,7 @@ static int      s_drawShadow = 0;     /* our own last-seen value of g_gui_draw  
 static unsigned s_resetShadow = 0;    /* ... and of g_guiq.resets                */
 static unsigned s_colarmShadow = 0;   /* ... and of g_guiq.colarm                */
 
-/* WHEN A REPAINT IS WORTH ISSUING. The plan named two moments -- the layer
-   arming, and a level boundary -- and the second one is a SUBSET of the right
+/* WHEN A REPAINT IS WORTH ISSUING. A level boundary is a SUBSET of the right
    trigger, not a trigger of its own. A surface is seeded whenever `publish`
    finds `!s->seeded`, and the only thing that clears that flag for every
    surface at once is a RESEED; `publish`'s own level check is one of the four
@@ -3542,12 +3394,12 @@ static unsigned s_colarmShadow = 0;   /* ... and of g_guiq.colarm               
    which publish bumps on this same thread -- no new cross-thread agreement,
    and it covers the level case for free.
 
-   [MEASURED 2026-09-18, and this is why the trigger moved:] the packet's level
-   generation advances in `tagpu_packet_pub_level_end`, i.e. when a level is
-   TORN DOWN, so a shell-to-game transition never moves it. Shadowing it fired
-   exactly once per session -- at the arm -- and never on entering a game. It
-   did not need to: entering a game BUILDS the in-game screen, and a build
-   draws every gadget through the leaves already.
+   [MEASURED 2026-09-18:] the packet's level generation advances in
+   `tagpu_packet_pub_level_end`, i.e. when a level is TORN DOWN, so a
+   shell-to-game transition never moves it; shadowing it fires exactly once per
+   session -- at the arm -- and never on entering a game. It does not need to:
+   entering a game BUILDS the in-game screen, and a build draws every gadget
+   through the leaves already.
 
    `g_gui_draw` is read once into a local and compared with a shadow this
    thread owns, so the render thread flipping it mid-check cannot be seen
@@ -3571,10 +3423,9 @@ static void repaint_arm(void)
 }
 
 /* ONE PER EPISODE, NOT ONE PER FLIP. A guard failure leaves `s_repaintPend`
-   set -- the retry is the point -- so counting every refusal counted FLIPS: in
-   the shell, ~5000 a second while a screen is between push and build, which
-   made `repaints=3/4813992` unreadable and was half of what pushed the
-   heartbeat line past its buffer. [FOUND by the landing review.] */
+   set -- the retry is the point -- so counting every refusal would count
+   FLIPS: in the shell, ~5000 a second while a screen is between push and build
+   (`repaints=3/4813992`, unreadable). */
 static void repaint_refused(void)
 {
     if (s_repaintCounted) return;
@@ -3588,10 +3439,10 @@ static void repaint_refused(void)
    (`0x4AB111` and `0x4AB13F`), so there is exactly one blit per dirty mark; the
    other way in is the overlap test at `0x4AB136`, and the in-game side panel at
    `[0,128,128,352]` does not overlap the viewport `{128,32,W-1,H-33}`, so that
-   never fires either. The ARM/CORE emblem lives in that surface and arrived
-   exactly once per level -- `copies=1` -- which is why it was missing from every
-   frame after the first reset. [MEASURED 2026-09-21: the probe at (64,285) saw
-   one `copy box=(0,128)-(127,479)` and nothing afterwards.]
+   never fires either. The ARM/CORE emblem lives in that surface and arrives
+   exactly once per level -- `copies=1` -- so without a re-emit it is missing
+   from every frame after the first reset. [MEASURED 2026-09-21: the probe at
+   (64,285) saw one `copy box=(0,128)-(127,479)` and nothing afterwards.]
 
    WE DO NOT MARK THE ENGINE'S FLAG. Setting `Active_b` would be a write to engine
    state that races the engine's own use of it -- it clears the flag itself, two
@@ -3639,10 +3490,10 @@ static void panel_emit(const char* ctrls, int n0)
                 *(const short*)(ctrls + P_RECT_X), *(const short*)(ctrls + P_RECT_Y));
     /* THE DEBT IS PAID BY A RECORD, NOT BY A CALL. `op_add` drops silently at
        `s_nops >= MAX_OPS` and leaves `s_lastOp` NULL, which `copy_record`
-       already tests before filling in the source -- so on a full ring the old
-       code cleared the debt for a copy that was never recorded and the emblem
-       stayed missing until the next reset. Keep the debt instead; the next
-       repaint re-offers it. [The landing review's.] */
+       already tests before filling in the source -- so on a full ring clearing
+       the debt would clear it for a copy that was never recorded, and the
+       emblem would stay missing until the next reset. The debt is kept
+       instead; the next repaint re-offers it. */
     if (!s_lastOp) return;
     s_panelPend = 0;
     s_panelEmits++;
@@ -3688,13 +3539,13 @@ static void hud_invalidate(void)
     ta = *(char* const*)TA_MAINPP;
     if (!ptr_ok(ta)) return;
     memo = (volatile unsigned char*)(ta + HUD_MEMO);
-    /* PER EPISODE, NOT EVER. This was `s_hudPokes && ...` and that is a
-       different question: once ANY poke had landed, the memo had long since been
-       overwritten by the engine's own fresh state, so the test passed on every
-       LATER reset and cleared each new debt without poking at all. Measured:
-       three resets, `hud=1/0`, bars still black. `s_hudPoked` is cleared with
-       every new debt, so the test only ever asks about the poke this episode
-       made. [FOUND by running it.] */
+    /* PER EPISODE, NOT EVER. Whether ANY poke has landed (`s_hudPokes`) is a
+       different question: once one has, the memo has long since been
+       overwritten by the engine's own fresh state, so the test would pass on
+       every LATER reset and clear each new debt without poking at all
+       (MEASURED: three resets, `hud=1/0`, bars still black). `s_hudPoked` is
+       cleared with every new debt, so the test only ever asks about the poke
+       this episode made. */
     if (s_hudPoked) {
         /* ONE POKE PER DEBT, BY CONSTRUCTION -- not one per flip. `after_flip`
            is on the flip FUNCTION `0x4C63A0`, which has 44 call sites; it is
@@ -3703,9 +3554,9 @@ static void hud_invalidate(void)
            `0x467D70` presents at `0x467E41` and returns, so presents do happen
            with no resource block between them. There, "the memo still holds our
            poison" does not mean "the engine has not redrawn yet" -- it means
-           nothing has looked, and the old code complemented and re-poked once
+           nothing has looked, and complementing and re-poking would run once
            per flip for as long as that lasted. The poison is already in place:
-           keep the debt and write nothing more. [The landing review's.] */
+           keep the debt and write nothing more. */
         if (*memo != s_hudPoison) { s_hudPend = 0; s_hudPoked = 0; }
         return;
     }
@@ -3724,9 +3575,9 @@ static void repaint_service(void)
     int n0, k;
     unsigned before[OP_NKIND];
     if (!s_repaint || !s_repaintPend || s_repainting || !g_gui_draw) return;
-    /* THE LIFETIME GATE, which this one was missing while `panel_emit`,
-       `hud_invalidate` and `chrome_emit` all had it -- and this is the only one
-       of the four that CALLS INTO the engine. The four `ptr_ok` tests below are
+    /* THE LIFETIME GATE, as `panel_emit`, `hud_invalidate` and `chrome_emit`
+       have it -- and this is the only one of the four that CALLS INTO the
+       engine. The four `ptr_ok` tests below are
        range tests on VALUES and are not a lifetime argument (this project's own
        rule); what keeps the redraw off a level that is going away is asking the
        reclaimer.
@@ -3735,12 +3586,11 @@ static void repaint_service(void)
        `!level_tracked() || level_closing()`. Those two are level-scoped -- the
        resource block and the side panel exist only in a game -- but a repaint
        is exactly as necessary in the SHELL, where `s_levelTracked` is 0 by
-       definition. Copying their gate here would have refused every menu
-       repaint in the game's whole front end. `level_closing()` is
+       definition. Copying their gate here would refuse every menu repaint in
+       the game's whole front end. `level_closing()` is
        `s_levelTracked && s_teardown`, so it is false in the shell and true only
        while a tracked level is actually going away, which is the one window
-       this call must not be in. [The review found the missing gate; the wrong
-       gate was mine, caught before it ran.] */
+       this call must not be in. */
     if (tagpu_reclaim_level_closing()) { repaint_refused(); return; }
     /* ptr_ok here is a range test on a VALUE, as everywhere else in this file;
        what makes the call safe is the three-link check below plus the flag */
@@ -3774,14 +3624,12 @@ static void repaint_service(void)
            offset whatever the platform does, and `n` is clamped below because a
            return of exactly the space left is a fit that msvcrt also leaves
            unterminated — the one case "cannot go negative" does not cover.
-           [The clamp found by the landing review.]
 
            TWO NUMBERS, TWO QUANTITIES. `s_repaintOps` is `s_nops - n0`: ops
            RECORDED. The breakdown is the `s_kindTotal` delta, and `op_add` bumps
            that BEFORE its `!s`, fully-clipped and `MAX_OPS` early returns — so it
            is ops ATTEMPTED. They agree on every screen measured so far; where
-           they do not, the line says so rather than letting the reader assume.
-           [Also the review's.] */
+           they do not, the line says so rather than letting the reader assume. */
         char b[448], kinds[288];
         int n = 0, w;
         unsigned att = 0;
@@ -3857,7 +3705,7 @@ static void* __cdecl after_flip(unsigned int* regs)
    cannot interleave -- but that closure is 610 functions and contains 362
    indirect call sites, which is not something a static read can close. The
    gates are a bound instead, and bounds do not care what a function pointer
-   does. [The design interview, 2026-09-21.]
+   does.
 
    NOT-YET-OPEN IS A RETRY, NOT A REFUSAL. A reset can land between the paint and
    the first in-play draw; clearing the debt there would lose the chrome for the
@@ -3868,20 +3716,20 @@ static void chrome_emit(struct SURF* fs)
        the engine lays them end to end from 0x81 until it runs out of screen --
        measured, not assumed: the probe caught the second one at
        `gaf box=(642,736)-(1023,767)`, and 0x81 + 513 is exactly 642, with the
-       right edge clipped by the surface rather than by a narrower asset. A
-       recipe that drew each bar once left everything past 642 black, which at
+       right edge clipped by the surface rather than by a narrower asset.
+       Drawing each bar once would leave everything past 642 black, which at
        1024 wide is 382 px of every bar and at 1920 would be most of it. */
-    /* `ext` is the sequence a bar CONTINUES with past its first tile, and for the
-       top bar that is the BOTTOM bar's art, not its own. Established by
+    /* `ext` is the sequence a bar CONTINUES with past its first tile, and for
+       the top bar that is the BOTTOM bar's art, not its own. Established by
        measurement rather than from the engine's code: in the golden source the
-       top bar's x642..1023 is 97.1% identical to the bottom bar's tiles and only
-       9.8% identical to its own left half, which carries METAL and ENERGY.
-       Repeating its own frame drew a second METAL / ENERGY panel at x=642, and
-       its sequence holds one frame so there is no plain variant inside it.
-       NOT DERIVED FROM THE PRODUCER: the engine function that lays these
-       continuations is still unidentified -- it is neither 0x467D70 (three
-       blits, no loop) nor either site in 0x46A860 (both redraw the same first
-       tile). This reproduces what that function's output looks like. */
+       top bar's x642..1023 is 97.1% identical to the bottom bar's tiles and
+       only 9.8% identical to its own left half, which carries METAL and ENERGY.
+       Repeating its own frame would draw a second METAL / ENERGY panel at
+       x=642, and its sequence holds one frame so there is no plain variant
+       inside it. NOT DERIVED FROM THE PRODUCER: the engine function that lays
+       these continuations is still unidentified -- it is neither 0x467D70
+       (three blits, no loop) nor either site in 0x46A860 (both redraw the same
+       first tile). This reproduces what that function's output looks like. */
     static const struct { unsigned tbl; unsigned ext; int x; int bottom; int tile; } PIECE[3] = {
         { CHROME_TOP,    CHROME_BOTTOM, CHROME_XOFF, 0, 1 },
         { CHROME_BOTTOM, CHROME_BOTTOM, CHROME_XOFF, 1, 1 },
@@ -3918,7 +3766,7 @@ static void chrome_emit(struct SURF* fs)
        0x4C6890(offscreen, 0) at its head and only then blits the three pieces.
        Reproducing it is what puts black where the engine leaves black -- the
        column below the 129x480 panel above all, which is 36 896 px of index 0 in
-       the golden source and was the lane's magenta here. */
+       the golden source and the lane's magenta without this fill. */
     op_add(OP_FILL, fs, 0, 0, fs->w - 1, fs->h - 1);
     if (s_lastOp) s_lastOp->col = 0;
     for (i = 0; i < 3; i++) {
@@ -3977,54 +3825,39 @@ static int read_tokens(void)
     return 1;
 }
 
-/* TWO INSTALLS, NOT ONE, AND ONLY THE SECOND IS THE UI LAYER'S [the landing
-   review of 10c-2 — it caught this as a HIGH and it was a real regression].
+/* TWO INSTALLS, NOT ONE, AND ONLY THE SECOND IS THE UI LAYER'S.
 
-   The flip observer is this file's hook, but since landing 10c it is no longer
-   this file's FEATURE: `before_flip` is the only host of `tagpu_triggers_frame`,
-   which is every `tacli` verb's way into the process and, since 10c-2, the
-   input injection `tacli keys` and `tacli click` go through. It used to sit
-   behind `read_tokens()` with everything else, so `tagpu_gui.on` being absent
-   took the tooling channel down with the UI layer.
+   The flip observer is this file's hook, but it is not this file's FEATURE:
+   `before_flip` is the only host of `tagpu_triggers_frame`, which is every
+   `tacli` verb's way into the process and the one the input injection
+   `tacli keys` and `tacli click` go through. Behind `read_tokens()` with
+   everything else, `tagpu_gui.on` being absent would take the tooling channel
+   down with the UI layer.
 
    THAT IS THE DEFAULT FOR A BARE INSTANCE. `tagpu_opt_read` answers -1 when the
    file is absent AND no default applies, and no default applies while
    `tagpu_defaults.off` exists — which `tacli launch` writes unless it is given
-   `--defaults`. So `tacli launch <i>` followed by `tacli click <i> …` wrote the
-   token file, printed `sent:`, and nothing read it, ON EVERY RENDERER: before
-   10c-2 `tagpu_input_frame` was called from `tagpu_overlay_draw` and did not
-   care about this trigger at all. `tacli` also arms `tagpu_shield.on` by
-   default, so hardware input was blocked on the same window: drivable by
-   nothing, with no line in the log, because the old early return was ABOVE the
-   only glog() this function had.
+   `--defaults`. Gated on it, `tacli launch <i>` followed by `tacli click <i> …`
+   would write the token file, print `sent:`, and nothing would read it, ON
+   EVERY RENDERER; and `tacli` also arms `tagpu_shield.on` by default, so
+   hardware input would be blocked too: drivable by nothing.
 
-   So the observer installs whenever its bytes match, and `tagpu_gui.on` now
-   gates the CAPTURE alone. Two further consequences, both wanted:
-     - a build whose LEAF prologues differ no longer costs us the flip as well;
+   So the observer installs whenever its bytes match, and `tagpu_gui.on` gates
+   the CAPTURE alone. Two further consequences, both wanted:
+     - a build whose LEAF prologues differ does not cost us the flip as well;
        the tooling survives where only the capture cannot install.
      - `tagpu_gui.off` and a bare launch still take the capture, the census and
-       the leaves away — they no longer take `tacli`'s ability to drive the
+       the leaves away — they do not take `tacli`'s ability to drive the
        instance with them.
 
-   AND THE CAPTURE IS ALL IT GATES SINCE THE CLEAN CUT. What `tagpu_gui.on`
-   turned on used to be a DRAW: the 17 leaves fed an op queue that
-   `tagpu_gui_surf.c` replayed into GL twins and `tagpu_vk_gui.c` composited
-   over the world. Both files are deleted and nothing consumes `g_guiq` today,
-   so this trigger is the op census, the diagnostics and the queue that feeds
-   them — a harness mode, and off the defaults table for that reason. The
-   leaves and the arena stay because the op stream is what a native UI pass
-   will be built from. [gpu-status §2.81.]
-
-   EVERY EXIT LOGS, AND THERE ARE FIVE, not the two an earlier draft of this
-   comment implied. Only the first two mean the instance cannot be driven, and
-   both of those say so in the words `no tacli verb can answer` — that phrase
-   is the diagnostic, not the absence of a line. */
+   EVERY EXIT LOGS, AND THERE ARE FIVE. Only the first two mean the instance
+   cannot be driven, and both of those say so in the words `no tacli verb can
+   answer` — that phrase is the diagnostic, not the absence of a line. */
 void tagpu_gui_init(void)
 {
     char b[256];        /* 221 worst case: 126 literal characters, the longest
                            `%s` (`FAILED`, 6), 8 `%d` at eleven digits and the
-                           NUL. All eight are small flags today, so 220 never
-                           actually overran -- but `_snprintf` does not
+                           NUL. All eight are small flags, but `_snprintf` does not
                            NUL-terminate on truncation and `glog` reads `%s`,
                            so one byte short is an out-of-bounds READ, not a cut. */
     int n, ok, want, phase = 0;
@@ -4074,8 +3907,8 @@ void tagpu_gui_init(void)
     /* AND THE PROVENANCE BRACKET, WITH THE LEAVES AND NOT BEFORE THEM: the four
        redirects exist to stamp ops, and without the leaves there is no op to
        stamp. It arms independently — a refusal there leaves the op capture
-       working and the engine's world draws crossing, which is the state before
-       this landing, and the log line says so. */
+       working and the engine's world draws crossing, and the log line says
+       so. */
     phase = phase_install();
     _snprintf(b, sizeof b, "gui: %s flip@0x4C63A0=%d leaves=%d/%d worldphase=%d census=%d log=%d pgm=%d key=%d (the op stream feeds the UI pass; no engine pixel is carried)",
               s_installed ? "ARMED" : "FAILED", ok, n, LEAF_COUNT, phase, s_census, s_log, s_pgm, s_key);
@@ -4083,25 +3916,15 @@ void tagpu_gui_init(void)
     glog(b);
 }
 
-/* NO CALLER SINCE THE CLEAN CUT. `tagpu_gui_surf.c` asked this before drawing
-   its layer; `tagpu_gui.h` keeps it declared because it is the honest answer to
-   "did the 17 leaves install", which a future UI pass will ask again. */
+/* "Did the 17 leaves install": `tagpu_gui_surf.c` asks this before drawing its
+   layer. */
 int tagpu_gui_installed(void) { return s_installed; }
 
-/* THE MINIMAP HANDSHAKE IS WHOLE AGAIN. This comment said both setters were
-   callerless and that `tagpu_gui_want_minimap()` "answers 0 for the life of the
-   process" -- true while `tagpu_gui_surf.c` was deleted, and wrong the moment it
-   was restored: its sharp minimap layer raises `g_wantMm` once per present and
-   publishes `g_mmHave` from its own frame, exactly as it used to, so
+/* THE MINIMAP HANDSHAKE. `tagpu_gui_surf.c`'s sharp minimap layer raises
+   `g_wantMm` once per present and publishes `g_mmHave` from its own frame, so
    `tagpu_packet_pub.c` interleaves the three 126-px surfaces and the level's
-   picture again and `want_minimap_watchdog` has something to release.
-
-   IT COST A DIAGNOSIS TO LEAVE STALE. Reading it as current is what sent the
-   2026-09-21 hunt for the missing minimap at the packet channel, which was
-   healthy, instead of at the k = 1 gate in `sharp_minimap` that was actually
-   refusing to draw. A note that describes a deleted module is worse than none
-   once the module is back. [Corrected 2026-09-21; the deleted-half state it
-   described was the clean cut's, and ended with the renderer restore.] */
+   picture, and `want_minimap_watchdog` releases the want when the layer stops
+   asking. */
 static volatile unsigned char g_wantMm;
 static unsigned g_wantMmBeat;
 void tagpu_gui_set_want_minimap(int on, unsigned int frame_counter)
@@ -4125,53 +3948,26 @@ static void want_minimap_watchdog(unsigned int frame_counter)
 void tagpu_gui_flush(unsigned int frame_counter)
 {
     static unsigned last = 0;
-    /* 352 AND NOT 200, MEASURED RATHER THAN GUESSED. The heartbeat's format is
-       137 literal characters plus 15 `%u` and 2 `%d`; at ten and eleven digits
-       that is 309, and this buffer held 200. It was already over before landing
-       9 added three fields (263), and the line observed in a live session is
-       ~180 with `bytes=` at nine digits — so the margin was one order of
-       magnitude of one counter. mingw's `_snprintf` does not NUL-terminate on
-       truncation, and `glog` hands the result to `fprintf("%s")`, so the
-       failure would have been an out-of-bounds READ, not a tidy cut. */
+    /* mingw's `_snprintf` does not NUL-terminate on truncation, and `glog`
+       hands the result to `fprintf("%s")`, so an undersized buffer is an
+       out-of-bounds READ, not a tidy cut. */
     char b[600];        /* 571 worst case, COUNTED OUT OF THE FORMAT STRING rather
                            than adjusted by eye: 207 literal characters, 33 `%u` at
                            ten digits, and THREE `%d` at eleven (`world=…/%d`,
-                           `surfaces=%d`, `draw=%d`) plus the NUL. An earlier
-                           revision of this comment said 213 literals and two `%d`,
-                           one of them "at two digits" because `s_phaseLive` only
-                           ever holds 0 or 1 -- a conversion is sized by its TYPE,
-                           not by the values you expect in it, and that is the
-                           reasoning that overran this buffer twice. The `asset=`
-                           group is FOUR
-                           fields, not the two an earlier revision of this comment
-                           claimed -- the arithmetic was right and the prose was
-                           stale, which is the way this line gets overrun. Landing
-                           8d added the FOUR-field `tint=` group: 444 -> 493, which
-                           is 13 past what the buffer was, so this is the second
-                           time the count has caught an overrun before it shipped.
-                           The world phase (2026-09-22) added `world=%u/%u/%d`,
-                           `fillcut=%u` and `vpclear=%u`: 493 -> 571, which is
-                           27 past 544 -- the third time. */
+                           `surfaces=%d`, `draw=%d`) plus the NUL. A conversion is
+                           sized by its TYPE, not by the values you expect in it:
+                           `s_phaseLive` only ever holds 0 or 1 and still counts
+                           eleven. The `asset=` and `tint=` groups are FOUR fields
+                           each. */
     want_minimap_watchdog(frame_counter);
     if (!s_installed) return;
     if (frame_counter - last >= 600) {
         last = frame_counter;
-        /* `published`, `bytes`, `queue`, `resets`, `overflows`, `stalls` and
-           `draw` WERE ALL STRUCTURALLY ZERO while the consumer was out --
-           `g_gui_draw` had no writer then, so `publish` never ran. THAT IS NO
-           LONGER TRUE and the paragraph saying so outlived the renderer restore
-           by three commits: a measured line now reads `published=2363986
-           resets=5 draw=1` in an ordinary boot [2026-09-21]. Every field here is
-           live; read them as numbers again.
-
-           SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Thirty-three
+        /* SIZED FOR THE COUNTERS, NOT FOR THE LINE YOU LAST SAW. Thirty-three
            `%u`s at ten digits and three `%d` at eleven, plus 207 literals, is
-           571 bytes -- past the 544 this buffer held, which is why `b` is now
-           600. The observed line is ~300; the gap is
-           entirely how long the session has run. This buffer has been overrun
-           twice before by one group too many, so COUNT IT AGAIN when you add
-           one. [`world=`, `fillcut=` and `vpclear=` added 2026-09-22 with the
-           world phase.] */
+           571 bytes, under the 600 of `b`. The observed line is ~300; the gap is
+           entirely how long the session has run. COUNT IT AGAIN when you add a
+           group. */
         _snprintf(b, sizeof b, "GUI flips=%u ops=%u dropped=%u world=%u/%u/%d fillcut=%u vpclear=%u changed=%u unexplained=%u surfaces=%d published=%u bytes=%u queue=%u resets=%u overflows=%u stalls=%u draw=%d flush=%u repaints=%u/%u rops=%u chrome=%u/%u panel=%u/%u hud=%u/%u asset=%u/%u/%u/%u tint=%u/%u/%u/%u",
                   s_flips, s_opsTotal, s_opsDropped,
                   s_worldOps, s_worldDropped, s_phaseLive, s_fillClipped, s_vpClears,
@@ -4184,8 +3980,8 @@ void tagpu_gui_flush(unsigned int frame_counter)
         {
             /* THE SAME GUARD AS THE OTHER THREE IN THIS FILE: mingw's
                `_snprintf` returns -1 on truncation, so a bare `n +=` makes `n`
-               negative and the size argument wrap. `ops` is also read by `%s`
-               and was never terminated when no kind had fired. */
+               negative and the size argument wrap. `ops` is also read by `%s`,
+               so it is terminated even when no kind has fired. */
             int k, n = 0, w;
             char ops[300];
             for (k = 1; k < OP_NKIND; k++) {
@@ -4204,7 +4000,7 @@ void tagpu_gui_flush(unsigned int frame_counter)
     }
 }
 
-/* ---- G17e: the TNT's minimap picture, for the render thread --------------
+/* ---- the TNT's minimap picture, for the render thread -------------------
    Returns 1 and fills the outputs when a picture has been snapshotted since
    the last map load. `gen` changes exactly once per load, so a consumer that
    caches anything derived from these bytes drops it when the generation moves.

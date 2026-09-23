@@ -31,7 +31,7 @@
    Two reasons. Its grey band is a shade-LUT remap of pixels already in the
    frame, so it would rewrite our key fill into flat grey blobs and every one
    of them would read as "the engine drew something here". And we reproduce
-   the overlay exactly since G13c, so drawing it twice is wrong anyway.
+   the overlay exactly, so drawing it twice is wrong anyway.
 
    But its first act is a LAZY REBUILD of the screen fog grid — the grid our
    own fog rule samples every frame:
@@ -42,7 +42,7 @@
      484904  or   word [eax+0x14281],bx   ; LosType |= 8
 
    so the skip path replicates those five lines and nothing else. Dropping
-   them would freeze the grid and take G13c's fog parity with it. */
+   them would freeze the grid and take our fog parity with it. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -68,7 +68,7 @@
 #define OFF_VP_T     0x37E2B
 #define OFF_VIEW_W   0x37E37
 #define OFF_VIEW_H   0x37E3B
-/* OFFSCREEN (terrain-depth.md 4, re-read from 0x4CBEF1 / 0x4C6B10 for G13b):
+/* OFFSCREEN (terrain-depth.md 4, re-read from 0x4CBEF1 / 0x4C6B10):
    +0x08 pitch, +0x0C pixel base, inclusive clip rect +0x1C..+0x28 */
 #define CTX_PITCH    2
 #define CTX_BASE     3
@@ -91,16 +91,16 @@ volatile unsigned char g_terrown_skip = 0;
    exists for `tagpu_vpwide`: the engine's terrain blit places its unclipped
    32x32 copies (`0x4CBEF1`) from the rect's L/T, so a rect widened for
    zoom < 1 -- a negative origin -- reaching that blit writes far outside the
-   offscreen: the crash of 2026-09-23, a new skirmish entered while the last
-   one's zoom was still live and before our terrain pass had taken the ground
-   back. With the stubs reading the skip directly, the rect (game thread) and
-   the skip (render thread) had no ordering at all.
+   offscreen, which is what a new skirmish entered while the last one's zoom
+   is still live, before our terrain pass has taken the ground back, does.
+   Stubs reading the skip directly would leave the rect (game thread) and the
+   skip (render thread) with no ordering at all.
 
    THE INVARIANT IS "the rect is wide => this is set", and it is kept by what
    the latch is handed rather than by what the request says: `request || the
    rect is still wide`, taken AFTER `tagpu_vpwide_apply` has had its say. So a
    rect that could not be restored (its own `true_rect_of` refusing) keeps the
-   engine's blit away too [the landing review]. The price is that a draw may
+   engine's blit away too. The price is that a draw may
    key-fill on a latch the render thread has already withdrawn -- the rest of
    the draw in flight, and the non-in-play callers of `DrawGameScreen`
    (`0x495C76`/`0x495E66` in the screenshot routine, `0x4962C2` the movie
@@ -185,13 +185,13 @@ static void __cdecl terr_fill(void* ctxv)
    `terr_fogtick` runs only while `g_terrown_own` is set, and that falls on the
    next latch after the render thread drops its request on any path that hands
    terrain back — the lever removed, `passive`, `over`, a `key=` change, a
-   bail-out, the 90-frame watchdog. When it does, this observer stops and the ENGINE calls `0x4848E0` itself, at the
-   live eye, where we cannot see it. Both fog answers below then go stale and
-   neither module can tell: `tagpu_fogwide`'s "valid" flag is only ever cleared
-   from inside the tick that has stopped, and this eye latch was never cleared
-   at all. So the tick stamps the publisher's in-play draw counter, and the
-   publisher — which runs in the same draw's `after` — accepts either answer
-   only when the stamp is this draw's [found by the landing review]. */
+   bail-out, the 90-frame watchdog. When it does, this observer stops and the
+   ENGINE calls `0x4848E0` itself, at the live eye, where we cannot see it.
+   Both fog answers below then go stale and neither module can tell:
+   `tagpu_fogwide`'s "valid" flag is only ever cleared from inside the tick
+   that has stopped. So the tick stamps the publisher's in-play draw counter,
+   and the publisher — which runs in the same draw's `after` — accepts either
+   answer only when the stamp is this draw's. */
 static int s_fogEyeX, s_fogEyeY, s_fogEyeOk;
 static unsigned s_fogEyeGen;                 /* the level the latch was taken in */
 static unsigned s_fogDrawSeq;
@@ -207,8 +207,7 @@ int tagpu_terrown_fog_site_live(void)
    LoadMap leaves the grid current — so a latch kept across the boundary would
    put the new level's grid at the old level's origin for as long as the camera
    stood still. Stamping the publisher's level generation beside it makes that
-   impossible without a level-end hook to remember [found by the landing
-   review]. */
+   impossible without a level-end hook to remember. */
 int tagpu_terrown_fog_eye(int* x, int* y)
 {
     if (!s_fogEyeOk || !tagpu_terrown_fog_site_live() ||
@@ -228,17 +227,16 @@ static void __cdecl terr_fogtick(void* ctxv)
     /* we ran in this draw, rebuild or not: that is what the publisher tests */
     s_fogDrawSeq = tagpu_packet_pub_draw_seq();
     s_fogDrawSeen = 1;
-    /* THE ENGINE'S OWN LAZY TEST, and nothing OR-ed into it any more. The
+    /* THE ENGINE'S OWN LAZY TEST, with nothing OR-ed into it. The
        screen fog grid is view-anchored, so an eye that moved must rebuild it,
        and every path that moves the eye says so by clearing LosType bit 3 —
-       the engine's writers, and since the frame packet's landing 2 ours too:
+       the engine's writers, and ours too:
        the cursor anchor, the camera range and the hold all move the eye from
        the GAME THREAD's command apply at the top of this same draw
        (tagpu_zoom_apply), which clears the bit exactly as `0x41CB6B` does,
        on the only thread that may (`0x484904` sets it with an unlocked
        read-modify-write, so a clear from any other thread could be lost).
-       The old request/ack handshake between the render thread and this tick
-       is gone with the render-thread eye writes it existed for. */
+       Nothing on the render thread writes the eye. */
     if (!(*(unsigned char*)los & 8)) {
         ((void (*)(void))(size_t)FOGGRID_BUILD_VA)();
         /* re-read: the builder reallocates nothing, but the engine reloads the
@@ -252,7 +250,7 @@ static void __cdecl terr_fogtick(void* ctxv)
            itself). The packet's publisher turns it into the grid's world origin
            later in this same draw; taking it from the packet's own eye instead
            would be right only while nothing moved the camera between here and
-           the post-flip publish (landing 4b). */
+           the post-flip publish. */
         s_fogEyeX = *(const int*)(ta + OFF_EYEX);
         s_fogEyeY = *(const int*)(ta + OFF_EYEY);
         s_fogEyeGen = tagpu_packet_pub_level_gen();
@@ -300,16 +298,15 @@ void tagpu_terrown_set_skip(int on)
            thread's unit blits come after its own terrain blit), so no draw can
            key-fill under a lowered gate. Lowering it after the skip is the
            benign direction: one frame of a missing shadow rather than one of
-           teal. [The fifth review of 10b found the previous arrangement -- the
-           unit pass publishing `tagpu_terrown_filled()` a frame later -- gave
-           up to two teal frames on every acquisition.] */
+           teal. (The unit pass publishing `tagpu_terrown_filled()` a frame
+           later instead gives up to two teal frames on every acquisition.) */
         if (v) tagpu_owndraw_set_structshadow_terr(1);
         /* the engine's surface still holds a real terrain blit at this instant;
            the composite must not invert until a filled frame has gone through */
         g_filled = 0;
         g_terrown_skip = v;
         if (!v) tagpu_owndraw_set_structshadow_terr(0);
-        /* The fog eye is NOT voided here any more: the fog site follows the
+        /* The fog eye is NOT voided here: the fog site follows the
            game thread's latch, not this request, so a clear from this thread
            could be undone by a tick still running on the old latch in the
            draw in flight. `tagpu_terrown_latch` voids it instead. */
@@ -340,13 +337,12 @@ void tagpu_terrown_latch(int own)
        is already set, no rebuild runs, and the latch would hand the publisher
        the PRE-GAP eye against a live grid. The draw stamp cannot catch that:
        it proves the observer ran, not that the latch is fresh. The fallback is
-       this packet's own eye [found by the review of the review's fixes].
+       this packet's own eye.
        HERE, ON THE GAME THREAD, and on every draw the site is not ours: the
        engine can only rebuild on such a draw, and this runs before its fog
-       site does, so no tick can re-arm the latch in between. It stood in
-       `tagpu_terrown_set_skip`, on the render thread, until the latch made
-       that a race: a tick on the draw in flight re-armed it after the clear
-       [the landing review of e8a05b1]. */
+       site does, so no tick can re-arm the latch in between. On the render
+       thread (`tagpu_terrown_set_skip`) it would race: a tick on the draw in
+       flight could re-arm it after the clear. */
     if (!own) s_fogEyeOk = 0;
 }
 

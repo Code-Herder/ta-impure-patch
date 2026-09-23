@@ -17,9 +17,8 @@
 /* Render thread, per present, GL context current. Polls the trigger on its own
    cadence and draws nothing at all when it is absent. */
 void tagpu_fps_present(const TAGPU_FRAME* f);
-void tagpu_fps_glreset(void);      /* the GL context changed: drop our objects */
 
-/* ---- the Vulkan edition of this pass (Phase G / G19d) ----
+/* ---- the Vulkan edition of this pass ----
    The quads `tagpu_fps_present` just built -- (x, y, u, v) per vertex, `nv`
    vertices, in a frame `fw` x `fh` game pixels -- so that the Vulkan lane draws
    THE SAME GEOMETRY rather than a second implementation of it. The pointer is
@@ -32,8 +31,8 @@ void tagpu_fps_glreset(void);      /* the GL context changed: drop our objects *
 
    `ab` comes back 1 on the ONE frame `tagpu_fps.ab` latched its claim, so the
    Vulkan lane captures THAT frame rather than whichever one its own lever poll
-   happened to land on. It does not mean a file was written: since landing 4d-2
-   there is no GL half. */
+   happened to land on. It does not mean a file was written: there is no GL
+   half. */
 int tagpu_fps_quads(const float** v, int* nv, int* fw, int* fh, int* ab);
 
 /* The most vertices `tagpu_fps_quads` can ever hand over -- MAXCH quads of

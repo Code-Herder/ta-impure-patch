@@ -1,6 +1,6 @@
-/* tagpu_vk_gui.c -- the GL UI layer's 1x mirror, drawn by Vulkan.
-   Phase G / G19f, landing 1. The header states the contract; this file is the
-   machinery. gpu-status.md 2.3e is the pass being ported.
+/* tagpu_vk_gui.c -- the GL UI layer's 1x mirror, drawn by Vulkan (Phase G).
+   The header states the contract; this file is the machinery. gpu-status.md
+   2.3e is the pass being ported.
 
    THE TWIN STORE IS ONE STORE AND THE FRAMES OVERLAP, which is the one
    synchronisation question this pass has that no world pass had. Every world
@@ -20,7 +20,7 @@
    it is a fact about the queue rather than a claim about timing. */
 
 #include "tagpu_vk_pass.h"
-#include "tagpu_vk_surf.h"   /* landing 10: the engine frame's one upload lives there */
+#include "tagpu_vk_surf.h"   /* the engine frame's one upload lives there */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -41,57 +41,43 @@
    the hand-over: the scaffold's rule -- a handed-over count never sizes an
    allocation. */
 #define TW_MAX      32
-/* sprite + copy draws in one frame. The first draft said 4096 because "a
-   steady screen is ~41 ops of which a handful draw" -- which is true of a
-   FLIP and not of a PUBLISH: the publisher batches every flip since its last
-   one (the shell flips ~12 000 times a second at a 5 ms cadence), so one
-   hand-over routinely carries thousands. MEASURED 2026-09-16 at 7414 on a
-   1080p level load. This is the bound on a runaway, not on a busy frame. */
+/* sprite + copy draws in one frame. "A steady screen is ~41 ops of which a
+   handful draw" is true of a FLIP and not of a PUBLISH: the publisher batches
+   every flip since its last one (the shell flips ~12 000 times a second at a
+   5 ms cadence), so one hand-over routinely carries thousands. MEASURED
+   2026-09-16 at 7414 on a 1080p level load. This is the bound on a runaway,
+   not on a busy frame. */
 #define DRAW_MAX    16384
-/* AND THE QUADS, WHICH STOPPED BEING THE DRAWS IN LANDING 2. A string is ONE
-   draw and up to 256 quads, so `DRAW_MAX` alone bounds a runaway at 4.2 million
-   quads -- a 402 MB host-visible `grow()` per slot, which `grow` never shrinks
-   again. Landing 1's worst measured frame was 7414 quads. */
+/* AND THE QUADS, WHICH ARE NOT THE DRAWS. A string is ONE draw and up to 256
+   quads, so `DRAW_MAX` alone bounds a runaway at 4.2 million quads -- a 402 MB
+   host-visible `grow()` per slot, which `grow` never shrinks again. The worst
+   frame measured above was 7414 quads. */
 #define QUAD_MAX    65536
 /* HOW MANY DESCRIPTOR SETS A FRAME IS GIVEN. Three kinds of image a twin draw
    samples: every sprite the ONE UI atlas, every string the ONE glyph atlas, and
-   a copy its SOURCE TWIN -- so the twins alive plus two covers any frame that
-   does not CHURN its store.
-   THIS IS A SIZE AND NOT A BOUND, and saying otherwise here was a finding of
-   its own. `tw_drop` deliberately leaves a claim standing (see it), so what a
-   frame spends is DISTINCT VIEWS CLAIMED, and a present that batches
-   FREE + SEED + COPY claims one per surface GENERATION -- which nothing bounds
-   by TW_MAX. What IS by construction is the consequence: `set_claim` answers 0
-   deterministically, the replay goes to `standdown`, `behind` drops OUR store
-   and asks once, and nothing of the GL lane's is touched. Sized for the case
-   that has to work, degrading predictably past it.
-   (It was TW_MAX + 1 until landing 2, whose string op made the glyph atlas a
-   second non-twin view and left the old size one short.)
+   a copy its SOURCE TWIN. Each claim is a PAIR, so a copy SOURCE can be
+   claimed twice in one frame -- once with its colour view for a coloured
+   destination, once with the dummy for an uncoloured one, and `uSrcHasCol` is
+   `src->rgb && t->rgb`, which is a property of the DESTINATION. The sprite
+   dimension doubles the same way (restored and unrestored sprites in one frame
+   are two pairs of the same atlas). So the worst case for a frame that does
+   not CHURN its store is `2 * TW_MAX` copy pairs + 2 sprite pairs + 1 glyph.
 
-   LANDING 4 DOUBLED THE COPY DIMENSION AND `+ 4` DID NOT COVER IT. The claim
-   became a PAIR, so a copy SOURCE can be claimed twice in one frame -- once
-   with its colour view for a coloured destination, once with the dummy for an
-   uncoloured one, and `uSrcHasCol` is `src->rgb && t->rgb`, which is a property
-   of the DESTINATION. The sprite dimension doubles the same way (restored and
-   unrestored sprites in one frame are two pairs of the same atlas). So the
-   honest worst case is `2 * TW_MAX` copy pairs + 2 sprite pairs + 1 glyph, and
-   that is what this now is. The first version of this landing wrote `+ 4`,
-   which is the answer to the question the OLD key asked.
-   [FOUND 2026-09-16 -- BOTH landing-4 reviewers, independently. Eighth such
-   pair on this lane.]
-   It is still a SIZE and not a bound, for the reason above it: `tw_drop`
-   deliberately leaves a claim standing, so a present that churns its store can
-   exceed any fixed count. What is by construction is the consequence --
-   `set_claim` answers 0 deterministically and the replay stands down. */
+   THIS IS A SIZE AND NOT A BOUND. `tw_drop` deliberately leaves a claim
+   standing (see it), so what a frame spends is DISTINCT VIEWS CLAIMED, and a
+   present that batches FREE + SEED + COPY claims one per surface GENERATION --
+   which nothing bounds by TW_MAX. What IS by construction is the consequence:
+   `set_claim` answers 0 deterministically, the replay goes to `standdown`,
+   `behind` drops OUR store and asks once, and nothing of the GL lane's is
+   touched. Sized for the case that has to work, degrading predictably past
+   it. */
 #define SET_MAX     (2 * TW_MAX + 3)
 /* objects waiting for every slot to turn over once before they are destroyed.
-   THE LANE ALREADY HAD THE ANSWER AND THIS PASS DID NOT USE IT: the seam waits
-   `fence[slot]` and nothing more, so `slots - 1` earlier submissions are still
-   executing -- and the command buffer being recorded right now already names
-   the objects too. Destroying a twin inside `prepare` is a use-after-free on
-   the FIRST eviction, not a rare one. tagpu_vk_terr.c's slot bitmask and
-   tagpu_vk_unit.c's `ret_push` are the same mechanism.
-   [FOUND 2026-09-16 -- BOTH landing reviewers led with it, independently.] */
+   The seam waits `fence[slot]` and nothing more, so `slots - 1` earlier
+   submissions are still executing -- and the command buffer being recorded
+   right now already names the objects too. Destroying a twin inside `prepare`
+   is a use-after-free on the FIRST eviction, not a rare one. tagpu_vk_terr.c's
+   slot bitmask and tagpu_vk_unit.c's `ret_push` are the same mechanism. */
 #define RET_MAX 128
 #define ATLAS_MAXDIM 8192
 #define SURF_MAXDIM  8192
@@ -137,7 +123,7 @@ typedef struct {
     VkFramebuffer   fb;
     VkImageLayout   layout;         /* what it is in RIGHT NOW               */
     int             needClear;      /* created this frame, not yet cleared   */
-    /* ---- CLASSIC++ (landing 4): THE COLOUR TWIN, made by the first op that
+    /* ---- CLASSIC++: THE COLOUR TWIN, made by the first op that
        had colour to put in it, exactly as `twin_colour` makes the GL one.
        It is a SECOND ATTACHMENT of the same draws and not a second pass: one
        MRT draw writes the index and the colour together, so the two can never
@@ -225,17 +211,17 @@ static VkDescriptorSetLayout s_dslTwin, s_dslLay;
 static VkPipelineLayout s_ploTwin, s_ploLay;
 static VkPipeline       s_pipeSpr, s_pipeCpy, s_pipeStr, s_pipeLay;
 static VkPipeline       s_pipeSpr2, s_pipeCpy2, s_pipeStr2;
-/* THE FOCUS TINT (landing 8d). One more pair against the same two passes and
+/* THE FOCUS TINT. One more pair against the same two passes and
    the same layout -- `TINT_FS` samples at bindings 40 and 41 and reads one int
    at 32, which is `CPY_FS`'s shape exactly, so nothing about the descriptor
    set layout or the pipeline layout changes for it. */
 static VkPipeline       s_pipeTint, s_pipeTint2;
-/* THE SHARP LAYER (landing 3). Its three programs share one layout -- G19c gave
-   all three a 16-byte block at binding 32 and CURS/MM three samplers at 40..42
-   -- so one descriptor set layout serves them and `SDSET_*` indexes one
-   pre-written set per KIND rather than one per draw: a frame's up-to-16 quads
-   sample at most three distinct combinations of images, and the per-draw
-   uniform window is reached with a dynamic offset. */
+/* THE SHARP LAYER. Its three programs share one layout -- all three have a
+   16-byte block at binding 32 and CURS/MM three samplers at 40..42 -- so one
+   descriptor set layout serves them and `SDSET_*` indexes one pre-written set
+   per KIND rather than one per draw: a frame's up-to-16 quads sample at most
+   three distinct combinations of images, and the per-draw uniform window is
+   reached with a dynamic offset. */
 static VkRenderPass     s_sharpRp;       /* one RGBA8 attachment, CLEAR       */
 static VkDescriptorSetLayout s_dslSharp;
 static VkPipelineLayout s_ploSharp;
@@ -255,7 +241,7 @@ static VkImageView      s_atView, s_palView, s_dumView, s_glView;
 static int              s_atDim, s_glW, s_glH;
 static unsigned         s_atSerial, s_palSerial, s_glSerial;
 static int              s_atHave, s_palHave, s_dumReady, s_glHave;
-/* THE LIGHTEN TABLE (landing 8d): 256 wide by 32 tall, R8, so `TINT_FS`'s
+/* THE LIGHTEN TABLE: 256 wide by 32 tall, R8, so `TINT_FS`'s
    `texelFetch(uShade, ivec2(index, row))` is the engine's own
    `LUT[row * 256 + index]` with no arithmetic in between. The hand-over's
    bytes are already row-major 32 x 256, so the upload is one `copy_rect` of
@@ -275,9 +261,8 @@ static int              s_lutHave;
    the module, grown and never shrunk -- 640x480 in the shell, 614 KB, and the
    shell is the only place tints occur at all.
 
-   IT IS NOT DOUBLE-BUFFERED AND DOES NOT NEED TO BE, but the reason is not
-   the one this comment gave until the landing review [CORRECTED, landing 8d].
-   It said "one command buffer", and that is false: the image is module-wide,
+   IT IS NOT DOUBLE-BUFFERED AND DOES NOT NEED TO BE, and not because of "one
+   command buffer", which is false: the image is module-wide,
    so every one of `d->slots` in-flight frames records against it and frame
    N+1's copy is a DIFFERENT command buffer from frame N's draw. What actually
    orders them is that `vkCmdPipelineBarrier`'s first scope covers everything
@@ -296,25 +281,8 @@ static VkImageView      s_tintView;
 static int              s_tintW, s_tintH;
 static VkImageLayout    s_tintLay;
 static unsigned         s_tintOps;
-/* THE RESTORED UI ATLAS IS NOT HERE ANY MORE (landing 11-5e-2b). It was an
-   RGBA8 image of the same dim and the same shelf as the indexed one, uploaded
-   from `atlasRgb` -- the texels the GL lane's restorer had painted, read back
-   out of its twin because the five restorer shaders are G19c's uncovered case
-   and the port does not run them. The read-back was `glReadPixels` and nothing
-   else, and `oglu_load_dll` has no caller, so opengl32.dll is never in the
-   process: `atlasRgb` was NULL on every frame this pass ever received. The
-   image, its clear, its staging share and `s_arSerial`/`s_arRows` went with it.
-
-   THE UI THEREFORE HAS NO RESTORED ATLAS AT ALL, and unlike the world lanes it
-   has no frame LIST to paint one from -- `tagpu_gui_surf.c` never arms
-   `tagpu_gaf_atlas_restore_vk`. Giving the UI Classic++ colour again means
-   arming that list here and consuming it, which is new work and not a
-   deletion; the plan records it as such. Until then `TAGPU_GUICOL_ON` cannot
-   be honoured and the ops that carry it stand down -- which changes nothing,
-   because `twin_sprite` and `twin_copy` both return 0 unconditionally, so no
-   op has carried it since 11-4b. */
-/* ---- ...AND IT IS HERE AGAIN, PAINTED RATHER THAN READ BACK. The UI atlas
-   now publishes a frame LIST, exactly as the feature and effects atlases do
+/* ---- THE RESTORED UI ATLAS, PAINTED RATHER THAN READ BACK. The UI atlas
+   publishes a frame LIST, exactly as the feature and effects atlases do
    (tagpu_gui.h `restoreFrames`), and this pass paints `s_arImg` from `s_atImg`
    with `tagpu_vk_restore.c`. Nothing is read back and no GL entry point is
    named: what crosses the hand-over is the work.
@@ -389,11 +357,10 @@ static int              s_behind, s_cantReplay;
    transition REPEATS: a RESET clears `s_behind`, and a condition that is
    structural rather than transient fires again inside the same frame that
    answered it -- so "once on the transition" is once PER FRAME for exactly the
-   conditions that never go away. That is the reseed storm the re-review found,
-   re-entering through a different door, and it changes the ORACLE. After this
-   many fruitless asks the pass stops asking: it keeps its store dropped and
-   composites nothing, which is a capability statement and costs the GL lane
-   nothing. [FOUND 2026-09-16, the landing-2 review.] */
+   conditions that never go away. That is a reseed storm, and it changes the
+   ORACLE. After this many fruitless asks the pass stops asking: it keeps its
+   store dropped and composites nothing, which is a capability statement and
+   costs the GL lane nothing. */
 #define BEHIND_ASKS_MAX 8
 /* ...and the cap counts FRUITLESS asks, not asks. A map change is a legitimate
    reason to fall behind once, and a long session can hold several; muting the
@@ -570,14 +537,14 @@ static void lay_to(VkCommandBuffer cb, VkImage img, VkImageLayout* cur, VkImageL
         sa = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT; break;
     case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
         ss = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; sa = VK_ACCESS_SHADER_READ_BIT; break;
-    /* TRANSFER_SRC ARRIVED WITH LANDING 8d's TINT, and it needed a case on BOTH
-       sides rather than the `default`. Leaving from it through the default
-       would have given `TOP_OF_PIPE`, which waits for nothing -- so the write
+    /* TRANSFER_SRC (the focus tint's) needs a case on BOTH sides rather than
+       the `default`. Leaving from it through the default would give
+       `TOP_OF_PIPE`, which waits for nothing -- so the write
        that follows a tint's snapshot copy could be ordered before the copy's
        own READ of the same image (a write-after-read hazard, the one kind an
        execution dependency alone fixes and a missing one silently corrupts).
-       Arriving at it through the default would have named the FRAGMENT stage
-       for what is a transfer. */
+       Arriving at it through the default would name the FRAGMENT stage for
+       what is a transfer. */
     case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
         ss = VK_PIPELINE_STAGE_TRANSFER_BIT; sa = VK_ACCESS_TRANSFER_READ_BIT; break;
     default:
@@ -691,14 +658,12 @@ static int tw_drop(const TAGPU_VKPASS* d, TWIN* t)
        of its attachments first (see RET). */
     if (!ret_push2(d, t->img, t->mem, t->view, t->fb,
                    t->colImg, t->colMem, t->colView, t->fb2)) return 0;
-    /* THE CLAIM IS DELIBERATELY LEFT STANDING. An earlier version cleared
-       `s_setView` here, to stop a recycled view handle matching a stale claim —
-       but now that `tw_drop` only RETIRES, the view stays alive for the whole
-       frame and no handle can be recycled inside it, while clearing the entry
-       frees the set index for `set_claim` to hand out again and REWRITE a set
-       a draw recorded earlier this frame already names. The fix for one hazard
-       was the cause of a worse one. The per-frame memset is what bounds this.
-       [FOUND 2026-09-16, the re-review.] */
+    /* THE CLAIM IS DELIBERATELY LEFT STANDING. `tw_drop` only RETIRES, so the
+       view stays alive for the whole frame and no handle can be recycled
+       inside it -- while clearing `s_setView` here would free the set index
+       for `set_claim` to hand out again and REWRITE a set a draw recorded
+       earlier this frame already names. The per-frame memset is what bounds
+       this. */
     *t = s_tw[--s_ntw];
     memset(&s_tw[s_ntw], 0, sizeof s_tw[s_ntw]);
     return 1;
@@ -725,11 +690,10 @@ static TWIN* tw_make(const TAGPU_VKPASS* d, unsigned surf, int w, int h)
     if (s_ntw >= TW_MAX && !tw_drop(d, &s_tw[0])) return NULL;
     t = &s_tw[s_ntw];
     memset(t, 0, sizeof *t);
-    /* TRANSFER_SRC IS LANDING 8d'S, and it is the only usage this module adds
-       for the whole of the focus tint: a tint copies the box it is about to
-       rewrite out to `s_tintImg` first, because a draw may not sample the
-       attachment it writes. Nothing else in this file reads a twin by
-       transfer. */
+    /* TRANSFER_SRC IS THE FOCUS TINT'S, and the only usage the tint needs: a
+       tint copies the box it is about to rewrite out to `s_tintImg` first,
+       because a draw may not sample the attachment it writes. Nothing else in
+       this file reads a twin by transfer. */
     if (!mk_image(d, w, h, VK_FORMAT_R8G8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                   VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -749,9 +713,7 @@ static TWIN* tw_make(const TAGPU_VKPASS* d, unsigned surf, int w, int h)
        covers must read the same in both. Ours would otherwise load whatever
        device memory it was handed, through a LOAD_OP_LOAD render pass, and
        keep it. Cheap, and it removes the question rather than resting on "the
-       producer always sends the bytes". [FOUND 2026-09-16, the landing
-       review -- the two reviewers disagreed about whether a seed can arrive
-       with no bytes, which is itself the reason not to depend on it.] */
+       producer always sends the bytes". */
     t->needClear = 1;
     s_ntw++;
     return t;
@@ -799,18 +761,16 @@ static int tw_colour(const TAGPU_VKPASS* d, TWIN* t)
     VkFramebufferCreateInfo fi = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
     VkImageView att[2];
     if (t->colImg) return 1;
-    /* TRANSFER_SRC IS HERE BECAUSE `tw_to` MOVES BOTH PLANES [FROM REVIEW,
-       landing 8d]. Nothing transfer-reads the colour image -- the tint
-       snapshots only the index plane -- but `tw_to`'s contract is that the
-       two images of a twin share a layout, so a tint on a twin that HAS
-       colour transitions this one to TRANSFER_SRC_OPTIMAL as well, and a
-       barrier to a layout the image was not created for is invalid
-       (VUID-VkImageMemoryBarrier-newLayout-01208). `tw_make` was given the
-       flag when the tint landed and this function was not, which made it a
-       latent fault rather than a live one: nothing on this lane makes a
-       colour twin today (`twin_sprite`/`twin_copy` pass col == 0), so it
-       would have fired on the day Classic++ colour came back, silently and
-       far from this change. */
+    /* TRANSFER_SRC IS HERE BECAUSE `tw_to` MOVES BOTH PLANES. Nothing
+       transfer-reads the colour image -- the tint snapshots only the index
+       plane -- but `tw_to`'s contract is that the two images of a twin share a
+       layout, so a tint on a twin that HAS colour transitions this one to
+       TRANSFER_SRC_OPTIMAL as well, and a barrier to a layout the image was
+       not created for is invalid (VUID-VkImageMemoryBarrier-newLayout-01208).
+       Nothing on this lane makes a colour twin today
+       (`twin_sprite`/`twin_copy` pass col == 0), so without the flag this
+       would be a latent fault that fires the day Classic++ colour comes back,
+       silently and far from its cause. */
     if (!mk_image(d, t->w, t->h, VK_FORMAT_R8G8B8A8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                   VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -898,13 +858,12 @@ static int build_rp_n(const TAGPU_VKPASS* d, int n, VkRenderPass* out)
                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                           VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    /* TRANSFER_READ ON BOTH SIDES [FROM REVIEW, landing 8d]: the tint copies
-       the attachment OUT (`vkCmdCopyImage` with the twin as source) before it
-       draws into it, so a transfer read both precedes a pass and follows one.
-       The explicit `tw_to` barriers are what actually order those today -- the
-       declared dependency was simply silent about a transfer access that
-       exists, which is the sort of gap that becomes a real one the first time
-       someone removes a barrier because "the render pass declares it". */
+    /* TRANSFER_READ ON BOTH SIDES: the tint copies the attachment OUT
+       (`vkCmdCopyImage` with the twin as source) before it draws into it, so
+       a transfer read both precedes a pass and follows one. The explicit
+       `tw_to` barriers are what actually order those; the declared dependency
+       names the access as well, so it is not silent about a transfer that
+       exists. */
     dep[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT |
                            VK_ACCESS_TRANSFER_READ_BIT |
                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -952,10 +911,9 @@ static int build_layouts(const TAGPU_VKPASS* d)
     li.bindingCount = 4; li.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &li, NULL, &s_dslTwin) != VK_SUCCESS) return 0;
 
-    /* the composite: LAY_FS binding 32, samplers 40..43. FOUR, NOT FIVE: the
-       fifth was `uSurf`, TA's own composed frame, and the clean cut took the
-       branches that read it. The shader does not declare it, so binding it
-       would be a set the pipeline has no use for. */
+    /* the composite: LAY_FS binding 32, samplers 40..43. FOUR: the shader
+       does not declare `uSurf`, TA's own composed frame, so binding it would
+       be a set the pipeline has no use for. */
     memset(b, 0, sizeof b);
     b[0].binding = 32; b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -1279,28 +1237,24 @@ static int build(const TAGPU_VKPASS* d)
     VkPhysicalDeviceProperties pr;
     if (!resolve(d)) return 0;
     if (!d->flipok) return 0;          /* the composite needs it */
-    /* THE DEVICE'S OWN NUMBER, not 256 assumed. The unit pass's note records
-       the reference device answering 64, and a stride quoted from the source
-       rather than the device was how its own first draft got the figure
-       wrong (gpu-status 2.33). */
+    /* THE DEVICE'S OWN NUMBER, not 256 assumed: the reference device answers
+       64 (gpu-status 2.33). */
     vkGetPhysicalDeviceProperties(d->pd, &pr);
     s_ualign = pr.limits.minUniformBufferOffsetAlignment;
     if (!s_ualign) s_ualign = 4;
     /* EVERY TEXTURE THIS MODULE SAMPLES IS NEAREST -- WITH EXACTLY ONE
-       EXCEPTION, and this comment claimed there was none until landing 3.
-       The twin, the atlas, the palette, the engine's frame and the ramp's own
-       texelFetch taps are all nearest. The MINIMAP PICTURE is not: the GL
-       texture is created `MIN_FILTER = GL_LINEAR, MAG_FILTER = GL_NEAREST`
-       and `MM_FS`'s own comment says why -- at the scales the minimap is drawn
-       at the destination box is usually SMALLER than the 252-px picture, so the
-       fragments take the MINIFICATION filter and a downsample wants one. (Not
-       at every k: past k of about 2.4 the box is the bigger of the two and the
-       magnification filter, nearest in both lanes, is what runs -- "the blow-up
-       at k > 2 stays crisp", as the GL comment puts it.) GL blends
-       four texels there; a nearest sampler takes one. A second sampler is the
-       whole fix. [FOUND 2026-09-16 -- BOTH landing-3 reviewers led with it,
-       independently, and the A/B could not see it: MM_FS reaches the picture
-       only where a 3x3 neighbourhood is unfogged.] */
+       EXCEPTION. The twin, the atlas, the palette, the engine's frame and the
+       ramp's own texelFetch taps are all nearest. The MINIMAP PICTURE is not:
+       the GL texture is created `MIN_FILTER = GL_LINEAR, MAG_FILTER =
+       GL_NEAREST` and `MM_FS`'s own comment says why -- at the scales the
+       minimap is drawn at the destination box is usually SMALLER than the
+       252-px picture, so the fragments take the MINIFICATION filter and a
+       downsample wants one. (Not at every k: past k of about 2.4 the box is
+       the bigger of the two and the magnification filter, nearest in both
+       lanes, is what runs -- "the blow-up at k > 2 stays crisp", as the GL
+       comment puts it.) GL blends four texels there; a nearest sampler takes
+       one, so this is a second sampler. The A/B cannot see the difference:
+       MM_FS reaches the picture only where a 3x3 neighbourhood is unfogged. */
     si.magFilter = VK_FILTER_NEAREST; si.minFilter = VK_FILTER_NEAREST;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -1311,11 +1265,8 @@ static int build(const TAGPU_VKPASS* d)
        level-of-detail to [minLod, maxLod] and only THEN asks whether this is a
        magnification (lambda <= 0) or a minification -- so with both 0 the
        answer is always "magnification" and `magFilter` is always the one used.
-       The first version of this fix left `maxLod` at the 0.0 it inherited from
-       the nearest sampler above, which made the whole second sampler a no-op
-       while the notes recorded the divergence as closed. `tagpu_vk_unit.c`
-       already had 0.25f here for exactly this reason, in this same repository.
-       [FOUND 2026-09-16, the landing-3 RE-review.] */
+       Left at the nearest sampler's 0.0, the whole second sampler would be a
+       no-op. `tagpu_vk_unit.c` uses 0.25f here for the same reason. */
     si.maxLod = 0.25f;
     if (vkCreateSampler(d->dev, &si, NULL, &s_sampMin) != VK_SUCCESS) return 0;
     si.maxLod = 0.0f;
@@ -1323,11 +1274,10 @@ static int build(const TAGPU_VKPASS* d)
     if (!build_layouts(d)) return 0;
     /* TWO OF EACH, one per render pass, and the SPIR-V is the same module for
        both: `SPR_FS`, `CPY_FS` and `STR_FS` all declare `layout(location=1) out`
-       already -- landings 1 to 3 ran them against a one-attachment pass, where
-       a write to a location the subpass has no attachment for is discarded,
-       which is exactly what `glDrawBuffers(1)` does on the GL side. So the
-       colour edition is the same shader against a pass that HAS the second
-       attachment, and nothing was translated for this landing. */
+       already -- against a one-attachment pass, a write to a location the
+       subpass has no attachment for is discarded, which is exactly what
+       `glDrawBuffers(1)` does on the GL side. So the colour edition is the same
+       shader against a pass that HAS the second attachment. */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_SPR_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_SPR_FS / 4,
                          s_twRp, 1, &s_pipeSpr)) return 0;
@@ -1350,7 +1300,7 @@ static int build(const TAGPU_VKPASS* d)
                          s_twRp2, 2, &s_pipeStr2)) return 0;
     /* the tint, on the same two passes: it writes both locations exactly as
        the other three do, so the one-attachment edition simply discards the
-       colour write [landing 8d] */
+       colour write */
     if (!build_twin_pipe(d, tagpu_spv_tagpu_gui_surf_TINT_FS,
                          sizeof tagpu_spv_tagpu_gui_surf_TINT_FS / 4,
                          s_twRp, 1, &s_pipeTint)) return 0;
@@ -1416,8 +1366,8 @@ static void copy_rect(VkCommandBuffer cb, VkBuffer src, VkDeviceSize off,
 }
 
 /* the 1x1 stand-ins every unused sampler binding names. A descriptor must be
-   VALID whether or not the shader reads it -- landing 1 never reads the colour
-   twin or the sharp layer, and both still need an image. */
+   VALID whether or not the shader reads it -- a draw that never reads the
+   colour twin or the sharp layer still needs an image for both. */
 static int dummies(const TAGPU_VKPASS* d, VkCommandBuffer cb)
 {
     if (s_dumReady) return 1;
@@ -1472,10 +1422,8 @@ static void set_viewport(VkCommandBuffer cb, int w, int h)
 }
 
 /* (s_setView is declared with the pass's state, above. NOTE THAT `tw_drop`
-   DELIBERATELY DOES NOT CLEAR A CLAIM whose view it is retiring -- an earlier
-   round made it do exactly that and caused a worse hazard than the one it
-   closed; `tw_drop` carries the argument. This comment said the opposite until
-   2026-09-16, which is how a future session restores the regression.)
+   DELIBERATELY DOES NOT CLEAR A CLAIM whose view it is retiring; `tw_drop`
+   carries the argument.)
    A TWIN-DRAW SET, CLAIMED FOR ONE IMAGE FOR THE LENGTH OF ONE FRAME.
    A set may not be rewritten once a recorded draw names it, so each distinct
    image a frame samples needs its own -- and the twin ARRAY cannot be the
@@ -1484,13 +1432,13 @@ static void set_viewport(VkCommandBuffer cb, int w, int h)
    it, else take a free one. SET_MAX is the twins plus TWO -- the UI atlas and
    the glyph atlas -- which covers any frame that does not churn its store; a
    frame that does can run out, and answering 0 here is how it says so. */
-/* THE CLAIM IS ON THE PAIR SINCE LANDING 4, not on binding 40 alone. Binding 41
-   stopped being the dummy when Classic++ arrived: a sprite now samples the
-   restored atlas there and a copy its source's COLOUR twin, so two draws that
-   agree about 40 and differ about 41 are two different sets. Keying on 40 alone
-   would have handed the second draw the first one's set and sampled the wrong
-   colour image -- with the right indices, so the picture would have been
-   right everywhere the colour twin happened to be empty. */
+/* THE CLAIM IS ON THE PAIR, not on binding 40 alone. Binding 41 is not always
+   the dummy: under Classic++ a sprite samples the restored atlas there and a
+   copy its source's COLOUR twin, so two draws that agree about 40 and differ
+   about 41 are two different sets. Keying on 40 alone would hand the second
+   draw the first one's set and sample the wrong colour image -- with the right
+   indices, so the picture would be right everywhere the colour twin happened
+   to be empty. */
 static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v, VkImageView v2,
                      VkDeviceSize uRange, VkDeviceSize fRange, int* out)
 {
@@ -1544,7 +1492,7 @@ static int set_claim(const TAGPU_VKPASS* d, SLOT* s, VkImageView v, VkImageView 
    2 skips every op for the rest of the session waiting for a RESET that will
    never be sent. A lost frame therefore INVALIDATES an outstanding request.
    This is not "the window is small": it is a message provably not delivered,
-   re-sent. [FOUND 2026-09-16, the re-review of the landing-2 fixes.] */
+   re-sent. */
 static int behind_ex(const TAGPU_VKPASS* d, const char* why, int reask)
 {
     /* THE REQUEST IS RAISED ONCE, ON THE TRANSITION, AND THAT IS NOT TIDINESS.
@@ -1554,9 +1502,7 @@ static int behind_ex(const TAGPU_VKPASS* d, const char* why, int reask)
        that holds every frame, reseeds the GL lane's own twin store at the frame
        rate: `tagpu_gui_hook.c` calls that a reseed storm and measured 2 749
        resets in one walk the last time something caused one. **The GL lane is
-       the oracle and this port may not change it** — which the first version of
-       this function did, and which `gui.on=nostring` hid from the A/B.
-       [FOUND 2026-09-16, the re-review of the review's fixes.] */
+       the oracle and this port may not change it.** */
     if (!s_behind || reask) {
         s_behind = 1;
         s_goodRun = 0;
@@ -1595,9 +1541,9 @@ static int behind(const TAGPU_VKPASS* d, const char* why)
 
    A FAILURE HERE IS NEVER FATAL TO THE UI. Every path that gives up clears
    `s_arHave`, the producer then stops setting `TAGPU_GUICOL_ON`, and the layer
-   goes back to the indexed art it drew before this landing -- which is a
-   picture, not a stand-down. That is the whole reason colour is asked for
-   through a back-channel rather than derived on each side. */
+   goes back to the indexed art -- which is a picture, not a stand-down. That
+   is the whole reason colour is asked for through a back-channel rather than
+   derived on each side. */
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
 {
     int repaint, n;
@@ -1749,12 +1695,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     VkDeviceSize glOff = 0;
     int shOn = 0, mmPicUp = 0, mmEngUp = 0, needMM = 0, needCurs = 0;
     /* THE VALIDATED COUNT, AND NOTHING BELOW SIZES ANYTHING FROM `h.nsdraw`.
-       The file's own rule at the top -- "a handed-over count never sizes an
-       allocation" -- was the one being broken: the range check only cleared
-       `compose`, while the vertex and uniform `grow`s still added the raw
-       value, so a negative one cast to VkDeviceSize asks for a buffer the size
-       of the address space and refuses the pass for the session.
-       [FOUND 2026-09-16, the landing-3 review.] */
+       The file's own rule at the top: "a handed-over count never sizes an
+       allocation". A raw negative one, cast to VkDeviceSize by the vertex and
+       uniform `grow`s, asks for a buffer the size of the address space and
+       refuses the pass for the session. */
     int nsd = 0;
     VkDeviceSize mmPicOff = 0, mmEngOff = 0, sStride = 0;
     VkDeviceSize stNeed = 0, stOff = 0, uStride, fStride;
@@ -1763,9 +1707,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     TWIN* cur = NULL;
     int rpOpen = 0;
     int drawn = 0;
-    /* WHY THE REPLAY STOOD DOWN. There are four ways to `standdown` now and
-       they were all reported as the first one, which is how a log stops being
-       evidence. */
+    /* WHY THE REPLAY STOOD DOWN. There are four ways to `standdown`, and a log
+       that reports them all as the first one stops being evidence. */
     const char* sdWhy = "the presented surface has no twin here";
     int compose = 1;               /* the OPS always run; this gates the quad */
     TWIN* pres;
@@ -1811,24 +1754,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_state = ST_READY;
     }
 
-    /* ---- WHAT THIS LANDING DOES NOT CARRY, AND WHY IT DOES NOT RETURN HERE.
+    /* ---- WHAT THIS PASS DOES NOT CARRY, AND WHY IT DOES NOT RETURN HERE.
        These three gate the COMPOSITE and nothing else. The op stream still has
        to be applied, because our twin store must equal the GL lane's or it is
        worth nothing: the GL lane applied these ops whatever it drew, and a
        frame we skip leaves our twins behind ITS twins for the rest of the
-       session, silently. So `compose` is cleared and the replay runs anyway.
-       [FOUND 2026-09-16, the first in-game run: the draw-count bound below
-       returned early and took the frame's ops with it.] ---- */
-    /* A STRING OP IS APPLIED BY THE GL LANE AND CANNOT BE REPLAYED HERE -- the
-       hand-over does not carry it, by design, because this landing has no
-       glyph path. So it is not a `compose = 0`: those glyphs are in the GL
-       twin and will never be in ours, and every later frame would composite a
-       twin missing them. It is the behind state.
-       [FOUND 2026-09-16, the landing review; §2.34's "the twins are kept
-       level" was written of the ops the mirror CARRIES and was false of this
-       one, which it does not.] */
-    /* `otherOps` is 0 for every op kind that exists today -- the string was the
-       last one it counted, and landing 2 carries it. The machinery stays,
+       session, silently. So `compose` is cleared and the replay runs anyway:
+       an early return here would take the frame's ops with it. ---- */
+    /* `otherOps` is 0 for every op kind that exists today. The machinery stays,
        because the NEXT op kind added to the queue will land here rather than
        being drawn wrong, and it is a capability gap rather than a sync one:
        a fresh start would not help, so it says so once, composites nothing,
@@ -1848,12 +1781,12 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (!behind(d, "ops this landing cannot replay have stopped")) goto refuse;
         return 0;
     }
-    /* CLASSIC++ IS CARRIED SINCE LANDING 4, so `colourTwins` is no longer a
-       stand-down: it IS `uColOn`, exactly as `draw_layer` set it, and it is
-       read where the composite's block is filled. The one thing still refused
-       here is a frame whose colour twins the GL lane can sample and whose
-       restored atlas never reached us -- the replay would then write alpha 0
-       where the GL lane wrote restored colour, silently and cumulatively. */
+    /* CLASSIC++ IS CARRIED, so `colourTwins` is not a stand-down: it IS
+       `uColOn`, exactly as `draw_layer` set it, and it is read where the
+       composite's block is filled. The one thing still refused here is a frame
+       whose colour twins the GL lane can sample and whose restored atlas never
+       reached us -- the replay would then write alpha 0 where the GL lane
+       wrote restored colour, silently and cumulatively. */
     if (h.colourTwins && !s_arHave) {
         if (!s_saidColour) { s_saidColour = 1;
             plog(d, "gui: the other lane is compositing Classic++ colour and "
@@ -1876,12 +1809,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         s_colRearm = h.colRearm;
         s_colRearmSeen = 1;
     }
-    /* ---- THE SHARP LAYER (landing 3). `h.sharpOn` is COVERAGE, and landing 1
-       could only stand down on it. Now the quads that produced that coverage
-       cross with the record and are drawn here.
+    /* ---- THE SHARP LAYER. `h.sharpOn` is COVERAGE, and the quads that
+       produced that coverage cross with the record and are drawn here.
 
        AN OVERFLOWING LIST IS A `compose = 0` AND NOT THE BEHIND STATE, which is
-       the distinction the twins made the hard way: a sharp-layer quad mutates
+       the distinction the twins draw: a sharp-layer quad mutates
        nothing that outlives its frame -- the layer is cleared at every present
        -- so a frame we cannot draw is ONE frame, never a store out of step.
        Nothing is asked of the producer for it. */
@@ -1915,13 +1847,13 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                        h.mmPicW > ATLAS_MAXDIM || h.mmPicH > ATLAS_MAXDIM ||
                        !h.mmEng || h.mmEngW < 1 || h.mmEngH < 1 ||
                        h.mmEngW > ATLAS_MAXDIM || h.mmEngH > ATLAS_MAXDIM)) {
-            /* `needMM` IS CLEARED, and that is the point. Leaving it set fed
-               the two cases this guard names straight into the staging path
-               below, which reads `mmEngW * mmEngH * 3` bytes out of the very
+            /* `needMM` IS CLEARED, and that is the point. Left set, it would
+               feed the two cases this guard names straight into the staging
+               path below, which reads `mmEngW * mmEngH * 3` bytes out of the very
                pointer the guard refused -- a NULL read of 15 876 texels, or a
                `grow` sized from a rejected dimension that fails and refuses the
                pass for the session. A refusal that still consumes its input is
-               not a refusal. [FOUND 2026-09-16, the landing-3 review.] */
+               not a refusal. */
             shOn = 0; compose = 0; needMM = 0; shRefused = 1;
             if (!s_saidSharp) { s_saidSharp = 1;
                 plog(d, "gui: the sharp layer wants the minimap and this frame's "
@@ -1929,48 +1861,28 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                      h.mmPic ? "outside what this pass carries" : "absent"); }
         }
         /* the GL lane HAS coverage and we produced no quad for it: that is a
-           client this landing does not carry, and it composites nothing rather
+           client this pass does not carry, and it composites nothing rather
            than a layer missing a piece. */
         if (h.sharpOn && !shOn) compose = 0;
-        /* THE LATCH IS CLEARED ONLY BY A GOOD FRAME. Clearing it at the top of
-           this branch -- which is where it was -- made `if (!s_saidSharp)`
-           true on every present, so a condition that holds every frame (the
-           atlas mirror not yet allocated, say) printed a line per present for
-           the session. [FOUND 2026-09-16, the re-review.] */
+        /* THE LATCH IS CLEARED ONLY BY A GOOD FRAME. Cleared at the top of this
+           branch, `if (!s_saidSharp)` would be true on every present, so a
+           condition that holds every frame (the atlas mirror not yet
+           allocated, say) would print a line per present for the session. */
         if (!shRefused) s_saidSharp = 0;
     }
-    /* ---- TA'S OWN FRAME IS NOT ACQUIRED AT ALL, AND THAT IS THE CUT ------
-       `tagpu_vk_surf_engine_view` stood here. It handed this pass the R8 image
-       `tagpu_vk_surf.c` uploads TA's composed 8-bit frame into, and the chain
-       below it decided whether the composite could bind that image as `uSurf`:
-       a refusal when the hand-over carried no frame, an arm for the
-       `tagpu_purevk.on` lever, a borrow refusal when the surface pass had
-       nothing to lend, and a bound test because `LAY_FS` clamped to the TWIN's
-       size and then fetched the PRIMARY.
-
-       Every one of those is a question about a layer that does not exist. The
-       three branches that read `uSurf` -- the stale-mirror guard, the `strict`
-       harness and the cursor-rect discard -- are gone from the shader, the
-       sampler is not declared, and the descriptor set has four images instead
-       of five. So there is nothing to acquire, nothing to bound and nothing to
-       refuse: this pass cannot name TA's image, which is a stronger statement
-       than any value of a lever.
-
-       THE GOLDEN SOURCE IS UNAFFECTED. `tagpu_vk_surf.c` goes on uploading it
-       every changed frame and `tagpu_vk_surf_engine_view` goes on handing it
-       out; it simply has no consumer here. That is deliberate and is the
-       reference a later comparison starts from. [THE CLEAN CUT, kept by the UI
-       rebuild.] */
+    /* ---- TA'S OWN FRAME IS NOT ACQUIRED AT ALL -----------------------------
+       This pass cannot name TA's image: `LAY_FS` declares no `uSurf` and the
+       descriptor set has four images. THE GOLDEN SOURCE IS UNAFFECTED --
+       `tagpu_vk_surf.c` uploads it every changed frame and
+       `tagpu_vk_surf_engine_view` hands it out; it has no consumer here. */
     if (!h.pal || !h.presented || h.surfW < 1 || h.surfH < 1 ||
         h.surfW > SURF_MAXDIM || h.surfH > SURF_MAXDIM) compose = 0;
     /* WHILE BEHIND, THE FRAME STARTS AT ITS RESET, for pass 1 as for pass 2.
-       Pass 2 skips every op before the RESET; pass 1 used to validate them
-       anyway, so one it refused threw away the frame that carried the fresh
-       start -- and `behind` does not ask again while already behind, so the
-       pass waited for a RESET the producer had already sent, composited
-       nothing, and never recovered. [FOUND 2026-09-23: the post-game screen
-       went black for good.] Validating only what pass 2 will apply is the
-       same rule both passes now state.
+       Pass 2 skips every op before the RESET, and pass 1 validates only what
+       pass 2 will apply: a refused op before the RESET would throw away the
+       frame that carries the fresh start -- and `behind` does not ask again
+       while already behind, so the pass would wait for a RESET the producer
+       had already sent, composite nothing, and never recover.
 
        `carries` IS THE LOST-FRAME RULE APPLIED TO A REFUSAL. A refusal in
        this frame is the answer provably not applied, exactly as `h.lost` is,
@@ -2066,7 +1978,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                over one or more rects, so they cost no quad and no descriptor
                set and are not counted against DRAW_MAX/QUAD_MAX. RECT clears
                four rects in ONE call rather than four, which is why it is here
-               and not with the quads. [BAR: landing 8a; RECT: landing 8b.] */
+               and not with the quads. */
             if (bw < 1 || bh < 1) { if (!behind_ex(d, "a malformed op", carries)) goto refuse; return 0; }
             break;
         case TAGPU_GUIOP_TINT:
@@ -2114,7 +2026,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     if (h.pal && (!s_palHave || s_palSerial != h.palSerial)) { palUp = 1; stNeed += 256 * 4; }
     /* THE LIGHTEN TABLE, on the palette's rule: uploaded when its serial moves,
-       which for this table is once a session in practice. [Landing 8d.] */
+       which for this table is once a session in practice. */
     if (h.shade && (!s_lutHave || s_lutSerial != h.shadeSerial)) {
         lutUp = 1; stNeed += TAGPU_GUI_SHADE_BYTES;
     }
@@ -2129,11 +2041,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         }
         mmEngUp = 1; stNeed += (VkDeviceSize)h.mmEngW * h.mmEngH * 4;
     }
-    /* THE CONTENT SERIAL, NOT THE REPACK GENERATION -- see tagpu_gui.h. The
-       first draft keyed this on `glyphGen`, which moves only when the atlas is
-       thrown away, so the image was uploaded once and every glyph rasterised
-       afterwards stayed 0 in it: invisible text where `bg == tr` and a solid
-       box where it is not, permanently, and no counter anywhere said so. */
+    /* THE CONTENT SERIAL, NOT THE REPACK GENERATION -- see tagpu_gui.h.
+       `glyphGen` moves only when the atlas is thrown away, so keyed on it the
+       image would be uploaded once and every glyph rasterised afterwards would
+       stay 0 in it: invisible text where `bg == tr` and a solid box where it
+       is not, permanently, and no counter anywhere would say so. */
     if (h.glyphs && (!s_glHave || s_glSerial != h.glyphSerial ||
                      s_glW != h.glyphW || s_glH != h.glyphH)) {
         glUp = 1; stNeed += (VkDeviceSize)h.glyphW * h.glyphH;
@@ -2443,12 +2355,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             TWIN* src = NULL;
             t = tw_find(o->surf);
             /* THE GL LANE HAD A TWIN AND WE DO NOT, WHICH IS THE DEFINITION OF
-               BEHIND. Skipping was silent divergence of exactly the shape this
-               pass keeps producing: the op is applied over there and never
-               here, for the session. The composite's own `tw_find(h.presented)`
-               catches it only for the PRESENTED surface and only on a frame the
-               composite is drawn on -- and `compose` is 0 on most real frames.
-               [FOUND 2026-09-16, the re-review; pre-existing since landing 1.] */
+               BEHIND. Skipping would be silent divergence: the op applied over
+               there and never here, for the session. The composite's own
+               `tw_find(h.presented)` catches it only for the PRESENTED surface
+               and only on a frame the composite is drawn on -- and `compose` is
+               0 on most real frames. */
             if (!t) { sdWhy = "an op names a surface this store never seeded"; goto standdown; }
             /* CLASSIC++: THE OP SAYS THE GL LANE GAVE THIS TWIN COLOUR, so this
                one gets it too, and the open render pass closes because the
@@ -2481,8 +2392,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                        -- which calls `behind`, which raises it again -- is two
                        reseeds per occurrence, and it walks straight past the
                        cap that stops a recurring condition reseeding the GL
-                       lane's own store at the frame rate. One door.
-                       [FOUND 2026-09-16, the landing-2 review.] */
+                       lane's own store at the frame rate. One door. */
                     if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                     sdWhy = "a copy names a source twin this store never made";
                     goto standdown;
@@ -2513,12 +2423,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                glyphs the GL twin has. */
             if (o->kind == TAGPU_GUIOP_STRING) set_scissor(cb, 0, 0, t->w, t->h, t->w, t->h);
             else                               set_scissor(cb, o->l, o->t, bw, bh, t->w, t->h);
-            /* THE SCISSOR ABOVE DOES NOT BOUND RECT'S EDGES, and the first
-               version of this comment said it did. `vkCmdClearAttachments` is
-               NOT affected by the dynamic scissor state -- only its own
-               `pRects` bounds it. The explicit per-rect clamp below is the
-               real bound and the only one, which is why it must not be removed
-               as redundant. [CORRECTED BY LANDING 8b'S REVIEW.] */
+            /* THE SCISSOR ABOVE DOES NOT BOUND RECT'S EDGES.
+               `vkCmdClearAttachments` is NOT affected by the dynamic scissor
+               state -- only its own `pRects` bounds it. The explicit per-rect
+               clamp below is the real bound and the only one, which is why it
+               must not be removed as redundant. */
 
             if (o->kind == TAGPU_GUIOP_CLEAR || o->kind == TAGPU_GUIOP_BAR ||
                 o->kind == TAGPU_GUIOP_RECT) {
@@ -2528,7 +2437,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                    `glDrawBuffers` named and `twin_colour` left that at two.
                    Clearing only the index here would leave restored colour
                    standing under a box the engine erased. */
-                /* BAR (landing 8a): the same rect, but the INDEX attachment
+                /* BAR: the same rect, but the INDEX attachment
                    takes the engine's palette index with coverage 1 instead of
                    zeros -- `twin_fill` is the GL twin's half of exactly this.
                    The colour attachment still goes to ZERO on both, and for the
@@ -2537,13 +2446,13 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                    the engine just painted over. The index is `o->fg`, one byte,
                    because that is all EITHER writer reads of the engine's own
                    colour argument: `0x4CCDEA` for `DrawBar 0x4BF6F0`, and
-                   `0x4CC7AB` for the axis-aligned `DrawLine 0x4BE950` that
-                   landing 8c routes through this same packet -- and which is
-                   now most of the traffic (exe-reverse-engineering.md). */
+                   `0x4CC7AB` for the axis-aligned `DrawLine 0x4BE950`, which
+                   is routed through this same packet -- and which is most of
+                   the traffic (exe-reverse-engineering.md). */
                 /* RECT IS FOUR RECTS IN ONE CALL; CLEAR and BAR are one.
                    `vkCmdClearAttachments` takes a rect ARRAY, so the four edges
                    cost one command rather than four, and each is clamped to the
-                   twin separately below. [RECT: landing 8b.] */
+                   twin separately below. */
                 VkClearAttachment ca[2];
                 VkClearRect cr[4];
                 int nca = t->colImg ? 2 : 1;
@@ -2792,7 +2701,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                engine has just repainted. */
             tw_col_drop(cb, t, ux, uy, uw, uh);
             break; }
-        /* ---- THE FOCUS TINT (landing 8d) -----------------------------------
+        /* ---- THE FOCUS TINT ------------------------------------------------
            The only op in the stream that READS ITS DESTINATION: `0x4CC8DF`
            does `dst = LUT[row*256 + dst]` per pixel, and a draw may not sample
            the attachment it is writing. So this is a snapshot and then a draw,
@@ -2804,8 +2713,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            this in one pass -- declare the attachment as an input attachment
            too, add a `VkSubpassDependency` with `srcSubpass == dstSubpass` and
            `BY_REGION`, and `subpassLoad()` gives the current value at this
-           fragment. That is the textbook answer and it was rejected for this
-           landing on blast radius, not on merit: it puts the twin attachment
+           fragment. That is the textbook answer and it is not used here, on
+           blast radius, not on merit: it puts the twin attachment
            in `VK_IMAGE_LAYOUT_GENERAL` for EVERY op of EVERY twin, adds a
            binding to the descriptor set layout that every other draw's set
            must then fill with its own destination, and rewrites the
@@ -2924,8 +2833,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                the subpass self-dependency described above -- one render pass
                instead of twenty-four.
 
-               THE COST ITSELF, re-measured on the build that shipped (the
-               review's fixes included, so the figure describes THIS code):
+               THE COST ITSELF, MEASURED on this code:
                uncapped on MAINMENU at 640x480, reference setup, Xvfb +
                llvmpipe, two DLLs run in turn on one instance, three
                alternating runs an arm and eight samples a run --
@@ -2933,10 +2841,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                each, about 8.7 %**. Run means were 177.2 / 179.7 / 179.3
                without and 162.3 / 167.5 / 159.6 with, so the no-tint arm is
                tight and the tint arm is not: treat 8.7 % as a figure with a
-               few points of slop in it, not a constant. The note's earlier
-               "~13 %" came from a different build and a differently pooled
-               run set; gui-renderer.md says so rather than quietly replacing
-               the number. */
+               few points of slop in it, not a constant. */
             rb.renderArea.offset.x = x0; rb.renderArea.offset.y = y0;
             rb.renderArea.extent.width  = (uint32_t)(x1 - x0 + 1);
             rb.renderArea.extent.height = (uint32_t)(y1 - y0 + 1);
@@ -2955,9 +2860,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             vkCmdEndRenderPass(cb);
             drawn++; quads++;
             /* SAID ONCE, on the first edge this lane ever draws. The counter
-               behind it would otherwise be a write-only static, which this
-               module has shipped eighteen of before and which `-Wall` cannot
-               see; one line that proves the path is live is worth more than a
+               behind it would otherwise be a write-only static, which `-Wall`
+               cannot see; one line that proves the path is live is worth more than a
                number nothing prints. */
             if (!s_tintOps++)
                 plog(d, "gui: the focus tint is drawing - surface %08X, box "
@@ -2970,30 +2874,24 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
 
     /* THE REPLAY GOT THROUGH, AND THAT -- NOT THE COMPOSITE -- IS THE EVIDENCE
-       THE LAST FRESH START WORKED. The budget refund sat below the gate, past
-       `s_drawThis = 1`, which is never reached on a frame the composite is
-       stood down on. `compose` is 0 whenever the sharp layer has coverage,
-       which is every frame with a cursor on screen, so in an ordinary session
-       the refund could never happen and every legitimate transition counted
-       against the cap: four level loads and the pass was muted for good. Being
-       LEVEL is a property of the replay. [FOUND 2026-09-16, the re-review.] */
-    /* `!s_behind` IS PART OF THE CONDITION, and leaving it out is the third
-       version of this same mistake. While `s_behind` stands, pass 2 applies
-       NOTHING -- it skips every op waiting for a RESET -- so those frames are
-       exactly the ones on which the store is provably NOT level. Counting them
-       let a pass waiting for a fresh start that never comes climb to the
-       threshold, refund the budget, and go on asking the GL ORACLE for a full
-       reseed for the rest of the session with the mute unable to latch. The
-       comment beside it already said what to check: being level is a property
-       of the replay. [FOUND 2026-09-16, the re-review.] */
+       THE LAST FRESH START WORKED. `compose` is 0 whenever the sharp layer has
+       coverage, which is every frame with a cursor on screen, so a refund
+       below the composite gate (past `s_drawThis = 1`) would never happen in
+       an ordinary session and every legitimate transition would count against
+       the cap: four level loads and the pass muted for good. Being LEVEL is a
+       property of the replay. */
+    /* `!s_behind` IS PART OF THE CONDITION. While `s_behind` stands, pass 2
+       applies NOTHING -- it skips every op waiting for a RESET -- so those
+       frames are exactly the ones on which the store is provably NOT level.
+       Counting them would let a pass waiting for a fresh start that never
+       comes climb to the threshold, refund the budget, and go on asking the GL
+       ORACLE for a full reseed for the rest of the session with the mute
+       unable to latch. */
     if (!s_behind && !s_behindMute && s_behindAsks && ++s_goodRun >= BEHIND_GOOD_RUN) {
         s_behindAsks = 0; s_goodRun = 0;
     }
 
     /* ---- the composite's own set and block ---- */
-    /* `s_engHave` is gone with the second upload: `compose` is cleared above when
-       the surface pass has no image for this slot, which is the same question
-       one step earlier and one copy cheaper. */
     if (s_behind || !compose || !s_palHave) {
         s_drawThis = 0; s_abFrame = 0; return 0;
     }
@@ -3009,13 +2907,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
 
     /* ---- THE SHARP LAYER'S OWN PASS, BELOW THE COMPOSITE GATE, because the
-       only thing that ever samples it is the composite: recording it above
-       drew and threw away a device-resolution layer on every frame the
-       composite was stood down on -- which is EVERY frame of a Classic++
-       session, where `colourTwins` clears `compose`. [FOUND 2026-09-16, the
-       landing-3 review.] It is still inside `prepare`, which is the hook
-       outside the seam's render pass, and still recorded earlier in this
-       same command buffer than the composite that reads it.
+       only thing that ever samples it is the composite: recorded above the
+       gate, it would draw and throw away a device-resolution layer on every
+       frame the composite is stood down on -- which is EVERY frame of a
+       Classic++ session, where `colourTwins` clears `compose`.
 
        Drawn here because `prepare` is the hook
        outside the seam's render pass and a render pass may not nest -- the same
@@ -3040,12 +2935,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             VkImageView v40[3], v41[3], v42[3];
             v40[SDSET_FLAT] = s_dumView;  v41[SDSET_FLAT] = s_dumView;  v42[SDSET_FLAT] = s_dumView;
             VkSampler sm[9];
-            /* THE PALETTE IS GUARDED LIKE EVERY SIBLING HERE. It was the one
-               view written raw, and `s_palView` is null until the first
-               `tagpu_pal_live()` resolves -- which is a frame the composite
-               refuses but the layer is still recorded on, so a null handle
-               reached `vkUpdateDescriptorSets` with no validation layer to say
-               so. [FOUND 2026-09-16, both landing-3 reviewers.] */
+            /* THE PALETTE IS GUARDED LIKE EVERY SIBLING HERE: `s_palView` is
+               null until the first `tagpu_pal_live()` resolves -- which is a
+               frame the composite refuses but the layer is still recorded on,
+               so a raw write would hand `vkUpdateDescriptorSets` a null handle
+               with no validation layer to say so. */
             v40[SDSET_CURS] = s_atHave ? s_atView : s_dumView;          /* uAtlas    */
             v41[SDSET_CURS] = s_dumView;                                /* uAtlasRGB */
             v42[SDSET_CURS] = s_palHave ? s_palView : s_dumView;        /* uPal      */
@@ -3137,17 +3031,15 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         unsigned char* b = s->lbMap;
         int* ip; float* fp;
         memset(b, 0, LAY_SZ);
-        /* `uColOn` AS `draw_layer` SET IT (landing 4): the presented twin has a
+        /* `uColOn` AS `draw_layer` SET IT: the presented twin has a
            colour attachment AND the palette-validity rule says it may be read
            this frame. `&& pres->colImg` is not redundant -- the GL lane's flag
            is about ITS twin, and a frame where ours has none would sample the
            dummy image through a live branch. The two agree by construction and
            this is what says so out loud. */
-        /* THE OFFSETS ARE THE GENERATED HEADER'S, re-derived after the cut
-           removed five uniforms from this block: `uStrict`, `uKey`, `uCursor`,
-           `uCursOurs` and `uGuard` all read or bounded TA's own frame, and the
-           block went from 128 bytes to 80. `inc/spirv/tagpu_gui_surf.spv.h`
-           prints the table this must match -- read it there, never from here. */
+        /* THE OFFSETS ARE THE GENERATED HEADER'S, and the block is 80 bytes.
+           `inc/spirv/tagpu_gui_surf.spv.h` prints the table this must match --
+           read it there, never from here. */
         ip = (int*)(b + 0);   *ip = (h.colourTwins && pres->colImg) ? 1 : 0;
         ip = (int*)(b + 4);   *ip = shOn;                    /* uSharpOn      */
         ip = (int*)(b + 8);   ip[0] = h.surfW; ip[1] = h.surfH;      /* uSize */
@@ -3171,9 +3063,9 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         wr[0].dstSet = s->laySet; wr[0].dstBinding = 32; wr[0].descriptorCount = 1;
         wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         wr[0].pBufferInfo = &bi;
-        /* 42 WAS `uSurf`, THE ENGINE'S OWN FRAME. The three views left are all
-           ours: the twin this pass replayed, its colour attachment and the
-           device-resolution sharp layer. Nothing here can name TA's image. */
+        /* EVERY VIEW IS OURS: the twin this pass replayed, the palette, the
+           twin's colour attachment and the device-resolution sharp layer.
+           Nothing here can name TA's image. */
         ii[0].imageView = pres->view;                /* 40 uTwin              */
         ii[1].imageView = s_palView;                 /* 41 uPal               */
         ii[2].imageView = pres->colImg ? pres->colView : s_dumView;   /* 42 uTwinCol */
@@ -3198,8 +3090,8 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         quadv(qv, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
         /* PAST THE SHARP LAYER'S QUADS TOO. They occupy `nquad .. nquad +
            nsdraw - 1`, so the composite's own quad is at `nquad + nsdraw` --
-           which is what the `+ nsdraw + 1` in the grow above reserves. Writing
-           it at `nquad` put it on top of the layer's first quad. */
+           which is what the `+ nsdraw + 1` in the grow above reserves. At
+           `nquad` it would sit on top of the layer's first quad. */
         memcpy(s->vbMap + (VkDeviceSize)(nquad + nsd) * 24 * sizeof(float),
                qv, sizeof qv);
         s_layQuad = (VkDeviceSize)(nquad + nsd) * 24 * sizeof(float);
@@ -3214,11 +3106,10 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
 standdown:
     if (rpOpen) vkCmdEndRenderPass(cb);
-    /* THE STORE IS BEHIND AND SOMETHING HAS TO ASK. Dropping it and saying
-       nothing was the bug: `tw_find(h.presented)` would answer NULL again on
-       every later frame, land here again, and the pass would never draw for
-       the rest of the session with no line in the log to say why.
-       [FOUND 2026-09-16 -- both landing reviewers, separately.] */
+    /* THE STORE IS BEHIND AND SOMETHING HAS TO ASK. Dropped silently,
+       `tw_find(h.presented)` would answer NULL again on every later frame,
+       land here again, and the pass would never draw for the rest of the
+       session with no line in the log to say why. */
     if (!behind(d, sdWhy)) goto refuse;
     s_drawThis = 0; s_abFrame = 0;
     return 0;
@@ -3264,15 +3155,14 @@ int tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     }
 
     /* THE GL LANE'S OWN VIEWPORT, turned over -- and this pass is one of the
-       THREE that still does. GL's y counts from the BOTTOM of the window and
+       THREE that turn it over. GL's y counts from the BOTTOM of the window and
        Vulkan's from the top, and LAY_VS writes `1 - a.y*2`, which is GL's
        window convention: so the negative height is what puts its row 0 back at
-       attachment row 0 (the file header). It is NOT "the negative height every
-       presented pass on this lane takes" -- landing 5b found that rule false.
-       The world passes are presented too and write the engine's screen-space y,
-       which grows downward, so they take a positive height. `gui`, `fps` and
-       `scaffold` are the ones whose shaders need the flip; tagpu_vk_pass.h's
-       `flipok` has the table. */
+       attachment row 0 (the file header). It is NOT a rule for every presented
+       pass on this lane. The world passes are presented too and write the
+       engine's screen-space y, which grows downward, so they take a positive
+       height. `gui`, `fps` and `scaffold` are the ones whose shaders need the
+       flip; tagpu_vk_pass.h's `flipok` has the table. */
     x = s_layVp[0]; vw = s_layVp[2]; vh = s_layVp[3];
     if (vw <= 0 || vh <= 0) { x = 0; vw = (int)w; vh = (int)h; ytop = 0; }
     else ytop = (int)h - s_layVp[1] - vh;

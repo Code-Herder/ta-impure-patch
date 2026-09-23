@@ -24,11 +24,10 @@ int tagpu_packet_publish(tagpu_packet_fill_fn fill, void* ctx, int force);
 /* The producer's thread, registered once at install (the game thread, which
    DllMain runs on). A publish from any other thread is refused and counted
    as `foreign`; without a registration the first publisher would be latched,
-   and a stray first call would then refuse the real one for the session
-   (landing review). */
+   and a stray first call would then refuse the real one for the session. */
 void tagpu_packet_producer(unsigned long tid);
 
-/* ---- the command record's consumer entry, GAME thread only (landing 2) ---- */
+/* ---- the command record's consumer entry, GAME thread only ---- */
 /* At the top of every in-play draw, from the observer's `before`: take the
    latest command record if the render thread posted one, else keep the one
    held. Returns the record the game thread now holds — NULL before the first
@@ -77,8 +76,7 @@ void tagpu_packet_pub_init(void);
    engine's marker block begins, with the font and text colour it will use.
    Copies the font's header and its 95 printable glyphs into the packet's
    font area whenever the font pointer or its header signature changed, and
-   latches the colour. Replaces tagpu_text_snapshot(): no render-thread code
-   dereferences an engine font any more. */
+   latches the colour. No render-thread code dereferences an engine font. */
 void tagpu_packet_pub_font_snapshot(void);
 /* Game thread, from reclaim_teardown_post after the level generation was
    bumped: publish a header-only packet with in_game = 0 and the new
@@ -121,6 +119,6 @@ int tagpu_packet_pub_level_tracked(void);
    the observer on DrawGameScreen's in-play call site, which the engine installs
    at 0x498342, and 0x497CE0 installs it BEFORE it paints at 0x49842A. So a
    caller gated on this can never run ahead of the engine's own first paint of
-   the level's chrome. [Added for the GUI chrome re-emit.] */
+   the level's chrome. The GUI chrome re-emit (tagpu_gui_hook.c) gates on it. */
 int tagpu_packet_pub_level_open(void);
 #endif

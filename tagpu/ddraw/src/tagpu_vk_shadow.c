@@ -1,8 +1,8 @@
 /* tagpu_vk_shadow.c -- the Classic++ cast-shadow depth map, drawn by Vulkan.
-   Phase G / G19e, the FIFTH world pass. The GL twin is tagpu_shadow.c and is
+   The FIFTH world pass. The GL twin is tagpu_shadow.c and is
    the oracle; the header tagpu_vk_shadow.h has the contract.
 
-   ---- WHAT IS NEW IN THIS PASS, AND WHY IT IS NEW ----
+   ---- WHAT THIS PASS DOES THAT THE OTHERS DO NOT, AND WHY ----
 
    1. IT OWNS A SECOND RENDER TARGET, AND THAT IS NOT A BREACH OF THE SEAM.
       Standing constraint 3 says surface, swapchain, acquire and present live in
@@ -15,8 +15,8 @@
       `prepare` -- legal precisely because `prepare` is the hook the seam calls
       OUTSIDE its own vkCmdBeginRenderPass, and render passes may not nest.
 
-   2. GL'S CLIP-SPACE Z RANGE, AND THIS IS THE PASS THAT NEEDED IT.
-      Every world pass ported so far writes a clip z already in [0, 1], so
+   2. GL'S CLIP-SPACE Z RANGE, AND THIS IS THE PASS THAT NEEDS IT.
+      Every other world pass writes a clip z already in [0, 1], so
       `minDepth 0.5 / maxDepth 1.0` reproduces GL's (z+1)/2 exactly and nothing
       is clipped (tagpu_vk_feat.c item 1, which says this extension would be
       the answer only if a shader were ever found writing a z below 0).
@@ -34,15 +34,13 @@
 
    3. THERE IS NO Y FLIP HERE, AND THAT IS NOT AN OMISSION.
       This target is SAMPLED, not presented, and that alone settles it.
-      [THE RULE THIS ITEM USED TO STATE -- "every other ported pass flips
-      because its target is PRESENTED" -- WAS WRONG, and landing 5b is what
-      found it. Being presented is not the question; the SHADER's y convention
-      is. A pass whose shader writes GL's window convention (`1 - y*2`) flips;
-      one that writes the engine's screen-space y, which grows downward, does
-      not, because clip -1 is already the game frame's top row. Since 5b that
-      second group -- terrain, features, effects, units, markers -- takes a
-      POSITIVE height too, for a different reason than this pass does.
-      tagpu_vk_pass.h's `flipok` carries the whole table.]
+      [For the other passes, being presented is not the question either; the
+      SHADER's y convention is. A pass whose shader writes GL's window
+      convention (`1 - y*2`) flips; one that writes the engine's screen-space
+      y, which grows downward, does not, because clip -1 is already the game
+      frame's top row. That second group -- terrain, features, effects, units,
+      markers -- takes a POSITIVE height too, for a different reason than this
+      pass does. tagpu_vk_pass.h's `flipok` carries the whole table.]
       In GL, clip y = -1 is window row 0, which is texel row 0, which is v = 0.
       In Vulkan with a positive viewport height, clip y = -1 is framebuffer row
       0, which is texel row 0, which is v = 0. The two agree already, and
@@ -350,8 +348,8 @@ static int resolve(const TAGPU_VKPASS* d)
 }
 
 /* ---- the format ---------------------------------------------------------
-   ASKED FOR BY NAME rather than discovered in a wrong picture, which is the
-   rule the feature pass's sampler check set. Two things are wanted of it at
+   ASKED FOR BY NAME rather than discovered in a wrong picture, as the feature
+   pass's sampler check is. Two things are wanted of it at
    once and neither is guaranteed: it must be a depth-stencil attachment AND a
    sampled image, and the consumers' PCF taps it through a LINEAR compare
    sampler, which is a third feature bit again.
@@ -748,12 +746,9 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     kill_target(d, s);
 }
 
-/* THE HAND-OVER, WHICH NOTHING PUBLISHES. See `tagpu_vk_shadow.h`'s block on
-   TAGPU_SHADOWHAND for the measurement: the old producer was `tagpu_shadow_end`
-   in the GL lane's `tagpu_shadow.c`, and it lost its caller before landing 11
-   deleted the file. This returns 0 exactly as that function did on every frame
-   of the last several landings, so the pass's behaviour is unchanged by the
-   deletion -- which is the whole claim D2 has to make.
+/* THE HAND-OVER, WHICH NOTHING PUBLISHES: no producer exists in this build,
+   so this returns 0 on every frame. See `tagpu_vk_shadow.h`'s block on
+   TAGPU_SHADOWHAND.
 
    IT IS A FUNCTION RATHER THAN A `return 0;` AT THE CALL SITE so that the one
    thing a reviver has to change is one body, and so that the refusal keeps its
@@ -825,8 +820,8 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        bodies, the replacement meshes -- and the heightfield itself when its
        mirror is missing.
 
-       SINCE THE UNIT PASS (G19e) THE POSED BODIES ARE COVERED, and this is
-       where that is accounted for. `tagpu_vk_unit_casters` is the subset of
+       THE POSED BODIES ARE COVERED BY THE UNIT PASS, and this is where that
+       is accounted for. `tagpu_vk_unit_casters` is the subset of
        that count this frame's unit pass is ready to draw into the map below,
        and it can only be SMALLER than the posed bodies' share of it -- the
        header says why, and an over-count is the safe direction: it refuses a
@@ -834,29 +829,21 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
        different map from the oracle's.
 
        WHAT IS LEFT OVER IS THE REPLACEMENT MESHES, AND THE HEIGHTFIELD WHOSE
-       MIRROR WENT MISSING. The native 3DO stream used to be named here as a
-       third; it is not one. `tagpu_shadow_unit`'s only call site is behind
+       MIRROR WENT MISSING. The native 3DO stream is not a third.
+       `tagpu_shadow_unit`'s only call site is behind
        `firstv[i+1] == firstv[i]`, and `nv` is 0 for the whole of that loop
-       since G16 step 8 made the posed program the path -- so no ordinary unit
-       has native vertices and that counter never moves. Gate 3 measured the
-       census it could not otherwise account for and found this.
-
-       AND UNTIL GATE 3 THE UNIT PASS ANSWERED 0 IN THE ONE CONFIGURATION THAT
-       SHIPS: it stood down on the Classic++ restored atlas several checks
-       before it reached its casters, so `ours` was 0 whatever the casters were
-       and this refusal fired on every frame with a unit on it. That is what
-       §2.35 measured as "the lane draws the UI and nothing else", read from the
-       other end.
+       because the posed program is the path -- so no ordinary unit has native
+       vertices and that counter never moves.
 
        The unit pass's `upload` has already run for this slot -- the seam calls
        it before this function and says so -- which is what makes the number
        available before the render pass begins. */
-    /* SINCE GATE 3b THE REPLACEMENT MESHES ARE THE SECOND TERM. Both passes
+    /* THE REPLACEMENT MESHES ARE THE SECOND TERM. Both passes
        count the same way -- the subset of the GL map's casters they are ready
        to draw this frame -- so the sum is comparable to `otherCasters` by the
        same construction, and both can only UNDER-count, which refuses a frame
        the lane could have drawn rather than drawing a map the oracle does not
-       have. What is left over now is the heightfield whose mirror went
+       have. What is left over is the heightfield whose mirror went
        missing, which is an out-of-memory path and not a caster kind. */
     ours = tagpu_vk_unit_casters() + tagpu_vk_hires_casters();
     if (h.otherCasters - ours > 0) {
@@ -926,13 +913,12 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
     }
 
     /* NOTHING IS KEPT ONCE THERE IS NOTHING TO DRAW -- the file header's own
-       rule, and the empty-map path was the one place it was not applied. The
-       caster mesh is the largest thing this pass owns (10 MB on Town & Country,
-       19 on Two Continents) and `terrainshadow` is a LIVE knob, so a map that
-       drew hills and then stopped held the whole pair for the rest of the
-       session. Through the retire rather than a destroy, because other slots'
-       submitted command buffers may still name the buffers.
-       [FROM THE G19e SHADOW REVIEW, 2026-09-15.] */
+       rule, applied to the empty-map path too. The caster mesh is the largest
+       thing this pass owns (10 MB on Town & Country, 19 on Two Continents) and
+       `terrainshadow` is a LIVE knob, so a map that drew hills and then stopped
+       would otherwise hold the whole pair for the rest of the session. Through
+       the retire rather than a destroy, because other slots' submitted command
+       buffers may still name the buffers. */
     if (!casters) mesh_retire(d);
     vbytes = casters ? (VkDeviceSize)h.hnv * 3u * sizeof(float) : 0;
     ibytes = casters ? (VkDeviceSize)h.hni * sizeof(unsigned) : 0;
@@ -1029,19 +1015,12 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
     }
 
     /* THE POSED CASTERS, drawn by the unit pass into OUR render pass with our
-       viewport and our scissor (G19e). It owns the geometry and the pose; this
-       pass owns the target, the matrix and the clear -- which is the split the
-       GL lane HAD, where `tagpu_shadow_begin` bound the FBO and
-       `tagpu_posedraw_depth_unit` drew into it. That function was deleted by
-       landing 11-5d, so this is the shape's origin and not a live oracle to
-       compare against.
+       viewport and our scissor. It owns the geometry and the pose; this pass
+       owns the target, the matrix and the clear.
 
-       AND `ours` IS CURRENTLY ALWAYS 0 FROM THE UNIT PASS, which makes the
-       test below `0 - 0` rather than a comparison: `TAGPU_PDHAND.depthOn` lost
-       its only producer with that same function, so no posed unit is ever a
-       caster here. The chain is in tagpu_posedraw.h's tombstone. It has been
-       true since landing 11-3 and this map has been published as complete
-       throughout. [Found by 11-5d's landing review, 2026-09-19.]
+       AND `ours` IS ALWAYS 0 FROM THE UNIT PASS, which makes the test below
+       `0 - 0` rather than a comparison: `TAGPU_PDHAND.depthOn` has no
+       producer, so no posed unit is ever a caster here (tagpu_posedraw.h).
 
        A SHORT COUNT IS A REFUSAL, not a partial map. `ours` was taken before
        the render pass began and is what the census above was reconciled
@@ -1085,15 +1064,12 @@ int tagpu_vk_shadow_ready(unsigned frame)
 }
 
 /* THE FRAME IS PART OF THE QUESTION, not an argument about call order.
-   `s_liveHave` is one flag for the whole pass rather than one per slot, and the
-   only thing that made this safe was that the seam calls this pass's `prepare`
-   first and the one consumer asks with the current slot. That is an enumeration
-   of today's call sites, not a bound -- and the UNIT pass is about to become a
-   second consumer. Asking for the frame makes a stale view impossible to
-   obtain: a caller out of step gets VK_NULL_HANDLE, binds its own dummy, and
-   `tagpu_vk_shadow_ready` refuses it the draw anyway.
-   [FROM THE G19e SHADOW REVIEW, 2026-09-15 -- flagged as a latent trap for the
-   next pass rather than a bug today, and closed by construction.] */
+   `s_liveHave` is one flag for the whole pass rather than one per slot, and
+   "the seam calls this pass's `prepare` first and every consumer asks with the
+   current slot" is an enumeration of call sites, not a bound. Asking for the
+   frame makes a stale view impossible to obtain: a caller out of step gets
+   VK_NULL_HANDLE, binds its own dummy, and `tagpu_vk_shadow_ready` refuses it
+   the draw anyway. */
 VkImageView tagpu_vk_shadow_view(unsigned frame, uint32_t slot)
 {
     if (!s_liveHave || s_liveFrame != frame || slot >= TAGPU_VK_SLOTS)

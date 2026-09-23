@@ -1,6 +1,6 @@
 #ifndef TAGPU_POSEBAKE_H
 #define TAGPU_POSEBAKE_H
-/* tagpu_posebake.h — the per-type geometry bake and its caches (G16 step 4).
+/* tagpu_posebake.h — the per-type geometry bake and its caches.
 
    research/notes/gpu-posing.md is the design; this is the half of it that
    turns a `Model3DONode` TEMPLATE into two GL vertex buffers that a posed
@@ -22,17 +22,15 @@
    THE TWO BUFFERS ALWAYS HOLD THE SAME NUMBER OF VERTICES, which is what makes
    them independently rebuildable: a face the engine's rasteriser paints nothing
    for is baked anyway and collapsed by its skip flag, rather than changing the
-   vertex count the way `emit_node`'s `continue` does today.
+   vertex count.
 
    THREE RANGES IN ONE GEOMETRY BUFFER (decision 10), because all three walk the
    same tree and differ only in which faces and which corners they take:
 
        [ body triangles ][ slant triangles ][ wire lines ]
 
-   Nothing DRAWS from these yet — the posed program is step 5. What step 4
-   delivers is the bake, the caches, their four invalidation triggers and a
-   lever. Its `check` token is gone with G16 step 8: it compared the bake
-   against the CPU emitters, and they no longer exist. `log` still works. */
+   What this module holds is the bake, the caches, their four invalidation
+   triggers and a lever (`log`). */
 
 #include "tagpu_model3do.h"      /* TAGPU_PBMAXPIECE, and the field offsets */
 
@@ -59,14 +57,14 @@ enum { TAGPU_PB_BODY = 0, TAGPU_PB_SLANT, TAGPU_PB_WIRE, TAGPU_PB_NRANGE };
 
 typedef struct TAGPU_PBGEOM {
     const char*  root;                        /* Model3DONode* of primitive 0 */
-    unsigned     levelGen, glGen;
+    unsigned     levelGen;
     int          nparts;
     int          ghost;                       /* 1 = baked from the ghost's
         synthesized piece run. Its walk order is the template tree's, which is
         NOT the prim order a live unit's packet run carries, and the VBO's
         per-vertex piece indices plus `parent[]` are laid out in that order —
         so a ghost entry and a unit entry of the same model are DIFFERENT
-        geometry and must never share a cache slot (2026-09-12 leak). */
+        geometry and must never share a cache slot. */
     /* the topology, cached per type: `pose_accum_body` rebuilds parent links by
        scanning the node list for every sibling of every node, which is fine on
        today's rare trip frames and not fine at 200 units a frame */
@@ -76,8 +74,7 @@ typedef struct TAGPU_PBGEOM {
     int          first[TAGPU_PB_NRANGE];      /* vertex offsets of the ranges  */
     int          count[TAGPU_PB_NRANGE];
     int          nvert;
-    unsigned int vbo;
-    /* ONE MONOTONIC NUMBER PER BAKE, never reused (Phase G / G19e, the unit
+    /* ONE MONOTONIC NUMBER PER BAKE, never reused (Phase G, the unit
        pass). A cache slot IS reused -- `geom_slot` evicts the least recently
        asked-for entry and re-bakes another type into it -- so a second backend
        that keyed its own vertex buffer on the slot, or on this pointer, would
@@ -85,15 +82,14 @@ typedef struct TAGPU_PBGEOM {
        geometry" a property of the bake rather than of where it landed. */
     unsigned     serial;
     /* the BODY range's rest AABB per piece, and whether the piece contributed
-       any body vertex at all. G16 step 5 replaces `s_emitTop` — which emit_node
-       took from the posed vertices it was writing — with a CPU walk of these 8
-       corners through the piece's pose matrix (gpu-posing.md §4, "What stops
-       being true"). Two stated deviations from what emit_node produced: an
+       any body vertex at all. The shadow top is a CPU walk of these 8 corners
+       through the piece's pose matrix (gpu-posing.md §4, "What stops being
+       true"). Two stated deviations from the posed vertices themselves: an
        AABB carried through a rotation BOUNDS the posed points rather than
        hitting them, so the top is an over-estimate; and it covers every body
-       face, including the ones whose material the stream collapses, which
-       emit_node skipped before it ever looked at their y. It feeds the shadow
-       height of WRECKS only — a unit with a record prefers `model_aabb`. */
+       face, including the ones whose material the stream collapses. It feeds
+       the shadow height of WRECKS only — a unit with a record prefers
+       `model_aabb`. */
     float        pmn[TAGPU_PBMAXPIECE][3];
     float        pmx[TAGPU_PBMAXPIECE][3];
     unsigned char pbody[TAGPU_PBMAXPIECE];   /* 0 = no body vertex baked      */
@@ -120,14 +116,7 @@ typedef struct TAGPU_PBMAT {
                                  material can never be matched against a slot
                                  that has since been evicted and re-baked */
     int          owner;
-    unsigned     atlasGen, levelGen, glGen;
-    unsigned int vbo;
-    /* the posed pass's VAO, binding this stream and its geometry together
-       (locations 0-3 from the geometry, 4-6 from here). It lives on the
-       MATERIAL entry because that is the shorter life of the two: a geometry
-       drop cascades into every stream that names it, so the VAO can never
-       outlive either buffer it points at. */
-    unsigned int vao;
+    unsigned     atlasGen, levelGen;
     unsigned     serial;         /* as the geometry entry's, and for the same
                                     reason: `mat_slot` recycles slots too      */
     int          nvert, nskip;   /* nskip: vertices the skip flag collapses    */
@@ -140,7 +129,7 @@ typedef struct TAGPU_PBMAT {
    deleting its GL buffers (which is why this is render-thread only). */
 /* `level_gen` is THE PACKET'S — it advances at every level end whoever
    published it, where tagpu_reclaim's own counter moves only when reclaim is
-   armed (landing review, 2026-09-12). */
+   armed. */
 void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen);
 
 /* Bake (or find) the geometry and the material stream for one unit's type.
@@ -161,7 +150,7 @@ int  tagpu_posebake_unit(const struct TAGPU_PK_PIECE* pc, int nparts, int owner,
 
 int  tagpu_posebake_armed(void);         /* tagpu_posebake.on                 */
 
-/* ---- THE VULKAN LANE'S MIRRORS (Phase G / G19e, the UNIT pass) -----------
+/* ---- THE VULKAN LANE'S MIRRORS (Phase G, the UNIT pass) -----------------
 
    A second backend cannot read a GL buffer, so the two streams `glBufferData`
    is handed are KEPT while the Vulkan lane is armed -- the same latch and the
@@ -190,7 +179,6 @@ const float* tagpu_posebake_geom_mirror(const TAGPU_PBGEOM* g, unsigned serial,
 const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
                                        int* nvert);
 
-void tagpu_posebake_glreset(void);       /* the GL context went              */
 /* one `bake=` field for the native: line; writes nothing when disarmed */
 int  tagpu_posebake_stats(char* out, int n);
 #endif

@@ -662,11 +662,11 @@ void util_update_bnet_pos(int new_x, int new_y)
        correctly.
 
    So the monitor rect is the only trustworthy source of "how big is the screen
-   we are on", and every place that used to ask the display "mode" for it was
-   getting the whole desktop: the borderless-fullscreen render target (a 4:3
-   viewport centred in 6200 rather than in 3840, i.e. the picture pushed off to
-   one side) and the cap on the resolution picker (6200x2160 offered as the top
-   entry on a 3840-wide monitor).
+   we are on", and anything that asks the display "mode" for it gets the whole
+   desktop: the borderless-fullscreen render target (a 4:3 viewport centred in
+   6200 rather than in 3840, i.e. the picture pushed off to one side) and the
+   cap on the resolution picker (6200x2160 offered as the top entry on a
+   3840-wide monitor).
 
    WHICH monitor: the one the render-options screen has selected if the player
    has been on that screen, else the one the window is on. See
@@ -909,7 +909,6 @@ void util_toggle_fullscreen()
 
             g_config.window_state = g_config.windowed = TRUE;
 
-            /* the Direct3D9 reset branch stood here [landing 11-1] */
             {
                 if (g_ddraw.render.thread)
                 {

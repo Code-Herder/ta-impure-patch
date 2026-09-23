@@ -1,5 +1,5 @@
-/* tagpu_gui_snap.c — on-demand snapshot of the live GUI gadget tree (was tagpu_ui.c;
-   the read half of `tacli ui`, now part of the tagpu_gui_* family, gui-renderer.md 4).
+/* tagpu_gui_snap.c — on-demand snapshot of the live GUI gadget tree (the read
+   half of `tacli ui`, one of the tagpu_gui_* family, gui-renderer.md 4).
    Contract: inc/tagpu_ui.h. Offsets and evidence: research/notes/gui-gadgets.md. */
 
 #include <windows.h>
@@ -356,12 +356,11 @@ static void write_items(FILE* out, const char* g)
 
 /* Per-item enable flags.
 
-   GUIGADGET_SetListText takes a fifth argument the first reading missed — a u8
-   array, one byte per item, stored at +0xD6 with attribs bit 0x800 set
-   (0x4A33A8). The listbox draw path tests bit 0 of each byte to grey a row out
-   (0x4A21F4). Only RESTRICT2.GUI uses it, and there it is what says which units
-   are available, so a row's flag is the difference between a selection landing
-   and quietly doing nothing. */
+   GUIGADGET_SetListText takes a fifth argument — a u8 array, one byte per item,
+   stored at +0xD6 with attribs bit 0x800 set (0x4A33A8). The listbox draw path
+   tests bit 0 of each byte to grey a row out (0x4A21F4). Only RESTRICT2.GUI
+   uses it, and there it is what says which units are available, so a row's flag
+   is the difference between a selection landing and quietly doing nothing. */
 static void write_itemflags(FILE* out, const char* g)
 {
     const unsigned char* flags = *(const unsigned char**)(g + L_FLAGS);
@@ -448,7 +447,7 @@ static void write_snapshot(const TAGPU_FRAME* f)
             f ? f->game_width : 0,
             f ? f->game_height : 0);
 
-    /* The letterboxed viewport in WINDOW pixels (G17b). `surface` above is the
+    /* The letterboxed viewport in WINDOW pixels. `surface` above is the
        engine's logical screen and every gadget rect below is in it; this is
        where that screen is actually drawn, so the two together are what a
        harness needs to aim a DEVICE-space click at a gadget — which is the

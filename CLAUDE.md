@@ -173,6 +173,54 @@ gate and runs whichever is missing** — commit, merge main in, build, the docum
 (Step 4), the dedicated review (Step 5), then the fast-forward. These lines exist so the rules
 still apply when landing by hand.
 
+## Comments say why, in the present tense — the story goes to git
+
+The rules are Robert C. Martin's (*Clean Code*, ch. 4), adapted to a stack that patches a 1997
+binary. **First try to say it in code**: a well-named function or variable beats a comment, and
+a comment that restates the next line is noise that will one day disagree with it. What the code
+cannot carry, the comment must — and here that is a lot, because no name in our code can say what
+`0x42DB90` does.
+
+**A comment earns its place when it is one of these:**
+
+- **Intent** — why this and not the obvious alternative.
+- **The invariant a fix rests on** — the bound, lifetime or ordering of *Fixes must be safe by
+  construction*, next to the code it protects, so the next edit cannot quietly break it.
+- **Engine facts** — an address, a field offset, a calling convention, a count the engine loops
+  to, and **how the fact was established** (`DISASSEMBLED`, `MEASURED` with the numbers and the
+  conditions, `[INFERRED]`). A measurement may keep its date: it tells the reader how old the
+  evidence is.
+- **Warnings** — which thread owns this, what must run first, what deleting it would also delete.
+- **Amplification** — the line that looks removable and is not, and why.
+- **Clarification** — a Win32, Vulkan or engine argument we cannot rename.
+- **A pointer** — `see tagpu_terr.h`, `exe-reverse-engineering.md §…` — instead of a second copy
+  of an argument that lives somewhere else and will drift from it.
+
+**Delete on sight:**
+
+- **Journal comments — the story of how the code got here.** Which landing, gate or review added,
+  found or corrected it (`[FOUND by the landing review, 2026-09-16]`, `G19e:`, `(landing 4a)`,
+  `[CORRECTED by …]`), and what it used to be (`WAS 512`, `since landing 11-4c`, `until …`).
+  That is what `git log`, the `landing-review:` notes and `research/notes/` hold. **Keep the fact,
+  drop the story**: "640, WAS 512, AND THE REASON IS ONE PIXEL" becomes "640: the reason is one
+  pixel", followed by the reason.
+- **Obituaries** — comments about code that has been deleted. If the absence is itself a trap,
+  state it as a present fact ("nothing else frees this"), not as history.
+- **Attributions and bylines** — who found it, who asked for it. Git knows.
+- **Redundant and noise comments** — `/* init the pipeline */` over `init_pipeline()`.
+- **Commented-out code and `#if 0`** — git remembers it; nobody dares delete it later.
+- **Closing-brace comments and banner rows** — a function that needs `} /* end for */` is too
+  long. A section banner in a long file is acceptable when used sparingly.
+- **Misleading comments** — a comment that is slightly wrong is wrong. Fix it or delete it;
+  this is *Correct what the work proved wrong*, applied to the source.
+
+This matches the rule the `ta-*` skills already follow for their own pages: state the present,
+replace rather than annotate, and keep the landing's story in the note.
+
+**Not ours to restyle:** the vendored code — upstream cnc-ddraw (`dd.c`, `ddsurface.c`,
+`config.c`, … outside our `tagpu_*` additions), `lodepng`, Detours, the Vulkan headers and the
+generated `inc/spirv/*.spv.h`. Our own lines inside a vendored file follow the rules above.
+
 ## Build the gate in parallel
 
 `make -C tagpu/ddraw -j$(nproc)` — **43.6 s serial, 4.8 s parallel** on the reference setup

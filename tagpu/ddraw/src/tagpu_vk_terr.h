@@ -1,7 +1,7 @@
 #ifndef TAGPU_VK_TERR_H
 #define TAGPU_VK_TERR_H
 /* The terrain pass -- the 32x32 pre-rendered map tiles -- drawn by Vulkan
-   (Phase G / G19e, the THIRD world pass). Implementation: tagpu_vk_terr.c. The
+   Implementation: tagpu_vk_terr.c. The
    GL edition is tagpu_terr.c and stays the source of the instances, the
    uniforms, the texels and the shader.
 
@@ -37,8 +37,8 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 /* 1 on the ONE frame `tagpu_terr.ab` latched its claim and `tagpu_vk_ab_arm`
    got the `_vk.ppm` target unlinked -- so the seam captures THAT frame rather
    than whichever one its own lever poll landed on. It does NOT mean a file was
-   written: since landing 4d-2 there is no GL half, and the capture the seam
-   then records is this lane's own. Consumed by the call. Valid after
+   written: the capture the seam then records is this lane's own. Consumed by
+   the call. Valid after
    `prepare`. */
 int  tagpu_vk_terr_ab_frame(void);
 
@@ -59,11 +59,9 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d);
    `vk_down` and `vk_resize` call `_down` for their own reasons and would
    otherwise consume an outstanding debt -- leaving the pass latched at
    ST_REFUSED, which `prepare` treats as terminal, so a transient refusal
-   followed by a window drag killed the pass for the life of the PROCESS. The
-   seam calls `_down_paid` after its drain; every other caller of `_down`
-   leaves the debt standing and the pass comes back ST_UNBUILT, which is what
-   it did before the owed-teardown protocol existed.
-   [FROM THE G19e RE-REVIEW, 2026-09-15.] */
+   followed by a window drag would kill the pass for the life of the PROCESS.
+   The seam calls `_down_paid` after its drain; every other caller of `_down`
+   leaves the debt standing and the pass comes back ST_UNBUILT. */
 int  tagpu_vk_terr_down_owed(void);
 /* The seam, after its vkDeviceWaitIdle: tear the pass down AND settle the
    debt, so `_down`'s ST_REFUSED latch applies to this teardown only. */

@@ -1,6 +1,6 @@
 #ifndef TAGPU_TERR_H
 #define TAGPU_TERR_H
-/* Terrain pass (G13b) — the 32x32 pre-rendered map tiles, the last layer the
+/* Terrain pass — the 32x32 pre-rendered map tiles, the last layer the
    engine still paints inside the viewport.
 
    The engine's pass is 0x483FA0(OFFSCREEN* ctx): a flat grid blit of 8bpp
@@ -11,7 +11,7 @@
 
    Because it covers the whole viewport it also inherits the fog overlay's
    solid black: where the engine would paint an unexplored cell black, terrain
-   PAINTS black instead of discarding, since nothing is behind it any more.
+   PAINTS black instead of discarding, since nothing is behind it.
 
    Armed by tagpu_terr.on (tokens: log, passive, over, key=N). `passive` emits
    nothing; `over` draws ours on top of the engine's own terrain without owning
@@ -25,29 +25,20 @@ int  tagpu_terr_on(void);
 /* build this frame's quads; returns the CELL count (0 = nothing to draw) —
    one instanced quad each, see the vertex shader in tagpu_terr.c */
 int  tagpu_terr_gather(const TAGPU_FXVIEW* v);
-/* GATHER AND HAND OVER. It drew, once; the draw half went in landing 11-3 and
-   the last of its GL in 11-5c, so what this does now is finish the frame's
-   hand-over and publish it. `palTex` was the GL palette texture name and is
-   unused -- its one caller passes 0 (tagpu_native.c) -- and retiring the
-   parameter belongs with the rest of the entry-point surface, 11-5e. */
-void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex);
-/* Drop everything derived from the map. Despite the name there is no GL here
-   any more, and NOTHING CALLS IT on the surviving lane: its one caller tests
-   `wglGetCurrentContext()`, which is NULL for the life of the process. See the
-   definition. */
-void tagpu_terr_glreset(void);
+/* GATHER AND HAND OVER: despite the name it draws nothing; it finishes the
+   frame's hand-over and publishes it. */
+void tagpu_terr_render(const TAGPU_FXVIEW* v);
 
 /* Classic++ shadows (tagpu_shadow.c, renderers.md 2.8): the heightfield as a
    caster. One world-space vertex per 16-px grid point of the height grid,
    built with it, row-major indices.
 
-   IT NO LONGER DRAWS ANYTHING -- landing 11-5c took the last three GL calls,
-   which were its whole draw half. What it does is CLAMP the requested cell
-   rows r0..r1 to the mesh and PUBLISH the mesh and that range, and the return
-   is now "the range is valid and `out` was filled", not "something was drawn".
+   IT DRAWS NOTHING. What it does is CLAMP the requested cell rows r0..r1 to
+   the mesh and PUBLISH the mesh and that range, and the return is "the range
+   is valid and `out` was filled", not "something was drawn".
 
    `out`, when given, comes back with THE CPU MIRROR OF THE MESH AND THE
-   CLAMPED RANGE (Phase G / G19e) -- the very buffers build_hills filled,
+   CLAMPED RANGE (Phase G) -- the very buffers build_hills filled,
    retained instead of freed while the Vulkan lane is armed -- so the Vulkan
    shadow pass draws the same indices rather than re-deriving the clamp.
    Zeroed, and `v`/`idx` left NULL, whenever there is no mirror; pass NULL when
@@ -55,20 +46,12 @@ void tagpu_terr_glreset(void);
    live until the next map change -- a consumer takes them through a hand-over
    that carries the frame they were published on.
 
-   NOTHING CALLS THIS, AND SINCE LANDING 11 D2 THERE IS NO CALL SITE AT ALL.
-   Until then its one call site was `tagpu_shadow_hills`, itself callerless,
-   which would in any case have returned at `!s_live` -- and `s_live` was set
-   only past tagpu_shadow.c's GL bring-up, which latched failed on a lane with
-   no context. D2 deleted that file, so the route is not merely shut, it is
-   absent. [The 11-5c review found the pins; D2's review found the orphaning.]
+   NOTHING CALLS THIS: there is no call site at all.
 
-   THE COST THIS NOW PROVABLY WASTES is the heightfield CPU mirror
-   `s_hMeshV`/`s_hMeshI` -- 19.3 MB on Two Continents by `build_hills`'
-   arithmetic, built unconditionally -- because this function is its ONLY
-   reader. That was already true before D2 (a callerless caller reads nothing),
-   so this is not a regression; it is the next deletion, and it is named here
-   rather than left for the next person to re-derive. `TAGPU_TERRHILLS` has no
-   consumer outside this header either. */
+   THE COST THIS WASTES is the heightfield CPU mirror `s_hMeshV`/`s_hMeshI` --
+   19.3 MB on Two Continents by `build_hills`' arithmetic, built
+   unconditionally -- because this function is its ONLY reader, so the two go
+   together. `TAGPU_TERRHILLS` has no consumer outside this header either. */
 typedef struct TAGPU_TERRHILLS {
     const float*    v;          /* nv * 3 floats: the world point per vertex */
     size_t          nv;
@@ -92,12 +75,11 @@ int  tagpu_terr_hills_draw(int r0, int r1, TAGPU_TERRHILLS* out);
    423 KB, 3840x2160 972 KB and 5120x2880 1746 KB, and each draws its whole
    view at the zoom floor.
 
-   The trim is what is left of the old fixed budget, and it now fires only if
-   the reservation could not be met — an allocation that failed, or a viewport
-   so large the module's own memory guard refuses it. A gather that exceeds the
-   staging BAILS, which hands the draw back for a frame and flashes, and a
-   flash is the one failure that reads as a bug; a black margin is the honest
-   degradation instead.
+   The trim fires only if the reservation could not be met — an allocation that
+   failed, or a viewport so large the module's own memory guard refuses it. A
+   gather that exceeds the staging BAILS, which hands the draw back for a frame
+   and flashes, and a flash is the one failure that reads as a bug; a black
+   margin is the honest degradation instead.
 
    THE TRIM HAS A FLOOR THE CALLER PUTS BACK, and it is worth knowing which
    failure that leaves. tagpu_native.c raises the rect to the viewport again
@@ -112,11 +94,11 @@ int  tagpu_terr_hills_draw(int r0, int r1, TAGPU_TERRHILLS* out);
    is what keeps that path unreachable; do not lower it without re-checking
    this.
 
-   What this replaced was a fixed 32768 cells sized for 1024x768 and 1920x1080.
-   An ordinary 3840x2160 desktop exceeded it at any zoom below about 0.5x, and
-   the rect was then cut to roughly a third of the width the view showed —
-   terrain, units, features and markers all stopping at a black margin that a
-   player reads as the map failing to draw at the edges. */
+   A fixed budget does not work: 32768 cells, sized for 1024x768 and
+   1920x1080, is exceeded by an ordinary 3840x2160 desktop at any zoom below
+   about 0.5x, and the rect is then cut to roughly a third of the width the
+   view shows — terrain, units, features and markers all stopping at a black
+   margin that a player reads as the map failing to draw at the edges. */
 void tagpu_terr_clamp_span(int vw, int vh, int* w, int* h);
 
 /* the palette index tagpu_terrown.c fills the viewport with in place of the
@@ -124,7 +106,7 @@ void tagpu_terr_clamp_span(int vw, int vh, int* w, int* h);
    frame as "an overlay the engine still draws, and we must not cover it" */
 int  tagpu_terr_key(void);
 
-/* ---- the Vulkan edition of this pass (Phase G / G19e, the THIRD world pass)
+/* ---- the Vulkan edition of this pass (Phase G, the THIRD world pass)
    ----------------------------------------------------------------------------
 
    Everything the GL lane just drew this pass FROM, so that the Vulkan lane
@@ -144,8 +126,7 @@ int  tagpu_terr_key(void);
    iteration of render_ogl.c's loop than the tagpu_vk_frame that consumes this,
    so the game thread never touches them and there is no lock to take.
 
-   THAT IS NOT BY ITSELF ENOUGH, and until the G19e re-review (2026-09-15) this
-   paragraph stopped there and was wrong. `ensure_atlas` FREES `s_atlasMirror`
+   THAT IS NOT BY ITSELF ENOUGH. `ensure_atlas` FREES `s_atlasMirror`
    and `build_height` frees `s_hMirror` whenever the map changes, so a
    hand-over left standing from an earlier frame names memory this file has
    given back -- and one can be left standing, because the flag is cleared
@@ -156,30 +137,22 @@ int  tagpu_terr_key(void);
    So the hand-over carries the frame it was published on and
    `tagpu_terr_handover` REFUSES any other, which makes "these pointers are
    alive" a property of the frame number rather than of which functions
-   happened to run. Both reviewers found this independently; the feature pass
-   had half the guard already (`tagpu_feat_glreset` clears the flag and says
-   why) and the scaffold had all of it (`tagpu_scaffold_frame` clears
-   unconditionally at the top), which is what made the terrain pass's omission
-   legible once it was looked for. */
+   happened to run. */
 
 /* THE UNIT QUAD IS DEFINED ONCE, HERE: the two triangles whose shared edge
    runs (1,0)-(0,1), in the engine's own vertex order. It is the pass's fixed
    geometry -- what varies is the per-INSTANCE cell record below.
-   It had two users and now has one (tagpu_vk_terr.c); the GL lane's copy went
-   with its vertex buffer in landing 11-5c. The macro stays because the
-   geometry is still the pass's, stated once where the record it pairs with is
-   stated -- but there is nothing left for it to drift against, so it is no
-   longer the guard against drift it was written as. */
+   Its one user is tagpu_vk_terr.c; the macro stays here because the geometry
+   is the pass's, stated once where the record it pairs with is stated. */
 #define TAGPU_TERR_QUAD  { 0.f,0.f, 1.f,0.f, 0.f,1.f, 1.f,0.f, 1.f,1.f, 0.f,1.f }
 #define TAGPU_TERR_QUADV 6
 /* SHORTS PER INSTANCE: the cell's column and row in this frame's gather grid,
    then its tile's column and row in the atlas. The vertex shader rebuilds the
    quad's position, world point and UVs from those four and the uniforms; see
    the VS in tagpu_terr.c for why every term is exact in float.
-   Unnormalised GL_SHORT on the GL side, so the Vulkan vertex format is SSCALED
-   and not SINT -- the shader's attribute is a `vec4`, and SINT would need an
-   `ivec4`. tagpu_vk_terr.c asks the device for that format rather than
-   assuming it. */
+   Unnormalised shorts, so the Vulkan vertex format is SSCALED and not SINT
+   -- the shader's attribute is a `vec4`, and SINT would need an `ivec4`.
+   tagpu_vk_terr.c asks the device for that format rather than assuming it. */
 #define TAGPU_TERR_ICOMP 4
 
 typedef struct TAGPU_TERRHAND {
@@ -206,10 +179,7 @@ typedef struct TAGPU_TERRHAND {
        bit.
 
        `restored` SAYS A RESTORE REQUEST IS STANDING FOR THIS ATLAS -- it is
-       the producer's `s_rFrames`, the published field itself. Until landing
-       11-5c it read the GL restorer's `s_rgbState` instead, which on a lane
-       with no GL context never left 0, so a consumer that had painted its own
-       restored atlas was told to sample the indexed one.
+       the producer's `s_rFrames`, the published field itself.
 
        IT DOES NOT SET `uRestored` BY ITSELF, and a consumer author should read
        that here rather than assume otherwise. `tagpu_vk_terr.c` ANDs it with
@@ -220,10 +190,7 @@ typedef struct TAGPU_TERRHAND {
        WHETHER THE PAINT HAS LANDED IS THE CONSUMER'S OWN FACT, it must keep
        it, and it must GATE ON IT: this flag is the request, not the result. A
        consumer that took it for the result would sample an image nothing has
-       written and that has never left VK_IMAGE_LAYOUT_UNDEFINED -- which for
-       one review round it did, and before that it was made to draw NOTHING
-       rather than fall back to the indexed atlas.
-       [The vulkan-only plan, landing 11-5c and its two reviews.] */
+       written and that has never left VK_IMAGE_LAYOUT_UNDEFINED. */
     int   restored, lit, lambert, fog, shadowOn;
     /* THE REST OF THE CAST-SHADOW BLOCK, and it is only meaningful while
        `shadowOn` is 1 -- tagpu_shadow_apply writes uShadowOn and then RETURNS
@@ -231,7 +198,7 @@ typedef struct TAGPU_TERRHAND {
        had (zero, for a freshly linked one) and these are published as zero to
        match. The numbers are the shadow module's own: the matrix it drew the
        map with, the sun the knobs name, uShScale = (texel, depth span, 1/res),
-       and the two shading scalars. [Phase G / G19e, the shadow pass.] */
+       and the two shading scalars. */
     float shadowMat[16], shadowSun[3], shScale[3], penumbra, shade;
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float hDimW, hDimH;       /* uHDim: 0 while there is no usable grid */
@@ -248,21 +215,8 @@ typedef struct TAGPU_TERRHAND {
     const unsigned char* atlas;       /* atlasW x atlasH R8                 */
     int                  atlasW, atlasH;
     unsigned             atlasSerial;
-    /* THE WORK ITSELF, for the lane that restores on its own (the Vulkan-only
-       plan's landing 7), and since 11-5c the only route there is. It used to
-       be one of two: `atlasRgb`, `atlasRgbRows` and `atlasRgbSerial` stood here
-       and carried Classic++'s restored tile atlas as TEXELS, read back off the
-       GL twin through tagpu_gaf.c's helper. 11-5c took terrain's GL and with it
-       the producer, and the three sat here as a tombstone -- NULL, 0 and never
-       written -- with a note saying the struct's shape belonged to 11-5e.
-       This is 11-5e, and they are gone.
-
-       IT WAS ALSO UNREACHABLE UNTIL 11-5c, and that is worth recording where a
-       consumer will read it: the only writer of this list lived inside the GL
-       bring-up's `glsl_begin`, below a guard on a GL texture name, so on a lane
-       with no GL context the restore arm armed a consumer and sent it
-       nothing -- and `restored` below, computed from the GL restorer's own
-       state machine, could only publish 0. Both were fixed in that landing.
+    /* THE WORK ITSELF, for the lane that restores on its own -- the only route
+       there is.
 
        WHY THE LIST AND NOT JUST "RESTORE IT": three of a frame's eleven
        numbers are content-dependent -- `wrap` is tagpu_rglsl_tileable() over
@@ -270,12 +224,8 @@ typedef struct TAGPU_TERRHAND {
        centre-out rank over the live tile map. Both are engine-memory reads, so
        both belong on this side of the hand-over; what crosses is their result.
        `restoreFrames` therefore points at the list `restore_publish` built,
-       in the order it built it. It used to point at the very list a GL job had
-       ALSO been given, which is what made the two lanes comparable
-       byte-for-byte rather than merely both-plausible; there is no second lane
-       since landing 11-5c, so that is no longer a property this field has --
-       and terrain's half of the `tagpu_restoredump.on` byte oracle went with
-       the GL job that produced it. [FROM THE 11-5c REVIEW.]
+       in the order it built it. There is no second lane to compare it against
+       byte-for-byte.
 
        LIFETIME: the frame list is retained for the map, not for the frame, but
        a consumer must still copy on the frame it takes it (as
@@ -286,8 +236,7 @@ typedef struct TAGPU_TERRHAND {
        ONE iteration of the render loop -- so the pointer cannot be freed
        between publication and the copy. Do not reason about this field as a
        cross-thread hand-over; it is not one, and neither are `atlas` and
-       `height` above. [Established by the 11-5c review, which was briefed on
-       the opposite and disproved it.] `restoreSerial`
+       `height` above. `restoreSerial`
        changes whenever the list or its destination does, including a repaint;
        `restoreRepaint` is 1 when the destination already holds a restore and
        only the palette moved, so it is recoloured in place rather than
@@ -319,8 +268,8 @@ typedef struct TAGPU_TERRHAND {
     /* 1 on the ONE frame `tagpu_terr.ab` latched its claim and
        `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane
        captures THAT frame rather than whichever one its own lever poll landed
-       on. It does NOT mean a capture file was written -- since landing 4d-2
-       there is no GL half to write one. */
+       on. It does NOT mean a capture file was written -- there is no GL half
+       to write one. */
     int   ab;
 } TAGPU_TERRHAND;
 

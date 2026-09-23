@@ -70,7 +70,7 @@ typedef struct {
 
 typedef struct {
     /* the type's bake. Both must be non-NULL and from the same frame's
-       tagpu_posebake_unit(); the pass reads `vao`, the body range and nparts. */
+       tagpu_posebake_unit(); the pass reads the body range and nparts. */
     const void* geom;           /* const TAGPU_PBGEOM*                        */
     const void* mat;            /* const TAGPU_PBMAT*                         */
     /* one 4x3 row-major matrix (3 vec4) per piece, carrying a REST vertex to
@@ -547,7 +547,6 @@ int  tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now);
 void tagpu_posedraw_slant_drew(void);
 int  tagpu_posedraw_slant_take(void);
 
-void tagpu_posedraw_glreset(void);
 /* one `posed=` field for the native: line; writes nothing when disarmed */
 int  tagpu_posedraw_stats(char* out, int n);
 #endif

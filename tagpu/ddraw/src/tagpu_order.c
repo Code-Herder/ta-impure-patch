@@ -1,4 +1,4 @@
-/* tagpu_order.c — the shift-held order-marker overlay, ported (G13o).
+/* tagpu_order.c — the shift-held order-marker overlay, ported.
    See tagpu_order.h for why it is a port and not a capture, and for the
    two-thread split. Everything below is transcribed from the disassembly of
    the engine's own driver, walker and five leaf drawers; the addresses and the
@@ -133,14 +133,13 @@
    - Unit-anchored positions ride tagpu_native_unit_pos(), the sub-pixel
      interpolated sample: a crisp circle centred on a walking unit would
      otherwise step once per sim tick against a body that slides.
-   - ShowRanges' text LABELS are drawn as of G13p, through tagpu_text.c: TA's
+   - ShowRanges' text LABELS are drawn through tagpu_text.c: TA's
      own glyphs, rasterised by the engine's own blitter into an atlas of ours,
      at the point on the circle `0x438EA0` would have put them and at a constant
      SCREEN size. Every circle of both limbs is there too — including the cloak
-     radius that opens the set and the sprite drawer's own AoE ring, each of
-     which was missed on the first pass and caught by the landing review.
-   - RANGE CIRCLES ARE ROUND. G13o drew them through the target circle's 0.89
-     squash; `0x438EA0` has no squash at all (see `ocircle`).
+     radius that opens the set and the sprite drawer's own AoE ring.
+   - RANGE CIRCLES ARE ROUND, as `0x438EA0`'s are: the target circle's 0.89
+     squash is not theirs (see `ocircle`).
 
    Read-only over the sim with ONE deliberate exception, on the game thread and
    at exactly the instant the engine did it: the target sprite's last-seen
@@ -291,14 +290,13 @@ int tagpu_order_armed(unsigned frame_counter)
     if (s_armed >= 0 && frame_counter - s_armCheck < 30) return s_armed > 0;
     s_armCheck = frame_counter;
     was = s_armed;
-    /* `s_armed` is NOT cleared for the length of the file read. It used to be,
-       and that opened a window — tens of microseconds, every 30 frames — in
-       which the game thread's snapshot declined (not armed) while `g_orders`
-       was still set, so `mark_orders` let the ENGINE's driver run: one block of
+    /* `s_armed` is NOT cleared for the length of the file read. Clearing it
+       would open a window — tens of microseconds, every 30 frames — in which
+       the game thread's snapshot declines (not armed) while `g_orders` is
+       still set, so `mark_orders` lets the ENGINE's driver run: one block of
        engine markers landing in its own frame, i.e. a ghost at the unzoomed
-       position at any zoom but 1. (The capture window that used to be closed
-       against it went with G13p; the ghost is the same either way.)
-       Parse into locals and commit at the end instead. */
+       position at any zoom but 1. So parse into locals and commit at the
+       end. */
     n = tagpu_opt_read("tagpu_order.on", buf, sizeof buf);
     if (n < 0) {
         s_armed = 0;
@@ -369,11 +367,10 @@ int tagpu_order_armed(unsigned frame_counter)
    fields for one frame. Every position is carried BOTH as the 16.16 the
    snapshot saw and, where it came from a unit, as that unit, so the present
    thread can ask tagpu_native_unit_pos() for the interpolated one. */
-/* NO ENGINE POINTER SURVIVES INTO THE DRAW (frame packet exchange, landing 3).
-   A record used to carry five raw UnitStruct* and a UnitDef*, and the present
-   thread bounded each against the live `begin`/`end` pair before dereferencing
-   it — the same unsynchronised pair the unit pass read, and the audit's open
-   hazard (cross-thread-engine-reads.md §5 row 2). The snapshot runs on the GAME
+/* NO ENGINE POINTER SURVIVES INTO THE DRAW: bounding a UnitStruct* or a
+   UnitDef* against the live `begin`/`end` pair on the present thread would
+   read an unsynchronised pair (cross-thread-engine-reads.md §5 row 2). The
+   snapshot runs on the GAME
    thread inside the marker block, so it resolves all of it there: a unit
    becomes its ARRAY SLOT (the present thread finds the matching PK_UNIT in the
    frame packet, or draws the snapshotted 16.16 if it is gone), and every def
@@ -590,9 +587,9 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
                 if (!ptr_ok(own)) own = NULL;
                 r->ownerSlot = ord_slot(units, own);
                 /* THE ISSUING UNIT, RESOLVED HERE. Everything the present
-                   thread used to read off this pointer — its position, its
-                   cloak bit, its def's nine ranges and its three live weapons
-                   — is copied now, on the thread that owns it. */
+                   thread needs from this pointer — its position, its cloak
+                   bit, its def's nine ranges and its three live weapons — is
+                   copied here, on the thread that owns it. */
                 if (own) {
                     const char* def = *(const char* const*)(own + U_TYPE);
                     r->ux = *(const int*)(own + U_POS + 0);
@@ -703,9 +700,8 @@ static void walk_unit(ORDARENA* A, const char* ta, const char* units, const char
                        node survives, N_TARGET holds a stale in-range pointer,
                        `started` stays 1, and the preview for that one site never
                        comes back although it is empty ground again. Nothing else
-                       degrades. Found by review 2026-09-22 and left open: the fix
-                       is to disassemble the node's release path, not to widen the
-                       test. */
+                       degrades. Open: the fix is to disassemble the node's
+                       release path, not to widen the test. */
                     r->bstarted =
                         ptr_ok(*(const char* const*)(node + N_TARGET)) ? 1 : 0;
                     pos[0] = r->bx; pos[1] = r->by; pos[2] = r->bz;
@@ -841,11 +837,11 @@ int tagpu_order_snapshot(void* ctx, void* view)
    and every site rect is here (the arena cap and the packet's truncation
    apart; both are counted, the packet's in `truncated`).
 
-   THE LEVER GATE FIRST, and it is the disarm case this was missing: taking
-   this pass off hands the engine its driver back and stops the block that
-   would clear the arena, so the last publication stayed readable for the rest
-   of the session and the ghost went on drawing a queue whose squares were
-   gone (the 2026-09-12 review). One int, read the way the block's own
+   THE LEVER GATE FIRST, for the disarm case: taking this pass off hands the
+   engine its driver back and stops the block that would clear the arena, so
+   without it the last publication would stay readable for the rest of the
+   session and the ghost would go on drawing a queue whose squares were gone.
+   One int, read the way the block's own
    passive/trace flags are — a stale read costs one frame of ghosts around a
    disarm. `passive`/`trace` are deliberately NOT gated here: those leave the
    engine drawing its own markers for comparison, and the ghost riding along
@@ -915,7 +911,7 @@ static void project(double wx, double walt, double wz, float* sx, float* sy)
     *sy = (float)(wz - walt * 0.5 - (double)s_v->eyeY + 32.0);
 }
 
-/* THE UNIT A RECORD NAMES, out of THIS FRAME'S PACKET (landing 3). The record
+/* THE UNIT A RECORD NAMES, out of THIS FRAME'S PACKET. The record
    carries an array SLOT the game thread computed; the packet's units table is
    in slot order, so this is a binary search over our own memory — no bound on
    an engine pointer, no `begin`/`end` pair, and a unit that died between the
@@ -1112,8 +1108,8 @@ static void range_label(double wx, double walt, double wz, double rad,
    for both), and the projection maps world z to screen y 1:1, so the circle is
    a circle on screen. The 0.89 at `0x4FD2C0` belongs to the TARGET circle
    `0x4399F0`, which multiplies only its y radius by it (`[esp+0x18]` there) —
-   a different drawer and a deliberate difference. G13o applied the squash to
-   both and drew every range circle 11% flat. */
+   a different drawer and a deliberate difference; the squash applied to both
+   draws every range circle 11% flat. */
 static void ocircle(double wx, double walt, double wz, double rad, int col,
                     const char* label, int slot)
 {
@@ -1133,8 +1129,8 @@ static void range_circle(int uslot, int fx, int fy, int fz, double rad,
 
 /* The ink a procedurally drawn marker inherits from the art it replaces.
 
-   NOT the most common index, which is what this did first and it drew every
-   route dot in (11,11,0) — near-black, invisible against grass. A `pathicon`
+   NOT the most common index, which draws every route dot in (11,11,0) —
+   near-black, invisible against grass. A `pathicon`
    dot and a `cursor_ary` crosshair are both a small bright core inside a dark
    outline, and the outline is the bigger half by area, so "most common" picks
    exactly the colour the sprite uses to HIDE its edge. The core is what the
@@ -1165,12 +1161,10 @@ static int seq_ink(const char* seq, int fallback)
        rather than tagpu_pal.c's gamma-scaled snapshot. The question is a
        luminance RANKING over one sprite's own colours, which a uniform scale of
        every entry cannot change: the ink index this picks is a property of the
-       art, not of the display. (This comment used to say the walk runs on the
-       GAME thread. It does not and never did: `tagpu_order_gather` is called
-       from `tagpu_mark_gather`, inside the unit pass, on the render thread —
-       only the SNAPSHOT is game-side. The reasoning above is unaffected; the
-       claim about which thread reads the table was simply wrong, and the table
-       now arrives in the packet either way.) */
+       art, not of the display. (The walk runs on the RENDER thread:
+       `tagpu_order_gather` is called from `tagpu_mark_gather`, inside the unit
+       pass — only the SNAPSHOT is game-side. The table arrives in the
+       packet.) */
     pal = s_pk ? s_pk->pal : NULL;
     if (!pal) return fallback;
     if (w > 0 && h > 0 && w <= 128 && h <= 128 &&
@@ -1378,9 +1372,9 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
            `0x439125` loads def+0x220 and returns only when it is NULL; with a
            weapon whose AoE>>1 is 0 the engine falls through, draws a circle of
            radius 0, and still reaches `0x439196` — which draws the
-           kamikazedistance-or-sight circle. Gating on the radius dropped that
-           second circle for such a unit (landing review, 2026-09-12). Inert on
-           stock content, where every ExplodeAs weapon has an AoE. */
+           kamikazedistance-or-sight circle. Gating on the radius would drop
+           that second circle for such a unit. Inert on stock content, where
+           every ExplodeAs weapon has an AoE. */
         if (!r->haveExplode) return;
         aoe = r->explodeAoe;
         /* radius = clamp(((gameTime % 60) * aoe * 2) / 60, 8, aoe), all of it
@@ -1406,7 +1400,7 @@ static void draw_ranges(const ORDREC* r, int gameTime, int showRanges)
        `UD_CLOAKDIST` IS IN THIS SET AND IS DRAWN FIRST, gated only on the value
        being non-zero — NOT on the unit's cloak flag, which is the normal path's
        rule and not this one (`0x43921A`, ahead of the sight circle at
-       `0x43924A`). Leaving it out cost a circle the engine draws whenever
+       `0x43924A`). Leaving it out would cost a circle the engine draws whenever
        ShowRanges is on and the unit is cloakable at all. */
     {
         /* The engine's own reads are MIXED, and the table carries which is
@@ -1459,15 +1453,12 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
        not also run — under trace the artifact is the two logged node lists,
        not a doubled screen. */
     if (s_armed != 1 || s_passive || s_trace) return 0;
-    /* THE DOUBLE-DRAW REFUSAL IS DELETED (gpu-status 2.81). It read
-       `if (!tagpu_markown_installed()) return 0;` because without the redirect
-       the engine drew its own set at the unzoomed position into the frame we
-       composited over. There is no composite: the engine's set lands in the
-       reference surface. What this pass still NEEDS from `markown` is the
-       arena -- `mark_orders` is the only caller of `tagpu_order_snapshot` --
-       and an uninstalled `markown` shows up below as an empty slot, which is
-       the honest failure and not a refusal to draw. */
-    /* THE FRAME PACKET IS THE ONLY ENGINE STATE THIS HALF SEES (landing 3):
+    /* NO DOUBLE-DRAW REFUSAL (gpu-status 2.81): there is no composite, so the
+       engine's own set lands in the reference surface. What this pass NEEDS
+       from `markown` is the arena -- `mark_orders` is the only caller of
+       `tagpu_order_snapshot` -- and an uninstalled `markown` shows up below as
+       an empty slot, which is the honest failure and not a refusal to draw. */
+    /* THE FRAME PACKET IS THE ONLY ENGINE STATE THIS HALF SEES:
        the units the records name, the GUI colour table and the palette the ink
        ranking uses. No main pointer, no unit array pair, no def dereference. */
     s_pk = v->packet;
@@ -1492,13 +1483,11 @@ int tagpu_order_gather(const TAGPU_FXVIEW* v)
        The generation re-read afterwards is what makes the copy trustworthy
        rather than merely fast: `g_gen` moving means the copy may straddle two
        publications, so it is taken again. Once, not in a loop — a second miss
-       is drawn anyway, because every field in a record is a plain value, every
-       unit pointer goes through sane_unit(), `bdef` is bounded against the
-       UnitDef array, and every primitive is culled against the viewport, so the
-       worst a straddled copy can produce is one frame of a marker in the wrong
-       place. Since landing 3 that is stronger still: a record carries no engine
-       pointer at all, so a straddled copy can produce a wrong NUMBER and never
-       a wrong dereference. */
+       is drawn anyway, because every field in a record is a plain value — a
+       record carries no engine pointer at all — and every primitive is culled
+       against the viewport, so the worst a straddled copy can produce is one
+       frame of a marker in the wrong place: a wrong NUMBER, never a wrong
+       dereference. */
     for (i = 0; i < 2; i++) {
         /* Sample the generation BEFORE the slot, so a publication that lands
            between the two is seen as well as one that lands during the copy. */

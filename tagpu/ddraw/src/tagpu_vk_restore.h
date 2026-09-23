@@ -1,16 +1,14 @@
 #ifndef TAGPU_VK_RESTORE_H
 #define TAGPU_VK_RESTORE_H
-/* The Classic++ RESTORER, drawn by Vulkan (the Vulkan-only plan's landing 7).
+/* The Classic++ RESTORER, drawn by Vulkan.
    Contract only; tagpu_vk_restore.c is the backend.
 
    IT IS THE SECOND BACKEND OF tagpu_restore_core.c, not a second restorer.
    The scheduler -- the job queues, batch formation, the pass sequencer, the
    cost model and the GPU-time budget -- is shared, and this file implements
-   the twelve-entry TAGPU_RBACKEND against it. That split landed first, and
-   with the GL restorer still running as its oracle: the terrain and unit
-   atlases came back byte-for-byte identical across the two builds. Everything
-   below is therefore about DEVICE RESOURCES and THREE DRAWS, and nothing
-   below decides when to draw.
+   the twelve-entry TAGPU_RBACKEND against it. Everything below is therefore
+   about DEVICE RESOURCES and THREE DRAWS, and nothing below decides when to
+   draw.
 
    IT IS NOT ONE OF THE FRAME'S PASSES, and tagpu_vk_shadow.c is the precedent
    rather than any of the world passes:
@@ -31,8 +29,7 @@
    ALREADY on the device for every consumer: the indexed source is the pass's
    own atlas image and the destination is the restored twin it already binds
    (binding 42 in tagpu_vk_feat.c, 43 in tagpu_vk_fx.c). So this pass needs no
-   CPU mirror and no read-back -- it RETIRES the mirror gate 2 built rather
-   than adding a second path beside it. What the consumer owes is the
+   CPU mirror and no read-back. What the consumer owes is the
    destination's usage widened to carry COLOR_ATTACHMENT and its view lent
    here; the palette is the one thing that still crosses as bytes, because it
    is 1 KB and the engine's own table is the source of truth.
@@ -93,8 +90,8 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
 #define TAGPU_VK_MAXMIP 12
 
 /* GIVE A JOB A MIP CHAIN, once, straight after `job_new` -- only a consumer
-   whose twin is mipped calls this, and a job without it behaves exactly as it
-   did before landing 7e-2.
+   whose twin is mipped calls this, and a job without it restores level 0
+   alone.
 
    `mips` is the deepest level (1..TAGPU_VK_MAXMIP) and `dim` level 0's square
    size; `attach[i]` and `sample[i]`, for i in 0..mips-1, are views of level
@@ -143,21 +140,14 @@ void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
    than for the drawing: under `tagpu_restoredump.on` the source is written out
    beside the destination, so a pair that differs can be read as "the two lanes
    restored different bytes" or "the two lanes restored the same bytes
-   differently" without another run. The GL lane has always written its own
-   source (`tagpu_restore_<tag>.r8`), and this is the other half of that pair.
-   [Landing 7e-2, which spent three runs on a difference that was one of those
-   two and could not be told apart from the destination alone.] */
+   differently" without another run: the destination alone cannot tell the
+   two apart. */
 
 /* THE BYTE ORACLE IS THIS FILE'S, and it needs no call of its own. Under
    `tagpu_restoredump.on` each job writes its finished destination to
    `tagpu_restore_<tag>_vk.rgba` out of `step`, once per picture: the copy is
    recorded into the frame's command buffer and read at that slot's next step,
-   so nothing waits on the device. The GL lane writes the other half of the
-   pair -- `tagpu_restore_<tag>.rgba`, from tagpu_gaf.c and tagpu_terr.c, under
-   the same lever and in the same process on the same frames -- so a lane's
-   claim to reproduce the GL picture is one `cmp` of two files rather than a
-   screenshot diff. It lived in the terrain consumer until landing 7d, which is
-   when a second consumer would have had to copy it. */
+   so nothing waits on the device. */
 
 /* ONE SLICE, from the seam's `prepare` and NOWHERE ELSE: issue draws for the
    active job until the budget is spent. `cb` must be recording and OUTSIDE any

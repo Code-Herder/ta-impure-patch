@@ -57,24 +57,14 @@ static void report(void)
 {
     char b[300];
     double v50 = pct(s_vkRing, s_vkN, 0.50), v99 = pct(s_vkRing, s_vkN, 0.99);
-    /* ONE LANE, SO ONE FIGURE AND NO RATIO. The `vk/gl` arithmetic this
-       function used to print needed samples from both rings; the GL ring was
-       filled only by a bracket render_ogl.c called, and landing 11-2 deleted
-       that file. (4d-1 deleted route D, which is what made the two lanes stop
-       being live in one process; 11-2 took the backend itself. An earlier
-       draft of this sentence conflated them -- the 11-5e-1 review's MEDIUM-3.)
-       From then the branch could not be reached, and from THIS
-       landing there is no second ring for it to read -- so the comparison the
-       gate asks for is a CROSS-BUILD one, this build's figure against an
-       earlier build's. tagpu_ftime.h says so at length and is the place to
-       look; repeating the history here would be the second copy that goes
-       stale. [11-5e-1: the GL half deleted; 4d-1 had already made it inert.]
+    /* ONE LANE, SO ONE FIGURE AND NO RATIO. The comparison the gate asks for
+       is a CROSS-BUILD one, this build's figure against an earlier build's.
+       tagpu_ftime.h says so at length and is the place to look.
 
        `s_vkN` IS AT LEAST 1 HERE, so `pct` is never asked for the percentile
        of an empty ring: the sole caller is `tagpu_ftime_vk_sample`, which
        pushes this frame's sample before it counts the frame. The empty case
-       has no branch because it has no path -- the two branches that used to
-       stand here were for a silent lane, and a silent lane now means this
+       has no branch because it has no path -- a silent lane means this
        function is not called at all. */
     _snprintf(b, sizeof b,
               "ftime: vk p50 %.3f ms p99 %.3f ms (n=%d/%u)"
@@ -100,9 +90,8 @@ void tagpu_ftime_poll(void)
            the only thing anyone reads. */
         s_vkN = 0; s_vkAt = 0; s_frames = 0;
         s_vkTotal = 0;
-        /* THE VULKAN LANE HAS A POOL TOO, AND THIS FUNCTION CANNOT REACH IT.
-           An earlier version of this comment said the lane "carries no such
-           pool here". It does: `tagpu_vk.c` keeps `tsPool` and
+        /* THE VULKAN LANE HAS A POOL, AND THIS FUNCTION CANNOT REACH IT.
+           `tagpu_vk.c` keeps `tsPool` and
            `tsPend[MAXIMG]`, the write is gated on `tagpu_ftime_armed()` and
            sets `tsPend[fi] = 1`, and the drain -- which is NOT gated -- reads
            any slot whose flag is set and calls `tagpu_ftime_vk_sample`.
@@ -111,13 +100,7 @@ void tagpu_ftime_poll(void)
            `vk_perimage_free` zeroes it slot by slot on the way down, and the
            drain clears its OWN slot as it reads it -- which is the mechanism
            the "one per present" below depends on, so it belongs in this list
-           rather than a paragraph away. [ROUND 3'S LOW: the first draft
-           named the swapchain's creation, which is not where the memset is.]
-
-           [THE 11-5e-1 REVIEW'S MEDIUM-1b, and it was right: the deleted GL
-           half kept `s_qPend` for exactly this reason, and the landing-6
-           review caught stale pairs being harvested into a freshly cleared
-           ring.]
+           rather than a paragraph away.
 
            WHAT ACTUALLY PROTECTS THE RING IS `s_on`, tested at the top of
            `tagpu_ftime_vk_sample`: a pair resolved while the lever is off is
@@ -137,12 +120,9 @@ void tagpu_ftime_poll(void)
            is `s_vk.frame % s_vk.nimg`, and `nimg` is whatever the swapchain
            reports, merely CLAMPED to MAXIMG (8). At three or four images that
            is six to eight frames a second, and at the clamp sixteen -- so the
-           honest statement is "single figures to the low tens". An earlier
-           draft said "about five" by reading the bound for the value, which
-           understated the window two- to three-fold, and that is the number a
-           reader uses to decide whether the deferred fix is urgent. [ROUND 3'S
-           MEDIUM.] Reachable at: a map load, a stalled device, the
-           owed-teardown `vkDeviceWaitIdle`.
+           honest statement is "single figures to the low tens". Reachable
+           at: a map load, a stalled device, the owed-teardown
+           `vkDeviceWaitIdle`.
 
            MEASURED AT FULL FRAME RATE, an off/on cycle reported `n=256/300` on
            the next report, so `s_frames` and `s_vkTotal` were cleared -- a
@@ -151,12 +131,10 @@ void tagpu_ftime_poll(void)
            pair would simply be one of the 300 and the line would read the
            same. The measurement is structurally blind to the leak, which is
            why this window is named here rather than treated as covered.
-           [ROUND 3'S LOW.]
            THE BY-CONSTRUCTION FIX IS AN IDENTITY, NOT A TIMING ARGUMENT: stamp
            each pending slot with the arm generation this poll bumps, and have
            the drain accept a pair only when the generation still matches.
-           Deliberately not done here -- it belongs to `tagpu_vk.c`'s seam and
-           this landing is three GL-free leaf files. */
+           Deliberately not done here -- it belongs to `tagpu_vk.c`'s seam. */
         flog(on ? "ftime: ON - GPU frame time on the Vulkan lane, two timestamps"
                   " a frame, nothing blocks"
                 : "ftime: off");
@@ -170,22 +148,15 @@ void tagpu_ftime_vk_sample(double ns)
     if (!s_on || ns <= 0.0) return;
     push(s_vkRing, &s_vkN, &s_vkAt, ns / 1.0e6);
     s_vkTotal++;
-    /* AND THIS LANE DRIVES THE REPORT, because it is the only lane there is.
-       It used to ask `!s_glDrives` first, a flag the GL bracket set when it
-       ran, so that exactly one of two live lanes printed. With the bracket
-       deleted the flag could only ever be 0 and the term only ever true --
-       a test that reads as a choice and is not one. [11-5e-1.] */
+    /* AND THIS LANE DRIVES THE REPORT, because it is the only lane there is. */
     if (++s_frames >= REPORT_FRAMES) { s_frames = 0; report(); }
 }
 
 /* The seam calls this when it brings the lane down. `s_frames` goes with the
-   ring: it used to be left alone, so a lane that came down at frame 299 of the
-   300-frame cadence made the NEXT sample after the re-bring-up trip the report
-   and print a p50/p99 "over 256 frames" computed from one. The window and the
-   counter over it are one piece of state and are cleared as one.
-   [THE 11-5e-1 REVIEW'S LOW-1a; pre-existing, and the collapse of `report()`
-   to a single branch is what made the wrong line plausible rather than
-   obviously empty.] */
+   ring: left alone, a lane that came down at frame 299 of the 300-frame
+   cadence would make the NEXT sample after the re-bring-up trip the report and
+   print a p50/p99 "over 256 frames" computed from one. The window and the
+   counter over it are one piece of state and are cleared as one. */
 void tagpu_ftime_vk_reset(void)
 {
     s_vkN = 0; s_vkAt = 0; s_vkTotal = 0; s_frames = 0;

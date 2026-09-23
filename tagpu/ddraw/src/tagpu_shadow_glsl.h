@@ -1,21 +1,21 @@
-/* The GLSL of the shadow depth programs, lifted out of `tagpu_shadow.c` so that
-   the file that made the GL calls can be deleted and the SHADERS can stay.
+/* The GLSL of the shadow depth programs: shader source only, with no GL calls
+   beside it.
 
    WHY A HEADER AND NOT A `.c`. `tools/spirv-gen.py` reads its shader sources by
    preprocessing one translation unit per entry in `SOURCES` -- `src/<name>.c` by
-   default, or whatever `HEADER_SOURCES` maps the name to. Lifting the strings
-   here and adding one `HEADER_SOURCES` entry keeps `SOURCES` and `PROGRAMS`
-   untouched, which matters: editing those would stop generating
-   `inc/spirv/tagpu_shadow.spv.h`, which `tagpu_vk_shadow.c:93` includes.
+   default, or whatever `HEADER_SOURCES` maps the name to. One `HEADER_SOURCES`
+   entry maps `tagpu_shadow` here, and `SOURCES` and `PROGRAMS` must keep that
+   name: without it `inc/spirv/tagpu_shadow.spv.h`, which
+   `tagpu_vk_shadow.c:93` includes, is not generated.
 
    WHY IT SITS IN `src/` RATHER THAN `inc/`. Its sibling
    `tagpu_hires_glsl.h` must, because the hires fragment shader pulls macros out
    of `src/tagpu_glsl.h` and the generator preprocesses with `-Iinc` alone; these
    two are kept in one place rather than split on a rule only one of them needs.
 
-   THE TEXT IS UNCHANGED, and the build proves it: every generated header carries
-   a per-shader md5 of the GLSL it was compiled from, so a single character moved
-   here fails `tools/spirv-check.sh`. [The vulkan-only plan, landing 11 D1.] */
+   THE TEXT IS PINNED BY THE BUILD: every generated header carries a per-shader
+   md5 of the GLSL it was compiled from, so a single character moved here fails
+   `tools/spirv-check.sh`. */
 #ifndef TAGPU_SHADOW_GLSL_H
 #define TAGPU_SHADOW_GLSL_H
 

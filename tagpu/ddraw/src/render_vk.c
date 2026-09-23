@@ -1,15 +1,7 @@
-/* render_vk.c -- the Vulkan renderer backend (the vulkan-only plan, landing 4a).
- *
- * WHAT THIS PART IS, AND WHAT IT IS NOT. It gives the Vulkan lane a render
- * thread of its own and presents into `g_ddraw.hwnd`, and that is all. It does
- * NOT call `tagpu_overlay_draw`, so no pass's gather half runs and the frame is
- * the seam's clear colour and nothing else. That is deliberate and it is
- * measurable on its own: the question this part answers is whether a swapchain
- * lives on the game's own window inside the game, which nothing has run yet.
- *
- * The parts after it: 4b runs the gathers and stands the GL draws down, 4c adds
- * the `ss` offscreen target and moves TA's surface upload into the backend, 4d
- * deletes route D's window. See research/notes/vulkan-only-plan.md landing 4.
+/* render_vk.c -- the Vulkan renderer backend. It owns a render thread of its
+ * own, runs the seam (`tagpu_overlay_draw`) once per frame and presents into
+ * `g_ddraw.hwnd` through `tagpu_vk_frame`. See
+ * research/notes/vulkan-only-plan.md landing 4.
  *
  * WHY THE PRESENT WORKS ON A WINDOW ROUTE A CALLED DEAD. The coexistence probe's
  * route A -- a GL context current on an HWND, then Vulkan on the same one --
@@ -19,55 +11,13 @@
  * window showing Vulkan's own frame against a GL and a GDI control at the same
  * 98.5 % -- roadmap Phase G / G19a has the table.
  *
- * AND WHY THE FALLBACK IS ALLOWED TO BE LATE. `ogl_render_main` hands the
- * session to `gdi_render_main` when GL will not come up and this does the same
- * on `tagpu_vk_failed()`. That is only safe because route F measured it: GDI
- * still reaches the screen after a surface has existed on the HWND, so
- * winevulkan's takeover is specific to GL's drawable rather than to the window.
- * Had it not been, the fallback would have had to be taken before the surface
- * was ever created and a later failure would have been terminal.
- *
- * WHAT IT DELIBERATELY DOES NOT INHERIT FROM THE GL BACKEND. Every
- * `g_ddraw.renderer == ogl_render_main` test IN THE TREE, checked site by site
- * 2026-09-17 rather than assumed -- each is a WGL workaround that a Vulkan
- * swapchain must not inherit, and adding `|| renderer == vk_render_main` to any
- * of them would be a silent bug. Line numbers are post-change:
- *
- *   dd.c:850, :995   `nonexclusive = TRUE` -- stops WGL going fullscreen
- *                    exclusive. Its ONE consumer is dd.c:1120, so leaving these
- *                    GL-only means exactly "no extra scanline".
- *   dd.c:1120        `render.height++` and `opengl_y_align = 1` -- a scanline
- *                    added so the driver cannot take exclusive mode, and the
- *                    viewport shift that pays for it. `opengl_y_align` is read
- *                    in render_ogl.c and nowhere else; a Vulkan frame that
- *                    inherited it would be one pixel tall too many and offset.
- *   dd.c:1265, :1354 `ogl_create()` on the window, GDI on failure. The Vulkan
- *                    bring-up is the render thread's own and needs no hook here.
- *   dd.c:1525        `SetPixelFormat`. Already gated on the GL backend, and
- *                    route E's measurement is of a window without one. The HDC
- *                    beside it is taken unconditionally, which is what leaves
- *                    the GDI fallback below a valid one.
- *   dd.c:1788        `ogl_release()`. Nothing to release, and dd.c joins the
- *                    render thread before reaching it, so `tagpu_vk_render_stop`
- *                    below has already run.
- *
- * AND THE TWO OUTSIDE dd.c, because scoping the audit to one file was itself a
- * gap the landing review found -- one of them is on this backend's PER-FRAME
- * path:
- *
- *   fps_limiter.c:153  reached from `fpsl_frame_end()` every frame. It is the
- *                    one site where the new backend does not merely skip GL
- *                    behaviour but takes a DIFFERENT branch
- *                    (`fpsl_dwm_flush() || fpsl_wait_for_vblank()` rather than
- *                    the vblank wait alone). `!IsWine()` makes it inert on the
- *                    reference setup, so it is not a live defect here -- but it
- *                    is a Windows-7-DWM workaround and the Vulkan present does
- *                    its own pacing, so GL-only is right on purpose and not by
- *                    accident.
- *   winapi_hooks.c:2039  `fake_DestroyWindow` -> `ogl_release()`. Nothing to
- *                    release. That same function is the ONLY writer that nulls
- *                    `g_ddraw.hwnd`, which is why `tagpu_vk.c`'s `s_ownGone`
- *                    latch exists rather than trusting `hwnd != s_owner`.
+ * AND WHY THE FALLBACK IS ALLOWED TO BE LATE. This hands the session to
+ * `gdi_render_main` on `tagpu_vk_failed()`. That is only safe because route F
+ * measured it: GDI still reaches the screen after a surface has existed on the
+ * HWND, so winevulkan's takeover is specific to GL's drawable rather than to
+ * the window.
+ * Had it not been, the fallback would have to be taken before the surface
+ * was ever created and a later failure would be terminal.
  */
 
 #include <windows.h>
@@ -98,11 +48,7 @@
    of frames into the new thread's life and hand a twin pointers into buffers
    that were freed and rebuilt in between.
 
-   A FILE STATIC IS THE FIX AND IT MATCHES THE GL LANE, whose `g_tagpu_frames`
-   (`render_ogl.c:47`) is a file static for the same reason. One backend is
-   chosen per process and can only degrade to GDI, so the two counters can never
-   both be live and cannot diverge. [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.]
-   */
+   SO IT IS A FILE STATIC. */
 static unsigned s_frames = 0;
 
 DWORD WINAPI vk_render_main(void)
@@ -118,7 +64,7 @@ DWORD WINAPI vk_render_main(void)
     int gave_up = 0, came_up = 0, retries = 0;
     DWORD timeout;
 
-    /* THE SAME QUARTER SECOND `ogl_render_main` TAKES. The render thread is
+    /* A QUARTER SECOND BEFORE ANYTHING ELSE. The render thread is
        started from the game thread's mode set-up and the window's client rect
        is not final until that has finished; a swapchain built against the
        intermediate size would be rebuilt on the first `VK_SUBOPTIMAL_KHR`
@@ -156,18 +102,16 @@ DWORD WINAPI vk_render_main(void)
 
         fpsl_frame_start();
 
-        /* `g_ddraw.render.clear_screen` IS DELIBERATELY NOT TOUCHED, and the
-           reason is worth recording because the first version of this file did
-           consume it. Only `render_gdi.c` consumes that flag; `render_ogl.c`
-           never reads it, because a backend that clears its own target every
-           frame has nothing to do with it. This one is in the same position --
-           the seam clears the whole swapchain image on every frame it presents.
+        /* `g_ddraw.render.clear_screen` IS DELIBERATELY NOT TOUCHED. Only
+           `render_gdi.c` consumes that flag, because a backend that clears its
+           own target every frame has nothing to do with it -- and the seam
+           clears the whole swapchain image on every frame it presents.
 
-           And consuming it would have been WRONG rather than merely idle: the
-           lane presents nothing while the bring-up runs (~420 ms measured), so
-           a mode change that set the flag in that window would have had its
-           clear eaten by a frame that painted nothing. Left standing, the flag
-           is still there for the GDI fallback below, which is the one path that
+           And consuming it would be WRONG rather than merely idle: the lane
+           presents nothing while the bring-up runs (~420 ms measured), so a
+           mode change that set the flag in that window would have its clear
+           eaten by a frame that painted nothing. Left standing, the flag is
+           still there for the GDI fallback below, which is the one path that
            owes it. */
 
         /* ONE NUMBER FOR THE WHOLE FRAME, TAKEN BEFORE ANYTHING USES IT. Every
@@ -175,20 +119,13 @@ DWORD WINAPI vk_render_main(void)
            Vulkan twin refuses one published on any other frame -- a safety
            property and not tidiness (tagpu_vk_pass.h) -- so the driver below
            and the present call must be given the SAME value, and a
-           post-increment inside either call would silently differ by one. The
-           GL lane gets the same ordering by filling the struct earlier in its
-           loop and passing `g_tagpu_frames - 1u`. */
+           post-increment inside either call would silently differ by one. */
         fc = s_frames++;
 
         /* THE DRIVER. `tagpu_overlay_draw` is the single per-frame entry point
-           for everything this fork adds, and most of it is already
-           API-independent: input injection, the trigger-file readers, the
-           own-draw flushes, the palette, the zoom's one read of the eye, the
-           roster logs. The four entry points inside it that draw with GL --
-           scaffold, native, GUI and fps -- stand down one per commit of this
-           landing, each with its own A/B row; until a pass has stood down it
-           simply draws nothing here, because there is no GL context for it to
-           draw into. */
+           for everything this fork adds: input injection, the trigger-file
+           readers, the own-draw flushes, the palette, the zoom's one read of
+           the eye, the roster logs. */
         {
             TAGPU_FRAME f;
             f.struct_size   = sizeof(f);
@@ -219,41 +156,19 @@ DWORD WINAPI vk_render_main(void)
             tagpu_menu_present();
         }
 
-        /* THE FRAME-TIME LEVER IS POLLED HERE OR NOWHERE. [FOUND BY THE 4d-1
-           LANDING REVIEW.] `tagpu_ftime_poll` is what sets the module's `s_on`,
-           and until this line it was called from exactly one place --
-           `render_ogl.c` -- which after 4d-1 never drives this lane. So under
-           `renderer=vulkan` the whole instrument was inert for the session: no
-           Vulkan timestamps written (`tagpu_vk.c` gates them on
+        /* THE FRAME-TIME LEVER IS POLLED HERE OR NOWHERE. `tagpu_ftime_poll`
+           is what sets the module's `s_on`, and this is its one caller: without
+           it the whole instrument is inert for the session -- no Vulkan
+           timestamps written (`tagpu_vk.c` gates them on
            `tagpu_ftime_armed()`), every sample discarded, and not one line in
-           the log. The gate clause it exists for, "frame time no worse than
-           GL", is still open, so the landing that deleted the other lane must
-           not also delete the only way to measure this one.
+           the log.
 
-           WHAT IT CAN AND CANNOT ANSWER NOW is in tagpu_ftime.h: the two-lane
-           ratio is gone with route D, and what is left is this build's GPU time
-           against a previous build's. */
+           WHAT IT CAN AND CANNOT ANSWER is in tagpu_ftime.h: this build's GPU
+           time against a previous build's. */
         tagpu_ftime_poll();
         if (tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
                            g_config.vsync, fc))
             came_up = 1;
-
-        /* THE CURSOR HAND-OVER STOOD HERE and there is nothing left to hand
-           over. Every frame this loop weighed two halves -- had OUR cursor
-           reached the mirror record (`tagpu_gui_cursor_drew_take`), and had the
-           frame it was for actually composited (`tagpu_vk_ui_composited`) --
-           and published the answer to `tagpu_cursown`, which suppressed the
-           engine's own cursor blit on a 1. The composite is gone, so both
-           halves are gone and the answer could only ever be 0; the suppression
-           module went with them rather than stay as four engine patches that
-           can never fire.
-
-           THE ENGINE DRAWS ITS OWN CURSOR NOW, into its own surface, which is
-           where the reference frame wants it: the golden source stays complete
-           even though nothing of it reaches the screen. WHAT THE PLAYER SEES IS
-           NO CURSOR AT ALL -- the cut's cost, named here rather than left to be
-           found. A cursor comes back as a pass of ours.
-           [The vulkan-only plan, THE CLEAN CUT.] */
 
         /* THE LOOP'S OWN EXIT WINS OVER A FAILURE, and the order is free. A
            frame that both fails and finds `render.run` clear is a shutdown or a
@@ -269,8 +184,6 @@ DWORD WINAPI vk_render_main(void)
            session to software rendering: the second includes a one-second fence
            or acquire timeout and a single refused allocation, either of which
            can happen to a lane that has been presenting for ten minutes.
-           [FROM THE LANDING REVIEW, 2026-09-17. The first version handed the
-           session to GDI on any ST_FAILED, which made one hiccup permanent.]
 
            `gave_up` is latched rather than re-asked because
            `tagpu_vk_render_stop` below takes the lane back to ST_OFF and the
@@ -302,18 +215,17 @@ DWORD WINAPI vk_render_main(void)
 
     if (gave_up)
     {
-        /* THE SAME HAND-OVER `ogl_render_main` MAKES, and the same shape: the
-           renderer pointer is moved first so nothing downstream still believes
-           this backend is live, then GDI is called and never returns. The
-           warning text GDI prints is the fork's own.
+        /* THE HAND-OVER TO GDI. The renderer pointer is moved first so
+           nothing downstream still believes this backend is live, then GDI is
+           called and never returns. The warning text GDI prints is the fork's
+           own.
 
-           NOT COVERED, and it is a real loss: the GPU row's retry. While the
-           lane was a lever beside GL, a failed bring-up could be retried by
-           picking another device (`lane_gen() != s_choiceSeen`). Once the
+           NOT COVERED, and it is a real loss: the GPU row's retry. Once the
            session is on GDI the Vulkan lane is down for the process's life,
-           because this thread is GDI's now. The alternative -- sitting in this
-           loop presenting nothing while the player hunts for a device that
-           works -- leaves them with no picture at all, which is worse. */
+           because this thread is GDI's now, so picking another device cannot
+           bring it back. The alternative -- sitting in this loop presenting
+           nothing while the player hunts for a device that works -- leaves
+           them with no picture at all, which is worse. */
         TRACE("     Vulkan backend did not come up - switched to GDI renderer\n");
         g_ddraw.show_driver_warning = TRUE;
         g_ddraw.renderer = gdi_render_main;

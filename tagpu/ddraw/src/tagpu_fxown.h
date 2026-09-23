@@ -12,7 +12,7 @@ void tagpu_fxown_beat(unsigned int frame_counter);   /* "we drew this frame" */
 void tagpu_fxown_set_skip_sfx(int on);
 void tagpu_fxown_beat_sfx(unsigned int frame_counter);
 int  tagpu_fxown_installed(void);
-/* WHETHER THE PACKET'S PUBLISHER FILLS THE EFFECT TABLES (landing 4a). The
+/* WHETHER THE PACKET'S PUBLISHER FILLS THE EFFECT TABLES. The
    render thread raises these from its arming check — once per gathered frame,
    PASSIVE OR NOT, because a passive pass still counts and logs what it would
    have drawn — and `tagpu_fxown_flush` drops them after 90 silent present

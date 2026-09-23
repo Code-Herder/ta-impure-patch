@@ -105,13 +105,13 @@ HRESULT dd_EnumDisplayModes(
 
     /* tagpu: THE CAP IS THE MONITOR, NOT THE "REGISTRY DISPLAY MODE". On a
        multi-monitor X server that mode is the whole virtual desktop -- 6200x2160
-       on the reference setup's three outputs -- so the picker's top entry was a
-       size no screen can show, and the same number went into `inject_resolution`
-       below as "the native mode". `util_target_monitor` is the one API that
+       on the reference setup's three outputs -- so the picker's top entry would
+       be a size no screen can show, and the same number would go into
+       `inject_resolution` below as "the native mode". `util_target_monitor` is the one API that
        answers per monitor, and it follows the Monitor row when the player has
        chosen one, which is what makes this list the SELECTED screen's list.
-       ENUM_REGISTRY_SETTINGS stays as the fallback for a host where no monitor
-       can be identified at all. */
+       ENUM_REGISTRY_SETTINGS is the fallback for a host where no monitor can
+       be identified at all. */
     if (util_target_monitor(&mon_rc))
     {
         max_w = mon_rc.right - mon_rc.left;
@@ -271,7 +271,7 @@ HRESULT dd_EnumDisplayModes(
                    Wine hands every adapter the same union of every output's
                    modes plus the virtual desktop's bounding box (see
                    `util_target_monitor`), so without this the 1280x1024 screen
-                   was offered 3840x2160 and the 4K one 6200x2160. The injected
+                   is offered 3840x2160 and the 4K one 6200x2160. The injected
                    entry below is written over `m` AFTER this test and is
                    therefore exempt, exactly as it is exempt from CDS_TEST --
                    an explicit `inject_resolution` in the ini stays the
@@ -810,12 +810,12 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
 
             /* tagpu: size to the MONITOR, not to the display "mode". The mode
                read above is the VIRTUAL DESKTOP on a multi-monitor X server --
-               6200x2160 where the target monitor is 3840x2160 -- so the render
-               target came out desktop-wide, the 4:3 viewport was centred in
-               6200 rather than in 3840, and the borderless window showed a
-               slice of it pushed off to the right. `mouse.scale_*` is derived
-               from the same viewport a few lines down, so clicks were displaced
-               with it. The measurement, and why no display API but
+               6200x2160 where the target monitor is 3840x2160 -- so sized to it
+               the render target comes out desktop-wide, the 4:3 viewport is
+               centred in 6200 rather than in 3840, and the borderless window
+               shows a slice of it pushed off to the right. `mouse.scale_*` is
+               derived from the same viewport a few lines down, so clicks would
+               be displaced with it. The measurement, and why no display API but
                `GetMonitorInfo` answers this, is on `util_target_monitor`.
 
                Borderless fullscreen presents into ONE monitor by definition, so
@@ -1174,11 +1174,10 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
         {
             /* tagpu: THE TARGET MONITOR'S ORIGIN, not the desktop's. `x = y = 0`
                is the primary monitor's top-left, so borderless fullscreen on any
-               other monitor put the window on the WRONG SCREEN -- it took its
+               other monitor would put the window on the WRONG SCREEN -- its
                size from the right monitor (above) and its position from the
-               primary, which is the same mismatch, in the other direction, as
-               the virtual-desktop size this pair of changes removed. One source
-               of truth for both. Exclusive fullscreen keeps 0,0: there the mode
+               primary, the same mismatch, in the other direction, as sizing to
+               the virtual desktop. One source of truth for both. Exclusive fullscreen keeps 0,0: there the mode
                really is the screen. */
             RECT mon_rc;
 
@@ -1270,10 +1269,7 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
             real_SetWindowLongA(g_ddraw.hwnd, GWL_EXSTYLE, exstyle & ~(WS_EX_CLIENTEDGE));
         }
 
-        /* WAS `if (!d3d9_active || g_config.nonexclusive)` [landing 11-1].
-           d3d9_active could only ever be TRUE on the Direct3D9 lane, so with
-           that lane deleted the condition is unconditionally true -- this is
-           the same code path every surviving renderer already took. */
+        /* Unconditional: every renderer takes this path. */
         {
             if (!zooming && ChangeDisplaySettings(&g_ddraw.render.mode, CDS_FULLSCREEN) != DISP_CHANGE_SUCCESSFUL)
             {
@@ -1431,11 +1427,9 @@ HRESULT dd_SetCooperativeLevel(HWND hwnd, DWORD dwFlags)
         {
             g_ddraw.render.hdc = GetDC(g_ddraw.hwnd);
 
-            /* THE WGL PIXEL FORMAT WENT WITH THE LANE [landing 11-2]. Neither
-               surviving backend wants one: GDI blits through the DC and Vulkan
-               brings its own surface. Setting one here is also what route A
-               measured as poisoning the drawable for Vulkan, so its absence is
-               a property this fork now has by construction. */
+            /* NO WGL PIXEL FORMAT. Neither backend wants one: GDI blits through
+               the DC and Vulkan brings its own surface, and setting one here is
+               what route A measured as poisoning the drawable for Vulkan. */
         }
 
         if (!g_config.devmode)
@@ -1674,8 +1668,7 @@ ULONG dd_Release()
 
         if (!g_config.windowed)
         {
-            ChangeDisplaySettings(NULL, 0);   /* the Direct3D9 reset stood in
-                                                 front of this [landing 11-1] */
+            ChangeDisplaySettings(NULL, 0);
         }
 
         if (g_ddraw.render.hdc)
@@ -1864,8 +1857,7 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
         }
         else if (tolower(g_config.renderer[0]) == 'v') /* vulkan */
         {
-            /* NOTHING IS PROBED HERE.
-               Loading an ICD is what `vkCreateInstance` does and it must not
+            /* NOTHING IS PROBED HERE. Loading an ICD is what `vkCreateInstance` does and it must not
                happen on this path: this runs from the engine's DirectDraw
                creation, under the loader lock on some paths, which is the
                LoadLibrary-from-DllMain the companion-DLL rule forbids. The

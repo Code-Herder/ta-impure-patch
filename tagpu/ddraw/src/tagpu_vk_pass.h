@@ -1,6 +1,6 @@
 #ifndef TAGPU_VK_PASS_H
 #define TAGPU_VK_PASS_H
-/* What the presentation seam hands a ported pass (Phase G / G19d onward).
+/* What the presentation seam hands a ported pass.
 
    THE SEAM IS STILL ONE FILE. Standing constraint 3 says surface, swapchain,
    acquire and present live in tagpu_vk.c and that nothing else may know a
@@ -47,7 +47,7 @@ typedef struct {
     VkRenderPass              rp;
     VkFormat                  fmt;
     /* THE DEPTH ATTACHMENT'S FORMAT, or VK_FORMAT_UNDEFINED when the render
-       pass has none (G19e). Every pipeline built against `rp` must supply a
+       pass has none. Every pipeline built against `rp` must supply a
        VkPipelineDepthStencilStateCreateInfo once this is set -- a null
        pDepthStencilState in a subpass that has a depth attachment is invalid --
        so a pass that does not test depth still declares one with testing and
@@ -79,9 +79,9 @@ typedef struct {
        must not arm; it may not fall back to flipping geometry, which would
        mirror every glyph.
 
-       WHICH PASSES NEED IT IS NOT "ALL OF THEM", and assuming it was cost the
-       lane an upside-down picture for eight landings [landing 5b, 2026-09-17].
-       It depends on the SHADER's y convention, and this tree has two:
+       WHICH PASSES NEED IT IS NOT "ALL OF THEM", and assuming it is draws the
+       picture upside down. It depends on the SHADER's y convention, and this
+       tree has two:
 
          * `1 - y*2`, or an NDC rect built y-up -- tagpu_vk_gui.c's composite,
            tagpu_vk_fps.c, tagpu_vk_scaffold.c. These speak GL's WINDOW
@@ -89,7 +89,7 @@ typedef struct {
          * `p.y/uGame.y*2 - 1` on the engine's screen-space y, which grows
            DOWNWARD -- tagpu_vk_terr.c, _feat.c, _fx.c, _unit.c, _mark.c. Clip
            -1 is the game frame's TOP row, which is row 0 under Vulkan already.
-           These must NOT flip, and no longer ask for this at all.
+           These must NOT flip, and do not ask for this at all.
 
        The two are distinguishable in one line of each pass's vertex shader, and
        the A/B cannot tell them apart: it compares the lanes to each other, and a
@@ -97,7 +97,7 @@ typedef struct {
     int                       flipok;
     /* VK_EXT_line_rasterization WITH `bresenhamLines`, ENABLED ON THE DEVICE.
        A pass that draws LINES needs it and may not draw without it.
-       MEASURED 2026-09-15 (G19e, the effects pass): under Vulkan's DEFAULT
+       MEASURED 2026-09-15 (the effects pass): under Vulkan's DEFAULT
        lineRasterizationMode the ported lasers came out a strict SUPERSET of
        their GL twin's -- all 126 of the twin's pixels plus exactly one extra
        fragment at the END of each line segment. GL's non-antialiased lines
@@ -113,12 +113,6 @@ typedef struct {
        wide is `ss` pixels of the target, and a Vulkan pipeline fixed at 1.0
        draws a line `ss` times too thin. Same shape as `flipok` and
        `lineok`: a rule the GL twin already obeys, adopted as pipeline state.
-       UNTIL 4c-2 THERE WAS NO SUPERSAMPLED TARGET, so `ss` was a number the
-       lane could only refuse -- tagpu_vk_fx.c and tagpu_vk_mark.c stood the
-       WHOLE pass down on any frame carrying line vertices, which on the
-       shipped default (`ss` is 2 unless `tagpu_ss.off` is there) meant the
-       effects pass dropped every frame with a laser in it. Measured on the
-       lane 2026-09-18 before this was added.
        `maxLineWidth` is `lineWidthRange[1]`, and a width past it is refused
        rather than clamped: a clamped width is a line a different thickness
        from its own oracle, which is the thing this family of flags exists
@@ -126,19 +120,18 @@ typedef struct {
     int                       wideok;
     float                     maxLineWidth;
     /* VK_EXT_depth_clip_control WITH `depthClipControl`, ENABLED ON THE DEVICE,
-       and so a pipeline may ask for GL'S OWN CLIP-SPACE Z RANGE.
-       GL maps clip z in [-1, 1] onto the depth range; Vulkan takes [0, 1] and
-       CLIPS the rest. Every world pass ported through G19e writes a z already
-       in [0, 1], so `minDepth 0.5 / maxDepth 1.0` reproduces GL exactly and
-       none of them needs this. THE SHADOW PASS IS THE EXCEPTION: its
-       orthographic light matrix is built to fill [-1, 1] (tagpu_shadow.c
-       `mrow`), so without this the near half of every caster is clipped away
-       and the depth map is WRONG rather than merely different -- and the
-       depths it stores are what the consumers' taShadowAt compares against.
-       Same shape as `flipok` and `lineok`: a rule the GL twin already obeys,
-       adopted as pipeline state rather than worked around, and a pass whose
-       device will not offer it stands down instead of drawing a map its own
-       oracle would not recognise. */
+       and so a pipeline may ask for GL'S OWN CLIP-SPACE Z RANGE. GL maps clip z
+       in [-1, 1] onto the depth range; Vulkan takes [0, 1] and CLIPS the rest.
+       The other world passes write a z already in [0, 1], so `minDepth 0.5 /
+       maxDepth 1.0` reproduces GL exactly and none of them needs this. THE
+       SHADOW PASS IS THE EXCEPTION: its orthographic light matrix is built to
+       fill [-1, 1] (tagpu_shadow.c `mrow`), so without this the near half of
+       every caster is clipped away and the depth map is WRONG rather than
+       merely different -- and the depths it stores are what the consumers'
+       taShadowAt compares against. Same shape as `flipok` and `lineok`: a rule
+       the GL twin already obeys, adopted as pipeline state rather than worked
+       around, and a pass whose device will not offer it stands down instead of
+       drawing a map its own oracle would not recognise. */
     int                       zclipok;
     /* `samplerAnisotropy` WAS ENABLED ON THE DEVICE, and the largest ratio it
        will apply. This fork filters exactly one class of texture -- the
@@ -158,11 +151,9 @@ typedef struct {
        refusal is the whole point: the GL modules' hand-overs alias buffers
        those modules own and rebuild (the tile atlas, the height grid, the
        vertex arrays), so a hand-over left standing from an earlier frame can
-       name memory that has since been freed. Before the G19e re-review the
-       only thing stopping that was "the publishing function is called every
-       frame, and it clears the flag on the way out" -- which is not true of a
-       frame whose gather bailed, because then it is not called at all.
-       [FROM THE G19e RE-REVIEW, 2026-09-15 -- both reviewers, separately.] */
+       name memory that has since been freed. The publishing function clearing
+       the flag on the way out is not enough on its own: a frame whose gather
+       bailed does not call it at all. */
     unsigned                  frame;
     PFN_vkGetInstanceProcAddr gipa;
     PFN_vkGetDeviceProcAddr   gdpa;

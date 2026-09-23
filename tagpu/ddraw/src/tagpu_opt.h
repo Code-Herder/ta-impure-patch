@@ -8,14 +8,14 @@
    is ON, with the tokens listed in tagpu_opt.c, whenever its .on file is absent. The
    files keep their meaning --
 
-     tagpu_<x>.on    exists: the pass is on and these are its tokens, as ever
+     tagpu_<x>.on    exists: the pass is on and these are its tokens
      tagpu_<x>.off   exists (and no .on): a default-on pass is off
      tagpu_defaults.off  exists: the whole table is off -- every pass opt-in again,
                      which is what tacli's instances use, so a measurement arms
                      exactly what it names and a stock launch stays a control.
 
    A pass off the table (the instrumentation triggers, the knob files, the `.off`
-   levers) is untouched: it reads its file as before. */
+   levers) is untouched: it reads its file. */
 
 /* 1 when the pass is on: its .on file exists, or its default applies. */
 int tagpu_opt_on(const char* onfile);

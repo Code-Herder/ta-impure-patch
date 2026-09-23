@@ -2,7 +2,7 @@
 #define TAGPU_TERROWN_H
 /* Own the terrain draw: skip the engine's terrain pass 0x483FA0 while the
    native terrain pass (tagpu_terr.on) supplies the pixels, and skip the fog
-   overlay 0x4848E0 with it (we reproduce the fog rule ourselves since G13c,
+   overlay 0x4848E0 with it (we reproduce the fog rule ourselves,
    and its shade remap would rewrite our key fill into grey blobs).
 
    Two things make this gate different from featown:
@@ -31,17 +31,8 @@ int  tagpu_terrown_installed(void);
    skip — the composite must not invert on the frame the skip is first set,
    when the engine's surface still holds a real terrain blit */
 int  tagpu_terrown_filled(void);
-/* `tagpu_terrown_fill_seq()` STOOD HERE and is deleted [2026-09-22]. It was
-   bumped by every successful key fill, and its one reader was the UI layer's
-   publisher: the viewport's erase was emitted only on a frame whose fill
-   sequence had advanced. That made this lever — which suppresses the engine's
-   terrain pass and so holes the reference frame — the publisher's only signal
-   that the viewport was ours, and with `terrown` off the erase never fired at
-   all. The erase is now a property of the frame (`tagpu_gui_hook.c`'s `publish`,
-   the `PK_CLEAR` at the flip marker), so nothing asks this any more. */
 /* 1 while the engine's fog overlay 0x4848E0 is ours -- the game thread's
-   latch, which is what its stub tests. (No caller at present; the comment here
-   said tagpu_zoom gates cursor anchoring on it, which is no longer so.) */
+   latch, which is what its stub tests. (No caller at present.) */
 int  tagpu_terrown_owns_fog(void);
 /* The render thread's request -- 1 while it wants the engine's terrain and
    fog skipped. Read by the game thread's latch below, never by the stubs. */
@@ -59,7 +50,7 @@ void tagpu_terrown_latch(int own);
    (0x4843C0 recomputes the origin from those two words itself). 0 when this
    fork has never seen that builder run — terrain ownership disarmed, so the
    engine calls it where we cannot observe — and the publisher then falls back
-   to the packet's own eye, which is what the render thread used to use. */
+   to the packet's own eye. */
 int tagpu_terrown_fog_eye(int* x, int* y);
 /* GAME THREAD, from the packet's publisher. 1 while our fog observer ran in
    THIS in-play draw — i.e. while terrain ownership is on and the site is ours.

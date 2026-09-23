@@ -2,8 +2,7 @@
    unit's COB piece pose. See tagpu_lerp.h for the invariants; this file is the
    pairing and the blend.
 
-   THE SHAPE, AFTER THE FRAME PACKET (landing 3). The consumer holds two
-   packets; `prev` carries the pose at an earlier sim tick and `read` the pose
+   THE SHAPE. The consumer holds two frame packets; `prev` carries the pose at an earlier sim tick and `read` the pose
    at a later one, and the exchange's own rotation guarantees the two ticks
    differ, so there is no history to keep here at all. `posed_pose` draws at
    prev + (read - prev) * u, where u is how far through the interval between
@@ -15,10 +14,9 @@
    QueryPerformanceCounter the instant the GAME thread first saw its tick
    change -- within one engine draw of the true tick boundary, and the engine
    draws hundreds of times a second. So the interval between two packets'
-   stamps IS the measured duration of the ticks between them, per pair, and the
-   learned-and-smoothed period this module used to keep (with a hard-coded
-   floor that was its first bug) is gone. u is (now - read.tick_start) divided
-   by that interval: 0 on the frame the later tick's first packet arrives,
+   stamps IS the measured duration of the ticks between them, per pair, and
+   nothing here learns or smooths a period. u is (now - read.tick_start)
+   divided by that interval: 0 on the frame the later tick's first packet arrives,
    which is the frame that must show PREV.
 
    UNITS ARE MATCHED BY THE STABLE ID (unit+0xA8), never by table position --
@@ -26,7 +24,7 @@
    otherwise shift every unit after it by one and blend each toward its
    neighbour. The pairing is verified with the model identity as well
    (Object3do key, piece count, UnitDef row), which narrows the one residual
-   this module has always had: the engine RECYCLES an in-game index when a unit
+   this module has: the engine RECYCLES an in-game index when a unit
    dies, so a unit that died and one that took its id within a single tick
    could be paired. It would have to be of the same type, on the same
    Object3do allocation, within one tick; the cost is one frame of a limb
@@ -164,15 +162,15 @@ void tagpu_lerp_frame(unsigned frameCounter, const TAGPU_PACKET* pk, const TAGPU
    target has no SSE, so there is no `cvttss2si`: C requires a float->int
    conversion to truncate toward zero, the x87 rounds to nearest, and GCC
    therefore brackets EVERY `(int)` of a float with a control-word save and
-   restore. The first cut did two such conversions per iteration, so the loop
-   carried FOUR `fldcw` -- a serialising reload of the whole x87 state -- for
-   about ten cycles of actual arithmetic.
+   restore. Two such conversions per iteration put FOUR `fldcw` in the loop --
+   a serialising reload of the whole x87 state -- for about ten cycles of
+   actual arithmetic.
 
    MEASURED FROM THE COMPILER, not from a stopwatch: both forms built with this
    makefile's own flags give 13 x87 instructions including 4 `fldcw` for the
    float loop and ZERO for this one (smooth-motion.md section 7i).
 
-   The blend never needed floating point. `u` is in [0,1), so 16.16 gives it
+   The blend does not need floating point. `u` is in [0,1), so 16.16 gives it
    1/65536 of a tick of resolution, which is finer than a piece moves in a tick
    by orders of magnitude; the position delta stays a WIDE multiply so no pair
    of endpoints can overflow it whatever a mod puts in those fields, and the
@@ -219,9 +217,9 @@ int tagpu_lerp_unit(const TAGPU_PK_UNIT* u, const TAGPU_PK_PIECE* cur, int npart
     if (!old) { s_nsnap++; return 0; }
 
     /* THE DEGRADATION IS A `return 0`, NOT A LERP AT WEIGHT 1. `a+(b-a)*1.0f`
-       is not `b` in floating point, so "blend with weight 1" would have been
-       off by an ulp on every piece of every unit and invariant 2's parity
-       claim would have been false. Refusing hands the caller back the packet's
+       is not `b` in floating point, so "blend with weight 1" would be off by
+       an ulp on every piece of every unit and invariant 2's parity claim
+       would be false. Refusing hands the caller back the packet's
        own untouched triples, which is bit-identical by construction. */
     blend(old, cur, nparts, s_w16, obuf, otbuf);
     *pos = obuf;

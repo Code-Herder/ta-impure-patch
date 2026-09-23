@@ -25,20 +25,17 @@ BOOL tagpu_mouse_nowarp(void)
 }
 
 /* THE ONE TRANSFORM from a client-area point to the engine's logical screen
-   (tagpu, G17b). It was inline in wndproc.c's button cases and nowhere else,
-   which made the pointer path untestable: `tacli`'s injected clicks deliver
-   GAME-space coordinates straight to the engine (tagpu_shield.c
-   `deliver_mouse`), so they never traverse this arithmetic at all, and the
-   G17b gate's exit -- "clicks land on the right gadget" -- could not be
-   measured by the tooling that exists. Sharing it is what makes the harness's
-   device-space click the same code a player's click takes, rather than a copy
-   of it that can drift.
+   (tagpu). One function rather than inline arithmetic in wndproc.c, because
+   `tacli`'s injected clicks deliver GAME-space coordinates straight to the
+   engine (tagpu_shield.c `deliver_mouse`) and so never traverse it: sharing it
+   is what makes the harness's device-space click the same code a player's
+   click takes, rather than a copy of it that can drift.
 
    Returns 1 when the point was inside the letterboxed viewport. Outside it the
-   engine has always been handed the centre of its own screen, and that is kept
-   exactly: a click on a letterbox bar is not a click at the nearest edge.
+   engine is handed the centre of its own screen: a click on a letterbox bar is
+   not a click at the nearest edge.
    Design: research/notes/gui-renderer.md 13.1. */
-/* THE TRUE DEVICE POINTER (tagpu, G17c). The engine only ever learns a point
+/* THE TRUE DEVICE POINTER (tagpu). The engine only ever learns a point
    in its own logical grid, so at k = 3 its cursor can only sit on multiples of
    three device pixels; ours is drawn from the client-area point the same
    message carried, which is where the pointer actually is. Kept here because
@@ -75,9 +72,9 @@ int mouse_last_client(int* cx, int* cy)
 
 /* Is a CLIENT point over the picture? The one definition, because two paths
    ask: the message path below, and the poll path (fake_GetCursorPos) that the
-   engine's edge scroll reads. They answered differently until G18-9 — the poll
-   CLAMPED an outside point into range and so reported x == 0 or width-1, the
-   exact equality 0x41CE90 scrolls on, ~700 times a launch. */
+   engine's edge scroll reads. They must agree: a poll that CLAMPS an outside
+   point into range reports x == 0 or width-1, the exact equality 0x41CE90
+   scrolls on, ~700 times a launch. */
 int mouse_client_inside(int cx, int cy)
 {
     return !(cx > g_ddraw.render.viewport.x + g_ddraw.render.viewport.width ||
@@ -116,13 +113,12 @@ int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
        outside a HUD region and at stock scale. */
     tagpu_hud_to_engine(&x, &y);
 
-    /* The clamp keeps the ORIGINAL unsigned comparison. `g_ddraw.width` is a
-       DWORD and the inline version in wndproc promoted `x` to unsigned against
-       it, so before the first dd_SetDisplayMode (width 0) the result was 0, not
-       -1. An `(int)` cast here would hand back -1, which deliver_mouse re-reads
-       as TAGPU_M_HERE and wndproc stores as 0xFFFFFFFF (both landing reviewers
-       spotted the difference). Guarded rather than cast so the degenerate state
-       cannot produce a negative. */
+    /* The clamp keeps the stock unsigned comparison. `g_ddraw.width` is a
+       DWORD and the stock comparison promotes `x` to unsigned against it, so
+       before the first dd_SetDisplayMode (width 0) the result is 0, not -1. An
+       `(int)` cast here would hand back -1, which deliver_mouse re-reads as
+       TAGPU_M_HERE and wndproc stores as 0xFFFFFFFF. Guarded rather than cast
+       so the degenerate state cannot produce a negative. */
     if (g_ddraw.width  && x > (int)g_ddraw.width  - 1) x = (int)g_ddraw.width  - 1;
     if (g_ddraw.height && y > (int)g_ddraw.height - 1) y = (int)g_ddraw.height - 1;
     if (x < 0) x = 0;

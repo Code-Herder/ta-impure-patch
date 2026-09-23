@@ -1,4 +1,4 @@
-/* tagpu_native.c — G12b: the first truly NATIVE unit pass (Phase D).
+/* tagpu_native.c — the NATIVE unit pass.
 
    Chosen unit types leave the 8bpp composite path entirely: their composites
    are wiped to ColorKey (engine keeps pose/AABB/alloc/blit — of nothing) and
@@ -11,7 +11,7 @@
        through the live palette (256x1 RGBA texture, refreshed per frame — not
        because it cycles: it does NOT cycle in play, measured 2026-09-05, see
        tagpu_terr.c. Re-reading it is free and survives whatever does write it);
-     - occlusion: per-fragment test against the G12a scene-depth scaffold
+     - occlusion: per-fragment test against the scene-depth scaffold
        (painter's row keys; a tall feature in a nearer row hides the unit),
        plus a real GL depth buffer for self/inter-unit occlusion;
      - fog: per-fragment sample of the LOS counter map + MAPPED bits
@@ -23,8 +23,8 @@
        covers twice is still darkened once (see the shadow loop). A mobile
        unit's is its body silhouette; a structure's is the engine's cached
        SLANT projection, which owndraw "all" stops the engine from blitting
-       (G13k) and emit_slant draws from the live posed prims by the engine's
-       own raster rules -- every face, flat, no waterline erase (G14j). A 3DO
+       and emit_slant draws from the live posed prims by the engine's
+       own raster rules -- every face, flat, no waterline erase. A 3DO
        wreck keeps the engine's FShadow feature shadow. FBI
        noshadow/canhover/floater gates mirror the engine;
      - cloak (unit+0x10E bit2): true translucency (alpha 0.5); cloaked
@@ -40,7 +40,7 @@
    owned like any other and staged here (build-state.md §7); see
    `tagpu_native_owns_unit`.
 
-   G12c close-out + G12d additions:
+   Beyond the units themselves:
      - WRECKS (extra token "wrecks" in tagpu_native.on): 3D husks are found by
        walking the sweep-rect FeatureStruct tiles (flags bit0 -> wreck record
        *(main+0x1420B)+idx*0x30; only defs with FeatureMask bit0 CLEAR are 3D)
@@ -80,22 +80,22 @@
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
-#include "tagpu_owndraw.h"   /* set_structshadow; structshadow_ours has no caller since 2026-09-20 */
+#include "tagpu_owndraw.h"   /* set_structshadow; structshadow_ours has no caller */
 #include "tagpu_reclaim.h"   /* the teardown fence this file's template reads stand behind */
 #include "tagpu_posebake.h"
 #include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
-#include "tagpu_posedraw.h"  /* G16 step 4: the per-type geometry bake and its caches */
+#include "tagpu_posedraw.h"  /* the per-type geometry bake and its caches */
 #include "tagpu_lerp.h"      /* smooth-motion.md option A: the pose between two sim ticks */
 #include "crc32.h"          /* the tagpu_posecrc.on gate oracle */
 #include "tagpu_glsl.h"
 #include "tagpu_zoom.h"
-#include "tagpu_packet.h"  /* the view every pass draws from (landing 2) */
-#include "tagpu_gui.h"       /* tagpu_gui_cursor_own: whose cursor is on screen (G17c) */
+#include "tagpu_packet.h"  /* the view every pass draws from */
+#include "tagpu_gui.h"       /* tagpu_gui_cursor_own: whose cursor is on screen */
 #include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
 #include "tagpu_vpwide.h"
 #include "tagpu_hud.h"
 
-/* ---- engine layout (all binary-verified in earlier phases) ---- */
+/* ---- engine layout (all binary-verified) ---- */
 #define TA_MAINPP    0x00511DE8u
 #define OFF_BEGIN    0x14357
 #define OFF_END      0x1435B
@@ -131,10 +131,8 @@
                                /* (composite-buffer.md) = *(u8*)(ta+0xDCB+i)*/
 #define SELBOX_COLIDX 0x0A     /* the select box's GUI colour — an INDEX INTO */
                                /* that array, not a palette index: 0xA reads  */
-                               /* 233 in stock TA, and using 10 raw drew the  */
-                               /* box in a dark colour that went unnoticed    */
-                               /* while the engine still painted its own      */
-                               /* green one over it (G13d)                    */
+                               /* 233 in stock TA, and 10 used raw is a dark  */
+                               /* colour                                      */
 #define U_OBJ3DO     0x9E
 #define U_TYPE       0x92
 #define U_OWNER      0xFF
@@ -151,10 +149,9 @@
 #define UD_DIGGER    0x40000000u /* FBI mask bit30: clip below ground level  */
 #define OFF_SEALEVEL 0x1427F   /* u8 water level, elevation units           */
 #define OFF_LOCALPL  0x2A43    /* u8 the blit compares unit+0xFF against    */
-/* The per-unit composite GAFFrame (Object3do+0x10) and its depth plane
-   (GAFFrame+0x14) used to be read here; the packet carries the answer as
-   TAGPU_PK_U_DEPTHPLANE since landing 3, and both offsets went unused with it.
-   They are in research/notes/exe-reverse-engineering.md. */
+/* The per-unit composite's depth plane arrives as the packet's
+   TAGPU_PK_U_DEPTHPLANE; its offsets (Object3do+0x10, GAFFrame+0x14) are in
+   research/notes/exe-reverse-engineering.md. */
 #define OFF_FMAP     0x14287   /* FeatureStruct tile map, stride 0x0D       */
 #define OFF_MAPW     0x14233   /* map W in 16-px tiles                      */
 #define OFF_MAPH     0x14237   /* map H in 16-px tiles                      */
@@ -178,7 +175,7 @@
    it is not merely undrawn, it is INVISIBLE — tagpu_overlay.c wipes the engine's
    composite for every unit `tagpu_native_owns_unit` accepts, whether or not this
    gather included it. So it has to stay ahead of the rect the gather fills from,
-   and since G13d that rect grows with zoom-out (16x the area at the 0.25x
+   and that rect grows with zoom-out (16x the area at the 0.25x
    floor). MAXNV is the real budget and truncates gracefully; this one must not
    be what runs out first. */
 #define MAXU   2048
@@ -205,17 +202,16 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
    interpolating between them is what makes an owned unit's body slide rather
    than step.
 
-   The table used to be a function-local static inside tagpu_native_frame,
-   because the unit pass was its only reader. It is not any more: a marker
-   drawn at native resolution — a crisp range circle centred on a walking
-   unit — steps once per tick against a body that slides, and the step is
-   plainly visible where the 1997 art's own blockiness hid it. So the read
-   half is factored out and published as tagpu_native_unit_pos().
+   The table is file-static because the unit pass is not its only reader: a
+   marker drawn at native resolution — a crisp range circle centred on a
+   walking unit — would step once per tick against a body that slides, and the
+   step is plainly visible where the 1997 art's own blockiness hid it. So the
+   read half is published as tagpu_native_unit_pos().
 
    ONLY THE UNIT PASS WRITES IT, and only for units it owns, so a unit the
    pass does not gather has no sample and every reader falls back to the raw
    16.16. Slot reuse (a dead unit's slot handed to a new one) is caught by the
-   same distance snap the pass has always used, plus — for the accessor — a
+   pass's distance snap, plus — for the accessor — a
    check that the stored sample still describes the unit being asked about. */
 typedef struct { int x, z, y; int px, pz, py; unsigned tc, tp; } SPX;
 static SPX      s_spx[8192];
@@ -263,75 +259,27 @@ static void nlog(const char* s)
 
 /* READ FROM THE GAME THREAD (tagpu_native_owns_unit, via tagpu_markown.c's
    mark_selbox), written here on the render thread — volatile so the publishing
-   store below cannot be hoisted above the state it publishes. (It used to cite
-   s_selComplete for the same reason; that one has no writer left, see its own
-   comment.) */
+   store below cannot be hoisted above the state it publishes. */
 static volatile int s_armed = -1;
 
-/* MUST THE ENGINE'S CACHED SLANT BE SUPPRESSED THIS FRAME -- the
-   structure-shadow gate's input. `s_ssSuppress`, the file-static that carried
-   it, IS GONE (2026-09-22): it had had no writer since landing 11-3 deleted the
-   GL painters, and the answer now comes from the painter that replaced them
-   through `tagpu_posedraw_slant_take()`, at the gate itself.
-
-   THE HISTORY IS KEPT BECAUSE THE GATE HAS ASKED FOUR WRONG QUESTIONS. The
-   variable was once `s_ssPainter` and asked "did anything paint one", which is
-   not the same as "must the engine be stopped": painting decides whether a
-   SHADOW appears, not whether GARBAGE does, and inside a key-filled viewport
-   the engine's cached slant is always garbage -- MEASURED 2026-09-18, 8779 px
-   of opaque teal on four structures. There is no key-fill on this lane, so what
-   is left of that question is the painting, and it is answered by the painter
-   rather than restated here. Render thread only, one writer and one reader; the
-   value that crosses to the game thread is `tagpu_owndraw.c`'s `g_ssSkip`,
-   which the publisher writes from this. */
 static char   s_type[32] = "armcom";
 static int    s_wrecks = 0;            /* "wrecks" token present            */
 static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
 static int    s_subpix = 1;            /* sub-pixel motion (tagpu_subpix.off)*/
 static int    s_spxlog = 0;            /* anchor filmstrip (tagpu_spxlog.on) */
-/* G16 step 8 removed the pose-race guard, the rest-equality detector, the
-   reconstruction and `posewatch` along with the CPU emitters that were the
-   only things that reached them, and with them the levers `tagpu_posefix.off`,
-   `tagpu_posewatch.on` and `tagpu_poserecon.on`. Nothing reads `prim+0x22` any
-   more, so the race they detected and worked around cannot happen — the pose
-   comes off the FIELDS. gpu-status.md §2.9 keeps the history. */
+/* Nothing reads `prim+0x22`: the pose comes off the FIELDS, so the pose race
+   cannot happen here (gpu-status.md §2.9). */
 static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
-#define TAGPU_SS_MAX 4                 /* the most we will supersample by (G17b) */
+#define TAGPU_SS_MAX 4                 /* the most we will supersample by */
 static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
 static TAGPU_WORLDTGT s_wt;            /* the world target, published per frame */
 static int    s_wtHave = 0;
-/* ---- `tagpu_selgeom.on` IS GONE, AND THE VULKAN LANE IS ITS `main` SETTING ----
-   The lever existed because a GL line is one pixel wide IN THE BUFFER IT IS
-   DRAWN INTO and the driver clamps an aliased line's width to 1 (measured:
-   `glLineWidth(ss*3)` draws pixel-identically to `glLineWidth(ss)`), so at
-   `ss > 1` the rect resolved to a half-lit smear; armed, each edge was emitted
-   as two triangles with a width we chose. None of that survives the GL draw
-   half [landing 11-3]: the Vulkan lane draws the rect as geometry always, and
-   `tagpu_vk_world.h` records that `selAt1x` is not expressible there -- so the
-   lane is permanently in what GL called `selgeom main`. A lever whose only
-   reader is deleted does not become harmless by being left in: it becomes a
-   file a session can arm and then measure nothing from. The widths it could
-   set, and the 2026-09-11 coverage measurement behind them, are in
-   ui-markers.md. */
-/* `s_fogTex` AND `s_fogLutTex` STOOD HERE AND WERE DELETED -- with the write
-   to `fv.fogTex`/`fv.fogLut` that was supposedly their reason to stay. They
-   survived the first pass of this landing because `tagpu_hires_draw.c` reads
-   `v->fogTex` and `v->fogLutTex`, which looked like a live consumer. IT IS NOT
-   THE SAME STRUCT: those are `TAGPU_HVIEW` fields (`inc/tagpu_hires_draw.h`),
-   and `TAGPU_FXVIEW.fogTex`/`.fogLut` had no reader anywhere in the tree.
-   Caught by this landing's review, and it is the second time in two landings
-   that "it is published" turned out to be inferred from a name rather than
-   checked -- the first was `s_palTex`, caught by the compiler. THE RULE: trace
-   the field, not the word. The bytes the Vulkan twins actually read are
-   `tagpu_native_foglut()`'s 256-byte CPU mirror, reached through the frame
-   packet's `fogLut`, which is a `const unsigned char*` -- a different field
-   that happens to share the name. */
-/* the 256-byte fog shade table as it was last uploaded to s_fogLutTex, for a
-   backend that cannot read a GL texture (Phase G / G19e, tagpu_native.h) */
+/* the 256-byte fog shade table as this frame built it, for the Vulkan twins
+   (tagpu_native.h) */
 static unsigned char s_fogLutBytes[256];
 static int s_fogLutHave;
 /* whether this frame's world FBO pass is actually scissored to the viewport
-   (Phase G / G19e, tagpu_native.h) */
+   (tagpu_native.h) */
 static int s_scissorOn;
 static float  s_zoom = 1.0f;
 static TAGPU_PDVIEW s_pv;          /* the posed pass's view, filled once per
@@ -344,8 +292,7 @@ static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
 static int    s_fogCells = 0;         /* the ALLOCATION's cell count (= cols*rows) */
 /* Frames drawn zoomed out, or from an unacknowledged eye, whose packet carried
    no WIDE fog grid — so the outer ring falls back to the engine's 1x grid and
-   taFog's clamp. This is tagpu_fogwide's old `bare=` counter, moved here with
-   the grid (landing 4b): it must read 0 unless `tagpu_fogwide.off` is armed. */
+   taFog's clamp. It must read 0 unless `tagpu_fogwide.off` is armed. */
 static unsigned s_fogBare = 0;
 static const unsigned short* s_fogGrid = NULL;
 static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
@@ -356,34 +303,31 @@ static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
    division, so a floor-based remainder would disagree with the engine for a
    negative eye (eye = -20: engine origin -16, floor would say -48). */
 static float  s_verts[MAXNV * NVST];
-/* NOTHING WRITES THIS, AND ON THIS LANE THAT IS DELIBERATE.
+/* NOTHING WRITES THIS, AND THAT IS DELIBERATE.
 
-   It was written once, at the bottom of the GL unit pass, meaning "every
-   selection box this frame owed was actually emitted"; `tagpu_markown.c`'s
-   mark_selbox reads it through `tagpu_native_selbox_complete()` and suppresses
-   the ENGINE's own box draw only when it is 1. That store sat below the
-   `!gl_draws` hand-over return, so on the Vulkan lane it never ran, and
-   landing 11-3 deleted it with the rest of that pass.
+   It means "every selection box this frame owed was actually emitted";
+   `tagpu_markown.c`'s mark_selbox reads it through
+   `tagpu_native_selbox_complete()` and suppresses the ENGINE's own box draw
+   only when it is 1.
 
-   THE RECT IS OURS AGAIN (`selbox_emit`, 2026-09-23) AND THIS STAYS 0 ON
-   PURPOSE. The suppression existed so the engine's box and ours could not
-   both land on the screen. Since the clean cut the engine's box lands only in
-   its own reference surface -- the golden source `tacli shot` reads -- and
-   nowhere a player sees, so there is no pair left to prevent; suppressing it
-   would only take the box out of the reference that our rect is measured
-   against. The cost is the engine's own draw, four `DrawLine`s per selected
-   unit on the game thread.
+   OUR RECT (`selbox_emit`) IS DRAWN AND THIS STAYS 0 ON PURPOSE. The
+   suppression exists so the engine's box and ours cannot both land on the
+   screen. The engine's box lands only in its own reference surface -- the
+   golden source `tacli shot` reads -- and nowhere a player sees, so there is
+   no pair to prevent; suppressing it would only take the box out of the
+   reference that our rect is measured against. The cost is the engine's own
+   draw, four `DrawLine`s per selected unit on the game thread.
 
    The variable and its accessor are kept because markown still reads them:
    deleting the accessor means editing a patch whose job is unchanged, and a
-   later lane that wants the engine to stand down has its seam here. */
+   lane that wants the engine to stand down has its seam here. */
 static volatile int s_selComplete = 0;
 
 /* material constants copied per frame from render3do's calibration */
 static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
 static const float SH_L[3] = { -0.35f, 0.80f, -0.49f };
 
-/* SIX SHADERS, AND FIVE OF THEM HAVE NO C REFERENCE LEFT. They are a BUILD
+/* SIX SHADERS, AND FIVE OF THEM HAVE NO C REFERENCE. They are a BUILD
    INPUT, not dead GL code: `tools/spirv-gen.py` reads every one out of the
    PREPROCESSED translation unit and generates the SPIR-V that
    `tagpu_vk_unit.c` and `tagpu_vk_world.c` draw with -- the manifest names
@@ -391,9 +335,8 @@ static const float SH_L[3] = { -0.35f, 0.80f, -0.49f };
    fails the build. `FS` is the exception with a live C caller:
    `tagpu_native_unit_fs()` hands it to `tagpu_posedraw.c`, which is exactly
    why the posed and unposed units cannot drift apart. The pragma below is
-   paired and its `pop` is PROVED with a planted probe rather than read --
-   landing 11-4b put one inside a comment, where it is text and not a
-   directive. */
+   paired and its `pop` is PROVED with a planted probe rather than read -- a
+   `pop` inside a comment is text and not a directive. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
@@ -407,7 +350,7 @@ static const char* VS =
     "layout(location=6) in vec3 aNrm;\n"     /* posed face normal, map space   */
     "uniform vec2 uGame;\n"                  /* game_width, game_height        */
     "uniform vec2 uOffset;\n"                /* shadow pass shift, px          */
-    "uniform float uZoom;\n"                 /* G12d partial-zoom demo         */
+    "uniform float uZoom;\n"                 /* view zoom about uZoomC         */
     "uniform vec2 uZoomC;\n"                 /* zoom centre, game px           */
     "uniform float uDepthScale;\n"           /* > every key in use this frame  */
     "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv   */
@@ -437,7 +380,7 @@ static const char* FS =
     "uniform sampler2D uPal;\n"              /* 256x1 RGBA live palette        */
     "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin, mipped */
     "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */
-    TAGPU_GLSL_SCAF_UNIFORMS                  /* G12a scaffold, R8, viewport    */
+    TAGPU_GLSL_SCAF_UNIFORMS                  /* scene scaffold, R8, viewport   */
     TAGPU_GLSL_FOG_UNIFORMS
     "uniform int uShadow;\n"
     "uniform float uAlpha;\n"
@@ -502,8 +445,8 @@ static const char* FS =
        encBase, so the two sort by md alone), and it culled the nanolathe
        spray, later-indexed units and hires bodies the same way. Losing the
        wireframe's hidden-line removal is the smaller of the two errors;
-       getting it back needs per-sprite isolation (a stencil pass), which this
-       landing did not do. */
+       getting it back needs per-sprite isolation (a stencil pass), which is
+       not done. */
     "  bool band = false;\n"
     "  if (uNanoOn == 1) {\n"
     "    float nd = vVY + 50.0;\n"
@@ -544,10 +487,10 @@ static const char* FS =
     "  frag = vec4(rgb * uAlpha, uAlpha);\n"
     "}\n";
 
-/* G16 step 5: the posed program is a TWIN of this one — its own vertex stage,
-   this exact fragment stage. Handing over the source rather than letting
-   tagpu_posedraw.c carry a copy is what keeps the two from drifting in the half
-   of the pipeline step 5 does not replace. */
+/* The posed program is a TWIN of this one — its own vertex stage, this exact
+   fragment stage. Handing over the source rather than letting tagpu_posedraw.c
+   carry a copy is what keeps the two from drifting in the half of the pipeline
+   they share. */
 const char* tagpu_native_unit_fs(void) { return FS; }
 
 /* composite: the game-res FBO over the frame, NEAREST (game-res look kept) */
@@ -557,16 +500,16 @@ static const char* CVS =
     "out vec2 uv;\n"
     "void main(){ uv = vec2(p.x, p.y);\n"
     "  gl_Position = vec4(p.x*2.0-1.0, 1.0-p.y*2.0, 0.0, 1.0); }\n";
-/* THE COMPOSITE INVERTS ONCE WE OWN THE TERRAIN (G13b).
-   Until then our passes only ever covered sprites, so the rule was "drop our
-   empty pixels and let the engine's frame show". Terrain covers the whole
+/* THE COMPOSITE INVERTS WHEN WE OWN THE TERRAIN.
+   Over sprites alone the rule is "drop our empty pixels and let the engine's
+   frame show". Terrain covers the whole
    viewport, so that rule would hide everything the engine still draws inside
    it — health bars, nanoframe wireframes, the build cursor, chat, dialogs.
    In place of its terrain blit, tagpu_terrown.c fills the viewport rect of the
    engine's offscreen with one palette index; every OTHER index there is by
    construction something the engine drew afterwards, so we discard OUR
    fragment at those pixels and its own already-drawn frame shows through.
-   uKey < 0 keeps the pre-G13b behaviour exactly. texelFetch, not texture(),
+   uKey < 0 keeps the sprites-only rule exactly. texelFetch, not texture(),
    because the surface is an INDEX texture whose filter state belongs to
    cnc-ddraw and may be linear — interpolated palette indices are garbage. */
 static const char* CFS =
@@ -578,7 +521,7 @@ static const char* CFS =
     "uniform ivec2 uSurfSz;\n"
     "uniform vec4 uVp;\n"          /* the rect the key fill covers, game px */
     "uniform int uKey;\n"
-    "uniform vec4 uCurs;\n"        /* G17c: the engine's cursor rect, game px */
+    "uniform vec4 uCurs;\n"        /* the engine's cursor rect, game px */
     "void main(){\n"
     "  vec4 c = texture(uTex, uv);\n"
     "  bool empty = c.a < 0.004 && max(max(c.r, c.g), c.b) < 0.004;\n"
@@ -589,7 +532,7 @@ static const char* CFS =
     "  if (uKey >= 0 && px.x >= uVp.x && px.x < uVp.x + uVp.z &&\n"
     "                   px.y >= uVp.y && px.y < uVp.y + uVp.w) {\n"
     "    ivec2 p = clamp(ivec2(px), ivec2(0), uSurfSz - 1);\n"
-    /* G17c: THE CURSOR'S RECT COUNTS AS KEY. The engine blits its cursor into
+    /* THE CURSOR'S RECT COUNTS AS KEY. The engine blits its cursor into
        the back buffer inside the flip, after everything we observe, so those
        pixels are not the key and the discard above would let them through —
        under the cursor the GL UI renderer already draws its own into the sharp
@@ -614,7 +557,7 @@ static const char* CFS =
        `c.rgb + (1 - c.a) * key`: a cyan-tinted line at exactly the zoom levels
        where the world's edge lands off the pixel grid. Opaque `c.rgb` is that
        same composite against black, and it subsumes the empty case (c.rgb is
-       then 0, which is the black this used to special-case). */
+       then 0, black). */
     "    frag = vec4(c.rgb, 1.0); return;\n"
     "  }\n"
     "  if (empty) discard;\n"
@@ -661,8 +604,8 @@ static int type_match(const char* def)
    because the composite scales OUR fragments and passes its frame through 1:1.
    A nanoframe left on the composite path therefore sits at its 1x pixels while
    the world moves under it — it slides away from the factory or the commander
-   building it the moment the zoom is not 1 (the bug this pass now closes), and
-   with owndraw "all" in force it is not even the engine's own look any more:
+   building it the moment the zoom is not 1, and
+   with owndraw "all" in force it is not even the engine's own look:
    the rasterise is skipped, so 0x458DD0 recolours an empty composite and only
    its wireframe survives. */
 /* Is this unit's ModelId one model_root() will resolve? The bound is
@@ -696,37 +639,32 @@ int tagpu_native_owns_unit(const char* u)
        composite unwiped, tagpu_mark.c leaves the bar on the engine's anchor,
        and tagpu_markown.c leaves the engine's own selection rect alone. Get it
        wrong in one direction and a unit is drawn twice; wrong in the other and
-       it is INVISIBLE, or — the case this line was added for — it keeps its
-       sprite and silently loses its selection box for ever.
+       it is INVISIBLE, or it keeps its sprite and silently loses its
+       selection box for ever.
 
        0x46A530 has NO ModelId test: its only early-out is the SelBoxes flag at
        0x46A544, and it indexes MODEL_PTRS[ModelId] at 0x46A56B and bounds it
        through 0x4CB650 unconditionally [BINARY-VERIFIED 2026-09-10]. So the
        engine DOES draw a box for a unit we cannot bound, and suppressing it
        while our own loop skips the unit leaves that unit unmarked every frame.
-       (This corrects the claim, made here and in ui-markers.md on 2026-09-09,
-       that a unit with no model is "owed nothing" — it is owed the engine's.) */
+       A unit with no model is owed the engine's box, not nothing. */
     {
         const char* ta = *(const char* const*)TA_MAINPP;
         if (!model_id_ok(ta, u, NULL)) return 0;
     }
-    /* A UNIT UNDER CONSTRUCTION IS OWNED LIKE ANY OTHER, unconditionally.
-       This test used to decline one whenever the build-effect detour on
-       0x458DD0 (tagpu_owndraw.c) was absent or `tagpu_nano.off` was set, on the
-       argument that "the engine owns nanoframes" was a safe fallback: the
-       engine would stamp its scaffold at the 1x projection, wrong at zoom != 1
-       but visible. THE CLEAN CUT MADE THAT FALLBACK DRAW NOTHING -- the
-       engine's frame reaches no pixel of the screen -- and took `owndraw` out
-       of the play defaults in the same stroke, so on the shipped configuration
-       every nanoframe was declined here and drew nothing but its health bar.
-       [FOUND 2026-09-23, reported from play.]
+    /* A UNIT UNDER CONSTRUCTION IS OWNED LIKE ANY OTHER, unconditionally --
+       whether or not the build-effect detour on 0x458DD0 (tagpu_owndraw.c) is
+       present, and whatever `tagpu_nano.off` says. "The engine owns
+       nanoframes" is no fallback: the engine's frame reaches no pixel of the
+       screen, and `owndraw` is off the play defaults, so a nanoframe declined
+       here would draw nothing but its health bar.
 
        Nothing is lost by owning one with `owndraw` unarmed, the play default:
        the engine's scaffold then lands in its own frame, which is the golden
        source and is exactly what the 1997 rasteriser draws. (With `owndraw`
        armed and its 0x458DD0 detour refused, the classifier wipes the owned
        composite and the engine's effect runs on the empty copy, so the golden
-       source holds a stripped nanoframe. The screen is unaffected either way.) `tagpu_nano.off` now means "draw it
+       source holds a stripped nanoframe. The screen is unaffected either way.) `tagpu_nano.off` means "draw it
        UNSTAGED", a finished-looking unit, rather than "hand it to nobody". */
     return 1;
 }
@@ -752,10 +690,6 @@ int tagpu_native_owns_obj(unsigned int obj3do)
     return own;
 }
 
-/* append one unit's triangles; returns new vertex count */
-/* ---- whole-3DO-tree model-space AABB (engine FUN_004CB650 equivalent) ----
-   walked over the raw Model3DONode template (verts 16.16, child offsets
-   accumulate); cached per root node. Feeds the native selection rect. */
 /* THE UNIT'S MODEL TEMPLATE, BOUNDS-CHECKED — and the bound is the whole
    safety argument, deliberately, because a readability PROBE would not be one.
 
@@ -787,42 +721,41 @@ int tagpu_native_owns_obj(unsigned int obj3do)
    between this frame's gather and this read is mapped but holds another unit's
    values — or, mid-rewrite, a torn one. That contract says a stale read is at
    worst a wrong frame, and it holds only if every value taken from such an
-   object is validated AS DATA before it is used. This one was not: an
-   unbounded index into a bounded table addresses arbitrary memory, and the
-   pointer read from there passes a range test about as often as not, so the
-   caller then walks bytes that are not a model at all. That is the read behind
-   the 2026-09-08 access violation in aabb_walk.
+   object is validated AS DATA before it is used. Unbounded, an index into a
+   bounded table addresses arbitrary memory, and the pointer read from there
+   passes a range test about as often as not, so the caller would then walk
+   bytes that are not a model at all.
 
    Bounded, the worst case is back inside the Mode B contract by construction
    rather than by luck: a stale index costs one frame of another type's AABB
    and can never fault. A live template has an internally consistent tree,
-   which is why aabb_walk below needs no per-node probing — see the note there.
+   which is why the walks over one need no per-node probing.
 
    THE ONE THING THIS RESTS ON that it does not itself establish: the templates
    must still be alive while we read them. They are freed by 0x42DB90 in the
    level-teardown cascade, and the render thread is held out of that window by
    tagpu_reclaim's teardown wrap — whose wait has a 1 s timeout, after which
    the cascade proceeds with a render pass still running. That hole is
-   pre-existing, is recorded in thread-safe-destruction.md §6a as an open item,
-   and is the reason this function is not the last word on the subject. */
+   recorded in thread-safe-destruction.md §6a as an open item, and is the
+   reason this function is not the last word on the subject. */
 static unsigned s_badModelId;          /* refused here, reported with the frame */
 
-/* THE MODEL ID ARRIVES BOUNDED (frame packet exchange, landing 3). The
+/* THE MODEL ID ARRIVES BOUNDED. The
    publisher drops a unit's `model_id` unless it is inside UNITINFOCount, so
    what reaches here is already a slot the engine writes; the count is carried
    beside it and re-checked, because this is the one place an index becomes an
    address. The table itself, and the templates in it, are freed by the level
    teardown (0x42DBCA/0x42DCB6) and held out of that window by tagpu_reclaim's
-   teardown wrap — the fence, unchanged by this landing. */
+   teardown wrap — the fence. */
 static const char* model_root(const TAGPU_PACKET* pk, unsigned mid)
 {
     /* THE TABLE'S BASE IS READ LIVE, EVERY CALL, and that is the point: the
        level teardown frees it at 0x42DCCB and NULLS main+0x14377 at 0x42DCD8,
        so the null is what refuses this walk once the cascade has run. A copy
-       taken at publish time and held for a frame reads straight past it
-       (landing review, 2026-09-12). The bound on `mid` is the packet's — the
-       publisher dropped anything outside UNITINFOCount — and the LIFETIME is
-       tagpu_reclaim's teardown wrap, unchanged. */
+       taken at publish time and held for a frame reads straight past it.
+       The bound on `mid` is the packet's — the publisher dropped anything
+       outside UNITINFOCount — and the LIFETIME is tagpu_reclaim's teardown
+       wrap. */
     const char* ta = *(const char* const*)TA_MAINPP;
     const char* mptrs;
     unsigned n = pk->udef_count;
@@ -836,37 +769,15 @@ static const char* model_root(const TAGPU_PACKET* pk, unsigned mid)
     return *(const char* const*)(mptrs + (size_t)mid * 4);   /* in bounds */
 }
 
-/* THE WHOLE-TREE MODEL-AABB CACHE WENT WITH THE GL DRAW HALVES [the
-   vulkan-only plan, landing 11-3]: `s_aabb`, `model_aabb`, the `MAABB` type
-   and `aabb_walk`, whose one reader was the GL unit pass. The Vulkan shadow
-   pass does not ask for that bound: it draws the posed casters through
-   tagpu_vk_hires/tagpu_vk_unit and counts them against the hand-over.
-
-   THE SELECT BOX'S OWN CACHE WENT WITH IT AND IS BACK (2026-09-23), as
-   `s_sbox`/`selbox_aabb` beside `selbox_emit` below, because the Vulkan lane
-   draws the rect again. It is the ROOT PIECE's own vertices unioned with the
-   origin rather than the whole tree -- a ~11 px difference on a Stumpy --
-   because `DrawUnitSelectBoxRect` passes 0 as 0x4CB650's descend flag; that,
-   the three-vertex threshold and the {0,0,0} seed are in
-   exe-reverse-engineering.md. */
 
 
-
-/* THIS VERTEX STREAM IS NOW THE ONLY ONE. It used to say that replacement
-   meshes did not come through it -- a glTF model has smooth normals, normal
-   maps and true-colour materials, none of which this program's palette-index
-   shader can carry -- and that they rendered in their own pass, which shared
-   this frame's FBO, depth keys, scaffold, fog and shadow rules. Landing 11 D3
-   deleted that pass with the rest of the glTF lane, and with it the branch that
-   gathered the units holding one. Nothing is diverted away from here any
-   more. [The vulkan-only plan, landing 11 D3.] */
 
 /* faces of one Model3DONode whose vertices are already model-space floats
    P[nvert*3] — the engine-posed vbuf for units, rotated raw verts for
    effects models. skipFace: index the engine never draws (-1 = none);
    quadOnly: textured faces need exactly 4 verts (GAF_DrawTransformed is a
    quad rasteriser — the generic 3DO draw 0x46BAE0 skips the rest). */
-/* G16 step 8: the two DEGRADATIONS, counted. There is no fallback renderer any
+/* The two DEGRADATIONS, counted. There is no fallback renderer any
    more (gpu-posing.md §4, "the refusal ledger"), so neither of these drops a
    unit — but both are things stock content never does, and a silent
    degradation is exactly what a gate must not allow. Both ride the `native:`
@@ -878,8 +789,8 @@ static const char* model_root(const TAGPU_PACKET* pk, unsigned mid)
      unpl=   PIECES the pose walk could not place — a node that did not read or
              a parent link that never resolved — left at rest inside a unit
              that is otherwise posed, as hires_pose has always done */
-/*   nobake= units the gather could not get a bake for, which since step 8
-             means they DRAW NOTHING — the one honest drop in the ledger. It
+/*   nobake= units the gather could not get a bake for, which means they
+             DRAW NOTHING — the one honest drop in the ledger. It
              has to be counted whether or not tagpu_posebake.on is armed,
              because without a count an undrawable model is a unit that is
              simply missing from the screen with nothing in the log. */
@@ -908,7 +819,6 @@ static void pose_rest_block_init(void)
     }
     filled = 1;
 }
-static int   s_castLogged = 0;      /* the first casters' numbers, once per session */
 #define MAXNODEV 4096               /* verts of one node staged for emission */
 
 static int emit_node(const char* nd, const float* P, int nvert, int nv,
@@ -951,8 +861,7 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
             tri[1] = idx[k]; slot[1] = k;
             tri[2] = idx[k+1]; slot[2] = k+1;
             if (tri[0] >= nvert || tri[1] >= nvert || tri[2] >= nvert) continue;
-            if (nv + 3 > MAXNV) return nv;   /* the budget. s_vtrunc counted this
-                                                for a log line landing 11-3 deleted */
+            if (nv + 3 > MAXNV) return nv;   /* the budget */
             float V[3][3]; int t;
             for (t = 0; t < 3; t++) {
                 const float* v = P + tri[t] * 3;
@@ -1056,13 +965,9 @@ static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
 }
 
 /* ---- THE SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md §1) ----
-   Back on the Vulkan lane, drawn by tagpu_vk_mark.c out of tagpu_mark.c's
-   bucket. It lived only inside the GL unit draw that landing 11-3 deleted, and
-   nothing replaced it: the engine went on drawing its own box, into a surface
-   that since the clean cut reaches no screen, so a selected unit showed no rect
-   at all. The geometry below is that GL pass's, which was measured against the
-   engine's own box (ui-markers.md §1, "what it took to land on the engine's
-   pixels"); what changed is only who draws it.
+   Drawn by tagpu_vk_mark.c out of tagpu_mark.c's bucket. The geometry below
+   was measured against the engine's own box (ui-markers.md §1, "what it took
+   to land on the engine's pixels").
 
    THE BOUNDS ARE THE ROOT PIECE'S, NOT THE WHOLE TREE'S -- ~11 px on a Stumpy.
    The engine asks `0x4CB650(model, &min, &max, 0)`, which seeds BOTH bounds
@@ -1139,8 +1044,7 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
        Rx(+0x68) on (y,z), Ry(+0x66) on (x,z), each `a' = a*cos - b*sin` --
        the same triple an effects model takes (`emit_fx_model`). The tilt words
        are live on a slope (17.4 deg of bank, -22.1 of pitch measured on one
-       hillside), and the TRANSPOSED heading turns the rect against its unit,
-       which is what the GL pass did until 2026-09-08. */
+       hillside), and a TRANSPOSED heading turns the rect against its unit. */
     c0 = cosf((float)pu->rot[0] * K); s0 = sinf((float)pu->rot[0] * K);
     c1 = cosf((float)pu->rot[1] * K); s1 = sinf((float)pu->rot[1] * K);
     c2 = cosf((float)pu->rot[2] * K); s2 = sinf((float)pu->rot[2] * K);
@@ -1174,7 +1078,7 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
         /* Away from 1x the vertex stage scales about the zoom centre and a
            truncated corner lands between pixels, so snap there too: forward
            through the zoom, onto the centre of a game pixel, and back -- the
-           rule the GL pass had and tagpu_mark.c's `snap_device` restates. */
+           rule tagpu_mark.c's `snap_device` restates. */
         if (zoom > 0.0f && zoom != 1.0f) {
             float zcx0 = (float)vpL + (float)vw * 0.5f;
             float zcy0 = (float)vpT + (float)vh * 0.5f;
@@ -1186,8 +1090,8 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
             py[k] = (sy - zcy0) / zoom + zcy0;
         }
     }
-    /* HALF A KEY UNDER ITS OWN UNIT: the GL pass's `encb - 0.5`, the vertex
-       stage's own mapping (`1 - enc/uDepthScale`). The body's keys run
+    /* HALF A KEY UNDER ITS OWN UNIT: `enc - 0.5` through the vertex stage's
+       own mapping (`1 - enc/uDepthScale`). The body's keys run
        enc +- 1.8 with the model's depth, so the rect is hidden behind the part
        of its unit that stands above its base -- the engine draws the rect
        first and the sprite over it -- and stays over everything a whole row
@@ -1202,19 +1106,16 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
 /* ------------------------------------------------------- replacement pose --
    One unit's COB pose: per piece a 4x3 (3 rows of 4) that carries a REST
    vertex of that piece to where the unit's script is holding it this frame.
-   It was written for `tagpu_hires_draw.c`, which landing 11 D3 deleted; what
-   survives below serves `pose_accum_body` and `pose_dump`, and the form is
-   kept because those two read it.
+   It serves `pose_accum_body` and `pose_dump`.
 
    The engine keeps the pose as explicit fields rather than only as posed
    vertices, so nothing here has to recover a transform from geometry. Per
-   piece: the node's rest offset from its parent (N_OFF -- the same field
-   aabb_walk sums), a MOVE delta and a TURN triple in the PrimitiveStruct.
+   piece: the node's rest offset from its parent (N_OFF), a MOVE delta and a TURN triple in the PrimitiveStruct.
    Accumulated down the tree that is P = parent * T(off + move) * R(turn), and
    the REST transform is the same walk with move and turn zero, which collapses
    to a translation by the accumulated offset. The matrix we want is therefore
    P * T(-restOffset), and it is the identity for a piece the script has not
-   touched -- so a model whose pieces never move renders exactly as before.
+   touched -- so a model whose pieces never move renders exactly at rest.
 
    The conventions were measured against the engine's own posed vertex buffer
    (P_VBUF), which is the ground truth this cannot argue with, and the residual
@@ -1223,12 +1124,11 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
      - turn[0] rotates about X, turn[1] about Y, turn[2] about Z, each the
        positive-angle rot2 above at 65536 = 360 degrees. NOT the index order
        the effects models use (emit_fx_model reads a different struct);
-     - the ORDER is Z, then X, then Y -- read out of the engine, not guessed
-       (tacob landing 4). UNITS_PieceOffset 0x43DEF0 composes through 0x4B6CC0,
-       which rotates the (x,y) pair by the +0x14 word, then (y,z) by +0x10, then
-       (x,z) by +0x12. An earlier note here said the sample could not settle it;
-       it could not, every piece in it turning about one axis only -- but the
-       disassembly can, and it picked the order this pass already used;
+     - the ORDER is Z, then X, then Y -- read out of the engine, not guessed:
+       UNITS_PieceOffset 0x43DEF0 composes through 0x4B6CC0, which rotates the
+       (x,y) pair by the +0x14 word, then (y,z) by +0x10, then (x,z) by +0x12.
+       (the sample alone cannot settle it: every piece in it turns about one
+       axis only);
      - `pos` is a MOVE delta in the parent's frame, added to the rest offset
        BEFORE the rotation -- also read rather than inferred: 0x43DF2A..0x43DF55
        adds PrimitiveStruct+0x04/+0x08/+0x0C to the node's +0x10/+0x14/+0x18 and
@@ -1274,27 +1174,20 @@ static void piece_local(const unsigned short* turn, const float* d, float* o)
     o[0*4+3] = d[0]; o[1*4+3] = d[1]; o[2*4+3] = d[2];
 }
 
-/* ---- the level generation, and the caches that USED to hang off it
-   THERE IS NO CACHE LEFT TO DROP. This block guarded `s_pmap`, a replacement
-   mesh's glTF-piece -> engine-primitive map keyed on a raw `Model3DONode*`; it
-   was one of three until landing 11-3 took the two model-AABB caches with the
-   GL draw halves, and landing 11 D3 took `s_pmap` itself with the glTF loader.
-   What is kept is the generation edge, because the reasoning below is the
-   expensive part and the next cache keyed on a template will need it verbatim.
-
-   THE HAZARD IT EXISTS FOR, stated for that next cache. A model template tree
-   is shared by every unit of a type, so it rightly outlives any unit -- but it
-   does NOT outlive the LEVEL, and it is not freed through `FreeObjectState`, so
-   `tagpu_reclaim`'s deferral does not cover it. Before this check nothing
-   dropped such entries at all: a second level whose allocator handed the same
-   address to a different model was served the first level's answer, for the
-   rest of the process. That is not a fault -- it is a wrong shadow height, a
-   wrong select box and a mis-bound pose, silently.
+/* ---- the level generation, and the caches keyed on a template -----------
+   THE HAZARD IT EXISTS FOR. A model template tree is shared by every unit of
+   a type, so it rightly outlives any unit -- but it does NOT outlive the
+   LEVEL, and it is not freed through `FreeObjectState`, so `tagpu_reclaim`'s
+   deferral does not cover it. Without this check nothing drops such entries
+   at all: a second level whose allocator handed the same address to a
+   different model would be served the first level's answer, for the rest of
+   the process. That is not a fault -- it is a wrong shadow height, a wrong
+   select box and a mis-bound pose, silently.
 
    The cure is THE PACKET'S level generation, which the publisher advances at
-   every level end -- it used to be tagpu_reclaim's own counter, and that moves
-   only when reclaim is armed, so with `reclaim.off` these caches never dropped
-   at all (landing review, 2026-09-12). The publisher's bump is in the same
+   every level end -- not tagpu_reclaim's own counter, which moves only when
+   reclaim is armed, so with `reclaim.off` these caches would never drop. The
+   publisher's bump is in the same
    place reclaim's is, the teardown `0x491B60`'s POST hook when reclaim is the
    provider, which matters: a bump in the pre hook is observed by a pass that is already
    past `tagpu_overlay.c`'s teardown gate and still running (the pre hook is
@@ -1304,18 +1197,14 @@ static void piece_local(const unsigned short* turn, const float* d, float* o)
    these caches is consulted only from tagpu_native_frame's own call tree.
 
    Such a cache holds no GL objects, so dropping it is resetting one count and
-   the entries rebuild on the next frame that asks. [The vulkan-only plan,
-   landing 11 D3.] */
-static unsigned s_cacheGen;              /* the level the (currently absent) caches describe */
+   the entries rebuild on the next frame that asks. */
+static unsigned s_cacheGen;              /* the level the template-keyed caches describe */
 static unsigned s_lastLevelGen;          /* the last packet's, carried over a frame with none */
 
 static void cache_gen_check(unsigned g)
 {
     /* WHAT THIS DROPS: `s_sbox`, the selection rect's root-piece bounds,
-       keyed by template node. (It once dropped `s_pmap`, the replacement
-       mesh's glTF piece map, which landing 11 D3 deleted with the loader; the
-       function and its call site were kept for exactly the next template-keyed
-       cache, and this is it.) */
+       keyed by template node. */
     if (g == s_cacheGen) return;
     s_cacheGen = g;
     s_nsbox = 0;          /* the selection rect's root-piece bounds */
@@ -1323,13 +1212,12 @@ static void cache_gen_check(unsigned g)
 
 /* Everything one unit's pose needs, accumulated down the piece tree. Shared
    with pose_dump, which checks it against the engine's own posed vertices. */
-/* THE PIECE COUNT IS NOT CAPPED AT 64 ANY MORE (gpu-posing.md decision 7):
-   64 was this array's size and nothing in the engine bounds a model's pieces.
-   TAGPU_PBMAXPIECE and why it is 256 are in tagpu_model3do.h.
-   The consequence HERE is that one HPOSE is ~17 kB, so they are held STATIC
-   rather than on the stack — pose_dump and hires_pose both used to take one as
-   a local. Both are render-thread only: they are reached only from
-   tagpu_native_frame. */
+/* THE PIECE COUNT IS NOT CAPPED AT 64 (gpu-posing.md decision 7): nothing in
+   the engine bounds a model's pieces. TAGPU_PBMAXPIECE and why it is 256 are
+   in tagpu_model3do.h.
+   The consequence HERE is that one HPOSE is ~17 kB, so it is held STATIC
+   rather than on the stack. Its user, pose_dump, is render-thread only: it is
+   reached only from tagpu_native_frame. */
 typedef struct {
     const char* nd[TAGPU_PBMAXPIECE];  /* the TYPE's template nodes, from the run  */
     float acc[TAGPU_PBMAXPIECE][12];   /* rest vertex of that piece -> model space */
@@ -1340,8 +1228,7 @@ typedef struct {
 /* `bt` non-NULL folds the body turn into the BASE piece's own turn, exactly
    where the compose adds it (0x45B0DB, only on the top-level call) -- the
    reconstruction needs it because P_VBUF holds the body-rotated pose. The
-   only caller left, `pose_dump`, passes `bt` NON-NULL; `hires_pose`, which
-   passed NULL for model space, went with landing 11 D3. */
+   only caller, `pose_dump`, passes `bt` NON-NULL. */
 /* `pc` is this unit's PK_PIECE run out of the frame packet and `nparts` its
    length; `basePiece` the index the body turn folds into (0xFFFF = none). The
    per-piece POSE fields are the packet's copy, taken on the game thread; the
@@ -1413,25 +1300,23 @@ static int pose_accum_body(const TAGPU_PK_PIECE* pc, int nparts, unsigned basePi
 
 
 
-/* ---- G16 step 5: one unit's pose, off the type's CACHED topology --------
+/* ---- one unit's pose, off the type's CACHED topology ---------------------
    `pose_accum_body` rebuilds the parent links by scanning the node list for
-   every sibling of every node. That is fine on today's rare trip frames and
-   not fine at 200 units a frame, so gpu-posing.md §4 requires the walk to be
-   cached per type — step 4 put `parent[]` and `restOff[]` in the bake entry,
-   and this is the caller that finally consumes them instead of walking again.
+   every sibling of every node. That is fine for a one-shot dump and not at
+   200 units a frame, so gpu-posing.md §4 requires the walk to be cached per
+   type — `parent[]` and `restOff[]` are in the bake entry, and this consumes
+   them instead of walking again.
 
-   THE ARITHMETIC IS pose_accum_body's, DELIBERATELY UNCHANGED: same order of
+   THE ARITHMETIC IS pose_accum_body's, DELIBERATELY: same order of
    operations, same `piece_local`, same body-turn fold into the base piece at
-   0x45B0DB's place. Only the parent array's SOURCE moves. That matters because
-   until step 8 the duplication is the oracle `tagpu_posebake.on=check` compares
-   against — the two must still agree exactly.
+   0x45B0DB's place. Only the parent array's SOURCE differs, so the two agree
+   exactly.
 
-   G16 step 8: THERE IS NOWHERE TO FALL BACK TO, so this degrades instead of
+   THERE IS NOWHERE TO FALL BACK TO, so this degrades instead of
    refusing (gpu-posing.md §3, "degrade inside the unit, never drop it", and
    §4's refusal ledger). A piece whose parent link never resolves takes the
-   IDENTITY — it draws at its rest position while the rest of the unit poses,
-   which is exactly what `hires_pose` has always done for an undone piece. The
-   only thing left that returns 0 is the object not being readable at all,
+   IDENTITY — it draws at its rest position while the rest of the unit poses.
+   The only thing left that returns 0 is the object not being readable at all,
    which is a LIFETIME question rather than a per-unit refusal: the gather has
    already re-read `o3` against `unit+0x9E`, and `tagpu_reclaim` defers
    `FreeObjectState 0x45AAA0` and the model-template frees until the render
@@ -1440,7 +1325,7 @@ static int pose_accum_body(const TAGPU_PK_PIECE* pc, int nparts, unsigned basePi
 
    The piece count is NOT re-checked against the bake's: `tagpu_posebake_unit`
    matched the cache entry on `nparts` one call earlier, so equality holds at
-   every call site, and `g->nparts` is used as the loop bound it always was. */
+   every call site, and `g->nparts` is the loop bound. */
 /* GATE ORACLE -- tagpu_posecrc.on, and the only thing that watches the
    matrices this pass hands the GPU. `tagpu_posedump.on` dumps the ENGINE's
    fields and `tools/tacob pose-check` diffs tacob's own reconstruction of
@@ -1505,7 +1390,7 @@ static int posed_pose(const TAGPU_PK_UNIT* pu, const TAGPU_PK_PIECE* pc,
     /* smooth-motion.md option A: NULL unless tagpu_lerp.on is armed AND this
        unit has two adjacent sim ticks of history. NULL is the blend weight of
        1.0 that invariant 2 requires the degradation to be, and it is spelled
-       as the caller reading the live fields exactly as it always has. */
+       as the caller reading the live fields. */
     const int* lpos = NULL;
     const unsigned short* lturn = NULL;
 
@@ -1554,8 +1439,8 @@ static int posed_pose(const TAGPU_PK_UNIT* pu, const TAGPU_PK_PIECE* pc,
             tn  = pc[i].turn;
             /* THE WHOLE OF OPTION A IS THESE TWO LINES. Everything below --
                the rest offset, the body-turn fold, piece_local, the parent
-               multiply -- is the arithmetic it always was, on a blended pair
-               of triples instead of the live ones. */
+               multiply -- is the unblended arithmetic, on a blended pair of
+               triples instead of the live ones. */
             if (lpos) { mv = lpos + i * 3; tn = lturn + i * 3; }
             for (k = 0; k < 3; k++)
                 d[k] = (float)off[k] / 65536.0f + (float)mv[k] / 65536.0f;
@@ -1573,7 +1458,7 @@ static int posed_pose(const TAGPU_PK_UNIT* pu, const TAGPU_PK_PIECE* pc,
     }
     /* A PIECE THE WALK COULD NOT PLACE STAYS AT REST — the identity, which
        carries its rest vertices to where the model holds them unposed. That is
-       `hires_pose`'s answer for the same condition and §3's rule: the unit
+       §3's rule: the unit
        draws, with one piece unanimated, rather than not drawing. Nothing in
        stock content reaches it (Gate A measured `norecon` 0 over 82 types),
        so it is also counted, once per frame, on the `native:` line. */
@@ -1591,7 +1476,7 @@ static int posed_pose(const TAGPU_PK_UNIT* pu, const TAGPU_PK_PIECE* pc,
         if (fl & 1) memcpy(out + (size_t)i * 12, acc[i], 12 * sizeof(float));
         else        memset(out + (size_t)i * 12, 0, 12 * sizeof(float));
         shaded[i] = (unsigned char)(anyShadeFlag ? ((fl & 4) != 0) : 1);
-        /* G16 step 6: the visibility word the slant and the wire ranges read.
+        /* the visibility word the slant and the wire ranges read.
            The SLANT casts from a piece only when bit0 AND bit1 are set —
            visible, and `cached`, which a COB's dont-cache clears
            (emit_slant_at's `(pflags & 3) != 3`); a separate flag rather than a
@@ -1607,16 +1492,12 @@ static int posed_pose(const TAGPU_PK_UNIT* pu, const TAGPU_PK_PIECE* pc,
         c = Crc32_ComputeBuf(c, shaded, (size_t)nparts);
         c = Crc32_ComputeBuf(c, pvis, (size_t)nparts);
         s_poseCrcOut = c;
-        /* AND THE INPUT AGAIN. This is THE GATE LANDING 3 IS MEASURED BY.
-           Until the packet, the COB scripts ran on the GAME thread while this
-           one posed, so the fields could move between the hash above and the
-           loop that read them -- gpu-posing.md section 2's residual, one tick
-           of one piece, measured at 1 sample in 1498 on the walk fixture. The
-           pose now comes out of a packet the game thread finished writing
-           before it handed the slot over, and the exchange forbids a fill that
-           overlaps a consumer frame, so `raced=` must read EXACTLY 0: this is
-           no longer a rate to accept but a race that cannot happen, and a
-           non-zero count means the exchange itself is broken. */
+        /* AND THE INPUT AGAIN, and `raced=` must read EXACTLY 0. The pose
+           comes out of a packet the game thread finished writing before it
+           handed the slot over, and the exchange forbids a fill that overlaps
+           a consumer frame, so an input that moved between the hash above and
+           the loop that read it is a race that cannot happen: a non-zero count
+           means the exchange itself is broken (gpu-posing.md section 2). */
         if (pose_crc_in(basePiece, g, pc, nd, bt, nparts) != s_poseCrcIn) {
             s_poseCrcRaced++;
             s_poseCrcIn = 0;                /* 0 = "do not join on this one" */
@@ -1644,13 +1525,10 @@ static int posed_pose(const TAGPU_PK_UNIT* pu, const TAGPU_PK_PIECE* pc,
    per-type MODEL template through model_root, the same fenced read the whole
    unit pass stands on (thread-split.allow: `fenced`).
 
-   IT DRAWS WHAT THE UNIT PASS SET UP, so it has two prerequisites, both now
-   checked rather than assumed: the posed program must be live and the view
-   it draws in (s_pv) must be THIS frame's — the unit pass fills it, so a
-   frame that early-returned must not leave the ghost drawing against last
-   frame's eye. And because it draws after tagpu_fx_render, which rebinds the
-   texture units the posed program samples, it re-binds them itself (see
-   ghost_bind_textures).
+   IT DRAWS IN THE VIEW THE UNIT PASS SET UP, checked rather than assumed:
+   the view (s_pv) must be THIS frame's — the unit pass fills it, so a frame
+   that early-returned must not leave the ghost drawing against last frame's
+   eye.
 
    The pose is a rest pose — per-piece translation by the bake's restOff,
    which is posed_pose's own output for a unit holding every piece at rest —
@@ -1675,10 +1553,7 @@ static int   s_ghostNoDraw = 0;      /* the missing prerequisite was logged */
    or an empty table and nothing else. This is tagpu_fxown's `want` pattern and
    exists for the same reason: the table costs the GAME thread a walk of the
    order pass's arena and a copy of up to TAGPU_PK_MAX_BUILDS * 16 bytes into
-   the packet, every frame, and nothing but this pass ever reads it. Until
-   2026-09-14 fill_builds was called unconditionally, so every session paid for
-   it whether or not a ghost could draw — including every session before the
-   ghost became a play default, where the answer was always zero.
+   the packet, every frame, and nothing but this pass ever reads it.
 
    The 90-frame watchdog is fxown's too: a pass that has stopped asking stops
    being charged, so a render thread that dies or a lever turned off between
@@ -1691,13 +1566,10 @@ void tagpu_native_set_want_builds(int want, unsigned int frame_counter)
     if (want) g_beatWantBuilds = frame_counter;
 }
 
-/* THE WATCHDOG HAS TO LIVE OUTSIDE THE SETTER, which is the whole point of it
-   and which the first version of this got wrong: it decayed inside
-   set_want_builds, in an `else` arm reached only when `want == 0` — by which
-   point the line above had already stored 0, so the branch could never change
-   anything, and the case it was written for (the render thread STOPS CALLING)
-   was the one case it could not see. tagpu_fxown does it properly and this now
-   copies that: the decay runs from tagpu_overlay.c's unconditional flush run,
+/* THE WATCHDOG HAS TO LIVE OUTSIDE THE SETTER, which is the whole point of it:
+   the case it is for is the render thread STOPPING CALLING the setter, which a
+   decay inside the setter cannot see. As in tagpu_fxown, the decay runs from
+   tagpu_overlay.c's unconditional flush run,
    which sits in front of the `tagpu_overlay.off` early-return, so a render
    thread that is STILL RUNNING but has stopped polling — a context loss,
    `tagpu_overlay.off` — stops charging the publisher for a table nothing will
@@ -1705,8 +1577,7 @@ void tagpu_native_set_want_builds(int want, unsigned int frame_counter)
    EXITED stops calling this flush too, so the flag keeps its last value. That
    is the same hole fxown's watchdog has and is not worth a second mechanism —
    with no render thread there is no renderer, and an unused table copy is the
-   least of it. (An earlier draft of this comment claimed the exit case was
-   covered. It never was.) */
+   least of it. */
 void tagpu_native_flush_want(unsigned int frame_counter)
 {
     if (g_wantBuilds && (unsigned)(frame_counter - g_beatWantBuilds) > 90)
@@ -1744,22 +1615,21 @@ static int ghost_armed(unsigned frame_counter)
             p = q + 1;
         }
     }
-    /* THE PREREQUISITE IS ASKED BEFORE ANYTHING IS LOGGED, and that ORDER is
-       the fix. The ghost draws through the unit pass — its view and its
-       program — so with tagpu_native.on off it can never draw a pixel. Since
-       2026-09-14 the ghost IS a play default and carries `needs
+    /* THE PREREQUISITE IS ASKED BEFORE ANYTHING IS LOGGED, and that ORDER
+       matters. The ghost draws through the unit pass — its view and its
+       program — so with tagpu_native.on off it can never draw a pixel. The
+       ghost IS a play default and carries `needs
        tagpu_native.on` in tagpu_opt.c's table like every other dependent
        lever, so the table's own resolution withholds the default when the unit
        pass is off. This test stays because `needs` governs the DEFAULT, not the
        lever: a hand-written `tagpu_ghost.on` file arms the pass whatever the
        table says, and that is the case this refusal is for.
 
-       Until 2026-09-14 the ARMED line was logged FIRST and this test came
-       after, so with the unit pass off each 30-frame poll wrote both lines —
-       ARMED set the state to 1, the refusal then found it != 2 and set it to
-       2, and the next poll found 2 != 1 and started again. Two file opens
-       every 30 frames for the life of the session, and a log that claimed the
-       pass was armed 15 lines before saying it was not. */
+       With the ARMED line logged FIRST, each 30-frame poll with the unit pass
+       off would write both lines — ARMED setting the state to 1, the refusal
+       finding it != 2 and setting 2, the next poll finding 2 != 1 and starting
+       again. Two file opens every 30 frames for the life of the session, and a
+       log that claims the pass is armed 15 lines before saying it is not. */
     if (!tagpu_opt_on("tagpu_native.on")) {
         if (s_ghostLogged != 2) {
             nlog("ghost: off — needs tagpu_native.on (it draws through the unit pass)");
@@ -1782,21 +1652,18 @@ static int ghost_armed(unsigned frame_counter)
    visible). The tree is the per-type template PK_PIECE.node already
    dereferences for units — the fenced read, nothing more.
 
-   A MODEL THE WALK CANNOT HOLD IS REFUSED, NOT HALVED. Both caps — the piece
-   count and the stack of pending siblings — used to drop what did not fit and
-   return the rest, which bakes and draws cleanly as half a building with
+   A MODEL THE WALK CANNOT HOLD IS REFUSED, NOT HALVED. Dropping what does not
+   fit either cap — the piece count and the stack of pending siblings — and
+   returning the rest would bake and draw cleanly as half a building with
    `nobake=0` reading healthy; the live unit path publishes zero pieces for the
    same condition and counts the refusal, so this one does too.
 
-   NO PER-NODE READABILITY PROBE, for aabb_walk's reason and by its argument —
-   see the comment there, which this walk is the second instance of. Until the
-   2026-09-14 review this one probed every node and every sibling with
-   IsBadReadPtr, which was wrong twice over: it is the shape of check CLAUDE.md
-   rules out (its answer can go stale between the check and the read), and it
-   was ALSO a second way to halve a model, defeating the paragraph above — a
-   failed node probe `continue`d, dropping that node AND its whole subtree, and
-   a failed sibling probe ended the sibling loop, dropping that sibling and
-   every one after it, both without setting `over`, so the caller read
+   NO PER-NODE READABILITY PROBE, for model_root's reason and by its argument.
+   IsBadReadPtr is the shape of check CLAUDE.md rules out (its answer can go
+   stale between the check and the read), and it would ALSO be a second way to
+   halve a model, defeating the paragraph above — a failed probe that skips a
+   node drops its whole subtree, and one that ends the sibling loop drops every
+   sibling after it, both without setting `over`, so the caller reads
    `nobake=0 trunc=0` over half a building. What the walk rests on instead:
    `root` came through model_root behind the caller's `mid < udef_count` bound,
    so it is a slot of the engine's own model table and the tree hanging off a
@@ -1805,17 +1672,17 @@ static int ghost_armed(unsigned frame_counter)
    model running away; and the lifetime is the LEVEL, the render thread held
    out of the teardown cascade by tagpu_reclaim's wrap. The `ptr_ok` in the
    sibling loop is a range test on a VALUE — the end-of-list test, not the
-   safety argument. The residual is the one aabb_walk already names: the pre
-   hook's 1 s timeout (thread-safe-destruction.md §6a), pre-existing and not
-   something this walk can close.
+   safety argument. The residual is the one model_root names: the pre hook's
+   1 s timeout (thread-safe-destruction.md §6a), which this walk cannot
+   close.
 
    EVERY PIECE IS MARKED VISIBLE, which is the one place the ghost is not the
    finished building: piece visibility is the COB script's (the live path takes
    it from the unit's primitives), and no script runs for a preview. A
    building whose script hides a piece at rest — doors, alternate geometry —
    therefore shows it in the ghost. Every stock 3DO's full tree is what most
-   previews want, and the reviewed trigger for a stock building was unproven;
-   it is a known deviation, stated in gpu-status §2.23, not a hidden one. */
+   previews want, and a trigger in a stock building is unproven; it is a
+   known deviation, stated in gpu-status §2.23, not a hidden one. */
 static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
 {
     const char* stack[TAGPU_PBMAXPIECE];
@@ -1851,7 +1718,7 @@ static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
    own truncating `>> 1`, the unit pass halves it in float (its verified
    convention for a placed unit), and the two differ by up to half a world
    pixel — half a screen pixel at 1x and a visible few at the closest zoom
-   (the 2026-09-12 review measured it). The ghost is the square's twin while
+   (measured). The ghost is the square's twin while
    the player is placing, so it takes the square's arithmetic; the difference
    from where the building will actually stand is that same sub-pixel. */
 static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
@@ -1879,8 +1746,7 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
        unit will look. ghost=1 keys the bake APART from the units' entries:
        this run walks the template tree in ITS order, which is not the prim
        order a live unit's packet run carries, so sharing a slot would pose a
-       placed building's parts with the wrong pieces' matrices (the
-       2026-09-12 leak). */
+       placed building's parts with the wrong pieces' matrices. */
     if (!tagpu_posebake_unit(s_pc, np, pk->local_player, 1, &bg, &bm) ||
         bg->nparts <= 0 || bg->count[TAGPU_PB_BODY] <= 0) { s_ghostNoBake++; return 0; }
     /* THE HEADING THE BUILDING WILL ACTUALLY STAND AT, NOT THE MODEL'S REST
@@ -1958,61 +1824,27 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     q.nanoOn = 0;
     q.cast[0] = 0.0f; q.cast[1] = 0.0f; q.cast[2] = 1.0f;
     q.ghost = 1;                              /* not a unit: the stats skip it   */
-    /* AND IT IS NOT IN THE DEPTH MAP, WHICH THIS FIELD NOW SAYS. The depth loop
+    /* AND IT IS NOT IN THE DEPTH MAP, WHICH THIS FIELD SAYS. The depth loop
        runs earlier in the frame and over the real units only; a ghost is drawn
-       here, after it, with depth writes off. `castSkip` was left 0 by the memset
-       above, which was harmless for as long as `pd_record` refused ghosts
-       outright -- but it computes `casts = (depthOn && !castSkip)`, so the
-       moment ghosts are carried (landing 6) every one of them would be handed
-       over as a CASTER the GL map has no silhouette for, and
-       `tagpu_vk_unit_casters` feeds the shadow census that is compared against
-       the GL side's own count. An extra caster there is a wrong shadow map, not
-       a missing one. [Landing 6, 2026-09-17.] */
+       here, after it, with depth writes off. Left 0 by the memset above,
+       `pd_record`'s `casts = (depthOn && !castSkip)` would hand every ghost
+       over as a CASTER the map has no silhouette for. An extra caster is a
+       wrong shadow map, not a missing one. */
     q.castSkip = 1;
     tagpu_posedraw_unit(&q);
     return 1;
 }
 
-/* the pass itself, called once per frame from tagpu_native_frame after the
-   effects: collect the cursor ghost and the queue ghosts and draw them.
-
-   THE SAMPLERS ARE THE POSED PROGRAM'S, WHICH NEVER RE-BINDS THEM — it draws
-   inside the unit pass's own binds (tagpu_posedraw.c says so where it sets
-   them). This pass runs after tagpu_fx_render, which rebinds units 0/1/2/4/5/6
-   to its own atlas, the palette and the fog grid for its own program, so
-   without rebinding the ghost samples fx textures with the model's UVs
-   whenever any effect is on screen — the frame the first in-game check never
-   had. Bind every unit the posed shader names, from the same sources the unit
-   pass binds (that is the invariant; "nothing else happens to touch it" is
-   not). */
 static int ghost_offscreen(float ax, float ay, int evpL, int evpT, int evw, int evh);
 
-/* THE BUILD GHOST'S RECORD HALF, LIFTED ABOVE THE LANE SEAM [the vulkan-only
-   plan, landing 11-3]. This was `ghost_pass`, and it was called from the unit
-   pass's GL half -- BELOW `if (!gl_draws) { ...hand over...; return; }` -- so
-   although `tagpu_vk_unit_record_ghosts` has existed since landing 6 and
-   `tagpu_posedraw.c` carries `ghost` through the hand-over, nothing ever
-   recorded a ghost on the Vulkan lane and the build preview has never appeared
-   there. That was invisible while `auto` meant OpenGL; landing 11-2 made it
-   the default, which is what turned a latent gap into a missing feature.
-
-   WHAT CHANGED COMING UP: three GL statements and one GL question.
-   `ghost_bind_textures` and the `glDepthMask(FALSE/TRUE)` bracket were the GL
-   draw's own state -- the Vulkan consumer takes depth-off with a second
-   pipeline instead (`tagpu_vk_unit.c`'s ghost stage), so there is nothing to
-   replace them with. And the prerequisite `tagpu_posedraw_live()` was
-   `s_state == 1 && !tagpu_vk_owns_present()` when this was written, i.e. "the
-   GL posed program is live", which is false on the only lane that now exists;
-   recording needs no program, so what is left of that guard is the half that
-   is still true -- the view must belong to THIS frame. (Landing 11-5d made
-   that predicate a plain `return 0` and wrote the reason at its definition;
-   the quoted expression no longer exists anywhere, so a grep for it finds only
-   notes like this one.)
-
-   Everything else is untouched, because none of it was ever GL: `ghost_pieces`
-   walks the 3DO tree, `ghost_offscreen` is a cull in screen space, and
-   `ghost_one` fills a TAGPU_PDUNIT and hands it to `tagpu_posedraw_unit`,
-   which is the same entry point the units above use. */
+/* THE BUILD GHOST'S RECORD, called once per frame from tagpu_native_frame
+   after the units: collect the cursor ghost and the queue ghosts and record
+   them. `ghost_pieces` walks the 3DO tree, `ghost_offscreen` is a cull in
+   screen space, and `ghost_one` fills a TAGPU_PDUNIT and hands it to
+   `tagpu_posedraw_unit`, which is the same entry point the units use. The
+   Vulkan consumer takes depth-off with a second pipeline (`tagpu_vk_unit.c`'s
+   ghost stage). Recording needs no program, so the one prerequisite is that
+   the view belongs to THIS frame. */
 static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
                        int eyeX, int eyeY, int vpL, int vpT, int r0,
                        int evpL, int evpT, int evw, int evh)
@@ -2023,21 +1855,13 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
     float cfx = 0.0f, cfz = 0.0f, cay = 0.0f;
 
     if (!s_ghostOn || !pk || !pk->in_game) return;
-    /* THE DRAW'S TWO PREREQUISITES, checked rather than assumed. Both are the
-       unit pass's and both are established in the same frame: the view this
-       pass draws through (s_pv, filled only when that pass really ran) and the
-       posed program itself — without the check a frame that early-returned
-       would draw against last frame's eye, and a refused program would keep
-       baking GL geometry that nothing can draw, ageing the live units out of
-       the bake cache for nothing (the review's findings). `ghost_armed` says
-       the lever-level half of this out loud, once. */
+    /* THE DRAW'S PREREQUISITE, checked rather than assumed: the view this
+       pass draws through (s_pv, filled only when the unit pass really ran) —
+       without the check a frame that early-returned would draw against last
+       frame's eye. `ghost_armed` says the lever-level half of this out loud,
+       once. */
     if (s_pvFrame != frame_counter) {
         if (!s_ghostNoDraw) {
-            /* one arm only since landing 11-3: the other read "the posed
-               program is not live on this driver", which was the
-               `tagpu_posedraw_live()` prerequisite. That predicate is false on
-               this lane by definition, so keeping it as a reason would report a
-               driver fault for the normal case. */
             nlog("ghost: armed, but the unit pass is not drawing this frame — nothing to draw in");
             s_ghostNoDraw = 1;
         }
@@ -2045,11 +1869,11 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
     }
     s_ghostNoDraw = 0;
     /* THE HEARTBEAT GOES HERE, IN FRONT OF THE "nothing to draw" RETURN below.
-       It used to sit at the tail, so it printed only on a frame that was both a
-       multiple of 300 AND had a ghost on screen — which made `nobake` and
-       `trunc`, the two counters gpu-status §2.23 says must stay 0, almost never
-       observable, and never at all in the sessions where something had gone
-       wrong and no ghost drew. The counters are cumulative, so printing them on
+       At the tail it would print only on a frame that was both a multiple of
+       300 AND had a ghost on screen — which makes `nobake` and `trunc`, the two
+       counters gpu-status §2.23 says must stay 0, almost never observable, and
+       never at all in a session where something has gone wrong and no ghost
+       draws. The counters are cumulative, so printing them on
        a frame that drew nothing is exactly as meaningful. */
     if ((frame_counter % 300) == 0) {
         char b[160];
@@ -2069,12 +1893,11 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
        arms on that layer's own answer — `tagpu_mark_cursor_ours()`, the one
        gather_cursor asks — exactly as the QUEUE ghost below arms on the order
        pass's (tagpu_order_copy_builds returns 0 when that pass is disarmed).
-       Until 2026-09-14 this half asked nothing: with `tagpu_mark` off, or
-       `mark.on=nocursor`, the translucent building followed the pointer while
-       our square did not, and the engine's own square is drawn at its UNZOOMED
-       1x projection, so at any zoom != 1 the building and its square were in
-       different places. Harmless while the ghost was opt-in; the ghost became
-       a play default the same day, which is what made it reachable. */
+       Asking nothing, with `tagpu_mark` off or `mark.on=nocursor` the
+       translucent building would follow the pointer while our square did not,
+       and the engine's own square is drawn at its UNZOOMED 1x projection, so
+       at any zoom != 1 the building and its square would be in different
+       places. */
     if (tagpu_mark_cursor_ours() &&
         pk->cursor_mode == 0x0E && pk->build_unit_id != 0 &&
         pk->build_unit_id < pk->udef_count &&
@@ -2119,13 +1942,12 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
        second -- with no posed unit on screen the unit window above is skipped
        and this is the first. */
     tagpu_posedraw_begin_ghost(&s_pv);
-    /* THE GHOSTS BLEND WITH EACH OTHER. Depth writes off for the pass: the
-       normal case is the cursor ghost standing on a queued ghost's own site,
-       and with the mask on the second draw failed GL_LESS against the first's
-       depth and the overlap simply vanished. The TEST stays on, so terrain and
-       units still occlude a ghost in front of them; only ghost-against-ghost
-       needed the mask. Restored after, because that is the state the marker
-       pass and the composite expect. */
+    /* THE GHOSTS BLEND WITH EACH OTHER. Depth writes are off for the ghost
+       window: the normal case is the cursor ghost standing on a queued ghost's
+       own site, and with writes on the second draw would fail the depth test
+       against the first's and the overlap would simply vanish. The TEST stays
+       on, so terrain and units still occlude a ghost in front of them; only
+       ghost-against-ghost needs the writes off. */
     if (haveCursor) {
         s_ghostCurs++;
         s_ghostDrawn += ghost_one(pk, pk->build_unit_id, cfx, cfz, cay,
@@ -2143,7 +1965,7 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
            (`started`), so this is a link the engine made and not a position
            match with a tolerance in it. The SQUARE stays: the engine draws its
            own over a frame under construction and the marker pass reproduces
-           that. [Owner-reported 2026-09-21.] */
+           that. */
         if (bs[k].started) { s_ghostBuilt++; continue; }
         fx = (float)bs[k].pos[0] / 65536.0f;
         fz = (float)bs[k].pos[2] / 65536.0f;
@@ -2161,11 +1983,6 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
     }
     tagpu_posedraw_end();
 }
-
-/* `ghost_bind_textures` stood here: it bound the atlas, the LUT and the
-   restored twin for the GL ghost draw. The Vulkan consumer binds its own
-   descriptors, so the lift left it with no caller [landing 11-3]. */
-
 
 /* is this anchor outside the rect the zoom can show? The unit gather's own
    test, margin included: it must never drop a ghost the pass would have drawn,
@@ -2193,8 +2010,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (f->packet) s_lastLevelGen = f->packet->level_gen;
     cache_gen_check(s_lastLevelGen);
     /* and the UNIT ATLAS, which keys on frame ADDRESSES the next level's loader
-       may reuse and until G19f-7 reset only when full or on a context loss.
-       Here rather than in tagpu_r3d_atlas_frame below because
+       may reuse. Here rather than in tagpu_r3d_atlas_frame below because
        tagpu_posebake_frame latches tagpu_r3d_atlas_gen() on the next line. */
     tagpu_r3d_atlas_level(s_lastLevelGen);
     /* the geometry bake's caches take the same three generations one frame
@@ -2203,7 +2019,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        thread, and not wherever the generation moved */
     tagpu_posebake_frame(f->frame_counter, s_lastLevelGen);
     pose_rest_block_init();      /* the degradation's block, once per session */
-    tagpu_mark_frame(f->frame_counter);       /* landing 5: and again */
+    tagpu_mark_frame(f->frame_counter);       /* the marker hand-over's frame */
     tagpu_posedraw_frame(f->frame_counter);   /* this frame's counters, and the
                                               Vulkan hand-over's frame stamp */
     /* smooth-motion.md option A. BEFORE the gather, because posed_pose
@@ -2214,40 +2030,24 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     tagpu_lerp_frame(f->frame_counter, f->packet, f->packet_prev);
     if ((f->frame_counter % 30) == 0)
         s_poseCrcOn = GetFileAttributesA("tagpu_posecrc.on") != INVALID_FILE_ATTRIBUTES;
-    /* WHETHER THIS PASS DRAWS, or only gathers and hands over. Under
-       `renderer=vulkan` there is no GL context in the process: the arm poll, the
-       view, the fog and palette COPIES, the four gathers and the vertex
-       emission are the pass and run either way, and the composite -- the world
-       FBO, the shadow map, the key/fill inversion and the resolve -- stands
-       down. [The vulkan-only plan, landing 4b-2; the composite and the program
-       state it was gated on went in landings 11-3 and 11-5b.] */
-    /* A REFUSED-PROGRAM EARLY RETURN STOOD HERE and published
-       `set_structshadow(0)` before taking it, so that a pass painting nothing
-       left the engine drawing its own slant shadows rather than leaving every
-       building without one -- the defect landing 10b fixed. It is gone with the
-       program that could refuse, and the property survives in a better form:
-       every return from this function that precedes the publication reaches it
+    /* THIS PASS GATHERS AND HANDS OVER; it draws nothing itself. The arm
+       poll, the view, the fog and palette COPIES, the four gathers and the
+       vertex emission are the pass.
+
+       A PASS PAINTING NOTHING MUST LEAVE THE ENGINE DRAWING ITS OWN SLANT
+       SHADOWS rather than leave every building without one: every return from
+       this function that precedes the structure-shadow publication reaches it
        through `SSHADOW_NONE()` (seven of them), the two that follow it cannot
        strand a raised gate because it has already been published, and the gate
        is read-and-clear besides -- so a frame that never reaches the painters
        lowers it anyway. */
     if (s_armed < 0 || (f->frame_counter % 30) == 0) {
         int was = s_armed;
-        /* NEVER PUBLISH "DISARMED" WHILE RE-READING. `s_armed` used to be zeroed
-           here and set back at the end of the block, with a FILE READ in
-           between -- and `tagpu_native_owns_unit()` opens `if (s_armed != 1)
-           return 0;` and is called from the GAME thread by tagpu_markown.c's
-           mark_selbox. So for the length of that read, twice a second, every
-           selected unit read as "not ours", markown stopped suppressing, and the
-           engine drew its own selection rects into the key-filled viewport --
-           where the GUI mirror published the boxes and painted them cyan over
-           the world (tagpu_gui_surf.c tap(), which now refuses the key).
-           [MEASURED 2026-09-09: the hit frames landed on a strict 30-frame
-           lattice -- 30/60/90/120/150/180/240 apart, the +1s being 60 fps
-           capture against a 59.8 fps game -- and 256 units with no combat at all
-           reproduced it at a HIGHER rate (0.70 %) than a 500 v 500 fight
-           (0.42 %), which is what ruled out the explosion and vertex-budget
-           theories. SELHANDBACK was 0 in every run.]
+        /* NEVER PUBLISH "DISARMED" WHILE RE-READING. `tagpu_native_owns_unit()`
+           opens `if (s_armed != 1) return 0;` and is called from the GAME thread
+           by tagpu_markown.c's mark_selbox, so an `s_armed` zeroed across the
+           FILE READ below would make every selected unit read as "not ours" for
+           the length of that read, twice a second.
            The state is computed into locals and published in ONE store, and
            `s_armed` is volatile so that store cannot be hoisted above the state
            it publishes. That closes the periodic window, which is the one the
@@ -2296,29 +2096,16 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_wrecks = wrecks;
         s_armed  = armed;                    /* the one store a reader can see */
         s_ss     = (GetFileAttributesA("tagpu_ss.off")     == INVALID_FILE_ATTRIBUTES);
-        /* THE DEVICE-RESOLUTION WORLD IS OPT-IN, and the reason is the selection
-           rects. The comment by the rect draw records the measurement: the
-           driver clamps an aliased GL line to one pixel, so a line in an
-           ss-times buffer is one SUPERSAMPLE wide and resolves to a half-lit
-           smear — which is why the GL half deferred them into the 1x FBO after
-           the box-downsample instead. Under devres there is no such downsample,
-           so the rects would reach the screen thinner and dimmer than the
-           engine's (about 0.75 of a device pixel at k = 1.5) while everything
-           else got sharper. Two landing reviewers found this independently.
-           `tagpu_devres.on` is how it was measured. The rect-as-geometry lever
-           that answered it went with the GL draw half [landing 11-3], and so
-           did the rect. It is back on this lane (`selbox_emit`, drawn by
-           tagpu_vk_mark.c), and the thin-rect problem does not return with it:
-           the rect's fragment stage keeps whole GAME pixels on the engine's
-           Bresenham path, so it resolves to the full colour at any `ss`,
-           devres included (tagpu_mark.c, SVS/SFS). ui-markers.md keeps the
-           2026-09-11 coverage numbers as the record of the GL path.
+        /* THE DEVICE-RESOLUTION WORLD IS OPT-IN (`tagpu_devres.on`). The
+           selection rect (`selbox_emit`, drawn by tagpu_vk_mark.c) does not
+           thin under it: the rect's fragment stage keeps whole GAME pixels on
+           the engine's Bresenham path, so it resolves to the full colour at any
+           `ss`, devres included (tagpu_mark.c, SVS/SFS). ui-markers.md keeps
+           the 2026-09-11 coverage numbers.
 
-           `s_devresFailed` WENT WITH `fbo_size`, which was its only writer, so
-           the "the driver refused the supersampled target, stay down" latch no
-           longer exists here. It is not replaced by a local one because the
-           refusal moved to the lane that can see the target: tagpu_vk.c names
-           it in the log and captures nothing. */
+           A refused supersampled target is not latched here: the lane that can
+           see the target refuses it, and tagpu_vk.c names it in the log and
+           captures nothing. */
         s_devres = (GetFileAttributesA("tagpu_devres.on") != INVALID_FILE_ATTRIBUTES);
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
@@ -2349,7 +2136,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int fxOn = tagpu_fx_armed(f->frame_counter);
     int sfxOn = tagpu_sfx_armed(f->frame_counter);
     /* the publisher fills the packet's effect tables only while a pass is
-       asking for them: the walk costs it four engine arrays (landing 4a).
+       asking for them: the walk costs it four engine arrays.
        Raised every frame, PASSIVE OR NOT — a passive pass still counts what it
        would have drawn — and dropped by fxown's watchdog after 90 silent
        frames, the same one the two skip bytes stand on. */
@@ -2362,14 +2149,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        if it is still being asked */
     tagpu_order_armed(f->frame_counter);
     if (!s_armed && !fxOn && !sfxOn && !featOn && !terrOn && !markOn) { SSHADOW_NONE(); return; }
-    /* THE 3DO ATLAS AND THE SHADE LUT ARE THE PASS'S, not the backend's. A GL
-       bring-up stood immediately above this, building this pass's programs and
-       FBOs, and it was gated because asking it on the vulkan-only lane would
-       have refused the WHOLE pass -- gathers included -- on the one lane the
-       hand-overs are for. It went in landing 11-5b. What is left is asked
-       unconditionally, as it always was on both lanes: the unit pass needs the
-       atlas laid out and the LUT mirrored whichever rasteriser draws it, and
-       since tagpu_gaf.h's change the atlas exists without a GL name. */
+    /* THE 3DO ATLAS AND THE SHADE LUT ARE THE PASS'S, not the backend's, and
+       are asked unconditionally: the unit pass needs the atlas laid out and the
+       LUT mirrored whichever rasteriser draws it, and the atlas exists without
+       a GL name (tagpu_gaf.h). */
     if (!tagpu_r3d_ensure()) { SSHADOW_NONE(); return; }
 
     char* ta = *(char**)TA_MAINPP;
@@ -2381,45 +2164,36 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        resolve serves the atlas restore here and uPal below. */
     const unsigned char* pal = tagpu_pal_live();
     /* No frame is drawn with an unspecified palette. Unreachable in practice --
-       ptr_ok(ta) above is what the engine-table fallback needs.
-       THE REASON NAMED HERE UNTIL 11-5e-2 WAS THE LINE BELOW -- that
-       `tagpu_r3d_atlas_frame` would restore the atlas against a null palette --
-       and that is no longer true: the restore went with the GL backend and the
-       call takes no palette now. What is left is the early-out itself, which
-       is a real behaviour (the whole native pass is skipped) and older than
-       the reason that was attached to it. Whether a frame with no live palette
-       should still be skipped is a question about the pass, not about the
-       restorer, so this landing leaves the guard exactly as it found it and
-       says so rather than removing it on the strength of a deleted caller. */
+       ptr_ok(ta) above is what the engine-table fallback needs. The early-out
+       skips the whole native pass; whether a frame with no live palette should
+       still be skipped is a question about the pass, and it is left as it
+       is. */
     if (!pal) { SSHADOW_NONE(); return; }
     /* the unit atlas's frame: recycle if full -- before any face asks it for a UV */
     tagpu_r3d_atlas_frame();
     /* AND THE SHADE LUT, on the same beat and for the same reason: it is the
-       pass's, the hand-over carries its mirror, and until this line it was only
-       ever built by the GL composite asking for its texture name. */
+       pass's, and the hand-over carries its mirror. */
     /* `tagpu_pk_shd` DEREFERENCES ITS ARGUMENT -- it reads `p->shd_len` with no
        null test of its own -- and a frame with no packet is ordinary (the shell
        before the first publish). NULL is a legitimate argument to `_want`: it
-       builds the LUT from our own computed ramp, exactly as `_texref` does on
-       the GL lane when the engine's table has not arrived. */
+       builds the LUT from our own computed ramp. */
     tagpu_r3d_lut_want(f->packet ? tagpu_pk_shd(f->packet) : NULL);
-    /* THE UNIT ARRAY IS NOT READ HERE ANY MORE, AND THAT IS WHAT LANDING 3 IS
-       (cross-thread-engine-reads.md §5 row 2). This pass used to load `begin`
-       and `end` as an unsynchronised pair: the level teardown 0x485980 frees
-       the array and nulls `begin` (0x485A27) inside the cascade tagpu_reclaim
-       fences, so between games the pair was refused — but the NEXT level's
-       load, 0x4854A0 from 0x4918D4, runs with this thread live, stores `begin`
-       at 0x485525, memsets the whole array, makes two more allocations and only
-       then stores `end` at 0x4855D6, the ONLY store to main+0x1435B in the
-       binary, so `end` is never nulled. For the length of that memset the pair
-       was (new begin, last game's end) and the walk could run past the new
-       allocation. No read-side gate could close that, and alignment played no
-       part in it. The fix is the ordering the publisher stands on: every unit
-       in the packet was copied on the GAME thread, during an in-play draw, at a
-       point where the loader thread has finished — and the walk there runs to
-       the engine's own SLOT COUNT, so it needs no pair at all.
+    /* THE UNIT ARRAY IS NOT READ HERE, AND MUST NOT BE
+       (cross-thread-engine-reads.md §5 row 2): `begin` and `end` are an
+       unsynchronised pair. The level teardown 0x485980 frees the array and
+       nulls `begin` (0x485A27) inside the cascade tagpu_reclaim fences, but the
+       NEXT level's load, 0x4854A0 from 0x4918D4, runs with this thread live,
+       stores `begin` at 0x485525, memsets the whole array, makes two more
+       allocations and only then stores `end` at 0x4855D6, the ONLY store to
+       main+0x1435B in the binary, so `end` is never nulled. For the length of
+       that memset the pair is (new begin, last game's end) and a walk can run
+       past the new allocation. No read-side gate can close that, and alignment
+       plays no part in it. The ordering the publisher stands on does: every
+       unit in the packet was copied on the GAME thread, during an in-play draw,
+       at a point where the loader thread has finished — and the walk there
+       runs to the engine's own SLOT COUNT, so it needs no pair at all.
 
-       THE VIEW COMES FROM THE PACKET (landing 2): the
+       THE VIEW COMES FROM THE PACKET: the
        TRUE 1x rect — not the field, which tagpu_vpwide widens at zoom < 1 —
        as the game thread published it, and the eye this frame is drawn from:
        the packet's eye plus the cursor anchor's deltas the game thread has not
@@ -2437,88 +2211,51 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        assumes a number: the FBO is the game's own size, the gather rect is the
        viewport over the zoom, and the terrain staging is reserved from the
        viewport. 16384 is the largest 2D texture common hardware will hold,
-       which is the real ceiling on the FBO the frame is drawn into; it used to
-       read 4096, and a 5K or 8K desktop was refused the whole native pass. */
+       which is the real ceiling on the FBO the frame is drawn into. */
     if (vw < 64 || vh < 64 || vw > 16384 || vh > 16384) { SSHADOW_NONE(); return; }
 /* The macro captures `f` from its expansion site, so it is confined to the one
    function that has an `f` to capture. This is its last use. */
 #undef SSHADOW_NONE
 
-    /* THE STRUCTURE-SHADOW GATE, AND THIS IS THE ONLY PLACE IT IS RAISED [the
-       vulkan-only plan, landing 10b]. The blit's two branches are detoured
-       rather than flipped now, and this is the word they read: set, the engine
-       draws no cached slant shadow and every structure's is ours.
+    /* THE STRUCTURE-SHADOW GATE, AND THIS IS THE ONLY PLACE IT IS RAISED. The
+       blit's two branches are detoured rather than flipped, and this is the
+       word they read: set, the engine draws no cached slant shadow and every
+       structure's is ours.
 
-       IT SITS AFTER EVERY EARLY RETURN ABOVE ON PURPOSE, and the first version
-       of this landing had it before them. The flag's two stale directions are
-       not symmetric -- stale 0 is a double shadow for a frame, stale 1 is NO
-       shadow -- so it may only be raised at a point the pass has committed to
-       drawing. Published from the top of the function it stayed raised through
-       every `return` here: a frame with no packet (the whole shell), an atlas
-       that would not allocate, a map the probes refused. Each of those
-       now lowers it on the way out, which is the `SSHADOW_NONE()` above them,
-       and this is the one line that raises it.
+       IT SITS AFTER EVERY EARLY RETURN ABOVE ON PURPOSE. The flag's two stale
+       directions are not symmetric -- stale 0 is a double shadow for a frame,
+       stale 1 is NO shadow -- so it may only be raised at a point the pass has
+       committed to drawing. Published from the top of the function it would
+       stay raised through every `return` here: a frame with no packet (the
+       whole shell), an atlas that would not allocate, a map the probes
+       refused. Each of those lowers it on the way out, which is the
+       `SSHADOW_NONE()` above them, and this is the one line that raises it.
 
        ONE WRITE PER FRAME, so there is no window: a shell frame writes 0 and
        only 0, a drawing frame writes 1 and only 1, and the value changes only
        when the pass's own state does.
 
-       IT IS OBSERVED, NOT PREDICTED, and that is the whole of the second
-       re-review of 10b. The question is "did anything actually paint a
-       structure's slant", and the honest answer is a report from the painters
-       rather than a guess assembled up here from their levers. Two rounds were
-       spent guessing it wrong:
+       IT IS OBSERVED, NOT PREDICTED. The question is "did anything actually
+       paint a structure's slant", and the honest answer is a report from the
+       painter rather than a guess assembled up here from its levers. The
+       painter is the Vulkan unit pass: `tagpu_posedraw_slant_take()` is the
+       CONSUMER reporting, after it has recorded its shadow stage, that it
+       painted at least one slant. The read here CLEARS it, so every frame must
+       earn the gate again. That is what makes the stale directions bounded by
+       construction rather than by argument: any path that does not reach the
+       painter -- the seven `SSHADOW_NONE(); return;` sites above, a refused
+       map -- leaves 0 behind and the next frame lowers the gate.
 
-         * `s_armed == 1` alone asked "is the pass armed", which is not the
-           same question at all;
-         * `tagpu_classicpp_on() || tagpu_posedraw_live()` asked it as an
-           either/or, and the two painters are not alternatives. BOTH of them
-           come out of the `pdu[]` array, which is filled only when
-           `tagpu_posedraw_ready()` -- so on a driver where the posed program
-           will not link (`s_state == 2`, a session latch) `npd` is 0, nothing
-           casts into the cast-shadow map AND the slant range is empty, and the
-           gate stood raised over an empty frame for the session with Classic++
-           on, which is the shipped default. `tagpu_posedraw_ready()` is a
-           PRECONDITION OF BOTH, never an alternative to one.
-
-       `s_ssSuppress` (below, next to the painters) carries the answer, and the
-       read here CLEARS it, so every frame must earn the gate again. That is
-       what makes the stale directions bounded by construction rather than by
-       argument: any path that does not reach the painters -- the seven
-       `SSHADOW_NONE(); return;` sites above, a refused map -- leaves 0 behind
-       and the next frame lowers the gate.
-
-       A `gl_draws` TERM USED TO BE ANDed IN HERE, read fresh from
-       `tagpu_vk_owns_present()` each frame while `s_ssSuppress` was last
-       frame's, so that a GL -> Vulkan switch could not carry one raised frame
-       across the seam. There is one lane and no seam, and the term is gone --
-       see the paragraph below, which is the authority on this expression.
+       NO `gl_draws` TERM. With one lane there is no seam to guard, and such a
+       term would PIN THE GATE AT 0 -- the engine would keep drawing its slant
+       shadows underneath ours and nothing would report it.
 
        THE COST IS ONE FRAME, IN BOTH DIRECTIONS, and it is the same shape the
        cursor hand-over already uses (`tagpu_cursown_publish` /
-       `tagpu_gui_cursor_drew_take`): when a painter starts, the engine and we
-       both draw for one frame; when it stops, one frame has no structure
-       shadow and then the gate falls. Neither can persist, which is the
-       property the two guessed versions did not have. */
-    /* THE `gl_draws` TERM IS GONE FROM THIS GATE, AND THAT MATTERS MORE THAN
-       THE OTHER DELETIONS IN THIS LANDING. It was ANDed in so that a GL ->
-       Vulkan switch could not carry one raised frame across the seam; with one
-       lane there is no seam, and leaving it would have PINNED THE GATE AT 0 for
-       any future painter -- the engine would keep drawing its slant shadows
-       underneath ours and nothing would report it.
-
-       THE PAINTER IS BACK AND IS THE VULKAN UNIT PASS (2026-09-22). From
-       landing 11-3 until then nothing set `s_ssSuppress` at all -- its writers
-       were the GL painters deleted with the draw half -- so this published 0
-       every frame and the engine drew every structure shadow itself. What sets
-       it now is `tagpu_posedraw_slant_take()`: the CONSUMER reports, after it
-       has recorded its shadow stage, that it painted at least one slant, and
-       that report is what is read here. It is deliberately not a prediction
-       assembled from this pass's own levers -- two rounds were spent guessing
-       it wrong, above -- and it is one render-loop iteration old by
-       construction, which is the one-frame cost this comment already budgets
-       for in both directions. The read-and-clear keeps it bounded: a frame
-       that does not reach the painter lowers the gate again on its own. */
+       `tagpu_gui_cursor_drew_take`): the report is one render-loop iteration
+       old by construction, so when a painter starts, the engine and we both
+       draw for one frame; when it stops, one frame has no structure shadow and
+       then the gate falls. Neither can persist. */
     {
         const int suppress = tagpu_posedraw_slant_take();   /* read AND clear */
         tagpu_owndraw_set_structshadow(s_armed == 1 && suppress,
@@ -2542,10 +2279,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            extreme and it can never shorten a view the player can actually
            reach — it is here so that a zoom that somehow slipped below the
            floor cannot ask for an unbounded rect, which is a property of the
-           value and not of the resolution. The fixed 8192 it replaced was
-           already below what a 3840x2160 viewport asks for at 0.25x (14912),
-           so the rect lost a third of its width here before the cell budget
-           cut it again. */
+           value and not of the resolution. */
         if (evw > maxeff_w) evw = maxeff_w;
         if (evh > maxeff_h) evh = maxeff_h;
     }
@@ -2590,20 +2324,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int fogMode = 0;
     s_fogGrid = NULL; s_fogCells = 0; s_fogLut = 0;
     {
-        /* BOTH GRIDS COME OUT OF THE PACKET (landing 4b). This was a read of
-           the engine's descriptor `*(main+0x1421F)` and of the buffer behind
-           it, on this thread, while the game thread's own fog site was
-           rewriting both — the read `tagpu_fog_at`'s guard was added for after
-           a hard fault off a base of -9 (2026-09-03). The publisher copies the
-           bytes now, with the relation between the descriptor's three numbers
-           checked there, and the acquire proves the copy's length is exactly
-           `cols * rows * 2`, so every index this frame can form is inside the
-           bytes it was handed. The wide grid arrives the same way and
-           tagpu_fogwide's three buffers, its critical section and its retire
-           ring went with the hand-over they existed for.
+        /* BOTH GRIDS COME OUT OF THE PACKET, never out of the engine's
+           descriptor `*(main+0x1421F)` and the buffer behind it on this thread:
+           the game thread's own fog site rewrites both, and a read racing it
+           faulted hard off a base of -9 (2026-09-03, the reason for
+           `tagpu_fog_at`'s guard). The publisher copies the bytes, with the
+           relation between the descriptor's three numbers checked there, and
+           the acquire proves the copy's length is exactly `cols * rows * 2`, so
+           every index this frame can form is inside the bytes it was handed.
+           The wide grid arrives the same way.
 
-           WHICH GRID THIS FRAME USES IS UNCHANGED, and it is this thread's
-           decision because it is the one that knows what it is about to draw:
+           WHICH GRID THIS FRAME USES is this thread's decision because it is the one that knows what it is about to draw:
            the engine's own at zoom >= 1, where it spans the frame by
            construction (its origin is the eye rounded to a half cell and its
            count is viewW/32 + 2, so the last column starts at least a pixel
@@ -2634,19 +2365,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 bufCells = cols * rows;
             } else if (!wb && (tagpu_zoom_level() < 1.0f || tagpu_zoom_unacked())) {
                 /* a zoomed frame drawn over the engine's 1x grid: the outer ring
-                   falls back to taFog's clamp. This is what `bare=` counted on
-                   tagpu_fogwide's own heartbeat before the grid rode in the
-                   packet; it must read 0 outside a deliberate `fogwide.off`. */
+                   falls back to taFog's clamp. It must read 0 outside a
+                   deliberate `fogwide.off`. */
                 s_fogBare++;
             }
         }
         if (buf && cols > 0 && rows > 0) {
-            /* THE UPLOAD IS GL; WHAT FOLLOWS IT IS THE PASS. The four statics
-               below are what `tagpu_terr_render`'s hand-over carries to the
-               Vulkan twin (`fogGrid`/`fogGridCols`/`fogGridRows` there), so the
-               gate was around the texture calls and not around the block, and
-               in landing 11-5b the calls went and the block stayed. The four
-               publications below are the whole of what this does now. */
+            /* The statics below are what `tagpu_terr_render`'s hand-over
+               carries to the Vulkan twin (`fogGrid`/`fogGridCols`/`fogGridRows`
+               there). */
             s_fogGrid = buf; s_fogCols = cols; s_fogRows = rows;
             s_fogCells = bufCells;
             s_fogOrgX = orgX;
@@ -2656,11 +2383,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                decided entirely by the grid bytes: the builder writes the grey
                mask only when LosType&2 and the black mask only where MAPPED is
                clear, so an inactive mode is already an all-zero grid and costs
-               nothing to sample. Gating on bit0 dropped the whole rule under
+               nothing to sample. Gating on bit0 would drop the whole rule under
                true-LOS-without-mapping (LosType=14, a reachable skirmish
-               setting) — and since G13b suppresses the engine's overlay, that
-               would delete the grey band outright instead of merely disagreeing
-               with it. */
+               setting) — and with the engine's overlay suppressed, that would
+               delete the grey band outright instead of merely disagreeing with
+               it. */
             fogMode = 1 | (lostype & 2);
             /* the grey band's darken is a palette remap, not a scale: 0x4BFE10
                rewrites every pixel p as shade[p] (256 bytes, everything folded
@@ -2678,42 +2405,26 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     for (i = 0; i < 256; i++) ident[i] = (unsigned char)i;
                     t = ident;
                 }
-                /* THE 256 BYTES, KEPT WHERE A SECOND BACKEND CAN REACH THEM
-                   (Phase G / G19e). A GL upload of the same buffer stood above
-                   this and went in landing 11-5b. The identity fallback above
-                   is part of the pass's INPUT, not a detail of that upload,
-                   which is why it survives it: `t` is the one construction of
-                   the table and this is the one copy of it. */
+                /* THE 256 BYTES, KEPT WHERE THE VULKAN TWINS CAN REACH THEM.
+                   The identity fallback above is part of the pass's INPUT: `t`
+                   is the one construction of the table and this is the one
+                   copy of it. */
                 memcpy(s_fogLutBytes, t, 256);
                 s_fogLutHave = 1;
             }
         }
     }
 
-    /* ---- the live palette (re-read per frame; it does NOT cycle -- terr.c),
-       and it was the ONLY palette texture the world had: terrain, features,
-       effects, markers and the replacement meshes were all handed the same
-       name, which went with the upload in landing 11-5b. ---- */
-    /* THIS UPLOAD WAS GL THROUGHOUT, unlike the fog grid and the shade table
-       above, and so it left NOTHING behind when it went in landing 11-5b: the
-       bytes a second backend needs are `tagpu_pal_live()`'s, which
-       `tagpu_pal_frame` fills from this frame's packet before any pass runs,
-       and each Vulkan twin uploads them itself.
-
-       `pal` ABOVE OUTLIVED THAT UPLOAD AND HAS NOW OUTLIVED ITS SECOND
-       READER TOO. This paragraph used to say it was load-bearing as the
-       argument to `tagpu_r3d_atlas_frame(pal)`; 11-5e-2 deleted the GL restore
-       that argument fed, so the call takes none and the only thing left
-       reading `pal` in this function is the `if (!pal)` early-out a few lines
-       up. That early-out is kept deliberately and its own comment says why.
-       A reader deciding whether `pal` can go should start there, not here. */
+    /* ---- the live palette (it does NOT cycle -- terr.c): each Vulkan twin
+       uploads `tagpu_pal_live()`'s bytes itself, which `tagpu_pal_frame` fills
+       from this frame's packet before any pass runs. `pal` above is read only
+       by the `if (!pal)` early-out; a reader deciding whether `pal` can go
+       should start at that early-out's own comment. ---- */
 
     /* ---- gather native-owned on-screen units ---- */
     /* ONE GATHERED DRAWABLE. `pu`/`pw` point into THIS FRAME'S PACKET — our
-       own memory for the length of the frame, which is what retires the `dead`
-       re-read this record used to carry (the engine's Object3do pointer was
-       compared against the unit record again before every draw, because it
-       could be freed between the gather and the draw). `pc` is the entry's
+       own memory for the length of the frame, so nothing here is re-read
+       against the engine between the gather and the draw. `pc` is the entry's
        piece run in the same packet. */
     typedef struct { const TAGPU_PK_UNIT* pu; const TAGPU_PK_WRECK* pw;
                      const TAGPU_PK_PIECE* pc; int nparts; unsigned basePiece;
@@ -2807,7 +2518,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    canhover/floater are NOT tested there. The rest get a
                    composite-derived silhouette the wipe emptied -- ours, under
                    the engine's FBI gates. Without the redirect a structure keeps the
-                   engine's cached shadow, exactly as before. */
+                   engine's cached shadow. */
                 mask = pu->def_mask;
                 /* a digger never reaches the cached branch: path A tests the
                    structure bit first and then sends a digger to the
@@ -2816,22 +2527,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    (0x4594D0) and clips a silhouette inline */
                 n2->slant = (st & ST_STRUCT) != 0 && !(mask & UD_DIGGER);
                 if (n2->slant) {
-                    /* `tagpu_owndraw_structshadow_ours()` WAS THE FIRST TERM
-                       and is gone. It answered `g_ssSkip` -- "we took the
-                       engine's cached slant shadow" -- which was the licence
-                       to draw ours only where the engine's own would otherwise
-                       have shown through the COMPOSITE. There is no composite
-                       and `owndraw` is off the defaults, so the term was 0 for
-                       the life of every session and said nothing true.
-
-                       THE SLANT IS DRAWN AGAIN SINCE THE HARD-SHADOW LANDING
-                       (2026-09-22). It was dark from landing 11-2, which
-                       deleted this pass's GL tail and took the slant and
-                       silhouette draws with it, until `tagpu_vk_unit.c` grew
-                       the two shadow stages; what this field feeds is the
-                       `shKind` the hand-over carries, and the engine's own
-                       cached slant is suppressed for exactly the frames that
-                       painter reports having drawn (the structure-shadow gate
+                    /* No `tagpu_owndraw_structshadow_ours()` term: it answers
+                       whether the engine's own shadow would show through the
+                       COMPOSITE, and there is no composite. This field feeds
+                       the `shKind` the hand-over carries; `tagpu_vk_unit.c`'s
+                       shadow stages draw it, and the engine's own cached slant
+                       is suppressed for exactly the frames that painter
+                       reports having drawn (the structure-shadow gate
                        above). */
                     n2->shadow = !(mask & 0x02000000u);    /* noshadow          */
                     if (n2->shadow && pu->model_id == 0 &&
@@ -2841,17 +2543,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     n2->shadow = !(mask & 0x02000000u) &&  /* noshadow          */
                                  !(mask & 0x00081000u);    /* canhover|floater  */
                 }
-                /* NO REPLACEMENT MESH IS LOOKED UP ANY MORE. This asked
-                   `tagpu_hires_mesh` for a `hires\<UnitName>.glb`, and then
-                   threw the answer away whenever the replacement pass could not
-                   draw -- which was EVERY session, because that pass resolved
-                   its GL entry points through a library the process never
-                   loads. The logs said so in as many words on every run.
-                   Landing 11 D3 deleted both files on the owner's ruling that
-                   glTF replacement models are disabled and the implementation
-                   is TODO and out of scope, so the lookup goes with them and
-                   every unit takes the posed path below, exactly as it already
-                   did. */
             }
         }
         /* waterline + digger clipping, PATH B only (composite has a depth
@@ -2890,22 +2581,18 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         /* GROUND height under the unit (engine: GetPosHeight); terrain height
            byte = PLOT_MEMORY tile +0x04 (16-px grid).
 
-           `gy` IS THE SCREEN-SPACE GROUND LINE and is back with the hard
-           shadow (2026-09-22). The engine blits a unit's shadow at
+           `gy` IS THE SCREEN-SPACE GROUND LINE. The engine blits a unit's shadow at
            `(sx + 0x85, groundY)` -- the ground height UNDER the unit, not the
            unit's own y -- so an aircraft's shadow lands on the terrain below
            it rather than under its hull. `gy - ay` is that shift in frame
-           pixels and is what the hand-over carries as `shOffY`. It was deleted
-           by landing 11 D3, whose only reader had been the replacement-mesh
-           branch; a structure at rest has `gy == ay` and the shift is 0, which
-           is why the field looked inert. That equality holds on a SLOPE only
-           because the packet publishes the engine's own bilinear ground height
-           (`GetPosHeight 0x485070`'s blend) rather than the nearest cell --
-           with the nearest cell it was true on flat ground alone, which is how
-           the landing review found it.
+           pixels and is what the hand-over carries as `shOffY`. A structure at
+           rest has `gy == ay` and the shift is 0 — on a SLOPE too, only because
+           the packet publishes the engine's own bilinear ground height
+           (`GetPosHeight 0x485070`'s blend) rather than the nearest cell, with
+           which it would hold on flat ground alone.
 
-           `gnd` is the raw height byte, not a projection of it, and still has
-           no reader. Left alone: it is older than this work. */
+           `gnd` is the raw height byte, not a projection of it, and has no
+           reader. */
         {
             float gy = ay;
             if (pu->flags & TAGPU_PK_U_GROUND) {
@@ -2927,8 +2614,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        separate sprite it lands on ITS OWN tile row instead -- measured on an
        ARM lab at world y 1072 building a Hammer at 1068, one 16-unit row
        apart, so four whole depth keys behind the lab, which then covered it at
-       every pixel it filled (reported from play: "the unit is being built
-       UNDER the lab"). Giving the cargo the parent's row and band leaves the
+       every pixel it filled. Giving the cargo the parent's row and band leaves the
        two models to sort against each other by md, our intra-model view depth.
        That is an APPROXIMATION of the merge, not a port of it: 0x4B90A0
        compares dstDepth against srcDepth + HIWORD(dy) -- the engine's depth
@@ -2964,7 +2650,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
     }
 
-    /* ---- gather 3D wrecks from the sweep-rect tiles (G12c close-out) ----
+    /* ---- gather 3D wrecks from the sweep-rect tiles ----
        anchor tile: flags bit0 + live def with FeatureMask bit0 CLEAR ->
        wreck record holds the husk's Object3do + world pos; drawn at FEATURE
        depth (3+rel*4). The engine's own scratch-fake-unit draw is suppressed
@@ -2975,12 +2661,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (mapW > 0 && mapH > 0 && mapW <= 4096 && mapH <= 4096) {
             /* THE HUSKS COME OUT OF THE PACKET. The publisher walked the
                feature grid for anchors whose def is a 3D wreck and copied the
-               record's pose, so this pass no longer follows tile -> def ->
-               record -> Object3do on the render thread. The rect is unchanged:
-               both axes off the ZOOM's rect, like the row range and the cull
-               below — leaving the columns on the engine's viewport stopped
-               wrecks at the unzoomed left and right edges while terrain,
-               features and units carried on past them. */
+               record's pose, so this pass does not follow tile -> def ->
+               record -> Object3do on the render thread. The rect takes both
+               axes off the ZOOM's rect, like the row range and the cull below —
+               columns on the engine's viewport would stop wrecks at the
+               unzoomed left and right edges while terrain, features and units
+               carried on past them. */
             int tx0 = ((eyeX + (evpL - vpL)) >> 4) - 8;
             int tx1 = tx0 + (evw >> 4) + 16;
             int ty0 = r0, ty1 = r0 + rows;
@@ -3000,7 +2686,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 int rx = pw->pos[0] >> 16;
                 int rz = pw->pos[1] >> 16;
                 int ry = pw->pos[2] >> 16;
-                /* BY THE ANCHOR TILE, as the grid walk this replaced was: a
+                /* BY THE ANCHOR TILE, not the position: a
                    record's own position is near its tile but not inside it, so
                    filtering on the position would take a different set at the
                    rect's edge */
@@ -3031,31 +2717,23 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 n2->slant = 0;
                 /* units[] is static and only nu resets per frame, so a field
                    left unwritten here is last frame's, and every field a wreck
-                   does not set has to be cleared here rather than assumed. The
-                   worst case this rule was written for is gone -- a wreck
-                   landing on an index that held a replacement unit inherited
-                   its HMesh*, took the hires branch, emitted no native vertices
-                   (the wreck itself vanished) and drew that unit's model at the
-                   wreck's anchor -- because landing 11 D3 deleted the field and
-                   the branch. The rule survives it: yaw is still last frame's
-                   if nothing writes it. */
+                   does not set has to be cleared here rather than assumed. */
                 n2->yaw = 0;
                 n2->waterT = -1e9f; n2->digT = -1e9f; n2->waterMode = 0;
                 /* ...and the nanoframe group, for the same reason: a wreck on
-                   an index that held a unit under construction inherited
-                   nanoOn = 1 and was staged and wire-drawn as one (landing
-                   review, 2026-09-12). Present on main since G16 too. */
+                   an index that held a unit under construction would inherit
+                   nanoOn = 1 and be staged and wire-drawn as one. */
                 n2->nanoOn = 0; n2->nanoT = 0.0f; n2->nanoWire = 0.0f;
                 n2->nanoC[0] = n2->nanoC[1] = n2->nanoC[2] = 0.0f;
                 nwr++;
             }
         }
     }
-    /* THE WORLD AT THE DEVICE'S RESOLUTION (G17b, gui-renderer.md 13.1).
-       Until now the supersampled buffer was always box-resolved back down to
-       the GAME resolution and the composite then stretched that into the
-       letterboxed viewport -- so at k > 1 the extra samples were thrown away
-       and the world reached the screen at the engine's resolution, upscaled.
+    /* THE WORLD AT THE DEVICE'S RESOLUTION (gui-renderer.md 13.1).
+       Otherwise the supersampled buffer is box-resolved back down to the GAME
+       resolution and the composite then stretches that into the letterboxed
+       viewport -- so at k > 1 the extra samples are thrown away and the world
+       reaches the screen at the engine's resolution, upscaled.
        When the viewport is wider than the engine's screen, pick `ss` to reach
        the device resolution instead and composite from the supersampled buffer
        directly, skipping the resolve.
@@ -3064,14 +2742,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        this frame has to agree about how many samples a game pixel is: the fx
        and marker passes take it from `fv.ss` and the hires pass from `hv.ss`,
        and `TAGPU_GLSL_SCAF_TEST` divides gl_FragCoord by it to find the game
-       pixel. The first cut of this raised `ss` AFTER `fv.ss` was set, so at
-       ceil(k) > 2 they disagreed and the scaffold test addressed a texel 1.5x
-       out (found by the landing review; invisible at k = 1.5, where ceil(k) is
-       2 and the two happen to match).
+       pixel. Raised AFTER `fv.ss` is set, at ceil(k) > 2 they would disagree
+       and the scaffold test would address a texel 1.5x out (invisible at
+       k = 1.5, where ceil(k) is 2 and the two happen to match).
 
        AT k = 1 NONE OF THIS APPLIES -- `devres` stays 0, `ss` stays 2, the
-       resolve runs and the composite reads the same texture it always did, so
-       every measurement taken at 1:1 (the parity md5 included) is untouched.
+       resolve runs and the composite reads the resolved texture, so every
+       measurement taken at 1:1 (the parity md5 included) is untouched.
        Past TAGPU_SS_MAX the source would fall BELOW the destination and the
        composite would blur it, so devres is refused there rather than capped
        into a stretch. */
@@ -3087,22 +2764,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ...AND PUBLISHED HERE, ONE LINE BELOW THE DECISION, so that the Vulkan
        backend sizes its offscreen world target from the SAME number rather than
        recomputing `s_ss ? 2 : 1` on its own side. The paragraph above is the
-       whole argument for why that matters and it applies verbatim to a second
-       backend: the first cut of `devres` raised `ss` after `fv.ss` was set and
-       the scaffold test addressed a texel 1.5x out. Two lanes disagreeing about
-       it would be the same bug with a wider blast radius.
+       whole argument for why that matters, and it applies verbatim to the
+       backend.
 
-       ABOVE THE `!gl_draws` RETURN, so this runs on both lanes -- every value
-       here is arithmetic on the frame packet and the levers, and nothing in it
-       touches GL, which is what makes that placement legal.
-
-       THE RECT IS THE FRAME'S OWN VIEWPORT AND CARRIES NO HUD SHIFT. The GL
-       composite shifts this draw by `tagpu_hud_shift` scaled into frame pixels
-       (see the composite, far below); the Vulkan composite does not, so the
-       shift is deliberately NOT folded in here -- publishing a shifted rect
-       that only one consumer applies is how two lanes drift. `tagpu_hud.on` is
-       not a play default and the gap is stated in the plan.
-       [The vulkan-only plan, landing 4c-2.] */
+       THE RECT IS THE FRAME'S OWN VIEWPORT AND CARRIES NO HUD SHIFT. The Vulkan
+       composite does not apply `tagpu_hud_shift`, so the shift is deliberately
+       NOT folded in here. `tagpu_hud.on` is not a play default and the gap is
+       stated in the plan. */
     {
         TAGPU_WORLDTGT w;
         w.gw = gw; w.gh = gh; w.ss = ss; w.devres = devres;
@@ -3110,29 +2778,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         w.frame = f->frame_counter;
         s_wt = w; s_wtHave = 1;
     }
-    /* the rect's own path, snapshotted beside ss for the same reason: the
-       gather decides how many vertices an edge is worth and the draw decides
-       what primitive to read them as, and the two must not disagree inside one
-       frame. `selW` is a width in GAME pixels whatever the trigger said, which
-       is the one unit both the 1x buffer and an ss buffer can be expressed in. */
-
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
     int nfx = 0, nfeat = 0, nterr = 0;
-    /* THE VIEW IS FILLED WHATEVER IS ARMED, and only the GATHERS are gated.
-       THE REASON HAS CHANGED AND THE RULE HAS NOT. It used to be filled inside
-       the `if` below, and what moved it out was `tagpu_shadow_begin` being
-       handed this same struct on a path gated on none of these five passes:
-       with all five disarmed the shadow module read UNINITIALISED STACK, its
-       `zoom` came out 0.000, its light window ran to millions of texels, and
-       the hand-over it published carried a garbage frame. [FOUND 2026-09-15
-       taking the unit pass's A/B.]
-       That hand-off is gone -- landing 11 D2 deleted `tagpu_shadow.c`, and the
-       function had lost its caller before that. The fill stays where it is
-       because the GATHERS read `fv` and each of them is gated separately, so
-       the same uninitialised-stack shape is one re-gating away from returning.
-       Forty stores on a path that already walks every unit is not worth
-       gating. */
+    /* THE VIEW IS FILLED WHATEVER IS ARMED, and only the GATHERS are gated:
+       they read `fv` and each of them is gated separately, so a fill inside a
+       gate is one re-gating away from a reader of UNINITIALISED STACK. Forty
+       stores on a path that already walks every unit is not worth gating. */
     {
         fv.eyeX = eyeX; fv.eyeY = eyeY;
         fv.packet = f->packet;
@@ -3175,12 +2827,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (terrOn) nterr = tagpu_terr_gather(&fv);
         if (featOn) nfeat = tagpu_feat_gather(&fv);
         if (fxOn || sfxOn) nfx = tagpu_fx_gather(&fv);
-        if (markOn) tagpu_mark_gather(&fv);   /* the count fed a deleted GL draw;
-                                                 the CALL fills the hand-over */
-        /* THE RESTORER'S SLICE WAS ISSUED HERE and went in 11-5e-2 with the GL
-           backend that ran it. The Vulkan restorer is sliced inside the frame's
-           command buffer from `tagpu_vk.c`, after every pass's prepare, so
-           there is nothing for the gather order to protect any more. */
+        if (markOn) tagpu_mark_gather(&fv);   /* the CALL fills the hand-over */
     }
     /* NEVER return early while we own the terrain: the engine's frame is a
        flat key fill inside the viewport, and only the composite below turns it
@@ -3191,17 +2838,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int terrOwned = tagpu_terrown_filled();
     if (nu == 0 && nfx == 0 && nfeat == 0 && nterr == 0 && !markOn && !terrOwned) return;
 
-    /* THE POSE VIEW IS THE GATHER'S, so it is built here and not inside the
-       composite where it used to sit. Every number in it comes from a local
+    /* THE POSE VIEW IS THE GATHER'S. Every number in it comes from a local
        assigned well above this line -- the viewport, `gw`/`gh`, `s_zoom`,
        `depthScale`, `ss`, `scafOn`, the fog origin and the Classic++ light --
-       and none of it is GL. It is stored in `s_pv`, which already existed for
-       the build ghost's own dependency check, and BOTH lanes now read it from
-       there: this one to hand the unit pass over, the composite below to draw
-       it. Copying the twenty lines into the vulkan-only exit instead would
-       have been a second construction to drift from the first, which is the
-       failure this landing keeps finding elsewhere.
-       [The vulkan-only plan, landing 4b-2.] */
+       and none of it is GL. It is stored in `s_pv`, which the unit hand-over
+       and the build ghost's dependency check both read. */
     {
         TAGPU_PDVIEW pv;
         const TAGPU_LIGHT* L = tagpu_classicpp_light();
@@ -3225,7 +2866,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         pv.shDir = tagpu_r3d_shade_dir();
         s_pv = pv;
         /* the build ghost's dependency, made checkable: its pass may only draw
-           in a frame this ran (see ghost_pass) */
+           in a frame this ran (see ghost_record) */
         s_pvFrame = f->frame_counter;
     }
 
@@ -3242,10 +2883,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
 
     int i;
-    /* G16 step 5: the units the POSED program drew, and their poses. `pdix[i]`
-       is the unit's entry or -1; a posed unit contributes no vertices to the
-       shared stream, so its firstv range is empty and every CPU draw over it
-       is a no-op — the same way a replacement mesh's is. */
+    /* the units the POSED program draws, and their poses. `pdix[i]` is the
+       unit's entry or -1; a posed unit contributes no vertices to the shared
+       stream, so its firstv range is empty and every CPU draw over it is a
+       no-op. */
     static TAGPU_PDUNIT pdu[MAXU];
 
     /* THE FRAME'S POSE ARENA, sized from MAXU rather than a magic unit count
@@ -3285,8 +2926,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        map-anchored depth map instead, which has no producer on this lane --
        see `shadow_defaults()` in tagpu_classicpp.c, which says why and is why
        HARD is the default. `shadows=0` draws neither. With the
-       Classic++ switch OFF the engine's option bits rule alone, exactly as
-       they did before Classic++ existed. */
+       Classic++ switch OFF the engine's option bits rule alone. */
     const TAGPU_LIGHT* cppL = tagpu_classicpp_light();
     const int cpp  = tagpu_classicpp_on();
     const int hard = !cpp || cppL->shadows == TAGPU_SHADOWS_HARD;
@@ -3310,18 +2950,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        when not, so this reads 0 under `noselbox` or `passive` */
     int nselDrawn = 0;
     for (i = 0; i < nu; i++) {
-        /* BEFORE any of the skips below, not in the branch that fills it: the
-           array is static, so a unit that takes an early `continue` — dead, or
-           a replacement mesh — would otherwise be read against another unit's
-           index from an earlier frame. */
-        /* The object pointer was captured at gather time. If the engine has
-           since nulled or replaced it (unit death, wreck destroyed), the old
-           object is on tagpu_reclaim's queue and still readable — but drawing
-           a dead unit's last pose is pointless, so skip it. On an exe where
-           reclaim could not arm this is the narrow-window guard on its own:
-           the null lands the instruction after the free returns, so a block
-           that could fault has already changed here
-           (thread-safe-destruction.md). Wrecks re-read their record. */
         /* airborne units draw in a second, un-rowed sweep above everything
            (terrain-depth 3.3) -> the air band above the effects band; wrecks
            sit at FEATURE depth (3+rel*4, terrain-depth 3.4) */
@@ -3337,31 +2965,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                                      units[i].wy, units[i].wx0, units[i].wz0,
                                      encBase, depthScale, vpL, vpT, vw, vh,
                                      s_zoom);
-        /* THE RE-READ IS GONE (frame packet exchange, landing 3). This used to
-           compare the unit's `+0x9E` again against the Object3do gathered a
-           moment earlier, because the engine could free it between the two —
-           the narrow-window guard tagpu_reclaim's deferral sits behind. There
-           is nothing left to re-read: the pose, the composite rect and every
-           field below are a COPY the game thread made, in our own memory,
-           valid for the whole frame. `s_reread` therefore stays 0 for good
-           and the counter is kept only so a non-zero one would be loud. */
-        /* THE REPLACEMENT-MESH BRANCH STOOD HERE, AND IT WAS UNREACHABLE.
-           It built a TAGPU_HUNIT for the glTF draw pass and posed the mesh
-           with hires_pose. `units[i].hires` was NULL on every unit of every
-           frame: the pass it routed to could not resolve a GL entry point,
-           so this file nulled the pointer itself and said so in the log.
-           Landing 11 D3 took it with the two files. [glTF replacement
-           models: disabled, implementation TODO and out of scope -- the
-           owner, 2026-09-19.] */
+        /* NOTHING IS RE-READ: the pose, the composite rect and every field
+           below are a COPY the game thread made, in our own memory, valid for
+           the whole frame. */
         {
-            /* G16 step 8: THE POSED PROGRAM IS THE PATH. This unit is drawn
-               out of its type's baked buffers with its pose in a uniform
-               block, and no vertices are built for it here at all — the CPU
-               emitters that used to do it are gone, and with them the pose
-               race's original window, because nothing below reads `prim+0x22`.
+            /* THE POSED PROGRAM IS THE PATH. This unit is drawn out of its
+               type's baked buffers with its pose in a uniform block, and no
+               vertices are built for it here at all; nothing below reads
+               `prim+0x22`.
 
-               There is nowhere to fall back to, so every condition that used
-               to refuse now DEGRADES inside the unit (gpu-posing.md §4, "the
+               There is nowhere to fall back to, so every condition that would
+               refuse DEGRADES inside the unit (gpu-posing.md §4, "the
                refusal ledger"):
 
                  - the frame's pose arena full  -> the unit draws AT REST, from
@@ -3444,8 +3058,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    `units[i].slant` says which of the blit's two branches it
                    takes. What is added here is the frame-level policy.
 
-                   `hard || (air && airDrop)` IS THE GL TWIN'S OWN TEST, kept
-                   whole: under Classic++ at `shadows=1` the only Classic
+                   `hard || (air && airDrop)`, whole: under Classic++ at `shadows=1` the only Classic
                    shadow that still draws is an aircraft's silhouette under
                    `airshadow=drop`, and an aircraft is never a structure, so
                    that clause can only ever admit a silhouette. */
@@ -3459,8 +3072,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                         q->shOffY = units[i].gy - units[i].ay;
                 }
                 npd++;   /* the count is live: the hand-over and the bail read it */
-                /* the model top no longer falls out of the vertices. Only a
-                   WRECK reads it: a unit with a record prefers model_aabb */
             }
         }
     }
@@ -3469,108 +3080,39 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         int k, nm = tagpu_fx_nmodels();
         for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
     }
-    /* npd belongs in this test, SINCE G16 STEP 8, and urgently: an ordinary unit
-       contributes no vertices either now, so without this a frame of nothing
+    /* npd belongs in this test, and urgently: an ordinary unit contributes no
+       vertices, so without this a frame of nothing
        but units — every unit in the game, on a map with our terrain off —
        would return here having drawn none of them. */
     if (nv == 0 && npd == 0 && nfx == 0 && nfeat == 0 && nterr == 0 &&
         !markOn && !terrOwned) return;
 
-    /* MOVED BELOW THE GATHER, not left at the top of the composite [4b-2]. The
-       per-unit array `pdu[]` and the vertex emission above are the UNIT pass's
-       gather, and they are pure CPU -- audited with the corrected regex: there
-       is not one GL call between the four world gathers and the early return
-       just above. Exiting before them left the unit pass no gather to hand
-       over; gating its 150 GL calls one by one would have been the wrong answer
-       to that, because its entry points are all called from the composite
-       BELOW, which this lane never reaches. They are already unreachable here.
-       What is missing is the RECORD, not a gate. */
-    /* THE VULKAN-ONLY LANE'S FRAME ENDS HERE, and it ends here rather than
-       threading a gate through the composite because it is a DIFFERENT frame.
-       Everything below this line is the GL world composite -- 103 GL calls in
-       eighteen runs: the unit geometry upload, the cast-shadow depth map, the
-       `ss x` FBO, the shadow and slant redraws, the nano wire pass, the key/fill
-       inversion against the engine's own surface and the resolve to the
-       drawable. None of it has a counterpart on this lane yet; the `ss` target
-       and TA's surface are 4c, and until then each ported pass draws itself into
-       the swapchain from its own hand-over.
+    /* THE HAND-OVER IS THE END OF THIS FUNCTION, UNCONDITIONALLY. */
 
-       SO THE HONEST SHAPE IS TWO EXITS, not one body with gates in it. The GL
-       path below is left byte for byte as it was -- which is what the phase's
-       standing rule asks ("a Phase G landing that moves a GL pixel has failed")
-       -- and this lane calls the passes that have been taught to hand over
-       without drawing, in the composite's own order, and stops.
-
-       THE PREDICATE IS THE COMPOSITE'S OWN, deliberately: `if (nterr)` is what
-       gates `tagpu_terr_render` below, so the two sites agree about when a pass
-       runs by using the same test rather than by being read together. Each
-       `*_render` also refuses on its own count, so this is belt and braces.
-
-       WHAT IS NOT DONE HERE, stated rather than left to be discovered: the
-       300-frame stats line at the end of the composite (posebake, posedraw and
-       the fill sequence) does not run on this lane; this lane's own heartbeat
-       below reports what was handed OVER instead.
-       [The vulkan-only plan, landing 4b-2.]
-
-       `tagpu_zoom_publish_view` IS DONE HERE, at the foot of the hand-over.
-       It was written for the GL composite and gated there on `keyOn >= 0` --
-       "the terrain under you is ours and the key/fill inversion is in force",
-       which was the GL lane's way of saying the world on screen is drawn at
-       our zoom rather than by the engine at 1x. That test cannot be carried
-       over, because the thing it tested is gone: since the clean cut nothing
-       composites TA's own frame at all (tagpu_overlay.c, `tagpu_surf_sync`) --
-       it is captured as the reference and drawn nowhere. On this lane the ONLY
-       world pixels that reach the screen are the ones handed over right above,
-       so reaching this line IS the fact `keyOn` stood for. See the publish
-       itself for the gate that replaces it. */
-    /* THE HAND-OVER IS THE END OF THIS FUNCTION, UNCONDITIONALLY. It stood
-       inside `if (!gl_draws) { … return; }`, with the GL draw half below it
-       reached by falling past; landing 11-3 deleted that half and landing
-       11-5b deleted the test, which was true at every reachable call. Nothing
-       follows this, so the `return` went with the `if`. */
-
-    /* WHETHER TERRAIN IS CLIPPED TO THE VIEWPORT IS THE PASS'S DECISION AND
-       NOT GL'S, and this line is where that gets said on this lane. The
-       engine clips unit blits to the viewport rect and this pass matches it;
-       the hand-over carries that as `scissorOn` and the Vulkan twin's
-       `terr_scissor` honours it ("NO CLIP WHERE THE GL LANE HAS NONE").
-       `s_scissorOn` used to be set from whether `x_glScissor` RESOLVED --
-       which is a fact about one context's entry points, and the reason the
-       GL path has a fallback at all. With no context every `x_gl*` is NULL,
-       so leaving the flag to that told the twin "no clip" and it drew
-       terrain over the whole frame instead of the viewport.
-       MEASURED before the fix: 33 088 px of 786 432 (4.21%) differing
-       against the two-lane capture, every one of them black in the GL half
-       and LOS-grey here, and all of them outside the 896x704 viewport this
-       fixture logs as `zoomvp=`. Coverage, not colour. [Landing 4b-2.] */
+    /* WHETHER TERRAIN IS CLIPPED TO THE VIEWPORT IS THE PASS'S DECISION, and
+       this line is where it is said. The engine clips unit blits to the
+       viewport rect and this pass matches it; the hand-over carries that as
+       `scissorOn` and the Vulkan twin's `terr_scissor` honours it. Left 0,
+       the twin draws terrain over the whole frame instead of the viewport. */
     s_scissorOn = 1;
-    /* IN THE COMPOSITE'S OWN ORDER, and with the composite's own predicates:
-       terrain is the world's bottom layer and the features follow it, which
-       is the order below and the order tagpu_vk.c records the passes in.
-       `glEnable(GL_BLEND)` wraps the feature render down there; over here the
-       twin owns its own blend state, which is why there is nothing to set. */
-    if (nterr) tagpu_terr_render(&fv, 0);
-    if (nfeat) tagpu_feat_render(&fv, 0);
+    /* IN THE WORLD'S ORDER: terrain is the bottom layer and the features
+       follow it, which is the order tagpu_vk.c records the passes in. Each
+       twin owns its own blend state, so there is nothing to set here. */
+    if (nterr) tagpu_terr_render(&fv);
+    if (nfeat) tagpu_feat_render(&fv);
     /* the effects are the LAST of the world, after the features and the
-       units -- the order below, and the order tagpu_vk.c records in. The
-       scaffold texture is 0 here: the effects twin refuses any frame whose
-       twin had the scaffold live, so that is the value it wants. */
-    if (nfx) tagpu_fx_render(&fv, 0, 0);
+       units -- the order tagpu_vk.c records in. */
+    if (nfx) tagpu_fx_render(&fv);
     /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below the
-       UI -- where the composite draws them, and where tagpu_vk.c records
-       them. `markOn` rather than a vertex count, because this pass's own
+       UI -- where tagpu_vk.c records them. `markOn` rather than a vertex count, because this pass's own
        heartbeat has to run even on a frame with no markers: without it the
        watchdog reads a dead pass and hands the draw back to the engine. */
     if (markOn) tagpu_mark_render(&fv);
-    /* AND THE UNIT PASS, last of the world's five. Its three body-path entry
-       points gate their own GL; the shadow, slant, wire and depth ones are
-       the composite's and are not called here at all. `begin` opens the
-       recording window and arms the A/B, `unit` records each pose, `end`
-       publishes -- which is the whole of the hand-over. */
-    /* THIS LANE'S OWN HEARTBEAT, the composite's 300-frame stats line
-       being below the exit and so unreachable here. It reports what was
-       handed OVER rather than what was drawn, which is the only thing
-       this lane decides. */
+    /* AND THE UNIT PASS, last of the world's five (below the heartbeat):
+       `begin` opens the recording window and arms the A/B, `unit` records
+       each pose, `end` publishes -- which is the whole of the hand-over. */
+    /* THE PASS'S HEARTBEAT. It reports what was handed OVER rather than what
+       was drawn, which is the only thing this pass decides. */
     if ((f->frame_counter % 300) == 0) {
         char hb[256];
         _snprintf(hb, sizeof hb,
@@ -3587,10 +3129,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         for (k = 0; k < npd; k++) tagpu_posedraw_unit(&pdu[k]);
         tagpu_posedraw_end();
     }
-    /* AND THE BUILD GHOST, in its own window after the units' [landing
-       11-3]. It is AFTER on purpose and not merely by habit: ghosts blend
-       with each other and with what they sit on, so they are recorded last
-       exactly as the GL pass drew them last. `_begin`/`_end` is a window
+    /* AND THE BUILD GHOST, in its own window after the units'. It is AFTER
+       on purpose and not merely by habit: ghosts blend with each other and
+       with what they sit on, so they are recorded last. `_begin`/`_end` is a
+       window
        rather than a frame (tagpu_posedraw.h), and with no posed unit on
        screen this is the first and only one. */
     ghost_record(pk, f->frame_counter, eyeX, eyeY, vpL, vpT, r0,
@@ -3599,8 +3141,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* THE WORLD ON SCREEN IS OURS, AT OUR ZOOM -- SAY SO, so that the input
        path starts unzooming and the wheel has something to be live over
        (tagpu_zoom.h). Without this line `s_live` is never raised and every
-       notch is refused with "no zoomed world on screen", which is what the
-       lane shipped with between landing 4b-2 and here.
+       notch is refused with "no zoomed world on screen".
 
        THE RECT IS THE TRUE VIEWPORT AND NOT THE EFFECTIVE ONE. `pk->vp[]` is
        the engine's own 1x world rect as the GAME thread published it -- the
@@ -3628,32 +3169,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        frame that does not reach here. The claim is one frame long by
        construction; it cannot latch. */
     tagpu_zoom_publish_view(vpL, vpT, vw, vh);
-
-
-    /* THE GL DRAW HALF OF THE UNIT PASS STOOD HERE -- 1 054 lines, deleted by
-       the vulkan-only plan's landing 11-3. Everything above this point is the
-       GATHER half and still runs on the Vulkan lane; the hand-over and its
-       `return` are the last thing in the function now.
-
-       IT WAS ALREADY UNREACHABLE WHEN IT WAS DELETED, and that is the whole
-       safety argument rather than a hope about coverage. Every draw below was
-       reached only by falling past `if (!gl_draws)`, `gl_draws` is
-       `!tagpu_vk_owns_present()`, this pass runs only from
-       `tagpu_overlay_draw`, and landing 11-2 removed that function's only
-       other caller (`render_ogl.c:1632`). The one that survives,
-       `render_vk.c:232`, runs after `tagpu_vk_own_present()` has set
-       `s_ownWin` at the top of the render thread -- so `gl_draws` is false at
-       every call that exists, and the process creates no GL context on any
-       path for it to have drawn into anyway.
-
-       WHAT WENT WITH IT: the selection rects, the slant and silhouette shadow
-       draws, the wire and ghost passes, the depth pre-pass, and the per-frame
-       diagnostic log line -- plus the five file-local statics whose ONLY
-       reader was that line (`s_reread`, `s_vtrunc`, `s_poseAtRest`,
-       `s_poseUnplaced`, `s_poseNoBake`). Those were counted in the gather half
-       and reset only down here, so on the Vulkan lane they had already been
-       accumulating without a reader since gate 4; deleting the tail is what
-       made that visible. Their increments went with them. */
 }
 
 /* The pose oracle, armed by tagpu_posedump.on (self-deleting): a one-shot
@@ -3666,17 +3181,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
    and it is how a unit whose script does something no sample covered — a piece
    MOVEd, two turn axes at once — says so, instead of just rendering slightly
    wrong. err should read 0.00. */
-/* THE ENGINE'S POSED VERTEX BUFFER IS NO LONGER READ HERE (frame packet
-   exchange, landing 3). `err=` compared our reconstruction against
-   PrimitiveStruct+0x22 — the buffer the engine rewrites in place, inside the
-   Object3do that FreeObjectState can take away mid-frame — and it was the last
-   per-unit engine read left in this file. What the dump is FOR survives whole:
-   `tools/tacob pose-check` diffs tacob's own reconstruction against the FIELDS
-   printed below (the rest offset, the COB move and turn, the visibility bit),
-   and `tagpu_posecrc.on` watches the matrices this pass hands the GPU. The
-   `err=` column is a gap this landing leaves open, not one it closes:
-   recovering it wants the posed buffer copied into the packet under the
-   trigger, which is a table nothing else would use. */
+/* THE ENGINE'S POSED VERTEX BUFFER IS NOT READ HERE: PrimitiveStruct+0x22 is
+   rewritten in place, inside the Object3do that FreeObjectState can take away
+   mid-frame. `tools/tacob pose-check` diffs tacob's own reconstruction against
+   the FIELDS printed below (the rest offset, the COB move and turn, the
+   visibility bit), and `tagpu_posecrc.on` watches the matrices this pass hands
+   the GPU. The `err=` column is an open gap: recovering it wants the posed
+   buffer copied into the packet under the trigger, which is a table nothing
+   else would use. */
 static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
                       const TAGPU_PK_PIECE* pc, int nparts)
 {
@@ -3689,10 +3201,10 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
        a reconstruction that applies the heading alone is short a bank and a
        pitch, and on ordinary ground the terrain's tilt puts tens of degrees
        there (three parked ARMSTUMPs read -22.1, -30.7 and +1.8 degrees of
-       +0x68). This dump used to rotate model space by `unit+0x66` and report
-       what was left; that omission, not any staleness in the vertex buffer, is
-       the whole of the residual the eight fixtures recorded -- recovered from
-       the fixtures' own base pieces 2026-09-08, every class to exactly 0.
+       +0x68). Rotating model space by `unit+0x66` alone leaves exactly the
+       residual the eight fixtures recorded -- not any staleness in the vertex
+       buffer; recovered from the fixtures' own base pieces 2026-09-08, every
+       class to exactly 0.
        `bt` is therefore built exactly as recon_begin builds it. `err=` is now
        built from the SAME RECONSTRUCTION recon_err uses -- not the same
        number: recon_err skips a piece whose visible bit is clear and compares
@@ -3719,7 +3231,7 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
        sub and was 1.4, 91.1 and 148.0 degrees away from it on the fighter,
        gunship and bomber. Which of the two diverges, and why, is not
        established -- this line is what will say. `yaw=` is kept, and is the
-       live heading, so a fixture written before this change still parses. */
+       live heading, so older fixtures still parse. */
     _snprintf(b, sizeof b,
               "posedump: tick=%d idx=%d o3=%08X nparts=%d yaw=%u "
               "body=(%u,%u,%u) live=(%u,%u,%u)",
@@ -3749,48 +3261,12 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
 
 /* game-thread readable flag: the owndraw classifier suppresses the engine's
    scratch-fake-unit wreck rasterise only while the native husk pass is armed */
-/* THE DISPATCHER, and that is now most of what it is. The fork restarts its
-   render thread on every display-mode change; this used to forget four
-   GL-shaped statics of its own before telling every other pass to do the same,
-   and those went with the bring-up in landing 11-5b. What it still does is its
-   own: drop the fog grid, whose pointer names a buffer the next frame rebuilds,
-   and then the dispatch in order -- the restorer first, so the passes below
-   forget their jobs before their atlases go. */
-/* NOTHING CALLS THIS, AND NOTHING HAS SINCE 11-5e-1. Its one call site was the
-   GL-context-change watch in tagpu_overlay.c, deleted there because no source
-   of this build makes a context current for it to see change. Every function
-   below is reachable only through this one, so the whole cascade is dead with
-   it; it is left standing because several of those modules still hold live GL
-   state this landing does not touch, and a reset tree deleted ahead of the
-   objects it resets is worse than one that is merely unreachable.
-   [The vulkan-only plan, 11-5e-1. THAT CONDITION IS NOW MET and the function
-   is still here: landings 11 D2 and D3 deleted tagpu_shadow.c and
-   tagpu_hires_draw.c, so no GL object is left for this tree to reset. It is
-   kept deliberately until D4 takes opengl_utils.c, because a reset tree that
-   is merely unreachable costs nothing and one that misses a live object costs
-   a leak -- delete it WITH the last GL file, not before.] */
-void tagpu_native_glreset(void)
-{
-    s_fogCols = s_fogRows = 0; s_fogCells = 0; s_fogGrid = NULL; s_fogLut = 0;
-    tagpu_fx_glreset();
-    tagpu_feat_glreset();
-    tagpu_terr_glreset();
-    s_castLogged = 0;
-    /* the marker pass left this cascade in 11-5e-1: its own ids went with the
-       draw in 11-4a and the text module it forwarded to owns no GL object. */
-    tagpu_posebake_glreset();
-    tagpu_posedraw_glreset();
-}
-
-/* `s_state != 2` -- "the GL program has not refused" -- was a term here until
-   landing 11-5b. There is no program to refuse and no state to hold the answer,
-   so the arm poll and the lever are the whole of it. */
 int tagpu_native_wrecks_armed(void)
 {
     return s_armed > 0 && s_wrecks;
 }
 
-/* THE FOG GRID AS THE NATIVE PASS BUILT IT (Phase G / G19e, the unit pass).
+/* THE FOG GRID AS THE NATIVE PASS BUILT IT.
    The very buffer the pass published, with the dimensions it published and the
    CELL COUNT the packet's own allocation
    holds -- the bound a copy of it has to be made against. That count is
@@ -3862,8 +3338,7 @@ int tagpu_native_unit_pos(const TAGPU_PK_UNIT* u, float* x, float* y, float* z)
        that filled it, so a sample belonging to a dead unit would be handed to
        whatever took its place: the equality test refuses any sample that does
        not still describe THIS unit's current 16.16 position, and spx_sample's
-       own distance snap catches the large jump. What the packet does retire is
-       the bounds check the pointer form needed — a slot is now a number the
+       own distance snap catches the large jump. A slot is a number the
        publisher took out of its own walk, not an address to validate. */
     {
         unsigned slot = u->slot;

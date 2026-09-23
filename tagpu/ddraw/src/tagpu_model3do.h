@@ -27,9 +27,8 @@
    of the stock objects3d tree the largest has 36 pieces, so this sits an order
    of magnitude above anything stock content asks for and above any plausible
    mod — which is the point: it stops being a number the design has to reason
-   about (gpu-posing.md decision 7). The `PB` is historical: it arrived with the
-   pose bake, and it lives here because the bound is a fact about a model, not
-   about that module. */
+   about (gpu-posing.md decision 7). It lives here because the bound is a fact
+   about a model, not about the pose bake. */
 #define TAGPU_PBMAXPIECE 256
 
 #define O3_NUMPARTS  0x00

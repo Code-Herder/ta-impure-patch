@@ -12,7 +12,7 @@
    sets it for tall defs, which is the state the row sweep reads — we remove
    the pixels and nothing else.
 
-   The leaf is pure draw. Its decompile (G13a) shows bodies 2 and 3 writing no
+   The leaf is pure draw. Its decompile shows bodies 2 and 3 writing no
    engine state at all, and body 1 (3D wreckage) writing only the DRAW-side
    scratch feature-unit *(main+0x1420F) before calling DrawUnit. Animation is
    advanced by the sim tick, not here: GAFGetCurrentFramePtrAddr only reads

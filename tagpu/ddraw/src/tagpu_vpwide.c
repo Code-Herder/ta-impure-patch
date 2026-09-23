@@ -30,13 +30,12 @@
    /`+0x37E23` — fields we never write — while we own L/T/R/B.
 
    THEY ARE CONSTANTS, and HUD scale does not move them (gui-renderer.md §22.5).
-   It was briefly allowed to: the first build wrote L = 128s / T = 32s here, on
-   the theory that the rect is the origin every consumer projects about. Only
-   `0x498DA0` reads it that way. The engine's world->screen projection is the
+   The rect is not the origin every consumer projects about: only `0x498DA0`
+   reads it that way. The engine's world->screen projection is the
    +0x80/+0x20 pair baked at each of its own sites, and the passes of ours that
-   reproduce it bake the same pair, so a moved L tore the two halves of the
-   world apart by ((s-1)*128, (s-1)*32). HUD scale now covers the world instead
-   of asking for it, and the origin is the engine's again. */
+   reproduce it bake the same pair, so a moved L tears the two halves of the
+   world apart by ((s-1)*128, (s-1)*32). HUD scale covers the world instead
+   of asking for it, and the origin stays the engine's. */
 #define VP_TRUE_L    0x80        /* the L 0x497F40 builds     */
 #define VP_TRUE_T    0x20        /* ...and the T              */
 #define VP_R_INSET   1           /* R = screenW - VP_R_INSET  */
@@ -112,10 +111,7 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x
 
 static int iround(float v) { return (int)(v >= 0.0f ? v + 0.5f : v - 0.5f); }
 
-/* The viewport origin and bottom inset the engine projects about. `ta` is
-   taken and ignored: it was a parameter while HUD scale wrote the rect, and
-   keeping it costs nothing and leaves the call sites alone if a later pass
-   makes the origin a variable again. */
+/* The viewport origin and bottom inset the engine projects about. */
 static void vp_true(const char* ta, int* L, int* T, int* bInset)
 {
     tagpu_hud_true_inset(ta, L, T, NULL, bInset);
@@ -151,11 +147,11 @@ static int clampi(int v, int lo, int hi)
 
 static int  s_installed;        /* the mouse->world redirect went in         */
 static int  s_widenArmed;       /* ...and tagpu_vpwide.on, so the rect widens */
-/* GAME THREAD ONLY since landing 2, all of it: the verification, the widening
+/* GAME THREAD ONLY, all of it: the verification, the widening
    store, the restore and every reader of the rect that is not the engine's
    own (the clip guard, the mouse->world stub, the capture window) run inside
-   DrawGameScreen on the game thread, so no flag here crosses a thread any
-   more. `volatile` stays on the two the stub reads mid-function, as a promise
+   DrawGameScreen on the game thread, so no flag here crosses a thread.
+   `volatile` stays on the two the stub reads mid-function, as a promise
    about the COMPILER: a plain int lets -O2 sink the store past the rect
    writes, and the order "ours, before the wide stores; not ours, after the
    restoring ones" is what the stub's origin arithmetic relies on. */
@@ -233,8 +229,7 @@ static void __thiscall vpw_setclip(void* self, int l, int t, int r, int b)
            allocation; riding it on `IsBadReadPtr` succeeding would make the
            bound conditional on a probe, which CLAUDE.md rules out as a safety
            argument — and a single call with an unreadable `self` would then
-           re-license the permanent side-panel marks this exists to stop.
-           A landing review caught exactly that [2026-09-10]. */
+           re-license the permanent side-panel marks this exists to stop. */
         if (tW > 0 && tH > 0) {
             int cl = l < tL ? tL : l, ct = t < tT ? tT : t;
             int cr = r > tL + tW - 1 ? tL + tW - 1 : r;
@@ -334,7 +329,7 @@ static void __stdcall vpw_mouse_world(int* pos)
     sy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
 
     /* GIVE THE ENGINE ITS `u` BACK. `fake_GetCursorPos` answers the TRUE
-       pointer now, so the engine blits its cursor sprite under it — and the
+       pointer, so the engine blits its cursor sprite under it — and the
        record the poll left at `[obj+0x196]` is in screen space, which is the
        one number the engine's 1:1 screen->world arithmetic must not be handed.
        This is the place that arithmetic happens, so the transform belongs here:
@@ -355,7 +350,7 @@ static void __stdcall vpw_mouse_world(int* pos)
     }
 
     /* Whenever the rect is not ours the engine's own conversion is the right
-       one — it is the true origin and the true bounds — and it now runs on a
+       one — it is the true origin and the true bounds — and it runs on a
        repaired position. That covers zoom 1, zoom > 1 (where `u` is always
        inside the viewport) and vpwide disarmed. */
     if (!s_wide) { ((PFN_MOUSEWORLD)VA_MOUSEWORLD)(pos); return; }
@@ -553,11 +548,9 @@ void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c, int terr_ours)
 
     /* W AND H ARE COUNTED, NOT REPAIRED. 0x497F40 computes W = R - L + 1 by
        RE-READING L (0x4981C9 writes it, 0x498214 reads it back) and H likewise
-       from T; while the widened L was stored from the render thread, a store
-       landing in that window — re-entering the game screen while a zoomed view
-       was live — left W hundreds of pixels too wide and the eye clamp 0x41C3C0
-       oscillating the camera, so the old per-frame apply put them back. Now
-       the store is on THIS thread, in the in-play draw, and 0x497F40 runs on
+       from T, so a widened L stored in that window would leave W hundreds of
+       pixels too wide and the eye clamp 0x41C3C0 oscillating the camera. The
+       store is on THIS thread, in the in-play draw, and 0x497F40 runs on
        this thread at game entry, before any in-play draw: the two cannot
        interleave, so a disagreement cannot come from us. It is counted (the
        heartbeat's `vpwh=`, which must read 0) and logged, and NOT written:
@@ -585,10 +578,10 @@ void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c, int terr_ours)
        later from the memory it had overwritten. Our terrain pass is what makes a wide rect
        safe, by taking that blit away, and `terr_ours` is the game thread's own
        latch of whether it has (`tagpu_terrown_latch`, taken just before this
-       call, and the only value the stub tests this draw). The gap it closes is
-       entering a level while the last one's zoom is still commanded: the rect
-       widened on the first draw, the render thread takes the ground a few
-       frames later, and in between the engine drew it. */
+       call, and the only value the stub tests this draw). The case it covers
+       is entering a level while the last one's zoom is still commanded: the
+       rect would widen on the first draw, the render thread takes the ground a
+       few frames later, and in between the engine draws it. */
     if (!terr_ours) {
         if (!s_refusedRun) {
             char b[128];
@@ -691,7 +684,7 @@ void tagpu_vpwide_init(void)
     /* all-or-nothing for the WIDENING half: every byte is checked before any of
        them is written, and a build that fails it still gets the repair below —
        which is one redirect on a site already matched, and which the true
-       pointer reaching the engine now depends on. */
+       pointer reaching the engine depends on. */
     if (s_widenArmed &&
         (!site_is(SITE_SETCLIP1, VA_SETCLIP) ||
          !site_is(SITE_SETCLIP2, VA_SETCLIP) ||

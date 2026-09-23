@@ -1,8 +1,8 @@
 #ifndef TAGPU_CLASSICPP_H
 #define TAGPU_CLASSICPP_H
 /* The Classic++ switch and its knobs -- two files in the gamedir, both the
-   player's (renderers.md 2.10: the menu, when it comes, is a front end over
-   these, not a store of its own):
+   player's (renderers.md 2.10: the menu is a front end over these, not a
+   store of its own):
 
      tagpu_classicpp.on    the renderer switch, and the master arm. Absent =
                            Classic, exactly today's pixels; present = the
@@ -11,9 +11,9 @@
      tagpu_classicpp.cfg   numeric knobs, `key=value` tokens separated by
                            whitespace or newlines, keyed like the lab's URL
                            parameters (tascene-design.md). Two of them
-                           subdivide the switch (G18a) -- they only ever
-                           narrow it, so both at 1 with the .on file present
-                           is exactly what the switch alone used to mean:
+                           subdivide the switch -- they only ever narrow
+                           it, so both at 1 with the .on file present is
+                           exactly the switch alone:
                              aniso=N        restored-twin anisotropy, default 4
                                             (1 = off, which is what the
                                             Vulkan A/B is taken at);
@@ -23,13 +23,11 @@
                                             jobs where they stand
                              light=0|1      the lambert below, default 1;
                                             0 draws Classic++ flat, and keeps
-                                            the shadows (G18b)
+                                            the shadows
                              sun=AZ,EL      the terrain's sun, degrees
                                             (azimuth, elevation); `sun=off`
-                                            is the older spelling of `light=0`
-                                            and does exactly that (G18b: it
-                                            used to force amb = 1 and clear
-                                            `shadows=` with it)
+                                            is another spelling of `light=0`
+                                            and does exactly that
                              unitsun=AZ,EL  the units' sun
                              amb=A          the ambient floor, 0..1
                            and the shadows' (renderers.md 2.12; tagpu_shadow.c):
@@ -73,7 +71,7 @@
    being in the Classic++ branch at all, not by which half of it is on. */
 int tagpu_classicpp_on(void);
 
-/* The two halves of the switch (G18a; renderers.md 2.10's `Undithered assets`
+/* The two halves of the switch (renderers.md 2.10's `Undithered assets`
    and `Dynamic lighting` rows). Each is the master arm AND its own cfg key, so
    a caller asks one question rather than two, and neither can be on while the
    .on file is absent. */
@@ -94,10 +92,10 @@ int tagpu_classicpp_lit(void);      /* the lambert: uLambert, and the baked one 
    every lambert is divided by so that level is exactly 1.0 (the art is
    already lit; the sun may only modulate by the tilt from level). The
    shaders take 1/level as uNorm (tagpu_glsl.h TAGPU_GLSL_LIGHT_FN).
-   `sun=off` is `light=0` (G18b): the level normal, so the rule is exactly 1.0
-   and the shadow term inside it survives. It no longer moves `amb`. */
+   `sun=off` is `light=0`: the level normal, so the rule is exactly 1.0 and
+   the shadow term inside it survives. It does not move `amb`. */
 /* shadows=: which shadow the Classic++ frame draws (renderers.md 2.10's
-   Off | Hard | Soft row, G18b). HARD is Classic's pair -- the 5-px silhouette
+   Off | Hard | Soft row). HARD is Classic's pair -- the 5-px silhouette
    and the cached slant -- emitted under the switch instead of the depth map;
    the two are never both on. Classic itself is not governed by this key: the
    engine's option bits rule there, and this file is the Classic++ knob. */
@@ -127,11 +125,11 @@ typedef struct {
        PLACEMENT IS IMPLEMENTATION-DEFINED and GL and Vulkan do it differently
        on the same hardware: MEASURED 2026-09-16, restored unit art is 0 px
        apart between the two lanes at `aniso=1` and up to 9 levels apart on 27 %
-       of unit pixels at 4x. The owner's decision is that PLAY keeps 4x on both
-       lanes and the A/B is taken at `aniso=1` as a stated substitution -- so
-       the oracle still catches every porting mistake and excludes only the one
-       thing the specs leave free. That is what this knob is for; it is not a
-       quality setting to reach for. [gpu-status 2.37.] */
+       of unit pixels at 4x. PLAY keeps 4x on both lanes and the A/B is
+       taken at `aniso=1` as a stated substitution -- so the oracle still
+       catches every porting mistake and excludes only the one thing the specs
+       leave free. That is what this knob is for; it is not a quality setting
+       to reach for. [gpu-status 2.37.] */
     float aniso;
 } TAGPU_LIGHT;
 const TAGPU_LIGHT* tagpu_classicpp_light(void);

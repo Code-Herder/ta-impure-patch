@@ -104,7 +104,7 @@ int  tagpu_reclaim_pass_passed(long stamp);
 
    NOT the pre hook, and the difference is a bug rather than a preference: the
    render thread is stopped by tagpu_overlay.c's teardown_active() gate, not by
-   pass_begin's return value — and since G13t that gate replays the flag as
+   pass_begin's return value — and that gate replays the flag as
    pass_begin latched it, so the boundary is pass_begin. A pass that had already
    begun when the flag was set latched 0 and runs its engine reads to completion
    while the pre hook waits for it — and would there see a generation bumped in
@@ -123,7 +123,7 @@ int  tagpu_reclaim_pass_passed(long stamp);
    under is what makes such a cache safe.
 
    Read it from the render thread; it is a plain aligned 32-bit load. It starts
-   at 0, and on an exe where the teardown could not be hooked it never moves —
-   which is exactly the behaviour those caches had before it existed. */
+   at 0, and on an exe where the teardown could not be hooked it never moves, so
+   nothing keyed on it is ever invalidated by it. */
 unsigned tagpu_reclaim_level_gen(void);
 #endif

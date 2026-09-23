@@ -1,8 +1,8 @@
 #ifndef TAGPU_VK_FPS_H
 #define TAGPU_VK_FPS_H
-/* The frame-rate readout, drawn by Vulkan (Phase G / G19d). Implementation:
-   tagpu_vk_fps.c. The GL edition is tagpu_fps.c and stays the source of the
-   geometry, the atlas and the shader -- see that file's header.
+/* The frame-rate readout, drawn by Vulkan. Implementation: tagpu_vk_fps.c.
+   tagpu_fps.c builds the geometry and places the strings in the atlas -- see
+   that file's header.
 
    THE TWO-PHASE CONTRACT, and it is the shape every ported pass will want. A
    texture upload is a transfer and a transfer may not be recorded inside a
@@ -30,8 +30,8 @@ void tagpu_vk_fps_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 /* 1 on the ONE frame `tagpu_fps.ab` latched its claim, so that the seam
    captures THAT frame instead of whichever one its own lever poll landed on --
    the readout changes its number twice a second, so which frame is captured
-   matters here more than anywhere. It does not mean a file was written: since
-   landing 4d-2 there is no GL half. Consumed. Valid after `prepare`. */
+   matters here more than anywhere. It does not mean a file was written: there
+   is no GL half. Consumed. Valid after `prepare`. */
 int  tagpu_vk_fps_ab_frame(void);
 
 /* Give everything back. Called by the seam from `vk_down`, after its

@@ -1,7 +1,7 @@
 #ifndef TAGPU_GLSL_H
 #define TAGPU_GLSL_H
 /* GLSL snippets shared by the native unit shader and the effects shader —
-   one copy of the scene-scaffold occlusion rule (G12a): a stamped feature row
+   one copy of the scene-scaffold occlusion rule: a stamped feature row
    nearer than this fragment's depth key hides it. Both fragment shaders carry
    `in float vEnc` (the vertex's depth key) and set the uniforms below. */
 #define TAGPU_GLSL_SCAF_UNIFORMS \
@@ -52,10 +52,10 @@
    the LAST column of any grid — the engine's and ours alike — never has its
    RIGHT corners written, and the last row never has its bottom ones (it is
    why fogw_window asks for two spare columns and the engine's own border
-   completion works on cols-2). Clamping to `uFogDim - 0.001` put every sample
-   past the grid at f.x = 1 in that column, i.e. on the corners nobody wrote:
-   coverage 0, which reads as NO FOG. That is the worst way to fail — a
-   zoomed-out frame the grid does not span came out with the outer ring in
+   completion works on cols-2). Clamping to `uFogDim - 0.001` would put every
+   sample past the grid at f.x = 1 in that column, i.e. on the corners nobody
+   wrote: coverage 0, which reads as NO FOG. That is the worst way to fail — a
+   zoomed-out frame the grid does not span comes out with the outer ring in
    full daylight rather than merely smeared. `uFogDim - 1.0` lands such a
    sample at f = 0 in the last entry instead, on the corners the builder did
    write, so the region past the grid REPLICATES its edge — the same thing
@@ -95,7 +95,7 @@
     "    if (taFogC.x >= 0.5) discard;\n" \
     "    if (taFogC.y >= 0.5 && (uFog & 2) == 2) discard;\n" \
     "  }\n"
-/* terrain edition (G13b). Terrain is the frame's bottom layer, so where the
+/* terrain edition. Terrain is the frame's bottom layer, so where the
    engine's overlay paints an unexplored cell SOLID BLACK it must paint black
    too — discarding would punch a hole through to the engine's frame, which no
    longer holds terrain (it holds tagpu_terrown.c's key fill). The engine's
@@ -131,14 +131,14 @@
    ground receives, so level is exactly 1.0 and the sun only modulates by the
    tilt from level -- the art is already lit (artlight) and must not be lit
    twice. Evaluated per fragment, because that is where a local light will
-   join it. The shadow half of the lab's rule (shadowAt) is here since G14i,
-   text for text but for one thing: the receiver-plane derivatives arrive as
+   join it. The shadow half of the lab's rule (shadowAt) is here, text for
+   text but for one thing: the receiver-plane derivatives arrive as
    arguments, taken by the caller at the top of its main() before any
    discard -- the derivative of a varying is only defined while every fragment
-   of the quad is still running (G14g's lesson on the mipped sample). A
+   of the quad is still running. A
    face's normal is flat, so dFdx(p) is exactly 0.5 * mat3(M) * dFdx(W), and
    the arithmetic below is the lab's with the derivative supplied.
-   One tap the lab did not have until G14i, in both copies: the receiver's
+   One tap, in both copies: the receiver's
    own texel opens the blocker search -- the eight ring taps sit 12-28
    texels out and missed the commander's head and gun (30 texels across)
    on every frame, so they cast nothing; a caster on the receiver's own ray
@@ -153,7 +153,7 @@
    shader that carries it (light, then the RGB grey band); 0 is Classic,
    byte for byte. */
 /* uLit is the Classic++ colour branch and follows the MASTER ARM; uLambert is
-   the `light=` half of it (G18a). uLambert 0 does not skip taLambert -- it
+   the `light=` half of it. uLambert 0 does not skip taLambert -- it
    hands it the LEVEL normal instead, so the slope shading goes while the
    shadow term, which lives inside taLambert, stays. Level ground is exactly
    1.0 there by construction: uNorm is 1/level and level is that same lambert

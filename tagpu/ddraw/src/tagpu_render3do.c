@@ -1,21 +1,6 @@
-/* tagpu_render3do.c — Phase B: real GPU geometry into TA's compositor.
-
-   For one unit per frame we take the ENGINE-POSED vertex buffers
-   (PrimitiveStruct+0x22, refreshed by TA's lazy repose because we do NOT
-   suppress DrawUnit), triangulate the Model3DONode face lists, render them
-   flat-coloured into an offscreen FBO with TA's own dimetric projection
-   (sx = +x, sy = -z - y/2, hotspot-anchored), read the pixels back and write
-   them straight into the GAFFrame colour plane at Object3do+0x10 that TA's
-   blit (0x459200 -> CopyGafToContext) stamps onto the frame.
-
-   Palette trick: faces carry TA palette indices, so the FBO renders the INDEX
-   itself (in the red channel, flat-interpolated) — readback needs no
-   nearest-match pass and is exact. Background clears to index 1 = ColorKey.
-   The depth PLANE of the composite is left as the engine wrote it: it encodes
-   elevation for the cargo z-merge only (ground blit never reads it) and our
-   silhouette matches the engine's because we render the same posed verts with
-   the same projection. GL self-occlusion uses the true dimetric view depth
-   (2y - z), resolved per-pixel by the FBO depth test. */
+/* tagpu_render3do.c — the material layer the native and posed passes share:
+   the unit texture atlas, the shade LUT and its calibration, the face
+   material helpers, and the build-state staging formulas. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -28,12 +13,9 @@
 #include "tagpu_classicpp.h"  /* tagpu_classicpp_assets: the restored twin is only worth mirroring while it is what the twin samples */
 #include "tagpu_r3dcache.h"
 
-/* NO ENGINE LAYOUT HERE ANY MORE. This file carried nine offsets — the
-   Object3do piece array, PrimitiveStruct and Model3DONode — for the write-back
-   the frame packet's landing 3 deleted. Every one of them became unused with
-   it, which is the check that the deletion was complete rather than partial.
-   They live on in research/notes/exe-reverse-engineering.md, and the pieces
-   this file still needs arrive in the packet's PK_PIECE table. */
+/* The Object3do piece array, PrimitiveStruct and Model3DONode layouts are in
+   research/notes/exe-reverse-engineering.md; the pieces this file needs
+   arrive in the packet's PK_PIECE table. */
 #define N_FACES       0x28     /* Model3DONode.pFaceArray                  */
 #define FACE_STRIDE   0x20     /* Model3DOFace                             */
 #define F_COLORTAB    0x00     /* PaletteEntry resolved to a table pointer */
@@ -46,7 +28,6 @@
 #define GF_HOTY       0x06
 #define GF_PTRCOLOR   0x10     /* u8* colour plane, top-down, stride=W     */
 
-#define FBO_DIM   640          /* stock composite is AABB-capped 600x600   */
 #define MAXVERTS  24576        /* triangulated vertices per unit per frame */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
@@ -59,7 +40,6 @@ static void rlog(const char* s)
 
 
 static int    s_state = 0;         /* 0=unloaded 1=ready 2=failed */
-void tagpu_r3d_glreset(void);
 static int    s_lutBuilt = 0;
 /* 1 when the LUT that is up came from the ENGINE's own PALETTE.SHD rather than
    our computed ramp. Without it a single frame that arrived with no table —
@@ -69,8 +49,8 @@ static int    s_lutBuilt = 0;
 static int    s_lutFromShd = 0;
 
 /* ---- 8bpp texture atlas: the unit textures' GAF frames as palette indices
-   in an R8 texture, NEAREST-sampled => the FBO stays index-exact. Since G14g
-   it is a TAGPU_GAFATLAS (tagpu_gaf.c), the same shelf atlas the feature and
+   in an R8 texture, NEAREST-sampled => the FBO stays index-exact. It is a
+   TAGPU_GAFATLAS (tagpu_gaf.c), the same shelf atlas the feature and
    effects passes use, with the unit layout renderers.md 2.5 decided: every
    frame in a cell with a 4-texel replicated border, 4-aligned, so the
    Classic++ twin can be mipmapped to level 2 without one frame bleeding into
@@ -79,10 +59,8 @@ static int    s_lutFromShd = 0;
    edges; a centre inset shifts every interior sample half a texel and flips
    ~50% of NEAREST lookups on noisy textures), so Classic's samples never
    reach the border and its pixels do not move. Recycled when full, at the
-   start of a frame (tagpu_r3d_atlas_frame) or of a blit-path render, never
-   between an emit and its draw. 2048^2 holds ~1,400 median cells (32x64
-   frames become 40x72); the old 1024^2 with a 1-texel gap held 256 entries
-   and drew a 257th flat. ---- */
+   start of a frame (tagpu_r3d_atlas_frame), never between an emit and its
+   draw. 2048^2 holds ~1,400 median cells (32x64 frames become 40x72). ---- */
 #define ATLAS_DIM  2048
 #define ATLAS_MAX  2048
 #define ATLAS_PAD  4                      /* tools/tascene UNIT_PAD          */
@@ -92,9 +70,9 @@ static TAGPU_GAFATLAS s_atlas;
 
 /* The atlas entry for a unit texture frame, uploading it on first sight.
    NULL for an unreadable frame, a compressed one (the engine's 3DO textures
-   are raw planes; a compressed frame drew flat before G14g too, kept so
-   Classic does not move -- whether the engine would texture it is not
-   established) or a full atlas (recycled next frame). */
+   are raw planes; a compressed frame draws flat so Classic does not move --
+   whether the engine would texture it is not established) or a full atlas
+   (recycled next frame). */
 static const TAGPU_GAFENT* atlas_get(const char* g)
 {
     const unsigned char* f = tagpu_gaf_frame_sane(g);
@@ -102,34 +80,26 @@ static const TAGPU_GAFENT* atlas_get(const char* g)
     return tagpu_gaf_atlas_get(&s_atlas, f);
 }
 
-/* ---- per-face directional shading (G10): palette-aware shade LUT ----
+/* ---- per-face directional shading: palette-aware shade LUT ----
    The composite stays 8bpp, so "lighting" = remapping each palette index to
    the palette's nearest entry to rgb*factor. 32 brightness rows, factor
    0.60 + 0.025*row => row 16 is EXACT 1.0 and forced to identity (shade off
    and shade-neutral are bit-identical to the unshaded renderer). Candidate
    indices 2..254 only — never emit reserved 0/1(ColorKey)/255. Built once
-   from the live in-game palette.
-   [`tagpu_shade.off` USED TO DISABLE THE REMAP PER FRAME and this line still
-   said so on 2026-09-15, when the Vulkan unit pass went looking for it as an
-   A/B lever: nothing anywhere in the tree reads that file. The lever is gone;
-   only the sentence survived it.] */
+   from the live in-game palette. */
 #define SH_ROWS    32
 #define SH_NEUTRAL 16
 static int s_shNeutral = SH_NEUTRAL;   /* LUT row that is identity/neutral      */
 static int s_shDir     = 1;            /* +1 = higher row is brighter           */
-/* THE LUT'S CPU MIRROR (Phase G / G19e). 8 KB, built once per context and
-   again when the engine's own table first arrives, so it is simply kept rather
-   than put behind a latch -- and it is the buffer this very call hands GL, in
-   the same call, so the two cannot differ. */
+/* THE LUT'S CPU MIRROR (Phase G). 8 KB, built once per context and again
+   when the engine's own table first arrives, so it is simply kept rather
+   than put behind a latch. */
 static unsigned char s_lutMirror[SH_ROWS * 256];
 static unsigned      s_lutSerial;
 
 static void shade_upload(const unsigned char* lut)
 {
-    /* THE GL UPLOAD STOOD HERE; THE LUT IS THE PASS [landing 11-3]. The texture
-       it filled had one consumer, the GL unit shader, which went with the draw
-       halves. `s_lutMirror` below is what the Vulkan twin samples and is the
-       whole of what this function does now. */
+    /* `s_lutMirror` is what the Vulkan twin samples. */
     memcpy(s_lutMirror, lut, sizeof s_lutMirror);
     s_lutSerial++;
     s_lutBuilt = 1;
@@ -137,8 +107,7 @@ static void shade_upload(const unsigned char* lut)
 static void shade_build_lut(const unsigned char* shd)
 {
     /* the palette the screen is SHOWN with (tagpu_pal.h): a snapshot we own,
-       so this reads no engine memory at all -- which also retires the
-       IsBadReadPtr that used to stand in for a bound here */
+       so this reads no engine memory at all */
     const unsigned char* pal = tagpu_pal_live();
     static unsigned char lut[SH_ROWS * 256];
     int r, i, c;
@@ -147,9 +116,8 @@ static void shade_build_lut(const unsigned char* shd)
     /* Prefer the ENGINE's own 32x256 shade table (PALETTE.SHD, built at init —
        the table its Gouraud rasteriser 0x459C70 uses; shadows-cloak.md /
        build-state.md). It arrives in the frame packet, copied by the game
-       thread (landing 3): this file used to dereference the graphics globals
-       for it on the render thread behind an IsBadReadPtr, and a probe is not a
-       lifetime argument. Calibrate rather than assume: neutral = the row with
+       thread, so the render thread never dereferences the graphics globals
+       for it. Calibrate rather than assume: neutral = the row with
        the most identity entries, direction from end-row luminance. Fall back
        to our computed LUT when the packet carried none. */
     {
@@ -212,10 +180,8 @@ static void shade_build_lut(const unsigned char* shd)
 /* sun: high, from screen upper-left, slightly toward camera:
    SH_L = (-0.35, 0.80, -0.49). Both vectors are kept here as the CALIBRATION
    OF RECORD — tagpu_native.c and tagpu_classicpp.c cite this file by name for
-   them, and tagpu_hires_draw.c did until landing 11 D3 deleted it — and no
-   longer as live constants: the
-   write-back that shaded with them is gone and each pass carries its own copy
-   of the numbers in the form its shader wants. */
+   them — and not as live constants: each pass carries its own copy of the
+   numbers in the form its shader wants. */
 
 /* ---- build-state (nanoframe) staging — engine formulas from build-state.md.
    p = Nanoframe*255 runs 255->0 over the build; two triangle-wave "blues"
@@ -265,10 +231,8 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
     return 1;
 }
 
-/* The two GL objects the surviving passes share: the unit texture atlas and
-   the shade LUT. Everything else this function used to build — the program,
-   the FBO, its three attachments and the vertex array — belonged to the
-   write-back and went with it (landing 3). */
+/* The two objects the passes share: the unit texture atlas and the shade
+   LUT. */
 static void r3d_init(void)
 {
     /* 8bpp index atlas (R8, NEAREST both ways: sampled texel == palette
@@ -280,50 +244,32 @@ static void r3d_init(void)
     s_atlas.prio = 3;                 /* restored after terrain, features, effects */
     if (!tagpu_gaf_atlas_create(&s_atlas)) { rlog("render3do: atlas texture FAILED"); s_state = 2; return; }
 
-    /* shade LUT texture (built lazily from the packet's table on first use).
-       THE TEXTURE IS GL; EVERYTHING ELSE IN THIS FUNCTION IS THE PASS -- the
-       atlas above is laid out on either lane (its existence is `made`, not a GL
-       name, since tagpu_gaf.h's change) and `s_state = 1` means "the atlas and
-       the shade LUT are ready", which is what `tagpu_r3d_ensure` answers for
-       the unit pass. Seventh instance in this landing of GL object creation
-       entangled with CPU setup a pass needs. [The vulkan-only plan, 4b-2.] */
-    /* the LUT texture's creation stood here and went with its only consumer
-       [landing 11-3]; the CPU half below is what `tagpu_r3d_ensure` answers. */
+    /* the shade LUT is built lazily from the packet's table on first use
+       (tagpu_r3d_lut_want). The atlas above is laid out on either lane (its
+       existence is `made`, not a GL name) and `s_state = 1` means "the atlas
+       and the shade LUT are ready", which is what `tagpu_r3d_ensure` answers
+       for the unit pass. */
     s_state = 1;
     /* THE MIRROR IS ASKED FOR HERE, BEFORE THE FIRST PAINT, and that ordering is
-       the whole of it. It used to be asked for in `pd_view_publish`, which is
-       right on the GL lane: the atlas fills during the BAKE, the mirror is
-       allocated after it, and the frames already painted are marked to
-       re-decode "on their next use" -- which comes, because the GL lane keeps
-       drawing and re-asking. On the vulkan-only lane the bake is cached and
-       nothing asks the atlas again, so that next use never arrives and the
-       twin stands down on a mirror that never converges. Measured: 25 s of
-       settled play with the census still reading `unit=0`.
-       Asked at arm time instead, every paint from the first one lands in the
-       mirror and nothing needs re-decoding at all. `s_atlas.dim` is set a few
-       lines above, which is the precondition `_want` tests, and the call is
-       idempotent inside tagpu_gaf.c. The GL lane is unchanged in kind -- it
-       allocates the same mirror under the same `tagpu_vk_armed()` condition,
-       only sooner, which is strictly more of what the mirror is for.
-       [The vulkan-only plan, landing 4b-2.] */
-    /* ASKED OF THE CONSUMER, NOT OF THE LEVER. [FROM THE 4d-1 LANDING REVIEW.]
-    This used to test `tagpu_vk_armed()`, which is true whenever `tagpu_vk.on`
-    exists -- and these latches are one-way, so once asked the memory is held
-    for the process's life. Until 4d-1 that was right: `tagpu_vk.on` under
-    `renderer=openglcore` brought up route D, which consumed the mirror. Route
-    D is gone, so on that path the lever now arms nothing and the mirror would
-    be paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
+       the whole of it. A mirror allocated after the atlas has filled only marks
+       the frames already painted to re-decode "on their next use" -- and on the
+       vulkan-only lane the bake is cached and nothing asks the atlas again, so
+       that next use never arrives and the twin stands down on a mirror that
+       never converges. Measured: 25 s of settled play with the census still
+       reading `unit=0`. Asked at arm time, every paint from the first one lands
+       in the mirror and nothing needs re-decoding at all. `s_atlas.dim` is set
+       a few lines above, which is the precondition `_want` tests, and the call
+       is idempotent inside tagpu_gaf.c. */
+    /* ASKED OF THE CONSUMER, NOT OF THE LEVER. These latches are one-way, so
+    once asked the memory is held for the process's life, and
+    `tagpu_vk_armed()` is true whenever `tagpu_vk.on` exists -- including under
+    `renderer=openglcore`, where the lever arms nothing and the mirror would be
+    paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
     "a Vulkan pass will run in this process", which is the question. */
     if (tagpu_vk_owns_present()) tagpu_r3d_atlas_mirror_want();
     rlog("render3do: ready (unit atlas + shade LUT; the write-back path is gone)");
 }
 
-/* Resolve a face's flat colour to a TA palette index. pColorTable is the
-   on-disk PaletteEntry "resolved to a palette/color-table pointer" (tamem.h);
-   the r3d_diag dump below tells us the real shape — until then: a small value
-   IS the index, a valid pointer's first byte is our best candidate, else a
-   neutral grey. Textured faces get the same treatment for now (flat-shaded
-   milestone; GAF sampling is the next step). */
 /* Validate a candidate GAFFrame* (same 0x18-byte header as the composite) and
    sample a representative palette index from its 8bpp colour plane: median-ish
    probe of 5 texels, skipping the frame's ColorKey. Returns -1 if the
@@ -353,12 +299,12 @@ static int gaf_sample(unsigned p)
 
 /* Returns the face's palette index, or -1 for "draw nothing": a face with no
    flat colour AND no resolved texture (e.g. the 'ground' footprint quad) is
-   skipped by the engine's rasteriser too — painting it was the green-slab bug. */
+   skipped by the engine's rasteriser too — painting it draws a green slab. */
 static int face_colour(const char* fa)
 {
     /* pColorTable is NOT always a live pointer: live armcom faces carry the
        deterministic non-pointer value 0x01E11F00 there, which passes a naive
-       range check and faults on deref (crashed the first Phase B run). Only
+       range check and faults on deref. Only
        trust a small value as a literal palette index; never dereference it.
        Textured faces (pColorTable==0): the loader leaves resolved texture
        pointers in the TexState words — live dumps show +0x10 for plain
@@ -410,36 +356,16 @@ static const char* face_texframe(const char* fa, int owner)
     return NULL;
 }
 
-/* THE WRITE-BACK IS GONE (frame packet exchange, landing 3). `tagpu_render3do`
-   rendered one unit's ENGINE-POSED vertex buffers into an FBO, read the pixels
-   back and wrote them into the GAFFrame colour plane at Object3do+0x10 — the
-   Phase B proof that our geometry could reach the screen at all. Two things
-   retired it. The native pass has drawn units straight into the frame since
-   Phase C, so nothing has used this since; and it walked the Object3do's
-   PrimitiveStructs on the RENDER thread and then STORED into engine memory
-   from there, which is the one shape the exchange exists to remove. Landing 2
-   could claim "no render-thread store into engine memory remains" only because
-   this path was off by default (`tagpu_writeback.on`), and an opt-in exception
-   is still an exception.
-
-   What the file keeps is what the native and posed passes share: the unit
-   texture atlas, the shade LUT and its calibration, the face material helpers,
-   and the build-state staging formulas. Its FBO, program, vertex scratch and
-   the four readback planes went with the write-back, so `r3d_init` now builds
-   the atlas and the LUT and nothing else. */
-
-
-/* ---- exports for the native pass (G12b, tagpu_native.c): share the atlas,
+/* ---- exports for the native pass (tagpu_native.c): share the atlas,
    shade LUT and calibration so both paths draw identical materials ---- */
 unsigned int tagpu_r3d_atlas_rgbref(void) { return s_atlas.rgb; }
-/* IS THERE A RESTORE ROUTE AT ALL (11-5e-2c). `rgbref` above was the old
-   answer -- a GL texture name -- and `tagpu_gaf.c:643 a->rgb = 0` is its only
-   writer in the tree, so it has answered "no" on every frame of every process
-   since 11-5e-2 deleted the restorer. The route is the published list now, and
-   this is what says it exists. Latched by the arm, so it does not flicker. */
+/* IS THERE A RESTORE ROUTE AT ALL. The route is the published list, and this
+   is what says it exists. `rgbref` above cannot answer it: `a->rgb = 0` in
+   tagpu_gaf.c is its only writer in the tree. Latched by the arm, so it does
+   not flicker. */
 int tagpu_r3d_atlas_restore_armed(void) { return s_atlas.rlistWant ? 1 : 0; }
 unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
-/* ---- THE LEVEL BOUNDARY (G19f-7) ---------------------------------------
+/* ---- THE LEVEL BOUNDARY ------------------------------------------------
    THIS ATLAS KEYS ON AN ADDRESS AND THE ADDRESSES ARE RECYCLED.
    `tagpu_gaf_atlas_find(a, g, pix, w, h, win)` matches on the frame header's
    address and the pixel plane's, so an entry is only right for as long as
@@ -449,9 +375,9 @@ unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
    level's texels for it, and nothing anywhere would detect it: the entry is
    valid, the UV is in range, the picture is simply wrong.
 
-   `tagpu_fx.c` and `tagpu_feat.c` both already drop theirs at this boundary
-   for exactly this reason; the unit atlas was the one that did not, and reset
-   only when FULL or on a GL context loss. Neither is a level boundary.
+   `tagpu_fx.c` and `tagpu_feat.c` drop theirs at this boundary for exactly
+   this reason. The atlas's other resets -- when FULL, and on a GL context
+   loss -- are not level boundaries.
 
    It is called from `tagpu_native_frame` beside `cache_gen_check` and
    `tagpu_posebake_frame`, the other two level-keyed caches, rather than from
@@ -462,7 +388,7 @@ unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
    one generation for the whole frame.
 
    The cost of being right is one re-decode of whatever is on screen at a level
-   change -- the same cost `tagpu_fx.c` accepted -- and the first frame of a
+   change -- the same cost `tagpu_fx.c` pays -- and the first frame of a
    session drops nothing, because `s_atlasGen` starts at 0 and no level's
    generation encodes to that. */
 void tagpu_r3d_atlas_level(unsigned level_gen)
@@ -478,23 +404,14 @@ void tagpu_r3d_atlas_frame(void)
 {
     if (s_state != 1) return;
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
-    /* AND THE PALETTE ARGUMENT WENT WITH THE RESTORE IT FED. This took
-       `const unsigned char* pal` and handed it to `tagpu_gaf_atlas_restore`,
-       which 11-5e-2 deleted with the GL restorer; the recycle above is all
-       that is left and it reads no palette. This atlas's restore is the other
-       lane's: `tagpu_gaf_atlas_restore_vk` publishes the frame list and
+    /* No palette here: this atlas's restore is the other lane's --
+       `tagpu_gaf_atlas_restore_vk` publishes the frame list and
        `tagpu_vk_restore.c` paints it, each reading the palette for itself. */
 }
 /* `shd` is the packet's copy of PALETTE.SHD, or NULL: the LUT is built once
-   per GL context out of whichever the caller has. */
-/* BUILD THE LUT, WITHOUT ANYONE ASKING FOR ITS GL NAME. Until this split the
-   construction was a side effect of `_texref`, which only the GL composite
-   calls -- so on the vulkan-only lane `s_lutBuilt` stayed 0, `s_lutMirror` was
-   empty, and the unit twin stood down on a mirror that nothing was ever going
-   to fill. Measured: `mirrors atlas=1 dim=2048 lut=0 pal=1 fogLut=1`.
-   ELEVENTH INSTANCE in this landing of GL and the pass being entangled -- here
-   not a handle used as a test, but a CONSTRUCTION reachable only through one.
-   [The vulkan-only plan, landing 4b-2.] */
+   per GL context out of whichever the caller has. Called every frame from
+   tagpu_native.c; it is what keeps `s_lutMirror` current for the Vulkan
+   twin. */
 void tagpu_r3d_lut_want(const unsigned char* shd)
 {
     /* build once — and REBUILD the first time the engine's own table arrives
@@ -502,11 +419,6 @@ void tagpu_r3d_lut_want(const unsigned char* shd)
     if (s_state == 1 && (!s_lutBuilt || (shd && !s_lutFromShd))) shade_build_lut(shd);
 }
 
-/* `tagpu_r3d_lut_texref` stood here: it returned the GL shade-LUT texture to
-   whoever was about to bind it. Its consumers were the GL unit and terrain
-   shaders, so it went with them [landing 11-3]. `tagpu_r3d_lut_want` -- the
-   CPU half it wrapped -- is still called every frame from tagpu_native.c and
-   is what keeps `s_lutMirror` current for the Vulkan twin. */
 /* ---- the Vulkan lane's texels; tagpu_render3do.h has the contract ------- */
 void tagpu_r3d_atlas_mirror_want(void)
 {
@@ -536,15 +448,10 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
     return s_atlas.mirror;
 }
 
-/* THE LIST, WHICH SINCE 11-5e-2b IS THE ONLY ANSWER TO THE QUESTION (the
-   Vulkan-only plan's landing 7e-2, the shape 7d gave features and effects).
-   Under Classic++ `assets=1` the other lane restores the twin for itself. It used to be one of two: a 16 MB RGBA8 READ-BACK of the GL twin
-   was armed instead whenever the lever was absent, stepped once per published
-   frame through `glReadPixels` off an FBO, and handed over as `atlasRgb`. Its
-   source was opengl32.dll, which is never in the process (`oglu_load_dll` has
-   no caller), so it produced nothing on any frame of any process; the arm, the
-   step, the accessor and the hand-over fields went together. Polled on every
-   beat until it takes, because the lever may appear mid-session. */
+/* THE LIST, THE ONLY ANSWER TO THE QUESTION (the shape features and effects
+   use). Under Classic++ `assets=1` the other lane restores the twin for
+   itself. Polled on every beat until it takes, because the lever may appear
+   mid-session. */
 static int s_rlistAsked;
 
 void tagpu_r3d_atlas_restore_want(void)
@@ -553,18 +460,15 @@ void tagpu_r3d_atlas_restore_want(void)
         !tagpu_classicpp_assets())
         return;
     if (!s_rlistAsked) s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
-    /* AND THE RATIO THE TWIN IS TO BE FILTERED AT (11-5e-2c). `rgbAniso` had
-       no writer at all after 11-5e-2 deleted the GL `glTexParameterf` that set
-       it, so it reported 0.0f while the consumer's sampler was built at 4, and
-       the consumer stands a frame down when the two disagree -- which is how
-       unpinning the feed alone would have drawn nothing.
+    /* AND THE RATIO THE TWIN IS TO BE FILTERED AT. This is `rgbAniso`'s only
+       writer, and the consumer stands a frame down when it disagrees with the
+       ratio its sampler was built at.
 
        IT IS THE KNOB, NOT THE CONSTANT, AND NOT THE CLAMP. Publishing
        `TAGPU_GAF_TWIN_ANISO` would stand the pass down on any device without
-       anisotropic filtering, because there `s_twinAniso` is 0.0f -- the plan's
-       own failure arriving from the other side. Publishing what the consumer
-       actually applies would make the test compare a value against itself. The
-       knob is the one thing both ends read independently
+       anisotropic filtering, because there `s_twinAniso` is 0.0f. Publishing
+       what the consumer actually applies would make the test compare a value
+       against itself. The knob is the one thing both ends read independently
        (`tagpu_classicpp_light()->aniso`, the same field the Vulkan sampler is
        built from), so comparing them still catches the case the sampler's own
        comment names -- a knob edited mid-session, when the sampler cannot be
@@ -574,22 +478,16 @@ void tagpu_r3d_atlas_restore_want(void)
     s_atlas.rgbAniso = tagpu_classicpp_light()->aniso;
 }
 
-/* THE LIST, AND THE TWIN'S SHAPE WITH IT. On this path there is no read-back
-   to carry the shape, so `dim` and `mips` come from the atlas -- and so does
-   `aniso`, which the mirror accessor also reports but which was never the
-   mirror's fact: it is the ratio the twin was filtered with, and a consumer
-   that cannot apply the same one draws different art wherever a unit is
-   minified at an angle. IT WAS 0 ON EVERY PATH FROM 11-5e-2 TO 11-5e-2c --
-   the GL restorer was its only writer, and deleting the restorer left the
-   field with no writer at all -- so it reported "no anisotropy" while the
-   consumer's sampler was built at `aniso=`. 11-5e-2c gave it a writer, `:574`
-   above, twelve lines from this comment; this paragraph kept prescribing the
-   fix after the fix had landed, which the landing review caught. What it
-   publishes now is the KNOB, not the constant `tagpu_gaf.h` once prescribed
-   and not the value the device allowed -- see `rgbAniso` there for why those
-   are three different numbers. Since 11-5e-2b this is the ONLY reporter of it -- the mirror
-   accessor that also carried it is gone with the mirror. NULL until the list has been armed AND has entries; a consumer that
-   gets NULL falls back to whatever it did before, which is the indexed atlas. */
+/* THE LIST, AND THE TWIN'S SHAPE WITH IT. There is no read-back to carry the
+   shape, so `dim` and `mips` come from the atlas -- and so does `aniso`: it
+   is the ratio the twin was filtered with, and a consumer that cannot apply
+   the same one draws different art wherever a unit is minified at an angle.
+   What it publishes is the KNOB (written by tagpu_r3d_atlas_restore_want
+   above), not the constant in `tagpu_gaf.h` and not the value the device
+   allowed -- see `rgbAniso` there for why those are three different numbers.
+   This is the ONLY reporter of it. NULL until the list has been armed AND has
+   entries; a consumer that gets NULL falls back to whatever it did before,
+   which is the indexed atlas. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
                                                       int* repaint, unsigned* blanks,
                                                       int* mips, float* aniso)
@@ -640,20 +538,3 @@ int tagpu_r3d_ensure(void)             /* init on demand (GL context current) */
 const char* tagpu_r3d_face_texframe(const char* fa, int owner) { return face_texframe(fa, owner); }
 int tagpu_r3d_face_colour(const char* fa) { return face_colour(fa); }
 
-/* NOTHING CALLS THIS SINCE 11-5e-1 -- see tagpu_native.c's `*_glreset` banner
-   for the whole cascade and why it is left standing. */
-void tagpu_r3d_glreset(void)
-{
-    /* fresh GL context: the new atlas/LUT textures are EMPTY — the CPU-side
-       caches must forget what was uploaded or everything samples black. The
-       atlas's twin died with the context too. THERE IS NOTHING LEFT TO ORDER
-       THIS AGAINST: this comment named `tagpu_rglsl_glreset`, which
-       tagpu_native_glreset ran first so the restorer forgot its job before
-       the atlas forgot the twin -- 11-5e-1 deleted the watch that drove the
-       cascade and 11-5e-2 deleted the restorer itself, so the ordering
-       constraint is gone rather than merely unenforced. */
-    s_state = 0;
-    s_lutBuilt = 0;
-    s_lutFromShd = 0;
-    tagpu_gaf_atlas_lost(&s_atlas);
-}

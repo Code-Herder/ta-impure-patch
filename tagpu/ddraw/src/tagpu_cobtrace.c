@@ -1,4 +1,4 @@
-/* tagpu_cobtrace.c — the COB script-call oracle (tacob landing 2).
+/* tagpu_cobtrace.c — the COB script-call oracle.
 
    WHAT IT LOGS. One tab-separated line per event on the game thread, written to
    `tagpu_cobtrace.log` in the game dir (the process cwd) — created afresh at
@@ -506,7 +506,7 @@ void tagpu_cobtrace_init(void)
     /* all five, or none: the first four are 5-byte jmps, the RNG site keeps its E8 */
     /* the call-site redirect: a rel32 is relative to the site it is written
        at, not to this buffer — tagpu_detour_rel() would encode it against the
-       stack (and did, once: the first `rand` then called a wild address) */
+       stack, and the first `rand` would call a wild address */
     {
         int32_t r = (int32_t)((unsigned)(size_t)sd - (RAND_SITE + 5));
         rel[0] = 0xE8; memcpy(rel + 1, &r, 4);

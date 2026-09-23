@@ -86,7 +86,7 @@
 #define U_STATE       0x110        /* alive 0x10000000; 0x20 is written below for  */
                                    /* a nanoframe but the DRAW path never reads it */
                                    /* — under construction is +0x104 alone, and    */
-                                   /* 0x20000000 is the STRUCTURE bit (G13l)       */
+                                   /* 0x20000000 is the STRUCTURE bit              */
                                    /* stance (0xC0000)>>18: 0 hold 1 manv 2 roam  */
 #define UO_POS        0x22         /* Position_Dword Pos in UnitOrdersStruct      */
 
@@ -96,11 +96,10 @@
 
    UNITS_CreateUnit and ORDERS_NewMainOrder2Unit speak the SAME language: 16.16
    fixed-point positions in the 3-D convention (x, altitude, depth). There is no
-   asymmetry — the earlier claim here (whole world units, {x, depth, altitude},
-   read off TADR's ConstructionKickout) was wrong, and the read-back probe below
-   could not catch it because the constructor 0x43A0C0 copies the caller's three
-   dwords verbatim into UnitOrders->Pos (0x43A164..), so anything written reads
-   back unchanged. What settles the scale is the duplicate-order test inside
+   asymmetry, whatever TADR's ConstructionKickout suggests (whole world units,
+   {x, depth, altitude}), and the read-back probe below cannot settle it because
+   the constructor 0x43A0C0 copies the caller's three dwords verbatim into
+   UnitOrders->Pos (0x43A164..), so anything written reads back unchanged. What settles the scale is the duplicate-order test inside
    0x43AFC0: `sub ebp,[esi+0x22]; add ebp,0x100000; cmp ebp,0x200000` at
    0x43B006 -- a tolerance of +/-0x100000, which is +/-16.0 in 16.16, one map
    cell. It compares components 0 and 2 (0x22 and 0x2A) and never component 1,
@@ -1212,13 +1211,13 @@ static int resolve_all(char* ta)
 /* `setup.clear_existing` defaults true: a scenario contains exactly what the file
    says. UNITS_KillUnit mode 0 is the silent path — no explosion, no wreck.
 
-   Two guards, both earned live on 2026-09-01:
+   Two guards, both measured live on 2026-09-01:
 
    * The sweep runs over a SNAPSHOT of the array, never over the live array, so
      it kills exactly what was there when the scenario arrived and can never
      reach a unit the same tick created. It runs BEFORE the create pass: the
      engine's per-player cap (MaxUnitNumberPerPlayer, 250 in stock TA) counts
-     units that are about to die, and creating first cost 302 of a 401-unit
+     units that are about to die, and creating first costs 302 of a 401-unit
      scenario. Clearing first is safe because the whole apply is one visit to a
      hook OUTSIDE the simulation loop — the sim never sees the empty world.
    * ActiveCommanderDeath is parked at zero for the kills. 0x486688 reads it and
@@ -1503,10 +1502,10 @@ static char* live_by_index(char* ta, int idx, const char* expect, const char** w
 
     /* Divide, never multiply: `(idx + 1) * UNIT_STRIDE` wraps at idx 15339168 on
        this 32-bit build, and `beg + idx * UNIT_STRIDE` wraps with it — a caller
-       index that large passed the old test and produced a pointer BELOW the
-       array. `main+0x1435B` is also INCLUSIVE: the engine's own sweep at
+       index that large would pass a multiplied test and produce a pointer
+       BELOW the array. `main+0x1435B` is also INCLUSIVE: the engine's own sweep at
        0x48BD22 does `add eax,0x118 / cmp eax,[main+0x1435B] / jbe`, so the unit
-       AT `end` is real and `<=` is the right comparison. [FROM REVIEW 2026-09-07] */
+       AT `end` is real and `<=` is the right comparison. */
     if (idx < 0 || (size_t)idx > (size_t)(end - beg) / UNIT_STRIDE)
     {
         *why = "index is outside the unit array";
@@ -1533,7 +1532,7 @@ static char* live_by_index(char* ta, int idx, const char* expect, const char** w
         /* The alive bit travels with the excluded bit everywhere else in this
            fork (live_selected below, tagpu_order.c, mark, native, tracer), and
            an order to a unit the engine has excluded is exactly as wrong from
-           this door as from those. [FROM REVIEW 2026-09-07] */
+           this door as from those. */
         if (st & 0x4000u)
         {
             *why = "that unit is excluded (loaded or hidden)";
@@ -1581,7 +1580,7 @@ static int live_selected(char* ta, char** out, int max)
        bound it: Players[] is ten slots. Unbounded it would place `player` up to
        84 KB past the array and read two pointers out of unrelated fields — which
        this function then hands to the order constructor, where `tagpu_order.c`'s
-       identical idiom only ever reads. [FROM REVIEW 2026-09-07] */
+       identical idiom only ever reads. */
     if (watched >= 10)
         return 0;
 
@@ -1598,7 +1597,7 @@ static int live_selected(char* ta, char** out, int max)
 
     /* Containment, not just readability: every pointer this returns is passed to
        ORDERS_NewMainOrder2Unit, so it has to be a unit — inside the array, and on
-       a stride boundary. [FROM REVIEW 2026-09-07] */
+       a stride boundary. */
     if (first < beg || last > end || last < first ||
         (size_t)(first - beg) % UNIT_STRIDE != 0 ||
         (size_t)(last - beg) % UNIT_STRIDE != 0)
@@ -1630,7 +1629,7 @@ static int live_selected(char* ta, char** out, int max)
 static void live_pos(char* u, int* x, int* alt, int* y)
 {
     /* Signed: field-notes.md and six other modules read these as short, and a
-       negative coordinate read unsigned becomes ~65535. [FROM REVIEW 2026-09-07] */
+       negative coordinate read unsigned becomes ~65535. */
     *x   = *(short*)(u + U_XPOS);
     *alt = *(short*)(u + U_ZPOS);
     *y   = *(short*)(u + U_YPOS);
@@ -1682,7 +1681,7 @@ static void issue_orders(void)
                 /* A cap that swallows the overflow quietly would report a full
                    success while ordering part of the selection. Say it, and
                    COUNT it — the CLI's exit status reads g_ord_fail, so logging
-                   alone would still exit 0. [FROM REVIEW 2026-09-07] */
+                   alone would still exit 0. */
                 scn_err("order %d: %d or more units are selected; only the "
                         "first %d were ordered", i, SCN_MAX_SEL, SCN_MAX_SEL);
                 g_ord_fail++;
@@ -1701,8 +1700,7 @@ static void issue_orders(void)
         if (o->kind == TGT_POS)
         {
             /* 16.16 fixed point, 3-D convention {x, altitude, depth} — the same
-               language UNITS_CreateUnit speaks, not the asymmetry this file used
-               to claim (see the header comment). */
+               language UNITS_CreateUnit speaks (see the header comment). */
             pos[0] = o->a << 16;
             pos[1] = ground_at(o->a, o->b) << 16;
             pos[2] = o->b << 16;

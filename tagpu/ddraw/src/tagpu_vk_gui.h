@@ -1,13 +1,13 @@
 #ifndef TAGPU_VK_GUI_H
 #define TAGPU_VK_GUI_H
 /* tagpu_vk_gui.c -- the GL UI layer's 1x mirror, drawn by Vulkan.
-   Phase G / G19f, landing 1. gpu-status.md 2.3e is the pass being ported and
-   research/notes/g19f-plan.md is why it is cut this way.
+   gpu-status.md 2.3e is the pass being ported and research/notes/g19f-plan.md
+   is why it is cut this way.
 
    IT IS NOT A SECOND IMPLEMENTATION OF THE UI. Everything it draws arrives
    through `tagpu_gui_handover` (tagpu_gui.h): the op stream the GL lane's own
    drain APPLIED, the atlas rect it resolved for each sprite, the atlas texels,
-   the palette, and the engine's own frame as bytes. The shaders are G19c's
+   the palette, and the engine's own frame as bytes. The shaders are a
    translation of the same GLSL. The twin store evolves identically on both
    sides because the op stream is identical -- which is the only claim a 0-px
    comparison can make.
@@ -39,14 +39,13 @@ int  tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
    next frame re-enters and fails identically), so a caller inferring "it was
    called, therefore it drew" would be wrong for the rest of the session.
    `tagpu_vk.c` sets `s_uiDrew` from this return for that reason, and the cursor
-   ownership the seam publishes rests on it.
-   [FOUND BY THE LANDING REVIEW OF GATE 4's LAST ITEM.] */
+   ownership the seam publishes rests on it. */
 int  tagpu_vk_gui_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h);
 
 /* 1 on the ONE frame `tagpu_gui.ab` latched its claim and the `_vk.ppm` target
    was unlinked, so the seam captures THAT frame. It does not mean a file was
-   written -- since landing 4d-2 there is no GL half. Consumed. */
+   written. Consumed. */
 int  tagpu_vk_gui_ab_frame(void);
 
 /* The owed-teardown protocol every pass on this lane uses: a refusal mid-frame

@@ -1,4 +1,4 @@
-/* tagpu_packet_pub.c — the frame packet's PUBLISHER (landing 1).
+/* tagpu_packet_pub.c — the frame packet's PUBLISHER.
    Contract: tagpu_packet_pub.h. Design: research/notes/frame-packet-exchange.html
    §3 (the publish point), §8 (the loader thread and the out-of-game packet),
    §9 (the marker font as glyph bytes).
@@ -19,15 +19,15 @@
    0x495E66 at the end), the movie recorder (0x4962C2), and — the reason it
    is a correctness gate and not a filter — every draw of the LOADING SCREEN,
    during which the loader thread owns the per-map arrays (below).
-     before  = THE COMMANDS (landing 2): post-tick, pre-draw, the latest
+     before  = THE COMMANDS: post-tick, pre-draw, the latest
                record the render thread posted is taken and applied on
                this thread — the zoom level (the camera range, the
                addressable rect, ScrollSpeed), the cursor anchor's eye
                delta, the camera hold, the follow release — so the frame
                the engine is about to draw, its fog rebuild and its minimap
                box all see the commanded camera (tagpu_zoom_apply,
-               tagpu_vpwide_apply). No render-thread store into engine
-               memory remains.
+               tagpu_vpwide_apply). The render thread stores nothing into
+               engine memory.
      after   = the publish, post-flip, only when the cell holds no FRESH
                packet: the engine draws 330..4900 times a second against
                about 60 presents, so most draws cost one relaxed load
@@ -52,16 +52,16 @@
    listed in the exe note), so whether they are reset between two games in
    one process is settled by the log lines here, not by the disassembly.
    The observer on 0x497C70 (stolen `55 8B EC 6A FF`, position-independent)
-   logs the loader's thread id at its entry — the direct measurement the plan
-   asked for, in place of the call-chain inference.
+   logs the loader's thread id at its entry — a direct measurement rather than
+   a call-chain inference.
 
    THE FONT, AS BYTES. The marker block's font (`[globals+0x204]`) and text
    colour (`+0x208`) are latched at hook 8 (0x469BD7, markown's stub), the
    instant the block that draws the group digit and the ShowRanges labels
    begins — nothing between there and the digit's own draw at 0x469CF9 calls
-   SetFont. Until this landing the render thread dereferenced that font
-   behind IsBadReadPtr; no note establishes a UI font's lifetime, and a probe
-   is not a lifetime argument (CLAUDE.md). Now the game thread copies the
+   SetFont. No note establishes a UI font's lifetime, and a probe is not a
+   lifetime argument (CLAUDE.md), so the render thread never dereferences the
+   font: the game thread copies the
    font's header and its 95 printable glyphs into a game-side buffer whenever
    the pointer or the header signature changes, each glyph as a one-glyph
    font object the engine's own blitter accepts, and every packet carries the
@@ -73,8 +73,8 @@
    such font), every index `c - first` for `c <= 0x7E` is inside it, and an
    entry is a file offset into the block the loader read the file into. A
    font whose byte at +3 is not 0 is not that format and is REFUSED, not
-   probed: the copy draws nothing rather than index a table it cannot bound
-   (landing review). What a corrupt file could do to the engine's own blitter
+   probed: the copy draws nothing rather than index a table it cannot bound.
+   What a corrupt file could do to the engine's own blitter
    it can do here too; that is the same trust, on the same thread. */
 
 #include <windows.h>
@@ -124,7 +124,7 @@ static void*    s_retStack[RET_DEPTH];     /* hijacked returns, LIFO            
 static int      s_retDepth;
 /* counters: written on the game thread, read by the heartbeat */
 static volatile unsigned s_cDrawsAll, s_cDraws, s_cForeign, s_cDeep;
-/* the shell's cursor channel (landing 6) — declared here, with the rest of
+/* the shell's cursor channel — declared here, with the rest of
    the counters, because the heartbeat reads them and is defined above the
    channel's own section */
 static volatile unsigned s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
@@ -160,14 +160,13 @@ static int           s_fontTrunc;
 static int           s_textFg = -1;
 static volatile unsigned s_cFontCopies, s_cFontRefused;
 static int      s_levelEndBy;              /* the level-end packet's provider: 1 reclaim's post hook, 2 our observer, 0 none */
-/* THE LEVEL GENERATION IS THE PACKET'S OWN, and it has to be: it was
-   tagpu_reclaim's counter, which is bumped only in reclaim's teardown post
-   hook — so with reclaim unarmed it never moved, and every consumer keyed on
-   it silently stopped invalidating. `frame_pair` withholds a PREV across a
-   level on it, the pose blend refuses a pair on it, and the model-template
-   caches drop on it; all three were inert in that configuration (landing
-   review, 2026-09-12). It advances here instead, at every level end, whoever
-   published it. Reclaim's own counter still exists for reclaim's own ring. */
+/* THE LEVEL GENERATION IS THE PACKET'S OWN, and it has to be: tagpu_reclaim's
+   counter is bumped only in reclaim's teardown post hook, so with reclaim
+   unarmed it never moves, and every consumer keyed on it would silently stop
+   invalidating. `frame_pair` withholds a PREV across a level on it, the pose
+   blend refuses a pair on it, and the model-template caches drop on it. This
+   one advances at every level end, whoever published it. Reclaim's own counter
+   still exists for reclaim's own ring. */
 static unsigned s_levelGen;
 
 static int on_game_thread(void)
@@ -284,13 +283,13 @@ static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, 
     return end;
 }
 
-/* ======================= THE WORLD TABLES (landing 3) =====================
+/* ======================= THE WORLD TABLES =================================
    Everything below runs on the GAME THREAD, inside DrawGameScreen, on the
    in-play gate — the one set of frames during which the loader thread has
    finished and this thread owns every array it touches (the file comment's
-   "THE LOADER THREAD"). That ordering is what closes the audit's open hazard:
-   the unit array's begin/end pair was read unsynchronised by six render-thread
-   files, and no read-side gate could close it because `end` is never nulled.
+   "THE LOADER THREAD"). That ordering is what closes the audit's hazard: no
+   read-side gate could make a render-thread read of the unit array's
+   begin/end pair safe, because `end` is never nulled.
 
    THE BOUNDS ARE THE ENGINE'S OWN COUNTS, APPLIED HERE AND NOWHERE ELSE.
    The walk runs to `unit_slots` (u16 main+0x14351, stored at 0x4854EF BEFORE
@@ -325,8 +324,8 @@ static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
 /* what fill_frame last wrote. Read back by roster_log immediately after the
    publish, on the producer's own thread.
 
-   THE INVARIANT IS THE CONSUMER'S ROTATION, NOT "CONSUMERS ONLY READ" [the
-   landing review corrected this]. "Consumers only read" is false under the
+   THE INVARIANT IS THE CONSUMER'S ROTATION, NOT "CONSUMERS ONLY READ".
+   "Consumers only read" is false under the
    `tagpu_packet.poison` lever, where the consumer memsets the header of the
    slot it hands back. What actually holds: for the slot just published to
    reach the consumer's spare -- the one poison touches -- the consumer needs
@@ -335,7 +334,7 @@ static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
    refused as `foreign`), and it is the thread sitting inside roster_log. So
    the rotation cannot advance while we read. Move roster_log anywhere the
    producer is not holding the thread, or add a second publisher, and this is
-   gone -- which the old wording would not have told you. */
+   gone. */
 static const TAGPU_PACKET* s_lastFilled;
 static TAGPU_PK_WRECK  s_wScratch[TAGPU_PK_MAX_WRECKS];
 static TAGPU_PK_ANCHOR s_aScratch[TAGPU_PK_MAX_ANCHORS];
@@ -478,11 +477,11 @@ static void fill_unit(TAGPU_PK_UNIT* e, const char* ta, const char* u,
     }
     /* THE OWNERSHIP ANSWER IS TAKEN HERE, ON THIS THREAD, WITH THE DEF IN
        HAND. `tagpu_native_owns_unit` reads the def's three name fields and the
-       build fraction; the unit pass used to call it per unit per frame from the
-       render thread, which is one of the reads this landing removes. It is the
-       same predicate the marker pass, the composite wipe and the owndraw
-       classifier already ask on the game thread, so all four now agree by
-       construction rather than by two threads reading the same bytes. */
+       build fraction, so the unit pass takes the answer from the packet rather
+       than calling it from the render thread. It is the same predicate the
+       marker pass, the composite wipe and the owndraw classifier ask on the
+       game thread, so all four agree by construction rather than by two
+       threads reading the same bytes. */
     if (tagpu_native_owns_unit(u)) e->flags |= TAGPU_PK_U_NATIVE;
     (void)ta;
 }
@@ -644,17 +643,16 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                fraction (`and 0xF`) on both axes and blends the 2x2
                neighbourhood, with each of its three steps dividing by 16
                TOWARD ZERO (`cdq / and edx,0xf / add / sar 4`, which is what C's
-               int `/` does). Publishing the nearest cell instead put the
+               int `/` does). Publishing the nearest cell instead would put the
                silhouette and the slant up to half a tile's height out on any
-               sloped ground, and made `gy == ay` -- the claim the unit pass
+               sloped ground, and make `gy == ay` -- the claim the unit pass
                rests its zero shift on -- true only on the flat.
 
                THE BOUND IS THE ENGINE'S OWN, one cell stricter than a plain
                index check because the blend reads `tx+1` and `ty+1`. Outside
                it the engine returns -1 and its caller draws the shadow at a
-               nonsense height; we fall back to the nearest cell, which is what
-               this code published before and is a height rather than a
-               sentinel. [Named by the landing review, 2026-09-22.] */
+               nonsense height; we fall back to the nearest cell, which is a
+               height rather than a sentinel. */
             {
                 int wx = (int)(short)(ue->pos[0] >> 16);
                 int wy = (int)(short)(ue->pos[2] >> 16);
@@ -756,11 +754,10 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             }
             s_aHave = 1; s_aTick = p->tick; s_aN = na;
             /* A TRUNCATED SCAN IS CACHED AS TRUNCATED. Without this every reuse
-               publish of the same tick reported a complete anchor table, and
-               the gate we read is "trunc is 0 after the first fill" — so the
-               one number that would have said the rect overflowed the table was
-               under-reported by exactly the reuse rate, which is 6 in 7
-               (landing review, 2026-09-12). */
+               publish of the same tick would report a complete anchor table,
+               and the gate we read is "trunc is 0 after the first fill" — so
+               the one number that says the rect overflowed the table would be
+               under-reported by exactly the reuse rate, which is 6 in 7. */
             s_aTrunc = (p->truncated & TAGPU_PK_TRUNC_ANCHORS) ? 1 : 0;
             s_aRect[0] = c0; s_aRect[1] = r0; s_aRect[2] = cols; s_aRect[3] = rows;
             s_cAnchScan++;
@@ -787,8 +784,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                drawing; this walk covers the zoom-floor rect plus a margin,
                which is most of a screen of cells the engine never touches.
                WR_COUNT is the pool the level allocates (tagpu_engine.h), and
-               2048 is also the value its allocator hands back for "none".
-               (landing review, 2026-09-12) */
+               2048 is also the value its allocator hands back for "none". */
             if (a->wreck >= WR_COUNT) { s_cWreckOob++; continue; }
             rec = recs + (size_t)a->wreck * WR_STRIDE;
             o3 = *(const char* const*)(rec + WR_OBJ3DO);
@@ -858,14 +854,13 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 }
 
 
-/* ====================== THE EFFECTS TABLES (landing 4a) ===================
-   The four per-frame effect arrays, on the thread that owns them. Until this
-   landing `tagpu_fx.c` and `tagpu_sfx.c` walked all four on the RENDER thread
-   behind `IsBadReadPtr`, and the particle heap was the one client the level
-   fence could not cover: the layer table is per game, but each layer's
-   {begin,end} pair and every object's sub-particle vector are std::vectors the
-   game thread GROWS mid-play, freeing the old array (0x4732E0), so the pair
-   could be read skewed and a consistent pair could name memory just freed
+/* ====================== THE EFFECTS TABLES ===============================
+   The four per-frame effect arrays, on the thread that owns them. On the
+   RENDER thread the particle heap is a client the level fence cannot cover:
+   the layer table is per game, but each layer's {begin,end} pair and every
+   object's sub-particle vector are std::vectors the game thread GROWS
+   mid-play, freeing the old array (0x4732E0), so the pair could be read skewed
+   and a consistent pair could name memory just freed
    (cross-thread-engine-reads.md §5). Reading them here is not a narrower
    window; it is the same thread doing both.
 
@@ -874,9 +869,8 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    because only the tick writes it. These four are not: **the engine's own
    explosion DRAW emits particles** — 0x420B00's debris loop calls 0x421550
    (0x420B18), which calls the grey-smoke emitter 0x472810 (0x421583) and the
-   fire emitter 0x472AB0 (0x4215AA), and both append to a layer [FOUND BY
-   LANDING 4A'S REVIEW, which disproved the sentence this comment used to
-   carry]. So a second draw of one tick can find a layer the first did not
+   fire emitter 0x472AB0 (0x4215AA), and both append to a layer. So a second
+   draw of one tick can find a layer the first did not
    produce.
 
    What actually licenses the cache is weaker and is enough:
@@ -893,7 +887,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        publish late: under 4 ms of wall time at the publish rates the reference
        setup reaches, on a sprite that is one frame old. It is a quality trade, taken
        deliberately, and the alternative is the whole gather at the DRAW rate —
-       measured at 6 to 7 % of the game thread when the plan costed it.
+       measured at 6 to 7 % of the game thread.
 
    At the 250-odd publishes a second the reference setup reaches against a
    60 Hz sim, four publishes in five reuse.
@@ -912,7 +906,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        0x429870 loads once per process (its only caller chain is 0x49134D <-
        0x491200 <- WinMain's 0x49EA62), so a SESSION asset.
      * an EXPLOSION's GAF frame, `frame` and `flash` — **per LEVEL**, and this
-       is not the same answer [ESTABLISHED 2026-09-12 by landing 4a's review].
+       is not the same answer.
        The add site takes the sequence from main+0x1AB8F[idx] (0x420AA2), a
        table 0x420620 builds from the level load (0x4919D2) and 0x420960 frees
        and nulls from the teardown (0x491B9F). So these two stand on
@@ -1002,8 +996,8 @@ static void gather_layer(const char* layers, int L)
        or fewer it appends, and past that it destroys the FRONT object, shifts
        the vector down by one and appends anyway. So a layer at 401 is the
        engine's steady state, and a walk that stopped at 400 would drop the
-       whole layer every time it filled — measured 2026-09-12, 86 layers
-       refused in one fx-mix run before this line said 401. The pair itself is
+       whole layer every time it filled — measured 2026-09-12: a bound of 400
+       refused 86 layers in one fx-mix run. The pair itself is
        sound because this thread is the one that runs those emitters; a count
        past 401 is a fact worth counting, not a walk worth attempting. */
     n = (unsigned)(e - b);
@@ -1026,8 +1020,7 @@ static void gather_layer(const char* layers, int L)
            that this thread is the one that grows these vectors. What it buys is
            containment: without it one object with a wild `end` fills the whole
            table and truncates every layer after it, and with it that object is
-           skipped and the frame is otherwise complete. 4096 is the number the
-           render-thread pass used. */
+           skipped and the frame is otherwise complete. */
         if (ns > PART_SUBCAP) { s_cSubBad++; continue; }
         for (j = 0; j < ns; j++) {
             const char* q = sb + (size_t)j * (size_t)PART_FMT[k].stride;
@@ -1070,8 +1063,7 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
     /* ---- projectiles (0x49BE60) ---------------------------------------
        The array is per game: 0x499A30 allocates exactly 300 slots and
        0x499A80 frees AND NULLS the base inside the teardown cascade, so a
-       NULL base is the refusal and the walk's bound is the allocation. The
-       8192-slot sanity cap the render-thread pass used is gone with it. */
+       NULL base is the refusal and the walk's bound is the allocation. */
     if (ptr_ok(pbase) && np > 0) {
         if (np > PROJ_COUNT) np = PROJ_COUNT;
         for (i = 0; i < np; i++) {
@@ -1292,38 +1284,36 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 }
 
 
-/* ======================== THE FOG GRIDS (landing 4b) ======================
+/* ======================== THE FOG GRIDS ===================================
    Two lattices, both read on the thread that writes them.
 
    THE ENGINE'S is `*(main+0x1421F)` — a descriptor {u16* buf, cols, rows,
    cells} built once per map by LoadMap (0x483C03 / 0x483C96) and REWRITTEN in
    place by the builder 0x4843C0, which this fork's terrain owner calls from the
-   engine's own fog site inside the draw. So the render thread used to read the
-   descriptor, and the buffer behind it, while this thread was rewriting both:
-   the read `tagpu_fog_at`'s guard was added for after a hard fault off a base
-   of -9 (2026-09-03; the root cause was never found and still is not — what
-   changes here is that the class is gone, not that it was diagnosed).
+   engine's own fog site inside the draw. So a render-thread read of the
+   descriptor, and the buffer behind it, races this thread rewriting both:
+   `tagpu_fog_at`'s guard exists for a hard fault off a base of -9 (2026-09-03;
+   the root cause was never found — reading here removes the class, it does
+   not diagnose it).
 
    THE RELATION IS THE CHECK, and it is the engine's own: `cells` is the
    allocation, which the builder rounds up to a multiple of 8 before allocating
    (0x483C84: add 7, and ~7), so `cells == ((cols*rows + 7) & ~7)` says the
-   three numbers describe one block. Demanding `cells == cols*rows` refused
-   every viewport whose cell count is not already a multiple of 8 — 1920x1080 is
-   58x34 = 1972 against an allocated 1976 — and a refusal here is not degraded
-   fog but NO fog at all. What lands in the packet is exactly `cols*rows`
-   entries, so the consumer's bound is its own length and the round-up is this
-   file's business alone.
+   three numbers describe one block. Demanding `cells == cols*rows` would
+   refuse every viewport whose cell count is not already a multiple of 8 —
+   1920x1080 is 58x34 = 1972 against an allocated 1976 — and a refusal here is
+   not degraded fog but NO fog at all. What lands in the packet is exactly
+   `cols*rows` entries, so the consumer's bound is its own length and the
+   round-up is this file's business alone.
 
    THE ORIGIN IS TAKEN HERE, from the eye this packet carries, because that is
-   the eye the grid was built at. The render thread used to derive it from its
-   PREDICTED eye — the packet's plus a cursor-anchor step not yet applied — and
-   covered the disagreement by taking the wide grid whenever anything was
-   unacknowledged. It still takes the wide grid there; the origin is now right
+   the eye the grid was built at, not the render thread's PREDICTED eye (the
+   packet's plus a cursor-anchor step not yet applied). The render thread takes
+   the wide grid whenever anything is unacknowledged; the origin is right
    either way.
 
    THE WIDE ONE is tagpu_fogwide's, built in `terr_fogtick` during THIS draw,
-   on this thread. Copying it here is what retired that module's three buffers,
-   its critical section and its retire ring. */
+   on this thread. */
 
 #define FOG_DESC     0x1421F      /* -> {u16* buf, i32 cols, i32 rows, i32 cells} */
 #define PROG_FOGSH   0x0CC        /* u8[256]: the grey band's palette remap,
@@ -1373,8 +1363,7 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                terrain ownership dropped the engine calls its own builder where
                we cannot see it, and a stale latch would put the engine's live
                grid at an origin from whenever we last owned the site. The
-               fallback is this packet's own eye, which is what the render
-               thread used before landing 4b. */
+               fallback is this packet's own eye. */
             tagpu_terrown_fog_eye(&ex, &ey);
             p->fog_cols = cols; p->fog_rows = rows;
             p->fog_org[0] = fog_org(ex);
@@ -1399,7 +1388,7 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
            ever cleared from inside the tick that has stopped running. Without
            this test the packet would carry the LAST grid ever built, for ever,
            against a camera and an LOS state that keep moving, and nothing would
-           count it [found by the landing review]. */
+           count it. */
         if (tagpu_terrown_fog_site_live() &&
             tagpu_fogwide_current(&wb, &wc, &wr, &wox, &woy) &&
             wc > 0 && wr > 0 && wc <= TAGPU_PK_FOG_DIMCAP && wr <= TAGPU_PK_FOG_DIMCAP) {
@@ -1424,28 +1413,28 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 }
 
 
-/* ==================== THE GL UI'S RENDER HALF (landing 4c) =================
-   The four engine reads tagpu_gui_surf.c made on the render thread, every
-   present. The queue itself is untouched: it carries an op STREAM into
-   retained twins and stays a queue (the plan's §9). What moves is the
-   per-frame state the render half read beside it.
+/* ==================== THE GL UI'S RENDER HALF =============================
+   The four engine reads tagpu_gui_surf.c needs every present. The queue
+   itself is untouched: it carries an op STREAM into retained twins and stays
+   a queue (the plan's §9). What is taken here is the per-frame state the
+   render half reads beside it.
 
    THE MINIMAP SURFACES ARE THE ONLY EXPENSIVE ONE and they are gated on the
    consumer asking (tagpu_gui_want_minimap), because at k = 1 the sharp minimap
    is deliberately the engine's own and the copy would be paid for nothing.
-   Their DESCRIPTORS are what made the old read dangerous rather than merely
-   stale: each carries a base and a pitch, so a torn one is a wild read and not
-   a wrong picture. Their lifetime is the minimap build's — 0x4669B0, from the
-   level load at 0x4919C3, stores the three pointers once, and 0x466AA0 frees
-   and NULLS them inside the teardown cascade — and every field is cross-checked
-   here, on the thread that owns them, exactly as the render half checked them.
+   Their DESCRIPTORS are what make a render-thread read dangerous rather than
+   merely stale: each carries a base and a pitch, so a torn one is a wild read
+   and not a wrong picture. Their lifetime is the minimap build's — 0x4669B0,
+   from the level load at 0x4919C3, stores the three pointers once, and
+   0x466AA0 frees and NULLS them inside the teardown cascade — and every field
+   is cross-checked here, on the thread that owns them.
 
-   THE PICTURE IS DECODED HERE TOO, on the level's first in-play publish. It
-   used to be decoded by an observer on the LOADER thread (before_minimap), the
-   one publisher this plan's rule forbids outright; the engine's own ordering is
-   what makes decoding it here correct instead — the in-play handler is
-   installed only after the loader has set bit 1 of main+0x38D75, so on the
-   first in-play draw of a level every per-map pointer is final. */
+   THE PICTURE IS DECODED HERE TOO, on the level's first in-play publish, and
+   not on the LOADER thread, the one publisher this plan's rule forbids
+   outright. The engine's own ordering is what makes decoding it here correct —
+   the in-play handler is installed only after the loader has set bit 1 of
+   main+0x38D75, so on the first in-play draw of a level every per-map pointer
+   is final. */
 
 #define MM_OFFX      0x142E7      /* i16 the box the engine fitted it into    */
 #define MM_OFFY      0x142E9
@@ -1462,7 +1451,7 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    shell's cursor channel and this file's in-play fill read the same six words
    and a second copy is how they would come to disagree. */
 
-/* the interleave the render half used to do per frame, per row */
+/* the interleave, per frame, per row */
 static unsigned char s_mmRg[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP * 3];
 /* the level's picture, decoded once per level (see fill_gui) */
 static unsigned char s_mmPic[TAGPU_PK_MM_DIMCAP * TAGPU_PK_MM_DIMCAP];
@@ -1470,8 +1459,8 @@ static int s_mmPicW, s_mmPicH, s_mmPicGen = -1;
 static volatile unsigned s_cMmCopies, s_cMmRefused, s_cMmPic;
 static volatile int s_lastMmW, s_lastMmH;
 
-/* The three values the render half's `cursor_rect` used to take live out of the
-   graphics globals, in exactly its shape: an unreadable globals block is
+/* The three values the render half's `cursor_rect` needs from the graphics
+   globals, in exactly its shape: an unreadable globals block is
    (-1, -1, 0, 0) — no rect, erase nothing — and a readable one with an
    unreadable sprite record is the position with the 64x64 fallback size. The
    out-of-game packet zeroes the header and never reaches here, so the consumer
@@ -1495,7 +1484,7 @@ static void fill_cursor(TAGPU_PACKET* p)
     rec = *(const unsigned short* const*)(g + GFX_CUR_REC);
     if (!ptr_ok(rec)) { p->cur_w = 64; p->cur_h = 64; return; }
     /* the record IS a GAF frame header, so its first two u16 are the size the
-       render half read out of it; the frame itself crosses as a key */
+       render half needs from it; the frame itself crosses as a key */
     p->cur_rec = (unsigned)(size_t)rec;
     p->cur_w = rec[0]; p->cur_h = rec[1];
 }
@@ -1512,9 +1501,8 @@ static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
     unsigned e, need = *cursor;
     int n;
     /* GATED ON THE ONLY PASS THAT READS IT, like the effect tables above. The
-       walk and the copy below are pure cost to a session with no build ghost,
-       which was every session before 2026-09-14 and is still any session that
-       turns it off. `tagpu_native_want_builds()` is the ghost's own 30-frame
+       walk and the copy below are pure cost to a session with no build ghost.
+       `tagpu_native_want_builds()` is the ghost's own 30-frame
        poll, published from the render thread; being a frame late either way
        costs one frame of an unused or an empty table. */
     if (!tagpu_native_want_builds()) return need;
@@ -1546,14 +1534,11 @@ static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        it is 0x483DFE inside 0x483DD0, whose only caller is 0x491BB3 — the level
        TEARDOWN cascade [VERIFIED 2026-09-12, objdump of the pristine build].
 
-       That is what let landing 4c delete the GL UI's loader-thread observer
-       outright. It sat at 0x466780's entry decoding the same frame, on the
-       LOADER thread, because this fork's notes said the picture was alive only
-       inside that call; it is not, and nothing of ours runs on that thread any
-       more. The first in-play draw is the earliest moment the engine's own
-       ordering makes every per-map pointer final (the in-play handler is
-       installed only after the loader sets bit 1 of main+0x38D75), and this is
-       that draw. */
+       So the picture is not alive only inside that call, and nothing needs to
+       decode it on the LOADER thread. The first in-play draw is the earliest
+       moment the engine's own ordering makes every per-map pointer final (the
+       in-play handler is installed only after the loader sets bit 1 of
+       main+0x38D75), and this is that draw. */
     if (s_mmPicGen != (int)p->level_gen) {
         const unsigned char* fr = tagpu_gaf_frame_sane(*(const void* const*)(ta + MM_PICFRAME));
         s_mmPicGen = (int)p->level_gen;              /* tried: not once a draw */
@@ -1572,7 +1557,7 @@ static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        statistic — and the likeliest packet to be dropped is a level's first,
        when the render thread is busiest. It is also gated on the minimap being
        WANTED at all, so a session that never turns the sharp minimap on never
-       pays the 63 KB [found by the landing review]. */
+       pays the 63 KB. */
     if (s_mmPicW > 0 && s_mmPicGen == (int)p->level_gen &&
         tagpu_gui_want_minimap() &&
         tagpu_gui_minimap_have() != p->level_gen + 1u) {
@@ -1630,7 +1615,7 @@ static unsigned fill_gui(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 /* The engine's palette table and gamma factor, into the packet — both kinds
    of packet carry them (the level-end one from the teardown, where `main` is
    still valid), so the render thread's palette module never reads either
-   field itself (tagpu_pal.c, converted by landing 2). The gamma is BOUNDED
+   field itself (tagpu_pal.c). The gamma is BOUNDED
    here to the band a slider or the chat command can produce; anything else,
    NaN included, ships as 1.0, the identity. */
 static void fill_pal(TAGPU_PACKET* p, const char* ta)
@@ -1659,7 +1644,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        by cap_bytes, which the primitive set before calling us */
     tagpu_pk_fill((unsigned char*)p + offsetof(TAGPU_PACKET, used_bytes), 0,
                   sizeof(TAGPU_PACKET) - offsetof(TAGPU_PACKET, used_bytes));
-    /* STAMPED HERE, NOT AT THE RETURN [landing review]: the `!ta` exit below
+    /* STAMPED HERE, NOT AT THE RETURN: the `!ta` exit below
        returns early, and stamping only at the end would leave s_lastFilled
        naming an EARLIER packet while the publish still reported success --
        roster_log would then print a live `units: alive=` block from the
@@ -1711,9 +1696,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->paused       = RDU8(ta, OFF_GAMEPAUSED) & 1u;
     p->game_speed   = RDI16(ta, OFF_GAMESPEED_LIVE);
     p->text_fg      = s_textFg;
-    /* what the marker pass reads and used to take from engine memory itself:
-       the GUI colour bytes, the dispatched mouse point, the build cursor's two
-       corners and the two mode bytes that gate them */
+    /* what the marker pass reads, so that it takes nothing from engine memory
+       itself: the GUI colour bytes, the dispatched mouse point, the build
+       cursor's two corners and the two mode bytes that gate them */
     tagpu_pk_copy(p->gui_col, ta + OFF_GUICOL, sizeof p->gui_col);
     p->mouse[0]     = RD32(ta, OFF_MOUSE_X);
     p->mouse[1]     = RD32(ta, OFF_MOUSE_Y);
@@ -1732,13 +1717,13 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the build-orders table (the ghost pass) ---- */
     e = fill_builds(p, &cursor);
     if (e > need) need = e;
-    /* ---- the effects and the particle layers (landing 4a) ---- */
+    /* ---- the effects and the particle layers ---- */
     e = fill_fx(p, ta, &cursor);
     if (e > need) need = e;
-    /* ---- the two fog grids (landing 4b) ---- */
+    /* ---- the two fog grids ---- */
     e = fill_fog(p, ta, &cursor);
     if (e > need) need = e;
-    /* ---- the GL UI's render half (landing 4c) ---- */
+    /* ---- the GL UI's render half ---- */
     e = fill_gui(p, ta, &cursor);
     if (e > need) need = e;
     shd_snapshot();
@@ -1760,9 +1745,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         /* the area did NOT FIT this packet (a copy exists on our side): carry
            generation 0 so the consumer keeps the copy it has and takes the
            next packet that fits, rather than latching this generation as
-           "no font" for as long as the engine keeps the same font (landing
-           review). A REFUSED or empty font (s_fontLen == 0) keeps its
-           generation: the consumer must blank, and stay blank. */
+           "no font" for as long as the engine keeps the same font. A REFUSED
+           or empty font (s_fontLen == 0) keeps its generation: the consumer
+           must blank, and stay blank. */
         if (s_fontLen) p->font_gen = 0;
     }
 
@@ -1776,8 +1761,6 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 }
 
 /* ===================== THE LIVE-STATE LOG tacli READS =====================
-   [the vulkan-only plan, landing 10c-3]
-
    Three lines, and with `peek:` they are the whole of what `tacli` greps out
    of tagpu.log:
 
@@ -1788,32 +1771,27 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
      `mouse: screen=(x,y)` -- TA's own pointer, read without touching the
         user's.
 
-   They were emitted by `log_units` in tagpu_overlay.c, which only
-   render_ogl.c and render_vk.c reach. On `renderer=gdi` none of them ever
-   appeared, so `tacli roster` answered nothing and `tacli scenario load`
-   TIMED OUT -- with the game behind it running perfectly well. That was
-   measured rather than assumed: `tacli scenario apply` against an instance
-   `load` had just declared dead applied 5 of 5. Only the detector was
+   They are emitted here, on the game thread, and not by a renderer: only
+   render_ogl.c and render_vk.c reach the overlay, so on `renderer=gdi` a log
+   there would never appear, `tacli roster` would answer nothing and `tacli
+   scenario load` would TIME OUT -- with the game behind it running perfectly
+   well. That was measured rather than assumed: `tacli scenario apply` against
+   an instance `load` had declared dead applied 5 of 5. Only the detector was
    missing, which is why this is one function and not a subsystem.
 
    GATED IN MILLISECONDS, NOT IN FRAMES, and that is the whole of the care
-   this needs. The old throttles counted RENDER frames at ~60/s -- `% 300`
-   for the roster, `>= 30` for the header, `>= 15` for the mouse. This runs
-   from the in-play draw, measured at 13 361 draws/s on the reference setup,
-   so carrying those modulos across would have raised the file-write rate
-   about two hundredfold on the game thread inside an engine call. That is
-   precisely the fault the landing review of 10c-1 found when this family
-   first moved, and the cadences below are the old ones restated as time.
-
-   (The old comment claimed "every ~10s" for the roster dump; 300 frames at
-   60/s is 5 s, and 5 s is what it has always done.) */
-#define ROSTER_HDR_MS    500u   /* `units:`  <- was >= 30 render frames  */
-#define ROSTER_DUMP_MS  5000u   /* the dump  <- was  % 300 render frames */
-#define ROSTER_MOUSE_MS  250u   /* `mouse:`  <- was >= 15 render frames  */
+   this needs. This runs from the in-play draw, measured at 13 361 draws/s on
+   the reference setup, so a frame modulo sized for ~60 render frames a second
+   would raise the file-write rate about two hundredfold on the game thread
+   inside an engine call. The cadences below are 30, 300 and 15 render frames
+   at 60/s, restated as time. */
+#define ROSTER_HDR_MS    500u   /* `units:`                              */
+#define ROSTER_DUMP_MS  5000u   /* the dump                              */
+#define ROSTER_MOUSE_MS  250u   /* `mouse:`                              */
 
 static LARGE_INTEGER s_rosFreq, s_rosNow, s_rosFill, s_rosHdr, s_rosDump, s_rosMouse;
-/* QPF is asked ONCE. Without this a refusal re-probed on every in-play draw
-   for the life of the process, and said nothing (landing review). */
+/* QPF is asked ONCE. Without this a refusal would re-probe on every in-play
+   draw for the life of the process, and say nothing. */
 static int s_rosFreqTried;
 
 static int ros_due(const LARGE_INTEGER* last, unsigned ms)
@@ -1828,9 +1806,8 @@ static int ros_due(const LARGE_INTEGER* last, unsigned ms)
    not taken the last packet. `tagpu_packet_acquire` has exactly two call
    sites -- render_vk.c and render_ogl.c -- so on `renderer=gdi` NOTHING
    takes, every unforced publish is skipped, and `fill_frame` runs about once
-   per level. Hanging the roster off the packet without this would have
-   produced nothing on the one lane landing 10c-3 exists for, and produced it
-   silently.
+   per level. Hanging the roster off the packet without this would produce
+   nothing on `renderer=gdi`, and produce it silently.
 
    IT ASKS WHEN THE LAST FILL WAS, not when a particular line is next due.
    Against the last FILL it is self-limiting for the right reason: on a lane
@@ -1838,10 +1815,8 @@ static int ros_due(const LARGE_INTEGER* last, unsigned ms)
    due and never forces.
 
    AND IT ASKS THE HEADER'S CADENCE, WHICH IS THE SLOWEST OF THE TWO THAT
-   MATTER [landing review]. An earlier cut used the MOUSE's 250 ms, on the
-   reasoning that a forced fill should serve the shortest gate any line has.
-   That doubled the forced-publish rate -- the one new risk this landing
-   carries -- to serve `mouse:`, and NOTHING PARSES `mouse:`: `tacli`'s
+   MATTER. The MOUSE's 250 ms -- the shortest gate any line has -- would double
+   the forced-publish rate to serve `mouse:`, and NOTHING PARSES `mouse:`: `tacli`'s
    structured readers are the peek line, the roster line and `units:`, and
    the only other reference in the tree is a sentence of prose in
    input-firewall.md. It is a human diagnostic. So the force runs at
@@ -1876,12 +1851,12 @@ static void roster_log(const TAGPU_PACKET* pk)
     FILE* dump;
 
     if (!s_rosFreq.QuadPart || !s_rosNow.QuadPart) return;
-    /* STAMPED BEFORE THE in_game GUARD, AND THAT ORDER IS LOAD-BEARING [landing
-       review, round 2]. It records that a FILL happened, which is the only
+    /* STAMPED BEFORE THE in_game GUARD, AND THAT ORDER IS LOAD-BEARING. It
+       records that a FILL happened, which is the only
        question roster_wants_fill asks. Move it below the guard and a persistent
        !in_game fill would leave s_rosFill frozen, so the force would be due on
        EVERY in-play draw -- a forced publish at the full draw rate, on the game
-       thread inside an engine call. That is the 10c-1 fault exactly. */
+       thread inside an engine call. */
     s_rosFill = s_rosNow;
     if (!pk || !pk->in_game) return;
 
@@ -1910,21 +1885,20 @@ static void roster_log(const TAGPU_PACKET* pk)
     if (!wantHdr && !wantDump) return;   /* the walk is only for these two */
     if (wantHdr)  s_rosHdr  = s_rosNow;
 
-    /* ONE OPEN FOR THE WHOLE DUMP, not one per unit [landing review]. plog()
-       is fopen/fprintf/fclose, and this loop is bounded only by
+    /* ONE OPEN FOR THE WHOLE DUMP, not one per unit. plog() is
+       fopen/fprintf/fclose, and this loop is bounded only by
        TAGPU_PK_MAX_UNITS (16384) -- at the reference setup's own 200v200 that
-       was ~400 opens every 5 s, and it now runs on the GAME thread, where a
-       stall costs sim time rather than a dropped frame. The landing measured
-       it at 11 units, which does not exercise it. Closed before the `units:`
+       would be ~400 opens every 5 s, on the GAME thread, where a stall costs
+       sim time rather than a dropped frame. Closed before the `units:`
        line below so the two never hold the file at once. */
     dump = wantDump ? fopen("tagpu.log", "a") : NULL;
-    /* THE CLOCK IS STAMPED BY THE OPEN, NOT BY THE INTENT [landing review].
-       Stamping before the fopen meant a failed open dropped a whole block
-       silently and put the next attempt 5 s away, while the `units:` line
-       below still printed -- so `tacli roster` saw a header with no roster
-       lines and reported "no roster lines yet (needs a running game)" for a
-       game that is running. Now a failure simply leaves the gate due and the
-       next fill retries, and it says once that it happened. */
+    /* THE CLOCK IS STAMPED BY THE OPEN, NOT BY THE INTENT. Stamping before
+       the fopen would let a failed open drop a whole block silently and put
+       the next attempt 5 s away, while the `units:` line below still prints --
+       so `tacli roster` would see a header with no roster lines and report "no
+       roster lines yet (needs a running game)" for a game that is running. A
+       failure leaves the gate due and the next fill retries, and it says once
+       that it happened. */
     if (wantDump) {
         if (dump) s_rosDump = s_rosNow;
         else {
@@ -1991,10 +1965,10 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     /* the argument is reclaim's counter when reclaim is the provider, kept for
        the log; ours is what the packet carries and what every consumer keys on */
     s_levelGen++;
-    /* THE GOLDEN SOURCE'S DROP IS ABOVE THE THREAD CHECK, and deliberately
-       [the landing review]. It was below it, so a teardown seen on a foreign
-       thread -- which this function counts and returns from -- would leave the
-       previous level's reference live with no line saying so. The level ended
+    /* THE GOLDEN SOURCE'S DROP IS ABOVE THE THREAD CHECK, and deliberately.
+       Below it, a teardown seen on a foreign thread -- which this function
+       counts and returns from -- would leave the previous level's reference
+       live with no line saying so. The level ended
        whoever noticed; the drop is one atomic increment and needs no thread
        identity, and the render thread is what acts on it.
 
@@ -2030,7 +2004,7 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
            draws and any screenshot draw before its first in-play one never
            latch, so without this they would run our key fill and fog tick on
            this level's decision. Only a rect `restore` could not put back
-           keeps it up. [The landing review of e8a05b1.] */
+           keeps it up. */
         tagpu_terrown_latch(tagpu_vpwide_wide());
         tagpu_packet_publish(fill_level_end, &s_levelGen, 1 /* past the FRESH gate */);
     }
@@ -2072,11 +2046,10 @@ static int __cdecl before_draw(void* entry_esp)
        the draw call at 0x4969CD, and both can be skipped: the stepper when the
        sim is paused, both under an in-game GUI screen — and before the draw's
        first read of the eye at 0x468DD9; no store to the eye exists inside
-       DrawGameScreen (whose extent is 0x468CF0..0x46A3FD -- this said
-       ..0x46A200, understating it by the 0x1FD-byte tail the golden-source
-       landing walked; the rows there are status icons, the clock, the GUI
-       blit, the profiler bars, the options tab, the cursor and the flip, and
-       none of them stores the eye), so a delta applied here composes
+       DrawGameScreen (whose extent is 0x468CF0..0x46A3FD; the tail past
+       0x46A200 is status icons, the clock, the GUI blit, the profiler bars,
+       the options tab, the cursor and the flip, and none of them stores the
+       eye), so a delta applied here composes
        with the engine's own camera move and the draw that follows reads the
        commanded eye; its fog rebuild and its minimap box see it too. The
        latest record is taken and every part of it applied by the module that
@@ -2118,20 +2091,18 @@ static void* __cdecl after_draw(unsigned int* regs)
     void* ret = s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
     (void)regs;
     /* post-flip: the packet. The FRESH gate inside makes most of these a load.
-       FORCED WHILE THE LEVEL HAS NO PACKET YET (landing 6): the shell's cursor
+       FORCED WHILE THE LEVEL HAS NO PACKET YET: the shell's cursor
        channel publishes through the load, so the FRESH gate can be set at the
        instant this draw runs — and a first packet the gate dropped would leave
        the renderer on an in_game = 0 packet, with no world, until the render
        thread happened to take one in between. One forced publish per level for
        THAT reason, counted as an overrun exactly like the level-end packet's.
 
-       IT IS NO LONGER THE ONLY FORCED ONE [landing 10c-3]. roster_wants_fill()
+       IT IS NOT THE ONLY FORCED ONE. roster_wants_fill()
        forces a fill whenever none has happened for ROSTER_HDR_MS, so on a lane
        with no consumer -- renderer=gdi, where nothing calls
        tagpu_packet_acquire -- this forces about twice a second and `overrun`
-       counts every one. gpu-status.md's exchange health rule used to read
-       "overrun/gap are 0 in play"; that is what this changed, and the rule now
-       says so. */
+       counts every one; gpu-status.md's exchange health rule says so. */
     {
         const int pub = tagpu_packet_publish(fill_frame, NULL,
                                              !s_levelOpen || roster_wants_fill());
@@ -2148,21 +2119,21 @@ static void* __cdecl after_draw(unsigned int* regs)
         if (pub) roster_log(s_lastFilled);
     }
 
-    /* THE GOLDEN SOURCE, ON THE THREAD THAT DREW IT [2026-09-20]. TA's composed
+    /* THE GOLDEN SOURCE, ON THE THREAD THAT DREW IT. TA's composed
        frame is copied here and nowhere else. This is the one point in the
        process where it is COMPLETE BY CONSTRUCTION rather than by timing: the
        flip `0x4C63A0` is called from inside this very function at `0x46A3DB`,
        34 bytes before its `ret` at `0x46A3FD`, so by the time the observer's
        `after` runs the engine has finished writing the primary -- and the
        thread that writes it is this one, which is not running anywhere else.
-       Before this the copy ran on the RENDER thread out of `tagpu_overlay_draw`
-       with nothing sequencing the two, and could publish a frame torn between
-       the engine's terrain rows and its side-panel rows (measured: 223 of
-       16 500 reads at that site came back torn).
+       A copy on the RENDER thread has nothing sequencing it against the
+       engine, and can publish a frame torn between the engine's terrain rows
+       and its side-panel rows (measured at such a site, in
+       `tagpu_overlay_draw`: 223 of 16 500 reads came back torn).
 
        THAT CALL IS CONDITIONAL, AND WHAT MAKES IT CERTAIN HERE IS THE
-       RETURN-ADDRESS FILTER RATHER THAN THE CALL'S PRESENCE [the landing
-       review; re-disassembled from the pristine exe 2026-09-20]. Two guards
+       RETURN-ADDRESS FILTER RATHER THAN THE CALL'S PRESENCE [re-disassembled
+       from the pristine exe 2026-09-20]. Two guards
        stand over it -- `0x46A3CC test ebx,ebx / je 0x46A3E0` on argument 1
        (`drawUnits`; the note explains why that argument lives in `ebx`) and
        `0x46A3D0 mov 0x22c(%esp),%eax / test eax,eax / je 0x46A3E0` on
@@ -2180,8 +2151,7 @@ static void* __cdecl after_draw(unsigned int* regs)
        frame.** Stated here because the filter is what carries it.
 
        IT IS NOT A GUARANTEE THAT THE REFERENCE AND THE PACKET ARE THE SAME
-       FRAME, and an earlier draft of this comment claimed it was [the landing
-       review, CONFIRMED]. The publish above has its own FRESH gate and the
+       FRAME. The publish above has its own FRESH gate and the
        capture below has the render thread's request gate, and they are
        independent: a draw can publish without capturing and capture without
        publishing. The render thread also acquires the packet at the TOP of its
@@ -2235,15 +2205,13 @@ static void* __cdecl after_loader(unsigned int* regs)
 unsigned tagpu_packet_pub_draw_seq(void)  { return s_cDraws; }
 unsigned tagpu_packet_pub_level_gen(void) { return s_levelGen; }
 int      tagpu_packet_pub_level_open(void) { return s_levelOpen; }
-/* `s_levelEndBy` IS NOT THE WHOLE ANSWER, and reading it as one was a defect.
-   It is only ever assigned inside `if (!s_countOnly)`, and `s_countOnly` is
-   `!tagpu_packet_armed()` -- so under `tagpu_packet.off` it stays 0 while the
-   generation goes on moving perfectly well, because `tagpu_packet_pub_level_end`
-   bumps `s_levelGen` as its FIRST statement, above every gate, and reclaim's
-   stub calls it unconditionally. A consumer keyed on this alone refused every
-   frame for the whole session.
-   [FOUND 2026-09-16, the landing-5 RE-review -- a defect inside the fix for the
-   review's own first finding, which is the fourth landing running.] */
+/* `s_levelEndBy` IS NOT THE WHOLE ANSWER. It is only ever assigned inside
+   `if (!s_countOnly)`, and `s_countOnly` is `!tagpu_packet_armed()` -- so
+   under `tagpu_packet.off` it stays 0 while the generation goes on moving
+   perfectly well, because `tagpu_packet_pub_level_end` bumps `s_levelGen` as
+   its FIRST statement, above every gate, and reclaim's stub calls it
+   unconditionally. A consumer keyed on this alone would refuse every frame for
+   the whole session. */
 int tagpu_packet_pub_level_tracked(void)
 {
     return s_levelEndBy != 0 || tagpu_reclaim_level_tracked();
@@ -2297,7 +2265,7 @@ static void extra(char* buf, unsigned cap, double secs)
                   s_mmPicW, s_mmPicH, s_cMmPic);
         n = 0;
         while (n < cap && buf[n]) n++;
-        /* THE SHELL'S CURSOR CHANNEL (landing 6). `draws` is every entry to
+        /* THE SHELL'S CURSOR CHANNEL. `draws` is every entry to
            the cursor draw, in play and in the shell alike, so 0 over a session
            in the shell means the 0x4C67C0 observer never fired and the channel
            is not what the layer is missing. `owned` + `hidden` are the frames
@@ -2318,8 +2286,8 @@ static void extra(char* buf, unsigned cap, double secs)
 }
 
 /* ---- the level-end packet's second provider -------------------------------
-   THE OUT-OF-GAME PACKET MUST NOT DEPEND ON ANOTHER MODULE BEING ARMED
-   (landing review): tagpu_reclaim's teardown wrap publishes it when reclaim
+   THE OUT-OF-GAME PACKET MUST NOT DEPEND ON ANOTHER MODULE BEING ARMED:
+   tagpu_reclaim's teardown wrap publishes it when reclaim
    is armed, but reclaim has five ways not to arm (its lever, a byte
    mismatch, a stub or a land failure) and then no level-end packet would
    ever exist — the renderer would hold a dead level's `in_game = 1` packet
@@ -2331,11 +2299,8 @@ static void extra(char* buf, unsigned cap, double secs)
    `after` either way), and publishes from `after`. With neither provider the
    publisher stays COUNT-ONLY: no packet at all is better than a stale one.
 
-   THE LEVEL GENERATION IS THIS MODULE'S OWN (`s_levelGen`), and these two
-   sentences used to say it was reclaim's and "0 for the session" when reclaim
-   is off. That was the pre-landing-3 design and it is what landing 3's review
-   had changed; the text stayed, and landing 4's review read it and reported a
-   defect that is not in the code. `tagpu_packet_pub_level_end` increments
+   THE LEVEL GENERATION IS THIS MODULE'S OWN (`s_levelGen`), not reclaim's.
+   `tagpu_packet_pub_level_end` increments
    `s_levelGen` before anything else, whichever provider called it, so the
    generation moves with reclaim armed or not. Reclaim's own counter is passed
    in for the log line and for nothing else. */
@@ -2358,19 +2323,19 @@ static void* __cdecl after_teardown(unsigned int* regs)
     return ret;
 }
 
-/* ---- the shell's cursor channel (landing 6) -------------------------------
+/* ---- the shell's cursor channel ------------------------------------------
 
    THE PROBLEM IT SOLVES. The GL UI layer draws a twin of the engine's
    presented surface over the composite and, on a frame whose packet carries a
    cursor, DISCARDS its own fragment at that rect so the engine's cursor comes
    through (tagpu_gui_surf.c, the layer shader's `cur` test). That rect comes
-   from the packet, and the packet's cursor fields were published on the
-   in-play gate alone — so on a shell frame the layer had no rect, discarded
-   nothing, and painted its twin over the engine's cursor. MEASURED on the
+   from the packet, and the in-play fill publishes the cursor fields on the
+   in-play gate alone — so without this channel, on a shell frame the layer
+   has no rect, discards nothing, and paints its twin over the engine's
+   cursor. MEASURED on the
    reference setup 2026-09-13, main menu, pointer over the window: `gui off`
    presents the cursor at (320,240) and `gui on` does not, and the two frames
-   differ by 288 px whose box contains it. The note called this a named
-   regression (gui-renderer.md, "Not closed here"); this closes it.
+   differ by 288 px whose box contains it.
 
    WHY NOT THE FLIP. The shell never calls DrawGameScreen, so the in-play gate
    has nothing to select on; what the shell has is the flip 0x4C63A0, which
@@ -2398,20 +2363,20 @@ static void* __cdecl after_teardown(unsigned int* regs)
        publishes in one draw would be a coin flip over which one the render
        thread ends up holding.
      - **`!s_levelOpen`** — because `s_retDepth == 0` is NOT the complement of
-       the in-play gate, which the first review of this landing found and the
-       disassembly confirms: the screenshot sweep `0x495A30` ends with its own
-       `DrawGameScreen(1, 1)` at `0x495E66` (both arguments 1, so the flip's own
-       gate at `0x46A3CC`/`0x46A3D7` passes and the cursor draw runs), and the
-       address that call pushes is `0x495E6B` rather than the in-play
-       `0x4969D2`, so nothing is on the stack. Without this test a Ctrl+F9
-       screenshot would publish an `in_game = 0` packet from the middle of a
-       level — and every world pass reads that field to decide whether to draw
-       at all, so the world would blink out for a present or two. The movie
-       recorder 0x4962C2 is excluded by the flip's own gate (it passes
-       drawUnits = 0), which is why only the screenshot path needed this.
+       the in-play gate, as the disassembly confirms: the screenshot sweep
+       `0x495A30` ends with its own `DrawGameScreen(1, 1)` at `0x495E66` (both
+       arguments 1, so the flip's own gate at `0x46A3CC`/`0x46A3D7` passes and
+       the cursor draw runs), and the address that call pushes is `0x495E6B`
+       rather than the in-play `0x4969D2`, so nothing is on the stack. Without
+       this test a Ctrl+F9 screenshot would publish an `in_game = 0` packet
+       from the middle of a level — and every world pass reads that field to
+       decide whether to draw at all, so the world would blink out for a
+       present or two. The movie recorder 0x4962C2 is excluded by the flip's
+       own gate (it passes drawUnits = 0), which is why only the screenshot
+       path needed this.
    Both are decided by the same observer, and neither depends on timing.
 
-   FOR THE SAME REASON the in-play publisher now FORCES its first packet of a
+   FOR THE SAME REASON the in-play publisher FORCES its first packet of a
    level (see after_draw). This channel publishes all through a load, at the
    shell's own rate, so the FRESH gate can well be set at the instant the
    level's first in-play draw runs — and a dropped first packet would hold the
@@ -2464,19 +2429,17 @@ static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
        that palette at a level transition. A torn copy is a wrong-palette frame
        on the load screen: cosmetic, pre-existing, and not introduced here.
 
-       A gate on `(load_flags & 3) == 1` was written on 2026-09-14 and REMOVED
-       the same day by the landing review, because it is a one-shot: bit0 is
-       `or 1` at 0x49832A and bit1 `or 2` at 0x497C5F, and NOTHING IN THE IMAGE
-       CLEARS EITHER (tagpu_engine.h's own OFF_LOADFLAGS entry says so — it was
-       read and then not believed). After the first level of a session the word
-       is 3 for ever, so the gate stopped firing exactly when a second load
-       needed it. The only bit both set and cleared is bit2 — set at 0x4975C7,
-       cleared at 0x496868 and 0x49855D — which tagpu_engine.h calls half of a
-       loader<->game handshake; whether "bit2 set" spans a whole load or is a
-       narrower one-shot signal is NOT measured, so no gate is written on it
-       here. It wants its own landing, with the window measured across a SECOND
-       level load in one process, which is the case the first attempt got
-       wrong. */
+       A gate on `(load_flags & 3) == 1` does not work, because it is a
+       one-shot: bit0 is `or 1` at 0x49832A and bit1 `or 2` at 0x497C5F, and
+       NOTHING IN THE IMAGE CLEARS EITHER (tagpu_engine.h's OFF_LOADFLAGS entry
+       says so). After the first level of a session the word is 3 for ever, so
+       the gate would stop firing exactly when a second load needs it. The only
+       bit both set and cleared is bit2 — set at 0x4975C7, cleared at 0x496868
+       and 0x49855D — which tagpu_engine.h calls half of a loader<->game
+       handshake; whether "bit2 set" spans a whole load or is a narrower
+       one-shot signal is NOT measured, so no gate is written on it here. It
+       wants its own landing, with the window measured across a SECOND level
+       load in one process. */
     return sizeof(TAGPU_PACKET);
 }
 
@@ -2495,7 +2458,7 @@ static int __cdecl before_cursor(void* entry_esp)
     /* in play the frame packet carries the cursor, and this channel must not
        race the publish that follows it in the same draw */
     if (s_retDepth != 0) return 0;
-    /* AND NO LEVEL MAY BE IN PLAY, which is not the same test (landing review).
+    /* AND NO LEVEL MAY BE IN PLAY, which is not the same test.
        The screenshot sweep 0x495A30 ends with its own `DrawGameScreen(1, 1)` at
        0x495E66 — drawUnits and blitScreen both 1, so the flip's gate at
        0x46A3CC/0x46A3D7 passes and 0x4C67C0 runs — but the address that call
@@ -2530,8 +2493,7 @@ static int __cdecl before_cursor(void* entry_esp)
            `mov edi,'MOUS'`, `push 0x52A4E8`, `call ebx` at 0x4C29D3). Same
            lock, so the two never overlap — an ORDERING, which is what
            CLAUDE.md asks the argument to be. Verified by disassembly
-           2026-09-14; the landing shipped without naming it, which is the
-           defect this comment fixes. It is load-bearing: a future hook that
+           2026-09-14. It is load-bearing: a future hook that
            reads these words from outside the flip does NOT inherit it. */
         if (InterlockedCompareExchangePointer((void* volatile*)&s_cursorRet,
                                               (void*)(size_t)((unsigned*)entry_esp)[0], NULL) != NULL) {

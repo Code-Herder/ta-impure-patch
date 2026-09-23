@@ -1,4 +1,4 @@
-/* tagpu_menu.c -- the render-options screen (Phase F, G18). API: tagpu_menu.h.
+/* tagpu_menu.c -- the render-options screen (Phase F). API: tagpu_menu.h.
 
    THE ENGINE FACTS THIS RESTS ON, all read off pristine/TotalA.exe.pristine and
    written up in exe-reverse-engineering.md "The screen lifecycle":
@@ -19,9 +19,9 @@
      call sites -- so anything pushed over the world is popped again unless that
      buffer names it. We write the buffer, load that same string, and CLOSE by
      restoring the buffer and letting the engine pop us. We never call GUI_Pop.
-   - `gi+0xCCA` -- roadmap G18 gate (2)'s named unknown -- is the screen's
-     DEFERRED-REPAINT flag. Twenty-odd state-changing GUI calls set it (there
-     are bare accessors at 0x49FA90 set / 0x49FAB0 clear) and there is exactly
+   - `gi+0xCCA` is the screen's DEFERRED-REPAINT flag. Twenty-odd
+     state-changing GUI calls set it (there are bare accessors at 0x49FA90
+     set / 0x49FAB0 clear) and there is exactly
      ONE reader, 0x4AA0AF inside the GUI pump: `if (flag == 1) { flag = 0;
      GUI_StageUpdateDraw(gi, top->flags | 0x40); }`. So it is not a
      precondition of anything -- it is the engine's own way of asking for the
@@ -38,8 +38,8 @@
      the re-push: either way every click would move two stages.
 
    WHERE THE WORK RUNS. `before_update()` is an observer on DrawGameScreen
-   0x468CF0 -- UpdateIngameGUI 0x491D70 was tried first and starved, because all
-   21 of its call sites are transition handlers rather than the frame loop. So
+   0x468CF0 -- not UpdateIngameGUI 0x491D70, which starves, because all 21 of
+   its call sites are transition handlers rather than the frame loop. So
    it is on the game thread and runs immediately before the engine reconsiders
    the GUI stack -- the one moment at which pushing a screen cannot race the
    pop loop. `OnCommand` is the engine calling us, also on the game thread, and
@@ -117,8 +117,8 @@ typedef void* (__stdcall *gaf_find_fn)(void* bank, const char* name);
 
 /* DrawGameScreen's prologue: `sub esp,0x214`.
 
-   THE TICK IS HERE AND NOT ON UpdateIngameGUI, which is where it started.
-   UpdateIngameGUI has 21 call sites and NONE of them is the frame loop -- they
+   THE TICK IS HERE AND NOT ON UpdateIngameGUI. UpdateIngameGUI has 21 call
+   sites and NONE of them is the frame loop -- they
    are transition and teardown handlers (0x460630 calls the level teardown
    0x491B60 first) -- so an observer there is called on GUI events only, and a
    poll hung off it never runs. Measured: with the tick there, creating the
@@ -131,20 +131,20 @@ static const unsigned char DRAW_STOLEN[6] = { 0x81, 0xEC, 0x14, 0x02, 0x00, 0x00
 /* 0x46A308: `mov edx,ds:0x511de8`, immediately after DrawGameScreen's own GUI
    draw (0x46A303 calls 0x4AB170) and before the flip. That is where the
    trigger goes: over the finished bar, through the engine's own blitter, so
-   it lands in the back buffer every flip presents and every G15/G17 twin
-   already watches -- rather than in a GL layer the engine's surface, `tacli
+   it lands in the back buffer every flip presents and every twin already
+   watches -- rather than in a GL layer the engine's surface, `tacli
    shot` and the twins would all miss. */
 static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
 #define PANEL_W   304
 /* SEVEN rows: ROW_Y0 34 + ROW_PITCH 28 * 6 = 202, and the row is ROW_H 20, so
-   the last one ends at 222 and 240 leaves the 18 px the six-row panel left
-   below 194. One define carries it: the GAF frame header (`FRMOFF + 0x02`
-   below), `s_ground`, the ramp, the border and the corner bolts are all sized
-   from it, and the panel is COMPOSED AT RUNTIME from the player's install
-   rather than shipped, so no art is regenerated. tools/guipanel.py still says
-   304x212 -- it is the lab's copy of this layout, not its source. */
+   the last one ends at 222 and 240 leaves 18 px below it. One define carries
+   it: the GAF frame header (`FRMOFF + 0x02` below), `s_ground`, the ramp, the
+   border and the corner bolts are all sized from it, and the panel is COMPOSED
+   AT RUNTIME from the player's install rather than shipped, so no art is
+   regenerated. tools/guipanel.py says 304x212 -- it is the lab's copy of this
+   layout, not its source. */
 #define PANEL_H   240
 #define MARGIN     16                   /* the panel and the trigger share it  */
 #define BAR_H      32                   /* the top bar: rows 0..31             */
@@ -160,9 +160,9 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 #define TRIG       28                   /* 2 px of bar above and below         */
 
 /* ---- the rows ------------------------------------------------------------ */
-/* Seven, and every one of them live -- mouse-wheel zoom was a candidate and was
-   cut because tagpu_zoom_init() installs byte patches once at attach, so the
-   row would have lit green and changed no pixel until the next launch. The
+/* Seven, and every one of them live. There is no mouse-wheel zoom row:
+   tagpu_zoom_init() installs byte patches once at attach, so the row would
+   light green and change no pixel until the next launch. The
    menu keeps the invariant that NO ROW NEEDS A RESTART (renderers.md 2.10), and
    the FPS counter honours it: tagpu_fps.c polls its trigger on the render
    thread and builds its GL objects on first use. */
@@ -194,13 +194,13 @@ enum { STYLE_CLASSIC, STYLE_PP, STYLE_CUSTOM };
    cfg's is 0 none / 1 SOFT / 2 HARD and the row offers them in the order a
    player reads them in. This table is the mapping.
 
-   THE `Soft` STAGE IS GONE, AND THAT IS AN HONESTY FIX RATHER THAN A CHOICE.
-   `shadows=1` is the map-anchored depth map, whose producer was `tagpu_shadow.c`
-   and went with the GL backend in landing 11 D2; nothing has drawn it since, so
-   the stage was Off wearing another name. It comes back the day a producer
-   does, and `shadows=1` in a hand-written cfg is still read -- it simply draws
-   nothing, and `read_state` below then shows this row as Off, which is what the
-   player is actually getting. [tagpu_classicpp.c's `shadow_defaults`.] */
+   THERE IS NO `Soft` STAGE, AND THAT IS HONESTY RATHER THAN A CHOICE.
+   `shadows=1` is the map-anchored depth map, which has no producer
+   (tagpu_vk_shadow.h), so the stage would be Off wearing another name. It
+   comes back the day a producer does, and `shadows=1` in a hand-written cfg is
+   still read -- it simply draws nothing, and `read_state` below then shows
+   this row as Off, which is what the player is actually getting.
+   [tagpu_classicpp.c's `shadow_defaults`.] */
 static const int SHADOW_VAL[2] = { TAGPU_SHADOWS_OFF, TAGPU_SHADOWS_HARD };
 #define SHADOWS_HARD_STAGE 1
 /* Shadow quality -> shadowres=, whose own range is 256..4096 (tagpu_classicpp.c).
@@ -311,7 +311,7 @@ static int exists(const char* p)
 #define DIV_BOT   202
 #define PAD         2
 
-/* THE FRAMES ARE NO LONGER ALL ONE SIZE, so the pixel helpers carry their
+/* THE FRAMES ARE NOT ALL ONE SIZE, so the pixel helpers carry their
    surface rather than reading PANEL_W. The front-end screen's recesses are
    small frames of their own (see `draw_recess_frame`), and a helper that
    silently strides by 304 would shear every one of them. */
@@ -417,9 +417,8 @@ static void draw_panel(unsigned char* f, int rows)
    background PCX paints one column of recess bars, centred on the stock
    gadget column at x = 278, and it is the game's art -- we do not ship it and
    we cannot repaint it. Moving the stock controls left to make room therefore
-   took them OUT of their recesses and left our own column sitting on bare
-   background: the screen read as two columns of plates floating over a panel
-   drawn for one.
+   takes them OUT of their recesses and leaves our own column sitting on bare
+   background: two columns of plates floating over a panel drawn for one.
 
    So the recesses come from us. These are small frames placed by an `id=12`
    gadget per row -- one frame per SIZE, reused by every row of that size,
@@ -436,9 +435,8 @@ static void draw_panel(unsigned char* f, int rows)
      table    u32 frameHeaderOffset | u32 flag                    (8, per frame)
      frame    u16 w | u16 h | ... | u8 key | u8 raw | u32 pixels   (0x18)
 
-   The frame table follows its entry immediately, which is what the single-entry
-   version relied on implicitly; with several entries that has to be laid out
-   rather than assumed. */
+   The frame table follows its entry immediately; with several entries that has
+   to be laid out rather than assumed. */
 typedef struct {
     const char* name;
     int         w, h;
@@ -503,8 +501,8 @@ static unsigned build_gaf(unsigned char* out, unsigned cap,
    The frame the archive carries is OURS and drawn; the ground the player sees
    is composed at runtime from THEIR OWN install, and the composed pixels never
    leave their machine. `frontend.gaf`'s `back*` nine-slice is the shell's
-   mottled panelling -- chosen by the owner over TA's dialog kit (`diatile` is
-   one colour, flat black, in a grey bevel) and over a hybrid of the two.
+   mottled panelling -- rather than TA's dialog kit (`diatile` is one colour,
+   flat black, in a grey bevel) or a hybrid of the two.
 
    USE `backtile` FRAME 4, NOT 0: frame 0 carries a lit bottom edge that puts
    seams through a tiled centre (tools/guipanel.py NINE).
@@ -754,8 +752,8 @@ static void build_trigger(void)
    on one line at every s. And the point each is hit-tested against arrives in
    exactly the space it was placed in: tagpu_hud_to_engine divides inside a HUD
    region and does nothing outside one, which is the same division and the same
-   nothing as here. At stock scale every line below is the arithmetic it
-   replaced, to the character. */
+   nothing as here. At stock scale every line below is the unscaled
+   arithmetic, to the character. */
 static void trigger_rect(int* x, int* y)
 {
     int q8 = 256, w;
@@ -769,10 +767,10 @@ static void trigger_rect(int* x, int* y)
 /* The drop-down. `menu_open` writes this into the panel gadget and
    `tagpu_menu_owns_point` tests against it, so there is one rule.
 
-   IT IS AN ENGINE-SURFACE RECT THAT NAMES A PLACE ON SCREEN, and since 22.6
-   those are not the same point. The panel hangs below the bar, i.e. in the
-   WORLD region, and the world region is no longer composited where the engine
-   drew it: it is translated by (128s - 128, 32s - 32). So the screen rect is
+   IT IS AN ENGINE-SURFACE RECT THAT NAMES A PLACE ON SCREEN, and under HUD
+   scale (22.6) those are not the same point. The panel hangs below the bar,
+   i.e. in the WORLD region, and the world region is not composited where the
+   engine drew it: it is translated by (128s - 128, 32s - 32). So the screen rect is
    chosen first -- right edge on the sprocket's line, top edge just under the
    magnified bar -- and then moved back along that vector to say where the
    ENGINE has to draw for it to land there.
@@ -780,10 +778,9 @@ static void trigger_rect(int* x, int* y)
    Without the subtraction the panel walks right by the whole inset as the
    scale rises: 124 px of it hang off a 1920 screen at s = 2.25, and at 4K's
    s = 4.5 it is placed at 3912 on a 3840-wide screen and NEVER APPEARS AT ALL.
-   Reported from play 2026-09-12: "the drop down menu doesnt appear".
 
-   At stock the inset is zero and both lines below are the arithmetic they
-   replaced, to the character. */
+   At stock the inset is zero and both lines below are the unscaled
+   arithmetic, to the character. */
 static void panel_rect(int* x, int* y)
 {
     int q8 = 256, bh = BAR_H, w = (int)g_ddraw.width, dx = 0, dy = 0;
@@ -815,11 +812,11 @@ static int gput(char* b, int cap, int at, const char* fmt, ...)
 /* `commonattribs` is a field the .GUI parser reads and the stock screens use
    non-zero values of (VISUALS.GUI's own labels carry 104, its BSHADOWS 109), so
    a screen we re-emit has to carry it through rather than assume 0. Every
-   RENDER.GUI call site passes 0, which is what it always wrote.
+   RENDER.GUI call site passes 0.
 
-   `assoc` IS THE SAME KIND OF FIELD AND WE GOT IT WRONG UNTIL 2026-09-11, with
-   a symptom nobody would trace back to a re-emitted file: on the front-end
-   screen the SCREEN SIZE arrows moved the GAMMA slider.
+   `assoc` IS THE SAME KIND OF FIELD, and getting it wrong has a symptom nobody
+   would trace back to a re-emitted file: on the front-end screen the SCREEN
+   SIZE arrows move the GAMMA slider.
 
    `assoc` is a group id (`gadget+0x01`), and for a slider it is the binding to
    everything that drives or displays it. The scroll arrows are not in the file
@@ -834,7 +831,7 @@ static int gput(char* b, int cap, int at, const char* fmt, ...)
        4a6fc8:  je    0x4a6fd6            ; -> mine. FIRST match wins.
 
    The stock VISUALS.GUI gives VIDSLDR, VIDVAL and VIDTEXT `assoc=243` and
-   leaves GAMMA at 0. Writing `assoc=0` for everything made both sliders match
+   leaves GAMMA at 0. Writing `assoc=0` for everything makes both sliders match
    every arrow, and the scan stops at the first one -- GAMMA, which we emit
    first. Nothing faults (a scan that matches nothing falls back to gadget 0 at
    `0x4A6FD4`), the wrong slider simply moves. So the field is carried through
@@ -902,9 +899,9 @@ static int build_gui(char* b, int cap, int rows)
    R_SS IS NOT ONE OF THEM. Supersampling is orthogonal to the lane -- the native
    pass reads `tagpu_ss.off` under Classic as well as Classic++, which is why
    `row_greyed` exempts it and why the Classic++ preset in `tagpu_menu_oncommand`
-   deliberately leaves it alone. It was in this test and nowhere else, so a
-   player who turned supersampling off saw the Renderer row read "Custom" on the
-   next visit with nothing in the lane actually customised. */
+   deliberately leaves it alone. In this test it would make a player who turned
+   supersampling off see the Renderer row read "Custom" on the next visit with
+   nothing in the lane actually customised. */
 static int derive_style(void)
 {
     return (s_stage[R_ASSETS] != 1 || s_stage[R_LIGHT] != 1 ||
@@ -922,10 +919,10 @@ static void read_state(void)
     s_stage[R_SS]      = exists(SS_OFF) ? 0 : 1;
     s_stage[R_FPS]     = exists(FPS_ON) ? 1 : 0;
 
-    /* 0 (Off) when the cfg names a value this row does not offer. Since the
-       landing review that is no longer reachable for `shadows=1`, which
-       tagpu_classicpp.c's parse migrates to HARD before it ever gets here; the
-       fallback stands for a hand-edited value out of range. */
+    /* 0 (Off) when the cfg names a value this row does not offer. That is not
+       reachable for `shadows=1`, which tagpu_classicpp.c's parse migrates to
+       HARD before it ever gets here; the fallback stands for a hand-edited
+       value out of range. */
     s_stage[R_SHADOWS] = 0;
     for (i = 0; i < 2; i++) if (L && SHADOW_VAL[i] == L->shadows) s_stage[R_SHADOWS] = i;
 
@@ -950,7 +947,7 @@ static int row_greyed(int row)
        them with the lane and a player on Classic could not turn either on. */
     if (row == R_STYLE || row == R_SS || row == R_FPS) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
-    /* ALWAYS GREY, and it used to be `Soft only`. `shadowres=` is the edge of
+    /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
        drawn from the unit bake at the frame's own resolution -- and there is no
        soft map on this lane. Left in place rather than removed: it is one line
@@ -973,9 +970,9 @@ static void push_stages(void* gi)
        THROUGH THE ENGINE'S SETTER, and it has to be. `+0x13C` is a **u16 whose
        bit 0 is the flag**, and both of the engine's own writers -- the .GUI
        parser (0x4ADD3E) and this setter (0x4A12D0) -- read the word, replace
-       bit 0 and store a WORD, deliberately preserving bits 1..15. An earlier
-       revision here stored a 32-bit 0/1 into the field directly, which cleared
-       those bits and the two bytes at +0x13E/+0x13F as well.
+       bit 0 and store a WORD, deliberately preserving bits 1..15. Storing a
+       32-bit 0/1 into the field directly would clear those bits and the two
+       bytes at +0x13E/+0x13F as well.
        GUIGADGET_SetGrayed 0x4A1250 is the exact parallel of SetStatus above:
        the same by-name scan of ControlsAry (stride 0x15B, name at +0x15D),
        stdcall, ret 0xC. */
@@ -1000,14 +997,12 @@ static int on_stack(char* main_p, void* gm)
    from the levers. A re-open with fresh == 0 is a RECOVERY, and there the model
    is ours and must survive: the engine tears the whole in-game GUI stack down
    and rebuilds it (a new ARMMAIN2.GUI whose `under` is NULL) on a world click,
-   and our panel hangs over the world. Re-reading the levers there put every
-   plate back the moment it was clicked -- the cfg on disk said assets=1 while
-   the button still read Off.
+   and our panel hangs over the world. Re-reading the levers there would put
+   every plate back the moment it was clicked -- the cfg on disk saying
+   assets=1 while the button still read Off.
 
-   Until `menu_accept` landed, a click on one of OUR OWN rows took this path as
-   well, because the pump popped and freed the panel every time. It no longer
-   does; the recovery is now what its name says, and an ordinary click never
-   reaches it. */
+   An ordinary click on one of our own rows never reaches this path: it is
+   answered by `menu_accept`. */
 static void menu_open(char* main_p, int fresh)
 {
     void* gi = main_p + OFF_GUIINFO;
@@ -1045,7 +1040,7 @@ static void menu_open(char* main_p, int fresh)
        would have made, reproduced exactly: the same `flags | 1` (0x400 is
        never passed on; 0x4AACB5 tests it and skips) under the same counted
        lock pair. Getting this wrong is not subtle and not silent: with only a
-       0x40 repaint the panel had no surface, and the engine composited the
+       0x40 repaint the panel has no surface, and the engine composites the
        frame's own pixels at our rect -- the game drawn a second time from
        x = 704 across. Stage 1 also reads the rect (0x4A8238: xpos -1 is the
        centre-me sentinel), which is why the right-aligned xpos is written
@@ -1061,19 +1056,17 @@ static void menu_open(char* main_p, int fresh)
     ((set_dirty_fn)VA_SETDIRTY)(gi);
 }
 
-/* UpdateIngameGUI IS NOT A POP, IT IS A COLLAPSE, and closing with it took the
-   player's build menu down with us.
+/* UpdateIngameGUI IS NOT A POP, IT IS A COLLAPSE, and closing with it takes
+   the player's build menu down with us.
 
    `0x491D70` loops `GUI_Pop` until the top screen's name matches the 16-byte
    buffer at `main+0x37EA0` (the compare is `0x4AB060`, `strncmp([top+4]+2,
    buf, 16)`). That buffer names the BASE in-game screen and nothing else: with
    a commander selected the stack is ARMMAIN2 -> ARMCOM1 -> ours and the buffer
    still reads "ARMMAIN2.GUI" [MEASURED 2026-09-12 by peeking it]. So restoring
-   it and calling UpdateIngameGUI popped TWO screens -- ours and the unit's
-   build page -- while leaving the unit's selected flag alone. Reported from
-   play: "clicking it several times when the commander is selected will make
-   the commander build menu disappear as if it was unselected but I can still
-   see the selection rect around it."
+   it and calling UpdateIngameGUI pops TWO screens -- ours and the unit's
+   build page -- while leaving the unit's selected flag alone: the build menu
+   disappears with the selection rect still drawn round the commander.
 
    `GUI_Pop` is the single pop the loop itself calls, and it is already this
    module's idiom on the front end (`vis_relist`). It answers the pump too --
@@ -1162,7 +1155,7 @@ static int menu_row_of(void* gi)
    `0x4D85A0` free and the `flags & 0x800` repaint. So the screen is popped and
    freed WITHOUT `GUI_Pop` ever being entered, which is why an observer armed on
    `0x4A9660` sat there and never fired while the screen vanished on every
-   click (measured 2026-09-11, and the reason this took a second session).
+   click (measured 2026-09-11).
 
    Every one of the engine's own handlers ends by calling `0x4AB0A0(gi)` --
    `0x45E2F0` and `0x45E27C` in the visual-options handler, `0x45E48C` on the
@@ -1171,11 +1164,11 @@ static int menu_row_of(void* gi)
    that return without it. It is a protocol, not a courtesy: clearing the field
    IS how a screen says "I consumed this".
 
-   This is also what the in-game RENDER.GUI screen was missing. Its GUIMEMSTRUCT
-   was popped and freed on every click too; `before_update`'s `on_stack` check
-   noticed and re-opened it with `fresh == 0`, so it LOOKED like it worked. That
-   recovery path stays -- the engine really does tear the in-game GUI stack down
-   on a world click -- but it is no longer on the path of an ordinary click. */
+   The in-game RENDER.GUI screen needs it too: without it its GUIMEMSTRUCT is
+   popped and freed on every click, and `before_update`'s `on_stack` check
+   re-opens it with `fresh == 0`, so it LOOKS like it works. That recovery path
+   exists for a real reason -- the engine tears the in-game GUI stack down on
+   a world click -- but it is not on the path of an ordinary click. */
 static void menu_accept(void* gi)
 {
     ((act_done_fn)VA_ACTDONE)(gi);
@@ -1203,15 +1196,14 @@ void __stdcall tagpu_menu_oncommand(void* gi)
            value leaves nothing customised, and saying "Custom" there is the
            screen telling the player something untrue -- the same test
            `read_state` applies on the way in, so the label a visit opens with
-           and the label a click produces are now one rule.
+           and the label a click produces are one rule.
 
-           THAT RULE SUBSUMES THE R_FPS EXEMPTION main carried here as an
-           explicit `row != R_FPS`. The counter is not part of the look -- it
-           draws a diagnostic OVER the frame and changes no pixel the game
-           rendered -- and neither is supersampling; deriving from the four
-           rows that ARE the lane leaves both out by construction, on the way
-           in and on the way out, instead of by a list that has to be kept in
-           step in two places. */
+           THAT RULE SUBSUMES AN R_FPS EXEMPTION. The counter is not part of
+           the look -- it draws a diagnostic OVER the frame and changes no
+           pixel the game rendered -- and neither is supersampling; deriving
+           from the four rows that ARE the lane leaves both out by
+           construction, on the way in and on the way out, instead of by a list
+           that has to be kept in step in two places. */
         if (s_stage[R_STYLE] != STYLE_CLASSIC) s_stage[R_STYLE] = derive_style();
     }
 
@@ -1231,8 +1223,8 @@ void __stdcall tagpu_menu_oncommand(void* gi)
 /* `sun=off` is the LEGACY spelling of `light=0`, and it BEATS us: tagpu_classicpp.c
    sets its `off` flag at :159 and then forces `s_lit = 0` at :100 AFTER the token
    loop, so a preserved `sun=off` makes the Dynamic lighting row read "On" and
-   change nothing -- the same silent no-op this landing fixed for the lever files.
-   So the menu owns that one token and drops it, expressing it through `light=`.
+   change nothing. So the menu owns that one token and drops it, expressing it
+   through `light=`.
    `sun=<az>,<el>` is the sun DIRECTION, is the player's, and must survive. */
 /* The keys this screen OWNS -- rewritten from the rows on every apply. Every
    other token in the cfg is a knob the player never reaches and is copied
@@ -1332,7 +1324,7 @@ static void touch(const char* path)
    THE SWITCH NEEDS BOTH OF ITS FILES WRITTEN, not just the `.off` one, because
    `tagpu_opt.c`'s precedence is **an `.on` wins and an `.off` only defeats a
    pass that was on BY DEFAULT**. Driving only the `.off` file fails in both
-   directions and the row silently does nothing (found in play 2026-09-09):
+   directions and the row silently does nothing:
 
      - with a hand-armed `tagpu_classicpp.on` present -- what `tacli arm` writes
        -- the `.off` is inert and Classic++ can never be turned off;
@@ -1391,12 +1383,11 @@ void tagpu_menu_present(void)
    does not work for players, or the reverse. This is the one function, and
    both callers hand it the same thing -- g_ddraw.cursor, which the injected
    path has just written and which the real path's preceding WM_MOUSEMOVE
-   wrote. (The same shape as the field-notes patch-2b bug, where a cursor
-   change quietly altered what a left click did.)
+   wrote.
 
    The press toggles and the RELEASE is consumed too. Letting the release
-   through would leave the engine holding a button it never saw pressed --
-   the G13e review's HIGH finding, and it costs the rest of the session. */
+   through would leave the engine holding a button it never saw pressed, and
+   that costs the rest of the session. */
 /* The sprocket always, and the panel while it is open. Both rects are computed
    the same way the drawing and the push do, so there is one source of truth. */
 int tagpu_menu_owns_point(int gx, int gy)
@@ -1440,8 +1431,8 @@ int tagpu_menu_click(int gx, int gy, int down)
            leaves s_pressed set, and then the next unrelated button-UP is
            swallowed by the branch above and never reaches the engine, which
            goes on holding the button for the rest of the session. That is the
-           G13e failure this guard exists to prevent, and the release path
-           alone did not prevent it. */
+           failure this guard exists to prevent, and the release path alone
+           does not prevent it. */
         s_pressed = 0;
         return 0;
     }
@@ -1617,7 +1608,7 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
    column (68..188) and its action column (478..598). The left column is the
    WINDOW -- what the picture is displayed in -- and the right one the
    RENDERER; the stock controls are folded into whichever column they belong
-   to rather than kept as a third, which is what the prototype settled.
+   to rather than kept as a third.
 
    THE RECESSES ARE OURS (see `draw_recess_frame`). STARTOPT's background PCX
    paints one column of them, centred on the stock gadget column at x = 278,
@@ -1627,7 +1618,7 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
    through everywhere between them. */
 #define VP_X      200           /* the ground panel, in screen coordinates     */
 /* VP_Y clears the background's own "VISUAL" title, whose glyphs end at y = 50
-   -- at 46 the panel ate the bottom of the L. */
+   -- at 46 the panel would eat the bottom of the L. */
 #define VP_Y       54
 #define VP_W      270
 #define VP_H      420
@@ -1656,32 +1647,32 @@ static const unsigned char VIS_BUILD_STOLEN[7] =
 /* the control positions, in screen coordinates: the WINDOW column's four
    buttons and two sliders, then the RENDERER column's nine on one pitch */
 /* The Gamma slider ends at 352 and the panel runs to VP_Y + VP_H = 474, so the
-   GPU row's caption at 364 and its control at 380 sit in space that was already
-   free -- no stock control moves and the panel does not grow.
+   GPU row's caption at 364 and its control at 380 sit in free space -- no
+   stock control moves and the panel does not grow.
 
-   A WIDER CONTROL WAS TRIED AND IS NOT AVAILABLE [MEASURED 2026-09-15]. A
-   device name is ~23 characters ("NVIDIA GeForce RTX 4070") and this plate
-   shows about thirteen, so the row was given the panel's full 255 px as a
-   footer under both columns. It changed nothing: a stage button's art is
-   `commongui.stagebuttnN` and that art is **120x20** (gui-gadgets.md 10.2), so
-   the engine draws the same plate and clips the caption to it whatever `w`
-   says -- the 255-px row rendered exactly the same "NVIDIA GeForce" with the
-   stage bars over its tail. The caption's width is not ours to set, so the row
-   goes back where it fits and `build_gpu_text` drops the part of the name that
+   A WIDER CONTROL IS NOT AVAILABLE [MEASURED 2026-09-15]. A device name is
+   ~23 characters ("NVIDIA GeForce RTX 4070") and this plate shows about
+   thirteen, and giving the row the panel's full 255 px as a footer under both
+   columns changes nothing: a stage button's art is `commongui.stagebuttnN`
+   and that art is **120x20** (gui-gadgets.md 10.2), so the engine draws the
+   same plate and clips the caption to it whatever `w` says -- a 255-px row
+   renders exactly the same "NVIDIA GeForce" with the stage bars over its
+   tail. The caption's width is not ours to set, so the row sits where it fits
+   and `build_gpu_text` drops the part of the name that
    distinguishes nothing instead. */
 static const short VC0_BTN[5] = { 96, 140, 184, 292, 380 };
 #define VC0_BTN_N (int)(sizeof VC0_BTN / sizeof VC0_BTN[0])
 static const short VC0_SLD[2] = { 244, 336 };
 #define VC1_ROWS  9
 
-/* ONE GROUND, NOT FIFTEEN RECESSES. A first attempt placed a small recess
-   frame behind each control and let the stock background show between them.
-   It cannot work: STARTOPT's background paints its own row of recess bars
-   across x 267..405 -- the middle of the space, because it was drawn for ONE
-   centred column -- so between two columns those bars show through as stripes
-   behind our captions. They are the game's art and we neither ship nor
-   repaint it, so the only way to be rid of them is to cover them. This panel
-   does, and carries our own recesses on its face. */
+/* ONE GROUND, NOT FIFTEEN RECESSES. A small recess frame behind each control,
+   with the stock background showing between them, cannot work: STARTOPT's
+   background paints its own row of recess bars across x 267..405 -- the middle
+   of the space, because it was drawn for ONE centred column -- so between two
+   columns those bars show through as stripes behind our captions. They are the
+   game's art and we neither ship nor repaint it, so the only way to be rid of
+   them is to cover them. This panel does, and carries our own recesses on its
+   face. */
 static void draw_visbg(unsigned char* f, int w, int h)
 {
     Surf s; int y, i;
@@ -1785,16 +1776,14 @@ static int  s_monChosen;
 /* 0 is UNLIMITED: fpsl_init maps a NEGATIVE maxfps onto the display refresh and
    only 0 falls through with tick_length left at 0. */
 static const int FPS_VAL[3] = { 60, 120, 0 };
-/* HUD SCALE (tagpu_hud.h, gui-renderer.md 22), 0 = Auto. The row used to be a
-   WINDOW multiplier -- `window = k x surface` -- which is why it was greyed in
-   fullscreen; one name cannot carry both meanings, and 20.2 dropped the
-   multiplier. These are percentages of the HUD's stock size, and Auto is the
-   ceiling H/480, where the panel exactly fills the screen height.
+/* HUD SCALE (tagpu_hud.h, gui-renderer.md 22), 0 = Auto. These are
+   percentages of the HUD's stock size, and Auto is the ceiling H/480, where
+   the panel exactly fills the screen height.
 
    SIX STAGES BECAUSE THE ROW CYCLES. A 25%-step ladder to 450% would be
    fifteen clicks to cross; these five stops span every surface a player can
    pick (the ceiling is 1.00 at 640x480, 1.60 at 1024x768, 2.25 at 1080p and
-   4.50 at 4K) and 150% is the owner's own example of the ask. Stages past a
+   4.50 at 4K). Stages past a
    screen's ceiling are SKIPPED as the row cycles rather than greyed: the
    engine's VA_SETGRAYED is per gadget, not per stage, so a greyed row would
    take the honourable stages down with the dishonourable ones. */
@@ -2169,11 +2158,11 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
                               SWP_NOZORDER | SWP_NOACTIVATE);
         break;
     case VD_MON:   move_to_monitor(s_vstage[VD_MON]);              break;
-    /* HUD scale touches no window, and since 20.5 it touches no engine memory
-       either -- the store puts it in force as it writes it, so the next
-       composited frame is already at the new scale. Writing it on the window
-       thread keeps every row of this screen on one thread, which is the
-       contract the comment above apply_display states. */
+    /* HUD scale touches no window, and it touches no engine memory either --
+       the store puts it in force as it writes it, so the next composited frame
+       is already at the new scale. Writing it on the window thread keeps every
+       row of this screen on one thread, which is the contract the comment
+       above apply_display states. */
     case VD_SCALE: tagpu_hud_store_pct(SCALE_VAL[s_vstage[VD_SCALE]]); break;
     case VD_FPS:
         /* fpsl_init reads g_config.maxfps and computes tick_length, so the cap
@@ -2230,12 +2219,12 @@ static void read_display_state(void)
     s_vstage[VD_FPS] = 2;
     for (i = 0; i < 3; i++) if (FPS_VAL[i] == g_config.maxfps) s_vstage[VD_FPS] = i;
 
-    /* THE DEVICE IN USE BEATS THE DEVICE REQUESTED, which is the whole of the
-       G19b exit's "reported back so the row can be verified rather than
-       trusted". `tagpu_vk_gpu_active` is what the render thread actually bound;
-       it is -1 while the lane is down, and only then does the row fall back to
-       the stored request (and that, in turn, to the discrete default). So a
-       choice that could not be honoured shows as the device that was. */
+    /* THE DEVICE IN USE BEATS THE DEVICE REQUESTED, so the row can be verified
+       rather than trusted. `tagpu_vk_gpu_active` is what the render thread
+       actually bound; it is -1 while the lane is down, and only then does the
+       row fall back to the stored request (and that, in turn, to the discrete
+       default). So a choice that could not be honoured shows as the device
+       that was. */
     k = tagpu_vk_gpu_active();
     if (k < 0) k = tagpu_vk_gpu_stored();
     s_vstage[VD_GPU] = (k >= 0 && k < tagpu_vk_gpu_count()) ? k : 0;
@@ -2245,9 +2234,9 @@ static void read_display_state(void)
    rule `row_greyed` applies to the render column. */
 /* GREYED FROM THE MODEL, NOT FROM `g_config`. The window work is POSTED, so
    `g_config.fullscreen` still holds the old value when `push_display` runs
-   immediately after a click -- which left the plate saying "Window" and UI
-   scale greyed at the same time, one click behind. `s_vstage[VD_MODE]` is what
-   the player just asked for, and the two agree again. */
+   immediately after a click -- greying from it would leave the plate saying
+   "Window" and UI scale greyed at the same time, one click behind.
+   `s_vstage[VD_MODE]` is what the player just asked for. */
 static int vrow_greyed(int row)
 {
     if (row == VD_MON)   return s_monCount < 2;
@@ -2256,8 +2245,7 @@ static int vrow_greyed(int row)
        cannot retarget anything in-process, and a live-looking row that changes
        no pixel is exactly what this rule exists to prevent. */
     if (row == VD_GPU)   return tagpu_vk_gpu_count() < 2 || !tagpu_vk_armed();
-    /* VD_SCALE IS LIVE IN BOTH MODES now. It used to be the window multiplier,
-       which fullscreen decides for itself; HUD scale is inside the picture and
+    /* VD_SCALE IS LIVE IN BOTH MODES: HUD scale is inside the picture and
        means the same thing windowed or not (gui-renderer.md 22.2, "Row"). */
     return 0;
 }
@@ -2275,10 +2263,9 @@ static void push_display(void* gi)
 /* ---- Restore Default and Undo Changes ------------------------------------
    Both are STARTOPT's own buttons, handled by `0x45E100`'s RESTORE
    (`0x45E331`) and UNDO (`0x45E2FD`) branches -- and both branches end the
-   same way: `GUI_Pop`, then `0x45E5E0(0)` to rebuild the screen. So they were
-   already reaching the engine through our chain and already resetting the
-   engine's own options; what they did not do was touch a single one of OUR
-   fifteen rows, which is what made them look broken.
+   same way: `GUI_Pop`, then `0x45E5E0(0)` to rebuild the screen. So they
+   reach the engine through our chain and reset the engine's own options, but
+   on their own they touch none of OUR fifteen rows.
 
    We handle them BEFORE forwarding, so the model is already what we want by
    the time the engine's rebuild re-seeds the plates from it. That rebuild runs
@@ -2359,10 +2346,10 @@ static void vis_restore(void)
    THE SCREEN SIZE LIST BELONGS TO A MONITOR. The engine builds it once per
    visit, in `0x45E5E0` (`0x45E6B0` allocates the header into GUIMEMSTRUCT+0x0C
    and hangs the table off VIDSLDR at `0x45E726`), out of whatever our
-   `EnumDisplayModes` serves at that moment -- and what we serve is now capped
-   to the monitor (`util_target_monitor`, dd.c). So a Monitor row that changed
+   `EnumDisplayModes` serves at that moment -- and what we serve is capped to
+   the monitor (`util_target_monitor`, dd.c). So a Monitor row that changed
    the monitor and left the list alone would be offering the OTHER screen's
-   sizes, which is the complaint this pair of changes answers.
+   sizes.
 
    There is no engine call for "re-enumerate in place", and there does not need
    to be: `GUI_Pop` + `0x45E5E0(0)` is the engine's own idiom for "this screen's
@@ -2479,7 +2466,8 @@ static void* __cdecl vis_build_after(unsigned int* regs)
    dispatch slot rather than over its handler.
 
    WHY THE HANDLER CANNOT SIMPLY BE OBSERVED, measured 2026-09-11. An observer
-   never skips, so the engine's `0x45E100` ran after ours -- and its fall-through
+   never skips, so the engine's `0x45E100` would run after ours -- and its
+   fall-through
    at `0x45E46A` is not the no-op it looks like:
 
        mov  eax,[esi+0x60]        ; the actuated index
@@ -2511,13 +2499,10 @@ static void* __cdecl vis_build_after(unsigned int* regs)
    screen's own destructor arriving on time, and it is the only thing that frees
    the display-mode list hanging off `GUIMEMSTRUCT+0x0C` (`0x45E11B`: the entry
    table, the list, the block) and clears `main+0x37EBE` bit 0. Declining it
-   leaked those three allocations on every visit to this tab, and left the bit
+   leaks those three allocations on every visit to this tab, and leaves the bit
    alone -- which is the bit `0x45E5E0` reads to decide between VISUALS.GUI and
-   VISUALRT.GUI.
-
-   An earlier revision declined it, on the theory that the -1 was a second call
-   for the same click that left the screen up. It is not -- see `menu_accept`
-   for what actually took the screen down. */
+   VISUALRT.GUI. The -1 is not a second call for the same click: see
+   `menu_accept` for what takes the screen down. */
 static void __stdcall tagpu_vis_oncommand(void* gi)
 {
     int d;

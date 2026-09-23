@@ -93,10 +93,9 @@ Arming an attach-time token on a running instance silently does nothing.
 - `twins= seeds= sprites= pixels= bars= rects= atlas=` — running totals, not per-frame numbers.
   `bars=` and `rects=` are bar and rectangle ops replayed as geometry.
 - **`overflows=` and `lost=` must stay 0.** `resets=` is 2 per launch (the arm, the shell→game
-  switch) and +1 per context switch after that; under `log` each reset is named (`stall-over`,
-  `arm`, `gl-context`, `queue-full`, `arena-full`, `box-outside-surface`, `lost-sprite`,
-  `atlas-full`, `untwinned-copy`). `stalls=` is 1 per context switch; `skipped=` the stale ops
-  stepped over after one.
+  switch) and +1 per mode switch after that; under `log` each reset is named (`stall-over`,
+  `arm`, `queue-full`, `arena-full`, `box-outside-surface`, `lost-sprite`, `atlas-full`,
+  `untwinned-copy`). `stalls=` is 1 per mode switch.
 - `k=` is device pixels per twin texel, `sharp=WxH` the sharp layer's size (the viewport).
   `k` is not always 1: the window is resizable and letterboxed, so a window off the game
   resolution is fractional, and the shell (640x480) under a 1280x984 client is `k=2.000`.

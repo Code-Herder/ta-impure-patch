@@ -80,9 +80,9 @@ void tagpu_apply_patches(void)
        re-dispatches to the move (0x43EDB6), attack (order 3) and reclaim (order 12)
        cases. That is NOT cursor-only by itself — the index also decides what a left
        click does, and the patch below is what keeps the promise. Enumerating the
-       readers of 0x37EFA (0x499046 / 0x499162 / 0x499352 / 0x499567) is what missed
-       it the first time: 0x499046's arm is guarded by the cursor index, so leaving
-       the interface-type compares untouched does not leave the button untouched. */
+       readers of 0x37EFA (0x499046 / 0x499162 / 0x499352 / 0x499567) misses it:
+       0x499046's arm is guarded by the cursor index, so leaving the
+       interface-type compares untouched does not leave the button untouched. */
     if (GetFileAttributesA("tagpu_curs.off") != INVALID_FILE_ATTRIBUTES) {
         plog("curs: contextual cursors left to the engine (tagpu_curs.off)");
     } else {
@@ -170,8 +170,7 @@ void tagpu_apply_patches(void)
                    its own IS the bug — it feeds 14 to a click handler that reads
                    anything under 0x11 as "issue the order". So if the companion
                    will not take, put the cursor patch back and run stock rather
-                   than ship the thing this landing exists to fix.
-                   [FROM REVIEW 2026-09-07] */
+                   than ship the thing this pair exists to fix. */
                 int back = patch_bytes(0x0043E50C, six_nops, je_expect,
                                        sizeof je_expect);
                 plog(back ? "curs: DISARMED — no left-click patch at 0x499041 "

@@ -14,9 +14,9 @@
    ARMING. The archive is written at `DLL_PROCESS_ATTACH` unconditionally, with
    a version stamp, so it can never be stale after a DLL upgrade. The screen
    itself is armed unless `tagpu_menu.off` exists; `tagpu_menu.on` may carry
-   tokens (`rows=N` to build fewer rows, which is the bisect the spike's gates
-   used). A `.ufo` the engine will not read is SILENT on screen and loud in
-   `tagpu.log`: a rendering menu failing to appear must never cost a game. */
+   tokens (`rows=N` to build fewer rows, for bisecting). A `.ufo` the engine
+   will not read is SILENT on screen and loud in `tagpu.log`: a rendering menu
+   failing to appear must never cost a game. */
 
 /* The engine calls this: __stdcall void(GUIInfo*), parked at GUIMEMSTRUCT+0x08.
    The actuated index arrives in gi->UIChange_f (main+0x579), not as an

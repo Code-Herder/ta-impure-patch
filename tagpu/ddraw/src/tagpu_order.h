@@ -1,20 +1,19 @@
 #ifndef TAGPU_ORDER_H
 #define TAGPU_ORDER_H
-/* Order markers (G13o) — the shift-held overlay: queued build sites, the
+/* Order markers — the shift-held overlay: queued build sites, the
    marching route dots, waypoint sprites, target circles and range circles.
 
-   WHY THIS IS A PORT AND NOT A CAPTURE. Everything in this block used to be
-   captured: the engine drew it into a scratch 8bpp buffer of ours and we
-   replayed the buffer as one quad (tagpu_markown.h, window A). A capture can
-   only ever reach the OFFSCREEN's own bound — `ctx+0x00`/`ctx+0x04`, read by
+   WHY THIS IS A PORT AND NOT A CAPTURE. A capture — the engine drawing this
+   block into a scratch 8bpp buffer of ours, replayed as one quad — can only
+   ever reach the OFFSCREEN's own bound — `ctx+0x00`/`ctx+0x04`, read by
    `0x4CC650` BEFORE the clip rect is consulted at all — and the offscreen is
    the size of the SCREEN, while `vpwide` lets the engine project these markers
    at coordinates far outside it. So at zoom < 1 every marker whose engine
    position leaves that surface is clipped away by the engine's own rasteriser
    and there is nothing left to capture: measured at 0.467x, a mex queued
    inside the central band shows its site rect and one queued out in the ring
-   shows nothing. That is the same wall G13n hit with the build cursor, and the
-   answer is the same one — own the draw (research/notes/ui-markers.md 6.1).
+   shows nothing. The build cursor hits the same wall, and the answer is the
+   same one — own the draw (research/notes/ui-markers.md 6.1).
 
    TWO THREADS, AND THE SPLIT IS THE SAFETY ARGUMENT.
 
@@ -45,13 +44,12 @@
    frames the engine would have blitted. It is TA's iconography drawn properly,
    not a restyle; the rest of the HUD is still TA's art.
 
-   THE SHOWRANGES LABELS CAME WITH G13p. Every circle both limbs draw carries
-   the engine's own label string at the engine's own point on it, rasterised
-   through TA's blitter into tagpu_text.c's atlas — so `ShowRanges` is now whole
-   rather than a set of unnamed rings. The same landing found that G13o drew
-   every RANGE circle 11% flat: `DrawRangeCircle 0x438EA0` hands one radius to
-   both lookups and only the TARGET circle `0x4399F0` squashes its y by the 0.89
-   at `0x4FD2C0`.
+   THE SHOWRANGES LABELS. Every circle both limbs draw carries the engine's own
+   label string at the engine's own point on it, rasterised through TA's
+   blitter into tagpu_text.c's atlas — so `ShowRanges` is whole rather than a
+   set of unnamed rings. RANGE circles are round, not 11% flat:
+   `DrawRangeCircle 0x438EA0` hands one radius to both lookups and only the
+   TARGET circle `0x4399F0` squashes its y by the 0.89 at `0x4FD2C0`.
 
    Armed by tagpu_order.on. Tokens: `log`, `passive` (gather and count, let the
    engine draw), `trace` (both sides run and both log their node lists, for the
