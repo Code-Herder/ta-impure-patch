@@ -1366,7 +1366,8 @@ corner. `ctx+0x08` is the pitch and `ctx+0x0C` the pixel base, the same two fiel
   counts exchanged;
 - **the error term starts at `2·minor − major`** (`0x4CC82A`..`0x4CC835`: `[ebp-4] = 2·minor`,
   `esi = 2·minor − major`, `[ebp-8] = 2·minor − 2·major`), and **the minor step is taken when it
-  is not negative** — `or esi,esi / jns` at `0x4CC898` (x-major) and `0x4CC8C6` (y-major) — so a
+  is not negative** — `or esi,esi` at `0x4CC898` / `jns` at `0x4CC89A` (x-major) and `0x4CC8C6` /
+  `0x4CC8C8` (y-major) — so a
   tie steps. Both loops run `major + 1` pixels (`inc ecx`), inclusive at both ends.
 
 Unrolled: pixel `i` of the walk sits at major offset `i` and minor offset
