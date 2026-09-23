@@ -538,8 +538,7 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
 
 /* THE LIST, WHICH SINCE 11-5e-2b IS THE ONLY ANSWER TO THE QUESTION (the
    Vulkan-only plan's landing 7e-2, the shape 7d gave features and effects).
-   With `tagpu_restorevk.on` beside TotalA.exe the other lane restores the twin
-   for itself. It used to be one of two: a 16 MB RGBA8 READ-BACK of the GL twin
+   Under Classic++ `assets=1` the other lane restores the twin for itself. It used to be one of two: a 16 MB RGBA8 READ-BACK of the GL twin
    was armed instead whenever the lever was absent, stepped once per published
    frame through `glReadPixels` off an FBO, and handed over as `atlasRgb`. Its
    source was opengl32.dll, which is never in the process (`oglu_load_dll` has

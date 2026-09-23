@@ -455,11 +455,11 @@ int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
 /* Ask for the PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d). It
    used to be an alternative to the read-back above and to stand it down;
 
-   It arms only while `tagpu_restorevk.on` is beside TotalA.exe: the second
-   backend restoring for itself is the end state, but until its bytes have been
-   compared against this lane's on the machine in front of you, the read-back
-   is the shipped path and this is the measurement. Poll it on the same beat as
-   the mirror -- the lever can appear mid-session, and arming then frees the
+   It arms only while Classic++'s `assets=` knob is on -- the master arm and
+   the key the render-options screen's `Undithered assets` row writes -- so
+   one question decides whether the art is restored and no second lever has
+   to be armed by hand. Poll it on the same beat as
+   the mirror -- the knob can move mid-session, and arming then frees the
    16 MB the read-back had already taken.
 
    Seeded with every entry the atlas holds right now, so it is correct from the

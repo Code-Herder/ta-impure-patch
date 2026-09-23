@@ -81,8 +81,8 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
    opengl32.dll is never in the process, so the read-back never produced a row;
    all three shrank to this one. */
 void tagpu_r3d_atlas_restore_want(void);
-/* THE LIST OF FRAMES TO RESTORE, which `_want` above arms under
-   `tagpu_restorevk.on` (the Vulkan-only plan's landing 7e-2). `mips` and
+/* THE LIST OF FRAMES TO RESTORE, which `_want` above arms under Classic++
+   `assets=1` (the Vulkan-only plan's landing 7e-2). `mips` and
    `aniso` describe the TWIN and come from the atlas, because nothing reads it
    back. NULL until the list is armed and has entries. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,

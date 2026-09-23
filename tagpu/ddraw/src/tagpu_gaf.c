@@ -555,7 +555,21 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
     if (!a || a->dim <= 0 || a->max <= 0 || !a->ents) return 0;
     if (a->rlistWant) return 1;
     if (a->rlistFailed) return 0;
-    if (GetFileAttributesA("tagpu_restorevk.on") == INVALID_FILE_ATTRIBUTES) return 0;
+    /* THE KNOB IS `assets=`, NOT A SECOND LEVER. This used to test a file of
+       its own, `tagpu_restorevk.on`, which was on no defaults table -- so the
+       shipped configuration had `tagpu_classicpp.on` (a play default) saying
+       "restored atlases" and nothing at all feeding the restorer, and every
+       player's frame was raw 8-bit palette art. `tagpu_classicpp_assets()` is
+       the master arm AND the `assets=` key of `tagpu_classicpp.cfg`, which is
+       what the render-options screen's `Undithered assets` row writes, so one
+       question now decides whether the art is restored and one row moves it.
+       Polled, not latched at attach: this function is called on its owner's
+       arm beat, so `assets=0 -> 1` arms within that beat. The latch above is a
+       LIFETIME (one `malloc`, one address the consumer holds for the frame),
+       not the draw switch; `assets=1 -> 0` is answered by the publishers'
+       `restored` flag and by the scheduler's `may_draw`, which pause the job
+       and put `uRestored` back to 0 without freeing anything. */
+    if (!tagpu_classicpp_assets()) return 0;
     /* THE WHOLE BOUND, IN ONE ALLOCATION, ONCE (11-5e-2c). This used to take
        256 frames and let `rlist_room` grow it, and the growth is exactly what
        made the feed unsafe: `realloc` moves the buffer, and the consumer holds

@@ -258,11 +258,11 @@ int tagpu_feat_armed(unsigned frame_counter)
     "a Vulkan pass will run in this process", which is the question. */
     if (!s_mirrorAsked && s_atlas.dim > 0 && tagpu_vk_owns_present())
         s_mirrorAsked = tagpu_gaf_atlas_mirror(&s_atlas);
-    /* AND THE RESTORE LIST (the Vulkan-only plan's landing 7d). With
-       `tagpu_restorevk.on` beside TotalA.exe the other lane restores for
-       itself, which since 11-5e-2b is the only way the restored twin reaches
-       it at all. Polled on every beat until it takes, exactly as the mirror
-       is, because the lever is allowed to appear mid-session. */
+    /* AND THE RESTORE LIST (the Vulkan-only plan's landing 7d). Under
+       Classic++ `assets=1` the other lane restores for itself, which since
+       11-5e-2b is the only way the restored twin reaches it at all. Polled
+       on every beat until it takes, exactly as the mirror is, because the
+       knob is allowed to move mid-session. */
     if (s_mirrorAsked && !s_rlistAsked && tagpu_classicpp_assets())
         s_rlistAsked = tagpu_gaf_atlas_restore_vk(&s_atlas);
     if (s_passive) tagpu_featown_set_skip(0);
