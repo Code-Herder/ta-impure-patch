@@ -15635,4 +15635,8 @@ history the comment review kept. `tascene ab`'s browser half draws no terrain in
 (the capture half is right: same view, same Commander, same wreck), so its percentage is not a
 parity figure yet. `big-battle` shows `unit=0` in the census from ~frame 3300 on `main` as well
 (`TAGPU_PD_MAXHAND`): the hand-over cap, not this landing.
+`uiwalk --game-only --screens-only --cycles 1` is clean except two stops of the cycle, and
+`main`'s DLL gives both identically: `VISUALS#1` misses the `FPS` gadget by 23 px, and
+`ARMMAIN2#1` has 574 unexplained px in (502,356)-(520,392), a unit-sized box at the viewport
+centre.
 
