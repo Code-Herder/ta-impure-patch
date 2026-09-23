@@ -1025,7 +1025,11 @@ search to run is `grep 37e3f`, unanchored.* It is a display memo, not sim state.
 **`PlayerStruct+0x146`** of the local player: `0x468E4B` takes p = `main[0x2A43]`, and
 `0x468E6C` loads `[main + p + 330p + 0x1CA9]`, i.e. `main + 0x1B63 + 331p + 0x146` — TADR's
 `PlayerAryIndex` *[INFERRED name]*; it read **0x00** for player 0 (MEASURED 2026-09-23, the memo
-read back after a draw). p is used unbounded. Bytes 1..4 ARE read
+read back after a draw). p is used unbounded. **Every writer of `+0x146` stores 0..10**
+[DISASSEMBLED 2026-09-23, two landing reviewers independently]: `0x463C05` the constant 10 (the
+player constructor), `0x4453F0` / `0x445565` / `0x44A8F6` a compacted index of the active
+players or 10 for an absent one, `0x46434D` a setup index (with `+0x147`/`+0x148`) — so 10 is
+"no player", and a byte outside 0..10 is one the block never computes. Bytes 1..4 ARE read
 from it — `flds 0x79(%esp)` at `0x468E7B`, before byte 0 is written — and are the displayed
 number's animation state: `0x468E83`/`0x468E90` convert the old and new values and `0x468E9F`/
 `0x468EB3` divide the difference by 8, so the number eases toward its target over frames. That

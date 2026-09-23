@@ -112,8 +112,9 @@ so a reset loses anything the engine will not redraw on its own. Three cases, al
   compute**, read from the same field (`PlayerStruct+0x146` of the local player, 0x00 for
   player 0): a poison equal to it compares equal and the block skips, and one debt is poked once,
   so a poison that toggled between two constants deadlocked on every debt whose constant was the
-  live byte. With 0x00 for player 0 that was every second reset, and the bars stayed blank for
-  the level whenever the entry into it took an even number of pokes — no numbers until the first
+  live byte. With 0x00 for player 0 that was every second poke of the process, and the bars
+  stayed blank for the level whenever the debt its entry raised was served by an even-numbered
+  one — no numbers until the first
   change of metal or energy (a building) made the block draw on its own.
 - **`0x468CF0` is NOT a callable repainter.** It is `DrawGameScreen` itself, running to `0x46A3FD`
   (`ret 8`) with the flip inline at `0x46A3DB`, four callers (`0x495C76`, `0x495E66`, `0x4962C2`,

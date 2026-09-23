@@ -211,7 +211,8 @@ static int  s_nsurf = 0;
                                          memo's byte 0                        */
 #define HUD_NPLAYERS   10
 #define CHROME_PLAYER  0x2A43u        /* main+ : the local player index      */
-#define CHROME_PLRTBL  0x1B8Au        /* main+ : records, stride 331         */
+#define CHROME_PLRTBL  0x1B8Au        /* main+ : record+0x27, a pointer (to the
+                                         block holding the side byte), stride 331 */
 #define CHROME_STRIDE  331
 #define CHROME_RECSIDE 0x95u          /* record+ : the side byte             */
 #define CHROME_XOFF    0x81           /* the top and bottom bars start here  */
@@ -3527,19 +3528,23 @@ static void panel_emit(const char* ctrls, int n0)
    and nothing here pokes twice for one debt (below), so a poison that merely
    toggled between two constants would deadlock on every debt whose constant
    happened to be the live byte -- which is 0x00 for player 0 on every other
-   reset. `x ^ 0xFF` cannot equal x, so the next block run differs by
-   construction; the only way it compares equal is the field being rewritten
-   to exactly its complement before that run, on this same thread. The debt
-   clears as soon as the memo stops reading back as our poison -- which is the
-   engine having written its own fresh state over it, i.e. having drawn.
+   reset. `x ^ 0xFF` cannot equal x, and every engine writer of the field
+   stores 0..10 (`0x463C05` the constant 10, `0x4453F0`/`0x445565`/`0x44A8F6`
+   a compacted index or 10, `0x46434D` a setup index -- DISASSEMBLED), so the
+   poison, 0xF5..0xFF, is a value the block cannot compute even if the field
+   moved between the poke and the draw. The debt clears as soon as the memo
+   stops reading back as our poison -- which is the engine having written its
+   own fresh state over it, i.e. having drawn.
 
    `p` IS BOUNDED BEFORE IT INDEXES. The engine indexes the ten records with
-   it unchecked; a value that is not a slot is data we refuse, not an offset.
+   it unchecked; a value that is not a slot is data we do not index with, and
+   the debt waits for a flip on which it is one.
 
-   ORDERING, NOT TIMING. This runs at the flip's RETURN, on the game thread --
-   which is INSIDE `DrawGameScreen`, after its resource block has already run
-   for this frame. Nothing is mid-read, and the next frame's `repz cmpsb` is the
-   first thing to look at what we wrote. */
+   ORDERING, NOT TIMING. This runs at the flip's RETURN, on the game thread.
+   None of the 44 call sites of the flip `0x4C63A0` lies inside the block
+   (`0x468E40..0x469610`), so a poke can never land between its seed and its
+   compare: the next `repz cmpsb` to run is the first thing to look at what we
+   wrote. */
 static void hud_invalidate(void)
 {
     char* ta;
@@ -3575,7 +3580,7 @@ static void hud_invalidate(void)
     }
     {
         unsigned p = *(const unsigned char*)(ta + CHROME_PLAYER);
-        if (p >= HUD_NPLAYERS) { s_hudPend = 0; s_hudRefused++; return; }
+        if (p >= HUD_NPLAYERS) return;            /* not a slot: keep the debt */
         s_hudPoison = (unsigned char)(*(const unsigned char*)
             (ta + HUD_PLRREC + p * CHROME_STRIDE + HUD_PLRBYTE) ^ 0xFFu);
     }
@@ -3773,8 +3778,11 @@ static void chrome_emit(struct SURF* fs)
     w = *(const int*)(gfx + GFX_SCREEN_W);
     if (h <= CHROME_YOFF || w <= CHROME_XOFF) { s_chromePend = 0; s_chromeRefused++; return; }
 
-    rec = *(const char* const*)(ta + CHROME_PLRTBL +
-                                (unsigned)*(const unsigned char*)(ta + CHROME_PLAYER) * CHROME_STRIDE);
+    {   /* the engine indexes the ten records with this unchecked; we do not */
+        unsigned p = *(const unsigned char*)(ta + CHROME_PLAYER);
+        if (p >= HUD_NPLAYERS) return;            /* not a slot: keep the debt */
+        rec = *(const char* const*)(ta + CHROME_PLRTBL + p * CHROME_STRIDE);
+    }
     if (!ptr_ok(rec)) return;
     side = *(const unsigned char*)(rec + CHROME_RECSIDE);
     if (side >= CHROME_SIDES) { s_chromePend = 0; s_chromeRefused++; return; }

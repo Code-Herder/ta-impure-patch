@@ -1323,8 +1323,9 @@ METAL/ENERGY block inside `DrawGameScreen` compares itself against, once per twi
 the engine redraw a block it would otherwise skip for the life of the level ([engine
 map](exe-reverse-engineering.html) "The resource block, and the 33-byte memo that skips it").
 The poison is the complement of the byte the block will write there (`PlayerStruct+0x146` of
-the local player, the player index bounded to the ten records first), so it cannot compare
-equal; a poison that alternated `0xFF`/`0x00` did on every second reset for player 0, and the
+the local player, the player index bounded to the ten records first). Every engine writer of
+that field stores 0..10 (engine map), so the poison, 0xF5..0xFF, is a value the block cannot
+compute and the compare cannot come out equal; a poison that alternated `0xFF`/`0x00` did on every second reset for player 0, and the
 bars then stayed blank until metal or energy first changed.
 
 What keeps the memo write inside this module's contract rather than breaking it: the memo has
