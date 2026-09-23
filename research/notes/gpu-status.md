@@ -387,9 +387,83 @@ quarter of the remaining log-distance per frame, and **snaps a cancelled round t
 scroll rate all test for by equality. While the file is in force the wheel is *pinned* to it,
 which is what makes deleting the file a handover rather than a jump.
 
-Centre-anchored: no eye motion at all, so `vpwide`, the minimap rect and `ScrollSpeed` follow
-with no further plumbing. Pointer-anchored zoom is the open follow-up and is a camera move —
-`tagpu_input.c`'s eye hold, not a transient bias (§3.1).
+A notch at the viewport centre moves no eye at all, so `vpwide`, the minimap rect and
+`ScrollSpeed` follow with no further plumbing. **Pointer-anchored zoom is not a follow-up any
+more — it ships (§2.3e)**, and it is a camera move: `tagpu_input.c`'s eye hold, not a transient
+bias (§3.1). Re-measured 2026-09-22 at the play defaults: six notches out at `(300,200)` take the
+eye from `(1716,806)` to `(1929,948)` against the closed form's `(1928.95, 947.97)`, and six back
+at the same point return it to `(1716,806)` and the level to exactly `1.000`.
+
+### 2.3a The live gate — where `s_live` is raised on the Vulkan-only lane  [2026-09-22]
+
+`tagpu_zoom_wheel()` refuses every notch while `s_live` is 0, and `s_live` is raised in exactly
+one place, `tagpu_zoom_publish_view()`. **Between the vulkan-only plan's landing 4b-2 and this
+one that function had no caller at all**, so the shipped play configuration answered every wheel
+notch with *"zoom: wheel ignored — no zoomed world on screen"*: a scroll wheel that did nothing,
+with `zoom.on` and `vpwide.on` both armed and both logging `ARMED`.
+
+The GL composite was the only caller and it went with the GL tail (landing 11-3). Its gate there
+was `keyOn >= 0` — "the terrain under you is ours **and** the key/fill inversion against TA's own
+surface is in force" — and 4b-2 recorded, correctly at the time, that the Vulkan lane could not
+run it because `keyOn` needs `f->surface_tex`. What made the note go stale is not 4c: it is
+**the clean cut**. TA's own frame is not composited on this lane at all any more — it is captured
+as the reference (`tagpu_surf_sync`) and drawn nowhere — so `keyOn`'s question has no answer to
+give, and the thing it tested is gone rather than deferred.
+
+**The publish is at the foot of `tagpu_native_frame`'s hand-over**, after the world passes and
+the ghost record, and its gate is that function's own preamble rather than a new test: reaching
+that line means a packet exists and `pk->in_game` is set, the packet's viewport passed the
+64..16384 bound, `tagpu_zoom_predicted_eye` resolved, and at least one world pass was armed —
+each of those is an early `return` above it. A menu, a game not yet loaded, a level teardown
+(`tagpu_overlay.c` returns through `tagpu_zoom_frame_end`) and a fully disarmed pass therefore
+publish nothing, and the claim expires on the next frame that does not reach the line. It cannot
+latch.
+
+**The rect is `pk->vp[]`, the TRUE 1x viewport, not the effective one.** That is what gives the
+wheel its two halves for free: `in_viewport` fails over the side panel and every dialog, while at
+zoom < 1 the outer ring is *inside* the same rect, so a notch out there still works. It is also
+the space the message carries — `tagpu_zoom_wheel`'s `lparam` is game-space, and so is `pk->vp[]`;
+the Vulkan composite's own rect (`TAGPU_WORLDTGT.vx/vw`) is the same region in frame pixels and
+must not be used here.
+
+**Measured 2026-09-22**, `renderer=vulkan`, 1024x768, `scenario load pose-inventory --defaults`,
+Two Continents, camera released, viewport `(128,32 896x704)`:
+
+| | before | after |
+|---|---|---|
+| `tacli wheel -6 --at 576 384` | 244 px change, refusal logged | `zoom: wheel -720 -> 0.564`, **630 184** px of the 630 784-px viewport changed |
+| the command record | `live=0` every frame | `z=0.513 live=1`, `addr=(-298,-303,1448,1069)` beside `vp=(128,32,896,704)` |
+| six notches out, six back, at the centre | — | exactly `1.000`, eye unchanged at `(1716,806)`, 372 px of frame noise |
+| six out at `(300,200)`, off centre | — | eye `(1716,806) -> (1929,948)`; the closed form `eye + (p−c)(1 − 1/z)` predicts `(1928.95, 947.97)` |
+| and six back at the same point | — | exactly `(1716,806)` and `1.000` |
+| a notch at `(60,400)`, over the side panel | — | *"wheel ignored — pointer is off the world viewport"* |
+| a notch at `(140,40)`, the ring's corner at z < 1 | — | accepted, `-120 -> 0.513` |
+| a notch at `MAINMENU.GUI` | — | *"wheel ignored — no zoomed world on screen"* |
+
+**What the dead gate was also holding down**, all of it restored by the one line, because each
+reads `live` off the command record `tagpu_zoom_frame_end` posts:
+
+* **`vpwide`** never widened the addressable rect — `tagpu_vpwide_apply` takes `z = (c && c->live)
+  ? c->zoom : 1.0f` — so every click and band box in the outer ring at zoom < 1 was dropped, the
+  feature §2.3b exists for. Verified after: at `z = 0.513`, clicks on `armsolar` and `armrad`
+  (1x screen x = 1110 and 1370, both off the window) select 1 unit each, the gap between them
+  selects 0, and a band box over the ring takes the 2 units inside it.
+* **The minimap view rectangle** stayed the 1x box. After: 8x7 px at 1.0, 14x13 px at 0.513.
+* **The camera range** stayed the engine's at every zoom (§2.3c). After, edge-scrolled to the
+  right edge: `eyeX` clamps at **9824** at 1.0 and **10063** at 2.144 — the closed form
+  `9824 + (W/2)(1 − 1/z)` gives 10063.00.
+* **`ScrollSpeed`** was never scaled, so scrolling at 0.25x crawled.
+
+The **fog** is the one item that never depended on it: `tagpu_fogwide.c` builds every tick from
+the screen size, and its oracle (`tagpu_fogwide_check.on`) reads `differ=0 engine-nonzero=300` of
+720 cells at `z = 0.564` on an unmapped Two Continents — byte-identical to the grid the engine
+built over its own window.
+
+**Not closed.** At zoom < 1 the eye range is deliberately the engine's own (§2.3c: `d = 0` at
+`z <= 1`), so a view wider than the map can sit past its edge; off-map there is the swapchain
+clear, which is magenta (`tagpu_vk.c`'s `s_clear`). Nothing about that is new — the world passes
+take their level from `tagpu_zoom_lever()`, which never read `s_live` — but the wheel is now a way
+to reach it in one gesture, at `0.25` with the eye against a map edge.
 
 ### 2.3a-bis The arm state is published in one store, never transiently zero  [2026-09-10]
 
@@ -9174,6 +9248,12 @@ lanes read one construction rather than two.
   wire pass, the key/fill inversion and the resolve — has no counterpart on this lane. Each pass
   draws itself into the swapchain from its own hand-over instead, which is why `tagpu_zoom_publish_view`
   does not run there and the input path stays 1:1.
+  > **Superseded 2026-09-22 (§2.3a).** The second half of that sentence was true when it was
+  > written and then outlived its reason: the clean cut stopped compositing TA's frame, so
+  > `keyOn`'s question has nothing left to ask, and the publish is at the foot of
+  > `tagpu_native_frame`'s hand-over now. Left un-run, it cost the shipped configuration its
+  > scroll wheel, the widened addressable rect, the zoomed minimap box and the widened camera
+  > range.
 * **The 300-frame composite stats line** does not run on this lane. The lane has its own instead.
 * **Classic++'s restorer never starts on the vulkan-only lane, and nothing says so.**
   `tagpu_terr.c`'s `restore_step` returns on `!s_atlasTex` and `tagpu_gaf.c`'s

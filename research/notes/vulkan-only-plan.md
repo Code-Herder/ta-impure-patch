@@ -2845,6 +2845,39 @@ not an oversight, and each is named here so the next session does not read it as
   asking. Nothing asks, so nothing is paid for.
 * `tagpu_gui_installed` — the module's public "did the observers go in" predicate.
 
+## The wheel the lane shipped without  [CLOSED 2026-09-22]
+
+Landing 4b-2 recorded, under *"What is not done here"*, that `tagpu_zoom_publish_view` does not
+run on this lane, *"but that one could not run anyway, because it is gated on `keyOn >= 0` and
+`keyOn` needs `f->surface_tex`, which is 0 until 4c gives this backend TA's surface. The input
+path therefore stays 1:1 here, which is correct while nothing zoomed reaches the screen."*
+
+Every clause of that was true on the day. What made it stale was not 4c but **the clean cut**:
+TA's own frame stopped being composited at all, so `keyOn` — "the terrain is ours and the key/fill
+inversion against the engine's surface is in force" — lost the thing it asks about instead of
+gaining it. The sentence went on reading as a correct deferral while the feature it deferred was
+dead, and it stayed dead through landings 4c, 5 through 11 and the cut itself.
+
+**What was actually broken**, at the shipped play defaults with `zoom.on` and `vpwide.on` both
+logging `ARMED`: every wheel notch refused with *"zoom: wheel ignored — no zoomed world on
+screen"*; `tagpu_zoom.txt` the only working lever; and, because they all read `live` off the
+command record, the addressable rect never widened (ring clicks and band boxes at zoom < 1 were
+dropped), the minimap view box stayed the 1x box, the camera range stayed the engine's at zoom > 1,
+and `ScrollSpeed` was never scaled.
+
+**The fix is one call at the foot of `tagpu_native_frame`'s hand-over**, publishing `pk->vp[]` —
+the TRUE 1x viewport, in the game space the wheel's `lparam` is already in. Its gate is the
+function's own preamble (a packet, `in_game`, the bounded viewport, a resolved predicted eye, at
+least one armed world pass), so the menus, a game not yet loaded, a teardown and a disarmed pass
+publish nothing and the claim expires on the next frame that does not reach the line. Measured in
+full in [gpu-status](gpu-status.html) §2.3a.
+
+**The lesson for the remaining landings.** A "not done here" bullet is load-bearing, and this one
+failed in a specific way worth naming: it gave a condition for closure (`until 4c gives this
+backend TA's surface`) that a later landing then removed rather than satisfied. When a landing
+records an omission, the condition it names has to be one a future landing will actually test —
+otherwise the omission becomes permanent and reads as deliberate.
+
 ## What this plan does not know yet
 
 * **Whether the audit reorders all of it.** Three gaps came out of one blind spot while planning;
