@@ -206,7 +206,7 @@ reads a finished image off the device, so it needs no window, no parked pointer 
 heuristics, and it answers whether two builds restore the **same bytes** for the whole atlas.
 
 ```bash
-tools/tacli arm <i> classicpp.on restorevk.on 'native.on=all wrecks' terr.on feat.on fx.on \
+tools/tacli arm <i> classicpp.on 'native.on=all wrecks' terr.on feat.on fx.on gui.on \
                     restoredump.on 'restoreglsl.on=log'
 tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
 # poll tagpu.log for the dump lines, then cmp each tagpu_restore_<tag>_vk.rgba across builds

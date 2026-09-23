@@ -455,11 +455,11 @@ int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
 /* Ask for the PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d). It
    used to be an alternative to the read-back above and to stand it down;
 
-   It arms only while `tagpu_restorevk.on` is beside TotalA.exe: the second
-   backend restoring for itself is the end state, but until its bytes have been
-   compared against this lane's on the machine in front of you, the read-back
-   is the shipped path and this is the measurement. Poll it on the same beat as
-   the mirror -- the lever can appear mid-session, and arming then frees the
+   It arms only while Classic++'s `assets=` knob is on -- the master arm and
+   the key the render-options screen's `Undithered assets` row writes -- so
+   one question decides whether the art is restored and no second lever has
+   to be armed by hand. Poll it on the same beat as
+   the mirror -- the knob can move mid-session, and arming then frees the
    16 MB the read-back had already taken.
 
    Seeded with every entry the atlas holds right now, so it is correct from the
@@ -469,6 +469,16 @@ int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
    lever is absent or the memory was refused -- and the atlas then goes on
    reading back as before. Render thread only. */
 int  tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a);
+
+/* THE PALETTE MOVED UNDER THE RESTORED TEXELS, so every frame of the list has
+   to be painted again against the new one -- the path `rlistRepaint`'s comment
+   above describes and which had no caller until the UI atlas needed it.
+   A REPAINTING generation: the destination KEEPS what it holds and the
+   restorer overwrites it frame by frame, so nothing is blanked and the art
+   does not flash through a cleared image on the way. `rlistBlanks` therefore
+   does not move, which is exactly the fact a consumer's `repaint` test reads.
+   A no-op on an atlas with no list. Render thread only. */
+void tagpu_gaf_atlas_restore_repalette(TAGPU_GAFATLAS* a);
 
 /* `tagpu_gl_rgba_readback` was declared here -- an RGBA8 GL texture read back
    through a caller-owned FBO -- and went in 11-5e-2 with its only two callers,

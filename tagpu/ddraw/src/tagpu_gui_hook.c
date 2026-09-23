@@ -3229,6 +3229,7 @@ static unsigned s_repaints = 0, s_repaintSkips = 0, s_repaintOps = 0;
 static int      s_repaintCounted = 0;  /* this pending episode's refusal is counted */
 static int      s_drawShadow = 0;     /* our own last-seen value of g_gui_draw    */
 static unsigned s_resetShadow = 0;    /* ... and of g_guiq.resets                */
+static unsigned s_colarmShadow = 0;   /* ... and of g_guiq.colarm                */
 
 /* WHEN A REPAINT IS WORTH ISSUING. The plan named two moments -- the layer
    arming, and a level boundary -- and the second one is a SUBSET of the right
@@ -3254,10 +3255,18 @@ static void repaint_arm(void)
 {
     int draw = g_gui_draw;
     unsigned resets = g_guiq.resets;
+    /* AND THE THIRD EDGE: Classic++ colour became valid on the render half.
+       Same shape as the two above and the same one-word read, because it is
+       the same question -- something happened that makes what is already on
+       the screen wrong, and only the engine can redraw it. See `colarm` in
+       tagpu_gui_int.h for why this is not a reseed. */
+    unsigned colarm = g_guiq.colarm;
     if (draw && !s_drawShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
     if (resets != s_resetShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
+    if (colarm != s_colarmShadow) { s_repaintPend = 1; s_repaintCounted = 0; }
     s_drawShadow = draw;
     s_resetShadow = resets;
+    s_colarmShadow = colarm;
 }
 
 /* ONE PER EPISODE, NOT ONE PER FLIP. A guard failure leaves `s_repaintPend`

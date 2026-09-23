@@ -260,7 +260,7 @@ typedef struct TAGPU_TERRHAND {
        IT WAS ALSO UNREACHABLE UNTIL 11-5c, and that is worth recording where a
        consumer will read it: the only writer of this list lived inside the GL
        bring-up's `glsl_begin`, below a guard on a GL texture name, so on a lane
-       with no GL context `tagpu_restorevk.on` armed a consumer and sent it
+       with no GL context the restore arm armed a consumer and sent it
        nothing -- and `restored` below, computed from the GL restorer's own
        state machine, could only publish 0. Both were fixed in that landing.
 

@@ -1387,7 +1387,10 @@ that a count which grows is the plan catching up with the work.) The row was
          `opengl_utils.c` itself, `render_gdi.c`'s `g_oglu_version` read, or one of the three
          files behind escalation reason 1.
 
-         **AND THE UI ATLAS IS NOW A CONSUMER OF NOTHING.** It has no read-back and no list,
+         **AND THE UI ATLAS IS NOW A CONSUMER OF NOTHING.** [CLOSED — the UI atlas arms
+         `tagpu_gaf_atlas_restore_vk` and `tagpu_vk_gui.c` paints a `"gui"` job from the
+         published list; see gpu-status, *The UI is restored too*. What follows is the state
+         this gate left.] It has no read-back and no list,
          because `tagpu_gui_surf.c` never arms `tagpu_gaf_atlas_restore_vk`; restored art cannot
          reach a UI sprite by any route in the tree. That costs nothing today — `twin_sprite` and
          `twin_copy` have returned 0 unconditionally since 11-4b — but it is a gap this gate
@@ -2713,10 +2716,12 @@ The UI returns as a pass of ours, built from the op stream the hook still captur
 engine's UI stated *semantically*, and the reason that file survived. (The other reason is that
 `before_flip` is the only host of `tagpu_triggers_frame`; deleting it takes every `tacli` verb.)
 
-**READ "CAPTURES" NARROWLY: the PUBLISHER is unreachable.** The landing review found that
-`g_gui_draw` — `publish()`'s gate — was written in exactly one place, `tagpu_gui_surf.c`'s
-trigger poll, so it is 0 for the life of every process: the op QUEUE is never filled and the
-16 MB arena never written, in any configuration. What survives and works is the 17 leaves
+**THAT PARAGRAPH'S SUCCESSOR SAID THE PUBLISHER WAS UNREACHABLE, AND IT IS NOT — see the
+correction below the cut's summary.** The claim was true of the moment the file was deleted and
+was carried forward past the rebuild that restored it. `g_gui_draw` has exactly one writer,
+`tagpu_gui_surf.c`'s trigger poll (`g_gui_draw = on`), that file is compiled and called every
+present, and an ordinary boot measures `published=4653791 bytes=902287148 draw=1`. What follows
+described the state between the cut and the rebuild: What survives and works is the 17 leaves
 recording into `s_ops` and the census diffing each surface against its own copy. That is enough
 for the future pass — the ops, their boxes, their fonts and their destinations are all there —
 but a restored consumer must bring a DRAIN in the same landing, because `qTail`/`aTail` lost
@@ -2834,9 +2839,14 @@ the slant and silhouette draws went with it, and this was true on `main`. **CLOS
 to HARD because the soft map it defaulted to has had no producer since landing 11 D2 (see
 [gpu-status](gpu-status.html) §2.83 for the measurement and the gap's history). The SOFT map is
 still unported and is the shadow half's remaining work.
-And the UI op PUBLISHER is unreachable: `g_gui_draw` lost its only writer
-with `tagpu_gui_surf.c`, so the queue and its arena are never used and `tagpu_gui.on` buys the
-17 leaves and the census, nothing more.
+
+**AND THE SECOND ONE IS NO LONGER TRUE EITHER.** It read: "the UI op PUBLISHER is unreachable:
+`g_gui_draw` lost its only writer with `tagpu_gui_surf.c`, so the queue and its arena are never
+used and `tagpu_gui.on` buys the 17 leaves and the census, nothing more." The UI-layer rebuild
+put `tagpu_gui_surf.c` back with the writer in it — `poll()` sets `g_gui_draw = on` — so the
+queue is filled, the arena is written, and `tagpu_gui.on` buys the layer. The publisher's own
+heartbeat says so on an ordinary boot: `published=4653791 bytes=902287148 draw=1`.
+`tagpu_gui_hook.c` carries the same correction at the word's declaration.
 
 ### The dormant contracts the cut left standing
 

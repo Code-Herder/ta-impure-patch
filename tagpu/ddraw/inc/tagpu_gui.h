@@ -308,7 +308,28 @@ typedef struct TAGPU_GUIHAND {
        that the consuming lane paints for itself; this one has no such list,
        because `tagpu_gui_surf.c` never arms `tagpu_gaf_atlas_restore_vk`. So
        the UI has no route to Classic++ colour, and giving it one is new work
-       rather than a deletion -- see the Vulkan-only plan, 11-5e-2b. */
+       rather than a deletion -- see the Vulkan-only plan, 11-5e-2b.
+
+       THAT WORK IS DONE AND THE FIVE FIELDS BELOW ARE IT. The UI atlas now
+       arms `tagpu_gaf_atlas_restore_vk` like the feature and effects atlases
+       do, so what crosses is the WORK and not the picture: a list of
+       rectangles the consuming lane paints into a restored image of its own.
+       The shape is `tagpu_feat.h`'s, field for field, and the same three rules
+       hold --
+         - `restoreFrames` aliases the producer's `rlist`, whose address is
+           fixed for the life of the atlas (one `malloc`, no `realloc`), so a
+           consumer may hold it for the frame;
+         - `restoreGen` is a CURSOR RESET and nothing else: while it is
+           unchanged the consumer takes the tail past what it has taken, and
+           when it moves the job is rebuilt from index 0;
+         - `restoreBlanks` counts the generations that BLANKED the destination,
+           so "keep what you have" cannot be believed over an atlas the
+           producer cleared in the same frame. */
+    const struct TAGPU_RGLSL_FRAME_S* restoreFrames;  /* NULL = nothing to restore */
+    int                  restoreN;
+    unsigned             restoreGen;
+    int                  restoreRepaint;
+    unsigned             restoreBlanks;
 
     /* EVERY COLOUR TWIN WAS INVALIDATED SINCE THE LAST FRAME THIS MOVED. The
        presented palette moved out from under the restored art and settled
@@ -421,6 +442,27 @@ typedef struct TAGPU_GUIHAND {
 
 /* Ask the render half to keep the mirror above. Render thread only. */
 void tagpu_gui_mirror_want(int on);
+
+/* THE ONE FACT THAT TRAVELS THE OTHER WAY about Classic++ colour: the consuming
+   lane says whether it holds a restored UI atlas with at least one painted
+   frame in it. Until it does, no op may carry `TAGPU_GUICOL_ON` -- such an op
+   is a frame the consumer has to refuse whole, and the store would thrash for
+   the two seconds a first restore takes rather than the art simply arriving
+   late. Called from the consumer's prepare, which runs later in the same
+   iteration of the render loop than the producer's present, so the producer
+   reads it one frame old; that delays turning colour ON and can do nothing
+   else. Render thread only, like everything else on this pass.
+
+   `settled` COUNTS THE TIMES THE RESTORE WENT QUIET having painted something
+   new, and it is the other half of the same fact. A twin takes its colour at
+   the moment the art is DRAWN, so a sprite drawn while its atlas entry was
+   still unrestored keeps indexed pixels for as long as nothing redraws it --
+   which in game is for ever, the sidebar being drawn once per selection
+   change. Each settle is the producer's cue to ask the engine for one repaint
+   (`g_guiq.colarm`), after which the art is drawn against an atlas that HAS
+   been restored. It converges because the set of atlas entries a screen uses
+   is finite: a repaint that introduces no new entry produces no new settle. */
+void tagpu_gui_col_ready(int have, unsigned settled);
 
 /* ASK THE PRODUCER FOR A FRESH START, through the very flag the GL consumer
    raises for itself. The mirror's consumer keeps a twin store of its own, and

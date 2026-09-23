@@ -240,7 +240,7 @@ typedef struct {
 } SHARED;
 /* WHAT AN IMAGE HERE IS FOR. Everything this pass makes is uploaded and then
    sampled; the one exception is the restored atlas, which the Vulkan restorer
-   RENDERS INTO under `tagpu_restorevk.on` -- and which therefore carries
+   RENDERS INTO under Classic++ `assets=1` -- and which therefore carries
    COLOR_ATTACHMENT unconditionally rather than only on the frames the lever is
    on. RGBA8 optimal-tiling colour-attachment support is required of every
    Vulkan device, so the flag cannot be refused, and paying for it always is
@@ -263,7 +263,7 @@ static SHARED s_height;                    /* the height grid, R8             */
    `have`, written by the restore job alone. */
 static SHARED s_rgbAtlas;
 /* ---- ...AND THE RESTORE THAT FILLS IT WITHOUT A MIRROR (landing 7) -------
-   The first consumer of tagpu_vk_restore.c. Under `tagpu_restorevk.on` the
+   The first consumer of tagpu_vk_restore.c. Under Classic++ `assets=1` the
    producer stops reading its own restored twin back and publishes the frame
    list instead (tagpu_terr.h, `restoreFrames`), and this pass paints
    `s_rgbAtlas` itself. There WAS a GL twin restoring its own texture in the same

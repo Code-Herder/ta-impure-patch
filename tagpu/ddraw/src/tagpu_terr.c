@@ -159,7 +159,7 @@ static unsigned s_atlasMirrorSerial;
    a full atlas", which is about 2045 tiles and was never a full one; the number
    mattered less while nothing consumed the list. [FROM THE 11-5c LANDING
    REVIEW; the units and the device caveat from its re-review.]) */
-static int                s_rvkWant;   /* tagpu_restorevk.on, latched         */
+static int                s_rvkWant;   /* Classic++ `assets=`, latched        */
 static TAGPU_RGLSL_FRAME* s_rFrames;   /* s_rFrameN entries, restore order    */
 static int                s_rFrameN;
 static unsigned           s_rSerial;   /* bumped on every change, drop included */
@@ -254,8 +254,13 @@ int tagpu_terr_armed(unsigned frame_counter)
     /* AND THE OTHER WAY OF FEEDING THAT LANE: hand it the frame list and let
        it restore, rather than reading our own restore back for it. Latched on
        the same beat and read only when there is a lane to feed. */
-    if (!s_rvkWant && s_mirrorWant &&
-        GetFileAttributesA("tagpu_restorevk.on") != INVALID_FILE_ATTRIBUTES) {
+    /* THE KNOB IS `assets=`, NOT A SECOND LEVER -- the same change
+       `tagpu_gaf_atlas_restore_vk` carries, for the one atlas that is not a
+       GAF atlas. `tagpu_restorevk.on` stood here, on no defaults table, so the
+       shipped game never fed the restorer at all. This beat is 30 frames, so
+       `assets=0 -> 1` from the render-options row arms within half a second
+       and `restore_step` publishes on the frame after. */
+    if (!s_rvkWant && s_mirrorWant && tagpu_classicpp_assets()) {
         s_rvkWant = 1;
         flog("terr: restorevk -- the restored atlas is the other lane's to paint, "
              "so no read-back and the frame list is published instead");
@@ -990,7 +995,7 @@ static int restore_publish(const char* ta, int repaint)
    had been since 4b-2: the list was published from inside the GL bring-up's
    `glsl_begin`, and the driver in front of it returned at `!s_atlasTex` -- a
    GL texture name that is only ever created on a lane with a GL context. So
-   `tagpu_restorevk.on` armed a consumer that was never sent anything, and
+   the restore arm armed a consumer that was never sent anything, and
    `restored` below -- keyed on the GL restore's own state machine -- could
    only ever publish 0. One guard on a GL name, and a Vulkan-lane feature that
    read as "off". [The vulkan-only plan, landing 11-5c.] */
@@ -998,9 +1003,9 @@ static unsigned s_palSeen;             /* the palette serial seen LAST frame   *
 static void restore_step(const char* ta)
 {
     unsigned palWas;
-    /* the request is only worth building when something asked for it: without
-       `tagpu_restorevk.on` there is no painter on this lane and the terrain
-       draws indexed, which is the default and stays it */
+    /* the request is only worth building when something asked for it: until
+       the arm above takes there is no painter on this lane and the terrain
+       draws indexed */
     if (!s_rvkWant) return;
     if (!tagpu_classicpp_assets() || !s_atlasBuilt || !s_setPix) return;
     /* LAST FRAME'S palette serial, read before anything below can publish and

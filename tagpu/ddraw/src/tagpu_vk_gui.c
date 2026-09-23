@@ -29,6 +29,7 @@
 
 #include "tagpu_vk_gui.h"
 #include "tagpu_gui.h"
+#include "tagpu_vk_restore.h"   /* the UI atlas is restored HERE, from a published list */
 #include "spirv/tagpu_gui_surf.spv.h"
 
 /* the std140 blocks, at the sizes the generated SPIR-V header prints */
@@ -312,6 +313,37 @@ static unsigned         s_tintOps;
    be honoured and the ops that carry it stand down -- which changes nothing,
    because `twin_sprite` and `twin_copy` both return 0 unconditionally, so no
    op has carried it since 11-4b. */
+/* ---- ...AND IT IS HERE AGAIN, PAINTED RATHER THAN READ BACK. The UI atlas
+   now publishes a frame LIST, exactly as the feature and effects atlases do
+   (tagpu_gui.h `restoreFrames`), and this pass paints `s_arImg` from `s_atImg`
+   with `tagpu_vk_restore.c`. Nothing is read back and no GL entry point is
+   named: what crosses the hand-over is the work.
+
+   `s_arHave` IS THE ONLY THING THAT SAYS THIS IS A PICTURE, and it is what
+   `tagpu_gui_col_ready` reports back to the producer -- so an op cannot claim
+   its texels are restored before there is something restored to sample. One
+   painted frame is enough to raise it: the rest of the atlas is alpha 0, which
+   `SPR_FS` reads as "no colour here" and falls back to the palette, per texel.
+   16 MB at the shipped 2048 square, and only in a session that restores. */
+static VkImage          s_arImg;
+static VkDeviceMemory   s_arMem;
+static VkImageView      s_arView;
+static int              s_arDim;
+static int              s_arHave;
+/* HOW OFTEN THE RESTORE HAS GONE QUIET HAVING PAINTED SOMETHING NEW, reported
+   to the producer so it can ask the engine for one repaint each time -- see
+   `tagpu_gui_col_ready` in tagpu_gui.h for why a twin needs it. */
+static unsigned         s_arSettled;
+/* the job that paints it, and the cursor into the producer's list. The shape
+   is `tagpu_vk_feat.c`'s, field for field, and so are the rules -- the
+   generation is the only thing that restarts the cursor, and `s_rjTried`
+   latches a device that refused so the ask is not repeated every frame. */
+static TAGPU_VKRJOB*    s_rjob;
+static unsigned         s_rjGen;
+static int              s_rjTaken, s_rjPainted;
+static unsigned         s_rjBlanks;
+static VkImageView      s_rjSrcView;
+static int              s_rjTried;
 /* the last `colRearm` seen: when it moves, every colour twin was invalidated */
 static unsigned         s_colRearm;
 static int              s_colRearmSeen;
@@ -1554,6 +1586,154 @@ static int behind(const TAGPU_VKPASS* d, const char* why)
     return behind_ex(d, why, 0);
 }
 
+/* ---- CLASSIC++: THE RESTORED UI ATLAS ------------------------------------
+   Give the restorer the rectangles the producer published and keep the cursor.
+   `tagpu_vk_feat.c`'s `restore_want`, with the UI's own two differences: the
+   atlas has no mip chain to register (`s_atlas.mip = 0` over there, the layer
+   samples NEAREST), and the verdict is reported BACK to the producer, because
+   this side is the only one that knows whether there is anything to sample.
+
+   A FAILURE HERE IS NEVER FATAL TO THE UI. Every path that gives up clears
+   `s_arHave`, the producer then stops setting `TAGPU_GUICOL_ON`, and the layer
+   goes back to the indexed art it drew before this landing -- which is a
+   picture, not a stand-down. That is the whole reason colour is asked for
+   through a back-channel rather than derived on each side. */
+static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
+{
+    int repaint, n;
+
+    /* THE IMAGE FOLLOWS THE INDEXED ATLAS'S SIZE, and a size change retires it
+       rather than destroying it: an in-flight composite may still be sampling
+       the old one. The job goes with it -- it names both views. */
+    if (s_arImg && s_arDim != s_atDim) {
+        if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
+        s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
+        if (!ret_push(d, s_arImg, s_arMem, s_arView, VK_NULL_HANDLE)) {
+            tagpu_gui_col_ready(0, s_arSettled);
+            return;                       /* the retire is full: ask next frame */
+        }
+        s_arImg = VK_NULL_HANDLE; s_arMem = VK_NULL_HANDLE; s_arView = VK_NULL_HANDLE;
+        s_arDim = 0; s_arHave = 0;
+    }
+
+    if (!h->restoreFrames || h->restoreGen == 0) {
+        /* No request: Classic++'s `assets=` is off, or the producer's list was
+           dropped. Either way this job describes nothing now, and what it
+           painted stops being a picture -- nothing else fills this image, so
+           leaving `s_arHave` set would have the layer sample a frozen twin for
+           the rest of the session. */
+        if (s_rjob) {
+            tagpu_vk_restore_job_free(d, s_rjob);
+            s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+            s_rjSrcView = VK_NULL_HANDLE;
+            s_arHave = 0;
+        }
+        tagpu_gui_col_ready(0, s_arSettled);
+        return;
+    }
+    /* THE SOURCE MOVED UNDER A LIVE JOB: the indexed atlas was re-created at a
+       new dimension, so the job reads a destroyed view. */
+    if (s_rjob && s_rjSrcView && s_atView && s_rjSrcView != s_atView) {
+        plog(d, "gui: the indexed UI atlas moved under a live restore - dropping "
+                "it and starting over on the new one");
+        tagpu_vk_restore_job_free(d, s_rjob);
+        s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+        s_rjSrcView = VK_NULL_HANDLE;
+        s_arHave = 0;
+    }
+    if (s_rjob && s_rjGen == h->restoreGen) {
+        int painted = tagpu_vk_restore_job_painted(s_rjob);
+        if (painted > 0) s_arHave = 1;
+        if (painted != s_rjPainted) {
+            s_rjPainted = painted;
+            if (tagpu_vk_restore_job_idle(s_rjob)) {
+                s_arSettled++;
+                plog(d, "gui: the UI atlas is restored HERE - %d frame(s) of "
+                        "generation %u", painted, h->restoreGen);
+            }
+        }
+        if (tagpu_vk_restore_job_failed(s_rjob)) {
+            /* The rects move whenever the atlas is re-laid, so an abandoned
+               restore stops being a picture now rather than when it starts
+               looking wrong. */
+            plog(d, "gui: the UI restore failed on this lane - the layer goes back "
+                    "to indexed art");
+            tagpu_vk_restore_job_free(d, s_rjob);
+            s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0;
+            s_rjTried = 1;
+            s_arHave = 0;
+            tagpu_gui_col_ready(0, s_arSettled);
+            return;
+        }
+        /* THE STEADY STATE: whatever the producer has appended since. The
+           cursor advances by what was OFFERED and not by what was taken, or a
+           frame the restorer can never queue is re-offered for ever; a
+           whole-call failure (nothing taken at all) is the queue's own realloc
+           and leaves the cursor where it is. */
+        n = h->restoreN - s_rjTaken;
+        if (n > 0) {
+            int took = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames + s_rjTaken, n);
+            if (took > 0) {
+                s_rjTaken += n;
+                if (took < n)
+                    plog(d, "gui: %d of %d new UI restore frames were refused by the "
+                            "restorer - they stay indexed until the next generation",
+                         n - took, took);
+            }
+        }
+        tagpu_gui_col_ready(s_arHave, s_arSettled);
+        return;
+    }
+    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; s_rjTaken = 0; }
+    if (s_rjTried) { s_arHave = 0; tagpu_gui_col_ready(0, s_arSettled); return; }
+    /* THE SOURCE HAS TO EXIST AND HAVE CONTENTS: a restore over an atlas no
+       copy has reached yet paints the palette's entry 0 over the art. Not an
+       error -- the next frame asks again. */
+    if (!s_atView || !s_atHave || s_atDim < 1) { tagpu_gui_col_ready(s_arHave, s_arSettled); return; }
+    if (!s_arImg) {
+        if (!mk_image(d, s_atDim, s_atDim, VK_FORMAT_R8G8B8A8_UNORM,
+                      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                      &s_arImg, &s_arMem, &s_arView)) {
+            /* `mk_image` can fail after the image and the memory were made, so
+               hand both back rather than nulling the handles. */
+            kill_image(d, &s_arImg, &s_arMem, &s_arView);
+            s_rjTried = 1;
+            plog(d, "gui: no %d MB device image for the restored UI atlas - the "
+                    "layer stays indexed", (s_atDim * s_atDim * 4) >> 20);
+            tagpu_gui_col_ready(0, s_arSettled);
+            return;
+        }
+        s_arDim = s_atDim; s_arHave = 0;
+    }
+    /* THE CONSUMER IS WHAT ASKS THE DEVICE: `up` loads the model off disk, so a
+       session that never restores never pays for it. It latches its verdict. */
+    if (!tagpu_vk_restore_up(d)) {
+        s_rjTried = 1; tagpu_gui_col_ready(0, s_arSettled); return;
+    }
+    /* A REPAINT ONLY OVER SOMETHING THIS PASS ACTUALLY PAINTED, and only when
+       nothing was BLANKED since it last looked: `restoreRepaint` describes the
+       latest generation alone, so a blanking generation followed in the same
+       producer frame by a repainting one would otherwise hand this pass "keep
+       what you have" over an image the producer had cleared. */
+    repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
+    s_rjob = tagpu_vk_restore_job_new(d, "gui", 4, 0, repaint,
+                                      s_atImg, s_atView, s_atDim, s_atDim,
+                                      h->pal,
+                                      s_arImg, s_arView, s_atDim, s_atDim);
+    if (!s_rjob) { s_rjTried = 1; tagpu_gui_col_ready(0, s_arSettled); return; }
+    s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
+    s_rjGen = h->restoreGen;
+    s_rjBlanks = h->restoreBlanks;
+    s_rjSrcView = s_atView;
+    s_rjPainted = 0;
+    if (!repaint) s_arHave = 0;           /* it is being blanked and repainted */
+    plog(d, "gui: restoring the UI atlas HERE - %d of %d frames over %dx%d, "
+            "generation %u%s", s_rjTaken, h->restoreN, s_atDim, s_atDim,
+         h->restoreGen, repaint ? ", repaint" : "");
+    tagpu_gui_col_ready(s_arHave, s_arSettled);
+}
+
 /* THE REPLAY. Every reason not to draw is taken BEFORE a byte is written, and
    each one stands the whole frame down rather than drawing part of it: a twin
    store is cumulative, so a partially applied frame is not a smaller picture,
@@ -1673,7 +1853,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        here is a frame whose colour twins the GL lane can sample and whose
        restored atlas never reached us -- the replay would then write alpha 0
        where the GL lane wrote restored colour, silently and cumulatively. */
-    if (h.colourTwins) {
+    if (h.colourTwins && !s_arHave) {
         if (!s_saidColour) { s_saidColour = 1;
             plog(d, "gui: the other lane is compositing Classic++ colour and "
                     "this one has no restored atlas to composite from - nothing "
@@ -1825,19 +2005,16 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         case TAGPU_GUIOP_SPRITE:
             if (o->fw < 1 || o->fh < 1) { if (!behind(d, "a malformed op")) goto refuse; return 0; }
             if (!h.atlas) { if (!behind(d, "a sprite with no atlas")) goto refuse; return 0; }
-            /* THE GL LANE SAMPLED THE RESTORED ATLAS AND WE HAVE NONE. Drawing
+            /* THE PRODUCER SAMPLED THE RESTORED ATLAS AND WE HAVE NONE. Drawing
                anyway writes alpha 0 where it wrote restored colour, into a twin
                that keeps it -- so it is a `behind` and not a `compose = 0`.
-               IT IS NOW UNREACHABLE FOR THE LIFE OF THE PROCESS, and this
-               paragraph used to say the opposite: "reachable for exactly one
-               frame", because the Vulkan pass asked for the mirror from inside
-               its own prepare and the read-back landed on the next present.
-               There is no mirror and no read-back since 11-5e-2b part 2, and
-               `o->col` cannot carry ON at all -- `twin_sprite` and `twin_copy`
-               have both returned 0 unconditionally since 11-4b. The test
-               stays as the one place that says so.
-               [11-5e-2b part 2's review, finding 2.] */
-            if (o->col & TAGPU_GUICOL_ON) {
+               IT SHOULD BE UNREACHABLE AND IS KEPT AS THE BRACE. The producer
+               may only set `TAGPU_GUICOL_ON` while this pass has said
+               `tagpu_gui_col_ready(1)`, which is `s_arHave`, so the two cannot
+               disagree except across the one frame of lag that back-channel
+               has -- and that frame moves the flag the safe way, from off to
+               on. What this catches is the day something else sets the bit. */
+            if ((o->col & TAGPU_GUICOL_ON) && !s_arHave) {
                 if (!behind(d, "a restored sprite and no restored atlas on this lane")) goto refuse;
                 return 0;
             }
@@ -2182,6 +2359,14 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s_lutHave = 1; s_lutSerial = h.shadeSerial;
     }
+    /* ---- CLASSIC++: THE UI ATLAS IS RESTORED HERE. After the copy above, so
+       a restore issued this frame reads the texels this frame delivered and
+       not the palette's entry 0 where the atlas had not arrived yet -- the
+       same ordering `tagpu_vk_feat.c` states for the same reason. It records
+       nothing into `cb`; `tagpu_vk_restore_step` does that, last of every
+       pass's prepare. */
+    restore_want(d, &h);
+
     /* no barrier and no copy for the engine's frame: `tagpu_vk_surf_prepare`
        recorded both into this same command buffer, for this same slot, before
        this function was called (tagpu_vk.c). */
@@ -2482,23 +2667,24 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                    dummy image as though it were art. */
                 if (o->kind == TAGPU_GUIOP_SPRITE) {
                     int on = (o->col & TAGPU_GUICOL_ON) != 0;
-                    /* THERE IS NO RESTORED ATLAS ON THIS LANE SINCE 11-5e-2b,
-                       so an op that asks to sample one cannot be drawn at all.
-                       This was `on && !s_arHave`, and it is the same test: the
-                       only writer of `s_arHave` was the mirror upload, which
-                       never ran. `prepare` refuses such a frame above; this is
-                       belt to that brace. */
-                    if (on) {
+                    /* An op that asks to sample a restored atlas we do not
+                       hold cannot be drawn at all -- `prepare` refuses such a
+                       frame above and this is belt to that brace. */
+                    if (on && !s_arHave) {
                         sdWhy = "a restored sprite and no restored atlas on this lane";
                         goto standdown; }
                     fq[0] = (int)o->ck; fq[1] = on;     /* uCK, uRestored      */
                     quadv(qv, (float)o->sl, (float)o->st,
                           (float)(o->sl + o->fw), (float)(o->st + o->fh),
                           o->u0, o->v0, o->u1, o->v1);
-                    /* `on` is 0 here by the stand-down above, so binding 41
-                       takes no second image -- the same value it took whenever
-                       the op was indexed. */
-                    if (!set_claim(d, s, s_atView, VK_NULL_HANDLE,
+                    /* BINDING 41 IS `uAtlasRGB`, and it takes the restored
+                       image only on an op that says it samples one: the
+                       descriptor's declared layout is SHADER_READ_ONLY, and
+                       until the restorer has painted this image once it is in
+                       no layout at all. `on` is exactly "there is a painted
+                       picture here", so naming it is safe precisely when it
+                       is read. */
+                    if (!set_claim(d, s, s_atView, on ? s_arView : VK_NULL_HANDLE,
                                    QVS_SZ, TWF_SZ, &si_)) {
                         sdWhy = "this frame claimed more distinct images than there are sets";
                         goto standdown; }
@@ -3145,6 +3331,17 @@ void tagpu_vk_gui_down(const TAGPU_VKPASS* d)
     s_lutHave = 0; s_lutSerial = 0;
     s_tintW = s_tintH = 0; s_tintLay = VK_IMAGE_LAYOUT_UNDEFINED;
     s_atDim = 0; s_atHave = 0; s_atSerial = 0;
+    /* THE RESTORE GOES WITH THE DEVICE. The job is freed BEFORE the image it
+       paints into, and `s_rjTried` is reset with them: it records that THIS
+       device refused, so a rebuilt one is entitled to be asked again. The
+       producer is told there is nothing to sample, or it would go on setting
+       `TAGPU_GUICOL_ON` into a lane with no atlas until its next present. */
+    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
+    s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjBlanks = 0;
+    s_rjSrcView = VK_NULL_HANDLE; s_rjTried = 0;
+    kill_image(d, &s_arImg, &s_arMem, &s_arView);
+    s_arDim = 0; s_arHave = 0; s_arSettled = 0;
+    tagpu_gui_col_ready(0, s_arSettled);
     s_colRearm = 0; s_colRearmSeen = 0;
     s_palHave = 0; s_palSerial = 0;
     s_dumReady = 0;
