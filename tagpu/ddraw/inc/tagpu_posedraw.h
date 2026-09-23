@@ -333,8 +333,9 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
    tagpu_shadow.h's `otherCasters` CANNOT CURRENTLY FIRE: see the depth twin's
    chain in the tombstone above.
 
-   RENDER THREAD ONLY, and published later in the same iteration of
-   render_ogl.c's loop than the tagpu_vk_frame that consumes it. */
+   RENDER THREAD ONLY, and published EARLIER in the same iteration of
+   render_vk.c's loop -- by the native pass inside `tagpu_overlay_draw` --
+   than the `tagpu_vk_frame` that consumes it. */
 
 /* Units one frame hands over. A bound on an allocation that scales with what
    is on screen, and the pass re-checks it: at the Vulkan end each unit costs a

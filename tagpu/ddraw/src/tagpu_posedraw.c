@@ -1123,8 +1123,8 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
        Every draw of this frame is behind us at this point, because the whole
        native pass runs earlier in this iteration of the render loop than the
        `tagpu_vk_frame` that calls this. On the Vulkan lane that is
-       `render_vk.c`: `tagpu_overlay_draw` at `:232`, then `tagpu_vk_frame` at
-       `:268`, in one iteration on one thread. (This said `render_ogl.c` until
+       `render_vk.c`: `tagpu_overlay_draw`, then `tagpu_vk_frame`, in one
+       iteration on one thread. (This said `render_ogl.c` until
        11-5e-2c; the property is the loop's shape and both loops have it, but
        the file named was the one that no longer runs.) */
     s_pub.otherDraws = s_other;

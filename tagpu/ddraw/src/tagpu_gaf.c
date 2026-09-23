@@ -1015,8 +1015,8 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
            `rlist_add`'s own header says what it does and does not bound.
          - THE ORDERING keeps `rlist_restart`'s in-place rewrite away from a
            reader. The unit atlas's list is taken in `tagpu_posedraw_handover`,
-           which `render_vk.c` reaches at `:268` through `tagpu_vk_frame`, after
-           `tagpu_overlay_draw` at `:232` has finished every paint of the frame.
+           which `render_vk.c`'s loop reaches through `tagpu_vk_frame`, after
+           `tagpu_overlay_draw` has finished every paint of the frame.
            It used to be taken in `pd_view_publish`, at the FIRST posedraw
            window, with `tagpu_native.c`'s `ghost_record` still to run and still
            able to paint through `tagpu_r3d_atlas_uv` -> `atlas_get`.
@@ -1025,8 +1025,9 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
        the prose this replaces said "the buffer the render thread is about to
        read" and invited a lock. There is no second thread here: every paint of
        an armed atlas is render-thread -- the unit atlas through
-       `tagpu_native.c:940` and `tagpu_posebake.c:467`, both inside
-       `tagpu_native_frame`, itself called only from `tagpu_overlay.c:264` --
+       `tagpu_native.c`'s `emit_node` and `tagpu_posebake.c`'s `mat_emit`,
+       both inside `tagpu_native_frame`, itself called only from
+       `tagpu_overlay.c`'s `tagpu_overlay_draw` --
        and so is every consumer. A fence would have fixed nothing while reading
        as though it had. [The vulkan-only plan, 11-5e-2c.] */
     rlist_add(a, e);
