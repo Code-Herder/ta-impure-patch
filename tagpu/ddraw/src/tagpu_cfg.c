@@ -42,6 +42,7 @@
 #include "ini.h"
 #include "tagpu_cfg.h"
 #include "tagpu_settings.h"
+#include "fps_limiter.h"
 
 /* TA's "DISPLAY MODES" buffer: 0x4B0 / 12 = 100 entries, and the count itself
    lives in a different allocation, so all 100 are usable. Our counter counts
@@ -140,8 +141,12 @@ void tagpu_cfg_defaults(void)
             g_config.windowed   = TRUE;             /* the pair stays atomic: borderless */
             g_config.fullscreen = v ? TRUE : FALSE; /* or a window                        */
         }
-        if (!s_maxfpsHeld && tagpu_settings_get(TS_MAXFPS, &v))
-            g_config.maxfps = v;
+        if (!s_maxfpsHeld && tagpu_settings_get(TS_MAXFPS, &v)) {
+            /* Refresh is resolved by fpsl_init, on the render thread, into a
+               positive cap; 60 until then */
+            g_config.maxfps = v < 0 ? 60 : v;
+            fpsl_request_cap(v);
+        }
         if (!s_windowHeld && tagpu_settings_window(&x, &y, &w, &h)) {
             g_config.window_rect.left   = x;
             g_config.window_rect.top    = y;

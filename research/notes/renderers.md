@@ -1427,19 +1427,32 @@ a named choice plates the device actually bound. The store writes `gpu=auto` or 
 no longer present binds the Auto pick and says so in the log (`the requested GPU "…" is not among
 the devices present - Auto instead`, then `Auto: <name> (type rank N of 4, M MB device-local)`).
 
-**Refresh.** `maxfps=refresh` is `g_config.maxfps = -1`, cnc-ddraw's own "the display's refresh".
-`fps_limiter.c` asked `g_ddraw.mode` for it, which is the primary adapter's mode; it asks
-`util_target_refresh` (`utils.c`) instead — the frequency of the target monitor's own adapter
-(`MONITORINFOEX.szDevice`), so the cap follows the Monitor row, which re-runs `fpsl_init` when it
-moves. Windows answers 0 or 1 for "the hardware default", which would be a cap of 0 or 1 fps, so
-anything outside 24..1000 Hz is 60. Logged each time: `frame cap: Refresh = N fps (<adapter>
-reports M Hz)`. A `maxfps` typed into `ddraw.ini` still holds the row (tacli's instances write one).
+**Refresh.** `maxfps=refresh` is stored as `-1` but is **never put in force as a negative cap**:
+cnc-ddraw's own `maxfps=-1` means "pace by `DwmFlush`, else by the D3DKMT vblank wait", which on
+Windows 8+ is the compositor's rate whatever monitor the game is on, and under wine an adapter
+open that fails every frame. Instead the store's cap is a **request** (`fpsl_request_cap`,
+`fps_limiter.h`), and `fpsl_init` resolves Refresh into a plain positive cap — the target
+monitor's rate from `util_target_refresh` (`utils.c`): the menu's chosen adapter by name, else
+the window's monitor, else the primary; bounded to 24..1000 Hz, else 60, because Windows answers
+0 or 1 for "the hardware default". So Refresh paces on the same tick path as 60 and 120.
+**The render thread is `fpsl_init`'s one owner**: the menu's Frame cap click, the Monitor row and
+`WM_DISPLAYCHANGE` only request it, and the render thread runs it at its next `fpsl_frame_start`
+— `fpsl_init` closes the D3DKMT adapter the render thread waits on and rewrites the tick fields it
+paces by, which a click on the window thread used to do under it. Logged each time: `frame cap:
+Refresh = N fps (<adapter> reports M Hz)`. A `maxfps` typed into `ddraw.ini` still holds the row
+(tacli's instances write one), with cnc-ddraw's own meaning, a negative value included. **Not
+covered:** a window dragged to another monitor without the Monitor row keeps the old rate until
+the next display change or relaunch; and whether a secondary monitor reports its own rate under
+wine is unknown — the reference setup's secondaries report their current mode as 0x0, which the
+bound turns into 60.
 
 **Landing 3, verified 2026-09-23** on the same Xvfb, the reference setup's RTX 4070 and llvmpipe
 listed: Auto binds the RTX (`type rank 4 of 4, 12282 MB device-local`); a stored `Imaginary GPU
 9000` logs the fallback and binds the RTX with the row on Auto; Auto → the RTX by name → Undo back
 to `gpu=auto`, each a rebind; the Frame cap row cycles to Refresh (`maxfps=refresh`, `Refresh = 60
-fps (\\.\DISPLAY1 reports 60 Hz)`), and Restore puts it back from 60 with `gpu=auto` untouched.
+fps (\\.\DISPLAY1 reports 60 Hz)`), and Restore puts it back from 60 with `gpu=auto` untouched;
+after the review's fix, measured from the census frame counter over 20 s: Refresh ~60 fps,
+Uncapped ~165, Refresh again ~60 — the request applied by the render thread each time.
 **Not verified:** a refresh other than 60 (wine reports 60 for the Xvfb output), and a rebind to
 llvmpipe from the Visuals screen — with llvmpipe bound, opening Options → Visuals kills the game,
 and it did so before the settings store existed (`dfe4b69`, the old `tagpu_vk.cfg` naming it), so it

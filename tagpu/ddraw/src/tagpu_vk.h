@@ -215,7 +215,8 @@ int tagpu_vk_gpu_stored(void);
 
 /* The index of the device ACTUALLY bound by the live Vulkan lane, or -1 when
    nothing is bound. This is what lets the row be verified rather than trusted:
-   the menu plates this when it is >= 0 and the request only when it is not. */
+   for a named request the menu plates this when it is >= 0 and the request
+   only when it is not; an Auto request plates Auto. */
 int tagpu_vk_gpu_active(void);
 
 /* The row's click, from the game thread: record the request -- an index into

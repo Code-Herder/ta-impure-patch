@@ -18,6 +18,7 @@
 #include "tagpu_vk.h"
 #include "tagpu_zoom.h"
 #include "tagpu_hud.h"
+#include "fps_limiter.h"
 
 
 /* tagpu: whether a TME_LEAVE request is outstanding. Window-thread only — this
@@ -75,9 +76,15 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     case WM_NCLBUTTONUP:
     case WM_NCPAINT:
     case WM_CANCELMODE:
-    case WM_DISPLAYCHANGE:
     case WM_NCCALCSIZE:
     {
+        return real_DefWindowProcA(hWnd, uMsg, wParam, lParam);
+    }
+    case WM_DISPLAYCHANGE:
+    {
+        /* tagpu: a Refresh cap is the monitor's rate, and the display just changed */
+        if (fpsl_cap_request() == -1)
+            fpsl_request_init();
         return real_DefWindowProcA(hWnd, uMsg, wParam, lParam);
     }
     case WM_GETMINMAXINFO:

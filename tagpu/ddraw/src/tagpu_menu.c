@@ -1754,8 +1754,8 @@ static int  s_monCount;
    row is seeded from the window, and where the player actuates it. */
 static int  s_monChosen;
 
-/* 0 is UNLIMITED: fpsl_init maps a NEGATIVE maxfps onto the display refresh and
-   only 0 falls through with tick_length left at 0. */
+/* -1 is Refresh, which fpsl_init resolves into the target monitor's rate
+   (fps_limiter.h); 0 is UNLIMITED, the one value that leaves tick_length 0. */
 static const int FPS_VAL[4] = { -1, 60, 120, 0 };
 /* HUD SCALE (tagpu_hud.h, gui-renderer.md 22), 0 = Auto. These are
    percentages of the HUD's stock size, and Auto is the ceiling H/480, where
@@ -1924,6 +1924,12 @@ static void build_gpu_text(void)
    racing click can do is hand back the monitor selected one click ago. A stale
    `s_monChosen` reads as "nobody has chosen", whose answer is the window's own
    monitor -- the correct fallback, not a wrong rect. */
+const char* tagpu_menu_monitor_device(void)
+{
+    int i = s_vstage[VD_MON];
+    return (s_monChosen && i >= 0 && i < s_monCount && s_monDev[i][0]) ? s_monDev[i] : NULL;
+}
+
 BOOL tagpu_menu_monitor(RECT* out)
 {
     int i = s_vstage[VD_MON];
@@ -2238,7 +2244,7 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
     case VD_MON:
         move_to_monitor(s_vstage[VD_MON]);
         /* a Refresh cap is the monitor's, and the monitor just changed */
-        if (g_config.maxfps < 0) fpsl_init();
+        if (fpsl_cap_request() == -1) fpsl_request_init();
         break;
     case VD_UNDO_SCALE:
         if (!tagpu_hud_held()) tagpu_hud_store_pct((int)s_scaleOpen);
@@ -2252,10 +2258,9 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
         if (!tagpu_hud_held()) tagpu_hud_store_pct(SCALE_VAL[s_vstage[VD_SCALE]]);
         break;
     case VD_FPS:
-        /* fpsl_init reads g_config.maxfps and computes tick_length, so the cap
-           is live from the next presented frame rather than the next launch. */
-        g_config.maxfps = FPS_VAL[s_vstage[VD_FPS]];
-        fpsl_init();
+        /* a request: the render thread applies it at its next frame
+           (fps_limiter.h), so the cap is live from the next presented frame */
+        fpsl_request_cap(FPS_VAL[s_vstage[VD_FPS]]);
         break;
     /* THE GPU ROW TOUCHES NO WINDOW AND NO VULKAN OBJECT. It records the
        request and bumps a generation counter; the RENDER thread, which is the
@@ -2309,15 +2314,22 @@ static void read_display_state(void)
             if (SCALE_VAL[k] == pct) { s_vstage[VD_SCALE] = k; break; }
     }
 
-    s_vstage[VD_FPS] = 3;
-    for (i = 0; i < 4; i++) if (FPS_VAL[i] == g_config.maxfps) s_vstage[VD_FPS] = i;
+    /* the cap requested, not the one in force: Refresh is in force as a
+       number (fps_limiter.h), and any negative ini value is cnc-ddraw's own
+       "the refresh" */
+    {
+        int cap = fpsl_cap_request();
+        if (cap == FPSL_CAP_NONE) cap = g_config.maxfps;
+        s_vstage[VD_FPS] = 3;
+        if (cap < 0) s_vstage[VD_FPS] = 0;
+        for (i = 1; i < 4; i++) if (FPS_VAL[i] == cap) s_vstage[VD_FPS] = i;
+    }
 
-    /* THE DEVICE IN USE BEATS THE DEVICE REQUESTED, so the row can be verified
-       rather than trusted. `tagpu_vk_gpu_active` is what the render thread
-       actually bound; it is -1 while the lane is down, and only then does the
-       row fall back to the stored request (and that, in turn, to the discrete
-       default). So a choice that could not be honoured shows as the device
-       that was. */
+    /* AUTO PLATES AUTO; A NAMED CHOICE PLATES THE DEVICE IN USE, so the row
+       can be verified rather than trusted. `tagpu_vk_gpu_active` is what the
+       render thread actually bound; it is -1 while the lane is down, and only
+       then does a named row show the request. So a choice that could not be
+       honoured shows as the device that was. */
     k = tagpu_vk_gpu_stored();
     if (k != TAGPU_VK_GPU_AUTO) {
         int a = tagpu_vk_gpu_active();
@@ -2454,7 +2466,7 @@ static void vis_undo(void)
 
 /* RESTORE -- the store's defaults (renderers.md 2.10b): Classic++ with every
    row it owns at its Classic++ value, supersampling on, the FPS counter off,
-   UI scale off and the stock 60 fps cap. A row a lever holds keeps the
+   UI scale off and the Refresh cap. A row a lever holds keeps the
    lever's value: Restore changes the store, and the store is not what draws
    that row.
 

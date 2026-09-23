@@ -2071,7 +2071,7 @@ captions; names, `assoc`, `commonattribs`, `range` and `stages` verbatim), the s
 
 | column | rows |
 |---|---|
-| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (Refresh / 60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`; Refresh is `-1`, the target monitor's rate), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
+| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (Refresh / 60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`; Refresh is the target monitor's rate, resolved into a positive cap on the render thread — renderers §2.10b), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
 | **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Supersampling, FPS counter |
 
 Four things this rests on, each measured rather than assumed:
