@@ -1283,7 +1283,7 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     if (h.scafOn) {
         if (!s_saidScaf) {
             s_saidScaf = 1;
-            plog(d, "fx: the GL twin has the scene-depth scaffold test on, and "
+            plog(d, "fx: the gather has the scene-depth scaffold test on, and "
                     "those texels live in tagpu_vk_scaffold.c's own image - "
                     "this pass shares no image with another and draws nothing "
                     "while the scaffold is armed");
@@ -1355,8 +1355,8 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
             s_saidLine = 1;
             plog(d, "fx: there are line vertices and this device has no "
                     "VK_EXT_line_rasterization/bresenhamLines - nothing drawn "
-                    "while there are, because the default mode is not the rule "
-                    "the GL twin rasterises by");
+                    "while there are, because the default mode is not the "
+                    "diamond-exit rule these lines are specified by");
         }
         return 0;
     }
@@ -1382,8 +1382,8 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         (ss != 1 && (!d->wideok || (float)ss > d->maxLineWidth))) {
         if (!s_saidWide) {
             s_saidWide = 1;
-            plog(d, "fx: the target is %dx supersampled, which makes the GL "
-                    "twin's lines %d px wide, and this device offers %s - "
+            plog(d, "fx: the target is %dx supersampled, which makes a "
+                    "line %d px wide, and this device offers %s - "
                     "nothing drawn while there are line vertices", ss, ss,
                  d->wideok ? "a narrower maximum" : "no wideLines at all");
         }

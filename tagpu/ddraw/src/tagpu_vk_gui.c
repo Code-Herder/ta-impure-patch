@@ -1511,11 +1511,11 @@ static int behind_ex(const TAGPU_VKPASS* d, const char* why, int reask)
         } else if (++s_behindAsks > BEHIND_ASKS_MAX) {
             s_behindMute = 1;
             plog(d, "gui: %d fresh starts have not made the twin store able to "
-                    "follow the GL lane (%s) - this is a capability gap and not "
+                    "follow the producer (%s) - this is a capability gap and not "
                     "a sync one, so nothing further is asked of the producer "
                     "and nothing is composited", BEHIND_ASKS_MAX, why);
         } else {
-            plog(d, "gui: the twin store cannot follow the GL lane (%s) - asking "
+            plog(d, "gui: the twin store cannot follow the producer (%s) - asking "
                     "the producer for a fresh start, once, and compositing nothing "
                     "until it arrives", why);
             tagpu_gui_mirror_reseed();
@@ -1745,7 +1745,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        indistinguishable from an unarmed lane. */
     if (h.lost) {
         if (s_state == ST_UNBUILT) return 0;      /* nothing built to drop yet */
-        if (!behind_ex(d, "the GL lane's record of this frame was lost", 1)) goto refuse;
+        if (!behind_ex(d, "the producer's record of this frame was lost", 1)) goto refuse;
         return 0;
     }
 
@@ -1769,7 +1769,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (h.otherOps > 0) {
         if (!s_cantReplay) {
             s_cantReplay = 1;
-            plog(d, "gui: the GL twin applied %d op(s) this landing cannot "
+            plog(d, "gui: the producer applied %d op(s) this pass cannot "
                     "replay - nothing composited, and the store is caught up "
                     "with ONE fresh start when they stop", h.otherOps);
         }
@@ -1804,7 +1804,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             for (k = 0; k < s_ntw; k++)
                 if (s_tw[k].colImg) s_tw[k].colNeedClear = 1;
             plog(d, "gui: the presented palette moved - %d colour twin(s) "
-                    "invalidated, as the GL lane invalidated its own", s_ntw);
+                    "invalidated, as the producer invalidated its own", s_ntw);
         }
         s_colRearm = h.colRearm;
         s_colRearmSeen = 1;
@@ -2369,7 +2369,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if ((o->col & TAGPU_GUICOL_DST) && !t->colImg) {
                 if (rpOpen) { vkCmdEndRenderPass(cb); rpOpen = 0; cur = NULL; }
                 if (!tw_colour(d, t)) {
-                    sdWhy = "the GL lane gave a twin colour and this one could not";
+                    sdWhy = "the producer gave a twin colour and this store could not";
                     goto standdown;
                 }
             }
@@ -2623,7 +2623,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                        one. Silently drawing `uSrcHasCol = 0` would propagate
                        that gap into the destination and every copy after it. */
                     if (on && !src->colImg) {
-                        sdWhy = "a copy whose source twin has colour in the GL lane and not here";
+                        sdWhy = "a copy whose source twin has colour in the producer's record and not here";
                         goto standdown; }
                     fq[0] = o->l - o->sl; fq[1] = o->t - o->st;
                     fq[2] = on;                         /* uSrcHasCol          */
@@ -2746,7 +2746,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
             if (!s_lutHave) { sdWhy = "a tint before the shade table was uploaded"; goto standdown; }
             if ((o->col & TAGPU_GUICOL_DST) && !t->colImg) {
                 if (!tw_colour(d, t)) {
-                    sdWhy = "the GL lane gave a twin colour and this one could not";
+                    sdWhy = "the producer gave a twin colour and this store could not";
                     goto standdown;
                 }
             }
@@ -2902,7 +2902,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        is the belt to that brace, and the alternative to it is compositing
        indexed art through a branch that says it is restored. */
     if (h.colourTwins && !pres->colImg) {
-        sdWhy = "the presented twin has colour in the GL lane and none here";
+        sdWhy = "the presented twin has colour in the producer's record and none here";
         goto standdown;
     }
 

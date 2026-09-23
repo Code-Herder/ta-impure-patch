@@ -278,7 +278,7 @@ static int arena_room(void** p, unsigned* cap, unsigned need, size_t elem)
         if (!s_saidRoom) {
             s_saidRoom = 1;
             plog("posedraw: the Vulkan hand-over's arena would not grow - nothing "
-                 "is handed over while that is true (the GL lane is unaffected)");
+                 "is handed over while that is true");
         }
         return 0;
     }

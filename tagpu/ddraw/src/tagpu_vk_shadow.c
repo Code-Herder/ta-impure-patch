@@ -625,8 +625,8 @@ static int build(const TAGPU_VKPASS* d)
     s_dfmt = tagpu_vk_shadow_format(d, &linearOk);
     if (s_dfmt == VK_FORMAT_UNDEFINED) {
         plog(d, "shadow: this device has no 24-bit depth format that is both a "
-                "depth attachment and a sampled image - the map stays down (the "
-                "GL twin's is GL_DEPTH_COMPONENT24 and a float one would not "
+                "depth attachment and a sampled image - the map stays down (it "
+                "is specified as 24-bit fixed point and a float one would not "
                 "quantise the same way)");
         return 0;
     }
@@ -808,7 +808,7 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
             s_saidZclip = 1;
             plog(d, "shadow: this device has no "
                     "VK_EXT_depth_clip_control/depthClipControl, so a clip z "
-                    "below 0 would be clipped where GL keeps it - the map is "
+                    "below 0 would be clipped where the map keeps it - the map is "
                     "not drawn, and the passes that sample it stand down");
         }
         return 0;
@@ -849,7 +849,7 @@ int tagpu_vk_shadow_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t 
     if (h.otherCasters - ours > 0) {
         if (!s_saidCasters) {
             s_saidCasters = 1;
-            plog(d, "shadow: the GL map holds %d caster(s) this lane has no copy "
+            plog(d, "shadow: the gather holds %d caster(s) this lane has no copy "
                     "of (%d of them the unit and hi-res passes carry). Nothing "
                     "drawn while there are, and the passes that sample the map "
                     "stand down with it", h.otherCasters, ours);
