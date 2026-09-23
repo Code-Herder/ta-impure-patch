@@ -141,9 +141,9 @@ static float wheel_level(void)
     }
     else if (s_wheelPend) {
         /* ONE line per gesture, at the end of it, not one per frame that
-           carried notches. zlog is an fopen/fprintf/fclose and this runs on the
-           render thread, so a sustained spin would otherwise open the log every
-           frame for as long as it lasted — and unlike every other per-frame log
+           carried notches. zlog is a file write and this runs on the render
+           thread, so a sustained spin would otherwise write a line every frame
+           for as long as it lasted — and unlike every other per-frame log
            in this stack (tagpu_spxlog.on and friends) there is no flag file to
            turn it off. Deferring to the settle costs nothing diagnostically: the
            total and the level it landed on are what the line was ever read for. */

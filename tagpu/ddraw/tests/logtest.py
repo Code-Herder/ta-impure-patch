@@ -201,11 +201,42 @@ def case_kill():
     return d
 
 
+def case_cursor():
+    print("cursor: talog.Cursor follows three rotations after history is full")
+    d = scratch()
+    p = subprocess.Popen(["wine", str(d / "logtest.exe"), "slow"], cwd=d, env=env(),
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    p.stdout.readline()
+
+    def part():
+        try:
+            return talog._header(talog.current(d).read_bytes()[:256])[1] or 0
+        except FileNotFoundError:
+            return 0
+
+    t0 = time.time()
+    while part() < KEEP + 4 and time.time() - t0 < 120:      # history full: eviction runs,
+        time.sleep(0.1)                                       # and inodes get reused
+    c = talog.Cursor(d)
+    key, off, n = c.key, c.off, part()
+    while part() < n + 3 and time.time() - t0 < 180:
+        time.sleep(0.05)
+    got = c.read()
+    os.kill(p.pid, signal.SIGKILL)
+    p.wait(timeout=30)
+    parts = list(talog.run_parts_newest_first(d))
+    i = next((i for i, x in enumerate(parts) if talog._key(x[:256]) == key), None)
+    expected = parts[i][off:] + b"".join(reversed(parts[:i])) if i is not None else b""
+    check(n > KEEP and i is not None and expected.startswith(got) and len(got) > 3 * 60000,
+          f"parts {n}..{part()}: the cursor returned exactly the {len(got)} bytes written after it")
+    return d
+
+
 def main():
     if not EXE.exists():
         sys.exit(f"{EXE} is missing: make -C tagpu/ddraw logtest")
     keep = "--keep" in sys.argv
-    dirs = [case_stress(), case_block(), case_second(), case_kill()]
+    dirs = [case_stress(), case_block(), case_second(), case_kill(), case_cursor()]
     if not keep:
         for d in dirs:
             shutil.rmtree(d, ignore_errors=True)

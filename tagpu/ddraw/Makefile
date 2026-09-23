@@ -101,7 +101,7 @@ $(TARGET): $(OBJS) | thread-split spirv log-check
 logtest: tests/logtest.exe
 
 tests/logtest.exe: tests/logtest.c src/tagpu_log.c inc/tagpu_log.h
-	$(CC) -Iinc -O2 -Wall -std=c99 -DTLOG_FILE_CAP=65536 -DTLOG_TOTAL_CAP=524288 -DTLOG_KEEP=10 \
+	$(CC) -Iinc -O2 -Wall -std=c99 -DTLOG_FILE_CAP=65536 -DTLOG_TOTAL_CAP=524288 -DTLOG_KEEP=10 -DTLOG_SELFTEST \
 	    -static -o $@ tests/logtest.c src/tagpu_log.c
 
 clean:

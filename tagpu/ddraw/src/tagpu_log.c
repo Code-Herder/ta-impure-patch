@@ -486,3 +486,14 @@ void tagpu_log_block_end(TLOG_BLOCK* b)
     free(b->p);
     free(b);
 }
+
+#ifdef TLOG_SELFTEST
+/* tests/logtest.c only: run `f` under the sink's lock, so a directory listing it makes is one
+   instant rather than a sum over a rotation in progress. Not in the DLL. */
+void tagpu_log_selftest_locked(void (*f)(void))
+{
+    EnterCriticalSection(&s_cs);
+    f();
+    LeaveCriticalSection(&s_cs);
+}
+#endif

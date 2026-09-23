@@ -13,6 +13,8 @@
      logtest hold <ms>        take the lock, write a line, sleep (the owner for `second`)
      logtest second <lines>   a second process: must write nothing and change nothing
      logtest forever          number lines until killed
+     logtest slow             number lines, one a millisecond, until killed (a rotation a
+                              second or so: slow enough for a reader to follow)
 
    Each mode prints `ok ...` and exits 0, or prints what failed and exits 1. */
 #include <windows.h>
@@ -20,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_log.h"
+
+void tagpu_log_selftest_locked(void (*f)(void));   /* src/tagpu_log.c, TLOG_SELFTEST */
 
 HMODULE g_ddraw_module;            /* NULL: the sink finds log\ beside logtest.exe */
 
@@ -52,8 +56,9 @@ static int ours(const char* n)
 }
 
 /* Every file of ours under the caps, the total under its cap, at most TLOG_KEEP rotated per
-   stream. Called between batches from the writing threads. */
-static void check_caps(void)
+   stream, as the directory shows them -- listed under the sink's lock (check_caps), because
+   a listing made while a rotation deletes and renames sums sizes from different instants. */
+static void check_caps_locked(void)
 {
     char pat[MAX_PATH];
     WIN32_FIND_DATAA fd;
@@ -75,6 +80,11 @@ static void check_caps(void)
     if (total > TLOG_TOTAL_CAP) fail("total over cap", "", total);
     if (rot[0] > TLOG_KEEP) fail("rotated files", "tagpu", rot[0]);
     if (rot[1] > TLOG_KEEP) fail("rotated files", "tagpu_cobtrace", rot[1]);
+}
+
+static void check_caps(void)
+{
+    tagpu_log_selftest_locked(check_caps_locked);
 }
 
 typedef struct { int id; unsigned lines; } WORK;
@@ -167,7 +177,7 @@ int main(int argc, char** argv)
     cut = strrchr(exe, '\\');
     if (cut) cut[1] = 0;
     _snprintf(s_dir, sizeof s_dir, "%slog\\", exe);
-    if (argc < 2) { printf("usage: logtest stress|block|hold|second|forever ...\n"); return 2; }
+    if (argc < 2) { printf("usage: logtest stress|block|hold|second|forever|slow ...\n"); return 2; }
     setvbuf(stdout, NULL, _IONBF, 0);
 
     if (!strcmp(argv[1], "stress")) { tagpu_log_init(); return mode_stress(argc > 2 ? (unsigned)atoi(argv[2]) : 20000); }
@@ -192,6 +202,12 @@ int main(int argc, char** argv)
         tagpu_log_init();
         printf("ok forever\n");
         for (;;) tagpu_logf("F %u pad=%0*d", i++, 40, 0);
+    }
+    if (!strcmp(argv[1], "slow")) {
+        unsigned i = 0;
+        tagpu_log_init();
+        printf("ok slow\n");
+        for (;;) { tagpu_logf("W %u pad=%0*d", i++, 40, 0); Sleep(1); }
     }
     return 2;
 }

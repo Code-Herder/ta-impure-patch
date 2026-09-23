@@ -13,17 +13,10 @@
 #include "tagpu_surf.h"
 #include "tagpu_log.h"
 
-/* THE LOG IS THE HOUSE PATTERN AND IT IS NOT SYNCHRONISED, deliberately. Every
-   module in the DLL logs exactly this way, open-append-close with no lock, at
-   55 call sites, and not one of them takes a lock; `tagpu_reclaim.c`'s is
-   called from both threads too. This file logs from both: the game thread
-   writes the re-read check and the heartbeat, the render thread the drop and
-   the dump. The cost of that is an interleaved line in a diagnostic file. It is
-   not a correctness surface -- no snapshot state is carried through it and
-   nothing reads it back -- so locking it here alone would buy tidier logs in one
-   file out of thirty-odd while making this module's logging unlike every other
-   module's. If the log is ever made to matter, it is one lock in one place for
-   all of them. */
+/* This file logs from both threads: the game thread writes the re-read check and
+   the heartbeat, the render thread the drop and the dump. The sink takes each line
+   whole under its own lock (tagpu_log.h), so the two never tear each other's lines;
+   their relative order is whatever order the threads reached it in. */
 static void slog(const char* s)
 {
     tagpu_log(s);

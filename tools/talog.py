@@ -6,8 +6,8 @@ The DLL writes `<gamedir>/log/tagpu.log` and `log/tagpu_cobtrace.log` through on
 reaches its cap, the current file becomes `<stream>.1.log` and the history shifts up
 (`.2`, … `.10`). So "the log" is a set of files, and a reader that remembers a byte
 offset in `tagpu.log` loses its place at the first rotation. Everything here follows a
-file by its INODE instead: under Wine a rename keeps it, so the file a cursor was
-reading is found again under its new name.
+file by the `run/part` in its first line instead, so the file a cursor was reading is
+found again under its new name.
 
 A RUN is one launch. The first line of every file the sink writes is
 
@@ -50,13 +50,15 @@ def newest_first(gamedir, stream="tagpu"):
     return [p for p in paths if p.exists()]
 
 
+HEAD_BYTES = 256              # the header line is well inside this (NOTE_MAX in tagpu_log.c)
+
+
 def _open(p: Path):
-    """(file, inode) or (None, None) when it vanished between the listing and the open."""
+    """The open file, or None when it vanished between the listing and the open."""
     try:
-        f = open(p, "rb")
+        return open(p, "rb")
     except FileNotFoundError:
-        return None, None
-    return f, os.fstat(f.fileno()).st_ino
+        return None
 
 
 def _header(data: bytes):
@@ -65,14 +67,14 @@ def _header(data: bytes):
 
 
 def _run_files(gamedir, stream):
-    """(inode, bytes) of each part of the current run, newest first. Stops at part 1, at a
+    """The bytes of each part of the current run, newest first. Stops at part 1, at a
     file of another run, or at a file with no header (not the sink's)."""
     paths = newest_first(gamedir, stream)
     if not paths or paths[0] != current(gamedir, stream):
         return
     run = None
     for p in paths:
-        f, ino = _open(p)
+        f = _open(p)
         if f is None:
             continue
         with f:
@@ -81,15 +83,14 @@ def _run_files(gamedir, stream):
         if rid is None or (run is not None and rid != run):
             return
         run = rid
-        yield ino, data
+        yield data
         if part <= 1:
             return
 
 
 def run_parts_newest_first(gamedir, stream="tagpu"):
     """The bytes of each part of the current run, newest first."""
-    for _, data in _run_files(gamedir, stream):
-        yield data
+    yield from _run_files(gamedir, stream)
 
 
 def run_bytes(gamedir, stream="tagpu") -> bytes:
@@ -110,19 +111,30 @@ def tail_lines(gamedir, n, stream="tagpu"):
     return lines[-n:] if n > 0 else lines
 
 
+def _key(data: bytes):
+    """A file's identity: `run/part` from its header. None for a file with no header yet --
+    the sink creates a file and writes its header right after, so a reader can catch it
+    empty; such a file holds nothing, and reading it whole is always right."""
+    rid, part = _header(data)
+    return f"{rid.decode()}/{part}" if rid else None
+
+
 class Cursor:
-    """A place in a stream that survives rotation: the inode and offset of the current file
-    when it was taken, plus the inodes of the history files that already existed then, so
-    read() returns exactly the bytes written since — across any number of rotations, as long
-    as the total cap has not deleted the file the cursor was in."""
+    """A place in a stream that survives rotation. A file is known by its header's
+    `run/part`, which the sink never repeats, and NOT by its inode: once history is full the
+    sink deletes files, and the filesystem hands a deleted file's inode to the next new one.
+    The cursor holds the key and offset of the current file when it was taken, plus the keys
+    of the history files that already existed then, so read() returns exactly the bytes
+    written since -- across any number of rotations, as long as the total cap has not deleted
+    the file the cursor was in."""
 
     def __init__(self, gamedir, stream="tagpu", token=None):
         self.gamedir, self.stream = gamedir, stream
         if token:
-            ino, off, known = token.split(":")
-            self.ino = int(ino) if ino else None
+            key, off, known = token.split(":")
+            self.key = key or None
             self.off = int(off)
-            self.known = {int(k) for k in known.split(",") if k}
+            self.known = {k for k in known.split(",") if k}
         else:
             self.mark()
 
@@ -130,51 +142,53 @@ class Cursor:
     def run_start(cls, gamedir, stream="tagpu"):
         """A cursor at the start of the current run: read() returns the whole run so far."""
         c = cls(gamedir, stream)
-        parts = {ino for ino, _ in _run_files(gamedir, stream)}
-        c.known = {ino for ino in c.known | ({c.ino} if c.ino else set()) if ino not in parts}
-        c.ino, c.off = None, 0
+        parts = {_key(data[:HEAD_BYTES]) for data in _run_files(gamedir, stream)}
+        c.known = {k for k in c.known | ({c.key} if c.key else set()) if k not in parts}
+        c.key, c.off = None, 0
         return c
 
     def token(self) -> str:
-        return f"{self.ino or ''}:{self.off}:{','.join(str(k) for k in sorted(self.known))}"
+        return f"{self.key or ''}:{self.off}:{','.join(sorted(self.known))}"
 
     def mark(self):
-        self.ino, self.off, self.known = None, 0, set()
+        self.key, self.off, self.known = None, 0, set()
         for p in newest_first(self.gamedir, self.stream):
-            try:
-                st = p.stat()
-            except FileNotFoundError:
+            f = _open(p)
+            if f is None:
                 continue
+            with f:
+                key = _key(f.read(HEAD_BYTES))
+                size = os.fstat(f.fileno()).st_size
             if p == current(self.gamedir, self.stream):
-                self.ino, self.off = st.st_ino, st.st_size
-            else:
-                self.known.add(st.st_ino)
+                self.key, self.off = key, (size if key else 0)
+            elif key:
+                self.known.add(key)
 
     def read(self, advance=False) -> bytes:
         """The bytes written since the mark, oldest first. With advance, the mark moves to
         the end of what was returned, so successive calls return successive pieces."""
         chunks, newest = [], None
         for p in newest_first(self.gamedir, self.stream):
-            f, ino = _open(p)
+            f = _open(p)
             if f is None:
                 continue
             with f:
-                if ino == self.ino:
-                    f.seek(self.off)
-                    data = f.read()
-                elif ino in self.known:
+                key = _key(f.read(HEAD_BYTES))
+                mine = key is not None and key == self.key
+                if not mine and key is not None and key in self.known:
                     break
-                else:
-                    data = f.read()
+                f.seek(self.off if mine else 0)
+                data = f.read()
             if newest is None:
-                newest = (ino, len(data) + (self.off if ino == self.ino else 0))
+                newest = (key, len(data) + (self.off if mine else 0))
             chunks.append(data)
-            if ino == self.ino:
+            if mine:
                 break
         if advance and newest is not None:
-            self.known |= {self.ino} if self.ino is not None else set()
-            self.ino, self.off = newest
-            self.known.discard(self.ino)
+            if self.key:
+                self.known.add(self.key)
+            self.key, self.off = newest if newest[0] else (None, 0)
+            self.known.discard(self.key)
         return b"".join(reversed(chunks))
 
     def text(self, advance=False) -> str:
