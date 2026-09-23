@@ -2598,7 +2598,7 @@ void tagpu_packet_pub_init(void)
               cursorOk,
               cursorOk ? " (the shell's only publish point: the flip 0x4C63A0 cannot be observed a second time, tagpu_gui_hook's hijacks it)"
                        : s_countOnly ? " (count-only: nothing is published at all)"
-                                     : " — NOT installed: the shell's cursor stays the engine's, and the GL UI layer paints over it (tagpu_engine.h VA_CURSOR_DRAW)");
+                                     : " — NOT installed: the shell's cursor stays the engine's, and the UI layer paints over it (tagpu_engine.h VA_CURSOR_DRAW)");
     b[sizeof b - 1] = 0;
     plog(b);
 }

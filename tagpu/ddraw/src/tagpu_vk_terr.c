@@ -801,8 +801,8 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     vkGetPhysicalDeviceFormatProperties(d->pd, VK_FORMAT_R16G16B16A16_SSCALED, &fp);
     if (!(fp.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT)) {
         plog(d, "terr: this device does not take R16G16B16A16_SSCALED as a vertex "
-                "format - the Vulkan edition of the terrain pass stays down (the "
-                "GL one is unaffected). The fix, if a device is ever found here, "
+                "format - the Vulkan edition of the terrain pass stays down. "
+                "The fix, if a device is ever found here, "
                 "is to widen the cell record to four floats on the CPU: every "
                 "field is a small integer and is exact in float.");
         return 0;
@@ -1352,7 +1352,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (t.shadowOn && !tagpu_vk_shadow_ready(d->frame)) {
         if (!s_saidShadow) {
             s_saidShadow = 1;
-            plog(d, "terr: the GL twin is reading the Classic++ cast-shadow map "
+            plog(d, "terr: the gather asks for the Classic++ cast-shadow map "
                     "and this frame's Vulkan map was not drawn (its casters are "
                     "not all on this side of the seam yet) - nothing drawn "
                     "rather than a different picture from our own oracle");
@@ -1383,7 +1383,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            of a session legitimately arrive without one. */
         if (!s_saidNoMirror) {
             s_saidNoMirror = 1;
-            plog(d, "terr: the GL tile atlas has no CPU mirror yet - nothing "
+            plog(d, "terr: the tile atlas has no CPU mirror yet - nothing "
                     "drawn until it does (the twin asks for one on its 30-frame "
                     "poll, and the first one costs a rebuild of the atlas)");
         }

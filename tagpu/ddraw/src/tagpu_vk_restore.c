@@ -2104,7 +2104,7 @@ int tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
     j->chainDone = 0;
     {   char b[180];
         _snprintf(b, sizeof b, "%s: %s: the twin's %d mip level(s) are reduced HERE, "
-                  "by the same integer (sum+1)/4 the GL lane draws",
+                  "by the integer (sum+1)/4 box",
                   LANE, j->core->tag, mips);
         rlog(b); }
     return 1;

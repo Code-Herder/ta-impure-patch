@@ -104,7 +104,6 @@ static int          s_mirrorWant;             /* the Vulkan lane asked for them 
    0 is "never baked", which is what a zeroed entry reads. */
 static unsigned     s_serial = 1;
 static int          s_nmat;
-static unsigned     s_glGen;                  /* bumped by tagpu_posebake_glreset */
 static unsigned     s_frame;
 /* THE FRAME'S generations, latched by tagpu_posebake_frame and used by every
    lookup in it. Re-reading them per unit would be a real hazard: the teardown pre
@@ -298,9 +297,6 @@ static void bake_topology(TAGPU_PBGEOM* g, const char* const* nd, int nparts)
     for (i = 0; i < nparts; i++) if (!g->done[i]) g->orphan++;
 }
 
-/* NO GL NAME IS DROPPED HERE BECAUSE NONE IS EVER MADE. The FIELDS stay:
-   `tagpu_posedraw.c` still reads `m->vao`, and they are zero for it, which is
-   the honest answer. */
 static void mat_drop(int i)
 {
     if (s_matSkip[i]) { free(s_matSkip[i]); s_matSkip[i] = NULL; }
@@ -363,7 +359,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
     slot = geom_slot();
     g = &s_geom[slot];
     memset(g, 0, sizeof *g);
-    g->root = nd[0]; g->levelGen = lvl; g->glGen = s_glGen; g->nparts = nparts;
+    g->root = nd[0]; g->levelGen = lvl; g->nparts = nparts;
     g->ghost = ghost;
     c.g = g;                    /* the per-piece rest AABB accumulates here */
     for (r = 0; r < TAGPU_PB_NRANGE; r++) {
@@ -513,7 +509,7 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     m = &s_mat[slot];
     memset(m, 0, sizeof *m);
     m->geom = g; m->root = g->root; m->owner = owner; m->atlasGen = atlasGen;
-    m->levelGen = lvl; m->glGen = s_glGen;
+    m->levelGen = lvl;
     m->nvert = c.nv; m->nskip = c.nskip; m->noMaterial = c.anom;
     m->serial = s_serial++;
     if (s_mirrorWant && c.nv > 0) {
@@ -583,11 +579,11 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
         }
     }
     for (i = 0; i < s_ngeom; i++)
-        if (s_geom[i].root && (s_geom[i].levelGen != lvl || s_geom[i].glGen != s_glGen)) {
+        if (s_geom[i].root && s_geom[i].levelGen != lvl) {
             geom_drop(&s_geom[i]); dg++;
         }
     for (i = 0; i < s_nmat; i++)
-        if (s_mat[i].geom && (s_mat[i].levelGen != lvl || s_mat[i].glGen != s_glGen ||
+        if (s_mat[i].geom && (s_mat[i].levelGen != lvl ||
                               s_mat[i].atlasGen != agen || !s_mat[i].geom->root)) {
             mat_drop(i); dm++;
         }
@@ -598,8 +594,8 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
            the geometry it was walked beside, before this loop ever sees it */
         _snprintf(b, sizeof b,
                   "posebake: dropped %d geometry (taking %d material with them) and %d material "
-                  "in its own right — level %u, GL %u, atlas %u",
-                  dg, s_dropCascade, dm, lvl, s_glGen, agen);
+                  "in its own right — level %u, atlas %u",
+                  dg, s_dropCascade, dm, lvl, agen);
         blog(b);
     }
 }
@@ -645,14 +641,6 @@ const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
     return s_matMirror[k];
 }
 
-void tagpu_posebake_glreset(void)
-{
-    /* A GENERATION BUMP IS ALL THIS IS: nothing in this build makes a buffer
-       id, so there is none to forget. The next frame's generation check is what
-       drops the entries, and that is about the BAKE, not about any API. */
-    s_glGen++;
-}
-
 /* ---- the lookup --------------------------------------------------------- */
 int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
                         int ghost,
@@ -689,7 +677,7 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
        would pose a building's parts with the wrong pieces' matrices. */
     for (i = 0; i < s_ngeom; i++)
         if (s_geom[i].root == nd[0] && s_geom[i].levelGen == lvl &&
-            s_geom[i].glGen == s_glGen && s_geom[i].nparts == nparts &&
+            s_geom[i].nparts == nparts &&
             s_geom[i].ghost == ghost) { g = &s_geom[i]; break; }
     if (g && g->refused) { g->lastFrame = s_frame; return 0; }
     if (!g) {
@@ -701,7 +689,7 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
 
     for (i = 0; i < s_nmat; i++)
         if (s_mat[i].geom == g && s_mat[i].root == nd[0] && s_mat[i].owner == owner &&
-            s_mat[i].atlasGen == agen && s_mat[i].glGen == s_glGen) { m = &s_mat[i]; break; }
+            s_mat[i].atlasGen == agen) { m = &s_mat[i]; break; }
     if (!m) {
         m = mat_bake(g, nd, owner, agen, lvl);
         if (!m) return 0;

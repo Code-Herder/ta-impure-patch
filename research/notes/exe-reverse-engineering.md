@@ -196,7 +196,7 @@ writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, 
 * **The renderer is sized past this cap**, for a patch that raises it to 1024: the unit
   array's `10 × cap + 1` slots become 10 241 (`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`),
   and every render-side table that scales with the unit count is grown to the frame or
-  asserted against that number at compile time — [gpu-status](gpu-status.html) §2.85.
+  asserted against that number at compile time — [gpu-status](gpu-status.html) §2.86.
 * What this cost before it was written down: `tools/tacli`'s scenario schema accepted
   `unit_limit: 1500` from the old `[20, 1500]` line above and a 600-unit scenario
   failed in the fork after launch instead of at validate time; the schema is now bounded

@@ -314,8 +314,7 @@ Design and engine recipe: `research/notes/scenario-format.md`.
   minimap, sidebar and cursor but **no terrain** (`terrown` key-fills the viewport), minus what
   `markown` skips; **`terrown.off mark.on=passive` hands it all back** (`references/levers.md`).
 - **The presented frame** is the window: `import -window <id> out.png` with the id from
-  `tacli ls --json`. There is no GL framebuffer and no `glshot`; the verb exists only to fail
-  loudly.
+  `tacli ls --json`. No `tacli` verb captures it in-process.
 - **The census** is the first thing to read when something is missing:
   `tacli log <i> -g 'vk: census'` → `census: frame N: 6 pass(es) drew and 0 claimed (terr=1
   feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1 fps=0)` is the play set. `mark=0` is the marker pass

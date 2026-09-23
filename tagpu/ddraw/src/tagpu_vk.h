@@ -23,10 +23,9 @@
 
    `tagpu_vk.off` TURNS THE WHOLE FILE OFF, enumeration included, and is the
    control for any A/B against a DLL built before Phase G. **NEITHER LEVER ARMS
-   A LANE.** `tagpu_vk.on` under `renderer=openglcore` brings nothing up: what
-   the lever does on that path is make `tagpu_vk_armed()` true, which ungreys
-   the menu's GPU row (the choice applies to a launch that picks
-   `renderer=vulkan`). It does NOT get read for its `color=` there --
+   A LANE.** `tagpu_vk.on` under `renderer=gdi` brings nothing up: what the
+   lever does on that path is make `tagpu_vk_armed()` true, which ungreys the
+   menu's GPU row (the choice applies to a launch on the Vulkan lane). It does NOT get read for its `color=` there --
    `read_lever` is only reached from `tagpu_vk_frame` -- and it does not latch
    the gather mirrors, which ask `tagpu_vk_owns_present()`. Under
    `renderer=vulkan` the lane runs because the renderer choice says so, and
@@ -123,8 +122,8 @@ int tagpu_vk_armed(void);
    Two things change and nothing else does:
 
    * the surface goes on the window `tagpu_vk_frame` is handed: with one backend
-     there is nothing to keep it apart from. Measured as route E in
-     `tools/vkcoexist.c` -- a top-level window that never had a GL context or a
+     there is nothing to keep it apart from. Measured as route E of
+     the coexistence probe -- a top-level window that never had a GL context or a
      pixel format presents, on wine 9.0 and on Proton 11 (roadmap §G19a).
    * `tagpu_vk.on` STOPS ARMING THE LANE, because the renderer choice already
      did. `tagpu_vk.off` stops disarming it for the same reason: with no GL

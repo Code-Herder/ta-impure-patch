@@ -14,17 +14,19 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 ## 1. Status — what is ours, what is still the engine's
 
 **THERE ARE TWO RENDERER BACKENDS SINCE 2026-09-18, AND THE PROCESS CREATES NO GL CONTEXT ON
-ANY PATH.** `renderer=vulkan` is the patch and `renderer=gdi` the reference; `auto`,
-`opengl` and `openglcore` all reach the Vulkan lane, which hands the session to GDI late if it
-will not come up. `render_ogl.c` (2 015 lines) and `render_ogl.h` went in the vulkan-only plan's
+ANY PATH.** `renderer=vulkan` is the patch and `renderer=gdi` the reference. `auto` and every
+value the switch does not name reach the Vulkan lane, which hands the session to GDI late if it
+will not come up; a value that is not `auto` is logged as `ddraw: renderer=X is not a renderer`.
+The old names — `opengl`, `openglcore`, `direct3d9` — are not recognised and take that path
+(§2.85). `render_ogl.c` (2 015 lines) and `render_ogl.h` went in the vulkan-only plan's
 landing 11-2, ahead of the sixteen passes' GL draw halves rather than behind them -- with the
 lane's only other `tagpu_overlay_draw` caller gone, `gl_draws = !tagpu_vk_owns_present()` is
 false at every surviving call, so those halves are now unreachable by an ordering and 11-3/11-4
 delete dead code. **`tacli shot` moved off the GL present loop with it** and answers on every
 lane for the first time -- the flip's trigger family both arms it and, on its NEXT pass, captures,
 so the picture is a frame the engine presented in between (capturing in the same pass returns
-frame N-1; §2.64). **`tacli glshot` is retired** and fails loudly, and `tascene ab` -- which
-called it -- now stops with an explanation rather than comparing the wrong images.
+frame N-1; §2.64). **`tacli glshot` is gone**, and `tascene ab` grabs the game window where it
+called it (§2.85).
 
 The paragraph this replaced, kept for its own record: three backends since the Direct3D9
 deletion. `renderer=` took `auto`
@@ -1233,25 +1235,23 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   rewrites it in place at launch, it now reads **12**, and instances launched under it present
   `paldiff=0` — no seam. The mechanism is unchanged; the *value* is shared and mutable, so read
   `paldiff=` rather than assuming it.
-- *Fresh starts:* the trigger reappearing, a GL context change (`tagpu_gui_glreset` from the
-  overlay's reset), a queue or arena overflow, a sprite whose bytes never arrived, a copy
+- *Fresh starts:* the trigger reappearing, a queue or arena overflow, a sprite whose bytes never arrived, a copy
   from a source with no twin, and the consumer coming back from a stall (below) all raise
   `reseed`; the next publish sends a **reset** and seeds every surface again from the
   engine's bytes. Nothing is reconstructed from history. **Since G15d every reset is logged
-  with its reason** (`gui: reset #n: arm | gl-context | queue-full | arena-full |
-  box-outside-surface | lost-sprite | atlas-full | untwinned-copy | stall-over`, with the
+  with its reason** (`gui: reset #n: arm | queue-full | arena-full | box-outside-surface |
+  lost-sprite | atlas-full | untwinned-copy | stall-over | string-empty | level-changed`, with the
   queue and arena occupancy), so the heartbeat's `resets=` is never a bare count.
 - *The consumer can die, or crawl (G15d):* cnc-ddraw stops its render thread inside every
-  `SetDisplayMode` and starts a new one on a new GL context, and on the way out of a game the
+  `SetDisplayMode` and starts a new one, and on the way out of a game the
   old thread presents only every few hundred ms while the game thread is in the exit path —
   while the shell already flips ~5 000 times a second and the game frame publishes ~150 KB of
   box bytes per 5 ms cadence, so the 16 MB arena is half a second of backlog. The publisher
   therefore **drops its batch** when the tail has not moved for 250 ms with work queued, or
   when the backlog is past half the arena or a quarter of the ring (`stalls=` counts the
   episodes), and publishes again — one reset, every surface re-seeded — once the consumer has
-  caught up. On the render thread, after a context change the drain **skips every op up to the
-  producer's next reset** (`skipped=`): they were published against twins and an atlas that
-  died with the context, and applying them only counted their sprites as lost. MEASURED
+  caught up. (The drain also skipped every op published before a GL context change up to the
+  producer's next reset, `skipped=`; with no GL context that path went, §2.85.) MEASURED
   2026-09-07: before, every game → shell switch cost 38 `arena-full` overflows, 39 resets and
   705 lost sprites; after, one reset (`stall-over`), no overflow, none lost, and the game's own
   OFFSCREEN — freed to the heap by `MEM_Free` at `0x491AB8`, not through `SurfaceFree`, and
@@ -2360,7 +2360,7 @@ whose contract is acquire-only), so the roles stay a permutation without a lock,
 made them one: explicit at DLL attach, `W=0, cell=1 (stale), READ=2, PREV=3`, because zeroed
 statics would put both threads on slot 0. `head_seq` stored before the fill, `tail_seq` after;
 the consumer latches the head at acquire and compares the tail at frame end. Slots are 16 MB of
-address space each (`PK_RESERVE`, derived from the unit tables at the design point — §2.85), reserved once, committed as the high-water mark rises on the producer's own
+address space each (`PK_RESERVE`, derived from the unit tables at the design point — §2.86), reserved once, committed as the high-water mark rises on the producer's own
 slot, never moved, never freed; a fill that does not fit truncates this frame and the next publish
 grows first. Neither side ever waits. Every violation is counted, logged rate-limited, never
 fatal: thread identity both sides (the render thread's restart across a display-mode change is
@@ -9827,7 +9827,7 @@ means reimplementing selection, box-select, build placement and every cursor mod
 | **`tagpu_overlay_draw`'s two early returns above the teardown gate still run `writeback_paint`**, which dereferences `*(char**)(u + U_OBJ3DO)` — after `tagpu_reclaim_pass_begin` has already published `s_completed = s_started` for that pass. The gate's own comment says the writeback must not run during a teardown, and those two paths sit above it. Found by the G13t re-review while checking the latch that closed the same hole one line lower | `tagpu_overlay.c` lines 583 and 585, `writeback_paint` | reachable only with `tagpu_writeback.on` **and** (`tagpu_overlay.off` or `s_state != 1`), so it is debug-lever-only and a no-op in play — which is why G13t recorded it instead of widening its own diff. The fix is the same shape: those returns must consult the latched flag too |
 | ~~**`tagpu_reclaim.c` claims every reader of the UnitDef array is on the game thread**, and uses that to justify leaving the free at `0x42DCCB` unhooked. But `tagpu_cat_frame`, `tagpu_weapons_frame` and `tagpu_scenario_frame` all run from `tagpu_overlay_draw`, on the RENDER thread, above the gate.~~ **CLOSED 2026-09-18 by landing 10c-1**, and closed the way the row asked for: the justification was not corrected, the premise was made true. All three now run on the GAME thread, from the engine's own flip, so `tagpu_reclaim.c`'s claim holds as written and the free at `0x42DCCB` needs no hook. The move was made to reach `renderer=gdi`; closing this was the side effect | `tagpu_reclaim.c` ~line 215, and `tagpu_triggers_frame` in `tagpu_overlay.c`, called from `tagpu_gui_hook.c`'s `before_flip` | nothing left to do |
 | **Past about 7680×4320 the wide fog grid is clamped and the outer ring smears again.** `tagpu_fogwide`'s three buffers are `FOGW_MAXDIM` square and allocated ONCE — it publishes a pointer into `s_pub` to the render thread while the game thread builds into `s_build`, so a buffer grown under a zoom change would be a use-after-free — and 1024 cells covers the window a real screen asks for (485 at 3840×2160, 645 at 5120×2880, 965 at 7680×4320, all MEASURED against the arithmetic 2026-09-09). Past that the clamp takes its trim off both ends, so the view's centre keeps its cover and only the edge returns to the border-cell smear | `tagpu_fogwide.c` `FOGW_MAXDIM` | a bigger allocation, or a publish handshake that makes growing one safe; neither is worth it for a screen nobody has |
-| The **unit** pass's `MAXNV` is the first fixed budget a very wide zoomed-out view meets, now that the terrain's and the feature pass's are the screen; the unit gather itself grows to the packet (§2.85) | `tagpu_native.c` | measure how many vertices a 4K 0.25× view over a full map actually emits, then size or bail deliberately. The feature pass's `MAXBV_BODY`/`MAXBV_SHAD` were this row's other half until 2026-09-10; they are gone — `tagpu_feat.c`'s buckets `realloc`-double from `BV_BODY_0`/`BV_SHAD_0` behind `feat_room()` up to a 16 MB ceiling, and a 4K 0.25× view on Town & Country grew them to 65536/32768 verts with `DROPPED(full=0)` |
+| The **unit** pass's `MAXNV` is the first fixed budget a very wide zoomed-out view meets, now that the terrain's and the feature pass's are the screen; the unit gather itself grows to the packet (§2.86) | `tagpu_native.c` | measure how many vertices a 4K 0.25× view over a full map actually emits, then size or bail deliberately. The feature pass's `MAXBV_BODY`/`MAXBV_SHAD` were this row's other half until 2026-09-10; they are gone — `tagpu_feat.c`'s buckets `realloc`-double from `BV_BODY_0`/`BV_SHAD_0` behind `feat_room()` up to a 16 MB ceiling, and a 4K 0.25× view on Town & Country grew them to 65536/32768 verts with `DROPPED(full=0)` |
 
 ### 3.3 Open questions, not limits
 
@@ -15591,9 +15591,54 @@ the rest of the marker layer still draws and the log says why once.
 **Found on the way.** On `500v500` the unit pass stood down for the whole frame
 (`vk: unit: the GL twin drew 348 posed unit(s) this hand-over does not carry`): about 860 units
 were on screen against `TAGPU_PD_MAXHAND`'s 512, so **no unit body drew at all** while the rects
-did. §2.85 removes that cap.
+did. §2.86 removes that cap.
 
-### 2.85 The unit cap goes — one pose buffer a frame, and every cap sized for 10 × 1024
+### 2.85 The strip — nothing in the build names a GL object, and no setting names GL
+
+**Landed on the branch `worktree-build_ghost`, 2026-09-23, by the owner's ruling: no aliasing, no
+backward compatibility.** 11-5 D4 deleted the last GL *file*; this removed what the lane left in
+everything else, measured by a scan that masks comments and string literals and lists every
+compiled identifier naming GL (`glreset`, `ogl`, `wgl`, `opengl`, `vbo`/`vao`/`fbo`, `palTex`).
+
+- **The renderer switch knows `auto`, `vulkan` and `gdi`.** The `openglcore` latch
+  (`opengl_core`), the `direct3d9` arm that sent an old ini to GDI and the `opengl` log line are
+  gone; any other value is logged once and runs Vulkan. Measured: `renderer=openglcore` logs
+  `ddraw: renderer=openglcore is not a renderer (auto, vulkan, gdi) -- using vulkan` and comes
+  up on Vulkan in 210 ms; `renderer=gdi` logs no `vk:` line and answers `tacli ui` and `tacli shot`.
+- **Dead state:** `opengl_y_align`, `render.tex`, `shader` (the libretro GLSL option),
+  `nonexclusive`, `TAGPU_FRAME.surface_tex`, the posebake GL generation and its key fields, the
+  `vbo`/`vao` fields of `TAGPU_PBGEOM`/`TAGPU_PBMAT`, the `palTex`/`scafTex` parameters of the
+  terrain, feature and effects hand-overs (every caller passed 0), `TAGPU_GUI_WHY_GLCTX`, the UI
+  drain's skip-to-reset latch and its `skipped=` heartbeat field.
+- **The ten `*_glreset` functions**, whose root `tagpu_native_glreset` had no caller; its banner
+  said to delete the cascade with the last GL file.
+- **Files:** `inc/openglshader.h`, the `tagpu.dll` companion (`tagpu/src/tagpu.c`, `tagpu.rc`,
+  `tagpu/Makefile` — nothing loaded it), the upstream C++Builder config GUI (`config/`, which
+  wrote `renderer=opengl` and could not be built here), `tools/gl-sites.py`, `tools/vkcoexist.c`
+  and `vkcoexist-pixels.sh`. The hook skip-list no longer names `opengl32`, `libgallium_wgl` or
+  `libglapi`. `opengl32.dll` is not mapped in the game process (`/proc/<pid>/maps`, in game);
+  the one GL-named library there is `libGLX_nvidia`, which is NVIDIA's Vulkan ICD on the
+  reference setup (its `nvidia_icd.json` names it).
+- **What players see:** the release `ddraw.ini` said `renderer=openglcore` and its README asked
+  for OpenGL 3.3; both name Vulkan now. The generated ini offers no GL renderer, no `shader=` and
+  no `nonexclusive=`. About forty `tagpu.log` messages that compared against "the GL twin" name
+  the gather or the requirement instead; every prefix and format argument is unchanged.
+- **Tools:** `tacli glshot` is gone. `uiwalk` loses `--layer`/`--vk` and the parity code, and its
+  loading stop waits for `vk: up in N ms` — it waited for `GL CONTEXT CHANGED`, which nothing
+  logs, so every load ran out its 150 s. `promo/shoot.sh`, `promo/survey-map.py` and
+  `tascene ab` grab the client window (`import -window`, 8-bit PPM for `ab`).
+
+**Not closed here:** about 800 comment mentions of GL remain in the DLL sources, most of them the
+history the comment review kept. `tascene ab`'s browser half draws no terrain in headless Chrome
+(the capture half is right: same view, same Commander, same wreck), so its percentage is not a
+parity figure yet. `big-battle` shows `unit=0` in the census from ~frame 3300 on `main` as well
+(`TAGPU_PD_MAXHAND`): the hand-over cap, which §2.86 removes.
+`uiwalk --game-only --screens-only --cycles 1` is clean except two stops of the cycle, and
+`main`'s DLL gives both identically: `VISUALS#1` misses the `FPS` gadget by 23 px, and
+`ARMMAIN2#1` has 574 unexplained px in (502,356)-(520,392), a unit-sized box at the viewport
+centre.
+
+### 2.86 The unit cap goes — one pose buffer a frame, and every cap sized for 10 × 1024
 
 **What was wrong.** Past **512 posed units on screen, no unit body drew at all**. The Vulkan unit
 pass bound one 14 336-byte uniform window per unit per frame slot — the 256-piece ceiling, whatever
@@ -15634,8 +15679,8 @@ unit's uniform block carries three base indices into it (`uRowBase`, `uFlagBase`
 | order-marker buckets | 12 000 / 12 000 / 4 800 verts | 24 000 / 24 000 / 9 600 | render | static; overflow counted |
 | order arena `MAXORD` / `MAXWALK` | 2 048 / 8 192 | 4 096 / 16 384 | game fills, render copies | **fixed, never reallocated** — two threads; asserted ≥ 4 records per design-point unit |
 | packet builds table | 2 048 | 4 096 | game | asserted ≥ `MAXORD` |
-| bake caches `PB_MAXGEOM` / `PB_MAXMAT` | 128 / 256 | 256 / 1 024 | render | an entry evicted mid-frame refuses the frame, so they hold one 10-player frame; entries are allocated on bake |
-| Vulkan vertex-buffer table `VB_MAX` | 512 | the bake caches' sum, with a validated direct-mapped hint in front of the scan | render | the scan ran four times a unit a frame over the whole table |
+| bake caches `PB_MAXGEOM` / `PB_MAXMAT` | 128 / 256 | 512 / 1 024 | render | an entry evicted mid-frame refuses the frame, so they hold one 10-player frame (a geometry entry is a model: wrecks and ghosts take their own); entries are allocated on bake |
+| Vulkan vertex-buffer table `VB_MAX` | 512 | the bake caches' sum (1 536), with a validated direct-mapped hint in front of the scan | render | the scan ran four times a unit a frame over the whole table |
 | packet slot reserve `PK_RESERVE` | 8 MB | 16 MB | game commits, render reads | asserted ≥ the unit-scaled tables at the design point at 36 pieces a model (14.6 MB); address space, committed as used |
 | packet `n_units` / `n_wrecks` | unchecked against the tables | validated at acquire | render | the render arrays are sized from them |
 | reclaim ring | 4 096 | 16 384 | game | a design-point level's objects fit on the timed-out teardown path; a full ring leaks, never frees |

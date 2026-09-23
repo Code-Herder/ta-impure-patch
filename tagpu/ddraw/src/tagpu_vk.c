@@ -2,7 +2,7 @@
 
    ------------------------------------------------------------- the window ---
    COEXISTENCE WITH A GL CONTEXT ON ONE WINDOW
-   [MEASURED 2026-09-15, tools/vkcoexist.c + tools/vkcoexist-pixels.sh].
+   [MEASURED 2026-09-15, roadmap §G19a].
    The probe brings GL up the way cnc-ddraw's GL renderer did -- `GetDC(hwnd)`,
    a `SetPixelFormat` on it and a 3.3 core context on that DC -- and then tries
    all three routes, and the second script asks the question that decides it:
@@ -1534,7 +1534,7 @@ static int vk_renderpass(void)
     s_vk.dfmt = vk_depth_format();
     if (s_vk.dfmt == VK_FORMAT_UNDEFINED)
         vklog("no 24-bit depth format on this device - the passes that depth-test "
-              "will not arm (the GL lane's FBO is DEPTH24_STENCIL8 and a 32-bit "
+              "will not arm (their depth is specified as 24-bit fixed point, and a 32-bit "
               "float attachment would not settle a z-fight the same way)");
 
     memset(at, 0, sizeof at);
@@ -2151,13 +2151,13 @@ static DWORD WINAPI up_worker(LPVOID arg)
                                 } else {
                                     vklog("the device offers VK_EXT_depth_clip_control but not "
                                           "the depthClipControl feature - a ported pass that "
-                                          "needs GL's clip-space z range will stand down");
+                                          "needs a clip-space z below 0 kept will stand down");
                                 }
                             } else {
                                 vklog("VK_EXT_depth_clip_control is offered but "
                                       "vkGetPhysicalDeviceFeatures2KHR is not, so "
                                       "depthClipControl cannot be confirmed - a pass that needs "
-                                      "GL's z range will stand down rather than chain a struct "
+                                      "a clip z below 0 kept will stand down rather than chain a struct "
                                       "the device may ignore");
                             }
                         }
@@ -2177,7 +2177,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
         if (!s_vk.zclipok)
             vklog("VK_EXT_depth_clip_control is not offered - a ported pass whose "
                   "shader writes a clip z below 0 will stand down (Vulkan clips "
-                  "those and GL does not); the world passes are unaffected");
+                  "those by default); the world passes are unaffected");
 
         /* ANISOTROPY IS A CORE FEATURE BIT, so it goes in pEnabledFeatures and
            not in the pNext chain -- which is why it is not on the retry ladder
@@ -2197,8 +2197,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
                 s_vk.maxAniso = dp.limits.maxSamplerAnisotropy;
             } else {
                 vklog("samplerAnisotropy is not offered - a pass sampling a "
-                      "Classic++ restored twin will stand down, because its GL "
-                      "original is filtered 4x anisotropically and NOT doing "
+                      "Classic++ restored twin will stand down, because the "
+                      "twin is specified filtered 4x anisotropically and NOT doing "
                       "that is a different picture from our own oracle");
             }
             /* `wideLines` IS A CORE FEATURE BIT TOO, so it sits beside
@@ -2221,8 +2221,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
                 s_vk.maxLineWidth = dp.limits.lineWidthRange[1];
             } else {
                 vklog("wideLines is not offered - a pass drawing lines into a "
-                      "supersampled world target will stand down, because its "
-                      "GL twin draws them ss pixels wide and a 1.0 line is a "
+                      "supersampled world target will stand down, because a "
+                      "line is ss pixels wide there and a 1.0 line is a "
                       "different picture from our own oracle");
             }
             dci.pEnabledFeatures = &feat;
@@ -2358,7 +2358,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     va_log("with Vulkan up");
     /* ONE HANDLE: there is one window and it is the game's. */
     vklog("up in %lu ms on \"%s\" (row %d), the game window %p, %ux%u, vsync %d "
-          "- the surface is on the game window and there is no GL lane",
+          "- the surface is on the game window",
           GetTickCount() - t0, s_vk.devName, s_vk.devIndex, (void*)s_vk.hwnd,
           s_vk.ext.width, s_vk.ext.height, s_vk.vsync);
 
@@ -2950,11 +2950,11 @@ static int vk_present(void)
         if (nclaim > 1 || (nclaim == 1 && ndraw > 1))
             vklog("%d A/B levers claimed this frame and %d passes drew into it - "
                   "nothing captured. A Vulkan frame carries every armed pass at "
-                  "once while each GL capture carries one, so arm one pass's .ab "
+                  "once, so arm one pass's .ab "
                   "at a time (and turn the other pass's .on off).", nclaim, ndraw);
         else if (nclaim == 1 && abIsWorld && !abworld)
             vklog("a world pass claimed the A/B and this frame has no world "
-                  "target - its GL half is the gw*ss FBO and the only image here "
+                  "target - its capture is the gw*ss world target and the only image here "
                   "is the window's client rect, which tools/vk-ab.py refuses as "
                   "two sizes. Nothing captured; the line above says why the "
                   "target stood down.");
@@ -2964,7 +2964,7 @@ static int vk_present(void)
            one has already failed vkCreateImage and stood the target down. */
         else if (nclaim == 1 && !abworld && !s_vk.cansrc)
             vklog("the A/B asked for a capture and this surface's images do not "
-                  "carry TRANSFER_SRC - only the GL half will be written");
+                  "carry TRANSFER_SRC - nothing captured");
         else if (nclaim == 1 && tagpu_vk_shot_record(&s_pass, cb, abimg, ablay,
                                                      abw, abh, abfmt)) {
             s_abSlot1 = (int)fi + 1;

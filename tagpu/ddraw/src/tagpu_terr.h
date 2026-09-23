@@ -26,14 +26,8 @@ int  tagpu_terr_on(void);
    one instanced quad each, see the vertex shader in tagpu_terr.c */
 int  tagpu_terr_gather(const TAGPU_FXVIEW* v);
 /* GATHER AND HAND OVER: despite the name it draws nothing; it finishes the
-   frame's hand-over and publishes it. `palTex` is unused -- its one caller
-   passes 0 (tagpu_native.c). */
-void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex);
-/* Drop everything derived from the map. Despite the name there is no GL here,
-   and NOTHING CALLS IT: its one caller tests
-   `wglGetCurrentContext()`, which is NULL for the life of the process. See the
-   definition. */
-void tagpu_terr_glreset(void);
+   frame's hand-over and publishes it. */
+void tagpu_terr_render(const TAGPU_FXVIEW* v);
 
 /* Classic++ shadows (tagpu_shadow.c, renderers.md 2.8): the heightfield as a
    caster. One world-space vertex per 16-px grid point of the height grid,

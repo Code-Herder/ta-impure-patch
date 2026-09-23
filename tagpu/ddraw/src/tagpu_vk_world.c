@@ -423,8 +423,8 @@ static int build_sampler(const TAGPU_VKPASS* d)
        has without a target. */
     if (d->fmt == VK_FORMAT_B8G8R8A8_SRGB || d->fmt == VK_FORMAT_R8G8B8A8_SRGB ||
         d->fmt == VK_FORMAT_A8B8G8R8_SRGB_PACK32) {
-        plog(d, "world: the surface gave us an sRGB format (%d) and the GL twin's "
-                "world FBO is linear GL_RGBA8 - an sRGB intermediate would blend "
+        plog(d, "world: the surface gave us an sRGB format (%d) and the "
+                "world target is linear RGBA8 - an sRGB intermediate would blend "
                 "against decoded values, so the world stays on the swapchain image",
              (int)d->fmt);
         return 0;

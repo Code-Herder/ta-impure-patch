@@ -854,7 +854,6 @@ static void pose_rest_block_init(void)
     }
     filled = 1;
 }
-static int   s_castLogged = 0;      /* the first casters' numbers, once per session */
 #define MAXNODEV 4096               /* verts of one node staged for emission */
 
 static int emit_node(const char* nd, const float* P, int nvert, int nv,
@@ -2479,7 +2478,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        the widest zoom, so that is the size; see `grow_room` */
     static NU* units;
     static unsigned unitsCap;
-    static int saidGrow;
+    static int saidGrow, saidListGrow;
     unsigned ucap;
     if (!grow_room((void**)&units, &unitsCap, pk->n_units + pk->n_wrecks, sizeof(NU))) {
         if (!saidGrow) {
@@ -2968,8 +2967,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             if (units[i].nparts > 0) pieces += (unsigned)units[i].nparts;
         ok = grow_room((void**)&pdu, &pduCap, (unsigned)nu, sizeof(TAGPU_PDUNIT));
         if (!ok) {
-            if (!saidGrow) {
-                saidGrow = 1;
+            if (!saidListGrow) {
+                saidListGrow = 1;
                 nlog("native: the posed-unit list would not grow to the gather - "
                      "the unit hand-over is refused while that is true");
             }
@@ -3181,13 +3180,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* IN THE WORLD'S ORDER: terrain is the bottom layer and the features
        follow it, which is the order tagpu_vk.c records the passes in. Each
        twin owns its own blend state, so there is nothing to set here. */
-    if (nterr) tagpu_terr_render(&fv, 0);
-    if (nfeat) tagpu_feat_render(&fv, 0);
+    if (nterr) tagpu_terr_render(&fv);
+    if (nfeat) tagpu_feat_render(&fv);
     /* the effects are the LAST of the world, after the features and the
-       units -- the order tagpu_vk.c records in. The
-       scaffold texture is 0 here: the effects twin refuses any frame whose
-       twin had the scaffold live, so that is the value it wants. */
-    if (nfx) tagpu_fx_render(&fv, 0, 0);
+       units -- the order tagpu_vk.c records in. */
+    if (nfx) tagpu_fx_render(&fv);
     /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below the
        UI -- where tagpu_vk.c records them. `markOn` rather than a vertex count, because this pass's own
        heartbeat has to run even on a frame with no markers: without it the
@@ -3346,26 +3343,6 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
 
 /* game-thread readable flag: the owndraw classifier suppresses the engine's
    scratch-fake-unit wreck rasterise only while the native husk pass is armed */
-/* THE DISPATCHER. It drops the fog grid, whose pointer names a buffer the
-   next frame rebuilds, and then dispatches in order -- the restorer first, so
-   the passes below forget their jobs before their atlases go. */
-/* NOTHING CALLS THIS: no source of this build makes a GL context current, so
-   nothing watches for one to change. Every function below is reachable only
-   through this one, so the whole cascade is dead with it. It is kept
-   deliberately until opengl_utils.c, the last GL file, goes: a reset tree
-   that is merely unreachable costs nothing and one that misses a live object
-   costs a leak -- delete it WITH the last GL file, not before. */
-void tagpu_native_glreset(void)
-{
-    s_fogCols = s_fogRows = 0; s_fogCells = 0; s_fogGrid = NULL; s_fogLut = 0;
-    tagpu_fx_glreset();
-    tagpu_feat_glreset();
-    tagpu_terr_glreset();
-    s_castLogged = 0;
-    tagpu_posebake_glreset();
-    tagpu_posedraw_glreset();
-}
-
 int tagpu_native_wrecks_armed(void)
 {
     return s_armed > 0 && s_wrecks;

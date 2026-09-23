@@ -454,7 +454,7 @@ static int build(const TAGPU_VKPASS* d)
     if (!d->flipok) {
         plog(d, "fps: this device does not offer VK_KHR_maintenance1, so the "
                 "clip-space flip has no pipeline state to ride - the Vulkan "
-                "edition of the readout stays down (the GL one is unaffected)");
+                "edition of the readout stays down");
         return 0;
     }
     if (!resolve(d)) { plog(d, "fps: an entry point is missing"); return 0; }

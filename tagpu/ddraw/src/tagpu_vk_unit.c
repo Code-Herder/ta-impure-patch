@@ -2122,7 +2122,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (!s_saidCmp) {
             s_saidCmp = 1;
             plog(d, "unit: this device will not filter a depth format linearly "
-                    "and the GL twin's shadow PCF is bilinear - nothing drawn "
+                    "and the shadow PCF is bilinear - nothing drawn "
                     "on a frame that samples the map");
         }
         goto standdown;
@@ -2374,7 +2374,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (h.scafOn) {
         if (!s_saidScaf) {
             s_saidScaf = 1;
-            plog(d, "unit: the GL twin is sampling the scaffold overlay, and "
+            plog(d, "unit: the gather asks for the scaffold overlay, and "
                     "this lane has never measured that path - binding 44 falls "
                     "back to a 1x1 stand-in on any frame the overlay's own pass "
                     "did not hand over, which would be a different picture, so "
@@ -2966,7 +2966,7 @@ int tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (s_shadowOn && !tagpu_vk_shadow_ready(d->frame)) {
         if (!s_saidShadow) {
             s_saidShadow = 1;
-            plog(d, "unit: the GL twin drew these units against a cast-shadow map "
+            plog(d, "unit: these units are drawn against a cast-shadow map "
                     "and the Vulkan lane has none this frame - nothing drawn "
                     "while that is true");
         }

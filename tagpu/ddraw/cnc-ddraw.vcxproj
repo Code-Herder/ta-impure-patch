@@ -100,7 +100,6 @@
     <ClInclude Include="inc\debug.h" />
     <ClInclude Include="inc\dd.h" />
     <ClInclude Include="inc\ddpalette.h" />
-    <ClInclude Include="inc\openglshader.h" />
     <ClInclude Include="inc\render_gdi.h" />
     <ClInclude Include="inc\screenshot.h" />
     <ClInclude Include="inc\config.h" />

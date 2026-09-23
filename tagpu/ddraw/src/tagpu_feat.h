@@ -25,8 +25,7 @@ int  tagpu_feat_gather(const TAGPU_FXVIEW* v);
 /* draw into the currently bound FBO (depth test on; shadows without depth
    writes, bodies with). Uses its own program/VAO and leaves the program,
    VAO and texture bindings dirty. */
-void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex);
-void tagpu_feat_glreset(void);
+void tagpu_feat_render(const TAGPU_FXVIEW* v);
 
 /* ---- the Vulkan edition of this pass (the second world pass)
    ----------------------------------------------------------------------------

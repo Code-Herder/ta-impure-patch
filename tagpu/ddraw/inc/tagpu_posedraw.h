@@ -70,7 +70,7 @@ typedef struct {
 
 typedef struct {
     /* the type's bake. Both must be non-NULL and from the same frame's
-       tagpu_posebake_unit(); the pass reads `vao`, the body range and nparts. */
+       tagpu_posebake_unit(); the pass reads the body range and nparts. */
     const void* geom;           /* const TAGPU_PBGEOM*                        */
     const void* mat;            /* const TAGPU_PBMAT*                         */
     /* one 4x3 row-major matrix (3 vec4) per piece, carrying a REST vertex to
@@ -360,7 +360,7 @@ typedef struct TAGPU_PDUREC {
     int   shKind;                     /* TAGPU_PDSH_*                         */
     int   shFirst, shCount;           /* the range that kind draws            */
     float shOffY;                     /* the ground shift, frame px           */
-    int   npose;                      /* pieces the block below carries       */
+    int   npose;                      /* pieces the pose arena carries        */
     unsigned rowOff;                  /* first of npose*3 vec4 in `rows`      */
     unsigned flagOff;                 /* first of npose floats in flags/vis   */
     /* the vertex stage's per-unit numbers */
@@ -550,7 +550,6 @@ int  tagpu_posedraw_slant_take(void);
    `tagpu_posedraw_frame` and before the frame's last window closes. */
 void tagpu_posedraw_uncarried(void);
 
-void tagpu_posedraw_glreset(void);
 /* one `posed=` field for the native: line; writes nothing when disarmed */
 int  tagpu_posedraw_stats(char* out, int n);
 #endif

@@ -690,8 +690,8 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                for the order lines. Named so the next reader is not left
                guessing at a pass that produced no log line at all. */
             plog(d, "mark: an entry point would not resolve (this pass asks for "
-                    "vkCmdSetLineWidth, which its siblings do not) - the markers "
-                    "stay with GL");
+                    "vkCmdSetLineWidth, which its siblings do not) - the marker "
+                    "pass stays down");
             s_state = ST_REFUSED; s_downOwed = 1; return 0;
         }
         vkGetPhysicalDeviceProperties(d->pd, &props);
@@ -713,7 +713,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (!tagpu_mark_handover(&s_h, d->frame)) {
         if (!s_saidHand) {
             s_saidHand = 1;
-            plog(d, "mark: no hand-over for frame %u - the GL pass published "
+            plog(d, "mark: no hand-over for frame %u - the mark pass published "
                     "nothing, or published it for another frame", d->frame);
         }
         return 0;
@@ -852,7 +852,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         if (!s_saidLine) {
             s_saidLine = 1;
             plog(d, "mark: order lines need VK_EXT_line_rasterization with "
-                    "bresenhamLines and the device has not got it - GL's "
+                    "bresenhamLines and the device has not got it - the "
                     "diamond-exit line is a different picture from Vulkan's "
                     "default, so nothing is drawn");
         }
@@ -888,7 +888,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         if (!s_saidWide) {
             s_saidWide = 1;
             plog(d, "mark: the target is %.0fx supersampled, so the order lines "
-                    "are that many px wide in the GL twin, and this device "
+                    "are that many px wide, and this device "
                     "offers %s - nothing drawn", s_lineW,
                  d->wideok ? "a narrower maximum" : "no wideLines at all");
         }

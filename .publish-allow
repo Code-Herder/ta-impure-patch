@@ -22,7 +22,3 @@ unditherer/models/*
 
 # Replacement unit models we built (posed by the unit's own COB at runtime)
 units/*.glb
-
-# cnc-ddraw upstream resources carried by the fork (MIT, github.com/FunkyFr3sh)
-tagpu/ddraw/config/cnc-ddraw.ico
-tagpu/ddraw/config/Resources/*.png

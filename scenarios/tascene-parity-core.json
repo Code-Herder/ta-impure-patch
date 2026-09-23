@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "The tascene parity fixture with the sides swapped: the human is CORE, so the in-game panel art, CORMAIN2 and the CORCOM build pages go through the GL UI layer (gui-renderer.md G15c). Same map, camera, seed and stillness rules as tascene-parity.json: fog off, the units on hold with shootall off, the eye pinned.",
+  "description": "The tascene parity fixture with the sides swapped: the human is CORE, so the in-game panel art, CORMAIN2 and the CORCOM build pages go through the UI layer (gui-renderer.md G15c). Same map, camera, seed and stillness rules as tascene-parity.json: fog off, the units on hold with shootall off, the eye pinned.",
   "seed": 20260903,
   "on_error": "abort",
 

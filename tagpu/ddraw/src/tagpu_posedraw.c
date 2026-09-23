@@ -130,9 +130,9 @@ static int    s_state;          /* 0 untried, 1 ready, 2 refused */
    asks before it skips (gpu-posing.md §4, decision B) — and reads `s_state`
    from the GAME thread while only the render thread writes it. That is safe by
    DIRECTION rather than by timing: `s_state` is one aligned int, set to 1 only
-   after the programs have linked and the buffers exist, and put back to 0 by
-   `tagpu_posedraw_glreset()` BEFORE a new context is used. A stale "not ready"
-   costs a double draw for a frame (the engine's 8bpp under our RGB); a stale
+   only once the device has answered, and a later device cannot make it
+   wrong: the consumer re-checks the whole frame against the current device's
+   limit on every frame. A stale "not ready" costs a double draw for a frame (the engine's 8bpp under our RGB); a stale
    "ready" is the unsafe direction and no write order produces it. */
 /* "THIS PASS WILL DRAW THE UNIT, SO THE ENGINE NEED NOT" -- and that is a
    promise to the GAME thread, which acts on it by skipping the engine's own
@@ -283,7 +283,7 @@ static int arena_room(void** p, unsigned* cap, unsigned need, size_t elem)
         if (!s_saidRoom) {
             s_saidRoom = 1;
             plog("posedraw: the Vulkan hand-over's arena would not grow - nothing "
-                 "is handed over while that is true (the GL lane is unaffected)");
+                 "is handed over while that is true");
         }
         return 0;
     }
@@ -877,11 +877,8 @@ static const TAGPU_PBGEOM* unit_ok(const TAGPU_PDUNIT* u, const TAGPU_PBMAT** mo
     const TAGPU_PBGEOM* g = (const TAGPU_PBGEOM*)u->geom;
     const TAGPU_PBMAT*  m = (const TAGPU_PBMAT*)u->mat;
     if (s_state != 1 || !g || !m || !u->pose) return NULL;
-    /* NOT `m->vao`: IT IS A GL NAME, NOT A VALIDITY TEST. `mat_bake` creates
-       no vertex array on the vulkan-only lane, so testing it would reject
-       every unit and the hand-over would come out `nunit=0`. The integrity
-       this line is for is these two terms: the material entry names THIS
-       geometry and agrees with it about the vertex count. */
+    /* the integrity this line is for: the material entry names THIS
+       geometry and agrees with it about the vertex count */
     if (m->geom != g || m->nvert != g->nvert) return NULL;
     if (u->npose < g->nparts) return NULL;
     if (g->nparts > TAGPU_PBMAXPIECE) { s_overPiece++; return NULL; }
@@ -1151,14 +1148,6 @@ void tagpu_posedraw_frame(unsigned frame_counter)
         s_ab = GetFileAttributesA(PD_ABFILE) != INVALID_FILE_ATTRIBUTES;
         if (!s_ab) s_abDone = 0;
     }
-}
-
-void tagpu_posedraw_glreset(void)
-{
-    /* The arm state belongs to a device: the fork restarts its render thread
-       on every display-mode change, and the device the next `ready()` asks
-       about its `maxStorageBufferRange` may not be the one this answered for. */
-    s_state = 0;
 }
 
 int tagpu_posedraw_stats(char* out, int n)

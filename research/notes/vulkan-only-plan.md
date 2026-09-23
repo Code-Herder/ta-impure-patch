@@ -133,7 +133,7 @@ non-zero the unit pass draws **nothing at all**.
 `ghost_pass` never ran on the Vulkan lane to count anything. What remains counted is an arena
 that would not grow, a unit with no pieces and a truncated packet. `TAGPU_PD_MAXHAND` is every
 record the producer can make, so no frame is refused for its count
-([GPU status](gpu-status.html) §2.85).
+([GPU status](gpu-status.html) §2.86).
 
 Not visible from the configuration Phase G was measured in.
 
@@ -1891,6 +1891,15 @@ that a count which grows is the plan catching up with the work.) The row was
      `tacli shield <name> off` so their keyboard and mouse reach it, and hands it over — not a
      screenshot, and not on the 4K screen (`tile` in `instance.json` is the lever). Confirmation
      comes from the owner looking at a live game, before any fix is attempted.
+
+   * **The strip — the residue 11-5 left in everything but files. ✓ DONE 2026-09-23** (branch
+     `worktree-build_ghost`), by the owner's ruling: no aliasing, no backward compatibility.
+     `renderer=` knows `auto`, `vulkan` and `gdi`; `opengl`, `openglcore` and `direct3d9` are
+     unknown values that are logged and run Vulkan. The ten `*_glreset` functions, the GL fields and
+     parameters, `inc/openglshader.h`, the `tagpu.dll` companion, the upstream config GUI,
+     `tools/gl-sites.py` and the vkcoexist probe are deleted; `tacli glshot` is gone and its three
+     callers grab the window. The list and the measurements are
+     [gpu-status](gpu-status.html) §2.85. **Open:** ~800 comment mentions of GL in the sources.
 
    * **11-6 — the exit condition.** `renderer=gdi` documented and MEASURED as the stock
      reference, with the residue named rather than waved at. **Note what 11-5d's gdi control

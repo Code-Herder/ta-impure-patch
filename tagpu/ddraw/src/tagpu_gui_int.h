@@ -295,7 +295,6 @@ void tagpu_gui_font_stats(unsigned* glyphs, unsigned* resends, unsigned* refused
 enum {
     TAGPU_GUI_WHY_NONE = 0,
     TAGPU_GUI_WHY_ARM,        /* the trigger (re)appeared: the twins start from the surfaces as they are */
-    TAGPU_GUI_WHY_GLCTX,      /* the GL context changed (a display-mode switch)                          */
     TAGPU_GUI_WHY_QUEUE,      /* the op ring was full                                                    */
     TAGPU_GUI_WHY_ARENA,      /* the byte arena was full                                                 */
     TAGPU_GUI_WHY_BOX,        /* a recorded box no longer fits its surface                              */

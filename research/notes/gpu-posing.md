@@ -341,13 +341,12 @@ each bound does when it is reached, at that scale:
 |---|---|---|---|
 | `MAXNV` / `s_vtrunc` | 49152 verts | the shared CPU vertex stream | **gone for units** — and it was already truncating at 281 units on screen (§4 step 7), which is the whole reason the CPU path is both slower and drawing less |
 | the pose arena | grown each frame to the gathered pieces (`tagpu_native.c`) | poses buffered per frame | exact: the bake keys its entry on the unit's own `nparts`, so the sum is what the loop can ask for; only a failed allocation reaches the rest-pose degradation above |
-| the unit gather | grown each frame to `n_units + n_wrecks` | units gathered per frame — **on screen only**, not alive | cannot drop a unit: a failed grow refuses the hand-over whole ([GPU status](gpu-status.html) §2.85) |
+| the unit gather | grown each frame to `n_units + n_wrecks` | units gathered per frame — **on screen only**, not alive | cannot drop a unit: a failed grow refuses the hand-over whole ([GPU status](gpu-status.html) §2.86) |
 | `PB_MAXMAT` | 1 024 | `(type, owner, atlas gen)` material streams | a stream is per OWNER, so it is sized for ten players at ~100 types on screen each. An entry evicted mid-frame leaves a record naming a stale serial and the Vulkan pass refuses the frame |
-| `PB_MAXGEOM` | 256 | model types baked at once | 279 unit types exist; sized so one frame of a varied ten-player game fits |
+| `PB_MAXGEOM` | 512 | models baked at once | 279 unit types exist, and a wreck's model and a ghost take entries of their own; sized so one frame of a varied ten-player game fits |
 
-**Only the first two are step 8's.** The other three are named with their failure mode so the
-unit-limit patch has a list rather than a surprise; `MAXU`'s silent drop is the one that is a
-correctness bug today and should not wait for the rest.
+**Only `MAXNV` is step 8's.** The rest are sized for 1024 units a player × 10 players by
+[GPU status](gpu-status.html) §2.86, which also removed the gather's silent drop.
 
 ## 4. The architecture
 
@@ -519,6 +518,10 @@ the reference setup) and the pass refuses to arm below 13 312, leaving every uni
 instead of drawing them all wrong. The per-piece `shaded` bit needs that second array because all
 twelve floats of the 4x3 are the matrix, and it cannot live in the per-type bake: it is
 `emit_geom_at`'s `pieceShaded`, which is per UNIT (a COB can clear the flag).
+*[The Vulkan pass carries the pose differently: one readonly storage buffer per frame slot holds
+every unit's rows, flags and visibility, and each unit's base indices into it are uniforms, so the
+only per-unit bound is the device's `maxStorageBufferRange` against one unit at the piece ceiling —
+[GPU status](gpu-status.html) §2.86.]*
 
 **Step 5 consumes the cached topology.** `posed_pose` (`tagpu_native.c`) builds the matrices off the
 bake entry's `parent[]` instead of re-walking the node tree per unit per frame — the duplication §4
@@ -772,7 +775,8 @@ outright — it was written inside `emit_node` and read only by the emitter path
 **The refusal ledger, as built.** Decisions A and B above were settled first and the code follows
 them. Two of the refusals turned out not to exist: `npd >= MAXU` cannot happen (`npd <= nu <= MAXU`
 by the loop that fills it) and `nparts != g->nparts` re-read what the cache lookup had already
-matched on. The pose arena is sized from `MAXU` rather than a magic 64.
+matched on. The pose arena is sized from `MAXU` rather than a magic 64. *[Since
+[GPU status](gpu-status.html) §2.86 the list and the arena both grow to the frame; `MAXU` is gone.]*
 
 **The one gap the build found in its own ledger.** The bake refusing was written up as "logged once
 per model" — but that log only exists under `tagpu_posebake.on`, so in an ordinary run an undrawable

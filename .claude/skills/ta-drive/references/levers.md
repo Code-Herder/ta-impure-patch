@@ -334,7 +334,7 @@ that map's size.
 These appear in older notes and commit messages. No file in the tree reads them; creating one
 changes nothing and logs nothing, which is the failure mode to recognise.
 
-`tagpu_glshot.trigger` (and `tacli glshot`, which fails loudly on purpose), `tagpu_gldbg.on`,
+`tagpu_glshot.trigger` (and `tacli glshot`, which no longer exists), `tagpu_gldbg.on`,
 `tagpu_writeback.on`, `tagpu_posedraw.on`, `tagpu_posefix.off`, `tagpu_posewatch.on`,
 `tagpu_poserecon.on`, `tagpu_purevk.on`, `tagpu_selgeom.on`, `tagpu_shade.off`,
 `tagpu_rglsl.step`, `tagpu_shadowdump.on`, `tagpu_shadow.ab`, `tagpu_unit.on`, `tagpu_unit.ab`,

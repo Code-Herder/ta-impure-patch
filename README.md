@@ -4,7 +4,7 @@ The aim of the Total Annihilation Impure patch is to fully modernize Total Annih
 
 ## Core features
 
-- **Game/UI render replacement.** Full port of the software renderer to OpenGL.
+- **Game/UI render replacement.** Full port of the software renderer to Vulkan.
   - Zoom in and out of the map.
   - UI resizes proportionally to the screen resolution *(work in progress)*. A prototype is partially integrated, not a full port; some UI elements are still blitted to a texture.
 - **COB extensions**

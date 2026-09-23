@@ -171,9 +171,6 @@
     <ClInclude Include="inc\debug.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="inc\openglshader.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="inc\lodepng.h">

@@ -56,7 +56,7 @@ The vocabulary is TA's: `move attack guard repair patrol reclaim capture load un
 
 **The input shield.** On by default. The game ignores the real keyboard and mouse, so an agent's game can run next to you without your typing landing in it, and its injected input never reaches your desktop. `tacli shield t1 off` hands the game over when you want to play the situation yourself.
 
-**The patch's features, per instance.** Every feature of the Impure Patch is a trigger file in the game directory, and `tacli arm` writes them for one instance: the OpenGL passes, the zoom, Classic++, the GL UI, the extra weapons, the COB trace. Arm a pass before the launch you want it in.
+**The patch's features, per instance.** Every feature of the Impure Patch is a trigger file in the game directory, and `tacli arm` writes them for one instance: the render passes, the zoom, Classic++, the UI layer, the extra weapons, the COB trace. Arm a pass before the launch you want it in.
 
 ```bash
 tools/tacli arm t1 'native.on=all wrecks' terr.on feat.on fx.on sfx.on mark.on zoom.on vpwide.on gui.on
@@ -67,7 +67,7 @@ tools/tacli launch t1 --res 1920x1080
 ## Looking at the game
 
 - `tacli shot` — the engine's own 8-bit surface. Engine truth, and the only view that shows the engine's UI.
-- The presented frame is the window itself: grab it by id (`import -window <id>`, the id from `tacli ls --json`). `tacli glshot` is retired and fails loudly: there is no GL framebuffer in the process.
+- The presented frame is the window itself: grab it by id (`import -window <id>`, the id from `tacli ls --json`).
 - `tacli roster` — the live units with type, owner, world and screen position, plus where the camera is.
 - `tacli log` and `tacli wait` — the patch's log, and a wait for a regex in it. This is how a script knows a pass armed, a model loaded, or a restore finished.
 - `tacli peek` — read game memory from inside the process. The cheap way to answer "did that actually change anything" without a debugger.
@@ -185,7 +185,7 @@ Everything in `scenarios/` was written to answer a question. What each one was f
 | scenario | used for |
 |---|---|
 | `tascene-parity` | A fixed camera, two still units, nothing that moves or fogs. The pixel-for-pixel parity fixture between the engine and the browser. |
-| `tascene-parity-core` | The same with the human on the CORE side, so the CORE panel art goes through the GL UI. |
+| `tascene-parity-core` | The same with the human on the CORE side, so the CORE panel art goes through the UI layer. |
 | `tascene-base` | A small ARM base on open grass with a hill for slopes. The scene to judge lighting and shadows in. |
 | `tascene-air` | The base with five aircraft parked in the air at each stock cruise altitude. Shadow drop against altitude, read off one still. |
 
@@ -240,7 +240,6 @@ Every command takes an instance name first and `--json` anywhere.
 | `gui` | the UI renderer: `on`, `strict`, `census`, `off`, `remove` |
 | `switches` | read or set the engine switches: `shootall=on noshake=on` … |
 | `shot` | screenshot of the engine's surface (PNG) |
-| `glshot` | retired — fails loudly; grab the window by id for the presented frame |
 | `roster` | the latest unit roster and the camera eye |
 | `log` | tail the patch's log (`-n`, `-g regex`) |
 | `wait` | wait for a regex in the log (`--timeout`) |

@@ -83,23 +83,6 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
        `do_eye` and whose answer the render thread reads back in
        `tagpu_zoom_frame_end`. The flip has no packet to give it, and on the gdi
        lane there is no `tagpu_cmd_post` to carry that answer anywhere. */
-    /* NO GL CONTEXT IS EVER CURRENT ON THIS THREAD, so nothing here watches
-       for a context change. THE INVARIANT IS A CALLER, NOT A NAME:
-       `opengl_utils.c:107` and `:110` resolve `wglCreateContext` and
-       `wglMakeCurrent` into `xwglCreateContext` / `xwglMakeCurrent`, which
-       `opengl_utils.h` exports tree-wide -- as string literals and
-       `x`-prefixed identifiers, so a name scan does not see them, and a change
-       that called them would pass that scan unchanged. What holds is that
-       **`oglu_load_dll()` is the only code that resolves those two pointers,
-       and it has no caller anywhere in the tree** (`dd.c:1898` and `:1912` say
-       so in prose; `dd.c`'s renderer selection has four arms resolving to two
-       destinations, gdi and Vulkan, and none of them probes GL). Neither
-       pointer is ever invoked -- `opengl_utils.c:133` is a truthiness test,
-       not a call -- so both are NULL.
-
-       The five `*_glreset` entry points -- `tagpu_native_glreset`,
-       `tagpu_scaffold_glreset`, `tagpu_r3d_glreset`, `tagpu_gui_glreset`,
-       `tagpu_fps_glreset` -- have no call site. */
     /* tracer flush: no-op unless the tracer was armed. Runs independently of the
        overlay's own enable state (must precede the tagpu_overlay.off early-return). */
     tagpu_tracer_flush(f->frame_counter);

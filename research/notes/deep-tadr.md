@@ -231,7 +231,7 @@ shipped ini says 1500. Same pattern at `:41` — code fallback 16000, shipped in
 [DISASSEMBLED for the retail values; VERIFIED against the TADR sources for the patch sites]
 
 The renderer is sized for **1024 a player × 10 players = 10 241 slots**
-(`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`); gpu-status §2.85 lists what that design point
+(`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`); gpu-status §2.86 lists what that design point
 bounds.
 
 **Weapon IDs 256→16000 is not current.** `tdraw.txt:8` explicitly says the weapon-ID

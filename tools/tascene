@@ -1883,13 +1883,10 @@ def cmd_uidiff(args):
 
 # --------------------------------------------------------------------------- ab
 
-# The parity claim, made checkable. `ab` was glue over three things that
-# already existed — tacli drives the game, `glshot` captured the GL framebuffer
-# top-down, roster reports the live eye — and being glue was the point: a
+# The parity claim, made checkable. `ab` is glue over three things that
+# already exist — tacli drives the game, the game window is grabbed by its
+# client id, roster reports the live eye — and being glue is the point: a
 # comparison that only happens when someone remembers does not happen.
-# ONE OF THE THREE IS GONE: the GL framebuffer went with the OpenGL lane in the
-# vulkan-only plan's landing 11-2, so `ab` stops at the capture and says so.
-# See the block in cmd_ab for what replaces it and what is still owed.
 
 TACLI = HERE / "tacli"
 
@@ -1909,9 +1906,24 @@ def run_tacli(argv, timeout=600.0, want_json=False):
     return text
 
 
-# UNUSED SINCE landing 11-2 took `ab`'s engine-side capture, and kept on
-# purpose: the capture that replaces it, `tagpu_vk_shot.c`, writes PPM too, so
-# this is the reader `ab` needs back rather than dead weight to delete.
+def grab_window(name: str, path: Path):
+    """The presented frame: the instance's client window, grabbed by id on its
+    display, as a PPM. The window has to be on the visible desktop, which the
+    tacli tiler guarantees for a window it placed."""
+    for inst in run_tacli(["ls"], want_json=True):
+        if inst.get("name") == name:
+            break
+    else:
+        die(f"no instance {name!r}")
+    if not inst.get("running") or not inst.get("window"):
+        die(f"{name} has no window to grab")
+    env = dict(os.environ, DISPLAY=inst["display"])
+    proc = subprocess.run(["import", "-window", "0x%x" % inst["window"][0], "-depth", "8", f"ppm:{path}"],
+                          env=env, capture_output=True)
+    if proc.returncode != 0 or not path.exists():
+        die(f"window grab failed: {proc.stderr.decode('utf-8', 'replace').strip()[:200]}")
+
+
 def read_ppm(path: Path):
     blob = path.read_bytes()
     if not blob.startswith(b"P6"):
@@ -1928,7 +1940,9 @@ def read_ppm(path: Path):
         while pos < len(blob) and not blob[pos:pos + 1].isspace():
             pos += 1
         fields.append(int(blob[start:pos]))
-    w, h, _maxv = fields
+    w, h, maxv = fields
+    if maxv != 255:
+        die(f"{path}: {maxv + 1}-level samples; only 8-bit PPM is read here")
     return w, h, blob[pos + 1:pos + 1 + w * h * 3]
 
 
@@ -2008,34 +2022,35 @@ def cmd_ab(args):
             "the roster still reads the boot frame, so any diff would be noise")
     print(f"tascene: live eye {eye[0]},{eye[1]}, {len(roster['units'])} units")
 
-    # THE ENGINE-SIDE CAPTURE THIS COMPARISON NEEDS NO LONGER EXISTS ON THIS
-    # LANE [the vulkan-only plan, landing 11-2]. `tacli glshot` read the GL
-    # framebuffer, which is where our passes had drawn; the OpenGL lane and
-    # that framebuffer are both gone. `tacli shot` is NOT a substitute: it
-    # captures TA's own DirectDraw primary, which on the Vulkan lane holds the
-    # engine's frame WITHOUT our passes -- so an `ab` built on it would compare
-    # the browser renderer against a picture our renderer never touched and
-    # report a difference that means nothing.
-    #
-    # Failing here, loudly, is deliberate: a parity harness that silently
-    # compares the wrong images is worse than one that stops. The surviving
-    # engine-side capture is the Vulkan one (`tagpu_vk_shot.c` writing
-    # `tagpu_<pass>_vk.ppm`, compared file-to-file by `vk-ab.py`); wiring `ab`
-    # to it is its own piece of work and is recorded as an open gap in the plan.
-    die("tascene ab has no engine-side capture on the vulkan-only lane: it was "
-        "`tacli glshot`, which retired with the OpenGL lane in landing 11-2. "
-        "`tacli shot` cannot stand in -- it captures TA's own surface without "
-        "our passes. Use the Vulkan A/B (tagpu_vk_shot.c + tools/vk-ab.py) "
-        "until `ab` is wired to it.")
+    ppm = out / "engine.ppm"
+    grab_window(args.name, ppm)
+    ew, eh, engine = read_ppm(ppm)
 
-    # WHAT STOOD HERE went with the capture [landing 11-2]: the browser-side
-    # build and shot, the size check, the viewport diff and the side-by-side
-    # panel. All of it consumed `engine`, `ew` and `eh`, which the line above no
-    # longer produces, so leaving it would have been unreachable code naming
-    # variables that do not exist -- the shape of "still works" that a reader
-    # trusts and an interpreter never reaches. The browser half is unchanged and
-    # still driven by `tascene build` and `tascene shot`; only the pairing is
-    # gone, and it comes back when `ab` is wired to the Vulkan capture.
+    pack = out / "pack"
+    build_argv = [str(scenario_path), "-o", str(pack), "--eye", f"{eye[0]},{eye[1]}",
+                  "--res", f"{ew}x{eh}"]
+    main(["build"] + build_argv)
+
+    ours_png = out / "browser.png"
+    main(["shot", str(pack), "-o", str(ours_png)] + (["--opts", args.opts] if args.opts else []))
+    ow, oh, _ch, ours = ta3do.read_png(ours_png.read_bytes())
+    if _ch == 4:
+        ours = bytes(b for i, b in enumerate(ours) if i % 4 != 3)
+
+    if (ow, oh) != (ew, eh):
+        die(f"size mismatch: game window {ew}x{eh}, browser {ow}x{oh}")
+
+    vpL, vpT, vw, vh = viewport([ew, eh])
+    n, mae, px = diff_rgb(engine, ours, ew, eh, (vpL, vpT, vw, vh))
+    panel([("engine", engine, ew, eh), ("tascene", ours, ow, oh)], out / "ab.png")
+
+    result = {"eye": eye, "res": [ew, eh], "viewport": [vpL, vpT, vw, vh],
+              "differing": n, "viewport_px": px, "pct": round(100.0 * n / px, 3),
+              "mean_abs": round(mae, 3), "panel": str(out / "ab.png")}
+    ta3do.out(result, args.json,
+              human=(f"game vs tascene inside the viewport: {n}/{px} px differ "
+                     f"({100.0 * n / px:.2f}%), mean abs {mae:.2f}/255\n"
+                     f"panel: {out / 'ab.png'}"))
 
 
 # --------------------------------------------------------------------------- CLI

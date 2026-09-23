@@ -1712,14 +1712,13 @@ read from the code and then from the reset reasons once they were logged:
   of the ring; publishing resumes, with one reseed (`stall-over`), once the queue is empty or
   the backlog under the low-water marks. A long render hitch (the terrain atlas at a map's first
   frame, a screenshot) counts as a stall and costs one reseed, which is the cheap side.
-- **Skip to reset** (render thread): after `tagpu_gui_glreset` the drain takes the arena bytes of
-  every op and applies none until the producer's `RESET` arrives (`skipped=`).
 - **The offscreen's identity**: a surface created with the tag `"OFFSCREEN"` (`0x5091D4`, the
   five sites) retires every other entry so tagged — the engine has one at a time — and a
   same-base size change forgets the ring's boxes on that base. The census also probes a
   surface's first and last row before diffing it and drops one that is unmapped.
 - **Every reset is logged with its reason** under `log` (`gui: reset #n: <why> (queued= arena=
-  surfaces=)`), and the heartbeat gained `stalls= skipped= palchg= paldiff=n@i palsrc=`.
+  surfaces=)`), and the heartbeat gained `stalls= palchg= paldiff=n@i palsrc=` (and a `skipped=` for the GL
+  context's skip-to-reset, which went with the GL context: gpu-status §2.85).
 - **The palette.** Every palette the engine sets goes through `0x4BA200`, which keeps the
   entries in the graphics globals and hands DirectDraw `min(255, entry × gamma)` with the gamma
   from the Gamma option (`SetGamma 0x4BA590`, `0.5 + Gamma/24`; 1.0 at the code default 12, and
