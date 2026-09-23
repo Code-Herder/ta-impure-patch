@@ -58,7 +58,7 @@ SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix .o, $(basename $(SRCS)))
 DEPS     := $(filter %.d, $(OBJS:.o=.d))
 
-.PHONY: clean all thread-split spirv
+.PHONY: clean all thread-split spirv log-check logtest
 all: $(TARGET)
 
 %.o: %.rc
@@ -87,10 +87,24 @@ thread-split:
 spirv:
 	../../tools/spirv-check.sh .
 
-$(TARGET): $(OBJS) | thread-split spirv
+# THE LOG RULE: only tagpu_log.c opens a log file, because its caps hold only while it
+# is the one writer (inc/tagpu_log.h). Same placement as the two rules above.
+log-check:
+	../../tools/log-check.sh .
+
+$(TARGET): $(OBJS) | thread-split spirv log-check
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
+# THE SINK'S STRESS TEST (tests/logtest.c, driven by tests/logtest.py under Wine): the
+# real tagpu_log.c with caps small enough that rotation and eviction happen in seconds.
+# Not part of `all` or of CI -- it needs Wine to run.
+logtest: tests/logtest.exe
+
+tests/logtest.exe: tests/logtest.c src/tagpu_log.c inc/tagpu_log.h
+	$(CC) -Iinc -O2 -Wall -std=c99 -DTLOG_FILE_CAP=65536 -DTLOG_TOTAL_CAP=524288 -DTLOG_KEEP=10 \
+	    -static -o $@ tests/logtest.c src/tagpu_log.c
+
 clean:
-	$(RM) $(TARGET) $(OBJS) $(DEPS) || del $(TARGET) $(subst /,\\,$(OBJS))
+	$(RM) $(TARGET) $(OBJS) $(DEPS) tests/logtest.exe || del $(TARGET) $(subst /,\\,$(OBJS))
 
 -include $(DEPS)

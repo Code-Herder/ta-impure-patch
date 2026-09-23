@@ -10,6 +10,7 @@
 #include "tagpu_fogwide.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
+#include "tagpu_log.h"
 
 /* the engine fields the builder reads, all in the TAdynmem block */
 #define OFF_LOSTYPE  0x14281       /* u16; bit1 = true LOS, bit3 = grid current */
@@ -51,8 +52,7 @@
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }

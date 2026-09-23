@@ -17,6 +17,7 @@
 #include "tagpu_menu.h"
 #include "mouse.h"
 #include "tagpu_zoom.h"
+#include "tagpu_log.h"
 
 #define SHIELD_TRIGGER  "tagpu_shield.on"
 
@@ -31,8 +32,7 @@ static volatile LONG s_downpolls[256];  /* ...and was told "down" */
 
 static void slog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static BOOL trigger_present(void)

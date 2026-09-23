@@ -3,14 +3,14 @@
 #include <windows.h>
 #include <stdio.h>
 #include "tagpu_peek.h"
+#include "tagpu_log.h"
 
 #define PEEK_TRIGGER "tagpu_peek.trigger"
 #define PEEK_MAX     256          /* bytes per s<N>/x<N> read */
 
 static void plog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* Readable means committed and not guard/no-access: the whole point of a peek is

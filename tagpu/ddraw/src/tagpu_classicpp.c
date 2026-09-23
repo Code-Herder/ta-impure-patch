@@ -15,6 +15,7 @@
 #include <math.h>
 #include "tagpu_classicpp.h"
 #include "tagpu_opt.h"
+#include "tagpu_log.h"
 
 #define ON_FILE   "tagpu_classicpp.on"
 #define CFG_FILE  "tagpu_classicpp.cfg"
@@ -27,8 +28,7 @@
 
 static void cplog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int          s_on = 0;

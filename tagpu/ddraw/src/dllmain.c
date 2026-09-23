@@ -34,6 +34,7 @@
 #include "versionhelpers.h"
 #include "delay_imports.h"
 #include "keyboard.h"
+#include "tagpu_log.h"
 
 
 /* export for cncnet cnc games */
@@ -61,6 +62,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
             cfg_load();
             return TRUE;
         }
+
+        /* tagpu: the log sink (tagpu_log.h) before anything that logs -- cfg_load does.
+           After the config tool's return above, so opening the tool never rotates the
+           player's logs. */
+        tagpu_log_init();
 
 #ifdef _DEBUG 
         dbg_init();

@@ -36,6 +36,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include "tagpu_log.h"
 
 #include "config.h"
 #include "ini.h"
@@ -72,8 +73,7 @@ static int s_mayInject;                 /* the player left inject_resolution to 
 
 static void cfglog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* Did the player write this key? Mirrors cfg_get_string's own rule exactly --

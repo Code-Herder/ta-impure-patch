@@ -94,6 +94,7 @@
 #include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
 #include "tagpu_vpwide.h"
 #include "tagpu_hud.h"
+#include "tagpu_log.h"
 
 /* ---- engine layout (all binary-verified) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -284,8 +285,7 @@ static int grow_room(void** p, unsigned* cap, unsigned need, size_t elem)
 
 static void nlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* units skipped because their object pointer moved between gather and emit

@@ -86,6 +86,7 @@
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"
 #include "tagpu_native.h"
+#include "tagpu_log.h"
 #include "tagpu_packet.h"     /* the record count TAGPU_PD_MAXHAND must cover,
                                  and tagpu_grow_stress */
 #include "tagpu_render3do.h"
@@ -113,8 +114,7 @@
 
 static void plog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int    s_state;          /* 0 untried, 1 ready, 2 refused */

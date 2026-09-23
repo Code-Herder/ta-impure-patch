@@ -12,6 +12,7 @@
 #include "tagpu_vk.h"         /* tagpu_vk_owns_present: is there a GL lane at all? */
 #include "tagpu_classicpp.h"  /* tagpu_classicpp_assets: the restored twin is only worth mirroring while it is what the twin samples */
 #include "tagpu_r3dcache.h"
+#include "tagpu_log.h"
 
 /* The Object3do piece array, PrimitiveStruct and Model3DONode layouts are in
    research/notes/exe-reverse-engineering.md; the pieces this file needs
@@ -34,8 +35,7 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0
 
 static void rlog(const char* s)
 {
-    FILE* fl = fopen("tagpu.log", "a");
-    if (fl) { fprintf(fl, "%s\n", s); fclose(fl); }
+    tagpu_log(s);
 }
 
 

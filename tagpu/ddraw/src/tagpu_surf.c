@@ -11,6 +11,7 @@
 #include "IDirectDrawSurface.h"     /* ->surface, ->pitch, ->width, ->height      */
 #include "IDirectDrawPalette.h"     /* ->palette->data_rgb                        */
 #include "tagpu_surf.h"
+#include "tagpu_log.h"
 
 /* THE LOG IS THE HOUSE PATTERN AND IT IS NOT SYNCHRONISED, deliberately. Every
    module in the DLL logs exactly this way, open-append-close with no lock, at
@@ -25,8 +26,7 @@
    all of them. */
 static void slog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ONE SNAPSHOT. Two of these exist and the ownership rule in the header says

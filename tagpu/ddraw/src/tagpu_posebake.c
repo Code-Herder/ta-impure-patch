@@ -32,6 +32,7 @@
 #include "tagpu_render3do.h"
 #include "tagpu_packet.h"   /* the piece run the bake keys on */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirrors */
+#include "tagpu_log.h"
 
 /* The two cache sizes are tagpu_posebake.h's, which says why. Entries are
    allocated as they are baked and kept until evicted, so a session pays for
@@ -47,8 +48,7 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0
 
 static void blog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ---- the lever ---------------------------------------------------------

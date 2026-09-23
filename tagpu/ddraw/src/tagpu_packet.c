@@ -108,6 +108,7 @@
 #include "tagpu_packet.h"
 #include "tagpu_packet_pub.h"
 #include "crc32.h"
+#include "tagpu_log.h"
 
 #define PK_MAXSLOTS   5                    /* the frame instance's 5; cmd's 4 */
 #define PK_RESERVE    (16u << 20)          /* address space per FRAME slot    */
@@ -216,8 +217,7 @@ static TAGPU_CMD s_lastPosted;
 
 static void plog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int s_growStress;               /* tagpu_grow.stress (tagpu_packet.h) */

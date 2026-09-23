@@ -44,6 +44,7 @@
 #include <string.h>
 #include <math.h>
 #include "tagpu_restore_core.h"
+#include "tagpu_log.h"
 
 #define MAX_PATH_B        260
 #define TILEABLE_THR      12.0
@@ -60,8 +61,7 @@ static const int s_classes[] = { 32, 48, 64, 96, 128, 192, 256, 384, 512 };
 
 static void rlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 /* "<lane>: <what>", the shape every line in this module has */
 static void rlog_2(const char* who, const char* what)

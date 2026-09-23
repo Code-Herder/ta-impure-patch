@@ -36,6 +36,7 @@ SECS="${7:?}"; ZOOM="${8:?}"; OUT="${9:?}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 TACLI="$REPO/tools/tacli"
+TALOG="$REPO/tools/talog.py"   # the DLL's log across its rotations
 FIX="${FIX:-$REPO/scenarios/bar-wobble.json}"
 mkdir -p "$OUT"
 
@@ -93,10 +94,10 @@ x,y=u['screen']; print(int(round(1024+(x-1024)*z)), int(round(540+(y-540)*z)))")
 sleep 1
 "$TACLI" keys "$INST" mouse:250,1010 >/dev/null 2>&1   # cursor sprite off the walk line
 sleep 1
-SEL=$(grep -a 'native: ' "$GD/tagpu.log" | tail -1 | grep -o '[0-9]* sel' | cut -d' ' -f1)
+SEL=$("$TALOG" run "$GD" | grep -a 'native: ' | tail -1 | grep -o '[0-9]* sel' | cut -d' ' -f1)
 echo "  selected: ${SEL:-n/a} (clicked $CX,$CY at zoom $ZOOM)"
 
-OFF=$(stat -c %s "$GD/tagpu.log")
+MARK=$("$TALOG" mark "$GD")
 
 ffmpeg -y -loglevel error -f x11grab -window_id "$WIDHEX" -draw_mouse 0 -framerate 60 \
   -video_size 1920x1080 -i "$DISP" -c:v libx264rgb -preset ultrafast -qp 0 \
@@ -106,6 +107,6 @@ sleep 0.5
 "$TACLI" order "$INST" --unit 1 --expect ARMCOM move pos "$EX" "$EY" >/dev/null 2>&1
 wait $FF
 
-tail -c +$((OFF + 1)) "$GD/tagpu.log" | tr -d '\000' > "$OUT/log-$TAG.txt"
+"$TALOG" since "$GD" "$MARK" | tr -d '\000' > "$OUT/log-$TAG.txt"
 echo "  $TAG: $(du -h "$OUT/walk-$TAG.mkv" | cut -f1) video, $(grep -ac 'spx:' "$OUT/log-$TAG.txt") spx samples"
 grep -a 'native: ' "$OUT/log-$TAG.txt" | tail -1 | sed 's/^/    /'

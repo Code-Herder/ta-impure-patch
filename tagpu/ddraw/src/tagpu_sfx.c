@@ -51,6 +51,7 @@
 #include "tagpu_packet.h"
 #include "tagpu_opt.h"
 #include "tagpu_fxown.h"
+#include "tagpu_log.h"
 
 #define NLAYER        10
 
@@ -59,8 +60,7 @@ static const char* KNAME[NKIND] = { "smoke1", "smoke2", "fire", "flare", "wake",
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* bounded append: MSVCRT's _vsnprintf returns -1 and leaves no NUL when the

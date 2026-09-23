@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "tagpu_log.h"
 /* `tagpu_restoreglsl.h` below is NOT GL -- it declares `TAGPU_RGLSL_FRAME`
    and `tagpu_rglsl_tileable`, both of which this file uses. */
 #include "tagpu_gaf.h"
@@ -26,8 +27,7 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0
 
 static void glog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* one scratch plane for every atlas: decoding happens only inside

@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_text.h"
+#include "tagpu_log.h"
 
 #define BLIT_VA         0x004CCF60u   /* pure engine code, 0x4CCF60..0x4CD00E */
 
@@ -78,8 +79,7 @@ typedef void (__cdecl *PFN_BLIT)(unsigned char*, int, const void*, const char*,
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* THE FRAME'S FONT: our copy of the packet's font area, keyed on the packet's

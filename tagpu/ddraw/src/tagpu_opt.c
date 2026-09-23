@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "tagpu_opt.h"
+#include "tagpu_log.h"
 
 #define MASTER_OFF "tagpu_defaults.off"
 
@@ -188,8 +189,7 @@ int tagpu_opt_read(const char* on, char* buf, unsigned cap)
 
 static void olog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 void tagpu_opt_init(void)

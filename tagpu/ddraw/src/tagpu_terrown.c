@@ -56,6 +56,7 @@
 #include "tagpu_fogwide.h"
 #include "tagpu_packet_pub.h"
 #include "tagpu_zoom.h"
+#include "tagpu_log.h"
 
 #define TERRAIN_VA   0x00483FA0u   /* stdcall(ctx), ret 4  */
 #define FOG_VA       0x004848E0u   /* stdcall(ctx), ret 4  */
@@ -114,8 +115,7 @@ static unsigned g_beat = 0, g_last = 0;
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }

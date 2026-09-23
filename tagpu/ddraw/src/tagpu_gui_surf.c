@@ -80,6 +80,7 @@
 #include "tagpu_overlay.h"
 #include "tagpu_pal.h"
 #include "tagpu_surf.h"                    /* the one resolution of the presented palette */
+#include "tagpu_log.h"
 #include "tagpu_vk.h"                 /* tagpu_vk_owns_present, tagpu_vk_ab_arm:
                                          which lane this is, and the A/B's arming */
 #include "dd.h"                         /* g_ddraw.cursor: the pointer the fork last saw (13.5) */
@@ -106,8 +107,7 @@ extern volatile int g_gui_draw;         /* tagpu_gui_hook.c: the publisher's gat
 
 static void slog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ------------------------------------------------------------------ state */

@@ -82,6 +82,7 @@
 #include "tagpu_owndraw.h"
 #include "tagpu_opt.h"
 #include "tagpu_r3dcache.h"
+#include "tagpu_log.h"
 
 #define RAST_OPAQUE_VA   0x00459830u
 #define RAST_OPAQUE_RES  0x00459835u
@@ -268,8 +269,7 @@ static unsigned          g_skip_total = 0, g_pass_total = 0, g_last = 0;
 
 static void olog2(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 /* The one writer of `g_ssSkip`. `g_sshadow` is the install and cannot change
    after DllMain, so a stranded stub can never be reached with a raised gate.

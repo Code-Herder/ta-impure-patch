@@ -52,6 +52,7 @@
 #include "../inc/dd.h"
 #include "../inc/tagpu.h"
 #include "tagpu_trigger.h"
+#include "tagpu_log.h"
 
 #define TA_MAINPP     0x00511DE8u
 #define OFF_GUI_TOP   0x531           /* GUIInfo.TheActive_GUIMEM               */
@@ -108,8 +109,7 @@ static int      s_winL = 0x7FFF, s_winT = 0x7FFF, s_winR = -1, s_winB = -1;
 
 static void glog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }
 

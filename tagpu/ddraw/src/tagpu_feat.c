@@ -75,6 +75,7 @@
 #include "tagpu_native.h"
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
+#include "tagpu_log.h"
 
 /* ---- engine layout (terrain-depth.md appendix, byte-confirmed) ----
    THE FEATURE GRID IS NOT READ IN THIS FILE (frame packet exchange).
@@ -147,8 +148,7 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* bounded append (MSVCRT's _vsnprintf returns -1 on truncation) */

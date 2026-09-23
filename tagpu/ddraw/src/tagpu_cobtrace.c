@@ -1,9 +1,11 @@
 /* tagpu_cobtrace.c — the COB script-call oracle.
 
    WHAT IT LOGS. One tab-separated line per event on the game thread, written to
-   `tagpu_cobtrace.log` in the game dir (the process cwd) — created afresh at
-   every attach (a previous run's file is truncated) and flushed per line, so a
-   killed process (`tacli stop`) loses nothing:
+   the sink's cobtrace stream, `log\tagpu_cobtrace.log` (tagpu_log.h): a fresh file
+   every run (the previous run's rotates into history), capped and rotated like
+   tagpu.log, and written through to the OS per line, so a killed process
+   (`tacli stop`) loses nothing. A run that rotates spans several files;
+   tools/talog.py reads them back as one:
 
      S  tick unit type script slot source args…   a thread starts (allocated)
      R  tick unit slot script value               a thread's RETURN, the value it popped
@@ -52,6 +54,7 @@
 #include <ctype.h>
 #include "tagpu_detour.h"
 #include "tagpu_cobtrace.h"
+#include "tagpu_log.h"
 
 #define TA_MAINPP   0x00511DE8u
 #define OFF_TICK    0x38A47
@@ -90,11 +93,11 @@ static const unsigned char KILL_STOLEN[6]  = { 0xC7, 0x01, 0x00, 0x00, 0x00, 0x0
 static const unsigned char RAND_STOLEN[5]  = { 0xE8, 0x4B, 0x56, 0x00, 0x00 };
 
 #define FLAG_FILE "tagpu_cobtrace.on"
-#define LOG_FILE  "tagpu_cobtrace.log"
+#define LOG_FILE  "log\\tagpu_cobtrace.log"
 
 typedef int (__thiscall *PFN_Alloc)(void* cob, int idx);
 
-static FILE*     s_f;
+static int       s_on;                       /* armed: emit() writes */
 static PFN_Alloc s_real_alloc;               /* the stolen prologue + jmp back */
 static char      s_filter[256];              /* upper-cased, comma-separated, or "" */
 static unsigned  s_skip;                     /* diagnostic: sites left unhooked (bit per site) */
@@ -110,8 +113,7 @@ static struct {
 
 static void tlog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "cobtrace: %s\n", s); fclose(f); }
+    tagpu_logf("cobtrace: %s", s);
 }
 
 static int tick(void)
@@ -174,10 +176,8 @@ static const char* script_of_pc(char* cob, int pc)
 
 static void emit(const char* line)
 {
-    if (!s_f) return;
-    fputs(line, s_f);
-    fputc('\n', s_f);
-    fflush(s_f);      /* per line: the process is killed, never detached, at `tacli stop` */
+    if (!s_on) return;
+    tagpu_log_stream(TLOG_COBTRACE, line);
 }
 
 static void flush_pending(void)
@@ -495,14 +495,15 @@ void tagpu_cobtrace_init(void)
         return;
     }
     read_filter();
-    s_f = fopen(LOG_FILE, "wb");
-    if (!s_f) { tlog("NOT armed — cannot create " LOG_FILE); return; }
-    fprintf(s_f, "# tagpu_cobtrace v1\tfilter=%s\tcolumns: S tick unit type script slot source args… | "
+    s_on = 1;
+    _snprintf(b, sizeof b, "# tagpu_cobtrace v1\tfilter=%s\tcolumns: S tick unit type script slot source args… | "
                  "R tick unit slot script value | X tick unit script source | K tick unit slot script by | "
-                 "D tick unit slot value\n", s_filter[0] ? s_filter : "all");
+                 "D tick unit slot value", s_filter[0] ? s_filter : "all");
+    b[sizeof b - 1] = 0;
+    emit(b);
     sa = build_alloc_stub(); sr = build_run_stub(); st = build_ret_stub();
     sk = build_kill_stub();  sd = build_rand_stub();
-    if (!sa || !sr || !st || !sk || !sd) { tlog("NOT armed — no stub memory"); fclose(s_f); s_f = NULL; return; }
+    if (!sa || !sr || !st || !sk || !sd) { tlog("NOT armed — no stub memory"); s_on = 0; return; }
     /* all five, or none: the first four are 5-byte jmps, the RNG site keeps its E8 */
     /* the call-site redirect: a rel32 is relative to the site it is written
        at, not to this buffer — tagpu_detour_rel() would encode it against the
@@ -518,9 +519,14 @@ void tagpu_cobtrace_init(void)
                   s_skip & SK_KILL ? " kill" : "", s_skip & SK_RAND ? " rand" : "",
                   s_skip & SK_RUN ? " (S arguments may be stale without the runner hook)" : "");
         tlog(b);
-        fprintf(s_f, "# %s\n", b);
+        {
+            char c[140];
+            _snprintf(c, sizeof c, "# %s", b);
+            c[sizeof c - 1] = 0;
+            emit(c);
+        }
     }
-    if (!(s_skip & SK_ALLOC) && !tagpu_detour_land(ALLOC_VA, sa, 5)) { tlog("NOT armed — could not write 0x4B08C0"); fclose(s_f); s_f = NULL; return; }
+    if (!(s_skip & SK_ALLOC) && !tagpu_detour_land(ALLOC_VA, sa, 5)) { tlog("NOT armed — could not write 0x4B08C0"); s_on = 0; return; }
     if ((!(s_skip & SK_RUN)  && !tagpu_detour_land(RUN_VA, sr, 5)) ||
         (!(s_skip & SK_RET)  && !tagpu_detour_land(RET_VA, st, 5)) ||
         (!(s_skip & SK_KILL) && !tagpu_detour_land(KILL_VA, sk, 6)) ||
@@ -531,7 +537,7 @@ void tagpu_cobtrace_init(void)
         tagpu_detour_write(RET_VA, RET_STOLEN, 5);
         tagpu_detour_write(KILL_VA, KILL_STOLEN, 6);
         tlog("NOT armed — a later site refused the write; every site restored");
-        fclose(s_f); s_f = NULL;
+        s_on = 0;
         return;
     }
     _snprintf(b, sizeof b, "ARMED (" FLAG_FILE " present): 0x4B08C0 0x4B0DA0 0x4B19D0 0x4B1A99 + the call at 0x4B15E0 -> "

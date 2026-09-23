@@ -25,6 +25,7 @@
 #include "tagpu_vpwide.h"
 #include "tagpu_input.h"
 #include "tagpu_packet.h"
+#include "tagpu_log.h"
 
 /* Published view. Volatile because two threads touch it; each is one aligned
    32-bit slot, which x86 loads and stores atomically. */
@@ -511,8 +512,7 @@ static int  s_eyeOff;                     /* tagpu_zoomedge.off, polled on the r
 
 static void zlog(const char* m)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", m); fclose(f); }
+    tagpu_log(m);
 }
 
 static int ta_ok(const char* ta)

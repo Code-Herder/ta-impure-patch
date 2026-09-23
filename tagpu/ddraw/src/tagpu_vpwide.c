@@ -12,6 +12,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_hud.h"
 #include "tagpu_packet.h"
+#include "tagpu_log.h"
 
 #define TA_MAINPP    0x00511DE8u
 
@@ -103,8 +104,7 @@ typedef unsigned short (__stdcall  *PFN_GRIDFEAT)(void* plot);
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u; }

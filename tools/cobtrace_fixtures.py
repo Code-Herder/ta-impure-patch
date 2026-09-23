@@ -27,6 +27,8 @@ import subprocess
 import sys
 import time
 
+import talog  # the DLL's logs across their rotations (tools/talog.py)
+
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
 TACLI = HERE / "tacli"
@@ -125,8 +127,8 @@ def run_one(inst, name, utype, run_s, after_s, out):
     tacli("arm", inst, "posedump.on")
     time.sleep(after_s)
     g = gamedir(inst)
-    trace = (g / "tagpu_cobtrace.log").read_text(errors="replace")
-    pose = last_posedump((g / "tagpu.log").read_text(errors="replace"))
+    trace = talog.run_text(g, "tagpu_cobtrace")      # every part of this run
+    pose = last_posedump(talog.run_text(g))
     tacli("stop", inst)
     d = out / name
     d.mkdir(parents=True, exist_ok=True)

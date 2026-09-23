@@ -158,6 +158,7 @@
 #include "tagpu_markown.h"
 #include "tagpu_gaf.h"
 #include "tagpu_native.h"
+#include "tagpu_log.h"
 
 /* ---- engine layout ---- */
 #define TA_MAINPP     0x00511DE8u
@@ -275,8 +276,7 @@ static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p < 0x
 
 static void flog(const char* s)
 {
-    FILE* f = fopen("tagpu.log", "a");
-    if (f) { fprintf(f, "%s\n", s); fclose(f); }
+    tagpu_log(s);
 }
 
 /* ---- arming ---------------------------------------------------------- */
