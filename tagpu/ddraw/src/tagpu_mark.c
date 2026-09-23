@@ -868,8 +868,8 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
            The bar has to floor with it, or it sits up to a whole game pixel off a
            body we did not place. `markown` has suppressed the engine's own bars
            globally by then, so this is not a rare path: a unit the type filter
-           rejects, or a nanoframe while the build-effect detour is absent, still
-           needs a bar from us.
+           rejects still needs a bar from us. (A nanoframe used to be the other
+           case; the native pass owns every one since 2026-09-23.)
 
            [Until the landing review both branches went through the accessor. It
            returns 1 whenever its POINTER checks pass and hands back the raw fraction

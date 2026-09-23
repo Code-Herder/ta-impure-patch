@@ -80,7 +80,7 @@
 #include "tagpu_mark.h"
 #include "tagpu_markown.h"
 #include "tagpu_order.h"
-#include "tagpu_owndraw.h"   /* set_structshadow, buildfx_armed; structshadow_ours has no caller since 2026-09-20 */
+#include "tagpu_owndraw.h"   /* set_structshadow; structshadow_ours has no caller since 2026-09-20 */
 #include "tagpu_reclaim.h"   /* the teardown fence this file's template reads stand behind */
 #include "tagpu_posebake.h"
 #include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
@@ -721,9 +721,12 @@ int tagpu_native_owns_unit(const char* u)
        every nanoframe was declined here and drew nothing but its health bar.
        [FOUND 2026-09-23, reported from play.]
 
-       Nothing is lost by owning one without the detour: the engine's scaffold
-       then lands in its own frame, which is the golden source and is exactly
-       what the 1997 rasteriser draws. `tagpu_nano.off` now means "draw it
+       Nothing is lost by owning one with `owndraw` unarmed, the play default:
+       the engine's scaffold then lands in its own frame, which is the golden
+       source and is exactly what the 1997 rasteriser draws. (With `owndraw`
+       armed and its 0x458DD0 detour refused, the classifier wipes the owned
+       composite and the engine's effect runs on the empty copy, so the golden
+       source holds a stripped nanoframe. The screen is unaffected either way.) `tagpu_nano.off` now means "draw it
        UNSTAGED", a finished-looking unit, rather than "hand it to nobody". */
     return 1;
 }

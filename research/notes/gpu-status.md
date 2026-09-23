@@ -223,8 +223,9 @@ two different things draw units. When `tagpu_native_owns_unit()` holds — the v
 unit pass gathers on — the body came from `tagpu_native_unit_pos()`, so the bar takes that same
 number. When it does not, the unit pass skipped the unit and the **engine** drew it from `(s16)`
 reads of the same 16.16, and the bar floors with it. That second branch is not hypothetical:
-`markown` suppresses the engine's own bars globally, so a unit the type filter rejects, or a
-nanoframe while the build-effect detour is absent, still needs a bar from us.
+`markown` suppresses the engine's own bars globally, so a unit the type filter rejects still
+needs a bar from us. (A nanoframe while the build-effect detour was absent was the other case until
+2026-09-23, when the native pass began owning every nanoframe — [build-state](build-state.html) §7.)
 
 *[The landing review caught this. Both branches went through the accessor at first, on the
 belief that it reports "no sub-pixel sample" — it does not. `tagpu_native_unit_pos` returns 1

@@ -2459,8 +2459,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        body's, the caster's, the hard shadow's, the nanoframe wire's) and three
        fragment-stage (the body's, the hard shadow's, the wire's). The wire's
        pair is written for every unit, nanoframe or not, because the window is
-       per unit and fixed-stride: 448 bytes a unit more on the reference
-       device's 64-byte alignment, 224 KB a slot at 512 units -- small against
+       per unit and fixed-stride: 512 bytes a unit more on the reference
+       device's 64-byte alignment (192 + 320), 256 KB a slot at 512 units -- small against
        the 14 336-byte pose window every unit already takes. */
     {
         VkDeviceSize vgl = align_up(VGL_SZ, s_ualign);
