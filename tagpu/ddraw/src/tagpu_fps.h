@@ -1,9 +1,8 @@
 #ifndef TAGPU_FPS_H
 #define TAGPU_FPS_H
 /* tagpu_fps.c -- the on-screen frame-rate readout, a row on the render-options
-   screen (Off|On). Armed by `tagpu_fps.on`, which the menu writes exactly as it
-   writes `tagpu_ss.off`, so the file and the row are one setting and either can
-   be driven by hand.
+   screen (Off|On), kept in the settings store; `tagpu_fps.on` is its lever and
+   turns it on whatever the row says (tagpu_settings_fps).
 
    WHY NOT THE ONE THAT ALREADY EXISTS. cnc-ddraw's `dbg_draw_frame_info_start`
    is behind `tagpu_fpsosd.on` already -- but it is compiled only under _DEBUG,

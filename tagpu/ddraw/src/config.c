@@ -10,6 +10,7 @@
 #include "ini.h"
 #include "versionhelpers.h"
 #include "tagpu_cfg.h"
+#include "tagpu_settings.h"
 
 static void cfg_init();
 static void cfg_create_ini();
@@ -134,6 +135,12 @@ void cfg_load()
 
 void cfg_save()
 {
+    /* tagpu: the windowed frame goes to impure.cfg instead of this ini, unless
+       the ini itself places the window (tacli's tile), which is the lever. */
+    if (!g_config.fullscreen && !tagpu_cfg_window_held())
+        tagpu_settings_save_window(g_config.window_rect.left, g_config.window_rect.top,
+                                   g_config.window_rect.right, g_config.window_rect.bottom);
+
     if (!g_config.save_settings)
         return;
 
@@ -193,8 +200,11 @@ static void cfg_create_ini()
             "\n"
             "\n"
             "; Stretch to custom resolution, 0 = defaults to the size game requests\n"
-            "width=0\n"
-            "height=0\n"
+            "; tagpu: COMMENTED OUT ON PURPOSE, like posX/posY and maxfps below. The\n"
+            "; in-game menu keeps the window and the frame cap in impure.cfg, and a key\n"
+            "; written here is a lever that holds its menu row. See tagpu_settings.h.\n"
+            "; width=0\n"
+            "; height=0\n"
             "\n"
             "; Override the width/height settings shown above and always stretch to fullscreen\n"
             "; Note: Can be combined with 'windowed=true' to get windowed-fullscreen aka borderless mode\n"
@@ -218,7 +228,7 @@ static void cfg_create_ini()
             "\n"
             "; Real rendering rate, -1 = screen rate, 0 = unlimited, n = cap\n"
             "; Note: Does not have an impact on the game speed, to limit your game speed use 'maxgameticks='\n"
-            "maxfps=-1\n"
+            "; maxfps=-1\n"
             "\n"
             "; Vertical synchronization, enable if you get tearing - (Requires 'renderer=auto/opengl*')\n"
             "; Note: vsync=true can fix tearing but it will cause input lag\n"
@@ -235,8 +245,8 @@ static void cfg_create_ini()
             "shader=Shaders\\interpolation\\catmull-rom-bilinear.glsl\n"
             "\n"
             "; Window position, -32000 = center to screen\n"
-            "posX=-32000\n"
-            "posY=-32000\n"
+            "; posX=-32000\n"
+            "; posY=-32000\n"
             "\n"
             "; Renderer, possible values: auto, opengl, openglcore, vulkan, gdi (auto = try opengl, fallback = gdi)\n"
             "renderer=auto\n"
@@ -249,7 +259,8 @@ static void cfg_create_ini()
             "\n"
             "; Save window position/size/state on game exit and restore it automatically on next game start\n"
             "; Possible values: 0 = disabled, 1 = save to global 'ddraw' section, 2 = save to game specific section\n"
-            "savesettings=1\n"
+            "; tagpu: 0, and forced to 0 whatever this says: impure.cfg keeps the window\n"
+            "savesettings=0\n"
             "\n"
             "; Should the window be resizable by the user in windowed mode?\n"
             "resizable=true\n"
@@ -2031,6 +2042,10 @@ static void cfg_init()
     {
         cfg_create_ini();
     }
+
+    /* tagpu: the settings store, BEFORE the ini is parsed: its first-run
+       migration may remove the keys it now owns from this very file. */
+    tagpu_settings_attach(g_config.ini_path);
 
     ini_create(&g_config.ini, g_config.ini_path);
     cfg_get_game_section(g_config.game_section, sizeof(g_config.game_section));

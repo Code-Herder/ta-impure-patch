@@ -3673,9 +3673,11 @@ division and the same nothing that `tagpu_hud_to_engine` applies.
 
 **The row.** "UI scale" is now `Auto|100%|150%|200%|300%|400%`, live in window *and*
 fullscreen (the greying rule is gone), and the window multiplier with `apply_scale()` is
-deleted. The store is the lever file `tagpu_hud.on` (`scale=auto` / `scale=<percent>`) — on
+deleted. The store was the lever file `tagpu_hud.on` (`scale=auto` / `scale=<percent>`) — on
 the defaults table at `scale=auto` and read at game entry in this build; 22.5 took it off the
-defaults and made it live. Stages past a screen's ceiling are
+defaults and made it live. **Today the row is `hudscale=` in `impure.cfg`**, the settings store
+([renderers](renderers.html) §2.10b), default `off`, and `tagpu_hud.on`/`.off` is the lever
+that holds it. Stages past a screen's ceiling are
 **skipped as the row cycles** rather than greyed — `VA_SETGRAYED` is per gadget, not per
 stage, so greying would take the honourable stages down with the rest. Measured: at a
 640×480 Screen Size the row alternates Auto/100% and the plate never shows a number the game

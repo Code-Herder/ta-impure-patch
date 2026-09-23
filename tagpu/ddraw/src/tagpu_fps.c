@@ -56,8 +56,8 @@
 #include "tagpu_fps.h"
 #include "tagpu_text.h"
 #include "tagpu_vk.h"      /* tagpu_vk_owns_present: is there a GL lane at all? */
+#include "tagpu_settings.h"
 
-#define TRIGGER   "tagpu_fps.on"
 #define PKSHOW    "tagpu_packet.show"
 #define ABFILE    "tagpu_fps.ab"      /* the A/B: capture one frame            */
 #define POLL      30                  /* frames between trigger polls          */
@@ -184,7 +184,7 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
 
     if (!f) return;
     if (s_on < 0 || (poll++ % POLL) == 0) {
-        s_on = GetFileAttributesA(TRIGGER) != INVALID_FILE_ATTRIBUTES;
+        s_on = tagpu_settings_fps();
         s_pk = GetFileAttributesA(PKSHOW) != INVALID_FILE_ATTRIBUTES;
         /* the A/B re-arms when the lever is taken away and put back, so a
            second capture needs no relaunch */

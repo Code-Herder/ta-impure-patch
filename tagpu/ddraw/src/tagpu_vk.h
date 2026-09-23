@@ -44,8 +44,9 @@
    `.GUI` and the archive is written before the engine globs it. So a machine
    whose GPUs changed shows the new list at the NEXT launch -- the same bargain
    the Monitor row already makes for a hot-plugged monitor, and for the same
-   reason. The selection is stored BY NAME (`tagpu_vk.cfg`), not by index, so
-   adding or removing a card cannot silently re-point it at another one. */
+   reason. The selection is stored BY NAME (`gpu=` in the settings store,
+   tagpu_settings.h), not by index, so adding or removing a card cannot
+   silently re-point it at another one. */
 
 #include <windows.h>
 
@@ -222,9 +223,9 @@ int tagpu_vk_gpu_active(void);
    `tagpu_vk_gpu_store`, called from the render thread with the deferred write. */
 void tagpu_vk_gpu_select(int i);
 
-/* Write the request to `tagpu_vk.cfg`. RENDER THREAD ONLY -- it is a file
-   write, and TA is lockstep, so it rides `tagpu_menu_present` exactly as the
-   Classic++ cfg does. */
+/* Record the request in the settings store, by name. RENDER THREAD ONLY: the
+   name is handed to the store on the thread that flushes it, so no string
+   crosses a thread; it rides `tagpu_menu_present` with the flush. */
 void tagpu_vk_gpu_store(void);
 
 #endif

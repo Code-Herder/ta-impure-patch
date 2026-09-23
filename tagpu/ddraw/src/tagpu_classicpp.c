@@ -15,6 +15,7 @@
 #include <math.h>
 #include "tagpu_classicpp.h"
 #include "tagpu_opt.h"
+#include "tagpu_settings.h"
 
 #define ON_FILE   "tagpu_classicpp.on"
 #define CFG_FILE  "tagpu_classicpp.cfg"
@@ -40,6 +41,8 @@ static int          s_cfgSeen = 0;        /* a cfg was read (or its absence logg
 static FILETIME     s_cfgTime;
 static DWORD        s_cfgSize;
 static int          s_cfgPresent = -1;    /* -1 never checked, 0 absent, 1 present */
+static unsigned     s_held;               /* TAGPU_HELD_*: the menu keys the cfg names */
+static long         s_storeGen = -1;      /* the store generation last applied   */
 
 /* the lab's sunVector(az, el): degrees to the unit vector toward the light */
 static void sun_vector(float az, float el, float v[3])
@@ -101,7 +104,7 @@ static void shadow_defaults(TAGPU_LIGHT* L)
        1997 engine casts no terrain shadows either, so it is also the parity
        answer. `terrainshadow=1` in the cfg still turns it on: it is the fixture
        the fix will be measured against. Nothing in the render-options menu
-       writes this key or can reach it (tagpu_menu.c `ours`). */
+       writes this key or can reach it: it has no row and no store key. */
     L->terrainshadow = 0;
     L->shadowres = 2048;
     L->aniso = 4.0f;             /* the lab's default; `aniso=1` is the A/B's */
@@ -146,6 +149,18 @@ static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float am
     cplog(b);
 }
 
+/* The settings store's value for every menu key the cfg did NOT name: the cfg
+   is the lever and wins, the store ranks next, and when the store has no say
+   (tagpu_defaults.off) the defaults set above stand -- renderers.md 2.10b. */
+static void from_store(void)
+{
+    int v;
+    if (!(s_held & TAGPU_HELD_ASSETS) && tagpu_settings_get(TS_ASSETS, &v)) s_assets = v != 0;
+    if (!(s_held & TAGPU_HELD_LIGHT)  && tagpu_settings_get(TS_LIGHT, &v))  s_lit = v != 0;
+    if (!(s_held & TAGPU_HELD_SHADOWS) && tagpu_settings_get(TS_SHADOWS, &v)) s_light.shadows = v;
+    if (!(s_held & TAGPU_HELD_SHADOWRES) && tagpu_settings_get(TS_SHADOWRES, &v)) s_light.shadowres = v;
+}
+
 static void bad(const char* p)
 {
     char b[160]; _snprintf(b, sizeof b, "classicpp: cfg: bad token \"%s\" ignored", p); cplog(b);
@@ -167,10 +182,15 @@ static void read_cfg(void)
     float ssunAz = DEF_SSUN_AZ, ssunEl = DEF_SSUN_EL;
     int off = 0;
     s_assets = 1; s_lit = 1;              /* the switch undivided: every part on */
+    s_held = 0;
     shadow_defaults(&s_light);
     h = CreateFileA(CFG_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) { apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, 0, "no cfg: defaults"); return; }
+    if (h == INVALID_HANDLE_VALUE) {
+        from_store();
+        apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, 0, "no cfg");
+        return;
+    }
     if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
         char* p = buf;
         buf[n] = 0;
@@ -190,10 +210,12 @@ static void read_cfg(void)
             *q = 0;
             if (!_strnicmp(p, "assets=", 7)) {
                 s_assets = atoi(p + 7) != 0;
+                s_held |= TAGPU_HELD_ASSETS;
             } else if (!_strnicmp(p, "light=", 6)) {
                 s_lit = atoi(p + 6) != 0;
+                s_held |= TAGPU_HELD_LIGHT;
             } else if (!_strnicmp(p, "sun=", 4)) {
-                if (!lstrcmpiA(p + 4, "off")) off = 1;
+                if (!lstrcmpiA(p + 4, "off")) { off = 1; s_held |= TAGPU_HELD_LIGHT; }
                 else if (sscanf(p + 4, "%f,%f", &a, &e) == 2) { sunAz = a; sunEl = e; }
                 else { char b[160]; _snprintf(b, sizeof b, "classicpp: cfg: bad token \"%s\" ignored", p); cplog(b); }
             } else if (!_strnicmp(p, "unitsun=", 8)) {
@@ -222,8 +244,10 @@ static void read_cfg(void)
                               "on this lane -- migrated to hard");
                     }
                 }
-                if (m >= TAGPU_SHADOWS_OFF && m <= TAGPU_SHADOWS_HARD) s_light.shadows = m;
-                else bad(p);                  /* out of range: the default stands */
+                if (m >= TAGPU_SHADOWS_OFF && m <= TAGPU_SHADOWS_HARD) {
+                    s_light.shadows = m;
+                    s_held |= TAGPU_HELD_SHADOWS;
+                } else bad(p);                /* out of range: the default stands */
             } else if (!_strnicmp(p, "shadowsun=", 10)) {
                 if (sscanf(p + 10, "%f,%f", &a, &e) == 2) { ssunAz = a; ssunEl = e; }
                 else bad(p);
@@ -246,6 +270,7 @@ static void read_cfg(void)
                 if (r < 256) r = 256;
                 if (r > 4096) r = 4096;
                 s_light.shadowres = r;
+                s_held |= TAGPU_HELD_SHADOWRES;
             } else if (!_strnicmp(p, "aniso=", 6)) {
                 float a = (float)atof(p + 6);
                 if (a < 1.0f) a = 1.0f;
@@ -264,6 +289,7 @@ static void read_cfg(void)
         }
     }
     CloseHandle(h);
+    from_store();
     apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, off, CFG_FILE);
 }
 
@@ -280,12 +306,21 @@ static void poll(void)
     if (present && !changed)
         changed = CompareFileTime(&fad.ftLastWriteTime, &s_cfgTime) != 0 ||
                   fad.nFileSizeLow != s_cfgSize;
+    /* a menu click is a store change, not a file change */
+    if (tagpu_settings_gen() != s_storeGen) changed = 1;
     if (!s_cfgSeen || changed) {
         s_cfgSeen = 1;
+        s_storeGen = tagpu_settings_gen();
         s_cfgPresent = present;
         if (present) { s_cfgTime = fad.ftLastWriteTime; s_cfgSize = fad.nFileSizeLow; }
         read_cfg();
     }
+}
+
+unsigned tagpu_classicpp_held(void)
+{
+    poll();
+    return s_held;
 }
 
 int tagpu_classicpp_on(void)

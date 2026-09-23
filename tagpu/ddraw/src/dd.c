@@ -1199,6 +1199,20 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
                 y += real_GetSystemMetrics(SM_CYMENU);
             }
         }
+        else if (g_config.window_rect.left != -32000 && g_config.window_rect.top != -32000)
+        {
+            /* tagpu: A SAVED FRAME ON NO MONITOR IS RE-CENTRED. impure.cfg keeps
+               the windowed frame across launches, and the screen it was on may
+               be unplugged since; restoring it there would put the game where
+               the player cannot see it. */
+            RECT r = { x, y, x + (LONG)g_ddraw.render.width, y + (LONG)g_ddraw.render.height };
+
+            if (!MonitorFromRect(&r, MONITOR_DEFAULTTONULL))
+            {
+                x = (cy / 2) - (g_ddraw.render.width / 2);
+                y = (cx / 2) - (g_ddraw.render.height / 2);
+            }
+        }
         else if (border && g_config.window_rect.top == -32000 && y < 0)
         {
             /* Make window titlebar visible if window does not fit into screen */

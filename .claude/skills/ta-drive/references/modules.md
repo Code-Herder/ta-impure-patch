@@ -107,16 +107,29 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
 
 `tagpu_menu.c` adds our rows to **Options → Visuals**: the frame-rate readout (`VFPS`), the GPU
 (`VGPU`), the video mode and monitor (`VMODE`, `VMON`), the UI scale (`VSCALE`) and the visual
-switches. The screen owns the lever files it writes — `tagpu_classicpp.on`/`.off`,
-`tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on` — so a row change is in force immediately
-and survives a relaunch. `tagpu_menu.off` disables the screen. Its rows are ordinary gadgets:
+switches. **Every row is kept in `impure.cfg`**, the settings store (`renderers.md` §2.10b): a
+click is in force within half a second and survives a relaunch, and the menu writes no lever
+file. `tagpu_menu.off` disables the screen. Its rows are ordinary gadgets:
 
 ```bash
 tools/tacli ui <i> show VGPU                  # stages, stage, grayed
 tools/tacli ui <i> click VGPU                 # cycle; the lane rebuilds within a frame
 cat <gamedir>/tagpu_vk.gpus                   # "<0|1> <name>" per device, 1 = discrete
-cat <gamedir>/tagpu_vk.cfg                    # gpu=<name> — the choice, stored BY NAME
+cat <gamedir>/impure.cfg                      # every row; gpu=<name>, stored BY NAME
+tacli log <i> -g '^settings:'                 # what the store loaded, migrated or refused
 ```
+
+- **A lever holds its row, greyed.** `tagpu_classicpp.on/.off`, a menu key inside
+  `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`, and `ddraw.ini`'s
+  `fullscreen`/`windowed`/`maxfps`/`posX`/`posY`/`width`/`height` each beat the store for what they
+  name. tacli's own `ddraw.ini` carries the window keys, so **Display mode, Monitor and Frame cap are
+  greyed in every instance** — the tile is the lever. `tacli arm` still drives the others for A/Bs.
+- **Under `tagpu_defaults.off` (every launch without `--defaults`) the store has no say and every
+  row is greyed.** Test the menu with `--defaults`.
+- **tacli creates an empty `impure.cfg` before every launch.** A missing store is the DLL's
+  first-run signal: it renames the files an older menu wrote to `*.migrated` and strips `ddraw.ini`.
+  To test that migration, launch the exe by hand in the gamedir (`WINEPREFIX=<prefix> DISPLAY=<d>
+  WINEDLLOVERRIDES=ddraw=n,b wine TotalA.exe`) on a private Xvfb — it goes fullscreen.
 
 - **The GPU list is one launch behind.** The captions live in a generated `.GUI` written at DLL
   attach, and a Vulkan instance cannot be created there, so a worker enumerates after the render

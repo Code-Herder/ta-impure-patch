@@ -1,13 +1,17 @@
 #ifndef TAGPU_CLASSICPP_H
 #define TAGPU_CLASSICPP_H
-/* The Classic++ switch and its knobs -- two files in the gamedir, both the
-   player's (renderers.md 2.10: the menu is a front end over these, not a
-   store of its own):
+/* The Classic++ switch and its knobs. The menu's rows -- Renderer, Undithered
+   assets, Dynamic lighting, Shadows, Shadow quality -- live in the settings
+   store (tagpu_settings.h, renderers.md 2.10b); the two files below are the
+   LEVERS over it: a file, or a key inside the cfg, beats the store for what it
+   names, and the menu greys the row it holds.
 
-     tagpu_classicpp.on    the renderer switch, and the master arm. Absent =
-                           Classic, exactly today's pixels; present = the
-                           restored atlases, the lighting below, the RGB fog
-                           rule (2.6), and the shadows of 2.12.
+     tagpu_classicpp.on    the renderer switch, and the master arm: present =
+     tagpu_classicpp.off   on, `.off` = off, neither = the store's Renderer
+                           row (tagpu_opt.c). Off is Classic, exactly the
+                           1997 pixels; on is the restored atlases, the
+                           lighting below, the RGB fog rule (2.6), and the
+                           shadows of 2.12.
      tagpu_classicpp.cfg   numeric knobs, `key=value` tokens separated by
                            whitespace or newlines, keyed like the lab's URL
                            parameters (tascene-design.md). Two of them
@@ -58,7 +62,9 @@
                                                 2048 (256..4096)
                              airshadow=len|physical|drop   an airborne caster
                                                 (2.2), len
-                           A missing file or key is the lab's default.
+                           A key the cfg does not name takes the store's
+                           value, and without the store (tagpu_defaults.off)
+                           the lab's default.
 
    Both are polled at most twice a second; the cfg is re-read when its write
    time or size changes, so `tacli arm <i> 'classicpp.cfg=sun=off'` takes
@@ -70,6 +76,14 @@
    sub-passes it replaces (tagpu_native.c, renderers.md 2.12) are suppressed by
    being in the Classic++ branch at all, not by which half of it is on. */
 int tagpu_classicpp_on(void);
+
+/* The menu keys the cfg itself names, TAGPU_HELD_*: those rows are held by the
+   lever and greyed. `sun=off` holds the lighting row, being its old spelling. */
+#define TAGPU_HELD_ASSETS    1u
+#define TAGPU_HELD_LIGHT     2u
+#define TAGPU_HELD_SHADOWS   4u
+#define TAGPU_HELD_SHADOWRES 8u
+unsigned tagpu_classicpp_held(void);
 
 /* The two halves of the switch (renderers.md 2.10's `Undithered assets`
    and `Dynamic lighting` rows). Each is the master arm AND its own cfg key, so

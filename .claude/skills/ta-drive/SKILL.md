@@ -366,8 +366,8 @@ exists (`tagpu_opt.c`; the table is in `references/levers.md`). A `tacli` instan
 `launch` and `scenario load` write `tagpu_defaults.off` unless given `--defaults` (sticky;
 `--no-defaults` back), so on a tacli instance only the arm files count and a bare launch is the
 stock control. `--defaults` is the player's configuration and the one to test a release with;
-under it a pass is turned off with `tacli arm <i> <pass>.off`. The first `opt:` line in
-`tagpu.log` says which way the instance went.
+under it a pass is turned off with `tacli arm <i> <pass>.off`; the first `opt:` line says which
+way it went. Menu rows live in `impure.cfg`, honoured only under `--defaults` (`references/modules.md`).
 
 ### The default arm set
 
