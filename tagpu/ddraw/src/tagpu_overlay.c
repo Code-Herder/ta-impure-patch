@@ -199,11 +199,11 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
 
     /* The frame-rate readout, ABOVE the UI layer: it is a diagnostic drawn over
        the finished frame and must not be hidden by the side panel or a dialog.
-       Off unless `tagpu_fps.on` is there, which the render-options screen's FPS
-       row writes -- see tagpu_fps.c for why this is not cnc-ddraw's own OSD.
-       Like the scaffold, it builds and does not draw: the averaging window,
-       the font latch and the quads are the pass, and tagpu_vk_fps.c draws
-       them. */
+       Off unless the render-options screen's FPS row (the settings store) or
+       the `tagpu_fps.on` lever turns it on -- see tagpu_fps.c for why this is
+       not cnc-ddraw's own OSD. Like the scaffold, it builds and does not draw:
+       the averaging window, the font latch and the quads are the pass, and
+       tagpu_vk_fps.c draws them. */
     tagpu_fps_present(f);
 
     /* If the native pass did not publish a view this frame, nothing zoomed was

@@ -20,6 +20,7 @@
 #include "tagpu_fogwide.h"
 #include "tagpu_gui.h"
 #include "tagpu_markown.h"
+#include "tagpu_settings.h"
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_weapons.h"
@@ -330,7 +331,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         TRACE("cnc-ddraw DLL_PROCESS_DETACH\n");
 
+        /* tagpu: every other thread is gone, so the store is written without
+           waiting on its lock (tagpu_settings.h) */
+        tagpu_settings_detaching();
         cfg_save();
+        tagpu_settings_final();
 
         indeo_disable();
         timeEndPeriod(1);

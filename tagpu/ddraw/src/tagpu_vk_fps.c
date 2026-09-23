@@ -493,8 +493,8 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
 
     /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW. The readout is off
-       unless `tagpu_fps.on` is there, and building a pipeline and a 128 KB
-       image for a pass that will never draw is work the lever exists to avoid.
+       unless the FPS row or `tagpu_fps.on` turns it on, and building a pipeline
+       and a 128 KB image for a pass that will never draw is wasted work.
        Asking first also means the atlas has a font in it by the time the image
        is created, which is what `tagpu_text_dims` needs to be right. */
     if (!tagpu_fps_quads(&v, &nv, &fw, &fh, &ab)) return 0;

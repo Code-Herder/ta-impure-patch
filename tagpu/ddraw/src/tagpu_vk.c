@@ -107,7 +107,7 @@
    player-facing in its own right, so it cannot be gated on the lane it
    outlives.
 
-   THE CHOICE IS STORED BY NAME, NOT BY INDEX (`tagpu_vk.cfg`). An index moves
+   THE CHOICE IS STORED BY NAME, NOT BY INDEX (`gpu=` in impure.cfg). An index moves
    when a card is added, removed or re-ordered by the driver, and would then
    point at a different GPU without anything saying so. A name that is no longer
    present falls back to the discrete default and logs that it did.
@@ -133,6 +133,7 @@
 
 #include "hook.h"
 #include "tagpu_vk.h"
+#include "tagpu_settings.h"
 #include "tagpu_vk_gui.h"
 #include "tagpu_vk_fps.h"
 #include "tagpu_vk_scaffold.h"
@@ -191,8 +192,6 @@ static const struct { const char* tag; const char* path; } s_abFiles[] = {
     { "mark", AB_MARK }, { "scaffold", AB_SCAF }, { "gui", AB_GUI }, { "fps", AB_FPS },
 };
 #define GPUS_FILE  "tagpu_vk.gpus"      /* the cache the menu reads at attach */
-#define CFG_FILE   "tagpu_vk.cfg"       /* the player's choice, by name       */
-#define CFG_TMP    "tagpu_vk.cfg.tmp"
 #define GPUS_TMP   "tagpu_vk.gpus.tmp"
 #define POLL_MS    250                  /* the lever, as elsewhere in the fork */
 #define MAXDEV     TAGPU_VK_MAXGPU
@@ -691,7 +690,7 @@ static int   s_disc[MAXDEV];            /* 1 = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_
 static volatile LONG s_count;
 /* THE ONLY THING THAT CROSSES A THREAD HERE IS AN ALIGNED LONG, and that is
    deliberate. A device NAME written by one thread and read by another can be
-   read half-copied, and the half-copy would be PERSISTED to the cfg. So no
+   read half-copied, and the half-copy would be PERSISTED to the store. So no
    string crosses:
 
      s_name[] / s_choice[]  written once, `tagpu_vk_names_init` at DLL attach,
@@ -706,14 +705,14 @@ static volatile LONG s_count;
                             live device was built for, so the LAST click always
                             gets a rebuild after it -- convergence by
                             construction, not by the click being slow. */
-static char  s_choice[NAMELEN];         /* the STORED choice, from the cfg; "" = none */
+static char  s_choice[NAMELEN];         /* the STORED choice, from the store; "" = none */
 static volatile LONG s_choiceIdx = -1;  /* the row's request, into s_name[]; -1 = none */
 static volatile LONG s_choiceGen;       /* bumped by a click: the render thread's signal */
 static LONG  s_choiceSeen;              /* the generation the live device was built for */
 static volatile LONG s_activeIndex = -1;
 
 /* The name the lane should bind: the row's request when there is one, else
-   whatever the cfg stored, else "" for "no preference". Both sources are
+   whatever the store held, else "" for "no preference". Both sources are
    immutable, so this can be called from any thread. */
 static const char* want_name(void)
 {
@@ -730,24 +729,9 @@ void tagpu_vk_names_init(void)
     char* p;
     int count = 0;
 
-    /* the stored choice first: a plain `gpu=<name>` line, and an absent file
-       means "nobody has chosen" rather than an error */
-    h = CreateFileA(CFG_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
-                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h != INVALID_HANDLE_VALUE) {
-        char c[NAMELEN + 16];
-        DWORD m = 0;
-        if (!ReadFile(h, c, sizeof c - 1, &m, 0)) m = 0;
-        CloseHandle(h);
-        c[m] = 0;
-        if (!strncmp(c, "gpu=", 4)) {
-            char* q = c + 4;
-            char* e = q;
-            while (*e && *e != '\r' && *e != '\n') e++;
-            *e = 0;
-            vk_canon(s_choice, sizeof s_choice, q);
-        }
-    }
+    /* the stored choice first, out of the settings store; "" means "nobody
+       has chosen" rather than an error */
+    vk_canon(s_choice, sizeof s_choice, tagpu_settings_gpu());
 
     h = CreateFileA(GPUS_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
@@ -826,29 +810,7 @@ void tagpu_vk_gpu_select(int i)
 
 void tagpu_vk_gpu_store(void)
 {
-    HANDLE h;
-    char b[NAMELEN + 16];
-    DWORD wrote = 0, len;
-
-    len = (DWORD)_snprintf(b, sizeof b, "gpu=%s\r\n", want_name());
-    if ((int)len <= 0) return;
-
-    /* written to a temporary and renamed over the target, for the reason
-       tagpu_menu.c's write_cfg states: CREATE_ALWAYS truncates first, and a
-       reader must never see the stub. */
-    h = CreateFileA(CFG_TMP, GENERIC_WRITE, FILE_SHARE_READ, 0, CREATE_ALWAYS,
-                    FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) { vklog("cannot write " CFG_TMP); return; }
-    if (!WriteFile(h, b, len, &wrote, 0) || wrote != len) {
-        CloseHandle(h); DeleteFileA(CFG_TMP);
-        vklog("short write to " CFG_TMP " - " CFG_FILE " left as it was");
-        return;
-    }
-    CloseHandle(h);
-    if (!MoveFileExA(CFG_TMP, CFG_FILE, MOVEFILE_REPLACE_EXISTING)) {
-        DeleteFileA(CFG_TMP);
-        vklog("cannot replace " CFG_FILE " - left as it was");
-    }
+    tagpu_settings_set_gpu(want_name());
 }
 
 /* ---- address-space cost ---------------------------------------------------
@@ -2884,8 +2846,8 @@ static int vk_present(void)
            A WORLD PASS'S CAPTURE IS THE WORLD TARGET, NOT THE WINDOW: `gw*ss`
            by `gh*ss` -- the game's own resolution times the supersample factor
            -- and never the window's client rect. The swapchain image matches
-           that only at `ss = 1` with no letterbox, and `ss` is 2 unless
-           `tagpu_ss.off` is there.
+           that only at `ss = 1` with no letterbox, and `ss` is 2 unless the
+           Supersampling row or its lever says Off (tagpu_settings_ss).
 
            The world target holds the world alone over a transparent clear.
            Reading it makes a world capture the same size and the same kind of

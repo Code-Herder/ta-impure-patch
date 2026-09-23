@@ -3,10 +3,10 @@
 /* tagpu_opt -- the play defaults: what is on when the player says nothing.
 
    Every pass is armed by a file beside TotalA.exe, `tagpu_<x>.on`, whose contents are
-   its tokens, and renderers.md 2.10 makes those files the store the in-game menu will
-   drive when it exists. Until it does, this table stands in for it: a pass on the table
-   is ON, with the tokens listed in tagpu_opt.c, whenever its .on file is absent. The
-   files keep their meaning --
+   its tokens. A pass on this table is ON, with the tokens listed in tagpu_opt.c,
+   whenever its .on file is absent -- except where the pass is a menu row: then the
+   settings store decides (tagpu_settings.h, renderers.md 2.10b), below the pass's own
+   files and above the table. The files keep their meaning --
 
      tagpu_<x>.on    exists: the pass is on and these are its tokens
      tagpu_<x>.off   exists (and no .on): a default-on pass is off

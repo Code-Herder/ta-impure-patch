@@ -43,8 +43,8 @@
    it is on the game thread and runs immediately before the engine reconsiders
    the GUI stack -- the one moment at which pushing a screen cannot race the
    pop loop. `OnCommand` is the engine calling us, also on the game thread, and
-   it does NOT write the file: it sets an in-memory value and the cfg is
-   written from the render thread in tagpu_menu_present(). */
+   it does NOT write the file: it records the value in the settings store and
+   the store is written from the render thread in tagpu_menu_present(). */
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -64,6 +64,8 @@
 #include "tagpu_menu.h"
 #include "tagpu_hud.h"
 #include "tagpu_vk.h"
+#include "tagpu_cfg.h"
+#include "tagpu_settings.h"
 
 /* ---- the engine ---------------------------------------------------------- */
 #define TA_MAIN         0x00511DE8u     /* TAdynmemStruct**                    */
@@ -240,10 +242,10 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 #define ON_FILE    "tagpu_menu.on"
 #define OFF_FILE   "tagpu_menu.off"
 #define OPEN_FILE  "tagpu_menu.open"    /* the spike's stand-in for the trigger */
-#define CFG_FILE   "tagpu_classicpp.cfg"
-#define CFG_TMP    "tagpu_classicpp.cfg.tmp"
+/* The levers over the store's rows (tagpu_settings.h): a row one of these
+   holds is greyed, showing the lever's value. */
 #define SS_OFF     "tagpu_ss.off"
-#define FPS_ON     "tagpu_fps.on"     /* the frame-rate readout, tagpu_fps.c */
+#define FPS_ON     "tagpu_fps.on"
 #define CPP_ON     "tagpu_classicpp.on"
 #define CPP_OFF    "tagpu_classicpp.off"
 #define POLL_MS    250
@@ -270,8 +272,7 @@ static int    s_nrows = R_COUNT;
 static void*  s_gm;                     /* our GUIMEMSTRUCT while open, else 0 */
 static char   s_saved[16];              /* what main+0x37EA0 held              */
 static int    s_stage[R_COUNT];
-static volatile LONG s_dirty;           /* a row moved: the cfg needs writing  */
-static volatile LONG s_vkDirty;         /* the GPU row moved: tagpu_vk.cfg     */
+static volatile LONG s_vkDirty;         /* the GPU row moved: the store's gpu= */
 static DWORD  s_lastPoll;
 static int    s_want;
 static int    s_fresh;                  /* the next open is the PLAYER'S open  */
@@ -889,14 +890,14 @@ static int build_gui(char* b, int cap, int rows)
     return at;
 }
 
-/* ---- reading the levers -------------------------------------------------- */
-/* The screen is a FRONT END over the trigger files and the cfg, never a store
-   of its own -- so the plates show what the levers say, read at open time. */
+/* ---- reading what is in force --------------------------------------------- */
+/* The plates show the value IN FORCE, read at open time: the store's, or a
+   lever's where one holds the row (tagpu_settings.h). */
 /* Classic++ is every row the switch OWNS at its Classic++ value; anything else
    is Custom, which is why Custom is derived and never chosen.
 
    R_SS IS NOT ONE OF THEM. Supersampling is orthogonal to the lane -- the native
-   pass reads `tagpu_ss.off` under Classic as well as Classic++, which is why
+   pass reads it under Classic as well as Classic++, which is why
    `row_greyed` exempts it and why the Classic++ preset in `tagpu_menu_oncommand`
    deliberately leaves it alone. In this test it would make a player who turned
    supersampling off see the Renderer row read "Custom" on the next visit with
@@ -915,8 +916,8 @@ static void read_state(void)
 
     s_stage[R_ASSETS]  = tagpu_classicpp_assets() ? 1 : 0;
     s_stage[R_LIGHT]   = tagpu_classicpp_lit() ? 1 : 0;
-    s_stage[R_SS]      = exists(SS_OFF) ? 0 : 1;
-    s_stage[R_FPS]     = exists(FPS_ON) ? 1 : 0;
+    s_stage[R_SS]      = tagpu_settings_ss() == 2;
+    s_stage[R_FPS]     = tagpu_settings_fps() ? 1 : 0;
 
     /* 0 (Off) when the cfg names a value this row does not offer. That is not
        reachable for `shadows=1`, which tagpu_classicpp.c's parse migrates to
@@ -936,10 +937,30 @@ static void read_state(void)
 /* A row that cannot bite is greyed rather than left looking live. Four of the
    six describe CLASSIC++'s behaviour and are inert under Classic -- leaving
    them reading `On` there is the menu telling the player something untrue.
-   Supersampling is not one of them: `tagpu_ss.off` is read by the native pass
-   in both lanes. */
+   Supersampling is not one of them: the native pass reads it in both lanes. */
+/* Is the row held by a lever, or is the store ignored altogether? Either way a
+   click could not change what is drawn, so the row is greyed and shows the
+   value in force (renderers.md 2.10b). */
+static int row_held(int row)
+{
+    unsigned h;
+    if (tagpu_settings_ignored()) return 1;
+    switch (row) {
+    case R_STYLE: return exists(CPP_ON) || exists(CPP_OFF);
+    case R_SS:    return exists(SS_OFF);
+    case R_FPS:   return exists(FPS_ON);
+    default:      break;
+    }
+    h = tagpu_classicpp_held();
+    return (row == R_ASSETS  && (h & TAGPU_HELD_ASSETS))  ||
+           (row == R_LIGHT   && (h & TAGPU_HELD_LIGHT))   ||
+           (row == R_SHADOWS && (h & TAGPU_HELD_SHADOWS)) ||
+           (row == R_SHADOWQ && (h & TAGPU_HELD_SHADOWRES));
+}
+
 static int row_greyed(int row)
 {
+    if (row_held(row)) return 1;
     /* R_SS and R_FPS are orthogonal to the Classic/Classic++ lane, so neither
        is one of the switch's dependants: supersampling is a resolution choice
        and the FPS counter is a diagnostic drawn OVER the finished frame. Grey
@@ -992,13 +1013,14 @@ static int on_stack(char* main_p, void* gm)
     return 0;
 }
 
-/* `fresh` = the player just opened the menu, so the plates take their values
-   from the levers. A re-open with fresh == 0 is a RECOVERY, and there the model
-   is ours and must survive: the engine tears the whole in-game GUI stack down
-   and rebuilds it (a new ARMMAIN2.GUI whose `under` is NULL) on a world click,
-   and our panel hangs over the world. Re-reading the levers there would put
-   every plate back the moment it was clicked -- the cfg on disk saying
-   assets=1 while the button still read Off.
+/* `fresh` = the player just opened the menu, so the plates take the values in
+   force. A re-open with fresh == 0 is a RECOVERY, and there the model is ours
+   and must survive: the engine tears the whole in-game GUI stack down and
+   rebuilds it (a new ARMMAIN2.GUI whose `under` is NULL) on a world click, and
+   our panel hangs over the world. Re-reading there would put a plate back the
+   moment it was clicked: Classic++ re-reads the store at most twice a second
+   (tagpu_classicpp.c), so for up to half a second after a click the value in
+   force is still the old one.
 
    An ordinary click on one of our own rows never reaches this path: it is
    answered by `menu_accept`. */
@@ -1173,6 +1195,70 @@ static void menu_accept(void* gi)
     ((act_done_fn)VA_ACTDONE)(gi);
 }
 
+/* ---- the model into the store --------------------------------------------
+   Any thread may record a value; the file is written by `tagpu_menu_present`.
+   ONLY WHAT THE PLAYER TOUCHED is recorded, never a row a lever holds: a held
+   row shows the lever's value, and copying that into the store would outlive
+   the lever. */
+static int style_value(void)
+{
+    return s_stage[R_STYLE] == STYLE_CLASSIC ? TS_STYLE_CLASSIC :
+           s_stage[R_STYLE] == STYLE_PP      ? TS_STYLE_PP : TS_STYLE_CUSTOM;
+}
+
+static void commit_one(int row)
+{
+    if (row_held(row)) return;
+    switch (row) {
+    case R_ASSETS:  tagpu_settings_set(TS_ASSETS, s_stage[R_ASSETS]); break;
+    case R_LIGHT:   tagpu_settings_set(TS_LIGHT, s_stage[R_LIGHT]); break;
+    case R_SHADOWS: tagpu_settings_set(TS_SHADOWS, SHADOW_VAL[s_stage[R_SHADOWS]]); break;
+    case R_SHADOWQ: tagpu_settings_set(TS_SHADOWRES, SHADOWQ_VAL[s_stage[R_SHADOWQ]]); break;
+    case R_SS:      tagpu_settings_set(TS_SS, s_stage[R_SS] ? 2 : 1); break;
+    case R_FPS:     tagpu_settings_set(TS_FPS, s_stage[R_FPS]); break;
+    default:        break;
+    }
+}
+
+/* THE RENDER KEYS FIRST AND THE STYLE LAST. Leaving a preset for Custom, the
+   store answers the preset for the render keys until the style changes, so
+   writing them first changes nothing a reader sees, and the style's one store
+   is the moment the pinned values take over. Going back from Custom to a
+   preset, a reader can see one generation of a mixed custom set; every set
+   bumps the generation after its value and marks the store again, so the
+   renderer and the file both end on the full set.
+
+   A render row carries the style with it even when a lever holds the Renderer
+   row: `tagpu_classicpp.on` decides on or off, and the store's `custom` is
+   what pins the row the player just changed. Under `.off` those rows are greyed
+   (row_greyed), so no click reaches here to write Classic over the store. */
+/* A RENDER ROW COMMITS ALL FOUR, not only itself. The store's render slots
+   keep whatever the last Custom session left in them while the style is a
+   preset, so going Custom on one click would bring the others' old values back
+   to life under plates that show the preset's. The plates are what the player
+   is looking at, so they are what is committed. */
+static void commit_row(int row)
+{
+    if (row == R_STYLE || row == R_ASSETS || row == R_LIGHT || row == R_SHADOWS ||
+        row == R_SHADOWQ) {
+        commit_one(R_ASSETS);
+        commit_one(R_LIGHT);
+        commit_one(R_SHADOWS);
+        commit_one(R_SHADOWQ);
+        if (row == R_STYLE && row_held(R_STYLE)) return;
+        tagpu_settings_set(TS_STYLE, style_value());
+        return;
+    }
+    commit_one(row);
+}
+
+static void commit_all_rows(void)
+{
+    int i;
+    for (i = 0; i < R_COUNT; i++) if (i != R_STYLE) commit_one(i);
+    if (!row_held(R_STYLE)) tagpu_settings_set(TS_STYLE, style_value());
+}
+
 void __stdcall tagpu_menu_oncommand(void* gi)
 {
     int row = menu_row_of(gi);
@@ -1206,170 +1292,25 @@ void __stdcall tagpu_menu_oncommand(void* gi)
         if (s_stage[R_STYLE] != STYLE_CLASSIC) s_stage[R_STYLE] = derive_style();
     }
 
+    commit_row(row);
     push_stages(gi);
-    /* NOT the file. The cfg is written from the render thread at the next
-       present: TA is lockstep and this is the game thread. */
-    InterlockedExchange(&s_dirty, 1);
     menu_accept(gi);
 }
 
-/* ---- the deferred write (render thread) ---------------------------------- */
-/* The cfg is the PLAYER'S file and carries keys this screen does not own --
-   sun, amb, penumbra, shadowlen. So it is rewritten rather than overwritten:
-   every token that is not one of ours is copied through in the order it was
-   read, and ours are appended. The reader's grammar is whitespace-separated
-   `key=value`, so newline-separated output reads back identically. */
-/* `sun=off` is the LEGACY spelling of `light=0`, and it BEATS us: tagpu_classicpp.c
-   sets its `off` flag at :159 and then forces `s_lit = 0` at :100 AFTER the token
-   loop, so a preserved `sun=off` makes the Dynamic lighting row read "On" and
-   change nothing. So the menu owns that one token and drops it, expressing it
-   through `light=`.
-   `sun=<az>,<el>` is the sun DIRECTION, is the player's, and must survive. */
-/* The keys this screen OWNS -- rewritten from the rows on every apply. Every
-   other token in the cfg is a knob the player never reaches and is copied
-   through untouched (write_cfg), which is what keeps a researcher's
-   `penumbra=`, `shadowsun=`, `shade=` and so on alive across a click.
-   `terrainshadow=` is deliberately NOT here and has no row: the ground casting
-   on itself is a known defect (renderers.md 2.7b), and no heightfield caster is
-   built, so the key changes nothing (tagpu_classicpp.c). Adding a row for it
-   means first building the caster and fixing the defect. */
-static int ours(const char* tok)
-{
-    return !_strnicmp(tok, "assets=", 7) || !_strnicmp(tok, "light=", 6) ||
-           !_strnicmp(tok, "shadows=", 8) || !_strnicmp(tok, "shadowres=", 10) ||
-           !lstrcmpiA(tok, "sun=off");
-}
-
-static void write_cfg(void)
-{
-    char in[2048], out[3072];
-    HANDLE h;
-    DWORD n = 0, wrote = 0;
-    int at = 0;
-
-    in[0] = 0;
-    h = CreateFileA(CFG_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h != INVALID_HANDLE_VALUE) {
-        if (!ReadFile(h, in, sizeof in - 1, &n, 0)) n = 0;
-        CloseHandle(h);
-        in[n] = 0;
-        /* A cfg that FILLED the buffer may have had more after it, and this
-           function exists to preserve what it does not own. Rewriting from a
-           truncated read would silently drop the tail -- the exact opposite --
-           so refuse instead. The rows still apply; only persistence is lost,
-           and the log says so. */
-        if (n >= sizeof in - 1) {
-            mlog("menu: " CFG_FILE " is larger than the rewrite buffer - NOT rewritten "
-                 "(the rows still apply this session)");
-            return;
-        }
-    }
-
-    {
-        char* p = in;
-        while (*p) {
-            char* q;
-            while (*p && (unsigned char)*p <= ' ') p++;
-            if (!*p) break;
-            q = p;
-            while (*q && (unsigned char)*q > ' ') q++;
-            if (*q) *q++ = 0;
-            if (!ours(p)) at = gput(out, sizeof out, at, "%s\r\n", p);
-            if (at < 0) { mlog("menu: cfg too large to rewrite - not written"); return; }
-            p = q;
-        }
-    }
-
-    at = gput(out, sizeof out, at, "assets=%d\r\nlight=%d\r\nshadows=%d\r\nshadowres=%d\r\n",
-              s_stage[R_ASSETS], s_stage[R_LIGHT],
-              SHADOW_VAL[s_stage[R_SHADOWS]], SHADOWQ_VAL[s_stage[R_SHADOWQ]]);
-    if (at < 0) { mlog("menu: cfg too large to rewrite - not written"); return; }
-
-    /* Write a temporary and RENAME it over the target. CREATE_ALWAYS truncates
-       first, so writing in place means that between the truncate and the write
-       the player's file is empty -- and everything this function copies through
-       (sun, amb, penumbra, shadowlen) is gone if we are killed there, or if the
-       write is short. MoveFileEx with MOVEFILE_REPLACE_EXISTING is atomic, so
-       a reader sees either the old file or the new one and never a stub. The
-       write is checked, and a failed one takes the temporary with it rather
-       than leaving litter beside the cfg. */
-    h = CreateFileA(CFG_TMP, GENERIC_WRITE, FILE_SHARE_READ, 0,
-                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h == INVALID_HANDLE_VALUE) { mlog("menu: cannot write " CFG_TMP); return; }
-    if (!WriteFile(h, out, (DWORD)at, &wrote, 0) || wrote != (DWORD)at) {
-        CloseHandle(h);
-        DeleteFileA(CFG_TMP);
-        mlog("menu: short write to " CFG_TMP " - " CFG_FILE " left as it was");
-        return;
-    }
-    CloseHandle(h);
-    if (!MoveFileExA(CFG_TMP, CFG_FILE, MOVEFILE_REPLACE_EXISTING)) {
-        DeleteFileA(CFG_TMP);
-        mlog("menu: cannot replace " CFG_FILE " - left as it was");
-    }
-}
-
-static void touch(const char* path)
-{
-    HANDLE h;
-    if (exists(path)) return;
-    h = CreateFileA(path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
-}
-
-/* The two rows that are FILES rather than cfg keys.
-
-   THE SWITCH NEEDS BOTH OF ITS FILES WRITTEN, not just the `.off` one, because
-   `tagpu_opt.c`'s precedence is **an `.on` wins and an `.off` only defeats a
-   pass that was on BY DEFAULT**. Driving only the `.off` file fails in both
-   directions and the row silently does nothing:
-
-     - with a hand-armed `tagpu_classicpp.on` present -- what `tacli arm` writes
-       -- the `.off` is inert and Classic++ can never be turned off;
-     - on any tacli instance, which carries `tagpu_defaults.off`, the table's
-       default does not apply, so deleting the `.off` is not enough to turn it
-       ON either.
-
-   Owning both is correct under all three configurations: the shipped DLL
-   (defaults on), a tacli instance (defaults off), and a hand-armed `.on`.
-
-   Supersampling is NOT the same shape and deliberately keeps one file:
-   `tagpu_ss.off` is read directly with GetFileAttributesA in tagpu_native.c
-   and tagpu_render3do.c, there is no `tagpu_ss.on` and no table entry, so
-   inventing one would arm nothing and confuse the next reader. */
-static void write_levers(void)
-{
-    int ss  = s_stage[R_SS] == 1;
-    int cpp = s_stage[R_STYLE] != STYLE_CLASSIC;
-
-    if (ss) DeleteFileA(SS_OFF); else touch(SS_OFF);
-
-    /* The readout's own trigger, the positive sense: present = on. Written here
-       rather than in OnCommand for the reason the whole function exists -- TA is
-       lockstep and OnCommand is the game thread. */
-    if (s_stage[R_FPS] == 1) touch(FPS_ON); else DeleteFileA(FPS_ON);
-
-    if (cpp) { DeleteFileA(CPP_OFF); touch(CPP_ON); }
-    else     { DeleteFileA(CPP_ON);  touch(CPP_OFF); }
-}
-
+/* ---- the render thread's half ------------------------------------------- */
+/* The store is written HERE, off the game thread: TA is lockstep and a disk
+   write inside OnCommand is an unbounded stall, which can drop a player from a
+   session whatever it was writing. A click only records a value
+   (`commit_row`); this coalesces any number of them into one write. */
 void tagpu_menu_present(void)
 {
     if (!s_installed) return;
-    if (InterlockedExchange(&s_dirty, 0)) {
-        write_cfg();
-        write_levers();
-    }
-    /* THE GPU ROW HAS ITS OWN FLAG AND NOT `s_dirty`, because `s_dirty` means
-       "rewrite tagpu_classicpp.cfg and the lever files" and the GPU choice is
-       in neither. Sharing it would make every GPU click rewrite the player's
-       renderer cfg -- harmless, and exactly the kind of thing that is not
-       harmless the day a key moves. Same deferred-write discipline: the click
-       lands on the game thread and TA is lockstep, so the file is written
-       here. */
+    /* THE GPU ROW HAS ITS OWN FLAG: its value is a device NAME, and the name
+       is handed to the store on this thread so that no string crosses one
+       (tagpu_vk.h). */
     if (InterlockedExchange(&s_vkDirty, 0))
         tagpu_vk_gpu_store();
+    tagpu_settings_flush();
 }
 
 /* ---- the trigger's two jobs: it is drawn, and it is hit-tested ----------- */
@@ -1438,7 +1379,7 @@ int tagpu_menu_click(int gx, int gy, int down)
 
     s_pressed = 1;
     s_want = !s_want;
-    if (s_want) s_fresh = 1;            /* the player's open reads the levers */
+    if (s_want) s_fresh = 1;            /* the player's open reads what is in force */
     return 1;
 }
 
@@ -1587,7 +1528,7 @@ static void read_tokens(void)
    byte-identical to the engine running alone, which is what makes replacing a
    stock screen's behaviour safe):
      - `0x45E5E0`, the visual-options dialog build, on RETURN: the gadgets exist
-       by then, so the plates are set from the levers there.
+       by then, so the plates are set from the values in force there.
      - `0x45E100`, OnCommand_VISUALRT_GUI, on ENTRY: the click is ours if the
        actuated gadget carries one of our names, and `tagpu_menu_oncommand` is
        already exactly that test -- it maps the index to a row BY NAME and
@@ -1760,11 +1701,21 @@ static const VisStock s_visStock[VIS_STOCK_N] = {
 enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_GPU, VD_COUNT,
        /* not a row: a second message the Display mode row posts to itself, so
           the frame restore lands after the style restore the fork posts */
-       VD_RESTORE_FRAME };
+       VD_RESTORE_FRAME,
+       /* not a row: Undo's UI scale, the exact value the screen opened with --
+          a stage cannot carry "off" (s_scaleOpen) */
+       VD_UNDO_SCALE };
+static volatile LONG s_scaleOpen = -1;  /* the UI scale in force at open, -1 off */
+/* Game thread: the window rows clicked since the screen opened, and the
+   store's Monitor then (-1 none) -- what Undo puts back (vis_undo). */
+static int s_vtouched[VD_COUNT];
+static int s_monOpen = -1;
+static int vrow_held(int row);
 
 #define VD_MONMAX 8
 static char s_monText[VD_MONMAX * 20];
 static RECT s_monRect[VD_MONMAX];
+static char s_monDev[VD_MONMAX][CCHDEVICENAME + 1];  /* the device name the store keeps */
 static int  s_monCount;
 /* Is `s_vstage[VD_MON]` a CHOICE, or just the zero the array was born with?
    The difference matters to `tagpu_menu_monitor`, whose caller needs to fall
@@ -1816,11 +1767,12 @@ static int s_vstage[VD_COUNT];
 
 static BOOL CALLBACK mon_cb(HMONITOR h, HDC dc, LPRECT clip, LPARAM p)
 {
-    MONITORINFO mi;
+    MONITORINFOEXA mi;
     (void)dc; (void)clip; (void)p;
     if (s_monCount >= VD_MONMAX) return FALSE;
     mi.cbSize = sizeof mi;
-    if (!GetMonitorInfoA(h, &mi)) return TRUE;
+    if (!GetMonitorInfoA(h, (MONITORINFO*)&mi)) return TRUE;
+    lstrcpynA(s_monDev[s_monCount], mi.szDevice, sizeof s_monDev[0]);
     s_monRect[s_monCount++] = mi.rcMonitor;
     return TRUE;
 }
@@ -1844,6 +1796,22 @@ static void enum_monitors(void)
     s_monText[sizeof s_monText - 1] = 0;
     if (s_monCount < 1) { lstrcpynA(s_monText, "1: default", sizeof s_monText); s_monCount = 1; }
     s_vrow[VD_MON].stages = s_monCount;
+
+    /* The store keeps the monitor BY DEVICE NAME, because the enumeration order
+       is not stable across a hot-plug; the list is handed over once, here,
+       before any other thread exists, and never changes. A stored monitor that
+       is attached is the choice from the first frame -- which is what places a
+       fullscreen window on it (`util_target_monitor`). */
+    {
+        const char* names[VD_MONMAX];
+        int m;
+        for (i = 0; i < s_monCount; i++) names[i] = s_monDev[i];
+        tagpu_settings_monitors(names, s_monCount);
+        if (tagpu_settings_get(TS_MONITOR, &m) && m >= 0 && m < s_monCount) {
+            s_vstage[VD_MON] = m;
+            s_monChosen = 1;
+        }
+    }
 }
 
 /* The GPU row's captions, from the cache `tagpu_vk.gpus` -- which the previous
@@ -2154,12 +2122,17 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
                               SWP_NOZORDER | SWP_NOACTIVATE);
         break;
     case VD_MON:   move_to_monitor(s_vstage[VD_MON]);              break;
+    case VD_UNDO_SCALE:
+        if (!tagpu_hud_held()) tagpu_hud_store_pct((int)s_scaleOpen);
+        break;
     /* HUD scale touches no window, and it touches no engine memory either --
        the store puts it in force as it writes it, so the next composited frame
        is already at the new scale. Writing it on the window thread keeps every
        row of this screen on one thread, which is the contract the comment
        above apply_display states. */
-    case VD_SCALE: tagpu_hud_store_pct(SCALE_VAL[s_vstage[VD_SCALE]]); break;
+    case VD_SCALE:
+        if (!tagpu_hud_held()) tagpu_hud_store_pct(SCALE_VAL[s_vstage[VD_SCALE]]);
+        break;
     case VD_FPS:
         /* fpsl_init reads g_config.maxfps and computes tick_length, so the cap
            is live from the next presented frame rather than the next launch. */
@@ -2173,14 +2146,19 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
        reach an object the other thread is using, because nothing here reaches
        an object at all. It rides this message with the rest for the reason the
        comment above `apply_display` gives -- one screen, one thread. */
-    case VD_GPU:   tagpu_vk_gpu_select(s_vstage[VD_GPU]);          break;
+    /* The store's flag is raised AFTER the select, so the render thread's
+       exchange of it orders its read of the chosen name after the choice. */
+    case VD_GPU:
+        tagpu_vk_gpu_select(s_vstage[VD_GPU]);
+        if (!vrow_held(VD_GPU)) InterlockedExchange(&s_vkDirty, 1);
+        break;
     }
     *result = 0;
     return TRUE;
 }
 
-/* The rows are a FRONT END over the fork's live settings, exactly as the
-   render rows are over the levers: read on the way in, never stored here. */
+/* The plates are read from the fork's live settings on the way in, which is
+   what the store put in force at attach or a click has put in force since. */
 static void read_display_state(void)
 {
     int i, k;
@@ -2201,13 +2179,13 @@ static void read_display_state(void)
                 }
     }
 
-    /* HUD scale is read back out of its own store, which is the lever file the
-       row writes -- not out of anything live, because the value in force is the
-       one the NEXT game entry will read and a game may not have started yet.
-       An unrecognised percentage plates as Auto rather than inventing a stage. */
-    s_vstage[VD_SCALE] = 0;
+    /* HUD scale is read back out of what the next game entry will read -- the
+       lever, else the store -- not out of anything live, because a game may not
+       have started yet. OFF plates as 100%, the stock size it draws at, and an
+       unrecognised percentage as Auto rather than inventing a stage. */
     {
         int pct = tagpu_hud_stored_pct();
+        s_vstage[VD_SCALE] = pct < 0 ? 1 : 0;
         for (k = 1; pct > 0 && k < (int)(sizeof SCALE_VAL / sizeof SCALE_VAL[0]); k++)
             if (SCALE_VAL[k] == pct) { s_vstage[VD_SCALE] = k; break; }
     }
@@ -2233,8 +2211,23 @@ static void read_display_state(void)
    immediately after a click -- greying from it would leave the plate saying
    "Window" and UI scale greyed at the same time, one click behind.
    `s_vstage[VD_MODE]` is what the player just asked for. */
+/* A row a ddraw.ini key holds, or every row when the store is ignored: a click
+   there could not outlive the launch, so it is greyed (renderers.md 2.10b). */
+static int vrow_held(int row)
+{
+    if (tagpu_settings_ignored()) return 1;
+    switch (row) {
+    case VD_MODE:  return tagpu_cfg_display_held();
+    case VD_MON:   return tagpu_cfg_display_held() || tagpu_cfg_window_held();
+    case VD_FPS:   return tagpu_cfg_maxfps_held();
+    case VD_SCALE: return tagpu_hud_held();
+    default:       return 0;
+    }
+}
+
 static int vrow_greyed(int row)
 {
+    if (vrow_held(row))  return 1;
     if (row == VD_MON)   return s_monCount < 2;
     /* Greyed unless there is a choice to make AND something that would act on
        it. `tagpu_vk_armed()` is 0 under `renderer=gdi` with no `tagpu_vk.on`
@@ -2256,6 +2249,21 @@ static void push_display(void* gi)
     ((set_dirty_fn)VA_SETDIRTY)(gi);
 }
 
+/* The WINDOW rows into the store. UI scale is not here: `tagpu_hud_store_pct`
+   records it as it puts it in force, on the window thread. Nor is the GPU: its
+   value is a name, handed over by the render thread (`tagpu_menu_present`)
+   once the window thread's select has run. */
+static void commit_display(int d)
+{
+    if (vrow_held(d)) return;
+    switch (d) {
+    case VD_MODE: tagpu_settings_set(TS_DISPLAY, s_vstage[VD_MODE] ? 1 : 0); break;
+    case VD_MON:  tagpu_settings_set(TS_MONITOR, s_vstage[VD_MON]); break;
+    case VD_FPS:  tagpu_settings_set(TS_MAXFPS, FPS_VAL[s_vstage[VD_FPS]]); break;
+    default:      break;
+    }
+}
+
 /* ---- Restore Default and Undo Changes ------------------------------------
    Both are STARTOPT's own buttons, handled by `0x45E100`'s RESTORE
    (`0x45E331`) and UNDO (`0x45E2FD`) branches -- and both branches end the
@@ -2265,9 +2273,10 @@ static void push_display(void* gi)
 
    We handle them BEFORE forwarding, so the model is already what we want by
    the time the engine's rebuild re-seeds the plates from it. That rebuild runs
-   `vis_build_after`, which would normally re-read the levers -- and the levers
-   still hold the OLD values, because the cfg is written from the render thread
-   at the next present. `s_visKeep` is how the rebuild is told the model is
+   `vis_build_after`, which would normally re-read the values in force -- and
+   those still hold the OLD values, because Classic++ re-reads the store on its
+   own poll and the window rows are applied by a POSTED message. `s_visKeep` is
+   how the rebuild is told the model is
    authoritative this once; it is the same bargain `menu_open(fresh = 0)`
    makes for the in-game panel's recovery. */
 static int s_visKeep;
@@ -2291,30 +2300,38 @@ static const char* vis_actuated(void* gi)
     return ctrls + (size_t)idx * STRIDE + G_NAME;
 }
 
-/* Every WINDOW row re-applied, because a restored model is only a picture
-   until the window is actually changed to match it. */
-static void apply_display_all(void)
-{
-    int i;
-    for (i = 0; i < VD_COUNT; i++) apply_display(i);
-}
+/* UNDO -- back to what the screen opened with, the two rows that move the
+   window included. This is the escape hatch for a Display mode or Monitor the
+   player cannot see the menu on any more, so it is the one place those two ARE
+   put back.
 
-/* UNDO -- back to what the screen opened with, every row, the two that move
-   the window included. This is the escape hatch for a Display mode or Monitor
-   the player cannot see the menu on any more, so it is the one place those two
-   ARE put back. */
+   ONLY THE WINDOW ROWS THE VISIT TOUCHED, AND TO WHAT THE STORE HELD. A plate
+   shows a resolved value -- the window's own monitor for a store that names
+   none, the device that came up for a stored GPU that could not -- so putting
+   an untouched row back from its plate would pin what the player never chose.
+   The Monitor goes back as the store's own value, "none" included; UI scale as
+   its exact value, off included. A row a lever holds is never put in force. */
 static void vis_undo(void)
 {
+    int i;
     memcpy(s_stage,  s_stageOpen,  sizeof s_stage);
     memcpy(s_vstage, s_vstageOpen, sizeof s_vstage);
-    apply_display_all();
-    InterlockedExchange(&s_dirty, 1);
+    commit_all_rows();
+    for (i = 0; i < VD_COUNT; i++) {
+        if (!s_vtouched[i] || vrow_held(i)) continue;
+        apply_display(i == VD_SCALE ? VD_UNDO_SCALE : i);
+        if (i == VD_MON) tagpu_settings_set(TS_MONITOR, s_monOpen);
+        else commit_display(i);
+    }
+    memset(s_vtouched, 0, sizeof s_vtouched);
     s_visKeep = 1;
 }
 
-/* RESTORE -- the shipped defaults: Classic++ with every row it owns at its
-   Classic++ value, supersampling on, the window fitted rather than pinned to a
-   whole multiple, and the stock 60 fps cap.
+/* RESTORE -- the store's defaults (renderers.md 2.10b): Classic++ with every
+   row it owns at its Classic++ value, supersampling on, the FPS counter off,
+   UI scale off and the stock 60 fps cap. A row a lever holds keeps the
+   lever's value: Restore changes the store, and the store is not what draws
+   that row.
 
    DISPLAY MODE AND MONITOR ARE DELIBERATELY NOT RESTORED. "Restore defaults"
    would otherwise move the player's window to another monitor, or into
@@ -2324,17 +2341,30 @@ static void vis_undo(void)
    themselves and is asking for it back. */
 static void vis_restore(void)
 {
+    int keep[R_COUNT], i;
+    memcpy(keep, s_stage, sizeof keep);
     s_stage[R_STYLE]   = STYLE_PP;
     s_stage[R_ASSETS]  = 1;
     s_stage[R_LIGHT]   = 1;
     s_stage[R_SHADOWS] = SHADOWS_HARD_STAGE;
     s_stage[R_SHADOWQ] = 2;
     s_stage[R_SS]      = 1;
-    s_vstage[VD_SCALE] = 0;         /* Auto  */
-    s_vstage[VD_FPS]   = 0;         /* 60 fps */
-    apply_display(VD_SCALE);
-    apply_display(VD_FPS);
-    InterlockedExchange(&s_dirty, 1);
+    s_stage[R_FPS]     = 0;
+    for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
+    commit_all_rows();
+    if (!vrow_held(VD_FPS)) {
+        s_vstage[VD_FPS] = 0;       /* 60 fps */
+        apply_display(VD_FPS);
+        commit_display(VD_FPS);
+    }
+    /* UI scale back to OFF, the store's default: HUD scale is off the play
+       defaults (tagpu_opt.c), so "Restore defaults" must not be what arms it.
+       No stage of the row means off, so the pass is turned off here directly,
+       and the row plates 100% -- stock size, which is what off draws. */
+    if (!vrow_held(VD_SCALE)) {
+        tagpu_hud_store_pct(-1);
+        s_vstage[VD_SCALE] = 1;
+    }
     s_visKeep = 1;
 }
 
@@ -2426,8 +2456,7 @@ static int __cdecl vis_build_before(void* esp)
 }
 
 /* On RETURN from the dialog build: the gadgets exist, so the plates can be set.
-   `read_state` re-reads the levers, which is what makes the screen a front end
-   over them rather than a store of its own. */
+   `read_state` reads the values in force, so the plates show what is drawn. */
 static void* __cdecl vis_build_after(unsigned int* regs)
 {
     (void)regs;
@@ -2451,6 +2480,9 @@ static void* __cdecl vis_build_after(unsigned int* regs)
             read_display_state();
             memcpy(s_stageOpen,  s_stage,  sizeof s_stageOpen);
             memcpy(s_vstageOpen, s_vstage, sizeof s_vstageOpen);
+            InterlockedExchange(&s_scaleOpen, tagpu_hud_stored_pct());
+            memset(s_vtouched, 0, sizeof s_vtouched);
+            if (!tagpu_settings_get(TS_MONITOR, &s_monOpen)) s_monOpen = -1;
         }
         push_stages(main_p + OFF_GUIINFO);
         push_display(main_p + OFF_GUIINFO);
@@ -2510,7 +2542,8 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
         do { s_vstage[d] = (s_vstage[d] + 1) % n; }
         while (d == VD_SCALE && !scale_stage_ok(s_vstage[d]) && --guard > 0);
         if (d == VD_MON) s_monChosen = 1;
-        if (d == VD_GPU) InterlockedExchange(&s_vkDirty, 1);
+        commit_display(d);
+        s_vtouched[d] = 1;
         apply_display(d);       /* posts; the wndproc does the window work */
         /* The Monitor row changes what the Screen Size list may contain, so it
            rebuilds the screen instead of just re-plating it. Nothing after the

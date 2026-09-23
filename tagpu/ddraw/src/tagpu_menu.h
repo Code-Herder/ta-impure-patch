@@ -41,13 +41,13 @@ int  tagpu_menu_owns_point(int gx, int gy);
    hit-test on either alone works for exactly half its users. */
 int  tagpu_menu_click(int gx, int gy, int down);
 
-/* The render thread's frame, from render_vk.c. Does the DEFERRED WRITE: a row
-   click sets an in-memory value on the game thread and the cfg is written
-   here, off it. TA is lockstep and a synchronous write inside `OnCommand` is
-   an unbounded stall — a slow disk, a scanner touching a just-written file, a
-   network drive — which can drop a player from a session whatever the content
-   was. Deferring also coalesces rapid clicks into one write, and the cfg
-   poller re-reads on mtime either way. */
+/* The render thread's frame. Does the DEFERRED WRITE: a row click records its
+   value in the settings store on the game thread (tagpu_settings.h) and the
+   store's file is written here, off it. TA is lockstep and a synchronous write
+   inside `OnCommand` is an unbounded stall — a slow disk, a scanner touching a
+   just-written file, a network drive — which can drop a player from a session
+   whatever the content was. Deferring also coalesces rapid clicks into one
+   write. */
 void tagpu_menu_present(void);
 
 /* The WINDOW column's four rows -- Display mode, Monitor, UI scale, Frame cap

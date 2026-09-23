@@ -262,10 +262,10 @@ verb except `eye`, `wheel` and `gui` still works.
 |---|---|
 | `vk.on` | not needed to run the lane; read for `color=r,g,b`, the clear colour (black by default; `255,0,255` makes every undrawn pixel a magenta sentinel) |
 | `vk.off` | **ignored** under `renderer=vulkan` (the log says so) |
-| `tagpu_vk.gpus`, `tagpu_vk.cfg` | the GPU row's device list (one launch behind) and choice (`gpu=<name>`) — `references/modules.md` |
-| `ss.off` | the 2x supersample off: the world target is `gw*ss x gh*ss` and is built where the lever is not re-read, so settle it before the launch |
+| `tagpu_vk.gpus` | the GPU row's device list (one launch behind); the choice is `gpu=` in `impure.cfg` — `references/modules.md` |
+| `ss.off` | the 2x supersample off, and the lever over the Supersampling row. Live: the world target (`gw*ss x gh*ss`) is rebuilt on the next frames — `vk: world: frame N: 1024x768 target (1024x768 at ss=1)` after arming it on a running game |
 | `devres.on` | the world at the device's resolution: `ss` follows `ceil(k)` (`references/ui-layer.md`) |
-| `fps.on` | the frame-rate readout, drawn from TA's own glyphs; needs the font the packet carries, which `markown` produces — with only `fps.on` armed the packet reads `font=0/0B` and the readout draws nothing |
+| `fps.on` | the frame-rate readout (the lever over the FPS counter row), drawn from TA's own glyphs; needs the font the packet carries, which `markown` produces — with only `fps.on` armed the packet reads `font=0/0B` and the readout draws nothing |
 | `scaffold.on` | the scene-depth scaffold overlay; a debug instrument that tints every tall feature purple. Not in the arm set |
 | `tagpu_<pass>.ab` | a one-frame capture of the presented frame as `tagpu_<pass>_vk.ppm` — `references/measuring.md` |
 
