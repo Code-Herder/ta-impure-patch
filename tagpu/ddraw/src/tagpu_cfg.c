@@ -26,11 +26,11 @@
    exactly the thing the toggle_borderless line is there to prevent. The pair is
    therefore atomic: if the player wrote EITHER key we own NEITHER.
 
-   THE PRESENCE TEST MEANS WHAT IT SAYS ONLY BECAUSE WE STOPPED SHIPPING THESE
+   THE PRESENCE TEST MEANS WHAT IT SAYS ONLY BECAUSE WE DO NOT SHIP THESE
    KEYS. cfg_create_ini() writes an ini for a player who has none, from the
-   template in config.c; while that template's [TotalA] section carried
-   `max_resolutions=32`, every player's ini "contained" the key and an
-   only-if-absent rule would never have fired. The keys are gone from there and
+   template in config.c; if that template's [TotalA] section carried, say,
+   `max_resolutions=32`, every player's ini would "contain" the key and an
+   only-if-absent rule would never fire. The keys are absent from there and
    from tagpu/release/ddraw.ini for that reason -- if one comes back, this
    module silently stops working and nothing warns you. */
 #include <windows.h>

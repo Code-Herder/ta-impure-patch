@@ -1,12 +1,9 @@
 #ifndef TAGPU_VK_SHADOW_H
 #define TAGPU_VK_SHADOW_H
-/* The Classic++ cast-shadow depth map, drawn by Vulkan (Phase G / G19e, the
-   FIFTH world pass). Implementation: tagpu_vk_shadow.c. The GL edition is
-   tagpu_shadow.c, DELETED BY LANDING 11 D2 -- read the TAGPU_SHADOWHAND
-   block at the bottom of this file before anything else here, because
-   this pass has had no producer since. It WAS the source of the matrix,
-   the caster geometry and
-   the shader.
+/* The Classic++ cast-shadow depth map, drawn by Vulkan (Phase G, the FIFTH
+   world pass). Implementation: tagpu_vk_shadow.c. Read the TAGPU_SHADOWHAND
+   block at the bottom of this file before anything else here, because this
+   pass has no producer.
 
    IT IS THE FIRST PASS THAT DRAWS INTO SOMETHING OTHER THAN THE FRAME. Every
    pass before it records into the seam's render pass and produces pixels; this
@@ -90,25 +87,20 @@ void tagpu_vk_shadow_down_paid(const TAGPU_VKPASS* d);
 
 /* ---- WHAT A SHADOW HAND-OVER IS, AND WHO IS SUPPOSED TO PUBLISH ONE -------
 
-   This type lived in `tagpu_shadow.h` until landing 11 D2 deleted that file
-   with the rest of the GL lane. It is kept, unchanged, because it is the shape
-   of the thing this pass needs and the next producer should not have to invent
-   it again.
+   This type is kept because it is the shape of the thing this pass needs,
+   and the next producer should not have to invent it again.
 
-   THERE IS NO PRODUCER TODAY, AND THERE HAS NOT BEEN ONE FOR SOME TIME. The
-   only writer of the old hand-over's `have` flag was `tagpu_shadow_end`, which
-   lost its caller when the GL draw path was disarmed, so
-   `tagpu_vk_shadow_prepare` has returned 0 on every frame since -- and nothing
-   said so, because `shadowOn` went to 0 at the same instant and the consumers'
-   refusals are gated on it. Both halves went dark together. Measured and
-   written up with the deletion; see the vulkan-only plan's landing 11.
+   THERE IS NO PRODUCER. Nothing writes a hand-over, so
+   `tagpu_vk_shadow_prepare` returns 0 on every frame -- and nothing says so,
+   because `shadowOn` is 0 as well and the consumers' refusals are gated on
+   it: both halves are dark together. See the vulkan-only plan's landing 11.
 
    SO THIS PASS IS A FOUNDATION, NOT A FEATURE. Everything below it still
    compiles, still builds its pipeline lazily, and still draws exactly what it
    is handed. Reviving cast shadows is writing the producer: something on the
    render thread that owns the light basis and the map extent, fills the struct
    below and publishes it for `d->frame`. That is a feature landing with its own
-   measurement, not part of a deletion.
+   measurement.
    THE POINTERS ARE THE TERRAIN MODULE'S and name the CPU mirror of the caster
    mesh, which that module frees and rebuilds on a map change. `frame` is the
    fork's monotonic render-thread counter and the hand-over refuses

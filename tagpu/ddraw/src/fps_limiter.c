@@ -148,9 +148,6 @@ void fpsl_frame_end()
     if (g_config.maxfps < 0 || 
         (g_config.vsync && (!g_config.maxfps || g_config.maxfps >= g_ddraw.mode.dmDisplayFrequency)))
     {
-        /* The Windows 7 SP1 DwmFlush() freeze workaround was here and was
-           gated on the OpenGL lane, which is gone [landing 11-2]. Neither
-           surviving backend ever took it. */
         {
             if (fpsl_dwm_flush() || fpsl_wait_for_vblank())
                 return;

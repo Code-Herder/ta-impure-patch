@@ -1,11 +1,11 @@
 #ifndef TAGPU_COBTRACE_H
 #define TAGPU_COBTRACE_H
-/* tagpu_cobtrace.h — the COB script-call oracle (tacob landing 2).
+/* tagpu_cobtrace.h — the COB script-call oracle.
 
    With `tagpu_cobtrace.on` in the game dir at DLL attach, every COB thread the
    engine's script VM starts, refuses, returns, kills or draws a random number
    for is appended as one tab-separated line to `tagpu_cobtrace.log`, stamped
-   with the sim tick, so a headless VM (tacob landing 3) can be diffed against
+   with the sim tick, so a headless VM (tacob) can be diffed against
    the real game. The line contract is research/notes/tacob-design.md, "The
    trace contract"; the engine seam is exe-reverse-engineering.md, "The COB
    engine". Reads only — five byte-matched, all-or-nothing hooks inside the COB

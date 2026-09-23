@@ -84,13 +84,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            No engine patch; `tagpu_packet.off` leaves it disarmed. */
         tagpu_packet_init();
 
-        /* tagpu: install the G5 render-suppressor. No-op unless "tagpu_suppress.on"
+        /* tagpu: install the render-suppressor. No-op unless "tagpu_suppress.on"
            exists next to the exe; byte-match guarded. Runs BEFORE the tracer so that
            when it is armed it owns DrawUnit 0x45AC20 and the tracer skips that hook
            (they must not double-detour the same bytes). */
         tagpu_suppress_init();
 
-        /* tagpu: install the G4 unit-draw tracer. No-op unless "tagpu_tracer.on"
+        /* tagpu: install the unit-draw tracer. No-op unless "tagpu_tracer.on"
            exists next to the exe; all detours are byte-match guarded. */
         tagpu_tracer_init();
 
@@ -100,11 +100,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            all disjoint from the suppress/tracer detours: the two rasterisers
            0x459830/0x459C70, the build-state effect 0x458DD0, the three
            composite-wipe sites 0x459338/0x45958C/0x4594DB, and the two
-           structure-shadow branches 0x4592BF/0x459522. This comment said "only
-           0x459830/0x459C70" until 2026-09-18, which was stale long before
-           landing 10b moved the last pair. EVERY ONE OF THEM DECIDES PER DRAW
-           against a flag a live lane sets — installing them suppresses
-           nothing. */
+           structure-shadow branches 0x4592BF/0x459522. EVERY ONE OF THEM
+           DECIDES PER DRAW against a flag a live lane sets — installing them
+           suppresses nothing. */
         tagpu_owndraw_init();
 
         /* tagpu: own the effects draw — redirect the two effects-pass call sites
@@ -113,13 +111,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            "tagpu_fxown.on" exists; byte-match guarded, all-or-nothing. */
         tagpu_fxown_init();
 
-        /* tagpu: own the engine's feature draw (G13a). No-op unless
+        /* tagpu: own the engine's feature draw. No-op unless
            "tagpu_featown.on" exists; byte-match guarded; one leaf,
            0x46A610, disjoint from every other detour. */
         tagpu_featown_init();
 
-        /* tagpu: own the engine's terrain draw and, with it, the fog overlay
-           (G13b). No-op unless "tagpu_terrown.on" exists; byte-match guarded,
+        /* tagpu: own the engine's terrain draw and, with it, the fog overlay.
+           No-op unless "tagpu_terrown.on" exists; byte-match guarded,
            all-or-nothing; 0x483FA0 and 0x4848E0, disjoint from every other
            detour. Unlike the others its skip path is not empty — it fills the
            viewport with the composite's key and replicates the fog grid's
@@ -133,7 +131,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            zoomed-out view is live; `tagpu_fogwide.off` turns it off. */
         tagpu_fogwide_init();
 
-        /* tagpu: own the engine's world-space UI markers (G13d) — health bars
+        /* tagpu: own the engine's world-space UI markers — health bars
            re-drawn natively, order markers / group digits / build cursor
            captured out of the engine's frame and replayed through the zoom.
            No-op unless "tagpu_markown.on" exists; byte-matched, all-or-nothing;
@@ -142,34 +140,23 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            installed on them still runs). */
         tagpu_markown_init();
 
-        /* `tagpu_cursown_init()` STOOD HERE and the clean cut deleted the
-           module with it -- four 5-byte call-site redirects that skipped the
-           engine's cursor BLIT while OURS was on screen. Ours was the UI
-           layer's composite, which is gone, so the suppression could never
-           fire again: the byte it compared would have been 0 for the life of
-           every session, and four engine patches that can only ever be
-           no-operations are worse than none. The engine draws its own cursor
-           now, into its own surface, which is where the reference frame wants
-           it. A native cursor pass brings the suppression back with it.
-           [The vulkan-only plan, THE CLEAN CUT.] */
+        /* Nothing suppresses the engine's cursor BLIT: the engine draws its
+           own cursor, into its own surface, which is where the reference frame
+           wants it. */
 
         /* tagpu: the flip observer AND the GL UI renderer's leaves (Phase E,
-           tagpu_gui.h). TWO INSTALLS SINCE THE VULKAN-ONLY PLAN'S LANDING
-           10c-2, and this comment described only the second until the review
-           of that landing: the observer of the flip 0x4C63A0 goes in whenever
-           the engine's bytes match there, with NO trigger, because it is the
-           only host of the on-demand trigger family and therefore of every
-           `tacli` verb and of the key/click injection. "tagpu_gui.on" gates
-           the 17 LEAVES, the arena and the census, and those are still
+           tagpu_gui.h). TWO INSTALLS: the observer of the flip 0x4C63A0 goes
+           in whenever the engine's bytes match there, with NO trigger, because
+           it is the only host of the on-demand trigger family and therefore of
+           every `tacli` verb and of the key/click injection. "tagpu_gui.on"
+           gates the 17 LEAVES, the arena and the census, and those are still
            byte-matched all-or-nothing. Every detour calls the original, so the
            engine draws exactly as before — we only watch. The leaves it
            watches are the GAF blits, the glyph blitter, the line drawers, the
            surface copy and the flip, and ONE of them collides with a detour
            above on purpose: leaf #1 is 0x4B7F90, which tagpu_fxown.c also
            takes, and the two are CHAINED -- tagpu_detour.c names that exact
-           pair as the case the chain mechanism exists for. This line said
-           "disjoint from every detour above" until round 3 of landing 10c-2's
-           review. */
+           pair as the case the chain mechanism exists for. */
         tagpu_gui_init();
 
         /* zoom: the minimap's view rectangle, computed from the 1x view and so a
@@ -194,7 +181,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            stock units trampoline to the untouched engine functions. */
         tagpu_weapons_init();
 
-        /* tagpu: the COB script-call oracle (tacob landing 2). No-op unless
+        /* tagpu: the COB script-call oracle. No-op unless
            "tagpu_cobtrace.on" exists; five sites inside the COB engine
            (0x4B08C0, 0x4B0DA0, 0x4B19D0, 0x4B1A99 and the RNG call at
            0x4B15E0), byte-matched, all-or-nothing, disjoint from every detour
@@ -222,7 +209,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            store through it. */
         tagpu_hud_init();
 
-        /* tagpu: the render-options screen (Phase F, G18). Writes
+        /* tagpu: the render-options screen (Phase F). Writes
            impure-patch.ufo unconditionally -- the engine globs *.UFO from the
            working directory at InitTAHPIAry 0x41D4C0, and DDRAW.dll is the
            FIRST static import of TotalA.exe, so DLL_PROCESS_ATTACH runs before
@@ -259,10 +246,6 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
             while (s)
             {
-                /* The Windows 11 "Steam RA2 crash" workaround was here: it set
-                   g_config.d3d9on12, and nothing else, so it went with the
-                   Direct3D9 lane [landing 11-1]. */
-
                 if (_strcmpi(s, "WIN95") == 0 || _strcmpi(s, "WIN98") == 0 || _strcmpi(s, "NT4SP5") == 0)
                 {
                     char mes[280] = { 0 };

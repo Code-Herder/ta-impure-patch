@@ -1,7 +1,7 @@
 #ifndef TAGPU_VK_FX_H
 #define TAGPU_VK_FX_H
 /* The effects pass -- weapon fire, explosions, debris and the ten particle
-   layers -- drawn by Vulkan (Phase G / G19e, the FOURTH world pass).
+   layers -- drawn by Vulkan (the FOURTH world pass).
    Implementation: tagpu_vk_fx.c. The GL edition is tagpu_fx.c and stays the
    source of the vertices, the uniforms, the texels and the shader.
 
@@ -38,7 +38,7 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
 /* 1 on the ONE frame `tagpu_fx.ab` latched its claim and `tagpu_vk_ab_arm`
    got the `_vk.ppm` target unlinked -- so the seam captures THAT frame rather
    than whichever one its own lever poll landed on. It does NOT mean a file was
-   written: since landing 4d-2 there is no GL half, and the capture the seam
+   written: there is no GL half, and the capture the seam
    then records is this lane's own. Consumed by the call. Valid after
    `prepare`. */
 int  tagpu_vk_fx_ab_frame(void);
@@ -60,10 +60,9 @@ void tagpu_vk_fx_down(const TAGPU_VKPASS* d);
    `vk_down` and `vk_resize` call `_down` for their own reasons and would
    otherwise consume an outstanding debt -- leaving the pass latched at
    ST_REFUSED, which `prepare` treats as terminal, so a transient refusal
-   followed by a window drag killed the pass for the life of the PROCESS. The
-   seam calls `_down_paid` after its drain; every other caller of `_down`
-   leaves the debt standing and the pass comes back ST_UNBUILT.
-   [THE G19e RE-REVIEW'S SECOND FINDING, 2026-09-15.] */
+   followed by a window drag would kill the pass for the life of the PROCESS.
+   The seam calls `_down_paid` after its drain; every other caller of `_down`
+   leaves the debt standing and the pass comes back ST_UNBUILT. */
 int  tagpu_vk_fx_down_owed(void);
 /* The seam, after its vkDeviceWaitIdle: tear the pass down AND settle the
    debt, so `_down`'s ST_REFUSED latch applies to this teardown only. */

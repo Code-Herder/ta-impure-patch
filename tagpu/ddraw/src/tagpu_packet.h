@@ -1,6 +1,6 @@
 #ifndef TAGPU_PACKET_H
 #define TAGPU_PACKET_H
-/* tagpu_packet — the frame packet exchange, consumer side (landings 1 and 2).
+/* tagpu_packet — the frame packet exchange, consumer side.
 
    Design: research/notes/frame-packet-exchange.html. The game thread publishes
    a COPY of the per-frame engine state it owns, once per presented frame at
@@ -10,13 +10,13 @@
    aligned word and two `xchg`s — no lock, no wait on either side, four slots
    that are always a permutation of {W, cell, READ, PREV} (tagpu_packet.c).
 
-   THE OTHER DIRECTION (landing 2) is the same primitive with the threads
+   THE OTHER DIRECTION is the same primitive with the threads
    swapped: the render thread posts a COMMAND record — the zoom level in
    force, the cursor anchor's eye delta, the camera hold, the follow release —
    and the game thread takes the latest one at the top of every in-play draw
    (the observer's `before`, post-tick, pre-draw) and writes the engine's
-   words there, on the thread that owns them. No render-thread store into
-   engine memory remains. The packet echoes what was applied (`cmd_ack_*`), and
+   words there, on the thread that owns them. The render thread stores into
+   no engine memory. The packet echoes what was applied (`cmd_ack_*`), and
    the render thread draws from the packet's eye PLUS the deltas not yet
    acknowledged — prediction reconciled by the next packet, so a wheel notch
    is drawn on the frame it happens and never wobbles.
@@ -28,21 +28,19 @@
    packet pointer from the driver, through TAGPU_FRAME / TAGPU_FXVIEW, and may
    not acquire on its own; the pointer is valid for THIS frame only.
 
-   Landing 1 carried the header, the marker text's font as glyph bytes, and
-   the out-of-game packet. Landing 2 added the view (the addressable rect, the
-   palette and gamma, the command acknowledgement) and the command record.
-   LANDING 3 adds the four world tables — units, pieces, wrecks and feature
-   anchors — with the header fields they need (the GUI colours, the mouse and
-   the build cursor, the per-map array bases the fenced passes index, the
-   engine's shade table), and makes the acquire tick-aware so that the two
-   packets the consumer holds always span two distinct sim ticks. The
-   fog table arrives with landing 4b and every table then has its `off`/`n`
-   here. LANDING 4A adds the four effect tables — projectiles, explosions,
-   flying debris and the ten particle layers' sub-particles — with the LHT
-   ramp, the ALP/LHT capability bits and the whole 256-byte GUI colour LUT
-   they need. They are the first tables whose gather is CACHED PER SIM TICK
-   in the publisher: the engine's two effect passes read their arrays and
-   write nothing, so two publishes of one tick must produce the same table. */
+   WHAT THE PACKET CARRIES. The header, the marker text's font as glyph
+   bytes, and the view (the addressable rect, the palette and gamma, the
+   command acknowledgement); the four world tables — units, pieces, wrecks and
+   feature anchors — with the header fields they need (the GUI colours, the
+   mouse and the build cursor, the engine's shade table); the four effect
+   tables — projectiles, explosions, flying debris and the ten particle
+   layers' sub-particles — with the LHT ramp, the ALP/LHT capability bits and
+   the whole 256-byte GUI colour LUT they need; the two fog grids; and the GL
+   UI's render half. Every table has its `off`/`n` here. The acquire is
+   tick-aware, so the two packets the consumer holds always span two distinct
+   sim ticks. The effect tables' gather is CACHED PER SIM TICK in the
+   publisher: the engine's two effect passes read their arrays and write
+   nothing, so two publishes of one tick must produce the same table. */
 #include <stdint.h>
 
 /* One glyph of the marker font, as a self-contained one-glyph FONT OBJECT the
@@ -71,7 +69,7 @@ typedef struct TAGPU_PK_GLYPH {
 #define TAGPU_PK_TRUNC_STRESS 0x2u          /* the stress lever's dummy table   */
 
 
-/* ---- THE WORLD TABLES (landing 3) ---------------------------------------
+/* ---- THE WORLD TABLES ---------------------------------------------------
    One contiguous block per slot: this header, then the tables, 4-aligned, each
    named by an `off_`/`n_` pair below. Every field says where the publisher
    reads it (game thread, in-play frames only) and the bound it applies. A
@@ -79,8 +77,8 @@ typedef struct TAGPU_PK_GLYPH {
    the render thread compares and never dereferences — with one stated
    exception, PK_PIECE.node, whose paragraph says why.
 
-   NOTHING PER-UNIT IS DEREFERENCED ON THE RENDER THREAD ANY MORE. The unit
-   array and every Object3do field the passes used to read are copied here by
+   NOTHING PER-UNIT IS DEREFERENCED ON THE RENDER THREAD. The unit array and
+   every Object3do field the passes read are copied here by
    the thread that owns them, which is what closes the audit's open hazard
    (cross-thread-engine-reads.md §5 row 2: the unsynchronised begin/end pair). */
 
@@ -146,12 +144,11 @@ typedef struct TAGPU_PK_UNIT {
    Model3DONode template, which the level teardown cascade frees (0x42DB90)
    and no unit's destructor touches, so its lifetime is tagpu_reclaim's
    teardown fence — the same argument tagpu_posebake.c and tagpu_r3dcache.c
-   already stand on, and the one landing 3 deliberately does not change (the
-   plan's row 3: "the template ones stay, they are the fence's"). What the
-   packet removes here is the per-UNIT read: the PrimitiveStruct lives inside
-   the Object3do, which FreeObjectState 0x45AAA0 frees while the render thread
-   may be mid-frame, and it is that read — not the template one — that the
-   game thread now makes on our behalf. */
+   stand on (the plan's row 3: "the template ones stay, they are the
+   fence's"). What the packet carries instead is the per-UNIT read: the
+   PrimitiveStruct lives inside the Object3do, which FreeObjectState 0x45AAA0
+   frees while the render thread may be mid-frame, and it is that read — not
+   the template one — that the game thread makes on our behalf. */
 typedef struct TAGPU_PK_PIECE {
     int32_t  pos[3];         /* prim+0x04 P_POS, the COB MOVE delta, 16.16      */
     uint16_t turn[3];        /* prim+0x10 P_TURN, 65536 = 360 degrees           */
@@ -174,8 +171,8 @@ typedef struct TAGPU_PK_WRECK {
     uint16_t base_piece;
     uint16_t col, row;       /* THE ANCHOR TILE, not the husk's own position: the
                                 unit pass decides which wrecks are in its rect by
-                                the tile, as the grid walk it replaced did, and
-                                only then culls by the projected anchor          */
+                                the tile, and only then culls by the projected
+                                anchor                                           */
     uint16_t pad;
 } TAGPU_PK_WRECK;
 
@@ -222,7 +219,7 @@ typedef struct TAGPU_PK_BUILD {
     int32_t  pos[3];          /* node+0x22.., 16.16 x, altitude, z              */
 } TAGPU_PK_BUILD;
 
-/* ---- THE EFFECTS AND THE PARTICLE LAYERS (landing 4a) -------------------
+/* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns
    them. All four are SIM STATE — the tick moves a projectile, advances an
    explosion's anim frame and walks every particle's update leaf, and the two
@@ -343,7 +340,7 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_LHT_ROWS    32u
 #define TAGPU_PK_LHT_BYTES   (TAGPU_PK_LHT_ROWS * 256u)
 
-/* ---- THE FOG GRIDS (landing 4b) -----------------------------------------
+/* ---- THE FOG GRIDS ------------------------------------------------------
    Two lattices of 32-px cells, each cell two bytes of 4-bit corner masks — low
    byte the unexplored corners, high byte the out-of-LOS ones, laid out exactly
    as an RG8 texture so the bytes upload with no conversion.
@@ -351,10 +348,10 @@ typedef struct TAGPU_PK_PART {
    THE ENGINE'S OWN, `*(main+0x1421F)`, spans the 1x viewport and about two
    cells more. It is built once per map by LoadMap and only REWRITTEN by the
    builder 0x4843C0, which the terrain owner calls from the engine's own fog
-   site — so the render thread used to read a buffer the game thread was
-   rewriting, and the descriptor beside it, unsynchronised. That is the read
-   `tagpu_fog_at`'s guard was added for after a hard fault off a base of -9
-   (2026-09-03, root cause never found). Both now cross as ONE record whose
+   site — so a render-thread read of the buffer, or of the descriptor beside
+   it, races the game thread rewriting them (`tagpu_fog_at`'s guard answers a
+   hard fault off a base of -9 whose root cause was never found). Both cross
+   as ONE record whose
    bounds the acquire checks: `fog_len` must be exactly `fog_cols * fog_rows *
    2` and must lie inside the packet, so the largest index a consumer can form
    is inside the bytes it was given, by construction rather than by a probe.
@@ -362,26 +359,23 @@ typedef struct TAGPU_PK_PART {
    THE WIDE ONE is tagpu_fogwide's replication of the same builder over a
    window the whole zoom range fits in — the same lattice, the same rule, more
    cells — used by a frame drawn at zoom < 1, where the engine's stops partway
-   across the screen. Until this landing it reached the render thread through
-   three heap buffers swapped under a critical section, with a retire ring
-   behind tagpu_reclaim's fence for the grow. All of that is gone: the grid is
-   built on the game thread inside the draw and copied into the packet after
-   it, so there is one buffer, no lock, and nothing to retire.
+   across the screen. The grid is built on the game thread inside the draw and
+   copied into the packet after it, so there is one buffer, no lock, and
+   nothing to retire.
 
    THE ORIGIN IS THE PUBLISHER'S. `fog_org` is the world point of cell (0,0) —
    `32*col0 + 16` — derived from the eye the grid was actually built at. The
-   render thread used to derive it from its PREDICTED eye, which is the packet's
-   eye plus a cursor-anchor step the game thread has not applied yet: right
-   whenever nothing was unacknowledged, and a lattice offset from its own bytes
-   when something was. (The pass covered it by taking the wide grid whenever
-   anything was unacknowledged, which is still what it does.) */
-/* ---- THE GL UI'S RENDER HALF (landing 4c) -------------------------------
-   The four engine reads tagpu_gui_surf.c made on the render thread, every
+   render thread's PREDICTED eye — the packet's eye plus a cursor-anchor step
+   the game thread has not applied yet — would put the lattice off its own
+   bytes whenever something is unacknowledged. (The pass also takes the wide
+   grid whenever anything is unacknowledged.) */
+/* ---- THE GL UI'S RENDER HALF --------------------------------------------
+   The four engine reads tagpu_gui_surf.c's render half needs, every
    present: the cursor's position and sprite through the graphics globals, the
    minimap's box, its three 8bpp surfaces and the view box drawn over them. The
    GL UI's op QUEUE is untouched and stays a queue — it carries an op stream
    into retained twins and a latest-wins snapshot cannot do that (the plan's
-   §9). What crosses here is the per-frame STATE the render half read beside it.
+   §9). What crosses here is the per-frame STATE the render half reads beside it.
 
    THE CURSOR'S SPRITE IS A KEY, not a copy. `cur_rec` is the record at
    `graphics+0x1B2`, which IS a GAF frame header — size, hotspot, colour key and
@@ -390,24 +384,21 @@ typedef struct TAGPU_PK_PART {
    dereferences it, which is where that argument lives.
 
    THE MINIMAP SURFACES ARE A COPY, and they are gated. The engine repaints the
-   three at every draw and the render half walked all three, row by row, to
-   interleave them; the publisher does the interleave now and the packet carries
+   three at every draw; the publisher interleaves them and the packet carries
    the result — but only while the consumer asks for it (tagpu_gui_want_minimap),
    because at k = 1 the sharp minimap is deliberately the engine's own and the
    whole copy would be paid for nothing.
 
    THE PICTURE ARRIVES IN THE LEVEL'S FIRST IN-PLAY PACKET and in no other, so
    the consumer keeps its own copy keyed on the level generation — which is also
-   what a GL re-init needs. Until this landing it was decoded by an observer on
-   the LOADER thread, the one publisher outside the in-play gate. */
+   what a GL re-init needs. */
 #define TAGPU_PK_MM_DIMCAP  512    /* A SANITY CEILING OF OURS on a minimap
                                       surface's dimension, and on the picture's.
                                       It is NOT an engine bound — the engine
                                       bounds only the BOX it fits the picture
                                       into (0x7E), and the surfaces' own
                                       dimensions are not bounded anywhere we
-                                      have found [corrected by landing 4c's
-                                      review]. What actually bounds a consumer
+                                      have found. What actually bounds a consumer
                                       is `len == w * h * 3` (and `w * h` for the
                                       picture), checked once at acquire; this
                                       only keeps the product inside 32 bits and
@@ -546,7 +537,7 @@ typedef struct TAGPU_PACKET {
     uint32_t stress_off;        /* the stress lever's dummy table (grows the   */
     uint32_t stress_len;        /* slot on purpose); 0 otherwise                */
 
-    /* ---- landing 3: the world tables and what reads them ---- */
+    /* ---- the world tables and what reads them ---- */
     uint32_t n_units,   off_units;    /* PK_UNIT,   live units in slot order    */
     uint32_t n_pieces,  off_pieces;   /* PK_PIECE,  the arena the runs index    */
     uint32_t n_wrecks,  off_wrecks;   /* PK_WRECK                               */
@@ -557,13 +548,12 @@ typedef struct TAGPU_PACKET {
                                          asks for a sub-rect of it               */
     uint32_t unit_dup;                /* live units sharing a stable id in THIS
                                          packet: the collision oracle, and a gate */
-    /* THE PER-MAP ARRAY BASES ARE NOT HERE, AND THAT IS DELIBERATE (the landing
-       review found them here and the disassembly agreed). FeatureDef
+    /* THE PER-MAP ARRAY BASES ARE NOT HERE, AND THAT IS DELIBERATE. FeatureDef
        `main+0x1426F`, the wreck records `+0x1420B` and `MODEL_PTRS` `+0x14377`
        are POINTERS the level teardown frees AND THEN NULLS — `0x4221F8` then
        `0x422214`, `0x42227D` then `0x42228B`, `0x42DCCB` then `0x42DCD8`, all
        inside the cascade `0x491B60`. That null is the only invalidation the
-       fenced passes have ever had, and a copy in a packet that outlives the
+       fenced passes have, and a copy in a packet that outlives the
        frame it was made in reads past it: with `tagpu_reclaim` unarmed —
        which is a supported configuration, the publisher has a second level-end
        provider for exactly that case — the render thread would walk a freed
@@ -577,16 +567,15 @@ typedef struct TAGPU_PACKET {
        0x422558 stores the base, 0x422DAC counts), so the live count never
        over-describes the live base — where this one belongs to the packet's
        level and would over-describe the next map's smaller array. Consumers
-       take the smaller of the two (landing review, 2026-09-12). */
+       take the smaller of the two. */
     int32_t  feat_defcount;
     int32_t  sweep_cols, sweep_rows;  /* the engine's own feature sweep rect size */
     int32_t  mouse[2];                /* the dispatched mouse point, screen px    */
     int32_t  build_rect[6];           /* the build cursor's two corners as
                                          x, altitude, z (0x2C92..0x2CA6)          */
     /* main+0xDCB, the whole 256-byte LUT the engine rebuilds from `guipal` at
-       startup (0x4AC7D0 writes exactly 0x100 bytes). It was 64 here until
-       landing 4a, which needed the tail: a weapon's colour NUMBER indexes this
-       table and nothing bounds it below 256. */
+       startup (0x4AC7D0 writes exactly 0x100 bytes). All of it: a weapon's
+       colour NUMBER indexes this table and nothing bounds it below 256. */
     uint8_t  gui_col[256];
     uint8_t  cursor_mode;             /* 0x2CC3: 0x0E = build placement           */
     uint8_t  region_flags;            /* 0x2CC6: bit3 band box, bit6 site OK      */
@@ -606,7 +595,7 @@ typedef struct TAGPU_PACKET {
     uint32_t n_builds, off_builds;    /* PK_BUILD: the queued builds whose site
                                          rect the order pass is showing          */
 
-    /* ---- landing 4a: the effects and the particle layers ---- */
+    /* ---- the effects and the particle layers ---- */
     uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
     uint32_t n_expl,   off_expl;      /* PK_EXPL,   the live explosions         */
     uint32_t n_debris, off_debris;    /* PK_DEBRIS, the occupied debris slots   */
@@ -629,7 +618,7 @@ typedef struct TAGPU_PACKET {
                                          request crosses on the render thread's
                                          clock and the fill on the game
                                          thread's, so the first armed frames see
-                                         empty tables (landing review)           */
+                                         empty tables                            */
     uint32_t fx_gen;                  /* bumped whenever any of the four tables
                                          was re-gathered (once per sim tick):
                                          the consumer's own "is this the same
@@ -641,7 +630,7 @@ typedef struct TAGPU_PACKET {
                                          (TAProgram+0xC8), the explosion flash's
                                          colour ramp                             */
 
-    /* ---- landing 4b: the two fog grids ---- */
+    /* ---- the two fog grids ---- */
     int32_t  fog_cols, fog_rows;      /* the ENGINE's screen grid; 0 = none this
                                          frame (the descriptor did not hold up) */
     int32_t  fog_org[2];              /* world x, projected z of its cell (0,0) */
@@ -652,7 +641,7 @@ typedef struct TAGPU_PACKET {
     uint32_t fogw_off, fogw_len;
     uint32_t fogsh_off, fogsh_len;    /* the grey band's 256-byte palette remap */
 
-    /* ---- landing 4c: the GL UI's render half ---- */
+    /* ---- the GL UI's render half ---- */
     int32_t  cur_pos[2];              /* graphics+0x1B6 / +0x1BA, where the
                                          engine last drew the cursor            */
     int32_t  cur_w, cur_h;            /* its sprite's size; 64x64 when the
@@ -668,7 +657,7 @@ typedef struct TAGPU_PACKET {
                                          to decide whether to draw at all — and
                                          still carries a cursor, which is what
                                          the layer needs to erase the engine's
-                                         (landing 6, tagpu_packet_pub.c). 0 on
+                                         (tagpu_packet_pub.c). 0 on
                                          the level-end packet and while the
                                          engine's own cursor is not being drawn */
     int32_t  mm_box[4];               /* main+0x142E7/E9/EB/ED, the box the
@@ -694,7 +683,7 @@ typedef struct TAGPU_PACKET {
                                    or the consumer's frame_end counts a violation */
 } TAGPU_PACKET;
 
-/* THE COMMAND RECORD — render thread to game thread (landing 2). One record
+/* THE COMMAND RECORD — render thread to game thread. One record
    per render frame, latest wins: every quantity in it is either a LEVEL (the
    game thread re-applies it before every in-play draw for as long as it
    stands) or a CUMULATIVE sum (the game thread applies the difference from
@@ -750,7 +739,7 @@ static __inline const unsigned char* tagpu_pk_shd(const TAGPU_PACKET* p)
 /* The LHT lighten table, same shape, or NULL. */
 static __inline const unsigned char* tagpu_pk_lht(const TAGPU_PACKET* p)
 { return p->lht_len == TAGPU_PK_LHT_BYTES ? (const unsigned char*)p + p->lht_off : (const unsigned char*)0; }
-/* ---- the fog grids (landing 4b). Each is NULL, or `cols * rows` u16 corner
+/* ---- the fog grids. Each is NULL, or `cols * rows` u16 corner
    masks — the acquire proved the length is exactly that and that it lies
    inside the record, so `grid[cy * cols + cx]` for cx < cols, cy < rows is
    inside the bytes by construction. ---- */
@@ -761,7 +750,7 @@ static __inline const unsigned short* tagpu_pk_fogw(const TAGPU_PACKET* p)
 /* the grey band's palette remap, 256 bytes, or NULL */
 static __inline const unsigned char* tagpu_pk_fogshade(const TAGPU_PACKET* p)
 { return p->fogsh_len == TAGPU_PK_FOGSHADE_BYTES ? (const unsigned char*)p + p->fogsh_off : (const unsigned char*)0; }
-/* ---- the GL UI's render half (landing 4c) ---- */
+/* ---- the GL UI's render half ---- */
 /* the three minimap surfaces interleaved, mm_w * mm_h RGB triples, or NULL */
 static __inline const unsigned char* tagpu_pk_minimap(const TAGPU_PACKET* p)
 { return p->mm_len ? (const unsigned char*)p + p->mm_off : (const unsigned char*)0; }
@@ -770,7 +759,7 @@ static __inline const unsigned char* tagpu_pk_minimap(const TAGPU_PACKET* p)
    that needs it across frames copies it and keys the copy on `level_gen`. */
 static __inline const unsigned char* tagpu_pk_minimap_pic(const TAGPU_PACKET* p)
 { return p->mmpic_len ? (const unsigned char*)p + p->mmpic_off : (const unsigned char*)0; }
-/* ---- the effects tables (landing 4a) ---- */
+/* ---- the effects tables ---- */
 static __inline const TAGPU_PK_PROJ* tagpu_pk_proj(const TAGPU_PACKET* p)
 { return p->n_proj ? (const TAGPU_PK_PROJ*)(const void*)((const unsigned char*)p + p->off_proj) : (const TAGPU_PK_PROJ*)0; }
 static __inline const TAGPU_PK_EXPL* tagpu_pk_expl(const TAGPU_PACKET* p)
@@ -810,7 +799,7 @@ int  tagpu_grow_stress(void);
 
    `*prev` is the previously taken packet when it is from the same level, in
    game, and of a DIFFERENT sim tick — so the pair the interpolation blends
-   over always spans two ticks, never one (landing 3). The engine publishes
+   over always spans two ticks, never one. The engine publishes
    several packets per tick, so a consumer that handed PREV back on every take
    would soon hold two of the same tick and the blend would refuse: stepped
    motion, always. The give-back is therefore tick-aware, and the way it is

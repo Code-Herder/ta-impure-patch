@@ -38,10 +38,9 @@
 #define LEAF_TEXT_VA     0x004C14F0u   /* DrawTextCustomFont, stdcall, ret 0x14   */
 /* The target-sprite drawer and its only two `E8` callers (`0x4394E0` delegates
    to it, `0x439B30` dispatches bit 3 to it); stdcall(ctx, view, node, pos,
-   flag), ret 0x14. Both sites are redirected for the trace and nothing else
-   now — the identity blend LUT they used to bracket went with the pre-fog
-   capture window (tagpu_markown.h), because the sprite no longer has a buffer
-   of ours to composite against. Its address is ALSO in `.rdata` 19 times, as
+   flag), ret 0x14. Both sites are redirected for the trace and nothing else:
+   the sprite has no buffer of ours to composite against (tagpu_markown.h).
+   Its address is ALSO in `.rdata` 19 times, as
    the `+8` field of the 25-byte order-descriptor records — a field this build
    never reads, so the two redirects are the whole path today and would be
    bypassed silently if it were ever brought into use. [BINARY-VERIFIED] */
@@ -92,24 +91,14 @@ static int g_orders = 0;                  /* ours redraws the order markers  */
 static int g_digits = 0;                  /* ours redraws the group digit    */
 static unsigned g_beat = 0, g_last = 0;
 
-/* THE CAPTURE IS GONE, AND WHAT IT DID IS WORTH STATING ONCE. Under
-   `tagpu_mark.on=nocursor` this file used to swap the engine's own pixel base
-   out from under it for the length of the post-fog marker block: the engine
-   drew the build cursor and the drag band box into a double-buffered scratch
-   of OURS, and `tagpu_mark.c` then drew those captured bytes back onto the
-   frame as a textured quad.
+/* NOTHING HERE CAPTURES THE ENGINE'S MARKER PIXELS. Everything the marker
+   pass draws is re-derived from engine STATE as our own geometry. A capture
+   would DIVERT the engine's draw: bytes captured into a scratch of ours never
+   reach the engine's own surface, so the reference frame `tagpu_surf.c` keeps
+   would miss exactly the markers the capture took.
 
-   THE CLEAN CUT DELETED IT, and for two reasons rather than one. It was the
-   marker pass's only engine-pixel path -- everything else it draws is
-   re-derived from engine STATE as our own geometry. And it DIVERTED the
-   engine's draw: bytes captured into our scratch never reached the engine's own
-   surface, so the reference frame `tagpu_surf.c` keeps was missing exactly
-   the markers the capture had taken. Removing it makes the golden source whole
-   again, which is what the cut is for.
-
-   All the *ownership* levers below survive: those stop the engine drawing a
-   marker at all, so ours can stand in its place, and the two are not the same
-   act. [The vulkan-only plan, THE CLEAN CUT.] */
+   The *ownership* levers below are a different act: they stop the engine
+   drawing a marker at all, so ours can stand in its place. */
 
 static void flog(const char* s)
 {
@@ -127,8 +116,7 @@ int tagpu_markown_key(void) { return tagpu_terr_key(); }
 /* hook 8: the layer-8 particle draw runs FIRST, into the engine's own frame
    (those particles belong to tagpu_sfx, not to us). What remains here is
    bookkeeping the order arena needs to know a marker block has STARTED, plus
-   the font latch the text pass needs taken at this instant. (The post-fog
-   capture window's own frame started here too, until the clean cut.) */
+   the font latch the text pass needs taken at this instant. */
 static void __stdcall mark_hook8(void* ctx, int n)
 {
     ((void (__stdcall *)(void*, int))PASS_SFX_VA)(ctx, n);
@@ -137,9 +125,9 @@ static void __stdcall mark_hook8(void* ctx, int n)
        draws the group digit and the ShowRanges labels. Taken here rather than
        read from the present thread because `SetFont 0x4C1420` runs many times a
        frame and nothing between this hook and `0x469CF9` calls it
-       (tagpu_text.h). Since the frame packet exchange's landing 1 the font is
-       COPIED here, glyph by glyph, and travels in the packet as bytes: the
-       present thread never dereferences it (tagpu_packet_pub.c). */
+       (tagpu_text.h). The font is COPIED here, glyph by glyph, and travels in
+       the packet as bytes: the present thread never dereferences it
+       (tagpu_packet_pub.c). */
     tagpu_packet_pub_font_snapshot();
 
     /* and the order arena's own block: the snapshot only runs when the SHIFT
@@ -153,8 +141,7 @@ static void __stdcall mark_hook8(void* ctx, int n)
    that does not is drawUnits == 0, which only TA's movie recorder passes
    (`0x469C03 je 0x469D38` lands PAST it; the recorder is `0x4962C2`, function
    `0x495E88`, `xor ebx,ebx` at `0x495EA1`) [BINARY-VERIFIED] — and `opens ==
-   ends` over ~50 000 blocks of live play said so while the capture still used
-   it. */
+   ends` over ~50 000 blocks of live play agreed. */
 static void __stdcall mark_hook9(void* ctx, int n)
 {
     tagpu_order_block_end();
@@ -180,11 +167,11 @@ static void __stdcall mark_transp(void* ctx, void* rect, int colour)
 
 /* The selection rectangle is the one marker the engine draws INSIDE the unit
    sweeps, per unit and immediately before that unit's own sprite — so it cannot
-   be bracketed with the block above, and the native pass has always re-drawn it
-   (it would otherwise be buried under our pixels). What was left over is that
-   the ENGINE still drew its own into the frame underneath, where at 1x it lands
-   on exactly the same pixels and is invisible, and at any other zoom becomes a
-   ghost box at the unzoomed position.
+   be bracketed with the block above, and the native pass re-draws it (it would
+   otherwise be buried under our pixels). Left alone, the ENGINE also draws its
+   own into the frame underneath, where at 1x it lands on exactly the same
+   pixels and is invisible, and at any other zoom becomes a ghost box at the
+   unzoomed position.
 
    The test is per unit rather than a flat flag: the native pass draws a box for
    exactly the units it owns (`native.on`'s type filter), so anything it does not
@@ -203,16 +190,12 @@ static void __stdcall mark_selbox(void* ctx, void* unit)
    separate stubs only so the diff can tell bit 3 from bit 1's unconditional
    delegation to the same drawer (logged as bit 5).
 
-   This used to bracket the call with an identity blend LUT, because the star
-   alpha-composites through `table[(src<<8)|dst]` and, captured into a buffer of
-   ours, read our fill key as its destination and came out teal instead of
-   olive. With the pre-fog capture gone the star only ever composites against
-   the ENGINE's own frame again — which is what stock does — so there is nothing
-   left to correct, and the 64 KB table and its scoped pointer swap went with
-   it. Under `passive` and `trace`, where the engine draws its own markers into
-   its own surface and we composite that surface, the star is stock's blend
-   against a key-filled viewport: teal, exactly as it was before G13o, and a
-   debug mode's business rather than the shipped frame's. */
+   The star alpha-composites through `table[(src<<8)|dst]`, only ever against
+   the ENGINE's own frame — which is what stock does — so there is nothing to
+   correct. Under `passive` and `trace`, where the engine draws its own markers
+   into its own surface and we composite that surface, the star is stock's
+   blend against a key-filled viewport: teal instead of olive, and a debug
+   mode's business rather than the shipped frame's. */
 static void tsprite(int bit, void* ctx, void* view, void* node,
                     void* pos, int flag)
 {

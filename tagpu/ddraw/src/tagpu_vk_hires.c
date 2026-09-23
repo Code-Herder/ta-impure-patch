@@ -1,30 +1,17 @@
 /* tagpu_vk_hires.c -- the replacement meshes' CASTERS, drawn by Vulkan.
-   Contract: tagpu_vk_hires.h. Phase G, the Vulkan-only plan's gate 3b.
+   Contract: tagpu_vk_hires.h.
 
-   THIS PASS DRAWS NOTHING, AND HAS SINCE BEFORE LANDING 11 D3 DELETED ITS
-   PRODUCER. `hires_handover` below is a stub returning 0 and the block above it
-   says why. Everything in this header comment is the design it was built to,
-   in the PAST tense, kept because it is what a revival has to re-establish.
+   THIS PASS DRAWS NOTHING: nothing produces its hand-over, and
+   `hires_handover` below is a stub returning 0. The rest of this header is the
+   design the pass is built to, kept because it is what a revival has to
+   re-establish.
 
-   WHY THIS PASS WAS SMALL, AND WHY IT WAS THE ONE THAT UNBLOCKED THE LANE.
-   `tagpu_shadow.c` counted every caster in the GL cast-shadow map that this
-   side of the seam had no copy of. A tacli instance ships `hires/armpw.glb`
-   ACTIVE, so one Peewee on screen made that count 1 and a 257-unit crowd made
-   it 16 -- and a map with an uncounted caster was one `tagpu_vk_shadow.c`
-   refused to draw at all, which stood the terrain and unit passes down behind
-   it. So gate 3b was not "port the glTF renderer": it was "put those
-   silhouettes in the map". The bodies stayed with `tagpu_hires_draw.c`'s GL
-   program, which was the whole difference between this file and its 1400-line
-   siblings. `tagpu_shadow.c` went to landing 11 D2 and `tagpu_hires_draw.c` to
-   D3, so neither the census nor the GL map exists now.
-
-   WHAT THE ORACLE WAS. `tagpu_hires_depth` in that same file, and this pass was
-   fed by the record IT wrote as it drew (`tagpu_hires_draw.h`,
-   `tagpu_hires_handover`) rather than by a second walk over the units. Three
-   things dropped a unit from the GL map -- `castSkip`, a VAO that would not
-   build, a group whose count was zero -- and a re-derivation was free to
-   disagree with the original about any of them while both looked right. That is
-   the reason a revival wants a producer beside the geometry, not a second walk.
+   A REVIVAL WANTS A PRODUCER BESIDE THE GEOMETRY, not a second walk over the
+   units: the pass is fed by the record the mesh renderer writes as it draws
+   (`tagpu_hires_handover`). Three things can drop a unit from the cast-shadow
+   map -- `castSkip`, a mesh that would not build, a group whose count is zero
+   -- and a re-derivation is free to disagree with the original about any of
+   them while both look right.
 
    ---- THE ALBEDO IS NOT CARRIED, AND THAT IS CHECKED RATHER THAN HOPED ----
 
@@ -110,13 +97,11 @@ DFNS(DECL)
    the block its old size, and `np * 12 * sizeof(float)` would run past
    `uPiece` into the projection uniforms and then off the end.
 
-   A comment asking the next maintainer to remember this is what was here
-   before, and it was WRONG about which file sizes what. This is the bound
-   instead: a negative array size is the C99 way to fail at compile time (the
-   build is -std=c99, so `_Static_assert` is not available), and it fails
-   LOUDLY -- `size of array is negative` naming this line. If you widen the
-   uniform block on purpose, update VS_SZ/VS_GAME from the generated header and
-   this assertion goes quiet by itself. [Landing 11 D3's review, finding M1.] */
+   This is the bound: a negative array size is the C99 way to fail at compile
+   time (the build is -std=c99, so `_Static_assert` is not available), and it
+   fails LOUDLY -- `size of array is negative` naming this line. If you widen
+   the uniform block on purpose, update VS_SZ/VS_GAME from the generated header
+   and this assertion goes quiet by itself. */
 typedef char tagpu_vk_hires_upiece_fits[
     (TAGPU_HMAXPIECE * 12 * (int)sizeof(float) <= VS_GAME - VS_PIECE) ? 1 : -1];
 
@@ -156,9 +141,8 @@ static VkDeviceSize   s_uboCap[TAGPU_VK_SLOTS];
 
 /* THE MESH BUFFERS, AND THEIR RETIRE. A .glb is hot-reloaded, so the triangles
    under a cached buffer can change mid-session -- and destroying a buffer that
-   command buffers already submitted still name is the use-after-free this phase
-   has already shipped once (gate 2's shared image) and nearly shipped twice
-   (gate 3a's mip chain). The rule is the one tagpu_vk_terr.c established:
+   command buffers already submitted still name is a use-after-free. The rule
+   is tagpu_vk_terr.c's:
    A BUFFER MAY ONLY BE DESTROYED ONCE EVERY SLOT THAT USED IT HAS TURNED OVER
    UNDER ITS OWN FENCE. `usedBy` records which slots named it; a retire snapshots
    that into `pending`, and entering slot i clears bit i -- because the seam's
@@ -243,9 +227,8 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
     }
     return 1;
 bad:
-    /* EVERY OUT-PARAM IS NULL ON FAILURE, from every exit -- the guarantee the
-       gate-3a verification pass found missing in the unit pass's own helper,
-       where it was a property of the call sites instead. */
+    /* EVERY OUT-PARAM IS NULL ON FAILURE, from every exit -- a property of
+       this helper, not of its call sites. */
     if (*mem) vkFreeMemory(d->dev, *mem, NULL);
     if (*buf) vkDestroyBuffer(d->dev, *buf, NULL);
     *buf = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE;
@@ -333,9 +316,8 @@ static int build_white(const TAGPU_VKPASS* d, VkCommandBuffer cb)
     /* OPAQUE WHITE, and the alpha is the point: the one branch that reads this
        texel tests `tex.a * uBase.a < uCutoff`, and a cleared-to-zero image
        would make it discard on any frame that reached it. The frames that could
-       reach it are refused, so this is belt and braces -- but an image whose
-       contents are UNDEFINED is what gate 3a's own review caught in the UI
-       lane, and it is not a mistake to make twice. */
+       reach it are refused, so this is belt and braces against an image whose
+       contents are UNDEFINED. */
     rg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     rg.baseMipLevel = 0; rg.levelCount = 1;
     rg.baseArrayLayer = 0; rg.layerCount = 1;
@@ -558,13 +540,12 @@ static int vb_for(const TAGPU_VKPASS* d, const TAGPU_HIMESH* m)
         return -1;
     }
     if (free < 0) return -1;
-    /* THE STRIDE IS CARRIED SO THAT IT CAN BE CHECKED, and the first draft
-       carried it and ignored it. `HI_VSTRIDE` and `vertex_layout`'s offsets are
-       this file's copy of the producer's `HVSTRIDE`; if that ever changes, a
-       copy sized on ours reads past the producer's array by
-       `ntri * 3 * (36 - 4 * stride)` bytes and draws a wrong picture either
-       way. Refusing is the pass's own idiom and costs a branch.
-       [The gate-3b landing review's finding 2.] */
+    /* THE STRIDE IS CARRIED SO THAT IT CAN BE CHECKED. `HI_VSTRIDE` and
+       `vertex_layout`'s offsets are this file's copy of the producer's
+       `HVSTRIDE`; if that ever changes, a copy sized on ours reads past the
+       producer's array by `ntri * 3 * (36 - 4 * stride)` bytes and draws a
+       wrong picture either way. Refusing is the pass's own idiom and costs a
+       branch. */
     if (m->stride * 4 != HI_VSTRIDE) return -1;
     sz = (VkDeviceSize)m->ntri * 3 * HI_VSTRIDE;
     if (sz == 0) return -1;
@@ -647,26 +628,14 @@ static void write_set(const TAGPU_VKPASS* d, uint32_t slot)
     vkUpdateDescriptorSets(d->dev, (uint32_t)n, w, 0, NULL);
 }
 
-/* THE HAND-OVER, WHICH NOTHING PUBLISHES. Its producer was
-   `tagpu_hires_depth` in `tagpu_hires_draw.c`, and that function had ZERO call
-   sites well before landing 11 D3 deleted the file. `s_hiHave` was assigned in
-   five places across three functions, but the ONLY assignment of 1 was at
-   `tagpu_hires_draw.c:611`, inside that callerless function; the other four
-   wrote 0. So the flag was never set and `tagpu_hires_handover` returned 0 on
-   every frame of every session. There was a second, independent reason the same pass could not
-   fire: `tagpu_hires_draw_ready()` was 0 because `opengl32.dll` is never in the
-   process, so `tagpu_native.c` nulled every replacement-mesh pointer and the
-   hand-over had nothing to carry even if something had published one.
-
-   So this returns exactly what the deleted function returned, and D3 changes no
-   behaviour -- which is the whole claim it has to make.
+/* THE HAND-OVER, WHICH NOTHING PUBLISHES: no producer exists in this build,
+   so this returns 0 on every frame.
 
    REVIVING THIS IS A FEATURE LANDING AND IT NEEDS A LOADER FIRST. glTF parsing,
-   the piece table, the material grouping and the COB-driven pose went with
-   `tagpu_hires.c`; they are in git at this landing's parent. What this pass
-   still owns is everything below: the vertex buffers, the descriptors, the
-   pose uniform block and the caster draw. [The vulkan-only plan, landing 11 D3;
-   gpu-status 2.80.] */
+   the piece table, the material grouping and the COB-driven pose are not in
+   the tree (git history has `tagpu_hires.c`). What this pass owns is
+   everything below: the vertex buffers, the descriptors, the pose uniform
+   block and the caster draw. gpu-status 2.80. */
 static int hires_handover(TAGPU_HIHAND* out, unsigned now)
 {
     (void)out; (void)now;
@@ -714,12 +683,6 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         return;
     }
 
-    /* THE PRODUCER IS GONE. This used to ask `tagpu_hires_verts_want()` to keep
-       the CPU triangle copy, because this pass was the only consumer that
-       needed it. Landing 11 D3 deleted `tagpu_hires.c` and `tagpu_hires_draw.c`
-       with the rest of the GL lane, on the owner's ruling that glTF replacement
-       models are disabled and their implementation is TODO and out of scope. */
-
     if (!hires_handover(&s_h, d->frame)) return;
     s_have = 1;
     if (!s_h.depthOn || s_h.nunit <= 0) return;
@@ -760,8 +723,7 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
            of `rows` and nothing bounded the write into this unit's 2480-byte
            block -- `uPiece` is 144 vec4, so `np > 48` walks off the end of it.
            The producer clamps to TAGPU_HMAXPIECE today; this is a seam struct
-           and a value that crosses one is DATA until it has been bounded here.
-           [The gate-3b landing review's finding 3.] */
+           and a value that crosses one is DATA until it has been bounded here. */
         if (np < 0 || np > TAGPU_HMAXPIECE) return;
         memset(p, 0, VS_SZ);
         if (np > 0 && u->rowOff + (unsigned)np * 12 <= s_h.nrow)

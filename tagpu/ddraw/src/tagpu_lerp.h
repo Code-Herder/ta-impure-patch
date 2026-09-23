@@ -5,18 +5,14 @@
    THE WHOLE FEATURE IS TWO FIELD READS. `posed_pose` composes each piece's
    4x3 from exactly `P_POS` (i32[3] 16.16) and `P_TURN` (u16[3] TAang); this
    module hands it a blended copy of those two triples and nothing else
-   changes. That is only this small because G16 turned the pose back into
-   per-piece FIELDS -- before it, the pose arrived already baked into vertices.
+   changes. That is only this small because the pose arrives as per-piece
+   FIELDS rather than already baked into vertices.
 
-   THE HISTORY IS THE EXCHANGE ITSELF (frame packet exchange, landing 3). Until
-   then this module kept its own 3.4 MB arena of two pose banks, keyed on the
-   Object3do address, and sampled P_POS/P_TURN off the engine's PrimitiveStructs
-   on the render thread -- one of the per-unit reads the packet removes. Now the
-   two packets the consumer holds ARE the two banks: `read` is the later tick,
+   THE POSE HISTORY IS THE EXCHANGE ITSELF (frame packet exchange). The two
+   packets the consumer holds ARE the two banks: `read` is the later tick,
    `prev` the earlier one, the acquire guarantees they differ (tagpu_packet.c's
    rotation), and units are matched between them by the STABLE ID, never by
-   table position. The arena, the pointer hash, the free-list, the ageing sweep
-   and the learned tick period all go with it.
+   table position. Nothing here reads the engine's PrimitiveStructs.
 
    THE INVARIANTS (smooth-motion.md section 3), all load-bearing:
 
@@ -25,8 +21,8 @@
         engine weapon muzzle origins out of them) and TA has NO runtime desync
         detection, so a framerate-dependent, per-machine blend written there
         would diverge two machines silently. Kept inside posed_pose's output it
-        is invisible to the simulation -- and since landing 3 this module holds
-        no engine pointer at all, so the invariant is a property of the code
+        is invisible to the simulation -- and this module holds no engine
+        pointer at all, so the invariant is a property of the code
         rather than a rule to keep.
      2. ONE RENDERER. Degradation is a blend weight of 1.0, never a second code
         path -- and here that is literal: every refusal returns 0 and the

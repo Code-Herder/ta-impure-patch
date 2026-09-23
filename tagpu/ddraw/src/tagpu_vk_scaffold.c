@@ -1,7 +1,7 @@
 /* tagpu_vk_scaffold.c -- the scene-depth scaffold overlay, drawn by Vulkan.
-   Contract: tagpu_vk_scaffold.h. Phase G / G19e, the FIRST WORLD PASS: the
-   smallest of them, and the one that forces the question tagpu_vk_fps.c was
-   allowed to leave open.
+   Contract: tagpu_vk_scaffold.h. The smallest world pass, and one that
+   uploads an image every frame -- the question tagpu_vk_fps.c can leave
+   open.
 
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. The scaffold bytes come from
    tagpu_scaffold.c through `tagpu_scaffold_overlay` -- the very buffer the GL
@@ -11,15 +11,14 @@
    translated by tools/spirv-gen.py into inc/spirv/tagpu_scaffold.spv.h. What a
    0-px comparison then compares is two RASTERISERS.
 
-   ---- THE PER-FRAME UPLOAD, WHICH IS THIS LANDING'S REAL WORK ----
+   ---- THE PER-FRAME UPLOAD ----
 
    tagpu_vk_fps.c uploads its atlas about twenty times in a session and pays for
    the ordering with `vkDeviceWaitIdle`: correct, and cheap at that rate. THIS
    pass uploads a viewport-sized image EVERY FRAME, and a device-wide stall per
    frame on the render thread -- the thread the game thread waits INFINITE on
-   across a mode change -- is not a cost, it is a defect. §2.26 named the
-   by-design alternative and left it to this gate. This is it, and it turned out
-   to need no new mechanism at all:
+   across a mode change -- is not a cost, it is a defect. The by-design
+   alternative (§2.26) needs no new mechanism at all:
 
      ONE IMAGE AND ONE STAGING BUFFER PER FRAME SLOT, and the seam's fence is
      what makes writing them safe.
@@ -61,7 +60,7 @@
    cross-submit ordering. The staging buffers stay per-slot either way, because
    a barrier orders GPU work and the hazard there is a CPU write. If a later
    per-frame pass needs that memory back, this is the design to reach for; for
-   the first of them, the one-line invariant is worth 6 MB behind a lever.
+   this one, the one-line invariant is worth 6 MB behind a lever.
 
    A VIEWPORT CHANGE IS THEREFORE FREE. The game's viewport can change without
    the swapchain changing -- a shell/game transition alone does it -- and with
@@ -73,7 +72,7 @@
    viewport height (VK_KHR_maintenance1), never a source edit, because an edited
    shader would disagree with the GL twin that is its oracle.
 
-   BLENDING IS PIPELINE STATE TOO, and it is new here -- the readout had none.
+   BLENDING IS PIPELINE STATE TOO -- the readout has none.
    The GL twin sets glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA), which in
    GL sets the RGB *and* the alpha factors, so both are set here. Over the black
    field both lanes clear to, the result is the shader's colour times 0.55 on
@@ -459,12 +458,11 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     gp.pRasterizationState = &rs;
     gp.pMultisampleState = &ms;
     /* A DEPTH STATE THAT TESTS NOTHING AND WRITES NOTHING, and it is required
-       rather than tidy: since G19e the seam's render pass carries a depth
-       attachment, and a pipeline built against a subpass that has one may not
-       leave pDepthStencilState null. This pass's GL twin calls neither
+       rather than tidy: the seam's render pass carries a depth attachment, and
+       a pipeline built against a subpass that has one may not leave
+       pDepthStencilState null. This pass's GL twin calls neither
        glEnable(GL_DEPTH_TEST) nor glDepthMask, so all three flags are off and
-       the picture is what it was before the attachment existed -- which is what
-       its own A/B re-measures. */
+       the attachment changes nothing in the picture. */
     memset(&ds, 0, sizeof ds);
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_FALSE;
@@ -479,8 +477,8 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     gp.renderPass = d->rp;
     gp.subpass = 0;
     /* THE DEPTH STATE IS OFF, not absent -- see where `ds` is filled above. The
-       seam's render pass carries a depth attachment since G19e's second world
-       pass, and the GL/Vulkan depth-range answer that one needed
+       seam's render pass carries a depth attachment, and the GL/Vulkan
+       depth-range answer the depth-testing passes need
        (minDepth 0.5 / maxDepth 1.0, gpu-status §2.28) is in tagpu_vk_feat.c;
        this pass does not test, so it does not need it. */
     r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipe);
@@ -650,8 +648,7 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
        buffers -- and `cb`, which this function has already recorded uploads
        and a depth clear into, is submitted whether this pass draws or not.
        Destroying any of it from here is a use-after-free on the FIRST
-       refusal, not a rare one. [FOUND BY THE G19e LANDING REVIEW, 2026-09-15,
-       by both reviewers independently.]
+       refusal, not a rare one.
 
        So the pass stops drawing at once and OWES a teardown. The seam pays it
        at the top of a later frame, behind the vkDeviceWaitIdle that makes "no
@@ -712,12 +709,11 @@ int tagpu_vk_scaffold_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_
        frame claimed and then not drawn would have the seam capture a bare clear
        against a GL half that has the overlay in it, and report every overlay
        pixel as differing: a port failure that is really an oracle failure, which
-       is the worst answer an oracle can give. (tagpu_vk_fps.c had exactly that
-       defect until the G19d review's second pass.) */
+       is the worst answer an oracle can give. */
     s_abFrame = ab;
     s_drawThis = 1;
-    /* THE OVERLAY IS ALSO A TEXTURE OTHER PASSES SAMPLE (Phase G / G19e, the
-       unit pass). It is in SHADER_READ_ONLY_OPTIMAL from the barrier above and
+    /* THE OVERLAY IS ALSO A TEXTURE OTHER PASSES SAMPLE (the unit pass). It
+       is in SHADER_READ_ONLY_OPTIMAL from the barrier above and
        stays that way for the rest of the frame, so a consumer that points its
        own descriptor set at it during its own `prepare` is naming an image
        this frame's upload has already been ordered into.
@@ -795,7 +791,7 @@ void tagpu_vk_scaffold_down(const TAGPU_VKPASS* d)
        `vk_down` or a `vk_resize` that happens to run while a debt is
        outstanding tears the pass down WITHOUT consuming it, and leaves it
        ST_UNBUILT so it can come back on the next device. Reading `s_downOwed`
-       here instead is what let one transient refusal plus a window drag latch
+       here instead would let one transient refusal plus a window drag latch
        the pass at ST_REFUSED for the life of the process.
 
        THE DEBT ITSELF IS DISCHARGED BY EVERY TEARDOWN, paid or not, and that is
@@ -803,14 +799,13 @@ void tagpu_vk_scaffold_down(const TAGPU_VKPASS* d)
        nothing left to free, so an un-cleared flag would have the seam drain the
        device and call `_down_paid` on an already-dead pass the next time it
        looked -- which would latch ST_REFUSED by the back door and lose exactly
-       what the two lines above win. (Found while re-reading this fix, not by a
-       reviewer.) [G19e RE-REVIEW, 2026-09-15.] */
+       what the two lines above win. */
     int owed = s_downPaying;
     s_downOwed = 0;
     /* NOTHING TO FREE, BUT THE VERDICT STILL STANDS. `owed` says the device
        refused this pass its resources, and that is a fact about the pass and
        not about whether the entry points resolved -- so it is latched here
-       too, exactly as below. [G19e RE-REVIEW, 2026-09-15.] */
+       too, exactly as below. */
     if (!dev || !vkDestroyBuffer) { s_state = owed ? ST_REFUSED : ST_UNBUILT; return; }
 
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
@@ -850,7 +845,7 @@ int tagpu_vk_scaffold_down_owed(void)
    discharges the debt (there is nothing left to free) but returns the pass
    ST_UNBUILT, so a pass refused once can try again on the device that replaces
    this one. Here the verdict stands, because here the device's refusal is
-   still the reason. [G19e RE-REVIEW, 2026-09-15.] */
+   still the reason. */
 void tagpu_vk_scaffold_down_paid(const TAGPU_VKPASS* d)
 {
     s_downPaying = 1;

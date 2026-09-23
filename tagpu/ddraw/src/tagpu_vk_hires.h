@@ -1,30 +1,18 @@
 #ifndef TAGPU_VK_HIRES_H
 #define TAGPU_VK_HIRES_H
-/* The replacement meshes' CASTERS, drawn by Vulkan (the Vulkan-only plan's
-   gate 3b). Contract only; tagpu_vk_hires.c is the pass.
+/* The replacement meshes' CASTERS, drawn by Vulkan. Contract only;
+   tagpu_vk_hires.c is the pass.
 
-   READ THE BLOCK AT THE FOOT OF THIS FILE FIRST: since landing 11 D3 NOTHING
-   PUBLISHES A HAND-OVER, so this pass draws nothing. What follows is the
-   contract it was built to, kept because it is the shape a revival needs, and
-   written here in the PAST tense so it cannot be read as a description of a
-   running system.
+   READ THE BLOCK AT THE FOOT OF THIS FILE FIRST: NOTHING PUBLISHES A
+   HAND-OVER, so this pass draws nothing. What follows is the contract it is
+   built to, kept because it is the shape a revival needs.
 
-   IT DREW INTO THE CAST-SHADOW MAP AND NOWHERE ELSE. The bodies belonged to
-   `tagpu_hires_draw.c`'s GL program -- a glTF unit shaded per pixel with normal
-   maps and metallic/roughness was never what this gate was about. What blocked
-   the Vulkan lane was narrower and entirely mechanical: `tagpu_shadow.c`
-   counted every caster the GL map held that this side had no copy of, and a
-   single Peewee with `hires/armpw.glb` active made that count 1 -- which stood
-   the shadow map down, and the terrain and unit passes with it. So the whole of
-   gate 3b was: put those casters in the map, and stop the census refusing.
-   BOTH of those files are gone -- `tagpu_shadow.c` to landing 11 D2 and
-   `tagpu_hires_draw.c` to D3 -- so there is no census to satisfy and no GL map
-   to be smaller than.
+   IT DRAWS INTO THE CAST-SHADOW MAP AND NOWHERE ELSE. A replacement mesh's
+   body is not this pass's; only its casters are.
 
-   WHAT IT WAS FED. `tagpu_hires_handover` (`tagpu_hires_draw.h`, deleted),
-   recorded by the GL depth pass AS IT DREW: the triangles as CPU bytes, the
-   per-unit anchor, yaw/enc and cast triple exactly as the GL uniforms had them,
-   and the pose rows. No GL name crossed, which was the whole-phase rule.
+   WHAT IT IS FED (TAGPU_HIHAND, at the foot): the triangles as CPU bytes, the
+   per-unit anchor, yaw/enc and cast triple, and the pose rows. No GL name
+   crosses.
 
    THE ALBEDO DOES NOT CROSS, AND `cutoutSeen` IS WHY THAT IS HONEST. The depth
    path samples the albedo for one purpose -- the alpha cutout -- and every
@@ -46,13 +34,11 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
    frame. Valid after `upload` and before `cast`, which is where the shadow
    pass's census needs it.
 
-   IT RETURNS 0, AND HAS SINCE BEFORE D3 (see the foot of this file). The
-   paragraph this replaced explained why it was comparable to `otherCasters` and
-   only ever smaller: `tagpu_shadow.c` counted what the GL pass drew, this
-   counted the subset that reached the hand-over complete and whose device
-   resources existed, and the hand-over refused to publish a record short of the
-   GL map, so it was 0 or all of them and never a part. Neither counter exists
-   now; the invariant is recorded because a revival has to re-establish it. */
+   IT RETURNS 0 (see the foot of this file). A revival has to re-establish the
+   invariant the count rests on: it counts the casters that reached the
+   hand-over complete and whose device resources exist, and a producer must
+   refuse to publish a record short of the map, so the count is 0 or all of
+   them and never a part. */
 int  tagpu_vk_hires_casters(void);
 
 /* Draw them, inside the caller's render pass, with the caller's viewport and
@@ -75,35 +61,20 @@ void tagpu_vk_hires_down_paid(const TAGPU_VKPASS* d);
 
 /* ---- WHAT A HIRES HAND-OVER IS, AND WHO IS SUPPOSED TO PUBLISH ONE --------
 
-   These four types lived in `inc/tagpu_hires_draw.h` until landing 11 D3
-   deleted that header with the GL lane. They are kept, unchanged, because they
-   are the shape this pass consumes and the next producer should not have to
-   invent them again.
+   These four types are the shape this pass consumes, kept so that the next
+   producer does not have to invent them again.
 
-   THERE IS NO PRODUCER, AND THERE WAS NONE BEFORE THE DELETION EITHER.
-   `s_hiHave` was assigned in five places across three functions, but the only
-   assignment of **1** was at `tagpu_hires_draw.c:611`, inside
-   `tagpu_hires_depth` -- and that function had ZERO call sites, so the flag was
-   never set and the hand-over returned 0 on every frame of every session. (The
-   other four assignments all wrote 0.) Independently of that,
-   `tagpu_hires_draw_ready()` answered 0 because `opengl32.dll` is never in the
-   process, so `tagpu_native.c` nulled every replacement-mesh pointer and there
-   was nothing to publish in any case. Measured on live runs: D2's four
-   `crowd-static` arms each log `hires draw: missing GL proc` and then the
-   fallback to the engine's own 3DO. D3's `one-unit` arms do NOT -- that fixture
-   is an ARMCOM with no replacement mesh, so the draw path was never reached at
-   all, and its logs show only the loader declining to find one.
+   THERE IS NO PRODUCER.
 
    glTF REPLACEMENT MODELS ARE DISABLED AND THEIR IMPLEMENTATION IS TODO AND
-   OUT OF SCOPE -- the owner's ruling, 2026-09-19. Reviving them needs a LOADER
-   first: the glTF parser, the piece table, the material grouping and the
-   COB-driven pose went with `tagpu_hires.c` and are in git at D3's parent.
-   What this pass still owns is everything it always did -- the vertex buffers,
-   the descriptors, the pose uniform block and the caster draw.
+   OUT OF SCOPE. Reviving them needs a LOADER first: the glTF parser, the piece
+   table, the material grouping and the COB-driven pose, which are in git
+   history as `tagpu_hires.c`.
+   What this pass owns is the vertex buffers, the descriptors, the pose
+   uniform block and the caster draw.
    [gpu-status 2.80.] */
 
-/* The cap every count in the hand-over is checked against, moved here with
-   the types it bounds (landing 11 D3). */
+/* The cap every count in the hand-over is checked against. */
 #define TAGPU_HI_MAXHAND 256
 
 typedef struct TAGPU_HIGREC {       /* one glTF material's draw */

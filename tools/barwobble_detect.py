@@ -3,7 +3,7 @@
 
     .venv-undither/bin/python tools/barwobble_detect.py /tmp/bw [walk-<tag>.mkv ...]
 
-THE DEFECT IT REGRESSES (fixed 2026-09-09, roadmap "Awaiting review", gpu-status §2.2).
+THE DEFECT IT REGRESSES (roadmap "Awaiting review", gpu-status §2.2).
 Everything anchored to a unit in our build takes the unit pass's interpolated sub-pixel
 anchor -- the body, the selection rect, the unit-anchored order markers.  tagpu_mark.c's
 health bar and group digit did not: they read the engine's integer world shorts, which
@@ -49,7 +49,7 @@ TWO INSTRUMENTS, because neither alone covers both builds:
         gamespeed 20 and 59 % at gamespeed 10 -- both correct.  Before the fix it was pinned
         near 54 % at any speed, because it was the SIM rate rather than a floor.
 
-THREE THINGS THAT WILL FOOL YOU, all paid for once:
+THREE THINGS THAT WILL FOOL YOU:
 
   * Anchor the bar on its RIGHT edge, not the run centre.  Under ss=2 the downsample adds
     an antialiased 34th column on the LEFT on transition frames; a centre anchor then
@@ -87,11 +87,10 @@ def frames(path):
 def calibrate_green(path, z=1.0, nframes=8):
     """The GUI green AS THIS CAPTURE HAS IT, not as a constant.
 
-    `Gamma` is one shared mutable registry inode across every instance (memory: the G17a
-    landing), so another session moving it repaints our palette: these legs came back with
-    the bar at (83,223,79) where the constant here says (93,250,88), and an exact-colour
-    match then found ZERO pixels in every frame and reported "no usable run" for BOTH
-    builds -- a silent total miss, not a noisy one.
+    `Gamma` is one shared mutable registry inode across every instance, so another
+    session moving it repaints our palette: a bar at (83,223,79) where the constant here
+    says (93,250,88) makes an exact-colour match find ZERO pixels in every frame and
+    report "no usable run" for BOTH builds -- a silent total miss, not a noisy one.
 
     PICK IT BY THE PROPERTY WE ACTUALLY NEED -- a long HORIZONTAL RUN -- and never by
     frequency.  Frequency picks foliage: on the stock leg the most common saturated colour
@@ -144,10 +143,10 @@ def measure(frame, z=1.0, green=GREEN):
     rank the candidate rows by the HEIGHT of the vertically contiguous block they sit in,
     and only then by run length.
 
-    Do NOT do this by eroding (`m[:-1] & m[1:]`), which is what the first cut of this fix
-    did: at 1x the fill is only 3 rows and the ss=2 downsample leaves its outer rows a
-    shade off the exact key, so erosion can delete the bar outright and the tool then
-    reports "no usable run" on every 1x leg -- the case this oracle was built for."""
+    Do NOT do this by eroding (`m[:-1] & m[1:]`): at 1x the fill is only 3 rows and the
+    ss=2 downsample leaves its outer rows a shade off the exact key, so erosion can delete
+    the bar outright and the tool then reports "no usable run" on every 1x leg -- the case
+    this oracle was built for."""
     sub = frame[VP[1]:VP[3], VP[0]:VP[2]].astype(np.int16)
     m = (np.abs(sub - green).max(axis=2) <= 10)
     minrun = max(8, int(round(25 * z)))
@@ -186,8 +185,8 @@ def measure(frame, z=1.0, green=GREEN):
     yy, xx = np.nonzero(win)
     # The BOX may be absent while the bar is fine (the unit can lose its selection), so
     # report the bar regardless and mark the box missing -- returning None for the whole
-    # frame silently dropped 523 of 1320 stock frames and made the retained ones look
-    # contiguous when they were not.
+    # frame silently drops frames (523 of 1320 on a stock leg) and makes the retained ones
+    # look contiguous when they are not.
     if len(yy) < 20:
         return bx + VP[0], by + VP[1], np.nan, np.nan
     return bx + VP[0], by + VP[1], xx.mean() + x0 + VP[0], yy.mean() + y0 + VP[1]
@@ -265,15 +264,14 @@ def video_leg(path, z=1.0):
     # The unit walks at a constant speed, so a bar that tracks it has a near-constant
     # step and a second difference near zero; a bar quantised on a grid of `q` px stands
     # still and then teleports `q`, which is a second difference of `q`.  Referencing the
-    # BOX instead nearly missed the 4x defect (its own rotated outline breathes ~11 px at
-    # that zoom, swamping the term), so this is reported beside it and not in place of it.
+    # BOX instead is nearly blind to the 4x defect (its own rotated outline breathes ~11 px
+    # at that zoom, swamping the term), so this is reported beside it and not in place of it.
     #
     # PER BLOCK, never across the concatenation.  `keep` glues non-adjacent blocks
     # together, so differencing over it invents one jump per junction -- the very trap
-    # this module's docstring names and `contiguous()` exists for, which the first cut of
-    # these two lines walked straight into: the 4x legs ran in 2 blocks and the single
-    # junction alone set `step max` to 19.45 px on a bar whose real step never exceeded
-    # 3.2.  `alt`/`bar_still`/`box_still` were already protected, by `edge`; these were not.
+    # this module's docstring names and `contiguous()` exists for: on 4x legs run in 2
+    # blocks, the single junction alone sets `step max` to 19.45 px on a bar whose real
+    # step never exceeds 3.2.  `alt`/`bar_still`/`box_still` are protected by `edge`.
     seg, off = [], 0
     for b in blocks:
         n = len(b)
@@ -294,21 +292,20 @@ def video_leg(path, z=1.0):
 
 
 def log_leg(path, zoom, ss=2, zcx=None):
-    """The three anchoring rules the bar has had, from ONE run of the current build.
+    """The three anchoring rules for the bar, from ONE run of the current build.
 
     `ax` is the anchor the BODY was drawn at, in game-frame (pre-zoom) units; the eye
     term in it is a whole number, so a separation is just the bar's rule applied to `ax`
-    minus `ax` itself.  Reported in DISPLAYED SCREEN PIXELS, which is what the owner sees:
+    minus `ax` itself.  Reported in DISPLAYED SCREEN PIXELS, which is what the player sees:
     one game-frame unit becomes `zoom` of them.
 
       shorts   the original defect -- the engine's s16, i.e. the SIM rate against a body
                at present rate.  Unbounded in principle: it is the distance the unit
                travels in a sim step, so it grows with unit speed and with `gamespeed`.
-      floored  fix 1 (2026-09-09, superseded the same day).  The body's own anchor, but
-               quantised in PRE-zoom units, so the step on screen is `zoom` px -- 4 px at
-               4x, 8 px at the 8x ZOOM_MAX.  This is the residual the owner then reported
-               as a diagonal twitch at max zoom-in.
-      snapped  fix 2, what ships.  `snap_device`: forward through the zoom, round onto the
+      floored  the body's own anchor, but quantised in PRE-zoom units, so the step on
+               screen is `zoom` px -- 4 px at 4x, 8 px at the 8x ZOOM_MAX: a diagonal
+               twitch at max zoom-in.
+      snapped  what ships.  `snap_device`: forward through the zoom, round onto the
                1/ss grid, back.  The step is 1/ss of a displayed pixel at EVERY zoom, so
                the bound does not grow with the zoom at all.
 

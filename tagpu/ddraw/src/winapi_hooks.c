@@ -29,20 +29,20 @@
 
 /* THE ENGINE IS TOLD THE TRUTH ABOUT WHERE THE POINTER IS, at every zoom.
 
-   It used to be handed the unzoomed `u` here, because its 1:1 screen->world
-   arithmetic needs that number — and the cost was that it also DREW its cursor
-   sprite at `u`, which the composite then had to move back under the pointer.
-   That move can never be exact: the texture the composite samples is only
-   replaced when the game flipped, and the engine draws its cursor several times
-   per flip, so any mismatch is multiplied by 1/z.
+   This hook answers the screen point `s`, not the unzoomed `u` the engine's 1:1
+   screen->world arithmetic needs, because the engine also DRAWS its cursor
+   sprite at the point it is handed, and moving that sprite back under the
+   pointer in the composite can never be exact: the texture the composite
+   samples is only replaced when the game flipped, and the engine draws its
+   cursor several times per flip, so any mismatch is multiplied by 1/z.
 
-   So the transform moved to the one place the world point is actually computed
-   (`vpw_mouse_world()` in tagpu_vpwide.c, our redirect of `0x498DA0`), and this
-   hook answers `s`. The engine blits its sprite under the pointer by itself, at
-   any zoom and any frame rate; the screen-space readers of this poll — the edge
-   scroll's equality on the outermost screen pixel (`0x41CE90`, which takes the
-   position from `[obj+0x196]`), the off-screen warp-back at `0x41CEE7` — get the
-   screen position they were always asking for. */
+   So the transform lives in the one place the world point is actually computed
+   (`vpw_mouse_world()` in tagpu_vpwide.c, our redirect of `0x498DA0`). The
+   engine blits its sprite under the pointer by itself, at any zoom and any
+   frame rate; the screen-space readers of this poll — the edge scroll's
+   equality on the outermost screen pixel (`0x41CE90`, which takes the position
+   from `[obj+0x196]`), the off-screen warp-back at `0x41CEE7` — get the screen
+   position they ask for. */
 BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 {
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
@@ -64,7 +64,7 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
     {
         int x, y;
 
-        /* THE POINTER THAT IS NOT OVER THE PICTURE (G18-9). TA polls this ~700
+        /* THE POINTER THAT IS NOT OVER THE PICTURE. TA polls this ~700
            times a launch and its edge-scroll test `0x41CE90` fires on an EXACT
            equality with the outermost screen pixel, so clamping an outside point
            into range — which is what the two `max`/`min` pairs below do — hands
@@ -316,8 +316,8 @@ BOOL WINAPI fake_ScreenToClient(HWND hWnd, LPPOINT lpPoint)
 BOOL WINAPI fake_SetCursorPos(int X, int Y)
 {
     /* Swallow every warp request, including early ones that arrive before our
-       ddraw state exists (those used to pass straight through). Verified: TA
-       itself never calls this - the launch-time pointer jump comes from wine. */
+       ddraw state exists. Verified: TA itself never calls this - the
+       launch-time pointer jump comes from wine. */
     if (tagpu_mouse_nowarp())
         return TRUE;
 
@@ -2029,8 +2029,7 @@ BOOL WINAPI fake_DestroyWindow(HWND hWnd)
     if (g_ddraw.ref && hWnd && hWnd == g_ddraw.hwnd)
     {
         dd_RestoreDisplayMode();
-        /* `ogl_release()` stood here [landing 11-2]; render_vk.c's header
-           already recorded that the Vulkan lane owes nothing at this site. */
+        /* The Vulkan lane owes nothing at this site (render_vk.c's header). */
     }
 
     BOOL result = real_DestroyWindow(hWnd);

@@ -1,15 +1,12 @@
-/* tagpu_vk.c -- the Vulkan backend (Phase G / G19). API and contract:
-   tagpu_vk.h.
+/* tagpu_vk.c -- the Vulkan backend. API and contract: tagpu_vk.h.
 
-   ------------------------------------------------------------------ G19a ---
-   COEXISTENCE IS SETTLED, AND ONLY ONE OF THE ROADMAP'S THREE ROUTES SURVIVES
+   ------------------------------------------------------------- the window ---
+   COEXISTENCE WITH A GL CONTEXT ON ONE WINDOW
    [MEASURED 2026-09-15, tools/vkcoexist.c + tools/vkcoexist-pixels.sh].
-   Phase G's kill rule asked whether Vulkan can present on the window
-   cnc-ddraw's GL renderer already owns -- `GetDC(hwnd)`, a `SetPixelFormat` on
-   it (dd.c) and a 3.3 core context on that DC (render_ogl.c `ogl_create`). The
-   probe brings GL up exactly that way and then tries all three routes, and the
-   second script asks the question that decides it: after the route, does a GL
-   frame still REACH THE SCREEN?
+   The probe brings GL up the way cnc-ddraw's GL renderer did -- `GetDC(hwnd)`,
+   a `SetPixelFormat` on it and a 3.3 core context on that DC -- and then tries
+   all three routes, and the second script asks the question that decides it:
+   after the route, does a GL frame still REACH THE SCREEN?
 
      route                                    wine 9.0            Proton 11
      A  same HWND, GL context left current    API ok, PIXELS DEAD   ok
@@ -20,38 +17,25 @@
      D  route 3: Vulkan on its OWN            ok                    ok
         top-level window
 
-   THAT TABLE IS THE RECORD OF A CHOICE THIS FILE NO LONGER MAKES. It took
-   route D -- Vulkan on a top-level window of its own -- for as long as a GL
-   backend could be in the same process, and the vulkan-only plan's landing 4d-1
-   deleted that arrangement. What it takes now is the surface straight on the
-   GAME window, which is the table's route A, and the row above marks route A
-   PIXELS DEAD on wine. THE REASON THAT IS SAFE HERE IS NOT IN THE TABLE: route
-   A's failure is winevulkan taking an HWND over so that GL can never draw to it
-   again, and on this path THERE IS NEVER A GL CONTEXT IN THE PROCESS to lose.
+   THIS FILE PUTS THE SURFACE STRAIGHT ON THE GAME WINDOW, which is the
+   table's route A, and the row above marks route A PIXELS DEAD on wine. THE
+   REASON THAT IS SAFE HERE IS NOT IN THE TABLE: route A's failure is
+   winevulkan taking an HWND over so that GL can never draw to it again, and on
+   this path THERE IS NEVER A GL CONTEXT IN THE PROCESS to lose.
    `renderer=vulkan` is dispatched at `dd.c` and cannot change afterwards. The
-   table is kept because it is what was measured, and because the out-of-process
-   64-bit renderer will own a window again.
+   table matters again for the out-of-process 64-bit renderer, which will own a
+   window of its own.
 
-   THE API LIED, AND THAT IS THE POINT OF THE SECOND SCRIPT. Routes A and B
+   THE API LIES, AND THAT IS THE POINT OF THE SECOND SCRIPT. Routes A and B
    return VK_SUCCESS for every call, present 10 of 10 frames, and then accept
    every GL call afterwards: `SwapBuffers` returns TRUE and `glGetError` is
-   clean. The window keeps showing Vulkan's last frame anyway. This was first
-   met in the game, not in the probe: with the lever armed and then cleared, the
-   window stayed magenta while `tacli glshot` read 168 distinct colours off the
-   GL framebuffer -- GL rendering correct frames that nothing would ever see --
-   and it SURVIVED A FULL VIDEO-MODE CHANGE and the new GL context that comes
-   with it. Once winevulkan has put a surface on an HWND, that HWND is finished
-   for GL for the life of the process.
-
-   WHAT ROUTE D COST WHILE IT LASTED, and why it was worth it then: a second
-   HWND to create, track, show, hide and destroy -- real machinery where route A
-   was none -- in exchange for never touching the GL lane, so the lever was
-   two-way and the menu kept its invariant that no row needs a relaunch. That
-   trade ended when the GL lane stopped being in the process at all, and landing
-   4d-1 removed the machinery (152 lines in, 370 out). The one thing it bought
-   that still matters: the out-of-process 64-bit renderer will own its own window
-   by definition, so the tracking was written once rather than twice, and it is
-   in the history when that move needs it.
+   clean. The window keeps showing Vulkan's last frame anyway. Measured in the
+   game as well: with the lever armed and then cleared, the window stayed
+   magenta while `tacli glshot` read 168 distinct colours off the GL framebuffer
+   -- GL rendering correct frames that nothing would ever see -- and it SURVIVED
+   A FULL VIDEO-MODE CHANGE and the new GL context that comes with it. Once
+   winevulkan has put a surface on an HWND, that HWND is finished for GL for
+   the life of the process.
 
    WHAT IS NOT ESTABLISHED, and it is the honest limit: every row of that table
    is the linux NVIDIA ICD under wine. No Windows box has run it. The cell that
@@ -98,23 +82,20 @@
    the state and not by timing.
 
    ST_ZOMBIE IS A WORKER WINDING DOWN, NOT A GRAVE, AND NOTHING WAITS FOR IT.
-   An earlier revision had `tagpu_vk_render_stop` wait five seconds for a worker
-   still in ST_STARTING and then LEAK its objects. Both halves were wrong. The
-   game thread waits INFINITE on the render thread across a mode change
-   (`dd.c`), so a mode change catching a bring-up stalled the whole LOCKSTEP
-   world for the 371-451 ms it had left; and the window thread IS the game
+   Neither waiting for a worker still in ST_STARTING nor leaking its objects
+   will do. The game thread waits INFINITE on the render thread across a mode
+   change (`dd.c`), so a stop that waited would stall the whole LOCKSTEP world
+   for the 371-451 ms a bring-up has left; and the window thread IS the game
    thread here, so a winevulkan call that reached the window with an
-   inter-thread send would have closed the cycle game -> render -> worker ->
-   window with only that timeout to break it. Now the lane is simply marked
-   ST_ZOMBIE: the worker, still the sole owner of everything it built, puts its
-   own objects back, destroys its own window, and hands the lane to ST_OFF so a
-   later render thread can bring it up again. Nothing waits and nothing leaks.
+   inter-thread send would close the cycle game -> render -> worker -> window
+   with only a timeout to break it. So the lane is simply marked ST_ZOMBIE: the
+   worker, still the sole owner of everything it built, puts its own objects
+   back and hands the lane to ST_OFF so a later render thread can bring it up
+   again. Nothing waits and nothing leaks.
 
-   THE WINDOW IS THE GAME'S AND THE LANE NEVER OWNS ONE, since landing 4d-1.
-   What used to need a rule here -- who may destroy the lane's own popup, and in
-   which states a worker might still hold a surface on it -- has no subject any
-   more: the surface goes on the window the caller names and nothing in this file
-   creates, moves or destroys a window.
+   THE WINDOW IS THE GAME'S AND THE LANE NEVER OWNS ONE: the surface goes on
+   the window the caller names and nothing in this file creates, moves or
+   destroys a window.
 
    IT READS NO ENGINE STATE. Every value arrives as an argument. This file is
    not on `thread-split.allow` and must never need to be.
@@ -123,7 +104,7 @@
    below casts one to a pointer, stores one in a `void*` or keys anything on
    one, and the header exposes no Vulkan type so a caller cannot either.
 
-   ------------------------------------------------------------------ G19b ---
+   --------------------------------------------------------- the device list ---
    THE DEVICE LIST IS A CACHE, AND IT IS ONE LAUNCH BEHIND ON PURPOSE. The row's
    captions live inside the generated `.GUI`, which `tagpu_menu_init` writes at
    DLL attach because the engine globs `*.UFO` before it will read any of them
@@ -134,8 +115,8 @@
    Monitor row already makes for a hot-plugged monitor.
 
    The enumeration runs WHETHER OR NOT THE VULKAN LANE IS ARMED. The picker is
-   the player-facing half of Phase G and the roadmap says a phase that stops at
-   G19b has still shipped it -- so it cannot be gated on the lane it outlives.
+   player-facing in its own right, so it cannot be gated on the lane it
+   outlives.
 
    THE CHOICE IS STORED BY NAME, NOT BY INDEX (`tagpu_vk.cfg`). An index moves
    when a card is added, removed or re-ordered by the driver, and would then
@@ -188,9 +169,9 @@
    behaviour, thread for thread and file for file, has to be able to say so.
    `tagpu_vk.off` is that: with it present nothing in this file runs, the
    enumeration worker included, and the row plates whatever the cache last
-   said. It is what an A/B against the pre-G19 DLL arms. */
+   said. It is what an A/B against a DLL without the lane arms. */
 #define OFF_FILE   "tagpu_vk.off"
-/* THE A/B (Phase G / G19d). `tagpu_fps.c` owns the lever (`tagpu_fps.ab`): it
+/* THE A/B. `tagpu_fps.c` owns the lever (`tagpu_fps.ab`): it
    clears the GL frame to black, writes `tagpu_fps_gl.ppm` and hands the flag
    over with the vertices, and this file writes `tagpu_fps_vk.ppm` out of the
    swapchain image it presents THAT frame. Set `color=0,0,0` in the lever file
@@ -206,25 +187,19 @@
 #define AB_FX      "tagpu_fx_vk.ppm"
 #define AB_MARK    "tagpu_mark_vk.ppm"
 #define AB_UNIT    "tagpu_posedraw_vk.ppm"
-/* THE ONE LIST OF THEM, in the order `vk_present` selects in (which is the
-   order the nested ternary it replaced tested in). The `tag` is the SAME string
+/* THE ONE LIST OF THEM, in the order `vk_present` selects in. The `tag` is the
+   SAME string
    the pass passes to `tagpu_vk_ab_arm`, so a pass names its file once, here,
    and both the write and the arming's unlink read this row.
    `posedraw`'s file is `AB_UNIT`: the pass is the unit pass and the lever is
    `tagpu_posedraw.ab`, and that mismatch is exactly why this is a table and not
    a `_snprintf` of the tag. */
 /* THE COUNT COMES OFF THE ARRAY, not out of a literal repeated at each of its
-   three readers. Deleting the UI layer's row took this from 8 to 7, and two of
-   those readers were bare `i < 8` loops that would have walked one row past the
-   end -- a table whose length is written down four times has three chances to
-   disagree with itself.
-
-   AND THE DIMENSION IS LEFT EMPTY, which it was not: the row count was still
-   spelled `[7]` beside a comment saying the count comes off the array, so
-   restoring the UI row initialised eight entries into seven slots and the
-   compiler said "excess elements in array initializer" rather than anything
-   about the A/B. An explicit dimension here is the fourth place the length was
-   written down. [The UI rebuild.] */
+   three readers, AND THE DIMENSION IS LEFT EMPTY: a table whose length is
+   written down four times has three chances to disagree with itself. A bare
+   `i < 8` loop walks a row past the end of a seven-row table, and an explicit
+   dimension one short of the rows is a compiler error about "excess elements
+   in array initializer" rather than anything about the A/B. */
 #define AB_N ((int)(sizeof s_abFiles / sizeof s_abFiles[0]))
 static const struct { const char* tag; const char* path; } s_abFiles[] = {
     { "terr", AB_TERR }, { "feat", AB_FEAT }, { "posedraw", AB_UNIT }, { "fx", AB_FX },
@@ -285,7 +260,7 @@ static void vk_canon(char* dst, unsigned cap, const char* src)
         dst[n++] = (char)c;
     }
     /* A TRUNCATION CUTS AT A WORD BOUNDARY. `llvmpipe (LLVM 20.1.2, 256 bits`
-       is what a straight cut produced, and a name that ends mid-token reads as
+       is what a straight cut produces, and a name that ends mid-token reads as
        a corrupt string rather than a shortened one. Only when the source was
        actually longer than the bound, and only when a space survives in the
        second half of the result -- otherwise one very long word would trim to
@@ -374,7 +349,7 @@ typedef struct {
     VkImage          img[MAXIMG];
     VkCommandPool    pool;
     VkCommandBuffer  cmd[MAXIMG];
-    /* G19d: what a pass draws into. THE RENDER PASS IS PER DEVICE AND THE
+    /* What a pass draws into. THE RENDER PASS IS PER DEVICE AND THE
        FRAMEBUFFERS ARE PER SWAPCHAIN -- a resize rebuilds the views and the
        framebuffers and keeps the render pass, so a pipeline a pass built
        against it stays valid across every resize. The format is checked on
@@ -382,7 +357,7 @@ typedef struct {
     VkRenderPass     rp;
     VkImageView      view[MAXIMG];
     VkFramebuffer    fb[MAXIMG];
-    /* G19e: THE DEPTH ATTACHMENT, one per swapchain image and not one shared.
+    /* THE DEPTH ATTACHMENT, one per swapchain image and not one shared.
        `nimg` frames are in flight at once and each has a framebuffer of its
        own, so a single depth buffer would be written by two frames that
        overlap on the GPU -- and the whole point of the seam's fence is that
@@ -396,7 +371,7 @@ typedef struct {
     VkSemaphore      semAcquire[MAXIMG];   /* by FRAME index                  */
     VkSemaphore      semRelease[MAXIMG];   /* by IMAGE index -- see vk_present */
     VkFence          fence[MAXIMG];
-    /* tagpu_ftime (G19f landing 6): two timestamps a frame, slot i at 2i and
+    /* tagpu_ftime: two timestamps a frame, slot i at 2i and
        2i+1. READ BEHIND THE FENCE THIS SEAM ALREADY WAITS ON before it
        re-records that slot -- so the results are complete by construction and
        cost no wait of their own. `tsPend` says a slot has a pair worth reading;
@@ -447,16 +422,12 @@ static TAGPU_VKPASS s_pass;
 static void passlog(const char* m) { vklog("%s", m); }
 
 /* THE CAPTURE IS COMPLETED BY THE SEAM'S OWN FENCE, AND ADDS NO WAIT AT ALL.
-   [REWRITTEN FROM REVIEW 2026-09-15.]
 
-   The first shape waited on the frame's fence right after the present, for up
-   to a second, and on a TIMEOUT it destroyed the staging buffer -- which the
-   already-submitted `vkCmdCopyImageToBuffer` writes into. The GPU would then
-   have completed the copy into freed memory, and the one-second timeout was
-   load-bearing for that rather than being the belt it claimed to be. A wait on
-   the render thread was also the one thing this file spent a whole review
-   removing: the game thread waits INFINITE on the render thread across a mode
-   change.
+   Waiting on the frame's fence right after the present puts a wait on the
+   render thread, which the game thread waits INFINITE on across a mode change;
+   and a TIMEOUT on that wait cannot free the staging buffer, which the
+   already-submitted `vkCmdCopyImageToBuffer` writes into -- the GPU would
+   complete the copy into freed memory.
 
    So nothing waits. The capture records into slot `fi` and says so, and the
    NEXT frame that reaches that slot finds the fence already waited on at the
@@ -472,20 +443,19 @@ static const char* s_abPath;/* the file the pending capture belongs in         *
    one of the pair is missing.
 
    `idle` IS THE WHOLE SAFETY ARGUMENT, SO IT IS THE CALLER'S RESULT AND NOT AN
-   ASSUMPTION. [FROM THE REVIEW'S SECOND PASS 2026-09-15.] `vkDeviceWaitIdle`
+   ASSUMPTION. `vkDeviceWaitIdle`
    can fail -- `VK_ERROR_OUT_OF_HOST_MEMORY` above all, in a 32-bit address space
    this lane spends its budget measuring -- and it then returns WITHOUT the
-   device being idle. Freeing a buffer the submitted `vkCmdCopyImageToBuffer` is
-   still writing into would be the same defect this whole mechanism was rewritten
-   to remove, one call further along. So a wait that did not succeed LEAKS the
+   device being idle, and a buffer the submitted `vkCmdCopyImageToBuffer` is
+   still writing into must not be freed. So a wait that did not succeed LEAKS the
    buffer instead: a leak is recoverable and a free is not, which is the same
    trade `ST_ZOMBIE` makes two hundred lines up. It is once per process at worst,
    it is logged, and `tagpu_vk_shot_record` then refuses further captures for the
    session because the buffer is still there.
 
-   The rest of `vk_down`'s teardown rests on that same wait and always has --
-   the swapchain, the per-image objects, the device itself. That is pre-existing
-   and is named in [gpu-status] §2.26 rather than changed here. */
+   The rest of `vk_down`'s teardown rests on that same wait -- the swapchain,
+   the per-image objects, the device itself -- and that gap is named in
+   [gpu-status] §2.26. */
 static void ab_drop(const char* why, int idle)
 {
     if (!s_abSlot1) return;
@@ -505,51 +475,33 @@ static void ab_drop(const char* why, int idle)
 /* The clear colour, `color=r,g,b` in the lever file. BLACK by default, because
    it is what a player sees wherever nothing draws -- off the map's edge at a
    zoom-out wider than the map above all, which the engine itself never shows
-   and would leave black. It was magenta until 2026-09-23, a bring-up sentinel
-   (no pixel of TA's palette is pure magenta, so "is the lane on screen?" was
-   answered by looking); that is now opt-in, `tagpu_vk.on=color=255,0,255`. */
+   and would leave black. Magenta is the opt-in bring-up sentinel,
+   `tagpu_vk.on=color=255,0,255`: no pixel of TA's palette is pure magenta, so
+   "is the lane on screen?" is answered by looking. */
 static float s_clear[3] = { 0.0f, 0.0f, 0.0f };
 
 /* ---- the window the surface goes on ---------------------------------------
-   THERE IS ONE, AND IT IS THE GAME'S. [The vulkan-only plan, landing 4d-1.]
+   THERE IS ONE, AND IT IS THE GAME'S. `renderer=vulkan` reaches
+   `render_vk.c`, which calls `tagpu_vk_own_present()` before its loop, and
+   nothing else drives this lane. So the surface goes on the window the caller
+   names and `s_ownWin` is set on every frame that gets here.
 
-   ROUTE D IS GONE. Until this landing the lane could also run BESIDE the GL
-   backend, presenting into an owned popup of its own placed over the game
-   window's client area -- a whole apparatus (a window class, a window proc, a
-   create/destroy handshake posted to the thread that pumps, and a
-   `WM_WINDOWPOSCHANGED` follow to keep the popup on the client rect) that
-   existed for exactly one reason, stated in tagpu_vk.h: *"two backends must not
-   both present to one window in one frame"*.
+   THERE IS NO TWO-LANE ORACLE. With one backend in the process no absolute
+   two-lane comparison is expressible, so a claim is relative: this build
+   against the previous one. The last two-lane figures are in
+   [gpu-status](gpu-status.html) §2.54.
 
-   THAT REASON NO LONGER EXISTS, because there is no longer a second backend to
-   present. `renderer=vulkan` reaches `render_vk.c`, which calls
-   `tagpu_vk_own_present()` before its loop, and nothing else drives this lane:
-   `render_ogl.c`'s own call to `tagpu_vk_frame` went with the popup. So the
-   surface goes on the window the caller names and `s_ownWin` is set on every
-   frame that gets here.
-
-   WHAT THIS COST, AND IT WAS PAID DELIBERATELY. Route D was also the project's
-   ORACLE: both backends rendering the same frame, each capturing its own half,
-   `tools/vk-ab.py` diffing the two. No absolute two-lane comparison is
-   expressible after this, so every figure that wanted one was taken first --
-   all five world passes at the shipped `ss = 2` in landing 4c-3
-   ([gpu-status](gpu-status.html) §2.54), the UI layer at 0 px of 307 200, and
-   the `ss = 1` set before them. From here a claim is relative: this build
-   against the previous one.
-
-   WHAT SURVIVES. `tagpu_vk_wndproc` keeps its name and its call from the fork's
-   wndproc, reduced to the one arm that was never about a window of ours -- the
-   OWNER dying, which is the only thing the window thread can tell the render
+   `tagpu_vk_wndproc` is called from the fork's wndproc and has one arm, which
+   is not about a window of ours -- the OWNER dying, which is the only thing the window thread can tell the render
    thread that `hwnd != s_owner` cannot (see `s_ownGone`). */
 
 static HWND          s_owner;           /* the game window we are tracking     */
 
 
-/* THIS BACKEND OWNS THE PRESENT, and since landing 4d-1 there is no other kind
-   of frame: `render_vk.c` sets this before its loop and it is the only driver
-   of this lane. The latch is kept rather than collapsed away -- the plan scopes
-   4d to the window, and turning every `tagpu_vk_owns_present()` test in the
-   tree into a constant is a far larger change than deleting a popup.
+/* THIS BACKEND OWNS THE PRESENT, and there is no other kind of frame:
+   `render_vk.c` sets this before its loop and it is the only driver of this
+   lane. It stays a latch rather than a constant because
+   `tagpu_vk_owns_present()` is tested throughout the tree.
 
    IT IS A ONE-WAY LATCH, set once from `vk_render_main` before its loop and
    never cleared: which backend the process has is decided at `dd.c`'s dispatch
@@ -559,7 +511,7 @@ static HWND          s_owner;           /* the game window we are tracking     *
    bring-up worker reads it for its two log lines, and the game/window thread
    reads it in `tagpu_vk_wndproc` and in `tagpu_vk_armed`. A plain `int` there
    is an unsynchronised cross-thread read, which is not an ordering however
-   early the write happens. [FROM THE LANDING REVIEW, 2026-09-17.] */
+   early the write happens. */
 static volatile LONG s_ownWin;          /* this backend owns the present       */
 
 /* THE OWNER IS GONE, published by the window thread, and it is the ONLY thing
@@ -569,27 +521,24 @@ static volatile LONG s_ownWin;          /* this backend owns the present       *
    and the lane presenting on a dead HWND until the driver says
    `VK_ERROR_SURFACE_LOST_KHR`. That would be trading an ordering for "wait for
    an error", which is the shape this file is not allowed to ship, so the latch
-   keeps a one-frame bound on it. It is why `tagpu_vk_wndproc` still exists at
-   all after 4d-1. [FROM THE LANDING REVIEW, 2026-09-17.] */
+   keeps a one-frame bound on it. It is why `tagpu_vk_wndproc` exists at
+   all. */
 static volatile LONG s_ownGone;
 
 
 /* Called from the fork's wndproc on the game window's thread. An OBSERVER: it
-   never swallows a message the fork or the engine needs, and since landing 4d-1
-   it watches exactly one thing -- the game window being destroyed. That is the
-   only fact the window thread has which the render thread cannot get for
-   itself; see `s_ownGone` for why asking `hwnd != s_owner` instead does not
-   work. Everything else this used to do created, placed or destroyed route D's
-   popup, and there is no popup. */
+   never swallows a message the fork or the engine needs, and it watches
+   exactly one thing -- the game window being destroyed. That is the only fact
+   the window thread has which the render thread cannot get for itself; see
+   `s_ownGone` for why asking `hwnd != s_owner` instead does not work. */
 void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     (void)hwnd; (void)wparam; (void)lparam;
-    /* AND ONLY WHEN THERE IS A LANE TO BRING DOWN. [FROM THE 4d-1 LANDING
-       REVIEW.] The `s_ownWin` test used to sit in front of the whole switch and
-       went with it; without it this appended a line naming a lane and a render
-       thread that do not exist to every `tagpu.log` on the DEFAULT renderer,
-       with no Vulkan lever present at all. It also restores the symmetry the
-       two readers of `s_ownGone` already have. */
+    /* AND ONLY WHEN THERE IS A LANE TO BRING DOWN: without the `s_ownWin`
+       test this would append a line naming a lane and a render thread that do
+       not exist to every `tagpu.log` on the DEFAULT renderer, with no Vulkan
+       lever present at all. It also keeps the symmetry the two readers of
+       `s_ownGone` have. */
     if (msg != WM_DESTROY || !s_ownWin) return;
     InterlockedExchange(&s_ownGone, 1);
     vklog("window: the game window is being destroyed - the lane comes down on "
@@ -599,13 +548,13 @@ void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 /* ---- the lever ----------------------------------------------------------- */
 static volatile LONG s_armed = -1;      /* -1 = never polled */
 static DWORD s_lastPoll;
-/* THE A/B'S FRAME IS NOT DECIDED HERE (G19d). `tagpu_fps.c` polls the lever,
+/* THE A/B'S FRAME IS NOT DECIDED HERE. `tagpu_fps.c` polls the lever,
    captures its own half and hands the flag over with the vertices; this file
-   only carries it through. Both lanes polling for themselves was the first
-   shape, and it was wrong: they poll on different cadences (that one every 30
-   frames, this one every 250 ms), so the two captures could land hundreds of
-   frames apart -- and the readout changes its number twice a second, so they
-   would have differed in the digits and agreed about nothing else. */
+   only carries it through. Both lanes polling for themselves would be wrong:
+   they poll on different cadences (that one every 30 frames, this one every
+   250 ms), so the two captures could land hundreds of frames apart -- and the
+   readout changes its number twice a second, so they would differ in the
+   digits and agree about nothing else. */
 static void read_lever(void)
 {
     char b[128];
@@ -615,8 +564,8 @@ static void read_lever(void)
        `renderer=vulkan` that a stray `tagpu_vk.off` could disarm would leave
        the process with NO renderer and a black window, which is a worse
        failure than anything the lever was there to protect against. The ON
-       file is still READ below for its `color=`, which every A/B on this plan
-       uses; it just no longer decides whether the lane runs. */
+       file is still READ below for its `color=`, which every A/B uses; it
+       does not decide whether the lane runs. */
     int on = s_ownWin ? 1 : (exists(ON_FILE) && !exists(OFF_FILE));
 
     InterlockedExchange(&s_armed, on);
@@ -644,12 +593,10 @@ static void read_lever(void)
    else. That placement IS the guarantee, and it is why this is not done where
    the capture is recorded.
 
-   WHAT IT BUYS, AND IT IS NOW THE WHOLE OF THE GUARANTEE. While route D
-   existed the rule was that a capture may be claimed only on a GL half that
-   reached the disk, because a refused write leaves the PREVIOUS run's file
-   lying there and a half diffed against it reports a capture of a different
-   frame as a port failure. Landings 4d-1 and 4d-2 deleted the GL half, so that
-   property rests entirely on this call: after it the target does not exist, and
+   WHAT IT BUYS. A refused write leaves the PREVIOUS run's file lying there,
+   and a capture diffed against it reports a capture of a different frame as a
+   port failure. So the property rests entirely on this call: after it the
+   target does not exist, and
    it comes back only if `tagpu_vk_shot_finish` writes it. Absent means this
    arming produced no capture; present means this arming's -- which is exactly
    what a cross-BUILD diff needs to be trustworthy.
@@ -664,7 +611,6 @@ static void read_lever(void)
    where the capture does not happen -- which is the case it exists for. Here it
    is in the same statement sequence as the latch, on the same thread, with no
    frame boundary between them, so there is no interleaving that separates them.
-   [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.]
 
    THE ONE RESIDUAL, NAMED. A capture recorded by an EARLIER arming is written
    when its frame slot's fence comes round, up to `nimg` frames later, and that
@@ -680,7 +626,7 @@ static void read_lever(void)
    property asserted rather than established, so 1 means the target is gone --
    deleted now, or already absent -- and the caller must not claim the Vulkan
    half on anything else. ERROR_FILE_NOT_FOUND and ERROR_PATH_NOT_FOUND are the
-   success cases that look like failures. [FROM THE 4b-1 LANDING REVIEW.]
+   success cases that look like failures.
 
    An unknown tag is a programming error and says so rather than composing a
    path: nothing should be unlinked on the strength of a string this file does
@@ -723,9 +669,8 @@ void tagpu_vk_own_present(void)
 }
 
 /* 1 when this backend owns the present, i.e. there is no GL context in the
-   process. THE PREDICATE LANDING 4b IS BUILT ON: every GL draw in the tree is
-   gated on its negation, one pass per commit, while the gather half beside it
-   runs unconditionally. Safe from any thread -- the latch is interlocked. */
+   process. Every GL draw in the tree is gated on its negation, while the
+   gather half beside it runs unconditionally. Safe from any thread -- the latch is interlocked. */
 int tagpu_vk_owns_present(void)
 {
     return s_ownWin != 0;
@@ -741,23 +686,19 @@ int tagpu_vk_armed(void)
        nothing at the rate a screen is built, and sharing no mutable state is
        worth more than the cached answer.
 
-       AND IT ANSWERS FOR THE OWNING BACKEND TOO, which it did not until the
-       landing review found what that cost [2026-09-17]. `renderer=vulkan`
-       needs no lever file, so this returned 0 in exactly the configuration
-       where the lane is the ONLY renderer -- and `tagpu_menu.c`'s
-       `vrow_greyed(VD_GPU)` greys the GPU picker on it. The row whose whole
-       purpose is choosing the Vulkan device was dead in the only mode where
-       Vulkan draws, which inverts the rule that row is greyed by: it looked
-       dead while it was the one thing that could bite.
+       AND IT ANSWERS FOR THE OWNING BACKEND TOO. `renderer=vulkan` needs no
+       lever file, so without the `s_ownWin` term this would return 0 in
+       exactly the configuration where the lane is the ONLY renderer -- and
+       `tagpu_menu.c`'s `vrow_greyed(VD_GPU)` would grey the GPU picker, the
+       row whose whole purpose is choosing the Vulkan device, in the only mode
+       where Vulkan draws.
 
        It also re-arms the GL halves' mirror latches (`tagpu_fx.c`,
-       `tagpu_feat.c`, `tagpu_terr.c`, `tagpu_posebake.c`, `tagpu_posedraw.c`),
-       which landing 4b needs and which are inert in 4a only because nothing
-       calls the gather halves yet. */
+       `tagpu_feat.c`, `tagpu_terr.c`, `tagpu_posebake.c`, `tagpu_posedraw.c`). */
     return s_ownWin || (exists(ON_FILE) && !exists(OFF_FILE));
 }
 
-/* ---- G19b: the cached name table -----------------------------------------
+/* ---- the cached name table -----------------------------------------------
    Written once by the enumeration worker, read by the menu on the game thread
    and by the bring-up worker. `s_count` is published LAST with an interlocked
    store, so a reader that sees a non-zero count sees the names behind it -- the
@@ -766,10 +707,9 @@ static char  s_name[MAXDEV][NAMELEN];
 static int   s_disc[MAXDEV];            /* 1 = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU */
 static volatile LONG s_count;
 /* THE ONLY THING THAT CROSSES A THREAD HERE IS AN ALIGNED LONG, and that is
-   deliberate. An earlier shape had the row write a device NAME that the
-   bring-up worker and the deferred writer then read; a string written by one
-   thread and read by another can be read half-copied, and the half-copy would
-   have been PERSISTED to the cfg. There is no such string now:
+   deliberate. A device NAME written by one thread and read by another can be
+   read half-copied, and the half-copy would be PERSISTED to the cfg. So no
+   string crosses:
 
      s_name[] / s_choice[]  written once, `tagpu_vk_names_init` at DLL attach,
                             before any other thread exists; read-only after.
@@ -928,7 +868,7 @@ void tagpu_vk_gpu_store(void)
     }
 }
 
-/* ---- address-space cost, the G19a exit's second half ---------------------
+/* ---- address-space cost ---------------------------------------------------
    Peak committed bytes and the largest free VA block. The second number is the
    one that decides whether a 32-bit TA survives a driver in its address space:
    the engine's own allocator fails by failing, not by saying anything. */
@@ -991,13 +931,13 @@ static void va_log(const char* when)
    real_LoadLibraryA, never LoadLibraryA: the fork hooks the latter (hook=4) and
    the hook re-scans the module tree, which is not something to trigger from
    under a driver's own loader work. */
-/* THE CACHE TEST IS THE LAST THING RESOLVED, NOT THE FIRST. [FROM REVIEW
-   2026-09-15, second pass.] It used to be `if (s_mod) return 1;` -- and `s_mod`
-   is set two lines before the two resolutions that can still fail, so a
-   `vulkan-1.dll` that loads but does not resolve reported FAILURE to the
-   enumeration worker and SUCCESS to the bring-up worker that followed it,
-   which then called through a NULL `vkCreateInstance`. Serialising the workers
-   removed the race between them; it did not remove the cache's own lie. */
+/* THE CACHE TEST IS THE LAST THING RESOLVED, NOT THE FIRST. `s_mod` is set
+   before the two resolutions that can still fail, so a bare
+   `if (s_mod) return 1;` would report a `vulkan-1.dll` that loads but does not
+   resolve as FAILURE to the enumeration worker and SUCCESS to the bring-up
+   worker that follows it, which would then call through a NULL
+   `vkCreateInstance`. Serialising the workers removes the race between them;
+   it does not remove that lie. */
 static int vk_load(void)
 {
     if (vkCreateInstance) return 1;
@@ -1029,13 +969,12 @@ static VkInstance vk_instance(void)
     /* VK_KHR_get_physical_device_properties2, WHEN THE LOADER HAS IT, AND IT IS
        A DEPENDENCY RATHER THAN A WANT. This instance asks for Vulkan 1.0, where
        VK_EXT_line_rasterization -- which the effects pass needs for GL's own
-       line rule (G19e) -- depends on it, and chaining
+       line rule -- depends on it, and chaining
        VkPhysicalDeviceLineRasterizationFeaturesEXT into VkDeviceCreateInfo is
        only defined with it enabled. The reference setup's loader tolerates the
-       omission, which is exactly why it went unnoticed: a stricter one refuses
-       vkCreateDevice, the retry there clears `lineok`, and every frame with a
-       laser in it is refused for the session ON HARDWARE THAT SUPPORTS THE
-       FEATURE. [FROM THE G19e EFFECTS REVIEW, 2026-09-15.]
+       omission; a stricter one refuses vkCreateDevice, the retry there clears
+       `lineok`, and every frame with a laser in it is refused for the session
+       ON HARDWARE THAT SUPPORTS THE FEATURE.
 
        ASKED FOR ONLY WHEN IT IS OFFERED: an instance extension the loader does
        not have fails vkCreateInstance outright, which would cost the whole lane
@@ -1086,14 +1025,12 @@ static VkInstance vk_instance(void)
 }
 
 /* ST_ZOMBIE IS A WORKER WINDING DOWN, NOT A GRAVE, and this is what clears it.
-   [FROM REVIEW 2026-09-15.]
 
    A worker that finishes and finds the lane is no longer ST_STARTING has been
    ABANDONED by `tagpu_vk_render_stop` -- but it is still the sole owner of
    everything it built, because ST_ZOMBIE is the state in which nobody else
-   touches any of it. So it can put its own objects back, which the previous
-   design could not: that one LEAKED them and made ST_ZOMBIE terminal for the
-   session. Handing the lane back to ST_OFF here is what lets a later render
+   touches any of it. So it can put its own objects back rather than leak them.
+   Handing the lane back to ST_OFF here is what lets a later render
    thread bring it up again.
 
    The transition out of ST_ZOMBIE is this function and nothing else, so the
@@ -1109,7 +1046,7 @@ static void lane_release(void)
    `s_state` is volatile but `s_vk` is not, and a volatile load orders nothing
    about a non-volatile one -- the interlocked read is a full barrier, which is
    what the publish on the other side already is. It is what `s_choiceGen`'s
-   read already does, and this one had been left plain. [FROM REVIEW 2026-09-15] */
+   read does too. */
 static LONG lane_state(void)
 {
     return InterlockedCompareExchange(&s_state, 0, 0);
@@ -1127,15 +1064,14 @@ static LONG lane_state(void)
    and the gathers run from the first frame, so a pass that read 0 as a bound
    would build a zero-row atlas and cache it for the life of the process. That
    is measured, not hypothetical -- it is what `terr: atlas built 2176x0 ... 0
-   kept` was. [The vulkan-only plan, landing 4b-2.] */
+   kept` means. */
 int tagpu_vk_max_image_dim(void)
 {
     /* CACHED AGAINST THE DEVICE IT CAME FROM, not just cached. The GPU picker
        tears the lane down and re-picks a physical device on a row change, and
        it is live under `renderer=vulkan` -- so a bare `static int cached` would
        keep the old device's limit for the life of the process and a smaller new
-       device would have work sized past what it accepts.
-       [FROM THE 4b-2 LANDING REVIEW, 2026-09-18.] */
+       device would have work sized past what it accepts. */
     static int cached;
     static VkPhysicalDevice cachedFor;
     VkPhysicalDeviceProperties p;
@@ -1148,39 +1084,17 @@ int tagpu_vk_max_image_dim(void)
     return cached;
 }
 
-/* THE DEVICE'S LARGEST UNIFORM BUFFER RANGE, or 0 while there is no device.
-   `GL_MAX_UNIFORM_BLOCK_SIZE`'s counterpart, and a ported pass wants it for the
-   same reason: the pose block is a COMPILE-TIME size and both lanes only ask
-   whether the device can hold it. Asked of the device we actually bound.
-   0 IS A REFUSAL AND NOT A DEFAULT, exactly as above -- a caller treats it as
-   "not yet" and asks again on a later frame. [The vulkan-only plan, 4b-2.] */
-int tagpu_vk_max_uniform_range(void)
+/* THE DEVICE'S LARGEST STORAGE BUFFER RANGE, or 0 while there is no device.
+   The posed-unit pass binds one storage buffer holding the whole frame's poses
+   and checks the frame's size against this. 0 IS "NOT YET", NEVER A LIMIT: a
+   caller asks again on a later frame. */
+int tagpu_vk_max_storage_range(void)
 {
     /* CACHED AGAINST THE DEVICE IT CAME FROM, not just cached. The GPU picker
        tears the lane down and re-picks a physical device on a row change, and
        it is live under `renderer=vulkan` -- so a bare `static int cached` would
        keep the old device's limit for the life of the process and a smaller new
-       device would have work sized past what it accepts.
-       [FROM THE 4b-2 LANDING REVIEW, 2026-09-18.] */
-    static int cached;
-    static VkPhysicalDevice cachedFor;
-    VkPhysicalDeviceProperties p;
-    if (!s_vk.pd || lane_state() != ST_READY) return 0;
-    if (cached > 0 && cachedFor == s_vk.pd) return cached;
-    vkGetPhysicalDeviceProperties(s_vk.pd, &p);
-    if (p.limits.maxUniformBufferRange > 0x7FFFFFFFu) return 0;
-    cached = (int)p.limits.maxUniformBufferRange;
-    cachedFor = s_vk.pd;
-    return cached;
-}
-
-/* THE DEVICE'S LARGEST STORAGE BUFFER RANGE, or 0 while there is no device.
-   The posed-unit pass binds one storage buffer holding the whole frame's poses
-   and checks the frame's size against this. Cached against the device it came
-   from, for the same reason as the uniform range above: the GPU picker can
-   re-pick a smaller device under us. 0 IS "NOT YET", NEVER A LIMIT. */
-int tagpu_vk_max_storage_range(void)
-{
+       device would have work sized past what it accepts. */
     static int cached;
     static VkPhysicalDevice cachedFor;
     VkPhysicalDeviceProperties p;
@@ -1201,16 +1115,14 @@ int tagpu_vk_max_storage_range(void)
    to do about a dead lane is a property of the backend and not of the seam.
    Returns 1 when the lane was in ST_FAILED and is now ST_OFF.
 
-   WHY IT EXISTS [FROM THE LANDING REVIEW, 2026-09-17]. ST_FAILED is not only
-   reachable from a bring-up that could never work: `tagpu_vk_frame` also
+   WHY IT EXISTS. ST_FAILED is not only reachable from a bring-up that could
+   never work: `tagpu_vk_frame` also
    publishes it when a swapchain REBUILD is refused and when `vk_present`
    returns -2, whose causes include a one-second fence or acquire timeout and
    `VK_ERROR_OUT_OF_HOST_MEMORY` -- "one second of no progress, or one
-   allocation refused". While this lane was a lever beside GL, that killed the
-   lane and GL kept the picture, and three separate things could bring it back.
-   With the present owned, all three are gone at once, so without this a live
-   lane that hiccups once after ten minutes would hand the session to software
-   rendering for good. */
+   allocation refused". With the present owned there is no other picture to
+   fall back on, so without this a live lane that hiccups once after ten
+   minutes would hand the session to software rendering for good. */
 int tagpu_vk_retry(void)
 {
     if (InterlockedCompareExchange(&s_state, ST_OFF, ST_FAILED) != ST_FAILED)
@@ -1242,7 +1154,7 @@ static LONG lane_gen(void)
     return InterlockedCompareExchange(&s_choiceGen, 0, 0);
 }
 
-/* ---- G19b: the enumeration worker ---------------------------------------- */
+/* ---- the enumeration worker ---------------------------------------------- */
 static DWORD WINAPI enum_worker(LPVOID arg)
 {
     VkInstance inst;
@@ -1260,10 +1172,9 @@ static DWORD WINAPI enum_worker(LPVOID arg)
     inst = vk_instance();
     if (!inst)                 { lane_release(); return 0; }
 
-    /* A FAILED OR EMPTY ENUMERATION LEAVES THE CACHE ALONE. [FROM REVIEW
-       2026-09-15.] The result used to go unchecked, and `n = 0` then differed
-       from `s_count` and counted as "the list changed" -- so one transient
-       refusal would have rewritten `tagpu_vk.gpus` to nothing and taken the
+    /* A FAILED OR EMPTY ENUMERATION LEAVES THE CACHE ALONE. Unchecked, `n = 0`
+       differs from `s_count` and counts as "the list changed" -- so one
+       transient refusal would rewrite `tagpu_vk.gpus` to nothing and take the
        GPU row's captions away at the next launch. A list we could not read is
        not a list of no devices. */
     if (vkEnumeratePhysicalDevices(inst, &n, NULL) != VK_SUCCESS || !n) {
@@ -1297,8 +1208,8 @@ static DWORD WINAPI enum_worker(LPVOID arg)
            the return is checked BEFORE it is added: `at += -1` would step the
            cursor backwards and the next device would be written in front of the
            buffer. It cannot truncate at today's bounds (4 devices x 34 bytes
-           against 224), which is exactly why it would have sat here unnoticed
-           until one of them moved. */
+           against 224), which is exactly why it would sit here unnoticed until
+           one of them moved. */
         k = _snprintf(out + at, sizeof out - at - 1, "%d %s\n", disc[i], name[i]);
         if (k < 0 || k >= (int)(sizeof out - at - 1)) break;
         at += k;
@@ -1311,11 +1222,10 @@ static DWORD WINAPI enum_worker(LPVOID arg)
 
     if (changed) {
         /* TEMPORARY AND RENAME, for the reason `tagpu_vk_gpu_store` and
-           `tagpu_menu.c`'s `write_cfg` both give and this one had not taken:
-           CREATE_ALWAYS truncates first, and the file is opened FILE_SHARE_READ,
+           `tagpu_menu.c`'s `write_cfg` both give: CREATE_ALWAYS truncates first, and the file is opened FILE_SHARE_READ,
            so a second instance reading it at DLL attach -- or a crash between
            the truncate and the write -- would see nothing and lose the GPU row's
-           captions for that launch. [FROM REVIEW 2026-09-15.] */
+           captions for that launch. */
         int ok = 0;
         h = CreateFileA(GPUS_TMP, GENERIC_WRITE, FILE_SHARE_READ, 0, CREATE_ALWAYS,
                         FILE_ATTRIBUTE_NORMAL, 0);
@@ -1340,17 +1250,16 @@ static DWORD WINAPI enum_worker(LPVOID arg)
 }
 
 /* THE ENUMERATION TAKES ST_STARTING TOO, and that is not bookkeeping -- it is
-   what stops two workers existing at once. [FROM REVIEW 2026-09-15.]
+   what stops two workers existing at once.
 
-   Before this, `enum_start` created its thread unguarded while `tagpu_vk_frame`
-   could create the bring-up thread a few frames later, and the two share every
-   global in this file: `s_mod`, `s_gipa` and the whole IFNS/DFNS dispatch
-   table. Two faults, both live: `vk_load`'s `if (s_mod) return 1;` is a
-   double-checked lock with no barrier, so the second thread could see `s_mod`
-   set and `vkCreateInstance` still NULL and call through it; and INSTANCE-LEVEL
-   ENTRY POINTS BELONG TO AN INSTANCE, so with two instances alive the table
-   ends up holding one instance's thunks while the other instance's handle is
-   passed to them.
+   `tagpu_vk_frame` can create the bring-up thread a few frames after this
+   one, and the two share every global in this file: `s_mod`, `s_gipa` and the
+   whole IFNS/DFNS dispatch table. Unguarded, two faults: a cache test on
+   `s_mod` is a double-checked lock with no barrier, so the second thread could
+   see `s_mod` set and `vkCreateInstance` still NULL and call through it; and
+   INSTANCE-LEVEL ENTRY POINTS BELONG TO AN INSTANCE, so with two instances
+   alive the table would end up holding one instance's thunks while the other
+   instance's handle is passed to them.
 
    The state machine already grants exactly one owner, so the enumeration asks
    for the same grant. A bring-up that arrives while it holds ST_STARTING waits
@@ -1360,18 +1269,13 @@ void tagpu_vk_enum_start(void)
     static LONG once;
     /* THE OFF FILE CANNOT CLAIM TO HAVE STOPPED A LANE IT DID NOT STOP. With
        the present owned, `read_lever` arms the lane whatever this file says --
-       the renderer choice decides -- so the old unconditional line ("nothing in
-       this module runs") was simply false on that path, and a log that
-       misinforms is the same defect as one that says nothing. Its only real
-       effect there is the device list not being refreshed, which is worth its
-       own sentence rather than a wrong one. [FROM THE LANDING REVIEW,
-       2026-09-17.] */
+       the renderer choice decides -- so "nothing in this module runs" would be
+       false on that path, and a log that misinforms is the same defect as one
+       that says nothing. */
     if (exists(OFF_FILE)) {
         if (s_ownWin) {
-            /* AND THE MESSAGE SAYS WHAT ACTUALLY HAPPENS. The first version of
-               this fix said "only the device list is left unrefreshed", and the
-               very next log line was the enumeration running -- a false line
-               written while fixing a false line. Nothing stands down here: the
+            /* AND THE MESSAGE SAYS WHAT ACTUALLY HAPPENS. Nothing stands down
+               here, the enumeration included: the
                GPU row needs the list whatever the OFF file says, because under
                this backend the row is the only way to choose a device. */
             vklog("tagpu_vk.off is present and IGNORED - `renderer=vulkan` "
@@ -1395,7 +1299,7 @@ void tagpu_vk_enum_start(void)
     }
 }
 
-/* ---- G19a: the bring-up -------------------------------------------------- */
+/* ---- the bring-up -------------------------------------------------------- */
 
 /* The swapchain, its images and its per-image objects. Called by the bring-up
    worker (ST_STARTING, the worker owns `s_vk`) and by the render thread on a
@@ -1428,8 +1332,7 @@ static int vk_swapchain(int w, int h)
             s_vk.fmt = fmts[i].format; s_vk.cspace = fmts[i].colorSpace; break;
         }
 
-    /* PARITY WITH THE GL LANE, WHICH SETS wglSwapIntervalEXT(vsync ? 1 : 0).
-       FIFO is the only mode the specification guarantees and is what vsync
+    /* PARITY WITH GL's wglSwapIntervalEXT(vsync ? 1 : 0). FIFO is the only mode the specification guarantees and is what vsync
        means; IMMEDIATE is the unlocked one. MAILBOX IS NOT OFFERED on the
        reference setup's 4070 under wine (roadmap, Phase G), so nothing here may
        be designed around triple buffering -- `fps_limiter.c` and `maxfps`
@@ -1464,11 +1367,9 @@ static int vk_swapchain(int w, int h)
         s_vk.ext.height = (uint32_t)(h > 0 ? h : 480);
     }
     /* A minimised or hidden window reports a zero extent and a swapchain cannot
-       be made on one. THAT IS A WAIT, NOT A FAILURE -- the comment used to say
-       "the caller retries" and no caller did: every one of them treated 0 as
-       terminal and put the lane into ST_FAILED for the session, so minimising
-       the game once with the lever on would have killed it until the lever was
-       toggled. -1 says "come back later". [FROM REVIEW 2026-09-15.] */
+       be made on one. THAT IS A WAIT, NOT A FAILURE: every caller treats 0 as
+       terminal and puts the lane into ST_FAILED for the session, so returning
+       0 here would let one minimise kill the lane. -1 says "come back later". */
     if (!s_vk.ext.width || !s_vk.ext.height) return -1;
     if (s_vk.ext.width  < caps.minImageExtent.width)  s_vk.ext.width  = caps.minImageExtent.width;
     if (s_vk.ext.height < caps.minImageExtent.height) s_vk.ext.height = caps.minImageExtent.height;
@@ -1482,20 +1383,19 @@ static int vk_swapchain(int w, int h)
     swci.imageExtent = s_vk.ext;
     swci.imageArrayLayers = 1;
     /* ASK THE SURFACE, DO NOT ASSUME. COLOR_ATTACHMENT is guaranteed on every
-       surface; TRANSFER_DST is not, and G19a's clear needs it -- a driver
+       surface; TRANSFER_DST is not, and the clear needs it -- a driver
        without it would fail swapchain creation with a result that says nothing
        about why. The reference setup reports 0x9F, so this has never fired;
        it is here so that the day it does, the log names it. Same for the
        composite mode: OPAQUE is what we want and INHERIT is the fallback every
-       surface that lacks it offers. [FROM REVIEW 2026-09-15.] */
+       surface that lacks it offers. */
     swci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     /* TRANSFER_SRC IS FOR THE CAPTURE, AND ASKING FOR IT IS NOT OPTIONAL.
-       [FROM REVIEW 2026-09-15.] `tagpu_vk_shot.c` copies a presented image into
+       `tagpu_vk_shot.c` copies a presented image into
        a host buffer, and `vkCmdCopyImageToBuffer` requires the source image to
        have been CREATED with this usage — it is not something a layout
-       transition confers. It was missing, the reference ICD did it anyway, no
-       validation layer was running to say otherwise, and G19d's whole 0-px
-       result therefore rested on undefined behaviour. The lane does not need
+       transition confers; an ICD that copies without it anyway is undefined
+       behaviour that no validation layer running says. The lane does not need
        it, so a surface that refuses it loses the CAPTURE and keeps the lane. */
     s_vk.cansrc = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ? 1 : 0;
     if (s_vk.cansrc) swci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -1547,7 +1447,7 @@ static int vk_swapchain(int w, int h)
        bounds what the implementation returns, and clamping the count would
        leave `vkAcquireNextImageKHR` free to hand back an index past the end of
        our per-image arrays -- a frame dropped every time, with an acquire
-       semaphore left signalled behind it. [FROM REVIEW 2026-09-15.] */
+       semaphore left signalled behind it. */
     s_vk.nimg = 0;
     if (vkGetSwapchainImagesKHR(s_vk.dev, s_vk.sc, &s_vk.nimg, NULL) != VK_SUCCESS ||
         !s_vk.nimg) {
@@ -1574,11 +1474,11 @@ static int vk_swapchain(int w, int h)
 
      * it takes the image from TRANSFER_DST_OPTIMAL -- which is what
        `vkCmdClearColorImage` left it in -- to COLOR_ATTACHMENT_OPTIMAL, and
-     * it leaves it in PRESENT_SRC_KHR, which is the transition `vk_present`
-       used to do by hand.
+     * it leaves it in PRESENT_SRC_KHR, so `vk_present` does no transition by
+       hand.
 
    `loadOp` is LOAD and not CLEAR because the clear has already happened: the
-   colour is the lever's and G19a's `vkCmdClearColorImage` is what applies it.
+   colour is the lever's and `vkCmdClearColorImage` is what applies it.
    The external dependency is what orders that transfer write before the first
    colour write, and it is not optional -- without it the layout transition the
    render pass performs is unordered against the clear.
@@ -1659,7 +1559,7 @@ static int vk_renderpass(void)
     at[1].samples = VK_SAMPLE_COUNT_1_BIT;
     at[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    /* CLEARED, NOT DONT_CARE, since the unit pass grew a stencil-masked
+    /* CLEARED, NOT DONT_CARE, because the unit pass draws a stencil-masked
        shadow: the mask is written and cleared within one unit's pair of draws,
        so every frame is meant to begin at 0 and the load op is what guarantees
        it. Nothing reads the plane after the pass, so the STORE stays
@@ -1770,15 +1670,13 @@ static int vk_depth_image(uint32_t i)
     ivi.image = s_vk.dimg[i];
     ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     ivi.format = s_vk.dfmt;
-    /* THE STENCIL ASPECT COMES WITH THE FORMAT, and this line used to leave it
-       out with a comment saying a view carrying both "cannot be used as a plain
-       depth attachment on every driver". The opposite is the rule:
-       tagpu_vk_world.c's own attachment names both aspects for exactly this
-       reason -- "a view of them must name it, or the framebuffer is refused" --
-       and the GL original of this attachment is GL_DEPTH24_STENCIL8, whose
-       stencil plane tagpu_native.c clears with the depth. It was true that
-       nothing here tested stencil; the unit pass's Classic hard shadow does,
-       and it needs the plane on whichever target it lands in. */
+    /* THE STENCIL ASPECT COMES WITH THE FORMAT: tagpu_vk_world.c's own
+       attachment names both aspects for the same reason -- "a view of them
+       must name it, or the framebuffer is refused" -- and the GL original of
+       this attachment is GL_DEPTH24_STENCIL8, whose stencil plane
+       tagpu_native.c clears with the depth. The unit pass's Classic hard
+       shadow tests stencil, and it needs the plane on whichever target it
+       lands in. */
     ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT |
                                       (vk_depth_has_stencil(s_vk.dfmt)
                                            ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
@@ -1791,7 +1689,7 @@ static int vk_depth_image(uint32_t i)
 }
 
 /* The per-image sync and command objects. Sized by the swapchain, so they are
-   built after it and torn down with it -- and since G19d the image views and
+   built after it and torn down with it -- and the image views and
    framebuffers a pass draws into are among them. */
 static int vk_perimage(void)
 {
@@ -1810,7 +1708,7 @@ static int vk_perimage(void)
     if (vkAllocateCommandBuffers(s_vk.dev, &cbai, s_vk.cmd) != VK_SUCCESS) {
         vklog("command buffers"); return 0;
     }
-    /* ---- tagpu_ftime's timestamps (G19f landing 6) ----------------------
+    /* ---- tagpu_ftime's timestamps ----------------------------------------
        TWO CONDITIONS, AND NEITHER IS "the device has a clock". `timestampPeriod`
        is nanoseconds per tick and is 0 on a device that cannot do it at all;
        `timestampValidBits` is per QUEUE FAMILY and can be 0 on the very family
@@ -1906,13 +1804,12 @@ static void vk_perimage_free(void)
         s_vk.tsPend[i] = 0;
     }
     /* THE TIMESTAMP POOL IS PER-IMAGE TOO, and leaving it out of this function
-       leaked one per swapchain rebuild for the life of the device -- a window
+       would leak one per swapchain rebuild for the life of the device -- a window
        the player drags rebuilds often, and `vk_resize` is exactly
        `vk_perimage_free(); vk_swapchain(); vk_perimage();`, so `vk_perimage`
        would overwrite a live handle every time. Nulled as well as destroyed:
        the write path gates on `tsPool` alone, so a stale handle left behind by
-       an early return in `vk_perimage` would be written into.
-       [FOUND 2026-09-16, the landing-6 review.] */
+       an early return in `vk_perimage` would be written into. */
     if (s_vk.tsPool) { vkDestroyQueryPool(s_vk.dev, s_vk.tsPool, NULL); s_vk.tsPool = VK_NULL_HANDLE; }
     s_vk.tsPeriod = 0.0;
 }
@@ -1927,15 +1824,12 @@ static void vk_down(void)
            correctness depends on it rather than on the object's own ownership. */
         int idle = !vkDeviceWaitIdle || vkDeviceWaitIdle(s_vk.dev) == VK_SUCCESS;
         if (!idle) vklog("vkDeviceWaitIdle refused on the way down");
-        /* THE FRAME-TIME RING GOES WITH THE LANE. `tagpu_ftime.h` says the seam
-           calls this "so a figure from a lane that no longer exists is not
-           averaged into one that does", and until the landing-6 review found it
-           the function had NO caller at all -- a documented invariant that was
-           never implemented. The shell<->game switch brings the lane down and
-           back up inside one process (145-173 ms, landing 5), possibly at
-           another resolution, so the old lane's samples would have been
-           averaged into the new one's percentiles.
-           [FOUND 2026-09-16, the landing-6 review.] */
+        /* THE FRAME-TIME RING GOES WITH THE LANE, "so a figure from a lane
+           that no longer exists is not averaged into one that does"
+           (`tagpu_ftime.h`). The shell<->game switch brings the lane down and
+           back up inside one process (145-173 ms), possibly at another
+           resolution, so the old lane's samples would otherwise be averaged
+           into the new one's percentiles. */
         tagpu_ftime_vk_reset();
         /* THE PASSES GO FIRST, AFTER THE WAIT AND BEFORE ANYTHING THEY MIGHT
            BE HOLDING. A pass owns pipelines, descriptors, buffers and images of
@@ -2013,8 +1907,8 @@ static int pick_device(VkPhysicalDevice* pds, uint32_t n, uint32_t* qfam_out, ch
             chosen = (int)i; qfam = (uint32_t)presentable;
         }
         /* the fallback is the first presentable device, upgraded the moment a
-           DISCRETE_GPU appears -- which is the G19b exit's "the default lands
-           on DISCRETE_GPU when one exists" */
+           DISCRETE_GPU appears, so the default lands on DISCRETE_GPU when one
+           exists */
         if (fallback < 0) { fallback = (int)i; fbqfam = (uint32_t)presentable; }
         else {
             VkPhysicalDeviceProperties fp;
@@ -2070,15 +1964,13 @@ static DWORD WINAPI up_worker(LPVOID arg)
         sci.hwnd = s_vk.hwnd;
         r = vkCreateWin32SurfaceKHR(s_vk.inst, &sci, NULL, &s_vk.surf);
         if (r != VK_SUCCESS) {
-            /* NAMED RATHER THAN SWALLOWED. There is one window now and it is
-               the game's, so a refusal here is a surface on the game window
+            /* NAMED RATHER THAN SWALLOWED. There is one window and it is the
+               game's, so a refusal here is a surface on the game window
                being refused -- measured to work on wine 9.0 and Proton 11
                (roadmap §G19a), which makes a driver that refuses it new
                information. The backend then falls back to GDI, which route F
                measured as still reaching the screen after a surface has been
-               attempted here. (Until landing 4d-1 this also named the other
-               case, a surface on a window of ours, which was the case the
-               phase's out-of-process pivot existed for.) */
+               attempted here. */
             vklog("vkCreateWin32SurfaceKHR on the game window: %s (%d) - the "
                   "lane stays down", res_name(r), (int)r);
             goto fail;
@@ -2123,26 +2015,24 @@ static DWORD WINAPI up_worker(LPVOID arg)
            disagree with the GL twin that is its oracle (tools/spirv-gen.py's
            header). So the flip is pipeline state, and this is the state.
 
-           NOT EVERY PORTED SHADER, which is what this said until landing 5b.
-           Only `gui`'s composite, `fps` and `scaffold` write that convention.
-           The world passes write the engine's screen-space y, which grows
-           DOWNWARD, so clip -1 is already the game frame's top row and a flip
-           would turn them over twice -- which is exactly what it did, for eight
-           landings. tagpu_vk_pass.h's `flipok` carries the table.
+           NOT EVERY PORTED SHADER. Only `gui`'s composite, `fps` and
+           `scaffold` write that convention. The world passes write the
+           engine's screen-space y, which grows DOWNWARD, so clip -1 is already
+           the game frame's top row and a flip would turn them over twice.
+           tagpu_vk_pass.h's `flipok` carries the table.
 
            The instance asks for Vulkan 1.0, where this is an extension rather
            than core; a 1.1+ driver still advertises it to a 1.0 application,
            and the reference setup's 4070 lists 247 device extensions. Asked for
            rather than assumed all the same: a device without it keeps the lane
            and loses the passes, which say so. */
-        /* THE COUNT IS ASKED FOR AND THE LIST IS ALLOCATED, and both halves are
-           the review's. [FROM REVIEW 2026-09-15.] The first version read into a
-           512-entry array on the stack -- 130 KB on a worker thread, and worse,
-           it accepted only `VK_SUCCESS`: a driver with more than 512 extensions
-           answers `VK_INCOMPLETE` with a perfectly good partial list, and the
-           lane would then have reported that maintenance1 "is not offered" on a
-           device that offers it, and refused every ported pass for the session.
-           `VK_INCOMPLETE` is an answer, not an error. */
+        /* THE COUNT IS ASKED FOR AND THE LIST IS ALLOCATED. A fixed array on
+           the stack is 130 KB on a worker thread at 512 entries, and a driver
+           with more extensions than it holds answers `VK_INCOMPLETE` with a
+           perfectly good partial list -- which, refused, would report that
+           maintenance1 "is not offered" on a device that offers it, and refuse
+           every ported pass for the session. `VK_INCOMPLETE` is an answer, not
+           an error. */
         if (vkEnumerateDeviceExtensionProperties) {
             uint32_t ne = 0, k;
             VkResult er = vkEnumerateDeviceExtensionProperties(s_vk.pd, NULL, &ne, NULL);
@@ -2158,7 +2048,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
                            a name is not enumerated twice; an ICD or layer that
                            does it anyway would write one past this array, and a
                            bound that costs one comparison is cheaper than
-                           trusting that. [G19e effects review, 2026-09-15.] */
+                           trusting that. */
                         if (ndext >= (uint32_t)(sizeof dexts / sizeof dexts[0])) break;
                         if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
                             dexts[ndext++] = "VK_KHR_maintenance1";
@@ -2191,9 +2081,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
                                device where the feature is off -- undefined
                                behaviour rather than an error, and in practice
                                the default line mode, which is the four-pixel
-                               superset G19e added this for. So: query, and on
-                               no query, no lines.
-                               [G19e EFFECTS REVIEW, 2026-09-15, both reviewers.] */
+                               superset this exists to avoid. So: query, and on
+                               no query, no lines. */
                             PFN_vkGetPhysicalDeviceFeatures2KHR gpdf2 =
                                 (PFN_vkGetPhysicalDeviceFeatures2KHR)
                                     s_gipa(s_vk.inst, "vkGetPhysicalDeviceFeatures2KHR");
@@ -2231,7 +2120,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
                            tagpu_vk_feat.c's header says this extension is the
                            answer only if a shader is ever found writing a z
                            below 0.
-                           G19e's SHADOW pass is that shader. Its orthographic
+                           The SHADOW pass is that shader. Its orthographic
                            light matrix is built to fill [-1, 1] (tagpu_shadow.c
                            `mrow`), so under Vulkan's own convention the whole
                            near half of every caster would be clipped away and
@@ -2316,14 +2205,14 @@ static DWORD WINAPI up_worker(LPVOID arg)
                anisotropy for the same reason and is likewise NOT on the retry
                ladder below -- the ladder drops EXTENSIONS, and this is asked
                for only when the device has just said it has it.
-               WHY THE LANE WANTS IT: since 4c-2 the world is drawn into a
-               target `ss` times the game resolution, and the GL twin calls
+               WHY THE LANE WANTS IT: the world is drawn into a target `ss`
+               times the game resolution, and the GL twin calls
                `glLineWidth(ss)` so a line one game pixel wide is `ss` pixels
                there. Without this the ported passes can only draw a 1.0 line,
                which is `ss` times too thin -- so tagpu_vk_fx.c and
-               tagpu_vk_mark.c refused the whole pass instead, and on the
-               shipped default (`ss` = 2) the effects pass dropped every frame
-               that had a laser in it. [The vulkan-only plan, landing 4c-2.] */
+               tagpu_vk_mark.c refuse the whole pass instead, and on the
+               shipped default (`ss` = 2) the effects pass would drop every
+               frame that had a laser in it. */
             if (have.wideLines) {
                 VkPhysicalDeviceProperties dp;
                 feat.wideLines = VK_TRUE;
@@ -2345,7 +2234,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
            the device actually has was settled above, by asking it; this only
            turns the one we want on. The retry below is a fallback, NOT the test
            -- a vkCreateDevice that succeeds proves nothing about a pNext struct
-           an ICD may have ignored. [Corrected by the G19e effects review.] */
+           an ICD may have ignored. */
         if (s_vk.lineok) {
             lrf.bresenhamLines = VK_TRUE;
             lrf.pNext = (void*)dci.pNext;
@@ -2467,10 +2356,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.log = passlog;
 
     va_log("with Vulkan up");
-    /* ONE HANDLE, NOT TWO. It used to print "our window %p over %p" because
-       there were two -- a popup of ours over the game window -- and after
-       landing 4d-1 both were the same handle and the line read "X over X" with
-       nothing to say why. There is one window and it is the game's. */
+    /* ONE HANDLE: there is one window and it is the game's. */
     vklog("up in %lu ms on \"%s\" (row %d), the game window %p, %ux%u, vsync %d "
           "- the surface is on the game window and there is no GL lane",
           GetTickCount() - t0, s_vk.devName, s_vk.devIndex, (void*)s_vk.hwnd,
@@ -2478,12 +2364,12 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
     InterlockedExchange(&s_activeIndex, s_vk.devIndex);
     /* THE PUBLISH, AND IT IS A COMPARE-EXCHANGE RATHER THAN A STORE.
-       [FROM REVIEW 2026-09-15.] Everything above is written before it and the
+       Everything above is written before it and the
        interlocked operation is a full barrier, so a render thread that reads
        ST_READY sees all of it. It has to be conditional on ST_STARTING because
        `tagpu_vk_render_stop` may have moved the lane to ST_ZOMBIE while we
-       worked -- an unconditional store used to stamp ST_READY over that and
-       hand the render thread objects the code had already declared abandoned.
+       worked -- an unconditional store would stamp ST_READY over that and hand
+       the render thread objects the code had already declared abandoned.
        After a successful publish the worker touches nothing. */
     if (InterlockedCompareExchange(&s_state, ST_READY, ST_STARTING) == ST_STARTING)
         return 0;
@@ -2497,15 +2383,14 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
 fail:
     /* Everything this built goes back, on the thread that is still its sole
-       owner. Before landing 4d-1 a window of ours went with it and the ORDER was
-       the delicate part; there is no window now, so this is just the release. */
+       owner. */
     vk_down();
     if (InterlockedCompareExchange(&s_state, ST_FAILED, ST_STARTING) != ST_STARTING)
         lane_release();          /* zombied: hand the lane back instead */
     return 0;
 }
 
-/* ---- G19a: the per-frame present ----------------------------------------- */
+/* ---- the per-frame present ----------------------------------------------- */
 
 /* THE SEMAPHORE INDEXING, which is the one thing in this file that is easy to
    get quietly wrong. `semAcquire` and `fence` and the command buffer are
@@ -2515,11 +2400,9 @@ fail:
    a present is done with an image is `vkAcquireNextImageKHR` handing that image
    back -- so the release semaphore has to follow the image and not the frame.
    `nimg` frames in flight, one per swapchain image: the fence wait at the top
-   is what makes frame `n` wait for frame `n - nimg` and nothing sooner. (An
-   earlier comment here said "one frame in flight", which `fi = frame % nimg`
-   plainly is not.) Deepening this into a pass that paces itself is G19d's. */
+   is what makes frame `n` wait for frame `n - nimg` and nothing sooner. */
 /* THE WORLD'S FIVE PASSES, IN THE GL LANE'S OWN ORDER, INTO WHATEVER TARGET IS
-   OPEN. One copy called from two places since 4c-2: the offscreen world pass
+   OPEN. One copy called from two places: the offscreen world pass
    when there is a target, and the frame's own render pass when there is not.
 
    IT IS ONE FUNCTION BECAUSE THE ORDER IS THE FRAGILE PART. tagpu_native.c
@@ -2549,9 +2432,9 @@ static void world_records(VkCommandBuffer cb, uint32_t fi, uint32_t w, uint32_t 
     if (draw_fx)   tagpu_vk_fx_record(&s_pass, cb, fi, w, h);
     /* AND THE BUILD GHOSTS AFTER THEM, which is the same rule applied a second
        time: tagpu_native.c draws the units, then the effects, then ghost_pass.
-       Landing 6 first recorded the ghosts inside the body stage above, which
-       put them on the wrong side of an effect they overlap -- `over` is not
-       commutative and the difference is up to the ghost's own alpha share.
+       Recorded inside the body stage above, the ghosts would land on the wrong
+       side of an effect they overlap -- `over` is not commutative and the
+       difference is up to the ghost's own alpha share.
        Both calls or neither: the second is what ends the unit pass's frame. */
     if (draw_unit) tagpu_vk_unit_record_ghosts(&s_pass, cb, fi, w, h);
     if (draw_mark) tagpu_vk_mark_record(&s_pass, cb, fi, s_vk.rp, w, h);
@@ -2564,12 +2447,11 @@ static int vk_present(void)
     VkImageSubresourceRange rng = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-    /* THE ACQUIRE IS WAITED ON AT THE TRANSFER STAGE TOO, AND THAT IS A FIX.
-       [FOUND 2026-09-15 while adding the render pass below.] A semaphore wait
+    /* THE ACQUIRE IS WAITED ON AT THE TRANSFER STAGE TOO. A semaphore wait
        blocks the stages named here and every LATER one -- and the first thing
        this command buffer does to the image is `vkCmdClearColorImage`, which
        runs at TRANSFER and is not later than COLOR_ATTACHMENT_OUTPUT. So with
-       COLOR_ATTACHMENT_OUTPUT alone the clear was free to run before the
+       COLOR_ATTACHMENT_OUTPUT alone the clear is free to run before the
        acquire had actually handed the image over: a write to an image the
        presentation engine may still be reading, which is the silent kind of
        fault -- it does not throw, it tears a frame now and then on a driver
@@ -2583,7 +2465,7 @@ static int vk_present(void)
 
     /* A SECOND IS NOT A FRAME, AND IT IS NOT A HICCUP EITHER. A clear-to-colour
        that has not completed in a second means the device is wedged, so this is
-       fatal rather than a skipped frame -- returning 0 here used to leave the
+       fatal rather than a skipped frame -- returning 0 here would leave the
        caller presenting nothing, for ever, at one frame a second, in silence. */
     if (vkWaitForFences(s_vk.dev, 1, &s_vk.fence[fi], VK_TRUE, 1000000000ull) != VK_SUCCESS) {
         vklog("a frame fence did not signal within a second - the device is not answering");
@@ -2608,7 +2490,6 @@ static int vk_present(void)
     }
 
     /* THE TEARDOWN A PASS OWES, PAID WHERE IT IS LEGAL TO PAY IT.
-       [FROM THE G19e LANDING REVIEW, 2026-09-15 -- both reviewers, separately.]
        A pass that cannot get its per-slot resources mid-frame stops drawing and
        raises this flag INSTEAD of destroying anything, because at the moment it
        finds out, the fence wait above has proved one slot idle and nothing
@@ -2637,7 +2518,7 @@ static int vk_present(void)
         /* `_down_paid`, not `_down`: settling the debt is what tells the pass
            this teardown is ITS teardown, so the ST_REFUSED latch applies here
            and not to a `vk_down` or `vk_resize` that merely happened to run
-           first. [G19e RE-REVIEW, 2026-09-15.] */
+           first. */
         if (tagpu_vk_terr_down_owed())     tagpu_vk_terr_down_paid(&s_pass);
         if (tagpu_vk_feat_down_owed())     tagpu_vk_feat_down_paid(&s_pass);
         if (tagpu_vk_fx_down_owed())       tagpu_vk_fx_down_paid(&s_pass);
@@ -2655,12 +2536,10 @@ static int vk_present(void)
                               s_vk.semAcquire[fi], VK_NULL_HANDLE, &idx);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) return -1;   /* the caller rebuilds */
     if (r == VK_SUBOPTIMAL_KHR) s_vk.rebuild = 1;   /* usable; rebuild after */
-    /* EVERYTHING ELSE IS FATAL AND SAYS SO. [FROM REVIEW 2026-09-15, second
-       pass.] This used to `return 0` in silence, which is the same defect the
-       fence and the submit below were just declared fatal for: VK_TIMEOUT
-       burns the full second and comes back, DEVICE_LOST and SURFACE_LOST come
-       back for ever, and the lane presents nothing at one frame a second with
-       GL still swapping underneath and not a line in the log. */
+    /* EVERYTHING ELSE IS FATAL AND SAYS SO, for the reason the fence and the
+       submit below are: VK_TIMEOUT burns the full second and comes back,
+       DEVICE_LOST and SURFACE_LOST come back for ever, and a silent `return 0`
+       would present nothing at one frame a second and not a line in the log. */
     else if (r != VK_SUCCESS) {
         vklog("vkAcquireNextImageKHR: %s (%d) - down", res_name(r), (int)r);
         return -2;
@@ -2671,7 +2550,7 @@ static int vk_present(void)
        with nothing left to wait on it, and the next frame would hand the same
        signalled semaphore back to `vkAcquireNextImageKHR`, which the
        specification forbids. Tearing the lane down is the only exit that does
-       not carry that state forward. [FROM REVIEW 2026-09-15.] */
+       not carry that state forward. */
     if (idx >= s_vk.nimg) {
         vklog("the swapchain handed back image %u of %u - down", idx, s_vk.nimg);
         return -2;
@@ -2720,8 +2599,7 @@ static int vk_present(void)
     vkCmdClearColorImage(cb, s_vk.img[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &col, 1, &rng);
 
     /* THE PASSES, AND THE RENDER PASS RUNS WHETHER OR NOT ONE DRAWS. It is what
-       takes the image from TRANSFER_DST to PRESENT_SRC -- the transition this
-       used to do with a second barrier -- so skipping it on a frame with
+       takes the image from TRANSFER_DST to PRESENT_SRC, so skipping it on a frame with
        nothing to draw would present an image in the wrong layout.
 
        `prepare` is OUTSIDE it and `record` INSIDE, because a pass's texture
@@ -2773,52 +2651,45 @@ static int vk_present(void)
                This pass puts none there, so counting it would refuse every
                capture taken while Classic++ shadows are on -- which is exactly
                the configuration the shadow work is measured in. */
-            /* ---- AND `prepare` ORDER IS NOT `record` ORDER, since G19e's
-               sixth pass. Three of the hooks below run in an order the DATA
+            /* ---- AND `prepare` ORDER IS NOT `record` ORDER. Three of the hooks below run in an order the DATA
                forces, and the draws still happen in the GL lane's order inside
                the render pass further down. ---- */
 
             /* TA'S OWN SCREEN IS UPLOADED BEFORE ANYTHING OF OURS, because it
-               is what everything of ours is drawn OVER. On the GL lane the fork
-               does this itself before any pass runs (render_ogl.c's
-               `g_ogl.main_program`), which is why `tagpu_gui.off` still shows a
-               game there and showed a flat clear here.
-               [The vulkan-only plan, landing 4c-1.] */
+               is what everything of ours is drawn OVER. */
             /* THE WORLD TARGET IS BUILT FIRST OF ALL, and the order is a
                 contract rather than a preference. It is not a pass and depends
                 on none of them -- it reads the geometry tagpu_native.c
                 published from this frame's gather -- but the passes depend on
                 IT: any pass whose GL twin scales something by `ss` asks
                 `tagpu_vk_world_scale()` during its own `prepare`, and that
-                answer does not exist until this has run. It was last of
-                `prepare` when 4c-2 was written, which left the effects and
-                marker passes setting an `ss`-wide line from their hand-over
-                while the target might have refused and the world be going into
-                the swapchain image at 1:1. [FROM THE 4c-2 LANDING REVIEW.]
+                answer does not exist until this has run -- after them, the
+                effects and marker passes would set an `ss`-wide line from their
+                hand-over while the target might have refused and the world be
+                going into the swapchain image at 1:1.
                 It puts no pixel anywhere, so it is not counted in
                 `ndraw`/`nclaim` -- the shadow map's rule for its reason. 0 means
                 there is no target this frame and the world draws into the
-                swapchain image exactly as it did before 4c-2: a smaller
-                picture, never a wrong one. */
+                swapchain image at client resolution: a smaller picture, never
+                a wrong one. */
             draw_world = tagpu_vk_world_prepare(&s_pass, cb, fi, &tw, &th);
 
             /* THE REFERENCE IS FILLED HERE AND DRAWN NOWHERE. This uploads the
                bytes the GAME thread captured into this slot's R8 image -- the
                original software rasteriser's own output, kept as a texture so
                our passes can be checked against it. It is not a pass and it
-               puts no pixel anywhere: the composite it used to feed was deleted
-               with the rest of the engine compositing, so `ndraw` does not
-               count it and there is no `record` to call. Its accessor is
+               puts no pixel anywhere, so `ndraw` does not count it and there
+               is no `record` to call. Its accessor is
                `tagpu_vk_surf_engine_view`. */
             tagpu_vk_surf_prepare(&s_pass, cb, fi);
 
             /* THE SCAFFOLD'S UPLOAD IS FIRST OF OURS, though its DRAW is nearly last.
-               The G12a overlay is a texture the unit, hi-res and effects
+               The overlay is a texture the unit, hi-res and effects
                fragment shaders sample (`uScafOn`), so the pass that fills it
                has to have filled it before a consumer points a descriptor set
                at it -- and a consumer does that in its own `prepare`.
-               tagpu_vk_scaffold.h states the contract; its `record` is still
-               where it always was, over the world. */
+               tagpu_vk_scaffold.h states the contract; its `record` is over
+               the world. */
             draw_scaf = tagpu_vk_scaffold_prepare(&s_pass, cb, fi);
             ab_scaf = tagpu_vk_scaffold_ab_frame();
 
@@ -2831,7 +2702,7 @@ static int vk_present(void)
             /* AND THE REPLACEMENT MESHES' CASTERS, beside it and for the same
                reason: they are geometry the shadow map is about to draw, so
                they have to be on the device before it is. It draws nothing
-               here either. [Gate 3b.] */
+               here either. */
             tagpu_vk_hires_upload(&s_pass, cb, fi);
 
             tagpu_vk_shadow_prepare(&s_pass, cb, fi);
@@ -2854,25 +2725,21 @@ static int vk_present(void)
             draw_fx = tagpu_vk_fx_prepare(&s_pass, cb, fi);
             ab_fx = tagpu_vk_fx_ab_frame();
             /* THE MARKERS ARE THE FRAME'S TOP LAYER, above the world and below
-               the UI -- where tagpu_native.c draws them (landing 5). */
+               the UI -- where tagpu_native.c draws them. */
             draw_mark = tagpu_vk_mark_prepare(&s_pass, cb, fi);
             ab_mark = tagpu_vk_mark_ab_frame();
-            /* THE UI LAYER IS BACK, AND THE COMPOSITE IS NOT. The cut took
-               both halves of one quad -- the engine's replayed UI twin and our
-               own device-resolution sharp layer -- because `LAY_FS` sampled
-               TA's composed frame in the same fragment stage and the engine's
-               half could not be removed while ours stayed. The rebuild removes
-               the engine's half AT THE SOURCE instead: `uSurf` is not declared,
-               the descriptor set carries four images and none of them is TA's,
-               and this pass never calls `tagpu_vk_surf_engine_view`. What it
-               draws is the twin store it replayed from the op stream plus the
-               sharp layer, and both are ours.
+            /* THE UI LAYER, WITHOUT THE ENGINE'S COMPOSITE. The engine's half
+               is absent AT THE SOURCE: `uSurf` is not declared, the descriptor
+               set carries four images and none of them is TA's, and this pass
+               never calls `tagpu_vk_surf_engine_view`. What it draws is the
+               twin store it replayed from the op stream plus the sharp layer,
+               and both are ours.
 
                ITS REPLAY IS IN `prepare` AND ITS DRAW IS IN `record`, which is
                not a style choice: a twin is drawn into with its own render pass
                and render passes may not nest, so the whole op replay has to
                happen out here -- exactly as the shadow map records its map in
-               `prepare`. [G19f landing 1; restored by the UI rebuild.] */
+               `prepare`. */
             draw_gui = tagpu_vk_gui_prepare(&s_pass, cb, fi);
             ab_gui = tagpu_vk_gui_ab_frame();
             draw_fps = tagpu_vk_fps_prepare(&s_pass, cb, fi);
@@ -2904,9 +2771,9 @@ static int vk_present(void)
                 draw_gui + draw_fps;
         nclaim = ab_terr + ab_feat + ab_unit + ab_fx + ab_mark + ab_scaf + ab_gui + ab_fps;
         /* THE CLAIMED PASS'S FILE, out of the one list of them in this file
-           (`s_abFiles`, above). The row order is the order the nested ternary
-           this replaced tested in, so which pass wins a (refused) multi-claim
-           frame is unchanged -- and `tagpu_vk_ab_arm` reads the same list, so
+           (`s_abFiles`, above). The row order decides which pass wins a
+           (refused) multi-claim frame -- and `tagpu_vk_ab_arm` reads the same
+           list, so
            the name the capture is WRITTEN to and the name the arming UNLINKS
            cannot drift apart.
 
@@ -2918,8 +2785,7 @@ static int vk_present(void)
            returns early on an out-of-date acquire. An unlink here would
            therefore be reached on most frames and missed on exactly the frames
            where a stale capture is likeliest, which is a guarantee about timing
-           wearing the words of one about construction.
-           [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.] */
+           wearing the words of one about construction. */
         {
             const int abclaim[AB_N] = { ab_terr, ab_feat, ab_unit, ab_fx,
                                      ab_mark, ab_scaf, ab_gui, ab_fps };
@@ -2931,8 +2797,7 @@ static int vk_present(void)
                     /* THE FIRST FIVE ROWS ARE THE WORLD, and the row order is
                        the one thing this list is FOR -- it is the same array the
                        path came out of, so "which file" and "which target" can
-                       no more drift apart than the path and the unlink can.
-                       [The vulkan-only plan, landing 4c-3.] */
+                       no more drift apart than the path and the unlink can. */
                     abIsWorld = abi < 5;
                 }
         }
@@ -2945,8 +2810,8 @@ static int vk_present(void)
            rect into whatever target they get (`terr_scissor`'s `sx = w/uGame.x`
            yields GL's own `glScissor(vpL*ss, ...)` at `tw = gw*ss`) and their
            vertex shaders divide by `uGame` rather than by the target. The
-           offscreen render pass is format-compatible with `s_vk.rp`, so not one
-           of their pipelines moved. [The vulkan-only plan, landing 4c-2.] */
+           offscreen render pass is format-compatible with `s_vk.rp`, so the
+           same pipelines draw into either. */
         if (draw_world) {
             tagpu_vk_world_begin(&s_pass, cb, fi);
             world_records(cb, fi, tw, th,
@@ -2958,7 +2823,7 @@ static int vk_present(void)
             VkClearValue cv[2];
             memset(cv, 0, sizeof cv);
             /* cv[0] is never used -- the colour attachment's loadOp is LOAD and
-               G19a's vkCmdClearColorImage above is what applies the lever's
+               the vkCmdClearColorImage above is what applies the lever's
                colour -- but the array has to reach the index of the attachment
                that DOES clear, which is the depth one. cv[1] is 1.0, the value
                glClear(GL_DEPTH_BUFFER_BIT) uses on the GL side. */
@@ -2966,7 +2831,7 @@ static int vk_present(void)
             /* AND THE STENCIL PLANE WITH IT, so the unit pass's shadow mask
                starts every frame at 0 rather than at whatever the last one
                left. `glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)` is
-               what the GL twin's world FBO did. */
+               what the GL twin's world FBO does. */
             cv[1].depthStencil.stencil = 0;
             rbi.renderPass = s_vk.rp;
             rbi.framebuffer = s_vk.fb[idx];
@@ -2974,18 +2839,15 @@ static int vk_present(void)
             rbi.clearValueCount = s_vk.dfmt != VK_FORMAT_UNDEFINED ? 2 : 0;
             rbi.pClearValues = cv;
             vkCmdBeginRenderPass(cb, &rbi, VK_SUBPASS_CONTENTS_INLINE);
-            /* NOTHING OF THE ENGINE'S IS DRAWN HERE ANY MORE. TA's composed
-               frame used to be the bottom layer of this render pass; that
-               draw, its pipeline and its quad were deleted, and what is left
-               of `tagpu_vk_surf` is the upload alone -- the reference texture
-               the world passes can be checked against. The clear is now the
-               bottom of the frame and the world is the first thing on it. */
+            /* NOTHING OF THE ENGINE'S IS DRAWN HERE. `tagpu_vk_surf` is the
+               upload alone -- the reference texture the world passes can be
+               checked against. The clear is the bottom of the frame and the
+               world is the first thing on it. */
             /* THE WORLD. With a target it was drawn into it above and this is
                the one draw that puts it on the frame, over TA's own surface and
                under the UI -- which is exactly where tagpu_native.c's composite
                sits. Without one the five passes draw straight into the
-               swapchain image at client resolution, which is what this lane did
-               before 4c-2. Both arms call `world_records`, so the GL lane's
+               swapchain image at client resolution. Both arms call `world_records`, so the GL lane's
                ORDER is written down once and cannot drift between them. */
             if (draw_world)
                 tagpu_vk_world_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
@@ -2994,9 +2856,8 @@ static int vk_present(void)
                               draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
             /* THE UI GOES OVER THE WORLD AND UNDER THE READOUT, which is where
                the GL lane drew it: the readout has to sit above the side panel
-               and the dialogs or they hide it. The return is not kept -- it fed
-               `tagpu_cursown_publish`, and that module is deleted, because the
-               engine's own cursor blit reaches only the golden source now and
+               and the dialogs or they hide it. The return is not kept: the
+               engine's own cursor blit reaches only the golden source, and
                suppressing it would just put a hole in the reference. */
             if (draw_gui)
                 tagpu_vk_gui_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
@@ -3007,8 +2868,7 @@ static int vk_present(void)
             vkCmdEndRenderPass(cb);
         } else {
             /* No render pass: nothing can draw, so the clear is the frame and
-               the layout has to be moved by hand exactly as it was before
-               G19d. */
+               the layout has to be moved by hand. */
             b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -3022,7 +2882,7 @@ static int vk_present(void)
            frame, and it leaves the image in PRESENT_SRC so the present below is
            unaffected.
 
-           ONE PASS IN THE FRAME, OR NO CAPTURE. [G19e.] Each GL twin captures
+           ONE PASS IN THE FRAME, OR NO CAPTURE. Each GL twin captures
            its own half by blacking the frame, drawing ITSELF and reading back
            immediately -- so a GL half contains exactly one pass. This side is
            one frame with every armed pass drawn into it. With two A/B levers
@@ -3036,37 +2896,29 @@ static int vk_present(void)
            why a capture was NOT taken when they fire, but say nothing at all
            when the claim simply never arrived -- and a claim that never arrives
            is indistinguishable, from outside, from a pass that drew nothing.
-           This line separates the two, and it is the third time in this landing
-           that a periodic report of the CURRENT state settled in one run what a
-           one-shot latch had hidden. */
+           This line separates the two: a periodic report of the CURRENT state
+           settles in one run what a one-shot latch hides. */
         /* KEYED ON THE DRIVER'S FRAME, not the lane's own present counter, so
            this line can be lined up against the passes' -- two censuses on two
-           counters print on different frames and cannot be compared, which cost
-           this landing a round. */
+           counters print on different frames and cannot be compared. */
         if ((s_pass.frame % 300u) == 0u)
             vklog("census: frame %u: %d pass(es) drew and %d claimed (terr=%d "
                   "feat=%d unit=%d fx=%d mark=%d scaf=%d gui=%d fps=%d)",
                   (unsigned)s_pass.frame, ndraw, nclaim, draw_terr, draw_feat,
                   draw_unit, draw_fx, draw_mark, draw_scaf, draw_gui, draw_fps);
         /* WHICH IMAGE THE CAPTURE READS, AND IT IS NOT ALWAYS THE FRAME.
-           [The vulkan-only plan, landing 4c-3.]
 
-           A WORLD PASS'S GL HALF IS THE WORLD FBO, NOT THE WINDOW. tagpu_native.c
-           binds it and sets `glViewport(0, 0, gw*ss, gh*ss)`; tagpu_abshot.c
-           blacks it, lets the pass draw and reads THAT viewport back. So the GL
-           half is `gw*ss` by `gh*ss` -- the game's own resolution times the
-           supersample factor -- and it has never been the window's client rect.
-           Reading the swapchain image for the Vulkan half therefore produced two
-           files of the same size only at `ss = 1` with no letterbox, and `ss` is
-           2 unless `tagpu_ss.off` is there. Four passes answered that by
-           REFUSING their own A/B whenever `ss != 1`; posedraw did not, and wrote
-           a pair tools/vk-ab.py then refused by size.
+           A WORLD PASS'S GL HALF IS THE WORLD FBO, NOT THE WINDOW: `gw*ss` by
+           `gh*ss` -- the game's own resolution times the supersample factor --
+           and never the window's client rect. The swapchain image matches it
+           only at `ss = 1` with no letterbox, and `ss` is 2 unless
+           `tagpu_ss.off` is there.
 
-           Landing 4c-2 gave this lane a `gw*ss, gh*ss` image holding the world
+           This lane's world target is a `gw*ss, gh*ss` image holding the world
            alone over a transparent clear, which is what GL's FBO is. Reading it
            makes the two halves the same size and the same kind of picture at
-           every `ss`, so a world A/B runs on the SHIPPED configuration for the
-           first time. It also makes the capture independent of everything the
+           every `ss`, so a world A/B runs on the SHIPPED configuration. It also
+           makes the capture independent of everything the
            swapchain image carries -- TA's own frame included -- which is the
            divergence the `nclaim == 0` line above exists for.
 
@@ -3086,8 +2938,7 @@ static int vk_present(void)
                and `s_pass.fmt` is copied from `s_vk.fmt` once at bring-up while
                `vk_resize` re-picks `s_vk.fmt` and refreshes only `s_pass.slots`.
                Taking it from the module that built the image makes the pairing
-               true by construction instead of by the two staying in step.
-               [FROM THE 4c-3 LANDING REVIEW.] */
+               true by construction instead of by the two staying in step. */
             if (abIsWorld && tagpu_vk_world_shot(fi, &abimg, &abw, &abh, &abfmt)) {
                 /* The offscreen pass's `finalLayout`, and `tagpu_vk_shot_record`
                    puts it back -- which costs nothing, because that pass declares
@@ -3134,8 +2985,7 @@ static int vk_present(void)
     /* A FAILED SUBMIT IS FATAL, because the fence was reset a few lines above
        and nothing will ever signal it again: `s_vk.frame` does not advance on
        an early return, so `fi` would stay on that fence and every later frame
-       would burn the full one-second wait. Silently, at one frame a second,
-       with GL still swapping underneath. [FROM REVIEW 2026-09-15.] */
+       would burn the full one-second wait. Silently, at one frame a second. */
     if (vkQueueSubmit(s_vk.queue, 1, &si, s_vk.fence[fi]) != VK_SUCCESS) {
         vklog("vkQueueSubmit refused the frame - down");
         return -2;
@@ -3207,12 +3057,11 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
 
     /* THIS FRAME'S NUMBER, BEFORE ANY PASS CAN ASK FOR IT. Every `prepare`
        below reaches a GL module's hand-over through it, and refuses one that
-       was published on a different frame. [G19e RE-REVIEW, 2026-09-15.] */
+       was published on a different frame. */
     s_pass.frame = frame_counter;
 
     /* THE LEVER FIRST AND CHEAPLY. With `tagpu_vk.on` absent this returns 0
-       here, on a cached answer refreshed every 250 ms, so the GL lane's frame
-       is what it was before this file existed. */
+       here, on a cached answer refreshed every 250 ms. */
     if (s_armed < 0 || (DWORD)(now - s_lastPoll) >= POLL_MS) { s_lastPoll = now; read_lever(); }
 
     /* THE DISARMED FRAME COSTS A PLAIN LOAD. `lane_state()` is a `lock cmpxchg`
@@ -3224,17 +3073,17 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
     st = lane_state();
 
     /* THE WORKER'S HANDLE IS REAPED WHEREVER IT FINISHES, not only on the way
-       into ST_READY. A lever cleared while a bring-up was still running used to
-       leave the handle open for the session: the disarm branch below returns
-       before any close, and the state never passes through ST_READY again. Any
-       state but ST_STARTING means the worker has published and exited. */
+       into ST_READY: a lever cleared while a bring-up is still running reaches
+       the disarm branch below, which returns before any close, and the state
+       never passes through ST_READY again. Any state but ST_STARTING means the
+       worker has published and exited. */
     if (st != ST_STARTING && s_worker) { CloseHandle(s_worker); s_worker = NULL; }
 
     if (!s_armed) {
         /* Disarmed: give the objects back, and let a FAILED lane retry the next
-           time the player arms it rather than once per launch. There is no
-           window to take down with them since landing 4d-1 -- the surface was on
-           the game's own window, which is not ours to destroy. */
+           time the player arms it rather than once per launch. No window goes
+           with them -- the surface was on the game's own window, which is not
+           ours to destroy. */
         if (st == ST_READY || st == ST_FAILED) {
             if (st == ST_READY) { vk_down(); vklog("lever off - down"); }
             InterlockedExchange(&s_state, ST_OFF);
@@ -3253,12 +3102,8 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
            stop rather than a wait. */
         if (s_ownWin && s_ownGone) return 0;
         s_owner = hwnd;
-        /* THE CALLER'S WINDOW, AND NOTHING ELSE. Before landing 4d-1 this chose
-           between the game window and a popup of ours, and asked another thread
-           to make the popup if it did not exist yet -- a create posted to the
-           thread that pumps, then a frame's wait for it to arrive. With no
-           second backend there is nothing to separate and nothing to wait for:
-           `hwnd` is already known non-NULL two lines above. */
+        /* THE CALLER'S WINDOW, AND NOTHING ELSE: `hwnd` is already known
+           non-NULL two lines above. */
         win = hwnd;
         s_want.hwnd = win; s_want.w = w; s_want.h = h; s_want.vsync = vsync;
         s_choiceSeen = lane_gen();
@@ -3275,11 +3120,10 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
 
     case ST_FAILED:
         /* A FAILED LANE RETRIES WHEN THE PLAYER ASKS FOR A DIFFERENT GPU.
-           [FROM REVIEW 2026-09-15.] `s_choiceSeen` is latched in the ST_OFF
-           branch only, so a player whose chosen device would not come up used
-           to click every other row in the list and get nothing at all, for
-           ever, until they found the lever file. The click is exactly the
-           signal that the thing that failed is not what we would try now. */
+           `s_choiceSeen` is latched in the ST_OFF branch only, so without this
+           a player whose chosen device would not come up could click every
+           other row in the list and get nothing at all. The click is exactly
+           the signal that the thing that failed is not what we would try now. */
         if (lane_gen() != s_choiceSeen) {
             vklog("the GPU row changed after a failed bring-up - trying again");
             InterlockedCompareExchange(&s_state, ST_OFF, ST_FAILED);
@@ -3301,10 +3145,7 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
        under us (only the wndproc observer can see that -- `s_ownGone`), or the
        player picked another GPU. Each invalidates the surface or the device and
        neither is patchable in place; going back through the worker is what keeps
-       every bring-up off the render thread, not just the first.
-
-       THERE USED TO BE A FOURTH -- "our window went away" -- and it is not a
-       case when we have no window. Landing 4d-1 deleted the window. */
+       every bring-up off the render thread, not just the first. */
     if (hwnd != s_owner || s_ownGone || lane_gen() != s_choiceSeen) {
         vklog(hwnd != s_owner ? "the game window changed - rebuilding" :
               s_ownGone       ? "the game window was destroyed under us - down"
@@ -3314,14 +3155,13 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
         return 0;
     }
 
-    /* THE SWAPCHAIN IS REBUILT WHEN VULKAN SAYS SO, NOT WHEN WE GUESS. An
-       earlier version compared the caller's `w`/`h` against the swapchain's
-       extent and rebuilt when they differed -- and the two are not the same
-       number: `g_ddraw.render.width/height` is the RENDER TARGET's size, while
-       the extent follows OUR window, which is the game's CLIENT rect. Any
-       window the fork letterboxes (`--window WxH`, k != 1) makes them differ
-       permanently, and the swapchain would have been torn down and rebuilt on
-       every single frame for the rest of the session. `VK_ERROR_OUT_OF_DATE_KHR`
+    /* THE SWAPCHAIN IS REBUILT WHEN VULKAN SAYS SO, NOT WHEN WE GUESS. The
+       caller's `w`/`h` and the swapchain's extent are not the same number:
+       `g_ddraw.render.width/height` is the RENDER TARGET's size, while the
+       extent follows OUR window, which is the game's CLIENT rect. Any window
+       the fork letterboxes (`--window WxH`, k != 1) makes them differ
+       permanently, so comparing them would tear the swapchain down and rebuild
+       it on every single frame. `VK_ERROR_OUT_OF_DATE_KHR`
        and `VK_SUBOPTIMAL_KHR` are the surface telling us its extent moved, which
        is the same answer without the guess. `vsync` stays ours, because no
        amount of asking the surface reveals a present mode we chose. */
@@ -3354,21 +3194,19 @@ int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter)
     }
 }
 
-/* THERE IS NO WAIT HERE ANY MORE, and removing it removed the last place this
-   file could stall the game. [FROM REVIEW 2026-09-15.]
+/* THERE IS NO WAIT HERE, and this must never gain one: it would be a place
+   this file could stall the game.
 
-   It used to wait up to five seconds for a worker still in ST_STARTING. The
-   game thread waits INFINITE on the render thread across a mode change
-   (`dd.c`), and the render thread was waiting on the worker, so a mode change
-   that caught a bring-up in flight stalled the whole LOCKSTEP world for as long
-   as the bring-up had left -- measured at 371-451 ms routinely. Worse, the
-   window thread IS the game thread here (`g_ddraw.gui_thread_id`), so if
-   winevulkan ever reaches the window with an inter-thread send during surface
-   or swapchain creation the cycle game -> render -> worker -> window closes and
-   the timeout is the only thing that breaks it: load-bearing, which the file
-   claimed it was not.
+   The game thread waits INFINITE on the render thread across a mode change
+   (`dd.c`), so a render thread waiting on a worker still in ST_STARTING would
+   stall the whole LOCKSTEP world for as long as the bring-up had left --
+   measured at 371-451 ms routinely. Worse, the window thread IS the game
+   thread here (`g_ddraw.gui_thread_id`), so if winevulkan ever reaches the
+   window with an inter-thread send during surface or swapchain creation the
+   cycle game -> render -> worker -> window closes and only a timeout could
+   break it.
 
-   None of it is needed now that a worker cleans up after itself (`up_worker`'s
+   None of it is needed, because a worker cleans up after itself (`up_worker`'s
    publish, and `lane_release`). Marking the lane ST_ZOMBIE tells the worker it
    has been abandoned; it finishes at its own pace, puts back exactly what it
    built and hands the lane to ST_OFF. Nothing waits, nothing leaks, and the

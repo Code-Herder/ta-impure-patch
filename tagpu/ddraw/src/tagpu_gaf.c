@@ -1,8 +1,7 @@
-/* tagpu_gaf.c — GAF frame decoding and the shared GL shelf atlas.
+/* tagpu_gaf.c — GAF frame decoding and the shared shelf atlas.
 
-   Lifted out of tagpu_fx.c when the feature pass (G13a) needed the same two
-   pieces; the effects, particle and feature passes now share one decoder and
-   one atlas implementation, each with its own storage and lifetime.
+   The effects, particle and feature passes share one decoder and one atlas
+   implementation, each with its own storage and lifetime.
 
    RLE rows (TA's own): a u16 byte length, then codes — `b&1` skips `b>>1`
    texels, `b&2` repeats the next byte `(b>>2)+1` times, otherwise `(b>>2)+1`
@@ -15,11 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-/* `opengl_utils.h` was here until 11-5e-2b. This file named `glReadPixels`
-   through it and nothing else; with the restored twin's read-back gone it
-   names no GL type, constant or entry point at all. `tagpu_restoreglsl.h`
-   below is NOT GL -- it declares `TAGPU_RGLSL_FRAME` and
-   `tagpu_rglsl_tileable`, both of which this file still uses. */
+/* `tagpu_restoreglsl.h` below is NOT GL -- it declares `TAGPU_RGLSL_FRAME`
+   and `tagpu_rglsl_tileable`, both of which this file uses. */
 #include "tagpu_gaf.h"
 #include "tagpu_pal.h"
 #include "tagpu_restoreglsl.h"
@@ -34,18 +30,8 @@ static void glog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* THIS FILE NAMES NO GL ENTRY POINT AND MAKES NO GL CALL (11-5e-2b). It held
-   the last one: `glReadPixels`, typedef'd `PFN_READPIXELS` and resolved by
-   `getgl` -- `xwglGetProcAddress` first, then `GetModuleHandleA("opengl32.dll")`
-   -- behind a `fetch_gl` that ran once. Its only consumer was
-   `tagpu_gaf_atlas_mirror_rgb`, the restored twin's read-back, which went with
-   the last lane that published its texels. That `xwglGetProcAddress` was this
-   file's single remaining GL call site, so the file is GL-free now on the
-   narrow AND the wide count (`tools/gl-sites.py`).
-   [The mip-generation and float-parameter typedefs that stood here went in
-   11-5e-2 with `twin_mips`, and the GL_TEXTURE_MAX_LEVEL /
-   GL_TEXTURE_MAX_ANISOTROPY_EXT fallbacks and the TWIN_ANISO alias with the
-   `glTexParameter` calls that were their only users.] */
+/* THIS FILE NAMES NO GL ENTRY POINT AND MAKES NO GL CALL, on the narrow AND
+   the wide count (`tools/gl-sites.py`). */
 
 /* one scratch plane for every atlas: decoding happens only inside
    tagpu_gaf_atlas_get, on the render thread, and the bytes are consumed by
@@ -70,10 +56,7 @@ static int cell_up(const TAGPU_GAFATLAS* a, int v)
    and is never restored at all.
    ONE BUILDER ON PURPOSE: the whole claim of the published list is that its
    frames are exactly the frames this atlas painted, so they are built here
-   rather than by a second piece of code that agrees today. (Until 11-5e-2
-   the second reader was the GL restorer's queue, which is what "shared" meant
-   here; the list is now the only one, and the rule is why it stays one
-   function.) */
+   rather than by a second piece of code that agrees today. */
 static int restore_frame_of(const TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e,
                             TAGPU_RGLSL_FRAME* f)
 {
@@ -96,23 +79,21 @@ static int rlist_cap(const TAGPU_GAFATLAS* a)
     return c < 1024 ? 1024 : c;
 }
 
-/* ROOM FOR `need` FRAMES -- A PURE BOUNDS TEST SINCE 11-5e-2c, and that is the
-   point of it rather than a simplification. It used to `realloc` on demand,
-   which made `a->rlist`'s ADDRESS mutable while the list was live, and the
-   consumer holds that address as a raw pointer across the rest of the frame.
-   The arm now allocates `rlist_cap(a)` frames in one go, so this can only ever
-   compare, and the address is fixed for the life of the atlas. THAT is what
-   makes the feed safe to restore: not a check before the write, but an
-   allocation that cannot move under a reader.
+/* ROOM FOR `need` FRAMES -- A PURE BOUNDS TEST, and that is the point of it
+   rather than a simplification. The consumer holds `a->rlist`'s address as a
+   raw pointer across the rest of the frame, so the address must not move
+   while the list is live. The arm allocates `rlist_cap(a)` frames in one go,
+   so this can only ever compare, and the address is fixed for the life of the
+   atlas. THAT is what makes the feed safe to restore: not a check before the
+   write, but an allocation that cannot move under a reader.
 
    The cost is stated rather than hidden: `rlist_cap` is `max * 4` frames at
    sizeof(TAGPU_RGLSL_FRAME) -- 360 448 bytes for the unit and effects atlases
-   (max 2048) and 720 896 for the feature atlas (max 4096) -- against a
-   read-back mirror this same file declined to free at 16 MB.
+   (max 2048) and 720 896 for the feature atlas (max 4096).
 
    0 means the caller has a list it must NOT write to: either the arm never
    ran, or `need` is past the bound. Both are the caller's to handle, and
-   neither can now leave the list in a half-grown state, because there is no
+   neither can leave the list in a half-grown state, because there is no
    growing. */
 static int rlist_room(const TAGPU_GAFATLAS* a, int need)
 {
@@ -155,32 +136,27 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
     }
 }
 
-/* ONE PAINTED ENTRY ONTO THE PUBLISHED LIST (11-5e-2c). Called from
-   `atlas_paint`, which is the only place an entry's texels become correct, so
-   "appended here" and "painted" are the same event and cannot drift apart.
+/* ONE PAINTED ENTRY ONTO THE PUBLISHED LIST. Called from `atlas_paint`,
+   which is the only place an entry's texels become correct, so "appended
+   here" and "painted" are the same event and cannot drift apart.
 
-   THE ADDRESS CANNOT MOVE UNDER A READER, which is what the bound bought:
+   THE ADDRESS CANNOT MOVE UNDER A READER, which is what the bound is for:
    `rlist_room` is a comparison, the arm's `malloc` is the only allocation, and
    there is no `realloc` in this file at all. A consumer holding the pointer
    across the frame is holding a fixed address.
 
-   THE ONE `free` IS NAMED RATHER THAN DENIED. This comment said "no `realloc`
-   and no `free` in this file" until the landing review caught it: the same
-   landing added `free(a->rlist)` to `tagpu_gaf_atlas_free_buffers` (`:638`),
-   forty lines after claiming it did not exist. What is true is narrower and
-   has to be stated as such -- there is no `realloc`, and the single `free` is
-   the atlas's own teardown, which clears `rlist`, `rlistWant` and the counts
-   together so no later append can reach a stale pointer.
+   THE ONE `free` is the atlas's own teardown, `tagpu_gaf_atlas_free_buffers`,
+   which clears `rlist`, `rlistWant` and the counts together so no later
+   append can reach a stale pointer.
 
    AND THE RESIDUAL, because it is a caller's property and not this file's.
    That `free` does NOT bound a consumer that captured the pointer before it
    ran. It is unreachable for an armed atlas today only because
    `tagpu_gaf_atlas_free_buffers` has exactly one call site --
-   `tagpu_gui_surf.c:643`, the GUI atlas, which never arms a list (it is not
-   one of `tagpu_gaf_atlas_restore_vk`'s three callers). That is an argument
-   about the caller, which is the shape this landing set out to replace, so it
-   is written down rather than left to be re-derived. A second caller on an
-   armed atlas re-opens the hazard.
+   `tagpu_gui_surf.c`, the GUI atlas, which never arms a list (it is not one
+   of `tagpu_gaf_atlas_restore_vk`'s three callers). That is an argument about
+   the caller, not a property of this file. A second caller on an armed atlas
+   re-opens the hazard.
 
    AND THE APPEND ITSELF CANNOT TEAR ONE. The frame is written at `[rlistN]`
    and only then is `rlistN` incremented, so a consumer that reads a stale
@@ -214,47 +190,18 @@ static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
     if (restore_frame_of(a, e, &a->rlist[a->rlistN])) a->rlistN++;
 }
 
-/* [`rgb_mirror_zeroed` and the thirteen lines that documented it went in
-   11-5e-2b part 2, with the read-back mirror they were about. The rule they
-   stated -- A CLEAR IS NOT A PAINT, so neither the twin's generation nor the
-   shelf can carry one, and a consumer keyed on either would miss it -- is the
-   reason `job_clear_dest` drops the LIST, and that function's own comment
-   below is where it now lives. This comment had already been reworded once,
-   in 11-5e-2, when the GL job it named went; the second time the subject
-   itself was gone. A block whose function is deleted does not become
-   documentation for the next function down.
-   [11-5e-2b part 2's review, finding 2.] */
-
 /* the job's destination back to unpainted, and the published list with it */
 static void job_clear_dest(TAGPU_GAFATLAS* a)
 {
-    /* THE PUBLISHED LIST GOES WHATEVER THE GL JOB IS, and that is deliberately
-       outside the early return below: the rects this atlas hands out have just
-       moved (a recycle, a repack), so a consumer's own destination is as wrong
-       as this twin is, whether or not a GL job exists to clear. The generation
-       is what tells it, and dropping the list is what stops it painting the
-       old layout over the new one. */
+    /* THE PUBLISHED LIST GOES: the rects this atlas hands out have just moved
+       (a recycle, a repack), so a consumer's own destination is wrong. The
+       generation is what tells it, and dropping the list is what stops it
+       painting the old layout over the new one. A CLEAR IS NOT A PAINT, so
+       neither the twin's generation nor the shelf can carry one, and a
+       consumer keyed on either would miss it. */
     rlist_reset(a, 0);
-    /* THE MIRROR THAT ALSO HAD TO BE ZEROED HERE IS GONE (11-5e-2b), and the
-       list is the whole of this function now. Until 11-5e-2 the zeroing sat
-       under `if (!a->job) return;` -- the GL restorer's job -- so a build with
-       no GL restorer cleared the published list and left the read-back mirror
-       holding the old layout's colours; 11-5e-2 unpinned it and 11-5e-2b
-       removed the mirror itself. The rule the function was written to state is
-       untouched: the rects this atlas hands out have just moved, so a
-       consumer's own destination is wrong whatever any GL object is doing. */
 }
 
-/* OUR OWN REDUCTION FIRST, glGenerateMipmap ONLY AS THE FALLBACK. The twin is
-   sampled GL_LINEAR_MIPMAP_LINEAR, so its levels 1.. are part of the picture a
-   second backend has to reproduce -- and gpu-status 2.45 measured that this
-   driver's glGenerateMipmap is an unweighted 2x2 box average with a rounding
-   rule no candidate matched exactly, every candidate landing within +/-1 per
-   RGB channel. A per-driver +/-1 cannot be pinned down by a note, so both lanes
-   do the reduction themselves (`tagpu_rglsl_mips`) and the levels are identical
-   by construction. The fallback is still here because it is what shipped before
-   landing 7e: it loses the cross-driver identity of the levels, not the levels.
-   [The Vulkan-only plan's landing 7e.] */
 /* ORDER IS THE WHOLE FIX. A shelf packer wastes the difference between the
    cell that opened a shelf and every shorter cell that then sat on it, and
    the feature atlas is fed in map order -- a 320-tall tree, then a row of
@@ -364,16 +311,13 @@ static int gaf_decode(const unsigned char* g, int w, int h, unsigned char* out, 
     const unsigned char* px;
     const unsigned char* p;
     int y;
-    /* THE HEADER IS BOUNDED BEFORE IT IS READ, and it was not: this function
-       took `ck`, `comp` and the pixel POINTER out of `g` on its first three
-       lines with only `px` checked afterwards, which is the same one-line
-       defect `frame_key` had and which cost a crash to find. Its own header
-       promises "0 if unreadable", so the check belongs here rather than in each
-       caller. No caller reaches it unsanitised today -- the UI publisher is
-       behind `frame_key`, the menu and the order overlay come through
-       `tagpu_gaf_seq_frame` -- so this is a BOUND that closes the contract, not
-       the lifetime argument, which stays the caller's.
-       [FOUND 2026-09-16, the landing-5 review.] */
+    /* THE HEADER IS BOUNDED BEFORE IT IS READ: `ck`, `comp` and the pixel
+       POINTER all come out of `g`, and only `px` is checked afterwards. Its
+       own header promises "0 if unreadable", so the check belongs here rather
+       than in each caller. No caller reaches it unsanitised today -- the UI
+       publisher is behind `frame_key`, the menu and the order overlay come
+       through `tagpu_gaf_seq_frame` -- so this is a BOUND that closes the
+       contract, not the lifetime argument, which stays the caller's. */
     if (!tagpu_gaf_frame_sane(g)) return 0;
     ck = g[TAGPU_GF_CK]; comp = g[TAGPU_GF_COMP];
     px = *(const unsigned char* const*)(g + TAGPU_GF_PIX);
@@ -438,7 +382,7 @@ static void atlas_drop(TAGPU_GAFATLAS* a, const char* why)
 void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
 {
     int wasFull = a->full;
-    /* PART 2: re-lay what is here instead of throwing it away. Only for an
+    /* Re-lay what is here instead of throwing it away. Only for an
        atlas that asked (`repack`), only when it actually filled -- a restart
        that is not "full" is the UI atlas re-arming or a context change, and
        both want the entries gone -- and only while a re-lay can still gain
@@ -496,40 +440,17 @@ int tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a)
     return 1;
 }
 
-/* ---- THE RESTORED TWIN'S MIRROR IS GONE (11-5e-2b) ----------------------
-   `tagpu_gaf_atlas_mirror_rgb` armed it -- a `dim x dim` RGBA8 calloc and an
-   FBO -- and `tagpu_gaf_atlas_mirror_rgb_step` filled it with `glReadPixels`
-   off that FBO once per published frame, so a second backend could be handed
-   the texels the GL restorer had painted. `oglu_load_dll` has no caller, so
-   opengl32.dll is never in the process and the arm refused at its entry-point
-   guard BEFORE its own calloc: `a->mirrorRgb` was NULL for the life of every
-   process, and every consumer's `atlasRgb` with it. The four world lanes that
-   read it moved to the published frame LIST in 11-5e-2b part 1; the UI, the
-   fifth, had no list to move to and lost the route entirely (tagpu_gui.h).
-   The `mirrorRgb*` fields went with these two functions. */
-
 /* THE RESTORED TWIN IS THE WHOLE MIP CHAIN, not level 0 alone, and the reason
-   is measurable. (The MIRROR this argued for is gone with the read-back in
-   11-5e-2b; the three functions below stay, because the LAYOUT is still the
-   contract between the producer's chain and the Vulkan restorer's dump --
-   `tagpu_vk_restore.c` calls `_off` and `_chain`.) The restored twin is mipped
-   and sampled
+   is measurable. The three functions below are the LAYOUT contract between
+   the producer's chain and the Vulkan restorer's dump -- `tagpu_vk_restore.c`
+   calls `_off` and `_chain`. The restored twin is mipped and sampled
    LINEAR_MIPMAP_LINEAR to its top level, so a consumer holding only level 0
-   draws a different picture wherever the art is minified. (The GL producer
-   that made it that way, `tagpu_gaf_atlas_restore`, went in 11-5e-2 -- the
-   MEASUREMENT below is a fact about mip chains and is unaffected, and the
-   shape it argues for is what the Vulkan lane must reproduce.) On the unit
+   draws a different picture wherever the art is minified. On the unit
    atlas a 32-texel cell lands on a ~23 px sprite at 1024x768 -- LOD around 0.5,
    which is a blend of levels 0 and 1 -- so "wherever it is minified" is
-   ordinary play. MEASURED before this existed: 2 126 of 2 132 unit pixels
+   ordinary play. MEASURED with level 0 alone: 2 126 of 2 132 unit pixels
    differing, worst channel 155, and the figure barely moved when only the
    MAGNIFICATION filter was matched. [gate 3a, 2026-09-16.]
-
-   THE LEVELS ARE READ BACK, NOT RE-DERIVED. A blit chain on the Vulkan side
-   would be this fork guessing at glGenerateMipmap's reduction, and the guess
-   would be a per-driver difference that no note could pin down. Reading GL's
-   own levels makes the two byte-identical by construction, which is the same
-   rule the whole seam runs on: hand over the bytes, never the derivation.
 
    LAYOUT: level L is `dim >> L` square, RGBA8, at the offset the levels before
    it occupy. Both are computed here so that producer and consumer cannot
@@ -554,13 +475,10 @@ size_t tagpu_gaf_mip_chain(int dim, int mip)
     return tagpu_gaf_mip_off(dim, mip) + tagpu_gaf_mip_bytes(dim, mip);
 }
 
-/* Arm the published restore list (tagpu_gaf.h). It used to ALSO stand the
-   read-back down, which is what "and never both" meant; there is no read-back
-   to stand down since 11-5e-2b, so this arms the only route there is.
-   Polled on the owner's arm beat, so the lever is allowed to appear
-   mid-session -- which is the case that has already been got wrong once on
-   this plan: a latch that is only ever tested at start-up reads as "off" for
-   a session the owner turned it on during. [tagpu_terr.c carries the same
+/* Arm the published restore list (tagpu_gaf.h). Polled on the owner's arm
+   beat, so the lever is allowed to appear mid-session: a latch that is only
+   ever tested at start-up reads as "off" for a session the owner turned it on
+   during. [tagpu_terr.c carries the same
    poll for the terrain atlas, whose restore is a fixed list rather than a
    queue and so needs no cursor.] */
 int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
@@ -569,14 +487,10 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
     if (!a || a->dim <= 0 || a->max <= 0 || !a->ents) return 0;
     if (a->rlistWant) return 1;
     if (a->rlistFailed) return 0;
-    /* THE KNOB IS `assets=`, NOT A SECOND LEVER. This used to test a file of
-       its own, `tagpu_restorevk.on`, which was on no defaults table -- so the
-       shipped configuration had `tagpu_classicpp.on` (a play default) saying
-       "restored atlases" and nothing at all feeding the restorer, and every
-       player's frame was raw 8-bit palette art. `tagpu_classicpp_assets()` is
-       the master arm AND the `assets=` key of `tagpu_classicpp.cfg`, which is
-       what the render-options screen's `Undithered assets` row writes, so one
-       question now decides whether the art is restored and one row moves it.
+    /* THE KNOB IS `assets=`, NOT A SECOND LEVER. `tagpu_classicpp_assets()`
+       is the master arm AND the `assets=` key of `tagpu_classicpp.cfg`, which
+       is what the render-options screen's `Undithered assets` row writes, so
+       one question decides whether the art is restored and one row moves it.
        Polled, not latched at attach: this function is called on its owner's
        arm beat, so `assets=0 -> 1` arms within that beat. The latch above is a
        LIFETIME (one `malloc`, one address the consumer holds for the frame),
@@ -584,10 +498,9 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
        `restored` flag and by the scheduler's `may_draw`, which pause the job
        and put `uRestored` back to 0 without freeing anything. */
     if (!tagpu_classicpp_assets()) return 0;
-    /* THE WHOLE BOUND, IN ONE ALLOCATION, ONCE (11-5e-2c). This used to take
-       256 frames and let `rlist_room` grow it, and the growth is exactly what
-       made the feed unsafe: `realloc` moves the buffer, and the consumer holds
-       its address as a raw pointer for the rest of the frame. Taking the bound
+    /* THE WHOLE BOUND, IN ONE ALLOCATION, ONCE. Growing the list would make
+       the feed unsafe: `realloc` moves the buffer, and the consumer holds its
+       address as a raw pointer for the rest of the frame. Taking the bound
        up front means the address never moves while the list is live, which is
        a LIFETIME the code enforces rather than an ordering stated three files
        away. `rlist_room` is a comparison from here on.
@@ -610,12 +523,6 @@ int tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a)
        instant it exists: whatever this lane has already restored, a consumer
        starting at index 0 restores the same rectangles for itself. */
     rlist_restart(a, 0);
-    /* THE READ-BACK'S 16 MB WAS GIVEN BACK HERE, and there is no read-back to
-       give back since 11-5e-2b. The mirror was documented as never freed --
-       an atlas has no destructor and a re-arm should find it already correct
-       -- and this was the one exception, because the list is not a second
-       consumer of the mirror but its replacement. Now it is the only thing
-       there ever was. */
     _snprintf(b, sizeof b, "%s: restorevk -- the restore is the other lane's to run, so"
               " no read-back and the frame list is published instead (%d entries seeded,"
               " %d-frame bound)", a->tag ? a->tag : "gaf", a->rlistN, rlist_cap(a));
@@ -635,34 +542,25 @@ void tagpu_gaf_atlas_restore_repalette(TAGPU_GAFATLAS* a)
 
 /* GIVE BACK EVERY HEAP BUFFER AN ATLAS OWNS, for a caller that is about to lay
    the struct out again from zero. That is two: `mirror` (dim*dim) and `rlist`
-   (the published restore list). `mirrorRgb`, the restored twin's mip chain,
-   was a third until 11-5e-2b.
+   (the published restore list).
 
-   `rlist` IS FREED HERE SINCE 11-5e-2c, and the review that asked for it is
-   worth recording because the answer changed. It said the comment claiming
-   `mirror` was the only allocation was false, and that the omission was safe
-   only by a property of the CALLER rather than of this function: the one
-   caller is `tagpu_gui_surf.c`'s `atlas_setup`, that is the GUI atlas, the GUI
-   never arms a list, so its `rlist` is NULL -- and `atlas_setup` memsets
-   afterwards, so the day the UI is given a list that memset drops a live
-   pointer on every re-arm. 11-5e-2b part 2 declined to fix it, because a
-   half-fix (free the buffer and leave `rlistWant` latched) is worse than the
-   gap, and `rlist`'s lifetime was this landing's subject.
+   `rlist` IS FREED HERE because the one caller, `tagpu_gui_surf.c`'s
+   `atlas_setup`, memsets the struct afterwards: the day the UI is given a
+   list, that memset would otherwise drop a live pointer on every re-arm.
 
-   THE BOUND IS WHAT MAKES THE FIX WHOLE. `rlist` now has exactly ONE writer --
-   the arm's single `malloc` -- and no `realloc` and no other `free` anywhere
-   in this file, so "give it back and clear the state that described it" is a
+   THE BOUND IS WHAT MAKES THIS WHOLE. `rlist` has exactly ONE writer -- the
+   arm's single `malloc` -- and no `realloc` and no other `free` anywhere in
+   this file, so "give it back and clear the state that described it" is a
    complete statement rather than one end of a lifetime nobody owns. The
    latches go with the buffer: an atlas with `rlistWant` set and `rlist` NULL
-   is precisely the half-state the review named.
+   is precisely the half-state to avoid.
 
    `mirror` is not freed by `_lost`, which keeps it
    deliberately so that a mirror is never stale for the frames between a
    context loss and the next create. A caller that re-arms by zeroing the
    struct would therefore drop the pointer and leak it; every writer already
    guards on the pointer and `_mirror` re-arms on demand, so handing it back
-   here costs nothing the memset was not already costing functionally.
-   [FROM THE 4b-3 LANDING REVIEW.] */
+   here costs nothing the memset was not already costing functionally. */
 void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a)
 {
     if (!a) return;
@@ -689,12 +587,10 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
        stale for the frames between a loss and the next create.) */
     if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
     memset(a->hash, 0, sizeof a->hash);
-    /* `rgb` and `restoreFailed` outlived the GL restorer that set them: both
-       are 0 for the life of the process since 11-5e-2 deleted the only writer
-       (`tagpu_gaf_atlas_restore`). Cleared here anyway, because this function's
-       contract is "the struct describes nothing that exists" and a field left
-       alone on the strength of an argument made elsewhere is how the next
-       landing gets a stale value. */
+    /* `rgb` and `restoreFailed` have no writer and are 0 for the life of the
+       process. Cleared here anyway, because this function's contract is "the
+       struct describes nothing that exists", and a field left alone on the
+       strength of an argument made elsewhere is how a stale value survives. */
     a->rgb = 0; a->restoreFailed = 0;
     /* THE OTHER LANE'S DESTINATION DID NOT DIE -- ITS SOURCE DID. Nothing here
        is a Vulkan object, so a consumer's twin still holds the colours of an
@@ -702,23 +598,11 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
        tells it to blank and start over; without this it would keep painting
        the old layout's rects for the rest of the session. */
     rlist_reset(a, 0);
-    /* THE READ-BACK'S FBO AND ITS BYTES WENT IN 11-5e-2b. The FBO was
-       forgotten here rather than deleted, exactly as `tex` is above -- deleting
-       a name from a context that is gone either does nothing or destroys a
-       live object of the NEW one handed the same number -- and the mirror's
-       bytes were zeroed with the twin they mirrored. There is no twin, no FBO
-       and no mirror now. */
     /* the entries went with the texture, so the wall the last fill hit says
        nothing about the next one */
     a->repackWall = 0;
 }
 
-/* tagpu_restoredump.on: the twin as the shader samples it, once per fill of
-   the atlas, as raw bytes -- the restorer's only disk write, and only under
-   the trigger (the terrain pass writes its own). Three files per atlas:
-   tagpu_restore_<tag>.r8 (the source, dim x dim), .rgba (the twin, dim x dim
-   x 4) and .idx (a line per entry: x y w h key wrap), so `tascene featdiff`
-   can find each frame in both and hold the twin to the lab's bar. */
 /* frame headers are heap pointers: mix the high bits down so the low-order
    allocator alignment does not cluster every key into one bucket */
 static unsigned gaf_hash(const void* p)
@@ -736,11 +620,10 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
        entry table and the CPU mirror below are what an atlas is in this build,
        and the Vulkan twin uploads the mirror. `a->tex` is set to 0 rather than
        left alone so that a re-created atlas cannot carry a stale name, and it
-       is 0 for the life of the process: the `glGenTextures` that used to fill
-       it went in landing 11-4c. `a->made`, not `a->tex`, is what says the
-       layout exists -- keying it on the name once produced a refusal that read
-       downstream as `atlas=0` and no sprite texels at all.
-       [The vulkan-only plan, landings 4b-2 and 11-4c.] */
+       is 0 for the life of the process: nothing gives it a name. `a->made`,
+       not `a->tex`, is what says the layout exists -- keyed on the name, every
+       create would refuse, which reads downstream as `atlas=0` and no sprite
+       texels at all. */
     /* A FRESH ATLAS IS A FRESH MIRROR, AND THE MEMSET IS WHAT MAKES IT INDEX 0
        -- the assumption the border comment in `atlas_paint` rests on. A mirror
        that kept the previous atlas's texels would be a copy of something that
@@ -767,7 +650,7 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
    frame's address and its size, never the decoded bytes, and GL 3.3 core has
    no glCopyImageSubData to shuffle them with -- so the pixels come back the
    way they arrived the first time, by RLE decode on demand. That is the same
-   work one of today's recycles does, done ONCE when the page fills instead
+   work one recycle does, done ONCE when the page fills instead
    of once per frame for as long as it stays full.
 
    It reads `w` and `h` out of an entry and nothing else: both were bounded to
@@ -886,7 +769,7 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
        is what lets the twin converge at all while zoomed out. */
     job_clear_dest(a);
 
-    /* PART 3, the branch that says a second page is the only thing left.
+    /* The branch that says a second page is the only thing left.
        `wanted` is the set that was still being asked for; if the tallest-first
        layout could not hold all of it, no re-sort will, and repacking again
        would only re-decode the same frames to reach the same wall. Hold what
@@ -927,13 +810,10 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
     const int x = e->x, y = e->y;
     int i;
 
-    /* THE PAINT IS THE ATLAS, AND THE MIRROR IS THE PAINT. This function used
-       to upload each cell to a GL texture beside the mirror write below; the
-       upload went in landing 11-4c and the mirror write is now the only
-       destination the art has. Nothing here is gated on a backend, and nothing
-       may become so: a cell that is packed but not mirrored is a hole the
-       Vulkan twin samples as index 0.
-       [The vulkan-only plan, landings 4b-2 and 11-4c.] */
+    /* THE PAINT IS THE ATLAS, AND THE MIRROR IS THE PAINT: the mirror write
+       below is the only destination the art has. Nothing here is gated on a
+       backend, and nothing may become so: a cell that is packed but not
+       mirrored is a hole the Vulkan twin samples as index 0. */
     /* Re-emit the frame with its outermost row and column repeated all
        round, `pad` deep. The border is what any sampler that reaches past
        the frame must land on: under GL_NEAREST that is the fragment whose
@@ -943,8 +823,7 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
        index 0, a real palette entry (black) rather than the frame's colour
        key, which is the black hairline down the right of every tree at
        zoom 0.25. Under a filtered sampler it is every edge fragment, which
-       is why the border is on all four sides and not just the two the
-       shelf packer used to leave spare; under a mipmapped one it is the
+       is why the border is on all four sides and not just two; under a mipmapped one it is the
        whole 4-texel ring (tagpu_gaf.h `pad`). The cell's slack past the
        border, where the alignment rounds up (0..align-1 texels on the
        right and bottom), is filled with the same edge: at level 2 the
@@ -968,12 +847,10 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
         for (k = 0; k < pb; k++)
             memcpy(s_pad + (size_t)(p + h + k) * pw, s_pad + (size_t)(p + h - 1) * pw, (size_t)pw);
         /* THE CPU MIRROR TAKES THE BYTES THE PADDING LOOPS ABOVE JUST BUILT,
-           OUT OF `s_pad` ITSELF (Phase G / G19e). Not a second evaluation of
-           the art: the very rows those loops wrote, so there is nothing for a
-           second pass over the source to drift from. It was written beside a
-           GL upload of the same buffer, which is why it is phrased as a mirror;
-           since landing 11-4c it is the only copy, and DELETING IT DELETES THE
-           SPRITE. The rect is the cell's, border and alignment slack included,
+           OUT OF `s_pad` ITSELF. Not a second evaluation of the art: the very
+           rows those loops wrote, so there is nothing for a second pass over
+           the source to drift from. It is the only copy, and DELETING IT
+           DELETES THE SPRITE. The rect is the cell's, border and alignment slack included,
            exactly as above -- and it is inside the atlas by construction,
            because the shelf packer refused the cell otherwise. */
         if (a->mirror) {
@@ -1000,50 +877,36 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
         e->wrap = art ? (char)tagpu_rglsl_tileable(pixels, w, h, art, e->ck) : 0;
     }
     e->ok = 1; e->resv = 0;
-    /* AND ONTO THE PUBLISHED LIST, WHICH IS THE OTHER LANE'S ONLY FEED
-       (11-5e-2c). This is the one place an entry's texels become correct, so
-       the append belongs here and nowhere else: "painted" and "published" are
-       then the same event and cannot drift apart.
+    /* AND ONTO THE PUBLISHED LIST, WHICH IS THE OTHER LANE'S ONLY FEED. This
+       is the one place an entry's texels become correct, so the append
+       belongs here and nowhere else: "painted" and "published" are then the
+       same event and cannot drift apart.
 
-       THE LINE THIS REPLACES WAS `if (a->job) restore_enqueue(a, e);` -- the
-       GL restorer's job -- and `a->job` had been NULL for the life of every
-       process since landing 11-4c took the `glGenTextures` that filled
-       `a->tex` out of `tagpu_gaf_atlas_create`. A predicate that read as "the
-       GL restorer is running" had quietly become "the GL restorer can never
-       run", and it was gating the OTHER backend's feed. So the list was seeded
-       once by `tagpu_gaf_atlas_restore_vk` and never fed again, while
-       `job_clear_dest` emptied it on any recycle or repack: after the first
-       reset every frame inserted stayed indexed on the consumer for the rest
-       of the session. Measured 2026-09-19 with a probe on `a->rlistWant`: feat
-       and fx both `restoring the atlas HERE - 0 of 0 frames`, zero drains.
-
-       11-5e-2 FOUND THE ONE-LINE FIX AND TOOK IT BACK OUT, because enqueueing
-       here made `a->rlist` mutable during a paint while a consumer held its
-       address as a raw pointer. That is fixed by construction now rather than
-       by a guard, and there are two halves to it because the hazard had two:
+       APPENDING DURING A PAINT MAKES `a->rlist` MUTABLE while a consumer holds
+       its address as a raw pointer. That is safe by construction rather than
+       by a guard, and there are two halves to it because the hazard has two:
 
          - THE BOUND kills the moving address. The arm allocates `rlist_cap(a)`
            frames in one `malloc`, `rlist_room` is a comparison, and there is no
            `realloc` anywhere in this file, so the address is fixed for as long
-           as the atlas holds it. The one `free` is the teardown at `:620` and
-           `rlist_add`'s own header says what it does and does not bound.
+           as the atlas holds it. The one `free` is the teardown in
+           `tagpu_gaf_atlas_free_buffers`, and `rlist_add`'s own header says
+           what it does and does not bound.
          - THE ORDERING keeps `rlist_restart`'s in-place rewrite away from a
            reader. The unit atlas's list is taken in `tagpu_posedraw_handover`,
            which `render_vk.c`'s loop reaches through `tagpu_vk_frame`, after
-           `tagpu_overlay_draw` has finished every paint of the frame.
-           It used to be taken in `pd_view_publish`, at the FIRST posedraw
-           window, with `tagpu_native.c`'s `ghost_record` still to run and still
-           able to paint through `tagpu_r3d_atlas_uv` -> `atlas_get`.
+           `tagpu_overlay_draw` has finished every paint of the frame. Taken at
+           the FIRST posedraw window instead, it would be read while
+           `tagpu_native.c`'s `ghost_record` can still paint through
+           `tagpu_r3d_atlas_uv` -> `atlas_get`.
 
-       AND IT IS AN ORDERING RATHER THAN A RACE, which is worth stating because
-       the prose this replaces said "the buffer the render thread is about to
-       read" and invited a lock. There is no second thread here: every paint of
-       an armed atlas is render-thread -- the unit atlas through
-       `tagpu_native.c`'s `emit_node` and `tagpu_posebake.c`'s `mat_emit`,
-       both inside `tagpu_native_frame`, itself called only from
-       `tagpu_overlay.c`'s `tagpu_overlay_draw` --
-       and so is every consumer. A fence would have fixed nothing while reading
-       as though it had. [The vulkan-only plan, 11-5e-2c.] */
+       AND IT IS AN ORDERING RATHER THAN A RACE, so no lock belongs here. There
+       is no second thread: every paint of an armed atlas is render-thread --
+       the unit atlas through `tagpu_native.c`'s `emit_node` and
+       `tagpu_posebake.c`'s `mat_emit`, both inside `tagpu_native_frame`,
+       itself called only from `tagpu_overlay.c`'s `tagpu_overlay_draw` -- and
+       so is every consumer. A fence would fix nothing while reading as though
+       it had. */
     rlist_add(a, e);
 }
 

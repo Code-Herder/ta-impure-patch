@@ -1,6 +1,6 @@
 #ifndef TAGPU_MARK_H
 #define TAGPU_MARK_H
-/* UI marker pass (G13d..G13p) — the world-space markers the engine used to draw
+/* UI marker pass — the world-space markers the engine would otherwise draw
    over the viewport: health bars, group digits, order/waypoint/build-queue
    markers, range circles and their labels, the build-cursor footprint and the
    drag band box.
@@ -26,8 +26,8 @@
      order markers ported whole in tagpu_order.c, emitted through the two
                    buckets below
 
-   NOTHING IS CAPTURED ANY MORE except the post-fog build-cursor window, which
-   only `nocursor` opens (see tagpu_markown.h for why the capture died)
+   NOTHING IS CAPTURED except the post-fog build-cursor window, which only
+   `nocursor` opens (see tagpu_markown.h for why)
 
    Both are drawn through the same zoom transform as the world, so a marker
    stays over its unit at any zoom and scales with it — the tile art, the unit
@@ -88,18 +88,11 @@ int  tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
    SCREEN size. 0 = the atlas refused the string or the bucket is full. */
 int  tagpu_mark_emit_text(float x, float y, const char* s, int colidx,
                           float wx, float wz);
-/* Gather the marker layer and publish it through `tagpu_mark_handover`. Since
-   [landing 11-4a] this issues NO draw and touches NO GL state -- the FBO, the
-   depth/blend expectations and the dirty program/VAO/texture bindings this
-   comment used to promise all went with the GL half. The markers are still the
-   frame's top layer with every fragment opaque; it is the twin that honours
-   that now. */
+/* Gather the marker layer and publish it through `tagpu_mark_handover`. This
+   issues NO draw and touches NO GL state. The markers are the frame's top layer
+   with every fragment opaque; it is the twin that honours that. */
 void tagpu_mark_render(const TAGPU_FXVIEW* v);
-/* `tagpu_mark_glreset` is gone (11-5e-1). Its body had been reduced to one
-   forward -- to tagpu_text.c, the last module on this branch of the cascade
-   still holding a GL id -- and that module holds none either now. */
-
-/* ---- the hand-over to the Vulkan lane (the Vulkan-only plan's landing 5) ----
+/* ---- the hand-over to the Vulkan lane ----
 
    THIS PASS IS NOT ONE DRAW AND THAT IS THE WHOLE POINT OF THE RECORD. It is
    order triangles, order lines at `ss` line width, order labels, health bars,
@@ -112,14 +105,9 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v);
    crosses is the DRAW LIST `tagpu_mark_render` issued, built as it issues it.
 
    NOTHING HERE NEEDS A NEW MIRROR: the vertices are this file's own arrays and
-   `tagpu_text_atlas` has existed since G19d for exactly this. (It used to carry
-   the captured layer's bytes as well; the clean cut deleted that draw.) */
-/* 1 WAS `TAGPU_MK_TEX_LAYER` -- the captured post-fog layer, raw palette
-   indices the ENGINE rasterised, copied out of its own surface and drawn back
-   onto the frame. The clean cut deleted it: that is the one observation of the
-   engine's pixels this pass made, and everything else here is re-derived from
-   engine STATE and drawn as our own geometry. The value is retired rather than
-   reused, so a stale `tex` field cannot silently become a text draw. */
+   `tagpu_text_atlas` exists for exactly this. */
+/* 1 is retired rather than reused, so a stale `tex` field cannot silently
+   become a text draw. */
 enum { TAGPU_MK_TEX_NONE = 0,   /* no sampler feeds uLayer this draw */
        TAGPU_MK_TEX_TEXT = 2 }; /* tagpu_text.c's coverage atlas */
 
@@ -146,11 +134,9 @@ typedef struct TAGPU_MKHAND {
     /* tagpu_text.c's atlas: one coverage byte a texel. `textGen` moves when a
        raster lands, which is how a backend holding its own copy is told. */
     const unsigned char* text; unsigned textGen; int textW, textH;
-    /* THE THREE SHARED TEXTURES, AS BYTES. `tagpu_mark_render` USED to take a
-       `palTex` and bind `v->fogTex` / `v->fogLut` -- three GL names, which is
-       exactly what may not cross; the parameter went with the draw
-       [landing 11-4a] rather than linger as one a caller could believe in. They come over in the shapes `tagpu_fx.h` already
-       uses for the same three, so the two consumers agree about what they are:
+    /* THE THREE SHARED TEXTURES, AS BYTES, because a GL name may not cross.
+       They come over in the shapes `tagpu_fx.h` already uses for the same three,
+       so the two consumers agree about what they are:
        the palette is 256 RGBA8 texels of `tagpu_pal_live()`, the fog grid is
        cols x rows of RG8, and the LUT is 256 R8. A frame whose GL draw sampled
        fog and whose grid did not cross is refused rather than drawn unfogged. */
@@ -166,8 +152,7 @@ typedef struct TAGPU_MKHAND {
     /* 1 on the ONE frame `tagpu_mark.ab` latched its claim and
        `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane
        captures THAT frame rather than whichever one its own lever poll landed
-       on. It does NOT mean a capture file was written -- since landing 4d-2
-       there is no GL half to write one. */
+       on. It does NOT mean a capture file was written. */
     int   ab;
     /* THE VIEWPORT THE GL DRAW WAS CLIPPED TO, in game-frame pixels measured
        from the TOP. The consumer needs it for its scissor, and `scissorOn` is
@@ -178,9 +163,8 @@ typedef struct TAGPU_MKHAND {
 } TAGPU_MKHAND;
 
 /* Exactly once per frame, and only for the frame it was published for -- `now`
-   is COMPARED, not stamped. [Landing 3b shipped a hand-over that stamped it and
-   the review found a stale record could make a census over-count; this one is
-   written the right way round from the start.] 0 = nothing to draw. */
+   is COMPARED, not stamped: a stamped record could be read again stale and make
+   a census over-count. 0 = nothing to draw. */
 int  tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now);
 /* This frame's counter, and the previous frame's record dropped with it.
    Unconditional, beside `tagpu_posedraw_frame`: `tagpu_mark_render` returns

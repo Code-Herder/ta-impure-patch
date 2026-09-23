@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Vulkan lane against its GL twin, pixel for pixel (Phase G / G19d).
+"""The Vulkan lane against its GL twin, pixel for pixel.
 
     tools/vk-ab.py <gamedir>                 # the fps pair in an instance
     tools/vk-ab.py <gamedir> --pass scaffold # another ported pass's pair
@@ -75,14 +75,10 @@ def main():
 
     lever = None
     if len(a.args) == 1:
-        # THE GAMEDIR FORM IS DEAD, AND IT HAS TO SAY SO RATHER THAN SEND THE
-        # OPERATOR LOOKING FOR A FILE NOTHING WRITES. It paired
-        # `tagpu_<tag>_gl.ppm` with `tagpu_<tag>_vk.ppm` -- one capture from each
-        # lane of a single frame, which was route D. The vulkan-only plan's
-        # landing 4d-1 deleted route D and 4d-2 deleted the GL capture, so the
-        # `_gl.ppm` can never appear again and the old refusal message ("did the
-        # lever fire on both lanes?") names a lane that does not exist.
-        # [FOUND BY THE 4d-2 LANDING REVIEW.]
+        # THE GAMEDIR FORM IS WITHDRAWN, AND IT HAS TO SAY SO RATHER THAN SEND
+        # THE OPERATOR LOOKING FOR A FILE NOTHING WRITES: it paired
+        # `tagpu_<tag>_gl.ppm` with `tagpu_<tag>_vk.ppm`, and no `_gl.ppm` is
+        # written by anything.
         raise SystemExit("""vk-ab: the gamedir form is withdrawn.
   It diffed the GL lane's capture against the Vulkan lane's, and the
   vulkan-only plan's landings 4d-1/4d-2 deleted the GL half -- no
@@ -109,9 +105,8 @@ def main():
     # already there does nothing), the lane down, `ss != 1`, the seam's
     # "N levers claimed this frame" refusal -- leaves the PREVIOUS run's PPMs
     # lying on the disk, and this tool would read them and print that run's
-    # verdict for the binary in front of you. The whole landing's evidence is
-    # this number, so it refuses instead.
-    # [ADDED BY THE G19e RE-REVIEW, 2026-09-15.]
+    # verdict for the binary in front of you. The verdict is this number, so
+    # it refuses instead.
     if lever is not None and lever.exists():
         arm = lever.stat().st_mtime
         stale = [p for p in (gl, vk) if p.stat().st_mtime < arm - 1.0]
@@ -161,10 +156,8 @@ def main():
                 if first_ink is None:
                     first_ink = (i % gw, i // gw, tuple(a3), tuple(b3))
         # BYTES AGAINST BYTES. `a3` is a slice of the file, so comparing it to a
-        # tuple is always unequal and every pixel counts as ink -- which made the
-        # first run of this report 786432 non-black pixels on an image that has
-        # 89, and would have hidden the "both captures are blank" case it exists
-        # to catch.
+        # tuple would always be unequal and count every pixel as ink, which
+        # would hide the "both captures are blank" case this exists to catch.
         if a3 != BLACK:
             ink_gl += 1
         if b3 != BLACK:
@@ -197,33 +190,15 @@ def main():
         print("without it every string is refused and BOTH lanes draw nothing.")
         return 1
     print("\n%s" % ("0 px apart" if diff == 0 else "NOT identical"))
-    # THE TWO CAPTURES ARE NOT THE SAME KIND OF PICTURE SINCE LANDING 4c-1, and
-    # a reader who takes the headline number alone will conclude a world pass
-    # regressed when it did not. The GL half of a world pass's A/B is the bare
-    # world FBO -- black everywhere the pass did not draw -- while the Vulkan
-    # half is the SWAPCHAIN IMAGE, which since 4c-1 carries TA's own 8-bit frame
-    # underneath it (`tagpu_vk_surf.c`, the bottom layer that made
-    # `tagpu_gui.off` show a game). So every pixel the pass did not cover
-    # differs by construction, and the question that still has a yes/no answer
-    # is the one about the pixels the GL capture actually contains.
-    # MEASURED 2026-09-18 on the terrain pass: 118 751 px differ of 786 432, and
-    # 0 of the 630 719 the GL FBO drew. That is a pass in exact agreement with
-    # its twin and a harness comparing two different framings.
-    # THE EXIT CODE NEVER SAYS "PASS" ON A RUN THAT DIFFERS, and the first cut
-    # of this report did. It returned 0 whenever every difference fell on a
-    # GL-black pixel -- which sounds like "the pass agrees" and is not, because
-    # `diff_ink` is blind to the one failure mode this project has already
-    # shipped once: a pass that draws MORE than its twin. G19e's line
-    # rasterisation was "all 126 of the twin's pixels plus exactly one extra
-    # fragment at the END of each line segment" (tagpu_vk_pass.h), and every one
-    # of those extra fragments lands on a pixel GL left black. So does a terrain
-    # or feature pass painting outside the scissor, or over fog its twin
-    # refused. An over-draw would have exited 0 and printed the words "the pass
-    # agrees with its twin".
+    # THE EXIT CODE NEVER SAYS "PASS" ON A RUN THAT DIFFERS. A run whose every
+    # difference falls on a pixel the first capture left black sounds like
+    # "the pass agrees" and is not: `diff_ink` is blind to a pass that draws
+    # MORE than its twin -- a line rasterisation that adds one fragment at the
+    # END of each segment (tagpu_vk_pass.h), a terrain or feature pass painting
+    # outside the scissor, or over fog its twin refused. Every one of those
+    # lands on a pixel the first capture left black.
     # The split is still worth printing -- it is what an over-draw looks like --
     # but it is a thing to READ, not a verdict.
-    # [FROM THE 4c-2 LANDING REVIEW; the framing case it used to also cover went
-    # with route D in 4d-1, so the reading below is narrower and firmer now.]
     if diff and diff_ink == 0:
         print("...but 0 of the %d pixels the FIRST capture DREW." % ink_gl)
         print("Every difference is a pixel the first one left black, i.e. the")

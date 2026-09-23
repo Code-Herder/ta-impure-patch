@@ -19,7 +19,7 @@
    makes main+0x37E1B that buffer at 0x468D30; the shell has its own. */
 /* `TA_GFX_PP` comes from inc/tagpu_engine.h, which tagpu_gui_hook.c -- this
    file's only includer -- includes above it. There is no local spelling of
-   0x51FBD0 any more. [FROM REVIEW, landing 8d.] */
+   0x51FBD0. */
 #define GFX_BACKBUF    0xBC
 #define GFX_BACKBUF_ON 0xDC
 static const int* back_buffer(void)
@@ -94,7 +94,7 @@ static void gaf_record(const int* ctx, SURF* s, const unsigned char* fr,
         s_lastOp->fw = GF_W(fr); s_lastOp->fh = GF_H(fr); s_lastOp->ck = fr[0x08];
         s_lastOp->dx = (short)(x - GF_HX(fr)); s_lastOp->dy = (short)(y - GF_HY(fr));
         if (kind == OP_GAF && fr[0x0A] != 0) s_lastOp->kind = OP_GAFA;   /* sub-frames: pixels */
-        /* THE IDENTITY AND THE PLANE, TAKEN HERE (G19f-7). We are inside the
+        /* THE IDENTITY AND THE PLANE, TAKEN HERE. We are inside the
            engine's own blit of this frame, which is the only moment the art is
            alive by the engine's ordering rather than by our hope; `publish`
            runs up to CENSUS_MS later, after a screen pop may have freed it.
@@ -105,12 +105,11 @@ static void gaf_record(const int* ctx, SURF* s, const unsigned char* fr,
         s_lastOp->fcomp = fr[0x09]; s_lastOp->fsub = fr[0x0A]; s_lastOp->fsubn = fr[0x0B];
         /* ONLY WHEN SOMETHING WILL CONSUME IT. `publish` returns at once when
            `!g_gui_draw`, and a census-less, draw-less window is thrown away
-           unread (`s_nops = 0`) -- so without this test the decode ran inside
-           the engine's blit for every new frame, every window, for a queue
-           nobody would read, and with the seen table never filling every blit
-           was a first sight. `after_alloc` below already gates on exactly this
-           pair, which is the precedent.
-           [FOUND 2026-09-16 by BOTH landing reviewers, independently.] */
+           unread (`s_nops = 0`) -- so without this test the decode would run
+           inside the engine's blit for every new frame, every window, for a
+           queue nobody would read, and with the seen table never filling every
+           blit would be a first sight. `after_alloc` below gates on exactly
+           this pair too. */
         if ((s_census || g_gui_draw) &&
             s_lastOp->kind == OP_GAF && s_lastOp->fw && s_lastOp->fh &&
             s_lastOp->fw <= TAGPU_GAF_DECMAX && s_lastOp->fh <= TAGPU_GAF_DECMAX)
@@ -201,7 +200,7 @@ static int __cdecl before_text(void* e)
     n = i;                                       /* the bytes the blitter reads */
     for (i = 0; i < s_nsurf; i++) if (s_surf[i].base == (unsigned)(size_t)base) { s = &s_surf[i]; break; }
     op_add(OP_TEXT, s, x, top, x + w - 1, top + rows - 1);
-    /* G17d: the STRING, not the box's bytes. Copied here, on the game thread,
+    /* The STRING, not the box's bytes. Copied here, on the game thread,
        because the argument is routinely a caller's stack temp and publish runs
        at the flip — the same reason a sprite's pixels are copied (3.5). With no
        room in the scratch the op stays what it was, a box of captured pixels,
@@ -214,14 +213,14 @@ static int __cdecl before_text(void* e)
         o->slen = (unsigned short)n;
         o->frame = font;                         /* the font's ADDRESS, as an
                                                     identity: `op_same` and the
-                                                    probe use it, and since
-                                                    G19f-8 nothing follows it  */
+                                                    probe use it, and nothing
+                                                    follows it                 */
         o->dx = (short)x; o->dy = (short)y;      /* what the blitter was GIVEN */
         o->fg = (unsigned char)ARG(e, 7);
         o->bg = (unsigned char)ARG(e, 8);
         o->tr = (unsigned char)ARG(e, 9);
         s_strUsed += (unsigned)n + 1;
-        /* AND THE FONT, HERE, WHERE THE ENGINE IS ABOUT TO READ IT (G19f-8).
+        /* AND THE FONT, HERE, WHERE THE ENGINE IS ABOUT TO READ IT.
            We are at the head of `0x4CCF60` with its own arguments, one
            instruction before it walks this string through this font; `publish`
            runs up to CENSUS_MS later over memory nothing here can say is still
@@ -243,17 +242,14 @@ static int __cdecl before_text(void* e)
     return 0;
 }
 
-/* THE MINIMAP PICTURE'S OBSERVER IS GONE (frame packet exchange, landing 4c).
-   It sat at `BuildMinimapSurface 0x466780`'s entry and decoded `main+0x1426B`
-   into a buffer of ours, on the LOADER thread — the one publisher the plan's
-   rule forbids outright. It was there because this file said the picture was
-   alive only inside that call. **That was wrong** [CORRECTED 2026-09-12 by
-   objdump of the pristine build]: LoadMap stores the picture at `0x483900` and
-   the ONLY thing that frees it is `0x483DFE`, inside `0x483DD0`, whose only
-   caller is `0x491BB3` — the level TEARDOWN cascade. `0x466780` reads it at
-   `0x46684F` and does not null it. So the picture is alive for the whole level,
-   the packet's publisher decodes it itself on the level's first in-play draw,
-   and nothing of ours runs on the loader thread any more. */
+/* NO OBSERVER SITS AT `BuildMinimapSurface 0x466780`, and none is needed: the
+   minimap picture it reads (`main+0x1426B`) is alive for the whole level.
+   LoadMap stores it at `0x483900` and the ONLY thing that frees it is
+   `0x483DFE`, inside `0x483DD0`, whose only caller is `0x491BB3` — the level
+   TEARDOWN cascade. `0x466780` reads it at `0x46684F` and does not null it
+   (objdump of the pristine build). So the packet's publisher decodes it itself
+   on the level's first in-play draw, and nothing of ours runs on the LOADER
+   thread — the one publisher the frame packet plan's rule forbids outright. */
 
 /* ---- 0x4BE950 DrawLine(ctx, x0, y0, x1, y1, colour) stdcall ----------- */
 static int __cdecl before_line(void* e)
@@ -264,16 +260,14 @@ static int __cdecl before_line(void* e)
     int l = x0 < x1 ? x0 : x1, r = x0 < x1 ? x1 : x0;
     int t = y0 < y1 ? y0 : y1, b = y0 < y1 ? y1 : y0;
     int ol, ot, orr, ob;
-    /* AXIS-ALIGNED OR DIAGONAL, DECIDED HERE AND KEPT AS TWO OP KINDS
-       [landing 8c]. For an axis-aligned line the bounding box IS the line --
+    /* AXIS-ALIGNED OR DIAGONAL, DECIDED HERE AND KEPT AS TWO OP KINDS.
+       For an axis-aligned line the bounding box IS the line --
        one pixel thick -- so it is a solid fill and ports exactly as `OP_BAR`
        does. For a diagonal the box is emphatically NOT the line: it is the
        square the line crosses, and replaying it would paint the whole square.
-       That is the fault gui-renderer.md 20 traced to cyan squares, and this
-       split is what stops landing 8c committing it again.
+       That is the fault gui-renderer.md 20 traced to cyan squares.
        Two kinds rather than a flag, because the CENSUS then counts them apart
-       and the next session reads the ratio off `GUI kinds:` instead of
-       guessing it -- the same move that made landing 8b honest about `focus`. */
+       and the ratio reads off `GUI kinds:` instead of being guessed. */
     int diag = (x0 != x1 && y0 != y1);
     SURF* s;
     if (!on_game_thread()) return 0;
@@ -319,10 +313,8 @@ static void rect_box(void* e, int kind)
        SIGNED SHADE LEVEL and for the two `OP_RECT` leaves it reaches a
        different writer again -- `OP::col` in tagpu_gui_hook.c has all four.
        Recorded for all four anyway because the raw argument is what the
-       observer saw; `publish` reads it for `OP_BAR` alone, and 8b/8c/8d each
-       have to decide what their own means before reading it.
-       [The vulkan-only plan, landing 8a; the other three CORRECTED by its
-       review.] */
+       observer saw; `publish` reads it for `OP_BAR` alone, and every other
+       kind has to decide what its own means before reading it. */
     if (s_lastOp) {
         s_lastOp->col = (unsigned char)ARG(e, 3);
         /* AND WHETHER THE CLAMP ABOVE MOVED AN EDGE -- `OP::clipped` says why
@@ -334,19 +326,18 @@ static int __cdecl before_bar(void* e)  { if (on_game_thread()) rect_box(e, OP_B
 /* 0x4BF4D0: NOT a fill — a SHADE of what is already in the box, (ctx, RECT*, level)
    ret 0xC; one clip through 0x4BF620, then every pixel remapped through a 256-byte
    row of globals+0xC4 (darken) or +0xC8 (lighten). What the F4 popup 0x4948E0 draws
-   its border with (×3 — three calls, not three fills). [CORRECTED 2026-09-18.] */
+   its border with (×3 — three calls, not three fills). */
 static int __cdecl before_frame(void* e) { if (on_game_thread()) rect_box(e, OP_FRAME); return 0; }
 static int __cdecl before_rect(void* e) { if (on_game_thread()) rect_box(e, OP_RECT); return 0; }
 /* 0x4BF7B0: the focus rectangle GUI_StageUpdateDraw draws last, (ctx, RECT*, level).
-   ITS OWN KIND SINCE LANDING 8b, not OP_RECT: four edges of one box through
-   0x4BEC70, whose writer 0x4CC8DF reads the destination and remaps it through
-   globals+0xC8. A tint, not a colour -- see the OP_FOCUS comment in
-   tagpu_gui_hook.c. [The "eight edges" this said at first were two mutually
-   exclusive arms on ctx == NULL; corrected by 8b's review.]
+   ITS OWN KIND, not OP_RECT: four edges of one box through 0x4BEC70, whose
+   writer 0x4CC8DF reads the destination and remaps it through globals+0xC8. A
+   tint, not a colour -- see the OP_FOCUS comment in tagpu_gui_hook.c. The
+   eight edge calls in its body are two mutually exclusive arms on ctx == NULL.
 
-   AND SINCE LANDING 8d IT RECORDS THE FOUR EDGES AS FOUR OPS, in the engine's
-   own order, rather than one op for the box. Three things fall out of that and
-   each of them was a reason the box could not be published:
+   IT RECORDS THE FOUR EDGES AS FOUR OPS, in the engine's own order, rather
+   than one op for the box. Three things fall out of that and each of them is
+   a reason the box could not be published:
 
      - THE CLIP. `0x4BF7B0` hands each edge to `0x4BEC70` separately and
        `0x4BEA20` clips each on its own, so a rectangle crossing the clip rect
@@ -359,12 +350,11 @@ static int __cdecl before_rect(void* e) { if (on_game_thread()) rect_box(e, OP_R
        covers (l,t)..(l,b), so (l,t) is remapped TWICE -- `LUT[LUT[x]]` -- and
        so are the other three corners. Four sequential ops reproduce that; one
        box op would have had to carry the rule.
-     - THE AREA. `s_kindArea[OP_FOCUS]` now counts the pixels the engine writes
+     - THE AREA. `s_kindArea[OP_FOCUS]` counts the pixels the engine writes
        instead of the bounding box, so `gui area:`'s `focus` figure is the
-       traffic and not an over-estimate of it. The numbers in gui-renderer.md
-       from before this landing are the old measure.
+       traffic and not an over-estimate of it.
 
-   Disassembled 2026-09-21 for this landing: both arms draw (l,t,r,t),
+   Disassembled 2026-09-21: both arms draw (l,t,r,t),
    (r,t,r,b), (l,b,r,b), (l,t,l,b) with the level passed straight through as
    `0x4BEC70`'s sixth argument and `0x4CC8DF`'s sixth. The RECT fields are
    [esi]=l, [esi+4]=t, [esi+8]=r, [esi+0xC]=b. */
@@ -480,12 +470,8 @@ static int __cdecl before_gafd(void* e)
 
 /* ---- 0x4C7580 GAF_DrawTransformed(ctx, src, int xy[8], int uv[8]) stdcall
         ret 0x10 — a TEXTURED QUAD: FOUR screen vertices and their texture
-        coordinates. [CORRECTED 2026-09-21 by the landing review, which
-        disassembled the loop: `0x4C763D..0x4C7679` walks arg3 with `add
-        edx,0x8` and `cmp ecx,0x4; jl`, so it is four vertices at stride 8, not
-        three. The earlier "three vertices (x0,y0,x1,y1,x2,y2)" reading came
-        from the 2026-09-07 sighting of the option screens' backdrop, where
-        only the first three were looked at.]
+        coordinates. DISASSEMBLED: `0x4C763D..0x4C7679` walks arg3 with `add
+        edx,0x8` and `cmp ecx,0x4; jl`, so it is four vertices at stride 8.
 
         When `uv` is NULL the engine synthesises its own quad
         `(0,0) (w-1,0) (w-1,h-1) (0,h-1)` at `[esp+0x4C..0x68]` — note `w-1`,
@@ -506,7 +492,7 @@ static int __cdecl before_scale(void* e)
     if (!ptr_ok(xy)) { op_add(OP_SCALE, NULL, 0, 0, 0, 0); return 0; }
     l = r = xy[0]; t = b = xy[1];
     /* FOUR, not three: the engine's own loop reads four vertices, so a box over
-       three of them can be too small. [The landing review's.] */
+       three of them can be too small. */
     for (i = 1; i < 4; i++) {
         if (xy[2 * i] < l) l = xy[2 * i];
         if (xy[2 * i] > r) r = xy[2 * i];
@@ -519,44 +505,37 @@ static int __cdecl before_scale(void* e)
        an x, and it covers the whole frame exactly when the uv triangle runs
        (0,0) (w,0) (w,h). The in-game player badge is that case, measured
        2026-09-21 as `xy=(132,5)(152,5)(152,25) uv=(0,0)(32,0)(32,32)`. A rotated
-       or sheared stamp, a partial uv window, or one the context clipped keeps
-       the old behaviour and publishes its box: the bound is the test, not a
-       belief about what the engine draws.
+       or sheared stamp, a partial uv window, or one the context clipped
+       publishes its box: the bound is the test, not a belief about what the
+       engine draws.
 
        AND THE EXTENT IS HALF-OPEN, which the vertices' bounding box is not. The
        far vertex is the edge the span stops BEFORE, not a pixel: golden draws
        that badge over x 132..151, twenty pixels, where the bbox says 132..152.
-       Taking the bbox made it twenty-one wide and put every interior line a
-       texel out. So the destination is `xy[2]-xy[0]` by `xy[5]-xy[1]`, and that
-       same span is the resample denominator. [The bars were one pixel too wide
-       for exactly this reason in b0b867a; this is the same mistake in a second
-       place, found by measuring the extent rather than trusting the box.]
+       Taking the bbox would make it twenty-one wide and put every interior line
+       a texel out. So the destination is `xy[2]-xy[0]` by `xy[5]-xy[1]`, and
+       that same span is the resample denominator.
 
        `fr[0x0A]` is the sub-frame count, refused for the same reason
        `gaf_record` turns such a frame into OP_GAFA: a stack is not one plane. */
     /* ALL FOUR VERTICES, or the shape is not the rectangle this claims it is.
-       `xy[6]`/`xy[7]` (v3) went uninspected until the landing review: the test
-       pinned v0's row, v1's column and the u/v extents, which a quad whose
-       fourth corner sits anywhere at all still satisfies -- and such a quad
-       would have been published as an axis-aligned sprite. Every caller
-       disassembled so far builds a true rectangle, so this corrects a test that
-       was too weak rather than a picture that was wrong. */
+       v0's row, v1's column and the u/v extents alone are satisfied by a quad
+       whose fourth corner (`xy[6]`/`xy[7]`) sits anywhere at all -- and such a
+       quad would be published as an axis-aligned sprite. Every caller
+       disassembled so far builds a true rectangle. */
     if (ptr_ok(fr) && ptr_ok(uv) && fr[0x0A] == 0 &&
         xy[1] == xy[3] && xy[2] == xy[4] &&
         xy[6] == xy[0] && xy[7] == xy[5] &&
         uv[1] == uv[3] && uv[2] == uv[4] &&
         uv[6] == uv[0] && uv[7] == uv[5]) {
-        /* THE SOURCE IS A WINDOW, NOT NECESSARILY THE WHOLE FRAME [landing 8e].
+        /* THE SOURCE IS A WINDOW, NOT NECESSARILY THE WHOLE FRAME.
            The quad's u/v corners are axis-aligned by the four tests above, so
            the source is the rectangle (uv[0], uv[1]) with the same half-open
            extents the destination uses. SKIRMISH.GUI's four player swatches are
-           the case that forced this: measured 2026-09-21 as
+           the case: measured 2026-09-21 as
            `xy=(214,94)(233,94)(233,113)(214,113) uv=(1,1)(31,1)(31,31)(1,31)`
            against a 32x32 frame -- a 30x30 window inset one texel, resampled to
-           19x19. They were the ENTIRE remaining residual of the shell (1 444 px,
-           `raw=62400 pct=0.23`), and the old test refused them on `uv[0] == 0`
-           alone. Nothing else about the shape changed: this widened what counts
-           as a source, not what counts as an axis-aligned stamp. */
+           19x19. */
         int su = uv[0], sv = uv[1];
         int sww = uv[2] - uv[0], swh = uv[5] - uv[1];
         int fw = (int)GF_W(fr), fh = (int)GF_H(fr);
@@ -570,10 +549,9 @@ static int __cdecl before_scale(void* e)
             l == xy[0] && t == xy[1]) {
             /* AND IT MUST BE KEYABLE. The consumer tells two windows of one
                frame apart by this packed value alone, so a window that will
-               not fit it keeps the old path rather than claiming an identity
+               not fit it publishes its box rather than claiming an identity
                it does not have. 0 is reserved for the whole frame, which is
-               what every 1:1 sprite and the in-game badge publish, so their
-               atlas keys are bit-for-bit what they were. */
+               what every 1:1 sprite and the in-game badge publish. */
             if (su == 0 && sv == 0 && sww == fw && swh == fh) {
                 r = l + dw - 1; b = t + dh - 1; plain = 1;
             } else if (su <= 255 && sv <= 255 && sww <= 255 && swh <= 255) {
@@ -632,12 +610,11 @@ static int __cdecl before_fill(void* e)
     if (!on_game_thread()) return 0;
     s = surf_of_ctx(ctx);
     op_add(OP_FILL, s, 0, 0, s ? s->w - 1 : 0, s ? s->h - 1 : 0);
-    /* AND THE COLOUR, which this leaf recorded nowhere until 2026-09-21. Without
-       it the op could only ever publish as its box's BYTES, and since the clean
-       cut those are dropped -- so the engine's own clear of the offscreen
-       (0x4C6890(offscreen, 0) at the head of 0x467D70) reached the twin as
-       nothing at all, and every region the engine leaves at index 0 presented as
-       the lane's magenta instead of black. Same shape as `rect_box`'s third
+    /* AND THE COLOUR. Without it the op could only ever publish as its box's
+       BYTES, and those are dropped -- so the engine's own clear of the offscreen
+       (0x4C6890(offscreen, 0) at the head of 0x467D70) would reach the twin as
+       nothing at all, and every region the engine leaves at index 0 would present
+       as the lane's magenta instead of black. Same shape as `rect_box`'s third
        argument, taken while the engine is inside the call. */
     if (s_lastOp) s_lastOp->col = (unsigned char)ARG(e, 2);
     return 0;
@@ -672,12 +649,12 @@ static int __cdecl before_free(void* e)
    of ours can run between the drop here and the release, by ordering rather
    than by luck.
 
-   Before this (G18-8) the table was retired by the two paths we had NAMED:
-   SurfaceFree (before_free) and the main offscreen's re-create
-   (surf_drop_offscreens, at the next 0x4C69F0("OFFSCREEN")). A surface freed
-   any other way left an entry pointing into the heap's free list, which reads
-   back as whatever the block became — and faults outright once the heap hands
-   the segment back, which is exactly what a level teardown makes likely.
+   The two paths we NAME are not enough on their own: SurfaceFree
+   (before_free) and the main offscreen's re-create (surf_drop_offscreens, at
+   the next 0x4C69F0("OFFSCREEN")). A surface freed any other way would leave
+   an entry pointing into the heap's free list, which reads back as whatever
+   the block became — and faults outright once the heap hands the segment
+   back, which is exactly what a level teardown makes likely.
 
    The engine's allocator is genuinely multi-threaded (`0x4D85B0` takes a
    critical section at `0x4D85C2`), and a free on another thread MUST NOT WALK
@@ -727,7 +704,7 @@ static int __cdecl before_build(void* e)
        keeping clean even though it did NOT settle the question it was reached
        for -- three boots per arm gave overlapping means, gpu-status 2.61 --
        because whatever settles that will be built on this counter or beside
-       it. [FOUND by landing 9's review.] */
+       it. */
     if (s_repainting) return 0;
     s_builds++;
     s_buildFlags |= ARG(e, 2);
@@ -759,7 +736,7 @@ static int __cdecl before_build(void* e)
    covers a pixel of it, which `op_add` is what actually enforces, and a claimed
    surface that is never a copy source costs nothing either way. Bounded and
    case-insensitive; a tag that is not a readable string simply is not one of
-   these. [Reach found by the landing review of 381465c.] */
+   these. */
 static int tag_is_shell_bg(const char* tag)
 {
     static const char pre[] = "bitmaps\\";
@@ -862,7 +839,7 @@ static const LEAF LEAVES[] = {
     { 0x004C6AC0u, "free",  { 0x8B, 0x44, 0x24, 0x04, 0x85, 0xC0 }, 6, before_free,  NULL },
     /* NOT a pixel-writing leaf: the allocator's free, the one place a recorded
        surface's memory can go away. It rides the same table so it takes the
-       same all-or-nothing byte match — G18-8, before_memfree. */
+       same all-or-nothing byte match — see before_memfree. */
     { 0x004D85A0u, "memfree", { 0x8B, 0x44, 0x24, 0x04, 0x50 }, 5, before_memfree, NULL },
     { 0x004A81E0u, "build", { 0x8B, 0x44, 0x24, 0x04, 0x81, 0xEC, 0xC0, 0x03, 0x00, 0x00 }, 10, before_build, NULL },
     { 0x004BF4D0u, "frame", { 0x83, 0xEC, 0x40, 0x53, 0x55, 0x56, 0x57 }, 7, before_frame, NULL },

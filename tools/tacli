@@ -82,8 +82,8 @@ def built_dll() -> Path:
 BUILT_DLL = built_dll()
 
 # The window title. Several instances of the same 1997 binary sit on the desktop
-# at once, one per worktree, and every one of them used to be titled exactly
-# "Total Annihilation": nothing on screen said which build you were looking at.
+# at once, one per worktree, and with the stock title every one of them reads
+# "Total Annihilation": nothing on screen says which build you are looking at.
 BASE_TITLE = "Total Annihilation"
 TREE = Path(__file__).resolve().parent.parent      # the tree this tacli ran from
 
@@ -300,9 +300,6 @@ class Instance:
         e["DISPLAY"] = meta.get("display") or default_display()
         # ddraw is always ours; DirectPlay is appended only for instances launched
         # with --dplay, so a stock single-player instance keeps wine's builtin.
-        # (Until 2026-09-05 a vkd3d-proton d3d12 pair was preferred here for the
-        # restorer's DirectML provider; the restorer is GLSL in our own context
-        # now and nothing in TA touches D3D12.)
         overrides = ["ddraw=n,b"]
         if meta.get("dplay"):
             overrides.append(DPLAY_OVERRIDES)
@@ -343,7 +340,7 @@ class Instance:
         (`window_title`): the tree label makes it instance-specific, and matching
         `^Total Annihilation - .*$` instead would start matching the user's browser
         tab about the game. The bare title stays in the list for an instance
-        launched before this existed, or with the label turned off.
+        whose meta records no title, or with the label turned off.
         """
         display = self.meta().get("display") or default_display()
         pid = self.pid()
@@ -364,14 +361,14 @@ class Instance:
         # Rank the candidates by how much evidence there is that this window is
         # ours, and take the best -- do not let the first one found stand in.
         #
-        # A window whose pid cannot be read is NOT evidence of anything, and the
-        # old "first candidate wins" let one become the answer. That is how a
-        # shoot came to grab the window of the instance stopped seconds earlier:
-        # a lingering, title-matching, pid-less window at TA's 640x480 SHELL size
-        # outranked nothing and so won. ffmpeg then refused the capture outright
-        # ("capture area 1024x768 ... outside the screen size 640x480"), or, when
-        # the leftover was the right size, grabbed it until it was destroyed
-        # mid-take and the demuxer failed with BadMatch. Ranking is used rather
+        # A window whose pid cannot be read is NOT evidence of anything, and
+        # "first candidate wins" lets one become the answer: a shoot then grabs
+        # the window of the instance stopped seconds earlier -- a lingering,
+        # title-matching, pid-less window at TA's 640x480 SHELL size. ffmpeg
+        # refuses that capture outright ("capture area 1024x768 ... outside the
+        # screen size 640x480"), or, when the leftover is the right size, grabs
+        # it until it is destroyed mid-take and the demuxer fails with BadMatch.
+        # Ranking is used rather
         # than skipping, because some wine windows carry no _NET_WM_PID at all
         # and refusing those outright would find no window on such a setup.
         #
@@ -379,9 +376,9 @@ class Instance:
         # for "the client is the size we asked for", so a pid-verified window at
         # any size beats a pid-less leftover at exactly the right size -- during
         # the launch poll our own window is still the 640x480 shell while a
-        # leftover can be a perfect 1024x768, and the first cut of this (size 2,
-        # pid 1) would have moved the leftover. Among our own windows size breaks
-        # the tie; with no readable pid anywhere, size alone decides as before.
+        # leftover can be a perfect 1024x768, and weights of size 2, pid 1 would
+        # move the leftover. Among our own windows size breaks the tie; with no
+        # readable pid anywhere, size alone decides.
         gw, gh = self.meta().get("res", list(DEFAULT_RES))
         ranked = []
         for wid in ids:
@@ -419,10 +416,9 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
         if name in PRIVATE_FILES or low.startswith("tagpu") or low.startswith("cnc-ddraw-"):
             continue
         # ErrorLog.txt is TA's crash report. It matches no other rule here — not
-        # private, not tagpu*, and .txt rather than .log — so it used to be
-        # symlinked through whenever the template happened to carry one, which
-        # is how 17 instances built on or before 2026-09-03 came to share a
-        # single file. TA writes it next to the EXE, and the exe is symlinked
+        # private, not tagpu*, and .txt rather than .log — so without this it
+        # would be symlinked through whenever the template carried one, and every
+        # instance would share a single file. TA writes it next to the EXE, and the exe is symlinked
         # into each gamedir, so leaving it out of the mirror is all it takes to
         # make it per-instance by construction.
         if name in ("Screenshots", "_triggers_off", "ErrorLog.txt") or low.endswith(".log"):
@@ -503,8 +499,7 @@ def write_title(inst: Instance, label: str) -> str:
 
     An empty label — none passed, blank, or nothing left of it after
     `title_label` — removes the file, which is the DLL's "leave the stock title
-    alone": the same state as an instance launched before this existed, or a game
-    launched outside tacli at all. Written on every launch rather than at create,
+    alone": the same state as a game launched outside tacli at all. Written on every launch rather than at create,
     so switching the tree's branch retitles the next launch without anyone having
     to remember to.
     """
@@ -543,7 +538,7 @@ def write_ddraw_ini(inst: Instance, tile, window=None, maxfps=60):
     (inst.gamedir / "ddraw.ini").write_text(
         "[ddraw]\n"
         + win +
-        # vulkan by name since landing 11-2: `openglcore` still REACHES this
+        # vulkan by name: `openglcore` also REACHES this
         # lane, but it reaches it through a fallback that says so in the log,
         # and a generated file should not need a fallback to be right.
         "renderer=vulkan\n"
@@ -576,11 +571,9 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
     read at 0x491653 and clamped by the engine itself to **[20, 500]**, which is
     why it is not a registry key and cannot be raised in a running game.
 
-    The bound is 500, not 1500 (which this said until 2026-09-10, and the scenario
-    schema accepted): `0x491658 cmp eax, 0x1f4 / jle` writes 0x1f4 straight into
-    `MaxUnitNumberPerPlayer` for anything larger, so asking for 1500 reports 1500
-    and gets 500. A scenario with 600 units on a player then failed in the fork,
-    after the game had launched, rather than at validate time. [BINARY-VERIFIED]
+    The bound is 500, not 1500: `0x491658 cmp eax, 0x1f4 / jle` writes 0x1f4
+    straight into `MaxUnitNumberPerPlayer` for anything larger, so asking for
+    1500 reports 1500 and gets 500. [BINARY-VERIFIED]
     """
     path = inst.gamedir / "totala.ini"
     prefs = [] if sound else [("NoDirectSound", 1), ("UseWindowsSound", 0)]
@@ -600,8 +593,7 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
 # instance made before a file existed would never see it -- they are re-linked
 # at launch instead, alongside deploy_dll and so, deliberately, under the same
 # --keep-dll guard. Absent is fine: the DLL logs why and the terrain stays
-# indexed under Classic++. (The ONNX Runtime / DirectML / vkd3d-proton stack
-# that lived here until 2026-09-05 is gone with the path that used it.)
+# indexed under Classic++.
 WEIGHT_FILES = ("full.w32.bin", "tiny.w32.bin")
 
 
@@ -825,8 +817,8 @@ def client_box(res, window):
     desktop. `dd.c` sets render.width/height from the ini's width/height and then
     maxes each against the game mode, so a --window SMALLER than --res does not
     shrink the client — it is ignored per axis. Tiling against the requested
-    window in that case put the real window off the right/bottom edge, which is
-    the silently mangled `glshot` tile_for exists to prevent (landing review)."""
+    window in that case would put the real window off the right/bottom edge,
+    which is the silently mangled `glshot` tile_for exists to prevent."""
     if not window:
         return tuple(res)
     return (max(int(res[0]), int(window[0])), max(int(res[1]), int(window[1])))
@@ -1047,7 +1039,7 @@ def _ensure_terrown_for_terr(inst) -> "str | None":
             "launch, not after)")
 
 def _ensure_markown_for_mark(inst) -> "str | None":
-    """Same footgun, UI markers edition (G13d): the marker pass (tagpu_mark.on) draws
+    """Same footgun, UI markers edition: the marker pass (tagpu_mark.on) draws
     the health bars itself and replays the engine's own order markers, group digits,
     build cursor and band box out of a capture — while tagpu_markown redirects the
     six call sites that produce them (including the engine's own selection rect, per
@@ -1454,7 +1446,7 @@ def cmd_gui(args):
             # with --defaults the default re-applies and the layer stays armed. Only
             # `off`, or a bare launch (which writes tagpu_defaults.off), takes it away.
             # Either way the flip observer stays -- it is tacli's own way into the
-            # process since the vulkan-only plan's landing 10c.
+            # process.
             path.write_text("off\n")
         elif args.state == "remove":
             path.unlink(missing_ok=True)
@@ -1595,7 +1587,7 @@ def cmd_weapons(args):
 # TA installs its own exception handler and writes ErrorLog.txt the instant it
 # faults, so a crash is detectable in milliseconds. Waiting out a 30 s timeout
 # and then guessing ("is the game past its loading screen?") wastes the time AND
-# names the wrong cause; every wait below now fails fast with the fault address,
+# names the wrong cause; every wait below fails fast with the fault address,
 # symbolised against tools/ta_symbols.txt.
 
 _SYMS = None
@@ -1641,13 +1633,10 @@ def crash_report(inst: "Instance", since: float):
     instance, or None. The exe path inside the report is what attributes it.
 
     The file is PER-INSTANCE: TA writes it beside the exe, and the exe is
-    symlinked into each gamedir. (Instances built on or before 2026-09-03 carry
-    a dangling symlink to a shared target, from when mirror_gamedir copied it
-    through; _launch's rotation unlinks that.) Corrected 2026-09-10 -- this
-    said the file "can be shared between instances", which is true only of
-    those legacy instances.
+    symlinked into each gamedir. (A legacy instance may carry a dangling
+    symlink to a shared target; _launch's rotation unlinks that.)
 
-    TWO THINGS THIS DOES NOT DO, and both have misled a session: it parses no
+    TWO THINGS THIS DOES NOT DO: it parses no
     TIMESTAMP -- freshness is the caller's `since` against the file's mtime,
     and nothing in the returned string says how old the report is -- and TA
     APPENDS, so `re.search` below returns the FIRST report in the file. Since
@@ -1743,16 +1732,14 @@ def cmd_shot(args):
 
 
 def cmd_glshot(args):
-    """RETIRED with the OpenGL lane (the vulkan-only plan, landing 11-2)."""
-    # The trigger was polled in render_ogl.c and nowhere else -- a comment in
-    # tagpu_scaffold.c mentions it but never read it -- so the verb died with
-    # that file. It captured the GL framebuffer, which no longer exists in the
-    # process: `ddraw.dll` creates no GL context on any path.
+    """RETIRED: there is no OpenGL lane, so there is no GL framebuffer."""
+    # `ddraw.dll` creates no GL context on any path, and nothing polls the
+    # trigger.
     #
     # It is kept as a verb, and fails loudly, because scripts and notes in this
     # tree still call it and a silent timeout is exactly the failure this repo
-    # keeps paying for. `tacli shot` is the replacement for most uses: since
-    # landing 11-2a it runs from the engine's flip and answers on every lane.
+    # keeps paying for. `tacli shot` is the replacement for most uses: it runs
+    # from the engine's flip and answers on every lane.
     die("tacli glshot is retired: the OpenGL lane was deleted in landing 11-2 "
         "and there is no GL framebuffer to capture. Use `tacli shot` for the "
         "engine's own surface (it works on every renderer now), or record the "
@@ -1799,15 +1786,15 @@ def cmd_roster(args):
                           "height": int(m.group(7)),
                           "screen": [int(m.group(8)), int(m.group(9))]})
         elif line.startswith("units:"):
-            # TAKE THE HEADER ON THE BLOCK'S OWN SIDE, NOT THE ONE PAST IT
-            # [landing review, 10c-3 r2]. roster_log() emits the dump lines
+            # TAKE THE HEADER ON THE BLOCK'S OWN SIDE, NOT THE ONE PAST IT.
+            # roster_log() emits the dump lines
             # first and its `units:` header second, so the header belonging to
             # a block sits immediately AFTER it in the file and is the last one
             # this reverse scan sees BEFORE the block. Headers run at
             # ROSTER_HDR_MS (500 ms) and dumps at ROSTER_DUMP_MS (5 s), so ten
-            # headers separate two blocks; overwriting unconditionally walked
-            # back through all of them, kept the right one for exactly one
-            # iteration, and then replaced it with the header from the PREVIOUS
+            # headers separate two blocks; overwriting unconditionally would walk
+            # back through all of them, keep the right one for exactly one
+            # iteration, and then replace it with the header from the PREVIOUS
             # roster_log call -- 500 ms older than the screen= values it labels,
             # and computed from a different eye than the projection they carry.
             if units:
@@ -2501,7 +2488,7 @@ def _ui_label_diff(before: dict, after: dict):
     return [t for t in dict.fromkeys(labels(after)) if t not in was]
 
 
-# G17b: when set, every gadget click in this process is aimed in CLIENT-AREA
+# When set, every gadget click in this process is aimed in CLIENT-AREA
 # pixels and converted back by the engine's own pointer path, instead of being
 # handed to the engine already in its own coordinates. It is a whole-run switch
 # rather than a per-call one because a walk that mixes the two proves nothing:
@@ -3276,8 +3263,8 @@ def _scn_setup(doc, label):
     # larger number here would be accepted, reported, and then silently ignored.
     setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, SCN_MAX_LIMIT)
     setup["clear_existing"] = _scn_bool(node, "clear_existing", w, True)
-    # Both default to None = "leave the screen as it is", which is what `load`
-    # did before they existed; `mapping` then falls back to SCN_MAPPING_DEFAULT.
+    # Both default to None = "leave the screen as it is"; `mapping` then falls
+    # back to SCN_MAPPING_DEFAULT.
     setup["los"] = _scn_str(node, "los", w, choices=SCN_LOS)
     setup["mapping"] = _scn_bool(node, "mapping", w)
 
@@ -4037,7 +4024,7 @@ def _is_int(w: str) -> bool:
 
     Python's `int()` is looser — `+5`, ` 7 `, `1_0` all parse here and are then
     refused by the fork with a message about the wire, which reads like a bug in
-    the verb. Refuse them where the user can see why. [FROM REVIEW 2026-09-07]
+    the verb. Refuse them where the user can see why.
     """
     return bool(re.fullmatch(r"-?[0-9]+", w))
 
@@ -4049,7 +4036,6 @@ def _order_type(name: str, flag: str) -> str:
     place in this verb where input reaches the fork's parser unchecked: a
     newline in `--expect` splits the order line into two the fork parses
     separately. TA's unit names are letters, digits and underscore.
-    [FROM REVIEW 2026-09-07]
     """
     if not re.fullmatch(r"[A-Za-z0-9_]{1,31}", name):
         die(f"{flag} {name!r}: a unit type is 1-31 characters of letters, "

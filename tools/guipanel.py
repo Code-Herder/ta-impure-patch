@@ -3,19 +3,18 @@
 
 TWO WAYS TO GET ONE, and `--nine` is the one that should ship.
 
-G18c: the screen needs a panel background no stock frame can provide -- none
-of the runtime frames has seven `h20` recesses, and none puts a label beside
-its control instead of above it. `guiart.py` splices one out of `visualsrt`'s
-pixels so the old vertical layout could be looked at; that output is a
-derivative of the game's art and can never ship.
+The screen needs a panel background no stock frame can provide -- none of the
+runtime frames has seven `h20` recesses, and none puts a label beside its
+control instead of above it. `guiart.py` splices one out of `visualsrt`'s
+pixels, but that output is a derivative of the game's art and can never ship.
 
     .venv-undither/bin/python tools/guipanel.py --nine     # the engine's kit
     .venv-undither/bin/python tools/guipanel.py            # drawn from nothing
     .venv-undither/bin/python tools/guipanel.py --trigger  # what OPENS it
 
 `--nine` COMPOSES the ground from `anims/frontend.gaf`'s own nine-slice. The
-owner chose `back` (the shell's mottled 64x64 panelling) over `dia` and the
-`hybrid` of the two, so that is the default; the dialog kit is
+default is `back` (the shell's mottled 64x64 panelling), over `dia` and the
+`hybrid` of the two; the dialog kit is
 `diaul/diau/diaur · dial/diatile/diar · diall/diabottom/dialr`, 32x32 each --
 which is what TA's floating dialogs (MSGBOX, YESORNO, EXITMENU) are made of:
 they declare no `id=12` at all and the engine composes their ground the same
@@ -40,9 +39,9 @@ what was measured off the Cavedog logo and off the real top bar.
 
 Both land in a gitignored directory. The drawn one would be ours to ship; the
 composed one is the game's pixels and is not, which is exactly why the DLL
-composes rather than carries it (gui-gadgets.md §10.1, and the one-common-GAF
-finding of 2026-09-09: there is a single gadget GAF at `gi+0x04`, so a new
-frame is appended to that blob in memory rather than loaded from a file).
+composes rather than carries it (gui-gadgets.md §10.1: there is a single
+gadget GAF at `gi+0x04`, so a new frame is appended to that blob in memory
+rather than loaded from a file).
 """
 
 import argparse
@@ -61,20 +60,20 @@ TOOLS = Path(__file__).resolve().parent
 # Panel id=0 at (704, 32), right-aligned 16 px in, hanging from the top bar's
 # underside. Panel-local coordinates throughout.
 #
-# SIX ROWS, AND EVERY ONE OF THEM IS LIVE. Mouse-wheel zoom was the seventh
-# and was cut 2026-09-09: `tagpu_zoom_init()` runs ONCE from dllmain.c:130 and
-# installs byte patches, so flipping `tagpu_zoom.on` mid-game does nothing at
-# all -- the row would have lit green and changed no pixel until the next
-# launch. It is also not a rendering option; it is a play mode. The lever
-# stays, the row goes, and the menu keeps an invariant worth having: NOTHING
-# IN IT NEEDS A RESTART, so no row ever has to carry an asterisk.
+# SIX ROWS, AND EVERY ONE OF THEM IS LIVE. Mouse-wheel zoom is not a row:
+# `tagpu_zoom_init()` runs ONCE from dllmain.c:130 and installs byte patches,
+# so flipping `tagpu_zoom.on` mid-game does nothing at all -- such a row would
+# light green and change no pixel until the next launch. It is also not a
+# rendering option; it is a play mode. So the menu keeps an invariant worth
+# having: NOTHING IN IT NEEDS A RESTART, so no row ever has to carry an
+# asterisk.
 #
-# NO APPLY BUTTON -- decided with the owner 2026-09-09. A stage button IS the
+# NO APPLY BUTTON. A stage button IS the
 # setting; there is no edit buffer for an Apply to commit, so a row writes its
 # key the moment it is clicked and the panel is dismissed by the trigger or by
 # clicking away, the way a drop-down is. That is not only a visual choice: it
 # means `OnCommand` writes the cfg per row and there is no eighth gadget to
-# gather state from. The panel loses the 40 px the action row occupied.
+# gather state from.
 W, H = 304, 212
 ROWS = 6
 ROW_Y0, ROW_PITCH, ROW_H = 34, 28, 20
@@ -299,8 +298,7 @@ def compose_panel(ground="back", kit=None):
 
 
 # ----------------------------------------------------------- the trigger --
-# What OPENS the drop-down. Decided with the owner 2026-09-09 after two rounds
-# of prototypes: a frameless icon on the top bar, in the register of the
+# What OPENS the drop-down: a frameless icon on the top bar, in the register of the
 # CAVEDOG LOGO -- `mainmenu.gui` GADGET5 `Credits`, which is an ordinary
 # `id=1` button with `text=` empty and `attribs=1026` where every other button
 # on that screen is `attribs=2`. Its art is `anims/mainmenu.gaf`, one entry,

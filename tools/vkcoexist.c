@@ -7,7 +7,7 @@
  * `wglCreateContext` (render_ogl.c `ogl_create`), and a window generally cannot
  * carry a GL context and a Vulkan swapchain at once. Which of the roadmap's
  * three routes actually works decides how the backend is built, so it is
- * measured here rather than argued -- BEFORE a line of it goes into the DLL.
+ * measured here rather than argued.
  *
  * The four things it tries, in the roadmap's order of preference:
  *
@@ -22,13 +22,12 @@
  *   D  ROUTE 3     two top-level windows, one GL, one Vulkan, swapping which is
  *                  visible.
  *
- * AND TWO MORE, ADDED WHEN THE PLAN DECIDED TO DELETE GL [2026-09-17], which
- * ask about a window no GL renderer owns at all:
+ * AND TWO MORE, which ask about a window no GL renderer owns at all:
  *
  *   E  VULKAN-ONLY  no GL context and no pixel format, ever. This is the state
  *                  the game window is in when `renderer=vulkan` selects a
  *                  backend that never calls `ogl_create`, and it is the route
- *                  the vulkan-only plan's landing 4 presents through.
+ *                  the Vulkan backend presents through.
  *   F  THE NET      route E, and then GDI on the same window -- because the
  *                  backend needs to know whether `gdi_render_main` can still
  *                  be SEEN after a surface has existed on the HWND, and that
@@ -739,18 +738,17 @@ static void route_D(Route* out, int show)
     DestroyWindow(b);
 }
 
-/* ---- the vulkan-only routes (the vulkan-only plan's landing 4) ----------- *
+/* ---- the vulkan-only routes ---------------------------------------------- *
  *
  * A, B, C and D all ask ONE question: can Vulkan present on a window the fork's
- * GL renderer owns, and does GL survive it? E and F ask a different one, and it
- * only became worth asking when the plan decided to delete GL: can Vulkan
- * present on a window NOBODY owns -- and what can still be seen on that window
- * afterwards when the Vulkan lane itself will not come up?
+ * GL renderer owns, and does GL survive it? E and F ask a different one: can
+ * Vulkan present on a window NOBODY owns -- and what can still be seen on that
+ * window afterwards when the Vulkan lane itself will not come up?
  *
  * They are separate routes rather than a conclusion drawn from A, and that is
  * the point. Route A's verdict is "API ok, pixels dead", but the dead pixels
  * were GL's: its Vulkan half presented 10 of 10 frames on the very HWND the
- * game owns. Landing 4 deletes the half that failed, so on paper A already says
+ * game owns. The Vulkan backend has no GL half, so on paper A already says
  * yes. "The half that failed is the half we deleted" is an argument, though,
  * and this file exists because arguments about this seam have been wrong twice
  * -- the API said yes when the screen said no, and the roadmap ranked the only
@@ -790,8 +788,7 @@ static void route_E(Route* out, int show)
  * the same net -- but route A measured that once winevulkan has put a surface
  * on an HWND, that HWND is finished for GL for the life of the process. If GDI
  * inherits that verdict, a late fallback paints into a drawable nobody shows:
- * a black window and no diagnostic, which is the failure mode this plan has
- * spent three landings finding in other clothes.
+ * a black window and no diagnostic.
  *
  * AND THE ANSWER DECIDES AN ORDERING RATHER THAN A HEURISTIC, which is what
  * CLAUDE.md asks a fix to be. If GDI does not survive, the fallback has to be
@@ -847,7 +844,7 @@ static void route_GL(Route* out, int show)
     /* THE CONTROL REPORTS ITS VA TOO, because "what does the GL lane cost in a
        32-bit address space" has no other answer in this file: every other route
        measures GL and Vulkan together and the two cannot be separated after the
-       fact. [ADDED 2026-09-17, for the vulkan-only plan's landing 4.] */
+       fact. */
     va_report("GL up, no Vulkan");
     if (g_hold) gl_hold(&g, g_hold);
     gl_down(&g, 1);

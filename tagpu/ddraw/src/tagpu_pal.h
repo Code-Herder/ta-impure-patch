@@ -21,10 +21,10 @@
    one world reader left on the engine's table directly, and its walk being on
    the game thread is why.
 
-   Since the frame packet's landing 2 the engine's table and the gamma factor
-   arrive in the PACKET (`pal[]`, `gamma`, copied on the game thread by the
-   publisher) and this module reads no engine memory: the engine half of the
-   resolution is the packet's copy, kept across frames without one. */
+   The engine's table and the gamma factor arrive in the PACKET (`pal[]`,
+   `gamma`, copied on the game thread by the publisher) and this module reads
+   no engine memory: the engine half of the resolution is the packet's copy,
+   kept across frames without one. */
 #ifndef TAGPU_PAL_H
 #define TAGPU_PAL_H
 struct TAGPU_PACKET;

@@ -1,7 +1,7 @@
 /* tagpu_terr.c — the terrain pass: the 32x32 map tiles, native.
 
    The engine's pass 0x483FA0 is a grid blit and nothing else
-   (research/notes/terrain-depth.md 2, re-read from the bytes for G13b):
+   (research/notes/terrain-depth.md 2, re-read from the bytes):
 
      tileX0 = eyeX/32 (toward zero);  fracX = eyeX - tileX0*32
      cols   = ceil((viewW + fracX)/32)            same for rows/viewH/fracY
@@ -23,12 +23,12 @@
      and over Ring Atoll's lagoon, NOT ONE PIXEL of the viewport changed over
      10 s, nor over 30 s at +10 game speed, and NOT ONE BYTE of the 256-entry
      live palette changed across 24 samples. The minimap kept changing in the
-     same frames, which is what says the capture was live. Earlier comments
-     here claimed the engine cycles the palette for water; it does not.
+     same frames, which is what says the capture was live. The engine does
+     not cycle the palette for water.
    * Fog is a straight import of the shared rule (tagpu_glsl.h) — with one
      change that owning the bottom layer forces. Terrain must PAINT the fog's
      solid black in unexplored cells rather than discard: nothing is behind it
-     any more except tagpu_terrown.c's key fill (TAGPU_GLSL_FOG_TERRAIN).
+     except tagpu_terrown.c's key fill (TAGPU_GLSL_FOG_TERRAIN).
 
    The tile set is built by LoadMap and never changes after, so the atlas is
    built ONCE per map — a single R8 texture of 32x32 cells on a 34-texel pitch,
@@ -108,7 +108,7 @@ static int s_armed = -1;
 static int s_log = 0, s_passive = 0, s_over = 0, s_key = DEFAULT_KEY;
 static unsigned s_armCheck = 0;
 
-/* ---- the hand-over to the Vulkan edition, and the A/B lever (Phase G/G19e)
+/* ---- the hand-over to the Vulkan edition, and the A/B lever ----
    `tagpu_terr.ab` makes this pass draw over a black frame with a cleared depth
    buffer and read it back ONCE; `s_abFrame` travels to the Vulkan lane with the
    instances rather than being polled twice on two cadences, so both lanes
@@ -120,8 +120,8 @@ static TAGPU_TERRHAND s_pub;
 /* THE CPU MIRRORS ARE ASKED FOR, ONCE, AND THEN KEPT. Unlike tagpu_gaf.c's
    incremental atlas (gpu-status.md 2.29), both of this pass's big buffers --
    the tile atlas and the height grid -- are built WHOLE in one pass out of a
-   buffer that used to be freed three lines later, so the whole of the
-   mechanism here is "do not free it", and a mirror is correct from the instant
+   buffer the build would otherwise free, so the whole of the mechanism here
+   is "do not free it", and a mirror is correct from the instant
    it exists because it IS the buffer the build loop filled. What the flag has
    to do instead is force ONE rebuild when the Vulkan lane arms after the
    buffer was built: `ensure_atlas` and `ensure_height` both early-return on an
@@ -130,18 +130,8 @@ static TAGPU_TERRHAND s_pub;
 static int s_mirrorWant;               /* the Vulkan lane asked for mirrors   */
 static unsigned char* s_atlasMirror;   /* ATLAS_W x s_atlasH, or NULL         */
 static unsigned s_atlasMirrorSerial;
-/* THE RESTORED TWIN'S MIRROR WAS THE OTHER WAY OF FEEDING THE SAME LANE, and
-   it went in landing 11-5c with the GL half it read back from. It could only
-   ever be a read-back: the indexed atlas above is the buffer an upload was
-   handed, but the restored one was painted on the GPU by tagpu_restoreglsl.c,
-   so a CPU copy meant pulling it back down every published frame. What is left
-   is the other route, below -- hand the CONSUMER the work instead of the
-   pixels -- and tagpu_terr.h's `atlasRgb`/`atlasRgbRows` went with it (11-5e-2b).
-   [The vulkan-only plan, landing 11-5c.] */
-
 /* ---- THE RESTORE REQUEST, for a lane that restores on its own -----------
-   The other half of gate 2's mirror, and its replacement: instead of reading
-   the GL twin back so a second lane can upload it, hand that lane the WORK.
+   Instead of restored pixels, hand the lane that restores the WORK.
    Latched on the arm beat exactly as `s_mirrorWant` is, and for the same
    reason -- the answer is a file-attribute query and it does not change
    mid-map in any way worth paying for every frame.
@@ -155,10 +145,7 @@ static unsigned s_atlasMirrorSerial;
    a device whose 2D limit is at least 6154 -- below that `ensure_atlas` clamps
    and the rest of the map draws black, which is its own problem and not this
    allocation's. It is the only copy of two facts a `_vk` file cannot re-derive,
-   the tileability flags and the centre-out order. (This read "under 90 KB for
-   a full atlas", which is about 2045 tiles and was never a full one; the number
-   mattered less while nothing consumed the list. [FROM THE 11-5c LANDING
-   REVIEW; the units and the device caveat from its re-review.]) */
+   the tileability flags and the centre-out order. */
 static int                s_rvkWant;   /* Classic++ `assets=`, latched        */
 static TAGPU_RGLSL_FRAME* s_rFrames;   /* s_rFrameN entries, restore order    */
 static int                s_rFrameN;
@@ -232,7 +219,7 @@ int tagpu_terr_armed(unsigned frame_counter)
        nothing. */
     s_ab = GetFileAttributesA(ABFILE) != INVALID_FILE_ATTRIBUTES;
     if (!s_ab) s_abDone = 0;
-    /* THE CPU MIRRORS (Phase G / G19e), on this beat and not per frame --
+    /* THE CPU MIRRORS, on this beat and not per frame --
        tagpu_vk_armed() is two file-attribute queries and a pass that asked
        every frame would make them on every frame of ordinary play, where the
        answer is no and stays no.
@@ -242,45 +229,24 @@ int tagpu_terr_armed(unsigned frame_counter)
        it stays asked for the process's life: the flag is what keeps the buffers
        off an ordinary play session, and un-asking it mid-session would only buy
        back memory a re-arm would immediately spend again. */
-    /* ASKED OF THE CONSUMER, NOT OF THE LEVER. [FROM THE 4d-1 LANDING REVIEW.]
-    This used to test `tagpu_vk_armed()`, which is true whenever `tagpu_vk.on`
-    exists -- and these latches are one-way, so once asked the memory is held
-    for the process's life. Until 4d-1 that was right: `tagpu_vk.on` under
-    `renderer=openglcore` brought up route D, which consumed the mirror. Route
-    D is gone, so on that path the lever now arms nothing and the mirror would
-    be paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
-    "a Vulkan pass will run in this process", which is the question. */
+    /* ASKED OF THE CONSUMER, NOT OF THE LEVER. `tagpu_vk_armed()` is true
+    whenever `tagpu_vk.on` exists, whether or not anything will consume the
+    mirror -- and these latches are one-way, so once asked the memory is held
+    for the process's life. `tagpu_vk_owns_present()` is exactly "a Vulkan
+    pass will run in this process", which is the question. */
     if (!s_mirrorWant && tagpu_vk_owns_present()) s_mirrorWant = 1;
-    /* AND THE OTHER WAY OF FEEDING THAT LANE: hand it the frame list and let
-       it restore, rather than reading our own restore back for it. Latched on
-       the same beat and read only when there is a lane to feed. */
-    /* THE KNOB IS `assets=`, NOT A SECOND LEVER -- the same change
-       `tagpu_gaf_atlas_restore_vk` carries, for the one atlas that is not a
-       GAF atlas. `tagpu_restorevk.on` stood here, on no defaults table, so the
-       shipped game never fed the restorer at all. This beat is 30 frames, so
+    /* AND THE FRAME LIST THAT LANE RESTORES FROM. Latched on the same beat
+       and read only when there is a lane to feed. */
+    /* THE KNOB IS `assets=`, NOT A SECOND LEVER -- the same knob
+       `tagpu_gaf_atlas_restore_vk` follows, for the one atlas that is not a
+       GAF atlas: a lever on no defaults table would leave the shipped game
+       never feeding the restorer at all. This beat is 30 frames, so
        `assets=0 -> 1` from the render-options row arms within half a second
        and `restore_step` publishes on the frame after. */
     if (!s_rvkWant && s_mirrorWant && tagpu_classicpp_assets()) {
         s_rvkWant = 1;
         flog("terr: restorevk -- the restored atlas is the other lane's to paint, "
              "so no read-back and the frame list is published instead");
-        /* AND THE MIRROR GOES WITH THE LATCH, ROWS FIRST -- which the first
-           version of this did not do, and the claim in tagpu_terr.h that the
-           two hand-over fields are mutually exclusive was false because of it.
-           [FROM THE LANDING-7c REVIEW; independently found the same hour.]
-           This lever is POLLED until it latches, so it can be created
-           mid-session -- and then the read-back's early return stopped
-           updating the mirror while leaving `rows > 0` standing, so the
-           publisher below ran BOTH blocks. A consumer then resized its restored
-           image twice in one call and uploaded a frozen mirror into the very
-           image the other lane renders into; where the mirror's rows and the
-           atlas's height disagreed it refused every frame instead and the
-           terrain stopped drawing altogether.
-           Freeing it was the same argument the read-back's own failure path
-           made: a buffer nothing will read again is up to 23 MB held for the
-           process, and leaving ROWS standing is worse than the memory because
-           the publish was gated on `rows > 0`. Both halves went with the
-           read-back in landing 11-5c and there is nothing left to free. */
     }
     if (s_passive || s_over) tagpu_terrown_set_skip(0);
     if (was != 1) {
@@ -295,15 +261,12 @@ int tagpu_terr_armed(unsigned frame_counter)
 int tagpu_terr_on(void) { return s_armed > 0; }
 
 /* ---- the atlas -----------------------------------------------------------
-   THE ATLAS IS BUILT WHEN THIS SAYS SO. `s_atlasBuilt` used to share the job
-   with a GL texture name, and keying `ensure_atlas`'s already-built test on
-   that name rebuilt the whole atlas EVERY FRAME on a lane with no GL -- a
-   5.9 MB calloc and free, the per-tile copy loop, an `IsBadReadPtr` over the
-   tile set, a log line a frame, and an `s_atlasMirrorSerial++` that made the
-   Vulkan twin re-upload the entire atlas image every frame. The name went in
-   landing 11-5c and the flag is the whole answer. [FROM THE 4b-2 LANDING
-   REVIEW, 2026-09-18 -- the twelfth instance of that landing's own shape, in
-   a function gpu-status.md 2.50 listed as fixed when only its mirror was.] */
+   THE ATLAS IS BUILT WHEN THIS SAYS SO, and nothing else answers that:
+   keying `ensure_atlas`'s already-built test on a GL texture name would
+   rebuild the whole atlas EVERY FRAME on a lane with no GL -- a 5.9 MB
+   calloc and free, the per-tile copy loop, an `IsBadReadPtr` over the tile
+   set, a log line a frame, and an `s_atlasMirrorSerial++` that makes the
+   Vulkan twin re-upload the entire atlas image every frame. */
 static int    s_atlasBuilt;
 static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
@@ -312,22 +275,16 @@ static int    s_maxTex;
 /* THE 2D IMAGE LIMIT THIS PASS HAS ALREADY REFUSED, or 0. Latched on the VALUE
    rather than as a flag, so a device swap (the GPU picker re-picks) is asked
    again on its own merits and a re-picked identical limit is still refused
-   without a second log line. See the refusal in tagpu_terr_gather.
-   [FROM THE 11-5c RE-REVIEW: the first version of that check assigned
-   `s_maxTex` and bailed, which made the enclosing
-   `s_maxTex != tagpu_vk_max_image_dim()` false on the very next frame -- so the
-   whole block was skipped, `ensure_atlas` built an atlas the consumer refuses
-   every frame, and the one log line saying "terrain stays the engine's" was
-   true for exactly one frame. A bound that does not bind is still a defect.] */
+   without a second log line. See the refusal in tagpu_terr_gather. */
 static int    s_dimBad;
 /* Classic++ (tagpu_classicpp.on): the RESTORED copy of the atlas -- the same
    cells on the same pitch, true colour from the unditherer's model -- so the
-   one set of UVs serves both looks. THE IMAGE IS NOT OURS. Since landing 11-5c
-   this side owns the REQUEST and nothing else: the order, the frame list, and
+   one set of UVs serves both looks. THE IMAGE IS NOT OURS. This side owns the
+   REQUEST and nothing else: the order, the frame list, and
    the two flags below. The consumer (tagpu_vk_terr.c) owns the image, runs the
    model, and knows when a cell has been painted; `restored` in the hand-over
    is this side saying a request STANDS, not that anything has been restored.
-   The look it produces is unchanged and is described where it is now made:
+   The look it produces is described where it is made:
    a slice per frame, the cells SHOW AS THEY LAND (renderers.md 4c Q6), the
    destination cleared to alpha 0 at the start of a job and each out pass
    writing alpha 1 over the cell it paints, guard ring included, so the
@@ -351,15 +308,14 @@ static const void* s_hSet;             /* from, or last attempted from      */
 static unsigned s_hFrame;              /* the frame of that attempt          */
 static int    s_hMeshW, s_hMeshH;      /* the grid it was built from: a failed
                                           rebuild leaves the old mesh, and this
-                                          is what keeps it undrawn (review) */
-/* THE CASTER MESH'S CPU MIRROR (Phase G / G19e, the shadow pass). The same
+                                          is what keeps it undrawn */
+/* THE CASTER MESH'S CPU MIRROR (Phase G, the shadow pass). The same
    answer as the atlas's and the height grid's: the very buffers build_hills
    filled, kept instead of freed, so the Vulkan shadow pass draws the SAME
    vertices and the SAME index order rather than a second evaluation of
    build_hills' arithmetic. 19.3 MB on Two Continents (6.4 vertices + 12.9
    indices) and paid for only while the Vulkan lane is armed --
-   `s_mirrorWant`, set from `tagpu_vk_owns_present()` on the arm beat (it read
-   `tagpu_vk_armed()` until the 4d-1 review; see the latch itself).
+   `s_mirrorWant`, set from `tagpu_vk_owns_present()` on the arm beat.
    The serial says when they last changed, so the Vulkan lane uploads on a map
    change and not per frame. */
 static float*    s_hMeshV;             /* s_hMeshVN * 3 floats, or NULL       */
@@ -374,7 +330,7 @@ static int       s_hMeshNoMirror;
 
 /* THIS FRAME'S CELLS, one record each: the cell's column and row in the
    gather's own grid, then its tile's column and row in the atlas. Everything
-   the six vertices used to carry is rebuilt from these four shorts by the
+   six vertices would carry is rebuilt from these four shorts by the
    vertex shader below, which is why a whole 4K view fits in a megabyte.
    GROWN FROM THE VIEWPORT (terr_reserve, through tagpu_terr_clamp_span) and
    never shrunk: a resolution change reserves once and every frame after it
@@ -397,19 +353,19 @@ typedef char terr_atlas_consts_unchanged[
    uploaded at init and never touched again — and `aCell` is this frame's four
    shorts for the cell, per instance.
 
-   The three values the per-vertex stream used to carry are rebuilt here, and
+   The three values a per-vertex stream would carry are rebuilt here, and
    rebuilt EXACTLY: every term is an integer far below 2^24 — a grid column is
    at most 2052 (the 16384-px viewport tagpu_native.c will believe, at the
    0.25x zoom floor, over 32), a map cell at most 2047 (`mapW16 <= 4096`, and
    the tile map's stride is half that), an atlas column 63 and an atlas row
    1023 — so each product and sum is exact in float and aPos, aUV and aWorld
-   are bit for bit the floats the CPU used to write. Those same bounds are
-   what puts every field of aCell inside a signed short. The atlas texel size arrives as the same
-   `uTexel` float the CPU used to multiply by, so the UVs are the same product
-   of the same two operands. What changes is only the cost — four shorts a
-   cell against six vertices of six floats — and that is what lets one frame's
+   are bit for bit the floats a CPU would write. Those same bounds are what
+   puts every field of aCell inside a signed short. The atlas texel size
+   arrives as the `uTexel` float a CPU would multiply by, so the UVs are the
+   same product of the same two operands. The cost is four shorts a cell
+   against six vertices of six floats — and that is what lets one frame's
    budget cover a 3840x2160 view at the zoom floor. */
-/* THIS PASS'S TWO SHADERS, AND NEITHER HAS A C REFERENCE LEFT. They are a
+/* THIS PASS'S TWO SHADERS, AND NEITHER HAS A C REFERENCE. They are a
    BUILD INPUT, not dead GL code: `tools/spirv-gen.py` reads them out of the
    PREPROCESSED translation unit under the manifest names tagpu_terr::VS and
    tagpu_terr::FS, and generates the SPIR-V `tagpu_vk_terr.c` draws the terrain
@@ -417,8 +373,8 @@ typedef char terr_atlas_consts_unchanged[
    terrain the player sees. `tools/spirv-check.sh` re-extracts them through the
    preprocessor on every link and compares the hashes.
    The pragma below is paired and its `pop` is PROVED with a planted probe
-   rather than read -- landing 11-4b put one at column 0 inside a comment,
-   where it is text and not a directive. */
+   rather than read: a `pop` at column 0 inside a comment is text and not a
+   directive. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
@@ -555,9 +511,7 @@ static const char* FS =
 void tagpu_terr_glreset(void)
 {
     /* and the hand-over goes with the context: its texel pointers name textures
-       that no longer exist and its cells a frame that will not be drawn. The
-       feature pass has carried this line since it was written; this one did
-       not, and the asymmetry was in the G19e diff. */
+       that no longer exist and its cells a frame that will not be drawn. */
     s_pubHave = 0; s_abFrame = 0;
     s_atlasBuilt = 0;                   /* rebuilt on the next gather          */
     s_hMeshW = s_hMeshH = 0;
@@ -575,22 +529,13 @@ void tagpu_terr_glreset(void)
        restore request on a new map). The request is dropped here too, so the
        consumer is handed a new serial rather than one it has already seen.
 
-       NOTHING CALLS THIS ON THE SURVIVING LANE, and the name is the reason it
-       is worth saying. Its one caller is `tagpu_native_glreset`
-       (tagpu_native.c), which tests nothing itself; THAT function's one caller
-       was tagpu_overlay.c's GL-context-change watch -- `if (cur != s_ctx)`,
-       with `cur` from `wglGetCurrentContext()`, NULL for the life of a process
-       that makes no GL context, so the branch never fired and `if (s_ctx)`
-       inside it was a second pin. **11-5e-1 DELETED THAT WATCH**, so the chain
-       has no root at all now and every link in it, this one included, is
-       unreachable. Naming the far end of the chain as "its one caller" sends a
-       reader grepping to the wrong file, which is why the chain is spelled out
-       rather than summarised. [FROM THE 11-5c RE-REVIEW; the deletion and this
-       correction are 11-5e-1's.] The
-       body is kept because none of it is GL any more: it is this pass's "drop
-       everything derived from the map" and a Vulkan device loss wants exactly
-       that. Retiring the entry point belongs with the rest of the GL entry-point
-       surface, 11-5e. [FROM THE 11-5c LANDING REVIEW.] */
+       NOTHING CALLS THIS, and the name is the reason it is worth saying. Its
+       one caller is `tagpu_native_glreset` (tagpu_native.c), which has no
+       caller of its own, so the chain has no root and every link in it, this
+       one included, is unreachable. The body is kept because none of it is
+       GL: it is this pass's "drop everything derived from the map" and a
+       Vulkan device loss wants exactly that. Retiring the entry point belongs
+       with the rest of the GL entry-point surface, 11-5e. */
     s_rgbState = 0;
     rlist_drop();
 }
@@ -639,7 +584,7 @@ static void build_height(const char* ta, unsigned frame)
     build_hills(buf, w, h);          /* TODO: unconditional -- 19 MB even when
                                         terrainshadow=0, which is the default.
                                         See build_hills' header. */
-    /* THE MIRROR IS THE BUFFER (Phase G / G19e), exactly as the atlas's: the
+    /* THE MIRROR IS THE BUFFER, exactly as the atlas's: the
        memory the loop above filled, kept instead of freed, so the Vulkan lane's
        uHeight is those texels rather than a second read of the engine's grid.
        0.5 MB at 512x512 cells, 16 MB at the 4096 ceiling, and paid for only
@@ -661,7 +606,7 @@ static void build_height(const char* ta, unsigned frame)
     flog(b);
 }
 
-/* ---- the heightfield as a caster (G14i, renderers.md 2.8, 2.12) ----
+/* ---- the heightfield as a caster (renderers.md 2.8, 2.12) ----
    One vertex per grid point at the world point the lab's terrain vertex
    depicts -- (c*16, h, r*16 + h/2) -- and two triangles per cell on the
    diagonal taTerrN interpolates across ((1,0)-(0,1)), indices ordered by
@@ -669,9 +614,9 @@ static void build_height(const char* ta, unsigned frame)
    Static: the map's heights never change. Two Continents: 537,600 vertices
    (6.4 MB), 3.2 M indices (12.9 MB), once per map.
 
-   ==== TODO (IMPORTANT), 2026-09-09: 19 MB of VRAM per map for a pass that is
+   ==== TODO (IMPORTANT): 19 MB of VRAM per map for a pass that is
    OFF BY DEFAULT and normally never draws. ====
-   `terrainshadow` now defaults to 0 (tagpu_classicpp.c shadow_defaults --
+   `terrainshadow` defaults to 0 (tagpu_classicpp.c shadow_defaults --
    the ground self-shadowed itself, renderers.md 2.7b), and the only caller of
    tagpu_terr_hills_draw was gated on it. This function is
    NOT gated: build_height calls it unconditionally, so every map pays 6.4 MB
@@ -747,13 +692,7 @@ int tagpu_terr_hills_draw(int r0, int r1, TAGPU_TERRHILLS* out)
     /* ONLY THE MESH BUILT FROM THIS GRID: after a map change whose rebuild
        failed (too small, out of memory) the old mesh is still what the arrays
        hold, and the new grid's size would index past it. Both terms are the
-       MESH's own.
-       There used to be a third, `!s_hVao` -- a GL vertex-array name, created
-       only on a lane that had a GL context. It sat above the publication of
-       the very mirror this function exists to hand over, so on a lane with no
-       GL this returned 0 before reaching it and the Vulkan shadow pass was
-       handed nothing, for a reason that had nothing to do with the mesh.
-       [The vulkan-only plan, landing 11-5c.] */
+       MESH's own. */
     if (s_hMeshW < 2 || s_hMeshH < 2) return 0;
     if (s_hMeshW != s_hW || s_hMeshH != s_hH) return 0;
     if (r0 < 0) r0 = 0;
@@ -813,11 +752,11 @@ static int ensure_atlas(const char* ta)
     if (count <= 0 || count > MAX_TILES) return 0;
     /* the identity test FIRST: the probe below walks megabytes of tile art and
        this runs every frame.
-       THE MIRROR TERM IS WHAT LETS THE VULKAN LANE ARM LATE (Phase G / G19e).
+       THE MIRROR TERM IS WHAT LETS THE VULKAN LANE ARM LATE.
        The mirror is the buffer this function is about to build and upload from,
        so the only way to obtain one for an atlas that is already built is to
        build it again -- once, on the first frame after the lane arms. Every
-       later frame takes the early return as before. */
+       later frame takes the early return. */
     if (s_atlasBuilt && s_setPtr == (const void*)set && s_setCount == count &&
         (!s_mirrorWant || s_atlasMirror)) return 1;
     if (!ptr_ok(pix) || IsBadReadPtr((void*)pix, (SIZE_T)count * TILE_BYTES)) return 0;
@@ -893,10 +832,9 @@ static int ensure_atlas(const char* ta)
    rect to the nearest map cell that uses it, so the reveal radiates from the
    middle of the screen, reaches the viewport's edge at rank ~half its span and
    carries on outward across the map at the same pace. (Ranking the whole rect
-   0, as the one-flip version did, restored the visible cells in tile-index
-   order -- a scatter.) The set holds every tile the map references and nothing
-   else, so no tile is left unranked, but an unreferenced one would simply go
-   last. */
+   0 would restore the visible cells in tile-index order -- a scatter.) The
+   set holds every tile the map references and nothing else, so no tile is
+   left unranked, but an unreferenced one would simply go last. */
 static int* restore_order(const char* ta, int count)
 {
     const unsigned short* tmap = *(const unsigned short* const*)(ta + OFF_TILEMAP);
@@ -949,8 +887,7 @@ static int restore_publish(const char* ta, int repaint)
        across the seam about the same fact. `ensure_atlas` refuses `count <= 0`,
        but it can still reach `s_atlasN == 0` by clamping `rows` to
        `s_maxTex / CELL_PITCH` on a device whose image bound is under 34, so
-       this is a BOUND rather than an argument about which devices exist.
-       [FROM THE 11-5c LANDING REVIEW, and found independently the same hour.] */
+       this is a BOUND rather than an argument about which devices exist. */
     if (n < 1) return 0;
     order = restore_order(ta, n);
     frames = (TAGPU_RGLSL_FRAME*)malloc((size_t)n * sizeof *frames);
@@ -991,14 +928,7 @@ static int restore_publish(const char* ta, int repaint)
    THE PAINTING IS THE CONSUMER'S; THE ORDER IS OURS. This side owns
    `restore_order` above -- the centre-out reveal the player watches -- and the
    frame list; the Vulkan pass owns the image, the job and the progress
-   (tagpu_vk_terr.c). Until landing 11-5c this whole route was UNREACHABLE and
-   had been since 4b-2: the list was published from inside the GL bring-up's
-   `glsl_begin`, and the driver in front of it returned at `!s_atlasTex` -- a
-   GL texture name that is only ever created on a lane with a GL context. So
-   the restore arm armed a consumer that was never sent anything, and
-   `restored` below -- keyed on the GL restore's own state machine -- could
-   only ever publish 0. One guard on a GL name, and a Vulkan-lane feature that
-   read as "off". [The vulkan-only plan, landing 11-5c.] */
+   (tagpu_vk_terr.c). */
 static unsigned s_palSeen;             /* the palette serial seen LAST frame   */
 static void restore_step(const char* ta)
 {
@@ -1030,28 +960,26 @@ static void restore_step(const char* ta)
        over the image that is there.
 
        NOT WHILE THE PALETTE IS STILL MOVING, and it is worth being exact about
-       what this does and does not buy, because the first version of this
-       comment overclaimed it. `s_rgbPalSerial != s_palSeen` is "the palette has
-       moved since the request went out"; `palWas == s_palSeen` is "the last two
-       CALLS TO THIS FUNCTION read the same serial". That second term is a fact
-       about the palette only in so far as this function is called as often as
-       the palette changes -- and it is not: the render loop wakes on every
-       primary Blt/Flip/Unlock as well as on a palette change, so it usually
-       runs more than one iteration per palette step. A slow fade can therefore
-       still get one republish per step.
+       what this does and does not buy. `s_rgbPalSerial != s_palSeen` is "the
+       palette has moved since the request went out"; `palWas == s_palSeen` is
+       "the last two CALLS TO THIS FUNCTION read the same serial". That second
+       term is a fact about the palette only in so far as this function is
+       called as often as the palette changes -- and it is not: the render loop
+       wakes on every primary Blt/Flip/Unlock as well as on a palette change,
+       so it usually runs more than one iteration per palette step. A slow fade
+       can therefore still get one republish per step.
        WHAT IT DOES CLOSE is the worst case, a palette moving on every
-       iteration, where the pre-fix code republished the whole list every single
-       frame -- `restore_order`'s full tile-map scan plus a
+       iteration, where without it the whole list would be republished every
+       single frame -- `restore_order`'s full tile-map scan plus a
        `tagpu_rglsl_tileable` per tile, and the consumer tearing its job down
-       and rebuilding it with its paint count back at zero, so the restore made
-       no progress at all for the length of the fade. It narrows the window; it
-       does not close it. [FROM THE 11-5c LANDING REVIEW AND ITS RE-REVIEW.]
+       and rebuilding it with its paint count back at zero, so the restore
+       would make no progress at all for the length of the fade. It narrows the
+       window; it does not close it.
        THE REAL FIX IS A COMPLETION SIGNAL BACK FROM THE CONSUMER, which this
-       hand-over does not carry. The GL lane never needed one: its repaint ran
-       only from state 2, "the job is idle", and it owned the job so it could
-       see that. The painting is the consumer's now, so "is the previous request
-       still being painted" is a question only it can answer, and until
-       tagpu_terr.h carries the answer this side is guessing from the palette.
+       hand-over does not carry. The painting is the consumer's, so "is the
+       previous request still being painted" is a question only it can answer,
+       and until tagpu_terr.h carries the answer this side is guessing from the
+       palette.
        RESIDUAL BEYOND THAT: a palette that settles, moves and settles again
        DURING a restore restarts it each time. That much is correct -- those
        tiles do need the new palette -- but it is slower than "finish first,
@@ -1164,13 +1092,12 @@ static void put_cell(int col, int row, int cx, int cy)
    the viewport flat key-colour until the 90-frame watchdog notices. */
 static int terr_bail(void)
 {
-    /* A FRAME THAT GATHERS NOTHING HANDS NOTHING OVER. `tagpu_terr_render` is
-       where this used to be done, and tagpu_native.c calls that only when the
-       gather returned cells -- so every bail below left the PREVIOUS frame's
-       hand-over standing, pointing at a tile atlas `ensure_atlas` may have
-       freed on the way past. The frame stamp bounds it either way; this makes
-       the flag tell the truth as well, which is what tagpu_feat_glreset and
-       tagpu_scaffold_frame already did. [G19e RE-REVIEW, 2026-09-15.] */
+    /* A FRAME THAT GATHERS NOTHING HANDS NOTHING OVER. It is done here and not
+       in `tagpu_terr_render`, which tagpu_native.c calls only when the gather
+       returned cells -- otherwise every bail below would leave the PREVIOUS
+       frame's hand-over standing, pointing at a tile atlas `ensure_atlas` may
+       have freed on the way past. The frame stamp bounds it either way; this
+       makes the flag tell the truth as well. */
     s_pubHave = 0; s_abFrame = 0;
     tagpu_terrown_set_skip(0);
     return 0;
@@ -1191,45 +1118,32 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     if (s_armed != 1) return terr_bail();
     if (!ptr_ok(ta)) return terr_bail();
     /* THE ATLAS BOUND IS A DEVICE LIMIT, so it is asked of the device that will
-       sample it. A GL bring-up stood in front of this and had to be gated: it
-       built this pass's program on first sight and resolved entry points, so on
-       the vulkan-only lane it logged `terr: missing GL proc`, latched a failed
-       state and killed the pass for the process, GATHER INCLUDED -- measured
-       2026-09-18 by running it, the hand-over never fired and the capture's
-       target was not even unlinked. It went in landing 11-5c and what is left
-       is the bound. `ensure_atlas` was never the gated part: it builds the tile
-       mirror the hand-over carries and gated only its own upload.
-       [The vulkan-only plan, landings 4b-2 and 11-5c.] */
+       sample it. */
     if (s_maxTex <= 0 || s_maxTex != tagpu_vk_max_image_dim()) {
-        /* The bring-up read GL_MAX_TEXTURE_SIZE into `s_maxTex`; with no GL
-           context that never happened and `s_maxTex` stayed 0, so
-           `ensure_atlas` kept `s_maxTex / CELL_PITCH` = 0 rows and cached a
-           zero-row atlas for the life of the process.
-           REFUSED RATHER THAN GUESSED while the lane is still coming up: 0 from
+        /* With `s_maxTex` 0, `ensure_atlas` keeps `s_maxTex / CELL_PITCH` = 0
+           rows and caches a zero-row atlas for the life of the process
+           (measured 2026-09-18: `terr: atlas built 2176x0 ... 0 kept`).
+           So it is REFUSED RATHER THAN GUESSED while the lane is still coming
+           up: 0 from
            `tagpu_vk_max_image_dim` means "no device yet", the gather hands the
            draw back for those few frames exactly as it does for any other
-           missing input, and the atlas is built once the real limit is known.
-           Measured 2026-09-18: `terr: atlas built 2176x0 ... 0 kept`. */
+           missing input, and the atlas is built once the real limit is known. */
         int m = tagpu_vk_max_image_dim();
         if (m <= 0) return terr_bail();
         /* AND A CHANGED BOUND INVALIDATES THE ATLAS. The accessor re-asks when
            the GPU picker re-picks a physical device; if the new one is smaller,
            an atlas laid out against the old bound is one the twin's image
            creation will refuse, and `s_atlasBuilt` would otherwise keep it for
-           the session. Rebuilding is what the GL lane does on a context change
-           and costs the same. [FROM THE 4b-2 LANDING REVIEW.] */
+           the session. */
         if (s_maxTex > 0 && m != s_maxTex) s_atlasBuilt = 0;
         /* AND A DEVICE THAT CANNOT HOLD THE ATLAS AT ALL IS REFUSED ONCE,
-           rather than left to be refused downstream per frame. The GL bring-up
-           made this check against GL_MAX_TEXTURE_SIZE and it went with the
-           bring-up in landing 11-5c; restored here because it is a property of
-           the atlas, not of an API. Without it `ensure_atlas` clamps `rows` to
-           `m / CELL_PITCH` and builds a 2176-wide image the consumer's own
-           creation then refuses, every frame, with nothing saying why.
-           Vulkan floors `maxImageDimension2D` at 4096 and ATLAS_W is 2176, so
-           no conformant device takes this arm -- it is a BOUND, not a
-           prediction about which devices exist.
-           [FROM THE 11-5c LANDING REVIEW.] */
+           rather than left to be refused downstream per frame. It lives here
+           because it is a property of the atlas, not of an API. Without it
+           `ensure_atlas` clamps `rows` to `m / CELL_PITCH` and builds a
+           2176-wide image the consumer's own creation then refuses, every
+           frame, with nothing saying why. Vulkan floors `maxImageDimension2D`
+           at 4096 and ATLAS_W is 2176, so no conformant device takes this arm
+           -- it is a BOUND, not a prediction about which devices exist. */
         if (m < ATLAS_W) {
             if (s_dimBad != m) {
                 char mb[128];
@@ -1253,27 +1167,14 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     restore_step(ta);
 
     s_ncell = 0;
-    /* THE GATHER IS UNCONDITIONAL NOW, and the clean cut is what freed it.
+    /* THE GATHER IS UNCONDITIONAL: it is NOT gated on owning the engine's
+       draw. There is nothing under us -- the engine's frame reaches no pixel
+       of the screen, so an opaque terrain can hide nothing that was going to
+       be shown; what it covers is the seam's clear colour.
 
-       IT USED TO BE GATED ON OWNING THE ENGINE'S DRAW -- `own || over ||
-       wasFilled` -- and the reason was the composite: our terrain is opaque and
-       covers the whole viewport, so with the engine's frame UNDER ours,
-       emitting without having key-filled it first would hide the health bars,
-       wireframes, build cursor and chat that the composite's key test existed
-       to let through. Without `terrown` installed there was no key at all, so
-       the pass counted its cells and deliberately emitted none rather than
-       blank those overlays -- which is why a default instance drew no terrain
-       the moment `terrown` came off the defaults.
-
-       THERE IS NOTHING UNDER US ANY MORE. The engine's frame reaches no pixel
-       of the screen, so an opaque terrain can hide nothing that was going to be
-       shown; what it covers is the seam's clear colour. The gate was a property
-       of the composite and went with it.
-
-       `own` IS STILL THE ENGINE'S HALF and still asks the same question, for
-       its own reason: whether to tell `terrown` to stop the engine drawing its
-       terrain. That is a lever about the reference frame and the CPU, not about
-       what we draw. [The vulkan-only plan, THE CLEAN CUT.] */
+       `own` IS THE ENGINE'S HALF: whether to tell `terrown` to stop the engine
+       drawing its terrain. That is a lever about the reference frame and the
+       CPU, not about what we draw. */
     own = !s_passive && !s_over && tagpu_terrown_installed();
 
     tmap = *(const unsigned short* const*)(ta + OFF_TILEMAP);
@@ -1353,10 +1254,9 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
                 tagpu_terrown_installed() ? ""
                     : " (terrown off: the engine keeps its terrain, and the"
                       " reference frame with it)");
-            /* `_snprintf` DOES NOT TERMINATE WHAT IT TRUNCATES on this CRT, and
-               the first edition of the suffix above proved it: the line ran
-               past 240 bytes and reached the log with a garbled tail and no NUL
-               behind it. Every other `_snprintf` in this file that can fill its
+            /* `_snprintf` DOES NOT TERMINATE WHAT IT TRUNCATES on this CRT: a
+               line past 240 bytes reaches the log with a garbled tail and no
+               NUL behind it. Every other `_snprintf` in this file that can fill its
                buffer pairs it with this line. */
             b[sizeof b - 1] = 0;
             flog(b);
@@ -1387,14 +1287,13 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
 /* THE FOG GRID IS COPIED, NOT ALIASED. `v->fogGrid` points INSIDE a frame-packet
    slot, and tagpu_packet.h gives both packet pointers a lifetime that ends at
    tagpu_packet_frame_end() -- which render_ogl.c calls BEFORE it runs the
-   Vulkan lane, so a pointer handed on from here is read past its contract. It
-   held only because the give-back happens at the next acquire, which is also
-   where the `poison` lever fills the slot: the one stale read that lever cannot
-   see, and outside frame_end's tail==head check as well. [FOUND BY THE G19e
-   LANDING REVIEW, 2026-09-15.] The atlas and the height grid were already
-   handed over as buffers this module owns; this makes the fog grid the same,
-   and makes the file header's "a pass reads no engine state" true of the whole
-   hand-over rather than of most of it.
+   Vulkan lane, so a pointer handed on from here is read past its contract. An
+   alias would hold only because the give-back happens at the next acquire,
+   which is also where the `poison` lever fills the slot: the one stale read
+   that lever cannot see, and outside frame_end's tail==head check as well.
+   The atlas and the height grid are handed over as buffers this module owns;
+   the copy makes the fog grid the same, and makes the file header's "a pass
+   reads no engine state" true of the whole hand-over.
 
    `cells * 2` is the size the GL lane's own glTexImage2D was given for this
    grid, so the read is bounded by the bound the GL upload already trusts; the
@@ -1415,7 +1314,7 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        lane is not armed, nothing will ever call the hand-over, and the memset
        and the forty stores below are pure cost on the path every player runs.
        `s_pubHave` is cleared with it so no earlier frame's hand-over can be
-       taken later. [FROM THE G19e LANDING REVIEW, 2026-09-15.] */
+       taken later. */
     if (!s_mirrorWant) { s_pubHave = 0; s_abFrame = 0; return; }
     memset(&s_pub, 0, sizeof s_pub);
     s_pub.cells = s_inst; s_pub.ncell = s_ncell;
@@ -1431,25 +1330,13 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.lit = tagpu_classicpp_on() ? 1 : 0;
     s_pub.lambert = tagpu_classicpp_lit() ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
-    /* THE CAST-SHADOW BLOCK. Since G19e the map is drawn by tagpu_vk_shadow.c
-       into an image of its own, and since landing 11 D2 that pass has no
-       producer -- the GL half that used to publish the hand-over is deleted,
-       and it had been callerless before that. The uniforms this used to mirror
-       came from `tagpu_shadow_apply`, which left every shadow uniform but
-       uShadowOn ALONE when no map was live; what is left of all of it is the
-       zero below. */
-    /* 0, AND THAT IS WHAT IT ALREADY WAS. This read `tagpu_shadow_live()` until
-       landing 11 D2 deleted the GL lane's `tagpu_shadow.c`. That function
-       returned `s_live`, whose only assignment to 1 sat inside
-       `tagpu_shadow_begin`, which had no caller -- so this published 0 on every
-       frame and the `if` below it never ran. The other shadow fields are
-       published as zero and now demonstrably so: this function opens with
-       `memset(&s_pub, 0, sizeof s_pub)` and, since this edit, NOTHING in this
-       file writes `shadowMat`, `shadowSun`, `shScale`, `penumbra` or `shade` at
-       all -- which is a stronger statement than the old code could make, and
-       one a grep checks. Writing the constant changes nothing and stops the
-       file claiming to ask a question. Reviving cast shadows means writing a
-       producer; see `tagpu_vk_shadow.h` on TAGPU_SHADOWHAND. */
+    /* THE CAST-SHADOW BLOCK: 0. The map is drawn by tagpu_vk_shadow.c into an
+       image of its own, and that pass has no producer. The other shadow fields
+       are published as zero: this function opens with
+       `memset(&s_pub, 0, sizeof s_pub)` and NOTHING in this file writes
+       `shadowMat`, `shadowSun`, `shScale`, `penumbra` or `shade` at all, which
+       a grep checks. Reviving cast shadows means writing a producer; see
+       `tagpu_vk_shadow.h` on TAGPU_SHADOWHAND. */
     s_pub.shadowOn = 0;
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
@@ -1460,11 +1347,7 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.atlas = s_atlasMirror;
     s_pub.atlasW = ATLAS_W; s_pub.atlasH = s_atlasH;
     s_pub.atlasSerial = s_atlasMirrorSerial;
-    /* THE REQUEST, AND NOTHING ELSE. `atlasRgb`/`atlasRgbRows` were the other
-       half of tagpu_terr.h's "mutually exclusive" pair -- the GL twin's
-       restored atlas, read back so this lane could upload it -- and they went
-       with the GL half in landing 11-5c; 11-5e-2b took the fields themselves,
-       so there is no pair left to be exclusive about.
+    /* THE REQUEST, AND NOTHING ELSE: the restored atlas is never read back.
        The serial goes out even with no list, because a DROP is news: it is how
        a consumer learns the atlas it was painting is not this map's. */
     if (s_rvkWant) {
@@ -1501,15 +1384,13 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        NOTHING rather than a frame it cannot describe. The copy can fail -- a
        refused `realloc`, which is precisely the address-space pressure this
        phase exists to measure, or a grid past FOG_COPY_MAXDIM -- and publishing
-       `fog` 1 with a NULL grid had the Vulkan lane sample a 1x1 image while
-       `uFogDim` carried the real size: the GL twin draws correct fog and the
-       port draws something else, silently.
+       `fog` 1 with a NULL grid would have the Vulkan lane sample a 1x1 image
+       while `uFogDim` carried the real size and draw wrong fog, silently.
        Clearing `fog` instead would be just as silent a difference the other
        way (a lit ring where the twin has none), so the answer is the one this
        file already gives for the restored atlas and the shadow map: stand down
        for the frame. The GL lane is untouched either way -- it draws from its
-       own texture and never reads this struct.
-       [G19e RE-REVIEW, 2026-09-15.] */
+       own texture and never reads this struct. */
     fogBad = (s_pub.fog && !s_pub.fogGrid);
     s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
@@ -1538,7 +1419,7 @@ int tagpu_terr_handover(TAGPU_TERRHAND* out, unsigned now)
 {
     if (!s_pubHave || !out) return 0;
     /* NOT THIS FRAME'S, SO NOT ALIVE. Dropping it here rather than trusting the
-       flag is the whole of the G19e re-review's first finding: `s_pub.atlas`
+       flag is the point: `s_pub.atlas`
        and `s_pub.height` are buffers `ensure_atlas`/`build_height` free on a
        map change, and the flag survives any frame the gather bailed on. The
        stale hand-over is also CLEARED, so the next frame starts honest. */
@@ -1550,76 +1431,48 @@ int tagpu_terr_handover(TAGPU_TERRHAND* out, unsigned now)
 
 void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
 {
-    /* THIS PASS NO LONGER DRAWS; IT GATHERS AND HANDS OVER. It used to do both,
-       picking with `gl_draws = !tagpu_vk_owns_present()` [landing 4b-2]. The GL
-       lane went in landing 11-2 and its draw half here went in 11-3, so the
-       question has one answer and is not asked any more. The instances, the
+    /* THIS PASS DOES NOT DRAW; IT GATHERS AND HANDS OVER. The instances, the
        numbers and the texels below are the gather's; the Vulkan twin draws them.
        The scaffold (tagpu_scaffold.c) has the same shape. */
     int restored;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
        frame's hand-over standing would have the Vulkan lane draw last frame's
        terrain over this frame's -- and on the frame a level is torn down, over
-       nothing at all.
-
-       `s_state` WAS THE GL PROGRAM'S and was only asked where GL drew: it is
-       permanently 0 on this lane, where `init_gl` is never called, so testing it
-       would refuse every hand-over. With the draw gone the term is gone with it,
-       and `s_ncell` -- the gather's own -- is the whole refusal, which is what it
-       always really was. */
+       nothing at all. `s_ncell` -- the gather's own -- is the whole refusal. */
     if (s_ncell == 0) { s_pubHave = 0; s_abFrame = 0; return; }
 
     /* THE FIELD, NOT A STATE MACHINE'S WORD FOR IT. This says exactly "a
        restore request STANDS for this atlas" -- no more, and in particular not
        "the atlas is restored", which is the consumer's fact and is the
-       consumer's to keep. It used to read the GL restorer's `s_rgbState`, which
-       on a lane with no GL context never left 0, so a consumer that had painted
-       the atlas it was handed was told to sample the indexed one.
+       consumer's to keep.
        WHAT THE SHADER IS TOLD IS NOT THIS. `tagpu_vk_terr.c` ANDs this with its
        own `s_rgbAtlas.view && .have` before writing `uRestored`, so a request
        this lane cannot or has not yet serviced draws indexed rather than
-       drawing nothing -- which is what it did for one landing-review's length.
-       [The vulkan-only plan, landing 11-5c and its review.] */
+       drawing nothing. */
     restored = (s_rFrames && tagpu_classicpp_assets()) ? 1 : 0;
     {
         const TAGPU_LIGHT* L = tagpu_classicpp_light();
-        /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is
-           armed without one. Read once so the two arms cannot disagree about
-           which frame is the capture frame. */
+        /* Read once so the two arms cannot disagree about which frame is the
+           capture frame. */
         int taking = s_ab && !s_abDone;
-        /* NO `ss` BOUND ON THIS A/B ANY MORE. It used to refuse itself whenever
-           `ss != 1`, because the GL capture is this FBO's viewport -- gw*ss by
-           gh*ss -- and the Vulkan half was the window's client rect, so at the
-           shipped ss=2 the two files differed by a factor of two and
-           tools/vk-ab.py refused the pair. Landing 4c-2 gave the Vulkan lane a
-           gw*ss by gh*ss world target and 4c-3 pointed the capture at it, so both
-           halves are now the same size at every `ss` and this pass is measurable on
-           the configuration it actually ships in. The refusal moved to the lane
-           that can see the target: if there is none that frame, tagpu_vk.c says so
-           by name and captures nothing. [tagpu_vk_world.h.] */
-        /* THE GL DRAW STOOD HERE -- the program, its eighteen uniforms, the six
-           texture units, the instance upload and one glDrawArraysInstanced.
-           Deleted by the vulkan-only plan's landing 11-3. Everything above is
-           the GATHER and still runs: the instances, the numbers and the texels
-           are built the same way and `terr_publish` below hands them to the
-           Vulkan twin, which is what draws them. */
+        /* NO `ss` BOUND ON THIS A/B: the Vulkan lane captures its gw*ss by
+           gh*ss world target, so this pass is measurable at every `ss`,
+           including the shipped ss=2. The refusal is in the lane that can see
+           the target: if there is none that frame, tagpu_vk.c says so by name
+           and captures nothing (tagpu_vk_world.h). */
         if (taking) {
-            /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
-               pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
-               only when that half had reached the disk -- route D gave the two lanes a
-               window each, so one frame could be photographed from both sides and diffed.
-               Route D went in 4d-1, the GL half had nothing left to pair with, and it went
-               too. What the lever does now is claim the VULKAN capture: `tagpu_vk_ab_arm`
-               unlinks the target `_vk.ppm` at the instant the claim latches, which is what
-               makes the file on the disk this arming's rather than an earlier run's. Diff
-               it against a capture taken from another BUILD. */
+            /* THE A/B CLAIM: the lever claims the VULKAN capture.
+               `tagpu_vk_ab_arm` unlinks the target `_vk.ppm` at the instant the
+               claim latches, which is what makes the file on the disk this
+               arming's rather than an earlier run's. Diff it against a capture
+               taken from another BUILD. */
             s_abDone = 1;
             s_abFrame = tagpu_vk_ab_arm("terr");
         }
 
-        /* PUBLISHED AFTER THE DRAW WHERE THERE IS ONE, and after the gather in
-           either case: these are the instances, the numbers and the texels this
-           frame built, and the Vulkan lane is about to draw the same ones. */
+        /* PUBLISHED AFTER THE GATHER: these are the instances, the numbers and
+           the texels this frame built, and the Vulkan lane is about to draw the
+           same ones. */
         terr_publish(v, restored, L);
     }
 }

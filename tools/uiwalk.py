@@ -70,7 +70,7 @@ TREE = HERE.parent
 ARM_SET = ["native.on=all wrecks", "terr.on", "feat.on", "fx.on", "sfx.on", "mark.on=log", "order.on",
            "zoom.on", "vpwide.on"]          # mark.on=log: its periodic line carries the live zoom
 KEY = 254          # terrown's viewport fill index (tagpu_terr.c, `key=N` moves it)
-# G17b: aim every gadget click in CLIENT-AREA pixels and let the engine work back
+# Aim every gadget click in CLIENT-AREA pixels and let the engine work back
 # to a logical pixel by its own arithmetic. A walk that mixes the two proves
 # nothing, so it is a whole-run switch (`--device`).
 CLICK_DEVICE = False
@@ -98,7 +98,7 @@ SHELL_WALK = [
 def chat(text):
     """Type a chat line (or a `+cheat`) the way a player does: Return, the characters, Return.
     A space goes as the `space` key token — `char: ` is dropped, and `+gamma 15` typed that
-    way is `+gamma15`, a command that does not exist (the G15d walk's first run)."""
+    way is `+gamma15`, a command that does not exist."""
     return [["keys", "return"], ["keys", *["space" if c == " " else f"char:{c}" for c in text]], ["keys", "return"]]
 
 
@@ -118,7 +118,7 @@ def game_walk(side):
         ("chat", chat("hello")),
         ("F4", [["keys", "f4"]]),
         ("F4-close", [["keys", "f4"]]),
-        # --- G15c: the HUD extras drawn over the viewport ---
+        # --- the HUD extras drawn over the viewport ---
         # 0x46A1D0: h:m:s from the sim tick at the viewport's bottom-left. The tick runs on
         # between the surface shot and the GL shot, so the stop is taken with the in-game
         # menu open: ARMOPT pauses the game and the clock with it.
@@ -128,7 +128,7 @@ def game_walk(side):
         ("bps-off", chat("+bps")),
         ("space-popup", ["hover-commander", ["keys", "down:space"]]),   # DrawPopupButtomDialog 0x4689C0
         ("space-popup-up", [["keys", "up:space"], "park"]),
-        # --- G15c: the dialogs over the viewport at 0.5x and 2x (opened at 1x, then zoomed) ---
+        # --- the dialogs over the viewport at 0.5x and 2x (opened at 1x, then zoomed) ---
         ("ARMOPT@0.5", [["keys", "tab"], "zoom:0.5"]),
         ("ARMOPT@2", ["zoom:2"]),
         ("PREFS@1", ["zoom:1", ["ui", "click", "PREFS"]]),
@@ -140,17 +140,17 @@ def game_walk(side):
         ("F4@2", ["zoom:2"]),
         ("chat@2", chat("hello at two")),
         ("F4-close@1", [["keys", "f4"], "zoom:reset"]),
-        # --- G15c: the minimap's dots and view box while a unit moves ---
+        # --- the minimap's dots and view box while a unit moves ---
         ("move", ["select-commander", "order-far"]),
         ("move-stop", [["ui", "click", f"{P}STOP"], "park"]),
-        # --- G15c: the minimap's view box after the camera moves (the fixture pins the eye,
+        # --- the minimap's view box after the camera moves (the fixture pins the eye,
         # so release it and edge-scroll right for a second; parking the pointer stops it) ---
         ("scroll-box", ["release-eye", "edge-scroll", "wait:1.0", "park"]),
     ]
 
 
 def cycle_walk(side, k):
-    """One game -> shell -> game cycle (G15d), every label suffixed `#k`. Three lists:
+    """One game -> shell -> game cycle, every label suffixed `#k`. Three lists:
     the exit dialogs (in game), the shell after the return (the switch to 640x480 and
     a new GL context happens at CHOICE1), and the game after the load — the loading
     screen between the two is its own stop (Walk.stop_loading). `EXITMENU` and
@@ -216,8 +216,6 @@ class Walk:
         self.log_seen = 0
         self.parity = parity
         self.restore = restore
-        # (`self.vk` and the whole --vk comparison went in landing 4d-2 with the
-        #  GL capture half; the flag itself refuses at argument-parse time.)
         self.scenario = scenario
         self.W, self.H = [int(v) for v in res.lower().split("x")]
 
@@ -403,7 +401,7 @@ class Walk:
         return float(m[-1]) if m else None
 
     def stop_restore(self, label, actions, in_game=False):
-        """G15e (`--restore`): drive the screen and let the UI atlas fill. No census,
+        """`--restore`: drive the screen and let the UI atlas fill. No census,
         no shots — the measurement is the twin the DLL dumps at the end, held to the
         offline restorer by `tascene uidiff`, and the only per-stop reading is how far
         the atlas has grown and whether colour is live (`col=`, `colvalid=`)."""
@@ -466,12 +464,6 @@ class Walk:
               f"\n  tools/tascene uidiff {self.out}/{phase}-tagpu_restore_{tag}", file=sys.stderr)
         return n
 
-    # `vk_ab` lived here until landing 4d-2: it diffed this walk's GL capture
-    # against the Vulkan lane's at every stop, which was route D. `--vk` has
-    # refused since 4d-1 and nothing could reach this, so ~115 lines built
-    # entirely around a `tagpu_gui_gl.ppm` that nothing writes are gone.
-    # [REMOVED ON THE 4d-2 LANDING REVIEW'S PROMPTING.]
-
     def stop_at(self, label, actions, in_game=False):
         if self.restore:
             return self.stop_restore(label, actions, in_game)
@@ -524,15 +516,11 @@ class Walk:
                             (parity["differing"] + parity.get("vpdiff", 0)):
                         p2["against"] = "after"
                         parity = {**parity, **p2}
-        # G17b's hit check goes AFTER the parity bracket, never inside or before
+        # The hit check goes AFTER the parity bracket, never inside or before
         # it: it costs a snapshot round-trip, and anything between the census
         # read and the surface/GL/surface triple moves where those land on the
         # game's own timeline. It reads no state the shots consume.
         hit = hit_check(self.inst)
-        # G19f: the Vulkan A/B goes AFTER the hit check for the same reason the
-        # hit check goes after the parity bracket -- it re-arms a one-shot lever
-        # and waits on two files, so anything it sits in front of would land
-        # somewhere else on the game's own timeline.
         summary = parse_census(lines)
         hb = self.heartbeat() if self.parity else {}
         self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary, **parity,
@@ -540,8 +528,7 @@ class Walk:
                           "heartbeat": hb, "zoom": self.zoom_level() if (self.parity and in_game) else None})
         kstr = f"{hit['k']:.4f}" if hit.get("k") else "-"
         # the hit half prints on EVERY walk — it costs a snapshot whether or not
-        # `--layer` is on, and a census-only run that paid for it and showed
-        # nothing was what the landing review caught
+        # `--layer` is on, and a census-only run that pays for it must show it
         hitstr = (f" | hit: k={kstr} gadgets={hit['n']} MISS={hit['miss']}"
                   f"{' [' + hit['names'] + ']' if hit['miss'] else ''}"
                   f"{' degenerate=' + str(hit['degen']) if hit['degen'] else ''}"
@@ -657,7 +644,7 @@ class Walk:
 
 
 def hit_check(inst):
-    """Phase 2's kill rule, as arithmetic (G17b).
+    """Phase 2's kill rule, as arithmetic.
 
     For every gadget on the screen: aim a device-space click where the RENDERER
     draws it (viewport offset plus the logical point scaled by viewport/surface),
@@ -887,14 +874,10 @@ def main():
     if a.restore and a.layer:
         sys.exit("uiwalk: --restore and --layer are different measurements: pick one")
     if a.vk:
-        # REFUSED RATHER THAN RUN EMPTY. [FOUND BY THE 4d-1 LANDING REVIEW.]
-        # This flag armed `vk.on` WITHOUT `renderer=vulkan`, which was route D:
-        # both backends live, each capturing its own half of one frame. Landing
-        # 4d-1 deleted route D, so that arm set now brings up no Vulkan lane at
-        # all and `tagpu_gui_vk.ppm` is never written. The walk failed closed --
-        # `Walk.vk_ab` returned None and refused to score it -- but it also burnt
-        # the PPM settle deadline at all 13 stops while doing nothing, and the
-        # flag's documented purpose had become impossible. Say so instead.
+        # REFUSED RATHER THAN RUN EMPTY. This flag arms `vk.on` WITHOUT
+        # `renderer=vulkan`, which brings up no Vulkan lane at all, so
+        # `tagpu_gui_vk.ppm` is never written and a walk would burn the PPM
+        # settle deadline at every stop doing nothing. Say so instead.
         sys.exit(
             "uiwalk: --vk is withdrawn. It diffed the Vulkan lane against the GL lane in\n"
             "  one process (route D), and the vulkan-only plan's landing 4d-1 deleted\n"
@@ -906,14 +889,12 @@ def main():
             "  diff the `_vk.ppm` against one taken from an earlier BUILD (tools/vk-ab.py\n"
             "  takes two file paths). Run this walk without --vk for the UI stops." )
     if a.layer:
-        # THE LANE THIS MODE COMPARED AGAINST IS GONE (the vulkan-only plan,
-        # landing 11-2). `--layer` captured the GL framebuffer with
-        # `tacli glshot` and diffed it against the engine's own surface; there
-        # is no GL framebuffer in the process any more, and the verb is
-        # retired. Refusing is the point: the failure it replaces was silent --
-        # the walk waited out its 150 s timeout per screen and wrote
-        # `{"differing": -1, "bbox": "no capture"}` for every row, which reads
-        # like a measurement.
+        # THE LANE THIS MODE COMPARES AGAINST DOES NOT EXIST. `--layer` diffs
+        # the GL framebuffer (`tacli glshot`) against the engine's own surface,
+        # there is no GL framebuffer in the process, and the verb is retired.
+        # Refusing is the point: run anyway, the walk would wait out its 150 s
+        # timeout per screen and write `{"differing": -1, "bbox": "no capture"}`
+        # for every row, which reads like a measurement.
         sys.exit("uiwalk: --layer compared our GL frame against the engine's surface, and the\n"
                  "OpenGL lane was deleted in the vulkan-only plan's landing 11-2. There is no\n"
                  "second frame to diff. Run without --layer for the census walk, which is\n"
@@ -931,11 +912,10 @@ def main():
         launch_args = ["launch", a.inst, "--res", a.res]
         if a.window:
             launch_args += ["--window", a.window]
-        # A FAILED LAUNCH MUST STOP THE WALK, NOT BE WALKED THROUGH. `rc` was
-        # captured here and never looked at, so a launch that did not come up
-        # left every shell stop to be taken against nothing -- and a stop taken
-        # against nothing is the thing this walker refuses everywhere else.
-        # `check=True` raises with tacli's own output. [2026-09-16.]
+        # A FAILED LAUNCH MUST STOP THE WALK, NOT BE WALKED THROUGH. A launch
+        # that did not come up would leave every shell stop to be taken against
+        # nothing -- the thing this walker refuses everywhere else. `check=True`
+        # raises with tacli's own output.
         rc, out = tacli(*launch_args, timeout=300, check=True)
         print(out.strip().splitlines()[-1] if out.strip() else "", file=sys.stderr)
         w.gamedir = instance_dir(a.inst) or (TREE / "tagpu" / "instances" / a.inst / "gamedir")
@@ -948,11 +928,10 @@ def main():
             w.collect_dump("shell")      # the atlas does not survive the switch
     if not a.shell_only:
         # AND THE SAME FOR THE SCENARIO LOAD, which is the one that decides
-        # whether there is a GAME to walk at all. Unchecked, a failed load sent
-        # the walk into `game_walk` against whatever was on screen -- the shell,
-        # most likely -- where the stops would find real content, diff it, and
-        # report 0 px. The A/B's own guards were about telling a hole from a
-        # pass, and this was a hole upstream of all of them. [2026-09-16.]
+        # whether there is a GAME to walk at all. Unchecked, a failed load would
+        # send the walk into `game_walk` against whatever is on screen -- the
+        # shell, most likely -- where the stops would find real content, diff
+        # it, and report 0 px: a hole upstream of every guard the A/B has.
         rc, out = tacli("scenario", "load", a.inst, scenario, "--restart", "--res", a.res,
                         timeout=600, check=True)
         print(out.strip().splitlines()[-1] if out.strip() else "", file=sys.stderr)

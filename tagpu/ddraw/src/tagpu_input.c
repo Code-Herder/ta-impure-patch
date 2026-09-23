@@ -1,10 +1,10 @@
 /* tagpu_input.c — in-process input injection (session-proof game driving).
 
-   2026-09-01: X-level injection (XTEST/XSendEvent) proved unreliable — a
-   locked/half-dead GNOME session holds a server grab and keys either vanish
-   or land in the user's UNLOCK DIALOG (see memory ta-input-injection-safety).
-   The fix: we live inside the process, so drive the game with its own
-   message queue and display state. No X involved; works under any lock.
+   X-level injection (XTEST/XSendEvent) is unreliable: a locked/half-dead
+   GNOME session holds a server grab and keys either vanish or land in the
+   user's UNLOCK DIALOG. We live inside the process, so we drive the game with
+   its own message queue and display state. No X involved; works under any
+   lock.
 
      tagpu_keys.txt   whitespace-separated key tokens, consumed ONCE (file is
                       deleted after reading): a..z 0..9 space return escape
@@ -20,12 +20,11 @@
                       camera's range, at the top of every in-play draw
                       (tagpu_zoom_apply). Delete the file to release. The eye
                       is display state, not sim state — read-only-over-sim
-                      holds, and since landing 2 of the frame packet exchange
-                      this module writes no engine memory at all.
+                      holds, and this module writes no engine memory at all.
 
    Both are checked every 15 frames from the present hook.
 
-   2026-09-01 (phase 1.1): keys and clicks now travel as tagged WM_TAGPU_*
+   Keys and clicks travel as tagged WM_TAGPU_*
    messages that the shield translates in the wndproc, so they survive the
    hardware-input filter and drive a virtual key/cursor state the game's polls
    read (inc/tagpu_shield.h). That is what makes ctrl/shift combos land. */
@@ -179,7 +178,7 @@ static void do_keys(HWND hwnd)
 {
     /* One `tacli ui fill` can emit a token per character plus a backspace per
        character already in the field, so 256 bytes is not enough headroom: an
-       over-long batch used to be silently truncated and its tail deleted with
+       over-long batch would be silently truncated and its tail deleted with
        the file. */
     char buf[1024]; DWORD n = 0;
     HANDLE h = CreateFileA("tagpu_keys.txt", GENERIC_READ,
@@ -247,7 +246,7 @@ static void do_keys(HWND hwnd)
             }
             else if (sscanf(p, "pclick:%d,%d", &gx, &gy) == 2)  inject_click(hwnd, gx, gy, 0);
             else if (sscanf(p, "prclick:%d,%d", &gx, &gy) == 2) inject_click(hwnd, gx, gy, 1);
-            /* DEVICE-SPACE click and move (G17b): x,y are client-area pixels
+            /* DEVICE-SPACE click and move: x,y are client-area pixels
                and are converted by the same `mouse_client_to_game` a hardware
                click goes through. Every other token here speaks the engine's
                coordinates and so proves nothing about the pointer path; these
@@ -339,7 +338,7 @@ static void do_keys(HWND hwnd)
    into the camera's range — not into [0, map - view], which at zoom > 1 would
    pull a scripted camera back off every map edge.
 
-   AND THIS HALF STAYED ON THE RENDER THREAD IN LANDING 10c-2, deliberately.
+   AND THIS HALF IS ON THE RENDER THREAD, deliberately.
    These four words are written here and read by tagpu_input_cmd(), which
    tagpu_zoom_frame_end() calls — and that runs only inside tagpu_overlay_draw,
    i.e. only on the lanes that draw the overlay. Moving the poll to the game
@@ -360,7 +359,7 @@ static void do_eye(const TAGPU_FRAME* f)
        15-frame poll: the hold is a LEVEL the game thread re-applies on every
        in-play draw, so a stale "valid" here would pin the camera — and rebuild
        the fog grid per draw — for up to 15 render frames after the file was
-       deleted (landing review). Every early exit below drops the level. */
+       deleted. Every early exit below drops the level. */
     if (h == INVALID_HANDLE_VALUE) { s_holdValid = 0; return; }
     if (!ReadFile(h, buf, sizeof buf - 1, &n, NULL)) n = 0;
     CloseHandle(h);
@@ -373,7 +372,7 @@ static void do_eye(const TAGPU_FRAME* f)
        +-2^24 world px, and a refused record disables the WHOLE command
        channel for as long as it is reposted — one absurd number in the file
        would silently turn off the camera range, the widened rect and the
-       scroll rate (landing review). The game thread clamps the point into the
+       scroll rate. The game thread clamps the point into the
        camera's range anyway, so clamping here loses nothing. */
     if (x < -0x1000000) x = -0x1000000; else if (x > 0x1000000) x = 0x1000000;
     if (y < -0x1000000) y = -0x1000000; else if (y > 0x1000000) y = 0x1000000;
@@ -410,13 +409,13 @@ void tagpu_input_cmd(TAGPU_CMD* rec)
     rec->hold_y  = s_holdY;
 }
 
-/* THE DRIVING HALF — GAME THREAD, from the engine's flip [landing 10c-2].
+/* THE DRIVING HALF — GAME THREAD, from the engine's flip.
 
    This is `tacli keys` and `tacli click`: the token file, the shield's held
    modifiers, the injected pointer. It touches no packet and no engine memory,
    so it can run wherever the family runs — and it has to run from the flip,
-   because tagpu_overlay_draw is never reached on renderer=gdi and driving that
-   lane is the whole point of landing 10c.
+   because tagpu_overlay_draw is never reached on renderer=gdi and that lane
+   has to be drivable too.
 
    NOTHING HERE REENTERS THE ENGINE. Every injection leaves by PostMessageA (a
    tagged WM_TAGPU_*) or by SendInput; there is no SendMessage on any path out
@@ -426,8 +425,7 @@ void tagpu_input_cmd(TAGPU_CMD* rec)
    this is safe to call from inside an engine call and not merely untested
    there.
 
-   ONE PATH COULD DISPATCH IT EARLIER, AND IT IS OFF ON THIS TARGET [landing
-   review]. dds_Blt and dds_Lock call util_pull_messages(), which does
+   ONE PATH COULD DISPATCH IT EARLIER, AND IT IS OFF ON THIS TARGET. dds_Blt and dds_Lock call util_pull_messages(), which does
    PeekMessageA(PM_REMOVE) + DispatchMessageA, and the flip reaches ddraw
    through them -- after this detour returns, still inside the flip. So a
    WM_TAGPU_MOUSE posted here could be dispatched mid-flip. Its guard is five
@@ -436,9 +434,8 @@ void tagpu_input_cmd(TAGPU_CMD* rec)
    pumped for a second", which is the whole point of `fix_not_responding` and
    is false almost always, because that field is stamped on essentially every
    message the game pulls (fake_GetMessageA, fake_PeekMessageA, and dd.c's own
-   pull). [Round 3 of the review corrected this: the first draft called that
-   conjunct inert because the assignment INSIDE util_pull_messages is commented
-   out, having looked only there for its writers.] Unreachable here, then, but
+   pull) -- not by util_pull_messages, whose own assignment is commented
+   out. Unreachable here, then, but
    by a CONFIGURATION fact rather than by an invariant of the injection path,
    which is why it is named instead of left implied. */
 void tagpu_input_frame(const TAGPU_FRAME* f)
@@ -459,7 +456,7 @@ void tagpu_input_frame(const TAGPU_FRAME* f)
            nowhere else, so bracketing it here is what makes the lifetime a
            fact rather than a habit.
 
-           SAVE AND RESTORE, NOT CLEAR [landing review]. A clear-to-NULL is
+           SAVE AND RESTORE, NOT CLEAR. A clear-to-NULL is
            correct only while this function has one caller and is never
            re-entered, and neither of those is a property this file can state.
            Under re-entry an inner clear would hand the OUTER do_keys a NULL,
@@ -467,24 +464,22 @@ void tagpu_input_frame(const TAGPU_FRAME* f)
            dereference, not a quiet no-op. Restoring makes the bracket true by
            construction instead of by caller count, and it costs one word.
 
-           (Round 2 of the review corrected the reason first given here: the
-           32-deep LIFO in before_flip is about SurfaceCreateNamed nesting
-           INSIDE a flip, not about flips nesting, and a nested flip could not
-           re-enter this anyway -- the outer call stamped the 16 ms gate's QPC,
-           so an inner one inside that window skips the whole block. The change
-           stands on its own; the evidence for it did not.) */
+           (The 32-deep LIFO in before_flip is about SurfaceCreateNamed
+           nesting INSIDE a flip, not about flips nesting, and a nested flip
+           cannot re-enter this anyway -- the outer call stamped the 16 ms
+           gate's QPC, so an inner one inside that window skips the whole
+           block. The save-and-restore does not rely on either.) */
         s_frame = f;
         if (f->hwnd) do_keys((HWND)f->hwnd);
         s_frame = prev;
     }
 }
 
-/* THE HOLD HALF — RENDER THREAD, from tagpu_overlay_draw, where it always was.
+/* THE HOLD HALF — RENDER THREAD, from tagpu_overlay_draw.
 
    It stays because it is the only part of this module that dereferences
    f->packet (through do_eye), and because its output is read on that thread:
-   see the note above s_eyeHold. The counter is the render frame counter, so
-   the poll cadence is exactly what it was before the split. */
+   see the note above s_eyeHold. The counter is the render frame counter. */
 void tagpu_input_eye_frame(const TAGPU_FRAME* f)
 {
     static unsigned last = 0;

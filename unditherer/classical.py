@@ -1,6 +1,6 @@
 """The classical (non-learned) restoration stages, stage for stage the code that
 tools/undither/restore.py, tools/undither/prep.py and the WebGL viewer are
-built on.  restore.py now imports everything from here.
+built on.  restore.py imports everything from here.
 
 Pipeline: expand -> analyze -> undither (bilateral) -> deband -> [enhance] -> QA.
 
@@ -234,8 +234,8 @@ def edge_retention(orig, out):
 def mean_colour(rgb):
     """Per-channel mean in float64.  A float32 reduction over a 1080p frame
     accumulates whole levels of error and even depends on the array's memory
-    layout (found 2026-09-02: the same frame gave 0.96 or 4.03 for the same
-    output); the numbers quoted before that date carry that noise."""
+    layout (measured 2026-09-02: the same frame gave 0.96 or 4.03 for the same
+    output); numbers quoted before that date carry that noise."""
     return rgb.reshape(-1, 3).mean(axis=0, dtype=np.float64)
 
 

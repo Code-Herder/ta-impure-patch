@@ -1,5 +1,5 @@
 /* tagpu_vk_shot.c -- one frame of the Vulkan lane, as a binary PPM. Contract:
-   tagpu_vk_shot.h. Phase G / G19d.
+   tagpu_vk_shot.h.
 
    A BINARY PPM AND NOT A PNG, deliberately. This exists to be DIFFED, by
    tools/vk-ab.py and by whatever a session reaches for next, and a P6 file
@@ -9,13 +9,13 @@
    `ffmpeg -i x.ppm x.png` is one command when a human wants to look.
 
    THE SOURCE'S FORMAT IS BGRA ON THE REFERENCE SETUP AND THE FILE IS RGB, so
-   the channels are swapped on the way out. (Source, not swapchain: since landing
-   4c-3 a world capture reads the offscreen world target instead, and it is built
-   with the same format, which is why the caller passes the format the image was
-   BUILT with rather than the one the surface reports.) Both orders are handled and anything
-   else is refused by name rather than written in the wrong colour -- a capture
-   that differs from its twin in every pixel because the channels were swapped
-   reads as a broken port.
+   the channels are swapped on the way out. (Source, not swapchain: a world
+   capture reads the offscreen world target instead, and it is built with the
+   same format, which is why the caller passes the format the image was BUILT
+   with rather than the one the surface reports.) Both orders are handled and
+   anything else is refused by name rather than written in the wrong colour --
+   a capture that differs from its twin in every pixel because the channels
+   were swapped reads as a broken port.
 
    NOTHING SURVIVES THE CAPTURE. The staging buffer is the size of the frame --
    8.3 MB at 1920x1080, which is real money in a 32-bit address space the lane
@@ -82,11 +82,10 @@ int tagpu_vk_shot_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, VkImage img,
     VkBufferImageCopy rg;
     uint32_t i, type = 0xFFFFFFFFu;
 
-    /* EVERY REFUSAL SAYS SO. These two returned 0 in silence, and since an
-       arming now unlinks its own target, the operator's only evidence that a
-       capture was asked for and not taken is this log -- an absent file with no
-       line beside it reads as "the lever never fired", which is a different
-       fault with a different fix. [FROM THE 4b-1 LANDING REVIEW, 2026-09-18.] */
+    /* EVERY REFUSAL SAYS SO. An arming unlinks its own target, so the
+       operator's only evidence that a capture was asked for and not taken is
+       this log -- an absent file with no line beside it reads as "the lever
+       never fired", which is a different fault with a different fix. */
     if (s_buf) {
         slog(d, "shot: a capture is already in flight - nothing captured for "
                 "this arming");
@@ -142,15 +141,15 @@ int tagpu_vk_shot_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, VkImage img,
        layout its render pass left it in and it must go back in that same layout,
        which is why `layout` is a parameter rather than a constant here.
 
-       THERE ARE TWO SOURCES SINCE LANDING 4c-3 and the restore matters for a
-       different reason in each. For the SWAPCHAIN image (PRESENT_SRC_KHR, the UI
-       captures) putting it back is load-bearing: the present that follows is
-       reading an image in a layout it was promised. For the WORLD TARGET
-       (SHADER_READ_ONLY_OPTIMAL, the five world captures) it is free rather than
-       load-bearing -- that pass declares `initialLayout = UNDEFINED` and does not
-       care what it finds next frame -- but it is done anyway, because a function
-       that restores what it moved on one path and not the other is one a reader
-       has to check twice. [THE TWO-SOURCE NOTE IS FROM THE 4c-3 REVIEW.] */
+       THERE ARE TWO SOURCES and the restore matters for a different reason in
+       each. For the SWAPCHAIN image (PRESENT_SRC_KHR, the UI captures) putting
+       it back is load-bearing: the present that follows is reading an image in
+       a layout it was promised. For the WORLD TARGET (SHADER_READ_ONLY_OPTIMAL,
+       the five world captures) it is free rather than load-bearing -- that pass
+       declares `initialLayout = UNDEFINED` and does not care what it finds next
+       frame -- but it is done anyway, because a function that restores what it
+       moved on one path and not the other is one a reader has to check
+       twice. */
     b.oldLayout = layout;
     b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -158,7 +157,7 @@ int tagpu_vk_shot_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, VkImage img,
     b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     b.subresourceRange.levelCount = 1;
     b.subresourceRange.layerCount = 1;
-    /* BOTTOM_OF_PIPE, NOT COLOR_ATTACHMENT_OUTPUT. [FROM REVIEW 2026-09-15.] The
+    /* BOTTOM_OF_PIPE, NOT COLOR_ATTACHMENT_OUTPUT. The
        render pass performs its own `finalLayout` transition as part of its
        final subpass dependency, whose destination stage is BOTTOM_OF_PIPE --
        which is LATER than COLOR_ATTACHMENT_OUTPUT, so a barrier sourced there
@@ -208,9 +207,8 @@ void tagpu_vk_shot_finish(const TAGPU_VKPASS* d, const char* path)
         return;
     }
     px = (const unsigned char*)p;
-    /* THE ROW BUFFER BEFORE THE FILE. [FROM THE REVIEW'S SECOND PASS
-       2026-09-15.] Allocating it after the header was written left a
-       header-only PPM on disk when it failed, and `tools/vk-ab.py` would then
+    /* THE ROW BUFFER BEFORE THE FILE. Allocated after the header, a failure
+       would leave a header-only PPM on disk, and `tools/vk-ab.py` would then
        report a MALFORMED capture rather than an absent one -- which reads as a
        broken writer instead of a machine that ran out of memory. */
     line = (unsigned char*)malloc((size_t)s_w * 3);
@@ -230,10 +228,10 @@ void tagpu_vk_shot_finish(const TAGPU_VKPASS* d, const char* path)
     }
     fprintf(f, "P6\n%u %u\n255\n", s_w, s_h);
     /* ROW 0 IS THE TOP ROW HERE, and in a PPM too, so the rows go out in order.
-       The GL twin's capture has to be turned over because glReadPixels hands
-       back the bottom row first; this one does not, and that asymmetry is
-       exactly the kind of thing that produces a capture differing from its twin
-       in every text pixel and nothing else. */
+       Unlike a glReadPixels capture, which hands back the bottom row first,
+       nothing is turned over -- and that asymmetry is exactly the kind of thing
+       that produces a capture differing from its twin in every text pixel and
+       nothing else. */
     /* ONE fwrite A ROW. This runs on the render thread, and a stdio call per
        pixel is two million of them at 1080p -- most of the one frame a capture
        costs, for nothing. */

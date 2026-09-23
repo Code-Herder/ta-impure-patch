@@ -6,7 +6,7 @@
    the lab's: the terrain sun 324.5,53.1 (north-west, the side the tile art
    is painted from -- artlight), the unit sun 215.5,53.1 (= tagpu_render3do.c's
    SH_L taken into map space: south-west, the camera light), amb 0.35. The two
-   suns stay constant on every map (renderers.md 2.1, decided 2026-09-04). */
+   suns stay constant on every map (renderers.md 2.1). */
 
 #include <windows.h>
 #include <stdio.h>
@@ -73,23 +73,19 @@ static float level_of(const float sun[3], float amb)
 #define DEF_SSUN_EL 40.0f
 static void shadow_defaults(TAGPU_LIGHT* L)
 {
-    /* HARD SINCE 2026-09-22, and the change is a consequence rather than a
-       preference. SOFT is the map-anchored depth map, and its producer -- the
-       light basis, the map extent and the heightfield caster mesh -- was
-       `tagpu_shadow.c`, which landing 11 D2 deleted with the GL backend. Since
-       then `shadows=1` has drawn NOTHING: `tagpu_vk_shadow_prepare` returns 0
-       on every frame for want of a hand-over, and the consumers' refusals are
-       gated on the same `shadowOn` that goes to 0 with it, so both halves went
-       dark together and silently. HARD is Classic's own pair -- the 5-px
-       silhouette and the structure slant -- and it is what the unit pass
-       actually draws, so it is what the default has to name.
-       [tagpu_vk_shadow.h's TAGPU_SHADOWHAND block; the vulkan-only plan's
-       landing 11.] */
+    /* HARD, and the choice is a consequence rather than a preference. SOFT is
+       the map-anchored depth map, and it has no producer in this build:
+       `tagpu_vk_shadow_prepare` returns 0 on every frame for want of a
+       hand-over, and the consumers' refusals are gated on the same `shadowOn`
+       that goes to 0 with it, so `shadows=1` draws NOTHING, silently. HARD is
+       Classic's own pair -- the 5-px silhouette and the structure slant -- and
+       it is what the unit pass actually draws, so it is what the default has
+       to name. [tagpu_vk_shadow.h's TAGPU_SHADOWHAND block.] */
     L->shadows = TAGPU_SHADOWS_HARD;
     L->penumbra = 0.05f;
     L->shadowlenOn = 1; L->shadowlen[0] = 14.0f; L->shadowlen[1] = 0.25f;
     L->shade = 1.0f;
-    /* OFF (2026-09-09, renderers.md 2.7b). The hills mesh casting on the ground
+    /* OFF (renderers.md 2.7b). The hills mesh casting on the ground
        it was built from self-shadows it: on open sea with nothing that can cast,
        the water darkens in the caster's own 16-unit lattice, and it gets WORSE as
        `Shadow quality` goes up because the bias is scaled to the texel while the
@@ -120,13 +116,13 @@ static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float am
     static const char* const shad[3] = { "off", "soft", "hard" };
     if (amb < 0.0f) amb = 0.0f;
     if (amb > 1.0f) amb = 1.0f;
-    /* G18b: `sun=off` IS `light=0` -- the level normal handed to taLambert, not
-       amb forced to 1. The picture is the same to the pixel (measured in G18a:
-       `light=0 shadows=0` and the old `sun=off` are byte-identical) and the
-       shadow term, which lives inside the lambert and was multiplied by
-       (1 - amb) = 0, survives. Nothing here touches `shadows=` any more: it is
-       the player's key, and a lever that silently rewrote it made the log lie
-       and did not put it back when the sun came on again. */
+    /* `sun=off` IS `light=0` -- the level normal handed to taLambert, not amb
+       forced to 1. The picture is the same to the pixel (measured: `light=0
+       shadows=0` and amb forced to 1 are byte-identical) and the shadow term,
+       which lives inside the lambert and would be multiplied by (1 - amb) = 0,
+       survives. Nothing here touches `shadows=`: it is the player's key, and a
+       lever that silently rewrote it would make the log lie and not put it back
+       when the sun came on again. */
     if (off) s_lit = 0;
     sun_vector(sunAz, sunEl, s_light.sun);
     sun_vector(usunAz, usunEl, s_light.unitSun);
@@ -162,17 +158,15 @@ static void read_cfg(void)
     /* 2048 to match tagpu_menu.c's write_cfg `in[2048]`, and it must: that
        function copies through every token it does not own and appends its own
        four (assets/light/shadows/shadowres) LAST, so a reader with a smaller
-       window loses the menu's own settings first. At 1024 a cfg between 1 KB
-       and 2 KB -- a few research knobs plus comments -- read back without the
-       player's rows, which applied for the session and then vanished on the
-       next poll, silently. write_cfg refuses to rewrite at all past its own
-       buffer, so matching it is the whole fix. */
+       window loses the menu's own settings first -- silently: the player's rows
+       apply for the session and then vanish on the next poll. write_cfg refuses
+       to rewrite at all past its own buffer, so matching it is the whole fix. */
     char buf[2048]; DWORD n = 0;
     float sunAz = DEF_SUN_AZ, sunEl = DEF_SUN_EL, usunAz = DEF_USUN_AZ, usunEl = DEF_USUN_EL;
     float amb = DEF_AMB;
     float ssunAz = DEF_SSUN_AZ, ssunEl = DEF_SSUN_EL;
     int off = 0;
-    s_assets = 1; s_lit = 1;              /* the switch undivided: G18a's defaults */
+    s_assets = 1; s_lit = 1;              /* the switch undivided: every part on */
     shadow_defaults(&s_light);
     h = CreateFileA(CFG_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
@@ -208,20 +202,17 @@ static void read_cfg(void)
             } else if (!_strnicmp(p, "amb=", 4)) {
                 amb = (float)atof(p + 4);
             } else if (!_strnicmp(p, "shadows=", 8)) {
-                int m = atoi(p + 8);          /* 0 none, 1 soft, 2 hard (G18b) */
+                int m = atoi(p + 8);          /* 0 none, 1 soft, 2 hard */
                 /* A PERSISTED `shadows=1` IS MIGRATED TO HARD RATHER THAN
                    HONOURED, and the distinction matters. Honouring it would
-                   draw nothing (SOFT has had no producer since landing 11 D2,
-                   see shadow_defaults above) and the render-options row, which
-                   no longer offers a Soft stage, would read Off -- so every
-                   player whose cfg was written while SOFT was the default
-                   would silently lose their shadows on upgrading, which is the
-                   opposite of what changing the default was for. A `1` in a
-                   file today is a stale value from a build where Soft existed,
-                   not a choice among the stages this build offers, so it is
-                   carried forward to the nearest thing that draws. Said once,
-                   because a cfg is re-read on every poll.
-                   [Named by the landing review, 2026-09-22.] */
+                   draw nothing (SOFT has no producer, see shadow_defaults
+                   above) and the render-options row, which offers no Soft
+                   stage, would read Off -- so every player whose cfg was
+                   written while SOFT was the default would silently lose their
+                   shadows. A `1` in a file is a stale value from a build where
+                   Soft existed, not a choice among the stages this build
+                   offers, so it is carried forward to the nearest thing that
+                   draws. Said once, because a cfg is re-read on every poll. */
                 if (m == TAGPU_SHADOWS_SOFT) {
                     static int said;
                     m = TAGPU_SHADOWS_HARD;

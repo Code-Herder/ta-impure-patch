@@ -8,9 +8,8 @@
 #include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the restore request */
 
 /* everything the effects gather/render needs from the native pass's frame.
-   THE ENGINE POINTER IS NOT IN IT (frame packet exchange, landing 2), and
-   since landing 4a neither effects pass reads engine memory at all: the
-   projectiles, explosions, debris and the ten particle layers arrive as
+   THE ENGINE POINTER IS NOT IN IT (frame packet exchange), and neither
+   effects pass reads engine memory at all: the projectiles, explosions, debris and the ten particle layers arrive as
    tables in `packet`, gathered by the game thread once per sim tick. */
 struct TAGPU_PACKET;
 typedef struct TAGPU_FXVIEW {
@@ -18,7 +17,7 @@ typedef struct TAGPU_FXVIEW {
                                     here; valid for this frame only, never cached */
     int eyeX, eyeY, vpL, vpT;    /* the PREDICTED eye and the true viewport, from the packet */
     int gw, gh, ss;
-    float zoom, zoomCx, zoomCy;  /* the native pass's view zoom (G12d demo)    */
+    float zoom, zoomCx, zoomCy;  /* the native pass's view zoom                */
     float encSprite, depthScale; /* this frame's sprite depth key and VS scale */
     float encLayer[10];          /* particle layer n -> depth key (tagpu_sfx)  */
     int r0, rows;                /* the row sweep's base row and count: a row  */
@@ -29,7 +28,7 @@ typedef struct TAGPU_FXVIEW {
        game-space rect of vw/z x vh/z centred on the same point: zoomed out, the
        gathers must reach further than the engine's own viewport or the world
        stops short of the frame edge. Identical to vpL/vpT/vw/vh at z >= 1, so
-       nothing about the 1x path (which every gate was verified at) changes. */
+       at 1x they change nothing. */
     int evpL, evpT, evw, evh;
     int fogMode;                 /* bit0 = the engine's fog overlay is live    */
                                  /* (the grid itself says what it paints);     */
@@ -38,14 +37,8 @@ typedef struct TAGPU_FXVIEW {
     int fogCols, fogRows;           /* its dims (view-anchored 32-px cells)    */
     int fogCells;                   /* cells the BUFFER holds — the real bound */
     int fogOrgX, fogOrgY;           /* world x, projected z of its cell (0,0)  */
-    /* NO WRITER AND NO READER since landing 11-5b, which deleted the two GL
-       names that fed them. Left in place rather than removed because changing
-       this struct's shape is 11-5e's, not a review fix's -- but do not plumb
-       anything into them believing there is a consumer: there is not, and the
-       review that found that also found `tagpu_hires_draw.c`'s `v->fogTex`
-       was a TAGPU_HVIEW field, a different struct with a similar name.
-       Both that file and that struct went in landing 11 D3; the note is
-       kept because the name collision is why the review looked twice. */
+    /* NO WRITER AND NO READER. Do not plumb anything into them believing
+       there is a consumer: there is not. */
     unsigned int fogTex, fogLut;    /* RG8 grid; 256x1 grey palette remap      */
     unsigned int frame_counter;
 } TAGPU_FXVIEW;
@@ -95,8 +88,7 @@ int  tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp);   /* engine 
 int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
                   int orgX, int orgY, int wx, int wzp);
 
-/* ---- the Vulkan edition of this pass (Phase G / G19e, the FOURTH world pass)
-   ----------------------------------------------------------------------------
+/* ---- the Vulkan edition of this pass -----------------------------------------
 
    Everything the GL lane just drew this pass FROM, so that the Vulkan lane
    draws the same thing rather than a second implementation of it. Nothing here
@@ -107,25 +99,22 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
 
    HANDED OVER EXACTLY ONCE, like the feature pass's, so one frame's geometry
    can never be drawn twice; a frame this pass skipped hands over nothing and
-   the Vulkan lane draws nothing, which is what the GL lane did.
+   the Vulkan lane draws nothing.
 
-   THE POINTERS ARE THIS FILE'S AND THE ATLAS MODULE'S. Both lanes run on the
+   THE POINTERS ARE THIS FILE'S AND THE ATLAS MODULE'S. Both halves run on the
    RENDER THREAD and the whole of the native pass happens earlier in the same
-   iteration of render_ogl.c's loop than the tagpu_vk_frame that consumes this,
+   iteration of render_vk.c's loop than the tagpu_vk_frame that consumes this,
    so the game thread never touches them.
 
-   WHAT THE FRAME STAMP BOUNDS HERE IS STALENESS, NOT A DANGLING POINTER, and
-   that is worth saying exactly because tagpu_terr.h's version of this comment
-   says the opposite and was copied here before it was re-derived. None of these
-   pointers can dangle: `s_verts` is a fixed file-static array, `s_lhtRGB` is
-   another, and tagpu_gaf.c never frees a mirror -- it memsets it. What CAN
-   happen is worse than it sounds anyway: `tagpu_native.c` calls
+   WHAT THE FRAME STAMP BOUNDS HERE IS STALENESS, NOT A DANGLING POINTER. None
+   of these pointers can dangle: `s_verts` is a fixed file-static array,
+   `s_lhtRGB` is another, and tagpu_gaf.c never frees a mirror -- it memsets
+   it. What CAN happen is worse than it sounds anyway: `tagpu_native.c` calls
    `tagpu_fx_render` only `if (nfx)`, so a frame that gathered nothing never
    reaches the publisher at all, while the NEXT gather has already overwritten
    `s_verts`. A hand-over left standing would then be read with one frame's
    counts over another frame's vertices. Hence the stamp, and hence the
-   unconditional clear on every path that does not publish.
-   [Rationale corrected by the G19e effects review, 2026-09-15.] */
+   unconditional clear on every path that does not publish. */
 
 /* FLOATS PER VERTEX, AND THE ATTRIBUTE TABLE, DEFINED ONCE FOR BOTH LANES --
    tagpu_feat.h's rule and for the same reason: a vertex layout copied into a
@@ -143,8 +132,7 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
 /* THE FOUR BUCKETS, IN THE GL LANE'S OWN DRAW ORDER, which is the order they
    are concatenated into one vertex buffer in. They are not four draws of one
    pipeline: the lines are a LINE_LIST and the flashes blend additively, so
-   this pass is the first ported one that needs more than one pipeline for the
-   same shader. */
+   this pass needs more than one pipeline for the same shader. */
 enum { TAGPU_FXB_UNDER = 0, TAGPU_FXB_LINES = 1,
        TAGPU_FXB_FLASH = 2, TAGPU_FXB_SPRITES = 3, TAGPU_FXB_N = 4 };
 
@@ -175,7 +163,7 @@ typedef struct TAGPU_FXHAND {
        uScafOn FOR THE B_UNDER DRAW ALONE; every other draw got 0. This pass
        REFUSES a frame with it set (see tagpu_vk_fx.c): the scaffold's texels
        live in another pass's image and sharing one image between two passes is
-       a mechanism this landing does not build. */
+       a mechanism that does not exist. */
     int   scafOn;
     float scafP[4];                   /* vpL, vpT, vw, vh, in frame px        */
     float uss;                        /* the supersample factor as the FS sees it */
@@ -189,14 +177,7 @@ typedef struct TAGPU_FXHAND {
     int                   atlasRows;  /* the rows the shelf packer has used   */
     unsigned              atlasSerial;
 
-    /* ...AND THE WORK ITSELF IS NOW THE ONLY FORM IT COMES IN (the Vulkan-only
-       plan's landing 7d, and 11-5e-2b). These were MUTUALLY EXCLUSIVE with a
-       read-back mirror, `atlasRgb`, that stood here until the GL backend that
-       produced it went: a consumer chose between a picture and a request. The
-       mirror's only source was `glReadPixels`, opengl32.dll is never loaded
-       (`oglu_load_dll` has no caller), so the picture was NULL on every
-       published frame of every process and the choice was never a choice.
-       tagpu_feat.h carries the same tombstone and the same reasoning.
+    /* THE RESTORE WORK, AS REQUESTS.
 
        IT IS AN APPEND-ONLY LIST WITH A CURSOR, not terrain's whole list per
        serial, because a effects atlas is a lazy QUEUE: tagpu_gaf.c adds one
@@ -223,7 +204,7 @@ typedef struct TAGPU_FXHAND {
        describes the LATEST generation, and two resets between two of a
        consumer's looks collapse into one, so a blank followed by a repaint
        would read as "keep what you have" over an atlas the producer cleared.
-       Blank whenever this has moved. [FROM THE LANDING-7d REVIEW.] */
+       Blank whenever this has moved. */
     unsigned                 restoreBlanks;
     const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()        */
     unsigned              palSerial;
@@ -246,8 +227,8 @@ typedef struct TAGPU_FXHAND {
     /* 1 on the ONE frame `tagpu_fx.ab` latched its claim and
        `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane
        captures THAT frame rather than whichever one its own lever poll landed
-       on. It does NOT mean a capture file was written -- since landing 4d-2
-       there is no GL half to write one. */
+       on. It does NOT mean a capture file was written: there is no GL half to
+       write one. */
     int   ab;
 } TAGPU_FXHAND;
 

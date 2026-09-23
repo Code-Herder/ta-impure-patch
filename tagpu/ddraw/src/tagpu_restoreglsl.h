@@ -2,9 +2,7 @@
 #define TAGPU_RESTOREGLSL_H
 /* THE SHARED CONTRACT OF THE CLASSIC++ RESTORER -- the frame struct both
    backends and tools/tascene are written against, and the tileability test.
-   The GL backend this header was named for is gone (11-5e-2); the tombstone
-   below says what it was and why it could not run. The restorer that runs is
-   `tagpu_vk_restore.c` under `tagpu_restore_core.c`.
+   The restorer that runs is `tagpu_vk_restore.c` under `tagpu_restore_core.c`.
 
    WHAT THE RESTORER IS, for a reader arriving here first: the unditherer's
    residual CNN as fragment passes (research/notes/renderers.md 4c), shaders in
@@ -53,34 +51,16 @@
    cannot include this file -- the build's only include directory is `inc`, so a
    header there naming a header here does not resolve. A tag lets that hand-over
    declare the pointer without the layout, and the consumer, which includes both,
-   gets the whole type. [The Vulkan-only plan's landing 7e-2.] */
+   gets the whole type. */
 typedef struct TAGPU_RGLSL_FRAME_S {
     int ax, ay, w, h, wrap, dx, dy, border, key, padR, padB;
 } TAGPU_RGLSL_FRAME;
 
-/* THE GL JOB API WAS HERE AND IT WENT WITH ITS BACKEND IN 11-5e-2.
-   `tagpu_rglsl_job_new/_repaint/_repalette/_add/_clear/_idle/_failed/_painted/
-   _free`, `tagpu_rglsl_step`, `_calls`, `_step_forced`, `_mips` and
-   `_glreset` were the surface of `tagpu_restoreglsl.c`, which compiled
-   tagpu_restore_glsl.h's shaders in the game's own GL context. That file is
-   deleted; the Vulkan restorer (`tagpu_vk_restore.c`, the other backend of
-   `tagpu_restore_core.c`) is the one this build runs, stepped from
-   `tagpu_vk.c` inside the frame's command buffer.
-
-   The API could not have done anything before it went. Its entry into GL was
-   `tagpu_rglsl_job_new`, whose ONE call site was `tagpu_gaf.c`'s
-   `tagpu_gaf_atlas_restore`, below a `!a->tex` return -- and `a->tex` has
-   been 0 for the life of the process since landing 11-4c took the
-   `glGenTextures` that filled it out of `tagpu_gaf_atlas_create`. No job was
-   ever made, so `gl_ready()` never turned on and `tagpu_rcore_step` returned
-   on its second line every frame.
-
-   WHAT THIS HEADER IS NOW. `TAGPU_RGLSL_FRAME` above -- a plain CPU struct
+/* WHAT THIS HEADER HOLDS. `TAGPU_RGLSL_FRAME` above -- a plain CPU struct
    with no GL in it -- and `tagpu_rglsl_tileable` below. Twelve files include
-   this header and almost all of them want only those two; the name is kept
+   this header and almost all of them want only those two; the name stays
    because the struct's name is the contract both restorer backends and
-   tools/tascene are written against.
-   [The vulkan-only plan, 11-5e-2.] */
+   tools/tascene are written against. */
 /* classical.is_tileable on palette colours: opposite edges agree within 12
    levels on average, over the three channels. A frame with its colour key
    `key` on an edge is never tileable (tagpu_restore_glsl.h says why);

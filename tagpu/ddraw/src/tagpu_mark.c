@@ -1,9 +1,9 @@
-/* tagpu_mark.c — the UI marker pass (G13d). See tagpu_mark.h for the split
+/* tagpu_mark.c — the UI marker pass. See tagpu_mark.h for the split
    between re-drawn health bars and captured everything-else, and
    tagpu_markown.h for how the capture works.
 
    THE HEALTH BAR, byte for byte (DrawHealthBars 0x46A430, sole caller
-   0x469CB9, re-read for this gate):
+   0x469CB9):
 
      if ((s16)unit->Health[+0x108] <= 0) return;
      DrawBar({x-0x11, y-2, x+0x11, y+2}, gui[0]);          // 35 x 5, black
@@ -27,38 +27,26 @@
    get a bar, in either version.
 
    Sub-pixel: the engine reads the ROSTER SHORTS (the high words of its 16.16
-   positions), so ITS bar steps once per sim tick — and so did ours until
-   2026-09-09, while the native unit pass interpolated the body between ticks.
-   That was wrong, and visibly so: the bar and the body slid against each other
-   by up to a whole tick of motion — 1.68 px peak-to-peak at 1x on a walking
-   commander at TA's NORMAL game speed, 2.95 px at `gamespeed` 20, and `zoom`
-   times either on screen — which is the health-bar wobble. (Both figures were
-   measured; the note here quoted only the 2.95 until the landing review, which
-   is the double-speed one this very session found the reference setup running
-   at, so it overstated the defect by 1.75x.) Stock TA cannot show it, because there the bar and the
-   body are the same shorts. The gather now takes `tagpu_native_unit_pos()` —
-   the body's own anchor, the same one the selection box and the unit-anchored
-   order markers already use.
+   positions), so ITS bar steps once per sim tick, while the native unit pass
+   interpolates the body between ticks. A bar on the shorts slides against the
+   body by up to a whole tick of motion — 1.68 px peak-to-peak at 1x on a
+   walking commander at TA's NORMAL game speed, 2.95 px at `gamespeed` 20, and
+   `zoom` times either on screen (both measured) — which is the health-bar
+   wobble. Stock TA cannot show it, because there the bar and the body are the
+   same shorts. The gather takes `tagpu_native_unit_pos()` — the body's own
+   anchor, the same one the selection box and the unit-anchored order markers
+   already use.
 
-   THE FIX HAD TO BE MADE TWICE, and the second half is the interesting one.
-   The first pass took that anchor and FLOORED it, on the argument that the
-   selection box floors the same anchor and the two should agree. They did
-   agree — with each other, in the frame's PRE-zoom units, which is the wrong
-   grid. The vertex shader scales this pass by `zoom` about the zoom centre, so
-   a one-unit quantisation here is `zoom * ss` DEVICE pixels on screen, and the
-   bar went on stepping 2-4 px diagonally at max zoom-in while the body glided
-   underneath it. (The selection box never showed it because it does not
-   actually floor in these units: `tagpu_native.c` snaps its corners forward
-   through the zoom, floors THERE, and comes back — a device-pixel step.) The
-   anchor now keeps its fraction to the last moment and `snap_device` puts it on
-   the device grid, so the step is one device pixel at every zoom, and the two
-   markers still agree because they are now quantised on the same grid.
-   [This note used to argue for the shorts outright: "a bar is 35 px of flat
-   colour over a unit that moves a couple of pixels per frame, and the
-   alternative is a second, differently sourced anchor that can disagree with
-   the body's." The second half had it backwards — `tagpu_native_unit_pos` IS
-   the body's anchor — and the first half was a guess the measurement did not
-   support.]
+   AND IT DOES NOT FLOOR THAT ANCHOR in the frame's PRE-zoom units, which is
+   the wrong grid. The vertex shader scales this pass by `zoom` about the zoom
+   centre, so a one-unit quantisation here is `zoom * ss` DEVICE pixels on
+   screen, and the bar steps 2-4 px diagonally at max zoom-in while the body
+   glides underneath it. (The selection box does not floor in these units
+   either: `tagpu_native.c` snaps its corners forward through the zoom, floors
+   THERE, and comes back — a device-pixel step.) The anchor keeps its fraction
+   to the last moment and `snap_device` puts it on the device grid, so the step
+   is one device pixel at every zoom, and the two markers agree because they
+   are quantised on the same grid.
 
    THE BUILD CURSOR and the drag band box are re-drawn for the same reason,
    and it is the reason a captured layer can never fix them: the capture is
@@ -104,11 +92,11 @@
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
 #include "tagpu_pal.h"
-#include "tagpu_vk.h"      /* tagpu_vk_ab_arm, for the Phase G A/B claim */
-#include "tagpu_packet.h"   /* the frame packet: the view, the tables (landing 3) */
+#include "tagpu_vk.h"      /* tagpu_vk_ab_arm, for the A/B claim */
+#include "tagpu_packet.h"   /* the frame packet: the view, the tables */
 
 /* ---- what the marker block reads, and where it comes from ----------------
-   SINCE THE FRAME PACKET'S LANDING 3 this file reads no engine memory at all.
+   This file reads no engine memory at all.
    The unit array walk, the two player-id bytes, the damagebars option, the GUI
    colour table, the build cursor's corners and the dispatched mouse point all
    arrive in the packet, copied by the game thread inside the very draw whose
@@ -121,9 +109,8 @@
    picks its player range from `main+0x2A42` (`0x48CC3B`). Two different bytes,
    two loops, one block. They are written independently (`0x416B25` and
    `0x416B38`, from two separate reads in the same loader function), so they can
-   differ, and G13d had this loop on `0x2A42` from the start — meaning our bars
-   were drawn for a different player's units than the engine's whenever the two
-   disagree. Which of the pair is "watched" and which "local" is NOT established
+   differ, and a bar loop on `0x2A42` would draw our bars for a different
+   player's units than the engine's whenever the two disagree. Which of the pair is "watched" and which "local" is NOT established
    here and the notes disagree with each other about it, so they are named by
    address. [BINARY-VERIFIED 2026-09-05] The packet carries both: `local_player`
    IS 0x2A43, the bar loop's, and `watched` is 0x2A42, the order driver's. */
@@ -138,9 +125,6 @@
 
 #define MVST         8                       /* x,y, u,v, wx,wz, colour, z   */
 #define QUADV        6
-/* THE CAPTURED LAYER'S QUAD USED TO SIT AT 0 and the cursor after it. The clean
-   cut deleted that draw -- it was the engine's own rasterised bytes copied back
-   onto the frame -- so the cursor rects are the block's first region now. */
 #define CURSBASE     0
 #define MAXCURSV     (8 * QUADV)             /* two rects, four edges each    */
 #define BARBASE      (CURSBASE + MAXCURSV)   /* and the bars after those      */
@@ -253,15 +237,7 @@ int tagpu_mark_armed(unsigned frame_counter)
     return 1;
 }
 
-/* ---- the gather's buckets ----
-   The program, the VAO/VBO, the per-layer textures, the eight uniform
-   locations AND the `s_state` readiness flag all went with the draw
-   [landing 11-4a]. `s_state` is named here because keeping it was the
-   landing's first instinct and the review disproved it: nothing could set it
-   to 1 once `init_gl` was gone, so a later `if (s_state != 1) return;` -- the
-   exact guard that was just deleted -- would have returned on every frame and
-   silently published no markers at all. A flag no code can raise is not
-   state; it is a trap with a plausible name. */
+/* ---- the gather's buckets ---- */
 
 /* THE TWO BUCKETS THAT SCALE WITH THE UNIT COUNT ARE GROWN, NOT FIXED: the
    health bars (two quads per unit of the watched player) and the selection
@@ -295,15 +271,14 @@ static double s_zoom, s_zcx, s_zcy;    /* the transform the text snap inverts  *
 static int    s_ss;
 static int   s_ntext, s_xover;         /* strings drawn / quads refused        */
 
-/* THE SHADER SOURCES ARE A BUILD INPUT, NOT CODE THIS FILE RUNS -- and from
-   landing 11-4a on, this file references neither. `tools/spirv-gen.py` reads
+/* THE SHADER SOURCES ARE A BUILD INPUT, NOT CODE THIS FILE RUNS -- this file
+   references none of them. `tools/spirv-gen.py` reads
    them out of the PREPROCESSED translation unit, so they have to stay here, at
    file scope, spelled exactly `static const char* NAME =`: its `_DECL` regex
    wants the `=` straight after the name, which rules out an
    `__attribute__((unused))` and is why the warning is turned off around them
    instead. Deleting them is not an option either -- `make` fails with "the
-   manifest names tagpu_mark::VS and the source does not have it".
-   [the vulkan-only plan, landing 11-4a] */
+   manifest names tagpu_mark::VS and the source does not have it". */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
@@ -371,8 +346,7 @@ static const char* FS =
    half a game pixel at a time at ss=2, and the box-filter composite then
    smears every diagonal across two game pixels at 20-80 % of the colour
    [MEASURED 2026-09-23 on selbox-facings: 262 of 290 rect pixels below full
-   coverage, where the engine's are all 100 %]. The GL pass hid that by drawing
-   the rect into a 1x buffer, which this lane does not have.
+   coverage, where the engine's are all 100 %].
 
    SO THE LINE PRIMITIVE IS ONLY A BAND THAT COVERS THE PIXELS, and the
    fragment stage decides which pixels are on the line: it takes the GAME pixel
@@ -399,8 +373,8 @@ static const char* FS =
    major axis, and the minor axis in proportion -- so the band covers the end
    pixels whole; the test clips back to them. Along the major axis alone would
    TILT the band (slope dy/(dx+2)) and leave it up to 0.9 game px off the line
-   at the ends of a long diagonal -- the GL pass's own trap, "the cap must run
-   along the segment" (ui-markers.md §1), found again by this landing's review.
+   at the ends of a long diagonal -- "the cap must run along the segment"
+   (ui-markers.md §1).
    The band's WIDTH is tagpu_vk_mark.c's. */
 static const char* SVS =
     "#version 330 core\n"
@@ -461,19 +435,12 @@ static const char* SFS =
     "}\n";
 #pragma GCC diagnostic pop
 
-/* `mksh` AND `init_gl` STOOD HERE -- the GLSL compile helper and the program
-   build [the vulkan-only plan, landing 11-4a]. `init_gl`'s only caller was
-   inside this pass's lane gate, which landing 11-3 had already made false by
-   an ordering, so it built a program nothing could use.
-
-   THE TWO SHADER SOURCES ABOVE DID NOT GO WITH IT, and that is the fact to
-   carry: `VS` and `FS` are the SOURCE OF TRUTH for the Vulkan shaders. The
-   build reads them out of this file (tools/spirv-gen.py, the `mark` entry of
-   its PROGRAMS table), translates them, and `make` fails if
-   `inc/spirv/tagpu_mark.spv.h` has drifted from them -- which is how deleting
-   them here was caught. They are GLSL strings, not a GL object; nothing
-   compiles them at run time any more. The gather below is untouched: it fills
-   the same vertex arrays and `mk_push` / `mk_draw` publish them to
+/* THE SHADER SOURCES ABOVE ARE THE SOURCE OF TRUTH for the Vulkan shaders.
+   The build reads them out of this file (tools/spirv-gen.py, the `mark` entry
+   of its PROGRAMS table), translates them, and `make` fails if
+   `inc/spirv/tagpu_mark.spv.h` has drifted from them. They are GLSL strings,
+   not a GL object; nothing compiles them at run time. The gather below fills
+   the vertex arrays and `mk_push` / `mk_draw` publish them to
    `tagpu_vk_mark.c`, which is what draws them with exactly these shaders. */
 
 /* ---- the health-bar gather ---- */
@@ -583,8 +550,8 @@ int tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
    The vertex shader applies `(p - zoomC) * zoom + zoomC` and then a viewport
    `ss` device pixels to the game-frame unit, so the snap is: take the post-zoom
    position, round it onto the 1/ss grid, and hand back the point that
-   transforms to it. Snapping the point we hand the shader instead — which is
-   what the health bars did until 2026-09-09 — quantises the marker in the
+   transforms to it. Snapping the point we hand the shader instead quantises
+   the marker in the
    frame's PRE-zoom units, so its step on screen is `zoom * ss` device pixels
    rather than one, and a marker anchored to a smoothly moving body then jerks
    against it by that much every time the anchor crosses a boundary. That is a
@@ -704,11 +671,10 @@ static void put_outline(int* nv, int l, int t, int r, int b, int col,
    draws a twin of something in that layer -- `tagpu_native.c`'s build ghost
    above all.
 
-   `tagpu_markown_installed()` USED TO BE FOLDED IN HERE and is not any more,
-   for the reason the bar gate below lost the same test: the engine's own pair
-   was a second, differently placed one only while the composite put it on the
-   screen. It goes to the reference surface now. `passive` stays, because that
-   lever's whole job is to hand the draw back. */
+   `tagpu_markown_installed()` is NOT part of the answer, for the reason the
+   bar gate below has no such test: the engine's own pair goes to the reference
+   surface, not the screen, so it is not a second, differently placed one.
+   `passive` is, because that lever's whole job is to hand the draw back. */
 int tagpu_mark_cursor_ours(void)
 {
     return s_armed == 1 && s_cursor && !s_passive;
@@ -718,22 +684,22 @@ int tagpu_mark_cursor_ours(void)
    `0x469DB4..0x469F23`, transcribed in the header comment */
 static void gather_cursor(const TAGPU_FXVIEW* v)
 {
-    /* EVERY WORD HERE IS THE PACKET'S (frame packet exchange, landing 3): the
+    /* EVERY WORD HERE IS THE PACKET'S: the
        GUI colour bytes, the two mode bytes, the dispatched mouse point and the
        build cursor's two world corners, all copied by the game thread inside
        the draw that is about to use them. The rect the engine can NAME comes
-       from the packet too (landing 2): the field 0x37E27 as the game thread
+       from the packet too: the field 0x37E27 as the game thread
        left it after its own widening — inclusive L, T, R, B, exactly what
        IsPositionInRect tests against.
 
        THE GATE IS tagpu_mark_cursor_ours(), NOT AN OPEN-CODED COPY OF IT, so
        that a client drawing a twin of the build square cannot arm on a
        different answer than the square itself. The build ghost is that client
-       (tagpu_native.c, ghost_pass) and until 2026-09-14 it asked none of these
-       questions: with the marker pass off, or `mark.on=nocursor`, the
-       translucent building tracked the pointer while our square did not, and
-       the engine's own square is drawn at its UNZOOMED 1x projection, so at
-       any zoom != 1 the two were in different places. */
+       (tagpu_native.c, ghost_pass): on a different answer -- the marker pass
+       off, or `mark.on=nocursor` -- the translucent building would track the
+       pointer while our square did not, and the engine's own square is drawn
+       at its UNZOOMED 1x projection, so at any zoom != 1 the two would be in
+       different places. */
     const TAGPU_PACKET* pk = v->packet;
     const unsigned char* gui;
     const int* vp = pk ? pk->vp_addr : NULL;
@@ -787,8 +753,7 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
        first and letting put_outline swap afterwards turns the inset into an
        OUTSET whenever the stored rect runs right-to-left or bottom-to-top —
        the black inner outline lands one pixel outside the white one. A band box
-       dragged up-left is exactly that case, and the G13n A/B only covered a
-       down-right drag. */
+       dragged up-left is exactly that case. */
     if (r < l) { int k = l; l = r; r = k; }
     if (b < t) { int k = t; t = b; b = k; }
 
@@ -875,17 +840,13 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        SAME loop (`0x469CB9` then `0x469CF9`), behind the same `damagebars`
        gate, so `nobars` may not take the digits with it. */
     if (s_armed != 1 || (!s_bars && !s_digits)) return 0;
-    /* THE DOUBLE-DRAW REFUSAL IS DELETED, for the reason the terrain pass's
-       emit gate was (gpu-status 2.81). It read
-       `if (!tagpu_markown_installed()) return 0;` and its premise was the
-       COMPOSITE: without the patches the engine drew its own bars and digits
-       into the frame we then drew on top of, so ours would have been a second
-       set at a second position. Nothing of the engine's reaches the screen any
-       more -- its bars land in the reference surface and nowhere else -- so
-       there is no pair to make. `markown` is still WANTED here, and it is back
-       on the defaults table, but as the PRODUCER of the snapshots this pass
-       and `tagpu_order.c` draw from, not as the thing that earns us the right
-       to draw. */
+    /* NO DOUBLE-DRAW REFUSAL, for the reason the terrain pass's emit gate has
+       none (gpu-status 2.81): nothing of the engine's reaches the screen --
+       its bars land in the reference surface and nowhere else -- so there is
+       no pair to make. `markown` is still WANTED here, and it is on the
+       defaults table, but as the PRODUCER of the snapshots this pass and
+       `tagpu_order.c` draw from, not as the thing that earns us the right to
+       draw. */
     if (!(pk->game_opt & 1)) return 0;                  /* damagebars */
 
     watched = pk->local_player;      /* 0x2A43: the bar loop's, see the header */
@@ -915,18 +876,16 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
            The bar has to floor with it, or it sits up to a whole game pixel off a
            body we did not place. `markown` has suppressed the engine's own bars
            globally by then, so this is not a rare path: a unit the type filter
-           rejects still needs a bar from us. (A nanoframe used to be the other
-           case; the native pass owns every one since 2026-09-23.)
+           rejects still needs a bar from us. (A nanoframe is not one: the native
+           pass owns every nanoframe.)
 
-           [Until the landing review both branches went through the accessor. It
-           returns 1 whenever its POINTER checks pass and hands back the raw fraction
-           when the table holds no sample — it never reports "no sample" — so the
-           integer branch below was unreachable and every engine-drawn unit got a bar
-           up to a pixel off its body. The comment here asserted the opposite, that
-           the sampleless path was byte-for-byte what it had always been.]
+           THE BRANCH IS ON THE OWNERSHIP BIT, NOT ON THE ACCESSOR'S RESULT. The
+           accessor returns 1 whenever its POINTER checks pass and hands back the
+           raw fraction when the table holds no sample — it never reports "no
+           sample" — so a branch on it alone would never reach the integer arm,
+           and every engine-drawn unit would get a bar up to a pixel off its body.
 
-           NEITHER CALL READS ENGINE MEMORY ANY MORE (frame packet exchange,
-           landing 3). The ownership answer is the PUBLISHER's — one bit in the
+           NEITHER CALL READS ENGINE MEMORY. The ownership answer is the PUBLISHER's — one bit in the
            packet, taken on the game thread with the def in hand — so the unit
            pass, this loop and the composite wipe act on one answer instead of
            three reads of the same bytes. `tagpu_mark_gather` is still called
@@ -936,12 +895,11 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
            does not still describe this unit's current 16.16 position, so a
            recycled slot falls through to its own fraction.
 
-           AND THE ANCHOR KEEPS ITS FRACTION TO THE LAST MOMENT. Flooring it — which
-           is what this loop did between the first fix and the second, both on
-           2026-09-09 — quantises the bar in the frame's PRE-zoom units, so the bar
-           steps `zoom` game pixels at a time while the body glides continuously
-           underneath it: 4 px at 4x, 8 px at ZOOM_MAX, which is the diagonal twitch
-           the owner reported at max zoom-in. `snap_device` puts the anchor on the
+           AND THE ANCHOR KEEPS ITS FRACTION TO THE LAST MOMENT. Flooring it
+           quantises the bar in the frame's PRE-zoom units, so the bar steps `zoom`
+           game pixels at a time while the body glides continuously underneath it:
+           4 px at 4x, 8 px at ZOOM_MAX, a diagonal twitch at max zoom-in.
+           `snap_device` puts the anchor on the
            DEVICE grid instead, the same rule the selection rect and the glyph atlas
            already follow, so the step is 1/ss of a displayed pixel at every zoom.
            It runs on BOTH branches: on the engine's integers it is the identity at
@@ -1025,12 +983,11 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 
 /* ---- render ---- */
 
-/* ---- THE HAND-OVER (the Vulkan-only plan's landing 5) --------------------
+/* ---- THE HAND-OVER ------------------------------------------------------
    Built by `tagpu_mark_render` as it walks the buckets. The vertex block is
    ONE concatenation in one order, so every `first` recorded here indexes that
    block directly rather than being re-derived from the counts and left free to
-   disagree with it. It mirrored a GL VBO until [landing 11-4a] took the draw;
-   the invariant survived the VBO because it was never about GL. */
+   disagree with it. */
 static float*        s_mkV;    static int s_mkVn, s_mkVcap;
 static TAGPU_MKDRAW  s_mkD[TAGPU_MK_MAXDRAW]; static int s_mkDn;
 static TAGPU_MKHAND  s_mkPub;
@@ -1089,38 +1046,18 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
     return 1;
 }
 
-/* THE CAPTURED LAYER IS GONE, AND WITH IT THE LAST ENGINE PIXEL THIS PASS DREW.
-   `layer_quad` built a screen-space quad over `TAGPU_MARKLAYER.pix` -- a
-   pointer into the ENGINE'S OWN 8-bit surface, the bytes it rasterised for the
-   post-fog UI markers -- and the twin sampled it as palette indices. Every
-   other marker this pass draws (the bars, the selection and band-box rects, the
-   order lines and dots, the range circles, the group digit, the labels) is
-   re-derived from engine STATE and drawn as our own geometry out of our own
-   atlas, which is why they stayed. The cut is about pixels we copied, not about
-   facts we read. [The vulkan-only plan, THE CLEAN CUT.]
-
-   `upload_layer` STOOD HERE BEFORE THAT and its first line was `if
-   (tagpu_vk_owns_present()) return 1;` -- so on this lane it uploaded nothing
-   and answered yes, and every line after it was already dead [landing 11-4a].
-   The reason it answered yes rather than no is worth keeping: THE LAYER IS
-   AVAILABLE WHEN ITS BYTES ARE, NOT WHEN A TEXTURE NAME IS. `TAGPU_MKHAND`
-   carries `layer`/`layerPitch`/`layerX/Y/W/H` and the twin uploads them itself.
-   Written the other way round -- testing the `glGenTextures` result -- it
-   returned 0 with no context and dropped the layer from the HAND-OVER rather
-   than from the draw, which is the GAF atlas's defect in miniature. */
+/* NO ENGINE PIXEL: every marker this pass draws (the bars, the selection and
+   band-box rects, the order lines and dots, the range circles, the group
+   digit, the labels) is re-derived from engine STATE and drawn as our own
+   geometry out of our own atlas. */
 
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
     int total, textBase = 0, selBase = 0;
 
-    /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else. It used
-       to do both: `mk_push` and `mk_draw` are the record and are pure CPU, and
-       22 GL calls were interleaved among them rather than producing them, so
-       the lane gate went around each GL statement and never around a record
-       append [landing 4b-2]. Landing 11-3 made every one of those gates false
-       by an ordering and landing 11-4a deleted them, which is why the record
-       appends below now stand alone. */
+    /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else:
+       `mk_push` and `mk_draw` are the record and are pure CPU. */
 
     s_mkVn = 0; s_mkDn = 0; s_mkDropped = 0;
     if (s_armed != 1) return;
@@ -1139,21 +1076,15 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nbar == 0 && s_ncurs == 0 && s_nsel == 0 &&
         s_nordt == 0 && s_nordl == 0 && s_nordx == 0) return;
 
-    /* ---- the Phase G A/B's lever ---- */
+    /* ---- the A/B's lever ---- */
     {
         int taking = s_ab && !s_abDone;
-        /* NO `ss` BOUND ON THIS A/B ANY MORE. It used to refuse itself whenever
-           `ss != 1`, because the GL capture is this FBO's viewport -- gw*ss by
-           gh*ss -- and the Vulkan half was the window's client rect, so at the
-           shipped ss=2 the two files differed by a factor of two and
-           tools/vk-ab.py refused the pair. Landing 4c-2 gave the Vulkan lane a
-           gw*ss by gh*ss world target and 4c-3 pointed the capture at it, so both
-           halves are now the same size at every `ss` and this pass is measurable on
-           the configuration it actually ships in. The refusal moved to the lane
-           that can see the target: if there is none that frame, tagpu_vk.c says so
-           by name and captures nothing. [tagpu_vk_world.h.] */
-        /* THE ARMING, and since landing 4d-2 that is the whole of it -- there
-           is no GL half to black the frame for. */
+        /* NO `ss` BOUND ON THIS A/B. The Vulkan lane captures its gw*ss by
+           gh*ss world target, so this pass is measurable at every `ss`, including
+           the configuration it actually ships in. The refusal belongs to the lane
+           that can see the target: if there is none that frame, tagpu_vk.c says
+           so by name and captures nothing. [tagpu_vk_world.h.] */
+        /* THE ARMING, which is the whole of it. */
         s_abTaking = taking;
     }
 
@@ -1163,9 +1094,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     /* ONE CONCATENATION, PUSHED ONCE, so every `first` below indexes the block
        the twin receives. Pushed here rather than per draw because the buckets
        are contiguous and re-slicing them per draw is how the offsets and the
-       geometry drift apart. (Until [landing 11-4a] this mirrored a GL VBO
-       filled a few lines above; there is no VBO now and nothing to mirror --
-       the record IS the vertex block.) */
+       geometry drift apart. The record IS the vertex block. */
     mk_push(s_verts, BARBASE);
     if (s_nbar) mk_push(s_barv, s_nbar);
     if (s_nordt) mk_push(s_ordt, s_nordt);
@@ -1203,17 +1132,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         }
     }
     if (s_nordx) {
-        /* `tagpu_text_tex()` USED TO BE CALLED HERE and its result used as the
-           test for "there is text". Both are gone [landing 11-4a]. It is worth
-           keeping why, because the shape recurs: that call is GL behind a name
-           that is not `gl*` -- it resolves entry points and creates/uploads the
-           glyph atlas texture, nine GL calls deep, and with no context those
-           pointers are NULL, an access violation at address 0. And its RESULT
-           could not be the test either, or the lane would have dropped the text
-           markers from the RECORD rather than merely from the draw. The twin
-           gets the atlas bytes through the hand-over
-           (`text`/`textGen`/`textW`/`textH`) and uploads its own, so the answer
-           here is yes without a texture -- which is now unconditional. */
+        /* the twin gets the atlas bytes through the hand-over
+           (`text`/`textGen`/`textW`/`textH`) and uploads its own */
         if (s_nordxOrd) {
             mk_draw(textBase, s_nordxOrd, 0, 1, v->fogMode & 1, TAGPU_MK_TEX_TEXT, 0);
         }
@@ -1225,25 +1145,18 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         /* the digits, over the bars, out of the same atlas — a SECOND record
            rather than one widened range because the bars are drawn between the
            two, which is the engine's own order (the labels come out of the
-           order driver at 0x469BFC and the digit at 0x469CF9). It was also a
-           second GL draw, for a binding reason that went with the draw. */
+           order driver at 0x469BFC and the digit at 0x469CF9). */
         mk_draw(textBase + s_nordxOrd, s_nordx - s_nordxOrd, 0, 1,
                 v->fogMode & 1, TAGPU_MK_TEX_TEXT, 0);
     }
-    /* last, and with the fog off for the same reason the layer above has it
-       off: the engine draws these two rects after its fog overlay and never
-       darkens them */
+    /* last, and with the fog off: the engine draws these two rects after its
+       fog overlay and never darkens them */
     if (s_ncurs) {
         mk_draw(CURSBASE, s_ncurs, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
     }
 
     if (s_abTaking) {
-        /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2
-           this pass also captured a GL half (`tagpu_abshot.c`) and, where the GL
-           lane drew, claimed the Vulkan one only if that half had reached the
-           disk -- route D gave the two lanes a window each. Route D went in
-           4d-1 and the GL half had nothing to pair with. `tagpu_vk_ab_arm`
-           unlinks the target `_vk.ppm` at the instant the claim latches, which
+        /* THE A/B CLAIM. `tagpu_vk_ab_arm` unlinks the target `_vk.ppm` at the instant the claim latches, which
            is what makes the file on the disk this arming's rather than an
            earlier run's; diff it against a capture from another BUILD. */
         s_abFrame = tagpu_vk_ab_arm("mark");

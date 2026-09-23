@@ -3,13 +3,13 @@
 /* tagpu_hud.h — HUD scale: the in-game HUD magnified inside the player's own
    Screen Size, over a world the engine goes on drawing exactly as it always
    did. Design: research/notes/gui-renderer.md §22; the geometry it rests on is
-   research/notes/resolution.md §3.4a; §22.5 is why the first build of this was
-   withdrawn and what replaced it.
+   research/notes/resolution.md §3.4a; §22.5 has why L and T are never
+   written.
 
    TA's HUD is a hard 128 logical px side panel and two 32 px bars — immediates
    at 0x4981C9 and a family of absolute constants in the painters. HUD scale
-   does NOT re-lay it out, and — this is the part that changed — it does not
-   ask the engine for the space either. It is one transform, applied twice:
+   does NOT re-lay it out, and it does not ask the engine for the space
+   either. It is one transform, applied twice:
 
      MAGNIFY  the composite samples the twin's HUD regions at s texels per
               device pixel instead of one, so the art the engine drew at 1x
@@ -27,28 +27,27 @@
    they cannot disagree about it.
 
    WE WRITE FOUR OF THE SIX INTS OF THE ENGINE'S VIEWPORT RECT, AND NEVER L/T.
-   That distinction is the whole design and it was learned the hard way.
+   That distinction is the whole design.
 
-   The FIRST build wrote all six — left = 128s, top = 32s — on the theory that
-   the rect is the one origin every consumer projects about. It is not. The
-   rect's L and T are the screen->world origin inside 0x498DA0 and nothing else;
-   TA's world->screen projection is a +0x80/+0x20 pair of immediates baked at
+   The rect is NOT the one origin every consumer projects about. Its L and T
+   are the screen->world origin inside 0x498DA0 and nothing else; TA's
+   world->screen projection is a +0x80/+0x20 pair of immediates baked at
    every site that uses it — unit picking, band select, build placement, the
-   feature blits — so moving them tore the world in two by ((s−1)·128,
+   feature blits — so moving them tears the world in two by ((s−1)·128,
    (s−1)·32). Measured 2026-09-11 at 1024x768 Auto: the engine picked a unit
-   76 px left and 19 px up from where it was drawn. §22.5 withdrew that build
-   and wrote nothing at all, which cost the other half: the world under the HUD
-   was rendered and covered, and the first world column the player could see was
-   eye + (128s − 128) rather than eye, with no smaller eye to scroll to.
+   76 px left and 19 px up from where it was drawn. Writing nothing at all
+   costs the other half: the world under the HUD is rendered and covered, and
+   the first world column the player can see is eye + (128s − 128) rather than
+   eye, with no smaller eye to scroll to.
 
-   §22.6 IS WHAT SHIPS: make the two rectangles the same one. `apply_rect`
+   SO THE TWO RECTANGLES ARE MADE THE SAME ONE (§22.6). `apply_rect`
    writes R, B, viewW and viewH — the four the engine derives from its screen
    size and nothing else derives a projection from — so the engine's own
    viewport becomes the window the player is actually looking at, while L and T
    keep the values the baked immediates assume. The world block is then
    translated by (128s − 128, 32s − 32) in exactly three places: the composite,
    the world layer's glViewport, and the pointer map's world branch. Because
-   the rect is what the camera clamp and the map loader read, the eye now
+   the rect is what the camera clamp and the map loader read, the eye
    reaches mapW − viewW / mapH − viewH and the corner of the map is reachable.
 
    THE WRITE IS LATCHED AT GAME ENTRY, and that ordering is load-bearing rather

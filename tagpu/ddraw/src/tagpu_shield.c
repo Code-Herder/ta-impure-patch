@@ -1,4 +1,4 @@
-/* tagpu_shield.c — the input firewall (phase 1.1).
+/* tagpu_shield.c — the input firewall.
 
    Rationale and message contract: inc/tagpu_shield.h.
 
@@ -138,9 +138,8 @@ void tagpu_shield_frame(HWND hwnd)
             s_release[vk] = 0;
             PostMessageA(hwnd, WM_TAGPU_KEY, (WPARAM)vk, TAGPU_KEY_UP);
 
-            /* Did the game actually look? This is the phase-1.1 claim made
-               measurable: "held for Nms, the game asked K times and was told
-               down D times". D=0 with K>0 means it polls other keys but not
+            /* Did the game actually look? The line says "held for Nms, the
+               game asked K times and was told down D times". D=0 with K>0 means it polls other keys but not
                this one; K=0 means it does not poll the keyboard at all here
                and a modifier has to reach it some other way. */
             char b[128];
@@ -241,7 +240,7 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
     int cur_x = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
     int cur_y = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
 
-    /* device-space injection (G17b): x,y are client-area pixels and go through
+    /* device-space injection: x,y are client-area pixels and go through
        the SAME transform a hardware click takes, so this is a test of the
        pointer path rather than a way around it. TAGPU_M_HERE is left alone --
        "where it is" is already a logical position. */
@@ -252,14 +251,14 @@ static void deliver_mouse(HWND hwnd, int code, int gx, int gy)
            MOVEREL is meaningless — the conversion would subtract the viewport
            origin from a delta and then add the cursor. Nothing does it today;
            it is refused rather than left latent, because the header invites
-           the flag to be OR'd into any code (both landing reviewers). */
+           the flag to be OR'd into any code. */
         if (code == TAGPU_M_MOVEREL) return;
         if (!(gx < 0 && gy < 0))
             mouse_client_to_game(gx, gy, &gx, &gy);
     }
     else
     {
-        /* G17c: an injected point is the engine's LOGICAL grid with no pointer
+        /* An injected point is the engine's LOGICAL grid with no pointer
            behind it. Dropping the recorded client point is what keeps the GL
            UI renderer's cursor on the injected position instead of leaving it
            at the human's real pointer, where it would disagree with every
@@ -429,17 +428,15 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
    two apart is what makes the timed release race-free — set the deadline before
    posting, and never clear it from delivery.
 
-   BOTH ARE THE GAME THREAD NOW, and this line used to say the injector was the
-   present-hook thread [corrected by the landing review of 10c-2]. The token
-   half of tagpu_input.c moved to the engine's flip, so tagpu_shield_frame and
-   every tagpu_shield_* injection run where the wndproc and the GetKeyState
-   hooks already run. The separation above is still the rule to keep -- it is
-   what makes the deadline unambiguous -- but it is no longer load-bearing as a
-   THREAD split, and it should not be cited as one.
+   BOTH ARE THE GAME THREAD. The token half of tagpu_input.c runs at the
+   engine's flip, so tagpu_shield_frame and every tagpu_shield_* injection run
+   where the wndproc and the GetKeyState hooks already run. The separation
+   above is still the rule to keep -- it is what makes the deadline
+   unambiguous -- but it is not load-bearing as a THREAD split, and it should
+   not be cited as one.
 
-   It also closes a real unsynchronised cross-thread write that nobody had
-   filed: clear_state() memsets s_down/s_async/s_release, and those are the
-   wndproc's arrays. It used to run on the render thread. */
+   The same placement keeps clear_state(), which memsets s_down/s_async/
+   s_release -- the wndproc's arrays -- on the wndproc's own thread. */
 void tagpu_shield_key(HWND hwnd, int vk, BOOL up)
 {
     if (!hwnd || vk <= 0 || vk >= 256)

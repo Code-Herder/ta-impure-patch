@@ -61,12 +61,10 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     if (tagpu_menu_wndproc(hWnd, uMsg, wParam, lParam, &shielded))
         return shielded;
 
-    /* tagpu_vk (Phase G): the Vulkan lane is told here, on the thread that owns
+    /* tagpu_vk: the Vulkan lane is told here, on the thread that owns
        windows, that the game window is being destroyed -- the one fact its
        render thread cannot get for itself. An OBSERVER -- it claims nothing and
-       returns nothing, so every message below reaches the fork exactly as it did
-       before. (Until the vulkan-only plan's landing 4d-1 it also created, moved
-       and destroyed a window of the lane's own; there is no such window now.) */
+       returns nothing, so every message below reaches the fork unchanged. */
     tagpu_vk_wndproc(hWnd, uMsg, wParam, lParam);
 
     switch (uMsg)
@@ -691,13 +689,12 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
            so the camera then scrolls that way FOR EVER, with nothing to stop it
            and no pointer in the window to explain it; the scroll tail also
            releases any camera follow (`0x41D091`), so a Ctrl+C snap is undone
-           in the same frame it happens. Reported from play at 4K fullscreen,
-           2026-09-12: "it keeps trying to pan to the left."
-           `mouse_lock()` would have fenced the pointer in, but tacli runs with
+           in the same frame it happens.
+           `mouse_lock()` would fence the pointer in, but tacli runs with
            `tagpu_nowarp.on` precisely so the game never fences or warps a
            pointer the human is also using (mouse.c), and a borderless fullscreen
            window on a multi-monitor desktop has a live desktop on the other side
-           of every edge. So the fix is to answer the engine with the point the
+           of every edge. So this answers the engine with the point the
            fork already answers for a pointer outside the viewport — the centre
            of its own screen (mouse_client_to_game) — the moment the pointer
            leaves. Event-driven, not polled: the invariant is that the engine's
@@ -785,7 +782,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         {
             if (!g_config.windowed)
             {
-                if (1) /* was: not the Direct3D9 lane, which is gone [11-1] */
+                if (1) /* always: there is no Direct3D9 lane */
                 {
                     ChangeDisplaySettings(&g_ddraw.render.mode, CDS_FULLSCREEN);
                     real_ShowWindow(g_ddraw.hwnd, SW_RESTORE);
@@ -811,7 +808,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
 
             if (!g_config.windowed)
             {
-                if (1) /* was: not the Direct3D9 lane, which is gone [11-1] */
+                if (1) /* always: there is no Direct3D9 lane */
                 {
                     real_ShowWindow(g_ddraw.hwnd, SW_MINIMIZE);
                     ChangeDisplaySettings(NULL, g_ddraw.bnet_active ? CDS_FULLSCREEN : 0);
@@ -937,9 +934,9 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
     {
         if (!g_config.devmode && !g_mouse_locked)
         {
-            /* tagpu (G17b): this arithmetic moved to mouse_client_to_game so the
-               harness's device-space click takes the SAME path a player's does.
-               Behaviour is unchanged, the centre-on-letterbox rule included. */
+            /* tagpu: the arithmetic lives in mouse_client_to_game so the
+               harness's device-space click takes the SAME path a player's does,
+               the centre-on-letterbox rule included. */
             int x, y;
             mouse_client_to_game(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), &x, &y);
 
@@ -982,7 +979,7 @@ LRESULT CALLBACK fake_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             lParam = MAKELPARAM(pt.x, pt.y);
         }
 
-        /* tagpu (G17c): the CLIENT point, before x_adjust and before any
+        /* tagpu: the CLIENT point, before x_adjust and before any
            unscale — the pointer at the device's resolution, which is what the
            GL UI renderer draws its own cursor from (gui-renderer.md 13.5).
            Recorded unclamped: the reader clamps to the viewport, matching the

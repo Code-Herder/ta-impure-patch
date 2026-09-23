@@ -1,6 +1,5 @@
 /* tagpu_vk_feat.c -- the feature pass (trees, rocks, splats, GAF wreckage)
-   drawn by Vulkan. Contract: tagpu_vk_feat.h. Phase G / G19e, the SECOND WORLD
-   PASS, and the first one that depth-tests.
+   drawn by Vulkan. Contract: tagpu_vk_feat.h. A world pass that depth-tests.
 
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
    `tagpu_feat_handover` (tagpu_feat.h): the vertices are the two arrays the GL
@@ -11,10 +10,9 @@
    shader is the same GLSL through tools/spirv-gen.py. What a 0-px comparison
    then compares is two rasterisers.
 
-   ---- WHAT THIS LANDING HAD TO ANSWER, AND WHERE EACH ANSWER IS ----
+   ---- WHAT A DEPTH-TESTING PASS HAS TO ANSWER, AND WHERE EACH ANSWER IS ----
 
-   1. DEPTH. gpu-status §2.28 decided the GL/Vulkan depth-range question on
-      paper and left it for the first pass that tests. This is it.
+   1. DEPTH (the GL/Vulkan depth-range question, gpu-status §2.28).
 
         GL maps clip z from [-1, 1] onto the depth range, Vulkan takes [0, 1].
         Every shader here writes a z already in [0, 1], so under GL the near
@@ -43,33 +41,25 @@
       VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE is Vulkan 1.3 or an extension and buys
       one object.
 
-   3. THE SCISSOR is the world viewport, and since landing 5b it is the SAME
-      rectangle on both sides. It used to be the vertical mirror
-      (`offset.y = H - (vpT + vh)`), which was the right arithmetic for as long
-      as the Vulkan image was stored upside down to match the GL world FBO --
-      item 4 is why it no longer is. With a positive viewport height row 0 of the
-      Vulkan image is the game frame's top row, the same row the GL FBO hands
-      back first, so `offset.y` is just the viewport top. Getting it wrong shows
-      up as the world clipped against the wrong edge rather than as anything
-      subtle.
+   3. THE SCISSOR is the world viewport, the SAME rectangle on both sides and
+      not its vertical mirror (`offset.y = H - (vpT + vh)`), because of item 4:
+      with a positive viewport height row 0 of the Vulkan image is the game
+      frame's top row, the same row the GL FBO hands back first, so `offset.y`
+      is just the viewport top. Getting it wrong shows up as the world clipped
+      against the wrong edge rather than as anything subtle.
 
-   4.   NO Y FLIP, AND THAT IS LANDING 5b's CORRECTION. This pass writes
-      `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's screen-space y, which
-      grows DOWNWARD, so clip +1 is the BOTTOM of the game frame. GL's composite
-      quad turns the world FBO over on the way to the window, which is why the
-      game looks right. The Vulkan lane has no composite quad -- the ported
-      passes draw STRAIGHT INTO THE SWAPCHAIN IMAGE -- so a negative viewport
-      height, which this pass took until 2026-09-17, turned the frame over a
-      SECOND time and Route D presented the world upside down. The viewport is
-      positive now and clip -1 lands on row 0, which is the game's top row under
-      both APIs.
-      It was invisible for eight landings because `tagpu_abshot.c` turned the GL
-      half of every capture over by the same rule, so the two halves lined up and
-      the A/B -- which compares the lanes to each other -- is structurally blind
-      to a flip they share. The capture takes TAGPU_ABSHOT_TOPDOWN now.
-      (VK_KHR_maintenance1 was needed only for the negative height, so this pass
-      no longer requires it; `tagpu_vk_gui.c`, `_fps.c` and `_scaffold.c` still
-      do, because their shaders are y-UP and their flip is correct.)
+   4. NO Y FLIP. This pass writes `gl_Position.y = p.y/uGame.y*2 - 1` on the
+      engine's screen-space y, which grows DOWNWARD, so clip +1 is the BOTTOM of
+      the game frame. The Vulkan lane has no composite quad to turn the frame
+      over -- the ported passes draw STRAIGHT INTO THE SWAPCHAIN IMAGE -- so a
+      negative viewport height would turn it over a SECOND time and present the
+      world upside down. The viewport is positive and clip -1 lands on row 0,
+      which is the game's top row under both APIs.
+      An A/B that compares the lanes to each other is structurally blind to a
+      flip they share; the capture takes TAGPU_ABSHOT_TOPDOWN.
+      (VK_KHR_maintenance1 is needed only for a negative height, so this pass
+      does not require it; `tagpu_vk_gui.c`, `_fps.c` and `_scaffold.c` do,
+      because their shaders are y-UP and their flip is correct.)
 
    5. BLENDING is glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA) -- the GL FBO is
       premultiplied -- and glBlendFunc sets the alpha factors as well as the
@@ -208,29 +198,19 @@ static int            s_atDim;             /* what the image was created for   *
 static unsigned       s_atSerial;          /* the mirror serial it holds       */
 static int            s_atHave;            /* a copy has been recorded into it */
 
-/* CLASSIC++'s RESTORED TWIN (the Vulkan-only plan's gate 2). A second image of
-   the same square in RGBA8, built beside the indexed one; binding 42 names it
-   instead of being the placeholder the comment in `atlas_build` used to
-   describe. When it cannot be built the binding falls back to the indexed view
-   and the pass stands down on a restored frame exactly as it did before this
-   existed -- a valid descriptor is required for the set to be bound at all, so
-   the fallback is not optional.
+/* CLASSIC++'s RESTORED TWIN. A second image of the same square in RGBA8,
+   built beside the indexed one; binding 42 names it. When it cannot be built
+   the binding falls back to the indexed view and the pass stands down on a
+   restored frame -- a valid descriptor is required for the set to be bound at
+   all, so the fallback is not optional.
 
-   THE RESTORE JOB IS ITS ONLY WRITER SINCE 11-5e-2b. It was fed from
-   `tagpu_gaf.c`'s read-back mirror as well, staged and copied in behind
-   `doRgb`, with `s_arReq`/`s_arSerial` deciding what a frame owed; the gate-2
-   review found `s_arReq` holding the rows SENT rather than the rows the mirror
-   covered, so the whole-square rule forced it to the full height, `doRgb` was
-   true on EVERY frame and the pass re-sent 16 MB per frame for the life of the
-   session while never releasing its staging. That mirror could only ever come
-   from `glReadPixels`, and `oglu_load_dll` has no caller, so it produced
-   nothing in any process -- the upload, both counters and the hand-over fields
-   went together. `s_arHave` alone now says whether this is a picture. */
+   THE RESTORE JOB IS ITS ONLY WRITER, and `s_arHave` alone says whether this
+   is a picture. */
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
 static int            s_arHave;
-/* ---- THE RESTORE THIS LANE RUNS FOR ITSELF (landing 7d) ------------------
+/* ---- THE RESTORE THIS LANE RUNS FOR ITSELF --------------------------------
    `s_rjob` paints `s_arImg` from `s_atImg` when the producer publishes a frame
    list instead of a mirror. Three pieces of state make it a CURSOR rather than
    a serial, which is what a lazy queue needs:
@@ -244,9 +224,8 @@ static int            s_arHave;
                 pass took nothing costs nothing: the next one takes more.
      s_rjSrcView  the view the job reads. The atlas image can be re-created
                 under a live job (a dimension change), and a job holding the
-                old view would paint from freed memory. [The landing-7 review
-                found this on the terrain consumer; it is the same hazard here
-                and the same guard.] */
+                old view would paint from freed memory -- the same hazard, and
+                the same guard, as the terrain consumer's. */
 static TAGPU_VKRJOB*  s_rjob;
 static unsigned       s_rjGen;
 static unsigned       s_rjBlanks;         /* the producer's blank count, seen */
@@ -363,15 +342,14 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
     return 1;
 }
 
-/* `usage` IS THE CALLER'S BECAUSE THE RESTORED TWIN IS A RENDER TARGET.
-   It was a constant here until landing 7d: the indexed atlas is only ever
-   copied into and sampled, but the twin is what this lane's own restorer
-   PAINTS, and a Vulkan image may only be a colour attachment if it was
-   created saying so. Nothing infers it from the format -- the destination's
-   usage is a promise made at creation and tagpu_vk_restore.h asks for it by
-   name. */
+/* `usage` IS THE CALLER'S BECAUSE THE RESTORED TWIN IS A RENDER TARGET. The
+   indexed atlas is only ever copied into and sampled, but the twin is what this
+   lane's own restorer PAINTS, and a Vulkan image may only be a colour
+   attachment if it was created saying so. Nothing infers it from the format --
+   the destination's usage is a promise made at creation and tagpu_vk_restore.h
+   asks for it by name. */
 /* WHAT EACH OF THIS PASS'S IMAGES IS FOR. The restored twin carries
-   COLOR_ATTACHMENT because this lane's restorer paints into it (landing 7d);
+   COLOR_ATTACHMENT because this lane's restorer paints into it;
    it costs nothing when nothing restores, and an image created without it
    could not be lent to the restorer at all. */
 #define IMG_SAMPLED  (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
@@ -713,12 +691,7 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     vp.viewportCount = 1; vp.scissorCount = 1;     /* both dynamic, set per frame */
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    /* NO CULLING, and the reason is now the simple one: THE GL TWIN DOES NOT
-       CULL. It used to be stated the other way round -- a negative viewport
-       height flips the winding of every triangle, so a cull mode that was right
-       under GL would have thrown the whole frame away -- and that argument went
-       with the flip in landing 5b. Nothing here culls and nothing here should,
-       so the state is unchanged and only its justification is. */
+    /* NO CULLING: THE GL TWIN DOES NOT CULL, and nothing here should. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
@@ -843,11 +816,11 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
     if (!mk_image(d, dim, dim, VK_FORMAT_R8G8B8A8_UNORM, IMG_RESTORED,
                   &s_arImg, &s_arMem, &s_arView)) {
         /* `mk_image` CAN FAIL AFTER vkCreateImage AND vkAllocateMemory SUCCEEDED
-           -- no device-local memory type, a failed bind, a failed view. Nulling
-           the handles here lost the image while leaving `s_arMem` set, so the
-           next kill_image would vkFreeMemory memory that still had an image
-           bound to it. kill_image is what tagpu_vk_terr.c's shared_resize does
-           for the identical case. [FOUND BY THE GATE-2 LANDING REVIEW.] */
+           -- no device-local memory type, a failed bind, a failed view.
+           Nulling the handles here would lose the image while leaving
+           `s_arMem` set, so the next kill_image would vkFreeMemory memory that
+           still had an image bound to it. kill_image is what tagpu_vk_terr.c's
+           shared_resize does for the identical case. */
         kill_image(d, &s_arImg, &s_arMem, &s_arView);
         plog(d, "feat: no %d MB device image for the Classic++ restored twin - "
                 "the pass keeps standing down on a restored frame",
@@ -864,14 +837,12 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
         wr[0].dstSet = s_slot[i].dset; wr[0].dstBinding = 40; wr[0].descriptorCount = 1;
         wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         wr[0].pImageInfo = &ii;
-        /* BINDING 42 IS uAtlasRGB, AND SINCE GATE 2 IT NAMES THE RESTORED
-           TWIN'S OWN IMAGE. It was the indexed view as a placeholder, because
-           the pass refused every frame that would have sampled it; now that the
-           mirror exists the branch is reachable and the binding has to be the
-           real thing. When the image could not be created it goes back to being
-           the placeholder -- a descriptor must be VALID for the set to bind,
-           and the restored stand-down then keeps the branch unreachable exactly
-           as before. */
+        /* BINDING 42 IS uAtlasRGB, AND IT NAMES THE RESTORED TWIN'S OWN
+           IMAGE: the branch that samples it is reachable, so the binding has
+           to be the real thing. When the image could not be created it is the
+           indexed view as a placeholder -- a descriptor must be VALID for the
+           set to bind, and the restored stand-down then keeps the branch
+           unreachable. */
         irgb = ii;
         if (s_arView) irgb.imageView = s_arView;
         wr[1] = wr[0]; wr[1].dstBinding = 42; wr[1].pImageInfo = &irgb;
@@ -926,7 +897,7 @@ static int build(const TAGPU_VKPASS* d)
 
 /* ---- the frame ---------------------------------------------------------- */
 
-/* THE RESTORE, FED FROM THE PUBLISHED LIST (landing 7d).
+/* THE RESTORE, FED FROM THE PUBLISHED LIST.
 
    Called once a frame after the atlas upload, because the FILL pass reads the
    indexed atlas and a restore issued before this frame's copy would paint the
@@ -960,8 +931,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
                frozen twin while the GL lane goes on restoring, which is a
                silent divergence rather than a stand-down. Only inside the
                `if` -- with the lever off there is no job and this branch runs
-               every frame, where clearing it would break the mirror path.
-               [FROM THE LANDING-7d REVIEW.] */
+               every frame, where clearing it would break the mirror path. */
             s_arHave = 0;
         }
         return;
@@ -996,8 +966,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
                they will: the next generation re-lays the atlas and this twin
                then holds the OLD layout's texels at every new rect. So the
                twin stops being a picture at the moment the restore is
-               abandoned, not at the moment it looks wrong.
-               [FROM THE LANDING-7d REVIEW.] */
+               abandoned, not at the moment it looks wrong. */
             plog(d, "feat: the restore failed on this lane - the twin stops being "
                     "drawn from, because the next atlas layout would sample it "
                     "at rects it was never painted for");
@@ -1022,8 +991,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
                THE EXCEPTION IS A WHOLE-CALL FAILURE (`took` 0 with frames
                offered): that is the queue's own realloc failing, which is
                transient and already logged by the core, so the cursor stays
-               where it is and the next frame offers them again.
-               [FROM THE LANDING-7d REVIEW.] */
+               where it is and the next frame offers them again. */
             if (took > 0) {
                 s_rjTaken += n;
                 if (took < n)
@@ -1057,8 +1025,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        palette move (which `tagpu_feat.c` does: it recycles a full atlas and
        calls `tagpu_gaf_atlas_restore` on the next line) would hand this pass
        "keep what you have" over an atlas the other lane has just cleared.
-       The blank COUNT cannot be hidden that way. [FROM THE LANDING-7d
-       REVIEW.] */
+       The blank COUNT cannot be hidden that way. */
     repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
     s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, repaint,
                                       s_atImg, s_atView, s_atDim, s_atDim,
@@ -1102,17 +1069,6 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
         return 0;
     }
     doIdx = !(s_atHave && s_atSerial == h->atlasSerial);
-    /* THE RESTORED TWIN'S MIRROR UPLOAD WENT IN 11-5e-2b, with the read-back
-       that fed it. It tested `h->atlasRgb && h->atlasRgbRows > 0`, and the
-       producer had published NULL/0 there for the life of the process: the
-       only allocator of `mirrorRgb` refused at its GL entry-point guard,
-       because nothing calls `oglu_load_dll` and so opengl32.dll is never in
-       the process -- and `mirrorRgbRows` had four writers in tagpu_gaf.c, all
-       four assigning 0. Past tense since 11-5e-2b part 2: the allocator, the
-       field and the spelling are all gone from the tree, so this paragraph is
-       history rather than a description of something still standing.
-       `s_arImg` and `s_arHave` STAY: they are this lane's
-       own restored twin and the list path's, not the mirror's. */
     if (!doIdx) {
         /* NOTHING TO SEND, SO THE 4 MB GOES BACK. This is the "given back at
            that slot's next prepare" the file header promises, and it is the
@@ -1163,22 +1119,16 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     s_atSerial = h->atlasSerial;
     s_atHave = 1;
 
-    /* THE SECOND IMAGE'S UPLOAD STOOD HERE and went with the mirror in
-       11-5e-2b: a write-after-read barrier, a `copy_rect` into `s_arImg` and
-       the `s_arSerial`/`s_arReq` bookkeeping, all of it gated on a `doRgb`
-       that the producer could not make true. `s_arImg` is still filled, by
-       this lane's OWN restore (`restore_want` above) -- that path writes it
-       through a render pass rather than a transfer, and carries its own
-       barriers. [The vulkan-only plan, 11-5e-2b.] */
+    /* ONLY THE INDEXED IMAGE IS UPLOADED. `s_arImg` is filled by this lane's
+       OWN restore (`restore_want` above), which writes it through a render
+       pass rather than a transfer and carries its own barriers. */
     return 1;
 }
 
 /* THE SCISSOR, in Vulkan framebuffer pixels. Item 3 of the file header: the
    rect arrives in GAME-FRAME pixels measured from the TOP of the frame (the
-   engine's own viewport rect, what the native pass hands glScissor), and since
-   landing 5b this pass's framebuffer row 0 IS that top row -- so the rect goes
-   in unchanged. It was mirrored on the way in until 2026-09-17, which was right
-   for as long as the viewport height was negative.
+   engine's own viewport rect, what the native pass hands glScissor), and this
+   pass's framebuffer row 0 IS that top row -- so the rect goes in unchanged.
 
    It is also SCALED, by the attachment's extent over the game frame's. At the
    sizes an A/B is run at those are the same number, but the Vulkan window
@@ -1193,7 +1143,7 @@ static void feat_scissor(uint32_t w, uint32_t h)
     int ww = (int)(s_hVw * sx + 0.5f);
     int ytop = (int)(s_hVpT * sy + 0.5f);
     int hh = (int)(s_hVh * sy + 0.5f);
-    int y0 = ytop;                          /* NOT mirrored: landing 5b */
+    int y0 = ytop;                          /* NOT mirrored: see above   */
 
     /* NO CLIP WHERE THE GL LANE HAS NONE. `scissorOn` is what the native pass
        actually did, not what it would have liked to; a Vulkan lane that clipped
@@ -1251,23 +1201,19 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         s_state = ST_READY;
     }
 
-    /* CAN THIS LANE DRAW A RESTORED FRAME? Since 11-5e-2b there is exactly
-       one way it can: the producer published a frame LIST, this lane painted
-       its own twin from it, and `s_arHave` says so. The other way -- holding a
-       CPU mirror of a GL twin, read back by the producer -- went with the
-       read-back; `atlasRgb` had been NULL on every published frame since
-       nothing put opengl32.dll in the process.
+    /* CAN THIS LANE DRAW A RESTORED FRAME? There is exactly one way it can:
+       the producer published a frame LIST, this lane painted its own twin from
+       it, and `s_arHave` says so.
 
        WHY IT IS A REFUSAL AT ALL: drawing with `uRestored` 0 against a twin
        that drew with 1 is a different picture, and an A/B would read it as a
        rasteriser difference rather than a missing input. So the frames before
        the first paint are refused and the rest are drawn.
 
-       IT IS NOT LATCHED. The old message said "this session" and meant it;
-       gpu-status 2.35 measured what that costs -- a pass that refuses once
-       stays dark for the process even after the condition clears. This one
-       clears within a few frames of the restorer starting, so `s_saidRestored`
-       gates the LOG LINE only and is cleared again below.
+       IT IS NOT LATCHED. gpu-status 2.35 measured what a latch costs -- a pass
+       that refuses once stays dark for the process even after the condition
+       clears. This one clears within a few frames of the restorer starting, so
+       `s_saidRestored` gates the LOG LINE only and is cleared again below.
 
        AND A REFUSAL HERE IS NOT ALWAYS A `return`. When the restore is this
        lane's own it needs THIS frame's indexed atlas uploaded before it can
@@ -1286,16 +1232,13 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                         ? "this frame makes the job and draws nothing"
                         : "drawing the indexed atlas until one is painted");
         }
-        /* AN UNPAINTED TWIN DRAWS INDEXED, ON BOTH BRANCHES (11-5e-2c review
-           H1, completed by the verification pass). This was `return 0`,
-           unreachable while `restored` was pinned 0 and reachable the moment it
-           was unpinned -- and this atlas changes generation on every map or
-           level change, so it is the routine path and not only the failure one.
-           The first cut cleared the flag on `!feed` alone, which is the rare
-           half: a generation change satisfies every feed term and so still
-           returned without drawing. Same argument as the unit pass -- there is
-           no second lane to disagree with, so indexed art is Classic++ restore
-           off for one frame rather than a disagreement with anybody. */
+        /* AN UNPAINTED TWIN DRAWS INDEXED, ON BOTH BRANCHES. This atlas changes
+           generation on every map or level change, so this is the routine path
+           and not only the failure one -- and clearing the flag on `!feed`
+           alone is the rare half: a generation change satisfies every feed term
+           and would return without drawing. Same argument as the unit pass --
+           there is no second lane to disagree with, so indexed art is Classic++
+           restore off for one frame rather than a disagreement with anybody. */
         h.restored = 0;
     } else s_saidRestored = 0;
 
@@ -1306,9 +1249,7 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         /* SAID ONCE. This is the INDEXED mirror -- the atlas's own bytes, the
            buffer an upload was handed -- and it cannot be had before the atlas
            has its dimensions, so the first frames of a session legitimately
-           arrive without one. It is NOT the restored twin's read-back, which
-           went in 11-5e-2b; the message used to blame that twin's 30-frame
-           poll and so read as a fault on a perfectly healthy run. */
+           arrive without one -- a healthy run, not a fault. */
         if (!s_saidNoMirror) {
             s_saidNoMirror = 1;
             plog(d, "feat: the indexed atlas has no CPU mirror yet - nothing "
@@ -1351,12 +1292,10 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        `tagpu_vk_restore_step`, after every pass's prepare -- this call only
        creates and feeds the job. */
     restore_want(d, &h);
-    /* A FEED FRAME USED TO END HERE and no longer does (11-5e-2c): "there is no
-       restored twin to draw against yet" was true and beside the point, because
-       the indexed atlas is there to draw against and is what this pass drew
-       before Classic++ existed. `restore_want` above has already made the job --
-       it takes no command buffer and never reads `restored` -- so drawing on
-       this frame conflicts with nothing it did. */
+    /* A FEED FRAME DRAWS: the indexed atlas is there to draw against, and it is
+       what this pass draws without Classic++. `restore_want` above has already
+       made the job -- it takes no command buffer and never reads `restored` --
+       so drawing on this frame conflicts with nothing it did. */
 
     /* THE THREE SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
@@ -1434,8 +1373,7 @@ refuse:
        buffers -- and `cb`, which this function has already recorded uploads
        and a depth clear into, is submitted whether this pass draws or not.
        Destroying any of it from here is a use-after-free on the FIRST
-       refusal, not a rare one. [FOUND BY THE G19e LANDING REVIEW, 2026-09-15,
-       by both reviewers independently.]
+       refusal, not a rare one.
 
        So the pass stops drawing at once and OWES a teardown. The seam pays it
        at the top of a later frame, behind the vkDeviceWaitIdle that makes "no
@@ -1464,11 +1402,8 @@ void tagpu_vk_feat_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        This pass writes `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's
        screen-space y, which grows DOWNWARD, so clip -1 is the game frame's top
        row and a POSITIVE height puts it on row 0 -- where the game's top row is
-       under both APIs. It took a NEGATIVE height until landing 5b (2026-09-17),
-       which turned the frame over a second time; this comment went on saying so
-       for another four landings after the code stopped doing it, which is how
-       the orientation question had to be re-derived three times in 4c.
-       minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1]
+       under both APIs; a NEGATIVE height would turn the frame over a second
+       time. minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1]
        onto GL's own (z+1)/2 -- see item 1 of the file header; without it every
        depth VALUE here is twice GL's and a z-fight settles the other way. */
     vp.x = 0.0f;
@@ -1513,7 +1448,7 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
        `vk_down` or a `vk_resize` that happens to run while a debt is
        outstanding tears the pass down WITHOUT consuming it, and leaves it
        ST_UNBUILT so it can come back on the next device. Reading `s_downOwed`
-       here instead is what let one transient refusal plus a window drag latch
+       here instead would let one transient refusal plus a window drag latch
        the pass at ST_REFUSED for the life of the process.
 
        THE DEBT ITSELF IS DISCHARGED BY EVERY TEARDOWN, paid or not, and that is
@@ -1521,14 +1456,13 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
        nothing left to free, so an un-cleared flag would have the seam drain the
        device and call `_down_paid` on an already-dead pass the next time it
        looked -- which would latch ST_REFUSED by the back door and lose exactly
-       what the two lines above win. (Found while re-reading this fix, not by a
-       reviewer.) [G19e RE-REVIEW, 2026-09-15.] */
+       what the two lines above win. */
     int owed = s_downPaying;
     s_downOwed = 0;
     /* NOTHING TO FREE, BUT THE VERDICT STILL STANDS. `owed` says the device
        refused this pass its resources, and that is a fact about the pass and
        not about whether the entry points resolved -- so it is latched here
-       too, exactly as below. [G19e RE-REVIEW, 2026-09-15.] */
+       too, exactly as below. */
     if (!dev || !vkDestroyBuffer) { s_state = owed ? ST_REFUSED : ST_UNBUILT; return; }
 
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
@@ -1581,7 +1515,7 @@ int tagpu_vk_feat_down_owed(void)
    discharges the debt (there is nothing left to free) but returns the pass
    ST_UNBUILT, so a pass refused once can try again on the device that replaces
    this one. Here the verdict stands, because here the device's refusal is
-   still the reason. [G19e RE-REVIEW, 2026-09-15.] */
+   still the reason. */
 void tagpu_vk_feat_down_paid(const TAGPU_VKPASS* d)
 {
     s_downPaying = 1;
