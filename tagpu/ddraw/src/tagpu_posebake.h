@@ -37,27 +37,45 @@
 #define TAGPU_PB_GEOMST  8      /* floats per geometry vertex */
 #define TAGPU_PB_MATST   5      /* floats per material vertex */
 
+/* THE BAKE'S TWO CACHES, and they must hold every entry ONE FRAME draws: an
+   entry evicted mid-frame leaves the records written before it naming a stale
+   serial, and the Vulkan pass then refuses the whole frame. So they are sized
+   for the design point (tagpu_packet.h's TAGPU_PK_DESIGN_SLOTS): 10 players,
+   each with up to ~100 unit types on screen at once. A geometry entry is one
+   MODEL, not one type: a wreck's model and a ghost's split entry take slots of
+   their own, which is why it holds twice stock's 279 types. Here as well as in
+   tagpu_posebake.c because tagpu_vk_unit.c sizes its vertex-buffer table
+   from them. */
+#define TAGPU_PB_MAXGEOM  512   /* models cached at once                      */
+#define TAGPU_PB_MAXMAT  1024   /* (type, owner) streams cached at once        */
+
 /* geometry vertex flags (float, bit-tested in the shader as an int) */
 #define TAGPU_PBF_SHADED 1      /* body face with a usable rest normal        */
 
 enum { TAGPU_PB_BODY = 0, TAGPU_PB_SLANT, TAGPU_PB_WIRE, TAGPU_PB_NRANGE };
 
-/* THE POSED PROGRAM'S `Pose` BLOCK, std140, SHARED BY BOTH LANES. It lives
-   here rather than in tagpu_posedraw.h because every number in it is the
-   bake's piece ceiling: 3 rows of a 4x3 per piece, then two packed per-piece
-   words four to a vec4. tagpu_posedraw.c builds the GLSL declaration from
-   these and tagpu_vk_unit.c fills the buffer from them, so the two cannot
-   drift -- which is rule 4 of this lane ("re-check every bound in the
-   consuming file, and share the constant through the header"). */
-#define TAGPU_PD_ROWS    (TAGPU_PBMAXPIECE * 3)              /* 768 vec4     */
-#define TAGPU_PD_FLAGV   (TAGPU_PBMAXPIECE / 4)              /*  64 vec4     */
-#define TAGPU_PD_FLAGOFF (TAGPU_PD_ROWS * 16)                /* bytes        */
-#define TAGPU_PD_VISOFF  ((TAGPU_PD_ROWS + TAGPU_PD_FLAGV) * 16)
-#define TAGPU_PD_BLOCK   ((TAGPU_PD_ROWS + TAGPU_PD_FLAGV * 2) * 16)  /* 14336 */
+/* THE POSED PROGRAM'S `Pose` STORAGE BUFFER. It lives here rather than in
+   tagpu_posedraw.h because every bound in it is the bake's piece ceiling.
+   One `vec4` array a frame, in three sections that follow one another:
+
+     rows   every posed unit's pose, 3 vec4 a piece (the rows of a 4x3)
+     flags  every unit's `shaded` words, one float a piece, packed 4 to a vec4
+     vis    every unit's visibility words, laid out exactly as `flags`
+
+   which is the hand-over's `rows`, `flags` and `vis` arrays copied whole. A
+   unit reaches its slices through three base indices in its uniform block;
+   a unit's word run is padded to a whole vec4, so each unit's starts on one.
+   tagpu_posedraw.c declares the buffer and tagpu_vk_unit.c fills it, and both
+   take their numbers from here -- rule 4 of this lane ("re-check every bound
+   in the consuming file, and share the constant through the header"). */
+#define TAGPU_PD_FLAGV   (TAGPU_PBMAXPIECE / 4)   /* one unit's word vec4s at the ceiling: 64 */
+/* one unit's pose at the piece ceiling, in bytes: 256 x 48 of rows plus the two
+   word runs, 14 336. What the device must be able to bind for one unit. */
+#define TAGPU_PD_UNITMAX ((TAGPU_PBMAXPIECE * 3 + TAGPU_PD_FLAGV * 2) * 16)
 
 typedef struct TAGPU_PBGEOM {
     const char*  root;                        /* Model3DONode* of primitive 0 */
-    unsigned     levelGen, glGen;
+    unsigned     levelGen;
     int          nparts;
     int          ghost;                       /* 1 = baked from the ghost's
         synthesized piece run. Its walk order is the template tree's, which is
@@ -74,7 +92,6 @@ typedef struct TAGPU_PBGEOM {
     int          first[TAGPU_PB_NRANGE];      /* vertex offsets of the ranges  */
     int          count[TAGPU_PB_NRANGE];
     int          nvert;
-    unsigned int vbo;
     /* ONE MONOTONIC NUMBER PER BAKE, never reused (Phase G, the unit
        pass). A cache slot IS reused -- `geom_slot` evicts the least recently
        asked-for entry and re-bakes another type into it -- so a second backend
@@ -117,14 +134,7 @@ typedef struct TAGPU_PBMAT {
                                  material can never be matched against a slot
                                  that has since been evicted and re-baked */
     int          owner;
-    unsigned     atlasGen, levelGen, glGen;
-    unsigned int vbo;
-    /* the posed pass's VAO, binding this stream and its geometry together
-       (locations 0-3 from the geometry, 4-6 from here). It lives on the
-       MATERIAL entry because that is the shorter life of the two: a geometry
-       drop cascades into every stream that names it, so the VAO can never
-       outlive either buffer it points at. */
-    unsigned int vao;
+    unsigned     atlasGen, levelGen;
     unsigned     serial;         /* as the geometry entry's, and for the same
                                     reason: `mat_slot` recycles slots too      */
     int          nvert, nskip;   /* nskip: vertices the skip flag collapses    */
@@ -187,7 +197,6 @@ const float* tagpu_posebake_geom_mirror(const TAGPU_PBGEOM* g, unsigned serial,
 const float* tagpu_posebake_mat_mirror(const TAGPU_PBMAT* m, unsigned serial,
                                        int* nvert);
 
-void tagpu_posebake_glreset(void);       /* the GL context went              */
 /* one `bake=` field for the native: line; writes nothing when disarmed */
 int  tagpu_posebake_stats(char* out, int n);
 #endif

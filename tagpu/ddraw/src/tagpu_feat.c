@@ -410,15 +410,6 @@ static void atlas_setup(void)
     tagpu_gaf_atlas_create(&s_atlas);   /* never bind texture 0 to uAtlas */
 }
 
-void tagpu_feat_glreset(void)
-{
-    tagpu_gaf_atlas_lost(&s_atlas);
-    s_mapGrid = NULL;           /* the entries went with the context */
-    /* and so did the hand-over: its texel pointers name an atlas that no longer
-       holds anything, and its vertices a frame that will not be drawn */
-    s_pubHave = 0; s_abFrame = 0;
-}
-
 /* ---- emission ---- */
 static float s_encCur = 0.0f;
 static int   s_bucketCur = B_BODY;
@@ -1017,7 +1008,7 @@ int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now)
     return 1;
 }
 
-void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex)
+void tagpu_feat_render(const TAGPU_FXVIEW* v)
 {
     /* THIS PASS DOES NOT DRAW; IT GATHERS AND HANDS OVER to the Vulkan twin,
        which draws. */

@@ -6,7 +6,7 @@ WHAT IT IS
 
   A replacement ddraw.dll for the retail Total Annihilation (the 3.1 TotalA.exe
   that Steam and GOG ship). It patches the game in memory when it starts -- the
-  files of your install are never modified -- and renders it through OpenGL:
+  files of your install are never modified -- and renders it through Vulkan:
 
     - every unit, wreck, feature, effect and the terrain drawn by the patch,
       at the screen's resolution, instead of the 1997 software renderer
@@ -19,7 +19,7 @@ WHAT IT IS
   different build of the exe it arms nothing and you get the stock game through
   the plain cnc-ddraw renderer.
 
-  Needs OpenGL 3.3 (any GPU of the last fifteen years). Runs under Wine too;
+  Needs a GPU and driver with Vulkan (1.0 or later). Runs under Wine too;
   that is where it is developed.
 
 
@@ -28,7 +28,7 @@ INSTALL
   Copy every file of this folder next to TotalA.exe, then start the game as usual:
 
     ddraw.dll       the patch
-    ddraw.ini       its settings; keep renderer=openglcore
+    ddraw.ini       its settings; keep renderer=vulkan
     full.w32.bin    the Classic++ restorer's weights (the DLL reads them beside
     tiny.w32.bin    the exe; without them Classic++ keeps the indexed colours)
 

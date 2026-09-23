@@ -1,13 +1,10 @@
-/* tagpu.h — shared contract between our cnc-ddraw fork and tagpu.dll.
-   The fork fills a TAGPU_FRAME each frame (on its render thread, GL context current)
-   and calls tagpu.dll!TagpuPresent just before SwapBuffers.
-   SINCE LANDING 10c-1 there is a SECOND filler, on the GAME thread with no GL
-   context: tagpu_gui_hook.c's before_flip builds one for the trigger family, so
-   that family reaches renderer=gdi. It leaves surface_tex 0 and packet NULL,
+/* tagpu.h — the frame every pass receives.
+   Two fillers: render_vk.c on the render thread, once per presented frame, and
+   tagpu_gui_hook.c's before_flip on the GAME thread for the trigger family, so
+   that family reaches renderer=gdi too. The game-thread one leaves packet NULL,
    and that is the family's membership test: a consumer that dereferences packet
-   cannot be called from it. Landing 10c-2 split tagpu_input.c along exactly that
-   line rather than excluding it -- the token half takes this frame, the camera
-   hold keeps the render thread's. */
+   cannot be called from it. tagpu_input.c is split along exactly that line --
+   the token half takes this frame, the camera hold keeps the render thread's. */
 #ifndef TAGPU_H
 #define TAGPU_H
 
@@ -27,20 +24,13 @@ typedef struct TAGPU_FRAME {
     void* hdc;                       /* g_ddraw.render.hdc                           */
     unsigned int frame_counter;      /* monotonic, maintained by the fork            */
     int   bpp;                       /* g_ddraw.bpp (8 for TA)                        */
-    /* G13b: the GL id of the engine's own 8bpp frame, an R8 INDEX texture whose
-       texel (x,y) is game pixel (x,y) (0 when not 8bpp / not uploaded). The
-       composite reads it to find the pixels the engine still paints inside the
-       viewport once we own the terrain — see tagpu_terrown.c. */
-    unsigned int surface_tex;
     /* The frame packet exchange (tagpu_packet.h): the packet the driver took
        for this frame and the previous one it still holds, or NULL. Valid until
        the driver's frame_end; a module that caches either past its frame holds
        a slot the producer may be filling — the poison lever exists to catch
-       exactly that. Appended, so the struct only grew. */
+       exactly that. */
     const struct TAGPU_PACKET* packet;
     const struct TAGPU_PACKET* packet_prev;
 } TAGPU_FRAME;
-
-typedef void (__cdecl *TagpuPresentProc)(const TAGPU_FRAME*);
 
 #endif

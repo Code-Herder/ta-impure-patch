@@ -157,9 +157,9 @@ typedef struct TAGPU_PK_PIECE {
     uint32_t node;           /* prim+0x00 P_NODE, the type's template node      */
 } TAGPU_PK_PIECE;
 
-/* 36 B, one per live wreck record the anchor rect names. Posed exactly as a
-   unit is — the engine draws a husk through a scratch fake unit — so it
-   carries the same pose fields. */
+/* 44 B (asserted in tagpu_packet_pub.c), one per live wreck record the anchor
+   rect names. Posed exactly as a unit is — the engine draws a husk through a
+   scratch fake unit — so it carries the same pose fields. */
 typedef struct TAGPU_PK_WRECK {
     int32_t  pos[3];         /* record+0x08 / +0x0C / +0x10, 16.16              */
     uint32_t o3_key;         /* record+0x04, KEY                                */
@@ -440,14 +440,22 @@ typedef struct TAGPU_PK_PART {
    tagpu_packet_pub.c compiles a static assertion that the two agree. */
 #define TAGPU_PK_MAXPIECE   256u
 
-/* The units table's own ceiling. The engine's slot count is 10 x MaxUnits + 1
-   and MaxUnits tops out at 1500, so 15001 is the largest the engine can ask
-   for; 16384 is that rounded up, and a slot count past it truncates the table
-   (and says so) rather than walking off the publisher's scratch. */
+/* THE DESIGN POINT: ten players of 1024 units each. The engine's unit array
+   has 10 x MaxUnits + 1 slots (the u16 at main+0x14351); stock clamps MaxUnits
+   to 500 (`cmp eax, 0x1f4` at 0x491658, DISASSEMBLED -- scenario-format.md),
+   and a unit-limit patch raising that clamp to 1024 makes 10 241. Every cap
+   in the exchange and in the passes it feeds that scales with the unit count
+   is asserted against this where it is declared, so a cap below it fails the
+   build rather than a large game. */
+#define TAGPU_PK_DESIGN_SLOTS (10u * 1024u + 1u)
+
+/* The units table's own ceiling: the design point rounded up to a power of
+   two. A slot count past it truncates the table (and says so, through
+   TAGPU_PK_TRUNC_UNITS) rather than walking off the publisher's scratch. */
 #define TAGPU_PK_MAX_UNITS    16384u
 #define TAGPU_PK_MAX_WRECKS   4096u
 #define TAGPU_PK_MAX_ANCHORS  65536u
-#define TAGPU_PK_MAX_BUILDS   2048u    /* the order snapshot's own arena cap:
+#define TAGPU_PK_MAX_BUILDS   4096u    /* the order snapshot's own arena cap:
                                           one record per queued marker, and a
                                           build is a subset of those             */
 
@@ -770,6 +778,19 @@ static __inline const TAGPU_PK_BUILD* tagpu_pk_builds(const TAGPU_PACKET* p)
    would put both threads on slot 0. Disarms itself if the reservation fails. */
 void tagpu_packet_init(void);
 int  tagpu_packet_armed(void);
+
+/* THE GROWTH-STRESS LEVER, `tagpu_grow.stress` in the gamedir, read once at
+   attach like the packet's own. The arrays whose caps this sizes for the
+   design point move on every frame under it: the native gather's and the
+   marker pass's are freed and allocated again at exactly the size asked for,
+   the posed hand-over's arenas grow to the exact size on every append, and
+   the Vulkan unit pass rebuilds its two slot buffers. Other growable arrays
+   (the unit pass's draw list and staging, the marker hand-over) keep their
+   ordinary doubling. A pointer that outlives a move then reads freed memory at the
+   unit counts a stock game reaches, rather than only in a game large enough to
+   grow the arrays for real. A measurement lever: it costs an allocation per
+   array per frame. */
+int  tagpu_grow_stress(void);
 
 /* ---- render thread ---- */
 /* Exactly once per frame, at the top of the overlay frame, by the driver

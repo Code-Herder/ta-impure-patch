@@ -487,9 +487,11 @@ November 2024 and no MR for host support was found.
   `unitSyncAckCount`; `Docs/lobbyprot.txt`: subtype 3 = "tell client this unit exists / is synced",
   subtype 2 = checksum). That is a *content-compatibility* check (all peers must have identical unit
   data), not a runtime desync detector. TAF layers file-CRC whitelisting on top for ranked play.
-- **The unit limit.** TADR's `plugins/UnitLimit.pas` embeds the disassembly of TA 3.1 at `0x0049163A`:
-  TA reads `"UnitLimit"` from the ini with default `0x5DC` and **clamps it to `[0x14, 0x5DC]` =
-  `[20, 1500]`** — exactly the range TAF re-implements. Crucially, **unit IDs are allocated in
+- **The unit limit.** Retail TA 3.1 reads `"UnitLimit"` from the ini with default `0xFA` (250) and
+  **clamps it to `[0x14, 0x1F4]` = `[20, 500]`** (`0x49163F`, `0x491658`, `0x491665`,
+  disassembled from the retail exe — [deep-tadr](deep-tadr.html) has the listing). TADR's
+  `plugins/UnitLimit.pas` quotes the same sites with `0x5DC` (1500), which is the patched binary,
+  and `[20, 1500]` is the range TAF re-implements. Crucially, **unit IDs are allocated in
   per-player blocks of `maxUnits`**: `GameMonitor2::onUnitDied` identifies a commander as
   `unitId % m_maxUnits == 1`. So `maxUnits` is part of a shared ID space every peer must agree on, and
   it is carried in the 0x20 status packet (offset `0xA6`, per `libs/tapacket/notes/statuspackets.txt`)

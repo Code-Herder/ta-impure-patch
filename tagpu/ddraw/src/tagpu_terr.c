@@ -508,38 +508,6 @@ static const char* FS =
     "}\n";
 #pragma GCC diagnostic pop
 
-void tagpu_terr_glreset(void)
-{
-    /* and the hand-over goes with the context: its texel pointers name textures
-       that no longer exist and its cells a frame that will not be drawn. */
-    s_pubHave = 0; s_abFrame = 0;
-    s_atlasBuilt = 0;                   /* rebuilt on the next gather          */
-    s_hMeshW = s_hMeshH = 0;
-    /* the mirror goes with the mesh it mirrors: keeping it would hand the
-       Vulkan lane vertices for a grid this pass is about to rebuild */
-    free(s_hMeshV); s_hMeshV = NULL;
-    free(s_hMeshI); s_hMeshI = NULL;
-    s_hMeshVN = s_hMeshIN = 0;
-    s_hMeshNoMirror = 0;
-    s_hW = s_hH = 0; s_hGrid = NULL; s_hFrame = 0;
-    s_rectValid = 0;
-    /* The set identity (s_setPtr/s_setCount/s_setPix) is LEFT ALONE: zeroing
-       s_atlasBuilt is what forces the atlas rebuild, and the identity's job is
-       to tell a NEW MAP from the same set (ensure_atlas drops a standing
-       restore request on a new map). The request is dropped here too, so the
-       consumer is handed a new serial rather than one it has already seen.
-
-       NOTHING CALLS THIS, and the name is the reason it is worth saying. Its
-       one caller is `tagpu_native_glreset` (tagpu_native.c), which has no
-       caller of its own, so the chain has no root and every link in it, this
-       one included, is unreachable. The body is kept because none of it is
-       GL: it is this pass's "drop everything derived from the map" and a
-       Vulkan device loss wants exactly that. Retiring the entry point belongs
-       with the rest of the GL entry-point surface, 11-5e. */
-    s_rgbState = 0;
-    rlist_drop();
-}
-
 /* ---- the height grid: one R8 texel per 16-px cell, once per map ----
    Keyed on ITS OWN inputs -- the grid pointer, the dims, and the tile set the
    atlas was built from (LoadMap could hand a same-sized map the same
@@ -811,8 +779,7 @@ static int ensure_atlas(const char* ta)
     s_atlasH = h;
     s_atlasN = count < rows * ATLAS_COLS ? count : rows * ATLAS_COLS;
     /* a different set is a new map: drop a restore still running on the old
-       one and start over. (A GL reset reaches here with the SAME set, after
-       glreset has already reset the restore, so both calls are no-ops then.) */
+       one and start over */
     if (s_setPtr != (const void*)set || s_setCount != count || s_setPix != pix) {
         s_rgbState = 0;
         rlist_drop();
@@ -1429,7 +1396,7 @@ int tagpu_terr_handover(TAGPU_TERRHAND* out, unsigned now)
     return 1;
 }
 
-void tagpu_terr_render(const TAGPU_FXVIEW* v, unsigned int palTex)
+void tagpu_terr_render(const TAGPU_FXVIEW* v)
 {
     /* THIS PASS DOES NOT DRAW; IT GATHERS AND HANDS OVER. The instances, the
        numbers and the texels below are the gather's; the Vulkan twin draws them.

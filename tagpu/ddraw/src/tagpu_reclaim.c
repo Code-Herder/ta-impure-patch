@@ -88,9 +88,15 @@
 static const unsigned char FREEOBJ_STOLEN[5]  = { 0x53, 0x8B, 0x5C, 0x24, 0x08 }; /* push ebx; mov ebx,[esp+8] */
 static const unsigned char TEARDOWN_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }; /* mov eax,[0x511DE8]        */
 
-#define RC_RING_SIZE 4096u                 /* a whole level's objects fit, for the case
-                                              where the teardown keeps deferring (below) */
+/* A WHOLE LEVEL'S OBJECTS FIT, for the case where the teardown keeps deferring
+   (below): one per unit slot and one per wreck at the design point
+   (TAGPU_PK_DESIGN_SLOTS), rounded up to the power of two the mask needs. An
+   object past it is not deferred and is leaked (`s_cOverflow`), never freed
+   under the reader. */
+#define RC_RING_SIZE 16384u
 #define RC_RING_MASK (RC_RING_SIZE - 1u)
+typedef char rc_ring_design[(RC_RING_SIZE >= TAGPU_PK_DESIGN_SLOTS + TAGPU_PK_MAX_WRECKS &&
+                             (RC_RING_SIZE & RC_RING_MASK) == 0) ? 1 : -1];
 #define RC_TEARDOWN_WAIT_MS 1000u
 
 #define RC_OBJ3DO 0                        /* free via the real FreeObjectState  */

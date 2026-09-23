@@ -28,7 +28,6 @@
 #define GF_HOTY       0x06
 #define GF_PTRCOLOR   0x10     /* u8* colour plane, top-down, stride=W     */
 
-#define FBO_DIM   640          /* stock composite is AABB-capped 600x600   */
 #define MAXVERTS  24576        /* triangulated vertices per unit per frame */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
@@ -41,7 +40,6 @@ static void rlog(const char* s)
 
 
 static int    s_state = 0;         /* 0=unloaded 1=ready 2=failed */
-void tagpu_r3d_glreset(void);
 static int    s_lutBuilt = 0;
 /* 1 when the LUT that is up came from the ENGINE's own PALETTE.SHD rather than
    our computed ramp. Without it a single frame that arrived with no table —
@@ -540,16 +538,3 @@ int tagpu_r3d_ensure(void)             /* init on demand (GL context current) */
 const char* tagpu_r3d_face_texframe(const char* fa, int owner) { return face_texframe(fa, owner); }
 int tagpu_r3d_face_colour(const char* fa) { return face_colour(fa); }
 
-/* NOTHING CALLS THIS -- see tagpu_native.c's `*_glreset` banner for why it is
-   left standing. */
-void tagpu_r3d_glreset(void)
-{
-    /* fresh GL context: the new atlas/LUT textures are EMPTY — the CPU-side
-       caches must forget what was uploaded or everything samples black. The
-       atlas's twin died with the context too. No other reset has to run
-       before this one. */
-    s_state = 0;
-    s_lutBuilt = 0;
-    s_lutFromShd = 0;
-    tagpu_gaf_atlas_lost(&s_atlas);
-}

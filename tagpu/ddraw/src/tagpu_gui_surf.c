@@ -190,10 +190,6 @@ static unsigned s_tints = 0;
 static unsigned char s_shade[TAGPU_GUI_SHADE_BYTES];
 static int      s_shadeHave = 0;
 static unsigned s_shadeSerial = 0;
-static int    s_skipToReset = 0;        /* after a GL context change: the queue's ops up to the producer's next
-                                           RESET were published against twins and an atlas that died with the
-                                           context — take their arena bytes, apply nothing (see drain) */
-static unsigned s_skipped = 0;
 /* Classic++ */
 static int    s_norestore = 0;          /* `norestore` in the trigger: the A/B lever   */
 /* WHETHER AN OP MAY SAY "RESTORED" THIS FRAME (gui-renderer.md 3.4). Written
@@ -709,22 +705,12 @@ static int atlas_setup(void)
 }
 
 /* WHETHER THIS FRAME CARRIES TA's OWN SURFACE, which is what the mirror's
-   `eng` copy, the strict guard and the layer's guard all really ask. On the GL
-   lane the fork has uploaded it and `f->surface_tex` names that upload; on a
-   lane with no GL there is no texture to name, but the BYTES are where they
-   always were -- `g_ddraw.primary->surface`, which `mir_finish` copies out
-   under g_ddraw.cs and validates against the primary's own geometry. Keyed on
-   the texture, the Vulkan twin would have no engine frame and composite
-   nothing at all, saying so every time: "the hand-over carries no copy of the
-   engine's own frame". */
+   `eng` copy, the strict guard and the layer's guard all really ask. The bytes
+   are `g_ddraw.primary->surface`, which `mir_finish` copies out under
+   g_ddraw.cs and validates against the primary's own geometry, so every frame
+   that reaches this file carries one. */
 static int have_engine_frame(const TAGPU_FRAME* f)
 {
-    /* The `|| tagpu_vk_owns_present()` term is the whole function: this file
-       is reached only through `tagpu_overlay_draw`, which runs only from
-       `render_vk.c` after the present latch is set. `f->surface_tex` is kept as
-       the first term because it is the honest question -- a caller that DOES
-       carry an engine frame answers yes for the original reason -- but nothing
-       can make this return 0 today. */
     (void)f;
     return 1;
 }
@@ -1385,29 +1371,16 @@ static void drain(void)
         const TAGPU_PUBOP* o = &g_guiq.ops[tail & (TAGPU_GUI_QCAP - 1)];
         TWIN* t;
         unsigned char col = 0;          /* TAGPU_GUIOP::col                   */
-        /* THE GLYPH BLOCK GOES IN BEFORE THE SKIP, NOT INSIDE THE SWITCH.
-           `s_skipToReset` jumps the whole switch for every op queued before a
-           GL context change (measured at 705 of them), so installing the block
-           inside it would let those ops take their first-sight glyph records
-           with them — and the producer has already marked the pairs sent. The
-           records are the op's own payload and installing them is independent
-           of everything the switch decides. The producer's reseed handling
-           clears `sent[]` as well, which is the second line. */
+        /* THE GLYPH BLOCK GOES IN BEFORE THE SWITCH, NOT INSIDE IT: the
+           records are the op's own payload, the producer has already marked
+           the pairs sent, and installing them is independent of everything the
+           switch decides. */
         if (o->kind == PK_STRING && o->alen)
             tagpu_text_glyph_feed(o->font_id, o->font_rows, o->font_yoff,
                                   g_guiq.arena + o->aoff, o->gcount, o->alen);
-        if (s_skipToReset && o->kind != PK_RESET) {
-            /* published before the producer learned the context was gone:
-               every twin and atlas entry it names is dead, and applying it
-               would only count its sprites as lost (MEASURED 2026-09-07: 705
-               per game -> shell switch). The producer's RESET follows at its
-               next publish, since glreset raised `reseed`. */
-            s_skipped++;
-            goto next;
-        }
         switch (o->kind) {
         case PK_FRAME:  s_presented = o->surf; break;
-        case PK_RESET:  twins_reset(); s_skipToReset = 0;
+        case PK_RESET:  twins_reset();
             { TAGPU_GUIOP* m = mir_op(); if (m) m->kind = TAGPU_GUIOP_RESET; }
             /* AND EVERY RESOLVED ATLAS RECT BEFORE THIS POINT STOPS MATTERING.
                The consumer drops its whole store on this op, so a sprite
@@ -1664,7 +1637,6 @@ static void drain(void)
             break; }
         default: break;
         }
-    next:
         if (o->alen) g_guiq.aTail = o->aoff + o->alen;
         tail++;
         s_drained++;
@@ -2577,10 +2549,10 @@ void tagpu_gui_present(const TAGPU_FRAME* f)
         if (t0.QuadPart) fps = (double)(f->frame_counter - last) * (double)fq.QuadPart / (double)(t1.QuadPart - t0.QuadPart);
         t0 = t1;
         last = f->frame_counter;
-        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u skipped=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%d/%d colops=%u prescol=%d k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
+        _snprintf(b, sizeof b, "gui: twins=%d presented=%08X drained=%u seeds=%u sprites=%u copies=%u pixels=%u pixdrop=%u assets=%u bars=%u rects=%u tints=%u/%u/%u/%u clears=%u atlas=%d/%d lost=%u strict=%d resets=%u overflows=%u gafnoplane=%u gafreseed=%u gafscratch=%u/%u/%u strrearm=%u glyscratch=%u/%u gfont=%u/%u/%u/%u stalls=%u palchg=%u paldiff=%d@%d palsrc=%d cpp=%d assets=%d light=%d col=%u/%d colvalid=%d rearms=%u rgb=%d/%d colops=%u prescol=%d k=%.3f s=%.3f sharp=%dx%d curs=%d,%dx%d,dev=%d,sc=%.2f,drawn=%u,warm=%u str=%u/%u,miss=%u,reseed=%u,repack=%u,glyphs=%u/%u,fonts=%d arena=%u mirlost=%u mm=%u,fog=%u/%u,noeng=%u fps=%.1f",
                   s_ntwins, s_presented, s_drained, s_seeds, s_sprites, s_copies, s_pixels, s_pixDropped, s_assets, s_bars, s_rects, s_tints, s_shadeSerial, s_tintDrop, s_tintStale, s_clears,
                   s_atlas.n, s_atlas.max, s_lostSprites, s_strict, g_guiq.resets, g_guiq.overflows, g_guiq.gafnoplane, g_guiq.gafreseed, g_guiq.gafhigh, g_guiq.gaflost, g_guiq.gafbaddec, g_guiq.strrearm, g_guiq.glyhigh, g_guiq.glylost, pGlyphs, pResends, pRefused, pRecycles, g_guiq.stalls,
-                  s_skipped, tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
+                  tagpu_pal_changes(), palDiff, palDiffAt, tagpu_pal_presented(),
                   tagpu_classicpp_on() ? 1 : 0, tagpu_classicpp_assets() ? 1 : 0,
                   tagpu_classicpp_lit() ? 1 : 0,
                   s_colTwins, s_ntwins, s_colValid, s_rearms,
@@ -2770,9 +2742,8 @@ static void mir_finish(const TAGPU_FRAME* f)
     s_mHand.shadeSerial = s_shadeSerial;
 
     /* THE ENGINE'S OWN FRAME. The composite's bottom layer and its
-       stale-mirror guard both sample it, as `f->surface_tex` -- a GL texture,
-       which is exactly what a second backend cannot have. The bytes behind it
-       are the fork's primary, and they are read HERE under `g_ddraw.cs` for
+       stale-mirror guard both sample it. The bytes are the fork's primary,
+       and they are read HERE under `g_ddraw.cs` for
        the lifetime reason tagpu_pal.c gives for the palette: the game thread
        NULLs `g_ddraw.primary` inside that section and frees the object only
        after leaving it, so a pointer read AND dereferenced inside it is a live
@@ -2860,28 +2831,6 @@ int tagpu_gui_handover(TAGPU_GUIHAND* out, unsigned now)
        carries. */
     if (s_handAssetTok) { g_guiq.assetAck = s_handAssetTok; s_handAssetTok = 0; }
     return 1;
-}
-
-/* NOTHING CALLS THIS. Not everything below is GL teardown: the reseed
-   request, `TAGPU_GUI_WHY_GLCTX` and `s_skipToReset` are "forget everything
-   derived from this device", and with `tagpu_native_glreset`'s fog-grid drop
-   they are the only such path in the build -- with nothing on the Vulkan side
-   wired to them. */
-void tagpu_gui_glreset(void)
-{
-    /* the context is gone: forget every id, start over from fresh seeds —
-       and take nothing from the queue until the producer's RESET arrives */
-    /* What is reset here is the state that genuinely dies with a context: the
-       twin table, the sharp layer's SIZE (its space is the viewport, which a
-       new context re-establishes), the cursor's ownership and the minimap's
-       generation. */
-    s_ntwins = 0; s_presented = 0;
-    s_sharpW = s_sharpH = 0; s_sharpOn = 0;            /* the sharp layer died with it */
-    s_curOwn = 0; s_curFrame = NULL;   /* and the cursor is nobody's until it is re-atlased */
-    s_mmGenSeen = 0;                    /* the picture's texture died; the BYTES are the hook's */
-    tagpu_gaf_atlas_lost(&s_atlas);
-    s_skipToReset = 1;
-    g_guiq.reseed = 1; g_guiq.why = TAGPU_GUI_WHY_GLCTX;
 }
 
 int tagpu_gui_drawing(void) { return s_on; }

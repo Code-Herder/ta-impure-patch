@@ -840,7 +840,7 @@ def client_box(res, window):
     maxes each against the game mode, so a --window SMALLER than --res does not
     shrink the client — it is ignored per axis. Tiling against the requested
     window in that case would put the real window off the right/bottom edge,
-    which is the silently mangled `glshot` tile_for exists to prevent."""
+    which is the silently mangled window grab tile_for exists to prevent."""
     if not window:
         return tuple(res)
     return (max(int(res[0]), int(window[0])), max(int(res[1]), int(window[1])))
@@ -849,12 +849,10 @@ def client_box(res, window):
 def tile_for(index: int, res, screen=None, origin=(0, 0)):
     """Lay instances out in a grid so parallel windows do not stack.
 
-    Never places a window off the visible desktop. That is not cosmetic: OpenGL
-    leaves glReadPixels on the default framebuffer undefined outside the visible
-    region, so an off-screen window used to hand back a mangled `glshot` with no
-    error anywhere. When the grid runs out of cells the layout WRAPS and windows
-    overlap — an overlapped window still captures correctly, an off-screen one
-    did not.
+    Never places a window off the visible desktop. That is not cosmetic: a
+    window grab (x11grab, `import -window`) of an off-screen window hands back
+    garbage for the part outside the visible region, with no error anywhere.
+    When the grid runs out of cells the layout WRAPS and windows overlap.
     """
     w, h = res
     if screen is None:
@@ -1129,7 +1127,7 @@ def _launch(args) -> dict:
         inst.save_meta(meta)
         write_ddraw_ini(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
     # Self-heal a tile recorded against a different (or wrongly assumed) desktop:
-    # an off-screen window is a silently broken `glshot`, so never open one there.
+    # an off-screen window is a silently broken window grab, so never open one there.
     res = tuple(meta.get("res") or DEFAULT_RES)
     box = client_box(res, win)
     if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), box, screen=screen):
@@ -1180,7 +1178,7 @@ def _launch(args) -> dict:
     # to give it away. Measured 2026-09-09: a 20-minute-old fault was read as five
     # consecutive fresh crashes, and cob1's file holds 17 reports whose fields
     # `tacli crash` stitches into one line from four different faults.
-    for stale in ("tagpu.log", "tagpu_gl.ppm", "ErrorLog.txt"):
+    for stale in ("tagpu.log", "ErrorLog.txt"):
         p = inst.gamedir / stale
         # a legacy instance carries this as a symlink into the TEMPLATE gamedir;
         # unlink rather than rotate, or the next fault re-creates the shared
@@ -1454,7 +1452,7 @@ def cmd_shield(args):
 
 
 def cmd_gui(args):
-    """The GL UI renderer (Phase E): arm before launch (its detours install at DLL attach),
+    """The UI layer (Phase E): arm before launch (its detours install at DLL attach),
     then flip the draw live — the file is polled twice a second in the DLL."""
     inst = Instance(args.name)
     path = inst.gamedir / "tagpu_gui.on"
@@ -1752,21 +1750,6 @@ def cmd_shot(args):
     if args.output:
         shutil.copy2(newest, dest)
     out({"name": args.name, "path": str(dest)}, args.json, human=str(dest))
-
-
-def cmd_glshot(args):
-    """RETIRED: there is no OpenGL lane, so there is no GL framebuffer."""
-    # `ddraw.dll` creates no GL context on any path, and nothing polls the
-    # trigger.
-    #
-    # It is kept as a verb, and fails loudly, because scripts and notes in this
-    # tree still call it and a silent timeout is exactly the failure this repo
-    # keeps paying for. `tacli shot` is the replacement for most uses: it runs
-    # from the engine's flip and answers on every lane.
-    die("tacli glshot is retired: the OpenGL lane was deleted in landing 11-2 "
-        "and there is no GL framebuffer to capture. Use `tacli shot` for the "
-        "engine's own surface (it works on every renderer now), or record the "
-        "live window -- see the ta-capture skill.")
 
 
 def cmd_log(args):
@@ -4581,7 +4564,7 @@ def build_parser():
     e.add_argument("--release", action="store_true")
     e.set_defaults(func=cmd_eye)
 
-    gu = sub.add_parser("gui", help="the GL UI renderer: on | strict | census | off | remove (Phase E)")
+    gu = sub.add_parser("gui", help="the UI layer: on | strict | census | off | remove (Phase E)")
     add_common(gu)
     gu.add_argument("name")
     gu.add_argument("state", nargs="?", choices=["on", "strict", "census", "off", "remove"],
@@ -4624,13 +4607,6 @@ def build_parser():
     sh.add_argument("-o", "--output")
     sh.add_argument("--timeout", type=float, default=15)
     sh.set_defaults(func=cmd_shot)
-
-    g = sub.add_parser("glshot", help="RETIRED with the OpenGL lane (landing 11-2) -- fails loudly")
-    add_common(g)
-    g.add_argument("name")
-    g.add_argument("-o", "--output")
-    g.add_argument("--timeout", type=float, default=15)
-    g.set_defaults(func=cmd_glshot)
 
     cr = sub.add_parser("crash", help="last crash TA recorded, symbolised")
     add_common(cr)

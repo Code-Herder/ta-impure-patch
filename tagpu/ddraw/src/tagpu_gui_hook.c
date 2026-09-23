@@ -2083,10 +2083,10 @@ static void dedup(void)
 }
 
 static const char* const WHY_NAME[TAGPU_GUI_WHY_N] =
-    { "?", "arm", "gl-context", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over", "string-empty", "level-changed" };
+    { "?", "arm", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over", "string-empty", "level-changed" };
 
 /* THE CONSUMER CAN DIE, OR CRAWL. cnc-ddraw stops its render thread inside
-   every SetDisplayMode and starts a new one with a new GL context (dd.c);
+   every SetDisplayMode and starts a new one (dd.c);
    between the two nothing drains the queue, and on the way out of a game the
    old thread presents only every few hundred ms while the game thread is in
    the exit path — and the game thread keeps flipping and this keeps
@@ -2973,10 +2973,7 @@ static int __cdecl before_flip(void* entry_esp)
             gf.game_width    = g_ddraw.width;
             gf.game_height   = g_ddraw.height;
             gf.vp_x          = g_ddraw.render.viewport.x;
-            /* the GL lane draws one row down when `nonexclusive`; render_ogl.c
-               adds this and the snapshot's "viewport" is what `tacli ui click
-               --device` maps through, so dropping it costs a pixel there */
-            gf.vp_y          = g_ddraw.render.viewport.y + g_ddraw.render.opengl_y_align /* provably 0 */;
+            gf.vp_y          = g_ddraw.render.viewport.y;
             gf.vp_w          = g_ddraw.render.viewport.width;
             gf.vp_h          = g_ddraw.render.viewport.height;
             gf.win_width     = g_ddraw.render.width;

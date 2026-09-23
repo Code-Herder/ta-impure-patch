@@ -16,7 +16,6 @@
 /* Render thread, per present, GL context current. Polls the trigger on its own
    cadence and draws nothing at all when it is absent. */
 void tagpu_fps_present(const TAGPU_FRAME* f);
-void tagpu_fps_glreset(void);      /* the GL context changed: drop our objects */
 
 /* ---- the Vulkan edition of this pass ----
    The quads `tagpu_fps_present` just built -- (x, y, u, v) per vertex, `nv`

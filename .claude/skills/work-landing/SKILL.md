@@ -143,7 +143,7 @@ prose sentence.
 **Attach as you produce it**, into `tmp/` first, never the repo root or `src/` (`agent-kanban`
 §8). Screenshots at meaningful *visual* milestones — changed states, not a clock.
 
-`ta-capture` covers the mechanics (`tacli shot`, `tacli glshot`, ffmpeg `x11grab -window_id`);
+`ta-capture` covers the mechanics (`tacli shot`, `import -window`, ffmpeg `x11grab -window_id`);
 `ta-drive` launches and drives the instance.
 
 ### The closing evidence

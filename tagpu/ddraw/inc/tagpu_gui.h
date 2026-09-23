@@ -394,9 +394,8 @@ typedef struct TAGPU_GUIHAND {
     unsigned             shadeSerial;
 
     /* THE ENGINE'S OWN FRAME, which the composite samples as its bottom layer
-       and its stale-mirror guard compares against. The GL lane reads it as
-       `f->surface_tex`; a Vulkan lane cannot, so the bytes are copied here
-       from the fork's primary under `g_ddraw.cs` -- the same lock and the same
+       and its stale-mirror guard compares against, copied here from the
+       fork's primary under `g_ddraw.cs` -- the same lock and the same
        argument tagpu_pal.c makes for the palette (the game thread NULLs the
        primary inside that section). NULL when there is none this frame, which
        is what turns the guard off. 8bpp, `engPitch` bytes a row. */

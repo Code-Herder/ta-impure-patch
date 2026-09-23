@@ -9,8 +9,8 @@ happened to `naval-push` and `shore-raid` on Anteer Strait. Guessing at
 coordinates does not work and `scenario validate` cannot help: it checks the
 schema, not the shoreline.
 
-So ask the map. This holds the camera at a grid of positions, takes a `glshot` at
-each (the fork's own FBO, so it is correct whether or not the window is visible),
+So ask the map. This holds the camera at a grid of positions, grabs the game's
+client window at each (so the window has to be on screen and unobscured),
 classifies every pixel as water or land, and writes:
 
   <outdir>/survey-<map>.png    the stitched terrain, land white / water black
@@ -23,8 +23,11 @@ during a battle maps the battle, not the shore.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +53,17 @@ def instance(name: str) -> dict:
     raise SystemExit(f"no instance {name!r}")
 
 
+def grab(inst: dict, path: Path) -> bool:
+    """The presented frame: the client window, grabbed by id on its display."""
+    win = inst.get("window")
+    if not win:
+        return False
+    r = subprocess.run(["import", "-window", "0x%x" % win[0], str(path)],
+                       env={**os.environ, "DISPLAY": inst["display"]},
+                       capture_output=True, text=True)
+    return r.returncode == 0 and path.exists()
+
+
 def is_water(a: np.ndarray) -> np.ndarray:
     """TA's sea is saturated blue; everything else here is not."""
     r, g, b = a[:, :, 0].astype(int), a[:, :, 1].astype(int), a[:, :, 2].astype(int)
@@ -73,7 +87,7 @@ def main() -> int:
     if not inst.get("running"):
         raise SystemExit(f"{args.instance} is not running — load the map first")
     want = tuple(inst["res"])
-    gamedir = Path(inst["gamedir"])
+    shot_dir = Path(tempfile.mkdtemp(prefix="survey-"))
     out = Path(args.outdir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -87,16 +101,17 @@ def main() -> int:
     for cy in range(args.y0, args.y1 + 1, args.step):
         for cx in range(args.x0, args.x1 + 1, args.step):
             tacli("eye", args.instance, str(cx), str(cy))
-            tacli("glshot", args.instance)
-            ppm = gamedir / "tagpu_gl.ppm"
-            if not ppm.exists():
-                print(f"  ({cx},{cy}) no glshot", file=sys.stderr)
+            time.sleep(0.5)   # let the moved camera reach a presented frame
+            png = shot_dir / "frame.png"
+            png.unlink(missing_ok=True)
+            if not grab(inst, png):
+                print(f"  ({cx},{cy}) no window grab", file=sys.stderr)
                 continue
-            a = np.asarray(Image.open(ppm).convert("RGB"))
+            a = np.asarray(Image.open(png).convert("RGB"))
             h, w = a.shape[:2]
             if (w, h) != want:
                 raise SystemExit(
-                    f"glshot came back {w}x{h}, not {want[0]}x{want[1]} — the game "
+                    f"the window grab came back {w}x{h}, not {want[0]}x{want[1]} — the game "
                     f"is in the 640x480 SHELL, not in a map. An empty scenario "
                     f"does that: with no units alive TA ends the game instantly, "
                     f"so survey with clear_existing false.")

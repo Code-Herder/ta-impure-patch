@@ -257,10 +257,3 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     s_nv = nv; s_fw = f->game_width; s_fh = f->game_height;
 }
 
-/* NOTHING CALLS THIS -- see tagpu_native.c's `*_glreset` banner for the whole
-   cascade and why it is left standing. */
-void tagpu_fps_glreset(void)
-{
-    s_fps = -1; s_frames = 0; s_t0 = 0;
-    s_nv = 0; s_abFrame = 0;
-}

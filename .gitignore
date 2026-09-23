@@ -12,8 +12,10 @@
 
 # the pinned glslang tools/spirv-gen.py compiles the shaders with
 # (tools/glslang-vendor.json is the manifest and IS tracked, and no BUILD needs
-# the compiler -- the generated headers are committed)
-/tools/glslang/
+# the compiler -- the generated headers are committed). No trailing slash: in a
+# worktree it is often a symlink to the main checkout's copy, and `dir/` matches
+# only a directory.
+/tools/glslang
 
 # Generated wiki output (rebuild with research/build_wiki.py)
 /research/site/
@@ -37,7 +39,6 @@
 *.o
 *.obj
 *.d
-/tagpu/tagpu.dll
 /tagpu/ddraw/ddraw.dll
 
 # Local Claude session state

@@ -283,6 +283,7 @@ that map's size.
 | `reclaim.off` | attach | **disables a crash fix**: `tagpu_reclaim` defers the engine's model-object and per-level template frees behind the render thread's quiescence. On by default with no arm file; this is the A/B back to the racing build. Read `reclaim: ARMED FreeObjectState@0x45AAA0 -> deferred …` at launch |
 | `packet.off` | attach | the frame packet exchange off: **no world pass draws at all**, no camera command is applied (`tagpu_eye.txt` and the wheel do nothing) and no text draws. The A/B lever, not a feature switch |
 | `packet.check`, `packet.stress`, `packet.poison` | attach | CRC-32 of every record verified per take; publish on every in-play draw with one-page slots that must grow (the protocol gate's mode); memset the slot handed back so a pointer cached past its frame reads `0xDD` |
+| `grow.stress` | attach | every render array that grows with the unit count moves every frame (freed and reallocated at the exact size; the unit pass rebuilds its slot buffers), so a pointer that outlives a move reads freed memory at stock unit counts. Logs `packet: tagpu_grow.stress - every unit-scaled render array moves every frame`. A measurement lever: an allocation per array per frame |
 | `lerp.on` | attach | smooth motion: history-based interpolation of a unit's piece pose between two published ticks (`research/notes/smooth-motion.md`) |
 | `posecrc.on` | attach | the gate oracle for it: a CRC of the pose fields, to prove the sim untouched |
 | `ghost.on` | live | the translucent building preview at the placement cursor and on queued sites; `alpha=<f>` (default 0.40). A play default; off the bench line because its posed draws perturb a measurement |
@@ -333,7 +334,7 @@ that map's size.
 These appear in older notes and commit messages. No file in the tree reads them; creating one
 changes nothing and logs nothing, which is the failure mode to recognise.
 
-`tagpu_glshot.trigger` (and `tacli glshot`, which fails loudly on purpose), `tagpu_gldbg.on`,
+`tagpu_glshot.trigger` (and `tacli glshot`, which no longer exists), `tagpu_gldbg.on`,
 `tagpu_writeback.on`, `tagpu_posedraw.on`, `tagpu_posefix.off`, `tagpu_posewatch.on`,
 `tagpu_poserecon.on`, `tagpu_purevk.on`, `tagpu_selgeom.on`, `tagpu_shade.off`,
 `tagpu_rglsl.step`, `tagpu_shadowdump.on`, `tagpu_shadow.ab`, `tagpu_unit.on`, `tagpu_unit.ab`,

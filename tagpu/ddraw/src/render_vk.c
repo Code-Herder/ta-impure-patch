@@ -3,7 +3,7 @@
  * `g_ddraw.hwnd` through `tagpu_vk_frame`. See
  * research/notes/vulkan-only-plan.md landing 4.
  *
- * WHY THE PRESENT WORKS ON A WINDOW ROUTE A CALLED DEAD. `tools/vkcoexist.c`
+ * WHY THE PRESENT WORKS ON A WINDOW ROUTE A CALLED DEAD. The coexistence probe's
  * route A -- a GL context current on an HWND, then Vulkan on the same one --
  * reads "API ok, pixels dead" on wine 9.0, and that verdict is about GL: its
  * VULKAN half presented 10 of 10 frames. This backend creates no GL context, so
@@ -142,11 +142,6 @@ DWORD WINAPI vk_render_main(void)
             f.hdc           = g_ddraw.render.hdc;
             f.frame_counter = fc;
             f.bpp           = g_ddraw.bpp;
-            /* THERE IS NO GL TEXTURE, so this is 0 and every consumer of it
-               must stand down rather than sample name 0. 0 is also what a
-               non-8bpp frame carries, so the value is in-contract rather than
-               a sentinel of ours. */
-            f.surface_tex   = 0;
             /* The frame packet, taken ONCE here and handed to every pass
                through the struct; both pointers die at `frame_end`, which is
                unconditional for the reason the reclaim bracket's is. */

@@ -10,13 +10,6 @@ subtracts every recorded op and the world viewport, and logs what nobody explain
 At each screen the walk lets the census run, pulls its lines, asks for the PGM of
 the last flip and the engine's surface shot, and writes a report.
 
-G15b/G15c, the LAYER (`--layer`). The DLL is armed with `tagpu_gui.on=strict log`: the
-GL UI layer draws with the fallback off, and at each stop the walk takes the engine's
-surface and our GL frame and counts differing pixels — outside the world viewport, and
-inside it wherever the engine's surface is not the terrain key (a dialog, the chat, the
-clock, the space popup) — plus magenta holes and the layer's heartbeat (fps, resets,
-overflows, atlas). Needs numpy and PIL: run it with the venv's python.
-
 The in-game inventory (G15c) is side-aware: `--side core` walks CORMAIN2/CORCOM1/2 on
 the CORE parity fixture. After the screens it exercises the HUD extras — the `+clock`
 string, the `+bps` lines, the hold-space unit popup — then the dialogs over the
@@ -26,27 +19,21 @@ bent), and finally a moving commander for the minimap's dots and box.
 G15e, the RESTORED TWIN (`--restore`). The DLL is armed with `tagpu_gui.on=log`,
 `tagpu_classicpp.on` and `tagpu_restoredump.on`: the layer draws in Classic++ colour and
 the walk's only job is to make every screen paint, so the UI atlas fills with the art the
-inventory draws. Nothing is shot and nothing is diffed here — the strict walk is not a
-valid regression while Classic++ is on, because it compares our frame against the engine's
-INDEXED surface. At the end the dumped twin (`tagpu_restore_gui.{r8,rgba,idx}`) is copied
+inventory draws. Nothing is shot and nothing is diffed here. At the end the dumped twin (`tagpu_restore_gui.{r8,rgba,idx}`) is copied
 into --out, where `tools/tascene uidiff` holds it to the same restorer run offline on the
 same cells (gui-renderer.md 3.11's Q2 diff).
 
 The cycles (G15d, `--cycles N`): after the in-game stops, N times game -> shell -> game
 in ONE process (no relaunch): the exit dialogs over the world, the return to MAINMENU
-through the 640x480 context switch, the whole shell inventory again, the loading
-screen held under strict while the map loads (a burst of bracketed shots until the
-world is alive), the fixture re-applied, the side's screens, and `+gamma` at 1.5 and
-back — the one lever that makes the engine present a palette other than main+0x143A7.
-Every row carries the layer's health counters (resets, overflows, stalls, lost,
-skipped, palette uploads and the presented-vs-engine palette mismatch), so "twin and
-atlas counts flat across three cycles" is read straight off the report.
+through the switch to 640x480, the whole shell inventory again, the loading screen
+held while the map loads (until the world is alive), the fixture re-applied, the side's
+screens, and `+gamma` at 1.5 and back — the one lever that makes the engine present a
+palette other than main+0x143A7.
 
     tools/uiwalk.py --inst uiw --res 1024x768 --out /tmp/uiwalk
     tools/uiwalk.py --inst uiw --shell-only
-    ../.venv-undither/bin/python tools/uiwalk.py --inst uiw --res 1920x1080 --layer --out /tmp/layer
-    ../.venv-undither/bin/python tools/uiwalk.py --inst uiwc --side core --layer --game-only --out /tmp/layer-core
-    ../.venv-undither/bin/python tools/uiwalk.py --inst uiwd --layer --game-only --screens-only --cycles 3 --out /tmp/cycles
+    tools/uiwalk.py --inst uiwc --side core --game-only --out /tmp/uiwalk-core
+    tools/uiwalk.py --inst uiwd --game-only --screens-only --cycles 3 --out /tmp/cycles
     tools/uiwalk.py --inst uiwr --restore --out /tmp/uirestore     # then: tascene uidiff /tmp/uirestore/tagpu_restore_gui
 
 The instance is created if needed and STOPPED at the end (kept for inspection with
@@ -68,8 +55,7 @@ TREE = HERE.parent
 
 # the default arm set of the ta-drive skill, less gui.on (the walk arms its own mode)
 ARM_SET = ["native.on=all wrecks", "terr.on", "feat.on", "fx.on", "sfx.on", "mark.on=log", "order.on",
-           "zoom.on", "vpwide.on"]          # mark.on=log: its periodic line carries the live zoom
-KEY = 254          # terrown's viewport fill index (tagpu_terr.c, `key=N` moves it)
+           "zoom.on", "vpwide.on"]
 # Aim every gadget click in CLIENT-AREA pixels and let the engine work back
 # to a logical pixel by its own arithmetic. A walk that mixes the two proves
 # nothing, so it is a whole-run switch (`--device`).
@@ -120,8 +106,8 @@ def game_walk(side):
         ("F4-close", [["keys", "f4"]]),
         # --- the HUD extras drawn over the viewport ---
         # 0x46A1D0: h:m:s from the sim tick at the viewport's bottom-left. The tick runs on
-        # between the surface shot and the GL shot, so the stop is taken with the in-game
-        # menu open: ARMOPT pauses the game and the clock with it.
+        # between shots, so the stop is taken with the in-game menu open: ARMOPT pauses the
+        # game and the clock with it.
         ("clock", ["park", *chat("+clock"), ["keys", "tab"]]),
         ("clock-off", [["ui", "click", "PREV", "CANCEL", "PREVMENU", "OK"], *chat("+clock")]),
         ("bps", chat("+bps")),                            # 0x468380: the Receive/Send K/s lines
@@ -152,7 +138,7 @@ def game_walk(side):
 def cycle_walk(side, k):
     """One game -> shell -> game cycle, every label suffixed `#k`. Three lists:
     the exit dialogs (in game), the shell after the return (the switch to 640x480 and
-    a new GL context happens at CHOICE1), and the game after the load — the loading
+    the render thread's restart happen at CHOICE1), and the game after the load — the loading
     screen between the two is its own stop (Walk.stop_loading). `EXITMENU` and
     `YESORNO` sit over the middle of the world, so the cycle runs at zoom 1."""
     P = side[:3].upper()
@@ -163,8 +149,8 @@ def cycle_walk(side, k):
         (f"YESORNO{sfx}", [["ui", "click", "MAINMENU"]]),
     ]
     # CHOICE1 = "yes, to the main menu": the engine frees the game, restores 640x480
-    # (0x491ADC) and pushes MAINMENU; cnc-ddraw restarts its render thread on a new GL
-    # context on the way, which is the switch the counters are read across
+    # (0x491ADC) and pushes MAINMENU; cnc-ddraw restarts its render thread (a new
+    # swapchain) on the way, which is the switch the counters are read across
     shell_stops = [(f"MAINMENU{sfx}", [["ui", "click", "CHOICE1"],
                                        ["ui", "wait", "--gui", "MAINMENU", "--timeout", "30"], "wait:3.0"])]
     shell_stops += [(f"{lbl}{sfx}", acts) for lbl, acts in SHELL_WALK[1:]]
@@ -208,13 +194,12 @@ def instance_dir(inst):
 
 
 class Walk:
-    def __init__(self, inst, out, res, parity=False, scenario=None, restore=False):
+    def __init__(self, inst, out, res, scenario=None, restore=False):
         self.inst, self.out, self.res = inst, Path(out), res
         self.out.mkdir(parents=True, exist_ok=True)
         self.rows = []
         self.gamedir = None
         self.log_seen = 0
-        self.parity = parity
         self.restore = restore
         self.scenario = scenario
         self.W, self.H = [int(v) for v in res.lower().split("x")]
@@ -393,13 +378,6 @@ class Walk:
             hb["paldiff"] = int(m.group(1)); hb["paldiffat"] = int(m.group(2))
         return hb
 
-    def zoom_level(self):
-        """The DLL's live zoom: the file lever logs nothing, but the mark pass's periodic
-        line (`mark.on=log`) carries `zoom=`; the newest one is at most a few frames old."""
-        rc, out = tacli("log", self.inst, "-g", r"^mark: .*zoom=")
-        m = re.findall(r"zoom=([0-9.]+)", out) if out.strip() else []
-        return float(m[-1]) if m else None
-
     def stop_restore(self, label, actions, in_game=False):
         """`--restore`: drive the screen and let the UI atlas fill. No census,
         no shots — the measurement is the twin the DLL dumps at the end, held to the
@@ -493,145 +471,58 @@ class Walk:
         rc, out = tacli("shot", self.inst, "-o", str(surf))
         if rc != 0 or not surf.exists():
             print(f"  [{label}] shot failed rc={rc}: {out.strip().splitlines()[-1] if out.strip() else ''}", file=sys.stderr)
-        parity = {}
-        if self.parity:
-            # the GL frame right after the surface: the two are a few frames apart, so an
-            # animated screen (MAINMENU's sparkles, a walking unit's minimap dot) differs
-            # by the animation's motion
-            rc, out = tacli("glshot", self.inst, "-o", str(self.out / f"{label}-gl.ppm"))
-            cur = cursor_rect(self.inst)
-            parity = frame_parity(self.out / f"{label}-gl.ppm", surf, in_game, self.res, cur)
-            if in_game:
-                # bracket the GL shot: a second surface shot right after it. The engine's own
-                # frame moves between shots (a chat line expiring, a minimap dot, the clock),
-                # and the GL frame is whichever state the layer had at its present, so the
-                # diff is taken against the closer surface and the engine's own change is its
-                # own column — a layer error differs from BOTH surfaces.
-                surf2 = self.out / f"{label}-surface2.png"
-                tacli("shot", self.inst, "-o", str(surf2))
-                if surf2.exists():
-                    p2 = frame_parity(self.out / f"{label}-gl.ppm", surf2, in_game, self.res, cur)
-                    parity["selfdiff"] = self_diff(surf, surf2, self.res, cur)
-                    if p2.get("differing", -1) >= 0 and (p2["differing"] + p2.get("vpdiff", 0)) < \
-                            (parity["differing"] + parity.get("vpdiff", 0)):
-                        p2["against"] = "after"
-                        parity = {**parity, **p2}
-        # The hit check goes AFTER the parity bracket, never inside or before
-        # it: it costs a snapshot round-trip, and anything between the census
-        # read and the surface/GL/surface triple moves where those land on the
-        # game's own timeline. It reads no state the shots consume.
+        # The hit check goes AFTER the surface shot, never before it: it costs
+        # a snapshot round-trip, and anything between the census read and the
+        # shot moves where the shot lands on the game's own timeline. It reads
+        # no state the shot consumes.
         hit = hit_check(self.inst)
         summary = parse_census(lines)
-        hb = self.heartbeat() if self.parity else {}
-        self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary, **parity,
-                          "hit": hit,
-                          "heartbeat": hb, "zoom": self.zoom_level() if (self.parity and in_game) else None})
+        self.rows.append({"label": label, "screen": screen, "in_game": in_game, "lines": lines, **summary,
+                          "hit": hit})
         kstr = f"{hit['k']:.4f}" if hit.get("k") else "-"
-        # the hit half prints on EVERY walk — it costs a snapshot whether or not
-        # `--layer` is on, and a census-only run that pays for it must show it
+        # the hit half prints on every stop: it costs a snapshot, so it shows what it paid for
         hitstr = (f" | hit: k={kstr} gadgets={hit['n']} MISS={hit['miss']}"
                   f"{' [' + hit['names'] + ']' if hit['miss'] else ''}"
                   f"{' degenerate=' + str(hit['degen']) if hit['degen'] else ''}"
                   f" drift={hit['drift']}px")
-        extra = (f" | parity: differing={parity.get('differing', '-')} vpdiff={parity.get('vpdiff', '-')}"
-                 f"/{parity.get('vpui', '-')} holes={parity.get('holes', '-')}"
-                 f" {parity.get('bbox', '')}{parity.get('vpbbox', '')}"
-                 f"{' self=' + str(parity['selfdiff']) if 'selfdiff' in parity else ''}"
-                 f" | fps={hb.get('fps', '-')} resets={hb.get('resets', '-')}"
-                 f" overflows={hb.get('overflows', '-')} stalls={hb.get('stalls', '-')} lost={hb.get('lost', '-')}"
-                 f" twins={hb.get('twins', '-')} atlas={hb.get('atlas', '-')} pal={hb.get('palchg', '-')}/{hb.get('paldiff', '-')}" if parity else "")
-        vkstr = ""
         print(f"  {label:14s} {screen:40s} flips={summary['flips']:4d} changed={summary['changed']:7d} "
-              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{hitstr}{extra}{vkstr}", file=sys.stderr)
+              f"unexplained={summary['unexplained']:7d} worst={summary['worst']}{hitstr}", file=sys.stderr)
 
     def stop_loading(self, label, timeout=150.0):
-        """The loading screen, held under strict. It is presented exactly ONCE: the game
-        entry handler paints it (`0x4288D0("loadgame2bg")`) and flips, and nothing presents
-        again until the map is loaded and the mode switches — a shot asked for during the
-        load blocks until then (MEASURED 2026-09-07: one sample at t = 17 s, the game's first
-        frame). So both capture triggers are armed BEFORE the click and served by that one
-        present; the row is that frame, engine surface against GL frame at 640x480, with a
-        64x64 box around the Start button's click left to the engine's cursor (no peek can
-        run: the render thread is the one that answers it). Then the world is waited for."""
-        before = time.time()
+        """The loading screen, held until the world is alive. It is presented exactly
+        ONCE: the game entry handler paints it (`0x4288D0("loadgame2bg")`) and flips, and
+        nothing presents again until the map is loaded and the mode switches."""
         start = self.log_size()
-        gl_path = self.gamedir / "tagpu_gl.ppm"
-        shots = self.gamedir / "Screenshots"
-        if self.parity:
-            (self.gamedir / "tagpu_glshot.trigger").write_text("")
-            (self.gamedir / "tagpu_shot.trigger").write_text("")
         rc, out = tacli("ui", self.inst, "click", "Start")
-        m = re.search(r"clicked Start at (\d+),(\d+)", out)
-        click = (int(m.group(1)), int(m.group(2))) if m else None
         if rc != 0:
             print(f"  [{label}] Start -> rc={rc}: {out.strip().splitlines()[-1] if out.strip() else ''}", file=sys.stderr)
         t0 = time.time()
-        gl = surf = None
         alive = False
         switched = None                  # log offset of the game's mode switch
         while time.time() - t0 < timeout:
-            if self.parity and gl is None and gl_path.exists() and gl_path.stat().st_mtime > before:
-                gl = self.out / f"{label}-gl.ppm"
-                shutil.copy2(gl_path, gl)
-            if self.parity and surf is None and shots.exists():
-                cands = [p for p in shots.glob("*.png") if p.stat().st_mtime > before]
-                if cands:
-                    surf = self.out / f"{label}-surface.png"
-                    shutil.copy2(max(cands, key=lambda p: p.stat().st_mtime), surf)
             # "alive" is read only after the game's mode switch: the overlay's `units:` line
             # keeps reporting the dead game's array from the shell (MEASURED 2026-09-07:
-            # `alive=4` two seconds after Start), so the switch — a GL context change — is
-            # the first sign the map has loaded, and the roster after it the second
-            if switched is None and self.log_since(start, r"GL CONTEXT CHANGED"):
+            # `alive=4` two seconds after Start), so the switch -- the Vulkan lane coming
+            # up again at the game's resolution -- is the first sign the map has loaded,
+            # and the roster after it the second
+            if switched is None and self.log_since(start, r"^vk: up in \d+ ms"):
                 switched = self.log_size() - 4096
             if switched is not None and self.log_since(max(switched, 0), r"units: alive=[1-9]"):
                 alive = True
                 break
             time.sleep(0.5)
-        parity = {}
-        if self.parity:
-            if gl is not None and surf is not None:
-                cur = (click[0] - 32, click[1] - 32, 64, 64) if click else None
-                parity = frame_parity(gl, surf, False, self.res, cur)
-                parity["cursor_box"] = cur
-            else:
-                parity = {"differing": -1, "holes": -1,
-                          "bbox": f"no capture (gl={'yes' if gl else 'no'} surface={'yes' if surf else 'no'})"}
-            # the triggers may still be armed if the frame never came: disarm them
-            (self.gamedir / "tagpu_glshot.trigger").unlink(missing_ok=True)
-            (self.gamedir / "tagpu_shot.trigger").unlink(missing_ok=True)
         lines = self.census_lines()
         summary = parse_census(lines)
-        hb = self.heartbeat() if self.parity else {}
-        row = {"label": label, "screen": "loading", "in_game": False, "lines": lines, **summary, **parity,
-               "heartbeat": hb, "zoom": None, "alive": alive, "load_s": round(time.time() - t0, 1), "samples": 1 if parity.get("differing", -1) >= 0 else 0}
+        row = {"label": label, "screen": "loading", "in_game": False, "lines": lines, **summary,
+               "alive": alive, "load_s": round(time.time() - t0, 1)}
         self.rows.append(row)
-        print(f"  {label:14s} {'loading (one presented frame)':40s} differing={parity.get('differing', '-')} "
-              f"holes={parity.get('holes', '-')} {parity.get('bbox', '')} alive={alive} in {row['load_s']}s"
-              f" | resets={hb.get('resets', '-')} overflows={hb.get('overflows', '-')} stalls={hb.get('stalls', '-')} "
-              f"lost={hb.get('lost', '-')} atlas={hb.get('atlas', '-')}", file=sys.stderr)
+        print(f"  {label:14s} {'loading (one presented frame)':40s} alive={alive} in {row['load_s']}s",
+              file=sys.stderr)
 
     def report(self):
         p = self.out / "report.md"
         with p.open("w") as f:
             f.write(f"# uiwalk — {self.inst} at {self.res}\n\n")
-            if self.parity:
-                f.write("| stop | screen | game | zoom | k | gadgets | hit misses | drift px | differing px outside the viewport | inside it, engine non-key px: differing / total | strict holes | box | engine self-diff | fps | resets | overflows | stalls | lost | skipped | twins | atlas | palette uploads / presented-vs-engine entries |\n"
-                        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
-                for r in self.rows:
-                    hb = r.get("heartbeat", {})
-                    extra = f" (the one presented frame; loaded in {r.get('load_s', '?')} s, alive={r.get('alive')})" if "samples" in r else ""
-                    h = r.get("hit", {})
-                    hk = f"{h['k']:.4f}" if h.get("k") else "-"
-                    f.write(f"| {r['label']} | {r['screen']}{extra} | {'y' if r['in_game'] else ''} | {r.get('zoom') or ''} | "
-                            f"{hk} | {h.get('n', '-')} | "
-                            f"{h.get('miss', '-')}{' ' + h['names'] if h.get('names') else ''} | {h.get('drift', '-')} | "
-                            f"{r.get('differing', '-')} | {r.get('vpdiff', '-')} / {r.get('vpui', '-')} | "
-                            f"{r.get('holes', '-')} | {r.get('bbox', '')} {r.get('vpbbox', '')} | {r.get('selfdiff', '')} | "
-                            f"{hb.get('fps', '-')} | {hb.get('resets', '-')} | {hb.get('overflows', '-')} | {hb.get('stalls', '-')} | "
-                            f"{hb.get('lost', '-')} | {hb.get('skipped', '-')} | {hb.get('twins', '-')} | {hb.get('atlas', '-')} | "
-                            f"{hb.get('palchg', '-')} / {hb.get('paldiff', '-')}{'@' + str(hb['paldiffat']) if hb.get('paldiff') else ''} |\n")
-                f.write("\n")
             f.write("| stop | screen | game | censuses | changed px | unexplained px | worst census box | ops in the window |\n|---|---|---|---|---|---|---|---|\n")
             for r in self.rows:
                 f.write(f"| {r['label']} | {r['screen']} | {'y' if r['in_game'] else ''} | {r['flips']} | {r['changed']} | "
@@ -689,121 +580,6 @@ def hit_check(inst):
             "drift": drift, "names": " ".join(miss[:6])}
 
 
-def peek_values(out):
-    """`tacli peek` prints one line per expression: `<expr>  <address>  <decimal> (<hex>)`."""
-    return [int(m.group(1)) for m in re.finditer(r"\s(\d+) \(0x[0-9A-Fa-f]+\)\s*$", out, re.M)]
-
-
-def cursor_rect(inst):
-    """The engine's cursor rect from the mouse object (its last drawn position and the
-    sprite record's width and height): our layer leaves it to the engine, and the flip
-    draws it into the primary the surface shot reads. Padded by 8 px: the sprite is
-    animated, so the record (and its size) can change frame between the two shots."""
-    try:
-        x, y, rec = peek_values(tacli("peek", inst, "*0x51FBD0+0x1B6:4", "*0x51FBD0+0x1BA:4",
-                                      "*0x51FBD0+0x1B2:4")[1])
-        w, h = peek_values(tacli("peek", inst, f"0x{rec:08X}:2", f"0x{rec + 2:08X}:2")[1])
-        if not (0 < w < 128 and 0 < h < 128):
-            return None
-        return (x - 8, y - 8, w + 16, h + 16)
-    except Exception:
-        return None
-
-
-def load_surface(surf_path):
-    """The engine's surface shot as (RGB, palette index or None). `tacli shot` writes
-    an 8-bit palette PNG, so the raw indices are there to read."""
-    import numpy as np
-    from PIL import Image
-    im = Image.open(surf_path)
-    idx = np.asarray(im).copy() if im.mode == "P" else None
-    return np.asarray(im.convert("RGB")).astype(int), idx
-
-
-def viewport(res):
-    W, H = [int(v) for v in res.lower().split("x")]
-    return 128, 32, W, H - 32           # x0, y0, x1, y1 (exclusive): the true viewport
-
-
-def frame_parity(gl_path, surf_path, in_game, res, cursor=None):
-    """Our presented frame against the engine's surface: differing pixels outside the
-    world viewport, differing pixels inside it wherever the engine's surface is not the
-    terrain key (the pixels the composite shows from the engine: a dialog, chat, the
-    clock), and strict holes (magenta). The cursor rect is left to the engine."""
-    try:
-        import numpy as np
-        from PIL import Image
-        gl = np.asarray(Image.open(gl_path).convert("RGB")).astype(int)
-        su, idx = load_surface(surf_path)
-        if gl.shape != su.shape:
-            # the fork did not resize its window to the surface (MEASURED 2026-09-07: from the
-            # second return to the shell at 1920x1080 the window stays game-sized and the
-            # 640x480 shell is scaled into it) — the twin goes through the same scale as the
-            # engine's frame, but a pixel compare needs 1:1, so the stop is not measurable
-            return {"differing": -1, "holes": -1,
-                    "bbox": f"not 1:1 — GL frame {gl.shape[1]}x{gl.shape[0]} vs surface {su.shape[1]}x{su.shape[0]} (window not resized)"}
-        d = np.abs(gl - su).max(axis=2)
-        mag = (gl[..., 0] > 200) & (gl[..., 1] < 60) & (gl[..., 2] > 200)
-        outside = np.ones(d.shape, bool)
-        inside = np.zeros(d.shape, bool)
-        if in_game:
-            x0, y0, x1, y1 = viewport(res)
-            outside[y0:y1, x0:x1] = False
-            if idx is not None:
-                nonkey = idx != KEY
-            else:                          # an RGB shot: the key is the viewport's dominant colour
-                vp = su[y0:y1, x0:x1].reshape(-1, 3)
-                cols, counts = np.unique(vp, axis=0, return_counts=True)
-                key = cols[counts.argmax()]
-                nonkey = (su != key).any(axis=2)
-            inside[y0:y1, x0:x1] = nonkey[y0:y1, x0:x1]
-        if cursor:
-            cx, cy, cw, ch = cursor
-            outside[max(cy, 0):cy + ch, max(cx, 0):cx + cw] = False
-            inside[max(cy, 0):cy + ch, max(cx, 0):cx + cw] = False
-        holes = int(mag.sum())
-        n = int(((d > 0) & outside).sum())
-        out = {"differing": n, "holes": holes, "bbox": ""}
-        if in_game:
-            out["vpui"] = int(inside.sum())
-            out["vpdiff"] = int(((d > 0) & inside).sum())
-            out["vpbbox"] = ""
-        diff = (d > 0) & (outside | inside)
-        if diff.any():
-            ys, xs = np.nonzero((d > 0) & outside)
-            if len(xs):
-                out["bbox"] = f"({xs.min()},{ys.min()})-({xs.max()},{ys.max()})"
-            if in_game:
-                ys, xs = np.nonzero((d > 0) & inside)
-                if len(xs):
-                    out["vpbbox"] = f" vp({xs.min()},{ys.min()})-({xs.max()},{ys.max()})"
-            Image.fromarray(diff.astype(np.uint8) * 255).save(str(gl_path).replace("-gl.ppm", "-diff.png"))
-        return out
-    except Exception as e:
-        return {"differing": -1, "holes": -1, "bbox": f"diff failed: {e}"}
-
-
-def self_diff(p1, p2, res, cursor=None):
-    """Differing pixels between two engine surface shots: outside the viewport, and inside
-    it where either is not the key (the UI pixels the engine draws over the world); the
-    cursor rect excluded like everywhere else."""
-    try:
-        import numpy as np
-        a, ia = load_surface(p1)
-        b, ib = load_surface(p2)
-        d = (np.abs(a - b).max(axis=2) > 0)
-        x0, y0, x1, y1 = viewport(res)
-        if ia is not None and ib is not None:
-            keep = (ia != KEY) | (ib != KEY)
-            d[y0:y1, x0:x1] &= keep[y0:y1, x0:x1]
-        if cursor:
-            cx, cy, cw, ch = cursor
-            d[max(cy, 0):cy + ch, max(cx, 0):cx + cw] = False
-        return int(d.sum())
-    except Exception as e:
-        return f"failed: {e}"
-
-
 def parse_census(lines):
     flips = changed = unexpl = 0
     worst = "-"
@@ -845,25 +621,14 @@ def main():
                     help="stop after the in-game screens (the G15b inventory), skipping the G15c HUD, zoom and move stops")
     ap.add_argument("--keep", action="store_true", help="leave the instance running")
     ap.add_argument("--no-passes", action="store_true", help="do not arm the world passes (engine draws the world)")
-    ap.add_argument("--layer", action="store_true",
-                    help="G15b/G15c: draw the GL UI layer (strict) instead of running the census, and diff our frame "
-                         "against the engine's surface at every stop")
     ap.add_argument("--restore", action="store_true",
                     help="G15e: arm the layer with Classic++ and tagpu_restoredump.on, walk the inventory "
                          "so the UI atlas fills with what every screen draws, and copy the dumped twin out "
-                         "for `tascene uidiff`. No census, no strict, no parity shots — the strict walk is "
-                         "not a valid regression while Classic++ is on (it compares against the engine's "
-                         "INDEXED surface), which is why this mode exists")
+                         "for `tascene uidiff`. No census and no shots")
     ap.add_argument("--device", action="store_true",
                     help="G17b: aim every gadget click in CLIENT-AREA pixels, so the walk exercises "
                          "the pointer unscale instead of handing the engine logical coordinates. "
                          "The hit check below runs either way")
-    ap.add_argument("--vk", action="store_true",
-                    help="WITHDRAWN by the vulkan-only plan's landing 4d-1 and now refused. It armed the "
-                         "Vulkan lane beside the GL one (route D, its own window) and diffed the two at every "
-                         "stop through `tagpu_gui.ab` + tools/vk-ab.py -- the walk the G19f gate was met with. "
-                         "Route D is deleted, so that configuration brings up no lane and no _vk.ppm is ever "
-                         "written")
     ap.add_argument("--cycles", type=int, default=0,
                     help="G15d: after the in-game stops, this many game -> shell -> game cycles in one process "
                          "(the exit dialogs, the shell inventory again, the loading screen held, the fixture re-applied)")
@@ -871,41 +636,13 @@ def main():
     if a.device:
         globals()["CLICK_DEVICE"] = True
     scenario = a.scenario or ("tascene-parity-core" if a.side == "core" else "tascene-parity")
-    if a.restore and a.layer:
-        sys.exit("uiwalk: --restore and --layer are different measurements: pick one")
-    if a.vk:
-        # REFUSED RATHER THAN RUN EMPTY. This flag arms `vk.on` WITHOUT
-        # `renderer=vulkan`, which brings up no Vulkan lane at all, so
-        # `tagpu_gui_vk.ppm` is never written and a walk would burn the PPM
-        # settle deadline at every stop doing nothing. Say so instead.
-        sys.exit(
-            "uiwalk: --vk is withdrawn. It diffed the Vulkan lane against the GL lane in\n"
-            "  one process (route D), and the vulkan-only plan's landing 4d-1 deleted\n"
-            "  route D -- `vk.on` without `renderer=vulkan` now brings up no lane, so\n"
-            "  there is no second half to capture and no absolute two-lane comparison is\n"
-            "  expressible any more. The banked two-lane figures are in\n"
-            "  research/notes/gpu-status.md, up to section 2.54.\n"
-            "  What replaced it: launch with `renderer=vulkan`, arm one pass's `.ab`, and\n"
-            "  diff the `_vk.ppm` against one taken from an earlier BUILD (tools/vk-ab.py\n"
-            "  takes two file paths). Run this walk without --vk for the UI stops." )
-    if a.layer:
-        # THE LANE THIS MODE COMPARES AGAINST DOES NOT EXIST. `--layer` diffs
-        # the GL framebuffer (`tacli glshot`) against the engine's own surface,
-        # there is no GL framebuffer in the process, and the verb is retired.
-        # Refusing is the point: run anyway, the walk would wait out its 150 s
-        # timeout per screen and write `{"differing": -1, "bbox": "no capture"}`
-        # for every row, which reads like a measurement.
-        sys.exit("uiwalk: --layer compared our GL frame against the engine's surface, and the\n"
-                 "OpenGL lane was deleted in the vulkan-only plan's landing 11-2. There is no\n"
-                 "second frame to diff. Run without --layer for the census walk, which is\n"
-                 "unaffected; a Vulkan-vs-engine parity mode would be new work.")
-    w = Walk(a.inst, a.out, a.res, parity=a.layer, scenario=scenario, restore=a.restore)
+    w = Walk(a.inst, a.out, a.res, scenario=scenario, restore=a.restore)
 
     tacli("stop", a.inst)
     if a.restore:
         tacli("arm", a.inst, "gui.on=log", "classicpp.on", "restoredump.on", check=True)
     else:
-        tacli("arm", a.inst, "gui.on=strict log" if a.layer else "gui.on=census log pgm trace", check=True)
+        tacli("arm", a.inst, "gui.on=census log pgm trace", check=True)
     if not a.no_passes:
         tacli("arm", a.inst, *ARM_SET, check=True)
     if not a.game_only:

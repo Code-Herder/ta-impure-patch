@@ -17,7 +17,7 @@ The gates, in order:
 
 1. Commit any local changes in the current worktree.
 2. Merge `main` into this branch (fast-forward, or a merge commit if diverged).
-3. Build gate — both DLLs compile on the post-merge tree.
+3. Build gate — the DLL compiles on the post-merge tree.
 4. Documentation gate — the pass CLAUDE.md requires, checked against the diff.
 5. Review gate — `medium` (or `high`) dedicated review, checked against a record of what was
    reviewed; findings verified and fixed as new commits; build re-run if anything changed.
@@ -48,7 +48,7 @@ next thing you do would be "…and now correct what I just landed", it was not f
 
 Before Step 6, all of these hold:
 
-1. **It does what it claims**, verified by running it, not by reading it. Both DLLs compiling is
+1. **It does what it claims**, verified by running it, not by reading it. The DLL compiling is
    Step 3's gate, not evidence the change works.
 2. **Its claims are checked.** This bites documentation hardest: a build gate cannot catch a
    wrong statement. Do not land a page and then discover a claim in it was too rosy — check the
@@ -130,7 +130,7 @@ git show :3:<path>   # theirs — main
 **STOP and report** — do not guess — when a wrong resolution would be invisible:
 
 - **Both sides changed the same logic.** Not the same file, the same *behaviour*.
-- **An absolute address, a byte patch, or an offset** (`tagpu/src/**`, `binary-patches.md`, any
+- **An absolute address, a byte patch, or an offset** (`tagpu/ddraw/src/**`, `binary-patches.md`, any
   `0x…` constant). A silently wrong address is this project's worst failure mode and no gate
   below catches it.
 - **Synchronisation**: a lock, a handshake, a published counter, a fence, or the lifetime of
@@ -158,7 +158,7 @@ and what you kept:
 ```
 Merge main into <branch>
 
-Resolved tagpu/src/tagpu_native.c: main added the fog bound, this branch added
+Resolved tagpu/ddraw/src/tagpu_native.c: main added the fog bound, this branch added
 the pass counter; kept both, counter after the bound.
 Resolved research/notes/roadmap.md: both appended a gate row; kept both, main's first.
 ```
@@ -172,15 +172,12 @@ one that bites.
 ## Step 3 — Build gate
 
 Always run the gate on the post-commit, post-merge tree so a broken tree never reaches `main`.
-There is no test suite; the gate is that both DLLs compile cleanly.
+There is no test suite; the gate is that the DLL compiles cleanly.
 
 - **Skip entirely only if nothing changed**: if Step 1 committed nothing AND Step 2 merged nothing AND `git log main..HEAD` is empty, there is nothing new to gate.
-- **Per-target skip (optimization, not a shortcut):** a target may be skipped only when the landing changes **zero** files it covers — check `git diff --name-only main...HEAD` against `tagpu/ddraw/**` (ddraw.dll) and `tagpu/src/**` + `tagpu/ddraw/inc/tagpu.h` (tagpu.dll). Call out any skip in the summary.
+- **Skip when the landing changes no file under `tagpu/ddraw/**`** (`git diff --name-only main...HEAD`). Call out the skip in the summary.
 
-Run each build in the foreground, sequentially:
-
-- **ddraw.dll** — `make -C tagpu/ddraw`
-- **tagpu.dll** — `make -C tagpu`
+Run the build in the foreground: **ddraw.dll** — `make -C tagpu/ddraw -j$(nproc)`.
 
 Treat new warnings from changed files as worth reporting even when the build succeeds.
 
@@ -192,7 +189,7 @@ Treat new warnings from changed files as worth reporting even when the build suc
 main in). Decide from it:
 
 - **Does the landing touch engine code?** `tagpu/ddraw/src/**`, `tagpu/ddraw/inc/**`,
-  `tagpu/src/**`, or `tools/tacli`. If not, the gate passes — say so and go to Step 5.
+  or `tools/tacli`. If not, the gate passes — say so and go to Step 5.
 - **Which engine addresses did it touch or read?** Every VA on an *added* line of the code half
   of the diff (context and removed lines are the previous landing's business):
   ```
@@ -330,7 +327,6 @@ stepper `0x41CA10`, the scroll poll `0x41CE90`, the dead clamp `0x41C450`.
 **Yes** when `git diff --name-only main...HEAD` touches:
 
 - `tagpu/ddraw/src/**` or `tagpu/ddraw/inc/**` (the fork and our modules), or
-- `tagpu/src/**` (tagpu.dll), or
 - `tools/tacli` (it drives every session; a bug here costs hours).
 
 **No** — say so in the summary and go to Step 6 — when the landing is only docs
@@ -459,7 +455,7 @@ After a successful run, report:
   conflicts, each path resolved with one line on what was kept, or each path that tripped a stop
   rule and which one.
 - Anything left deliberately unstaged in Step 1 (build artifacts, suspicious files) and why.
-- Build-gate result per target — ddraw.dll, tagpu.dll — passed, skipped (with the reason), or what failed.
+- Build-gate result — ddraw.dll passed, skipped (with the reason), or what failed.
 - **Each gate's verdict**: docs — already done / done now (what was added) / not needed;
   review — already recorded on `<sha>` / run now with `<model>` at `<effort>` (`n` findings, `k` acted
   on, `m` rejected and why) / skipped and why.

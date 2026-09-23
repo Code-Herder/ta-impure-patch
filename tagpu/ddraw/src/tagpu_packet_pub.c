@@ -315,6 +315,8 @@ static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, 
    differently would read every entry but the first at the wrong offset. The
    packet's copy of the piece bound has to be the model header's number too. */
 typedef char pk_maxpiece_agrees[(TAGPU_PK_MAXPIECE == TAGPU_PBMAXPIECE) ? 1 : -1];
+/* the units table holds every slot of the largest game this is built for */
+typedef char pk_units_design[(TAGPU_PK_MAX_UNITS >= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
 typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 100) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
@@ -2596,7 +2598,7 @@ void tagpu_packet_pub_init(void)
               cursorOk,
               cursorOk ? " (the shell's only publish point: the flip 0x4C63A0 cannot be observed a second time, tagpu_gui_hook's hijacks it)"
                        : s_countOnly ? " (count-only: nothing is published at all)"
-                                     : " — NOT installed: the shell's cursor stays the engine's, and the GL UI layer paints over it (tagpu_engine.h VA_CURSOR_DRAW)");
+                                     : " — NOT installed: the shell's cursor stays the engine's, and the UI layer paints over it (tagpu_engine.h VA_CURSOR_DRAW)");
     b[sizeof b - 1] = 0;
     plog(b);
 }

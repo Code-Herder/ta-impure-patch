@@ -30,9 +30,6 @@ static void glog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-/* THIS FILE NAMES NO GL ENTRY POINT AND MAKES NO GL CALL, on the narrow AND
-   the wide count (`tools/gl-sites.py`). */
-
 /* one scratch plane for every atlas: decoding happens only inside
    tagpu_gaf_atlas_get, on the render thread, and the bytes are consumed by
    the upload before the call returns */

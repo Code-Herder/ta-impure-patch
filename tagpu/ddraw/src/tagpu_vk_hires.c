@@ -660,7 +660,7 @@ void tagpu_vk_hires_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
         if (s_ualign == 0) s_ualign = 1;
         if (props.limits.maxUniformBufferRange < VS_SZ) {
             plog(d, "hires: maxUniformBufferRange is %u and the pose block needs "
-                    "%d - the replacement meshes' casters stay with GL",
+                    "%d - the replacement meshes' casters are not drawn",
                  (unsigned)props.limits.maxUniformBufferRange, VS_SZ);
             s_state = ST_REFUSED; s_downOwed = 1; return;
         }

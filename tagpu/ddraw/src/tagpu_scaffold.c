@@ -16,7 +16,7 @@
 
    Debug outputs:
      - colour overlay: scaffold pixels tinted far(blue)->near(red), 55% alpha,
-       drawn over the live frame (capture with tagpu_glshot.trigger);
+       drawn over the live frame (capture it with a window grab);
      - per-unit occlusion PREDICTION in tagpu.log ("scaffold: uNNN ... occl=P%"):
        fraction of the unit's composite rect covered by scaffold pixels nearer
        than the unit's row key. The engine frame must agree.
@@ -74,7 +74,6 @@ static void slog(const char* s)
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
 
-void tagpu_scaffold_glreset(void);
 static int    s_armed = -1;        /* re-checked every 30 frames          */
 static unsigned char* s_buf = 0;   /* viewport-sized scaffold, malloc'd   */
 static int    s_bw = 0, s_bh = 0;  /* current buffer dims                 */
@@ -483,15 +482,3 @@ int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows)
     return 1;
 }
 
-/* A CONTEXT RESET DROPS THIS FRAME'S HAND-OVER: the published buffer, which
-   names memory this pass owns and no API.
-
-   NOTHING CALLS IT. No source of this build makes a GL context current for a
-   change to be seen (`oglu_load_dll` has no caller). This file carries ZERO
-   GL call sites and the body below touches no API at all, so it is deletable
-   as soon as someone decides the hand-over needs no reset entry point of its
-   own. */
-void tagpu_scaffold_glreset(void)
-{
-    s_pubBuf = NULL; s_abFrame = 0;
-}
