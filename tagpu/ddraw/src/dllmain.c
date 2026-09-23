@@ -338,8 +338,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         TRACE("cnc-ddraw DLL_PROCESS_DETACH\n");
 
-        /* tagpu: every other thread is gone, so the store is written without
-           waiting on its lock (tagpu_settings.h) */
+        /* tagpu: every other thread is gone, so neither the log (tagpu_log.h) nor the
+           store (tagpu_settings.h) waits on its lock from here */
+        tagpu_log_detaching();
         tagpu_settings_detaching();
         cfg_save();
         tagpu_settings_final();

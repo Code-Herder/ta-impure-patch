@@ -108,12 +108,21 @@ rename the first process's live file, and each would keep its own count of the t
   size checks, a rotation or an eviction, and one `WriteFile`. A caller's line is formatted before
   the lock is taken, into a stack buffer or a block's heap buffer. Only the sink's own notes (the
   header, the gap line, `continued in`) are formatted under it, from string and integer conversions only.
-- **It is a leaf lock.** Nothing under it logs, allocates, calls back into our code or takes
-  another lock of ours. Only kernel32 file calls and those notes run under it. So it cannot
-  close a lock cycle with any lock a caller holds.
-- **Never torn down.** The critical section is never deleted and the handles are never closed at
-  detach. The render thread can still log while the process exits, and the OS closes the
-  handles.
+- **It is a leaf lock.** Under it run only kernel32 file calls and the CRT formatting of those
+  notes. msvcrt's `_vsnprintf` can take its own locale lock and allocate the thread's CRT data
+  on first use, but nothing that holds a CRT lock logs. Nothing under it logs, calls back into
+  our code, or takes a lock of ours, so it cannot close a lock cycle with any lock a caller
+  holds.
+- **Process exit.** `ExitProcess` kills every other thread before `DLL_PROCESS_DETACH`. For
+  example, the close button's `SC_CLOSE` calls it on the game thread without joining the
+  render thread, so a thread killed inside `put()` leaves the lock owned by a dead thread. At
+  detach, the settings store logs the window frame it keeps. Waiting on that lock would end
+  the exit there: Windows terminates the process, and Wine grants the lock over half-updated
+  state. So `tagpu_log_detaching()`, the first call in `DLL_PROCESS_DETACH`, switches every
+  call to `TryEnterCriticalSection`: a line that cannot take the lock at once is dropped.
+  This is the same rule the settings store uses for its own lock.
+- **Never torn down.** The critical section is never deleted and the handles are never closed;
+  the OS closes them.
 - **`s_live` is the gate every call reads.** It is set once, as the last step of init, and never
   cleared. A call before init, in the config tool's load, or in a process that does not own the
   folder returns without writing.
@@ -183,8 +192,8 @@ total for exactly that reason.
 
 - **stress**: two threads, 20 000 numbered lines each on the main stream, a cobtrace line every 7,
   and a block of 1–300 lines every 97. Also three stray files (`notes.txt`, `tagpu.backup.log`,
-  `tagpu.11.log`). Result: parts consecutive (82–88 survive), each thread's lines contiguous to
-  19 999, 32 blocks each whole in one file, a 5 000-byte line cut to 1 024 + marker. The two
+  `tagpu.11.log`). Result: parts consecutive (82–88 survive), each thread's surviving lines a
+  gapless run ending at 19 999 (a thread that finishes first can age out entirely), 32 blocks each whole in one file, a 5 000-byte line cut to 1 024 + marker. The two
   strays are untouched and `tagpu.11.log` is deleted at attach. A second launch starts run part 1
   and the previous run's last part becomes `tagpu.1.log`.
 - **block**: a handle without `FILE_SHARE_DELETE` holds `tagpu.log` for 2.5 s. 1 022 684 lines
@@ -192,6 +201,8 @@ total for exactly that reason.
   that many. Writing resumed once the handle closed.
 - **second**: while one process holds the lock, a second writes 1 000 lines: `log\` is unchanged
   (names, sizes, mtimes).
+- **orphan**: a thread exits while holding the sink's lock. After `tagpu_log_detaching()` a
+  line and a block both return at once and are dropped; the line before is kept.
 - **kill**: `SIGKILL` mid-stream. The surviving lines are contiguous and the file ends on a whole
   line.
 - **cursor**: a slow writer (one line a millisecond). A cursor taken at part 14, after history is

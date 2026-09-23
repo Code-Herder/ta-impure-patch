@@ -110,10 +110,16 @@ def case_stress():
     check(all(re.search(rb"log: continued in tagpu\.log \(part \d+\)\r\n$", p) for p in parts[:-1]),
           "every rotated part ends with its `continued in` line")
     lines = b"".join(parts).decode().splitlines()
+    # eviction takes the oldest parts, so each thread's surviving lines are a contiguous
+    # suffix ending at its last line -- or none at all, when that thread finished early
+    # enough for the other one's lines to push all of its own out of history
+    survivors = 0
     for t in (1, 2):
         xs = seqs(lines, re.compile(rf"^t{t} (\d+) "))
-        check(xs and xs[-1] == 19999 and contiguous(xs),
-              f"thread {t}: lines {xs[0] if xs else '-'}..{xs[-1] if xs else '-'} with no gap")
+        survivors += bool(xs)
+        check(not xs or (xs[-1] == 19999 and contiguous(xs)),
+              f"thread {t}: lines {xs[0] if xs else '-'}..{xs[-1] if xs else '-'}, a gapless suffix")
+    check(survivors > 0, "at least one thread's lines survive")
     cut = [l for l in lines if l.endswith("...[truncated]")]
     check(any(set(l[:-14]) == {"x"} and len(l) == 1024 + 14 for l in cut), "a 5000-byte line is cut to 1024 and marked")
     # blocks: begin, n lines, end -- consecutive, inside ONE file
@@ -201,6 +207,19 @@ def case_kill():
     return d
 
 
+def case_orphan():
+    print("orphan: a thread dies holding the lock; at detach a line is dropped, not waited on")
+    d = scratch()
+    try:
+        rc, out = run(d, "orphan", timeout=60)
+    except subprocess.TimeoutExpired:
+        rc, out = -1, "hung"
+    check(rc == 0 and "ok orphan" in out, f"the detach-time line returns at once ({out.strip()[-80:]})")
+    text = talog.run_text(d)
+    check("orphan: before" in text and "dropped" not in text, "the line before is kept, the two after are dropped")
+    return d
+
+
 def case_cursor():
     print("cursor: talog.Cursor follows three rotations after history is full")
     d = scratch()
@@ -236,7 +255,7 @@ def main():
     if not EXE.exists():
         sys.exit(f"{EXE} is missing: make -C tagpu/ddraw logtest")
     keep = "--keep" in sys.argv
-    dirs = [case_stress(), case_block(), case_second(), case_kill(), case_cursor()]
+    dirs = [case_stress(), case_block(), case_second(), case_kill(), case_orphan(), case_cursor()]
     if not keep:
         for d in dirs:
             shutil.rmtree(d, ignore_errors=True)

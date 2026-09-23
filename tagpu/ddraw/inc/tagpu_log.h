@@ -36,10 +36,14 @@
 
    THREADS. Any thread may call any of these. One critical section covers both streams (the
    total cap spans them); it is held for the size checks, a rotation and one WriteFile. A
-   caller's line is formatted before it is taken; nothing under it allocates, logs or takes
-   another lock, so it is a leaf and cannot close a lock cycle. It is never deleted and the
-   files are never closed at detach: the render thread can still log while the process
-   exits, and the OS closes the handles.
+   caller's line is formatted before it is taken. Under it run only kernel32 file calls and
+   the CRT formatting of the sink's own notes: nothing logs, calls back into our code or
+   takes a lock of ours, so it is a leaf and cannot close a lock cycle.
+
+   EXIT. ExitProcess kills every other thread before DLL_PROCESS_DETACH, possibly inside the
+   sink with the lock held. From tagpu_log_detaching() on, a call that cannot take the lock
+   at once drops its line instead of waiting on a dead owner. The lock is never deleted and
+   the files are never closed: the OS closes the handles.
 
    Before tagpu_log_init, in the config tool's load (cnc_ddraw_config_init), and in a process
    that does not own `log\`, every call returns without writing. */
@@ -50,6 +54,9 @@
 /* DllMain, DLL_PROCESS_ATTACH, before any other tagpu_* init: takes the lock, rotates the
    previous run into history, enforces the caps. */
 void tagpu_log_init(void);
+
+/* DllMain, DLL_PROCESS_DETACH, first: from here a held lock is an orphan (EXIT above). */
+void tagpu_log_detaching(void);
 
 /* One line to TLOG_MAIN; the sink adds the line ending. Longer than 1 KB is cut and marked. */
 void tagpu_log(const char* line);

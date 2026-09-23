@@ -68,6 +68,7 @@ struct TLOG_BLOCK { int s; char* p; unsigned n, cap; int cut; };
 
 static CRITICAL_SECTION s_cs;
 static volatile LONG    s_live;           /* set once, last thing in init; never cleared     */
+static volatile LONG    s_detach;         /* process detach: see tagpu_log_detaching         */
 static char             s_dir[MAX_PATH];  /* "<folder of our ddraw.dll>\log\"                */
 static char             s_run[48];        /* "YYYYMMDD-HHMMSS-<pid>"                         */
 static SYSTEMTIME       s_start;
@@ -374,6 +375,19 @@ void tagpu_log_init(void)
 
 /* ---- lines ------------------------------------------------------------------------- */
 
+void tagpu_log_detaching(void) { InterlockedExchange(&s_detach, 1); }
+
+/* At detach ExitProcess has already killed every other thread, and one killed inside put()
+   left s_cs owned by a dead thread: waiting on it would hang the exit (Windows terminates
+   the process there, Wine grants it over half-updated state). So from detach on, a line
+   that cannot take the lock at once is dropped. 1 when the lock is held. */
+static int lock(void)
+{
+    if (s_detach) return TryEnterCriticalSection(&s_cs);
+    EnterCriticalSection(&s_cs);
+    return 1;
+}
+
 /* `in` into `out` as one line of stream s: at most LINE_MAX bytes of text, marked when cut,
    then the stream's ending. On the CRLF stream a bare '\n' inside the text becomes CRLF, as
    the text-mode fopen every writer used before this sink made it. */
@@ -399,7 +413,7 @@ void tagpu_log_stream(int s, const char* line)
     unsigned n;
     if (!s_live || s < 0 || s >= NSTREAM || !line) return;
     n = compose(s, b, line);
-    EnterCriticalSection(&s_cs);
+    if (!lock()) return;
     put(s, b, n);
     LeaveCriticalSection(&s_cs);
 }
@@ -478,8 +492,7 @@ void tagpu_log_block_end(TLOG_BLOCK* b)
         char* q = (char*)realloc(b->p, b->n + n);
         if (q) { b->p = q; memcpy(b->p + b->n, line, n); b->n += n; }
     }
-    if (b->n) {
-        EnterCriticalSection(&s_cs);
+    if (b->n && lock()) {
         put(b->s, b->p, b->n);
         LeaveCriticalSection(&s_cs);
     }

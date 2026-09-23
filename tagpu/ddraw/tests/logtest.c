@@ -13,6 +13,8 @@
      logtest hold <ms>        take the lock, write a line, sleep (the owner for `second`)
      logtest second <lines>   a second process: must write nothing and change nothing
      logtest forever          number lines until killed
+     logtest orphan           a thread dies holding the sink's lock; after tagpu_log_detaching
+                              a line must return at once (dropped), not wait on the dead owner
      logtest slow             number lines, one a millisecond, until killed (a rotation a
                               second or so: slow enough for a reader to follow)
 
@@ -170,6 +172,35 @@ static int mode_block(void)
     return 0;
 }
 
+static void die_holding(void) { ExitThread(0); }
+
+static DWORD WINAPI orphan_thread(LPVOID p)
+{
+    (void)p;
+    tagpu_log_selftest_locked(die_holding);    /* never returns: the lock stays owned */
+    return 0;
+}
+
+static int mode_orphan(void)
+{
+    HANDLE t;
+    DWORD t0;
+    tagpu_log("orphan: before");
+    t = CreateThread(NULL, 0, orphan_thread, NULL, 0, NULL);
+    WaitForSingleObject(t, INFINITE);
+    tagpu_log_detaching();
+    t0 = GetTickCount();
+    tagpu_log("orphan: after detach, dropped");
+    {
+        TLOG_BLOCK* b = tagpu_log_block_begin(TLOG_MAIN);
+        tagpu_log_blockf(b, "orphan: block, dropped");
+        tagpu_log_block_end(b);
+    }
+    if (GetTickCount() - t0 > 1000) { printf("FAIL waited %lu ms\n", GetTickCount() - t0); return 1; }
+    printf("ok orphan\n");
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     char exe[MAX_PATH], *cut;
@@ -177,11 +208,12 @@ int main(int argc, char** argv)
     cut = strrchr(exe, '\\');
     if (cut) cut[1] = 0;
     _snprintf(s_dir, sizeof s_dir, "%slog\\", exe);
-    if (argc < 2) { printf("usage: logtest stress|block|hold|second|forever|slow ...\n"); return 2; }
+    if (argc < 2) { printf("usage: logtest stress|block|hold|second|forever|slow|orphan ...\n"); return 2; }
     setvbuf(stdout, NULL, _IONBF, 0);
 
     if (!strcmp(argv[1], "stress")) { tagpu_log_init(); return mode_stress(argc > 2 ? (unsigned)atoi(argv[2]) : 20000); }
     if (!strcmp(argv[1], "block"))  { tagpu_log_init(); return mode_block(); }
+    if (!strcmp(argv[1], "orphan")) { tagpu_log_init(); return mode_orphan(); }
     if (!strcmp(argv[1], "hold")) {
         tagpu_log_init();
         tagpu_log("hold: owner");
