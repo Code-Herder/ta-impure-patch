@@ -8227,9 +8227,10 @@ measured in.
   gadget ([gui-gadgets](gui-gadgets.html) places it on the campaign screen) or reach `SetGamma`
   another way. That is still the next thing worth building for this lane, and it is now a smaller
   and better-aimed question than it was.
-* **The `restorevk` lever is measured in one configuration only**: created before launch, terrain
-  only, one map, no mid-session flip. The mid-session flip is now correct by construction (the
-  publish is an either/or) but has not been run.
+* ~~**The `restorevk` lever is measured in one configuration only**~~ — the lever is gone. The
+  restorer follows Classic++'s `assets=` knob, which is a play default and which the
+  render-options screen's `Undithered assets` row writes, so the mid-session flip is the
+  ordinary case and is run in both directions. See *Undithering ships on* below.
 * **The `g_alloc` ring is a bound that a fast enough device can reach.** 256 blocks per slot per
   slice; a FILL takes one, a CONV one and an OUT two, so a `full`-model batch spends 15 and a slice
   of more than about **seventeen batches** exhausts it and fails the job. Not reached on the
@@ -12385,6 +12386,120 @@ FBO you own and the window stops being part of the equation.
 
 ---
 
+## Undithering ships on, and the UI is restored too
+
+Two facts about Classic++ were false in the shipped configuration until this landing: nothing
+undithered, and nothing in the UI could ever have.
+
+### The restorer had a second lever, and it was on no defaults table
+
+`tagpu_classicpp.on` is a play default and logs `classicpp: assets=1 light=1`. What actually fed
+the restorer was a separate file, `tagpu_restorevk.on`, tested in exactly two places
+(`tagpu_gaf_atlas_restore_vk` for the unit/feature/effects atlases, and `tagpu_terr.c`'s arm beat
+for the terrain atlas, which is not a GAF atlas). Nothing armed it, so a player launching the
+game got the raw 8-bit palette art of 1997 with a menu row saying `Undithered assets: On`.
+
+**Both sites now ask `tagpu_classicpp_assets()`** — the master arm AND the `assets=` key of
+`tagpu_classicpp.cfg`, which is the key the render-options screen's row writes. One question,
+one row. The lever is gone as a name; the `restorevk:` log prefix stays, being the restorer's
+lane tag rather than the lever.
+
+**"Read at attach, latched per pass" was never true of those sites and is not a constraint.**
+Both were already POLLED — the GAF one on each owner's 30-frame arm beat, the terrain one on its
+own — so the latch takes on the first beat at which the answer is yes. The latch is a LIFETIME:
+it guards one `malloc` whose address a consumer holds raw for the rest of the frame, which is
+why it must not be re-taken. Turning the knob OFF is answered where it always was, by the
+publishers' `restored` flag and by `tagpu_vk_restore.c`'s `may_draw`, which put `uRestored` back
+to 0 and pause the job in place without freeing anything.
+
+Measured at 1024x768 on `pose-inventory`, Two Continents, play defaults, no arm file:
+
+| | whole frame | grass (330,560)-(430,640) |
+|---|---|---|
+| before | 12 428 colours | 14.21 energy / 193 colours |
+| after | 94 532 colours | 7.16 / 4 264 |
+
+which is the same picture the hand-armed lever gave (94 538 / 7.16 / 4 264). The terrain job is
+5062 frames in 80 batches, 3760 draws across 137 of 147 frames = **2426 ms of wall clock at 60.6
+fps**, 1641 ms of it GPU, against a 12 ms/frame budget. The first two to three seconds of a level
+are visibly indexed and then reveal centre-out; the frame rate does not move.
+
+### The UI atlas was the one GAF atlas that armed no list
+
+`tagpu_gui_surf.c` reported `col=0/3 colvalid=0 rgb=0` on every frame of every session, and the
+reason was not a switch. `twin_sprite` and `twin_copy` returned 0 unconditionally, `s_colValid`
+had no writer, and `tagpu_vk_gui.c` carried the whole consumer — `tw_colour`, the two-attachment
+render pass, the four `*2` pipelines, `LAY_FS`'s `uColOn` and `uTwinCol` — as reachable code that
+nothing could reach. `TAGPU_R_MAXJOBS` had reserved priority slot 4 for the UI since landing 7.
+
+What was built is the same shape as the feature atlas's: the UI atlas arms
+`tagpu_gaf_atlas_restore_vk`, publishes its frame list on the hand-over, and `tagpu_vk_gui.c`'s
+`restore_want` paints a `"gui"` job into an RGBA8 image of its own, bound at descriptor 41
+(`uAtlasRGB`) on the ops that say they sample it.
+
+**Three things had to be facts rather than hopes, and each was found by running it.**
+
+1. **An op may not claim restored art before there is any.** The consumer refuses such a frame
+   WHOLE — correctly: it would write alpha 0 where the producer wrote colour, into a twin that
+   keeps it. Deriving "restored" on the producer's side alone therefore thrashes the twin store
+   for the two seconds a first restore takes. `tagpu_gui_col_ready` is the back-channel: the
+   consumer says whether it holds a painted image, and only then does `s_colValid` rise. Both
+   halves are the render thread, so it is a static and not a handshake, and the producer reads it
+   one frame old — which can only delay turning colour ON.
+
+2. **The art has to be REDRAWN to gain colour.** A twin takes its restored texels at the moment
+   the art is drawn, so anything already on a surface keeps the indices it was painted with. In
+   the shell that is invisible (every gadget is redrawn on every flip); in game it is the whole
+   sidebar, which the engine draws once per selection change. Measured: with the panel left
+   standing, `assets=0` and `assets=1` were **0 differing pixels of 82 944** over
+   (0,120)-(128,768); one deselect-and-reselect took the same region to 23 662 colours.
+   `g_guiq.colarm` asks the engine for that repaint — one counter, shadowed by
+   `tagpu_gui_hook.c`'s `repaint_arm` exactly as `g_guiq.resets` is.
+
+   **It is deliberately not a reseed, and that is a fix rather than a preference.** The first
+   build raised `g_guiq.reseed` on the same edge. A reseed resets the twin store and the UI
+   atlas, which re-arms the restore list, which clears the consumer's image, which clears the
+   very flag that raised it: the loop ran, the layer composited nothing at all, and the harness
+   showed a magenta frame.
+
+3. **And once is not enough, for a bounded reason rather than a timing one.** A sprite drawn in
+   the same present that put its entry in the atlas takes alpha 0, the restorer not having
+   reached that entry yet. So the producer asks for one more repaint each time the restore
+   SETTLES having painted something new. It converges because the set of atlas entries a screen
+   uses is finite — a repaint that adds no entry adds no frame, and no frame is no settle — and
+   it is bounded at 32 per palette generation anyway, with a line in the log if that is reached.
+
+**The palette-validity rule of [gui-renderer](gui-renderer.html) 3.4 is now built rather than
+described.** While the presented palette differs from the one the restore was painted against,
+`s_colValid` is 0 and the frame is indexed — dithered art for the duration of a fade, never wrong
+art — and once the palette has held still for `PAL_SETTLE` frames the list is restarted as a
+REPAINT (`tagpu_gaf_atlas_restore_repalette`, the generation `rlistRepaint` was documented for
+and nothing had ever asked for) and `colRearm` invalidates every colour plane the consumer holds.
+
+Measured at 1024x768, `assets=0` → `1`, commander selected:
+
+| region | before | after | pixels differing |
+|---|---|---|---|
+| sidebar (0,120)-(128,768) | 11.53 / 273 colours | 10.07 / 23 662 | 44 061 of 82 944 |
+| HUD patch (20,300)-(110,420) | 17.61 / 115 | 15.18 / 6 453 | |
+| minimap | 9.21 / 543 | 8.37 / 3 246 | 3 576 of 15 624 |
+| top bar | 10.01 / 89 | 9.98 / 598 | 761 of 28 672 |
+| whole frame | 12 468 colours | 115 666 | |
+
+and the shell (MAINMENU, 640x480) goes from 148 to 2 585 colours, 9 191 px of 307 200. The
+heartbeat reads `col=5/5 colvalid=1 rearms=1 rgb=41/71` and the frame rate holds 60.0.
+
+**What is not restored, said plainly.** A surface adopted whole from the engine's bytes —
+`PK_ASSET`: the shell's backdrop, the in-game panel's ground plate — carries palette indices and
+nothing else, so it stays dithered. That is why the shell moves 3 % of its pixels rather than
+30 %. Restoring those needs a per-surface restore rather than an atlas one, and is the next
+thing to build here.
+
+**`rgb=` in the `gui:` heartbeat was a dead GL texture name** and is now
+`rgb=<frames offered>/<atlas entries>`. `colops=` and `prescol=` are new beside it: `colvalid=1
+colops=0` is the difference between the restorer being off and the ops that would sample it never
+running, which is the distinction this landing spent three builds failing to see.
+
 ## Where to go next
 
 - [GPU renderer roadmap](roadmap.html) — the gates, the chronological log, the decisions locked.
@@ -14866,16 +14981,15 @@ whoever ports that draw, and the field is kept as the record of what such a pass
 Neither is wrong at runtime — no engine memory, no pixel, no wrong state — and both are recorded
 here rather than deleted, because deleting them is a landing with its own review.
 
-* **The publisher has no producer gate.** `g_gui_draw` was written in exactly one place,
-  `tagpu_gui_surf.c`'s trigger poll, so it is 0 for the life of every process: `publish()`
-  returns on its first line, `g_guiq` never receives an op and the 16 MB arena is never written.
-  What `tagpu_gui.on` still buys is the 17 leaves recording into `s_ops` and the census diffing
-  each surface against its own copy — a harness mode, which is why the lever is off the defaults.
-  The heartbeat says `publisher idle` so nobody chases `published=0`. **A restored consumer needs
-  a drain in the same landing**: `g_guiq.qTail` and `aTail` lost their writers with the same
-  file, so a producer alone would trip `consumer_stalled` at a quarter of the queue or half the
-  arena and latch `s_stalled` for the session — its release tests `head == tail`, which a frozen
-  tail can never satisfy.
+* ~~**The publisher has no producer gate.**~~ **WITHDRAWN — the entry was true of the gap
+  between the clean cut and the UI-layer rebuild, and was carried past it.** It read that
+  `g_gui_draw` had one writer in a deleted file, so `publish()` returned on its first line and
+  the 16 MB arena was never written. `tagpu_gui_surf.c` exists again and its trigger poll is
+  that writer (`g_gui_draw = on`); the queue is filled, the arena is written, the drain the
+  entry said a consumer would have to bring is in the same file, and the publisher's heartbeat
+  reads `published=4653791 bytes=902287148 draw=1` on an ordinary boot. `tagpu_gui.on` is a play
+  default and buys the UI. The entry is kept struck through rather than deleted because three
+  other notes quoted it.
 * **The minimap handshake has no asking half.** `tagpu_gui_set_want_minimap` and
   `tagpu_gui_set_minimap_have` are callerless, so `tagpu_gui_want_minimap()` answers 0 for the
   process, `tagpu_packet_pub.c` never copies the three 126-px surfaces or the TNT picture, and

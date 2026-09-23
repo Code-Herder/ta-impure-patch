@@ -53,8 +53,7 @@ the arm files count. A dependency turns off with its parent.
 Not on the defaults, and why: `owndraw`, `featown`, `fxown` stop the engine drawing what our pass
 draws and so hole the golden source (`tacli` still auto-arms them when the pass is armed, because
 they save the engine's CPU); `hud.on` changes the look of every screen and is the owner's call;
-`restorevk.on` is what feeds the restorer and nothing arms it for you; `scaffold.on` and `fps.on`
-are instruments.
+`scaffold.on` and `fps.on` are instruments.
 
 **`terrown` is the exception and is a default.** It holes the golden source like the other three
 — the viewport arrives key-filled, with no terrain — but it is an **optimisation, not a
@@ -99,7 +98,7 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   relaunch. Expect `terr: atlas built
   2176x<h> for <n> tiles`, `terr: height grid WxH uploaded` (without it Classic++ terrain draws
   unlit), and `vk: terr: the Vulkan edition is up …`. Under Classic++ `assets=1` it draws the
-  restored atlas, which is fed only while `restorevk.on` is armed.
+  restored atlas.
 - **`feat.on`** takes the draw only while `native.on` carries `wrecks` (3D wreckage is drawn from
   the same leaf); otherwise it logs `nothing emitted: native.on needs "wrecks"` and `atlas=0`.
   Heartbeat under `log`: `feat: rect=… anchors= flat= tall= … 3dwreck= body= shadow=` every 60
@@ -218,8 +217,7 @@ chasing it; at 14 a moving scene gives ~30/s. **One `bare=1` per video-mode chan
 
 | lever | when read | what |
 |---|---|---|
-| `classicpp.on` | polled twice a second | the master arm: restored true-colour terrain, features, effects and unit textures, the lambert lighting and the cast shadows. Flips live; arming mid-play restores what is on screen |
-| `restorevk.on` | attach (latched per pass) | publishes the frame lists the Vulkan restorer paints from. **Nothing arms it for you** — without it the restorer is never fed and the world stays indexed under `assets=1` |
+| `classicpp.on` | polled twice a second | the master arm: restored true-colour terrain, features, effects, unit textures **and the UI** (sidebar, minimap, top bar, shell), the lambert lighting and the cast shadows. Flips live; arming mid-play restores what is on screen |
 | `classicpp.cfg` | live (re-read on the poll when its mtime or size changes) | the knobs: `sun=AZ,EL` or `sun=off`, `unitsun=AZ,EL`, `amb=A`, `assets=0|1`, `light=0|1`, `shadows=0|1|2`, `shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B` or `off`, `shade=S`, `terrainshadow=0|1`, `shadowres=N`, `airshadow=len|physical|drop`, `aniso=N`. Written by `tacli arm <i> 'classicpp.cfg=sun=off shadows=0'`, removed by `classicpp.cfg=off` |
 | `restoreglsl.on` | when the restorer starts (arm before launch) | the restorer core's knobs, in the file that keeps the name it had: `log` (a line per batch), `tiny` (the small model), `fp16`, and the numeric knobs in `tagpu_restore_core.c` |
 | `restoredump.on` | after each queue drains | writes `tagpu_restore_<tag>_vk.{r8,rgba,idx}` per atlas — the byte oracle (`references/measuring.md`) |
@@ -241,7 +239,8 @@ chasing it; at 14 a moving scene gives ~30/s. **One `bare=1` per video-mode chan
 - `aniso=1` for a unit-pass A/B; 4 ships.
 - Read the result of a restore in the `restorevk:` lines — `restorevk: <tag>: lazy restore armed
   (…)`, `restorevk: <tag>: done: N frames (… wrap-padded) in B batches, D draws in S of F frames = …`
-  and, with `restoredump.on`, `restorevk: <tag>: restored atlas dumped to …`. The fps in the
+  and, with `restoredump.on`, `restorevk: <tag>: restored atlas dumped to …`. The tags are
+  `terr`, `feat`, `fx`, `unit` and `gui`. The fps in the
   `done` line is the rate the game held during the restore. The first job of every launch is abandoned by the
   startup reset and restarted; the `done` line is the second job's. Wait for it before a parity
   capture.
@@ -330,4 +329,6 @@ changes nothing and logs nothing, which is the failure mode to recognise.
 `tagpu_writeback.on`, `tagpu_posedraw.on`, `tagpu_posefix.off`, `tagpu_posewatch.on`,
 `tagpu_poserecon.on`, `tagpu_purevk.on`, `tagpu_selgeom.on`, `tagpu_shade.off`,
 `tagpu_rglsl.step`, `tagpu_shadowdump.on`, `tagpu_shadow.ab`, `tagpu_unit.on`, `tagpu_unit.ab`,
-`tagpu_restore_<tag>.rgba` without `_vk` (the GL half of the restore dump), `tagpu_<pass>_gl.ppm`.
+`tagpu_restore_<tag>.rgba` without `_vk` (the GL half of the restore dump), `tagpu_<pass>_gl.ppm`,
+`tagpu_restorevk.on` (the restorer follows Classic++'s `assets=` knob, which the render-options
+screen's `Undithered assets` row writes; `classicpp.cfg=assets=0` is the A/B).

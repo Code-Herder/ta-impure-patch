@@ -3461,9 +3461,10 @@ status](gpu-status.html) §2.82). **The same continuous probe at the new site is
 torn**, across two levels and a teardown. `tagpu_surfdump.on` is the
 oracle. **The shell has no golden source** — it never calls `DrawGameScreen` — and `tacli shot` is
 the answer there. Also open: no structure draws its slant shadow on this lane — landing 11-2 took
-the draw with the GL tail, which is older than the cut and true on `main`; and the UI op
-PUBLISHER is unreachable (`g_gui_draw` has no writer), so `tagpu_gui.on` buys the leaves and the
-census and nothing else. And the shadow half is still escalation
+the draw with the GL tail, which is older than the cut and true on `main`. (This also said the
+UI op PUBLISHER was unreachable, `g_gui_draw` having no writer. The UI-layer rebuild put
+`tagpu_gui_surf.c` back with that writer in it, so the queue is filled, the arena is written and
+`tagpu_gui.on` buys the layer; the publisher's heartbeat reads `draw=1`.) And the shadow half is still escalation
 reason 1, and now known to be more than a preference — `tagpu_shadow_begin` has no caller
 anywhere in the tree, so that pass is already dead and the question is whether the two files are
 scaffolding for a Vulkan-side producer or debris. See the plan's
@@ -3493,6 +3494,35 @@ file already asks a lane-published flag (`tagpu_posedraw_live`, `tagpu_native_ow
 `set_skip(ours-live)` pairs), so the gap was two bytes rather than a class. **Reading a label as
 a measurement** is what made a two-byte landing look like a large one, and the log line now says
 what it actually knows.
+
+### Classic++ ships undithered, HUD and shell included
+
+Two facts about the shipped configuration were false and are not any more. Full account and
+numbers: [GPU status](gpu-status.html), *Undithering ships on, and the UI is restored too*.
+
+**The restorer is armed by Classic++'s `assets=` knob, not by a lever of its own.**
+`tagpu_restorevk.on` was on no defaults table and nothing wrote it, so a player launching the
+game got 1997's raw palette art under a menu row reading `Undithered assets: On`. Both arm sites
+— `tagpu_gaf_atlas_restore_vk` and `tagpu_terr.c`'s beat — now ask `tagpu_classicpp_assets()`,
+which is the master arm AND the key the render-options row writes, so one row moves one thing and
+both directions are live. The lever is gone as a name; `classicpp.cfg=assets=0` is the A/B.
+Measured at 1024x768 on `pose-inventory`: 12 428 → 94 532 distinct colours whole-frame, a bare
+grass patch 14.21/193 → 7.16/4 264, the terrain job 2 426 ms of wall clock at 60.6 fps.
+
+**The UI atlas is restored too.** It was the one GAF atlas that armed no frame list, so the
+sidebar, minimap, top bar and shell drew straight from palette indices whatever Classic++ said.
+It now arms one and `tagpu_vk_gui.c` paints a `"gui"` job into an image of its own — the
+priority-4 slot reserved for it since landing 7. Three things the work had to establish: an op
+may not claim restored art before the consuming lane holds any (`tagpu_gui_col_ready`, a
+render-thread back-channel); the art has to be REDRAWN to gain colour, so the engine is asked for
+a repaint when colour becomes valid (`g_guiq.colarm` — NOT a reseed, which closed a loop and
+composited a magenta frame); and once is not enough, because a sprite drawn in the same present
+that added its atlas entry takes alpha 0, so a repaint is asked for on each settle, bounded at 32
+per palette generation. Measured, `assets=0` → `1` with a unit selected: the sidebar 273 → 23 662
+colours and 44 061 of 82 944 px differing, the shell 148 → 2 585 colours, 60.0 fps throughout.
+**Open:** a surface adopted whole from the engine's bytes (`PK_ASSET` — the shell backdrop, the
+panel's ground plate) carries indices only and stays dithered; that needs a per-surface restore
+rather than an atlas one.
 
 ### Not in this phase
 

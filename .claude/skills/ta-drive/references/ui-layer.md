@@ -100,8 +100,13 @@ Arming an attach-time token on a running instance silently does nothing.
 - `k=` is device pixels per twin texel, `sharp=WxH` the sharp layer's size (the viewport).
   `k` is not always 1: the window is resizable and letterboxed, so a window off the game
   resolution is fractional, and the shell (640x480) under a 1280x984 client is `k=2.000`.
-- `cpp= assets= light= col=<made>/<live> colvalid= rgb=` — the Classic++ half. `colvalid` drops to
-  0 while `assets=0` or while the palette is settling.
+- `cpp= assets= light= col=<made>/<live> colvalid= rearms= rgb=<frames>/<atlas entries> colops=
+  prescol=` — the Classic++ half. `colvalid` drops to 0 while `assets=0`, while the Vulkan lane
+  has not painted the restored UI atlas yet, or while the palette is settling; `rgb=` is what the
+  UI atlas offers the restorer against what it holds; `colops=` counts the ops that actually said
+  "restored", so `colvalid=1 colops=0` means nothing asked rather than nothing was restored;
+  `prescol=1` says the PRESENTED surface has a colour plane, which is what the composite samples.
+  A restoring session reads `col=5/5 colvalid=1 rgb=41/71` in game.
 - **`str=<ops>/<glyph quads> miss= reseed= glyphs=<cached>/<drops> fonts=`** — `miss` and
   `reseed` must stay 0. `glyphs=` climbing is not `str=` climbing: the glyph records arrive
   unconditionally, the stamping needs a twin. Read `str=` for "text was drawn".
@@ -164,13 +169,27 @@ nothing** — a mapped skirmish hides nothing — so the fixture is an unmapped 
 `tacli scenario load <i> <scn> --mapping 0` gives `fog=13301/13356`. Measure sharpness by
 distinct colours in the box, not by replication.
 
-**Classic++ UI.** With `classicpp.on` the layer picks per texel between an index twin and a colour
-twin; `norestore` is the A/B. On entering a game the panel is **indexed**, and that is expected:
-colour reaches a twin only through a sprite op and the panel is seeded at the mode switch with
-HUD icons all under the 12-px restore floor. Open `ARMOPT` with Tab or select a builder first,
-then a `norestore` A/B moves ~37 000 of the panel rect's 45 056 px; taken before that it differs
-by 0 px and means nothing. Read `col=`/`colvalid=` in the heartbeat before assuming colour
-reached the UI at all.
+**Classic++ UI.** With `classicpp.on` and `assets=1` the layer picks per texel between an index
+twin and a colour twin; `norestore` in `tagpu_gui.on` is the A/B, and `classicpp.cfg=assets=0` is
+the other one.
+
+**Colour arrives when the art is DRAWN, not when it is restored.** A twin takes the restored
+texel at the moment a sprite writes it, so anything already on a surface keeps the indices it was
+painted with. The DLL closes that itself — it asks the engine for a repaint when colour becomes
+valid and again each time the restore settles having painted something new — but two things
+follow for a measurement:
+
+- **give it a few seconds.** The repaints chase the restore; at 1024x768 the UI settles within
+  about five seconds of the level coming up.
+- **a surface adopted whole from the engine's bytes is never restored.** The shell's backdrop and
+  the in-game panel's ground plate arrive as `PK_ASSET` and carry indices only, so they stay
+  dithered by design. That is why a shell A/B moves ~3 % of the frame and an in-game one moves
+  53 % of the sidebar.
+
+Measured at 1024x768 on `pose-inventory` with a unit selected, `assets=0` vs `1`: the sidebar
+(0,120)-(128,768) goes from 273 to 23 662 distinct colours, 44 061 of 82 944 px differing; the
+shell at 640x480 goes from 148 to 2 585 colours. Read `col=`/`colvalid=`/`colops=` in the
+heartbeat before assuming colour reached the UI at all.
 
 ## `uiwalk.py`
 
