@@ -62,21 +62,26 @@ def _open(p: Path):
 
 
 def _keys_now(gamedir, stream):
-    """The key of every file of the stream, newest first (headers only)."""
+    """(name, key) of every file of the stream, newest first (headers only). The names
+    matter: the sink creates the new current file on its first line, so for a moment after a
+    rotation the keys alone read the same as before -- only shifted one name up."""
     out = []
     for p in newest_first(gamedir, stream):
         f = _open(p)
         if f is not None:
             with f:
-                out.append(_key(f.read(HEAD_BYTES)))
+                out.append((p.name, _key(f.read(HEAD_BYTES))))
     return out
 
 
 def _stable(gamedir, stream, fn):
     """fn() over a listing no rotation moved. A listing and the opens after it are not one
     act: a rotation between them renames files under the reader, and a pass can then read a
-    part twice or miss one. The sink never reuses a key, so an unchanged key list before and
-    after the pass proves no rotation happened during it; otherwise the pass runs again."""
+    part twice or miss one. A rotation moves every key to another name and the sink never
+    reuses a key, so an unchanged (name, key) list before and after the pass proves no
+    rotation happened during it; otherwise the pass runs again. After eight moved passes --
+    a rotation per pass, sustained -- the last result is returned as it is: a reader that
+    waits or tails is better served by a rare repeated or missing part than by an error."""
     for _ in range(8):
         before = _keys_now(gamedir, stream)
         result = fn()

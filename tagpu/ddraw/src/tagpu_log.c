@@ -260,7 +260,9 @@ static int open_current(int s)
             CloseHandle(st->h);
             st->h = INVALID_HANDLE_VALUE;
             st->part--;
-            gone(p);
+            /* a torn header that will not delete rotates away before the next line */
+            if (gone(p)) st->cur = 0;
+            else st->stale = 1;
             return 0;
         }
     }

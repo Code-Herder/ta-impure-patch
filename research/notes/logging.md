@@ -172,9 +172,12 @@ the first 256 bytes of a file are read to key it.
 
 **Every pass is checked against a rotation.** Listing the files and then opening them are two
 separate steps, so a rotation in between renames files under the reader, and a pass could read
-a part twice or miss one. Each pass (`mark`, `read`, a run's parts) lists the keys before and
-after itself, and runs again if they differ. The sink never reuses a key, so an unchanged list
-proves nothing rotated during the pass. `tail_lines` and `roster` stop reading parts as soon as
+a part twice or miss one. Each pass (`mark`, `read`, a run's parts) lists the files' (name, key)
+pairs before and after itself, and runs again if they differ. A rotation moves every key to
+another name and the sink never reuses a key, so an unchanged list proves nothing rotated during
+the pass. The names are needed: the new current file appears only with its first line, so just
+after a rotation the keys alone read the same, shifted one name up. After eight moved passes the
+last result stands; that takes a rotation per pass, sustained. `tail_lines` and `roster` stop reading parts as soon as
 they have enough, inside the same checked pass.
 
 **Why not the inode.** The first cursor keyed files by inode. Once history is full the sink deletes
