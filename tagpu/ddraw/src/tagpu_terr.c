@@ -779,8 +779,7 @@ static int ensure_atlas(const char* ta)
     s_atlasH = h;
     s_atlasN = count < rows * ATLAS_COLS ? count : rows * ATLAS_COLS;
     /* a different set is a new map: drop a restore still running on the old
-       one and start over. (A GL reset reaches here with the SAME set, after
-       glreset has already reset the restore, so both calls are no-ops then.) */
+       one and start over */
     if (s_setPtr != (const void*)set || s_setCount != count || s_setPix != pix) {
         s_rgbState = 0;
         rlist_drop();

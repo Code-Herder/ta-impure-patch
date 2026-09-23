@@ -23,10 +23,9 @@
 
    `tagpu_vk.off` TURNS THE WHOLE FILE OFF, enumeration included, and is the
    control for any A/B against a DLL built before Phase G. **NEITHER LEVER ARMS
-   A LANE.** `tagpu_vk.on` under `renderer=openglcore` brings nothing up: what
-   the lever does on that path is make `tagpu_vk_armed()` true, which ungreys
-   the menu's GPU row (the choice applies to a launch that picks
-   `renderer=vulkan`). It does NOT get read for its `color=` there --
+   A LANE.** `tagpu_vk.on` under `renderer=gdi` brings nothing up: what the
+   lever does on that path is make `tagpu_vk_armed()` true, which ungreys the
+   menu's GPU row (the choice applies to a launch on the Vulkan lane). It does NOT get read for its `color=` there --
    `read_lever` is only reached from `tagpu_vk_frame` -- and it does not latch
    the gather mirrors, which ask `tagpu_vk_owns_present()`. Under
    `renderer=vulkan` the lane runs because the renderer choice says so, and

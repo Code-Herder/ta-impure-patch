@@ -1235,25 +1235,23 @@ half on the render thread, and the two halves meet only in a lock-free SPSC queu
   rewrites it in place at launch, it now reads **12**, and instances launched under it present
   `paldiff=0` — no seam. The mechanism is unchanged; the *value* is shared and mutable, so read
   `paldiff=` rather than assuming it.
-- *Fresh starts:* the trigger reappearing, a GL context change (`tagpu_gui_glreset` from the
-  overlay's reset), a queue or arena overflow, a sprite whose bytes never arrived, a copy
+- *Fresh starts:* the trigger reappearing, a queue or arena overflow, a sprite whose bytes never arrived, a copy
   from a source with no twin, and the consumer coming back from a stall (below) all raise
   `reseed`; the next publish sends a **reset** and seeds every surface again from the
   engine's bytes. Nothing is reconstructed from history. **Since G15d every reset is logged
-  with its reason** (`gui: reset #n: arm | gl-context | queue-full | arena-full |
-  box-outside-surface | lost-sprite | atlas-full | untwinned-copy | stall-over`, with the
+  with its reason** (`gui: reset #n: arm | queue-full | arena-full | box-outside-surface |
+  lost-sprite | atlas-full | untwinned-copy | stall-over | string-empty | level-changed`, with the
   queue and arena occupancy), so the heartbeat's `resets=` is never a bare count.
 - *The consumer can die, or crawl (G15d):* cnc-ddraw stops its render thread inside every
-  `SetDisplayMode` and starts a new one on a new GL context, and on the way out of a game the
+  `SetDisplayMode` and starts a new one, and on the way out of a game the
   old thread presents only every few hundred ms while the game thread is in the exit path —
   while the shell already flips ~5 000 times a second and the game frame publishes ~150 KB of
   box bytes per 5 ms cadence, so the 16 MB arena is half a second of backlog. The publisher
   therefore **drops its batch** when the tail has not moved for 250 ms with work queued, or
   when the backlog is past half the arena or a quarter of the ring (`stalls=` counts the
   episodes), and publishes again — one reset, every surface re-seeded — once the consumer has
-  caught up. On the render thread, after a context change the drain **skips every op up to the
-  producer's next reset** (`skipped=`): they were published against twins and an atlas that
-  died with the context, and applying them only counted their sprites as lost. MEASURED
+  caught up. (The drain also skipped every op published before a GL context change up to the
+  producer's next reset, `skipped=`; with no GL context that path went, §2.85.) MEASURED
   2026-09-07: before, every game → shell switch cost 38 `arena-full` overflows, 39 resets and
   705 lost sprites; after, one reset (`stall-over`), no overflow, none lost, and the game's own
   OFFSCREEN — freed to the heap by `MEM_Free` at `0x491AB8`, not through `SurfaceFree`, and

@@ -157,12 +157,6 @@ typedef struct TAGPU_FXHAND {
     int   restored;                   /* Classic++ restored atlas in use      */
     int   fog;                        /* the uFog the GL lane passed          */
     float fogOrgX, fogOrgY, fogCols, fogRows;
-    /* The scaffold test's inputs. `scafOn` is the value the GL lane put in
-       uScafOn FOR THE B_UNDER DRAW ALONE; every other draw got 0. This pass
-       REFUSES a frame with it set (see tagpu_vk_fx.c): the scaffold's texels
-       live in another pass's image and sharing one image between two passes is
-       a mechanism that does not exist. */
-    int   scafOn;
     float scafP[4];                   /* vpL, vpT, vw, vh, in frame px        */
     float uss;                        /* the supersample factor as the FS sees it */
     float zoomF, zoomCFx, zoomCFy;

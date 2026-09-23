@@ -2086,7 +2086,7 @@ static const char* const WHY_NAME[TAGPU_GUI_WHY_N] =
     { "?", "arm", "queue-full", "arena-full", "box-outside-surface", "lost-sprite", "atlas-full", "untwinned-copy", "stall-over", "string-empty", "level-changed" };
 
 /* THE CONSUMER CAN DIE, OR CRAWL. cnc-ddraw stops its render thread inside
-   every SetDisplayMode and starts a new one with a new GL context (dd.c);
+   every SetDisplayMode and starts a new one (dd.c);
    between the two nothing drains the queue, and on the way out of a game the
    old thread presents only every few hundred ms while the game thread is in
    the exit path — and the game thread keeps flipping and this keeps

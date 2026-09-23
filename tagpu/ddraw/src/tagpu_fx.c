@@ -895,7 +895,7 @@ const TAGPU_FXMODEL* tagpu_fx_model(int i) { return (i >= 0 && i < s_nm) ? &s_mo
 static unsigned short* s_fogCopy;
 static int             s_fogCopyCells;
 
-static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
+static void fx_publish(const TAGPU_FXVIEW* v, int total)
 {
     int fogBad = 0;                    /* fog wanted, no grid: publish nothing */
     int b;
@@ -925,10 +925,6 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total, int scaf)
     s_pub.fog = (v->fogMode & 1) | 2;
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
-    /* THE SCAFFOLD TEST, exactly as the GL lane set it for the B_UNDER draw.
-       The Vulkan pass refuses the frame when it is 1 -- the scaffold's texels
-       are another pass's image and this pass shares none. */
-    s_pub.scafOn = scaf;
     s_pub.scafP[0] = (float)v->vpL; s_pub.scafP[1] = (float)v->vpT;
     s_pub.scafP[2] = (float)v->vw;  s_pub.scafP[3] = (float)v->vh;
     s_pub.uss   = (float)(v->ss > 0 ? v->ss : 1);
@@ -1007,9 +1003,7 @@ int tagpu_fx_handover(TAGPU_FXHAND* out, unsigned now)
 void tagpu_fx_render(const TAGPU_FXVIEW* v)
 {
     /* THIS PASS ONLY GATHERS AND HANDS OVER -- the feature pass's shape
-       (tagpu_feat.c). The hand-over's scaffold flag is always 0: tagpu_vk_fx.c
-       refuses any frame whose twin had the scaffold live, so a 1 there would
-       stand the pass down. */
+       (tagpu_feat.c). */
     int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3];
     int taking;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
@@ -1029,7 +1023,7 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
        tagpu_vk.c says so by name and captures nothing. [tagpu_vk_world.h.] */
 
     /* Everything above is the GATHER; `fx_publish` below hands the vertices,
-       the numbers and the scaffold flag to the Vulkan twin, which draws them. */
+       and the numbers to the Vulkan twin, which draws them. */
     if (taking) {
         /* THE A/B CLAIM. The lever claims the VULKAN capture: `tagpu_vk_ab_arm`
            unlinks the target `_vk.ppm` at the instant the claim latches, which is what
@@ -1042,5 +1036,5 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
     /* PUBLISHED AFTER THE GATHER: these are the vertices, the numbers and the
        texels this frame built, and the Vulkan lane is about to draw the same
        ones. */
-    fx_publish(v, total, 0);
+    fx_publish(v, total);
 }

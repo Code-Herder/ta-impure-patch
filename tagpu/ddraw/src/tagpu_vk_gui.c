@@ -346,12 +346,11 @@ typedef struct {
 } RET;
 static RET              s_ret[RET_MAX];
 
-/* THE STORE MAY BE BEHIND THE GL LANE'S, and that is a state rather than an
+/* THE STORE MAY BE BEHIND THE PRODUCER'S, and that is a state rather than an
    accident. Any path that cannot apply a frame's ops sets it: the twins are
    dropped, the producer is asked for a fresh start, and nothing is composited
-   until its RESET arrives. It is `tagpu_gui_surf.c`'s own `s_skipToReset`, for
-   the same reason -- applying ops to a store that has missed some is a wrong
-   picture that every later frame inherits. */
+   until its RESET arrives -- applying ops to a store that has missed some is a
+   wrong picture that every later frame inherits. */
 static int              s_behind, s_cantReplay;
 /* RESEEDS RAISED THIS SESSION. `behind` asks once on the transition, but the
    transition REPEATS: a RESET clears `s_behind`, and a condition that is
@@ -2333,8 +2332,7 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     /* WHILE BEHIND, ONLY A RESET IS APPLIED. Everything before the producer's
        fresh start names twins this store never made, and applying it would
-       build a picture out of half a history. `tagpu_gui_surf.c`'s drain does
-       exactly this with `s_skipToReset` after a GL context change. */
+       build a picture out of half a history. */
 
     /* ---- pass 2: the ops, in the order the GL lane applied them ---- */
     for (i = 0; i < h.nops; i++) {

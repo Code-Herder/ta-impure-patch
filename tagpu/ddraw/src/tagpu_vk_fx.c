@@ -92,16 +92,11 @@
 
    ---- WHAT IT DOES NOT DO ----
 
-   THE SCAFFOLD TEST. `uScafOn` is 1 for the B_UNDER draw alone when the
-   scene-depth scaffold is armed, and the fragment shader then samples `uScaf`
-   -- WHICH IS ANOTHER PASS'S TEXTURE. tagpu_vk_scaffold.c has those texels in
-   an image it owns privately, and sharing one image between two passes is a
-   mechanism with an ordering contract of its own; it is not built here. So a
-   frame whose twin had the test on is REFUSED, said once, exactly as the
-   Classic++ refusal below. The scaffold is a debug overlay and is not in the
-   default arm set, so this costs the measured configuration nothing -- but the
-   unit pass and the hires path sample the same texture, so whichever landing
-   ports those is the one that has to answer it.
+   THE SCAFFOLD TEST. `uScafOn` is 0 on every draw, so the fragment shader
+   never samples `uScaf`: the scaffold's texels are in an image
+   tagpu_vk_scaffold.c owns privately, and sharing one image between two
+   passes is a mechanism with an ordering contract of its own that is not
+   built. The scaffold is a debug overlay and is not in the default arm set.
 
    CLASSIC++'s RESTORED ATLAS **IS** MIRRORED SINCE GATE 2 of the Vulkan-only
    plan, so a frame whose twin reports `uRestored` 1 is DRAWN, through the
@@ -175,7 +170,6 @@ static int s_drawThis;                     /* `prepare` left a draw for `record`
 static int s_abFrame;
 static int s_saidRestored;                 /* the Classic++ refusal, said once  */
 static int s_saidNoMirror;                 /* ...and the mirror's, likewise     */
-static int s_saidScaf;                     /* ...the scaffold's                 */
 static int s_saidLht;                      /* ...the light table's              */
 static int s_saidWide;
 static float s_lineW = 1.0f;   /* glLineWidth(ss), this frame's */                     /* ...the line width's               */
@@ -880,9 +874,8 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
         /* BINDING 43 IS uAtlasRGB AND IT NAMES THE RESTORED TWIN'S OWN IMAGE;
            BINDING 46 IS uScaf AND IS THE INDEXED VIEW AS A PLACEHOLDER. The
            difference is which branch is reachable: this pass draws restored
-           frames, so 43 has to be the real thing,
-           while it still refuses every frame whose twin had the scaffold live
-           (see the file header), so nothing ever samples 46. A placeholder is
+           frames, so 43 has to be the real thing, while `uScafOn` is 0 on
+           every draw (see the file header), so nothing ever samples 46. A placeholder is
            legitimate only under a refusal -- a descriptor must be VALID for
            the set to bind, and naming the image already here costs no memory
            and no second object. 43 falls back to it when the restored image
@@ -1279,18 +1272,6 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         h.restored = 0;
     } else s_saidRestored = 0;
 
-    /* THE SCAFFOLD TEST IS ANOTHER PASS'S TEXTURE (see the file header). */
-    if (h.scafOn) {
-        if (!s_saidScaf) {
-            s_saidScaf = 1;
-            plog(d, "fx: the gather has the scene-depth scaffold test on, and "
-                    "those texels live in tagpu_vk_scaffold.c's own image - "
-                    "this pass shares no image with another and draws nothing "
-                    "while the scaffold is armed");
-        }
-        return 0;
-    }
-
     /* THE BOUNDS, RE-CHECKED. Every one of these sizes an allocation or a
        memcpy, and a bound that lives in the file that produced the number is a
        bound only while both files are read together. */
@@ -1513,12 +1494,10 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     ub.f[2] = h.fogOrgX; ub.f[3] = h.fogOrgY;          /* uFogOrg     vec2 @8  */
     ub.f[4] = h.fogCols; ub.f[5] = h.fogRows;          /* uFogDim     vec2 @16 */
     ub.i[6] = h.fog;                                   /* uFog         int @24 */
-    /* uScafOn @28 IS ALWAYS 0 HERE, and that is not a simplification: the
-       refusal above means this pass never draws a frame whose twin had it set,
-       so the twin's own value for every draw it made is 0 too. The day the
-       scaffold's image is shared, this is where the B_UNDER draw needs its own
-       block -- a second offset in this buffer and a second descriptor, because
-       the GL twin changes it BETWEEN draws of one frame. */
+    /* uScafOn @28 IS ALWAYS 0: the scaffold test is not run by this pass (see
+       the file header). Running it would need the B_UNDER draw's own block --
+       a second offset in this buffer and a second descriptor -- because the
+       test applies to that one draw of the frame only. */
     ub.i[7] = 0;                                       /* uScafOn      int @28 */
     ub.f[8]  = h.scafP[0]; ub.f[9]  = h.scafP[1];      /* uScafP      vec4 @32 */
     ub.f[10] = h.scafP[2]; ub.f[11] = h.scafP[3];
