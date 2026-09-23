@@ -19,7 +19,7 @@ session; **[CORPUS]** = name/layout from TADR / the other notes; **[INFERRED]**.
 **The nanoframe look is NOT produced by the "nanoframe rasteriser" `0x459C70`.**
 Both rasterisers (`0x459830` opaque, `0x459C70` lit) bake the *fully textured* model
 into the composite — colour plane + a **depth plane whose byte per pixel is the
-pixel's model-space HEIGHT** (`worldY + 0x32`, or `+0x7D` for airborne units). The
+pixel's model-space HEIGHT** (`worldY + 0x32`, or `+0x7D` for UnitDef+0x241 bit-30 units). The
 under-construction appearance is applied **at blit time, every frame**, by
 **`0x458DD0`** (thiscall `(this, GAFFrame* frame, Object3doStruct*)`, ret 8), which:
 
@@ -333,8 +333,9 @@ d  = (vy >> 16) + 0x32                              ; +0x4B more if UnitDef+0x24
 
 `d` is interpolated across faces and stored in the depth plane on every pixel win
 (test: `plane <= d`, larger = higher/nearer wins). **The depth plane is a height
-map**: byte = model-space height + 50 (ground units) or +125 (bit-30/airborne
-units). Cleared to 0 at alloc. This is what the scaffold threshold, the underwater
+map**: byte = model-space height + 50, or +125 for UnitDef+0x241 bit 30 (the
+digger bit, `tagpu_native.c` `UD_DIGGER`; the base leaves room below the origin for the
+0x7D clip to erase — not "airborne": an ARMATLAS reads `0x00808889`, bit 30 clear). Cleared to 0 at alloc. This is what the scaffold threshold, the underwater
 erase/tint (`0x4BA1B0`/`0x4B96E0`, level = `sealevel(0x1427F) − unitY + bias`),
 the aircraft ground clip (`0x4BA1B0(frame, 0x7D)`), and the cargo z-merge
 (`0x4B90A0`, `dstDepth <= srcDepth + bias`) all consume.
@@ -409,7 +410,7 @@ Anti-aliased nanoframe bakes, option-gated.
 | `UnitStruct` cargo chain | +0x8A / +0x8E | first cargo unit / next-in-chain (z-merged, scaffolded) |
 | `UnitDefStruct.buildtime` | +0x1EA | u32 divisor of the per-tick decrement |
 | `UnitDefStruct.maxdamage` | +0x1FA | health target |
-| `UnitDefStruct` flags | +0x241 | bit30 = airborne: depth bias +0x4B and ground clip at 0x7D |
+| `UnitDefStruct` flags | +0x241 | bit30 = digger: depth base +0x4B (0x459A29) and the clip at 0x7D. MEASURED clear on ARMATLAS (`0x00808889`) and ARMCOM (`0x0495C0C8`) |
 | `Object3doStruct` piece array | +0x22, stride 0x36 | resident `PrimitiveStruct` |
 | `PrimitiveStruct` posed verts | +0x22 | 16.16 ×3 per vertex |
 | `PrimitiveStruct` flags | +0x28 | bit0 visible, bit1 cache, bit2 shade |
@@ -601,14 +602,19 @@ commander or factory building it. Reported from play, reproduced on a scripted
   the lab", reported from play against the first cut of this gate). The gather
   now walks `unit+0x8A` / `+0x8E` and gives every chain member the parent's row
   and band, mirroring the engine's own skip on `state & 0x20000`, so the two
-  models sort against each other by `md`, our intra-model view depth. **That is
-  an approximation of the merge, not a port of it.** `0x4B90A0` compares
-  `dstDepth` against `srcDepth + HIWORD(dy)`: its depth plane is a *height*,
-  biased by the world height delta between the two origins, and it samples at
-  the projected offset. `md = (2y − z)/256` is model-local and carries neither.
-  They agree while parent and cargo are at the same height — every factory pad —
-  and diverge for a cargo whose origin sits above or below its parent, which
-  this landing did not cover.
+  models sort against each other by `md`, our intra-model view depth.
+  **The merge's height offset is carried as a bias on the cargo's `md`.** The call
+  (`0x45968B..0x4596D8`) is `0x4B90A0(cargo, scratch, dx = hi(Δx), dy = hi(Δz) −
+  hi(Δalt)/2, bias = hi(Δalt))`, Δ = cargo − parent, and the merge writes a cargo
+  pixel where `dst <= src + bias` (`0x4B913D..0x4B914D`), storing `src + bias`.
+  With the per-type plane base (0x32, or 0x7D for bit 30) a cargo pixel stands
+  `baseC − baseP + Δalt` height units above its parent's; `md` counts height at
+  2/256, so `cargo_md_bias` adds `2·(baseC − baseP + Δalt)/256`, inside the
+  vertex stage's ±1.8 clamp (`uMdBias`) so it cannot leave the row's band.
+  MEASURED: a commander carried by an ARMATLAS hangs at Δalt = −40 (bias −0.31)
+  and is covered by it, as in the engine; an ARMATLAS on an ARMAP pad has
+  Δalt = 0 and the same base, bias 0. It is still an approximation: `md`'s z
+  term has no counterpart in the merge, which compares height alone.
 - **A unit under construction casts no shadow — nearly to the end.** Ours had to
   drop it or the erased body showed our slant projection through as a black
   silhouette. Measured against the stock renderer on ONE solar at one spot, only

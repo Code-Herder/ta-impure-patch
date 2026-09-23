@@ -136,6 +136,25 @@
 #define ROW_SLACK 8               /* rows a gathered unit may sit past the sweep */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
+
+/* THE ENGINE'S CARGO MERGE, AS A SHIFT OF THE CARGO'S md. DISASSEMBLED:
+   the blit's cargo loop calls 0x4B90A0(cargo, scratch, dx, dy, bias) with
+   bias = hi(cargo.alt - parent.alt) (0x45968B..0x4596D8), and 0x4B90A0 lets
+   a cargo pixel win where `dst <= src + bias` (0x4B913D..0x4B914D). Both
+   planes hold model height plus a per-type base the rasteriser adds,
+   0x32, or 0x7D with UnitDef+0x241 bit 30 (0x459A29..0x459A3C). So in the
+   engine a cargo pixel sits `baseC - baseP + dAlt` height units above its
+   parent's, and md counts height at 2/256 per unit. The z term md also
+   carries has no counterpart in the merge; this matches the height part,
+   which is all that separates a unit hanging under a transport from it. */
+static float cargo_md_bias(const TAGPU_PK_UNIT* parent, const TAGPU_PK_UNIT* c)
+{
+    int baseP = 0x32, baseC = 0x32;
+    int dAlt = (int)(short)(((unsigned)c->pos[1] - (unsigned)parent->pos[1]) >> 16);
+    if (parent->type_row != 0xFFFFu && (parent->def_mask & UD_DIGGER)) baseP += 0x4B;
+    if (c->type_row != 0xFFFFu && (c->def_mask & UD_DIGGER)) baseC += 0x4B;
+    return (float)(2 * (baseC - baseP + dAlt)) / 256.0f;
+}
 static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
                       const TAGPU_PK_PIECE* pc, int nparts);
 
@@ -2324,6 +2343,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                      const unsigned short* bturn;
                      float ax, ay, wx0, wz0, wy, gnd, gy;
                      int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
+                     float mdBias;
                      float waterT, digT; int waterMode;
                      int nanoOn; float nanoT, nanoC[3], nanoWire; } NU;
     /* every unit and every wreck the packet carries could be on screen at
@@ -2482,6 +2502,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         if (n2->nanoOn) n2->shadow = 0;
         n2->air = ((st & 3) != 1);
         n2->feat = 0;
+        n2->mdBias = 0.0f;                    /* the cargo loop sets it */
         n2->sel = ((st & 0x10) && (uiGates & 4));
         if (n2->sel) nsel++;
         /* GROUND height under the unit (engine: GetPosHeight); terrain height
@@ -2512,24 +2533,22 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         n2->owner = owner; n2->cloaked = cloaked;
     }
 
-    /* A UNIT BEING BUILT INSIDE A FACTORY IS PART OF THE FACTORY'S SPRITE.
-       The engine does not sort it against the factory at all: the blit's cargo
-       loop (0x459646..0x4596DD) rebuilds the cargo composite, scaffolds it and
-       Z-MERGES it into the factory's own scratch through 0x4B90A0, per pixel,
-       by the two height planes offset by the position delta. Sorted as a
-       separate sprite it lands on ITS OWN tile row instead -- measured on an
-       ARM lab at world y 1072 building a Hammer at 1068, one 16-unit row
-       apart, so four whole depth keys behind the lab, which then covered it at
-       every pixel it filled. Giving the cargo the parent's row and band leaves the
-       two models to sort against each other by md, our intra-model view depth.
-       That is an APPROXIMATION of the merge, not a port of it: 0x4B90A0
-       compares dstDepth against srcDepth + HIWORD(dy) -- the engine's depth
-       plane is a HEIGHT, biased by the world height delta between the two
-       origins -- while md = (2y - z)/256 is model-local and carries neither
-       that bias nor the positional term. The two agree while parent and cargo
-       sit at the same height, which is every factory pad; a cargo whose origin
-       is offset in height sorts here as though it were level with its parent.
-       The engine's own chain skip
+    /* A CARGO UNIT IS PART OF ITS PARENT'S SPRITE -- a unit being built in a
+       factory, or one carried by a transport. The engine does not sort it
+       against the parent at all: the blit's cargo loop (0x459646..0x4596DD)
+       rebuilds the cargo composite, scaffolds it and Z-MERGES it into the
+       parent's own scratch through 0x4B90A0, per pixel, by the two height
+       planes offset by the position delta. Sorted as a separate sprite it
+       lands on ITS OWN tile row instead -- measured on an ARM lab at world y
+       1072 building a Hammer at 1068, one 16-unit row apart, so four whole
+       depth keys behind the lab, which then covered it at every pixel it
+       filled. So the cargo takes the parent's row and band, and the two models
+       sort against each other by md, our intra-model view depth, with the
+       merge's height offset added to the cargo's (`cargo_md_bias`): a unit
+       hanging under a transport sits below it and is covered by it, as in the
+       engine, and a unit on a factory pad, level with its factory, gets none.
+       It is an APPROXIMATION of the merge rather than a port: md's z term has
+       no counterpart there. The engine's own chain skip
        (0x459657, state & 0x20000) is mirrored so a member it does not draw
        does not get moved either. */
     for (int a = 0; a < nu; a++) {
@@ -2548,6 +2567,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     if (units[b].pu == c) {
                         units[b].rel = units[a].rel;
                         units[b].air = units[a].air;
+                        units[b].mdBias = units[a].mdBias + cargo_md_bias(parent, c);
                         break;
                     }
             }
@@ -2619,6 +2639,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 n2->gy = ay;        /* no ground line of its own: no shift    */
                 n2->rel = (ry >> 4) - r0;
                 n2->owner = 0; n2->cloaked = 0; n2->air = 0; n2->feat = 1; n2->sel = 0;
+                n2->mdBias = 0.0f;
                 n2->shadow = 0;     /* the engine's FShadow feature shadow stays */
                 n2->slant = 0;
                 /* units[] is static and only nu resets per frame, so a field
@@ -2971,6 +2992,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 q->ax = units[i].ax;   q->ay = units[i].ay;
                 q->wx0 = units[i].wx0; q->wz0 = units[i].wz0;
                 q->enc = encBase;
+                q->mdBias = units[i].mdBias;
                 q->alpha = units[i].cloaked ? 0.5f : 1.0f;
                 q->fog = FOGW(i);
                 q->waterT = units[i].waterT;
