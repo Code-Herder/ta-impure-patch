@@ -3090,10 +3090,11 @@ int tagpu_vk_gui_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
         set_viewport(cb, h.sharpW, h.sharpH);
         set_scissor(cb, 0, 0, h.sharpW, h.sharpH, h.sharpW, h.sharpH);
-        /* IN THE ORDER THE GL LANE DREW THEM, which is load-bearing: the
-           minimap is drawn after the cursor and covers it where they overlap,
-           and its view box after its own base for the same reason the engine
-           draws them that way (0x466B44 then 0x466B5E). */
+        /* IN THE ORDER THE PRODUCER RECORDED THEM, which is load-bearing: the
+           cursor is recorded last and covers the minimap where they overlap
+           (the engine's own is drawn inside the flip, 0x4C67C0), and the view
+           box after its own base for the same reason the engine draws them
+           that way (0x466B44 then 0x466B5E). */
         for (q = 0; q < nsd; q++) {
             const TAGPU_GUISDRAW* sd = &h.sdraw[q];
             float qv[24];
