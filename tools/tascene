@@ -1918,7 +1918,7 @@ def grab_window(name: str, path: Path):
     if not inst.get("running") or not inst.get("window"):
         die(f"{name} has no window to grab")
     env = dict(os.environ, DISPLAY=inst["display"])
-    proc = subprocess.run(["import", "-window", "0x%x" % inst["window"][0], f"ppm:{path}"],
+    proc = subprocess.run(["import", "-window", "0x%x" % inst["window"][0], "-depth", "8", f"ppm:{path}"],
                           env=env, capture_output=True)
     if proc.returncode != 0 or not path.exists():
         die(f"window grab failed: {proc.stderr.decode('utf-8', 'replace').strip()[:200]}")
@@ -1940,7 +1940,9 @@ def read_ppm(path: Path):
         while pos < len(blob) and not blob[pos:pos + 1].isspace():
             pos += 1
         fields.append(int(blob[start:pos]))
-    w, h, _maxv = fields
+    w, h, maxv = fields
+    if maxv != 255:
+        die(f"{path}: {maxv + 1}-level samples; only 8-bit PPM is read here")
     return w, h, blob[pos + 1:pos + 1 + w * h * 3]
 
 
