@@ -52,8 +52,9 @@
    caught by the consumer that saw it, on the frame it saw it.
 
    NOTHING MOVES, NOTHING IS FREED. Each slot's address range is reserved
-   once (VirtualAlloc MEM_RESERVE, 8 MB per frame slot against ~2.3 MB at the
-   engine's worst case) and pages are COMMITTED as the high-water mark rises,
+   once (VirtualAlloc MEM_RESERVE, PK_RESERVE per frame slot, which the
+   design point's unit tables fit -- see below) and pages are COMMITTED as the
+   high-water mark rises,
    by the producer, on the slot it holds as W. A fill that does not fit
    truncates this frame (a bit per table in the header) and the next publish
    grows the write slot first; a commit that fails keeps the current size and
@@ -93,7 +94,7 @@
    that starts with the three-dword prefix {head_seq, cap_bytes, used_bytes}
    and ends with {crc, tail_seq}; what lies between is the instance's
    business, checked by its own `valid` callback after the structural checks
-   here. The frame packet (s_frame: game thread -> render thread, 8 MB
+   here. The frame packet (s_frame: game thread -> render thread, 16 MB
    slots, FIVE of them, PREV handed out for the pose blend) and the command
    record (s_cmd: render thread -> game thread, 64 KB slots, four of them,
    latest wins with `force`, no PREV) are the two instances. The proof above is written once and holds for
@@ -109,7 +110,7 @@
 #include "crc32.h"
 
 #define PK_MAXSLOTS   5                    /* the frame instance's 5; cmd's 4 */
-#define PK_RESERVE    (8u << 20)           /* address space per FRAME slot    */
+#define PK_RESERVE    (16u << 20)          /* address space per FRAME slot    */
 #define PK_CMD_RESERVE (64u << 10)         /* ...and per COMMAND slot         */
 #define PK_GRAIN      (64u << 10)          /* commit granularity              */
 #define PK_PAGE       4096u                /* ...under stress, and for commands: one page */
@@ -122,6 +123,24 @@
 #define PK_LOG_EVERY  64                   /* violations logged: the first, then every this many */
 #define PK_PREFIX     12u                  /* head_seq, cap_bytes, used_bytes  */
 #define PK_SUFFIX     8u                   /* crc, tail_seq                    */
+
+/* THE FRAME SLOT'S RESERVE HOLDS THE UNIT-SCALED TABLES AT THE DESIGN POINT.
+   The publisher lays the pieces down first and the units, wrecks and anchors
+   straight after (tagpu_packet_pub.c), so those are the part a reserve that is
+   too small would truncate -- and a truncated unit, piece or wreck table
+   refuses the frame's whole unit hand-over. The sum below is every slot of
+   TAGPU_PK_DESIGN_SLOTS and every wreck the table holds, each at stock's worst
+   model (36 pieces, ARMSCORP/CORSCORP), plus the anchor table: 14.6 MB. What
+   follows them -- effects, fog grids, minimap -- is bounded by its own caps and
+   truncates on its own bit, which costs that layer alone. The reserve is
+   address space; pages are committed as the packets grow (`slot_commit`), so
+   a game pays only for what it publishes. */
+#define PK_DESIGN_PIECES 36u
+#define PK_UNIT_WORST (sizeof(TAGPU_PACKET) + \
+    TAGPU_PK_DESIGN_SLOTS * (sizeof(TAGPU_PK_UNIT) + PK_DESIGN_PIECES * sizeof(TAGPU_PK_PIECE)) + \
+    TAGPU_PK_MAX_WRECKS * (sizeof(TAGPU_PK_WRECK) + PK_DESIGN_PIECES * sizeof(TAGPU_PK_PIECE)) + \
+    TAGPU_PK_MAX_ANCHORS * sizeof(TAGPU_PK_ANCHOR) + 64u /* the tables' 4-alignment */)
+typedef char pk_reserve_design[(PK_RESERVE >= PK_UNIT_WORST) ? 1 : -1];
 
 /* the record's prefix and suffix, wherever the instance's suffix sits */
 #define REC_HEAD(p)     (((uint32_t*)(p))[0])
@@ -200,6 +219,8 @@ static void plog(const char* s)
     FILE* f = fopen("tagpu.log", "a");
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
+
+static int s_growStress;               /* tagpu_grow.stress (tagpu_packet.h) */
 
 static int lever(const char* file)
 {
@@ -464,6 +485,10 @@ static const char* frame_valid(const void* rec)
        every table a consumer indexes by `n_` alone is checked HERE. */
     if (!table_ok(p, p->off_builds, p->n_builds, sizeof(TAGPU_PK_BUILD))) return "builds table";
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
+    /* the publisher's own table caps, which the render thread sizes its
+       per-frame arrays from -- a count past them is not a packet it wrote */
+    if (p->n_units > TAGPU_PK_MAX_UNITS) return "more units than the table holds";
+    if (p->n_wrecks > TAGPU_PK_MAX_WRECKS) return "more wrecks than the table holds";
     if (p->n_builds > TAGPU_PK_MAX_BUILDS) return "more builds than slots";
     if (p->n_anchors && p->anch_cols > 0 && p->anch_rows > 0 &&
         p->n_anchors > (unsigned)p->anch_cols * (unsigned)p->anch_rows) return "more anchors than cells";
@@ -870,6 +895,8 @@ void tagpu_packet_set_extra(tagpu_packet_extra_fn fn) { s_extra = fn; }
 
 int tagpu_packet_armed(void) { return s_armed; }
 
+int tagpu_grow_stress(void) { return s_growStress; }
+
 /* ------------------------------------------------------------- attach ---- */
 
 static void pkx_setup(PKX* m, const char* name, unsigned recBytes, unsigned reserve, unsigned grain,
@@ -888,6 +915,8 @@ void tagpu_packet_init(void)
     s_check  = lever("tagpu_packet.check");
     s_stress = lever("tagpu_packet.stress");
     s_poison = lever("tagpu_packet.poison");
+    s_growStress = lever("tagpu_grow.stress");
+    if (s_growStress) plog("packet: tagpu_grow.stress - every unit-scaled render array moves every frame");
     QueryPerformanceFrequency(&s_freq);       /* the heartbeat's clock, armed or not */
     if (lever("tagpu_packet.off")) {
         plog("packet: disabled by tagpu_packet.off — no slots, nothing published, taken or applied: "

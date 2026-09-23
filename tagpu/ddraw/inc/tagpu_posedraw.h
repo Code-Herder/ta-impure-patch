@@ -154,11 +154,11 @@ unsigned tagpu_posedraw_drawn(void);  /* units drawn this frame */
    monotonic render-thread counter and stamps this frame's hand-over. */
 void tagpu_posedraw_frame(unsigned frame_counter);
 
-/* 0 when the pass cannot arm: a device whose `maxUniformBufferRange` will not
-   hold the pose block, which is the whole of bring-up. There is no CPU
-   emitter to leave those units to, so the caller
-   instead stops skipping the engine's own unit rasterise and they are drawn by
-   the engine at 8bpp. A 0 ALSO MEANS "NO DEVICE YET" for the first frames —
+/* 0 when the pass cannot arm: a device whose `maxStorageBufferRange` will not
+   hold one unit's pose at the piece ceiling, which is the whole of bring-up.
+   There is no CPU emitter to leave those units to, so the caller instead stops
+   skipping the engine's own unit rasterise and they are drawn by the engine at
+   8bpp. A 0 ALSO MEANS "NO DEVICE YET" for the first frames —
    the state goes back to untried rather than latching a refusal — so a caller
    that latches on the first answer latches the wrong one. */
 int  tagpu_posedraw_ready(void);
@@ -214,19 +214,19 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
    tagpu_vk_unit.c draws the units from this and the bake. This is everything
    it is handed; it reads no engine state and re-derives nothing.
 
-   NOTHING HERE IS A SECOND EVALUATION OF ANYTHING: the vertices are the two
+   NOTHING HERE IS A SECOND EVALUATION OF ANYTHING. The vertices are the two
    streams tagpu_posebake.h's mirrors carry; the ranges are the `first`/`count`
-   pairs the bake lays down per range; the pose block is what `pose_words`
-   converts, the single conversion of it.
+   pairs the bake lays down per range; the per-piece words are what
+   `pose_words` converts, the single conversion there is.
 
-   THE POSE ROWS LIVE IN AN ARENA, not in the record. A unit's block is 14 336
-   bytes if it is carried whole, and almost all of that is the 256-piece
-   ceiling rather than the model: stock's worst is 36 pieces. So each record
-   names an offset into two arrays this module owns and grows, and 300 units of
-   stock content cost about half a megabyte rather than four. THE VULKAN PASS
-   STILL NEEDS THE WHOLE 14 336-byte WINDOW per unit, because that is the size
-   of the block the shader declares and a descriptor must cover it -- what the
-   arena saves is the hand-over, not the uniform buffer.
+   THE POSES LIVE IN THREE ARENAS, not in the records. A unit at the 256-piece
+   ceiling would be 14 336 bytes, and stock's worst is 36 pieces, so each
+   record names OFFSETS into `rows`, `flags` and `vis` -- arrays this module
+   owns and grows -- and a unit costs what its model has. The arenas are laid
+   out exactly as the shader's storage buffer (tagpu_posebake.h), so the
+   Vulkan pass copies them whole, and the record's offsets become the shader's
+   base indices unchanged. Offsets rather than pointers are also what lets an
+   arena move when it grows without invalidating a record already written.
 
    IT IS VALID FOR THE FRAME THAT PUBLISHED IT AND NO OTHER, like every other
    hand-over in this tree, and here the reason is its own: `units`, `rows`,
@@ -238,12 +238,13 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
 
    `otherDraws` IS THE REFUSAL, AND IT IS NARROW ON PURPOSE. It counts the
    units THIS PASS DREW INSIDE THE PUBLISHED WINDOW that the hand-over does not
-   carry -- a unit past TAGPU_PD_MAXHAND, a unit an arena would not grow for --
-   and a non-zero count stands the Vulkan pass down. **The build ghost is
-   CARRIED, not counted**: `ghost.on` is a play default, and counting an open
-   building placement would stand the whole pass down every frame. That is
-   the set the A/B brackets, and what the lever claims is the VULKAN capture,
-   for a cross-BUILD comparison.
+   carry -- a unit past TAGPU_PD_MAXHAND, a unit an arena would not grow for,
+   and every unit of a frame whose packet was truncated -- and a non-zero count
+   stands the Vulkan pass down. The build ghost is carried, not counted: it
+   rides the same records with its own alpha and depth rule, and `ghost.on` is
+   a play default, so counting it would stand the whole pass down for as long
+   as a building placement is open. The A/B lever captures the Vulkan frame
+   alone, for a comparison across builds.
 
    IT DOES NOT COUNT THE REST OF THE FRAME, and that is not an oversight:
    nothing else draws a unit (the replacement meshes and the native 3DO stream
@@ -259,12 +260,16 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
    render_vk.c's loop -- by the native pass inside `tagpu_overlay_draw` --
    than the `tagpu_vk_frame` that consumes it. */
 
-/* Units one frame hands over. A bound on an allocation that scales with what
-   is on screen, and the pass re-checks it: at the Vulkan end each unit costs a
-   14 336-byte uniform window per FRAME SLOT, so 512 is 7.3 MB a slot and the
-   ceiling is a deliberate one rather than MAXU's 2048. A frame with more posed
-   units than this hands over nothing and says so once. */
-#define TAGPU_PD_MAXHAND 512
+/* Records one frame can hand over: every one the producer can make, so no
+   frame the packet carries is refused for count. A record is a unit-table
+   slot (TAGPU_PK_MAX_UNITS), a wreck (TAGPU_PK_MAX_WRECKS), the placement
+   ghost (1) or a queued build ghost (TAGPU_PK_MAX_BUILDS); tagpu_posedraw.c
+   asserts the sum against tagpu_packet.h. NOTHING IS SIZED FROM IT -- the
+   arenas here and the Vulkan pass's slot buffers grow to the frame's own
+   count -- so it is a bound on a number handed between two files, which the
+   Vulkan pass re-checks, not a budget. A frame past it hands nothing over and
+   says so once. */
+#define TAGPU_PD_MAXHAND (16384 + 4096 + 1 + 4096)
 
 typedef struct TAGPU_PDUREC {
     /* the bake entries, and the serial each was baked under. The POINTER alone
@@ -285,7 +290,7 @@ typedef struct TAGPU_PDUREC {
     int   shKind;                     /* TAGPU_PDSH_*                         */
     int   shFirst, shCount;           /* the range that kind draws            */
     float shOffY;                     /* the ground shift, frame px           */
-    int   npose;                      /* pieces the block below carries       */
+    int   npose;                      /* pieces the pose arena carries        */
     unsigned rowOff;                  /* first of npose*3 vec4 in `rows`      */
     unsigned flagOff;                 /* first of npose floats in flags/vis   */
     /* the vertex stage's per-unit numbers */
@@ -444,6 +449,12 @@ int  tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now);
    lowers the gate on its own. */
 void tagpu_posedraw_slant_drew(void);
 int  tagpu_posedraw_slant_take(void);
+
+/* THIS FRAME HAS UNITS THE HAND-OVER CANNOT CARRY, because the packet they
+   came from was truncated: the frame's `otherDraws` becomes non-zero and the
+   Vulkan pass draws no unit rather than some of them. Render thread, after
+   `tagpu_posedraw_frame` and before the frame's last window closes. */
+void tagpu_posedraw_uncarried(void);
 
 /* one `posed=` field for the native: line; writes nothing when disarmed */
 int  tagpu_posedraw_stats(char* out, int n);

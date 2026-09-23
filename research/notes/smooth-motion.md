@@ -104,8 +104,9 @@ or lookahead (parsing).
 Snapshot each drawn unit's `P_POS`/`P_TURN` when the sim tick counter (`main+0x38A47`) changes;
 render at `t − D` with D ≈ 2 ticks; interpolate between the two bracketing samples. `[PLANNED]`
 
-- **Arena.** Raw fields are 18 B/piece. At `PD_ARENA` sizing (`MAXU * 48` = 98 304 pieces) two
-  snapshots are **3.5 MB**, less than the 4.7 MB pose arena already there. Past the arena, weight
+- **Arena.** Raw fields are 18 B/piece, so two snapshots cost 36 B for every piece the pose
+  arena holds (grown each frame to the gathered pieces, [GPU status](gpu-status.html) §2.86):
+  3.5 MB at 98 304 pieces. Past the arena, weight
   1.0 — and counted, the way [G16](gpu-posing.md) step 8 counts `rest=`.
 - **Keyed by `(o3, nparts, level generation)`, dropped on mismatch.** Unit array slots are
   recycled; without this a new unit inherits a dead one's poses. **It does not close the case for

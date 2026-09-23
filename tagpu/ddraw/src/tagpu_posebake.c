@@ -33,12 +33,13 @@
 #include "tagpu_packet.h"   /* the piece run the bake keys on */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirrors */
 
-/* A 69-unit inventory of 67 distinct types filled a 64-entry table and started
-   evicting, so both are set clear of a busy screen rather than at it. A stock
-   model bakes to ~2000 vertices: 128 geometry entries is about 8 MB of
-   geometry mirror and 256 material streams about 10 MB. */
-#define PB_MAXGEOM  128          /* types cached at once                     */
-#define PB_MAXMAT   256          /* (type, owner) streams cached at once     */
+/* The two cache sizes are tagpu_posebake.h's, which says why. Entries are
+   allocated as they are baked and kept until evicted, so a session pays for
+   the types it has actually drawn: a stock model bakes to ~2000 vertices, 64 KB
+   of geometry and 40 KB of material stream with their mirrors, so a full
+   material table is ~43 MB -- a 10-player game's cost, not a 1v1's. */
+#define PB_MAXGEOM  TAGPU_PB_MAXGEOM
+#define PB_MAXMAT   TAGPU_PB_MAXMAT
 #define PB_MAXVERT 49152         /* vertices one model may bake to           */
 #define PB_MAXNODEV 4096         /* vertices in one piece (emit_node's bound) */
 

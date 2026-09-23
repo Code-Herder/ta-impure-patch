@@ -1544,7 +1544,7 @@ engine read) and *pass-completed* (after its last). The real free runs on the **
 the next `FreeObjectState` call: every entry already queued has had its record nulled since
 (program order), so after a full fence the drain stamps them with pass-started and frees each
 once pass-completed has reached its stamp. An idle reader passes at once; a reader mid-pass makes
-the entry wait for that pass; a stuck reader freezes reclamation and the 4096-entry ring leaks
+the entry wait for that pass; a stuck reader freezes reclamation and the 16 384-entry ring leaks
 on overflow — never a synchronous free, never a spin. The drain is pumped only by frees, so the
 most recent death's object (and its composite-registry slot) is held until the next death or the
 level ends — one object for the length of a lull, harmless: the engine draws from the unit array.
@@ -2359,8 +2359,8 @@ cell and takes what was there (`__atomic_exchange_n`, ACQ_REL — NOT mingw's `I
 whose contract is acquire-only), so the roles stay a permutation without a lock, provided the init
 made them one: explicit at DLL attach, `W=0, cell=1 (stale), READ=2, PREV=3`, because zeroed
 statics would put both threads on slot 0. `head_seq` stored before the fill, `tail_seq` after;
-the consumer latches the head at acquire and compares the tail at frame end. Slots are 8 MB of
-address space each, reserved once, committed as the high-water mark rises on the producer's own
+the consumer latches the head at acquire and compares the tail at frame end. Slots are 16 MB of
+address space each (`PK_RESERVE`, derived from the unit tables at the design point — §2.86), reserved once, committed as the high-water mark rises on the producer's own
 slot, never moved, never freed; a fill that does not fit truncates this frame and the next publish
 grows first. Neither side ever waits. Every violation is counted, logged rate-limited, never
 fatal: thread identity both sides (the render thread's restart across a display-mode change is
@@ -2395,7 +2395,7 @@ under a new name plus a macro offset, an address assembled from split macros, an
 arrives at run time. It is a ratchet against the spellings in use, not a proof; a new spelling is
 a review matter.
 
-**Read it in `tagpu.log`.** `packet: ARMED 4 slots x 8 MB reserved, 127 KB committed each …` (the first 64 KB grain plus the
+**Read it in `tagpu.log`.** `packet: ARMED 5 slots x 16 MB reserved, 127 KB committed each …` (the first 64 KB grain plus the
 grain the canary's four bytes tip it into) and
 `packet: publisher ARMED on DrawGameScreen 0x468CF0 … level-end packet by … loader-thread observer
 at 0x497C70=1 …` at launch; then every 300 frames
@@ -9827,7 +9827,7 @@ means reimplementing selection, box-select, build placement and every cursor mod
 | **`tagpu_overlay_draw`'s two early returns above the teardown gate still run `writeback_paint`**, which dereferences `*(char**)(u + U_OBJ3DO)` — after `tagpu_reclaim_pass_begin` has already published `s_completed = s_started` for that pass. The gate's own comment says the writeback must not run during a teardown, and those two paths sit above it. Found by the G13t re-review while checking the latch that closed the same hole one line lower | `tagpu_overlay.c` lines 583 and 585, `writeback_paint` | reachable only with `tagpu_writeback.on` **and** (`tagpu_overlay.off` or `s_state != 1`), so it is debug-lever-only and a no-op in play — which is why G13t recorded it instead of widening its own diff. The fix is the same shape: those returns must consult the latched flag too |
 | ~~**`tagpu_reclaim.c` claims every reader of the UnitDef array is on the game thread**, and uses that to justify leaving the free at `0x42DCCB` unhooked. But `tagpu_cat_frame`, `tagpu_weapons_frame` and `tagpu_scenario_frame` all run from `tagpu_overlay_draw`, on the RENDER thread, above the gate.~~ **CLOSED 2026-09-18 by landing 10c-1**, and closed the way the row asked for: the justification was not corrected, the premise was made true. All three now run on the GAME thread, from the engine's own flip, so `tagpu_reclaim.c`'s claim holds as written and the free at `0x42DCCB` needs no hook. The move was made to reach `renderer=gdi`; closing this was the side effect | `tagpu_reclaim.c` ~line 215, and `tagpu_triggers_frame` in `tagpu_overlay.c`, called from `tagpu_gui_hook.c`'s `before_flip` | nothing left to do |
 | **Past about 7680×4320 the wide fog grid is clamped and the outer ring smears again.** `tagpu_fogwide`'s three buffers are `FOGW_MAXDIM` square and allocated ONCE — it publishes a pointer into `s_pub` to the render thread while the game thread builds into `s_build`, so a buffer grown under a zoom change would be a use-after-free — and 1024 cells covers the window a real screen asks for (485 at 3840×2160, 645 at 5120×2880, 965 at 7680×4320, all MEASURED against the arithmetic 2026-09-09). Past that the clamp takes its trim off both ends, so the view's centre keeps its cover and only the edge returns to the border-cell smear | `tagpu_fogwide.c` `FOGW_MAXDIM` | a bigger allocation, or a publish handshake that makes growing one safe; neither is worth it for a screen nobody has |
-| The **unit** pass's `MAXU`/`MAXNV` are the first fixed budgets a very wide zoomed-out view meets, now that the terrain's and the feature pass's are the screen | `tagpu_native.c` | measure how many units a 4K 0.25× view over a full map actually gathers, then size or bail deliberately. The feature pass's `MAXBV_BODY`/`MAXBV_SHAD` were this row's other half until 2026-09-10; they are gone — `tagpu_feat.c`'s buckets `realloc`-double from `BV_BODY_0`/`BV_SHAD_0` behind `feat_room()` up to a 16 MB ceiling, and a 4K 0.25× view on Town & Country grew them to 65536/32768 verts with `DROPPED(full=0)` |
+| The **unit** pass's `MAXNV` is the first fixed budget a very wide zoomed-out view meets, now that the terrain's and the feature pass's are the screen; the unit gather itself grows to the packet (§2.86) | `tagpu_native.c` | measure how many vertices a 4K 0.25× view over a full map actually emits, then size or bail deliberately. The feature pass's `MAXBV_BODY`/`MAXBV_SHAD` were this row's other half until 2026-09-10; they are gone — `tagpu_feat.c`'s buckets `realloc`-double from `BV_BODY_0`/`BV_SHAD_0` behind `feat_room()` up to a 16 MB ceiling, and a 4K 0.25× view on Town & Country grew them to 65536/32768 verts with `DROPPED(full=0)` |
 
 ### 3.3 Open questions, not limits
 
@@ -15588,10 +15588,10 @@ swept. `0x4CC650`'s clip at the context edge is not reproduced (the scissor cuts
 instead). A device without Bresenham lines, or without a line `ceil(3·scale) + 2` wide, draws no rect —
 the rest of the marker layer still draws and the log says why once.
 
-**Found on the way, not fixed here.** On `500v500` the unit pass stood down for the whole frame
+**Found on the way.** On `500v500` the unit pass stood down for the whole frame
 (`vk: unit: the GL twin drew 348 posed unit(s) this hand-over does not carry`): about 860 units
 were on screen against `TAGPU_PD_MAXHAND`'s 512, so **no unit body drew at all** while the rects
-did. That cap and its all-or-nothing refusal predate this landing and were not touched.
+did. §2.86 removes that cap.
 
 ### 2.85 The strip — nothing in the build names a GL object, and no setting names GL
 
@@ -15632,9 +15632,91 @@ compiled identifier naming GL (`glreset`, `ogl`, `wgl`, `opengl`, `vbo`/`vao`/`f
 history the comment review kept. `tascene ab`'s browser half draws no terrain in headless Chrome
 (the capture half is right: same view, same Commander, same wreck), so its percentage is not a
 parity figure yet. `big-battle` shows `unit=0` in the census from ~frame 3300 on `main` as well
-(`TAGPU_PD_MAXHAND`): the hand-over cap, not this landing.
+(`TAGPU_PD_MAXHAND`): the hand-over cap, which §2.86 removes.
 `uiwalk --game-only --screens-only --cycles 1` is clean except two stops of the cycle, and
 `main`'s DLL gives both identically: `VISUALS#1` misses the `FPS` gadget by 23 px, and
 `ARMMAIN2#1` has 574 unexplained px in (502,356)-(520,392), a unit-sized box at the viewport
 centre.
 
+### 2.86 The unit cap goes — one pose buffer a frame, and every cap sized for 10 × 1024
+
+**What was wrong.** Past **512 posed units on screen, no unit body drew at all**. The Vulkan unit
+pass bound one 14 336-byte uniform window per unit per frame slot — the 256-piece ceiling, whatever
+the model — so the hand-over was capped at `TAGPU_PD_MAXHAND` 512 to keep that affordable, and a
+frame over the cap was refused whole (§2.84 found it on `500v500`). Behind it sat a row of other
+fixed caps that scale with the unit count, each sized for stock's 500 a player.
+
+**The design point.** The engine's unit array has `10 × UnitLimit + 1` slots; retail clamps
+`UnitLimit` to 500 (`0x491658`, [deep-tadr](deep-tadr.html)), and a unit-limit patch raising it to
+1024 makes **10 241**. That number is `TAGPU_PK_DESIGN_SLOTS` in `tagpu_packet.h`, and every cap
+below is either grown to the frame's own count or fixed at a size asserted against it at compile
+time. The patch itself is not part of this; nothing here was run above stock's 5 001 slots.
+
+**The pose is one storage buffer a frame.** The hand-over already kept the poses in three arenas
+(`rows`, `flags`, `vis`) with per-record offsets; the Vulkan pass now copies the three whole into
+one `readonly` storage buffer per frame slot, laid out as `tagpu_posebake.h` states, and each
+unit's uniform block carries three base indices into it (`uRowBase`, `uFlagBase`, `uVisBase`,
+`VGL_SZ` 176 → 192). A unit costs what its model has: 2 016 bytes at stock's worst, 36 pieces.
+`tools/spirv-gen.py` accepts `layout(std430) readonly buffer` blocks for it.
+
+| bound | where | what it holds |
+|---|---|---|
+| every `uPose` index clamped to the bound range | the posed VS | no vertex reads past the buffer, whatever it is handed; on data that passed the two below, a no-op |
+| each unit's slices inside the copied arenas | `tagpu_vk_unit_upload` | a unit that fails is not drawn and the every-unit-or-none gate refuses the frame |
+| the frame's packed size ≤ `maxStorageBufferRange` | the same, every frame | the limit is a 32-bit field, so every base index stays under 2^28 vec4 and the `int` bases cannot overflow |
+| one unit at the piece ceiling bindable | `tagpu_posedraw_ready` | 14 336 bytes; the spec's 128 MB floor means it cannot refuse a conformant device |
+| `TAGPU_PD_MAXHAND` = units table + wrecks + 1 + builds (24 577) | `tagpu_posedraw.h`, asserted in `tagpu_posedraw.c` | every record the producer can make, so no frame the packet carries is refused for count; nothing is sized from it |
+| a packet truncated in its unit, piece or wreck table | `tagpu_native.c` → `tagpu_posedraw_uncarried` | refuses the unit hand-over whole: a frame missing units is a different frame |
+
+**Every other cap, and how it scales.**
+
+| cap | was | now | thread | why that is safe |
+|---|---|---|---|---|
+| native gather `units[]`, posed list `pdu[]` | `MAXU` 2048, static | grown to `n_units + n_wrecks` | render | one owner, grown before any pointer is taken; a failed grow refuses the hand-over |
+| native pose arena | `MAXU × 48` pieces | grown to the gathered pieces (exact: the bake keys on `nparts`) | render | same; a failed grow draws units at rest, logged once |
+| sub-pixel table `s_spx` | 8 192 slots | `TAGPU_PK_MAX_UNITS` 16 384 | render | static, asserted ≥ the design point |
+| marker bars, selection rects | 2 048 each | grown to `n_units` | render | grown at the top of `tagpu_mark_gather`, before anything emits; the cursor rects stay static and the two blocks are pushed back to back, so vertex indices are unchanged |
+| order-marker buckets | 12 000 / 12 000 / 4 800 verts | 24 000 / 24 000 / 9 600 | render | static; overflow counted |
+| order arena `MAXORD` / `MAXWALK` | 2 048 / 8 192 | 4 096 / 16 384 | game fills, render copies | **fixed, never reallocated** — two threads; asserted ≥ 4 records per design-point unit |
+| packet builds table | 2 048 | 4 096 | game | asserted ≥ `MAXORD` |
+| bake caches `PB_MAXGEOM` / `PB_MAXMAT` | 128 / 256 | 512 / 1 024 | render | an entry evicted mid-frame refuses the frame, so they hold one 10-player frame (a geometry entry is a model: wrecks and ghosts take their own); entries are allocated on bake |
+| Vulkan vertex-buffer table `VB_MAX` | 512 | the bake caches' sum (1 536), with a validated direct-mapped hint in front of the scan | render | the scan ran four times a unit a frame over the whole table |
+| packet slot reserve `PK_RESERVE` | 8 MB | 16 MB | game commits, render reads | asserted ≥ the unit-scaled tables at the design point at 36 pieces a model (14.6 MB); address space, committed as used |
+| packet `n_units` / `n_wrecks` | unchecked against the tables | validated at acquire | render | the render arrays are sized from them |
+| reclaim ring | 4 096 | 16 384 | game | a design-point level's objects fit on the timed-out teardown path; a full ring leaks, never frees |
+
+**Measured 2026-09-23**, 1024×768, `ss = 2`, branch against `main` built clean from one tree:
+
+| measurement | result |
+|---|---|
+| `selbox-facings`, `tagpu_posedraw.ab`, runs interleaved main/branch/main/branch | **0 px of 3 145 728 in every pairing**, 8 465 ink pixels each side, one md5 across all four |
+| `pose-inventory` at the structures stop, the same four runs | cross-build 14 137–27 961 px against a same-build floor of 21 536–23 207: idle COB animation, every pose class drawn on both (checked by eye) |
+| `500v500` at zoom 0.25, `main` | `posedraw: more posed units on screen than the Vulkan hand-over carries`, census `unit=0` |
+| `500v500` at zoom 0.25, branch | census `unit=1`, **610 posed units drawn**, `ftime: vk p50 0.355 ms p99 0.405 ms` |
+| the same under `tagpu_grow.stress` | census `unit=1`, 604 posed, p50 0.361 ms, no crash |
+| `ball10` at zoom 0.25, branch | census `unit=1`, 560 posed, 1 747 units alive, no crash |
+
+`tagpu_grow.stress` (read at attach, `tagpu_packet.h`) moves the arrays this sizes every frame:
+the native gather's and the marker pass's are freed and reallocated at exactly the size asked
+for, the posed hand-over's arenas grow to the exact size on each append, and the unit pass
+rebuilds its two slot buffers. The other growable arrays (the unit pass's draw list and staging,
+the marker hand-over) keep their ordinary doubling and are not covered by it. A pointer that
+outlives a move then reads freed memory at stock unit counts.
+
+**What the design point costs in address space, if a frame reaches it.** 10 241 units posed and
+on screen at 36 pieces: the unit pass's pose buffer is 20.6 MB and its uniform blocks 17.7 MB
+**per frame slot** (four on the reference setup), and the native pose arena 17.7 MB. The frame
+packet reserves 16 MB × 5 slots = 80 MB up front (it was 40), committed only as packets grow. A
+stock game pays what it draws.
+
+**Not covered.**
+- **Nothing ran past 5 001 slots**; the design point is argued and asserted, not measured.
+- **Frame time at 10 000 units is unknown.** The bake's per-unit lookup scans its caches linearly
+  and probes every piece's node with `IsBadReadPtr`; at ~600 posed units neither shows (0.36 ms),
+  and at 10 000 either may. Instancing is the next step if it does.
+- A packet that truncates while its slot grows at load (`trunc=5` over `grow=17` on `500v500`)
+  now refuses those few frames' units whole, where it used to drop the truncated units alone.
+- If the unit-limit patch also enlarges the engine's wreck pool (0x18000 bytes at `0x421F29`),
+  `WR_COUNT` has to follow it — in `tagpu_engine.h` and in its own copy in `tagpu_feat.c`.
+- Type-scaled caps are unchanged: the selection-box cache (256 root nodes a level) and the
+  scenario harness's `SCN_MAX_*` (4 096 units, 512 selected).

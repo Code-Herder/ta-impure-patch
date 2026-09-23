@@ -1067,12 +1067,11 @@ int tagpu_vk_max_image_dim(void)
     return cached;
 }
 
-/* THE DEVICE'S LARGEST UNIFORM BUFFER RANGE, or 0 while there is no device.
-   A pass wants it for the same reason: the pose block is a COMPILE-TIME size
-   and the pass only asks whether the device can hold it. Asked of the device we actually bound.
-   0 IS A REFUSAL AND NOT A DEFAULT, exactly as above -- a caller treats it as
-   "not yet" and asks again on a later frame. */
-int tagpu_vk_max_uniform_range(void)
+/* THE DEVICE'S LARGEST STORAGE BUFFER RANGE, or 0 while there is no device.
+   The posed-unit pass binds one storage buffer holding the whole frame's poses
+   and checks the frame's size against this. 0 IS "NOT YET", NEVER A LIMIT: a
+   caller asks again on a later frame. */
+int tagpu_vk_max_storage_range(void)
 {
     /* CACHED AGAINST THE DEVICE IT CAME FROM, not just cached. The GPU picker
        tears the lane down and re-picks a physical device on a row change, and
@@ -1085,8 +1084,10 @@ int tagpu_vk_max_uniform_range(void)
     if (!s_vk.pd || lane_state() != ST_READY) return 0;
     if (cached > 0 && cachedFor == s_vk.pd) return cached;
     vkGetPhysicalDeviceProperties(s_vk.pd, &p);
-    if (p.limits.maxUniformBufferRange > 0x7FFFFFFFu) return 0;
-    cached = (int)p.limits.maxUniformBufferRange;
+    /* the spec's floor is 2^27; a device reporting past INT_MAX is capped
+       rather than refused -- the pass never asks for more than a frame holds */
+    cached = p.limits.maxStorageBufferRange > 0x7FFFFFFFu
+               ? 0x7FFFFFFF : (int)p.limits.maxStorageBufferRange;
     cachedFor = s_vk.pd;
     return cached;
 }

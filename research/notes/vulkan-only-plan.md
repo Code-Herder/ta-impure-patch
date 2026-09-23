@@ -130,11 +130,10 @@ non-zero the unit pass draws **nothing at all**.
 
 **The build-ghost half of this is FIXED and the text above was stale** [re-checked 2026-09-18]:
 `tagpu_posedraw.c:887` records ghosts instead of counting them since landing 6, and in any case
-`ghost_pass` never ran on the Vulkan lane to count anything. What remains true is the ceiling:
-
-* any frame with more than **512** posed units — `TAGPU_PD_MAXHAND`, a deliberate ceiling under
-  `MAXU`'s 2048, chosen because each unit costs a 14 336-byte uniform window per frame slot —
-  and the two other counted cases, an arena that would not grow and a unit with no pieces.
+`ghost_pass` never ran on the Vulkan lane to count anything. What remains counted is an arena
+that would not grow, a unit with no pieces and a truncated packet. `TAGPU_PD_MAXHAND` is every
+record the producer can make, so no frame is refused for its count
+([GPU status](gpu-status.html) §2.86).
 
 Not visible from the configuration Phase G was measured in.
 

@@ -194,7 +194,7 @@ annotates every key with "TA v3.1 default" and "TA patch default".
 
 | Limit | Stock | TADR | Where |
 |---|---|---|---|
-| Units per player | **250** (`totala.ini:31`) | **1500**, ini `UnitLimit` | 4 DWORD writes |
+| Units per player | **250** default, clamped to **500** (`0x491658`) | **1500**, ini `UnitLimit` | 4 DWORD writes |
 | Pathfinding cycles | 1333 | 66650, ini `AISearchMapEntries` | `0x0040EAD6` |
 | SFX vectors | 400 | 20480 (`totala.ini:47`); malloc = ×10 | 20 sites + 1 hook |
 | Unit-type IDs | 512 | 16000, ini `UnitType` | 17 patches |
@@ -205,33 +205,34 @@ annotates every key with "TA v3.1 default" and "TA patch default".
 | Aux (debris) effects | 300 | 3000 | `EngineLimits.h:8` |
 | Weapon IDs | 256 | 4096 heap overflow, **off by default** | `WeaponIdOverflow.h:29-30` |
 
-**Resolving the unit-limit conflict.** Neither of your notes is right, and the "6553"
-figure appears nowhere in the repo. `src/Recorder/plugins/UnitLimit.pas:37-67` quotes the
-actual TA 3.1 disassembly at the disputed address:
+**Resolving the unit-limit conflict.** Retail TA 3.1 reads `UnitLimit` from the ini with a
+default of **250** and clamps it to **[20, 500]** — disassembled from
+`pristine/TotalA.exe.pristine`:
 
 ```
-.text:0049163A mov  eax, TAdynmemStructPtr
-.text:0049163F push 5DCh                    ; = 1500, the ReadIniFileValue default
-.text:00491644 push offset aUnitlimit       ; "UnitLimit"
-.text:00491653 call ReadIniFileValue
-.text:00491658 cmp  eax, 5DCh               ; upper clamp
-.text:00491665 mov  eax, 5DCh
-.text:00491678 cmp  eax, 14h                ; lower clamp = 20
-.text:0049167D mov  eax, 14h
+0049163F push 0FAh                   ; = 250, the ReadIniFileValue default
+00491644 push offset aUnitlimit      ; "UnitLimit"
+00491653 call ReadIniFileValue       ; 0x49F5A0
+00491658 cmp  eax, 1F4h              ; upper clamp = 500
+00491665 mov  eax, 1F4h
+00491678 cmp  eax, 14h               ; lower clamp = 20
+0049167D mov  eax, 14h
 ```
 
-So **stock TA 3.1 already reads `UnitLimit` from the ini and clamps it to [20, 1500]**;
-the `[20,1500]` clamp at `0x49163A` in your notes is *vanilla behaviour, not a patch*.
-1500 is the ceiling, 250 is the value TA ships in its ini. What TADR does is rewrite the
-three `5DCh` immediates — `0x491640` (default), `0x491659` (compare), `0x491666`
-(clamp-to) — plus a fourth multiplayer site at `0x44CAFE`
-(`LimitCrack.cpp:466-473`, addresses at `HardCodeFunctions.cpp:832-835`). The Delphi
-plugin writes 2 bytes per site (`UnitLimit.pas:93-104`), the C++ writes 4. The "500 →
-1500 or 5000" line is a **stale comment** at `UnitLimit.pas:3` that the code below it
-contradicts. One live inconsistency: `LimitCrack.cpp:43` uses a hard-coded fallback of
-**3663** if the ini key is missing, while the shipped ini says 1500 and its own comment
-says the range is 20–1500. Same pattern at `:41` — code fallback 16000, shipped ini
-20480. [VERIFIED]
+The engine's unit array then has `10 × UnitLimit + 1` slots (the u16 at `main+0x14351`), so
+stock tops out at 5 001. `src/Recorder/plugins/UnitLimit.pas:37-67` quotes the same sites with
+`5DCh` (1500) in all three immediates; that listing is of a binary already patched, not of the
+retail one. What TADR does is rewrite those three immediates — `0x491640` (default), `0x491659`
+(compare), `0x491666` (clamp-to) — plus a fourth multiplayer site at `0x44CAFE`
+(`LimitCrack.cpp:466-473`, addresses at `HardCodeFunctions.cpp:832-835`). The Delphi plugin
+writes 2 bytes per site (`UnitLimit.pas:93-104`), the C++ writes 4. One live inconsistency:
+`LimitCrack.cpp:43` uses a hard-coded fallback of **3663** if the ini key is missing, while the
+shipped ini says 1500. Same pattern at `:41` — code fallback 16000, shipped ini 20480.
+[DISASSEMBLED for the retail values; VERIFIED against the TADR sources for the patch sites]
+
+The renderer is sized for **1024 a player × 10 players = 10 241 slots**
+(`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`); gpu-status §2.86 lists what that design point
+bounds.
 
 **Weapon IDs 256→16000 is not current.** `tdraw.txt:8` explicitly says the weapon-ID
 crack is "not present in current release"; the ini keys `WeaponType` and
