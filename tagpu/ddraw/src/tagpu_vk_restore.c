@@ -26,7 +26,7 @@
      * THE WEIGHT BLOCK IS A DYNAMIC UNIFORM OFFSET. GL rebinds a range with
        glBindBufferRange per draw; here the offset is a dynamic descriptor
        offset, and it must be a multiple of minUniformBufferOffsetAlignment.
-       That is why tagpu_restore_core.c's loader now bounds `offset & 15` as
+       That is why tagpu_restore_core.c's loader bounds `offset & 15` as
        well as `kstride & 15` -- both terms of `(offset + group x kstride) x 16`
        are then multiples of 256 and no device's alignment can reject one.
      * THE SLICE IS TIMED WITH TIMESTAMPS, not a single elapsed-time query. GL
@@ -38,8 +38,8 @@
    did not have. All three fragment shaders index the slot grid with
    `ivec2(gl_FragCoord.xy)`, and GL measures that y from the framebuffer's
    BOTTOM while Vulkan measures it from the TOP -- `OriginLowerLeft` is not even
-   permitted in Vulkan. That looks exactly like landing 5b waiting to happen,
-   and it is not, because the two differences cancel:
+   permitted in Vulkan. That looks exactly like a missing flip, and it is
+   not, because the two differences cancel:
 
      * GL:     gl_FragCoord.y ~ 0 is framebuffer row 0, and for an FBO colour
                attachment framebuffer row 0 IS texel row 0. NDC y = -1 maps to
@@ -61,12 +61,11 @@
    byte oracle below is what settles it, and a mirrored restore would show up
    as every tile's rows reversed.
 
-   THE ORACLE FOR THIS PORT IS BYTES, NOT PIXELS, and it is the strongest one
-   this plan has had. `tagpu_restoredump.on` writes each restored atlas with
-   glGetTexImage; the same dump taken from this lane can be `cmp`-ed against the
-   GL lane's, so "the Vulkan restore is the GL restore" is a byte comparison of
-   a 46 MB surface rather than a screenshot diff. It needs no window, no Route D
-   and no settle heuristic.
+   THE ORACLE FOR THIS PORT IS BYTES, NOT PIXELS. `tagpu_restoredump.on` writes
+   each restored atlas with glGetTexImage; the same dump taken from this lane
+   can be `cmp`-ed against the GL lane's, so "the Vulkan restore is the GL
+   restore" is a byte comparison of a 46 MB surface rather than a screenshot
+   diff. It needs no window, no Route D and no settle heuristic.
 
    EVERYTHING ELSE -- the padding rule, the batch grid, the size-class ladder,
    the budget, every counter and every log line -- is the core's and is shared
@@ -166,9 +165,8 @@ static int fmt_ok(const TAGPU_VKPASS* d, VkFormat f, int needColour, int needLin
 
 /* ASK THE DEVICE FOR EVERY PREREQUISITE AND REFUSE BY NAME.
 
-   This is the third time on this plan that measuring the refusal before
-   porting the stream behind it has paid, and the reason it is code rather than
-   a note is that the numbers were measured on ONE device. They all held there
+   It is code rather than a note because the numbers were measured on ONE
+   device. They all held there
    -- 8 colour attachments, a 64 KiB uniform block, 2 048 array layers,
    timestamps on the submitting family, and all three formats
    colour-attachment + sampled + linear -- and again through winevulkan. A
@@ -344,7 +342,7 @@ static VkPipelineLayout      s_ploFill, s_ploConv, s_ploOut;
 static VkPipeline            s_pipeFill, s_pipeConv[RP_MAX + 1], s_pipeOut;
 static VkRenderPass          s_rpAct[RP_MAX + 1];   /* index = USED count      */
 static VkRenderPass          s_rpOut;
-/* THE MIP REDUCTION (the Vulkan-only plan's landing 7e-2), and it is the same
+/* THE MIP REDUCTION, and it is the same
    arithmetic the GL lane draws -- one shader string, two backends, so a mipped
    twin's levels are identical on both by construction rather than by two
    drivers agreeing about glGenerateMipmap. gpu-status 2.45 is why, 2.46 is the
@@ -386,25 +384,20 @@ typedef struct {
 } RETIRE;
 static RETIRE s_ret;
 
-/* ---- AND A JOB'S OWN RESOURCES NEED THE SAME THING, which the first version
-   of this file did not give them. [FROM THE LANDING-7c REVIEW.]
-   `job_free` destroyed the destination framebuffer, the palette image and the
-   five descriptor sets outright -- and three of its four callers are in a
-   consumer's `prepare`, where the seam has waited on THIS SLOT'S fence and no
-   other. The other `slots - 1` submits are still in the queue naming exactly
-   those objects: the OUT render pass named `dstFb`, its descriptor set was
-   `setOut[i]`, and FILL sampled `palView`. A map change, a GL reset or a
-   repaint within `slots - 1` frames of a draw is all it takes
-   (VUID-vkDestroyFramebuffer-framebuffer-00892,
-   VUID-vkFreeDescriptorSets-pDescriptorSets-00309) -- a crash on a strict
+/* ---- AND A JOB'S OWN RESOURCES NEED THE SAME THING. Three of `job_free`'s
+   four callers are in a consumer's `prepare`, where the seam has waited on
+   THIS SLOT'S fence and no other. The other `slots - 1` submits are still in
+   the queue naming the job's objects: the OUT render pass names `dstFb`, its
+   descriptor set is `setOut[i]`, and FILL samples `palView`. Destroying them
+   outright on a map change, a GL reset or a repaint within `slots - 1` frames
+   of a draw (VUID-vkDestroyFramebuffer-framebuffer-00892,
+   VUID-vkFreeDescriptorSets-pDescriptorSets-00309) is a crash on a strict
    driver and corrupt paint on a lax one.
 
-   The activations got a whole retire for this hazard and the job's own
-   resources got none, which is the inconsistency that made it easy to miss.
-   So they get one too, with the same licence: `pending == 0` and not a frame
-   count. There is ONE PATH rather than a fast path for idle callers -- `down`
-   flushes these unconditionally because the seam has drained the device above
-   it, so nothing here depends on which caller knew what.
+   So they are retired too, with the activations' licence: `pending == 0` and
+   not a frame count. There is ONE PATH rather than a fast path for idle
+   callers -- `down` flushes these unconditionally because the seam has drained
+   the device above it, so nothing here depends on which caller knew what.
 
    THE RING IS SIZED AT THE WORST CASE ITS CALLERS CAN PRODUCE, which is what
    makes it a bound rather than a guess. A consumer frees at most one job per
@@ -426,8 +419,8 @@ typedef struct {
     VkImageView     palView;
     VkBuffer        palStage;
     VkDeviceMemory  palStageMem;
-    /* FIVE SETS AND ONE FRAMEBUFFER WAS THE WHOLE JOB UNTIL LANDING 7e-2. A
-       registered mip chain adds one framebuffer and one descriptor set PER
+    /* FIVE SETS AND ONE FRAMEBUFFER, PLUS THE MIP CHAIN. A registered mip
+       chain adds one framebuffer and one descriptor set PER
        LEVEL, and they are retired with everything else for the same reason: a
        reduction into them was recorded into some slot's command buffer, and a
        consumer frees its job when its generation moves, which is any frame. */
@@ -437,10 +430,9 @@ typedef struct {
        flight. It is here for the same reason everything else is: the copy was
        recorded into the command buffer of the slot that took the dump, and a
        consumer frees its job when its generation moves -- which is any frame,
-       not that slot's next one. [landing 7d: the first version of `job_free`
-       destroyed it immediately, on the argument that it is "called between
-       frames". Between frames is not past the fence of the slot that recorded
-       the copy, and that is the whole distinction this retire exists for.] */
+       not that slot's next one. "Called between frames" is not past the fence
+       of the slot that recorded the copy, and that is the whole distinction
+       this retire exists for. */
     VkBuffer        buf;      VkDeviceMemory bufMem;
     uint32_t        pending;
 } JRETIRE;
@@ -593,9 +585,9 @@ static int layer_view(const TAGPU_VKPASS* d, VkImage img, VkFormat fmt, int laye
    unordered against the write. Drivers that flush at a render-pass boundary
    hide it -- which is the whole problem, because a hazard hidden by a driver's
    habit is the bug with better odds and not a fix (CLAUDE.md, *Fixes must be
-   safe by construction*). Found by wiring the first consumer: the chain is
-   FILL -> CONV -> ... -> OUT -> the terrain's own sample of the atlas, and the
-   last link crosses out of this file entirely.
+   safe by construction*). The chain is FILL -> CONV -> ... -> OUT -> the
+   terrain's own sample of the atlas, and the last link crosses out of this
+   file entirely.
 
    So each pass states both ends, and the two together make the chain
    transitive: a 0 -> EXTERNAL dependency's destination scope is every
@@ -756,8 +748,8 @@ static void fb_flush(const TAGPU_VKPASS* d)
    product `NK in {1,2,4,8}` x `kmax in {56, 148}` -- eight modules -- because
    `#if NK > 1` declares a different number of `out` locations and SPIR-V
    interface variables are static, and because WMAX = NK x kmax is the declared
-   length of `WBlock`. THE LANE IS THEREFORE PINNED TO THE TWO SHIPPED MODELS,
-   which is recorded in the plan as the owner's to widen: a third model needs
+   length of `WBlock`. THE LANE IS THEREFORE PINNED TO THE TWO SHIPPED MODELS:
+   a third model needs
    its four variants generated and committed, and until then this refuses it by
    name rather than restoring with the wrong block length. */
 static const uint32_t* conv_spv(int nk, int kmax, size_t* words)
@@ -890,8 +882,7 @@ static int build_rp_mip(const TAGPU_VKPASS* d)
    declaration order, so FILL has uAtlas at 40 while OUT has uAct at 40 and
    uAtlas at 41. One shared layout would bind the atlas where OUT expects the
    activations. [Read out of inc/spirv/tagpu_restore_glsl.spv.h, whose per-
-   shader interface comment is the contract -- and which only began reporting
-   the named WBlock block when this port needed it.] */
+   shader interface comment is the contract.] */
 static VkDescriptorSetLayout mk_dsl(const TAGPU_VKPASS* d, const int* bind,
                                     const VkDescriptorType* type,
                                     const VkShaderStageFlags* stage, int n)
@@ -984,8 +975,7 @@ static JRETIRE* jret_take(const TAGPU_VKPASS* d)
 }
 
 /* The activation retire's contents, destroyed. Split out from the slot walk so
-   that `down` can use it under the seam's device drain, which is what the
-   review found missing. */
+   that `down` can use it under the seam's device drain. */
 static void retire_kill(const TAGPU_VKPASS* d)
 {
     int i, l;
@@ -1181,7 +1171,7 @@ static int build_shared(const TAGPU_VKPASS* d)
        written with vkCmdUpdateBuffer at the point of the draw, so what orders
        one batch's write against the previous batch's read is a barrier in the
        stream rather than a region nobody else is using -- see the OUT branch of
-       `vk_draw`, and the six cells that paid for the paragraph there. */
+       `vk_draw`. */
     if (!mk_buffer(d, (VkDeviceSize)sizeof s_sched.verts,
                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1197,7 +1187,7 @@ static int build_shared(const TAGPU_VKPASS* d)
        own copy, so what orders one batch's write against the previous batch's
        read is a barrier in the stream. The per-SLOT offset is kept -- it costs
        3 KB a slot and it means the barrier only ever names this slot's region
-       -- but it is no longer what makes the write safe. [landing 7d] */
+       -- but it is not what makes the write safe. */
     if (!mk_buffer(d, (VkDeviceSize)TAGPU_R_BATCH * 16 * 3 * TAGPU_VK_SLOTS,
                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1275,13 +1265,13 @@ struct TAGPU_VKRJOB {
     int            dstReady;                /* brought to SHADER_READ_ONLY    */
     int            clearDue;                /* ...and cleared to alpha 0      */
     /* 1 when the destination HOLDS SOMETHING this pass must not throw away --
-       which is what picks `dst_ready`'s source layout, and the second thing
-       wiring a consumer caught. A repaint exists to recolour a restored atlas
-       in place; transitioning it from UNDEFINED licenses the driver to discard
-       every texel of it, so the repaint would have blanked exactly the world
-       it was added to avoid blanking. Set from `repaint` at creation -- the
-       consumer's statement that the atlas already holds a restore -- and then
-       by `dst_ready` itself, so a clear and a re-queue keep it. */
+       which is what picks `dst_ready`'s source layout. A repaint exists to
+       recolour a restored atlas in place; transitioning it from UNDEFINED
+       licenses the driver to discard every texel of it, so the repaint would
+       blank exactly the world it exists to avoid blanking. Set from `repaint`
+       at creation -- the consumer's statement that the atlas already holds a
+       restore -- and then by `dst_ready` itself, so a clear and a re-queue
+       keep it. */
     int            dstHas;
     /* THE BYTE ORACLE'S HALF OF THIS LANE (`dump_step`). It lives here rather
        than in each consumer because the destination, its size and the moment
@@ -1307,12 +1297,10 @@ static uint32_t g_alloc(const void* data, size_t bytes)
 {
     VkDeviceSize off;
     if (s_gnext >= GLOBALS_RING || !s_gmap) {
-        /* IT SAYS WHY, and it did not. [FROM THE LANDING-7c REVIEW.] The
-           callers return 0 from `draw`, which the core turns into
-           `failed = 1` and a drop -- and the consumer then logs that the
-           restore failed with no reason anywhere in the log. That is the same
-           silence this landing's own notes criticise the vertex bug for, on
-           the one bound those notes concede a fast enough device can reach:
+        /* IT SAYS WHY. The callers return 0 from `draw`, which the core
+           turns into `failed = 1` and a drop -- and the consumer then logs
+           that the restore failed, with no reason anywhere else in the log.
+           This is the one bound a fast enough device can reach:
            GLOBALS_RING blocks per slot per slice, one for a FILL, one for a
            CONV and two for an OUT, so a `full`-model batch spends 15 and a
            slice of more than about seventeen batches exhausts it.
@@ -1341,15 +1329,15 @@ static uint32_t g_alloc(const void* data, size_t bytes)
    is undefined behaviour, and this one is bound by every frame still in flight:
    the activations are re-created whenever a batch needs a bigger slot geometry
    (five times in one measured run, 94 to 512 square), and each of those bumps
-   `s_actGen` and sent every live job's five sets back through `write_sets`
-   while earlier frames were still executing against them.
+   `s_actGen`; rewriting every live job's five sets through `write_sets` then
+   changes them while earlier frames are still executing against them.
 
-   WHAT IT LOOKED LIKE, because this is the shape to recognise rather than the
+   WHAT IT LOOKS LIKE, because this is the shape to recognise rather than the
    API rule to recite: the OUT pass reads `frag = c - net`, the palette colour
    minus the network's output, so a set whose `uAct` still named the array the
-   FILL wrote gives net == c and paints the cell BLACK. Landing 7e-2's chain
-   oracle found exactly that -- every texel of the earliest frames black, the
-   source byte-identical, and the count varying run to run (165 136, then
+   FILL wrote gives net == c and paints the cell BLACK -- MEASURED as every
+   texel of the earliest frames black, the source byte-identical, and the
+   count varying run to run (165 136, then
    54 912, then 165 136 differing bytes) because it depends on which batches
    happen to straddle a grow. The GL lane cannot show it: it binds textures by
    name at draw time and has no descriptor to go stale.
@@ -1562,39 +1550,34 @@ static void vk_timer_off(void) { /* the pool stays; the core stops asking */ }
    the destination rect, the source rect, and the KEY AND WRAP of every frame in
    the batch.
 
-   THE BYTES GO INTO THE COMMAND STREAM, NOT INTO A PER-SLOT STAGING REGION,
-   and this is the SECOND resource to be corrected for the same reason --
-   landing 7c did the OUT vertices and left these, on a comment that said "one
-   batch is ever in flight, so nothing else writes them in between". That is
+   THE BYTES GO INTO THE COMMAND STREAM, NOT INTO A PER-SLOT STAGING REGION.
+   "One batch is ever in flight, so nothing else writes them in between" is
    true of the DEVICE and false of the RECORDING: a slice can issue more than
    one batch (tagpu_rcore_step re-picks at every batch boundary and runs until
-   the GPU-time budget is spent), and both batches' `memcpy` landed on the same
-   address before either `vkCmdCopyBufferToImage` had executed -- so the first
-   batch's frames were restored through the SECOND batch's tables: wrong source
-   rects, and wrong colour keys.
+   the GPU-time budget is spent), and two batches' `memcpy` into one region
+   land on the same address before either `vkCmdCopyBufferToImage` has
+   executed -- so the first batch's frames would be restored through the
+   SECOND batch's tables: wrong source rects, and wrong colour keys.
 
-   WHAT THAT LOOKS LIKE, because it is the whole reason this was found: a frame
-   whose key came from another frame's table has no keyed texel where it should
-   have one, so the OUT pass writes the key's own palette colour -- opaque
-   (84, 84, 252) -- where the GL twin writes (0, 0, 0, 0). 118 of 1304 feature
-   frames and 3 of 167 effects frames, every other frame byte-identical.
-   THE TERRAIN COULD NOT REVEAL IT: 10 036 tiles of one size with no colour key
-   at all, so a swapped table costs a source rect and nothing else, and the two
-   runs that measured it happened to give each slice one batch. It took a
-   consumer whose frames have DIFFERENT SIZES AND A KEY. [landing 7d, found by
-   the byte oracle on its first run against the sprite atlases.]
+   WHAT THAT LOOKS LIKE: a frame whose key came from another frame's table has
+   no keyed texel where it should have one, so the OUT pass writes the key's
+   own palette colour -- opaque (84, 84, 252) -- where the GL twin writes
+   (0, 0, 0, 0). MEASURED on 118 of 1304 feature frames and 3 of 167 effects
+   frames, every other frame byte-identical. THE TERRAIN CANNOT REVEAL IT:
+   10 036 tiles of one size with no colour key at all, so a swapped table
+   costs a source rect and nothing else. It takes a consumer whose frames have
+   DIFFERENT SIZES AND A KEY.
 
-   A BIGGER ARENA IS STILL NOT THE FIX, for landing 7c's reason: batches per
-   slice is a time budget rather than a count, so any arena is a number that
-   can be exceeded and what it buys is this failure again. 3 KB at most, well
-   inside the 65 536 vkCmdUpdateBuffer allows.
+   A BIGGER ARENA IS NOT THE FIX: batches per slice is a time budget rather
+   than a count, so any arena is a number that can be exceeded and what it
+   buys is this failure again. 3 KB at most, well inside the 65 536
+   vkCmdUpdateBuffer allows.
 
-   THE IMAGES THEMSELVES WERE ALREADY ORDERED -- the write-after-read barrier
-   below runs before each batch's copy and names the previous batch's shader
-   reads -- which is exactly why the bug was in the staging buffer and nowhere
-   else, and why it was invisible to reasoning about the images. The new buffer
-   barrier is the same shape for the buffer: TRANSFER -> TRANSFER, because the
-   previous batch's read of these bytes is a copy and not a draw. */
+   THE IMAGES THEMSELVES ARE ORDERED -- the write-after-read barrier below
+   runs before each batch's copy and names the previous batch's shader reads.
+   The buffer barrier is the same shape for the buffer: TRANSFER -> TRANSFER,
+   because the previous batch's read of these bytes is a copy and not a
+   draw. */
 static void upload_tables(const TAGPU_VKPASS* d, const TAGPU_RDRAWREQ* r)
 {
     const float* src[3];
@@ -1875,18 +1858,17 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
         dst_ready(d, g);
         if (!g->dstFb) { rlog(LANE ": the job has no destination framebuffer"); return 0; }
         if (r->nv <= 0) return 1;                     /* an empty batch draws nothing */
-        /* THE VERTICES GO INTO THE COMMAND STREAM, and the first version of this
-           wrote them into a host-mapped region indexed by the FRAME SLOT. That
-           was wrong, and the byte oracle is what found it: A SLICE CAN ISSUE
-           MORE THAN ONE BATCH -- the loop in tagpu_rcore_step re-picks at every
-           batch boundary and runs until the GPU-time budget is spent, and the
+        /* THE VERTICES GO INTO THE COMMAND STREAM, not into a host-mapped
+           region indexed by the FRAME SLOT: A SLICE CAN ISSUE MORE THAN ONE
+           BATCH -- the loop in tagpu_rcore_step re-picks at every batch
+           boundary and runs until the GPU-time budget is spent, and the
            terrain's own log shows batches 157 and 158 both issued at slice 917.
-           Two OUT draws in one slice wrote the same address, so the second
-           batch's 36 vertices landed on top of the first's before either draw
-           executed: the first batch's leading six cells were never painted and
-           the second's six were painted twice. Six cells of 10 036, every other
-           one byte-identical to the GL twin -- silent, and exactly the shape of
-           failure this stack produces.
+           Two OUT draws in one slice would write the same address, so the
+           second batch's 36 vertices land on top of the first's before either
+           draw executes: the first batch's leading six cells are never painted
+           and the second's six are painted twice. MEASURED as six cells of
+           10 036, every other one byte-identical to the GL twin -- silent, and
+           exactly the shape of failure this stack produces.
            A BIGGER ARENA WOULD NOT BE THE FIX. Batches per slice is bounded by
            a time budget and not by a count, so any arena is a number that can
            be exceeded, and the failure it buys is this one again. vkCmdUpdateBuffer
@@ -2042,10 +2024,8 @@ int tagpu_vk_restore_job_chain(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j,
     if (!s_built || !s_pipeMip || !s_rpMip || !s_dslMip || !s_dpool) return 0;
     if (j->chainN) return 1;                  /* registered once, by contract */
     /* AN ODD LEVEL WOULD NEED A WEIGHTED THREE-TAP, not a 2x2 average, and
-       this shader does not pretend to be one. The GL lane refused the same
-       chain for the same reason, in `tagpu_rglsl_mips`, until 11-5e-2 deleted
-       that lane -- the rule is kept here because it is a property of the 2x2
-       reduction and not of either backend. Refused WHOLE rather than
+       this shader does not pretend to be one. The rule is a property of the
+       2x2 reduction and not of the backend. Refused WHOLE rather than
        part-reduced: a chain half ours and half nobody's is the one outcome
        neither lane can describe. */
     for (L = 1; L <= mips; L++)
@@ -2243,21 +2223,13 @@ static void dump_free(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
 /* One half of the byte oracle, from `step` and outside any render pass:
    collect a copy this slot owes us, or record one.
 
-   THE GL LANE USED TO WRITE THE OTHER HALF IN THE SAME PROCESS ON THE SAME
-   FRAMES, and 11-5e-2 deleted it: `tagpu_gaf.c`'s `dump_if_armed` went with
-   the GL restorer, so THIS DUMP NOW HAS NOTHING TO BE COMPARED AGAINST within
-   a run. What it writes is still the Vulkan lane's own bytes and still useful
-   against a file kept from an older build -- it is no longer a two-lane
-   oracle, and a landing that reads it as one is comparing this lane with
-   itself. (`tagpu_terr.c`'s dump is under the same `tagpu_restoredump.on` and
-   does survive, because the terrain's restore was never the GL restorer's.)
-   While it worked it was worth the lines: no second launch, no second
-   palette, no settle heuristic; a mirrored restore showed as every cell's
-   rows reversed and a dropped batch as whole cells of alpha 0, and on landing
-   7d's first run the difference was 6 x 34 x 34 texels, which is what named
-   the bug. [The name `dump_twin` stood here from 7d until 11-5e-2's review:
-   it was never a function in any revision, only ever a comment's word for
-   `dump_if_armed`.]
+   THIS DUMP HAS NOTHING TO BE COMPARED AGAINST WITHIN A RUN: nothing else in
+   the process writes the other half. What it writes is the Vulkan lane's own
+   bytes, useful against a file kept from an older build -- it is not a
+   two-lane oracle, and reading it as one compares this lane with itself.
+   (`tagpu_terr.c`'s dump is under the same `tagpu_restoredump.on`.) A
+   mirrored restore shows as every cell's rows reversed and a dropped batch as
+   whole cells of alpha 0.
 
    AND IT DOES NOT BLOCK THE DEVICE. The copy is recorded into this frame's
    command buffer and read at THIS SLOT'S NEXT step, which is the one instant
@@ -2280,19 +2252,15 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
     if (g->dumpState == 1 && slot == g->dumpSlot) {
         FILE* f;
         /* THE DESTINATION'S OWN BYTES, NOT THE WHOLE BUFFER. The source rides
-           in the same allocation after it, and writing `dumpBytes` here put it
-           on the end of the destination file -- every pair then differed on
-           SIZE, which is what the run that introduced this reported for all
-           four consumers. */
+           in the same allocation after it, and writing `dumpBytes` here would
+           put it on the end of the destination file, so every pair would
+           differ on SIZE. */
         size_t n = (size_t)(g->dumpBytes - g->dumpSrcBytes);
         /* A CHAIN DUMPS AS `.mips`, LEVEL 0 ALONE AS `.rgba`, and the name is
-           what tells them apart. The GL lane wrote exactly the same two names
-           for exactly the same two cases (`tagpu_gaf.c`'s `dump_if_armed`,
-           deleted in 11-5e-2), which made a mipped consumer's pair one `cmp`
-           of two whole chains rather than of two level-0 images -- the whole
-           of landing 7e-2's oracle, since the levels are what it claimed to
-           reproduce. The naming is kept so that a chain dumped now still
-           compares against one kept from a build that had both lanes. */
+           what tells them apart. They are the names the GL lane's dump used
+           for the same two cases, so a chain dumped now still compares, with
+           one `cmp` of two whole chains, against one kept from a build that
+           had both lanes. */
         _snprintf(name, sizeof name, "tagpu_restore_%s_vk.%s", g->tag,
                   g->chainN > 0 ? "mips" : "rgba");
         name[sizeof name - 1] = 0;
@@ -2475,30 +2443,25 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
    above it. Nothing here is staged per frame slot and written at record time --
    the framebuffers and the descriptor sets were made once when the consumer
    registered the chain, and the only per-draw datum is `uSrcDim`, which goes
-   through the globals RING, whose cursor advances per allocation. That is the
-   property 7c and 7d each had to learn the hard way. */
+   through the globals RING, whose cursor advances per allocation. */
 static void chain_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, struct TAGPU_VKRJOB* g)
 {
     int L, painted;
     if (!g->core || !g->core->used || g->chainN <= 0 || !s_pipeMip) return;
     painted = g->core->tframes;      /* what `job_painted` publishes */
     /* NOTHING PAINTED MEANS NOTHING TO REDUCE, AND THAT INCLUDES THE FIRST
-       PASS. This used to force one reduction over an unpainted twin, on the
-       stated grounds that a Vulkan image's levels begin UNDEFINED and the
-       consumer samples the chain trilinearly. Both halves were wrong. The
-       consumer cannot sample the chain until `job_painted` moves -- the unit
-       pass sets `s_arHave` only on `painted > 0` -- so there is nothing to
-       protect; and level 0 is exactly as UNDEFINED as the rest until
-       `dst_ready` transitions it, which happens in the OUT path and therefore
-       has NOT happened on a slice that painted nothing. The forced pass
-       sampled level 0 through a descriptor declaring
-       SHADER_READ_ONLY_OPTIMAL while the image was still UNDEFINED: a layout
+       PASS. The consumer cannot sample the chain until `job_painted` moves --
+       the unit pass sets `s_arHave` only on `painted > 0` -- so there is
+       nothing to protect; and level 0 is exactly as UNDEFINED as the rest
+       until `dst_ready` transitions it, which happens in the OUT path and
+       therefore has NOT happened on a slice that painted nothing. A forced
+       first pass would sample level 0 through a descriptor declaring
+       SHADER_READ_ONLY_OPTIMAL while the image is still UNDEFINED: a layout
        mismatch, undefined behaviour, and a validation error on the ordinary
        first frame, because the unit job is priority 3 and `covered_prefix`
-       deliberately returns 0 while the atlas upload lags.
-       `chainDone` still earns its keep -- it is what makes a reduction run
-       again when the paint count has NOT moved but the levels are stale.
-       [Landing 7e-2's review, finding 3.] */
+       deliberately returns 0 while the atlas upload lags. `chainDone` still
+       earns its keep -- it is what makes a reduction run again when the paint
+       count has NOT moved but the levels are stale. */
     if (painted <= 0) return;
     if (g->chainDone && painted == g->chainPainted) return;
     for (L = 1; L <= g->chainN; L++) {
@@ -2550,13 +2513,13 @@ void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     }
     tagpu_rcore_step(&s_sched);
     /* AND THE MIP CHAIN AFTER THE SLICE, ONCE -- not once per batch. A slice
-       issues as many batches as its budget allows (which is the whole shape of
-       7c's and 7d's bugs), so a reduction per batch would be work per batch for
-       a picture that is only finished at the end of the slice; and the levels
-       have to be right before the frame that samples them, which is this one.
-       It runs outside every render pass the slice began, in the same command
-       buffer and after the last OUT, so the render pass dependency chain orders
-       level 0's write against level 1's read for us. */
+       issues as many batches as its budget allows, so a reduction per batch
+       would be work per batch for a picture that is only finished at the end
+       of the slice; and the levels have to be right before the frame that
+       samples them, which is this one. It runs outside every render pass the
+       slice began, in the same command buffer and after the last OUT, so the
+       render pass dependency chain orders level 0's write against level 1's
+       read for us. */
     {
         int i;
         for (i = 0; i < TAGPU_R_MAXJOBS; i++) chain_step(d, cb, &s_vjob[i]);
@@ -2573,8 +2536,7 @@ void tagpu_vk_restore_lost(void)
     memset(s_fb, 0, sizeof s_fb); s_nfb = 0;
     /* BOTH RETIRES FORGOTTEN RATHER THAN FREED -- every handle in them died
        with the device, and a `pending` left standing would have a rebuilt
-       device's `retire_slot_done` destroy handles that belong to nothing.
-       [FROM THE LANDING-7c REVIEW.] */
+       device's `retire_slot_done` destroy handles that belong to nothing. */
     memset(&s_ret, 0, sizeof s_ret);
     memset(s_jret, 0, sizeof s_jret);
     /* AND EVERY DUMP'S STAGING, forgotten the same way: the buffer and its
@@ -2627,13 +2589,12 @@ void tagpu_vk_restore_down(const TAGPU_VKPASS* d)
 {
     int i, l;
     if (!d || !d->dev) { tagpu_vk_restore_lost(); return; }
-    /* THE TWO RETIRES GO FIRST, AND NEITHER WAS IN HERE. [FROM THE LANDING-7c
-       REVIEW.] A retire outstanding at teardown -- an activation grow, or the
-       idle release after 180 quiet slices -- held two array images, their
-       memory, every layer view and up to 32 framebuffers, around 100 MB, and
-       `vkDestroyDevice` then ran with all of it alive. The resize path happened
-       to be fine because the device survives it and a later
-       `retire_slot_done` cleaned up; `vk_down` had nothing that ever would.
+    /* THE TWO RETIRES GO FIRST. A retire outstanding at teardown -- an
+       activation grow, or the idle release after 180 quiet slices -- holds two
+       array images, their memory, every layer view and up to 32 framebuffers,
+       around 100 MB, and `vkDestroyDevice` would run with all of it alive. The
+       resize path needs nothing here because the device survives it and a
+       later `retire_slot_done` cleans up; after `vk_down` nothing would.
        The licence here is the seam's vkDeviceWaitIdle above this call, which is
        stronger than any mask. */
     jret_flush(d);

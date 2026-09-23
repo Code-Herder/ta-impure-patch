@@ -1,6 +1,6 @@
 #ifndef TAGPU_VK_H
 #define TAGPU_VK_H
-/* tagpu_vk -- the Vulkan backend (Phase G / G19). Implementation: tagpu_vk.c.
+/* tagpu_vk -- the Vulkan backend. Implementation: tagpu_vk.c.
 
    THIS IS THE PRESENTATION SEAM, and it is the whole of it (Phase G standing
    constraint 3): surface, swapchain, acquire and present live in tagpu_vk.c and
@@ -9,8 +9,8 @@
    this file is what is replaced; nothing above it changes.
 
    IT READS NO ENGINE STATE AT ALL (standing constraint 1). Every value it needs
-   arrives as an argument from `vk_render_main` (render_vk.c), which since the
-   vulkan-only plan's landing 4d-1 is its only caller. It is not on `thread-split.allow`
+   arrives as an argument from `vk_render_main` (render_vk.c), its only
+   caller. It is not on `thread-split.allow`
    and must never need to be.
 
    NEVER CAST A VULKAN HANDLE TO A POINTER (standing constraint 2), store one in
@@ -23,25 +23,22 @@
 
    `tagpu_vk.off` TURNS THE WHOLE FILE OFF, enumeration included, and is the
    control for any A/B against a DLL built before Phase G. **NEITHER LEVER ARMS
-   A LANE ANY MORE.** Landing 4d-1 deleted route D, so `tagpu_vk.on` under
-   `renderer=openglcore` no longer brings anything up: what the lever still does
-   on that path is make `tagpu_vk_armed()` true, which ungreys the menu's GPU
-   row (the choice applies to a launch that picks `renderer=vulkan`). It does
-   NOT get read for its `color=` there -- `read_lever` is only reached from
-   `tagpu_vk_frame` -- and it no longer latches the gather mirrors either, which
-   now ask `tagpu_vk_owns_present()` instead. Under `renderer=vulkan` the lane
-   runs because the renderer choice says so, and `tagpu_vk.off` only leaves the
-   device list unrefreshed for that launch, which the log says.
+   A LANE.** `tagpu_vk.on` under `renderer=openglcore` brings nothing up: what
+   the lever does on that path is make `tagpu_vk_armed()` true, which ungreys
+   the menu's GPU row (the choice applies to a launch that picks
+   `renderer=vulkan`). It does NOT get read for its `color=` there --
+   `read_lever` is only reached from `tagpu_vk_frame` -- and it does not latch
+   the gather mirrors, which ask `tagpu_vk_owns_present()`. Under
+   `renderer=vulkan` the lane runs because the renderer choice says so, and
+   `tagpu_vk.off` only leaves the device list unrefreshed for that launch, which
+   the log says.
 
-   G19a -- the bring-up. `tagpu_vk_frame` is called once per iteration from
+   THE BRING-UP. `tagpu_vk_frame` is called once per iteration from
    `vk_render_main`, which is the only backend that drives it. It returns 1 when
-   it presented the frame itself. **It used to be called from `ogl_render` too,
-   immediately before `SwapBuffers`, and a 1 meant the caller must NOT swap
-   because two backends must not both present to one window in one frame; that
-   call and that rule went with route D in landing 4d-1.** The return value is
-   still what `vk_render_main` uses to know a frame reached the screen.
+   it presented the frame itself, which is what `vk_render_main` uses to know a
+   frame reached the screen.
 
-   G19b -- the GPU picker. The device list is enumerated once per launch by a
+   THE GPU PICKER. The device list is enumerated once per launch by a
    worker thread and CACHED to `tagpu_vk.gpus`; the menu reads that cache at
    DLL attach, because the row's captions have to be inside the generated
    `.GUI` and the archive is written before the engine globs it. So a machine
@@ -57,23 +54,21 @@
    ends up inside a generated `.GUI` where `|` and `;` are syntax. The caller
    sizes its caption buffer from these and never from `deviceName`. */
 #define TAGPU_VK_NAMELEN 32
-/* EIGHT, AND THE BOUND IS OURS RATHER THAN THE ENGINE'S. This said four, on
-   the theory that a stage button cannot carry more stages than
-   `commongui.stagebuttnN` has art for. That is not what the engine does
-   [MEASURED 2026-09-15 from the disassembly, after a review challenged it]:
-   `0x4A8003` is `cmp al,4; jae` onto `mov eax,4` and only THEN
-   `sprintf("stagebuttn%d")`, so the art index is CLAMPED and a row with more
-   than four stages draws the four-bar plate and works. The shipped `UI scale`
-   row has carried six stages all along, which is the same fact from the other
-   end. So eight: every device a player is plausibly choosing between stays
-   selectable, and past the fourth the plate's bar count saturates while the
-   caption -- the half that says which card -- stays right.
-   (`0x4A803C` is worth knowing too: a `stages=1` button is rewritten to 2 and
-   flagged, which is why the "(not listed yet)" row is also greyed rather than
-   relying on its stage count to keep it inert.) */
+/* EIGHT, AND THE BOUND IS OURS RATHER THAN THE ENGINE'S. A stage button CAN
+   carry more stages than `commongui.stagebuttnN` has art for [MEASURED
+   2026-09-15 from the disassembly]: `0x4A8003` is `cmp al,4; jae` onto `mov
+   eax,4` and only THEN `sprintf("stagebuttn%d")`, so the art index is CLAMPED
+   and a row with more than four stages draws the four-bar plate and works. The
+   shipped `UI scale` row carries six stages, which is the same fact from the
+   other end. So eight: every device a player is plausibly choosing between
+   stays selectable, and past the fourth the plate's bar count saturates while
+   the caption -- the half that says which card -- stays right. (`0x4A803C` is
+   worth knowing too: a `stages=1` button is rewritten to 2 and flagged, which
+   is why the "(not listed yet)" row is also greyed rather than relying on its
+   stage count to keep it inert.) */
 #define TAGPU_VK_MAXGPU   8
 
-/* ---- G19a: the render thread ------------------------------------------- */
+/* ---- the render thread -------------------------------------------------- */
 
 /* Called from `ogl_render`, immediately before the GL swap, on the render
    thread and on no other. Returns 1 when Vulkan presented this frame -- the
@@ -89,8 +84,7 @@
    the SAME number the GL lane stamped its hand-overs with earlier in this
    iteration of render_ogl.c's loop. It reaches a pass as TAGPU_VKPASS::frame,
    and a pass uses it to refuse a hand-over published on any other frame; see
-   tagpu_vk_pass.h for why that refusal is a safety property and not tidiness.
-   [ADDED BY THE G19e RE-REVIEW, 2026-09-15.] */
+   tagpu_vk_pass.h for why that refusal is a safety property and not tidiness. */
 int tagpu_vk_frame(HWND hwnd, int w, int h, int vsync, unsigned frame_counter);
 
 /* Called from the render thread as it stops -- a mode change or a shutdown,
@@ -110,15 +104,7 @@ void tagpu_vk_render_stop(void);
 
    AN OBSERVER: it returns nothing and swallows nothing. Unlike
    `tagpu_menu_wndproc` it cannot claim a message, so adding it to the chain
-   changes no other message's path.
-
-   IT USED TO DO MUCH MORE. Until landing 4d-1 it also created, placed and
-   destroyed route D's window -- an owned popup over the game's client area,
-   which existed so that two backends could each present without presenting to
-   one window in one frame. There is no second backend now, so the surface goes
-   on the game window and the popup, its class, its window proc, its
-   create/destroy message (`WM_TAGPU_VK`) and its `WM_WINDOWPOSCHANGED` follow
-   are all gone. */
+   changes no other message's path. */
 void tagpu_vk_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
 /* Called once from the render thread's start-up. Kicks the enumeration worker
@@ -130,45 +116,37 @@ void tagpu_vk_enum_start(void);
 /* 1 when `tagpu_vk.on` is present: the row's "can this bite?" test. */
 int tagpu_vk_armed(void);
 
-/* ---- landing 4: this backend owns the present ---------------------------- */
+/* ---- this backend owns the present --------------------------------------- */
 
 /* Called ONCE from the render thread, before its frame loop, by the backend
    that has no other backend beside it (`renderer=vulkan`, `render_vk.c`).
    Two things change and nothing else does:
 
-   * the surface goes on the window `tagpu_vk_frame` is handed. Every line of
-     the machinery that used to put it on a window of the lane's own existed
-     because "two backends must not both present to one window in one frame";
-     with one backend there was nothing to separate, and landing 4d-1 deleted
-     it. Measured as route E in `tools/vkcoexist.c` -- a top-level window that
-     never had a GL context or a pixel format presents, on wine 9.0 and on
-     Proton 11 (roadmap §G19a).
+   * the surface goes on the window `tagpu_vk_frame` is handed: with one backend
+     there is nothing to keep it apart from. Measured as route E in
+     `tools/vkcoexist.c` -- a top-level window that never had a GL context or a
+     pixel format presents, on wine 9.0 and on Proton 11 (roadmap §G19a).
    * `tagpu_vk.on` STOPS ARMING THE LANE, because the renderer choice already
      did. `tagpu_vk.off` stops disarming it for the same reason: with no GL
      lane behind it, a disarmed Vulkan lane is a black window rather than a
-     fallback. The ON file is still read for its `color=`.
+     fallback. The ON file is read for its `color=`.
 
    A ONE-WAY LATCH: which backend the process has is settled at `dd.c`'s
-   dispatch and cannot change. There is deliberately no way to clear it. Until
-   the vulkan-only plan's landing 4d-1 a flag that could go back would have
-   allowed a surface on the game window and a window of the lane's own at once;
-   that window is gone, and the latch is kept because collapsing every
-   `tagpu_vk_owns_present()` test in the tree into a constant is a much larger
-   change than deleting it -- and because those tests are now what the gather
-   mirrors ask to decide whether a consumer exists at all. */
+   dispatch and cannot change. There is deliberately no way to clear it. The
+   `tagpu_vk_owns_present()` tests across the tree read it, and they are what
+   the gather mirrors ask to decide whether a consumer exists at all. */
 void tagpu_vk_own_present(void);
 
-/* 1 when the latch above is set. Read by every GL draw site that landing 4b
-   stands down, and by the A/B arming, which cannot route through the GL
-   capture on this path. Safe from any thread. */
+/* 1 when the latch above is set. Read by every GL draw site that stands down
+   on this lane, and by the A/B arming. Safe from any thread. */
 int tagpu_vk_owns_present(void);
 
 
 
 /* Unlink `tagpu_<tag>_vk.ppm`, where `tag` is one of "scaffold", "fps", "terr",
-   "feat", "fx", "mark", "posedraw". ("gui" was the seventh and its row left the
-   table with the UI layer -- `tagpu_vk_ab_arm("gui")` returns 0 now, and the
-   lever file is read by nobody.) A pass calls this AT THE INSTANT IT LATCHES A CLAIM and
+   "feat", "fx", "mark", "posedraw". (There is no "gui" row:
+   `tagpu_vk_ab_arm("gui")` returns 0, and that lever file is read by nobody.)
+   A pass calls this AT THE INSTANT IT LATCHES A CLAIM and
    nowhere else -- the placement is the whole guarantee, and tagpu_vk.c states it
    at length. Safe on either lane and on a lane that is not up.
 
@@ -200,9 +178,9 @@ int tagpu_vk_max_uniform_range(void);
    refused and when a present goes fatal -- a one-second fence or acquire
    timeout, an allocation refused. The caller must therefore decide whether
    this lane had ever come up, and use `tagpu_vk_retry` for the case where it
-   had. [FROM THE LANDING REVIEW, 2026-09-17: the first version handed the
-   session to GDI on any ST_FAILED, which turned one hiccup after ten minutes
-   of play into software rendering for the rest of the process.] */
+   had: handing the session to GDI on any ST_FAILED would turn one hiccup
+   after ten minutes of play into software rendering for the rest of the
+   process. */
 int tagpu_vk_failed(void);
 
 /* Put a lane that failed back to ST_OFF, so the next frame brings it up again;
@@ -211,7 +189,7 @@ int tagpu_vk_failed(void);
    about a dead lane is a property of the renderer and not of the seam. */
 int tagpu_vk_retry(void);
 
-/* ---- G19b: the menu ------------------------------------------------------ */
+/* ---- the menu ----------------------------------------------------------- */
 
 /* Read `tagpu_vk.gpus` into the name table. Plain file I/O and nothing else --
    it is called from `tagpu_menu_init` at DLL attach, under the loader lock,

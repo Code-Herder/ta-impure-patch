@@ -1,7 +1,7 @@
-/* tagpu_tracer.c — G4 in-process tracer for TA's unit-draw path.
+/* tagpu_tracer.c — in-process tracer for TA's unit-draw path.
 
    Detours (classic 5-byte E9 JMP at the function entry to a runtime-generated naked
-   stub) are installed on two G3-verified sites in the pristine TotalA.exe (ImageBase
+   stub) are installed on two verified sites in the pristine TotalA.exe (ImageBase
    0x400000, md5 8e74a1dffa1f5988624c52048f5b20cd):
 
      * DrawUnit  0x45AC20  — one call per drawn unit; args (OFFSCREEN* ctx, UnitStruct*).
@@ -78,7 +78,7 @@
 #include <stdint.h>
 #include "tagpu_tracer.h"
 
-/* ---- engine layout (all G3/G4-verified, see frame-composition.md / this file's header) */
+/* ---- engine layout (all verified, see frame-composition.md / this file's header) */
 #define TA_MAINPP        0x00511DE8u  /* TAdynmemStruct**            */
 #define OFF_BEGIN        0x14357      /* UnitStruct* begin           */
 #define OFF_END          0x1435B      /* UnitStruct* end             */
@@ -298,7 +298,7 @@ void tagpu_tracer_init(void)
 
     if (GetFileAttributesA("tagpu_tracer.on") == INVALID_FILE_ATTRIBUTES) return;  /* disarmed */
 
-    /* Coexistence with the G5 suppressor (tagpu_suppress.c): when "tagpu_suppress.on"
+    /* Coexistence with the suppressor (tagpu_suppress.c): when "tagpu_suppress.on"
        is present the suppressor OWNS DrawUnit 0x45AC20 (it installs its own E9 over the
        same 7 stolen bytes). We must NOT double-detour those bytes, so skip our DrawUnit
        hook in that case. The blit hook 0x459200 is independent and always installs. */

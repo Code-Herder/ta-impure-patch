@@ -1,6 +1,6 @@
 #ifndef TAGPU_TEXT_H
 #define TAGPU_TEXT_H
-/* Engine text, rasterised into a texture of ours (G13p) — the L2 half of the
+/* Engine text, rasterised into a texture of ours — the L2 half of the
    marker port: the group digit over a squad-tagged unit and the `ShowRanges`
    labels beside each range circle.
 
@@ -11,8 +11,8 @@
    and the offscreen is the size of the SCREEN while `vpwide` lets the projection
    reach far outside it. So at zoom < 1 a digit or a label out in the ring is
    thrown away by the engine's own rasteriser and no capture can reach it
-   (research/notes/ui-markers.md 6.1). The answer is the same one G13n and G13o
-   gave: own the draw.
+   (research/notes/ui-markers.md 6.1). The answer is the one the other markers
+   use: own the draw.
 
    AND WHY IT IS NOT A FONT PORT. TA's in-game bitmap font is a private format
    and decoding it would be a week of work for nothing. Its blitter is not:
@@ -29,12 +29,11 @@
    with `fg=255, bg=0, transparent=0`, which makes the store `if (colour !=
    transparent)` keep only the set bits: the result is a 1-bit COVERAGE MASK, not
    a coloured sprite, so the atlas is colour-free and one raster serves the same
-   string in any colour, at no cost when a colour changes. (An earlier revision
-   justified this by saying the weapon-range labels flash their colour every game
-   tick. They do not: `0x438EA0` hands the flashing colour to the LINE drawer
-   only, and the string goes to `DrawTextCustomFont`, whose foreground is
-   `[globals+0x208]` — set once at `0x4696E7` and untouched inside the block. The
-   design is right; that reason for it was wrong.)
+   string in any colour, at no cost when a colour changes. (The weapon-range
+   labels do NOT flash their colour: `0x438EA0` hands the flashing colour to the
+   LINE drawer only, and the string goes to `DrawTextCustomFont`, whose
+   foreground is `[globals+0x208]` — set once at `0x4696E7` and untouched inside
+   the block.)
 
    Each distinct string is rasterised ONCE into a shelf-packed 8bpp atlas, and
    tagpu_mark.c draws it as a quad in the palette index the engine would have
@@ -43,8 +42,8 @@
    the "1997 art blown up" this port exists to stop — at 0.25x it would be two
    pixels tall and unreadable.
 
-   THE FONT ARRIVES AS BYTES, IN THE FRAME PACKET (landing 1 of the frame packet
-   exchange, 2026-09-12). The engine's font and text colour are latched on the
+   THE FONT ARRIVES AS BYTES, IN THE FRAME PACKET. The engine's font and text
+   colour are latched on the
    GAME THREAD at hook 8 — `[globals+0x204]` is whatever the engine's last
    `SetFont 0x4C1420` left there and the engine changes it many times a frame,
    so a present-thread read would get the side panel's font as often as the
@@ -52,10 +51,9 @@
    calls `0x4C1420` or `0x4C13A0` [BINARY-VERIFIED] — and the publisher
    (tagpu_packet_pub.c) COPIES the font's header and its 95 printable glyphs,
    each as a one-glyph font object the blitter accepts, into every packet.
-   Until this landing the present thread held the engine's font POINTER and
-   dereferenced it behind IsBadReadPtr; no note establishes a UI font's
-   lifetime and a probe is not a lifetime argument (CLAUDE.md). Now no
-   render-thread code touches an engine font: the raster runs the engine's
+   No render-thread code touches an engine font -- no note establishes a UI
+   font's lifetime, and a probe is not a lifetime argument (CLAUDE.md): the
+   raster runs the engine's
    blitter, on the present thread, over our copy, one glyph at a time at the
    same x the blitter's own string loop would have used (it advances by the
    width byte and nothing else), so the pixels are the ones the engine draws.
@@ -85,7 +83,7 @@ int  tagpu_text_colour(void);
    string does not fit, or the atlas is full. */
 int  tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff);
 
-/* ---- the GLYPH cache (G17d), present thread ---- */
+/* ---- the GLYPH cache, present thread ---- */
 /* Find or rasterise ONE character of `font` in the glyph atlas. The engine's
    own blitter advances x by the glyph's width byte and nothing else, so a run
    of these at those offsets reproduces its string blit exactly rather than
@@ -94,14 +92,11 @@ int  tagpu_text_place(const char* s, int* ax, int* ay, int* w, int* h, int* yoff
    clock, a new STRING every tick, against a 64-entry string cache.
    Its atlas is separate from the string one: different lifetimes (a font change
    repacks that one) and different keys. */
-/* THE UI'S GLYPHS, BY ID AND BY BITS (landing 4c). `feed` installs every glyph
+/* THE UI'S GLYPHS, BY ID AND BY BITS. `feed` installs every glyph
    record a string op carried — `{u8 code, u8 w, u16 nbytes, u8 bits[]}` each,
    4-byte aligned, the producer's copy of the font's own packed rows — and
-   `glyph_id` is the lookup afterwards. Nothing here dereferences a font: the
-   string op used to carry the engine's font OBJECT and this file read its
-   header, its offset table and every glyph behind IsBadReadPtr, on the present
-   thread, up to a queue backlog after the observer saw it. The blitter still
-   stamps the glyph, from a one-glyph font object of OURS. */
+   `glyph_id` is the lookup afterwards. Nothing here dereferences an engine
+   font: the blitter stamps the glyph from a one-glyph font object of OURS. */
 void tagpu_text_glyph_feed(unsigned font_id, int rows, int yoff,
                            const unsigned char* block, unsigned n, unsigned len);
 int  tagpu_text_glyph_id(unsigned font_id, int ch, int* ax, int* ay,
@@ -117,37 +112,26 @@ void tagpu_text_glyph_dims(int* w, int* h);
 unsigned tagpu_text_glyph_gen(void);
 /* has the cache rasterised any glyph? */
 int tagpu_text_glyph_have(void);
-/* THE GLYPH ATLAS AS BYTES (G19f landing 2). A second backend cannot read a GL
-   texture, and this one needs no mechanism to expose: the module already keeps
-   the atlas as a CPU array and uploads the texture FROM it, so this is the
-   array and `tagpu_text_glyph_gen`'s counter says when it last moved. Render
-   thread only. */
+/* THE GLYPH ATLAS AS BYTES. The module keeps the atlas as a CPU array; this is
+   the array, and `tagpu_text_glyph_gen`'s counter says when it last moved.
+   Render thread only. */
 const unsigned char* tagpu_text_glyph_atlas(int* w, int* h);
 /* THE ATLAS'S CONTENT SERIAL -- bumped whenever its BYTES change, including an
-   ordinary new glyph, which `tagpu_text_glyph_gen` does NOT count. Key a second
+   ordinary new glyph, which `tagpu_text_glyph_gen` does NOT count. Key a
    backend's upload on this one; key the validity of CELLS ALREADY RESOLVED on
    the generation above. Render thread only. */
 unsigned tagpu_text_glyph_serial(void);
 int  tagpu_text_glyph_stats(unsigned* glyphs, unsigned* drops, int* fonts);
 
-/* THIS MODULE HOLDS NO GPU OBJECT (11-5e-1). It rasterises with TA's own
-   blitter into two CPU arrays and hands them out as bytes; a backend uploads
-   them itself. `tagpu_text_tex` and `tagpu_text_glyph_tex` used to own a GL
-   texture each, creating it lazily and re-uploading the whole array when a
-   raster landed, and `tagpu_text_glreset` dropped both ids when the fork's GL
-   context changed. All three were callerless [masked scan, 11-5e-1] -- their
-   callers went with the GL draws in 11-4a and 11-4b -- and the reset cascade
-   that reached the last of them could not fire at all (tagpu_overlay.c).
-
-   WHAT REPLACED THEM IS ALREADY HERE AND IS BETTER: the two serials below.
-   A texture-owning accessor can serve only one backend, because the upload
-   consumes the dirty flag that told it to run; a counter can serve any number,
-   because each consumer keeps its own last-seen value. That was found the hard
-   way (the G19f landing-2 review, both reviewers) and it is the reason nothing
-   is ported back. */
+/* THIS MODULE HOLDS NO GPU OBJECT. It rasterises with TA's own blitter into
+   two CPU arrays and hands them out as bytes; a backend uploads them itself,
+   keyed on the counters. A texture-owning accessor could serve only one
+   backend, because the upload consumes the dirty flag that told it to run; a
+   counter can serve any number, because each consumer keeps its own last-seen
+   value. */
 void tagpu_text_dims(int* w, int* h);
 
-/* ---- the bytes a backend uploads (Phase G / G19d) ----
+/* ---- the bytes a backend uploads ----
    The CPU-side string atlas -- ATLAS_W x ATLAS_H, one coverage byte per texel,
    128 KB -- and a counter that ticks whenever a raster lands in it. A backend
    holds its own texture and refills it when the counter moves. Valid for the

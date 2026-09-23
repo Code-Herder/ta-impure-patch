@@ -1,5 +1,5 @@
 /* tagpu_vk_mark.c -- the UI MARKERS, drawn by Vulkan.
-   Contract: tagpu_vk_mark.h. Phase G, the Vulkan-only plan's landing 5.
+   Contract: tagpu_vk_mark.h.
 
    WHAT THE ORACLE IS. `tagpu_mark_render` in tagpu_mark.c, and this pass is fed
    by the DRAW LIST that function records as it issues its draws
@@ -77,10 +77,8 @@ DFNS(DECL)
 #define MK_VSTRIDE (MVST * 4)
 
 enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
-/* IMG_NONE WAS `IMG_LAYER`, the captured 8bpp post-fog layer, and it is now
-   only what that image already doubled as: the 1x1 0xFF stand-in that fills a
-   sampler binding with no picture this frame. The capture went with the clean
-   cut -- it was this pass's one engine-pixel path. */
+/* IMG_NONE is the 1x1 0xFF stand-in that fills a sampler binding with no
+   picture this frame. */
 enum { IMG_NONE = 0, IMG_TEXT, IMG_PAL, IMG_FOG, IMG_LUT, IMG_N };
 
 static int s_state;
@@ -100,26 +98,20 @@ static VkPipeline            s_pipeTri, s_pipeLine;
 static VkPipeline            s_pipeLineZ;
 static VkRenderPass          s_pipeRp;
 static VkDescriptorPool      s_pool;
-/* TWO SETS PER SLOT, AND ONE OF THEM IS NOW THE EMPTY ONE. `uLayer` is ONE
+/* TWO SETS PER SLOT, AND ONE OF THEM IS THE EMPTY ONE. `uLayer` is ONE
    sampler at binding 40, and Vulkan has no per-draw texture bind, so which
    image a draw samples is a property of the set: `s_setT` carries
    tagpu_text.c's coverage atlas for the label and digit draws, `s_setN` the
    1x1 stand-in for every draw that samples nothing (the bars, the rects, the
-   order lines and dots), and `record` picks one per draw.
+   order lines and dots), and `record` picks one per draw. The second is a set
+   rather than a branch because a set cannot be bound with a hole and something
+   must be at binding 40 either way.
 
-   IT USED TO BE A REAL CHOICE OF TEXTURES -- `s_setL` carried the captured
-   post-fog layer, the engine's own rasterised bytes, and a layer draw sampled
-   it. The clean cut deleted that draw, so the second set is the hole-filler
-   alone. It stays a set rather than becoming a branch because a set cannot be
-   bound with a hole and something must be at binding 40 either way.
-
-   THE FIRST BUILD HAD ONE SET AND NEVER BOUND THE ATLAS AT ALL. The text image
-   was sized, uploaded and generation-tracked, and then nothing sampled it: every
-   text draw read the LAYER binding, which on a frame with no captured layer is
-   the 1x1 0xFF stand-in, so `texture(uLayer, vUV).r` was 1.0 for every fragment,
-   the `< 0.5` discard never fired and each label and digit came out a SOLID
-   filled quad in its vertex colour. The bars-only A/B could not see it -- there
-   was no text draw in the frame -- and the first A/B that had labels in it
+   WITH ONE SET THE ATLAS IS NEVER BOUND AT ALL: every text draw reads the 1x1
+   0xFF stand-in, so `texture(uLayer, vUV).r` is 1.0 for every fragment, the
+   `< 0.5` discard never fires and each label and digit comes out a SOLID
+   filled quad in its vertex colour. A bars-only A/B cannot see it -- there is
+   no text draw in the frame -- and the first A/B that had labels in it
    measured 3 891 pixels. */
 static VkDescriptorSet       s_setN[TAGPU_VK_SLOTS];
 static VkDescriptorSet       s_setT[TAGPU_VK_SLOTS];
@@ -129,31 +121,25 @@ static VkSampler             s_samp;          /* NEAREST: every texel here is an
 /* the five sampled images, PER FRAME SLOT. `w`/`h` are what they were built
    for, so a change of extent rebuilds.
 
-   THEY WERE ONE SET SHARED BY EVERY SLOT UNTIL A LANDING REVIEW, 2026-09-17,
-   and the comment here asserted the invariant that made that safe -- "per-pass
-   images no other slot names, and the seam's fence for this slot has already
-   been waited on". Both halves were false. Every slot's `s_setN`/`s_setT` names
-   these views, and the seam's fence makes frame `n` wait for frame `n - nimg`
-   and nothing sooner (`tagpu_vk.c`, THE SEMAPHORE INDEXING) -- so with two
-   swapchain images the previous frame's submission can still be sampling them.
-   Two faults followed from it, neither of which any A/B could show, because
-   both need a second frame in flight:
+   THEY CANNOT BE ONE SET SHARED BY EVERY SLOT. Every slot's `s_setN`/`s_setT`
+   names these views, and the seam's fence makes frame `n` wait for frame
+   `n - nimg` and nothing sooner (`tagpu_vk.c`, THE SEMAPHORE INDEXING) -- so
+   with two swapchain images the previous frame's submission can still be
+   sampling them. Shared, they would fault two ways, neither of which any A/B
+   can show, because both need a second frame in flight:
 
      - the palette and the fog grid are re-uploaded EVERY frame, and `img_up`
        barriers SHADER_READ_ONLY -> TRANSFER_DST and copies over an image the
        previous submission may still be reading. Nothing orders the two;
-     - `img_size` destroys and rebuilds on any change of extent, and the
-       captured layer's extent changes per frame -- the GL twin re-specs on
-       exactly that condition (`tagpu_mark.c`, `upload_layer`). So a
-       `mark.on=nocursor` session frees an image a live command buffer names.
+     - `img_size` destroys and rebuilds on any change of extent, which would
+       free an image a live command buffer names.
 
    Per slot is what `tagpu_vk_fx.c` ("the four small per-slot images") and
    `tagpu_vk_terr.c` ("the three small per-slot images") already do, and the one
    pass that genuinely shares a device resource carries a per-slot retirement
-   mask for it instead (`tagpu_vk_unit.c`'s `VBRET.pending`). This pass had
-   neither. The cost is the text atlas uploading once per slot after a change
-   rather than once; it is 128 KB and it changes when a string is first
-   rasterised. */
+   mask for it instead (`tagpu_vk_unit.c`'s `VBRET.pending`). The cost is the
+   text atlas uploading once per slot after a change rather than once; it is
+   128 KB and it changes when a string is first rasterised. */
 typedef struct {
     VkImage        img;
     VkDeviceMemory mem;
@@ -194,15 +180,12 @@ static float s_selW;          /* the rects' band, target px -- set in record */
 static int s_selDraw;         /* and whether this frame's can be drawn        */
 static int s_saidSel, s_saidSelW;
 static int s_saidPal;
-/* ONE LATCH PER SITE HERE TOO. `s_saidWhy` covered three distinct refusals
-   and `s_saidTex` two, so the first to fire silenced a DIFFERENT one for the
-   rest of the session -- the same fault the image latches below were split
-   for, left standing on the draw-list ones. [LANDING REVIEW, 2026-09-17.] */
+/* ONE LATCH PER SITE HERE TOO: one latch over several distinct refusals lets
+   the first to fire silence a DIFFERENT one for the rest of the session. */
 static int s_saidEmpty, s_saidMany, s_saidBound, s_saidTexA;
-/* ONE LATCH PER SITE. A single `s_saidImg` shared by six upload sites hid every
+/* ONE LATCH PER SITE. A single latch shared by six upload sites hides every
    failure after the first -- including a failure at a DIFFERENT site, which is
-   the case that matters. Two live diagnosis cycles were spent reading a masked
-   error because of it. */
+   the case that matters. */
 static int s_saidImgT, s_saidImgP, s_saidImgF, s_saidImgU, s_saidImgS;
 static int s_saidNoDraw, s_saidSlot;
 
@@ -256,8 +239,7 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
     if (map) *map = (unsigned char*)p;
     return 1;
 bad:
-    /* every out-param NULL from every exit -- the contract the gate-3a
-       verification pass found missing in the unit pass's helper */
+    /* every out-param NULL from every exit */
     if (*mem) vkFreeMemory(d->dev, *mem, NULL);
     if (*buf) vkDestroyBuffer(d->dev, *buf, NULL);
     *buf = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE;
@@ -543,13 +525,10 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     /* THE ORDER LINES, AND THE ONE PIECE OF STATE THAT MAKES THEM THE TWIN'S.
        BRESENHAM is the diamond-exit rule GL's non-antialiased lines already
        follow; Vulkan's DEFAULT mode is not it, and the difference is whole
-       fragments along every diagonal. This pass shipped without the chain and
-       the first A/B that had order lines in it measured the cost: 4 900 pixels
+       fragments along every diagonal. MEASURED without the chain: 4 900 pixels
        the Vulkan lane drew and the GL twin did not, on 436 segments of route
        line and range circle, with the GL half a near-perfect SUBSET of the
-       Vulkan one. `tagpu_vk_fx.c` had the same state for the same reason and
-       this pass did not copy it -- the second time this file has been caught
-       by a rule a sibling already wrote down.
+       Vulkan one. `tagpu_vk_fx.c` carries the same state for the same reason.
 
        Built ONLY when the device gave us the mode, which is what makes the
        refusal in `prepare` a refusal rather than a fallback: with `lineok`
@@ -575,7 +554,7 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
            NOT A FAILURE OF THE PASS IF IT WILL NOT BUILD: the rects are
            dropped and the rest of the markers still draw, the same rule as a
            device without the lines (`prepare`). `s_pipeLineZ` stays NULL and
-           `record`'s `s_selDraw` reads that. [Landing review, 2026-09-23.] */
+           `record`'s `s_selDraw` reads that. */
         svs = mk_module(d, tagpu_spv_tagpu_mark_SVS, sizeof tagpu_spv_tagpu_mark_SVS / 4);
         sfs = mk_module(d, tagpu_spv_tagpu_mark_SFS, sizeof tagpu_spv_tagpu_mark_SFS / 4);
         if (svs && sfs) {
@@ -723,9 +702,9 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             s_state = ST_REFUSED; s_downOwed = 1; return 0;
         }
         s_state = ST_READY;
-        /* THE `up` LINE EVERY SIBLING PRINTS. Its absence was the whole
-           diagnosis on this pass's first live A/B: no refusal, no draw and no
-           voice at all, which says "never reached ready" and nothing else. */
+        /* THE `up` LINE EVERY SIBLING PRINTS. Without it, a pass with no
+           refusal, no draw and no voice at all says "never reached ready" and
+           nothing else. */
         plog(d, "mark: up - %u frame slots, uniform offset alignment %u, "
                 "bresenham lines %s", (unsigned)d->slots, (unsigned)s_ualign,
              d->lineok ? "yes" : "NO (a frame with order lines will refuse)");
@@ -756,23 +735,22 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
              s_h.text ? "yes" : "NULL", s_h.textW, s_h.textH,
              s_h.key, s_h.gw, s_h.gh, s_h.zoom, s_h.ss);
     }
-    /* EVERY BAIL-OUT FROM HERE DOWN SAYS WHY. They were silent in the first
-       draft, and the first A/B of this pass came back "GL 297 px, Vulkan 0"
-       with the log holding not one word about the cause -- which is the exact
-       shape of failure this project keeps paying for. Each latches SEPARATELY
-       so a refusal is said once and not at the frame rate -- and so that one
-       refusal cannot silence a different one. */
+    /* EVERY BAIL-OUT FROM HERE DOWN SAYS WHY. A silent one leaves an A/B that
+       reads "GL 297 px, Vulkan 0" with the log holding not one word about the
+       cause -- which is the exact shape of failure this project keeps paying
+       for. Each latches SEPARATELY so a refusal is said once and not at the
+       frame rate -- and so that one refusal cannot silence a different one. */
     /* NO PALETTE, NO FRAME. Binding 41 falls back to the STAND-IN's view rather
        than leaving a hole in the set, and the fragment shader's LAST line is
        `texelFetch(uPal, ivec2(pi, 0), 0)` on EVERY path -- the flat one and the
        text one alike. So a frame with no palette would draw
        every marker out of a 1x1 R8 image instead of refusing: the whole layer
        in garbage colours, which is a different picture and not an absent one.
-       The fallback's own comment said "the uniform that would read it is 0 on
-       such a frame", which is true of uLayer and false of uPal.
+       The fallback's comment ("the uniform that would read it is 0 on such a
+       frame") is true of uLayer and false of uPal.
        `tagpu_pal_live()` returns NULL until it has resolved one
        (`s_have ? s_pal : NULL`), and `tagpu_vk_fx.c` refuses on it for the same
-       reason. [LANDING REVIEW, 2026-09-17.] */
+       reason. */
     if (!s_h.pal) {
         if (!s_saidPal) { s_saidPal = 1;
             plog(d, "mark: the hand-over carries no palette - every marker "
@@ -824,13 +802,12 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             }
             return 0;
         }
-        /* AND THE LUT, WHICH IS THE SAME RULE AND WAS MISSING. The fog shade
-           re-indexes through `uFogLUT` inside the grey band
-           (`TAGPU_GLSL_FOG_SHADE`), so a fogged draw with no LUT samples
-           binding 43's fallback and every marker in that band takes a wrong
-           palette index. `tagpu_native_foglut()` returns NULL until a fog frame
-           has built the table, and `tagpu_vk_terr.c` refuses on exactly this.
-           [LANDING REVIEW, 2026-09-17.] */
+        /* AND THE LUT, WHICH IS THE SAME RULE. The fog shade re-indexes through
+           `uFogLUT` inside the grey band (`TAGPU_GLSL_FOG_SHADE`), so a fogged
+           draw with no LUT samples binding 43's fallback and every marker in
+           that band takes a wrong palette index. `tagpu_native_foglut()`
+           returns NULL until a fog frame has built the table, and
+           `tagpu_vk_terr.c` refuses on exactly this. */
         if (g->fog && !s_h.fogLut) {
             if (!s_saidLut) {
                 s_saidLut = 1;
@@ -863,14 +840,14 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        The WIDTH is the other one. The GL twin calls `glLineWidth(ss)`, and a
        Vulkan `lineWidth` other than 1.0 needs the `wideLines` device feature
        enabled at device creation -- which is the seam's business, not a
-       pass's. SINCE 4c-2 THE SEAM DOES ASK FOR IT, because the world is drawn
-       into a target `ss` times the game resolution and a 1.0 line there is `ss`
-       times too thin. The width comes from `tagpu_vk_world_scale()` -- the
-       supersample factor of THIS frame's target, which is 1 when the target
-       refused and the world is going into the swapchain image at 1:1 -- and a
-       width the device will not rasterise is still refused rather than clamped.
-       This is `tagpu_vk_fx.c`'s rule, item 2 of its header, and it applies here
-       word for word. [Corrected by the 4c-2 landing review.] */
+       pass's. THE SEAM ASKS FOR IT, because the world is drawn into a target
+       `ss` times the game resolution and a 1.0 line there is `ss` times too
+       thin. The width comes from `tagpu_vk_world_scale()` -- the supersample
+       factor of THIS frame's target, which is 1 when the target refused and the
+       world is going into the swapchain image at 1:1 -- and a width the device
+       will not rasterise is still refused rather than clamped. This is
+       `tagpu_vk_fx.c`'s rule, item 2 of its header, and it applies here word
+       for word. */
     if (needLines && !d->lineok) {
         if (!s_saidLine) {
             s_saidLine = 1;
@@ -881,18 +858,15 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         }
         return 0;
     }
-    /* THE LINE WIDTH, AND SINCE 4c-2 THE BOUND CAN USUALLY BE MET. The twin
-       calls `glLineWidth(ss)` and the world is drawn into a target `ss` times
-       the game resolution, so `ss` is the width that matches the oracle and
-       `record` below sets exactly that. Refused rather than clamped, for
-       tagpu_vk_fx.c's reason: a clamped width is a line a different thickness
-       from its own twin. Before 4c-2 this read `s_h.ss != 1.0f` and there was
-       no supersampled target for a wide line to be correct in. */
+    /* THE LINE WIDTH. The twin calls `glLineWidth(ss)` and the world is drawn
+       into a target `ss` times the game resolution, so `ss` is the width that
+       matches the oracle and `record` below sets exactly that. Refused rather
+       than clamped, for tagpu_vk_fx.c's reason: a clamped width is a line a
+       different thickness from its own twin. */
     /* THE WIDTH FOLLOWS THE TARGET, NOT THE HAND-OVER -- tagpu_vk_fx.c carries
        the argument. `s_h.ss` says what the GL lane did; this says what this
        frame's target is, and on the fallback path (no offscreen target, the
-       world going into the swapchain image at 1:1) they differ.
-       [FROM THE 4c-2 LANDING REVIEW.] */
+       world going into the swapchain image at 1:1) they differ. */
     s_lineW = (float)tagpu_vk_world_scale();
     /* THE SELECTION RECTS NEED THE SAME TWO FEATURES AND ARE NOT REFUSED WITH
        THE FRAME. The order lines' refusal exists because they had a GL twin to
@@ -929,11 +903,10 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (s_h.fogGrid) ssz += (VkDeviceSize)s_h.fogGridCols * s_h.fogGridRows * 2;
     if (s_h.fogLut) ssz += 256;
     /* AND THE 1x1 STAND-IN'S OWN BYTE. Reserving for the images the hand-over
-       carries and forgetting the one this pass makes for itself is how the
-       first live run of this pass drew nothing: the four real uploads land at
-       exactly `ssz`, the stand-in asks for one byte past it, `img_up`'s bound
-       refuses, and the whole frame bails. 16 rather than 1 so the next thing
-       added here is not a second off-by-one. */
+       carries and forgetting the one this pass makes for itself draws nothing:
+       the four real uploads land at exactly `ssz`, the stand-in asks for one
+       byte past it, `img_up`'s bound refuses, and the whole frame bails. 16
+       rather than 1 so the next thing added here is not a second off-by-one. */
     ssz += 16;
     if (ssz < 4096) ssz = 4096;
 
@@ -992,14 +965,13 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         off += 256;
     }
     /* THE FALLBACK EVERY UNUSED BINDING NAMES, AND IT HAS TO BE INITIALISED.
-       The first draft CREATED it and stopped there -- no clear, no transition --
-       so its descriptor claimed SHADER_READ_ONLY_OPTIMAL while the image sat in
-       UNDEFINED with undefined contents, and sampling that is undefined
-       behaviour. The pass drew its 90 vertices and the frame came back black.
-       `tagpu_vk_hires.c` carries a comment about this exact fault from gate 3a's
-       review -- "an image whose contents are UNDEFINED ... is not a mistake to
-       make twice" -- and this is it made twice. The upload is what puts it in
-       the layout the descriptor promises. */
+       Created and left there -- no clear, no transition -- its descriptor would
+       claim SHADER_READ_ONLY_OPTIMAL while the image sat in UNDEFINED with
+       undefined contents, and sampling that is undefined behaviour: the pass
+       draws its vertices and the frame comes back black. `tagpu_vk_hires.c`
+       carries a comment about the same fault ("an image whose contents are
+       UNDEFINED ... is not a mistake to make twice"). The upload is what puts
+       it in the layout the descriptor promises. */
     if (!s_img[slot][IMG_NONE].have) {
         static const unsigned char ONE = 0xFF;
         if (!img_size(d, &s_img[slot][IMG_NONE], 1, 1, VK_FORMAT_R8_UNORM) ||
@@ -1038,7 +1010,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     return 1;
 }
 
-/* the scissor in the target's pixels, and NOT mirrored since landing 5b. This
+/* the scissor in the target's pixels, and NOT mirrored. This
    is `tagpu_vk_fx.c`'s `fx_scissor` line for line: the two passes clip to the
    same rect and deriving it twice differently is how they would drift. */
 static void mk_scissor(const TAGPU_MKHAND* h, uint32_t w, uint32_t hh,
@@ -1050,7 +1022,7 @@ static void mk_scissor(const TAGPU_MKHAND* h, uint32_t w, uint32_t hh,
     int ww = (int)(h->vw * sx + 0.5f);
     int ytop = (int)(h->vpT * sy + 0.5f);
     int hgt = (int)(h->vh * sy + 0.5f);
-    int y0 = ytop;                            /* NOT mirrored: landing 5b */
+    int y0 = ytop;                            /* NOT mirrored */
     if (!h->scissorOn || ww <= 0 || hgt <= 0) {
         out->offset.x = 0; out->offset.y = 0;
         out->extent.width = w; out->extent.height = hh;
@@ -1099,16 +1071,14 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     }
     /* THE VIEWPORT AND THE SCISSOR, SET HERE BECAUSE THIS PASS'S PIPELINES
        DECLARE THEM DYNAMIC -- and dynamic state that is never set is undefined.
-       The first build of this pass declared both and set neither, so it issued
-       its draws correctly into nowhere: the log said "drew 1 list entr(ies), 90
-       vertices" and the frame came back black, on the lane's own window as well
-       as in the capture.
-       NO Y FLIP, since landing 5b: this pass's vertices are the engine's
-       screen-space y, which grows DOWNWARD, so clip -1 is the game frame's TOP
-       row and a positive viewport height puts it on row 0 of the swapchain
-       image -- which is where the game's top row is. A negative height, which
-       this pass took until 2026-09-17, turned it over a second time and Route D
-       presented the markers upside down; `tagpu_vk_fx.c` item 6 has the whole
+       Declared and not set, the draws go correctly into nowhere: the log says
+       "drew 1 list entr(ies), 90 vertices" and the frame comes back black, on
+       the lane's own window as well as in the capture.
+       NO Y FLIP: this pass's vertices are the engine's screen-space y, which
+       grows DOWNWARD, so clip -1 is the game frame's TOP row and a positive
+       viewport height puts it on row 0 of the swapchain image -- which is where
+       the game's top row is. A negative height turns it over a second time and
+       presents the markers upside down; `tagpu_vk_fx.c` item 6 has the whole
        argument. minDepth 0.5 / maxDepth 1.0 still maps clip z in [0, 1] onto
        GL's own (z+1)/2 -- the depth range is a separate question from the
        flip. */
@@ -1134,12 +1104,11 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        sit 1.5 game px from the ideal line: half a pixel of Bresenham rounding,
        half of the pixel's own extent, and up to half again because a sample's
        column is up to half a pixel from the pixel's centre on a slope of up to
-       1. The +2 is the column's own rounding in the target. The first cut
-       used 2 * scale + 2, which the landing review showed leaves samples
-       uncovered, and a brute-force of every edge within 24 px at every scale
-       from 1 to 6 in 1/16 steps finds none uncovered at this width. It costs
-       nothing to be wide: the fragment test decides the pixels. A device that
-       will not draw that wide loses the rects, not the frame. */
+       1. The +2 is the column's own rounding in the target. 2 * scale + 2
+       leaves samples uncovered; a brute-force of every edge within 24 px at
+       every scale from 1 to 6 in 1/16 steps finds none uncovered at this
+       width. It costs nothing to be wide: the fragment test decides the pixels.
+       A device that will not draw that wide loses the rects, not the frame. */
     {
         float pxX = s_h.gw > 0.0f ? (float)w / s_h.gw : 1.0f;
         float pxY = s_h.gh > 0.0f ? (float)h / s_h.gh : 1.0f;
@@ -1176,11 +1145,10 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           g->depth ? s_pipeLineZ :
                           g->lines ? s_pipeLine : s_pipeTri);
-        /* `glLineWidth(ss)`, and since 4c-2 it is genuinely `ss` rather than
-           always 1.0: the seam enables `wideLines` and the world is drawn into
-           a target that many times the game resolution. `s_lineW` is the
-           TARGET's scale, settled in `prepare`, not the hand-over's -- the two
-           differ on the frame the target refused. */
+        /* `glLineWidth(ss)`: the seam enables `wideLines` and the world is
+           drawn into a target that many times the game resolution. `s_lineW`
+           is the TARGET's scale, settled in `prepare`, not the hand-over's --
+           the two differ on the frame the target refused. */
         if (g->lines) vkCmdSetLineWidth(cb, g->depth ? s_selW : s_lineW);
         dyno[0] = 0;
         dyno[1] = (uint32_t)s_fsOff[i];

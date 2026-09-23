@@ -72,8 +72,8 @@ class Font:
     'j' h=14 ypos=11 xpos=1, and "'" h=6 ypos=11, which places it six rows
     above the baseline where an apostrophe belongs.
 
-    Bottom-aligning the frames instead -- which is what this did first -- puts
-    every descender back on the baseline and lifts the apostrophe onto it.
+    Bottom-aligning the frames instead puts every descender back on the
+    baseline and lifts the apostrophe onto it.
     """
 
     def __init__(self, assets, ta3do, size=12):

@@ -72,8 +72,8 @@ MOUNTS = [(-11.0, 11.09, 20.0), (11.0, 11.09, 20.0),
           (-11.0, 11.09, 44.0), (11.0, 11.09, 44.0)]
 # The same High Energy Laser the Warlord's own tri-barrel turret fires
 # (weapons/lasers.tdf: range 810, 180 damage, 75 energy a shot). The Light
-# Laser it used to carry only reached 300, which is inside the range every
-# ship it meets opens fire from — the battery never got a shot off.
+# Laser only reaches 300, which is inside the range every ship it meets opens
+# fire from — a battery of them never gets a shot off.
 LASER = "CORE_BATSLASER"
 FIRST_SLOT = 4
 # The Warlord's 6140 is a fair fight against a few ships and a very short one
@@ -122,7 +122,7 @@ SIGHT_DISTANCE = 1300
 # the "one turret won't move to aim" bug; see extra-weapons.md snag 10.
 #
 # So the turret slews from a script that returns inside its own tick, and the
-# module supplies the guarantee the `wait-for-turn` used to: it re-solves every
+# module supplies the guarantee a `wait-for-turn` would: it re-solves every
 # tick (a `turn` keeps running without a thread once issued) and holds fire
 # until the muzzle piece actually points at the target. Measured on
 # scenarios/warlordex-vs-fleet, shots on slots 4..7 over one run:
@@ -132,8 +132,8 @@ SIGHT_DISTANCE = 1300
 #   snap      turn-now, return 1              48 10 10  5   on target, no slew
 #   slew      turn, return 1                  19 18 25 19   even, and aligned
 #
-# `slew` reads lower than `track` only because it now declines the shots it used
-# to take while the barrel was still swinging (the module counts those as
+# `slew` reads lower than `track` only because it declines the shots it would
+# take while the barrel is still swinging (the module counts those as
 # `hold_fire`). It is the only one of the four that both keeps all four turrets
 # alive and puts the beam out of a barrel that is pointing at the target.
 AIM_STYLE = "slew"
@@ -226,8 +226,8 @@ def aim_script(stand, gun, signal, style="full"):
                 but the turret teleports to the angle instead of slewing.
       full      Cavedog's own shape, signal and all: 0/2/0/6. The signal pair is
                 what kills it; `track` is this minus those two words.
-      nosignal  the old name for `track`, still accepted.
-      nowait    the old name for `slew`, still accepted.
+      nosignal  an alias for `track`.
+      nowait    an alias for `slew`.
       instant   return 1 and turn nothing, the isolation test."""
     body = [OP["CREATE_LOCAL_VAR"], OP["CREATE_LOCAL_VAR"]]
     if style == "slew":

@@ -1,7 +1,7 @@
 #ifndef TAGPU_VK_UNIT_H
 #define TAGPU_VK_UNIT_H
 /* The posed unit bodies and their cast-shadow depth twins, drawn by Vulkan
-   (Phase G / G19e, the SIXTH world pass and the last of the gate).
+   (Phase G, the SIXTH world pass).
    Implementation: tagpu_vk_unit.c. The GL edition is tagpu_posedraw.c and
    stays the source of the vertices, the pose, the uniforms and the shader.
 
@@ -81,14 +81,14 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
    commutative, so a ghost recorded in the body stage composites differently
    against any translucent effect that overlaps it. The seam calls this one
    immediately after `tagpu_vk_fx_record`, and it is what ends the pass's frame
-   -- call both or neither. [Landing 6's review, 2026-09-17.] */
+   -- call both or neither. */
 void tagpu_vk_unit_record_ghosts(const TAGPU_VKPASS* d, VkCommandBuffer cb,
                                  uint32_t slot, uint32_t w, uint32_t h);
 
 /* 1 on the ONE frame `tagpu_posedraw.ab` latched its claim and `tagpu_vk_ab_arm`
    got the `_vk.ppm` target unlinked -- so the seam captures THAT frame rather
    than whichever one its own lever poll landed on. It does NOT mean a file was
-   written: since landing 4d-2 there is no GL half, and the capture the seam
+   written: there is no GL half, and the capture the seam
    then records is this lane's own. Consumed by the call. Valid after
    `prepare`. */
 int  tagpu_vk_unit_ab_frame(void);

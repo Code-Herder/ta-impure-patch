@@ -1,28 +1,25 @@
-/* The GLSL of the replacement-mesh program, lifted out of `tagpu_hires_draw.c`
-   so that the file that made the GL calls can be deleted and the SHADERS can
-   stay -- the Vulkan lane draws this pair as `hires`
-   (`tools/spirv-gen.py:194`).
+/* The GLSL of the replacement-mesh program -- the Vulkan lane draws this pair
+   as `hires` (`tools/spirv-gen.py:194`).
 
    WHY A HEADER AND NOT A `.c`. `tools/spirv-gen.py` reads its shader sources by
    preprocessing one translation unit per entry in `SOURCES` -- `src/<name>.c` by
-   default, or whatever `HEADER_SOURCES` maps the name to. Lifting the strings
-   here and adding one `HEADER_SOURCES` entry keeps `SOURCES` and `PROGRAMS`
-   untouched, which matters: removing a name from those would stop generating
-   `inc/spirv/tagpu_hires_draw.spv.h`, which the surviving Vulkan file includes.
+   default, or whatever `HEADER_SOURCES` maps the name to. One `HEADER_SOURCES`
+   entry maps `tagpu_hires_draw` here and keeps `SOURCES` and `PROGRAMS` as they
+   are, which matters: removing the name from those would stop generating
+   `inc/spirv/tagpu_hires_draw.spv.h`, which the Vulkan file includes.
 
    WHY IT SITS IN `src/` AND NOT `inc/`. The fragment shader pastes five
    `TAGPU_GLSL_*` macros out of `src/tagpu_glsl.h`, and the generator
    preprocesses with `-Iinc` alone -- a copy in `inc/` could not find them. The
    vertex shader also stringifies `TAGPU_HMAXPIECE`, which IS in `inc/`.
 
-   `STR`/`STR2` LIVE HERE NOW rather than in the `.c`, because the stringify is
-   part of the shader text: `uniform vec4 uPiece[48*3]` is what the generator
-   must see, and a macro left behind in the deleted file would leave the array
-   unsized.
+   `STR`/`STR2` LIVE HERE because the stringify is part of the shader text:
+   `uniform vec4 uPiece[48*3]` is what the generator must see, and without the
+   macro the array would be unsized.
 
-   THE TEXT IS UNCHANGED, and the build proves it: every generated header carries
+   THE TEXT IS PINNED, and the build proves it: every generated header carries
    a per-shader md5 of the GLSL it was compiled from, so a single character moved
-   here fails `tools/spirv-check.sh`. [The vulkan-only plan, landing 11 D1.] */
+   here fails `tools/spirv-check.sh`. */
 #ifndef TAGPU_HIRES_GLSL_H
 #define TAGPU_HIRES_GLSL_H
 
@@ -51,7 +48,7 @@ static const char* VS =
     "uniform vec4 uAnchor;\n"                 /* ax, ay, world x, world z     */
     "uniform vec3 uYawEnc;\n"                 /* cos yaw, sin yaw, depth key  */
     "uniform int uSlant;\n"                   /* 1: structure shadow slant    */
-    "uniform int uDepthPass;\n"               /* 1: into the shadow map (G14i) */
+    "uniform int uDepthPass;\n"               /* 1: into the shadow map       */
     "uniform mat4 uShadowMat;\n"
     "uniform vec3 uCast;\n"                   /* altitude, ground + throw, sv */
     "out vec3 vPos; out vec3 vNrm; out vec2 vUV;\n"

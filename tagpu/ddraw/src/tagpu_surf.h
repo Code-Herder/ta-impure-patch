@@ -20,18 +20,17 @@
    The bytes live in the fork's DirectDraw primary. TA rasterises into it
    through a Lock/Unlock pair that enters NO critical section, and
    `FlipOffscreenToPrimary 0x4C63A0` copies the engine's offscreen onto it row
-   by row — all on the GAME thread. Until 2026-09-20 the copy out of it ran on
-   the RENDER thread, from `tagpu_overlay_draw`, with nothing sequencing the
-   two. `g_ddraw.cs` was held, and that section is a LIFETIME ARGUMENT FOR THE
-   POINTER — it serialises `dds_Flip`'s swap and `dds_SetPalette` — and never a
-   bound on the BYTES. The failing interleaving is concrete: the render thread
-   reaches the row loop while the game thread is inside the flip between its
-   terrain rows and its side-panel rows; the copy takes new terrain over last
-   frame's panel, the byte comparison says "changed", the serial advances, and a
-   TORN picture is uploaded as the golden source with nothing marking it.
-   Per CLAUDE.md that is the bug with better odds, not a fix.
+   by row — all on the GAME thread. A copy out of it on the RENDER thread, from
+   `tagpu_overlay_draw`, has nothing sequencing the two. `g_ddraw.cs` does not
+   help: that section is a LIFETIME ARGUMENT FOR THE POINTER — it serialises
+   `dds_Flip`'s swap and `dds_SetPalette` — and never a bound on the BYTES.
+   The failing interleaving is concrete: the render thread reaches the row loop
+   while the game thread is inside the flip between its terrain rows and its
+   side-panel rows; the copy takes new terrain over last frame's panel, the
+   byte comparison says "changed", the serial advances, and a TORN picture is
+   uploaded as the golden source with nothing marking it.
 
-   SO THE COPY MOVED TO THE WRITER'S OWN THREAD, at a point where the frame is
+   SO THE COPY RUNS ON THE WRITER'S OWN THREAD, at a point where the frame is
    complete by construction: `tagpu_packet_pub.c`'s `after_draw` observer on
    `DrawGameScreen 0x468CF0`, on the in-play draw only. The flip is INSIDE that
    function (`0x46A3DB`, 34 bytes before its `ret` at `0x46A3FD`), so at the
@@ -53,8 +52,7 @@
    is the last COMPLETED frame.
 
    TWO MORE CONFIGURATIONS CAPTURE NOTHING, and in both the render thread is
-   left holding a request that will never be served [the landing review; both
-   benign, neither previously written down]. Under `renderer=gdi` the render
+   left holding a request that will never be served; both are benign. Under `renderer=gdi` the render
    half never runs at all, so no request is ever made and the game thread's
    gate returns on its first compare — zero cost. Under the publisher's
    `s_countOnly` the `after_draw` observer is not registered, so the render
@@ -66,7 +64,7 @@
    ---------------------------------------------------------------------------
    THE HAND-OVER: TWO BUFFERS AND ONE OWNERSHIP RULE
 
-   Moving the copy to the game thread moves the race rather than removing it
+   A copy on the game thread only moves the race rather than removing it
    unless the reader is ordered too, so the snapshot is double-buffered and the
    two threads never touch one buffer:
 
@@ -89,8 +87,7 @@
    almost always finished". `volatile` is not the mechanism; the `__atomic`
    acquire/release pair is, for the reason `tagpu_packet.c` states at length.
 
-   AND IT IS NOT RE-ENTRANT, WHICH COSTS NOTHING TO SAY AND WAS NOT SAID [the
-   landing review asked; rejected, with this reason]. The producer would break
+   AND IT IS NOT RE-ENTRANT. The producer would break
    if a second capture could begin while one was mid-copy on the same thread:
    the inner publish would let the render thread flip `hold`, and the outer
    would go on writing the buffer the render thread now owns. It cannot happen.
@@ -108,7 +105,7 @@
    request needs a sync, and a render thread that is behind costs the game
    thread nothing at all. But what each copy costs is `w*h` copied plus `w*h`
    compared, on TA's lockstep game thread: the 52-59 us the notes quote is
-   1024x768, and the figure scales with the pixels [the landing review]. At the
+   1024x768, and the figure scales with the pixels. At the
    `TAGPU_SURF_MAXDIM` ceiling it would be a 16 MiB copy and a 16 MiB compare
    per in-play draw. The heartbeat prints `us avg/max` so it is never a guess.
 
@@ -120,8 +117,8 @@
    serves only a snapshot stamped with the CURRENT one. So the reference cannot
    outlive the level it was taken from and be diffed against the next.
 
-   IT IS A STAMP RATHER THAN A FLAG BECAUSE A FLAG COULD NOT BE CLEARED IN TIME
-   [the landing review]. The producer's half runs inside `tagpu_overlay_draw`,
+   IT IS A STAMP RATHER THAN A FLAG BECAUSE A FLAG COULD NOT BE CLEARED IN
+   TIME. The producer's half runs inside `tagpu_overlay_draw`,
    below its `tagpu_reclaim_teardown_active()` early return — a level teardown,
    which is exactly the event the drop is for — while the consumer runs from the
    Vulkan frame record and shares no such return. Testing the data on the
@@ -129,9 +126,7 @@
 
    IT IS NOT AN ENGINE READ, and so this file is not on
    `tagpu/ddraw/thread-split.allow`. `g_ddraw.primary` is the FORK's own
-   DirectDraw surface object, not the game's memory at an absolute address.
-   [The vulkan-only plan, landing 4c-1; THE CLEAN CUT; the reference capture
-   moved to the game thread 2026-09-20.] */
+   DirectDraw surface object, not the game's memory at an absolute address. */
 
 /* ---------------------------------------------------------------------------
    `tagpu_surfdump.on` -- THE ORACLE, one shot, self-deleting, two halves
@@ -142,7 +137,7 @@
 
      * `surf: re-read check at draw N: 0 byte(s) of M differ` -- the GAME thread
        reads the primary a second time and compares it against the copy it just
-       took. This landing's claim is that nothing else is writing those bytes at
+       took. The claim is that nothing else is writing those bytes at
        this point; 0 is that claim measured, and it must hold with the game in
        motion, not only on a settled screen. A non-zero answer means the site is
        wrong.
@@ -177,10 +172,9 @@ typedef struct {
     /* 256 four-byte entries, R,G,B,255 — the palette the screen is being shown
        with, read from the primary's own palette object INSIDE THE SAME
        CRITICAL SECTION AS THE BYTES, so the indices and the table they resolve
-       through cannot be a frame apart. (Until this file moved threads the
-       palette came from `tagpu_pal.c` BEFORE the section, i.e. at a different
-       instant — and from a module whose every entry point is render-thread
-       only. Both are closed here.) */
+       through cannot be a frame apart. (Not from `tagpu_pal.c`: that is a
+       different instant, and every entry point of that module is render-thread
+       only.) */
     const unsigned char* pal;
     /* Bumped only when the bytes CHANGED against the previous snapshot, for a
        consumer that uploads to a device and wants to skip an upload it already
@@ -189,8 +183,7 @@ typedef struct {
     /* AND THE PALETTE HAS ITS OWN, because it moves INDEPENDENTLY of the bytes
        and a consumer that gated both on `serial` would freeze the colours. A
        fade is exactly that case -- one picture held still while the table runs
-       down to black -- and so is a gamma change over a static screen.
-       [FROM THE 4c-1 LANDING REVIEW.] */
+       down to black -- and so is a gamma change over a static screen. */
     unsigned             palSerial;
     /* WHICH ENGINE DRAW THIS IS, from the publisher's own in-play draw counter.
        A diff that wants to say WHAT it compared has the number here; a consumer

@@ -792,8 +792,7 @@ class Editor(unittest.TestCase):
 
     def test_a_stock_aim_is_not_restarted_while_one_is_still_slewing(self):
         # start one every tick and each new signal kills the last before it can
-        # arrive — extra-weapons.md snag 1's `full` row, and what an early version
-        # of this director did
+        # arrive — extra-weapons.md snag 1's `full` row
         source = "#define SIG 2\n" + PRELUDE + """
         Create() { return (0); }
         AimPrimary(heading, pitch)
@@ -917,7 +916,7 @@ class Serve(unittest.TestCase):
 
 
 class Packaging(unittest.TestCase):
-    """Landing 5: the paths, the config and the import map the packaged folder needs.
+    """Packaging: the paths, the config and the import map the packaged folder needs.
 
     Every one of these is a *layout* rule rather than a behaviour, and layout is
     what breaks when the same code runs out of a PyInstaller folder instead of a

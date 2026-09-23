@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""G15-0 — the Classic++ restorer on the UI art, offline, before any engine code.
+"""G15-0 — the Classic++ restorer on the UI art, offline, outside the engine.
 
 Pulls the UI art straight out of the game archives (no game running), runs the shipped
 learned model on it exactly as the game's GLSL port does, and lays original beside restored

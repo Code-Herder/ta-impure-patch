@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tacob-build.py — build the tacob folder that needs no Python (landing 5).
+"""tacob-build.py — build the tacob folder that needs no Python.
 
     tools/tacob-build.py vendor           # fetch the page's JavaScript, pinned and checksummed
     tools/tacob-build.py wine-setup       # a Wine prefix with a Windows Python and PyInstaller
@@ -282,8 +282,8 @@ def clean_prefix(args):
 def drive_page(url, offline=True, png=None):
     """Load the served page in headless Chrome and report what came back.
 
-    The same helpers landing 4 used, for the same reason: `ta3do.Display()` is a
-    private Xvfb, never the owner's desktop. `--host-resolver-rules` cuts the page
+    It uses `ta3do`'s helpers: `ta3do.Display()` is a private Xvfb, never the
+    owner's desktop. `--host-resolver-rules` cuts the page
     off from every host but loopback, which is what turns "it loaded" into "it
     loaded *from the folder*"."""
     import tempfile
@@ -313,7 +313,7 @@ def drive_page(url, offline=True, png=None):
 
 
 def cmd_check(args):
-    """Run the built folder in a prefix that has no Python — the landing's gate.
+    """Run the built folder in a prefix that has no Python — the packaging gate.
 
     Two runs. The headless smoke test proves the bundle *is* the program: it
     reads the game's archives, decompiles, compiles, and steps the VM. The page

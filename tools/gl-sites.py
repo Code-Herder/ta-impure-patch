@@ -2,11 +2,11 @@
 """Count the GL call sites left in the fork -- the vulkan-only plan's exit condition.
 
 Gate 11-5's exit condition is a NUMBER ("no GL call sites remain in
-tagpu/ddraw/src/*.c"), and until this tool existed that number was produced by a
-different throwaway script each landing.  That is not an exit condition, it is an
-assertion: two sessions counting "GL sites" can differ by a hundred and both be
-telling the truth, because the disagreement is in the three things nobody wrote
-down.  All three are decisions, not facts, so they are made here, once:
+tagpu/ddraw/src/*.c").  Produced by a different throwaway script each time, that
+is not an exit condition, it is an assertion: two sessions counting "GL sites"
+can differ by a hundred and both be telling the truth, because the disagreement
+is in the three things nobody wrote down.  All three are decisions, not facts,
+so they are made here, once:
 
   THE PATTERN.  `\\b(?:gl|x_gl)[A-Z][A-Za-z0-9]*\\s*\\(` -- the GL naming
       convention (`gl` + CapitalisedVerb) plus this tree's `x_gl` prefix for an
@@ -50,15 +50,12 @@ NARROW = re.compile(r"\b(?:gl|x_gl)[A-Z][A-Za-z0-9]*\s*\(")
 # WIDE is NARROW plus the three families that are GL without being spelled
 # `glSomething`: `oglu_*` (the fork's own GL helpers), `wgl*` and `xwgl*`.
 #
-# IT KEEPS NARROW'S `[A-Z]` FOR THE BARE `gl` PREFIX, and the first version did
-# not -- it read `[A-Za-z_]`, which made `gl` followed by a lower-case letter a
-# match and swept in three of this fork's own identifiers: `glog`, the
-# per-module logger that writes to tagpu.log (32 calls), `glyph_obj` /
-# `glyph_raster` / `glyph_block_*` (9), and `gl_probe` (2). The effect was not
-# cosmetic: `tagpu_gaf.c` was tracked in the plan and the roadmap as "0 narrow,
-# 12 wide" with those 12 said to go with the RGB mirror, and eleven of them
-# were `glog`. `tagpu_gui_hook.c` (25) and `tagpu_text.c` (5) were listed as
-# carrying GL while carrying none at all.
+# IT KEEPS NARROW'S `[A-Z]` FOR THE BARE `gl` PREFIX. `[A-Za-z_]` would make
+# `gl` followed by a lower-case letter a match and sweep in three of this fork's
+# own identifiers: `glog`, the per-module logger that writes to tagpu.log,
+# `glyph_obj` / `glyph_raster` / `glyph_block_*`, and `gl_probe` -- enough to
+# report files such as `tagpu_gui_hook.c` and `tagpu_text.c` as carrying GL
+# while they carry none at all.
 WIDE = re.compile(
     r"\b(?:(?:gl|x_gl)[A-Z][A-Za-z0-9]*|(?:oglu_|wgl|xwgl)[A-Za-z_][A-Za-z0-9_]*)\s*\("
 )

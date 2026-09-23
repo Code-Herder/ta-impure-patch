@@ -1,6 +1,6 @@
 #ifndef TAGPU_FEAT_H
 #define TAGPU_FEAT_H
-/* Feature pass (G13a) — trees, rocks, metal patches, splats and GAF
+/* Feature pass — trees, rocks, metal patches, splats and GAF
    wreckage: the last colour-keyed sprites the engine blits into the 8bpp
    frame besides the terrain itself.
 
@@ -12,8 +12,7 @@
 
    This module reproduces both from the same FeatureMap walk and renders the
    frames natively with DEPTH WRITES ON, so a tall feature occludes units
-   through the real depth buffer — which is what retires the G12a scene-depth
-   scaffold. Armed by tagpu_feat.on (tokens log, passive, noflat, notall,
+   through the real depth buffer. Armed by tagpu_feat.on (tokens log, passive, noflat, notall,
    noshadow, nowreck). Rides the native pass's per-frame view. */
 #include "tagpu_fx.h"
 #include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the restore request */
@@ -29,7 +28,7 @@ int  tagpu_feat_gather(const TAGPU_FXVIEW* v);
 void tagpu_feat_render(const TAGPU_FXVIEW* v, unsigned int palTex);
 void tagpu_feat_glreset(void);
 
-/* ---- the Vulkan edition of this pass (Phase G / G19e, the second world pass)
+/* ---- the Vulkan edition of this pass (the second world pass)
    ----------------------------------------------------------------------------
 
    Everything the GL lane just drew this pass FROM, so that the Vulkan lane
@@ -92,15 +91,8 @@ typedef struct TAGPU_FEATHAND {
     int                   atlasRows;
     unsigned              atlasSerial;
 
-    /* ...AND THE WORK ITSELF IS NOW THE ONLY FORM IT COMES IN (the Vulkan-only
-       plan's landing 7d, and 11-5e-2b). These were MUTUALLY EXCLUSIVE with a
-       read-back mirror, `atlasRgb`, that stood here until the GL backend that
-       produced it went: a consumer chose between a picture and a request. The
-       mirror's only source was `glReadPixels`, opengl32.dll is never loaded
-       (`oglu_load_dll` has no caller), so the picture was NULL on every
-       published frame of every process and the choice was never a choice.
-       `atlasRgb`'s companions were `atlasRgbRows`, the read-back's own
-       high-water mark, and `atlasRgbSerial`. Nothing new goes where they were:
+    /* ...AND THE WORK ITSELF IS THE ONLY FORM IT COMES IN. There is no
+       read-back picture of the twin (opengl32.dll is never loaded):
        the twin reaches a consumer as the list below and is painted on the
        device.
 
@@ -129,7 +121,7 @@ typedef struct TAGPU_FEATHAND {
        describes the LATEST generation, and two resets between two of a
        consumer's looks collapse into one, so a blank followed by a repaint
        would read as "keep what you have" over an atlas the producer cleared.
-       Blank whenever this has moved. [FROM THE LANDING-7d REVIEW.] */
+       Blank whenever this has moved. */
     unsigned                 restoreBlanks;
     const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()       */
     unsigned              palSerial;
@@ -149,8 +141,8 @@ typedef struct TAGPU_FEATHAND {
     /* 1 on the ONE frame `tagpu_feat.ab` latched its claim and
        `tagpu_vk_ab_arm` got the `_vk.ppm` target unlinked, so the Vulkan lane
        captures THAT frame rather than whichever one its own lever poll landed
-       on. It does NOT mean a capture file was written -- since landing 4d-2
-       there is no GL half to write one. */
+       on. It does NOT mean a capture file was written -- there is no GL half
+       to write one. */
     int   ab;
 } TAGPU_FEATHAND;
 

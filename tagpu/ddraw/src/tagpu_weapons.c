@@ -341,7 +341,7 @@ typedef char* (__stdcall  *PFN_FindTarget)(char* unit, u32 idx, int);          /
 #define E_QueryScript ((PFN_QueryScript)0x4B0BC0u)
 /* 0x4B07C0 walks the COB name table and returns the script's index, or -1.
    Stock's clear-target calls it here and throws the answer away; kept
-   call-for-call. It is NOT a stop-script, whatever the old name said. */
+   call-for-call. It is NOT a stop-script. */
 #define E_Name2Index  ((PFN_Name2Index)0x4B07C0u)
 #define E_PiecePos    ((PFN_PiecePos)   0x43DEF0u)
 #define E_Name2Ptr    ((PFN_Name2Ptr)   0x49E5B0u)

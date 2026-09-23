@@ -4,16 +4,12 @@
    the line a rendering backend implements.
 
    WHY THIS FILE EXISTS, which is a fact about the tree rather than a taste.
-   `tagpu_restoreglsl.c` was one file doing two unrelated jobs: an incremental
-   background SCHEDULER (job queues, batch formation, a GPU-time budget driven
-   by a smoothed cost estimate) and a GL DRAW SEQUENCE. The Vulkan-only plan's
-   landing 11 deletes `opengl_utils.h`, which that file includes -- but two of
-   its exports are called from gather halves that SURVIVE the deletion
-   (`tagpu_rglsl_tileable` from tagpu_terr.c and tagpu_gaf.c), and the queues
-   are what every consumer's lazy-restore contract is written against. So the
-   module could not be deleted with GL and could not stay as it was; the split
-   is mandatory. It is done while the GL restorer is still here to diff against
-   itself, because after landing 4 that oracle is gone.
+   The restorer is two unrelated jobs: an incremental background SCHEDULER
+   (job queues, batch formation, a GPU-time budget driven by a smoothed cost
+   estimate) and a DRAW SEQUENCE. Only the second names an API; the first is
+   called from API-free gather halves (`tagpu_rglsl_tileable` from
+   tagpu_terr.c and tagpu_gaf.c), and the queues are what every consumer's
+   lazy-restore contract is written against.
 
    WHAT IS ON WHICH SIDE. The core owns everything that does not name an API:
    the weight file, the options, the size-class ladder, `tileable`, the job
@@ -25,10 +21,9 @@
    a way no A/B would show.
 
    ONE SCHEDULER PER BACKEND, not one shared. Each backend declares its own
-   TAGPU_RSCHED, so a lane's slicing is bit-identical to what it was before this
-   split whether or not another lane is alive. A shared budget would have been
-   defensible and would also have changed the GL lane's behaviour the moment a
-   second lane came up -- and this split is meant to be pure code motion.
+   TAGPU_RSCHED, so a lane's slicing is the same whether or not another lane is
+   alive; a shared budget would change one lane's behaviour the moment a second
+   lane came up.
 
    THE MODEL AND THE OPTIONS ARE PROCESS-WIDE: one weight file, one
    `tagpu_restoreglsl.on`, whatever lanes are running. Both lanes must restore
@@ -63,7 +58,7 @@ typedef struct {
 typedef struct { int tiny, fp16, nk, log; double budget; } TAGPU_ROPT;
 
 /* Re-read the options and the model, from a backend's own init, so that both
-   are picked up once per CONTEXT as they were before this split. 0 with the
+   are picked up once per CONTEXT. 0 with the
    reason in tagpu.log when the weight file is unusable -- Classic++ then stays
    indexed, which is the shipped fallback and not a failure. */
 int                tagpu_rcore_reload(const char* who);

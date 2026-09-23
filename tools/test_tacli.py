@@ -1025,7 +1025,7 @@ class ScenarioResults(unittest.TestCase):
 
 
 class Roster(unittest.TestCase):
-    """The roster line gained UnitInGameIndex; older logs still have to parse."""
+    """The roster line carries UnitInGameIndex; logs without it still have to parse."""
 
     def parse(self, line):
         return tacli.ROSTER_RX.match(line)
@@ -1087,7 +1087,6 @@ class PlayerSpecs(unittest.TestCase):
                          [("Player0Controller", "1"), ("Player0Color", "3")])
 
     def test_a_spec_with_no_controller_is_refused_rather_than_ignored(self):
-        # It used to raise IndexError, and then, briefly, do nothing at all.
         with refuses(self):
             tacli.player_keys("2")
 

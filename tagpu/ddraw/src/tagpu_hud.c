@@ -2,7 +2,7 @@
    the engine's viewport rect it writes and why never L/T, and what makes the
    one word that crosses threads safe; research/notes/gui-renderer.md §22 for
    why the art is magnified rather than re-laid-out, §22.5 for the origin tear
-   the first build caused and §22.6 for the rule that replaced it.
+   that moving L/T causes and §22.6 for the rule this file follows.
 
    THE MAGNIFICATION ITSELF IS NOT HERE: it is the composite's shader in
    tagpu_gui_surf.c, which this module only feeds. Arming `tagpu_hud.on`
@@ -233,7 +233,7 @@ void tagpu_hud_to_engine(int* x, int* y)
         *x = *x * 256 / q;
         *y = H - (H - *y) * 256 / q;
     } else {
-        /* THE WORLD, and it is no longer the identity (22.6). The engine draws
+        /* THE WORLD, which is not the identity (22.6). The engine draws
            the world into [128, R] x [32, B] of its own surface and we put that
            block on screen at [128s, W-1] x [32s, H-1-32s], so a screen point in
            the world comes back by the same vector. Screen 128s -> engine 128
@@ -273,7 +273,7 @@ void tagpu_hud_to_screen(int* x, int* y)
    at least four places that assume its viewport IS what the player looks at --
    the eye clamp 0x41C3C0, the centre-on 0x41C7C0, the per-frame FOLLOW at
    0x41CAF7 and the smooth SetCamera 0x41C4C0 -- and patching them one at a
-   time was a losing game. So the viewport is made to BE the visible window,
+   time is a losing game. So the viewport is made to BE the visible window,
    and every one of them is then simply right.
 
    WHAT IS WRITTEN, and what is deliberately not:
@@ -281,13 +281,12 @@ void tagpu_hud_to_screen(int* x, int* y)
      L, T   NOT WRITTEN. 0x80 / 0x20 are baked as immediates into every site
             that projects world -> screen (exe map, "The world->screen
             projection is NOT derived from the viewport rect"), so moving them
-            tears the world in two -- 22.5, and the whole reason the first
-            build was withdrawn.
+            tears the world in two (22.5).
      R, B   the far edges pulled in by what the HUD covers.
      viewW  R - L + 1, and viewH B - T + 1, so every clamp and every centre the
             engine computes is about the window the player can actually see.
 
-   THE TRANSLATION is what pays for it: the engine now draws the world into
+   THE TRANSLATION is what pays for it: the engine draws the world into
    [128, R] x [32, B] of its own surface, and that block belongs on screen at
    [128s, W-1] x [32s, H-1-32s]. One vector, (128s - 128, 32s - 32), applied in
    the three places we own -- the world layer's viewport, the composite's
@@ -298,13 +297,13 @@ void tagpu_hud_to_screen(int* x, int* y)
    and viewH = H-64 are exactly what 0x497F40 just built, so the s = 1 frame is
    the engine's own and the parity gate cannot move because of this file.
 
-   GAME-ENTRY-TIME AGAIN, and this is the cost of the change: LoadMap's
+   GAME-ENTRY-TIME, and this is the cost: LoadMap's
    derivations and the SORT allocations are sized from viewW/viewH, and the
    loader thread is not created until 0x4982CA, so the rect has to be in place
-   before then. The observer is back on 0x4288D0 gated on the return address
+   before then. The observer is on 0x4288D0 gated on the return address
    0x498242 -- the call at 0x49823D, which is the first one after the last
    store of the rect. A scale chosen mid-game therefore waits for the next
-   game, which is what 22.2 said before the live version briefly replaced it. */
+   game (22.2). */
 #define VA_LOADBG   0x004288D0u
 #define SITE_RET    0x00498242u
 static const unsigned char LOADBG_STOLEN[7] = { 0x83,0xEC,0x30, 0x8B,0x44,0x24,0x38 };
@@ -333,7 +332,7 @@ int tagpu_hud_shift(int* dx, int* dy)
 /* The insets `tagpu_vpwide.c` derives the TRUE rect from. L and T are the
    engine's own 0x80/0x20 and never move -- the projection bakes them (22.5) --
    but the far edges come in by what the HUD covers, so that the rect this
-   fork reasons about is the same rect the engine's own fields now hold.
+   fork reasons about is the same rect the engine's own fields hold.
    ONCE horizontally and TWICE vertically, for the reason apply_rect gives. */
 void tagpu_hud_true_inset(const char* ta, int* L, int* T, int* rInset, int* bInset)
 {

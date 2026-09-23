@@ -63,7 +63,7 @@ static void rlog(const char* s)
     FILE* f = fopen("tagpu.log", "a");
     if (f) { fprintf(f, "%s\n", s); fclose(f); }
 }
-/* "<lane>: <what>", the shape every line in this module has had */
+/* "<lane>: <what>", the shape every line in this module has */
 static void rlog_2(const char* who, const char* what)
 {
     char b[300];
@@ -121,15 +121,13 @@ static int load_weights(const char* who, const char* model)
                `(offset + group x kstride) x 16` bytes, and both APIs require that
                to be a multiple of the device's uniform-buffer offset alignment:
                GL refuses above 256 in the backend, and the reference setup's
-               Vulkan device reports 64 (16 on llvmpipe). `kstride & 15` below
-               already makes the group term a multiple of 256; `offset & 15` is
-               what makes the base term one, and it was missing.
-               It held anyway for both shipped models -- the exporter lays layers
-               back to back from 0, so every offset is a running sum of
-               `kout x kstride` and therefore a multiple of 16 -- so this closes a
-               hole rather than fixing a fault, and the hole was in the GL path
-               too. [The Vulkan port is what made it concrete; measured through
-               winevulkan 2026-09-17.] */
+               Vulkan device reports 64 (16 on llvmpipe; measured through
+               winevulkan 2026-09-17). `kstride & 15` below already makes the
+               group term a multiple of 256; `offset & 15` is what makes the
+               base term one. Both shipped models pass it by construction --
+               the exporter lays layers back to back from 0, so every offset is
+               a running sum of `kout x kstride` and therefore a multiple of 16
+               -- so this is a bound on the file, not a fix for the exporter. */
             if (L->jin == 0 || L->kout == 0 || L->kstride == 0 || (L->kstride & 15) ||
                 (L->offset & 15) ||
                 L->kstride > ntex || L->kout > ntex || end > ntex || L->jin > 64) {
@@ -181,10 +179,8 @@ static void read_options(void)
 }
 
 /* RE-READ BOTH, which a backend does from its own init -- so the options are
-   picked up once per CONTEXT, not once per process, exactly as they were
-   before the split. That matters: `tagpu_rglsl_glreset` clears the GL
-   backend's ready flag, the next job re-inits, and a `tiny` or `budget=`
-   edited between two contexts took effect. `load_weights` re-reads only when
+   picked up once per CONTEXT, not once per process: a `tiny` or `budget=`
+   edited between two contexts takes effect. `load_weights` re-reads only when
    the model NAME changed, so flipping `tiny` reloads and a plain reload does
    not touch the 4 MB body.
 
@@ -271,11 +267,9 @@ TAGPU_RCORE* tagpu_rcore_job_new(TAGPU_RSCHED* s, const char* tag, int prio,
        off the end of the model: FILL sets `pass = 1`, `pass <= depth` is
        `1 <= 0`, so the next draw falls into the OUT branch and evaluates
        `layer[depth - 1]` -- `layer[-1]`, which is the four ints in front of the
-       array, read as an input-tile count. The GL lane cannot reach it (its
-       `job_new_x` runs `init_gl` first, which fails on a bad weight file), so
-       this is a trap laid for the SECOND backend, which is the whole reason
-       this interface exists. [FOUND BY THE LANDING REVIEW, 2026-09-17: the
-       header said "or the model is unusable" and the code never looked.] */
+       array, read as an input-tile count. The guard lives here and not in a
+       backend's init because this is the interface every backend shares, and
+       the header promises it ("or the model is unusable"). */
     if (!tagpu_rcore_ready()) {
         _snprintf(b, sizeof b, "%s: %s: no model loaded, so no job", s->be->name, tag ? tag : "job");
         rlog(b);
@@ -360,9 +354,9 @@ int tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
    order is the point. The queue compaction is destructive, so calling
    `act_ensure` after it would leave a -1 with the batch already taken out of a
    queue it has to go back into. Two passes over the queue with the same
-   predicate pick the same frames, so the batch is identical to the one the
-   single destructive pass produced; what changes is only that nothing is
-   committed until the scratch exists. */
+   predicate pick the same frames, so the batch is identical to the one a
+   single destructive pass would produce; nothing is committed until the
+   scratch exists. */
 static int form_batch(TAGPU_RSCHED* s, TAGPU_RCORE* j)
 {
     int cls, cols, cap, i, k = 0, S = 0, taken = 0, ok;

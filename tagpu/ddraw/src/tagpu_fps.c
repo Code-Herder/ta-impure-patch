@@ -23,18 +23,13 @@
    THE PACKET LINE. `tagpu_packet.show` (polled with the trigger) adds a second
    row under the frame rate: `PK<seq> T<tick> E<eyeX>,<eyeY> A<ack> D<dx>,<dy>`
    from the packet the driver acquired this frame — the frame packet exchange's
-   "visibly alive" readout (landing 1), with the command acknowledgement since
-   landing 2 (the last record applied, and the cumulative anchor delta applied
-   by then). Same eleven strings plus "PK", "T", "E", "A", "D", "," and "-",
+   "visibly alive" readout, with the command acknowledgement (the last record
+   applied, and the cumulative anchor delta applied by then). Same eleven strings plus "PK", "T", "E", "A", "D", "," and "-",
    so it costs the atlas nothing per frame either.
 
-   TWO BACKENDS DRAW THIS PASS SINCE G19d, AND FROM ONE SET OF QUADS. The
-   Vulkan lane's edition of it (tagpu_vk_fps.c) does not rebuild the geometry;
-   it takes the vertices this file just built, through `tagpu_fps_quads`, and
-   samples the same atlas bytes. That is what makes "0 px apart" a statement
-   about the two APIs rather than about two pieces of arithmetic that happen to
-   agree -- the quads, the atlas, the frame size and the ink are literally the
-   same values, and only the rasteriser differs.
+   THE VULKAN LANE DRAWS THIS PASS FROM THE QUADS BUILT HERE. Its edition
+   (tagpu_vk_fps.c) does not rebuild the geometry; it takes the vertices this
+   file just built, through `tagpu_fps_quads`, and samples the same atlas bytes.
 
    `tagpu_fps_quads` CONSUMES what it returns, and here is exactly what that
    buys. The Vulkan lane presents from `ogl_render` while this runs inside the
@@ -44,24 +39,16 @@
    whose readout has already been superseded. It does not make it impossible for
    the lane to draw the newest vertices on a frame this file was skipped on:
    that frame shows a readout one frame stale, which is a digit and not a fault.
-   [The header used to claim the stronger property. A review disproved it
-   2026-09-15; making it true would need a frame stamp the two files share, and
-   nothing yet needs one.]
+   The stronger property would need a frame stamp the two files share, and
+   nothing yet needs one.
 
-   THE A/B (`tagpu_fps.ab`) IS AN ORACLE, NOT INSTRUMENTATION, and since landing
-   4d-2 what is left of it here is the two lines that say WHEN. The lever latches
+   THE A/B (`tagpu_fps.ab`) IS AN ORACLE, NOT INSTRUMENTATION, and what there
+   is of it here is the two lines that say WHEN. The lever latches
    a claim for one frame, once, until the file is removed; the seam then captures
    THAT frame from the Vulkan image and `tagpu_vk_ab_arm` has already unlinked
    the target so the file on the disk is this arming's. Diff it against a capture
-   from another BUILD.
-
-   THERE USED TO BE A GL HALF AND THIS FILE DESCRIBED IT AT LENGTH. Route D ran
-   both backends at once, so this pass cleared the frame to black, drew, read the
-   result back to `tagpu_fps_gl.ppm` through the shared `tagpu_abshot.c`, and the
-   two captures were diffed. 4d-1 deleted route D and 4d-2 deleted that machinery.
-   The one part of the old argument still worth knowing: the clear was BLACK, and
-   `tagpu_vk.on=color=0,0,0` still matters, because a capture is only comparable
-   when the pass sits alone over a known background. */
+   from another BUILD. `tagpu_vk.on=color=0,0,0` matters for it, because a
+   capture is only comparable when the pass sits alone over a known background. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,7 +59,7 @@
 
 #define TRIGGER   "tagpu_fps.on"
 #define PKSHOW    "tagpu_packet.show"
-#define ABFILE    "tagpu_fps.ab"      /* the G19d A/B: capture one frame       */
+#define ABFILE    "tagpu_fps.ab"      /* the A/B: capture one frame            */
 #define POLL      30                  /* frames between trigger polls          */
 #define WINDOW_MS 500u                /* averaging window                      */
 #define MAXCH     48
@@ -92,12 +79,11 @@ static unsigned s_frames;
 static int      s_fps = -1;
 
 /* THE SHADER PAIR IS A BUILD INPUT, NOT CODE THIS FILE RUNS. Nothing here
-   references them since [the vulkan-only plan, landing 11-4c] -- tools/spirv-gen.py
-   reads them out of the PREPROCESSED translation unit and generates the SPIR-V the
-   Vulkan twin draws with, so deleting them fails the build with "the manifest names
-   <pass>::VS and the source does not have it". The pragma below is paired and its
-   `pop` was PROVED with a planted probe rather than read: landing 11-4b put one
-   inside a comment, where it is text and not a directive. */
+   references them -- tools/spirv-gen.py reads them out of the PREPROCESSED
+   translation unit and generates the SPIR-V the Vulkan twin draws with, so deleting
+   them fails the build with "the manifest names <pass>::VS and the source does not
+   have it". The pragma below is paired and its `pop` was PROVED with a planted
+   probe rather than read: a `pop` inside a comment is text and not a directive. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
@@ -156,8 +142,7 @@ static int emit(const char* s, float* x, float y, int* nv)
    which is also what a frame the overlay did not run on returns.
 
    `ab` RIDES WITH THEM, AND THAT IS WHAT MAKES THE COMPARISON HONEST. Both
-   lanes could poll `tagpu_fps.ab` for themselves -- and the first version did --
-   but they poll on different cadences (this one every 30 frames, the lane every
+   lanes could poll `tagpu_fps.ab` for themselves, but they poll on different cadences (this one every 30 frames, the lane every
    250 ms), so the two captures could land several hundred frames apart, and the
    readout changes its number twice a second. The captures would then differ in
    the digits and agree about nothing else, which reads exactly like a broken
@@ -183,23 +168,17 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     /* NOTHING TO HAND OVER UNTIL THIS FRAME HAS BUILT IT. Every return below
        leaves both at 0.
 
-       THE A/B FLAG GOES WITH IT, AND LEAVING IT LATCHED WAS A BUG. [FROM REVIEW
-       2026-09-15.] It was set once and cleared only when the Vulkan lane
-       consumed it -- so on a frame where the lane did not get as far as
-       `tagpu_vk_fps_prepare` (not yet `ST_READY`, a swapchain rebuild, the
-       Vulkan lever off) the flag survived and rode with a LATER frame's
-       vertices. The two captures would then have been of different frames,
-       which is the one thing the design exists to prevent. Its life is now one
-       frame: set at the end of this function, read by the lane before the next
-       present, gone here. A capture the lane never collected is simply not
-       written, and `tools/vk-ab.py` says so. */
+       THE A/B FLAG GOES WITH IT, AND ITS LIFE IS ONE FRAME: set at the end of
+       this function, read by the lane before the next present, gone here.
+       Latched until the Vulkan lane consumed it, the flag would survive a frame
+       where the lane did not get as far as `tagpu_vk_fps_prepare` (not yet
+       `ST_READY`, a swapchain rebuild, the Vulkan lever off) and ride with a
+       LATER frame's vertices -- a capture of the wrong frame, which is the one
+       thing the design exists to prevent. A capture the lane never collected is
+       simply not written, and `tools/vk-ab.py` says so. */
     /* THIS PASS BUILDS QUADS; THE VULKAN TWIN DRAWS THEM. The poll, the
        frame-rate window, the font latch and the vertex array are the pass, and
-       they run unconditionally. The upload, the draw and the read-back that
-       used to sit beside them stood down under `renderer=vulkan` in landing 4b
-       and were deleted in landing 11-4c, so there is no longer a second way
-       through this function.
-       [The vulkan-only plan, landings 4b and 11-4c.] */
+       they run unconditionally. */
 
     s_nv = 0; s_abFrame = 0;
 
@@ -241,7 +220,7 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
         const TAGPU_PACKET* p = f->packet;
         char line[64];
         int ax, ay, w, h = 0, yoff;
-        /* ...and since landing 2 the command acknowledgement: the last record
+        /* ...and the command acknowledgement: the last record
            the game thread applied before this draw, and the cumulative anchor
            delta it had applied by then */
         _snprintf(line, sizeof line, "PK%u T%u E%d,%d A%u D%d,%d", p->head_seq, p->tick, p->eye[0], p->eye[1],
@@ -258,19 +237,13 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     }
     if (!nv) return;
 
-    /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is armed
-       without one -- the scaffold's shape (tagpu_scaffold.c) and the same
-       reason. Read once so the two arms below cannot disagree about whether
+    /* OUTSIDE ANY DRAW, because the A/B is armed without one -- the
+       scaffold's shape (tagpu_scaffold.c) and the same reason. Read once so the two arms below cannot disagree about whether
        this is the capture frame. */
     int taking = s_ab && !s_abDone;
 
     if (taking) {
-        /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
-           pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
-           only when that half had reached the disk -- route D gave the two lanes a
-           window each, so one frame could be photographed from both sides and diffed.
-           Route D went in 4d-1, the GL half had nothing left to pair with, and it went
-           too. What the lever does now is claim the VULKAN capture: `tagpu_vk_ab_arm`
+        /* THE A/B CLAIM. The lever claims the VULKAN capture: `tagpu_vk_ab_arm`
            unlinks the target `_vk.ppm` at the instant the claim latches, which is what
            makes the file on the disk this arming's rather than an earlier run's. Diff
            it against a capture taken from another BUILD. */
@@ -284,14 +257,10 @@ void tagpu_fps_present(const TAGPU_FRAME* f)
     s_nv = nv; s_fw = f->game_width; s_fh = f->game_height;
 }
 
-/* NOTHING CALLS THIS SINCE 11-5e-1 -- see tagpu_native.c's `*_glreset` banner
-   for the whole cascade and why it is left standing. */
+/* NOTHING CALLS THIS -- see tagpu_native.c's `*_glreset` banner for the whole
+   cascade and why it is left standing. */
 void tagpu_fps_glreset(void)
 {
-    /* `s_state`, `s_prog`, `s_vao` and `s_vbo` were zeroed here; all four went
-       with the draw [landing 11-4c]. Nothing could raise `s_state` to 1 once
-       `init_gl` was gone -- landing 11-4a's trap -- and the other three named
-       GL objects nothing creates. */
     s_fps = -1; s_frames = 0; s_t0 = 0;
     s_nv = 0; s_abFrame = 0;
 }

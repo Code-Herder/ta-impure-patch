@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """guisurvey.py — the GAF kits a new screen can be built from.
 
-G18c needs a ground for the drop-down (renderers.md §2.10) and the obvious
-answer -- reuse a stock panel -- does not work: none of the runtime frames has
-seven `h20` recesses, and none puts a label beside its control. Drawing one
-from nothing was the fallback. This asks the archives first, and the archives
-answer better than the fallback:
+The render-options drop-down needs a ground (renderers.md §2.10), and the
+obvious answer -- reuse a stock panel -- does not work: none of the runtime
+frames has seven `h20` recesses, and none puts a label beside its control.
+Drawing one from nothing is the fallback. This asks the archives first, and
+the archives answer better than the fallback:
 
   TA'S FLOATING DIALOGS HAVE NO BACKGROUND GADGET AT ALL.  `guis/msgbox.gui`,
   `yesorno.gui` and `exitmenu.gui` declare `panel=` empty and carry no `id=12`

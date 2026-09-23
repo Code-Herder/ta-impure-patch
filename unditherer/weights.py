@@ -34,8 +34,8 @@ offset + k * kstride.  Everything a consumer needs is in the header; the only
 formula it must know is the mat4 index above.
 
 `run_reference` below runs the model FROM THE PACKED BLOCKS, tap by tap,
-exactly as the shader will, so a layout mistake shows up here against
-onnxruntime before any shader exists.
+exactly as the shader does, so a layout mistake shows up here against
+onnxruntime without a shader.
 """
 import struct
 from pathlib import Path

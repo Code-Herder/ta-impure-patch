@@ -1,6 +1,5 @@
 /* tagpu_vk_unit.c -- the posed unit bodies and their cast-shadow depth twins,
-   drawn by Vulkan. Contract: tagpu_vk_unit.h. Phase G / G19e, the SIXTH world
-   pass and the last of the gate.
+   drawn by Vulkan. Contract: tagpu_vk_unit.h.
 
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
    `tagpu_posedraw_handover` (tagpu_posedraw.h): the vertices are the two
@@ -11,19 +10,14 @@
    GL texture was uploaded from; and the shaders are the same GLSL through
    tools/spirv-gen.py. What a 0-px comparison then compares is two rasterisers.
 
-   ---- WHAT THIS LANDING HAD TO ANSWER, AND WHERE EACH ANSWER IS ----
+   ---- WHAT THIS PASS HAS TO ANSWER, AND WHERE EACH ANSWER IS ----
 
-   1. A PASS THAT BOTH FEEDS AND SAMPLES ANOTHER PASS'S TARGET. Every pass
-      before this one either drew into the frame or drew a map for others; this
-      one puts casters INTO the cast-shadow map and then samples the finished
-      map in its own fragment shader. So it has four hooks rather than two and
-      the seam calls three of them at three different points in the frame --
+   1. A PASS THAT BOTH FEEDS AND SAMPLES ANOTHER PASS'S TARGET. This one puts
+      casters INTO the cast-shadow map and then samples the finished map in its
+      own fragment shader. So it has four hooks rather than two and the seam
+      calls three of them at three different points in the frame --
       tagpu_vk_unit.h lists them and the seam repeats the ordering at the call
-      sites. The GL twin HAD exactly the same shape for exactly the same
-      reason, with `tagpu_posedraw_depth_unit` and `tagpu_posedraw_unit` called
-      from tagpu_native.c's composite. Both that composite (landing 11-3) and
-      `_depth_unit` itself (landing 11-5d) are gone, so the shape is this
-      file's own now and there is nothing to read it against.
+      sites.
 
       AND THE CASTER DRAW BINDS A SET OF ITS OWN. A descriptor set may only be
       written during its own slot's `prepare`, which is after the map is drawn;
@@ -34,13 +28,12 @@
       image at all, and the question does not arise. Two layouts, two sets per
       slot, one pipeline each.
 
-   2. PER-UNIT UNIFORMS, WHICH IS WHAT A UNIT PASS IS. The GL twin re-uploads
-      one 14 336-byte pose block and a dozen loose uniforms per unit and draws
-      between the uploads; a Vulkan command buffer cannot, because every draw
-      it records is submitted together. So each unit gets its own window in
-      three DYNAMIC uniform buffers and the draw binds the set with three
-      offsets. That is the whole of the per-unit cost and it is the pass's
-      memory story:
+   2. PER-UNIT UNIFORMS, WHICH IS WHAT A UNIT PASS IS. One 14 336-byte pose
+      block and a dozen loose uniforms per unit cannot be re-uploaded between
+      draws: every draw a Vulkan command buffer records is submitted together.
+      So each unit gets its own window in three DYNAMIC uniform buffers and the
+      draw binds the set with three offsets. That is the whole of the per-unit
+      cost and it is the pass's memory story:
 
         the POSE buffer   TAGPU_PD_BLOCK (14 336) a unit, per frame slot. The
                           block's SIZE is the 256-piece ceiling, not the model
@@ -58,8 +51,8 @@
       nothing over -- §2.28's rule, and at this size it is the rule that makes
       the pass affordable in a 32-bit address space.
 
-   3. PER-TYPE VERTEX BUFFERS, AND A SERIAL RATHER THAN A POINTER. The GL twin
-      draws every unit out of its TYPE's two static buffers, so this keeps one
+   3. PER-TYPE VERTEX BUFFERS, AND A SERIAL RATHER THAN A POINTER. Every unit
+      draws out of its TYPE's two baked streams, so this keeps one
       Vulkan buffer per baked stream and uploads it once. The table is keyed on
       tagpu_posebake.h's SERIAL, which is monotonic and never reused, because
       the bake's cache slots ARE reused -- key on the slot or on the entry
@@ -69,26 +62,21 @@
       so `pending == 0` means "no submitted command buffer names it and no
       future one will" by construction rather than by a timer.
 
-   4. NO Y FLIP ON EITHER, AND SINCE LANDING 5b THAT IS TRUE OF THE BODY TOO.
-      The caster never flipped -- it draws into the depth map, which is sampled
-      and not presented, and its viewport is the shadow pass's own. The body took
-      the negative viewport height every frame pass took, and that was the bug: this pass writes
-      `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's screen-space y, which
-      grows DOWNWARD, so clip +1 is the BOTTOM of the game frame. GL's composite
-      quad turns the world FBO over on the way to the window, which is why the
-      game looks right. The Vulkan lane has no composite quad -- the ported
-      passes draw STRAIGHT INTO THE SWAPCHAIN IMAGE -- so a negative viewport
-      height, which this pass took until 2026-09-17, turned the frame over a
-      SECOND time and Route D presented the world upside down. The viewport is
-      positive now and clip -1 lands on row 0, the game's top row under both.
-      It was invisible for eight landings because `tagpu_abshot.c` turned the GL
-      half of every capture over by the same rule, so the two halves lined up and
-      the A/B -- which compares the lanes to each other -- is blind to a flip they
-      share. The capture takes TAGPU_ABSHOT_TOPDOWN now. VK_KHR_maintenance1 was
-      needed only for the negative height, so this pass no longer requires it.
+   4. NO Y FLIP ON EITHER. The caster draws into the depth map, which is
+      sampled and not presented, and its viewport is the shadow pass's own. The
+      body writes `gl_Position.y = p.y/uGame.y*2 - 1` on the engine's
+      screen-space y, which grows DOWNWARD, so clip +1 is the BOTTOM of the game
+      frame. The Vulkan lane has no composite quad to turn the frame over -- the
+      ported passes draw STRAIGHT INTO THE SWAPCHAIN IMAGE -- so a negative
+      viewport height would turn it over a SECOND time and present the world
+      upside down. The viewport is positive and clip -1 lands on row 0, the
+      game's top row under both. An A/B that compares the lanes to each other
+      is blind to a flip they share; the capture takes TAGPU_ABSHOT_TOPDOWN.
+      VK_KHR_maintenance1 is needed only for a negative height, so this pass
+      does not require it.
 
-   5. THE CLASSIC HARD SHADOW, AND WHY IT IS TWO PIPELINES [2026-09-22]. The
-      body range is not the only one drawn here any more: a third record stage,
+   5. THE CLASSIC HARD SHADOW, AND WHY IT IS TWO PIPELINES. The body range is
+      not the only one drawn here: a third record stage,
       before the bodies, draws the Classic SILHOUETTE (the body range again,
       shifted) and the structure SLANT (the bake's own slant range) out of
       `TAGPU_PDUREC.shKind`. Both are one 50% blend PER PIXEL rather than per
@@ -100,15 +88,13 @@
 
    ---- WHAT IT DOES NOT DO ----
 
-   THE NANOFRAME WIRE IS A LINE PIPELINE AND A SIXTH AND SEVENTH BLOCK
-   [2026-09-23]. `uRange` 2 over the bake's WIRE range, the same program, drawn
-   after every body -- the GL twin's `_wire_begin`/`_wire_unit`, which went
-   with landing 11-5d, reproduced: uNanoOn 0 (the outline carries its own
-   colour and must not be re-classified by the recolour it is drawn beside),
-   uWaterMode 0, uAlpha 1, uCast (0, 0, 1). THE WIDTH IS THE TARGET'S SCALE,
-   which the GL twin asked for with glLineWidth(ss) and never got: the driver
-   clamped it to one supersample and the wire drew at half the engine's
-   intensity (build-state.md 7). Here `wideLines` gives it the full game
+   THE NANOFRAME WIRE IS A LINE PIPELINE AND A SIXTH AND SEVENTH BLOCK.
+   `uRange` 2 over the bake's WIRE range, the same program, drawn after every
+   body with uNanoOn 0 (the outline carries its own colour and must not be
+   re-classified by the recolour it is drawn beside), uWaterMode 0, uAlpha 1,
+   uCast (0, 0, 1). THE WIDTH IS THE TARGET'S SCALE: GL's glLineWidth(ss) is
+   clamped by the driver to one supersample, which draws the wire at half the
+   engine's intensity (build-state.md 7). Here `wideLines` gives it the full game
    pixel. A device without it, or with a narrower maximum, draws the wire at
    the widest it offers rather than not at all -- the wire is one part of a
    unit's look, and refusing the frame would lose the unit.
@@ -124,50 +110,36 @@
    bug, and it is left as one deliberately: the alternative is a depth or
    stencil dependency between two passes that are otherwise independent, which
    costs more than it buys for a configuration that exists only to measure.
-   [Named by the landing review, 2026-09-22.]
 
-   AND NO PASS HERE DRAWS THE SOFT SHADOW. `tagpu_vk_shadow.c`'s map has had no
-   producer since the GL backend went, so `uShadowOn` is 0 on every frame and
+   AND NO PASS HERE DRAWS THE SOFT SHADOW. `tagpu_vk_shadow.c`'s map has no
+   producer, so `uShadowOn` is 0 on every frame and
    the cast-shadow half of this file's fragment stage is unreachable; the pair
    above is what `shadows=` means today.
 
-   CLASSIC++'s RESTORED ATLAS IS DRAWN SINCE GATE 3 of the Vulkan-only plan, so
-   a frame whose twin reports `uRestored` 1 is DRAWN, through the twin's own
-   colours at binding 43. It reaches this lane as the producer's frame LIST,
-   which the restorer below paints into `s_arImg` here on the device; the
-   read-back mirror that carried it until landing 11-5e-2b is gone with the GL
-   backend that produced it. What is left of the old refusal is "has a restore
-   painted anything YET", and it is no longer latched for the session.
-   MEASURED: on the fixture this pass's A/B
-   uses, the build before gate 3 drew NO PICTURE AT ALL with Classic++ art on
-   and this one is 0 px with the cast-shadow map off, 1 px with it on -- and
-   that 1 px is the shadow PCF's, established on the one configuration both
-   builds can draw (gpu-status §2.37).
+   CLASSIC++'s RESTORED ATLAS IS DRAWN: a frame whose twin reports
+   `uRestored` 1 is DRAWN, through the twin's own colours at binding 43. It
+   reaches this lane as the producer's frame LIST, which the restorer below
+   paints into `s_arImg` here on the device. Until a restore has painted
+   anything the frame draws the indexed atlas, and that is not latched for the
+   session. MEASURED: on the fixture this pass's A/B uses, 0 px with the
+   cast-shadow map off, 1 px with it on -- and that 1 px is the shadow PCF's
+   (gpu-status §2.37).
 
-   THE REPLACEMENT MESHES ARE GONE, AND SO IS THE CENSUS THAT COUNTED THEM.
-   They were the last caster the shadow map's census held that nothing on this
-   side drew -- measured at 1 refused caster with one `armpw.glb` on screen and
-   16 on a 257-unit crowd, because a tacli instance ships that mesh active.
-   Landing 11 D2 deleted `tagpu_shadow.c` and with it the census; D3 deleted
-   `tagpu_hires_draw.c` and the loader that fed it, on the owner's ruling that
-   glTF replacement models are disabled and out of scope. Nothing refuses this
-   pass on their account any more.
+   THERE ARE NO REPLACEMENT MESHES: glTF replacement models are disabled and
+   out of scope, and nothing refuses this pass on their account.
 
-   THE NATIVE 3DO STREAM'S OWN UNIT VERTICES ARE NOT A THING ANY MORE. That
-   clause used to stand here beside the replacement meshes; it is wrong.
-   tagpu_native.c builds no vertices for an ordinary unit since G16 step 8 --
-   `nv` is 0 for the whole of its unit loop -- so both the body draw and the
-   caster draw that read `firstv[i+1] - firstv[i]` are unreachable, and
-   `tagpu_shadow_unit`, whose only call site is behind that same test, is never
-   called. [FOUND 2026-09-16, reading the census the gate-3 measurement could
-   not account for.]
+   THE NATIVE 3DO STREAM HAS NO UNIT VERTICES. tagpu_native.c builds no
+   vertices for an ordinary unit -- `nv` is 0 for the whole of its unit loop --
+   so both the body draw and the caster draw that read
+   `firstv[i+1] - firstv[i]` are unreachable, and `tagpu_shadow_unit`, whose
+   only call site is behind that same test, is never called.
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
    A PASS READS NO ENGINE STATE: every value comes from the GL lane's
    hand-over, so this file is not on thread-split.allow and must never be. */
 
 #include "tagpu_vk_pass.h"
-#include "tagpu_vk_restore.h"   /* this lane restores the twin itself (landing 7e-2) */
+#include "tagpu_vk_restore.h"   /* this lane restores the twin itself */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -263,11 +235,11 @@ static VkRenderPass          s_castRp;     /* what s_pipeCast was built against 
 static VkDescriptorPool      s_dpool;
 static VkSampler             s_samp, s_sampCmp, s_sampTwin;
 /* what `s_sampTwin` asked for and what the device allowed, kept apart on
-   purpose (11-5e-2c): the agreement test compares the two CONFIGURATIONS --
+   purpose: the agreement test compares the two CONFIGURATIONS --
    `s_twinAnisoWant` against the producer's published knob -- and deliberately
    does NOT catch a device that cannot offer the feature, because standing
    down for that draws no unit at all on a machine that can do nothing about
-   it. The comment here used to say "compared against what the GL twin got". */
+   it. */
 static float                 s_twinAniso;      /* what the device applied   */
 static float                 s_twinAnisoWant;  /* what the knob asked for   */
 static int                   s_cmpLinear;  /* the compare sampler is the twin's */
@@ -287,9 +259,9 @@ static int            s_atHave;
    the same thing as "the atlas has been uploaded at least once" -- and the
    difference is a whole shelf of black art. See `restore_want`. */
 static int            s_atRows;
-/* CLASSIC++'s RESTORED TWIN, RGBA8 (the Vulkan-only plan's gate 3).
+/* CLASSIC++'s RESTORED TWIN, RGBA8.
 
-   IT IS THE ATLAS'S FULL SQUARE, `dim x dim`, AND NOT THE ROWS THE READ-BACK
+   IT IS THE ATLAS'S FULL SQUARE, `dim x dim`, AND NOT THE ROWS A PRODUCER
    HAS COVERED. That is not a memory decision, it is the only extent that can
    be right: the UVs the vertex stream carries are normalised against the whole
    atlas (`tagpu_gaf.c`: `u0 = x / a->dim`, `v0 = y / a->dim`), the GL twin they
@@ -297,41 +269,29 @@ static int            s_atRows;
    no scale uniform between them. An image of `dim x rows` makes `v = 1.0` mean
    row `rows` instead of row `dim`, so every restored texel is sampled from the
    wrong place -- by a factor of `dim / rows`, which on a half-filled shelf is
-   two. The first version of this landing built it `dim x rows` and the A/B
-   could not see it, because the restorer had painted nothing in that fixture
-   and the branch only ever read alpha 0. [FOUND BY THE GATE-3a LANDING REVIEW,
-   2026-09-16. tagpu_vk_feat.c and tagpu_vk_fx.c had it right already, which is
-   what makes a pass that differs from its neighbours worth explaining.]
+   two. An A/B cannot see a `dim x rows` image on a fixture where the restorer
+   has painted nothing, because the branch then only ever reads alpha 0.
+   tagpu_vk_feat.c and tagpu_vk_fx.c build the full square too.
 
    BUILT ONCE AND NEVER RESIZED, which is the second half of the same decision.
    An extent that never moves means `kill_image` is never called on it in the
    middle of a frame -- and this file's own `refuse:` label says why that
    matters: the seam waited on fence[slot] ALONE, so every OTHER slot's submit
-   is still executing against this shared image. The earlier version rebuilt
-   whenever the read-back's high-water mark advanced, which is routinely, during
-   play. [Same review, and it is the same fault twice.]
+   is still executing against this shared image. A rebuild on a high-water
+   mark would come routinely, during play.
 
-   It is still built LAZILY -- on the first frame that carries a restore list
+   It is built LAZILY -- on the first frame that carries a restore list
    rather than beside the indexed atlas as the feature pass does -- so a session
    with Classic++ off never pays the 16 MB. Lazy is safe here precisely because
    the extent does not depend on the frame that triggers it.
 
-   NOTHING IS UPLOADED INTO IT. Until landing 11-5e-2b this image had a second
-   producer: a host-side RGBA8 mirror read back off the GL twin, staged and
-   copied in here, with `s_arSerial`/`s_arReq` deciding whether a frame owed it
-   bytes and whether the mirror had SHRUNK. That mirror was reachable only
-   through `glReadPixels`, and 11-5e-2's premise -- `oglu_load_dll` has no
-   caller, so opengl32.dll is never in the process -- made `tagpu_gaf.c`'s
-   producer refuse at its entry guard for the life of every process. The
-   published `atlasRgb` was NULL and `atlasRgbRows` 0 on every frame, so the
-   upload path here was dead code holding a dead field. The restorer below is
-   now the only thing that writes this image, and it writes it with
-   `vkCmdDraw`, not with a copy. [Landing 11-5e-2b.] */
+   NOTHING IS UPLOADED INTO IT. The restorer below is the only thing that
+   writes this image, and it writes it with `vkCmdDraw`, not with a copy. */
 static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
 static int            s_arDim, s_arMips;
-/* THE TWIN'S PER-LEVEL VIEWS (the Vulkan-only plan's landing 7e-2), made only
+/* THE TWIN'S PER-LEVEL VIEWS, made only
    when this lane restores for itself. `s_arLvl[L]` names level L alone, and the
    restorer takes them in pairs -- level L as the attachment, level L-1 as the
    source -- which is what makes a reduction with no copy sound: the source view
@@ -339,8 +299,8 @@ static int            s_arDim, s_arMips;
    chain and is what the pass samples. */
 static VkImageView    s_arLvl[TAGPU_VK_MAXMIP + 1];
 static int            s_arLvlN;
-/* THE RESTORE THIS LANE RUNS FOR ITSELF, when the producer publishes the frame
-   LIST instead of the read-back. The cursor into that list is `s_rjTaken`; the
+/* THE RESTORE THIS LANE RUNS FOR ITSELF, from the frame LIST the producer
+   publishes. The cursor into that list is `s_rjTaken`; the
    generation is the only thing a cursor cannot survive, so `s_rjGen` is
    compared and a move restarts from 0. `s_rjChain` records that the twin's mip
    levels are reduced here too -- without it the twin has one defined level and
@@ -548,11 +508,9 @@ static int mk_image(const TAGPU_VKPASS* d, int w, int h, int mips, VkFormat fmt,
     ii.usage = use;
     ii.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    /* ON FAILURE, ALL THREE OUT-PARAMS ARE NULL, from every exit. The three
-       early returns used to leave the view -- and two of them the memory -- as
-       the caller found it, so the guarantee held only at the call sites that
-       happen to `kill_image` first. A guarantee that is a property of the
-       CALLER is the kind that a new call site does not inherit. */
+    /* ON FAILURE, ALL THREE OUT-PARAMS ARE NULL, from every exit: a guarantee
+       that is a property of the CALLER is the kind that a new call site does
+       not inherit. */
     if (vkCreateImage(d->dev, &ii, NULL, img) != VK_SUCCESS) {
         *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; *view = VK_NULL_HANDLE;
         return 0;
@@ -582,13 +540,11 @@ static int mk_image(const TAGPU_VKPASS* d, int w, int h, int mips, VkFormat fmt,
     return 1;
 bad:
     vkFreeMemory(d->dev, *mem, NULL); vkDestroyImage(d->dev, *img, NULL);
-    /* AND THE VIEW, which this label used to leave as the caller found it.
-       vkCreateImageView's out-param is undefined on failure, every caller's
-       `kill_image` destroys `*view` on the strength of it being non-NULL, and
-       three of the EIGHT call sites here hand it an out-param that has held a
-       live handle earlier in the session. Nulling it here closes all eight at
-       once; `atlas_rgb_build` carried a second `kill_image` to close one.
-       [The gate-3a re-review's finding 3.] */
+    /* AND THE VIEW. vkCreateImageView's out-param is undefined on failure,
+       every caller's `kill_image` destroys `*view` on the strength of it being
+       non-NULL, and three of the EIGHT call sites here hand it an out-param
+       that has held a live handle earlier in the session. Nulling it here
+       covers all eight. */
     *img = VK_NULL_HANDLE; *mem = VK_NULL_HANDLE; *view = VK_NULL_HANDLE;
     return 0;
 }
@@ -833,8 +789,7 @@ static int build_samplers(const TAGPU_VKPASS* d)
        texel and a filtered fetch would blend two palette indices.
        THE RESTORED TWIN IS THE EXCEPTION AND GETS ITS OWN SAMPLER BELOW: it
        holds true colour, so the GL twin filters it, and NEAREST against that is
-       a different picture. [Read as "every texture" until the gate-3a review;
-       it was true until binding 43 stopped being a placeholder.] */
+       a different picture. */
     si.magFilter = VK_FILTER_NEAREST;
     si.minFilter = VK_FILTER_NEAREST;
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -871,12 +826,11 @@ static int build_samplers(const TAGPU_VKPASS* d)
        GL_TEXTURE_MAX_LEVEL = `mip`, 4x anisotropy where the extension answers,
        and GL_CLAMP_TO_EDGE.
 
-       MEASURED WHAT NEAREST COSTS, because the first version of gate 3a used
-       the indexed sampler here and the A/B could not see it until the fixture
-       was fixed: 2 126 of 2 132 unit pixels differing at 1024x768 and 1 523 of
-       1 528 at 640x480 -- the same ~99.7 %, the same worst channel 155, the
-       same first pixel -- which is the signature of a MAGNIFICATION filter and
-       not of a mip level, because it does not move with the sampling rate.
+       MEASURED WHAT NEAREST COSTS: 2 126 of 2 132 unit pixels differing at
+       1024x768 and 1 523 of 1 528 at 640x480 -- the same ~99.7 %, the same
+       worst channel 155, the same first pixel -- which is the signature of a
+       MAGNIFICATION filter and not of a mip level, because it does not move
+       with the sampling rate.
 
        THE LOD IS NOT CLAMPED HERE, AND THAT IS DELIBERATE. GL bounds the twin
        with GL_TEXTURE_MAX_LEVEL; the equivalent is the IMAGE's own level count,
@@ -889,9 +843,9 @@ static int build_samplers(const TAGPU_VKPASS* d)
        actually got is remembered SEPARATELY from what was asked for. `prepare`
        compares the producer's published knob against `s_twinAnisoWant`, the
        value read here -- not against `s_twinAniso`, the value the device
-       allowed. The difference is the whole of 11-5e-2c's reversal: a device
-       without `samplerAnisotropy` clamps the applied value to 0.0f, and a test
-       against that stands every frame down on such a machine. */
+       allowed. The difference matters: a device without `samplerAnisotropy`
+       clamps the applied value to 0.0f, and a test against that would stand
+       every frame down on such a machine. */
     si.compareEnable = VK_FALSE;
     si.magFilter = VK_FILTER_LINEAR;
     si.minFilter = VK_FILTER_LINEAR;
@@ -909,8 +863,8 @@ static int build_samplers(const TAGPU_VKPASS* d)
            the one read here. */
         float want = tagpu_classicpp_light()->aniso;
         s_twinAniso = 0.0f;
-        /* THE KNOB AS READ, KEPT SEPARATELY FROM WHAT THE DEVICE ALLOWED
-           (11-5e-2c). `s_twinAniso` below is the applied value and is 0.0f
+        /* THE KNOB AS READ, KEPT SEPARATELY FROM WHAT THE DEVICE ALLOWED.
+           `s_twinAniso` below is the applied value and is 0.0f
            wherever the extension is absent or the device's ceiling is lower;
            `s_twinAnisoWant` is what the configuration asked for. The producer
            publishes the same knob, so the agreement test compares the two
@@ -1078,8 +1032,7 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
        nothing else -- so ghosts blend with each other (the usual case is the
        cursor ghost standing on a queued ghost's own site) while units drawn
        earlier still occlude them, because the depth TEST stays on. Same
-       shaders, same blend, same layout; `depthWriteEnable` alone moves.
-       [Landing 6, 2026-09-17.] */
+       shaders, same blend, same layout; `depthWriteEnable` alone moves. */
     if (ok) {
         ds.depthWriteEnable = VK_FALSE;
         ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
@@ -1132,11 +1085,10 @@ done:
 
    THE STENCIL PLANE IS THE TARGET'S, AND IT IS NOT A GIVEN. `tagpu_vk_world.c`
    clears its depth attachment's stencil to 0 every frame and names the stencil
-   aspect in the view; the seam's own attachment does the same since this
-   landing. A device with no stencil-carrying depth format has neither, and
-   `d->stencilok` is 0 there -- the pair is not built and the pass draws no hard
-   shadow at all rather than a compounded one, which is a stated gap and not a
-   different picture.
+   aspect in the view; the seam's own attachment does the same. A device with no
+   stencil-carrying depth format has neither, and `d->stencilok` is 0 there --
+   the pair is not built and the pass draws no hard shadow at all rather than a
+   compounded one, which is a stated gap and not a different picture.
 
    EVERYTHING ELSE IS build_body_pipeline's, deliberately: same modules, same
    vertex layout, same blend, same layout, same render pass. What moves is the
@@ -1373,25 +1325,20 @@ static int build_descriptors(const TAGPU_VKPASS* d)
    the test is kept as the assertion that it does not.
 
    A FAILURE HERE IS NOT FATAL AND MUST NOT BE. The view stays NULL, binding 43
-   falls back to the indexed view exactly as it did before gate 3 -- so a device
+   falls back to the indexed view -- so a device
    that will not give us 16 MB of RGBA8 loses restored frames rather than the
    pass. That is why it does not join the `goto refuse` family, whose label
    stops the pass for the session.
 
-   THIS USED TO REST ON A THIRD CLAUSE -- "and the restored refusal in `prepare`
-   keeps the branch unreachable" -- AND 11-5e-2c MADE IT FALSE. That refusal was
-   dead code while `restored` was pinned 0; unpinning the flag woke it, and it
-   did not lose restored frames, it lost the pass for the session. The refusal
-   is gone and what holds the promise now is stated where it is enforced:
-   `prepare` clears `h.restored` whenever the twin is not painted, and the
-   binding below names the twin only when `s_arHave` says it has left
-   UNDEFINED. The two are computed from the same pair, so the flag and the
-   descriptor agree by construction. [The 11-5e-2c reviews.] */
-/* THE REQUEST, AND WHAT THIS LANE DOES WITH IT (the Vulkan-only plan's landing
-   7e-2). Landing 7d's `restore_want` in tagpu_vk_feat.c and tagpu_vk_fx.c is
-   the shape and every comment there applies here; what the UNITS add is the
-   mip chain, which is registered with the job and without which the twin is
-   not a picture this pass may draw.
+   WHAT HOLDS THAT PROMISE is stated where it is enforced: `prepare` clears
+   `h.restored` whenever the twin is not painted, and the binding below names
+   the twin only when `s_arHave` says it has left UNDEFINED. The two are
+   computed from the same pair, so the flag and the descriptor agree by
+   construction. */
+/* THE REQUEST, AND WHAT THIS LANE DOES WITH IT. `restore_want` in
+   tagpu_vk_feat.c and tagpu_vk_fx.c is the shape and every comment there
+   applies here; what the UNITS add is the mip chain, which is registered with
+   the job and without which the twin is not a picture this pass may draw.
 
    Called from `prepare` AFTER the atlas upload, because the job reads the
    indexed atlas's view and that is where it comes to exist. */
@@ -1402,11 +1349,11 @@ static int build_descriptors(const TAGPU_VKPASS* d)
    restore paints a black cell over art that is perfectly fine on the GL lane,
    whose source is the live texture `atlas_paint` writes as entries are added.
 
-   MEASURED, and it is the whole reason this function exists: landing 7e-2's
-   first working oracle run had the unit chain differing in rows 0..71 -- the
-   first shelf -- with the Vulkan side holding (0,0,0,255) in 55 213 texels and
-   the GL side holding art. Those were the 25 frames of the first batch, queued
-   in the same frame as an upload that had covered fewer rows than they sit in.
+   MEASURED, and it is the whole reason this function exists: an oracle run
+   with the unit chain differing in rows 0..71 -- the first shelf -- with the
+   Vulkan side holding (0,0,0,255) in 55 213 texels and the GL side holding
+   art. Those were the 25 frames of the first batch, queued in the same frame
+   as an upload that had covered fewer rows than they sit in.
 
    The count is a PREFIX because the producer appends in shelf order, so the
    first uncovered frame bounds every frame after it. Stopping there rather than
@@ -1419,15 +1366,14 @@ static int covered_prefix(const TAGPU_RGLSL_FRAME* f, int n, int rows)
     for (i = 0; i < n; i++)
         if (f[i].ay < 0 || f[i].ay + f[i].h > rows) return i;
     return n;
-    /* A DEGENERATE FRAME IS NOT AN UNCOVERED ONE, and testing `h <= 0` here
-       conflated them: one such entry became a permanent coverage boundary, so
-       every frame behind it stayed unpainted for the life of the generation
-       while `s_arHave` still said the twin was a picture. The restorer already
+    /* A DEGENERATE FRAME IS NOT AN UNCOVERED ONE: testing `h <= 0` here would
+       make one such entry a permanent coverage boundary, so every frame behind
+       it would stay unpainted for the life of the generation while `s_arHave`
+       still said the twin was a picture. The restorer already
        refuses a degenerate frame by name and `restore_want` advances the cursor
        by what was OFFERED, which is what makes "a frame the core can never
        queue is skipped for good" true -- so this function answers the coverage
-       question alone and lets `job_add` answer the other one.
-       [Landing 7e-2's review, finding 4.] */
+       question alone and lets `job_add` answer the other one. */
 }
 
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
@@ -1443,7 +1389,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
             /* AND WHAT IT PAINTED IS NO LONGER A PICTURE -- the list dying is
                the producer's out-of-memory drop, and the read-back cannot take
                over because both arm latches are one-way and the mirror was
-               freed when the list armed. [The landing-7d review's finding.] */
+               freed when the list armed. */
             s_arHave = 0;
         }
         return;
@@ -1505,7 +1451,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
                a frame the core can never queue is skipped for good, and
                advancing by `took` would re-offer the tail for ever. A whole-call
                failure (`took` 0 with frames offered) is the queue's own realloc
-               and is transient, so the cursor stays. [Landing 7d's review.] */
+               and is transient, so the cursor stays. */
             if (took > 0) {
                 s_rjTaken += n;
                 if (took < n)
@@ -1526,8 +1472,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
        shipped fallback and looks like Classic++ off rather than like a bug. */
     /* UNCONDITIONALLY, so a gap stands down LOUDLY instead of falling into
        `job_new`'s silent refusal of a null view. `s_arMips + 1` is the whole
-       chain including level 0, which is the one every twin has.
-       [Landing 7e-2's review, finding 2.] */
+       chain including level 0, which is the one every twin has. */
     if (s_arLvlN < s_arMips + 1) {
         plog(d, "unit: the restored twin has no per-level views, so this lane "
                 "cannot reduce its own mip chain - staying indexed rather than "
@@ -1538,7 +1483,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
     if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
     /* a repaint only over something this pass painted, and only if nothing was
        blanked since it last looked -- the blank COUNT is what a single
-       `restoreRepaint` flag cannot hide. [Landing 7d's review.] */
+       `restoreRepaint` flag cannot hide. */
     repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
     s_rjob = tagpu_vk_restore_job_new(d, "unit", 3, 0, repaint,
                                       s_atImg, s_atView, s_atDim, s_atDim,
@@ -1548,7 +1493,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
         /* IT SAYS SO. `job_new` refuses a bad argument without a word of its
            own, and `s_rjTried` is cleared only by a teardown, so a silent
            refusal here is a pass that draws nothing for the rest of the
-           session and never explains why. [Landing 7e-2's review, finding 2.] */
+           session and never explains why. */
         plog(d, "unit: the restorer would not take a job for the twin "
                 "(%dx%d, %d mip level(s), %d per-level view(s)) - staying "
                 "indexed for this session",
@@ -1558,7 +1503,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
     }
     /* THE OUT PASS PAINTS LEVEL 0 THROUGH `s_arLvl[0]`, not through the
        whole-chain view: a framebuffer attachment must name exactly one level,
-       and the whole-chain view named three. */
+       and the whole-chain view names more than one. */
     s_rjChain = 1;
     if (s_arMips > 0) {
         s_rjChain = tagpu_vk_restore_job_chain(d, s_rjob, s_arMips, s_arDim,
@@ -1602,12 +1547,9 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
        `job_free` retires them on the mask a submitted command buffer is bound
        by; `kill_image` below does not defer. `restore_want`'s "the twin moved"
        check is the backstop and cannot be the fix: it runs LATER in the frame,
-       so by the time it looked the handles were already dead -- and it could
-       not fire at all for a level-0-only twin, because it tested `s_arLvlN > 0`
-       and this function leaves that 0 on exactly the paths that destroy the
-       most. Reachable because `tagpu_gaf.c` demotes the atlas's `mip` to 0 at
-       runtime when `glGenerateMipmap` does not resolve, and the producer
-       publishes that unfiltered. [Landing 7e-2's review, finding 1.] */
+       when the handles are already dead. Reachable because `tagpu_gaf.c`
+       demotes the atlas's `mip` to 0 at runtime when `glGenerateMipmap` does
+       not resolve, and the producer publishes that unfiltered. */
     if (s_arImg && s_rjob) {
         plog(d, "unit: the restored twin is being rebuilt (%dx%d mip %d -> %dx%d "
                 "mip %d) and a restore is live on the old one - dropping the job "
@@ -1623,7 +1565,7 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
     s_arLvlN = 0;
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
     s_arDim = 0; s_arMips = 0; s_arHave = 0;
-    /* COLOR_ATTACHMENT SINCE LANDING 7e-2, and it costs nothing when unused:
+    /* COLOR_ATTACHMENT, and it costs nothing when unused:
        the restorer paints level 0 into this image through a render pass and
        reduces the rest into it the same way, so every level is a colour
        attachment at some point. The mirror path never uses it and the usage
@@ -1634,8 +1576,7 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
                   VK_IMAGE_ASPECT_COLOR_BIT, &s_arImg, &s_arMem, &s_arView))
         /* every out-param is NULL on this path, from EVERY exit of `mk_image`
            and not merely because a `kill_image` ran before this call -- see its
-           contract. This used to need a second `kill_image` here to null the
-           view the failure label left behind. */
+           contract. */
         return 0;
     s_arDim = dim; s_arMips = mips;
     /* THE PER-LEVEL VIEWS, ALL OF THEM OR NONE. A chain the restorer can only
@@ -1649,11 +1590,10 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
        (`h.restoreMips >= 0` at the build site) and that is a real
        configuration: the atlas demotes `mip` to 0 whenever `glGenerateMipmap`
        did not resolve. A level-0-only twin needs no chain, but the OUT pass
-       still paints THROUGH `s_arLvl[0]`, so it needs that one view -- and with
-       this loop starting at 1 there was none, `job_new` refused the null
-       `dstView` silently, `s_rjTried` latched for the session and the unit pass
-       stood down on EVERY frame. No units drawn at all, on any driver missing
-       those two GL entry points. [Landing 7e-2's review, finding 2.] */
+       still paints THROUGH `s_arLvl[0]`, so it needs that one view -- starting
+       this loop at 1 would leave none, `job_new` would refuse the null
+       `dstView` silently, `s_rjTried` would latch for the session and the unit
+       pass would stand down on EVERY frame: no units drawn at all. */
     if (mips >= 0 && mips <= TAGPU_VK_MAXMIP) {
         for (i = 0; i <= mips; i++) {
             VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
@@ -1860,20 +1800,11 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     return 1;
 }
 
-/* THE RESTORED TWIN IS NOT STAGED AND NOT COPIED. `rgb_stage_bytes`,
-   `rgb_rows_due` and `atlas_rgb_upload` lived here and put the GL read-back's
-   mirror onto the device: level 0's covered rows plus every other level whole,
-   at an offset past the indexed atlas's share, with the whole-square rule for a
-   mirror that shrank. All three are gone with the mirror that fed them
-   (11-5e-2b). Their careful parts are not lost -- the reservation-and-copy
-   agreeing by construction, and the refusal that matched `prepare`'s zeroed
-   count -- because `atlas_upload` above still carries both for the INDEXED
-   atlas, which is the one mirror this lane still uploads.
-
-   WHAT WRITES `s_arImg` NOW: `restore_want` below, through the restore job, on
-   the device, from the indexed atlas and the palette. There is no host-side
-   source for it any more, so there is no staging share to reserve and no serial
-   to compare -- `s_arHave` alone says whether it is a picture. */
+/* THE RESTORED TWIN IS NOT STAGED AND NOT COPIED. `restore_want` below writes
+   `s_arImg`, through the restore job, on the device, from the indexed atlas and
+   the palette. There is no host-side source for it, so there is no staging
+   share to reserve and no serial to compare -- `s_arHave` alone says whether
+   it is a picture. */
 
 /* the two uniform blocks for one unit: the vertex stage's twice (the body's
    and the caster's) and the fragment stage's once, at the std140 offsets
@@ -1913,9 +1844,7 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     memcpy(ub, b.f, VGL_SZ);
 
     /* ---- the vertex stage, the CLASSIC HARD SHADOW ----
-       The body block again with two fields moved, which is exactly what the GL
-       twin's `_shadow_set` and `_slant_set` did to the program the body draw
-       had just used: the SHIFT, and the RANGE.
+       The body block again with two fields moved: the SHIFT, and the RANGE.
 
        THE SHIFT IS 5 PX RIGHT AND ONTO THE GROUND LINE. The engine blits the
        shadow at `(sx + 0x85, groundY)` against the body's `sx + 0x80`
@@ -1938,10 +1867,9 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     memcpy(ub + vglOff3, b.f, VGL_SZ);
 
     /* ---- the vertex stage, the NANOFRAME WIRE ----
-       The body block with what the GL twin's `_wire_begin` and `_wire_unit`
-       set on it: no shift, uRange WIRE, the unit's own outline colour, and
-       uCast (0, 0, 1) -- which reaches only the shadow-space point, and the
-       twin set it so. Written for every unit, read only for one that has a
+       The body block with no shift, uRange WIRE, the unit's own outline
+       colour, and uCast (0, 0, 1) -- which reaches only the shadow-space
+       point. Written for every unit, read only for one that has a
        wire range. */
     b.f[2] = 0.0f; b.f[3] = 0.0f;                      /* uOffset              */
     b.f[20] = 0.0f; b.f[21] = 0.0f; b.f[22] = 1.0f;    /* uCast                */
@@ -1950,14 +1878,13 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     memcpy(ub + vglOff4, b.f, VGL_SZ);
 
     /* ---- the vertex stage, the CASTER draw ----
-       What `tagpu_posedraw_depth_begin` set before landing 11-5d deleted it:
-       the shadow matrix, uDepthPass 1, uRange BODY, and the projection pair
+       The shadow matrix, uDepthPass 1, uRange BODY, and the projection pair
        pinned at something finite because the vertex shader still evaluates the
        discarded branch.
 
        NOTHING REACHES THIS TODAY. `tagpu_vk_unit_cast` returns at `!s_ncast`
-       every frame, because `h.castMat`'s and `w->casts`'s producer went with
-       that same function -- see tagpu_posedraw.h's tombstone for the chain.
+       every frame, because `h.castMat` and `w->casts` have no producer -- see
+       tagpu_posedraw.h for the chain.
        The uniforms below are correct and unexercised. */
     memset(&b, 0, sizeof b);
     b.f[0] = 1.0f; b.f[1] = 1.0f;                      /* uGame                */
@@ -2022,9 +1949,8 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        return, so a shadow inside fog or under a stamped scaffold row goes with
        them, and those two do read this block.
 
-       uAlpha IS SET TO THE 0.5 THE TWIN SET AND IS NOT READ. `tagpu_native.c`'s
-       composite wrote `glUniform1f(s_uAlpha, 0.5f)` before its shadow loop and
-       the shader's shadow branch hard-codes the same number; carrying it keeps
+       uAlpha IS SET TO 0.5 AND IS NOT READ: the shader's shadow branch
+       hard-codes the same number, and carrying it keeps
        the two blocks the same bytes rather than the same picture by luck.
 
        THE WATERLINE PAIR IS THE ONE PLACE THE TWO KINDS DIFFER. A completed
@@ -2033,8 +1959,8 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
        STRUCTURE'S SLANT IS BLITTED AS BUILT: 0x459319 and 0x4595E9 go straight
        from 0x45A790 to the blit, and the waterline erase 0x4BA1B0 belongs to
        the completed branch and the digger's inline branch only. Getting this
-       wrong erased the Kbot lab's shadow below the waterline until G14j, so it
-       is pinned here rather than passed in. */
+       wrong erases the Kbot lab's shadow below the waterline, so it is pinned
+       here rather than passed in. */
     b.i[17] = 1;                                       /* uShadow              */
     b.f[18] = 0.5f;                                    /* uAlpha               */
     b.i[22] = 0;                                       /* uNanoOn              */
@@ -2045,10 +1971,9 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     memcpy(ub + fglOff2, b.f, FGL_SZ);
 
     /* ---- the fragment stage, the NANOFRAME WIRE ----
-       The body block with `_wire_begin`'s four: uShadow 0, uNanoOn 0 (the
-       outline is not re-classified by the recolour it traces), uWaterMode 0 and
-       uAlpha 1. The waterline and digger thresholds stay the unit's own, as
-       `_wire_unit` set them per unit. */
+       The body block with four fields moved: uShadow 0, uNanoOn 0 (the outline
+       is not re-classified by the recolour it traces), uWaterMode 0 and
+       uAlpha 1. The waterline and digger thresholds stay the unit's own. */
     b.i[17] = 0;                                       /* uShadow              */
     b.f[18] = 1.0f;                                    /* uAlpha               */
     b.f[19] = r->waterT;                               /* uWaterT              */
@@ -2118,12 +2043,12 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        is the same instant, and the same ownership, that the rest of this
        function writes it in. */
     if (!tagpu_posedraw_handover(&h, d->frame)) {
-        /* AND IT SAYS SO, ONCE. This was the pass's only silent stand-down, and
-           on the vulkan-only lane it is the one that fires -- every other
-           refusal below carries a `plog` with a one-shot latch, so an absent
-           capture with an empty log could only be this. Throttled the same way
-           they are: the ordinary case is a frame the GL twin drew no posed unit
-           on, which is most frames in the shell. [The vulkan-only plan, 4b-2.] */
+        /* AND IT SAYS SO, ONCE. On the vulkan-only lane this is the stand-down
+           that fires, and every other refusal below carries a `plog` with a
+           one-shot latch, so a silent one here would leave an absent capture
+           with an empty log. Throttled the same way they are: the ordinary case
+           is a frame the GL twin drew no posed unit on, which is most frames in
+           the shell. */
         if (!s_saidNoHand) {
             s_saidNoHand = 1;
             plog(d, "unit: no hand-over for frame %u - the pass published "
@@ -2152,9 +2077,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        this slot's pose buffer for the life of the process: 14 336 bytes a unit
        a slot, 7.3 MB a slot at the hand-over's cap, in the 32-bit address
        space whose largest free block this phase spends its budget measuring.
-       §2.28's rule is "nothing is kept once there is nothing to draw", and
-       before this it held only for the frame that handed nothing over.
-       [FOUND 2026-09-16, the landing review.] */
+       §2.28's rule is "nothing is kept once there is nothing to draw". */
 
     /* A COMPARE SAMPLER THAT IS NOT THE TWIN'S, AND THE DECISION IS TAKEN
        HERE. The GL PCF is bilinear and linear filtering of a depth format is a
@@ -2171,7 +2094,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        the map is refused and the terrain stands down with it -- one decision,
        taken before anything downstream can depend on the other answer.
        `s_cmpLinear` is a device property settled in `build`, so it is knowable
-       at this instant. [FOUND 2026-09-16, the landing review.] */
+       at this instant. */
     if (h.shadowOn && !s_cmpLinear) {
         if (!s_saidCmp) {
             s_saidCmp = 1;
@@ -2185,7 +2108,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     /* THE FRAME HAS DRAWS THIS PASS DOES NOT CARRY -- a unit past the
        hand-over's cap, or one an arena would not grow for.
-       NOT THE BUILD GHOST since landing 6: it is carried, and drawn by
+       NOT THE BUILD GHOST: it is carried, and drawn by
        `tagpu_vk_unit_record_ghosts` after the effects pass.
        tagpu_posedraw.h says why the count is narrow. */
     if (h.otherDraws > 0) {
@@ -2199,11 +2122,10 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     s_saidOther = 0;
 
-    /* THE THREE THAT USED TO BE SILENT. Every other stand-down in this function
-       carries a message; these did not, and a hand-over that succeeds and then
-       stands down here is indistinguishable from one that never arrived.
-       Periodic rather than latched: this landing has been sent to the wrong
-       function twice by a one-shot spent on an ordinary frame. */
+    /* THREE MORE STAND-DOWNS, AND THEY SAY SO: without a message, a hand-over
+       that succeeds and then stands down here is indistinguishable from one
+       that never arrived. Periodic rather than latched: a one-shot spent on an
+       ordinary frame points at the wrong function. */
     if (h.nunit < 1 || h.nunit > TAGPU_PD_MAXHAND ||
         !h.units || !h.rows || !h.flags || !h.vis) {
         if ((d->frame % 300u) == 0u)
@@ -2219,9 +2141,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        session legitimately arrive without one. Said once. */
     if (!h.atlas || h.atlasDim < 1 || h.atlasDim > 8192 || !h.lut || !h.pal ||
         !h.fogLut) {
-        /* WHICH mirror, periodically. Six terms behind one message told me
-           only that one of them was missing, and a latch on top of that meant
-           it said so once. [The vulkan-only plan, landing 4b-2.] */
+        /* WHICH mirror, periodically: six terms behind one latched message
+           would say only that one of them was missing, and only once. */
         if ((d->frame % 300u) == 0u)
             plog(d, "unit: frame %u: mirrors atlas=%d dim=%d lut=%d pal=%d "
                     "fogLut=%d - nothing drawn until all are there",
@@ -2242,12 +2163,11 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         goto standdown;
     }
 
-    /* ---- CLASSIC++'s RESTORED ATLAS, WHICH IS MIRRORED SINCE GATE 3 ----
+    /* ---- CLASSIC++'s RESTORED ATLAS ----
 
-       IT SITS HERE, BELOW THE TEXEL BOUNDS, and it used to sit three refusals
-       higher. The image has to be sized to `atlasDim` and to the rows the
-       read-back covered, and neither number is trustworthy until the block
-       above has bounded it -- a bound that lives in the file that produced the
+       IT SITS HERE, BELOW THE TEXEL BOUNDS. The image has to be sized to
+       `atlasDim`, and that number is not trustworthy until the block above
+       has bounded it -- a bound that lives in the file that produced the
        number is a bound only while both files are read together.
 
        THE ROWS ARE BOUNDED AGAINST THE ATLAS'S OWN SQUARE. The mirror IS the
@@ -2255,28 +2175,25 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        is taken as absent and the frame stands down rather than size an image
        and a memcpy from a number nothing checked.
 
-       AND THE REFUSAL IS NO LONGER A STATEMENT ABOUT THE SESSION. It used to
-       say "draws nothing this session", and gpu-status 2.35 measured what that
-       costs: a pass that refuses once stays dark for the process after the
-       condition has cleared. This one clears by itself within a few frames of
-       the restorer starting, so `s_saidRestored` gates the LOG LINE and not the
-       refusal. */
+       AND THE REFUSAL IS NOT A STATEMENT ABOUT THE SESSION: gpu-status 2.35
+       measured what that costs -- a pass that refuses once stays dark for the
+       process after the condition has cleared. This one clears by itself within
+       a few frames of the restorer starting, so `s_saidRestored` gates the LOG
+       LINE and not the refusal. */
     /* BUILT BEFORE THE REFUSAL THAT TESTS IT, and that order is the whole of
        it: `prepare` returning 0 skips everything below, so a build placed after
        the refusal never runs -- the pass cannot make the image because it
-       refuses, and refuses because there is no image. The terrain pass was
-       measured failing in exactly that shape twice on the way to gate 2, with
-       a perfect hand-over against img=0 view=0. A failure is non-fatal: the
+       refuses, and refuses because there is no image (the terrain pass has
+       shown exactly that shape: a perfect hand-over against img=0 view=0). A
+       failure is non-fatal: the
        view stays NULL and the refusal below then holds. */
-    /* ...AND BECAUSE A LIST WAS PUBLISHED, which is now the only reason there
-       is. The twin is the thing this lane PAINTS INTO, so it has to exist
-       BEFORE there is anything to put in it. Gating its creation on a
-       read-back's rows left `restore_want` with no destination, so it made no
-       job, so nothing ever painted, so the pass stood down for the session with
-       the list sitting there full: measured on the first run of landing 7e-2's
-       oracle, which dumped three sprite atlases and no unit chain at all. The
-       shape comes from the producer (`restoreDim`/`restoreMips`) for the same
-       reason the aniso does: nothing else carries it. */
+    /* ...AND BECAUSE A LIST WAS PUBLISHED, which is the only reason there is.
+       The twin is the thing this lane PAINTS INTO, so it has to exist BEFORE
+       there is anything to put in it: without it `restore_want` has no
+       destination, makes no job, nothing ever paints, and the pass stands down
+       for the session with the list sitting there full. The shape comes from
+       the producer (`restoreDim`/`restoreMips`) for the same reason the aniso
+       does: nothing else carries it. */
     if (h.restoreFrames && h.restoreDim > 0 &&
         h.restoreMips >= 0 && h.restoreMips <= TAGPU_VK_MAXMIP) {
         if (!atlas_rgb_build(d, h.restoreDim, h.restoreMips)) {
@@ -2299,18 +2216,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        ordinary play, so the frame stands down rather than draw one. Same rule,
        and the same shape, as `s_cmpLinear` above.
 
-       WHAT THIS TEST DOES NOT CATCH, said plainly (11-5e-2c): a device whose
-       ceiling is below the knob. That was the old test's subject and it was
-       the wrong one -- the producer cannot know this device's ceiling, and
+       WHAT THIS TEST DOES NOT CATCH, said plainly: a device whose ceiling is
+       below the knob. The producer cannot know this device's ceiling, and
        standing down for it means drawing no units at all rather than slightly
        differently filtered ones. */
-    /* `atlasRgbAniso` IS THE RATIO, AND IT SURVIVED THE MIRROR. It is a fact
-       about what the OTHER lane's twin was filtered at, not about the read-back
-       that used to carry it, and the producer publishes it on the list path too
-       -- so a restore this lane runs for itself is held to the filter test that
-       a mirror used to be held to. [Landing 7e-2; 11-5e-2 labelled the field
-       `[PINNED 0]`, 11-5e-2b kept it for this test, and 11-5e-2c gave it a
-       writer and changed what it is compared against.] */
+    /* `atlasRgbAniso` IS THE RATIO: a fact about what the producer's twin is
+       filtered at, published on the list path, so a restore this lane runs for
+       itself is held to the filter test. */
     if (h.restored && h.restoreFrames && h.atlasRgbAniso != s_twinAnisoWant) {
         if (!s_saidAniso) {
             s_saidAniso = 1;
@@ -2322,28 +2234,23 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "(the device applied %.1fx)",
                  (double)h.atlasRgbAniso, (double)s_twinAnisoWant, (double)s_twinAniso);
         }
-        /* AND THE PENALTY IS THE TWIN, NOT THE PASS (11-5e-2c review, H1/M2).
-           This stood the whole frame down, which was survivable only while
-           `restored` was pinned 0 and the branch was unreachable. Unpinning it
-           made a knob edited mid-session -- `tagpu_classicpp.cfg` is re-read
-           whenever its mtime moves -- draw NO UNIT AT ALL for the rest of the
-           session. Dropping to the indexed atlas is the shipped fallback and
+        /* AND THE PENALTY IS THE TWIN, NOT THE PASS. Standing the whole frame
+           down would make a knob edited mid-session -- `tagpu_classicpp.cfg` is
+           re-read whenever its mtime moves -- draw NO UNIT AT ALL for the rest
+           of the session. Dropping to the indexed atlas is the shipped fallback and
            is what `atlas_rgb_build`'s own header promises: "a device that will
            not give us 16 MB of RGBA8 loses restored frames rather than the
            pass". */
         h.restored = 0;
-    } else s_saidAniso = 0;   /* the latch, which the first cut of this fix killed:
-                                 `goto standdown` used to make the line below
-                                 unreachable while the condition held, so moving to a
-                                 fall-through logged it EVERY frame. [The 11-5e-2c
-                                 verification pass.] */
+    } else s_saidAniso = 0;   /* the latch: the branch above falls through
+                                 rather than returning, so without it its log
+                                 line would fire EVERY frame */
 
     /* A RESTORE THIS LANE RAN, and the refusal must not always return: there is
        no painted twin until a job exists, and the job is made below in
        `restore_want`. So a frame that has the list, the image and no job yet
-       FALLS THROUGH to make one and then returns -- which is the deadlock
-       landing 7d paid for in the sprite passes and is written the same way
-       here. [Landing 7e-2.] */
+       FALLS THROUGH to make one and then returns -- the sprite passes avoid
+       the same deadlock the same way. */
     feed = 0;
     if (h.restored && !(s_arView && h.restoreFrames && s_arHave)) {
         if (h.restoreFrames && s_arImg && !s_rjTried) feed = 1;
@@ -2353,26 +2260,19 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "painted yet - drawing the indexed atlas until it is%s",
                  feed ? " (this frame also makes the restore job)" : "");
         }
-        /* AN UNPAINTED TWIN DRAWS INDEXED. ON BOTH BRANCHES (11-5e-2c review,
-           H1, completed by the verification pass). This was `goto standdown`,
-           and unpinning `restored` is what made it reachable: with five one-way
-           `s_rjTried` latches above it blanked every unit for the rest of the
-           SESSION on any restorer refusal, and -- because `rlistRepaint` is a
-           constant 0, so `if (!repaint) s_arHave = 0;` fires on every
-           generation change -- for the length of a repaint on every level
-           boundary, recycle and map change.
+        /* AN UNPAINTED TWIN DRAWS INDEXED, ON BOTH BRANCHES. A stand-down
+           here, with five one-way `s_rjTried` latches above it, would blank
+           every unit for the rest of the SESSION on any restorer refusal, and
+           -- because `rlistRepaint` is a constant 0, so `if (!repaint)
+           s_arHave = 0;` fires on every generation change -- for the length of
+           a repaint on every level boundary, recycle and map change. `!feed`
+           is the rare half: a generation change satisfies all three feed terms.
 
-           THE FIRST CUT OF THIS FIX ONLY COVERED `!feed`, WHICH IS THE RARE
-           HALF. A generation change satisfies all three feed terms, so it took
-           `feed = 1` and returned through `feedout` still drawing nothing --
-           the routine case, unfixed, while the note claimed otherwise.
-
-           THE STAND-DOWN'S PREMISE IS GONE EITHER WAY. It existed to avoid
-           showing "a different picture from its own oracle" -- art filtered
-           unlike the other lane's. There is no other lane: `render_vk.c:232`
-           is the only caller of `tagpu_overlay_draw`. Indexed art is not a
-           disagreement with anybody, it is Classic++ restore off for one
-           frame. A bound on what the flag may promise, not a timing fix. */
+           THERE IS NO OTHER LANE TO SHOW A DIFFERENT PICTURE FROM:
+           `render_vk.c:232` is the only caller of `tagpu_overlay_draw`. Indexed
+           art is not a disagreement with anybody, it is Classic++ restore off
+           for one frame. A bound on what the flag may promise, not a timing
+           fix. */
         h.restored = 0;
     } else s_saidRestored = 0;
 
@@ -2398,25 +2298,22 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     }
     s_saidFog = 0;
 
-    /* ---- THE SCAFFOLD, AND THE HALF OF IT THIS LANDING DOES NOT CLOSE ----
+    /* ---- THE SCAFFOLD, AND THE HALF OF IT THAT IS STILL OPEN ----
 
        Half the question IS answered, and the mechanism is in place: the
-       overlay is another pass's image, and tagpu_vk_scaffold.h now exposes a
+       overlay is another pass's image, and tagpu_vk_scaffold.h exposes a
        FRAME-STAMPED per-slot view in exactly the shape tagpu_vk_shadow.h
        settled on, which `bind_main` points binding 44 at. That is the part
        the effects and hi-res passes will reuse.
 
-       THE `gl_FragCoord` HALF IS CLOSED BY LANDING 5b, and this paragraph used
-       to say the opposite -- it is corrected here rather than deleted, because
-       it ended by telling every later pass to inherit it.
-       [FOUND BY THE 5b REVIEW, 2026-09-17.]
+       THE `gl_FragCoord` HALF IS CLOSED.
 
        TAGPU_GLSL_SCAF_TEST (tagpu_glsl.h) locates the fragment in the game
        frame with `gl_FragCoord.xy / uSS`, and the two APIs measure that from
        opposite edges: GL's origin is the LOWER left, Vulkan's is the UPPER left
-       and `OriginUpperLeft` is the only execution mode Vulkan permits. That
-       used to make them exact mirrors -- but only because this pass took a
-       NEGATIVE viewport height. It no longer does (item 4). The GL twin's VS
+       and `OriginUpperLeft` is the only execution mode Vulkan permits. A
+       NEGATIVE viewport height would make them exact mirrors; this pass takes
+       a positive one (item 4). The GL twin's VS
        maps game row 0 to FBO window y 0, which tagpu_glsl.h states outright, so
        GL reads `g + 0.5` for game row g; with a positive height this lane
        stores game row g at image row g and reads `g + 0.5` as well. THE TWO
@@ -2430,8 +2327,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        so it is refused. Turning the refusal into `scafOn && !scaffold_view(...)`
        is now a small, bounded change -- but it enables a drawing path this lane
        has never measured, and it needs its own A/B, which is awkward because
-       the overlay's own Vulkan pass draws in the same frame. Left for the
-       landing that measures it.
+       the overlay's own Vulkan pass draws in the same frame. Left open until
+       something measures it.
 
        It costs nothing in play either way: `scaffold.on` is not in the default
        arm set and its own note says to leave it disarmed. */
@@ -2496,15 +2393,11 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        unit fitting, the every-unit-or-none gate passing, and the atlas memcpy
        running that far past the end of the mapped allocation. So the loop's
        bound carries `atlasNeed` with it and `atlas_upload` re-checks its own.
-       (`atlasRows` can only make the real copy smaller than this square.)
-       [FOUND 2026-09-16, the re-review of the fix.] */
+       (`atlasRows` can only make the real copy smaller than this square.) */
     atlasNeed = (!s_atHave || s_atSerial != h.atlasSerial)
                 ? (VkDeviceSize)h.atlasDim * h.atlasDim : 0;
     /* THE RESTORED TWIN RESERVES NOTHING, because nothing is copied into it
-       from the host any more. It used to reserve its own share here for the
-       same reason the indexed atlas does -- an overspend by the loop above
-       would have eaten into the room its memcpy needed -- and that share is
-       gone with the mirror (11-5e-2b). The restorer paints it on the device. */
+       from the host: the restorer paints it on the device. */
     stageNeed += atlasNeed;
     if (stageNeed) {
         if (!slot_vstage(d, s, stageNeed)) goto refuse;
@@ -2536,8 +2429,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* STAMPED THE MOMENT THEY RESOLVE, AND NOT AFTER THE LOOP BELOW.
            `vb_slot` refuses to evict an entry stamped with the frame in hand,
            and that is the ONLY thing keeping this unit's two entries alive
-           across its own second allocation. Stamped after the loop instead --
-           which is where these two stores used to be -- a unit whose geometry
+           across its own second allocation. Stamped after the loop instead, a
+           unit whose geometry
            is cached and whose material is not hands `vb_slot` its own geometry
            entry as the least recently drawn: `ret_push` retires the buffer,
            the entry is memset and handed back for the MATERIAL, and `g` and
@@ -2545,8 +2438,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
            leave `w->geom` and `w->mat` both pointing at it, and binding 0
            would fetch 32-byte vertices out of a buffer holding 20-byte ones --
            past its end, on a draw that still passes the every-unit-or-none
-           gate because the unit WAS drawn. [FOUND 2026-09-16, the landing
-           review, by both reviewers independently.] */
+           gate because the unit WAS drawn. */
         if (g) g->lastFrame = d->frame;
         if (m) m->lastFrame = d->frame;
 
@@ -2586,8 +2478,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                `w->geom` would be VK_NULL_HANDLE on a recorded draw. Breaking
                here consumes nothing: the pointer is still NULL, the unit is
                not drawn, and the every-unit-or-none gate turns that into a
-               refused frame. [FOUND 2026-09-16, the landing review; the
-               placement, in the round after it.] */
+               refused frame. */
             if (stageOff + bytes + atlasNeed > s->vscap) break;
             *e = vb_slot(d, d->frame);
             if (!*e) {
@@ -2675,14 +2566,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        out of the SAME command buffer -- one TRANSFER_WRITE ->
        VERTEX_ATTRIBUTE_READ dependency whatever the count.
 
-       IT MUST NOT SIT BELOW THE EVERY-UNIT-OR-NONE GATE, which is where it
-       used to be. That gate returns without drawing, but the copies are
-       already in `cb` and `cb` is submitted either way, and the buffers stay
-       in the table with their serials -- so a LATER frame finds them, uploads
-       nothing, sets no `anyUpload`, and reads vertices that no barrier ever
-       ordered against the write that filled them. Recording it here costs one
-       barrier on a frame that draws nothing and closes that for good.
-       [FOUND 2026-09-16, the landing review.] */
+       IT MUST NOT SIT BELOW THE EVERY-UNIT-OR-NONE GATE. That gate returns
+       without drawing, but the copies are already in `cb` and `cb` is submitted
+       either way, and the buffers stay in the table with their serials -- so a
+       LATER frame finds them, uploads nothing, sets no `anyUpload`, and reads
+       vertices that no barrier ever ordered against the write that filled them.
+       Recording it here costs one barrier on a frame that draws nothing and
+       closes that for good. */
     if (anyUpload) {
         mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         mb.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
@@ -2716,12 +2606,10 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        frame that came here only to make the job: it has nothing to draw yet and
        says so by returning 0, exactly as the refusal above would have. */
     restore_want(d, &h);
-    /* AND THE FEED FRAME NOW DRAWS, so there is no `goto feedout` here any more
-       (11-5e-2c). It used to leave through that label having drawn nothing,
-       because the only thing it could draw was a twin that did not exist yet;
-       with `restored` cleared above it draws the indexed atlas like any other
-       frame. `feedout` itself is gone with the jump -- what it protected against
-       is recorded at `standdown` instead, because that is where the hazard is. */
+    /* AND THE FEED FRAME DRAWS: with `restored` cleared above it draws the
+       indexed atlas like any other frame. What a stand-down from below this
+       point would risk is recorded at `standdown`, because that is where the
+       hazard is. */
 
     /* THE FOUR SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
@@ -2805,17 +2693,9 @@ standdown:
     /* NOT A REFUSAL OF THE PASS: a frame this pass will not draw, and the slot
        given back because the next one may not draw either.
 
-       SAFE ONLY ABOVE THE STAGING. Every `goto standdown` is above
-       `slot_vstage`, so no copy out of `s->vstage` has been recorded when
-       control reaches here. That was the whole of the argument and it was
-       stated as "safe here and only here", which read as a property of the
-       label rather than of its callers -- and then the feed path was pointed at
-       it from BELOW the two atlas uploads.
-
-       `feedout` WAS THE LABEL THAT SOLVED THAT, AND IT IS GONE SINCE 11-5e-2c,
-       because the feed frame now draws and nothing jumps there any more. The
-       hazard it existed for is unchanged and is recorded here instead, since a
-       future stand-down is the only way to meet it again:
+       SAFE ONLY ABOVE THE STAGING -- a property of every caller, not of this
+       label. Every `goto standdown` is above `slot_vstage`, so no copy out of
+       `s->vstage` has been recorded when control reaches here. Below it:
 
          by the time control is below `slot_vstage`, `atlas_upload` has memcpy'd
          the indexed mirror into `s->vstage` and recorded a
@@ -2824,15 +2704,15 @@ standdown:
          `kill_buffer(&s->vstage)`, the SOURCE buffer of a copy the GPU has not
          executed yet.
 
-       What that looked like, because the shape is worth recognising rather than
+       What that looks like, because the shape is worth recognising rather than
        the rule reciting: `atlas_upload` latches `s_atHave`, `s_atSerial` and
-       `s_atRows` at RECORD time, so after the lost copy the pass believed the
-       device held rows it never received and did not re-upload until the
-       mirror's serial moved again. `restore_want` then handed the restorer
-       frames `covered_prefix` called covered, and the lane restored them from an
+       `s_atRows` at RECORD time, so after the lost copy the pass believes the
+       device holds rows it never received and does not re-upload until the
+       mirror's serial moves again. `restore_want` then hands the restorer
+       frames `covered_prefix` calls covered, and the lane restores them from an
        EMPTY atlas image: the OUT pass reads `frag = c - net` with both taken
-       from palette index 0, so every one of those cells came out BLACK, alpha 1.
-       [FOUND 2026-09-17.]
+       from palette index 0, so every one of those cells comes out BLACK,
+       alpha 1.
 
        SO: a new stand-down added BELOW `slot_vstage` must `return 0` without
        freeing the slot -- never `goto standdown`. */
@@ -2965,33 +2845,31 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
     /* 40 uAtlas, 41 uLUT, 42 uPal, 43 uAtlasRGB, 44 uScaf, 45 uFogGrid,
        46 uFogLUT, 47 uShadowCmp, 48 uShadowRaw -- the order
        inc/spirv/tagpu_native.spv.h prints for tagpu_native::FS.
-       BINDING 43 IS uAtlasRGB AND SINCE GATE 3 IT NAMES THE RESTORED TWIN'S
-       OWN IMAGE. The fragment stage reads it on the `uRestored == 1` branch,
-       which this pass now draws. It FALLS BACK to the indexed view when there
-       is no restored image, and that is not a picture: a descriptor must be
-       VALID for the set to be bound, naming the image already here costs no
-       memory and no second object, and `prepare`'s restored refusal keeps the
-       branch unreachable on exactly the frames the fallback is in place. That
-       fallback is all this binding was before gate 3, on every frame. */
+       BINDING 43 IS uAtlasRGB AND IT NAMES THE RESTORED TWIN'S OWN IMAGE.
+       The fragment stage reads it on the `uRestored == 1` branch, which this
+       pass draws. It FALLS BACK to the indexed view when there is no painted
+       restored image, and that is not a picture: a descriptor must be VALID
+       for the set to be bound, naming the image already here costs no memory
+       and no second object, and `prepare` clears `uRestored` on exactly the
+       frames the fallback is in place. */
     ii[0].sampler = s_samp; ii[0].imageView = s_atView;
     ii[1].sampler = s_samp; ii[1].imageView = s->lutView;
     ii[2].sampler = s_samp; ii[2].imageView = s->palView;
     /* THE RESTORED TWIN TAKES ITS OWN SAMPLER WITH ITS OWN VIEW. The fallback
        is the indexed image AND the indexed sampler together: filtering palette
        indices would blend two table entries, and the pair only ever stands in
-       on frames `prepare` has already refused. */
-    /* `s_arHave`, NOT JUST `s_arView` -- A LAYOUT QUESTION BEFORE A PICTURE ONE
-       (11-5e-2c verification pass). `mk_image` creates the twin UNDEFINED and
+       on frames `prepare` has cleared `uRestored` on. */
+    /* `s_arHave`, NOT JUST `s_arView` -- A LAYOUT QUESTION BEFORE A PICTURE
+       ONE. `mk_image` creates the twin UNDEFINED and
        only the restorer's own job transitions it; on a path where the image is
        made and no job ever runs it stays UNDEFINED, and naming it here with
        `imageLayout = SHADER_READ_ONLY_OPTIMAL` is a descriptor-layout mismatch
-       on a statically-used binding. That was survivable only while the removed
-       stand-down kept those frames from drawing at all. `s_arHave` comes from
+       on a statically-used binding. `s_arHave` comes from
        `painted > 0`, so testing it is exactly "this image has left UNDEFINED",
        and it is the same pair that decides `uRestored` -- which makes the flag
        and this descriptor agree BY CONSTRUCTION rather than by a refusal placed
-       somewhere else. `tagpu_vk_terr.c:1080` settled this for binding 42 in the
-       11-5c re-review and gives the whole argument. */
+       somewhere else. `tagpu_vk_terr.c:1080` gives the whole argument, for its
+       binding 42. */
     ii[3].sampler   = (s_arView && s_arHave) ? s_sampTwin : s_samp;
     ii[3].imageView = (s_arView && s_arHave) ? s_arView   : s_atView;
     /* BINDING 44 NAMES THE REAL OVERLAY WHEN THERE IS ONE, even though this
@@ -3049,12 +2927,11 @@ int tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     return 1;
 }
 
-/* the world scissor, and since landing 5b it is the SAME rectangle the GL twin
-   clips to rather than its vertical mirror: this pass's framebuffer row 0 is
-   the game frame's top row under both APIs now. It was mirrored for as long as
-   the viewport height was negative -- tagpu_vk_feat.c is where that is argued
-   at length. Getting it wrong shows up as the world clipped against the wrong
-   edge rather than as anything subtle. */
+/* the world scissor, the SAME rectangle the GL twin clips to rather than its
+   vertical mirror: this pass's framebuffer row 0 is the game frame's top row
+   under both APIs (tagpu_vk_feat.c argues it at length). Getting it wrong shows
+   up as the world clipped against the wrong edge rather than as anything
+   subtle. */
 static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
 {
     int x = 0, y = 0, cw = (int)w, ch = (int)h;
@@ -3063,11 +2940,10 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
        pixels -- it is the rect the native pass hands glScissor -- while this
        pass's viewport covers the whole attachment and its vertex shader
        divides by `uGame`. At the 1:1 sizes an A/B is run at the two are the
-       same number, which is why the measurement could not see this; the
+       same number, so a measurement there cannot see this; the
        Vulkan window tracks the client rect and the GL lane's own render target
        need not match it. Unscaled, a 640x480 game frame in a 1920x1080 window
-       clips every unit to the left third of the bottom quarter of the world.
-       [FOUND 2026-09-16, the landing review.] */
+       clips every unit to the left third of the bottom quarter of the world. */
     float sx = s_gw > 0.0f ? (float)w / s_gw : 1.0f;
     float sy = s_gh > 0.0f ? (float)h / s_gh : 1.0f;
     if (s_scissorOn && s_vw > 0 && s_vh > 0) {
@@ -3075,7 +2951,7 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
         x  = (int)((float)s_vpL * sx + 0.5f);
         cw = (int)((float)s_vw  * sx + 0.5f);
         ch = (int)((float)s_vh  * sy + 0.5f);
-        y  = ytop;                      /* NOT mirrored: landing 5b */
+        y  = ytop;                      /* NOT mirrored: see above  */
     }
     if (x < 0) { cw += x; x = 0; }
     if (y < 0) { ch += y; y = 0; }
@@ -3092,14 +2968,13 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
 /* ONE STAGE OF THIS PASS: the bodies, or the build ghosts. They are separate
    calls because the GL twin draws them at DIFFERENT POINTS OF THE FRAME and
    both blend -- `tagpu_native.c` draws the units, then the effects, then
-   `ghost_pass`. Recording the ghosts inside the body stage put them BEFORE the
-   effects on this lane and after them on the GL one, and premultiplied `over`
-   is not commutative: any translucent effect overlapping a ghost (nano spray on
-   a queued site, an explosion under the placement cursor) composites to a
-   different colour, by up to the ghost's own alpha share of the effect. The
-   seam's own comment states that rule as the reason the body stage sits where
-   it does; landing 6 put the ghosts in without re-running it, and the landing's
-   review caught it. [2026-09-17.] */
+   `ghost_pass`. Recording the ghosts inside the body stage would put them
+   BEFORE the effects on this lane and after them on the GL one, and
+   premultiplied `over` is not commutative: any translucent effect overlapping a
+   ghost (nano spray on a queued site, an explosion under the placement cursor)
+   composites to a different colour, by up to the ghost's own alpha share of the
+   effect. The seam's own comment states that rule as the reason the body stage
+   sits where it does. */
 /* THE THREE STAGES, and the numbers are the order they are recorded in.
    RS_SHADOW is first inside `tagpu_vk_unit_record` because the engine draws a
    unit's shadow before its body (0x459200 blits the blackened composite and
@@ -3119,7 +2994,7 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     (void)d;
 
-    /* NO Y FLIP (landing 5b): this pass writes the engine's screen-space y,
+    /* NO Y FLIP: this pass writes the engine's screen-space y,
        which grows downward, so clip -1 is the game frame's top row and a
        POSITIVE height puts it on row 0 -- where the game's top row is under
        both APIs. minDepth 0.5 / maxDepth 1.0 maps clip z in [0, 1] onto GL's
@@ -3254,8 +3129,8 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (s_nwire) record_stage(d, cb, slot, w, h, RS_WIRE);
     /* THE PRODUCER IS TOLD, AND ONLY FROM HERE. The structure-shadow gate in
        tagpu_native.c must be raised on a frame something actually painted a
-       slant and not on a frame that merely could have -- its own comment lists
-       the three wrong questions it asked before this one. This is the painter
+       slant and not on a frame that merely could have -- its own comment says
+       why. This is the painter
        saying so, after the draws are in the command buffer.
 
        IT IS RECORDED, NOT SUBMITTED, and that is the honest reading of the
@@ -3321,8 +3196,8 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
        still named by a live framebuffer may not be destroyed. Every caller of
        this function is past the seam's vkDeviceWaitIdle, so none of it is in a
        queue. `s_rjTried` is a fact about a device that refused, so it does not
-       survive the device either. [Landing 7e-2; tagpu_vk_feat.c carries the
-       same block for the same reason.] */
+       survive the device either. tagpu_vk_feat.c carries the same block for the
+       same reason. */
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
     s_rjGen = 0; s_rjBlanks = 0; s_rjTaken = 0; s_rjPainted = 0;
     s_rjTried = 0; s_rjChain = 0;

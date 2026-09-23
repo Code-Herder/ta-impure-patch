@@ -1,4 +1,4 @@
-/* tagpu_scaffold.c — G12a: the scene-depth scaffold (Phase D, native-res pass).
+/* tagpu_scaffold.c — the scene-depth scaffold (a native-res pass).
 
    The engine has no screen depth plane (terrain-depth.md §4): scene order is a
    painter's sweep keyed on the 16-px map-tile row (§3.3). This module rebuilds
@@ -14,7 +14,7 @@
    lower occludes that feature). relRow is relative to the sweep's first row
    (eyeY>>4 - 16), exactly the engine's own bucket origin.
 
-   Debug outputs (G12a exit evidence):
+   Debug outputs:
      - colour overlay: scaffold pixels tinted far(blue)->near(red), 55% alpha,
        drawn over the live frame (capture with tagpu_glshot.trigger);
      - per-unit occlusion PREDICTION in tagpu.log ("scaffold: uNNN ... occl=P%"):
@@ -34,17 +34,17 @@
 #include "tagpu_vk.h"        /* tagpu_vk_owns_present: is there a GL lane at all? */
 
 /* ---- engine layout (terrain-depth.md, binary-verified) ----
-   SINCE THE FRAME PACKET'S LANDING 3 this file reads no engine field of its
-   own. The view, the map dimensions, the engine's sweep rect, the feature
-   anchors in it and every unit it stamps for come out of the packet; what is
-   left below is the FeatureDef record's own layout and the one LIVE read of
-   its base. Those records are the per-MAP asset the teardown cascade frees, so
-   their lifetime is tagpu_reclaim's fence — the same standing tagpu_terr.c and
+   This file reads no per-frame engine field of its own. The view, the map
+   dimensions, the engine's sweep rect, the feature anchors in it and every
+   unit it stamps for come out of the packet; what is left below is the
+   FeatureDef record's own layout and the one LIVE read of its base. Those
+   records are the per-MAP asset the teardown cascade frees, so their lifetime
+   is tagpu_reclaim's fence — the same standing tagpu_terr.c and
    tagpu_r3dcache.c have, and not the per-frame sim state the packet exists to
    copy. The base is READ LIVE rather than taken from the packet because the
-   cascade frees the array at 0x42227D and then NULLS main+0x1426F at 0x42228B,
-   and that null is this pass's only refusal afterwards; a base copied into a
-   packet and held for a frame reads past it (landing review, 2026-09-12). */
+   cascade frees the array at 0x42227D and then NULLS main+0x1426F at
+   0x42228B, and that null is this pass's only refusal afterwards; a base
+   copied into a packet and held for a frame reads past it. */
 #define TA_MAINPP    0x00511DE8u
 #define OFF_FEATDEF  0x1426F   /* FeatureDef array, stride 0x100                */
 #define OFF_FEATCOUNT 0x14253  /* i32 NumFeatureDefs: read LIVE beside the base  */
@@ -81,7 +81,7 @@ static int    s_bw = 0, s_bh = 0;  /* current buffer dims                 */
 static int    s_lastR0 = 0, s_lastRows = 0;
 static unsigned s_lastFrame = 0;
 
-/* ---- the G19e A/B, and what this frame hands the Vulkan lane ----
+/* ---- the A/B, and what this frame hands the Vulkan lane ----
    `tagpu_scaffold.ab` makes this pass draw over a black frame and read it back
    once; the Vulkan lane captures the same frame because `s_abFrame` travels
    with the scaffold below rather than being polled a second time. See
@@ -97,12 +97,12 @@ static int   s_pubW, s_pubH;
 static float s_pubRect[4], s_pubRows;
 
 /* THE SHADER PAIR IS A BUILD INPUT, NOT CODE THIS FILE RUNS. Nothing here
-   references them since [the vulkan-only plan, landing 11-4c] -- tools/spirv-gen.py
+   references them -- tools/spirv-gen.py
    reads them out of the PREPROCESSED translation unit and generates the SPIR-V the
    Vulkan twin draws with, so deleting them fails the build with "the manifest names
    <pass>::VS and the source does not have it". The pragma below is paired and its
-   `pop` was PROVED with a planted probe rather than read: landing 11-4b put one
-   inside a comment, where it is text and not a directive. */
+   `pop` is PROVED with a planted probe rather than read: a `pop` inside a
+   comment is text, not a directive. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 static const char* VS =
@@ -213,14 +213,11 @@ static const unsigned char* feat_frame0(const char* def)
     return g;
 }
 
-/* THE WHOLE-MAP CENSUS IS GONE (frame packet exchange, landing 3). It walked
-   every cell of the engine's feature grid on the render thread — the whole map,
-   not a rect — to log which defs a map uses and where the tall ones are. That
-   was the G12a proof's camera-steering aid, and `tagpu_features.trigger`
-   (tagpu_cat.c, a tooling reader with its documented caveat) has answered the
-   same question properly since. Nothing replaces it here: the packet carries
-   the anchors of the gather rect, which is what this pass draws from, and a
-   whole-map walk is not something a render-thread pass should be doing at all. */
+/* NO WHOLE-MAP WALK. The packet carries the anchors of the gather rect, which
+   is what this pass draws from, and a whole-map walk is not something a
+   render-thread pass should do at all. Which defs a map uses, and where the
+   tall ones are, is `tagpu_features.trigger`'s question (tagpu_cat.c, a
+   tooling reader with its documented caveat). */
 
 void tagpu_scaffold_frame(const TAGPU_FRAME* f)
 {
@@ -229,14 +226,12 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
        the flag LATCHING: set once and cleared only on consumption, it would
        survive a frame the Vulkan lane never collected and ride a LATER frame's
        scaffold, so the two captures would be of different frames -- the one
-       thing the design exists to prevent. (The same defect was found in
-       tagpu_fps.c by the G19d review; it is designed out here.) */
+       thing the design exists to prevent. */
     /* THIS PASS GATHERS; THE TWIN DRAWS. The Vulkan lane owns the present and
-       there is no GL context anywhere in the process, so the upload and the
-       quad that used to sit below stood down in landing 4b and were deleted in
-       11-4c; tagpu_vk_scaffold.c draws the same buffer out of the hand-over at
-       the bottom of this function. The gather is unconditional: it is the pass,
-       and there is no longer a second way through here. */
+       there is no GL context anywhere in the process; tagpu_vk_scaffold.c
+       draws the same buffer out of the hand-over at the bottom of this
+       function. The gather is unconditional: it is the pass, and there is no
+       second way through here. */
 
     s_pubBuf = NULL; s_abFrame = 0;
 
@@ -278,8 +273,7 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
        base (`0x42228B`) while the new map's array starts at one record and grows,
        so a held packet from a map with 442 defs would authorise 442 records of a
        30-record array. Taking the smaller is safe under both, and costs one load of
-       a field in a struct this pass is already dereferencing.
-       (landing review, 2026-09-12.) */
+       a field in a struct this pass is already dereferencing. */
     int liveDefs = ptr_ok(taNow) ? *(const int*)(taNow + OFF_FEATCOUNT) : 0;
     int nDefs = pk->feat_defcount;
     if (nDefs < 0 || nDefs > 4096) nDefs = 0;
@@ -309,8 +303,7 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     memset(s_buf, 0, (size_t)vw * vh);
 
     /* ---- walk the packet's anchors over the engine's own sweep rect ----
-       The rect is unchanged; what moved is where the cells come from. The
-       packet's anchor table covers the WIDEST zoom rect, so this rect is a
+       The packet's anchor table covers the WIDEST zoom rect, so this rect is a
        sub-rect of it, and each entry already carries the four corner heights
        the engine's projection averages. */
     int r0 = (eyeY >> 4) - 16;
@@ -327,11 +320,11 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
             if (row < 0 || row >= mapH || col < 0 || col >= mapW) continue;
             unsigned idx = a->def;
             const char* def;
-            /* A BOUND THIS PASS DID NOT HAVE. A tile can name a def past the
-               map's own count, whose 0x100-byte record holds garbage (the
-               terrain-depth note's "Corrections"); the feature pass has always
-               refused those and this one indexed them. Counted as `junk`, as
-               there — and applied BEFORE the address is formed, not after. */
+            /* THE DEF BOUND. A tile can name a def past the map's own count,
+               whose 0x100-byte record holds garbage (the terrain-depth note's
+               "Corrections"); the feature pass refuses those and so does this
+               one. Counted as `junk`, as there — and applied BEFORE the address
+               is formed, not after. */
             if (!nDefs || (int)idx >= nDefs) { junk++; continue; }
             def = fdef + (size_t)idx * FD_STRIDE;
             if (*(const unsigned char*)(def + FD_HEIGHT) < 10) { flat++; continue; }
@@ -362,9 +355,8 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
                 int hgt = *(const unsigned char*)(def + FD_HEIGHT);
                 int ya = py1 - hgt / 2 - fz * 16, yb = py1 + fz * 16;
                 int xa = px0, xb = px0 + fx * 16;
-                /* clip BEFORE looping. One clamp per line: the four used to
-                   share two lines, which is correct C and which -Wall reads as
-                   a misleading indentation every time this file is rebuilt. */
+                /* clip BEFORE looping. One clamp per line: two to a line is
+                   correct C that -Wall reads as a misleading indentation. */
                 if (ya < 0) ya = 0;
                 if (yb > s_bh) yb = s_bh;
                 if (xa < 0) xa = 0;
@@ -376,13 +368,12 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
         }
     }
 
-    /* ---- per-unit occlusion prediction (logged; the G12a exit check) ----
+    /* ---- per-unit occlusion prediction (logged) ----
        Out of the packet's units table: the state bits, the 16.16 anchor and
        the unit composite's rect and hotspot, all copied by the game thread.
-       This used to walk the engine's array through the same unsynchronised
-       begin/end pair the unit pass did, and probe each composite frame with
-       IsBadReadPtr — a check whose answer can go stale between the check and
-       the read, and never the argument (cross-thread-engine-reads.md §5). */
+       No engine array is walked here and nothing is probed with IsBadReadPtr —
+       a check whose answer can go stale between the check and the read, and
+       never the argument (cross-thread-engine-reads.md §5). */
     int logNow = (f->frame_counter % 300) == 0;
     {
         const TAGPU_PK_UNIT* uu = tagpu_pk_units(pk);
@@ -423,22 +414,18 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
         slog(b);
     }
 
-    /* ---- upload + draw the debug overlay quad over the viewport ----
-       AND THIS IS WHERE THE PASS STOPS BEING API-INDEPENDENT. Everything above
-       it is the GATHER: the packet's anchors walked over the engine's own sweep
-       rect into `s_buf`, the per-unit occlusion prediction read back out of it,
-       and the four NDC numbers just below. All of that runs on either lane and
-       is the pass; what follows is one backend's way of showing it.
+    /* ---- the debug overlay quad's rect, for the Vulkan twin ----
+       Everything above is the GATHER: the packet's anchors walked over the
+       engine's own sweep rect into `s_buf`, and the per-unit occlusion
+       prediction read back out of it. Below are the four NDC numbers the twin
+       draws the quad at.
 
-       THE DRAW WAS STOOD DOWN RATHER THAN LEFT TO NO-OP, and then deleted.
-       The reason is worth keeping because it is the rule the rest of this plan
-       follows: with no context current most GL calls do nothing, and "most" is
-       the whole objection -- a bring-up that branches on a compile or link
-       status it reads back takes whichever branch the loader's stubs produce,
-       and both are wrong, one logging a failure that never happened and the
-       other latching a failed state that kills the pass for the process. A
-       pass that is not called publishes nothing instead, and the twin then
-       refuses out loud. [Landing 4b; the draw itself went in landing 11-4c.] */
+       THERE IS NO GL DRAW, NOT A GL DRAW LEFT TO NO-OP. With no context
+       current most GL calls do nothing, and "most" is the whole objection -- a
+       bring-up that branches on a compile or link status it reads back takes
+       whichever branch the loader's stubs produce, and both are wrong, one
+       logging a failure that never happened and the other latching a failed
+       state that kills the pass for the process. */
     int gw = f->game_width  > 0 ? f->game_width  : vpL + vw;
     int gh = f->game_height > 0 ? f->game_height : vpT + vh;
     float x0 = (float)vpL        / gw * 2.f - 1.f;
@@ -446,28 +433,21 @@ void tagpu_scaffold_frame(const TAGPU_FRAME* f)
     float y0 = 1.f - (float)vpT        / gh * 2.f;   /* NDC top    */
     float y1 = 1.f - (float)(vpT + vh) / gh * 2.f;   /* NDC bottom */
 
-    /* HOISTED OUT OF THE DRAW, because on the vulkan-only lane the A/B is armed
-       without one. Read once per frame either way, so the two arms below cannot
-       disagree about whether this is the capture frame. */
+    /* Read once per frame, so nothing below can disagree about whether this is
+       the capture frame. */
     int taking = s_ab && !s_abDone;
 
     if (taking) {
-        /* THE A/B CLAIM, which is all that is left of it. Until landing 4d-2 this
-           pass also captured a GL half (`tagpu_abshot.c`) and claimed the Vulkan one
-           only when that half had reached the disk -- route D gave the two lanes a
-           window each, so one frame could be photographed from both sides and diffed.
-           Route D went in 4d-1, the GL half had nothing left to pair with, and it went
-           too. What the lever does now is claim the VULKAN capture: `tagpu_vk_ab_arm`
-           unlinks the target `_vk.ppm` at the instant the claim latches, which is what
-           makes the file on the disk this arming's rather than an earlier run's. Diff
-           it against a capture taken from another BUILD. */
+        /* THE A/B CLAIM, of the VULKAN capture: `tagpu_vk_ab_arm` unlinks the
+           target `_vk.ppm` at the instant the claim latches, which is what
+           makes the file on the disk this arming's rather than an earlier
+           run's. Diff it against a capture taken from another BUILD. */
         s_abDone = 1;
         s_abFrame = tagpu_vk_ab_arm("scaffold");
     }
 
-    /* PUBLISHED AFTER THE DRAW WHERE THERE IS ONE, and after the gather in
-       either case: these are the bytes and the numbers the frame was built
-       from, and the Vulkan lane is about to draw the same ones. */
+    /* PUBLISHED AFTER THE GATHER: these are the bytes and the numbers the frame
+       was built from, and the Vulkan lane is about to draw the same ones. */
     s_pubBuf = s_buf; s_pubW = vw; s_pubH = vh;
     s_pubRect[0] = x0; s_pubRect[1] = y0; s_pubRect[2] = x1; s_pubRect[3] = y1;
     s_pubRows = (float)nRows;
@@ -492,44 +472,25 @@ int tagpu_scaffold_overlay(const unsigned char** buf, int* w, int* h,
 int tagpu_scaffold_frameinfo(unsigned frame_counter, int* r0, int* nrows)
 {
     /* NOT GATED ON ANY BACKEND'S READINESS, because these two numbers are the
-       GATHER's and the gather runs whatever draws. This function once tested
-       the GL program's state, which was permanently 0 under `renderer=vulkan`
-       because its bring-up was never called -- so it handed every caller "no
-       rows" on the one lane the rows are needed for, silently. The freshness
-       test below is the real one and it is API-independent: `s_lastFrame` is
-       stamped by the gather. Do not re-add a readiness test here: there is no
-       longer any state it could ask, and the caller it feeds is the unit
-       shader's occlusion input.
-       [FROM THE 4b-1 LANDING REVIEW, 2026-09-18 -- inert when found, because
-       the only caller was still gated. The state itself went in 11-4c's own
-       review, so the trap is closed rather than merely documented.] */
+       GATHER's and the gather runs whatever draws. A readiness test would hand
+       every caller "no rows", silently, on a lane whose backend never brings a
+       program up -- and the caller it feeds is the unit shader's occlusion
+       input. The freshness test below is the real one and it is
+       API-independent: `s_lastFrame` is stamped by the gather. */
     if (!s_armed) return 0;
     if (frame_counter - s_lastFrame > 2) return 0;   /* stale (not armed/in-game) */
     *r0 = s_lastR0; *nrows = s_lastRows;
     return 1;
 }
 
-/* A CONTEXT RESET STILL DROPS THIS FRAME'S HAND-OVER, and that is now all it
-   does here. The three GL-shaped statics this used to clear -- the program's
-   state and the uploaded texture's dimensions -- went with the draw they
-   described; what remains is the published buffer, which names memory this
-   pass owns and no API.
+/* A CONTEXT RESET DROPS THIS FRAME'S HAND-OVER: the published buffer, which
+   names memory this pass owns and no API.
 
-   AND NOTHING CALLS IT SINCE 11-5e-1. Its one call site was the
-   GL-context-change watch in tagpu_overlay.c, deleted because no source of
-   this build makes a context current for it to see change (`oglu_load_dll`
-   has no caller). The sentence that stood here -- "`tagpu_overlay.c:291` is
-   the caller" -- named a line that is now inside an unrelated function.
-
-   THIS MODULE IS NOT ONE OF THE ONES WAITING ON THE ESCALATION, and the first
-   version of this banner said it was by borrowing tagpu_native.c's wording.
-   `tagpu_scaffold.c` carries ZERO GL call sites and the body below touches no
-   API at all, so it was never held up by objects that still had to go the way
-   `tagpu_shadow.c`'s and `tagpu_hires_draw.c`'s resets were -- and those two
-   files are themselves gone now, to landings 11 D2 and D3. It is deletable as
-   soon as someone decides the hand-over needs no reset entry point of its own. Left standing only so the cascade goes in one piece. [ROUND 3'S
-   MEDIUM: a banner that borrows a justification for a module the
-   justification does not fit is a reason to keep dead code for ever.] */
+   NOTHING CALLS IT. No source of this build makes a GL context current for a
+   change to be seen (`oglu_load_dll` has no caller). This file carries ZERO
+   GL call sites and the body below touches no API at all, so it is deletable
+   as soon as someone decides the hand-over needs no reset entry point of its
+   own. */
 void tagpu_scaffold_glreset(void)
 {
     s_pubBuf = NULL; s_abFrame = 0;

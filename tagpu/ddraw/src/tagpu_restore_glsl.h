@@ -56,7 +56,7 @@
     "}\n"
 
 /* MIP: one level of the restored twin from the level above it, as an EXACT
-   INTEGER 2x2 BOX AVERAGE (the Vulkan-only plan's landing 7e).
+   INTEGER 2x2 BOX AVERAGE.
 
    WHY THIS EXISTS AT ALL, when glGenerateMipmap is one call: the twin is
    sampled GL_LINEAR_MIPMAP_LINEAR, so a second backend that paints level 0

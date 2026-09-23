@@ -13,16 +13,15 @@
    layer calling vtbl+8 (draw) on each object; the sim tick walks them calling
    vtbl+4 (update: move, animate, cull) — the draw is pure.
 
-   WHAT THIS FILE DOES, SINCE LANDING 4A OF THE FRAME PACKET EXCHANGE. It reads
-   the packet's particle table and nothing else. The walk above — ten engine
-   vectors, and inside each object a second one at its class's stride — is the
-   publisher's now (tagpu_packet_pub.c, game thread, once per sim tick), and so
-   is every sprite's GAF frame lookup. That is not a narrower window: those
+   WHAT THIS FILE DOES. It reads the packet's particle table and nothing else.
+   The walk above — ten engine vectors, and inside each object a second one at
+   its class's stride — is the publisher's (tagpu_packet_pub.c, game thread,
+   once per sim tick), and so is every sprite's GAF frame lookup. Those
    sub-vectors are std::vectors the game thread GROWS mid-play, freeing the old
-   array (0x4732E0), so the {begin,end} pair could be read skewed and a
-   consistent pair could name memory just freed — the one client
-   tagpu_reclaim's per-LEVEL fence never covered (cross-thread-engine-reads.md
-   §5). The probes this file used to carry made that rarer and nothing else.
+   array (0x4732E0), so from another thread the {begin,end} pair could be read
+   skewed and a consistent pair could name memory just freed — a client
+   tagpu_reclaim's per-LEVEL fence does not cover (cross-thread-engine-reads.md
+   §5). A probe would only make that rarer.
 
    What arrives per drawable sub-particle is 16 bytes: the projected world
    point (hi(x), hi(y) - hi(alt)/2), the resolved GAF frame or a colour byte,
@@ -40,7 +39,7 @@
 
    LOS gate = the local player's LOS counter at the tile, true LOS or the
    MAPPED bit — applied HERE, against the fog grid the render thread holds,
-   because that grid is the render thread's own (landing 4b moves it too).
+   because that grid is the render thread's own.
    Armed by tagpu_sfx.on (tokens log, passive, nosmoke, nofire, nowake,
    nonano). Read-only over sim. */
 
@@ -144,15 +143,12 @@ typedef char sfx_kind_agrees[(K_SMOKE1 == (int)TAGPU_PK_PK_SMOKE1 &&
 static int s_nSub, s_nSprites, s_nDots, s_nFogged;
 static int s_nObj[NLAYER], s_nKind[NKIND];
 
-/* THE LAYERS COME OUT OF THE PACKET (landing 4a). Until this landing the walk
-   below was ten engine std::vectors and, inside each object, a second one — a
-   pair the game thread grows and frees mid-play (0x4732E0), which is why the
-   level fence never covered this pass and why the probes here were only ever
-   making a fault rarer. The publisher walks them on the thread that writes
-   them, once per sim tick, and resolves every sprite's GAF frame there; what
-   arrives is a flat table in LAYER ORDER with the projection already done.
+/* THE LAYERS COME OUT OF THE PACKET. The publisher walks the engine's vectors
+   on the thread that writes them, once per sim tick, and resolves every
+   sprite's GAF frame there (the header says why); what arrives is a flat table
+   in LAYER ORDER with the projection already done.
 
-   `from`/`to` still select a layer range, because the layer IS the draw depth
+   `from`/`to` select a layer range, because the layer IS the draw depth
    and the engine interleaves them with its own effects passes: 0..6 before
    the projectiles, 7..9 after the explosions. */
 void tagpu_sfx_gather(const TAGPU_FXVIEW* v, int from, int to)
@@ -209,7 +205,7 @@ void tagpu_sfx_frame_done(const TAGPU_FXVIEW* v)
     /* we gathered this frame: the engine's layer draw may be skipped — but only
        once the packet says the publisher was filling the particle table for us,
        or the first armed frames would suppress the engine's ten layer draws
-       against an empty table (landing review) */
+       against an empty table */
     if (!s_passive && (pk->fx_want & TAGPU_PK_FXWANT_SFX)) tagpu_fxown_set_skip_sfx(1);
     tagpu_fxown_beat_sfx(v->frame_counter);
     static unsigned last = 0;

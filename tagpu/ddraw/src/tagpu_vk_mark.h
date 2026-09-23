@@ -1,6 +1,6 @@
 #ifndef TAGPU_VK_MARK_H
 #define TAGPU_VK_MARK_H
-/* The UI MARKERS, drawn by Vulkan (the Vulkan-only plan's landing 5): health
+/* The UI MARKERS, drawn by Vulkan: health
    bars, the build and band-box cursors, order markers and their labels, group
    digits, and the captured post-fog layer. Contract only; tagpu_vk_mark.c is
    the pass.
@@ -24,9 +24,9 @@ int  tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
 /* Draw, inside the caller's render pass. `w`/`h` are the target's extent: this
    pass SETS ITS OWN viewport and scissor, as every world pass does, because its
    pipelines declare both dynamic and dynamic state that is never set is
-   undefined -- which is exactly how the first build of this pass drew its
-   vertices into nowhere. `rp` is the render pass, needed once to build the
-   pipelines against it; a second call with a different one rebuilds. */
+   undefined -- the vertices land nowhere. `rp` is the render pass, needed once
+   to build the pipelines against it; a second call with a different one
+   rebuilds. */
 void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                           VkRenderPass rp, uint32_t w, uint32_t h);
 

@@ -4,16 +4,14 @@
    present; the first reader after that re-resolves it, so the critical section
    below is entered once a frame however many passes ask.
 
-   Until G15d every pass read main+0x143A7 and was wrong by the Gamma factor;
-   G15d fixed the UI twin alone and left the world. This is that fix's other
-   half, and the resolution now lives in one place instead of two.
+   A pass that reads main+0x143A7 is wrong by the Gamma factor, so every pass
+   takes the palette from here, the one place it is resolved.
 
-   NO ENGINE MEMORY since the frame packet's landing 2: the engine's own table
+   NO ENGINE MEMORY: the engine's own table
    and the gamma factor are fields of the packet, copied by the publisher on
    the game thread (both kinds of packet carry them, the level-end one too),
    and the copy taken here outlives the packet — a frame with no packet keeps
-   the last table it saw, exactly as the old direct read kept its last good
-   snapshot. The presented half is the fork's own palette object, which is
+   the last table it saw. The presented half is the fork's own palette object, which is
    not engine memory at all. */
 
 #include <windows.h>

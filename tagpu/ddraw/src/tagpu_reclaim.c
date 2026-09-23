@@ -10,9 +10,9 @@
                       (0x42DC01, 0x42DCB6) and the level teardown 0x491B60. It
                       owns the ring outright — enqueue AND drain run here, so
                       the ring itself is single-threaded.
-     reader         = the fork's GL render thread: publishes s_started before
+     reader         = the fork's render thread: publishes s_started before
                       the overlay driver and s_completed after it returns
-                      (render_ogl.c brackets tagpu_overlay_draw), and skips the
+                      (render_vk.c brackets tagpu_overlay_draw), and skips the
                       driver's engine reads while a teardown is in progress.
    The only words that cross threads are the two pass counters and the
    teardown flag, all 32-bit aligned, all written through lock-prefixed
@@ -79,15 +79,9 @@
    tagpu_order, tagpu_cat, tagpu_weapons, tagpu_scenario, tagpu_packet_pub --
    but every one of those readers is on the GAME thread, as is this cascade, so
    it needs no ring. Stated because the list is what the next pass to want the
-   defs will trust, and it has to be COMPLETE to be worth trusting:
-   tagpu_packet_pub was missing from it until 2026-09-18, and until landing
-   10c-1 of the vulkan-only plan the claim itself was FALSE -- tagpu_cat,
-   tagpu_weapons and tagpu_scenario ran their trigger frames from
-   tagpu_overlay_draw, on the render thread. That landing moved them to the game
-   thread (for a different reason, to reach renderer=gdi) and so made this
-   paragraph true rather than aspirational. Swept 2026-09-18 across every file
-   naming main+0x1439B or dereferencing unit+0x92: no render-thread reader
-   remains. */
+   defs will trust, and it has to be COMPLETE to be worth trusting. Swept
+   2026-09-18 across every file naming main+0x1439B or dereferencing
+   unit+0x92: no render-thread reader. */
 #define TMPLFREE_VA   0x0042DC01u          /* MEM_Free(one Model3DONode block)            */
 #define TMPLTAB_VA    0x0042DCB6u          /* MEM_Free(the model-pointer table)           */
 #define MEMFREE_VA    0x004D85A0u          /* MEM_Free: cdecl, 1 arg, caller cleans       */
@@ -119,10 +113,9 @@ static int   s_installed;
    and only sets `s_installed` after the FREE detour lands too -- so there is a
    real configuration where `s_teardown` and `s_levelGen` are being maintained
    correctly and `s_installed` is 0. A consumer that only wants to know WHEN a
-   level is ending, rather than whether frees are deferred, must key on this.
-   [FOUND 2026-09-16, the landing-5 review: keying the UI publisher's ordering
-   on `s_installed` made it inert in exactly that case, and the engine frees the
-   GAF banks whether or not our detour is in.] */
+   level is ending, rather than whether frees are deferred, must key on this:
+   the engine frees the GAF banks whether or not our detour is in, so an
+   ordering keyed on `s_installed` is inert in exactly that case. */
 static int   s_levelTracked;
 static int   s_tmplArmed;                  /* the two template redirects are in       */
 /* Render thread only: the teardown flag as pass_begin found it, held for the
@@ -136,12 +129,11 @@ static volatile DWORD s_owner_tid;         /* the game thread, when the fork has
 static int   s_foreign_logged;
 
 /* counters: written on the game thread, read racily by the render thread's log */
-/* WHICH THREAD THE TEARDOWN CAME IN ON, MEASURED RATHER THAN ASSERTED. Two
-   places in this file used to answer that differently: `reclaim_template_free`
-   below CHECKS and falls back, while both teardown hooks simply said "game
-   thread" in a comment. The landing review asked which was right; this is the
-   instrument that answers it, on every run and on machines this session cannot
-   reproduce (multiplayer, a campaign defeat, an alt-tabbed load).
+/* WHICH THREAD THE TEARDOWN CAME IN ON, MEASURED RATHER THAN ASSERTED.
+   `reclaim_template_free` below CHECKS and falls back; the two teardown hooks
+   cannot, so this instrument answers the question on every run, including the
+   configurations not reproduced in testing (multiplayer, a campaign defeat, an
+   alt-tabbed load).
 
    A GUARD HERE WOULD BE WRONG, WHICH IS WHY THERE IS NONE. The pre hook's job
    is to publish `s_teardown`, wait for the render thread to leave its pass and
@@ -159,8 +151,7 @@ static int   s_foreign_logged;
    first deferred free. `tagpu_packet_pub.c`'s `on_game_thread()` asks
    `s_gameTid`, the thread DllMain ran on. They agree in every configuration
    seen, but they are different questions, so `foreign=` on the packet line and
-   `tdforeign=` on this one are not measuring quite the same thing [the landing
-   review]. */
+   `tdforeign=` on this one are not measuring quite the same thing. */
 static volatile DWORD    s_tdTid;          /* the thread that entered 0x491B60 */
 static volatile unsigned s_cTdForeign;
 static volatile unsigned s_cDeferred, s_cDrained, s_cOverflow, s_cForeign,
@@ -302,8 +293,8 @@ static void __cdecl reclaim_teardown_pre(void)
     DWORD t0, game;
     unsigned n = 0, busy = 0;
     const char* sfx;
-    /* 320, NOT 200 [the landing review]. The line grew by two thread ids and a
-       suffix of up to 33 bytes, worst case 239 -- and this toolchain's
+    /* 320: the line carries two thread ids and a suffix of up to 33 bytes,
+       worst case 239 -- and this toolchain's
        `_snprintf` is msvcrt's, which on truncation writes `_Count` characters,
        returns -1 and DOES NOT terminate. `rlog` would then have read past the
        buffer. Terminated explicitly below as well, like every other formatter
@@ -319,12 +310,11 @@ static void __cdecl reclaim_teardown_pre(void)
     game = g_ddraw.gui_thread_id ? g_ddraw.gui_thread_id : s_owner_tid;
     s_tdTid = GetCurrentThreadId();
     if (game && s_tdTid != game) s_cTdForeign++;
-    /* THIS TEARDOWN'S VERDICT, NOT THE SESSION'S [the landing review]. The
-       suffix tested the cumulative counter, so one foreign teardown would have
-       marked every later game-thread one FOREIGN -- a line contradicting its
-       own two numbers for the rest of the session, which is the exact failure
-       mode this instrument was rebuilt to avoid. The cumulative view is
-       `tdforeign=` on the heartbeat, where it belongs. */
+    /* THIS TEARDOWN'S VERDICT, NOT THE SESSION'S. Testing the cumulative
+       counter would let one foreign teardown mark every later game-thread one
+       FOREIGN -- a line contradicting its own two numbers for the rest of the
+       session. The cumulative view is `tdforeign=` on the heartbeat, where it
+       belongs. */
     sfx = !game            ? " - game thread not known yet"
         : (s_tdTid != game) ? " - FOREIGN, see tagpu_reclaim.c"
                             : "";
@@ -359,18 +349,18 @@ static void __cdecl reclaim_teardown_pre(void)
 
    THE GENERATION IS BUMPED HERE AND NOT IN THE PRE HOOK, and the difference is
    a bug rather than a preference. The render thread is NOT stopped by
-   `pass_begin` -- `render_ogl.c` ignores its return value -- it is stopped by
-   `tagpu_overlay.c`'s `teardown_active()` gate. Since the G13t landing that
-   gate replays the flag as `pass_begin` LATCHED it, so the boundary is
-   `pass_begin` itself: a pass that had ALREADY BEGUN when the flag was set
-   latched 0 and runs its engine reads to completion while the pre hook waits
-   for it. That pass reaches `tagpu_native_frame` (thirteen lines and two subsystems later,
-   one of them file I/O) and would there see a generation bumped in the pre
-   hook, drop the template caches, and REFILL THEM IN THE SAME FRAME from
-   templates the cascade has not freed yet -- because the game thread is still
-   blocked waiting for that very pass. The stamp would then match for the rest
-   of the process and the caches would never drop again: exactly the stale-
-   template bug the generation exists to prevent, with an extra step.
+   `pass_begin` -- `render_vk.c` ignores its return value -- it is stopped by
+   `tagpu_overlay.c`'s `teardown_active()` gate. That gate replays the flag as
+   `pass_begin` LATCHED it, so the boundary is `pass_begin` itself: a pass that
+   had ALREADY BEGUN when the flag was set latched 0 and runs its engine reads
+   to completion while the pre hook waits for it. That pass reaches
+   `tagpu_native_frame` (thirteen lines and two subsystems later, one of them
+   file I/O) and would there see a generation bumped in the pre hook, drop the
+   template caches, and REFILL THEM IN THE SAME FRAME from templates the cascade
+   has not freed yet -- because the game thread is still blocked waiting for
+   that very pass. The stamp would then match for the rest of the process and
+   the caches would never drop again: exactly the stale- template bug the
+   generation exists to prevent, with an extra step.
 
    Bumped here, nothing can repopulate between the free and the bump: the
    overlay gate refuses every frame for the whole teardown, and the release
@@ -430,11 +420,9 @@ static void __cdecl reclaim_teardown_post(void)
        dead level's last packet and draw it over the menus and the loading
        screen.
 
-       ON WHATEVER THREAD ENTERED 0x491B60, and that is now recorded rather
-       than claimed -- by the PRE hook, which is where `s_tdTid` is written and
-       read (this hook only inherits the thread). It
-       said "game thread, like everything in this hook" as an assertion, which
-       is what the landing review objected to. The callee is built for it: its
+       ON WHATEVER THREAD ENTERED 0x491B60, which is recorded rather than
+       claimed -- by the PRE hook, which is where `s_tdTid` is written and
+       read (this hook only inherits the thread). The callee is built for it: its
        first act is the golden source's drop, one atomic increment that needs
        no thread identity, and it then tests the thread itself and declines to
        publish if it is not the game thread's. */
@@ -448,22 +436,21 @@ static void __cdecl reclaim_teardown_post(void)
    else, and tagpu_reclaim_teardown_active() below returns what this read
    decided rather than sampling it again.
 
-   IT USED TO BE TWO READS, and that was a use-after-free with the reader's own
-   completion counter as the alibi. render_ogl.c ignores this function's return
-   value by design (the driver must still run — input injection, the GL context
-   check, the flushes), so the "skip the engine reads" decision was re-made in
-   tagpu_overlay.c's gate, tens to hundreds of microseconds later. Clear
-   s_teardown in between — reclaim_teardown_post does exactly that — and the
-   gate answers 0 for a pass that already published `s_completed = s_started`
-   at the line below. That pass runs on into tagpu_native_frame and takes
+   TWO READS WOULD BE A USE-AFTER-FREE, with the reader's own completion
+   counter as the alibi. render_vk.c ignores this function's return value by
+   design (the driver must still run — input injection, the flushes), so the
+   "skip the engine reads" decision is made again in tagpu_overlay.c's gate,
+   tens to hundreds of microseconds later. Were s_teardown re-read there, a
+   clear in between — reclaim_teardown_post does exactly that — would make the
+   gate answer 0 for a pass that already published `s_completed = s_started`
+   at the line below. That pass would run on into tagpu_native_frame and take
    pointers while the fence says the reader is idle, so anything stamped after
-   it is freed under a live reader. Found by two reviewers on the G13t landing,
-   against tagpu_fogwide's grid buffers; it applied to this module's own queue
-   the same way. Latching makes the flip impossible rather than unlikely.
+   it would be freed under a live reader. Latching makes the flip impossible
+   rather than unlikely.
 
-   Both pre-existing behaviours are unchanged: a pass that began before the flag
-   was set still runs its engine reads to completion (which is what the pre
-   hook's wait is for), and one that begins after still skips them. */
+   A pass that began before the flag was set still runs its engine reads to
+   completion (which is what the pre hook's wait is for), and one that begins
+   after skips them. */
 int tagpu_reclaim_pass_begin(void)
 {
     if (!s_installed) { s_passTeardown = 0; return 1; }
@@ -495,7 +482,7 @@ void tagpu_reclaim_pass_end(unsigned frame_counter)
 
 /* Render thread, inside the pass. Returns the decision pass_begin LATCHED for
    this pass, never a fresh read of s_teardown — see pass_begin for the
-   use-after-free the fresh read allowed. */
+   use-after-free a fresh read would allow. */
 int tagpu_reclaim_teardown_active(void) { return s_installed && s_passTeardown; }
 
 unsigned tagpu_reclaim_level_gen(void) { return (unsigned)s_levelGen; }
@@ -526,8 +513,8 @@ int tagpu_reclaim_pass_passed(long stamp)
 
 /* Redirect one `call MEM_Free` to `fn`. The rel32 is computed against the
    CALL SITE, not against the buffer it is built in -- a rel32 encoded against
-   a stack address is a wild call, and this project has already paid for that
-   once (field notes: tagpu_detour_rel takes the address it will live at).
+   a stack address is a wild call (tagpu_detour_rel takes the address it will
+   live at).
    Refuses unless the site really is `E8 <rel to 0x4D85A0>`, so a different exe
    arms nothing. */
 static int redirect_memfree(unsigned int va, void (__cdecl *fn)(void*))

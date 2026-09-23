@@ -1,15 +1,11 @@
 /* THE REFERENCE TEXTURE: TA's own 8-bit screen, on the device, drawn nowhere.
    The header carries the argument.
 
-   THIS PASS USED TO BE THE FRAME'S BOTTOM LAYER -- it resolved TA's indices
-   through the presented palette and blitted them under everything we draw.
-   THE CLEAN CUT DELETED THAT DRAW and everything that served it: the pipeline,
-   the descriptor sets, the sampler, the vertex and uniform buffers, the quad,
-   `record`, and the GLSL the fork's GL lane shared with it. Nothing the engine
-   rasterises reaches the screen any more, and there is no lever to bring it
-   back -- the code is gone rather than gated.
+   THIS PASS DRAWS NOTHING: no pipeline, no descriptor sets, no sampler, no
+   `record`. Nothing the engine rasterises reaches the screen, and there is no
+   lever to bring it back -- the code is absent rather than gated.
 
-   WHAT IS LEFT IS THE UPLOAD, AND IT IS THE POINT. `tagpu_surf_capture` takes
+   WHAT IT DOES IS THE UPLOAD, AND IT IS THE POINT. `tagpu_surf_capture` takes
    TA's composed frame on the GAME thread, at the one point in the process where
    it is finished (tagpu_surf.h); this puts it on the device as a per-slot R8
    index image with its palette beside it, and `tagpu_vk_surf_engine_view`
@@ -18,13 +14,11 @@
    reference and never a layer.
 
    IT HAS NO CONSUMER IN THE TREE TODAY, and that is deliberate rather than an
-   oversight. The one consumer it had was the UI layer's composite, which went
-   with the cut. Keeping the upload alive costs one memcpy and one
+   oversight. Keeping the upload alive costs one memcpy and one
    vkCmdCopyBufferToImage per changed frame -- and the serial gate below means
    a still screen pays neither -- which is the price of having the golden
    source addressable from a shader the moment something wants to diff against
-   it. Dropping it would make the next comparison a rebuild rather than a call.
-   [The vulkan-only plan, THE CLEAN CUT.] */
+   it. Dropping it would make the next comparison a rebuild rather than a call. */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -35,9 +29,8 @@
     X(vkGetPhysicalDeviceMemoryProperties)
 
 /* NO PIPELINE, NO DESCRIPTORS, NO SAMPLER AND NO DRAW COMMAND. This list is
-   the whole of what an upload needs, and the twenty entry points the blit
-   needed went with it. A pass that resolves only what it uses cannot quietly
-   grow a draw back. */
+   the whole of what an upload needs. A pass that resolves only what it uses
+   cannot quietly grow a draw back. */
 #define DFNS(X) \
     X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) \
     X(vkBindBufferMemory) \
@@ -60,9 +53,8 @@ static int s_downOwed;
 static int s_downPaying;
 /* WHAT THIS PASS HAS ACTUALLY DONE, reported periodically rather than latched
    once: the two upload counts are the evidence that the surface and the palette
-   are gated SEPARATELY, which a one-shot line could not show and which the
-   landing review found this pass had wrong. A fade moves `pal` and not `bytes`;
-   a still frame moves neither. */
+   are gated SEPARATELY, which a one-shot line could not show. A fade moves
+   `pal` and not `bytes`; a still frame moves neither. */
 static unsigned s_nBytes, s_nPal, s_nFrames, s_saidAt;
 
 
@@ -241,8 +233,7 @@ static int build(const TAGPU_VKPASS* d)
        leave route E on the seam's flat clear -- the exact blind spot this pass
        exists to close -- while the log sent the next reader to look for a flip
        that is not there. tagpu_vk_pass.h says it in terms: the passes that must
-       not flip "no longer ask for this at all".
-       [FROM THE 4c-1 LANDING REVIEW.] */
+       not flip "no longer ask for this at all". */
     if (!resolve(d)) { plog(d, "surf: an entry point is missing"); return 0; }
 
 
@@ -285,14 +276,13 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (sf.w < 1 || sf.h < 1 || sf.w > TAGPU_SURF_MAXDIM || sf.h > TAGPU_SURF_MAXDIM) {
         plog(d, "surf: a %dx%d surface is outside what this pass carries - nothing drawn",
              sf.w, sf.h);
-        /* AND THE SLOT STOPS BEING ADDRESSABLE. This return used to leave
-           `haveSerial` set, so `tagpu_vk_surf_engine_view` would hand this
-           slot's image -- TAGPU_VK_SLOTS frames old -- to the UI layer as the
-           current frame. Unreachable today (the capture refuses an
-           out-of-range surface before it marks the snapshot usable, so
-           `tagpu_surf_frame` cannot return one), which is exactly why it would
-           have survived until an edit here made it live. [FOUND by landing
-           10's review.] */
+        /* AND THE SLOT STOPS BEING ADDRESSABLE: with `haveSerial` left set,
+           `tagpu_vk_surf_engine_view` would hand this slot's image --
+           TAGPU_VK_SLOTS frames old -- out as the current frame. Unreachable
+           today (the capture refuses an out-of-range surface before it marks
+           the snapshot usable, so `tagpu_surf_frame` cannot return one), which
+           is exactly why it is cleared here rather than left for an edit to
+           make live. */
         if (s_state == ST_READY) s_slot[slot].haveSerial = 0;
         return 0;
     }
@@ -317,10 +307,10 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        THE PALETTE IS ASKED SEPARATELY, AND IT HAS TO BE. It moves independently
        of the indices: a FADE is one picture held still while the table runs
        down to black, and a gamma change rescales every entry under a static
-       screen. Gating it on the BYTES' serial froze the bottom layer's colours
-       for the whole of a fade -- no fade at all, then a snap when something
-       finally redrew. That was not a bound, it was the hope that the two move
-       together, and they do not. [FROM THE 4c-1 LANDING REVIEW.] */
+       screen. Gating it on the BYTES' serial would freeze the colours for the
+       whole of a fade -- no fade at all, then a snap when something finally
+       redrew. That is not a bound, it is the hope that the two move together,
+       and they do not. */
     fresh    = !s->haveSerial || s->serial != sf.serial;
     freshPal = !s->haveSerial || s->palSerial != sf.palSerial;
     if (fresh || freshPal) {
@@ -331,8 +321,7 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            stops being true one day -- and the bound this file re-checks admits
            any 1..TAGPU_SURF_MAXDIM, so an odd-by-odd primary would produce an
            illegal offset and a palette read out of phase by a channel. The
-           staging buffer is sized with the slack.
-           [FROM THE 4c-1 LANDING REVIEW.] */
+           staging buffer is sized with the slack. */
         VkDeviceSize palOff = (((VkDeviceSize)sf.w * sf.h) + 3u) & ~(VkDeviceSize)3u;
 
         b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -403,11 +392,11 @@ int tagpu_vk_surf_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     }
 
     /* READIED, NEVER DRAWN. `sf.dx..sf.dh` -- where TA put this frame inside
-       the window -- are deliberately NOT kept any more: they existed for
-       `record`'s viewport and there is no record. The reference is the image
-       and its extent (`tagpu_vk_surf_engine_view` hands both out); where the
-       engine would have placed it on screen is a property of a composite that
-       no longer happens, and holding it would invite one back. */
+       the window -- are deliberately NOT kept: there is no `record` to need a
+       viewport. The reference is the image and its extent
+       (`tagpu_vk_surf_engine_view` hands both out); where the engine would
+       place it on screen is a property of a composite that does not happen,
+       and holding it would invite one back. */
     s_nFrames++;
     if (d->frame - s_saidAt >= 300) {
         s_saidAt = d->frame;

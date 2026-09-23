@@ -8,10 +8,10 @@
    state (`GAFGetCurrentFramePtrAddr 0x4B7EE0`). Both resolvers are pure
    reads: 0x4B7EE0 indexes the sequence's frame table with the state's frame
    number and never advances it, so a pass that owns a draw leaf does not
-   stall any animation (verified in the decompile, G13a).
+   stall any animation (verified in the decompile).
 
-   The decoder and the atlas were a private copy in tagpu_fx.c; features need
-   the same two, so they live here and both passes share them. An atlas is
+   The effects and feature passes need the same decoder and atlas, so they
+   live here and both passes share them. An atlas is
    caller-owned storage (its entry array and dimensions) so each pass keeps
    its own lifetime: the effects atlas churns as explosion sequences are
    freed, the feature atlas fills once per map and stays.
@@ -38,25 +38,23 @@
 #define TAGPU_AS_FRAME  0x00    /* u16 current frame index                  */
 #define TAGPU_AS_SEQ    0x08    /* sequence*                                */
 
-/* 640 SINCE 2026-09-21, WAS 512, AND THE REASON IS ONE PIXEL. The in-game HUD
-   bars are 513-px frames, so at 512 they failed `fw <= DECMAX` by one, fell to
-   `as_pixels`, and -- since the clean cut drops PK_PIXELS -- drew nothing at
-   all. 640 also takes in the shell's 640-wide title art that the gui hook's own
-   comment names as the thing past the old edge, and stops there: the next power
-   of two costs 1.5 MB of static for nothing this engine asks for.
-   COST: s_dec and s_pad grow from ~522 KB together to ~813 KB. The gui atlas is
-   2048 square, so a 513-wide entry was never the constraint. */
+/* 640, AND THE REASON IS ONE PIXEL. The in-game HUD bars are 513-px frames, so
+   at 512 they would fail `fw <= DECMAX` by one and fall to `as_pixels`, which
+   draws nothing (PK_PIXELS is dropped). 640 also takes in the shell's 640-wide
+   title art, and stops there: the next power of two costs 1.5 MB of static for
+   nothing this engine asks for.
+   COST: s_dec and s_pad are ~813 KB together (~522 KB at 512). The gui atlas is
+   2048 square, so a 513-wide entry is not its constraint. */
 #define TAGPU_GAF_DECMAX 640    /* largest frame edge the decoder accepts    */
 #define TAGPU_GAF_PADMAX 4      /* widest replicated border an atlas may ask  */
 
 typedef struct TAGPU_GAFENT {
     const void*    frame;       /* keyed on the header AND its pixel ptr:    */
     const void*    pix;         /* freed sequences get their address reused  */
-    /* AND ON THE SOURCE WINDOW, because (frame, pix, w, h) stopped being an
-       identity the moment a transformed draw could take a SUB-RECTANGLE of a
-       frame [landing 8e]. 0 is "the whole frame", which is what every 1:1
-       sprite, every cursor and every atlas_get passes, so their keys are
-       unchanged. A windowed capture packs (u0, v0, uw, uh) one byte each --
+    /* AND ON THE SOURCE WINDOW, because (frame, pix, w, h) is not an identity
+       once a transformed draw can take a SUB-RECTANGLE of a frame. 0 is "the
+       whole frame", which is what every 1:1 sprite, every cursor and every
+       atlas_get passes. A windowed capture packs (u0, v0, uw, uh) one byte each --
        see `scale_capture`'s caller, which refuses to claim a window it cannot
        key. Without this, two windows of one frame resampled to the same
        destination size collide, `atlas_find` runs BEFORE `atlas_put`, and the
@@ -102,10 +100,9 @@ typedef struct TAGPU_GAFATLAS {
        is only its GL NAME and is 0 on a lane that has no GL at all: under
        `renderer=vulkan` the entries, the shelf packer and the CPU mirror are
        all still built and a second backend uploads the mirror itself. Keying
-       existence on the handle is what made every sprite pass gather geometry
+       existence on the handle would make every sprite pass gather geometry
        and find `atlas=0` there -- `glGenTextures` is a direct opengl32 import,
-       so with no context it does not fail loudly, it leaves the name at 0 and
-       `tagpu_gaf_atlas_create` refused. [The vulkan-only plan, landing 4b-2.] */
+       so with no context it does not fail loudly, it leaves the name at 0. */
     int           made;         /* the atlas is laid out and usable          */
     unsigned int  tex;          /* its GL_R8 name, or 0 where there is no GL */
     int           dim;          /* square edge in texels                     */
@@ -156,20 +153,16 @@ typedef struct TAGPU_GAFATLAS {
        uploaded with `pad` replicated edge texels on all four sides and its
        cell -- frame plus border -- is allocated at a multiple of `align`
        texels in both origin and size. 0 for either means 1, the sprite
-       atlases' layout (one texel of border, G13i). The unit atlas asks for
+       atlases' layout (one texel of border). The unit atlas asks for
        4 and 4 so the twin can be MIPMAPPED to `mip` levels: with cells
        4-aligned and 4 texels of the frame's own edge around it, a mip texel
        at level <= 2 that touches a frame is made only of that frame's texels
        (tools/tascene UNIT_PAD says the same). `mip` > 0 means the twin is
        MIPPED to that top level and sampled trilinearly, 0 that it is NEAREST
-       and 1:1. IT IS NOW A SHAPE, NOT A SETTING: it described the GL twin's
-       own sampler (GL_LINEAR_MIPMAP_LINEAR, MAX_LEVEL = mip, 4x anisotropic
-       where the extension answered) and the levels that twin regenerated after
-       every batch the restorer painted, and there is no such twin since
-       11-5e-2. What reads it is `tagpu_r3d_atlas_restore_list`, which publishes
+       and 1:1. IT IS A SHAPE, NOT A SETTING: nothing on this side samples
+       with it. What reads it is `tagpu_r3d_atlas_restore_list`, which publishes
        it as `restoreMips` so the OTHER lane builds a chain of the same depth
-       -- see `rgbAniso` below for the other half of that contract, which was
-       pinned until 11-5e-2c gave it a writer. */
+       -- see `rgbAniso` below for the other half of that contract. */
     int           pad, align, mip;
     /* Classic++ (renderers.md 4b Option 4): the RESTORED TWIN -- same dim,
        same shelf, GL_RGBA8 -- painted lazily from a queue that every miss
@@ -178,10 +171,8 @@ typedef struct TAGPU_GAFATLAS {
        on the index elsewhere; a recycle clears it. `prio` orders the queue
        against the other jobs (the terrain's is 0).
 
-       `rgb` IS 0 FOR THE LIFE OF THE PROCESS AS OF 11-5e-2. Its one non-zero
-       writer was `tagpu_gaf_atlas_restore`, which is gone, and it could not
-       have run in any case: it returned at `!a->tex`, and `tex` has been 0
-       since 11-4c (see `tagpu_gaf_atlas_create`). So EVERY pass that gates
+       `rgb` IS 0 FOR THE LIFE OF THE PROCESS: nothing in the tree writes it
+       non-zero. So EVERY pass that gates
        its restored branch on `rgb` publishes 0 every frame, and there are
        THREE of them, not one:
            tagpu_feat.c      `s_pub.restored = (s_atlas.rgb && ...)`
@@ -194,35 +185,32 @@ typedef struct TAGPU_GAFATLAS {
        THIS IS THE PIN UNDER THE PIN. Feeding the published restore list is
        not enough to make the other lane's restore run: with `restored` 0 its
        consumers take the "no restore" arm before they ever look at the list.
-       That branch and the mirror below go together in 11-5e-2b; the field is
-       kept until then so the consumers can be unwound with their producer in
-       view. */
+       The field is kept so the consumers can be unwound with their producer
+       in view. */
     unsigned int  rgb;
-    /* BUMPED EVERY TIME `rgb` IS CREATED, and never otherwise: a re-arm freed
-       the texture and made it again, resetting the restorer's painted count
+    /* BUMPED EVERY TIME `rgb` IS CREATED, and never otherwise: a re-arm frees
+       the texture and makes it again, resetting the restorer's painted count
        to 0 -- so a painted count alone is not a content key across that seam.
-       This is the discontinuity such a count cannot see. Pinned with `rgb`
-       since 11-5e-2 took the only creator; kept for the same reason. */
+       This is the discontinuity such a count cannot see. Pinned with `rgb`,
+       which nothing creates; kept for the same reason. */
     unsigned      rgbGen;
     int           prio;
     /* frames whose shorter edge is under this are never queued for restore:
        below the model's receptive field there is nothing to restore, so the
-       work returns approximately its input (G15-0's verdict, gui-renderer.md
-       3.9). 0 = no floor, which is every atlas but the UI's. */
+       work returns approximately its input (gui-renderer.md 3.9). 0 = no
+       floor, which is every atlas but the UI's. */
     int           restoreMinEdge;
     int           restoreFailed;
-    /* THE NEXT THREE HAVE NO WRITER AND NO READER LEFT IN THE TREE -- 11-5e-2
-       deleted the GL restorer that was the only one of either. They are 0 and
-       NULL for the life of the process. Kept, not deleted, because 11-5e-2b
-       unwinds this struct's restore half as one piece and a field removed
+    /* THE NEXT THREE HAVE NO WRITER AND NO READER IN THE TREE. They are 0 and
+       NULL for the life of the process. Kept, not deleted, because this
+       struct's restore half is to be unwound as one piece and a field removed
        early is a field whose consumers are found by the compiler one at a
-       time. `pal` in particular was already WRITE-ONLY before that: the
-       tileability test it names takes its palette from its caller
+       time. The tileability test `pal` names takes its palette from its caller
        (`tagpu_rglsl_tileable(px, w, h, pal, key)`), never from here. */
     int           dumpedN;      /* [PINNED 0] entries when the dump last wrote */
-    const unsigned char* pal;   /* [PINNED NULL] was the tileability palette   */
+    const unsigned char* pal;   /* [PINNED NULL] the tileability palette       */
     unsigned      palSerial;    /* [PINNED 0] pal serial the twin was made at  */
-    /* THE CPU MIRROR (Phase G / G19e, the Vulkan lane). `dim` x `dim` bytes
+    /* THE CPU MIRROR (Phase G, the Vulkan lane). `dim` x `dim` bytes
        holding exactly what has been uploaded to `tex`, written by the same
        atlas_paint that writes GL and by nothing else, so a second backend can
        upload the SAME texels rather than decode the art a second time. NULL
@@ -236,54 +224,34 @@ typedef struct TAGPU_GAFATLAS {
        for the re-decode again. */
     unsigned char* mirror;
     unsigned      mirrorSerial;
-    /* THE RESTORED TWIN'S MIRROR WENT IN 11-5e-2b, and with it `mirrorRgb`,
-       `mirrorRgbDim`/`Mip`/`Mips`, `mirrorRgbSerial`, `mirrorRgbRows`,
-       `mirrorRgbFbo`, `mirrorRgbFailed`, `mirroredPainted` and
-       `mirroredRgbGen`. It was not the same mechanism as `mirror` above:
-       `mirror` is written by the paint, because the CPU holds the source
-       bytes, while the restored twin's texels were the RESTORER'S OUTPUT and
-       existed only on the GPU -- so the only way to them was a `glReadPixels`
-       read-back. `oglu_load_dll` has no caller, so opengl32.dll is never in
-       the process, so the arm refused before its own calloc and the buffer was
-       NULL for the life of every process. What a second backend gets instead
-       is the published restore list below, and it paints its own twin from it.
-       [The allocated-shape pair `mirrorRgbDim`/`Mip` existed because this
-       buffer was deliberately never freed while `mip` DOES change -- a demote
-       on a GL with no glGenerateMipmap, raised back on the next context reset
-       -- so sizing a memset off the CURRENT pair could write a 21 MB chain
-       into a 16 MB allocation. That hazard goes with the buffer.] */
+    /* THERE IS NO MIRROR OF THE RESTORED TWIN. `mirror` above is written by
+       the paint, because the CPU holds the source bytes; restored texels are
+       the RESTORER'S OUTPUT and exist only on the GPU of the lane that paints
+       them. A second backend gets the published restore list below instead,
+       and paints its own twin from it. */
     /* THE ANISOTROPY THE TWIN IS CONFIGURED FOR. Written every arm beat by
        `tagpu_r3d_atlas_restore_want` from `tagpu_classicpp_light()->aniso`.
 
-       IT WAS [PINNED 0.0f] UNTIL 11-5e-2c, and 11-5e-2's review left a warning
-       here calling it a loaded gun for whoever restored the feed: the consumer
-       stands the whole frame down on `h.atlasRgbAniso != s_twinAniso`, so a
-       field reporting 0 against a sampler built at 4 draws nothing. That was
-       right, and one detail of it was not, which is why the fix is not the one
-       this comment asked for. `s_twinAniso` is NOT `aniso=`; it is `aniso=`
-       CLAMPED BY THE DEVICE, and it is 0.0f wherever the extension is absent
-       or the ceiling is lower. So publishing the constant this file documents
-       would have swapped one silent stand-down for another, on exactly the
-       machines that can do least about it.
+       IT CARRIES THE KNOB, NOT THE APPLIED VALUE. The consumer stands the
+       whole frame down when the two ends disagree, and the applied value
+       `s_twinAniso` is NOT `aniso=`; it is `aniso=` CLAMPED BY THE DEVICE,
+       and it is 0.0f wherever the extension is absent or the ceiling is lower.
+       So a published constant would stand the frame down silently, on exactly
+       the machines that can do least about it.
 
-       WHAT IT CARRIES INSTEAD IS THE KNOB, and the consumer compares it
-       against the knob it read rather than against what the device allowed
-       (`s_twinAnisoWant`). The test then means "the two ends are configured
-       apart", which is the one thing that can still go wrong -- a knob edited
-       mid-session, after a sampler that cannot be rebuilt mid-frame -- and
-       stops meaning "the device lacks a feature". [11-5e-2's review left the
-       warning; 11-5e-2c discharged it.] */
+       The consumer therefore compares this against the knob it read rather
+       than against what the device allowed (`s_twinAnisoWant`). The test then
+       means "the two ends are configured apart", which is the one thing that
+       can still go wrong -- a knob edited mid-session, after a sampler that
+       cannot be rebuilt mid-frame -- and never "the device lacks a
+       feature". */
     float          rgbAniso;
-    /* THE PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d), which is
-       the OTHER answer to the same question the mirror above answers -- and
-       since 11-5e-2b part 2 it is the ONLY answer left in the tree. A second
-       backend could either read this lane's restored texels back or run the
-       restore itself; the read-back is gone, so this is it. It is also the
-       cheaper one by a
-       whole read-back -- what crosses is the REQUEST rather than the picture.
+    /* THE PUBLISHED RESTORE LIST: how a second backend gets restored art. It
+       runs the restore itself, so what crosses is the REQUEST rather than the
+       picture.
 
-       It holds the very frames this atlas queued for the GL restorer, in the
-       order it queued them, because three of a frame's eleven numbers are
+       It holds the very frames this atlas queues for restore, in the order it
+       queues them, because three of a frame's eleven numbers are
        content-dependent: `wrap` is tagpu_rglsl_tileable() over the frame's own
        texels against the ART palette, `key` is the frame header's, and the
        padding comes from the atlas's cell layout. Those are this side's facts;
@@ -307,15 +275,15 @@ typedef struct TAGPU_GAFATLAS {
        `rlistRepaint` is 1 only for the palette-move generation, where the
        destination already holds a restore and is recoloured in place.
 
-       AND IT HAS NO WRITER THAT PASSES 1 (found by the 11-5e-2c review). The
-       only assignment is `rlist_restart`'s parameter, and both call sites pass
-       0 -- the arm and the overflow restart. So the palette-move generation
+       AND IT HAS NO WRITER THAT PASSES 1. The only assignment is
+       `rlist_restart`'s parameter, and both call sites pass 0 -- the arm and
+       the overflow restart. So the palette-move generation
        this paragraph describes does not exist yet, `rlistRepaint` is a
        constant 0, and every consumer's `repaint` term is dead. The consequence
        is real rather than cosmetic: `if (!repaint) s_arHave = 0;` means every
-       generation change blanks the destination, which is why the consumers had
-       to stop treating "no twin" as "draw nothing" (see `tagpu_vk_unit.c`'s
-       restored gate). Either give it the palette-move writer it describes, or
+       generation change blanks the destination, which is why the consumers do
+       not treat "no twin" as "draw nothing" (see `tagpu_vk_unit.c`'s restored
+       gate). Either give it the palette-move writer it describes, or
        delete the term; it is documented as live here so the next reader does
        not re-derive that it is not.
 
@@ -325,10 +293,7 @@ typedef struct TAGPU_GAFATLAS {
        repaint 0) rather than growing, so the memory is a function of `max`
        and the recovery is the same path as the arm. Armed by
        tagpu_gaf_atlas_restore_vk and NULL otherwise, so an atlas nobody asks
-       pays nothing. (While it was armed the read-back mirror stood down,
-       because the two were answers to one question and doing both paid for the
-       mirror to be ignored. There is no read-back to stand down since
-       11-5e-2b part 2, so the arm now competes with nothing.) */
+       pays nothing. */
     TAGPU_RGLSL_FRAME* rlist;
     int           rlistN, rlistCap;
     unsigned      rlistGen;
@@ -341,11 +306,9 @@ typedef struct TAGPU_GAFATLAS {
        which `tagpu_feat.c` can do, because it recycles a full atlas and then
        re-arms it on the next line -- would otherwise tell
        the consumer to KEEP a destination this lane has just cleared. A
-       consumer blanks whenever this has moved, whatever the flag says.
-       [FROM THE LANDING-7d REVIEW.] */
+       consumer blanks whenever this has moved, whatever the flag says. */
     unsigned      rlistBlanks;
-    int           rlistWant;       /* armed. (It also stood the read-back
-                                      down, until 11-5e-2b part 2 removed it) */
+    int           rlistWant;       /* armed                                  */
     int           rlistFailed;     /* latched, and said once                 */
     /* open-addressed index over `ents`, keyed on the frame header address:
        the lookup runs once per emitted sprite and the feature pass emits
@@ -402,11 +365,9 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_get(TAGPU_GAFATLAS* a, const unsigned char* 
    the lookup alone, NULL when absent.
 
    `win` is the SOURCE WINDOW and 0 means "the whole frame" -- which is what
-   atlas_get and every 1:1 caller pass, so their keys are exactly what they were.
-   It exists because a transformed draw can take a sub-rectangle of a frame, and
-   (frame, pix, w, h) alone cannot tell two such windows apart. [Landing 8e; this
-   comment said "keyed like atlas_get on (frame, pix, w, h)" and was left stale by
-   the commit that changed the signature three lines below it.] */
+   atlas_get and every 1:1 caller pass. It exists because a transformed draw can
+   take a sub-rectangle of a frame, and (frame, pix, w, h) alone cannot tell two
+   such windows apart. */
 const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, const void* pix,
                                         int w, int h, unsigned win,
                                         unsigned char ck, const unsigned char* pixels);
@@ -426,8 +387,7 @@ void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a);
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);
 /* give back BOTH heap buffers an atlas owns (`mirror` and `rlist`) and clear
    the latches that described them; for a caller about to re-lay the struct out
-   from zero, which would otherwise drop the pointers. `rlist` joined in
-   11-5e-2c, once the bound gave it a single allocation site and no other free */
+   from zero, which would otherwise drop the pointers */
 void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a);       /* GL context replaced   */
 /* create the GL texture now rather than on the first frame that atlases a
    sprite — a pass whose shader samples the atlas must never bind texture 0 */
@@ -447,38 +407,30 @@ int  tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a);
    was refused, and the atlas then goes on working without one. Idempotent. */
 int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
 
-/* `tagpu_gaf_atlas_mirror_rgb` AND `_step` WENT IN 11-5e-2b, with the buffer
-   they filled. They armed and drove a `glReadPixels` read-back of the restored
-   twin so that a second backend could be handed its texels. The rule that
-   governed WHERE the step had to go is worth keeping, because it is the
-   constraint on anything that hands restored texels across a thread: step it
+/* THE RULE FOR ANYTHING THAT HANDS RESTORED TEXELS ACROSS A THREAD: step it
    where the paint is already visible to this frame's draws -- after the
    restorer has run and before the ops that sample the twin -- so that what
    crosses is byte-identical to what those ops sampled rather than a frame
-   behind them. The route a second backend uses now is the list below, which
-   it paints for itself and so needs no such rule. */
+   behind them. The list below needs no such rule: the second backend paints
+   from it for itself. */
 
-/* Ask for the PUBLISHED RESTORE LIST (the Vulkan-only plan's landing 7d). It
-   used to be an alternative to the read-back above and to stand it down;
-
-   It arms only while Classic++'s `assets=` knob is on -- the master arm and
-   the key the render-options screen's `Undithered assets` row writes -- so
-   one question decides whether the art is restored and no second lever has
-   to be armed by hand. Poll it on the same beat as
-   the mirror -- the knob can move mid-session, and arming then frees the
-   16 MB the read-back had already taken.
+/* Ask for the PUBLISHED RESTORE LIST. It arms only while Classic++'s
+   `assets=` knob is on -- the master arm and the key the render-options
+   screen's `Undithered assets` row writes -- so one question decides whether
+   the art is restored and no second lever has to be armed by hand. Poll it on
+   the same beat as the mirror -- the knob can move mid-session.
 
    Seeded with every entry the atlas holds right now, so it is correct from the
    instant it exists in the same sense the mirror is: a consumer starting from
    index 0 restores exactly what this lane has, whatever has already been
    painted here. Returns 1 when armed (and on every later call), 0 when the
    lever is absent or the memory was refused -- and the atlas then goes on
-   reading back as before. Render thread only. */
+   working without one. Render thread only. */
 int  tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a);
 
 /* THE PALETTE MOVED UNDER THE RESTORED TEXELS, so every frame of the list has
    to be painted again against the new one -- the path `rlistRepaint`'s comment
-   above describes and which had no caller until the UI atlas needed it.
+   above describes, which the UI atlas takes.
    A REPAINTING generation: the destination KEEPS what it holds and the
    restorer overwrites it frame by frame, so nothing is blanked and the art
    does not flash through a cleared image on the way. `rlistBlanks` therefore
@@ -486,41 +438,31 @@ int  tagpu_gaf_atlas_restore_vk(TAGPU_GAFATLAS* a);
    A no-op on an atlas with no list. Render thread only. */
 void tagpu_gaf_atlas_restore_repalette(TAGPU_GAFATLAS* a);
 
-/* `tagpu_gl_rgba_readback` was declared here -- an RGBA8 GL texture read back
-   through a caller-owned FBO -- and went in 11-5e-2 with its only two callers,
-   which were the level-0 and mip halves of the step above. There is no texture
-   left for it to read: `rgb` is 0 for the life of the process. */
 
 /* A RESTORED TWIN IS THE WHOLE MIP CHAIN when the atlas is mipped, because it
    is sampled LINEAR_MIPMAP_LINEAR and a consumer holding level 0 alone draws a
    different picture wherever the art is minified -- which on the unit atlas is
    ordinary play. Level L is `dim >> L` square, RGBA8, at `tagpu_gaf_mip_off`;
-   the whole chain is `tagpu_gaf_mip_chain` bytes. These two are still the
-   layout contract after 11-5e-2b took the mirror they were written for:
-   `tagpu_vk_restore.c` sizes its dump with them. (`mirrorRgbMips`, the top
-   level actually read back, went with the read-back; the consuming lane knows
-   its own chain depth from `restoreMips`.) */
+   the whole chain is `tagpu_gaf_mip_chain` bytes. These two are the layout
+   contract: `tagpu_vk_restore.c` sizes its dump with them, and the consuming
+   lane knows its own chain depth from `restoreMips`. */
 /* THE ANISOTROPY A RESTORED TWIN IS FILTERED WITH. `rgbAniso` below carries it
-   and, since 11-5e-2c, carries the CONFIGURED ratio rather than an applied one:
+   and carries the CONFIGURED ratio rather than an applied one:
    `tagpu_classicpp_light()->aniso`, the same knob the consumer's own sampler is
    built from. Written every arm beat, so a knob edited mid-session is seen.
 
-   WHY NOT THE APPLIED VALUE, which is what this said until 11-5e-2c. There is
-   no second backend to disagree with any more -- the lane that reads this list
-   paints the twin itself, with its own sampler -- so "what was actually
-   applied" is the consumer's own value and the test would compare it against
-   itself. What can still go wrong is the two ends being CONFIGURED apart, and
-   the knob is what catches that. */
-/* [NO CONSUMER, AND 11-5e-2c DECIDED AGAINST GIVING IT ONE] The ratio the two
-   lanes had to agree on. Its only user was `tagpu_gaf.c`'s GL
-   `glTexParameterf`, deleted with the restorer; the Vulkan lane reads
+   WHY NOT THE APPLIED VALUE. The lane that reads this list paints the twin
+   itself, with its own sampler, so "what was actually applied" is the
+   consumer's own value and the test would compare it against itself. What
+   can still go wrong is the two ends being CONFIGURED apart, and the knob is
+   what catches that. */
+/* [NO CONSUMER] The default ratio. The Vulkan lane reads
    `tagpu_classicpp_light()->aniso`, which has the same default and is a knob
    rather than a constant.
 
-   THIS COMMENT USED TO SAY `rgbAniso` MUST CARRY THIS CONSTANT once the feed
-   was back, and the landing that brought the feed back did not do that, on
-   purpose. Publishing a constant means standing the unit pass down on every
-   device without anisotropic filtering, where the consumer's applied value is
+   `rgbAniso` DOES NOT CARRY THIS CONSTANT, on purpose. Publishing a constant
+   means standing the unit pass down on every device without anisotropic
+   filtering, where the consumer's applied value is
    0.0f and can be nothing else -- drawing no unit at all rather than an
    unfiltered one, over a feature the machine does not have. The knob is
    published instead. Kept as the documented default and as the number the

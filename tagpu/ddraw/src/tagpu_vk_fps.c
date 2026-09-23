@@ -1,6 +1,5 @@
 /* tagpu_vk_fps.c -- the frame-rate readout, drawn by Vulkan. Contract:
-   tagpu_vk_fps.h. Phase G / G19d: the first pass of the fork's renderer to run
-   on the second backend end to end, and the smallest one that exercises a
+   tagpu_vk_fps.h. The smallest pass of the fork's renderer that exercises a
    buffer, a texture, a shader and a draw with nothing depending on it.
 
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS, and that is the whole point.
@@ -371,12 +370,10 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     gp.pRasterizationState = &rs;
     gp.pMultisampleState = &ms;
     /* A DEPTH STATE THAT TESTS NOTHING AND WRITES NOTHING, and it is required
-       rather than tidy: since G19e the seam's render pass carries a depth
-       attachment, and a pipeline built against a subpass that has one may not
-       leave pDepthStencilState null. This pass's GL twin calls neither
-       glEnable(GL_DEPTH_TEST) nor glDepthMask, so all three flags are off and
-       the picture is what it was before the attachment existed -- which is what
-       its own A/B re-measures. */
+       rather than tidy: the seam's render pass carries a depth attachment, and
+       a pipeline built against a subpass that has one may not leave
+       pDepthStencilState null. This pass's GL twin calls neither
+       glEnable(GL_DEPTH_TEST) nor glDepthMask, so all three flags are off. */
     memset(&ds, 0, sizeof ds);
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = VK_FALSE;
@@ -537,10 +534,9 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
         VkBufferImageCopy rg;
         /* THE ONLY WAIT IN THIS FILE, AND ITS COST IS REAL RATHER THAN NIL.
-           [SHARPENED BY REVIEW 2026-09-15.] Frames already submitted may still
-           be sampling this image, and a barrier in THIS command buffer orders
-           nothing about them, so the ordering has to come from outside it. That
-           part is sound.
+           Frames already submitted may still be sampling this image, and a
+           barrier in THIS command buffer orders nothing about them, so the
+           ordering has to come from outside it. That part is sound.
 
            WHAT IT COSTS, said rather than implied: this is the render thread,
            and the game thread waits INFINITE on the render thread across a mode
@@ -554,12 +550,12 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
            THE BY-DESIGN ALTERNATIVE, and why it is not here: a second image
            uploaded into while the first is sampled, swapped when every slot has
-           turned over. G19e's tagpu_vk_scaffold.c had to answer this for a pass
-           that uploads EVERY frame, and found something simpler than a swap: one
-           image per FRAME SLOT, which the seam's fence already proves free, so
-           there is no in-flight problem left to move. This file is deliberately
-           not changed to match -- twenty stalls a session buys nothing back, and
-           this atlas is 128 KB against that pass's whole viewport.
+           turned over. tagpu_vk_scaffold.c, a pass that uploads EVERY frame,
+           uses something simpler than a swap: one image per FRAME SLOT, which
+           the seam's fence already proves free, so there is no in-flight problem
+           left to move. This file deliberately does not match it -- twenty
+           stalls a session buys nothing back, and this atlas is 128 KB against
+           that pass's whole viewport.
 
            A FAILED WAIT IS NOT AN UPLOAD. If the device is lost, writing into
            an image a live frame may be sampling is exactly what the wait was
@@ -609,13 +605,12 @@ int tagpu_vk_fps_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (!s_agen) return 0;
 
     /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST.
-       [FROM THE REVIEW'S SECOND PASS 2026-09-15.] It used to be claimed the
-       moment the quads arrived, and every `return 0` between there and here --
+       Claimed when the quads arrive, every `return 0` between there and here --
        a build that failed, the vertex bound, a device that would not go idle for
-       the atlas upload, an atlas never uploaded -- left it claimed while this
-       pass drew NOTHING. The seam would then have captured a bare clear against
-       a GL half that has text, and reported every text pixel as differing: a
-       port failure that is really an oracle failure, which is the worst kind of
+       the atlas upload, an atlas never uploaded -- would leave it claimed while
+       this pass drew NOTHING. The seam would then capture a bare clear and
+       report every text pixel as differing: a port failure that is really an
+       oracle failure, which is the worst kind of
        answer an oracle can give. Claimed here, the flag means "this pass is
        about to draw this frame" and nothing weaker; a frame that cannot draw
        simply loses its half, and `tools/vk-ab.py` says which one is missing. */
