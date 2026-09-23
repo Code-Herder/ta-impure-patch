@@ -1419,17 +1419,49 @@ static int pub_seed_snap(SURF* s)
 
 /* a sprite `publish` just sent onto a snapshot surface, remembered with a copy
    of its plane; past OVL_MAX the surface is no longer one we can rebuild */
+/* the held sprite of this frame, or NULL: the plane a redraw with no fresh
+   capture can be replayed from (`gaf_capture` captures nothing for a frame the
+   seen table already holds) */
+static const OVL* ovl_plane_of(const SURF* s, const OP* op)
+{
+    int k;
+    for (k = 0; k < s->novl; k++)
+        if (s->ovl[k].frame == op->frame && s->ovl[k].key == op->fkey &&
+            s->ovl[k].fw == op->fw && s->ovl[k].fh == op->fh) return &s->ovl[k];
+    return NULL;
+}
+
 static void ovl_add(SURF* s, const OP* op)
 {
     OVL* v;
+    const OVL* held;
+    int k;
     if (!s->snap) return;
+    /* THE SAME SPRITE AT THE SAME PLACE IS THE SAME PIXELS: a redraw replaces
+       nothing, so it takes no entry. Without this every repaint that redraws
+       a title would spend one, and eight would drop the snapshot.
+       [The review of 878d7bf, finding 3.] */
+    for (k = 0; k < s->novl; k++) {
+        v = &s->ovl[k];
+        if (v->frame == op->frame && v->key == op->fkey && v->fw == op->fw && v->fh == op->fh &&
+            v->dx == op->dx && v->dy == op->dy && v->l == op->l && v->t == op->t &&
+            v->r == op->r && v->b == op->b && v->ck == op->ck) {
+            /* ...but it is the NEWEST draw now, and order is what a replay
+               keeps: move it to the end so whatever it covers stays under it */
+            OVL keep = *v;
+            memmove(v, v + 1, (size_t)(s->novl - k - 1) * sizeof(OVL));
+            s->ovl[s->novl - 1] = keep;
+            return;
+        }
+    }
+    held = ovl_plane_of(s, op);
     if (!s->ovl) s->ovl = (OVL*)calloc(OVL_MAX, sizeof(OVL));
-    if (!s->ovl || s->novl >= OVL_MAX || !op->glen) { snap_free(s); return; }
+    if (!s->ovl || s->novl >= OVL_MAX || (!op->glen && !held)) { snap_free(s); return; }
     v = &s->ovl[s->novl];
-    v->plane = (unsigned char*)malloc(op->glen);
+    v->glen = op->glen ? op->glen : held->glen;
+    v->plane = (unsigned char*)malloc(v->glen);
     if (!v->plane) { snap_free(s); return; }
-    memcpy(v->plane, s_gafBuf + op->goff, op->glen);
-    v->glen = op->glen;
+    memcpy(v->plane, op->glen ? s_gafBuf + op->goff : held->plane, v->glen);
     v->l = op->l; v->t = op->t; v->r = op->r; v->b = op->b;
     v->dx = op->dx; v->dy = op->dy; v->fw = op->fw; v->fh = op->fh; v->ck = op->ck;
     v->frame = op->frame; v->key = op->fkey;
@@ -1662,8 +1694,27 @@ static struct { const void* fr; unsigned key, off, len; } s_gcap[GCAP_N];  /* th
    `s_nops = 0` and call this; the string scratch used to be reset beside
    `s_nops` at each of them instead, which is one more place for the next
    scratch to be forgotten. */
+/* HOW FAR `publish` GOT THROUGH THIS WINDOW: every op below this index was
+   handled (published, or deliberately skipped), every op from it on was not.
+   0 when `publish` never ran or returned before its loop. */
+static int s_pubReached = 0;
+static SURF* surf_by_base(unsigned base);
 static void ops_window_reset(void)
 {
+    /* A SNAPSHOT IS ITS SURFACE ONLY WHILE EVERY DRAW ON IT REACHED `ovl`. An
+       op recorded into this window and never published -- the window thrown
+       away on a stall, `publish` returning on a full queue or arena, or not
+       running at all -- drew pixels the rebuild would not replay, so the
+       snapshot goes with the window. By construction rather than by the
+       stall being rare: `consumer_stalled` fires on exactly the way out of a
+       game, which is when the post-game screen builds.
+       [The review of 878d7bf, finding 1.] */
+    int k;
+    for (k = s_pubReached; k < s_nops; k++) {
+        SURF* sv = surf_by_base(s_ops[k].base);
+        if (sv && sv->snap) snap_free(sv);
+    }
+    s_pubReached = 0;
     s_nops = 0;
     s_winGameFlip = 0;
     s_strUsed = 0;
@@ -2097,6 +2148,7 @@ static void publish(unsigned flipSurf)
     int i;
     SURF* fs;
     int vl = 0, vt = 0, vr = -1, vb = -1;
+    s_pubReached = 0;
     if (!g_gui_draw) return;
     if (consumer_stalled()) return;
     dedup();
@@ -2267,6 +2319,7 @@ static void publish(unsigned flipSurf)
         s_vpClears++;
     }
     for (i = 0; i < s_nops && !s_pubOverflow; i++) {
+        s_pubReached = i;
         OP* op = &s_ops[i];
         SURF* s;
         TAGPU_PUBOP* o;
@@ -2317,7 +2370,7 @@ static void publish(unsigned flipSurf)
            `pub_seed` could send it. */
         if (s->snap && !(op->kind == OP_GAF && !op->world && op->frame && op->fw && op->fh &&
                          op->fw <= TAGPU_GAF_DECMAX && op->fh <= TAGPU_GAF_DECMAX &&
-                         op->fkey && op->glen))
+                         op->fkey && (op->glen || ovl_plane_of(s, op))))
             snap_free(s);
         if (op->world) { s_worldDropped++; continue; }
         if (!s->seeded && !pub_seed(s)) return;
@@ -2367,9 +2420,13 @@ static void publish(unsigned flipSurf)
                said the by-design fix wanted `MEM_Free`'s block size, which the
                observer is not handed. It wanted a different hook instead.] */
             int have;
+            const OVL* held = NULL;
             key = (const void*)(size_t)op->fkey;
             if (!key) goto as_pixels;           /* it was not readable when drawn */
             have = seen_frame(op->frame, key, 0);
+            /* a snapshot surface's redraw with no fresh plane sends the one it
+               holds -- the precheck above admitted it on exactly that */
+            if (!have && !op->glen && s->snap) held = ovl_plane_of(s, op);
             /* A FIRST SIGHT WITH NO PLANE IN HAND PUBLISHES ITS BOX, and it is
                decided BEFORE the op is opened so a half-filled sprite can never
                be committed. Two ways to get here and they mean opposite things:
@@ -2381,7 +2438,7 @@ static void publish(unsigned flipSurf)
                without its atlas identity, in a publish that is already seeding
                every surface whole, and it self-heals on the next window.
                ["free" corrected by the landing review.] */
-            if (!have && !op->glen) {
+            if (!have && !op->glen && !held) {
                 if (op->sgen != s_seenGen) g_guiq.gafreseed++;
                 else                       g_guiq.gafnoplane++;
                 goto as_pixels;
@@ -2391,9 +2448,10 @@ static void publish(unsigned flipSurf)
             o->sl = op->dx; o->st = op->dy; o->fw = op->fw; o->fh = op->fh; o->ck = op->ck;
             o->frame = op->frame; o->pix = key;
             if (!have) {
-                unsigned char* dst = pub_bytes(o, op->glen);
+                unsigned n = op->glen ? op->glen : held->glen;
+                unsigned char* dst = pub_bytes(o, n);
                 if (!dst) return;
-                memcpy(dst, s_gafBuf + op->goff, op->glen);
+                memcpy(dst, op->glen ? s_gafBuf + op->goff : held->plane, n);
                 seen_frame(op->frame, key, 1);
             }
             pub_commit();
@@ -2751,6 +2809,8 @@ static void publish(unsigned flipSurf)
         if (!pub_surface_bytes(s, op->l, op->t, op->r, op->b, o)) return;
         pub_commit();
     }
+    /* the loop also stops on an overflow an op before `i` raised */
+    s_pubReached = i;
 }
 
 /* ---- the census, at the flip ------------------------------------------- */

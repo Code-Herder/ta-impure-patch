@@ -297,8 +297,12 @@ replays the sprites, and a copy that reads such a surface seeds it on demand, wh
 survive a reset. This is not the refused `wasAsset` repair, which re-sent the surface as it stood
 after the draws: what crosses here is still only what the loader made. Any op that is not a
 replayable 1:1 sprite (and any draw that could not be recorded) drops the snapshot, and the
-surface is then exactly as unrecoverable as before. The residual is the asset's own: an unhooked
-write after the snapshot leaves it older than the surface.
+surface is then exactly as unrecoverable as before; so does any op on it that the window
+recorded and `publish` never handled (a window thrown away on a stall, a publish cut short by a
+full queue or arena), which `ops_window_reset` checks against `s_pubReached`. A redraw of a sprite
+already held takes no new entry, and one whose plane `gaf_capture` skipped (the seen table had it)
+is replayed from the held plane. The residual is the asset's own: an unhooked write after the
+snapshot leaves it older than the surface.
 
 **The consumer needed no new case.** `PK_ASSET` mirrors as `TAGPU_GUIOP_SEED` *with* its bytes —
 the shape the Vulkan lane's SEED already has (`o->alen` optional, validated as `w * h`), a path

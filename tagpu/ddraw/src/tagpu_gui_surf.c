@@ -1595,7 +1595,11 @@ static void drain(void)
                     m->aoff = off; m->alen = o->alen;
                     /* REMEMBERED, NOT YET ACKED -- `mir_finish` publishes it
                        if and only if this record is handed over. */
-                    s_mirAssetTok = o->assetTok;
+                    /* ONLY A REAL OFFER'S TOKEN: a snapshot seed carries 0
+                       (tagpu_gui_hook.c `pub_seed_snap`) and must not wipe an
+                       offer drained earlier in this present, which would then
+                       never be acked. [The review of 878d7bf, finding 2.] */
+                    if (o->assetTok) s_mirAssetTok = o->assetTok;
                     s_assets++;
                 }
             }
