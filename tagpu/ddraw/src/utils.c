@@ -14,6 +14,7 @@
 #include "versionhelpers.h"
 #include "delay_imports.h"
 #include "tagpu_menu.h"
+#include "tagpu_log.h"
 
 
 /*
@@ -698,6 +699,44 @@ BOOL util_target_monitor(RECT* out)
 
     *out = mi.rcMonitor;
     return TRUE;
+}
+
+/* The target monitor's refresh rate in Hz, for a Refresh frame cap. Asked of
+   the monitor's own adapter (MONITORINFOEX.szDevice), whose CURRENT mode's
+   frequency is per output even where its size is the virtual desktop's (the
+   comment above). BOUNDED: Windows answers 0 or 1 for "the hardware default",
+   and a cap of 1 fps would be the result, so anything outside 24..1000 is the
+   stock 60. */
+int util_target_refresh(void)
+{
+    RECT r;
+    POINT c;
+    HMONITOR mon;
+    MONITORINFOEXA mi;
+    DEVMODEA m;
+    int hz;
+
+    if (!util_target_monitor(&r))
+        return 60;
+
+    c.x = r.left + (r.right - r.left) / 2;
+    c.y = r.top + (r.bottom - r.top) / 2;
+    mon = MonitorFromPoint(c, MONITOR_DEFAULTTOPRIMARY);
+    mi.cbSize = sizeof(mi);
+    memset(&m, 0, sizeof(m));
+    m.dmSize = sizeof(m);
+
+    if (!mon || !GetMonitorInfoA(mon, (MONITORINFO*)&mi) ||
+        !real_EnumDisplaySettingsA(mi.szDevice, ENUM_CURRENT_SETTINGS, &m))
+    {
+        tagpu_log("frame cap: Refresh = 60 fps (the target monitor's mode could not be read)");
+        return 60;
+    }
+
+    hz = (m.dmDisplayFrequency >= 24 && m.dmDisplayFrequency <= 1000) ? (int)m.dmDisplayFrequency : 60;
+    tagpu_logf("frame cap: Refresh = %d fps (%s reports %lu Hz)", hz, mi.szDevice,
+               (unsigned long)m.dmDisplayFrequency);
+    return hz;
 }
 
 BOOL util_get_lowest_resolution(

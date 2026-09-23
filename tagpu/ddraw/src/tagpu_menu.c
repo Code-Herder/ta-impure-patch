@@ -1756,7 +1756,7 @@ static int  s_monChosen;
 
 /* 0 is UNLIMITED: fpsl_init maps a NEGATIVE maxfps onto the display refresh and
    only 0 falls through with tick_length left at 0. */
-static const int FPS_VAL[3] = { 60, 120, 0 };
+static const int FPS_VAL[4] = { -1, 60, 120, 0 };
 /* HUD SCALE (tagpu_hud.h, gui-renderer.md 22), 0 = Auto. These are
    percentages of the HUD's stock size, and Auto is the ceiling H/480, where
    the panel exactly fills the screen height.
@@ -1791,7 +1791,7 @@ static VisRow s_vrow[VD_COUNT] = {
     { "VMODE",  "Display mode", "Window|Fullscreen",          2 },
     { "VMON",   "Monitor",      s_monText,                    0 },
     { "VSCALE", "UI scale",     "Auto|100%|150%|200%|300%|400%", 6 },
-    { "VFPS",   "Frame cap",    "60 fps|120 fps|Uncapped",    3 },
+    { "VFPS",   "Frame cap",    "Refresh|60 fps|120 fps|Uncapped", 4 },
     { "VGPU",   "GPU (Vulkan)", s_gpuText,                    0 },
 };
 static int s_vstage[VD_COUNT];
@@ -1888,12 +1888,14 @@ static void build_gpu_text(void)
 {
     int n = tagpu_vk_gpu_count(), i, at = 0, cut;
 
-    s_gpuText[0] = 0;
+    /* stage 0 is Auto: the lane ranks the devices itself (tagpu_vk.c) */
+    lstrcpynA(s_gpuText, "Auto", sizeof s_gpuText);
+    at = 4;
     if (n > TAGPU_VK_MAXGPU) n = TAGPU_VK_MAXGPU;
     cut = gpu_common_prefix(n);
     for (i = 0; i < n; i++) {
-        int k = _snprintf(s_gpuText + at, sizeof s_gpuText - at - 1, "%s%s",
-                          i ? "|" : "", tagpu_vk_gpu_name(i) + cut);
+        int k = _snprintf(s_gpuText + at, sizeof s_gpuText - at - 1, "|%s",
+                          tagpu_vk_gpu_name(i) + cut);
         /* `_snprintf` returns -1 on truncation AND leaves no terminator, so a
            break has to put one back -- otherwise the tail of a half-written
            caption would run on into whatever the buffer held. It cannot
@@ -1906,11 +1908,8 @@ static void build_gpu_text(void)
     /* NEVER A ZERO-STAGE BUTTON: the engine's own advance wraps against the
        stage count and would divide by it. One stage saying why is the answer
        to "no cache yet" and to "no Vulkan runtime installed" alike. */
-    if (!at) {
-        lstrcpynA(s_gpuText, "(not listed yet)", sizeof s_gpuText);
-        n = 0;
-    }
-    s_vrow[VD_GPU].stages = n > 0 ? n : 1;
+    if (!n) lstrcpynA(s_gpuText, "(not listed yet)", sizeof s_gpuText);
+    s_vrow[VD_GPU].stages = n + 1;
 }
 
 /* Declared in tagpu_menu.h, called by `util_target_monitor`.
@@ -2236,7 +2235,11 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
                               s_winFrame.bottom - s_winFrame.top,
                               SWP_NOZORDER | SWP_NOACTIVATE);
         break;
-    case VD_MON:   move_to_monitor(s_vstage[VD_MON]);              break;
+    case VD_MON:
+        move_to_monitor(s_vstage[VD_MON]);
+        /* a Refresh cap is the monitor's, and the monitor just changed */
+        if (g_config.maxfps < 0) fpsl_init();
+        break;
     case VD_UNDO_SCALE:
         if (!tagpu_hud_held()) tagpu_hud_store_pct((int)s_scaleOpen);
         break;
@@ -2264,7 +2267,8 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
     /* The store's flag is raised AFTER the select, so the render thread's
        exchange of it orders its read of the chosen name after the choice. */
     case VD_GPU:
-        tagpu_vk_gpu_select(s_vstage[VD_GPU]);
+        /* stage 0 is Auto, stage k the cache's device k-1 */
+        tagpu_vk_gpu_select(s_vstage[VD_GPU] ? s_vstage[VD_GPU] - 1 : TAGPU_VK_GPU_AUTO);
         if (!vrow_held(VD_GPU)) InterlockedExchange(&s_vkDirty, 1);
         break;
     }
@@ -2305,8 +2309,8 @@ static void read_display_state(void)
             if (SCALE_VAL[k] == pct) { s_vstage[VD_SCALE] = k; break; }
     }
 
-    s_vstage[VD_FPS] = 2;
-    for (i = 0; i < 3; i++) if (FPS_VAL[i] == g_config.maxfps) s_vstage[VD_FPS] = i;
+    s_vstage[VD_FPS] = 3;
+    for (i = 0; i < 4; i++) if (FPS_VAL[i] == g_config.maxfps) s_vstage[VD_FPS] = i;
 
     /* THE DEVICE IN USE BEATS THE DEVICE REQUESTED, so the row can be verified
        rather than trusted. `tagpu_vk_gpu_active` is what the render thread
@@ -2314,9 +2318,12 @@ static void read_display_state(void)
        row fall back to the stored request (and that, in turn, to the discrete
        default). So a choice that could not be honoured shows as the device
        that was. */
-    k = tagpu_vk_gpu_active();
-    if (k < 0) k = tagpu_vk_gpu_stored();
-    s_vstage[VD_GPU] = (k >= 0 && k < tagpu_vk_gpu_count()) ? k : 0;
+    k = tagpu_vk_gpu_stored();
+    if (k != TAGPU_VK_GPU_AUTO) {
+        int a = tagpu_vk_gpu_active();
+        if (a >= 0) k = a;
+    }
+    s_vstage[VD_GPU] = (k >= 0 && k < tagpu_vk_gpu_count()) ? k + 1 : 0;
 }
 
 /* A row that cannot bite is greyed rather than left looking live -- the same
@@ -2471,7 +2478,7 @@ static void vis_restore(void)
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
     commit_all_rows();
     if (!vrow_held(VD_FPS)) {
-        s_vstage[VD_FPS] = 0;       /* 60 fps */
+        s_vstage[VD_FPS] = 0;       /* the monitor's refresh */
         apply_display(VD_FPS);
         commit_display(VD_FPS);
     }

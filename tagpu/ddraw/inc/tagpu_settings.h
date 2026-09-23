@@ -39,7 +39,7 @@ typedef enum {
     TS_SHADOWRES,   /* 512 | 1024 | 2048 | 4096                           */
     TS_SS,          /* 1 | 2                                              */
     TS_FPS,         /* 0 | 1: the frame-rate readout                      */
-    TS_MAXFPS,      /* 60 | 120 | 0 (uncapped)                            */
+    TS_MAXFPS,      /* -1 (refresh) | 60 | 120 | 0 (uncapped)             */
     TS_HUDSCALE,    /* -1 off | 0 auto | 100 150 200 300 400              */
     TS_DISPLAY,     /* 0 window | 1 fullscreen (borderless)               */
     TS_MONITOR,     /* -1 none chosen | an index into the registered list */

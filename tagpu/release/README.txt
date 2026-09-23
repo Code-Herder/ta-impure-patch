@@ -40,7 +40,8 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
 
   THE SETTINGS are the in-game menu's: the cog at the top right of the screen
   in a game, and Options > Visuals in the main menu. They are saved in
-  impure.cfg next to TotalA.exe and start at the Classic++ look. If you ran an
+  impure.cfg next to TotalA.exe and start at the Classic++ look, on the most
+  powerful GPU (the GPU row's Auto), capped at the monitor's refresh rate. If you ran an
   earlier version, the first start of this one renames the files its menu wrote
   to *.migrated, takes the display, frame-cap and window lines out of ddraw.ini
   (the old file is kept as ddraw.ini.migrated), lists what it did in

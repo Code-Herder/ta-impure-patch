@@ -5,6 +5,7 @@
 #include "hook.h"
 #include "config.h"
 #include "versionhelpers.h"
+#include "utils.h"
 
 
 FPSLIMITER g_fpsl;
@@ -18,6 +19,11 @@ void fpsl_init()
 
     if (max_fps < 0 || (g_config.vsync && (!g_config.maxfps || g_config.maxfps >= g_ddraw.mode.dmDisplayFrequency)))
         max_fps = g_ddraw.mode.dmDisplayFrequency;
+
+    /* tagpu: a negative cap is the TARGET monitor's refresh, not the primary's:
+       `g_ddraw.mode` is the primary adapter's mode (utils.c, util_target_monitor) */
+    if (g_config.maxfps < 0)
+        max_fps = util_target_refresh();
 
     if (max_fps > 1000)
         max_fps = 0;
