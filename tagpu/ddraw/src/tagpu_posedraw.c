@@ -86,7 +86,8 @@
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"
 #include "tagpu_native.h"
-#include "tagpu_packet.h"     /* the record count TAGPU_PD_MAXHAND must cover */
+#include "tagpu_packet.h"     /* the record count TAGPU_PD_MAXHAND must cover,
+                                 and tagpu_grow_stress */
 #include "tagpu_render3do.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_vk.h"      /* tagpu_vk_armed(): whether to publish at all */
@@ -291,6 +292,9 @@ static int arena_room(void** p, unsigned* cap, unsigned need, size_t elem)
     if (need <= *cap) return 1;
     want = *cap ? *cap * 2 : 1024;
     while (want < need) want *= 2;
+    /* the lever: grow to the exact size, so nearly every append moves the
+       arena -- which the records survive because they hold offsets */
+    if (tagpu_grow_stress()) want = need;
     q = realloc(*p, (size_t)want * elem);
     if (!q) {
         if (!s_saidRoom) {

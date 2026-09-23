@@ -464,7 +464,7 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_MAX_UNITS    16384u
 #define TAGPU_PK_MAX_WRECKS   4096u
 #define TAGPU_PK_MAX_ANCHORS  65536u
-#define TAGPU_PK_MAX_BUILDS   2048u    /* the order snapshot's own arena cap:
+#define TAGPU_PK_MAX_BUILDS   4096u    /* the order snapshot's own arena cap:
                                           one record per queued marker, and a
                                           build is a subset of those             */
 
@@ -789,6 +789,17 @@ static __inline const TAGPU_PK_BUILD* tagpu_pk_builds(const TAGPU_PACKET* p)
    would put both threads on slot 0. Disarms itself if the reservation fails. */
 void tagpu_packet_init(void);
 int  tagpu_packet_armed(void);
+
+/* THE GROWTH-STRESS LEVER, `tagpu_grow.stress` in the gamedir, read once at
+   attach like the packet's own. Every render-side array that grows with the
+   unit count moves on every frame under it: the per-frame ones are freed and
+   allocated again at exactly the size asked for, the hand-over's arenas grow
+   to the exact size on every append, and the Vulkan unit pass rebuilds its
+   slot buffers. A pointer that outlives a move then reads freed memory at the
+   unit counts a stock game reaches, rather than only in a game large enough to
+   grow the arrays for real. A measurement lever: it costs an allocation per
+   array per frame. */
+int  tagpu_grow_stress(void);
 
 /* ---- render thread ---- */
 /* Exactly once per frame, at the top of the overlay frame, by the driver

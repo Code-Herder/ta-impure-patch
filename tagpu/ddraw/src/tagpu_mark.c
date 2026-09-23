@@ -136,7 +136,6 @@
 #define GUI_YELLOW   0x0E
 #define GUI_WHITE    0x0F
 
-#define MAXBAR       2048                    /* bars per frame               */
 #define MVST         8                       /* x,y, u,v, wx,wz, colour, z   */
 #define QUADV        6
 /* THE CAPTURED LAYER'S QUAD USED TO SIT AT 0 and the cursor after it. The clean
@@ -145,26 +144,24 @@
 #define CURSBASE     0
 #define MAXCURSV     (8 * QUADV)             /* two rects, four edges each    */
 #define BARBASE      (CURSBASE + MAXCURSV)   /* and the bars after those      */
-#define MAXMV        (BARBASE + MAXBAR * 2 * QUADV)
 /* The order-marker buckets (tagpu_order.c). Separate arrays rather than more
    regions of s_verts: the bar region's length is decided at gather time, so
    anything at a FIXED offset behind it would have to be uploaded across the
    whole unused bar budget every frame. Uploaded contiguously after the
    triangles instead, with the draw offsets computed at render. */
-#define MAXORDT      12000                   /* order triangle verts (dots)  */
-#define MAXORDL      12000                   /* order line verts (2 per line)*/
+/* Sized for tagpu_order.c's MAXORD records at the design point; an overflow
+   loses markers and is counted, never written past the end. */
+#define MAXORDT      24000                   /* order triangle verts (dots)  */
+#define MAXORDL      24000                   /* order line verts (2 per line)*/
 /* Text quads: the ShowRanges labels (up to twelve per SELECTED unit with the
    toggle on) and one group digit per watched unit, in ONE bucket — 800 quads,
    134 KB. The order gather runs first, so a frame that overruns this loses the
    digits rather than the labels; `s_xover` counts it and `mark: … over=N` says
    so. That ordering is deliberate (it is the engine's own draw order) but it is
    the failure mode to know: ShowRanges over a large selection is the only thing
-   that can reach the cap, and it costs the digits first. */
-#define MAXORDX      4800                    /* text verts (6 per quad)      */
-/* The selection rects: four lines, eight vertices, per selected unit, for as
-   many units as the native gather can hold (its MAXU). A frame over it loses
-   the rects past the cap and `mark: ... selover=N` says so. */
-#define MAXSELV      (2048 * 8)
+   that can reach the cap, and it costs the digits first. 1 600 quads: a digit
+   for each of a design-point player's 1 024 units, and the labels besides. */
+#define MAXORDX      9600                    /* text verts (6 per quad)      */
 
 static void flog(const char* s)
 {
@@ -266,11 +263,21 @@ int tagpu_mark_armed(unsigned frame_counter)
    silently published no markers at all. A flag no code can raise is not
    state; it is a trap with a plausible name. */
 
-static float s_verts[MAXMV * MVST];
-static float s_ordt[MAXORDT * MVST];   /* order markers: filled triangles     */
-static float s_ordl[MAXORDL * MVST];   /* order markers: a line list          */
-static float s_ordx[MAXORDX * MVST];   /* text quads: labels, then digits     */
-static float s_sel[MAXSELV * MVST];    /* selection rects: a line list        */
+/* THE TWO BUCKETS THAT SCALE WITH THE UNIT COUNT ARE GROWN, NOT FIXED: the
+   health bars (two quads per unit of the watched player) and the selection
+   rects (eight vertices per selected unit). `tagpu_mark_gather` grows both to
+   the packet's unit count before anything is emitted into them, and only the
+   render thread touches either, so no pointer into one outlives a realloc.
+   The vertex INDEX space is unchanged: the cursor rects are 0..BARBASE-1 in
+   `s_verts`, the bars BARBASE.. in `s_barv`, and the render pushes the two
+   back to back. */
+static float  s_verts[BARBASE * MVST];  /* the cursor rects                   */
+static float* s_barv;  static unsigned s_barvCap;  /* bars, in vertices       */
+static float  s_ordt[MAXORDT * MVST];   /* order markers: filled triangles    */
+static float  s_ordl[MAXORDL * MVST];   /* order markers: a line list         */
+static float  s_ordx[MAXORDX * MVST];   /* text quads: labels, then digits    */
+static float* s_sel;   static unsigned s_selCap;   /* selection rects, verts  */
+static int    s_saidGrow;
 static int   s_nsel, s_selover;        /* their verts / rects refused, a frame */
 static int   s_nbar;                   /* bars gathered (2 quads each)        */
 static int   s_cBar;                   /* counted, whether emitted or not     */
@@ -474,7 +481,8 @@ static const char* SFS =
 static void put_vert(int i, float x, float y, float u, float v, float wx, float wz,
                      float col)
 {
-    float* o = s_verts + (size_t)i * MVST;
+    float* o = i < BARBASE ? s_verts + (size_t)i * MVST
+                           : s_barv + (size_t)(i - BARBASE) * MVST;
     o[0] = x; o[1] = y; o[2] = u; o[3] = v; o[4] = wx; o[5] = wz; o[6] = col;
     o[7] = 0.0f;                       /* the top layer: no depth test reads it */
 }
@@ -541,7 +549,7 @@ int tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
     float c = (float)colidx / 255.0f;
     int k;
     if (s_armed != 1 || s_passive || !s_selbox) return 0;
-    if (s_nsel + 8 > MAXSELV) { s_selover++; return 0; }
+    if ((unsigned)s_nsel + 8u > s_selCap) { s_selover++; return 0; }
     for (k = 0; k < 4; k++) {
         int k2 = (k + 1) & 3;
         float x0 = px[k], y0 = py[k], x1 = px[k2], y1 = py[k2];
@@ -793,6 +801,33 @@ static void gather_cursor(const TAGPU_FXVIEW* v)
     s_ncurs = nv - CURSBASE;
 }
 
+/* Grow one of the two unit-scaled buckets to `need` vertices. Grow only,
+   doubling; 0 leaves the bucket and its capacity as they were. */
+static int grow_verts(float** p, unsigned* cap, unsigned need)
+{
+    float* q;
+    unsigned want;
+    if (tagpu_grow_stress()) {
+        /* the lever: a fresh block every frame, exactly `need` long */
+        free(*p); *p = NULL; *cap = 0;
+        if (!need) return 1;
+        *p = (float*)malloc((size_t)need * MVST * sizeof(float));
+        if (!*p) return 0;
+        *cap = need;
+        return 1;
+    }
+    if (need <= *cap) return 1;
+    want = *cap ? *cap : 1024;
+    while (want < need) {
+        if (want > 0x7FFFFFFFu / 2u / MVST / sizeof(float)) return 0;
+        want *= 2;
+    }
+    q = (float*)realloc(*p, (size_t)want * MVST * sizeof(float));
+    if (!q) return 0;
+    *p = q; *cap = want;
+    return 1;
+}
+
 int tagpu_mark_gather(const TAGPU_FXVIEW* v)
 {
     const TAGPU_PACKET* pk = v->packet;
@@ -805,6 +840,18 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_nsel = 0; s_selover = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     if (!pk || !pk->in_game) return 0;
+    /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
+       at most, and the unit count is bounded by the packet's own table. A
+       bucket that would not grow keeps its old size, and the caps below then
+       count what they refuse. */
+    if (!grow_verts(&s_barv, &s_barvCap, pk->n_units * 2u * QUADV) ||
+        !grow_verts(&s_sel, &s_selCap, pk->n_units * 8u)) {
+        if (!s_saidGrow) {
+            s_saidGrow = 1;
+            flog("mark: a unit-scaled marker bucket would not grow to the packet's "
+                 "unit count - markers past its old size are refused and counted");
+        }
+    }
     /* before anything emits: tagpu_order.c's labels come through
        tagpu_mark_emit_text, which sizes its quads with this */
     /* one font for the whole frame, before anything asks the atlas for a string:
@@ -845,7 +892,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     gui = pk->gui_col;
     uu = tagpu_pk_units(pk);
 
-    for (ui = 0; ui < pk->n_units && s_cBar < MAXBAR; ui++) {
+    for (ui = 0; ui < pk->n_units && (unsigned)s_cBar < s_barvCap / (2u * QUADV); ui++) {
         const TAGPU_PK_UNIT* u = &uu[ui];
         int hp, maxhp, third, w, col;
         float x, y;                     /* the anchor, in game-frame units     */
@@ -1119,7 +1166,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        geometry drift apart. (Until [landing 11-4a] this mirrored a GL VBO
        filled a few lines above; there is no VBO now and nothing to mirror --
        the record IS the vertex block.) */
-    mk_push(s_verts, total);
+    mk_push(s_verts, BARBASE);
+    if (s_nbar) mk_push(s_barv, s_nbar);
     if (s_nordt) mk_push(s_ordt, s_nordt);
     if (s_nordl) mk_push(s_ordl, s_nordl);
     if (s_nordx) mk_push(s_ordx, s_nordx);

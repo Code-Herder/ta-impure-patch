@@ -174,14 +174,13 @@
 #include "tagpu_model3do.h"   /* O3_*, PRIM_*, P_*, N_*, F_*: the engine's model structures */
 
 #define MAXNV  49152           /* vertices across all native units per frame */
-/* Units (and wrecks) gathered per frame. This is NOT a soft limit: a unit past
-   it is not merely undrawn, it is INVISIBLE — tagpu_overlay.c wipes the engine's
-   composite for every unit `tagpu_native_owns_unit` accepts, whether or not this
-   gather included it. So it has to stay ahead of the rect the gather fills from,
-   and since G13d that rect grows with zoom-out (16x the area at the 0.25x
-   floor). MAXNV is the real budget and truncates gracefully; this one must not
-   be what runs out first. */
-#define MAXU   2048
+/* THE GATHER HAS NO UNIT CAP OF ITS OWN. A unit it leaves out is not merely
+   undrawn, it is INVISIBLE -- tagpu_overlay.c wipes the engine's composite for
+   every unit `tagpu_native_owns_unit` accepts, whether or not this gather
+   included it. So its arrays are sized from the packet's own counts every
+   frame (`grow_room`), and those counts are bounded by the packet's tables,
+   which cover the design point (TAGPU_PK_DESIGN_SLOTS). An allocation that
+   fails refuses the frame's unit hand-over rather than drawing some units. */
 #define NVST   14              /* x,y,depthEnc, u,v, flat,ck, shadeRow, wx,wzp, vy,
                                   nx,ny,nz (Classic++: the posed face normal in
                                   map space, unit length, flat per face; level
@@ -218,7 +217,11 @@ static void pose_dump(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* u,
    same distance snap the pass has always used, plus — for the accessor — a
    check that the stored sample still describes the unit being asked about. */
 typedef struct { int x, z, y; int px, pz, py; unsigned tc, tp; } SPX;
-static SPX      s_spx[8192];
+/* one per unit-table slot the packet can carry, so no slot of the largest
+   game this is built for goes without smoothing */
+#define SPX_SLOTS TAGPU_PK_MAX_UNITS
+typedef char spx_slots_design[(SPX_SLOTS >= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
+static SPX      s_spx[SPX_SLOTS];
 static unsigned s_spxFrame;     /* the frame the pass last refreshed it in */
 
 /* The read half. 1, and the three outputs filled, when slot `slot` carries a
@@ -229,7 +232,7 @@ static int spx_sample(size_t slot, unsigned fc, float* fx, float* fz, float* fy)
     const SPX* e;
     unsigned dt, el;
     float dx, dz, dy, a;
-    if (slot >= 8192) return 0;
+    if (slot >= SPX_SLOTS) return 0;
     e = &s_spx[slot];
     if (e->tp == 0) return 0;
     dt = e->tc - e->tp;
@@ -248,6 +251,38 @@ static int spx_sample(size_t slot, unsigned fc, float* fx, float* fz, float* fy)
     *fx = (float)e->px / 65536.0f + dx * a;
     *fz = (float)e->pz / 65536.0f + dz * a;
     *fy = (float)e->py / 65536.0f + dy * a;
+    return 1;
+}
+
+/* Grow one of the render thread's per-frame arrays to `need` elements. Grow
+   only, doubling, and ONLY BETWEEN FRAMES' USES: every caller grows before it
+   takes a pointer into the array, and the render thread is the only owner, so
+   no pointer into the old block survives a realloc. 0 when the allocation
+   failed; the array and its capacity are then unchanged. */
+static int grow_room(void** p, unsigned* cap, unsigned need, size_t elem)
+{
+    void* q;
+    unsigned want;
+    if (tagpu_grow_stress()) {
+        /* the lever: a fresh block every frame, exactly `need` long */
+        free(*p); *p = NULL; *cap = 0;
+        if (!need) return 1;
+        if ((size_t)need > (size_t)-1 / elem) return 0;
+        *p = malloc((size_t)need * elem);
+        if (!*p) return 0;
+        *cap = need;
+        return 1;
+    }
+    if (need <= *cap) return 1;
+    want = *cap ? *cap : 256;
+    while (want < need) {
+        if (want > 0x7FFFFFFFu / 2u) return 0;
+        want *= 2;
+    }
+    if ((size_t)want > (size_t)-1 / elem) return 0;
+    q = realloc(*p, (size_t)want * elem);
+    if (!q) return 0;
+    *p = q; *cap = want;
     return 1;
 }
 
@@ -2728,7 +2763,21 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                      int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
                      float waterT, digT; int waterMode;
                      int nanoOn; float nanoT, nanoC[3], nanoWire; } NU;
-    static NU units[MAXU];
+    /* every unit and every wreck the packet carries could be on screen at
+       the widest zoom, so that is the size; see `grow_room` */
+    static NU* units;
+    static unsigned unitsCap;
+    static int saidGrow;
+    unsigned ucap;
+    if (!grow_room((void**)&units, &unitsCap, pk->n_units + pk->n_wrecks, sizeof(NU))) {
+        if (!saidGrow) {
+            saidGrow = 1;
+            nlog("native: the unit gather would not grow to the packet's unit "
+                 "count - the unit hand-over is refused while that is true");
+        }
+        tagpu_posedraw_uncarried();
+    }
+    ucap = unitsCap;
     /* sub-pixel motion: see the SPX block at the top of this file for the
        table, the read half and why both are file-static now */
     s_spxFrame = f->frame_counter;
@@ -2736,7 +2785,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     unsigned uiGates = pk->ui_gates;
     const TAGPU_PK_UNIT* pkUnits = tagpu_pk_units(pk);
     if (s_armed) {                 /* units are gathered only by the unit pass */
-    for (unsigned pui = 0; pui < pk->n_units && nu < MAXU; pui++) {
+    for (unsigned pui = 0; pui < pk->n_units && (unsigned)nu < ucap; pui++) {
         const TAGPU_PK_UNIT* pu = &pkUnits[pui];
         unsigned st = pu->state;
         const TAGPU_PK_PIECE* pc;
@@ -2748,7 +2797,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         float fx = (float)ix / 65536.0f, fz = (float)iz / 65536.0f, fy = (float)iy / 65536.0f;
         if (s_subpix) {
             unsigned slot = pu->slot;
-            if (slot < 8192) {
+            if (slot < SPX_SLOTS) {
                 SPX* e = &s_spx[slot];
                 if (e->tc == 0 || e->x != ix || e->z != iz || e->y != iy) {
                     e->px = e->x; e->pz = e->z; e->py = e->y; e->tp = e->tc;
@@ -2995,7 +3044,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             if (ty0 < 0) ty0 = 0;
             if (tx1 > mapW) tx1 = mapW;
             if (ty1 > mapH) ty1 = mapH;
-            for (wi = 0; wi < pk->n_wrecks && nu < MAXU; wi++) {
+            for (wi = 0; wi < pk->n_wrecks && (unsigned)nu < ucap; wi++) {
                 const TAGPU_PK_WRECK* pw = &pkWrecks[wi];
                 const TAGPU_PK_PIECE* wpc;
                 /* wreck record positions are 16.16 fixed-point (the engine
@@ -3252,24 +3301,45 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        is the unit's entry or -1; a posed unit contributes no vertices to the
        shared stream, so its firstv range is empty and every CPU draw over it
        is a no-op — the same way a replacement mesh's is. */
-    static TAGPU_PDUNIT pdu[MAXU];
+    static TAGPU_PDUNIT* pdu;
+    static unsigned pduCap;
 
-    /* THE FRAME'S POSE ARENA, sized from MAXU rather than a magic unit count
-       (gpu-posing.md §4, "the budget"). The bound that matters is total PIECES
-       on screen, not units x the per-model maximum: 2048 units at stock's
-       worst model (36 pieces, ARMSCORP/CORSCORP) is 73 728, and a 256-piece
-       model is 7x anything stock ships. PD_ARENA slots is 4.7 MB of pose and
-       96 KB each of the two per-piece bytes; sizing for MAXU * TAGPU_PBMAXPIECE
-       instead would be 25 MB to make an unreachable case impossible, which is
-       what the rest-block degradation is for. Past it a unit draws at rest —
-       it never drops out of the scene. */
-#define PD_ARENA (MAXU * 48)                /* pieces buffered per frame */
-    static float pdPose[PD_ARENA * 12];
-    static unsigned char pdShaded[PD_ARENA];
-    static unsigned char pdPvis[PD_ARENA];
+    /* THE FRAME'S POSE ARENA, sized to the PIECES gathered this frame
+       (gpu-posing.md §4, "the budget"): a posed unit's pose is `bg->nparts`
+       pieces, and the bake matches its cache entry on the unit's own
+       `nparts`, so the sum below is exactly what the loop can ask for. At the
+       design point that is 10 241 units at stock's worst model (36 pieces,
+       ARMSCORP/CORSCORP), 18 MB of pose. The rest-block degradation below is
+       what an allocation that failed costs: the unit draws at rest, it never
+       drops out of the scene. */
+    static float* pdPose;
+    static unsigned char* pdShaded;
+    static unsigned char* pdPvis;
+    static unsigned pdPoseCap, pdShadedCap, pdPvisCap;
+    static int saidRest;
     int npd = 0, pdPoseN = 0, pdShadedN = 0;
-    const int pdPoseMax = (int)(sizeof pdPose / sizeof pdPose[0]);
-    const int pdShadedMax = (int)(sizeof pdShaded);
+    int pdPoseMax = 0, pdShadedMax = 0;
+    {
+        unsigned pieces = 0;
+        int ok;
+        for (i = 0; i < nu; i++)
+            if (units[i].nparts > 0) pieces += (unsigned)units[i].nparts;
+        ok = grow_room((void**)&pdu, &pduCap, (unsigned)nu, sizeof(TAGPU_PDUNIT));
+        if (!ok) {
+            if (!saidGrow) {
+                saidGrow = 1;
+                nlog("native: the posed-unit list would not grow to the gather - "
+                     "the unit hand-over is refused while that is true");
+            }
+            tagpu_posedraw_uncarried();
+        }
+        if (grow_room((void**)&pdPose, &pdPoseCap, pieces * 12u, sizeof(float)) &&
+            grow_room((void**)&pdShaded, &pdShadedCap, pieces, 1) &&
+            grow_room((void**)&pdPvis, &pdPvisCap, pieces, 1)) {
+            pdPoseMax = (int)pdPoseCap;
+            pdShadedMax = (int)(pdShadedCap < pdPvisCap ? pdShadedCap : pdPvisCap);
+        }
+    }
     int pdReady = tagpu_posedraw_ready();
     /* ---- THE CLASSIC HARD SHADOW'S POLICY, DECIDED ONCE PER FRAME ----------
        Everything the decision reads is engine state or a lever, and a Vulkan
@@ -3380,9 +3450,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    vertices — 7x and 85x what the largest stock model asks for,
                    logged once per model by the bake, and the one honest drop.
 
-               `npd < MAXU` is not tested: the gather loop above stops at
-               `nu < MAXU` and every unit here takes exactly one slot, so
-               `npd <= nu <= MAXU` holds by construction. */
+               `pdu` was grown to `nu` above and every unit here takes
+               exactly one slot, so `npd < nu <= pduCap`; the test is what
+               holds that when the grow failed and the hand-over is refused. */
+            if ((unsigned)npd >= pduCap) continue;
             const TAGPU_PBGEOM* bg; const TAGPU_PBMAT* bm;
             if (!pdReady) continue;
             if (!tagpu_posebake_unit(units[i].pc, units[i].nparts, units[i].owner, 0, &bg, &bm) ||
@@ -3426,6 +3497,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                     q->pose   = s_poseRestPose;
                     q->shaded = s_poseRestShaded;
                     q->pvis   = s_poseRestVis;
+                    if (!fits && !saidRest) {
+                        saidRest = 1;
+                        nlog("native: the pose arena would not grow to this frame's "
+                             "pieces - units past it draw at rest");
+                    }
                 }
                 q->npose = np;
                 q->ax = units[i].ax;   q->ay = units[i].ay;
@@ -3873,7 +3949,7 @@ int tagpu_native_unit_pos(const TAGPU_PK_UNIT* u, float* x, float* y, float* z)
        publisher took out of its own walk, not an address to validate. */
     {
         unsigned slot = u->slot;
-        if (slot < 8192 && s_spx[slot].x == ix && s_spx[slot].z == iz &&
+        if (slot < SPX_SLOTS && s_spx[slot].x == ix && s_spx[slot].z == iz &&
             s_spx[slot].y == iy)
             spx_sample(slot, s_spxFrame, &fx, &fz, &fy);
     }

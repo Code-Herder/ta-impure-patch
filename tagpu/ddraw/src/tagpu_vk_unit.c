@@ -181,6 +181,7 @@
 #include "tagpu_vk_world.h"   /* the target's ss: the wire's width follows it */
 #include "tagpu_posedraw.h"
 #include "tagpu_posebake.h"
+#include "tagpu_packet.h"    /* tagpu_grow_stress, and nothing else of it */
 #include "tagpu_gaf.h"
 #include "tagpu_classicpp.h" /* aniso=: the one knob both lanes filter by */   /* tagpu_gaf_mip_off/_bytes: the restored twin's chain layout */
 #include "spirv/tagpu_posedraw.spv.h"
@@ -200,10 +201,10 @@
    allocation (the scaffold's rule) */
 #define FOG_MAXDIM 1024
 
-/* per-type vertex buffers cached at once. tagpu_posebake.c holds 128 geometry
-   entries and 256 material streams, so 512 can never be the binding limit on a
-   healthy frame -- it is the bound on a leak, and eviction is LRU. */
-#define VB_MAX  512
+/* per-type vertex buffers cached at once: one per bake entry the bake can
+   hold, so this table is never the binding limit on a frame the bake could
+   serve -- it is the bound on a leak, and eviction is LRU. */
+#define VB_MAX  (TAGPU_PB_MAXGEOM + TAGPU_PB_MAXMAT)
 /* buffers waiting for every slot to turn over once before they are destroyed */
 #define RET_MAX 64
 
@@ -700,12 +701,28 @@ static int ret_push(const TAGPU_VKPASS* d, VkBuffer buf, VkDeviceMemory mem)
     return 0;
 }
 
+/* A DIRECT-MAPPED HINT IN FRONT OF THE SCAN. `vb_find` runs four times a unit
+   a frame and the table is VB_MAX long, so a scan alone is O(units x table).
+   Units of one type share a serial, so the hint almost always answers; it is
+   only ever a guess -- an index, checked against the entry's own serial before
+   it is believed -- and an evicted entry is zeroed, so a stale hint misses
+   and falls through to the scan. */
+#define VB_HINT 1024                        /* a power of two */
+static unsigned short s_vbHint[VB_HINT];
+typedef char vb_hint_fits[(VB_MAX <= 0xFFFF) ? 1 : -1];
+
 static VBENT* vb_find(unsigned serial)
 {
     int i;
+    unsigned h;
     if (!serial) return NULL;
+    h = s_vbHint[serial & (VB_HINT - 1)];
+    if (h < VB_MAX && s_vb[h].serial == serial) return &s_vb[h];
     for (i = 0; i < VB_MAX; i++)
-        if (s_vb[i].serial == serial) return &s_vb[i];
+        if (s_vb[i].serial == serial) {
+            s_vbHint[serial & (VB_HINT - 1)] = (unsigned short)i;
+            return &s_vb[i];
+        }
     return NULL;
 }
 
@@ -796,6 +813,9 @@ static int slot_fog(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
 static int slot_sized(const TAGPU_VKPASS* d, SLOT* s,
                       VkDeviceSize ubytes, VkDeviceSize pbytes)
 {
+    /* the lever: both rebuilt on every frame, under the same fence that makes
+       growing them safe */
+    if (tagpu_grow_stress()) s->ucap = s->pcap = 0;
     if (s->ucap < ubytes) {
         kill_buffer(d, &s->ubuf, &s->umem, &s->umap);
         s->ucap = 0;

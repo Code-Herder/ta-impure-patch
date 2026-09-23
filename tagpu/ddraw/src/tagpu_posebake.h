@@ -39,6 +39,16 @@
 #define TAGPU_PB_GEOMST  8      /* floats per geometry vertex */
 #define TAGPU_PB_MATST   5      /* floats per material vertex */
 
+/* THE BAKE'S TWO CACHES, and they must hold every entry ONE FRAME draws: an
+   entry evicted mid-frame leaves the records written before it naming a stale
+   serial, and the Vulkan pass then refuses the whole frame. So they are sized
+   for the design point (tagpu_packet.h's TAGPU_PK_DESIGN_SLOTS): 10 players,
+   each with up to ~100 unit types on screen at once. Here as well as in
+   tagpu_posebake.c because tagpu_vk_unit.c sizes its vertex-buffer table
+   from them. */
+#define TAGPU_PB_MAXGEOM  256   /* types cached at once, ghosts apart         */
+#define TAGPU_PB_MAXMAT  1024   /* (type, owner) streams cached at once        */
+
 /* geometry vertex flags (float, bit-tested in the shader as an int) */
 #define TAGPU_PBF_SHADED 1      /* body face with a usable rest normal        */
 
