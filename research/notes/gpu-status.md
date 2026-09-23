@@ -51,7 +51,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | What the engine used to draw | Ours since | Owned how |
 |---|---|---|
 | Units, wrecks, shadows, cloak, waterline | G12a–c, G13n | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them. **The Classic pair — the silhouette and the structure slant — is what the shipped configuration draws again since 2026-09-22, out of `tagpu_vk_unit.c`, and `shadows=` defaults to HARD (§2.83).** G14i's alternative, `tagpu_shadow.c`'s depth map at `shadows=1`, is unported: that module went with the GL backend and nothing produces a hand-over for the Vulkan map. **The silhouette shadow blends once per silhouette PIXEL through a stencil** (G13n) — the engine blits one blackened copy of the composite, so re-using the body's 3-D geometry with depth writes off darkened once per surface the ray crossed: aircraft came out at 0.25 of the ground against the engine's 0.49. Both FBOs are `DEPTH24_STENCIL8` for it — [shadows & cloak](shadows-cloak.html) §"What our GL renderer must do" |
-| **Units under construction** — the nanoframe scaffold, its fill and its wireframe | G13l | the same pass: ownership no longer stops at `Nanoframe > 0`, the recolour is three per-unit uniforms in the unit shader and the wireframe a line range per unit; a third `owndraw` detour (`0x458DD0`) stops the engine stamping its own copy at the 1× position. A unit under construction casts no shadow, as the engine's does not, and a factory's cargo takes the FACTORY's depth key — the engine z-merges it into the factory's sprite (`0x4B90A0`) rather than sorting it, and on its own tile row it disappeared under the lab. The carry relationship itself — attach/detach `0x48AB70`, and why a *released* unit appears to walk under the plant (stock, measured) — is on [factories](factory-build.html) |
+| **Units under construction** — the nanoframe scaffold, its fill and its wireframe | G13l | the same pass: ownership no longer stops at `Nanoframe > 0`, the recolour is three per-unit uniforms in the unit shader and the wireframe a line range per unit; a third `owndraw` detour (`0x458DD0`) stops the engine stamping its own copy at the 1× position. A unit under construction casts no shadow, as the engine's does not, and a factory's cargo takes the FACTORY's depth key — the engine z-merges it into the factory's sprite (`0x4B90A0`) rather than sorting it, and on its own tile row it disappeared under the lab; within that key it carries the merge's height offset (§2.87), which is what puts a transport's cargo under the transport. The carry relationship itself — attach/detach `0x48AB70`, and why a *released* unit appears to walk under the plant (stock, measured) — is on [factories](factory-build.html) |
 | Structure shadows (the cached slant projection) | G13k, redrawn 2026-09-22 | `owndraw all` flips the blit's two structure-shadow `je`s behind `g_ssSkip`; the SLANT range of the posed bake is drawn by `tagpu_vk_unit.c`, stencil-masked, before the bodies — see §2.83, §2.1 and [shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" |
 | Weapon fire, explosions, debris | G12e | `fxown`: 2 call-site redirects + 4 leaf detours |
 | Smoke, fire, wakes, nanolathe | G12f | `fxown`: one detour on the layer walker |
@@ -15763,3 +15763,36 @@ stock game pays what it draws.
   `WR_COUNT` has to follow it — in `tagpu_engine.h` and in its own copy in `tagpu_feat.c`.
 - Type-scaled caps are unchanged: the selection-box cache (256 root nodes a level) and the
   scenario harness's `SCN_MAX_*` (4 096 units, 512 selected).
+
+### 2.87 Unit bodies before the effects, and cargo sorted by the merge's height
+
+**What was wrong.** Two depth faults in the unit pass, both reported from play.
+
+- **Every unit body drew after the effects.** `tagpu_vk_unit.c` `record_stage` picks each
+  stage's draws with `(q->ghost != 0) != (stage == RS_GHOST)`; it read `!q->ghost != (stage ==
+  RS_GHOST)`, which is the negated test, so ordinary units were skipped in `RS_BODY` and drawn in
+  `RS_GHOST` — the stage `tagpu_vk.c` `world_records` runs after `tagpu_vk_fx_record`. The depth
+  keys were right, so no key could fix it: every particle, projectile and explosion under a unit
+  body was painted over. It showed first as the nanolathe spray vanishing over a factory's pad and
+  the nanoframe on it (layer 6, `fxKey − 2`), most visibly zoomed in. MEASURED on
+  `nano-factory` at zoom 2.5 with only the ARMAP drawn natively: spray-palette pixels over the pad
+  were **0 in every frame** at any layer-6 key up to 1000, and 550–1200 a frame after the fix.
+- **A unit carried by a transport drew over it.** The cargo loop gives a chain member its
+  parent's row and band and lets the two sort by `md`; a carried commander's origin is 40 height
+  units under its ARMATLAS, which `md` did not know. The engine merges cargo by height through
+  `0x4B90A0` with `dbias = hi(Δalt)` over planes based at 0x32 / 0x7D
+  ([exe-reverse-engineering](exe-reverse-engineering.html), the cargo-loop section). Now
+  `cargo_md_bias` gives the cargo `2·(baseC − baseP + Δalt)/256`, and the posed vertex stage adds
+  it as **`uMdBias`** (std140 offset 68, after `uEnc`) **inside** `md`'s ±1.8 clamp, so no bias
+  carries a vertex out of its row's band. MEASURED on `transport-cargo`: bias −0.31, the Atlas
+  covers the commander with the bias and the commander draws over it with a live A/B that zeroed
+  it; ARMATLAS cargo on an ARMAP pad reads bias 0.000.
+
+**Fixtures.** `scenarios/nano-factory.json` (a plant, a guarding commander) and
+`scenarios/transport-cargo.json` (an Atlas and a commander to load).
+
+**Not covered.**
+- The cargo bias matches the merge's height term only: `md`'s z term has no counterpart in
+  `0x4B90A0`, so a cargo far north or south of its parent's origin still sorts by `md`.
+- Cargo of cargo takes its immediate parent's bias plus that parent's own, in gather order; the
+  engine forbids nesting (`0x48AB70`), so this is not reached in stock play.

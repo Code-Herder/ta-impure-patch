@@ -2498,11 +2498,22 @@ the colour and sets `dstDepth = srcDepth + dbias`.
 which put it on its own tile row — an ARM lab at world y 1072 building a Hammer at 1068 is one
 16-unit row apart, four whole depth keys behind the lab, which then covered it at every pixel.
 Matching the engine means giving every chain member the parent's row and band and letting the
-two models sort against each other by `md`, our intra-model view depth. That **approximates** the
-merge rather than porting it: `0x4B90A0` compares a *height* biased by `HIWORD(dy)` and samples
-at the projected offset, while `md = (2y − z)/256` is model-local and carries neither term. They
-agree while parent and cargo are level, which is every factory pad, and diverge for a cargo whose
-origin sits above or below its parent.
+two models sort against each other by `md`, our intra-model view depth, **plus the merge's height
+offset** as a bias on the cargo's `md` (`tagpu_native.c` `cargo_md_bias`, applied by the posed
+vertex stage as `uMdBias` inside `md`'s ±1.8 clamp). In depth-plane units a cargo pixel stands
+`baseC − baseP + dbias` above its parent's, where `base` is the per-type plane base below; `md`
+counts height at 2/256, so the bias is `2·(baseC − baseP + dbias)/256`. MEASURED: a commander
+carried by an ARMATLAS hangs at `dbias` = −40 (bias −0.31) and is covered by it as in the engine;
+an ARMATLAS on an ARMAP pad has `dbias` 0 and the same base, bias 0. It still **approximates** the
+merge: `md`'s z term has no counterpart in `0x4B90A0`, which compares height alone.
+
+**The plane's base, `0x459A29..0x459A3C`** (and its twins at `0x459A56..0x459A69` and in the lit
+rasteriser, `0x459EAA`/`0x459ED7`) — `mov edx,[def+0x241]` / `shr edx,0x1e` / `and dl,1` /
+`neg dl` / `sbb edx,edx` / `and edx,0x4B` / `add edx,0x32`: each pixel's depth byte is its model
+height plus **0x32, or 0x7D when `UnitDef+0x241` bit 30 is set**. Bit 30 is the digger bit
+(`tagpu_native.c` `UD_DIGGER`), not "airborne": MEASURED clear on ARMATLAS (`0x00808889`) and
+ARMCOM (`0x0495C0C8`). The higher base leaves room below the origin for the `0x7D` clip to
+erase.
 
 ## `0x48AB70` — attach and detach one unit to another — mapped by us
 
