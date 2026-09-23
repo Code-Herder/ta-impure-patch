@@ -1208,6 +1208,35 @@ footprint. A build-menu click changes no GUI state — only the mode byte moves 
 is latched here, not in any `.GUI` gadget record. The frame packet carries it as
 `build_unit_id` for the ghost pass.
 
+**`0x4197D0` — who fills `0x2C92..0x2CA6`: the footprint snapped around the world point
+[DISASSEMBLED 2026-09-23; MEASURED the same day].** `cdecl()`, no arguments, `ret`. Two call
+sites, both behind "pointer on the world (`0x2CC6` bit 1) and mode `0x0E`": `0x499241` in the
+mode-6 mouse handler, right after `0x498DA0`, and `0x491CDB` inside `0x491CC0` (`ret 4`). It
+reads nothing about the screen — only the world point `main+0x2CAA` that `0x498DA0` just
+left there (x, y, z in 16.16) — so **the square follows the world point, and every question of
+where it lands relative to the pointer is a question about `0x498DA0`'s input and about where
+the world is drawn.**
+
+```
+def   = *(main+0x1439B) + BuildUnitID*0x249          ; the UnitDef, stride 585
+fx,fz = i16 [def+0x14A], i16 [def+0x14C]             ; footprint in 16-px cells
+cx0   = (TPos.x - fx<<19 + 0x80000) >> 20            ; round((x - 8fx) / 16)
+cz0   = (TPos.z - fz<<19 + 0x80000) >> 20            ;   TPos.y is loaded and not used
+main[0x2C92] = cx0*16          main[0x2C9E] = cx0*16 + fx*16
+main[0x2C9A] = cz0*16          main[0x2CA6] = cz0*16 + fz*16
+ok    = 0x47D2E0(def, cx0 | cz0<<16, 0, main+0x1B63+331*player) & 1
+main[0x2CC6] bit 6 = ok                               ; green vs blocked (the colour 0x469E6B picks)
+alt   = ok ? 0x47C780() : 0x47D820(def, cx0 | cz0<<16)   ; a byte
+main[0x2C96] = main[0x2CA2] = alt                     ; both corners' altitude
+return ok
+```
+
+So the square's centre is within **8 world px** of the world point on each axis, at every zoom:
+that is the snap, and at 7.7× it is up to 62 screen px. Measured at 1920×1080 on `ARMSOLAR`
+(5×5 cells), the pointer's engine point at world x 1940: corners `1904..1984`, centre 1944. `0x47D2E0` is the site
+test *[INFERRED]* from its result landing in the green bit; `0x47C780` / `0x47D820` are the
+placement altitude for a valid and a blocked site *[INFERRED]* — neither was disassembled.
+
 **`0x46A530 DrawUnitSelectBoxRect` has NO ModelId test — a negative result that cost a landing
 review to establish [BINARY-VERIFIED 2026-09-10].** Its only early-out is the `SelBoxes` option
 bit:

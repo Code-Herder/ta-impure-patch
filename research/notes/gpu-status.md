@@ -2309,12 +2309,10 @@ the game under it. It clears the whole frame on purpose, once, until the lever i
 
 ### 2.15 HUD scale (`tagpu_hud.c`, **off unless armed**, `tagpu_hud.on`) — Phase F G18f
 
-> **THE DRAW HALF IS GONE SINCE 2026-09-20 (§2.81).** The magnification was the UI layer's
-> `LAY_FS` sampling `uHud`, and the clean cut deleted that layer, so arming `tagpu_hud.on` now
-> shifts the world and the input mapping and leaves no HUD behind to magnify. `tagpu_hud.c`
-> itself is untouched — the geometry, the ceiling, `tagpu_hud_to_engine`, the menu stage — and
-> everything below still describes what it computes. It was never a play default, so nothing
-> shipped changes; the pass that consumed it is what has to come back.
+> **Both halves draw on Vulkan.** The magnification is the UI composite's `uHud`
+> (`tagpu_gui_surf.c`'s shader, recorded by `tagpu_vk_gui.c`), and the world target is placed
+> on the frame shifted by `tagpu_hud_shift` (`tagpu_native.c`, where it publishes
+> `TAGPU_WORLDTGT`). It is not a play default; the Visuals row's `hudscale=` turns it on.
 
 The in-game HUD magnified inside the player's own Screen Size, over a world the engine goes on
 drawing exactly as it always did — so Screen Size and HUD size are two dials rather than two
@@ -2333,12 +2331,12 @@ covers the outer world instead of asking for it.
 
 | site | what we do there | thread |
 |---|---|---|
-| `LAY_FS` (`tagpu_gui_surf.c`) | `uHud` — the two integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them. Inert at `s = 1` | render |
+| the UI composite (`tagpu_gui_surf.c`'s shader, `tagpu_vk_gui.c`) | `uHud` — the two integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them; the world region is sampled back by the shift. Inert at `s = 1` | render |
 | `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid | message |
 | `sharp_cursor`, `sharp_minimap` | `tagpu_hud_to_screen()` — the engine's own cursor position (the fallback path only) and the minimap's box go the other way, so the sharp layer lands on the magnified art | render |
 | `tagpu_menu.c` | the "UI scale" row, `trigger_rect()` and `panel_rect()` | game / window |
 | `0x4288D0` (observer), gated on return address `0x498242` | write `R`, `B`, `viewW`, `viewH` so the engine's viewport IS the visible window — `L`/`T` untouched, because the projection bakes them. Writes nothing at stock | game |
-| `tagpu_native.c`, the world composite's `glViewport` | the one draw that puts the world target on the frame, shifted by `(128s−128, 32s−32)` | render |
+| `tagpu_native.c`, the `TAGPU_WORLDTGT` publish; `tagpu_vk_world_record` | the one draw that puts the world target on the frame: its rect is shifted by `(128s−128, 32s−32)` × k device px; the viewport keeps the whole block and only the scissor is clipped to the window, so the block's far edges (the engine's right inset and bottom bar, no world in them) fall off the frame instead of squeezing the world. Without it every world thing — the build square, a unit under a click — sits the shift away from the pointer, a constant in screen px that reads as "far" at zoom < 1, where the square is small | render |
 **One resolver, so the two halves cannot disagree.** `tagpu_hud_geom(W, H, pct, …)` is a pure
 function that clamps to the screen's own ceiling and yields `s`, the panel width and the bar
 height. The composite and the pointer map both call it; neither owns the answer, and because
@@ -10039,10 +10037,6 @@ files (§2.52). A landing that corrects a fact has to grep for the fact.
   it is a softer rect. Porting it needs a second 1x image, a depth resolve and the marker pass
   recorded twice; the offscreen depth attachment is `STORE_OP_DONT_CARE` until then and the code
   says so.
-- **The HUD-scale shift.** The GL composite offsets this draw by `tagpu_hud_shift` scaled into
-  frame pixels; the Vulkan composite does not, so `tagpu_hud.on` leaves the world where it is
-  today. The rect is published unshifted on purpose — a shifted rect only one consumer applies is
-  how two lanes drift.
 - **The two-step resolve.** GL resolves `ss -> 1x` and then composites 1x -> viewport with
   `GL_NEAREST`; this draws the `ss` image straight into the viewport with `LINEAR`. At k = 1 those
   are arithmetically the same filter (a destination centre lands on the corner of a 2x2 source

@@ -90,6 +90,7 @@
 #include "tagpu_pal.h"       /* the palette the screen is SHOWN with, not main+0x143A7 */
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
+#include "tagpu_hud.h"       /* tagpu_hud_shift: where the world block lands */
 
 /* ---- engine layout (all binary-verified) ---- */
 #define TA_MAINPP    0x00511DE8u
@@ -2693,14 +2694,27 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        whole argument for why that matters, and it applies verbatim to the
        backend.
 
-       THE RECT IS THE FRAME'S OWN VIEWPORT AND CARRIES NO HUD SHIFT. The Vulkan
-       composite does not apply `tagpu_hud_shift`, so the shift is deliberately
-       NOT folded in here. `tagpu_hud.on` is not a play default and the gap is
-       stated in the plan. */
+       THE RECT IS THE FRAME'S OWN VIEWPORT, TRANSLATED BY THE HUD SHIFT
+       (gui-renderer.md 22.6). Under HUD scale the engine draws the world into
+       [128, R] x [32, B] of its surface and the player sees it at
+       [128s, W) x [32s, H - 32s): the pointer map subtracts that vector on the
+       way in (tagpu_hud_to_engine) and the GUI composite subtracts it when it
+       samples the world region, so the world block has to land by the same
+       vector or every world thing -- the build square, a unit under a click --
+       sits (128s - 128, 32s - 32) game px from the pointer. The vector is in
+       game px and this rect is in device px, hence the k. The block's far
+       edges then hang past the window by the same amount: that is the
+       engine's own right inset and bottom bar, which hold no world, and
+       tagpu_vk_world_record clips them with the scissor. */
     {
         TAGPU_WORLDTGT w;
+        int hdx, hdy;
         w.gw = gw; w.gh = gh; w.ss = ss; w.devres = devres;
         w.vx = f->vp_x; w.vy = f->vp_y; w.vw = f->vp_w; w.vh = f->vp_h;
+        if (tagpu_hud_shift(&hdx, &hdy) && gw > 0 && gh > 0) {
+            w.vx += (int)(((long long)hdx * f->vp_w + gw / 2) / gw);
+            w.vy += (int)(((long long)hdy * f->vp_h + gh / 2) / gh);
+        }
         w.frame = f->frame_counter;
         s_wt = w; s_wtHave = 1;
     }
