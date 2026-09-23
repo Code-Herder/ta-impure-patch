@@ -1208,11 +1208,13 @@ temporary file renamed over the target (the §2.10 deferred write; TA is lockste
 thread never writes a file mid-session). The two other writes are at the ends, where nothing is
 in lockstep: the first-run defaults at attach, and a final flush in `dd_Release` once the render
 thread is joined (and at process detach) — a click not yet flushed, and the windowed frame. A
-failed write keeps the change and is retried, at most once a second. It is loaded once at attach
+failed write keeps the change and is retried, at most once a second: the change count is
+cleared only by a compare-exchange against the count the write covered, after it landed. It is loaded once at attach
 and held in memory. **Every key is bounded against its own stage table on the way in**: an
 out-of-range value takes that key's default and is logged, so a hand-edited file cannot index
-anything. A key this build does not know is kept verbatim and written back, so a file a newer
-build wrote survives an older one. A store that exists and **cannot be read** is logged and
+anything. A key this build does not know is kept verbatim and written back, so a key a newer
+build added survives an older one; a new *value* of a known key does not — it reads as out of
+range, and the next write puts the default in its place. A store that exists and **cannot be read** is logged and
 never written that session, which runs at the defaults — a write would replace the player's
 file with them.
 
@@ -1300,8 +1302,10 @@ the levers a measurement armed survive. Empty means every key at its compiled de
 
 **Restore defaults** resets every key except `display`, `monitor`, `window` and `gpu`, for §2.10's
 reason: it must not move the window somewhere the player cannot see the button, nor rebind the
-device under them. **Undo** puts every row back to what the screen opened with, those included —
-UI scale to its exact value, `off` too. Neither touches a row a lever holds.
+device under them. **Undo** puts the render rows back to what the screen opened with, and the
+window rows the visit touched back to what the store held — the Monitor to "none" if it named
+none, UI scale to its exact value, `off` too — so an untouched row is never pinned to the value
+its plate resolved. Neither touches a row a lever holds.
 
 **The engine's values** (landing 2):
 

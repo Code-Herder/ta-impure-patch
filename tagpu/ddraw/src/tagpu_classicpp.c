@@ -116,7 +116,8 @@ static void shadow_defaults(TAGPU_LIGHT* L)
 }
 
 static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float amb,
-                  float ssunAz, float ssunEl, int off, const char* how)
+                  float ssunAz, float ssunEl, int off, const char* how,
+                  int assets, int* lit, TAGPU_LIGHT* L)
 {
     char b[240];
     static const char* const air[3] = { "len", "physical", "drop" };
@@ -130,45 +131,59 @@ static void apply(float sunAz, float sunEl, float usunAz, float usunEl, float am
        survives. Nothing here touches `shadows=`: it is the player's key, and a
        lever that silently rewrote it would make the log lie and not put it back
        when the sun came on again. */
-    if (off) s_lit = 0;
-    sun_vector(sunAz, sunEl, s_light.sun);
-    sun_vector(usunAz, usunEl, s_light.unitSun);
-    sun_vector(ssunAz, ssunEl, s_light.shadowSun);
-    s_light.amb = amb;
-    s_light.level = level_of(s_light.sun, amb);
-    s_light.unitLevel = level_of(s_light.unitSun, amb);
+    if (off) *lit = 0;
+    sun_vector(sunAz, sunEl, L->sun);
+    sun_vector(usunAz, usunEl, L->unitSun);
+    sun_vector(ssunAz, ssunEl, L->shadowSun);
+    L->amb = amb;
+    L->level = level_of(L->sun, amb);
+    L->unitLevel = level_of(L->unitSun, amb);
     /* its own line: `classicpp: light ` is a prefix the ta-drive skill greps */
-    _snprintf(b, sizeof b, "classicpp: assets=%d light=%d (%s)", s_assets, s_lit, how);
+    _snprintf(b, sizeof b, "classicpp: assets=%d light=%d (%s)", assets, *lit, how);
     cplog(b);
     _snprintf(b, sizeof b, "classicpp: light sun=%s%.1f,%.1f unitsun=%.1f,%.1f amb=%.2f level=%.4f/%.4f (%s)",
               off ? "off " : "", sunAz, sunEl, usunAz, usunEl, amb,
-              s_light.level, s_light.unitLevel, how);
+              L->level, L->unitLevel, how);
     cplog(b);
     _snprintf(b, sizeof b, "classicpp: shadows=%d(%s) shadowsun=%.1f,%.1f penumbra=%.3f shadowlen=%s%.1f,%.2f"
               " shade=%.2f terrainshadow=%d shadowres=%d airshadow=%s aniso=%.1f",
-              s_light.shadows, shad[s_light.shadows], ssunAz, ssunEl, s_light.penumbra,
-              s_light.shadowlenOn ? "" : "off:", s_light.shadowlen[0], s_light.shadowlen[1],
-              s_light.shade, s_light.terrainshadow, s_light.shadowres, air[s_light.airshadow],
-              (double)s_light.aniso);
+              L->shadows, shad[L->shadows], ssunAz, ssunEl, L->penumbra,
+              L->shadowlenOn ? "" : "off:", L->shadowlen[0], L->shadowlen[1],
+              L->shade, L->terrainshadow, L->shadowres, air[L->airshadow],
+              (double)L->aniso);
     cplog(b);
 }
 
 /* The settings store's value for every menu key the cfg did NOT name: the cfg
    is the lever and wins, the store ranks next, and when the store has no say
    (tagpu_defaults.off) the defaults set above stand -- renderers.md 2.10b. */
-static void from_store(unsigned held)
+static void from_store(unsigned held, int* assets, int* lit, TAGPU_LIGHT* L)
 {
     int v;
-    InterlockedExchange(&s_held, (LONG)held);
-    if (!(held & TAGPU_HELD_ASSETS) && tagpu_settings_get(TS_ASSETS, &v)) s_assets = v != 0;
-    if (!(held & TAGPU_HELD_LIGHT)  && tagpu_settings_get(TS_LIGHT, &v))  s_lit = v != 0;
-    if (!(held & TAGPU_HELD_SHADOWS) && tagpu_settings_get(TS_SHADOWS, &v)) s_light.shadows = v;
-    if (!(held & TAGPU_HELD_SHADOWRES) && tagpu_settings_get(TS_SHADOWRES, &v)) s_light.shadowres = v;
+    if (!(held & TAGPU_HELD_ASSETS) && tagpu_settings_get(TS_ASSETS, &v)) *assets = v != 0;
+    if (!(held & TAGPU_HELD_LIGHT)  && tagpu_settings_get(TS_LIGHT, &v))  *lit = v != 0;
+    if (!(held & TAGPU_HELD_SHADOWS) && tagpu_settings_get(TS_SHADOWS, &v)) L->shadows = v;
+    if (!(held & TAGPU_HELD_SHADOWRES) && tagpu_settings_get(TS_SHADOWRES, &v)) L->shadowres = v;
 }
 
 static void bad(const char* p)
 {
     char b[160]; _snprintf(b, sizeof b, "classicpp: cfg: bad token \"%s\" ignored", p); cplog(b);
+}
+
+/* the cfg: whitespace-separated key=value tokens, unknown keys reported once */
+/* THE READ IS BUILT IN LOCALS AND PUBLISHED WHOLE. The render thread reads
+   these every frame while a poll re-reads the cfg, and a rebuild in place
+   would show it the defaults a read starts from -- a shadow map resized for
+   one frame, a style flickering. Each field is published once, at its new
+   value, so a reader sees the old set, the new one, or a field-wise mix of
+   the two, and every one of those is a value some read produced. */
+static void publish(unsigned held, int assets, int lit, const TAGPU_LIGHT* L)
+{
+    s_light  = *L;
+    s_assets = assets;
+    s_lit    = lit;
+    InterlockedExchange(&s_held, (LONG)held);
 }
 
 /* the cfg: whitespace-separated key=value tokens, unknown keys reported once */
@@ -182,13 +197,15 @@ static void read_cfg(void)
     float ssunAz = DEF_SSUN_AZ, ssunEl = DEF_SSUN_EL;
     int off = 0;
     unsigned held = 0;
-    s_assets = 1; s_lit = 1;              /* the switch undivided: every part on */
-    shadow_defaults(&s_light);
+    int assets = 1, lit = 1;              /* the switch undivided: every part on */
+    TAGPU_LIGHT L;
+    shadow_defaults(&L);
     h = CreateFileA(CFG_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (h == INVALID_HANDLE_VALUE) {
-        from_store(held);
-        apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, 0, "no cfg");
+        from_store(held, &assets, &lit, &L);
+        apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, 0, "no cfg", assets, &lit, &L);
+        publish(held, assets, lit, &L);
         return;
     }
     if (ReadFile(h, buf, sizeof buf - 1, &n, 0) && n > 0) {
@@ -209,10 +226,10 @@ static void read_cfg(void)
             last = (*q == 0);
             *q = 0;
             if (!_strnicmp(p, "assets=", 7)) {
-                s_assets = atoi(p + 7) != 0;
+                assets = atoi(p + 7) != 0;
                 held |= TAGPU_HELD_ASSETS;
             } else if (!_strnicmp(p, "light=", 6)) {
-                s_lit = atoi(p + 6) != 0;
+                lit = atoi(p + 6) != 0;
                 held |= TAGPU_HELD_LIGHT;
             } else if (!_strnicmp(p, "sun=", 4)) {
                 if (!lstrcmpiA(p + 4, "off")) { off = 1; held |= TAGPU_HELD_LIGHT; }
@@ -245,41 +262,41 @@ static void read_cfg(void)
                     }
                 }
                 if (m >= TAGPU_SHADOWS_OFF && m <= TAGPU_SHADOWS_HARD) {
-                    s_light.shadows = m;
+                    L.shadows = m;
                     held |= TAGPU_HELD_SHADOWS;
                 } else bad(p);                /* out of range: the default stands */
             } else if (!_strnicmp(p, "shadowsun=", 10)) {
                 if (sscanf(p + 10, "%f,%f", &a, &e) == 2) { ssunAz = a; ssunEl = e; }
                 else bad(p);
             } else if (!_strnicmp(p, "penumbra=", 9)) {
-                s_light.penumbra = (float)atof(p + 9);
-                if (s_light.penumbra < 0.0f) s_light.penumbra = 0.0f;
+                L.penumbra = (float)atof(p + 9);
+                if (L.penumbra < 0.0f) L.penumbra = 0.0f;
             } else if (!_strnicmp(p, "shadowlen=", 10)) {
-                if (!lstrcmpiA(p + 10, "off")) s_light.shadowlenOn = 0;
+                if (!lstrcmpiA(p + 10, "off")) L.shadowlenOn = 0;
                 else if (sscanf(p + 10, "%f,%f", &a, &e) == 2) {
-                    s_light.shadowlenOn = 1; s_light.shadowlen[0] = a; s_light.shadowlen[1] = e;
+                    L.shadowlenOn = 1; L.shadowlen[0] = a; L.shadowlen[1] = e;
                 } else bad(p);
             } else if (!_strnicmp(p, "shade=", 6)) {
-                s_light.shade = (float)atof(p + 6);
-                if (s_light.shade < 0.0f) s_light.shade = 0.0f;
-                if (s_light.shade > 1.0f) s_light.shade = 1.0f;
+                L.shade = (float)atof(p + 6);
+                if (L.shade < 0.0f) L.shade = 0.0f;
+                if (L.shade > 1.0f) L.shade = 1.0f;
             } else if (!_strnicmp(p, "terrainshadow=", 14)) {
-                s_light.terrainshadow = atoi(p + 14) != 0;
+                L.terrainshadow = atoi(p + 14) != 0;
             } else if (!_strnicmp(p, "shadowres=", 10)) {
                 int r = atoi(p + 10);
                 if (r < 256) r = 256;
                 if (r > 4096) r = 4096;
-                s_light.shadowres = r;
+                L.shadowres = r;
                 held |= TAGPU_HELD_SHADOWRES;
             } else if (!_strnicmp(p, "aniso=", 6)) {
                 float a = (float)atof(p + 6);
                 if (a < 1.0f) a = 1.0f;
                 if (a > 16.0f) a = 16.0f;
-                s_light.aniso = a;
+                L.aniso = a;
             } else if (!_strnicmp(p, "airshadow=", 10)) {
-                if (!lstrcmpiA(p + 10, "len")) s_light.airshadow = TAGPU_AIRSHADOW_LEN;
-                else if (!lstrcmpiA(p + 10, "physical")) s_light.airshadow = TAGPU_AIRSHADOW_PHYSICAL;
-                else if (!lstrcmpiA(p + 10, "drop")) s_light.airshadow = TAGPU_AIRSHADOW_DROP;
+                if (!lstrcmpiA(p + 10, "len")) L.airshadow = TAGPU_AIRSHADOW_LEN;
+                else if (!lstrcmpiA(p + 10, "physical")) L.airshadow = TAGPU_AIRSHADOW_PHYSICAL;
+                else if (!lstrcmpiA(p + 10, "drop")) L.airshadow = TAGPU_AIRSHADOW_DROP;
                 else bad(p);
             } else {
                 char b[160]; _snprintf(b, sizeof b, "classicpp: cfg: unknown token \"%s\" ignored", p); cplog(b);
@@ -289,11 +306,26 @@ static void read_cfg(void)
         }
     }
     CloseHandle(h);
-    from_store(held);
-    apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, off, CFG_FILE);
+    from_store(held, &assets, &lit, &L);
+    apply(sunAz, sunEl, usunAz, usunEl, amb, ssunAz, ssunEl, off, CFG_FILE, assets, &lit, &L);
+    publish(held, assets, lit, &L);
 }
 
+/* ONE THREAD AT A TIME: the menu polls from the game thread and the passes
+   from the render thread. A poll that finds another in progress returns, and
+   its caller reads the set last published -- which is what it would have read
+   a moment earlier anyway. */
+static volatile LONG s_polling;
+static void poll_owned(void);
+
 static void poll(void)
+{
+    if (InterlockedCompareExchange(&s_polling, 1, 0) != 0) return;
+    poll_owned();
+    InterlockedExchange(&s_polling, 0);
+}
+
+static void poll_owned(void)
 {
     DWORD t = GetTickCount();
     WIN32_FILE_ATTRIBUTE_DATA fad;

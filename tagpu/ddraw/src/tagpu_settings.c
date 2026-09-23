@@ -87,6 +87,8 @@ static const Key s_key[TS_NKEYS] = {
 
 static volatile LONG s_val[TS_NKEYS];
 static volatile LONG s_gen;
+/* A COUNT of changes, not a flag: the flush clears it only by the count it
+   saw, and only once the write has landed (flush). */
 static volatile LONG s_dirty;
 static int  s_ignored;                  /* tagpu_defaults.off, latched at attach */
 static int  s_attached;
@@ -193,7 +195,7 @@ void tagpu_settings_set(TagpuSetting key, int value)
     /* the generation SECOND, and with a barrier: a reader that sees it has the
        value behind it */
     InterlockedIncrement(&s_gen);
-    InterlockedExchange(&s_dirty, 1);
+    InterlockedIncrement(&s_dirty);
 }
 
 /* ---- the file ------------------------------------------------------------ */
@@ -252,24 +254,27 @@ static int write_store(void)
     HANDLE h;
     DWORD wrote = 0;
     const char* why = NULL;
+    DWORD err = 0;
     int len = serialise(b, sizeof b);
 
     if (len < 0) why = "the store does not fit its buffer";
     else {
         h = CreateFileA(STORE_TMP, GENERIC_WRITE, FILE_SHARE_READ, 0, CREATE_ALWAYS,
                         FILE_ATTRIBUTE_NORMAL, 0);
-        if (h == INVALID_HANDLE_VALUE) why = "cannot create " STORE_TMP;
+        if (h == INVALID_HANDLE_VALUE) { why = "cannot create " STORE_TMP; err = GetLastError(); }
         else {
             int ok = WriteFile(h, b, (DWORD)len, &wrote, 0) && wrote == (DWORD)len;
+            if (!ok) { why = "short write to " STORE_TMP; err = GetLastError(); }
             CloseHandle(h);
-            if (!ok) why = "short write to " STORE_TMP;
-            else if (!MoveFileExA(STORE_TMP, STORE, MOVEFILE_REPLACE_EXISTING))
+            if (!why && !MoveFileExA(STORE_TMP, STORE, MOVEFILE_REPLACE_EXISTING)) {
                 why = "cannot replace " STORE;
+                err = GetLastError();
+            }
             if (why) DeleteFileA(STORE_TMP);
         }
     }
     if (why) {
-        if (!s_failing) slog("%s (error %lu) - " STORE " left as it was, retried", why, GetLastError());
+        if (!s_failing) slog("%s (error %lu) - " STORE " left as it was, retried", why, err);
         s_failing = 1;
         return 0;
     }
@@ -278,16 +283,20 @@ static int write_store(void)
     return 1;
 }
 
-/* A FAILED WRITE RE-ARMS THE FLAG, so the change is not lost: it is retried on
-   a later frame (at most once a second -- a file a scanner holds should not be
-   hammered at the frame rate) and by the final flush. The flag is cleared
-   BEFORE serialise reads the values, so a set racing this one is either in
-   the file or leaves the flag set; it cannot be dropped. */
+/* CLEARED ONLY BY WHAT WAS WRITTEN, AND ONLY AFTER IT WAS. The count is read
+   before serialise reads the values, so everything it covers is in the file;
+   it is then taken back with a compare-exchange, so a set that raced the write
+   leaves the store marked. A write that fails -- or a thread killed inside
+   one -- leaves the count where it was, for a later frame (at most once a
+   second: a file a scanner holds should not be hammered at the frame rate) or
+   the final flush. The file itself is only ever replaced whole (write_store). */
 static void flush(int final)
 {
+    LONG seen;
     if (!s_attached || s_unreadable) return;
     if (!final && s_retryAt && (LONG)(GetTickCount() - s_retryAt) < 0) return;
-    if (!InterlockedExchange(&s_dirty, 0)) return;
+    seen = s_dirty;
+    if (!seen) return;
     if (final) {
         /* Only ever called once no other thread can be inside s_io: after the
            render thread is joined, or at process detach, when every other
@@ -300,12 +309,12 @@ static void flush(int final)
     } else {
         EnterCriticalSection(&s_io);
     }
-    if (!write_store()) {
-        InterlockedExchange(&s_dirty, 1);
+    if (write_store()) {
+        InterlockedCompareExchange(&s_dirty, 0, seen);
+        s_retryAt = 0;
+    } else {
         s_retryAt = GetTickCount() + RETRY_MS;
         if (!s_retryAt) s_retryAt = 1;
-    } else {
-        s_retryAt = 0;
     }
     LeaveCriticalSection(&s_io);
 }
@@ -422,11 +431,12 @@ static int  s_recLen;
 static void record(const char* fmt, ...)
 {
     va_list ap;
-    int n;
+    int n, room = (int)sizeof s_rec - s_recLen - 3;   /* CR, LF and the NUL */
+    if (room <= 0) return;
     va_start(ap, fmt);
-    n = _vsnprintf(s_rec + s_recLen, sizeof s_rec - s_recLen - 2, fmt, ap);
+    n = _vsnprintf(s_rec + s_recLen, room, fmt, ap);
     va_end(ap);
-    if (n < 0 || n >= (int)sizeof s_rec - s_recLen - 2) return;
+    if (n < 0 || n >= room) { s_rec[s_recLen] = 0; return; }
     s_recLen += n;
     s_rec[s_recLen++] = '\r';
     s_rec[s_recLen++] = '\n';
@@ -571,7 +581,7 @@ static void migrate(const char* ini_path)
     HANDLE h;
     DWORD wrote = 0;
 
-    InterlockedExchange(&s_dirty, 1);   /* written by attach: every key, at its default */
+    InterlockedIncrement(&s_dirty);     /* written by attach: every key, at its default */
     if (exists(RECORD)) {
         slog("no " STORE ", and " RECORD " says this directory was migrated - writing the defaults");
         return;
@@ -607,7 +617,7 @@ void tagpu_settings_attach(const char* ini_path)
        there is a tacli that did not, and renaming a measurement's levers aside
        would silently change what it measures. */
     if (first && !s_ignored) migrate(ini_path);
-    else load();
+    else if (!first) load();
     s_attached = 1;
     /* The defaults are written now; if that fails the flag stays set and the
        render thread retries, as for any click. */
@@ -660,7 +670,7 @@ void tagpu_settings_set_gpu(const char* name)
     EnterCriticalSection(&s_io);
     if (lstrcmpiA(s_gpu, name)) {
         lstrcpynA(s_gpu, name, sizeof s_gpu);
-        InterlockedExchange(&s_dirty, 1);
+        InterlockedIncrement(&s_dirty);
     }
     LeaveCriticalSection(&s_io);
 }
@@ -688,7 +698,7 @@ void tagpu_settings_save_window(int x, int y, int w, int h)
     if (!s_winSet || memcmp(s_win, f, sizeof f)) {
         memcpy(s_win, f, sizeof f);
         s_winSet = 1;
-        InterlockedExchange(&s_dirty, 1);
+        InterlockedIncrement(&s_dirty);
         slog("the windowed frame %d,%d %dx%d is kept for the next launch", x, y, w, h);
     }
     LeaveCriticalSection(&s_io);

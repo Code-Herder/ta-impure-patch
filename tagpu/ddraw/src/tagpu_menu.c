@@ -1707,6 +1707,10 @@ enum { VD_MODE, VD_MON, VD_SCALE, VD_FPS, VD_GPU, VD_COUNT,
           a stage cannot carry "off" (s_scaleOpen) */
        VD_UNDO_SCALE };
 static volatile LONG s_scaleOpen = -1;  /* the UI scale in force at open, -1 off */
+/* Game thread: the window rows clicked since the screen opened, and the
+   store's Monitor then (-1 none) -- what Undo puts back (vis_undo). */
+static int s_vtouched[VD_COUNT];
+static int s_monOpen = -1;
 static int vrow_held(int row);
 
 #define VD_MONMAX 8
@@ -2300,34 +2304,30 @@ static const char* vis_actuated(void* gi)
     return ctrls + (size_t)idx * STRIDE + G_NAME;
 }
 
-/* Every WINDOW row re-applied, because a restored model is only a picture
-   until the window is actually changed to match it -- except a row a lever
-   holds, whose plate shows the lever's value and must not be put in force over
-   it. UI scale goes back as the exact value it had, not as its stage. */
-static void apply_display_all(void)
-{
-    int i;
-    for (i = 0; i < VD_COUNT; i++)
-        if (!vrow_held(i))
-            apply_display(i == VD_SCALE ? VD_UNDO_SCALE : i);
-}
+/* UNDO -- back to what the screen opened with, the two rows that move the
+   window included. This is the escape hatch for a Display mode or Monitor the
+   player cannot see the menu on any more, so it is the one place those two ARE
+   put back.
 
-/* UNDO -- back to what the screen opened with, every row, the two that move
-   the window included. This is the escape hatch for a Display mode or Monitor
-   the player cannot see the menu on any more, so it is the one place those two
-   ARE put back. */
+   ONLY THE WINDOW ROWS THE VISIT TOUCHED, AND TO WHAT THE STORE HELD. A plate
+   shows a resolved value -- the window's own monitor for a store that names
+   none, the device that came up for a stored GPU that could not -- so putting
+   an untouched row back from its plate would pin what the player never chose.
+   The Monitor goes back as the store's own value, "none" included; UI scale as
+   its exact value, off included. A row a lever holds is never put in force. */
 static void vis_undo(void)
 {
-    int i, moved[VD_COUNT];
-    /* Only a window row the visit MOVED goes back into the store: the plates
-       show a resolved value -- the window's own monitor for a store that names
-       none -- and committing that would pin what the player never chose. */
-    for (i = 0; i < VD_COUNT; i++) moved[i] = s_vstage[i] != s_vstageOpen[i];
+    int i;
     memcpy(s_stage,  s_stageOpen,  sizeof s_stage);
     memcpy(s_vstage, s_vstageOpen, sizeof s_vstage);
-    apply_display_all();
     commit_all_rows();
-    for (i = 0; i < VD_COUNT; i++) if (moved[i]) commit_display(i);
+    for (i = 0; i < VD_COUNT; i++) {
+        if (!s_vtouched[i] || vrow_held(i)) continue;
+        apply_display(i == VD_SCALE ? VD_UNDO_SCALE : i);
+        if (i == VD_MON) tagpu_settings_set(TS_MONITOR, s_monOpen);
+        else commit_display(i);
+    }
+    memset(s_vtouched, 0, sizeof s_vtouched);
     s_visKeep = 1;
 }
 
@@ -2485,6 +2485,8 @@ static void* __cdecl vis_build_after(unsigned int* regs)
             memcpy(s_stageOpen,  s_stage,  sizeof s_stageOpen);
             memcpy(s_vstageOpen, s_vstage, sizeof s_vstageOpen);
             InterlockedExchange(&s_scaleOpen, tagpu_hud_stored_pct());
+            memset(s_vtouched, 0, sizeof s_vtouched);
+            if (!tagpu_settings_get(TS_MONITOR, &s_monOpen)) s_monOpen = -1;
         }
         push_stages(main_p + OFF_GUIINFO);
         push_display(main_p + OFF_GUIINFO);
@@ -2545,6 +2547,7 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
         while (d == VD_SCALE && !scale_stage_ok(s_vstage[d]) && --guard > 0);
         if (d == VD_MON) s_monChosen = 1;
         commit_display(d);
+        s_vtouched[d] = 1;
         apply_display(d);       /* posts; the wndproc does the window work */
         /* The Monitor row changes what the Screen Size list may contain, so it
            rebuilds the screen instead of just re-plating it. Nothing after the
