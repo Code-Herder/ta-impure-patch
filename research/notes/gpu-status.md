@@ -14,17 +14,19 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 ## 1. Status — what is ours, what is still the engine's
 
 **THERE ARE TWO RENDERER BACKENDS SINCE 2026-09-18, AND THE PROCESS CREATES NO GL CONTEXT ON
-ANY PATH.** `renderer=vulkan` is the patch and `renderer=gdi` the reference; `auto`,
-`opengl` and `openglcore` all reach the Vulkan lane, which hands the session to GDI late if it
-will not come up. `render_ogl.c` (2 015 lines) and `render_ogl.h` went in the vulkan-only plan's
+ANY PATH.** `renderer=vulkan` is the patch and `renderer=gdi` the reference. `auto` and every
+value the switch does not name reach the Vulkan lane, which hands the session to GDI late if it
+will not come up; a value that is not `auto` is logged as `ddraw: renderer=X is not a renderer`.
+The old names — `opengl`, `openglcore`, `direct3d9` — are not recognised and take that path
+(§2.85). `render_ogl.c` (2 015 lines) and `render_ogl.h` went in the vulkan-only plan's
 landing 11-2, ahead of the sixteen passes' GL draw halves rather than behind them -- with the
 lane's only other `tagpu_overlay_draw` caller gone, `gl_draws = !tagpu_vk_owns_present()` is
 false at every surviving call, so those halves are now unreachable by an ordering and 11-3/11-4
 delete dead code. **`tacli shot` moved off the GL present loop with it** and answers on every
 lane for the first time -- the flip's trigger family both arms it and, on its NEXT pass, captures,
 so the picture is a frame the engine presented in between (capturing in the same pass returns
-frame N-1; §2.64). **`tacli glshot` is retired** and fails loudly, and `tascene ab` -- which
-called it -- now stops with an explanation rather than comparing the wrong images.
+frame N-1; §2.64). **`tacli glshot` is gone**, and `tascene ab` grabs the game window where it
+called it (§2.85).
 
 The paragraph this replaced, kept for its own record: three backends since the Direct3D9
 deletion. `renderer=` took `auto`
@@ -15592,3 +15594,45 @@ the rest of the marker layer still draws and the log says why once.
 (`vk: unit: the GL twin drew 348 posed unit(s) this hand-over does not carry`): about 860 units
 were on screen against `TAGPU_PD_MAXHAND`'s 512, so **no unit body drew at all** while the rects
 did. That cap and its all-or-nothing refusal predate this landing and were not touched.
+
+### 2.85 The strip — nothing in the build names a GL object, and no setting names GL
+
+**Landed on the branch `worktree-build_ghost`, 2026-09-23, by the owner's ruling: no aliasing, no
+backward compatibility.** 11-5 D4 deleted the last GL *file*; this removed what the lane left in
+everything else, measured by a scan that masks comments and string literals and lists every
+compiled identifier naming GL (`glreset`, `ogl`, `wgl`, `opengl`, `vbo`/`vao`/`fbo`, `palTex`).
+
+- **The renderer switch knows `auto`, `vulkan` and `gdi`.** The `openglcore` latch
+  (`opengl_core`), the `direct3d9` arm that sent an old ini to GDI and the `opengl` log line are
+  gone; any other value is logged once and runs Vulkan. Measured: `renderer=openglcore` logs
+  `ddraw: renderer=openglcore is not a renderer (auto, vulkan, gdi) -- using vulkan` and comes
+  up on Vulkan in 210 ms; `renderer=gdi` logs no `vk:` line and answers `tacli ui` and `tacli shot`.
+- **Dead state:** `opengl_y_align`, `render.tex`, `shader` (the libretro GLSL option),
+  `nonexclusive`, `TAGPU_FRAME.surface_tex`, the posebake GL generation and its key fields, the
+  `vbo`/`vao` fields of `TAGPU_PBGEOM`/`TAGPU_PBMAT`, the `palTex`/`scafTex` parameters of the
+  terrain, feature and effects hand-overs (every caller passed 0), `TAGPU_GUI_WHY_GLCTX`, the UI
+  drain's skip-to-reset latch and its `skipped=` heartbeat field.
+- **The ten `*_glreset` functions**, whose root `tagpu_native_glreset` had no caller; its banner
+  said to delete the cascade with the last GL file.
+- **Files:** `inc/openglshader.h`, the `tagpu.dll` companion (`tagpu/src/tagpu.c`, `tagpu.rc`,
+  `tagpu/Makefile` — nothing loaded it), the upstream C++Builder config GUI (`config/`, which
+  wrote `renderer=opengl` and could not be built here), `tools/gl-sites.py`, `tools/vkcoexist.c`
+  and `vkcoexist-pixels.sh`. The hook skip-list no longer names `opengl32`, `libgallium_wgl` or
+  `libglapi`. `opengl32.dll` is not mapped in the game process (`/proc/<pid>/maps`, in game);
+  the one GL-named library there is `libGLX_nvidia`, which is NVIDIA's Vulkan ICD on the
+  reference setup (its `nvidia_icd.json` names it).
+- **What players see:** the release `ddraw.ini` said `renderer=openglcore` and its README asked
+  for OpenGL 3.3; both name Vulkan now. The generated ini offers no GL renderer, no `shader=` and
+  no `nonexclusive=`. About forty `tagpu.log` messages that compared against "the GL twin" name
+  the gather or the requirement instead; every prefix and format argument is unchanged.
+- **Tools:** `tacli glshot` is gone. `uiwalk` loses `--layer`/`--vk` and the parity code, and its
+  loading stop waits for `vk: up in N ms` — it waited for `GL CONTEXT CHANGED`, which nothing
+  logs, so every load ran out its 150 s. `promo/shoot.sh`, `promo/survey-map.py` and
+  `tascene ab` grab the client window (`import -window`, 8-bit PPM for `ab`).
+
+**Not closed here:** about 800 comment mentions of GL remain in the DLL sources, most of them the
+history the comment review kept. `tascene ab`'s browser half draws no terrain in headless Chrome
+(the capture half is right: same view, same Commander, same wreck), so its percentage is not a
+parity figure yet. `big-battle` shows `unit=0` in the census from ~frame 3300 on `main` as well
+(`TAGPU_PD_MAXHAND`): the hand-over cap, not this landing.
+
