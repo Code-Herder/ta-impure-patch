@@ -315,8 +315,8 @@ at 1:1** — 0 differing pixels and an unmoved md5 at `ss = 2` with the resolve,
 expressible on the Vulkan lane** (`tagpu_vk_world.h`: the world resolves in one draw, so there
 is no 1x buffer to defer the rect into), which is why both halves were deleted together rather
 than one being ported. **Do not read the 1320 figure as the cost of the move** either: the
-Vulkan rect (§2.84) is not a band at `ss`; it keeps whole game pixels, and measured 179 of its
-189 pixels at exactly the engine's colour.
+Vulkan rect (§2.84) is not a band at `ss`; it keeps whole game pixels, and measured 173 of its
+181 pixels at exactly the engine's colour.
 [UI markers](ui-markers.html) §1 has the numbers and the two construction traps
 (the cap must run along the segment; the band is nudged 1/256 px off the tie).
 
@@ -15439,7 +15439,7 @@ in short:
 |---|---|
 | `tagpu_native.c` `selbox_emit`, `selbox_aabb` | the GL pass's geometry, unchanged: root-piece bounds (cached per template node, dropped in `cache_gen_check`), `0x4B6CC0`'s angle triple, `0x467A50`'s truncating projection, zoom snap; emitted in the unit hand-over loop at key `enc − 0.5`, ahead of every skip |
 | `tagpu_mark.c` `tagpu_mark_emit_selbox` | the bucket and the ownership gate (armed, not `passive`, not `noselbox`); the rects are the first draw of the list and its only `depth` draw; the vertex grows to 8 floats (clip z, 0 for every other marker) |
-| `tagpu_mark.c` `SVS`/`SFS` | a program of its own: the line is a band `2·scale + 2` target px wide, and the fragment stage keeps a sample only when its GAME pixel is on `DrawLine`'s Bresenham (`0x4CC7AB`) |
+| `tagpu_mark.c` `SVS`/`SFS` | a program of its own: the line is a band extended along the segment and `ceil(3·scale) + 2` target px wide, and the fragment stage keeps a sample only when its GAME pixel is on `DrawLine`'s Bresenham (`0x4CC7AB`) |
 | `tagpu_vk_mark.c` `s_pipeLineZ` | that program, Bresenham line mode, depth test `LESS`, writes off; `uPx` written at record time from the target's real extent (`FS_SZ` 48, `FS_PX` 32) |
 
 **Why a fragment test rather than a line.** The first cut drew the rect with the pass's own
@@ -15457,13 +15457,23 @@ window in one run:
 |---|---|
 | our rect pixels identical to the engine's own box | **176** of the engine's 261 (the rest: nearer trees in our frame — the reference has none — and health bars) |
 | our rect pixels the engine does not have | **5** |
-| our rect pixels at exactly the engine's (83,223,79) | **179 of 189** (the line pipeline: 28 of 290) |
+| our rect pixels at exactly the engine's (83,223,79) | **173 of 181** (the line pipeline: 28 of 290); the 8 are on hull silhouettes, where the body's supersampled edge shares the pixel |
 | depth test off, same fixture | the rect's front tip drawn over the next row's tree; the stock game (nothing armed) hides it, as the depth-tested build does |
 | `500v500`, all own units selected | `sel=401 selover=0`, 60 fps |
 
+**The landing review found four, all acted on.** The band was extended along the major axis
+alone and drawn `2·scale + 2` wide, which a brute force of Vulkan's wide-Bresenham rule showed
+leaves samples of kept pixels uncovered at every scale above 1 (58 of 3 720 edge vectors at
+`ss = 2`, 1 328 at 3) — now along the segment and `ceil(3·scale) + 2`, with none uncovered from 1
+to 6 in 1/16 steps. A zero-length edge (a root piece under three vertices) drew nothing where the
+engine plots a pixel — now split a quarter of a screen pixel. A failure to build the rect's own
+pipeline took the whole marker layer with it — now it drops the rects alone. And a comment in
+`tagpu_native.c` still said `s_sbox` was deleted. The table above was re-measured on the fixed
+binary.
+
 **Not covered.** The occlusion was compared against the stock game by eye on two trees, not
 swept. `0x4CC650`'s clip at the context edge is not reproduced (the scissor cuts the band
-instead). A device without Bresenham lines, or without a line `2·scale + 2` wide, draws no rect —
+instead). A device without Bresenham lines, or without a line `ceil(3·scale) + 2` wide, draws no rect —
 the rest of the marker layer still draws and the log says why once.
 
 **Found on the way, not fixed here.** On `500v500` the unit pass stood down for the whole frame

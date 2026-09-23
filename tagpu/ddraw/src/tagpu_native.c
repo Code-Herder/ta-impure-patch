@@ -833,23 +833,19 @@ static const char* model_root(const TAGPU_PACKET* pk, unsigned mid)
     return *(const char* const*)(mptrs + (size_t)mid * 4);   /* in bounds */
 }
 
-/* THE TWO MODEL-AABB CACHES WENT WITH THE GL DRAW HALVES [the vulkan-only
-   plan, landing 11-3]. `s_aabb` (the whole-tree bounds the shadow's height
-   rule read) and `s_sbox` (the select box's own bounds), their counters, the
-   `MAABB` type and the `aabb_walk` that filled them had exactly one reader
-   each -- `model_aabb` and `selbox_aabb` -- and both of those were called only
-   from the GL unit pass this landing deleted. Landing 11-2 had already made
-   that pass unreachable (`gl_draws` is false at every surviving call site), so
-   nothing observable goes with them.
+/* THE WHOLE-TREE MODEL-AABB CACHE WENT WITH THE GL DRAW HALVES [the
+   vulkan-only plan, landing 11-3]: `s_aabb`, `model_aabb`, the `MAABB` type
+   and `aabb_walk`, whose one reader was the GL unit pass. The Vulkan shadow
+   pass does not ask for that bound: it draws the posed casters through
+   tagpu_vk_hires/tagpu_vk_unit and counts them against the hand-over.
 
-   What they knew is NOT lost with the code: the select box is the ROOT PIECE's
-   own vertices unioned with the origin rather than the whole tree -- a ~11 px
-   difference on a Stumpy -- because `DrawUnitSelectBoxRect` passes 0 as
-   0x4CB650's descend flag. That, the three-vertex threshold and the seeding of
-   both bounds with {0,0,0} are written up against the disassembly in
-   exe-reverse-engineering.md, which is where they belong. The Vulkan shadow
-   pass does not ask for either bound: it draws the posed casters through
-   tagpu_vk_hires/tagpu_vk_unit and counts them against the hand-over. */
+   THE SELECT BOX'S OWN CACHE WENT WITH IT AND IS BACK (2026-09-23), as
+   `s_sbox`/`selbox_aabb` beside `selbox_emit` below, because the Vulkan lane
+   draws the rect again. It is the ROOT PIECE's own vertices unioned with the
+   origin rather than the whole tree -- a ~11 px difference on a Stumpy --
+   because `DrawUnitSelectBoxRect` passes 0 as 0x4CB650's descend flag; that,
+   the three-vertex threshold and the {0,0,0} seed are in
+   exe-reverse-engineering.md. */
 
 
 

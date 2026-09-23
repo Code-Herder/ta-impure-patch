@@ -331,9 +331,19 @@ plain Bresenham line pipeline at `ss` width) measured **28 of 290 rect pixels at
 the rest between 0.2 and 0.8 — visibly faint beside the engine's flat (83,223,79). The GL pass
 avoided this with the 1x detour, which this lane has no buffer for. So:
 
-- **the line primitive is only a band.** `SVS` pushes each end one game pixel out along the
-  major axis and the pipeline draws it `2·scale + 2` target pixels wide, which covers every
-  sample of every game pixel the engine's line can touch;
+- **the line primitive is only a band.** `SVS` pushes each end one game pixel out **along the
+  segment** and the pipeline draws it `ceil(3·scale) + 2` target pixels wide. The 3 is a bound:
+  a sample of a kept pixel can sit 1.5 game px across from the ideal line (half a pixel of
+  Bresenham rounding, half the pixel's extent, half again from the sample's column on a slope
+  of up to 1). A brute force of Vulkan's wide-Bresenham rule over every edge within 24 px, at
+  every scale from 1 to 6 in 1/16 steps, leaves no such sample uncovered. **The first cut
+  pushed the ends along the major axis alone and drew `2·scale + 2` wide; the landing review
+  showed both wrong** — the major-axis push tilts the band (slope `dy/(dx+2)`, the GL pass's own
+  "the cap must run along the segment" trap) and the narrower band misses samples at every
+  scale above 1 (58 edge vectors of 3 720 at `ss = 2`, 1 328 at 3);
+- **a zero-length edge is split a quarter of a screen pixel either way**, because the engine
+  plots one pixel for it (`0x4CC83B`'s column fill) and a zero-length line rasterises nothing —
+  the case of a root piece with fewer than three vertices, whose box is the bare origin;
 - **`SFS` decides membership per GAME pixel.** It takes `floor(gl_FragCoord / uPx)` and keeps
   the fragment only when that pixel is one `DrawLine`'s Bresenham plots (the rule is in
   exe-reverse-engineering.md at `0x4CC7AB`): endpoints ordered by x, minor offset
@@ -346,8 +356,9 @@ avoided this with the 1x detour, which this lane has no buffer for. So:
 
 **Measured on `selbox-facings`, 1024×768, `ss = 2`, one run** (selected minus deselected, on
 the engine's reference surface and on the window): **176 pixels identical** to the engine's
-own box, **5** of ours the engine does not have, and of our 189 pixels **179 are exactly
-(83,223,79)**. The engine-only pixels are where our frame has a nearer tree (the reference has
+own box, **5** of ours the engine does not have, and of our 181 pixels **173 are exactly
+(83,223,79)** — the other 8 all lie on a hull's silhouette, where the body's own supersampled
+edge shares the game pixel with the rect. The engine-only pixels are where our frame has a nearer tree (the reference has
 no trees — `feat.on` owns them) or a health bar over the line. At zoom 0.62 and 1.95 the rects
 track their units (looked at, not diffed), and at 1.95 the line is one screen pixel wide and at
 full colour. On `500v500` with 400 selected: `sel=401
@@ -357,7 +368,8 @@ selover=0`, 60 fps.
 is the oracle and agreed with the depth test on the two cases looked at; it was not swept. The
 clip `0x4CC650` applies at the context edge is not reproduced — the scissor cuts the band at
 the viewport instead, which can differ by a step at the edge. The rect is not drawn at all on a
-device without `VK_EXT_line_rasterization` Bresenham lines or a line `2·scale + 2` wide; that
+device without `VK_EXT_line_rasterization` Bresenham lines or a line `ceil(3·scale) + 2` wide, or
+where the rect's own pipeline will not build; that
 drops the rects and not the rest of the marker layer, and says so once in the log.
 
 **The engine's own box is not suppressed** (`s_selComplete` stays 0). It lands only in the

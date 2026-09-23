@@ -3469,7 +3469,7 @@ none since landing 11-3 (the rect lived in the GL unit draw, and the engine's ow
 the golden source after the cut). The marker pass draws it again, depth-tested at the GL pass's
 key so it keeps its place in the unit sweep, with a fragment stage that keeps only game pixels on
 `DrawLine`'s own Bresenham — 176 pixels identical to the engine's box on `selbox-facings` at
-`ss = 2`, 179 of 189 at its exact colour. [GPU status](gpu-status.html) §2.84. Found on the way
+`ss = 2`, 173 of 181 at its exact colour. [GPU status](gpu-status.html) §2.84. Found on the way
 and left open: past `TAGPU_PD_MAXHAND`'s 512 posed units on screen the unit pass draws NO bodies
 for the frame (`500v500`). (This entry also said the UI op PUBLISHER was unreachable,
 `g_gui_draw` having no writer. The UI-layer rebuild put `tagpu_gui_surf.c` back with that writer

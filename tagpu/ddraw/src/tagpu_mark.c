@@ -388,8 +388,13 @@ static const char* FS =
    `vA`/`vB` are the edge's two ends, FLAT: the provoking vertex of a line is
    its first, and the emitter writes each vertex's own end in `aPos` and the
    other in `aUV`, so both arrive whatever the order. The vertex stage pushes
-   each end one game pixel further out along the major axis so the band covers
-   the end pixels whole; the test clips back to them. */
+   each end one game pixel further out ALONG THE SEGMENT -- one unit of the
+   major axis, and the minor axis in proportion -- so the band covers the end
+   pixels whole; the test clips back to them. Along the major axis alone would
+   TILT the band (slope dy/(dx+2)) and leave it up to 0.9 game px off the line
+   at the ends of a long diagonal -- the GL pass's own trap, "the cap must run
+   along the segment" (ui-markers.md §1), found again by this landing's review.
+   The band's WIDTH is tagpu_vk_mark.c's. */
 static const char* SVS =
     "#version 330 core\n"
     "layout(location=0) in vec2 aPos;\n"     /* this end of the edge          */
@@ -405,8 +410,8 @@ static const char* SVS =
     "  vec2 a = (aPos - uZoomC) * uZoom + uZoomC;\n"
     "  vec2 b = (aUV  - uZoomC) * uZoom + uZoomC;\n"
     "  vec2 d = a - b;\n"
-    "  vec2 e = abs(d.x) >= abs(d.y) ? vec2(sign(d.x), 0.0) : vec2(0.0, sign(d.y));\n"
-    "  vec2 p = a + e;\n"
+    "  float m = max(abs(d.x), abs(d.y));\n"
+    "  vec2 p = m > 0.0 ? a + d / m : a;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0, aDepth, 1.0);\n"
     "  vWorld = aWorld; vCol = aCol; vA = a; vB = b;\n"
     "}\n";
@@ -539,10 +544,24 @@ int tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
     if (s_nsel + 8 > MAXSELV) { s_selover++; return 0; }
     for (k = 0; k < 4; k++) {
         int k2 = (k + 1) & 3;
+        float x0 = px[k], y0 = py[k], x1 = px[k2], y1 = py[k2];
+        /* A ZERO-LENGTH EDGE IS ONE PIXEL, NOT NOTHING. A root piece with
+           fewer than three vertices bounds to the bare origin, so all four
+           corners coincide; the engine's DrawLine takes its dx == 0 column
+           fill and plots the one pixel (`0x4CC83B`, `inc ecx`), while a line
+           of zero length rasterises no fragment at all. Split the ends a
+           quarter of a SCREEN pixel either way: both still floor to the same
+           game pixel, so the fragment test keeps exactly that one, and the
+           band now has a direction to be drawn in. `s_px` is one screen pixel
+           in these (pre-zoom) units, set by this frame's gather. */
+        if (x0 == x1 && y0 == y1) {
+            float h = (float)(0.25 * s_px);
+            x0 -= h; x1 += h;
+        }
         /* each vertex carries its own end in (x, y) and the OTHER end in
            (u, v): the program's fragment test needs both (SVS/SFS above) */
-        put_at(s_sel, s_nsel + 0, px[k],  py[k],  px[k2], py[k2], wx, wz, c);
-        put_at(s_sel, s_nsel + 1, px[k2], py[k2], px[k],  py[k],  wx, wz, c);
+        put_at(s_sel, s_nsel + 0, x0, y0, x1, y1, wx, wz, c);
+        put_at(s_sel, s_nsel + 1, x1, y1, x0, y0, wx, wz, c);
         s_sel[(size_t)(s_nsel + 0) * MVST + 7] = depth;
         s_sel[(size_t)(s_nsel + 1) * MVST + 7] = depth;
         s_nsel += 2;

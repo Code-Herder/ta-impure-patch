@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <math.h>
 #include "tagpu_vk_mark.h"
 #include "tagpu_vk_world.h"   /* the target's ss: the line width follows it */
 #include "tagpu_mark.h"
@@ -569,18 +570,25 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
         /* the selection rects' pipeline: the SVS/SFS program (tagpu_mark.c
            says why it is its own), the depth TEST on with LESS -- the unit
            pass's own compare, against the keys that pass wrote -- and never
-           written, so a rect cannot hide anything drawn after it */
+           written, so a rect cannot hide anything drawn after it.
+
+           NOT A FAILURE OF THE PASS IF IT WILL NOT BUILD: the rects are
+           dropped and the rest of the markers still draw, the same rule as a
+           device without the lines (`prepare`). `s_pipeLineZ` stays NULL and
+           `record`'s `s_selDraw` reads that. [Landing review, 2026-09-23.] */
         svs = mk_module(d, tagpu_spv_tagpu_mark_SVS, sizeof tagpu_spv_tagpu_mark_SVS / 4);
         sfs = mk_module(d, tagpu_spv_tagpu_mark_SFS, sizeof tagpu_spv_tagpu_mark_SFS / 4);
-        if (!svs || !sfs) { rs.pNext = lr.pNext; goto done; }
-        st[0].module = svs; st[1].module = sfs;
-        ds.depthTestEnable = VK_TRUE;
-        ds.depthCompareOp = VK_COMPARE_OP_LESS;
-        if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
-                                      &s_pipeLineZ) != VK_SUCCESS) {
-            rs.pNext = lr.pNext;
-            goto done;
+        if (svs && sfs) {
+            st[0].module = svs; st[1].module = sfs;
+            ds.depthTestEnable = VK_TRUE;
+            ds.depthCompareOp = VK_COMPARE_OP_LESS;
+            if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                          &s_pipeLineZ) != VK_SUCCESS)
+                s_pipeLineZ = VK_NULL_HANDLE;
         }
+        if (!s_pipeLineZ)
+            plog(d, "mark: the selection rects' pipeline would not build - "
+                    "the rects are not drawn, every other marker is");
         ds.depthTestEnable = VK_FALSE;
         ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
         st[0].module = vs; st[1].module = fs;
@@ -1119,13 +1127,23 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        target's extent, not from the supersample factor, because on the frame
        the offscreen target refused the world goes into the swapchain image at
        whatever scale that is, and a wrong scale does not blur the rect, it
-       moves every pixel of it. The band must reach one game pixel either side
-       of the line to cover a Bresenham pixel whole, so it is 2*scale + 2 wide;
-       a device that will not draw that wide loses the rects, not the frame. */
+       moves every pixel of it.
+
+       THE BAND IS ceil(3 * scale) + 2 WIDE, and the 3 is a bound, not a
+       margin. Across the minor axis, a sample of a pixel the test keeps can
+       sit 1.5 game px from the ideal line: half a pixel of Bresenham rounding,
+       half of the pixel's own extent, and up to half again because a sample's
+       column is up to half a pixel from the pixel's centre on a slope of up to
+       1. The +2 is the column's own rounding in the target. The first cut
+       used 2 * scale + 2, which the landing review showed leaves samples
+       uncovered, and a brute-force of every edge within 24 px at every scale
+       from 1 to 6 in 1/16 steps finds none uncovered at this width. It costs
+       nothing to be wide: the fragment test decides the pixels. A device that
+       will not draw that wide loses the rects, not the frame. */
     {
         float pxX = s_h.gw > 0.0f ? (float)w / s_h.gw : 1.0f;
         float pxY = s_h.gh > 0.0f ? (float)h / s_h.gh : 1.0f;
-        s_selW = 2.0f * (pxX > pxY ? pxX : pxY) + 2.0f;
+        s_selW = (float)ceil(3.0 * (pxX > pxY ? pxX : pxY)) + 2.0f;
         s_selDraw = s_selOk && s_pipeLineZ && d->wideok &&
                     s_selW <= d->maxLineWidth;
         for (i = 0; i < s_h.ndraw; i++) {
