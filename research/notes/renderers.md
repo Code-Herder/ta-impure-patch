@@ -1421,8 +1421,12 @@ RTX 4070 and llvmpipe both listed:
 **GPU Auto.** `pick_device` (`tagpu_vk.c`) binds the named choice when the loader still offers it
 and it can present, else Auto: among the devices that can present on the game window, the best
 type rank — discrete 4, integrated 3, virtual 2, CPU 1 — then the largest `DEVICE_LOCAL` heap,
-then the loader's order. A software rasteriser is `TYPE_CPU`, so llvmpipe is never Auto's pick
-beside a GPU. The row's stages are `Auto` and then the cached device names; Auto plates `Auto`,
+then the loader's order. **A software rasteriser (`TYPE_CPU`, llvmpipe) is not offered beside a
+GPU**: the enumeration leaves it out of `tagpu_vk.gpus` (`… 1 software rasteriser(s) not offered`),
+and `pick_device` refuses a stored one while a GPU can present (`the requested GPU "…" is a
+software rasteriser and a GPU is present - Auto instead`). A choice of it that failed at bring-up
+was one the player could not undo from the menu — with llvmpipe bound the game dies at start-up
+at 3840×2160 and on opening Visuals. With no GPU at all it stays: it is then the only device. The row's stages are `Auto` and then the cached device names; Auto plates `Auto`,
 a named choice plates the device actually bound. The store writes `gpu=auto` or the name; a name
 no longer present binds the Auto pick and says so in the log (`the requested GPU "…" is not among
 the devices present - Auto instead`, then `Auto: <name> (type rank N of 4, M MB device-local)`).

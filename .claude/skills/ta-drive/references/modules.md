@@ -152,8 +152,10 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
   then device-local memory, and logs `vk: Auto: <name> (type rank N of 4, M MB device-local)`. A
   named choice plates the device actually bound; a stored name no longer present binds the Auto
   pick and logs `the requested GPU "…" is not among the devices present - Auto instead`.
-- **With llvmpipe bound, opening Options → Visuals kills the game** (no ErrorLog). Drive the GPU
-  row from Auto or a hardware device, and do not click through to llvmpipe on that screen.
+- **llvmpipe is not offered while a GPU is present**, and a stored choice of it is refused
+  (`vk: the requested GPU "…" is a software rasteriser`), so on the reference setup the row is
+  Auto alone and greyed. With llvmpipe bound the game dies on opening Options → Visuals and at a
+  3840x2160 start-up; that only happens now on a machine with no GPU.
 - **The Frame cap row's first stage is Refresh** (`maxfps=refresh`, the target monitor's rate,
   logged as `frame cap: Refresh = N fps`); tacli's `ddraw.ini` `maxfps` holds the row.
 - **At most eight devices are listed** (our cap; a stage button's art index is clamped by the

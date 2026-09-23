@@ -1102,7 +1102,7 @@ static DWORD WINAPI enum_worker(LPVOID arg)
     char out[MAXDEV * (NAMELEN + 8) + 64];
     char name[MAXDEV][NAMELEN];
     int  disc[MAXDEV];
-    int at = 0, i, changed;
+    int at = 0, i, m = 0, changed, anygpu = 0, hidden = 0;
     HANDLE h;
     DWORD wrote = 0;
 
@@ -1134,6 +1134,17 @@ static DWORD WINAPI enum_worker(LPVOID arg)
         return 0;
     }
 
+    /* A SOFTWARE RASTERISER IS NOT OFFERED BESIDE A GPU. llvmpipe is
+       VK_PHYSICAL_DEVICE_TYPE_CPU, is never what a player wants when a GPU is
+       there, and a choice of it that fails at bring-up is one the player
+       cannot undo from the menu. With no GPU at all it stays: it is then the
+       only device. `pick_device` refuses a stored one on the same rule. */
+    for (i = 0; i < (int)n; i++) {
+        VkPhysicalDeviceProperties p;
+        vkGetPhysicalDeviceProperties(pds[i], &p);
+        if (p.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU) anygpu = 1;
+    }
+
     /* Build the file text first, and compare it with what the cache already
        says: an unchanged list is not rewritten, so the common launch does no
        write at all and a file watcher sees a change only when there is one. */
@@ -1141,22 +1152,24 @@ static DWORD WINAPI enum_worker(LPVOID arg)
         VkPhysicalDeviceProperties p;
         int k;
         vkGetPhysicalDeviceProperties(pds[i], &p);
-        vk_canon(name[i], NAMELEN, p.deviceName);
-        disc[i] = (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
+        if (anygpu && p.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) { hidden++; continue; }
+        vk_canon(name[m], NAMELEN, p.deviceName);
+        disc[m] = (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
         /* `_snprintf` RETURNS -1 ON TRUNCATION, not the length it wanted, so
            the return is checked BEFORE it is added: `at += -1` would step the
            cursor backwards and the next device would be written in front of the
            buffer. It cannot truncate at today's bounds (4 devices x 34 bytes
            against 224), which is exactly why it would sit here unnoticed until
            one of them moved. */
-        k = _snprintf(out + at, sizeof out - at - 1, "%d %s\n", disc[i], name[i]);
+        k = _snprintf(out + at, sizeof out - at - 1, "%d %s\n", disc[m], name[m]);
         if (k < 0 || k >= (int)(sizeof out - at - 1)) break;
         at += k;
+        m++;
     }
     out[sizeof out - 1] = 0;
 
-    changed = (int)n != (int)s_count;
-    for (i = 0; !changed && i < (int)n; i++)
+    changed = m != (int)s_count;
+    for (i = 0; !changed && i < m; i++)
         if (lstrcmpA(s_name[i], name[i]) || s_disc[i] != disc[i]) changed = 1;
 
     if (changed) {
@@ -1174,13 +1187,15 @@ static DWORD WINAPI enum_worker(LPVOID arg)
             if (ok) ok = MoveFileExA(GPUS_TMP, GPUS_FILE, MOVEFILE_REPLACE_EXISTING);
             if (!ok) DeleteFileA(GPUS_TMP);
         }
-        vklog("enumerated %u device(s) - " GPUS_FILE " %s, so the GPU row lists them "
-              "from the NEXT launch (the menu's .GUI is written at attach)",
-              n, ok ? "rewritten" : "could NOT be rewritten and is left as it was");
+        vklog("enumerated %u device(s), %d software rasteriser(s) not offered - " GPUS_FILE
+              " %s, so the GPU row lists them from the NEXT launch (the menu's .GUI is "
+              "written at attach)", n, hidden,
+              ok ? "rewritten" : "could NOT be rewritten and is left as it was");
     } else {
-        vklog("enumerated %u device(s) - " GPUS_FILE " already agrees", n);
+        vklog("enumerated %u device(s), %d software rasteriser(s) not offered - " GPUS_FILE
+              " already agrees", n, hidden);
     }
-    for (i = 0; i < (int)n; i++)
+    for (i = 0; i < m; i++)
         vklog("  device %d: %s%s", i, name[i], disc[i] ? "  [discrete]" : "");
 
     vkDestroyInstance(inst, NULL);
@@ -1842,7 +1857,7 @@ static VkDeviceSize gpu_local_heap(VkPhysicalDevice pd)
    handed us. */
 static int pick_device(VkPhysicalDevice* pds, uint32_t n, uint32_t* qfam_out, char* name_out)
 {
-    int chosen = -1, best = -1, bestRank = -1;
+    int chosen = -1, best = -1, bestRank = -1, chosenCpu = 0, gpuPresent = 0;
     VkDeviceSize bestHeap = 0;
     uint32_t i, k, qfam = 0, bestq = 0;
     char cname[NAMELEN];
@@ -1870,8 +1885,9 @@ static int pick_device(VkPhysicalDevice* pds, uint32_t n, uint32_t* qfam_out, ch
 
         vk_canon(cname, sizeof cname, p.deviceName);
         if (want[0] && !lstrcmpiA(cname, want)) {
-            chosen = (int)i; qfam = (uint32_t)presentable;
+            chosen = (int)i; qfam = (uint32_t)presentable; chosenCpu = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
         }
+        if (p.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU) gpuPresent = 1;
         rank = gpu_type_rank(p.deviceType);
         heap = gpu_local_heap(pds[i]);
         if (rank > bestRank || (rank == bestRank && heap > bestHeap)) {
@@ -1879,9 +1895,14 @@ static int pick_device(VkPhysicalDevice* pds, uint32_t n, uint32_t* qfam_out, ch
         }
     }
 
+    /* the enumeration's rule: a software rasteriser is not used beside a GPU */
+    if (chosen >= 0 && chosenCpu && gpuPresent) {
+        vklog("the requested GPU \"%s\" is a software rasteriser and a GPU is present - Auto instead", want);
+        chosen = -1;
+    } else if (chosen < 0 && want[0]) {
+        vklog("the requested GPU \"%s\" is not among the devices present - Auto instead", want);
+    }
     if (chosen < 0) {
-        if (want[0])
-            vklog("the requested GPU \"%s\" is not among the devices present - Auto instead", want);
         chosen = best; qfam = bestq;
         if (chosen >= 0) {
             VkPhysicalDeviceProperties p;

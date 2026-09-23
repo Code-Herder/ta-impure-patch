@@ -2102,7 +2102,8 @@ Four things this rests on, each measured rather than assumed:
   hot-plugged monitor. The row's **model** is not one launch behind: the choice is stored by
   name as `gpu=` in the settings store (`impure.cfg`, [renderers](renderers.html) §2.10b), and
   its first stage is **Auto** (`gpu=auto`, the lane's own ranking: [renderers](renderers.html)
-  §2.10b). Auto plates Auto; a named choice plates `tagpu_vk_gpu_active()` — the device the render
+  §2.10b). A software rasteriser is not listed while a GPU is present, so on a machine with one
+  GPU the row is Auto alone, greyed. Auto plates Auto; a named choice plates `tagpu_vk_gpu_active()` — the device the render
   thread actually bound — whenever the lane is up, so a request that could not be honoured shows
   as the device that was.
 
