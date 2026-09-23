@@ -83,6 +83,22 @@ static const unsigned char FOG_STOLEN[5] =
     { 0x83, 0xEC, 0x2C, 0x53, 0x55 };
 
 volatile unsigned char g_terrown_skip = 0;
+/* WHAT THE TWO STUBS TEST, and it is not `g_terrown_skip`. The skip is the
+   RENDER thread's request and changes whenever that thread decides; this is
+   the GAME thread's copy of it, taken once per in-play draw by
+   `tagpu_terrown_latch` at the top of `DrawGameScreen`, and written by nothing
+   else. It exists for `tagpu_vpwide`: the engine's terrain blit sizes its
+   unclipped 32x32 copies (`0x4CBEF1`) from the viewport rect, so a rect widened
+   for zoom < 1 reaching that blit writes far past the offscreen -- the crash
+   of 2026-09-23, a new skirmish entered while the last one's zoom was still
+   live and before our terrain pass had taken the ground back. With the skip
+   read straight by the stubs, the rect (widened on the game thread) and the
+   skip (dropped on the render thread) had no ordering at all. With one game
+   thread writing both this byte and the rect, in that order, at one site, a
+   wide rect and an engine terrain blit cannot meet: `tagpu_vpwide_apply`
+   widens only when this is set, and nothing clears it but the next latch,
+   which restores the rect in the same breath when it does. */
+static volatile unsigned char g_terrown_own = 0;
 static int g_installed = 0;
 static volatile int g_filled = 0;      /* the fill has run under this skip */
 static unsigned g_beat = 0, g_last = 0;
@@ -250,10 +266,10 @@ void tagpu_terrown_init(void)
        let its shade remap rewrite the key fill, and suppressing the overlay
        without owning terrain would simply delete the fog */
     t = tagpu_detour_leaf_call(TERRAIN_VA, TERR_STOLEN, (int)sizeof TERR_STOLEN,
-                               &g_terrown_skip, 0x04, terr_fill);
+                               &g_terrown_own, 0x04, terr_fill);
     if (t)
         g = tagpu_detour_leaf_call(FOG_VA, FOG_STOLEN, (int)sizeof FOG_STOLEN,
-                                   &g_terrown_skip, 0x04, terr_fogtick);
+                                   &g_terrown_own, 0x04, terr_fogtick);
     g_installed = (t && g);
     _snprintf(b, sizeof b,
         "terrown: %s terrain@0x483FA0=%d fog@0x4848E0=%d key=%d default "
@@ -304,10 +320,16 @@ int tagpu_terrown_installed(void) { return g_installed; }
 
 int tagpu_terrown_filled(void) { return g_terrown_skip && g_filled; }
 
-/* The fog overlay is ours exactly while the skip is set: that is the flag the
+/* The fog overlay is ours exactly while the LATCH is set: that is the flag the
    leaf_call detour on 0x4848E0 tests, so terr_fogtick above runs on precisely
    these ticks and on no others. */
-int tagpu_terrown_owns_fog(void) { return g_terrown_skip != 0; }
+int tagpu_terrown_owns_fog(void) { return g_terrown_own != 0; }
+
+int tagpu_terrown_latch(void)
+{
+    g_terrown_own = g_terrown_skip;
+    return g_terrown_own;
+}
 
 void tagpu_terrown_flush(unsigned int frame_counter)
 {

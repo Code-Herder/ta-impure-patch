@@ -3476,7 +3476,10 @@ causes: the consumer stayed behind (a refused frame that carries the RESET now r
 and the player names went through `0x4B8310`, whose RLE arm is a remap that now crosses as a
 sprite. Backdrop, title, stats and all 788 name texels match `tacli shot`. [GPU status](gpu-status.html),
 the "replay runs on frames the composite cannot" section. Not covered: `0x4B8310`'s raw arm and
-sub-frame stacks, which were not reached on any screen measured. Found on the way
+sub-frame stacks, which were not reached on any screen measured. **A crash entering a second
+skirmish while zoomed out is CLOSED, 2026-09-23**: the widened viewport rect reached the engine's
+own terrain blit before our terrain pass had taken it back. The rect now widens only on draws the
+game thread has latched as ours. [GPU status](gpu-status.html) §2.3b. Found on the way
 and left open: past `TAGPU_PD_MAXHAND`'s 512 posed units on screen the unit pass draws NO bodies
 for the frame (`500v500`). (This entry also said the UI op PUBLISHER was unreachable,
 `g_gui_draw` having no writer. The UI-layer rebuild put `tagpu_gui_surf.c` back with that writer

@@ -2084,9 +2084,15 @@ static int __cdecl before_draw(void* entry_esp)
         unsigned us;
         QueryPerformanceCounter(&t0);
         c = tagpu_cmd_take();
-        if (ta) {
-            tagpu_zoom_apply(ta, c);
-            tagpu_vpwide_apply(ta, c);
+        /* THE TERRAIN LATCH FIRST, then the rect: the rect may only be wide on
+           a draw whose ground is ours, and this is where both are decided, on
+           the one thread that writes either (`tagpu_terrown_latch`). */
+        {
+            int terr = tagpu_terrown_latch();
+            if (ta) {
+                tagpu_zoom_apply(ta, c);
+                tagpu_vpwide_apply(ta, c, terr);
+            }
         }
         tagpu_cmd_done();
         QueryPerformanceCounter(&t1);

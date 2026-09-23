@@ -684,8 +684,18 @@ the eye, and they do not agree:
   guard here.
 - **`0x483FA0`** (the terrain pass) indexes the tile map at `main+0x1428B` with **no bounds
   check at all**: `0x48409B` does `imul` row × stride, `add` col, `lea ebp,[edx+eax*2]`. A
-  negative eye would read before the array. Moot in practice — `terrown` skips the whole
-  function — but it is the reason to keep the eye's excursion a property of *our* passes.
+  negative eye would read before the array. It is the reason to keep the eye's excursion a
+  property of *our* passes. **And it WRITES unbounded too**: it walks the viewport rect
+  (`main+0x37E27..`) in 32-px cells and hands every whole cell to `0x4C6E70` → `0x4CBEF1`, which
+  copies 32 rows of 8 dwords (`rep movsd` at `0x4CBF1D`) with no clip at all, so a rect wider than
+  the offscreen is a heap overwrite. *[CORRECTED 2026-09-23: this said "moot in practice —
+  `terrown` skips the whole function". It skips it only while our terrain pass owns the ground,
+  and entering a new skirmish with the previous one's zoom still commanded left a few draws where
+  the rect was already widened and the engine still drew the ground. MEASURED: an access violation
+  at `0x4CBF1D` writing `0x07B50084`, tile at (−2380, −1105), called from `0x484370`; and, on
+  another run, a later read through the overwritten memory (`0x4B8B94`, `mov ecx,[eax+8]` with
+  `eax = 0xE367E3E3` — terrain palette bytes where a pointer was). Closed by making the rect wide
+  only on draws the game thread has latched as ours — `tagpu_terrown_latch`, gpu-status §2.3b.]*
 
 ## The screen fog grid — where it is allocated, and every cell the builder reads — mapped by us
 

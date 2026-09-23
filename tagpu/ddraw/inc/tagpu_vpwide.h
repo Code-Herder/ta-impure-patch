@@ -106,9 +106,13 @@ void tagpu_vpwide_init(void);
    back. Verifies the rect once against what 0x497F40 builds, on a draw it
    does not own, and COUNTS (never repairs) a W/H that disagrees with the
    screen dimensions: on one thread that cannot happen, and the counter is
-   the proof it does not. */
+   the proof it does not.
+   `terr_ours` is `tagpu_terrown_latch()`'s answer for THIS draw, and the rect
+   widens only when it is set: the engine's own terrain blit sizes unclipped
+   tile copies from the rect, so a wide rect under an engine terrain draw
+   writes past the offscreen (the crash of 2026-09-23). */
 struct TAGPU_CMD;
-void tagpu_vpwide_apply(char* ta, const struct TAGPU_CMD* c);
+void tagpu_vpwide_apply(char* ta, const struct TAGPU_CMD* c, int terr_ours);
 
 /* GAME THREAD, from the level teardown: the true rect back before the shell
    draws — no in-play draw will apply a record until the next level. */

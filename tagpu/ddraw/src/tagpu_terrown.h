@@ -45,6 +45,13 @@ int  tagpu_terrown_filled(void);
    have to race it to write. tagpu_zoom gates cursor anchoring on this: a
    stepped eye it could not answer for is a silently stale fog. */
 int  tagpu_terrown_owns_fog(void);
+/* GAME THREAD, at the top of every in-play draw and before the viewport rect
+   is touched: copy the render thread's skip request into the byte the terrain
+   and fog stubs test, and return it. The only writer of that byte, so within
+   a draw the engine's terrain blit runs or is skipped exactly as this said --
+   which is what lets `tagpu_vpwide_apply` widen the rect only on draws whose
+   terrain is ours (see `g_terrown_own`). */
+int  tagpu_terrown_latch(void);
 /* GAME THREAD, from the packet's publisher. The eye the ENGINE's own fog grid
    was last anchored at, latched inside the fog site the moment its builder ran
    (0x4843C0 recomputes the origin from those two words itself). 0 when this

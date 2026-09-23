@@ -165,6 +165,8 @@ static volatile LONG s_wide;    /* we are currently writing the rect         */
 static unsigned s_whMismatch;   /* draws on which W/H disagreed with the screen
                                    dimensions: MUST READ 0 (heartbeat)        */
 static unsigned s_applies;      /* in-play draws the apply ran on             */
+static unsigned s_refused;      /* zoomed draws refused: terrain not ours     */
+static int      s_refusedRun;   /* the refusal is logged once per run of them */
 
 /* Published for the reader on the other thread: the message thread's ring
    test (markown's capture window reads it on this thread). Five aligned
@@ -502,7 +504,7 @@ static void restore(char* ta)
    `before`), with the latest command record. The level it carries is what
    the addressable rect is derived from; a record that says no zoomed world
    is live — or no record at all — puts the true rect back. */
-void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c)
+void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c, int terr_ours)
 {
     int tR, tB, tW, tH, aL, aT, aR, aB, tL, tT;
     float cx, cy, z;
@@ -572,6 +574,30 @@ void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c)
     }
 
     if (!(z > 0.05f && z < 1.0f)) { restore(ta); return; }
+
+    /* NOT WHILE THE ENGINE DRAWS THE GROUND. `0x483FA0` walks the rect in
+       32-px cells and hands every whole one to `0x4CBEF1`, which copies 32
+       rows of 32 bytes with no clip at all, so a rect wider than the offscreen
+       is a heap overwrite -- measured 2026-09-23 as an access violation inside
+       that copy, and on another run as a garbage pointer read later from the
+       memory it had overwritten. Our terrain pass is what makes a wide rect
+       safe, by taking that blit away, and `terr_ours` is the game thread's own
+       latch of whether it has (`tagpu_terrown_latch`, taken just before this
+       call, and the only value the stub tests this draw). The gap it closes is
+       entering a level while the last one's zoom is still commanded: the rect
+       widened on the first draw, the render thread takes the ground a few
+       frames later, and in between the engine drew it. */
+    if (!terr_ours) {
+        if (!s_refusedRun) {
+            char b[128];
+            _snprintf(b, sizeof b, "vpwide: not widening at zoom %.3f - the engine draws the terrain this draw (#%u)",
+                      (double)z, s_refused + 1);
+            flog(b);
+        }
+        s_refused++; s_refusedRun = 1;
+        restore(ta); return;
+    }
+    s_refusedRun = 0;
 
     /* The addressable rect is not "the viewport, bigger" — it is exactly the
        range tagpu_zoom's transform produces, computed with the same formula

@@ -780,6 +780,28 @@ across two levels, 1 571 648 under the stress lever). The addressable rect the m
 ring test reads is published right after the field is written, so it is exactly what the engine
 can name.
 
+**The rect is wide only on a draw whose ground is ours [2026-09-23].** The engine's terrain pass
+`0x483FA0` is the one reader of this rect that no clip reaches: it sizes whole-tile copies
+(`0x4CBEF1`, 32 rows of 8 dwords, no clip) from the rect itself, so under a wide rect it writes
+past the offscreen. `terrown` normally takes that pass away, which is what made widening safe,
+but the two were decided by different threads: the rect by the game thread from the zoom level,
+the skip by the render thread when its terrain pass is live. Entering a new skirmish while the
+last one's zoom was still commanded (the zoom is not reset at level end) widened the rect on the
+first in-play draw, and the render thread took the ground back a few draws later, after the new
+map's tile atlas was built. The engine drew the ground in between: a crash at `0x4CBF1D`, or on
+another run a garbage pointer read from the memory it had overwritten. Reproduced 1 in 1 on a map
+change. Now `tagpu_terrown_latch()` copies the render thread's skip request into the byte both
+`terrown` stubs test, once per in-play draw, on the game thread, immediately before
+`tagpu_vpwide_apply(ta, c, terr)`. That call widens only when the latch is set and restores the
+rect when it is not. One thread writes both, the latch first, so a wide rect and an engine
+terrain draw cannot meet. Measured: 3 of 3 map changes at 0.25× clean, each logging
+`vpwide: not widening at zoom 0.250 - the engine draws the terrain this draw (#1)`, the draw the
+old build widened on.
+
+The latch also moves when a skip change takes effect, from the stub's read at `0x468DB0` to the
+top of the draw, a few instructions earlier in the same draw. `tagpu_terrown_filled()` and the
+structure-shadow gate still follow the render thread's request, as before.
+
 **The cursor is not a reader of this rect and no longer needs to be** — §2.3d is why. Until
 G13m it was: the engine drew its sprite wherever `GetCursorPos` reported, so widening what it
 could NAME also moved where it DREW, and in the ring a widened `u` lands on the side panel or off
