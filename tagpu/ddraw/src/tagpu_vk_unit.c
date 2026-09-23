@@ -100,10 +100,19 @@
 
    ---- WHAT IT DOES NOT DO ----
 
-   THE NANOFRAME WIRE IS NOT PORTED. `uRange` 2, GL_LINES, the same program and
-   the same bake; a unit under construction has no wireframe on this lane. The
-   hand-over counts any draw the published window does not carry and the pass
-   stands down on a non-zero count.
+   THE NANOFRAME WIRE IS A LINE PIPELINE AND A SIXTH AND SEVENTH BLOCK
+   [2026-09-23]. `uRange` 2 over the bake's WIRE range, the same program, drawn
+   after every body -- the GL twin's `_wire_begin`/`_wire_unit`, which went
+   with landing 11-5d, reproduced: uNanoOn 0 (the outline carries its own
+   colour and must not be re-classified by the recolour it is drawn beside),
+   uWaterMode 0, uAlpha 1, uCast (0, 0, 1). THE WIDTH IS THE TARGET'S SCALE,
+   which the GL twin asked for with glLineWidth(ss) and never got: the driver
+   clamped it to one supersample and the wire drew at half the engine's
+   intensity (build-state.md 7). Here `wideLines` gives it the full game
+   pixel. A device without it, or with a narrower maximum, draws the wire at
+   the widest it offers rather than not at all -- the wire is one part of a
+   unit's look, and refusing the frame would lose the unit.
+
 
    THE HARD SHADOW DOES NOT CHECK THAT THERE IS GROUND UNDER IT, which only
    shows under a partial arm. The blend is `ONE / ONE_MINUS_SRC_ALPHA` with
@@ -167,6 +176,7 @@
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_scaffold.h"
+#include "tagpu_vk_world.h"   /* the target's ss: the wire's width follows it */
 #include "tagpu_posedraw.h"
 #include "tagpu_posebake.h"
 #include "tagpu_gaf.h"
@@ -215,7 +225,7 @@
     X(vkCreateSampler) X(vkDestroySampler) \
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
-    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
+    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetLineWidth) \
     X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) \
     X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)
 
@@ -241,6 +251,9 @@ static int s_saidAniso;                 /* ...and its filter could not be matche
 static VkDescriptorSetLayout s_dslMain, s_dslCast;
 static VkPipelineLayout      s_ploMain, s_ploCast;
 static VkPipeline            s_pipeBody, s_pipeGhost, s_pipeCast;
+/* the nanoframe wire: the body pipeline as LINE_LIST, width dynamic when the
+   device has `wideLines`. VK_NULL_HANDLE = refused, and then no wire is drawn */
+static VkPipeline            s_pipeWire;
 /* THE CLASSIC HARD SHADOW'S PAIR, and it is a pair because one blend per
    silhouette PIXEL is not one blend per surface the model has there. See
    `build_shadow_pipelines`. */
@@ -420,6 +433,8 @@ typedef struct {
        TAGPU_PDSH_* and the `first`/`count` the hand-over already resolved */
     int      shKind;
     uint32_t shFirst, shCount;
+    /* the nanoframe wire's range, 0 = none (tagpu_posedraw.h) */
+    uint32_t wireFirst, wireCount;
 } DRAW;
 static DRAW*    s_draw;
 static unsigned s_drawCap, s_ndraw, s_ncast;
@@ -431,7 +446,9 @@ static int      s_shadowOn;            /* the twin drew these against a map  */
    change inside a frame -- but they are recomputed every `upload` rather than
    once at build, because `build` is where the alignment is read and a pass that
    cached them would have two places to keep in step. */
-static VkDeviceSize s_uStride, s_vglOff2, s_vglOff3, s_fglOff, s_fglOff2, s_pStride;
+static VkDeviceSize s_uStride, s_vglOff2, s_vglOff3, s_vglOff4, s_fglOff, s_fglOff2,
+                    s_fglOff3, s_pStride;
+static unsigned     s_nwire;            /* nanoframe wires recorded this frame */
 /* shadow casters recorded this frame, so the pass can REPORT having painted a
    structure slant rather than let the producer predict it (tagpu_posedraw.h) */
 static unsigned     s_nsil, s_nslant;
@@ -1068,6 +1085,23 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
         ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
                                        &s_pipeGhost) == VK_SUCCESS;
         ds.depthWriteEnable = VK_TRUE;
+    }
+    /* THE WIRE PIPELINE, and it differs in the topology and the width. Depth
+       is the body's own -- tested LESS and WRITTEN, as the GL twin left the
+       mask on across its wire loop -- and the shader's one-notch-nearer bias
+       (+0.15 on the key, `uRange == 2`) is what lets an edge win against the
+       surface it traces. NOT A REASON TO REFUSE THE PASS: without it a
+       nanoframe keeps its recolour and loses only the outline. */
+    if (ok) {
+        VkDynamicState dynw[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                   VK_DYNAMIC_STATE_LINE_WIDTH };
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        dy.dynamicStateCount = d->wideok ? 3 : 2; dy.pDynamicStates = dynw;
+        if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                      &s_pipeWire) != VK_SUCCESS)
+            s_pipeWire = VK_NULL_HANDLE;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        dy.dynamicStateCount = 2; dy.pDynamicStates = dyn;
     }
 done:
     if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
@@ -1759,14 +1793,16 @@ static int build(const TAGPU_VKPASS* d)
     s_shOk = build_shadow_pipelines(d);
     plog(d, "unit: up - %u frame slots, uniform offset alignment %u, %u bytes "
             "of blocks and %d of pose per unit, compare sampler %s, hard "
-            "shadows %s",
+            "shadows %s, nanoframe wire %s",
          (unsigned)d->slots, (unsigned)s_ualign,
-         (unsigned)(align_up(VGL_SZ, s_ualign) * 3 + align_up(FGL_SZ, s_ualign) * 2),
+         (unsigned)(align_up(VGL_SZ, s_ualign) * 4 + align_up(FGL_SZ, s_ualign) * 3),
          (int)align_up(POSE_SZ, s_ualign),
          s_cmpLinear ? "LINEAR" : "NEAREST (the map cannot be sampled)",
          s_shOk ? "on (stencil-masked)"
                 : (d->stencilok ? "OFF - the pipelines were refused"
-                                : "OFF - no stencil plane on this device"));
+                                : "OFF - no stencil plane on this device"),
+         !s_pipeWire ? "OFF - the pipeline was refused"
+                     : d->wideok ? "on" : "on at 1 px (no wideLines)");
     /* the stand-ins, in the map's own format so that one compare sampler is
        valid against both (tagpu_vk_shadow_format, and tagpu_vk_terr.c's note) */
     dfmt = tagpu_vk_shadow_format(d, NULL);
@@ -1846,8 +1882,9 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
    rule broken at -O2. */
 static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
                         const TAGPU_PDUREC* r, VkDeviceSize vglOff2,
-                        VkDeviceSize vglOff3, VkDeviceSize fglOff,
-                        VkDeviceSize fglOff2)
+                        VkDeviceSize vglOff3, VkDeviceSize vglOff4,
+                        VkDeviceSize fglOff, VkDeviceSize fglOff2,
+                        VkDeviceSize fglOff3)
 {
     union { float f[68]; int i[68]; } b;
 
@@ -1899,6 +1936,18 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.f[2] = 5.0f; b.f[3] = r->shOffY;                 /* uOffset     vec2 @8  */
     b.i[40] = (r->shKind == TAGPU_PDSH_SLANT) ? 1 : 0; /* uRange               */
     memcpy(ub + vglOff3, b.f, VGL_SZ);
+
+    /* ---- the vertex stage, the NANOFRAME WIRE ----
+       The body block with what the GL twin's `_wire_begin` and `_wire_unit`
+       set on it: no shift, uRange WIRE, the unit's own outline colour, and
+       uCast (0, 0, 1) -- which reaches only the shadow-space point, and the
+       twin set it so. Written for every unit, read only for one that has a
+       wire range. */
+    b.f[2] = 0.0f; b.f[3] = 0.0f;                      /* uOffset              */
+    b.f[20] = 0.0f; b.f[21] = 0.0f; b.f[22] = 1.0f;    /* uCast                */
+    b.i[40] = 2;                                       /* uRange = WIRE        */
+    b.f[41] = r->wire;                                 /* uWire                */
+    memcpy(ub + vglOff4, b.f, VGL_SZ);
 
     /* ---- the vertex stage, the CASTER draw ----
        What `tagpu_posedraw_depth_begin` set before landing 11-5d deleted it:
@@ -1994,6 +2043,19 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
         b.f[21] = -1e9f;                               /* uDigT                */
     }
     memcpy(ub + fglOff2, b.f, FGL_SZ);
+
+    /* ---- the fragment stage, the NANOFRAME WIRE ----
+       The body block with `_wire_begin`'s four: uShadow 0, uNanoOn 0 (the
+       outline is not re-classified by the recolour it traces), uWaterMode 0 and
+       uAlpha 1. The waterline and digger thresholds stay the unit's own, as
+       `_wire_unit` set them per unit. */
+    b.i[17] = 0;                                       /* uShadow              */
+    b.f[18] = 1.0f;                                    /* uAlpha               */
+    b.f[19] = r->waterT;                               /* uWaterT              */
+    b.i[20] = 0;                                       /* uWaterMode           */
+    b.f[21] = r->digT;                                 /* uDigT                */
+    b.i[22] = 0;                                       /* uNanoOn              */
+    memcpy(ub + fglOff3, b.f, FGL_SZ);
 }
 
 /* One unit's pose block, written exactly where and exactly as far as
@@ -2032,13 +2094,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     TAGPU_PDHAND h;
     SLOT* s;
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-    VkDeviceSize ustride, vglOff2, vglOff3, fglOff, fglOff2, pstride;
+    VkDeviceSize ustride, vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3, pstride;
     VkDeviceSize stageOff, stageNeed, atlasNeed;
     int feed = 0;
     int fogW = 1, fogH = 1, i, anyUpload = 0, fogWanted = 0;
 
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
-    s_nsil = 0; s_nslant = 0;
+    s_nsil = 0; s_nslant = 0; s_nwire = 0;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -2393,19 +2455,23 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     if (!slot_fog(d, s, fogW, fogH)) goto refuse;
     if (!atlas_build(d, h.atlasDim)) goto refuse;
 
-    /* FIVE BLOCKS A UNIT, at device-accepted offsets: three vertex-stage (the
-       body's, the caster's, the hard shadow's) and two fragment-stage (the
-       body's and the hard shadow's). They were three until the hard shadow
-       landed; the two it adds cost 96 bytes a unit more on the reference
-       device's 64-byte alignment, which is 48 KB a slot at 512 units. */
+    /* SEVEN BLOCKS A UNIT, at device-accepted offsets: four vertex-stage (the
+       body's, the caster's, the hard shadow's, the nanoframe wire's) and three
+       fragment-stage (the body's, the hard shadow's, the wire's). The wire's
+       pair is written for every unit, nanoframe or not, because the window is
+       per unit and fixed-stride: 448 bytes a unit more on the reference
+       device's 64-byte alignment, 224 KB a slot at 512 units -- small against
+       the 14 336-byte pose window every unit already takes. */
     {
         VkDeviceSize vgl = align_up(VGL_SZ, s_ualign);
         VkDeviceSize fgl = align_up(FGL_SZ, s_ualign);
         vglOff2 = vgl;
         vglOff3 = vgl * 2;
-        fglOff  = vgl * 3;
-        fglOff2 = vgl * 3 + fgl;
-        ustride = vgl * 3 + fgl * 2;
+        vglOff4 = vgl * 3;
+        fglOff  = vgl * 4;
+        fglOff2 = vgl * 4 + fgl;
+        fglOff3 = vgl * 4 + fgl * 2;
+        ustride = vgl * 4 + fgl * 3;
     }
     pstride = align_up(POSE_SZ, s_ualign);
     if (!slot_sized(d, s, ustride * (VkDeviceSize)h.nunit,
@@ -2587,10 +2653,18 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         if (w->shCount == 0) w->shKind = TAGPU_PDSH_NONE;
         if (w->shKind == TAGPU_PDSH_SLANT)    s_nslant++;
         else if (w->shKind == TAGPU_PDSH_SIL) s_nsil++;
+        /* THE WIRE'S RANGE, BOUNDED THE SAME WAY AND FOR THE SAME REASON: a
+           third range out of the one buffer, from its own two fields. An
+           out-of-range one loses the outline, never the unit. */
+        w->wireFirst = (uint32_t)r->wireFirst;
+        w->wireCount = (uint32_t)r->wireCount;
+        if (!s_pipeWire || r->wireFirst < 0 || r->wireCount <= 0 ||
+            r->wireFirst + r->wireCount > r->nvert) w->wireCount = 0;
+        if (w->wireCount) s_nwire++;
         s_ndraw++;
 
         fill_blocks(s->umap + (VkDeviceSize)i * ustride, &h, r,
-                    vglOff2, vglOff3, fglOff, fglOff2);
+                    vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3);
         fill_pose(s->pmap + (VkDeviceSize)i * pstride, &h, r);
     }
 
@@ -2628,7 +2702,7 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                     "Nothing drawn while that is true",
                  s_ndraw, h.nunit);
         }
-        s_ndraw = 0; s_ncast = 0; s_nsil = 0; s_nslant = 0;
+        s_ndraw = 0; s_ncast = 0; s_nsil = 0; s_nslant = 0; s_nwire = 0;
         return 0;
     }
 
@@ -2721,7 +2795,8 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     s_drawThis = 1;
     /* the offsets `cast`, `prepare` and `record` bind with */
     s_uStride = ustride; s_vglOff2 = vglOff2; s_vglOff3 = vglOff3;
-    s_fglOff = fglOff;   s_fglOff2 = fglOff2;
+    s_vglOff4 = vglOff4;
+    s_fglOff = fglOff;   s_fglOff2 = fglOff2; s_fglOff3 = fglOff3;
     s_pStride = pstride;
     return 1;
 
@@ -2780,7 +2855,7 @@ refuse:
     s_state = ST_REFUSED;
     s_downOwed = 1;
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
-    s_nsil = 0; s_nslant = 0;
+    s_nsil = 0; s_nslant = 0; s_nwire = 0;
     return 0;
 }
 
@@ -3032,7 +3107,7 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
    the bodies it would still land under them by the depth TEST, but a shadow
    belonging to a unit in FRONT would then be tested against that unit's own
    body depth and vanish where it overlaps. */
-enum { RS_SHADOW = 0, RS_BODY, RS_GHOST };
+enum { RS_SHADOW = 0, RS_BODY, RS_WIRE, RS_GHOST };
 
 static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h, int stage)
@@ -3113,6 +3188,40 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         return;
     }
 
+    /* ---- the nanoframe wires ----
+       After every body, the GL twin's order: `_wire_begin` ran once the unit
+       loop was done. Depth-tested against the bodies and writing its own, so
+       an edge behind another unit is hidden and one on its own model wins by
+       the shader's +0.15. THE WIDTH IS SET ON EVERY BIND OF A PIPELINE THAT
+       DECLARED IT DYNAMIC, whatever its value -- an unset dynamic state is
+       undefined, which is the trap tagpu_vk_fx.c records. */
+    if (stage == RS_WIRE) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeWire);
+        if (d->wideok) {
+            float lw = (float)tagpu_vk_world_scale();
+            if (lw < 1.0f) lw = 1.0f;
+            if (lw > d->maxLineWidth) lw = d->maxLineWidth;
+            vkCmdSetLineWidth(cb, lw);
+        }
+        for (i = 0; i < s_ndraw; i++) {
+            const DRAW* q = &s_draw[i];
+            VkBuffer vbs[2];
+            VkDeviceSize offs[2];
+            uint32_t dyn[3];
+            if (!q->wireCount) continue;
+            dyn[0] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_vglOff4);
+            dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_pStride);
+            dyn[2] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff3);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploMain,
+                                    0, 1, &s_slot[slot].dsMain, 3, dyn);
+            vbs[0] = q->geom; vbs[1] = q->mat;
+            offs[0] = 0;      offs[1] = 0;
+            vkCmdBindVertexBuffers(cb, 0, 2, vbs, offs);
+            vkCmdDraw(cb, q->wireCount, 1, q->wireFirst, 0);
+        }
+        return;
+    }
+
     for (i = 0; i < s_ndraw; i++) {
         const DRAW* q = &s_draw[i];
         VkPipeline want;
@@ -3142,6 +3251,7 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (s_state != ST_READY || !s_drawThis) return;
     if (s_nsil || s_nslant) record_stage(d, cb, slot, w, h, RS_SHADOW);
     record_stage(d, cb, slot, w, h, RS_BODY);
+    if (s_nwire) record_stage(d, cb, slot, w, h, RS_WIRE);
     /* THE PRODUCER IS TOLD, AND ONLY FROM HERE. The structure-shadow gate in
        tagpu_native.c must be raised on a frame something actually painted a
        slant and not on a frame that merely could have -- its own comment lists
@@ -3187,7 +3297,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     int owed = s_downPaying;
     s_downOwed = 0;
     s_drawThis = 0; s_abFrame = 0; s_ndraw = 0; s_ncast = 0;
-    s_nsil = 0; s_nslant = 0;
+    s_nsil = 0; s_nslant = 0; s_nwire = 0;
     s_shadowOn = 0;
 
     /* NOTHING TO FREE, BUT THE VERDICT STILL STANDS. */
@@ -3230,6 +3340,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeBody) { vkDestroyPipeline(d->dev, s_pipeBody, NULL); s_pipeBody = VK_NULL_HANDLE; }
     if (s_pipeGhost) { vkDestroyPipeline(d->dev, s_pipeGhost, NULL); s_pipeGhost = VK_NULL_HANDLE; }
+    if (s_pipeWire) { vkDestroyPipeline(d->dev, s_pipeWire, NULL); s_pipeWire = VK_NULL_HANDLE; }
     if (s_pipeShMark) { vkDestroyPipeline(d->dev, s_pipeShMark, NULL); s_pipeShMark = VK_NULL_HANDLE; }
     if (s_pipeShDraw) { vkDestroyPipeline(d->dev, s_pipeShDraw, NULL); s_pipeShDraw = VK_NULL_HANDLE; }
     s_shOk = 0;

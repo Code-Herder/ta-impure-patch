@@ -1,0 +1,27 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The nanoframe ladder: ARM solars at 5, 25, 50, 75 and 95 % built in a row on open Two Continents ground, a lab at 40 % and a Stumpy at 60 % beside them, all owned by player 0 so nothing fires; a CORE spare far off keeps the game alive. Every stage of the engine's build-state recolour (build-state.md §3, stages A to E) is on screen at once, and so is the wireframe that runs through all of them. The units are created complete and then have +0x104 written, so pause (or read a frame quickly): a nanoframe nobody is building stays at its percentage, but compare stages rather than a live build's history.",
+  "seed": 20260923,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": { "shootall": false, "noshake": true },
+    "players": [
+      { "slot": 0, "controller": "human", "side": "arm", "color": 0 },
+      { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+    ]
+  },
+  "units": [
+    { "id": "s5",  "type": "ARMSOLAR", "owner": 0, "pos": [1440, 1560], "facing": 0, "nanoframe": 5 },
+    { "id": "s25", "type": "ARMSOLAR", "owner": 0, "pos": [1520, 1560], "facing": 0, "nanoframe": 25 },
+    { "id": "s50", "type": "ARMSOLAR", "owner": 0, "pos": [1600, 1560], "facing": 0, "nanoframe": 50 },
+    { "id": "s75", "type": "ARMSOLAR", "owner": 0, "pos": [1680, 1560], "facing": 0, "nanoframe": 75 },
+    { "id": "s95", "type": "ARMSOLAR", "owner": 0, "pos": [1760, 1560], "facing": 0, "nanoframe": 95 },
+    { "id": "lab", "type": "ARMLAB",   "owner": 0, "pos": [1520, 1680], "facing": 0, "nanoframe": 40 },
+    { "id": "tank", "type": "ARMSTUMP", "owner": 0, "pos": [1680, 1680], "facing": 135, "nanoframe": 60, "stance": "hold" },
+    { "id": "spare", "type": "CORSOLAR", "owner": 1, "pos": [4000, 3500], "facing": 0 }
+  ],
+  "camera": { "center_on": "s50" }
+}

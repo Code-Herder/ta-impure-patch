@@ -498,17 +498,25 @@ cargo therefore slid across the map the moment the zoom left 1, away from the
 commander or factory building it. Reported from play, reproduced on a scripted
 `nanoframe` fixture and on a live commander build.
 
-- **Ownership.** `tagpu_native_owns_unit()` no longer excludes `Nanoframe > 0`
+- **Ownership.** `tagpu_native_owns_unit()` does not exclude `Nanoframe > 0`
   (`tagpu_native.c`); the native pass draws the unit like any other, so the
-  scaffold goes through the zoom transform with the world.
+  scaffold goes through the zoom transform with the world. **Unconditionally
+  since 2026-09-23.** Until then it declined a nanoframe whenever the `0x458DD0`
+  detour was absent or `tagpu_nano.off` was set, on the argument that the
+  engine's own scaffold was a safe fallback. The clean cut made that fallback
+  draw nothing (the engine's frame reaches no pixel of the screen) and took
+  `owndraw` out of the play defaults, so on the shipped configuration **every
+  unit under construction was invisible** except for its health bar. Reported
+  from play; reproduced on `scenarios/nanoframe-ladder.json` (seven nanoframes,
+  none drawn, the unit pass's window never opening).
 - **The formulas live once.** `tagpu_r3d_nano_state(unit, &t, c, &wire)` in
   `tagpu_render3do.c` is §3's stage table plus the two oscillators; the composite
   path (`tagpu_render3do`) and the native pass both call it. `tagpu_nano.off`
-  still disables the staging: the native pass reads it once per arm poll, the
+  disables the staging: the native pass reads it once per arm poll, the
   composite path only after `nano_state` has said the unit is a nanoframe at
-  all. With the lever set, a nanoframe goes back to the engine entirely —
-  `tagpu_native_owns_unit()` declines it — so the lever stays a real A/B
-  instead of showing a finished-looking unit with the engine's copy suppressed.
+  all. With the lever set a nanoframe is drawn **unstaged**, as a
+  finished-looking unit with no wire; it is no longer handed to the engine,
+  whose frame nobody sees.
 - **The recolour** is three per-unit uniforms in the native fragment shader
   (`uNanoOn`, `uNanoT`, `uNanoC`), classifying by `vVY + 50` exactly as §1.2.
   An **erased fragment discards**, and that is a deliberate divergence — see
@@ -519,8 +527,18 @@ commander or factory building it. Reported from play, reproduced on a scripted
   traces (1.8 + 0.15 = 1.95 against the 2.0 half-gap between row keys — inside
   it, with 0.05 to spare). It is not decoration: at the top of a build the
   recolour erases the whole model and the skeleton is the only thing on screen.
-- **GAP — the wireframe is drawn at HALF the engine's intensity on the shipped
-  default, and has been all along** [MEASURED 2026-09-11]. It is `GL_LINES` with
+- **On the Vulkan lane the wire was missing from the port until 2026-09-23**, and
+  is drawn now by `tagpu_vk_unit.c`: the record carries the WIRE range and the
+  colour (`TAGPU_PDUREC.wireFirst`/`wireCount`/`wire`), and a `LINE_LIST` twin
+  of the body pipeline draws it after every body with `_wire_begin`'s uniforms
+  (uNanoOn 0, uWaterMode 0, uAlpha 1). Seen on the ladder fixture, a commander
+  building a solar (wire → silhouette → texture under the rising band →
+  finished) and an ARM lab building a Peewee. **Its width is the target's scale**
+  through `wideLines`, which is what the GL lane asked for and never got (next
+  item); whether that closes the half-intensity gap was **not measured**. A
+  device without `wideLines` draws it one sample wide rather than not at all.
+- **GAP (the GL lane) — the wireframe was drawn at HALF the engine's intensity on the shipped
+  default, and had been all along** [MEASURED 2026-09-11]. It is `GL_LINES` with
   `glLineWidth(ss)` in the main pass, and the driver clamps an aliased line to
   one pixel *of the buffer it is drawn into* — the same fact the selection rect
   ran into ([UI markers](ui-markers.html) §1) — so at the default `ss = 2` each

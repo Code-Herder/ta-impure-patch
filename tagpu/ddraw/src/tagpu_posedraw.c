@@ -830,6 +830,16 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
     r->nanoC[0] = s_lastNanoC[0];
     r->nanoC[1] = s_lastNanoC[1];
     r->nanoC[2] = s_lastNanoC[2];
+    /* THE NANOFRAME WIRE: every face of every visible piece as a closed
+       outline, in the second oscillator's colour (build-state.md 3, the
+       engine's 0x458FA0). The bake's WIRE range, drawn by the consumer after
+       the bodies -- the GL twin's own `_wire_unit` order. A ghost is never a
+       nanoframe and never carries one. */
+    if (u->nanoOn && !u->ghost && g->count[TAGPU_PB_WIRE] > 0) {
+        r->wireFirst = g->first[TAGPU_PB_WIRE];
+        r->wireCount = g->count[TAGPU_PB_WIRE];
+        r->wire = u->nanoWire;
+    }
     /* THIS REPRODUCED WHICH CASTERS WERE IN THE MAP, back when a depth loop
        drew them earlier in the same frame over the same array with the same
        `unit_ok` gate. There is no such loop: `s_depthOn` lost its only writer

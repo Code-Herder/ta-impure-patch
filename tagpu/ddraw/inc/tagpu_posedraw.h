@@ -110,6 +110,8 @@ typedef struct {
     int   waterMode;
     int   nanoOn;
     float nanoT, nanoC[3];
+    float nanoWire;             /* the wireframe's colour, idx/255 (the second*/
+                                /* oscillator); read only while `nanoOn`      */
     float cast[3];              /* altitude, ground + throw, the length scale */
     int   castSkip;             /* out of the depth map (nanoframe, air drop) */
     /* THE CLASSIC HARD SHADOW THIS UNIT CASTS, decided by tagpu_native.c and
@@ -219,10 +221,12 @@ void tagpu_posedraw_end(void);
                                   bodies. The stencil dance the six GL entry
                                   points existed to express is two pipelines
                                   there.
-     _wire_begin / _wire_unit     NOT PORTED. The nanoframe wireframe is the
-                                  same program and the same bake (`uRange` 2,
-                                  GL_LINES) and this lane does not draw it, so
-                                  a unit under construction has no wire.
+     _wire_begin / _wire_unit     PORTED 2026-09-23, the same way.
+                                  `TAGPU_PDUREC.wireFirst`/`wireCount` carry the
+                                  bake's WIRE range for a unit with `nanoOn`,
+                                  `wire` its colour, and tagpu_vk_unit.c records
+                                  them after the bodies through a LINE_LIST twin
+                                  of the body pipeline.
 
    SO THIS IS A TOMBSTONE, NOT A MIGRATION, for all ten. The gap is the Vulkan
    unit pass's, not this header's — whoever closes it ports the ranges into
@@ -317,9 +321,9 @@ float tagpu_posedraw_top(const TAGPU_PDUNIT* u);
    comparison.
 
    IT DOES NOT COUNT THE REST OF THE FRAME, and that is not an oversight. The
-   nanoframe wire, the replacement meshes and the native 3DO stream all draw
-   OUTSIDE this window, and none of the three draws at all any more. THE
-   SILHOUETTE AND THE SLANT ARE INSIDE IT SINCE 2026-09-22: they are drawn from
+   replacement meshes and the native 3DO stream draw OUTSIDE this window, and
+   neither draws at all any more. THE SILHOUETTE AND THE SLANT ARE INSIDE IT
+   SINCE 2026-09-22, AND THE NANOFRAME WIRE SINCE 2026-09-23: they are drawn from
    the very records this hand-over carries, out of the same bake, by the same
    consumer -- so a unit the hand-over drops loses its shadow with its body
    rather than leaving a shadow behind, which is what makes the refusal still
@@ -373,6 +377,12 @@ typedef struct TAGPU_PDUREC {
        statement about the shader rather than about the upload. */
     float alpha, waterT, digT, nanoT, nanoC[3];
     int   fog, waterMode, nanoOn;
+    /* THE NANOFRAME WIRE, resolved here like the shadow's range: the bake's
+       WIRE range for a unit with `nanoOn`, and `wireCount == 0` for every
+       other unit and for every ghost. `wire` is the colour, idx/255 -- the
+       vertex stage's `uWire`. */
+    int   wireFirst, wireCount;
+    float wire;
     /* 1 = this unit was drawn into the cast-shadow depth map this frame, which
        is `!castSkip` on the frame the twin's depth block ran. Meaningless when
        `depthOn` below is 0. */

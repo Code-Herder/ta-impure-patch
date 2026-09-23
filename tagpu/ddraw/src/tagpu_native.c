@@ -36,9 +36,9 @@
        the origin. Per-vertex model height rides in the vertex stream.
 
    Armed by tagpu_native.on (first token = type, default armcom; the 3-name
-   match as everywhere). Under-construction units (unit+0x104 nano > 0) stay
-   on the composite path until complete — the nanoframe look is already
-   verified there; ownership begins at completion.
+   match as everywhere). Under-construction units (unit+0x104 nano > 0) are
+   owned like any other and staged here (build-state.md §7); see
+   `tagpu_native_owns_unit`.
 
    G12c close-out + G12d additions:
      - WRECKS (extra token "wrecks" in tagpu_native.on): 3D husks are found by
@@ -710,21 +710,21 @@ int tagpu_native_owns_unit(const char* u)
         const char* ta = *(const char* const*)TA_MAINPP;
         if (!model_id_ok(ta, u, NULL)) return 0;
     }
-    /* ...but a unit UNDER CONSTRUCTION only while we can actually take the
-       whole of it over. Claiming one means the engine's blit-time build-state
-       effect (0x458DD0) must be detoured away and we must stage the look
-       ourselves; if either half is missing the engine stamps its recolour and
-       wireframe at the unzoomed 1x projection and the two fight. Failing back
-       to "the engine owns nanoframes" is the pre-G13l behaviour: the scaffold
-       drifts at zoom != 1, which is a known bug, where a half-armed state is
-       an unknown one. Costs one float read per candidate and only when the
-       detour is absent or the tagpu_nano.off lever is set. */
-    {
-        extern int tagpu_owndraw_buildfx_armed(void);
-        if ((!s_nano || !tagpu_owndraw_buildfx_armed()) &&
-            !IsBadReadPtr(u, 0x108) &&
-            *(const float*)(u + U_NANO) > 0.0f) return 0;
-    }
+    /* A UNIT UNDER CONSTRUCTION IS OWNED LIKE ANY OTHER, unconditionally.
+       This test used to decline one whenever the build-effect detour on
+       0x458DD0 (tagpu_owndraw.c) was absent or `tagpu_nano.off` was set, on the
+       argument that "the engine owns nanoframes" was a safe fallback: the
+       engine would stamp its scaffold at the 1x projection, wrong at zoom != 1
+       but visible. THE CLEAN CUT MADE THAT FALLBACK DRAW NOTHING -- the
+       engine's frame reaches no pixel of the screen -- and took `owndraw` out
+       of the play defaults in the same stroke, so on the shipped configuration
+       every nanoframe was declined here and drew nothing but its health bar.
+       [FOUND 2026-09-23, reported from play.]
+
+       Nothing is lost by owning one without the detour: the engine's scaffold
+       then lands in its own frame, which is the golden source and is exactly
+       what the 1997 rasteriser draws. `tagpu_nano.off` now means "draw it
+       UNSTAGED", a finished-looking unit, rather than "hand it to nobody". */
     return 1;
 }
 
@@ -3432,6 +3432,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 q->nanoC[0] = units[i].nanoC[0];
                 q->nanoC[1] = units[i].nanoC[1];
                 q->nanoC[2] = units[i].nanoC[2];
+                q->nanoWire = units[i].nanoWire;
                 q->cast[0] = 0.0f; q->cast[1] = 0.0f; q->cast[2] = 1.0f;
                 /* THE HARD SHADOW. `units[i].shadow` already carries the
                    engine's per-unit refusals -- noshadow, canhover|floater for

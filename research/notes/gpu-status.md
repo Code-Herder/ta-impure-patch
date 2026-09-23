@@ -5186,7 +5186,9 @@ still has no validation layer.
 #### Not covered
 
 * **The nanoframe WIRE, the Classic SILHOUETTE and the structure SLANT** — the same program and the
-  same bake at `uRange` 2 and 1. They draw *outside* the window the A/B brackets, so they cannot
+  same bake at `uRange` 2 and 1. *(All three are drawn now: the silhouette and slant since
+  2026-09-22, the wire since 2026-09-23 — [build-state](build-state.html) §7. What follows is the
+  state this section measured.)* They draw *outside* the window the A/B brackets, so they cannot
   make this comparison disagree, and the pass does not refuse for them; they are simply missing
   from a Vulkan frame that has them in the GL one. The wire also draws **lines**, which is §2.31's
   stated bar.

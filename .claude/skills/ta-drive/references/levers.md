@@ -288,7 +288,7 @@ that map's size.
 | `ghost.on` | live | the translucent building preview at the placement cursor and on queued sites; `alpha=<f>` (default 0.40). A play default; off the bench line because its posed draws perturb a measurement |
 | `worldphase.off` | attach | **the world phase off**: the four call-site redirects inside `DrawGameScreen` that bracket the engine's two world spans are not installed, so engine world draws are no longer stamped and `publish` refuses none of them — the lever for any A/B that needs the engine's own world pixels ON THE SCREEN rather than only in the shot. Read `gui: ARMED … worldphase=1` at launch; `worldphase=0` means unarmed — it fails open, so unarmed costs nothing but the leak. Heartbeat `world=<stamped>/<refused>/<live>` |
 | `curs.off` | attach | the engine's own contextual-cursor behaviour at `Interface Type=1` back (the DLL otherwise patches the cursor on at any type; `curs: ARMED — contextual cursors on at any Interface Type`) |
-| `nano.off` | live | the build-state (nanoframe) look off |
+| `nano.off` | live | the build-state (nanoframe) look off: a unit under construction draws unstaged, as if finished, with no wire |
 | `subpix.off` | live | sub-pixel unit motion off |
 | `r3dcache.off` | live (re-checked every 256 frames) | the 3D-model cache's restores off, an A/B |
 | `overlay.off` | per present | the whole per-present GPU pass returns early |
