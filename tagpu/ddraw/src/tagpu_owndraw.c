@@ -225,11 +225,19 @@ static unsigned               g_ssBeat = 0;   /* frame of the last publish  */
    So terrown raises it DIRECTLY, from `tagpu_terrown_set_skip`, before that
    function publishes its own skip byte. Both are render-thread stores, x86 does
    not reorder stores with stores, and the game thread reaches the key fill only
-   after observing `g_terrown_skip`; its unit blits come after its own terrain
-   blit. A draw that key-fills therefore cannot see a lowered gate. That is an
-   ordering, not a window, which is what the previous version only claimed to be.
-   The fall (1->0) is published AFTER the skip byte, so it is late rather than
-   early -- one frame of a missing shadow, the benign direction. */
+   after latching that byte into `g_terrown_own` (`tagpu_terrown_latch`, at the
+   top of the in-play draw); its unit blits come after its own terrain blit. A
+   draw that key-fills on a RISE therefore cannot see a lowered gate. That is an
+   ordering, not a window.
+   THE FALL IS NOT SYMMETRIC, and this said it was. The gate drops right after
+   the skip byte, but a draw that latched before the drop keeps key-filling to
+   its end -- and the non-in-play callers of DrawGameScreen until the next latch
+   -- so the engine's slant can land on a key-filled surface under a lowered
+   gate. It is harmless for the reason the fall was always benign: the composite
+   inverts on `tagpu_terrown_filled()`, which reads the skip byte, already 0, so
+   no such frame is inverted and the key reaches no screen as teal.
+   [Corrected by the landing review of e8a05b1, which made that window a draw
+   long; before it the same window ran from the stub's read at 0x468DB0.] */
 static volatile unsigned char g_ssTerr = 0;
 static unsigned char          g_ssPass = 0;
 

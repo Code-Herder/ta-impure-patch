@@ -575,12 +575,14 @@ void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c, int terr_ours)
 
     if (!(z > 0.05f && z < 1.0f)) { restore(ta); return; }
 
-    /* NOT WHILE THE ENGINE DRAWS THE GROUND. `0x483FA0` walks the rect in
-       32-px cells and hands every whole one to `0x4CBEF1`, which copies 32
-       rows of 32 bytes with no clip at all, so a rect wider than the offscreen
-       is a heap overwrite -- measured 2026-09-23 as an access violation inside
-       that copy, and on another run as a garbage pointer read later from the
-       memory it had overwritten. Our terrain pass is what makes a wide rect
+    /* NOT WHILE THE ENGINE DRAWS THE GROUND. `0x483FA0` places its 32-px
+       cells from the rect's L/T (`+0x37E27`/`+0x37E2B`, the fields widened
+       here) over the TRUE W/H (`+0x37E37`/`+0x37E3B`, never written here) and
+       hands every whole one to `0x4CBEF1`, which copies 32 rows of 32 bytes
+       with no clip at all -- so a widened, negative origin is a heap
+       overwrite: measured 2026-09-23 as an access violation inside that copy
+       (a tile at (-2380,-1105)), and on another run as a garbage pointer read
+       later from the memory it had overwritten. Our terrain pass is what makes a wide rect
        safe, by taking that blit away, and `terr_ours` is the game thread's own
        latch of whether it has (`tagpu_terrown_latch`, taken just before this
        call, and the only value the stub tests this draw). The gap it closes is
@@ -627,6 +629,8 @@ void tagpu_vpwide_apply(char* ta, const TAGPU_CMD* c, int terr_ours)
         s_pubLive = 1;
     }
 }
+
+int tagpu_vpwide_wide(void) { return s_wide != 0; }
 
 void tagpu_vpwide_level_end(char* ta)
 {

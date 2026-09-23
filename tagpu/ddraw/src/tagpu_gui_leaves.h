@@ -114,7 +114,7 @@ static void gaf_record(const int* ctx, SURF* s, const unsigned char* fr,
         if ((s_census || g_gui_draw) &&
             s_lastOp->kind == OP_GAF && s_lastOp->fw && s_lastOp->fh &&
             s_lastOp->fw <= TAGPU_GAF_DECMAX && s_lastOp->fh <= TAGPU_GAF_DECMAX)
-            gaf_capture(s_lastOp, fr);       /* publish's own test, so the
+            gaf_capture(s_lastOp, fr, s && s->snap);   /* publish's own test, so the
                                                 scratch is never spent on a
                                                 frame it will refuse anyway */
     }
@@ -143,9 +143,11 @@ static void gaf_box(void* e, int kind)
 }
 static int __cdecl before_gaf(void* e)  { if (on_game_thread()) gaf_box(e, OP_GAF);  return 0; }
 static int __cdecl before_gafa(void* e) { if (on_game_thread()) gaf_box(e, OP_GAFA); return 0; }
-/* 0x4B8310: the blit DrawText 0x4A50E0 takes when globals+0xF0 bit 7 is set.
-   NOT the same shape as 0x4B7F90: stdcall with FIVE args (ret 0x14), it draws
-   nothing unless that bit is set, and it BLENDS -- a raw frame goes to
+/* 0x4B8310: the blit DrawText 0x4A50E0 takes when its sixth argument, the
+   shade, is non-zero (0x4A5179..0x4A517F), passing that shade as arg 5; the
+   gadget painters call it directly too (0x4A5EED, 0x4A619C). NOT the same
+   shape as 0x4B7F90: stdcall with FIVE args (ret 0x14), it draws nothing
+   unless globals+0xF0 bit 7 is set (tested inside it), and it BLENDS -- a raw frame goes to
    0x4CBF2C, which writes dst = [globals+0xC8][src * 256 + dst] for every src
    pixel other than arg 5, and an RLE frame to 0x4CC3D0, which writes
    `[globals+0xC8][arg5 * 256 + src]` over each texel it draws and reads no
@@ -165,7 +167,10 @@ static int __cdecl before_gafb(void* e)
     s_lastOp = NULL;
     gaf_box(e, OP_GAFB);
     if (s_lastOp && s_lastOp->kind == OP_GAFB && (s_census || g_gui_draw))
-        gafb_capture(s_lastOp, (const unsigned char*)(size_t)ARG(e, 2), ARG(e, 5));
+    {
+        const SURF* ds = surf_by_base(s_lastOp->base);
+        gafb_capture(s_lastOp, (const unsigned char*)(size_t)ARG(e, 2), ARG(e, 5), ds && ds->snap);
+    }
     return 0;
 }
 

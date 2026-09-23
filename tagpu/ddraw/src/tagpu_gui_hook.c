@@ -1723,7 +1723,14 @@ static void ops_window_reset(void)
     memset(s_gcap, 0, sizeof s_gcap);
 }
 
-static void gaf_capture(OP* o, const unsigned char* fr)
+/* `force`: decode even when the seen table says the consumer has the frame.
+   A snapshot surface (see `snap_take`) needs every sprite drawn onto it WITH
+   its plane, because `ovl` must be able to replay it after a reset has emptied
+   the consumer's atlas -- and without one the precheck in `publish` drops the
+   snapshot, which put the post-game backdrop back to black whenever its title
+   frame had already crossed from another surface. [The landing review of
+   878d7bf..e8a05b1.] */
+static void gaf_capture(OP* o, const unsigned char* fr, int force)
 {
     const void* key = frame_key(fr, o->pix, o->fw, o->fh);
     unsigned n, i;
@@ -1732,7 +1739,7 @@ static void gaf_capture(OP* o, const unsigned char* fr)
     o->goff = o->glen = 0;
     o->sgen = s_seenGen;
     if (!key) return;                       /* unreadable now: publish the box */
-    if (seen_frame(fr, key, 0)) return;      /* the consumer already has it     */
+    if (!force && seen_frame(fr, key, 0)) return;   /* the consumer already has it */
     /* the same new frame twice in one window -- 39 gadgets sharing one button
        face -- reuses the first decode. Direct-mapped, and matched on ALL THREE
        of the frame pointer, the key and the length. The first version matched
@@ -1796,7 +1803,7 @@ static void gaf_capture(OP* o, const unsigned char* fr)
    `row` is BOUNDED here and not by the engine: `0x4B84AB` shifts it unmasked,
    and the table is 32 rows (`TAGPU_GUI_SHADE_ROWS`). */
 static unsigned char s_gafbCov[TAGPU_GAF_DECMAX * TAGPU_GAF_DECMAX];
-static void gafb_capture(OP* o, const unsigned char* fr, unsigned row)
+static void gafb_capture(OP* o, const unsigned char* fr, unsigned row, int force)
 {
     const char* g;
     const unsigned char* t;
@@ -1825,7 +1832,7 @@ static void gafb_capture(OP* o, const unsigned char* fr, unsigned row)
     hh ^= (unsigned)(size_t)fk * 2654435761u;
     hh ^= row * 0x9E3779B9u;
     o->fkey = hh ? hh : 1u;
-    if (seen_frame(fr, (const void*)(size_t)o->fkey, 0)) return;
+    if (!force && seen_frame(fr, (const void*)(size_t)o->fkey, 0)) return;   /* see `gaf_capture` */
     n = (unsigned)o->fw * (unsigned)o->fh;
     i = o->fkey & (GCAP_N - 1);
     if (s_gcap[i].fr == (const void*)fr && s_gcap[i].key == o->fkey && s_gcap[i].len == n) {

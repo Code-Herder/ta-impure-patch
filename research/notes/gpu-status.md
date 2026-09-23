@@ -781,26 +781,35 @@ ring test reads is published right after the field is written, so it is exactly 
 can name.
 
 **The rect is wide only on a draw whose ground is ours [2026-09-23].** The engine's terrain pass
-`0x483FA0` is the one reader of this rect that no clip reaches: it sizes whole-tile copies
-(`0x4CBEF1`, 32 rows of 8 dwords, no clip) from the rect itself, so under a wide rect it writes
-past the offscreen. `terrown` normally takes that pass away, which is what made widening safe,
+`0x483FA0` is the one reader of this rect that no clip reaches: it places whole-tile copies
+(`0x4CBEF1`, 32 rows of 8 dwords, no clip) from the rect's L/T over the unwidened W/H, so under a
+widened, negative origin it writes outside the offscreen. `terrown` normally takes that pass away, which is what made widening safe,
 but the two were decided by different threads: the rect by the game thread from the zoom level,
 the skip by the render thread when its terrain pass is live. Entering a new skirmish while the
 last one's zoom was still commanded (the zoom is not reset at level end) widened the rect on the
 first in-play draw, and the render thread took the ground back a few draws later, after the new
 map's tile atlas was built. The engine drew the ground in between: a crash at `0x4CBF1D`, or on
 another run a garbage pointer read from the memory it had overwritten. Reproduced 1 in 1 on a map
-change. Now `tagpu_terrown_latch()` copies the render thread's skip request into the byte both
-`terrown` stubs test, once per in-play draw, on the game thread, immediately before
-`tagpu_vpwide_apply(ta, c, terr)`. That call widens only when the latch is set and restores the
-rect when it is not. One thread writes both, the latch first, so a wide rect and an engine
-terrain draw cannot meet. Measured: 3 of 3 map changes at 0.25× clean, each logging
+change. Now, at the top of every in-play draw, the game thread reads the render thread's request once
+(`tagpu_terrown_request`), `tagpu_vpwide_apply(ta, c, terr)` widens only when it is set and
+restores the rect when it is not, and then `tagpu_terrown_latch(terr || tagpu_vpwide_wide())`
+writes the byte both `terrown` stubs test. The level end latches again with
+`tagpu_vpwide_wide()`. One thread writes both the rect and the latch, and the latch is taken
+after the rect is final and is set whenever the rect is still wide (a `restore` that could not
+run included), so a wide rect and an engine terrain draw cannot meet. Measured: 3 of 3 map changes at 0.25× clean, each logging
 `vpwide: not widening at zoom 0.250 - the engine draws the terrain this draw (#1)`, the draw the
 old build widened on.
 
-The latch also moves when a skip change takes effect, from the stub's read at `0x468DB0` to the
-top of the draw, a few instructions earlier in the same draw. `tagpu_terrown_filled()` and the
-structure-shadow gate still follow the render thread's request, as before.
+**What the latch costs, from the landing review.** A change of the request now takes effect at
+the next latch, not at the stub's own read. The terrain stub at `0x468DB0` is near the top of
+the draw, but the fog stub at `0x469D8E` comes after the whole world draw. The non-in-play
+callers of `DrawGameScreen` (`0x495C76` and `0x495E66` in the screenshot routine, `0x4962C2` the
+movie recorder) never latch and keep the last in-play value until the level end. So after the
+render thread withdraws, the key fill and the fog tick can still run for the rest of that draw.
+`tagpu_terrown_filled()` and the structure-shadow gate follow the request, which is already
+down, so no such frame is inverted. The fog-eye latch that handing the site back must void is
+now voided by `tagpu_terrown_latch` on every draw the site is not ours, on the game thread. The
+render thread's clear, which a tick on the draw in flight could undo, is gone.
 
 **The cursor is not a reader of this rect and no longer needs to be** — §2.3d is why. Until
 G13m it was: the engine drew its sprite wherever `GetCursorPos` reported, so widening what it

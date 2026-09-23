@@ -2026,6 +2026,12 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     if (s_installed && !s_countOnly) {
         char* ta = (char*)ta_main();
         if (ta) { tagpu_zoom_level_end(ta); tagpu_vpwide_level_end(ta); }
+        /* and the terrain latch with it: the shell, the next level's loading
+           draws and any screenshot draw before its first in-play one never
+           latch, so without this they would run our key fill and fog tick on
+           this level's decision. Only a rect `restore` could not put back
+           keeps it up. [The landing review of e8a05b1.] */
+        tagpu_terrown_latch(tagpu_vpwide_wide());
         tagpu_packet_publish(fill_level_end, &s_levelGen, 1 /* past the FRESH gate */);
     }
     _snprintf(b, sizeof b, "packet: level end -> gen %u (reclaim's %u): in_game=0 published%s; %u in-play draw(s) this level; load flags 0x%04X",
@@ -2084,15 +2090,19 @@ static int __cdecl before_draw(void* entry_esp)
         unsigned us;
         QueryPerformanceCounter(&t0);
         c = tagpu_cmd_take();
-        /* THE TERRAIN LATCH FIRST, then the rect: the rect may only be wide on
-           a draw whose ground is ours, and this is where both are decided, on
-           the one thread that writes either (`tagpu_terrown_latch`). */
+        /* THE RECT, THEN THE TERRAIN LATCH: the rect may only be wide on a
+           draw whose ground is ours. The render thread's request is read ONCE,
+           the rect widens only on it, and the stubs are latched on it OR on a
+           rect that is still wide (a `restore` that could not run) -- after the
+           rect is final, on the one thread that writes either, before this
+           draw reaches `0x468DB0`. See `g_terrown_own`. */
         {
-            int terr = tagpu_terrown_latch();
+            int terr = tagpu_terrown_request();
             if (ta) {
                 tagpu_zoom_apply(ta, c);
                 tagpu_vpwide_apply(ta, c, terr);
             }
+            tagpu_terrown_latch(terr || tagpu_vpwide_wide());
         }
         tagpu_cmd_done();
         QueryPerformanceCounter(&t1);

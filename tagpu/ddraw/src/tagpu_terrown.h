@@ -39,19 +39,21 @@ int  tagpu_terrown_filled(void);
    that the viewport was ours, and with `terrown` off the erase never fired at
    all. The erase is now a property of the frame (`tagpu_gui_hook.c`'s `publish`,
    the `PK_CLEAR` at the flip marker), so nothing asks this any more. */
-/* 1 while the engine's fog overlay 0x4848E0 is ours — which is to say while
-   the lazy rebuild of the screen fog grid is a decision WE make, in
-   terr_fogtick, rather than one the engine makes by testing a bit we would
-   have to race it to write. tagpu_zoom gates cursor anchoring on this: a
-   stepped eye it could not answer for is a silently stale fog. */
+/* 1 while the engine's fog overlay 0x4848E0 is ours -- the game thread's
+   latch, which is what its stub tests. (No caller at present; the comment here
+   said tagpu_zoom gates cursor anchoring on it, which is no longer so.) */
 int  tagpu_terrown_owns_fog(void);
-/* GAME THREAD, at the top of every in-play draw and before the viewport rect
-   is touched: copy the render thread's skip request into the byte the terrain
-   and fog stubs test, and return it. The only writer of that byte, so within
-   a draw the engine's terrain blit runs or is skipped exactly as this said --
-   which is what lets `tagpu_vpwide_apply` widen the rect only on draws whose
-   terrain is ours (see `g_terrown_own`). */
-int  tagpu_terrown_latch(void);
+/* The render thread's request -- 1 while it wants the engine's terrain and
+   fog skipped. Read by the game thread's latch below, never by the stubs. */
+int  tagpu_terrown_request(void);
+/* GAME THREAD ONLY: decide, for the draws until the next latch, whether the
+   engine's terrain and fog run or are skipped -- the one byte both stubs test.
+   The packet publisher calls it at the top of every in-play draw AFTER the
+   viewport rect is settled, with `request || tagpu_vpwide_wide()`, and at the
+   level end with `tagpu_vpwide_wide()`, which keeps "the rect is wide => the
+   engine's terrain blit is skipped" true at every moment (see
+   `g_terrown_own`). */
+void tagpu_terrown_latch(int own);
 /* GAME THREAD, from the packet's publisher. The eye the ENGINE's own fog grid
    was last anchored at, latched inside the fog site the moment its builder ran
    (0x4843C0 recomputes the origin from those two words itself). 0 when this

@@ -301,7 +301,11 @@ surface is then exactly as unrecoverable as before; so does any op on it that th
 recorded and `publish` never handled (a window thrown away on a stall, a publish cut short by a
 full queue or arena), which `ops_window_reset` checks against `s_pubReached`. A redraw of a sprite
 already held takes no new entry, and one whose plane `gaf_capture` skipped (the seen table had it)
-is replayed from the held plane. The residual is the asset's own: an unhooked write after the
+is replayed from the held plane. A sprite drawn onto a snapshot surface is decoded even when the
+seen table says the consumer has it (`gaf_capture`'s and `gafb_capture`'s `force`): `ovl` has to be
+able to replay it after a reset has emptied the consumer's atlas, and without a plane the snapshot
+was dropped, which turned the backdrop black again whenever the title frame had already crossed
+from another surface (found by the landing review). The residual is the asset's own: an unhooked write after the
 snapshot leaves it older than the surface.
 
 **A remap is a sprite; only a blend is not (2026-09-23).** `0x4B8310`'s RLE arm writes
