@@ -269,23 +269,21 @@ static void nlog(const char* s)
 static volatile int s_armed = -1;
 
 /* MUST THE ENGINE'S CACHED SLANT BE SUPPRESSED THIS FRAME -- the
-   structure-shadow gate's input, written at the bottom of the unit pass and
-   read (and cleared) by the publisher at the top of the NEXT frame.
+   structure-shadow gate's input. `s_ssSuppress`, the file-static that carried
+   it, IS GONE (2026-09-22): it had had no writer since landing 11-3 deleted the
+   GL painters, and the answer now comes from the painter that replaced them
+   through `tagpu_posedraw_slant_take()`, at the gate itself.
 
-   IT WAS CALLED `s_ssPainter` AND ASKED "DID ANYTHING PAINT ONE", which is a
-   different question and the fourth wrong one this gate has asked. Painting
-   decides whether a SHADOW appears; it does not decide whether GARBAGE does,
-   and inside a key-filled viewport the engine's cached slant is always
-   garbage -- MEASURED 2026-09-18, 8779 px of opaque teal on four structures.
-   So the first term is now the key-fill itself. Render thread only, one writer, one reader, same
-   thread: `tagpu_native_frame` is the whole of both. Not volatile and not
-   published anywhere else, because the value that crosses to the game thread is
-   `tagpu_owndraw.c`'s `g_ssSkip`, which the publisher writes from this.
-
-   It is deliberately the painters' OWN conditions, quoted where they live
-   rather than restated up there -- that is the bug this variable exists to
-   stop repeating. */
-static int s_ssSuppress = 0;
+   THE HISTORY IS KEPT BECAUSE THE GATE HAS ASKED FOUR WRONG QUESTIONS. The
+   variable was once `s_ssPainter` and asked "did anything paint one", which is
+   not the same as "must the engine be stopped": painting decides whether a
+   SHADOW appears, not whether GARBAGE does, and inside a key-filled viewport
+   the engine's cached slant is always garbage -- MEASURED 2026-09-18, 8779 px
+   of opaque teal on four structures. There is no key-fill on this lane, so what
+   is left of that question is the painting, and it is answered by the painter
+   rather than restated here. Render thread only, one writer and one reader; the
+   value that crosses to the game thread is `tagpu_owndraw.c`'s `g_ssSkip`,
+   which the publisher writes from this. */
 static char   s_type[32] = "armcom";
 static int    s_wrecks = 0;            /* "wrecks" token present            */
 static int    s_ss     = 1;            /* 2x supersample (tagpu_ss.off)     */
@@ -2362,18 +2360,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        any future painter -- the engine would keep drawing its slant shadows
        underneath ours and nothing would report it.
 
-       WHAT IS STILL MISSING, stated rather than left to be found: nothing sets
-       `s_ssSuppress` to 1 any more. Its writers were the GL painters, deleted
-       with the draw half in landing 11-3, so this publishes 0 every frame and
-       the engine draws every structure shadow itself. That is the CORRECT
-       picture while we paint none -- but a Vulkan-side structure-shadow painter
-       must set `s_ssSuppress` where the GL one did, or it will draw over the
-       engine's rather than instead of them. The read-and-clear below is what
-       keeps that bounded by construction: a frame that does not reach a painter
-       lowers the gate again on its own. */
+       THE PAINTER IS BACK AND IS THE VULKAN UNIT PASS (2026-09-22). From
+       landing 11-3 until then nothing set `s_ssSuppress` at all -- its writers
+       were the GL painters deleted with the draw half -- so this published 0
+       every frame and the engine drew every structure shadow itself. What sets
+       it now is `tagpu_posedraw_slant_take()`: the CONSUMER reports, after it
+       has recorded its shadow stage, that it painted at least one slant, and
+       that report is what is read here. It is deliberately not a prediction
+       assembled from this pass's own levers -- two rounds were spent guessing
+       it wrong, above -- and it is one render-loop iteration old by
+       construction, which is the one-frame cost this comment already budgets
+       for in both directions. The read-and-clear keeps it bounded: a frame
+       that does not reach the painter lowers the gate again on its own. */
     {
-        const int suppress = s_ssSuppress;
-        s_ssSuppress = 0;                 /* this frame must earn it again */
+        const int suppress = tagpu_posedraw_slant_take();   /* read AND clear */
         tagpu_owndraw_set_structshadow(s_armed == 1 && suppress,
                                        f->frame_counter);
     }
@@ -2571,7 +2571,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     typedef struct { const TAGPU_PK_UNIT* pu; const TAGPU_PK_WRECK* pw;
                      const TAGPU_PK_PIECE* pc; int nparts; unsigned basePiece;
                      const unsigned short* bturn;
-                     float ax, ay, wx0, wz0, wy, gnd;
+                     float ax, ay, wx0, wz0, wy, gnd, gy;
                      int rel, owner, cloaked, air, feat, sel, shadow, slant; unsigned yaw;
                      float waterT, digT; int waterMode;
                      int nanoOn; float nanoT, nanoC[3], nanoWire; } NU;
@@ -2657,12 +2657,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    has redirected that branch the engine draws nothing for them
                    and the slant shadow is ours, under that branch's own gates
                    -- noshadow, and the model-0-under-water skip at 0x4592D5;
-                   canhover/floater are NOT tested there. (The test that asked
-                   `tagpu_owndraw_structshadow_ours` is gone from the
-                   assignment below; read its comment before trusting any of
-                   this -- no slant shadow is drawn on this lane at all.) The rest get a composite-derived
-                   silhouette the wipe emptied -- ours, under the engine's
-                   FBI gates. Without the redirect a structure keeps the
+                   canhover/floater are NOT tested there. The rest get a
+                   composite-derived silhouette the wipe emptied -- ours, under
+                   the engine's FBI gates. Without the redirect a structure keeps the
                    engine's cached shadow, exactly as before. */
                 mask = pu->def_mask;
                 /* a digger never reaches the cached branch: path A tests the
@@ -2679,17 +2676,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                        and `owndraw` is off the defaults, so the term was 0 for
                        the life of every session and said nothing true.
 
-                       THIS DOES NOT PUT A STRUCTURE SHADOW BACK ON THE SCREEN,
-                       and must not be read as though it did. **Nothing on the
-                       Vulkan lane draws the slant at all**: landing 11-2
-                       deleted this pass's GL tail and the slant and silhouette
-                       shadow draws went with it (the note at the end of
-                       `tagpu_native_frame` lists them), and `tagpu_vk_unit.c`
-                       contains no slant anything -- checked 2026-09-20, on
-                       `main` as well, so the gap predates the clean cut. This
-                       field feeds a bake whose only consumer was that tail.
-                       Simplified rather than deleted because it is the record
-                       of what a restored slant pass must ask. */
+                       THE SLANT IS DRAWN AGAIN SINCE THE HARD-SHADOW LANDING
+                       (2026-09-22). It was dark from landing 11-2, which
+                       deleted this pass's GL tail and took the slant and
+                       silhouette draws with it, until `tagpu_vk_unit.c` grew
+                       the two shadow stages; what this field feeds is the
+                       `shKind` the hand-over carries, and the engine's own
+                       cached slant is suppressed for exactly the frames that
+                       painter reports having drawn (the structure-shadow gate
+                       above). */
                     n2->shadow = !(mask & 0x02000000u);    /* noshadow          */
                     if (n2->shadow && pu->model_id == 0 &&
                         fz < (float)pk->sea_level)
@@ -2747,16 +2742,27 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         /* GROUND height under the unit (engine: GetPosHeight); terrain height
            byte = PLOT_MEMORY tile +0x04 (16-px grid).
 
-           `gy` -- the screen-space ground line this used to derive -- IS GONE.
-           Its only reader was `h->shadowDy` inside the replacement-mesh branch,
-           which landing 11 D3 deleted, so it became a store nothing loaded and
-           -Wall could not say so. `gnd` is kept: it is the raw height byte, not
-           a projection of it.
+           `gy` IS THE SCREEN-SPACE GROUND LINE and is back with the hard
+           shadow (2026-09-22). The engine blits a unit's shadow at
+           `(sx + 0x85, groundY)` -- the ground height UNDER the unit, not the
+           unit's own y -- so an aircraft's shadow lands on the terrain below
+           it rather than under its hull. `gy - ay` is that shift in frame
+           pixels and is what the hand-over carries as `shOffY`. It was deleted
+           by landing 11 D3, whose only reader had been the replacement-mesh
+           branch; a structure at rest has `gy == ay` and the shift is 0, which
+           is why the field looked inert.
 
-           FOUND HERE AND NOT TOUCHED, because it is not this landing's: `gnd`
-           has no reader either, and had none at D3's parent, so it is older
-           than this deletion and belongs to whoever audits it. */
-        if (pu->flags & TAGPU_PK_U_GROUND) n2->gnd = (float)pu->ground_h;
+           `gnd` is the raw height byte, not a projection of it, and still has
+           no reader. Left alone: it is older than this work. */
+        {
+            float gy = ay;
+            if (pu->flags & TAGPU_PK_U_GROUND) {
+                int th = pu->ground_h;
+                gy = fy - (float)th * 0.5f - (float)eyeY + (float)vpT;
+                n2->gnd = (float)th;
+            }
+            n2->gy = gy;
+        }
         n2->rel = (wy >> 4) - r0;
         n2->owner = owner; n2->cloaked = cloaked;
     }
@@ -2866,6 +2872,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 n2->ax = ax; n2->ay = ay;
                 n2->wx0 = (float)rx; n2->wz0 = (float)(ry - rz / 2);
                 n2->wy = (float)rz; n2->gnd = (float)rz;
+                n2->gy = ay;        /* no ground line of its own: no shift    */
                 n2->rel = (ry >> 4) - r0;
                 n2->owner = 0; n2->cloaked = 0; n2->air = 0; n2->feat = 1; n2->sel = 0;
                 n2->shadow = 0;     /* the engine's FShadow feature shadow stays */
@@ -3106,6 +3113,35 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     const int pdPoseMax = (int)(sizeof pdPose / sizeof pdPose[0]);
     const int pdShadedMax = (int)(sizeof pdShaded);
     int pdReady = tagpu_posedraw_ready();
+    /* ---- THE CLASSIC HARD SHADOW'S POLICY, DECIDED ONCE PER FRAME ----------
+       Everything the decision reads is engine state or a lever, and a Vulkan
+       pass may read neither (tagpu_vk_pass.h), so it is settled here and the
+       hand-over carries one `shKind` per unit.
+
+       THE ENGINE'S OWN OPTION WORD IS THE OUTER GATE, and it is read from the
+       frame PACKET's copy rather than across the threads -- `pk->gfx_opt` is
+       `TA+0x37F06` as the publisher took it (tagpu_packet.h), the same copy the
+       marker pass reads `damagebars` out of. Bit 2 "Shadow" is the master: a
+       player who turns Shadows off in TA's own Options gets none from us
+       either. Bit 3 "TShadow" is the SILHOUETTE's alone -- the engine tests it
+       only on the completed-unit branch (0x4592C8) and never on the structure
+       branch, so a structure's slant survives it. Bit 4 "FShadow" is the
+       FEATURE pass's and is not touched here.
+
+       THE CLASSIC++ KEY IS THE INNER ONE. `shadows=2` (HARD) is Classic's own
+       pair and is the shipped default; `shadows=1` (SOFT) asks for the
+       map-anchored depth map instead, which has no producer on this lane --
+       see the note by `s_hardOnly` below. `shadows=0` draws neither. With the
+       Classic++ switch OFF the engine's option bits rule alone, exactly as
+       they did before Classic++ existed. */
+    const TAGPU_LIGHT* cppL = tagpu_classicpp_light();
+    const int cpp  = tagpu_classicpp_on();
+    const int hard = !cpp || cppL->shadows == TAGPU_SHADOWS_HARD;
+    /* `shadows=0` needs no term of its own: it makes `hard` false and
+       `airDrop` false, so the test below admits nothing. */
+    const int airDrop = cppL->airshadow == TAGPU_AIRSHADOW_DROP &&
+                        cppL->shadows != TAGPU_SHADOWS_OFF;
+    const unsigned gfx = pk->gfx_opt;
     /* tagpu_posecrc.on: one line per unit per SIM TICK. Per FRAME would be two
        identical lines per tick at 60 fps and sixteen on a fast machine, which
        buries the transitions the join is looking for. */
@@ -3233,6 +3269,27 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 q->nanoC[1] = units[i].nanoC[1];
                 q->nanoC[2] = units[i].nanoC[2];
                 q->cast[0] = 0.0f; q->cast[1] = 0.0f; q->cast[2] = 1.0f;
+                /* THE HARD SHADOW. `units[i].shadow` already carries the
+                   engine's per-unit refusals -- noshadow, canhover|floater for
+                   a mobile, the model-0-under-water skip for a structure, and
+                   a unit under construction (build-state.md 7) -- and
+                   `units[i].slant` says which of the blit's two branches it
+                   takes. What is added here is the frame-level policy.
+
+                   `hard || (air && airDrop)` IS THE GL TWIN'S OWN TEST, kept
+                   whole: under Classic++ at `shadows=1` the only Classic
+                   shadow that still draws is an aircraft's silhouette under
+                   `airshadow=drop`, and an aircraft is never a structure, so
+                   that clause can only ever admit a silhouette. */
+                q->shKind = TAGPU_PDSH_NONE;
+                q->shOffY = 0.0f;
+                if (units[i].shadow && (gfx & 4) &&
+                    (hard || (units[i].air && airDrop))) {
+                    if (units[i].slant) q->shKind = TAGPU_PDSH_SLANT;
+                    else if (gfx & 8)   q->shKind = TAGPU_PDSH_SIL;
+                    if (q->shKind != TAGPU_PDSH_NONE)
+                        q->shOffY = units[i].gy - units[i].ay;
+                }
                 npd++;   /* the count is live: the hand-over and the bail read it */
                 /* the model top no longer falls out of the vertices. Only a
                    WRECK reads it: a unit with a record prefers model_aabb */

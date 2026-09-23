@@ -73,7 +73,19 @@ static float level_of(const float sun[3], float amb)
 #define DEF_SSUN_EL 40.0f
 static void shadow_defaults(TAGPU_LIGHT* L)
 {
-    L->shadows = TAGPU_SHADOWS_SOFT;
+    /* HARD SINCE 2026-09-22, and the change is a consequence rather than a
+       preference. SOFT is the map-anchored depth map, and its producer -- the
+       light basis, the map extent and the heightfield caster mesh -- was
+       `tagpu_shadow.c`, which landing 11 D2 deleted with the GL backend. Since
+       then `shadows=1` has drawn NOTHING: `tagpu_vk_shadow_prepare` returns 0
+       on every frame for want of a hand-over, and the consumers' refusals are
+       gated on the same `shadowOn` that goes to 0 with it, so both halves went
+       dark together and silently. HARD is Classic's own pair -- the 5-px
+       silhouette and the structure slant -- and it is what the unit pass
+       actually draws, so it is what the default has to name.
+       [tagpu_vk_shadow.h's TAGPU_SHADOWHAND block; the vulkan-only plan's
+       landing 11.] */
+    L->shadows = TAGPU_SHADOWS_HARD;
     L->penumbra = 0.05f;
     L->shadowlenOn = 1; L->shadowlen[0] = 14.0f; L->shadowlen[1] = 0.25f;
     L->shade = 1.0f;

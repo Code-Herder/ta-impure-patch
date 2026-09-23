@@ -57,6 +57,18 @@ typedef struct {
        GL_DEPTH24_STENCIL8 and a comparison against it is a comparison of two
        quantisations as much as of two rasterisers. */
     VkFormat                  dfmt;
+    /* 1 when `dfmt` CARRIES A STENCIL PLANE and the render passes clear it --
+       both the seam's and tagpu_vk_world.c's offscreen one -- so a pass may
+       build a pipeline with `stencilTestEnable`. The 24-bit format the lane
+       prefers is D24_UNORM_S8_UINT and has one; its fallback,
+       X8_D24_UNORM_PACK32, has none, and a device that offers only that gets a
+       0 here. Same shape as `flipok` and `lineok`: a capability a pass asks
+       about rather than assumes, and a pass whose device will not offer it
+       stands its stencil-masked work down instead of drawing without the mask.
+       THE ONLY USER TODAY is the unit pass's Classic hard shadow, whose mask
+       is what makes one 50% blend per silhouette PIXEL rather than one per
+       surface -- see build_shadow_pipelines. */
+    int                       stencilok;
     uint32_t                  slots;    /* <= TAGPU_VK_SLOTS                   */
     /* VK_KHR_maintenance1, and so a NEGATIVE VIEWPORT HEIGHT. GL's clip space
        has +Y up and Vulkan's has +Y down, so a shader written in GL's window

@@ -34,13 +34,17 @@
                              amb=A          the ambient floor, 0..1
                            and the shadows' (renderers.md 2.12; tagpu_shadow.c):
                              shadows=0|1|2      0 none, 1 SOFT (the map-anchored
-                                                depth map of 2.12, the default),
+                                                depth map of 2.12, which HAS NO
+                                                PRODUCER on this lane and draws
+                                                nothing -- see tagpu_classicpp.c),
                                                 2 HARD (Classic's own silhouette
                                                 and slant, drawn under the
-                                                switch). Any of them also needs
-                                                the engine's own Shadow option
-                                                bit (+0x37F06 bit2); the keys
-                                                below describe the soft map only
+                                                switch), THE DEFAULT. Any of
+                                                them also needs the engine's own
+                                                Shadow option bit (+0x37F06
+                                                bit2), and the silhouette needs
+                                                bit3 as well; the keys below
+                                                describe the soft map only
                              shadowsun=AZ,EL    the shadows' light, 225,40
                              penumbra=K         kernel radius per world unit of
                                                 blocker distance, 0.05; 0 = hard

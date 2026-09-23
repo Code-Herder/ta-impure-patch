@@ -112,7 +112,30 @@ typedef struct {
     float nanoT, nanoC[3];
     float cast[3];              /* altitude, ground + throw, the length scale */
     int   castSkip;             /* out of the depth map (nanoframe, air drop) */
+    /* THE CLASSIC HARD SHADOW THIS UNIT CASTS, decided by tagpu_native.c and
+       carried rather than re-derived: the engine's option word, the unit-type
+       bits and the Classic++ `shadows=` key are all engine or lever state, and
+       a pass file may read none of them (tagpu_vk_pass.h). One field says both
+       WHETHER and WHICH, because the two kinds are exclusive by the engine's
+       own branch (0x459200: a structure takes the cached slant at 0x45A790,
+       everything else the blackened composite at 0x45A470):
+
+         TAGPU_PDSH_NONE   no shadow for this unit
+         TAGPU_PDSH_SIL    the Classic SILHOUETTE -- the BODY range again,
+                           shifted, with the fragment stage's uShadow on
+         TAGPU_PDSH_SLANT  the structure SLANT -- the bake's own SLANT range
+
+       `shOffY` is the shift onto the ground line under the unit, `gy - ay` in
+       frame pixels, so an aircraft's shadow lands on the ground rather than
+       under its hull. The x shift is the engine's constant 5 px (the blit's
+       sx+0x85 against the body's sx+0x80) and is the consumer's. */
+    int   shKind;
+    float shOffY;
 } TAGPU_PDUNIT;
+
+#define TAGPU_PDSH_NONE   0
+#define TAGPU_PDSH_SIL    1
+#define TAGPU_PDSH_SLANT  2
 
 /* "SOMETHING WILL DRAW THE UNIT, SO THE ENGINE NEED NOT." Published because
    `owndraw` must not skip the engine's unit rasterise unless that is true —
@@ -319,6 +342,15 @@ typedef struct TAGPU_PDUREC {
     unsigned    geomSerial, matSerial;
     int   nvert;                      /* both streams carry this many         */
     int   first, count;               /* the BODY range this draw used        */
+    /* THE CLASSIC HARD SHADOW, as TAGPU_PDUNIT carries it, with the range
+       already resolved here so the consumer never has to know which of the
+       bake's three ranges a kind means. `shCount == 0` is "no shadow", whatever
+       `shKind` says -- a structure whose bake carries no slant triangles is the
+       ordinary case of that, and it is expressed once, here, rather than as a
+       second test at the draw. */
+    int   shKind;                     /* TAGPU_PDSH_*                         */
+    int   shFirst, shCount;           /* the range that kind draws            */
+    float shOffY;                     /* the ground shift, frame px           */
     int   npose;                      /* pieces the block below carries       */
     unsigned rowOff;                  /* first of npose*3 vec4 in `rows`      */
     unsigned flagOff;                 /* first of npose floats in flags/vis   */
@@ -476,6 +508,26 @@ typedef struct TAGPU_PDHAND {
    been taken, or when the standing one was published on a different frame than
    `now`. Render thread only. */
 int  tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now);
+
+/* ---- WHO PAINTED A STRUCTURE'S SLANT, REPORTED BY THE PAINTER --------------
+   The structure-shadow gate in tagpu_native.c may only be raised on a frame
+   something actually drew a slant (its comment says why at length: it is
+   "observed, not predicted"), and the only code that knows is the consuming
+   pass. So the consumer SAYS SO after recording its shadow stage, and the
+   producer's next frame reads it and clears it.
+
+   RENDER THREAD ONLY, and the two calls are one iteration of the render loop
+   apart by construction: `tagpu_native_frame` publishes the hand-over and the
+   seam's `tagpu_vk_frame` consumes it later in the SAME iteration, so the
+   `_take` at the top of frame N+1 reads what the painter reported in frame N.
+   That is the one-frame cost the gate's own comment already budgets for, in
+   both directions.
+
+   `_drew` is idempotent within a frame (the consumer may record more than one
+   stage); `_take` reads and clears, so a frame that never reaches the painter
+   lowers the gate on its own. */
+void tagpu_posedraw_slant_drew(void);
+int  tagpu_posedraw_slant_take(void);
 
 void tagpu_posedraw_glreset(void);
 /* one `posed=` field for the native: line; writes nothing when disarmed */

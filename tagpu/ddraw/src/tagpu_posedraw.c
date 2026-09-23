@@ -306,6 +306,14 @@ static int arena_room(void** p, unsigned* cap, unsigned need, size_t elem)
 /* units the pass actually drew this frame, for the caller to hold its own
    queued count against — a queued unit that is not drawn is a missing one */
 unsigned tagpu_posedraw_drawn(void) { return s_units; }
+
+/* the consumer's report that it painted at least one structure slant this
+   frame, and the producer's read-and-clear of it -- tagpu_posedraw.h states
+   the ordering that makes the one-frame lag a property of the loop rather than
+   of who happened to run */
+static int s_slantDrew;
+void tagpu_posedraw_slant_drew(void) { s_slantDrew = 1; }
+int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; return v; }
 /* `s_slantU/s_slantT/s_wireU/s_wireL` counted the slant and wire draws and
    went with them in landing 11-5d: their only increments were inside
    `_slant_redraw` and `_wire_unit`, so keeping them would have left
@@ -773,6 +781,23 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
     r->nvert = g->nvert;
     r->first = g->first[TAGPU_PB_BODY];
     r->count = g->count[TAGPU_PB_BODY];
+    /* THE HARD SHADOW'S RANGE, RESOLVED HERE AND NOWHERE ELSE. The silhouette
+       is the BODY range shifted (the engine blackens the composite it has just
+       built and blits it again, 0x45A470 then 0x459200); the structure slant is
+       the bake's own SLANT range, whose per-piece `cached` rule the vertex
+       shader applies off uPieceVis. A ghost casts nothing -- it is a preview of
+       a building that is not there, and the engine draws no shadow for a
+       placement cursor. */
+    r->shKind = u->ghost ? TAGPU_PDSH_NONE : u->shKind;
+    r->shOffY = u->shOffY;
+    if (r->shKind == TAGPU_PDSH_SLANT) {
+        r->shFirst = g->first[TAGPU_PB_SLANT];
+        r->shCount = g->count[TAGPU_PB_SLANT];
+    } else if (r->shKind == TAGPU_PDSH_SIL) {
+        r->shFirst = r->first;
+        r->shCount = r->count;
+    }
+    if (r->shCount <= 0) r->shKind = TAGPU_PDSH_NONE;
     r->npose = np;
     r->rowOff = s_nrow / 4;                 /* in vec4, as the header says    */
     /* `arena_room` rounds up to a power of two, so the vis arena can end a

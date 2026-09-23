@@ -1571,6 +1571,17 @@ static int vk_swapchain(int w, int h)
    neither 24-bit format gets no depth attachment at all -- the passes that do
    not test go on working and the ones that do refuse to arm and say so, which
    is a stated gap rather than a silently different picture. */
+/* 1 when the format carries a stencil plane -- which the 24-bit pair the lane
+   prefers does and its no-stencil fallback does not. One place, because the
+   view's aspect mask, the render pass's load op and `TAGPU_VKPASS.stencilok`
+   have to agree and there is no way to check that they do at run time. */
+static int vk_depth_has_stencil(VkFormat f)
+{
+    return f == VK_FORMAT_D24_UNORM_S8_UINT ||
+           f == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+           f == VK_FORMAT_D16_UNORM_S8_UINT;
+}
+
 static VkFormat vk_depth_format(void)
 {
     static const VkFormat want[2] = {
@@ -1624,7 +1635,12 @@ static int vk_renderpass(void)
     at[1].samples = VK_SAMPLE_COUNT_1_BIT;
     at[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    /* CLEARED, NOT DONT_CARE, since the unit pass grew a stencil-masked
+       shadow: the mask is written and cleared within one unit's pair of draws,
+       so every frame is meant to begin at 0 and the load op is what guarantees
+       it. Nothing reads the plane after the pass, so the STORE stays
+       DONT_CARE. */
+    at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     at[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -1730,10 +1746,18 @@ static int vk_depth_image(uint32_t i)
     ivi.image = s_vk.dimg[i];
     ivi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     ivi.format = s_vk.dfmt;
-    /* the STENCIL aspect is deliberately not in the view: nothing here tests or
-       writes stencil, and a depth/stencil format whose view carries both cannot
-       be used as a plain depth attachment on every driver */
-    ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    /* THE STENCIL ASPECT COMES WITH THE FORMAT, and this line used to leave it
+       out with a comment saying a view carrying both "cannot be used as a plain
+       depth attachment on every driver". The opposite is the rule:
+       tagpu_vk_world.c's own attachment names both aspects for exactly this
+       reason -- "a view of them must name it, or the framebuffer is refused" --
+       and the GL original of this attachment is GL_DEPTH24_STENCIL8, whose
+       stencil plane tagpu_native.c clears with the depth. It was true that
+       nothing here tested stencil; the unit pass's Classic hard shadow does,
+       and it needs the plane on whichever target it lands in. */
+    ivi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT |
+                                      (vk_depth_has_stencil(s_vk.dfmt)
+                                           ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
     ivi.subresourceRange.levelCount = 1;
     ivi.subresourceRange.layerCount = 1;
     if (vkCreateImageView(s_vk.dev, &ivi, NULL, &s_vk.dview[i]) != VK_SUCCESS) {
@@ -2405,6 +2429,7 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.rp = s_vk.rp;
     s_pass.fmt = s_vk.fmt;
     s_pass.dfmt = s_vk.dfmt;
+    s_pass.stencilok = vk_depth_has_stencil(s_vk.dfmt);
     s_pass.slots = s_vk.nimg;
     s_pass.flipok = s_vk.flipok;
     s_pass.anisook = s_vk.anisook;
@@ -2914,6 +2939,11 @@ static int vk_present(void)
                that DOES clear, which is the depth one. cv[1] is 1.0, the value
                glClear(GL_DEPTH_BUFFER_BIT) uses on the GL side. */
             cv[1].depthStencil.depth = 1.0f;
+            /* AND THE STENCIL PLANE WITH IT, so the unit pass's shadow mask
+               starts every frame at 0 rather than at whatever the last one
+               left. `glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)` is
+               what the GL twin's world FBO did. */
+            cv[1].depthStencil.stencil = 0;
             rbi.renderPass = s_vk.rp;
             rbi.framebuffer = s_vk.fb[idx];
             rbi.renderArea.extent = s_vk.ext;
