@@ -342,8 +342,9 @@ see it. Making the OUT shader report the index it had read is what found it.
 
 * **The 65 px rasteriser-edge difference** (3b, §2.38) — characterised, not traced, needs its own
   landing, and nothing may be measured on a small fixture again.
-* **`selAt1x`'s depth resolve**, the HUD-scale shift, and GL's two-step resolve — 4c-2's
-  *Not covered*, and `devres` / `k != 1` are untested either way.
+* **`selAt1x`'s depth resolve** and GL's two-step resolve — 4c-2's *Not covered*, and
+  `devres` / `k != 1` are untested either way. (The HUD-scale shift is applied to the world
+  target's placement — `gpu-status.md` §2.15.)
 * **The GL twin's lines are the WRONG half.** At `ss=2` the driver clamps an aliased line's width
   to 1, so `glLineWidth(ss)` draws pixel-identically to `glLineWidth(1)` and the GL laser is a
   half-lit smear; the Vulkan lane has `wideLines` and gets its 2 px. ~100 px on lasers, 34 on order
