@@ -484,7 +484,7 @@ void tagpu_cobtrace_init(void)
 {
     unsigned char *sa, *sr, *st, *sk, *sd;
     unsigned char  rel[5];
-    char           b[400];
+    char           b[640];      /* the header: ~200 bytes of text plus a filter of up to 255 */
     if (GetFileAttributesA(FLAG_FILE) == INVALID_FILE_ATTRIBUTES) return;
     if (memcmp((void*)ALLOC_VA, ALLOC_STOLEN, 5) != 0 ||
         memcmp((void*)RUN_VA,   RUN_STOLEN,   5) != 0 ||

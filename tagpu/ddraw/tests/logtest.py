@@ -121,7 +121,7 @@ def case_stress():
               f"thread {t}: lines {xs[0] if xs else '-'}..{xs[-1] if xs else '-'}, a gapless suffix")
     check(survivors > 0, "at least one thread's lines survive")
     cut = [l for l in lines if l.endswith("...[truncated]")]
-    check(any(set(l[:-14]) == {"x"} and len(l) == 1024 + 14 for l in cut), "a 5000-byte line is cut to 1024 and marked")
+    check(any(set(l[:-14]) == {"x"} and len(l) == 2048 + 14 for l in cut), "a 5000-byte line is cut to 2048 and marked")
     # blocks: begin, n lines, end -- consecutive, inside ONE file
     bad = blocks = 0
     for p in parts:

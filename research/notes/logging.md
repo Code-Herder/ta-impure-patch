@@ -41,8 +41,9 @@ history can always make room, and a fresh file holds its header, a gap line, one
 and the room for its `continued in` line.
 
 `NOTE_MAX` (192 bytes) stays free at the end of every file for the `continued in` line its
-rotation writes. One line is at most `LINE_MAX` (1024) bytes of text; a longer one is cut and ends
-`...[truncated]`. A block is at most `TLOG_FILE_CAP - 4 × NOTE_MAX`; a longer one is cut and ends
+rotation writes. One line is at most `LINE_MAX` (2048) bytes of text, above every buffer that
+feeds the sink (the `packet:` heartbeat's is 1 700 bytes and its lines run to 1 210); a longer
+one is cut and ends `...[truncated]`. A block is at most `TLOG_FILE_CAP - 4 × NOTE_MAX`; a longer one is cut and ends
 with a `...[block truncated]` line.
 
 **Only names the sink writes are counted or deleted.** Those are `<stream>.log` and
@@ -71,6 +72,17 @@ with `log: continued in tagpu.log (part N)`. On the cobtrace stream these lines 
 because its parsers skip comments. So a run is `tagpu.log` plus the rotated files in front of it
 that carry the same run id, back to part 1 or to the oldest one the caps kept. A new current file
 is created on the first line after a rotation, so an empty file never takes a history slot.
+
+**No file of ours lacks its header.** `put()` reserves room under the total cap for the header
+and any pending gap line together with the line they precede, so all of them are written or
+none is. If the header still cannot be written, the new file is removed again. Readers know a
+file by that first line, so a file without it would drop out of every reader's view. The drop
+count is cleared only when its gap line has actually been written.
+
+**A file closed by a rotation takes no more lines.** Once its `continued in` line is written
+and its handle closed, the file must rotate before anything else is written. If the rename is
+refused, lines are dropped until it succeeds, rather than appended after the line that says the
+log continued elsewhere.
 
 **The shift starts at the lowest free slot.** With no free slot, it first deletes
 `<stream>.10.log`. After a refused rename the numbering is still in order with one gap, and the
@@ -136,7 +148,7 @@ rename the first process's live file, and each would keep its own count of the t
 
 ```c
 tagpu_log(line);                 /* TLOG_MAIN, the sink adds the ending */
-tagpu_logf(fmt, ...);            /* formatted, cut at 1 KB */
+tagpu_logf(fmt, ...);            /* formatted, cut at 2 KB */
 tagpu_log_stream(TLOG_COBTRACE, line);
 TLOG_BLOCK* b = tagpu_log_block_begin(TLOG_MAIN);   /* NULL when nothing would be written */
 tagpu_log_blockf(b, fmt, ...);   /* NULL-safe */
@@ -157,6 +169,13 @@ A reader that remembers a byte offset in `tagpu.log` loses its place at the firs
 keys of the history files that already existed. `read()` walks newest first: it reads unknown
 files whole, reads the cursor's own file from the saved offset, and stops at a known file. Only
 the first 256 bytes of a file are read to key it.
+
+**Every pass is checked against a rotation.** Listing the files and then opening them are two
+separate steps, so a rotation in between renames files under the reader, and a pass could read
+a part twice or miss one. Each pass (`mark`, `read`, a run's parts) lists the keys before and
+after itself, and runs again if they differ. The sink never reuses a key, so an unchanged list
+proves nothing rotated during the pass. `tail_lines` and `roster` stop reading parts as soon as
+they have enough, inside the same checked pass.
 
 **Why not the inode.** The first cursor keyed files by inode. Once history is full the sink deletes
 files, and the filesystem gives the next new `tagpu.log` a deleted file's inode. The cursor had
@@ -193,7 +212,7 @@ total for exactly that reason.
 - **stress**: two threads, 20 000 numbered lines each on the main stream, a cobtrace line every 7,
   and a block of 1–300 lines every 97. Also three stray files (`notes.txt`, `tagpu.backup.log`,
   `tagpu.11.log`). Result: parts consecutive (82–88 survive), each thread's surviving lines a
-  gapless run ending at 19 999 (a thread that finishes first can age out entirely), 32 blocks each whole in one file, a 5 000-byte line cut to 1 024 + marker. The two
+  gapless run ending at 19 999 (a thread that finishes first can age out entirely), 32 blocks each whole in one file, a 5 000-byte line cut to 2 048 + marker. The two
   strays are untouched and `tagpu.11.log` is deleted at attach. A second launch starts run part 1
   and the previous run's last part becomes `tagpu.1.log`.
 - **block**: a handle without `FILE_SHARE_DELETE` holds `tagpu.log` for 2.5 s. 1 022 684 lines

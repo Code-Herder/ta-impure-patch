@@ -1791,11 +1791,11 @@ def cmd_roster(args):
         die("no log/tagpu.log yet")
     # Newest part first, and one more part only while no block has been found: a dump
     # is never split, but its `units:` header can land in the file after a rotation.
+    has_roster = lambda parts: any(ROSTER_RX.match(line) for line in
+                                   parts[-1].decode("utf-8", "replace").splitlines())
     lines = []
-    for data in talog.run_parts_newest_first(inst.gamedir):
+    for data in talog.run_parts_newest_first(inst.gamedir, enough=has_roster):
         lines = data.decode("utf-8", "replace").splitlines() + lines
-        if any(ROSTER_RX.match(line) for line in lines):
-            break
     units, eye = [], None
     for line in reversed(lines):
         m = ROSTER_RX.match(line)

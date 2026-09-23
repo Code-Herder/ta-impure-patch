@@ -61,6 +61,30 @@ def _open(p: Path):
         return None
 
 
+def _keys_now(gamedir, stream):
+    """The key of every file of the stream, newest first (headers only)."""
+    out = []
+    for p in newest_first(gamedir, stream):
+        f = _open(p)
+        if f is not None:
+            with f:
+                out.append(_key(f.read(HEAD_BYTES)))
+    return out
+
+
+def _stable(gamedir, stream, fn):
+    """fn() over a listing no rotation moved. A listing and the opens after it are not one
+    act: a rotation between them renames files under the reader, and a pass can then read a
+    part twice or miss one. The sink never reuses a key, so an unchanged key list before and
+    after the pass proves no rotation happened during it; otherwise the pass runs again."""
+    for _ in range(8):
+        before = _keys_now(gamedir, stream)
+        result = fn()
+        if _keys_now(gamedir, stream) == before:
+            return result
+    return result
+
+
 def _header(data: bytes):
     m = HEADER_RX.match(data)
     return (m.group(1), int(m.group(2))) if m else (None, None)
@@ -88,9 +112,17 @@ def _run_files(gamedir, stream):
             return
 
 
-def run_parts_newest_first(gamedir, stream="tagpu"):
-    """The bytes of each part of the current run, newest first."""
-    yield from _run_files(gamedir, stream)
+def run_parts_newest_first(gamedir, stream="tagpu", enough=None):
+    """The bytes of each part of the current run, newest first -- all of them, or only as many
+    as it takes for enough(parts_so_far) to say so."""
+    def one_pass():
+        parts = []
+        for data in _run_files(gamedir, stream):
+            parts.append(data)
+            if enough and enough(parts):
+                break
+        return parts
+    return _stable(gamedir, stream, one_pass)
 
 
 def run_bytes(gamedir, stream="tagpu") -> bytes:
@@ -103,11 +135,10 @@ def run_text(gamedir, stream="tagpu") -> str:
 
 def tail_lines(gamedir, n, stream="tagpu"):
     """The current run's last `n` lines, reading back only as many parts as it takes."""
+    enough = (lambda parts: sum(p.count(b"\n") for p in parts) >= n) if n > 0 else None
     lines = []
-    for data in run_parts_newest_first(gamedir, stream):
+    for data in run_parts_newest_first(gamedir, stream, enough):
         lines = data.decode("utf-8", "replace").splitlines() + lines
-        if len(lines) >= n:
-            break
     return lines[-n:] if n > 0 else lines
 
 
@@ -142,7 +173,7 @@ class Cursor:
     def run_start(cls, gamedir, stream="tagpu"):
         """A cursor at the start of the current run: read() returns the whole run so far."""
         c = cls(gamedir, stream)
-        parts = {_key(data[:HEAD_BYTES]) for data in _run_files(gamedir, stream)}
+        parts = {_key(data[:HEAD_BYTES]) for data in run_parts_newest_first(gamedir, stream)}
         c.known = {k for k in c.known | ({c.key} if c.key else set()) if k not in parts}
         c.key, c.off = None, 0
         return c
@@ -151,6 +182,9 @@ class Cursor:
         return f"{self.key or ''}:{self.off}:{','.join(sorted(self.known))}"
 
     def mark(self):
+        _stable(self.gamedir, self.stream, self._mark)
+
+    def _mark(self):
         self.key, self.off, self.known = None, 0, set()
         for p in newest_first(self.gamedir, self.stream):
             f = _open(p)
@@ -167,6 +201,15 @@ class Cursor:
     def read(self, advance=False) -> bytes:
         """The bytes written since the mark, oldest first. With advance, the mark moves to
         the end of what was returned, so successive calls return successive pieces."""
+        chunks, newest = _stable(self.gamedir, self.stream, self._pass)
+        if advance and newest is not None:
+            if self.key:
+                self.known.add(self.key)
+            self.key, self.off = newest if newest[0] else (None, 0)
+            self.known.discard(self.key)
+        return b"".join(reversed(chunks))
+
+    def _pass(self):
         chunks, newest = [], None
         for p in newest_first(self.gamedir, self.stream):
             f = _open(p)
@@ -184,12 +227,7 @@ class Cursor:
             chunks.append(data)
             if mine:
                 break
-        if advance and newest is not None:
-            if self.key:
-                self.known.add(self.key)
-            self.key, self.off = newest if newest[0] else (None, 0)
-            self.known.discard(self.key)
-        return b"".join(reversed(chunks))
+        return chunks, newest
 
     def text(self, advance=False) -> str:
         return self.read(advance).decode("utf-8", "replace")

@@ -2424,7 +2424,8 @@ def read_cobtrace(path):
         if not raw.strip():
             continue
         if raw.startswith("#"):
-            if header is None:
+            # the log sink's own `# log: run …` / `# log: continued …` lines are not the header
+            if header is None and not raw.startswith("# log: "):
                 header = raw
             continue
         lines.append(TraceLine(raw))

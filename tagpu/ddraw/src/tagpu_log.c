@@ -30,7 +30,9 @@
 #endif
 
 #define NSTREAM     2
-#define LINE_MAX    1024          /* one line's text, before its ending                   */
+#define LINE_MAX    2048          /* one line's text, before its ending: above every line
+                                     buffer that feeds the sink (the packet heartbeat's is
+                                     1700 bytes, and its lines run past 1200)             */
 #define NOTE_MAX    192           /* one of the sink's own lines, ending included          */
 #define RETRY_MS    1000          /* a refused rotation or delete is retried this often    */
 #define TRUNC       "...[truncated]"
@@ -51,8 +53,10 @@ static const char* const s_eol[NSTREAM]  = { "\r\n", "\n" };  /* what each strea
 typedef struct {
     HANDLE             h;                    /* the current file; INVALID_HANDLE_VALUE when closed */
     unsigned long long cur;                  /* bytes in the current file, open or not             */
-    int                stale;                /* the current file is the PREVIOUS run's: it must
-                                                rotate before a line of ours goes anywhere        */
+    int                stale;                /* the current file is closed to writing -- the
+                                                previous run's, or one whose rotation was
+                                                refused after its `continued in` line: it must
+                                                rotate before another line goes anywhere      */
     long long          slot[TLOG_KEEP + 1];  /* bytes in <base>.<n>.log, -1 absent; [0] unused   */
     unsigned long long age[TLOG_KEEP + 1];   /* its last write (FILETIME): the eviction order    */
     unsigned long long extra;                /* <base>.<n>.log past TLOG_KEEP that would not
@@ -157,23 +161,24 @@ static int raw(int s, const char* b, unsigned n)
     return ok && w == n;
 }
 
-/* One of the sink's own lines. Written only when it passes both caps; skipped otherwise,
-   since what it says is never worth a byte over a cap. */
-static void note(int s, const char* fmt, ...)
+/* One of the sink's own lines. Written only when it passes both caps; 0 when it did not.
+   put() reserves room for the header and the gap line with the line they precede, so those
+   two are written whenever the line is. */
+static int note(int s, const char* fmt, ...)
 {
     TLOG_STREAM* st = &s_st[s];
     char b[NOTE_MAX];
     int n, k;
     va_list ap;
-    if (st->h == INVALID_HANDLE_VALUE) return;
+    if (st->h == INVALID_HANDLE_VALUE) return 0;
     n = _snprintf(b, sizeof b, "%s", s_note[s]);
     va_start(ap, fmt);
     k = _vsnprintf(b + n, sizeof b - n - 3, fmt, ap);
     va_end(ap);
     n = (k < 0 || k >= (int)(sizeof b - n - 3)) ? (int)sizeof b - 3 : n + k;
     n += _snprintf(b + n, 3, "%s", s_eol[s]);
-    if (st->cur + n > TLOG_FILE_CAP || !room_total(n)) return;
-    raw(s, b, n);
+    if (st->cur + n > TLOG_FILE_CAP || !room_total(n)) return 0;
+    return raw(s, b, n);
 }
 
 /* Shift the history up one and the current file into <base>.1.log. The shift starts at
@@ -224,12 +229,15 @@ static int rotate(int s)
         note(s, "log: continued in %s.log (part %u)", s_base[s], st->part + 1);
         CloseHandle(st->h);
         st->h = INVALID_HANDLE_VALUE;
+        st->stale = 1;               /* until the shift succeeds, nothing more goes in it */
     }
     return shift(s);
 }
 
 /* The current file, created on the first line after a rotation so that an empty file
-   never takes a history slot. FILE_SHARE_DELETE: our handle never blocks a rename. */
+   never takes a history slot. FILE_SHARE_DELETE: our handle never blocks a rename. A new
+   file's first line is its header, or the file is removed again: tools/talog.py knows a
+   file by that line, and a file without it would drop out of every reader's view. */
 static int open_current(int s)
 {
     TLOG_STREAM* st = &s_st[s];
@@ -246,9 +254,15 @@ static int open_current(int s)
         st->part++;
         if (st->part > 1) _snprintf(from, sizeof from, ", continues from %s.1.log", s_base[s]);
         from[sizeof from - 1] = 0;
-        note(s, "log: run %s part %u of %s.log, started %04u-%02u-%02u %02u:%02u:%02u%s",
-             s_run, st->part, s_base[s], s_start.wYear, s_start.wMonth, s_start.wDay,
-             s_start.wHour, s_start.wMinute, s_start.wSecond, from);
+        if (!note(s, "log: run %s part %u of %s.log, started %04u-%02u-%02u %02u:%02u:%02u%s",
+                  s_run, st->part, s_base[s], s_start.wYear, s_start.wMonth, s_start.wDay,
+                  s_start.wHour, s_start.wMinute, s_start.wSecond, from)) {
+            CloseHandle(st->h);
+            st->h = INVALID_HANDLE_VALUE;
+            st->part--;
+            gone(p);
+            return 0;
+        }
     }
     return 1;
 }
@@ -263,10 +277,14 @@ static void put(int s, const char* b, unsigned n)
     st->blocked = 0;
     /* NOTE_MAX stays free in every file for the `continued in` line its rotation writes */
     if ((st->stale || st->cur + n + NOTE_MAX > TLOG_FILE_CAP) && !rotate(s)) goto refused;
+    /* the header and the gap line go with the line or not at all: room for all three first */
+    if (!room_total(n + (st->h == INVALID_HANDLE_VALUE ? NOTE_MAX : 0) + (st->dropped ? NOTE_MAX : 0)))
+        goto refused;
     if (st->h == INVALID_HANDLE_VALUE && !open_current(s)) goto refused;
     if (st->dropped) {
-        note(s, "log: %u lines dropped over %lu ms -- a rename, delete or create in log\\ was refused",
-             st->dropped, (unsigned long)(now - st->dropFrom));
+        if (!note(s, "log: %u lines dropped over %lu ms -- a rename, delete or create in log\\ was refused",
+                  st->dropped, (unsigned long)(now - st->dropFrom)))
+            goto refused;
         st->dropped = 0;
     }
     if (st->cur + n > TLOG_FILE_CAP || !room_total(n)) goto refused;

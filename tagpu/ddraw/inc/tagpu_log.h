@@ -58,7 +58,7 @@ void tagpu_log_init(void);
 /* DllMain, DLL_PROCESS_DETACH, first: from here a held lock is an orphan (EXIT above). */
 void tagpu_log_detaching(void);
 
-/* One line to TLOG_MAIN; the sink adds the line ending. Longer than 1 KB is cut and marked. */
+/* One line to TLOG_MAIN; the sink adds the line ending. Longer than 2 KB is cut and marked. */
 void tagpu_log(const char* line);
 void tagpu_logf(const char* fmt, ...);
 void tagpu_log_stream(int stream, const char* line);
