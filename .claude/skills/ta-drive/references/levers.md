@@ -223,14 +223,17 @@ chasing it; at 14 a moving scene gives ~30/s. **One `bare=1` per video-mode chan
 | `restoredump.on` | after each queue drains | writes `tagpu_restore_<tag>_vk.{r8,rgba,idx}` per atlas — the byte oracle (`references/measuring.md`) |
 
 - The DLL answers every cfg read on its own lines: `classicpp: assets=1 light=1 (…)`,
-  `classicpp: light sun=… unitsun=… amb=… level=…/…`, `classicpp: shadows=1(soft) shadowsun=…`;
+  `classicpp: light sun=… unitsun=… amb=… level=…/…`, `classicpp: shadows=2(hard) shadowsun=…`;
   `tacli log <i> -g 'classicpp:' | tail -3` says what the frame is lit by. Allow ~1.5 s after
   arming before a shot.
-- `assets=` is the restored atlases; `light=` the lambert; `shadows=` 0 none, 1 the soft
-  map-anchored depth map (default; the only one that reads the other shadow keys), 2 Classic's
-  own hard silhouette. The map also needs the engine's own Shadows option on (Options → Visuals,
-  `BSHADOWS`; both option bits at `main+0x37F06` read `0x3F` on, `0x23` off — peek it before a
-  shot, because one run of the clicks reported `stage 0` and changed nothing).
+- `assets=` is the restored atlases and is what arms the restorer — there is no second lever;
+  `light=` the lambert; `shadows=` 0 none, 2 Classic's own hard silhouette and structure slant
+  (**the default**), 1 the soft map-anchored depth map, which has no producer on this lane and
+  draws nothing, so the render-options row offers only `Off|Hard` and `shadowres=`/`penumbra=`/
+  `shadowlen=`/`shadowsun=` are read by nothing. Shadows also need the engine's own Shadows
+  option on (Options → Visuals, `BSHADOWS`): it moves bits 2, 3 **and** 4 of the option word
+  together, `main+0x37F06` reading `0x3F` on and `0x23` off — peek it before a shot, because one
+  run of the clicks reported `stage 0` and changed nothing.
 - `sun=off` is exactly `light=0`. `light=0` leaves a unit **unshaded**, not Classic-shaded (the
   engine's per-face shade row is the Classic branch's). `assets=0 light=0 shadows=0` is the one
   Classic++ state that is a Classic frame.
