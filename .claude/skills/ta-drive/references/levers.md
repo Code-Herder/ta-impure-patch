@@ -235,10 +235,12 @@ chasing it; at 14 a moving scene gives ~30/s. **One `bare=1` per video-mode chan
   `light=` the lambert; `shadows=` 0 none, 2 Classic's own hard silhouette and structure slant
   (**the default**), 1 the soft map-anchored depth map, which has no producer on this lane and
   draws nothing, so the render-options row offers only `Off|Hard` and `shadowres=`/`penumbra=`/
-  `shadowlen=`/`shadowsun=` are read by nothing. Shadows also need the engine's own Shadows
-  option on (Options → Visuals, `BSHADOWS`): it moves bits 2, 3 **and** 4 of the option word
-  together, `main+0x37F06` reading `0x3F` on and `0x23` off — peek it before a shot, because one
-  run of the clicks reported `stage 0` and changed nothing.
+  `shadowlen=`/`shadowsun=` are read by nothing. Shadows also need the engine's own shadow bits
+  2, 3 **and** 4 of the option word, and the menu's Shadows row (`SHADOWS`, Options → Visuals
+  or the cog) is what sets them now — from the store under `--defaults`, directly without it,
+  where it is the one live row. `main+0x37F06` reads `0x3E` on and `0x22` off; peek it before a
+  shot: the registry holding the word is one `user.reg` every instance shares, so a shadows-off
+  left by another run shows up in a control launch.
 - `sun=off` is exactly `light=0`. `light=0` leaves a unit **unshaded**, not Classic-shaded (the
   engine's per-face shade row is the Classic branch's). `assets=0 light=0 shadows=0` is the one
   Classic++ state that is a Classic frame.

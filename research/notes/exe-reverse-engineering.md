@@ -5139,6 +5139,130 @@ name at `+4`; the oldest is `SurfaceFree`d and its name `MEM_Free`d at `0x428A04
 the shell's `FrontendX` background among them (`0x478F19`). How the picture then reaches the
 frame is the census's finding in [GL UI renderer](gui-renderer.html) §12.
 
+### The Visuals options the store owns [DISASSEMBLED + MEASURED 2026-09-23]
+
+The engine's side of the settings store ([renderers](renderers.html) §2.10b): four fields of
+`main`, where the engine loads and saves them, how its two Visuals screens find their gadgets,
+and what each stock button writes. `tagpu_menu.c`'s section *"the engine's Visuals options,
+owned by the store"* is the consumer.
+
+**The fields.**
+
+| field | width | what | set by |
+|---|---|---|---|
+| `main+0x37F06` | **WORD** | the option word, one registry `REG_DWORD` per bit (below) | the loader, the three stock toggles, the console toggles, RESTORE/UNDO/CANCEL |
+| `main+0x37F08` | **signed dword** | Gamma, 0..20 on the slider; the option screens apply `0.5 + Gamma/24` (constants `−1/24` at `0x4FD4F0`, `0.5` at `0x4FD4F8`) | the loader, the slider callback `0x45BD20`, RESTORE, UNDO, CANCEL, `+gamma N` (`0x4172C8`, which applies `N/10` instead) |
+| `main+0x37F1B` / `+0x37F1F` | dwords at odd offsets | the in-game screen size ([resolution](resolution.html) §4) | the loader, `VIDSLDR`'s callback `0x45BBF0`, RESTORE (640×480, front end only), UNDO, the battleroom picker |
+
+| bit of `+0x37F06` | registry value | read by the loader at | default |
+|---|---|---|---|
+| 0 | `damagebars` | `0x42FD4C` | 0 |
+| 1 | `Anti-Alias` | `0x42FF38` | 1 |
+| 2 | `Shadows` | `0x42FF9B` | 1 |
+| 3 | `VehicleShadows` | `0x43006A` | 1 |
+| 4 | `FeatureShadows` | `0x430000` | 1 |
+| 5 | `Shading` | `0x4300CF` | 1 |
+| 6 | `DitheredFog` | `0x430134` | 0 |
+| 8 | `SwitchAlt` | `0x43020A` | — |
+
+The Gamma load (`0x43019B`) remaps a stored **10 to 12** without writing it back (`0x4301B7`),
+stores any other value **unclamped** (`0x4301D2`), and writes 12 when the value is absent.
+
+**The loader `0x42F9A0` has exactly three call sites** (a full relative-call scan):
+`0x4913F6` in `UIPipelinesInit 0x491200` (startup; `0x491200`'s only caller is `0x49EA62`),
+followed by `0x45BCC0` at `0x49147C` and a second `SetGamma` at `0x4914A7`, with nothing
+between that writes `+0x37F08` — so a value written when the loader returns there is the one
+applied; `0x4273E8`, in the front end's state machine (case `+0x2BBE == 7`, sub-result
+`+0x2BBF == 0xB` [screen identity INFERRED]), which reloads **without saving first**; and
+`0x47BB52`, in the skirmish setup, which saves (`0x47BB3D`), writes `NumSkirmishPlayers` and
+reloads. MEASURED on a `scenario load`: one reload after startup, which read Gamma 12, word
+`0x003E` and 1024×768 from the registry while memory held 16, `0x0022` and 1024×768.
+
+**The saver `REGISTRY_SaveSettings 0x430F00`** writes the same names back from memory
+(`0x431108..0x431216`, Gamma at `0x4311ED`) and has **27 callers**, among them Options Done
+(`0x45FD5F`), **game entry (`0x497FF6`, every launch unless `0x435100(...) == 2`)**, every
+console toggle (`0x416420`, `0x416510`, …: toggle the bit, re-bake, save), the damage-bars
+hotkey (`0x496077`) and the battleroom (`0x446246`, `0x44626C`, `0x4462FC`). No dedicated save
+on exit was found [INFERRED]. So the registry follows memory on its own.
+
+**The dialog build `0x45E5E0(selvmode)` finds its gadgets by NAME, two ways.** Seeding runs
+only for `selvmode == 0` (`0x45E93F`), after `0x4A1110(gi, "VISUALS", 1)` at `0x45E952`.
+- **`0x49FDF0(ctrls, name, _)`** — `strnicmp` over 16 characters from `ctrls+0x15D` at stride
+  `0x15B`; answers the index or **−1** (`0x49FE36`/`0x49FE4C`), and the caller skips on −1:
+  `ANTI` (guard `0x45E96A`, then `0x4A1030(gi, idx, (word>>1)&1)`), `BSHADOWS` (`0x45E99E`,
+  value **`(word>>4)&1`, bit 4**, not bit 2), `SHADING` (`0x45E9D3`, bit 5), `GAMMA`
+  (`0x45EA08`), `VIDSLDR` (`0x45E70D`, front end only). **A missing toggle is harmless.**
+- **`0x4A0200(ctrls, name)`** — the same search, but a miss is **FATAL**:
+  `TerminateProcess_WithWarning 0x4B6290("Error in GUI layout")` (the string is pushed at
+  `0x4A026A`), a message box, then `crt_exit(1)`. The build reaches it for `GAMMA` and `VIDSLDR` only after the
+  guard; **the slider callbacks `0x45BD20` and `0x45BBF0` call it unguarded.** Any screen that
+  keeps either callback must carry the gadget under exactly that name.
+- `0x4A1030` is SetStatus by INDEX: it writes `+0x137` only when the gadget's type byte is 1,
+  and answers 0 otherwise (`0x4A1056`).
+
+**Sliders have no OnCommand branch.** A move fires the gadget's own callback at **`+0x144`**
+(`mov eax,[ebx+0x144]` at `0x4A42DF`, `call eax` at `0x4A42F5`, `stdcall(gi, [ebx+0x14A])`,
+`ret 8`). The build stores GAMMA's (`0x45EA1C..0x45EA92`): `+0x13C = 20`, `+0x144 = 0x45BD20`,
+knob `min(Gamma, 20) · (w−1) · 0.05`, no lower clamp. **`0x45BD20`**: `g = knob/(size−1) ·
+[+0x13C]`, stored as a dword in `+0x37F08` (`0x45BD7B`), `SetGamma(0.5 + g/24)` (`0x45BD9B`),
+then the volumes are re-applied; no registry write. A slider event that reached OnCommand would
+fall to `0x45E48C` and be ignored.
+
+**`SetGamma 0x4BA590`** is `stdcall(float factor)`, `ret 4`: `globals+0x614 = factor`, then
+`0x4BA200(globals+0x214, 0, 256)`.
+
+**`OnCommand_VISUALRT_GUI 0x45E100`, per button** (the front end's `VISUALS` and the in-game
+`VISUALRT` share it):
+- `ANTI` (`0x45E16D`) — bit 1 = `GetStatus 0x4A0F60 & 1`. `BSHADOWS` (`0x45E1CB`) — bit 4 =
+  status, then bit 3 = bit 4 (`0x45E21D`), bit 2 = bit 3 (`0x45E240`): **one click sets all
+  three.** `SHADING` (`0x45E289`) — bit 5. In game (`main+0x37EBE & 1`) each then calls the
+  re-bake **`0x437C80`**, `thiscall` with `this = [main+0x1437B]` (`0x45E26B`/`0x45E271`, and
+  `0x45E2E5`) [role INFERRED: it flushes the unit-bake heap so units re-bake]. None calls
+  `SetGamma` or writes the registry.
+- **UNDO** (`0x45E2FD`) → **`0x45CAE0`**: bits 1..6 back from the stash byte `0x512F38`, Gamma
+  from `0x512F3A`, the screen size from `0x512F4D/51` only when `!(main+0x2A44 & 4)`, then
+  `SetGamma`; then `GUI_Pop` + `0x45E5E0(0)`.
+- **RESTORE** (`0x45E331`): bits 1..5 set, Gamma 12, and off the game only 640×480 and
+  **DitheredFog cleared** (`0x45E3CC`); `SetGamma` (`0x45E3F0`), the volumes, pop and rebuild.
+  No registry write.
+- Any other button (`0x45E499`): `GUI_Pop`, then the screen below's OnCommand, **`0x45FC60`**
+  (installed at `0x460249`) [target INFERRED]. There **PREV ("OK")** saves (`0x45FD5F`) and
+  **CANCEL** restores everything in memory from the stash, `0x45CAE0` and `SetGamma` included
+  (`0x45FD91..0x45FF17`), without a registry write.
+- The stash is taken once, when Options opens: `0x460160` copies `main+0x37EE6`, 0x53 bytes,
+  to **`0x512F18`** (`0x460250`), so `0x512F38` is the word's copy. `0x45C740`, `0x45CC50` and
+  `0x45CDE0` duplicate RESTORE, CANCEL and the stash fill and have **no reference in the image**
+  [dead, INFERRED].
+- In game, `0x45CFC0` sets `main+0x37EBE |= 1` iff `main+0x2A44 & 4` (`0x45D002`); `0x45E5E0`
+  tests it to choose `VISUALRT.GUI` (`0x45E641`), skips the mode list (`0x45E69E`,
+  `GUIMEMSTRUCT+0xC = 0`) and runs `0x4A0570(gi, name, 0)` on every gadget whose name starts
+  `MAP` or `VID` (`0x45E83A..0x45E92C`) [role INFERRED: disable]. OnCommand's −1 branch clears
+  the bit (`0x45E15D`).
+
+**Who reads bits 1 and 5** (a full scan): bit 1 at `0x459842` and `0x459BEA` in the plain
+rasteriser `0x459830`, and at `0x459C82` and `0x45A404` in the lit rasteriser `0x459C70` — the
+supersampled bake paths; bit 5 only at `0x45874A` in the builder `0x4586A0`, choosing `0x459C70`
+(Gouraud) over `0x459830` for units with the structure bit `0x20000000`. **All three are the
+engine's own unit bake**, which no Vulkan pass presents; the DLL's packet copies the word and
+uses bits 0, 2, 3 and 4. MEASURED 2026-09-23, `crowd-static` paused, 1024×768: toggling
+`SHADING` or `ANTI` in the in-game screen changed **0 world pixels** under Classic++ and under
+Classic (the bits verified to flip: `0x3E` → `0x1E` → `0x1C`); the panel's own pixels are the
+whole difference. Bits 2 and 3 are read at `0x45928E`/`0x4594A2` and `0x459324` (the unit-shadow
+gates in `0x459200`), bit 4 at `0x46A6ED`, `0x46A784`, `0x46A7E0` (feature shadows); ours in
+`tagpu_native.c` (2, 3) and `tagpu_feat.c` (4). Bit 6 at `0x484A5E`/`0x484A9F` (fog), bit 7 at
+`0x486C74`/`0x494935`.
+
+**What the DLL does with it** (observers, no byte patch): `0x42F9A0` is watched — after the
+first load the store is pushed (Gamma, the shadow bits, the pins, the resolved screen size);
+after each later load what memory held before it is put back, so a reload never changes an
+owned value and the battleroom's size and `+gamma` stay session-only. `0x45CAE0` is watched and
+the store pushed after it. The two slider callbacks are replaced per visit in the gadget's
+`+0x144`, only while they are still the engine's, by wrappers that call them and then record the
+field. The in-game `VISUALRT.GUI` is replaced by a generated one carrying `GAMMA`, `RESTORE` and
+`UNDO` under their stock names and rects. The re-bake `0x437C80` is called when the Shadows row
+changes the word in game, as the stock toggle does. Under `tagpu_defaults.off` none of this is installed: the
+Shadows row writes bits 2–4 directly, and `RESTORE`/`UNDO` reach the stock branches.
+
 ## The unit-death path, the object destructor and the level teardown — mapped by us
 
 Mapped 2026-09-06 to close the render thread's use-after-free on a dying unit's model object

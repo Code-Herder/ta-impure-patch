@@ -804,6 +804,16 @@ h16 recess, `SHADING` / `ANTI` / `BSHADOWS` (`id=1 stages=2`, `120×20`) in the 
 sits **16 px above** its control. So a stock runtime screen is **four option slots and two
 action slots** — the art sets that, not the record.
 
+**That is the stock file; the patch ships its own.** With the settings store owning the
+engine's Visuals options ([renderers](renderers.html) §2.10b), `impure-patch.ufo` carries a
+`guis/visualrt.gui` and an `anims/visualrt.gaf` of its own, and the `.ufo` wins the lookup.
+It keeps `GAMMA`, `RESTORE` and `UNDO` under their stock names and at their stock rects —
+`0x45E5E0`'s seeding looks `GAMMA` up with a lookup that is fatal on a miss (`0x4A0200`,
+"Error in GUI layout"), and so does the slider's own callback `0x45BD20` — drops the three
+toggles, and puts a caption pointing at the cog in the freed recesses. Its `id=12` is
+`VRTBG`, a frame of its own GAF with the three recesses the kept gadgets need, since
+`visualsrt`'s six would show three empty bands. `tagpu_menu.c`, `build_visualrt_gui`.
+
 `PREFS.GUI` is the same story one level up: `128×354` at `(0,126)`, art `IGOPT`, six
 `96×31` buttons at y=24/66/108/150/251/293 — `SOUND`, `MUSIC`, `INTERFACE` (named
 `SPEEDS`), `VISUALS`, `OK` (named `PREV`), `Cancel`. **All six recesses are used.**

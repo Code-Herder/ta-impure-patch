@@ -1246,24 +1246,26 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `style` | `classic++` | `classic`, `classic++` or `custom` — see *the preset* below |
 | `assets` | 1 | undithered |
 | `light` | 1 | |
-| `shadows` | `hard` | also drives the engine's Shadow bits (landing 2) |
+| `shadows` | `hard` | also drives the engine's shadow bits; **not part of the preset** (below) |
 | `shadowres` | 2048 | greyed until the soft map has a producer; stored anyway |
 | `ss` | 2 | **every resolution** — the owner's call; an Auto-by-resolution stage was proposed and declined |
 | `fps` | 0 | a diagnostic |
 | `maxfps` | `refresh` | a new stage: the monitor's refresh rate (landing 3). Until landing 3 the default is **60**, the stock cap |
 | `hudscale` | `off` | the pass unarmed, which the UI scale row plates as 100 % — the stock size it draws at. **Not Auto**, as the interview first had it: `tagpu_hud.on` is off the play defaults because whether HUD scale is on by default is the owner's call, and its composite does not magnify today (`tagpu_opt.c`). Found while building landing 1 |
-| `gamma` | 12 | a factor of exactly 1.0 (landing 2) |
-| `resolution` | `native` | resolved against the selected monitor (landing 2) |
+| `gamma` | 12 | 0..20; the stock default, and the factor the engine's own Restore sets |
+| `resolution` | `native` | or `WxH`; resolved against the selected monitor |
 | `display` | `fullscreen` | borderless |
 | `monitor` | the primary | stored by device name (`\\.\DISPLAY2`), never by index |
 | `window` | — | the windowed frame rect, once there has been one |
 | `gpu` | `auto` | discrete > integrated > virtual > CPU, then the largest `DEVICE_LOCAL` heap (landing 3). Until landing 3 an absent `gpu=` is `pick_device`'s first `DISCRETE_GPU` |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
-or `classic++`, the render keys (`assets`, `light`, `shadows`, `shadowres`) are **rewritten from
-the DLL's current preset on every load**: a player on Classic++ always gets today's Classic++,
-and the day `shadows` moves to Soft they get Soft without touching anything. Only
-`style=custom` pins those four. The window and system keys default to values that follow the
+or `classic++`, the render keys (`assets`, `light`, `shadowres`) are **rewritten from the DLL's
+current preset on every load**: a player on Classic++ always gets today's Classic++, and the day
+its shadow quality moves up they get it without touching anything. Only `style=custom` pins those
+three. **`shadows` is not one of them**: it also switches the engine's own shadows, so it is a
+switch a Classic player needs too — the preset leaves it alone, the row never greys with the lane,
+and changing it never makes Renderer read Custom. The window and system keys default to values that follow the
 hardware (`native`, `auto`, `refresh`), so writing them out freezes nothing; `gamma` and `fps`
 are literal and are not expected to move. A key the file lacks takes the compiled default.
 
@@ -1307,30 +1309,73 @@ window rows the visit touched back to what the store held — the Monitor to "no
 none, UI scale to its exact value, `off` too — so an untouched row is never pinned to the value
 its plate resolved. Neither touches a row a lever holds.
 
-**The engine's values** (landing 2):
+**The engine's values.** The Visuals options the engine keeps in `main` — the option word
+`+0x37F06`, Gamma `+0x37F08` and the screen size `+0x37F1B/F` — are the store's too. The engine
+still loads them from the registry and saves them back, and both are left running; the store
+simply wins, at the three places the engine could otherwise put its own value in force
+(`tagpu_menu.c`, "the engine's Visuals options, owned by the store"; the addresses and how each
+was established: [engine map](exe-reverse-engineering.html), "The Visuals options the store
+owns"):
 
-- **Engine shadows is folded into our Shadows row**, which drives `main+0x37F06` bits 2–4. Our
-  hard shadows were already gated on those bits (`tagpu_native.c`, and bit 4 in `tagpu_feat.c`),
-  so there were two switches for one thing.
-- **Shading (bit 5) and Anti-aliasing (bit 1) leave the screen, pinned**, but only after an A/B
-  on both lanes shows neither changes a presented pixel. None of our passes reads either bit.
-- **`gamma=`** is pushed into `main+0x37F08` and through `SetGamma 0x4BA590` right after the
-  registry loader `0x42F9A0`. `+gamma N` stays session-only.
-- **`resolution=`** is pushed into `main+0x37F1B/F` at the same site, with `native` already
-  resolved to a concrete mode, and re-resolved when the Monitor row changes. A stored `WxH`
-  the monitor does not offer falls back to native. The slider keeps concrete stages.
+- **After the startup load** (`0x42F9A0` at `0x4913F6`) the store is pushed: Gamma, the shadow
+  bits, the two pins, and the screen size. The engine's own `SetGamma` follows at `0x4914A7`, so
+  nothing is applied twice. The registry then follows memory on its own, because the engine
+  saves at every game entry.
+- **Around every later load** (the front end's `0x4273E8`, the skirmish setup's `0x47BB52`) the
+  fields are snapshotted before and put back after: a reload reads the registry, which is at
+  best the store's value one save ago and at worst a value `+gamma` or the battleroom set for one
+  session. Each is logged (`menu: registry reload N: the engine read …; memory's kept …`).
+- **After the stash restore `0x45CAE0`** — UNDO's and CANCEL's copy of what the Options screen
+  opened with — the store is pushed again.
+- The **sliders** keep their stock callbacks; a wrapper at the gadget's `+0x144` calls the
+  engine's and records the value it wrote. Screen Size stores `native` when the pick equals the
+  monitor's size, so a store written on one monitor stays right on another.
+
+What each value does:
+
+- **Engine shadows is folded into the Shadows row**, which sets or clears `main+0x37F06` bits
+  2–4 together, as the stock `BSHADOWS` click did, and re-bakes (`0x437C80`) when it changes the
+  word in game. Our hard shadows were already gated on those bits (`tagpu_native.c`, and bit 4 in
+  `tagpu_feat.c`), so there were two switches for one thing.
+- **Shading (bit 5) and Anti-aliasing (bit 1) left the screen, pinned on.** Their only readers
+  are the engine's own unit bake, and the A/B — both toggles, both looks, a paused game —
+  changed **0 world pixels** with the bits verified to flip (`0x3E` → `0x1E` → `0x1C`). Pinned to
+  on, the stock default, because the GDI lane presents that bake: its behaviour there is the
+  stock game's by construction. GDI was not A/B'd — `scenario load` forces `renderer=vulkan`.
+- **`gamma=`** is bounded to 0..20 and applied through `SetGamma 0x4BA590`. `+gamma N` stays
+  session-only.
+- **`resolution=`** is resolved against the target monitor (`util_target_monitor`); a stored size
+  larger than the monitor falls back to native, and the Monitor row re-resolves it. It is written
+  on the front end only — in game the size is the running game's.
 - **The battleroom mode picker stays session-only**, as stock: `0x446310`/`0x4461D0` write the
-  pair and broadcast `PlayerInfo+0x8B/+0x8D`, and never write the store. Because the store is
-  pushed before the battleroom builds its list, the first broadcast is already the truth.
-- **In-game Options → Visuals (`VISUALRT.GUI`) is replaced on the front end's mechanism** — a
+  pair and broadcast `PlayerInfo+0x8B/+0x8D`, never the store, and the next reload puts memory
+  back. The store is pushed before the battleroom builds its list, so the first broadcast is
+  already the store's.
+- **In-game Options → Visuals (`VISUALRT.GUI`) is replaced** on the front end's mechanism — a
   generated `.GUI` in `impure-patch.ufo`, OnCommand chained at `GUIMEMSTRUCT+0x08` — carrying
-  Gamma only, with Restore and Undo routed to ours. The sprocket panel is the in-game home of
-  the render rows and already shares the front end's model.
+  Gamma, Restore and Undo under their stock names and rects (the slider callback's name lookup is
+  fatal on a miss; the layout: [gui-gadgets](gui-gadgets.html) §10.3), and a line
+  pointing at the cog for the rendering rows. Restore sets Gamma 12, Undo puts back the Gamma the
+  screen opened with; neither is forwarded.
+- **Restore defaults** on the front end also sets Gamma 12, the screen size to native and clears
+  DitheredFog, as the engine's own Restore did; **Undo** puts Gamma and the screen size back to
+  what the store held at open. Neither is forwarded to the engine's branches, which would reset
+  the engine's options from its own defaults.
+- **`tagpu_defaults.off` leaves all of it alone**: nothing is installed and the registry's values
+  are the game's, as stock (`menu: engine options NOT taken over`). The screen is still ours, so
+  the stock behaviour is kept by hand: **Shadows is the one row left live**, plated from bit 2 and
+  setting bits 2–4 directly as `BSHADOWS` did (the engine's saver keeps it) — without it nothing
+  on either screen could switch the engine's shadows back on, and the registry is one file every
+  tacli instance shares — and Restore and Undo are forwarded to the engine's branches, which
+  reset Gamma, the size and the word from its defaults or the stash. The same holds if the loader
+  observer did not install.
+- **tacli** writes the instance's `--res` as `resolution=WxH` into the instance's store, since a
+  store's `native` would otherwise override the size a measurement asked for.
 
 | landing | what | status |
 |---|---|---|
 | 1 | the store: load, bounds, precedence, preset, migration, deferred write; every row that was already ours moved onto it (render rows, SS, FPS, UI scale, frame cap, display mode, monitor by name, the window rect, GPU); the menu stops writing levers; tacli creates the empty store | built 2026-09-23 (`tagpu_settings.c`) |
-| 2 | the engine's values: gamma, resolution and the battleroom, the Shadows fold, the Shading/AA A/B and removal, `VISUALRT.GUI` — and **the front end's layout**, which is wrong today: the renderer column puts Supersampling on Shading's slot (both at `402,326`) and the FPS counter at `y = 502`, below the 480-high shell, because the slot map predates the seventh row. Removing the three stock toggles frees exactly the slots it needs | planned |
+| 2 | the engine's values: gamma, resolution and the battleroom, the Shadows fold, the Shading/AA A/B and removal, `VISUALRT.GUI` — and **the front end's layout**: the renderer column had put Supersampling on Shading's slot and the FPS counter below the 480-high shell; removing the three stock toggles freed the slots, and the rows now sit on one pitch | built 2026-09-23 (`tagpu_menu.c`) |
 | 3 | GPU Auto and its ranking; the Refresh frame-cap stage | planned |
 
 **Landing 1, verified 2026-09-23** on a private 1920×1080 Xvfb (`:93`), the reference setup's
@@ -1358,7 +1403,24 @@ RTX 4070 and llvmpipe both listed:
   read* and is byte-identical after a click; with `renderer=gdi` (no Vulkan device up) a click is
   in the store mid-session.
 
-**Not verified:** the Monitor row's click on two real monitors. Xvfb offers one monitor, and a
+**Landing 2, verified 2026-09-23** on the same Xvfb, Classic++ on Vulkan:
+
+- the startup push (`menu: engine options from the store: gamma=12 optword=0x003E
+  screen=1920x1080`), and with tacli's `resolution=1024x768` the game at 1024×768;
+- the front end's fourteen rows laid out on one pitch inside the shell (screenshot); the Gamma
+  slider reaching the store; Shadows off giving word `0x0022` with Renderer still Classic++;
+  Undo and Restore on both; CANCEL out of Options keeping the store's values;
+- a `scenario load` reload logging the registry's values and keeping memory's;
+- in game, the replaced `VISUALRT` screen rendered, its Gamma, Restore and Undo each reaching the
+  store; the sprocket panel's Shadows on giving `0x003E` and visible shadows (14 168 pixels
+  darker than off), with no crash across the re-bake;
+- a control launch (`tagpu_defaults.off`) installing none of it, with the Shadows row live
+  (`0x22` ↔ `0x3E` on both screens, the in-game one re-baking without a crash), Restore giving
+  the engine's Gamma 12 and 640×480 and Undo the opened 16 and 1024×768, on the front end and on
+  the in-game Visuals screen, and `impure.cfg` never written.
+
+**Not verified:** the Monitor row's click on two real monitors, and so the screen size's
+re-resolution on a second monitor. Xvfb offers one monitor, and a
 two-head Xinerama Xvfb (`:94`) stopped the game at bring-up — once with this build, then with a
 stale wineserver left by that run, so the display's own first failure is unexplained rather than
 proven to be the display's. What was checked is the name's handling in the store: a stored

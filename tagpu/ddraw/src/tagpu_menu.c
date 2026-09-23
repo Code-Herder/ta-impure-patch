@@ -69,6 +69,9 @@
 
 /* the engine's Visuals options: the section "owned by the store" below */
 static void eng_push(int what);
+static int  eng_owned(void);
+static int  eng_shadows_bit(void);
+static void eng_set_shadows(int on);
 enum { ENG_GAMMA = 1, ENG_BITS = 2, ENG_RES = 4, ENG_ALL = 7 };
 #define OFF_OPTWORD       0x37F06u      /* WORD                                 */
 #define OFF_GAMMA         0x37F08u      /* signed dword, 0..20                  */
@@ -945,6 +948,8 @@ static void read_state(void)
        value out of range. */
     s_stage[R_SHADOWS] = 0;
     for (i = 0; i < 2; i++) if (L && SHADOW_VAL[i] == L->shadows) s_stage[R_SHADOWS] = i;
+    /* with no store, the row is the engine's own shadow switch alone */
+    if (tagpu_settings_ignored()) s_stage[R_SHADOWS] = eng_shadows_bit();
 
     s_stage[R_SHADOWQ] = 2;
     for (i = 0; i < 4; i++) if (L && SHADOWQ_VAL[i] == L->shadowres) s_stage[R_SHADOWQ] = i;
@@ -964,7 +969,9 @@ static void read_state(void)
 static int row_held(int row)
 {
     unsigned h;
-    if (tagpu_settings_ignored()) return 1;
+    /* Shadows stays live: with the stock BSHADOWS toggle gone from the screen,
+       it is the only switch left for the engine's shadows (eng_set_shadows) */
+    if (tagpu_settings_ignored()) return row != R_SHADOWS;
     switch (row) {
     case R_STYLE: return exists(CPP_ON) || exists(CPP_OFF);
     case R_SS:    return exists(SS_OFF);
@@ -1235,7 +1242,10 @@ static void commit_one(int row)
     case R_LIGHT:   tagpu_settings_set(TS_LIGHT, s_stage[R_LIGHT]); break;
     case R_SHADOWS:
         tagpu_settings_set(TS_SHADOWS, SHADOW_VAL[s_stage[R_SHADOWS]]);
-        eng_push(ENG_BITS);         /* the engine's shadows are this row too */
+        /* the engine's shadows are this row too: through the store when it
+           owns them, otherwise as the stock toggle set them */
+        if (eng_owned()) eng_push(ENG_BITS);
+        else eng_set_shadows(s_stage[R_SHADOWS] != 0);
         break;
     case R_SHADOWQ: tagpu_settings_set(TS_SHADOWRES, SHADOWQ_VAL[s_stage[R_SHADOWQ]]); break;
     case R_SS:      tagpu_settings_set(TS_SS, s_stage[R_SS] ? 2 : 1); break;
@@ -2374,18 +2384,16 @@ static void commit_display(int d)
 }
 
 /* ---- Restore Default and Undo Changes ------------------------------------
-   Both are STARTOPT's own buttons, handled by `0x45E100`'s RESTORE
-   (`0x45E331`) and UNDO (`0x45E2FD`) branches -- and both branches end the
-   same way: `GUI_Pop`, then `0x45E5E0(0)` to rebuild the screen. So they
-   reach the engine through our chain and reset the engine's own options, but
-   on their own they touch none of OUR fifteen rows.
+   Both are STARTOPT's own buttons. The engine's branches -- RESTORE
+   (`0x45E331`) and UNDO (`0x45E2FD`) -- reset the engine's options from its
+   own defaults or the Options stash, which the store owns now, so neither is
+   forwarded: we set the model and the store, push the engine's values, and
+   end the way those branches end, `GUI_Pop` then `0x45E5E0(0)` (`vis_relist`).
 
-   We handle them BEFORE forwarding, so the model is already what we want by
-   the time the engine's rebuild re-seeds the plates from it. That rebuild runs
-   `vis_build_after`, which would normally re-read the values in force -- and
-   those still hold the OLD values, because Classic++ re-reads the store on its
-   own poll and the window rows are applied by a POSTED message. `s_visKeep` is
-   how the rebuild is told the model is
+   That rebuild runs `vis_build_after`, which would normally re-read the
+   values in force -- and those still hold the OLD values, because Classic++
+   re-reads the store on its own poll and the window rows are applied by a
+   POSTED message. `s_visKeep` is how the rebuild is told the model is
    authoritative this once; it is the same bargain `menu_open(fresh = 0)`
    makes for the in-game panel's recovery. */
 static int s_visKeep;
@@ -2588,6 +2596,7 @@ static unsigned short s_snapOpt;
 static int  s_snapGamma, s_snapW, s_snapH;
 
 static char* eng_main(void) { return *(char**)TA_MAIN; }
+static int eng_owned(void) { return s_engArmed; }
 
 static int eng_in_game(const char* m) { return (*(const unsigned char*)(m + OFF_INGAME) & 4) != 0; }
 
@@ -2623,6 +2632,36 @@ static int eng_shadows_on(void)
     return tagpu_settings_get(TS_SHADOWS, &v) ? v != 0 : 1;
 }
 
+/* Set `pin` in the option word, and the three shadow bits together as the
+   stock BSHADOWS click does (0x45E1CB). The engine re-bakes after a stock
+   toggle in game (0x45E26B); a unit baked under the old bits would otherwise
+   keep them. */
+static void eng_write_word(char* m, unsigned short pin, int shadows)
+{
+    unsigned short was = *(unsigned short*)(m + OFF_OPTWORD), now = was | pin;
+    now = shadows ? (unsigned short)(now | OPT_SHADOWS) : (unsigned short)(now & ~OPT_SHADOWS);
+    *(unsigned short*)(m + OFF_OPTWORD) = now;
+    if (now != was && eng_in_game(m)) {
+        void* heap = *(void**)(m + OFF_BAKEHEAP);
+        if (heap) ((rebake_fn)VA_REBAKE)(heap);
+    }
+}
+
+/* The Shadows row where the store does not own the engine's options -- under
+   tagpu_defaults.off, or with the loader observer not in: the stock toggle's
+   write and nothing else, and the engine's own saver keeps it, as stock. */
+static int eng_shadows_bit(void)
+{
+    char* m = eng_main();
+    return m ? (*(unsigned short*)(m + OFF_OPTWORD) & 4) != 0 : 1;
+}
+
+static void eng_set_shadows(int on)
+{
+    char* m = eng_main();
+    if (m) eng_write_word(m, 0, on);
+}
+
 static void eng_push(int what)
 {
     char* m = eng_main();
@@ -2633,19 +2672,8 @@ static void eng_push(int what)
         wr32(m + OFF_GAMMA, v);
         ((setgamma_fn)VA_SETGAMMA)(0.5f + (float)v / 24.0f);
     }
-    if (what & ENG_BITS) {
-        unsigned short was = *(unsigned short*)(m + OFF_OPTWORD), now = was;
-        now |= OPT_AA | OPT_SHADING;
-        now = eng_shadows_on() ? (unsigned short)(now | OPT_SHADOWS)
-                               : (unsigned short)(now & ~OPT_SHADOWS);
-        *(unsigned short*)(m + OFF_OPTWORD) = now;
-        /* The engine re-bakes after a stock toggle in game (0x45E26B); a unit
-           baked under the old bits would otherwise keep them. */
-        if (now != was && eng_in_game(m)) {
-            void* heap = *(void**)(m + OFF_BAKEHEAP);
-            if (heap) ((rebake_fn)VA_REBAKE)(heap);
-        }
-    }
+    if (what & ENG_BITS)
+        eng_write_word(m, (unsigned short)(OPT_AA | OPT_SHADING), eng_shadows_on());
     if ((what & ENG_RES) && !eng_in_game(m) && tagpu_settings_get(TS_RESOLUTION, &v)) {
         int w, h;
         if (eng_resolve(v, &w, &h)) {
@@ -2845,7 +2873,8 @@ static int screen_is_vrt(void)
 
 /* THE IN-GAME SCREEN'S OnCommand, chained the way the front end's is. Its
    RESTORE and UNDO are Gamma's alone -- the sprocket panel has its own -- and
-   they are not forwarded, for the reason tagpu_vis_oncommand gives. The
+   they are not forwarded while the store owns Gamma, for the reason
+   tagpu_vis_oncommand gives. The
    rebuild is the engine's own idiom again: `0x45E5E0` builds VISUALRT while
    `main+0x37EBE & 1` stands, which only the screen's -1 branch clears. */
 static oncmd_fn s_vrtPrevOnCmd = 0;
@@ -2862,7 +2891,7 @@ static void vrt_rebuild(void* gi)
 static void __stdcall tagpu_vrt_oncommand(void* gi)
 {
     const char* n = vis_actuated(gi);
-    if (n && (!memcmp(n, "RESTORE", 8) || !memcmp(n, "UNDO", 5))) {
+    if (eng_owned() && n && (!memcmp(n, "RESTORE", 8) || !memcmp(n, "UNDO", 5))) {
         tagpu_settings_set(TS_GAMMA, n[0] == 'R' ? 12 : s_vrtGammaOpen);
         eng_push(ENG_GAMMA);
         vrt_rebuild(gi);
@@ -2995,13 +3024,19 @@ static void __stdcall tagpu_vis_oncommand(void* gi)
         return;
     }
     {
-        /* UNDO AND RESTORE ARE OURS AND NOT FORWARDED. Every value the
-           engine's two branches reset (0x45E2FD, 0x45E331) is now the store's,
-           so forwarding would put the engine's copies -- the stash, 640x480 --
-           back over it. The screen is rebuilt the way both branches end. */
+        /* UNDO AND RESTORE ARE OURS AND NOT FORWARDED while the store owns
+           the engine's options: every value the engine's two branches reset
+           (0x45E2FD, 0x45E331) is the store's, so forwarding would put the
+           engine's copies -- the stash, 640x480 -- back over it. The screen is
+           rebuilt the way both branches end. Where the store does not own
+           them, the engine's branch is what resets them, and its rebuild
+           keeps our model (`s_visKeep`). */
         const char* n = vis_actuated(gi);
-        if (n && !memcmp(n, "UNDO", 5))    { vis_undo();    vis_relist(gi); return; }
-        if (n && !memcmp(n, "RESTORE", 8)) { vis_restore(); vis_relist(gi); return; }
+        int undo = n && !memcmp(n, "UNDO", 5), restore = n && !memcmp(n, "RESTORE", 8);
+        if (undo || restore) {
+            if (undo) vis_undo(); else vis_restore();
+            if (eng_owned()) { vis_relist(gi); return; }
+        }
     }
     if (s_visPrevOnCmd) s_visPrevOnCmd(gi);
 }

@@ -125,7 +125,14 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
   name. tacli's own `ddraw.ini` carries the window keys, so **Display mode, Monitor and Frame cap are
   greyed in every instance** — the tile is the lever. `tacli arm` still drives the others for A/Bs.
 - **Under `tagpu_defaults.off` (every launch without `--defaults`) the store has no say and every
-  row is greyed.** Test the menu with `--defaults`.
+  row but Shadows is greyed.** Shadows is then the engine's own shadow switch. Test the menu with
+  `--defaults`.
+- **The store also owns the engine's Gamma, screen size and shadow bits** under `--defaults`: the
+  registry is still loaded and saved, but memory is the store's after the startup load, and a
+  later reload (a `scenario load`) keeps memory's (`tacli log <i> -g 'registry reload'`). tacli
+  writes the instance's `--res` into the store as `resolution=WxH`, or `native` would win. The
+  Visuals screen has no `SHADING`, `ANTI` or `BSHADOWS` gadgets; the in-game `VISUALRT` carries
+  `GAMMA`, `RESTORE` and `UNDO` only.
 - **tacli creates an empty `impure.cfg` before every launch.** A missing store is the DLL's
   first-run signal: it renames the files an older menu wrote to `*.migrated`, strips `ddraw.ini`,
   and leaves `impure-migration.txt`, after which a missing store only gets the defaults. To test the

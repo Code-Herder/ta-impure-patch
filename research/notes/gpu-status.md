@@ -1477,8 +1477,11 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x1421F` | the screen fog grid `{u16* buf; cols; rows; cells}`. Read only, per frame on the render thread. **Its last column and last row are short their outer corners** — the map cell that would supply them is past the builder's loop — so a sampler that clamps a world point into that cell reads *no fog*, not the border cell; `taFog` clamps to `uFogDim − 1.0`, one whole cell short, and the grid's own overshoot of the viewport — at least 1 px on every side for every viewport size the allocation accepts and every eye, 16 px for a negative one — is what makes that a no-op at 1× (terrain-depth §8a). **`cells` is the ALLOCATION**, `(cols*rows + 7) & ~7` — asserting `cells == cols*rows` accepted 1024×768 and refused 1920×1080, where the refusal cleared `fogMode` and there was no fog at all until 2026-09-09 ([terrain & depth](terrain-depth.html) §5.2). **The dimensions are one cell per 32 px of the 1× viewport plus two**, whatever the zoom: MEASURED by `tacli peek` through this descriptor, **118 × 68** for the 3712 × 2096 viewport of a 3840×2160 screen (`cells` 8024, exactly the product) and **78 × 45** for the 2432 × 1376 of a 2560×1440 one (`cells` 3512 against a product of 3510 — the round-up, and the case that refused). The `cols`/`rows` sanity bound in `tagpu_native.c` is 1024, not 256: at that rate 256 is a viewport 8128 px wide, which made the bound a screen limit standing in front of the real test |
 | `main+0x2A43`, `main+0x1B63 + id*0x14B + 0x7C`, `main+0x14273`, `main+0x14233`/`+0x14237` | the LOCAL player id, that player's LOS counter block `{u8* buf; w; h}`, the MAPPED bitmap (u16 per tile, one bit per player, row stride `PLOT_C` **bytes**) and the PLOT dimensions. Read only, **on the GAME THREAD** from `tagpu_fogwide.c` at the fog overlay's own call site — which is the lifetime argument for reading them at all: the engine's builder reads the same two allocations there. Every index is bounded by the dimensions read alongside them |
 | `main+0x37F06` bit0 | `damagebars` registry option |
-| `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). **Read on the GAME THREAD by the frame packet's publisher and consumed from the packet's copy (`pk->gfx_opt`)** — the render thread does not reach across for it, and `damagebars` (bit0) has come out of the same byte the same way since landing 3. Per frame. The Classic silhouette needs both bits, the slant only bit2, and §2.83 is the pass that reads them today. **One checkbox moves three bits**: TA's own Options → Visuals `Shadows` takes `0x000C003F` to `0x000C0023`, clearing bit2, bit3 and bit4 (FShadow) together — measured live 2026-09-22. G14i's claim that bit2 also gates the Classic++ shadow map is dead with the map: `shadows=1` has no producer (§2.83) |
+| `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). **Read on the GAME THREAD by the frame packet's publisher and consumed from the packet's copy (`pk->gfx_opt`)** — the render thread does not reach across for it, and `damagebars` (bit0) has come out of the same byte the same way since landing 3. Per frame. The Classic silhouette needs both bits, the slant only bit2, and §2.83 is the pass that reads them today. **One switch moves three bits**: the stock `BSHADOWS` click set bit2, bit3 and bit4 (FShadow) together (`0x45E1CB`), and the menu's Shadows row, which replaces it, does the same (§2.12). G14i's claim that bit2 also gates the Classic++ shadow map is dead with the map: `shadows=1` has no producer (§2.83) |
 | `main+0x37F2F` bit2 | `SelBoxes` |
+| **`main+0x37F06` bits 1..5** | **WRITTEN, on the GAME THREAD, by the settings store** (§2.12). Bits 1 (`Anti-Alias`) and 5 (`Shading`) are pinned on — their only readers are the engine's own unit bake, which no Vulkan pass presents, and toggling either moved 0 world pixels under both looks (measured 2026-09-23, [engine map](exe-reverse-engineering.html), "The Visuals options the store owns"). Bits 2, 3 and 4 are set or cleared together from the store's `shadows` row, as the stock `BSHADOWS` click does. Written after the startup load, after `0x45CAE0` (UNDO, CANCEL), and from the Shadows row; the re-bake `0x437C80` is called when the word changed in game. Bits 0, 6 and 7 are the engine's and the console's — never written |
+| **`main+0x37F08`** | **Gamma, a signed dword. WRITTEN, on the GAME THREAD, by the settings store**, bounded to 0..20 before it is written, and applied with `SetGamma 0x4BA590` except at startup, where the engine's own `SetGamma` at `0x4914A7` follows. The slider's own callback writes it too; ours records what it wrote |
+| **`main+0x37F1B` / `+0x37F1F`** | the screen size the next game opens at. **WRITTEN by the settings store, front end only** (`main+0x2A44 & 4` clear) — the store's `resolution`, resolved against the target monitor, and a size larger than it falls back to native. The battleroom advertises this size to the other players (PlayerInfo `+0x8B`/`+0x8D`) as stock; a battleroom pick is session-only because the next registry reload's value is replaced by what memory held |
 | `main+0x142E7..0x142ED` | minimap rect on screen |
 | `main+0x1423B` / `+0x1423F` | view size in map cells (the minimap rect's size comes from here) |
 | `main+0x14283` / `+0x1428B` | `TILE_SET` `{count, pixels}` and the `u16` `TILE_MAP` — the terrain pass reads both per frame. The GLSL restorer reads them once more when its job starts, on the render thread: each tile's edge texels for the tileability test and the whole tile map once, to rank tiles by distance from the centre of the viewport (`tagpu_terr.c` `restore_order`, G14e: from the centre, so the reveal radiates); the pixels themselves are sampled from the R8 atlas already on the GPU |
@@ -2033,13 +2036,16 @@ one small archive.
 
 | site | what we do there | thread |
 |---|---|---|
-| `DLL_PROCESS_ATTACH` | write `impure-patch.ufo` (`guis/render.gui` + `anims/render.gaf`) unconditionally, with a version stamp. `DDRAW.dll` is TotalA.exe's first static import, so this precedes `InitTAHPIAry 0x41D4C0`'s `*.UFO` glob by the loader's rules | — |
+| `DLL_PROCESS_ATTACH` | write `impure-patch.ufo` unconditionally, with a version stamp: six files — the panel (`guis/render.gui`, `anims/render.gaf`), the front end's `guis/visuals.gui` + `anims/visuals.gaf`, and the in-game `guis/visualrt.gui` + `anims/visualrt.gaf`, which replaces the stock screen with Gamma, Restore and Undo. `DDRAW.dll` is TotalA.exe's first static import, so this precedes `InitTAHPIAry 0x41D4C0`'s `*.UFO` glob by the loader's rules | — |
 | `DrawGameScreen 0x468CF0` (observer) | the per-frame tick: sample the trigger file on its edges, open or close, re-assert `main+0x37EA0`, and recover if the screen was freed under us | game |
 | `0x46A308` (observer, post-GUI) | blit the sprocket into the back buffer with `CopyGafToContext 0x4B7F90(NULL, frame, x, y)` | game |
 | `GUIMEMSTRUCT+0x08` (our `OnCommand`) | advance the row, `GUIGADGET_SetStatus 0x4A1080` for every row, `grayedout` for Shadow quality, set the repaint flag `gi+0xCCA` via `0x49FA90`, and **answer the pump with `0x4AB0A0(gi)`** (`gi->UIChange_f = -1`). **It writes no file** | game |
 | `tagpu_shield.c`, both paths | `tagpu_menu_click()` — the sprocket's hit test, from `deliver_mouse()` (injected) and from the wndproc before the shield's gate (real) | game |
 | `tagpu_zoom.c`, two entry points | `tagpu_menu_owns_point()` — the zoom transform must leave a point the menu owns alone. The panel hangs over the world and the transform's gate is geometric, so at any zoom ≠ 1 a row click was bent away and **no row worked**; `tagpu_zoom_drop_mouse` must not treat it as the display-only ring either | game |
-| `render_ogl.c`'s frame | `tagpu_menu_present()` — the deferred cfg/lever write | render |
+| `render_vk.c`'s and `render_gdi.c`'s frame | `tagpu_menu_present()` — the settings store's write (`tagpu_settings_present`) | render |
+| `0x42F9A0` (observer, the registry loader) | after the startup load: push the store into the engine's Visuals fields (Gamma, the option word, the screen size). Around every later load: snapshot the fields before it and put them back after it, so a reload never changes an owned value. Skipped entirely under `tagpu_defaults.off` | game |
+| `0x45CAE0` (observer, the stash restore) | after it: push the store again, so UNDO's and CANCEL's copy of the stash cannot bring back a value the store no longer holds. Optional: if it will not install, logged and the rest stands | game |
+| gadget `+0x144` of `GAMMA` and `VIDSLDR` | the slider callbacks `0x45BD20` / `0x45BBF0` are wrapped, per visit and only while the field still holds the engine's own: the wrapper calls it, then records the value it wrote into the store | game |
 | open | `GUI_Load 0x4AA8F0(gi, main+0x37EA0, flags)` with `0x20` + `0x400`, patch the panel rect, set `+0x08`/`+0x0C`, then `0x4C2470(); GUI_StageUpdateDraw(gi, 0x21); 0x4C2870()` — GUI_Load's own suppressed stage 1, reproduced; then repaint the ground and set `gi+0xCCA` | game |
 | close | restore `main+0x37EA0` and call `UpdateIngameGUI 0x491D70(1)`. **`GUI_Pop` is never called** | game |
 
@@ -2051,15 +2057,15 @@ still set is asking to be popped — whereupon `0x4AA7BC..0x4AA7FA`, an **inline
 ends with `0x4AB0A0(gi)` for exactly this reason; see *The pump's dispatch contract* in the
 [engine map](exe-reverse-engineering.html).
 
-**The front-end screen carries sixteen rows in two columns** [2026-09-11; the GPU row added
-2026-09-15]. `VISUALS.GUI` is re-emitted into the same `.ufo` with the stock eleven gadgets
-moved (names, `assoc`, `commonattribs`, `range` and `stages` all verbatim) and five rows of our
-own added:
+**The front-end screen carries fourteen rows in two columns.** `VISUALS.GUI` is re-emitted into
+the same `.ufo` with five of the stock gadgets moved (`GAMMA`, `VIDSLDR` and their three
+captions; names, `assoc`, `commonattribs`, `range` and `stages` verbatim), the stock `SHADING`,
+`ANTI` and `BSHADOWS` toggles removed, and twelve rows of our own:
 
 | column | rows |
 |---|---|
 | **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
-| **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Shading (stock), Anti-aliasing (stock), Engine shadows (stock `BSHADOWS`), Supersampling |
+| **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Supersampling, FPS counter |
 
 Four things this rests on, each measured rather than assumed:
 
@@ -2106,14 +2112,19 @@ follows one message later. In fullscreen the row applies as a single
 same monitor; placing the window here as well left it a pixel taller than the screen and
 back at the primary's origin, because the re-apply places it last.
 
-**Restore Default and Undo Changes reach our rows too.** Both are STARTOPT's buttons and
-both end in `GUI_Pop` + `0x45E5E0(0)`; we handle them before forwarding and set `s_visKeep`
-so the rebuild seeds the plates from the model rather than re-reading levers the deferred
-write has not reached yet. **Undo** restores every row the screen opened with, Display mode
-and Monitor included — it is the escape hatch for a mode the player cannot see the menu on.
-**Restore** sets the rendering rows to the Classic++ defaults, UI scale to Auto and the cap
-to 60, and deliberately leaves Display mode and Monitor alone: a default that moves the
-window to a monitor the player cannot see would hide the button that undoes it.
+**Restore Default and Undo Changes are ours, and not forwarded.** Both are STARTOPT's buttons,
+and the engine's branches would reset the engine's options from its own defaults or from the
+Options stash — values the store owns now. So `OnCommand` handles both and does the engine's own
+ending itself, `GUI_Pop` + `0x45E5E0(0)`, with `s_visKeep` set so the rebuild seeds the plates
+from the model rather than re-reading levers the deferred write has not reached yet. **Undo**
+restores every row the screen opened with: the rendering rows, Gamma and Screen Size to the
+store's values at open, and the Window rows the visit touched — Display mode and Monitor
+included, since it is the escape hatch for a mode the player cannot see the menu on. **Restore**
+sets the rendering rows to the Classic++ defaults, UI scale off, the cap to 60, Gamma 12 and the
+screen size to native, clears DitheredFog as the engine's own Restore did, and deliberately
+leaves Display mode and Monitor alone: a default that moves the window to a monitor the player
+cannot see would hide the button that undoes it. The in-game `VISUALRT` screen has the same two
+buttons for its one row, Gamma.
 
 Until 2026-09-11 this screen did not, so **every click popped and freed it**, and the tick's
 `on_stack` recovery re-opened it with `fresh == 0` the same frame — which is why it looked
@@ -2132,8 +2143,12 @@ and `0x47746A` — `status_curnt`, a different field — and `+0x13C` is a **u16
 flag**, which the engine read-modify-writes so bits 1..15 survive.) The panel record's
 `xpos`/`ypos` (`+0x13`/`+0x15`),
 because the panel is right-aligned and a `.GUI` written at attach cannot know the resolution.
-`gi+0xCCA`, the repaint flag. And the loaded GAF frame's colour plane (`+0x10 PtrFrameBits`),
-repainted in place with the composed ground. **Nothing sim-side, and nothing that replicates.**
+`gi+0xCCA`, the repaint flag. The loaded GAF frame's colour plane (`+0x10 PtrFrameBits`),
+repainted in place with the composed ground. The `+0x144` callback of `GAMMA` and `VIDSLDR`.
+And the engine's Visuals options — the option word `main+0x37F06` (bits 1..5), Gamma
+`main+0x37F08` and the screen size `main+0x37F1B/+0x37F1F` — from the settings store (§2.5).
+**Nothing sim-side, and nothing that replicates** beyond what stock already sends: the
+battleroom advertises the screen size to the other players, as it always has.
 
 **Seven rows since 2026-09-09**, the seventh being the FPS readout (§2.14). Two things about it
 are unlike the other six, and `read_state()` and the click handler have to agree on both or the
@@ -2146,6 +2161,13 @@ row would read one way and behave the other:
 - **It is never greyed.** Like supersampling, it is orthogonal to the Classic/Classic++ lane, so it
   is not one of the switch's dependants — grey it with the lane and a player on Classic could not
   turn it on.
+
+**Shadows is exempt from `Custom` the same way.** The row drives the engine's own shadow bits
+(2, 3 and 4 of `main+0x37F06`) as well as the Classic++ shadows, so it is a switch a Classic player
+needs too: the preset leaves it alone, it never greys with the lane, and changing it never makes
+Renderer read `Custom`. For the same reason it is the one row **not** greyed under
+`tagpu_defaults.off`: there it plates the engine's bit 2 and sets bits 2–4 directly, the stock
+`BSHADOWS` write, and Restore and Undo are forwarded to the engine's branches again.
 
 `PANEL_H` went 212 → 240 for the seventh row: `ROW_Y0 34 + ROW_PITCH 28 × 6 = 202` and `ROW_H` is
 20, so the last row ends at 222 and 240 leaves the 18 px the six-row panel left below 194. One

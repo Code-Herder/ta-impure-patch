@@ -67,7 +67,8 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
   tagpu_classicpp.off also works, and holds that row until it is deleted.)
 
   tagpu_defaults.off turns the whole list off at once, and ignores impure.cfg:
-  the menu's rows are greyed while it is there. Two things stay on because
+  the menu's rows are greyed while it is there, except Shadows, which is then
+  the game's own shadow option, saved by the game as before. Two things stay on because
   they are fixes rather than modes, each with its own switch:
 
     tagpu_reclaim.off   a crash fix: the engine's model frees are deferred so the
@@ -86,13 +87,15 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
     shadowlen=A,B|off  shade=S  terrainshadow=0|1  shadowres=N
     airshadow=len|physical|drop
 
-  No file = the defaults the art was tuned with. Cast shadows also need the
-  game's own Shadows option on.
+  No file = the defaults the art was tuned with. The menu's Shadows row switches
+  the game's own shadows too.
 
 
 WHAT IT WRITES
 
-  impure.cfg next to TotalA.exe: the menu's settings, one key=value per line.
+  impure.cfg next to TotalA.exe: the menu's settings, one key=value per line --
+  the gamma and the screen size included, which the game still also saves in
+  its registry keys as before.
   On the first start only, impure-migration.txt and the *.migrated backups.
 
   tagpu.log next to TotalA.exe: one "ARMED" line per pass at start, the options
