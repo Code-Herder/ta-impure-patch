@@ -64,12 +64,13 @@ DFNS(DECL)
 #define VS_ZOOM     8
 #define VS_ZOOMC   16
 
-#define FS_SZ      32
+#define FS_SZ      48          /* SFS's block: FS's five, then uPx at 32 */
 #define FS_KEY      0
 #define FS_TEXT     4
 #define FS_FOGORG   8
 #define FS_FOGDIM  16
 #define FS_FOG     24
+#define FS_PX      32          /* SFS only; padding past FS's own block */
 
 #define MVST       8           /* floats a vertex: x,y u,v wx,wz colour z */
 #define MK_VSTRIDE (MVST * 4)
@@ -188,7 +189,9 @@ static float s_lineW = 1.0f;   /* glLineWidth(ss) for THIS frame's target */
    an order-line frame is: the rects are dropped and every other marker still
    draws (see `prepare`). */
 static int s_selOk;
-static int s_saidSel;
+static float s_selW;          /* the rects' band, target px -- set in record */
+static int s_selDraw;         /* and whether this frame's can be drawn        */
+static int s_saidSel, s_saidSelW;
 static int s_saidPal;
 /* ONE LATCH PER SITE HERE TOO. `s_saidWhy` covered three distinct refusals
    and `s_saidTex` two, so the first to fire silenced a DIFFERENT one for the
@@ -464,6 +467,7 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     VkPipelineRasterizationLineStateCreateInfoEXT lr =
         { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT };
     VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+    VkShaderModule svs = VK_NULL_HANDLE, sfs = VK_NULL_HANDLE;
     int ok = 0;
 
     vs = mk_module(d, tagpu_spv_tagpu_mark_VS, sizeof tagpu_spv_tagpu_mark_VS / 4);
@@ -562,9 +566,14 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
             rs.pNext = lr.pNext;
             goto done;
         }
-        /* the selection rects' twin of it: LESS, the unit pass's own compare,
-           against the keys that pass wrote; never written, so a rect cannot
-           hide anything drawn after it */
+        /* the selection rects' pipeline: the SVS/SFS program (tagpu_mark.c
+           says why it is its own), the depth TEST on with LESS -- the unit
+           pass's own compare, against the keys that pass wrote -- and never
+           written, so a rect cannot hide anything drawn after it */
+        svs = mk_module(d, tagpu_spv_tagpu_mark_SVS, sizeof tagpu_spv_tagpu_mark_SVS / 4);
+        sfs = mk_module(d, tagpu_spv_tagpu_mark_SFS, sizeof tagpu_spv_tagpu_mark_SFS / 4);
+        if (!svs || !sfs) { rs.pNext = lr.pNext; goto done; }
+        st[0].module = svs; st[1].module = sfs;
         ds.depthTestEnable = VK_TRUE;
         ds.depthCompareOp = VK_COMPARE_OP_LESS;
         if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
@@ -574,6 +583,7 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
         }
         ds.depthTestEnable = VK_FALSE;
         ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+        st[0].module = vs; st[1].module = fs;
         rs.pNext = lr.pNext;
     }
     s_pipeRp = rp;
@@ -581,6 +591,8 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
 done:
     if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
     if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
+    if (svs) vkDestroyShaderModule(d->dev, svs, NULL);
+    if (sfs) vkDestroyShaderModule(d->dev, sfs, NULL);
     return ok;
 }
 
@@ -879,17 +891,15 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        be a different picture from; the rects have none, and a selection is on
        screen far more often than an order line -- refusing the whole marker
        layer whenever a unit is selected would take the health bars with it.
-       So on a device without Bresenham or wide lines the rects alone are
-       dropped, and said so once. */
-    s_selOk = d->lineok &&
-              (s_lineW == 1.0f || (d->wideok && s_lineW <= d->maxLineWidth));
+       So on a device without Bresenham lines the rects alone are dropped, and
+       said so once; the WIDTH they need is `record`'s to check, because it
+       follows the target's real extent. */
+    s_selOk = d->lineok;
     if (needSel && !s_selOk && !s_saidSel) {
         s_saidSel = 1;
-        plog(d, "mark: selection rects need Bresenham lines %.0f px wide and "
-                "this device has %s - the rects are not drawn, every other "
-                "marker is", s_lineW,
-             !d->lineok ? "no VK_EXT_line_rasterization bresenhamLines"
-                        : "no line that wide");
+        plog(d, "mark: selection rects need VK_EXT_line_rasterization "
+                "bresenhamLines and this device has not got it - the rects "
+                "are not drawn, every other marker is");
     }
     if (needLines && s_lineW != 1.0f &&
         (!d->wideok || s_lineW > d->maxLineWidth)) {
@@ -1104,6 +1114,36 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     mk_scissor(&s_h, w, h, &sc);
     vkCmdSetScissor(cb, 0, 1, &sc);
 
+    /* THE SELECTION RECTS' PIXEL SCALE AND BAND. SFS asks which GAME pixel a
+       sample lies in, so it needs target pixels per game pixel -- from THIS
+       target's extent, not from the supersample factor, because on the frame
+       the offscreen target refused the world goes into the swapchain image at
+       whatever scale that is, and a wrong scale does not blur the rect, it
+       moves every pixel of it. The band must reach one game pixel either side
+       of the line to cover a Bresenham pixel whole, so it is 2*scale + 2 wide;
+       a device that will not draw that wide loses the rects, not the frame. */
+    {
+        float pxX = s_h.gw > 0.0f ? (float)w / s_h.gw : 1.0f;
+        float pxY = s_h.gh > 0.0f ? (float)h / s_h.gh : 1.0f;
+        s_selW = 2.0f * (pxX > pxY ? pxX : pxY) + 2.0f;
+        s_selDraw = s_selOk && s_pipeLineZ && d->wideok &&
+                    s_selW <= d->maxLineWidth;
+        for (i = 0; i < s_h.ndraw; i++) {
+            unsigned char* p = s_uboMap[slot] + s_fsOff[i];
+            put_f(p, FS_PX, pxX);
+            put_f(p, FS_PX + 4, pxY);
+        }
+        if (!s_selDraw && s_selOk && !s_saidSelW) {
+            for (i = 0; i < s_h.ndraw; i++) if (s_h.draws[i].depth) break;
+            if (i < s_h.ndraw) {
+                s_saidSelW = 1;
+                plog(d, "mark: selection rects need a line %.0f px wide and "
+                        "this device offers %s - the rects are not drawn",
+                     s_selW, d->wideok ? "a narrower maximum" : "no wideLines");
+            }
+        }
+    }
+
     vkCmdBindVertexBuffers(cb, 0, 1, &s_vb[slot], &zero);
     for (i = 0; i < s_h.ndraw; i++) {
         const TAGPU_MKDRAW* g = &s_h.draws[i];
@@ -1114,7 +1154,7 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            because a bind of VK_NULL_HANDLE is undefined rather than loud and
            the cost of the branch is nothing. */
         if (g->lines && !s_pipeLine) continue;
-        if (g->depth && (!s_selOk || !s_pipeLineZ)) continue;
+        if (g->depth && !s_selDraw) continue;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           g->depth ? s_pipeLineZ :
                           g->lines ? s_pipeLine : s_pipeTri);
@@ -1123,7 +1163,7 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
            a target that many times the game resolution. `s_lineW` is the
            TARGET's scale, settled in `prepare`, not the hand-over's -- the two
            differ on the frame the target refused. */
-        if (g->lines) vkCmdSetLineWidth(cb, s_lineW);
+        if (g->lines) vkCmdSetLineWidth(cb, g->depth ? s_selW : s_lineW);
         dyno[0] = 0;
         dyno[1] = (uint32_t)s_fsOff[i];
         /* UNIT 0 IS PER DRAW: the text draws sample the coverage atlas and
@@ -1176,7 +1216,7 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
     s_saidLine = s_saidWide = s_saidFog = s_saidLut = s_saidRoom = s_saidPal = 0;
-    s_saidSel = 0;
+    s_saidSel = s_saidSelW = 0;
     s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = 0;
     s_saidImgT = s_saidImgP = s_saidImgF = s_saidImgU = s_saidImgS = 0;
     s_saidNoDraw = s_saidSlot = 0;

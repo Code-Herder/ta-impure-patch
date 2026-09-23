@@ -1353,6 +1353,26 @@ axis-aligned special cases count **both endpoints** — `0x4CC83B` (dx == 0) doe
 corner. `ctx+0x08` is the pitch and `ctx+0x0C` the pixel base, the same two fields
 `tagpu_markown.c` swaps.
 
+**The general case, which is the rule a redraw of any engine line has to reproduce**
+[DISASSEMBLED 2026-09-23 for the Vulkan selection rect]. After the clip:
+
+- **it always walks from the smaller x.** `0x4CC7F1` (`jns` on `x1 − x0`) falls into a swap of
+  both endpoint pairs (`0x4CC7F3`..`0x4CC804`) when dx is negative, so the call's endpoint order
+  never matters;
+- **dy's sign becomes the step direction**: `0x4CC80F`..`0x4CC813` negate dy and the pitch in
+  `esi`, which is pushed as the minor step;
+- **the major axis is chosen by `cmp ebx,ecx / jle` at `0x4CC81D`** — x-major (`0x4CC880`) when
+  `|dy| <= dx`, so an exact 45° line is x-major; y-major (`0x4CC8AC`) otherwise, with the two
+  counts exchanged;
+- **the error term starts at `2·minor − major`** (`0x4CC82A`..`0x4CC835`: `[ebp-4] = 2·minor`,
+  `esi = 2·minor − major`, `[ebp-8] = 2·minor − 2·major`), and **the minor step is taken when it
+  is not negative** — `or esi,esi / jns` at `0x4CC898` (x-major) and `0x4CC8C6` (y-major) — so a
+  tie steps. Both loops run `major + 1` pixels (`inc ecx`), inclusive at both ends.
+
+Unrolled: pixel `i` of the walk sits at major offset `i` and minor offset
+`(2·minor·i + major) / (2·major)` in integer division — round-half-up of `i·minor/major`, measured
+from the smaller-x end. `tagpu_mark.c`'s `SFS` evaluates exactly this per game pixel.
+
 **THE NEGATIVE RESULT, and it is the load-bearing one.** `0x4CC7AB` opens by calling
 **`0x4CC650`**, which reads `edi = [ctx+0x00]` and `esi = [ctx+0x04]` — the surface's WIDTH and
 HEIGHT — and clips the line to `[0,w) x [0,h)`, returning 0 for a line wholly outside; the

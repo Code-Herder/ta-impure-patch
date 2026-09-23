@@ -197,6 +197,8 @@ PROGRAMS = [
     # one pass each
     ("fps",          "tagpu_fps::VS",           "tagpu_fps::FS"),
     ("mark",         "tagpu_mark::VS",          "tagpu_mark::FS"),
+    # the selection rect: the engine's Bresenham decided per game pixel
+    ("mark_sel",     "tagpu_mark::SVS",         "tagpu_mark::SFS"),
     ("scaffold",     "tagpu_scaffold::VS",      "tagpu_scaffold::FS"),
     ("fx",           "tagpu_fx::VS",            "tagpu_fx::FS"),
     ("feat",         "tagpu_feat::VS",          "tagpu_feat::FS"),

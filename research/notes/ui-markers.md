@@ -26,6 +26,11 @@ runtime-confirmed. `main` = `*(void**)0x511DE8` (the `TAdynmemStruct`).
 > ours or genuinely screen-space (side panel, minimap, top bar, chat, dialogs), which
 > must stay at 1:1 at any zoom. A marker left engine-drawn is a marker frozen at the
 > unzoomed projection — invisible at 1×, a ghost at anything else.
+>
+> **On the Vulkan lane the selection rectangle is drawn by the marker pass** (since
+> 2026-09-23), depth-tested so it keeps its place in the unit sweep, and pixel-exact against
+> the engine's own Bresenham at any supersample — §1, *On the Vulkan lane*. Between landing
+> 11-3 of the vulkan-only plan and then, nothing drew it and a selected unit showed no rect.
 
 ---
 
@@ -196,14 +201,8 @@ difference:
 > **THE LEVER IS GONE; THE MEASUREMENTS ARE WHY THIS SECTION STAYS.** `tagpu_selgeom.on` and
 > the `selAt1x` detour it toggled were both halves of the GL unit pass, deleted with it in the
 > vulkan-only plan's landing 11-3. Nothing below is a knob any more. It is kept because the
-> numbers are the only record of what a one-pixel rect costs under each strategy, and because
-> **the Vulkan lane inherited NEITHER: it draws no selection rect at all.** The rect lived only
-> inside the GL unit draw, and no `tagpu_vk_*` file has replaced it — so on that lane the ENGINE
-> draws every selection box, at its unzoomed projection, which at zoom ≠ 1 scatters. That gap
-> dates from landing 4b, not from the deletion. An earlier draft of the note you are reading
-> said the lane "draws the rect as geometry always" and quoted the 1320-pixel figure below as
-> the cost of the move; landing 11-3's review disproved both. The numbers below measure the GL
-> path against the engine and are kept for that. See gpu-status §2.65.
+> numbers are the only record of what a one-pixel rect costs under each strategy. The Vulkan
+> lane inherited neither strategy: it draws the rect a third way, in the next section.
 
 The 1x detour above only exists because a GL line's width is not ours to set. It
 needs a buffer at the game's own resolution to draw into, so under
@@ -295,6 +294,76 @@ differently, which is a second reason the supersampled one is the one to trust.)
 measured, so nothing was seen crossing; the real fix is the same one the rect
 just had — the marker layer is supersampled too, and every line and glyph in it
 is softer than the engine's for exactly the same reason.
+
+### On the Vulkan lane — the marker pass, a depth test, and the engine's Bresenham (2026-09-23)
+
+**The rect had been missing from the screen since the clean cut.** It lived only inside the GL
+unit draw that landing 11-3 deleted; the engine went on drawing its own box, but into a surface
+that reaches no screen (gpu-status §2.81), so a selected unit showed nothing. It is back, and
+the division of labour is the order markers':
+
+- **`tagpu_native.c` `selbox_emit` computes it**, in the unit hand-over loop, because that is
+  where the unit's depth key is decided. The geometry is the GL pass's, unchanged: the root
+  piece's bounds unioned with the origin (`selbox_aabb`, cached per template node and dropped
+  on the level edge in `cache_gen_check`), the full angle triple in `0x4B6CC0`'s order, the
+  term-by-term truncating projection of `0x467A50`, corners on pixel centres, snapped through
+  the zoom. It is emitted **ahead of every `continue`** in that loop, since `0x46A530` has no
+  model test and draws a box for a unit whose body we could not bake.
+- **`tagpu_mark.c` owns it**: `tagpu_mark_emit_selbox` refuses unless the pass is armed, not
+  `passive` and not `noselbox` — the same conditions `mark_selbox` is told. The rects are the
+  **first** draw of the marker list and the only **depth-tested** one.
+- **`tagpu_vk_mark.c` draws it** with its own program and pipeline (`SVS`/`SFS`, `s_pipeLineZ`).
+
+**Why depth, and which key.** The engine draws each rect immediately before its own unit, so
+it is under that unit and every later row and over everything earlier. The unit pass's depth
+keys already encode exactly that order, so the rect is drawn after the world with the test on
+(`LESS`, writes off) at the GL pass's key, `enc − 0.5` — the body's keys run `enc ± 1.8`, so
+the part of the unit standing above its base hides the rect, and a row is 4 keys. The marker
+vertex carries clip z for this (`MVST` 8; 0 on every other marker, whose draws test nothing).
+**Checked against the stock game**, where the engine draws trees too: a tree in a later row
+covers the rect's front tip in both, and a tree in a nearer row covers the rect's far half in
+both. The same fixture with the test off drew the tip over the tree — wrong.
+
+**Why a program of its own: the line has to be the engine's line, and `ss` makes that hard.**
+A line rasterised in the `ss×` world target steps on the TARGET grid, half a game pixel per
+step at `ss = 2`, and the box-filter composite smears every diagonal. The first cut (the
+plain Bresenham line pipeline at `ss` width) measured **28 of 290 rect pixels at full colour**,
+the rest between 0.2 and 0.8 — visibly faint beside the engine's flat (83,223,79). The GL pass
+avoided this with the 1x detour, which this lane has no buffer for. So:
+
+- **the line primitive is only a band.** `SVS` pushes each end one game pixel out along the
+  major axis and the pipeline draws it `2·scale + 2` target pixels wide, which covers every
+  sample of every game pixel the engine's line can touch;
+- **`SFS` decides membership per GAME pixel.** It takes `floor(gl_FragCoord / uPx)` and keeps
+  the fragment only when that pixel is one `DrawLine`'s Bresenham plots (the rule is in
+  exe-reverse-engineering.md at `0x4CC7AB`): endpoints ordered by x, minor offset
+  `(2·minor·i + major) / (2·major)`. Both ends arrive flat — each vertex carries its own end in
+  `aPos` and the other in `aUV`;
+- **`uPx` is written at record time from the target's real extent** (`w / gw`, `h / gh`), not
+  from the supersample factor: on a frame whose offscreen target refused, the world goes into
+  the swapchain image at whatever scale that is, and a wrong scale moves the rect's pixels
+  rather than blurring them.
+
+**Measured on `selbox-facings`, 1024×768, `ss = 2`, one run** (selected minus deselected, on
+the engine's reference surface and on the window): **176 pixels identical** to the engine's
+own box, **5** of ours the engine does not have, and of our 189 pixels **179 are exactly
+(83,223,79)**. The engine-only pixels are where our frame has a nearer tree (the reference has
+no trees — `feat.on` owns them) or a health bar over the line. At zoom 0.62 and 1.95 the rects
+track their units (looked at, not diffed), and at 1.95 the line is one screen pixel wide and at
+full colour. On `500v500` with 400 selected: `sel=401
+selover=0`, 60 fps.
+
+**What is not the engine's.** Where our frame's trees and the reference disagree, the stock game
+is the oracle and agreed with the depth test on the two cases looked at; it was not swept. The
+clip `0x4CC650` applies at the context edge is not reproduced — the scissor cuts the band at
+the viewport instead, which can differ by a step at the edge. The rect is not drawn at all on a
+device without `VK_EXT_line_rasterization` Bresenham lines or a line `2·scale + 2` wide; that
+drops the rects and not the rest of the marker layer, and says so once in the log.
+
+**The engine's own box is not suppressed** (`s_selComplete` stays 0). It lands only in the
+golden source, where it is the reference this rect is measured against, so taking it out would
+buy nothing on the screen and cost the comparison. `mark.on=noselbox` therefore means *no rect
+on the window*, with the engine's box still in `tacli shot`.
 
 ### The hand-back, and the two bugs it hid [MEASURED 2026-09-09]
 

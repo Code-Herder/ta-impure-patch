@@ -150,6 +150,7 @@ fixture that only arms the pass produces no picture:
 | kind | what makes it non-empty |
 |---|---|
 | health bars | a unit of the **watched** player on screen, and the `damagebars` registry value set (`main+0x37F06` bit 0, read from the packet's copy) |
+| selection rects | a unit of the local player **selected** (`ctrl+a`, or a `click` on it) and the engine's `SelBoxes` toggle on (the default); not under `noselbox` or `passive` |
 | group digits | `u->squad` non-zero — `tacli keys <i> ctrl+1` on a selection; `damagebars` too |
 | order lines | `order.on` **and** SHIFT physically held (`down:shift` … `up:shift`; a bare `shift` is a 150 ms tap) **and** an order that does not complete — `move` completes and takes its markers with it; `patrol` never does |
 | order triangles | the route dots — only for the **hovered** unit; `pmove:x,y` onto it from a fresh roster, at game speed 1 so it does not walk away |
@@ -161,8 +162,12 @@ fixture that only arms the pass produces no picture:
 - `order.on=trace` runs both sides in one pass and logs both node lists (`order TRACE own:` /
   `order TRACE eng:`), which is the correctness gate — a pixel diff is unavailable because native
   resolution means the frames deliberately differ.
-- `mark.on=noselbox` makes the engine draw every selection rect at the unzoomed projection every
-  frame: the forcing lever (`tacli log <i> -g 'markown: engine selection'` → `restored`).
+- `mark.on=noselbox` stops our selection rects and hands the box to the engine, which draws it at
+  the unzoomed projection into `tacli shot` only (`tacli log <i> -g 'markown: engine selection'`
+  → `restored`). With `worldphase.off` as well, the engine's boxes reach the window.
+- The selection-rect count is in the native heartbeat: `native: vulkan lane handed over … sel=N/M
+  selcache=K full=F` — `N` rects handed to the marker pass of `M` selected units on screen;
+  `mark.on=log` adds `sel=` and `selover=` (rects past the bucket) to the `mark:` line.
 - `ShowRanges` is a typed cheat, not a switch: `keys <i> return`, then `char:+ char:s char:h …`,
   then `keys <i> return`, and confirm with `tacli peek <i> '*0x511DE8+0x391BF:4'` — on a
   `scenario load` fixture the chat line may not open under injection and the address stays 0.

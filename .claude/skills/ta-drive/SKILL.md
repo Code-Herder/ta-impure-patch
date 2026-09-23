@@ -431,9 +431,9 @@ under zoom, `wheel.off` and `zoomedge.off`: `references/levers.md` §"Camera, vi
 
 ## Things that will bite you
 
-- **`mark.on=noselbox` makes the engine draw every selection rect, every frame, at the unzoomed
-  position** — the forcing lever for anything drawn inside the viewport. **Remove it
-  afterwards**: hundreds of green boxes scattered over the map is this lever, not a bug.
+- **`mark.on=noselbox` takes the selection rects off the window.** The marker pass draws them;
+  the token stops it, and the engine's own boxes (at the unzoomed position) then land in
+  `tacli shot` only. A selected unit with no rect on screen is this lever, not a bug.
 - **A one-frame artifact is not findable with a screenshot.** Record the window losslessly
   (`ffmpeg -f x11grab -window_id <id> -framerate 60 -c:v libx264rgb -qp 0 out.mkv`) and scan
   every frame (the ta-capture skill). `-window_id`, never a screen region.

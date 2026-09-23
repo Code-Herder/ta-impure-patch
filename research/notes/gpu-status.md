@@ -299,9 +299,10 @@ else stays ours, so both boxes land in one `glshot`):
    and the A/B's engine box (which composites over our whole world) is not.
 
 **From 2026-09-11 it could be drawn as GEOMETRY instead, behind `tagpu_selgeom.on`; since
-landing 11-3 of the vulkan-only plan that lever is GONE — and so is the rect. THE VULKAN LANE
-DRAWS NO SELECTION RECT AT ALL** (§2.65's correction); everything in this entry describes the GL
-path, which is the only one that ever had it. On GL it was — each edge two triangles, a band of `w` game pixels
+landing 11-3 of the vulkan-only plan that lever is GONE, and the rect went with it until §2.84
+put it back on the Vulkan lane** — drawn by the marker pass, not here, and exact by a different
+route (a fragment test for the engine's Bresenham). Everything in this entry describes the GL
+path. On GL it was — each edge two triangles, a band of `w` game pixels
 (`w=`, or `wdev=` in device pixels) expanded along the edge's *minor* axis,
 because Bresenham's own rule is one pixel per major-axis step. That is the width
 the driver would not give us, and it is the thing `devres` was waiting on: at
@@ -313,9 +314,9 @@ at 1:1** — 0 differing pixels and an unmoved md5 at `ss = 2` with the resolve,
 `ss = 2`, so on GL the 1x detour was what made the default exact. **That detour is not
 expressible on the Vulkan lane** (`tagpu_vk_world.h`: the world resolves in one draw, so there
 is no 1x buffer to defer the rect into), which is why both halves were deleted together rather
-than one being ported. **But do not read the 1320 figure as the cost of the move** — that would
-be the cost if this lane drew the rect at `ss`, and it does not draw one at all. The real
-deviation is in §2.65 and it is unmeasured.
+than one being ported. **Do not read the 1320 figure as the cost of the move** either: the
+Vulkan rect (§2.84) is not a band at `ss`; it keeps whole game pixels, and measured 179 of its
+189 pixels at exactly the engine's colour.
 [UI markers](ui-markers.html) §1 has the numbers and the two construction traps
 (the cap must run along the segment; the band is nudged 1/256 px off the tie).
 
@@ -11499,6 +11500,12 @@ in the same plan. Whoever closes that one inherits this one on the same day.
 The seam for a fix is left in place deliberately: a Vulkan pass that emits the boxes writes
 `s_selComplete` and the engine stands down exactly as it did on GL.
 
+**[Closed by §2.84, and not through that seam.]** The paragraph above was written before §2.81:
+since the clean cut the engine's box lands in the golden source only, so "the engine draws every
+box itself" meant no box on the screen at all, at any zoom, and the latent deviation was a real
+one. §2.84 draws the rect in the marker pass and leaves `s_selComplete` at 0 on purpose — the
+engine's box in the reference is what the new rect is measured against.
+
 The GL path's own numbers — 1 320 differing pixels at `ss=2` for `selgeom main` against the
 engine's Bresenham rect — are kept in [UI markers](ui-markers.html) as the record of that path,
 not as the cost of this one.
@@ -15414,3 +15421,49 @@ which is `shOffY` working — but it was **not** compared against the engine: th
 units are airborne on one launch and landed on the next, so the two frames are not the same
 situation and the pair proves nothing. The GL twin's own rule is restored unchanged; nothing about
 it was re-measured here.
+
+### 2.84 The selection rect, back on the screen — drawn by the marker pass, exact by a fragment test
+
+**What was wrong.** A selected unit showed no selection rectangle. The rect lived only inside
+the GL unit draw that landing 11-3 deleted (§2.65), and nothing replaced it; §2.65 recorded the
+engine as drawing "every box itself", which stopped reaching the screen at the clean cut (§2.81):
+the engine's box lands in the golden source and nowhere else. Reported from play.
+
+**What draws it now** — [UI markers](ui-markers.html) §1, *On the Vulkan lane*, has the design;
+in short:
+
+| where | what |
+|---|---|
+| `tagpu_native.c` `selbox_emit`, `selbox_aabb` | the GL pass's geometry, unchanged: root-piece bounds (cached per template node, dropped in `cache_gen_check`), `0x4B6CC0`'s angle triple, `0x467A50`'s truncating projection, zoom snap; emitted in the unit hand-over loop at key `enc − 0.5`, ahead of every skip |
+| `tagpu_mark.c` `tagpu_mark_emit_selbox` | the bucket and the ownership gate (armed, not `passive`, not `noselbox`); the rects are the first draw of the list and its only `depth` draw; the vertex grows to 8 floats (clip z, 0 for every other marker) |
+| `tagpu_mark.c` `SVS`/`SFS` | a program of its own: the line is a band `2·scale + 2` target px wide, and the fragment stage keeps a sample only when its GAME pixel is on `DrawLine`'s Bresenham (`0x4CC7AB`) |
+| `tagpu_vk_mark.c` `s_pipeLineZ` | that program, Bresenham line mode, depth test `LESS`, writes off; `uPx` written at record time from the target's real extent (`FS_SZ` 48, `FS_PX` 32) |
+
+**Why a fragment test rather than a line.** The first cut drew the rect with the pass's own
+Bresenham line pipeline at `ss` width. In the `ss×` target a diagonal steps half a game pixel at
+a time and the composite's box filter smears it: **28 of 290** rect pixels at full colour, the
+rest at 0.2–0.8, visibly faint beside the engine's. The GL answer (draw at 1x) has no buffer on
+this lane (`tagpu_vk_world.h`). Deciding membership per game pixel makes every sample of a kept
+pixel survive, so it resolves to the flat colour at any `ss` and under `devres`.
+
+**Measured 2026-09-23**, `selbox-facings` (three Stumpys at facings 45/135/200), 1024×768,
+`ss = 2`, the bench arm set, selected minus deselected on both the reference surface and the
+window in one run:
+
+| measurement | number |
+|---|---|
+| our rect pixels identical to the engine's own box | **176** of the engine's 261 (the rest: nearer trees in our frame — the reference has none — and health bars) |
+| our rect pixels the engine does not have | **5** |
+| our rect pixels at exactly the engine's (83,223,79) | **179 of 189** (the line pipeline: 28 of 290) |
+| depth test off, same fixture | the rect's front tip drawn over the next row's tree; the stock game (nothing armed) hides it, as the depth-tested build does |
+| `500v500`, all own units selected | `sel=401 selover=0`, 60 fps |
+
+**Not covered.** The occlusion was compared against the stock game by eye on two trees, not
+swept. `0x4CC650`'s clip at the context edge is not reproduced (the scissor cuts the band
+instead). A device without Bresenham lines, or without a line `2·scale + 2` wide, draws no rect —
+the rest of the marker layer still draws and the log says why once.
+
+**Found on the way, not fixed here.** On `500v500` the unit pass stood down for the whole frame
+(`vk: unit: the GL twin drew 348 posed unit(s) this hand-over does not carry`): about 860 units
+were on screen against `TAGPU_PD_MAXHAND`'s 512, so **no unit body drew at all** while the rects
+did. That cap and its all-or-nothing refusal predate this landing and were not touched.

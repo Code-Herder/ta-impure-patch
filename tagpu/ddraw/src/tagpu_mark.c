@@ -359,6 +359,94 @@ static const char* FS =
     TAGPU_GLSL_FOG_SHADE("pi")
     "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 1.0);\n"
     "}\n";
+/* ---- THE SELECTION RECT'S PROGRAM: the engine's own line, pixel for pixel ----
+   A plain line drawn into the supersampled target steps on the TARGET'S grid,
+   half a game pixel at a time at ss=2, and the box-filter composite then
+   smears every diagonal across two game pixels at 20-80 % of the colour
+   [MEASURED 2026-09-23 on selbox-facings: 262 of 290 rect pixels below full
+   coverage, where the engine's are all 100 %]. The GL pass hid that by drawing
+   the rect into a 1x buffer, which this lane does not have.
+
+   SO THE LINE PRIMITIVE IS ONLY A BAND THAT COVERS THE PIXELS, and the
+   fragment stage decides which pixels are on the line: it takes the GAME pixel
+   a sample lies in and keeps it only when that pixel is one `DrawLine`'s
+   Bresenham (`0x4CC7AB`, after the clip at `0x4CC650`) would plot. Every
+   sample of a kept pixel survives, so each one resolves to the full colour at
+   any `ss`, and the set of pixels is the engine's at any zoom -- the test runs
+   on the SCREEN's game-pixel grid, where tagpu_native.c has already snapped
+   the corners.
+
+   THE ENGINE'S RULE, read off `0x4CC7AB` [BINARY-VERIFIED 2026-09-23]: the
+   endpoints are swapped so the walk always starts at the SMALLER x
+   (`0x4CC7F1`..`0x4CC804`); a zero dx is a straight column fill and a zero dy a
+   straight run; otherwise the error term starts at `2*minor - major`
+   (`0x4CC82A`..`0x4CC835`) and the minor step is taken when it is NOT
+   negative (`jns`, `0x4CC89A`/`0x4CC8C8`), so a tie steps. Unrolled, the
+   pixel `i` major steps from the start is `minor offset = (2*minor*i + major)
+   / (2*major)` in integers -- which is what the test below evaluates.
+
+   `vA`/`vB` are the edge's two ends, FLAT: the provoking vertex of a line is
+   its first, and the emitter writes each vertex's own end in `aPos` and the
+   other in `aUV`, so both arrive whatever the order. The vertex stage pushes
+   each end one game pixel further out along the major axis so the band covers
+   the end pixels whole; the test clips back to them. */
+static const char* SVS =
+    "#version 330 core\n"
+    "layout(location=0) in vec2 aPos;\n"     /* this end of the edge          */
+    "layout(location=1) in vec2 aUV;\n"      /* and the other one             */
+    "layout(location=2) in vec2 aWorld;\n"
+    "layout(location=3) in float aCol;\n"
+    "layout(location=4) in float aDepth;\n"
+    "uniform vec2 uGame;\n"
+    "uniform float uZoom;\n"
+    "uniform vec2 uZoomC;\n"
+    "out vec2 vWorld; out float vCol; flat out vec2 vA; flat out vec2 vB;\n"
+    "void main(){\n"
+    "  vec2 a = (aPos - uZoomC) * uZoom + uZoomC;\n"
+    "  vec2 b = (aUV  - uZoomC) * uZoom + uZoomC;\n"
+    "  vec2 d = a - b;\n"
+    "  vec2 e = abs(d.x) >= abs(d.y) ? vec2(sign(d.x), 0.0) : vec2(0.0, sign(d.y));\n"
+    "  vec2 p = a + e;\n"
+    "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0, aDepth, 1.0);\n"
+    "  vWorld = aWorld; vCol = aCol; vA = a; vB = b;\n"
+    "}\n";
+/* The samplers and the first five uniforms are FS's, in FS's order, so the two
+   programs share one descriptor layout and one uniform window: `uPx` lands
+   after them at offset 32 and the C side writes it into every draw's block. */
+static const char* SFS =
+    "#version 330 core\n"
+    "in vec2 vWorld; in float vCol; flat in vec2 vA; flat in vec2 vB;\n"
+    "out vec4 frag;\n"
+    "uniform sampler2D uLayer;\n"
+    "uniform sampler2D uPal;\n"
+    "uniform int uKey;\n"
+    "uniform int uText;\n"
+    TAGPU_GLSL_FOG_UNIFORMS
+    "uniform vec2 uPx;\n"                    /* target pixels per game pixel  */
+    TAGPU_GLSL_FOG_FN
+    "void main(){\n"
+    /* gl_FragCoord has its origin top-left under Vulkan, which is the
+       engine's own y -- the lane draws with no flip */
+    "  ivec2 g = ivec2(floor(gl_FragCoord.xy / uPx));\n"
+    "  ivec2 a = ivec2(floor(vA)), b = ivec2(floor(vB));\n"
+    "  if (a.x > b.x) { ivec2 t = a; a = b; b = t; }\n"
+    "  int dx = b.x - a.x, dy = b.y - a.y;\n"
+    "  int ady = abs(dy), s = dy < 0 ? -1 : 1;\n"
+    "  bool on;\n"
+    "  if (ady <= dx) {\n"
+    "    int i = g.x - a.x;\n"
+    "    on = i >= 0 && i <= dx &&\n"
+    "         g.y == a.y + (dx == 0 ? 0 : s * ((2 * ady * i + dx) / (2 * dx)));\n"
+    "  } else {\n"
+    "    int j = (g.y - a.y) * s;\n"
+    "    on = j >= 0 && j <= ady && g.x == a.x + (2 * dx * j + ady) / (2 * ady);\n"
+    "  }\n"
+    "  if (!on) discard;\n"
+    TAGPU_GLSL_FOG_DISCARD
+    "  int pi = int(vCol * 255.0 + 0.5);\n"
+    TAGPU_GLSL_FOG_SHADE("pi")
+    "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 1.0);\n"
+    "}\n";
 #pragma GCC diagnostic pop
 
 /* `mksh` AND `init_gl` STOOD HERE -- the GLSL compile helper and the program
@@ -451,8 +539,10 @@ int tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
     if (s_nsel + 8 > MAXSELV) { s_selover++; return 0; }
     for (k = 0; k < 4; k++) {
         int k2 = (k + 1) & 3;
-        put_ord(s_sel, s_nsel + 0, px[k],  py[k],  wx, wz, c);
-        put_ord(s_sel, s_nsel + 1, px[k2], py[k2], wx, wz, c);
+        /* each vertex carries its own end in (x, y) and the OTHER end in
+           (u, v): the program's fragment test needs both (SVS/SFS above) */
+        put_at(s_sel, s_nsel + 0, px[k],  py[k],  px[k2], py[k2], wx, wz, c);
+        put_at(s_sel, s_nsel + 1, px[k2], py[k2], px[k],  py[k],  wx, wz, c);
         s_sel[(size_t)(s_nsel + 0) * MVST + 7] = depth;
         s_sel[(size_t)(s_nsel + 1) * MVST + 7] = depth;
         s_nsel += 2;

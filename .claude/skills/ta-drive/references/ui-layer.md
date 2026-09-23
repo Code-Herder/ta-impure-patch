@@ -82,8 +82,8 @@ Arming an attach-time token on a running instance silently does nothing.
 - **`sharptest`** — paints a 64x64 opaque green square at the viewport's top-left and a one-device-
   pixel white column at device x = 100, as geometry: the proof the device-resolution sharp layer
   is wired. Harness only, like `strict`; never hand a player an instance with it armed.
-- **`mark.on=noselbox`** (a different file) makes the engine draw its own selection rects every
-  frame, at the unzoomed projection — the forcing lever for anything drawn inside the viewport.
+- **`mark.on=noselbox`** (a different file) takes our selection rects off the window and hands
+  the box to the engine, which draws it at the unzoomed projection into `tacli shot` only.
   Confirm with `tacli log <i> -g 'markown: engine selection'`; remove it afterwards.
 
 ## The heartbeat

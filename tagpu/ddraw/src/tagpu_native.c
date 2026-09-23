@@ -356,25 +356,27 @@ static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
    division, so a floor-based remainder would disagree with the engine for a
    negative eye (eye = -20: engine origin -16, floor would say -48). */
 static float  s_verts[MAXNV * NVST];
-/* NOTHING WRITES THIS ON THE SURVIVING LANE, AND THAT IS A REAL GAP -- read it
-   before believing any note that says the selection rect is ours.
+/* NOTHING WRITES THIS, AND ON THIS LANE THAT IS DELIBERATE.
 
    It was written once, at the bottom of the GL unit pass, meaning "every
    selection box this frame owed was actually emitted"; `tagpu_markown.c`'s
    mark_selbox reads it through `tagpu_native_selbox_complete()` and suppresses
    the ENGINE's own box draw only when it is 1. That store sat below the
-   `!gl_draws` hand-over return, so on the Vulkan lane it never ran and this has
-   been permanently 0 since landing 4b; landing 11-3 deleted the store with the
-   rest of that pass, which changed nothing.
+   `!gl_draws` hand-over return, so on the Vulkan lane it never ran, and
+   landing 11-3 deleted it with the rest of that pass.
 
-   THE CONSEQUENCE: on this lane we draw no selection rect at all and never
-   suppress, so the engine draws every box itself -- at its UNZOOMED projection,
-   which at zoom != 1 is the visible scatter the GL pass existed to avoid. No
-   `tagpu_vk_*` file contains selection-rect code. This deviation is UNMEASURED.
+   THE RECT IS OURS AGAIN (`selbox_emit`, 2026-09-23) AND THIS STAYS 0 ON
+   PURPOSE. The suppression existed so the engine's box and ours could not
+   both land on the screen. Since the clean cut the engine's box lands only in
+   its own reference surface -- the golden source `tacli shot` reads -- and
+   nowhere a player sees, so there is no pair left to prevent; suppressing it
+   would only take the box out of the reference that our rect is measured
+   against. The cost is the engine's own draw, four `DrawLine`s per selected
+   unit on the game thread.
 
-   The variable and its accessor are kept rather than deleted because they are
-   the seam a Vulkan selection rect would fill: write this from the pass that
-   emits the boxes and the engine stands down exactly as it did on GL. */
+   The variable and its accessor are kept because markown still reads them:
+   deleting the accessor means editing a patch whose job is unchanged, and a
+   later lane that wants the engine to stand down has its seam here. */
 static volatile int s_selComplete = 0;
 
 /* material constants copied per frame from render3do's calibration */
@@ -2305,11 +2307,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            engine's (about 0.75 of a device pixel at k = 1.5) while everything
            else got sharper. Two landing reviewers found this independently.
            `tagpu_devres.on` is how it was measured. The rect-as-geometry lever
-           that answered it went with the GL draw half [landing 11-3] -- AND SO
-           DID THE RECT: this lane draws no selection rect at all and the engine
-           draws the boxes itself (see `s_selComplete`). The thin-rect problem
-           described above is therefore not the one this lane has. ui-markers.md
-           keeps the 2026-09-11 coverage numbers as the record of the GL path.
+           that answered it went with the GL draw half [landing 11-3], and so
+           did the rect. It is back on this lane (`selbox_emit`, drawn by
+           tagpu_vk_mark.c), and the thin-rect problem does not return with it:
+           the rect's fragment stage keeps whole GAME pixels on the engine's
+           Bresenham path, so it resolves to the full colour at any `ss`,
+           devres included (tagpu_mark.c, SVS/SFS). ui-markers.md keeps the
+           2026-09-11 coverage numbers as the record of the GL path.
 
            `s_devresFailed` WENT WITH `fbo_size`, which was its only writer, so
            the "the driver refused the supersampled target, stay down" latch no
