@@ -354,6 +354,14 @@ game. The page sizes the canvas to `GW·k/dpr` CSS px with `k = ⌊dpr⌋`, refi
 scales pointer drags to canvas pixels so a pan is still a whole pixel; the status bar's `device`
 field shows the mapping. The headless shooter runs at ratio 1, so no baseline moved.
 
+**A lost WebGL context reloads the page.** Every GL object dies with the context and the page
+builds them once, so the canvas asks for the context back (`preventDefault` on
+`webglcontextlost`) and reloads on `webglcontextrestored`, three loads running at most. Measured
+2026-09-23: the first page of a fresh headless Chromium on ANGLE-Vulkan loses its context
+~0.4 s into loading, every later page is fine, and the symptom was the banner *offscreen
+framebuffer incomplete* (status `0x8cdd`, from the dead context) — the same on the viewer from
+before these changes. The SwiftShader shooter never loses it, so no shot showed it.
+
 **Nothing proportional to the view is rebuilt per frame if it can be kept.** The wheel eases, so
 one notch is thirteen to fifteen frames, and at 0.3× the view is 20 000 tiles. The Classic++
 terrain is therefore kept in chunks of 16×16 tiles, nine shared vertices a tile, built the first
@@ -384,18 +392,16 @@ about a millisecond between them.
 - ~~**The art already contains the hill.**~~ **Measured in landing 2 — see "Does the art
   already contain the hill" below.** It does, the amount is per-map, and each map's artist
   chose a different sun. The gap is now a number rather than a worry.
-- **The Classic lane draws no terrain on current `main`** [MEASURED 2026-09-23, Two Continents
-  at 1920x1080: 65.8 % of the viewport black, the same md5 from the viewer before and after the
-  camera knobs]. `tagpu_terr.c`'s vertex shader, which the pack extracts, is now **instanced** —
-  `aCorner` per vertex, `aCell` per instance, `uOrigin`/`uTile0`/`uTexel` — while the viewer's
-  `buildTerrain` still feeds the old six-float vertex (`x,y, u,v, wx,wz`) and sets none of those
-  uniforms, so no cell lands. Features and units still draw. The parity claim is void until the
-  builder feeds the instanced layout.
-- **A map's own 3DO features are not drawn** [VERIFIED 2026-09-23, by reading `build_features`
-  and `build_units`]. A TNT anchor whose def names an `object=` instead of a `seqname` gets no
-  sprite from `build_features`, and `build_units` takes 3DO features from the *scenario* only —
-  so a map that anchors wrecks draws none of them, on the map or in the mirror. Two Continents
-  anchors 4893 features, all GAF, so the test map loses nothing.
+- ~~**The Classic lane draws no terrain on current `main`**~~ **Closed 2026-09-23.**
+  `tagpu_terr.c`'s vertex shader, which the pack extracts, is instanced — `aCorner` per vertex
+  (`TAGPU_TERR_QUAD`, the engine's six-corner order), `aCell` per instance (four unnormalised
+  shorts: the cell's grid column and row, its tile's atlas column and row), `uOrigin`/`uTile0`/
+  `uTexel` — and the viewer's `buildTerrain` fed the old six-float vertex, so no cell landed
+  (65.8 % of the viewport black). It now feeds exactly that: one instance per visible cell and
+  the three uniforms the game sets. Checked against the lane's own twin: `pass=terrain` in
+  Classic against Classic++ unlit and indexed (`undither=0&amb=1&shadows=0&sun=off`) is **0
+  differing pixels** at 1×, 0.5× and 2× — two independent paths over one atlas. Not re-measured
+  against the game (`tascene ab`).
 - **Minimap letterboxing convention** (how a non-square map maps into the stored picture) was
   not determined — the corner pixel is map content, not padding, on all three maps sampled.
 - **Hires `.glb` parsing** leans on three.js's `GLTFLoader` in parse-only mode (read the

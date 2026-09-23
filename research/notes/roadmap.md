@@ -2587,7 +2587,9 @@ deleted the last GL file, this removed the rest by the owner's ruling (no aliasi
 knows `auto`, `vulkan` and `gdi` only, the `*_glreset` cascade and every GL field and parameter
 are gone, `tacli glshot` is gone and its callers grab the window, and the release ini and README
 name Vulkan. [gpu-status](gpu-status.html) §2.85 has the list and the measurements. **Not covered:**
-~800 comment mentions of GL in the sources; `tascene ab`'s browser half draws no terrain.
+~800 comment mentions of GL in the sources. (`tascene ab`'s browser half drew no terrain; closed
+2026-09-23 on worktree-camera_zoom — the viewer feeds the instanced terrain shader,
+[tascene-design](tascene-design.html) *Gaps*.)
 
 **Landing 2 followed the same day**: the Classic++ restored atlases mirrored for three of the
 four world passes ([gpu-status](gpu-status.html) §2.36) — features **0 px**, effects **0 px**,

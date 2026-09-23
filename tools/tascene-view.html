@@ -323,13 +323,16 @@ const err  = document.getElementById("err");
 const bar  = document.getElementById("bar");
 if (SHOT) document.body.classList.add("shot");
 
+let contextLost = false;         // set by the canvas's webglcontextlost handler
 function fail(msg) {
   // drop the shot class first: `body.shot #err` hides the banner, and a
   // headless shot of a mistyped parameter would otherwise be a black frame
   // with nothing to read
   document.body.classList.remove("shot");
   err.style.display = "block";
-  err.textContent = String(msg && msg.stack || msg);
+  // after a lost context every GL call fails, so whatever failed next is a
+  // symptom: the banner keeps saying what happened
+  if (!contextLost) err.textContent = String(msg && msg.stack || msg);
   document.title = "tascene-error";
   throw msg;
 }
@@ -1229,6 +1232,31 @@ async function main() {
   cv.style.width = GW + "px"; cv.style.height = GH + "px";
   const gl = cv.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
   if (!gl) fail("no WebGL2 context");
+  // A LOST CONTEXT KILLS EVERY GL OBJECT THE PAGE HOLDS, and the page builds
+  // them once, so the only recovery is a fresh load. Measured on the first
+  // page of a fresh headless Chromium on ANGLE-Vulkan: the context is lost
+  // ~0.4 s into loading and every page after it is fine, and the symptom was
+  // "offscreen framebuffer incomplete" (status 0x8cdd from a dead context).
+  // So the page asks for the context back and reloads when it returns; the
+  // count stops a GPU that keeps losing it from reloading forever.
+  cv.addEventListener("webglcontextlost", (e) => {
+    e.preventDefault();
+    contextLost = true;
+    let n = 0;
+    try { n = +sessionStorage.getItem("tascene-lost") || 0; } catch (_) {}
+    err.style.display = "block";
+    if (n >= 3) {
+      err.textContent = "the WebGL context was lost three loads running; reload by hand";
+      return;
+    }
+    try { sessionStorage.setItem("tascene-lost", String(n + 1)); } catch (_) {}
+    err.textContent = "the WebGL context was lost; reloading when it comes back";
+  });
+  cv.addEventListener("webglcontextrestored", () => {
+    let n = 0;
+    try { n = +sessionStorage.getItem("tascene-lost") || 0; } catch (_) {}
+    if (n <= 3) location.reload();
+  });
 
   // ---- what the union of the sides actually needs
   const any = (f) => sides.some(f);
@@ -1388,23 +1416,35 @@ async function main() {
   }
   const targets = sides.map(offscreen);
 
-  // ---- terrain, parity: tagpu's own shaders and the 32-px grid
-  const TVST = 6;                                   // x,y, u,v, wx,wz
-  let terrProg = null, terrVAO = null, terrVBO = null, U = {};
+  // ---- terrain, parity: tagpu's own shaders and the 32-px grid. tagpu_terr.c's
+  // vertex shader is INSTANCED: a static unit quad (TAGPU_TERR_QUAD, the
+  // engine's vertex order, the shared edge on (1,0)-(0,1)) at location 0, and
+  // per instance the cell's grid column and row and its tile's atlas column and
+  // row as four unnormalised shorts at location 1 (TAGPU_TERR_ICOMP). The
+  // shader rebuilds the position, world point and UVs from those and uOrigin,
+  // uTile0, uTexel — exactly, every term an integer far below 2^24.
+  const TVST = 6;              // the mirror's vertex: x,y, u,v, wx,wz
+  let terrProg = null, terrVAO = null, terrInst = null, U = {};
+  let terrCells = new Int16Array(4 * 4096);
   if (wantParity) {
     terrProg = program(gl, terrVS, terrFS, "terrain");
     terrVAO = gl.createVertexArray();
-    terrVBO = gl.createBuffer();
     gl.bindVertexArray(terrVAO);
-    gl.bindBuffer(gl.ARRAY_BUFFER, terrVBO);
-    for (let i = 0; i < 3; i++) {
-      gl.enableVertexAttribArray(i);
-      gl.vertexAttribPointer(i, 2, gl.FLOAT, false, TVST * 4, i * 8);
-    }
+    const quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]),
+                  gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
+    terrInst = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, terrInst);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.SHORT, false, 8, 0);   // SSCALED, as the game's
+    gl.vertexAttribDivisor(1, 1);
     gl.bindVertexArray(null);
     U = uniforms(gl, terrProg, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
                                 "uAtlas", "uPal", "uFogGrid", "uFogLUT", "uFogOrg",
-                                "uFogDim", "uFog"]);
+                                "uFogDim", "uFog", "uOrigin", "uTile0", "uTexel"]);
     nameShadowUnits(gl, terrProg);
   }
 
@@ -1915,7 +1955,6 @@ async function main() {
   const blitVAO = gl.createVertexArray();
   const BU = uniforms(gl, blitProg, ["uA", "uB", "uWipe", "uWidth", "uSS"]);
 
-  const verts = new Float32Array(32768 * 6 * TVST);
 
   // ---- the heightfield, read the way the engine reads it -------------------
   // mapattr byte 0 is one height per 16-px cell; the engine treats those as
@@ -1946,18 +1985,13 @@ async function main() {
   const rowBase = () => (E[1] >> 4) - 16;
 
   function buildTerrain(L) {
-    // tagpu_terr.c's emit loop, line for line.
+    // tagpu_terr.c's gather, line for line: one instance per visible cell
     const stride = map.tilemap.w, mrows = map.tilemap.h;
     const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
     const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
     const cols = ceil32(W[0] + fx), rows = ceil32(W[1] + fy);
-    const iw = 1 / map.atlas.w, ih = 1 / map.atlas.h;
+    if (terrCells.length < cols * rows * 4) terrCells = new Int16Array(cols * rows * 4);
     let n = 0, skipped = 0, junk = 0;
-    const put = (x, y, u, v, wx, wz) => {
-      const o = n * TVST;
-      verts[o] = x; verts[o + 1] = y; verts[o + 2] = u;
-      verts[o + 3] = v; verts[o + 4] = wx; verts[o + 5] = wz; n++;
-    };
     for (let r = 0; r < rows; r++) {
       const my = ty0 + r;
       if (my < 0 || my >= mrows) { skipped += cols; continue; }
@@ -1966,25 +2000,22 @@ async function main() {
         if (mx < 0 || mx >= stride) { skipped++; continue; }
         const idx = tilemap[my * stride + mx];
         if (idx >= map.atlas.tiles) { junk++; continue; }
-        const cx = idx % map.atlas.cols, cy = (idx / map.atlas.cols) | 0;
-        // the quad still spans exactly TILE_PX texels; u1 lands ON the guard
-        // column, which is a copy of the last real one (tagpu_terr.c)
-        const tu = cx * PITCH + BORDER, tv = cy * PITCH + BORDER;
-        const u0 = tu * iw, u1 = (tu + TILE_PX) * iw;
-        const v0 = tv * ih, v1 = (tv + TILE_PX) * ih;
-        const x0 = vpL + c * 32 - fx, y0 = vpT + r * 32 - fy;
-        const wx0 = mx * 32, wz0 = my * 32;
-        put(x0,      y0,      u0, v0, wx0,      wz0);
-        put(x0 + 32, y0,      u1, v0, wx0 + 32, wz0);
-        put(x0,      y0 + 32, u0, v1, wx0,      wz0 + 32);
-        put(x0 + 32, y0,      u1, v0, wx0 + 32, wz0);
-        put(x0 + 32, y0 + 32, u1, v1, wx0 + 32, wz0 + 32);
-        put(x0,      y0 + 32, u0, v1, wx0,      wz0 + 32);
+        // the quad still spans exactly TILE_PX texels, and its far edge lands
+        // ON the guard column, which is a copy of the last real one
+        const o = n * 4;
+        terrCells[o] = c; terrCells[o + 1] = r;
+        terrCells[o + 2] = idx % map.atlas.cols; terrCells[o + 3] = (idx / map.atlas.cols) | 0;
+        n++;
       }
     }
-    gl.bindBuffer(gl.ARRAY_BUFFER, terrVBO);
-    gl.bufferData(gl.ARRAY_BUFFER, verts.subarray(0, n * TVST), gl.DYNAMIC_DRAW);
-    L.stats = { cols, rows, tx0, ty0, fx, fy, cells: n / 6, skipped, junk };
+    gl.bindBuffer(gl.ARRAY_BUFFER, terrInst);
+    gl.bufferData(gl.ARRAY_BUFFER, terrCells.subarray(0, n * 4), gl.DYNAMIC_DRAW);
+    gl.useProgram(terrProg);
+    // grid cell (0,0)'s screen corner, the map cell it is, the atlas texel
+    gl.uniform2f(U.uOrigin, vpL - fx, vpT - fy);
+    gl.uniform2f(U.uTile0, tx0, ty0);
+    gl.uniform2f(U.uTexel, 1 / map.atlas.w, 1 / map.atlas.h);
+    L.stats = { cols, rows, tx0, ty0, fx, fy, cells: n, skipped, junk };
     return n;
   }
 
@@ -2782,7 +2813,7 @@ async function main() {
         gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
         gl.uniform1i(U.uFog, 0);
         gl.bindVertexArray(terrVAO);
-        gl.drawArrays(gl.TRIANGLES, 0, nterr);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, nterr);
         gl.bindVertexArray(null);
       }
     }
@@ -3157,6 +3188,7 @@ async function main() {
   }
 
   draw();
+  try { sessionStorage.removeItem("tascene-lost"); } catch (_) {}
   document.title = "tascene-ready";
 }
 

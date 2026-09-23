@@ -15670,9 +15670,10 @@ compiled identifier naming GL (`glreset`, `ogl`, `wgl`, `opengl`, `vbo`/`vao`/`f
   `tascene ab` grab the client window (`import -window`, 8-bit PPM for `ab`).
 
 **Not closed here:** about 800 comment mentions of GL remain in the DLL sources, most of them the
-history the comment review kept. `tascene ab`'s browser half draws no terrain in headless Chrome
-(the capture half is right: same view, same Commander, same wreck), so its percentage is not a
-parity figure yet. `big-battle` shows `unit=0` in the census from ~frame 3300 on `main` as well
+history the comment review kept. `tascene ab`'s browser half drew no terrain in headless Chrome
+(the capture half is right: same view, same Commander, same wreck), so its percentage was not a
+parity figure; the viewer feeds the instanced terrain shader since 2026-09-23 (worktree-camera_zoom,
+[tascene-design](tascene-design.html) *Gaps*), and `ab` has not been re-run since. `big-battle` shows `unit=0` in the census from ~frame 3300 on `main` as well
 (`TAGPU_PD_MAXHAND`): the hand-over cap, which §2.86 removes.
 `uiwalk --game-only --screens-only --cycles 1` is clean except two stops of the cycle, and
 `main`'s DLL gives both identically: `VISUALS#1` misses the `FPS` gadget by 23 px, and
