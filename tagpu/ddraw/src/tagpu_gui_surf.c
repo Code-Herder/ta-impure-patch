@@ -1595,14 +1595,14 @@ static void drain(void)
    passes and this one alike. Here it is only uploaded, and only when it has
    actually moved: the serial says so. */
 /* THE UI's RENDER HALF READS THE PACKET, never the engine: the cursor's
-   position and sprite, the minimap's box, its surfaces and its view box are
-   all packet fields.
+   sprite record, the minimap's box, its surfaces and its view box are all
+   packet fields.
 
    THE POINTER IS NEVER KEPT ACROSS A CALL, let alone across a frame: it is
    handed down from the driver's own record every time. A static holding it
    would be exactly the cached packet pointer `tagpu_packet.poison` exists to
-   catch, and the two entry points here (the cursor decision before the world
-   pass, the layer after it) are separate calls with separate chances to be
+   catch, and the two entry points here (the cursor decision and the layer,
+   both after the world pass) are separate calls with separate chances to be
    skipped. NULL is "no packet this frame" — a shell frame or a load — and
    every consumer below declines. */
 

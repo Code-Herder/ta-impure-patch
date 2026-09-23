@@ -59,10 +59,9 @@ unsigned tagpu_pal_changes(void);
    NULL when the engine's table is unreadable. */
 const unsigned char* tagpu_pal_engine(void);
 
-/* The engine's gamma factor itself, for the passes whose colour never came
-   from a palette at all (a replacement mesh's glTF texture) and so cannot be
-   scaled by resolving through a different one. 1.0 when unreadable, and
-   bounded to a band a slider can actually produce. */
+/* The engine's gamma factor itself, which the palette's log line prints
+   beside the serial. 1.0 when unreadable, and bounded to a band a slider can
+   actually produce. */
 float tagpu_pal_gamma(void);
 
 #endif

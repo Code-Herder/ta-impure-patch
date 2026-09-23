@@ -127,8 +127,8 @@ typedef struct TAGPU_PK_UNIT {
     uint8_t  flags;          /* TAGPU_PK_U_* below                              */
     uint8_t  ground_h;       /* the feature cell's height byte under the anchor */
     char     name[16];       /* UnitDef+0x20 UnitName, LOWERCASED and NUL-padded:
-                                what the glTF replacement pass looks a mesh up by
-                                and what the roster line prints. 16 is the FBI
+                                what the roster and scaffold log lines print.
+                                16 is the FBI
                                 field's own width; a longer name is truncated    */
 } TAGPU_PK_UNIT;
 
@@ -371,7 +371,7 @@ typedef struct TAGPU_PK_PART {
    grid whenever anything is unacknowledged.) */
 /* ---- THE UI LAYER'S RENDER HALF -----------------------------------------
    The four engine reads tagpu_gui_surf.c's render half needs, every
-   present: the cursor's position and sprite through the graphics globals, the
+   present: the cursor's sprite record through the graphics globals, the
    minimap's box, its three 8bpp surfaces and the view box drawn over them. The
    UI layer's op QUEUE is untouched and stays a queue — it carries an op stream
    into retained twins and a latest-wins snapshot cannot do that (the plan's

@@ -978,8 +978,14 @@ def _ensure_owndraw_for_native(inst) -> "str | None":
         own.write_text(tok + "\n")
         return (f"auto-armed owndraw.on={tok} (native.on is set and owndraw must be "
                 f"installed at launch, not after)")
-    # A type that differs from native.on's is harmless: owndraw skips no unit by
-    # type, so its target only scopes the posed program's refusal warning.
+    # owndraw's target decides whether the structure-shadow pair is installed at
+    # all: only "all" installs it (tagpu_owndraw.c, g_all), so a narrower owndraw
+    # under native.on=all leaves the engine's cached slant under ours.
+    have = (own.read_text().split() or [""])[0]
+    if have != tok:
+        return (f"warning: owndraw.on={have or '(empty)'} but native.on={tok} — "
+                f"owndraw installs its structure-shadow detours only for 'all'. Set "
+                f"them to match: `tacli arm {inst.name} owndraw.on={tok}` and relaunch.")
     return None
 
 

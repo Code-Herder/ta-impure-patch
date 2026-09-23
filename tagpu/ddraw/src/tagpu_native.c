@@ -675,31 +675,13 @@ static const char* model_root(const TAGPU_PACKET* pk, unsigned mid)
     return *(const char* const*)(mptrs + (size_t)mid * 4);   /* in bounds */
 }
 
-
-
-
-/* faces of one Model3DONode whose vertices are already model-space floats
-   P[nvert*3] — the engine-posed vbuf for units, rotated raw verts for
-   effects models. skipFace: index the engine never draws (-1 = none);
-   quadOnly: textured faces need exactly 4 verts (GAF_DrawTransformed is a
-   quad rasteriser — the generic 3DO draw 0x46BAE0 skips the rest). */
-/* The two DEGRADATIONS, counted. There is no fallback renderer any
-   more (gpu-posing.md §4, "the refusal ledger"), so neither of these drops a
-   unit — but both are things stock content never does, and a silent
-   degradation is exactly what a gate must not allow. Both ride the `native:`
-   line beside `posed=`, and are only printed when they have caught something.
-
-     rest=   units past the frame's pose arena, drawn AT REST for that frame
-             (right geometry, material, position, fog, shadow and depth; only
-             the animation frozen) from one shared identity block
-     unpl=   PIECES the pose walk could not place — a node that did not read or
-             a parent link that never resolved — left at rest inside a unit
-             that is otherwise posed */
-/*   nobake= units the gather could not get a bake for, which means they
-             DRAW NOTHING — the one honest drop in the ledger. It
-             has to be counted whether or not tagpu_posebake.on is armed,
-             because without a count an undrawable model is a unit that is
-             simply missing from the screen with nothing in the log. */
+/* The arena-full DEGRADATION. There is no fallback renderer (gpu-posing.md
+   §4, "the refusal ledger"), so a unit past the frame's pose arena is not
+   dropped: it is drawn AT REST for that frame — right geometry, material,
+   position, fog, shadow and depth; only the animation frozen — from the one
+   shared identity block below. Stock content never reaches it. No heartbeat
+   field counts it, nor the pieces the pose walk cannot place (left at rest
+   inside a unit that is otherwise posed). */
 /* The block the arena-full degradation hands out: TAGPU_PBMAXPIECE identity
    matrices, every piece visible, shaded and casting. Filled ONCE and never
    written again, which is what makes it safe to hand the same pointer to
@@ -727,6 +709,11 @@ static void pose_rest_block_init(void)
 }
 #define MAXNODEV 4096               /* verts of one node staged for emission */
 
+/* faces of one Model3DONode whose vertices are already model-space floats
+   P[nvert*3] — the engine-posed vbuf for units, rotated raw verts for
+   effects models. skipFace: index the engine never draws (-1 = none);
+   quadOnly: textured faces need exactly 4 verts (GAF_DrawTransformed is a
+   quad rasteriser — the generic 3DO draw 0x46BAE0 skips the rest). */
 static int emit_node(const char* nd, const float* P, int nvert, int nv,
                      float ax, float ay, float wx0, float wz0, float encBase,
                      int owner, int pieceShaded, int skipFace, int quadOnly)

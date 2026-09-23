@@ -2982,7 +2982,7 @@ its inputs; the op QUEUE is untouched and stays a queue. Full detail:
 
 | what it was, on the render thread, every present | what it is |
 |---|---|
-| the cursor's position and sprite record through `[0x51FBD0]+0x1B6`/`+0x1BA`/`+0x1B2` | header fields; the record is a KEY into the session cursor table and only `tagpu_gaf.c` dereferences it |
+| the cursor's position and sprite record through `[0x51FBD0]+0x1B6`/`+0x1BA`/`+0x1B2` | the record alone, as the header's `cur_rec`: a KEY into the session cursor table, and only `tagpu_gaf.c` dereferences it. The position has no reader and does not cross |
 | the minimap's box, its view rect and its colour byte | header fields |
 | its three 8bpp surfaces, walked row by row to interleave into RGB | one area the PUBLISHER interleaves, gated on the sharp minimap asking for it (at k = 1 it is deliberately the engine's own) |
 | the level's picture, from a buffer the LOADER thread filled | the level's FIRST in-play packet, acknowledged by the consumer; **the loader-thread observer is deleted** |
@@ -11058,7 +11058,7 @@ already decides per draw, against a word that only a live lane sets:
 | the opaque and nano rasterise (`0x459830`, `0x459C70`) | `tagpu_posedraw_live()` | the posed program has linked (`s_state == 1`) and Vulkan does not own the present. **Since 2026-09-23 the predicate is gone: `tagpu_owndraw_classify` never skips a unit, and skips a husk only while `tagpu_native_wrecks_armed()`** |
 | the pre-shadow composite wipe (`0x459338`, `0x45958C`, `0x4594DB`) | the same, plus the classifier's own target test | as above. **Deleted 2026-09-23 with its three patches: the gate was the constant 0, so it only replayed the call** |
 | `buildfx` (`0x458DD0`) | `tagpu_native_owns_obj` | `s_armed == 1`, written **only** in `tagpu_native_frame` |
-| `terrown`, `featown`, `fxown`, `markown` | a `volatile unsigned char` the stub compares | `set_skip(ours-live)` from the pass that paints, with a watchdog. **`cursown` was the fifth and is deleted** (§2.81); **none of the four is a play default since 2026-09-20**, because a suppressed engine pass holes the reference frame |
+| `terrown`, `featown`, `fxown`, `markown` | a `volatile unsigned char` the stub compares | `set_skip(ours-live)` from the pass that paints, with a watchdog. **`cursown` was the fifth and is deleted** (§2.81); `terrown` and `markown` are play defaults (`tagpu_opt.c`); `featown` and `fxown` are not, because a suppressed engine pass holes the reference frame |
 | **the structure-shadow pair** (`0x4592BF`, `0x459522`) | a `volatile unsigned char` (`g_ssSkip`) the stub compares | `g_ssSkip = (g_ssTerr \|\| g_ssPass) && g_sshadow`. **`g_ssTerr`** is raised by `tagpu_terrown_set_skip` *before* it publishes its own skip byte — an ordering, so no draw can key-fill under a lowered gate. **`g_ssPass`** is `s_armed == 1 && gl_draws && s_ssSuppress`, published once per frame by the unit pass, and is the half the 8-frame watchdog releases |
 
 And **every one of those answers is produced inside `tagpu_overlay_draw`**, whose only callers

@@ -131,13 +131,9 @@ static const Def s_defs[] = {
        BAKED immediates, so moving them makes picking answer about the unmoved
        origin (measured 2026-09-11 at 1024x768 Auto, 76 px left and 19 px up).
 
-       AND IT DRAWS NOTHING AT ALL. The magnification was
-       the UI layer's `LAY_FS` reading `uHud`, and that layer is deleted, so
-       arming `tagpu_hud.on` today shifts the world and the input mapping and
-       leaves no HUD behind to magnify. `tagpu_hud.c` is kept whole -- the
-       geometry, the ceiling, the input transform and the menu stage all still
-       work -- because the pass that consumes it is what has to be rebuilt.
-       Arm tagpu_hud.on by hand; see gui-renderer.md 22.6. */
+       The magnification is the UI layer's `LAY_FS` reading `uHud`
+       (tagpu_gui_surf.c, drawn by tagpu_vk_gui.c). Arm tagpu_hud.on by hand;
+       see gui-renderer.md 22.6. */
 };
 #define NDEFS (int)(sizeof s_defs / sizeof s_defs[0])
 

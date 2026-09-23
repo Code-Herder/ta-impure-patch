@@ -764,8 +764,7 @@ static void pd_begin(const TAGPU_PDVIEW* v, int ghostWindow)
 {
     if (s_state != 1) return;
     /* THE PUBLISH WINDOW. EVERY window of a frame records -- the build ghost
-       draws in a SECOND one (ghost_pass opens its own, after the wire and the
-       replacement meshes), and counting that window against the hand-over
+       draws in a SECOND one (ghost_pass opens its own, after the wire), and counting that window against the hand-over
        instead would stand the Vulkan unit pass down for the whole of any
        building placement.
 
@@ -847,7 +846,7 @@ void tagpu_posedraw_end(void)
     s_pub.nflag = s_nflag;
     s_pub.ncast = s_ncast;
     /* `otherDraws` IS NOT SET HERE, and that is deliberate: the wire, the
-       replacement meshes, the slant and the build ghost all draw LATER in this
+       slant and the build ghost all draw LATER in this
        frame than this window closes, and a count frozen now would miss exactly
        the draws the refusal exists to catch. It is read at the moment the
        hand-over is taken, which is later in this same iteration of

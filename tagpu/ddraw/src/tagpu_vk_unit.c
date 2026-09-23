@@ -132,8 +132,9 @@
 
    THE NATIVE 3DO STREAM HAS NO UNIT VERTICES. tagpu_native.c builds no
    vertices for an ordinary unit -- `nv` is 0 for the whole of its unit loop --
-   so every unit body and every unit caster comes from the posed hand-over
-   this pass draws.
+   so every unit body and every unit's hard-shadow silhouette comes from the
+   posed hand-over this pass draws (no posed unit casts into the cast-shadow
+   map: tagpu_posedraw.h).
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
    A PASS READS NO ENGINE STATE: every value comes from the gather's

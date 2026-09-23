@@ -183,7 +183,7 @@ static const unsigned char SSB_STOLEN[12] =
    runs" -- it does not:
 
      * `tagpu_native_frame` publishes on every frame it REACHES, including 0 on
-       each of the nine early returns and 0 whenever no painter reported one the
+       each of the seven early returns and 0 whenever no painter reported one the
        frame before (`s_ssSuppress`, tagpu_native.c);
      * terrown lowers `g_ssTerr` when it hands the ground back;
      * and the heartbeat below, for the frames the pass does not reach at all --
@@ -436,9 +436,8 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
         static int said = 0;
         if (!said && tagpu_posedraw_refused()) {
             said = 1;
-            olog2("owndraw: the posed unit program REFUSED to arm — the engine's "
-                  "own unit rasterise is NOT being skipped. On renderer=gdi that "
-                  "means units are drawn by the engine at 8bpp; on renderer=vulkan "
+            olog2("owndraw: the posed unit program REFUSED to arm. "
+                  "On renderer=gdi that means units are drawn by the engine at 8bpp; on renderer=vulkan "
                   "the engine's copy does not currently reach the presented frame, "
                   "so expect NO units rather than 8bpp ones. The posedraw: line "
                   "above says why the program refused.");
@@ -713,9 +712,11 @@ void tagpu_owndraw_init(void)
     }
     g_armed = a && c;
     if (g_armed) g_buildfx = install_buildfx();
-    /* structure shadows: only with "all" (every composite blank), and only
-       as a pair -- one path redirected and not the other would leave a
-       building's shadow depending on which composite it was given.
+    /* structure shadows: only with "all" -- `g_ssSkip` is one byte for every
+       building, so it may drop the engine's shadow only when the native pass
+       draws every building's -- and only as a pair: one path redirected and
+       not the other would leave a building's shadow depending on which
+       composite it was given.
        Installing the detour does NOT suppress anything: `g_ssSkip` decides,
        and it is 0 until the native pass says otherwise. */
     if (g_armed && g_all) {
