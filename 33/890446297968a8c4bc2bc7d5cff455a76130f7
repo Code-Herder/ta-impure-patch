@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high scope=3389044 (re-review of the anchor-mark fix) findings=2 acted=1 rejected=1 date=2026-09-24 — the burn and death marks (wording, 64445f2); the cross-peer note is not a defect (same-build peers agree)
