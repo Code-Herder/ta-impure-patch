@@ -43,7 +43,9 @@
    level the game thread can see is the one the render thread published on the
    previous frame, so sizing for the current level would leave the ring bare for
    a frame whenever the zoom eased outward; sizing for the whole range means no
-   step of any lever can outrun the grid.
+   change of level can outrun the grid. A step of the EYE can: the cursor
+   anchor moves the drawn eye ahead of the one the grid was built about, and
+   the render thread's fog bound (tagpu_zoom.c) holds it inside the grid.
 
    HANDING IT OVER — IT DOES NOT (frame packet exchange). The render thread
    holds no pointer into this module: the packet's publisher copies the grid

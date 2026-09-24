@@ -481,7 +481,11 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
 
 /* ---- the LOS gate, 0x4658E0: two projected footprint corners. The per-tile
    test is the same one the effects pass runs per projectile, so it is shared
-   rather than copied (both are the engine's LosType rule). ---- */
+   rather than copied (both are the engine's LosType rule). Its points reach
+   past the gathers' slab: the sweep's first row lies up to 15 px above it, a
+   cell's height lifts a point up to 127 px more, and a far corner lies up to
+   MAXFOOT cells past its row. The shared test samples such a corner at the
+   slab's nearest point (tagpu_fx_tile_visible). ---- */
 static int feat_visible(const TAGPU_FXVIEW* v, int col, int row, int fx, int fz, int th)
 {
     int hh = th >> 1;

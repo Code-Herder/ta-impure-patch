@@ -60,15 +60,13 @@
    sample at f = 0 in the last entry instead, on the corners the builder did
    write, so the region past the grid REPLICATES its edge — the same thing
    fogw_edge_fill does off the map, and what the engine's own single off-map
-   row already amounts to. It cannot change a picture whose fragments are all
-   inside the grid, and that is a bound and not a hope: the engine's grid is the
-   eye rounded to a half cell plus viewW/32 + 2 or 3 columns, and over that
-   arithmetic the viewport's right and bottom edges sit inside its last column
-   and row for EVERY viewport size the allocation accepts (64..16384) and every
-   eye — worst case one pixel, at a 64-px viewport with eye%32 == 15, and 16 px
-   for the negative eyes the camera's centre range produces. The wide grid
-   spans the gathers' whole slab, a TAGPU_GATHER_MARGIN past the view on each
-   side, for any eye the frame is drawn from (the fog bound, tagpu_zoom.c). */
+   row already amounts to. It decides a pixel only on a BARE frame (no wide
+   grid in the packet, counted by the native pass): on every other frame the
+   fog bound (tagpu_zoom.c) keeps every drawn fragment inside `[0, dim - 1]`
+   of the grid it samples — the engine's is taken only when the 1x rect about
+   the drawn eye lies in its fully written cells, and the wide one spans the
+   gathers' whole slab, a TAGPU_GATHER_MARGIN past the view on each side, for
+   any eye the frame is drawn from. */
 #define TAGPU_GLSL_FOG_UNIFORMS \
     "uniform sampler2D uFogGrid;\n"   /* RG8 corner masks, r = b0, g = b1  */ \
     "uniform sampler2D uFogLUT;\n"    /* 256x1 palette remap for the grey  */ \

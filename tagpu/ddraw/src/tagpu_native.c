@@ -300,6 +300,8 @@ static unsigned s_fogBare = 0;
    bound's witness (tagpu_zoom.c). The bare frames above, and nothing else
    outside a grid trimmed by a failed allocation. */
 static unsigned s_fogOut = 0;
+/* the grid the last frame actually sampled, for the heartbeat's `fog=` */
+static const char* s_fogSampled = "none";
 static const unsigned short* s_fogGrid = NULL;
 static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
 /* world origin of fog grid cell 0 on one axis: the builder's rounded eye>>5
@@ -2252,13 +2254,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            is the one that knows what it is about to draw, and it was made
            together with the eye it is drawn from (tagpu_zoom_wide_fog, the
            fog bound in tagpu_zoom.c): the engine's grid where it spans the
-           view — level >= 1, the packet's eye on the engine's own range, the
-           1x rect about the drawn eye inside its cells — and otherwise the
-           wide one, with the drawn eye clamped so this pass's whole gather
-           slab lies inside it. So every fog sample this frame takes, a drawn
-           pixel's or a gathered anchor's, is inside the grid it reads, for any
-           gesture and however far the game thread lags; the witness below
-           checks it on this pass's own numbers. */
+           view — level >= 1, the grid's own window at most one cell past the
+           map, the 1x rect about the drawn eye inside its fully written
+           cells — and otherwise the wide one, with the drawn eye clamped so
+           this pass's whole gather slab lies inside it. So every drawn
+           pixel's fog sample, and on the wide grid every gathered anchor's,
+           is inside the grid it reads, for any gesture and however far the
+           game thread lags; the witness below checks it on this pass's own
+           numbers. */
         const unsigned short* buf = tagpu_pk_fog(pk);
         int cols = pk->fog_cols, rows = pk->fog_rows;
         int orgX = pk->fog_org[0], orgY = pk->fog_org[1];
@@ -2288,9 +2291,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             int m = wide ? TAGPU_GATHER_MARGIN : 0;
             int x0 = eyeX + (evpL - vpL) - m, x1 = eyeX + (evpL - vpL) + evw + m;
             int y0 = eyeY + (evpT - vpT) - m, y1 = eyeY + (evpT - vpT) + evh + m;
-            int hx = orgX + 32 * (wide ? cols - 1 : cols);
-            int hy = orgY + 32 * (wide ? rows - 1 : rows);
+            int hx = orgX + 32 * (cols - 1), hy = orgY + 32 * (rows - 1);
             if (x0 < orgX || x1 > hx || y0 < orgY || y1 > hy) s_fogOut++;
+            s_fogSampled = wide ? "wide" : "engine";
+        } else {
+            s_fogSampled = "none";
         }
         if (buf && cols > 0 && rows > 0) {
             /* The statics below are what `tagpu_terr_render`'s hand-over
@@ -2401,8 +2406,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         float ax = fx - (float)eyeX + (float)vpL;
         float ay = fy - fz * 0.5f - (float)eyeY + (float)vpT;
+        /* THE SLAB TEST, on the drawn anchor AND on the point the fog gate
+           below samples: the sub-pixel anchor trails the unit's position by
+           up to a sim step (spx_sample), and the fog bound keeps only the
+           slab inside the wide grid (tagpu_zoom.c). */
+        int sx = wx - eyeX + vpL, sy = wy - wz / 2 - eyeY + vpT;
         if (ax < evpL - TAGPU_GATHER_MARGIN || ax > evpL + evw + TAGPU_GATHER_MARGIN ||
-            ay < evpT - TAGPU_GATHER_MARGIN || ay > evpT + evh + TAGPU_GATHER_MARGIN)
+            ay < evpT - TAGPU_GATHER_MARGIN || ay > evpT + evh + TAGPU_GATHER_MARGIN ||
+            sx < evpL - TAGPU_GATHER_MARGIN || sx > evpL + evw + TAGPU_GATHER_MARGIN ||
+            sy < evpT - TAGPU_GATHER_MARGIN || sy > evpT + evh + TAGPU_GATHER_MARGIN)
             continue;
         int owner = pu->owner;
         int cloaked = (pu->cloak & 4) != 0;
@@ -3094,16 +3106,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        was drawn, which is the only thing this pass decides. */
     if ((f->frame_counter % 300) == 0) {
         char hb[320];
-        unsigned held; int heldMax;
-        tagpu_zoom_fog_held(&held, &heldMax);
+        unsigned held, paused, back; int heldMax;
+        tagpu_zoom_fog_held(&held, &heldMax, &paused, &back);
         _snprintf(hb, sizeof hb,
                   "native: vulkan lane handed over frame %u: terr=%d feat=%d "
                   "fx=%d mark=%d units=%d posed=%d sel=%d/%d selcache=%d full=%u "
-                  "fog=%s bare=%u out=%u held=%u/%dpx",
+                  "fog=%s bare=%u out=%u held=%u/%dpx paused=%u back=%u",
                   f->frame_counter, nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd,
                   nselDrawn, nsel, s_nsbox, s_sboxFull,
-                  tagpu_zoom_wide_fog() ? "wide" : "engine", s_fogBare, s_fogOut,
-                  held, heldMax);
+                  s_fogSampled, s_fogBare, s_fogOut, held, heldMax, paused, back);
         hb[sizeof hb - 1] = 0;
         nlog(hb);
     }

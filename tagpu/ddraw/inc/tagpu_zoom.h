@@ -122,11 +122,14 @@ void  tagpu_zoom_init(void);
    delta against the packet's eye and the camera range the packet's map and
    viewport describe, and the PREDICTED eye for this frame — the packet's eye
    plus every delta the game thread has not acknowledged yet — is what
-   tagpu_zoom_predicted_eye() answers until the next call. */
+   tagpu_zoom_predicted_eye() answers until the next call. The level returned
+   is the lever's, or the last frame's where the fog bound would otherwise
+   draw the view against the gesture (tagpu_zoom.c, predict). */
 float tagpu_zoom_read_lever(const struct TAGPU_PACKET* pk);
 
 /* The level tagpu_zoom_read_lever() settled on this frame (the file's or the
-   wheel's), whether or not a zoomed world is on screen. */
+   wheel's, or the last frame's where the fog bound held it), whether or not a
+   zoomed world is on screen. */
 float tagpu_zoom_lever(void);
 
 /* The eye every pass draws this frame from: the packet's eye plus the cursor
@@ -138,15 +141,17 @@ float tagpu_zoom_lever(void);
    alone — when there is no in-game packet: then there is no world to draw. */
 int   tagpu_zoom_predicted_eye(int* eyeX, int* eyeY);
 
-/* 1 when this frame samples the WIDE fog grid (tagpu_fogwide) rather than the
-   engine's, decided with the predicted eye by tagpu_zoom_read_lever(). The
-   engine's is taken only where it spans this frame's view: the level this
-   frame draws with (tagpu_zoom_lever()) is at least 1, the packet's eye is on
-   the engine's own range (off it the engine places its border completions
-   off the map), and the 1x rect about the predicted eye lies in the grid's
-   cells — tested on the packet's own numbers. Otherwise the wide one, with
-   the predicted eye already clamped so the gathers' whole slab lies inside
-   it. Render thread. */
+/* 1 when this frame is to sample the WIDE fog grid (tagpu_fogwide) rather
+   than the engine's, decided with the predicted eye by
+   tagpu_zoom_read_lever(). The engine's is taken only where it spans this
+   frame's view: the level this frame draws with (tagpu_zoom_lever()) is at
+   least 1, the grid's own window reaches no more than one cell past the map
+   (past that the engine places its border completions off the map), and the
+   1x rect about the predicted eye lies in the grid's fully written cells —
+   tested on the packet's own numbers. Otherwise the wide one, with the
+   predicted eye already clamped so the gathers' whole slab lies inside it.
+   A packet with no wide grid leaves the frame on the engine's grid whatever
+   this answers — the native pass counts that frame as bare. Render thread. */
 int   tagpu_zoom_wide_fog(void);
 
 /* The span a pass gathers over along one axis, for the 1x viewport's extent
@@ -157,10 +162,13 @@ int   tagpu_zoom_wide_fog(void);
    clamps the predicted eye with it. One expression for all three. */
 int   tagpu_zoom_gather_span(int v, float z);
 
-/* The fog bound's cost: frames whose predicted eye it held back, and the
-   largest hold in world px along either axis, since the DLL loaded. For the
-   native pass's heartbeat. Render thread. */
-void  tagpu_zoom_fog_held(unsigned* frames, int* maxPx);
+/* The fog bound's cost since the DLL loaded: frames whose predicted eye it
+   held back and the largest hold in world px along either axis; frames it
+   drew at the last frame's level so the view would not move against the
+   gesture (`paused`); and frames that moved against it anyway because the
+   grid's own eye had (`back`, the monotone rule's witness). For the native
+   pass's heartbeat. Render thread. */
+void  tagpu_zoom_fog_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back);
 
 /* A mouse message on its way into the engine, offered to the wheel first.
    Returns 1 when the wheel took it — the caller must then NOT pass it on.
@@ -233,22 +241,24 @@ float tagpu_zoom_min(void);
    0x41CE90 are both called before the draw call at 0x4969CD, and both can
    be skipped — the stepper when the sim is paused, both under an in-game
    GUI screen) and before the draw's first read of the eye at 0x468DD9; no
-   store to the eye exists inside DrawGameScreen before that read (the
-   scenario camera's comes after the world draw, at the flip), so nothing
-   moves the camera between the apply and the read. In order: the level it carries becomes
+   store to the eye exists inside DrawGameScreen, so nothing moves the camera
+   between the apply and the read. In order: the level it carries becomes
    the level every game-thread reader here uses (the minimap rect's scale,
    the scroll rate); the camera range is chosen — the centre range when
    `terr`, the render thread's terrain request that the publisher latches
    for this same draw right after, else the engine's own; a NEW record of the
    current epoch has its eye delta applied — the follow released first when
-   the record asks, then the eye and its scroll target stepped together; the
+   the record asks, then the eye and its scroll target stepped together; a
+   scenario camera handed over since the last apply is written; the
    hold, when on, is clamped into the range and written when it differs; the
    range is applied to the eye and the target every draw, which is what walks
    the eye into the engine's own range before a draw whose ground is the
-   engine's; a camera that moved gets the minimap's view box recomputed and
-   the screen fog grid invalidated — bit 3 of main+0x14281 cleared, exactly as
-   every engine eye writer clears it, which is safe HERE and nowhere else; and
-   ScrollSpeed is driven at base/z. `ta` is validated by the caller. */
+   engine's; a camera that moved gets what every engine eye writer gives it —
+   the minimap's view box recomputed, bit 1 of main+0x142F1 set (the
+   minimap's dirty flag) and bit 3 of main+0x14281 cleared (the screen fog
+   grid's is-current flag), both safe HERE, on the game thread, and nowhere
+   else; and ScrollSpeed is driven at base/z. `ta` is validated by the
+   caller. */
 void  tagpu_zoom_apply(char* ta, const struct TAGPU_CMD* c, int terr);
 
 /* GAME THREAD, from the level teardown (the packet publisher's level end):
@@ -262,11 +272,17 @@ void  tagpu_zoom_apply(char* ta, const struct TAGPU_CMD* c, int terr);
 void  tagpu_zoom_level_end(char* ta);
 
 /* GAME THREAD: put the camera at (x, y) from outside the apply — the scenario
-   camera. Clamped into the range in force (this draw's, or the engine's own
-   when it cannot be computed), eye and scroll target written together, the
-   minimap's view box recomputed and bit 3 of main+0x14281 cleared, as every
-   engine eye writer does. The eye actually written goes to outX, outY.
-   Returns 0, writing nothing, when main is not sane. */
+   camera. Clamped into the range in force (the last apply's, or the engine's
+   own when it cannot be computed) and handed to the NEXT apply, which writes
+   it at the top of the next in-play draw, before that draw builds its fog
+   grids, with what every engine eye writer owes: the scroll target with the
+   eye, then (as `tagpu_zoom_apply` does for any camera it moved) the view
+   box, the minimap's dirty bit and the fog flag. Every engine writer sets
+   bit 1 of main+0x142F1 before calling `0x41C3C0`, which itself only clamps
+   the eye and recomputes the view box through `0x466B70`. Written here only
+   when no apply runs (the packet publisher count-only). The eye to be
+   written goes to outX, outY. Returns 0, writing nothing, when main is not
+   sane. */
 int   tagpu_zoom_place_eye(char* ta, int x, int y, int* outX, int* outY);
 
 /* GAME THREAD: what the apply has done so far, for the packet's

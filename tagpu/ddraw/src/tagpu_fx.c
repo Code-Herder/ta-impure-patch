@@ -59,6 +59,7 @@
 #include "tagpu_packet.h"
 #include "tagpu_native.h"   /* tagpu_native_foglut/scissor_on, for the hand-over */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
+#include "tagpu_zoom.h"     /* TAGPU_GATHER_MARGIN: the slab the fog gate samples in */
 #include "tagpu_log.h"
 
 
@@ -545,16 +546,20 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
        sits past the edge over dark ground, popping sprites in as you scroll.
 
        THE SHADERS DO NOT CLAMP THE SAME WAY: taFog clamps to `uFogDim - 1.0`,
-       one whole cell short, because the last column of any grid never has its right
-       corners written and interpolating toward them reads as NO FOG. The band
-       `gx in [cols-1, cols)` here has that same hazard and is left alone
-       deliberately: with the WIDE grid the fog bound on the drawn eye
-       (tagpu_zoom.c) keeps the gathers' whole slab inside `[0, cols - 1]`,
-       so no anchor they accept can be sampled there; with the ENGINE's grid at
-       zoom >= 1 an anchor 1..32 px past the viewport edge does land in it, and
-       both answers available there — the interpolation's and the off-grid
-       `return 0` a tighter bound would give — are the same "no fog", so
-       tightening it would change nothing but the argument. */
+       one whole cell short, because the last column of any grid never has its
+       right corners written. The band `gx in [cols-1, cols)` here interpolates
+       toward those unwritten corners, which read as no fog. With the WIDE grid
+       no caller samples there: every caller samples inside the gathers' slab
+       — the unit and wreck gathers test the point they sample against it, and
+       tagpu_fx_tile_visible clamps the feature, effect and particle gates'
+       points into it — and the fog bound on the drawn eye (tagpu_zoom.c) keeps
+       that slab inside `[0, cols - 1]`. With the ENGINE's grid, taken only at
+       zoom >= 1 with the view inside `[0, cols - 1]`, the band lies past the
+       view's right and bottom edges, and an off-screen anchor within 32 px of
+       them is sampled there: its answer, interpolated toward corners nobody
+       wrote, decides only whether an anchor off the screen is posed. The
+       engine's grid holds no truer answer for it — its builder never read
+       those cells. */
     if (gx < 0.0f || gy < 0.0f ||
         gx >= (float)cols || gy >= (float)rows) return 0;
     int cx = (int)gx, cy = (int)gy;
@@ -573,7 +578,21 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
    the builder only writes the grey mask in true-LOS mode. */
 int tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
 {
+    /* THE POINT IS SAMPLED INSIDE THE GATHERS' SLAB — the effective rect plus
+       TAGPU_GATHER_MARGIN about the drawn eye, the rect the fog bound keeps
+       inside the wide grid's written cells (tagpu_zoom.c). The feature sweep
+       starts 16 rows above the effective rect and tests a footprint's far
+       corner up to 16 cells past its row, and the effect and particle tables
+       carry every effect on the map, so their points can lie past it; such a
+       point is 256 world px or more outside everything drawn, and is answered
+       from the nearest point of the slab. */
+    int x0 = v->eyeX + (v->evpL - v->vpL) - TAGPU_GATHER_MARGIN;
+    int y0 = v->eyeY + (v->evpT - v->vpT) - TAGPU_GATHER_MARGIN;
     if (!(v->fogMode & 1) || !v->fogGrid) return 1;
+    if (wx < x0) wx = x0;
+    else if (wx > x0 + v->evw + 2 * TAGPU_GATHER_MARGIN) wx = x0 + v->evw + 2 * TAGPU_GATHER_MARGIN;
+    if (wzp < y0) wzp = y0;
+    else if (wzp > y0 + v->evh + 2 * TAGPU_GATHER_MARGIN) wzp = y0 + v->evh + 2 * TAGPU_GATHER_MARGIN;
     return tagpu_fog_at(v->fogGrid, v->fogCols, v->fogRows, v->fogCells,
                         v->fogOrgX, v->fogOrgY, wx, wzp) == 0;
 }

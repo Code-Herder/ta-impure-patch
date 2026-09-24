@@ -606,12 +606,13 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     anchor_rect(p, &c0, &r0, &cols, &rows);
     p->anch_c0 = c0; p->anch_r0 = r0; p->anch_cols = cols; p->anch_rows = rows;
 
-    /* the piece-cull rect, in world px: the widest viewport about the eye plus
-       the 256-px slack the unit gather already allows itself */
+    /* the piece-cull rect, in world px: the span the gathers reach at the
+       zoom floor about the eye, plus the slack they allow themselves each way
+       — the same rect fogw_window builds the wide fog grid over */
     {
         int vw = p->vp[2], vh = p->vp[3];
-        int ew = (int)((float)vw / TAGPU_ZOOM_MIN) + 64 + 512;
-        int eh = (int)((float)vh / TAGPU_ZOOM_MIN) + 64 + 512;
+        int ew = tagpu_zoom_gather_span(vw, TAGPU_ZOOM_MIN) + 2 * TAGPU_GATHER_MARGIN;
+        int eh = tagpu_zoom_gather_span(vh, TAGPU_ZOOM_MIN) + 2 * TAGPU_GATHER_MARGIN;
         inL = p->eye[0] - (ew - vw) / 2;
         inT = p->eye[1] - (eh - vh) / 2;
         inR = inL + ew;
@@ -2102,9 +2103,8 @@ static int __cdecl before_draw(void* entry_esp)
        inside DrawGameScreen (whose extent is 0x468CF0..0x46A3FD; the tail past
        0x46A200 is status icons, the clock, the GUI blit, the profiler bars,
        the options tab, the cursor and the flip, and none of them stores the
-       eye) — the one store of ours inside it is the scenario camera, from the
-       flip observer at 0x46A3DB, after the world draw's reads
-       (tagpu_zoom_place_eye) — so a delta applied here composes
+       eye), and none of ours either: the scenario camera is handed to this
+       apply (tagpu_zoom_place_eye) — so a delta applied here composes
        with the engine's own camera move and the draw that follows reads the
        commanded eye; its fog rebuild and its minimap box see it too. The
        latest record is taken and every part of it applied by the module that
