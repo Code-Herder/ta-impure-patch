@@ -1505,8 +1505,9 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    step is pre-clamped here against the same camera range the game thread
    applies, computed from the packet's copy of the same two fields, so what is
    posted is what will be accepted; the one case the game thread refuses more —
-   the engine scrolled the eye to the edge between the two — is reconciled by
-   the packet like any other engine camera move.
+   the engine scrolled the eye to the edge between the two — is clamped there
+   and reconciled by the packet like any other engine camera move, and the
+   pre-clamp never posts a pull-back of its own for it (step_axis).
 
    TWO PROPERTIES FALL OUT OF THE DELTA FORM, and the tests lean on both.
    With the pointer at the viewport centre `a - c` is zero, so R stays exactly
@@ -1612,6 +1613,29 @@ static int anchor_allowed(void)
     return 0;
 }
 
+/* One axis of the anchor's step from the predicted position `p`, pre-clamped
+   into [lo, hi]; `*cut` says the clamp took some of it.
+   NEVER A PULL-BACK. A prediction already past the range carries a delta the
+   game thread is about to clamp — the engine's scroll poll moved the eye
+   under it, which is exactly the race the apply's clamp exists for — and
+   posting the difference as well would take the overshoot off twice, so the
+   eye would stop a step short of the edge. MEASURED 2026-09-23 (vpwide.on
+   without zoom.on, notches in below the centre while the pointer
+   edge-scrolled to the bottom stop): a +10 the apply clamped at the stop was
+   followed on the next draw by a posted -10, applied to an eye already at
+   the stop. So the bounds widen to include `p`: a step never moves the eye
+   further out than the range, and never back in on its own account. */
+static int step_axis(int p, int n, int lo, int hi, int* cut)
+{
+    int q   = p + n;
+    int top = hi > p ? hi : p;
+    int bot = lo < p ? lo : p;
+
+    if      (q > top) { q = top; *cut = 1; }
+    else if (q < bot) { q = bot; *cut = 1; }
+    return q;
+}
+
 /* Render thread, once a frame, from read_lever() and BEFORE any pass reads the
    eye, after wheel_level() has taken this frame's notches. `fromWheel` is false
    while the file lever is in force: it changes z with no gesture behind it and
@@ -1675,16 +1699,13 @@ static void anchor_step(int fromWheel, const TAGPU_PACKET* pk)
 
     /* the step, taken against the eye this frame is drawn from — the packet's
        plus what is already posted and unacknowledged — and pre-clamped into
-       the range PER AXIS. An axis the clamp cuts drops what the gesture still
-       owes on it, residual included, rather than banking it against the way
-       back out; the other axis carries on. */
+       the range PER AXIS (step_axis). An axis the clamp cuts drops what the
+       gesture still owes on it, residual included, rather than banking it
+       against the way back out; the other axis carries on. */
     px = pk->eye[0] + (s_cumX - pk->cmd_ack_dx);
     py = pk->eye[1] + (s_cumY - pk->cmd_ack_dy);
-    qx = px + nx; qy = py + ny;
-    if      (qx < loX) { qx = loX; cutX = 1; }
-    else if (qx > hiX) { qx = hiX; cutX = 1; }
-    if      (qy < loY) { qy = loY; cutY = 1; }
-    else if (qy > hiY) { qy = hiY; cutY = 1; }
+    qx = step_axis(px, nx, loX, hiX, &cutX);
+    qy = step_axis(py, ny, loY, hiY, &cutY);
     s_residX -= (float)nx;
     s_residY -= (float)ny;
     if (cutX) { s_remX = 0.0f; s_residX = 0.0f; }
