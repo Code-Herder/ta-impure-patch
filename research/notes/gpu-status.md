@@ -958,6 +958,24 @@ cycle at 0.5×, `bare` 15 — 14 frames with the terrain request still down, 13 
 new 1024x768 swapchain existed, and 1 on the request's round trip — then 0 for the rest of the
 level. Those frames draw the engine's own terrain and fog overlay.
 
+**A packet cut at a level's start was drawn with no fog.** MEASURED 2026-09-24 on `big-battle` at
+1920×1080 on Xvfb, a fresh instance with the play set and no input: one frame counted `bare` at
+the level's start, the first heartbeat reading `fog=engine bare=1` and the publisher `norec=0
+recodd=0`. A diagnostic build (not committed) logged it: frame 995, tick 42, level 0, a packet
+published with `truncated = 0xfc6d` — the font, units, pieces, anchors, shade, particle, light,
+both fog grids, fog shade and minimap all cut — because the scenario's units arrived and the fill
+outgrew the write slot's committed pages. The frame packet exchange published the cut fill and
+grew the slot for the next one, so the native pass drew that frame without its units and with no
+fog grid (`fog=none`): a wrong frame, not an empty one. It had nothing to do with the camera; any
+level whose tables outgrow the slots does it. The exchange now grows the slot and fills it again
+before publishing, and the fill reports its whole size (§2.16, the primitive), so no frame is
+published without the tables it asked for while the slot can grow. After, on the same run:
+`bare=0 out=0 back=0 nopieces=0`, `norec=0 recodd=0`, packet `trunc=0 refill=3 grow=15`. Two
+Continents, the fight / follow / hand-back run above: `bare`, `out`, `nopieces`, `norec` and
+`recodd` 0 at every stage, `back=0` on every heartbeat, `trunc=0 refill=3`. `big-battle` under
+`check` + `stress`, where every in-play draw publishes into one-page slots that must grow:
+`trunc=0 refill=12 grow=43 viol=0 pviol=0 crcbad=0`.
+
 **The minimap's dirty bit is set now, and the box never lagged.** Nine of the engine's eleven eye
 writers store the eye, set bit 1 of `main+0x142F1` (`orb $2`, e.g. `0x41C598`, `0x41D04D`), call
 `0x41C3C0` — which only clamps the eye and recomputes the view box through `0x466B70` — then copy
@@ -3056,10 +3074,16 @@ cell and takes what was there (`__atomic_exchange_n`, ACQ_REL — NOT mingw's `I
 whose contract is acquire-only), so the roles stay a permutation without a lock, provided the init
 made them one: explicit at DLL attach, `W=0, cell=1 (stale), READ=2, PREV=3`, because zeroed
 statics would put both threads on slot 0. `head_seq` stored before the fill, `tail_seq` after;
-the consumer latches the head at acquire and compares the tail at frame end. Slots are 16 MB of
+the consumer latches the head at acquire and compares the tail at frame end. Slots are 20 MB of
 address space each (`PK_RESERVE`, derived from the unit tables at the design point — §2.86), reserved once, committed as the high-water mark rises on the producer's own
-slot, never moved, never freed; a fill that does not fit truncates this frame and the next publish
-grows first. Neither side ever waits. Every violation is counted, logged rate-limited, never
+slot, never moved, never freed. A fill that does not fit is not published: the producer grows the
+slot it still holds and fills it again (`pkx_publish`), which the consumer cannot see because the
+slot is not exchanged until the tail is stored. The fill reports its whole size, the tables it
+could not place included (`s_fillShort` in `tagpu_packet_pub.c`), so one refill fits unless an
+input the render thread publishes changed in between; the loop is bounded because each pass grows
+the slot by at least a 64 KB grain and the reserve ends it. A frame is published cut only when the
+slot cannot grow to it, a failed commit or a fill past the reserve, and that is `trunc`. Neither
+side ever waits. Every violation is counted, logged rate-limited, never
 fatal: thread identity both sides (the render thread's restart across a display-mode change is
 recorded, not refused — ownership is by role), the permutation after every exchange, `head ==
 tail`, the structural bounds of every offset against the slot's committed size, a canary past the
@@ -3092,15 +3116,17 @@ under a new name plus a macro offset, an address assembled from split macros, an
 arrives at run time. It is a ratchet against the spellings in use, not a proof; a new spelling is
 a review matter.
 
-**Read it in `tagpu.log`.** `packet: ARMED 5 slots x 16 MB reserved, 127 KB committed each …` (the first 64 KB grain plus the
+**Read it in `tagpu.log`.** `packet: ARMED 5 slots x 20 MB reserved, 127 KB committed each …` (the first 64 KB grain plus the
 grain the canary's four bytes tip it into) and
 `packet: publisher ARMED on DrawGameScreen 0x468CF0 … level-end packet by … loader-thread observer
 at 0x497C70=1 …` at launch; then every 300 frames
-`packet: pub= skip= overrun= foreign= acq= taken= gap= grow= commitfail= trunc= viol= pviol=
-crcbad= nopkt= | pub/s= taken/s= pubus p50= p99= | seq= tick= tps= speed= paused= in_game= gen=
+`packet: pub= skip= overrun= foreign= acq= taken= gap= grow= commitfail= trunc= refill= viol=
+pviol= crcbad= nopkt= | pub/s= taken/s= pubus p50= p99= | seq= tick= tps= speed= paused= in_game= gen=
 flags= eye= vp= flips= font= fg= trunc= used= | draws= inplay= draws/s= inplay/s= foreign= deep=
 fontcopies=<copies>/<refused> levelend=reclaim|own|none`.
-`viol`, `pviol`, `crcbad`, `foreign` and `commitfail` must stay 0; `skip` is the fresh gate
+`viol`, `pviol`, `crcbad`, `foreign`, `commitfail` and `trunc` must stay 0; `refill` counts the
+fills done again after the slot grew under them (a few at a level's start, when the world tables
+first outgrow the slots); `skip` is the fresh gate
 working; `overrun`/`gap` are 0 in play **on a lane whose renderer takes packets**, and count
 under `stress`, across a level end, **or from the roster keepalive** — the vulkan-only plan's
 landing 10c-3 forces a fill when none has happened for 500 ms, so on `renderer=gdi`, where
@@ -3352,8 +3378,10 @@ one packet and **must read 0**, `pair` the frames that had a usable two-tick pai
 rotations that displaced READ because the tick had not moved. A `world:` segment at the very end
 carries the publisher's own: `u= p= w= a=<anchors>/<cells scanned> scan=<scans>/<reuses> dup=
 trunc=<units>/<pieces>/<wrecks>/<anchors> relbad= woob= shd=`. **`relbad` must stay 0** — it counts
-draws on which `end != begin + (count−1)·0x118`, the relation the note records — and so must every
-`trunc` past the first fill of each slot. **`woob` is the wreck-record index the bound refused**,
+draws on which `end != begin + (count−1)·0x118`, the relation the note records — and so must the
+units, wrecks and anchors `trunc` counts, which are the tables' own caps. The pieces count is the
+arena running out of the slot, in any fill, the ones the primitive then grew and filled again
+included, so it reads at most `refill` plus the packet's `trunc`. **`woob` is the wreck-record index the bound refused**,
 added by the landing review below; it is a monitor and not the safety argument, which is the
 engine's own 2048-record pool.
 
