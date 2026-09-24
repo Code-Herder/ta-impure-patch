@@ -224,7 +224,7 @@ game paused):
 
 | check | result |
 | --- | --- |
-| model pixels at 1×, Classic | `fx-rockets` 28 of 28, 18 of 18, 2 of 2, 15 of 15, 19 of 19 exact; `big-battle` 1292 of 1352, 487 of 492, 587 of 588, the others under a health bar or at a sprite's edge the engine draws later |
+| model pixels at 1×, Classic | `fx-rockets` 28 of 28, 18 of 18, 2 of 2, 15 of 15, 19 of 19, 20 of 20 exact; `big-battle` 1292 of 1352, 487 of 492, 587 of 588, 968 of 968, the others under a health bar or at a sprite's edge the engine draws later |
 | the band order, in the presented frame | where only a model has ink the frame shows it, 857 of 857; where a model and a sprite overlap, the frame shows whichever the engine painted last, 247 of 257 — the 10 others sit under a flash and take its additive RGB approximation of the engine's LHT remap |
 | Classic++ | the same pixels covered; the models take the restored unit art, 812 of 1192 pixels a new colour |
 | zoom 0.49× and 2.35× | every model where the world's own zoom transform puts it, within 0.15 px at 0.49× and under 1 px at 2.35× |
