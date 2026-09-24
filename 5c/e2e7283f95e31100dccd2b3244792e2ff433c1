@@ -1,0 +1,19 @@
+landing-review: model=opus effort=high range=main..5ce2e72 findings=10 acted=9 rejected=1 date=2026-09-23
+
+TADR port landing 1 (the effect pools). Two dedicated read-only Opus reviewers in
+parallel: A on the whole diff, B on the 43 patch sites against the pristine image.
+Both: no site wrong, byte for byte. Ten distinct findings (B's two duplicate A's),
+every one verified against the code and the disassembly before acting.
+
+Acted (fixed in 2ca4f23): the flying-piece ring changes behaviour below the stock
+caps (claims corrected); MAXNV/MAXMODEL raised a vertex path no lane reads
+(reverted); TAGPU_FX_MAXV is a size not a bound (comment + assert 6x(2P+E));
+swapped site names (draw/tick); the report misdescribed our own failures (stub
+vs table); docs cited unreachable 0x420E50/0x420920 and six draws (eight; live
+spawner 0x481140); the projectiles row said two append sites (ten); make clean
+left the other DLL. Documented and queued for tier 1: the explosion tick's
+quadratic compaction (PLAUSIBLE, performance only).
+
+Rejected: failing closed in a non-TA process that loads this ddraw.dll. By
+design, the DLL is built for TotalA.exe alone and the report names the exe it
+met; recorded in gpu-status 2.6b.
