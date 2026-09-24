@@ -1465,7 +1465,7 @@ def cmd_wheel(args):
     player, so a position is almost always what you want: without `--at` the
     notches land wherever the injected pointer happens to be, and if that is the
     side panel or a menu they do nothing at all (the game logs `zoom: wheel
-    ignored`). One notch is ~1.1x, geometric, eased over about six frames.
+    ignored`). One notch is ~1.1x, geometric, eased over thirteen presented frames.
     """
     inst = Instance(args.name)
     tokens = []

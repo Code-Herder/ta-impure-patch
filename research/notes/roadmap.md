@@ -2587,7 +2587,9 @@ deleted the last GL file, this removed the rest by the owner's ruling (no aliasi
 knows `auto`, `vulkan` and `gdi` only, the `*_glreset` cascade and every GL field and parameter
 are gone, `tacli glshot` is gone and its callers grab the window, and the release ini and README
 name Vulkan. [gpu-status](gpu-status.html) §2.85 has the list and the measurements. **Not covered:**
-~800 comment mentions of GL in the sources; `tascene ab`'s browser half draws no terrain.
+~800 comment mentions of GL in the sources. (`tascene ab`'s browser half drew no terrain; closed
+2026-09-23 on worktree-camera_zoom — the viewer feeds the instanced terrain shader,
+[tascene-design](tascene-design.html) *Gaps*.)
 
 **Landing 2 followed the same day**: the Classic++ restored atlases mirrored for three of the
 four world passes ([gpu-status](gpu-status.html) §2.36) — features **0 px**, effects **0 px**,
@@ -3687,6 +3689,26 @@ honestly and gave a reason that would expire (`keyOn` needs TA's surface, "until
 clean cut removed the thing the reason was about rather than supplying it — so the sentence stayed
 true-sounding and the feature stayed dead through every landing after it. **A stated gap needs the
 condition that closes it to be something a later landing will actually test.**
+
+## BAR's pan and zoom, and a full-colour Classic (G20)  [PLANNED 2026-09-23]
+
+The plan is [BAR camera & full-colour Classic](bar-camera-port.html). Both halves copy what the
+`tascene` lab already does (`worktree-camera_zoom`, its **BAR** button). The owner's decisions of
+2026-09-23 are listed at the foot of that note.
+
+- **Camera:** **the BAR camera replaces the game's camera.** There is one camera, and the old
+  rules and their escape hatch are stripped. That means BAR's centre clamp, zoom-out from the
+  centre, notch and ease. The mirrored map edge is an on/off setting, `edge`, which defaults to
+  `mirror`. TA's projection does not change.
+- **Renderer:** Classic becomes a preset of the Classic++ pipeline in full colour, and the world
+  passes lose their 8bpp path.
+
+| Gate | Status | Exit |
+|---|---|---|
+| G20a — the BAR camera replaces the old one: the centre clamp (with `0x41C4C0`/`0x41C7F7` replaced), zoom-out from the centre, BAR's notch and 250 ms ease; the window clamp, the log ease, `zoomedge.off` and the lab's `cam=game` deleted | ○ planned (track A, parallel with G20c) | at a pinned eye and level, 0 px from today for eyes inside the old range. The map corner at the view centre at 0.25×, 1× and 8×; one notch in logs 1.163 and lands in 240–260 ms; the zoom-to-cursor gate holds; the eye-reader audit closed with a bound for each reader |
+| G20b — the mirror: `edge` (`mirror` or `black`), off-map terrain cells and the map's own features, in the lab's tone | ○ planned (after G20c) | the off-map strip is the flipped on-map strip through the tone, and it A/Bs against the lab |
+| G20c — the base atlas and Classic onto the full-colour shaders (the plan's 2a + 2b) | ○ planned (track B) | Classic++ 0 px after the base atlas. The old and new Classic measured side by side, the new baseline recorded, and the owner has looked |
+| G20d — Gamma once at the end, and the 8bpp path deleted (2c + 2d) | ○ planned (track B) | 0 px at Gamma 12 in both presets; no repaint on a Gamma change; R8 atlases, SHD texture and fog table gone |
 
 ## The TADR port — raised ceilings (planned 2026-09-23)
 

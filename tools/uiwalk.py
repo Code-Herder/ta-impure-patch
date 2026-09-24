@@ -286,7 +286,7 @@ class Walk:
             return
         tmp.write_text(f"{float(level):.3f}\n")
         os.replace(tmp, path)
-        time.sleep(1.5)                  # the zoom eases over about six frames
+        time.sleep(1.5)                  # the zoom eases over thirteen presented frames
 
     def order_far(self, label):
         """Right-click ground far from the commander until it walks (a click on water is

@@ -66,9 +66,12 @@ static int  iround(float v);
    And it EASES rather than jumping. The per-frame re-read in read_lever()
    exists precisely so a ramp is smooth (see its comment), and a bare notch is a
    9% jump of the whole world — harsh to look at, and worse at speed. A quarter
-   of the remaining log-distance per frame settles in about six frames: fast
-   enough to feel direct, slow enough that the eye tracks the world through it.
-   Log-distance, not linear, so zooming in and out ease identically. */
+   of the remaining log-distance per frame covers four fifths of a notch in six
+   frames and lands on it (WHEEL_SNAP) in thirteen: fast enough to feel direct,
+   slow enough that the eye tracks the world through it. It steps once per
+   PRESENTED frame (tagpu_overlay.c), so its length in time follows the present
+   rate: 0.22 s at 60 Hz. Log-distance, not linear, so zooming in and out ease
+   identically. */
 #define WHEEL_STEP  1.1f      /* per notch, geometric              */
 #define WHEEL_EASE  0.25f     /* of the remaining log-distance, per frame */
 #define WHEEL_SNAP  0.0025f   /* log-distance at which the ease is done   */
