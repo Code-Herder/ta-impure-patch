@@ -430,9 +430,21 @@ instances were running on the GPU at the time):
 | +1 at `(1000,700)` from 2× | `(3030,3022)` | `(3029.68, 3022.12)` | `-> 2.326`, 264.7 ms |
 | +2 at `(300,650)` from 0.5× | `(2856,3139)` | `(2856.26, 3138.53)` | `-> 0.676`, 256.5 ms |
 | −3 at `(900,600)`, then −3 at `(200,100)`, from 1× | `(3000,3000)` both times | unchanged | `-> 0.675`, then `-> 0.456` |
+| +3 at `(900,600)`, then −1 at `(200,100)` inside its tween | `(3118,3078)` | `(3117.92, 3078.61)` — the +3's own displacement, whole | `-> 1.379` |
+| −3 at `(900,600)`, then +1 at `(200,100)` inside its tween | `(2922,2942)` | `(2922.01, 2941.09)` — the +1 anchored at `(200,100)` on the −3's target | `-> 0.785` |
+| +3 `(900,600)`, −1 `(200,100)`, +2 `(300,650)`, −2 `(1000,700)`, each inside the last's tween | `(3065,3129)`, `(3066,3129)` | `(3065.80, 3128.84)`; the lab `(3066,3129)` | `-> 1.435`; the lab `1.435` |
 
 The world point under the pointer moves by at most 0.47 world px across a notch in — the
-integer eye's rounding, which the residual carries into the next frame. The landing time is the
+integer eye's rounding, which the residual carries into the next frame. Over a gesture of several
+groups the carry can leave the eye up to one world px off the model (0.91 on the −3/+1 row).
+**The last three rows are the tween's cut**, each group one `tacli keys` batch (the injector
+takes one about every 240 ms, inside the 250 ms tween); a diagnostic build with the tween
+stretched to 2.5 s, so that every group lands deep inside the one before, ends on the same eyes
+and levels. A zoom-out that cuts a zoom-in's tween leaves the zoom-in's displacement whole and
+pulls back about the view centre, as BAR's does: the world point that was under `(900,600)` at
+the +3's target ends at `(860.2, 573.5)` on screen. The four-group row is the lab's own scripted
+sequence (`tascene-view.html`, one `WheelEvent` per notch, 0.1 s and 1 s between groups): lab and
+game end on the same eye and level. The landing time is the
 first presented frame at or after 250 ms: at the 60 fps cap every figure lies in
 `[250, 266.7)`, and **uncapped** (`--maxfps 0`, about 1600 frames a second, one other game
 instance still on the GPU) six single notches in landed **250.2–251.0 ms** after the notch. One
@@ -1045,6 +1057,19 @@ Continents: map 10752 × 12800, extent 10720 × 12672, `W = 896`, `H = 704`, so 
   (`at: [6336, 12192]`) come near one, and they reach it only in a window taller than 1024 px plus
   the ground's altitude there (stock HUD): at 1024x768 their eye is inside the range; at 1920x1080
   on level ground it stops 28 px higher.
+* **Without `zoom.on`, what the apply applied is clamped.** `vpwide.on`, `native.on=all` and
+  `mark.on`, no `zoom.on` and no `terr.on`, `selbox-facings`, and a diagnostic build that logs every
+  applied delta leaving the engine's range. 20 rounds: the eye held at `(3000, 11790..11849)` and
+  released, then one `tacli keys` batch of +3 notches at `(576,700)` followed by the pointer on
+  the bottom edge pixel, so the anchor's steps and the engine's edge scroll race to the stop
+  `extent − H = 11968`. Before the anchor's pre-clamp was made one-sided (`step_axis`), the log
+  held 17 applied deltas that would have left the eye 2–10 px past 11968; after it, 6. Every one
+  was clamped back on the same draw, every round ended with eye and target at `(3000, 11968)`, and
+  since `step_axis` no step posts a pull-back (a step against the gesture's own direction).
+* **The fog oracle** (`tagpu_fogwide_check.on`, 30×24 at 1024x768) reads `differ=0` at every eye:
+  `compared=720 … skipped=0` at `(3000,3000)`, and `compared=616 … skipped=104` at both the NW
+  corner `(−448,−352)` and the SE corner `(10304,12448)`, where two rows and two columns straddle
+  the map's edge (the engine map, "The four border completions").
 
 ### 2.3d The cursor, and where `u` is allowed to reach the engine (`zoom.on`, G13m)
 
