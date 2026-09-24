@@ -371,9 +371,13 @@ typedef struct {
 } RETIRE;
 static RETIRE s_ret;
 
-/* ---- AND A JOB'S OWN RESOURCES NEED THE SAME THING. Three of `job_free`'s
-   four callers are in a consumer's `prepare`, where the seam has waited on
-   THIS SLOT'S fence and no other. The other `slots - 1` submits are still in
+/* ---- AND A JOB'S OWN RESOURCES NEED THE SAME THING. Every consumer's call
+   of `job_free` but the one in its `down` is reached from its per-frame call
+   (`prepare`, the units' `upload`) -- `restore_want`, `refuse_job`, and the
+   drops of a twin or a source that moved (tagpu_vk_feat.c `twin_drop`,
+   tagpu_vk_unit.c `atlas_rgb_build`, tagpu_vk_terr.c's base atlas) -- and so
+   is `job_new`'s own failure path. There the seam has waited on THIS SLOT'S
+   fence and no other. The other `slots - 1` submits are still in
    the queue naming the job's objects: the OUT render pass names `dstFb`, its
    descriptor set is `setOut[i]`, and FILL samples `palView`. Destroying them
    outright on a map change or a repaint within `slots - 1` frames
@@ -386,18 +390,19 @@ static RETIRE s_ret;
    callers -- `down` flushes these unconditionally because the seam has drained
    the device above it, so nothing here depends on which caller knew what.
 
-   THE RING IS SIZED AT THE WORST CASE ITS CALLERS CAN PRODUCE, which is what
-   makes it a bound rather than a guess. A consumer frees at most one job per
-   frame -- the serial it keys on moves at most once per frame -- there are at
-   most `TAGPU_R_MAXJOBS` consumers, and an entry is given back after `slots`
-   frames, so no more than `TAGPU_R_MAXJOBS x TAGPU_VK_SLOTS` can be
-   outstanding at once even if every consumer churned its serial on every
-   frame. At 80-odd bytes an entry that is under 4 KB, so there is no reason to
-   be clever about it.
-   The full case is therefore unreachable, and it is still handled rather than
-   asserted: the device is DRAINED and every entry freed immediately. A stall
-   on a frame is honest; a destroy nobody has licensed is the bug this whole
-   structure exists to prevent. */
+   THE RING HOLDS ONE FREE PER CONSUMER PER FRAME, AND A FULL RING DRAINS. A
+   consumer holds one job and makes at most one a frame, so it frees one in a
+   frame -- when the serial it keys on moves, or what the job reads or paints
+   goes -- and two only when the job made to replace it is refused on the way
+   (`job_new`'s own failure path, the unit twin's chain). There are at most
+   `TAGPU_R_MAXJOBS` consumers and an entry is given back after `slots`
+   frames, so `TAGPU_R_MAXJOBS x TAGPU_VK_SLOTS` entries hold every consumer
+   churning its serial on every frame. At 80-odd bytes an entry that is under
+   4 KB, so there is no reason to be clever about it.
+   Only those refusals, repeated frame after frame, can fill it, and the full
+   case is handled rather than asserted: the device is DRAINED and every entry
+   freed immediately. A stall on a frame is honest; a destroy nobody has
+   licensed is the bug this whole structure exists to prevent. */
 typedef struct {
     VkFramebuffer   fb[1 + TAGPU_VK_MAXMIP];
     int             nfb;
