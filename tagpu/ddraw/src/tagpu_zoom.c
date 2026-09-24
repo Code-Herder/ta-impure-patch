@@ -594,6 +594,16 @@ static void apply_scroll_rate(char* ta)
      the latch, and the level end drops both together (and walks the eye
      home).
 
+     WHAT THAT COSTS, BY DESIGN: whenever our terrain pass hands the ground
+     back — its 90-frame watchdog, a `key=` change, the passive or over
+     modes, a gather that bails or draws no cell, the pass disarmed — the
+     next apply takes the engine's range and walks an eye that was past
+     `[0, map - W]` inward, by up to W/2 (H/2), on that draw. And it stays
+     there when the ground comes back: the range is a clamp, not a memory,
+     so a view that had the map's edge at its centre shows it W/2 world px
+     nearer its own edge (on it, at 1x) until the player scrolls back. The level
+     end does the same.
+
      EVERY CLAMP FAILS CLOSED. Where the range in force cannot be computed
      (a main pointer outside the sanity window, a zero viewport or map), each
      one clamps to the engine's own `[0, map - W]` from the engine's own words

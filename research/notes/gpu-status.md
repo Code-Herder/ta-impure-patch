@@ -922,6 +922,13 @@ handed (`terr || the rect is still wide`). So:
   on **every draw that applied a delta or a hold**: the wheel and its anchor need only the
   mouse→world repair, which `vpwide.on` installs alone, and a delta applied after the engine's
   scroll poll had already clamped the frame would otherwise reach `0x483FA0` past `map − H`.
+* **handing the ground back moves the eye inward, and it stays there** — the by-design cost of
+  the bound. Whenever our terrain pass gives the ground back to the engine (its 90-frame watchdog,
+  a `key=` change, the passive or over modes, a gather that bails or draws no cell, the pass
+  disarmed), the next apply takes the engine's range and walks an eye past `[0, map − W]` inward
+  by up to `W/2` (`H/2`) on that draw. When the ground comes back the eye does not return: the
+  range is a clamp, not a memory, so a view that had the map's edge at its centre shows it `W/2` world
+  px nearer its own edge (on it, at 1×) until the player scrolls back. The level end does the same.
 * **every clamp fails closed.** Where the range in force cannot be computed (a main pointer
   outside the sanity window, a zero viewport or map), the eye clamp, the target-clamp stubs, the
   apply and the level end all clamp to the engine's own `[0, map − W]` from the engine's own words
