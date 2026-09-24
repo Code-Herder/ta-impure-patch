@@ -92,7 +92,6 @@
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
 #include "tagpu_pal.h"
-#include "tagpu_classicpp.h" /* tagpu_classicpp_index: which grey the band takes */
 #include "tagpu_vk.h"      /* tagpu_vk_ab_arm, for the A/B claim */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables */
 #include "tagpu_log.h"
@@ -339,17 +338,10 @@ static const char* FS =
     "    pi = int(texture(uLayer, vUV).r * 255.0 + 0.5);\n"
     "    if (pi == uKey) discard;\n"
     "  }\n"
-    /* THE GREY BAND: the RGB rule every world pass takes (renderers.md 2.6)
-       -- or, with uFog bit 4 set (tagpu_classicpp_index), the engine's remap
-       of the index through the fog LUT before the palette fetch. SFS below
-       carries the same lines. */
-    "  if ((uFog & 4) == 4) {\n"
-    TAGPU_GLSL_FOG_SHADE("pi")
-    "  }\n"
+    /* THE GREY BAND: the RGB rule every world pass takes (renderers.md 2.6).
+       SFS below carries the same lines. */
     "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
-    "  if ((uFog & 4) == 0) {\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
-    "  }\n"
     "  frag = vec4(rgb, 1.0);\n"
     "}\n";
 /* ---- THE SELECTION RECT'S PROGRAM: the engine's own line, pixel for pixel ----
@@ -442,13 +434,8 @@ static const char* SFS =
     TAGPU_GLSL_FOG_DISCARD
     "  int pi = int(vCol * 255.0 + 0.5);\n"
     /* the grey band exactly as FS takes it */
-    "  if ((uFog & 4) == 4) {\n"
-    TAGPU_GLSL_FOG_SHADE("pi")
-    "  }\n"
     "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
-    "  if ((uFog & 4) == 0) {\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
-    "  }\n"
     "  frag = vec4(rgb, 1.0);\n"
     "}\n";
 #pragma GCC diagnostic pop
@@ -1197,9 +1184,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         s_mkPub.pal = tagpu_pal_engine(); s_mkPub.palSerial = tagpu_pal_engine_serial();
         s_mkPub.fogGrid = (v->fogMode & 1) ? v->fogGrid : NULL;
         s_mkPub.fogGridCols = v->fogCols; s_mkPub.fogGridRows = v->fogRows;
-        s_mkPub.fogLut = tagpu_native_foglut();
         s_mkPub.key = tagpu_markown_key();
-        s_mkPub.index = tagpu_classicpp_index();
         s_mkPub.gw = (float)v->gw; s_mkPub.gh = (float)v->gh;
         s_mkPub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
         s_mkPub.zoomCx = v->zoomCx; s_mkPub.zoomCy = v->zoomCy;

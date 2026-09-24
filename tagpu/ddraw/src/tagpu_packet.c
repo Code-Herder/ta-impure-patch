@@ -579,9 +579,6 @@ static const char* frame_valid(const void* rec)
             !area_ok(p, p->fogw_off, p->fogw_len))
             return "wide fog grid area";
     }
-    if (p->fogsh_len && (p->fogsh_len != TAGPU_PK_FOGSHADE_BYTES ||
-                         !area_ok(p, p->fogsh_off, p->fogsh_len)))
-        return "fog shade area";
     /* THE UI's TWO MINIMAP AREAS, bounded the same way the fog grids
        are: the length has to be exactly what the dimensions describe, so the
        largest index a consumer can form is inside the bytes it was handed. */

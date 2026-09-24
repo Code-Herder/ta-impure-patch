@@ -57,7 +57,7 @@
 #include "tagpu_gaf.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_packet.h"
-#include "tagpu_native.h"   /* tagpu_native_foglut/scissor_on, for the hand-over */
+#include "tagpu_native.h"   /* tagpu_native_scissor_on, for the hand-over */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
 #include "tagpu_log.h"
 
@@ -243,16 +243,15 @@ static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld; in float vEnc;\n"
     "out vec4 frag;\n"
-    "uniform sampler2D uAtlas;\n"
-    "uniform sampler2D uPal;\n"
+    "uniform sampler2D uPal;\n"              /* the engine's table: mode 0's colour */
     "uniform sampler2D uLht;\n"              /* 32x1 RGB additive per level  */
     "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin */
     "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_SCAF_UNIFORMS
-    /* the base atlas: the same texels expanded through the palette, alpha 0 at
-       the key (tagpu_vk_fx.c). Last, so the samplers above keep their
-       bindings. */
+    /* the base atlas: the same texels expanded through the engine's table,
+       alpha 0 at the frame's key and 255 - the flash level elsewhere
+       (tagpu_fx.h TAGPU_FX_FLASH_ALPHA, tagpu_vk_fx.c) */
     "uniform sampler2D uBase;\n"
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
@@ -264,23 +263,24 @@ static const char* FS =
     /* effects are transient: the engine's own passes are LOS-gated, so they
        vanish in grey rather than darkening (uFog bit1 is set for this pass) */
     TAGPU_GLSL_FOG_DISCARD
+    /* mode 0 is a flat colour, and the vertex carries its palette index */
     "  if (mode == 0) {\n"
     "    rgb = texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb;\n"
     "  } else {\n"
-    "    float idx = texture(uAtlas, vUV).r;\n"
-    "    vec3 base = texture(uBase, vUV).rgb;\n"
-    "    if (abs(idx - vCM.x) < 0.5/255.0) discard;\n"
-    "    int ii = int(idx*255.0+0.5);\n"
+    /* colour-keyed: the base's alpha is 0 exactly where the frame's index is
+       its key (NEAREST, the texel the index was) */
+    "    vec4 b = texture(uBase, vUV);\n"
+    "    if (b.a < 0.5) discard;\n"
     "    if (mode == 3) {\n"
-    "      int lv = clamp(ii - 79, 0, 31);\n"
+    "      int lv = 255 - int(b.a * 255.0 + 0.5);\n"
     "      rgb = texelFetch(uLht, ivec2(lv, 0), 0).rgb;\n"
     "    } else {\n"
-    /* Classic++: the twin's colour where the lazy restore has painted it
-       (alpha 1 -- tagpu_gaf.h), the base atlas's otherwise; the flash mode
-       above keeps its index-driven light table. Effects hide in grey, so no
-       RGB fog rule is needed here */
+    /* the twin's colour where the lazy restore has painted it (alpha 1 --
+       tagpu_gaf.h), the base atlas's otherwise; the flash mode above keeps
+       its level-driven light table. Effects hide in grey, so no RGB fog rule
+       is needed here */
     "      vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "      rgb = t.a > 0.5 ? t.rgb : (uRestored == 1 ? base : texelFetch(uPal, ivec2(ii, 0), 0).rgb);\n"
+    "      rgb = t.a > 0.5 ? t.rgb : b.rgb;\n"
     "      if (mode == 2) a = 0.5;\n"
     "    }\n"
     "  }\n"
@@ -959,7 +959,6 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
        NOTHING -- the copy can fail, and the port would sample a 1x1 image while
        uFogDim carried the real size. */
     fogBad = ((s_pub.fog & 1) && !s_pub.fogGrid);
-    s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
        pass decides it (tagpu_native.c `s_scissorOn`). */

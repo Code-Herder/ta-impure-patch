@@ -73,21 +73,23 @@ typedef struct TAGPU_FEATHAND {
     float depthScale;
 
     /* The fragment stage's. `restored` is the Classic++ restored-colour
-       branch, `lit` the full-colour path both presets take (0 only under
-       tagpu_classicpp_index); `fog` is the engine's overlay bit. */
-    int   restored, lit, fog;
+       branch; `fog` is the engine's overlay bit. */
+    int   restored, fog;
     float fogOrgX, fogOrgY, fogCols, fogRows;
 
     /* The texels, as CPU-side bytes. Each carries the serial that says when
-       it last changed, so the Vulkan pass re-uploads on a change and not per
+       it last changed, so the Vulkan pass re-sends on a change and not per
        frame. */
-    const unsigned char*  atlas;      /* dim x dim R8, tagpu_gaf.c's mirror  */
+    const unsigned char*  atlas;      /* dim x dim palette indices,
+                                         tagpu_gaf.c's mirror: the source the
+                                         Vulkan pass expands its base atlas
+                                         from (tagpu_pal_expand)             */
     int                   atlasDim;
     /* THE ROWS IN USE, which is what a second backend needs to upload and is
        usually a quarter of the page. The shelf packer never places a cell
        below `shelfY + shelfH`, so every texel any of these vertices can name
-       is above this line -- and uploading 4 MB when 1 is live is a cost paid
-       every time a feature frame is added to the atlas. */
+       is above this line -- and expanding and sending 16 MB when 4 are live is
+       a cost paid every time the whole page has to go. */
     int                   atlasRows;
     unsigned              atlasSerial;
     /* THE BASE ATLAS'S TWO OTHER INPUTS, beside the indices: the key plane
@@ -126,7 +128,6 @@ typedef struct TAGPU_FEATHAND {
     unsigned              palSerial;  /* tagpu_pal_engine_serial()           */
     const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
     int                   fogGridCols, fogGridRows;
-    const unsigned char*  fogLut;     /* 256 x R8, tagpu_native_foglut()     */
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame -- the engine's own viewport rect.

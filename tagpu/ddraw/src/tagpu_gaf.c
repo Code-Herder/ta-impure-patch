@@ -46,7 +46,8 @@ static int cell_up(const TAGPU_GAFATLAS* a, int v)
 /* ---- the published restore list (tagpu_gaf.h `rlist`) ------------------ */
 
 /* The frame the restorer is asked for, from the entry that was just painted:
-   the R8 atlas is the source, the twin the destination, same rect, the border
+   the atlas is the source -- its RGBA base for a world pass, the R8 itself for
+   the UI (tagpu_vk_restore.h) -- the twin the destination, same rect, the border
    -- and the cell's alignment slack past it -- painted as a copy of the edge,
    as atlas_paint painted them. 0 when this frame is below the model's floor
    and is never restored at all.

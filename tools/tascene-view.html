@@ -1349,14 +1349,12 @@ async function main() {
   tex2D(gl, 1, gl.RGBA8, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, palBuf);
   // fog is off in the parity fixture, but the samplers must still be bound
   tex2D(gl, 2, gl.RG8, 1, 1, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array([0, 0]));
-  tex2D(gl, 3, gl.R8, 256, 1, gl.RED, gl.UNSIGNED_BYTE,
-        Uint8Array.from({ length: 256 }, (_, i) => i));
   const DUMMY = new Uint8Array([0, 0, 0, 0]);
   const rgbaTex = (unit, buf, w, h) =>
     tex2D(gl, unit, gl.RGBA8, buf ? w : 1, buf ? h : 1, gl.RGBA, gl.UNSIGNED_BYTE,
           buf || DUMMY);
-  // CLASSIC IS tagpu's FULL-COLOUR BRANCH with assets=0 light=0 (uLit 1,
-  // uRestored 0, uLambert 0), so it samples what the game's Classic samples:
+  // CLASSIC IS tagpu's ONE FULL-COLOUR PATH with assets=0 light=0
+  // (uRestored 0, uLambert 0), so it samples what the game's Classic samples:
   // the BASE ATLAS -- every index expanded to its palette colour, alpha 0 at a
   // sprite frame's own key, the game's tagpu_pal_expand over its key plane.
   // `rects` are the frames with their keys, `pad` the replicated border each
@@ -1497,9 +1495,9 @@ async function main() {
     gl.vertexAttribDivisor(1, 1);
     gl.bindVertexArray(null);
     U = uniforms(gl, terrProg, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
-                                "uAtlas", "uPal", "uFogGrid", "uFogLUT", "uFogOrg",
+                                "uPal", "uFogGrid", "uFogOrg",
                                 "uFogDim", "uFog", "uOrigin", "uTile0", "uTexel",
-                                "uLit", "uLambert", "uRestored", "uBase", "uHDim",
+                                "uLambert", "uRestored", "uBase", "uHDim",
                                 "uShadowOn"]);
     nameShadowUnits(gl, terrProg);
     tex2D(gl, 16, gl.RGBA8, map.atlas.w, map.atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
@@ -1599,9 +1597,8 @@ async function main() {
       }
       gl.bindVertexArray(null);
       SU = uniforms(gl, sprProg, ["uGame", "uZoom", "uZoomC", "uDepthScale",
-                                  "uAtlas", "uPal", "uFogGrid", "uFogLUT",
-                                  "uFogOrg", "uFogDim", "uFog",
-                                  "uLit", "uRestored", "uBase"]);
+                                  "uFogGrid", "uFogOrg", "uFogDim", "uFog",
+                                  "uRestored", "uBase"]);
       const rects = [];
       for (const d of Object.values(scene.features.defs))
         for (const r of [d.body, d.shadow]) if (r) rects.push({ ...r, key: r.ck });
@@ -1674,7 +1671,6 @@ async function main() {
   if (hasUnit) {
     tex2D(gl, 6, gl.R8, scene.units.atlas.w, scene.units.atlas.h,
           gl.RED, gl.UNSIGNED_BYTE, unitAtlas);
-    tex2D(gl, 7, gl.R8, 256, scene.palette.shdRows, gl.RED, gl.UNSIGNED_BYTE, shdBuf);
     unitRGBTex = rgbaTex(10, unitRGB, scene.units.atlas.w, scene.units.atlas.h);
     if (unitRGB && unitPad >= 4) {
       // levels 0..log2(pad) are bleed-free by construction; never go deeper
@@ -1696,11 +1692,11 @@ async function main() {
     if (wantUnitClassic) {
       uProg = program(gl, unitVS, unitFS, "unit");
       UU = uniforms(gl, uProg, ["uGame", "uOffset", "uZoom", "uZoomC", "uDepthScale",
-                                "uAtlas", "uLUT", "uPal", "uShadow", "uAlpha",
+                                "uPal", "uShadow", "uAlpha",
                                 "uWaterT", "uWaterMode", "uDigT",
                                 "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF",
-                                "uZoomCF", "uFogGrid", "uFogLUT", "uFogOrg",
-                                "uFogDim", "uFog", "uLit", "uLambert", "uRestored",
+                                "uZoomCF", "uFogGrid", "uFogOrg",
+                                "uFogDim", "uFog", "uLambert", "uRestored",
                                 "uBase", "uShadeK", "uSun", "uAmb", "uNorm",
                                 "uShadowOn"]);
       nameShadowUnits(gl, uProg);
@@ -2463,11 +2459,10 @@ async function main() {
       gl.uniform1f(SU.uZoom, zoom);
       gl.uniform2f(SU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
       gl.uniform1f(SU.uDepthScale, scene.depth.scale);
-      gl.uniform1i(SU.uAtlas, 5); gl.uniform1i(SU.uPal, 1);
-      gl.uniform1i(SU.uFogGrid, 2); gl.uniform1i(SU.uFogLUT, 3);
+      gl.uniform1i(SU.uFogGrid, 2);
       gl.uniform2f(SU.uFogOrg, 0, 0); gl.uniform2f(SU.uFogDim, 1, 1);
       gl.uniform1i(SU.uFog, 0);
-      gl.uniform1i(SU.uLit, 1); gl.uniform1i(SU.uRestored, 0);
+      gl.uniform1i(SU.uRestored, 0);
       gl.uniform1i(SU.uBase, 17);
       // aLam, the anchor's ground lambert, is not in the parity vertex: the
       // generic value stands in, and light=0 bakes exactly 1.0 there
@@ -2693,7 +2688,7 @@ async function main() {
     gl.uniform1f(UU.uZoom, zoom);
     gl.uniform2f(UU.uZoomC, ZOOM_C[0], ZOOM_C[1]);
     gl.uniform1f(UU.uDepthScale, scene.depth.scale);
-    gl.uniform1i(UU.uAtlas, 6); gl.uniform1i(UU.uLUT, 7); gl.uniform1i(UU.uPal, 1);
+    gl.uniform1i(UU.uPal, 1);
     gl.uniform1i(UU.uShadow, 0); gl.uniform1f(UU.uAlpha, 1.0);
     // the water/dig tests are `vVY <= threshold`; -1e9 disables both
     gl.uniform1f(UU.uWaterT, -1e9); gl.uniform1i(UU.uWaterMode, 0);
@@ -2702,12 +2697,12 @@ async function main() {
     gl.uniform4f(UU.uScafP, vpL, vpT, vw, vh);
     gl.uniform1f(UU.uSS, SS); gl.uniform1f(UU.uZoomF, zoom);
     gl.uniform2f(UU.uZoomCF, ZOOM_C[0], ZOOM_C[1]);
-    gl.uniform1i(UU.uFogGrid, 2); gl.uniform1i(UU.uFogLUT, 3);
+    gl.uniform1i(UU.uFogGrid, 2);
     gl.uniform2f(UU.uFogOrg, 0, 0); gl.uniform2f(UU.uFogDim, 1, 1);
     gl.uniform1i(UU.uFog, 0);
-    // the full-colour branch with light=0: the base, the face-shade
-    // multiplier, and a lambert that is exactly 1.0 (ambient 1, no shadow)
-    gl.uniform1i(UU.uLit, 1); gl.uniform1i(UU.uLambert, 0);
+    // light=0: the base, the face-shade multiplier, and a lambert that is
+    // exactly 1.0 (ambient 1, no shadow)
+    gl.uniform1i(UU.uLambert, 0);
     gl.uniform1i(UU.uRestored, 0); gl.uniform1i(UU.uBase, 18);
     gl.uniform1i(UU.uShadeK, 19);
     gl.uniform3f(UU.uSun, 0, 1, 0); gl.uniform1f(UU.uAmb, 1); gl.uniform1f(UU.uNorm, 1);
@@ -2853,12 +2848,12 @@ async function main() {
         gl.uniform2f(U.uZoomC, ZOOM_C[0], ZOOM_C[1]);
         gl.uniform1f(U.uDepthScale, scene.depth.scale);
         gl.uniform1f(U.uEnc, scene.depth.terrain);
-        gl.uniform1i(U.uAtlas, 0); gl.uniform1i(U.uPal, 1);
-        gl.uniform1i(U.uFogGrid, 2); gl.uniform1i(U.uFogLUT, 3);
+        gl.uniform1i(U.uPal, 1);
+        gl.uniform1i(U.uFogGrid, 2);
         gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
         gl.uniform1i(U.uFog, 0);
-        // the full-colour branch, unlit: no height grid, so no lambert term
-        gl.uniform1i(U.uLit, 1); gl.uniform1i(U.uLambert, 0);
+        // unlit: no height grid, so no lambert term
+        gl.uniform1i(U.uLambert, 0);
         gl.uniform1i(U.uRestored, 0); gl.uniform1i(U.uBase, 16);
         gl.uniform2f(U.uHDim, 0, 0); gl.uniform1i(U.uShadowOn, 0);
         gl.bindVertexArray(terrVAO);

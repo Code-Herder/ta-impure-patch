@@ -30,9 +30,9 @@
        shell.
 
    RENDER THREAD ONLY, every entry point: they resolve into a shared snapshot,
-   so a call from the game thread would race it. tagpu_order.c's seq_ink is the
-   one reader left on the engine's table directly, and its walk being on the
-   game thread is why.
+   so a call from the game thread would race it. tagpu_order.c's seq_ink reads
+   the packet's `pal[]` itself -- the same unscaled table tagpu_pal_engine
+   returns, taken from the packet the order walk already holds.
 
    The engine's table and the gamma factor arrive in the PACKET (`pal[]`,
    `gamma`, copied on the game thread by the publisher) and this module reads
@@ -85,10 +85,15 @@ float tagpu_pal_gamma(void);
 /* THE BASE ATLAS'S TEXELS: a rectangle of an index plane expanded through
    `pal` (256 x R,G,B,x) into tight RGBA8 rows at `dst` (w*h*4 bytes). `key`
    is the atlas's key plane (tagpu_gaf.h `keym`: 0 at a keyed texel) and gives
-   the alpha -- 0 with RGB 0 at a key, 255 elsewhere; NULL means nothing is
-   keyed (the terrain). `pitch` is both planes' row length. Pure, any thread:
-   it reads the three inputs and writes `dst`. */
+   the alpha -- 0 with RGB 0 at a key; NULL means nothing is keyed (the
+   terrain). An art texel's alpha is `alpha[index]`, or 255 when `alpha` is
+   NULL: the effects pass carries its flash level there (tagpu_fx.h
+   TAGPU_FX_FLASH_ALPHA), and every reader of a base atlas takes alpha < 0.5
+   as the hole and nothing else, so any table whose entries are all >= 128
+   keeps that test exact. `pitch` is both planes' row length. Pure, any
+   thread: it reads the inputs and writes `dst`. */
 void tagpu_pal_expand(unsigned char* dst, const unsigned char* idx, const unsigned char* key,
-                      int pitch, int x0, int y0, int w, int h, const unsigned char* pal);
+                      int pitch, int x0, int y0, int w, int h, const unsigned char* pal,
+                      const unsigned char* alpha);
 
 #endif

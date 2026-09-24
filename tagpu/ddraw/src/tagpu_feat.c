@@ -327,7 +327,12 @@ static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec3 aPos;\n"
     "layout(location=1) in vec2 aUV;\n"
-    "layout(location=2) in vec2 aCM;\n"       /* colour key /255, mode        */
+    "layout(location=2) in vec2 aCM;\n"       /* colour key /255, mode: the
+                                                   fragment stage reads the mode
+                                                   and takes the hole from the
+                                                   base atlas's alpha, which
+                                                   tagpu_gaf.c keys against this
+                                                   same key */
     "layout(location=3) in vec2 aWorld;\n"
     "layout(location=4) in float aLam;\n"   /* Classic++: the ground's lambert */
     "uniform vec2 uGame;\n"
@@ -345,44 +350,35 @@ static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld; flat in float vLam;\n"
     "out vec4 frag;\n"
-    "uniform sampler2D uAtlas;\n"
-    "uniform sampler2D uPal;\n"
     "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the atlas's restored twin */
     "uniform int uRestored;\n"         /* 1 = sample it where its alpha says so */
-    "uniform int uLit;\n"              /* 1 = Classic++: lit, RGB fog rule     */
     TAGPU_GLSL_FOG_UNIFORMS
-    /* the base atlas: the same texels expanded through the palette, alpha 0 at
-       the key (tagpu_vk_feat.c). Last, so the samplers above keep their
-       bindings. */
+    /* the base atlas: the same texels expanded through the engine's table,
+       alpha 0 at the frame's key (tagpu_vk_feat.c) */
     "uniform sampler2D uBase;\n"
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
     /* features are terrain furniture: the engine draws them under the fog
-       overlay, so they stay visible in grey and are merely shade-remapped */
+       overlay, so they stay visible in grey */
     TAGPU_GLSL_FOG_DISCARD
-    "  float idx = texture(uAtlas, vUV).r;\n"
-    "  vec3 base = texture(uBase, vUV).rgb;\n"
+    "  vec4 b = texture(uBase, vUV);\n"
     /* colour-keyed: the key texel is a hole, and discarding keeps it out of
-       the depth buffer too — a tree occludes only where it has pixels */
-    "  if (abs(idx - vCM.x) < 0.5/255.0) discard;\n"
+       the depth buffer too -- a tree occludes only where it has pixels. The
+       base's alpha is 0 exactly where the frame's index is its key (NEAREST,
+       the texel the index was) */
+    "  if (b.a < 0.5) discard;\n"
     "  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;\n"
-    /* Classic++ (uLit): the twin's colour where the lazy restore has painted
-       it (alpha 1 -- tagpu_gaf.h), the base atlas's for a frame not yet
-       restored, times the GROUND's lambert at the anchor (a billboard has no
-       normal of its own; the lab's lambertAt -- a tree on a shaded slope sits
-       in the shade rather than on top of it), then the grey band as the RGB
-       rule (renderers.md 2.6). The hole stays the index test above. */
-    "  if (uLit == 1) {\n"
-    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "    vec3 c = t.a > 0.5 ? t.rgb : base;\n"
-    "    c *= vLam;\n"
+    /* the twin's colour where the lazy restore has painted it (alpha 1 --
+       tagpu_gaf.h), the base atlas's otherwise -- always, under Classic --
+       times the GROUND's lambert at the anchor (a billboard has no normal of
+       its own; the lab's lambertAt -- a tree on a shaded slope sits in the
+       shade rather than on top of it; 1.0 under `light=0`), then the grey band
+       as the RGB rule (renderers.md 2.6). Premultiplied. */
+    "  vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "  vec3 c = t.a > 0.5 ? t.rgb : b.rgb;\n"
+    "  c *= vLam;\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
-    "    frag = vec4(c * a, a); return;\n"
-    "  }\n"
-    "  int pi = int(idx*255.0+0.5);\n"
-    TAGPU_GLSL_FOG_SHADE("pi")
-    "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
-    "  frag = vec4(rgb * a, a);\n"           /* premultiplied               */
+    "  frag = vec4(c * a, a);\n"
     "}\n";
 #pragma GCC diagnostic pop
 
@@ -503,7 +499,6 @@ typedef struct {
 } FEATC;
 static FEATC s_c;
 static int s_logged;
-static int s_cpp;                       /* the full-colour branch this frame (uLit), both presets */
 static int s_lit;                       /* light= this frame: anchors take the ground's light    */
 
 /* Classic++: the ground's lambert at an anchor -- the lab's lambertAt(col,
@@ -697,7 +692,6 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
        arm set, not a gate the defaults depend on. */
     s_ownable = tagpu_native_wrecks_armed();
     s_mute = s_passive || !s_ownable;
-    s_cpp = !tagpu_classicpp_index();
     s_lit = tagpu_classicpp_lit();
 
     {   /* LIVE, once per frame: see the header */
@@ -931,7 +925,6 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     /* THE ROUTE IS THE PUBLISHED LIST: `rlistWant` is what says a restore
        route exists; it is latched by the arm. */
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
-    s_pub.lit = s_cpp ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
@@ -975,7 +968,6 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
        uFogDim carried the real size. Refused the way the restored atlas already
        is; tagpu_terr.c has the argument in full. */
     fogBad = (s_pub.fog && !s_pub.fogGrid);
-    s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
        pass's own decision (tagpu_native.c `s_scissorOn`). A pass that clipped

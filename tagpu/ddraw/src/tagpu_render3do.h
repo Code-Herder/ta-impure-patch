@@ -20,11 +20,11 @@ void tagpu_r3d_atlas_frame(void);
    when the level changes, because the atlas keys on frame addresses the next
    level's loader may reuse. */
 void tagpu_r3d_atlas_level(unsigned level_gen);
-/* Build the shade LUT and its CPU mirror, once. `shd` is the
+/* Build the face-shade calibration and its multipliers, once. `shd` is the
    frame packet's copy of the engine's PALETTE.SHD table (tagpu_pk_shd), or
    NULL to use our own computed ramp — this module does not read the graphics
    globals itself. */
-void tagpu_r3d_lut_want(const unsigned char* shd);
+void tagpu_r3d_shade_want(const unsigned char* shd);
 int tagpu_r3d_shade_neutral(void);
 int tagpu_r3d_shade_dir(void);
 int tagpu_r3d_atlas_uv(const char* gafframe, float uv[4], float* ck);
@@ -42,12 +42,12 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
 
 /* ---- THE VULKAN LANE'S TEXELS (Phase G, the unit pass) ------------------
 
-   The unit fragment shader samples the unit atlas and the shade LUT, and
-   both exist on this side only as CPU bytes, which the Vulkan unit pass
-   uploads. The atlas takes tagpu_gaf.h's mechanism unchanged -- the mirror is
-   written by atlas_paint, and asking for one marks every painted entry for
-   repaint so that it is correct from the instant it exists. The LUT is 8 KB
-   and is simply kept.
+   The unit fragment shader samples the unit atlas's base expansion and the
+   face-shade multipliers, and both exist on this side only as CPU bytes, which
+   the Vulkan unit pass expands and uploads. The atlas takes tagpu_gaf.h's
+   mechanism unchanged -- the mirror is written by atlas_paint, and asking for
+   one marks every painted entry for repaint so that it is correct from the
+   instant it exists. The multipliers are 32 floats and are simply kept.
 
    `_want` is idempotent and costs nothing until it is called. `_mirror`
    returns NULL while there is none, which a pass treats as "stand down this
@@ -75,12 +75,9 @@ void tagpu_r3d_atlas_restore_want(void);
    back. NULL until the list is armed and has entries. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
                                                       int* mips, float* aniso);
-/* 256 x 32 R8, the bytes `shade_upload` last stored. The serial
-   moves when the table is rebuilt -- which happens once, and again the first
-   time the engine's own PALETTE.SHD arrives after a frame with none. */
-const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial);
 /* The face-shade multiplier, 32 floats indexed by the SHD row a face takes,
-   or NULL until the LUT beside it is built -- tagpu_render3do.c's
-   `s_shadeK` says how it is fitted. */
+   or NULL until the calibration is built -- tagpu_render3do.c's `s_shadeK`
+   says how it is fitted. Rebuilt once, and again the first time the engine's
+   own PALETTE.SHD arrives after a frame with none. */
 const float* tagpu_r3d_shade_k(void);
 #endif

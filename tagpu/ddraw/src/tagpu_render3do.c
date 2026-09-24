@@ -1,6 +1,6 @@
 /* tagpu_render3do.c — the material layer the native and posed passes share:
-   the unit texture atlas, the shade LUT and its calibration, the face
-   material helpers, and the build-state staging formulas. */
+   the unit texture atlas, the face-shade calibration and its multipliers, the
+   face material helpers, and the build-state staging formulas. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -27,27 +27,27 @@ static void rlog(const char* s)
 
 
 static int    s_state = 0;         /* 0=unloaded 1=ready 2=failed */
-static int    s_lutBuilt = 0;
-/* 1 when the LUT that is up came from the ENGINE's own PALETTE.SHD rather than
-   our computed ramp. Without it a single frame that arrived with no table —
-   the first fill of a slot truncates until the slot has grown, so this is
-   reachable at startup — would latch the fallback for the whole session and
-   every unit would be shaded by the wrong ramp, quietly. */
-static int    s_lutFromShd = 0;
+static int    s_shadeBuilt = 0;
+/* 1 when the calibration that is up came from the ENGINE's own PALETTE.SHD
+   rather than our computed ramp. Without it a single frame that arrived with
+   no table — the first fill of a slot truncates until the slot has grown, so
+   this is reachable at startup — would latch the fallback for the whole
+   session and every unit would be shaded by the wrong ramp, quietly. */
+static int    s_shadeFromShd = 0;
 
-/* ---- 8bpp texture atlas: the unit textures' GAF frames as palette indices
-   in an R8 texture, NEAREST-sampled => the FBO stays index-exact. It is a
-   TAGPU_GAFATLAS (tagpu_gaf.c), the same shelf atlas the feature and
-   effects passes use, with the unit layout renderers.md 2.5 decided: every
-   frame in a cell with a 4-texel replicated border, 4-aligned, so the
-   Classic++ twin can be mipmapped to level 2 without one frame bleeding into
-   the next (tagpu_gaf.h `pad`/`align`/`mip`). The entry's u0..v1 are still
-   the frame's OWN texels, edge-mapped (TA maps quad corners to texture
+/* ---- the unit texture atlas: the unit textures' GAF frames as palette
+   indices, which the Vulkan unit pass expands into its RGBA8 base atlas and
+   samples NEAREST. It is a TAGPU_GAFATLAS (tagpu_gaf.c), the same shelf atlas
+   the feature and effects passes use, with the unit layout renderers.md 2.5
+   decided: every frame in a cell with a 4-texel replicated border, 4-aligned,
+   so the Classic++ twin can be mipmapped to level 2 without one frame bleeding
+   into the next (tagpu_gaf.h `pad`/`align`/`mip`). The entry's u0..v1 are
+   still the frame's OWN texels, edge-mapped (TA maps quad corners to texture
    edges; a centre inset shifts every interior sample half a texel and flips
    ~50% of NEAREST lookups on noisy textures), so Classic's samples never
-   reach the border and its pixels do not move. Recycled when full, at the
-   start of a frame (tagpu_r3d_atlas_frame), never between an emit and its
-   draw. 2048^2 holds ~1,400 median cells (32x64 frames become 40x72). ---- */
+   reach the border. Recycled when full, at the start of a frame
+   (tagpu_r3d_atlas_frame), never between an emit and its draw. 2048^2 holds
+   ~1,400 median cells (32x64 frames become 40x72). ---- */
 #define ATLAS_DIM  2048
 #define ATLAS_MAX  2048
 #define ATLAS_PAD  4                      /* tools/tascene UNIT_PAD          */
@@ -67,28 +67,23 @@ static const TAGPU_GAFENT* atlas_get(const char* g)
     return tagpu_gaf_atlas_get(&s_atlas, f);
 }
 
-/* ---- per-face directional shading: palette-aware shade LUT ----
-   The composite stays 8bpp, so "lighting" = remapping each palette index to
-   the palette's nearest entry to rgb*factor. 32 brightness rows, factor
-   0.60 + 0.025*row => row 16 is EXACT 1.0 and forced to identity (shade off
-   and shade-neutral are bit-identical to the unshaded renderer). Candidate
-   indices 2..254 only — never emit reserved 0/1(ColorKey)/255. Built once
-   from the live in-game palette. */
+/* ---- per-face directional shading: the engine's 32 shade rows ----
+   The vertex stage chooses a row per face, `neutral + dir * round(12 * N.SH_L)`
+   clamped to 0..31 (tagpu_posedraw.c), the way the engine's rasteriser picks a
+   PALETTE.SHD row; `s_shNeutral` and `s_shDir` are that table's calibration.
+   Without the engine's table the rows are our own ramp, factor 0.60 +
+   0.025*row, so row 16 is EXACT 1.0. */
 #define SH_ROWS    32
 #define SH_NEUTRAL 16
-static int s_shNeutral = SH_NEUTRAL;   /* LUT row that is identity/neutral      */
+static int s_shNeutral = SH_NEUTRAL;   /* the row that leaves a colour as it is */
 static int s_shDir     = 1;            /* +1 = higher row is brighter           */
-/* THE LUT'S CPU MIRROR (Phase G). 8 KB, built once per context and again
-   when the engine's own table first arrives, so it is simply kept rather
-   than put behind a latch. */
-static unsigned char s_lutMirror[SH_ROWS * 256];
-static unsigned      s_lutSerial;
 
 /* THE FACE-SHADE MULTIPLIER (bar-camera-port.md 2.2): a shade row in full
-   colour. The row a face takes is chosen exactly as for the LUT; the fragment
-   then multiplies its RGB by k[row] and clamps, in both presets, instead of
-   remapping an index. For each row, k is the least-squares slope through the
-   origin of the shaded colour against the unshaded one, over every palette
+   colour. The fragment multiplies its RGB by k[row] and clamps, in both
+   presets; the engine remaps the index through the row instead, and the
+   multiplier is the full-colour fit of that remap. For each row, k is the
+   least-squares slope through the origin of the shaded colour against the
+   unshaded one, over every palette
    entry and channel the row does not clip, normalised so the neutral row is
    exactly 1.0.
 
@@ -140,20 +135,12 @@ static void shade_k_build(const unsigned char* shd, const unsigned char* pal)
     rlog(b);
 }
 
-static void shade_upload(const unsigned char* lut)
-{
-    /* `s_lutMirror` is what the Vulkan unit pass samples. */
-    memcpy(s_lutMirror, lut, sizeof s_lutMirror);
-    s_lutSerial++;
-    s_lutBuilt = 1;
-}
-static void shade_build_lut(const unsigned char* shd)
+static void shade_build(const unsigned char* shd)
 {
     /* the ENGINE'S table (tagpu_pal.h), the one every world colour is built
        from: a snapshot we own, so this reads no engine memory at all */
     const unsigned char* pal = tagpu_pal_engine();
-    static unsigned char lut[SH_ROWS * 256];
-    int r, i, c;
+    int r, i;
     if (!pal) return;
 
     /* Prefer the ENGINE's own 32x256 shade table (PALETTE.SHD, built at init —
@@ -162,58 +149,36 @@ static void shade_build_lut(const unsigned char* shd)
        thread, so the render thread never dereferences the graphics globals
        for it. Calibrate rather than assume: neutral = the row with
        the most identity entries, direction from end-row luminance. Fall back
-       to our computed LUT when the packet carried none. */
-    {
-        if (shd) {
-            int bestr = -1, bestn = -1;
-            for (r = 0; r < SH_ROWS; r++) {
-                int n = 0;
-                for (i = 0; i < 256; i++) n += (shd[r*256 + i] == i);
-                if (n > bestn) { bestn = n; bestr = r; }
-            }
-            long lum0 = 0, lum31 = 0;
-            for (i = 0; i < 256; i++) {
-                const unsigned char* c0 = pal + (size_t)shd[0*256 + i]  * 4;
-                const unsigned char* c1 = pal + (size_t)shd[31*256 + i] * 4;
-                lum0  += c0[0] + c0[1] + c0[2];
-                lum31 += c1[0] + c1[1] + c1[2];
-            }
-            s_shNeutral = bestr;
-            s_shDir     = (lum31 >= lum0) ? 1 : -1;
-            shade_upload(shd);
-            s_lutFromShd = 1;
-            shade_k_build(shd, pal);
-            { char b[96]; _snprintf(b, sizeof b,
-                "r3d shade: engine SHD table (neutral=%d id=%d/256 dir=%d)",
-                s_shNeutral, bestn, s_shDir); rlog(b); }
-            return;
+       to our computed ramp when the packet carried none. */
+    if (shd) {
+        int bestr = -1, bestn = -1;
+        long lum0 = 0, lum31 = 0;
+        for (r = 0; r < SH_ROWS; r++) {
+            int n = 0;
+            for (i = 0; i < 256; i++) n += (shd[r*256 + i] == i);
+            if (n > bestn) { bestn = n; bestr = r; }
         }
-    }
-    for (r = 0; r < SH_ROWS; r++) {
-        float f = 0.60f + 0.025f * r;
         for (i = 0; i < 256; i++) {
-            if (r == SH_NEUTRAL || i <= 1 || i == 255) {
-                lut[r * 256 + i] = (unsigned char)i;
-                continue;
-            }
-            int tr = (int)(pal[i*4+0] * f + 0.5f); if (tr > 255) tr = 255;
-            int tg = (int)(pal[i*4+1] * f + 0.5f); if (tg > 255) tg = 255;
-            int tb = (int)(pal[i*4+2] * f + 0.5f); if (tb > 255) tb = 255;
-            int best = i, bestd = 0x7FFFFFFF;
-            for (c = 2; c <= 254; c++) {
-                int dr = pal[c*4+0] - tr, dg = pal[c*4+1] - tg, db = pal[c*4+2] - tb;
-                int d = dr*dr + dg*dg + db*db;
-                if (d < bestd) { bestd = d; best = c; }
-            }
-            lut[r * 256 + i] = (unsigned char)best;
+            const unsigned char* c0 = pal + (size_t)shd[0*256 + i]  * 4;
+            const unsigned char* c1 = pal + (size_t)shd[31*256 + i] * 4;
+            lum0  += c0[0] + c0[1] + c0[2];
+            lum31 += c1[0] + c1[1] + c1[2];
         }
+        s_shNeutral = bestr;
+        s_shDir     = (lum31 >= lum0) ? 1 : -1;
+        s_shadeFromShd = 1;
+        s_shadeBuilt = 1;
+        shade_k_build(shd, pal);
+        { char b[96]; _snprintf(b, sizeof b,
+            "r3d shade: engine SHD table (neutral=%d id=%d/256 dir=%d)",
+            s_shNeutral, bestn, s_shDir); rlog(b); }
+        return;
     }
     s_shNeutral = SH_NEUTRAL; s_shDir = 1;
-    s_lutFromShd = 0;
-    shade_upload(lut);
+    s_shadeFromShd = 0;
+    s_shadeBuilt = 1;
     shade_k_build(NULL, NULL);
-    /* only reachable with shd == NULL: the SHD branch above returns */
-    rlog("r3d shade: computed palette LUT (32 rows, row 16 identity) — no shade table in "
+    rlog("r3d shade: computed ramp (32 rows, row 16 exactly 1.0) — no shade table in "
          "the packet yet; it is rebuilt from the engine's own the first frame one arrives");
 }
 
@@ -276,12 +241,11 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
     return 1;
 }
 
-/* The two objects the passes share: the unit texture atlas and the shade
-   LUT. */
+/* The two things the passes share: the unit texture atlas and the shade
+   calibration. */
 static void r3d_init(void)
 {
-    /* 8bpp index atlas (R8, NEAREST both ways: sampled texel == palette
-       index), laid out now, before the unit pass's first lookup */
+    /* the index atlas, laid out now, before the unit pass's first lookup */
     tagpu_gaf_atlas_lost(&s_atlas);
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "unit";
@@ -291,12 +255,11 @@ static void r3d_init(void)
     s_atlas.pad = ATLAS_PAD; s_atlas.align = ATLAS_PAD; s_atlas.mip = ATLAS_MIP;
     if (!tagpu_gaf_atlas_create(&s_atlas)) { rlog("render3do: atlas texture FAILED"); s_state = 2; return; }
 
-    /* the shade LUT is built lazily from the packet's table on first use
-       (tagpu_r3d_lut_want). The atlas above is laid out whether or not a
+    /* the shade calibration is built lazily from the packet's table on first
+       use (tagpu_r3d_shade_want). The atlas above is laid out whether or not a
        Vulkan pass will consume it (its existence is `made`, tagpu_gaf.h) and
-       `s_state = 1` means "the atlas
-       and the shade LUT are ready", which is what `tagpu_r3d_ensure` answers
-       for the unit pass. */
+       `s_state = 1` means "the atlas is ready and the shade calibration may be
+       built", which is what `tagpu_r3d_ensure` answers for the unit pass. */
     s_state = 1;
     /* THE MIRROR IS ASKED FOR HERE, BEFORE THE FIRST PAINT, and that ordering is
        the whole of it. A mirror allocated after the atlas has filled only marks
@@ -315,7 +278,7 @@ static void r3d_init(void)
     paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
     "a Vulkan pass will run in this process", which is the question. */
     if (tagpu_vk_owns_present()) tagpu_r3d_atlas_mirror_want();
-    rlog("render3do: ready (unit atlas + shade LUT; the write-back path is gone)");
+    rlog("render3do: ready (unit atlas + shade calibration)");
 }
 
 /* Validate a candidate GAFFrame* (same 0x18-byte header as the composite) and
@@ -404,8 +367,8 @@ static const char* face_texframe(const char* fa, int owner)
     return NULL;
 }
 
-/* ---- exports for the native pass (tagpu_native.c): share the atlas,
-   shade LUT and calibration so both paths draw identical materials ---- */
+/* ---- exports for the native pass (tagpu_native.c): share the atlas and
+   the shade calibration so both paths draw identical materials ---- */
 /* IS THERE A RESTORE ROUTE AT ALL. The route is the published list, and this
    is what says it exists. Latched by the arm, so it does not flicker. */
 int tagpu_r3d_atlas_restore_armed(void) { return s_atlas.rlistWant ? 1 : 0; }
@@ -453,13 +416,14 @@ void tagpu_r3d_atlas_frame(void)
        `tagpu_gaf_atlas_restore_vk` publishes the frame list and
        `tagpu_vk_restore.c` paints it, each reading the palette for itself. */
 }
-/* `shd` is the packet's copy of PALETTE.SHD, or NULL: the LUT is built once
-   out of whichever the caller has, and again the first time the engine's SHD
-   arrives after a frame with none. Called every frame from tagpu_native.c; it
-   is what keeps `s_lutMirror` current for the Vulkan unit pass. */
-void tagpu_r3d_lut_want(const unsigned char* shd)
+/* `shd` is the packet's copy of PALETTE.SHD, or NULL: the calibration and
+   the multipliers are built once out of whichever the caller has, and again
+   the first time the engine's SHD arrives after a frame with none. Called
+   every frame from tagpu_native.c; it is what keeps `s_shadeK` current for the
+   Vulkan unit pass. */
+void tagpu_r3d_shade_want(const unsigned char* shd)
 {
-    if (s_state == 1 && (!s_lutBuilt || (shd && !s_lutFromShd))) shade_build_lut(shd);
+    if (s_state == 1 && (!s_shadeBuilt || (shd && !s_shadeFromShd))) shade_build(shd);
 }
 
 /* ---- the Vulkan lane's texels; tagpu_render3do.h has the contract ------- */
@@ -552,14 +516,6 @@ const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned
     if (mips) *mips = s_atlas.mip;
     if (aniso) *aniso = s_atlas.rgbAniso;
     return s_atlas.rlist;
-}
-
-const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial)
-{
-    if (w) *w = 256;
-    if (h) *h = SH_ROWS;
-    if (serial) *serial = s_lutSerial;
-    return s_lutBuilt ? s_lutMirror : NULL;
 }
 
 const float* tagpu_r3d_shade_k(void)

@@ -56,7 +56,6 @@ typedef struct {
     int   scafOn;
     float scafP[4];             /* vpL, vpT, vw, vh                           */
     float fogOrg[2], fogDim[2];
-    int   lit;                  /* the full-colour path: tagpu_classicpp_index */
     float sun[3], amb, norm;    /* the units' sun, ambient, 1/unitLevel       */
     int   shNeutral, shDir;     /* the engine's SHD rows                      */
 } TAGPU_PDVIEW;
@@ -316,7 +315,7 @@ typedef struct TAGPU_PDHAND {
     /* THE FRAGMENT STAGE'S, as `_begin` left it. uLambert IS PUBLISHED AS
        ZERO: tagpu_posedraw.c never sets it, so the Classic++ lambert lights a
        posed unit from a flat up normal rather than from vNrm. */
-    int   restored, scafOn, lit, lambert, shadowOn;
+    int   restored, scafOn, lambert, shadowOn;
     float scafP[4], ss;
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float sun[3], amb, norm;
@@ -344,9 +343,10 @@ typedef struct TAGPU_PDHAND {
 
     /* THE TEXELS, as bytes. Each carries the serial that says when it last
        changed, so the Vulkan pass re-uploads on a change and not per frame.
-       The unit atlas and the shade LUT are tagpu_render3do.h's mirrors; the
-       palette is tagpu_pal's snapshot; the fog pair is what the native pass
-       built this frame.
+       The unit atlas's indices are tagpu_render3do.h's mirror, which the
+       Vulkan pass expands into its base atlas, and the face-shade multipliers
+       its array; the palette is tagpu_pal's snapshot; the fog grid is what the
+       native pass built this frame.
 
        THE CLASSIC++ RESTORED TWIN IS NOT HERE AS TEXELS: it crosses as the
        frame LIST below, which the consuming pass paints into its own twin on
@@ -380,9 +380,8 @@ typedef struct TAGPU_PDHAND {
        `atlasRgbAniso` above comes from the same accessor for the same
        reason. */
     int                               restoreDim, restoreMips;
-    const unsigned char* lut;     int lutW, lutH;          unsigned lutSerial;
     /* the face-shade multiplier, 32 floats by SHD row (tagpu_r3d_shade_k),
-       aliased like `lut`: both are the material layer's own arrays */
+       aliased: it is the material layer's own array */
     const float*         shadeK;
     /* the engine's table and its serial (tagpu_pal_engine) */
     const unsigned char* pal;     unsigned palSerial;
@@ -390,7 +389,6 @@ typedef struct TAGPU_PDHAND {
        reuses, and tagpu_feat.c's own copy exists for the same reason. NULL when
        this frame had none, which a unit with `uFog & 1` makes a refusal. */
     const unsigned short* fogGrid; int fogGridCols, fogGridRows;
-    const unsigned char*  fogLut;  /* 256 x R8 */
 
     /* the scissor the native pass set around these draws, in game-frame pixels
        from the TOP of the frame -- tagpu_vk_feat.c is where the flip onto

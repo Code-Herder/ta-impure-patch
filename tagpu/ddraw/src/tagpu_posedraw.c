@@ -546,7 +546,6 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     s_pub.ss = v->ss;
     s_pub.fogOrgX = v->fogOrg[0]; s_pub.fogOrgY = v->fogOrg[1];
     s_pub.fogCols = v->fogDim[0]; s_pub.fogRows = v->fogDim[1];
-    s_pub.lit = v->lit ? 1 : 0;
     s_pub.lambert = 0;                 /* never set -- see the header */
     s_pub.sun[0] = v->sun[0]; s_pub.sun[1] = v->sun[1]; s_pub.sun[2] = v->sun[2];
     s_pub.amb = v->amb; s_pub.norm = v->norm;
@@ -588,7 +587,7 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        `tagpu_classicpp_on()` is `s_on` alone. `assets=` is live cfg the
        render-options menu writes back, so asking `_on()` here would, when
        assets are turned off mid-session, revert terrain, features and effects
-       to the palette path while units kept sampling the restored atlas: mixed
+       to the base atlas while units kept sampling the restored atlas: mixed
        art, silently, until restart. */
     s_pub.restored = (tagpu_r3d_atlas_restore_armed() && tagpu_classicpp_assets()) ? 1 : 0;
     /* THE ARM IS TAKEN HERE AND THE LIST IS NOT. Arming is an ASK and belongs
@@ -600,10 +599,8 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        not yet atlased. That appends to the very list a capture here would
        publish, so a capture here would be a snapshot taken before the frame
        has finished writing it. See the handover for the ordering. */
-    s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);
     s_pub.shadeK = tagpu_r3d_shade_k();
     s_pub.pal = tagpu_pal_engine(); s_pub.palSerial = tagpu_pal_engine_serial();
-    s_pub.fogLut = tagpu_native_foglut();
     {   /* THE GRID IS COPIED. It points into a frame packet the game thread
            reuses, and `cells` -- not cols*rows -- is what the packet actually
            allocated, so it is the bound the copy is made against. */

@@ -169,15 +169,16 @@ float tagpu_pal_gamma(void)
 }
 
 void tagpu_pal_expand(unsigned char* dst, const unsigned char* idx, const unsigned char* key,
-                      int pitch, int x0, int y0, int w, int h, const unsigned char* pal)
+                      int pitch, int x0, int y0, int w, int h, const unsigned char* pal,
+                      const unsigned char* alpha)
 {
-    /* one 4-byte entry per index, R,G,B,255, so a texel is one 4-byte copy */
+    /* one 4-byte entry per index, R,G,B,A, so a texel is one 4-byte copy */
     unsigned char lut[256][4];
     int i, x, y;
     if (!dst || !idx || !pal || w <= 0 || h <= 0) return;
     for (i = 0; i < 256; i++) {
         lut[i][0] = pal[i * 4 + 0]; lut[i][1] = pal[i * 4 + 1];
-        lut[i][2] = pal[i * 4 + 2]; lut[i][3] = 255;
+        lut[i][2] = pal[i * 4 + 2]; lut[i][3] = alpha ? alpha[i] : 255;
     }
     for (y = 0; y < h; y++) {
         const unsigned char* ir = idx + (size_t)(y0 + y) * pitch + x0;

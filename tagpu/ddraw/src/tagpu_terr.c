@@ -381,19 +381,19 @@ static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; in vec2 vWorld;\n"
     "out vec4 frag;\n"
-    "uniform sampler2D uAtlas;\n"
-    "uniform sampler2D uPal;\n"
+    "uniform sampler2D uPal;\n"        /* the engine's table: index 0 is the
+                                          unexplored black (FOG_TERRAIN)    */
     "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the restored atlas    */
     "uniform int uRestored;\n"         /* 1 = a restore is running or done:
                                           sample it where its alpha says so */
-    "uniform sampler2D uHeight;\n"     /* Classic++: R8 height per 16-px cell */
+    "uniform sampler2D uHeight;\n"     /* R8 height per 16-px cell          */
     "uniform vec2 uHDim;\n"            /* its size: mapW16, mapH16; 0 = none */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
-    /* the base atlas: the tile atlas expanded through the palette
-       (tagpu_vk_terr.c). Last, so the samplers above keep their bindings. */
+    /* the base atlas: the tile atlas expanded through the engine's table
+       (tagpu_vk_terr.c) -- what every texel is drawn from */
     "uniform sampler2D uBase;\n"
     TAGPU_GLSL_LIGHT_FN
     /* the lab's normalAt (tascene-view.html): at a grid point, central
@@ -460,28 +460,22 @@ static const char* FS =
     /* terrain is the bottom layer: it paints the fog's black instead of
        discarding, and it darkens (never hides) in grey — the engine's rule */
     TAGPU_GLSL_FOG_TERRAIN
-    /* Classic++ (uLit): the restored colour where the reveal has painted it
-       -- alpha is the restorer's own "painted" mark, a cell it
-       has not reached yet is alpha 0 -- and the base atlas's colour elsewhere,
-       so the reveal goes lit-base to lit-restored; lit by the lab's rule
-       from the heightfield normal; then the grey band as the RGB rule
-       (renderers.md 2.6) rather than the index LUT. Nothing below this
-       branch runs under Classic++, nothing in it runs under Classic. */
-    "  if (uLit == 1) {\n"
-    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "    vec3 c = t.a > 0.5 ? t.rgb : texture(uBase, vUV).rgb;\n"
-    "    if (uHDim.x > 0.5) c *= taLambert(uLambert == 1 ? taTerrN(vWorld) : vec3(0.0, 1.0, 0.0),\n"
-    "                                     taW, taWx, taWy);\n"
+    /* the restored colour where the reveal has painted it -- alpha is the
+       restorer's own "painted" mark, a cell it has not reached yet is alpha 0
+       -- and the base atlas's colour elsewhere, so the reveal goes lit-base to
+       lit-restored; lit by the lab's rule from the heightfield normal (the
+       level normal under `light=0`: exactly 1.0 where no shadow falls); then the grey band
+       as the RGB rule (renderers.md 2.6). Classic is this with `uRestored` 0
+       and `uLambert` 0: the base atlas, NEAREST, as the engine's tiles. The
+       quad spans exactly the tile's 32 texels, so no filtering to get wrong;
+       a fragment landing exactly on the far edge reads the cell's replicated
+       guard texel rather than the next cell (CELL_PITCH). */
+    "  vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "  vec3 c = t.a > 0.5 ? t.rgb : texture(uBase, vUV).rgb;\n"
+    "  if (uHDim.x > 0.5) c *= taLambert(uLambert == 1 ? taTerrN(vWorld) : vec3(0.0, 1.0, 0.0),\n"
+    "                                   taW, taWx, taWy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
-    "    frag = vec4(c, 1.0); return;\n"
-    "  }\n"
-    /* NEAREST on an R8 atlas: the texel IS the palette index, and the quad
-       spans exactly the tile's 32 texels, so no colour key and no filtering to
-       get wrong. A fragment landing exactly on the far edge reads the cell's
-       replicated guard texel rather than the next cell (CELL_PITCH). */
-    "  int pi = int(texture(uAtlas, vUV).r * 255.0 + 0.5);\n"
-    TAGPU_GLSL_FOG_SHADE("pi")
-    "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 1.0);\n"
+    "  frag = vec4(c, 1.0);\n"
     "}\n";
 #pragma GCC diagnostic pop
 
@@ -1104,7 +1098,6 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.tile0X = (float)s_rectTx0; s_pub.tile0Y = (float)s_rectTy0;
     s_pub.texelW = s_iw; s_pub.texelH = s_ih;
     s_pub.restored = restored;
-    s_pub.lit = tagpu_classicpp_index() ? 0 : 1;
     s_pub.lambert = tagpu_classicpp_lit() ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
     /* THE CAST-SHADOW BLOCK: 0. The map is drawn by tagpu_vk_shadow.c into an
@@ -1169,7 +1162,6 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        is the one this file already gives for the restored atlas and the shadow
        map: stand down for the frame. */
     fogBad = (s_pub.fog && !s_pub.fogGrid);
-    s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists -- the feature
        pass's reasoning (tagpu_feat.c), and terrain covers the whole viewport,
