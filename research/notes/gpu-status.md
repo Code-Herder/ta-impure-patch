@@ -1682,11 +1682,11 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 
 ### 2.6c The stock engine's own defects (`tagpu_patches.c`, always on)
 
-**What it is.** Two places where the retail image writes or reads memory it does not own, patched
-at every attach by `patch_engine_defects()` at the end of `tagpu_apply_patches()`. Each patch is
-the identity on every input stock handles safely. Each site is compared with its stock bytes and
-skipped alone, as §2.6's rows are: the two are independent, and either one alone is still the
-identity wherever stock is safe. The disassembly, callers, invariants and measurements are in the
+**What it is.** Three places where the retail image writes or reads memory it does not own,
+patched at every attach by `patch_engine_defects()` at the end of `tagpu_apply_patches()`. Each
+patch is the identity on every input stock handles safely. Each site is compared with its stock
+bytes and skipped alone, as §2.6's rows are: the three are independent, and any one alone is still
+the identity wherever stock is safe. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
 
@@ -1694,27 +1694,36 @@ engine defects we patch".
 |---|---|---|
 | `0x469807..0x469825` | `DrawGameScreen`'s unit-sort append, which never tests a row's count and so can write unit pointers past the end of SORT_UNIT_LIST (`main+0x141FB`) | 31 bytes: a `jmp` to a 44-byte stub from `tagpu_detour_stub`, then NOPs up to the stock join `0x469826`. The stub files a unit only while `count[row] < (rows − row)·cap`, the slots left to the end of the allocation (`[edi+0x50]`, `[edi+0x54]` = `main+0x1424B`/`+0x1424F`). The whole stock block is compared first, then written with `tagpu_detour_write` |
 | `0x421E60` | `GetGridPosFeature`, which reads `[plot+8]` with no NULL test (callers `0x498F4F`, `0x40514A` untested; `0x47EAE3` tests) | a prologue detour (`tagpu_detour_land`, 8 stolen bytes, compared first). A NULL plot returns `0xFFFF`, the engine's own "no feature", with the function's `ret 4` |
+| `0x484057` | inside the terrain pass `0x483FA0`, where its window of 32-px cells (`row0`, `col0`, `nrows`, `ncols` from the eye and the view) is computed and the tile map `main+0x1428B` not yet read | `tagpu_detour_land` over 10 stolen bytes, compared first. The stub passes the pass's frame to `terrain_window_on_map`: a window inside the `pxH/32 × pxW/32` tile map (`main+0x14223`/`+0x14227`, the words LoadMap sized it with) runs the stolen pair and resumes at `0x484061`; any other is drawn by `terrain_window_draw` (black, then each on-map cell whose id is below the tile set's count, inside the OFFSCREEN's clip rect) and leaves through the pass's epilogue `0x4843AC` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
-exactly as stock does for every slot inside the list. The plot guard writes nothing. Neither is
-in §2.5. `tagpu_zoom`'s `0x498EF9` guard and `vpwide`'s `0x499221` replica still clamp the
+exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
+bound writes only the engine's offscreen, and only on a draw whose window leaves the map: the
+viewport inside the clip rect, the pixels the pass paints on every draw anyway. None is in §2.5. `tagpu_zoom`'s `0x498EF9` guard and `vpwide`'s `0x499221` replica still clamp the
 pointer's world point to the scroll extent. With `0x421E60` guarded, those clamps are what keeps
 the hover *right*. They are no longer what keeps the game alive.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
-ARMED`. A site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
+ARMED; terrain window bound 0x484057 ARMED`. A site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
 `SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
-place of `ARMED`; a stub whose site cannot be written is released. There is no switch: both are
-installed on every launch, `tagpu_defaults.off` included.
+place of `ARMED`; a stub whose site cannot be written is released. There is no switch: all three
+are installed on every launch, `tagpu_defaults.off` included.
 
 **What it does not cover:**
 
 - `0x40514A`'s reachability with a NULL plot is not audited. The guard covers it whether or not it
   is reachable.
-- On a map shorter than the viewport plus 128 px the engine's own terrain pass `0x483FA0` faults
-  before any pointer reaches `0x421E60`: MEASURED on Lava Run at 1920×1440 without these patches
-  and without our terrain pass owning the ground. That is a separate stock defect and nothing here
-  covers it.
+- The terrain pass is reached with a window off the map only where the view is larger than the
+  scroll extent: in the shipped play set, on a level's first draws before our terrain pass takes
+  the ground; on every draw with `terrown.off` (MEASURED); and on every draw under `renderer=gdi`,
+  where none of our passes draws [INFERRED, not run]. The skirmish maps and
+  resolutions that do it are in the engine map. On the stock path, which every draw with the eye
+  in `[0, extent − view]` takes, the interior cells still go through the unclipped `0x4C6E70`;
+  terrown's latch, not this bound, keeps vpwide's widened rect away from it (§2.3b).
+- The camera clamp `0x41C3C0`'s inverted range is not patched. The zoom module's command apply
+  holds such a range at 0 on every in-play draw once a zoomed world is live, so a level's first
+  draws can carry the engine's negative eye, and the terrain bound draws them. The pointer's path
+  to `0x421E60` on such a map was not run.
 - The off-map cell `0x498F2E` leaves in `main+0x2C8E` is untouched. Its readers are not audited.
 - The stock past-the-end write at 1× was not reproduced: it needs more than `cap` units in one of
   the sweep's last rows, the margin below the view [INFERRED].
