@@ -1,0 +1,61 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Tier 2 of the TADR port's raised limits, peer 7 of ten: 1499 units for the local player, which with its commander is the 1500 cap (owner 0 is always the peer that applies it), one of ten armies on a ring 2800 world units round the centre of Town & Country, all ordered onto the centre. Apply limits-tier2-p0 \u2026 p9 one to each peer of a ten-player network game (tools/mp_lobby.sh --map 'Town & Country' \u2026): every peer creates and owns its own units and TA replicates them, so the ten together make 15 000 units, the 15 001-slot design point less one. Even peers field ARM, odd CORE, in tier 1's 12:8:5 mix. The armies are 39-column blocks at 34 world units, so neighbours on the ring stay apart.",
+  "seed": 20260924,
+  "on_error": "abort",
+  "setup": {
+    "map": "Town & Country",
+    "unit_limit": 1500,
+    "clear_existing": false,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    }
+  },
+  "groups": [
+    {
+      "id": "army7",
+      "owner": 0,
+      "at": [
+        3455,
+        1657
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 39,
+        "spacing": 34,
+        "jitter": 4
+      },
+      "composition": [
+        {
+          "type": "CORAK",
+          "count": 719
+        },
+        {
+          "type": "CORTHUD",
+          "count": 480
+        },
+        {
+          "type": "CORSTORM",
+          "count": 300
+        }
+      ],
+      "facing": 72,
+      "orders": [
+        {
+          "cmd": "attack",
+          "to": [
+            4320,
+            4320
+          ]
+        }
+      ]
+    }
+  ],
+  "camera": {
+    "at": [
+      3455,
+      1657
+    ]
+  }
+}

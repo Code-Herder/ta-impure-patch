@@ -654,9 +654,9 @@ static void apply_scroll_rate(char* ta)
    under an engine terrain draw reads before the tile array or past its end.
    What follows bounds that EYE and nothing more: over a view larger than the
    map the pass's window runs past the tile map from any eye (the engine's
-   own range is empty there), in stock and on both cameras, and only the
-   engine-defect patch at 0x484057 bounds the window (patched on main by the
-   engine-defect landing; exe map, "Engine defects we patch").
+   own range is empty there), in stock and on both cameras, and the window
+   check at 0x484057 bounds it, drawing the part past the map black
+   (tagpu_patches.c; exe map, "Engine defects we patch").
    terrown takes that function away on every draw whose terrain latch is up
    (`g_terrown_own`, tagpu_terrown.c), and the latch is set by the packet
    publisher right after this module's apply, from the same request the apply

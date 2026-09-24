@@ -1013,11 +1013,11 @@ grid, so the two threads compute the range from the same words.
 on.** The engine's terrain pass `0x483FA0` indexes the tile map from the eye with no bounds
 check at either end ([engine map](exe-reverse-engineering.html), "Two per-cell loops"), so an
 eye off `[0, extent − W]` under an engine terrain draw reads outside the tile array. This bounds
-the eye the pass reads from and nothing more: the pass has no bound of its own, so over a view
-larger than the map its window runs past the tile map from any eye — a fault in stock and on both
+the eye the pass reads from and nothing more: over a view larger than the map the pass's window
+runs past the tile map from any eye — without the window check a fault in stock and on both
 cameras, MEASURED on Lava Run at 1920x1440 in a level's first draws, before the terrain latch is
-up — and it is bounded there by the engine-defect patch at `0x484057`, patched on main by the
-engine-defect landing (engine map, "Engine defects we patch"). terrown skips
+up — and the window check at `0x484057` bounds it there, drawing the part past the map black
+(engine map, "Engine defects we patch": "The terrain pass reads off its tile map"). terrown skips
 that function on every draw whose terrain latch is up (`g_terrown_own`, §2.3b), and the packet
 publisher sets the latch right after the command apply, from the same request the apply was
 handed (`terr || the rect is still wide`). So:
@@ -1807,12 +1807,14 @@ live, commander selected on Two Continents at type 1: a left click on ground wal
 the clicked point, and the same click with `tagpu_curs.off` deselected it and moved nothing. The
 full path is `exe-reverse-engineering.md` §"The in-game mouse buttons".
 
-### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–3
+### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–5
 
 **What it is.** TA's limits, raised the way TADR raises them, as our own C: projectiles
 300 → 3000, explosions 300 → 3000, flying pieces 100 → 1000, debris records 300 → 3000, units a
 player 250 (default) / 500 (ceiling) → 1500 / 1500, the pathfinder's budget 1333 → 66 650, and
-particles 400 → 20 480 a layer from a pool of 1000 → 204 800 objects.
+particles 400 → 20 480 a layer from a pool of 1000 → 204 800 objects, and the composite
+scratch frame 600² → 1280². The engine's simultaneous sounds are not a site: they are the settings
+store's `mixingbuffers`, held to 32 (below).
 Planned in [the TADR port](tadr-port/raised-limits.md); every site is in the engine map, *The raised
 effect pools* and *The per-player unit cap*.
 
@@ -1831,14 +1833,15 @@ effect pools* and *The per-player unit cap*.
 | the pathfinder's budget | `0x40EAD6` | 1333 → 66 650 |
 | the particle layers | twenty compares, `0x471183` … `0x472CD9` (`0x472BF2` against `ecx`) | 400 → 20 480 |
 | the particle pool | `0x471C83`, the `push` in the C runtime's static initializer `0x471C80` | 1000 → 204 800, built at that size because DllMain runs first |
+| the composite scratch frame | `0x45819B` (width), `0x458196` (height), the two `push 0x258` in `0x458180` | 600 → 1280 each; one frame a level at `*(main+0x1437B)+0x10` |
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
 while it changes. It reads every site (through `VirtualQuery`, never assuming the page), compares
-all 73 with the stock bytes, and writes them only if every one matches; a refused write puts back
+all 75 with the stock bytes, and writes them only if every one matches; a refused write puts back
 what was written. The patches last for the process and are never restored. The log line names the
-moved pools' addresses for `tacli peek`: `limits: installed 73 sites -- …, units 1500 a player,
-pathfinding 66650, particles 20480 a layer from a pool of 204800`.
+moved pools' addresses for `tacli peek`: `limits: installed 75 sites -- …, units 1500 a player,
+pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280`.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -1912,6 +1915,35 @@ second, median 36**, and the publisher's own cost is past its histogram's 512 µ
 sample — how much of the game thread's frame is ours and how much is the engine's is not
 measured.
 
+**Sounds: 32, through the store, not a site.** `mixingbuffers` in `impure.cfg` (renderers.md
+2.10b) is 32 by default and one of 8, 16, 24 or 32. `tagpu_menu.c`'s `eng_push_mixing` writes it
+into the sound object's `+0x2C` after every registry load (`0x42F9A0`), where the loader has just
+stored the registry's `MixingBuffers` through a setter that takes anything. 32 is the engine's
+own table: past it a sound plays untracked and a looping one escapes the stop-all (engine map,
+*The sound object*). TADR writes 128. The engine saves the value back to the registry with its
+other options, as it does the store's Gamma, into the one `user.reg` every instance shares, so a
+control launch (`tagpu_defaults.off`, or the stock DLL) reads 32 where stock's missing key gives
+8. MEASURED 2026-09-23, tier 1 with sound on a null
+device: 32 in use for the whole fight, never more; the store at 8 held 8.
+
+**The composite scratch frame** is the unit bake's one shared frame a level (engine map, *The
+composite scratch frame*), not the per-unit composite, which the ring caps. Four engine writers in
+the blit size it to a unit and never compare with the allocation (the build-state copy, the frame
+copy, the shadow build and the 2× structure bake, every frame and on every lane), so the raise
+moves the box at which they write past it, from 600 × 600 to 1280 × 1280 (a quarter of each for
+the 2× bake). It read back at 1280² after tier 1
+on the Vulkan lane and at 600² on the stock build, and the GDI lane draws the nanoframe ladder the
+same on both.
+
+**Tier 2, measured 2026-09-24**: ten peers in one network game on Town & Country, 1500 a player,
+15 000 units. Every peer held 15 001 slots and peaked at 14 991–15 000 alive; every raised pool
+passed its stock cap on every peer (projectiles 731–854, explosions 2936–2966, particle objects
+12 759–14 331, flying pieces 947–993); the simulation held 30 ticks a second, the full rate at a
+network game's speed 10, on all ten. Paused after three minutes, the ten agreed on the same 7307
+units in the same slots, and 95.8 % stood at the identical position on all ten; the moving rest
+sat off their owner's copy by at most 40 ticks of their own top speed. Details in
+[the plan](tadr-port/raised-limits.md), landing 5.
+
 **Landing 1, measured 2026-09-23** (the numbers are in the engine map): in single player the packet carried
 687 projectiles, 2439 explosions and 540 flying pieces with no table truncated; in a
 two-peer network game both peers passed every stock cap and, paused, held the same units at
@@ -1926,6 +1958,7 @@ simulation's generator only if the explosion pool fills (it gates `0x421700`'s d
 stock-limits build is therefore a comparison build, not a proof of equality.
 
 **What this landing does not close.**
+
 - **The explosion tick's compaction is quadratic.** `0x4210E6..0x42113E` removes one dead record,
   shifts the whole tail down one record (`rep movsd`, `0x15` dwords) and rescans from the start,
   so a tick costs O(dead × live) record moves. At 3000 records with a mass death expiring together
@@ -1943,22 +1976,30 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 - **What 6000 units cost the game thread.** The median 36 publications a second at 4000–6000
   units is measured; its split between the engine's own frame and our publisher is not, because
   the publisher's histogram stops at 512 µs.
-- **Ten players at 1500 (15 000 units)** is landing 5's proof; tier 1 seats four.
+- **How long a remote unit lags its owner at stock's 500 a player.** At 1500 a player (tier 2,
+  below) the moving ones sat up to 40 ticks of their own travel behind; stock's figure is not
+  measured, so whether the raise stretches TA's update interval is open.
 - **The particle layers erase by shifting.** The layer tick `0x471EB0` deletes a finished object and
   moves the tail down one slot, and an emitter at the cap drops the front the same way, so a
   removal costs the layer's length. At 13 529 objects in one layer the sim held 60 ticks a second;
   a layer held at the full 20 481, where every emission shifts the whole layer, was not reached.
   The level-end teardown `0x471DE0` empties each layer front first the same way, about n²/2 moves:
   some 2 × 10⁸ for a full layer. Not measured.
-- The sound and composite limits are landing 4 of the plan.
+- **The composite scratch frame is not bounded.** A unit (with its cargo) whose screen box is past
+  1280 × 1280, or a structure's past 640 × 640 under the 2× bake, still writes past the frame, as
+  one past 600 × 600 or 300 × 300 does in stock. A bound has to test the box in all four writers
+  (`0x4589C0`, `0x45A470`, `0x45A790`, and the 2× branch of `0x459830` / `0x459C70`, which can
+  take the 1× path instead) and skip or fall back in each; not built. The ring that caps a unit's
+  own frame does not help: at 800 × 600 it admits one of 3.1 million pixels.
 
 ### 2.6c The stock engine's own defects (`tagpu_patches.c`, always on)
 
-**What it is.** Two places where the retail image writes or reads memory it does not own, patched
-at every attach by `patch_engine_defects()` at the end of `tagpu_apply_patches()`. Each patch is
-the identity on every input stock handles safely. Each site is compared with its stock bytes and
-skipped alone, as §2.6's rows are: the two are independent, and either one alone is still the
-identity wherever stock is safe. The disassembly, callers, invariants and measurements are in the
+**What it is.** Three places where the retail image writes or reads memory it does not own (the
+third also leaves a strip of the viewport unpainted, which the same patch paints), patched at
+every attach by `patch_engine_defects()` at the end of `tagpu_apply_patches()`. Each patch is the
+identity on every input stock handles safely. Each site is compared with its stock
+bytes and skipped alone, as §2.6's rows are: the three are independent, and any one alone is still
+the identity wherever stock is safe. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
 
@@ -1966,27 +2007,48 @@ engine defects we patch".
 |---|---|---|
 | `0x469807..0x469825` | `DrawGameScreen`'s unit-sort append, which never tests a row's count and so can write unit pointers past the end of SORT_UNIT_LIST (`main+0x141FB`) | 31 bytes: a `jmp` to a 44-byte stub from `tagpu_detour_stub`, then NOPs up to the stock join `0x469826`. The stub files a unit only while `count[row] < (rows − row)·cap`, the slots left to the end of the allocation (`[edi+0x50]`, `[edi+0x54]` = `main+0x1424B`/`+0x1424F`). The whole stock block is compared first, then written with `tagpu_detour_write` |
 | `0x421E60` | `GetGridPosFeature`, which reads `[plot+8]` with no NULL test (callers `0x498F4F`, `0x40514A` untested; `0x47EAE3` tests) | a prologue detour (`tagpu_detour_land`, 8 stolen bytes, compared first). A NULL plot returns `0xFFFF`, the engine's own "no feature", with the function's `ret 4` |
+| `0x484057` | inside the terrain pass `0x483FA0`, where its window of 32-px cells (`row0`, `col0`, `nrows`, `ncols` from the eye and the view) is computed and the tile map `main+0x1428B` not yet read | `tagpu_detour_land` over 10 stolen bytes, compared first. The stub passes the pass's frame to `terrain_window_on_map`: a window stock gets right — `sx ≥ 0`, `sy ≥ 0` and inside the `pxH/32 × pxW/32` tile map (`main+0x14223`/`+0x14227`, the words LoadMap sized it with) — runs the stolen pair and resumes at `0x484061`; any other is drawn by `terrain_window_draw` (black, then each on-map cell whose id is below the tile set's count, inside the OFFSCREEN's clip rect, which must itself lie inside the surface's width and height at `+0x00`/`+0x04`) and leaves through the pass's epilogue `0x4843AC` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
-exactly as stock does for every slot inside the list. The plot guard writes nothing. Neither is
-in §2.5. `tagpu_zoom`'s `0x498EF9` guard and `vpwide`'s `0x499221` replica still clamp the
-pointer's world point to the scroll extent. With `0x421E60` guarded, those clamps are what keeps
+exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
+bound writes only the engine's offscreen, and only on a draw stock gets wrong: the viewport inside
+the clip rect, which is what the pass is there to paint on every draw, and which stock on such a
+draw paints from off the map or leaves holding the last frame. None is in §2.5. `tagpu_zoom`'s
+`0x498EF9` guard and `vpwide`'s `0x499221` replica still clamp the pointer's world point to the
+scroll extent. With `0x421E60` guarded, those clamps are what keeps
 the hover *right*. They are no longer what keeps the game alive.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
-ARMED`. A site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
+ARMED; terrain window bound 0x484057 ARMED`. A site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
 `SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
-place of `ARMED`; a stub whose site cannot be written is released. There is no switch: both are
-installed on every launch, `tagpu_defaults.off` included.
+place of `ARMED`; a stub whose site cannot be written is released. There is no switch: all three
+are installed on every launch, `tagpu_defaults.off` included.
 
 **What it does not cover:**
 
 - `0x40514A`'s reachability with a NULL plot is not audited. The guard covers it whether or not it
   is reachable.
-- On a map shorter than the viewport plus 128 px the engine's own terrain pass `0x483FA0` faults
-  before any pointer reaches `0x421E60`: MEASURED on Lava Run at 1920×1440 without these patches
-  and without our terrain pass owning the ground. That is a separate stock defect and nothing here
-  covers it.
+- The terrain pass is handed a window stock gets wrong where the view is larger than the scroll
+  extent (the engine map's "Where it is reached"). The camera clamp `0x41C3C0` inverts its range
+  there; with `tagpu_zoom.on` the camera's own clamp replaces it and, with the command apply, holds
+  the eye at 0, so the window leaves the map only where the view is larger than the map. The
+  camera's centre range takes the eye below 0 at every left and top edge, but it is in force only
+  on draws whose ground is ours (§2.3c). The engine's pass draws the ground on a level's first
+  draws before our terrain pass takes it (MEASURED on Lava Run at 1920×1440), on every draw with
+  `terrown.off`, and on every draw under `renderer=gdi`, where none of our passes draws [INFERRED,
+  not run]. The zoom range the BAR camera replaced, `[−dx, extent − view + dx]` above 1, handed
+  it a negative eye at every left and top edge as well: MEASURED on Two Continents at 1920×1080
+  at zoom 2 with `terrown.off`, the eye at the NW corner of that range, −448 × −254, faulted main
+  `09d7d55` at `0x4CBE44`, and an eye of −20 left a 20-px strip at that edge holding the last
+  frame; with the bound, no fault and the strip black. The route is not patched; the bound
+  covers it. The skirmish maps and resolutions are in the engine map. On the stock path the
+  interior cells still go through the unclipped `0x4C6E70`; terrown's latch, not this bound,
+  keeps vpwide's widened rect away from it (§2.3b). Only our path bounds the tile ids by the tile
+  set's count; the stock path reads them unchecked.
+- The camera clamp `0x41C3C0`'s inverted range is not patched in the engine's bytes. With
+  `tagpu_zoom.on` it is replaced and held at 0; without it the engine alternates the eye between 0
+  and the negative bound as stock does, and the terrain bound draws those draws. The pointer's path to `0x421E60` on such a
+  map was not run.
 - The off-map cell `0x498F2E` leaves in `main+0x2C8E` is untouched. Its readers are not audited.
 - The stock past-the-end write at 1× was not reproduced: it needs more than `cap` units in one of
   the sweep's last rows, the margin below the view [INFERRED].

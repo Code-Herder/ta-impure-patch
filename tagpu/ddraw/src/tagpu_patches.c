@@ -54,15 +54,16 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
 
 /* ---- defects of the stock engine -------------------------------------------
 
-   Two places where TotalA.exe itself writes or reads memory it does not own. Each
-   patch below is the identity on every input the stock code handles safely and
-   differs only where the stock code would write past an allocation or read through
-   NULL. The engine map (exe-reverse-engineering.md, "Engine defects we patch") has
-   the disassembly, the callers and the measurements; binary-patches.md lists them.
-   Both are installed at every attach: ddraw.dll is a static import of the exe, so
-   DllMain runs before the exe's entry point. The two are independent: each is
-   skipped, with its reason logged, only when its bytes differ from the retail exe,
-   its stub cannot be allocated, or its page cannot be made writable. */
+   Three places where TotalA.exe itself writes or reads memory it does not own.
+   Each patch below is the identity on every input the stock code handles safely
+   and differs only where the stock code would write past an allocation, read
+   through NULL, or read off the end of the tile map. The engine map
+   (exe-reverse-engineering.md, "Engine defects we patch") has the disassembly,
+   the callers and the measurements; binary-patches.md lists them. All three are
+   installed at every attach: ddraw.dll is a static import of the exe, so DllMain
+   runs before the exe's entry point. They are independent: each is skipped, with
+   its reason logged, only when its bytes differ from the retail exe, its stub
+   cannot be allocated, or its page cannot be made writable. */
 
 /* why a defect patch did not go in; the log line names it */
 enum { FIX_ARMED, FIX_BYTES, FIX_STUB, FIX_PROTECT };
@@ -251,15 +252,256 @@ static int fix_feature_null_plot(void)
     return FIX_ARMED;
 }
 
+/* THE TERRAIN PASS'S WINDOW, in 0x483FA0 (stdcall(ctx), ret 4; one caller, 0x468DB0
+   in DrawGameScreen). [DISASSEMBLED] From the eye main+0x1431F/0x14323 it takes
+   col0 = eyeX/32 and row0 = eyeY/32, truncating toward zero, the offsets
+   sx = eyeX - 32*col0 and sy likewise (each in (-32, 32), with the eye's sign),
+   and from the view size main+0x37E37/0x37E3B the counts ncols = ceil((W + sx)/32)
+   and nrows likewise. It reads the tile map *(main+0x1428B) at
+   row*(main+0x14233 / 2) + col for every cell of that window (0x4840A6, 0x4841A9,
+   0x4841D6, 0x484345) and the tile graphic at *(*(main+0x14283)+4) + id*0x400,
+   with no compare on the index or the id. It paints cell (i, j) of the window at
+   (L - sx + 32*j, T - sy + 32*i): the edge columns and rows through the clipped
+   blitter 0x4B8150, the rest through the unclipped 0x4C6E70. LoadMap allocates
+   the tile map as (pxW/32)*(pxH/32) u16 from the map's pixel size
+   main+0x14223/0x14227 (0x48393C..0x483969) and copies the TNT's ids in raw
+   (0x48397D), and the tile set as {count, pixels} with count*0x400 bytes of
+   graphics (0x483B53..0x483B80).
+
+   WHERE STOCK IS RIGHT. ncols = ceil((W + sx)/32) carries the painted span to
+   L + W or past it for any sx, but it starts at L - sx: the viewport's left
+   column is painted only when sx >= 0, and its top row only when sy >= 0. So the
+   pass reads only map cells AND paints every viewport pixel exactly when
+   sx >= 0, sy >= 0 and the window lies inside the tile map; with col0 and row0
+   truncated, that is 0 <= eye and eye + view <= 32 * tiles on each axis. Outside
+   it, stock does one of two wrong things:
+     - an eye in (-32, 0) truncates to col0 = 0: every read is on the map, but the
+       leftmost -sx columns (or top -sy rows) keep the last frame's pixels;
+     - an eye at or below -32 starts the window before the map, and an eye with
+       eye + view past the map's far edge runs it off the end: the id read there
+       is whatever the heap holds, and the tile pointer made from it is anywhere.
+       MEASURED under the engine's alternating clamp (below): an access
+       violation reading that tile at 0x4CBE44 (the row copy 0x4CBDD1 called
+       by 0x4B8150) on the first in-play draw of Lava Run at 1920x1440 (row0 = -7) and 3840x2160 (row0 = -29), and
+       of Coast To Coast at 3840x2160 (row0 = -6).
+   What hands the pass such a window is the camera clamp 0x41C3C0: it holds the
+   eye in [0, extent - view] (the extent is the map less 32 px wide and 128
+   tall), and where the view is larger than the extent it alternates the eye
+   between 0 and the negative extent - view (0x41C40D..0x41C431). With
+   tagpu_zoom.on our clamp replaces it and holds the eye at 0 there
+   (tagpu_zoom.c, zoom_eye_clamp), so the window leaves the map only where the
+   view is larger than the map; the camera's centre range goes below 0 at every
+   left and top edge, but only on draws our terrain pass owns, where this pass
+   does not run. MEASURED on Lava Run at 1920x1440 with that clamp: the same
+   fault from row0 = 0, the window's rows 40..42 past the tile map.
+
+   THE FIX, a jump at 0x484057, the first point at which every value the pass
+   places and indexes with is computed and nothing has been read through it. The
+   stub hands the pass's frame to terrain_window_on_map. Where stock is right, it
+   returns 1 and the stub runs the two stolen instructions and resumes at
+   0x484061: the stock pass, unchanged. Otherwise terrain_window_draw draws the
+   window itself and the stub leaves through the pass's own epilogue 0x4843AC.
+
+   THE INVARIANT: whatever the eye and the view, the pass reads no tile-map entry
+   outside (pxW/32)*(pxH/32) and paints every viewport pixel inside the clip rect
+   (our path refuses a context whose clip rect is not inside its surface, and
+   then draws nothing rather than write outside it). Only our path bounds the
+   tile ids by the tile set's count: the stock path reads them unchecked, so a
+   map whose ids reach past its tile set still reads past it there. Identical
+   to stock on every draw where stock is right; the draws it changes are the ones where stock leaves a strip unpainted,
+   reads before the tile map or past its end, or — on a map narrower than the
+   view — reads the next row's cells at the right edge, which stays inside the
+   allocation on every row but the last. Registers at 0x484057: ecx (main), esi
+   (sx), edi (sy) and ebp (0) are live, eax and ebx are what the stolen
+   instructions load, edx is overwritten by the `cdq` at 0x484061, and the flags
+   are set again at 0x48406B before anything tests them; pushad/popad keep them
+   all. 0x484050's `je` lands on 0x484057 itself, the jump; no branch lands in
+   0x484058..0x484060 [rel8/rel32 scan of .text]. */
+
+/* the pass's frame at 0x484057, as dword indexes from its esp: the four registers
+   it saved at +0x00, its 0x48 bytes of locals from +0x10, its return address at
+   +0x58 and its argument, the OFFSCREEN, at +0x5C */
+enum { TPF_NCOLS = 0x10 / 4, TPF_COL0 = 0x14 / 4, TPF_NROWS = 0x18 / 4,
+       TPF_T = 0x1C / 4, TPF_L = 0x20 / 4, TPF_ROW0 = 0x24 / 4, TPF_CTX = 0x5C / 4 };
+/* the stub's pushad block, as dword indexes */
+enum { TPR_EDI = 0, TPR_ESI = 1, TPR_ECX = 6 };
+
+#define TP_MAP_PXW    0x14223   /* the map's own size in px, which the tile map is */
+#define TP_MAP_PXH    0x14227   /* allocated from                                   */
+#define TP_PLOT_C     0x14233   /* 16-px cells across; the pass's stride is half    */
+#define TP_TILE_SET   0x14283   /* {u32 count; u8* pixels}                         */
+#define TP_TILE_MAP   0x1428B   /* u16 tile id per 32-px cell                      */
+#define TP_VIEW_W     0x37E37
+#define TP_VIEW_H     0x37E3B
+/* the engine's OFFSCREEN (terrain-depth.md 4): width and height, which
+   SurfaceCreateNamed 0x4C69F0 stores at 0x4C6A2C/0x4C6A35 and sizes the pixels
+   by, then pitch, pixel base and the inclusive clip rect */
+enum { CTX_W = 0, CTX_H = 1, CTX_PITCH = 2, CTX_BASE = 3, CTX_CLIP_L = 7,
+       CTX_CLIP_T = 8, CTX_CLIP_R = 9, CTX_CLIP_B = 10 };
+
+static int ptr_sane(const void* p)
+{
+    return (size_t)p > 0x10000u && (size_t)p < 0x7FFF0000u;
+}
+
+static int floor32(int v)
+{
+    return v >= 0 ? v / 32 : -((31 - v) / 32);
+}
+
+/* The window the pass was about to draw, drawn with every read bounded: the
+   viewport filled with palette index 0 (the black the fog paints unexplored
+   ground with), then each cell of the same window that is on the map, and whose
+   id is below the tile set's count, copied to where stock puts it,
+   (L - sx + 32*j, T - sy + 32*i). Every write is inside the context's clip rect,
+   and that rect is checked against the surface's own width and height, the size
+   SurfaceCreateNamed allocates the pixels with, before anything is written; a
+   context whose rect or size does not validate is not drawn at all. GAME THREAD,
+   inside DrawGameScreen. */
+static void terrain_window_draw(const char* ta, const unsigned int* regs, const int* f,
+                                int tilesW, int tilesH)
+{
+    const int* ctx = (const int*)(size_t)(unsigned)f[TPF_CTX];
+    const unsigned short* tmap;
+    const unsigned int* tset;
+    const unsigned char* pix;
+    unsigned char* base;
+    unsigned int count;
+    int L = f[TPF_L], T = f[TPF_T], W, H, pitch, x0, y0, x1, y1, y, i, j;
+    int ox, oy, i0, i1, j0, j1;
+
+    if (!ptr_sane(ctx)) return;
+    pitch = ctx[CTX_PITCH];
+    base = (unsigned char*)(size_t)(unsigned)ctx[CTX_BASE];
+    if (!ptr_sane(base) || pitch <= 0 || pitch > 16384) return;
+    W = *(const int*)(ta + TP_VIEW_W);
+    H = *(const int*)(ta + TP_VIEW_H);
+    /* sizes and an origin no screen has are refused before any sum is formed */
+    if (W <= 0 || H <= 0 || W > 32768 || H > 32768 ||
+        L < -65536 || L > 65536 || T < -65536 || T > 65536) return;
+    {
+        int sw = ctx[CTX_W], sh = ctx[CTX_H];
+        int cl = ctx[CTX_CLIP_L], ct = ctx[CTX_CLIP_T];
+        int cr = ctx[CTX_CLIP_R], cb = ctx[CTX_CLIP_B];
+        /* the rect is inclusive, so its last column and row must be inside the
+           surface: cr < width <= pitch and cb < height */
+        if (!(sw > 0 && sh > 0 && sw <= pitch && sh <= 16384 &&
+              cl >= 0 && ct >= 0 && cr >= cl && cb >= ct && cr < sw && cb < sh))
+            return;
+        x0 = L > cl ? L : cl;
+        y0 = T > ct ? T : ct;
+        x1 = L + W < cr + 1 ? L + W : cr + 1;
+        y1 = T + H < cb + 1 ? T + H : cb + 1;
+    }
+    if (x1 <= x0 || y1 <= y0) return;
+    for (y = y0; y < y1; y++)
+        memset(base + (size_t)y * (size_t)pitch + x0, 0, (size_t)(x1 - x0));
+
+    tmap = *(const unsigned short* const*)(ta + TP_TILE_MAP);
+    tset = *(const unsigned int* const*)(ta + TP_TILE_SET);
+    if (!ptr_sane(tmap) || !ptr_sane(tset)) return;
+    count = tset[0];
+    pix = (const unsigned char*)(size_t)tset[1];
+    if (!ptr_sane(pix)) return;
+
+    /* the cells of the pass's window that meet the drawn rect; (ox, oy) is where
+       stock puts its first cell, and sx, sy lie in (-32, 32) */
+    ox = L - (int)regs[TPR_ESI];
+    oy = T - (int)regs[TPR_EDI];
+    i0 = floor32(y0 - oy);      i1 = floor32(y1 - 1 - oy);
+    j0 = floor32(x0 - ox);      j1 = floor32(x1 - 1 - ox);
+    if (i0 < 0) i0 = 0;
+    if (j0 < 0) j0 = 0;
+    if (i1 > f[TPF_NROWS] - 1) i1 = f[TPF_NROWS] - 1;
+    if (j1 > f[TPF_NCOLS] - 1) j1 = f[TPF_NCOLS] - 1;
+    for (i = i0; i <= i1; i++) {
+        int r = f[TPF_ROW0] + i, ty = oy + 32 * i;
+        int cy0 = ty > y0 ? ty : y0, cy1 = ty + 32 < y1 ? ty + 32 : y1;
+        if (r < 0 || r >= tilesH) continue;
+        for (j = j0; j <= j1; j++) {
+            int c = f[TPF_COL0] + j, tx = ox + 32 * j;
+            int cx0 = tx > x0 ? tx : x0, cx1 = tx + 32 < x1 ? tx + 32 : x1;
+            unsigned int id;
+            const unsigned char* src;
+            if (c < 0 || c >= tilesW) continue;
+            id = tmap[(size_t)r * (size_t)tilesW + (size_t)c];
+            if (id >= count) continue;
+            src = pix + (size_t)id * 0x400u;
+            for (y = cy0; y < cy1; y++)
+                memcpy(base + (size_t)y * (size_t)pitch + cx0,
+                       src + (size_t)(y - ty) * 32u + (size_t)(cx0 - tx),
+                       (size_t)(cx1 - cx0));
+        }
+    }
+}
+
+/* 1: stock is right for this window (see above) and the stock pass runs. 0: it was
+   drawn here and the pass returns. The tile map's own dimensions come from the
+   words LoadMap sized it with, and the stock path is taken only where the pass's
+   stride agrees with them, so the bound does not rest on main+0x14233 alone. */
+static int __cdecl terrain_window_on_map(const unsigned int* regs)
+{
+    const int* f = (const int*)(regs + 8);
+    const char* ta = (const char*)(size_t)regs[TPR_ECX];
+    int stride = *(const int*)(ta + TP_PLOT_C) / 2;
+    int tilesW = *(const int*)(ta + TP_MAP_PXW) / 32;
+    int tilesH = *(const int*)(ta + TP_MAP_PXH) / 32;
+    int sx = (int)regs[TPR_ESI], sy = (int)regs[TPR_EDI];
+    int col0 = f[TPF_COL0], row0 = f[TPF_ROW0];
+    int ncols = f[TPF_NCOLS], nrows = f[TPF_NROWS];
+
+    if (tilesW <= 0 || tilesH <= 0) {
+        tilesW = tilesH = 0;             /* no map to read: the fill alone */
+    } else if (stride == tilesW && sx >= 0 && sy >= 0 &&
+               col0 >= 0 && ncols > 0 && ncols <= tilesW - col0 &&
+               row0 >= 0 && nrows > 0 && nrows <= tilesH - row0) {
+        return 1;
+    }
+    terrain_window_draw(ta, regs, f, tilesW, tilesH);
+    return 0;
+}
+
+static int fix_terrain_window(void)
+{
+    static const unsigned char was[10] = {
+        0x8B, 0x81, 0x33, 0x42, 0x01, 0x00, /* mov eax,[ecx+0x14233]    */
+        0x8B, 0x5C, 0x24, 0x5C,             /* mov ebx,[esp+0x5c]       */
+    };
+    unsigned char* s;
+    unsigned char* p;
+
+    if (memcmp((const void*)0x00484057, was, sizeof was) != 0) return FIX_BYTES;
+    s = p = tagpu_detour_stub();
+    if (!s) return FIX_STUB;
+    *p++ = 0x60;                                            /* pushad           */
+    *p++ = 0x54;                                            /* push esp         */
+    *p++ = 0xE8;                                            /* call             */
+    tagpu_detour_rel(p, (unsigned int)(size_t)terrain_window_on_map); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                  /* add esp,4        */
+    *p++ = 0x85; *p++ = 0xC0;                               /* test eax,eax     */
+    *p++ = 0x61;                                            /* popad            */
+    *p++ = 0x74; *p++ = 0x0F;                               /* jz drawn         */
+    memcpy(p, was, sizeof was); p += sizeof was;            /* the stolen pair  */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00484061); p += 4;   /* jmp 0x484061     */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x004843AC); p += 4;   /* drawn: epilogue  */
+    if (!tagpu_detour_land(0x00484057, s, (int)sizeof was)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return FIX_PROTECT;
+    }
+    return FIX_ARMED;
+}
+
 static void patch_engine_defects(void)
 {
     int sort = fix_sort_buffer_end();
     int plot = fix_feature_null_plot();
-    char b[256];
+    int terr = fix_terrain_window();
+    char b[320];
 
     _snprintf(b, sizeof b,
-              "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s",
-              fix_state(sort), fix_state(plot));
+              "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
+              "terrain window bound 0x484057 %s",
+              fix_state(sort), fix_state(plot), fix_state(terr));
     b[sizeof b - 1] = 0;
     plog(b);
 }
@@ -797,6 +1039,19 @@ static void lim_sites(void)
         lim_dword(0x00472BF2 + 2, 400, TAGPU_LIM_SFX, "particle layer cap");
         lim_dword(0x00471C83, 1000, TAGPU_LIM_SFXPOOL, "particle pool");
     }
+
+    /* ---- the composite scratch frame. The composite draw context *(main+0x1437B), made once a
+       level by the model loader (0x42D473 -> 0x458180), keeps one scratch frame at +0x10 from
+       0x4B8E00(name, width, height): a colour and a depth plane of width x height bytes, freed
+       with the context by the level teardown (0x42DC8F -> 0x4581C0). Four writers in the blit
+       size it to a unit and none compares that size with the allocation: the build-state copy
+       0x4589C0, the frame copy 0x45A470, the shadow build 0x45A790 and the 2x structure bake in
+       0x459830 / 0x459C70. A box of more than width x height pixels -- a quarter of that for the
+       2x bake -- therefore writes past the frame, on every lane. The raise moves that threshold
+       from 600 x 600 to 1280 x 1280; it is not a bound. Every reader takes its size from the
+       header a writer set, so no write grows with the raise. */
+    lim_dword(0x0045819B, 600, TAGPU_LIM_COMPOSITE, "composite scratch width");
+    lim_dword(0x00458196, 600, TAGPU_LIM_COMPOSITE, "composite scratch height");
 }
 
 /* one site's bytes, without trusting the page to be readable */
@@ -850,11 +1105,11 @@ int tagpu_limits_install(void)
     /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
     tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d at 0x%08X, "
                "flying pieces %d at 0x%08X, debris records %d at 0x%08X, units %d a player, "
-               "pathfinding %d, particles %d a layer from a pool of %d", s_nlim,
+               "pathfinding %d, particles %d a layer from a pool of %d, composite %d", s_nlim,
                TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
                TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
                TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
-               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL);
+               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE);
     return 1;
 }
 
@@ -881,7 +1136,7 @@ int tagpu_limits_install(void)
 {
     plog("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
          "flying pieces 100, debris records 300, units 250 a player up to 500, "
-         "pathfinding 1333, particles 400 a layer from a pool of 1000)");
+         "pathfinding 1333, particles 400 a layer from a pool of 1000, composite 600)");
     return 0;
 }
 

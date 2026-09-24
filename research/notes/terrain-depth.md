@@ -115,10 +115,12 @@ What it does — nothing but a grid blit:
 
 ```c
 // decompiled core (FUN_00483fa0), annotated
-tileX0 = eyeX >> 5;  fracX = eyeX & 0x1F;      // eyeX = main+0x1431F, eyeY = main+0x14323
-tileY0 = eyeY >> 5;  fracY = eyeY & 0x1F;      // 32-px tiles; frac = sub-tile scroll
-cols   = (viewW(main+0x37E37) + fracX + 31) >> 5;   // +1 col/row when scrolled mid-tile
-rows   = (viewH(main+0x37E3B) + fracY + 31) >> 5;
+tileX0 = eyeX / 32;  fracX = eyeX - 32*tileX0; // eyeX = main+0x1431F, eyeY = main+0x14323
+tileY0 = eyeY / 32;  fracY = eyeY - 32*tileY0; // 32-px tiles; frac = sub-tile scroll
+                                               // (cdq; and 0x1F; add; sar 5: truncates toward
+                                               //  zero, so both are negative for a negative eye)
+cols   = ceil((viewW(main+0x37E37) + fracX) / 32);  // +1 col/row when scrolled mid-tile
+rows   = ceil((viewH(main+0x37E3B) + fracY) / 32);
 rowStride = FeatureMapSizeX/2;                  // = TILE_MAP width in 32-px tiles
 
 // edge columns/rows (partially visible): stack-built GAF descriptor
@@ -139,6 +141,16 @@ Key facts:
   read or write, no shading. The terrain repaints the whole viewport every frame,
   which is why the offscreen never needs a clear: **terrain is the frame's
   implicit "far plane"**.
+- **No bound on the window.** Nothing compares the cells it reads with the tile map's size, and
+  the window is placed from `L − sx`, so the pass is right only when `0 ≤ eye` and
+  `eye + view ≤ map` on each axis. An eye in (−32, 0) leaves a strip of up to 31 px at the
+  viewport's left or top edge unpainted; a lower one, or a window past the far edge, reads before
+  or past the tile map and faulted at `0x4CBE44`. The engine's camera clamp keeps the eye in range
+  only while the view fits in the scroll extent; ours holds it at 0 past that, so the window leaves
+  the map only where the view is larger than the map. Our centre range takes the eye below 0 at
+  every left and top edge, but only on draws our terrain pass owns, where this pass does not run.
+  Our window check at `0x484057` bounds the reads and paints the strip black
+  ([the engine map](exe-reverse-engineering.html), §"Engine defects we patch").
 - **No height/LOS participation.** Neither `FeatureStruct.height` nor any LOS map
   is consulted. Cliff faces, shadows, water — all pre-painted into the 32×32 tile
   art by the map compiler. Fog darkening happens later, over the finished scene

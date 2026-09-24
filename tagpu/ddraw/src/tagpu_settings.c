@@ -69,6 +69,14 @@ static const Opt O_GAMMA[]   = { {"12", 12}, {"0", 0}, {"1", 1}, {"2", 2}, {"3",
                                  {"5", 5}, {"6", 6}, {"7", 7}, {"8", 8}, {"9", 9}, {"10", 10},
                                  {"11", 11}, {"13", 13}, {"14", 14}, {"15", 15}, {"16", 16},
                                  {"17", 17}, {"18", 18}, {"19", 19}, {"20", 20} };
+/* THE ENGINE'S TABLE IS THE BOUND. The sound object tracks at most 32 playing
+   buffers (+0x38, +0xB8, +0x138, every loop `cmp 0x20`), and MixingBuffers is
+   the count at which it evicts one (0x4CF570 -> 0x4CF180). Past 32 the
+   eviction never fires and a 33rd sound plays untracked, where the stop-all
+   0x4CF150 cannot reach it -- a looping one plays on. Below 2 the eviction
+   can find no victim (only one looping sound is tracked at a time) and reads
+   past the table. research/notes/tadr-port/limits-evidence.md §11. */
+static const Opt O_MIXING[]  = { {"32", 32}, {"8", 8}, {"16", 16}, {"24", 24} };
 
 #define N(a) (int)(sizeof a / sizeof a[0])
 
@@ -94,6 +102,7 @@ static const Key s_key[TS_NKEYS] = {
        applies 0.5 + Gamma/24 (exe-reverse-engineering.md, SetGamma 0x4BA590) */
     { "gamma",     O_GAMMA,   N(O_GAMMA),   12 },
     { "resolution", NULL,     0,            0 },
+    { "mixingbuffers", O_MIXING, N(O_MIXING), 32 },
 };
 
 static volatile LONG s_val[TS_NKEYS];
