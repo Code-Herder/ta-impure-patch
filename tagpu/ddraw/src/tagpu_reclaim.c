@@ -94,7 +94,7 @@ static const unsigned char TEARDOWN_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 }
    (TAGPU_PK_DESIGN_SLOTS), rounded up to the power of two the mask needs. An
    object past it is not deferred and is leaked (`s_cOverflow`), never freed
    under the reader. */
-#define RC_RING_SIZE 16384u
+#define RC_RING_SIZE 32768u
 #define RC_RING_MASK (RC_RING_SIZE - 1u)
 typedef char rc_ring_design[(RC_RING_SIZE >= TAGPU_PK_DESIGN_SLOTS + TAGPU_PK_MAX_WRECKS &&
                              (RC_RING_SIZE & RC_RING_MASK) == 0) ? 1 : -1];

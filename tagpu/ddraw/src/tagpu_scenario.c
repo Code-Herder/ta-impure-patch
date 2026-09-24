@@ -16,6 +16,7 @@
 #include <string.h>
 #include "tagpu_scenario.h"
 #include "tagpu_log.h"
+#include "tagpu_limits.h"   /* TAGPU_LIM_UNITS: the arena holds a full game */
 
 #define SCN_TRIGGER   "tagpu_scenario.trigger"
 #define SCN_OUT       "tagpu_scenario.json"
@@ -69,6 +70,9 @@
 
 #define OFF_LIMIT     0x37EEA      /* u16 ActualUnitLimit                         */
 #define OFF_PERPLAYER 0x37EEC      /* u16 MaxUnitNumberPerPlayer                  */
+#define OFF_ARRAYCAP  0x37EE6      /* u16 the unit array's count a player: the cap
+                                      in force (the game start copies +0x37EEC, a
+                                      network game the host's value)              */
 #define OFF_CMDRDEATH 0x37EF6      /* u32 ActiveCommanderDeath (0 = game goes on) */
 #define OFF_SWITCHES  0x37F2F      /* u16 SoftwareDebugMode                       */
 #define OFF_GAMETIME  0x38A47      /* int GameTime                                */
@@ -138,11 +142,13 @@ static const unsigned char TICK_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
 
 /* ------------------------------------------------------------------ the arena */
 
-#define SCN_MAX_UNITS   4096
+/* a scenario can fill the largest game the installed limit allows, ten players at
+   TAGPU_LIM_UNITS, give each of those units an order, and clear a game that full */
+#define SCN_MAX_UNITS   (10 * TAGPU_LIM_UNITS)
 #define SCN_MAX_FEATS   1024
-#define SCN_MAX_ORDERS  4096
+#define SCN_MAX_ORDERS  (10 * TAGPU_LIM_UNITS)
 #define SCN_MAX_ERRORS  24
-#define SCN_MAX_CLEAR   4096
+#define SCN_MAX_CLEAR   (10 * TAGPU_LIM_UNITS + 1)
 #define SCN_ERRLEN      168
 #define SCN_NAMELEN     32
 #define SCN_FILEMAX     (4u * 1024u * 1024u)
@@ -1124,7 +1130,7 @@ static int resolve_all(char* ta)
        the arithmetic here instead: what each player already has (minus what the
        clear is about to remove) plus what the file asks for. */
     {
-        int want[10], have[10], cap = *(unsigned short*)(ta + OFF_PERPLAYER);
+        int want[10], have[10], cap = *(unsigned short*)(ta + OFF_ARRAYCAP);
         char* beg = *(char**)(ta + OFF_BEGIN);
         char* end = *(char**)(ta + OFF_END);
 

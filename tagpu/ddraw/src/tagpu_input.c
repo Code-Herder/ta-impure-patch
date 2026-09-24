@@ -71,6 +71,9 @@ static int token_vk(const char* t)
     if (!lstrcmpiA(t, "left"))   return VK_LEFT;
     if (!lstrcmpiA(t, "right"))  return VK_RIGHT;
     if (!lstrcmpiA(t, "tab"))    return VK_TAB;
+    /* the game's own pause: in a network game it pauses every peer, where Tab only
+       opens the options panel */
+    if (!lstrcmpiA(t, "pause"))  return VK_PAUSE;
     /* text entry (tacli ui fill): clearing a field means one backspace per
        character already in it. */
     if (!lstrcmpiA(t, "backspace") || !lstrcmpiA(t, "back")) return VK_BACK;

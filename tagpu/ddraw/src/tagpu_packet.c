@@ -94,7 +94,7 @@
    that starts with the three-dword prefix {head_seq, cap_bytes, used_bytes}
    and ends with {crc, tail_seq}; what lies between is the instance's
    business, checked by its own `valid` callback after the structural checks
-   here. The frame packet (s_frame: game thread -> render thread, 16 MB
+   here. The frame packet (s_frame: game thread -> render thread, 20 MB
    slots, FIVE of them, PREV handed out for the pose blend) and the command
    record (s_cmd: render thread -> game thread, 64 KB slots, four of them,
    latest wins with `force`, no PREV) are the two instances. The proof above is written once and holds for
@@ -111,7 +111,7 @@
 #include "tagpu_log.h"
 
 #define PK_MAXSLOTS   5                    /* the frame instance's 5; cmd's 4 */
-#define PK_RESERVE    (16u << 20)          /* address space per FRAME slot    */
+#define PK_RESERVE    (20u << 20)          /* address space per FRAME slot    */
 #define PK_CMD_RESERVE (64u << 10)         /* ...and per COMMAND slot         */
 #define PK_GRAIN      (64u << 10)          /* commit granularity              */
 #define PK_PAGE       4096u                /* ...under stress, and for commands: one page */
@@ -131,7 +131,7 @@
    too small would truncate -- and a truncated unit, piece or wreck table
    refuses the frame's whole unit hand-over. The sum below is every slot of
    TAGPU_PK_DESIGN_SLOTS and every wreck the table holds, each at stock's worst
-   model (36 pieces, ARMSCORP/CORSCORP), plus the anchor table: 14.6 MB. What
+   model (36 pieces, ARMSCORP/CORSCORP), plus the anchor table: 19.2 MB. What
    follows them -- effects, fog grids, minimap -- is bounded by its own caps and
    truncates on its own bit, which costs that layer alone. The reserve is
    address space; pages are committed as the packets grow (`slot_commit`), so

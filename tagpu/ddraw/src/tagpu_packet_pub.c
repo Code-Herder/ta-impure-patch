@@ -316,8 +316,10 @@ static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, 
    differently would read every entry but the first at the wrong offset. The
    packet's copy of the piece bound has to be the model header's number too. */
 typedef char pk_maxpiece_agrees[(TAGPU_PK_MAXPIECE == TAGPU_PBMAXPIECE) ? 1 : -1];
-/* the units table holds every slot of the largest game this is built for */
+/* the units table holds every slot of the largest game this is built for, and
+   that game is at least the one the installed unit limit allows */
 typedef char pk_units_design[(TAGPU_PK_MAX_UNITS >= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
+typedef char pk_limit_design[(10u * TAGPU_LIM_UNITS + 1u <= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
 typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 100) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
@@ -995,7 +997,8 @@ static void gather_layer(const char* layers, int L)
     if (!ptr_ok(b) || !ptr_ok(e) || e <= b) return;
     /* THE BOUND IS THE ENGINE'S OWN RULE, not a probe, and the rule is 401 —
        one MORE than the number in the compare. Every emitter reads the layer's
-       size and `cmp eax,0x190 / jbe append` (0x472071 and twelve more): at 400
+       size and `cmp eax,0x190 / jbe append` (0x472071 and nineteen more across
+       0x471183..0x472CD9; 0x472BF2 compares ecx): at 400
        or fewer it appends, and past that it destroys the FRONT object, shifts
        the vector down by one and appends anyway. So a layer at 401 is the
        engine's steady state, and a walk that stopped at 400 would drop the
@@ -1058,15 +1061,18 @@ static void gather_layer(const char* layers, int L)
 static void gather_effects(const char* ta, int tick, const unsigned char* coltab)
 {
     const char* pbase = *(const char* const*)(ta + OFF_PROJ);
+    const char* xpool = tagpu_limits_expl_pool(ta);
+    const void* const* ps;
     int np = RD32(ta, OFF_NPROJ);
-    int ne = RD32(ta, OFF_NEXPL);
-    unsigned a;
+    int ne = RD32(xpool, EXPL_NCOUNT);
     int i;
 
     /* ---- projectiles (0x49BE60) ---------------------------------------
-       The array is per game: 0x499A30 allocates exactly 300 slots and
-       0x499A80 frees AND NULLS the base inside the teardown cascade, so a
-       NULL base is the refusal and the walk's bound is the allocation. */
+       The array is per game: 0x499A30 allocates exactly PROJ_COUNT slots
+       (tagpu_limits.h raises the allocation and the ten caps together, at
+       attach, before any game) and 0x499A80 frees AND NULLS the base inside
+       the teardown cascade, so a NULL base is the refusal and the walk's
+       bound is the allocation. */
     if (ptr_ok(pbase) && np > 0) {
         if (np > PROJ_COUNT) np = PROJ_COUNT;
         for (i = 0; i < np; i++) {
@@ -1081,7 +1087,7 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
             if (rt < 0 || rt > 7) continue;
             color  = *(const unsigned char*)(w + W_COLOR);
             color2 = *(const unsigned char*)(w + W_COLOR2);
-            if (s_nProj >= TAGPU_PK_MAX_PROJ) break;      /* np <= 300 already */
+            if (s_nProj >= TAGPU_PK_MAX_PROJ) break;      /* np <= PROJ_COUNT already */
             pe = &s_pScratch[s_nProj++];
             tagpu_pk_fill(pe, 0, (unsigned)sizeof *pe);
             pe->pos[0]   = *(const int*)(q + PJ_X);
@@ -1156,16 +1162,17 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
         }
     }
 
-    /* ---- the flying-debris particle slots (drawn by 0x4211D0) ---------- */
-    for (a = VA_PSYS_BEGIN; a < VA_PSYS_END; a += 4) {
-        const char* sys = *(const char* const*)(size_t)a;
+    /* ---- the flying-debris particle slots (drawn by 0x4211D0) ----------
+       Stock's .data array or ours, whichever the engine writes into. */
+    for (ps = tagpu_limits_psys_begin(); ps < tagpu_limits_psys_end(); ps++) {
+        const char* sys = (const char*)*ps;
         const char* pc;
         TAGPU_PK_DEBRIS* de;
         const short* tr;
         if (!ptr_ok(sys)) continue;
         pc = *(const char* const*)(sys + PSYS_PIECE);
         if (!ptr_ok(pc)) continue;
-        if (s_nDebris >= TAGPU_PK_MAX_DEBRIS) break;      /* 100 slots, 100 rows */
+        if (s_nDebris >= TAGPU_PK_MAX_DEBRIS) break;      /* one row per slot */
         de = &s_dScratch[s_nDebris++];
         de->pos[0] = *(const int*)(pc + DB_X);
         de->pos[1] = *(const int*)(pc + DB_ALT);
@@ -1180,15 +1187,16 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
     }
 
     /* ---- explosions (0x420B00) ---------------------------------------
-       The records are INLINE in the block, so there is no base to be NULL and
-       no allocation to outlive: the count is the whole bound, and the engine's
-       own add site keeps it under 300 (0x420A42). */
+       The pool is a fixed array -- inline in the block, or our static -- so
+       there is no base to be NULL and no allocation to outlive: the count is
+       the whole bound, and the engine's own add site keeps it under
+       EXPL_COUNT (0x420A42). */
     if (ne > 0) {
         if (ne > EXPL_COUNT) ne = EXPL_COUNT;
         for (i = 0; i < ne; i++) {
-            const char* q = ta + OFF_EXPL + (size_t)i * EXPL_STRIDE;
+            const char* q = xpool + EXPL_RECS + (size_t)i * EXPL_STRIDE;
             TAGPU_PK_EXPL* xe;
-            if (s_nExpl >= TAGPU_PK_MAX_EXPL) break;      /* ne <= 300 already */
+            if (s_nExpl >= TAGPU_PK_MAX_EXPL) break;      /* ne <= EXPL_COUNT already */
             xe = &s_eScratch[s_nExpl++];
             const short* tr = (const short*)(q + EX_TURN);
             const char* node = *(const char* const*)(q + EX_NODE);

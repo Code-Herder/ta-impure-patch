@@ -98,8 +98,21 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
   default `ui` snapshot; reach them with `ui <inst> show READY1`.
 - **Lobby state syncs**: set the map on the host and read it back on the joiner
   (`ui <join> show MAPNAME`) as a cheap proof the link is live.
-- **`scenario apply` on the host replicates its units to the joiner** through TA's own create
-  packet. Apply on one peer only.
+- **Every peer creates its own units.** `scenario apply` on a peer replicates the units that peer
+  owns to the others, through TA's own create packet. `owner` is the LOCAL player index — each
+  peer is owner 0 on its own screen — so units a file gives owner 1 are created for the other
+  player's slot on this peer alone, and no peer simulates them. For a fight between peers, apply
+  one half on each: `scenario apply h1 limits-mp-west` and `scenario apply j1 limits-mp-east`,
+  both written as owner 0. Leave `clear_existing` false, or a peer kills the other's commander
+  locally.
+- **To compare peers, pause and read both rosters.** `tacli keys h1 shift pause` sends the game's
+  own `Pause` (the leading token is the one a `keys` call drops), which pauses every peer; confirm
+  with `tacli peek <i> '*511DE8+38A51:1'` reading 1 on each. Then `tacli roster <i> --json` on
+  both: match units by `engine_index`, which is the same slot on every peer, with `owner` flipped
+  (0 ↔ 1 for two players). Stationary units agree exactly. Tab opens the options panel and does
+  not pause a network game.
+- **Each peer draws its own units in player 0's colour** on the Vulkan lane; the engine's own frame
+  is right. A renderer limit (`gpu-status.md` §3.2), not a network fault.
 - `SELPROV`'s `SELECT` crashes the game on the non-TCP/IP rows; select *Internet TCP/IP
   Connection For DirectPlay* **by name, never by row number** — it is row 0 under wine's builtin
   DirectPlay and row 3 under the native one.

@@ -108,6 +108,21 @@ scores 0 magenta and shows no game.
   `scenario load` (tacli copies it into the gamedir at launch; editing the gamedir's copy is
   overwritten), or `cp` it over `<gamedir>/ddraw.dll` and launch with `--keep-dll`. `md5sum` the
   gamedir copy in the script's own output: that line says the run tested what you think.
+- **The stock engine limits are a second build of the same tree**: `make -C tagpu/ddraw -j$(nproc)
+  LIMITS=stock` writes `ddraw-stocklimits.dll` beside `ddraw.dll`, from objects of its own, so the
+  two never mix. `cp` it over `<gamedir>/ddraw.dll`, launch with `--keep-dll`, and read
+  `limits: stock build -- nothing raised` in the log before believing the run.
+- **The unit limit is 1500 a player, and an instance keeps the last one it was given.** With no
+  `UnitLimit` in the instance's `totala.ini` the game runs at 1500; `--unit-limit` or
+  `setup.unit_limit` writes one, and it stays until another launch writes a different one, so a
+  fixture with no `unit_limit` inherits the instance's last value (the fork then refuses the
+  apply with "this game's cap is 500"). Write it in the fixture. Under `ddraw-stocklimits.dll` the
+  engine clamps to 500 again and defaults to 250, which `tacli`'s schema does not know: `scenario
+  validate` passes up to 1500 a player and 15 000 entities, and the apply then refuses. The apply's
+  own check is against the cap in force (`main+0x37EE6`), which is the host's in a network game.
+- **A single-player fight does not reproduce run to run, even under one DLL**, so a COB-trace or
+  roster timeline compared across two runs measures noise from the first impact on. Compare what
+  is a function of the build (a static frame, a pose, a table), or two peers of one network game.
 - **A foreign tree's `tacli` cannot make instances** (no wine prefix template outside a real
   checkout). Make the instance from a real checkout and swap the DLL as above. If you do set up a
   second tree, `wineprefix` there must be a `cp -al` clone and not a symlink — `cp -al` on a
