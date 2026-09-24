@@ -30,7 +30,7 @@ Three findings shaped the plan:
 
 | Limit | Stock | Ours | What it touches | Landing |
 |---|---|---|---|---|
-| the Vulkan unit pass's caches | 512 models, 1024 (type, owner) streams a frame | **done**: 30 721 each, the bound a frame cannot exceed, and a keep of 512 / 1024 between frames | visual: past them the frame's last objects were silently not drawn | A′1 |
+| the Vulkan unit pass's caches | 512 models, 1024 (type, owner) streams a frame | **done**: 30 721 each, the bound a frame cannot exceed, recycling from 512 / 1024 | visual: past them the frame's last objects were silently not drawn | A′1 |
 | unit-type IDs | 512 real types | **16 383 real types** (16 384 counting `None`) | **simulation as content**: category masks, the AI, selection | A′2 |
 | a builder's build list | 30 entries, appended unbounded | the whole list | a heap overrun at game load | A′2 |
 | a download file's menu entries | 5 a file, filled unbounded | as many as the files hold | a heap overrun at game load | A′2 |
@@ -257,9 +257,12 @@ Only the raises differ between the builds.
   with the bake's own frame counter, advanced at each `tagpu_posebake_frame`; the eviction takes only
   an entry with an older stamp. A frame asks for at most the bound, and the table holds the bound,
   so a full table always has an unstamped entry.
-- **The keep bounds memory between frames**: 512 models and 1024 streams, as before. Below it a new
-  entry takes a free slot; at it, the least recently used entry this frame has not asked for goes
-  first, so the tables and their mirrors grow past the keep only while one frame draws more.
+- **The keep is where recycling starts**: 512 models and 1024 streams, stock's sizes. Below it a new
+  entry takes a free slot; from it on, a new entry takes the slot of the least recently used entry
+  this frame has not asked for. So the caches hold the busiest frame of the level, at least the
+  keep, until the level change drops them, and a scene larger than the keep does not re-bake every
+  frame. The vertex-buffer table recycles the same way but is not dropped at a level change: its
+  entries from the last level are the first recycled.
 - **The lookups are hash chains**, on the root and ghost flag for a model, the model's slot and the
   owner for a stream, and on the serial for a vertex buffer: a scan would have been O(units ×
   entries) a frame against a table of this size. A model's per-piece topology is its own block of
@@ -271,8 +274,9 @@ Only the raises differ between the builds.
   paused right after the scenario applied:
   - the previous build: the wrecks, the heaps and the last units of the last owner are not drawn,
     nothing is logged, and the caches re-bake 51 929 models and 239 364 streams in 35 s;
-  - this build: a frame held 598 models and 1414 streams, all 1426 objects are drawn, and each
-    entry is baked once (598 and 1423);
+  - this build: a frame held 598 models and 1414 streams, all 1426 objects are drawn, and
+    nothing is re-baked once the scene is up: 598 model and 1423 stream bakes in the whole run, the
+    9 streams past 1414 being ones baked in earlier frames and recycled;
   - a level change in the same process drops all 598 and 1414, streams first, and the next level
     re-bakes from the free slots with the vertex buffers of the first evicted through the retire.
 - Review at `medium`: renderer code, no engine patch, no thread-sync change.

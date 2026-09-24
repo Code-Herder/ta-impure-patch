@@ -39,7 +39,8 @@
    pays for the types it has actually drawn: a stock model bakes to ~2000
    vertices, 64 KB of geometry and 40 KB of material stream with their mirrors,
    so a material table at its keep is ~43 MB -- a 10-player game's cost, not a
-   1v1's -- and only a frame that draws more streams than the keep holds more. */
+   1v1's -- and a level whose busiest frame draws more streams than the keep
+   holds that frame's worth until it ends. */
 #define PB_MAXGEOM  TAGPU_PB_MAXGEOM
 #define PB_MAXMAT   TAGPU_PB_MAXMAT
 #define PB_MAXVERT 49152         /* vertices one model may bake to           */
@@ -336,14 +337,12 @@ static void mat_drop(int i)
    beside, so dropping a geometry entry drops every stream that names it —
    otherwise the slot is re-baked for another type and a surviving stream would
    match a `geom ==` test against a model it has never seen. */
-static int s_dropCascade;      /* material streams dropped WITH their geometry */
-
 static void geom_drop(TAGPU_PBGEOM* g)
 {
     int i, k = (int)(g - s_geom);
     if (!g->root) return;
     for (i = 0; i < s_nmat && s_geomNmat[k]; i++)
-        if (s_mat[i].geom == g) { mat_drop(i); s_dropCascade++; }
+        if (s_mat[i].geom == g) mat_drop(i);
     chain_unlink(s_geomHead, s_geomNext, geom_bucket(g), k);
     /* the mirror goes with the entry, and the serial in it is what stops a
        hand-over published before this from reading the next model's bytes */
@@ -456,6 +455,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
            other, so a level change re-tries. */
         g->refused = 1;
         g->nvert = 0;
+        g->lastFrame = s_frame;
         return NULL;
     }
     g->nvert = c.nv;
@@ -650,7 +650,6 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
         b[sizeof b - 1] = 0;
         blog(b);
     }
-    s_dropCascade = 0;
     s_frame++;
     s_lvlGen = lvl; s_atlasGen = agen;
     /* the same 30-frame cadence tagpu_native.on is read on: this is a file
@@ -689,16 +688,10 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
         if (s_geom[i].root && s_geom[i].levelGen != lvl) {
             geom_drop(&s_geom[i]); dg++;
         }
-    if (dg || dm || s_dropCascade) {
-        char b[192];
-        /* the cascade is reported separately or the line reads "0 material" on
-           a level change that dropped every stream there was: a material goes
-           with the geometry it was walked beside, before this loop ever sees
-           it */
-        _snprintf(b, sizeof b,
-                  "posebake: dropped %d geometry (taking %d material with them) and %d material "
-                  "in its own right — level %u, atlas %u",
-                  dg, s_dropCascade, dm, lvl, agen);
+    if (dg || dm) {
+        char b[160];
+        _snprintf(b, sizeof b, "posebake: dropped %d material and %d geometry — level %u, atlas %u",
+                  dm, dg, lvl, agen);
         blog(b);
     }
 }

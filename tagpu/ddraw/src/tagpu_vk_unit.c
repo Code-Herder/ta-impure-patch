@@ -176,8 +176,8 @@
 #define FOG_MAXDIM 1024
 
 /* per-type vertex buffers: one per bake entry the bake can hold, so this
-   table is never the binding limit on a frame the bake could serve, and a keep
-   of one per entry the bake keeps between frames (`vb_slot` has the rule) */
+   table is never the binding limit on a frame the bake could serve, and
+   recycling from the bake's two keeps (`vb_slot` has the rule) */
 #define VB_MAX  (TAGPU_PB_MAXGEOM + TAGPU_PB_MAXMAT)
 #define VB_KEEP (TAGPU_PB_KEEPGEOM + TAGPU_PB_KEEPMAT)
 
@@ -728,9 +728,10 @@ static void vb_release(VBENT* e)
    frame at most TAGPU_PB_FRAMEMAX of each, which is what the table holds, so a
    table with every slot live has one this frame has not drawn. An eviction
    also needs the retire to take the buffer; when it cannot, the table grows
-   instead, so the retire bounds how fast the table comes back to the keep and
-   never what a frame can draw. The NULL is the table full with the retire
-   unable to grow: host memory, not the frame. */
+   instead, so the retire never bounds what a frame can draw. Nothing drops the
+   table at a level change: the last level's buffers are the least recently
+   drawn, so they are the first recycled. The NULL is the table full with the
+   retire unable to grow: host memory, not the frame. */
 static VBENT* vb_slot(const TAGPU_VKPASS* d, unsigned frame)
 {
     int i, worst = -1;

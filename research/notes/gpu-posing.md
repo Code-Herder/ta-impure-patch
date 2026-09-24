@@ -342,7 +342,7 @@ each bound does when it is reached, at that scale:
 | `MAXNV` / `s_vtrunc` | 49152 verts | the shared CPU vertex stream | **gone for units** — and it was already truncating at 281 units on screen (§4 step 7), which is the whole reason the CPU path is both slower and drawing less |
 | the pose arena | grown each frame to the gathered pieces (`tagpu_native.c`) | poses buffered per frame | exact: the bake keys its entry on the unit's own `nparts`, so the sum is what the loop can ask for; only a failed allocation reaches the rest-pose degradation above |
 | the unit gather | grown each frame to `n_units + n_wrecks` | units gathered per frame — **on screen only**, not alive | cannot drop a unit: a failed grow refuses the hand-over whole ([GPU status](gpu-status.html) §2.86) |
-| `PB_MAXMAT` | 30 721 (keep 1 024) | `(type, owner, atlas gen)` material streams | cannot be reached: the size is the frame's bound (every unit, wreck and ghost the packet carries), and no entry a frame has asked for is evicted during it; the keep is what is held between frames |
+| `PB_MAXMAT` | 30 721 (keep 1 024) | `(type, owner, atlas gen)` material streams | cannot be reached: the size is the frame's bound (every unit, wreck and ghost the packet carries), and no entry a frame has asked for is evicted during it; from the keep on a new entry recycles an older one, so a level holds its busiest frame's entries |
 | `PB_MAXGEOM` | 30 721 (keep 512) | models baked at once | the same bound; a wreck's model and a ghost take entries of their own ([A′1](tadr-port/content-ids.md)) |
 
 **Only `MAXNV` is step 8's.** The rest are sized for 1500 units a player × 10 players by

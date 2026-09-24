@@ -39,24 +39,25 @@
 #define TAGPU_PB_MATST   5      /* floats per material vertex */
 
 /* THE BAKE'S TWO CACHES MUST HOLD EVERY ENTRY ONE FRAME DRAWS: an entry
-   evicted mid-frame leaves the records written before it naming a stale
-   serial, and the Vulkan pass then refuses the whole frame. A frame asks for
-   at most one geometry entry and one material stream per posed object, and the
-   frame packet bounds those: every unit its table holds, every wreck, and a
-   ghost for every queued build site plus the cursor's. So each cache holds
-   that many, and a slot is never taken from an entry this frame has asked for
-   (tagpu_posebake.c `pb_slot`): together they make the mid-frame eviction
-   unreachable, whatever the content.
+   evicted mid-frame costs that frame objects, silently (content-ids.md
+   measures the frame's last objects not drawn and nothing logged). A frame
+   asks for at most one geometry entry and one material stream per posed
+   object, and the frame packet bounds those: every unit its table holds,
+   every wreck, and a ghost for every queued build site plus the cursor's. So
+   each cache holds that many, and a slot is never taken from an entry this
+   frame has asked for (tagpu_posebake.c `geom_slot`, `mat_slot`): together
+   they make the mid-frame eviction unreachable, whatever the content.
 
-   THE KEEP IS WHAT A SESSION HOLDS BETWEEN FRAMES. Below it a new entry takes
-   a free slot; at it, the least recently used entry this frame has not asked
-   for is evicted first, so the table and the mirrors it owns stay at the keep
-   unless one frame draws more distinct models or streams than that. A
-   geometry entry is one MODEL, not one type: a wreck's model and a ghost's
-   split entry take slots of their own, which is why the keep is twice stock's
-   279 types; a material stream is one (type, owner). Here as well as in
-   tagpu_posebake.c because tagpu_vk_unit.c sizes its vertex-buffer table from
-   them. */
+   THE KEEP IS WHERE RECYCLING STARTS, NOT A CEILING BETWEEN FRAMES. Below it a
+   new entry takes a free slot; from it on, a new entry evicts the least
+   recently used entry this frame has not asked for and takes its slot. So a
+   cache holds the most one frame of the level has asked for, at least the
+   keep, until the level change drops it: the recycling is what stops a scene
+   larger than the keep from re-baking every frame. A geometry entry is one
+   MODEL, not one type: a wreck's model and a ghost's split entry take slots of
+   their own, which is why the keep is twice stock's 279 types; a material
+   stream is one (type, owner). Here as well as in tagpu_posebake.c because
+   tagpu_vk_unit.c sizes its vertex-buffer table from them. */
 #define TAGPU_PB_FRAMEMAX (TAGPU_PK_MAX_UNITS + TAGPU_PK_MAX_WRECKS + TAGPU_PK_MAX_BUILDS + 1u)
 #define TAGPU_PB_MAXGEOM  ((int)TAGPU_PB_FRAMEMAX)   /* models cached at once        */
 #define TAGPU_PB_MAXMAT   ((int)TAGPU_PB_FRAMEMAX)   /* (type, owner) streams        */
