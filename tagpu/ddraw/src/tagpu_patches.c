@@ -54,16 +54,18 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
 
 /* ---- defects of the stock engine -------------------------------------------
 
-   Three places where TotalA.exe itself writes or reads memory it does not own.
-   Each patch below is the identity on every input the stock code handles safely
-   and differs only where the stock code would write past an allocation, read
-   through NULL, or read off the end of the tile map. The engine map
+   Three places where TotalA.exe itself writes or reads memory it does not own,
+   and two where it takes a player's payment and does not deliver. Each patch
+   below is the identity on every input the stock code handles correctly and
+   differs only where the stock code would write past an allocation, read
+   through NULL, read off the end of the tile map, leave a paid-for feature
+   standing, or pay for one feature twice. The engine map
    (exe-reverse-engineering.md, "Engine defects we patch") has the disassembly,
-   the callers and the measurements; binary-patches.md lists them. All three are
-   installed at every attach: ddraw.dll is a static import of the exe, so DllMain
-   runs before the exe's entry point. They are independent: each is skipped, with
-   its reason logged, only when its bytes differ from the retail exe, its stub
-   cannot be allocated, or its page cannot be made writable. */
+   the callers and the measurements; binary-patches.md lists them. All five are
+   installed at every attach: ddraw.dll is a static import of the exe, so
+   DllMain runs before the exe's entry point. They are independent: each is
+   skipped, with its reason logged, only when its bytes differ from the retail
+   exe, its stub cannot be allocated, or its page cannot be made writable. */
 
 /* why a defect patch did not go in; the log line names it */
 enum { FIX_ARMED, FIX_BYTES, FIX_STUB, FIX_PROTECT };
@@ -497,10 +499,10 @@ static int fix_terrain_window(void)
    the wreck pool, marks the cell (flags bit 0) and returns, and the update loop swaps it when
    the sequence ends (0x424495 -> 0x423710; the record's bit 1 keeps `reclaimed`). With the
    pool empty, 0x42361D sets the "no record" count and 0x423651 `jge 0x4236F7` returns having
-   done neither. Its callers have already acted: the reclaim 0x4237D0 pays the feature's metal
-   (+0xEC) and energy (+0xF0) at 0x4238FF / 0x42395B before calling it at 0x423965, and in a
-   network game then sends the event (0x0F, 0xFF, x, y) that 0x4554B0 hands to FeatureDie on
-   every peer. The cell is left unmarked, so the reclaim accepts the same feature again:
+   done neither. Its callers have already acted: the reclaim 0x4237D0 pays the feature's
+   energy (+0xEC) and metal (+0xF0) at 0x4238EF or 0x4238FF / 0x42395B before calling it at
+   0x423965, and in a network game then sends the event (0x0F, 0xFF, x, y) that 0x4554B0
+   hands to FeatureDie on every peer. The cell is left unmarked, so the reclaim accepts the same feature again:
    metal for nothing, as often as the builder repeats it. MEASURED 2026-09-24 in a ten-player
    game at 1500 units a player: the free-list head main+0x1421B read -1 on the three peers
    read.
@@ -542,18 +544,77 @@ static int fix_feature_die_pool_full(void)
     return FIX_ARMED;
 }
 
+/* A FEATURE THAT IS PAID FOR TWICE. [DISASSEMBLED] The reclaim completion 0x4237D0(who, pos),
+   stdcall, ret 8, refuses a GAF feature that is already playing its sequence: 0x423892 tests
+   the cell's flags bit 0, 0x423898 the def's GAF bit (+0xFE bit 0), and both set return 0
+   before anything is paid. But the flags it tests are the TARGETED cell's (esi, from
+   0x481550 at 0x4237FE), and FeatureDie marks only the anchor (0x42368F); every other cell
+   of a multi-cell feature keeps bit 0 clear (0x423F4D, 0x4247BB). A reclaim that lands on
+   any cell but the anchor while the sequence plays is paid in full, and its FeatureDie then
+   returns at 0x423606 on the marked anchor. MEASURED 2026-09-24, Town & Country, free
+   records: two commanders ordered together onto Building15's centre cell (2900 metal) were
+   paid +5959 in the same moment; onto its anchor cell, +3056 -- paid once.
+
+   THE FIX tests the anchor's flags. The stub resolves a 0xFFFE cell to its anchor exactly
+   as 0x423845..0x423862 does for the def -- cell - (row * width + col) * 13, the offsets
+   bytes +0x0A/+0x0B of the cell -- so it reads byte +0x0C of the cell stock already reads
+   byte +0x08 of at 0x423864: no address stock does not form. THE INVARIANT: the mark the
+   reclaim tests is the mark FeatureDie sets, so a feature playing its sequence refuses every
+   reclaim, whichever of its cells the builder aimed at. eax and ebx are dead here (eax is
+   reloaded at 0x4238B9 or zeroed at 0x4238A1; ebx ends as 3 * (row * width + col), the value
+   stock's own anchor path leaves in it), ecx (the FeatureDef) and edx (main) are untouched,
+   and esi is reloaded at 0x4238AD or restored by the epilogue. Identity on a one-cell
+   feature, on an anchor, and on a 3DO feature, which the def test pays either way. */
+static int fix_reclaim_mark_anchor(void)
+{
+    static const unsigned char was[6] = {
+        0xF6, 0x46, 0x0C, 0x01,             /* test byte [esi+0xc],1    */
+        0x74, 0x15,                         /* je 0x4238AD              */
+    };
+    static const unsigned char anchor[] = {
+        0x66, 0x81, 0x7E, 0x08, 0xFE, 0xFF, /* cmp word [esi+0x8],0xfffe */
+        0x75, 0x20,                         /* jne test                 */
+        0xA1, 0xE8, 0x1D, 0x51, 0x00,       /* mov eax,[0x511de8]       */
+        0x8B, 0x80, 0x33, 0x42, 0x01, 0x00, /* mov eax,[eax+0x14233]    */
+        0x0F, 0xB6, 0x5E, 0x0A,             /* movzx ebx,byte [esi+0xa] */
+        0x0F, 0xAF, 0xC3,                   /* imul eax,ebx             */
+        0x0F, 0xB6, 0x5E, 0x0B,             /* movzx ebx,byte [esi+0xb] */
+        0x03, 0xC3,                         /* add eax,ebx              */
+        0x8D, 0x1C, 0x40,                   /* lea ebx,[eax+eax*2]      */
+        0x8D, 0x04, 0x98,                   /* lea eax,[eax+ebx*4]      */
+        0x2B, 0xF0,                         /* sub esi,eax              */
+        0xF6, 0x46, 0x0C, 0x01,             /* test: test byte [esi+0xc],1 */
+    };
+    unsigned char* s;
+    unsigned char* p;
+
+    if (memcmp((const void*)0x00423892, was, sizeof was) != 0) return FIX_BYTES;
+    s = p = tagpu_detour_stub();
+    if (!s) return FIX_STUB;
+    memcpy(p, anchor, sizeof anchor); p += sizeof anchor;
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x004238AD); p += 4;  /* je 0x4238AD  */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00423898); p += 4;               /* jmp 0x423898 */
+    if (!tagpu_detour_land(0x00423892, s, (int)sizeof was)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return FIX_PROTECT;
+    }
+    return FIX_ARMED;
+}
+
 static void patch_engine_defects(void)
 {
     int sort = fix_sort_buffer_end();
     int plot = fix_feature_null_plot();
     int terr = fix_terrain_window();
     int die  = fix_feature_die_pool_full();
-    char b[384];
+    int mark = fix_reclaim_mark_anchor();
+    char b[448];
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
-              "terrain window bound 0x484057 %s; feature swap on a full wreck pool 0x423651 %s",
-              fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die));
+              "terrain window bound 0x484057 %s; feature swap on a full wreck pool 0x423651 %s; "
+              "reclaim tests the anchor's mark 0x423892 %s",
+              fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark));
     b[sizeof b - 1] = 0;
     plog(b);
 }
