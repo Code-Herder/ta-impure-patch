@@ -286,22 +286,31 @@ static unsigned s_pvFrame = 0xFFFFFFFFu;   /* the frame that fill belongs to —
                                       zeroed view */
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
 static int    s_fogCells = 0;         /* the ALLOCATION's cell count (= cols*rows) */
-/* Frames that needed the WIDE fog grid and whose packet carried none — so the
-   outer ring falls back to the engine's 1x grid and taFog's clamp. The wide
-   grid is built at our fog site, which exists only while the terrain pass
-   owns the ground: so besides `tagpu_fogwide.off`, a level that starts below
-   1x counts the frames before the pass takes the ground (15 measured after a
-   game -> shell -> game cycle at 1024x768), and nothing after. */
+/* Presented frames that needed the WIDE fog grid and whose packet carried
+   none — so the outer ring falls back to the engine's 1x grid and taFog's
+   clamp. The wide grid is built on every tracked in-play draw (at our fog
+   site, or by the publisher when the site is the engine's), so this counts
+   `tagpu_fogwide.off`, a build or append that failed, and nothing else. */
 static unsigned s_fogBare = 0;
-/* frames whose fog domain was not inside the grid they sampled — the fog
-   bound's witness (tagpu_zoom.c). The bare frames above, and nothing else
-   outside a grid trimmed by a failed allocation. */
+/* presented frames whose fog domain was not inside the grid they sampled —
+   the fog bound's witness (tagpu_zoom.c). The bare frames above, and nothing
+   else outside a grid trimmed by a failed allocation. */
 static unsigned s_fogOut = 0;
 /* the grid the last frame actually sampled, for the heartbeat's `fog=` */
 static const char* s_fogSampled = "none";
-/* units inside a frame's gather slab that the packet carried outside its fog
-   reach, and so without their pieces: not drawn (`nopieces=`, cumulative) */
+/* units inside a presented frame's gather slab that the packet carried
+   outside its fog reach, and so without their pieces: not drawn
+   (`nopieces=`, cumulative) */
 static unsigned s_unitNoPieces = 0;
+/* THIS FRAME'S SHARE OF THE THREE WITNESSES ABOVE, held until the frame is
+   presented. They say what reached the screen wrong, and a gather is not a
+   picture: all through the lane's bring-up, a swapchain rebuild or a skipped
+   acquire, this pass gathers and nothing is presented. render_vk.c calls
+   tagpu_native_presented with the frame number tagpu_vk_frame presented;
+   only this frame's share is kept, keyed by the number it was gathered
+   under, and the next frame's gather drops whatever was not presented. */
+static unsigned s_pendFrame = 0xFFFFFFFFu;
+static unsigned s_pendBare, s_pendOut, s_pendNoPieces;
 static const unsigned short* s_fogGrid = NULL;
 /* world origin of fog grid cell 0 on one axis: the builder's rounded eye>>5
    turned back into world px, i.e. 32*col0 + 16 (0x4843C0 head, 0x4848E0).
@@ -1966,6 +1975,13 @@ static int ghost_offscreen(float ax, float ay, int evpL, int evpT, int evw, int 
    below the viewport bound. */
 #define SSHADOW_NONE() tagpu_owndraw_set_structshadow(0, f->frame_counter)
 
+void tagpu_native_presented(unsigned int frame_counter)
+{
+    if (frame_counter != s_pendFrame) return;
+    s_fogBare += s_pendBare; s_fogOut += s_pendOut; s_unitNoPieces += s_pendNoPieces;
+    s_pendBare = s_pendOut = s_pendNoPieces = 0;
+}
+
 void tagpu_native_frame(const TAGPU_FRAME* f)
 {
     /* before the early-out and before any gather: a level that ended while this
@@ -1976,6 +1992,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        which is right — nothing has told us a level ended. */
     if (f->packet) s_lastLevelGen = f->packet->level_gen;
     cache_gen_check(s_lastLevelGen);
+    /* a new frame's witnesses start from zero, on every path through here */
+    s_pendFrame = f->frame_counter;
+    s_pendBare = s_pendOut = s_pendNoPieces = 0;
     /* and the UNIT ATLAS, which keys on frame ADDRESSES the next level's loader
        may reuse, and recycles when full. Both move its generation, so both
        are here, before tagpu_posebake_frame latches tagpu_r3d_atlas_gen() on
@@ -2319,7 +2338,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                    the outer ring falls back to taFog's clamp, and an off-map
                    eye's edge keeps the engine's misplaced completions
                    (s_fogBare says when that is expected) */
-                s_fogBare++;
+                s_pendBare++;
             }
         }
         /* THE WITNESS: this frame's fog domain inside the grid it took — on
@@ -2334,7 +2353,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             int x0 = eyeX + (evpL - vpL) - m, x1 = eyeX + (evpL - vpL) + evw + m;
             int y0 = eyeY + (evpT - vpT) - m, y1 = eyeY + (evpT - vpT) + evh + m;
             int hx = orgX + 32 * (cols - 1), hy = orgY + 32 * (rows - 1);
-            if (x0 < orgX || x1 > hx || y0 < orgY || y1 > hy) s_fogOut++;
+            if (x0 < orgX || x1 > hx || y0 < orgY || y1 > hy) s_pendOut++;
             s_fogSampled = wide ? "wide" : "engine";
         } else {
             s_fogSampled = "none";
@@ -2421,7 +2440,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 int sx0 = wx - eyeX + vpL, sy0 = wy - wz / 2 - eyeY + vpT;
                 if (sx0 >= evpL - TAGPU_GATHER_MARGIN && sx0 <= evpL + evw + TAGPU_GATHER_MARGIN &&
                     sy0 >= evpT - TAGPU_GATHER_MARGIN && sy0 <= evpT + evh + TAGPU_GATHER_MARGIN)
-                    s_unitNoPieces++;
+                    s_pendNoPieces++;
             }
             continue;
         }
