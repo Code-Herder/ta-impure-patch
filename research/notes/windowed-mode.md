@@ -147,7 +147,8 @@ Everything else is set in code (`config.c`, `tagpu_cfg.c`): the Vulkan backend (
 forces GDI), `maintas`, `vsync` off, `adjmouse`, a border, `lock_surfaces`, `singlecpu` off,
 `max_resolutions` 90, `maxgameticks` 0 (never raise: it perturbs the sim), and `center_window`
 never for a placed window — at cnc-ddraw's `auto` the shell-to-game mode switch re-centres it off
-its tile; a placed frame the switch would push off every monitor is moved onto one instead.
+its tile; a placed window the switch would leave with a corner on no monitor is moved into the work area of
+the monitor it overlaps most instead.
 
 Two X windows carry the game's title: the outer frame (client + decoration, e.g. 668×546)
 and the 640×480 client. Match on geometry, and remember the user's Discord and browser

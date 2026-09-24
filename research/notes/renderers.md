@@ -1320,8 +1320,9 @@ the store.
 **The windowed frame is saved to the store**, by `cfg_save` on the way out: `window=x,y,w,h`,
 where `w,h = 0,0` is cnc-ddraw's "the size the game asks for". A frame that a mode would leave
 with a corner on no monitor — its screen unplugged, or the shell dragged to a corner before a
-larger game — is moved the least distance that puts it wholly on the monitor it overlaps most
-(`dd_SetDisplayMode`); one straddling two monitors has every corner on one and stays.
+larger game — is moved the least distance that puts the window, decoration included, in the work
+area of the monitor it overlaps most, top-left first if it is the larger, so its title bar stays
+reachable (`dd_SetDisplayMode`); a client straddling two monitors has every corner on one and stays.
 
 **tacli never meets the migration.** It creates an **empty** `impure.cfg` in every instance
 before a launch (and never mirrors `*.migrated` or the record from the template), so the one trigger ("no `impure.cfg`") never fires there and

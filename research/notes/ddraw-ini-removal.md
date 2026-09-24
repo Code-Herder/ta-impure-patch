@@ -20,7 +20,7 @@ this file. Of the ten values the release shipped, three changed anything a playe
 | `tagpu_cfg_defaults` owned four keys *unless the file carried them* (`typed()`) | it sets TA's values outright: `max_resolutions` 90 (a static assert bounds it at TA's 100-entry buffer), `toggle_borderless`, `lock_surfaces`, `singlecpu` off, `maintas`, borderless fullscreen; logs one `cfg:` line |
 | three **held** flags greyed Display mode, Monitor and Frame cap when the file placed the window | gone; `vrow_held` greys only a lever's row (UI scale) or everything under `tagpu_defaults.off` |
 | under `tagpu_defaults.off` the store had no say; the window came from `ddraw.ini` | `display`, `maxfps` and `window` are read under every launch (`tagpu_settings_placement`, `tagpu_settings_window`); nothing else can place a window |
-| tacli wrote `center_window=0` so a tile survived the shell → game mode switch | a window the store placed gets `CENTER_WINDOW_NEVER` in code; one a mode switch would leave with a corner on no monitor is moved the least distance onto the monitor it overlaps most (`dd_SetDisplayMode`) |
+| tacli wrote `center_window=0` so a tile survived the shell → game mode switch | a window the store placed gets `CENTER_WINDOW_NEVER` in code; one a mode switch would leave with a client corner on no monitor is moved the least distance that puts the window, decoration included, in the work area of the monitor it overlaps most (`dd_SetDisplayMode`) |
 | the first-run migration stripped the window keys from `ddraw.ini` (`strip_ini`) | gone; the migration keeps its other steps |
 | `renderer=` chose the backend (`gdi`, `vulkan`, `auto` = Vulkan) | Vulkan always, unless the harness lever **`tagpu_gdi.on`** is present at attach (`g_config.gdi`); GDI is otherwise only the lane Vulkan hands a failed session to |
 | the compatibility warning pointed at `no_compat_warning` in `ddraw.ini` | the sentence is gone |
@@ -90,8 +90,9 @@ With no monitor chosen (`monitor=-`, or a stored one no longer attached), `util_
 - **fullscreen with a windowed frame on record** (`window_rect`, from the store or from this
   session's window) — the monitor that frame is on. `util_toggle_fullscreen` records the window's
   client origin on the way out, so the frame is where the window *is*: on Windows a keyboard move
-  or a snap updates `window_rect` nowhere else. A frame on no monitor (its screen unplugged) counts
-  as none. This is a refinement of the decision's
+  or a snap updates `window_rect` nowhere else. The frame's monitor is the one its client overlaps
+  most, so a window dragged partly past an edge, or with its origin in the gap between two monitors
+  of different sizes, still counts; a frame on no monitor (its screen unplugged) counts as none. This is a refinement of the decision's
   "primary": without it, Alt+Enter from a window on a side monitor would go fullscreen on the
   primary.
 - **fullscreen with no frame** — the **primary**, the monitor at the desktop's origin. Before,
@@ -150,16 +151,20 @@ Xinerama heads, 1280×1024 at 0,0 = wine's primary and 1920×1080 at 1280,0) ins
    target logged `0,0-1280,1024` and the window came up 1280×1024 at 0,0 (the primary); a stored
    frame at 1400,100 with `display=fullscreen` and a detached `monitor=\\.\DISPLAY9` → target
    `1280,0-3200,1080`, window 1920×1080 at 1280,0.
-9. **The review's fixes** (two `high` reviewers). Store ownership, on a fresh instance: `--shipped`,
-   menu keys set to `maxfps=120 display=window resolution=800x600` → an ordinary launch wrote
-   `resolution=1024x768`, the tile and `maxfps=60`, with the player's three kept in the meta → a
-   second `--shipped` launch came up `display=window maxfps=120 window=default` with the player's
-   lines back and no harness file → an ordinary launch restored the harness lines. `create
-   --maxfps 30` and `create --window 200x100` refused with no instance directory left; `--keep-dll`
-   over `main`'s build refused and wrote no ini. On the nested two-head server (no WM), a stored
-   frame at 2800,700 came up 640×480 at **2560,600** (moved wholly onto head 1), one at 1000,100
-   straddling both heads stayed, one at 2500,500 stayed; from 2500,500, Display mode → Fullscreen
-   went 1920×1080 at 1280,0 and back → Window returned to 2500,500 and saved it.
+9. **The review's fixes** (two `high` reviewers, then a re-review of the fixes). Store ownership,
+   on a fresh instance: `--shipped`, menu keys set to `maxfps=120 display=window
+   resolution=800x600` → an ordinary launch wrote `resolution=1024x768`, the tile and `maxfps=60`,
+   with the player's three kept in the meta → a second `--shipped` launch came up `display=window
+   maxfps=120 window=default` with the player's lines back and no harness file → an ordinary launch
+   restored the harness lines. On a `--defaults` instance, two `--shipped` launches in a row left
+   the harness's `res` and tile at 1024×768 with the player's `resolution=800x600` in the store,
+   and a control launch after them restored `resolution=1024x768`. `create --maxfps 30` and
+   `create --window 200x100` refused with no instance directory left; `--keep-dll` over `main`'s
+   build refused and wrote no ini. On the nested two-head server (no WM), a stored frame at
+   2800,700 came up with its 640×480 client at **2556,596** (the 4-pixel border ends on head 1's
+   edge), one at -300,-200 at **4,30** (the title bar at 0,0), one at 1000,100 straddling both
+   heads stayed, one at 2500,500 stayed; from 2500,500, Display mode → Fullscreen went 1920×1080
+   at 1280,0 and back → Window returned to 2500,500.
 
 ## Gaps
 

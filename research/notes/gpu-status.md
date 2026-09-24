@@ -1917,7 +1917,7 @@ per-game hacks (`vhack`, `tshack`, `infantryhack`, …), none of which TA ever t
 | `singlecpu` | false | cnc-ddraw's default pins the whole process, the render thread included, to one CPU |
 | `maintas` | true | the aspect-preserving fit |
 | `maxfps`, `window_rect` | the store's `maxfps` and `window` | read under `tagpu_defaults.off` too (`tagpu_settings_placement`): nothing else can place the window |
-| `center_window` | never, when the store placed the window | at cnc-ddraw's `auto`, the shell-to-game mode switch re-centres the window off its tile; a placed frame with a corner on no monitor is moved onto the one it overlaps most instead (`dd_SetDisplayMode`) |
+| `center_window` | never, when the store placed the window | at cnc-ddraw's `auto`, the shell-to-game mode switch re-centres the window off its tile; a placed client with a corner on no monitor is moved, decoration included, into the work area of the monitor it overlaps most instead (`dd_SetDisplayMode`) |
 | `gdi` | `tagpu_gdi.on` present | forces the GDI backend; otherwise Vulkan |
 | `inject_resolution` | the desktop mode | the one list entry exempt from the `CDS_TEST` filter, so the monitor's own mode is *guaranteed* into the picker ([resolution](resolution.html) §6.5); filled lazily in `EnumDisplayModes`, because `cfg_load` runs under the loader lock and must not touch the display |
 
