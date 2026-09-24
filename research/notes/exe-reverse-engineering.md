@@ -4274,7 +4274,20 @@ its bound.
 | the feature grid | `main+0x14287`, `0x0D` per cell: `+0x04` height, `+0x08` def index, `+0x0A` wreck index, `+0x0C` flags | the rect is clamped to `main+0x14233`/`+0x14237`; a def index `≥ 0xFFFB` is not an anchor |
 | a wreck record | `main+0x1420B + idx·0x30`: `+0x04` Object3do, `+0x08/+0x0C/+0x10` the 16.16 position | reached only from an anchor whose FeatureDef row is inside `main+0x14253` and whose `FeatureMask` bit 0 is clear — **and whose cell index is under the pool's count** (`WR_COUNT` = `TAGPU_LIM_WRECKS`: 2048 in stock, 8192 under the raised limits), the pool `0x421F29` allocates. **[ADDED 2026-09-12, a landing review]** the index had no bound at all before, and this walk is not the engine's: the engine's own read at `0x46A6C4` is equally unbounded but only ever forms the address for a cell it is drawing, where the publisher covers the zoom-floor rect plus a 32-cell margin. The allocator `0x4232A0` returns the count itself when the free list is empty, so the count is the engine's own "no record" value as well as the array's length |
 | the frame's option bytes | `main+0x0DCB` the GUI colour array — **256 bytes, not 64** [CORRECTED 2026-09-12, landing 4a: `0x4AC7D0` rebuilds it from `guipal` and its loop at `0x4AC7FF..0x4AC88F` writes exactly `0x100` of them], `+0x2C76`/`+0x2C7A` the dispatched mouse point, `+0x2C92..+0x2CA6` the build cursor's two corners, `+0x2CC3` the cursor mode, `+0x2CC6` the region flags, `+0x37F06` the option byte (damagebars, Shadow, TShadow, FShadow), `+0x1424B`/`+0x1424F` the feature sweep | none needed: they are values, and every consumer of them already treated them as such |
+| the feature grid, WHOLE, once a level | `main+0x14287` over all `main+0x14233` × `main+0x14237` cells: `+0x08` def index, `+0x0C` flags (bit 0 only), `+0x04` height of the cell and of its right, lower and lower-right neighbours | the map's own features for the map edge's mirror (`mapfeat_snapshot`, `TAGPU_PK_MAPFEAT`, [GPU status](gpu-status.html) §2.89). The dimensions must be 1..4096 and `NumFeatureDefs` (`main+0x14253`) 1..4096; a def index is kept only under that count and a cell with flags bit 0 is skipped, being the wreck pool's; the neighbours take the anchor scan's edge clamps; the table stops at 65 536 entries and says so (`TAGPU_PK_TRUNC_MAPFEAT`). Taken on the level's first in-play draw only — see the ordering below |
 | the shade table | `[0x51FBD0]+0xC4`, 32 × 256 bytes | the FORMAT is the bound: `0x459C70`'s Gouraud path indexes it with a 5-bit row and a byte, so a copy of exactly that size reads what the rasteriser reads. The unit lane does not remap through it: `tagpu_render3do.c` fits one RGB multiplier per row from it (`shade_k_build`, [GPU status](gpu-status.html) §2.88) |
+
+**The map's own features are taken before any scenario can touch the grid** [VERIFIED 2026-09-24,
+`objdump` of the pristine build at `0x4969CB..0x4969D7`]. The played frame is `push ebx; push
+ebx; call 0x468CF0` at `0x4969CD`, and the instruction after it, `0x4969D2` (`A1 E8 1D 51 00`,
+`mov eax, ds:0x511DE8`), is where the scenario applier's tick stub lands its `jmp` — the applier
+creates its units, features and wrecks from there and from nowhere else (`tagpu_scenario.c`).
+The publisher's observer on `DrawGameScreen` runs its `after` when that call returns, before
+control reaches `0x4969D2`. So the `after` of a level's first in-play draw precedes the first run
+of the stub in that level, whatever the applier has queued, and the whole-grid snapshot taken
+there is the grid the map's load left (`tagpu_packet_pub.c` `after_draw`, the snapshot above the
+publish and outside its FRESH gate, because a publish can be skipped and this must not be). Its
+cost is one `u16` load per cell on that one frame and was not measured.
 
 ### The effects: the four per-frame arrays [VERIFIED 2026-09-12, landing 4a, objdump of the pristine build]
 

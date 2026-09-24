@@ -771,7 +771,7 @@ lane runs at zoom 1 by construction and cannot show them (§4).
 ### 2.10 Settings: an in-game screen, drawn by the engine's own GUI  [REVISED 2026-09-09]
 
 **Decided: the render options are a real `.GUI` screen — the engine's own gadgets, its own
-GAF art, its own dispatcher — not a panel the DLL paints.** Seven stage buttons, no pages.
+GAF art, its own dispatcher — not a panel the DLL paints.** Eight stage buttons, no pages.
 This supersedes the original decision below, which was for a DLL-drawn panel hanging off an
 "Options" button in the top bar.
 
@@ -782,30 +782,30 @@ game's is tracked). Interviewed with the owner 2026-09-08/09.
 
 **The two rules the owner set.**
 
-*The count has been six and seven at different times and the two changes are unrelated:
-mouse-wheel zoom was cut as a seventh row (below), and the **FPS readout** was added as one
-on 2026-09-09. The row table and every geometry number here are the current **seven**.*
+*The count has been six, seven and eight, and the changes are unrelated: mouse-wheel zoom was
+cut as a seventh row (below), the **FPS readout** was added as one on 2026-09-09, and the **Map
+edge** as the eighth on 2026-09-24 (G20b). The row table and every geometry number here are the
+current **eight**.*
 
 1. **The menu never offers the unmodified original engine.** No row has an "off, let the
    1997 code draw it" position — we own the draw, and the only question a row asks is which
    of *our* two renderers owns it.
-2. **Simplify.** Seven gadgets, and everything else demoted to the cfg. (Six when the rules
-   were set; the readout is the one addition, and it is a diagnostic rather than a render
-   option — see the row table.)
+2. **Simplify.** Eight gadgets, and everything else demoted to the cfg. (Six when the rules
+   were set; the additions are the readout, a diagnostic rather than a render option, and the
+   map edge — see the row table.)
 
 **The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
-panel `id=0` at `(w−16−304, 32) 304×240` — right-aligned by `MARGIN = 16`, hanging from the
-top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Seven
+panel `id=0` at `(w−16−304, 32) 304×268` — right-aligned by `MARGIN = 16`, hanging from the
+top bar's underside, over the world. Background gadget `id=12` naming its panel frame. Eight
 `id=1` buttons at `x=166 w=120 h=20` on a **28 px** pitch, each with an `id=5` label at
 `x=14 w=144` **on the same line**:
 
-*The height is **240 again as of 2026-09-09**, and the arithmetic — not an earlier draft — is
-why. At six rows it was 212 (`DIV_BOT = 202`, the last row ending at 194) and a revision that
-said 240 was simply wrong; the seventh row moves the last row's end to `34 + 28×6 + 20 = 222`,
-so 240 is what leaves the same 18 px below it. **`tools/guipanel.py` is no longer the source of
-truth for this number** — it still says `W,H = 304,212`, and `PANEL_H` in `tagpu_menu.c` is the
-one define the screen is actually built from (the panel is composed at runtime from the
-player's install, so nothing is regenerated when it changes).*
+*The height is **268**, and the arithmetic is why: eight rows on the 28 px pitch put the last
+row's end at `34 + 28×7 + 20 = 250`, the bottom rule (`DIV_BOT`) sits 8 px under it at 258, and
+the panel ends 10 px under the rule. **`tools/guipanel.py` is not the source of truth for this
+number** — it says `W,H = 304,212` — and `PANEL_H` in `tagpu_menu.c` is the one define the
+screen is actually built from (the panel is composed at runtime from the player's install, so
+nothing is regenerated when it changes).*
 
 | y | row | stages | what drives it |
 |---|---|---|---|
@@ -817,6 +817,7 @@ player's install, so nothing is regenerated when it changes).*
 | 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=` — it sizes the soft map and nothing else, so with no soft map the row is **greyed unconditionally**. It is kept rather than removed: one line un-greys it the day the map's producer is written |
 | 174 | **Supersampling** | Off \| 2× | `ss=` in the store (§2.10b); `tagpu_ss.off` is its lever |
 | 202 | **FPS counter** | Off \| On | `fps=` in the store; `tagpu_fps.on` is its lever — the readout, [GPU status](gpu-status.html) §2.14 |
+| 230 | **Map edge** | Black \| Mirror | `edge=` in the store (§2.10b); `tagpu_mirror.on`/`.off` are its levers — what the view shows past the map, [GPU status](gpu-status.html) §2.89. Never greyed with the lane: the mirror is drawn under either preset |
 
 **Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
 was the seventh row and was **cut**: `tagpu_zoom_init()` runs *once* from `dllmain.c:130` and
@@ -839,6 +840,15 @@ Classic lane (it is orthogonal to it, as supersampling is). Both are stated in
 [GPU status](gpu-status.html) §2.12, because `read_state()` and the click handler have to agree
 on them or the row misreports itself on the next open.
 
+**The Map edge row clears the same bar** [2026-09-24, G20b]. The render thread re-reads the edge
+every 30 frames (`tagpu_native.c`, through `tagpu_opt_on("tagpu_mirror.on")`, which answers
+lever, then store, then default), and the terrain and feature gathers decide per frame, so a
+click shows within half a second at 60 fps with no patch and no relaunch. It has the FPS row's
+two exemptions, for its own reasons: `derive_style()` does not read it, so it never makes
+Renderer read `Custom`, and it is never greyed by the Classic lane, because the mirror is drawn
+in full colour under either preset. `read_state()` shows the edge **in force** — the lever's
+where one exists, which also greys the row — so the plate cannot disagree with the picture.
+
 *This supersedes a 150×352 panel at `(128,128)` — the rect `VISUALRT.GUI` uses — with the
 label 16 px **above** its control on a 44 px pitch. The label moved beside the control, and
 that is the whole reason the frame has to be composed rather than reused: every stock panel
@@ -848,7 +858,7 @@ puts the label above, which seven rows have no room for.*
 behaviour prototyped the same day]. The panel opens on the sprocket and closes on the sprocket;
 clicks anywhere else go to the game untouched. Two things forced it, and both are measurements:
 **every row is live**, so a menu you must dismiss to see the effect of is the wrong shape —
-you would click, close, look, reopen; and the panel is 304×240 in a corner, covering ~9 % of a
+you would click, close, look, reopen; and the panel is 304×268 in a corner, covering ~10 % of a
 1024×768 frame and none of the side panel. It also removes the only place our input code would
 have had to arbitrate with the game's, and makes the earlier *"not measured: whether a `.GUI`
 dispatcher reports a click outside its `id=0` rect"* moot — nothing needs that answer now.
@@ -864,15 +874,16 @@ at `main+0x38A47`, and the notes record the seconds *stopping* with TA's own men
 edit buffer for an Apply to commit — so `OnCommand` writes the row's key on the click and
 the panel is dismissed by the trigger or by clicking away, the way a drop-down is. Not only
 a visual choice: it removes an eighth gadget from the `.GUI` and means no code ever has to
-gather seven gadgets' state at once. It also takes 40 px off the panel, which is why the
-height is 240 and not 280.
+gather every gadget's state at once. It also takes 40 px off the panel, which is why the
+height is 268 and not 308.
 
 **The ground is `frontend.gaf`'s own `back*` nine-slice** [DECIDED 2026-09-09] — the shell's
-mottled panelling, 64×64, composed at 304×240 by `tools/guipanel.py --nine back`. Three were
+mottled panelling, 64×64, composed at the panel's size (`tools/guipanel.py --nine back` is the
+lab's copy of it). Three were
 built and looked at: `dia` (TA's dialog exactly — `diatile` is *one colour*, flat black, in a
 grey bevel), `back`, and a `hybrid` putting the back texture inside the dia frame. `back`
 was chosen. **Use `backtile` frame 4, not 0** — frame 0 carries a lit bottom edge that puts
-seams through a tiled centre. Only the seven recesses are drawn over it; `text16*` is a
+seams through a tiled centre. Only the eight recesses are drawn over it; `text16*` is a
 *blue* text-field well, not a neutral recess, which is why they cannot come from the kit.
 
 **What opens it: a frameless sprocket on the top bar** [DECIDED 2026-09-09]. 28×28 in the
@@ -1259,7 +1270,7 @@ file with them.
 **Precedence: a lever beats the store, and the store beats the compiled default.**
 
 1. A **lever file** that names the setting (`tagpu_classicpp.on/.off`, a menu key inside
-   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`) wins. The row
+   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`, `tagpu_mirror.on/.off`) wins. The row
    shows the lever's value **greyed**, so a click can never silently lose to a file. Display
    mode, Monitor and Frame cap have no lever: nothing but the store places the window.
 2. **`impure.cfg`.**
@@ -1300,6 +1311,7 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `monitor` | the primary | stored by device name (`\\.\DISPLAY2`), never by index |
 | `window` | — | the windowed frame rect, once there has been one |
 | `gpu` | `auto` | discrete > integrated > virtual > CPU, then the largest `DEVICE_LOCAL` heap; the row's first stage |
+| `edge` | `mirror` | `mirror` or `black`: what the view shows past the map ([GPU status](gpu-status.html) §2.89). Not a render key, so the preset never rewrites it; `tagpu_mirror.on`/`.off` are its levers |
 | `mixingbuffers` | 32 | 8, 16, 24 or 32: the sounds the engine plays at once. No row; not a Visuals value, but the same loader reads it |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`

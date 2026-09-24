@@ -46,6 +46,7 @@ the arm files count. A dependency turns off with its parent.
 | `ghost.on` | | `native.on` |
 | `zoom.on` | | |
 | `vpwide.on` | | `zoom.on` |
+| `mirror.on` | | the store's `edge` key decides it (below) |
 | `gui.on` | | |
 | `classicpp.on` | | |
 | `weapons.on` | | |
@@ -184,6 +185,7 @@ need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pix
 | `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with `zoom.on` |
 | `zoomedge.off` | live | the 1x camera range back (a zoomed-in view then stops short of the map edge) |
 | `vpwide.on` | attach | widens the rect the engine addresses to what the zoom shows, so ring clicks and band boxes land at zoom < 1. Writes `main+0x37E27..0x37E33`. Logs `vpwide: ARMED (mouse->world 0x498DA0, surface …)` and `vpwide: true viewport rect verified (128,32 896x704)`, `vpwide: viewport rect restored to 1x` at 1x. `zoom.on` alone logs `vpwide: mouse->world repair only (0x498DA0) —` |
+| `mirror.on` / `mirror.off` | live (30 frames) | the map edge: the world reflected past the map, or black. On the play defaults, where the store's `edge=mirror\|black` decides it; under `tagpu_defaults.off` (every tacli control launch) it is **black** unless `mirror.on` is armed. The render thread logs `native: map edge = mirror` or `= black` on every change, the one line to read |
 | `fogwide.off` | live | the wide fog grid off: the outer ring at zoom < 1 falls back to a smear of the border cell. The native line's `bare=` does not count this |
 | `fogwide_check.on` | live | the oracle: `fogwide check: … compared=N of cells=M differ=N` every 120th tick, **`differ=0`** |
 
@@ -209,6 +211,18 @@ Driving the camera at a zoom other than 1:
 - **Dialogs drawn inside the viewport keep 1:1 clicks at every zoom** (`ARMOPT`, `EXITMENU`,
   `YESORNO`, the preferences screens); `SHARE.GUI` is the known gap, and `ui press <gadget>` is
   the fallback there.
+- **The mirror is ground and features together or neither.** Its features come from the map's
+  own feature grid as the level's first in-play draw found it (never a scenario's, never a
+  wreck), which the packet carries only while the feature pass is armed with the edge on
+  `mirror`; the ground waits for that table, so with `feat.on` armed nothing mirrors until
+  `feat: mirror: the map's own features taken for level N: K of K over WxH` has logged. With
+  `feat.on` unarmed the ground mirrors alone, as the map's own features are absent too. The
+  publisher's line is `packet: level gen N: the map's own features: K anchor(s) over WxH`.
+  Heartbeats: `terr: … mirror=N` (off-map cells drawn), `feat: … | mirror: map=K anchors=
+  body= shadow=` under `log`, and `packet: … mapfeat=K carried=N`, where `carried` stops
+  climbing once the feature pass holds the table.
+- **An edge=black A/B is the control launch as it is**: `tagpu_defaults.off` already draws black,
+  so arm `mirror.on` only on the side that should mirror.
 - **Edge scroll is an equality on the outermost pixel** (`x == 0`, `y == 0`, `x == W−1`,
   `y == H−1`), at every zoom on all four edges.
 
