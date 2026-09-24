@@ -411,17 +411,46 @@ static int fogw_window(char* ta, int vw, int vh,
    trunc(eye/32), one less when the eye sits in the first half of its cell. */
 static int eng_col0(int eye) { return eye / 32 - ((eye % 32) < 16 ? 1 : 0); }
 
+/* One border completion's two rows (or columns) — the engine's literal index
+   and fogw_build's derived one — marked for the oracle to leave out when they
+   differ. Both are marked: that edge's completion is then defined differently
+   by the two functions on each of them. */
+static void edge_skip(unsigned char* skip, int n, int literal, int derived)
+{
+    if (literal == derived) return;
+    if ((unsigned)literal < (unsigned)n) skip[literal] = 1;
+    if ((unsigned)derived < (unsigned)n) skip[derived] = 1;
+}
+
 /* With tagpu_fogwide_check.on: build over the ENGINE's own window and compare
-   with the grid the engine just built there. A replication that is right is
-   byte-identical; anything else is a number in the log, not a guess. */
+   with the grid the engine just built there, on every entry the two functions
+   define the same way. A replication that is right is byte-identical there;
+   anything else is a number in the log, not a guess.
+
+   THE BORDER COMPLETIONS ARE COMPARED ONLY WHERE BOTH FUNCTIONS PUT THEM. The
+   engine completes its literal row 0 / rows-2 / column 0 / cols-2; fogw_build
+   completes the entry that straddles the map edge, `-row0-1` and so on (exe
+   map, "The four border completions"). Those are the same line while the
+   window overshoots the map by at most one cell — every eye in the engine's
+   own range `[0, map - W]` — and not otherwise: past it (`row0 <= -2`, or the
+   far edges' equivalent, which the camera's centre range reaches) the
+   engine's line lies wholly off the map and its completion is a no-op on an
+   all-zero line, while ours completes the straddling line the engine leaves
+   half-set. That difference is the derived index doing its job, so for each
+   completion whose gate is up and whose two lines differ, both lines are left
+   out — and nothing else can differ because of them: every entry depends only
+   on its own four cells, and each completion copies bits within one entry.
+   `skipped=` counts the entries left out; 0 for any eye in the engine's own
+   range, where the comparison is the whole grid as before. */
 static void fogw_check(char* ta, const FOGW_SRC* s)
 {
     static unsigned short* scratch;
     static unsigned frames;
     static int armed = -1;
+    static unsigned char skipR[256], skipC[256];
     const int* fg;
     const unsigned short* buf;
-    int cols, rows, cells, i, n, bad = 0, nz = 0;
+    int cols, rows, cells, i, n, bad = 0, nz = 0, cmp = 0, col0, row0;
     char b[192];
 
     if (armed < 0)
@@ -438,9 +467,17 @@ static void fogw_check(char* ta, const FOGW_SRC* s)
     if (!scratch) scratch = (unsigned short*)malloc((size_t)256 * 256 * 2);
     if (!scratch) return;
 
-    fogw_build(s, scratch, cols, rows,
-               eng_col0(*(const int*)(ta + OFF_EYEX)),
-               eng_col0(*(const int*)(ta + OFF_EYEY)));
+    col0 = eng_col0(*(const int*)(ta + OFF_EYEX));
+    row0 = eng_col0(*(const int*)(ta + OFF_EYEY));
+    fogw_build(s, scratch, cols, rows, col0, row0);
+
+    memset(skipR, 0, (size_t)rows);
+    memset(skipC, 0, (size_t)cols);
+    if (row0 < 0)                  edge_skip(skipR, rows, 0, -row0 - 1);
+    if (row0 + rows > s->plotR / 2) edge_skip(skipR, rows, rows - 2, s->plotR / 2 - 1 - row0);
+    if (col0 < 0)                  edge_skip(skipC, cols, 0, -col0 - 1);
+    if (col0 + cols > s->plotC / 2) edge_skip(skipC, cols, cols - 2, s->plotC / 2 - 1 - col0);
+
     /* `cols*rows`, NOT `cells`: the engine ROUNDS ITS ALLOCATION UP to a
        multiple of 8 and clears all of it, while fogw_build fills exactly the
        grid. Comparing the tail would put up to 7 entries of untouched
@@ -448,12 +485,14 @@ static void fogw_check(char* ta, const FOGW_SRC* s)
        difference vanish, but on a reused heap block it invents one. */
     n = cols * rows;
     for (i = 0; i < n; i++) {
+        if (skipR[i / cols] || skipC[i % cols]) continue;
+        cmp++;
         if (scratch[i] != buf[i]) bad++;
         if (buf[i]) nz++;
     }
-    sprintf(b, "fogwide check: %dx%d compared=%d of cells=%d differ=%d "
+    sprintf(b, "fogwide check: %dx%d compared=%d of cells=%d skipped=%d differ=%d "
                "engine-nonzero=%d truelos=%d",
-            cols, rows, n, cells, bad, nz, s->trueLos);
+            cols, rows, cmp, cells, n - cmp, bad, nz, s->trueLos);
     flog(b);
 }
 

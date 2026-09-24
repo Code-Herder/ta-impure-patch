@@ -1010,9 +1010,14 @@ window each 120th tick and compares byte for byte — **0 differing of 720 cells
 Two departures from the engine, both deliberate and both documented in the source:
 
 1. **The border completions use the derived straddling index**, not the engine's literal
-   `0`/`rows−2`/`0`/`cols−2` (engine map, the table). They coincide in every window the engine can
-   produce, which is why the oracle still reads 0; they do not in a window that reaches many cells
-   past the map.
+   `0`/`rows−2`/`0`/`cols−2` (engine map, the table). They coincide in every window an eye in the
+   engine's own range `[0, map − W]` produces; past it — the camera's centre range takes the eye up
+   to `W/2` off the map, so `row0`/`col0` reach −2 and beyond, or the far edges' equivalent — they do
+   not, and there the engine's completion is a no-op on a wholly off-map line while ours completes
+   the straddling one. So the oracle compares only what both functions define the same way: for
+   each completion whose gate is up and whose two lines differ, both lines are left out and counted
+   as `skipped=` (`edge_skip`). Every other entry depends only on its own four cells, and each
+   completion copies bits within one entry, so nothing else can differ because of them.
 2. **`fogw_edge_fill` replicates the edge entry outward** over the entries that lie wholly off the
    map. The engine never meets that case — its grid stops one cell past — but ours can carry forty
    all-zero rows over open water, and an all-zero entry means "no fog": a sprite whose *projected*

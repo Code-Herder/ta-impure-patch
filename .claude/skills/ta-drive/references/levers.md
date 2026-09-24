@@ -180,7 +180,7 @@ fixture that only arms the pass produces no picture:
 | `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with the mouse->world repair (`zoom.on` or `vpwide.on`) |
 | `vpwide.on` | attach | widens the rect the engine addresses to what the zoom shows, so ring clicks and band boxes land at zoom < 1. Writes `main+0x37E27..0x37E33`. Logs `vpwide: ARMED (mouse->world 0x498DA0, surface …)` and `vpwide: true viewport rect verified (128,32 896x704)`, `vpwide: viewport rect restored to 1x` at 1x. `zoom.on` alone logs `vpwide: mouse->world repair only (0x498DA0) —` |
 | `fogwide.off` | live | the wide fog grid off: the outer ring at zoom < 1 falls back to a smear of the border cell. The native line's `bare=` does not count this |
-| `fogwide_check.on` | live | the oracle: `fogwide check: … compared=N of cells=M differ=N` every 120th tick, **`differ=0`** |
+| `fogwide_check.on` | live | the oracle: `fogwide check: … compared=N of cells=M skipped=K differ=N` every 120th tick, **`differ=0`**. It compares only the entries both builders define the same way: `skipped` is the border lines where the engine's literal completion row or column and ours (the straddling one) differ, both left out — 0 for an eye in the engine's own `[0, map − W]`, non-zero past it (the centre range) |
 
 Driving the camera at a zoom other than 1:
 

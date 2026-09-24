@@ -843,6 +843,12 @@ put the eye past `[0, map − W]`, and the native pass then draws from `fogwide`
 (`tagpu_zoom_wide_fog`). The addresses stay inside the grid either way — each completion loops
 over the grid's own `[0, cols)` or `[0, rows)` — so what goes wrong is the content, not memory.
 
+Off the straddle the literal line lies wholly off the map, where every entry is zero, so the
+engine's completion there is a no-op and the two builders differ only on the lines of that table:
+the engine leaves the straddling line half-set, ours completes it. `fogwide`'s oracle
+(`tagpu_fogwide_check.on`) therefore leaves both lines out of the comparison for each completion
+whose gate is up and whose two indices differ, and reports them as `skipped=`.
+
 ## The blend LUT and the marker composites — mapped by us
 
 [MEASURED 2026-09-03, this project — disassembly of the pristine Steam build plus live reads.
