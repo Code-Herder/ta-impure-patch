@@ -974,7 +974,10 @@ published without the tables it asked for while the slot can grow. After, on the
 Continents, the fight / follow / hand-back run above: `bare`, `out`, `nopieces`, `norec` and
 `recodd` 0 at every stage, `back=0` on every heartbeat, `trunc=0 refill=3`. `big-battle` under
 `check` + `stress`, where every in-play draw publishes into one-page slots that must grow:
-`trunc=0 refill=12 grow=43 viol=0 pviol=0 crcbad=0`.
+`trunc=0 refill=12 grow=43 viol=0 pviol=0 crcbad=0`. Merged with main's full-colour Classic and run on the reference
+setup's GPU at 1024x768, the world A/B with the eye pinned (terrain at 1×, 2× and 0.5×, units at
+1× and 2×) read main's own build's md5 on all five captures, main, this branch and main again on
+one instance.
 
 **The minimap's dirty bit is set now, and the box never lagged.** Nine of the engine's eleven eye
 writers store the eye, set bit 1 of `main+0x142F1` (`orb $2`, e.g. `0x41C598`, `0x41D04D`), call
@@ -3738,8 +3741,9 @@ Loaded `--mapping 0 --los 1` so there IS fog, at four stops — zoom 1.0 and 0.5
 position and at the map's (0,0) corner, zoom driven through `tagpu_zoom.txt` so the camera never
 moves between the first two. **Every stop: within-launch floor 0 px, and 0 px between landing 3's
 DLL and this one.** `fogwide check: differ=0` on 720 of 720 cells on both builds; `bare=0`.
-The heartbeat's new `fog:` segment is `<cols>x<rows> wide=<cols>x<rows>/<publishes> refused=
-shade=`.
+The heartbeat's new `fog:` segment is `<cols>x<rows> wide=<cols>x<rows>/<publishes> refused=`,
+with `norec=` and `recodd=` since the engine grid's build record (§2.3e); its `shade=` went with
+the fog-shade table (G20d).
 
 **And re-measured on the binary that SHIPS**, after the review's fix put a draw stamp in front of
 both fog answers — because that fix could have refused the wide grid outright and the only thing
