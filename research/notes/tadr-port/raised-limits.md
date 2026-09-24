@@ -2,9 +2,11 @@
 
 ## Summary
 
-Nine of the engine limits TADR raises come into our stack, as one C module (`tagpu_limits.c`) over
-five landings. The owner decided every choice below on 2026-09-23 **[DECIDED]**. As of that date
-nothing is built. The disassembly behind each fact is in [the evidence pass](limits-evidence.md),
+Nine of the engine limits TADR raises come into our stack, as one module over five landings. The
+owner decided every choice below on 2026-09-23 **[DECIDED]**. **Landing 1 is done** (2026-09-23):
+the effect pools, the module, the failure report and the stock-limits build. The module is
+`tagpu_limits.h` and the limits block of `tagpu_patches.c`, which keeps it out of the thread-split
+allow-list; how it works is [gpu-status §2.6b](../gpu-status.md). The disassembly behind each fact is in [the evidence pass](limits-evidence.md),
 and the rules shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 Three findings shaped the plan:
@@ -58,7 +60,7 @@ failure, exactly as under TADR.
 - `tacli`'s scenario schema ceiling `SCN_MAX_LIMIT` (`tools/tacli:3073`) goes from 500 to 1500.
   `scenario-format.md`'s statement that the cap can never exceed 500 is replaced.
 
-**One module, one table, one rule.** `tagpu_limits.c` holds one site table: address, expected
+**One module, one table, one rule.** The limits block holds one site table: address, expected
 bytes, replacement, name. It checks every entry, then writes all of them or none.
 - It runs at `DLL_PROCESS_ATTACH`. `ddraw.dll` is `TotalA.exe`'s first static import
   (`dllmain.c:221`), so it runs before the exe's C-runtime static initialisers. The particle pool
@@ -76,86 +78,103 @@ persists across games. Two peers with different game histories would then start 
 slots, and below the cap the order would differ from stock. A first-free scan over 3000 slots
 costs little and keeps stock's assignment exactly.
 
-**The projectile compaction frame** `0x49AE20` grows from `0x4C0` to `0x2EF0` bytes of stack.
-TADR's naked stack probe does this correctly by construction. The alternative is a C replacement
-over static arrays, which is safe only because the function is game-thread-only and not reentrant.
-Landing 1 decides between them, after checking both callers.
+**The projectile compaction frame** `0x49AE20` grows from `0x4C0` to `0x2EF0` bytes of stack,
+committed by a stack probe a page at a time, as TADR does it. Correct by construction whatever
+calls it. A C replacement over static arrays was the alternative, safe only because both callers
+(`0x49BE53`, `0x49C8F4`) are on the game thread and the function is not reentrant; landing 1
+checked both callers and took the probe, which needs neither fact.
 
-**No runtime opt-out.** A `make` flag builds the stock-limits DLL under its own name for the
-comparisons; it is launched with `tacli --keep-dll`. No lever file and no store key exist for it.
+**No runtime opt-out.** `make LIMITS=stock` builds `ddraw-stocklimits.dll` for the comparisons,
+copied over an instance's `ddraw.dll` and launched with `tacli --keep-dll`. No lever file and no
+store key exist for it.
 
 ## The failure report
 
 If any site differs, the DLL writes nothing. At the first DirectDraw call (after the loader lock,
 before the game window exists) it shows this MessageBox and exits. The same text goes to
-`log\startup-failure.txt`. Ctrl+C copies a MessageBox's text on Windows and on Wine. The owner
-approved this draft and reviews the final wording in landing 1.
+`log\startup-failure.txt`. Ctrl+C copies a MessageBox's text on Windows and on Wine. The text is one
+line per paragraph, so the box wraps it once; the owner reviewed it as it shows in the game.
 
 ```text
 Title: Total Annihilation: Impure cannot start
 
-Impure could not install its engine limits, so Total
-Annihilation will now close. Nothing was changed.
+Impure could not install its engine limits, so Total Annihilation will now close. Nothing was changed.
 
 WHY
-Impure raises the game's limits (units, projectiles,
-explosions...) by rewriting its code in memory, and it
-checks every place first. This TotalA.exe is not the
-Total Annihilation 3.1 that Impure is built for.
-Running anyway would let this game play by different
-rules from other players and break multiplayer
-without warning.
+Impure raises the game's limits (units, projectiles, explosions...) by rewriting its code in memory, and it checks every place first. <why> Running anyway would let this game play by different rules from other players and break multiplayer without warning.
 
 WHAT TO DO
-- Use the original 3.1 TotalA.exe (the Steam and GOG
-  copies are 3.1). Community patches such as 3.9.02 and
-  TA: Escalation ship a modified exe.
-- Or report it: press Ctrl+C to copy this message and
-  paste it into a new issue at
-  github.com/Code-Herder/ta-impure-patch/issues
-  The same report is saved in log\startup-failure.txt
+- Use the original 3.1 TotalA.exe (the Steam copy is 3.1). Community patches such as 3.9.02 and TA: Escalation ship a modified exe.
+- Or report it: press Ctrl+C to copy this message and paste it into a new issue at
+github.com/Code-Herder/ta-impure-patch/issues
+The same report is saved in log\startup-failure.txt
 
 --- report ---
-impure  <commit> (<branch>)
-exe     TotalA.exe  <size> bytes
-        md5 <md5>  PE stamp <stamp>
-        known build: <name or none>
-result  <k> of <n> sites differ, nothing written
-  <address> <site name>
-             want <stock bytes>  have <found bytes>
+impure <commit> (<branch>)
+exe TotalA.exe, <size> bytes
+md5 <md5>
+PE stamp <stamp>, known build: <name or none>
+result: <k> of <n> sites differ, nothing written
+<address> <site name>
+  want <stock bytes>
+  have <found bytes>
 ```
 
+- **`<why>` has three forms**: an exe that is not 3.1; the 3.1 exe, changed in memory before we ran
+  (another patch or loader); and Windows refusing the write.
 - **The report block exists for whoever debugs it, person or agent.** It names our build and
-  identifies the exe exactly. It lists *every* differing site, not just the first. It prints no
-  path, because a report is meant to be pasted publicly and an install path carries a user name.
-- **`known build`** is looked up from a small compiled-in table of md5s: retail 3.1, and 3.9.02
-  once measured.
-- **Unverified: "the Steam and GOG copies are 3.1".** The Steam copy matches the retail 3.1 exe.
-  The GOG copy has not been checked. Verify it or cut it before landing 1.
+  identifies the exe exactly. It lists every differing site, twelve in the box and all of them in
+  `log\tagpu.log`. It prints no path, because a report is meant to be pasted publicly and an
+  install path carries a user name.
+- **`known build`** is looked up from a compiled-in table of md5s, which holds retail 3.1 alone.
+- The draft said "the Steam and GOG copies are 3.1". The GOG copy was never checked, so the text
+  names Steam only.
 
-## Landings
+## The landings
 
-| # | Content | Proof |
-|---|---|---|
-| L1 | the module and the failure report; projectiles, explosions, flying pieces and debris; the frame packet follows the moved pools; the stock-limits `make` flag | **below the caps nothing changes**: `tagpu_cobtrace` byte-identical between the stock-limits DLL and ours, on a scenario under every stock cap. **Above the caps it works**: a scenario past 300 projectiles and explosions, with the engine count equal to the packet count. **Two peers agree**: a two-instance game (`tools/mp_lobby.sh`) pushed past the caps, `tacli` rosters compared at the same tick. `high` review |
-| L2 | units 1500 and the `maxunits` clamp; the design point to 15 001; `tacli` to 1500; pathfinding 66 650 | **tier 1**: a 4-player skirmish at 1500 each (6000 units; a skirmish seats four), measuring frame time and every pool's peak |
-| L3 | particles: the per-layer cap and the object pool | the value is set from tier 1's per-layer peaks plus headroom; `LAYER_OBJCAP`, `TAGPU_PK_MAX_PART` and `PART_SUBCAP` follow |
-| L4 | `MixingBuffers` 128 as an `impure.cfg` key (read at `0x42FE4F` inside the registry loader `0x42F9A0`, which the store already observes); the composite buffer | a GDI-lane comparison for the composite |
-| L5 | `mp_lobby.sh` extended to N instances | **tier 2**: a 10-player network game at 1500 each (15 000 units), the proof of the 15 001-slot design point |
+**Landing 1 — the effect pools, the module and the failure report. Done 2026-09-23.**
+Projectiles, explosions, flying pieces and debris records, 43 sites; the frame packet follows the
+moved pools; the stock-limits `make` flag. What it proved, by running it:
+- **Above the caps it works.** `scenarios/limits-flood.json`: the packet carried 687 projectiles,
+  2439 explosions and 540 flying pieces, the same projectile count the engine held at that moment,
+  with no table truncated.
+- **Two peers agree.** A two-instance network game, each peer applying its own half
+  (`limits-mp-west`, `limits-mp-east`): both passed every stock cap (projectiles 689 on each,
+  explosions 1770 and 984), and when paused with the game's `Pause` both held the same 394 units at
+  identical positions. A second fight of 630 units matched the same way.
+- **It fails closed.** An exe copy with one cap byte changed got the dialog, the report file and
+  the exit, with nothing written.
+- **Below the caps: by construction, not by a trace.** The plan asked for a `tagpu_cobtrace`
+  comparison with the stock-limits build. It cannot be run: two runs of the *same* stock build do
+  not reproduce a fight past its first impact, even with both random seeds and the apply tick
+  pinned (the engine map, *the engine's rates*), so the comparison would measure noise. The owner's
+  point that TA replicates state rather than running lockstep settled it: what multiplayer needs is
+  the two-peer agreement above, and what "stock below the caps" needs is that each rewritten site
+  does what stock did, which the landing review checks site by site against the disassembly.
 
-L1 comes first because it forces the module, the report and the packet changes into existence.
-L2 comes before L3 because the particle measurement needs the raised unit limit. TA replicates
-state and events rather than running in lockstep
-([networking-lobbies](../networking-lobbies.md)). Comparing rosters on both peers is therefore the
-agreement test; TA itself detects nothing.
+**Landing 2 — units 1500 and the `maxunits` clamp; the design point to 15 001; `tacli` to 1500;
+pathfinding 66 650.** Proof, tier 1: a four-player skirmish at 1500 each (6000 units; a skirmish
+seats four), measuring frame time and every pool's peak.
+
+**Landing 3 — particles: the per-layer cap and the object pool.** The value is set from tier 1's
+per-layer peaks plus headroom; `LAYER_OBJCAP`, `TAGPU_PK_MAX_PART` and `PART_SUBCAP` follow.
+
+**Landing 4 — `MixingBuffers` 128 and the composite buffer.** `MixingBuffers` as an `impure.cfg`
+key (read at `0x42FE4F` inside the registry loader `0x42F9A0`, which the store already observes);
+the composite buffer proved by a GDI-lane comparison.
+
+**Landing 5 — ten players.** `mp_lobby.sh` extended to N instances. Proof, tier 2: a 10-player
+network game at 1500 each (15 000 units), the proof of the 15 001-slot design point, checked the
+way landing 1 checked two peers: every peer applies its own units, then a paused roster on each.
+
+L1 came first because it forced the module, the report and the packet changes into existence.
+L2 comes before L3 because the particle measurement needs the raised unit limit.
 
 ## Open questions
 
-- The GOG exe (see *The failure report*).
-- `0x49AE20`: TADR's stack probe or a C replacement. Landing 1 checks both callers first.
 - Whether a refused remote projectile changes damage on that peer
   ([evidence §1](limits-evidence.md#1-projectiles-300-3000-enginelimitscpp-addprojectilepatches)).
-  L1's two-peer check covers only the same-build case, which is the contract.
+  Landing 1's two-peer check covered the same-build case, which is the contract.
 - `0x44CAFE`: TADR writes the unit limit over the per-type value 101 there. If the engine treats
   101 as a real cap, then in a network game at 1500 a player no single unit type could pass 101.
   L2 settles it by building 102 of one type in a two-peer game, and writes the site as TADR does
@@ -163,13 +182,12 @@ agreement test; TA itself detects nothing.
 - The particle headroom rule: decided in L3, from the data.
 - Pathfinding cost at 6000 units: tier 1 measures it.
 
-## Corrections this plan owes
+## Corrections this plan made
 
 - **`0x44CAFE` is not a unit-limit site** (`mov ecx,0x65`: 101 into the per-type battleroom table;
   read as the "unrestricted" sentinel [INFERRED]). Corrected in [deep-tadr](../deep-tadr.md) on
   2026-09-23.
-- `tagpu_packet_pub.c:997` says "twelve more" particle cap sites; there are twenty. Landing 1
-  fixes it.
-- The engine map says the effect arrays are simulation state that the draw passes only read. It
-  does not record that the explosion and debris caps gate synced random-number draws. Landing 1
-  adds that.
+- `tagpu_packet_pub.c` said "twelve more" particle cap sites; there are twenty (landing 1).
+- The engine map said the effect arrays are simulation state that the draw passes only read, and
+  did not record that the explosion cap and the debris records' fullness gate synced random-number
+  draws. It does now (landing 1).

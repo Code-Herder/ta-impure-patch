@@ -366,9 +366,12 @@ the Visuals landing), so this is a store key. Nothing in `tagpu/` or `tools/` me
 | composite 600²→1280² | visual, GDI lane only (INF) | per Object3do, static imm. | 1 × 10 bytes, blind | none | none on Vulkan | memory |
 | MixingBuffers 8→128 | audio | per process (registry load) | none (launcher writes REG) | n/a | the impure.cfg store's loader observer | none |
 
-**Notes still to correct** (landing 1 carries both):
-1. `tagpu_packet_pub.c:997` says "twelve more" `0x190` sites; there are twenty.
-2. The engine map's "all four [effect arrays] are SIM state… draw passes read them and write
-   nothing" stands for the arrays. But `0x420B00` (called from the draw site `0x469B2C`) *emits*
-   particles, which the map already records, and the explosion and aux caps gate sim-RNG draws,
-   which the map does not.
+**Notes this pass corrected**, both in landing 1: `tagpu_packet_pub.c` said "twelve more" `0x190`
+sites where there are twenty, and the engine map now records that the explosion cap and the debris
+records' fullness gate sim-RNG draws.
+
+**Settled since, by landing 1** [MEASURED 2026-09-23]: both callers of `0x49AE20` are game-thread,
+and the stack probe was taken anyway. Two peers on the same build agree past every effect cap: paused,
+they held the same units at identical positions ([the engine map](../exe-reverse-engineering.md),
+*The raised effect pools*). What a peer on a *lower* cap than its opponent does with a refused
+remote projectile (§1) is still unmeasured; it is outside the same-build contract.
