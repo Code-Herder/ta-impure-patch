@@ -1535,12 +1535,14 @@ live, commander selected on Two Continents at type 1: a left click on ground wal
 the clicked point, and the same click with `tagpu_curs.off` deselected it and moved nothing. The
 full path is `exe-reverse-engineering.md` §"The in-game mouse buttons".
 
-### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–3
+### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–5
 
 **What it is.** TA's limits, raised the way TADR raises them, as our own C: projectiles
 300 → 3000, explosions 300 → 3000, flying pieces 100 → 1000, debris records 300 → 3000, units a
 player 250 (default) / 500 (ceiling) → 1500 / 1500, the pathfinder's budget 1333 → 66 650, and
-particles 400 → 20 480 a layer from a pool of 1000 → 204 800 objects.
+particles 400 → 20 480 a layer from a pool of 1000 → 204 800 objects, and the composite
+scratch frame 600² → 1280². The engine's simultaneous sounds are not a site: they are the settings
+store's `mixingbuffers`, held to 32 (below).
 Planned in [the TADR port](tadr-port/raised-limits.md); every site is in the engine map, *The raised
 effect pools* and *The per-player unit cap*.
 
@@ -1559,14 +1561,15 @@ effect pools* and *The per-player unit cap*.
 | the pathfinder's budget | `0x40EAD6` | 1333 → 66 650 |
 | the particle layers | twenty compares, `0x471183` … `0x472CD9` (`0x472BF2` against `ecx`) | 400 → 20 480 |
 | the particle pool | `0x471C83`, the `push` in the C runtime's static initializer `0x471C80` | 1000 → 204 800, built at that size because DllMain runs first |
+| the composite scratch frame | `0x45819B` (width), `0x458196` (height), the two `push 0x258` in `0x458180` | 600 → 1280 each; one frame a level at `*(main+0x1437B)+0x10` |
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
 while it changes. It reads every site (through `VirtualQuery`, never assuming the page), compares
-all 73 with the stock bytes, and writes them only if every one matches; a refused write puts back
+all 75 with the stock bytes, and writes them only if every one matches; a refused write puts back
 what was written. The patches last for the process and are never restored. The log line names the
-moved pools' addresses for `tacli peek`: `limits: installed 73 sites -- …, units 1500 a player,
-pathfinding 66650, particles 20480 a layer from a pool of 204800`.
+moved pools' addresses for `tacli peek`: `limits: installed 75 sites -- …, units 1500 a player,
+pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280`.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -1640,6 +1643,35 @@ second, median 36**, and the publisher's own cost is past its histogram's 512 µ
 sample — how much of the game thread's frame is ours and how much is the engine's is not
 measured.
 
+**Sounds: 32, through the store, not a site.** `mixingbuffers` in `impure.cfg` (renderers.md
+2.10b) is 32 by default and one of 8, 16, 24 or 32. `tagpu_menu.c`'s `eng_push_mixing` writes it
+into the sound object's `+0x2C` after every registry load (`0x42F9A0`), where the loader has just
+stored the registry's `MixingBuffers` through a setter that takes anything. 32 is the engine's
+own table: past it a sound plays untracked and a looping one escapes the stop-all (engine map,
+*The sound object*). TADR writes 128. The engine saves the value back to the registry with its
+other options, as it does the store's Gamma, into the one `user.reg` every instance shares, so a
+control launch (`tagpu_defaults.off`, or the stock DLL) reads 32 where stock's missing key gives
+8. MEASURED 2026-09-23, tier 1 with sound on a null
+device: 32 in use for the whole fight, never more; the store at 8 held 8.
+
+**The composite scratch frame** is the unit bake's one shared frame a level (engine map, *The
+composite scratch frame*), not the per-unit composite, which the ring caps. Four engine writers in
+the blit size it to a unit and never compare with the allocation (the build-state copy, the frame
+copy, the shadow build and the 2× structure bake, every frame and on every lane), so the raise
+moves the box at which they write past it, from 600 × 600 to 1280 × 1280 (a quarter of each for
+the 2× bake). It read back at 1280² after tier 1
+on the Vulkan lane and at 600² on the stock build, and the GDI lane draws the nanoframe ladder the
+same on both.
+
+**Tier 2, measured 2026-09-24**: ten peers in one network game on Town & Country, 1500 a player,
+15 000 units. Every peer held 15 001 slots and peaked at 14 991–15 000 alive; every raised pool
+passed its stock cap on every peer (projectiles 731–854, explosions 2936–2966, particle objects
+12 759–14 331, flying pieces 947–993); the simulation held 30 ticks a second, the full rate at a
+network game's speed 10, on all ten. Paused after three minutes, the ten agreed on the same 7307
+units in the same slots, and 95.8 % stood at the identical position on all ten; the moving rest
+sat off their owner's copy by at most 40 ticks of their own top speed. Details in
+[the plan](tadr-port/raised-limits.md), landing 5.
+
 **Landing 1, measured 2026-09-23** (the numbers are in the engine map): in single player the packet carried
 687 projectiles, 2439 explosions and 540 flying pieces with no table truncated; in a
 two-peer network game both peers passed every stock cap and, paused, held the same units at
@@ -1654,6 +1686,7 @@ simulation's generator only if the explosion pool fills (it gates `0x421700`'s d
 stock-limits build is therefore a comparison build, not a proof of equality.
 
 **What this landing does not close.**
+
 - **The explosion tick's compaction is quadratic.** `0x4210E6..0x42113E` removes one dead record,
   shifts the whole tail down one record (`rep movsd`, `0x15` dwords) and rescans from the start,
   so a tick costs O(dead × live) record moves. At 3000 records with a mass death expiring together
@@ -1671,14 +1704,21 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 - **What 6000 units cost the game thread.** The median 36 publications a second at 4000–6000
   units is measured; its split between the engine's own frame and our publisher is not, because
   the publisher's histogram stops at 512 µs.
-- **Ten players at 1500 (15 000 units)** is landing 5's proof; tier 1 seats four.
+- **How long a remote unit lags its owner at stock's 500 a player.** At 1500 a player (tier 2,
+  below) the moving ones sat up to 40 ticks of their own travel behind; stock's figure is not
+  measured, so whether the raise stretches TA's update interval is open.
 - **The particle layers erase by shifting.** The layer tick `0x471EB0` deletes a finished object and
   moves the tail down one slot, and an emitter at the cap drops the front the same way, so a
   removal costs the layer's length. At 13 529 objects in one layer the sim held 60 ticks a second;
   a layer held at the full 20 481, where every emission shifts the whole layer, was not reached.
   The level-end teardown `0x471DE0` empties each layer front first the same way, about n²/2 moves:
   some 2 × 10⁸ for a full layer. Not measured.
-- The sound and composite limits are landing 4 of the plan.
+- **The composite scratch frame is not bounded.** A unit (with its cargo) whose screen box is past
+  1280 × 1280, or a structure's past 640 × 640 under the 2× bake, still writes past the frame, as
+  one past 600 × 600 or 300 × 300 does in stock. A bound has to test the box in all four writers
+  (`0x4589C0`, `0x45A470`, `0x45A790`, and the 2× branch of `0x459830` / `0x459C70`, which can
+  take the 1× path instead) and skip or fall back in each; not built. The ring that caps a unit's
+  own frame does not help: at 800 × 600 it admits one of 3.1 million pixels.
 
 ### 2.6c The stock engine's own defects (`tagpu_patches.c`, always on)
 

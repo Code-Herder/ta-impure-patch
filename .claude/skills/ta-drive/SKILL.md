@@ -35,7 +35,7 @@ isolation), `windowed-mode.md` (display bugs), `cmdline-options.md` (every launc
    *reading* window geometry and for capture. **Never run `xrandr` against the live display**,
    never move the human's pointer, never activate windows to "test" something.
 3. **Silence is the default** (`NoDirectSound`, six registry values, no `music/`). Pass
-   `--sound` only when asked.
+   `--sound` only when asked, or to measure sound on a null device (`references/measuring.md`).
 4. **Clean up**: `tacli stop <name>` when done, `tacli rm <name>` when the instance has no
    further use. Every running game is a GPU client.
 5. **Rebuilt the DLL? Relaunch.** `tacli launch` copies `ddraw.dll` into the instance from
@@ -459,19 +459,19 @@ under zoom, `wheel.off` and `zoomedge.off`: `references/levers.md` §"Camera, vi
   Make the instance from a real checkout; to run a foreign build, `cp` its `ddraw.dll` over
   `<gamedir>/ddraw.dll` and launch with `--keep-dll`.
 
-## Multiplayer: two instances in one game
+## Multiplayer: two to ten instances in one game
 
 ```bash
 tools/tacli launch h1 --dplay --free-dplay-port     # the host
-tools/tacli launch j1 --dplay                       # the joiner
-tools/mp_lobby.sh h1 j1 'Two Continents'            # menus -> battle room -> live
+tools/tacli launch j1 --dplay                       # a joiner, as many as nine
+tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 ```
 
 `--dplay` puts Microsoft's DirectPlay into that instance's prefix (wine's builtin cannot create
 a session); `--free-dplay-port` kills a stale `dplaysvr.exe`, which owns UDP 47624 machine-wide —
 on the **hosting** launch only, and never by hand while another agent's game is hosting.
-`scenario apply` on the host replicates its units to the joiner. The lobby facts and the
-provider-row crash: `references/modules.md`.
+`scenario apply` on a peer creates units that peer owns, and TA replicates them. The lobby facts,
+the commander-death trap and how to compare peers: `references/modules.md`.
 
 ## Maintaining this skill
 

@@ -1012,6 +1012,19 @@ static void lim_sites(void)
         lim_dword(0x00472BF2 + 2, 400, TAGPU_LIM_SFX, "particle layer cap");
         lim_dword(0x00471C83, 1000, TAGPU_LIM_SFXPOOL, "particle pool");
     }
+
+    /* ---- the composite scratch frame. The composite draw context *(main+0x1437B), made once a
+       level by the model loader (0x42D473 -> 0x458180), keeps one scratch frame at +0x10 from
+       0x4B8E00(name, width, height): a colour and a depth plane of width x height bytes, freed
+       with the context by the level teardown (0x42DC8F -> 0x4581C0). Four writers in the blit
+       size it to a unit and none compares that size with the allocation: the build-state copy
+       0x4589C0, the frame copy 0x45A470, the shadow build 0x45A790 and the 2x structure bake in
+       0x459830 / 0x459C70. A box of more than width x height pixels -- a quarter of that for the
+       2x bake -- therefore writes past the frame, on every lane. The raise moves that threshold
+       from 600 x 600 to 1280 x 1280; it is not a bound. Every reader takes its size from the
+       header a writer set, so no write grows with the raise. */
+    lim_dword(0x0045819B, 600, TAGPU_LIM_COMPOSITE, "composite scratch width");
+    lim_dword(0x00458196, 600, TAGPU_LIM_COMPOSITE, "composite scratch height");
 }
 
 /* one site's bytes, without trusting the page to be readable */
@@ -1065,11 +1078,11 @@ int tagpu_limits_install(void)
     /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
     tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d at 0x%08X, "
                "flying pieces %d at 0x%08X, debris records %d at 0x%08X, units %d a player, "
-               "pathfinding %d, particles %d a layer from a pool of %d", s_nlim,
+               "pathfinding %d, particles %d a layer from a pool of %d, composite %d", s_nlim,
                TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
                TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
                TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
-               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL);
+               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE);
     return 1;
 }
 
@@ -1096,7 +1109,7 @@ int tagpu_limits_install(void)
 {
     plog("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
          "flying pieces 100, debris records 300, units 250 a player up to 500, "
-         "pathfinding 1333, particles 400 a layer from a pool of 1000)");
+         "pathfinding 1333, particles 400 a layer from a pool of 1000, composite 600)");
     return 0;
 }
 

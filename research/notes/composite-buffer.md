@@ -128,8 +128,12 @@ layout: pixel ptr at +0x10 and depth ptr at +0x14."* Verified: `0x458D30` walks
 > `FUN_00437be0(this, obj3do+0x10, W, H)` → `buf[+4]=hotX; buf[+6]=hotY` →
 > `FUN_00459830()`. [BINARY-VERIFIED]
 
-**TADR patches the AABB cap at `0x458195`** [CORPUS] — the stock composite is bounded
-600×600, so a full-screen unit sprite is at most `600·600·2 + 0x18 ≈ 703 KB`.
+**The composite's only cap is the context's ring**: `0x437BE0` (or `0x437B50`, colour only)
+allocates it at the AABB's size out of the ring, and a block larger than the ring is refused and
+the unit skipped. The 600 × 600
+that TADR raises at `0x458195` is the draw context's one shared scratch, which the blit's
+build-state copy and the 2× bake write into (exe-reverse-engineering.md, *The composite scratch
+frame*) [DISASSEMBLED 2026-09-23].
 
 ---
 

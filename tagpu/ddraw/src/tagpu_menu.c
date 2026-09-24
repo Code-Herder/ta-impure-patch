@@ -78,6 +78,8 @@ enum { ENG_GAMMA = 1, ENG_BITS = 2, ENG_RES = 4, ENG_ALL = 7 };
 #define OFF_GAMMA         0x37F08u      /* signed dword, 0..20                  */
 #define OFF_INGAME        0x2A44u       /* & 4: a game is in progress           */
 #define OFF_BAKEHEAP      0x1437Bu      /* this for the re-bake 0x437C80        */
+#define OFF_SOUND         0x10u         /* the sound object                     */
+#define SND_MIXING        0x2Cu         /* its MixingBuffers, set by 0x4CF210   */
 #define OPT_AA            0x0002u
 #define OPT_SHADOWS       0x001Cu       /* Shadow | TShadow | FShadow           */
 #define OPT_SHADING       0x0020u
@@ -2715,6 +2717,23 @@ static void eng_push(int what)
     }
 }
 
+/* MixingBuffers is not a Visuals value: the registry load reads it (0x42FE4F)
+   and stores it through the sound object's setter 0x4CF210 with no check, so
+   the store's value goes in after EVERY load, the first and the reloads alike.
+   The pointer is the one that setter has just written through on this thread;
+   the engine reads the field only on this thread too (the play 0x4CF570). The
+   engine saves it back to the registry with its other options (0x4310AB). */
+static int eng_push_mixing(char* m)
+{
+    char* snd;
+    int v;
+    if (!tagpu_settings_get(TS_MIXING, &v)) return 0;
+    snd = *(char**)(m + OFF_SOUND);
+    if (!snd) return 0;
+    wr32(snd + SND_MIXING, v);
+    return v;
+}
+
 static int __cdecl opt_load_before(void* esp)
 {
     char* m = eng_main();
@@ -2740,9 +2759,11 @@ static void* __cdecl opt_load_after(unsigned int* regs)
             char b[160];
             if (tagpu_settings_get(TS_GAMMA, &v)) wr32(m + OFF_GAMMA, v);
             eng_push(ENG_BITS | ENG_RES);
-            _snprintf(b, sizeof b, "menu: engine options from the store: gamma=%d optword=0x%04X screen=%dx%d",
+            v = eng_push_mixing(m);
+            _snprintf(b, sizeof b, "menu: engine options from the store: gamma=%d optword=0x%04X screen=%dx%d "
+                      "mixingbuffers=%d",
                       rd32(m + OFF_GAMMA), *(unsigned short*)(m + OFF_OPTWORD),
-                      rd32(m + OFF_SELW), rd32(m + OFF_SELH));
+                      rd32(m + OFF_SELW), rd32(m + OFF_SELH), v);
             b[sizeof b - 1] = 0;
             mlog(b);
         } else {
@@ -2763,6 +2784,7 @@ static void* __cdecl opt_load_after(unsigned int* regs)
             wr32(m + OFF_GAMMA, s_snapGamma);
             wr32(m + OFF_SELW, s_snapW);
             wr32(m + OFF_SELH, s_snapH);
+            eng_push_mixing(m);
         }
         s_engLoads++;
     }

@@ -45,6 +45,7 @@ typedef enum {
     TS_MONITOR,     /* -1 none chosen | an index into the registered list */
     TS_GAMMA,       /* 0..20, the engine's own Gamma scale (12 = factor 1.0)  */
     TS_RESOLUTION,  /* 0 native | TS_RES(w, h): the in-game screen size       */
+    TS_MIXING,      /* 8 | 16 | 24 | 32: sounds the engine plays at once      */
     TS_NKEYS
 } TagpuSetting;
 
