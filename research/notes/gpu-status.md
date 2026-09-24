@@ -887,6 +887,16 @@ handed (`terr || the rect is still wide`). So:
   which makes the latch up for that draw, and **clamps the eye and the scroll target into the
   range in force on every in-play draw**. A draw whose ground is the engine's therefore starts
   from an eye in `[0, map − W]`; a live `terr.on=off` walks the eye home on the next draw.
+  Without `zoom.on` (the eye clamp not installed, the range always the engine's) it still clamps
+  on **every draw that applied a delta or a hold**: the wheel and its anchor need only the
+  mouse→world repair, which `vpwide.on` installs alone, and a delta applied after the engine's
+  scroll poll had already clamped the frame would otherwise reach `0x483FA0` past `map − H`.
+* **every clamp fails closed.** Where the range in force cannot be computed (a main pointer
+  outside the sanity window, a zero viewport or map), the eye clamp, the target-clamp stubs, the
+  apply and the level end all clamp to the engine's own `[0, map − W]` from the engine's own words
+  (`engine_range`: `main+0x1422B`/`+0x1422F` less `main+0x37E37`/`+0x37E3B`, the top held at 0),
+  and the apply publishes `cam_centre = 0` for that draw, so no path leaves the eye or the target
+  unclamped. The follow stub clears fog bit 3 on every pass, as the block it replaces did.
 * **between in-play draws** every engine camera writer ends in `0x41C3C0` or in one of the four
   target clamps below, and all five use the range the last apply chose, which the latch still
   matches. The level end drops both together and walks the eye into `[0, map − W]`. The

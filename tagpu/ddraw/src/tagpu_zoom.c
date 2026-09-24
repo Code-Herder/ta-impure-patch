@@ -522,14 +522,22 @@ static void apply_scroll_rate(char* ta)
      the apply runs at the top of every in-play draw, before the draw's first
      read of the eye; it takes the centre range only when the request is up,
      which makes the latch up for that draw; and it clamps the eye and the
-     target into the range in force on EVERY draw. A draw whose ground is the
-     engine's therefore starts from an eye in `[0, map - W]`.
+     target into the range in force on every draw (every draw that applied a
+     delta or a hold, when our eye clamp is not installed and the engine's
+     own clamp keeps the rest). A draw whose ground is the engine's therefore
+     starts from an eye in `[0, map - W]`.
 
      between in-play draws, every engine camera writer ends in `0x41C3C0` or
-     in one of the four target clamps below, and all five use the range the
+     in one of the target clamps below, and all of them use the range the
      last apply chose, which the latch still matches: nothing else writes
      the latch, and the level end drops both together (and walks the eye
-     home). The screenshot tiler's `DrawGameScreen(1, 0)` loop `0x495C76`
+     home).
+
+     EVERY CLAMP FAILS CLOSED. Where the range in force cannot be computed
+     (a main pointer outside the sanity window, a zero viewport or map), each
+     one clamps to the engine's own `[0, map - W]` from the engine's own words
+     instead (engine_range), and the apply publishes `centre = 0` for that
+     draw — so no path leaves the eye or the target unclamped. The screenshot tiler's `DrawGameScreen(1, 0)` loop `0x495C76`
      and the movie recorder never apply or latch, so they draw on exactly
      that pair.
 
@@ -604,6 +612,8 @@ static void apply_scroll_rate(char* ta)
 #define OFF_EYEY         0x14323
 #define OFF_MAP_W        0x1422B       /* map size in world px                    */
 #define OFF_MAP_H        0x1422F
+#define OFF_FIELD_W      0x37E37       /* the true viewport size: the W and H of  */
+#define OFF_FIELD_H      0x37E3B       /* 0x41C3C0's [0, map - W]; vpwide never writes them */
 #define OFF_SCRTX        0x14327       /* MapXScrollingTo — the eye eases to here */
 #define OFF_SCRTY        0x1432B
 #define OFF_MM_RECT      0x142CB       /* the RECT 0x466B70 fills                 */
@@ -730,6 +740,32 @@ static int zoom_eye_range(const char* ta, int* loX, int* hiX, int* loY, int* hiY
                         s_gCentre, loX, hiX, loY, hiY);
 }
 
+/* THE ENGINE'S OWN RANGE, FROM THE ENGINE'S OWN WORDS — what every clamp here
+   falls back to when the range above cannot be computed, so that a clamp FAILS
+   CLOSED. `0x41C3C0` clamps to `[0, map - W]` from main+0x1422B/0x1422F and
+   main+0x37E37/0x37E3B with no test of any of them [DISASSEMBLED]; this reads
+   the same four words and holds the top at 0 where the engine's inverts. It
+   always answers, and its range is inside the centre one, so falling back can
+   only pull the eye in. It needs nothing of `ta` but that it is not NULL: the
+   engine's own bytes that every caller replaces read main unconditionally. */
+static void engine_range(const char* ta, int* loX, int* hiX, int* loY, int* hiY)
+{
+    int hx = *(const int*)(ta + OFF_MAP_W) - *(const int*)(ta + OFF_FIELD_W);
+    int hy = *(const int*)(ta + OFF_MAP_H) - *(const int*)(ta + OFF_FIELD_H);
+
+    *loX = 0; *hiX = hx > 0 ? hx : 0;
+    *loY = 0; *hiY = hy > 0 ? hy : 0;
+}
+
+/* The range every game-thread clamp uses: the one in force, else the engine's.
+   Returns whether it was the one in force. */
+static int clamp_range(const char* ta, int* loX, int* hiX, int* loY, int* hiY)
+{
+    if (zoom_eye_range(ta, loX, hiX, loY, hiY)) return 1;
+    engine_range(ta, loX, hiX, loY, hiY);
+    return 0;
+}
+
 /* The same range from the packet's copies of the same inputs — the render
    thread's, for the cursor anchor's pre-clamp and the predicted eye. The
    packet's `vp` IS tagpu_vpwide_true_rect's answer, its `map_pxw/h` the same
@@ -771,24 +807,22 @@ static void __cdecl zoom_eye_clamp(void* arg)
     int loX, hiX, loY, hiY;
 
     (void)arg;
-    if (!ta_ok(ta)) return;
-    if (zoom_eye_range(ta, &loX, &hiX, &loY, &hiY))
-        clamp_pair((int*)(ta + OFF_EYEX), (int*)(ta + OFF_EYEY),
-                   loX, hiX, loY, hiY);
+    if (!ta) return;
+    clamp_range(ta, &loX, &hiX, &loY, &hiY);
+    clamp_pair((int*)(ta + OFF_EYEX), (int*)(ta + OFF_EYEY), loX, hiX, loY, hiY);
     /* the engine's own last act, and the only place this rect is recomputed */
     zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
 }
 
-/* The scroll target into the range in force — what each of the four inline
-   target clamps does in place of the engine's `[0, map - W]`. GAME THREAD.
-   On a frame whose engine state is not sane enough for a range the target is
-   left as the engine wrote it, unclamped, which the eye clamp then bounds when
-   the stepper moves the eye toward it. */
+/* The scroll target into the range in force — what each of the inline target
+   clamps does in place of the engine's `[0, map - W]`. GAME THREAD. On a frame
+   whose engine state is not sane enough for the range in force, into the
+   engine's own (clamp_range): never left unclamped. */
 static void clamp_target(char* ta)
 {
     int loX, hiX, loY, hiY;
-    if (zoom_eye_range(ta, &loX, &hiX, &loY, &hiY))
-        clamp_pair((int*)(ta + OFF_SCRTX), (int*)(ta + OFF_SCRTY), loX, hiX, loY, hiY);
+    clamp_range(ta, &loX, &hiX, &loY, &hiY);
+    clamp_pair((int*)(ta + OFF_SCRTX), (int*)(ta + OFF_SCRTY), loX, hiX, loY, hiY);
 }
 
 /* THE FOLLOW'S CLAMP. The per-frame stepper `0x41CA10` recomputes the scroll
@@ -808,12 +842,13 @@ static void __cdecl zoom_follow_clamp(void)
 {
     char* ta = *(char**)TA_MAINPP;
 
-    if (!ta_ok(ta)) return;
+    if (!ta) return;                     /* the block's own bytes would fault */
     clamp_target(ta);
-    /* `0x41CB3B`, the block's last act: bit 3 of main+0x14281 is the screen fog
-       grid's is-current flag and the target it was built for has just moved.
-       This is the GAME thread -- the only one that may touch that word at all
-       (exe map, "who may clear main+0x14281 bit 3"). */
+    /* `0x41CB3B`, the block's last act, done on every pass exactly as the
+       block did: bit 3 of main+0x14281 is the screen fog grid's is-current
+       flag and the target it was built for has just moved. This is the GAME
+       thread -- the only one that may touch that word at all (exe map, "who
+       may clear main+0x14281 bit 3"). */
     *(unsigned short*)(ta + OFF_LOSTYPE) &= (unsigned short)~8u;
 }
 
@@ -822,7 +857,7 @@ static void __cdecl zoom_follow_clamp(void)
 static void __cdecl zoom_centring_clamp(void)
 {
     char* ta = *(char**)TA_MAINPP;
-    if (ta_ok(ta)) clamp_target(ta);
+    if (ta) clamp_target(ta);
 }
 
 /* pushfd ; pushad ; call fn ; popad ; popfd ; jmp resume. The flags are saved
@@ -963,7 +998,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
 {
     int* eye = (int*)(ta + OFF_EYEX);
     int* scr = (int*)(ta + OFF_SCRTX);
-    int  loX = 0, hiX = 0, loY = 0, hiY = 0, haveRange, moved = 0, applied = 0;
+    int  loX, hiX, loY, hiY, moved = 0, applied = 0;
 
     /* THE LEVEL FIRST: every game-thread reader in this file — the minimap
        rect's scale, the scroll rate — uses the level the last record carried,
@@ -975,10 +1010,12 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     /* THEN THE RANGE: centred only on a draw whose ground is ours. `terr` is
        the request the publisher latches for this same draw right after this
        call (`terr || rect still wide`), so the centre range is in force only
-       where the engine's terrain pass is skipped — see "the camera's range". */
+       where the engine's terrain pass is skipped — see "the camera's range".
+       And only when it can be computed: a draw whose engine state is not sane
+       enough for it takes the engine's own range and publishes `centre = 0`,
+       so the eye is inside `[0, map - W]` whoever draws the ground. */
     s_gCentre = g_eyeInstalled && terr;
-
-    haveRange = zoom_eye_range(ta, &loX, &hiX, &loY, &hiY);
+    if (!clamp_range(ta, &loX, &hiX, &loY, &hiY)) s_gCentre = 0;
 
     /* A NEW RECORD: its delta is consumed exactly once — the difference
        between its cumulative sum and what was applied so far — and the
@@ -1009,7 +1046,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     /* THE HOLD, a level: the camera is where tagpu_eye.txt says, every draw,
        clamped into the camera's range. Written only when it differs, so the
        invalidation below is paid only when the camera actually moved. */
-    if (c && c->hold_on && haveRange) {
+    if (c && c->hold_on) {
         int x = c->hold_x, y = c->hold_y;
         clamp_pair(&x, &y, loX, hiX, loY, hiY);
         if (eye[0] != x || eye[1] != y) { eye[0] = x; eye[1] = y; moved = 1; }
@@ -1040,7 +1077,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        stepper moved the eye under, and at no other time. The target is
        clamped rather than assigned the eye, which keeps a camera move that
        is genuinely in flight. */
-    if ((g_eyeInstalled || applied) && haveRange) {
+    if (g_eyeInstalled || applied) {
         moved |= clamp_pair(eye, eye + 1, loX, hiX, loY, hiY);
         moved |= clamp_pair(scr, scr + 1, loX, hiX, loY, hiY);
     }
@@ -1079,15 +1116,14 @@ void tagpu_zoom_level_end(char* ta)
        own range first: nothing between this teardown and the next level's
        first apply may find an eye off `[0, map - W]`. */
     s_gCentre = 0;
-    if (!ta_ok(ta)) return;
+    if (!ta) return;
     if (g_eyeInstalled) {
         int loX, hiX, loY, hiY;
-        if (zoom_eye_range(ta, &loX, &hiX, &loY, &hiY)) {
-            clamp_pair((int*)(ta + OFF_EYEX), (int*)(ta + OFF_EYEY), loX, hiX, loY, hiY);
-            clamp_pair((int*)(ta + OFF_SCRTX), (int*)(ta + OFF_SCRTY), loX, hiX, loY, hiY);
-        }
+        clamp_range(ta, &loX, &hiX, &loY, &hiY);
+        clamp_pair((int*)(ta + OFF_EYEX), (int*)(ta + OFF_EYEY), loX, hiX, loY, hiY);
+        clamp_pair((int*)(ta + OFF_SCRTX), (int*)(ta + OFF_SCRTY), loX, hiX, loY, hiY);
     }
-    apply_scroll_rate(ta);                     /* the player's own value, for the options screen */
+    if (ta_ok(ta)) apply_scroll_rate(ta);                     /* the player's own value, for the options screen */
 }
 
 void tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
