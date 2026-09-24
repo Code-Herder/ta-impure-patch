@@ -57,6 +57,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Smoke, fire, wakes, nanolathe | G12f | `fxown`: one detour on the layer walker |
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
+| Past the map's edge — the engine's black | G20b | nothing of the engine's changes: the terrain and feature passes draw the map reflected there, in the lab's tone, from a snapshot of the map's own features taken on the game thread once a level (`edge`, §2.89) |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
 | Health bars, order markers, group digits, ShowRanges labels, build cursor, band box, selection rect | G13d, cursor G13n, order block G13o, text G13p | `markown`: 14 call-site redirects + 1 detour, and **nothing world-anchored is captured any more**. Health bars, the selection rect, the build cursor and drag band box are re-drawn from engine state; **G13o ported the order-marker block** (`tagpu_order.c`) as a game-thread snapshot of the order lists at `0x469BFC`; **G13p ported the text** (`tagpu_text.c`) — the group digit at `0x469CF9` and the `ShowRanges` labels — by calling TA's own glyph blitter `0x4CCF60` with a buffer of ours. Window A is retired and the identity blend LUT with it; the post-fog capture is deleted (the clean cut, §2.39), and `mark.on=nocursor` hands the cursors back to the engine |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m, **cursor ours again G17c** | `tagpu_zoom.c`; G13m made the engine's own cursor correct by telling it the truth about the pointer, and the zoom composite stopped touching it (§2.3d). **Since G17c the cursor is DRAWN BY US** — 1× device pixels at every `k`, from the client point the message carried, into the GL UI renderer's sharp layer — and the engine's is erased from the frame by two cooperating exemptions, the UI layer's rect discard and the world composite's `uCurs` ([GL UI renderer](gui-renderer.html) §17). §2.3d's rule is unchanged and still what keeps the two in the same place |
@@ -2041,7 +2042,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x14283` / `+0x1428B` | `TILE_SET` `{count, pixels}` and the `u16` `TILE_MAP` — the terrain pass reads both per frame. The GLSL restorer reads them once more when its job starts, on the render thread: each tile's edge texels for the tileability test and the whole tile map once, to rank tiles by distance from the centre of the viewport (`tagpu_terr.c` `restore_order`, G14e: from the centre, so the reveal radiates); the pixels themselves are sampled from the RGBA8 base atlas already on the GPU (§2.88) |
 | `main+0x143A7` | the engine's own palette table, 256 × (R, G, B, pad). Read only, **on the game thread by the frame packet's publisher since 2026-09-12** (a 1 KB copy in every packet, the level-end one too), and by nothing on the render thread: `tagpu_pal.c` takes it from the packet — **and it is not what the screen shows** (§2.3f). **Every world colour is built from it** (`tagpu_pal_engine()`, keyed on `tagpu_pal_engine_serial()`): the four RGBA8 base atlases (terrain, features, effects, units — `tagpu_pal_expand`), which are the Classic++ restorer's input too; the markers' `uPal`; the effects' LHT flash colours; the units' face-shade multipliers; and `tagpu_rglsl_tileable`'s edge test. The Gamma is applied once, after all of them, by the world composite (§2.3f). `tagpu_order.c`'s `seq_ink` reads the packet's `pal[]` itself, on the render thread (`tagpu_order_gather` runs from `tagpu_mark_gather`, inside the unit pass) — a luminance ranking over one sprite's colours, which no uniform scale moves. Its one writer is the PALETTE load `0x42A400`, once per process ([engine map](exe-reverse-engineering.html)) |
 | `*(0x51FBD0) + 0x614` | the gamma factor `0x4BA200` multiplies every palette entry by on its way to DirectDraw (`SetGamma 0x4BA590`). Read only, **on the game thread by the packet publisher since 2026-09-12** (a bounded float in every packet; `tagpu_pal_gamma()` answers from the copy). **Its consumer is the world composite** (`tagpu_vk_world.c`, §2.3f): the engine's own curve `min(255, trunc(e × factor))`, uploaded per slot when the factor changes and applied to the finished world; at exactly 1.0 no curve is drawn. It also reaches the `pal:` log lines. **Bounded** to 0.05..8.0 against the slider's own 0.5..1.5 and the chat command's N/10; anything else, NaN included, reads as 1.0, the identity |
-| `main+0x14287` | the `FeatureStruct` grid, one 13-byte record per 16-px cell, `mapW16 × mapH16` (`main+0x14233`/`+0x14237`). Read only. `tagpu_feat.c` reads the height byte (`+0x04`) of the anchor's four corners per anchor per frame for the engine's own projection, and since G14f the four central-difference neighbours too, for the ground's lambert (Classic++ only); `tagpu_terr.c` (G14f) copies the height byte of **every** cell once per map, when it builds the atlas, into an R8 texture the terrain shader samples — keyed on the grid pointer, the dims and the tile set, re-checked every frame; the grid is `IsBadReadPtr`-checked whole before the copy (7 MB on Two Continents), and an unreadable grid leaves Classic++ terrain **unlit** (the restored colour and the grey rule stay, the lambert is skipped), logged and retried every 60 frames |
+| `main+0x14287` | the `FeatureStruct` grid, one 13-byte record per 16-px cell, `mapW16 × mapH16` (`main+0x14233`/`+0x14237`). Read only. `tagpu_feat.c` reads the height byte (`+0x04`) of the anchor's four corners per anchor per frame for the engine's own projection, and since G14f the four central-difference neighbours too, for the ground's lambert (Classic++ only); `tagpu_terr.c` (G14f) copies the height byte of **every** cell once per map, when it builds the atlas, into an R8 texture the terrain shader samples — keyed on the grid pointer, the dims and the tile set, re-checked every frame; the grid is `IsBadReadPtr`-checked whole before the copy (7 MB on Two Continents), and an unreadable grid leaves Classic++ terrain **unlit** (the restored colour and the grey rule stay, the lambert is skipped), logged and retried every 60 frames. **The frame packet's publisher reads the grid whole, once a level**, on the game thread at the level's first in-play draw: the def index, flags bit 0 and the 2×2 heights of every cell, for the map edge's mirror (`mapfeat_snapshot`, §2.89) |
 | **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z **by the command apply on the game thread since 2026-09-12** (every in-play draw, before the next frame's scroll poll reads it; the base restored at the level end), and its save path is guarded (§2.3) |
 | **`UnitOrders->Pos`, `unit+0x5C` → `+0x22`/`+0x26`/`+0x2A`** | **WRITTEN, and it is SIM state** — not by us directly but by `ORDERS_NewMainOrder2Unit 0x43AFC0`, which the scenario applier calls on the game thread from the tick site. Three 16.16 dwords, `{x, altitude, depth}`, copied verbatim by the constructor `0x43A0C0`. An order is a sim command and replicates in multiplayer, so a wrong value here is a wrong game, not a wrong picture; the applier is a fixture tool and is never armed in a played session |
 | **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
@@ -17427,3 +17428,180 @@ composite; `k[]` and its fallback; the `shadows=0` change. The no-target Gamma: 
 choice between the two arms (`prepare`'s 0 and `record_direct`'s `s_drawThis` guard), the blend
 constants and the doubling above 2, and the teardown split — `_down_paid` now frees the target
 alone and `_down` both.
+
+### 2.89 The mirrored map edge (`tagpu_terr.c`, `tagpu_feat.c`, `tagpu_packet_pub.c`; `edge`, `tagpu_mirror.on/.off`) — G20b
+
+**What it is.** Past the map the view shows the world reflected, in the lab's tone, instead of
+black: C5 of [BAR camera & full-colour Classic](bar-camera-port.html), the lab's `edge=mirror`
+(`tools/tascene-view.html`) ported to the two world passes that draw ground. The centre clamp
+(G20a) is what brings it into view — up to W/2 past an edge at 1×, and at a corner three
+quarters of the view at every zoom. The ground past the map is the map's own tiles, texel for
+texel, each flipped across every edge it is past; on it stand the map's own features, flipped
+across a side edge and upright across the top and bottom. Units stay on the map, and the minimap
+is unchanged. Nothing here hooks, patches or writes the engine: the one new engine read is the
+feature grid, whole, once a level, on the game thread (below and §2.5).
+
+**The setting: `edge = mirror | black`, default `mirror`** (`TS_EDGE`, [renderers](renderers.html)
+§2.10b). One row in the render-options panel (`EDGE`, *Map edge*, Black | Mirror, the eighth,
+§2.12) and in the front end's Visuals column. `tagpu_opt.c` answers `tagpu_opt_on("tagpu_mirror.on")`
+lever first (`tagpu_mirror.on` mirrors, `tagpu_mirror.off` blacks), then the store, then the
+compiled default; `tagpu_defaults.off` skips the store and the play defaults, so every control
+launch draws black. The render thread re-reads it with the native pass's 30-frame poll and logs
+`native: map edge = mirror` or `= black` on every change. It is not a render key: the preset never
+rewrites it, `derive_style()` never reads it, and the row is never greyed by the Classic lane.
+
+**Terrain: an off-map cell is one more instance** (`tagpu_terr_gather`). Every cell of the gather
+rect past the map takes the tile of the cell it folds to, `tagpu_edge_reflect(m, n)` — the lab's
+triangle wave, `p = m mod 2n` taken into `[0, 2n)`, `p` or `2n − 1 − p`, so any distance past the
+map lands on a map cell and says whether the axis turned over. The instance carries the tile
+column with `TAGPU_TERR_MIRROR` (0x2000) and each flipped axis's `TAGPU_TERR_FLIP` (0x4000):
+spare bits by bound, since a tile column is under 64 and a row under 1024 (a u16 tile index over
+64 columns), and a flagged record is still a positive short in the `SSCALED` attribute
+(`terr_mirror_flags_unchanged` holds the numbers). The vertex stage takes each flag off as an exact
+power of two and runs a flipped axis's corner the other way; the fragment stage draws a mirrored
+cell as the base atlas (or the restored twin where the reveal has painted it) through `taEdge`, with
+no fog of war and no light, and returns.
+
+- **The tone, `TAGPU_GLSL_EDGE_FN`, is the lab's `EDGE_TONE` at the owner's knobs:** `o = max(−w,
+  w − uMapPx, 0)` per axis, `t = |o| / 1536`, the colour mixed 0.75 toward its RGB mean, times 0.5,
+  times `1 − t`. `w` is the point drawn on the tile grid and `uMapPx` the map's 32-px cells × 32
+  (`TAGPU_TERRHAND.mapPxW/H`, the block's last vec2 at 184; the terrain block stays 192 B). One copy
+  for both passes, so a tree and the ground under it cannot drift apart.
+- **The nudge, reflected.** `TAGPU_EDGE_NUDGE` moves every sample 1/32 game px the same way on
+  screen, which breaks a sample lying exactly between two texels towards the next one; reflected,
+  that is the previous one. At 0.25× every sample lies on a texel boundary, so the mirror was the
+  flipped art one texel out of phase with the map it reflects — no seam, but not a reflection
+  (the offline recompute below missed by up to 28 levels). A flipped axis now adds `2·NUDGE/uZoom`
+  texels back to its coordinate: at most a quarter texel at the zoom floor, into the guard ring
+  only where the unshifted coordinate already read the tile's last texel, so no sample reads a
+  colour the tile does not end on.
+- **The grid starts from a floor** (`div32_floor`). The engine's `sar 5` divides toward zero,
+  which for an eye < 0 — past the top or left edge, where the centre clamp now goes — starts the
+  grid one cell late and leaves up to 31 game px of the view's leading edge with no cell: under
+  black those are off-map cells the gather skips anyway, under the mirror a band of clear colour
+  (measured at the eye (−300, −200), 1×: 12 px wide on the left, 8 px on top). For an eye ≥ 0 the
+  two divisions agree, and on-map cells land on the same pixels either way, since the origin
+  moves one cell and the fraction 32 px together. The lab's mirror sweep had the same band and
+  takes the same floor ([terrain depth](terrain-depth.html)).
+- **`skipped` is still the off-map count under black**; under mirror the heartbeat's `mirror=N`
+  counts the cells drawn past the map (`terr: … off-map=0 mirror=705 …` at the north-west corner at
+  0.5× on Two Continents).
+
+**Features: the map's own, from a snapshot taken before any scenario.** The mirror draws what the
+map placed, never what a game or a scenario has since done to it — a tree burnt, a wreck left, a
+scenario's own feature.
+
+- **The snapshot** (`tagpu_packet_pub.c` `mapfeat_snapshot`) walks the whole feature grid
+  `main+0x14287` once a level, on the game thread, in the `after` of the level's first in-play
+  `DrawGameScreen` — which is before the scenario applier's stub at `0x4969D2` first runs in that
+  level ([engine map](exe-reverse-engineering.html), "The map's own features are taken before any
+  scenario can touch the grid"). It keeps a cell whose def index is under `NumFeatureDefs` and
+  whose flags bit 0 is clear (a set bit is the wreck pool's record), with the anchor scan's 2×2
+  height term: `TAGPU_PK_MAPFEAT {col, row, def, lift}`, 8 bytes, at most 65 536 (the anchor
+  table's cap; past it the first 65 536 in row order, and `TAGPU_PK_TRUNC_MAPFEAT` says so). It runs
+  above the publish and outside its FRESH gate, because a publish can be skipped and this must not
+  be, and whatever the setting, so a switch to mirror in the middle of a level finds it (its cost,
+  one walk of the grid a level, is not measured). Two Continents: 4 893 of them over 672 × 800
+  cells, the same count the lab's pack reports; the log says `packet: level gen N: the map's own
+  features: 4893 anchor(s) over 672x800`.
+- **It rides the packet only while it is wanted**: `fill_mapfeat` appends it while
+  `tagpu_feat_mapfeat_want()` (the feature pass armed with the edge on mirror) and
+  `tagpu_feat_mapfeat_have()` is not this level's `level_gen + 1`. Each is one aligned word the render
+  thread stores, so a stale read costs one more packet or one packet later, never a wrong picture —
+  the copy is keyed on the level it came from. It is the **last table in the packet**, after the
+  font: the fill order is the cut order, and this is the one table that loses nothing by waiting.
+  Its `carried=` count is among the fill counts a refill takes back.
+- **The consumer's copy** (`tagpu_feat.c` `mapfeat_take`) is bucketed by row with a counting sort
+  into static arrays sized by `MF_DIM` (4096, the dimension the gather already refuses a map past),
+  and **every entry is bounded on the way in** — a row or column outside the dimensions it claims
+  is dropped — so the lookups index by a row under `mapH` and a column under `mapW` by construction,
+  not by the publisher's order.
+- **The gather** (`mirror_gather`, after the map's own anchors): every cell of the sweep rect **not
+  clamped to the map** that lies past it takes the map's anchor at the cell it folds to. Cells in
+  the map's last row or column are skipped, as the engine's sweep skips them. A mirrored feature
+  **ends** on the cell its source begins on (`wax = (col + 1)·16 − hx` on a flipped x), and across
+  the top or bottom the half height is **added** (`waz = (row + 1)·16 − hz + lift`), because the
+  mirrored ground is the tile art, with the height painted in. The quad is flipped about its
+  anchor on a side edge — `x0 = sx − (w − hotx)`, the u's swapped — and never on a y one.
+- **The depth keys.** Under the mirror the flat and tall keys of the map's own features **and** the
+  mirrored ones are taken over the unclamped sweep rect (`KEYRECT`), as the lab takes them, so the
+  two sort by one painter's order across the edge. Inside the map the ORDER is the clamped rect's
+  either way; what moves is the tall keys' column term within its row band, and the flat keys'
+  value within theirs. Under black the rect is the clamped one and every key is main's.
+- **The fragment stage** (mode + `TAGPU_FEAT_MIRROR`, 4, tested as `mode > 3.5`) discards inside
+  the map rectangle — a mirrored tree just past the bottom edge stands in front of the map's last
+  rows by the painter's order — then takes the hole from the base's alpha, the twin's colour where
+  the reveal painted it, `taEdge`, and premultiplies half-alpha frames. No fog, no light.
+- **Draw order**: four buckets, the map's shadows and bodies, then the mirror's shadows
+  (`s_pipeShadow`, no depth writes) and bodies (`s_pipeBody`). The fragment block grew to 48 B
+  (`uMapPx` at 32); each block is rounded to `minUniformBufferOffsetAlignment`.
+
+**Ground and trees together, by construction** (`tagpu_feat_mapfeat_sync`). The render thread asks
+the feature pass for the table before either gather, and `fv.mirror` is 1 only while the pass
+holds this level's copy of this map. So at a level's start, or a toggle to mirror, both switch on
+the same frame — one or two frames after the setting — and never ground without trees. With the
+feature pass unarmed there are no features on the map either, and the ground mirrors alone.
+
+**MEASURED 2026-09-24** — Two Continents, `feat-forest` at 1024 × 768, `ss=2`, the reference setup's
+discrete GPU on a private Xvfb display:
+
+- **`edge=black` draws what main draws, 0 px.** Against main at the BAR camera's landing, each world
+  pass A/B'd alone under `tagpu_defaults.off` at the shipped `ss=2` (3 145 728 px a capture), both
+  presets. Terrain: 22 of 22 captures at 0 px, eleven views — (2566, 616) at 1× and 0.5×,
+  (0, 3000) at 0.25×, (0, 0) at 0.5×, (1200, 2000) at 1×, the north-west corner (−448, −352) at 1×
+  and 8×, the south-east (10304, 12448) at 0.25×, and (−300, −200), off the cell grid, at 1×, 0.5×
+  and 0.25×. Features: 14 of 14 at 0 px, at seven of those views and (1200, 2000) at 0.5×; the
+  south-east corner at 0.25× is open sea, and with no feature in view neither build takes a
+  capture. Units: 10 of 10 at 0 px — the scenario's own at (2566, 616) at 1×, 0.5× and 0.25×, and
+  nine more placed at the north-west corner, seen from (0, 0) at 0.5× and from the corner at 1×; at
+  (−300, −200) at 8× no unit is in view and both builds draw nothing.
+- **The mirror is the map reflected through the tone, to the rounding.** With the features hidden
+  (`feat.on=noflat notall noshadow nowreck`), every off-map pixel whose reflection is on screen was
+  predicted offline from that on-map pixel through `taEdge`, averaged over the `ss` samples: at the
+  north-west and south-east corners at 0.25×, 0.5×, 1×, 2× and 8×, and at (−300, −200) at 0.25×,
+  0.5× and 1× — every strip (side, top or bottom, corner) within one level, 100 % of its pixels.
+- **Against the lab**, the pack rebuilt from this tree, `edge=mirror`, features on, the cursor
+  masked: at 1× at both corners and at (−300, −200), and at 0.5× at the north-west corner and at
+  (−300, −200), every pixel on and off the map within two levels. At 0.25× the lab's own mirror is
+  not an exact reflection — it misses the phase this pass's reflected nudge corrects — and it misses
+  by up to 88 levels at a mirrored tree's edge (12 over the south-east's open sea); the game's
+  0.25× passes the recompute above. At 8× rows of texel boundaries land one pixel apart in the lab
+  and the game on the map itself (up to 48 levels), and through the tone past it (up to 13).
+- **No seam, gap or band.** Three scans — a clear-colour pixel where the tone is lit, a one-pixel
+  line of clear colour between lit pixels, a band of clear colour along the viewport's border —
+  read 0 at every view above and over 300 window grabs of a scripted edge scroll with the shipped
+  Classic++ play set: at 0.25×, 0.5×, 1×, 2× and 8×, into the north-west corner along the left
+  and top edges and into the south-east along the right and bottom, twelve frames each, then the
+  wheel out, in and back over each corner, ten frames a gesture. `tagpu.log` over the run: no
+  deferral, `trunc=0`, `viol=0`.
+- **The setting**: a click on the Map edge row turns the view black within the poll (`native: map
+  edge = black`), `edge=black` survives a relaunch, `tagpu_mirror.on` over that store mirrors and
+  greys the row, and every `tagpu_defaults.off` launch logs `native: map edge = black`. The front
+  end's Visuals column carries the row eighth under *Impure rendering*.
+- **The cost**, GPU p50 with `--maxfps 0`, mirror against black alternated on one instance at the
+  north-west corner, Classic++: 1.11 against 0.76 ms at 1× and 0.91 against 0.72 at 8× (six reports
+  each, within 0.03 ms), and at 0.25×, the widest view, 1.18 against 0.80 ms over nine reports each
+  (eye (0, 0), before the merge with the BAR camera); with the mirror the p99 at 0.25× reads
+  2.3–3.4 ms against about 0.95, which is not explained. Two other
+  sessions' instances shared the GPU for the later 0.25× runs, which scattered their reports from
+  0.12 to 1.29 ms; their one quiet round read 1.21–1.29 against 0.77–0.81.
+
+**What it does not do.**
+
+- **A wreck the map placed is not mirrored.** Its cell carries a wreck record, which is the pool's
+  and moves with play; the snapshot skips it rather than freeze a copy.
+- **A map with more than 65 536 features** is mirrored with its first 65 536 in row order.
+- **At the design point the table can wait.** It is the last table in the packet, so on a frame
+  whose packet is at the reserve it is cut, and it rides the next; until the pass holds it nothing
+  mirrors, ground included.
+- **The mirror carries no fog of war, no light and no units** — by the owner's call, as in the lab.
+
+**Risky spots for a review.** The snapshot's ordering argument against `0x4969D2` and its bounds
+(the dimensions, `NumFeatureDefs`, the 65 536 cap); `mapfeat_take`'s bounds and bucketing; the two
+aligned words between the threads and the level key on the copy; `tagpu_feat_mapfeat_sync`'s gate
+and its caller in `tagpu_native.c`; the terrain flags' spare-bit bound and the vertex stage's
+decode, the reflected nudge; the gather's floor origin (`div32_floor`) and what else reads
+`s_rectTx0`; the fold for negative and far distances; `mirror_gather`'s skip of
+the map's own columns (`i = mapW − 1 − c0`); `KEYRECT` and the on-map keys it moves under mirror;
+the fragment stage's in-map discard; the feature blocks' sizes and offsets; the table's place in
+the fill and cut order.

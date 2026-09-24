@@ -1,7 +1,8 @@
 # BAR's camera and a full-colour Classic — the port plan
 
-**Written** 2026-09-23. **C1–C4 of Part 1 are built (G20a, on its worktree branch, not landed);
-C5 is not. Part 2 is built** (G20c and G20d, the same day): §2.1–2.4 are the plan it was built
+**Written** 2026-09-23. **C1–C4 of Part 1 are built (G20a); C5 is built (G20b, 2026-09-24, on its
+worktree branch, not landed) and its facts are in [GPU status](gpu-status.html) §2.89. Part 2 is
+built** (G20c and G20d, the same day): §2.1–2.4 are the plan it was built
 from, corrected where the work proved them wrong, and §2.5 is what the work learned. It covers
 two changes the lab has already made:
 
@@ -269,7 +270,7 @@ centre, away from the clamp. The one difference is the clamp: the lab clamps the
 at the notch, the game pre-clamps each frame's step per axis, and an axis the clamp cuts drops
 the rest of `R` and the residual on it rather than banking them.
 
-**C5 — the mirror, in the Vulkan world pass (G20b).**
+**C5 — the mirror, in the Vulkan world pass [BUILT, G20b — [GPU status](gpu-status.html) §2.89].**
 
 * **`edge = mirror | black`, default `mirror` [DECIDED 2026-09-23].** This is an on/off setting,
   the only new one. It is a store key in `impure.cfg` ([renderers](renderers.html) §2.10b) with a
@@ -297,6 +298,22 @@ The game's terrain is instanced: `tagpu_terr.c`'s vertex stage reads one quad pl
 `aCell` (col, row, cx, cy) as four signed shorts. A mirrored cell is one more instance, with its
 tile taken from the reflected cell and its flip bits in spare bits of the instance.
 
+**What the build added to the plan** [BUILT 2026-09-24, [GPU status](gpu-status.html) §2.89]:
+
+* **The map's own features come from a snapshot**, the whole feature grid read on the game thread
+  at the level's first in-play draw, before the scenario applier can run, and carried to the render
+  thread as the packet's last table. "The TNT's anchors" is not something the game keeps apart from
+  a scenario's, so the snapshot is how the mirror tells them apart.
+* **Ground and trees switch on together**: the terrain mirrors only while the feature pass holds
+  this level's copy.
+* **A flipped axis nudges the other way.** The half-texel nudge that breaks a tie between two texels
+  breaks it toward the previous texel once reflected, so at 0.25×, where every sample is a tie, the
+  mirror was the flipped art one texel out of phase. The game corrects it; the lab does not, and its
+  0.25× mirror is not an exact reflection (below).
+* **The grid's origin is a floor**, in the game and in the lab. The engine's toward-zero division
+  left up to 31 px of the view's leading edge with no cell past the top or left edge, which the
+  mirror showed as a band of clear colour ([terrain depth](terrain-depth.html)).
+
 ### 1.5 How each step is verified
 
 * **The picture is untouched by C1–C4. Only where the camera goes changes.** At an eye and level
@@ -318,6 +335,11 @@ tile taken from the reflected cell and its flip bits in spare bits of the instan
   through the tone. Recompute the tone offline from the shot's own on-map pixels and compare to
   within rounding. Then run an A/B against the lab at the same eye and zoom, using the pack the
   game shot was taken from.
+  **Met** [MEASURED 2026-09-24, [GPU status](gpu-status.html) §2.89]: the recompute is within one
+  level at both corners at 0.25×–8×, and the lab within two levels at 1× and 0.5×. Two lab findings
+  came out of it: at 0.25× the lab's mirror is a texel out of phase (up to 88 levels at a mirrored
+  tree's edge), and at 8× the lab and the game put rows of texel boundaries one pixel apart on the
+  map itself, so the mirror inherits that difference through the tone. Neither is the mirror's.
 
 ---
 
@@ -581,7 +603,7 @@ plan, or would change the next one:
 | landing | contents | review (CLAUDE.md) |
 |---|---|---|
 | 1 (track A) | C1–C4: the BAR camera in, the old rules out | **high** — writes engine memory (the eye, the target and their range) and adds byte patches at `0x41C808`, `0x41C93B`, `0x41CAF7` and `0x468DBA` |
-| 2 (after 3) | C5, the mirror | medium — new instances and a new sprite list in two passes, no engine state |
+| 2 (after 3) | C5, the mirror | **high** — besides new instances and a new sprite list in two passes, it reads the whole feature grid on the game thread once a level and hands it to the render thread as a new packet table, gated by two words each thread stores for the other ([GPU status](gpu-status.html) §2.89) |
 | 3 (track B) | 2a + 2b | medium — atlases and shaders |
 | 4 (track B) | 2c + 2d, the no-target Gamma, and the fixes its review asked for: every upload through one bounded staging module, and every palette-derived source keyed on the engine serial ([GPU status](gpu-status.html) §2.88) | **high** — the packet loses a field, which is the game↔render hand-over; and the banded upload submits to the seam's queue and waits on its own fence from the render thread |
 
