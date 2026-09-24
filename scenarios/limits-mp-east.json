@@ -1,0 +1,46 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The east half of the network effect-pool flood: 450 CORVROC (long-range rocket artillery, whose rockets stay in flight for seconds) on hold in a deep line at x 2850 on Two Continents, owned by the peer that applies it (owner 0 is always the local player). Apply limits-mp-west on one peer and limits-mp-east on the other, each on its own instance: in a network game every peer creates and owns its own units and TA replicates them, so a peer that creates another player's units makes units no peer owns. Built to push both peers' projectile and explosion pools past stock's 300 (tagpu_limits.h).",
+  "seed": 20260909,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "unit_limit": 500,
+    "clear_existing": false,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    }
+  },
+  "groups": [
+    {
+      "id": "east_guns",
+      "owner": 0,
+      "at": [
+        2850,
+        1200
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 10,
+        "spacing": 40,
+        "jitter": 3
+      },
+      "composition": [
+        {
+          "type": "CORVROC",
+          "count": 450
+        }
+      ],
+      "facing": 270,
+      "stance": "hold"
+    }
+  ],
+  "camera": {
+    "at": [
+      2600,
+      1200
+    ]
+  }
+}

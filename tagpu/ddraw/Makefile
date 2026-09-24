@@ -51,14 +51,36 @@ endif
 CC        = i686-w64-mingw32-gcc
 WINDRES  ?= i686-w64-mingw32-windres
 
+# THE STOCK-LIMITS BUILD (inc/tagpu_limits.h): `make LIMITS=stock` builds
+# ddraw-stocklimits.dll, which raises no engine limit, for comparisons with stock. It
+# changes only the engine's limits: the renderer's own budgets are the raised build's in
+# both, which draw more than stock ever asks for. Its objects carry their own
+# suffix, so neither build can ever link the other's -- the two differ in a macro,
+# not in a file, and make would otherwise call a stale object up to date.
+ifeq ($(LIMITS),stock)
+TARGET   := ddraw-stocklimits.dll
+CPPFLAGS += -DTAGPU_LIMITS_STOCK
+OBJEXT   := .stock.o
+else
+OBJEXT   := .o
+endif
+
 SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
-OBJS     := $(addsuffix .o, $(basename $(SRCS)))
+OBJS     := $(addsuffix $(OBJEXT), $(basename $(SRCS)))
 DEPS     := $(filter %.d, $(OBJS:.o=.d))
+# `clean` removes both builds' objects, whichever LIMITS it is run with.
+ALLOBJS  := $(foreach e, .o .stock.o, $(addsuffix $(e), $(basename $(SRCS))))
 
 .PHONY: clean all thread-split spirv log-check logtest
 all: $(TARGET)
 
 %.o: %.rc
+	$(WINDRES) -J rc $< $@ || windres -J rc $< $@
+
+%.stock.o: %.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+%.stock.o: %.rc
 	$(WINDRES) -J rc $< $@ || windres -J rc $< $@
 
 # THE THREAD-SPLIT RULE (frame-packet-exchange §10): a source file that is
@@ -102,6 +124,6 @@ tests/logtest.exe: tests/logtest.c src/tagpu_log.c inc/tagpu_log.h
 	    -static -o $@ tests/logtest.c src/tagpu_log.c
 
 clean:
-	$(RM) $(TARGET) $(OBJS) $(DEPS) tests/logtest.exe || del $(TARGET) $(subst /,\\,$(OBJS))
+	$(RM) ddraw.dll ddraw-stocklimits.dll $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
 
 -include $(DEPS)

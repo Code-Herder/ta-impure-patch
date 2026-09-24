@@ -140,8 +140,8 @@ the overlap because both copies are live and each mod toggles its own independen
 Three ways to get TADR's feature set into the tagpu stack.
 
 **Way 1 — use both at once (chain).** Point the exe's import at `tdraw.dll`; let it chain-load our
-tagpu GL renderer as its `ddraw.dll` backend (the slot cnc-ddraw fills today). tdraw does game logic
-plus its own UI through DirectDraw surfaces → our GL; its `DllMain` and ours both patch, at disjoint
+tagpu renderer as its `ddraw.dll` backend (the slot cnc-ddraw fills today). tdraw does game logic
+plus its own UI through DirectDraw surfaces → our renderer; its `DllMain` and ours both patch, at disjoint
 addresses (we own draw leaves; TADR owns sim tick / loaders / combat). One swap, no fork.
 
 **Way 2 — merge into one DLL (vendor).** Compile TADR's self-contained sim/engine modules (all
@@ -162,6 +162,11 @@ UI ownership (our G15 vs TADR's megamap); Class-B patches that must ship identic
 features into Way 2 or Way 3 for long-term ownership. Rewriting (Way 3) is where the four
 duplications and the recorder's 40 features collapse into one owner each — but it means inventorying
 the Delphi side too, not just `tdraw.dll`.
+
+**Taken: Way 3.** [The TADR port](tadr-port/overview.md) rewrites the features group by group, under
+standing rules the owner set on 2026-09-23 — TADR's multiplayer behaviour, fail-closed installs, no
+runtime opt-out for anything that changes the simulation. Group A is planned in
+[the section-A plan](tadr-port/raised-limits.md).
 
 ## Sources
 

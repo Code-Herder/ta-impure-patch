@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Build the TotalA.exe modding wiki from research/notes/*.md into research/site/.
+"""Build the TotalA.exe modding wiki from research/notes/*.md (and the note folders listed in
+FOLDERS) into research/site/.
 
 A note may also be authored HTML: research/notes/<slug>.html (its own <title>, <link>s and one
 <style>, then its body, then its script) is rendered inside the wiki template with its styles
@@ -126,15 +127,26 @@ PAGES = [
     ("candidates-features",       "Feature-first sweep",       "Survey"),
     ("candidates-code",           "Code-host sweep",           "Survey"),
     ("patching-playbooks",        "Playbooks from other games","Survey"),
+
+    ("tadr-port/overview",        "The port",                  "TADR port"),
+    ("tadr-port/raised-limits",   "A. Raised ceilings — plan", "TADR port"),
+    ("tadr-port/limits-evidence", "A. Raised ceilings — evidence", "TADR port"),
 ]
 
-SECTION_ORDER = ["Overview", "Renderer", "Tooling", "Mechanism", "Projects",
+# A folder of notes is a section of its own: research/notes/<folder>/<name>.md is the slug
+# "<folder>/<name>" and renders to site/<folder>/<name>.html, so a relative link between
+# notes is the same path in the repo and on the site. A note added to the folder is listed
+# in its section without being registered in PAGES; register it to choose its label and order.
+FOLDERS = {"tadr-port": "TADR port"}
+
+SECTION_ORDER = ["Overview", "Renderer", "Tooling", "Mechanism", "TADR port", "Projects",
                  "Reference", "Survey"]
 SECTION_BLURB = {
     "Overview": "Where the project stands, and the gotchas that cost time",
     "Renderer": "The GPU renderer: TA's draw paths mapped, and our passes",
     "Tooling": "Driving the game from a CLI — instances, input, UI, scenarios",
     "Mechanism": "How the patching actually works",
+    "TADR port": "Bringing TADR's engine features into our stack — the rules, then one plan per feature group",
     "Projects": "The mods and patches, one page each",
     "Survey": "Discovery passes and comparisons",
     "Reference": "Asset formats and the stock engine's external surfaces",
@@ -520,9 +532,10 @@ def build_page(md_text: str):
                                        _Strikethrough()],
                            extension_configs={"toc": {"anchorlink": False, "permalink": False}})
     html = md.convert(md_text)
-    # cross-links between notes are authored as `page.md` (correct in the repo);
-    # the site serves `page.html`
-    html = re.sub(r'href="([a-z0-9_-]+)\.md(#[^"]*)?"', lambda m: f'href="{m.group(1)}.html{m.group(2) or ""}"', html)
+    # cross-links between notes are authored as `page.md`, `folder/page.md` or `../page.md`
+    # (correct in the repo); the site mirrors the folders and serves `.html`
+    html = re.sub(r'href="((?:\.\./)*(?:[a-z0-9_-]+/)*[a-z0-9_-]+)\.md(#[^"]*)?"',
+                  lambda m: f'href="{m.group(1)}.html{m.group(2) or ""}"', html)
     html = wrap_tables(pillify(html))
     toc = getattr(md, "toc_tokens", [])
     return html, toc
@@ -684,6 +697,17 @@ FPX_BOOT = """(function () {
 })();"""
 
 
+def base_of(slug):
+    """The relative path from a page back to the site root: '' at the top, '../' per folder."""
+    return "../" * slug.count("/")
+
+
+def write_page(slug, html):
+    out = SITE / f"{slug}.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(html)
+
+
 def emit_html_page(slug, label, section, src, nav_html):
     """An authored HTML note, rendered INSIDE the wiki template but with its styles isolated.
 
@@ -733,7 +757,7 @@ def emit_html_page(slug, label, section, src, nav_html):
     blurb = (strip_html(m.group(1)) if m else plain).strip()
     if len(blurb) > 165:
         blurb = blurb[:162].rsplit(" ", 1)[0] + "…"
-    (SITE / f"{slug}.html").write_text(render(title, wiki_body, nav_html, toc_html, ""))
+    write_page(slug, render(title, wiki_body, nav_html, toc_html, base_of(slug)))
     return title, plain, blurb
 
 
@@ -809,6 +833,13 @@ def main(bake="auto"):
         if f.stem not in known:
             present.append((f.stem, f.stem.replace("-", " ").title(), "Survey"))
             known.add(f.stem)
+    for folder, folder_sec in FOLDERS.items():
+        for f in sorted((NOTES / folder).glob("*.md")):
+            slug = f"{folder}/{f.stem}"
+            if f.stem.startswith("_") or slug in known:
+                continue
+            present.append((slug, f.stem.replace("-", " ").capitalize(), folder_sec))
+            known.add(slug)
 
     def nav_for(current, base):
         out = []
@@ -827,8 +858,9 @@ def main(bake="auto"):
     meta = {}
 
     for slug, label, sec in present:
+        base = base_of(slug)
         if not (NOTES / f"{slug}.md").exists():
-            title, plain, blurb = emit_html_page(slug, label, sec, NOTES / f"{slug}.html", nav_for(slug, ""))
+            title, plain, blurb = emit_html_page(slug, label, sec, NOTES / f"{slug}.html", nav_for(slug, base))
             search_index.append({"u": f"{slug}.html", "t": title, "h": "", "b": plain[:2600]})
             meta[slug] = {"title": title, "label": label, "section": sec,
                           "words": len(plain.split()), "blurb": blurb}
@@ -854,9 +886,7 @@ def main(bake="auto"):
         meta[slug] = {"title": title, "label": label, "section": sec,
                       "words": len(plain.split()), "blurb": blurb_from(md_text, plain)}
 
-        (SITE / f"{slug}.html").write_text(
-            render(title, body, nav_for(slug, ""), toc_html, "")
-        )
+        write_page(slug, render(title, body, nav_for(slug, base), toc_html, base))
 
     # ---- index ----
     total_words = sum(m["words"] for m in meta.values())

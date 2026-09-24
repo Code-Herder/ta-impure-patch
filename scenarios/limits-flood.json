@@ -1,0 +1,96 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Effect-pool flood: 450 ARM Merls and 450 CORE Diplomats (long-range rocket artillery, whose rockets stay in flight for seconds) on hold, in two deep lines 500 world units apart on the Two Continents plateau, so the front ranks see each other and every launcher fires from the first seconds. The first volley puts about 700 rockets in the air and the impacts more than a thousand explosions, well past stock's 300 for both (tagpu_limits.h); under the stock limits the engine refuses every shot and explosion past 300. limits-mp-west and limits-mp-east are its two halves for a network game.",
+  "seed": 20260909,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1920x1080",
+    "unit_limit": 500,
+    "clear_existing": true,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1
+      }
+    ]
+  },
+  "groups": [
+    {
+      "id": "arm_guns",
+      "owner": 0,
+      "at": [
+        2350,
+        1200
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 10,
+        "spacing": 40,
+        "jitter": 3
+      },
+      "composition": [
+        {
+          "type": "ARMMERL",
+          "count": 450
+        }
+      ],
+      "facing": 90,
+      "stance": "hold"
+    },
+    {
+      "id": "core_guns",
+      "owner": 1,
+      "at": [
+        2850,
+        1200
+      ],
+      "pattern": {
+        "kind": "grid",
+        "cols": 10,
+        "spacing": 40,
+        "jitter": 3
+      },
+      "composition": [
+        {
+          "type": "CORVROC",
+          "count": 450
+        }
+      ],
+      "facing": 270,
+      "stance": "hold"
+    }
+  ],
+  "units": [
+    {
+      "id": "hero",
+      "type": "ARMCOM",
+      "owner": 0,
+      "pos": [
+        1800,
+        1200
+      ],
+      "facing": 90,
+      "health": 100,
+      "stance": "hold"
+    }
+  ],
+  "camera": {
+    "at": [
+      2600,
+      1200
+    ]
+  }
+}

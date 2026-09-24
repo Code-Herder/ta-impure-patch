@@ -120,8 +120,16 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
 #define TAGPU_FX_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28} }
 /* VERTICES PER BUCKET PER FRAME -- the gather's own `MAXFXV`, shared so that
    the Vulkan pass can re-check a handed-over count against the very number that
-   produced it rather than against a second copy of it. */
-#define TAGPU_FX_MAXV   32768
+   produced it rather than against a second copy of it. SIZED FOR THE ENGINE'S
+   POOLS (tagpu_limits.h) as they usually fill: a projectile makes at most two
+   sprite quads (its shadow blob and its own frame) and an explosion one, and
+   tagpu_fx.c asserts that 6 x (2 x projectiles + explosions) fits. IT IS NOT A
+   BOUND BY CONSTRUCTION: a composite GAF frame makes one quad per subframe, a
+   lightning bolt up to 2 044 line vertices, and the particles share the
+   sprites bucket under their own cap (TAGPU_PK_MAX_PART). A vertex past a full
+   bucket is dropped and counted (`fx: DROPPED ... bucket-full` in the log),
+   never written past it. */
+#define TAGPU_FX_MAXV   65536
 
 /* THE FOUR BUCKETS, IN DRAW ORDER, which is the order they are concatenated
    into one vertex buffer in. They are not four draws of one

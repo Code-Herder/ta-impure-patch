@@ -3710,6 +3710,18 @@ The plan is [BAR camera & full-colour Classic](bar-camera-port.html). Both halve
 | G20c — the base atlas and Classic onto the full-colour shaders (the plan's 2a + 2b) | ○ planned (track B) | Classic++ 0 px after the base atlas. The old and new Classic measured side by side, the new baseline recorded, and the owner has looked |
 | G20d — Gamma once at the end, and the 8bpp path deleted (2c + 2d) | ○ planned (track B) | 0 px at Gamma 12 in both presets; no repaint on a Gamma change; R8 atlases, SHD texture and fog table gone |
 
+## The TADR port — raised ceilings (planned 2026-09-23)
+
+TADR's engine features, brought in as our own code: the plans live in the wiki's
+[TADR port](tadr-port/overview.html) section, one page per feature group. Group A raises the
+engine's limits over five landings ([the plan](tadr-port/raised-limits.html)); the owner decided
+every choice on 2026-09-23. The standing rules: the same build on every peer, fail closed with a
+report, no runtime opt-out, and stock behaviour exact below every raised limit.
+
+| Gate | Status | Result |
+|---|---|---|
+| A — Raised ceilings | ◐ **landing 1 of 5, 2026-09-23** — [the plan](tadr-port/raised-limits.html) | **Exit:** ten players at 1500 units each in one network game, every raised pool past its stock cap on every peer, and the peers agreeing when paused. Landing 1 raised the four effect pools and built the module, the failure report and the stock-limits build ([gpu-status §2.6b](gpu-status.html)). **Not covered by landing 1:** units, pathfinding, particles, sounds and the composite buffer (landings 2–4), and the ten-player proof (landing 5) |
+
 ## Shipping — the build people can download (2026-09-08)
 
 Until the game has the render options screen (**Phase F / G18** above; [renderers](renderers.html)
