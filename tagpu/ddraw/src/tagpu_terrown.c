@@ -187,12 +187,12 @@ static void __cdecl terr_fill(void* ctxv)
    terrain back — the lever removed, `passive`, `over`, a `key=` change, a
    bail-out, the 90-frame watchdog. When it does, this observer stops and the
    ENGINE calls `0x4848E0` itself, at the live eye. Its builds are still seen
-   — the publisher reads them off LosType bit 3 — but the wide grid is then
-   stale and its module cannot tell: `tagpu_fogwide`'s "valid" flag is only
-   ever cleared from inside the tick that has stopped. So the tick stamps the
-   publisher's in-play draw counter,
-   and the publisher — which runs in the same draw's `after` — accepts the
-   wide grid only when the stamp is this draw's. */
+   — the publisher reads them off LosType bit 3 — and the publisher ticks the
+   wide grid itself in that draw's `after` (`wide_tick`), since
+   `tagpu_fogwide`'s "valid" flag is only ever cleared from inside a tick and
+   cannot say that this one stopped. So this tick stamps the publisher's
+   in-play draw counter, the publisher ticks only on a draw without the
+   stamp, and it accepts the wide grid only from a tick of this draw. */
 static unsigned s_fogDrawSeq;
 static int      s_fogDrawSeen;
 

@@ -1479,8 +1479,9 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    never a guess from an eye that may have moved since: the builder derives
    the origin from the eye it reads, and nothing stores it.
 
-   THE WIDE ONE is tagpu_fogwide's, built in `terr_fogtick` during THIS draw,
-   on this thread, with its origin and size published beside it. */
+   THE WIDE ONE is tagpu_fogwide's, built in THIS draw on this thread -- in
+   `terr_fogtick` when the fog site is ours, in `wide_tick` below when it is
+   the engine's -- with its origin and size published beside it. */
 
 #define FOG_DESC     0x1421F      /* -> {u16* buf, i32 cols, i32 rows, i32 cells} */
 
@@ -1517,6 +1518,10 @@ static volatile int      s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR;
 static int      s_engRecOk, s_engRecX, s_engRecY;
 static unsigned s_engRecGen;
 static int      s_fogBitBefore = -1;      /* bit 3 after this draw's apply; -1 untracked */
+/* the engine grid was not current when this draw began (bit 3 clear after the
+   apply, or untracked): what the wide grid's tick is told as `rebuilt` when
+   the fog site is the engine's (wide_tick) */
+static int      s_fogStale = 1;
 
 static void fog_rec_before(char* ta)
 {
@@ -1536,6 +1541,7 @@ static void fog_rec_drop(void)
 static void fog_rec_after(const char* ta)
 {
     int after;
+    s_fogStale = s_fogBitBefore != 1;
     if (!ta || s_fogBitBefore < 0) { fog_rec_drop(); return; }
     after = (RDU16(ta, OFF_LOSTYPE) & 8) != 0;
     if (!s_fogBitBefore && after) {
@@ -1545,6 +1551,49 @@ static void fog_rec_after(const char* ta)
         s_cFogRecOdd++; s_engRecOk = 0;
     }
     s_fogBitBefore = -1;
+}
+
+/* THE WIDE GRID ON EVERY TRACKED DRAW, not only while the fog site is ours.
+   `terr_fogtick` ticks tagpu_fogwide at the engine's fog call `0x469D8E`,
+   but only on a draw latched to our terrain (`g_terrown_own`), and that latch
+   follows the terrain pass's request: at a level's start, until our pass
+   has gathered a frame and the game thread has seen its request, and under
+   `terr.on=off` or `passive`, the ENGINE's `0x4848E0` runs there instead and
+   nothing builds the wide grid. A frame drawn below 1x from such a packet had
+   no grid covering its view (`bare=`). So on the draws where our site did
+   not run, this `after` ticks the wide grid itself, before the fill copies it.
+
+   WHAT IT READS IS SAFE HERE FOR THE SAME REASON AS AT THE FOG SITE: the local
+   player's LOS counters and the MAPPED bitmap are the level's. The counters
+   are (re)allocated only by `0x464700`, which `0x464990` calls for each
+   active player at `0x4919C8`, inside the level load `LoadGameData_Main
+   0x4917D0` on the loader thread; MAPPED is allocated at `0x483CF6` in the
+   map load and freed by the map-free routine `0x483DD0` in the teardown
+   cascade `0x491B60` [DISASSEMBLED 2026-09-24]. This `after` runs on the
+   in-play gate, after the load and before the teardown, on the thread that
+   runs the teardown -- the argument every table this publisher copies
+   stands on -- and every index the build forms is bounded by the maps' own
+   dimensions (tagpu_fogwide.c, fogw_source).
+
+   `rebuilt` IS "the engine grid was not current when this draw began". The
+   engine's `0x4848E0` runs on every in-play draw (its call at `0x469D8E` is
+   gated on `drawUnits`, which the in-play call passes as 1) and rebuilds
+   whenever bit 3 is clear, and every LOS stamp and every eye writer clears
+   it; so a clear bit at the apply is the same signal `terr_fogtick` hands
+   over when it rebuilds, and an untracked draw counts as one. The tick
+   rebuilds on it or on a moved window, and otherwise keeps the grid, which
+   is then still exactly what a build would produce. */
+static unsigned s_wideTickDraw;
+static int      s_wideTickSeen;
+
+static void wide_tick(void)
+{
+    char* ta;
+    if (tagpu_terrown_fog_site_live()) return;       /* ticked at our fog site */
+    ta = (char*)ta_main();
+    if (!ta) return;
+    tagpu_fogwide_tick(ta, s_fogStale);
+    s_wideTickDraw = s_cDraws; s_wideTickSeen = 1;
 }
 
 /* THE TWO GRIDS THIS PACKET CARRIES, decided once per fill, before the
@@ -1580,16 +1629,12 @@ static void fog_sources(const char* ta)
     } else {
         s_cFogRefused++;
     }
-    /* ONLY WHILE THE FOG SITE RAN IN THIS DRAW. The wide grid is built by the
-       observer inside it, and if terrain ownership was dropped — the
-       `terr.on` lever removed, `passive`, a `key=` change, a bail-out, or
-       the 90-frame watchdog — that observer stops while this one keeps
-       publishing. The producer's own "valid" flag cannot say so: it is only
-       ever cleared from inside the tick that has stopped running. Without
-       this test the packet would carry the LAST grid ever built, for ever,
-       against a camera and an LOS state that keep moving, and nothing would
-       count it. */
-    if (tagpu_terrown_fog_site_live() &&
+    /* ONLY A GRID TICKED IN THIS DRAW, at our fog site or by wide_tick. The
+       producer's own "valid" flag cannot say so: it is only ever cleared
+       from inside a tick, so a tick that stopped running would leave the
+       packet carrying the LAST grid ever built, against a camera and an LOS
+       state that keep moving. Both tick sites stamp the draw. */
+    if ((tagpu_terrown_fog_site_live() || (s_wideTickSeen && s_wideTickDraw == s_cDraws)) &&
         tagpu_fogwide_current(&wb, &wc, &wr, &wox, &woy) &&
         wc > 0 && wr > 0 && wc <= TAGPU_PK_FOG_DIMCAP && wr <= TAGPU_PK_FOG_DIMCAP) {
         s_fsWide.buf = wb; s_fsWide.cols = wc; s_fsWide.rows = wr;
@@ -2363,6 +2408,8 @@ static void* __cdecl after_draw(unsigned int* regs)
     /* the draw is done: did its fog call rebuild the engine's grid, and at
        which eye — before the publish reads the record */
     fog_rec_after(ta_main());
+    /* the wide grid, when our fog site did not build it in this draw */
+    wide_tick();
     /* post-flip: the packet. The FRESH gate inside makes most of these a load.
        FORCED WHILE THE LEVEL HAS NO PACKET YET: the shell's cursor
        channel publishes through the load, so the FRESH gate can be set at the

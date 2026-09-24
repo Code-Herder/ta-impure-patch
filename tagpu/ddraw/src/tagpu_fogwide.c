@@ -277,10 +277,10 @@ static void fogw_edge_fill(const FOGW_SRC* s, unsigned short* out,
 
 /* ---- reading the sources ------------------------------------------------ */
 
-/* Fill `s` from the engine, or return 0. Game thread, at the fog overlay's own
-   call site: the engine's builder reads these very allocations there, which is
-   what makes them safe to read at all. Every field is range-checked, and every
-   index the build takes is bounded by the dimensions collected here. */
+/* Fill `s` from the engine, or return 0. Game thread, inside an in-play draw
+   (tagpu_fogwide.h, WHERE IT RUNS, for why the maps are live there). Every
+   field is range-checked, and every index the build takes is bounded by the
+   dimensions collected here. */
 static int fogw_source(char* ta, FOGW_SRC* s)
 {
     const char* ps;

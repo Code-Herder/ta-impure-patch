@@ -30,13 +30,16 @@
    same lattice — origin `32·col0 + 16` — so nothing downstream changes but the
    numbers in `uFogOrg`/`uFogDim`.
 
-   WHERE IT RUNS. On the GAME thread, from `tagpu_terrown.c`'s `terr_fogtick`,
-   which is the engine's own fog-overlay call site and already calls the engine's
-   builder there. That is the lifetime argument for reading the LOS and MAPPED
-   maps at all: at this call site the engine's builder reads exactly the same two
-   allocations, so a pointer we could not read is one the engine could not read
-   either. Every index into them is bounded by the maps' own dimensions, as the
-   engine's own loop bounds it.
+   WHERE IT RUNS. On the GAME thread, once in every tracked in-play draw: from
+   `tagpu_terrown.c`'s `terr_fogtick`, the engine's own fog-overlay call site,
+   when that site is ours, and otherwise from the packet publisher's `after`
+   of the same draw (`wide_tick` in tagpu_packet_pub.c) -- so a level that
+   starts below 1x, or runs with our terrain pass off, still has the grid.
+   Both read the LOS and MAPPED maps inside an in-play draw, after the level
+   load that allocates them and before the teardown that frees them, on the
+   thread that runs that teardown (the lifetime is spelled out at
+   `wide_tick`). Every index into them is bounded by the maps' own
+   dimensions, as the engine's own loop bounds it.
 
    WHAT IT COVERS. The window is sized for the WIDEST view the zoom levers can
    produce — TAGPU_ZOOM_MIN, not the current level — plus a margin. The
@@ -75,10 +78,11 @@
    has run. */
 void tagpu_fogwide_init(void);
 
-/* Game thread, from the fog-overlay call site, once per engine frame. `ta` is
-   the TAdynmem base; `rebuilt` is 1 when the engine's own grid was rebuilt on
-   this tick (its is-current flag had been cleared), which is also our cue that
-   the LOS state moved under us. It rebuilds only when `rebuilt` is set or the
+/* Game thread, once per tracked in-play draw: from the fog-overlay call site
+   when it is ours, else from the publisher's `after` (see WHERE IT RUNS). `ta`
+   is the TAdynmem base; `rebuilt` is 1 when the engine's own grid was not
+   current on this draw (its is-current flag had been cleared), which is also
+   our cue that the LOS state moved under us. It rebuilds only when `rebuilt` is set or the
    window itself moved — but `rebuilt` is cleared by every LOS stamp as well as
    every scroll, so in a live game that is the SIM TICK rate whenever anything
    is moving, ~30/s at gamespeed 10 (see the tick's own comment for the number).
