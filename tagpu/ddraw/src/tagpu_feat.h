@@ -93,12 +93,19 @@ typedef struct TAGPU_FEATHAND {
     int                   atlasRows;
     unsigned              atlasSerial;
     /* THE BASE ATLAS'S TWO OTHER INPUTS, beside the indices: the key plane
-       (dim x dim, 0 at a keyed texel -- tagpu_gaf.h `keym`) and the ring of
-       the mirror's recent writes, which tells a consumer holding serial S
-       which rect to re-send (tagpu_gaf_band_since). Both are the atlas's own
-       buffers, alive as long as the mirror is. */
+       (dim x dim, 0 at a keyed texel -- tagpu_gaf.h `keym`) and the dirty map,
+       the serial of the last write to each tile, which tells a consumer
+       holding serial S which tiles to re-send (tagpu_gaf_dirty_since). Both
+       are the atlas's own buffers, alive as long as the atlas is. */
     const unsigned char*        atlasKey;
-    const struct TAGPU_GAFBAND* atlasBands;
+    const unsigned*             atlasDirty;
+    /* THE LAST REPACK'S MOVES (tagpu_gaf.h `moves`): the cells a copy as of
+       a serial in [atlasMovePrev, atlasMoveSerial) carries to their new place
+       on the device instead of taking the page again. The atlas's own array,
+       alive as long as the atlas is; NULL until a repack has recorded one. */
+    const struct TAGPU_GAFMOVE* atlasMoves;
+    int                         atlasMoveN;
+    unsigned                    atlasMoveSerial, atlasMovePrev;
 
     /* ...AND THE WORK ITSELF IS THE ONLY FORM IT COMES IN. There is no
        restored picture on the CPU side: the restored copy of the atlas reaches

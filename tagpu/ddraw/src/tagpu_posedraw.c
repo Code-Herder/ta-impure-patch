@@ -960,7 +960,7 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
        opaque black, for the rest of the generation. */
     s_pub.atlas = tagpu_r3d_atlas_mirror(&s_pub.atlasDim, &s_pub.atlasRows,
                                          &s_pub.atlasSerial);
-    s_pub.atlasKey = tagpu_r3d_atlas_key(&s_pub.atlasBands);
+    s_pub.atlasKey = tagpu_r3d_atlas_key(&s_pub.atlasDirty);
     {
         float aniso = 0.0f;
         const TAGPU_RGLSL_FRAME* fr =

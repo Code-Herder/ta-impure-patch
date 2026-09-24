@@ -77,9 +77,10 @@ typedef struct TAGPU_GAFENT {
        maps would carry the previous map's frames forever and reach the wall
        holding art nothing on screen can use. */
     char           hit;
-    /* RESERVED BY A REPACK: the rect above is assigned but nothing has been
-       uploaded to it yet, because a repack moves every entry and we do not
-       keep the decoded pixels (only the frame's address and its size). The
+    /* RESERVED: the rect above is assigned but nothing has been painted into
+       it yet. A repack leaves an entry so when it had not been painted, or
+       when there is no mirror to carry its texels to the new rect (the
+       decoded pixels live nowhere else); so does the mirror's arm. The
        next atlas_get/atlas_put for this frame paints it in place instead of
        allocating a new cell. `ok` is 0 for exactly as long as that is true,
        so tagpu_gaf_atlas_find keeps refusing it -- there is nothing there to
@@ -91,16 +92,30 @@ typedef struct TAGPU_GAFENT {
 
 struct TAGPU_RGLSL_JOB;
 
-/* ONE WRITE INTO THE MIRROR: the rect it covered and the mirror serial it left
-   behind. The atlas keeps the last TAGPU_GAF_NBAND of them, so a consumer
-   holding a copy as of serial S can re-send the union of every write since S
-   instead of the whole page -- which matters once that copy is four bytes a
-   texel (the world's base atlas, tagpu_pal_expand). */
-#define TAGPU_GAF_NBAND 64
-typedef struct TAGPU_GAFBAND {
-    unsigned       serial;      /* `mirrorSerial` just after the write       */
-    unsigned short x0, y0, x1, y1;
-} TAGPU_GAFBAND;
+/* THE DIRTY MAP: for each tile of TAGPU_GAF_TILEW x TAGPU_GAF_TILEH texels,
+   the mirror serial of the last write that touched it. A consumer holding a
+   copy as of serial S re-sends exactly the tiles whose serial is past S
+   (tagpu_gaf_dirty_since) -- which matters once that copy is four bytes a
+   texel (the world's base atlas, tagpu_pal_expand).
+   IT CANNOT OVERFLOW: it has a slot per tile, not per write, so however many
+   paints land between two uploads, the tiles they touched are all still
+   named. A consumer re-sends the whole page only when the whole page was
+   written (a create, a loss, a mirror arm) or its copy is gone -- never
+   because a burst of paints outran a record of them. A repack writes the
+   whole page too, unless the atlas publishes its moves (`moveList` below).
+   A mirror is refused on an atlas wider than TAGPU_GAF_DIMMAX, so the map
+   covers every texel of any mirror there is. */
+#define TAGPU_GAF_TILEW   32
+#define TAGPU_GAF_TILEH   16
+#define TAGPU_GAF_DIMMAX  2048
+#define TAGPU_GAF_TCOLS   (TAGPU_GAF_DIMMAX / TAGPU_GAF_TILEW)
+#define TAGPU_GAF_TROWS   (TAGPU_GAF_DIMMAX / TAGPU_GAF_TILEH)
+
+/* ONE CELL A REPACK MOVED, border and alignment slack included: `w` x `h`
+   texels from (ox, oy) to (nx, ny). */
+typedef struct TAGPU_GAFMOVE {
+    unsigned short ox, oy, nx, ny, w, h;
+} TAGPU_GAFMOVE;
 
 /* Caller-owned atlas. Zero it, then point `ents`/`max` at your storage and
    set `dim` and `tag` before the first tagpu_gaf_atlas_get. */
@@ -131,7 +146,8 @@ typedef struct TAGPU_GAFATLAS {
        as long as the atlas lives, which is the feature atlas: it fills once
        per map and every frame in it is a feature that is still on the map.
        With it, filling up re-lays what is already here TALLEST CELL FIRST
-       instead of dropping it, and each entry re-uploads on its next get.
+       instead of dropping it: a painted entry's texels move with it in the
+       mirror, and an entry never painted is painted on its next get.
        Insertion order is what wastes the page -- a 320-tall tree opens a
        shelf that a row of 12-tall rocks then sits in -- so sorting is worth
        more than any cleverer packer: measured on Town & Country's 229
@@ -205,9 +221,30 @@ typedef struct TAGPU_GAFATLAS {
        memsets -- one lifetime, never a second one to keep in step. */
     int            keyPlane;
     unsigned char* keym;
-    /* the last TAGPU_GAF_NBAND mirror writes, indexed by serial modulo the
-       ring (tagpu_gaf_band_since) */
-    TAGPU_GAFBAND band[TAGPU_GAF_NBAND];
+    /* the serial of the last mirror write to each tile (the DIRTY MAP above),
+       row-major, TAGPU_GAF_TCOLS tiles a row */
+    unsigned       dirty[TAGPU_GAF_TROWS * TAGPU_GAF_TCOLS];
+    /* THE LAST REPACK'S MOVES, for a consumer that moves its own copy of the
+       mirror rather than receive the page again. The owner sets `moveList`
+       when its consumer applies them (tagpu_vk_feat.c); any other atlas's
+       repack is a whole-page write to the map above, which every consumer
+       already answers.
+       `moves` holds the `moveN` cells that moved painted. `moveSerial` is the
+       mirror serial the repack took and `movePrev` the one the recorded repack
+       before it took, 0 before the first. A copy as of serial S takes this
+       move when S is before `moveSerial` and not before `movePrev`: it then
+       holds every earlier move and lacks only this one. A copy further behind
+       takes the whole page.
+       THE MAP STAYS EXACT ACROSS THE MOVE: each moved cell's new tiles take
+       the newest serial its old tiles held, so a paint that the copy lacked
+       before the move is still due after it, at the cell's new place.
+       Allocated once, `max` cells, the first time a repack records a move,
+       and never moved: the consumer reads it through the hand-over on the
+       same thread. */
+    int            moveList;
+    TAGPU_GAFMOVE* moves;
+    int            moveN;
+    unsigned       moveSerial, movePrev;
     /* THERE IS NO MIRROR OF THE RESTORED TWIN. `mirror` above is written by
        the paint, because the CPU holds the source bytes; restored texels are
        the RESTORER'S OUTPUT and exist only on the GPU. The Vulkan lane gets
@@ -350,7 +387,8 @@ const TAGPU_GAFENT* tagpu_gaf_atlas_put(TAGPU_GAFATLAS* a, const void* frame, co
 const TAGPU_GAFENT* tagpu_gaf_atlas_find(const TAGPU_GAFATLAS* a, const void* frame, const void* pix,
                                          int w, int h, unsigned win);
 /* Recycle a full atlas. With `repack` set this RE-LAYS the entries it holds
-   tallest-first and keeps them (reserved, re-uploading on demand); without
+   tallest-first and keeps them (moved in the mirror when painted, reserved
+   and painted on demand otherwise); without
    it -- and always for a restart that is not "full", such as the UI atlas's
    re-arm -- it drops them and they re-decode in arrival order as before. */
 void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a);
@@ -361,7 +399,7 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a);
    correct to call when nothing has changed. */
 void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a);
 void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a);
-/* give back BOTH heap buffers an atlas owns (`mirror` and `rlist`) and clear
+/* give back every heap buffer an atlas owns (`mirror`, `rlist`, `moves`) and clear
    the latches that described them; for a caller about to re-lay the struct out
    from zero, which would otherwise drop the pointers */
 void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a);
@@ -383,14 +421,28 @@ int  tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a);
    was refused, and the atlas then goes on working without one. Idempotent. */
 int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
 
-/* THE RECT THAT CHANGED since a consumer's copy: the union of every mirror
-   write with a serial in (since, now], clipped to `rows` x `dim`, as
-   x0, y0, x1, y1 (exclusive). 1 with the rect -- empty (x1 <= x0) when
-   nothing changed -- and 0 when the ring no longer holds all of those writes,
-   which means "send the whole page". `ring` is an atlas's `band`, `now` its
-   `mirrorSerial`. Pure: it reads the ring and nothing else. */
-int  tagpu_gaf_band_since(const TAGPU_GAFBAND* ring, unsigned now, unsigned since,
-                          int dim, int rows, int rect[4]);
+/* WHAT CHANGED since a consumer's copy: every tile of `dirty` (an atlas's
+   `dirty`, `now` its `mirrorSerial`) written after serial `since`, as up to
+   `maxr` rects x0, y0, x1, y1 (exclusive), clipped to `rows` x `dim`. Each
+   strip of TAGPU_GAF_TILEH rows gives one rect per run of dirty tiles, and a
+   run directly under an identical one extends it. Past `maxr` rects the last
+   one grows over the rest, so the answer is always a superset of the
+   writes: larger, never wrong. The count, 0 when nothing changed; -1 when
+   `since` is ahead of `now`, which is a copy of something else and means
+   "send the whole page". Pure: it reads the map and nothing else. */
+int  tagpu_gaf_dirty_since(const unsigned* dirty, unsigned now, unsigned since,
+                           int dim, int rows, int (*rect)[4], int maxr);
+
+/* WHAT A CONSUMER'S COPY OF THE MIRROR IS DUE, as rects for
+   tagpu_vk_stage_expand_rects. `keep` 1 says the copy holds this mirror's
+   texels as of serial `since`; the answer is then the tiles written since.
+   `keep` 0 -- the consumer holds nothing, or holds another palette's colours
+   -- or a `since` the map cannot answer for, is the whole page as one rect of
+   `dim` x `rows`. The count, 0 when nothing is due. */
+int  tagpu_gaf_rects_due(const unsigned* dirty, unsigned now, unsigned since, int keep,
+                         int dim, int rows, int (*rect)[4], int maxr);
+/* The texels `n` such rects cover, overlaps counted twice. */
+unsigned long long tagpu_gaf_rects_area(const int (*rect)[4], int n);
 
 /* THE RULE FOR ANYTHING THAT HANDS RESTORED TEXELS ACROSS A THREAD: step it
    where the paint is already visible to this frame's draws -- after the

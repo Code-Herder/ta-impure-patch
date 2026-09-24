@@ -8,6 +8,7 @@
 
 #include "tagpu_vk_stage.h"
 #include "tagpu_pal.h"                     /* tagpu_pal_expand */
+#include "tagpu_gaf.h"                     /* TAGPU_GAFMOVE */
 
 #define IFNS(X) X(vkGetPhysicalDeviceMemoryProperties)
 
@@ -20,7 +21,7 @@
     X(vkCreateFence) X(vkDestroyFence) X(vkWaitForFences) X(vkResetFences) \
     X(vkGetFenceStatus) \
     X(vkQueueSubmit) \
-    X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage)
+    X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -285,9 +286,12 @@ static int banded_one(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st, VkDeviceSi
     return 1;
 }
 
+/* `banded` 1 sends it through the banded path even when it would fit: a caller
+   with several rects that do not fit together bands them all, so an earlier
+   one held in-frame cannot leave a later one less than a row to band through. */
 static int upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st,
                   VkImage img, int had, int x, int y, int w, int h, int bpp,
-                  FILL fill, void* ctx)
+                  FILL fill, void* ctx, int banded)
 {
     VkDeviceSize row = (VkDeviceSize)w * bpp;
     VkDeviceSize bytes = row * (VkDeviceSize)h;
@@ -299,7 +303,7 @@ static int upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st,
     /* IT FITS: into the frame's own command buffer, as the passes always did.
        The bytes stay held until this frame's submit completes, which is the
        seam's fence on this slot. */
-    if (off + bytes <= st->cap) {
+    if (!banded && off + bytes <= st->cap) {
         fill(ctx, st->map + off, 0, h);
         barrier_in(cb, img, had);
         copy_band(cb, st->buf, off, img, x, y, w, h);
@@ -370,7 +374,237 @@ int tagpu_vk_stage_expand(const TAGPU_VKPASS* d, VkCommandBuffer cb,
     if (!idx || !pal) return 0;
     e.idx = idx; e.key = key; e.pal = pal; e.alpha = alpha;
     e.pitch = pitch; e.x = x; e.y = y; e.w = w;
-    return upload(d, cb, st, img, had, x, y, w, h, 4, fill_expand, &e);
+    return upload(d, cb, st, img, had, x, y, w, h, 4, fill_expand, &e, 0);
+}
+
+/* The regions of one in-frame copy. Render thread only, and filled and used
+   inside one call, so one static array serves every pass. */
+static VkBufferImageCopy s_reg[TAGPU_VK_STAGE_MAXRECT];
+
+int tagpu_vk_stage_expand_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                                TAGPU_VKSTAGE* st, VkImage img, int had,
+                                const unsigned char* idx, const unsigned char* key,
+                                int pitch, const int (*r)[4], int n,
+                                const unsigned char* pal, const unsigned char* alpha)
+{
+    VkDeviceSize off, o, total = 0;
+    int i, m = 0, rc;
+
+    if (!idx || !pal || n < 0 || n > TAGPU_VK_STAGE_MAXRECT) return 0;
+    if (!st->buf || !st->map || !img) return 0;
+    for (i = 0; i < n; i++) {
+        const int w = r[i][2] - r[i][0], h = r[i][3] - r[i][1];
+        if (w > 0 && h > 0) total += (VkDeviceSize)w * (VkDeviceSize)h * 4;
+    }
+    if (total == 0) return 1;
+    off = ALIGN4(st->used);
+
+    /* ALL OF THEM FIT: one barrier pair and one copy of `m` regions, in the
+       frame's own command buffer -- no wait, as for a single rect that fits. */
+    if (tagpu_vk_stage_fits(st, total)) {
+        o = off;
+        for (i = 0; i < n; i++) {
+            const int x = r[i][0], y = r[i][1], w = r[i][2] - x, h = r[i][3] - y;
+            VkBufferImageCopy* rg = &s_reg[m];
+            if (w <= 0 || h <= 0) continue;
+            tagpu_pal_expand(st->map + o, idx, key, pitch, x, y, w, h, pal, alpha);
+            memset(rg, 0, sizeof *rg);
+            rg->bufferOffset = o;
+            rg->imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            rg->imageSubresource.layerCount = 1;
+            rg->imageOffset.x = x; rg->imageOffset.y = y;
+            rg->imageExtent.width = (uint32_t)w; rg->imageExtent.height = (uint32_t)h;
+            rg->imageExtent.depth = 1;
+            o += (VkDeviceSize)w * (VkDeviceSize)h * 4;
+            m++;
+        }
+        barrier_in(cb, img, had);
+        vkCmdCopyBufferToImage(cb, st->buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               (uint32_t)m, s_reg);
+        barrier_out(cb, img);
+        st->used = o;
+        return 1;
+    }
+
+    /* THEY DO NOT: every rect banded, one after another. A rect already sent
+       stays sent if a later one fails -- the caller does not advance its
+       serial, and the next frame sends them all again. */
+    for (i = 0; i < n; i++) {
+        EXPAND e;
+        const int x = r[i][0], y = r[i][1], w = r[i][2] - x, h = r[i][3] - y;
+        if (w <= 0 || h <= 0) continue;
+        e.idx = idx; e.key = key; e.pal = pal; e.alpha = alpha;
+        e.pitch = pitch; e.x = x; e.y = y; e.w = w;
+        rc = upload(d, cb, st, img, had, x, y, w, h, 4, fill_expand, &e, 1);
+        if (rc <= 0) return rc;
+    }
+    return 1;
+}
+
+int tagpu_vk_stage_fits(const TAGPU_VKSTAGE* st, VkDeviceSize bytes)
+{
+    return st->buf && st->map && ALIGN4(st->used) + bytes <= st->cap;
+}
+
+/* ---- the move ------------------------------------------------------------ */
+
+int tagpu_vk_stage_move_ready(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb, int dim,
+                              const TAGPU_GAFMOVE* m, int n)
+{
+    VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkMemoryRequirements req;
+    const VkDeviceSize need = (VkDeviceSize)dim * (VkDeviceSize)dim * 4;
+    int i, type;
+
+    if (!resolve(d) || dim <= 0 || n < 0 || (n > 0 && !m)) return 0;
+    /* THE MOVES ARE BOUNDED HERE, as data: each cell inside the square at both
+       ends, so no region below can name a texel the image or the buffer does
+       not have */
+    for (i = 0; i < n; i++)
+        if (m[i].w == 0 || m[i].h == 0 || m[i].ox + m[i].w > dim || m[i].oy + m[i].h > dim ||
+            m[i].nx + m[i].w > dim || m[i].ny + m[i].h > dim) return 0;
+    if (mb->buf) return mb->size >= need;
+    if (mb->refused) return 0;
+    bci.size = need;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(d->dev, &bci, NULL, &mb->buf) != VK_SUCCESS) {
+        mb->buf = VK_NULL_HANDLE;
+        mb->refused = 1;
+        return 0;
+    }
+    vkGetBufferMemoryRequirements(d->dev, mb->buf, &req);
+    type = mem_type(d, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = (uint32_t)type;
+    if (type < 0 || vkAllocateMemory(d->dev, &mai, NULL, &mb->mem) != VK_SUCCESS ||
+        vkBindBufferMemory(d->dev, mb->buf, mb->mem, 0) != VK_SUCCESS) {
+        tagpu_vk_stage_move_drop(d, mb);
+        mb->refused = 1;
+        slog(d, "stage: no %u MB of device memory to move an atlas repack in - "
+                "a repack re-sends the page", (unsigned)(need >> 20));
+        return 0;
+    }
+    mb->size = need;
+    return 1;
+}
+
+/* The move's commands. THE ORDER: the image leaves SHADER_READ_ONLY only after
+   every earlier sampling of it, and the buffer is written only after every
+   earlier move's read of it -- a barrier's first scope is everything
+   submitted to this queue before it; the cells are read back only once the
+   copy into the buffer is complete; and the image returns to
+   SHADER_READ_ONLY with its writes visible to the fragment stage, the layout
+   and the visibility every other upload here leaves it in. */
+static void move_record(VkCommandBuffer cb, const TAGPU_VKMOVEBUF* mb, VkImage img, int dim,
+                        const TAGPU_GAFMOVE* m, int n)
+{
+    VkImageMemoryBarrier ib = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    VkBufferMemoryBarrier bb = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
+    VkBufferImageCopy rg;
+    int i, k, rows = 0;
+
+    /* the rows the old cells occupy: what the buffer has to hold */
+    for (i = 0; i < n; i++)
+        if (m[i].oy + m[i].h > rows) rows = m[i].oy + m[i].h;
+
+    ib.srcQueueFamilyIndex = ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    ib.image = img;
+    ib.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ib.subresourceRange.levelCount = 1;
+    ib.subresourceRange.layerCount = 1;
+    bb.srcQueueFamilyIndex = bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bb.buffer = mb->buf;
+    bb.size = VK_WHOLE_SIZE;
+
+    ib.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    ib.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    ib.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    ib.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    bb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    bb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &bb, 1, &ib);
+    if (rows > 0) {
+        memset(&rg, 0, sizeof rg);
+        rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        rg.imageSubresource.layerCount = 1;
+        rg.imageExtent.width = (uint32_t)dim;
+        rg.imageExtent.height = (uint32_t)rows;
+        rg.imageExtent.depth = 1;
+        vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mb->buf, 1, &rg);
+    }
+
+    ib.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    ib.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    ib.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    ib.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    bb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    bb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, NULL, 1, &bb, 1, &ib);
+    /* each cell from its old place in the buffer, whose rows are `dim` texels
+       as the image's are, to its new place in the image */
+    for (i = 0; i < n; ) {
+        for (k = 0; k < TAGPU_VK_STAGE_MAXRECT && i < n; k++, i++) {
+            VkBufferImageCopy* r = &s_reg[k];
+            memset(r, 0, sizeof *r);
+            r->bufferOffset = ((VkDeviceSize)m[i].oy * (VkDeviceSize)dim + m[i].ox) * 4;
+            r->bufferRowLength = (uint32_t)dim;
+            r->imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            r->imageSubresource.layerCount = 1;
+            r->imageOffset.x = m[i].nx; r->imageOffset.y = m[i].ny;
+            r->imageExtent.width = m[i].w; r->imageExtent.height = m[i].h;
+            r->imageExtent.depth = 1;
+        }
+        vkCmdCopyBufferToImage(cb, mb->buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               (uint32_t)k, s_reg);
+    }
+    barrier_out(cb, img);
+}
+
+int tagpu_vk_stage_move(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKMOVEBUF* mb,
+                        VkImage img, int dim, const TAGPU_GAFMOVE* m, int n, int banded)
+{
+    VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+    VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+
+    if (!mb->buf || !img || dim <= 0 || n < 0 || (n > 0 && !m) ||
+        (VkDeviceSize)dim * (VkDeviceSize)dim * 4 > mb->size)
+        return 0;
+    if (!banded) {
+        move_record(cb, mb, img, dim, m, n);
+        return 1;
+    }
+    /* AHEAD OF THE BANDS: through their command buffer, and waited on like
+       one, so its fence orders it before the first band is recorded */
+    if (!banded_ready(d)) return 0;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkResetCommandBuffer(s_cb, 0) != VK_SUCCESS ||
+        vkBeginCommandBuffer(s_cb, &bi) != VK_SUCCESS) return 0;
+    move_record(s_cb, mb, img, dim, m, n);
+    if (vkEndCommandBuffer(s_cb) != VK_SUCCESS) return 0;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &s_cb;
+    if (vkQueueSubmit(d->queue, 1, &si, s_fence) != VK_SUCCESS) return -1;
+    s_inflight = 1;
+    if (vkWaitForFences(d->dev, 1, &s_fence, VK_TRUE, 1000000000ull) != VK_SUCCESS) return -1;
+    if (vkResetFences(d->dev, 1, &s_fence) != VK_SUCCESS) return -1;
+    s_inflight = 0;
+    return 1;
+}
+
+void tagpu_vk_stage_move_drop(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb)
+{
+    if (d->dev && s_dev == d->dev) {
+        if (mb->buf) vkDestroyBuffer(d->dev, mb->buf, NULL);
+        if (mb->mem) vkFreeMemory(d->dev, mb->mem, NULL);
+    }
+    mb->buf = VK_NULL_HANDLE;
+    mb->mem = VK_NULL_HANDLE;
+    mb->size = 0;
+    mb->refused = 0;                       /* a new device may say yes */
 }
 
 int tagpu_vk_stage_copy(const TAGPU_VKPASS* d, VkCommandBuffer cb,
@@ -380,7 +614,7 @@ int tagpu_vk_stage_copy(const TAGPU_VKPASS* d, VkCommandBuffer cb,
     COPY c;
     if (!src) return 0;
     c.src = src; c.pitch = pitch; c.rowBytes = w * bpp;
-    return upload(d, cb, st, img, had, 0, 0, w, h, bpp, fill_copy, &c);
+    return upload(d, cb, st, img, had, 0, 0, w, h, bpp, fill_copy, &c, 0);
 }
 
 void tagpu_vk_stage_down(const TAGPU_VKPASS* d)

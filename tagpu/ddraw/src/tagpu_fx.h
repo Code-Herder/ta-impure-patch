@@ -194,7 +194,7 @@ typedef struct TAGPU_FXHAND {
     unsigned              atlasSerial;
     /* the base atlas's other two inputs -- tagpu_feat.h has them in full */
     const unsigned char*        atlasKey;
-    const struct TAGPU_GAFBAND* atlasBands;
+    const unsigned*             atlasDirty;
 
     /* THE RESTORE WORK, AS REQUESTS.
 

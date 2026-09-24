@@ -659,7 +659,7 @@ static int atlas_setup(void)
 {
     if (s_atlas.made) return 1;
     /* the memset drops `mirror` and `rlist`, which `_lost` keeps -- so this
-       hands back BOTH heap buffers first, and clears `rlistWant`/`rlistFailed`
+       hands back every heap buffer first, and clears `rlistWant`/`rlistFailed`
        with them, or the memset leaks them. The GUI
        atlas never arms a list, so `rlist` is NULL on this path either way, and
        this is the only call site -- `tagpu_gaf_atlas_restore_vk` has three

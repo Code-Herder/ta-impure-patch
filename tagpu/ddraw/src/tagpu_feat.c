@@ -406,6 +406,10 @@ static void atlas_setup(void)
        ~200 GAF frames and clearing the Classic++ restore queue before it
        could land. */
     s_atlas.repack = 1;
+    /* and the repack's moves are published, because tagpu_vk_feat.c applies
+       them to its own copy: a repack then sends nothing but the paints it
+       lacked, where the whole page is a wait on the render thread */
+    s_atlas.moveList = 1;
     tagpu_gaf_atlas_create(&s_atlas);
 }
 
@@ -929,7 +933,9 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
     s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
-    s_pub.atlasKey = s_atlas.keym; s_pub.atlasBands = s_atlas.band;
+    s_pub.atlasKey = s_atlas.keym; s_pub.atlasDirty = s_atlas.dirty;
+    s_pub.atlasMoves = s_atlas.moves; s_pub.atlasMoveN = s_atlas.moveN;
+    s_pub.atlasMoveSerial = s_atlas.moveSerial; s_pub.atlasMovePrev = s_atlas.movePrev;
     {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
         int rows = s_atlas.shelfY + s_atlas.shelfH;
         if (rows < 0) rows = 0;

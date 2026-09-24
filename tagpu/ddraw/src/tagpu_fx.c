@@ -933,7 +933,7 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.zoomF = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCFx = v->zoomCx; s_pub.zoomCFy = v->zoomCy;
     s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
-    s_pub.atlasKey = s_atlas.keym; s_pub.atlasBands = s_atlas.band;
+    s_pub.atlasKey = s_atlas.keym; s_pub.atlasDirty = s_atlas.dirty;
     {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
         int rows = s_atlas.shelfY + s_atlas.shelfH;
         if (rows < 0) rows = 0;

@@ -156,7 +156,7 @@
 #include "tagpu_posebake.h"
 #include "tagpu_packet.h"    /* tagpu_grow_stress, and nothing else of it */
 #include "tagpu_classicpp.h" /* aniso=: the knob the producer publishes too */
-#include "tagpu_gaf.h"       /* tagpu_gaf_band_since */
+#include "tagpu_gaf.h"       /* tagpu_gaf_rects_due */
 #include "tagpu_pal.h"       /* tagpu_pal_expand */
 #include "spirv/tagpu_posedraw.spv.h"
 #include "spirv/tagpu_native.spv.h"
@@ -261,8 +261,8 @@ static int            s_atDim;
    restorer's source -- so `s_bRows`, the rows it holds, is what `restore_want`
    bounds a frame by, and the difference between those rows and "uploaded at
    least once" is a whole shelf of black art. A move of the engine's table (its
-   arrival) re-sends the whole used page; a paint only the rect the atlas's
-   band ring says changed (tagpu_vk_feat.c `base_upload`). */
+   arrival) re-sends the whole used page; a paint only the tiles the atlas's
+   dirty map says it wrote (tagpu_vk_feat.c `base_upload`). */
 static VkImage        s_bImg;
 static VkDeviceMemory s_bMem;
 static VkImageView    s_bView;
@@ -1824,10 +1824,11 @@ static int build(const TAGPU_VKPASS* d)
    it is due and given back on this slot's next prepare that has nothing to
    send -- tagpu_vk_feat.c `base_upload`, the same answers: 1 sent or nothing
    due, 0 no staging this frame, -1 the pass must come down. */
+static int s_rect[TAGPU_VK_STAGE_MAXRECT][4];      /* render thread only */
 static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                        const TAGPU_PDHAND* h)
 {
-    int rows = h->atlasRows, r[4], w, hh, rc;
+    int rows = h->atlasRows, n, rc;
 
     if (s_bHave && s_bSerial == h->atlasSerial && s_bPal == h->palSerial) {
         tagpu_vk_stage_drop(d, &s->stage);
@@ -1835,21 +1836,20 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     }
     if (rows < 1) rows = 1;
     if (rows > h->atlasDim) rows = h->atlasDim;
-    if (!s_bHave || s_bPal != h->palSerial ||
-        !tagpu_gaf_band_since(h->atlasBands, h->atlasSerial, s_bSerial,
-                              h->atlasDim, rows, r)) {
-        r[0] = 0; r[1] = 0; r[2] = h->atlasDim; r[3] = rows;
-    }
-    w = r[2] - r[0]; hh = r[3] - r[1];
-    if (w <= 0 || hh <= 0) {
+    n = tagpu_gaf_rects_due(h->atlasDirty, h->atlasSerial, s_bSerial,
+                            s_bHave && s_bPal == h->palSerial, h->atlasDim, rows,
+                            s_rect, TAGPU_VK_STAGE_MAXRECT);
+    if (n == 0) {
         s_bSerial = h->atlasSerial; s_bPal = h->palSerial; s_bRows = rows;
         tagpu_vk_stage_drop(d, &s->stage);
         return 1;
     }
-    if (!tagpu_vk_stage_begin(d, &s->stage, (VkDeviceSize)w * hh * 4, (VkDeviceSize)w * 4))
+    if (!tagpu_vk_stage_begin(d, &s->stage,
+                              (VkDeviceSize)tagpu_gaf_rects_area((const int (*)[4])s_rect, n) * 4,
+                              (VkDeviceSize)h->atlasDim * 4))
         return 0;
-    rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
-                               h->atlasDim, r[0], r[1], w, hh, h->pal, NULL);
+    rc = tagpu_vk_stage_expand_rects(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
+                                     h->atlasDim, (const int (*)[4])s_rect, n, h->pal, NULL);
     if (rc <= 0) return rc;
     s_bSerial = h->atlasSerial; s_bPal = h->palSerial; s_bRows = rows;
     s_bHave = 1;

@@ -57,10 +57,8 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
 void tagpu_r3d_atlas_mirror_want(void);
 const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* serial);
 /* The base atlas's other two inputs from the same atlas: the key plane (NULL
-   while there is no mirror) and, in `*bands`, the ring of its recent writes
-   (tagpu_gaf.h). */
-struct TAGPU_GAFBAND;
-const unsigned char* tagpu_r3d_atlas_key(const struct TAGPU_GAFBAND** bands);
+   while there is no mirror) and, in `*dirty`, its dirty map (tagpu_gaf.h). */
+const unsigned char* tagpu_r3d_atlas_key(const unsigned** dirty);
 
 /* ASK FOR THE CLASSIC++ RESTORED TWIN. Gated on `tagpu_classicpp_assets()`,
    because the twin costs 16 MB that a session with Classic++ off must not pay

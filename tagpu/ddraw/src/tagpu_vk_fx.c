@@ -111,7 +111,7 @@
 #include "tagpu_vk_fx.h"
 #include "tagpu_vk_world.h"   /* the target's ss: the line width follows it */
 #include "tagpu_fx.h"
-#include "tagpu_gaf.h"                     /* tagpu_gaf_band_since             */
+#include "tagpu_gaf.h"                     /* tagpu_gaf_rects_due              */
 #include "tagpu_pal.h"                     /* tagpu_pal_expand                 */
 #include "spirv/tagpu_fx.spv.h"
 
@@ -1043,10 +1043,11 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FXHAND* h)
 
 /* THE BASE ATLAS -- tagpu_vk_feat.c's `base_upload`, the same rule and the
    same answers, with this pass's own alpha (`s_flashAlpha`). */
+static int s_rect[TAGPU_VK_STAGE_MAXRECT][4];      /* render thread only */
 static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                        const TAGPU_FXHAND* h)
 {
-    int rows = h->atlasRows, r[4], w, hh, rc;
+    int rows = h->atlasRows, n, rc;
 
     /* THE DIMENSIONS ARE FIXED AT `atlas_build`, and the bindings naming the
        images touch every slot's set -- tagpu_vk_feat.c's `base_upload` has
@@ -1064,21 +1065,21 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     }
     if (rows < 1) rows = 1;
     if (rows > h->atlasDim) rows = h->atlasDim;
-    if (!s_bHave || s_bPal != h->palSerial ||
-        !tagpu_gaf_band_since(h->atlasBands, h->atlasSerial, s_bSerial,
-                              h->atlasDim, rows, r)) {
-        r[0] = 0; r[1] = 0; r[2] = h->atlasDim; r[3] = rows;
-    }
-    w = r[2] - r[0]; hh = r[3] - r[1];
-    if (w <= 0 || hh <= 0) {
+    n = tagpu_gaf_rects_due(h->atlasDirty, h->atlasSerial, s_bSerial,
+                            s_bHave && s_bPal == h->palSerial, h->atlasDim, rows,
+                            s_rect, TAGPU_VK_STAGE_MAXRECT);
+    if (n == 0) {
         s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
         tagpu_vk_stage_drop(d, &s->stage);
         return 1;
     }
-    if (!tagpu_vk_stage_begin(d, &s->stage, (VkDeviceSize)w * hh * 4, (VkDeviceSize)w * 4))
+    if (!tagpu_vk_stage_begin(d, &s->stage,
+                              (VkDeviceSize)tagpu_gaf_rects_area((const int (*)[4])s_rect, n) * 4,
+                              (VkDeviceSize)h->atlasDim * 4))
         return 0;
-    rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
-                               h->atlasDim, r[0], r[1], w, hh, h->pal, s_flashAlpha);
+    rc = tagpu_vk_stage_expand_rects(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
+                                     h->atlasDim, (const int (*)[4])s_rect, n, h->pal,
+                                     s_flashAlpha);
     if (rc <= 0) return rc;
     s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
     s_bHave = 1;

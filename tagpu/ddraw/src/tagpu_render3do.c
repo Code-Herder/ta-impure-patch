@@ -471,9 +471,9 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
     return s_atlas.mirror;
 }
 
-const unsigned char* tagpu_r3d_atlas_key(const TAGPU_GAFBAND** bands)
+const unsigned char* tagpu_r3d_atlas_key(const unsigned** dirty)
 {
-    if (bands) *bands = s_atlas.mirror ? s_atlas.band : NULL;
+    if (dirty) *dirty = s_atlas.mirror ? s_atlas.dirty : NULL;
     return s_atlas.mirror ? s_atlas.keym : NULL;
 }
 

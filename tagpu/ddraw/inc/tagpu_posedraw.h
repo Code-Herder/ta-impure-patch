@@ -354,7 +354,7 @@ typedef struct TAGPU_PDHAND {
     const unsigned char* atlas;   int atlasDim, atlasRows; unsigned atlasSerial;
     /* the base atlas's other two inputs -- tagpu_feat.h has them in full */
     const unsigned char*        atlasKey;
-    const struct TAGPU_GAFBAND* atlasBands;
+    const unsigned*             atlasDirty;
     /* the anisotropy the restored twin is filtered at (0 = none). A consumer
        that cannot apply the same ratio draws different art wherever the
        texture is minified at an angle, so this is compared and not assumed.
