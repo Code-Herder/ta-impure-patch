@@ -8754,19 +8754,41 @@ measured in.
   gadget ([gui-gadgets](gui-gadgets.html) places it on the campaign screen) or reach `SetGamma`
   another way. That is still the next thing worth building for this lane, and it is now a smaller
   and better-aimed question than it was.
+
 * ~~**The `restorevk` lever is measured in one configuration only**~~ — the lever is gone. The
   restorer follows Classic++'s `assets=` knob, which is a play default and which the
   render-options screen's `Undithered assets` row writes, so the mid-session flip is the
   ordinary case and is run in both directions. See *Undithering ships on* below.
-* **The `g_alloc` ring is a bound that a fast enough device can reach.** 256 blocks per slot per
-  slice; a FILL takes one, a CONV one and an OUT two, so a `full`-model batch spends 15 and a slice
-  of more than about **seventeen batches** exhausts it and fails the job. Not reached on the
-  reference setup (7 draws a slice at a 12 ms budget) and not raised, because the correct number is
-  not knowable from one device. **An earlier version of this bullet said the failure was *loud* and
-  said "two per draw"; both were wrong** — the review disproved them. The draw returned 0 with no
-  log line at all, so the consumer reported "the restore failed" and nothing anywhere said why,
-  which is exactly the silence this section criticises the vertex bug for, on the one bound the
-  section concedes is reachable. `g_alloc` now names the reason once per slice.
+* **The `g_alloc` ring is bounded by the core stopping short of it (`vk_room`, G20d).** The ring
+  holds 256 blocks per slot per slice. A FILL takes one, a CONV one and an OUT two.
+    - **A `full`-model batch at NK 4 is 47 draws:** the FILL, 45 CONVs (four groups on each of
+      eleven 64-channel layers, one on the output) and the OUT, so it spends 48 blocks. The
+      terrain's own line gives the count: 3 760 draws in 80 batches. So **the sixth batch in one
+      slice overflows the ring**.
+    - **This bullet used to say 15 blocks a batch and "about seventeen batches"**, counting one
+      CONV a layer. It also said the ring was not reached on the reference setup. Both were wrong.
+    - **MEASURED 2026-09-24**, `fx-rockets` under `--defaults` at 1024 × 768, once in each of
+      two launches, one of `b14e9b4` and one of the code at `4143757`. Both times four small
+      feature batches and two effect batches issued in one slice. The job holding the sixth
+      failed, and so did every job that drew after it in that slice: the effects and
+      the UI in one launch, and the units as well in the other. A failed job latches its lane
+      unrestored (`s_rjTried`) until the pass is next torn down. Classic++ therefore drew those
+      lanes from the base atlas for the rest of the launch.
+    - **Now the core asks the backend's `room` before every draw** and ends the slice on 0. The
+      batch in flight resumes on the next slice, as it does when the budget cuts it. `vk_room`
+      holds back each live job's mip levels, which `chain_step` reduces from the same ring after
+      the slice. A `_Static_assert` keeps 6 jobs × 12 levels + one draw inside the ring, so the
+      head of a slice always has room. `g_alloc`'s line stays as the backstop and is
+      unreachable while that holds.
+    - **MEASURED 2026-09-24**, the same fixture, two launches with the bound. Neither logged a
+      ring line or a failed restore, and every lane's queue drained again and again through the
+      fight. Batches finishing per slice: 1 to 5 in both launches, and 6 in one slice of each,
+      where a batch the previous slice had cut short finished first. In one case five batches
+      filled slice 302 and the next was cut short in 303 and finished in 304. Before the bound,
+      the sixth batch in a slice failed its job.
+    - **The earlier failure was silent**, which the review caught: the draw returned 0 with no
+      log line, so the consumer reported "the restore failed" and nothing said why. `g_alloc`
+      names the reason once per slice.
 * **One GPU, one model, one fixture, one map.** `tiny`, `fp16`, and any other device's limits are
   unmeasured on this lane.
 * **The failure paths** — `act_ensure` returning 0, a destination that is not a complete render
@@ -16253,7 +16275,8 @@ it:
   `banded_ready`, `barrier_in`, `barrier_out`, `copy_band`, `fill_copy`, `fill_expand`,
   `mem_type`, `mk_stage`, `resolve`, `slog`, `upload` — for `slot_drop_bstage` ×2 and the
   terrain's `shared_upload` and `slot_drop_bigstage`;
-- the palette keys (`4143757`), none.
+- the palette keys (`4143757`), none;
+- the restorer's ring bound, +1: `vk_room` (§2.43).
 
 Every removed non-static had its callers ported; the build is clean under `-Wall`,
 `thread-split-check.sh` is clean with the packet field gone, and `spirv-check.sh` agrees with the
@@ -16442,6 +16465,42 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
 
   Every pass kept drawing (the census), and the terrain's twin was repainted.
 
+- **The bounded upload and the palette keys draw what the build before them drew (MEASURED
+  2026-09-24).** The build before is `b14e9b4`; the fixtures, the capture and the settings are
+  2d's above (Gamma 12, `los 1`, both presets, read off the target):
+    - **Terrain, units and features:** 6 of 6 captures **byte-identical** — the terrain over
+      2 523 124 drawn pixels, the units over 1 550 and the features over 529 468. The terrain's
+      atlas is 23.7 MB, far over the cap, so it reaches the device through the banded path.
+      With the restorer's ring bound (§2.43) added, the same 6 of 6 are byte-identical again.
+    - **The restorer's input and output:** `fx-rockets` under `--defaults` with
+      `tagpu_restoredump.on`, read back off the device. The terrain's base and restored twin
+      (23 674 880 bytes each) are byte-identical between the two builds. So are the units' base
+      and their twin with its mip chain (22 020 096 bytes), in two launches of the build with the
+      ring bound (§2.43). The feature, effect and UI dumps differ in which frames the fight had
+      painted by then: 849–860 feature frames in one launch and 917–931 in another. Those dumps
+      compare nothing.
+    - **The effects have no exact A/B.** Three ways were tried: every capture of one launch
+      paired against every capture of the other, the fight stepped five ticks at a time through a
+      window in both launches, and the device dumps above. No pair showed the same scene, because
+      the fight is not the same fight twice. The effects' change is the features' change,
+      line for line: the same `tagpu_vk_stage` calls and the same restore key, with its own
+      alpha table passed through unchanged. The flash colours are built by the loop they always
+      were, and only what triggers the rebuild moved, so on a table that does not move they are
+      the same bytes.
+- **ShowRanges labels and the post-fog draws (MEASURED 2026-09-24).** This uses the
+  `marker-mix` fixture and the old/new DLL pair of the second fixture above, on the presented
+  window. Every unit is selected with a patrol queued, and `+showranges` is typed in, which
+  `*0x511DE8+0x391BF` then reads as 1:
+    - **The band box and the build square over fogged ground**, both drawn after the fog with
+      the fog off: **byte-identical** in both presets.
+    - **The labels state:** `mark:` counts 16 labels in both launches. Everything is
+      byte-identical except 8 px in each preset, all inside one 14 × 14 box at the patrol
+      waypoint's sprite. Its arms are one pixel longer in one launch.
+    - That sprite is the order's target sprite (`0x439740`), and it is animated. Its frame is
+      `(gameTime / (2 × (u16)seq[0x2C])) % (u16)seq[0]` (`tagpu_order.c`), and the two launches
+      were paused at ticks 1887 and 1871. Stepping both
+      onto one tick did not work: a step is five ticks, and the old build overshot its target.
+
 **Not covered.**
 
 - **The UI stays indexed**, through the presented palette, with its own re-restore on a palette
@@ -16452,10 +16511,15 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
 - **The lab's Classic++ lane keeps its own R8 inputs** beside the restored RGB (its `restore=`
   switch and the edge colour read them); only its Classic lane lost the index path.
 - **The effects' 2d exit rests on two matched scenes** (above), not on an A/B paused on one
-  tick, which two launches of the fight cannot reach.
-- **The markers' 2d exit is a window read at `ss=2` and Gamma 12.** No ShowRanges label and no
-  post-fog layer was on screen, and the health bars were opened by a diagnostic token rather
-  than by `damagebars` itself.
+  tick, which two launches of the fight cannot reach. **The bounded upload and the palette keys
+  have no effects A/B at all**; that rests on the features' byte-identical pair and on the code
+  being the same.
+- **The markers' 2d exit is a window read at `ss=2` and Gamma 12.** The health bars were opened
+  by a diagnostic token rather than by `damagebars` itself. The ShowRanges state was read at two
+  different ticks, so its 8 px at the waypoint sprite are put down to the animation by where
+  they are, not by a pair taken on one tick.
+- **The restorer's ring bound (`vk_room`) was measured on one fixture and one device**:
+  `fx-rockets` on the reference setup, in the launches listed in §2.43.
 - **The UI layer stood itself down on some launches of a fresh instance** ("`gui: 8 fresh starts
   have not made the twin store able to follow the producer`", census `gui=0`). The pre-G20 base
   build did the same on the same instance, so it predates this work. It was not investigated
@@ -16482,7 +16546,9 @@ in flight sample it; `tagpu_vk_stage.c` — the cap, the halving, the banded pat
 buffer on the seam's queue, its one-second fence and the in-flight mark a wait that gives up
 leaves, and the 1/0/−1 answers each pass maps to draw, skip and refuse; the palette keys
 (`s_rjPal`, `s_shadePal`, `s_lhtPal`) and `tagpu_r3d_shade_want`'s kept copy of the shade table;
-the flash level in the effects' alpha; the
+the restorer's `room` — asked at the head of every iteration of the core's slice loop, before a
+batch is formed, with `vk_room`'s mip reserve and the static bound that keeps a fresh slice able
+to draw; the flash level in the effects' alpha; the
 restorer's input switched to the base; the Gamma curve's per-slot images and the premultiplied
 composite; `k[]` and its fallback; the `shadows=0` change. The no-target Gamma: the per-frame
 choice between the two arms (`prepare`'s 0 and `record_direct`'s `s_drawThis` guard), the blend
