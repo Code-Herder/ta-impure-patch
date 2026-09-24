@@ -9,7 +9,11 @@ with each other and with the screen.
 §6.2 is what shipped, and §8 records what each of its open questions was answered with and what
 was measured. Everything below is computed from the code's own arithmetic — `fogw_window` in
 `tagpu_fogwide.c` and the `cols > 512 || rows > 512` test in `tagpu_fog_at`
-(`tagpu_fx.c`) — evaluated over every eye residue, not estimated.
+(`tagpu_fx.c`) — evaluated over every eye residue, not estimated. The window has since grown by
+a lead of a quarter of the viewport on each side ([GPU status](gpu-status.html) §2.3e): 147 ×
+120 cells at 1024×768, 273 × 164 at 1920×1080 and 543 × 316 at 3840×2160. The windows below are
+the ones before it; the sizing argument is unchanged, since the capacity is still taken from the
+same expression at the worst residue.
 
 <div class="tablewrap fg">
 <style>

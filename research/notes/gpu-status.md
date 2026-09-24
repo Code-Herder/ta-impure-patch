@@ -764,9 +764,13 @@ not a multiple of 32 (1016 rows at 1080p) reaches into the short last row even a
 and takes the wide grid. Otherwise the wide grid, and the drawn eye `e` is clamped per axis until
 the slab `[e + (vw − S)/2 − M, e + (vw − S)/2 + S + M]` (S = `tagpu_zoom_gather_span(vw, z)`, M =
 `TAGPU_GATHER_MARGIN`, 256) lies inside its span. The window is that slab at the floor about the
-eye it was built at (`fogw_window`, the same two numbers), so the interval always holds the build
-eye and the clamp is the identity for a gesture that only zooms in; what it holds back is a
-displacement the game thread has not applied yet, for as long as that lasts. It is empty only for a
+eye it was built at, grown by **the lead**, a quarter of the viewport on each side
+(`TAGPU_LEAD_DIV`), through `tagpu_zoom_pub_window` — the one function the units carried with
+their pieces and the feature anchors are published over as well, so a slab the bound accepts is
+covered by every table the frame reads. The interval therefore holds every eye within the lead
+of the build eye; the clamp is the identity for a gesture that only zooms in and for an unapplied
+displacement inside the lead, and what it holds back is a larger one, for as long as that lasts.
+The clamp reads the grid's own origin and size, never the lead. It is empty only for a
 grid trimmed by a failed allocation, where the slab is centred and the frame counted. With no wide
 grid in the packet a frame on a qualifying engine grid is held into it; any other is drawn bare —
 unclamped over the engine's grid — and counted.
@@ -797,8 +801,9 @@ map plus half a view each side: on Seven Islands, the largest stock map (20480²
 and ~1.1 MB a packet at 1024x768, ~663 k and ~1.3 MB at 1080p, ~1 M and ~2 MB at 4K, rebuilt at
 ~2.5 ns a cell — 1.4, 1.65 and 2.5 ms of game-thread time per rebuild, at the sim tick rate
 whenever anything moves. A window sized for the largest unapplied displacement is about four
-times today's area, ~0.35 ms and ~280 KB at 1080p, ~1.4 ms at 4K. The bound costs a few integer
-operations per frame and no byte of the packet.
+times the floor's area, ~0.35 ms and ~280 KB at 1080p, ~1.4 ms at 4K. The bound costs a few integer
+operations per frame and no byte of the packet; the lead below covers the one posted step the
+prediction runs ahead by for 23–25 % more cells.
 
 *Measured 2026-09-24* on Two Continents at 1024x768, aimed at the viewport corner facing the
 interior, at the NW and SE corners of the camera's range and mid-map (5000, 6000). **The strip.**
@@ -816,29 +821,36 @@ puts it: under the 200-ms lag, **before** 30 frames of 641, all on `+3 −6` fro
 32 frames paused (7, 11 and 14) and `back` 0. Without the forced lag (the shipped behaviour) 0
 frames against the gesture before and after, and 0 paused: the game thread applies each step
 before the next frame, and a grid built at the eye the last frame was drawn toward always covers
-it. Without the lag the gestures below 1× still hold the eye — 50 frames in all, by up to 263
-world px (~66 screen px at 0.25×): the prediction runs one posted step ahead of the game thread by
-design, and at the floor the slab has no slack beyond the grid's own rounding, so the first steps
-of a tween wait a frame for the grid. On a held frame a click is mapped through the eye the game
-thread applies, up to the hold from where it is drawn.
+it. Without the lag, and before the lead below, the gestures below 1× still held the eye — 50
+frames in all, by up to 263 world px (~66 screen px at 0.25×): the prediction runs one posted step
+ahead of the game thread by design, and at the floor the slab had no slack beyond the grid's own
+rounding, so the first steps of a tween waited a frame for the grid. On a held frame a click is
+mapped through the eye the game thread applies, up to the hold from where it is drawn.
 
-**A lead margin on the wide window — measured, not built; the owner's call.** The window grown
-by `vw/4` and `vh/4` per side (a diagnostic build), against the shipped window, on Seven Islands
+**The lead — built on the owner's call.** The published window grows by `vw/4` and `vh/4` on
+each side, so that posted step no longer waits for the grid. MEASURED 2026-09-24 on Seven Islands
 with the play set, the same 36 gestures at NW, SE and mid (10240, 10240), counted from the
-heartbeat's `held`, 2026-09-24:
+heartbeat's `held`:
 
 | | cells (bytes a packet) | build, mean / max per rebuild | held frames, largest hold |
 |---|---|---|---|
-| 1080p, shipped | 36 260 (72.5 KB) | 72 / 206 µs over 533 rebuilds | 53, 509 world px |
-| 1080p, margin | 44 772 (89.5 KB), +23 % | 91 / 261 µs | 4, 61 world px |
-| 4K, shipped | 137 255 (274.5 KB) | 313 / 720 µs over 62 rebuilds | 13, 2511 world px |
-| 4K, margin | 171 588 (343.2 KB), +25 % | 386 / 840 µs | 8, 1578 world px |
+| 1080p, reference GPU, before | 36 260 (72.5 KB) | 72 / 206 µs over 533 rebuilds | 53, 509 world px |
+| 1080p, reference GPU, with the lead | 44 772 (89.5 KB), +23 % | 91 / 261 µs | 4, 61 world px |
+| 1080p, Xvfb, before | 36 260 | 104 / 320 µs over 220 rebuilds | 24, 949 world px |
+| 1080p, Xvfb, with the lead | 44 772 | 99 / 249 µs over 257 | 11, 474 world px |
+| 1080p, Xvfb, with the lead, apply forced 200 ms behind | 44 772 | 105 / 280 µs over 107 | 33 (11 paused), 779 world px |
+| 4K, Xvfb, before | 137 255 (274.5 KB) | 313 / 720 µs over 62 rebuilds | 13, 2511 world px |
+| 4K, Xvfb, with the lead | 171 588 (343.2 KB), +25 % | 386 / 840 µs | 8, 1578 world px |
 
-1080p ran on the live display; 4K on a private Xvfb, where llvmpipe draws a handful of frames a
-second, so each held frame there spans many notches' displacement: its cells, bytes and build
-times hold, its hold counts do not transfer to a real GPU. Every run read `back`, `out` and `bare`
-0, and `paused` 0 except one frame at 4K with the margin. The rebuild rate is ~2.8/s during the
-gestures, so the margin adds ~50 µs of game-thread time a second at 1080p.
+The reference-GPU rows are a diagnostic build that grew the fog window alone, the same window the
+committed build publishes; the Xvfb rows at 1080p are the committed build and the one before it.
+On Xvfb llvmpipe draws a handful of frames a second, so each held frame there spans several posted
+steps: its cells, bytes and build times hold, its hold counts compare only with each other. Every
+run read `back`, `out` and `bare` 0, and the feature pass's `outside=` 0 on every heartbeat (371
+and 369 of them on the committed build and the one before). The rebuild rate is ~2.8/s during the
+gestures, so the lead adds ~50 µs of game-thread time a second at 1080p. The units' piece-cull
+rect and the anchor rect grow by the same lead: the anchor rect's margin is 16 cells past the
+published window, the slack past the slab it had before.
 
 A level that starts below 1× has no wide grid until our terrain pass owns the ground (the wide
 grid is built at the fog site, which is ours only then): measured after a game → shell → game
@@ -1768,7 +1780,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only, and on the GAME THREAD only since the clean cut** (§2.81): the reader is `tagpu_packet_pub.c` (`MM_COMPOSITE`/`MM_FOGBASE`/`MM_SCALEDMAP`/`MM_PICFRAME`), which copies them into the packet. The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured. **The render-thread reader is gone**: `tagpu_gui_surf.c`'s sharp minimap layer read all three per frame while the game thread may have been rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19), and that layer is deleted. The `tagpu_gui_set_want_minimap` / `tagpu_gui_minimap_have` handshake survives in `tagpu_gui.h` with no consumer |
 | `[0x51FBD0]+0x1B2` | the cursor's **GAF frame**. Read only — **on the GAME THREAD**, by `tagpu_packet_pub.c` (the in-play fill, and in the shell its observer of `0x4C67C0`), and published as the packet's `cur_rec`, a KEY; `tagpu_gui_cursor_frame()` resolves it on the render thread through `tagpu_gaf_frame_sane` for the sharp layer's cursor. `+0x1B6`/`+0x1BA`, the position the engine last drew it at, are **not read since 2026-09-23**: the packet's `cur_pos`/`cur_w`/`cur_h`/`cursor_live` had no reader left and were deleted, so `cur_rec` is the whole cursor channel (0 = no cursor this frame). The engine blits its own sprite into the reference frame |
 | `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with. **Since 2026-09-12 (the frame packet's landing 1) the font is COPIED there**, header and 95 printable glyphs, each as a one-glyph font object, into the packet (`tagpu_packet_pub.c`); the present thread rasterises from the copy and no longer dereferences the engine's font at all (`tagpu_text.c`, §2.16). The GL UI's string op carried the font's address too (landing 4c) and went with the UI layer (§2.81); `tagpu_gui_hook.c` still captures the op, so the address is still recorded — nothing reads it |
-| **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (the scroll extent — the map less 32 and 128 px — and the map in cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table). **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect, and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
+| **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (the scroll extent — the map less 32 and 128 px — and the map in cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table). **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect plus the lead (`tagpu_zoom_pub_window`), and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |

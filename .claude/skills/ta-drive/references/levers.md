@@ -226,8 +226,9 @@ The native heartbeat's fog fields are the fog bound's witness (`tagpu_zoom.c`, g
 grid at all); **`out=` must read 0** — frames whose fog domain was not inside that grid; `bare=`
 counts frames that needed the wide grid and had none; `held=N/Mpx` is the frames whose drawn eye
 the bound held back and the largest hold, never more than the displacement the gesture has posted
-and the game thread not yet applied — one frame's step when it keeps up (non-zero on wheel
-gestures below 1×; 263 world px measured at the floor at 1024x768), all of it when it lags;
+and the game thread not yet applied, less the lead the wide grid carries (a quarter of the view a
+side) — near 0 when the game thread keeps up (4 frames over 36 wheel gestures at 1080p on the
+reference setup's GPU), more when it lags;
 `paused=` is the frames drawn at the previous frame's level so the view would not move against
 the gesture; **`back=` must read 0** — frames that moved against it anyway.
 **A level that starts below 1× shows `bare=` and `out=` of about 15** — the frames before the
