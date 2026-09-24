@@ -176,6 +176,8 @@ per-frame re-arm. The behaviour flags on top of the patches *are* re-read live.
 | `0x483FA0` | terrain tile blit (`ret 4`) | `terrown` (`terrown.on`) | `leaf_call` — the skip path key-fills the viewport |
 | `0x4848E0` | fog overlay (`ret 4`) | `terrown` | `leaf_call` — the skip path replicates only the lazy grid rebuild |
 | `0x4843C0` | screen fog-grid rebuild | `terrown` | *called by us*, not patched — and **replicated in C** by `tagpu_fogwide.c`, which builds the same masks over a window the whole zoom range fits in, **every tick since G13s** so that the first zoomed-out frame of a gesture cannot outrun it (terrain-depth §8, §8a) |
+| `0x4B6CC0` | the rotation by a triple, `stdcall(src[3], dst[3], turn[3])`, `ret 0xC` — pure: it reads its two inputs and one constant and writes `dst` alone | `tagpu_fx.on` | *called by us*, not patched — by the frame packet's publisher, on the game thread, to pose every effects model with the engine's own rounding (§2.89) |
+| `0x4C7580`, `0x4C7310`, `0x4C0330` | the textured-quad rasteriser, its span and the flat fill — what `0x46BAE0` and `0x4211D0` paint every effects model's faces with | `tagpu_fx.on` | not called, not patched: **replicated in C** by `tagpu_fxmodel.c`, integer for integer, on the render thread (§2.89) |
 
 > **`0x4B7F90` is not an effects function** — it is the engine's generic GAF-frame blit, and the
 > mouse cursor goes through it too (`0x4C2870` → `0x4C297E`). It is detoured on **`g_fxown_in`**,
@@ -2022,6 +2024,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `[0x51FBD0]+0x1B2` | the cursor's **GAF frame**. Read only — **on the GAME THREAD**, by `tagpu_packet_pub.c` (the in-play fill, and in the shell its observer of `0x4C67C0`), and published as the packet's `cur_rec`, a KEY; `tagpu_gui_cursor_frame()` resolves it on the render thread through `tagpu_gaf_frame_sane` for the sharp layer's cursor. `+0x1B6`/`+0x1BA`, the position the engine last drew it at, are **not read since 2026-09-23**: the packet's `cur_pos`/`cur_w`/`cur_h`/`cursor_live` had no reader left and were deleted, so `cur_rec` is the whole cursor channel (0 = no cursor this frame). The engine blits its own sprite into the reference frame |
 | `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with. **Since 2026-09-12 (the frame packet's landing 1) the font is COPIED there**, header and 95 printable glyphs, each as a one-glyph font object, into the packet (`tagpu_packet_pub.c`); the present thread rasterises from the copy and no longer dereferences the engine's font at all (`tagpu_text.c`, §2.16). The GL UI's string op carried the font's address too (landing 4c) and went with the UI layer (§2.81); `tagpu_gui_hook.c` still captures the op, so the address is still recorded — nothing reads it |
 | **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (the scroll extent — the map less 32 and 128 px — and the map in cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table, which the unit pass turns into its face-shade multipliers, §2.88); `[0x51FBD0]+0xCC`, the grey band's 256-byte remap, is **not** copied since G20d — the grey is computed in RGB. **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect plus the lead (`tagpu_zoom_pub_window`), and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
+| **the effects models** — a weapon's `+0x74` node and its `+0x30` child, an explosion's `+0x00` body, a flying piece's `*(sys+0x2C)` node; per node `+0x04`, `+0x08`, `+0x0C`, `+0x24`, `+0x28`, `+0x30`; per face `+0x00`, `+0x04`, `+0x0C`, `+0x10`, `+0x18`, `+0x1C`; a sequence's `u16` count and its `+0x28` frames; for a piece's team face `sys+0` → `+0x96` → `+0x27` → `+0x96` | **Read only, on the GAME THREAD**, by the frame packet's publisher (`tagpu_packet_pub.c` `fx_model`) in the same `after` as the tables above, and COPIED: posed by the engine's own `0x4B6CC0` into a `dst` of the publisher's, every count and index bounded before it is used — the vertex and face counts, each face index by its node's vertex count, each frame index by its sequence's count, the piece's unit a stride-aligned member of the unit array inside the slot count and its player one of the ten `main+0x1B63` records — into the packet's five model tables. The render thread reads the copies (`tagpu_fxmodel.c`) and the unit atlas's own mirror, never a model (§2.89) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
@@ -2240,9 +2243,9 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 - **The install fails closed in any process that loads this DLL.** An exe that is not TA and calls
   `DirectDrawCreate` gets the same box and exits. By design: this `ddraw.dll` is built for
   `TotalA.exe` alone, and the report names the exe it met.
-- **The native pass still emits effect models into a vertex array no lane reads**
-  (`tagpu_native.c`'s `s_verts`, fed by `emit_fx_model`). Its budgets were left at their stock
-  sizes; the path is a candidate for deletion.
+- **The effects models are sized for the raised pools**: the packet carries up to
+  `TAGPU_PK_MAX_FXMODEL` (two a projectile, one a piece, one an explosion — 10 000 at the raised
+  limits) and the unit pass's hand-over counts them in `TAGPU_PD_MAXHAND` (§2.89).
 - Whether a peer on a lower cap than its opponent refuses projectiles the other fired, and what that
   does to damage. The contract is the same build on every peer, which is what was measured.
 - The known-build table holds retail 3.1 alone; other builds report `known build: none`.
@@ -2722,8 +2725,9 @@ emitters were Gate B's oracle; step 8 deleted them, so this pass draws every uni
 not drawn. A unit is one `glDrawArrays` out of its type's geometry and material VBOs with its whole
 pose in a uniform block; no vertices are built for it on the CPU at all. That covers **all three
 baked ranges** — the body, the structure-shadow slant and the nanoframe wireframe — which was every
-reader of `prim+0x22` except the selection lines and the effects models, and those two are all that
-is left on the shared stream.
+reader of `prim+0x22` except the selection lines and the effects models. Neither is on a shared
+stream: the selection rect is the marker pass's (§2.84) and the effects models are rasterised from
+the frame packet (§2.89), so `tagpu_native.c` builds no vertices at all.
 
 | | |
 |---|---|
@@ -3728,7 +3732,7 @@ consistent pair could name memory just freed ([cross-thread engine reads](cross-
 |---|---|---|
 | `DrawGameScreen 0x468CF0`, the observer's **`after`** | four more tables. `PK_PROJ` (56 B) one per live projectile, with the rendertype's own rotation adjustment applied, the weapon's colour NUMBERS already through `main+0xDCB`, the attacker's owner byte, the ground-shadow blob's world y, and the sprite or flare frame already indexed by this tick; `PK_EXPL` (32 B) the debris node, the two anim states' resolved frames and the turn triple; `PK_DEBRIS` (24 B) one per occupied particle slot; `PK_PART` (16 B) one per drawable sub-particle, **in layer order**, with the projection done (`x` = hi(world x), `zp` = hi(y) − hi(alt)/2) and its GAF frame resolved. The header gained the ALP/LHT capability bits, the ground-shadow frame, the 32×256 LHT ramp and the **whole 256-byte** GUI colour LUT | game |
 | the same `after` | **the gather is taken once per SIM TICK**, keyed on `(level generation, tick)`. Measured on a live `200v200` at 1080p: **5 592 scans against 80 469 reuses, one gather in 15 publishes**, at 634 publishes a second against a 60 Hz sim. The LEVEL half of the key is what stops a hit across a boundary handing the native pass a model root the teardown has freed. **The argument is NOT the anchor scan's** — that grid really is constant within a tick because only the tick writes it, and these four are not: the engine's own explosion DRAW emits particles (`0x420B00` → `0x421550` at `0x420B18`, which calls the grey-smoke emitter `0x472810` and the fire emitter `0x472AB0`, both of which append to a layer). What licenses the cache is weaker: the tables are COPIES, so a later append cannot dangle one; positions are the TICK's, so nothing already present goes stale; and what it costs is the newest smoke or fire of a tick landing one publish late. [The sentence this row carried — "the engine's own draw passes read them and write nothing" — was disproved by landing 4a's review; §2.22 finding 10.] | game |
-| `tagpu_fx.c` | the three effect tables and the engine's DRAWING RULES over them — which rendertype makes which primitive, where the shadow blob goes, how the lightning bolt jitters. It reads no engine memory at all and is **off the allow-list**; the model roots it carries are per-TYPE templates it never dereferences, passed straight to `emit_fx_model` in the (fenced) native pass | render |
+| `tagpu_fx.c` | the three effect tables and the engine's DRAWING RULES over them — which rendertype makes which primitive, where the shadow blob goes, how the lightning bolt jitters. It reads no engine memory at all and is **off the allow-list**; the models its records name are indices into the packet's model tables, which `tagpu_fxmodel.c` rasterises (§2.89) | render |
 | `tagpu_sfx.c` | the particle table, walked by layer because the layer IS the draw depth (0..6 before the projectiles, 7..9 after the explosions). Also **off the allow-list** | render |
 | `tagpu_gaf.c` | gained `tagpu_gaf_frame_geom` / `_subframe`, so a pass that only PLACES a sprite dereferences no engine byte of its own; the publisher calls its resolvers on the game thread | both |
 | `tagpu_fxown.c` | the render thread's standing request for the tables (`want`), with the same 90-frame watchdog the two skip bytes stand on: an unarmed pass costs the publisher nothing | both |
@@ -14812,12 +14816,12 @@ nothing while reading as though it had**. Established by call graph instead:
 | `render_vk.c:232` | `tagpu_overlay_draw` — the whole gather and paint half | render |
 | ↳ `tagpu_overlay.c:264` | `tagpu_native_frame` (its only caller) | render |
 | ↳ `:3291`, and `ghost_record` → `ghost_one:1887` | `tagpu_posebake_unit` → `mat_bake` → `pb_walk` → `mat_emit:467` → `tagpu_r3d_atlas_uv` → `atlas_paint` | render |
-| ↳ `:3357` | `emit_fx_model` → `emit_node` → `tagpu_native.c:940` → `tagpu_r3d_atlas_uv` → `atlas_paint` | render |
+| ↳ `tagpu_native.c`, `tagpu_fx_gather` | `emit_model` → `tagpu_fxmodel_raster` → `tagpu_r3d_atlas_texels` → `atlas_get` → `atlas_paint` | render |
 | `render_vk.c:268` | `tagpu_vk_frame` → `vk_present` → `tagpu_vk_unit.c:1803` → `tagpu_posedraw_handover` | render |
 
 Every paint of an armed atlas and every consumer are the **same thread**, in one
-iteration of one loop. The unit atlas is reachable only through `tagpu_native.c:940`
-and `tagpu_posebake.c:467`, both inside `tagpu_native_frame`, which has exactly one
+iteration of one loop. The unit atlas is reachable only through `tagpu_posebake.c`'s
+`mat_emit` and `tagpu_fxmodel.c`'s `tagpu_fxmodel_raster`, both inside `tagpu_native_frame`, which has exactly one
 caller, which has exactly one. The GUI atlas is **not in scope**, and the reason is that
 it never arms a list — `tagpu_gaf_atlas_restore_vk` has exactly three callers
 (`tagpu_fx.c:173`, `tagpu_feat.c:267`, `tagpu_render3do.c:555`) and none is in
@@ -17362,16 +17366,9 @@ private virtual display, `--defaults` (Classic++, so every restore job runs), Ga
   only under a diagnostic build with the allowance cut to 384 tiles (above). A frame's paints are
   bounded by the atlas, 16 MiB, so a scene denser than big-battle's can defer in play. What that
   costs is a feature, an effect or a unit drawn one or more frames late, never a wait.
-- **No lane draws the effects' models.** The native pass's `emit_fx_model` writes the 3DO
-  bodies of rendertype 1, 3 and 6 projectiles, the debris pieces and the explosions' models into
-  `tagpu_native.c`'s `s_verts`, which has that one writer and no reader, and no Vulkan pass takes
-  `tagpu_fx_model`; `fxown` meanwhile skips the engine's own draw of them (`0x46BAE0`,
-  `0x4211D0`). So a rocket's body and its thrust flame, a shell and a debris piece are not on
-  screen at all. Reads of the presented window on `fx-rockets`, 0.05 s apart (MEASURED
-  2026-09-24), show the rockets' smoke trails and the impact flashes, and no rocket at a
-  trail's head. Their
-  lookups still paint into the unit atlas and spend its allowance. The effect bracket keeps an
-  effect's drawn parts — its sprites and lines — whole; drawing the models is new work.
+- **No lane drew the effects' models** — a rocket's body and its flame, a shell, a debris piece.
+  Reads of the presented window on `fx-rockets`, 0.05 s apart (MEASURED 2026-09-24), showed the
+  smoke trails and the impact flashes and no rocket at a trail's head. §2.89 draws them.
 - **A frame that fails to decode was not forced.** It answers NULL at the same line as the full
   atlas (`tagpu_gaf_atlas_get`), so it feeds the same `s_partsLost`, but no run made one fail.
 - **No validation layer has run on the twin bindings.** That no descriptor names a twin in a
@@ -17442,3 +17439,105 @@ composite; `k[]` and its fallback; the `shadows=0` change. The no-target Gamma: 
 choice between the two arms (`prepare`'s 0 and `record_direct`'s `s_drawThis` guard), the blend
 constants and the doubling above 2, and the teardown split — `_down_paid` now frees the target
 alone and `_down` both.
+
+### 2.89 The effects' models, drawn — the engine's rasterisers, transcribed
+
+**What was wrong.** No Vulkan pass drew an effect's 3D model: a weapon's body and its thrust
+flame (rendertypes 1, 3 and 6), an explosion's body, a debris piece. The native pass wrote their
+vertices into an array nothing read, and `fxown` skips the engine's own draw of them
+(`0x46BAE0`, `0x4211D0`), so a rocket at the head of its smoke trail was not on screen at all
+(§2.88, *Not covered*, measured on `fx-rockets`).
+
+**The survey, and the design chosen.** Three ways to put them back:
+
+- **The engine's own pixels** — not available: the engine's frame reaches no pixel of the
+  screen (§2.81), and the 8bpp path is deleted (§2.88).
+- **Geometry on the GPU** — the node posed and drawn as two triangles a face with interpolated
+  UVs, as the unit bodies are. Built and measured against the engine's own draw, paused at 1×:
+  **3 of 20** model pixels differed on a frame of rockets, **10 of 62** on a mixed one and **309
+  of 831** on `big-battle`. The engine walks each edge in 16.16 from a vertex biased by `0xFFFF`,
+  steps its texture coordinates by truncating divisions and addresses the texel by the frame
+  width's own rule, and a rocket at 1× is a few dozen pixels, every one of them decided by that
+  arithmetic. Discarded, and its code deleted.
+- **The engine's rasterisers, transcribed** — chosen. They are integer code with no state but
+  the clip rect, so a transcription reproduces them exactly, and their output is small.
+
+| where | what |
+|---|---|
+| `tagpu_packet_pub.c` `fx_model` (game thread) | poses each model with the engine's own rotation `0x4B6CC0` into a `dst` of its own, adds the effect's 16.16 position, and copies it with its faces and every frame already resolved by the draw's own rule (`0x4B7EE0` for an animated face, `0x4B7F30` with the owner's logo colour for a debris piece's team face) into five tables — model, shape, face, index, vertex (`tagpu_packet.h`, *THE EFFECTS MODELS*). A shape is shared by every model of the gather that draws the same node with the same frames. Every count and index is bounded before it is used (the node's `+0x04` 1..2048 and `+0x08` 0..512, a face's indices by its node's vertex count, a frame index by its sequence's count, a piece's unit and player by the arrays they must belong to); a node that does not validate is not carried, and its record's index then lies past `n_fxmodel` |
+| `tagpu_packet.c` `frame_valid` | the acquire checks every index of the five tables before the render thread sees them, so the consumer follows them without a check of its own |
+| `tagpu_fx.c` `emit_model` | hands each model to the rasteriser as its record is emitted, keeps its runs, its key and its fog anchor, and counts a model it cannot draw as a lost part of its record (the bracket below) |
+| `tagpu_fxmodel.c` (render thread) | projects the posed vertices with the effects pass's own eye, `(v >> 16) − eye + 0x80` across and the engine's `y − alt/2` down, and runs `0x46BAE0`'s and `0x4211D0`'s face rules and the two rasterisers — `0x4C7580` + `0x4C7310` for a textured quad, `0x4C0330` for a flat face — integer for integer, clipped to the packet's `vp_addr` exactly as the engine's context rect is. The result is **runs** (32 B): a row's pixels that take one texel of the unit atlas, or one palette index where the face is flat or the texel is the frame's key (which the span copies and the atlas marks a hole) |
+| `tagpu_native.c` | sizes the effects band from the packet's own bound on the frame's models, before any key is fixed, and appends one draw per model to the posed pass's list after its units (`tagpu_posedraw_fx`) |
+| `tagpu_posedraw.c` `FXVS` | a vertex stage with no vertex input: six vertices a run, read out of the frame's pose buffer by index, placed in frame px through the world's own zoom transform, at the model's key |
+| `tagpu_vk_unit.c` `s_pipeFx`, `RS_FX` | that stage with the unit program's fragment stage, no cull (a run is a rectangle; the rasterisers already decided which faces paint), depth `LESS_OR_EQUAL` and written, so a model's later runs win over its earlier ones as the engine's face order does. Recorded after every unit body and before the effects pass's sprites |
+
+**What a model takes from the unit program**, which is why the runs go through it rather than a
+program of their own: the unit atlas's texels (so a model's texture lookups spend the unit
+atlas's allowance, as a unit's do); the neutral face shade, because neither effects draw shades a
+face; the fog at its effect's anchor, the rule the effects pass applies to its sprites; Classic++'s
+restored art and its lighting with a level normal (the lambert is the level constant); and the
+Gamma once, at the world composite. No shadow is sampled and no waterline clips it
+(`uShadowOn = 0`, the water and dig heights out of reach): the engine draws neither for an effect.
+
+**The depth order is the engine's paint order.** The effects band starts at `encFx = fxKey − 1.5`
+and holds `2N + 2` keys for `N` models; model `k` takes `encFx + (2k + 1)·step`, a sprite or a
+line after `k` models `encFx + 2k·step`, and every flash the key the explosion walk starts at.
+The step is never below `16·2⁻²³` of the depth scale and the band grows to hold it, so adjacent
+keys stay apart in the D24 buffer; at the default six the air band is where it was
+(`airKey = fxKey + 12`). [Effects](effects.html) §4 has the sequence.
+
+**An effect is drawn whole or not at all, across two passes.** Inside `tagpu_fx.c` the record's
+bracket takes back every part of a record that lost one — a model the packet did not carry, a
+texel the unit atlas's allowance has not painted yet, a model past the frame's bound or the run
+arena — with its sprites, its lines and its keys. Between the passes the hand-over's `nmodels` is
+the handshake: the unit pass draws the frame's models all or none (`s_nfx == nfxRec`) and tells
+the effects pass through `tagpu_vk_unit_fx_count`; the effects pass draws only a frame whose
+models the unit pass draws (`h.nmodels == tagpu_vk_unit_fx_count`), and the unit pass records
+`RS_FX` only when `tagpu_vk_fx_models_ok` says the effects pass is drawing that frame. Both
+passes prepare before either records, so the answer is known when it is used.
+
+**The thread split.** The engine's models are read on the game thread alone, by the publisher;
+`tagpu_fxmodel.c` reads the packet it is handed and the unit atlas's mirror, and is not on the
+allow-list (`thread-split: clean`, 32 files). `0x4B6CC0` is pure — it reads its two inputs and
+one constant and writes `dst` alone — which is what lets the publisher call it (engine map,
+*The effects models*).
+
+**MEASURED 2026-09-24** (1024×768; the oracle is the engine's own draw with `fxown`'s skip off,
+the game paused, the eye pinned):
+
+| check | result |
+|---|---|
+| model pixels at 1×, Classic | `fx-rockets` **28 of 28, 18 of 18, 2 of 2** exact, and 28 of 28 again on the final build (its 16 uncovered engine pixels the two rockets' ground-shadow blobs); `big-battle` **1292 of 1352**, the other 60 all where the engine's finished frame shows a health bar drawn after the effects. Of the 290 engine effect pixels neither capture inks, 73 are black — which the capture cannot tell from its clear — and the presented frame shows every one of them exactly; 198 are the half-alpha ground-shadow blob; 19 lie at a sprite's or a flash's edge, 29 px or more from any model |
+| the band order, in the presented frame | where only a model has ink the frame shows it, **857 of 857**; where a model and a sprite overlap the frame shows whichever the engine painted last, **247 of 257** — the 10 others sit under a flash and take its additive RGB approximation of the LHT remap |
+| Classic++ | the same 1192 pixels covered; 812 take a restored colour |
+| zoom 0.49× and 2.35× | every model where the world's own zoom transform puts it: within 0.15 px at 0.49× and under 1 px at 2.35× |
+| a forced texel loss — a test build whose unit atlas answers "not painted yet" for every other GAF frame, then "refused" for all of them, 22 s each on `big-battle` | 38 106 and 50 534 records taken back whole; records left half-drawn **0** |
+| A/B against main, the same fixture and eye, `ss=2` | terrain (`static-terrain`), units (`selbox-facings` with `native.on=all`, and `pose-inventory`) and features (`feat-forest`) **byte-identical** |
+| cost, `big-battle` paused at a pinned eye, `--maxfps 0`, two launches each | the engine publishes 50–53 packets a second on main and 51–56 with 107–114 models, the publisher's p50 294–306 µs against 276–296 µs; the GPU frame's p50 settles at 2.40–2.47 ms against 1.83–2.40 ms. No cost the scene's own spread shows |
+| the log, a minute of `big-battle` in play | clean |
+
+**The heartbeats.** `fx:` gains `models= runs= (lost= why= of cap )` — drawn, their runs, taken
+back, the rasteriser's last refusal (1 not carried, 2 texel not painted, 3 no room), the frame's
+bound; `packet:` gains `models=N/Vv lost=` — the models carried and their vertices, and the
+running count of models the publisher could not carry (a node that did not validate, or no room).
+
+**What it does not do.**
+
+- **At zoom-in a model is magnified engine pixels**, as the rest of the effects are: the runs are
+  the engine's pixels at its resolution, and the zoom scales them. A model drawn at the display's
+  resolution is geometry again, which is the measured alternative above.
+- **The flash is still an additive RGB approximation** of the LHT remap, and still draws before
+  every sprite of the frame where the engine draws it after the projectiles (effects §4). Both
+  predate this work; the 10 overlap pixels above are the approximation's.
+- **A face of more than 32 vertices, or taller than 65 536 scanlines, is not drawn.** Neither
+  engine draw bounds either; no stock model reaches them (`0x4211D0`'s stack frame caps a node at
+  ~1990 vertices, and `0x4C7580`'s its rows).
+- **Fog is decided at the effect's anchor**, for the model as for its record's sprites and
+  lines (`vWorld` is the anchor; the effects pass has decided it there since G13b, and a
+  record's parts fog together). The engine's overlay decides per pixel, so a model that crosses
+  a fog cell's edge can differ from the engine by the part across it. No scene of this work had
+  a model on such an edge; the fix is per-pixel fog for the whole effects pass, both halves at
+  once.
+- **Classic++ has no engine oracle**: its models were checked for coverage and for taking the
+  restored art, not against a reference picture.

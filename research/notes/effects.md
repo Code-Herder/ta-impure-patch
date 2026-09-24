@@ -19,8 +19,8 @@ nanolathe — which are not drawn by the two effects passes at all.*
    flare, a lightning bolt — or a background-refraction "ball" nobody has reproduced.
    Each is gated by the local player's LOS at its anchor tile, and the model kinds get
    a translucent ground-shadow blob first.
-3. **An explosion record carries up to three things**: a debris 3DO (`+0x00`) rotated by
-   `+0x4C`, an opaque sprite animation (anim state `+0x04`) and a *light flash* (anim
+3. **An explosion record carries up to three things**: a 3DO body (`+0x00`, only on the
+   explosions a dying unit's piece breaks into) rotated by `+0x4C`, an opaque sprite animation (anim state `+0x04`) and a *light flash* (anim
    state `+0x10`) blitted through the **LHT** lighten table — the big white disc around
    a big explosion. Flying debris pieces are separate objects in the particle slots
    `0x511DF0..0x511F80`, drawn by `0x4211D0`.
@@ -88,8 +88,9 @@ Shadow blob = `AlphaCompsteBuf2OFFScreen` of frame 0 of `*(main+0x1480F)` at
    `sys+0x28` bits 1/0 — these become objects in the plugin-layer hook vectors
    `*(main+0x38D77)`, drawn by `0x471F90(ctx, n)` at the hook sites, **not by this
    pass**), rotates the piece's verts (`0x4B6CC0`) and draws it via `0x4211D0`. The
-   piece is `*(sys+0x2C)`: `{Model3DONode* @0, short turn[3] @0x12, i32 16.16 x/alt/y
-   @0x16/0x1A/0x1E}`.
+   piece is `*(sys+0x2C)`: `{Model3DONode* @0, the turn words @0x10/0x12/0x14 — handed to
+   0x4B6CC0 reversed, as {w14, w12, w10} — i32 16.16 x/alt/y @0x16/0x1A/0x1E, the rotated
+   vertices @0x22}`.
 2. **Flash loop** over `ExplosionStruct[]` (count `main+0x1491B`, inline at
    `main+0x1491F`, stride `0x54`, 300 slots): anchor `+0x1C/+0x20/+0x24` (16.16 x/alt/y)
    inside the viewport rect `main+0x37E27`, and `+0x18 != 0` → frame of anim state
@@ -97,7 +98,14 @@ Shadow blob = `AlphaCompsteBuf2OFFScreen` of frame 0 of `*(main+0x1480F)` at
    `TAProgram+0xF0` bit 7. The flash sequence is a short-lived object: its memory is
    freed when the explosion ends (a later read of a dead record's `+0x18` finds
    unreadable frames — read it only while `i < count`).
-3. **Body loop**: per record, `+0x00` debris node → `0x46BAE0` rotated by `+0x4C`; then
+3. **Body loop**: per record inside the viewport rect, `+0x00` → `0x46BAE0` rotated by
+   `+0x4C` when it is non-zero. The ordinary add site `0x420A30` writes it 0; the explosions
+   `0x421700` makes from each face of a dying unit's piece carry a **piece-explosion
+   record** — node-shaped, 8 vertices and 6 faces whose index pointers are the executable's
+   own table `0x502BF8`, out of a pool (stock's 300 at `main+0x1AB9F`, laid out by
+   `0x420620` at the level load), rewritten per explosion and freed by the tick writing
+   `0xFF` over its first byte. It is not a template, so only the thread that draws it can say
+   what it holds ([engine map](exe-reverse-engineering.html), *The effects models*); then
    anim state `+0x04` (`seq @+0x0C`) → `CopyGafToContext` (opaque, colour-keyed).
    Explosion sequences seen live: `Explode2/3/5`, `Explosion` (19–23 frames, frame 0 as
    small as 4×3, RLE).
@@ -109,10 +117,11 @@ Shadow blob = `AlphaCompsteBuf2OFFScreen` of frame 0 of `*(main+0x1480F)` at
 | `CopyGafToContext 0x4B7F90` | colour-keyed copy (`ColorKey @+8`); sub-frame lists recurse, a sub-frame with `+0x0B != 0` goes through the alpha blit instead. `ret 0x10` |
 | `AlphaCompsteBuf2OFFScreen 0x4B8500` | `dst = ALP[src·256 + dst]` (50 % blend, `TAProgram+0xC0`), gated by `+0xF0` bit 5 |
 | `0x4B8EC0` | LHT lighten as above, gated by bit 7. `ret 0x10` |
-| `0x46BAE0(ctx, pos16.16[3], node, turn[3])` | rotate `node+0x24` verts by the triple, project `sx = hi(vx+px) + 0x80`, `sy = hi(py − vz) − hi(vy+palt)/2 + 0x20`; faces `node+0x28` (stride 0x20): skip face 0 when `node+0x0C` (selection primitive) `!= −1`; flag bit 0 → flat fill `0x4C0330` in the face colour; else **only 4-vertex faces** → `GAF_DrawTransformed` (texel copy, **no shade table**; bit 1 → current anim frame of `face+0x10`). `ret 0x10` |
-| `0x4211D0` | the same face rules for a debris piece (team-colour frame via bits 1+2). `ret 0xC` |
+| `0x46BAE0(ctx, pos16.16[3], node, turn[3])` | `pos` eye-relative (the callers take `eye << 16` off x and y). Rotate `node+0x24` verts by the triple, project `sx = (int16)hi(vx+px) + 0x80`, `sy = (int16)hi(py − vz) − ((int16)hi(vy+palt) >> 1) + 0x20`; faces `node+0x28` (stride 0x20): skip face 0 when `node+0x0C` (selection primitive) `!= −1`; indices unbounded; flag bit 0 → flat fill `0x4C0310` in the colour word's low byte, any vertex count; else **only 4-vertex faces** → `GAF_DrawTransformed 0x4C7580` with `uv = NULL` (texel copy, **no shade table**; bit 1 → current anim frame of `face+0x10` through `0x4B7EE0`, unbounded). `ret 0x10` |
+| `0x4211D0` | the same face rules for a debris piece, drawn only when its anchor is in the viewport rect, from the vertices `0x421550` rotated into `piece+0x22`; with bits 1 **and** 2 the frame is `0x4B7F30(face+0x18, logo)`, the logo colour of the unit the piece flew off (`sys+0 → +0x96 → +0x27 → +0x96`). `ret 0xC` |
 | `0x4B6CC0(in, out, turn)` | `Rz(t0)` on (x,y), then `Rx(t2)` on (y,z), then `Ry(t1)` on (x,z); each `0x4B7173`: `a' = a·cos − b·sin, b' = a·sin + b·cos`, angle = `t·2π/65536` |
 | `DrawLine 0x4BE950` | clip to the context rect (`CorrecLinetPosition`), Bresenham in the palette index |
+| `0x4C7580` / `0x4C7310` / `0x4C0330` | the textured quad, its span and the flat fill: two edge chains walked in 16.16 from a vertex biased by `0xFFFF`, steps by truncating division, rows appended per side and read back by position, one texel per pixel by the frame width's own addressing, the frame's key colour copied like any other texel; clipped to the context's `+0x1C` rect, which `DrawGameScreen` sets to the viewport rect `main+0x37E27`. The whole arithmetic is in the [engine map](exe-reverse-engineering.html), *The effects models* |
 
 GAF frame header (0x18): `u16 w@0, h@2; i16 hotX@4, hotY@6; u8 ck@8, compressed@9,
 subframes@0xA, subAlpha@0xB; u8* pixels@0x10`. RLE rows: `u16 length`, then codes
@@ -124,50 +133,93 @@ Armed by `tagpu_fx.on` (tokens `log`, `nolines`, `nomodels`, `nosprites`, `noexp
 `nodebris`). It rides the native unit frame: `tagpu_native_frame` builds the view
 (eye, viewport, fog textures, palette), calls `tagpu_fx_gather`, and:
 
-- **Models** (rockets, missiles, shells, debris, flying pieces) are emitted by
-  `emit_fx_model` through `emit_node`, the face loop shared with units, fed raw node
-  vertices rotated by the engine triple exactly as `0x4B6CC0` does — unshaded (neutral
-  SHD row), selection-primitive face skipped, textured faces quads-only: the `0x46BAE0`
-  rules. **They are not drawn.** The vertices go into `tagpu_native.c`'s `s_verts`,
-  which no Vulkan lane reads, while `fxown` skips the engine's own draw of them, so a
-  rocket's body, a shell and a debris piece are not on screen
-  ([gpu-status](gpu-status.html) §2.88, *Not covered*). Their texture lookups still paint
-  into the unit atlas.
-- **A record is drawn whole or not at all.** A projectile with its ground shadow, an
-  explosion with its flash and its body, is emitted inside one bracket
-  (`effect_begin`/`effect_end`); any part of it lost for want of room — a sprite whose
-  atlas paint the allowance defers, one the full atlas refuses or that would not decode, a
-  quad or a line past a bucket's end (`s_partsLost`) — takes the whole record back out for
-  that frame, so a flash never shows without its explosion or a shadow without its shell. The explosions are one walk, flash and body per record;
-  the buckets keep the engine's two layers apart, every flash before every body.
-- **Lines and sprites** are the module's own program: a private 2048² R8 atlas (raw,
-  RLE and sub-frame frames decoded on first use), palette lookup, four modes — flat
-  colour (lines, `GL_LINES` at supersample width), opaque colour-keyed, 50 % alpha
-  (the ALP blend in RGB), and **flash** = additive with a per-level colour derived from
-  the live LHT table (mean palette delta of each of the 32 rows; an RGB approximation of
-  a palette-space remap). Depth 403, depth writes off, drawn after the unit bodies so
-  aircraft (band 1201) cover them and nothing else does; the same fog rule as units
-  (unexplored discarded, explored-out-of-LOS darkened). Three fixed buckets drawn in
-  order — lines, flashes (additive), sprites — so explosion sprites sit over their flash
-  as in the engine and nothing is dropped however often kinds alternate.
+- **Models** (a weapon's body and its thrust flame, an explosion's body, a debris piece)
+  are the ENGINE'S OWN PIXELS, drawn by the unit pass ([gpu-status](gpu-status.html) §2.89):
+
+    - the frame packet's publisher poses each one on the game thread with the engine's own
+      rotation `0x4B6CC0`, offsets it by the effect's position and copies it with its faces
+      and every frame already resolved into five tables (`tagpu_packet.h`, *The effects
+      models*);
+    - `tagpu_fx.c` hands each model to `tagpu_fxmodel.c` as it emits the record, which
+      projects it with this pass's eye and runs the engine's rasterisers over it integer for
+      integer — the `0x46BAE0`/`0x4211D0` face rules, `0x4C7580` + `0x4C7310` for a textured
+      quad, `0x4C0330` for a flat face — and keeps the result as **runs**: a row's pixels that
+      take one texel, or one palette index where the face is flat or the texel is the frame's
+      key;
+    - the unit pass draws the runs through a vertex stage of its own (`FXVS`) and the unit
+      program's fragment stage, so a model takes the unit atlas's texels, the neutral face
+      shade (neither draw shades a face), the fog at its effect's anchor, Classic++'s restored
+      art and lighting, and the Gamma once at the world composite, exactly as a unit does.
+      No shadow and no waterline: the engine draws neither for an effect.
+    - **Why runs and not geometry**: the engine's pixel is decided by its 16.16 walk and its
+      truncating divisions, and a rocket at 1× is a few dozen pixels. The node posed on the GPU
+      and drawn as two triangles a face differed from the engine on 3 of 20 model pixels, 10 of
+      62 and 309 of 831 (paused, 1×). The runs match it (MEASURED below).
+- **A record is drawn whole or not at all.** A projectile with its ground shadow, its body
+  and its flame, an explosion with its flash, its body and its sprite, a debris piece, is
+  emitted inside one bracket (`effect_begin`/`effect_end`); any part of it lost for want of
+  room — a sprite whose atlas paint the allowance defers, one the full atlas refuses or that
+  would not decode, a quad or a line past a bucket's end, a model whose texel the unit
+  atlas's allowance has not painted or that the band has no key for (`s_partsLost`) —
+  takes the whole record back out for that frame: every bucket, the model list, the run
+  arena and the sequence key. So a flash never shows without its explosion, a shadow
+  without its shell or a flame without its rocket. The two halves are drawn by two passes,
+  and they agree per frame through the hand-over's `nmodels`: the unit pass draws the
+  frame's models all or none, and the effects pass draws only a frame whose models the unit
+  pass is drawing, so neither shows a frame's effects without the other.
+- **The paint order is a sequence of keys.** The engine paints with no depth: every
+  projectile record in turn (shadow, lines, model or sprite), the debris, every explosion's
+  flash, then each explosion's body and sprite. Model `k` of the frame takes `encFx +
+  (2k + 1)·step` and a sprite or a line after `k` models `encFx + 2k·step`, so a sprite
+  lands over every model emitted before it and under every one after it; every flash takes
+  the key the explosion walk starts at. A record taken back rewinds the key with it.
+- **Lines and sprites** are the module's own program: a private 2048² atlas (raw, RLE
+  and sub-frame frames decoded on first use, `tagpu_gaf.c`), four modes — flat colour
+  (lines, Bresenham on the Vulkan lane, [gpu-status](gpu-status.html) §2.31), opaque
+  colour-keyed, 50 % alpha (the ALP blend in RGB), and **flash** = additive with a
+  per-level colour derived from the live LHT table (mean palette delta of each of the 32
+  rows; an RGB approximation of a palette-space remap). Depth tested and never written, at
+  the keys above, drawn after the unit pass; the same fog rule as units (unexplored
+  discarded, explored-out-of-LOS darkened). Buckets drawn in order — the lower particle
+  layers, lines, flashes (additive), sprites — so explosion sprites sit over their flash
+  as in the engine and nothing is dropped however often kinds alternate. **The flashes
+  draw before every sprite of the frame**, a projectile's included, where the engine
+  draws them after the projectiles: a flash over a projectile's sprite is under it here.
 - Gates mirrored: `+0x60 == 0`, the per-projectile LOS/MAPPED test, the viewport-rect
   test for explosions and pieces, `TAProgram+0xF0` bits 5 and 7.
-- **Depth bands are per frame**, not constants: `fxKey = 3 + (rows + 8)·4 + 4` sits above
-  the last row key a gathered unit can carry (`rows` = the sweep's row count, +8 for the
-  ±256 px gather slack), the air band is `fxKey + 12`, sprites at `fxKey + 3`, and the
-  vertex shaders divide by `airKey + 8` instead of a fixed 512 — so a 1440p or 2160p
-  viewport keeps the order ground → effects → aircraft.
-- **The native FBO became premultiplied** for the additive flash (blend `ONE,
-  ONE_MINUS_SRC_ALPHA` in the FBO and at the composite; the unit FS outputs `rgb·a`). Side
-  effect, deliberate: the unit pass's half-alpha draws (shadows, cloak) now land at the
-  engine's 50 % instead of the 25 % the straight-alpha path had silently produced
-  (`a·a` at the composite) — shadows and cloaked units are a little darker than in the
-  G12c panels, and match the ALP-table blend.
+- **Depth bands are per frame**, not constants (`tagpu_native.c`): `fxKey = 3 + (rows +
+  8)·4 + 4` sits above the last row key a gathered unit can carry (`rows` = the sweep's row
+  count, +8 for the ±256 px gather slack). The effects band starts at `encFx = fxKey − 1.5`
+  and holds `2N + 2` keys for `N` = the packet's own bound on the frame's models
+  (`tagpu_fx_model_bound`), six wide by default; its step is never below `16·2⁻²³` of the
+  depth scale, and the band grows rather than the step shrinking, so adjacent keys stay
+  apart in the D24 buffer and no frame refuses a model for want of keys. The air band is
+  `encFx + band + 7.5` (`fxKey + 12` at six keys) and the vertex stages divide by `airKey +
+  8`, so any viewport keeps the order ground → effects → aircraft.
+- **The world target is premultiplied** for the additive flash (blend `ONE,
+  ONE_MINUS_SRC_ALPHA`; the unit program outputs `rgb·a`), so the unit pass's half-alpha
+  draws (shadows, cloak) land at the engine's 50 %, the ALP-table blend.
 
-Log every 60 frames: `fx: proj=N (laser= model= sprite= flare= light= ball= hidden=
-fogged=) expl=K flash= debris= -> lines= sprites= flashq= models= atlas=`; with `log`,
-the first records of each kind every 60 frames (`fx: p0 "EMG" rt=4 …`, `fx: e0
-seq="Explode3" …`).
+Log every 60 frames: `fx: proj=N (laser= model= sprite= flare= light= ball= fogged=)
+expl=K flash= debris= -> lines= sprites= flashq= models= runs= (lost= why= of cap )
+atlas=` — `models=` drawn this frame, `runs=` their rasterised runs, `lost=` models taken
+back with their records, `why=` the rasteriser's last refusal (1 a model the packet did not
+carry, 2 a texel the unit atlas has not painted, 3 no room), `cap` the frame's bound on
+models; with `log`, the first eight projectile records every 60 frames (`fx: p0 rt=1 …
+model=0/1 frame=…`, `model=` the indices of its body and its flame in the packet's model
+table).
+
+**MEASURED 2026-09-24** (1024×768; the oracle the engine's own draw with `fxown` off, the
+game paused):
+
+| check | result |
+| --- | --- |
+| model pixels at 1×, Classic | `fx-rockets` 28 of 28, 18 of 18, 2 of 2 exact; `big-battle` 1292 of 1352, the other 60 all under a health bar the engine draws later |
+| the band order, in the presented frame | where only a model has ink the frame shows it, 857 of 857; where a model and a sprite overlap, the frame shows whichever the engine painted last, 247 of 257 — the 10 others sit under a flash and take its additive RGB approximation of the engine's LHT remap |
+| Classic++ | the same pixels covered; the models take the restored unit art, 812 of 1192 pixels a new colour |
+| zoom 0.49× and 2.35× | every model where the world's own zoom transform puts it, within 0.15 px at 0.49× and under 1 px at 2.35× |
+| a forced texel loss (a test build whose unit atlas answers "not painted yet" for every other GAF frame, then "refused" for all of them, 22 s each on `big-battle`) | 38 106 and 50 534 records taken back whole; records left half-drawn **0** |
+| cost, `big-battle` paused, `--maxfps 0`, two launches each | the engine publishes 50–53 packets a second without the models and 51–56 with 107–114 of them, the publisher's p50 294–306 µs against 276–296 µs; the GPU frame's p50 settles at 2.40–2.47 ms against 1.83–2.40 ms — the models cost nothing the scene's own spread shows |
 
 ## 5. Owning the draw — `tagpu_fxown.c` [LIVE-VERIFIED]
 
@@ -194,17 +246,15 @@ Verify install with `fxown: ARMED site.proj=1 site.expl=1 model@0x46BAE0=1
 flash@0x4B8EC0=1 piece@0x4211D0=1 copy@0x4B7F90=1`. tacli drops a stale `fxown.on` at
 launch when `fx.on` is absent.
 
-Caveats: while only some unit types are native (`native.on=armcom` or no unit pass at
-all), engine-drawn aircraft sit in the 8bpp frame *under* our composited effects — the
-reverse of the engine's order; with `native.on=all` the depth buffer restores it. The
-rendertype-2 refraction ball is dropped while owning. The particle layers have their own
+Caveats: the engine's frame reaches no pixel of the screen ([gpu-status](gpu-status.html)
+§2.81), so what `fxown` buys is the engine's CPU, at the price of the golden source's
+effects — which is why it is not a play default. The rendertype-2 refraction ball is
+dropped while owning. The particle layers have their own
 skip byte and detour (§7.5), armed by `tagpu_sfx.on` independently of `tagpu_fx.on`.
 
-Follow-ups noted by review, not done: the GAF RLE decoder and shelf atlas duplicate
-`tagpu_scaffold.c` / `tagpu_render3do.c` (a shared `tagpu_gaf.c` would serve all three);
-the byte-match/stub/detour machinery is now the fifth private copy across owndraw,
-tracer, suppress, scenario and fxown; the effects models are emitted into a vertex array
-no lane reads (§4).
+Follow-ups noted by review, not done: `tagpu_scaffold.c` keeps a GAF RLE decoder of its
+own beside `tagpu_gaf.c`; the byte-match/stub/detour machinery is the fifth private copy
+across owndraw, tracer, suppress, scenario and fxown.
 
 ## 6. Verification (2026-09-02, `scenarios/fx-mix.json`, `scenarios/fx-lasers.json`)
 
