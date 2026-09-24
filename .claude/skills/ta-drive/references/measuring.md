@@ -110,7 +110,8 @@ scores 0 magenta and shows no game.
 - **Swap the DLL in the same instance**: replace the worktree's `tagpu/ddraw/ddraw.dll` before
   `scenario load` (tacli copies it into the gamedir at launch; editing the gamedir's copy is
   overwritten), or `cp` it over `<gamedir>/ddraw.dll` and launch with `--keep-dll`. `md5sum` the
-  gamedir copy in the script's own output: that line says the run tested what you think.
+  gamedir copy in the script's own output: that line says the run tested what you think. A build
+  that still reads `ddraw.ini` is refused: run it with a tree of its own age.
 - **The stock engine limits are a second build of the same tree**: `make -C tagpu/ddraw -j$(nproc)
   LIMITS=stock` writes `ddraw-stocklimits.dll` beside `ddraw.dll`, from objects of its own, so the
   two never mix. `cp` it over `<gamedir>/ddraw.dll`, launch with `--keep-dll`, and read
@@ -123,12 +124,9 @@ scores 0 magenta and shows no game.
   engine clamps to 500 again and defaults to 250, which `tacli`'s schema does not know: `scenario
   validate` passes up to 1500 a player and 15 000 entities, and the apply then refuses. The apply's
   own check is against the cap in force (`main+0x37EE6`), which is the host's in a network game.
-- **The GDI lane takes a hand-edited `ddraw.ini` and a fixture with no resolution.** `scenario
-  load` rewrites `ddraw.ini`, `renderer=vulkan` included, whenever it passes a resolution, and it
-  passes `setup.res` whenever the fixture has one. Set `renderer=gdi` in `<gamedir>/ddraw.ini`, load
-  a copy of the fixture without `setup.res` into an instance whose store resolution is the one
-  wanted, and check `ddraw.ini` still says `gdi` after the load. Set it back to `vulkan` after: a
-  plain `tacli launch` keeps whatever the file says.
+- **The GDI lane is `tacli arm <i> gdi.on`**, before the launch and read at attach; every launch
+  path keeps it, `scenario load` included. Confirm with `tacli log <i> -g 'renderer GDI'`, and
+  clear it with `gdi.on=off` afterwards.
 - **Sound goes to a null device, never to the human's speakers.** Export
   `PULSE_SERVER=unix:/nonexistent/pulse` and `ALSA_CONFIG_PATH=<a file holding
   pcm.!default { type null }>` in the shell that runs `tacli`, and set `"sound": true` in the
@@ -204,8 +202,8 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
 ## Frame-time A/Bs
 
 - **`--maxfps 0` on both sides**, or you measure the cap. `0` is unlimited (a negative value maps
-  to the display refresh). It is a sticky launch knob; confirm it survived with
-  `grep maxfps <gamedir>/ddraw.ini`.
+  to the display refresh). It is a sticky launch knob; confirm it with `grep maxfps
+  <gamedir>/impure.cfg` (`uncapped`) or `tacli log <i> -g '^cfg:'` (`maxfps=0`).
 - **Pause the sim first** (`tab`, then peek the tick twice): on a fighting scenario units die under
   the measurement and the second half draws a smaller scene.
 - **`ftime.on`** logs `ftime: vk p50 <ms> p99 <ms> (n=…)`, the GPU frame time on the Vulkan lane

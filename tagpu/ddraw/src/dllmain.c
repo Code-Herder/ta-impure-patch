@@ -59,11 +59,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         delay_imports_init();
 
+        /* cnc-ddraw's config tool loads the DLL to edit a ddraw.ini this DLL
+           does not read: it gets nothing, and nothing of ours runs. */
         if (GetEnvironmentVariable("cnc_ddraw_config_init", NULL, 0))
-        {
-            cfg_load();
             return TRUE;
-        }
 
         /* tagpu: the log sink (tagpu_log.h) before anything that logs -- cfg_load does.
            After the config tool's return above, so opening the tool never rotates the
@@ -266,8 +265,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
                         mes,
                         sizeof(mes) - 1,
                         "Warning: Compatibility modes detected. \n\nIf there are issues with the game then try to "
-                        "disable the '%s' compatibility mode for all game executables.\n\n"
-                        "Note: You can disable this warning via ddraw.ini -> 'no_compat_warning=true'",
+                        "disable the '%s' compatibility mode for all game executables.",
                         s);
 
                     if (!g_config.no_compat_warning)
@@ -415,7 +413,7 @@ HRESULT WINAPI DirectDrawCreate(GUID FAR* lpGUID, LPDIRECTDRAW FAR* lplpDD, IUnk
 
     HRESULT ret;
 
-    if (util_caller_is_ddraw_wrapper(_ReturnAddress()) || g_config.flightsim98_hack)
+    if (util_caller_is_ddraw_wrapper(_ReturnAddress()))
     {
         if (lplpDD)
             *lplpDD = NULL;
@@ -462,7 +460,7 @@ HRESULT WINAPI DirectDrawCreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnk
 
     HRESULT ret;
 
-    if (util_caller_is_ddraw_wrapper(_ReturnAddress()) || g_config.flightsim98_hack)
+    if (util_caller_is_ddraw_wrapper(_ReturnAddress()))
     {
         if (lplpDD)
             *lplpDD = NULL;

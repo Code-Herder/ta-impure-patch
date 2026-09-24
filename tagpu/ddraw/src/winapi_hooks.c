@@ -48,12 +48,10 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
         return real_GetCursorPos(lpPoint);
 
-    POINT pt, realpt;
+    POINT pt;
 
     if (!real_GetCursorPos(&pt))
         return FALSE;
-
-    realpt = pt;
 
     /* Armed shield: the game polls this ~700x a launch, and every one of those
        polls would otherwise report the human's pointer. Fall through to the
@@ -109,31 +107,6 @@ BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
                on being right while the player points at art that is s times
                bigger. The identity outside a HUD region and at stock scale. */
             tagpu_hud_to_engine(&x, &y);
-        }
-
-        if (g_config.vhack && 
-            !g_ddraw.isworms2 && 
-            !g_config.devmode && 
-            !g_ddraw.bnet_active && 
-            InterlockedExchangeAdd(&g_ddraw.upscale_hack_active, 0))
-        {
-            int diffx = 0;
-            int diffy = 0;
-
-            if (x > g_ddraw.upscale_hack_width)
-            {
-                diffx = x - g_ddraw.upscale_hack_width;
-                x = g_ddraw.upscale_hack_width;
-            }
-
-            if (y > g_ddraw.upscale_hack_height)
-            {
-                diffy = y - g_ddraw.upscale_hack_height;
-                y = g_ddraw.upscale_hack_height;
-            }
-
-            if (diffx || diffy)
-                real_SetCursorPos(realpt.x - diffx, realpt.y - diffy);
         }
 
         InterlockedExchange((LONG*)&g_ddraw.cursor.x, x);
@@ -630,7 +603,7 @@ BOOL WINAPI fake_ShowWindow(HWND hWnd, int nCmdShow)
         if (nCmdShow == SW_MAXIMIZE)
             nCmdShow = SW_NORMAL;
 
-        if (nCmdShow == SW_MINIMIZE && g_config.hook != 2 && !g_config.tlc_hack)
+        if (nCmdShow == SW_MINIMIZE && g_config.hook != 2)
             return TRUE;
     }
 
@@ -682,12 +655,6 @@ HHOOK WINAPI fake_SetWindowsHookExA(int idHook, HOOKPROC lpfn, HINSTANCE hmod, D
     if (idHook == WH_KEYBOARD_LL && hmod && GetModuleHandle("AcGenral") == hmod)
     {
         return NULL;
-    }
-
-    if (idHook == WH_MOUSE && lpfn && !hmod && !g_mouse_hook && g_config.sirtech_hack)
-    {
-        g_mouse_proc = lpfn;
-        return g_mouse_hook = real_SetWindowsHookExA(idHook, mouse_hook_proc, hmod, dwThreadId);
     }
 
     HHOOK result = real_SetWindowsHookExA(idHook, lpfn, hmod, dwThreadId);
@@ -806,27 +773,13 @@ void HandleMessage(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMa
             int x = max(GET_X_LPARAM(lpMsg->lParam) - g_ddraw.mouse.x_adjust, 0);
             int y = max(GET_Y_LPARAM(lpMsg->lParam) - g_ddraw.mouse.y_adjust, 0);
 
-            int mapped = 0;
-
             if (g_config.adjmouse)
             {
-                if (g_config.vhack && !g_config.devmode)
-                {
-                    POINT pt = { 0, 0 };
-                    fake_GetCursorPos(&pt);
-
-                    x = pt.x;
-                    y = pt.y;
-                    mapped = 1;   /* fake_GetCursorPos already answered in game space */
-                }
-                else
-                {
-                    x = (DWORD)(roundf(x * g_ddraw.mouse.unscale_x));
-                    y = (DWORD)(roundf(y * g_ddraw.mouse.unscale_y));
-                }
+                x = (DWORD)(roundf(x * g_ddraw.mouse.unscale_x));
+                y = (DWORD)(roundf(y * g_ddraw.mouse.unscale_y));
             }
 
-            if (!mapped) tagpu_hud_to_engine(&x, &y);    /* see fake_GetCursorPos */
+            tagpu_hud_to_engine(&x, &y);    /* see fake_GetCursorPos */
 
             x = min(x, g_ddraw.width - 1);
             y = min(y, g_ddraw.height - 1);
@@ -861,14 +814,6 @@ BOOL WINAPI fake_GetMessageA(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wM
 
 BOOL WINAPI fake_PeekMessageA(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax, UINT wRemoveMsg)
 {
-    if (g_config.darkcolony_hack && !hWnd)
-    {
-        hWnd = g_ddraw.hwnd;
-
-        MSG msg;
-        real_PeekMessageA(&msg, 0, 0, 0, PM_NOREMOVE);
-    }
-
     if (g_config.limiter_type == LIMIT_PEEKMESSAGE && 
         g_ddraw.ticks_limiter.tick_length > 0 &&
         InterlockedExchange(&g_ddraw.render.screen_updated, FALSE))
@@ -2116,24 +2061,6 @@ HWND WINAPI fake_CreateWindowExA(
 
     dbg_dump_wnd_styles(dwStyle, dwExStyle);
 
-    /* Almost all of the Learning Company Games */
-    if (!dwExStyle &&
-        HIWORD(lpClassName) && _strcmpi(lpClassName, "OMWindowChildClass") == 0 &&
-        !lpWindowName &&
-        dwStyle == (WS_CHILD | WS_CHILDWINDOW | WS_CLIPSIBLINGS) &&
-        !X &&
-        !Y &&
-        g_ddraw.ref && g_ddraw.width && g_ddraw.width == nWidth && g_ddraw.height == nHeight &&
-        g_ddraw.hwnd && hWndParent == g_ddraw.hwnd &&
-        !hMenu &&
-        !g_config.game_section[0])
-    {
-        dwExStyle = WS_EX_TRANSPARENT;
-        g_config.lock_mouse_top_left = TRUE;
-        g_config.adjmouse = FALSE;
-        dd_SetDisplayMode(0, 0, 0, 0);
-    }
-
     /* The American Girls Dress Designer */
     if (HIWORD(lpClassName) && _strcmpi(lpClassName, "AfxFrameOrView42s") == 0 &&
         g_ddraw.ref && g_ddraw.hwnd && hWndParent == g_ddraw.hwnd &&
@@ -2268,9 +2195,7 @@ HWND WINAPI fake_CreateWindowExA(
 
             if (!g_config.windowed && !g_ddraw.bnet_was_fullscreen)
             {
-                int ws = g_config.window_state;
                 util_toggle_fullscreen();
-                g_config.window_state = ws;
                 g_ddraw.bnet_was_fullscreen = TRUE;
             }
 

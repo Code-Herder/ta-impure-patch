@@ -129,17 +129,11 @@ HRESULT dd_EnumDisplayModes(
         TRACE("     max_w=%u, max_h=%u\n", reg_m.dmPelsWidth, reg_m.dmPelsHeight);
     }
 
-    if (g_config.stronghold_hack && max_w && (max_w % 8))
-    {
-        while (--max_w % 8);
-    }
-
-    /* tagpu: put the monitor's own mode in the list without the player editing
-       an ini. It goes through `inject_resolution` because that entry is the one
-       exempt from the CDS_TEST filter below, and it is set HERE rather than at
-       DLL attach because this is where the desktop mode is already known --
-       cfg_load runs under the loader lock and must not touch the display.
-       Does nothing if the player wrote the key (tagpu_cfg.c). */
+    /* tagpu: put the monitor's own mode in the list. It goes through
+       `inject_resolution` because that entry is the one exempt from the
+       CDS_TEST filter below, and it is set HERE rather than at DLL attach
+       because this is where the desktop mode is already known -- cfg_load
+       runs under the loader lock and must not touch the display. */
     tagpu_cfg_inject_native(max_w, max_h);
 
     char* ires = &g_config.inject_resolution[0];
@@ -275,17 +269,10 @@ HRESULT dd_EnumDisplayModes(
                    `util_target_monitor`), so without this the 1280x1024 screen
                    is offered 3840x2160 and the 4K one 6200x2160. The injected
                    entry below is written over `m` AFTER this test and is
-                   therefore exempt, exactly as it is exempt from CDS_TEST --
-                   an explicit `inject_resolution` in the ini stays the
-                   player's to make. */
+                   therefore exempt, exactly as it is exempt from CDS_TEST. */
                 (!max_w || m.dmPelsWidth <= max_w) &&
                 (!max_h || m.dmPelsHeight <= max_h))
             {
-                if (g_config.stronghold_hack && m.dmPelsWidth && (m.dmPelsWidth % 8))
-                {
-                    while (--m.dmPelsWidth % 8);
-                }
-
                 if (!custom_res_injected && custom_width && custom_height)
                 {
                     m.dmPelsWidth = custom_width;
@@ -728,8 +715,6 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
     if (dwBPP != 8 && dwBPP != 16 && dwBPP != 32)
         return DDERR_INVALIDMODE;
 
-    if (g_config.mgs_hack && dwHeight == 480) dwHeight -= 32; /* Remove black bar in Metal Gear Solid */
-
     if (g_ddraw.render.thread)
     {
         EnterCriticalSection(&g_ddraw.cs);
@@ -780,7 +765,7 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
 
     /* temporary fix: center window for games that keep changing their resolution */
     if (g_config.center_window &&
-        (g_ddraw.width || g_config.infantryhack || g_config.center_window == CENTER_WINDOW_ALWAYS) &&
+        (g_ddraw.width || g_config.center_window == CENTER_WINDOW_ALWAYS) &&
         (g_ddraw.width != dwWidth || g_ddraw.height != dwHeight) &&
         (
             dwWidth > g_config.window_rect.right ||
@@ -1198,16 +1183,50 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
         }
         else if (g_config.window_rect.left != -32000 && g_config.window_rect.top != -32000)
         {
-            /* tagpu: A SAVED FRAME ON NO MONITOR IS RE-CENTRED. impure.cfg keeps
-               the windowed frame across launches, and the screen it was on may
-               be unplugged since; restoring it there would put the game where
-               the player cannot see it. */
+            /* tagpu: A PLACED WINDOW WITH A CORNER ON NO MONITOR IS MOVED ONTO ONE.
+               A placed frame is never re-centred (center_window NEVER,
+               tagpu_cfg.c), so it keeps its origin while the mode grows under it
+               -- the 640x480 shell dragged to a corner becomes a 1600x900 game
+               hanging past the edge -- and impure.cfg keeps it across launches,
+               when its screen may be unplugged since. A client corner on no
+               monitor means part of the game is where the player cannot see it;
+               the window, decoration included, then moves the least distance
+               that puts it in the WORK AREA of the monitor it overlaps most,
+               its top-left kept in view if it is the larger, so the title bar
+               stays reachable. A client straddling two monitors, as tacli's
+               tiles may, has every corner on one and stays. */
             RECT r = { x, y, x + (LONG)g_ddraw.render.width, y + (LONG)g_ddraw.render.height };
+            POINT corner[4] = { { r.left, r.top }, { r.right - 1, r.top },
+                                { r.left, r.bottom - 1 }, { r.right - 1, r.bottom - 1 } };
+            MONITORINFO mi = { sizeof(mi) };
+            int i, off = 0;
 
-            if (!MonitorFromRect(&r, MONITOR_DEFAULTTONULL))
+            for (i = 0; i < 4; i++)
+                off |= !MonitorFromPoint(corner[i], MONITOR_DEFAULTTONULL);
+
+            if (off && GetMonitorInfoA(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi))
             {
-                x = (cy / 2) - (g_ddraw.render.width / 2);
-                y = (cx / 2) - (g_ddraw.render.height / 2);
+                RECT f = r, placed;
+
+                AdjustWindowRectEx(&f, real_GetWindowLongA(g_ddraw.hwnd, GWL_STYLE),
+                                   GetMenu(g_ddraw.hwnd) != NULL,
+                                   real_GetWindowLongA(g_ddraw.hwnd, GWL_EXSTYLE));
+                placed = f;
+
+                if (f.right > mi.rcWork.right)
+                    OffsetRect(&f, mi.rcWork.right - f.right, 0);
+                if (f.bottom > mi.rcWork.bottom)
+                    OffsetRect(&f, 0, mi.rcWork.bottom - f.bottom);
+                if (f.left < mi.rcWork.left)
+                    OffsetRect(&f, mi.rcWork.left - f.left, 0);
+                if (f.top < mi.rcWork.top)
+                    OffsetRect(&f, 0, mi.rcWork.top - f.top);
+
+                /* the client moves with its frame */
+                x += f.left - placed.left;
+                y += f.top - placed.top;
+                g_config.window_rect.left = x;
+                g_config.window_rect.top = y;
             }
         }
         else if (border && g_config.window_rect.top == -32000 && y < 0)
@@ -1381,7 +1400,7 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
         SetThreadPriority(g_ddraw.render.thread, THREAD_PRIORITY_ABOVE_NORMAL);
     }
 
-    if ((dwFlags & SDM_MODE_SET_BY_GAME) && !g_config.infantryhack)
+    if (dwFlags & SDM_MODE_SET_BY_GAME)
     {
         real_SendMessageA(g_ddraw.hwnd, WM_SIZE_DDRAW, 0, MAKELPARAM(g_ddraw.width, g_ddraw.height));
         real_SendMessageA(g_ddraw.hwnd, WM_DISPLAYCHANGE_DDRAW, g_ddraw.bpp, MAKELPARAM(g_ddraw.width, g_ddraw.height));
@@ -1471,93 +1490,13 @@ HRESULT dd_SetCooperativeLevel(HWND hwnd, DWORD dwFlags)
 
         GetWindowText(g_ddraw.hwnd, (LPTSTR)&g_ddraw.title, sizeof(g_ddraw.title));
 
-        g_ddraw.isredalert = strcmp(g_ddraw.title, "Red Alert") == 0;
-        g_ddraw.iscnc1 = strcmp(g_ddraw.title, "Command & Conquer") == 0;
         g_ddraw.iskkndx = strcmp(g_ddraw.title, "KKND Xtreme") == 0;
-        g_ddraw.isworms2 = strcmp(g_ddraw.title, "worms2") == 0;
 
         /* Name the tree this DLL came from in the title bar, AFTER the game
          * detection above and the g_ddraw.title copy it reads: the suffix must
-         * not reach those strcmps, nor screenshot.c's filenames. Passing the
+         * not reach that strcmp, nor screenshot.c's filenames. Passing the
          * pristine copy as the base also keeps repeat calls from stacking it. */
         tagpu_title_apply(g_ddraw.hwnd, g_ddraw.title);
-
-        if (g_ddraw.iskkndx)
-        {
-            g_ddraw.upscale_hack_width = 640;
-            g_ddraw.upscale_hack_height = 480;
-        }
-        else if (g_ddraw.isredalert || g_ddraw.iscnc1)
-        {
-            g_ddraw.upscale_hack_width = 640;
-            g_ddraw.upscale_hack_height = 400;
-        }
-        else if (g_ddraw.isworms2)
-        {
-            if (memcmp((char*)GetModuleHandleA(NULL) + 0x00010000, "\x17\x81\xC2\x00\x80\x00\x00\x89", 8) != 0)
-            {
-                g_ddraw.isworms2 = FALSE;
-            }
-            else
-            {
-                g_ddraw.upscale_hack_width = 80;
-                g_ddraw.upscale_hack_height = 60;
-            }
-        }
-
-        if (g_config.vhack && !g_ddraw.isredalert && !g_ddraw.iscnc1 && !g_ddraw.iskkndx && !g_ddraw.isworms2)
-        {
-            g_config.vhack = 0;
-        }
-    }
-
-    /* Infantry Online Zone List Window */
-    if (g_config.infantryhack)
-    {
-        static BOOL windowed, fullscreen, devmode;
-
-        if (dwFlags & DDSCL_FULLSCREEN)
-        {
-            g_config.windowed = windowed;
-            g_config.fullscreen = fullscreen;
-            g_config.devmode = devmode;
-        }
-        else if (dwFlags & DDSCL_NOWINDOWCHANGES)
-        {
-            windowed = g_config.windowed;
-            fullscreen = g_config.fullscreen;
-            devmode = g_config.devmode;
-
-            if (GetMenu(g_ddraw.hwnd) != NULL)
-            {
-                g_config.windowed = TRUE;
-                g_config.fullscreen = FALSE;
-                g_config.devmode = TRUE;
-
-                /*
-                if (!g_config.window_rect.right && g_config.window_rect.left == -32000)
-                {
-                    if (real_GetSystemMetrics(SM_CYSCREEN) >= 2160)
-                    {
-                        g_config.window_rect.right = 640 * 3;
-                        g_config.window_rect.bottom = 480 * 3;
-                    }
-                    else if (real_GetSystemMetrics(SM_CYSCREEN) >= 1440)
-                    {
-                        g_config.window_rect.right = 640 * 2;
-                        g_config.window_rect.bottom = 480 * 2;
-                    }
-                    else if (real_GetSystemMetrics(SM_CYSCREEN) >= 1080)
-                    {
-                        g_config.window_rect.right = (LONG)(640 * 1.5f);
-                        g_config.window_rect.bottom = (LONG)(480 * 1.5f);
-                    }
-                }
-                */
-            }
-
-            dd_SetDisplayMode(640, 480, 16, SDM_MODE_SET_BY_GAME);
-        }
     }
 
     if ((dwFlags & DDSCL_NORMAL) && !(dwFlags & DDSCL_FULLSCREEN))
@@ -1765,7 +1704,7 @@ HRESULT dd_TestCooperativeLevel()
         util_limit_game_ticks();
     }
 
-    return g_config.tlc_hack ? DDERR_NOEXCLUSIVEMODE : DD_OK;
+    return DD_OK;
 }
 
 HRESULT dd_GetDeviceIdentifier(LPDDDEVICEIDENTIFIER pDDDI, DWORD dwFlags, REFIID riid)
@@ -1872,11 +1811,11 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
             TRACE("     proc_affinity=%08X, system_affinity=%08X\n", proc_affinity, system_affinity);
         }
 
-        if (tolower(g_config.renderer[0]) == 's' || tolower(g_config.renderer[0]) == 'g') /* gdi */
+        if (g_config.gdi) /* the tagpu_gdi.on lever (tagpu_cfg.h) */
         {
             g_ddraw.renderer = gdi_render_main;
         }
-        else if (tolower(g_config.renderer[0]) == 'v') /* vulkan */
+        else
         {
             /* NOTHING IS PROBED HERE. Loading an ICD is what `vkCreateInstance` does and it must not
                happen on this path: this runs from the engine's DirectDraw
@@ -1885,17 +1824,6 @@ HRESULT dd_CreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnknown* pUnkOute
                bring-up is the render thread's own and `vk_render_main` hands
                the session to GDI if it fails -- which route F measured as
                still reaching the screen. See render_vk.c. */
-            g_ddraw.renderer = vk_render_main;
-        }
-        else /* auto, and any value this switch does not name */
-        {
-            /* The Vulkan lane, probed by nothing here for the reason the 'v'
-               arm gives. A value that is not a renderer is logged rather than
-               refused: the game still starts, on the default. */
-            if (_strcmpi(g_config.renderer, "auto") != 0) {
-                tagpu_logf("ddraw: renderer=%s is not a renderer (auto, vulkan, gdi) -- using vulkan",
-                           g_config.renderer);
-            }
             g_ddraw.renderer = vk_render_main;
         }
 

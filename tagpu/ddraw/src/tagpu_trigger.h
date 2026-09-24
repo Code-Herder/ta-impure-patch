@@ -23,7 +23,7 @@
    They hang off the engine's own flip (`0x4C63A0`, observed by
    tagpu_gui_hook.c), which every renderer reaches, on the GAME thread -- not
    off a renderer's present: `render_gdi.c` contains no `tagpu_` call at all,
-   and `renderer=gdi` is this project's stock reference, so hung off a present
+   and the GDI backend is this project's stock reference, so hung off a present
    none of them would run there, `tacli ui` would return "no UI snapshot
    appeared" and the shell could not be driven past the main menu.
 

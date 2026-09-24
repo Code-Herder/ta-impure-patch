@@ -108,8 +108,8 @@ static const unsigned char BFX_STOLEN[6]  = { 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x0C
    A `74 rel8` -> `EB rel8` flip would make the engine take its "no cached
    slant shadow" path unconditionally, for the whole process, from `DllMain`
    onwards. That would be the ONE suppression in this file with no runtime
-   gate to be inert through, and it would make `renderer=gdi` not stock:
-   `tagpu_owndraw_init` runs whatever `renderer=` says, `tagpu_owndraw.on` is a
+   gate to be inert through, and it would make the GDI backend not stock:
+   `tagpu_owndraw_init` runs whatever the backend, `tagpu_owndraw.on` is a
    play default, and on a lane where `tagpu_overlay_draw` is never called --
    `render_gdi.c` contains no `tagpu_` call at all -- nothing of ours ever
    draws the shadow the flip took away. Every OTHER suppression here already
@@ -419,9 +419,9 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
 
        THE ENGINE'S COPY IS NOT A FALLBACK ON EVERY LANE. Measured on
        `one-unit`, 2026-09-19: `OWND target=all skipped=0 passed=55991`, and
-       the detours are armed on gdi too. On `renderer=gdi` that engine copy
+       the detours are armed on gdi too. On the GDI backend that engine copy
        REACHES THE PLAYER: the window capture and `tacli shot` are the same
-       picture. On `renderer=vulkan` it does not -- the commander is on TA's
+       picture. On the Vulkan backend it does not -- the commander is on TA's
        own surface in colour and absent from the presented frame, with our
        unit pass disarmed and with our terrain pass disarmed as well, so
        nothing of ours is covering it. The loss is in the Vulkan composite
@@ -437,7 +437,7 @@ int __cdecl tagpu_owndraw_classify(unsigned int obj3do, unsigned int frame)
         if (!said && tagpu_posedraw_refused()) {
             said = 1;
             olog2("owndraw: the posed unit program REFUSED to arm. "
-                  "On renderer=gdi that means units are drawn by the engine at 8bpp; on renderer=vulkan "
+                  "On the GDI backend that means units are drawn by the engine at 8bpp; on the Vulkan backend "
                   "the engine's copy does not currently reach the presented frame, "
                   "so expect NO units rather than 8bpp ones. The posedraw: line "
                   "above says why the program refused.");

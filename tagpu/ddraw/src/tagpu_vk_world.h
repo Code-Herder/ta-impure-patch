@@ -19,7 +19,7 @@
                and this device offers no wideLines at all - nothing drawn
                while there are line vertices
 
-   MEASURED ON THE LANE 2026-09-18, in a live game on `renderer=vulkan` with
+   MEASURED ON THE LANE 2026-09-18, in a live game on the Vulkan backend with
    `fx.on` and no ss target. The census read `fx=1` on frames without lasers
    and the pass dropped every frame with one. That is what "ss=2 has no
    target" actually costs, and it is why the device is also asked for

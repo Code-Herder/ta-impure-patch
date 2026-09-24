@@ -346,7 +346,7 @@ static void do_keys(HWND hwnd)
    tagpu_zoom_frame_end() calls — and that runs only inside tagpu_overlay_draw,
    i.e. only on the lanes that draw the overlay. Moving the poll to the game
    thread would make all four cross-thread to serve a consumer that is not on
-   the other side, and on renderer=gdi it would deliver nothing either way:
+   the other side, and on the GDI backend it would deliver nothing either way:
    tagpu_cmd_post() is never reached there, so the hold could not be applied
    even if it were read. Same thread as its only readers is the invariant. */
 static int s_eyeHold = 0;
@@ -417,7 +417,7 @@ void tagpu_input_cmd(TAGPU_CMD* rec)
    This is `tacli keys` and `tacli click`: the token file, the shield's held
    modifiers, the injected pointer. It touches no packet and no engine memory,
    so it can run wherever the family runs — and it has to run from the flip,
-   because tagpu_overlay_draw is never reached on renderer=gdi and that lane
+   because tagpu_overlay_draw is never reached on the GDI backend and that lane
    has to be drivable too.
 
    NOTHING HERE REENTERS THE ENGINE. Every injection leaves by PostMessageA (a

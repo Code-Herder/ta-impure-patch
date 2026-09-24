@@ -3,7 +3,7 @@
 #include "tagpu.h"
 /* Draw our GPU overlay for this frame. Called from the render thread, once per
    present, from render_vk.c -- its only caller: render_gdi.c makes no tagpu_
-   call at all, so on `renderer=gdi` this function is never entered. Compiled
+   call at all, so on the GDI backend this function is never entered. Compiled
    into the fork -- no separate DLL, no runtime LoadLibrary. */
 void tagpu_overlay_draw(const TAGPU_FRAME* f);
 

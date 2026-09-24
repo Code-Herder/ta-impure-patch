@@ -584,7 +584,7 @@ up to 64 MB past the tile set. That read is the fault.
   edge of **any** map the eye is then negative: in `(−32, 0)` just past the edge, and down to
   −448 × −254 at zoom 2 at 1920×1080. The engine's pass sees that eye on every draw it runs while
   zoomed in: every draw with `terrown.off`, a level's first draws before terrown latches the
-  ground when the zoom is already above 1, and every draw under `renderer=gdi`, where none of our
+  ground when the zoom is already above 1, and every draw on the GDI backend, where none of our
   passes draws [INFERRED, not run].
 
 MEASURED, each on the first in-play draw of a scenario load with the shipped play set (`--defaults`)
@@ -6209,6 +6209,17 @@ Mapped 2026-09-06 to close the render thread's use-after-free on a dying unit's 
 ([Thread-safe destruction](thread-safe-destruction.html)). Everything here is **[VERIFIED]** by
 disassembly of the retail exe unless marked `[INFERRED]`; the fork's `tagpu_reclaim.c` patches
 exactly two of these addresses (`0x45AAA0`, `0x491B60`) and reads none of the others at runtime.
+
+### `0x4B5330` — the display-mode callback, and why `max_resolutions` is bounded [DISASSEMBLED 2026-09-24]
+
+`stdcall(DDSURFACEDESC* desc, list* ctx)`, `ret 8`, handed to `EnumDisplayModes` by `0x4B5370`
+(`call [vt+0x20]` at `0x4B54EB`). Its **only filter** is `desc+0x54 == 8` (the pixel format's
+bit count); a match writes `{+0x0C width, +0x08 height, +0x18 refresh}` at `modes + count*12`
+(`lea ecx,[ecx+ecx*2]` / `lea ecx,[edx+ecx*4]`) and increments `*ctx` — **with no bounds check**
+against the `"DISPLAY MODES"` allocation, `0x4B0` bytes = 100 entries. It always returns 1
+(`DDENUMRET_OK`). So the fork's mode list must never offer more than 100 descriptors: this DLL
+sets `max_resolutions` 90 in code (`tagpu_cfg.c`, a static assert against 100), since cnc-ddraw's
+default of 0 means no cap. The list object and the windowed path: [resolution](resolution.html) §6.
 
 ### `0x4866D0` — the unit destructor `[INFERRED name: UNITS_Destroy]`
 

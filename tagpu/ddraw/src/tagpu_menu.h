@@ -62,7 +62,7 @@ BOOL tagpu_menu_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESU
 
 /* The monitor the Monitor row has selected, as a desktop rect. FALSE means
    nobody has chosen one yet -- the screen has never been opened -- and the
-   caller falls back to the monitor the window is on (`util_target_monitor`).
+   caller falls back to `util_default_monitor` (`util_target_monitor`).
 
    The resolution list is built from this rather than from where the window
    actually is, because the two disagree for exactly as long as it matters: the
