@@ -85,7 +85,7 @@ void tagpu_packet_pub_font_snapshot(void);
 void tagpu_packet_pub_level_end(unsigned level_gen);
 /* GAME THREAD. The publisher's own in-play draw counter — the number of draws
    it has seen through the 0x4969D2 gate. A game-thread observer that runs
-   INSIDE the draw stamps it, and `fill_fog` (which runs in the same draw's
+   INSIDE the draw stamps it, and `fog_sources` (which runs in the same draw's
    `after`) compares: a stamp that is not this draw's means that observer did
    not run, which is how the publisher tells "this is current" from "this is
    whatever was there when I last owned the site". Nothing else may use it as a
