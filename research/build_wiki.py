@@ -440,6 +440,36 @@ JS = r"""
   if(scrim) scrim.addEventListener('click',function(){ setDrawer(false); });
   document.addEventListener('keydown',function(e){ if(e.key==='Escape') setDrawer(false); });
   if(side) side.addEventListener('click',function(e){ if(e.target.closest('a')) setDrawer(false); });
+
+  /* ---- the sidebar keeps its scroll position from page to page ----
+     Each page is a fresh document, so the sidebar would open at the top. Its scrollTop is kept
+     per tab in sessionStorage; a tab's first page centres its own entry instead. Web fonts can
+     move the entries after this runs, so the position is set again once they load, unless the
+     reader has scrolled the sidebar by then -- or the browser has: Back and Forward restore a
+     page's sidebar as that page left it, which is the browser's own rule and is kept. */
+  if(side){
+    var NAVKEY='tawiki-navscroll', saved=null;
+    try{ var v=sessionStorage.getItem(NAVKEY); if(v!==null) saved=+v; }catch(e){}
+    var target=function(){
+      if(saved!==null) return saved;
+      var cur=side.querySelector('.nav a.current');
+      return cur ? side.scrollTop+cur.getBoundingClientRect().top-side.getBoundingClientRect().top
+                   -(side.clientHeight-cur.offsetHeight)/2 : null;
+    };
+    var want=target();
+    if(want!==null){
+      side.scrollTop=want;
+      var placed=side.scrollTop;
+      if(document.fonts&&document.fonts.ready) document.fonts.ready.then(function(){
+        var again=target();
+        if(side.scrollTop===placed&&again!==null) side.scrollTop=again;
+      });
+    }
+    var keep=function(){ try{ sessionStorage.setItem(NAVKEY,String(side.scrollTop)); }catch(e){} };
+    addEventListener('pagehide',keep);
+    side.addEventListener('click',function(e){ if(e.target.closest('a')) keep(); });
+  }
+
   var btn=document.getElementById('themebtn');
   if(btn) btn.addEventListener('click',function(){
     var cur=root.getAttribute('data-theme');
