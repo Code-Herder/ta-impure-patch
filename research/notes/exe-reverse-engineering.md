@@ -1103,11 +1103,24 @@ calls `0x4648E0`. `0x464700` frees the block's old buffer (`0x464855`, `0x4B4F20
 rounded size at `+0x88`), stores the pointer at `+0x7C` (`0x46487B`) and zeroes it (`rep stos`
 at `0x46488F`). The image holds one direct call of each (`0x4919C8` for `0x464990`, `0x4649B1`
 for `0x464700`) and no other reference to either address; a call through a table or a register
-is not excluded by that search. So the local player's counters, which the builder `0x4843C0` and
-`tagpu_fogwide` read (`0x4843F0`, the block at `main+0x1B63+id*0x14B+0x7C`), are the level's, like
-MAPPED (`0x483CF6`, freed by the map-free routine): the in-play draws fall between their
-allocation and the next load or teardown. `tagpu_fogwide` reads them from inside every in-play
-draw, at the fog site or in the publisher's `after` (gpu-status §2.3e).
+is not excluded by that search.
+
+**The LOS counters and MAPPED end at different points** [DISASSEMBLED 2026-09-24, the pristine
+build]. MAPPED (`main+0x14273`) is allocated at `0x483CF6` in `LoadMap` and freed at `0x483E70`
+(`0x4D85A0` on `[main+0x14273]`) by the map-free routine `0x483DD0`, inside the teardown. The
+teardown does **not** free the LOS counters: the block is freed by `0x464700` itself at
+`0x464855`, at the next level's load, and by the player record's destructor. The constructor
+`0x463BE0` zeroes `[this]`, `+0x73`, `+0x80`/`+0x84`/`+0x88` and `+0x7C`, and allocates `0xB9`
+bytes into `+0x27` (zeroed with `rep stos`); it is called at `0x41D98B`, a loop of eleven (`ebx =
+0xB`) over the records from `main+0x1B63` at stride `0x14B`, and at `0x454436` on a stack-local
+record at `[esp+0x2E0]`. The destructor `0x463C40` frees `[this+0x27]` and `[this+0x7C]` through
+`0x4B4F20` and nulls neither; its two calls, `0x454538` and `0x454607`, destroy that stack-local
+record, whose `+0x7C` the constructor zeroed and `0x464700` (whose one caller walks `main`'s
+records) never fills. So the local player's counters, which the builder `0x4843C0` and
+`tagpu_fogwide` read (`0x4843F0`, the block at `main+0x1B63+id*0x14B+0x7C`), live from one level's
+load to the next, and MAPPED from the map load to the teardown: every in-play draw falls inside
+both. `tagpu_fogwide` reads them from inside every in-play draw, at the fog site or, on the
+Vulkan renderer, in the publisher's `after` (gpu-status §2.3e).
 
 #### Who enters `0x491B60`, and on which thread
 

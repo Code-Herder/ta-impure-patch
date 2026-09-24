@@ -60,9 +60,9 @@ they save the engine's CPU); `hud.on` changes the look of every screen and is th
 requirement**: the play defaults and the play defaults plus `tagpu_terrown.off` render the same
 picture (`build-facing` at 1024x768: 0.03 % exactly-black viewport and 8898 distinct colours
 either way), and with it off `tacli shot` has terrain again. **`tacli arm <i> terrown.off` is the
-arm for a reference-quality capture.** What it costs is the **zoomed-out fog**, not the picture:
-`tagpu_fogwide`'s tick runs inside `terrown`'s fog-overlay detour and only while the skip is set,
-so a zoomed-out frame falls back to the engine's 1x grid.
+arm for a reference-quality capture.** It keeps the **zoomed-out fog**: without `terrown`'s
+fog-overlay detour the packet's publisher ticks `tagpu_fogwide` in the draw's `after`, so a
+zoomed-out frame still has the wide grid (`fog=wide`, `bare=0`).
 
 ## The world passes
 

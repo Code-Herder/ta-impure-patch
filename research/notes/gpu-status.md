@@ -958,19 +958,33 @@ gestures, so the lead adds ~50 µs of game-thread time a second at 1080p. The un
 rect and the anchor rect are the fog reach, which holds the wide grid's span, so both grow with the
 lead; the anchor rect's margin is 16 cells past the reach.
 
-**The wide grid is built on every tracked in-play draw**, whoever owns the fog site.
-`terr_fogtick` ticks it at the engine's fog call `0x469D8E` on a draw latched to our terrain;
-on any other draw the engine's own `0x4848E0` runs there, and the publisher ticks the grid in
-that draw's `after` (`wide_tick`), before the fill copies it, telling it `rebuilt` when the
-engine grid was not current as the draw began (bit 3 clear at the apply, which the engine's
-fog function, run on every in-play draw, then rebuilds). The maps it reads are the level's: the
-local player's LOS counters are (re)allocated only by `0x464700`, called for each active player by
-`0x464990` at `0x4919C8` inside the level load `LoadGameData_Main 0x4917D0`, and MAPPED is
-allocated in the map load and freed by the map-free routine in the teardown cascade; the `after`
-runs between the two, on the thread that runs the teardown. The draws without our site are a
-level's first ones, until our terrain pass has gathered a frame and the game thread has latched
-its request (the rect widens only on the request, `tagpu_zoom_apply`), and every draw under
-`terr.on=off` or `passive`. MEASURED 2026-09-24 at 1920×1080 on Xvfb with the play set, Two
+**The wide grid is built on every tracked in-play draw of a Vulkan session**, whoever owns the
+fog site. `terr_fogtick` ticks it at the engine's fog call `0x469D8E` on a draw latched to our
+terrain; on any other draw the engine's own `0x4848E0` runs there, and the publisher ticks the
+grid in that draw's `after` (`wide_tick`), before the fill copies it, telling it `rebuilt` when
+the LOS state moved in the draw: bit 3 clear at the apply (the engine grid was not current as
+the draw began; the engine's fog function, run on every in-play draw, then rebuilds), or set at
+the apply and clear at the draw's end (a stamp inside the draw, `recodd`). The maps it reads
+outlive every in-play draw, and they end at different points: MAPPED is allocated in the map
+load (`0x483CF6`) and freed at `0x483E70` by the map-free routine in the teardown cascade; the
+local player's LOS counters are allocated by `0x464700`, called for each active player by
+`0x464990` at `0x4919C8` inside the level load `LoadGameData_Main 0x4917D0`, and freed by that
+same `0x464700` at the next level's load — the teardown leaves them ([engine map](exe-reverse-engineering.html)
+§"The two routines that bracket a level"). The `after` runs after the load and before the
+teardown, on the thread that runs the teardown. The draws without our site are a level's first
+ones, until our terrain pass has gathered a frame and the game thread has latched its request
+(the rect widens only on the request, `tagpu_zoom_apply`); every draw under `terr.on=off` or
+`passive`; every draw of a session without `tagpu_terrown` (`terrown.off`); and every draw on
+the GDI lane. On the GDI lane nothing reads the wide grid, so nothing builds it: `wide_tick`
+runs only while the session's renderer is Vulkan (`g_ddraw.renderer`, stored on the game thread
+at DirectDraw creation before the first draw and moved later only by the Vulkan backend's
+hand-over to GDI). That is a property of the session, not the per-frame zoom gate the tick rules
+out (`tagpu_fogwide.c`: a producer gated on the level the render thread publishes builds one
+frame late at the start of every zoom-out). MEASURED 2026-09-24 on `big-battle` at 1920×1080 on
+Xvfb with the play set and `tagpu_gdi.on`: the build before allocated the 273×164 grid (87 KB)
+and ticked it on every draw (3 086 ticks in its first five-second heartbeat); this one logs no `fogwide:`
+line. With `terrown.off` on the Vulkan lane, Two Continents six notches out (0.456): `fog=wide`,
+`bare`, `out`, `back`, `nopieces` 0, the grid rebuilt 29.7 times a second. MEASURED 2026-09-24 at 1920×1080 on Xvfb with the play set, Two
 Continents zoomed out six notches (0.456), the level ended through the menu (EXITMENU →
 MAINMENU) and a skirmish started, the zoom still below 1 (the second level's heartbeat reads
 `fog=wide`): before, `bare=17 out=17` on the second level; with only the presented-frame rule
@@ -999,9 +1013,18 @@ stage, `trunc=0 refill=2`. **Past the reserve** (a diagnostic build with a 512 K
 not committed, `big-battle`): with the loop that stopped on `slot_commit`'s answer, one frame
 refused by the consumer (`viol=1`, `cap_bytes != the slot's capacity`); with the loop that stops
 on what it committed, `viol=0`, every publish past the reserve counted (`trunc=432`), the units
-kept (`units=948`) and the fog grids the layer cut. `big-battle` under
+kept (`units=948`) and the fog grids the layer cut, so 247 frames were drawn bare. **The fog grids
+and the shade table now go down ahead of the world tables**, the reserve holding them at the
+design point, so an overflow cuts what follows: at the same 512 KB, which cannot hold the grids
+and `big-battle`'s world tables together (about 600 KB), both grids are carried and `bare=0`, and
+the unit table is what is cut; at 640 KB, which holds those but not the whole fill (683 KB), the
+grids and every world table are carried (`units=959 pieces=14254 wrecks=13`), the cut lands on
+the light layer and the minimap (`truncated = 0x8800`, 428 publishes), and `bare=0 viol=0`. Re-run
+on that build: `big-battle` `bare=0 out=0 back=0 nopieces=0`, `trunc=0 refill=4`; Two Continents
+0 on every stage; the second level below 1× 0; `big-battle` under
 `check` + `stress`, where every in-play draw publishes into one-page slots that must grow:
-`trunc=0 refill=12 grow=43 viol=0 pviol=0 crcbad=0`. Merged with main's full-colour Classic and run on the reference
+`trunc=0 refill=12 grow=43 viol=0 pviol=0 crcbad=0` (after the fill order, `trunc=0 refill=5
+viol=0 pviol=0 crcbad=0`). Merged with main's full-colour Classic and run on the reference
 setup's GPU at 1024x768, the world A/B with the eye pinned (terrain at 1×, 2× and 0.5×, units at
 1× and 2×) read main's own build's md5 on all five captures, main, this branch and main again on
 one instance.
@@ -2006,7 +2029,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | the **pose history** (`tagpu_lerp.c`, `tagpu_lerp.on`) | not an engine field — our own arena, 3.4 MB of `P_POS`/`P_TURN` snapshots keyed by `(Object3do, nparts, level generation)`. **It READS `pr+P_POS` and `pr+P_TURN` and writes NOTHING back**, which is the whole safety argument: the sim reads those fields (`get PIECE_XZ`, and `QueryPrimary`/`AimFromPrimary` hand the engine weapon muzzle origins out of them) and TA has no runtime desync detection, so a framerate-dependent per-machine blend written there would diverge two machines silently. Verified by running it: the walker's COB trace is byte-identical with the lever on and off ([smooth motion](smooth-motion.html) §7g) |
 | `node+0x24` | the model's REST vertices, `count × 12` bytes of 16.16. Read only. Shared by every unit of a type and never written after load, which is what makes the reconstruction in §2.9 safe to build from while the engine is rewriting the posed copy |
 | `main+0x1421F` | the screen fog grid `{u16* buf; cols; rows; cells}`. Read only, per frame on the render thread. **Its last column and last row are short their outer corners** — the map cell that would supply them is past the builder's loop — so a sampler that clamps a world point into that cell reads *no fog*, not the border cell; `taFog` clamps to `uFogDim − 1.0`, one whole cell short, and the grid's own overshoot of the viewport — at least 1 px on every side for every viewport size the allocation accepts and every eye, 16 px for a negative one — is what makes that a no-op at 1× (terrain-depth §8a). **`cells` is the ALLOCATION**, `(cols*rows + 7) & ~7` — asserting `cells == cols*rows` accepted 1024×768 and refused 1920×1080, where the refusal cleared `fogMode` and there was no fog at all until 2026-09-09 ([terrain & depth](terrain-depth.html) §5.2). **The dimensions are one cell per 32 px of the 1× viewport plus two**, whatever the zoom: MEASURED by `tacli peek` through this descriptor, **118 × 68** for the 3712 × 2096 viewport of a 3840×2160 screen (`cells` 8024, exactly the product) and **78 × 45** for the 2432 × 1376 of a 2560×1440 one (`cells` 3512 against a product of 3510 — the round-up, and the case that refused). The `cols`/`rows` sanity bound in `tagpu_native.c` is 1024, not 256: at that rate 256 is a viewport 8128 px wide, which made the bound a screen limit standing in front of the real test |
-| `main+0x2A43`, `main+0x1B63 + id*0x14B + 0x7C`, `main+0x14273`, `main+0x14233`/`+0x14237` | the LOCAL player id, that player's LOS counter block `{u8* buf; w; h}`, the MAPPED bitmap (u16 per tile, one bit per player, row stride `PLOT_C` **bytes**) and the PLOT dimensions. Read only, **on the GAME THREAD** from `tagpu_fogwide.c`, inside an in-play draw — at the fog overlay's own call site when it is ours, else in the publisher's `after` of the same draw (§2.3e). The lifetime argument is the level's: the LOS counters are (re)allocated only by `0x464700` in the level load (`0x464990` at `0x4919C8`), MAPPED is allocated in the map load and freed in the teardown cascade, and an in-play draw runs between the two on the teardown's own thread. Every index is bounded by the dimensions read alongside them |
+| `main+0x2A43`, `main+0x1B63 + id*0x14B + 0x7C`, `main+0x14273`, `main+0x14233`/`+0x14237` | the LOCAL player id, that player's LOS counter block `{u8* buf; w; h}`, the MAPPED bitmap (u16 per tile, one bit per player, row stride `PLOT_C` **bytes**) and the PLOT dimensions. Read only, **on the GAME THREAD** from `tagpu_fogwide.c`, inside an in-play draw — at the fog overlay's own call site when it is ours, else, on the Vulkan renderer, in the publisher's `after` of the same draw (§2.3e). The lifetime argument is the level's, and the two maps end at different points: the LOS counters are allocated by `0x464700` in the level load (`0x464990` at `0x4919C8`) and freed by it at the next load, the teardown leaving them; MAPPED is allocated in the map load and freed at `0x483E70` in the teardown cascade. An in-play draw runs after the load and before the teardown, on the teardown's own thread. Every index is bounded by the dimensions read alongside them |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). **Read on the GAME THREAD by the frame packet's publisher and consumed from the packet's copy (`pk->gfx_opt`)** — the render thread does not reach across for it, and `damagebars` (bit0) has come out of the same byte the same way since landing 3. Per frame. The Classic silhouette needs both bits, the slant only bit2, and §2.83 is the pass that reads them today. **One switch moves three bits**: the stock `BSHADOWS` click set bit2, bit3 and bit4 (FShadow) together (`0x45E1CB`), and the menu's Shadows row, which replaces it, does the same (§2.12). G14i's claim that bit2 also gates the Classic++ shadow map is dead with the map: `shadows=1` has no producer (§2.83) |
 | `main+0x37F2F` bit2 | `SelBoxes` |
@@ -3172,7 +3195,11 @@ slot's) and is filled once more at it, which is the last fill. It is bounded bec
 that fills again has grown the slot by at least its grain (64 KB, one page under `stress`) and the
 reserve ends it. A frame is published cut only when the slot cannot grow to it, a failed commit
 or a fill past the reserve, and that is `trunc`; past the reserve the fill runs at the whole
-reserve, so the world tables laid down first are kept and what is cut is what follows them. The
+reserve, and what is cut is what the fill lays down last. The fog grids and the shade table go
+down first and the world tables straight after them, which the reserve holds at the design
+point (§2.86), so an overflow reaches the build orders, the effects, the UI's render half and the
+font — a frame without its fog grids would be drawn bare, and one without its unit tables drops
+its whole unit hand-over. The
 publisher's counters count the fill that is published, once per publish: a fill done again takes
 back what the one before it counted (`PK_FILL_COUNTS`), and a cache reuse in a refill is not
 counted. Neither side ever waits. Every violation is counted, logged rate-limited, never
@@ -16550,7 +16577,7 @@ unit's uniform block carries three base indices into it (`uRowBase`, `uFlagBase`
 | packet builds table | 2 048 | 6 144 | game | asserted ≥ `MAXORD` |
 | bake caches `PB_MAXGEOM` / `PB_MAXMAT` | 128 / 256 | 512 / 1 024 | render | an entry evicted mid-frame refuses the frame, so they hold one 10-player frame (a geometry entry is a model: wrecks and ghosts take their own); entries are allocated on bake |
 | Vulkan vertex-buffer table `VB_MAX` | 512 | the bake caches' sum (1 536), with a validated direct-mapped hint in front of the scan | render | the scan ran four times a unit a frame over the whole table |
-| packet slot reserve `PK_RESERVE` | 8 MB | 20 MB | game commits, render reads | asserted ≥ the unit-scaled tables at the design point, units at 36 pieces a model and the wreck table at stock's worst wreck model, 19 pieces (19.6 MB); address space, committed as used — five slots of it in a 32-bit process whose largest free block an instance's `vk: VA` line has logged as low as 43.6 MB |
+| packet slot reserve `PK_RESERVE` | 8 MB | 20 MB | game commits, render reads | asserted ≥ the unit-scaled tables at the design point, units at 36 pieces a model and the wreck table at stock's worst wreck model, 19 pieces (19.6 MB), plus a 512 KB allowance for the fog grids and the shade table the publisher lays down ahead of them (359 KB on a 3840×2160 screen); address space, committed as used — five slots of it in a 32-bit process whose largest free block an instance's `vk: VA` line has logged as low as 43.6 MB |
 | packet wreck table `TAGPU_PK_MAX_WRECKS` | 4 096 | the wreck pool, `TAGPU_LIM_WRECKS` (8 192; 2 048 in the stock build) | game | a wreck in the table is a cell's record and a record belongs to one cell, so the table cannot truncate |
 | packet `n_units` / `n_wrecks` | unchecked against the tables | validated at acquire | render | the render arrays are sized from them |
 | reclaim ring | 4 096 | 32 768 | game | a design-point level's objects fit on the timed-out teardown path; a full ring leaks, never frees |
