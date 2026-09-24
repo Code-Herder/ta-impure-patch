@@ -459,12 +459,12 @@ under zoom, `wheel.off` and `zoomedge.off`: `references/levers.md` §"Camera, vi
   Make the instance from a real checkout; to run a foreign build, `cp` its `ddraw.dll` over
   `<gamedir>/ddraw.dll` and launch with `--keep-dll`.
 
-## Multiplayer: two instances in one game
+## Multiplayer: two to ten instances in one game
 
 ```bash
 tools/tacli launch h1 --dplay --free-dplay-port     # the host
-tools/tacli launch j1 --dplay                       # the joiner
-tools/mp_lobby.sh h1 j1 'Two Continents'            # menus -> battle room -> live
+tools/tacli launch j1 --dplay                       # a joiner, as many as nine
+tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 ```
 
 `--dplay` puts Microsoft's DirectPlay into that instance's prefix (wine's builtin cannot create

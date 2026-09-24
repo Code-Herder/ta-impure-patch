@@ -1,12 +1,14 @@
 #!/bin/bash
-# mp_lobby.sh -- drive two tacli instances from the shell into one live TA game.
+# mp_lobby.sh -- drive tacli instances from the shell into one live TA game.
 #
-#   ./mp_lobby.sh <host-instance> <join-instance> [map]
+#   ./mp_lobby.sh [--map <map>] <host-instance> <join-instance> [<join-instance>...]
 #
-# Both instances must already be running, launched with --dplay (the host with
-# --free-dplay-port as well); wine's builtin DirectPlay cannot create a session
-# at all, so without native DirectPlay this script stalls on SELGAME. See
-# research/notes/networking-lobbies.md.
+# Two to ten players: the host and one to nine joiners, which join in the order
+# given. Every instance must already be running, launched with --dplay (the host
+# with --free-dplay-port as well); wine's builtin DirectPlay cannot create a
+# session at all, so without native DirectPlay this script stalls on SELGAME. See
+# research/notes/networking-lobbies.md. A map seats only the player counts its
+# .ota lists (Town & Country takes ten, Two Continents two).
 #
 # Everything goes through `tacli ui`, which auto-waits on each gadget, so the
 # script is a straight line with no sleeps of its own.
@@ -23,9 +25,12 @@
 #     host's own row is READY0 on its own screen; each client lists itself first.
 set -eu
 
-HOST="${1:?usage: mp_lobby.sh <host-instance> <join-instance> [map]}"
-JOIN="${2:?usage: mp_lobby.sh <host-instance> <join-instance> [map]}"
-MAP="${3:-}"
+USAGE='usage: mp_lobby.sh [--map <map>] <host-instance> <join-instance> [<join-instance>...]'
+MAP=""
+if [ "${1:-}" = "--map" ]; then MAP="${2:?$USAGE}"; shift 2; fi
+[ $# -ge 2 ] && [ $# -le 10 ] || { echo "$USAGE" >&2; exit 2; }
+HOST="$1"; shift
+JOINS=("$@")
 TACLI="$(cd "$(dirname "$0")" && pwd)/tacli"
 PROVIDER='Internet TCP/IP Connection For DirectPlay'
 
@@ -68,21 +73,26 @@ if [ -n "$MAP" ]; then
     ui "$HOST" click LOAD --timeout 25
 fi
 
-echo "== $JOIN: joining =="
-to_selgame "$JOIN"
-field "$JOIN" NICKNAME "$(echo "$JOIN" | tr 'a-z' 'A-Z')"
-ui "$JOIN" click JOINGAME --timeout 30
-ui "$JOIN" wait --gui LOUNGE2 --timeout 30
+for JOIN in "${JOINS[@]}"; do
+    echo "== $JOIN: joining =="
+    to_selgame "$JOIN"
+    field "$JOIN" NICKNAME "$(echo "$JOIN" | tr 'a-z' 'A-Z')"
+    ui "$JOIN" click JOINGAME --timeout 30
+    ui "$JOIN" wait --gui LOUNGE2 --timeout 30
+done
 
 if [ -n "${MP_NO_START:-}" ]; then
-    echo "== both in the battle room; MP_NO_START set, stopping here =="
+    echo "== all $((${#JOINS[@]} + 1)) in the battle room; MP_NO_START set, stopping here =="
     exit 0
 fi
 
-echo "== both ready, starting =="
-ui "$JOIN" click READY0 --timeout 20      # each client lists itself as row 0
+echo "== all ready, starting =="
+for JOIN in "${JOINS[@]}"; do
+    ui "$JOIN" click READY0 --timeout 20      # each client lists itself as row 0
+done
 ui "$HOST" click READY0 --timeout 20
 ui "$HOST" click START --timeout 30
-"$TACLI" wait "$HOST" 'alive=[1-9]' --timeout 120
-"$TACLI" wait "$JOIN" 'alive=[1-9]' --timeout 120
-echo "live: $HOST (host) and $JOIN are in one game"
+for INST in "$HOST" "${JOINS[@]}"; do
+    "$TACLI" wait "$INST" 'alive=[1-9]' --timeout 120
+done
+echo "live: $HOST (host) and ${JOINS[*]} are in one game"

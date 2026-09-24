@@ -556,8 +556,8 @@ between peers. What it relies on from the network model, and what is still open:
   because no unit of that type exists in the game. Both controls (both-armed and
   both-unarmed) keep all 281. Full detail and the CRC formula are in
   [extra-weapons](extra-weapons.md#multiplayer-who-computes-what-and-the-guard).
-- **How to run it**: `tools/mp_lobby.sh <host-instance> <join-instance> [map]`, with
-  both instances launched `--dplay` (the host also `--free-dplay-port`). wine's
+- **How to run it**: `tools/mp_lobby.sh [--map <map>] <host-instance> <join-instance>…` (up
+  to nine joiners), with every instance launched `--dplay` (the host also `--free-dplay-port`). wine's
   builtin DirectPlay cannot host at all (`DPWSCB_Open`: "session creation is not yet
   supported"), which is why the first attempt got no further than an empty
   `SELGAME`; native `dplayx` + `dpwsockx` + `dplaysvr.exe` fix that on the stock

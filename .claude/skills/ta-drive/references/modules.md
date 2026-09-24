@@ -78,8 +78,8 @@ go blaming the game, and `research/notes/networking-lobbies.md` has the protocol
 
 ```bash
 tools/tacli launch h1 --dplay --free-dplay-port     # the host
-tools/tacli launch j1 --dplay                       # the joiner
-tools/mp_lobby.sh h1 j1 'Two Continents'            # menus -> battle room -> live
+tools/tacli launch j1 --dplay                       # a joiner, as many as nine
+tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
 ```
 
