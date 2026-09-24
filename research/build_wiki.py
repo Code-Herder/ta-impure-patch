@@ -132,6 +132,7 @@ PAGES = [
     ("tadr-merge-exploration",    "TADR merge exploration",    "TADR port"),
     ("tadr-port/raised-limits",   "A. Raised ceilings — plan", "TADR port"),
     ("tadr-port/limits-evidence", "A. Raised ceilings — evidence", "TADR port"),
+    ("tadr-port/content-ids",     "A′. Content IDs — plan",    "TADR port"),
 ]
 
 # A folder of notes is a section of its own: research/notes/<folder>/<name>.md is the slug
