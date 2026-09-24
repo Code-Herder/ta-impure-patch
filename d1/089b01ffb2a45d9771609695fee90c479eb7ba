@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=medium range=main..d1089b0 findings=5 acted=5 rejected=0 date=2026-09-24 — keep overclaim in docs/comments corrected (holding the level's peak kept, no trim), dead cascade counter removed, pb_slot reference fixed, refused geometry stamped, measurement wording corrected
