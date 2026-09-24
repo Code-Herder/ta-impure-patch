@@ -59,53 +59,63 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
    `tagpu_enginefix.off` in the gamedir leaves both unpatched, for an A/B against
    stock. */
 
-/* THE SORT ROW'S CAPACITY, in DrawGameScreen's unit binning (0x4697CF..0x469840).
+/* THE SORT BUFFER'S END, in DrawGameScreen's unit binning (0x4697CF..0x469840).
    [DISASSEMBLED] With edi = main+0x141FB, every hot unit (main+0x1435F, NumHotUnits
    main+0x14367) is binned by the 16-px row of its feet, row = (unit+0x74 - eyeY)/16
    + 16, tested 0 <= row < rows at 0x469800/0x469805, and appended to that row:
    count[row]++ (u16, [edi+0x08] = SORT LINE COUNT), *cursor[row]++ = unit
-   ([edi+0x04] = SORT INDICES). Nothing compares count[row] with the row's capacity.
+   ([edi+0x04] = SORT INDICES). Nothing compares count[row] with anything.
 
    LoadMap sizes the buffer once per map (0x483D27..0x483D45): cap = viewW/16 + 12
    into [edi+0x50] (main+0x1424B), rows = viewH/16 + 32 into [edi+0x54]
    (main+0x1424F), and SORT UNIT LIST = rows * cap * 4 bytes into [edi]
    (main+0x141FB); the per-frame reset at 0x46971B points cursor[r] at
-   base + r*cap*4. Row r is therefore cap slots, and the two readers (0x4699A8,
-   0x469B54) walk count[r] slots from base + r*cap*4 with no bound either. So one
-   row holding more than cap hot units spills into the next row's slots, and the
-   last rows spill past the end of the allocation: a heap overwrite with unit
-   pointers. cap is one unit per 16-px column swept; units whose feet share a row
-   band beyond that (a dense line or stack, aircraft over one spot, or any crowd
-   wider than the 1x view, which the rect vpwide widens at zoom < 1 hands the cull)
-   are what reach it.
+   base + r*cap*4 and 0x469731 zeroes count[r]. The two readers (0x4699A8,
+   0x469B54) walk count[r] slots from base + r*cap*4 with no bound either. So a row
+   holding more than cap hot units runs on into the next row's slots — which the
+   readers tolerate: every slot a row counts was written this frame, by that row
+   or by the one it ran into — and a row near the end runs past the end of the
+   allocation, a heap overwrite with unit pointers. cap is one unit per 16-px
+   column swept; units whose feet share a row band beyond that (a dense line or
+   stack, aircraft over one spot, or any crowd wider than the 1x view, which the
+   rect vpwide widens at zoom < 1 hands the cull) are what reach it.
 
-   THE FIX, 31 bytes for 31 at 0x469807..0x469825, ending on the stock join
-   0x469826:
+   THE FIX bounds the append by the ALLOCATION, not by the row: a row may still
+   run on into later rows, exactly as stock, but never past the buffer's end. A
+   jmp at 0x469807 (the 31-byte append block, NOPped behind it) to:
 
-       469807  mov   edx,[edi+0x08]           ; SORT LINE COUNT
-       46980A  lea   edx,[edx+eax*2]          ; &count[row]
-       46980D  movzx ecx,word [edx]
-       469810  cmp   ecx,[edi+0x50]           ; the row's capacity
-       469813  jge   0x469826                 ; full: the unit is not binned
-       469815  inc   word [edx]
-       469818  mov   edx,[edi+0x04]           ; SORT INDICES
-       46981B  mov   ecx,[edx+eax*4]          ; the row's cursor
-       46981E  jecxz 0x469826                 ; stock's NULL-cursor skip
-       469820  mov   [ecx],ebp                ; append the unit
-       469822  add   dword [edx+eax*4],4
+       mov   edx,[edi+0x54]           ; rows
+       sub   edx,eax                  ; rows - row, >= 1 (0x469805)
+       imul  edx,[edi+0x50]           ; the slots from this row's start to the end
+       mov   ecx,[edi+0x08]
+       lea   ecx,[ecx+eax*2]          ; &count[row]
+       movzx esi,word [ecx]
+       cmp   esi,edx
+       jge   join                     ; the next slot is past the end: not binned
+       inc   word [ecx]
+       mov   edx,[edi+0x04]           ; SORT INDICES
+       mov   ecx,[edx+eax*4]          ; the row's cursor
+       jecxz join                     ; stock's NULL-cursor skip
+       mov   [ecx],ebp                ; append the unit
+       add   dword [edx+eax*4],4
+     join:
+       jmp   0x469826                 ; the stock join
 
-   THE INVARIANT: count[row] <= cap after every append, so the slot written is
-   base + (row*cap + count)*4 with count < cap, inside row `row`, and every reader
-   stays inside it too. It rests on [edi+0x50]/[edi+0x54] being the values the
-   allocation was made with: LoadMap is their only writer, through that one base
-   register, and nothing of ours writes them. Registers: eax (row), edi and ebp
-   (unit) as stock; eax, ecx and edx are dead at 0x469826, which reloads esi and
-   reaches 0x46982C's loads. The only branch into the block from outside is the
-   stock NULL-cursor skip to 0x469826 [a rel8/rel32 scan of .text]. A unit past
-   the capacity is not drawn by the engine's sweep that frame; stock drew it by
-   overwriting another row's entry. The list feeds nothing but DrawGameScreen's
-   two draw loops, so the simulation reads nothing different. */
-static int fix_sort_row_capacity(void)
+   THE INVARIANT: count[row] <= (rows - row) * cap after every append. The cursor
+   and the count start together each frame and move together only here, so the
+   slot written is base + (row*cap + count)*4 < base + rows*cap*4, and every slot
+   a reader walks is inside the allocation and was written this frame. It rests on
+   [edi+0x50]/[edi+0x54] being the values the allocation was made with: LoadMap is
+   their only writer, through that one base register, and nothing of ours writes
+   them. Registers: eax (row), edi and ebp (unit) are stock's inputs; eax, ecx, edx
+   and esi are dead at 0x469826, which reloads esi. The only branch into the block
+   from outside is the stock NULL-cursor skip to 0x469826 [a rel8/rel32 scan of
+   .text]. Identical to stock for every unit whose slot is inside the buffer; a
+   unit whose slot would be past it is not drawn by the engine's sweep that frame.
+   Bounding by the row instead would drop units stock draws correctly — a row run
+   on into an empty neighbour is drawn whole. The list feeds nothing but
+   DrawGameScreen's two draw loops, so the simulation reads nothing different. */
+static int fix_sort_buffer_end(void)
 {
     static const unsigned char was[31] = {
         0x8B, 0x57, 0x04,                   /* mov edx,[edi+0x4]        */
@@ -121,19 +131,39 @@ static int fix_sort_row_capacity(void)
         0x83, 0xC0, 0x04,                   /* add eax,4                */
         0x89, 0x01,                         /* mov [ecx],eax            */
     };
-    static const unsigned char now[31] = {
-        0x8B, 0x57, 0x08,                   /* mov edx,[edi+0x8]        */
-        0x8D, 0x14, 0x42,                   /* lea edx,[edx+eax*2]      */
-        0x0F, 0xB7, 0x0A,                   /* movzx ecx,word [edx]     */
-        0x3B, 0x4F, 0x50,                   /* cmp ecx,[edi+0x50]       */
-        0x7D, 0x11,                         /* jge 0x469826             */
-        0x66, 0xFF, 0x02,                   /* inc word [edx]           */
+    static const unsigned char body[39] = {
+        0x8B, 0x57, 0x54,                   /* mov edx,[edi+0x54]       */
+        0x29, 0xC2,                         /* sub edx,eax              */
+        0x0F, 0xAF, 0x57, 0x50,             /* imul edx,[edi+0x50]      */
+        0x8B, 0x4F, 0x08,                   /* mov ecx,[edi+0x8]        */
+        0x8D, 0x0C, 0x41,                   /* lea ecx,[ecx+eax*2]      */
+        0x0F, 0xB7, 0x31,                   /* movzx esi,word [ecx]     */
+        0x39, 0xD6,                         /* cmp esi,edx              */
+        0x7D, 0x11,                         /* jge join                 */
+        0x66, 0xFF, 0x01,                   /* inc word [ecx]           */
         0x8B, 0x57, 0x04,                   /* mov edx,[edi+0x4]        */
         0x8B, 0x0C, 0x82,                   /* mov ecx,[edx+eax*4]      */
-        0xE3, 0x06,                         /* jecxz 0x469826           */
+        0xE3, 0x06,                         /* jecxz join               */
         0x89, 0x29,                         /* mov [ecx],ebp            */
         0x83, 0x04, 0x82, 0x04,             /* add dword [edx+eax*4],4  */
     };
+    unsigned char now[31];
+    unsigned char* s;
+
+    if (memcmp((const void*)0x00469807, was, sizeof was) != 0) return 0;
+    s = tagpu_detour_stub();
+    if (!s) return 0;
+    memcpy(s, body, sizeof body);
+    s[sizeof body] = 0xE9;                                  /* join: jmp 0x469826 */
+    tagpu_detour_rel(s + sizeof body + 1, 0x00469826);
+    /* the jmp is encoded against 0x469807, where it will run — not against
+       this buffer (tagpu_detour_rel encodes against its own address) */
+    memset(now, 0x90, sizeof now);
+    now[0] = 0xE9;                                          /* jmp stub           */
+    {
+        unsigned int rel = (unsigned int)(size_t)s - (0x00469807u + 5u);
+        memcpy(now + 1, &rel, 4);
+    }
     return patch_bytes(0x00469807, was, now, sizeof was);
 }
 
@@ -146,10 +176,12 @@ static int fix_sort_row_capacity(void)
    does not — the cursor's hover feature in 0x498DA0, whose cell comes from
    GetTPosition's row, and GetTPosition can answer up to 143 px below the point it
    is handed; 0x40514A does not either — an order handler's target lookup through
-   0x4815F0 on the order's position. Stock's camera keeps 0x498F4F's point 128 px
-   clear of the map's bottom edge (the scroll extent main+0x1422F), exactly the
-   margin GetTPosition needs; a point past that extent — an eye outside the stock
-   range, a pointer on the bottom bar — reads [NULL+8] at 0x421E64.
+   0x4815F0 on the order's position. For 0x498F4F stock keeps the point inside
+   the scroll extent main+0x1422F, which is the map's height less 128 (the default
+   of the debug-level `Edge` console command 0x416730), and that margin is exactly
+   what keeps GetTPosition's row on the map. A point past the extent — an eye
+   outside the stock range, a pointer on the bottom bar below one — reads
+   [NULL+8] at 0x421E64: MEASURED, with our clamp at 0x498EF9 disabled.
 
    THE FIX, a prologue detour: the stub runs the first stolen instruction, and
    for a NULL plot returns the engine's own "no feature" 0xFFFF with the
@@ -185,18 +217,18 @@ static int fix_feature_null_plot(void)
 
 static void patch_engine_defects(void)
 {
-    int rows, plot;
+    int sort, plot;
     char b[200];
 
     if (GetFileAttributesA("tagpu_enginefix.off") != INVALID_FILE_ATTRIBUTES) {
         plog("enginefix: stock engine defects left unpatched (tagpu_enginefix.off)");
         return;
     }
-    rows = fix_sort_row_capacity();
+    sort = fix_sort_buffer_end();
     plot = fix_feature_null_plot();
     _snprintf(b, sizeof b,
-              "enginefix: sort-row capacity bound 0x469807 %s; NULL-plot guard 0x421E60 %s",
-              rows ? "ARMED" : "SKIPPED (byte mismatch)",
+              "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s",
+              sort ? "ARMED" : "SKIPPED (byte mismatch)",
               plot ? "ARMED" : "SKIPPED (byte mismatch)");
     plog(b);
 }

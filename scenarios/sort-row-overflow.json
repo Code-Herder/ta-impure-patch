@@ -1,6 +1,6 @@
 {
   "format": "ta-scenario/1",
-  "description": "150 Peewees in one line, 8 px apart, every one with its feet at the same world z, so they all fall in ONE 16-px row of DrawGameScreen's unit sort. That row holds viewW/16 + 12 units (68 at 1024x768), and the line on screen holds more: the engine's append at 0x469807 (the sort-row capacity, exe-reverse-engineering.md 'Engine defects we patch'). At 1x with the line across the view the extra units spill into the next row's slots; with the camera pinned so the line sits in the LAST sort row (tacli eye <i> 1552 650 at 1024x768) and the view widened (zoom 0.5 with vpwide), they spill past the end of the buffer. Read the row counts with tacli peek; nothing fights, nothing moves.",
+  "description": "150 Peewees in one line, 8 px apart, every one with its feet at the same world z, so they all fall in ONE 16-px row of DrawGameScreen's unit sort. A row holds viewW/16 + 12 units (68 at 1024x768) and the line on screen holds more, so the engine's append (0x469807) runs on into the next row's slots at 1x, which stock tolerates; with the camera pinned so the line sits in the LAST sort row (tacli eye <i> 1552 650 at 1024x768) and the view widened (zoom 0.5 with vpwide), stock writes past the end of the buffer. exe-reverse-engineering.md, 'Engine defects we patch'. Read the row counts with tacli peek; nothing fights, nothing moves.",
   "on_error": "abort",
   "setup": {
     "map": "Two Continents",
