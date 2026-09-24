@@ -108,9 +108,14 @@ so a reset loses anything the engine will not redraw on its own. Three cases, al
   block overwrites (`0x468E7F`, from the player record) and never reads back, unlike bytes 1..4
   which `flds 0x79(%esp)` reads at `0x468E7B` as the number's animation state. So the poke changes
   the comparison and nothing displayed; poisoning the animated bytes would have made the numbers
-  converge from a value we invented. A poison equal to the byte the block would compute compares
-  equal, so the debt is kept and the poison is **complemented** on the retry — the fresh byte
-  cannot equal both `x` and `~x`, which bounds it at two pokes.
+  converge from a value we invented. **The poison is the complement of the byte the block will
+  compute**, read from the same field (`PlayerStruct+0x146` of the local player, 0x00 for
+  player 0): a poison equal to it compares equal and the block skips, and one debt is poked once,
+  so a poison that toggled between two constants deadlocked on every debt whose constant was the
+  live byte. With 0x00 for player 0 that was every second poke of the process, and the bars
+  stayed blank for the level whenever the debt its entry raised was served by an even-numbered
+  one — no numbers until the first
+  change of metal or energy (a building) made the block draw on its own.
 - **`0x468CF0` is NOT a callable repainter.** It is `DrawGameScreen` itself, running to `0x46A3FD`
   (`ret 8`) with the flip inline at `0x46A3DB`, four callers (`0x495C76`, `0x495E66`, `0x4962C2`,
   `0x4969CD`). The resource block is inline in it, not a function, so there is no
@@ -3934,13 +3939,16 @@ before the loader thread at `0x4982CA`), which is the price: a scale chosen mid-
 **The translation pays for it.** The engine now draws the world into `[128, R] × [32, B]` of its
 own surface and that block belongs on screen at `[128s, W−1] × [32s, H−1−32s]`. One vector,
 `(128s − 128, 32s − 32)`, in the three places we own: the composite's world-region sampling, the
-pointer map's world branch, and **the single `glViewport` on the draw that puts the world target
-on the frame** (`tagpu_native.c`, the "composite over the frame"). Not a uniform per world
-shader, and not a bracket around `tagpu_native_frame` — that was tried first and the passes
-inside set their own viewports (the shadow map, the supersampled target), so it was overwritten
-before the first triangle. The symptom of that attempt is worth recognising: the world came out
-**short on the right and bottom by exactly the shift**, which is what an unshifted block under a
-shrunken viewport looks like.
+pointer map's world branch, and **the one draw that puts the world target on the frame** — its
+rect is shifted where `tagpu_native.c` publishes `TAGPU_WORLDTGT`, and `tagpu_vk_world_record`
+draws the whole block there, clipping only the scissor to the window. Not a uniform per world
+shader, and not a bracket around `tagpu_native_frame`: the passes inside set their own viewports
+(the shadow map, the supersampled target), so a bracket is overwritten before the first
+triangle. Two symptoms are worth recognising. The world **short on the right and bottom by
+exactly the shift** is an unshifted block under a shrunken viewport, and clamping the block's
+viewport to the window gives the same squeeze. The build square **a constant (128s − 128,
+32s − 32) screen px from the pointer at every zoom** — invisible inside an 80-px square at 1×,
+three square-widths away at 0.25× — is the world not shifted at all while the pointer map is.
 
 `tagpu_vpwide.c`'s true rect follows the same insets, so `vpwide: true viewport rect verified
 (128,32 3264x1872)` and the `hud:` line now agree by construction.

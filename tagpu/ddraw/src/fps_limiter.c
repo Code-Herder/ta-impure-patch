@@ -5,13 +5,38 @@
 #include "hook.h"
 #include "config.h"
 #include "versionhelpers.h"
+#include "utils.h"
 
 
 FPSLIMITER g_fpsl;
 
+/* tagpu: fps_limiter.h, "THE RENDER THREAD IS fpsl_init's ONE OWNER" */
+static volatile LONG s_capWant = FPSL_CAP_NONE;
+static volatile LONG s_reinit;
+
+void fpsl_request_cap(int cap)
+{
+    InterlockedExchange(&s_capWant, cap);
+    InterlockedExchange(&s_reinit, 1);          /* after the cap: the init reads it */
+}
+
+void fpsl_request_init(void) { InterlockedExchange(&s_reinit, 1); }
+int  fpsl_cap_request(void)  { return (int)s_capWant; }
+
 void fpsl_init()
 {
-    int max_fps = g_config.maxfps;
+    int max_fps;
+
+    /* tagpu: the menu's cap, a positive number even for Refresh. The request
+       is cleared BEFORE the cap is read, so one made while this runs re-arms
+       it rather than being lost. */
+    InterlockedExchange(&s_reinit, 0);
+    {
+        LONG want = s_capWant;
+        if (want != FPSL_CAP_NONE)
+            g_config.maxfps = want < 0 ? util_target_refresh() : (int)want;
+    }
+    max_fps = g_config.maxfps;
 
     g_fpsl.tick_length_ns = 0;
     g_fpsl.tick_length = 0;
@@ -139,6 +164,9 @@ BOOL fpsl_dwm_is_enabled()
 
 void fpsl_frame_start()
 {
+    if (s_reinit)
+        fpsl_init();
+
     if (g_fpsl.tick_length > 0)
         g_fpsl.tick_start = timeGetTime();
 }

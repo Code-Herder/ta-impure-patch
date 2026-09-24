@@ -824,16 +824,25 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     s_drawThis = 0;
     if (slot >= TAGPU_VK_SLOTS || !s_slot[slot].w) return;
 
-    /* CLAMPED TO THE RENDER AREA WE ARE HANDED, for tagpu_vk_surf.c's reason:
-       the rect was published by the gather at the top of
-       this iteration, and tagpu_vk_frame may have rebuilt the swapchain since,
-       so on the frame a window shrinks the rect is the old viewport and `w`/`h`
-       are the new extent. An unclamped scissor would lie partly outside the
-       render area, which the spec leaves undefined. */
+    /* THE SCISSOR IS CLAMPED TO THE RENDER AREA WE ARE HANDED, for
+       tagpu_vk_surf.c's reason: the rect was published by the gather at the top
+       of this iteration, and tagpu_vk_frame may have rebuilt the swapchain
+       since, so on the frame a window shrinks the rect is the old viewport and
+       `w`/`h` are the new extent. An unclamped scissor would lie partly outside
+       the render area, which the spec leaves undefined.
+
+       THE VIEWPORT IS NOT CLAMPED. It is where the whole block lands, and under
+       HUD scale the block is translated so that its far edges hang past the
+       window (tagpu_native.c, where the rect is published): clamping the
+       viewport too would squeeze the world into what is left instead of
+       clipping it, and every world pixel would drift from the pointer by a
+       fraction of its distance from the origin. The block is at most the
+       viewport plus the HUD shift, well inside the spec's viewport bounds. */
+    if (s_vw < 1 || s_vh < 1) return;
     rx = s_vx < 0 ? 0 : s_vx;
     ry = s_vy < 0 ? 0 : s_vy;
     if (rx >= (int)w || ry >= (int)h) return;
-    rw = s_vw; rh = s_vh;
+    rw = s_vx + s_vw - rx; rh = s_vy + s_vh - ry;
     if (rx + rw > (int)w) rw = (int)w - rx;
     if (ry + rh > (int)h) rh = (int)h - ry;
     if (rw < 1 || rh < 1) return;
@@ -844,10 +853,10 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
        row at row 0 of the source for the same reason they put it at row 0 of
        the swapchain image, so the two agree and a negative height here would
        be a third turn. */
-    vp.x = (float)rx;
-    vp.y = (float)ry;
-    vp.width = (float)rw;
-    vp.height = (float)rh;
+    vp.x = (float)s_vx;
+    vp.y = (float)s_vy;
+    vp.width = (float)s_vw;
+    vp.height = (float)s_vh;
     vp.minDepth = 0.0f;
     vp.maxDepth = 1.0f;
     vkCmdSetViewport(cb, 0, 1, &vp);

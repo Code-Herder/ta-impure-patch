@@ -51,7 +51,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | What the engine used to draw | Ours since | Owned how |
 |---|---|---|
 | Units, wrecks, shadows, cloak, waterline | G12a–c, G13n | `owndraw` skips the software rasterisers; `tagpu_native.c` draws them. **The Classic pair — the silhouette and the structure slant — is what the shipped configuration draws again since 2026-09-22, out of `tagpu_vk_unit.c`, and `shadows=` defaults to HARD (§2.83).** G14i's alternative, `tagpu_shadow.c`'s depth map at `shadows=1`, is unported: that module went with the GL backend and nothing produces a hand-over for the Vulkan map. **The silhouette shadow blends once per silhouette PIXEL through a stencil** (G13n) — the engine blits one blackened copy of the composite, so re-using the body's 3-D geometry with depth writes off darkened once per surface the ray crossed: aircraft came out at 0.25 of the ground against the engine's 0.49. Both FBOs are `DEPTH24_STENCIL8` for it — [shadows & cloak](shadows-cloak.html) §"What our GL renderer must do" |
-| **Units under construction** — the nanoframe scaffold, its fill and its wireframe | G13l | the same pass: ownership no longer stops at `Nanoframe > 0`, the recolour is three per-unit uniforms in the unit shader and the wireframe a line range per unit; a third `owndraw` detour (`0x458DD0`) stops the engine stamping its own copy at the 1× position. A unit under construction casts no shadow, as the engine's does not, and a factory's cargo takes the FACTORY's depth key — the engine z-merges it into the factory's sprite (`0x4B90A0`) rather than sorting it, and on its own tile row it disappeared under the lab. The carry relationship itself — attach/detach `0x48AB70`, and why a *released* unit appears to walk under the plant (stock, measured) — is on [factories](factory-build.html) |
+| **Units under construction** — the nanoframe scaffold, its fill and its wireframe | G13l | the same pass: ownership no longer stops at `Nanoframe > 0`, the recolour is three per-unit uniforms in the unit shader and the wireframe a line range per unit; a third `owndraw` detour (`0x458DD0`) stops the engine stamping its own copy at the 1× position. A unit under construction casts no shadow, as the engine's does not, and a factory's cargo takes the FACTORY's depth key — the engine z-merges it into the factory's sprite (`0x4B90A0`) rather than sorting it, and on its own tile row it disappeared under the lab; within that key it carries the merge's height offset (§2.87), which is what puts a transport's cargo under the transport. The carry relationship itself — attach/detach `0x48AB70`, and why a *released* unit appears to walk under the plant (stock, measured) — is on [factories](factory-build.html) |
 | Structure shadows (the cached slant projection) | G13k, redrawn 2026-09-22 | `owndraw all` flips the blit's two structure-shadow `je`s behind `g_ssSkip`; the SLANT range of the posed bake is drawn by `tagpu_vk_unit.c`, stencil-masked, before the bodies — see §2.83, §2.1 and [shadows & cloak](shadows-cloak.html) §"Structure shadows, owned" |
 | Weapon fire, explosions, debris | G12e | `fxown`: 2 call-site redirects + 4 leaf detours |
 | Smoke, fire, wakes, nanolathe | G12f | `fxown`: one detour on the layer walker |
@@ -1322,6 +1322,11 @@ objects of its own. On top of that it now **poisons byte 0 of the 33-byte last-d
 METAL/ENERGY block inside `DrawGameScreen` compares itself against, once per twin reset, to make
 the engine redraw a block it would otherwise skip for the life of the level ([engine
 map](exe-reverse-engineering.html) "The resource block, and the 33-byte memo that skips it").
+The poison is the complement of the byte the block will write there (`PlayerStruct+0x146` of
+the local player, the player index bounded to the ten records first). Every engine writer of
+that field stores 0..10 (engine map), so the poison, 0xF5..0xFF, is a value the block cannot
+compute and the compare cannot come out equal; a poison that alternated `0xFF`/`0x00` did on every second reset for player 0, and the
+bars then stayed blank until metal or energy first changed.
 
 What keeps the memo write inside this module's contract rather than breaking it: the memo has
 **three** references in the binary — `0x468E51` and `0x468FC6` inside that block, plus `0x4679A6`,
@@ -2071,7 +2076,7 @@ captions; names, `assoc`, `commonattribs`, `range` and `stages` verbatim), the s
 
 | column | rows |
 |---|---|
-| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
+| **Window** | Display mode (window / borderless fullscreen, `util_toggle_fullscreen`), Monitor (`EnumDisplayMonitors`, `SetWindowPos`), UI scale (Auto / 1x..4x, the client set to k x the Screen Size row's own mode at `main+0x37F1B/+0x37F1F`), Screen Size (stock `VIDSLDR`), Frame cap (Refresh / 60 / 120 / uncapped, `g_config.maxfps` + `fpsl_init`; Refresh is the target monitor's rate, resolved into a positive cap on the render thread — renderers §2.10b), Gamma (stock), **GPU (Vulkan)** (G19b — `tagpu_vk.h`; caption at y 364, control at 380, in the space the Gamma slider left free) |
 | **Impure rendering** | Renderer, Undithered assets, Dynamic lighting, Shadows, Shadow quality, Supersampling, FPS counter |
 
 Four things this rests on, each measured rather than assumed:
@@ -2101,9 +2106,11 @@ Four things this rests on, each measured rather than assumed:
   cache at the *next* attach. It is the same bargain the Monitor row already makes for a
   hot-plugged monitor. The row's **model** is not one launch behind: the choice is stored by
   name as `gpu=` in the settings store (`impure.cfg`, [renderers](renderers.html) §2.10b), and
-  `read_display_state` plates `tagpu_vk_gpu_active()` — the device
-  the render thread actually bound — whenever the lane is up, so a request that could not be
-  honoured shows as the device that was.
+  its first stage is **Auto** (`gpu=auto`, the lane's own ranking: [renderers](renderers.html)
+  §2.10b). A software rasteriser is not listed while a GPU is present, so on a machine with one
+  GPU the row is Auto alone, greyed. Auto plates Auto; a named choice plates `tagpu_vk_gpu_active()` — the device the render
+  thread actually bound — whenever the lane is up, so a request that could not be honoured shows
+  as the device that was.
 
 **The Monitor row rebuilds the screen**, because the Screen Size list belongs to a monitor
 and the engine builds it once per visit (`0x45E6B0` into `GUIMEMSTRUCT+0x0C`, hung off
@@ -2307,12 +2314,10 @@ the game under it. It clears the whole frame on purpose, once, until the lever i
 
 ### 2.15 HUD scale (`tagpu_hud.c`, **off unless armed**, `tagpu_hud.on`) — Phase F G18f
 
-> **THE DRAW HALF IS GONE SINCE 2026-09-20 (§2.81).** The magnification was the UI layer's
-> `LAY_FS` sampling `uHud`, and the clean cut deleted that layer, so arming `tagpu_hud.on` now
-> shifts the world and the input mapping and leaves no HUD behind to magnify. `tagpu_hud.c`
-> itself is untouched — the geometry, the ceiling, `tagpu_hud_to_engine`, the menu stage — and
-> everything below still describes what it computes. It was never a play default, so nothing
-> shipped changes; the pass that consumed it is what has to come back.
+> **Both halves draw on Vulkan.** The magnification is the UI composite's `uHud`
+> (`tagpu_gui_surf.c`'s shader, recorded by `tagpu_vk_gui.c`), and the world target is placed
+> on the frame shifted by `tagpu_hud_shift` (`tagpu_native.c`, where it publishes
+> `TAGPU_WORLDTGT`). It is not a play default; the Visuals row's `hudscale=` turns it on.
 
 The in-game HUD magnified inside the player's own Screen Size, over a world the engine goes on
 drawing exactly as it always did — so Screen Size and HUD size are two dials rather than two
@@ -2331,12 +2336,12 @@ covers the outer world instead of asking for it.
 
 | site | what we do there | thread |
 |---|---|---|
-| `LAY_FS` (`tagpu_gui_surf.c`) | `uHud` — the two integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them. Inert at `s = 1` | render |
+| the UI composite (`tagpu_gui_surf.c`'s shader, `tagpu_vk_gui.c`) | `uHud` — the two integers, `1/s` and `s`. Three regions sample the twin at `s` texels per device pixel; the ramp widens by `s` with them; the world region is sampled back by the shift. Inert at `s = 1` | render |
 | `mouse.c`, `winapi_hooks.c` ×4, `wndproc.c` ×3 | `tagpu_hud_to_engine()` at the end of every client → game conversion: inside a HUD region the engine is handed the point on its own 1× HUD grid | message |
 | `sharp_cursor`, `sharp_minimap` | `tagpu_hud_to_screen()` — the engine's own cursor position (the fallback path only) and the minimap's box go the other way, so the sharp layer lands on the magnified art | render |
 | `tagpu_menu.c` | the "UI scale" row, `trigger_rect()` and `panel_rect()` | game / window |
 | `0x4288D0` (observer), gated on return address `0x498242` | write `R`, `B`, `viewW`, `viewH` so the engine's viewport IS the visible window — `L`/`T` untouched, because the projection bakes them. Writes nothing at stock | game |
-| `tagpu_native.c`, the world composite's `glViewport` | the one draw that puts the world target on the frame, shifted by `(128s−128, 32s−32)` | render |
+| `tagpu_native.c`, the `TAGPU_WORLDTGT` publish; `tagpu_vk_world_record` | the one draw that puts the world target on the frame: its rect is shifted by `(128s−128, 32s−32)` × k device px; the viewport keeps the whole block and only the scissor is clipped to the window, so the block's far edges (the engine's right inset and bottom bar, no world in them) fall off the frame instead of squeezing the world. Without it every world thing — the build square, a unit under a click — sits the shift away from the pointer, a constant in screen px that reads as "far" at zoom < 1, where the square is small. **Not covered**: when the target is refused (`tagpu_vk_world_prepare` returns 0 — a slot that will not size, a target over `WORLD_MAXDIM`) the world passes draw straight into the swapchain with no shift, and the `scaffold.on` instrument draws over the whole frame unshifted | render |
 **One resolver, so the two halves cannot disagree.** `tagpu_hud_geom(W, H, pct, …)` is a pure
 function that clamps to the screen's own ceiling and yields `s`, the panel width and the bar
 height. The composite and the pointer map both call it; neither owns the answer, and because
@@ -10037,10 +10042,6 @@ files (§2.52). A landing that corrects a fact has to grep for the fact.
   it is a softer rect. Porting it needs a second 1x image, a depth resolve and the marker pass
   recorded twice; the offscreen depth attachment is `STORE_OP_DONT_CARE` until then and the code
   says so.
-- **The HUD-scale shift.** The GL composite offsets this draw by `tagpu_hud_shift` scaled into
-  frame pixels; the Vulkan composite does not, so `tagpu_hud.on` leaves the world where it is
-  today. The rect is published unshifted on purpose — a shifted rect only one consumer applies is
-  how two lanes drift.
 - **The two-step resolve.** GL resolves `ss -> 1x` and then composites 1x -> viewport with
   `GL_NEAREST`; this draws the `ss` image straight into the viewport with `LINEAR`. At k = 1 those
   are arithmetically the same filter (a destination centre lands on the corner of a 2x2 source
@@ -15762,3 +15763,36 @@ stock game pays what it draws.
   `WR_COUNT` has to follow it — in `tagpu_engine.h` and in its own copy in `tagpu_feat.c`.
 - Type-scaled caps are unchanged: the selection-box cache (256 root nodes a level) and the
   scenario harness's `SCN_MAX_*` (4 096 units, 512 selected).
+
+### 2.87 Unit bodies before the effects, and cargo sorted by the merge's height
+
+**What was wrong.** Two depth faults in the unit pass, both reported from play.
+
+- **Every unit body drew after the effects.** `tagpu_vk_unit.c` `record_stage` picks each
+  stage's draws with `(q->ghost != 0) != (stage == RS_GHOST)`; it read `!q->ghost != (stage ==
+  RS_GHOST)`, which is the negated test, so ordinary units were skipped in `RS_BODY` and drawn in
+  `RS_GHOST` — the stage `tagpu_vk.c` `world_records` runs after `tagpu_vk_fx_record`. The depth
+  keys were right, so no key could fix it: every particle, projectile and explosion under a unit
+  body was painted over. It showed first as the nanolathe spray vanishing over a factory's pad and
+  the nanoframe on it (layer 6, `fxKey − 2`), most visibly zoomed in. MEASURED on
+  `nano-factory` at zoom 2.5 with only the ARMAP drawn natively: spray-palette pixels over the pad
+  were **0 in every frame** at any layer-6 key up to 1000, and 550–1200 a frame after the fix.
+- **A unit carried by a transport drew over it.** The cargo loop gives a chain member its
+  parent's row and band and lets the two sort by `md`; a carried commander's origin is 40 height
+  units under its ARMATLAS, which `md` did not know. The engine merges cargo by height through
+  `0x4B90A0` with `dbias = hi(Δalt)` over planes based at 0x32 / 0x7D
+  ([exe-reverse-engineering](exe-reverse-engineering.html), the cargo-loop section). Now
+  `cargo_md_bias` gives the cargo `2·(baseC − baseP + Δalt)/256`, and the posed vertex stage adds
+  it as **`uMdBias`** (std140 offset 68, after `uEnc`) **inside** `md`'s ±1.8 clamp, so no bias
+  carries a vertex out of its row's band. MEASURED on `transport-cargo`: bias −0.31, the Atlas
+  covers the commander with the bias and the commander draws over it with a live A/B that zeroed
+  it; ARMATLAS cargo on an ARMAP pad reads bias 0.000.
+
+**Fixtures.** `scenarios/nano-factory.json` (a plant, a guarding commander) and
+`scenarios/transport-cargo.json` (an Atlas and a commander to load).
+
+**Not covered.**
+- The cargo bias matches the merge's height term only: `md`'s z term has no counterpart in
+  `0x4B90A0`, so a cargo far north or south of its parent's origin still sorts by `md`.
+- Cargo of cargo takes its immediate parent's bias plus that parent's own, in gather order; the
+  engine forbids nesting (`0x48AB70`), so this is not reached in stock play.

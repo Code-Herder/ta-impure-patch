@@ -1,0 +1,21 @@
+{
+  "format": "ta-scenario/1",
+  "description": "A unit hanging under an air transport: an ARMATLAS and a commander on open ground beside the ARM aircraft plant. Order the Atlas to pick the commander up (`tacli order <i> --unit <atlas> --expect ARMATLAS load unit <com> --expect-target ARMCOM`, indices from `tacli roster`). In the engine the Atlas covers the commander it carries; the cargo sorts against its transport by the merge's height offset, not as a unit level with it.",
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": false,
+    "switches": {"shootall": false, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 100000, "energy": 100000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 1000,   "energy": 1000}
+    ]
+  },
+  "units": [
+    { "id": "plant", "type": "ARMAP",    "owner": 0, "pos": [1500, 1500], "facing": 0 },
+    { "id": "com",   "type": "ARMCOM",   "owner": 0, "pos": [1620, 1680], "facing": 270 },
+    { "id": "atlas", "type": "ARMATLAS", "owner": 0, "pos": [1500, 1680], "facing": 90 }
+  ],
+  "camera": { "center_on": "com" }
+}

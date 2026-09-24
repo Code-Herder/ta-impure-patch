@@ -202,21 +202,25 @@ int tagpu_vk_gpu_count(void);
 /* Device `i`'s name, or "" out of range. Valid for the process's life. */
 const char* tagpu_vk_gpu_name(int i);
 
-/* The index the row should sit at when the player has never chosen: the first
-   DISCRETE_GPU the cache records, else 0. */
-int tagpu_vk_gpu_default(void);
+/* "Auto": no device named, so the lane binds the highest-ranked one --
+   discrete > integrated > virtual > CPU, then the largest DEVICE_LOCAL heap.
+   A request, never an index into the name table. */
+#define TAGPU_VK_GPU_AUTO (-2)
 
-/* The index the stored choice names, matched BY NAME against the cache, or
-   `tagpu_vk_gpu_default()` when nothing is stored or the stored name is not
-   among the devices present any more. */
+/* The index the request names -- the row's click, else the stored choice --
+   matched BY NAME against the cache, or TAGPU_VK_GPU_AUTO when the request is
+   Auto, nothing is stored, or the stored name is not among the devices present
+   any more (the lane binds the Auto pick then too). */
 int tagpu_vk_gpu_stored(void);
 
 /* The index of the device ACTUALLY bound by the live Vulkan lane, or -1 when
    nothing is bound. This is what lets the row be verified rather than trusted:
-   the menu plates this when it is >= 0 and the request only when it is not. */
+   for a named request the menu plates this when it is >= 0 and the request
+   only when it is not; an Auto request plates Auto. */
 int tagpu_vk_gpu_active(void);
 
-/* The row's click, from the game thread: record the request. Takes effect on
+/* The row's click, from the game thread: record the request -- an index into
+   the name table, or TAGPU_VK_GPU_AUTO. Takes effect on
    the render thread's next frame, which rebuilds the device. Persisting it is
    `tagpu_vk_gpu_store`, called from the render thread with the deferred write. */
 void tagpu_vk_gpu_select(int i);

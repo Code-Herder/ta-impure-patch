@@ -1,0 +1,22 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The nanolathe over its target: an aircraft plant with a commander on open ground beside it, ARM rich in metal and energy. Select the plant (`tacli click` on it) and queue aircraft (`tacli ui <i> click ARMATLAS`, repeatedly) so it sprays onto the nanoframe on its pad; order the commander to guard the plant (`tacli order <i> --unit 3 --expect ARMCOM defend unit 2`) so its spray lands there too. The spray is particle layer 6 and must read OVER the pad and the nanoframe, at 1x and zoomed in.",
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": false,
+    "switches": {"shootall": false, "noshake": true},
+    "players": [
+      {"slot": 0, "controller": "human", "side": "arm",  "color": 0, "metal": 100000, "energy": 100000},
+      {"slot": 1, "controller": "ai",    "side": "core", "color": 1, "metal": 1000,   "energy": 1000}
+    ]
+  },
+  "units": [
+    { "id": "plant", "type": "ARMAP",    "owner": 0, "pos": [1500, 1500], "facing": 0 },
+    { "id": "com",   "type": "ARMCOM",   "owner": 0, "pos": [1620, 1680], "facing": 270 },
+    { "id": "ms",    "type": "ARMMSTOR", "owner": 0, "pos": [1350, 1700] },
+    { "id": "es",    "type": "ARMESTOR", "owner": 0, "pos": [1450, 1700] }
+  ],
+  "camera": { "center_on": "plant" }
+}

@@ -58,7 +58,10 @@ static const Opt O_SHADOWS[] = { {"hard", 2}, {"off", 0}, {"2", 2}, {"0", 0},
                                  {"soft", 2}, {"1", 2} };
 static const Opt O_RES[]     = { {"2048", 2048}, {"512", 512}, {"1024", 1024}, {"4096", 4096} };
 static const Opt O_SS[]      = { {"2", 2}, {"1", 1}, {"on", 2}, {"off", 1} };
-static const Opt O_MAXFPS[]  = { {"60", 60}, {"120", 120}, {"uncapped", 0}, {"0", 0} };
+/* -1 is cnc-ddraw's own "the display's refresh" (fps_limiter.c, which asks the
+   target monitor for it) */
+static const Opt O_MAXFPS[]  = { {"refresh", -1}, {"60", 60}, {"120", 120}, {"uncapped", 0},
+                                 {"0", 0}, {"-1", -1} };
 static const Opt O_HUD[]     = { {"off", -1}, {"auto", 0}, {"100", 100}, {"150", 150},
                                  {"200", 200}, {"300", 300}, {"400", 400} };
 static const Opt O_DISPLAY[] = { {"fullscreen", 1}, {"window", 0} };
@@ -80,7 +83,7 @@ static const Key s_key[TS_NKEYS] = {
     { "shadowres", O_RES,     N(O_RES),     2048 },
     { "ss",        O_SS,      N(O_SS),      2 },
     { "fps",       O_BOOL,    N(O_BOOL),    0 },
-    { "maxfps",    O_MAXFPS,  N(O_MAXFPS),  60 },
+    { "maxfps",    O_MAXFPS,  N(O_MAXFPS),  -1 },
     /* OFF, not Auto: HUD scale is off the play defaults and whether it belongs
        on is the owner's call (tagpu_opt.c). Off is also what the pass reads when
        nothing has armed it, so the default changes nothing. */
@@ -245,11 +248,9 @@ static int serialise(char* b, int cap)
         if (k < 0 || k >= cap - at) return -1;
         at += k;
     }
-    if (s_gpu[0]) {
-        k = _snprintf(b + at, cap - at, "gpu=%s\r\n", s_gpu);
-        if (k < 0 || k >= cap - at) return -1;
-        at += k;
-    }
+    k = _snprintf(b + at, cap - at, "gpu=%s\r\n", s_gpu[0] ? s_gpu : "auto");
+    if (k < 0 || k >= cap - at) return -1;
+    at += k;
     if (s_winSet) {
         k = _snprintf(b + at, cap - at, "window=%d,%d,%d,%d\r\n",
                       s_win[0], s_win[1], s_win[2], s_win[3]);
@@ -672,7 +673,7 @@ void tagpu_settings_attach(const char* ini_path)
         at += k;
     }
     b[sizeof b - 1] = 0;
-    slog("%s gpu=%s window=%s", b, s_gpu[0] ? s_gpu : "-", s_winSet ? "set" : "-");
+    slog("%s gpu=%s window=%s", b, s_gpu[0] ? s_gpu : "auto", s_winSet ? "set" : "-");
 }
 
 /* ---- the monitors, the GPU and the window -------------------------------- */

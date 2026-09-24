@@ -1337,8 +1337,9 @@ class WindowTiling(unittest.TestCase):
 
 
 class SettingsStore(unittest.TestCase):
-    """`ensure_store`: an instance always has a store, and its `resolution=` is
-    the instance's --res, whatever else the store holds."""
+    """`ensure_store`: an instance always has a store; an explicit --res replaces
+    its `resolution=`, the recorded size fills one in only where there is none,
+    and a size the menu picked is kept (and read back by `store_res`)."""
 
     def _inst(self, tmp):
         return types.SimpleNamespace(gamedir=Path(tmp) / "gamedir")
@@ -1357,6 +1358,35 @@ class SettingsStore(unittest.TestCase):
             tacli.ensure_store(inst, (1024, 768))
             lines = (inst.gamedir / "impure.cfg").read_text().splitlines()
             self.assertEqual(lines, ["gamma=15", "shadows=off", "resolution=1024x768"])
+
+    def test_the_recorded_size_fills_an_empty_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            tacli.ensure_store(inst)                        # what create does
+            tacli.ensure_store(inst, None, default_res=(800, 600))
+            self.assertEqual((inst.gamedir / "impure.cfg").read_text(), "resolution=800x600\n")
+
+    def test_a_menu_pick_survives_a_relaunch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            for picked in ("resolution=3840x2160\n", "resolution=native\n"):
+                (inst.gamedir / "impure.cfg").write_text("gamma=12\n" + picked)
+                tacli.ensure_store(inst, None, default_res=(1024, 768))
+                self.assertEqual((inst.gamedir / "impure.cfg").read_text(), "gamma=12\n" + picked)
+
+    def test_store_res_reads_back_a_size_and_not_native(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            self.assertIsNone(tacli.store_res(inst))           # no store at all
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            cfg.write_text("gamma=12\nresolution=2560x1440\n")
+            self.assertEqual(tacli.store_res(inst), (2560, 1440))
+            cfg.write_text("resolution=native\n")
+            self.assertIsNone(tacli.store_res(inst))
+            cfg.write_text("resolution=junk\n")
+            self.assertIsNone(tacli.store_res(inst))
 
 
 if __name__ == "__main__":

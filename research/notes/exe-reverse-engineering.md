@@ -1021,7 +1021,15 @@ plain immediate — `add eax,0x37e3f` — so the grep that "proved" the claim wa
 search to run is `grep 37e3f`, unanchored.* It is a display memo, not sim state.
 
 **Which bytes are read back and which are not.** Byte 0 of the local is written at `0x468E7F` from
-`cl`, a byte taken out of the player record, and is never read from the memo. Bytes 1..4 ARE read
+`cl`, a byte taken out of the player record, and is never read from the memo. The byte is
+**`PlayerStruct+0x146`** of the local player: `0x468E4B` takes p = `main[0x2A43]`, and
+`0x468E6C` loads `[main + p + 330p + 0x1CA9]`, i.e. `main + 0x1B63 + 331p + 0x146` — TADR's
+`PlayerAryIndex` *[INFERRED name]*; it read **0x00** for player 0 (MEASURED 2026-09-23, the memo
+read back after a draw). p is used unbounded. **Every writer of `+0x146` stores 0..10**
+[DISASSEMBLED 2026-09-23, two landing reviewers independently]: `0x463C05` the constant 10 (the
+player constructor), `0x4453F0` / `0x445565` / `0x44A8F6` a compacted index of the active
+players or 10 for an absent one, `0x46434D` a setup index (with `+0x147`/`+0x148`) — so 10 is
+"no player", and a byte outside 0..10 is one the block never computes. Bytes 1..4 ARE read
 from it — `flds 0x79(%esp)` at `0x468E7B`, before byte 0 is written — and are the displayed
 number's animation state: `0x468E83`/`0x468E90` convert the old and new values and `0x468E9F`/
 `0x468EB3` divide the difference by 8, so the number eases toward its target over frames. That
@@ -1207,6 +1215,35 @@ landing: with a commander selected, clicking `ARMMEX` on the build page puts the
 footprint. A build-menu click changes no GUI state — only the mode byte moves — so the type
 is latched here, not in any `.GUI` gadget record. The frame packet carries it as
 `build_unit_id` for the ghost pass.
+
+**`0x4197D0` — who fills `0x2C92..0x2CA6`: the footprint snapped around the world point
+[DISASSEMBLED 2026-09-23; MEASURED the same day].** `cdecl()`, no arguments, `ret`. Two call
+sites, both behind "pointer on the world (`0x2CC6` bit 1) and mode `0x0E`": `0x499241` in the
+mode-6 mouse handler, right after `0x498DA0`, and `0x491CDB` inside `0x491CC0` (`ret 4`). It
+reads nothing about the screen — only the world point `main+0x2CAA` that `0x498DA0` just
+left there (x, y, z in 16.16) — so **the square follows the world point, and every question of
+where it lands relative to the pointer is a question about `0x498DA0`'s input and about where
+the world is drawn.**
+
+```
+def   = *(main+0x1439B) + BuildUnitID*0x249          ; the UnitDef, stride 585
+fx,fz = i16 [def+0x14A], i16 [def+0x14C]             ; footprint in 16-px cells
+cx0   = (TPos.x - fx<<19 + 0x80000) >> 20            ; round((x - 8fx) / 16)
+cz0   = (TPos.z - fz<<19 + 0x80000) >> 20            ;   TPos.y is loaded and not used
+main[0x2C92] = cx0*16          main[0x2C9E] = cx0*16 + fx*16
+main[0x2C9A] = cz0*16          main[0x2CA6] = cz0*16 + fz*16
+ok    = 0x47D2E0(def, cx0 | cz0<<16, 0, main+0x1B63+331*player) & 1
+main[0x2CC6] bit 6 = ok                               ; green vs blocked (the colour 0x469E6B picks)
+alt   = ok ? 0x47C780() : 0x47D820(def, cx0 | cz0<<16)   ; a byte
+main[0x2C96] = main[0x2CA2] = alt                     ; both corners' altitude
+return ok
+```
+
+So the square's centre is within **8 world px** of the world point on each axis, at every zoom:
+that is the snap, and at 7.7× it is up to 62 screen px. Measured at 1920×1080 on `ARMSOLAR`
+(5×5 cells), the pointer's engine point at world x 1940: corners `1904..1984`, centre 1944. `0x47D2E0` is the site
+test *[INFERRED]* from its result landing in the green bit; `0x47C780` / `0x47D820` are the
+placement altitude for a valid and a blocked site *[INFERRED]* — neither was disassembled.
 
 **`0x46A530 DrawUnitSelectBoxRect` has NO ModelId test — a negative result that cost a landing
 review to establish [BINARY-VERIFIED 2026-09-10].** Its only early-out is the `SelBoxes` option
@@ -2498,11 +2535,22 @@ the colour and sets `dstDepth = srcDepth + dbias`.
 which put it on its own tile row — an ARM lab at world y 1072 building a Hammer at 1068 is one
 16-unit row apart, four whole depth keys behind the lab, which then covered it at every pixel.
 Matching the engine means giving every chain member the parent's row and band and letting the
-two models sort against each other by `md`, our intra-model view depth. That **approximates** the
-merge rather than porting it: `0x4B90A0` compares a *height* biased by `HIWORD(dy)` and samples
-at the projected offset, while `md = (2y − z)/256` is model-local and carries neither term. They
-agree while parent and cargo are level, which is every factory pad, and diverge for a cargo whose
-origin sits above or below its parent.
+two models sort against each other by `md`, our intra-model view depth, **plus the merge's height
+offset** as a bias on the cargo's `md` (`tagpu_native.c` `cargo_md_bias`, applied by the posed
+vertex stage as `uMdBias` inside `md`'s ±1.8 clamp). In depth-plane units a cargo pixel stands
+`baseC − baseP + dbias` above its parent's, where `base` is the per-type plane base below; `md`
+counts height at 2/256, so the bias is `2·(baseC − baseP + dbias)/256`. MEASURED: a commander
+carried by an ARMATLAS hangs at `dbias` = −40 (bias −0.31) and is covered by it as in the engine;
+an ARMATLAS on an ARMAP pad has `dbias` 0 and the same base, bias 0. It still **approximates** the
+merge: `md`'s z term has no counterpart in `0x4B90A0`, which compares height alone.
+
+**The plane's base, `0x459A29..0x459A3C`** (and its twins at `0x459A56..0x459A69` and in the lit
+rasteriser, `0x459EAA`/`0x459ED7`) — `mov edx,[def+0x241]` / `shr edx,0x1e` / `and dl,1` /
+`neg dl` / `sbb edx,edx` / `and edx,0x4B` / `add edx,0x32`: each pixel's depth byte is its model
+height plus **0x32, or 0x7D when `UnitDef+0x241` bit 30 is set**. Bit 30 is the digger bit
+(`tagpu_native.c` `UD_DIGGER`), not "airborne": MEASURED clear on ARMATLAS (`0x00808889`) and
+ARMCOM (`0x0495C0C8`). The higher base leaves room below the origin for the `0x7D` clip to
+erase.
 
 ## `0x48AB70` — attach and detach one unit to another — mapped by us
 

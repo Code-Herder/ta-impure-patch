@@ -19,7 +19,7 @@ session; **[CORPUS]** = name/layout from TADR / the other notes; **[INFERRED]**.
 **The nanoframe look is NOT produced by the "nanoframe rasteriser" `0x459C70`.**
 Both rasterisers (`0x459830` opaque, `0x459C70` lit) bake the *fully textured* model
 into the composite — colour plane + a **depth plane whose byte per pixel is the
-pixel's model-space HEIGHT** (`worldY + 0x32`, or `+0x7D` for airborne units). The
+pixel's model-space HEIGHT** (`worldY + 0x32`, or `+0x7D` for UnitDef+0x241 bit-30 units). The
 under-construction appearance is applied **at blit time, every frame**, by
 **`0x458DD0`** (thiscall `(this, GAFFrame* frame, Object3doStruct*)`, ret 8), which:
 
@@ -127,7 +127,7 @@ rerasterise:
 0x459670  call 0x4586A0(cargo_obj, 1, -1)   ; rebuild cargo composite EVERY frame
 0x459686  call 0x458DD0(cargo_composite, cargo_obj)     ; scaffold on the cargo
           call 0x4B90A0(cargo_comp, scratch, dx, dy, bias)  ; z-merge (depth <=)
-; then: underwater erase 0x4BA1B0 / tint 0x4B96E0, aircraft ground clip
+; then: underwater erase 0x4BA1B0 / tint 0x4B96E0, digger clip
 ;   0x4BA1B0(scratch,0x7D) if UnitDef+0x241 bit30, cloak alpha vs CopyGafToContext
 ```
 
@@ -231,7 +231,7 @@ for (i = 0; i < W*H; i++) {
 }
 ```
 
-**Depth plane untouched** — so later passes (wireframe, underwater/aircraft clips,
+**Depth plane untouched** — so later passes (wireframe, underwater/digger clips,
 cargo z-merge) still see the full model's heights even where colour was erased.
 The cutoff is a plain per-pixel height threshold over the *whole model* — there is
 no per-piece cutoff.
@@ -333,10 +333,11 @@ d  = (vy >> 16) + 0x32                              ; +0x4B more if UnitDef+0x24
 
 `d` is interpolated across faces and stored in the depth plane on every pixel win
 (test: `plane <= d`, larger = higher/nearer wins). **The depth plane is a height
-map**: byte = model-space height + 50 (ground units) or +125 (bit-30/airborne
-units). Cleared to 0 at alloc. This is what the scaffold threshold, the underwater
+map**: byte = model-space height + 50, or +125 for UnitDef+0x241 bit 30 (the
+digger bit, `tagpu_native.c` `UD_DIGGER`; the base leaves room below the origin for the
+0x7D clip to erase — not "airborne": an ARMATLAS reads `0x00808889`, bit 30 clear). Cleared to 0 at alloc. This is what the scaffold threshold, the underwater
 erase/tint (`0x4BA1B0`/`0x4B96E0`, level = `sealevel(0x1427F) − unitY + bias`),
-the aircraft ground clip (`0x4BA1B0(frame, 0x7D)`), and the cargo z-merge
+the digger clip (`0x4BA1B0(frame, 0x7D)`, run at `0x45976E` only when UnitDef+0x241 bit 30 is set), and the cargo z-merge
 (`0x4B90A0`, `dstDepth <= srcDepth + bias`) all consume.
 
 In 2× supersample mode (below), `sx`,`sy` double but `d` does **not**.
@@ -409,7 +410,7 @@ Anti-aliased nanoframe bakes, option-gated.
 | `UnitStruct` cargo chain | +0x8A / +0x8E | first cargo unit / next-in-chain (z-merged, scaffolded) |
 | `UnitDefStruct.buildtime` | +0x1EA | u32 divisor of the per-tick decrement |
 | `UnitDefStruct.maxdamage` | +0x1FA | health target |
-| `UnitDefStruct` flags | +0x241 | bit30 = airborne: depth bias +0x4B and ground clip at 0x7D |
+| `UnitDefStruct` flags | +0x241 | bit30 = digger: depth base +0x4B (0x459A29) and the clip at 0x7D. MEASURED clear on ARMATLAS (`0x00808889`) and ARMCOM (`0x0495C0C8`) |
 | `Object3doStruct` piece array | +0x22, stride 0x36 | resident `PrimitiveStruct` |
 | `PrimitiveStruct` posed verts | +0x22 | 16.16 ×3 per vertex |
 | `PrimitiveStruct` flags | +0x28 | bit0 visible, bit1 cache, bit2 shade |
@@ -437,7 +438,7 @@ Anti-aliased nanoframe bakes, option-gated.
 | `0x4C8760` → `0x4C7A20` | opaque quad walker → scanline | — |
 | `0x4C0C70` / `0x4C1000` | colour-fill n-gon, lit / opaque | — |
 | `0x4B90A0` | z-merge blit (cargo → scratch, `dst<=src+bias`) | (src, dst, dx, dy, bias) |
-| `0x4BA1B0` | erase where `depth <= level` (underwater hide, aircraft clip 0x7D) | (frame, level) |
+| `0x4BA1B0` | erase where `depth <= level` (underwater hide, digger clip 0x7D) | (frame, level) |
 | `0x4B96E0` | tint via `*(TAProgram+0xD0)` where `depth <= level` | (frame, level) |
 | `0x4B95A0` | 2×→1× colour downsample via blend LUT `+0xC0` | (scratch2x, dst) |
 | `0x41BA60` | build tick: `Nanoframe -= work/buildtime`, sets `0x110|=0x2000` | stores `0x41BC16/0x41BC96` |
@@ -462,7 +463,7 @@ composite: colour = full textured render (all visible pieces, texture frame 0),
 UnitDef+0x241-bit30 units). TA will then copy, stage-recolour, wireframe,
 water-clip and z-merge exactly as retail. If the depth plane is left zero the
 scaffold degrades badly (every pixel classifies as "below threshold": stages C/D
-render solid-blue/plain-texture with no rise, and the water/aircraft clips
+render solid-blue/plain-texture with no rise, and the water/digger clips
 misfire) — filling depth is not optional. Detect the case with
 `unit+0x110 & 0x20000000 && *(float*)(unit+0x104) != 0`.
 
@@ -601,14 +602,19 @@ commander or factory building it. Reported from play, reproduced on a scripted
   the lab", reported from play against the first cut of this gate). The gather
   now walks `unit+0x8A` / `+0x8E` and gives every chain member the parent's row
   and band, mirroring the engine's own skip on `state & 0x20000`, so the two
-  models sort against each other by `md`, our intra-model view depth. **That is
-  an approximation of the merge, not a port of it.** `0x4B90A0` compares
-  `dstDepth` against `srcDepth + HIWORD(dy)`: its depth plane is a *height*,
-  biased by the world height delta between the two origins, and it samples at
-  the projected offset. `md = (2y − z)/256` is model-local and carries neither.
-  They agree while parent and cargo are at the same height — every factory pad —
-  and diverge for a cargo whose origin sits above or below its parent, which
-  this landing did not cover.
+  models sort against each other by `md`, our intra-model view depth.
+  **The merge's height offset is carried as a bias on the cargo's `md`.** The call
+  (`0x45968B..0x4596D8`) is `0x4B90A0(cargo, scratch, dx = hi(Δx), dy = hi(Δz) −
+  hi(Δalt)/2, bias = hi(Δalt))`, Δ = cargo − parent, and the merge writes a cargo
+  pixel where `dst <= src + bias` (`0x4B913D..0x4B914D`), storing `src + bias`.
+  With the per-type plane base (0x32, or 0x7D for bit 30) a cargo pixel stands
+  `baseC − baseP + Δalt` height units above its parent's; `md` counts height at
+  2/256, so `cargo_md_bias` adds `2·(baseC − baseP + Δalt)/256`, inside the
+  vertex stage's ±1.8 clamp (`uMdBias`) so it cannot leave the row's band.
+  MEASURED: a commander carried by an ARMATLAS hangs at Δalt = −40 (bias −0.31)
+  and is covered by it, as in the engine; an ARMATLAS on an ARMAP pad has
+  Δalt = 0 and the same base, bias 0. It is still an approximation: `md`'s z
+  term has no counterpart in the merge, which compares height alone.
 - **A unit under construction casts no shadow — nearly to the end.** Ours had to
   drop it or the erased body showed our slant projection through as a black
   silhouette. Measured against the stock renderer on ONE solar at one spot, only

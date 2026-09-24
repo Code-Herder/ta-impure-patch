@@ -89,6 +89,8 @@ typedef struct {
     float ax, ay;               /* frame-px anchor                            */
     float wx0, wz0;             /* world x and projected world z at the anchor*/
     float enc;                  /* depth key base                             */
+    float mdBias;               /* added to md before its clamp: 0 except for */
+                                /* cargo (tagpu_native.c, the cargo loop)     */
     float alpha;                /* 0.5 while cloaked; the build ghost rides   */
                                 /* the same blend at its own alpha            */
     int   ghost;                /* 1 = a build-ghost preview: it draws through*/
@@ -272,7 +274,7 @@ typedef struct TAGPU_PDUREC {
     unsigned flagOff;                 /* first of npose floats in flags/vis   */
     /* the vertex stage's per-unit numbers */
     float anchor[4];                  /* ax, ay, world x, projected world z   */
-    float enc, cast[3];
+    float enc, mdBias, cast[3];
     /* the fragment stage's. uNanoT and uNanoC are STICKY: they are written
        only from a unit with `nanoOn`, so a unit without one carries whatever
        the last one that had it left, rather than zeros. Nothing reads them on

@@ -284,6 +284,7 @@ static const char* VS =
     "uniform float uDepthScale;\n"
     "uniform vec4 uAnchor;\n"                /* ax, ay, world x, world z      */
     "uniform float uEnc;\n"                  /* the row's depth key base      */
+    "uniform float uMdBias;\n"               /* cargo vs parent, md units     */
     "uniform vec2 uShd;\n"                   /* shNeutral, shDir              */
     "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv  */
     "uniform int uDepthPass;\n"
@@ -370,7 +371,11 @@ static const char* VS =
     "    px = m.x; py = -m.z - m.y * 0.5;\n"
     "  }\n"
     "  vec2 p0 = uAnchor.xy + vec2(px, py);\n"
-    "  float md = clamp((2.0 * m.y - m.z) / 256.0, -1.8, 1.8);\n"
+    /* uMdBias moves a CARGO unit against its parent inside their shared row
+       (tagpu_native.c, the cargo loop) and is 0 for everything else. It is
+       added BEFORE the clamp, so no bias can carry a vertex out of the row's
+       +-1.8 band into a neighbour's. */
+    "  float md = clamp((2.0 * m.y - m.z) / 256.0 + uMdBias, -1.8, 1.8);\n"
     /* the wire is emitted one notch NEARER than the surface it traces, so it
        wins against the solid part of the model: md reaches +-1.8 and the bias
        is 0.15, against the 2.0 half-gap between depth rows (emit_wire) */
@@ -719,6 +724,7 @@ static void pd_record(const TAGPU_PDUNIT* u, const TAGPU_PBGEOM* g,
     r->anchor[0] = u->ax; r->anchor[1] = u->ay;
     r->anchor[2] = u->wx0; r->anchor[3] = u->wz0;
     r->enc = u->enc;
+    r->mdBias = u->mdBias;
     r->cast[0] = u->cast[0]; r->cast[1] = u->cast[1]; r->cast[2] = u->cast[2];
     r->alpha = u->alpha;
     r->waterT = u->waterT; r->digT = u->digT;

@@ -1858,6 +1858,7 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.f[12] = r->anchor[0]; b.f[13] = r->anchor[1];
     b.f[14] = r->anchor[2]; b.f[15] = r->anchor[3];    /* uAnchor     vec4 @48 */
     b.f[16] = r->enc;                                  /* uEnc       float @64 */
+    b.f[17] = r->mdBias;                               /* uMdBias    float @68 */
     b.f[18] = h->shd[0]; b.f[19] = h->shd[1];          /* uShd        vec2 @72 */
     b.f[20] = r->cast[0]; b.f[21] = r->cast[1];
     b.f[22] = r->cast[2];                              /* uCast       vec3 @80 */
@@ -1920,6 +1921,7 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.f[12] = r->anchor[0]; b.f[13] = r->anchor[1];
     b.f[14] = r->anchor[2]; b.f[15] = r->anchor[3];
     b.f[16] = r->enc;
+    b.f[17] = r->mdBias;
     /* uShd is NOT set on the depth program either: it stays at the memset's
        zero, and nothing the caster writes reads it. */
     b.f[20] = r->cast[0]; b.f[21] = r->cast[1]; b.f[22] = r->cast[2];
@@ -3138,7 +3140,11 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     for (i = 0; i < s_ndraw; i++) {
         const DRAW* q = &s_draw[i];
         VkPipeline want;
-        if (!q->ghost != (stage == RS_GHOST)) continue;  /* this stage's only */
+        /* BOTH SIDES AS 0/1 BEFORE THE COMPARE. `!q->ghost` alone is the
+           negation of the test, and against the stage test it would draw every
+           unit body in the ghost stage -- after the effects, over every
+           particle and projectile, with nothing failing. */
+        if ((q->ghost != 0) != (stage == RS_GHOST)) continue;  /* this stage's only */
         want = q->ghost ? s_pipeGhost : s_pipeBody;
         VkBuffer vbs[2];
         VkDeviceSize offs[2];
