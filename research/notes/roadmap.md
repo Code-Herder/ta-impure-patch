@@ -320,7 +320,7 @@ no LOS drew in full colour at 0.35x on `feat-forest`, and is hidden with the fix
 Neither half of the engine's grid can be moved — the size is a map-load allocation and the origin
 is recomputed inside `0x4843C0` from `main+0x1431F`, which the render thread reads for the whole
 world's position, so lying to the builder about it is a race with the camera. **`tagpu_fogwide.c`
-replicates the builder instead**, over a window sized for `tagpu_zoom_min()` (the widest view the
+replicates the builder instead**, over a window sized for `TAGPU_ZOOM_MIN` (the widest view the
 levers reach — not the level in force, which the game thread can only see one frame late), on the
 **game thread** from `terr_fogtick`, where the LOS and MAPPED allocations are the engine's own to
 read. Three buffers swapped under a critical section carry it to the render thread, so neither

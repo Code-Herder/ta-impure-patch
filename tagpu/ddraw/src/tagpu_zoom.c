@@ -460,6 +460,15 @@ int tagpu_zoom_gather_span(int v, float z)
     return span < v ? v : span;
 }
 
+void tagpu_zoom_pub_window(int eye, int v, int* lo, int* span)
+{
+    int s = tagpu_zoom_gather_span(v, ZOOM_MIN);
+    int pad = TAGPU_GATHER_MARGIN + (v > 0 ? v / TAGPU_LEAD_DIV : 0);
+
+    *lo = eye - (s - v) / 2 - pad;
+    *span = s + 2 * pad;
+}
+
 void tagpu_zoom_fog_held(unsigned* frames, int* maxPx, unsigned* paused, unsigned* back)
 {
     *frames = s_fogHeld;
@@ -1450,11 +1459,6 @@ float tagpu_zoom_level(void)
     return s_live ? s_zoom : 1.0f;
 }
 
-float tagpu_zoom_min(void)
-{
-    return ZOOM_MIN;
-}
-
 /* Snapshot the published view. Returns 0 when there is nothing to do —
    the caller then leaves the point alone. */
 static int view(float* z, float* cx, float* cy, int* L, int* T, int* W, int* H)
@@ -1969,17 +1973,20 @@ static int engine_grid_misplaced(const TAGPU_PACKET* pk)
    step it has not seen, and false at the build eye itself for a view that is
    not (1016 rows at 1080p reach into the short last row). Otherwise the wide
    grid, with the eye clamped so the slab lies in its span. That interval
-   holds the eye the grid was built about for every level, since fogw_window
-   cuts the slab at the floor about that eye and S never exceeds the floor's,
+   holds every eye within the lead of the one the grid was built about, at
+   every level, since fogw_window cuts the slab at the floor about that eye
+   grown by the lead (tagpu_zoom_pub_window) and S never exceeds the floor's,
    so it is empty only for a grid built for another viewport or trimmed by a
    failed allocation. The clamp is the identity for every gesture that only
-   zooms in (fogw_window's argument); what it holds back is a displacement
-   the game thread has not applied yet, and the drawn eye waits at the edge
-   of what the grid covers for as many frames as that takes, instead of
-   drawing past it. That happens without any lag too: the prediction runs
-   one posted step ahead of the game thread by design, and at the floor the
-   slab has no slack past the grid's rounding (gpu-status §2.3 has the
-   numbers). While a frame is held, a click is still mapped by the game
+   zooms in (fogw_window's argument), and for any displacement the game
+   thread has not applied that is within the lead; what it holds back is a
+   larger one, and the drawn eye waits at the edge of what the grid covers
+   for as many frames as that takes, instead of drawing past it. The
+   prediction runs one posted step ahead of the game thread by design, and
+   the lead is sized to absorb that step (gpu-status §2.3e has the
+   numbers). The clamp reads the grid's own origin and size, never the lead:
+   a grid a failed allocation trimmed is bounded by what it holds. While a
+   frame is held, a click is still mapped by the game
    thread through the eye it applies, up to the hold from where it is drawn.
    With no wide grid in the packet (`fogwide.off`, a failed build) a frame
    whose engine grid qualifies but for the 1x rect is held into that grid; any

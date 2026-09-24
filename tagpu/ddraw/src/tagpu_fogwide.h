@@ -39,13 +39,15 @@
    engine's own loop bounds it.
 
    WHAT IT COVERS. The window is sized for the WIDEST view the zoom levers can
-   produce — `tagpu_zoom_min()`, not the current level — plus a margin. The
+   produce — TAGPU_ZOOM_MIN, not the current level — plus a margin. The
    level the game thread can see is the one the render thread published on the
    previous frame, so sizing for the current level would leave the ring bare for
    a frame whenever the zoom eased outward; sizing for the whole range means no
    change of level can outrun the grid. A step of the EYE can: the cursor
-   anchor moves the drawn eye ahead of the one the grid was built about, and
-   the render thread's fog bound (tagpu_zoom.c) holds it inside the grid.
+   anchor moves the drawn eye ahead of the one the grid was built about. The
+   window carries a lead of a quarter of the viewport on each side for that
+   step (TAGPU_LEAD_DIV, tagpu_zoom.h), and the render thread's fog bound
+   (tagpu_zoom.c) holds an eye that runs past it inside the grid.
 
    HANDING IT OVER — IT DOES NOT (frame packet exchange). The render thread
    holds no pointer into this module: the packet's publisher copies the grid

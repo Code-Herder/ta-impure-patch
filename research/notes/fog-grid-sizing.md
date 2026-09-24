@@ -540,7 +540,7 @@ the eye stops being an input at all.
 
 **What is left is the viewport.** `vw`/`vh` come from `tagpu_vpwide_true_rect`, which derives the
 *true* engine viewport — `(screenW − 128) × (screenH − 64)` — and `zmin` is a compile-time
-constant (`tagpu_zoom_min` returns `ZOOM_MIN`). So once the residue is removed, the required size
+constant (`TAGPU_ZOOM_MIN`). So once the residue is removed, the required size
 is a pure function of the video mode, and it changes exactly when the video mode does: at game
 entry, after a trip through the shell.
 

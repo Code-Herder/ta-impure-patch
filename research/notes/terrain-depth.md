@@ -1008,7 +1008,7 @@ ground between them, and, in the black band's case, unexplored map drawn in full
 and buildings the player has never seen. Measured on `feat-forest` at 0.35× — an enemy CORE Solar
 Collector on ground with no LOS, drawn in full colour on the frame's right edge, gone with the fix.
 
-**`tagpu_fogwide.c` builds its own grid** over a window sized for `tagpu_zoom_min()` — the widest
+**`tagpu_fogwide.c` builds its own grid** over a window sized for `TAGPU_ZOOM_MIN` — the widest
 view the levers can reach, not the level in force, because the level the game thread can read is a
 frame old and one ease step of a wheel flick is wider than the slack. It replicates `0x4843C0`
 exactly (engine map §"The screen fog grid"), on the **game thread**, from `terr_fogtick` — the fog

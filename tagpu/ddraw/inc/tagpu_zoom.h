@@ -19,6 +19,20 @@
    grid cannot come out narrower than the slab the gathers test against it. */
 #define TAGPU_GATHER_MARGIN 256
 
+/* THE LEAD, as the divisor of the viewport on each axis: a quarter of it, in
+   world px, on every side. The render thread draws from a predicted eye that
+   runs ahead of the one the game thread published by the steps it has not
+   applied yet, and the fog bound (tagpu_zoom.c, predict) holds that eye only
+   when its slab would leave the wide fog grid. Every window the game thread
+   publishes about its eye is therefore the floor's slab grown by this much —
+   the wide fog grid (tagpu_fogwide.c), the units carried with their pieces and
+   the feature anchors (tagpu_packet_pub.c) — all through
+   tagpu_zoom_pub_window, so an eye the bound accepts finds each of those
+   tables covering its slab. The slab itself (the native pass's tests, the
+   fog gates) stays at TAGPU_GATHER_MARGIN about the eye it draws from, and
+   the bound reads the grid's own origin and size, not this number. */
+#define TAGPU_LEAD_DIV 4
+
 struct TAGPU_PACKET;
 struct TAGPU_CMD;
 
@@ -162,6 +176,12 @@ int   tagpu_zoom_wide_fog(void);
    clamps the predicted eye with it. One expression for all three. */
 int   tagpu_zoom_gather_span(int v, float z);
 
+/* The window the game thread publishes about its eye `eye` along one axis of
+   extent `v`: the floor's gather span centred as the pass centres it, plus
+   TAGPU_GATHER_MARGIN and the lead (v / TAGPU_LEAD_DIV) on each side. `*lo`
+   is its first world px and `*span` its width. Pure arithmetic, any thread. */
+void  tagpu_zoom_pub_window(int eye, int v, int* lo, int* span);
+
 /* The fog bound's cost since the DLL loaded: frames whose predicted eye it
    held back and the largest hold in world px along either axis; frames it
    drew at the last frame's level so the view would not move against the
@@ -222,14 +242,6 @@ void  tagpu_zoom_frame_end(void);
 /* The level in force (1.0 until the first publish — menus are never zoomed).
    Render thread and the message thread. */
 float tagpu_zoom_level(void);
-
-/* The widest view the levers can produce: the LOWEST level either of them will
-   settle at, which is the same clamp tagpu_zoom_read_lever() applies to both.
-   Anything that has to size a buffer for "however far out this view can go"
-   asks here rather than pinning the number itself — tagpu_fogwide.c does,
-   because the level it can read is always one frame old and one frame of the
-   tween can cross the whole range. */
-float tagpu_zoom_min(void);
 
 /* ---- game thread: the apply ------------------------------------------- */
 

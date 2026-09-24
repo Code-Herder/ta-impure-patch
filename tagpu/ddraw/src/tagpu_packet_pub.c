@@ -91,7 +91,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
 #include "tagpu_native.h"   /* tagpu_native_owns_unit: the ownership answer, taken here */
-#include "tagpu_zoom.h"      /* TAGPU_ZOOM_MIN: the widest rect the tables cover */
+#include "tagpu_zoom.h"      /* tagpu_zoom_pub_window: the rect the tables cover */
 #include "tagpu_model3do.h"  /* TAGPU_PBMAXPIECE, to assert the packet's copy of it */
 #include "tagpu_gaf.h"       /* the GAF resolvers: pure reads, taken on THIS thread */
 #include "tagpu_fxown.h"     /* whether the render thread wants the effect tables */
@@ -545,23 +545,31 @@ static unsigned fill_pieces(TAGPU_PACKET* p, const char* o3, unsigned nparts,
     return nparts;
 }
 
-/* THE ANCHOR RECT: the engine's own feature sweep grown to the WIDEST zoom the
-   lever allows, plus a margin, and clamped to the map. Never the zoom in force
-   — the render thread may still be drawing from this packet a frame later, and
-   at a level the game thread has not seen; the margin also absorbs the cursor
-   anchor's unacknowledged eye delta, which is how far ahead of `eye` the frame
-   is actually drawn. A consumer at any zoom asks for a sub-rect of this one and
-   counts what falls outside. */
-#define PK_ANCH_MARGIN 32           /* 16-px cells on every side               */
+/* THE ANCHOR RECT: the window published about the eye (tagpu_zoom_pub_window:
+   the widest zoom's slab, the gathers' slack and the lead a predicted eye may
+   run ahead by), plus a margin, and clamped to the map. Never the zoom in
+   force — the render thread may still be drawing from this packet a frame
+   later, and at a level the game thread has not seen. The feature pass asks
+   for the engine's sweep about the eye it draws from: 10 cells left of its
+   effective rect, 16 rows above it, and the sweep's own count on from there
+   (tagpu_feat.c), which ends about 2 cells right of that rect and 16 rows
+   below it — inside the slab, TAGPU_GATHER_MARGIN (16 cells) about the rect.
+   On a frame drawn from the wide grid the fog bound keeps the slab inside
+   the grid, which reaches at most 31 px before the published window and 63
+   past it; the margin leaves 16 cells beyond the window for that and for a
+   sweep longer than the engine's own. A consumer at any zoom asks for a
+   sub-rect of this one and counts what falls outside (`outside=`). */
+#define PK_ANCH_MARGIN 16           /* 16-px cells on every side               */
 
 static void anchor_rect(const TAGPU_PACKET* p, int* c0, int* r0, int* cols, int* rows)
 {
     int vw = p->vp[2], vh = p->vp[3];
-    int ew = (int)((float)vw / TAGPU_ZOOM_MIN) + 64;
-    int eh = (int)((float)vh / TAGPU_ZOOM_MIN) + 64;
+    int lx, ly, ew, eh;
     int mapW = p->map_w16, mapH = p->map_h16;
-    *c0   = ((p->eye[0] + (vw - ew) / 2) >> 4) - PK_ANCH_MARGIN;
-    *r0   = ((p->eye[1] + (vh - eh) / 2) >> 4) - PK_ANCH_MARGIN;
+    tagpu_zoom_pub_window(p->eye[0], vw, &lx, &ew);
+    tagpu_zoom_pub_window(p->eye[1], vh, &ly, &eh);
+    *c0   = (lx >> 4) - PK_ANCH_MARGIN;
+    *r0   = (ly >> 4) - PK_ANCH_MARGIN;
     *cols = (ew >> 4) + 16 + 2 * PK_ANCH_MARGIN;
     *rows = (eh >> 4) + 40 + 2 * PK_ANCH_MARGIN;
     if (*c0 < 0) { *cols += *c0; *c0 = 0; }
@@ -606,15 +614,14 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     anchor_rect(p, &c0, &r0, &cols, &rows);
     p->anch_c0 = c0; p->anch_r0 = r0; p->anch_cols = cols; p->anch_rows = rows;
 
-    /* the piece-cull rect, in world px: the span the gathers reach at the
-       zoom floor about the eye, plus the slack they allow themselves each way
-       — the same rect fogw_window builds the wide fog grid over */
+    /* the piece-cull rect, in world px: the window published about the eye —
+       the same one fogw_window builds the wide fog grid over, so a unit whose
+       anchor the pass accepts inside a slab the fog bound allows has its
+       pieces here */
     {
-        int vw = p->vp[2], vh = p->vp[3];
-        int ew = tagpu_zoom_gather_span(vw, TAGPU_ZOOM_MIN) + 2 * TAGPU_GATHER_MARGIN;
-        int eh = tagpu_zoom_gather_span(vh, TAGPU_ZOOM_MIN) + 2 * TAGPU_GATHER_MARGIN;
-        inL = p->eye[0] - (ew - vw) / 2;
-        inT = p->eye[1] - (eh - vh) / 2;
+        int ew, eh;
+        tagpu_zoom_pub_window(p->eye[0], p->vp[2], &inL, &ew);
+        tagpu_zoom_pub_window(p->eye[1], p->vp[3], &inT, &eh);
         inR = inL + ew;
         inB = inT + eh;
     }
