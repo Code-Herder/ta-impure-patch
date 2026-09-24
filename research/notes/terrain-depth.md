@@ -1011,8 +1011,10 @@ Two departures from the engine, both deliberate and both documented in the sourc
 
 1. **The border completions use the derived straddling index**, not the engine's literal
    `0`/`rows−2`/`0`/`cols−2` (engine map, the table). They coincide in every window an eye in the
-   engine's own range `[0, map − W]` produces; past it — the camera's centre range takes the eye up
-   to `W/2` off the map, so `row0`/`col0` reach −2 and beyond, or the far edges' equivalent — they do
+   engine's own range `[0, extent − W]` produces (`extent` the scroll extent `main+0x1422B`, the
+   map less 32 and 128 px; `skipped=0` measured at its far corner `(9824, 11968)` on Two
+   Continents); past it — the camera's centre range takes the view up to `W/2` off the map, so
+   `row0`/`col0` reach −2 and beyond, or the far edges' equivalent — they do
    not, and there the engine's completion is a no-op on a wholly off-map line while ours completes
    the straddling one. So the oracle compares only what both functions define the same way: for
    each completion whose gate is up and whose two lines differ, both lines are left out and counted

@@ -41,6 +41,8 @@
 
 #define OFF_MAPPXW    0x14223      /* int MapWidth  (world units)                 */
 #define OFF_MAPPXH    0x14227      /* int MapHeight                               */
+#define OFF_SCROLLW   0x1422B      /* the scroll extent: MapWidth less 32 and     */
+#define OFF_SCROLLH   0x1422F      /* MapHeight less 128 (level load 0x4833C4/E0) */
 #define OFF_FMAPX     0x14233      /* int FeatureMapSizeX (tiles, 16 units each)  */
 #define OFF_FMAPY     0x14237
 #define OFF_FMAP      0x14287      /* FeatureStruct* FeatureMap, stride 0x0D      */
@@ -2090,8 +2092,10 @@ static void write_result(void)
    the CENTRE of the window, so the eye is the centre minus half a view, using
    the projection the roster already reports. The eye is written straight into
    the field, outside the zoom module's apply, so it is clamped to the engine's
-   own range `[0, map - W]` — the top first, then the bottom, so a map narrower
-   than the view (where `map - W` is negative) holds it at 0: that range is
+   own range `[0, extent - W]`, `extent` the SCROLL EXTENT main+0x1422B/0x1422F
+   (the map less 32 and 128 px, tagpu_zoom.c "two sizes") — the top first,
+   then the bottom, so an extent narrower than the view (where `extent - W` is
+   negative) holds it at 0: that range is
    inside the camera's range whichever is in force, and an eye off it is only
    safe on a draw whose ground our terrain pass owns (tagpu_zoom.c, "the
    camera's range"). A `pin` then holds exactly this eye. */
@@ -2105,8 +2109,8 @@ static void place_camera(const TAGPU_FRAME* f)
 
     gw = f && f->game_width  > 0 ? f->game_width  : 640;
     gh = f && f->game_height > 0 ? f->game_height : 480;
-    mw = *(int*)(ta + OFF_MAPPXW);
-    mh = *(int*)(ta + OFF_MAPPXH);
+    mw = *(int*)(ta + OFF_SCROLLW);
+    mh = *(int*)(ta + OFF_SCROLLH);
     vw = *(int*)(ta + OFF_VIEW_W);
     vh = *(int*)(ta + OFF_VIEW_H);
 

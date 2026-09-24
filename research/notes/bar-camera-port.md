@@ -173,9 +173,17 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
 **C2 — the centre clamp [BUILT, G20a].**
 
 * **The range.** `camera_range()` is the one function: lo = −W/2 and hi = map − W/2, with W the
-  **true** viewport, or the engine's own [0, map − W]. `zoom_eye_range` (the game thread's inputs)
-  and `range_pk` (the packet's `vp`, `map_pxw/h` and the new `cam_centre`) both call it, which is
-  the invariant the pre-clamp rests on.
+  **true** viewport, or the engine's own [0, extent − W]. `zoom_eye_range` (the game thread's
+  inputs) and `range_pk` (the packet's `vp`, `map_pxw/h`, `map_w16/h16` and the new
+  `cam_centre`) both call it, which is the invariant the pre-clamp rests on.
+* **Two sizes.** `map` is the map's own size, the PLOT grid `main+0x14233`/`+0x14237` × 16 —
+  the tile map the lab and the terrain pass draw, and where the mirror (C5) reflects. `extent` is
+  the scroll extent `main+0x1422B`/`+0x1422F`, the map less 32 px wide and 128 px tall, which the
+  engine's clamp `0x41C3C0` and its inline target clamps read. The view centre stops at the map's
+  edge, as the lab's does (Two Continents: `(10304, 12448)` at 1024x768, not the extent's
+  `(10272, 12320)`). The engine's range and the pointer's guards stay on the extent, which is what
+  keeps them safe: the 128-px bottom margin is `GetTPosition`'s search window (engine map,
+  "Engine defects we patch").
 * **Which range is in force.** The centre range holds only on a draw whose ground is ours
   (`s_gCentre = installed && terr`), because the engine's terrain pass `0x483FA0` has no bound on
   its tile index; the terrain latch is set from the same request right after the apply, so the
@@ -193,22 +201,24 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
 * **The debug overlay.** `0x418310` has no lower bound on its cell window, so its one call site
   `0x468DBA` is redirected to call it only for an eye in the engine's own range.
 * **The minimap box** is clamped to the minimap at every zoom, 1× included.
-* **The fog.** An eye off [0, map − W] puts the engine grid's border completions off the map, so
+* **The fog.** An eye off [0, extent − W] puts the engine grid's border completions off the map, so
   the native pass draws from `fogwide`'s grid then (`tagpu_zoom_wide_fog`).
 
 **The audit C2 needed.** Every engine reader of the eye had to be bounded for an eye W/2 past the
 map, **at every zoom**, with `vpwide`'s widened rect below 1× adding W/(2z) − W/2 more. Before
 G20a the eye reached −0.4375 W at 8× and never went below 0 at or under 1×. The full table, with
 the instruction behind each bound, is [exe reverse engineering](exe-reverse-engineering.html)
-§"Who reads the eye"; the rows this note listed:
+§"Who reads the eye". Moving the far ends from the extent's edge to the map's (32 px right,
+128 px down) changed no verdict: no row's bound reads where the centre range ends. The rows this
+note listed:
 
 | reader | bound |
 |---|---|
 | `0x483FA0`, the engine's terrain pass | **none of its own** — the tile index from `eye >> 5` is unchecked at both ends. Bounded by design: the centre range is in force only on draws whose terrain latch skips it |
 | `0x418310`, the map debug overlay | **none below** — the cell window starts at eye/16 with only the upper ends clipped. Bounded by the redirect of `0x468DBA` |
-| `0x498DA0`, the pointer → world point | **bounded twice**: `tagpu_vpwide.c` clamps the world point to the map, and `zoom_tpos_guard` (`0x498EF9`) clamps the side-panel path. A right-click past the edge orders a move to the nearest point on the map's edge |
+| `0x498DA0`, the pointer → world point | **bounded twice**: `tagpu_vpwide.c` clamps the world point to the scroll extent, and `zoom_tpos_guard` (`0x498EF9`) clamps the side-panel path to the same. A right-click past the edge orders a move to the nearest point of the extent |
 | the minimap view box | **bounded**: clamped to the minimap at every zoom |
-| `0x4843C0`, the screen fog grid builder | **bounded**: every cell is tested unsigned against the LOS block's w/h before either read; the border completions stay inside the grid, but their content is misplaced for an eye off [0, map − W], which is why the native pass takes `fogwide`'s grid then |
+| `0x4843C0`, the screen fog grid builder | **bounded**: every cell is tested unsigned against the LOS block's w/h before either read; the border completions stay inside the grid, but their content is misplaced for an eye off [0, extent − W], which is why the native pass takes `fogwide`'s grid then |
 | `0x4848E0`, the fog draw | **bounded**: a `[0, cols) × [0, rows)` walk; terrown skips it with the terrain pass |
 | `fogwide`'s wide grid | **bounded in the replica**: every read of the mapped bytes checks `idx < mappedCells`, and the edge completions derive their row from `row0` |
 | our feature gather (`tagpu_feat.c`) | **bounded**: rows and columns are clamped to the map. The mirror's gather (C5) is a separate list, so this clamp stays |

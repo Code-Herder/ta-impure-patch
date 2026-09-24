@@ -180,16 +180,19 @@ fixture that only arms the pass produces no picture:
 | `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with the mouse->world repair (`zoom.on` or `vpwide.on`) |
 | `vpwide.on` | attach | widens the rect the engine addresses to what the zoom shows, so ring clicks and band boxes land at zoom < 1. Writes `main+0x37E27..0x37E33`. Logs `vpwide: ARMED (mouse->world 0x498DA0, surface …)` and `vpwide: true viewport rect verified (128,32 896x704)`, `vpwide: viewport rect restored to 1x` at 1x. `zoom.on` alone logs `vpwide: mouse->world repair only (0x498DA0) —` |
 | `fogwide.off` | live | the wide fog grid off: the outer ring at zoom < 1 falls back to a smear of the border cell. The native line's `bare=` does not count this |
-| `fogwide_check.on` | live | the oracle: `fogwide check: … compared=N of cells=M skipped=K differ=N` every 120th tick, **`differ=0`**. It compares only the entries both builders define the same way: `skipped` is the border lines where the engine's literal completion row or column and ours (the straddling one) differ, both left out — 0 for an eye in the engine's own `[0, map − W]`, non-zero past it (the centre range) |
+| `fogwide_check.on` | live | the oracle: `fogwide check: … compared=N of cells=M skipped=K differ=N` every 120th tick, **`differ=0`**. It compares only the entries both builders define the same way: `skipped` is the border lines where the engine's literal completion row or column and ours (the straddling one) differ, both left out — 0 for an eye in the engine's own `[0, extent − W]`, non-zero near the map's edge in the centre range (104 of 720 at a corner, 1024x768) |
 
 Driving the camera at a zoom other than 1:
 
 - **The camera keeps the view centre on the map, at every zoom**: the eye ranges over
-  `[−W/2, map − W/2]` (W, H the true viewport, 896x704 at 1024x768), so a map edge can reach the
-  middle of the screen. That range holds only while `terr.on` draws the ground; without it the eye
-  stays in the engine's own `[0, map − W]`. `tacli eye` is clamped into the range in force, so
-  `tacli eye <i> -99999 -99999` puts the map's NW corner at the view centre. A right-click past the
-  edge orders a move to the nearest point on the map.
+  `[−W/2, map − W/2]` (W, H the true viewport, 896x704 at 1024x768; `map` the PLOT grid × 16),
+  so a map edge can reach the middle of the screen. That range holds only while `terr.on` draws
+  the ground; without it the eye stays in the engine's own `[0, extent − W]`, `extent` the scroll
+  extent `main+0x1422B`/`+0x1422F` — the map less 32 px wide and 128 px tall, and **not** the
+  map's size (Two Continents: map 10752x12800, extent 10720x12672). `tacli eye` is clamped into
+  the range in force, so `tacli eye <i> -99999 -99999` puts the map's NW corner at the view
+  centre and `99999 99999` its SE corner. A right-click past the edge orders a move to the nearest
+  point of the extent.
 - **A wheel round trip does not land on 1x** (x1.163 then x0.877 is 1.020). Re-anchor by writing
   `1.0` to `tagpu_zoom.txt`, then deleting it. Deleting the file hands over, it does not reset;
   notches sent while the file is present are dropped and logged (`zoom: wheel … ignored -

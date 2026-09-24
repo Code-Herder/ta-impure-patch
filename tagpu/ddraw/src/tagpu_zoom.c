@@ -567,8 +567,23 @@ static void apply_scroll_rate(char* ta)
        eye in [-W/2, map - W/2]            the same at every zoom
 
    and the map's edge can reach the middle of the screen, zoomed in or out.
-   The engine's own `0x41C3C0` clamps to `[0, map - W]` instead, the range that
-   keeps the VIEWPORT's edges on the map's at 1x.
+   The engine's own `0x41C3C0` clamps to `[0, extent - W]` instead, the range
+   that keeps the VIEWPORT's edges on the scroll extent's at 1x.
+
+   TWO SIZES, AND ONLY ONE IS THE MAP. `map` is the map's own size, the PLOT
+   grid main+0x14233/0x14237 (16-px cells) x 16 — the tile map's extent, the
+   one the lab and the terrain pass draw. `extent` is the SCROLL EXTENT
+   main+0x1422B/0x1422F, the map less 32 px wide and 128 px tall, written at
+   the level load from the map's pixel size main+0x14223/0x14227
+   (`0x4833B8..0x4833E0`: `sub 0x20`, `sub 0x80`) and rewritten after that only
+   by the debug-level `Edge` command [DISASSEMBLED]. MEASURED 2026-09-23 on Two
+   Continents: PLOT 672 x 800, main+0x14223/0x14227 10752 x 12800, extent
+   10720 x 12672. The view centre stops at the MAP's edge, as the lab's does;
+   the engine's range and the pointer's guards stay on the extent, which is
+   what keeps them safe (zoom_tpos_guard). The PLOT grid and not
+   main+0x14223 is read for the map because the packet carries it
+   (`map_w16/h16`): the two threads then compute the range from the same
+   words, and agree by construction.
 
    THE CENTRE RANGE IS IN FORCE ONLY WHILE THE GROUND IS OURS, and that is the
    bound the whole range rests on. The engine's terrain pass `0x483FA0` indexes
@@ -586,7 +601,7 @@ static void apply_scroll_rate(char* ta)
      target into the range in force on every draw (every draw that applied a
      delta or a hold, when our eye clamp is not installed and the engine's
      own clamp keeps the rest). A draw whose ground is the engine's therefore
-     starts from an eye in `[0, map - W]`.
+     starts from an eye in `[0, extent - W]`.
 
      between in-play draws, every engine camera writer ends in `0x41C3C0` or
      in one of the target clamps below, and all of them use the range the
@@ -598,7 +613,7 @@ static void apply_scroll_rate(char* ta)
      back — its 90-frame watchdog, a `key=` change, the passive or over
      modes, a gather that bails or draws no cell, the pass disarmed — the
      next apply takes the engine's range and walks an eye that was past
-     `[0, map - W]` inward, by up to W/2 (H/2), on that draw. And it stays
+     `[0, extent - W]` inward, by up to W/2 (H/2), on that draw. And it stays
      there when the ground comes back: the range is a clamp, not a memory,
      so a view that had the map's edge at its centre shows it W/2 world px
      nearer its own edge (on it, at 1x) until the player scrolls back. The level
@@ -606,7 +621,7 @@ static void apply_scroll_rate(char* ta)
 
      EVERY CLAMP FAILS CLOSED. Where the range in force cannot be computed
      (a main pointer outside the sanity window, a zero viewport or map), each
-     one clamps to the engine's own `[0, map - W]` from the engine's own words
+     one clamps to the engine's own `[0, extent - W]` from the engine's own words
      instead (engine_range), and the apply publishes `centre = 0` for that
      draw — so no path leaves the eye or the target unclamped. The screenshot tiler's `DrawGameScreen(1, 0)` loop `0x495C76`
      and the movie recorder never apply or latch, so they draw on exactly
@@ -619,7 +634,7 @@ static void apply_scroll_rate(char* ta)
    (zoom_debug_overlay).
 
    THE SCROLL TARGET `main+0x14327`/`+0x1432B` HAS THREE REACHABLE INLINE
-   CLAMPS, all to `[0, map - W]`, that never reach `0x41C3C0`: the smooth arms
+   CLAMPS, all to `[0, extent - W]`, that never reach `0x41C3C0`: the smooth arms
    of the centre-on `0x41C7C0` (block `0x41C808`) and of the centre-on-object
    `0x41C8E0` that centre-on-unit calls (block `0x41C93B`), and the per-frame
    camera follow in the stepper (block `0x41CAF7`). The stepper eases the eye
@@ -693,10 +708,12 @@ static void apply_scroll_rate(char* ta)
 #define SITE_GETTPOS     0x00498EF9u   /* its call site inside 0x498DA0           */
 #define OFF_EYEX         0x1431F
 #define OFF_EYEY         0x14323
-#define OFF_MAP_W        0x1422B       /* map size in world px                    */
-#define OFF_MAP_H        0x1422F
+#define OFF_EXTENT_W     0x1422B       /* the SCROLL EXTENT: the map less 32 px   */
+#define OFF_EXTENT_H     0x1422F       /* ...and less 128 px ("two sizes")        */
+#define OFF_PLOT_C       0x14233       /* the map in 16-px cells: the map is 16x  */
+#define OFF_PLOT_R       0x14237
 #define OFF_FIELD_W      0x37E37       /* the true viewport size: the W and H of  */
-#define OFF_FIELD_H      0x37E3B       /* 0x41C3C0's [0, map - W]; vpwide never writes them */
+#define OFF_FIELD_H      0x37E3B       /* 0x41C3C0's [0, extent - W]; vpwide never writes them */
 #define OFF_SCRTX        0x14327       /* MapXScrollingTo — the eye eases to here */
 #define OFF_SCRTY        0x1432B
 #define OFF_MM_RECT      0x142CB       /* the RECT 0x466B70 fills                 */
@@ -788,25 +805,35 @@ static void __stdcall zoom_minimap_rect(int* r)
 }
 
 /* THE CAMERA'S RANGE, the one arithmetic both threads use: the centre range
-   when `centre`, else the engine's own `[0, map - W]`. Returns 0 — and leaves
-   the outputs alone — when the inputs are not sane enough to compute one.
-   The centre range cannot invert (its width is the map's); the engine's
-   inverts on a map smaller than the viewport, where the engine alternates
-   between 0 and a negative bound on every call, and this one holds at 0. */
-static int camera_range(int W, int H, int mapW, int mapH, int centre,
-                        int* loX, int* hiX, int* loY, int* hiY)
+   `[-W/2, map - W/2]` when `centre`, else the engine's own `[0, extent - W]`
+   ("two sizes"). Returns 0 — and leaves the outputs alone — when the inputs
+   the chosen range needs are not sane enough to compute it. The centre range
+   cannot invert (its width is the map's); the engine's inverts on a map
+   smaller than the viewport, where the engine alternates between 0 and a
+   negative bound on every call, and this one holds at 0. */
+static int camera_range(int W, int H, int extW, int extH, int mapW, int mapH,
+                        int centre, int* loX, int* hiX, int* loY, int* hiY)
 {
-    if (W <= 0 || H <= 0 || mapW <= 0 || mapH <= 0) return 0;
+    if (W <= 0 || H <= 0) return 0;
     if (centre) {
+        if (mapW <= 0 || mapH <= 0) return 0;
         *loX = -(W / 2); *hiX = mapW - W / 2;
         *loY = -(H / 2); *hiY = mapH - H / 2;
     } else {
-        *loX = 0; *hiX = mapW - W;
-        *loY = 0; *hiY = mapH - H;
+        if (extW <= 0 || extH <= 0) return 0;
+        *loX = 0; *hiX = extW - W;
+        *loY = 0; *hiY = extH - H;
         if (*hiX < 0) *hiX = 0;
         if (*hiY < 0) *hiY = 0;
     }
     return 1;
+}
+
+/* The map in world px from its size in 16-px PLOT cells; 0 (no centre range)
+   for a count no map has, so the multiply cannot overflow. */
+static int plot_px(int cells)
+{
+    return cells > 0 && cells < 65536 ? cells * 16 : 0;
 }
 
 /* The range in force on the GAME thread: the TRUE viewport (never the field:
@@ -819,13 +846,15 @@ static int zoom_eye_range(const char* ta, int* loX, int* hiX, int* loY, int* hiY
 
     if (!ta_ok(ta)) return 0;
     tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
-    return camera_range(W, H, *(const int*)(ta + OFF_MAP_W), *(const int*)(ta + OFF_MAP_H),
+    return camera_range(W, H, *(const int*)(ta + OFF_EXTENT_W), *(const int*)(ta + OFF_EXTENT_H),
+                        plot_px(*(const int*)(ta + OFF_PLOT_C)),
+                        plot_px(*(const int*)(ta + OFF_PLOT_R)),
                         s_gCentre, loX, hiX, loY, hiY);
 }
 
 /* THE ENGINE'S OWN RANGE, FROM THE ENGINE'S OWN WORDS — what every clamp here
    falls back to when the range above cannot be computed, so that a clamp FAILS
-   CLOSED. `0x41C3C0` clamps to `[0, map - W]` from main+0x1422B/0x1422F and
+   CLOSED. `0x41C3C0` clamps to `[0, extent - W]` from main+0x1422B/0x1422F and
    main+0x37E37/0x37E3B with no test of any of them [DISASSEMBLED]; this reads
    the same four words and holds the top at 0 where the engine's inverts. It
    always answers, and its range is inside the centre one, so falling back can
@@ -833,8 +862,8 @@ static int zoom_eye_range(const char* ta, int* loX, int* hiX, int* loY, int* hiY
    engine's own bytes that every caller replaces read main unconditionally. */
 static void engine_range(const char* ta, int* loX, int* hiX, int* loY, int* hiY)
 {
-    int hx = *(const int*)(ta + OFF_MAP_W) - *(const int*)(ta + OFF_FIELD_W);
-    int hy = *(const int*)(ta + OFF_MAP_H) - *(const int*)(ta + OFF_FIELD_H);
+    int hx = *(const int*)(ta + OFF_EXTENT_W) - *(const int*)(ta + OFF_FIELD_W);
+    int hy = *(const int*)(ta + OFF_EXTENT_H) - *(const int*)(ta + OFF_FIELD_H);
 
     *loX = 0; *hiX = hx > 0 ? hx : 0;
     *loY = 0; *hiY = hy > 0 ? hy : 0;
@@ -851,13 +880,15 @@ static int clamp_range(const char* ta, int* loX, int* hiX, int* loY, int* hiY)
 
 /* The same range from the packet's copies of the same inputs — the render
    thread's, for the cursor anchor's pre-clamp and the predicted eye. The
-   packet's `vp` IS tagpu_vpwide_true_rect's answer, its `map_pxw/h` the same
-   two fields and its `cam_centre` the apply's own choice for the draw it was
-   published from, so the two agree by construction and a step the render
-   thread pre-clamps is accepted there. */
+   packet's `vp` IS tagpu_vpwide_true_rect's answer, its `map_pxw/h` the
+   scroll extent's two words, its `map_w16/h16` the PLOT grid's and its
+   `cam_centre` the apply's own choice for the draw it was published from, so
+   the two agree by construction and a step the render thread pre-clamps is
+   accepted there. */
 static int range_pk(const TAGPU_PACKET* p, int* loX, int* hiX, int* loY, int* hiY)
 {
     return camera_range(p->vp[2], p->vp[3], p->map_pxw, p->map_pxh,
+                        plot_px(p->map_w16), plot_px(p->map_h16),
                         p->cam_centre != 0, loX, hiX, loY, hiY);
 }
 
@@ -898,7 +929,7 @@ static void __cdecl zoom_eye_clamp(void* arg)
 }
 
 /* The scroll target into the range in force — what each of the inline target
-   clamps does in place of the engine's `[0, map - W]`. GAME THREAD. On a frame
+   clamps does in place of the engine's `[0, extent - W]`. GAME THREAD. On a frame
    whose engine state is not sane enough for the range in force, into the
    engine's own (clamp_range): never left unclamped. */
 static void clamp_target(char* ta)
@@ -910,7 +941,7 @@ static void clamp_target(char* ta)
 
 /* THE FOLLOW'S CLAMP. The per-frame stepper `0x41CA10` recomputes the scroll
    target from whatever is being followed (`want = unit - view/2`,
-   `0x41CA95`..`0x41CAD2`) and then clamps it INLINE to `[0, map - view]`.
+   `0x41CA95`..`0x41CAD2`) and then clamps it INLINE to `[0, extent - view]`.
    MEASURED 2026-09-12 at z = 8 (1920x1080, HUD 225%,
    view 1632x936, a 4064x3968 map, commander at world (3808,3600)): the follow
    asked for (2992,3132), the engine's clamp cut it to (2432,3032), and the
@@ -965,7 +996,7 @@ static unsigned char* build_block_stub(void (__cdecl *fn)(void), unsigned resume
    (`0x4183B9`, `0x4183D0`), so an eye below 0 reads before the feature grid
    `main+0x14287` and two other grids [DISASSEMBLED 2026-09-23]. It draws
    nothing unless the debug view `main+0x14280` or the Contour command
-   `0x511DD0` is on. With the eye inside `[0, map - W]` it runs exactly as
+   `0x511DD0` is on. With the eye inside `[0, extent - W]` it runs exactly as
    stock; outside it the overlay is skipped on EVERY draw, for as long as the
    eye stays there — which the centre range allows whenever the view is
    within W/2 (H/2) of a map edge — so a developer view shows no lines at all
@@ -978,8 +1009,8 @@ static void __stdcall zoom_debug_overlay(void* ctx)
 
     if (!ta_ok(ta)) return;
     tagpu_vpwide_true_rect(ta, &L, &T, &W, &H);
-    if (!camera_range(W, H, *(const int*)(ta + OFF_MAP_W), *(const int*)(ta + OFF_MAP_H),
-                      0, &loX, &hiX, &loY, &hiY))
+    if (!camera_range(W, H, *(const int*)(ta + OFF_EXTENT_W), *(const int*)(ta + OFF_EXTENT_H),
+                      0, 0, 0, &loX, &hiX, &loY, &hiY))
         return;
     ex = *(const int*)(ta + OFF_EYEX);
     ey = *(const int*)(ta + OFF_EYEY);
@@ -1098,7 +1129,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        where the engine's terrain pass is skipped — see "the camera's range".
        And only when it can be computed: a draw whose engine state is not sane
        enough for it takes the engine's own range and publishes `centre = 0`,
-       so the eye is inside `[0, map - W]` whoever draws the ground. */
+       so the eye is inside `[0, extent - W]` whoever draws the ground. */
     s_gCentre = g_eyeInstalled && terr;
     if (!clamp_range(ta, &loX, &hiX, &loY, &hiY)) s_gCentre = 0;
 
@@ -1141,7 +1172,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
 
     /* THE RANGE IN FORCE, and this is the half of the bound that holds when
        the ground goes back to the engine: an eye the centre range allowed is
-       walked into `[0, map - W]` here, before the draw that would hand it to
+       walked into `[0, extent - W]` here, before the draw that would hand it to
        `0x483FA0`, which reads the map's grids from eye/16 with no bound of
        its own.
 
@@ -1151,7 +1182,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
        anchor need only the mouse->world repair, which `vpwide.on` installs
        without `zoom.on`, and on such a build the engine's own clamp has
        already run for this frame when the delta lands — an edge scroll that
-       left the eye at `map - H` plus a 20-px anchor step would reach
+       left the eye at `extent - H` plus a 20-px anchor step would reach
        `0x483FA0` unclamped. Here the range is the engine's (s_gCentre is 0
        without the eye clamp), so this is the engine's clamp, applied once
        more after the only writer that runs after it.
@@ -1199,7 +1230,7 @@ void tagpu_zoom_level_end(char* ta)
     /* THE GROUND GOES BACK TO THE ENGINE HERE (the publisher latches it down
        right after this call), so the eye and the target are walked into its
        own range first: nothing between this teardown and the next level's
-       first apply may find an eye off `[0, map - W]`. */
+       first apply may find an eye off `[0, extent - W]`. */
     s_gCentre = 0;
     if (!ta) return;
     if (g_eyeInstalled) {
@@ -1749,31 +1780,38 @@ static void predict(const TAGPU_PACKET* pk)
        The engine's builder places its four border completions on the grid's
        literal first and last-but-one rows and columns, which straddle the map
        edge only while its window overshoots the map by at most one cell —
-       the case `[0, map - W]` guarantees (exe map, "The four border
+       the case `[0, extent - W]` guarantees (exe map, "The four border
        completions"). Past that, the completions land off the map and the
        edge cells keep half-set corners: a fogged map edge would fade to lit
        across its last half cell. The wide grid derives the straddling index
        instead. */
-    if (camera_range(pk->vp[2], pk->vp[3], pk->map_pxw, pk->map_pxh, 0,
+    if (camera_range(pk->vp[2], pk->vp[3], pk->map_pxw, pk->map_pxh, 0, 0, 0,
                      &loX, &hiX, &loY, &hiY))
         s_offGrid = pk->eye[0] < loX || pk->eye[0] > hiX ||
                     pk->eye[1] < loY || pk->eye[1] > hiY;
 }
 
-/* GetTPosition on the world point under the mouse, clamped to the map — see
-   "the camera's range" for why the centre range makes that necessary. A no-op
-   for every eye in the engine's own range, which cannot name a point off the
-   map. */
+/* GetTPosition on the world point under the mouse, clamped to the SCROLL
+   EXTENT — see "the camera's range" for why the centre range makes that
+   necessary. The extent and not the map, and that is the safety argument:
+   GetTPosition's answer lies below `(y & ~15) + 144` (a 128-px search down
+   from `y & ~15`, 0x484B94..0x484B9B, plus the interpolation's one cell),
+   and with `y <= extent - 1 = mapH - 129` that is below
+   `(mapH - 144) + 144 = mapH`, on the map — the extent's 128-px bottom margin
+   is exactly its search window (exe map, "Engine defects we patch"). A clamp
+   to the map's own size would leave 128 px in which it answers off the map.
+   A no-op for every eye in the engine's own range, which cannot name a point
+   past the extent. */
 static void __stdcall zoom_tpos_guard(int x, int y, int* out)
 {
     const char* ta = *(const char* const*)TA_MAINPP;
 
     if (ta_ok(ta)) {
-        int mw = *(const int*)(ta + OFF_MAP_W);
-        int mh = *(const int*)(ta + OFF_MAP_H);
-        if (mw > 0 && mh > 0) {
-            if (x < 0) x = 0; else if (x > mw - 1) x = mw - 1;
-            if (y < 0) y = 0; else if (y > mh - 1) y = mh - 1;
+        int ew = *(const int*)(ta + OFF_EXTENT_W);
+        int eh = *(const int*)(ta + OFF_EXTENT_H);
+        if (ew > 0 && eh > 0) {
+            if (x < 0) x = 0; else if (x > ew - 1) x = ew - 1;
+            if (y < 0) y = 0; else if (y > eh - 1) y = eh - 1;
         }
     }
     ((PFN_GETTPOS)VA_GETTPOS)(x, y, out);

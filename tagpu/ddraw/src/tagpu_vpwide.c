@@ -46,8 +46,8 @@
 
 #define OFF_EYEX     0x1431F
 #define OFF_EYEY     0x14323
-#define OFF_MAP_W    0x1422B     /* map size in world px                      */
-#define OFF_MAP_H    0x1422F
+#define OFF_MAP_W    0x1422B     /* the scroll extent: map px less 32 / 128   */
+#define OFF_MAP_H    0x1422F     /* (level load 0x4833C4/0x4833E0)            */
 #define OFF_PLOT_C   0x14233     /* the PLOT grid GetGridPosPLOT indexes      */
 #define OFF_PLOT_R   0x14237
 #define OFF_MM_CLICK 0x142BB     /* the minimap's click RECT                  */

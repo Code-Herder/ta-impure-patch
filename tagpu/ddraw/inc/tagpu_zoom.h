@@ -72,7 +72,9 @@ struct TAGPU_CMD;
 
      THE CAMERA'S RANGE (0x41C3C0, the eye clamp) is BAR's centre clamp: the
        ground point at the view centre stays on the map at every zoom, so the
-       eye ranges over [-W/2, map - W/2] instead of the engine's [0, map - W].
+       eye ranges over [-W/2, map - W/2] — `map` the map's own size, the PLOT
+       grid x 16 — instead of the engine's [0, extent - W], `extent` the scroll
+       extent main+0x1422B, the map less 32 and 128 px.
        In force only on draws whose ground our terrain pass owns; the engine's
        own range otherwise (tagpu_zoom.c, "the camera's range").
 

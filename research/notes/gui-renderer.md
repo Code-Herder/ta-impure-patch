@@ -3858,16 +3858,17 @@ at `s = 4.5`. **Vertically there is nothing to fix**: the bars are the same heig
 bottom, so `32 + viewH/2` already is the visible centre. That asymmetry is the signature, and
 it is why the report said *to the side* and not *up* or *down*.
 
-**The bounds.** `0x41C3C0` clamps the eye to `[0, map − view]`, which stops the visible edge
+**The bounds.** `0x41C3C0` clamps the eye to `[0, extent − view]` (`extent` the scroll extent
+`main+0x1422B`/`+0x1422F`, the map less 32 and 128 px), which stops the visible edge
 `(128s − 128)` short on the left and `(32s − 32)` short top and bottom. In the engine's own
 coordinates (`L = 128`, `T = 32`):
 
 | visible | engine screen | world | bound |
 |---|---|---|---|
 | left column | `128s` | `eye + (128s − 128)` | `loX = −(128s − 128)` |
-| right column | `W + 127` | `eye + W − 1` | `hiX = mapW − viewW` — **unmoved** |
+| right column | `W + 127` | `eye + W − 1` | `hiX = extentW − viewW` — **unmoved** |
 | top row | `32s` | `eye + (32s − 32)` | `loY = −(32s − 32)` |
-| bottom row | `H + 31 − 32s` | `eye + H − 1 − (32s − 32)` | `hiY = mapH − viewH + (32s − 32)` |
+| bottom row | `H + 31 − 32s` | `eye + H − 1 − (32s − 32)` | `hiY = extentH − viewH + (32s − 32)` |
 
 **Asymmetric on purpose**: the panel is only on the left, so only the low x bound moves; the
 bars are on both, so both y bounds move, in opposite directions.
