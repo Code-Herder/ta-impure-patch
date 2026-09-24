@@ -111,8 +111,9 @@
 #define OFF_VP_B           0x37E33      /* on the game thread at zoom < 1)           */
 #define OFF_PALETTE        0x143A7      /* 256 x {R,G,B,pad}: the engine's own table, */
                                         /* never gamma-scaled (tagpu_pal.h)          */
-#define OFF_MAP_PXW        0x1422B      /* i32: map size in world px                 */
-#define OFF_MAP_PXH        0x1422F
+#define OFF_MAP_PXW        0x1422B      /* i32: the scroll extent, map px less 32 and */
+#define OFF_MAP_PXH        0x1422F      /* less 128 (0x4833C4/0x4833E0); the map's    */
+                                        /* own size is main+0x14223/0x14227          */
 #define OFF_MAP_W16        0x14233      /* i32: the PLOT grid, 16-px cells           */
 #define OFF_MAP_H16        0x14237
 #define OFF_VIEWCELLS_W    0x1423B      /* i32: the view in map cells (minimap box)  */

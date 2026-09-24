@@ -271,6 +271,239 @@ nothing sizes or indexes, so raising it costs time, not memory. The raised limit
 TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame.
 
+## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23]
+
+Two places where the retail 3.1 image writes or reads memory it does not own. `tagpu_patches.c`
+(`patch_engine_defects`) patches both at every attach: `ddraw.dll` is a static import of the exe,
+so `DllMain` runs before the exe's entry point. The two are independent. Each is skipped, with its
+reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its stub
+cannot be allocated, or its page cannot be made writable. Each patch is the identity on every
+input the stock code handles safely. [Binary patches](binary-patches.html) §"Stock engine defects
+we patch" is the one-row-per-bug register. The disassembly is `objdump -d -M intel` of
+`pristine/TotalA.exe.pristine`, and the callers come from an E8/E9 rel32 scan of `.text`. The
+measurements are `tacli` instances on Two Continents at 1024×768 with
+`scenarios/sort-row-overflow.json` (150 Peewees in one line, every foot at the same world z) and
+on Lava Run at 1920×1440. Each compares against a build without the patches.
+
+### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
+
+**The buffers.** `DrawGameScreen` holds `edi = main+0x141FB` through its unit binning and both
+sweeps. LoadMap sizes everything through `ebp` = the same address, once per map, and is the only
+writer of the two dimensions (a displacement scan plus the base-register scan of
+[resolution](resolution.html) §3.2):
+
+| field | what | set at |
+|---|---|---|
+| `[edi+0x00]` = `main+0x141FB` | SORT_UNIT_LIST: `rows × cap` unit pointers | `MEM_Alloc 0x4D83B0` of `rows·cap·4` bytes (tag `0x508B28`) at `0x483D45`, stored at `0x483D4A` |
+| `[edi+0x04]` = `main+0x141FF` | SORT_INDICES: one write cursor per row | `rows·4` bytes (tag `0x508B18`) at `0x483D5C`, stored at `0x483D6F` |
+| `[edi+0x08]` = `main+0x14203` | SORT_LINE_COUNT: one `u16` per row | `rows·2` bytes (tag `0x508B08`) at `0x483D72`, stored at `0x483D7A` |
+| `[edi+0x50]` = `main+0x1424B` | `cap` = view width in 16-px cells + 12 | `0x483D2A`, `+0xC` at `0x483D30`, stored at `0x483D42` |
+| `[edi+0x54]` = `main+0x1424F` | `rows` = view height in 16-px cells + 32 | `0x483D27`, `+0x20` at `0x483D2D`, stored at `0x483D33` |
+
+At 1024×768 that is `cap` 68, `rows` 76 and a 20 672-byte list [MEASURED].
+
+**Every frame.** `0x46971B..0x46973D` points `cursor[r]` at `base + r·cap·4` (`0x46972A`) and zeroes
+`count[r]` (`0x469731`) for every row. The binning loop `0x4697CF..0x469840` then walks HotUnits
+(`u16` unit indices at `main+0x1435F`, `NumHotUnits` at `main+0x14367`, filled by the cull
+`0x48BAE0`) and files each unit under the 16-px row of its feet:
+
+```
+4697ed  movsx eax, word [unit+0x74]    ; the feet's world z
+4697f2  sub   eax, [main+0x14323]      ; - eyeY; then sar 4, add 0x10
+469800  js    0x46982c                 ; row < 0: not filed
+469802  cmp   eax, [edi+0x54]
+469805  jge   0x46982c                 ; row >= rows: not filed
+469807  mov   edx, [edi+0x4]           ; SORT_INDICES
+46980a  lea   ecx, [edx+eax*4]         ; &cursor[row]
+46980d  mov   edx, [edi+0x8]           ; SORT_LINE_COUNT
+469810  inc   word [edx+eax*2]         ; count[row]++
+469814  lea   eax, [edx+eax*2]
+469817  mov   eax, [ecx]
+469819  test  eax, eax
+46981b  je    0x469826                 ; a NULL cursor skips the store
+46981d  mov   [eax], ebp               ; *cursor[row] = unit
+46981f  mov   eax, [ecx]
+469821  add   eax, 4
+469824  mov   [ecx], eax               ; cursor[row] += 4
+469826  mov   esi, ds:0x511de8         ; the join
+```
+
+**Nothing compares `count[row]` with anything**, and the two readers do not either: site A's loop
+(`0x4699A8`, ground units, the swept rows) and site B's (`0x469B54`, everything else, all rows)
+each start at `base + row·cap·4` and walk `count[row]` slots (§"The sweep order inside
+`DrawGameScreen`", below). So:
+
+- **A row holding more than `cap` units runs on into the next row's slots.** That is stock
+  behaviour and it is harmless: every slot a row counts was written this frame, by that row or by
+  the one it ran into. When the next row has units of its own, the two rows write the same slots
+  and one unit is drawn twice and another not at all. Beside an empty row, the full row is drawn
+  whole. MEASURED without the patch at 1×: the fixture's line at eye (1616, 1206) puts 116 hot
+  units in row 40 against a `cap` of 68, and the engine draws the whole line.
+- **A row near the end runs past the end of SORT_UNIT_LIST.** The write lands in whatever the
+  allocator put next, and what it writes is unit pointers. The last 16 rows are the margin below
+  the viewport (`rows` = 16 above + the view + 16 below). At stock 1× a unit is filed there only
+  when its feet are below the view and its box still reaches into it. Past the end of the list
+  therefore takes more than `cap` such units in one of the last rows, or a run-on long enough to
+  reach them. [INFERRED from the cull and the row formula; not reproduced at stock 1×.]
+- **Our build reaches it with an ordinary crowd.** At zoom < 1 `vpwide` widens the rect the cull
+  tests (gpu-status §2.3b), but `cap` and `rows` stay the 1× values LoadMap computed. The rows
+  below the 1× view then hold every unit the wider view shows. MEASURED without the patch, the
+  eye held at (1552, 650) so that the line sits in row 75 (the last) and the scripted zoom at 0.5:
+  150 hot units are filed in row 75 against a `cap` of 68. That writes **82 pointers, 328 bytes,
+  past the end of the list on every frame**, over the next heap block's header (the dump at the
+  end address reads unit pointers where it read `5B 00 00 00 26 00 75 00 …` before). Nothing
+  faulted: the simulation kept ticking and the level exited cleanly to the main menu. It is a
+  silent corruption of memory the engine owns elsewhere.
+
+**The patch bounds the append by the allocation, not by the row.** A `jmp` at `0x469807` to a stub
+of ours, the rest of the 31-byte block NOPped up to the join:
+
+```
+mov   edx,[edi+0x54]      ; rows
+sub   edx,eax             ; rows - row, at least 1 (0x469805)
+imul  edx,[edi+0x50]      ; the slots from this row's start to the end of the list
+mov   ecx,[edi+0x8]
+lea   ecx,[ecx+eax*2]     ; &count[row]
+movzx esi,word [ecx]
+cmp   esi,edx
+jge   join                ; the next slot is past the end: not filed
+inc   word [ecx]
+mov   edx,[edi+0x4]
+mov   ecx,[edx+eax*4]     ; the row's cursor
+jecxz join                ; stock's NULL-cursor skip
+mov   [ecx],ebp
+add   dword [edx+eax*4],4
+join: jmp 0x469826
+```
+
+- **The invariant:** `count[row] ≤ (rows − row)·cap` after every append. The cursor and the count
+  start together each frame and move together only here, so the slot written is
+  `base + (row·cap + count)·4 < base + rows·cap·4`. Every slot a reader walks is inside the list
+  and was written this frame.
+- **What it rests on:** `[edi+0x50]`/`[edi+0x54]` are the values the allocation was made with.
+  LoadMap is their only writer and nothing of ours writes them. `eax`, `ecx`, `edx` and `esi` are
+  dead at `0x469826`, which reloads `esi`; `0x46982C` reloads `eax` and `ecx`, and `edx` is written
+  at `0x4697D1` before its next read. No branch from outside the block lands in
+  `0x469808..0x469825`, and stock's own `0x46981B → 0x469826` is the only branch to the join [a
+  rel8/rel32 scan of `.text`].
+- **The count cannot wrap.** It is a `u16`, and the cull `0x48BAE0` files each slot of the unit
+  array (stride `0x118`, walked from `main+0x14357` to `main+0x1435B`, one `u16` index each at
+  `0x48BC6A`) at most once per call. A frame's appends to any row are therefore at most the unit
+  slots, `10 ×` the per-player cap `+ 1`, far below 65 536.
+- **What it changes:** nothing for a unit whose slot is inside the list, the run-on included. A
+  unit whose slot would be past the end is not drawn by the engine's sweep that frame.
+- **Why not the row:** a bound of `count[row] < cap` was built first and measured. It erased
+  **7 066 px** of the fixture's line at 1×: the run-on into an empty neighbour that stock draws
+  correctly.
+- **Measured with the patch:** at the same held eye and zoom 0.5, row 75 holds 68
+  (`(76 − 75)·68`), none of the 102 dwords after the list's end is a unit pointer, and the heap
+  header there is intact. At 1×, against a build without the patch: the fixture is 0 px apart in
+  the engine's own frame (the golden-source A/B of `ta-drive`'s measuring reference, three shots
+  each), and the fixture and `selbox-facings` are both 0 of 3 145 728 apart in the world unit pass
+  at `ss=2`.
+- **The simulation:** the list is read only by `DrawGameScreen`'s two draw loops, so the
+  simulation reads nothing different. The stock overwrite is the only part of this that could ever
+  reach simulation state.
+
+A raised unit cap (the TADR port's later landings) puts more units on screen and makes the stock
+overwrite easier to reach. The patch does not depend on the cap.
+
+### A NULL plot handed to `GetGridPosFeature 0x421E60`
+
+`GetGridPosFeature 0x421E60` is `stdcall(plot)`, `ret 4`. It opens with `mov ecx,[esp+4]` /
+`mov ax,[ecx+8]`, reading the plot's feature index with no test, and "no feature" is its
+`or ax,0xFFFF` at `0x421E9C`. Three functions turn a place into a plot, and each can return NULL:
+
+- `GetGridPosPLOT 0x481550` (a cell) and `0x4815A0` (a position) return NULL for a cell outside
+  `main+0x14233 × main+0x14237`.
+- `0x4815F0` (a position) returns NULL for a cell off the grid too. It also returns NULL for a cell
+  **on** the grid that holds `0xFFFE`, a multi-cell feature's non-anchor cell, when the offset to
+  the anchor in the cell's bytes `+0xB`/`+0xA` leads off the grid (`0x48164A..0x481682`). That is
+  the only way a position on the map gets a NULL plot.
+
+`0x421E60` has three callers:
+
+| call | what | tests the plot |
+|---|---|---|
+| `0x47EAE3` | a lookup on the plot `0x4815A0` returns | yes, `0x47EADA` |
+| `0x498F4F` | the hovered feature in the pointer→world function `0x498DA0` (one caller, `0x499221`), stored at `main+0x2CBC` | **no** |
+| `0x40514A` | the target lookup of the order handler `0x404DB0`, through `0x4815F0` on the order's position. The order-descriptor record at `0x4FC8A6` (file `0xFB6A6`) names that handler with the string "Resurrecting", so this is the resurrect order [INFERRED from the name] | **no** — its reachability is not audited |
+
+**How `0x498F4F` gets its plot.** `0x498DA0` turns the pointer into a world point: the viewport arm
+is `eye + clamp(pos, L, R) − L`, and the minimap arm scales the pointer by `main+0x1422B`/`+0x1422F`
+(§"The in-game mouse buttons"). `GetTPosition 0x484B50`, called at `0x498EF9`, clamps x and y to
+the map's pixel size `main+0x14223`/`+0x14227` (`0x484B5D..0x484B88`). It then searches for the
+terrain point in a window from `y & ~15` down 0x80 px (`0x484B94..0x484B9B`), plus interpolation,
+so its answer is below `(y & ~15) + 144`: up to 143 px below the point it was handed. `0x498F2E`
+stores that point's cell at `main+0x2C8E`, `0x481550` makes it a plot, and `0x498F4F` hands the
+plot over.
+
+**What keeps stock off it.** `main+0x1422B`/`+0x1422F` is not the map's size. It is the **scroll
+extent**, the map's pixel width less 32 and its height less 128, written at the level load
+(`0x4833C4`, `0x4833E0`). The engine's camera clamp `0x41C3C0` holds the eye in
+`[0, extent − view]`, the viewport arm clamps the pointer to the rect, and the minimap's click
+rect ends at `mmY + mmH − 1`. So every point `0x498DA0` produces has `y ≤ mapH − 129`, and
+GetTPosition's answer is below `(mapH − 144) + 144 = mapH`, on the map. **The 128-px bottom margin
+is exactly GetTPosition's search window, and nothing tighter protects this call.** Two Continents
+measured it: map 10752 × 12800, extent 10720 × 12672.
+
+**Where stock reaches it.** The margin holds only while `[0, extent − view]` is a range:
+
+- **A map shorter than the viewport plus 128 px.** Then `extent − view` is negative. `0x41C40D`
+  sets a negative eyeY to 0 and `0x41C42D..0x41C431` set an eyeY above `extent − view` to that
+  negative value, so successive calls alternate the eye between the two. At eyeY = 0 the
+  viewport's bottom row is past the extent. GetTPosition clamps y to `mapH − 1` and, where the
+  terrain along the bottom edge is raised, can answer up to 127 px past the map: a NULL plot.
+  [INFERRED from `0x41C40D..0x41C431` and GetTPosition; not run.] Retail's largest mode,
+  1600×1200, has a 1136-px viewport. Of the 275 stock map files only `example.tnt` (1024 px, not in
+  the skirmish list) is that short; the shortest skirmish map, Lava Run, is 1280 px tall with an
+  extent of 1152 (their TNT headers). A custom map can be, and our DLL runs any resolution. MEASURED on Lava Run at 1920×1440 (a
+  1376-px viewport) on a build without the patches: **the engine's terrain pass faults first**, on
+  the first in-play frame, in the tile copy at `0x4CBE44`, called from `0x484110` inside
+  `0x483FA0` (called at `0x468DB0`). It faulted twice with no pass armed and once with `terr.on`,
+  and Two Continents loads cleanly at the same resolution on the same build. That fault is the
+  terrain pass reading its tile map (`main+0x1428B`, indexed at `0x4840A6..0x4840AC`) and tile
+  graphics for a view past the map: a separate stock defect, which no patch here covers.
+- **The debug-level console command `Edge`** (run level 4; table entry `0x50206C`, handler
+  `0x416730`) rewrites both margins from its two arguments, 32 and 128 by default. A bottom margin
+  under 128 lets the pointer's row leave the map. [INFERRED from the arithmetic; not run.]
+- **`0x40514A`** hands over the plot `0x4815F0` returns for the order's position, and that path is
+  not audited. The guard covers it whether or not it is reachable.
+
+**Our build.** Zoom > 1 lets the eye past the stock range, and vpwide's rect at zoom < 1 lets the
+pointer past it, so both can hand `0x498DA0` a point beyond the extent. Two clamps keep it off
+this call: `zoom_tpos_guard` (`tagpu_zoom.c`, the redirect of `0x498EF9`) and vpwide's replica of
+`0x498DA0` (the redirect of `0x499221`). Both clamp the point to `[0, extent − 1]`, and **they work
+because they read the scroll extent**: a clamp to the map's own size would leave 128 px in which
+GetTPosition can answer off the map. MEASURED in experiment builds with `0x498EF9`'s clamp turned
+off, at zoom 2.0 with the eye held at the bottom of our range (eyeY 12144). Without the patch, the
+pointer on the bottom bar at (512, 760) faults at `0x421E64` reading `0x00000008`, return address
+`0x498F54`. With the patch it does not fault and the simulation keeps ticking. The cell left at
+`main+0x2C8E` is (125, 802), past the map's 800 rows, and the hovered feature reads `0xFFFF`.
+vpwide's comment records the same fault once from an edge scroll at 0.5×, before its replica
+clamped.
+
+**The patch is a prologue detour on `0x421E60`**, eight stolen bytes (`tagpu_detour_land`):
+
+```
+mov  ecx,[esp+4]
+test ecx,ecx
+jnz  +7
+or   ax,0xFFFF         ; the engine's own "no feature", as 0x421E9C
+ret  4
+mov  ax,[ecx+8]
+jmp  0x421E68
+```
+
+- **The invariant:** `0x421E60` never dereferences NULL, whichever caller hands it the plot. No
+  branch lands inside the eight stolen bytes [rel8/rel32 scan].
+- **What it changes:** nothing for a non-NULL plot. For a NULL plot stock faults, so nothing the
+  simulation reads differs except where stock would have crashed. `0x40514A` is on the resurrect
+  order's path [INFERRED], so in a network game with a peer on stock, the stock peer crashes where
+  the patched one goes on.
+- **What it leaves:** the off-map cell `0x498F2E` stores at `main+0x2C8E` is untouched, as it is in
+  stock under `Edge`. Its readers are not audited here.
+
 ## Built-in cheat/console command surface
 
 This is the richest extension point in the binary, and the evidence is unusually good.
@@ -3033,8 +3266,9 @@ two rects with `0x4B6720` (point-in-rect *[INFERRED]*) and records which one it 
 | `0x04` | set when **bit 0 or bit 1** is — "the pointer is on one of them" | computed at `0x498ECE..0x498EE6` |
 | `0x08` | already documented elsewhere; gates the minimap branch at `0x498DD5`: while it is set the minimap rect is not consulted at all. `ui-markers.md` §4 has it as the drag/band "rect forced on" bit; the two readings are consistent | disassembly |
 
-The minimap arm scales the pointer by the minimap rect (`main+0x142E7..0x142ED`) against the map
-size (`main+0x1422B`/`+0x1422F`); the viewport arm is the `world = eye + clamp(pos, L, R) − L`
+The minimap arm scales the pointer by the minimap rect (`main+0x142E7..0x142ED`) against the
+scroll extent (`main+0x1422B`/`+0x1422F`, the map less 32 and 128 px — §"Engine defects we
+patch"); the viewport arm is the `world = eye + clamp(pos, L, R) − L`
 form already documented in `gpu-status.md` §2.3b. The tail converts the world point to a cell
 pair at `main+0x2C8E` (`>> 0x14`) and stores the **hovered feature id** as a WORD at
 `main+0x2CBC` — live: `0xFFFF` over open ground, `87` over a lab wreck.
@@ -4647,13 +4881,13 @@ HUD scale gave a cleaner experiment than the two-resolutions one this was waitin
 changes viewW/viewH **without** changing the screen mode or the map, so the two candidate
 sources are separated outright. Same map, same 1920×1080 surface, one lever:
 
-| | viewW `+0x37E37` | viewH `+0x37E3B` | map px `+0x1422B`/`+0x1422F` | `+0x1423B` | `+0x1423F` |
+| | viewW `+0x37E37` | viewH `+0x37E3B` | scroll extent `+0x1422B`/`+0x1422F` | `+0x1423B` | `+0x1423F` |
 |---|---|---|---|---|---|
 | stock HUD | 1792 | 1016 | 10720 × 12672 | **112** | **63** |
 | HUD scale Auto (`s` = 2.25) | 1632 | 936 | 10720 × 12672 (unchanged) | **102** | **58** |
 
 `1792 >> 4 = 112`, `1016 >> 4 = 63`, `1632 >> 4 = 102`, `936 >> 4 = 58` — all four exact.
-The map dimensions did not move; these did. The minimap's view-box filler `0x466B70` above is
+The scroll extent (the map less 32 and 128 px) did not move; these did. The minimap's view-box filler `0x466B70` above is
 therefore reading *view tiles*, which is what a view box is drawn from, and the write the scan
 could not find is `0x483BD6`/`0x483BE4` inside LoadMap reaching them through `ebp = main+0x141FB`
 at `+0x40`/`+0x44` — a base the displacement scan cannot see, which is exactly why it found

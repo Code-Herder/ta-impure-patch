@@ -486,7 +486,7 @@ static void apply_scroll_rate(char* ta)
 #define SITE_GETTPOS     0x00498EF9u   /* its call site inside 0x498DA0           */
 #define OFF_EYEX         0x1431F
 #define OFF_EYEY         0x14323
-#define OFF_MAP_W        0x1422B       /* map size in world px                    */
+#define OFF_MAP_W        0x1422B       /* scroll extent: map px less 32 / 128     */
 #define OFF_MAP_H        0x1422F
 #define OFF_SCRTX        0x14327       /* MapXScrollingTo — the eye eases to here */
 #define OFF_SCRTY        0x1432B
