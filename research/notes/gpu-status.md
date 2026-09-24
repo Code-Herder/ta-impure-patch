@@ -58,7 +58,7 @@ own sprite, drawn under the pointer at every zoom and left alone by the composit
 | Features (trees, rocks, splats, wreckage) | G13a | `featown`: one detour on the feature leaf |
 | Terrain tiles + the fog overlay | G13b | `terrown`: two detours; the terrain skip path key-fills the viewport |
 | Fog of war *as drawn* | G13c | one shared rule (`tagpu_glsl.h`) in all four native passes |
-| Health bars, order markers, group digits, ShowRanges labels, build cursor, band box, selection rect | G13d, cursor G13n, order block G13o, text G13p | `markown`: 14 call-site redirects + 1 detour, and **nothing world-anchored is captured any more**. Health bars, the selection rect, the build cursor and drag band box are re-drawn from engine state; **G13o ported the order-marker block** (`tagpu_order.c`) as a game-thread snapshot of the order lists at `0x469BFC`; **G13p ported the text** (`tagpu_text.c`) — the group digit at `0x469CF9` and the `ShowRanges` labels — by calling TA's own glyph blitter `0x4CCF60` with a buffer of ours. Window A is retired and the identity blend LUT with it; the post-fog capture survives only for `mark.on=nocursor` (§2.2) |
+| Health bars, order markers, group digits, ShowRanges labels, build cursor, band box, selection rect | G13d, cursor G13n, order block G13o, text G13p | `markown`: 14 call-site redirects + 1 detour, and **nothing world-anchored is captured any more**. Health bars, the selection rect, the build cursor and drag band box are re-drawn from engine state; **G13o ported the order-marker block** (`tagpu_order.c`) as a game-thread snapshot of the order lists at `0x469BFC`; **G13p ported the text** (`tagpu_text.c`) — the group digit at `0x469CF9` and the `ShowRanges` labels — by calling TA's own glyph blitter `0x4CCF60` with a buffer of ours. Window A is retired and the identity blend LUT with it; the post-fog capture is deleted (the clean cut, §2.39), and `mark.on=nocursor` hands the cursors back to the engine |
 | Mouse cursor position, clicks, minimap view rect, scroll rate | G13e, cured G13m, **cursor ours again G17c** | `tagpu_zoom.c`; G13m made the engine's own cursor correct by telling it the truth about the pointer, and the zoom composite stopped touching it (§2.3d). **Since G17c the cursor is DRAWN BY US** — 1× device pixels at every `k`, from the client point the message carried, into the GL UI renderer's sharp layer — and the engine's is erased from the frame by two cooperating exemptions, the UI layer's rect discard and the world composite's `uCurs` ([GL UI renderer](gui-renderer.html) §17). §2.3d's rule is unchanged and still what keeps the two in the same place |
 | Which cursor sprite the engine picks on hover (move / reclaim / …) | G13j | one byte patch in `tagpu_patches.c`; the engine still draws it — see §2.6 |
 | The engine's *addressable* viewport at zoom < 1 — clicks, orders and unit picking in the outer ring | G13f | `vpwide`: 3 call-site redirects + a 3-site byte patch behind `vpwide.on`, plus the `0x499221` redirect that also carries the zoom's mouse-point repair and is armed by `zoom.on` too (§2.3d) |
@@ -1376,8 +1376,14 @@ beside the engine's own pixels at any factor but 1.0, and the question is where 
   The table has **one writer**, the PALETTE load `0x42A400` that `UIPipelinesInit` runs once per
   process (engine map, "Who writes the engine's own table"), so the engine serial is 1 for the
   life of an ordinary process — MEASURED on a `big-battle` soak, one line per process — and no
-  world source is rebuilt in play. Every world source still keys on the serial, so an engine
-  writer the survey missed would rebuild them rather than leave them stale.
+  world source is rebuilt in play. **Every world source keys on the serial**, so an engine writer
+  the survey missed would rebuild them rather than leave them stale: the base atlases (`s_bPal`
+  in the feature, effect and unit passes' `base_upload`, `s_basePal` on the terrain), the
+  restore jobs (`s_rjPal` in each world lane: a move is a new job, and the twin is blanked and
+  repainted from the re-sent base), `k[]` (`s_shadePal` in `tagpu_r3d_shade_want`, which also
+  keeps the last shade table it saw) and the LHT flash colours (`s_lhtPal`, with the LHT bytes).
+  The markers upload `uPal` every frame. MEASURED 2026-09-24 with a diagnostic-only forced bump
+  of the serial mid-battle (§2.88): every one of them rebuilt on the frame it was seen.
 - **The presented table, `tagpu_pal_live()`, is the UI's.** It is resolved lazily: the per-present
   `tagpu_pal_frame` marks it stale and the first reader re-resolves it — the primary's palette
   object (`g_ddraw.primary->palette->data_rgb`, what cnc-ddraw's `ddp_SetEntries` stored) read
@@ -1430,8 +1436,14 @@ a texel with no coverage is additive light (the effects' flashes) and takes the 
     - at 1.0: nothing is drawn.
 
     The factor lands after the world's own blends, and clamps where the curve does, as on the
-    composite. It differs in one step: the blend rounds `e × factor` where the engine truncates, so a
-    level lands at most one step from the curve. The frame holds only the clear and the world when
+    composite. **On a UNORM surface** it differs in one step: the blend rounds `e × factor` where
+    the engine truncates, so a level lands at most one step from the curve. **On an sRGB surface it
+    does not**: the blend runs on decoded, linear values, so the factor scales light rather than
+    the level — at factor 1.5, level 128 lands near 155 against the curve's 192. That surface is
+    exactly where this path is the only one, because the target refuses sRGB (above). The seam
+    prefers `B8G8R8A8_UNORM` and falls back to the device's first format only when that is not
+    offered (`tagpu_vk.c`, the surface format), so sRGB is a fallback surface; the choice of format
+    is unchanged here and belongs to the owner. The frame holds only the clear and the world when
     the quad draws: nothing of the engine's is drawn under the world, the UI comes after, and the
     default clear is black. Its two pipelines and its quad are its own, so they survive the target's
     refusal; `tagpu_vk_world_down` frees them with the device or a resize. **MEASURED 2026-09-24**
@@ -3944,8 +3956,10 @@ PIXELS change and is never cleared; it deliberately does not tick in `tagpu_text
 a lost GL context does not change a byte of the atlas.
 
 **The seam is still one file.** `tagpu_vk_pass.h` is what a ported pass is handed: an instance, a
-physical device, a device, a render pass, a slot count, the flip flag and the two `GetProcAddr`s.
-Nothing in it names a window, a surface or a swapchain, so `tagpu_vk_fps.c` would draw into an
+physical device, a device, a render pass, a slot count, the flip flag and the two `GetProcAddr`s
+— and, for one user only, the seam's queue and its family (`queue`, `qfam`), which
+`tagpu_vk_stage.c`'s banded upload submits to from the same render thread (§2.88, *The
+staging*). Nothing in it names a window, a surface or a swapchain, so `tagpu_vk_fps.c` would draw into an
 offscreen image or another process's image unchanged — standing constraint 3 holding rather than
 asserted. **Every pass resolves its own entry points**: the presentation table (swapchain, acquire,
 present, fences) and a pass's (pipelines, descriptors, buffers, images) barely overlap, and one
@@ -7882,6 +7896,13 @@ from the difference image, not traced to a line of arithmetic.
 digits, order markers and their `ShowRanges` labels, the build-cursor footprint, the drag band box
 and the captured post-fog layer. §2.34 took the UI's own surface; this is what is drawn *over the
 world* and *under* nothing.
+
+**The captured post-fog layer no longer exists.** The clean cut (`a2b1333`, 2026-09-20) deleted
+`TAGPU_MK_TEX_LAYER` and the `markown` capture behind it, so the list below is one kind shorter
+today. The pass draws the selection rects (depth-tested), the order triangles, lines and labels,
+the health bars, the group digits, and last the cursors — the build square and the band box —
+which are now the one draw with the fog off. `mark.on=nocursor` hands the cursors back to the
+engine and fills nothing of ours. The tables record the pass as measured on 2026-09-17.
 
 #### It is seven draws, not one, and that is why a draw LIST crosses
 
@@ -16124,8 +16145,9 @@ beside its index mirror, and it is the only atlas image the world passes upload:
 - **The colour is the engine's unscaled table** (`tagpu_pal_engine()`, §2.3f), and the base is
   keyed on the atlas's mirror serial and the engine serial: a paint re-sends only the rectangle
   the atlas's band ring says changed (`tagpu_gaf_band_since`), an engine-table change the whole
-  page. The staging is per slot, behind the seam's fence; the image is shared and written behind
-  a write-after-read barrier on the one queue.
+  page. The staging is the slot's own bounded buffer, at most 1 MiB whatever the atlas
+  (`tagpu_vk_stage.c`, *The staging* below); the image is shared and written behind a
+  write-after-read barrier on the one queue.
 - **The key is per frame, so it has a plane of its own.** `tagpu_gaf.c` writes `keym` beside the
   index mirror in the same paint and the same allocation, 0 where a texel is its frame's key;
   `tagpu_pal_expand` makes that alpha 0 with RGB 0. Every reader discards at `alpha < 0.5`, which
@@ -16136,9 +16158,22 @@ beside its index mirror, and it is the only atlas image the world passes upload:
   `255 − int(a·255 + 0.5)` — exact.
 - **The restorer reads the base** (`srcBase` 1 on the terrain, feature, effect and unit jobs), not
   indices through a palette. The UI's job still reads its R8 through the presented palette.
-- **The atlas descriptors are written once**, on the first prepare after `build`, before any set
-  is bound: `base_upload` refuses a change of the atlas's dimension and stands the pass down
-  rather than rewrite sets that frames in flight use.
+- **What keeps a shared atlas image alive while frames in flight sample it** differs by pass:
+    - **Features and effects write their atlas descriptors once**, on the first prepare after
+      `build`, before any set is bound. `base_upload` refuses a change of the atlas's dimension
+      and stands the pass down rather than rewrite sets that frames in flight use.
+    - **Units write the view into the slot's set every frame** (`bind_main`), so the hazard is
+      the image, not the set: re-creating it would free an image another slot's pending submit
+      samples. `atlas_build` refuses a change of the square once the image exists and stands the
+      pass down, as the other two do.
+    - None of these refusals fires today: the three atlases are `ATLAS_DIM`-square, a
+      compile-time 2048 in each of `tagpu_render3do.c`, `tagpu_feat.c` and `tagpu_fx.c`. The
+      guards keep that true.
+    - **The terrain's atlas does change size**, once per map, and the terrain pass rebinds every
+      prepare (`shared_bind`, behind that slot's fence). It replaces an image through
+      `shared_resize`, one retire at a time: the old image is destroyed only when no slot's set
+      still names it (`SHARED::pending`), and a frame that finds a retire still clearing draws
+      nothing rather than the previous map's texels.
 
 **The shading, both presets.** Every world fragment shader has one colour path: the restored twin
 where `uRestored` is 1 and the twin's alpha says it has painted, else the base; then the preset's
@@ -16199,15 +16234,30 @@ it lands within one level of the curve.
 - in the lab, `tools/tascene-view.html`'s index path for its Classic lane: the parity lane samples
   the base atlas and the `k` table, as the game does ([tascene](tascene-design.html)).
 
-The function inventory against the base of G20c: **1980 → 1985**. Gone —
+The function inventory of `tagpu/ddraw/src/*.c`, the G20c base against 2d (`78c22b2` →
+`402dc94`), counting one-line definitions too: **2060 → 2066**, 12 gone and 18 new. Gone —
 `tagpu_native_foglut`, `fogshade_snapshot`, `shade_build_lut`, `shade_upload`,
 `tagpu_r3d_lut_mirror`, `tagpu_r3d_lut_want`, `atlas_upload` ×3, the feature pass's
-`slot_build`, `slot_drop_astage` ×2. New — `tagpu_pal_expand`, `mirror_bytes`, `mirror_wrote`,
-`tagpu_gaf_band_since`, `shade_build`, `shade_k_build`, `tagpu_r3d_atlas_key`,
-`tagpu_r3d_shade_k`, `tagpu_r3d_shade_want`, `base_upload` ×3, `slot_drop_bstage` ×2,
-`build_gamma`, `gamma_free`, `gamma_upload`. Every removed non-static had its callers ported; the
-build is clean under `-Wall`, `thread-split-check.sh` is clean with the packet field gone, and
-`spirv-check.sh` agrees with the regenerated headers.
+`slot_build`, `slot_drop_astage` ×2. New — `tagpu_pal_engine_serial`, `tagpu_pal_expand`,
+`mirror_bytes`, `mirror_wrote`, `tagpu_gaf_band_since`, `shade_build`, `shade_k_build`,
+`tagpu_r3d_atlas_key`, `tagpu_r3d_shade_k`, `tagpu_r3d_shade_want`, `base_upload` ×3,
+`slot_drop_bstage` ×2, `build_gamma`, `gamma_free`, `gamma_upload`. (An inventory that counts
+only a definition whose `{` ends the line or opens the next misses the one-line functions — 80
+at the base, 81 after 2d, `tagpu_pal_engine_serial` the new one — and reads 1980 → 1985.) After
+it:
+
+- the no-target Gamma (`95452c4`), +7: `tagpu_vk_world_record_direct`, `build_direct`,
+  `direct_draw`, `direct_free`, `quad_buffer`, `quad_pipeline`, `target_down`;
+- the bounded staging (`13b6b8a`), +17 −4: `tagpu_vk_stage.c` whole — the five non-statics
+  `tagpu_vk_stage_begin`, `_drop`, `_expand`, `_copy`, `_down`, and `banded_one`,
+  `banded_ready`, `barrier_in`, `barrier_out`, `copy_band`, `fill_copy`, `fill_expand`,
+  `mem_type`, `mk_stage`, `resolve`, `slog`, `upload` — for `slot_drop_bstage` ×2 and the
+  terrain's `shared_upload` and `slot_drop_bigstage`;
+- the palette keys (`4143757`), none.
+
+Every removed non-static had its callers ported; the build is clean under `-Wall`,
+`thread-split-check.sh` is clean with the packet field gone, and `spirv-check.sh` agrees with the
+regenerated headers.
 
 **Device memory, per atlas.**
 
@@ -16223,6 +16273,79 @@ to about 10 KiB a slot. The unit pass's transient staging no longer reserves up 
 for an R8 upload. Its fragment-stage uniform block is 256 bytes, down from 272 now that `uLit`
 is gone. At the reference device's 64-byte alignment that is 1 536 bytes a unit instead of
 1 728, so the design point's blocks come to 23.0 MB a frame slot (§2.86).
+
+**The staging: host-visible memory, bounded by a constant** (`tagpu_vk_stage.c`, the header
+carries the argument). Every upload into a shared image — the base atlases of the feature, effect
+and unit passes, the terrain's base atlas and height grid — goes through it.
+
+- **Before, each slot staged its whole upload in one buffer.** A full page is a feature, effect or
+  unit atlas's used rows × 2048 × 4, up to 16 MiB. The terrain's is its whole atlas, 2176 × 5338
+  × 4 = 46 461 952 bytes on Town & Country, plus the height grid, all in one mapping. A full page
+  is sent on the first upload, an atlas recycle, a band-ring overflow, a palette move, and after
+  every teardown (a swapchain rebuild runs every pass's `_down`). A refused allocation took the
+  pass down for the session.
+- **Now each slot keeps one `TAGPU_VKSTAGE` of at most `TAGPU_VK_STAGE_CAP`, 1 MiB**, made on a
+  frame that uploads and given back on the slot's next frame with nothing to send. The bound is
+  a constant whatever the atlas: 1 MiB × `TAGPU_VK_SLOTS` (8) = 8 MiB a pass, 32 MiB for the
+  four.
+    - **An upload that fits** is recorded in the frame's own command buffer, as before; the seam's
+      fence on the slot is what frees the buffer.
+    - **One that does not fit goes out in bands** of whole rows through the rest of the buffer.
+      Each band is copied by a submit of the module's own command buffer to the seam's queue and
+      waited on (its fence, one second) before the next band overwrites the same bytes. A wait that
+      gives up leaves the buffer marked in flight, and it is not recorded again until the device
+      reports that submit done.
+    - **No frame samples a texel the device has not received.** A banded upload is complete —
+      every band copied, the image back in `SHADER_READ_ONLY_OPTIMAL` — before `prepare` returns.
+      Its submits reach the queue before the frame's own, so the frame that asked for the page
+      draws all of it, exactly as the in-frame copy did. The price is a wait on the CPU, and only
+      an upload larger than the cap pays it.
+    - **A refusal never latches.** `tagpu_vk_stage_begin` halves its ask on a refused allocation
+      or map, down to one row of the widest upload. A slot that cannot map even that gets 0, and
+      the pass skips the frame without advancing its serials: the upload is still due and the next
+      frame asks again. **A skipped frame draws nothing of that pass** — the terrain, the
+      features, the effects or the units are missing from that one frame — rather than anything
+      sampled from texels the device has not received. Only a device that fails a submit or a
+      fence partway through a banded upload refuses the pass.
+
+  **MEASURED 2026-09-24**, `scenarios/big-battle.json` (Town & Country, 980 units converging),
+  `--defaults`, Gamma 12, through the map load, a scroll burst (the camera jumped across the map
+  nine times, 0.3 s apart), one forced swapchain rebuild (the path a window resize takes) and the
+  fight. A diagnostic-only build summed each pass's mapped staging over its slots after every
+  frame's prepares; the figure is the largest sum at one frame, in MiB:
+
+  | | features | effects | units | terrain | all four |
+  |---|---|---|---|---|---|
+  | before, 3840 × 2160 | 14.75 | 5.11 | 2.21 | 44.59 | **66.63** |
+  | before, 2560 × 1440 | 14.27 | 4.16 | 2.19 | 44.59 | **65.20** |
+  | after, 3840 × 2160 | 1.78 | 2.09 | 1.01 | 1.00 | **5.09** |
+  | after, 2560 × 1440 | 2.00 | 1.00 | 1.00 | 1.00 | **4.00** |
+
+  **The banded path's cost**, timed from the first band's fill to the last band's fence:
+
+  - **At 2560 × 1440, 21 banded uploads in the run:**
+      - seven at the load;
+      - eight feature pages of 4.6–11.6 MB during the scroll burst, each jump painting a new
+        area;
+      - the four atlases re-sent whole at the rebuild (2.3, 46.5, 16.1 and 4.4 MB);
+      - two more of 1.1 and 1.3 MB.
+
+    The terrain's whole atlas takes 63 bands in 6.6–6.7 ms. The worst is 9.3 ms, of which 6.9 ms
+    is the first band waiting behind the frames still in flight.
+  - **At 3840 × 2160** the first band's wait is up to 27.9 ms (28.7 ms in all). A fresh image's
+    upload waits too, because its first band still queues behind the frames the queue is
+    executing. The terrain's 63 bands take 6.0–8.2 ms. That run counted 173 banded uploads, most
+    of them the full re-sends of 43 render-thread restarts. The restart loop predates this work:
+    the G20c base build restarts the same way at 4K (below, *Not covered*).
+
+  So a full-page event now costs the render thread a wait of up to 28.7 ms at 4K, in place of up
+  to 66.6 MiB mapped at once.
+
+  **A refusal degrades and recovers.** Big-battle at 2560 × 1440; mid-fight, a forced swapchain
+  rebuild, so every pass re-sends its atlases, together with 120 forced refusals of
+  `tagpu_vk_stage_begin` (diagnostic-only). The passes skipped frames while refused, no pass
+  refused or tore down, and the census before and after read the same passes drawing
+  (`terr=1 feat=1 unit=1 fx=1`).
 
 **MEASURED 2026-09-23** — Two Continents, `scenarios/tascene-parity.json` (terrain, units) and
 `feat-forest` (features), 1024 × 768, `ss=2`, the world A/B read off the target
@@ -16291,9 +16414,10 @@ is gone. At the reference device's 64-byte alignment that is 1 536 bytes a unit 
       Its Classic++ and relief-sun pictures are unchanged.
 
 - **A frame with no world target, after 2d (MEASURED 2026-09-24).** The target path and the
-  no-target path were compared at `ss=1`, so both draw at the same resolution. The fixture was
-  `selbox-facings`, three tanks selected, fog on, paused, read off the presented window. The
-  no-target path was forced by a diagnostic-only file probe in `prepare`, which is not in the tree.
+  no-target path were compared at `ss=1`, so both draw at the same resolution, on the reference
+  setup's `B8G8R8A8_UNORM` surface. The fixture was `selbox-facings`, three tanks selected, fog
+  on, paused, read off the presented window. The no-target path was forced by a
+  diagnostic-only file probe in `prepare`, which is not in the tree.
 
     - **Gamma 12:** the target, the no-target path, and the no-target path without the quad are
       all byte-identical over the whole window.
@@ -16304,6 +16428,19 @@ is gone. At the reference device's 64-byte alignment that is 1 536 bytes a unit 
     - **Gamma 6 (factor 0.75):** 75.2 % exact, the rest one level off. Without the quad it was
       up to 64 off.
     - Outside the viewport: 0 px in every case.
+
+- **Every palette-keyed source rebuilds on a move of the engine serial (MEASURED 2026-09-24).**
+  Big-battle at 2560 × 1440, `--defaults` (Classic++, so all four restore jobs run). A
+  diagnostic-only file probe bumped `tagpu_pal_engine_serial` once mid-fight without changing
+  the table's bytes, as a writer the survey missed would. Every source it keys rebuilt on that
+  frame:
+    - `k[]` from the engine SHD (`r3d shade:`);
+    - the LHT flash colours;
+    - the four base atlases, re-sent whole: units 2048 × 280, the terrain, features 2048 ×
+      1374, effects 2048 × 532, each "palette serial 1 → 2";
+    - new restore jobs for the units, the terrain, the features and the effects.
+
+  Every pass kept drawing (the census), and the terrain's twin was repainted.
 
 **Not covered.**
 
@@ -16323,12 +16460,29 @@ is gone. At the reference device's 64-byte alignment that is 1 536 bytes a unit 
   have not made the twin store able to follow the producer`", census `gui=0`). The pre-G20 base
   build did the same on the same instance, so it predates this work. It was not investigated
   here. The marker A/B turns the layer off in both runs so that it cannot decide the diff.
+- **The restorer's wrap-pad decision is not re-keyed on a palette move.** Whether a frame is
+  tileable (`tagpu_rglsl_tileable`, a colour distance over the engine's table) is decided when
+  the frame is painted (`tagpu_gaf.c`) or, for the terrain, when the restore list is published
+  (`tagpu_terr.c` `restore_publish`), with the table of that moment. A move of the serial starts
+  a new restore job, and the job repaints the new colours with the old classification. The
+  table has one writer and does not move in play, so this is the same hypothetical as the keys
+  above, not an observed fault.
+- **The render thread restarts in a loop at 3840 × 2160 on some launches**: 43 restarts in one
+  staging run, each a `vk_down` and a full re-upload. The G20c base build (`78c22b2`) does the
+  same at 4K, so it predates this work. It was not investigated here.
+- **The no-target Gamma on an sRGB surface** misses the curve by far more than a level (§2.3f).
+  Only the fallback surface is sRGB, and no run has used one.
 
 **Risky spots for a review.** The packet layout (a field removed from the game-to-render
 hand-over; every offset after it moved); each world pass's binding list and uniform offsets
 against its regenerated header; the base images shared across slots and written behind a barrier
-from per-slot staging; `base_upload` as the one atlas upload and its dimension guard, which is
-what makes the once-only descriptor writes safe; the flash level in the effects' alpha; the
+from per-slot staging; `base_upload` as the one atlas upload and its dimension guards (feature,
+effect and unit), which with the terrain's retire are what keep a shared image alive while frames
+in flight sample it; `tagpu_vk_stage.c` — the cap, the halving, the banded path's own command
+buffer on the seam's queue, its one-second fence and the in-flight mark a wait that gives up
+leaves, and the 1/0/−1 answers each pass maps to draw, skip and refuse; the palette keys
+(`s_rjPal`, `s_shadePal`, `s_lhtPal`) and `tagpu_r3d_shade_want`'s kept copy of the shade table;
+the flash level in the effects' alpha; the
 restorer's input switched to the base; the Gamma curve's per-slot images and the premultiplied
 composite; `k[]` and its fallback; the `shadows=0` change. The no-target Gamma: the per-frame
 choice between the two arms (`prepare`'s 0 and `record_direct`'s `s_drawThis` guard), the blend

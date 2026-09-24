@@ -6,14 +6,14 @@
    size a constant caps, whatever the size of the image.
 
    WHY A CAP. A full page of a base atlas is its used rows x 2048 x 4 bytes, up
-   to 16 MB for units, features and effects, and the terrain's is its whole
-   atlas, 2176 x 5338 x 4 = 44 MB on Town & Country. A full page is sent on the
-   first upload, an atlas recycle, a band-ring overflow, a palette move and
-   after every teardown (a swapchain rebuild runs every pass's `_down`). When
-   each slot staged the whole page, a teardown that re-sent everything held
-   tens of megabytes of host-visible memory mapped at once in a 32-bit process
-   (gpu-status §2.88 has the numbers), and a refused allocation took the pass
-   down for the session.
+   to 16 MiB for units, features and effects, and the terrain's is its whole
+   atlas, 2176 x 5338 x 4 = 46 461 952 bytes on Town & Country. A full page is
+   sent on the first upload, an atlas recycle, a band-ring overflow, a palette
+   move and after every teardown (a swapchain rebuild runs every pass's
+   `_down`). Staged whole, the pages of one teardown hold 66.6 MiB of
+   host-visible memory mapped at once in a 32-bit process (MEASURED,
+   gpu-status §2.88), and one refused allocation is a pass down for the
+   session.
 
    THE SHAPE. Each slot keeps one TAGPU_VKSTAGE, at most TAGPU_VK_STAGE_CAP
    bytes, allocated on a frame that uploads and given back on that slot's next
@@ -57,9 +57,11 @@
 
 #include "tagpu_vk_pass.h"
 
-/* Bytes one slot may map for its uploads, whatever the image. 1 MB is 128 rows
-   of a 2048-wide RGBA8 atlas: the steady state -- the paints of one frame --
-   fits under it (gpu-status §2.88), and a pass holds at most `slots` of them. */
+/* Bytes one slot may map for its uploads, whatever the image. 1 MiB is 128
+   rows of a 2048-wide RGBA8 atlas, and the steady state -- the paints of one
+   frame -- fits under it (gpu-status §2.88). THE BOUND: a pass holds at most
+   TAGPU_VK_SLOTS of these, 8 MiB, and the four world passes 32 MiB, whatever
+   the atlases. */
 #define TAGPU_VK_STAGE_CAP ((VkDeviceSize)1 << 20)
 
 typedef struct {

@@ -28,7 +28,7 @@
    WHAT IT IS FED, AND WHY THERE IS NO MIRROR. A job's two surfaces are
    ALREADY on the device for every consumer: the source is the pass's own
    atlas image (the RGBA base for a world pass, the R8 atlas for the UI) and the destination is the restored twin it already binds
-   (binding 42 in tagpu_vk_feat.c, 43 in tagpu_vk_fx.c). So this pass needs no
+   (binding 40 in tagpu_vk_feat.c, 42 in tagpu_vk_fx.c). So this pass needs no
    CPU mirror and no read-back. What the consumer owes is the
    destination's usage widened to carry COLOR_ATTACHMENT and its view lent
    here; the palette is the one thing that still crosses as bytes, because it

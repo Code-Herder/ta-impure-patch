@@ -2432,24 +2432,9 @@ static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
     p->text_fg    = -1;
     p->gamma      = 1.0f;
     if (live) fill_cursor(p);
-    /* THE PALETTE READ HERE IS A KNOWN HAZARD, AND THE GATE FOR IT IS NOT YET
-       KNOWN. fill_pal copies 1 KB from `main+0x143A7`, the live palette, and
-       this channel publishes on the FLIP — ~5000 presents a second, through a
-       loading screen as well as the menu — while the LOADER thread rewrites
-       that palette at a level transition. A torn copy is a wrong-palette frame
-       on the load screen: cosmetic, pre-existing, and not introduced here.
-
-       A gate on `(load_flags & 3) == 1` does not work, because it is a
-       one-shot: bit0 is `or 1` at 0x49832A and bit1 `or 2` at 0x497C5F, and
-       NOTHING IN THE IMAGE CLEARS EITHER (tagpu_engine.h's OFF_LOADFLAGS entry
-       says so). After the first level of a session the word is 3 for ever, so
-       the gate would stop firing exactly when a second load needs it. The only
-       bit both set and cleared is bit2 — set at 0x4975C7, cleared at 0x496868
-       and 0x49855D — which tagpu_engine.h calls half of a loader<->game
-       handshake; whether "bit2 set" spans a whole load or is a narrower
-       one-shot signal is NOT measured, so no gate is written on it here. It
-       wants its own landing, with the window measured across a SECOND level
-       load in one process. */
+    /* NO PALETTE ON THIS CHANNEL: `fill_pal` is not called, so `pal_ok` stays
+       0 from the fill above and nothing here reads `main+0x143A7`; a shell
+       frame draws no world. */
     return sizeof(TAGPU_PACKET);
 }
 

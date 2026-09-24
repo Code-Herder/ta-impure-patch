@@ -153,11 +153,10 @@ fixture that only arms the pass produces no picture:
 | order lines | `order.on` **and** SHIFT physically held (`down:shift` … `up:shift`; a bare `shift` is a 150 ms tap) **and** an order that does not complete — `move` completes and takes its markers with it; `patrol` never does |
 | order triangles | the route dots — only for the **hovered** unit; `pmove:x,y` onto it from a fresh roster, at game speed 1 so it does not walk away |
 | labels | `+showranges`, typed into the chat |
-| cursors | a **held** drag (`pmove:x0,y0`, `down:lbutton`, `pmove:x1,y1`, capture, `up:lbutton`) or a build placement |
-| post-fog layer | `mark.on=nocursor`, the only window in normal play that still fills it |
+| cursors | a **held** drag (`pmove:x0,y0`, `down:lbutton`, `pmove:x1,y1`, capture, `up:lbutton`) or a build placement. The one draw with the fog off: over fogged ground it stays undarkened, which is what an A/B of the post-fog draw needs on screen. `mark.on=nocursor` hands both back to the engine and draws neither |
 
-`scenarios/marker-mix.json` is the fixture that opens all of them except the labels and the
-post-fog layer. It has three tanks at 30, 65 and 100 % health and a Commander, on open ground
+`scenarios/marker-mix.json` is the fixture that opens all of them except the labels. It has
+three tanks at 30, 65 and 100 % health and a Commander, on open ground
 with water and the fog band in view. Its description gives the key sequence. Health bars still
 need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pixel A/B.
 

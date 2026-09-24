@@ -504,9 +504,12 @@ plan, or would change the next one:
   straight into the swapchain image, and before the fix they showed the world at factor 1.0
   whatever the Gamma. Before G20c the palette carried the Gamma on that path, so this was a
   regression. The fix is one full-frame quad after the last world pass and before the UI, which
-  multiplies the frame by the factor in the blend unit ([GPU status](gpu-status.html) §2.3f). It is
-  at most one level from the curve, because the blend rounds where the engine truncates. It is
-  measured against the target path in §2.88.
+  multiplies the frame by the factor in the blend unit ([GPU status](gpu-status.html) §2.3f). On a
+  UNORM surface it is at most one level from the curve, because the blend rounds where the engine
+  truncates; it is measured against the target path in §2.88. On an sRGB surface the blend scales
+  the decoded, linear value and misses the curve by far more (level 128 at factor 1.5 lands near
+  155, not 192). That is the fallback surface, taken only when the device offers no
+  `B8G8R8A8_UNORM`, and the format choice is left as it is.
 
 ---
 
@@ -533,7 +536,7 @@ plan, or would change the next one:
 | 1 (track A) | C1–C4: the BAR camera in, the old rules out | **high** — writes engine memory (the eye and its range) and adds a byte patch at `0x41C4C0`/`0x41C7F7` |
 | 2 (after 3) | C5, the mirror | medium — new instances and a new sprite list in two passes, no engine state |
 | 3 (track B) | 2a + 2b | medium — atlases and shaders |
-| 4 (track B) | 2c + 2d | **high** — the packet loses a field, which is the game↔render hand-over |
+| 4 (track B) | 2c + 2d, the no-target Gamma, and the fixes its review asked for: every upload through one bounded staging module, and every palette-derived source keyed on the engine serial ([GPU status](gpu-status.html) §2.88) | **high** — the packet loses a field, which is the game↔render hand-over; and the banded upload submits to the seam's queue and waits on its own fence from the render thread |
 
 ## Decisions [DECIDED 2026-09-23, the owner]
 

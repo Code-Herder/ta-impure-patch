@@ -5817,7 +5817,10 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
   `0x41E403` (the fade, below); `0x4ACCC4` (**one entry**: `0x4ACC70(gi, RGBQUAD* pal)`,
   `ret 8`, builds it from three sliders' positions — `gi+0xCB6`, `+0xCBA`, `+0xCBE`, each
   gadget's `+0x140` — into `pal[gi+0x9B2]` and sets index `gi+0x9B2`: an RGB colour editor
-  [INFERRED]; no direct call site, a callback); `0x45FBDF` (a zeroed buffer — all black — then
+  [INFERRED]. **`0x4ACC70` is dead code** [VERIFIED 2026-09-24 against
+  `pristine/TotalA.exe.pristine`]: no `call` or `jmp` in the whole disassembly targets it, and
+  its address appears nowhere in the file as an absolute value, so no callback table or `push`
+  can hand it out either); `0x45FBDF` (a zeroed buffer — all black — then
   `0x4C69A0(main+0x37E1B)`, a `SurfaceFill` with `main+0xDCB[…]` and a flip: the blackout
   `0x45FBC0`, `0x45FC33` its end); `0x428AA9`, `0x44B049`, `0x476798` (palettes loaded from
   files).
@@ -5827,9 +5830,17 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
   `0x5033A4`) into it with `rep movsd`; its one caller is `UIPipelinesInit` at `0x491378`, so it
   runs once per process. Every other reference passes the address as an argument —
   `0x444604`/`0x44461C`, `0x478F29`, `0x497FD4`, `0x49813B` and the table builders at
-  `0x491388..0x4913CD`. One of those arguments reaches a writer of ONE entry: `0x4AC7D0` is handed
-  `+0x143A7` from `0x444629`, `0x478F37` and `0x498148`, and hands it to `0x4ACC70`, the RGB
-  colour-editor callback above, which stores `pal[gi+0x9B2]` [role INFERRED]. Of the eleven
+  `0x491388..0x4913CD`. **None of those arguments reaches a writer** [VERIFIED by disassembly
+  2026-09-24]. `0x4AC7D0(gi, pal, src)`, `ret 0xC`, copies 1 KB from `src` into `gi+0xB2`,
+  then for each of those 256 entries finds the nearest entry of `pal` (the sum of the three
+  channels' absolute differences, first minimum) and writes its index to `gi+0x8B2[i]`: the
+  GUI's 256-byte colour LUT, built at `0x4AC7D0..0x4AC89C`, which calls nothing. `+0x143A7` is
+  its **second** argument, `pal`, at `0x444629`, `0x478F37` and `0x498148` — read and never
+  written — with `gi = main+0x519`. At the first two `src` is `main+0x5CB`, the copy's own
+  destination; at `0x498148` it is the `guipal` file `0x4BBE50` loaded (*The loading screen*,
+  below). A fourth caller, `0x426503`, passes a file loaded the same way as `src` and `edi` as
+  `pal`. And the one single-entry palette writer the survey found, `0x4ACC70` (above), has no
+  caller at all, so it cannot write `+0x143A7` whatever it would be handed. Of the eleven
   `0x4BA200` callers, three are the shell's (`0x428AA9` inside `0x4288D0`, a `"Palette"` loaded
   from a file by many shell screens; `0x44B049` inside `0x44A680`, called from `0x42837F` in the
   shell state machine `0x426E80`; the glamour fade), one is the ARMOPT family's blackout

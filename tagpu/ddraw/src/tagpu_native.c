@@ -464,8 +464,10 @@ static const char* FS =
        whose colour is an index and not a texel. Then the face shade: the SHD
        row the vertex stage chose, as a multiplier (uShadeK), clamped to 1 --
        and not on a nanoframe band, which the engine paints over the shaded
-       index. Then the lab's lambert (renderers.md 2.11; the level normal under
-       `light=0`) and the grey band as the RGB rule (2.6). The twin is divided
+       index. Then taLambert of the LEVEL normal: `uLambert` is published as 0
+       (inc/tagpu_posedraw.h), so `vNrm` is never used and a unit has no slope
+       shading in the game (tagpu_glsl.h on what the level normal leaves).
+       Then the grey band as the RGB rule (renderers.md 2.6). The twin is divided
        by its alpha: a keyed texel is (0, 0, 0, 0), so a bilinear sample beside
        one is premultiplied by its coverage and would draw a dark ring where
        the lab's shader (which takes t.rgb as is) does. */

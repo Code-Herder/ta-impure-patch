@@ -88,10 +88,16 @@
    applied by the blend -- the one stage that reads the frame -- with a
    full-frame quad: frame x factor, clamped at 1.0, after the last world pass
    and before the UI. It is the same order as the composite's (the curve on the
-   finished world, blends included) and the same clamp. It differs from the
-   curve only in the last step: the blend rounds e x factor to the nearest
-   level where the engine truncates, so a level lands at most one step from
-   the curve's. The frame holds only the clear and the world when it runs --
+   finished world, blends included) and the same clamp. ON A UNORM SURFACE it
+   differs from the curve only in the last step: the blend rounds e x factor to
+   the nearest level where the engine truncates, so a level lands at most one
+   step from the curve's. ON AN sRGB SURFACE IT DOES NOT: the blend runs on the
+   decoded, linear value, so the factor scales light rather than the level --
+   at factor 1.5, level 128 lands near 155 against the curve's 192. That is
+   the one surface where this path is the only one (the target refuses sRGB,
+   below); the seam prefers B8G8R8A8_UNORM and takes the device's first format
+   only when that is not offered (tagpu_vk.c, the surface format).
+   The frame holds only the clear and the world when it runs --
    nothing of the engine's is drawn under the world, and the UI comes after --
    and the default clear is black, which the factor leaves black. A frame takes
    this path whenever `prepare` returns 0. The target is refused for good on an

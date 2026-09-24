@@ -5,10 +5,10 @@
    gathers, and this pass draws exactly that list (`tagpu_mark_handover`). The
    list matters more here than in any pass before it: this is seven draws, not
    one, and they differ only in `uText`, `uFog` and which texture feeds
-   `uLayer` -- the order markers and their labels first, then the bars over
-   them, then the group digit, then the captured layer, and the build cursor
-   last of all with fog OFF because the engine draws it after the fog overlay
-   and never darkens it. Every one of those is a decision the
+   `uLayer` -- the selection rects, the order markers and their labels, then
+   the bars over them, then the group digit, and the build cursor and band
+   box last of all with fog OFF because the engine draws them after the fog
+   overlay and never darkens them. Every one of those is a decision the
    gather made from state this side cannot see, so it is carried rather than
    re-derived.
 
