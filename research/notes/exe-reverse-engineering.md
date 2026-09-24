@@ -1090,8 +1090,24 @@ set, tile map, feature map, wreck records and fog descriptor), `0x42DB90` the mo
 body `0x497180` **on the loader thread** (see "The in-play publish point, the loader thread and the
 load flags", traced 2026-09-12) — allocates in this order: `0x471D90` layers
 (`0x4918B1`), `0x499A30` projectiles (`0x4918B6`), `0x483610` `LoadMap` (`0x4918C0`), `0x4854A0`
-the unit array (`0x4918D4`), and later `0x4669B0` the minimap (`0x4919C3`). Between the two the
+the unit array (`0x4918D4`), and later `0x4669B0` the minimap (`0x4919C3`) and `0x464990` the
+players' LOS counters (`0x4919C8`). Between the two the
 render thread is live: the reclaim post hook clears its flag as soon as `0x491B60` returns.
+
+**The LOS counters are allocated in the level load and nowhere else** [DISASSEMBLED 2026-09-24,
+the pristine build]. `0x464990` walks the ten players and calls `0x464700` (at `0x4649B1`) for each
+whose byte `Players[i]+0x73` (`[main+0x1BD6+i*0x14B]`, tested at `0x4649AC`) is non-zero, then
+calls `0x4648E0`. `0x464700` frees the block's old buffer (`0x464855`, `0x4B4F20` on
+`[player+0x7C]`), stores the dimensions as the PLOT size halved (`w` at `0x464849`, `h` at
+`0x46484F`, `+0x80`/`+0x84`), allocates `w*h` rounded up to 8 (`0x46486F`, `0x4B4F10`; the
+rounded size at `+0x88`), stores the pointer at `+0x7C` (`0x46487B`) and zeroes it (`rep stos`
+at `0x46488F`). The image holds one direct call of each (`0x4919C8` for `0x464990`, `0x4649B1`
+for `0x464700`) and no other reference to either address; a call through a table or a register
+is not excluded by that search. So the local player's counters, which the builder `0x4843C0` and
+`tagpu_fogwide` read (`0x4843F0`, the block at `main+0x1B63+id*0x14B+0x7C`), are the level's, like
+MAPPED (`0x483CF6`, freed by the map-free routine): the in-play draws fall between their
+allocation and the next load or teardown. `tagpu_fogwide` reads them from inside every in-play
+draw, at the fog site or in the publisher's `after` (gpu-status §2.3e).
 
 #### Who enters `0x491B60`, and on which thread
 

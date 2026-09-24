@@ -236,16 +236,16 @@ grid at all; **`out=` must read 0** — frames whose fog domain was not inside t
 **`nopieces=` must read 0** — units inside a frame's slab that the packet carried outside its fog
 reach, so without their pieces and not drawn (the reach covers every slab the bound fits into a
 grid, so only a bare frame whose unapplied steps outran the lead, or a centred frame, makes one);
-`bare=`
-counts frames that needed the wide grid and had none; `held=N/Mpx` is the frames whose drawn eye
+**`bare=` must read 0** outside `fogwide.off` — presented frames that needed the wide grid and had
+none (the grid is built on every in-play draw, whoever owns the fog site); `held=N/Mpx` is the frames whose drawn eye
 the bound held back and the largest hold, never more than the displacement the gesture has posted
 and the game thread not yet applied, less the lead the wide grid carries (a quarter of the view a
 side) — near 0 when the game thread keeps up (4 frames over 36 wheel gestures at 1080p on the
 reference setup's GPU), more when it lags;
 `paused=` is the frames drawn at the previous frame's level so the view would not move against
 the gesture; **`back=` must read 0** — frames that moved against it anyway.
-**A level that starts below 1× shows `bare=` and `out=` of about 15** — the frames before the
-terrain pass owns the ground, when there is no wide grid to take — and they must not grow after.
+`bare=`, `out=` and `nopieces=` count only frames the Vulkan lane presented, so the lane's
+bring-up and a swapchain rebuild add nothing to them.
 
 ## Classic++
 
@@ -349,8 +349,8 @@ that map's size.
 
 | line | every | must read 0 | notes |
 |---|---|---|---|
-| `packet: pub= skip= overrun= foreign= … trunc= refill= viol= pviol= crcbad= nopkt= \| … \| cmd: … \| draws= … \| world: … dup= trunc= relbad= woob= …` | 300 render frames | `viol`, `pviol`, `crcbad`, `foreign`, `commitfail`, `vpwh` (both exchanges); `trunc` (a frame published cut: the slot could not grow to the fill); `dup` (the stable-id collision oracle), `relbad` (the engine's `end == begin + (count−1)·0x118` relation), `woob` (wreck records outside the 2048-record pool); the `world:` segment's units, wrecks and anchors `trunc`; `layerbad`, `subbad` in the `fx:` segment; `refused` in the `fog:` and `gui:` segments; `recodd` in the `fog:` segment (a draw that cleared the engine fog grid's is-current bit without building it) | `skip` is the FRESH gate doing its job; `refill` counts fills done again after the slot grew under them, a few at a level's start; the `world:` pieces `trunc` reads at most `refill` plus the packet's `trunc`; `overrun`/`gap` count only under `stress` or across a level end; `unacked=(0,0)` whenever no wheel gesture is in flight; `hold=1` while `tagpu_eye.txt` is in force; `tps` is 3 × `speed`; `font=` non-zero when text can draw; `levelend=reclaim` names who published the level-end packet |
-| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog= bare= out= held=N/Mpx paused= back= nopieces=` | 300 | `out` past a level's start, `back`, `nopieces` | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; the fog fields are the fog bound's witness (§"Camera, viewport and fog") |
+| `packet: pub= skip= overrun= foreign= … trunc= refill= viol= pviol= crcbad= nopkt= \| … \| cmd: … \| draws= … \| world: … dup= trunc= relbad= woob= …` | 300 render frames | `viol`, `pviol`, `crcbad`, `foreign`, `commitfail`, `vpwh` (both exchanges); `trunc` (a frame published cut: the slot could not grow to the fill); `dup` (the stable-id collision oracle), `relbad` (the engine's `end == begin + (count−1)·0x118` relation), `woob` (wreck records outside the 2048-record pool); the `world:` segment's units, wrecks and anchors `trunc`; `layerbad`, `subbad` in the `fx:` segment; `refused` in the `fog:` and `gui:` segments; `recodd` in the `fog:` segment (a draw that cleared the engine fog grid's is-current bit without building it) | `skip` is the FRESH gate doing its job; `refill` counts fills done again after the slot grew under them, a few at a level's start; the segments' counts are per publish, from the fill that was published; the `world:` pieces `trunc` reads at most the packet's `trunc`; `overrun`/`gap` count only under `stress` or across a level end; `unacked=(0,0)` whenever no wheel gesture is in flight; `hold=1` while `tagpu_eye.txt` is in force; `tps` is 3 × `speed`; `font=` non-zero when text can draw; `levelend=reclaim` names who published the level-end packet |
+| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog= bare= out= held=N/Mpx paused= back= nopieces=` | 300 | `bare`, `out`, `back`, `nopieces` | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; the fog fields are the fog bound's witness (§"Camera, viewport and fog") |
 | `reclaim: def= drn= ovf= … tmpl=<queued>/<freed by the epoch>/<leaked>` | 300 | `ovf`, the third `tmpl` field | a level change logs `reclaim: level teardown: flushed N …` then `reclaim: teardown post: freed N block(s)` |
 | `fogwide: …`, `fogwide check: … differ=` | 5 s / 120 ticks | `differ` | a video-mode change logs `fogwide: grid CxR, N KB (N cells) — grown` |
 | `gui: twins= …` | 300 | `overflows`, `lost`, `miss`, `reseed` | `references/ui-layer.md` |

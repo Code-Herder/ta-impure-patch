@@ -882,13 +882,19 @@ engine's grid; with the rule applied regardless of `fit` (the build before) the 
 0.4556 and `paused` grew by one every frame, 1 120 in two heartbeats, until the zoom-in released it.
 
 The native heartbeat carries the witnesses — `fog=wide|engine|none bare=N out=N held=N/Mpx
-paused=N back=N nopieces=N`: `fog` is the grid the last frame actually sampled; `out` counts frames whose
+paused=N back=N nopieces=N`: `fog` is the grid the last frame actually sampled; `bare` counts
+presented frames that needed the wide grid and whose packet carried none, and must read 0 outside
+`tagpu_fogwide.off`; `out` counts presented frames whose
 domain is not inside the grid they took, checked on the pass's own numbers, and must read 0; `held`
 counts frames the bound held back and the largest hold; `paused` the frames drawn at the last
 frame's level; `back` the frames that moved against the gesture anyway, and must read 0;
 `nopieces` the units inside a frame's slab that the packet carried outside its fog reach, and so
-without their pieces, which were not drawn, and must read 0. The publisher's `fog:` segment carries the build record's two:
-`norec` and `recodd` (above).
+without their pieces, which were not drawn, and must read 0. `bare`, `out` and `nopieces` count
+only frames that reached the screen: the pass gathers on every iteration of the render loop,
+through the lane's bring-up, a swapchain rebuild and a skipped acquire, when nothing is presented,
+so each frame's share is held until `tagpu_vk_frame` says it presented that frame
+(`tagpu_native_presented`, from `render_vk.c`) and dropped by the next gather otherwise. The
+publisher's `fog:` segment carries the build record's two: `norec` and `recodd` (above).
 
 *Why a bound on the eye and not a bigger grid.* A grid spanning the whole reachable range is the
 map plus half a view each side: on Seven Islands, the largest stock map (20480² px), ~547 k cells
@@ -952,11 +958,25 @@ gestures, so the lead adds ~50 µs of game-thread time a second at 1080p. The un
 rect and the anchor rect are the fog reach, which holds the wide grid's span, so both grow with the
 lead; the anchor rect's margin is 16 cells past the reach.
 
-A level that starts below 1× has no wide grid until our terrain pass owns the ground (the wide
-grid is built at the fog site, which is ours only then): measured after a game → shell → game
-cycle at 0.5×, `bare` 15 — 14 frames with the terrain request still down, 13 of them before the
-new 1024x768 swapchain existed, and 1 on the request's round trip — then 0 for the rest of the
-level. Those frames draw the engine's own terrain and fog overlay.
+**The wide grid is built on every tracked in-play draw**, whoever owns the fog site.
+`terr_fogtick` ticks it at the engine's fog call `0x469D8E` on a draw latched to our terrain;
+on any other draw the engine's own `0x4848E0` runs there, and the publisher ticks the grid in
+that draw's `after` (`wide_tick`), before the fill copies it, telling it `rebuilt` when the
+engine grid was not current as the draw began (bit 3 clear at the apply, which the engine's
+fog function, run on every in-play draw, then rebuilds). The maps it reads are the level's: the
+local player's LOS counters are (re)allocated only by `0x464700`, called for each active player by
+`0x464990` at `0x4919C8` inside the level load `LoadGameData_Main 0x4917D0`, and MAPPED is
+allocated in the map load and freed by the map-free routine in the teardown cascade; the `after`
+runs between the two, on the thread that runs the teardown. The draws without our site are a
+level's first ones, until our terrain pass has gathered a frame and the game thread has latched
+its request (the rect widens only on the request, `tagpu_zoom_apply`), and every draw under
+`terr.on=off` or `passive`. MEASURED 2026-09-24 at 1920×1080 on Xvfb with the play set, Two
+Continents zoomed out six notches (0.456), the level ended through the menu (EXITMENU →
+MAINMENU) and a skirmish started, the zoom still below 1 (the second level's heartbeat reads
+`fog=wide`): before, `bare=17 out=17` on the second level; with only the presented-frame rule
+below, 2 — the frames that reached the screen; with the tick, 0, and `back`, `nopieces`, `norec`,
+`recodd` 0. The world A/B fixture, which holds `terr.on=off native.on=all` at 0.5× for five
+seconds, read `bare=283 out=283` before and 0 after, on the reference setup's GPU at 1024x768.
 
 **A packet cut at a level's start was drawn with no fog.** MEASURED 2026-09-24 on `big-battle` at
 1920×1080 on Xvfb, a fresh instance with the play set and no input: one frame counted `bare` at
@@ -972,7 +992,14 @@ before publishing, and the fill reports its whole size (§2.16, the primitive), 
 published without the tables it asked for while the slot can grow. After, on the same run:
 `bare=0 out=0 back=0 nopieces=0`, `norec=0 recodd=0`, packet `trunc=0 refill=3 grow=15`. Two
 Continents, the fight / follow / hand-back run above: `bare`, `out`, `nopieces`, `norec` and
-`recodd` 0 at every stage, `back=0` on every heartbeat, `trunc=0 refill=3`. `big-battle` under
+`recodd` 0 at every stage, `back=0` on every heartbeat, `trunc=0 refill=3`. Re-run with the wide
+grid ticked on every draw and the per-publish counts: `big-battle` `bare=0 out=0 back=0
+nopieces=0`, `trunc=0 refill=4`, the world segment's `trunc=0/0/0/0`; Two Continents 0 on every
+stage, `trunc=0 refill=2`. **Past the reserve** (a diagnostic build with a 512 KB frame reserve,
+not committed, `big-battle`): with the loop that stopped on `slot_commit`'s answer, one frame
+refused by the consumer (`viol=1`, `cap_bytes != the slot's capacity`); with the loop that stops
+on what it committed, `viol=0`, every publish past the reserve counted (`trunc=432`), the units
+kept (`units=948`) and the fog grids the layer cut. `big-battle` under
 `check` + `stress`, where every in-play draw publishes into one-page slots that must grow:
 `trunc=0 refill=12 grow=43 viol=0 pviol=0 crcbad=0`. Merged with main's full-colour Classic and run on the reference
 setup's GPU at 1024x768, the world A/B with the eye pinned (terrain at 1×, 2× and 0.5×, units at
@@ -1121,7 +1148,7 @@ render thread withdraws, the key fill and the fog tick can still run for the res
 `tagpu_terrown_filled()` and the structure-shadow gate follow the request, which is already
 down, so no such frame is inverted. Handing the site back leaves nothing to void: the engine
 grid's origin is its build record, read off LosType bit 3 whoever builds it (§2.3e), and the
-wide grid is refused unless the fog site ran in the same draw.
+wide grid is refused unless it was ticked in the same draw, at our fog site or by the publisher.
 
 **The cursor is not a reader of this rect and no longer needs to be** — §2.3d is why. Until
 G13m it was: the engine drew its sprite wherever `GetCursorPos` reported, so widening what it
@@ -1979,7 +2006,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | the **pose history** (`tagpu_lerp.c`, `tagpu_lerp.on`) | not an engine field — our own arena, 3.4 MB of `P_POS`/`P_TURN` snapshots keyed by `(Object3do, nparts, level generation)`. **It READS `pr+P_POS` and `pr+P_TURN` and writes NOTHING back**, which is the whole safety argument: the sim reads those fields (`get PIECE_XZ`, and `QueryPrimary`/`AimFromPrimary` hand the engine weapon muzzle origins out of them) and TA has no runtime desync detection, so a framerate-dependent per-machine blend written there would diverge two machines silently. Verified by running it: the walker's COB trace is byte-identical with the lever on and off ([smooth motion](smooth-motion.html) §7g) |
 | `node+0x24` | the model's REST vertices, `count × 12` bytes of 16.16. Read only. Shared by every unit of a type and never written after load, which is what makes the reconstruction in §2.9 safe to build from while the engine is rewriting the posed copy |
 | `main+0x1421F` | the screen fog grid `{u16* buf; cols; rows; cells}`. Read only, per frame on the render thread. **Its last column and last row are short their outer corners** — the map cell that would supply them is past the builder's loop — so a sampler that clamps a world point into that cell reads *no fog*, not the border cell; `taFog` clamps to `uFogDim − 1.0`, one whole cell short, and the grid's own overshoot of the viewport — at least 1 px on every side for every viewport size the allocation accepts and every eye, 16 px for a negative one — is what makes that a no-op at 1× (terrain-depth §8a). **`cells` is the ALLOCATION**, `(cols*rows + 7) & ~7` — asserting `cells == cols*rows` accepted 1024×768 and refused 1920×1080, where the refusal cleared `fogMode` and there was no fog at all until 2026-09-09 ([terrain & depth](terrain-depth.html) §5.2). **The dimensions are one cell per 32 px of the 1× viewport plus two**, whatever the zoom: MEASURED by `tacli peek` through this descriptor, **118 × 68** for the 3712 × 2096 viewport of a 3840×2160 screen (`cells` 8024, exactly the product) and **78 × 45** for the 2432 × 1376 of a 2560×1440 one (`cells` 3512 against a product of 3510 — the round-up, and the case that refused). The `cols`/`rows` sanity bound in `tagpu_native.c` is 1024, not 256: at that rate 256 is a viewport 8128 px wide, which made the bound a screen limit standing in front of the real test |
-| `main+0x2A43`, `main+0x1B63 + id*0x14B + 0x7C`, `main+0x14273`, `main+0x14233`/`+0x14237` | the LOCAL player id, that player's LOS counter block `{u8* buf; w; h}`, the MAPPED bitmap (u16 per tile, one bit per player, row stride `PLOT_C` **bytes**) and the PLOT dimensions. Read only, **on the GAME THREAD** from `tagpu_fogwide.c` at the fog overlay's own call site — which is the lifetime argument for reading them at all: the engine's builder reads the same two allocations there. Every index is bounded by the dimensions read alongside them |
+| `main+0x2A43`, `main+0x1B63 + id*0x14B + 0x7C`, `main+0x14273`, `main+0x14233`/`+0x14237` | the LOCAL player id, that player's LOS counter block `{u8* buf; w; h}`, the MAPPED bitmap (u16 per tile, one bit per player, row stride `PLOT_C` **bytes**) and the PLOT dimensions. Read only, **on the GAME THREAD** from `tagpu_fogwide.c`, inside an in-play draw — at the fog overlay's own call site when it is ours, else in the publisher's `after` of the same draw (§2.3e). The lifetime argument is the level's: the LOS counters are (re)allocated only by `0x464700` in the level load (`0x464990` at `0x4919C8`), MAPPED is allocated in the map load and freed in the teardown cascade, and an in-play draw runs between the two on the teardown's own thread. Every index is bounded by the dimensions read alongside them |
 | `main+0x37F06` bit0 | `damagebars` registry option |
 | `main+0x37F06` bit2 / bit3 | the graphics options `Shadow` / `TShadow` (the blit tests `al,4` at `0x45928E`, [shadows & cloak](shadows-cloak.html) §2). **Read on the GAME THREAD by the frame packet's publisher and consumed from the packet's copy (`pk->gfx_opt`)** — the render thread does not reach across for it, and `damagebars` (bit0) has come out of the same byte the same way since landing 3. Per frame. The Classic silhouette needs both bits, the slant only bit2, and §2.83 is the pass that reads them today. **One switch moves three bits**: the stock `BSHADOWS` click set bit2, bit3 and bit4 (FShadow) together (`0x45E1CB`), and the menu's Shadows row, which replaces it, does the same (§2.12). G14i's claim that bit2 also gates the Classic++ shadow map is dead with the map: `shadows=1` has no producer (§2.83) |
 | `main+0x37F2F` bit2 | `SelBoxes` |
@@ -3138,10 +3165,17 @@ slot, never moved, never freed. A fill that does not fit is not published: the p
 slot it still holds and fills it again (`pkx_publish`), which the consumer cannot see because the
 slot is not exchanged until the tail is stored. The fill reports its whole size, the tables it
 could not place included (`s_fillShort` in `tagpu_packet_pub.c`), so one refill fits unless an
-input the render thread publishes changed in between; the loop is bounded because each pass grows
-the slot by at least a 64 KB grain and the reserve ends it. A frame is published cut only when the
-slot cannot grow to it, a failed commit or a fill past the reserve, and that is `trunc`. Neither
-side ever waits. Every violation is counted, logged rate-limited, never
+input the render thread publishes changed in between. The loop keys on what `slot_commit`
+committed, not on what it answered: past the reserve it commits all of it and still answers no,
+and the record then carries the new capacity (the consumer refuses a `cap_bytes` that is not the
+slot's) and is filled once more at it, which is the last fill. It is bounded because every pass
+that fills again has grown the slot by at least its grain (64 KB, one page under `stress`) and the
+reserve ends it. A frame is published cut only when the slot cannot grow to it, a failed commit
+or a fill past the reserve, and that is `trunc`; past the reserve the fill runs at the whole
+reserve, so the world tables laid down first are kept and what is cut is what follows them. The
+publisher's counters count the fill that is published, once per publish: a fill done again takes
+back what the one before it counted (`PK_FILL_COUNTS`), and a cache reuse in a refill is not
+counted. Neither side ever waits. Every violation is counted, logged rate-limited, never
 fatal: thread identity both sides (the render thread's restart across a display-mode change is
 recorded, not refused — ownership is by role), the permutation after every exchange, `head ==
 tail`, the structural bounds of every offset against the slot's committed size, a canary past the
@@ -3184,7 +3218,8 @@ flags= eye= vp= flips= font= fg= trunc= used= | draws= inplay= draws/s= inplay/s
 fontcopies=<copies>/<refused> levelend=reclaim|own|none`.
 `viol`, `pviol`, `crcbad`, `foreign`, `commitfail` and `trunc` must stay 0; `refill` counts the
 fills done again after the slot grew under them (a few at a level's start, when the world tables
-first outgrow the slots); `skip` is the fresh gate
+first outgrow the slots). **The segments' counts are per publish**, from the fill that was
+published; `skip` is the fresh gate
 working; `overrun`/`gap` are 0 in play **on a lane whose renderer takes packets**, and count
 under `stress`, across a level end, **or from the roster keepalive** — the vulkan-only plan's
 landing 10c-3 forces a fill when none has happened for 500 ms, so on `renderer=gdi`, where
@@ -3438,8 +3473,7 @@ carries the publisher's own: `u= p= w= a=<anchors>/<cells scanned> scan=<scans>/
 trunc=<units>/<pieces>/<wrecks>/<anchors> relbad= woob= shd=`. **`relbad` must stay 0** — it counts
 draws on which `end != begin + (count−1)·0x118`, the relation the note records — and so must the
 units, wrecks and anchors `trunc` counts, which are the tables' own caps. The pieces count is the
-arena running out of the slot, in any fill, the ones the primitive then grew and filled again
-included, so it reads at most `refill` plus the packet's `trunc`. **`woob` is the wreck-record index the bound refused**,
+arena running out of the slot in a published fill, so it reads at most the packet's `trunc`. **`woob` is the wreck-record index the bound refused**,
 added by the landing review below; it is a monitor and not the safety argument, which is the
 engine's own 2048-record pool.
 
@@ -16551,8 +16585,10 @@ pays what it draws.
 - **Frame time at 10 000 units is unknown.** The bake's per-unit lookup scans its caches linearly
   and probes every piece's node with `IsBadReadPtr`; at ~600 posed units neither shows (0.36 ms),
   and at 10 000 either may. Instancing is the next step if it does.
-- A packet that truncates while its slot grows at load (`trunc=5` over `grow=17` on `500v500`)
-  now refuses those few frames' units whole, where it used to drop the truncated units alone.
+- ~~A packet that truncates while its slot grows at load (`trunc=5` over `grow=17` on
+  `500v500`)~~ **closed**: a fill that does not fit is grown and filled again before it is
+  published (§2.16, the primitive; §2.3e, the level-start bare frame), so `trunc` reads 0 inside
+  the reserve.
 - Type-scaled caps are unchanged: the selection-box cache (256 root nodes a level) and the
   scenario harness's selection (`SCN_MAX_SEL` 512); its unit, order and clear arrays follow the
   unit limit (§2.6b).
