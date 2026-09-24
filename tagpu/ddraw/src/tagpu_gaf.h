@@ -93,6 +93,10 @@ typedef struct TAGPU_GAFENT {
        entry is RESERVED: its rect is assigned and nothing samples it. */
     char           pend;
     unsigned       deferEpoch, askFrame;
+    /* ITS FRAME IN THE PUBLISHED RESTORE LIST (`rlist`), -1 for none: what a
+       repack rewrites in place when it moves the entry, so the list stays one
+       generation and a consumer's cursor into it stays good. */
+    int            rli;
 } TAGPU_GAFENT;
 
 #include "tagpu_restoreglsl.h"   /* TAGPU_RGLSL_FRAME, the shared frame */
@@ -370,10 +374,17 @@ typedef struct TAGPU_GAFATLAS {
        `rlistGen` IS THE DISCONTINUITY and the only thing a cursor cannot
        survive. It is bumped whenever the array stops being a continuation of
        what a consumer already has, and the list is SIX events long: the
-       arm, a recycle or a repack (both of which drop the queue and blank the
-       destination), `tagpu_gaf_atlas_lost`, a palette move, and the overflow
-       restart below. A consumer that sees a new
+       arm, a recycle or a repack that publishes no moves (both of which drop
+       the queue and blank the destination), `tagpu_gaf_atlas_lost`, a palette
+       move, and the overflow restart below. A consumer that sees a new
        generation drops its own job and starts from index 0.
+       A REPACK THAT PUBLISHES ITS MOVES (`moveList`) IS NOT ONE. It rewrites
+       each moved entry's frame in place, at its new rect, and blanks the
+       frames of entries it dropped or could not move (w and h 0, which a job
+       skips); indices do not move, so the cursor stays good. The consumer
+       then carries its restored twin's cells with the base atlas's and moves
+       its own queued frames by the same list (tagpu_vk_feat.c), so a repack
+       costs the twin nothing that was already restored.
        `rlistRepaint` is 1 only for the palette-move generation
        (`tagpu_gaf_atlas_restore_repalette`), where the destination already
        holds a restore and is recoloured in place. Only the UI atlas takes that

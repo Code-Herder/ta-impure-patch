@@ -220,9 +220,10 @@ static TAGPU_VKMOVEBUF s_move;
    a serial, which is what a lazy queue needs:
 
      s_rjGen    the producer's generation this job belongs to. A new one is a
-                discontinuity a cursor cannot survive -- a recycle, a repack,
-                the atlas laid out afresh -- so the job is rebuilt and the
-                cursor goes back to 0.
+                discontinuity a cursor cannot survive -- a recycle, a repack
+                whose moves are not published, the atlas laid out afresh -- so
+                the job is rebuilt and the cursor goes back to 0. A repack
+                whose moves are published is carried instead (`twin_move`).
      s_rjPal    the engine palette serial the job was built with. The
                 generation does NOT move with the palette, and the job keeps
                 the palette it was made with, so a move of the serial is a new
@@ -348,9 +349,11 @@ static int mk_buffer(const TAGPU_VKPASS* d, VkDeviceSize size, VkBufferUsageFlag
 /* WHAT EACH OF THIS PASS'S IMAGES IS FOR. The restored twin carries
    COLOR_ATTACHMENT because this lane's restorer paints into it;
    it costs nothing when nothing restores, and an image created without it
-   could not be lent to the restorer at all. */
+   could not be lent to the restorer at all. It is a transfer source as well,
+   because a repack's move carries its cells (`twin_move`). */
 #define IMG_SAMPLED  (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
-#define IMG_RESTORED (IMG_SAMPLED | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+#define IMG_RESTORED (IMG_SAMPLED | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | \
+                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
 /* the base atlas is also a transfer source, for a repack's move */
 #define IMG_BASE     (IMG_SAMPLED | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
 
@@ -857,6 +860,36 @@ static int build(const TAGPU_VKPASS* d)
 
 /* ---- the frame ---------------------------------------------------------- */
 
+/* THE FRAMES PAST THE CURSOR onto the job. THE CURSOR ADVANCES BY WHAT WAS
+   OFFERED, NOT BY WHAT WAS TAKEN. `tagpu_rcore_job_add` SKIPS a frame it can
+   never queue -- a degenerate rect, or one larger than the activation slot
+   even after the wrap demote -- and returns only the count it queued, so
+   advancing by that would re-offer the tail of the list on every frame for
+   the life of the atlas: one duplicate restore per refused frame, for ever.
+   A BLANK FRAME (w and h 0) is one a repack dropped (tagpu_feat.h), skipped
+   the same way and not a refusal. A refused frame draws the base atlas until
+   the next generation, which is what the log line says.
+   THE EXCEPTION IS A WHOLE-CALL FAILURE (nothing taken of frames that were
+   not all blank): that is the queue's own realloc failing, which is transient
+   and already logged by the core, so the cursor stays where it is and the
+   next frame offers them again. */
+static void restore_take(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
+{
+    const int n = h->restoreN - s_rjTaken;
+    const TAGPU_RGLSL_FRAME* f;
+    int i, blank = 0, took;
+    if (n <= 0 || s_rjTaken < 0) return;
+    f = h->restoreFrames + s_rjTaken;
+    for (i = 0; i < n; i++) if (f[i].w <= 0 || f[i].h <= 0) blank++;
+    took = blank < n ? tagpu_vk_restore_job_add(s_rjob, f, n) : 0;
+    if (took == 0 && blank < n) return;
+    s_rjTaken += n;
+    if (took < n - blank)
+        plog(d, "feat: %d of %d new restore frames were refused by the "
+                "restorer (degenerate or larger than a slot) - they draw "
+                "the base atlas until the next generation", n - blank - took, n - blank);
+}
+
 /* THE RESTORE, FED FROM THE PUBLISHED LIST.
 
    Called once a frame after the base atlas's upload, because the FILL pass
@@ -867,12 +900,12 @@ static int build(const TAGPU_VKPASS* d)
    feature atlas is a lazy queue: the producer appends one frame per miss
    for the life of the atlas, so the steady state here is "add the few frames
    past my cursor and advance it". Everything that could make the cursor a lie
-   -- the rects moving, the destination blanking -- arrives as a new
-   generation, and then the job is rebuilt from index 0. */
+   -- the destination blanking, the rects moving with no moves to follow --
+   arrives as a new generation, and then the job is rebuilt from index 0. A
+   repack that publishes its moves has already been carried into the job and
+   the twin by `base_upload` (`twin_move`), before this runs. */
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
 {
-    int n;
-
     if (!h->restoreFrames || h->restoreGen == 0) {
         /* No request: the lever was never on, or the producer's list was
            dropped. Either way this job describes nothing now. */
@@ -930,29 +963,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
             return;
         }
         /* THE STEADY STATE: whatever the producer has appended since. */
-        n = h->restoreN - s_rjTaken;
-        if (n > 0) {
-            int took = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames + s_rjTaken, n);
-            /* THE CURSOR ADVANCES BY WHAT WAS OFFERED, NOT BY WHAT WAS TAKEN.
-               `tagpu_rcore_job_add` SKIPS a frame it can never queue -- a
-               degenerate rect, or one larger than the activation slot even
-               after the wrap demote -- and returns only the count it queued,
-               so advancing by that re-offers the tail of the list on every
-               frame for the life of the atlas: one duplicate restore per
-               refused frame, for ever. A refused frame draws the base atlas
-               until the next generation, which is what the log line says.
-               THE EXCEPTION IS A WHOLE-CALL FAILURE (`took` 0 with frames
-               offered): that is the queue's own realloc failing, which is
-               transient and already logged by the core, so the cursor stays
-               where it is and the next frame offers them again. */
-            if (took > 0) {
-                s_rjTaken += n;
-                if (took < n)
-                    plog(d, "feat: %d of %d new restore frames were refused by the "
-                            "restorer (degenerate or larger than a slot) - they draw "
-                            "the base atlas until the next generation", n - took, n);
-            }
-        }
+        restore_take(d, h);
         return;
     }
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; s_rjTaken = 0; }
@@ -978,7 +989,8 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);
     if (!s_rjob) { s_rjTried = 1; return; }   /* the reason is in the log      */
-    s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
+    s_rjTaken = 0;
+    restore_take(d, h);
     s_rjGen = h->restoreGen;
     s_rjPal = h->palSerial;
     s_rjSrcView = s_bView;
@@ -987,6 +999,101 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
     plog(d, "feat: restoring the atlas HERE - %d of %d frames over %dx%d, "
             "generation %u", s_rjTaken, h->restoreN, s_atDim, s_atDim,
          h->restoreGen);
+}
+
+/* ---- THE RESTORED TWIN FOLLOWS A REPACK ----------------------------------
+   The moves by the old cell origin, which is how a frame names its cell as
+   well: (dx - border, dy - border), the move's (ox, oy) (tagpu_gaf.h). Open
+   addressing over twice the atlas's entries, so a probe always ends. */
+#define MOVEHASH 8192                      /* a power of two                  */
+static unsigned short s_mvHash[MOVEHASH];  /* move index + 1, 0 empty; render thread */
+
+static unsigned mv_slot(unsigned x, unsigned y)
+{
+    return (x * 73856093u ^ y * 19349663u) & (MOVEHASH - 1);
+}
+
+/* a queued frame to its entry's new rect: 1, or 0 when no move names its cell
+   -- the repack dropped the entry. The size is compared as well as the
+   origin, so a frame can only follow the cell it was built for. */
+static int twin_map(void* ctx, TAGPU_RGLSL_FRAME* f)
+{
+    const TAGPU_GAFMOVE* m = (const TAGPU_GAFMOVE*)ctx;
+    const int ox = f->dx - f->border, oy = f->dy - f->border;
+    const int cw = f->w + 2 * f->border + f->padR, ch = f->h + 2 * f->border + f->padB;
+    unsigned s;
+    if (ox < 0 || oy < 0) return 0;
+    for (s = mv_slot((unsigned)ox, (unsigned)oy); s_mvHash[s]; s = (s + 1) & (MOVEHASH - 1)) {
+        const TAGPU_GAFMOVE* c = &m[s_mvHash[s] - 1];
+        if (c->ox == ox && c->oy == oy && c->w == cw && c->h == ch) {
+            f->ax = f->dx = c->nx + f->border;
+            f->ay = f->dy = c->ny + f->border;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The job goes, and with it every claim the twin makes: the next
+   `restore_want` blanks it and restores from the list's first frame. */
+static void twin_drop(const TAGPU_VKPASS* d, const char* why)
+{
+    if (!s_rjob) return;
+    plog(d, "feat: %s - the restored twin is blanked and restored again from "
+            "the list's first frame", why);
+    tagpu_vk_restore_job_free(d, s_rjob);
+    s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+    s_rjSrcView = VK_NULL_HANDLE;
+    s_arHave = 0;
+}
+
+/* THE REPACK'S MOVE, CARRIED INTO THE RESTORED TWIN, so that what was
+   restored stays restored, at its new rect, and only what never was is
+   restored after. Called once per move, straight after the base atlas's move
+   is recorded into `cb`: the job's frames are moved by the same list -- the
+   producer has rewritten its published list in place (tagpu_gaf.h
+   `rlistGen`) -- and the twin's cells are moved on the device, with every
+   texel no cell lands on cleared (tagpu_vk_stage_move_twin).
+   WHY THE TWIN CANNOT DISAGREE WITH THE BASE ATLAS: both images move by one
+   list in one command buffer; the job's frames are rewritten by that list
+   before the restorer records its next slice, which it does after every
+   prepare; and the batch in flight is taken back out -- so after the move no
+   FILL reads the base atlas, and no OUT writes the twin, at a rect of the old
+   layout. A twin the job has not drawn into yet is not moved: the job's first
+   draw clears it.
+   Anything that stops the twin following -- more moves than the table holds,
+   a job that cannot take its batch back, a twin the device cannot move --
+   drops the job, the rule for any discontinuity. */
+static void twin_move(const TAGPU_VKPASS* d, VkCommandBuffer cb, const TAGPU_FEATHAND* h)
+{
+    int kept = 0, requeued = 0, dropped = 0, carried = 0, i;
+    if (!s_rjob) return;
+    if (h->atlasMoveN < 0 || h->atlasMoveN > MOVEHASH / 2) {
+        twin_drop(d, "a repack moved more cells than the twin's table holds");
+        return;
+    }
+    memset(s_mvHash, 0, sizeof s_mvHash);
+    for (i = 0; i < h->atlasMoveN; i++) {
+        unsigned s = mv_slot(h->atlasMoves[i].ox, h->atlasMoves[i].oy);
+        while (s_mvHash[s]) s = (s + 1) & (MOVEHASH - 1);
+        s_mvHash[s] = (unsigned short)(i + 1);
+    }
+    if (!tagpu_vk_restore_job_remap(s_rjob, twin_map, (void*)h->atlasMoves,
+                                    &kept, &requeued, &dropped)) {
+        twin_drop(d, "the restore job could not take its batch back after a repack");
+        return;
+    }
+    if (tagpu_vk_restore_job_dst_live(s_rjob)) {
+        if (!tagpu_vk_stage_move_twin(d, cb, &s_move, s_arImg, h->atlasDim,
+                                      h->atlasMoves, h->atlasMoveN)) {
+            twin_drop(d, "the restored twin could not be moved with the repack");
+            return;
+        }
+        carried = h->atlasMoveN;
+    }
+    plog(d, "feat: the restored twin followed the repack - %d cells carried on the "
+            "device, %d queued frames moved with them, %d in flight taken back and "
+            "re-queued, %d dropped with their entries", carried, kept, requeued, dropped);
 }
 
 /* THE BASE ATLAS, when the mirror or the engine's table moved. Which of two
@@ -1018,7 +1125,7 @@ static unsigned s_saidSkip;                        /* the skip's line, once a 30
 static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                        const TAGPU_FEATHAND* h)
 {
-    int rows = h->atlasRows, n, rc, keep, move = 0;
+    int rows = h->atlasRows, n, rc, keep, move = 0, moveDue;
     const char* why = NULL;
     VkDeviceSize bytes;
 
@@ -1056,9 +1163,11 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
        only the paints the copy lacked are sent (tagpu_gaf.h `moves`). The atlas
        holds a repack until this copy is current (tagpu_gaf_atlas_reset), so
        the move always applies; a device that refused the buffer takes the
-       page instead, which is right and is a wait. */
-    if (keep && h->atlasMoves && (int)(h->atlasMoveSerial - s_bSerial) > 0 &&
-        h->atlasMoveSerial != s_bMove) {
+       page instead, which is right and is a wait. The restored twin follows
+       whichever it is: moved with the base (`twin_move`), or restored again. */
+    moveDue = h->atlasMoves && (int)(h->atlasMoveSerial - s_bSerial) > 0 &&
+              h->atlasMoveSerial != s_bMove;
+    if (keep && moveDue) {
         if ((int)(s_bSerial - h->atlasMovePrev) >= 0 &&
             tagpu_vk_stage_move_ready(d, &s_move, h->atlasDim, h->atlasMoves, h->atlasMoveN))
             move = 1;
@@ -1088,6 +1197,7 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                                      h->atlasMoveN))
                 return 0;
             s_bMove = h->atlasMoveSerial;
+            twin_move(d, cb, h);
         }
         if (n > 0 &&
             !tagpu_vk_stage_expand_rects(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
@@ -1104,6 +1214,9 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
         rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
                                    h->atlasDim, 0, 0, h->atlasDim, rows, h->pal, NULL);
         if (rc <= 0) return rc;
+        /* the base atlas took the repack's layout whole, so the twin, which
+           cannot be sent from here, starts again in it */
+        if (moveDue) twin_drop(d, "a repack the base atlas took whole");
     }
     s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
     s_bHave = 1;

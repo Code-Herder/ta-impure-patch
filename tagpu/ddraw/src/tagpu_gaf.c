@@ -102,7 +102,9 @@ static int rlist_room(const TAGPU_GAFATLAS* a, int need)
    rather than being blanked. */
 static void rlist_reset(TAGPU_GAFATLAS* a, int repaint)
 {
+    int i;
     if (!a->rlistWant) return;
+    for (i = 0; i < a->n; i++) a->ents[i].rli = -1;
     a->rlistN = 0;
     a->rlistRepaint = repaint;
     a->rlistGen++;
@@ -129,7 +131,8 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
     for (i = 0; i < a->n; i++) {
         if (!a->ents[i].ok) continue;
         if (a->rlistN >= a->rlistCap) break;      /* cannot happen; not assumed */
-        if (restore_frame_of(a, &a->ents[i], &a->rlist[a->rlistN])) a->rlistN++;
+        if (restore_frame_of(a, &a->ents[i], &a->rlist[a->rlistN]))
+            a->ents[i].rli = a->rlistN++;
     }
 }
 
@@ -168,7 +171,7 @@ static void rlist_restart(TAGPU_GAFATLAS* a, int repaint)
    definition: "start from what is actually here" is the only state either path
    can restart from, and it cannot itself overflow because the seed is at most
    `max` entries against a bound of four times that. */
-static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
+static void rlist_add(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e)
 {
     if (!a->rlistWant || !a->rlist) return;
     if (!rlist_room(a, a->rlistN + 1)) {
@@ -184,7 +187,41 @@ static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
            argument for writing past an array. */
         if (!rlist_room(a, a->rlistN + 1)) return;
     }
-    if (restore_frame_of(a, e, &a->rlist[a->rlistN])) a->rlistN++;
+    if (restore_frame_of(a, e, &a->rlist[a->rlistN])) e->rli = a->rlistN++;
+}
+
+/* A REPACK THAT PUBLISHED ITS MOVES KEEPS THE LIST'S GENERATION (tagpu_gaf.h
+   `rlistGen`): each entry the repack moved painted has its frame rewritten in
+   place at its new rect, and every other listed entry -- dropped as unasked,
+   or left reserved because its cell could not be moved -- has its frame
+   blanked, w and h 0, which a consumer's job skips. The indices do not move,
+   so a consumer's cursor stays good, and the frames it already took move by
+   the same list the moves are published in: frame (dx, dy) is its cell's
+   origin plus `border`, exactly as the move names the cell.
+   Called between the repack's first pass and its compaction, while the old
+   indices still name the entries and `resv`/`ok` say what became of each. It
+   rewrites frames a consumer has already read, which is safe where such a
+   repack runs: the one atlas that publishes its moves is the features', whose
+   `tagpu_gaf_atlas_reset` runs at the start of its gather (tagpu_feat.c), on
+   the render thread that reads the list, before this frame's hand-over. */
+static void rlist_moved(TAGPU_GAFATLAS* a, int before)
+{
+    int i;
+    if (!a->rlistWant || !a->rlist) return;
+    for (i = 0; i < before; i++) {
+        TAGPU_GAFENT* e = &a->ents[i];
+        TAGPU_RGLSL_FRAME* f;
+        if (e->rli < 0) continue;
+        if (e->rli >= a->rlistN) { e->rli = -1; continue; }
+        f = &a->rlist[e->rli];
+        if (e->resv && e->ok) {
+            f->ax = f->dx = e->x;
+            f->ay = f->dy = e->y;
+        } else {
+            f->w = 0; f->h = 0;
+            e->rli = -1;
+        }
+    }
 }
 
 /* EVERY MIRROR WRITE GOES THROUGH HERE: the serial moves and every tile the
@@ -1139,7 +1176,7 @@ static int mirror_move(TAGPU_GAFATLAS* a, int before)
     a->moveN = k;
     a->movePrev = a->moveSerial;
     a->moveSerial = a->mirrorSerial;
-    return 1;
+    return 2;
 }
 
 /* THE REPACK. Re-lay every entry the atlas holds, tallest cell first. With a
@@ -1238,6 +1275,7 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
     if (kept <= 0) return 0;
 
     moved = a->mirror ? mirror_move(a, before) : 0;
+    if (moved == 2) rlist_moved(a, before);
 
     /* Pass 2 -- compact the survivors down so `ents` stays dense (`n` is
        where atlas_insert puts the next one) and rebuild the hash over their
@@ -1269,14 +1307,16 @@ static int atlas_repack(TAGPU_GAFATLAS* a)
     a->full = 0;
     a->gen++;                           /* every UV in the atlas has just moved */
     a->repacks++;
-    /* the twin's rects moved with them: back to unpainted (a new list
-       generation, which the consumer blanks its twin on), re-seeded with every
-       entry that moved painted, and each reserved one re-queues as it is
-       painted. Unlike the recycle this happens once, which is what lets the
-       twin converge at all while zoomed out. The restart rewrites the list in
-       place, which is safe where the repack runs: inside a paint, where
-       `rlist_add` may already restart it (the ordering is at `atlas_paint`). */
-    rlist_restart(a, 0);
+    /* THE TWIN'S RECTS MOVED WITH THEM. With the moves published the list was
+       rewritten in place above and keeps its generation: the consumer carries
+       its restored cells on the device by the same list, and only what was
+       never restored is restored. Without them the consumer takes the whole
+       page, so the twin goes back to unpainted -- a new list generation, which
+       the consumer blanks its twin on -- re-seeded with every entry that moved
+       painted, and each reserved one re-queues as it is painted. The restart
+       rewrites the list in place; the ordering that keeps it away from a
+       reader is stated at `atlas_paint`. */
+    if (moved != 2) rlist_restart(a, 0);
 
     /* The branch that says a second page is the only thing left.
        `wanted` is the set that was still being asked for; if the tallest-first
@@ -1468,7 +1508,7 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
         /* RESERVED UNTIL PAINTED, so that a paint the allowance defers leaves
            a rect the next ask paints in place */
         e->resv = 1;
-        e->pend = 0; e->deferEpoch = 0; e->askFrame = 0;
+        e->pend = 0; e->deferEpoch = 0; e->askFrame = 0; e->rli = -1;
         e->hit = 1;                     /* asked for by definition: it is being inserted */
         e->x = (unsigned short)(a->shelfX + p);       /* inside the border */
         e->y = (unsigned short)(a->shelfY + p);

@@ -21,7 +21,8 @@
     X(vkCreateFence) X(vkDestroyFence) X(vkWaitForFences) X(vkResetFences) \
     X(vkGetFenceStatus) \
     X(vkQueueSubmit) \
-    X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer)
+    X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) \
+    X(vkCmdClearColorImage)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -485,14 +486,16 @@ int tagpu_vk_stage_move_ready(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb, int di
 }
 
 /* The move's commands. THE ORDER: the image leaves SHADER_READ_ONLY only after
-   every earlier sampling of it, and the buffer is written only after every
-   earlier move's read of it -- a barrier's first scope is everything
-   submitted to this queue before it; the cells are read back only once the
-   copy into the buffer is complete; and the image returns to
-   SHADER_READ_ONLY with its writes visible to the fragment stage, the layout
-   and the visibility every other upload here leaves it in. */
+   every earlier access to it -- a sample, an upload, or a render pass's colour
+   write, which is how a restored twin is written -- and the buffer is written
+   only after every earlier move's read of it: a barrier's first scope is
+   everything submitted to this queue before it. The cells are read back only
+   once the copy into the buffer is complete; with `clear` the image is cleared
+   between the two, and the cells land only after the clear. The image returns
+   to SHADER_READ_ONLY with its writes visible to the fragment stage, the
+   layout and the visibility every other upload here leaves it in. */
 static void move_record(VkCommandBuffer cb, const TAGPU_VKMOVEBUF* mb, VkImage img, int dim,
-                        const TAGPU_GAFMOVE* m, int n)
+                        const TAGPU_GAFMOVE* m, int n, int clear)
 {
     VkImageMemoryBarrier ib = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     VkBufferMemoryBarrier bb = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
@@ -514,11 +517,13 @@ static void move_record(VkCommandBuffer cb, const TAGPU_VKMOVEBUF* mb, VkImage i
 
     ib.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     ib.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    ib.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    ib.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     ib.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     bb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     bb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &bb, 1, &ib);
     if (rows > 0) {
         memset(&rg, 0, sizeof rg);
@@ -538,6 +543,19 @@ static void move_record(VkCommandBuffer cb, const TAGPU_VKMOVEBUF* mb, VkImage i
     bb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          0, 0, NULL, 1, &bb, 1, &ib);
+    if (clear) {
+        VkClearColorValue cc;
+        VkImageSubresourceRange rr;
+        memset(&cc, 0, sizeof cc);
+        rr = ib.subresourceRange;
+        vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cc, 1, &rr);
+        /* the clear and the cells write the same texels: the cells last */
+        ib.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        ib.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        ib.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, NULL, 0, NULL, 1, &ib);
+    }
     /* each cell from its old place in the buffer, whose rows are `dim` texels
        as the image's are, to its new place in the image */
     for (i = 0; i < n; ) {
@@ -565,7 +583,18 @@ int tagpu_vk_stage_move(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKMOVEB
     if (!mb->buf || !img || dim <= 0 || n < 0 || (n > 0 && !m) ||
         (VkDeviceSize)dim * (VkDeviceSize)dim * 4 > mb->size)
         return 0;
-    move_record(cb, mb, img, dim, m, n);
+    move_record(cb, mb, img, dim, m, n, 0);
+    return 1;
+}
+
+int tagpu_vk_stage_move_twin(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKMOVEBUF* mb,
+                             VkImage img, int dim, const TAGPU_GAFMOVE* m, int n)
+{
+    if (!resolve(d)) return 0;
+    if (!mb->buf || !img || dim <= 0 || n < 0 || (n > 0 && !m) ||
+        (VkDeviceSize)dim * (VkDeviceSize)dim * 4 > mb->size)
+        return 0;
+    move_record(cb, mb, img, dim, m, n, 1);
     return 1;
 }
 

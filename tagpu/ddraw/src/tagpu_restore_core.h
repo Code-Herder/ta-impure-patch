@@ -201,6 +201,19 @@ int  tagpu_rcore_job_add(TAGPU_RSCHED* s, TAGPU_RCORE* j,
                          const TAGPU_RGLSL_FRAME* frames, int count);
 /* Drop everything queued or in flight; the backend clears the destination. */
 void tagpu_rcore_job_drop(TAGPU_RCORE* j);
+/* THE LAYOUT MOVED UNDER THE JOB -- an atlas repack whose cells the consumer
+   carries on the device, source and destination alike. `map` rewrites a frame
+   to its new rect and answers 1, or answers 0 for a frame whose entry the
+   repack dropped. Every queued frame is mapped, and the unmapped are dropped.
+   THE BATCH IN FLIGHT IS TAKEN BACK OUT: its FILL read the old rects, so its
+   frames go back to the head of the queue, mapped, and are restored from the
+   start -- nothing in flight spans the move. None of them was painted yet, so
+   nothing is restored twice. `kept` is the queued frames kept, `requeued` the
+   batch's, `dropped` both kinds dropped.
+   1 done; 0 when the queue could not grow to take the batch back, and then
+   nothing has changed and the caller drops the job. */
+int  tagpu_rcore_job_remap(TAGPU_RCORE* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAME* f),
+                           void* ctx, int* kept, int* requeued, int* dropped);
 
 /* One slice: issue draws for the active job until the budget is spent. The
    backend's `state_push`/`state_pop` bracket it. Counts the call whether or

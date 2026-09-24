@@ -2143,6 +2143,21 @@ int tagpu_vk_restore_job_painted(const TAGPU_VKRJOB* j)
     return (j && j->core && j->core->used) ? j->core->tframes : 0;
 }
 
+int tagpu_vk_restore_job_remap(TAGPU_VKRJOB* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAME* f),
+                               void* ctx, int* kept, int* requeued, int* dropped)
+{
+    if (!j || !j->core || !j->core->used) {
+        *kept = 0; *requeued = 0; *dropped = 0;
+        return 1;
+    }
+    return tagpu_rcore_job_remap(j->core, map, ctx, kept, requeued, dropped);
+}
+
+int tagpu_vk_restore_job_dst_live(const TAGPU_VKRJOB* j)
+{
+    return j && j->core && j->core->used && j->dstReady && j->chainN == 0;
+}
+
 /* below, beside the rest of the dump */
 static void dump_free(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g);
 

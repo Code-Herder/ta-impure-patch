@@ -251,6 +251,40 @@ void tagpu_rcore_job_drop(TAGPU_RCORE* j)
     j->running = 0;
 }
 
+/* tagpu_restore_core.h. THE ACTIVATIONS NEED NOTHING: they are scratch that
+   the batch in flight owns, and the next batch's FILL overwrites them behind
+   the backend's slice barrier, as it does after any batch. */
+int tagpu_rcore_job_remap(TAGPU_RCORE* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAME* f),
+                          void* ctx, int* kept, int* requeued, int* dropped)
+{
+    int i, k = 0, b = 0;
+    const int nb = j && j->used && j->inflight ? j->bn : 0;
+    *kept = 0; *requeued = 0; *dropped = 0;
+    if (!j || !j->used || j->failed) return 1;
+    if (j->qn + nb > j->qcap) {
+        TAGPU_RQF* nq = (TAGPU_RQF*)realloc(j->q, (size_t)(j->qn + nb) * sizeof *nq);
+        if (!nq) return 0;
+        j->q = nq; j->qcap = j->qn + nb;
+    }
+    for (i = 0; i < j->qn; i++) {
+        if (map(ctx, &j->q[i].f)) j->q[k++] = j->q[i];
+        else (*dropped)++;
+    }
+    for (i = 0; i < nb; i++) {
+        if (map(ctx, &j->bf[i].f)) j->bf[b++] = j->bf[i];
+        else (*dropped)++;
+    }
+    /* the batch at the head, in the order it was taken: it was the oldest */
+    if (b > 0) {
+        memmove(j->q + b, j->q, (size_t)k * sizeof *j->q);
+        memcpy(j->q, j->bf, (size_t)b * sizeof *j->q);
+    }
+    j->qn = k + b;
+    if (nb > 0) { j->bn = 0; j->inflight = 0; j->pass = 0; j->group = 0; j->srcAct = 0; }
+    *kept = k; *requeued = b;
+    return 1;
+}
+
 TAGPU_RCORE* tagpu_rcore_job_new(TAGPU_RSCHED* s, const char* tag, int prio,
                                  int oneshot, void* owner)
 {

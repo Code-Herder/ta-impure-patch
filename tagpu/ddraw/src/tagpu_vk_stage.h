@@ -169,6 +169,21 @@ int  tagpu_vk_stage_move_ready(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb, int d
 int  tagpu_vk_stage_move(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKMOVEBUF* mb,
                          VkImage img, int dim, const struct TAGPU_GAFMOVE* m, int n);
 
+/* THE SAME MOVE FOR A RESTORED TWIN (tagpu_vk_feat.c): an image a render pass
+   writes -- the restorer's OUT pass -- and whose texels the host cannot send
+   again, since they exist only on the device. The cells move exactly as the
+   base atlas's did, by the same list and through the same buffer, and
+   EVERYTHING NO CELL LANDS ON IS CLEARED TO 0 in between: alpha 0 is what the
+   draw reads as "not restored, take the base atlas" (tagpu_feat.c), and the
+   rects a repack frees are handed to other entries, which must not sample
+   what the old ones left there. `img` needs TRANSFER_SRC and TRANSFER_DST
+   usage and is in SHADER_READ_ONLY_OPTIMAL, where the OUT pass leaves it, and
+   is left there. Called after tagpu_vk_stage_move in the same command buffer,
+   it reuses the buffer behind the barrier that orders every move's writes of
+   it after the last one's reads. 1 moved, 0 nothing recorded. */
+int  tagpu_vk_stage_move_twin(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKMOVEBUF* mb,
+                              VkImage img, int dim, const struct TAGPU_GAFMOVE* m, int n);
+
 /* The buffer, given back. Where the pass's images are: behind the seam's
    vkDeviceWaitIdle. */
 void tagpu_vk_stage_move_drop(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb);

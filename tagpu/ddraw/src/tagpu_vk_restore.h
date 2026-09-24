@@ -123,6 +123,18 @@ int  tagpu_vk_restore_job_failed(const TAGPU_VKRJOB* j);
 /* Frames painted over the job's life -- for a consumer that must do something
    after each batch. Never reset by a clear; compare it for change. */
 int  tagpu_vk_restore_job_painted(const TAGPU_VKRJOB* j);
+/* THE ATLAS WAS RE-LAID AND ITS CELLS MOVED ON THE DEVICE, source and
+   destination alike: the job's frames follow them (tagpu_rcore_job_remap --
+   `map` rewrites a frame to its new rect or answers 0 for one whose entry is
+   gone; the batch in flight goes back to the head of the queue). 1 done, 0
+   when the job could not take it and the consumer must drop the job. */
+int  tagpu_vk_restore_job_remap(TAGPU_VKRJOB* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAME* f),
+                                void* ctx, int* kept, int* requeued, int* dropped);
+/* 1 when the destination is a picture a move may carry: made ready by the
+   job's first draw -- cleared, in SHADER_READ_ONLY_OPTIMAL -- and with no mip
+   chain, whose levels a move of level 0 would leave behind. 0 before the first
+   draw, when the job's own clear is still to come. */
+int  tagpu_vk_restore_job_dst_live(const TAGPU_VKRJOB* j);
 void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
 
 /* `srcImg` IS THE IMAGE `srcView` NAMES, and it is here for the oracle rather

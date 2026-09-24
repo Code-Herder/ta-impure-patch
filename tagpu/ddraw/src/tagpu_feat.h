@@ -120,12 +120,19 @@ typedef struct TAGPU_FEATHAND {
        index into `restoreFrames` and takes `[cursor, restoreN)`; a frame on
        which it takes nothing costs nothing, because the entries are still
        there on the next one. `restoreGen` is the discontinuity a cursor cannot
-       survive -- the arm, an overflow restart, a recycle, a repack, the atlas
-       being laid out afresh -- and a consumer that sees a new one drops its
-       job and starts at 0. Every generation blanks the destination: the
-       restore reads the base atlas, built from the engine's table, and the
-       Gamma factor is applied after it, to the finished world image
-       (tagpu_pal.h), so no generation is a recolour of the last.
+       survive -- the arm, an overflow restart, a recycle, a repack whose
+       moves are not published, the atlas being laid out afresh -- and a
+       consumer that sees a new one drops its job and starts at 0. Every
+       generation blanks the destination: the restore reads the base atlas,
+       built from the engine's table, and the Gamma factor is applied after
+       it, to the finished world image (tagpu_pal.h), so no generation is a
+       recolour of the last.
+       A REPACK WHOSE MOVES ARE PUBLISHED (`atlasMoves`) IS NOT A GENERATION.
+       The list is rewritten in place -- each moved frame at its new rect, a
+       dropped one blanked to w and h 0, which a consumer skips -- and the
+       consumer carries its twin's cells and its queued frames by the same
+       moves (tagpu_vk_feat.c `twin_move`), so nothing restored is restored
+       again. A frame past a consumer's cursor may therefore be a blank one.
 
        LIFETIME: the array is the atlas's, retained for the atlas rather than
        for the frame, but a consumer still copies on the frame it takes it (as
