@@ -3765,7 +3765,7 @@ every publish of that tick.
 | projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **All ten append sites refuse past the cap** — each a `cmp …,0x12C / jge` past the store (`0x49B6EE`, `0x49B809` and eight more; the list is under *The raised effect pools*) — so the count is bounded by the allocation itself and no sanity cap is needed |
 | explosions | stock: count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54`; raised: the same layout in a DLL static | **300 in stock, 3000 raised.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
 | flying debris | stock: the 100 dwords at `0x511DF0..0x511F80`; raised: 1000 dwords in a DLL static. Each names a system whose `+0x2C` is the piece `{node @0, turn @0x12, x @0x16, alt @0x1A, y @0x1E}` | the slot count is the address range |
-| the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **401 objects, not 400.** Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at 400 or fewer it appends, and **past 400 it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So 401 is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
+| the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **The cap plus one: 401 in stock, 20 481 under the raised limits** (*The raised effect pools*, below). Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at the cap or fewer it appends, and **past it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So the cap plus one is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
 
 **"The draw passes only read them" is true of the arrays, not of what their fullness decides.**
 Two of the caps above gate draws from the simulation's random numbers; see *The raised effect
@@ -3812,12 +3812,14 @@ above are what establish the mapping).
 ### The raised effect pools — every site `tagpu_limits.h` rewrites [DISASSEMBLED 2026-09-23, objdump of the pristine build; MEASURED 2026-09-23]
 
 The four pools above are raised tenfold by the limits block of `tagpu_patches.c`, re-derived from
-TADR's `EngineLimits.cpp` (prior art, [the TADR port](tadr-port/raised-limits.md)). **43 sites in
-one table**, compared with the stock bytes as a whole at `DLL_PROCESS_ATTACH` and written as a
-whole or not at all; a mismatch writes nothing and the first DirectDraw call shows the
-startup-failure report and exits. Every site below was read out of the pristine image, and the
-evidence for each is in [the evidence pass](tadr-port/limits-evidence.md) §1–4. Two landing
-reviewers checked all 43 against the image byte for byte and found no site wrong.
+TADR's `EngineLimits.cpp` (prior art, [the TADR port](tadr-port/raised-limits.md)), and the
+particle layers and their object pool with them, from its `LimitCrack.cpp`. They share **one table**
+with the unit limit's sites (*The per-player unit cap*), 73 sites in all, compared with the stock
+bytes as a whole at `DLL_PROCESS_ATTACH` and written as a whole or not at all; a mismatch writes
+nothing and the first DirectDraw call shows the startup-failure report and exits. Every site below
+was read out of the pristine image, and the evidence for each is in
+[the evidence pass](tadr-port/limits-evidence.md) §1–4 and §7. Landing reviewers checked the sites
+against the image byte for byte.
 
 **Projectiles, 300 → 3000.** The pool stays the engine's, allocated per game:
 - `0x499A32` the `push 0x7D64` (the bytes, `300 × 0x6B`) and `0x499A56` the `mov ecx,0x1F59` of the
@@ -3904,6 +3906,36 @@ bit 2) to `0x421700` before it scans for a slot, so that branch does not depend 
 either. `0x420E50`, which has the same shape and also calls `0x421620`, has no caller or pointer
 anywhere in the image; nor do `0x421150`, `0x421170` and `0x4211A0`, three slot helpers whose
 operands are patched with the rest.
+
+**Particles, 400 → 20 480 a layer and 1000 → 204 800 objects.** Two ceilings, both visual: the
+emitter range `0x470F00..0x472F00` draws the C runtime's `rand` (`0x4E4870`) and never the
+simulation's generator.
+- **The layer cap is twenty operands**, every `0x190` compare in the emitters: nineteen
+  `cmp eax,0x190` (`3D imm32`, operand at +1) at `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`,
+  `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`,
+  `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472CD9`, and
+  `cmp ecx,0x190` (`81 F9 imm32`, operand at +2) at `0x472BF2`. Past the cap the emitter destroys
+  the layer's front object and shifts the rest down (`0x472078..0x4720AF`), so a layer holds the
+  cap plus one.
+- **The pool `0x51E610` is built once, by the C runtime's static initializer** `0x471C80`:
+  `push 0x4C; push 0x3E8` (operand `0x471C83`), `call 0x470A90`, then `atexit(0x471CA0)`. The
+  constructor calls `0x470C10` once (its only caller, `0x470ACB`), which `realloc`s the pointer
+  stack at `+0x14` to 4 × capacity and `malloc`s capacity × `0x4C` bytes in one block; nothing grows
+  it later. The alloc `0x470EB0` is `used < capacity ? stack[used++] : 0` (`+0x20` used, `+0x1C`
+  capacity), the free `0x470ED0` is `stack[--used] = p`. All 28 references to `0x51E610` are the
+  twenty allocs, six frees, the constructor and the `atexit`. An empty pool makes the emitter skip
+  the particle (`0x471FFC..0x47202E`). DllMain runs before that initializer, so writing the operand
+  is enough; TADR hooks `0x471C87` and rewrites the pushed value instead. At 204 800 the block is
+  15.6 MB and the stack 0.8 MB, once a process.
+- **The layers' tick `0x471EB0` erases by shifting:** for every object of every layer it calls
+  `vtbl+0xC`, and a finished object is deleted and the tail moved down one slot. Like the emitter's
+  own front-drop, that is O(layer) a removal. The draw `0x471F40` calls `vtbl+8` on every object.
+- **MEASURED 2026-09-23 in tier 1** (4 × 1500 units, the scratch build first, then the landing's):
+  one layer, layer 9, peaked at **13 529 objects** at the opening volley (its objects' vtable
+  `0x4FD618`, dark smoke; the rocket kbots' trails <span class="pill pill-warn">INFERRED</span>),
+  the pool's used count at **13 571**, and the frame packet's sub-particles at **14 510** and
+  **15 964** in two runs. The simulation held 60 ticks a second throughout. Stock would have held
+  that layer to 401.
 
 **What it measured, 2026-09-23.** Single player, `scenarios/limits-flood.json` (450 Merls against
 450 Diplomats): the engine's own counts peaked at **687 projectiles** and **1727 explosions**, and

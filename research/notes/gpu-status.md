@@ -1534,11 +1534,12 @@ live, commander selected on Two Continents at type 1: a left click on ground wal
 the clicked point, and the same click with `tagpu_curs.off` deselected it and moved nothing. The
 full path is `exe-reverse-engineering.md` §"The in-game mouse buttons".
 
-### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–2
+### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–3
 
 **What it is.** TA's limits, raised the way TADR raises them, as our own C: projectiles
 300 → 3000, explosions 300 → 3000, flying pieces 100 → 1000, debris records 300 → 3000, units a
-player 250 (default) / 500 (ceiling) → 1500 / 1500, and the pathfinder's budget 1333 → 66 650.
+player 250 (default) / 500 (ceiling) → 1500 / 1500, the pathfinder's budget 1333 → 66 650, and
+particles 400 → 20 480 a layer from a pool of 1000 → 204 800 objects.
 Planned in [the TADR port](tadr-port/raised-limits.md); every site is in the engine map, *The raised
 effect pools* and *The per-player unit cap*.
 
@@ -1555,14 +1556,16 @@ effect pools* and *The per-player unit cap*.
 | the host's limit in a network game | `0x4973AE` (read), `0x4973B5` (store) | the read becomes `movzx eax, word [eax+0xA5]`, the store the same clamp stub |
 | the restriction menu's "no limit" | `0x44CAFE` | 101 → 1500, so a cancelled menu caps no type below the player's own limit (Reset's 100 each, `0x44C62D`, is stock's and shown as 100) |
 | the pathfinder's budget | `0x40EAD6` | 1333 → 66 650 |
+| the particle layers | twenty compares, `0x471183` … `0x472CD9` (`0x472BF2` against `ecx`) | 400 → 20 480 |
+| the particle pool | `0x471C83`, the `push` in the C runtime's static initializer `0x471C80` | 1000 → 204 800, built at that size because DllMain runs first |
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
 while it changes. It reads every site (through `VirtualQuery`, never assuming the page), compares
-all 52 with the stock bytes, and writes them only if every one matches; a refused write puts back
+all 73 with the stock bytes, and writes them only if every one matches; a refused write puts back
 what was written. The patches last for the process and are never restored. The log line names the
-moved pools' addresses for `tacli peek`: `limits: installed 52 sites -- …, units 1500 a player,
-pathfinding 66650`.
+moved pools' addresses for `tacli peek`: `limits: installed 73 sites -- …, units 1500 a player,
+pathfinding 66650, particles 20480 a layer from a pool of 204800`.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -1599,13 +1602,25 @@ it. `tagpu_packet_pub.c` asserts that the installed limit fits the design point,
 [20, 1500] clamp as the `maxunits` keys (`0x4973B5`), so every writer of the array's count is held to
 the design point; should a slot count still exceed it, the packet's tables truncate and say so.
 
+**The particles follow the layer cap on our side too.** The publisher walks a layer up to the
+engine's own steady state, `TAGPU_LIM_SFX + 1` (`tagpu_packet_pub.c`; past it the layer is counted
+in `layerbad` and skipped). The packet's particle table is `TAGPU_PK_MAX_PART` = 24 576
+sub-particles, one and a half times tier 1's frame of 14 510, and truncates past it on its own bit.
+The effects pass's four vertex buckets no longer share one cap (`tagpu_fx.h`): each of the two
+that particles land in holds the whole table, `UNDER` (layers 0–6) at 6 × 24 576 vertices and
+`SPRITES` (layers 7–9, projectiles, explosions) at 6 × (2 × projectiles + explosions + 24 576);
+lines and flashes keep 65 536. At 65 536 for all four, tier 1's opening volley filled `SPRITES` and dropped 169 vertices
+(`fx: DROPPED … bucket-full`); on the landing's build the same fight dropped none.
+
 **Tier 1, measured 2026-09-23** (`scenarios/limits-tier1.json`: four players at 1500, 6000 kbots on
 Town & Country ordered onto the centre, 1920×1080, the shipped defaults, speed 20): the engine held
 1500 a player and 15 001 slots; 6000 of 6000 units and orders applied; the packet peaked at **5983
 units and 88 696 pieces**, 2.96 MB used of the 20 MB reserve, never truncated after the load's
 growth. Effect peaks: projectiles 215 and explosions 1042 (the engine's counts, sampled at
 ~2 Hz), flying pieces 441 (at the heartbeat) and 755 particles in one frame (the packet's own
-running maximum, under the stock particle caps, which landing 3 raises). **The sim held 57–60 ticks a second** outside the apply frame,
+running maximum, under the stock particle caps). Under landing 3's raised particles the same fight
+peaked at one layer of **13 529 objects**, a pool of **13 571** in use and **15 964** sub-particles
+in a frame, with the simulation at 60 ticks a second throughout. **The sim held 57–60 ticks a second** outside the apply frame,
 so neither the pathfinder's budget nor the explosion tick's compaction stalled it at these counts.
 The GPU frame was 0.7–0.8 ms at p50 (`ftime`). **The game thread published 21–59 frames a
 second, median 36**, and the publisher's own cost is past its histogram's 512 µs top at every
@@ -1644,7 +1659,11 @@ stock-limits build is therefore a comparison build, not a proof of equality.
   units is measured; its split between the engine's own frame and our publisher is not, because
   the publisher's histogram stops at 512 µs.
 - **Ten players at 1500 (15 000 units)** is landing 5's proof; tier 1 seats four.
-- The particle, sound and composite limits are landings 3–4 of the plan.
+- **The particle layers erase by shifting.** The layer tick `0x471EB0` deletes a finished object and
+  moves the tail down one slot, and an emitter at the cap drops the front the same way, so a
+  removal costs the layer's length. At 13 529 objects in one layer the sim held 60 ticks a second;
+  a layer at the full 20 481 was not reached.
+- The sound and composite limits are landing 4 of the plan.
 
 ---
 
