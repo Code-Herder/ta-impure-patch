@@ -5,7 +5,7 @@
 Two ceilings split out of [section A](raised-limits.md) come into our stack: **unit-type IDs**
 (512 → 16 384) and **weapon IDs** (256 → 4096). So does the renderer cache that the first one makes
 easy to overflow. That is three landings. The owner decided every choice below on 2026-09-24
-**[DECIDED]**. **A′1 is done; A′2 and A′3 are planned.** The disassembly behind each fact is in
+**[DECIDED]**. **A′1 and A′2 are done; A′3 is planned.** The disassembly behind each fact is in
 [the evidence pass](limits-evidence.md), §8 and §9. The rules shared by every group are in
 [the port overview](overview.md#standing-rules-decided-2026-09-23). Section A's last item, the
 composite scratch bound, is [landing 7 of that plan](raised-limits.md#the-landings), done before
@@ -21,20 +21,25 @@ Three findings shaped the plan:
 - **Three network messages carry the weapon ID as one byte.** Two have room to widen in place. The
   interceptor's `0x0E` does not.
 - **Memory bounds a large mod, not the type count.** Every type loads its own model and script,
-  every game, at their file sizes: 10–12 KB a stock type, 17 KB for the test's synthetic types
-  (measured). On the reference setup a 32-bit process with the Vulkan stack loaded can still
-  allocate 1.44 GB, so 16 383 ordinary types fit with room to spare. A mod of heavy types may not,
-  whatever the cap (evidence §8, *Memory*).
+  every game, at their file sizes: 10–12 KB a stock type, 17 KB for a clone of the Peewee and 7 KB
+  for A′2's generated types (measured). On the reference setup a 32-bit process with the Vulkan
+  stack loaded can still allocate 1.44 GB, and 16 383 of the generated types played two games in
+  one process at 4K. A mod of heavy types may not fit, whatever the cap (evidence §8, *Memory*).
+- **Found by the landing: the network join matches types by a weak checksum.** The unit sync keys
+  each type on four byte-lane sums of its FBI, and two types with one key hold the battle room at
+  SYNCHING for good. Stock content has no such pair; a mod of near-identical FBIs has thousands.
 
 ## Scope and values
 
 | Limit | Stock | Ours | What it touches | Landing |
 |---|---|---|---|---|
 | the Vulkan unit pass's caches | 512 models, 1024 (type, owner) streams a frame | **done**: 30 721 each, the bound a frame cannot exceed, recycling from 512 / 1024 | visual: past them the frame's last objects were silently not drawn | A′1 |
-| unit-type IDs | 512 real types | **16 383 real types** (16 384 counting `None`) | **simulation as content**: category masks, the AI, selection | A′2 |
-| a builder's build list | 30 entries, appended unbounded | the whole list | a heap overrun at game load | A′2 |
-| a download file's menu entries | 5 a file, filled unbounded | as many as the files hold | a heap overrun at game load | A′2 |
+| unit-type IDs | 512 real types | **done**: 16 383 real types (16 384 counting `None`) | **simulation as content**: category masks, the AI, selection | A′2 |
+| a builder's build list | 30 entries, appended unbounded | **done**: the whole list | a heap overrun at game load | A′2 |
+| a download file's menu entries | 5 a file, filled unbounded | **done**: as many as the files hold | a heap overrun at game load | A′2 |
 | running out of memory | "Your hard disk may be full", then exit | an honest message, then the same exit | what a player reads | A′2 |
+| the unit sync's keys | two types may share one, and the join never ends | unique, re-keyed at load | a network game's start | A′2 |
+| the network join's pace | 4 types a lobby tick | 64 | the join's time | A′2 |
 | weapon IDs | 256 | **4096** | **simulation, and the wire** | A′3 |
 
 ## Decisions
@@ -128,14 +133,38 @@ each mod's models (evidence §8, *Memory*).
   covers it if it does not. Sizing masks by the loaded count was rejected: it turns five
   immediates into loads from a global, with an ordering to prove, for memory only such a mod uses.
 
-**The lobby join [DECIDED 2026-09-24].** When a player joins, the unit-sync handshake sends one
-14-byte message per type per peer. The engine matches each with a linear search (`0x46D755`,
-`0x46D9E3`, `0x46DA7A`, `0x46D906`), so a join costs on the order of N²·P compares. A′2's two-peer
-test times a join at the ceiling.
+**The lobby join [DECIDED 2026-09-24, and again after A′2 measured it].** When a player joins, the
+unit-sync handshake sends one 14-byte message per type per peer, and the engine matches each with
+a linear search (`0x46D755`, `0x46D9E3`, `0x46DA7A`, `0x46D906`). The plan was: at 5 seconds or less,
+record the time; over 5, replace the four searches with a lookup keyed on `+0x13E`.
 
-- At 5 seconds or less, the time is recorded as the engine's own cost.
-- Over 5 seconds, the landing replaces the four searches with a lookup keyed on the CRC the engine
-  already stores (`+0x13E`).
+A′2 measured 20 s at 16 383 types, but not in the searches. The joiner sends its checksums four
+types a lobby tick (`0x46DE8F`), and its cursor moved at a steady ~880 types a second while the host
+kept up; a rejoin in the same processes, whose searches ran again over a fresh record, took under
+2 s. The owner decided, on those numbers:
+
+- **The pace rises to 64 types a tick** (`0x46DE91`, a raised-limits site). The first join at the
+  ceiling then takes 12.5 s. What is left is the engine filling each type's value on first use
+  (`0x42A610`, which reads the type's script and GUI files), which a lookup cannot shorten, so the
+  searches stay the engine's.
+- **Two types with one key are re-keyed at load**, a stock defect the test found (below), fixed in
+  both builds.
+
+**The unit sync's keys [DECIDED 2026-09-24].** The key at `+0x13E` is `0x4B6BA0`'s checksum of the
+FBI file: four 8-bit lanes of byte sums and xors, not a CRC. The host keeps one entry a key in a
+list that has to reach the type count, so two types with one key hold the battle room at SYNCHING
+for good. The test's first FBIs, which differed only in their digits, gave 9 991 keys for 16 105
+types, and the join never ended.
+
+- After the menu-time load, every type whose key an earlier type holds takes the next value no
+  type holds (`fix_sync_keys`, at the load's one call `0x42BD29`). Types that do not collide keep
+  their keys, and the install's 278 names share none, so stock is unchanged.
+- Peers with the same content compute the same keys. A type re-keyed on one peer only is reported
+  not synced, which is what different content should get.
+- The def array is write-protected after the load (the engine's `0x4D8710`), so the pass opens and
+  seals it as the engine's own writers do.
+- The owner chose this over documenting the limit: a mod built from copied FBIs can hit it at any
+  type count, and the failure is a lobby that never starts, with no message.
 
 **One limit outside our code.** TADR's `.tad` demo format keeps every unit-sync message in one
 record with a 16-bit length (SRC, `Docs/saveformat.txt`), so recording a game breaks above about
@@ -240,6 +269,7 @@ The always-on fixes are in both builds, `make LIMITS=stock` included, as landing
 - the build list;
 - the download records;
 - the out-of-memory message;
+- the unit sync's keys;
 - skipping a weapon with a bad ID, bounded by that build's own array size;
 - the `0x0F` sentinel;
 - the receivers' two bounds.
@@ -281,29 +311,38 @@ Only the raises differ between the builds.
     re-bakes from the free slots with the vertex buffers of the first evicted through the retire.
 - Review at `medium`: renderer code, no engine patch, no thread-sync change.
 
-**A′2 — unit types, 16 384. Planned.**
+**A′2 — unit types, 16 384. Done 2026-09-24.**
 
-- **Test content is generated locally and never committed**, like `tools/extra_weapons_fixture.py`.
-  A generator writes the FBI text itself, naming stock models by name, plus one COB of ours
-  compiled with tacob. Nothing from the game goes into the repository.
-- **The ladder:**
-  - 512 real types, stock's breaking point: the overrun on the previous build, clean on this one.
-  - 16 383 real types, the ceiling: a type with an ID above 512 works in every mask reader —
-    Ctrl-letter selection, an AI build line and Ctrl-Z.
-  - 16 384 real types: the dialog and the exit, with nothing written.
-- A builder with 31 and more build entries: every entry in its menu and its AI list, with nothing
-  read past the list.
-- A two-peer network game on the synthetic mod, building and fighting with types above 512.
-- **Memory and load time are measured at the ceiling**, at 1080p and 4K, over two consecutive
-  games: the second game's 4K work buffer (108 MB, contiguous) is the allocation fragmentation
-  would refuse first. The prediction from 17 KB and 3.6 ms a type is about 270 MB and one extra
-  minute of load. The engine's own counters (`[0x5289F8]` live bytes, `[0x5289D8]` peak) are read
-  in-process. The numbers are recorded whatever they are (*Memory*, above).
-- **A mod too big to fit**, generated locally: the honest message, the dump and the exit.
-- **A download file with six or more entries**: every button present, nothing written past the
-  records.
-- **The two-peer join timed at the ceiling**, against the 5-second rule.
-- Review at `high`: byte patches, simulation as content.
+- **The sites**: the 17 mask sites and the count check `0x42AA65` in the raised-limits table, and
+  the join's pace `0x46DE91` with them (105 sites); the build list, the download records, the
+  out-of-memory text and the unit sync's keys as engine fixes in both builds; `mask_has` bounded
+  and `WPN_MAXDEFS` following the cap. The engine map has every address, *Unit-type slots* in the
+  raised pools and four sections of *Engine defects we patch*.
+- **The test content** is `tools/unittypes_fixture.py`: generated kbots on the Peewee's model, one
+  small script compiled with tacob, a `CTRL_G` category, and options for a long `[CANBUILD]` list,
+  a download file, an AI `Weight` line naming the highest type, padded scripts and raw keys. The
+  engine loads a type only if its FBI carries the `Copyright` key (`0x42B0E2`), and each generated
+  FBI ends in a tag that makes its unit-sync key unique. Nothing of the game's is committed.
+- **Measured**, Core Prime Industrial Area:
+  - IDs 512 and 543, stock's break: on the previous build Ctrl-Z returns to a corrupted address and
+    an AI `Weight` line naming 543 faults during the load; on this build Ctrl+G and Ctrl-Z select
+    every generated unit.
+  - The ceiling, 16 383 real types: every mask reader works on a type at ID 16 383, including the
+    AI line. The load takes 1.3 ms and 7 092 bytes a type, and two games in one process at
+    1280×1024, 1920×1080 and 3840×2160 all load (gpu-status §2.6b has the table).
+  - 16 384 real types: the dialog, and the exit on OK, with no `ErrorLog.txt`.
+  - 1500 types each carrying a 1 MB script: our out-of-memory text, the engine's dump, the exit.
+  - 40 `canbuild` keys and 12 download entries on ARMCOM: the whole list of 71, and 73 records.
+    The previous build reads 59 entries over a 30-entry copy, and a 12-entry download file alone
+    kills its load.
+  - Two peers at 16 383 types with colliding keys: both re-key the same 6 114 types, and the join
+    ends in 13 s. The peers fight with types from ID 279 to 16 383, and a Kbot Lab builds ID 16 383
+    from its download page; paused, both hold the same slots, types and positions, with no spread.
+    A commander's download button for a kbot arms nothing, in both builds; a factory's queues it.
+  - Stock content: nothing re-keyed; the stock-limits build compiles.
+- **Open**: a first join at the ceiling still takes 12.5 s, the engine's value checksum reading
+  every type's files once per process.
+- Review at `high`: byte patches, simulation as content, and a network-lobby path.
 
 **A′3 — weapons, 4096. Planned.**
 
@@ -325,11 +364,8 @@ can expose the caches, then A′2, then A′3.
 
 ## Measured in the landings, decided now
 
-Nothing is left for the owner. The numbers below are still to be measured, and each outcome's
-consequence is already decided above:
-
-- memory and load time at the ceiling (recorded, and the cap stays);
-- the lobby join (the 5-second rule).
+Nothing is left for the owner. A′2 measured memory and load time at the ceiling (the cap stays) and
+the lobby join, whose measured cause changed the fix (*The lobby join*, above).
 
 Also recorded: the unit-selection dialog's pictures. The dialog loads one 4 KB picture a type
 while it is open, 67 MB at the ceiling.
