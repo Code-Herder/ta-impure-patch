@@ -20,6 +20,11 @@ Three findings shaped the plan:
   projectile pool's header. All 21 references to the array are known, so the array can move.
 - **Three network messages carry the weapon ID as one byte.** Two have room to widen in place. The
   interceptor's `0x0E` does not.
+- **Memory bounds a large mod, not the type count.** Every type loads its own model and script,
+  every game, at their file sizes: 10–12 KB a stock type, 17 KB for the test's synthetic types
+  (measured). On the reference setup a 32-bit process with the Vulkan stack loaded can still
+  allocate 1.44 GB, so 16 383 ordinary types fit with room to spare. A mod of heavy types may not,
+  whatever the cap (evidence §8, *Memory*).
 
 ## Scope and values
 
@@ -27,7 +32,9 @@ Three findings shaped the plan:
 |---|---|---|---|---|
 | the Vulkan unit pass's caches | 512 models, 1024 (type, owner) streams a frame | sized from a bound the frame cannot exceed | visual: a frame over them refuses the whole unit draw | A′1 |
 | unit-type IDs | 512 real types | **16 383 real types** (16 384 counting `None`) | **simulation as content**: category masks, the AI, selection | A′2 |
-| a builder's build list | 30 entries, appended unbounded | bounded | a heap overrun at game load | A′2 |
+| a builder's build list | 30 entries, appended unbounded | the whole list | a heap overrun at game load | A′2 |
+| a download file's menu entries | 5 a file, filled unbounded | as many as the files hold | a heap overrun at game load | A′2 |
+| running out of memory | "Your hard disk may be full", then exit | an honest message, then the same exit | what a player reads | A′2 |
 | weapon IDs | 256 | **4096** | **simulation, and the wire** | A′3 |
 
 ## Decisions
@@ -59,20 +66,80 @@ covers them.
   `+0xA6` with no bound. It is bounded by the mask's capacity.
 - `WPN_MAXDEFS` (4096) follows the ceiling. Today a type past it silently keeps three weapons.
 - **The build list, fixed beyond TADR.** This is the list of what each builder may build: the
-  `canbuild1..N` keys of a `[CANBUILD]` section, which is `sidedata.tdf`'s **[INFERRED** from the
-  section and key names; the file open was not traced**]**. The engine reads every builder's
-  entries into one shared 0x3C-byte heap block it names `TEMP UTYPE LIST`, which holds 30 `u16`
-  IDs (`0x42D971`). The append loop (`0x42DA46..0x42DA99`) stops only when a key is missing. Each
-  builder then gets its own 0x3C-byte copy of exactly 30 entries at def `+0x156` (`0x42DACA`,
-  `rep movs` of 15 dwords), with the real count at `+0x152`, and `0x4894FD` loops to that count.
-  So a builder with more than 30 entries overruns the shared block and makes readers read past
-  its own copy. This is a stock defect, but mods with thousands of types are the ones with long
-  lists. The fix is always on: **the builder keeps its whole list [DECIDED 2026-09-24]**. The
-  shared block grows as it fills, and each copy holds `max(30, count)` entries: every reader that
-  loops to the count stays inside the list, and one that assumes stock's 30 still finds them. A
-  builder with 30 entries or fewer, every stock builder, gets stock's exact block. The readers not
-  yet classified (evidence §8) are read before the landing writes this. Clamping the count to 30 was rejected: a mod's builder, and the AI,
-  would silently lose every option past the 30th.
+  `canbuild1..N` keys of `gamedata\sidedata.tdf`'s `[CANBUILD]` section. Two writers fill it:
+  - **At game load**, the engine reads each builder's entries into one shared 0x3C-byte heap block
+    it names `TEMP UTYPE LIST`, which holds 30 `u16` IDs (`0x42D971`). The append loop
+    (`0x42DA46..0x42DA99`) stops only when a key is missing. The builder then gets its own
+    0x3C-byte copy of exactly 30 entries at def `+0x156` (`0x42DACA`, `rep movs` of 15 dwords),
+    with the real count at `+0x152`.
+  - **Later**, `0x42BE30` appends the builder's download-menu entries to the same list while the
+    count is at most 30, so it can write entry 30, two bytes past the block: a stock off-by-one.
+
+  The AI's pick (`0x40BDB0`) and its debug listing loop to the count. So a builder with more than
+  30 entries overruns the shared block, and they read past its copy. Every other reader only tests
+  the pointer, and no reader assumes 30 (evidence §8). This is a stock defect, but mods with
+  thousands of types are the ones with long lists. Stock's longest list is exactly 30 (`corch`,
+  `corcsa`), with no download entries.
+
+  The fix is always on: **the builder keeps its whole list [DECIDED 2026-09-24]**.
+  - The shared block grows as it fills.
+  - Each copy holds `max(30, count)` entries.
+  - The appender grows the copy itself when it runs out of room: a new block from `0x4D83B0`, the
+    old one freed with `0x4D85A0`, and its cap of 30 removed. It runs on the loader thread before
+    any reader exists.
+
+  A builder with 30 entries or fewer, which covers every stock builder, gets stock's exact block.
+  Clamping the count to 30 was rejected: a mod's builder, and the AI, would silently lose every
+  option past the 30th.
+- **The download-menu records, fixed beyond TADR [DECIDED 2026-09-24].**
+  - The engine makes one 0xBD-byte record per `download\*.tdf` file (`0x42DCF0`, count at
+    `[main+0x391C7]`, block at `[main+0x391CB]`), with room for five entries. The fill loop
+    (`0x42DDD5..0x42DF0C`) never checks the count, so a file with six or more writes past its
+    record, and the last file's past the heap block.
+  - Stock files hold at most four.
+  - The block is sized by the total number of entries across all files, and a large file continues
+    into as many extra records as it needs. Its readers walk records and need no change: the
+    build menu (`0x41AE0F`), the page count (`0x42DF72`), the downloadable check (`0x42E04B`) and
+    the appender (`0x42BE30`).
+  - Every entry the mod wrote appears, and stock's files get stock's exact records.
+  - The owner rejected capping at five, which silently drops a mod's buttons.
+
+**Memory [DECIDED 2026-09-24].** The cap bounds the masks. It cannot bound memory, which depends on
+each mod's models (evidence §8, *Memory*).
+
+- **Running out of memory shows an honest message.** The engine's handler (`0x49E700`, installed for
+  the whole process) writes a crash dump to `ErrorLog.txt` and then shows "Out of memory! Your hard
+  disk may be full" before it exits. It fires on any failed allocation. Ours keeps that path, the
+  dump and the exit included, and replaces the text: the game is a 32-bit program that has used
+  the memory it can address, and this game loaded N unit types.
+  - A pre-flight estimate at startup was rejected. Fragmentation and the graphics driver's share
+    are unknown, so an estimate could refuse a mod that fits, or pass one that does not.
+- **The cap stays 16 384 whatever the ceiling test finds.** A′2 records how many of the test's
+  types fit at each resolution, and the address space used, in this page and in gpu-status.
+  - Lowering the cap to what passes was rejected: it holds only for content as light as the
+    test's, and refuses lighter mods that would fit.
+- **Models are not shared between types.** Types that name the same 3DO each load their own copy.
+  - Sharing is feasible, but it saves nothing on stock content, where all 278 types name different
+    models. It would also make two types show the same animated-texture frames, because the engine
+    writes its frame cursors into the loaded model.
+  - It is recorded as the lever to pull if a real mod runs out of memory (evidence §8).
+- **Masks stay a fixed 2 KB.** A pathological mod with unique category strings on every type would
+  make about 80 000 masks, up to 164 MB. That still fits the measured headroom, and the message
+  covers it if it does not. Sizing masks by the loaded count was rejected: it turns five
+  immediates into loads from a global, with an ordering to prove, for memory only such a mod uses.
+
+**The lobby join [DECIDED 2026-09-24].** When a player joins, the unit-sync handshake sends one
+14-byte message per type per peer. The engine matches each with a linear search (`0x46D755`,
+`0x46D9E3`, `0x46DA7A`, `0x46D906`), so a join costs on the order of N²·P compares. A′2's two-peer
+test times a join at the ceiling.
+
+- At 5 seconds or less, the time is recorded as the engine's own cost.
+- Over 5 seconds, the landing replaces the four searches with a lookup keyed on the CRC the engine
+  already stores (`+0x13E`).
+
+**One limit outside our code.** TADR's `.tad` demo format keeps every unit-sync message in one
+record with a 16-bit length (SRC, `Docs/saveformat.txt`), so recording a game breaks above about
+2 340 types. The game is unaffected; the limit is documented, not fixed.
 
 ### The unit pass's caches
 
@@ -125,13 +192,25 @@ and `0x0F` do not change.
   each other's projectiles. That makes the match exact by construction, and stock behaviour stays
   exact below 256. The owner rejected an in-place alternative, which put the high bits in the
   target's lowest fraction bits: it made two targets closer than 1/4096 px match, for every weapon.
+  **Both receivers match on the index derived from the local projectile's weapon pointer**, not on
+  the ID byte at `+0x10A`. A saved game writes that byte back on load (`0x487628`), so under a
+  changed mod it can be stale.
   **The companion travels as a tagged `0x05` chat message [DECIDED 2026-09-24]**, the way TADR
-  carries its `0x0D` extension. The engine, TADR's demo recorder and TAF's replay parser all split a
-  packet into messages by each type's known length, so a type of our own would cost any of them
-  the rest of the packet ([networking](../networking-lobbies.md)). With a chat message, a game on
-  our DLL still records and replays. It costs a 65-byte message instead of 14, and only when an
-  interceptor with an ID of 256 or more fires. The chat display skips our tagged messages, so they
-  never show as empty lines.
+  carries its `0x0D` extension:
+  - **Why chat.** The engine, TADR's demo recorder and TAF's replay parser all split a packet into
+    messages by each type's known length, so a type of our own would cost any of them the rest of
+    the packet ([networking](../networking-lobbies.md)). With a chat message, a game on our DLL
+    still records and replays, within the `.tad` limit above. It costs a 65-byte message instead
+    of 14, and only when an interceptor with an ID of 256 or more fires.
+  - **The layout.** `0x05`, a zero byte, our tag, then the payload. The tag is one outside TADR's
+    set (`0x2B..0x31`, `0x60`).
+  - **No display hook is needed.** The chat receiver `0x463CA0` returns at once for text that starts
+    with a zero byte (`0x463CA7`): nothing is shown, logged or sounded. That is how TADR's tagged
+    messages stay invisible.
+  - **Our handler** is reached by pointing the dispatch table's `0x05` slot (`0x455F90`, data, no
+    code bytes) at a stub that falls through to stock's `0x45522E`. It acts only on the game thread
+    with the in-play handler (`0x499200`) installed, and drops the message otherwise. During a
+    network load, the loader thread pumps messages too.
 
 **Fixed beyond TADR, in the same landing.** We rewrite both ends of these messages anyway:
 
@@ -144,6 +223,19 @@ and `0x0F` do not change.
   bound in stock.
 - **The `0x0F` receiver refuses a cell outside the map.** Stock goes on to read through the NULL
   that `0x481550` returns for one (`0x4244CF`).
+
+### Both builds
+
+The always-on fixes are in both builds, `make LIMITS=stock` included, as landing 6's are:
+
+- the build list;
+- the download records;
+- the out-of-memory message;
+- skipping a weapon with a bad ID, bounded by that build's own array size;
+- the `0x0F` sentinel;
+- the receivers' two bounds.
+
+Only the raises differ between the builds.
 
 ## The landings
 
@@ -169,8 +261,15 @@ and `0x0F` do not change.
 - A builder with 31 and more build entries: every entry in its menu and its AI list, with nothing
   read past the list.
 - A two-peer network game on the synthetic mod, building and fighting with types above 512.
-- Memory and load time are measured at the ceiling. Every def loads its own model (`0x42D766`, no
-  sharing). The estimate is 100–250 MB at 16 000 types in a 32-bit process, and it is untested.
+- **Memory and load time are measured at the ceiling**, at 1080p and 4K, over two consecutive
+  games: the second game's 4K work buffer (108 MB, contiguous) is the allocation fragmentation
+  would refuse first. The prediction from 17 KB and 3.6 ms a type is about 270 MB and one extra
+  minute of load. The engine's own counters (`[0x5289F8]` live bytes, `[0x5289D8]` peak) are read
+  in-process. The numbers are recorded whatever they are (*Memory*, above).
+- **A mod too big to fit**, generated locally: the honest message, the dump and the exit.
+- **A download file with six or more entries**: every button present, nothing written past the
+  records.
+- **The two-peer join timed at the ceiling**, against the 5-second rule.
 - Review at `high`: byte patches, simulation as content.
 
 **A′3 — weapons, 4096. Planned.**
@@ -191,12 +290,20 @@ and `0x0F` do not change.
 **The order** is section A's landing 7 first, a gap in landed code. Then A′1, before the type raise
 can expose the caches, then A′2, then A′3.
 
-## Open questions
+## Measured in the landings, decided now
 
-- The chat tag's form, and where the chat display is told to skip it. The landing reads the chat
-  receive path first.
-- How a saved game stores a unit's type: by name or by ID.
-- The unit-sync handshake with 16 383 defs sends one 14-byte subpacket per def per peer. How long a
-  lobby takes is unmeasured.
-- The build-menu records at `[main+0x391CB]` store `u16` IDs. They were skimmed, not read.
-- Whether any COB path carries a weapon ID. It was not checked.
+Nothing is left for the owner. The numbers below are still to be measured, and each outcome's
+consequence is already decided above:
+
+- memory and load time at the ceiling (recorded, and the cap stays);
+- the lobby join (the 5-second rule).
+
+Also recorded: the unit-selection dialog's pictures. The dialog loads one 4 KB picture a type
+while it is open, 67 MB at the ceiling.
+
+Settled on 2026-09-24 and not open:
+
+- saved games store types by name;
+- COB carries no type or weapon ID;
+- the chat path is traced;
+- the download records are read.

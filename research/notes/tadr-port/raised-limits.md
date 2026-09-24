@@ -369,10 +369,17 @@ most 9 % of it. A modded giant can still overrun it.
   `2h(w+1) ≤ A`.
 - **Grow.** When a box does not fit, the game thread allocates a larger frame and frees the old
   one.
-  - The allocation returns NULL on failure. That rules out `0x4D83B0`, which retries for as long
-    as a new handler is installed at `[0x5289BC]`.
-  - It comes from the heap that the level's teardown (`0x4581C0`) frees from. The grown frame is
-    kept until the level ends.
+  - The allocation must return NULL on failure. `0x4D83B0` cannot: it calls the game's
+    out-of-memory handler, which ends the game. The CRT's own `_nh_malloc` (`0x4E8890`) returns
+    NULL, because nothing sets its new-mode flag. It is called inside the allocator's critical
+    section (`0x4DA780`), with the allocator's bookkeeping (`0x4DA7D0`), so the level's teardown
+    (`0x4581C0`, through `0x4D85A0`) frees it like any engine block. The grown frame is kept until
+    the level ends.
+  - The engine's own save writer gets a NULL-returning allocation differently: it sets the handler
+    to 0 around the call. That is not used, because the handler is a plain global that other
+    threads' allocations read ([evidence §8](limits-evidence.md#8-unit-type-ids-512-16000-increaseunittypelimit-17-writes)).
+  - Under `-memfussy` the grow is refused and the fallback taken: that debug heap loops on the
+    handler too.
   - It is safe because every writer, and the blit after each call, reloads `[ctx+0x10]` after the
     size decision (`0x458B87`, `0x45A47C`, `0x45A7B9`, `0x459884`, `0x459CC4`). All of them run on
     the game thread, and nothing of ours reads the scratch on the render thread.

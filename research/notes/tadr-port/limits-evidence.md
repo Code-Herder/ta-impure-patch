@@ -357,7 +357,8 @@ needs 9, 16 384 needs 15. The packet stays under 0x200 bytes (`0x48B7F6`), so fe
 (INF).
 
 **A separate stock overflow: the build list.** Each builder's entries under `[CANBUILD]`
-(`canbuild%d`; the section is `sidedata.tdf`'s, INF from the names) are read into one shared
+(`canbuild%d`, in `gamedata\sidedata.tdf`: the strings are pushed at `0x42D937..0x42D945`, and a
+failure reports "Can't load GAMEDATA.TDF"; builders are the defs with `+0x241` bit 6) are read into one shared
 0x3C-byte heap block the engine names `TEMP UTYPE LIST` (`0x42D971`, through `0x4D83B0`), 30 `u16`
 IDs.
 
@@ -366,11 +367,101 @@ IDs.
   unit) at def `+0x156`. It is filled by a `rep movs` of exactly 15 dwords, with the real count at
   `+0x152`.
 - The shared block is freed after the last builder (`0x42DB07`).
-- **Readers:** `0x4894FD..0x48951B` loops to the count at `+0x152`. The others (`0x4094B6`,
-  `0x40ABAD`, `0x40BDDB`, `0x4143F9`, `0x41B8F7`, `0x43E828`, `0x43F7A0`, `0x468604`, `0x46887B`,
-  `0x48CCBC..0x48CCE4`) are not classified yet.
-- So a builder with more than 30 entries overruns the shared block and makes the counted reader
-  read past its own copy. It depends on the length of the list, not on the number of types.
+- **A second writer**, `0x42BE30` (from `0x42E0DE`, later in the load), appends each builder's
+  download-menu entries to the list through `lea ebp,[def+0x152]`. It appends while the count is at
+  most 30 (`0x42BEAF`), so it can write entry 30, two bytes past the block: a stock off-by-one.
+- **Readers.** Three loop to the count:
+  - the AI's pick `0x40BDB0` (reached through the count test at `0x408149`/`0x408781`);
+  - the AI's debug listing `0x46887B..0x468982`;
+  - `0x4894F0`, which has no callers.
+
+  The rest only test the pointer: `0x4094B6`, `0x40ABAD`, `0x4143F9`, `0x41B8F7`, `0x43E828`,
+  `0x43F7A0`, `0x468604`, `0x48CCBC..0x48CCE4`, and our `tagpu_order.c`. No reader assumes 30.
+  (`0x46B04C`/`0x46B2DC` read a UI struct, not a def.)
+- **Lifetime.** The def clone `0x42B370` copies `+0x152`/`+0x156`, but every clone runs before
+  `0x42D9BB`/`0x42D9C7` zero them, so no two defs share a list. Teardown frees each list with
+  `0x4D85A0` (`0x42DC52`, in `0x42DB90`, on the game thread).
+- **So** a builder with more than 30 entries overruns the shared block and makes the counted
+  readers read past its own copy. It depends on the length of the list, not on the number of
+  types. Stock's longest list is exactly 30 (`corch`, `corcsa`, READ), with no download entries.
+
+**A third stock overflow: the download-menu records.** `0x42DCF0` (tag `DOWNLOADMENU`, loader
+thread) builds one 0xBD-byte record per `download\*.tdf` file.
+
+- The block is at `[main+0x391CB]`, its count at `[main+0x391C7]`, allocated at `0x42DD74`.
+- Each record is a dword entry count and five 0x25-byte entries: a `u16` builder type, `u8`
+  `MENU`, `u8` `BUTTON`, and the buildee's name as a 32-byte string.
+- The entry loop `0x42DDD5..0x42DF0C` has no cap, so a file with six or more entries writes past
+  its record.
+- Readers: the build menu `0x41AE0F` (which never checks `BUTTON` against its gadget count), the
+  page count `0x42DF72` (def `+0x22E`), the downloadable check `0x42E04B` (a string compare per
+  type and file), and `0x42BE30`. `0x42BD40` is dead.
+- Stock content (READ): 70 files, at most 4 entries each.
+
+**Saved games store types by name.** A unit's record starts with its def's name (`0x4877DF..
+0x487811`), resolved on load through `0x488B10` (`0x487183`). Build orders use `UTYPENAME%4d`
+(`0x43ABF8`, `0x43A757`), and features are saved by name too. Neither ceiling reaches the format.
+
+**The unit sync (`0x1A`) is keyed on the FBI's CRC, never the type.** Trees, vectors and lists
+(`0x46EF50`, `0x46E9B0`, `0x46E640`), per-peer records of 0x5C bytes, dword counters.
+
+- Each message is 14 bytes: the type, a subtype, fill, the CRC at `+6`, then status and an `i16`
+  limit.
+- A join walks every def (`0x46DD1E`) and sends one subtype 3 per def per peer (`0x46D860`); the
+  peers also exchange one subtype-2 CRC per def.
+- Its matching is linear (`0x46D755`, `0x46D9E3`, `0x46DA7A`, `0x46D906`), so a join costs on the
+  order of N²·P compares. Unmeasured.
+- TADR's `.tad` format keeps all of them in one record with a `u16` length (SRC,
+  `Docs/saveformat.txt`), which overflows above about 2 340 types.
+
+**Memory.** The CRT allocator `0x4D83B0` → `0x4D83C0` retries through the new handler at
+`[0x5289BC]`.
+
+- **The out-of-memory path.** WinMain (`0x49E849`, in `0x49E830`) installs `0x49E700` for the
+  whole process. On any failed allocation it:
+  1. appends "Out of memory! Your hard disk may be full" to `ErrorLog.txt`;
+  2. dumps registers and stack through a deliberate fault (`0x49E680` → `0x4D8E60`);
+  3. shows a system-modal `MessageBoxA`;
+  4. ends in `raise(SIGABRT)`, which leads to `ExitProcess(3)`.
+
+  It never returns.
+- **Where stock clears the handler.** Two places set it to 0 around one allocation: the save
+  writer's compression buffer (`0x4B3B75..0x4B3B8F`, `0x4B4146..0x4B422B`) and BIGSHOT
+  (`0x495ABE`, which reinstalls `0x49E700` instead of what it replaced). The handler is a plain
+  global.
+- **A handler-free entry.** `0x4E8890` is `_nh_malloc(size, _newmode)`, and nothing writes
+  `_newmode` (`[0x52A430]`), so it returns NULL on failure. Called inside the allocator's critical
+  section (`0x4DA780`) with its bookkeeping (`0x4DA7D0`), when `0x4D80D0` (`-memfussy`) is false,
+  it gives memory that `0x4D85A0` frees. That is the composite grow's allocation.
+- **The engine's own counters:** live bytes `[0x5289F8]`, peak `[0x5289D8]`, live blocks
+  `[0x528A08]`.
+- **Per type** (DIS; sizes READ from the retail archives):
+  - the def, 585 bytes, in one contiguous array;
+  - the 3DO at exactly its file size, fixed up in place (`0x42D766` → `0x4CB560` → `0x4BBE50`),
+    with no sharing between types that name the same model;
+  - the COB at its file size, plus a 0x18-byte node (`0x42D8EF` → `0x4B2450`);
+  - the yardmap;
+  - the masks, one per distinct category string.
+
+  Every kept type loads every game. Stock 3DOs have a median of 5.8 KB and a maximum of 20.9 KB;
+  COBs a median of 3.1 KB and a maximum of 36.6 KB. The heaviest type is `armss` at 48 KB. No two
+  stock types name the same model. The unit-selection dialog adds one 4 KB picture a type while it
+  is open.
+- **Measured 2026-09-24 on the reference setup** (Wine 9, whose 32-bit process also maps the
+  host's 32-bit Vulkan drivers; addresses walked with `VirtualQueryEx` from inside the prefix):
+  - A stock game on the current build commits 196 MB.
+  - **200 synthetic types** (the stock Peewee's FBI and COB under new names) **added 3.3 MB
+    committed and 0.7 s of scenario load: 17 KB and 3.6 ms a type.** The engine's count read 479.
+  - A 32-bit process with the Vulkan stack loaded allocated **1439 MB** of heap before failing, in
+    every band below 2 GB. That includes the 0x20000000 and 0x40000000 regions `VirtualQuery`
+    reports as reserved: they are Wine's own reservations, which it hands out to ordinary
+    allocations.
+- **Sharing a model is feasible** (not planned; the lever if a mod runs out of memory):
+  - The load's fixups (relocation, the x/z negation, the texture binding) must run once, so a
+    shared type skips `0x42D75E..0x42D78F`.
+  - Teardown must free each model once.
+  - Two types sharing a model would show the same animated-texture frames: the ticker `0x415B36`
+    writes its frame cursors into the model.
 
 **SIM-relevant as content** (AI build targeting, categories). Static immediates, so any time before
 use is fine.
@@ -474,7 +565,20 @@ region where objdump's sweep desyncs near `0x49C740`.
       the receiver.
     - The map's size is copied from the TNT header unclamped (`0x48367D`, `0x483684`). But
       positions are 16.16 `i32` shifted right by 20 (`0x4815A0`), so no reachable cell passes 2047.
-  - `0x0B` and `0x0C` carry no weapon ID. COB was not checked.
+  - `0x0B` and `0x0C` carry no weapon ID. **COB carries none either**: GET `0x480770` and SET
+    `0x480B20` accept values 1..20 only (`cmp eax,0x13`), none of which reads a type or a weapon,
+    and EMIT_SFX and EXPLODE reach only particles and flying pieces.
+  - **`0x05`, chat, 65 bytes:** the type and a 64-byte text field (sent with `push 0x41`).
+    - The dispatch table `0x455F84` sends it (slot `0x455F90`) to `0x45522E`. That drops it unless
+      the addressee is an active local human, then calls `0x463CA0(text, 8, 0, sender)`.
+    - `0x463CA0` returns at `0x463CA7` when the text starts with a zero byte: no line, no log, no
+      sound. TADR's tagged messages (`05 00 <id>`, ids `0x2B..0x31` and `0x60`, SRC
+      `PacketChatRouter.cpp`) rely on exactly that.
+    - Received chat is never logged. Only chat typed locally in a network game goes to
+      `reporter.dll`.
+  - **Threads.** In play, the receive pump `0x453D40` runs on the game thread, from the frame
+    callback (`0x4968CB`) and the sim tick (`0x4954C8`). During a network load, the loader thread
+    (`0x49727D`) pumps it as well.
 - Weapon `+0xBC`, which TADR's Delphi layout calls "reserved": no displacement in the array scan,
   no loader store, and only unit pointers at `+0xBC` in the weapon code ranges. Unused, with high
   confidence; about 160 hits elsewhere are unclassified.
