@@ -187,7 +187,9 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
 * **Which range is in force.** The centre range holds only on a draw whose ground is ours
   (`s_gCentre = installed && terr`), because the engine's terrain pass `0x483FA0` has no bound on
   its tile index; the terrain latch is set from the same request right after the apply, so the
-  two agree on every draw. The apply clamps the eye and target into the range in force on every
+  two agree on every draw. That bounds the eye the pass reads from, not its window: a view larger
+  than the map runs the window past the tile map from any eye, in stock and on both cameras, and
+  the engine-defect patch at `0x484057` bounds it (patched on main by the engine-defect landing). The apply clamps the eye and target into the range in force on every
   in-play draw; the level end puts the engine's range back and walks the eye into it.
 * **The flag.** The replacement of `0x41C3C0` runs whenever it is installed.
 * **The three reachable inline target clamps** — not two. The smooth arms of centre-on-point
@@ -218,7 +220,7 @@ note listed:
 
 | reader | bound |
 |---|---|
-| `0x483FA0`, the engine's terrain pass | **none of its own** — the tile index from `eye >> 5` is unchecked at both ends. Bounded by design: the centre range is in force only on draws whose terrain latch skips it |
+| `0x483FA0`, the engine's terrain pass | **none of its own** — the tile index from `eye >> 5` is unchecked at both ends. Its eye stays in `[0, extent − W]`: the centre range is in force only on draws whose terrain latch skips it. Its window does not: over a view larger than the map it runs past the tile map from any eye (Lava Run at 1920x1440, 12 skirmish maps at 3840x2160), in stock and on both cameras — bounded by the engine-defect patch at `0x484057`, patched on main by the engine-defect landing |
 | `0x418310`, the map debug overlay | **none below** — the cell window starts at eye/16 with only the upper ends clipped. Bounded by the redirect of `0x468DBA` |
 | `0x498DA0`, the pointer → world point | **bounded twice**: `tagpu_vpwide.c` clamps the world point to the scroll extent, and `zoom_tpos_guard` (`0x498EF9`) clamps the side-panel path to the same. A right-click past the edge orders a move to the nearest point of the extent |
 | the minimap view box | **bounded**: its centre clamped into the minimap, then each edge on both sides, at every zoom — it cannot invert |

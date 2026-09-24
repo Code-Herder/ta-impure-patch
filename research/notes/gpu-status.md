@@ -985,7 +985,12 @@ grid, so the two threads compute the range from the same words.
 **The centre range is in force only while the ground is ours, and that is the bound it rests
 on.** The engine's terrain pass `0x483FA0` indexes the tile map from the eye with no bounds
 check at either end ([engine map](exe-reverse-engineering.html), "Two per-cell loops"), so an
-eye off `[0, extent − W]` under an engine terrain draw reads outside the tile array. terrown skips
+eye off `[0, extent − W]` under an engine terrain draw reads outside the tile array. This bounds
+the eye the pass reads from and nothing more: the pass has no bound of its own, so over a view
+larger than the map its window runs past the tile map from any eye — a fault in stock and on both
+cameras, MEASURED on Lava Run at 1920x1440 in a level's first draws, before the terrain latch is
+up — and it is bounded there by the engine-defect patch at `0x484057`, patched on main by the
+engine-defect landing (engine map, "Engine defects we patch"). terrown skips
 that function on every draw whose terrain latch is up (`g_terrown_own`, §2.3b), and the packet
 publisher sets the latch right after the command apply, from the same request the apply was
 handed (`terr || the rect is still wide`). So:
@@ -1033,7 +1038,8 @@ the "Contour" command), and its one call site `0x468DBA` is redirected to run it
 in the engine's own range. **The far ends reach the map's edge, 32 px (right) and 128 px (down)
 past the extent's, and no reader's bound depends on where they are:** each is bounded by its own
 compare (the sweep's `PLOT − 1` clips, the fog builder's unsigned tests against the LOS block, the
-cull's rect test, the positional sound's LOS test), by the terrain latch (`0x483FA0`), or by a
+cull's rect test, the positional sound's LOS test), by the terrain latch (`0x483FA0`'s eye; its
+window over a view larger than the map by the engine-defect patch at `0x484057`), or by a
 test against the engine's range, which still reads the extent (the debug overlay, the fog's
 off-range switch below, the pointer's guards).
 
