@@ -1021,10 +1021,10 @@ static int clamp_pair(int* px, int* py, int loX, int hiX, int loY, int hiY)
    `main+0x14327`/`+0x1432B` is where the camera is heading, and three of this
    function's callers are inside the per-frame stepper `0x41CA10`, which eases
    the eye halfway toward it and calls us afterwards: writing the target there
-   would make it the eye every frame and the camera would never arrive. Every
-   caller that MEANT to move the camera copies the clamped eye into the target
-   itself, right after we return (`0x41C5A4`, `0x41CDE6`, `0x41D05E`), so the
-   pair stays consistent without our help. */
+   would make it the eye every frame and the camera would never arrive. The
+   other nine callers each MEANT to move the camera, and each copies the
+   clamped eye into the target itself right after we return (e.g. `0x41C5A4`,
+   `0x41CDE6`, `0x41D05E`), so the pair stays consistent without our help. */
 static void __cdecl zoom_eye_clamp(void* arg)
 {
     char* ta = *(char**)TA_MAINPP;
@@ -1325,16 +1325,20 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
         moved |= clamp_pair(scr, scr + 1, loX, hiX, loY, hiY);
     }
 
-    /* A CAMERA WE MOVED OWES THE ENGINE WHAT ITS OWN WRITERS DO. Each of the
-       eleven (exe map, `main+0x142F1` bit 1) stores the eye, sets bit 1 of
-       main+0x142F1 (`orb $2`, e.g. `0x41C598`, `0x41D04D`), calls `0x41C3C0`
+    /* A CAMERA WE MOVED OWES THE ENGINE WHAT ITS OWN WRITERS DO. Nine of the
+       eleven (exe map, `main+0x142F1` bit 1) store the eye, set bit 1 of
+       main+0x142F1 (`orb $2`, e.g. `0x41C598`, `0x41D04D`), call `0x41C3C0`
        — which only clamps the eye and recomputes the minimap's view box
-       through `0x466B70`, touching neither flag nor the target — then copies
-       the eye into the target and clears bit 3 of main+0x14281. So: the view
-       box recomputed, `0x41C3C0` being the only place the engine ever fills
-       it; bit 1 set, DrawMinimap `0x466B00`'s dirty flag, without which the
-       engine's minimap is not redrawn and its box stays where it was until
-       something else sets it; and bit 3 cleared,
+       through `0x466B70`, touching neither flag nor the target — then copy
+       the eye into the target and clear bit 3 of main+0x14281. The stepper's
+       two (`0x41CB5F`, `0x41CBCF`) set bit 1 and clear bit 3, then step the
+       eye toward the target, which they never write. So: the view box
+       recomputed, `0x41C3C0` being the only place the engine ever fills it;
+       bit 1 set, the dirty flag DrawMinimap `0x466B00` alone tests
+       (`0x466B06..0x466B16`) — display state, like the word's other bits; the
+       minimap's radar rebuild `0x466DC0` also sets it on every sim tick for
+       the local player (`0x46742F`), so this write decides something only on
+       a frame no tick ran; and bit 3 cleared,
        the screen fog grid's is-current flag, since that grid is
        view-anchored and rebuilt lazily off it. Both flags are written HERE,
        on the game thread, the only one that may: `0x484904` sets bit 3 and
@@ -1971,11 +1975,14 @@ static int engine_grid_misplaced(const TAGPU_PACKET* pk)
 
    THE CHOICE. The engine's grid when the level is at least 1, its window is
    the engine's own construction (engine_grid_misplaced) and the 1x rect
-   about the drawn eye lies in its span — true for the eye it was built at
-   wherever the view is a multiple of 32 (30 x 24 cells for the 896 x 704
-   view at 1024x768: `view/32 + 2`, MEASURED 2026-09-24), false for an anchor
-   step it has not seen, and false at the build eye itself for a view that is
-   not (1016 rows at 1080p reach into the short last row). Otherwise the wide
+   about the drawn eye lies in its span — true for the eye it was built at,
+   for every view: the builder sizes the grid `view/32 + 2` cells, `+ 3` when
+   the view is not a multiple of 32 (`0x483C1E..0x483C79`), from the eye
+   rounded to a half cell, so the span reaches 1..32 px past the far edge of
+   the 1x rect for a multiple of 32 (30 x 24 cells for the 896 x 704 view at
+   1024x768, MEASURED 2026-09-24) and `33 - m .. 64 - m` px for a view `m`
+   px past one (9..40 for the 1016 rows at 1080p, 17..48 for 2096 at 4K);
+   false for an anchor step past that slack. Otherwise the wide
    grid, with the eye clamped so the slab lies in its span. That interval
    holds every eye within the lead of the one the grid was built about, at
    every level, since fogw_window cuts the slab at the floor about that eye

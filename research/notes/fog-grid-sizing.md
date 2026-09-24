@@ -212,11 +212,11 @@ So the question the bound is answering is not "how big may fog be?" but:
 > Anything past that means these numbers and this buffer have come apart.**
 
 And *that* is why the number went stale. When it was written there were two producers, and 512 was
-comfortably above both: the engine's own grid (`viewW/32 + 2`, against a viewport the native pass
-then capped at 4096) and `tagpu_fogwide`'s window as it was then sized. `FOGW_MAXDIM` has since
-moved to 1024 and the viewport cap to 16384, so the honest answer to the question is now 1024 —
-but the answer lives in a second, hand-typed literal in another file, and only one of the two was
-updated.
+comfortably above both: the engine's own grid (`viewW/32 + 2`, or `+ 3` off a multiple of 32,
+against a viewport the native pass then capped at 4096) and `tagpu_fogwide`'s window as it was
+then sized. `FOGW_MAXDIM` has since moved to 1024 and the viewport cap to 16384, so the honest
+answer to the question is now 1024 — but the answer lives in a second, hand-typed literal in
+another file, and only one of the two was updated.
 
 The sharpest way to see it: **the same three numbers pass a `cols <= 1024 && rows <= 1024` check
 in `tagpu_native.c` when they are read, and then fail a `cols > 512` check in `tagpu_fx.c` when
@@ -1088,8 +1088,8 @@ per frame.
 
 Two things that are *not* limits, so that nobody spends a session on them: `tagpu_native.c`'s
 `cols <= 1024` on the **engine's** descriptor is fine at any of these — the engine's own grid is
-`viewW/32 + 2`, which is 478 cells at 16K — and the fog texture at 1925×1093 is far inside any
-GL implementation's maximum.
+`viewW/32 + 2` (`+ 3` off a multiple of 32), which is 478 cells at 16K — and the fog texture at
+1925×1093 is far inside any GL implementation's maximum.
 
 ## 8. What was decided, and what it measured
 

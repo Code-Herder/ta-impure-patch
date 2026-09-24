@@ -100,8 +100,11 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   restored atlas.
 - **`feat.on`** takes the draw only while `native.on` carries `wrecks` (3D wreckage is drawn from
   the same leaf); otherwise it logs `nothing emitted: native.on needs "wrecks"` and `atlas=0`.
-  Heartbeat under `log`: `feat: rect=… anchors= flat= tall= … 3dwreck= body= shadow=` every 60
-  frames. Fixture `feat-forest`.
+  Heartbeat under `log`: `feat: rect=… anchors= flat= tall= … 3dwreck= … outside= trunc= -> body=
+  shadow=` every 60 frames. **`outside=` must read 0** — cells the frame's rect asked for past the
+  rect the packet's anchor table covers; **`trunc=` must read 0** — frames drawn from an anchor
+  table the publisher cut short (it drops the rows farthest from the view's centre first; the
+  densest stock map fills 19 % of it at 4K). Fixture `feat-forest`.
 - **`fx.on`** is called from inside the native pass, so it needs `native.on` (any filter). The
   engine skip follows the file live: `fx.on=off` restores the engine's effects within 30 frames.
   Heartbeat `fx: proj= expl= … lines= sprites= flashq= models=`. Fixtures `fx-mix`, `fx-lasers`
