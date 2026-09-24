@@ -108,6 +108,37 @@ scores 0 magenta and shows no game.
   `scenario load` (tacli copies it into the gamedir at launch; editing the gamedir's copy is
   overwritten), or `cp` it over `<gamedir>/ddraw.dll` and launch with `--keep-dll`. `md5sum` the
   gamedir copy in the script's own output: that line says the run tested what you think.
+- **The stock engine limits are a second build of the same tree**: `make -C tagpu/ddraw -j$(nproc)
+  LIMITS=stock` writes `ddraw-stocklimits.dll` beside `ddraw.dll`, from objects of its own, so the
+  two never mix. `cp` it over `<gamedir>/ddraw.dll`, launch with `--keep-dll`, and read
+  `limits: stock build -- nothing raised` in the log before believing the run.
+- **The unit limit is 1500 a player, and an instance keeps the last one it was given.** With no
+  `UnitLimit` in the instance's `totala.ini` the game runs at 1500; `--unit-limit` or
+  `setup.unit_limit` writes one, and it stays until another launch writes a different one, so a
+  fixture with no `unit_limit` inherits the instance's last value (the fork then refuses the
+  apply with "this game's cap is 500"). Write it in the fixture. Under `ddraw-stocklimits.dll` the
+  engine clamps to 500 again and defaults to 250, which `tacli`'s schema does not know: `scenario
+  validate` passes up to 1500 a player and 15 000 entities, and the apply then refuses. The apply's
+  own check is against the cap in force (`main+0x37EE6`), which is the host's in a network game.
+- **The GDI lane takes a hand-edited `ddraw.ini` and a fixture with no resolution.** `scenario
+  load` rewrites `ddraw.ini`, `renderer=vulkan` included, whenever it passes a resolution, and it
+  passes `setup.res` whenever the fixture has one. Set `renderer=gdi` in `<gamedir>/ddraw.ini`, load
+  a copy of the fixture without `setup.res` into an instance whose store resolution is the one
+  wanted, and check `ddraw.ini` still says `gdi` after the load. Set it back to `vulkan` after: a
+  plain `tacli launch` keeps whatever the file says.
+- **Sound goes to a null device, never to the human's speakers.** Export
+  `PULSE_SERVER=unix:/nonexistent/pulse` and `ALSA_CONFIG_PATH=<a file holding
+  pcm.!default { type null }>` in the shell that runs `tacli`, and set `"sound": true` in the
+  instance's `instance.json` (`scenario load` has no `--sound`; set it back to false after). Effect
+  sounds also need the registry's `fxvol` above 0, and every silent launch writes it to 0 in the one
+  `user.reg` all instances share: `wine reg add` it in your own prefix just before the launch and
+  back to 0 after the game stops. The sound object is `*(main+0x10)`: `+0x2C` MixingBuffers,
+  `+0x30` the sounds in use. Any launch of the store's DLL saves its `mixingbuffers` (32) into that
+  shared registry, so a control launch reads 32 there, not stock's 8; write `MixingBuffers` back
+  before a sound A/B that needs stock's.
+- **A single-player fight does not reproduce run to run, even under one DLL**, so a COB-trace or
+  roster timeline compared across two runs measures noise from the first impact on. Compare what
+  is a function of the build (a static frame, a pose, a table), or two peers of one network game.
 - **A foreign tree's `tacli` cannot make instances** (no wine prefix template outside a real
   checkout). Make the instance from a real checkout and swap the DLL as above. If you do set up a
   second tree, `wineprefix` there must be a `cp -al` clone and not a symlink — `cp -al` on a

@@ -1296,6 +1296,7 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `monitor` | the primary | stored by device name (`\\.\DISPLAY2`), never by index |
 | `window` | — | the windowed frame rect, once there has been one |
 | `gpu` | `auto` | discrete > integrated > virtual > CPU, then the largest `DEVICE_LOCAL` heap; the row's first stage |
+| `mixingbuffers` | 32 | 8, 16, 24 or 32: the sounds the engine plays at once. No row; not a Visuals value, but the same loader reads it |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`
 or `classic++`, the render keys (`assets`, `light`, `shadowres`) are **rewritten from the DLL's
@@ -1379,11 +1380,22 @@ What each value does:
   are the engine's own unit bake, and the A/B — both toggles, both looks, a paused game —
   changed **0 world pixels** with the bits verified to flip (`0x3E` → `0x1E` → `0x1C`). Pinned to
   on, the stock default, because the GDI lane presents that bake: its behaviour there is the
-  stock game's by construction. GDI was not A/B'd — `scenario load` forces `renderer=vulkan`.
+  stock game's by construction. GDI was not A/B'd: `scenario load` rewrites `ddraw.ini` to
+  `renderer=vulkan` whenever it passes a resolution (the ta-drive skill's `measuring.md` has the way
+  round it).
 - **`gamma=`** is bounded to 0..20 and applied through `SetGamma 0x4BA590`. `+gamma N` is
   session-only: stock saves it to the registry (`0x4172CE`), and so does this build, but the store
   never records it and the next launch pushes the store over it. A CANCEL after it puts the
   store's Gamma back.
+- **`mixingbuffers=`** is pushed into the sound object (`*(main+0x10)+0x2C`) after every registry
+  load, the first and the reloads alike: the loader stores the registry's `MixingBuffers` there
+  through a setter with no check, and the store's value replaces it. The engine's table of playing
+  sounds has 32 slots, which is the bound (engine map, *The sound object*); TADR's 128 would play
+  sounds it no longer tracks. The bound holds while the store's loader observer is in: under
+  `tagpu_defaults.off`, or with the loader's bytes not as expected, the registry's value stands, as
+  in stock, whatever wrote it. The engine saves the value back to the registry with its other
+  options, and under tacli that is the one `user.reg` of every instance, so a control launch reads
+  32 where stock's missing key gives 8.
 - **`resolution=`** is resolved against the target monitor (`util_target_monitor`); a stored size
   larger than the monitor falls back to native — unless it is the ini's `inject_resolution`, which
   the picker offers whatever the monitor — and the Monitor row re-resolves it. It is written

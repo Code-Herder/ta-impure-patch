@@ -1501,7 +1501,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only, and on the GAME THREAD only since the clean cut** (§2.81): the reader is `tagpu_packet_pub.c` (`MM_COMPOSITE`/`MM_FOGBASE`/`MM_SCALEDMAP`/`MM_PICFRAME`), which copies them into the packet. The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured. **The render-thread reader is gone**: `tagpu_gui_surf.c`'s sharp minimap layer read all three per frame while the game thread may have been rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19), and that layer is deleted. The `tagpu_gui_set_want_minimap` / `tagpu_gui_minimap_have` handshake survives in `tagpu_gui.h` with no consumer |
 | `[0x51FBD0]+0x1B2` | the cursor's **GAF frame**. Read only — **on the GAME THREAD**, by `tagpu_packet_pub.c` (the in-play fill, and in the shell its observer of `0x4C67C0`), and published as the packet's `cur_rec`, a KEY; `tagpu_gui_cursor_frame()` resolves it on the render thread through `tagpu_gaf_frame_sane` for the sharp layer's cursor. `+0x1B6`/`+0x1BA`, the position the engine last drew it at, are **not read since 2026-09-23**: the packet's `cur_pos`/`cur_w`/`cur_h`/`cursor_live` had no reader left and were deleted, so `cur_rec` is the whole cursor channel (0 = no cursor this frame). The engine blits its own sprite into the reference frame |
 | `[0x51FBD0]+0x204` / `+0x208` | the current font object and text foreground colour. Read only, on the GAME THREAD at hook 8: the engine re-points both many times a frame, so a present-thread read would get whatever the side panel last drew with. **Since 2026-09-12 (the frame packet's landing 1) the font is COPIED there**, header and 95 printable glyphs, each as a one-glyph font object, into the packet (`tagpu_packet_pub.c`); the present thread rasterises from the copy and no longer dereferences the engine's font at all (`tagpu_text.c`, §2.16). The GL UI's string op carried the font's address too (landing 4c) and went with the UI layer (§2.81); `tagpu_gui_hook.c` still captures the op, so the address is still recorded — nothing reads it |
-| **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (map px, map cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table, which the unit pass turns into its face-shade multipliers, §2.88); `[0x51FBD0]+0xCC`, the grey band's 256-byte remap, is **not** copied since G20d — the grey is computed in RGB. **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect, and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
+| **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (the scroll extent — the map less 32 and 128 px — and the map in cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table, which the unit pass turns into its face-shade multipliers, §2.88); `[0x51FBD0]+0xCC`, the grey band's 256-byte remap, is **not** copied since G20d — the grey is computed in RGB. **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect, and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
@@ -1533,7 +1533,9 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 Not detours and not redirects: bytes rewritten once in `DllMain` through `VirtualProtect`, each
 written only if the site still holds the value we recorded. They own no state and run no code of
 ours, so they are listed here rather than in §2.1–2.5. The table of them with the before/after
-bytes is `field-notes.md` §"Our engine patches".
+bytes is `field-notes.md` §"Our engine patches". The raised engine limits are byte patches too,
+but they move state into the DLL and run code of ours, so they have their own section, §2.6b.
+The fixes for the stock engine's own defects run code of ours too, §2.6c.
 
 | VA | What it is | Mechanism |
 |---|---|---|
@@ -1554,6 +1556,230 @@ so `< 0x11` never happened and the compare *was* the type-1 rule; feed it the cl
 live, commander selected on Two Continents at type 1: a left click on ground walked the unit to
 the clicked point, and the same click with `tagpu_curs.off` deselected it and moved nothing. The
 full path is `exe-reverse-engineering.md` §"The in-game mouse buttons".
+
+### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–5
+
+**What it is.** TA's limits, raised the way TADR raises them, as our own C: projectiles
+300 → 3000, explosions 300 → 3000, flying pieces 100 → 1000, debris records 300 → 3000, units a
+player 250 (default) / 500 (ceiling) → 1500 / 1500, the pathfinder's budget 1333 → 66 650, and
+particles 400 → 20 480 a layer from a pool of 1000 → 204 800 objects, and the composite
+scratch frame 600² → 1280². The engine's simultaneous sounds are not a site: they are the settings
+store's `mixingbuffers`, held to 32 (below).
+Planned in [the TADR port](tadr-port/raised-limits.md); every site is in the engine map, *The raised
+effect pools* and *The per-player unit cap*.
+
+| What | Sites | Mechanism |
+|---|---|---|
+| the projectile pool | `0x499A32`, `0x499A56`; ten caps `0x49B6F0` … `0x49DF24` | immediates ×10 |
+| the projectile compaction frame | `0x49AE20` (`jmp` to a page-at-a-time stack probe), `0x49AEB8`, `0x49AF39`, `0x49AF7F` | a stub from `tagpu_detour_stub`, three displacements |
+| the explosion pool | `0x420630`, `0x420A36`, `0x420A3C`, `0x420B35`, `0x420B3B`, `0x420F66`, `0x421738`; caps `0x420A44`, `0x421771` | `main`-relative operands become the address of `s_expl`; `0x420AA2` becomes a `call` to a stub that reads the sequence table from `main` |
+| the flying-piece slots | seven base and six end operands (`0x420B08` … `0x42166D`); the backing `push` at `0x4208FB` | operands become `s_psys`'s bounds |
+| the level's effect reset | `0x42090A` | a `call` to `lim_level_reset` in place of the `rep stosd` |
+| the debris records | `0x4217DE` (16 bytes: `call` + `jmp 0x421804`), and `0x420920` (`jmp`), a stock copy of the scan that nothing calls | first-free C allocator over `s_aux` |
+| units a player | `0x491640` (default), `0x491659` (compare), `0x491666` (clamp-to) | immediates → 1500; the floor 20 stays |
+| the two `maxunits` keys | `0x432646` (a saved game's `[Summary]`), `0x436037` (a map's `.ota` `[GlobalHeader]`) | the 7-byte store becomes a `call` to a stub that clamps `eax` to [20, 1500] and stores it |
+| the host's limit in a network game | `0x4973AE` (read), `0x4973B5` (store) | the read becomes `movzx eax, word [eax+0xA5]`, the store the same clamp stub |
+| the restriction menu's "no limit" | `0x44CAFE` | 101 → 1500, so a cancelled menu caps no type below the player's own limit (Reset's 100 each, `0x44C62D`, is stock's and shown as 100) |
+| the pathfinder's budget | `0x40EAD6` | 1333 → 66 650 |
+| the particle layers | twenty compares, `0x471183` … `0x472CD9` (`0x472BF2` against `ecx`) | 400 → 20 480 |
+| the particle pool | `0x471C83`, the `push` in the C runtime's static initializer `0x471C80` | 1000 → 204 800, built at that size because DllMain runs first |
+| the composite scratch frame | `0x45819B` (width), `0x458196` (height), the two `push 0x258` in `0x458180` | 600 → 1280 each; one frame a level at `*(main+0x1437B)+0x10` |
+
+**The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
+after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
+while it changes. It reads every site (through `VirtualQuery`, never assuming the page), compares
+all 75 with the stock bytes, and writes them only if every one matches; a refused write puts back
+what was written. The patches last for the process and are never restored. The log line names the
+moved pools' addresses for `tacli peek`: `limits: installed 75 sites -- …, units 1500 a player,
+pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280`.
+
+**Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
+`DirectDrawCreateEx` — outside the loader lock, before the game window exists —
+`tagpu_limits_report()` shows a MessageBox titled *Total Annihilation: Impure cannot start* and
+calls `ExitProcess`. The text says why in plain words (the exe is not 3.1; it is 3.1 but was
+changed in memory first; Windows refused the write; or Impure failed on its own side, a table
+overflow or a stub it could not allocate), what to do, and ends in a report block for
+whoever debugs it: the impure commit and branch, the exe's name, size, md5 and PE stamp, whether
+the md5 is a known build, and every differing site as `want` and `have` bytes (twelve in the box,
+all of them in `log\tagpu.log`). It prints no path. The same text is written to
+`log\startup-failure.txt`. `tagpu_log_dir()` gives the folder.
+
+**The stock build.** `make LIMITS=stock` builds `ddraw-stocklimits.dll` from objects with their
+own suffix (`.stock.o`), with `TAGPU_LIMITS_STOCK` defined: nothing is raised and every accessor
+returns the engine's own location. It is the comparison build, launched with `tacli launch
+--keep-dll` after copying it over the instance's `ddraw.dll`. There is no runtime switch.
+
+**What follows the pools.** The frame packet's publisher reads the explosions through
+`tagpu_limits_expl_pool()` and the flying pieces through `tagpu_limits_psys_begin()`/`_end()`,
+never at a fixed address; `TAGPU_PK_MAX_PROJ`/`_EXPL`/`_DEBRIS` are the pool sizes, so an effect
+table cannot truncate below the engine's own cap. `tagpu_fx.c`'s buckets are sized from the tables
+they draw (`tagpu_fx.h`, and *The particles follow the layer cap* below): `SPRITES` holds a
+projectile's two quads (its shadow blob and its frame), an explosion's one and the particle table;
+`UNDER` the particle table; lines and flashes 65 536 vertices each. That is a size, not a bound by
+construction: a composite GAF frame makes a quad per subframe and a lightning bolt up to 2 044 line
+vertices. A quad or line that does not fit is dropped and logged (`fx: DROPPED … bucket-full`).
+
+**The design point follows the unit limit.** The engine's unit array is `10 · N + 1` slots, so 1500
+a player makes **15 001**: `TAGPU_PK_DESIGN_SLOTS`, and every cap sized from it (§2.86) grew with
+it. `tagpu_packet_pub.c` asserts that the installed limit fits the design point, so raising
+`TAGPU_LIM_UNITS` alone fails the build. The scenario harness holds a game that full too
+(`SCN_MAX_UNITS`, `_ORDERS`, `_CLEAR` = 10 × `TAGPU_LIM_UNITS`; `tacli`'s `SCN_MAX_LIMIT` 1500,
+`SCN_MAX_ENTITIES` 15 000). In a network game every peer takes the host's limit, through the same
+[20, 1500] clamp as the `maxunits` keys (`0x4973B5`), so every writer of the array's count is held to
+the design point; should a slot count still exceed it, the packet's tables truncate and say so.
+
+**The particles follow the layer cap on our side too.** The publisher walks a layer up to the
+engine's own steady state, `TAGPU_LIM_SFX + 1` (`tagpu_packet_pub.c`; past it the layer is counted
+in `layerbad` and skipped). The packet's particle table is `TAGPU_PK_MAX_PART` = 24 576
+sub-particles, one and a half times tier 1's frame of 14 510. **A frame that holds more is thinned,
+not truncated:** the publisher counts every layer's sub-particles first and, when the total is past
+the table, keeps the same share of each layer (a 16.16 accumulator, so the kept total cannot exceed
+the table), counted in the heartbeat's `thin=`. A table that simply filled would lose the top
+layers whole, because the walk runs bottom to top — the trails and smoke of layer 9 first.
+MEASURED 2026-09-23 with the table forced to 2048 in tier 1: 670 thinned frames, the kept count
+never past 2047, `trunc=0`, and every layer present in proportion (a frame of 8 776: layer 9 kept
+2 024, layers 4 and 5 kept 8 and 15).
+The effects pass's four vertex buckets no longer share one cap (`tagpu_fx.h`): each of the two
+that particles land in holds the whole table, `UNDER` (layers 0–6) at 6 × 24 576 vertices and
+`SPRITES` (layers 7–9, projectiles, explosions) at 6 × (2 × projectiles + explosions + 24 576);
+lines and flashes keep 65 536. At 65 536 for all four, tier 1's opening volley filled `SPRITES` and refused 169 quads
+(`fx: DROPPED … bucket-full`, which counts quads and lines, not vertices); on the landing's build
+the same fight dropped none. **What that costs in address space**, in a process that is not
+large-address-aware (the exe's characteristics are `0x10B`): the buckets' static arrays grow from
+9.0 to 16.5 MiB, and a Vulkan slot's host-visible vertex buffer, which grows to a power of two and
+never shrinks, can reach 32 MiB at the buckets' worst case, one a swapchain image. The engine's own
+particle pool is 15.6 MB plus a 0.8 MB pointer stack, allocated once at startup.
+
+**Tier 1, measured 2026-09-23** (`scenarios/limits-tier1.json`: four players at 1500, 6000 kbots on
+Town & Country ordered onto the centre, 1920×1080, the shipped defaults, speed 20): the engine held
+1500 a player and 15 001 slots; 6000 of 6000 units and orders applied; the packet peaked at **5983
+units and 88 696 pieces**, 2.96 MB used of the 20 MB reserve, never truncated after the load's
+growth. Effect peaks: projectiles 215 and explosions 1042 (the engine's counts, sampled at
+~2 Hz), flying pieces 441 (at the heartbeat) and 755 particles in one frame (the packet's own
+running maximum, under the stock particle caps). Under landing 3's raised particles the same fight
+peaked at one layer of **13 529 objects**, a pool of **13 571** in use and **15 964** sub-particles
+in a frame, with the simulation at 60 ticks a second throughout. **The sim held 57–60 ticks a second** outside the apply frame,
+so neither the pathfinder's budget nor the explosion tick's compaction stalled it at these counts.
+The GPU frame was 0.7–0.8 ms at p50 (`ftime`). **The game thread published 21–59 frames a
+second, median 36**, and the publisher's own cost is past its histogram's 512 µs top at every
+sample — how much of the game thread's frame is ours and how much is the engine's is not
+measured.
+
+**Sounds: 32, through the store, not a site.** `mixingbuffers` in `impure.cfg` (renderers.md
+2.10b) is 32 by default and one of 8, 16, 24 or 32. `tagpu_menu.c`'s `eng_push_mixing` writes it
+into the sound object's `+0x2C` after every registry load (`0x42F9A0`), where the loader has just
+stored the registry's `MixingBuffers` through a setter that takes anything. 32 is the engine's
+own table: past it a sound plays untracked and a looping one escapes the stop-all (engine map,
+*The sound object*). TADR writes 128. The engine saves the value back to the registry with its
+other options, as it does the store's Gamma, into the one `user.reg` every instance shares, so a
+control launch (`tagpu_defaults.off`, or the stock DLL) reads 32 where stock's missing key gives
+8. MEASURED 2026-09-23, tier 1 with sound on a null
+device: 32 in use for the whole fight, never more; the store at 8 held 8.
+
+**The composite scratch frame** is the unit bake's one shared frame a level (engine map, *The
+composite scratch frame*), not the per-unit composite, which the ring caps. Four engine writers in
+the blit size it to a unit and never compare with the allocation (the build-state copy, the frame
+copy, the shadow build and the 2× structure bake, every frame and on every lane), so the raise
+moves the box at which they write past it, from 600 × 600 to 1280 × 1280 (a quarter of each for
+the 2× bake). It read back at 1280² after tier 1
+on the Vulkan lane and at 600² on the stock build, and the GDI lane draws the nanoframe ladder the
+same on both.
+
+**Tier 2, measured 2026-09-24**: ten peers in one network game on Town & Country, 1500 a player,
+15 000 units. Every peer held 15 001 slots and peaked at 14 991–15 000 alive; every raised pool
+passed its stock cap on every peer (projectiles 731–854, explosions 2936–2966, particle objects
+12 759–14 331, flying pieces 947–993); the simulation held 30 ticks a second, the full rate at a
+network game's speed 10, on all ten. Paused after three minutes, the ten agreed on the same 7307
+units in the same slots, and 95.8 % stood at the identical position on all ten; the moving rest
+sat off their owner's copy by at most 40 ticks of their own top speed. Details in
+[the plan](tadr-port/raised-limits.md), landing 5.
+
+**Landing 1, measured 2026-09-23** (the numbers are in the engine map): in single player the packet carried
+687 projectiles, 2439 explosions and 540 flying pieces with no table truncated; in a
+two-peer network game both peers passed every stock cap and, paused, held the same units at
+identical positions; a copy of the exe with one site byte changed got the report, the file and
+the exit, and the retail exe was untouched.
+
+**Below the stock caps the raised build is not stock in one respect.** The flying pieces' ring
+allocator `0x437A30` evicts the oldest blocks when it wraps and nulls their slots; its backing is
+ten times larger here, so a piece stock would have evicted to make room lives on, lands and adds
+its explosion. That changes the explosion count and the C-runtime `rand` stream, and reaches the
+simulation's generator only if the explosion pool fills (it gates `0x421700`'s draws). The
+stock-limits build is therefore a comparison build, not a proof of equality.
+
+**What this landing does not close.**
+
+- **The explosion tick's compaction is quadratic.** `0x4210E6..0x42113E` removes one dead record,
+  shifts the whole tail down one record (`rep movsd`, `0x15` dwords) and rescans from the start,
+  so a tick costs O(dead × live) record moves. At 3000 records with a mass death expiring together
+  that is about a hundred times stock's worst tick. Not measured yet; landing 2's tier-1 battle
+  measures the tick. TADR runs the same loop.
+- **The install fails closed in any process that loads this DLL.** An exe that is not TA and calls
+  `DirectDrawCreate` gets the same box and exits. By design: this `ddraw.dll` is built for
+  `TotalA.exe` alone, and the report names the exe it met.
+- **The native pass still emits effect models into a vertex array no lane reads**
+  (`tagpu_native.c`'s `s_verts`, fed by `emit_fx_model`). Its budgets were left at their stock
+  sizes; the path is a candidate for deletion.
+- Whether a peer on a lower cap than its opponent refuses projectiles the other fired, and what that
+  does to damage. The contract is the same build on every peer, which is what was measured.
+- The known-build table holds retail 3.1 alone; other builds report `known build: none`.
+- **What 6000 units cost the game thread.** The median 36 publications a second at 4000–6000
+  units is measured; its split between the engine's own frame and our publisher is not, because
+  the publisher's histogram stops at 512 µs.
+- **How long a remote unit lags its owner at stock's 500 a player.** At 1500 a player (tier 2,
+  below) the moving ones sat up to 40 ticks of their own travel behind; stock's figure is not
+  measured, so whether the raise stretches TA's update interval is open.
+- **The particle layers erase by shifting.** The layer tick `0x471EB0` deletes a finished object and
+  moves the tail down one slot, and an emitter at the cap drops the front the same way, so a
+  removal costs the layer's length. At 13 529 objects in one layer the sim held 60 ticks a second;
+  a layer held at the full 20 481, where every emission shifts the whole layer, was not reached.
+  The level-end teardown `0x471DE0` empties each layer front first the same way, about n²/2 moves:
+  some 2 × 10⁸ for a full layer. Not measured.
+- **The composite scratch frame is not bounded.** A unit (with its cargo) whose screen box is past
+  1280 × 1280, or a structure's past 640 × 640 under the 2× bake, still writes past the frame, as
+  one past 600 × 600 or 300 × 300 does in stock. A bound has to test the box in all four writers
+  (`0x4589C0`, `0x45A470`, `0x45A790`, and the 2× branch of `0x459830` / `0x459C70`, which can
+  take the 1× path instead) and skip or fall back in each; not built. The ring that caps a unit's
+  own frame does not help: at 800 × 600 it admits one of 3.1 million pixels.
+
+### 2.6c The stock engine's own defects (`tagpu_patches.c`, always on)
+
+**What it is.** Two places where the retail image writes or reads memory it does not own, patched
+at every attach by `patch_engine_defects()` at the end of `tagpu_apply_patches()`. Each patch is
+the identity on every input stock handles safely. Each site is compared with its stock bytes and
+skipped alone, as §2.6's rows are: the two are independent, and either one alone is still the
+identity wherever stock is safe. The disassembly, callers, invariants and measurements are in the
+engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
+engine defects we patch".
+
+| VA | What it is | Mechanism |
+|---|---|---|
+| `0x469807..0x469825` | `DrawGameScreen`'s unit-sort append, which never tests a row's count and so can write unit pointers past the end of SORT_UNIT_LIST (`main+0x141FB`) | 31 bytes: a `jmp` to a 44-byte stub from `tagpu_detour_stub`, then NOPs up to the stock join `0x469826`. The stub files a unit only while `count[row] < (rows − row)·cap`, the slots left to the end of the allocation (`[edi+0x50]`, `[edi+0x54]` = `main+0x1424B`/`+0x1424F`). The whole stock block is compared first, then written with `tagpu_detour_write` |
+| `0x421E60` | `GetGridPosFeature`, which reads `[plot+8]` with no NULL test (callers `0x498F4F`, `0x40514A` untested; `0x47EAE3` tests) | a prologue detour (`tagpu_detour_land`, 8 stolen bytes, compared first). A NULL plot returns `0xFFFF`, the engine's own "no feature", with the function's `ret 4` |
+
+**It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
+exactly as stock does for every slot inside the list. The plot guard writes nothing. Neither is
+in §2.5. `tagpu_zoom`'s `0x498EF9` guard and `vpwide`'s `0x499221` replica still clamp the
+pointer's world point to the scroll extent. With `0x421E60` guarded, those clamps are what keeps
+the hover *right*. They are no longer what keeps the game alive.
+
+**The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
+ARMED`. A site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
+`SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
+place of `ARMED`; a stub whose site cannot be written is released. There is no switch: both are
+installed on every launch, `tagpu_defaults.off` included.
+
+**What it does not cover:**
+
+- `0x40514A`'s reachability with a NULL plot is not audited. The guard covers it whether or not it
+  is reachable.
+- On a map shorter than the viewport plus 128 px the engine's own terrain pass `0x483FA0` faults
+  before any pointer reaches `0x421E60`: MEASURED on Lava Run at 1920×1440 without these patches
+  and without our terrain pass owning the ground. That is a separate stock defect and nothing here
+  covers it.
+- The off-map cell `0x498F2E` leaves in `main+0x2C8E` is untouched. Its readers are not audited.
+- The stock past-the-end write at 1× was not reproduced: it needs more than `cap` units in one of
+  the sweep's last rows, the margin below the view [INFERRED].
 
 ---
 
@@ -9779,6 +10005,16 @@ means reimplementing selection, box-select, build placement and every cursor mod
 
 ### 3.2 Smaller, known, and cheap to close
 
+- **In a network game every peer draws its own units in player 0's colour** [MEASURED
+  2026-09-23, two peers]. The engine takes a unit's team colour from its owner's player record,
+  `player+0x96` (the frame index into `main+0x148DB`, `exe-reverse-engineering.md` §`0x467C00`).
+  `face_texframe` in `tagpu_render3do.c` picks the team frame by the owner byte `unit+0xFF`
+  itself, and that byte is the LOCAL player index: each peer is player 0 on its own screen. In
+  single player the two agree (you are player 0 and colour 0), which is why it never showed. The
+  engine's own frame is right on both peers. Closing it: the publisher reads `player+0x96` for each
+  unit's owner (bounded: owner < 10) into the packet, and the unit pass keys the team frame and the
+  bake's material on that colour instead of on the owner.
+
 - **Nothing in this repository has ever been measured on a Windows GL driver, and the first run
   on one found two bugs — 2026-09-10.** `renderer=openglcore` fell back to GDI on a real ICD
   because `glGetIntegerv` was fetched through `wglGetProcAddress`, which returns NULL for the
@@ -15705,7 +15941,7 @@ parity figure; the viewer feeds the instanced terrain shader since 2026-09-23 (w
 `ARMMAIN2#1` has 574 unexplained px in (502,356)-(520,392), a unit-sized box at the viewport
 centre.
 
-### 2.86 The unit cap goes — one pose buffer a frame, and every cap sized for 10 × 1024
+### 2.86 The unit cap goes — one pose buffer a frame, and every cap sized for the design point
 
 **What was wrong.** Past **512 posed units on screen, no unit body drew at all**. The Vulkan unit
 pass bound one 14 336-byte uniform window per unit per frame slot — the 256-piece ceiling, whatever
@@ -15714,10 +15950,10 @@ frame over the cap was refused whole (§2.84 found it on `500v500`). Behind it s
 fixed caps that scale with the unit count, each sized for stock's 500 a player.
 
 **The design point.** The engine's unit array has `10 × UnitLimit + 1` slots; retail clamps
-`UnitLimit` to 500 (`0x491658`, [deep-tadr](deep-tadr.html)), and a unit-limit patch raising it to
-1024 makes **10 241**. That number is `TAGPU_PK_DESIGN_SLOTS` in `tagpu_packet.h`, and every cap
+`UnitLimit` to 500 (`0x491658`, [deep-tadr](deep-tadr.html)), and the raised limits make it 1500
+(§2.6b), so **15 001**. That number is `TAGPU_PK_DESIGN_SLOTS` in `tagpu_packet.h`, and every cap
 below is either grown to the frame's own count or fixed at a size asserted against it at compile
-time. The patch itself is not part of this; nothing here was run above stock's 5 001 slots.
+time. The fixed sizes below are the 15 001-slot ones.
 
 **The pose is one storage buffer a frame.** The hand-over already kept the poses in three arenas
 (`rows`, `flags`, `vis`) with per-record offsets; the Vulkan pass now copies the three whole into
@@ -15732,7 +15968,7 @@ unit's uniform block carries three base indices into it (`uRowBase`, `uFlagBase`
 | each unit's slices inside the copied arenas | `tagpu_vk_unit_upload` | a unit that fails is not drawn and the every-unit-or-none gate refuses the frame |
 | the frame's packed size ≤ `maxStorageBufferRange` | the same, every frame | the limit is a 32-bit field, so every base index stays under 2^28 vec4 and the `int` bases cannot overflow |
 | one unit at the piece ceiling bindable | `tagpu_posedraw_ready` | 14 336 bytes; the spec's 128 MB floor means it cannot refuse a conformant device |
-| `TAGPU_PD_MAXHAND` = units table + wrecks + 1 + builds (24 577) | `tagpu_posedraw.h`, asserted in `tagpu_posedraw.c` | every record the producer can make, so no frame the packet carries is refused for count; nothing is sized from it |
+| `TAGPU_PD_MAXHAND` = units table + wrecks + 1 + builds (26 625) | `tagpu_posedraw.h`, asserted in `tagpu_posedraw.c` | every record the producer can make, so no frame the packet carries is refused for count; nothing is sized from it |
 | a packet truncated in its unit, piece or wreck table | `tagpu_native.c` → `tagpu_posedraw_uncarried` | refuses the unit hand-over whole: a frame missing units is a different frame |
 
 **Every other cap, and how it scales.**
@@ -15744,13 +15980,13 @@ unit's uniform block carries three base indices into it (`uRowBase`, `uFlagBase`
 | sub-pixel table `s_spx` | 8 192 slots | `TAGPU_PK_MAX_UNITS` 16 384 | render | static, asserted ≥ the design point |
 | marker bars, selection rects | 2 048 each | grown to `n_units` | render | grown at the top of `tagpu_mark_gather`, before anything emits; the cursor rects stay static and the two blocks are pushed back to back, so vertex indices are unchanged |
 | order-marker buckets | 12 000 / 12 000 / 4 800 verts | 24 000 / 24 000 / 9 600 | render | static; overflow counted |
-| order arena `MAXORD` / `MAXWALK` | 2 048 / 8 192 | 4 096 / 16 384 | game fills, render copies | **fixed, never reallocated** — two threads; asserted ≥ 4 records per design-point unit |
-| packet builds table | 2 048 | 4 096 | game | asserted ≥ `MAXORD` |
+| order arena `MAXORD` / `MAXWALK` | 2 048 / 8 192 | 6 144 / 24 576 | game fills, render copies | **fixed, never reallocated** — two threads; asserted ≥ 4 records and 16 visited nodes per design-point unit |
+| packet builds table | 2 048 | 6 144 | game | asserted ≥ `MAXORD` |
 | bake caches `PB_MAXGEOM` / `PB_MAXMAT` | 128 / 256 | 512 / 1 024 | render | an entry evicted mid-frame refuses the frame, so they hold one 10-player frame (a geometry entry is a model: wrecks and ghosts take their own); entries are allocated on bake |
 | Vulkan vertex-buffer table `VB_MAX` | 512 | the bake caches' sum (1 536), with a validated direct-mapped hint in front of the scan | render | the scan ran four times a unit a frame over the whole table |
-| packet slot reserve `PK_RESERVE` | 8 MB | 16 MB | game commits, render reads | asserted ≥ the unit-scaled tables at the design point at 36 pieces a model (14.6 MB); address space, committed as used |
+| packet slot reserve `PK_RESERVE` | 8 MB | 20 MB | game commits, render reads | asserted ≥ the unit-scaled tables at the design point at 36 pieces a model (19.2 MB); address space, committed as used |
 | packet `n_units` / `n_wrecks` | unchecked against the tables | validated at acquire | render | the render arrays are sized from them |
-| reclaim ring | 4 096 | 16 384 | game | a design-point level's objects fit on the timed-out teardown path; a full ring leaks, never frees |
+| reclaim ring | 4 096 | 32 768 | game | a design-point level's objects fit on the timed-out teardown path; a full ring leaks, never frees |
 
 **Measured 2026-09-23**, 1024×768, `ss = 2`, branch against `main` built clean from one tree:
 
@@ -15770,14 +16006,15 @@ rebuilds its two slot buffers. The other growable arrays (the unit pass's draw l
 the marker hand-over) keep their ordinary doubling and are not covered by it. A pointer that
 outlives a move then reads freed memory at stock unit counts.
 
-**What the design point costs in address space, if a frame reaches it.** 10 241 units posed and
-on screen at 36 pieces: the unit pass's pose buffer is 20.6 MB and its uniform blocks 17.7 MB
-**per frame slot** (four on the reference setup), and the native pose arena 17.7 MB. The frame
-packet reserves 16 MB × 5 slots = 80 MB up front (it was 40), committed only as packets grow. A
-stock game pays what it draws.
+**What the design point costs in address space, if a frame reaches it.** 15 001 units posed and
+on screen at 36 pieces: the unit pass's pose buffer is 30.2 MB and its uniform blocks 23.0 MB
+(1 536 bytes a unit, §2.88) **per frame slot** (four on the reference setup), and the native pose arena 25.9 MB. The frame
+packet reserves 20 MB × 5 slots = 100 MB up front, committed only as packets grow. A stock game
+pays what it draws.
 
 **Not covered.**
-- **Nothing ran past 5 001 slots**; the design point is argued and asserted, not measured.
+- **A full design-point frame has not run.** Tier 1 (§2.6b) ran the 15 001-slot array with 5983
+  units alive, four players' worth; ten players at 1500 is the TADR port's landing 5.
 - **Frame time at 10 000 units is unknown.** The bake's per-unit lookup scans its caches linearly
   and probes every piece's node with `IsBadReadPtr`; at ~600 posed units neither shows (0.36 ms),
   and at 10 000 either may. Instancing is the next step if it does.
@@ -15786,7 +16023,8 @@ stock game pays what it draws.
 - If the unit-limit patch also enlarges the engine's wreck pool (0x18000 bytes at `0x421F29`),
   `WR_COUNT` has to follow it — in `tagpu_engine.h` and in its own copy in `tagpu_feat.c`.
 - Type-scaled caps are unchanged: the selection-box cache (256 root nodes a level) and the
-  scenario harness's `SCN_MAX_*` (4 096 units, 512 selected).
+  scenario harness's selection (`SCN_MAX_SEL` 512); its unit, order and clear arrays follow the
+  unit limit (§2.6b).
 
 ### 2.87 Unit bodies before the effects, and cargo sorted by the merge's height
 
@@ -15938,7 +16176,9 @@ build is clean under `-Wall`, `thread-split-check.sh` is clean with the packet f
 That is 3 B/texel over the R8 alone, +53 MiB on Two Continents, and −17.6 MiB against 2c; the
 restored twins are the same size in every column. The small per-slot images removed at 2d come
 to about 10 KiB a slot. The unit pass's transient staging no longer reserves up to 4 MiB a frame
-for an R8 upload.
+for an R8 upload. Its fragment-stage uniform block is 256 bytes, down from 272 now that `uLit`
+is gone. At the reference device's 64-byte alignment that is 1 536 bytes a unit instead of
+1 728, so the design point's blocks come to 23.0 MB a frame slot (§2.86).
 
 **MEASURED 2026-09-23** — Two Continents, `scenarios/tascene-parity.json` (terrain, units) and
 `feat-forest` (features), 1024 × 768, `ss=2`, the world A/B read off the target

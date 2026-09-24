@@ -1254,11 +1254,11 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
            `total` sizes the vertex allocation and the memcpy that fills it, and
            this file's rule -- the one every pass here repeats -- is that a bound
            living in the file that produced the number is a bound only while both
-           files are read together. TAGPU_FX_MAXV is the gather's MAXFXV, shared
-           through tagpu_fx.h so the two cannot drift. */
-        if (h.n[b] < 0 || h.n[b] > TAGPU_FX_MAXV) {
+           files are read together. TAGPU_FX_MAXV_OF is the gather's own cap,
+           shared through tagpu_fx.h so the two cannot drift. */
+        if (h.n[b] < 0 || h.n[b] > TAGPU_FX_MAXV_OF(b)) {
             plog(d, "fx: bucket %d reports %d vertices, outside 0..%d - nothing drawn",
-                 b, h.n[b], TAGPU_FX_MAXV);
+                 b, h.n[b], TAGPU_FX_MAXV_OF(b));
             return 0;
         }
         total += h.n[b];

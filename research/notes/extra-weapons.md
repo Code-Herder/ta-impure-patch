@@ -808,8 +808,8 @@ what removed the obstacle on 2026-09-02.
 
 Every multiplayer assertion (7 remote fire packets, 8/9 the unit-CRC handshake, 10
 `AutoAim` ownership, 12 give-unit, 15 unarmed peers) needs two `tacli` instances in
-one TCP/IP game over loopback. **That game now runs**: `tools/mp_lobby.sh <host>
-<join> [map]` drives both instances from the main menu into one live game in a
+one TCP/IP game over loopback. **That game now runs**: `tools/mp_lobby.sh [--map <map>]
+<host> <join>…` drives the instances from the main menu into one live game in a
 single command, and the assertions above are answered from it. The history below is
 kept because the two dead ends in it are expensive to re-derive.
 

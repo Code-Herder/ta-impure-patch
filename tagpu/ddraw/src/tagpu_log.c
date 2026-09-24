@@ -397,6 +397,8 @@ void tagpu_log_init(void)
 
 void tagpu_log_detaching(void) { InterlockedExchange(&s_detach, 1); }
 
+const char* tagpu_log_dir(void) { return s_live ? s_dir : ""; }
+
 /* At detach ExitProcess has already killed every other thread, and one killed inside put()
    left s_cs owned by a dead thread: waiting on it would hang the exit (Windows terminates
    the process there, Wine grants it over half-updated state). So from detach on, a line

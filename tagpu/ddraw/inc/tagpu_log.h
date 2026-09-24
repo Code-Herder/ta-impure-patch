@@ -58,6 +58,11 @@ void tagpu_log_init(void);
 /* DllMain, DLL_PROCESS_DETACH, first: from here a held lock is an orphan (EXIT above). */
 void tagpu_log_detaching(void);
 
+/* `log\` with its trailing backslash, or "" when this process does not own it. For a file
+   that is not a log stream -- the startup failure report -- which the sink neither counts
+   nor deletes. */
+const char* tagpu_log_dir(void);
+
 /* One line to TLOG_MAIN; the sink adds the line ending. Longer than 2 KB is cut and marked. */
 void tagpu_log(const char* line);
 void tagpu_logf(const char* fmt, ...);

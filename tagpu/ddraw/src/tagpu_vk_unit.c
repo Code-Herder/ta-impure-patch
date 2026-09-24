@@ -48,9 +48,9 @@
                           the reference device's 64-byte alignment.
 
       Both grow to the frame's own size and are given back the moment a frame
-      hands nothing over -- §2.28's rule. AT THE DESIGN POINT, 10 241 units
+      hands nothing over -- §2.28's rule. AT THE DESIGN POINT, 15 001 units
       (TAGPU_PK_DESIGN_SLOTS) all posed and on screen at stock's worst model,
-      that is 20.6 MB of pose and 15.7 MB of blocks per frame slot, times the
+      that is 30.2 MB of pose and 23.0 MB of blocks per frame slot, times the
       slot count in address space. Only a frame that large pays it.
 
    3. PER-TYPE VERTEX BUFFERS, AND A SERIAL RATHER THAN A POINTER. Every unit

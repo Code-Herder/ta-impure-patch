@@ -3484,10 +3484,11 @@ own terrain blit before our terrain pass had taken it back. The rect now widens 
 game thread has latched as ours. [GPU status](gpu-status.html) §2.3b. **The 512-posed-unit cap is
 CLOSED, 2026-09-23**: past it the unit pass drew no bodies at all (`500v500` zoomed out). The poses
 are one storage buffer a frame now, and every cap that scales with the unit count is grown to the
-frame or fixed at the design point of 10 players × 1024 units (`TAGPU_PK_DESIGN_SLOTS`, asserted at
+frame or fixed at the design point, 10 players × 1500 units since the TADR port's landing 2 (`TAGPU_PK_DESIGN_SLOTS`, asserted at
 compile time): 610 posed units drawn on `500v500` where `main` drew none, and 0 px against `main` on
-`selbox-facings`. [GPU status](gpu-status.html) §2.86. Not covered: nothing ran past stock's 5 001
-slots, and frame time at 10 000 units is unmeasured. **Unit bodies over the effects, and cargo over
+`selbox-facings`. [GPU status](gpu-status.html) §2.86. Past stock's 5 001 slots it has run since:
+6000 units in 15 001 slots in the port's tier-1 battle ([§2.6b](gpu-status.html)). Not covered:
+frame time at 10 000 units and more. **Unit bodies over the effects, and cargo over
 its transport, are CLOSED, 2026-09-23**: a negated stage test drew every unit body after the
 effects pass (the nanolathe spray vanished over a factory's pad), and a carried unit sorted as
 though level with its transport. The body stage is the body stage again, and cargo takes the
@@ -3709,6 +3710,31 @@ The plan is [BAR camera & full-colour Classic](bar-camera-port.html). Both halve
 | G20b — the mirror: `edge` (`mirror` or `black`), off-map terrain cells and the map's own features, in the lab's tone | ○ planned (after G20c) | the off-map strip is the flipped on-map strip through the tone, and it A/Bs against the lab |
 | G20c — the base atlas and Classic onto the full-colour shaders (the plan's 2a + 2b) | ◐ **built 2026-09-23** (track B, on its worktree branch; not landed) — [GPU status](gpu-status.html) §2.88: 2a is byte-identical to the build before on every pass, both presets, Gamma 12 and 16; 2b's old-against-new Classic is measured per pass (the move is the grey band and the units' face shade), the lab's new parity pair is recorded ([renderers](renderers.html) §1), and the side-by-side PNGs are with the owner | Classic++ 0 px after the base atlas. The old and new Classic measured side by side, the new baseline recorded, and the owner has looked. **Open: the owner's look** |
 | G20d — Gamma once at the end, and the 8bpp path deleted (2c + 2d) | ◐ **built 2026-09-23** (track B, not landed) — §2.3f and §2.88: at Gamma 12 2c is byte-identical to 2b everywhere; a live `+gamma 15` reaches the whole world on the next frame with nothing restored (95.8 % exact to the engine's curve, ±1 elsewhere); only the Gamma moves the palette in play (writer survey + soak). 2d: terrain, units and features byte-identical to 2c in both presets (18 of 18 captures: Gamma 12 with and without fog, Gamma 16 with it); the effects 0 px on the two scenes the runs shared (Classic++ moves 8 near-black texels on one of them, a position and not a colour); the markers byte-identical off the presented window; the lab's Classic byte-identical to 2b; R8 atlases, SHD texture, fog table and the packet's fog-shade field gone (1980 to 1985 functions against the base), 70.6 MiB of atlases on Two Continents, down from 88.3 at 2c. **Not covered**: the fallback path (no world target) shows factor 1.0; no engine A/B of the units at a factor other than 1.0; the effects' exit rests on two matched scenes, not a paused-tick A/B; the markers' on one fixture with no health bar, order marker or band box | 0 px at Gamma 12 in both presets; no repaint on a Gamma change; R8 atlases, SHD texture and fog table gone |
+
+## The TADR port — raised ceilings (planned 2026-09-23)
+
+TADR's engine features, brought in as our own code: the plans live in the wiki's
+[TADR port](tadr-port/overview.html) section, one page per feature group. Group A raises the
+engine's limits over five landings ([the plan](tadr-port/raised-limits.html)); the owner decided
+every choice on 2026-09-23. The standing rules: the same build on every peer, fail closed with a
+report, no runtime opt-out, and stock behaviour exact below every raised limit wherever it can be
+kept (the flying pieces' byte ring is the one place it cannot).
+
+| Gate | Status | Result |
+|---|---|---|
+| A — Raised ceilings | ● **done, 2026-09-24** — [the plan](tadr-port/raised-limits.html) | **Exit:** ten players at 1500 units each in one network game, every raised pool past its stock cap on every peer, and the peers agreeing when paused. Landing 1 raised the four effect pools and built the module, the failure report and the stock-limits build; landing 2 raised units to 1500 a player (default and ceiling), clamped both `maxunits` keys and the host's limit, closed the restriction menu's hidden 101-per-type cap (Cancel's), raised the pathfinder's budget and moved the render design point to 15 001, proved by a four-player skirmish of 6000 units; landing 3 raised the particle layers to 20 480 and their pool to 204 800, which the same battle reaches 13 529 of in one layer, and sized our particle table and effect buckets to follow ([gpu-status §2.6b](gpu-status.html)); landing 4 made the engine's simultaneous sounds an `impure.cfg` key held to the 32 its table tracks (TADR's 128 would play sounds untracked) and raised the unit bake's shared scratch frame to 1280², whose four writers still never compare with it; landing 5 put ten players at 1500 in one network game on Town & Country: 15 001 slots and every raised pool past its stock cap on every peer, 30 ticks a second on all ten, and after three minutes of fighting the same 7307 units on every peer, 95.8 % at identical positions and the moving rest within 40 ticks of their own travel of their owner. **Not covered:** a bound on the composite scratch frame's four writers (the owner's decision), how far a remote unit lags its owner at stock's 500 a player, and how the game thread's frame at 6000 units splits between the engine and our publisher |
+
+## The stock engine's own defects (2026-09-23)
+
+Two defects of the retail image itself, found by the camera work's audit of every eye reader and
+patched in `tagpu_patches.c` on every launch, with no switch ([gpu-status](gpu-status.html) §2.6c).
+The register is [binary patches](binary-patches.html) §"Stock engine defects we patch", and the
+engine map has the disassembly.
+
+| Defect | Status | Result |
+|---|---|---|
+| `DrawGameScreen`'s unit sort writes past its buffer (`0x469807`) | ● done 2026-09-23 | the append is bounded at the allocation's end. Before: 82 unit pointers past the end on every frame at zoom 0.5 with `vpwide`. After: none, and 0 px from stock at 1×. A per-row bound was built first and dropped, because it erased 7 066 px that stock draws |
+| `GetGridPosFeature 0x421E60` reads a NULL plot | ● done 2026-09-23 | a NULL plot answers "no feature". Stock reaches it on a map shorter than the viewport plus 128 px, where the camera clamp has no valid eye [INFERRED]; no stock skirmish map is that short at retail resolutions, and on Lava Run at 1920×1440 the engine's terrain pass faulted first [MEASURED]. The resurrect order's lookup at `0x40514A` is not audited. The access violation at `0x421E64` reproduced with our pointer clamp off and is gone with the guard |
 
 ## Shipping — the build people can download (2026-09-08)
 

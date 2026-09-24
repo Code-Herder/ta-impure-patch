@@ -136,17 +136,17 @@
    triangles instead, with the draw offsets computed at render. */
 /* Sized for tagpu_order.c's MAXORD records at the design point; an overflow
    loses markers and is counted, never written past the end. */
-#define MAXORDT      24000                   /* order triangle verts (dots)  */
-#define MAXORDL      24000                   /* order line verts (2 per line)*/
+#define MAXORDT      36000                   /* order triangle verts (dots)  */
+#define MAXORDL      36000                   /* order line verts (2 per line)*/
 /* Text quads: the ShowRanges labels (up to twelve per SELECTED unit with the
-   toggle on) and one group digit per watched unit, in ONE bucket — 800 quads,
-   134 KB. The order gather runs first, so a frame that overruns this loses the
+   toggle on) and one group digit per watched unit, in ONE bucket — 2 400 quads,
+   460 KB. The order gather runs first, so a frame that overruns this loses the
    digits rather than the labels; `s_xover` counts it and `mark: … over=N` says
    so. That ordering is deliberate (it is the engine's own draw order) but it is
    the failure mode to know: ShowRanges over a large selection is the only thing
-   that can reach the cap, and it costs the digits first. 1 600 quads: a digit
-   for each of a design-point player's 1 024 units, and the labels besides. */
-#define MAXORDX      9600                    /* text verts (6 per quad)      */
+   that can reach the cap, and it costs the digits first. The size is a digit
+   for each of a design-point player's 1 500 units, and the labels besides. */
+#define MAXORDX      14400                   /* text verts (6 per quad)      */
 
 static void flog(const char* s)
 {

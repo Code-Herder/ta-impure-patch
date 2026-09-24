@@ -159,7 +159,7 @@ unit names by scanning the live definition table. This design follows its recipe
   what the engine calls it; with no catalogue the author's spelling is passed through
   untouched, because inventing a case would be inventing a name.
 - Per-player unit counts are checked after expansion: over `setup.unit_limit` is an
-  **error**, over TA's stock cap of 250 with no limit set is a **warning** (the engine
+  **error**, over the default cap of 1500 with no limit set is a **warning** (the engine
   would silently drop the rest).
 
 ## Order vocabulary
@@ -324,15 +324,17 @@ Every call is `__stdcall` and every address is from the merged community symbol 
 | commander-death gate | `ActiveCommanderDeath` | `main+0x37EF6` | `0x486688` compares it against zero and only then calls `UNITS_KillAllForPlayer`. [VERIFIED, binary] |
 | apply point | `Game_MainLoopTick` detour | `0x4969D2` | See *The apply point* below. |
 | map extents | `MapWidth/Height` | `main+0x14223`/`0x14227` | World units. Bounds-checking source; `FeatureMapSizeX/Y` (`0x14233`/`0x14237`) is the same map in tiles. |
-| per-player cap | `MaxUnitNumberPerPlayer` | `main+0x37EEC` | Reads **250** in stock skirmish, and **500** after `setup.unit_limit: 500` (phase D writes it to `totala.ini`; the array grows with it, `array_slots` 2500 -> 5000). **500 is the CEILING, not an example** — see below. `ActualUnitLimit` (`0x37EEA`) reads 0 either way and is not written. |
+| per-player cap | `MaxUnitNumberPerPlayer` | `main+0x37EEC` | Whatever `setup.unit_limit` asks within **[20, 1500]** (phase D writes it to `totala.ini`), and **1500** when it is unset; the unit array is `10 · cap + 1` slots. Under stock limits the default is 250 and the ceiling 500 — see below. `ActualUnitLimit` (`0x37EEA`) reads 0 in single player and is not written. |
 | loaded map | `GameingState.TNTFile` | `*(main+0x391E9) + 0x204` | The map the engine really has, `"Maps\Two Continents.TNT"`. TA falls back silently on a `SkirmishMap` it does not know, so this is the only honest answer [VERIFIED live, tamem.h:632,811]. |
 | player resources | `PlayerStruct[10]`, stride `0x14B` | `main+0x1B63` | `fCurrentEnergy +0x8C`, `fCurrentMetal +0x98`, `fMaxEnergyStorage +0xA4`, `fMaxMetalStorage +0xA8` — all confirmed against a live read, and the stride with them (slot 1 at `+0x1CAE`). Writable, but not *settable* from the apply point: see the phase C notes. Set them **at launch** instead, `Player<N>Metal`/`Energy` in the skirmish registry key (phase D). |
 
-### `UnitLimit` is clamped to 500, and asking for more is silent
+### `UnitLimit` is clamped, to 1500 under this repo's DLL and 500 under stock
 
 `0x491653` reads `UnitLimit` out of `totala.ini` with a default of `0xFA` (250) and
 then clamps it **before** storing `MaxUnitNumberPerPlayer` [BINARY-VERIFIED
-2026-09-10, `objdump` of the pristine build]:
+2026-09-10, `objdump` of the pristine build]. This repo's `ddraw.dll` rewrites the
+default and both `0x1f4` operands to 1500 at startup (`tagpu_limits.h`, the TADR
+port's landing 2); the floor stays 20. The stock code:
 
 ```
 491653: call 0x49f5a0              ; GetPrivateProfileIntA("Preferences", "UnitLimit", 250, "<exe dir>\totala.ini")
@@ -349,32 +351,29 @@ then clamps it **before** storing `MaxUnitNumberPerPlayer` [BINARY-VERIFIED
 49168b: mov  WORD PTR [ecx+0x37eec], ax
 ```
 
-So **the per-player cap can never exceed 500**, whatever the file says. This is a
-cap per *player*, not per game: four players hold 2000 units between them, and the
-index blocks confirm it — with the cap at 500 a fresh skirmish hands out idx 1 to
-player 0, **501** to player 1 and **1001** to player 2 [MEASURED live 2026-09-10,
-`tacli roster`].
+So **the per-player cap can never exceed the ceiling**, whatever the file says, and
+asking for more is silent: the file's value is reported and the ceiling is what the
+game gets. The schema is therefore bounded by `SCN_MAX_LIMIT = 1500`, and an
+over-limit file is refused at `scenario validate` time rather than after a launch.
+Under `ddraw-stocklimits.dll` (`--keep-dll`) the ceiling is 500 again and the schema
+does not know it.
 
-Two things followed from this being written down as `[20, 1500]` until 2026-09-10:
+This is a cap per *player*, not per game: four players at 500 hold 2000 units between
+them, and the index blocks confirm it — with the cap at 500 a fresh skirmish hands out
+idx 1 to player 0, **501** to player 1 and **1001** to player 2 [MEASURED live
+2026-09-10, `tacli roster`]. `scenarios/ball10.json` holds 500 a player;
+`scenarios/limits-tier1.json` holds 1500.
 
-* `tacli`'s scenario schema accepted `setup.unit_limit: 1500`, reported "unit limit
-  1500" at launch, and the fork then refused the apply with *"player 0 would end up
-  with 600 units and this game's cap is 500"* — **after** the game had launched and
-  the map had loaded, rather than at `scenario validate` time. The schema is now
-  bounded by `SCN_MAX_LIMIT = 500`, so the existing per-owner check catches it with
-  no game at all.
-* **`scenarios/ball10.json` asked for 625 units on each of four players and never
-  had them.** It declared 2500 kbots against an engine ceiling of 2000; its
-  `on_error: "skip"` is why that was never loud. Any measurement taken on it — it is
-  the scale fixture for sub-tick pose interpolation — was taken at an unknown count
-  at or below 2000, not at 2500. With the schema bounded, `scenario validate` and
-  `load` both **refuse** the old file outright (`die`, not a warning), so the fixture
-  was re-cut on 2026-09-11 to 500 per player (240/160/100, the same 12:8:5 mix),
-  which is the most the engine will seat. If a smaller scale is wanted that is a
-  one-number edit; larger is not available.
+The count the cap is compared against is *live units*, so `clear_existing: false`
+leaves each player's commander occupying one of the cap.
 
-Note also that the count the cap is compared against is *live units*, so
-`clear_existing: false` leaves each player's commander occupying one of the 500.
+**The `maxunits` keys.** A saved game's `[Summary]` (`0x432610`, writing
+`MaxUnitNumberPerPlayer`) and a map's `.ota` `[GlobalHeader]` (`0x435DA0`, default
+200, writing the array's own count `main+0x37EE6` directly) carry a `maxunits` key
+that stock stores unclamped. Both are clamped to [20, 1500] here. A skirmish and a
+network game overwrite the map's value at game start (`0x4971C7`: from
+`MaxUnitNumberPerPlayer`, or in a network game from the host's player record at
+`0x4973B5`); a campaign mission plays with it.
 
 ### The apply point
 

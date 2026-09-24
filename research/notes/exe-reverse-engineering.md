@@ -161,9 +161,10 @@ are that patch's business, not retail's. (`AISearchMapEntries` is not examined h
 
 ### The per-player unit cap — `0x49163F..0x49168B` — mapped by us [VERIFIED 2026-09-11, objdump of the pristine build]
 
-At game start the engine reads the cap out of `totala.ini` and clamps it before
-writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, and
-`tools/tacli` writes the file before launch for exactly that reason:
+At process start the engine reads the cap out of `totala.ini` and clamps it before
+writing `MaxUnitNumberPerPlayer`. The read is in `0x491200`, which WinMain calls once
+(`0x49EA62`), so the value cannot be raised in a running process, and `tools/tacli` writes
+the file before launch for exactly that reason:
 
 ```
 49163f: push 0xfa                        ; default 250
@@ -185,24 +186,323 @@ writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, 
 49168b: mov  WORD PTR [ecx+0x37eec], ax
 ```
 
-* **The ceiling is 500 per player**, whatever the file says; four players hold 2000
+* **The stock ceiling is 500 per player**, whatever the file says; four players hold 2000
   between them. Measured live 2026-09-10 with `tacli roster`: at the cap of 500 a
   fresh skirmish hands out idx 1 to player 0, **501** to player 1, **1001** to player 2.
 * The store is a WORD, so the field is an `unsigned short` (where the 6553 figure
-  comes from), but no retail path writes more than 500 into it. Raising the cap means
+  comes from). This path writes at most 500; a saved game's `[Summary]` `maxunits` is stored
+  into it unclamped (`0x432646`, below). Raising the cap means
   patching **both** immediates, the compare and the stored value — the community's
   "two offsets, set identically".
 * `ActualUnitLimit` (`+0x37EEA`) is not touched on this path.
-* **The renderer is sized past this cap**, for a patch that raises it to 1024: the unit
-  array's `10 × cap + 1` slots become 10 241 (`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`),
-  and every render-side table that scales with the unit count is grown to the frame or
-  asserted against that number at compile time — [gpu-status](gpu-status.html) §2.86.
-* What this cost before it was written down: `tools/tacli`'s scenario schema accepted
-  `unit_limit: 1500` from the old `[20, 1500]` line above and a 600-unit scenario
-  failed in the fork after launch instead of at validate time; the schema is now bounded
-  at `SCN_MAX_LIMIT = 500`, and `research/notes/scenario-format.md` carries the
-  scenario-side consequences (`scenarios/ball10.json` asks 625 per player and has never
-  had them).
+* **Under the raised limits the ceiling and the default are 1500** (`tagpu_limits.h`, the TADR
+  port's landing 2): the default operand `0x491640`, the compare `0x491659` and the clamp-to
+  `0x491666` all become `0x5DC`; the floor stays. MEASURED 2026-09-23: with no `UnitLimit` key,
+  `+0x37EEC` reads 1500 at the menu; in a four-player skirmish `+0x37EEC` = `+0x37EE6` = 1500 and
+  the slot count `main+0x14351` = **15 001**, and 6000 units were created without a refusal.
+  The renderer's design point is exactly that game (`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`;
+  [gpu-status](gpu-status.html) §2.86 and §2.6b).
+
+**Who writes the array's count, `main+0x37EE6` [DISASSEMBLED 2026-09-23].** It is the field the slot
+count `10·N + 1` is computed from (`0x4854EF`, a 16-bit `imul` at `0x4854EA` that wraps past 6553,
+after which `0x485502` allocates the array too small). These places write it:
+
+- `0x4912F5`, in the process init `0x491200`, copies `+0x37EEC` into it (and `0x491308` on into
+  `+0x37EEA`). It runs *before* that function's ini read at `0x491653`, so it copies whatever
+  `+0x37EEC` held before the read; the game start below is what carries the configured value.
+- **Game start, `0x4971C7`, dispatches on `0x435100` (`[ecx]` of `main+0x391E9`):** mode 2 (skirmish)
+  copies `+0x37EEC` at `0x4973CD`; mode 3 (network) copies it at `0x4971F8`, reloads the map through
+  `0x4972D6` → `0x435A20` → `0x435DA0` (which writes the `.ota` value, next item), and then, for
+  the seat `0x456850` returns (the host <span class="pill pill-warn">INFERRED</span>), overwrites
+  it at `0x4973B5` with the word at `+0xA5` of that player's record (`PlayerStruct + 0x27`, the
+  pointer at `main + 0x1B8A + i·0x14B`). When `0x456850` returns 10 (`0x4972E2`) that overwrite is
+  skipped and the map's value stays. Mode 1 (campaign, `0x49745C`) does not write it at all.
+- `0x436037`, inside `0x435DA0`, the map loader: the map's `.ota` `[GlobalHeader]` key `maxunits`
+  (`0x4C46C0`, default 200), stored unclamped. A campaign mission plays with this value; a skirmish
+  overwrites it at game start. Every retail map sets 200 to 400 (checked over every `.ota` in the
+  retail archives, 2026-09-23).
+- **Where the host's word comes from.** On the host, `+0xA5` is the battleroom's MAXUNITS slider,
+  whose maximum is `ActualUnitLimit − 20` (`+0x37EEA`, read at `0x44A2B2`). `ActualUnitLimit` is
+  written from `+0x37EEC` by the process init (`0x491308`) and by the battleroom at `0x449C42` when
+  the local record's `+0x97` bit 0 is set; a DirectPlay lobby launch writes it, and the record's
+  `+0xA5`, from `0x512D6C` unclamped (`0x449D87`, `0x449D9B`). On a client the record arrives over
+  the network.
+- **The raised limits hold every writer to [20, 1500]:** the game-start copies take the clamped
+  `+0x37EEC`, and three stores go through a clamp stub: `0x436037`; `0x432646` in `0x432610`, which
+  reads `maxunits` out of a saved game's `[Summary]` (called from `0x497B29` when the game's
+  `main+0x38D6B` TDF has no `BetweenMissions` key) into `+0x37EEC`; and the host's word at
+  `0x4973B5`, whose read at `0x4973AE` becomes `movzx eax, word [eax+0xA5]` (the same seven bytes)
+  so that the stub sees the whole value. Each 7-byte `mov word [ecx+off],ax` becomes a `call` to a
+  stub that clamps `eax` and stores it, and two NOPs. `eax` and the flags are dead after all three.
+
+**A type's own cap, `UnitDef+0x15A` [DISASSEMBLED 2026-09-23].** The unit constructor `0x485F50`
+(`UNITS_CreateUnit`, `(player, type, …)`) checks it before anything else: a type whose `def+0x241`
+bit 23 is clear is refused outright (`0x485FAA`, `je 0x4861BD`, return 0); when the bit is set and
+`def+0x15A` is not −1, it counts the player's units of that type (`unit+0xA6`, over the
+player's range at `PlayerStruct+0x67..+0x6B`, stride `0x118`) and refuses the unit at the cap
+(`0x485FE4`). The load sets `def+0x15A` = −1 (`0x42B169`); the battleroom's restriction store
+(`main+0x2A30`) sets both in `0x46E160` (called from `0x46CA60`; that this runs at game start is
+<span class="pill pill-warn">INFERRED</span>): the bit when the type's record has `+0x18` set (by
+`0x46E4D0`, cleared by `0x46E450`) and `+0x1A` set, the cap from the record's `+0x1C`. The
+restriction menu keeps each type as 0..100, **101 meaning no limit** (`0x44CAFD`, operand
+`0x44CAFE`: when the per-type lookup `0x46E330` answers −1 from the record's `+0x1C`, the menu
+holds 101); a slider moved past 100 is stored as −1 and shown as "No Limit"
+(`0x44BEC0` → `0x44BF47`), but **Cancel (`0x44C6FC`) writes the values saved when the menu opened
+back as they are** (`0x44C750` → `0x46E550`), 101 included, so after a cancelled menu every
+enabled, unlimited type is capped at 101. The raised
+limits write the unit limit over that sentinel, as TADR does. A default network game never reaches
+it: landing 1's two peers each created 450 of one type through `0x485F50` with none refused.
+**Reset (`0x44C5EB`) is a second, visible path:** it writes 100 into every enabled type
+(`mov ebx,0x64` at `0x44C62D`, stored through `0x46E550` at `0x44C69B`), and the menu shows 100,
+so each type then stops at 100 units in a 1500-unit game. That one is stock's and is left alone:
+the player sees the number they chose.
+
+**The pathfinder's budget [DISASSEMBLED 2026-09-23].** `0x40EAD3 mov dword [esi+0x48],0x535` (1333,
+operand `0x40EAD6`), the only `0x535` in `.text`, in the pathfinder's per-game init `0x40E9E0`
+(called from `0x44F6B3`; it sizes its bitmaps from the map, fills `[pf+0x79+4i]` from each
+player's record, `[main+0x1A7F+i·0x14B]`, and stores `+0x54` = `0x18000`). **Its one reader is the
+per-tick `0x40EB70`** (called from `0x464F92`): at `0x40EB91` it divides the budget by the u16 at
+`main+0x2A3C`, adds that to each active player's credit at `[pf+0xA1+4i]`, and the searches spend
+those credits. So it is a budget a tick shared among the players, not one per search. Every 150
+calls (`0x511A38`) the same function rewrites a ten-dword table at `0x5119E8` (stride 4, to
+`0x511A10`): a multiple of `+0x54` chosen by each player's counter at `0x511A10` over the
+per-player count `main+0x1434F`, and the counter is reset. The budget is an `int` that
+nothing sizes or indexes, so raising it costs time, not memory. The raised limits make it 66 650,
+TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
+outside the apply frame.
+
+## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23]
+
+Two places where the retail 3.1 image writes or reads memory it does not own. `tagpu_patches.c`
+(`patch_engine_defects`) patches both at every attach: `ddraw.dll` is a static import of the exe,
+so `DllMain` runs before the exe's entry point. The two are independent. Each is skipped, with its
+reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its stub
+cannot be allocated, or its page cannot be made writable. Each patch is the identity on every
+input the stock code handles safely. [Binary patches](binary-patches.html) §"Stock engine defects
+we patch" is the one-row-per-bug register. The disassembly is `objdump -d -M intel` of
+`pristine/TotalA.exe.pristine`, and the callers come from an E8/E9 rel32 scan of `.text`. The
+measurements are `tacli` instances on Two Continents at 1024×768 with
+`scenarios/sort-row-overflow.json` (150 Peewees in one line, every foot at the same world z) and
+on Lava Run at 1920×1440. Each compares against a build without the patches.
+
+### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
+
+**The buffers.** `DrawGameScreen` holds `edi = main+0x141FB` through its unit binning and both
+sweeps. LoadMap sizes everything through `ebp` = the same address, once per map, and is the only
+writer of the two dimensions (a displacement scan plus the base-register scan of
+[resolution](resolution.html) §3.2):
+
+| field | what | set at |
+|---|---|---|
+| `[edi+0x00]` = `main+0x141FB` | SORT_UNIT_LIST: `rows × cap` unit pointers | `MEM_Alloc 0x4D83B0` of `rows·cap·4` bytes (tag `0x508B28`) at `0x483D45`, stored at `0x483D4A` |
+| `[edi+0x04]` = `main+0x141FF` | SORT_INDICES: one write cursor per row | `rows·4` bytes (tag `0x508B18`) at `0x483D5C`, stored at `0x483D6F` |
+| `[edi+0x08]` = `main+0x14203` | SORT_LINE_COUNT: one `u16` per row | `rows·2` bytes (tag `0x508B08`) at `0x483D72`, stored at `0x483D7A` |
+| `[edi+0x50]` = `main+0x1424B` | `cap` = view width in 16-px cells + 12 | `0x483D2A`, `+0xC` at `0x483D30`, stored at `0x483D42` |
+| `[edi+0x54]` = `main+0x1424F` | `rows` = view height in 16-px cells + 32 | `0x483D27`, `+0x20` at `0x483D2D`, stored at `0x483D33` |
+
+At 1024×768 that is `cap` 68, `rows` 76 and a 20 672-byte list [MEASURED].
+
+**Every frame.** `0x46971B..0x46973D` points `cursor[r]` at `base + r·cap·4` (`0x46972A`) and zeroes
+`count[r]` (`0x469731`) for every row. The binning loop `0x4697CF..0x469840` then walks HotUnits
+(`u16` unit indices at `main+0x1435F`, `NumHotUnits` at `main+0x14367`, filled by the cull
+`0x48BAE0`) and files each unit under the 16-px row of its feet:
+
+```
+4697ed  movsx eax, word [unit+0x74]    ; the feet's world z
+4697f2  sub   eax, [main+0x14323]      ; - eyeY; then sar 4, add 0x10
+469800  js    0x46982c                 ; row < 0: not filed
+469802  cmp   eax, [edi+0x54]
+469805  jge   0x46982c                 ; row >= rows: not filed
+469807  mov   edx, [edi+0x4]           ; SORT_INDICES
+46980a  lea   ecx, [edx+eax*4]         ; &cursor[row]
+46980d  mov   edx, [edi+0x8]           ; SORT_LINE_COUNT
+469810  inc   word [edx+eax*2]         ; count[row]++
+469814  lea   eax, [edx+eax*2]
+469817  mov   eax, [ecx]
+469819  test  eax, eax
+46981b  je    0x469826                 ; a NULL cursor skips the store
+46981d  mov   [eax], ebp               ; *cursor[row] = unit
+46981f  mov   eax, [ecx]
+469821  add   eax, 4
+469824  mov   [ecx], eax               ; cursor[row] += 4
+469826  mov   esi, ds:0x511de8         ; the join
+```
+
+**Nothing compares `count[row]` with anything**, and the two readers do not either: site A's loop
+(`0x4699A8`, ground units, the swept rows) and site B's (`0x469B54`, everything else, all rows)
+each start at `base + row·cap·4` and walk `count[row]` slots (§"The sweep order inside
+`DrawGameScreen`", below). So:
+
+- **A row holding more than `cap` units runs on into the next row's slots.** That is stock
+  behaviour and it is harmless: every slot a row counts was written this frame, by that row or by
+  the one it ran into. When the next row has units of its own, the two rows write the same slots
+  and one unit is drawn twice and another not at all. Beside an empty row, the full row is drawn
+  whole. MEASURED without the patch at 1×: the fixture's line at eye (1616, 1206) puts 116 hot
+  units in row 40 against a `cap` of 68, and the engine draws the whole line.
+- **A row near the end runs past the end of SORT_UNIT_LIST.** The write lands in whatever the
+  allocator put next, and what it writes is unit pointers. The last 16 rows are the margin below
+  the viewport (`rows` = 16 above + the view + 16 below). At stock 1× a unit is filed there only
+  when its feet are below the view and its box still reaches into it. Past the end of the list
+  therefore takes more than `cap` such units in one of the last rows, or a run-on long enough to
+  reach them. [INFERRED from the cull and the row formula; not reproduced at stock 1×.]
+- **Our build reaches it with an ordinary crowd.** At zoom < 1 `vpwide` widens the rect the cull
+  tests (gpu-status §2.3b), but `cap` and `rows` stay the 1× values LoadMap computed. The rows
+  below the 1× view then hold every unit the wider view shows. MEASURED without the patch, the
+  eye held at (1552, 650) so that the line sits in row 75 (the last) and the scripted zoom at 0.5:
+  150 hot units are filed in row 75 against a `cap` of 68. That writes **82 pointers, 328 bytes,
+  past the end of the list on every frame**, over the next heap block's header (the dump at the
+  end address reads unit pointers where it read `5B 00 00 00 26 00 75 00 …` before). Nothing
+  faulted: the simulation kept ticking and the level exited cleanly to the main menu. It is a
+  silent corruption of memory the engine owns elsewhere.
+
+**The patch bounds the append by the allocation, not by the row.** A `jmp` at `0x469807` to a stub
+of ours, the rest of the 31-byte block NOPped up to the join:
+
+```
+mov   edx,[edi+0x54]      ; rows
+sub   edx,eax             ; rows - row, at least 1 (0x469805)
+imul  edx,[edi+0x50]      ; the slots from this row's start to the end of the list
+mov   ecx,[edi+0x8]
+lea   ecx,[ecx+eax*2]     ; &count[row]
+movzx esi,word [ecx]
+cmp   esi,edx
+jge   join                ; the next slot is past the end: not filed
+inc   word [ecx]
+mov   edx,[edi+0x4]
+mov   ecx,[edx+eax*4]     ; the row's cursor
+jecxz join                ; stock's NULL-cursor skip
+mov   [ecx],ebp
+add   dword [edx+eax*4],4
+join: jmp 0x469826
+```
+
+- **The invariant:** `count[row] ≤ (rows − row)·cap` after every append. The cursor and the count
+  start together each frame and move together only here, so the slot written is
+  `base + (row·cap + count)·4 < base + rows·cap·4`. Every slot a reader walks is inside the list
+  and was written this frame.
+- **What it rests on:** `[edi+0x50]`/`[edi+0x54]` are the values the allocation was made with.
+  LoadMap is their only writer and nothing of ours writes them. `eax`, `ecx`, `edx` and `esi` are
+  dead at `0x469826`, which reloads `esi`; `0x46982C` reloads `eax` and `ecx`, and `edx` is written
+  at `0x4697D1` before its next read. No branch from outside the block lands in
+  `0x469808..0x469825`, and stock's own `0x46981B → 0x469826` is the only branch to the join [a
+  rel8/rel32 scan of `.text`].
+- **The count cannot wrap.** It is a `u16`, and the cull `0x48BAE0` files each slot of the unit
+  array (stride `0x118`, walked from `main+0x14357` to `main+0x1435B`, one `u16` index each at
+  `0x48BC6A`) at most once per call. A frame's appends to any row are therefore at most the unit
+  slots, `10 ×` the per-player cap `+ 1`, far below 65 536.
+- **What it changes:** nothing for a unit whose slot is inside the list, the run-on included. A
+  unit whose slot would be past the end is not drawn by the engine's sweep that frame.
+- **Why not the row:** a bound of `count[row] < cap` was built first and measured. It erased
+  **7 066 px** of the fixture's line at 1×: the run-on into an empty neighbour that stock draws
+  correctly.
+- **Measured with the patch:** at the same held eye and zoom 0.5, row 75 holds 68
+  (`(76 − 75)·68`), none of the 102 dwords after the list's end is a unit pointer, and the heap
+  header there is intact. At 1×, against a build without the patch: the fixture is 0 px apart in
+  the engine's own frame (the golden-source A/B of `ta-drive`'s measuring reference, three shots
+  each), and the fixture and `selbox-facings` are both 0 of 3 145 728 apart in the world unit pass
+  at `ss=2`.
+- **The simulation:** the list is read only by `DrawGameScreen`'s two draw loops, so the
+  simulation reads nothing different. The stock overwrite is the only part of this that could ever
+  reach simulation state.
+
+A raised unit cap (the TADR port's later landings) puts more units on screen and makes the stock
+overwrite easier to reach. The patch does not depend on the cap.
+
+### A NULL plot handed to `GetGridPosFeature 0x421E60`
+
+`GetGridPosFeature 0x421E60` is `stdcall(plot)`, `ret 4`. It opens with `mov ecx,[esp+4]` /
+`mov ax,[ecx+8]`, reading the plot's feature index with no test, and "no feature" is its
+`or ax,0xFFFF` at `0x421E9C`. Three functions turn a place into a plot, and each can return NULL:
+
+- `GetGridPosPLOT 0x481550` (a cell) and `0x4815A0` (a position) return NULL for a cell outside
+  `main+0x14233 × main+0x14237`.
+- `0x4815F0` (a position) returns NULL for a cell off the grid too. It also returns NULL for a cell
+  **on** the grid that holds `0xFFFE`, a multi-cell feature's non-anchor cell, when the offset to
+  the anchor in the cell's bytes `+0xB`/`+0xA` leads off the grid (`0x48164A..0x481682`). That is
+  the only way a position on the map gets a NULL plot.
+
+`0x421E60` has three callers:
+
+| call | what | tests the plot |
+|---|---|---|
+| `0x47EAE3` | a lookup on the plot `0x4815A0` returns | yes, `0x47EADA` |
+| `0x498F4F` | the hovered feature in the pointer→world function `0x498DA0` (one caller, `0x499221`), stored at `main+0x2CBC` | **no** |
+| `0x40514A` | the target lookup of the order handler `0x404DB0`, through `0x4815F0` on the order's position. The order-descriptor record at `0x4FC8A6` (file `0xFB6A6`) names that handler with the string "Resurrecting", so this is the resurrect order [INFERRED from the name] | **no** — its reachability is not audited |
+
+**How `0x498F4F` gets its plot.** `0x498DA0` turns the pointer into a world point: the viewport arm
+is `eye + clamp(pos, L, R) − L`, and the minimap arm scales the pointer by `main+0x1422B`/`+0x1422F`
+(§"The in-game mouse buttons"). `GetTPosition 0x484B50`, called at `0x498EF9`, clamps x and y to
+the map's pixel size `main+0x14223`/`+0x14227` (`0x484B5D..0x484B88`). It then searches for the
+terrain point in a window from `y & ~15` down 0x80 px (`0x484B94..0x484B9B`), plus interpolation,
+so its answer is below `(y & ~15) + 144`: up to 143 px below the point it was handed. `0x498F2E`
+stores that point's cell at `main+0x2C8E`, `0x481550` makes it a plot, and `0x498F4F` hands the
+plot over.
+
+**What keeps stock off it.** `main+0x1422B`/`+0x1422F` is not the map's size. It is the **scroll
+extent**, the map's pixel width less 32 and its height less 128, written at the level load
+(`0x4833C4`, `0x4833E0`). The engine's camera clamp `0x41C3C0` holds the eye in
+`[0, extent − view]`, the viewport arm clamps the pointer to the rect, and the minimap's click
+rect ends at `mmY + mmH − 1`. So every point `0x498DA0` produces has `y ≤ mapH − 129`, and
+GetTPosition's answer is below `(mapH − 144) + 144 = mapH`, on the map. **The 128-px bottom margin
+is exactly GetTPosition's search window, and nothing tighter protects this call.** Two Continents
+measured it: map 10752 × 12800, extent 10720 × 12672.
+
+**Where stock reaches it.** The margin holds only while `[0, extent − view]` is a range:
+
+- **A map shorter than the viewport plus 128 px.** Then `extent − view` is negative. `0x41C40D`
+  sets a negative eyeY to 0 and `0x41C42D..0x41C431` set an eyeY above `extent − view` to that
+  negative value, so successive calls alternate the eye between the two. At eyeY = 0 the
+  viewport's bottom row is past the extent. GetTPosition clamps y to `mapH − 1` and, where the
+  terrain along the bottom edge is raised, can answer up to 127 px past the map: a NULL plot.
+  [INFERRED from `0x41C40D..0x41C431` and GetTPosition; not run.] Retail's largest mode,
+  1600×1200, has a 1136-px viewport. Of the 275 stock map files only `example.tnt` (1024 px, not in
+  the skirmish list) is that short; the shortest skirmish map, Lava Run, is 1280 px tall with an
+  extent of 1152 (their TNT headers). A custom map can be, and our DLL runs any resolution. MEASURED on Lava Run at 1920×1440 (a
+  1376-px viewport) on a build without the patches: **the engine's terrain pass faults first**, on
+  the first in-play frame, in the tile copy at `0x4CBE44`, called from `0x484110` inside
+  `0x483FA0` (called at `0x468DB0`). It faulted twice with no pass armed and once with `terr.on`,
+  and Two Continents loads cleanly at the same resolution on the same build. That fault is the
+  terrain pass reading its tile map (`main+0x1428B`, indexed at `0x4840A6..0x4840AC`) and tile
+  graphics for a view past the map: a separate stock defect, which no patch here covers.
+- **The debug-level console command `Edge`** (run level 4; table entry `0x50206C`, handler
+  `0x416730`) rewrites both margins from its two arguments, 32 and 128 by default. A bottom margin
+  under 128 lets the pointer's row leave the map. [INFERRED from the arithmetic; not run.]
+- **`0x40514A`** hands over the plot `0x4815F0` returns for the order's position, and that path is
+  not audited. The guard covers it whether or not it is reachable.
+
+**Our build.** Zoom > 1 lets the eye past the stock range, and vpwide's rect at zoom < 1 lets the
+pointer past it, so both can hand `0x498DA0` a point beyond the extent. Two clamps keep it off
+this call: `zoom_tpos_guard` (`tagpu_zoom.c`, the redirect of `0x498EF9`) and vpwide's replica of
+`0x498DA0` (the redirect of `0x499221`). Both clamp the point to `[0, extent − 1]`, and **they work
+because they read the scroll extent**: a clamp to the map's own size would leave 128 px in which
+GetTPosition can answer off the map. MEASURED in experiment builds with `0x498EF9`'s clamp turned
+off, at zoom 2.0 with the eye held at the bottom of our range (eyeY 12144). Without the patch, the
+pointer on the bottom bar at (512, 760) faults at `0x421E64` reading `0x00000008`, return address
+`0x498F54`. With the patch it does not fault and the simulation keeps ticking. The cell left at
+`main+0x2C8E` is (125, 802), past the map's 800 rows, and the hovered feature reads `0xFFFF`.
+vpwide's comment records the same fault once from an edge scroll at 0.5×, before its replica
+clamped.
+
+**The patch is a prologue detour on `0x421E60`**, eight stolen bytes (`tagpu_detour_land`):
+
+```
+mov  ecx,[esp+4]
+test ecx,ecx
+jnz  +7
+or   ax,0xFFFF         ; the engine's own "no feature", as 0x421E9C
+ret  4
+mov  ax,[ecx+8]
+jmp  0x421E68
+```
+
+- **The invariant:** `0x421E60` never dereferences NULL, whichever caller hands it the plot. No
+  branch lands inside the eight stolen bytes [rel8/rel32 scan].
+- **What it changes:** nothing for a non-NULL plot. For a NULL plot stock faults, so nothing the
+  simulation reads differs except where stock would have crashed. `0x40514A` is on the resurrect
+  order's path [INFERRED], so in a network game with a peer on stock, the stock peer crashes where
+  the patched one goes on.
+- **What it leaves:** the off-map cell `0x498F2E` stores at `main+0x2C8E` is untouched, as it is in
+  stock under `Edge`. Its readers are not audited here.
 
 ## Built-in cheat/console command surface
 
@@ -321,6 +621,19 @@ tick counter runs at double rate. **Two consequences.** The in-game clock is `ti
 at `gamespeed` 20 **Game Time runs at exactly 2× real time** — read off the screen:
 `00:00:16` at tick 489, `00:01:17` at tick 2319, 30.6 real seconds apart. And any tool that
 treats `main+0x38A47` as seconds×30, or as a sim-step count, is only right at `gamespeed` 10.
+
+**So a single-player fight does not reproduce run to run, even from one file** [MEASURED
+2026-09-23, `tagpu_cobtrace` on a 40-unit fight, two runs of one build]. With the sim RNG state and
+the game thread's CRT seed written at the same point of the scenario apply, and the apply landing
+on the same tick, the two runs' per-unit COB traces agreed event for event for the first 90 ticks
+(1806 events over 40 units) and then parted at the first impact: at `gamespeed` 20 the step is
+two ticks on average but follows the wall clock, so a shell's flight is cut into different steps.
+With both speed fields held at 10 in memory, the apply tick matched exactly and the traces parted
+earlier, at the first target choice, for a reason not identified. Two consequences: a COB-trace
+comparison of two builds over a whole fight measures noise, not the change, and TA's multiplayer
+does not need one, because it replicates state rather than running lockstep
+([networking-lobbies](networking-lobbies.md)). The comparison that answers "do two peers agree" is
+a paused roster on both peers of one game.
 
 **The engine's DRAW loop is neither of these rates, and it is scene-dependent.** `DrawGameScreen`
 — and with it the fog overlay `0x4848E0`, which is where `tagpu_fogwide.c` ticks — turns over as
@@ -592,7 +905,7 @@ standing instrument — not of the call graph, which stops at a function pointer
 | `main+0x14283` | `TILE_SET` `{count, pixels}` | `[ebp+0x88]` at `0x483B68` | nulled at `0x483ECA` |
 | `main+0x1421F` | fog descriptor `{buf, cols, rows, cells}` | `[ebp+0x24]` at `0x483C28` (struct `0x483C03`, buffer `0x483C96`) | `free 0x4B4F20` twice at `0x483F06`/`0x483F0F`, nulled at `0x483F1C` |
 | `main+0x1420B` | wreck records, stride `0x30`, **a fixed pool of 2048** | `0x421F20`, through `esi = main+0x141FB`: `MEM_Alloc(0x18000)` at `0x421F29`/`0x421F39`, pointer into `[esi+0x10]` at `0x421F47`, `rep stos` of `0x6000` dwords, then a doubly-linked free list threaded through every record — `0x421F5F..0x421F7E` steps `eax` by `0x30` from 0 to `0x18000` writing `u16 [rec+0x00] = i+1` (next) and `u16 [rec+0x02] = i−1` (prev), so **`0x18000 / 0x30` = 2048 records, 0..2047**; `0x421F8D` terminates the prev chain at record 0 and `0x421F94` the next chain at `+0x17FD0` = record 2047. `[esi+0x18]`/`[esi+0x1C]` (`main+0x14213`/`+0x14217`) are two live-list heads, both −1; `[esi+0x20]` (`+0x1421B`) the free head, 0 | `0x4221F1`→`0x4221F8` frees it and `0x422214` **nulls** it, inside the feature teardown, after `0x42219A`'s loop has walked both live lists calling `FreeObjectState 0x45AAA0` on each record's `+0x04` |
-| `main+0x141F7` / `+0x141F3` | projectile array / live count, stride `0x6B` | `0x499A30`: `MEM_Alloc(0x7D64)` = **300 slots**, pointer at `0x499A49`, count zeroed at `0x499A6A`; the count is rewritten by the sim at 13 sites (`0x49AF76` … `0x49DF3F`) | `0x499A80`: `MEM_Free`, nulled at `0x499A9A` |
+| `main+0x141F7` / `+0x141F3` | projectile array / live count, stride `0x6B` | `0x499A30`: `MEM_Alloc(0x7D64)` = **300 slots** (the `push` operand at `0x499A32`; 3000 under the raised limits), pointer at `0x499A49`, count zeroed at `0x499A6A`; the count is rewritten by the sim at 13 sites (`0x49AF76` … `0x49DF3F`) | `0x499A80`: `MEM_Free`, nulled at `0x499A9A` |
 | `main+0x38D77` | particle layer table, 10 × `{…, begin, end}` | `0x471D90`, pointer at `0x471DCB`; each layer's vector and every object's sub-vector grow **mid-play** (`0x4732E0`) | `0x471DE0`, nulled at `0x471E97` |
 | `main+0x142DB` / `+0x142DF` / `+0x142E3` | minimap composite / fogged base / scaled map (8bpp offscreens) | the minimap build: `0x4669DA`, `0x466A05`, `0x46682E` | `0x466AA0`: `0x466AF5`, `0x466AE9`, `0x466ADD` |
 | `main+0x37E37` / `+0x37E3B` | view W / H | `0x49821D` / `0x498237` (the view-size setter), plus the fork's `tagpu_vpwide` from the render thread | — |
@@ -2953,8 +3266,9 @@ two rects with `0x4B6720` (point-in-rect *[INFERRED]*) and records which one it 
 | `0x04` | set when **bit 0 or bit 1** is — "the pointer is on one of them" | computed at `0x498ECE..0x498EE6` |
 | `0x08` | already documented elsewhere; gates the minimap branch at `0x498DD5`: while it is set the minimap rect is not consulted at all. `ui-markers.md` §4 has it as the drag/band "rect forced on" bit; the two readings are consistent | disassembly |
 
-The minimap arm scales the pointer by the minimap rect (`main+0x142E7..0x142ED`) against the map
-size (`main+0x1422B`/`+0x1422F`); the viewport arm is the `world = eye + clamp(pos, L, R) − L`
+The minimap arm scales the pointer by the minimap rect (`main+0x142E7..0x142ED`) against the
+scroll extent (`main+0x1422B`/`+0x1422F`, the map less 32 and 128 px — §"Engine defects we
+patch"); the viewport arm is the `world = eye + clamp(pos, L, R) − L`
 form already documented in `gpu-status.md` §2.3b. The tail converts the world point to a cell
 pair at `main+0x2C8E` (`>> 0x14`) and stores the **hovered feature id** as a WORD at
 `main+0x2CBC` — live: `0xFFFF` over open ground, `87` over a lab wreck.
@@ -3510,7 +3824,7 @@ boundaries; the ORDER measured live by the log lines of the frame packet's publi
 **The image, for the build rule's address ranges** (`objdump -h` of the pristine exe, 2026-09-12):
 `.text` at `0x401000` (size `0xFA92A`), `.rdata` at `0x4FC000`, `.data` at `0x501000` (file size
 `0x10A00`, its bss extending to the `.tls` at `0x52C000` — which is where `0x511DE8` the main pointer,
-`0x511DF0..0x511F80` the fx pass's 100 debris slots, `0x512344` the order descriptors, `0x51FBD0`
+`0x511DF0..0x511F80` stock's 100 flying-piece slots (unused under the raised limits, which move them into the DLL), `0x512344` the order descriptors, `0x51FBD0`
 the graphics globals and `0x5289A4` the allocator's flag byte live), `.rsrc` at `0x52D000`. So an
 engine virtual address is `0x4xxxxx` or `0x5[0-2]xxxx`, which is what `tools/thread-split-check.sh`
 looks for.
@@ -3683,15 +3997,20 @@ every publish of that tick.
 
 | array | where | how many, and who says so |
 | --- | --- | --- |
-| projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300.** `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **Both append sites refuse past 300** — `0x49B6EE` and `0x49B809`, each `cmp …,0x12C / jge` past the store — so the count is bounded by the allocation itself and no sanity cap is needed |
-| explosions | count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54` | **300.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
-| flying debris | the 100 dwords at `0x511DF0..0x511F80`; each names a system whose `+0x2C` is the piece `{node @0, turn @0x12, x @0x16, alt @0x1A, y @0x1E}` | the slot count is the address range |
-| the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **401 objects, not 400.** Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at 400 or fewer it appends, and **past 400 it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So 401 is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
+| projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **All ten append sites refuse past the cap** — each a `cmp …,0x12C / jge` past the store (`0x49B6EE`, `0x49B809` and eight more; the list is under *The raised effect pools*) — so the count is bounded by the allocation itself and no sanity cap is needed |
+| explosions | stock: count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54`; raised: the same layout in a DLL static | **300 in stock, 3000 raised.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
+| flying debris | stock: the 100 dwords at `0x511DF0..0x511F80`; raised: 1000 dwords in a DLL static. Each names a system whose `+0x2C` is the piece `{node @0, turn @0x12, x @0x16, alt @0x1A, y @0x1E}` | the slot count is the address range |
+| the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **The cap plus one: 401 in stock, 20 481 under the raised limits** (*The raised effect pools*, below). Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at the cap or fewer it appends, and **past it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So the cap plus one is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
+
+**"The draw passes only read them" is true of the arrays, not of what their fullness decides.**
+Two of the caps above gate draws from the simulation's random numbers; see *The raised effect
+pools* below.
 
 **THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
 to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and
 that function calls the grey-smoke emitter `0x472810` (`0x421583`) and the fire emitter `0x472AB0`
-(`0x4215AA`) — both **append to a particle layer**, and past 400 destroy its front object. So the
+(`0x4215AA`) — both **append to a particle layer**, and past its cap (400 in stock, 20 480 raised)
+destroy its front object. So the
 ten layers are not constant within a sim tick: a second draw of one tick can find a layer the first
 draw did not produce. [ESTABLISHED 2026-09-12 by landing 4a's review, which is what corrected the
 frame packet's per-tick cache argument — see the note in `tagpu_packet_pub.c`.]
@@ -3726,6 +4045,252 @@ packet's level generation.
 band is computed in RGB); and `+0xF0` the capability word (bit 5 the ALP alpha table is
 built, **bit 6 the PALETTE.SHD darken table**, bit 7 the LHT one — the three in-place setters
 above are what establish the mapping).
+
+### The raised effect pools — every site `tagpu_limits.h` rewrites [DISASSEMBLED 2026-09-23, objdump of the pristine build; MEASURED 2026-09-23]
+
+The four pools above are raised tenfold by the limits block of `tagpu_patches.c`, re-derived from
+TADR's `EngineLimits.cpp` (prior art, [the TADR port](tadr-port/raised-limits.md)), and the
+particle layers, their object pool and the composite scratch frame with them, from its
+`LimitCrack.cpp`. They share **one table**
+with the unit limit's sites (*The per-player unit cap*), 75 sites in all, compared with the stock
+bytes as a whole at `DLL_PROCESS_ATTACH` and written as a whole or not at all; a mismatch writes
+nothing and the first DirectDraw call shows the startup-failure report and exits. Every site below
+was read out of the pristine image, and the evidence for each is in
+[the evidence pass](tadr-port/limits-evidence.md) §1–4, §7 and §10. Landing reviewers checked the sites
+against the image byte for byte.
+
+**Projectiles, 300 → 3000.** The pool stays the engine's, allocated per game:
+
+- `0x499A32` the `push 0x7D64` (the bytes, `300 × 0x6B`) and `0x499A56` the `mov ecx,0x1F59` of the
+  clear (the dwords), both scaled by ten.
+- The ten cap operands of the `cmp …,0x12C` that refuse a new projectile: `0x49B6F0`, `0x49B80A`,
+  `0x49C9D2`, `0x49CC34`, `0x49CDF3`, `0x49D011`, `0x49D2BE`, `0x49D4B5`, `0x49DD96`, `0x49DF24`.
+  `0x49D2BE` and `0x49D4B5` are inside the `WEAPON_FIRED` receiver, so the cap also refuses a
+  projectile a peer fired. `0x49F442`, the eleventh `0x12C` nearby, is a command-line clamp into
+  `main+0x37F31` and is not a projectile cap.
+- **The compaction `0x49AE20`** keeps two i16 index arrays on its stack, one entry a slot:
+  `[esp+0x20+i·2]` and `[esp+0x278+i·2]` after its four pushes. Its `sub esp,0x4C0` becomes a `jmp`
+  to a stub that commits the new frame, `0x20 − 0x10 + 4 · 3000 = 0x2EF0` bytes, a page at a time
+  (`sub esp,0x1000 / test [esp],eax`, twice, then the remainder) and jumps back to `0x49AE26`. The
+  second array's displacement `0x278` at `0x49AEB8` (write) and `0x49AF39` (read) becomes
+  `0x20 + 2 · 3000`, and the release `add esp,0x4C0` at `0x49AF7F` becomes `0x2EF0`. Its only
+  callers are `0x49BE53` and `0x49C8F4`, both on the game thread. It also fixes up `main+0x142F7`,
+  a pointer into the pool.
+
+**Explosions, 300 → 3000, moved into a DLL static.** The engine's inline block at `main+0x1491B`
+stays where it is and nothing reads it any more. The layout is kept, `{i32 count; 0x54 × N
+records}`, because the add site `0x420A3C` takes the count's address as its base and reaches the
+records at `+4`.
+
+- The seven base references, the only ones in `.text`: `0x420630` the reset inside `0x420620`
+  (called only from the level load `0x4919D2`), `0x420A36` / `0x420A3C` the add `0x420A30`,
+  `0x420B35` / `0x420B3B` inside the draw `0x420B00`, `0x420F66` inside the tick `0x420F30`, and
+  `0x421738` in the piece explosion `0x421700`. Each `mov`/`lea` relative to `main` becomes an absolute
+  `mov` of the static's address, same length.
+- **The sequence table `main+0x1AB8F` stays in the engine.** `0x420AA2` reads it as
+  `[edi+eax*4+0x6274]` only because stock's pool sits in front of it (`4 + 300 · 0x54 = 0x6274`);
+  with `edi` now the static, that load becomes a `call` to a stub that loads `main` and reads
+  `[main+eax*4+0x1AB8F]`. Only `eax` changes.
+- The caps `0x420A44` (the add) and `0x421771` (the piece explosion).
+- **The tick's compaction is quadratic.** `0x4210E6..0x42113E` finds the first dead record
+  (`+0`, `+0xC` and `+0x18` all zero), shifts the whole tail down one record (`rep movsd`, `0x15`
+  dwords), decrements the count and rescans from record 0 until a pass removes nothing: O(dead ×
+  live) record moves a tick. At stock's 300 that is small; at 3000, with a mass death's explosions
+  expiring on the same tick, it is about a hundred times stock's worst. Unchanged by the raise,
+  and TADR's too.
+
+**Flying pieces, 100 → 1000, moved into a DLL static.** Seven base operands (`0x420B08`,
+`0x420F38`, `0x421153`, `0x421172`, `0x4211A7`, `0x42165F`, `0x421680`) and six end operands
+(`0x420B28`, `0x420F53`, `0x421162`, `0x42118D`, `0x4211C3`, `0x42166D`) cover every array use of
+`0x511DF0` and `0x511F80`. **The five `mov ecx,0x511F80` stay** (`0x4205F0`, `0x420610`,
+`0x420900`, `0x420977`, `0x421691`): `0x511F80` is also the pool allocator that backs the pieces,
+the `this` of `0x4379B0` (init) and `0x437A30` (alloc), and its backing grows tenfold at the
+`push 0x186A0` at `0x4208FB`. **`0x437A30` is a ring:** an allocation that reaches the end wraps,
+and every block it then overwrites is evicted, its owner's slot nulled (`0x437A9D`, `0x437ACF`).
+Stock can therefore evict pieces with fewer than 100 alive, and the tenfold ring evicts them later:
+below the stock caps the raised build keeps pieces stock would have dropped, and they land and add
+their explosions. That changes the explosion count and the C-runtime `rand` stream, not the
+simulation's generator unless the explosion pool fills. The level load's clear at `0x42090A` (`mov ecx,0x64 / xor eax,eax /
+mov edi,0x511DF0 / rep stosd`, 14 bytes) becomes a `call` to a C reset that clears the static,
+returns 0 in `eax` as stock leaves it, and initialises the debris records below.
+
+**Debris records, 300 → 3000, moved into DLL statics.** Stock keeps 300 × `0x34` at `main+0x1AB9F`,
+each owning 8 vertices of 12 bytes at `main+0x1E88F + i·0x60` and 6 face records of `0x20` at
+`main+0x2590F + i·0xC0`. The level load initialises them in two loops: `0x4207FB..0x42088F`
+writes each record (`+0` = `0xFF` free, `+4` = 8, `+8` = 6, `+0xC` = −1, `+0x1C` = `0x502C28`
+from `edi`, set at `0x4207DD`, `+0x20` = 0, `+0x24` the vertices, `+0x28` the faces), and
+`0x420895..0x4208F9` its faces (`+0x1C |= 1`, `+0` = `0xC8`, `+4` = 4, `+0xC` = `0x502BF8 + k·8`
+for the six faces). The C reset writes the same values into the statics; the stock loops still run
+over the engine's array, which nothing reads. Two first-free scans hand out a record, both
+`cmp eax,0x12C`: the standalone allocator `0x420920`, which nothing in the image calls or points
+to, becomes a `jmp` to the C allocator so that no copy of the stock scan survives, and the inline copy
+at `0x4217DE` (16 bytes: `mov edx,[main] / xor esi,esi / xor eax,eax / lea ecx,[edx+0x1AB9F]`)
+becomes `xor esi,esi` / `call alloc` at `0x4217E0` / `jmp 0x421804` at `0x4217E5` and four NOPs. `0x421804` wants `eax` = the
+record or 0 and `esi` = 0, and reloads `ecx` and `edx` before it uses them. **The C allocator is
+first-free, as stock's is**, so below 300 it hands out exactly the records stock does, and nothing
+carries from one game to the next.
+
+**The caps gate the simulation's random numbers.** `0x421700`, the piece explosion, walks a dying
+unit's pieces; for each it leaves when the explosion count reaches the cap (`0x42176F`); when no debris record is free, `0x421802..0x421808` skips the draws that
+follow. Otherwise it **draws the sim RNG `0x4B6C30` eight times a piece**: six at
+`0x421851..0x4218D2` and two at `0x421B39` and `0x421B62`, on the same path with no branch
+between. So the explosion cap and the debris records' fullness decide how many sim-RNG draws a
+death makes. Below the stock caps the raised build makes the same draws in the same order; past
+them, the raised build draws where stock would have stopped.
+
+**The flying-piece cap gates no draw.** The live spawner is `0x481140`, reached through the
+function-pointer table entry at `0x4FD6CC` (`.rdata`, among `0x480xxx`/`0x481xxx` handlers), not
+by a call. It draws the sim RNG six times (`0x48116F..0x4811B9`) and only then asks
+`0x421620` for a slot (`0x48123C`). `0x421620` hands a piece flagged to explode (record `+0x28`
+bit 2) to `0x421700` before it scans for a slot, so that branch does not depend on the slots
+either. `0x420E50`, which has the same shape and also calls `0x421620`, has no caller or pointer
+anywhere in the image; nor do `0x421150`, `0x421170` and `0x4211A0`, three slot helpers whose
+operands are patched with the rest.
+
+**Particles, 400 → 20 480 a layer and 1000 → 204 800 objects.** Two ceilings, both visual: the
+emitter range `0x470F00..0x472F00` draws the C runtime's `rand` (`0x4E4870`) and never the
+simulation's generator.
+
+- **The layer cap is twenty operands**, every `0x190` compare in the emitters: nineteen
+  `cmp eax,0x190` (`3D imm32`, operand at +1) at `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`,
+  `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`,
+  `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472CD9`, and
+  `cmp ecx,0x190` (`81 F9 imm32`, operand at +2) at `0x472BF2`. Past the cap the emitter destroys
+  the layer's front object and shifts the rest down (`0x472078..0x4720AF`), so a layer holds the
+  cap plus one.
+- **The pool `0x51E610` is built once, by the C runtime's static initializer** `0x471C80`:
+  `push 0x4C; push 0x3E8` (operand `0x471C83`), `call 0x470A90`, then `atexit(0x471CA0)`. The
+  constructor calls `0x470C10` once (its only caller, `0x470ACB`), which `realloc`s the pointer
+  stack at `+0x14` to 4 × capacity and `malloc`s capacity × `0x4C` bytes in one block; nothing grows
+  it later. The alloc `0x470EB0` is `used < capacity ? stack[used++] : 0` (`+0x20` used, `+0x1C`
+  capacity), the free `0x470ED0` is `stack[--used] = p`. All 28 references to `0x51E610` are the
+  twenty allocs, six frees, the constructor and the `atexit`. An empty pool makes the emitter skip
+  the particle (`0x471FFC..0x47202E`). DllMain runs before that initializer, so writing the operand
+  is enough; TADR hooks `0x471C87` and rewrites the pushed value instead. At 204 800 the block is
+  15.6 MB and the stack 0.8 MB, once a process.
+- **Eight of the twenty compares are in code nothing reaches.** The emitters at `0x471160`,
+  `0x471340`, `0x471470`, `0x4715A0`, `0x4716E0`, `0x471820`, `0x471A50` and `0x472720` (the compares
+  `0x471183` … `0x471AD7` and `0x4727B0`) have no call, jump or pointer anywhere in the image, nor
+  does `0x471D10` with its alloc; the twelve live emitters are `0x471FD0`, `0x4720D0`, `0x472200`,
+  `0x472330`, `0x472430`, `0x472530`, `0x472630`, `0x472810`, `0x4728F0`, `0x4729D0`, `0x472AB0`
+  and `0x472C50`. The dead sites are written with the rest, since their bytes are compared anyway.
+- **The layers' tick `0x471EB0` erases by shifting:** for every object of every layer it calls
+  `vtbl+0xC`, and a finished object is deleted and the tail moved down one slot. Like the emitter's
+  own front-drop, that is O(layer) a removal; it runs in the sim tick (`0x4955BF`). The teardown
+  `0x471DE0` empties a layer front first the same way (`0x471E17..0x471E48`), n²/2 moves a layer.
+  The draw is `0x471F90(ctx, layer)`, called ten times from DrawGameScreen (`0x469849` …
+  `0x469D2C`), which calls `vtbl+8` on each object; `0x471F40`, a whole-table twin of it, has no
+  caller.
+- **MEASURED 2026-09-23 in tier 1** (4 × 1500 units, the scratch build first, then the landing's):
+  one layer, layer 9, peaked at **13 529 objects** at the opening volley (its objects' vtable
+  `0x4FD618`, dark smoke; the rocket kbots' trails <span class="pill pill-warn">INFERRED</span>),
+  the pool's used count at **13 571**, and the frame packet's sub-particles at **14 510** and
+  **15 964** in two runs. The simulation held 60 ticks a second throughout. Stock would have held
+  that layer to 401.
+
+**The composite scratch frame, 600 × 600 → 1280 × 1280** [DISASSEMBLED 2026-09-23; MEASURED
+2026-09-23]. One frame a level: the unit blit's work frame (the build-state copy and the shadow
+passes draw there, and the GDI lane shows what they leave) and the 2× bake's canvas.
+
+- **Where it lives.** The composite draw context `*(main+0x1437B)` is a `0x14`-byte object the
+  model loader makes once a level (`0x4B4F10(0x14)` at `0x42D3C0`, the constructor `0x458160`,
+  stored at `0x42D3DD`). `0x458180`, called at `0x42D473` with a page-rounded size, allocates the
+  context's ring at `+4` (`0x4379B0`: frees any old one, `[+0]` the size) and then the scratch at
+  `+0x10`: `push 0x258` (the height, operand `0x458196`), `push 0x258` (the width, operand
+  `0x45819B`), `push 0x506604`, `call 0x4B8E00`. It is the only such pair in `.text`.
+  `0x4B8E00(name, w, h)` allocates `w·h·2 + 0x18` bytes: the header (`+0` width and `+2` height,
+  u16), the colour plane at `+0x18` (pointer at `+0x10`) and the depth plane right after it
+  (`+0x14`). The level teardown frees it inside `0x42DB90`: `0x42DC8F` calls `0x4581C0`
+  (`MEM_Free [+0x10]`, then `0x437A20` frees the ring), `0x4B4F20` frees the context and
+  `0x42DCA3` nulls the pointer. Nothing leaks at 1280², 3.28 MB a level.
+- **It is not the per-unit composite.** The unit's own frame at `Object3do+0x10` is allocated by
+  the builder `0x4586A0` at the AABB's size, through `0x437BE0(slot, w, h)` (colour and depth,
+  `0x458719`) or `0x437B50` (colour only, `+0x14 = 0`, `0x458702`), both a block of the context's
+  ring: they call the ring allocator `0x437A30` (the flying pieces' too) with `this` unchanged. What
+  caps it is the ring, not 600 × 600: `0x437A30` refuses a block larger than the ring
+  (`0x437A65..0x437A77`: the slot is nulled and it returns 0), and the builder then skips the unit
+  (`0x45871E`). The ring is sized once a level from the screen, `main+0x37E23` (height) ×
+  `main+0x37E1F` (width) at `0x42D3E9`, page-rounded at `0x42D466`: 6 242 304 bytes, 13 × the
+  pixels, on an 800 × 600 peer [MEASURED 2026-09-24].
+- **Four writers size it to a unit, and none compares with the allocation**, all called from the
+  blit `0x459200` with the context as `this`. The build-state copy `0x4589C0` (from `0x459608`,
+  every frame, for a unit with a depth plane) writes the box of the unit and its cargo into the
+  header (`0x458B8C`, `0x458B92`) and copies or clears both planes at that size. The frame copy
+  `0x45A470` (from `0x459338`, `0x4594DB`, `0x45958C`, under the Shadow and TShadow bits) copies a
+  unit's own frame, header and both planes (`0x45A4C8`, `0x45A4F1`). The shadow build `0x45A790`
+  (from `0x4592FE`, `0x45955B`, for an object with no depth plane) takes a box from the model's
+  vertex extents (`0x45A510`), writes it into the header, clears both planes (`0x45A80E`,
+  `0x45A82D`) and rasterises into them (`0x45A610`). The 2× bake in both rasterisers, `0x459830`
+  and `0x459C70` (AntiAlias, `main+0x37F06` bit 1; the structure bit, `unit+0x110` bit 29;
+  `mode != 0`), doubles the box (`0x459899` … `0x4598C1`), writes it into the header and clears
+  both planes at the doubled size (`0x4598E4`, `0x459908`).
+- **So a box larger than the frame's area, or than a quarter of it for the 2× bake, writes past
+  it**: 600 × 600 and 300 × 300 in stock, 1280 × 1280 and 640 × 640 raised. The ring's cap does not
+  keep a unit frame within the scratch: at 800 × 600 it has room for a frame of 3.1 million pixels
+  against the scratch's 1.6 million. **TADR's raise moves the threshold; nothing bounds it.** Every
+  reader takes the size from the header a writer set earlier in the same call, and the only `0x258`
+  immediates in `.text` are the two raised, so the raise lengthens no write.
+- **It runs on every lane** [MEASURED 2026-09-23]. After tier 1 on the Vulkan lane the scratch's
+  header held a 39 × 42 box with a hotspot of 21, 24, a 1× writer's (the 2× bake writes only even
+  values), and its planes were `0x190000` = 1280² apart; the stock-limits build reads `0x57E40` =
+  600². On the GDI lane the nanoframe ladder (`scenarios/nanoframe-ladder.json`) looks the same
+  on both builds: every pixel that differs lies inside the nanoframes, and stock against raised
+  differs by the same 10 733 pixels as two frames of one run a second apart, the build-state pulse.
+
+**What it measured, 2026-09-23.** Single player, `scenarios/limits-flood.json` (450 Merls against
+450 Diplomats): the engine's own counts peaked at **687 projectiles** and **1727 explosions**, and
+the frame packet carried **687 projectiles, 2439 explosions and 540 flying pieces** at its peaks,
+with no table truncated. Network game, two peers on the
+raised build (`scenarios/limits-mp-west.json` on one, `-east` on the other): projectiles
+**689 on both**, explosions **1770** and **984**. Paused with the game's own `Pause` (`main+0x38A51`
+= 1 on both, their tick counters three apart), **both peers held the same 394 units at identical
+positions**, 0.00 world units apart, matched by engine index, which is the same slot on every
+peer. A first round (Hammers against Thuds, 630 units) matched the same way.
+
+**Ten peers at 1500, 2026-09-24** (`scenarios/limits-tier2-p0` … `p9`, one per peer, Town &
+Country, network speed 10): `main+0x14351` read **15 001** on all ten and the per-peer counts
+peaked at 14 991–15 000 alive. The engine's own counts, polled on every peer for three minutes,
+peaked at **731–854 projectiles** (`main+0x141F3`), **2936–2966 explosions** (the moved pool's count
+word), and **12 759–14 331 particle objects** in use (`0x51E630`, the pool's used count); `GameTime`
+(`main+0x38A47`) advanced 30 a second on every peer. Paused, the ten rosters held the same 7307 units
+in the same slots with the same types; 6998 stood at identical positions on all ten, and the
+moving rest sat off the owning peer's copy by at most 40 ticks of their own `maxvelocity`: a remote
+unit is where its owner last reported it. The pause landed on `GameTime` 6440–6455 across the ten.
+**`ActiveCommanderDeath` (`main+0x37EF6`) decides whether a dead commander takes its army with it,
+on every peer** (`0x486688` → `UNITS_KillAllForPlayer`); the lobby's default is on, and a run with
+it on lost a whole army to one commander's death.
+
+**`unit+0xFF` is the LOCAL player index**, not a global one [MEASURED 2026-09-23]: every peer
+lists itself as player 0, so the same unit reads owner 0 on the peer that owns it and owner 1 on
+the other. A peer that creates units for another player's slot makes units no peer owns: they
+exist on that peer alone. The team colour is the owner's player record, `player+0x96` (see
+`0x467C00` above).
+
+### The sound object and its table of 32 playing sounds — `*(main+0x10)` [DISASSEMBLED 2026-09-23; MEASURED 2026-09-23]
+
+`MixingBuffers` is not a site of the limits table: it is a registry value, and the settings store
+owns it (`impure.cfg`'s `mixingbuffers`, renderers.md 2.10b). The engine side:
+
+- **The fields.** `+0x2C` MixingBuffers, `+0x30` the sounds in use, `+0x34` a play sequence, and
+  one table of **32** slots in three arrays: `+0x38` the buffer, `+0xB8` its sequence number,
+  `+0x138` the looping flag. Every loop over it stops at `cmp 0x20`.
+- **Who writes `+0x2C`.** The registry loader `0x42F9A0` reads `MixingBuffers` (default 8) at
+  `0x42FE4F` and stores it through the setter `0x4CF210`, which takes any value. The getter
+  `0x4CF220` has one reader, the registry save (`0x4310A5` / `0x4310AB`).
+- **The play `0x4CF570`.** While `+0x30 >= +0x2C` it evicts (`0x4CF5B2..0x4CF5CB`, `0x4CF180`);
+  after the play it takes the first empty slot of the 32 (`0x4CF792..0x4CF7A3`) and bumps `+0x30`,
+  and **with none free it returns without tracking the sound**. A looping sound is refused while one
+  is tracked (`0x4CF592..0x4CF5A3`), so at most one is.
+- **The eviction `0x4CF180`** stops the oldest non-looping sound. With none it falls out of its loop
+  at 32 and reads slot 32, which is `+0xB8`: past the table.
+- **So the table is the bound.** Past 32 the eviction never fires once 32 are playing, and the 33rd
+  sound plays untracked, out of reach of the stop-all `0x4CF150`; a looping one (`0x4CF540`, the
+  flag at `0x51FF48`) plays on. Below 2, a tracked looping sound leaves the eviction no victim.
+  TADR's 128 is past the table; the store offers 8, 16, 24 and 32.
+- **MEASURED 2026-09-23**, tier 1 with sound on a null device: `+0x2C` read 32 and `+0x30` stood at
+  32 through two minutes of the fight, never above, the sequence at 83 146; the same fight with the
+  store at 8 held `+0x30` at 8. Effect sounds also need the registry's `fxvol` (`main+0x37F0C`)
+  above zero, which `tacli` sets to 0 on every silent launch.
 
 ### The two fog lattices, and the minimap's four surfaces [VERIFIED 2026-09-12, landing 4b and 4c]
 
@@ -4330,13 +4895,13 @@ HUD scale gave a cleaner experiment than the two-resolutions one this was waitin
 changes viewW/viewH **without** changing the screen mode or the map, so the two candidate
 sources are separated outright. Same map, same 1920×1080 surface, one lever:
 
-| | viewW `+0x37E37` | viewH `+0x37E3B` | map px `+0x1422B`/`+0x1422F` | `+0x1423B` | `+0x1423F` |
+| | viewW `+0x37E37` | viewH `+0x37E3B` | scroll extent `+0x1422B`/`+0x1422F` | `+0x1423B` | `+0x1423F` |
 |---|---|---|---|---|---|
 | stock HUD | 1792 | 1016 | 10720 × 12672 | **112** | **63** |
 | HUD scale Auto (`s` = 2.25) | 1632 | 936 | 10720 × 12672 (unchanged) | **102** | **58** |
 
 `1792 >> 4 = 112`, `1016 >> 4 = 63`, `1632 >> 4 = 102`, `936 >> 4 = 58` — all four exact.
-The map dimensions did not move; these did. The minimap's view-box filler `0x466B70` above is
+The scroll extent (the map less 32 and 128 px) did not move; these did. The minimap's view-box filler `0x466B70` above is
 therefore reading *view tiles*, which is what a view box is drawn from, and the write the scan
 could not find is `0x483BD6`/`0x483BE4` inside LoadMap reaching them through `ebp = main+0x141FB`
 at `+0x40`/`+0x44` — a base the displacement scan cannot see, which is exactly why it found
@@ -5401,8 +5966,11 @@ instead of freeing it; the real body runs later through a trampoline over the st
 frame-composition.md), one argument: a slot address. It walks `[ecx+4]`'s `{ptr, size}` entries
 (advancing by `size`, `[ecx]` the total) and zeroes `entry.ptr` where it equals the argument.
 **The routine contains no `call` — it frees nothing.** The composite frame at `obj+0x10` therefore
-has an owner other than `FreeObjectState`; that frame's lifetime is an open item
-([Thread-safe destruction](thread-safe-destruction.html) §10). The registry pointer
+has an owner other than `FreeObjectState`: it is a block of the context's ring, allocated by
+`0x437BE0` or `0x437B50` through the ring allocator `0x437A30`, and the ring is freed with the context by the
+level teardown (*The composite scratch frame*, above). When the frame's memory can be reused
+before then — the allocator evicting it on a wrap — is still the open item of
+[Thread-safe destruction](thread-safe-destruction.html) §10. The registry pointer
 `main+0x1437B` is written at `0x42D3DD` (set) and `0x42DCA3` (`mov [ecx+0x1437B],ebx`, `ebx = 0`
 `[INFERRED]` — the teardown nulls it, and `FreeObjectState`'s guard then skips the walk).
 
@@ -6074,7 +6642,15 @@ Helpers the ids reach, all read this session:
   then `s = 16807·s − q·0x7FFFFFFF` (which is `16807·(s mod 127773) − 2836·q`), `s += 0x7FFFFFFF`
   when the result is `<= 0`, and the draw is `s % n`. `n < 2` returns 0 **without touching the
   state** (`0x4B6C38`). `tools/tacob`'s `SimRandom` is that recurrence; what the game seeds it
-  with at match start is still unread.
+  with at match start is still unread (`0x4B6CA0`, called at `0x49719D` just before the CRT seed
+  below, is the candidate [INFERRED]).
+- **The C runtime's `rand` is a second, separate stream** [DISASSEMBLED 2026-09-23]: `rand`
+  `0x4E4870` is MSVC's LCG (`·0x343FD + 0x269EC3`, bits 16..30), its state at `+0x14` of the
+  per-thread data `0x4EB0F0` returns, and `srand` is `0x4E4860`. The match seeds it from the clock,
+  `srand(time(0))` at `0x4971AE` (`0x4E6480` is `time`), and 61 sites draw from it — the particle
+  emitters among them. The three at `0x49C619`, `0x49C648` and `0x49C677` add `rand() % 11 − 5` to
+  screen coordinates taken with the eye (`main+0x1431F`/`+0x14323`): the lightning bolt's jitter,
+  a draw, not a rule.
 
 ### The piece transform — `0x43DEF0`, `0x43E060` and `0x4B6CC0` (tacob landing 4)
 

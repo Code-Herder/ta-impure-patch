@@ -626,12 +626,13 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
     Both settings we write live in `[Preferences]`, so the file is composed from
     what is asked for rather than branched on sound alone: with sound on and no
     limit wanted there is nothing to say and the file goes away. `UnitLimit` is
-    read at 0x491653 and clamped by the engine itself to **[20, 500]**, which is
-    why it is not a registry key and cannot be raised in a running game.
+    read at 0x491653, once, at startup, so it cannot be raised in a running game.
 
-    The bound is 500, not 1500: `0x491658 cmp eax, 0x1f4 / jle` writes 0x1f4
-    straight into `MaxUnitNumberPerPlayer` for anything larger, so asking for
-    1500 reports 1500 and gets 500. [BINARY-VERIFIED]
+    The engine clamps it to [20, 500] (`0x491658 cmp eax, 0x1f4`, default 250);
+    this repo's ddraw.dll raises the ceiling AND the default to 1500
+    (tagpu_limits.h), so the bound here is 1500 and no key means 1500. Under
+    ddraw-stocklimits.dll (`--keep-dll`) stock's clamp is back: 1500 reports
+    1500 and gets 500. [BINARY-VERIFIED]
     """
     path = inst.gamedir / "totala.ini"
     prefs = [] if sound else [("NoDirectSound", 1), ("UseWindowsSound", 0)]
@@ -3068,10 +3069,9 @@ SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2}
 SCN_PATTERNS = ("grid", "line", "random")
 SCN_HANDLE_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
 SCN_WORLD_MAX = 65535       # world coordinates are the integer half of a 16.16 dword
-SCN_MAX_ENTITIES = 5000     # a ceiling the fork enforces again on its side
-SCN_STOCK_LIMIT = 250       # TA's own per-player unit cap before UnitLimit is raised
-SCN_MAX_LIMIT = 500         # and the ceiling it can be raised TO: 0x491658 clamps
-                            # UnitLimit to 0x1f4 before storing MaxUnitNumberPerPlayer
+SCN_MAX_LIMIT = 1500        # the per-player ceiling tagpu_limits.h installs at 0x491658
+SCN_DEFAULT_LIMIT = 1500    # ...which is also the default when no UnitLimit is written
+SCN_MAX_ENTITIES = 15000    # ten players at the ceiling; the fork enforces it again
 
 
 class _ScnRandom:
@@ -3327,8 +3327,9 @@ def _scn_setup(doc, label):
         if not m:
             die(f"{w}.res: {res!r} must look like 1024x768")
         setup["res"] = [int(m.group(1)), int(m.group(2))]
-    # TA reads UnitLimit from totala.ini and clamps it to [20, 500] itself, so a
-    # larger number here would be accepted, reported, and then silently ignored.
+    # TA reads UnitLimit from totala.ini and clamps it to [20, 1500] under this
+    # repo's ddraw.dll, so a larger number here would be accepted, reported, and
+    # then silently ignored.
     setup["unit_limit"] = _scn_int(node, "unit_limit", w, 20, SCN_MAX_LIMIT)
     setup["clear_existing"] = _scn_bool(node, "clear_existing", w, True)
     # Both default to None = "leave the screen as it is"; `mapping` then falls
@@ -3710,10 +3711,10 @@ def _scn_check(exp, norm):
         if limit is not None and n > limit:
             die(f"{label}: player {owner} would get {n} units, over "
                 f"setup.unit_limit {limit}")
-        if limit is None and n > SCN_STOCK_LIMIT:
+        if limit is None and n > SCN_DEFAULT_LIMIT:
             exp["warnings"].append(
-                f"player {owner} gets {n} units, over TA's stock per-player cap of "
-                f"{SCN_STOCK_LIMIT} — set setup.unit_limit or the engine drops the rest")
+                f"player {owner} gets {n} units, over the default per-player cap of "
+                f"{SCN_DEFAULT_LIMIT} — set setup.unit_limit or the engine drops the rest")
 
 
 # ------------------------------------------------------------------- wire layer
@@ -4525,7 +4526,7 @@ def build_parser():
                    help="stock window title, no label (also sticky; --title auto undoes it)")
     l.add_argument("--map", help="skirmish map name, e.g. 'Two Continents'")
     l.add_argument("--unit-limit", dest="unit_limit", type=int,
-                   help="per-player unit cap in totala.ini (TA clamps it to 20-500)")
+                   help="per-player unit cap in totala.ini (20-1500; 1500 when unset)")
     l.add_argument("--player", action="append",
                    help="N:controller[:side[:color[:metal[:energy]]]] (controller "
                         "0=off 1=human 2=AI, side 0=ARM 1=CORE; an empty field is "

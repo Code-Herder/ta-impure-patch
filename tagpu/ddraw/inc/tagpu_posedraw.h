@@ -247,7 +247,7 @@ void tagpu_posedraw_end(void);
    count -- so it is a bound on a number handed between two files, which the
    Vulkan pass re-checks, not a budget. A frame past it hands nothing over and
    says so once. */
-#define TAGPU_PD_MAXHAND (16384 + 4096 + 1 + 4096)
+#define TAGPU_PD_MAXHAND (16384 + 4096 + 1 + 6144)
 
 typedef struct TAGPU_PDUREC {
     /* the bake entries, and the serial each was baked under. The POINTER alone
