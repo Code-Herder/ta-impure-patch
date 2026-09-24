@@ -69,7 +69,7 @@ void fpsl_frame_end();
    fpsl_request_cap: the menu's frame cap, -1 for Refresh (the target monitor's
    rate, resolved by fpsl_init into a plain positive cap -- never cnc-ddraw's
    own negative maxfps, which paces by DwmFlush/vblank instead), >= 0 an fps.
-   FPSL_CAP_NONE (never requested) leaves the ini's maxfps as it is. */
+   FPSL_CAP_NONE (never requested) leaves g_config.maxfps as it is. */
 #define FPSL_CAP_NONE (-0x7FFFFFFF)
 void fpsl_request_cap(int cap);
 void fpsl_request_init(void);

@@ -10,13 +10,13 @@
 
 /* The token half: keys, clicks, the shield's expiries. GAME THREAD, from
    tagpu_gui_hook.c's before_flip via tagpu_triggers_frame — which is what lets
-   `tacli keys` and `tacli click` reach renderer=gdi, where tagpu_overlay_draw
+   `tacli keys` and `tacli click` reach the GDI backend, where tagpu_overlay_draw
    is never called. Reads no packet; posts, never sends. */
 void tagpu_input_frame(const TAGPU_FRAME* f);
 
 /* The hold half: tagpu_eye.txt. RENDER THREAD, from tagpu_overlay_draw. Needs
    f->packet, and its output is read on that same thread (tagpu_input_cmd
-   below). Not reached on renderer=gdi — nor could it do anything there, since
+   below). Not reached on the GDI backend — nor could it do anything there, since
    the command record it feeds is posted from the overlay frame. */
 void tagpu_input_eye_frame(const TAGPU_FRAME* f);
 

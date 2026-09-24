@@ -1,7 +1,7 @@
 /* tagpu.h — the frame every pass receives.
    Two fillers: render_vk.c on the render thread, once per presented frame, and
    tagpu_gui_hook.c's before_flip on the GAME thread for the trigger family, so
-   that family reaches renderer=gdi too. The game-thread one leaves packet NULL,
+   that family reaches the GDI backend too. The game-thread one leaves packet NULL,
    and that is the family's membership test: a consumer that dereferences packet
    cannot be called from it. tagpu_input.c is split along exactly that line --
    the token half takes this frame, the camera hold keeps the render thread's. */

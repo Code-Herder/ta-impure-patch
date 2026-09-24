@@ -28,12 +28,12 @@ INSTALL
   Copy every file of this folder next to TotalA.exe, then start the game as usual:
 
     ddraw.dll       the patch
-    ddraw.ini       its settings; keep renderer=vulkan
     full.w32.bin    the Classic++ restorer's weights (the DLL reads them beside
     tiny.w32.bin    the exe; without them Classic++ keeps the indexed colours)
 
   If another ddraw.dll is already there (an older cnc-ddraw, a resolution fix),
-  this one replaces it.
+  this one replaces it. The patch reads no ddraw.ini: one left there by an
+  earlier version, or by cnc-ddraw, is ignored and can be deleted.
 
 
 OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
@@ -41,11 +41,10 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
   THE SETTINGS are the in-game menu's: the cog at the top right of the screen
   in a game, and Options > Visuals in the main menu. They are saved in
   impure.cfg next to TotalA.exe and start at the Classic++ look, on the most
-  powerful GPU (the GPU row's Auto), capped at the monitor's refresh rate. If you ran an
-  earlier version, the first start of this one renames the files its menu wrote
-  to *.migrated, takes the display, frame-cap and window lines out of ddraw.ini
-  (the old file is kept as ddraw.ini.migrated), lists what it did in
-  impure-migration.txt, and starts from the defaults. Delete impure.cfg to go
+  powerful GPU (the GPU row's Auto), capped at the monitor's refresh rate, and
+  fullscreen on the primary monitor. If you ran an earlier version, the first
+  start of this one renames the files its menu wrote to *.migrated, lists what
+  it did in impure-migration.txt, and starts from the defaults. Delete impure.cfg to go
   back to the defaults later; that does not repeat the migration.
 
   Everything is ON by default. A pass is turned off by an empty file next to
@@ -67,8 +66,9 @@ OPTIONS -- UNTIL THE GAME HAS A MENU FOR THEM
   e.g. tagpu_zoom.off for no zoom. (The classic look is the menu's Renderer row;
   tagpu_classicpp.off also works, and holds that row until it is deleted.)
 
-  tagpu_defaults.off turns the whole list off at once, and ignores impure.cfg:
-  the menu's rows are greyed while it is there, except Shadows, which is then
+  tagpu_defaults.off turns the whole list off at once, and ignores impure.cfg
+  but for the display mode, the frame cap and the window's position: the menu's
+  rows are greyed while it is there, except Shadows, which is then
   the game's own shadow option, kept with the game's other options as before. Two things stay on because
   they are fixes rather than modes, each with its own switch:
 

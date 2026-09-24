@@ -2928,7 +2928,7 @@ static int __cdecl before_flip(void* entry_esp)
     }
 
     /* THE ON-DEMAND TRIGGERS, ON THE GAME THREAD AND ON EVERY LANE.
-       `renderer=gdi` makes no `tagpu_` call at all, so hung off a renderer's
+       The GDI backend makes no `tagpu_` call at all, so hung off a renderer's
        present not one of them would run there and no `tacli` verb could see
        the game. Here they run wherever the engine flips, which is every lane.
 
@@ -3011,7 +3011,7 @@ static int __cdecl before_flip(void* entry_esp)
            configurations, because the reset sits on the `!s_census &&
            !g_gui_draw` exit and `g_gui_draw` is 0 whenever the layer is armed
            but not DRAWING: `gui.on=off`, which is the documented live A/B, and
-           any armed instance on `renderer=gdi`, where `tagpu_gui_present` --
+           any armed instance on the GDI backend, where `tagpu_gui_present` --
            the only writer of that word -- is never called because render_gdi.c
            makes no `tagpu_` call. Armed+gdi matters because gdi is meant to be
            the stock lane, and it is open.]
@@ -3346,7 +3346,7 @@ static int __cdecl before_flip(void* entry_esp)
    provoke a further engine redraw.
 
    `builds=` CANNOT ANSWER IT AT THIS SAMPLE SIZE. Three boots per arm,
-   `gui.on=census`, `renderer=vulkan`: shipped gave means of **1.0, 72.0, 69.1**
+   `gui.on=census`, the Vulkan backend: shipped gave means of **1.0, 72.0, 69.1**
    redraws per census window and `norepaint` gave **28.1, 21.8, 62.1** --
    overlapping, dominated by something other than the repaint (how long a boot
    lingers on which screen), and no direction. So the amplification question is
