@@ -59,7 +59,6 @@
 #include "tagpu_packet.h"
 #include "tagpu_native.h"   /* tagpu_native_foglut/scissor_on, for the hand-over */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
-#include "tagpu_zoom.h"     /* TAGPU_GATHER_MARGIN: the slab the fog gate samples in */
 #include "tagpu_log.h"
 
 
@@ -547,19 +546,15 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
 
        THE SHADERS DO NOT CLAMP THE SAME WAY: taFog clamps to `uFogDim - 1.0`,
        one whole cell short, because the last column of any grid never has its
-       right corners written. The band `gx in [cols-1, cols)` here interpolates
-       toward those unwritten corners, which read as no fog. With the WIDE grid
-       no caller samples there: every caller samples inside the gathers' slab
-       — the unit and wreck gathers test the point they sample against it, and
-       tagpu_fx_tile_visible clamps the feature, effect and particle gates'
-       points into it — and the fog bound on the drawn eye (tagpu_zoom.c) keeps
-       that slab inside `[0, cols - 1]`. With the ENGINE's grid, taken only at
-       zoom >= 1 with the view inside `[0, cols - 1]`, the band lies past the
-       view's right and bottom edges, and an off-screen anchor within 32 px of
-       them is sampled there: its answer, interpolated toward corners nobody
-       wrote, decides only whether an anchor off the screen is posed. The
-       engine's grid holds no truer answer for it — its builder never read
-       those cells. */
+       right corners written. The band `gx in [cols-1, cols)` here would
+       interpolate toward those unwritten corners. No caller samples it: the
+       unit and wreck gathers test the point they sample against the gathers'
+       slab, which the fog bound on the drawn eye (tagpu_zoom.c) keeps inside
+       `[0, cols - 1]` on the wide grid; tagpu_fx_tile_visible, the feature,
+       effect and particle gate, moves a point in the band onto the band's
+       left edge `cols - 1`, whose right corners carry no weight. On the
+       engine's grid the unit gathers still reach the band past the view's
+       right and bottom edges, for an anchor off the screen. */
     if (gx < 0.0f || gy < 0.0f ||
         gx >= (float)cols || gy >= (float)rows) return 0;
     int cx = (int)gx, cy = (int)gy;
@@ -578,21 +573,24 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
    the builder only writes the grey mask in true-LOS mode. */
 int tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
 {
-    /* THE POINT IS SAMPLED INSIDE THE GATHERS' SLAB — the effective rect plus
-       TAGPU_GATHER_MARGIN about the drawn eye, the rect the fog bound keeps
-       inside the wide grid's written cells (tagpu_zoom.c). The feature sweep
-       starts 16 rows above the effective rect and tests a footprint's far
-       corner up to 16 cells past its row, and the effect and particle tables
-       carry every effect on the map, so their points can lie past it; such a
-       point is 256 world px or more outside everything drawn, and is answered
-       from the nearest point of the slab. */
-    int x0 = v->eyeX + (v->evpL - v->vpL) - TAGPU_GATHER_MARGIN;
-    int y0 = v->eyeY + (v->evpT - v->vpT) - TAGPU_GATHER_MARGIN;
+    /* ONLY THE UNWRITTEN BAND MOVES. The last column and row of the grid this
+       frame samples (the packet's, wide or engine's: `fogGrid`/`fogCols`/
+       `fogOrg`) are short their right and bottom corners, so a point in
+       `(org + 32 (cols - 1), org + 32 cols)` is answered at the band's left
+       edge, where those corners carry no weight. Every other point keeps the
+       answer the grid gives it — inside the written cells its own value, past
+       the grid tagpu_fog_at's "no fog" — so a laser or a lightning bolt, gated
+       on its head wherever that head is, reads the same fog it always did.
+       The feature sweep's points (a footprint's far corner, a row above the
+       effective rect) and the effect and particle tables' (every effect on
+       the map) reach past the gathers' slab, which is why the bound on the
+       slab does not cover them and this does. */
+    int bx, by;
     if (!(v->fogMode & 1) || !v->fogGrid) return 1;
-    if (wx < x0) wx = x0;
-    else if (wx > x0 + v->evw + 2 * TAGPU_GATHER_MARGIN) wx = x0 + v->evw + 2 * TAGPU_GATHER_MARGIN;
-    if (wzp < y0) wzp = y0;
-    else if (wzp > y0 + v->evh + 2 * TAGPU_GATHER_MARGIN) wzp = y0 + v->evh + 2 * TAGPU_GATHER_MARGIN;
+    bx = v->fogOrgX + 32 * (v->fogCols - 1);
+    by = v->fogOrgY + 32 * (v->fogRows - 1);
+    if (wx > bx && wx < bx + 32) wx = bx;
+    if (wzp > by && wzp < by + 32) wzp = by;
     return tagpu_fog_at(v->fogGrid, v->fogCols, v->fogRows, v->fogCells,
                         v->fogOrgX, v->fogOrgY, wx, wzp) == 0;
 }

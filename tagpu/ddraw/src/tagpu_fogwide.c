@@ -352,38 +352,45 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
    zooms out adds no displacement. What it holds is a reversal (a notch out
    that cuts a notch in whose displacement is still owed) that the game thread
    has not caught up with, for as long as that lasts. */
-static int fogw_window(char* ta, int vw, int vh,
-                       int* col0, int* row0, int* cols, int* rows)
+/* One axis of the window about `eye`: the world rect the game thread publishes
+   about it (tagpu_zoom_pub_window, the function the unit and anchor windows
+   take theirs from), put onto the engine's own lattice. No further clamp: a
+   clamp would only make this grid narrower than the slab it exists to cover. */
+static void fogw_axis(int eye, int v, int* c0, int* n)
 {
-    int eyeX, eyeY, spanX, spanY, x0, y0, x1, y1;
+    int lo, span;
 
-    /* vw/vh come from fogw_view, sampled once for this tick and shared with
-       fogw_capacity, so the two cannot derive from different viewports. */
-    eyeX = *(const int*)(ta + OFF_EYEX);
-    eyeY = *(const int*)(ta + OFF_EYEY);
-
-    /* The world rect the game thread publishes about this eye, from the one
-       function the unit and anchor windows take theirs from. No further
-       clamp: a clamp would only make this grid narrower than the slab it
-       exists to cover. The one bound is the allocated set below, and since
-       it is SIZED from the same function (fogw_capacity) it is not a limit
-       on the screen either. */
-    tagpu_zoom_pub_window(eyeX, vw, &x0, &spanX);
-    tagpu_zoom_pub_window(eyeY, vh, &y0, &spanY);
-    x1 = x0 + spanX;
-    y1 = y0 + spanY;
-
-    /* onto the engine's own lattice — a grid corner sits at a map cell's
-       centre, so entry (0,0) covers map cell col0 and the origin is 32*col0+16 */
-    *col0 = floor_div32(x0 - 16);
-    *row0 = floor_div32(y0 - 16);
-    /* +2, not +1: the builder fills entry gx from map cells col0+gx and
-       col0+gx+1, so the LAST column and row of any window are short their
+    tagpu_zoom_pub_window(eye, v, &lo, &span);
+    /* a grid corner sits at a map cell's centre, so entry 0 covers map cell
+       c0 and the origin is 32*c0+16 */
+    *c0 = floor_div32(lo - 16);
+    /* +2, not +1: the builder fills entry gx from map cells c0+gx and
+       c0+gx+1, so the LAST column and row of any window are short their
        right/bottom corners — which is why the engine's own border completion
        works on cols-2 and rows-2. One spare each way keeps the short ones
        outside anything the view can show. */
-    *cols = (x1 - (32 * *col0 + 16) + 31) / 32 + 2;
-    *rows = (y1 - (32 * *row0 + 16) + 31) / 32 + 2;
+    *n = (lo + span - (32 * *c0 + 16) + 31) / 32 + 2;
+}
+
+void tagpu_fogwide_span(int eye, int v, int* lo, int* hi)
+{
+    int c0, n;
+
+    fogw_axis(eye, v, &c0, &n);
+    *lo = 32 * c0 + 16;
+    *hi = *lo + 32 * (n - 1);
+}
+
+static int fogw_window(char* ta, int vw, int vh,
+                       int* col0, int* row0, int* cols, int* rows)
+{
+    /* vw/vh come from fogw_view, sampled once for this tick and shared with
+       fogw_capacity, so the two cannot derive from different viewports. The
+       one bound on the window is the allocated set below, and since it is
+       SIZED from the same function (fogw_capacity) it is not a limit on the
+       screen either. */
+    fogw_axis(*(const int*)(ta + OFF_EYEX), vw, col0, cols);
+    fogw_axis(*(const int*)(ta + OFF_EYEY), vh, row0, rows);
     if (*cols < 3 || *rows < 3) return 0;
     /* Clamp to what is ALLOCATED, and take the trim off both ends so the
        view's centre keeps the cover. fogw_capacity sized the set for this same

@@ -343,6 +343,11 @@ static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
 static const TAGPU_PACKET* s_lastFilled;
 static TAGPU_PK_WRECK  s_wScratch[TAGPU_PK_MAX_WRECKS];
 static TAGPU_PK_ANCHOR s_aScratch[TAGPU_PK_MAX_ANCHORS];
+/* the anchor scan's own order (rows outward from the view's centre row) before
+   it is put back in row order into s_aScratch, and where each row landed */
+#define PK_ANCH_MAXROWS 4096
+static TAGPU_PK_ANCHOR s_aScan[TAGPU_PK_MAX_ANCHORS];
+static unsigned        s_aRowAt[PK_ANCH_MAXROWS], s_aRowN[PK_ANCH_MAXROWS];
 /* slot -> index in the units table, for the cargo links; 0xFFFF = not carried
    in this packet. Sized like the scratch and rewritten for the slots the walk
    actually visits, so no memset of 32 KB per frame. */
@@ -561,13 +566,14 @@ static unsigned fill_pieces(TAGPU_PACKET* p, const char* o3, unsigned nparts,
    sub-rect of this one and counts what falls outside (`outside=`). */
 #define PK_ANCH_MARGIN 16           /* 16-px cells on every side               */
 
-static void anchor_rect(const TAGPU_PACKET* p, int* c0, int* r0, int* cols, int* rows)
+static void anchor_rect(const TAGPU_PACKET* p, int eyeX, int eyeY,
+                        int* c0, int* r0, int* cols, int* rows)
 {
     int vw = p->vp[2], vh = p->vp[3];
     int lx, ly, ew, eh;
     int mapW = p->map_w16, mapH = p->map_h16;
-    tagpu_zoom_pub_window(p->eye[0], vw, &lx, &ew);
-    tagpu_zoom_pub_window(p->eye[1], vh, &ly, &eh);
+    tagpu_zoom_pub_window(eyeX, vw, &lx, &ew);
+    tagpu_zoom_pub_window(eyeY, vh, &ly, &eh);
     *c0   = (lx >> 4) - PK_ANCH_MARGIN;
     *r0   = (ly >> 4) - PK_ANCH_MARGIN;
     *cols = (ew >> 4) + 16 + 2 * PK_ANCH_MARGIN;
@@ -605,26 +611,37 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     unsigned pTrunc = 0;
     int c0, r0, cols, rows, row, col;
     int inL, inT, inR, inB;
+    int midRow;
 
     p->feat_defcount = RD32(ta, OFF_FEATCOUNT);
     p->sweep_cols  = RD32(ta, OFF_SWEEP_C);
     p->sweep_rows  = RD32(ta, OFF_SWEEP_R);
     if (p->feat_defcount < 0 || p->feat_defcount > 4096) p->feat_defcount = 0;
 
-    anchor_rect(p, &c0, &r0, &cols, &rows);
-    p->anch_c0 = c0; p->anch_r0 = r0; p->anch_cols = cols; p->anch_rows = rows;
-
-    /* the piece-cull rect, in world px: the window published about the eye —
-       the same one fogw_window builds the wide fog grid over, so a unit whose
-       anchor the pass accepts inside a slab the fog bound allows has its
-       pieces here */
+    /* THE EYE THE TABLES ARE PUBLISHED ABOUT is the one both fog grids were
+       built at — latched at the fog site in this draw, which the engine's
+       camera stepper can have moved on from by the time this runs — and the
+       packet's own eye where the site did not run (fill_fog anchors the
+       engine's grid by the same call). The fog bound holds the drawn slab
+       inside the grid it samples, so tables published about the grid's eye
+       cover it; tables about the packet's eye would be off by the stepper's
+       move. */
     {
-        int ew, eh;
-        tagpu_zoom_pub_window(p->eye[0], p->vp[2], &inL, &ew);
-        tagpu_zoom_pub_window(p->eye[1], p->vp[3], &inT, &eh);
-        inR = inL + ew;
-        inB = inT + eh;
+        int gx = p->eye[0], gy = p->eye[1];
+        tagpu_terrown_fog_eye(&gx, &gy);
+        anchor_rect(p, gx, gy, &c0, &r0, &cols, &rows);
+        /* the piece-cull rect, in world px: the span of fully written cells
+           of the wide grid built about that eye (tagpu_fogwide_span, the
+           lattice fogw_window builds on), which is every point the fog bound
+           lets a slab reach on the wide grid — and, since that grid covers
+           the zoom floor's slab, every point of an engine-grid frame's slab
+           too. Tested on the PROJECTED anchor below, the point the pass
+           tests, so no bound on a unit's altitude is needed. */
+        tagpu_fogwide_span(gx, p->vp[2], &inL, &inR);
+        tagpu_fogwide_span(gy, p->vp[3], &inT, &inB);
+        midRow = (gy + p->vp[3] / 2) >> 4;
     }
+    p->anch_c0 = c0; p->anch_r0 = r0; p->anch_cols = cols; p->anch_rows = rows;
 
     /* ---- the units, and their pieces ---- */
     walk = slots;
@@ -687,8 +704,14 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                     }
                     ue->flags |= TAGPU_PK_U_GROUND;
                 }
-                if (wx >= inL && wx <= inR && wy >= inT && wy <= inB)
-                    ue->flags |= TAGPU_PK_U_INRECT;
+                /* the pass's own projection (tagpu_native.c: `wy - wz / 2`
+                   with the altitude as a short), so the two agree exactly */
+                {
+                    int wz = (int)(short)(ue->pos[1] >> 16);
+                    int py = wy - wz / 2;
+                    if (wx >= inL && wx <= inR && py >= inT && py <= inB)
+                        ue->flags |= TAGPU_PK_U_INRECT;
+                }
             }
             /* the cargo links, as SLOTS for now: the packet indices they become
                are not all known until the walk ends */
@@ -740,15 +763,43 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             if (s_aTrunc) p->truncated |= TAGPU_PK_TRUNC_ANCHORS;
             s_cAnchReuse++;
         } else {
-            for (row = r0; row < r0 + rows; row++) {
-                const char* trow = fmap + ((size_t)row * mapW) * FT_STRIDE;
+            /* ROWS OUTWARD FROM THE VIEW'S CENTRE ROW, WHOLE ROWS ONLY. The
+               rect is the zoom floor's window plus the lead and a margin, and
+               the table holds TAGPU_PK_MAX_ANCHORS; scanned from its top, an
+               overflow would drop the rows at the bottom of the screen. Taken
+               as `mid, mid+1, mid-1, mid+2, ...` about the centre row of the
+               1x view (about the eye the grids were built at), and a row that
+               does not fit rolled back and the scan stopped there, what a
+               truncation keeps is the band of rows nearest the view's centre:
+               a row is dropped only when the rows nearer the centre than it
+               already hold the whole table. A view at any level is centred
+               there, so it loses nothing while the anchors of the band it
+               covers fit — at the floor at 4K a band of 560 rows by the rect's
+               width; the densest stock map puts 12 633 anchors in the WHOLE
+               rect. Put back in row order afterwards: the depth keys come from
+               each anchor's own row and column, and the order is what the
+               table has always promised. A truncation sets
+               TAGPU_PK_TRUNC_ANCHORS, which the feature pass counts (`trunc=`
+               on its line). */
+            int k, rr = rows < PK_ANCH_MAXROWS ? rows : PK_ANCH_MAXROWS;
+            unsigned out = 0;
+            int mid = midRow < r0 ? r0 : midRow >= r0 + rr ? r0 + rr - 1 : midRow;
+            for (k = 0; k < rr; k++) s_aRowN[k] = 0;
+            for (k = 0; ; k++) {
+                int off = (k & 1) ? (k + 1) / 2 : -(k / 2);
+                unsigned start = na;
+                const char* trow;
+                row = mid + off;
+                if (k > 2 * rr) break;
+                if (row < r0 || row >= r0 + rr) continue;
+                trow = fmap + ((size_t)row * mapW) * FT_STRIDE;
                 for (col = c0; col < c0 + cols; col++) {
                     const char* t = trow + (size_t)col * FT_STRIDE;
                     unsigned d = RDU16(t, FT_DEFIDX);
                     TAGPU_PK_ANCHOR* a;
                     if (d >= 0xFFFBu) continue;
-                    if (na >= TAGPU_PK_MAX_ANCHORS) { s_cAnchTrunc++; p->truncated |= TAGPU_PK_TRUNC_ANCHORS; row = r0 + rows; break; }
-                    a = &s_aScratch[na++];
+                    if (na >= TAGPU_PK_MAX_ANCHORS) break;
+                    a = &s_aScan[na++];
                     a->col = (unsigned short)col; a->row = (unsigned short)row;
                     a->def = (unsigned short)d;
                     a->wreck = RDU16(t, FT_WIDX);
@@ -764,6 +815,18 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                     } else { a->hd = a->h; a->hrd = a->hr; }
                     a->pad = 0;
                 }
+                if (col < c0 + cols) {      /* this row did not fit: drop it whole */
+                    na = start;
+                    s_cAnchTrunc++; p->truncated |= TAGPU_PK_TRUNC_ANCHORS;
+                    break;
+                }
+                s_aRowAt[row - r0] = start; s_aRowN[row - r0] = na - start;
+            }
+            if (rr < rows) { s_cAnchTrunc++; p->truncated |= TAGPU_PK_TRUNC_ANCHORS; }
+            for (k = 0; k < rr; k++) {
+                if (!s_aRowN[k]) continue;
+                memcpy(&s_aScratch[out], &s_aScan[s_aRowAt[k]], s_aRowN[k] * sizeof(TAGPU_PK_ANCHOR));
+                out += s_aRowN[k];
             }
             s_aHave = 1; s_aTick = p->tick; s_aN = na;
             /* A TRUNCATED SCAN IS CACHED AS TRUNCATED. Without this every reuse

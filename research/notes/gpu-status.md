@@ -748,10 +748,11 @@ zooms in; one that reverses is held by the fog bound (below).
 
 **The fog bound on the drawn eye [2026-09-24].** *The invariant:* every fog sample a frame takes
 from a grid lies inside that grid's fully written cells — every drawn pixel's (`taFog`, at the
-world point under it) and, on the wide grid, every CPU sample (`tagpu_fog_at`), all of which lie in
-the gathers' slab: the unit and wreck gathers test the very point they sample against it, and the
-feature, effect and particle gates clamp theirs into it (`tagpu_fx_tile_visible`) — for any gesture,
-reversal or lag. *The bound:* `predict()` in `tagpu_zoom.c` chooses the grid together with the eye
+world point under it) and, on the wide grid, every CPU sample (`tagpu_fog_at`): the unit and wreck
+gathers test the very point they sample against the gathers' slab, and the feature, effect and
+particle gate (`tagpu_fx_tile_visible`) moves a point in the grid's unwritten last column or row onto
+that band's written edge and answers every other point where it lies, so a laser gated on a head far
+outside the view reads the fog the grid gives there — for any gesture, reversal or lag. *The bound:* `predict()` in `tagpu_zoom.c` chooses the grid together with the eye
 the frame is drawn from, from the packet's own numbers. Both grids span `[org, org + 32·(cols −
 1)]`: the builder fills entry `gx` from cells `gx` and `gx + 1`, so the last column is short its
 right corners. The engine's grid is taken where it spans the view: level ≥ 1, its own window no

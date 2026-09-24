@@ -1910,8 +1910,8 @@ static void anchor_step(int fromWheel, const TAGPU_PACKET* pk)
 }
 
 /* The eye interval that puts `[e + dL, e + dR]` inside `[lo, hi]`, and `*e`
-   clamped into it. An empty interval centres the span on `[lo, hi]` and
-   returns 0. */
+   clamped into it; returns 1. An empty interval centres the span on
+   `[lo, hi]` and returns 0. */
 static int fog_fit(int* e, int dL, int dR, int lo, int hi)
 {
     int a = lo - dL, b = hi - dR;
@@ -1931,12 +1931,15 @@ static int fog_fit(int* e, int dL, int dR, int lo, int hi)
    instead. Judged on the grid's OWN window — the origin `32 col0 + 16` and the
    size the packet carries with it — and never on the packet's eye, which is
    not the eye the grid was built at whenever something moved the camera
-   between the two. */
+   between the two. The map's size is the PLOT grid's (`map_w16/h16`, 16-px
+   cells), halved into the fog lattice's 32-px cells — not the scroll extent
+   `map_pxw/h`, which is 32 px narrower and 128 px shorter and would refuse
+   the grid the engine builds at the bottom of its own range. */
 static int engine_grid_misplaced(const TAGPU_PACKET* pk)
 {
     /* `org - 16` is a multiple of 32 on either sign, so the division is exact */
     int c0 = (pk->fog_org[0] - 16) / 32, r0 = (pk->fog_org[1] - 16) / 32;
-    int w = pk->map_pxw / 32, h = pk->map_pxh / 32;     /* PLOT_C/2, PLOT_R/2 */
+    int w = pk->map_w16 / 2, h = pk->map_h16 / 2;       /* PLOT_C/2, PLOT_R/2 */
     return c0 < -1 || c0 + pk->fog_cols > w + 1 ||
            r0 < -1 || r0 + pk->fog_rows > h + 1;
 }
@@ -1944,9 +1947,10 @@ static int engine_grid_misplaced(const TAGPU_PACKET* pk)
 /* THE FOG BOUND ON THE DRAWN EYE. The invariant: every fog sample this frame
    takes from a grid lies inside that grid's fully written cells — the sample
    of every drawn pixel (taFog, at the world point under it), and on the wide
-   grid every CPU sample (tagpu_fog_at), all of which lie in the slab below:
-   the unit and wreck gathers test the point they sample against it, and the
-   feature, effect and particle gates clamp theirs into it
+   grid every CPU sample (tagpu_fog_at): the unit and wreck gathers test the
+   point they sample against the slab below, and the feature, effect and
+   particle gate moves a point in the grid's unwritten last column or row
+   onto its written edge and answers every other point where it lies
    (tagpu_fx_tile_visible). It rests on a bound and not on the game thread
    keeping up: the domain comes from this frame's level and viewport, the
    grid's span from the packet's own numbers, and the eye is clamped until one
@@ -1994,21 +1998,22 @@ static int engine_grid_misplaced(const TAGPU_PACKET* pk)
    unclamped over the engine's grid, and the native pass counts it. An empty
    interval centres the domain on the grid. The native pass also counts any
    frame whose domain is not inside its grid, as the bound's witness.
-   Returns 1 when the frame is to sample the wide grid. */
-static int fog_bound(const TAGPU_PACKET* pk, float z, int* ex, int* ey)
+   Returns 1 when the frame is to sample the wide grid; `*fit` is 0 when an
+   interval it clamped into was empty and the domain was centred instead. */
+static int fog_bound(const TAGPU_PACKET* pk, float z, int* ex, int* ey, int* fit)
 {
     int vw = pk->vp[2], vh = pk->vp[3], x = *ex, y = *ey;
     int engine = z >= 1.0f && pk->fog_cols > 0 && pk->fog_rows > 0 &&
                  !engine_grid_misplaced(pk);
 
+    *fit = 1;
     if (vw <= 0 || vh <= 0) return 1;
     if (engine) {
         int ox = pk->fog_org[0], oy = pk->fog_org[1];
         int hx = ox + 32 * (pk->fog_cols - 1), hy = oy + 32 * (pk->fog_rows - 1);
         if (x >= ox && x + vw <= hx && y >= oy && y + vh <= hy) return 0;
         if (!tagpu_pk_fogw(pk)) {
-            fog_fit(&x, 0, vw, ox, hx);
-            fog_fit(&y, 0, vh, oy, hy);
+            *fit = fog_fit(&x, 0, vw, ox, hx) & fog_fit(&y, 0, vh, oy, hy);
             *ex = x; *ey = y;
             return 0;
         }
@@ -2017,8 +2022,8 @@ static int fog_bound(const TAGPU_PACKET* pk, float z, int* ex, int* ey)
         int sw = tagpu_zoom_gather_span(vw, z), sh = tagpu_zoom_gather_span(vh, z);
         int dLx = (vw - sw) / 2 - TAGPU_GATHER_MARGIN, dRx = dLx + sw + 2 * TAGPU_GATHER_MARGIN;
         int dLy = (vh - sh) / 2 - TAGPU_GATHER_MARGIN, dRy = dLy + sh + 2 * TAGPU_GATHER_MARGIN;
-        fog_fit(&x, dLx, dRx, pk->fogw_org[0], pk->fogw_org[0] + 32 * (pk->fogw_cols - 1));
-        fog_fit(&y, dLy, dRy, pk->fogw_org[1], pk->fogw_org[1] + 32 * (pk->fogw_rows - 1));
+        *fit = fog_fit(&x, dLx, dRx, pk->fogw_org[0], pk->fogw_org[0] + 32 * (pk->fogw_cols - 1)) &
+               fog_fit(&y, dLy, dRy, pk->fogw_org[1], pk->fogw_org[1] + 32 * (pk->fogw_rows - 1));
         *ex = x; *ey = y;
     }
     return 1;
@@ -2062,10 +2067,17 @@ static float s_drawnZ;
    step of another gesture, or its own camera writers — or the grid was
    trimmed by a failed allocation. Only then is the step taken anyway, and
    counted (`back=` in the native heartbeat): the fog invariant is the one
-   that cannot give. */
+   that cannot give.
+   THE RULE NEEDS AN INTERVAL. Where the one at this level is empty — a grid
+   trimmed narrower than the slab — the bound centres the domain on the grid,
+   and a centred eye is not a step the gesture asked for in either direction:
+   pausing on it would hold the last level for as long as the trim lasted. So
+   the rule is applied only when the bound fitted the eye into a non-empty
+   interval, and the retry is taken only when it did too; a centred frame is
+   drawn as the bound left it and counted by the native pass (`out=`). */
 static float predict(const TAGPU_PACKET* pk, float z, int mayHold)
 {
-    int ux, uy, ex, ey, loX, hiX, loY, hiY, wide;
+    int ux, uy, ex, ey, loX, hiX, loY, hiY, wide, fit;
     s_havePred = 0; s_fogWide = 0;
     if (!pk) { s_haveDrawn = 0; return z; }
     /* A NEW EPOCH — the level ended on the game thread, which reset what it
@@ -2090,11 +2102,11 @@ static float predict(const TAGPU_PACKET* pk, float z, int mayHold)
         clamp_pair(&ex, &ey, loX, hiX, loY, hiY);
     ux = ex; uy = ey;
     /* LAST, so nothing moves the eye after the bound is established */
-    wide = fog_bound(pk, z, &ex, &ey);
-    if (mayHold && s_haveDrawn &&
+    wide = fog_bound(pk, z, &ex, &ey, &fit);
+    if (mayHold && fit && s_haveDrawn &&
         (against(ex, ux, s_drawnX) || against(ey, uy, s_drawnY))) {
-        int hx = ux, hy = uy, hw = fog_bound(pk, s_drawnZ, &hx, &hy);
-        if (!against(hx, ux, s_drawnX) && !against(hy, uy, s_drawnY)) {
+        int hx = ux, hy = uy, hfit, hw = fog_bound(pk, s_drawnZ, &hx, &hy, &hfit);
+        if (hfit && !against(hx, ux, s_drawnX) && !against(hy, uy, s_drawnY)) {
             ex = hx; ey = hy; wide = hw; z = s_drawnZ;
             s_fogPaused++;
         } else {

@@ -113,4 +113,11 @@ void tagpu_fogwide_tick(char* ta, int rebuilt);
 int tagpu_fogwide_current(const unsigned short** buf,
                           int* cols, int* rows, int* orgX, int* orgY);
 
+/* The world span `[lo, hi]` of fully written cells a grid built about `eye`
+   covers along one axis of extent `v` — `[org, org + 32 (cols - 1)]`, the span
+   the render thread's fog bound reads — before any trim a failed allocation
+   imposes (which only narrows it). Pure arithmetic, any thread: the packet's
+   publisher sizes the units it carries with their pieces from it. */
+void tagpu_fogwide_span(int eye, int v, int* lo, int* hi);
+
 #endif
