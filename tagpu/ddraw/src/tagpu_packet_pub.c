@@ -283,6 +283,11 @@ void tagpu_packet_pub_font_snapshot(void)
    cut frame. Zeroed at the top of fill_frame; every appender runs inside it,
    on the game thread. */
 static unsigned s_fillShort;
+/* 1 while fill_frame redoes the fill it made for this same publish (same
+   head_seq): pkx_publish grew the slot under it. Set at the top of
+   fill_frame; the caches' reuse counters skip a fill that is done again, and
+   fill_counts_* below take back what the discarded fill counted. */
+static int      s_fillAgain;
 
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
                             unsigned* off_out, unsigned* len_out, unsigned trunc_bit)
@@ -774,7 +779,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             s_aRect[2] == cols && s_aRect[3] == rows && s_aMid == mid) {
             na = s_aN;
             if (s_aTrunc) p->truncated |= TAGPU_PK_TRUNC_ANCHORS;
-            s_cAnchReuse++;
+            if (!s_fillAgain) s_cAnchReuse++;
         } else {
             /* ROWS OUTWARD FROM THE VIEW'S CENTRE ROW, WHOLE ROWS ONLY. The
                rect is the fog reach plus a margin, and the table holds
@@ -849,8 +854,8 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             s_aHave = 1; s_aTick = p->tick; s_aN = na;
             /* A TRUNCATED SCAN IS CACHED AS TRUNCATED. Without this every reuse
                publish of the same tick would report a complete anchor table,
-               and the gate we read is "trunc is 0 after the first fill" — so
-               the one number that says the rect overflowed the table would be
+               and the feature pass's `trunc=`, which must read 0, is the one
+               number that says the rect overflowed the table: it would be
                under-reported by exactly the reuse rate, which is 6 in 7. */
             s_aTrunc = (p->truncated & TAGPU_PK_TRUNC_ANCHORS) ? 1 : 0;
             s_aRect[0] = c0; s_aRect[1] = r0; s_aRect[2] = cols; s_aRect[3] = rows;
@@ -1374,7 +1379,7 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level)
        the cache as well (tagpu_packet_pub_level_end), but that is the second
        line — this is the one that holds whichever provider fired. */
     if (s_fxHave && tick == s_fxTick && level == s_fxLevel && want == s_fxWant)
-        { s_cFxReuse++; return; }
+        { if (!s_fillAgain) s_cFxReuse++; return; }
     s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
     s_fxPartTrunc = 0;
     tagpu_pk_fill(s_partN, 0, (unsigned)sizeof s_partN);
@@ -1865,6 +1870,25 @@ static void fill_pal(TAGPU_PACKET* p, const char* ta)
 }
 
 /* the in-play frame: every field of the header, from the thread that owns it */
+/* THE COUNTS OF A FILL THAT IS DONE AGAIN ARE TAKEN BACK. pkx_publish fills
+   a slot a second time when the first fill did not fit, and publishes only
+   the second, so everything these count -- a cut table, a grid or minimap
+   that landed, a refusal, a duplicate id -- counts the fill that was
+   published, once per publish. The mark is taken before a publish's first
+   fill and restored before each fill that redoes it. Not in the list: the
+   anchor and effect SCANS, which count work done (a refill reuses their
+   caches, and its reuse is not counted either), and the snapshot copies,
+   which a refill does not repeat. */
+#define PK_FILL_COUNTS(X) \
+    X(s_cUnitTrunc) X(s_cWreckTrunc) X(s_cPieceTrunc) X(s_cUnitDup) X(s_cRelBad) \
+    X(s_cWreckOob) X(s_cFogRefused) X(s_cFogNoRec) X(s_cFogwSeen) \
+    X(s_cMmPic) X(s_cMmCopies) X(s_cMmRefused)
+#define PK_FC_FIELD(c) unsigned c;
+#define PK_FC_MARK(c)  s_fcMark.c = c;
+#define PK_FC_UNDO(c)  c = s_fcMark.c;
+static struct { PK_FILL_COUNTS(PK_FC_FIELD) } s_fcMark;
+static uint32_t s_fillHead;
+
 static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 {
     const char* ta = ta_main();
@@ -1885,6 +1909,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        zeroed, so in_game is 0 and roster_log returns at its guard. */
     s_lastFilled = p;
     s_fillShort = 0;
+    s_fillAgain = p->head_seq == s_fillHead;
+    if (s_fillAgain) { PK_FILL_COUNTS(PK_FC_UNDO) }
+    else { s_fillHead = p->head_seq; PK_FILL_COUNTS(PK_FC_MARK) }
     p->used_bytes = sizeof(TAGPU_PACKET);
     p->text_fg = -1;
     p->gamma = 1.0f;
