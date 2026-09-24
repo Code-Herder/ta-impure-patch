@@ -3726,8 +3726,8 @@ kept (the flying pieces' byte ring is the one place it cannot).
 
 ## The stock engine's own defects (2026-09-23)
 
-Two defects of the retail image itself, found by the camera work's audit of every eye reader and
-patched in `tagpu_patches.c` on every launch, with no switch ([gpu-status](gpu-status.html) §2.6c).
+Three defects of the retail image itself, found by the camera work's audit of every eye reader
+and patched in `tagpu_patches.c` on every launch, with no switch ([gpu-status](gpu-status.html) §2.6c).
 The register is [binary patches](binary-patches.html) §"Stock engine defects we patch", and the
 engine map has the disassembly.
 
@@ -3735,6 +3735,7 @@ engine map has the disassembly.
 |---|---|---|
 | `DrawGameScreen`'s unit sort writes past its buffer (`0x469807`) | ● done 2026-09-23 | the append is bounded at the allocation's end. Before: 82 unit pointers past the end on every frame at zoom 0.5 with `vpwide`. After: none, and 0 px from stock at 1×. A per-row bound was built first and dropped, because it erased 7 066 px that stock draws |
 | `GetGridPosFeature 0x421E60` reads a NULL plot | ● done 2026-09-23 | a NULL plot answers "no feature". Stock reaches it on a map shorter than the viewport plus 128 px, where the camera clamp has no valid eye [INFERRED]; no stock skirmish map is that short at retail resolutions, and on Lava Run at 1920×1440 the engine's terrain pass faulted first [MEASURED]. The resurrect order's lookup at `0x40514A` is not audited. The access violation at `0x421E64` reproduced with our pointer clamp off and is gone with the guard |
+| The terrain pass `0x483FA0` reads off its tile map | ● done 2026-09-24 | a window check at `0x484057`: a window stock gets right (eye ≥ 0, on the tile map) runs the stock pass; any other is drawn by us, black where it leaves the map or where stock left a strip unpainted. Reached by the camera clamp where the view is larger than the scroll extent (from the TNT headers, reads off the map on Lava Run from 1920×1440, six skirmish maps at 3440×1440 and twelve at 3840×2160, none at 1920×1200 or below), and by our zoom range above 1 at every left and top edge of any map, whenever the engine draws the ground. Before: an access violation at `0x4CBE44` on the first in-play draw of Lava Run at 1920×1440 and 3840×2160 and of Coast To Coast at 3840×2160 with the shipped play set, on the BAR camera branch at 1920×1440, and at zoom 2 at Two Continents' NW corner with `terrown.off`; at an eye of −20 a 20-px strip holding the last frame. After: no fault and the strip black; every draw with the eye in the engine's range takes the stock path, and the engine's frame on Coast To Coast at 1920×1440 is 0 px from main at the centre and the near corner, and differs at the far one only by a game message printed in one run |
 
 ## Shipping — the build people can download (2026-09-08)
 

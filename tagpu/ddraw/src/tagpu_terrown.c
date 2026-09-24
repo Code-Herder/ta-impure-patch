@@ -143,11 +143,12 @@ static void __cdecl terr_fill(void* ctxv)
     }
     /* The engine's own blits are clipped to the context rect (inclusive), so
        intersecting with it can only shrink the fill to what the terrain pass
-       would have covered — and since the OFFSCREEN carries no buffer HEIGHT,
-       that rect is the only bound we have on the last row. A context whose rect
-       does not validate is therefore REFUSED, not filled on the viewport fields
-       alone: failing here leaves g_filled clear, the composite does not invert,
-       and our own opaque terrain covers the viewport. */
+       would have covered — and that rect is the only bound this fill applies to
+       the last row (the surface's own height at +0x04 is not compared). A
+       context whose rect does not validate is therefore REFUSED, not filled on
+       the viewport fields alone: failing here leaves g_filled clear, the
+       composite does not invert, and our own opaque terrain covers the
+       viewport. */
     {
         int cl = ctx[CTX_CLIP_L], ct = ctx[CTX_CLIP_T];
         int cr = ctx[CTX_CLIP_R], cb = ctx[CTX_CLIP_B];
