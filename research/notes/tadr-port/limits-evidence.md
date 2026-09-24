@@ -475,9 +475,9 @@ use is fine.
 - Already bounded: `tagpu_scenario.c` `unit_type_index` refuses a count above 16 384;
   `model_root` requires `n <= 0x10000`; the packet's `model_id`, `type_row` and `PK_BUILD.type` are
   `u16`, bounded by the engine's count (`tagpu_native.c`, `tagpu_packet_pub.c`).
-- The Vulkan unit pass caches 512 models and 1024 (type, owner) streams a frame
-  (`tagpu_posebake.h`), and a frame over either is refused whole. Stock content can reach the
-  stream limit with ten players on screen. The A′ plan sizes them first.
+- The Vulkan unit pass cached 512 models and 1024 (type, owner) streams a frame
+  (`tagpu_posebake.h`). Past either, the frame's last objects were not drawn and the caches re-baked
+  every frame ([A′1](content-ids.md), which sizes them from the frame's bound).
 
 ## 9. Weapon IDs 256 → 4096 (`WeaponIdOverflow` + `WeaponFiredExt`, off by default)
 

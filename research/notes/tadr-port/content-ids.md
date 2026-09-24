@@ -30,7 +30,7 @@ Three findings shaped the plan:
 
 | Limit | Stock | Ours | What it touches | Landing |
 |---|---|---|---|---|
-| the Vulkan unit pass's caches | 512 models, 1024 (type, owner) streams a frame | sized from a bound the frame cannot exceed | visual: a frame over them refuses the whole unit draw | A′1 |
+| the Vulkan unit pass's caches | 512 models, 1024 (type, owner) streams a frame | **done**: 30 721 each, the bound a frame cannot exceed, and a keep of 512 / 1024 between frames | visual: past them the frame's last objects were silently not drawn | A′1 |
 | unit-type IDs | 512 real types | **16 383 real types** (16 384 counting `None`) | **simulation as content**: category masks, the AI, selection | A′2 |
 | a builder's build list | 30 entries, appended unbounded | the whole list | a heap overrun at game load | A′2 |
 | a download file's menu entries | 5 a file, filled unbounded | as many as the files hold | a heap overrun at game load | A′2 |
@@ -144,12 +144,21 @@ record with a 16-bit length (SRC, `Docs/saveformat.txt`), so recording a game br
 ### The unit pass's caches
 
 **Their own landing, before the type raise**, so the raise never exposes them. `tagpu_posebake.h`
-holds 512 models and 1024 (type, owner) streams. They must hold every entry one frame draws: an
-entry evicted mid-frame makes the Vulkan pass refuse the whole frame. Stock content can already
-reach the stream limit: ten players, each with more than 102 types on screen. Sixteen thousand
-types make it likely. The caches are sized from a bound the frame cannot exceed. A frame draws no
-more distinct models or streams than it has posed objects, and the frame packet already bounds
-those. So the refusal becomes unreachable by construction.
+held 512 models and 1024 (type, owner) streams, and they must hold every entry one frame draws.
+Stock content reaches the stream limit: four skirmish players each with 257 or more types on
+screen, or ten network players with 103. Sixteen thousand types make it likely. The caches are
+sized from a bound the frame cannot exceed. A frame draws no more distinct models or streams than
+it has posed objects, and the frame packet already bounds those: every unit its table holds, every
+wreck, and a ghost for every queued build site plus the cursor's. So a mid-frame eviction becomes
+unreachable by construction.
+
+**What the old caches did past their size** was not the refusal this section first predicted. A
+unit's hand-over record copies its entries' serials in `pd_record`, after every lookup of the
+frame, so an entry evicted mid-frame hands its record the re-baked entry's serial rather than a
+stale one, and the Vulkan pass's every-unit-or-none gate never fires. MEASURED: the frame's last
+objects — every wreck and heap, and the last units of the last owner — were simply not drawn, with
+no log line, while the caches re-baked 52 000 models and 239 000 streams in 35 seconds. Which step
+drops them was not traced.
 
 ### Weapons
 
@@ -239,13 +248,33 @@ Only the raises differ between the builds.
 
 ## The landings
 
-**A′1 — the unit pass's caches. Planned.**
+**A′1 — the unit pass's caches. Done 2026-09-24.**
 
-- The gate is a frame over each stock limit: more than 1024 (type, owner) streams on screen
-  (ten players, each with more than 102 types), and more than 512 distinct models (units, wrecks
-  and build ghosts together).
-- On the previous build, the refusal counter shows the frame refused. On this build it is drawn,
-  with no refusal.
+- **The size is the frame's bound**, `TAGPU_PB_FRAMEMAX` = `TAGPU_PK_MAX_UNITS` + `TAGPU_PK_MAX_WRECKS`
+  + `TAGPU_PK_MAX_BUILDS` + 1 = 30 721 entries in each cache (24 577 in the stock build), and the
+  Vulkan pass's vertex-buffer table holds one per entry of both.
+- **A slot is never taken from an entry this frame has asked for.** Every lookup stamps its entries
+  with the bake's own frame counter, advanced at each `tagpu_posebake_frame`; the eviction takes only
+  an entry with an older stamp. A frame asks for at most the bound, and the table holds the bound,
+  so a full table always has an unstamped entry.
+- **The keep bounds memory between frames**: 512 models and 1024 streams, as before. Below it a new
+  entry takes a free slot; at it, the least recently used entry this frame has not asked for goes
+  first, so the tables and their mirrors grow past the keep only while one frame draws more.
+- **The lookups are hash chains**, on the root and ghost flag for a model, the model's slot and the
+  owner for a stream, and on the serial for a vertex buffer: a scan would have been O(units ×
+  entries) a frame against a table of this size. A model's per-piece topology is its own block of
+  `nparts` entries, so an entry costs its model's pieces, not the 256-piece ceiling's.
+- **The Vulkan pass's retire grows** instead of holding 64 buffers: a full retire can no longer
+  refuse an eviction, and when it cannot grow the table grows instead.
+- **Measured**, Vulkan lane, Core Prime Industrial Area at 1280×1024 and zoom 0.25, four skirmish
+  owners each with all 278 stock types plus every stock wreck and heap, 1426 objects in one view,
+  paused right after the scenario applied:
+  - the previous build: the wrecks, the heaps and the last units of the last owner are not drawn,
+    nothing is logged, and the caches re-bake 51 929 models and 239 364 streams in 35 s;
+  - this build: a frame held 598 models and 1414 streams, all 1426 objects are drawn, and each
+    entry is baked once (598 and 1423);
+  - a level change in the same process drops all 598 and 1414, streams first, and the next level
+    re-bakes from the free slots with the vertex buffers of the first evicted through the retire.
 - Review at `medium`: renderer code, no engine patch, no thread-sync change.
 
 **A′2 — unit types, 16 384. Planned.**

@@ -33,21 +33,35 @@
    triggers and a lever (`log`). */
 
 #include "tagpu_model3do.h"      /* TAGPU_PBMAXPIECE, and the field offsets */
+#include "tagpu_packet.h"        /* the bound on one frame's posed objects */
 
 #define TAGPU_PB_GEOMST  8      /* floats per geometry vertex */
 #define TAGPU_PB_MATST   5      /* floats per material vertex */
 
-/* THE BAKE'S TWO CACHES, and they must hold every entry ONE FRAME draws: an
-   entry evicted mid-frame leaves the records written before it naming a stale
-   serial, and the Vulkan pass then refuses the whole frame. So they are sized
-   for the design point (tagpu_packet.h's TAGPU_PK_DESIGN_SLOTS): 10 players,
-   each with up to ~100 unit types on screen at once. A geometry entry is one
-   MODEL, not one type: a wreck's model and a ghost's split entry take slots of
-   their own, which is why it holds twice stock's 279 types. Here as well as in
-   tagpu_posebake.c because tagpu_vk_unit.c sizes its vertex-buffer table
-   from them. */
-#define TAGPU_PB_MAXGEOM  512   /* models cached at once                      */
-#define TAGPU_PB_MAXMAT  1024   /* (type, owner) streams cached at once        */
+/* THE BAKE'S TWO CACHES MUST HOLD EVERY ENTRY ONE FRAME DRAWS: an entry
+   evicted mid-frame leaves the records written before it naming a stale
+   serial, and the Vulkan pass then refuses the whole frame. A frame asks for
+   at most one geometry entry and one material stream per posed object, and the
+   frame packet bounds those: every unit its table holds, every wreck, and a
+   ghost for every queued build site plus the cursor's. So each cache holds
+   that many, and a slot is never taken from an entry this frame has asked for
+   (tagpu_posebake.c `pb_slot`): together they make the mid-frame eviction
+   unreachable, whatever the content.
+
+   THE KEEP IS WHAT A SESSION HOLDS BETWEEN FRAMES. Below it a new entry takes
+   a free slot; at it, the least recently used entry this frame has not asked
+   for is evicted first, so the table and the mirrors it owns stay at the keep
+   unless one frame draws more distinct models or streams than that. A
+   geometry entry is one MODEL, not one type: a wreck's model and a ghost's
+   split entry take slots of their own, which is why the keep is twice stock's
+   279 types; a material stream is one (type, owner). Here as well as in
+   tagpu_posebake.c because tagpu_vk_unit.c sizes its vertex-buffer table from
+   them. */
+#define TAGPU_PB_FRAMEMAX (TAGPU_PK_MAX_UNITS + TAGPU_PK_MAX_WRECKS + TAGPU_PK_MAX_BUILDS + 1u)
+#define TAGPU_PB_MAXGEOM  ((int)TAGPU_PB_FRAMEMAX)   /* models cached at once        */
+#define TAGPU_PB_MAXMAT   ((int)TAGPU_PB_FRAMEMAX)   /* (type, owner) streams        */
+#define TAGPU_PB_KEEPGEOM  512
+#define TAGPU_PB_KEEPMAT  1024
 
 /* geometry vertex flags (float, bit-tested in the shader as an int) */
 #define TAGPU_PBF_SHADED 1      /* body face with a usable rest normal        */
@@ -86,9 +100,12 @@ typedef struct TAGPU_PBGEOM {
     /* the topology, cached per type: `pose_accum_body` rebuilds parent links by
        scanning the node list for every sibling of every node, which is fine on
        today's rare trip frames and not fine at 200 units a frame */
-    short        parent[TAGPU_PBMAXPIECE];
-    float        restOff[TAGPU_PBMAXPIECE][3];
-    unsigned char done[TAGPU_PBMAXPIECE];     /* 0 = parent link never resolved */
+    /* nparts entries each, in one block the entry owns and its drop frees
+       (restOff is its start), so an entry costs its own model's pieces and not
+       the piece ceiling's */
+    short*       parent;
+    float      (*restOff)[3];
+    unsigned char* done;                      /* 0 = parent link never resolved */
     int          first[TAGPU_PB_NRANGE];      /* vertex offsets of the ranges  */
     int          count[TAGPU_PB_NRANGE];
     int          nvert;

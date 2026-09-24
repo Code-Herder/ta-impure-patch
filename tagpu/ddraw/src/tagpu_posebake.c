@@ -34,11 +34,12 @@
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirrors */
 #include "tagpu_log.h"
 
-/* The two cache sizes are tagpu_posebake.h's, which says why. Entries are
-   allocated as they are baked and kept until evicted, so a session pays for
-   the types it has actually drawn: a stock model bakes to ~2000 vertices, 64 KB
-   of geometry and 40 KB of material stream with their mirrors, so a full
-   material table is ~43 MB -- a 10-player game's cost, not a 1v1's. */
+/* The two cache sizes and their keeps are tagpu_posebake.h's, which says why.
+   Entries are allocated as they are baked and kept until evicted, so a session
+   pays for the types it has actually drawn: a stock model bakes to ~2000
+   vertices, 64 KB of geometry and 40 KB of material stream with their mirrors,
+   so a material table at its keep is ~43 MB -- a 10-player game's cost, not a
+   1v1's -- and only a frame that draws more streams than the keep holds more. */
 #define PB_MAXGEOM  TAGPU_PB_MAXGEOM
 #define PB_MAXMAT   TAGPU_PB_MAXMAT
 #define PB_MAXVERT 49152         /* vertices one model may bake to           */
@@ -85,9 +86,27 @@ static void lever_read(void)
 
 /* ---- the caches --------------------------------------------------------- */
 static TAGPU_PBGEOM s_geom[PB_MAXGEOM];
-static int          s_ngeom;
+static int          s_ngeom;                  /* slots ever used: the high-water mark */
 static TAGPU_PBMAT  s_mat[PB_MAXMAT];
 static unsigned char* s_matSkip[PB_MAXMAT];   /* per vertex, for the predictor */
+/* THE LOOKUP IS A HASH, NOT A SCAN: a unit asks for its two entries every
+   frame, and a scan of the table is O(units x entries), which the old table
+   sizes kept affordable and the frame bound does not. Chains hold slot + 1, so
+   0 ends one and a zeroed table is empty. A geometry entry hashes on its root
+   and ghost flag, a material stream on its geometry's slot and its owner; the
+   rest of each key is compared in the chain. */
+#define PB_HBITS 16
+#define PB_HSIZE (1u << PB_HBITS)
+typedef char pb_chain_fits[(PB_MAXGEOM < 0xFFFF && PB_MAXMAT < 0xFFFF) ? 1 : -1];
+static unsigned short s_geomHead[PB_HSIZE], s_geomNext[PB_MAXGEOM];
+static unsigned short s_matHead[PB_HSIZE], s_matNext[PB_MAXMAT];
+/* the free slots below each high-water mark, the live counts the keeps are
+   tested on, and how many streams name each geometry entry (its drop scans
+   the material table only when that is not 0) */
+static unsigned short s_geomFree[PB_MAXGEOM], s_matFree[PB_MAXMAT];
+static int          s_ngeomFree, s_nmatFree, s_geomLive, s_matLive;
+static int          s_geomSaid, s_matSaid;    /* the peaks already logged */
+static unsigned short s_geomNmat[PB_MAXGEOM];
 /* ---- THE VULKAN LANE'S MIRRORS (Phase G, the unit pass) ----
    The bake's own output, copied out of the walk's scratch in the same call,
    once the latch below has armed -- tagpu_posebake.h says why, and
@@ -100,7 +119,10 @@ static int          s_mirrorWant;             /* the Vulkan lane asked for them 
    serial and a ref handed to the wrong accessor cannot match. It starts at 1:
    0 is "never baked", which is what a zeroed entry reads. */
 static unsigned     s_serial = 1;
-static int          s_nmat;
+static int          s_nmat;                   /* slots ever used: the high-water mark */
+/* THE BAKE'S OWN FRAME, advanced by every tagpu_posebake_frame, so "stamped
+   this frame" means "asked for since the last latch" however the render
+   thread's counter moves; nothing but the eviction reads it */
 static unsigned     s_frame;
 /* THE FRAME'S generations, latched by tagpu_posebake_frame and used by every
    lookup in it. Re-reading them per unit would be a real hazard: the teardown pre
@@ -274,11 +296,40 @@ static void bake_topology(TAGPU_PBGEOM* g, const char* const* nd, int nparts)
     for (i = 0; i < nparts; i++) if (!g->done[i]) g->orphan++;
 }
 
+static unsigned pb_hash(unsigned a, unsigned b)
+{
+    return ((a ^ (b * 0x9E3779B9u)) * 0x85EBCA6Bu) >> (32 - PB_HBITS);
+}
+
+static unsigned geom_bucket(const TAGPU_PBGEOM* g)
+{
+    return pb_hash((unsigned)(size_t)g->root, (unsigned)g->ghost);
+}
+
+static unsigned mat_bucket(const TAGPU_PBMAT* m)
+{
+    return pb_hash((unsigned)(m->geom - s_geom), (unsigned)m->owner);
+}
+
+static void chain_unlink(unsigned short* head, unsigned short* next, unsigned b, int k)
+{
+    unsigned short* at = &head[b];
+    while (*at && *at != (unsigned short)(k + 1)) at = &next[*at - 1];
+    if (*at) *at = next[k];
+    next[k] = 0;
+}
+
 static void mat_drop(int i)
 {
+    TAGPU_PBMAT* m = &s_mat[i];
+    if (!m->geom) return;
+    chain_unlink(s_matHead, s_matNext, mat_bucket(m), i);
+    s_geomNmat[m->geom - s_geom]--;
     if (s_matSkip[i]) { free(s_matSkip[i]); s_matSkip[i] = NULL; }
     if (s_matMirror[i]) { free(s_matMirror[i]); s_matMirror[i] = NULL; }
-    memset(&s_mat[i], 0, sizeof s_mat[i]);
+    memset(m, 0, sizeof *m);
+    s_matFree[s_nmatFree++] = (unsigned short)i;
+    s_matLive--;
 }
 
 /* A material stream is only meaningful against the geometry it was walked
@@ -289,41 +340,69 @@ static int s_dropCascade;      /* material streams dropped WITH their geometry *
 
 static void geom_drop(TAGPU_PBGEOM* g)
 {
-    int i;
-    for (i = 0; i < s_nmat; i++)
+    int i, k = (int)(g - s_geom);
+    if (!g->root) return;
+    for (i = 0; i < s_nmat && s_geomNmat[k]; i++)
         if (s_mat[i].geom == g) { mat_drop(i); s_dropCascade++; }
+    chain_unlink(s_geomHead, s_geomNext, geom_bucket(g), k);
     /* the mirror goes with the entry, and the serial in it is what stops a
        hand-over published before this from reading the next model's bytes */
-    {
-        int k = (int)(g - s_geom);
-        if (k >= 0 && k < PB_MAXGEOM && s_geomMirror[k]) {
-            free(s_geomMirror[k]); s_geomMirror[k] = NULL;
-        }
-    }
+    if (s_geomMirror[k]) { free(s_geomMirror[k]); s_geomMirror[k] = NULL; }
+    free(g->restOff);                         /* the topology block */
     memset(g, 0, sizeof *g);
+    s_geomFree[s_ngeomFree++] = (unsigned short)k;
+    s_geomLive--;
 }
 
-/* evict the entry least recently asked for; the drop frees a mirror the
-   Vulkan unit pass reads on the render thread, and every caller of this is on
-   it */
+/* THE SLOT A NEW ENTRY TAKES (tagpu_posebake.h says why). At the keep, the
+   least recently used entry this frame has not asked for is evicted first;
+   then a free slot, and a new one above the high-water mark only when there is
+   none. Every entry this frame asks for is stamped with s_frame, a frame asks
+   for at most TAGPU_PB_FRAMEMAX, and the table holds that many: so a table
+   with every slot live has an unstamped entry to evict, a table with a slot
+   not live has a free one, and the -1 is unreachable. The drop frees mirrors
+   the Vulkan unit pass reads on the render thread, and every caller is on it. */
 static int geom_slot(void)
 {
-    int i, worst = 0;
+    int i, worst = -1;
+    if (s_geomLive >= TAGPU_PB_KEEPGEOM) {
+        for (i = 0; i < s_ngeom; i++)
+            if (s_geom[i].root && s_geom[i].lastFrame != s_frame &&
+                (worst < 0 || s_geom[i].lastFrame < s_geom[worst].lastFrame)) worst = i;
+        if (worst >= 0) geom_drop(&s_geom[worst]);
+    }
+    if (s_ngeomFree) return s_geomFree[--s_ngeomFree];
     if (s_ngeom < PB_MAXGEOM) return s_ngeom++;
-    for (i = 1; i < PB_MAXGEOM; i++)
-        if (s_geom[i].lastFrame < s_geom[worst].lastFrame) worst = i;
-    geom_drop(&s_geom[worst]);
-    return worst;
+    return -1;
 }
 
 static int mat_slot(void)
 {
-    int i, worst = 0;
+    int i, worst = -1;
+    if (s_matLive >= TAGPU_PB_KEEPMAT) {
+        for (i = 0; i < s_nmat; i++)
+            if (s_mat[i].geom && s_mat[i].lastFrame != s_frame &&
+                (worst < 0 || s_mat[i].lastFrame < s_mat[worst].lastFrame)) worst = i;
+        if (worst >= 0) mat_drop(worst);
+    }
+    if (s_nmatFree) return s_matFree[--s_nmatFree];
     if (s_nmat < PB_MAXMAT) return s_nmat++;
-    for (i = 1; i < PB_MAXMAT; i++)
-        if (s_mat[i].lastFrame < s_mat[worst].lastFrame) worst = i;
-    mat_drop(worst);
-    return worst;
+    return -1;
+}
+
+/* the -1 above, which the bound makes unreachable, said once if it ever is */
+static int s_saidFull;
+
+static void say_full(const char* table)
+{
+    char b[160];
+    if (s_saidFull) return;
+    s_saidFull = 1;
+    _snprintf(b, sizeof b, "posebake: the %s cache is full of entries this frame asked for "
+              "(%u a frame is the bound) - the unit is not drawn", table,
+              (unsigned)TAGPU_PB_FRAMEMAX);
+    b[sizeof b - 1] = 0;
+    blog(b);
 }
 
 static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
@@ -331,14 +410,32 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
 {
     PBGEOMCTX c; PBWALKSTAT st;
     TAGPU_PBGEOM* g;
+    unsigned char* topo;
     int r, slot;
     char b[192];
     c.nv = 0; c.over = 0; st.badNode = 0; st.oddFace = 0;
     slot = geom_slot();
+    if (slot < 0) { say_full("geometry"); return NULL; }
     g = &s_geom[slot];
     memset(g, 0, sizeof *g);
+    /* the topology, nparts entries of each array in one block: restOff first
+       for its alignment, then parent, then done */
+    topo = (unsigned char*)malloc((size_t)nparts * (sizeof(float[3]) + sizeof(short) + 1));
+    if (!topo) {
+        s_geomFree[s_ngeomFree++] = (unsigned short)slot;
+        return NULL;
+    }
+    g->restOff = (float (*)[3])(void*)topo;
+    g->parent = (short*)(void*)(topo + (size_t)nparts * sizeof(float[3]));
+    g->done = (unsigned char*)(g->parent + nparts);
     g->root = nd[0]; g->levelGen = lvl; g->nparts = nparts;
     g->ghost = ghost;
+    {
+        const unsigned b = geom_bucket(g);
+        s_geomNext[slot] = s_geomHead[b];
+        s_geomHead[b] = (unsigned short)(slot + 1);
+    }
+    s_geomLive++;
     for (r = 0; r < TAGPU_PB_NRANGE; r++) {
         g->first[r] = c.nv;
         pb_walk(nd, nparts, r, geom_emit, &c, r == 0 ? &st : NULL);
@@ -487,10 +584,18 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
         return NULL;
     }
     slot = mat_slot();
+    if (slot < 0) { say_full("material"); return NULL; }
     m = &s_mat[slot];
     memset(m, 0, sizeof *m);
     m->geom = g; m->root = g->root; m->owner = owner; m->atlasGen = atlasGen;
     m->levelGen = lvl;
+    {
+        const unsigned b = mat_bucket(m);
+        s_matNext[slot] = s_matHead[b];
+        s_matHead[b] = (unsigned short)(slot + 1);
+    }
+    s_geomNmat[g - s_geom]++;
+    s_matLive++;
     m->nvert = c.nv; m->nskip = c.nskip;
     m->serial = s_serial++;
     if (s_mirrorWant && c.nv > 0) {
@@ -532,8 +637,21 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
     unsigned lvl = level_gen;
     unsigned agen = tagpu_r3d_atlas_gen();
     int i, dg = 0, dm = 0;
+    /* the frame that just ended held more than a keep: said at each new peak,
+       so a session that never needs more says nothing */
+    if ((s_geomLive > TAGPU_PB_KEEPGEOM && s_geomLive > s_geomSaid) ||
+        (s_matLive > TAGPU_PB_KEEPMAT && s_matLive > s_matSaid)) {
+        char b[192];
+        if (s_geomLive > s_geomSaid) s_geomSaid = s_geomLive;
+        if (s_matLive > s_matSaid) s_matSaid = s_matLive;
+        _snprintf(b, sizeof b, "posebake: a frame held %d geometry entries and %d material "
+                  "streams (keep %d and %d, bound %u each)", s_geomLive, s_matLive,
+                  TAGPU_PB_KEEPGEOM, TAGPU_PB_KEEPMAT, (unsigned)TAGPU_PB_FRAMEMAX);
+        b[sizeof b - 1] = 0;
+        blog(b);
+    }
     s_dropCascade = 0;
-    s_frame = frame_counter;
+    s_frame++;
     s_lvlGen = lvl; s_atlasGen = agen;
     /* the same 30-frame cadence tagpu_native.on is read on: this is a file
        probe, and one per frame is a syscall nobody asked for */
@@ -553,20 +671,23 @@ void tagpu_posebake_frame(unsigned frame_counter, unsigned level_gen)
            re-bake of what is visible, once. */
         if (!s_mirrorWant) {
             s_mirrorWant = 1;
-            for (i = 0; i < s_ngeom; i++)
-                if (s_geom[i].root) { geom_drop(&s_geom[i]); dg++; }
             for (i = 0; i < s_nmat; i++)
                 if (s_mat[i].geom) { mat_drop(i); dm++; }
+            for (i = 0; i < s_ngeom; i++)
+                if (s_geom[i].root) { geom_drop(&s_geom[i]); dg++; }
         }
     }
-    for (i = 0; i < s_ngeom; i++)
-        if (s_geom[i].root && s_geom[i].levelGen != lvl) {
-            geom_drop(&s_geom[i]); dg++;
-        }
+    /* THE STREAMS FIRST: a stream carries its geometry's level, so a level
+       change drops every stream here and the geometry drops below find none
+       left to scan the material table for */
     for (i = 0; i < s_nmat; i++)
         if (s_mat[i].geom && (s_mat[i].levelGen != lvl ||
                               s_mat[i].atlasGen != agen || !s_mat[i].geom->root)) {
             mat_drop(i); dm++;
+        }
+    for (i = 0; i < s_ngeom; i++)
+        if (s_geom[i].root && s_geom[i].levelGen != lvl) {
+            geom_drop(&s_geom[i]); dg++;
         }
     if (dg || dm || s_dropCascade) {
         char b[192];
@@ -658,10 +779,14 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
        `parent[]` do not line up with a live unit's prim-ordered run, and a
        shared entry would pose a building's parts with the wrong pieces'
        matrices. */
-    for (i = 0; i < s_ngeom; i++)
-        if (s_geom[i].root == nd[0] && s_geom[i].levelGen == lvl &&
-            s_geom[i].nparts == nparts &&
-            s_geom[i].ghost == ghost) { g = &s_geom[i]; break; }
+    {
+        unsigned k = s_geomHead[pb_hash((unsigned)(size_t)nd[0], (unsigned)ghost)];
+        for (; k; k = s_geomNext[k - 1]) {
+            TAGPU_PBGEOM* e = &s_geom[k - 1];
+            if (e->root == nd[0] && e->levelGen == lvl && e->nparts == nparts &&
+                e->ghost == ghost) { g = e; break; }
+        }
+    }
     if (g && g->refused) { g->lastFrame = s_frame; return 0; }
     if (!g) {
         if (!tagpu_r3d_ready()) return 0;
@@ -670,9 +795,14 @@ int tagpu_posebake_unit(const TAGPU_PK_PIECE* pc, int nparts, int owner,
     }
     g->lastFrame = s_frame;
 
-    for (i = 0; i < s_nmat; i++)
-        if (s_mat[i].geom == g && s_mat[i].root == nd[0] && s_mat[i].owner == owner &&
-            s_mat[i].atlasGen == agen) { m = &s_mat[i]; break; }
+    {
+        unsigned k = s_matHead[pb_hash((unsigned)(g - s_geom), (unsigned)owner)];
+        for (; k; k = s_matNext[k - 1]) {
+            TAGPU_PBMAT* e = &s_mat[k - 1];
+            if (e->geom == g && e->root == nd[0] && e->owner == owner &&
+                e->atlasGen == agen) { m = e; break; }
+        }
+    }
     if (!m) {
         m = mat_bake(g, nd, owner, agen, lvl);
         if (!m) return 0;
