@@ -450,6 +450,7 @@ static int gate_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e)
             a->deferLive++;
             a->dfBytes += b;
             a->dfThis += b;
+            a->dfOpen = 1;
         }
         a->deferN++;
         return 0;
@@ -466,17 +467,19 @@ static int gate_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e)
     return 1;
 }
 
-/* No entry is waiting any more: every one was dropped with the layout. */
+/* No entry is waiting any more: every one was dropped with the layout, so
+   none of them lands and the drain's line is not written for them. */
 static void defer_forget(TAGPU_GAFATLAS* a)
 {
     a->deferLive = 0;
     a->nBk = 0;
+    a->dfOpen = 0;
 }
 
 void tagpu_gaf_atlas_frame(TAGPU_GAFATLAS* a)
 {
     unsigned long long back = 0;
-    int i, was;
+    int i;
     char b[256];
     if (!a) return;
     /* the frame that just ended */
@@ -485,7 +488,6 @@ void tagpu_gaf_atlas_frame(TAGPU_GAFATLAS* a)
     a->dfThis = 0;
     if (++a->frame == 0) a->frame = 1;
     a->nBk = 0;
-    was = a->deferLive;
     if (a->deferLive > 0) {
         a->deferLive = 0;
         for (i = 0; i < a->n; i++) {
@@ -510,7 +512,8 @@ void tagpu_gaf_atlas_frame(TAGPU_GAFATLAS* a)
         }
         if (back > a->dfMaxBacklog) a->dfMaxBacklog = (unsigned)back;
     }
-    if (was > 0 && a->deferLive == 0) {
+    if (a->dfOpen && a->deferLive == 0) {
+        a->dfOpen = 0;
         _snprintf(b, sizeof b, "%s: every deferred paint has landed - so far %u frame(s) deferred"
                   " %u KB (at most %u KB first deferred in one frame, %u KB waiting at once),"
                   " the longest wait %u frame(s), %u painted after waiting, %u gone unasked",

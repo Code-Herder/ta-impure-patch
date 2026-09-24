@@ -327,10 +327,14 @@ typedef struct TAGPU_GAFATLAS {
        frames with a refusal, the bytes (the cells' RGBA8) first refused and the
        most in one frame, the most waiting at a frame's start, the longest wait
        in frames, entries that stopped waiting unasked, and paints that had
-       waited. `dfThis` is this frame's first-refused bytes. */
+       waited. `dfThis` is this frame's first-refused bytes. `dfOpen` is 1 from
+       a refusal until a frame opens with nothing waiting, which is when the
+       line is written: the last waiting entries are painted during a frame, so
+       the count at the start of the one before is no witness to it. */
     unsigned       dfFrames, dfMaxFrame, dfMaxBacklog, dfMaxWait, dfExpired, dfPainted;
     unsigned long long dfBytes;
     unsigned       dfThis, dfSeenN;
+    int            dfOpen;
     /* THERE IS NO MIRROR OF THE RESTORED TWIN. `mirror` above is written by
        the paint, because the CPU holds the source bytes; restored texels are
        the RESTORER'S OUTPUT and exist only on the GPU. The Vulkan lane gets
