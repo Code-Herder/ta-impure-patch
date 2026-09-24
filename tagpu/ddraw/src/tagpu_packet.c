@@ -55,10 +55,11 @@
    once (VirtualAlloc MEM_RESERVE, PK_RESERVE per frame slot, which the
    design point's unit tables fit -- see below) and pages are COMMITTED as the
    high-water mark rises,
-   by the producer, on the slot it holds as W. A fill that does not fit
-   truncates this frame (a bit per table in the header) and the next publish
-   grows the write slot first; a commit that fails keeps the current size and
-   retries later, never pins it. So no block ever moves, a pointer into a
+   by the producer, on the slot it holds as W. A fill that does not fit grows
+   the slot and fills it again before it is published (`pkx_publish`); only a
+   slot that cannot grow publishes a truncated frame (a bit per table in the
+   header), and a commit that fails keeps the current size and retries later,
+   never pins it. So no block ever moves, a pointer into a
    slot can never dangle, and a rule-breaking cached pointer reaches a slot's
    current bytes and never freed memory. Not reference counting: a count
    cannot see the raw pointer a module copies.
@@ -191,7 +192,7 @@ typedef struct PKX {
     DWORD           consTid;
     /* diagnostics: written by one side, read by the heartbeat on the other;
        aligned dwords, so a stale value is the worst a racy read can get   */
-    volatile unsigned cPub, cSkip, cOverrun, cForeign, cGrow, cCommitFail, cTrunc, cPViol;
+    volatile unsigned cPub, cSkip, cOverrun, cForeign, cGrow, cCommitFail, cTrunc, cRefill, cPViol;
     volatile unsigned cAcq, cTaken, cGap, cViol, cCrcBad, cNoPkt, cSameTick, cPaired;
     volatile unsigned hist[PK_HIST_N + 1];
     unsigned        histPrev[PK_HIST_N + 1];
@@ -349,6 +350,28 @@ static int pkx_publish(PKX* m, pkx_fill_fn fill, void* ctx, int force)
     REC_CAP(p)  = m->cap[w];
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
     need = fill(p, ctx);                           /* every engine read is in there */
+    /* A FILL THAT DID NOT FIT IS DONE AGAIN, NOT PUBLISHED, WHILE THE SLOT
+       CAN GROW TO IT. Published, it is a frame with tables missing — at a
+       level's start, when the world tables first outgrow a slot, a frame with
+       no fog grid, no shade table and no units, which the native pass draws
+       with no fog at all. The slot is still this side's alone (W, not yet
+       exchanged), so committing more of its pages and filling it again is
+       invisible to the consumer: the head stored above stays, and the tail is
+       stored after the fill that is kept. The fill reports the size of the
+       whole fill, not the end of the table that ran out (tagpu_packet_pub.c,
+       s_fillShort), so one refill fits unless an input the render thread
+       publishes (the fx, ghost and minimap wants) changed in between.
+       BOUNDED: slot_commit succeeds only with cap[w] >= need > the old cap,
+       so every pass grows the slot by at least a grain, and the reserve ends
+       the loop. What leaves it still over capacity (a commit that failed, a
+       fill larger than the reserve) is published cut, and counted in `trunc`. */
+    while (need > REC_CAP(p)) {
+        if (need > m->need) m->need = need;
+        if (!slot_commit(m, w, need)) break;
+        m->cGrow++; m->cRefill++;
+        REC_CAP(p) = m->cap[w];
+        need = fill(p, ctx);
+    }
     /* our own bounds on what the fill left — a misbehaving fill is a producer
        violation, and the record is still made valid for the consumer */
     if (REC_USED(p) < m->recBytes || REC_USED(p) > REC_CAP(p) || (REC_USED(p) & 3u)) {
@@ -817,11 +840,11 @@ static void heartbeat(PKX* m, unsigned fc)
     }
     pubs = m->cPub; taken = m->cTaken;
     n = _snprintf(b, sizeof b,
-                  "packet:%s pub=%u skip=%u overrun=%u foreign=%u acq=%u taken=%u gap=%u grow=%u commitfail=%u trunc=%u viol=%u pviol=%u crcbad=%u nopkt=%u"
+                  "packet:%s pub=%u skip=%u overrun=%u foreign=%u acq=%u taken=%u gap=%u grow=%u commitfail=%u trunc=%u refill=%u viol=%u pviol=%u crcbad=%u nopkt=%u"
                   " | pub/s=%.0f taken/s=%.1f pubus p50=%u p99=%s%u",
                   m->fatal ? " STOPPED" : "",
                   m->cPub, m->cSkip, m->cOverrun, m->cForeign, m->cAcq, m->cTaken, m->cGap,
-                  m->cGrow, m->cCommitFail, m->cTrunc, m->cViol, m->cPViol, m->cCrcBad, m->cNoPkt,
+                  m->cGrow, m->cCommitFail, m->cTrunc, m->cRefill, m->cViol, m->cPViol, m->cCrcBad, m->cNoPkt,
                   secs > 0.0 ? (double)(pubs - lastPub) / secs : 0.0,
                   secs > 0.0 ? (double)(taken - lastTaken) / secs : 0.0,
                   p50, p99 >= PK_HIST_N * 2u ? ">" : "", p99);

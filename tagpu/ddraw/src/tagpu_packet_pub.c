@@ -270,13 +270,31 @@ void tagpu_packet_pub_font_snapshot(void)
 
 /* ---- the fills ----------------------------------------------------------- */
 
+/* WHAT THE TABLES THAT DID NOT FIT WOULD HAVE TAKEN, in this fill. A table
+   that does not fit leaves the cursor where it was, so the tables after it
+   pack into the room it would have used, and the largest end any one of them
+   asked for is not the size of the fill: with several tables cut, a slot grown
+   to that end would cut one again. Every refusal below adds its table's
+   4-aligned length here. In the layout where everything fits, each table
+   after a refused one moves by exactly that length, and a move by a multiple
+   of 4 keeps every alignment, so `ALIGN4(cursor) + s_fillShort` is at least
+   the size of the whole fill (fill_frame returns it). That is what lets
+   pkx_publish grow the slot once and fill it again instead of publishing the
+   cut frame. Zeroed at the top of fill_frame; every appender runs inside it,
+   on the game thread. */
+static unsigned s_fillShort;
+
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
                             unsigned* off_out, unsigned* len_out, unsigned trunc_bit)
 {
     unsigned at = (*cursor + 3u) & ~3u;
     unsigned end = at + ((len + 3u) & ~3u);
     if (!len) { *off_out = 0; *len_out = 0; return *cursor; }
-    if (end > p->cap_bytes) { p->truncated |= trunc_bit; *off_out = 0; *len_out = 0; return end; }
+    if (end > p->cap_bytes) {
+        p->truncated |= trunc_bit; *off_out = 0; *len_out = 0;
+        s_fillShort += (len + 3u) & ~3u;
+        return end;
+    }
     if (src) tagpu_pk_copy((unsigned char*)p + at, src, len);
     else tagpu_pk_fill((unsigned char*)p + at, 0x5A, len);
     *off_out = at; *len_out = len;
@@ -520,7 +538,7 @@ static unsigned append_table(TAGPU_PACKET* p, unsigned* cursor, const void* src,
     unsigned end = at + n * stride;
     *off_out = 0; *n_out = 0;
     if (!n) return *cursor;
-    if (end > p->cap_bytes) { p->truncated |= trunc_bit; return end; }
+    if (end > p->cap_bytes) { p->truncated |= trunc_bit; s_fillShort += PKT_ALIGN4(n * stride); return end; }
     tagpu_pk_copy((unsigned char*)p + at, src, n * stride);
     *off_out = at; *n_out = n; *cursor = end;
     return end;
@@ -586,8 +604,9 @@ static void anchor_rect(const TAGPU_PACKET* p, int loX, int hiX, int loY, int hi
 }
 
 /* The four tables, into the slot the producer holds. Returns the byte count
-   the fill NEEDED — past cap_bytes means something truncated this frame and
-   the primitive grows the write slot before the next fill. */
+   the fill NEEDED — past cap_bytes means something did not fit, and the
+   primitive grows the write slot and fills it again before publishing
+   (pkx_publish; fill_frame turns this into the whole fill's size). */
 static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 {
     const char* beg   = *(const char* const*)(ta + OFF_UNIT_BEGIN);
@@ -909,6 +928,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     {
         unsigned want = pieces_base + pkWant * (unsigned)sizeof(TAGPU_PK_PIECE);
         if (want > need) need = want;
+        s_fillShort += PKT_ALIGN4((pkWant - pk) * (unsigned)sizeof(TAGPU_PK_PIECE));
     }
 
     e = append_table(p, cursor, s_uScratch, nu, (unsigned)sizeof(TAGPU_PK_UNIT),
@@ -1890,6 +1910,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        treats as proof the map is live. Stamped here the header is already
        zeroed, so in_game is 0 and roster_log returns at its guard. */
     s_lastFilled = p;
+    s_fillShort = 0;
     p->used_bytes = sizeof(TAGPU_PACKET);
     p->text_fg = -1;
     p->gamma = 1.0f;
@@ -1998,6 +2019,8 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         if (e > need) need = e;
     }
     p->used_bytes = cursor;
+    /* the whole fill's size when a table did not fit (s_fillShort) */
+    if (s_fillShort && PKT_ALIGN4(cursor) + s_fillShort > need) need = PKT_ALIGN4(cursor) + s_fillShort;
     return need;
 }
 
