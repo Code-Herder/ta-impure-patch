@@ -130,7 +130,8 @@
 #include "spirv/tagpu_feat.spv.h"
 
 #define VST TAGPU_FEAT_VST                 /* floats per vertex, the gather's  */
-#define UBLK 32                            /* bytes in each std140 block below */
+#define UBLK_VS 32                         /* std140, the generated header's   */
+#define UBLK_FS 48
 
 /* ---- the entry points ----------------------------------------------------
    Resolved from the seam's `gdpa`/`gipa`, never linked, and this pass's own:
@@ -249,7 +250,7 @@ static int            s_rjTried;           /* the device refused; do not ask aga
 static VkImageView    s_rjSrcView;
 
 /* what `record` was left to draw */
-static int s_nShadow, s_nBody;
+static int s_nShadow, s_nBody, s_nMShadow, s_nMBody;
 static int s_scX, s_scY, s_scW, s_scH;     /* the scissor, in Vulkan framebuffer px */
 /* The scissor's INPUTS, kept as numbers rather than as a copy of the hand-over.
    TAGPU_FEATHAND is full of pointers into the gather's own frame memory, and a
@@ -744,8 +745,8 @@ static int build_descriptors(const TAGPU_VKPASS* d)
         VkWriteDescriptorSet w[2];
         s_slot[i].dset = sets[i];
         memset(bi, 0, sizeof bi); memset(w, 0, sizeof w);
-        bi[0].buffer = s_ubuf; bi[0].offset = i * s_ustride;              bi[0].range = UBLK;
-        bi[1].buffer = s_ubuf; bi[1].offset = i * s_ustride + s_ublock;   bi[1].range = UBLK;
+        bi[0].buffer = s_ubuf; bi[0].offset = i * s_ustride;              bi[0].range = UBLK_VS;
+        bi[1].buffer = s_ubuf; bi[1].offset = i * s_ustride + s_ublock;   bi[1].range = UBLK_FS;
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].dstSet = sets[i]; w[0].dstBinding = 0; w[0].descriptorCount = 1;
         w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &bi[0];
@@ -839,13 +840,13 @@ static int build(const TAGPU_VKPASS* d)
     /* TWO BLOCKS PER SLOT, EACH AT AN OFFSET THE DEVICE ACCEPTS.
        `minUniformBufferOffsetAlignment` is 16 on some devices and 256 on
        others, and a bound buffer offset that is not a multiple of it is
-       undefined behaviour rather than a slow path. Each block is 32 bytes
-       (the generated header prints the std140 offsets), so the stride is the
-       larger of the two, twice. */
+       undefined behaviour rather than a slow path. The blocks are 32 and 48
+       bytes (the generated header prints the std140 offsets), so each is
+       rounded up to that alignment in turn. */
     ualign = props.limits.minUniformBufferOffsetAlignment;
-    if (ualign < UBLK) ualign = UBLK;
-    s_ublock = ualign;
-    s_ustride = ualign * 2;
+    if (ualign < 1) ualign = 1;
+    s_ublock = ((VkDeviceSize)UBLK_VS + ualign - 1) / ualign * ualign;
+    s_ustride = s_ublock + ((VkDeviceSize)UBLK_FS + ualign - 1) / ualign * ualign;
 
     if (!mk_buffer(d, s_ustride * d->slots, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -1325,7 +1326,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        writing an int through a float array is the aliasing rule broken at -O2,
        which is not a place to find out that the fog branch took a garbage
        uFog. */
-    union { float f[8]; int i[8]; } ub;
+    union { float f[UBLK_FS / 4]; int i[UBLK_FS / 4]; } ub;
     int fogW = 1, fogH = 1;
 
     if (s_state == ST_REFUSED) return 0;
@@ -1368,7 +1369,8 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     }
     s_saidNoMirror = 0;
     if (!h.pal) return 0;
-    if (h.nShadow < 0 || h.nBody < 0 || h.nShadow + h.nBody < 1) return 0;
+    if (h.nShadow < 0 || h.nBody < 0 || h.nMShadow < 0 || h.nMBody < 0 ||
+        h.nShadow + h.nBody + h.nMShadow + h.nMBody < 1) return 0;
     if (h.fogGrid) {
         if (h.fogGridCols < 1 || h.fogGridRows < 1 ||
             h.fogGridCols > FOG_MAXDIM || h.fogGridRows > FOG_MAXDIM) {
@@ -1386,12 +1388,24 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        with no device-wide wait. */
     if (!slot_fog(d, s, fogW, fogH)) goto refuse;
 
-    vbytes = (VkDeviceSize)(h.nShadow + h.nBody) * VST * sizeof(float);
+    vbytes = (VkDeviceSize)(h.nShadow + h.nBody + h.nMShadow + h.nMBody) * VST * sizeof(float);
     if (!slot_verts(d, s, vbytes)) goto refuse;
-    /* the two buckets, contiguous and in draw order: shadows, then bodies */
-    if (h.nShadow) memcpy(s->vmap, h.shadow, (size_t)h.nShadow * VST * sizeof(float));
-    if (h.nBody)   memcpy(s->vmap + (size_t)h.nShadow * VST * sizeof(float),
-                          h.body, (size_t)h.nBody * VST * sizeof(float));
+    /* the four buckets, contiguous and in draw order: shadows, then bodies,
+       the map's own and then the mirror's past its edge */
+    {
+        const float* src[4];
+        int n[4], k;
+        size_t at = 0;
+        src[0] = h.shadow;  n[0] = h.nShadow;
+        src[1] = h.body;    n[1] = h.nBody;
+        src[2] = h.mshadow; n[2] = h.nMShadow;
+        src[3] = h.mbody;   n[3] = h.nMBody;
+        for (k = 0; k < 4; k++) {
+            if (n[k] && src[k])
+                memcpy(s->vmap + at, src[k], (size_t)n[k] * VST * sizeof(float));
+            at += (size_t)n[k] * VST * sizeof(float);
+        }
+    }
 
     /* A FRAME WITH NO STAGING IS SKIPPED, NOT REFUSED: the atlas this frame
        samples has not reached the device, and the next frame sends it. */
@@ -1469,16 +1483,19 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     ub.f[2] = h.zoom;                                  /* uZoom      float @8  */
     ub.f[4] = h.zoomCx; ub.f[5] = h.zoomCy;            /* uZoomC      vec2 @16 */
     ub.f[6] = h.depthScale;                            /* uDepthScale float @24 */
-    memcpy(s_umap + (size_t)slot * s_ustride, ub.f, UBLK);
+    memcpy(s_umap + (size_t)slot * s_ustride, ub.f, UBLK_VS);
     memset(&ub, 0, sizeof ub);
     ub.i[0] = h.restored;                              /* uRestored    int @0  */
     ub.f[2] = h.fogOrgX; ub.f[3] = h.fogOrgY;          /* uFogOrg     vec2 @8  */
     ub.f[4] = h.fogCols; ub.f[5] = h.fogRows;          /* uFogDim     vec2 @16 */
     ub.i[6] = h.fog;                                   /* uFog         int @24 */
-    memcpy(s_umap + (size_t)slot * s_ustride + s_ublock, ub.f, UBLK);
+    ub.f[8] = h.mapPxW; ub.f[9] = h.mapPxH;            /* uMapPx      vec2 @32 */
+    memcpy(s_umap + (size_t)slot * s_ustride + s_ublock, ub.f, UBLK_FS);
 
     s_nShadow = h.nShadow;
     s_nBody = h.nBody;
+    s_nMShadow = h.nMShadow;
+    s_nMBody = h.nMBody;
     s_hGw = h.gw; s_hGh = h.gh;
     s_hVpL = h.vpL; s_hVpT = h.vpT; s_hVw = h.vw; s_hVh = h.vh;
     s_hScissorOn = h.scissorOn;
@@ -1595,6 +1612,17 @@ void tagpu_vk_feat_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeBody);
         vkCmdDraw(cb, (uint32_t)s_nBody, 1, (uint32_t)s_nShadow, 0);
     }
+    /* THE MAP EDGE'S MIRROR, after the map's own and through the same two
+       pipelines: its shadows write no depth, its bodies do, and the keys sort
+       both against what is already in the buffer (tagpu_feat.c, KEYRECT). */
+    if (s_nMShadow) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeShadow);
+        vkCmdDraw(cb, (uint32_t)s_nMShadow, 1, (uint32_t)(s_nShadow + s_nBody), 0);
+    }
+    if (s_nMBody) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeBody);
+        vkCmdDraw(cb, (uint32_t)s_nMBody, 1, (uint32_t)(s_nShadow + s_nBody + s_nMShadow), 0);
+    }
 }
 
 int tagpu_vk_feat_ab_frame(void)
@@ -1661,7 +1689,7 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
     if (s_umem)  { vkFreeMemory(dev, s_umem, NULL); s_umem = VK_NULL_HANDLE; }
     s_drawThis = 0;
     s_abFrame = 0;
-    s_nShadow = s_nBody = 0;
+    s_nShadow = s_nBody = s_nMShadow = s_nMBody = 0;
     /* ST_UNBUILT and not ST_REFUSED: a pass brought down by a mode change or a
        cleared lever must be able to come back. THE ONE EXCEPTION IS THE
        TEARDOWN THIS PASS ASKED FOR: there the device refusing resources IS the

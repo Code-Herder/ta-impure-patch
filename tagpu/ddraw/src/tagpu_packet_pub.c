@@ -102,6 +102,7 @@
                                 out of the snapshot the squares draw from        */
 #include "tagpu_surf.h"      /* the golden source: TA's composed frame, copied on
                                 THIS thread at the one point it is finished      */
+#include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -323,6 +324,7 @@ typedef char pk_unit_size  [(sizeof(TAGPU_PK_UNIT)   == 100) ? 1 : -1];
 typedef char pk_piece_size [(sizeof(TAGPU_PK_PIECE)  ==  24) ? 1 : -1];
 typedef char pk_wreck_size [(sizeof(TAGPU_PK_WRECK)  ==  44) ? 1 : -1];
 typedef char pk_anchor_size[(sizeof(TAGPU_PK_ANCHOR) ==  16) ? 1 : -1];
+typedef char pk_mapfeat_size[(sizeof(TAGPU_PK_MAPFEAT) == 8) ? 1 : -1];
 
 static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
 /* what fill_frame last wrote. Read back by roster_log immediately after the
@@ -371,6 +373,14 @@ static volatile unsigned s_cShdCopies;
    costs one comparison and changes nothing. The WRECKS are re-derived from the
    cached anchors either way, because their piece runs go into THIS packet's
    arena. */
+/* THE MAP'S OWN FEATURES (TAGPU_PK_MAPFEAT): taken once a level, at its first
+   in-play draw, by `mapfeat_snapshot`. `s_mfGen` is the level it was taken
+   for, -1 before the first; the level end resets it. */
+static TAGPU_PK_MAPFEAT s_mfScratch[TAGPU_PK_MAX_MAPFEAT];
+static unsigned s_mfN;
+static int      s_mfGen = -1, s_mfTrunc;
+static volatile unsigned s_cMfCarried;
+
 static unsigned s_aTick;
 static int      s_aHave, s_aTrunc, s_aRect[4];
 static unsigned s_aN;
@@ -569,6 +579,74 @@ static void anchor_rect(const TAGPU_PACKET* p, int* c0, int* r0, int* cols, int*
     if (*r0 + *rows > mapH) *rows = mapH - *r0;
     if (*cols < 0) *cols = 0;
     if (*rows < 0) *rows = 0;
+}
+
+/* THE MAP'S OWN FEATURES, the whole grid once a level (TAGPU_PK_MAPFEAT has
+   why the first in-play draw is the moment). Every bound is the engine's own
+   count: the walk runs over the map_w16 x map_h16 cells the anchor scan above
+   also walks, a def is kept only inside NumFeatureDefs, and the height
+   neighbours take the anchor scan's edge clamps, so `lift` is the number the
+   projection would compute for the anchor. Once a level, so the cost -- one
+   u16 load per cell, 1.6 M cells on a 1280 x 1280 map -- is paid on the frame
+   the level opens and never again. */
+static void mapfeat_snapshot(const char* ta)
+{
+    const char* fmap;
+    int mapW, mapH, defs, row, col;
+    s_mfGen = (int)s_levelGen;           /* tried: once a level, whatever it finds */
+    s_mfN = 0; s_mfTrunc = 0;
+    if (!ta) return;
+    fmap = *(const char* const*)(ta + OFF_FEATMAP);
+    mapW = RD32(ta, OFF_MAP_W16);
+    mapH = RD32(ta, OFF_MAP_H16);
+    defs = RD32(ta, OFF_FEATCOUNT);
+    if (!ptr_ok(fmap) || mapW <= 0 || mapH <= 0 || mapW > 4096 || mapH > 4096) return;
+    if (defs <= 0 || defs > 4096) return;
+    for (row = 0; row < mapH; row++) {
+        const char* trow = fmap + ((size_t)row * mapW) * FT_STRIDE;
+        for (col = 0; col < mapW; col++) {
+            const char* t = trow + (size_t)col * FT_STRIDE;
+            unsigned d = RDU16(t, FT_DEFIDX);
+            unsigned h, hr, hd, hrd;
+            TAGPU_PK_MAPFEAT* m;
+            if (d >= (unsigned)defs) continue;          /* 0xFFFB.. and junk alike */
+            if (RDU8(t, FT_FLAGS) & 1u) continue;       /* the wreck pool's        */
+            if (s_mfN >= TAGPU_PK_MAX_MAPFEAT) { s_mfTrunc = 1; row = mapH; break; }
+            h  = RDU8(t, FT_HEIGHT);
+            hr = (col + 1 < mapW) ? RDU8(t + FT_STRIDE, FT_HEIGHT) : h;
+            if (row + 1 < mapH) {
+                const char* t2 = t + (size_t)mapW * FT_STRIDE;
+                hd  = RDU8(t2, FT_HEIGHT);
+                hrd = (col + 1 < mapW) ? RDU8(t2 + FT_STRIDE, FT_HEIGHT) : hd;
+            } else { hd = h; hrd = hr; }
+            m = &s_mfScratch[s_mfN++];
+            m->col = (unsigned short)col; m->row = (unsigned short)row;
+            m->def = (unsigned short)d;
+            m->lift = (unsigned char)((h + hr + hd + hrd) >> 3);
+            m->pad = 0;
+        }
+    }
+    {
+        char b[160];
+        _snprintf(b, sizeof b, "packet: level gen %u: the map's own features: %u anchor(s) over %dx%d%s",
+                  s_levelGen, s_mfN, mapW, mapH, s_mfTrunc ? " (TRUNCATED at the table's cap)" : "");
+        b[sizeof b - 1] = 0; plog(b);
+    }
+}
+
+/* ...into this packet, while the consumer wants them and does not yet hold
+   this level's. */
+static unsigned fill_mapfeat(TAGPU_PACKET* p, unsigned* cursor)
+{
+    unsigned e;
+    if (!s_mfN || s_mfGen != (int)p->level_gen) return *cursor;
+    if (!tagpu_feat_mapfeat_want() || tagpu_feat_mapfeat_have() == p->level_gen + 1u)
+        return *cursor;
+    e = append_table(p, cursor, s_mfScratch, s_mfN, (unsigned)sizeof(TAGPU_PK_MAPFEAT),
+                     &p->off_mapfeat, &p->n_mapfeat, TAGPU_PK_TRUNC_MAPFEAT);
+    if (s_mfTrunc) p->truncated |= TAGPU_PK_TRUNC_MAPFEAT;
+    if (p->n_mapfeat) s_cMfCarried++;
+    return e;
 }
 
 /* The four tables, into the slot the producer holds. Returns the byte count
@@ -1756,6 +1834,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the UI's render half ---- */
     e = fill_gui(p, ta, &cursor);
     if (e > need) need = e;
+    /* ---- the map's own features, until the mirror holds them ---- */
+    e = fill_mapfeat(p, &cursor);
+    if (e > need) need = e;
     shd_snapshot();
     if (s_shdOk) {
         e = append_area(p, &cursor, s_shd, (unsigned)sizeof s_shd, &p->shd_off, &p->shd_len,
@@ -2042,6 +2123,8 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     s_fxHave = 0; s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
     /* the next level's picture is a different picture, and it has not been sent */
     s_mmPicGen = -1; s_mmPicW = s_mmPicH = 0;
+    /* and its features are a different map's */
+    s_mfGen = -1; s_mfN = 0; s_mfTrunc = 0;
 }
 
 /* ---- the observers ------------------------------------------------------- */
@@ -2127,6 +2210,11 @@ static void* __cdecl after_draw(unsigned int* regs)
        with no consumer -- the GDI backend, where nothing calls
        tagpu_packet_acquire -- this forces about twice a second and `overrun`
        counts every one; gpu-status.md's exchange health rule says so. */
+    /* THE MAP'S OWN FEATURES, BEFORE THE PUBLISH AND OUTSIDE ITS GATE: the
+       level's first in-play `after` is the one moment that is before every
+       run of the scenario applier's stub at 0x4969D2 (TAGPU_PK_MAPFEAT), and
+       a publish can be skipped -- this cannot. */
+    if (s_mfGen != (int)s_levelGen) mapfeat_snapshot(ta_main());
     {
         const int pub = tagpu_packet_publish(fill_frame, NULL,
                                              !s_levelOpen || roster_wants_fill());
@@ -2268,14 +2356,16 @@ static void extra(char* buf, unsigned cap, double secs)
         _snprintf(buf + n, cap > n ? cap - n : 0,
                   " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u thin=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
                   " | fog: %dx%d wide=%dx%d/%u refused=%u"
-                  " | gui: mm=%dx%d/%u refused=%u pic=%dx%d/%u",
+                  " | gui: mm=%dx%d/%u refused=%u pic=%dx%d/%u"
+                  " | mapfeat=%u%s carried=%u",
                   s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart, s_cPartMax,
                   s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartThin, s_cLayerBad, s_cSubBad, s_cLhtCopies,
                   tagpu_fxown_want_fx(), tagpu_fxown_want_sfx(),
                   s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR, s_cFogwSeen,
                   s_cFogRefused,
                   s_lastMmW, s_lastMmH, s_cMmCopies, s_cMmRefused,
-                  s_mmPicW, s_mmPicH, s_cMmPic);
+                  s_mmPicW, s_mmPicH, s_cMmPic,
+                  s_mfN, s_mfTrunc ? "(trunc)" : "", s_cMfCarried);
         n = 0;
         while (n < cap && buf[n]) n++;
         /* THE SHELL'S CURSOR CHANNEL. `draws` is every entry to

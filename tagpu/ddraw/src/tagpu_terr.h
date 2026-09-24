@@ -121,6 +121,16 @@ int  tagpu_terr_key(void);
    -- the shader's attribute is a `vec4`, and SINT would need an `ivec4`.
    tagpu_vk_terr.c asks the device for that format rather than assuming it. */
 #define TAGPU_TERR_ICOMP 4
+/* THE MIRROR'S FLAGS, in the tile's column and row (the edge setting,
+   `tagpu_terr_gather`). A cell past the map carries the tile of the cell it
+   reflects to, TAGPU_TERR_MIRROR in its tile column, and TAGPU_TERR_FLIP in the
+   column and/or row whose axis the reflection turned over. They are spare bits
+   by bound, not by habit: the tile column is under ATLAS_COLS (64) and the tile
+   row under 65536 / 64 = 1024, because a tile index is a u16 -- so bits 13 and
+   14 are clear in every on-map record, and a flagged one is still a positive
+   short. The vertex stage takes each off as one exact power of two. */
+#define TAGPU_TERR_MIRROR 0x2000
+#define TAGPU_TERR_FLIP   0x4000
 
 typedef struct TAGPU_TERRHAND {
     /* THE FRAME THIS WAS PUBLISHED ON (the fork's monotonic render-thread
@@ -169,6 +179,10 @@ typedef struct TAGPU_TERRHAND {
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float hDimW, hDimH;       /* uHDim: 0 while there is no usable grid */
     float sun[3], amb, norm;
+    /* uMapPx: the map on the tile grid, its 32-px cell count times 32 -- the
+       extent the mirrored cells reflect about and the edge tone fades from
+       (TAGPU_GLSL_EDGE_FN). Published whether or not a cell is mirrored. */
+    float mapPxW, mapPxH;
 
     /* The texels, as bytes: the Vulkan pass uploads them into images of its
        own. Each carries the serial that says when it last

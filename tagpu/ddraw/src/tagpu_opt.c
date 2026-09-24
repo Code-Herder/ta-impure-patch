@@ -34,6 +34,14 @@ static int store_classicpp(void)
     return v != TS_STYLE_CLASSIC;
 }
 
+/* The Map edge row: mirror or black. */
+static int store_mirror(void)
+{
+    int v;
+    if (!tagpu_settings_get(TS_EDGE, &v)) return -1;
+    return v != 0;
+}
+
 /* The table: the ta-drive skill's default arm set, Classic++ and the extra weapons.
    Order is the order the log line lists them in. */
 /* THREE OF THE `*own` LEVERS ARE NOT PLAY DEFAULTS, AND THE REASON IS THE
@@ -107,6 +115,7 @@ static const Def s_defs[] = {
     { "tagpu_ghost.on",     "", "tagpu_native.on", 0 },     /* the building preview at the cursor  */
     { "tagpu_zoom.on",      "", 0, 0 },                     /* the wheel, the camera's range       */
     { "tagpu_vpwide.on",    "", "tagpu_zoom.on", 0 },       /* clicks land at zoom < 1             */
+    { "tagpu_mirror.on",    "", 0, 0, store_mirror },       /* the world reflected past the map edge */
     /* `tagpu_gui.on` IS A DRAW. The layer it arms has no composite -- the
        twins and the device-resolution sharp layer are ours, and `LAY_FS`
        declares no sampler for TA's own frame -- so it is the UI and belongs on

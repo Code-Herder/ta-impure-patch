@@ -18,6 +18,7 @@ typedef struct TAGPU_FXVIEW {
                                     here; valid for this frame only, never cached */
     int eyeX, eyeY, vpL, vpT;    /* the PREDICTED eye and the true viewport, from the packet */
     int gw, gh, ss;
+    int mirror;                  /* the map edge: 1 mirror, 0 black (this frame) */
     float zoom, zoomCx, zoomCy;  /* the native pass's view zoom                */
     float encSprite, depthScale; /* this frame's sprite depth key and VS scale */
     float encLayer[10];          /* particle layer n -> depth key (tagpu_sfx)  */
@@ -40,6 +41,22 @@ typedef struct TAGPU_FXVIEW {
     int fogOrgX, fogOrgY;           /* world x, projected z of its cell (0,0)  */
     unsigned int frame_counter;
 } TAGPU_FXVIEW;
+
+/* THE MAP EDGE'S FOLD, shared by the two passes it mirrors (the terrain's
+   32-px cells, the features' 16-px ones) so they cannot disagree about where
+   a cell lands: the lab's triangle wave (tascene-view.html `reflect`). Cell
+   `m` of an axis `n` cells long, folded into [0, n) by reflection about the
+   map's edges, with *flip set when it lands turned over; two maps out it is
+   the map again, the right way round. The fold is the whole bound: p is in
+   [0, 2n) for any m, so the answer indexes the axis. n > 0 is the caller's. */
+static __inline int tagpu_edge_reflect(int m, int n, int* flip)
+{
+    int p = m % (2 * n);
+    if (p < 0) p += 2 * n;
+    if (p < n) { *flip = 0; return p; }
+    *flip = 1;
+    return 2 * n - 1 - p;
+}
 
 /* one 3DO node to emit through the native geometry path */
 typedef struct TAGPU_FXMODEL {

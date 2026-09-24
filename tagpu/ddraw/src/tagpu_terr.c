@@ -317,12 +317,19 @@ static int    s_ncell;                 /* what this frame put in it           */
    top-left corner sits on, and the atlas's texel size. The map cell it is,
    the other half of the rebuild, is s_rectTx0/s_rectTy0. */
 static float s_origX, s_origY, s_iw, s_ih;
+/* the map on the tile grid, in 32-px cells: what the mirror reflects about
+   (uMapPx, published) */
+static int   s_mapCellsW, s_mapCellsH;
 /* The shader spells CELL_PITCH, CELL_BORDER and TILE_PX as literals — GLSL
    cannot see a C macro — so a change to any of the three must not silently
    leave the UVs a texel out. This is that change refusing to compile. */
 typedef char terr_atlas_consts_unchanged[
     (CELL_PITCH == 34 && CELL_BORDER == 1 && TILE_PX == 32) ? 1 : -1];
-
+/* ...and the mirror's two flags, which the vertex shader spells as 8192 and
+   16384, above the largest tile column and row an atlas can hold. */
+typedef char terr_mirror_flags_unchanged[
+    (TAGPU_TERR_MIRROR == 8192 && TAGPU_TERR_FLIP == 16384 &&
+     ATLAS_COLS <= TAGPU_TERR_MIRROR && 65536 / ATLAS_COLS <= TAGPU_TERR_MIRROR) ? 1 : -1];
 /* ONE QUAD PER VISIBLE CELL, AND THE CELL IS AN INSTANCE. `aCorner` is the
    unit quad's six corners in the engine's own vertex order — one static buffer
    uploaded at init and never touched again — and `aCell` is this frame's four
@@ -364,22 +371,34 @@ static const char* VS =
     "uniform vec2 uOrigin;\n"   /* screen px of grid cell (0,0)'s corner      */
     "uniform vec2 uTile0;\n"    /* the map cell grid cell (0,0) IS            */
     "uniform vec2 uTexel;\n"    /* 1/ATLAS_W, 1/atlas height                  */
-    "out vec2 vUV; out vec2 vWorld;\n"
+    "out vec2 vUV; out vec2 vWorld; flat out float vMirror;\n"
     "void main(){\n"
     /* CELL_PITCH 34, CELL_BORDER 1, TILE_PX 32 — held to those values by
-       terr_atlas_consts_unchanged in tagpu_terr.c */
+       terr_atlas_consts_unchanged in tagpu_terr.c. The tile's column and row
+       carry the mirror's flags above their values (TAGPU_TERR_FLIP and
+       TAGPU_TERR_MIRROR, tagpu_terr.h): each is one power of two, taken off
+       exactly, so an on-map cell's tile is aCell.zw itself. A flipped axis
+       runs its corner the other way, which swaps the quad's two texel edges:
+       a pixel centre at i + 0.5 samples texel 31 - i. Either way the quad
+       spans exactly the tile's 32 texels and both its edges sit on the guard
+       ring, a copy of the tile's own border. */
+    "  vec2 f = step(16384.0, aCell.zw);\n"
+    "  vec2 t = aCell.zw - f * 16384.0;\n"
+    "  float m = step(8192.0, t.x);\n"
+    "  t.x -= m * 8192.0;\n"
+    "  vec2 k = mix(aCorner, 1.0 - aCorner, f);\n"
     "  vec2 g = aCell.xy + aCorner;\n"
     "  vec2 aPos = uOrigin + g * 32.0;\n"
     "  vec2 aWorld = (uTile0 + g) * 32.0;\n"
-    "  vec2 aUV = (aCell.zw * 34.0 + 1.0 + aCorner * 32.0) * uTexel;\n"
+    "  vec2 aUV = (t * 34.0 + 1.0 + k * 32.0) * uTexel;\n"
     "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - vec2(" TAGPU_EDGE_NUDGE ");\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
-    "  vUV = aUV; vWorld = aWorld;\n"
+    "  vUV = aUV; vWorld = aWorld; vMirror = m;\n"
     "}\n";
 static const char* FS =
     "#version 330 core\n"
-    "in vec2 vUV; in vec2 vWorld;\n"
+    "in vec2 vUV; in vec2 vWorld; flat in float vMirror;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uPal;\n"        /* the engine's table: index 0 is the
                                           unexplored black (FOG_TERRAIN)    */
@@ -395,7 +414,11 @@ static const char* FS =
     /* the base atlas: the tile atlas expanded through the engine's table
        (tagpu_vk_terr.c) -- what every texel is drawn from */
     "uniform sampler2D uBase;\n"
+    /* declared LAST, so the block offsets every other uniform already has are
+       the ones the generated header printed before it */
+    TAGPU_GLSL_EDGE_UNIFORMS
     TAGPU_GLSL_LIGHT_FN
+    TAGPU_GLSL_EDGE_FN
     /* the lab's normalAt (tascene-view.html): at a grid point, central
        differences of the height over 32 world units, coordinates clamped to
        the map; elevation and x/z are the same world units. The height is the
@@ -457,6 +480,15 @@ static const char* FS =
        still uniform (tagpu_glsl.h, the shadow half) */
     "  vec3 taWx = vec3(0.0), taWy = vec3(0.0);\n"
     "  vec3 taW = uHDim.x > 0.5 ? taTerrW(vWorld, taWx, taWy) : vec3(vWorld.x, 0.0, vWorld.y);\n"
+    /* A CELL PAST THE MAP is the tile of the cell it mirrors, in the edge's
+       tone and nothing else: no fog of war -- there is no ground out there to
+       have explored -- and no light, for the reason at taEdge. The restored
+       colour where the reveal has painted it, as on the map. */
+    "  if (vMirror > 0.5) {\n"
+    "    vec4 e = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "    frag = vec4(taEdge(e.a > 0.5 ? e.rgb : texture(uBase, vUV).rgb, vWorld), 1.0);\n"
+    "    return;\n"
+    "  }\n"
     /* terrain is the bottom layer: it paints the fog's black instead of
        discarding, and it darkens (never hides) in grey — the engine's rule */
     TAGPU_GLSL_FOG_TERRAIN
@@ -882,7 +914,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     const unsigned short* tmap;
     int mapW16, mapH16, stride, mrows;
     int tx0, ty0, fx, fy, cols, rows, r, c;
-    int skipped = 0, junk = 0, own;
+    int skipped = 0, junk = 0, mirrored = 0, own;
     int eyeX, eyeY, vpL, vpT, evw, evh;
     float iw, ih;
 
@@ -984,22 +1016,39 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
        floats. The map cell is s_rectTx0/s_rectTy0, set just above. */
     s_origX = (float)(vpL - fx); s_origY = (float)(vpT - fy);
     s_iw = iw; s_ih = ih;
+    s_mapCellsW = stride; s_mapCellsH = mrows;
     for (r = 0; r < rows; r++) {
-        int my = ty0 + r;
-        if (my < 0 || my >= mrows) { skipped += cols; continue; }
+        int my = ty0 + r, sy = my, flipY = 0, offY = (my < 0 || my >= mrows);
+        if (offY) {
+            if (!v->mirror) { skipped += cols; continue; }
+            sy = tagpu_edge_reflect(my, mrows, &flipY);
+        }
         for (c = 0; c < cols; c++) {
-            int mx = tx0 + c;
+            int mx = tx0 + c, sx = mx, flipX = 0, off = offY;
             int idx;
-            if (mx < 0 || mx >= stride) { skipped++; continue; }
-            idx = tmap[(size_t)my * stride + mx];
+            if (mx < 0 || mx >= stride) {
+                if (!v->mirror) { skipped++; continue; }
+                sx = tagpu_edge_reflect(mx, stride, &flipX);
+                off = 1;
+            }
+            idx = tmap[(size_t)sy * stride + sx];
             if (idx >= s_atlasN) { junk++; continue; }
             /* the quad still spans exactly TILE_PX texels, and its far edge
                lands ON the guard column, which is a copy of the last real one.
                Screen and world differ by a pure translation here, so the cell's
                world rect is exactly (mx*32, my*32)..+32 — the space the
                engine's fog grid is built in — and the shader reaches it as
-               uTile0 + (col,row), which is (tx0+c, ty0+r) = (mx, my). */
-            put_cell(c, r, idx % ATLAS_COLS, idx / ATLAS_COLS);
+               uTile0 + (col,row), which is (tx0+c, ty0+r) = (mx, my). A cell
+               past the map keeps that rect -- the edge tone fades with its
+               distance from the map -- and takes the tile of (sx, sy), the
+               cell it mirrors (TAGPU_TERR_MIRROR, tagpu_terr.h). */
+            if (off) {
+                put_cell(c, r, (idx % ATLAS_COLS) | TAGPU_TERR_MIRROR | (flipX ? TAGPU_TERR_FLIP : 0),
+                         (idx / ATLAS_COLS) | (flipY ? TAGPU_TERR_FLIP : 0));
+                mirrored++;
+            } else {
+                put_cell(c, r, idx % ATLAS_COLS, idx / ATLAS_COLS);
+            }
         }
     }
 
@@ -1013,13 +1062,13 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     {
         static unsigned last = 0;
         if (v->frame_counter - last >= 60) {
-            char b[240];
+            char b[280];
             last = v->frame_counter;
             _snprintf(b, sizeof b,
                 "terr: grid=%dx%d tile0=(%d,%d) frac=(%d,%d) map=%dx%d cells=%d"
-                " zoomvp=%dx%d off-map=%d junk=%d atlas=%dx%d/%d%s%s",
+                " zoomvp=%dx%d off-map=%d mirror=%d junk=%d atlas=%dx%d/%d%s%s",
                 cols, rows, tx0, ty0, fx, fy, stride, mrows, s_ncell, evw, evh,
-                skipped, junk, ATLAS_W, s_atlasH, s_setCount,
+                skipped, mirrored, junk, ATLAS_W, s_atlasH, s_setCount,
                 s_over ? " (over: engine still drawing)"
                        : (s_passive ? " (passive: engine still drawing)" : ""),
                 tagpu_terrown_installed() ? ""
@@ -1114,6 +1163,7 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.sun[0] = L->sun[0]; s_pub.sun[1] = L->sun[1]; s_pub.sun[2] = L->sun[2];
     s_pub.amb = L->amb;
     s_pub.norm = 1.0f / L->level;
+    s_pub.mapPxW = (float)(s_mapCellsW * 32); s_pub.mapPxH = (float)(s_mapCellsH * 32);
     s_pub.atlas = s_atlasMirror;
     s_pub.atlasW = ATLAS_W; s_pub.atlasH = s_atlasH;
     s_pub.atlasSerial = s_atlasMirrorSerial;

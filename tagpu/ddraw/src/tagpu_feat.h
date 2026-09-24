@@ -55,16 +55,25 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v);
 #define TAGPU_FEAT_VST    10       /* x,y,enc, u,v, ck,mode, wx,wz, lam */
 #define TAGPU_FEAT_NATTR  5
 #define TAGPU_FEAT_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28}, {4,1,36} }
+/* Added to a vertex's mode (TAGPU_FXMODE_OPAQUE 1 / _ALPHA 2): the quad is the
+   map edge's mirror of a feature, drawn in the edge's tone and never inside the
+   map. The fragment stage tests `mode > 3.5`, so the flag is a value above
+   every plain mode. */
+#define TAGPU_FEAT_MIRROR 4
 
 typedef struct TAGPU_FEATHAND {
     /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_feat_handover` refuses any other
        -- see there, and tagpu_terr.h for the failure it bounds. */
     unsigned frame;
 
-    /* The geometry, in the gather's two buckets and in draw order: shadows
-       first (they test depth and never write it), bodies second. */
+    /* The geometry, in the gather's four buckets and in draw order: shadows
+       first (they test depth and never write it), bodies second -- the map's
+       own, then the mirror's past the map edge, which sort against them by
+       the same keys (tagpu_feat.c). */
     const float* shadow;  int nShadow;     /* vertices, TAGPU_FEAT_VST floats each */
     const float* body;    int nBody;
+    const float* mshadow; int nMShadow;    /* mode carries TAGPU_FEAT_MIRROR      */
+    const float* mbody;   int nMBody;
 
     /* The vertex stage's uniform block (std140 offsets are printed in
        inc/spirv/tagpu_feat.spv.h and are the contract for the buffer). */
@@ -76,6 +85,7 @@ typedef struct TAGPU_FEATHAND {
        branch; `fog` is the engine's overlay bit. */
     int   restored, fog;
     float fogOrgX, fogOrgY, fogCols, fogRows;
+    float mapPxW, mapPxH;                  /* uMapPx: the map on the tile grid */
 
     /* The texels, as CPU-side bytes. Each carries the serial that says when
        it last changed, so the Vulkan pass re-sends on a change and not per
@@ -180,4 +190,14 @@ int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now);
 int  tagpu_feat_atlas_hand(TAGPU_FEATHAND* h);
 int  tagpu_feat_atlas_owed(void);
 void tagpu_feat_atlas_ack(unsigned serial, int keep);
+
+/* THE MAP'S OWN FEATURES, the mirror's source (tagpu_packet.h
+   TAGPU_PK_MAPFEAT). The publisher asks, on the GAME thread, whether to carry
+   the table: `_want` is 1 while this pass is armed with the map edge on
+   mirror, `_have` is `level_gen + 1` of the copy this pass holds (0 = none).
+   Each is one aligned word the render thread stores; a stale read costs the
+   table one more packet, or one packet later -- never a wrong picture, since
+   the copy is keyed on the level it came from. */
+int      tagpu_feat_mapfeat_want(void);
+unsigned tagpu_feat_mapfeat_have(void);
 #endif

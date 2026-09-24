@@ -489,6 +489,10 @@ static const char* frame_valid(const void* rec)
        raw pointer and no cap of its own, which is this line's whole point:
        every table a consumer indexes by `n_` alone is checked HERE. */
     if (!table_ok(p, p->off_builds, p->n_builds, sizeof(TAGPU_PK_BUILD))) return "builds table";
+    /* the map's own features: its consumer copies `n_mapfeat` entries into a
+       buffer sized by the cap, so the cap is checked here with the extent */
+    if (!table_ok(p, p->off_mapfeat, p->n_mapfeat, sizeof(TAGPU_PK_MAPFEAT))) return "map features table";
+    if (p->n_mapfeat > TAGPU_PK_MAX_MAPFEAT) return "more map features than the table holds";
     if (p->n_units && p->unit_slots && p->n_units > p->unit_slots) return "more units than slots";
     /* the publisher's own table caps, which the render thread sizes its
        per-frame arrays from -- a count past them is not a packet it wrote */

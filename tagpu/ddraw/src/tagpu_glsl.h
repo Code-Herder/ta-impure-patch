@@ -120,6 +120,33 @@
 #define TAGPU_GLSL_FOG_GREY_RGB(V) \
     "  if (taFogC.y >= 0.5) " V " = vec3(dot(" V ", vec3(1.0/3.0)));\n"
 
+/* ---- past the map's edge: the mirror's tone ----------------------------
+   The lab's EDGE_TONE (tascene-view.html, `edge=mirror`) at the knobs the
+   owner looked at: `edgedim` 0.5, `edgegrey` 0.75, `edgefade` 1536,
+   `edgesteps` 0 and `edgedither` 0, so the fade is smooth and nothing
+   dithers. One copy for the two passes that draw the mirror -- terrain and
+   features -- so the tile under a mirrored tree and the tree itself cannot
+   drift apart.
+
+   `w` is the point the fragment DRAWS, on the tile grid (world px, the space
+   the terrain's cells are laid out in), and uMapPx is the map's extent on that
+   grid: its 32-px cell count times 32. `o` is how far past the map the point
+   is on each axis, so the fade runs from the nearest map edge and rounds the
+   corners, exactly as the lab measures it. The colour is mixed toward its RGB
+   mean -- the fog of war's grey rule (TAGPU_GLSL_FOG_GREY_RGB), in full colour
+   -- then dimmed, then faded linearly to black. Unlit: the art is painted lit
+   from the north-west, and its reflection is lit from wherever the mirror
+   sent that light. */
+#define TAGPU_GLSL_EDGE_UNIFORMS \
+    "uniform vec2 uMapPx;\n"          /* the map on the tile grid, px      */
+#define TAGPU_GLSL_EDGE_FN \
+    "vec3 taEdge(vec3 c, vec2 w){\n" \
+    "  vec2 o = max(max(-w, w - uMapPx), vec2(0.0));\n" \
+    "  float t = clamp(length(o) / 1536.0, 0.0, 1.0);\n" \
+    "  c = mix(c, vec3(dot(c, vec3(1.0/3.0))), 0.75);\n" \
+    "  return c * 0.5 * (1.0 - t);\n" \
+    "}\n"
+
 /* ---- Classic++ lighting: the lab's one rule ---------------------------
    tascene-view.html LAB_LIGHT, renderers.md 1, tascene-design.md "Level
    ground takes exactly 1.0": an ambient-floored lambert divided by what LEVEL

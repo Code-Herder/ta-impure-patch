@@ -66,6 +66,7 @@
 #include "tagpu_hud.h"
 #include "tagpu_vk.h"
 #include "tagpu_settings.h"
+#include "tagpu_opt.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
 static void eng_push(int what);
@@ -163,14 +164,15 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 
 /* ---- the geometry, from tools/guipanel.py (the source of truth) ---------- */
 #define PANEL_W   304
-/* SEVEN rows: ROW_Y0 34 + ROW_PITCH 28 * 6 = 202, and the row is ROW_H 20, so
-   the last one ends at 222 and 240 leaves 18 px below it. One define carries
+/* EIGHT rows: ROW_Y0 34 + ROW_PITCH 28 * 7 = 230, and the row is ROW_H 20, so
+   the last one ends at 250; the bottom rule sits 8 px under it and the panel
+   ends 10 px under the rule (DIV_BOT). One define carries
    it: the GAF frame header (`FRMOFF + 0x02` below), `s_ground`, the ramp, the
    border and the corner bolts are all sized from it, and the panel is COMPOSED
    AT RUNTIME from the player's install rather than shipped, so no art is
    regenerated. tools/guipanel.py says 304x212 -- it is the lab's copy of this
    layout, not its source. */
-#define PANEL_H   240
+#define PANEL_H   268
 #define MARGIN     16                   /* the panel and the trigger share it  */
 #define BAR_H      32                   /* the top bar: rows 0..31             */
 #define ROW_Y0     34
@@ -185,13 +187,13 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 #define TRIG       28                   /* 2 px of bar above and below         */
 
 /* ---- the rows ------------------------------------------------------------ */
-/* Seven, and every one of them live. There is no mouse-wheel zoom row:
+/* Eight, and every one of them live. There is no mouse-wheel zoom row:
    tagpu_zoom_init() installs byte patches once at attach, so the row would
    light green and change no pixel until the next launch. The
    menu keeps the invariant that NO ROW NEEDS A RESTART (renderers.md 2.10), and
    the FPS counter honours it: tagpu_fps.c polls its trigger on the render
    thread and tagpu_vk_fps.c builds its pipeline on first use. */
-enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_COUNT };
+enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_EDGE, R_COUNT };
 
 typedef struct {
     const char* name;                   /* the gadget name in the .GUI         */
@@ -208,6 +210,9 @@ static const Row s_row[R_COUNT] = {
     { "SHADOWQ", "Shadow quality",    "Low|Med|High|Ultra",       4 },
     { "SS",      "Supersampling",     "Off|2x",                   2 },
     { "FPS",     "FPS counter",       "Off|On",                   2 },
+    /* what the view shows past the map: the world reflected, or the engine's
+       black (bar-camera-port.md 1.2) */
+    { "EDGE",    "Map edge",          "Black|Mirror",             2 },
 };
 
 /* Renderer stages. Custom is DERIVED, never clicked into: clicking the row
@@ -272,6 +277,8 @@ static const int SHADOWQ_VAL[4] = { 512, 1024, 2048, 4096 };
 #define FPS_ON     "tagpu_fps.on"
 #define CPP_ON     "tagpu_classicpp.on"
 #define CPP_OFF    "tagpu_classicpp.off"
+#define EDGE_ON    "tagpu_mirror.on"
+#define EDGE_OFF   "tagpu_mirror.off"
 #define POLL_MS    250
 
 /* The trigger's ink walks the SAME ramp, re-hung around a lighter ground than
@@ -289,7 +296,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "G19-1"
+#define UFO_STAMP  "G20b-1"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -331,7 +338,7 @@ static int exists(const char* p)
 #define IX_KEY            0     /* the frame's transparency index -- never drawn */
 
 #define DIV_TOP    30
-#define DIV_BOT   202
+#define DIV_BOT   258           /* under the last row: 250 + 8 */
 #define PAD         2
 
 /* THE FRAMES ARE NOT ALL ONE SIZE, so the pixel helpers carry their
@@ -941,6 +948,9 @@ static void read_state(void)
     s_stage[R_LIGHT]   = tagpu_classicpp_lit() ? 1 : 0;
     s_stage[R_SS]      = tagpu_settings_ss() == 2;
     s_stage[R_FPS]     = tagpu_settings_fps() ? 1 : 0;
+    /* the map edge in force: its lever, then the store, then the default --
+       tagpu_opt.c answers in that order, and Black under tagpu_defaults.off */
+    s_stage[R_EDGE]    = tagpu_opt_on(EDGE_ON) ? 1 : 0;
 
     /* 0 (Off) when the cfg names a value this row does not offer. That is not
        reachable for `shadows=1`, which tagpu_classicpp.c's parse migrates to
@@ -976,6 +986,7 @@ static int row_held(int row)
     case R_STYLE: return exists(CPP_ON) || exists(CPP_OFF);
     case R_SS:    return exists(SS_OFF);
     case R_FPS:   return exists(FPS_ON);
+    case R_EDGE:  return exists(EDGE_ON) || exists(EDGE_OFF);
     default:      break;
     }
     h = tagpu_classicpp_held();
@@ -988,12 +999,14 @@ static int row_held(int row)
 static int row_greyed(int row)
 {
     if (row_held(row)) return 1;
-    /* R_SS, R_FPS and R_SHADOWS are orthogonal to the Classic/Classic++ lane,
-       so none is one of the switch's dependants: supersampling is a resolution
-       choice, the FPS counter a diagnostic drawn OVER the finished frame, and
-       Shadows is the engine's shadow switch too. Grey them with the lane and a
+    /* R_SS, R_FPS, R_SHADOWS and R_EDGE are orthogonal to the Classic/Classic++
+       lane, so none is one of the switch's dependants: supersampling is a
+       resolution choice, the FPS counter a diagnostic drawn OVER the finished
+       frame, Shadows is the engine's shadow switch too, and the map edge is
+       drawn in full colour under either lane. Grey them with the lane and a
        player on Classic could not reach them. */
-    if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_SHADOWS) return 0;
+    if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_SHADOWS ||
+        row == R_EDGE) return 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
        the soft map's depth texture and reaches nothing else -- the hard pair is
@@ -1250,6 +1263,7 @@ static void commit_one(int row)
     case R_SHADOWQ: tagpu_settings_set(TS_SHADOWRES, SHADOWQ_VAL[s_stage[R_SHADOWQ]]); break;
     case R_SS:      tagpu_settings_set(TS_SS, s_stage[R_SS] ? 2 : 1); break;
     case R_FPS:     tagpu_settings_set(TS_FPS, s_stage[R_FPS]); break;
+    case R_EDGE:    tagpu_settings_set(TS_EDGE, s_stage[R_EDGE]); break;
     default:        break;
     }
 }
@@ -2460,7 +2474,7 @@ static void vis_undo(void)
 
 /* RESTORE -- the store's defaults (renderers.md 2.10b): Classic++ with every
    row it owns at its Classic++ value, supersampling on, the FPS counter off,
-   UI scale off and the Refresh cap. A row a lever holds keeps the
+   the map edge mirrored, UI scale off and the Refresh cap. A row a lever holds keeps the
    lever's value: Restore changes the store, and the store is not what draws
    that row.
 
@@ -2481,6 +2495,7 @@ static void vis_restore(void)
     s_stage[R_SHADOWQ] = 2;
     s_stage[R_SS]      = 1;
     s_stage[R_FPS]     = 0;
+    s_stage[R_EDGE]    = 1;
     for (i = 0; i < R_COUNT; i++) if (row_held(i)) s_stage[i] = keep[i];
     commit_all_rows();
     if (!vrow_held(VD_FPS)) {

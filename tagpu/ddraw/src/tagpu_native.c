@@ -272,6 +272,11 @@ static int    s_spxlog = 0;            /* anchor filmstrip (tagpu_spxlog.on) */
 static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
 #define TAGPU_SS_MAX 4                 /* the most we will supersample by */
 static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
+/* THE MAP EDGE (tagpu_mirror.on: lever, then the store's `edge`, then on).
+   Read ONCE here and handed to every gather in the frame view, so terrain and
+   features switch on the same frame: a mirrored ground under unmirrored trees,
+   or the reverse, is a frame nobody drew on purpose. */
+static int    s_mirror = -1;
 static TAGPU_WORLDTGT s_wt;            /* the world target, published per frame */
 static int    s_wtHave = 0;
 /* whether this frame's world passes are actually scissored to the viewport
@@ -2066,6 +2071,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         s_subpix = (GetFileAttributesA("tagpu_subpix.off") == INVALID_FILE_ATTRIBUTES);
         s_spxlog = (GetFileAttributesA("tagpu_spxlog.on")  != INVALID_FILE_ATTRIBUTES);
         s_nano   = (GetFileAttributesA("tagpu_nano.off")   == INVALID_FILE_ATTRIBUTES);
+        {
+            int m = tagpu_opt_on("tagpu_mirror.on");
+            if (m != s_mirror) {
+                nlog(m ? "native: map edge = mirror" : "native: map edge = black");
+                s_mirror = m;
+            }
+        }
         /* tagpu_ghost.on, its own 30f poll — and the answer is PUBLISHED, because
            the packet's builds table is walked and copied by the game thread and
            is worth nothing to anyone but this pass. */
@@ -2746,6 +2758,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
         fv.gw = gw; fv.gh = gh; fv.ss = ss; fv.fogMode = fogMode;
+        fv.mirror = s_mirror > 0;
         fv.zoom = s_zoom;
         fv.zoomCx = (float)vpL + (float)vw * 0.5f;
         fv.zoomCy = (float)vpT + (float)vh * 0.5f;

@@ -1611,6 +1611,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         ub.f[43] = t.penumbra;                   /* uPenumbra   float @172 */
         ub.f[44] = t.shade;                      /* uShade      float @176 */
     }
+    ub.f[46] = t.mapPxW; ub.f[47] = t.mapPxH;    /* uMapPx       vec2 @184 */
     memcpy(s_umap + (size_t)slot * s_ustride + s_ublkF, ub.f, UBLK_FS);
 
     s_ncell = t.ncell;

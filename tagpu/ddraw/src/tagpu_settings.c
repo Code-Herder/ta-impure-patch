@@ -77,6 +77,11 @@ static const Opt O_GAMMA[]   = { {"12", 12}, {"0", 0}, {"1", 1}, {"2", 2}, {"3",
    can find no victim (only one looping sound is tracked at a time) and reads
    past the table. research/notes/tadr-port/limits-evidence.md §11. */
 static const Opt O_MIXING[]  = { {"32", 32}, {"8", 8}, {"16", 16}, {"24", 24} };
+/* The map edge: the world reflected past the map, or the black the engine
+   leaves there (bar-camera-port.md 1.2). Not a render key: it is the
+   player's under every style, as the shadows row is. */
+static const Opt O_EDGE[]    = { {"mirror", 1}, {"black", 0}, {"1", 1}, {"0", 0},
+                                 {"on", 1}, {"off", 0} };
 
 #define N(a) (int)(sizeof a / sizeof a[0])
 
@@ -103,6 +108,7 @@ static const Key s_key[TS_NKEYS] = {
     { "gamma",     O_GAMMA,   N(O_GAMMA),   12 },
     { "resolution", NULL,     0,            0 },
     { "mixingbuffers", O_MIXING, N(O_MIXING), 32 },
+    { "edge",      O_EDGE,    N(O_EDGE),    1 },
 };
 
 static volatile LONG s_val[TS_NKEYS];
