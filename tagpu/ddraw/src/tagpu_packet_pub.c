@@ -860,7 +860,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                drawing; this walk covers the zoom-floor rect plus a margin,
                which is most of a screen of cells the engine never touches.
                WR_COUNT is the pool the level allocates (tagpu_engine.h), and
-               2048 is also the value its allocator hands back for "none". */
+               also the value its allocators hand back for "none". */
             if (a->wreck >= WR_COUNT) { s_cWreckOob++; continue; }
             rec = recs + (size_t)a->wreck * WR_STRIDE;
             o3 = *(const char* const*)(rec + WR_OBJ3DO);

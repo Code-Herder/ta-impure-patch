@@ -33,6 +33,7 @@
 #define TAGPU_LIM_SFX    400     /* particle objects a layer (the emitters keep one more) */
 #define TAGPU_LIM_SFXPOOL 1000   /* particle objects in all ten layers together   */
 #define TAGPU_LIM_COMPOSITE 600  /* the composite scratch frame, a side          */
+#define TAGPU_LIM_WRECKS 2048    /* wreck records: 3DO wrecks and feature animations */
 #else
 #define TAGPU_LIM_PROJ   3000
 #define TAGPU_LIM_EXPL   3000
@@ -43,7 +44,14 @@
 #define TAGPU_LIM_SFX    20480
 #define TAGPU_LIM_SFXPOOL (10 * TAGPU_LIM_SFX)
 #define TAGPU_LIM_COMPOSITE 1280
+/* Not a TADR value: TADR leaves the pool at 2048. 8192 is what the frame packet's wreck
+   table holds inside its existing reserve (tagpu_packet.c), so the raise costs no address
+   space; the engine's own ceiling is 0x7FFF, its list links being signed 16-bit. */
+#define TAGPU_LIM_WRECKS 8192
 #endif
+/* the wreck pool's list links are signed 16-bit words (0x4232F0 reads them with movsx), so
+   every record index has to stay below 0x8000 */
+typedef char tagpu_lim_wrecks_fit[(TAGPU_LIM_WRECKS <= 0x7FFF) ? 1 : -1];
 /* the engine's own floor for a player's units (0x491678: `cmp eax,0x14`) */
 #define TAGPU_LIM_UNITS_MIN 20
 
