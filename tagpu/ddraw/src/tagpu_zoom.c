@@ -608,17 +608,18 @@ static void apply_scroll_rate(char* ta)
    bound is the map debug overlay `0x418310`, which has its own guard here
    (zoom_debug_overlay).
 
-   THE SCROLL TARGET `main+0x14327`/`+0x1432B` HAS FOUR INLINE CLAMPS, all to
-   `[0, map - W]`, that never reach `0x41C3C0`: the smooth arms of SetCamera
-   `0x41C4C0` (block `0x41C4EC`), of the centre-on `0x41C7C0` (block `0x41C808`)
-   and of the centre-on-object `0x41C8E0` that centre-on-unit calls (block
-   `0x41C93B`), and the per-frame camera follow in the stepper (block
-   `0x41CAF7`). The stepper eases the eye to the target, so a target cut short
-   there stops the camera short: a unit centred near an edge would not be
-   centred. Each block is replaced, not chased — its first instruction becomes a
-   jump to a stub that clamps the target into the range in force and resumes at
-   the block's own tail — so every target the engine computes lands on the same
-   range the eye does.
+   THE SCROLL TARGET `main+0x14327`/`+0x1432B` HAS THREE REACHABLE INLINE
+   CLAMPS, all to `[0, map - W]`, that never reach `0x41C3C0`: the smooth arms
+   of the centre-on `0x41C7C0` (block `0x41C808`) and of the centre-on-object
+   `0x41C8E0` that centre-on-unit calls (block `0x41C93B`), and the per-frame
+   camera follow in the stepper (block `0x41CAF7`). The stepper eases the eye
+   to the target, so a target cut short there stops the camera short: a unit
+   centred near an edge would not be centred. Each block is replaced, not
+   chased — its first instruction becomes a jump to a stub that clamps the
+   target into the range in force and resumes at the block's own tail — so
+   every target the engine computes lands on the same range the eye does.
+   SetCamera `0x41C4C0` has a fourth of the same shape and needs nothing: no
+   caller reaches it (CENTRE_BLOCK).
 
    MECHANISM for the eye: a `leaf_call` detour on `0x41C3C0`, on a flag that is
    always up once installed — the replacement does the whole job: the clamp,
@@ -649,15 +650,26 @@ static void apply_scroll_rate(char* ta)
    Nothing jumps INTO it, so the whole block is ours to replace. */
 #define FOLLOWCLAMP_VA   0x0041CAF7u   /* mov esi,[eax+0x14327] — the clamp's top */
 #define FOLLOWCLAMP_END  0x0041CB44u   /* the instruction past the block          */
-/* THE THREE SMOOTH CENTRING BLOCKS [DISASSEMBLED 2026-09-23]. Each smooth arm
+/* THE TWO SMOOTH CENTRING BLOCKS [DISASSEMBLED 2026-09-23]. Each smooth arm
    stores the new target and then clamps it inline; each block starts with
-   `mov eax, ds:0x511DE8` (5 bytes) and every path out of it reaches the arm's
-   common tail, `mov eax, ds:0x511DE8` / `and word [eax+0x14281], 0xFFF7` /
-   pops / `ret`. The stub jumps to that tail, so the fog bit is cleared and the
-   frame unwound by the engine's own bytes. No branch from outside a block
-   lands inside it (every rel8 and rel32 in .text was checked). */
-#define SETCAM_BLOCK     0x0041C4ECu   /* SetCamera 0x41C4C0, smooth arm          */
-#define SETCAM_TAIL      0x0041C5C6u   /* ... pop esi; ret 0xC                    */
+   `mov eax, ds:0x511DE8` (5 bytes), and the stub resumes at the function's
+   tail — `mov eax, ds:0x511DE8` / `and word [eax+0x14281], 0xFFF7` / pops /
+   `ret` — so the fog bit is cleared and the frame unwound by the engine's own
+   bytes. The block's own exits do the same by other routes: a target clamped
+   at the top returns early (`0x41C871`, `0x41C9A5`) after the same clear and
+   the same pops, and the rest reach the tail. So the stub's one exit has the
+   side effects of every exit it replaces.
+   NO BRANCH LANDS IN A REPLACED BYTE (every rel8 and rel32 in .text was
+   checked). Branches do land inside each block's address range: the
+   non-smooth arm's `je` (`0x41C7F1`, `0x41C924`) targets `0x41C87A` /
+   `0x41C9AE`, past the five bytes the jump takes, and that arm runs intact
+   through its own `0x41C3C0` call to the same tail.
+   SETCAMERA `0x41C4C0` HAS A THIRD SMOOTH ARM, `0x41C4EC`, AND IT IS LEFT
+   ALONE BECAUSE IT IS UNREACHABLE: its four callers (`0x495C68`, `0x495E11`,
+   `0x497060`, `0x4978C9`) all push smooth = 0 (`push 0` at `0x495C5E`,
+   `0x495DCB`, `0x49703E`, `0x4978C5`), and `0x41C4C0` occurs nowhere in the
+   image as a 32-bit value, so no pointer to it exists and `0x41C4C7`'s
+   `je 0x41C574` is always taken. */
 #define CENTRE_BLOCK     0x0041C808u   /* centre-on(x, y, smooth) 0x41C7C0        */
 #define CENTRE_TAIL      0x0041C8BFu   /* ... pop esi; ret 0xC                    */
 #define CENTOBJ_BLOCK    0x0041C93Bu   /* centre-on(object, smooth) 0x41C8E0      */
@@ -913,8 +925,8 @@ static void __cdecl zoom_follow_clamp(void)
     *(unsigned short*)(ta + OFF_LOSTYPE) &= (unsigned short)~8u;
 }
 
-/* The three smooth centring blocks: the target they just stored, clamped. The
-   fog bit is the tail's (see SETCAM_BLOCK). */
+/* The two smooth centring blocks: the target they just stored, clamped. The
+   fog bit is the tail's (see CENTRE_BLOCK). */
 static void __cdecl zoom_centring_clamp(void)
 {
     char* ta = *(char**)TA_MAINPP;
@@ -1540,8 +1552,8 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    pointer on the viewport centre — releases nothing, so the A/B control still
    holds exactly.
 
-   A SMOOTH CENTRING ISSUED AFTER A STEP WINS. SetCamera's and the two
-   centre-ons' smooth arms (`0x41C4C0`, `0x41C7C0`, `0x41C8E0`) set the scroll
+   A SMOOTH CENTRING ISSUED AFTER A STEP WINS. The two centre-ons' smooth
+   arms (`0x41C7C0`, `0x41C8E0`) set the scroll
    target once, from their own point and without our delta, and the stepper
    eases the eye to it. A step applied while one is in flight moves the eye
    and the target together, so the centring's destination moves with it.
@@ -1765,12 +1777,11 @@ static int redirect(unsigned int site, void* target)
 
 void tagpu_zoom_init(void)
 {
-    static const unsigned blocks[3][2] = {
-        { SETCAM_BLOCK,  SETCAM_TAIL  },
+    static const unsigned blocks[2][2] = {
         { CENTRE_BLOCK,  CENTRE_TAIL  },
         { CENTOBJ_BLOCK, CENTOBJ_TAIL },
     };
-    unsigned char* stubs[4];
+    unsigned char* stubs[3];
     int ok, i, built;
 
     if (!tagpu_opt_on("tagpu_zoom.on")) return;
@@ -1783,13 +1794,12 @@ void tagpu_zoom_init(void)
         !site_is(SITE_GETTPOS, VA_GETTPOS) ||
         !site_is(SITE_DEBUGOVL, DEBUGOVL_VA) ||
         !bytes_are(EYECLAMP_VA, EYE_STOLEN, (int)sizeof EYE_STOLEN) ||
-        !bytes_are(SETCAM_BLOCK, EYE_STOLEN, (int)sizeof EYE_STOLEN) ||
         !bytes_are(CENTRE_BLOCK, EYE_STOLEN, (int)sizeof EYE_STOLEN) ||
         !bytes_are(CENTOBJ_BLOCK, EYE_STOLEN, (int)sizeof EYE_STOLEN) ||
         !bytes_are(FOLLOWCLAMP_VA, FOLLOW_STOLEN, (int)sizeof FOLLOW_STOLEN)) {
         zlog("zoom: NOT armed — engine bytes differ at one of "
              "0x41C426/0x41C442/0x430FAE/0x498EF9/0x468DBA/0x41C3C0/"
-             "0x41C4EC/0x41C808/0x41C93B/0x41CAF7");
+             "0x41C808/0x41C93B/0x41CAF7");
         return;
     }
     ok  = redirect(SITE_MMRECT1_VA, (void*)zoom_minimap_rect);
@@ -1798,11 +1808,11 @@ void tagpu_zoom_init(void)
     g_mmInstalled = ok;
     if (!ok) { zlog("zoom: PARTIAL — see above"); return; }
 
-    /* The four target clamps are BUILT before anything is landed, so a failed
+    /* The three target clamps are BUILT before anything is landed, so a failed
        allocation lands none of them. */
     stubs[0] = build_block_stub(zoom_follow_clamp, FOLLOWCLAMP_END);
-    for (i = 0; i < 3; i++) stubs[1 + i] = build_block_stub(zoom_centring_clamp, blocks[i][1]);
-    built = stubs[0] && stubs[1] && stubs[2] && stubs[3];
+    for (i = 0; i < 2; i++) stubs[1 + i] = build_block_stub(zoom_centring_clamp, blocks[i][1]);
+    built = stubs[0] && stubs[1] && stubs[2];
 
     /* THE CAMERA RANGE ONLY ON TOP OF ITS TWO GUARDS, and only on top of a
        minimap wrapper that went in, because the replacement clamp calls it:
@@ -1825,15 +1835,15 @@ void tagpu_zoom_init(void)
        range, so the camera is short of the edge and nothing else. */
     if (built) {
         built = tagpu_detour_land(FOLLOWCLAMP_VA, stubs[0], (int)sizeof FOLLOW_STOLEN);
-        for (i = 0; i < 3; i++)
+        for (i = 0; i < 2; i++)
             built &= tagpu_detour_land(blocks[i][0], stubs[1 + i], (int)sizeof EYE_STOLEN);
     }
     zlog(built ? "zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save 0x430FAE, "
-                 "camera centre range 0x41C3C0 + target clamps 0x41C4EC/0x41C808/"
+                 "camera centre range 0x41C3C0 + target clamps 0x41C808/"
                  "0x41C93B/0x41CAF7 + world guard 0x498EF9 + debug overlay guard "
                  "0x468DBA); the eye, the target, the follow and ScrollSpeed are "
                  "written on the game thread from the frame packet's command apply"
-               : "zoom: ARMED without every target clamp (0x41C4EC/0x41C808/"
+               : "zoom: ARMED without every target clamp (0x41C808/"
                  "0x41C93B/0x41CAF7) — a centring or a follow near a map edge "
                  "stops at the 1x range");
 }

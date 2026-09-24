@@ -3887,10 +3887,10 @@ scroll — all three fail with the pass off too). The centre-on observer is conf
 (`observer on 0x41C7C0: ok`) and its arithmetic is read off the disassembly above, but nothing
 here has driven a centre-on either.
 
-**Two more inline clamps are still open**, and they were open before this: `0x41C4C0` (the
-smooth SetCamera) and `0x41CAF7` (the per-frame FOLLOW) clamp the same way without going
-through `0x41C3C0`, and zoom's own `d` widening never reached any of the three either. This
-closes the HUD half of one of them.
+**Two more inline clamps were open here**: `0x41C4C0` (the smooth SetCamera) and `0x41CAF7`
+(the per-frame FOLLOW) clamp the same way without going through `0x41C3C0`. G20a replaced the
+follow's and both centre-ons' with the camera's range; SetCamera's smooth arm is unreachable
+(every caller passes `smooth = 0`), so it needs nothing ([GPU status](gpu-status.html) §2.3c).
 
 **And the clamp fix rides on `zoom.on`**: `zoom_eye_range` lives in `tagpu_zoom.c` and
 `apply_eye_range` returns early when zoom is not installed. With `zoom.off` and `hud.on` the

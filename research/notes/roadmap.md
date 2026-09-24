@@ -1539,9 +1539,10 @@ stop. Closing it means widening three inline clamps in the middle of the camera 
 a bigger patch than this one.
 
 *G20a (2026-09-23) replaced this whole range with BAR's centre clamp and deleted
-`tagpu_zoomedge.off`. It closed the gap by replacing four inline target clamps, not three —
-`0x41C7F7` is a target store inside centre-on-point `0x41C7C0`, and centre-on-object `0x41C8E0` has
-one of its own ([GPU status](gpu-status.html) §2.3c).*
+`tagpu_zoomedge.off`. It closed the gap by replacing the three reachable inline target clamps —
+`0x41C7F7` is a target store inside centre-on-point `0x41C7C0`, centre-on-object `0x41C8E0` has
+one of its own, and the follow's is the third; `SetCamera`'s smooth arm is unreachable, since every
+caller passes `smooth = 0` ([GPU status](gpu-status.html) §2.3c).*
 
 **G13f — the ring at zoom < 1 is a play mode (opt-in, `vpwide.on`).** G13e's honest answer
 to the ring was to *drop* the click; this addresses the ring instead. `tagpu_vpwide.c` widens
@@ -3710,7 +3711,7 @@ The plan is [BAR camera & full-colour Classic](bar-camera-port.html). Both halve
 
 | Gate | Status | Exit |
 |---|---|---|
-| G20a — the BAR camera replaces the old one: the centre clamp (with the four inline target clamps `0x41C4EC`/`0x41C808`/`0x41C93B`/`0x41CAF7` replaced and the debug overlay guarded at `0x468DBA`), zoom-out from the centre, BAR's notch and 250 ms tween; the window clamp, the log ease, `zoomedge.off`, `eyeoff` and the lab's `cam=game` deleted | ● **built and verified 2026-09-23 on its worktree branch, not landed, not reviewed** | **met.** 0 px of 3 145 728 against the base build (terrain at 0.5×/1×/2×, units at 1×/2×, eye held inside the old range). The eye reads `(−448, −352)` and `(10272, 12320)` at the NW and SE corners at 0.25×, 1× and 8×, the map's NW corner on the view centre pixel in a window capture at all three. One notch in logs `-> 1.163` and lands 250.2–251.0 ms after it uncapped (250.8–266.1 at the 60 fps cap; another game instance on the GPU both times). Zoom-out off-centre moves no eye; zoom-in holds the point under the pointer to ≤ 0.47 world px. A minute of edge scroll per edge per zoom and a wheel at every corner, `tagpu.log` clean. The lab loads and zooms with the same numbers headless. The eye-reader audit closed with a bound for each reader ([engine map](exe-reverse-engineering.html) §"Who reads the eye"; [GPU status](gpu-status.html) §2.3c) |
+| G20a — the BAR camera replaces the old one: the centre clamp (with the three reachable inline target clamps `0x41C808`/`0x41C93B`/`0x41CAF7` replaced and the debug overlay guarded at `0x468DBA`), zoom-out from the centre, BAR's notch and 250 ms tween; the window clamp, the log ease, `zoomedge.off`, `eyeoff` and the lab's `cam=game` deleted | ● **built and verified 2026-09-23 on its worktree branch, not landed, not reviewed** | **met.** 0 px of 3 145 728 against the base build (terrain at 0.5×/1×/2×, units at 1×/2×, eye held inside the old range). The eye reads `(−448, −352)` and `(10272, 12320)` at the NW and SE corners at 0.25×, 1× and 8×, the map's NW corner on the view centre pixel in a window capture at all three. One notch in logs `-> 1.163` and lands 250.2–251.0 ms after it uncapped (250.8–266.1 at the 60 fps cap; another game instance on the GPU both times). Zoom-out off-centre moves no eye; zoom-in holds the point under the pointer to ≤ 0.47 world px. A minute of edge scroll per edge per zoom and a wheel at every corner, `tagpu.log` clean. The lab loads and zooms with the same numbers headless. The eye-reader audit closed with a bound for each reader ([engine map](exe-reverse-engineering.html) §"Who reads the eye"; [GPU status](gpu-status.html) §2.3c) |
 | G20b — the mirror: `edge` (`mirror` or `black`), off-map terrain cells and the map's own features, in the lab's tone | ○ planned (after G20c) | the off-map strip is the flipped on-map strip through the tone, and it A/Bs against the lab |
 | G20c — the base atlas and Classic onto the full-colour shaders (the plan's 2a + 2b) | ○ planned (track B) | Classic++ 0 px after the base atlas. The old and new Classic measured side by side, the new baseline recorded, and the owner has looked |
 | G20d — Gamma once at the end, and the 8bpp path deleted (2c + 2d) | ○ planned (track B) | 0 px at Gamma 12 in both presets; no repaint on a Gamma change; R8 atlases, SHD texture and fog table gone |

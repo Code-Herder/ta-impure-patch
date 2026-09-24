@@ -76,9 +76,10 @@ struct TAGPU_CMD;
        In force only on draws whose ground our terrain pass owns; the engine's
        own range otherwise (tagpu_zoom.c, "the camera's range").
 
-     THE SCROLL TARGET'S FOUR INLINE CLAMPS (0x41C4EC, 0x41C808, 0x41C93B —
-       the smooth arms of SetCamera and the two centre-ons — and the follow's
-       0x41CAF7) take the same range, so a centring or a follow reaches it.
+     THE SCROLL TARGET'S THREE REACHABLE INLINE CLAMPS (0x41C808, 0x41C93B —
+       the smooth arms of the two centre-ons — and the follow's 0x41CAF7) take
+       the same range, so a centring or a follow reaches it. SetCamera's smooth
+       arm has no caller that reaches it and is left alone.
 
      THE WORLD POINT UNDER THE MOUSE (0x498EF9, the GetTPosition call inside
        0x498DA0) is clamped to the map, because a pointer over the void past

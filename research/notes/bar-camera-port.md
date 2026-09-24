@@ -182,12 +182,14 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
   two agree on every draw. The apply clamps the eye and target into the range in force on every
   in-play draw; the level end puts the engine's range back and walks the eye into it.
 * **The flag.** The replacement of `0x41C3C0` runs whenever it is installed.
-* **The four inline target clamps** — not two. The smooth arms of `SetCamera 0x41C4C0`, of
-  centre-on-point `0x41C7C0` and of centre-on-object `0x41C8E0` each store the target and clamp it
-  inline (blocks `0x41C4EC`, `0x41C808`, `0x41C93B`); the follow's block `0x41CAF7` is the fourth.
-  All four are replaced, not chased: the first instruction jumps to a stub that clamps into the
-  range in force and resumes at the block's own tail. `0x41C7F7`, which this note named before, is
-  the target store inside `0x41C7C0`, not a function of its own.
+* **The three reachable inline target clamps** — not two. The smooth arms of centre-on-point
+  `0x41C7C0` and of centre-on-object `0x41C8E0` each store the target and clamp it inline (blocks
+  `0x41C808`, `0x41C93B`); the follow's block `0x41CAF7` is the third. All three are replaced, not
+  chased: the first instruction jumps to a stub that clamps into the range in force and resumes at
+  the function's tail. `0x41C7F7`, which this note named before, is the target store inside
+  `0x41C7C0`, not a function of its own. `SetCamera 0x41C4C0` has a smooth arm of the same shape
+  (`0x41C4EC`) and it is left alone: all four callers push `smooth = 0` and the function's address
+  occurs nowhere in the image as data, so no path reaches it.
 * **The debug overlay.** `0x418310` has no lower bound on its cell window, so its one call site
   `0x468DBA` is redirected to call it only for an eye in the engine's own range.
 * **The minimap box** is clamped to the minimap at every zoom, 1× included.
@@ -211,7 +213,7 @@ the instruction behind each bound, is [exe reverse engineering](exe-reverse-engi
 | `fogwide`'s wide grid | **bounded in the replica**: every read of the mapped bytes checks `idx < mappedCells`, and the edge completions derive their row from `row0` |
 | our feature gather (`tagpu_feat.c`) | **bounded**: rows and columns are clamped to the map. The mirror's gather (C5) is a separate list, so this clamp stays |
 | the engine's sweep rect and HotUnits (`DrawGameScreen`'s row sweep, `0x48BAE0`) | **bounded**: the sweep's start is clamped to 0 and its end to `PLOT − 1`, signed; the bucket index is refused below 0 and at the row count; the cull is a signed rect test. The per-row bucket append `0x46981D` has no capacity check, which the eye does not cause |
-| edge scroll and the scroll target | through `0x41C3C0` and the four target clamps, all ours |
+| edge scroll and the scroll target | through `0x41C3C0` and the three reachable target clamps, all ours |
 | positional sound, the drag box, the unit hit test, the screenshot tiler, the effect and particle draws | **bounded** or projection only |
 
 Each row ends with a bound argument (*Fixes must be safe by construction*), not with "it did
@@ -509,7 +511,7 @@ comments, so regenerate rather than hand-edit).
 
 | landing | contents | review (CLAUDE.md) |
 |---|---|---|
-| 1 (track A) | C1–C4: the BAR camera in, the old rules out | **high** — writes engine memory (the eye, the target and their range) and adds byte patches at `0x41C4EC`, `0x41C808`, `0x41C93B` and `0x468DBA` |
+| 1 (track A) | C1–C4: the BAR camera in, the old rules out | **high** — writes engine memory (the eye, the target and their range) and adds byte patches at `0x41C808`, `0x41C93B`, `0x41CAF7` and `0x468DBA` |
 | 2 (after 3) | C5, the mirror | medium — new instances and a new sprite list in two passes, no engine state |
 | 3 (track B) | 2a + 2b | medium — atlases and shaders |
 | 4 (track B) | 2c + 2d | **high** — the packet loses a field, which is the game↔render hand-over |

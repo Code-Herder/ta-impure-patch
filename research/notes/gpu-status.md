@@ -369,7 +369,7 @@ the star is teal — a debug mode's business, not the shipped frame's.
 | `0x41C442` | `call 0x466B70` — ...and at bottom | call-site redirect |
 | `0x430FAE` | `call 0x4B6A50` — the one site that persists `ScrollSpeed` | call-site redirect; substitutes the player's own value so our scaling can never reach the registry |
 | `0x41C3C0` | the eye clamp — `eye = clamp(eye, 0, map − W)`, plus the minimap rect as its last act | **`leaf_call` detour, 5 stolen**, on a flag that is up whenever the module is installed; the replacement clamps to the range in force (§2.3c) and calls the same minimap wrapper |
-| `0x41C4EC`, `0x41C808`, `0x41C93B` | the inline target clamps of the smooth arms of `SetCamera 0x41C4C0`, centre-on-point `0x41C7C0` and centre-on-object `0x41C8E0` | **block replacement**: the block's first instruction (5 bytes) becomes a jump to a stub that clamps the scroll target into the range in force and resumes at the block's own tail (`0x41C5C6`, `0x41C8BF`, `0x41C9F3`) |
+| `0x41C808`, `0x41C93B` | the inline target clamps of the smooth arms of centre-on-point `0x41C7C0` and centre-on-object `0x41C8E0` | **block replacement**: the block's first instruction (5 bytes) becomes a jump to a stub that clamps the scroll target into the range in force and resumes at the function's tail (`0x41C8BF`, `0x41C9F3`). `SetCamera 0x41C4C0`'s smooth arm (`0x41C4EC`) has the same shape and is **not** patched: no caller reaches it (engine map, row `0x41C4C0`) |
 | `0x41CAF7` | the per-frame camera follow's inline target clamp, inside the stepper `0x41CA10` | **block replacement** (6 bytes), resuming at `0x41CB44`; clamps the target into the range in force and clears fog bit 3, as the block's own tail did |
 | `0x468DBA` | `call 0x418310` — the map debug overlay | call-site redirect; the overlay runs only for an eye in the engine's own range, because its cell window has no lower bound |
 | `0x498EF9` | `call 0x484B50` — the `GetTPosition` inside the mouse → world conversion | call-site redirect; clamps the world point to the map, a no-op for any eye the engine's own bounds can produce |
@@ -746,7 +746,7 @@ establish, so this is a measured behaviour and not an explained one.
 from the pointer while a gesture is in flight — 0.5 px at 1×, 4 px at 8×; holding it exactly
 would need an off-centre scale centre, which vpwide's addressable rect, fogwide's window and
 the ring test all assume away. A smooth centring (`SetCamera`'s smooth arm, centre-on-point,
-centre-on-object) issued after a notch sets the scroll target from its own point, without the
+centre-on-object; `SetCamera`'s smooth arm has no caller) issued after a notch sets the scroll target from its own point, without the
 anchor's step, and the stepper eases the eye to it, so the centring wins; a notch that lands
 while one is in flight moves the eye and the target together, so the centring's destination
 moves with it. The target is clamped into the same range as the eye (§2.3c), so both stop on the
@@ -913,8 +913,8 @@ handed (`terr || the rect is still wide`). So:
   (`engine_range`: `main+0x1422B`/`+0x1422F` less `main+0x37E37`/`+0x37E3B`, the top held at 0),
   and the apply publishes `cam_centre = 0` for that draw, so no path leaves the eye or the target
   unclamped. The follow stub clears fog bit 3 on every pass, as the block it replaces did.
-* **between in-play draws** every engine camera writer ends in `0x41C3C0` or in one of the four
-  target clamps below, and all five use the range the last apply chose, which the latch still
+* **between in-play draws** every engine camera writer ends in `0x41C3C0` or in one of the three
+  target clamps below, and all four use the range the last apply chose, which the latch still
   matches. The level end drops both together and walks the eye into `[0, map − W]`. The
   screenshot tiler (`0x495A30`, the `MakePoster` command) and the movie recorder draw outside the
   in-play gate and so on exactly that pair.
@@ -928,17 +928,19 @@ The one other reader without a lower bound is the map debug overlay `0x418310` (
 the "Contour" command), and its one call site `0x468DBA` is redirected to run it only for an eye
 in the engine's own range.
 
-**The scroll target has four inline clamps, and each is replaced, not chased.** Paths that set
-the eye and copy it into the target afterwards (`0x41C574`, the path whose clamp call is
-`0x41CDE1`, the scroll `0x41D037`) reach the range through the detour. Four others compute the
+**The scroll target has three reachable inline clamps, and each is replaced, not chased.** Paths
+that set the eye and copy it into the target afterwards (`0x41C574`, the path whose clamp call is
+`0x41CDE1`, the scroll `0x41D037`) reach the range through the detour. Three others compute the
 target and clamp it inline against `[0, map − W]`, never calling `0x41C3C0`: the smooth arms of
-`SetCamera 0x41C4C0` (block `0x41C4EC`), of centre-on-point `0x41C7C0` (block `0x41C808`) and of
-centre-on-object `0x41C8E0` (block `0x41C93B`, which centre-on-unit calls), and the per-frame
-camera follow (`0x41CAF7`). The stepper eases the eye to the target, so a target cut short there
-stops the camera short and a unit near an edge would not be centred. Each block's first
-instruction becomes a jump to a stub that clamps the target into the range in force and resumes
-at the block's own tail, so the fog-bit clear and the unwind are the engine's own bytes (engine
-map, "the sites `tagpu_zoom.c` patches").
+centre-on-point `0x41C7C0` (block `0x41C808`) and of centre-on-object `0x41C8E0` (block
+`0x41C93B`, which centre-on-unit calls), and the per-frame camera follow (`0x41CAF7`). The stepper
+eases the eye to the target, so a target cut short there stops the camera short and a unit near
+an edge would not be centred. Each block's first instruction becomes a jump to a stub that clamps
+the target into the range in force and resumes at the function's tail, so the fog-bit clear and
+the unwind are the engine's own bytes, with the same side effects as each exit the block had
+(engine map, "the sites `tagpu_zoom.c` patches"). `SetCamera 0x41C4C0` has a smooth arm of the
+same shape (`0x41C4EC`) that is left alone because nothing reaches it: all four of its callers
+push `smooth = 0`, and its address occurs nowhere in the image as data.
 
 **The minimap box** is clamped to the minimap at every zoom (`zoom_minimap_rect`); it is scaled
 by `1/z` only away from 1×. At 1× an eye at `−W/2` would otherwise put the engine's box half a
@@ -1537,7 +1539,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `main+0x14357` / `+0x1435B` | unit array begin/end, stride `0x118` |
 | `main+0x1435F` / `+0x14367` | HotUnits ids / count (culled to whatever the viewport rect says — the unzoomed one, or the widened one under `vpwide`) |
 | `main+0x1431F` / `+0x14323` | eyeX / eyeY. **WRITTEN, on the GAME THREAD only since 2026-09-12** (§2.17): the command apply at the top of every in-play draw steps it by the cursor anchor's delta, holds it where `tagpu_eye.txt` says, and clamps it into the camera's range in force (§2.3c: the centre range `[−W/2, map − W/2]` on a draw whose ground is ours, the engine's `[0, map − W]` otherwise) on every in-play draw — every value written goes through `clamp_pair()`. The render thread reads the eye from the frame packet and draws from it plus the deltas not yet acknowledged; it never reads or writes the field. Sim-neutral for the same reason `ScrollSpeed` is |
-| `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA10` eases the eye toward it. **WRITTEN by the command apply, on the game thread, always together with the eye** and clamped to the same range, because a disagreement between the two is what the stepper reads as a camera move in flight and would cost the fog grid its is-current flag every frame (§2.3c). **Also WRITTEN by the four target-clamp stubs** that replace the engine's own inline clamps (`0x41C4EC`, `0x41C808`, `0x41C93B`, `0x41CAF7`), on the game thread, only where the engine had just computed it — clamped into the range in force instead of `[0, map − W]`. The eye clamp's replacement deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
+| `main+0x14327` / `+0x1432B` | `MapXScrollingTo` — where the camera is heading; the stepper `0x41CA10` eases the eye toward it. **WRITTEN by the command apply, on the game thread, always together with the eye** and clamped to the same range, because a disagreement between the two is what the stepper reads as a camera move in flight and would cost the fog grid its is-current flag every frame (§2.3c). **Also WRITTEN by the three target-clamp stubs** that replace the engine's own inline clamps (`0x41C808`, `0x41C93B`, `0x41CAF7`), on the game thread, only where the engine had just computed it — clamped into the range in force instead of `[0, map − W]`. The eye clamp's replacement deliberately does **not** touch it — three of its callers are inside the stepper, and writing the target there would stop the camera ever arriving |
 | `main+0x142CB` | the minimap's view RECT. Engine-drawn and engine-filled — `0x41C3C0` is the only place it is computed — so the command apply recomputes it through the same wrapper on the draws it moved the eye. **Game thread since 2026-09-12**; it was the one render-thread write of it before (a one-frame torn box while the game thread drew the minimap) |
 | `main+0x14281` bit 3 | the screen fog grid's is-current flag. **CLEARED by the command apply after any eye it moved, on the game thread** — the same clear the engine's own eye writers make at `0x41CB6B`, and safe only there: `0x484904` sets it with an unlocked read-modify-write, so a clear from the render thread could be swallowed ([engine map](exe-reverse-engineering.html), "who may clear `main+0x14281` bit 3"). Until landing 2 the render thread asked terrown's fog tick for the rebuild through a request/ack pair instead; that handshake is gone |
 | `main+0x37E27..0x37E3B` | viewport rect: L, T, R, B, then W, H. **L/T/R/B are WRITTEN while `vpwide` is live, on the game thread since 2026-09-12** (§2.3b, §2.17): the command apply derives the widened rect from the level the record carries and restores the true one when nothing is zoomed. The true 1× rect reaches the render thread as the packet's `vp`; `tagpu_vpwide_true_rect()` is game-thread only now. W/H are never written; a disagreement with the screen-derived size is counted (`vpwh=`), not repaired |
