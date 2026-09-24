@@ -767,6 +767,13 @@ jump to a stub that resolves a `0xFFFE` cell to its anchor exactly as `0x423845.
 `cell − (row · width + col) · 13`, `row` and `col` the bytes at `+0x0A`/`+0x0B` — tests the anchor's
 bit 0, and rejoins at `0x4238AD` (pay) or `0x423898` (the def's GAF test). It reads byte `+0x0C` of
 the cell stock itself reads byte `+0x08` of at `0x423864`, so it forms no address stock does not.
+The anchor's bit 0 is set by every sequence in play, not only a reclaim: `FeatureDie`'s death
+sequence, and a burn (`0x4233A0` at `0x423468`). So the fix also refuses, through any cell, a
+reclaim of a multi-cell feature that is burning or dying — the reclaim stock refuses through the
+anchor. Where such a feature has no reclaim sequence, stock paid it once through another cell and
+swapped it (`FeatureDie` takes `0x4235FC` before it reads the mark); that one reclaim is now
+refused. The two builder callers (`0x404D66`, `0x414A4A`) ignore the result and return 5 either way, so a
+refused builder ends its order as a paid one does [INFERRED: 5 as the order's done state].
 Only `0x423884`'s `jne` branches to `0x423892`, and nothing into the five bytes after it. MEASURED
 with the fix, same procedure: through the centre cell +3056 at the first payout and +3143 over
 80 s, the anchor's +3140 — the building played its sequence with a record held and ended as

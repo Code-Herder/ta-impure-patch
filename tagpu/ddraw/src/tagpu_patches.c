@@ -559,12 +559,17 @@ static int fix_feature_die_pool_full(void)
    as 0x423845..0x423862 does for the def -- cell - (row * width + col) * 13, the offsets
    bytes +0x0A/+0x0B of the cell -- so it reads byte +0x0C of the cell stock already reads
    byte +0x08 of at 0x423864: no address stock does not form. THE INVARIANT: the mark the
-   reclaim tests is the mark FeatureDie sets, so a feature playing its sequence refuses every
-   reclaim, whichever of its cells the builder aimed at. eax and ebx are dead here (eax is
-   reloaded at 0x4238B9 or zeroed at 0x4238A1; ebx ends as 3 * (row * width + col), the value
-   stock's own anchor path leaves in it), ecx (the FeatureDef) and edx (main) are untouched,
-   and esi is reloaded at 0x4238AD or restored by the epilogue. Identity on a one-cell
-   feature, on an anchor, and on a 3DO feature, which the def test pays either way. */
+   reclaim tests is the anchor's, the one every sequence in play sets -- a reclaim or death
+   sequence (FeatureDie, 0x42368F) or a burn (0x4233A0, 0x423468) -- so such a feature refuses
+   every reclaim, whichever of its cells the builder aimed at, as stock refuses one aimed at
+   its anchor. eax and ebx are dead here (eax is reloaded at 0x4238B9 or zeroed at 0x4238A1;
+   ebx ends as 3 * (row * width + col), the value stock's own anchor path leaves in it), ecx
+   (the FeatureDef) and edx (main) are untouched, and esi is reloaded at 0x4238AD or restored
+   by the epilogue. Identity on a one-cell feature, on an anchor, on an unmarked feature, and
+   on a 3DO feature, which the def test pays either way. The one reclaim it refuses that stock
+   paid only once: through another cell of a multi-cell feature that is burning or dying and
+   has no reclaim sequence, which FeatureDie swaps before it reads the mark (0x4235FC) -- the
+   reclaim stock already refuses through the anchor. */
 static int fix_reclaim_mark_anchor(void)
 {
     static const unsigned char was[6] = {

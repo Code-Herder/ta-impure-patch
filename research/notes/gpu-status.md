@@ -1752,7 +1752,7 @@ draw paints from off the map or leaves holding the last frame. The feature swap 
 itself: it sends a full pool's `FeatureDie` down the engine's own path, so the feature map changes
 exactly as it does for a feature that has no sequence — which is simulation state, and the point:
 stock leaves a paid-for feature standing. The reclaim's anchor test writes nothing either; it
-refuses a reclaim that stock would pay a second time. None is in §2.5. `tagpu_zoom`'s
+refuses, through any cell of a feature whose sequence is in play (a reclaim, a death or a burn), the reclaim stock refuses through its anchor. None is in §2.5. `tagpu_zoom`'s
 `0x498EF9` guard and `vpwide`'s `0x499221` replica still clamp the pointer's world point to the
 scroll extent. With `0x421E60` guarded, those clamps are what keeps
 the hover *right*. They are no longer what keeps the game alive.
