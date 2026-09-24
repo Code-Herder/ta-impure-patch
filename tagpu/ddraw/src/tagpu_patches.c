@@ -3,7 +3,9 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <string.h>
 #include "tagpu_patches.h"
+#include "tagpu_detour.h"
 #include "tagpu_log.h"
 
 static void plog(const char* s)
@@ -45,6 +47,158 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
             p[i] = val[i];
     VirtualProtect(p, n, old, &old);
     return ok;
+}
+
+/* ---- defects of the stock engine -------------------------------------------
+
+   Two places where TotalA.exe itself writes or reads memory it does not own. Each
+   patch below is the identity on every input the stock code handles safely and
+   differs only where the stock code would write past an allocation or read through
+   NULL. The engine map (exe-reverse-engineering.md, "Engine defects we patch") has
+   the disassembly, the callers and the measurements; binary-patches.md lists them.
+   `tagpu_enginefix.off` in the gamedir leaves both unpatched, for an A/B against
+   stock. */
+
+/* THE SORT ROW'S CAPACITY, in DrawGameScreen's unit binning (0x4697CF..0x469840).
+   [DISASSEMBLED] With edi = main+0x141FB, every hot unit (main+0x1435F, NumHotUnits
+   main+0x14367) is binned by the 16-px row of its feet, row = (unit+0x74 - eyeY)/16
+   + 16, tested 0 <= row < rows at 0x469800/0x469805, and appended to that row:
+   count[row]++ (u16, [edi+0x08] = SORT LINE COUNT), *cursor[row]++ = unit
+   ([edi+0x04] = SORT INDICES). Nothing compares count[row] with the row's capacity.
+
+   LoadMap sizes the buffer once per map (0x483D27..0x483D45): cap = viewW/16 + 12
+   into [edi+0x50] (main+0x1424B), rows = viewH/16 + 32 into [edi+0x54]
+   (main+0x1424F), and SORT UNIT LIST = rows * cap * 4 bytes into [edi]
+   (main+0x141FB); the per-frame reset at 0x46971B points cursor[r] at
+   base + r*cap*4. Row r is therefore cap slots, and the two readers (0x4699A8,
+   0x469B54) walk count[r] slots from base + r*cap*4 with no bound either. So one
+   row holding more than cap hot units spills into the next row's slots, and the
+   last rows spill past the end of the allocation: a heap overwrite with unit
+   pointers. cap is one unit per 16-px column swept; units whose feet share a row
+   band beyond that (a dense line or stack, aircraft over one spot, or any crowd
+   wider than the 1x view, which the rect vpwide widens at zoom < 1 hands the cull)
+   are what reach it.
+
+   THE FIX, 31 bytes for 31 at 0x469807..0x469825, ending on the stock join
+   0x469826:
+
+       469807  mov   edx,[edi+0x08]           ; SORT LINE COUNT
+       46980A  lea   edx,[edx+eax*2]          ; &count[row]
+       46980D  movzx ecx,word [edx]
+       469810  cmp   ecx,[edi+0x50]           ; the row's capacity
+       469813  jge   0x469826                 ; full: the unit is not binned
+       469815  inc   word [edx]
+       469818  mov   edx,[edi+0x04]           ; SORT INDICES
+       46981B  mov   ecx,[edx+eax*4]          ; the row's cursor
+       46981E  jecxz 0x469826                 ; stock's NULL-cursor skip
+       469820  mov   [ecx],ebp                ; append the unit
+       469822  add   dword [edx+eax*4],4
+
+   THE INVARIANT: count[row] <= cap after every append, so the slot written is
+   base + (row*cap + count)*4 with count < cap, inside row `row`, and every reader
+   stays inside it too. It rests on [edi+0x50]/[edi+0x54] being the values the
+   allocation was made with: LoadMap is their only writer, through that one base
+   register, and nothing of ours writes them. Registers: eax (row), edi and ebp
+   (unit) as stock; eax, ecx and edx are dead at 0x469826, which reloads esi and
+   reaches 0x46982C's loads. The only branch into the block from outside is the
+   stock NULL-cursor skip to 0x469826 [a rel8/rel32 scan of .text]. A unit past
+   the capacity is not drawn by the engine's sweep that frame; stock drew it by
+   overwriting another row's entry. The list feeds nothing but DrawGameScreen's
+   two draw loops, so the simulation reads nothing different. */
+static int fix_sort_row_capacity(void)
+{
+    static const unsigned char was[31] = {
+        0x8B, 0x57, 0x04,                   /* mov edx,[edi+0x4]        */
+        0x8D, 0x0C, 0x82,                   /* lea ecx,[edx+eax*4]      */
+        0x8B, 0x57, 0x08,                   /* mov edx,[edi+0x8]        */
+        0x66, 0xFF, 0x04, 0x42,             /* inc word [edx+eax*2]     */
+        0x8D, 0x04, 0x42,                   /* lea eax,[edx+eax*2]      */
+        0x8B, 0x01,                         /* mov eax,[ecx]            */
+        0x85, 0xC0,                         /* test eax,eax             */
+        0x74, 0x09,                         /* je 0x469826              */
+        0x89, 0x28,                         /* mov [eax],ebp            */
+        0x8B, 0x01,                         /* mov eax,[ecx]            */
+        0x83, 0xC0, 0x04,                   /* add eax,4                */
+        0x89, 0x01,                         /* mov [ecx],eax            */
+    };
+    static const unsigned char now[31] = {
+        0x8B, 0x57, 0x08,                   /* mov edx,[edi+0x8]        */
+        0x8D, 0x14, 0x42,                   /* lea edx,[edx+eax*2]      */
+        0x0F, 0xB7, 0x0A,                   /* movzx ecx,word [edx]     */
+        0x3B, 0x4F, 0x50,                   /* cmp ecx,[edi+0x50]       */
+        0x7D, 0x11,                         /* jge 0x469826             */
+        0x66, 0xFF, 0x02,                   /* inc word [edx]           */
+        0x8B, 0x57, 0x04,                   /* mov edx,[edi+0x4]        */
+        0x8B, 0x0C, 0x82,                   /* mov ecx,[edx+eax*4]      */
+        0xE3, 0x06,                         /* jecxz 0x469826           */
+        0x89, 0x29,                         /* mov [ecx],ebp            */
+        0x83, 0x04, 0x82, 0x04,             /* add dword [edx+eax*4],4  */
+    };
+    return patch_bytes(0x00469807, was, now, sizeof was);
+}
+
+/* A NULL PLOT, handed to GetGridPosFeature 0x421E60 (stdcall(plot), ret 4).
+   [DISASSEMBLED] Its first two instructions are `mov ecx,[esp+4]` and
+   `mov ax,[ecx+8]`: the plot's feature index is read with no test, and "no
+   feature" is `or ax,0xFFFF` at 0x421E9C. GetGridPosPLOT 0x481550 and
+   0x4815F0 return NULL for a cell outside main+0x14233 x main+0x14237. Three
+   callers [E8 scan of .text]: 0x47EAE3 tests the plot first (0x47EADA); 0x498F4F
+   does not — the cursor's hover feature in 0x498DA0, whose cell comes from
+   GetTPosition's row, and GetTPosition can answer up to 143 px below the point it
+   is handed; 0x40514A does not either — an order handler's target lookup through
+   0x4815F0 on the order's position. Stock's camera keeps 0x498F4F's point 128 px
+   clear of the map's bottom edge (the scroll extent main+0x1422F), exactly the
+   margin GetTPosition needs; a point past that extent — an eye outside the stock
+   range, a pointer on the bottom bar — reads [NULL+8] at 0x421E64.
+
+   THE FIX, a prologue detour: the stub runs the first stolen instruction, and
+   for a NULL plot returns the engine's own "no feature" 0xFFFF with the
+   function's `ret 4`; otherwise it runs the second and resumes at 0x421E68.
+   THE INVARIANT: 0x421E60 never dereferences NULL, whichever caller hands it
+   the plot. Identity for every non-NULL plot; for a NULL one the stock code
+   faults, so nothing the simulation reads changes except where it would have
+   crashed. No branch lands inside the eight stolen bytes [rel8/rel32 scan]. */
+static int fix_feature_null_plot(void)
+{
+    static const unsigned char was[16] = {
+        0x8B, 0x4C, 0x24, 0x04,             /* mov ecx,[esp+4]          */
+        0x66, 0x8B, 0x41, 0x08,             /* mov ax,[ecx+8]           */
+        0x66, 0x3D, 0xFB, 0xFF,             /* cmp ax,0xFFFB            */
+        0x72, 0x32,                         /* jb 0x421EA0              */
+        0x66, 0x3D,                         /* cmp ax,0xFFFE ...        */
+    };
+    unsigned char* s;
+    unsigned char* p;
+
+    if (memcmp((const void*)0x00421E60, was, sizeof was) != 0) return 0;
+    s = p = tagpu_detour_stub();
+    if (!s) return 0;
+    *p++ = 0x8B; *p++ = 0x4C; *p++ = 0x24; *p++ = 0x04;     /* mov ecx,[esp+4]  */
+    *p++ = 0x85; *p++ = 0xC9;                               /* test ecx,ecx     */
+    *p++ = 0x75; *p++ = 0x07;                               /* jnz +7           */
+    *p++ = 0x66; *p++ = 0x0D; *p++ = 0xFF; *p++ = 0xFF;     /* or ax,0xFFFF     */
+    *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;                  /* ret 4            */
+    *p++ = 0x66; *p++ = 0x8B; *p++ = 0x41; *p++ = 0x08;     /* mov ax,[ecx+8]   */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00421E68); p += 4;   /* jmp 0x421E68     */
+    return tagpu_detour_land(0x00421E60, s, 8);
+}
+
+static void patch_engine_defects(void)
+{
+    int rows, plot;
+    char b[200];
+
+    if (GetFileAttributesA("tagpu_enginefix.off") != INVALID_FILE_ATTRIBUTES) {
+        plog("enginefix: stock engine defects left unpatched (tagpu_enginefix.off)");
+        return;
+    }
+    rows = fix_sort_row_capacity();
+    plot = fix_feature_null_plot();
+    _snprintf(b, sizeof b,
+              "enginefix: sort-row capacity bound 0x469807 %s; NULL-plot guard 0x421E60 %s",
+              rows ? "ARMED" : "SKIPPED (byte mismatch)",
+              plot ? "ARMED" : "SKIPPED (byte mismatch)");
+    plog(b);
 }
 
 void tagpu_apply_patches(void)
@@ -181,4 +335,6 @@ void tagpu_apply_patches(void)
             }
         }
     }
+
+    patch_engine_defects();
 }
