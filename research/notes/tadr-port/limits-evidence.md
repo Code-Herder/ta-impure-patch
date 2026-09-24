@@ -677,6 +677,16 @@ All 15 references to `main+0x1437B` were read: besides these, only the construct
 `0x4581C0`, and the ring's flush and free (`0x437C80`, `0x437C90`). Every other function called on
 the scratch takes its size from the header.
 
+**The header's rows meet a second ceiling** (DIS + MEASURED in landing 7). The rasterisers four of
+the writers draw through keep one `0x28`-byte stack entry per row, clipped only to the destination's
+height: `0x4C8BB0` and `0x4C8760` hold 799 (the bakes), `0x4C0820`, `0x4C0C70` and `0x4C1000` 2047
+(the build-state copy's wireframe, the bakes, the shadow). A 2× bake grown to 1548 rows faulted at
+`0x4C8035` with its texture argument overwritten. So the bound is area **and** rows, and the fix
+checks both; the engine map's *The composite scratch frame and the rasterisers' span tables* has the
+table and the call sites. A unit's own 1× frame meets the same tables and is not the scratch: a
+model more than 800 rows tall overflows them with the fix as in stock (a solar ×22, 1544 rows,
+faults at `0x4C8035`).
+
 **What sizes the box.** A box is the model's extent in world units, 1 unit = 1 pixel, and zoom
 never enters. The ring (`ctx+0..+0xC`) is `page_round(2·W·H·1.3·f)` with `f = min(RAM_MB/16, 5)`
 (`0x42D3E9..0x42D466`), 13·W·H at most. `0x437A30` refuses only a block larger than the whole ring,
@@ -688,6 +698,8 @@ exists.
 - The largest 1× is `cordev1`/`armdev1`, 184×239 = 43 976 pixels: 12 % of stock `A` and 2.7 % of
   1280².
 - The largest 2× structure is 4 × 35 708 = 142 832 pixels: 40 % and 8.7 %.
+- The tallest 1× frame is 239 rows, so no stock 2× bake (478 rows at most) reaches the 800-row
+  tables.
 
 **What each lane sees.** Only GDI presents the scratch. On Vulkan it reaches only the golden
 source, and nothing of ours reads it on the render thread.
@@ -784,7 +796,7 @@ read with every peer paused — two and a half stock pools, and 36 % of this one
 | SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | the walk's layer bound (drops whole layers), `MAX_PART`, the effects pass's sprite bucket; all follow since landing 3 | about 15 MB |
 | unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | none (all 116 `mov r,0x10` classified; ctrl-A/B/C/F only read masks); the separate `CANBUILD` overflow `0x42D971` | `WPN_MAXDEFS 4096`, `mask_has` unbounded, the unit pass's caches | mods only; planned in [A′](content-ids.md) |
 | weapon IDs 256→4096 | **SIM + wire** | per level (`0x4918BB`) | 4 hooks + chat-hijack packet | ID < 0 unguarded (stock); `0x0E` and `0x0F` still 8-bit; the model path | `OFF_WEAPON0`, two extra-weapons splices | needs every peer; off in mainline; planned in [A′](content-ids.md) |
-| composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **four writers never compare with the allocation** (the build-state copy, the frame copy, the shadow build, the 2× bake), and the shadow's compression writes a fifth | none | 3.28 MB a level; the bound is [landing 7](raised-limits.md#the-landings) |
+| composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **four writers never compare with the allocation** (the build-state copy, the frame copy, the shadow build, the 2× bake), and the shadow's compression writes a fifth; the rasterisers under them hold 800 or 2048 rows | none | 3.28 MB a level, up to 8 MB grown; bounded by area and rows in [landing 7](raised-limits.md#the-landings) |
 | MixingBuffers 8→128 | audio | per process (registry load) | none (launcher writes REG) | **the engine tracks 32; past it a sound plays untracked** | the impure.cfg store's loader observer, bounded to 32 | none |
 | wreck records 2048→8192 (**not TADR's**) | **SIM**: corpses, and features dying or reclaimed | per level (`0x421F20`) | none — TADR leaves it | — | `WR_COUNT` ×2, `TAGPU_PK_MAX_WRECKS`, `PK_RESERVE`, `TAGPU_PD_MAXHAND` | a full pool refuses corpses; stock's paid-for feature left standing is fixed at `0x423651` (§12) |
 

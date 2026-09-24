@@ -54,14 +54,14 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
 
 /* ---- defects of the stock engine -------------------------------------------
 
-   Three places where TotalA.exe itself writes or reads memory it does not own,
+   Four places where TotalA.exe itself writes or reads memory it does not own,
    and two where it takes a player's payment and does not deliver. Each patch
    below is the identity on every input the stock code handles correctly and
    differs only where the stock code would write past an allocation, read
    through NULL, read off the end of the tile map, leave a paid-for feature
    standing, or pay for one feature twice. The engine map
    (exe-reverse-engineering.md, "Engine defects we patch") has the disassembly,
-   the callers and the measurements; binary-patches.md lists them. All five are
+   the callers and the measurements; binary-patches.md lists them. All six are
    installed at every attach: ddraw.dll is a static import of the exe, so
    DllMain runs before the exe's entry point. They are independent: each is
    skipped, with its reason logged, only when its bytes differ from the retail
@@ -606,6 +606,404 @@ static int fix_reclaim_mark_anchor(void)
     return FIX_ARMED;
 }
 
+/* THE COMPOSITE SCRATCH FRAME. [DISASSEMBLED] The composite draw context ctx = *(main+0x1437B)
+   keeps one frame at ctx+0x10, made at the level load by 0x458180 through 0x4B8E00(name, w, h)
+   and freed by the teardown 0x4581C0 through 0x4D85A0. 0x4B8E00 lays it out as a 0x18-byte
+   header -- +0 width u16, +2 height u16, +4/+6 hotspot s16, +8 key, +9..+B flags -- then a
+   colour plane at +0x10 = base+0x18 and a depth plane at +0x14 = colour + w*h, w*h bytes each:
+   A = [f+0x14] - [f+0x10] is the frame's area. The limits table sizes it 1280 x 1280 (stock
+   600 x 600). Five writers size it to one unit and none compares that size with A, all
+   thiscall on ctx, all on the game thread:
+     - the build-state copy 0x4589C0 sets the header to the box of the unit and its build
+       pieces (esi x edx at 0x458B87) and fills or copies w*h of both planes; one caller,
+       0x459608 in the unit draw 0x459200;
+     - the frame copy 0x45A470(src) copies src's header and w*h of both planes; three callers
+       (0x459338, 0x4594DB, 0x45958C);
+     - the shadow build 0x45A790 sets w x h from the bounds 0x45A510 leaves at [esp+0x10] and
+       [esp+0x20] (at 0x45A7B9), fills w*h of both planes, draws, then run-length encodes the
+       colour plane INTO the depth plane (0x4B9E60 from 0x45A85B: two bytes a row and at most
+       two a pixel, so 2h(w+1) bytes); callers 0x4592FE, 0x45955B;
+     - the 2x bakes 0x459830 and 0x459C70(src, ...) set 2w x 2h from src (a `shl` on the u16)
+       and fill, draw and downsample that much, when their fourth argument asks for the 2x
+       path (0x459875, 0x459CB5); src is [esp+0x5F18] / [esp+0x159E8] there.
+   A unit whose box passes A -- a quarter of it for the bake, half for the shadow -- writes
+   past the allocation, on every lane (only GDI presents the result, but the game thread
+   builds it on all of them, MEASURED). And A bounds area, not height: four of the writers then
+   draw polygons into the frame through rasterisers that keep one 0x28-byte stack entry a row,
+   clipped only to the frame's height - 1, in tables of 799 rows (0x4C8BB0, 0x4C8760, the bakes'
+   quads) or 2047 (0x4C0820, 0x4C0C70, 0x4C1000; the build-state copy's wireframe, the bakes,
+   the shadow). A frame taller than the table under it overruns the rasteriser's stack: MEASURED,
+   a 2x bake grown to 1548 rows faulted at 0x4C8035 with its texture argument overwritten.
+
+   THE FIX: before each writer forms its size, a check computes what it will write (need) and
+   how many rows, and compares them with A and with the smallest span table under that writer
+   (2048 rows for the build-state copy and the shadow, 800 for the 2x bakes' 2h). If it fits the
+   writer runs unchanged. If not, the frame grows: a new
+   block of 0x18 + 2*px bytes, px >= need rounded up to 256 Ki pixels and at most 2048 x 2048,
+   from the engine's own allocator path (below), laid out as 0x4B8E00 lays it out, with the
+   header and both planes copied; ctx+0x10 is repointed and the old block freed with 0x4D85A0,
+   the free 0x4581C0 uses. If the grow is refused -- the need is over 2048 x 2048, the rows are
+   over the span table, the lever `tagpu_scratch.nogrow`, the allocator is out of memory or in
+   its debug-heap mode, or the frame is the writer's own source -- the writer takes a fallback
+   that writes nothing past A:
+     - build-state copy: leaves through its epilogue 0x458D13 and flags the refusal, and the
+       wrapper on its one call (0x459608) leaves the unit draw through 0x4597D8, the draw's
+       own "no frame" exit (0x459212): the unit is not drawn this frame;
+     - frame copy: the frame becomes 1 x 1 holding src's key, with src's hotspot and key, and
+       the function returns it as stock does (`mov eax,[ecx+0x10]; ret 4`): nothing drawn;
+     - shadow build: the frame becomes 1 x 1 holding its own key, hotspot 0, and the function
+       resumes at the encode 0x45A853: the unit's cached shadow is one transparent pixel;
+     - 2x bake: the 1x path (0x459913 / 0x459D57), which draws into src by src's own header.
+   Never a clip: the cargo merge 0x4B90A0 (0x4596D8) blits the frame with no right or bottom
+   clip, so a header must say what the planes hold.
+
+   THE INVARIANT: every header a writer sets has w*h <= A, and a shadow's 2h(w+1) <= A, and no
+   more rows than the span tables under that writer hold, so no writer, no rasteriser and no
+   reader sized by a header leaves its allocation or its stack table. It rests on:
+     - a bound: A is read from the frame's own two pointers, which have exactly two producers,
+       0x4B8E00 at the level load and scratch_grow here, and both lay the frame out this way.
+       The layout test in scratch_area (colour == base+0x18, depth > colour) is a sanity
+       filter on those values, not the argument; a frame failing it is left to stock, logged.
+       Every fallback's 1 x 1 fits: A >= 360000 from 0x4B8E00 and >= 64 from a grow;
+     - an ordering: each writer reads ctx+0x10 only after its check [every read of +0x10 in
+       each writer]; its callers re-read ctx+0x10 after every call (0x45933D..0x459342,
+       0x4594E3, 0x4595B8, 0x4595D9, 0x459639); the only function any writer calls that can
+       reach another writer is 0x458310, which the build-state copy calls before its check
+       (0x458A0C, 0x458A77) [call graph of .text]; and a frame is never regrown under a
+       writer that is reading from it (src == frame refuses the grow instead);
+     - a lifetime: the old block is freed only after ctx+0x10 points at the new one, and it
+       has no other holder -- the render thread never reads it, and our tracer only logs the
+       pointer's value.
+   Identical to stock for every unit whose box fits the frame as allocated. Grows persist for
+   the level: the teardown frees whichever block ctx+0x10 holds. Not bounded here: a unit's own
+   frame (Object3do+0x10), which the 1x bakes draw into through the same rasterisers, so a model
+   more than 800 rows tall still overruns their table (exe-reverse-engineering.md, "The composite
+   scratch frame and the rasterisers' span tables").
+
+   THE ALLOCATOR. The engine's malloc 0x4D83B0 -> 0x4D83C0 calls the out-of-memory handler at
+   [0x5289BC] when malloc fails, and the installed handler 0x49E700 ends the process. A grow
+   must be able to fail, so scratch_alloc runs 0x4D83C0's own success path by hand: inside the
+   allocator's critical section (0x4DA780 returns it, 0x528A28), refuse if 0x4D80D0 reports the
+   debug heap (its blocks come from 0x4DACF0 and go back through 0x4DB7D0), else CRT malloc
+   0x4E8890 and, on success, the byte counters 0x4DA7D0(size). 0x4D85A0's non-debug path
+   frees exactly such a block (0x4D8360, 0x4DA840, 0x4E8820). The debug fill 0x4D82C0 that
+   0x4D83C0 applies when its option is set is not applied: every plane is written before it
+   is read.
+
+   Levers, read once at attach: `tagpu_scratch.stress` treats every frame as too small, so
+   every writer call regrows it to exactly max(need, 64) pixels and frees the old one;
+   `tagpu_scratch.nogrow` refuses every grow, so every oversized writer takes its fallback.
+   Registers: every stub saves them all (pushad/popad) around the check, and the flags the
+   stolen instructions set are set after it. No branch lands inside the stolen bytes
+   [rel8/rel32 scan of .text]; 0x459608's call is the only reference to 0x4589C0. */
+
+#define SCR_CAP_PX    (2048u * 2048u)
+#define SCR_ROUND_PX  0x40000u
+#define SCR_MIN_PX    64u
+#define SCR_ROWS_POLY 2048u     /* 0x4C0820, 0x4C0C70, 0x4C1000: 2047 rows of span table */
+#define SCR_ROWS_SPAN 800u      /* 0x4C8760, 0x4C8BB0: 799                               */
+
+enum { SCR_BUILD, SCR_FRAME, SCR_SHADOW, SCR_BAKE1, SCR_BAKE2 };
+static const char* const SCR_WHO[] = {
+    "the build-state copy 0x4589C0", "the frame copy 0x45A470", "the shadow build 0x45A790",
+    "the 2x bake 0x459830", "the 2x bake 0x459C70",
+};
+
+/* the stubs' pushad block, as dword indexes; the site's esp is regs + 8 */
+enum { SCR_EDI = 0, SCR_ESI = 1, SCR_EBP = 2, SCR_EBX = 4, SCR_EDX = 5, SCR_ECX = 6,
+       SCR_SITE = 8 };
+
+static int s_scr_stress, s_scr_nogrow;
+static volatile unsigned char s_scr_refused;     /* the build-state copy's answer, GAME THREAD */
+static unsigned s_scr_grows[5], s_scr_refusals[5], s_scr_layout;   /* by writer */
+
+/* A, or 0 when the frame is not in 0x4B8E00's layout */
+static unsigned scratch_area(const unsigned char* f)
+{
+    const unsigned char* colour;
+    const unsigned char* depth;
+    if (!ptr_sane(f)) return 0;
+    colour = *(const unsigned char* const*)(f + 0x10);
+    depth  = *(const unsigned char* const*)(f + 0x14);
+    if (colour != f + 0x18 || depth <= colour || (size_t)(depth - colour) > 0x10000000u)
+        return 0;
+    return (unsigned)(depth - colour);
+}
+
+static void scratch_log(const char* what, int who, unsigned long long need, unsigned rows,
+                        unsigned a, unsigned px, unsigned n)
+{
+    char b[288];
+    if (n > 16 && (n & 1023)) return;        /* a writer's first 16, then every 1024th */
+    _snprintf(b, sizeof b, "enginefix: composite scratch %s for %s: %u px in %u rows asked, "
+              "%u held, %u now (%u so far)", what, SCR_WHO[who],
+              need > 0xFFFFFFFFull ? 0xFFFFFFFFu : (unsigned)need, rows, a, px, n);
+    b[sizeof b - 1] = 0;
+    plog(b);
+}
+
+static unsigned char* scratch_alloc(size_t bytes)
+{
+    CRITICAL_SECTION* lock = ((CRITICAL_SECTION* (__cdecl*)(void))0x004DA780)();
+    unsigned char* p = NULL;
+    EnterCriticalSection(lock);
+    if (!((char (__cdecl*)(void))0x004D80D0)()) {
+        p = ((unsigned char* (__cdecl*)(size_t))0x004E8890)(bytes);
+        if (p) ((void (__cdecl*)(size_t))0x004DA7D0)(bytes);
+    }
+    LeaveCriticalSection(lock);
+    return p;
+}
+
+/* Make the frame at ctx+0x10 (f, area a) hold `need` pixels. 1: it does, and the writer runs;
+   0: it does not, and the writer takes its fallback on f, which is unchanged. */
+static int scratch_hold(unsigned char* ctx, unsigned char* f, unsigned a,
+                        unsigned long long need, unsigned rows, unsigned rows_max,
+                        const void* src, int who)
+{
+    unsigned char* g;
+    unsigned px, keep;
+    const char* why;
+
+    if (rows > rows_max)         why = rows_max == SCR_ROWS_SPAN
+                                       ? "refused (taller than 800 rows, the span table of 0x4C8760 / 0x4C8BB0)"
+                                       : "refused (taller than 2048 rows, the span table of 0x4C0820 / 0x4C1000)";
+    else if (need <= a && (!s_scr_stress || src == f)) return 1;
+    else if (src == f)           why = "refused (the frame is the writer's own source)";
+    else if (need > SCR_CAP_PX)  why = "refused (over 2048 x 2048)";
+    else if (s_scr_nogrow)       why = "refused (tagpu_scratch.nogrow)";
+    else {
+        if (s_scr_stress)
+            px = need > SCR_MIN_PX ? (unsigned)need : SCR_MIN_PX;
+        else {
+            px = ((unsigned)need + SCR_ROUND_PX - 1) & ~(SCR_ROUND_PX - 1);
+            if (px > SCR_CAP_PX) px = SCR_CAP_PX;
+        }
+        g = scratch_alloc(0x18u + 2u * (size_t)px);
+        if (g) {
+            keep = a < px ? a : px;
+            memcpy(g, f, 0x10);
+            memcpy(g + 0x18, f + 0x18, keep);
+            memcpy(g + 0x18 + px, f + 0x18 + a, keep);
+            *(unsigned char**)(g + 0x10) = g + 0x18;
+            *(unsigned char**)(g + 0x14) = g + 0x18 + px;
+            *(unsigned char**)(ctx + 0x10) = g;
+            ((void (__cdecl*)(void*))0x004D85A0)(f);
+            scratch_log("grown", who, need, rows, a, px, ++s_scr_grows[who]);
+            return 1;
+        }
+        why = "refused (the allocator has no block)";
+    }
+    scratch_log(why, who, need, rows, a, a, ++s_scr_refusals[who]);
+    return 0;
+}
+
+/* the frame at ctx+0x10 and its area; 0 leaves the write to stock (see THE INVARIANT) */
+static unsigned char* scratch_frame(unsigned char* ctx, unsigned* a)
+{
+    unsigned char* f = ptr_sane(ctx) ? *(unsigned char**)(ctx + 0x10) : NULL;
+    *a = scratch_area(f);
+    if (!*a && s_scr_layout++ == 0)
+        plog("enginefix: composite scratch at ctx+0x10 is not in 0x4B8E00's layout; "
+             "its writers are left to stock");
+    return f;
+}
+
+/* a 1 x 1 frame of one key pixel: every fallback that must still hand a frame on */
+static void scratch_one_pixel(unsigned char* f, short hx, short hy, unsigned char key)
+{
+    unsigned char* colour = *(unsigned char**)(f + 0x10);
+    unsigned char* depth  = *(unsigned char**)(f + 0x14);
+    *(unsigned short*)(f + 0) = 1;
+    *(unsigned short*)(f + 2) = 1;
+    *(short*)(f + 4) = hx;
+    *(short*)(f + 6) = hy;
+    f[8] = key;
+    colour[0] = key;
+    depth[0] = 0;
+}
+
+/* 0x458B87: esi x edx is the header about to be written; ebx is ctx, ebp the source frame */
+static int __cdecl scratch_build_state(unsigned int* regs)
+{
+    unsigned char* ctx = (unsigned char*)(size_t)regs[SCR_EBX];
+    int w = (int)regs[SCR_ESI], h = (int)regs[SCR_EDX];
+    unsigned a;
+    unsigned char* f = scratch_frame(ctx, &a);
+    if (!a) return 1;
+    if (w >= 0 && h >= 0 && w <= 0xFFFF && h <= 0xFFFF &&
+        scratch_hold(ctx, f, a, (unsigned long long)w * (unsigned)h, (unsigned)h, SCR_ROWS_POLY,
+                     (const void*)(size_t)regs[SCR_EBP], SCR_BUILD))
+        return 1;
+    s_scr_refused = 1;
+    return 0;
+}
+
+/* 0x45A470, the entry: ecx is ctx, [esp+4] the source frame */
+static int __cdecl scratch_frame_copy(unsigned int* regs)
+{
+    unsigned char* ctx = (unsigned char*)(size_t)regs[SCR_ECX];
+    const unsigned char* src = (const unsigned char*)(size_t)regs[SCR_SITE + 1];
+    unsigned a;
+    unsigned char* f = scratch_frame(ctx, &a);
+    if (!a || !ptr_sane(src)) return 1;
+    if (scratch_hold(ctx, f, a, (unsigned long long)*(const unsigned short*)src *
+                     *(const unsigned short*)(src + 2), *(const unsigned short*)(src + 2),
+                     0xFFFFu, src, SCR_FRAME))              /* nothing rasterizes into it */
+        return 1;
+    scratch_one_pixel(f, *(const short*)(src + 4), *(const short*)(src + 6), src[8]);
+    return 0;
+}
+
+/* 0x45A7B9: ebp is ctx; the bounds 0x45A510 left are w at [esp+0x10] and h at [esp+0x20] */
+static int __cdecl scratch_shadow(unsigned int* regs)
+{
+    unsigned char* ctx = (unsigned char*)(size_t)regs[SCR_EBP];
+    int w = (int)regs[SCR_SITE + 0x10 / 4], h = (int)regs[SCR_SITE + 0x20 / 4];
+    unsigned a;
+    unsigned char* f = scratch_frame(ctx, &a);
+    if (!a) return 1;
+    if (w >= 0 && h >= 0 && w <= 0xFFFF && h <= 0xFFFF &&
+        scratch_hold(ctx, f, a, 2ull * (unsigned)h * ((unsigned)w + 1u), (unsigned)h,
+                     SCR_ROWS_POLY, NULL, SCR_SHADOW))
+        return 1;
+    scratch_one_pixel(f, 0, 0, f[8]);
+    return 0;
+}
+
+/* 0x459875 / 0x459CB5, on the 2x path: ecx is ctx, the source frame at [esp+slot] */
+static int scratch_bake(unsigned int* regs, unsigned slot, int who)
+{
+    unsigned char* ctx = (unsigned char*)(size_t)regs[SCR_ECX];
+    const unsigned char* src =
+        *(const unsigned char* const*)((const unsigned char*)(regs + SCR_SITE) + slot);
+    unsigned a, w, h;
+    unsigned char* f = scratch_frame(ctx, &a);
+    if (!a || !ptr_sane(src)) return 1;
+    w = *(const unsigned short*)src;
+    h = *(const unsigned short*)(src + 2);
+    return w < 0x8000 && h < 0x8000 &&         /* the doubled header is a u16 as well */
+           scratch_hold(ctx, f, a, 4ull * w * h, 2u * h, SCR_ROWS_SPAN, src, who);
+}
+
+static int __cdecl scratch_bake1(unsigned int* regs) { return scratch_bake(regs, 0x5F18, SCR_BAKE1); }
+static int __cdecl scratch_bake2(unsigned int* regs) { return scratch_bake(regs, 0x159E8, SCR_BAKE2); }
+
+/* pushad; push esp; call check; add esp,4; test eax,eax; popad -- ZF set = refused */
+static unsigned char* scratch_call_check(unsigned char* p, int (__cdecl *check)(unsigned int*))
+{
+    *p++ = 0x60;                                            /* pushad           */
+    *p++ = 0x54;                                            /* push esp         */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)check); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                  /* add esp,4        */
+    *p++ = 0x85; *p++ = 0xC0;                               /* test eax,eax     */
+    *p++ = 0x61;                                            /* popad            */
+    return p;
+}
+
+/* the bakes' 2x test, stolen: `test reg,reg; je one_x`; the check runs on the 2x path only */
+static unsigned char* scratch_bake_stub(unsigned char* s, unsigned char test_rr,
+                                        int (__cdecl *check)(unsigned int*),
+                                        unsigned int two_x, unsigned int one_x)
+{
+    unsigned char* p = s;
+    unsigned char* jz0;
+    *p++ = 0x85; *p++ = test_rr;                            /* test reg,reg     */
+    *p++ = 0x74; jz0 = p++;                                 /* jz one_x         */
+    p = scratch_call_check(p, check);
+    *p++ = 0x74; *p++ = 0x05;                               /* jz one_x         */
+    *p++ = 0xE9; tagpu_detour_rel(p, two_x); p += 4;        /* jmp: the 2x path */
+    *jz0 = (unsigned char)(p - (jz0 + 1));
+    *p++ = 0xE9; tagpu_detour_rel(p, one_x); p += 4;        /* one_x            */
+    return p;
+}
+
+typedef struct SCRSITE { unsigned int va; unsigned char was[8]; int n; unsigned char* stub; } SCRSITE;
+
+static int fix_composite_scratch(void)
+{
+    SCRSITE site[6] = {
+        { 0x00459608, { 0xE8, 0xB3, 0xF3, 0xFF, 0xFF }, 5, NULL },          /* call 0x4589C0 */
+        { 0x00458B87, { 0x8B, 0x4B, 0x10, 0xF7, 0xD8 }, 5, NULL },          /* mov ecx,[ebx+0x10]; neg eax */
+        { 0x0045A470, { 0x8B, 0x44, 0x24, 0x04, 0x53 }, 5, NULL },          /* mov eax,[esp+4]; push ebx */
+        { 0x0045A7B9, { 0x8B, 0x4D, 0x10, 0x66, 0x8B, 0x54, 0x24, 0x10 }, 8, NULL },
+        { 0x00459875, { 0x85, 0xDB, 0x0F, 0x84, 0x96, 0x00, 0x00, 0x00 }, 8, NULL }, /* test ebx,ebx; je 0x459913 */
+        { 0x00459CB5, { 0x85, 0xC0, 0x0F, 0x84, 0x9A, 0x00, 0x00, 0x00 }, 8, NULL }, /* test eax,eax; je 0x459D57 */
+    };
+    const int n = (int)(sizeof site / sizeof site[0]);
+    unsigned char* p;
+    int i, done;
+
+    for (i = 0; i < n; i++)
+        if (memcmp((const void*)(size_t)site[i].va, site[i].was, (size_t)site[i].n) != 0)
+            return FIX_BYTES;
+    for (i = 0; i < n; i++)
+        if (!(site[i].stub = tagpu_detour_stub())) {
+            while (i-- > 0) VirtualFree(site[i].stub, 0, MEM_RELEASE);
+            return FIX_STUB;
+        }
+    s_scr_stress = GetFileAttributesA("tagpu_scratch.stress") != INVALID_FILE_ATTRIBUTES;
+    s_scr_nogrow = GetFileAttributesA("tagpu_scratch.nogrow") != INVALID_FILE_ATTRIBUTES;
+
+    /* the build-state copy's caller: run it, and on a refusal leave the unit draw */
+    p = site[0].stub;
+    p = tagpu_detour_set_flag(p, &s_scr_refused, 0);
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;     /* push [esp+8]     */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;     /* push [esp+8]     */
+    *p++ = 0xE8; tagpu_detour_rel(p, 0x004589C0); p += 4;   /* call 0x4589C0    */
+    p = tagpu_detour_cmp_flag(p, &s_scr_refused);
+    *p++ = 0x75; *p++ = 0x03;                               /* jnz refused      */
+    *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;                  /* ret 8            */
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x0C;                  /* refused: add esp,0xC (return, 2 args) */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x004597D8); p += 4;   /* jmp 0x4597D8     */
+
+    p = scratch_call_check(site[1].stub, scratch_build_state);
+    *p++ = 0x74; *p++ = 0x0A;                               /* jz refused       */
+    memcpy(p, site[1].was, 5); p += 5;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00458B8C); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00458D13); p += 4;   /* refused: epilogue */
+
+    p = scratch_call_check(site[2].stub, scratch_frame_copy);
+    *p++ = 0x74; *p++ = 0x0A;                               /* jz refused       */
+    memcpy(p, site[2].was, 5); p += 5;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0045A475); p += 4;
+    *p++ = 0x8B; *p++ = 0x41; *p++ = 0x10;                  /* refused: mov eax,[ecx+0x10] */
+    *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;                  /* ret 4            */
+
+    p = scratch_call_check(site[3].stub, scratch_shadow);
+    *p++ = 0x74; *p++ = 0x0D;                               /* jz refused       */
+    memcpy(p, site[3].was, 8); p += 8;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0045A7C1); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0045A853); p += 4;   /* refused: the encode */
+
+    scratch_bake_stub(site[4].stub, 0xDB, scratch_bake1, 0x0045987D, 0x00459913);
+    scratch_bake_stub(site[5].stub, 0xC0, scratch_bake2, 0x00459CBD, 0x00459D57);
+
+    /* the caller's wrapper first: alone it only runs the call. Written together or not at all. */
+    for (done = 0; done < n; done++) {
+        unsigned char now[8];
+        unsigned int rel = (unsigned int)(size_t)site[done].stub - (site[done].va + 5u);
+        memset(now, 0x90, sizeof now);
+        now[0] = done == 0 ? 0xE8 : 0xE9;                   /* the call stays a call */
+        memcpy(now + 1, &rel, 4);
+        if (!tagpu_detour_write(site[done].va, now, site[done].n)) break;
+    }
+    if (done < n) {
+        while (done-- > 0) tagpu_detour_write(site[done].va, site[done].was, site[done].n);
+        for (i = 0; i < n; i++) VirtualFree(site[i].stub, 0, MEM_RELEASE);
+        return FIX_PROTECT;
+    }
+    if (s_scr_stress || s_scr_nogrow)
+        plog(s_scr_stress && s_scr_nogrow
+             ? "enginefix: composite scratch levers: tagpu_scratch.stress + tagpu_scratch.nogrow "
+               "(every writer takes its fallback)"
+             : s_scr_stress ? "enginefix: composite scratch lever: tagpu_scratch.stress "
+                              "(every writer call regrows the frame)"
+                            : "enginefix: composite scratch lever: tagpu_scratch.nogrow "
+                              "(an oversized writer takes its fallback)");
+    return FIX_ARMED;
+}
+
 static void patch_engine_defects(void)
 {
     int sort = fix_sort_buffer_end();
@@ -613,13 +1011,16 @@ static void patch_engine_defects(void)
     int terr = fix_terrain_window();
     int die  = fix_feature_die_pool_full();
     int mark = fix_reclaim_mark_anchor();
-    char b[448];
+    int scr  = fix_composite_scratch();
+    char b[512];
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
               "terrain window bound 0x484057 %s; feature swap on a full wreck pool 0x423651 %s; "
-              "reclaim tests the anchor's mark 0x423892 %s",
-              fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark));
+              "reclaim tests the anchor's mark 0x423892 %s; composite scratch bound "
+              "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70) %s",
+              fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
+              fix_state(scr));
     b[sizeof b - 1] = 0;
     plog(b);
 }
@@ -1164,10 +1565,10 @@ static void lim_sites(void)
        with the context by the level teardown (0x42DC8F -> 0x4581C0). Four writers in the blit
        size it to a unit and none compares that size with the allocation: the build-state copy
        0x4589C0, the frame copy 0x45A470, the shadow build 0x45A790 and the 2x structure bake in
-       0x459830 / 0x459C70. A box of more than width x height pixels -- a quarter of that for the
-       2x bake -- therefore writes past the frame, on every lane. The raise moves that threshold
-       from 600 x 600 to 1280 x 1280; it is not a bound. Every reader takes its size from the
-       header a writer set, so no write grows with the raise. */
+       0x459830 / 0x459C70. The engine fix fix_composite_scratch bounds them all and grows the
+       frame when a unit needs more; this raise is only where it starts, so that no unit of the
+       shipped content needs a grow. Every reader takes its size from the header a writer set,
+       so no write grows with the raise. */
     lim_dword(0x0045819B, 600, TAGPU_LIM_COMPOSITE, "composite scratch width");
     lim_dword(0x00458196, 600, TAGPU_LIM_COMPOSITE, "composite scratch height");
 

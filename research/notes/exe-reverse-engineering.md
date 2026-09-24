@@ -273,11 +273,12 @@ outside the apply frame.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..24]
 
-Three places where the retail 3.1 image writes or reads memory it does not own, and two where it
-takes a player's payment and does not deliver: a feature reclaimed or destroyed while the wreck pool
-is full, and a feature reclaimed twice through a cell that is not its anchor. `tagpu_patches.c`
-(`patch_engine_defects`) patches all five at every attach: `ddraw.dll` is a static import of the
-exe, so `DllMain` runs before the exe's entry point. The five are independent. Each is skipped, with
+Four places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
+composite scratch frame's writers, with the span tables of the rasterisers under them), and two
+where it takes a player's payment and does not deliver: a feature reclaimed or destroyed while the
+wreck pool is full, and a feature reclaimed twice through a cell that is not its anchor.
+`tagpu_patches.c` (`patch_engine_defects`) patches all six at every attach: `ddraw.dll` is a static
+import of the exe, so `DllMain` runs before the exe's entry point. The six are independent. Each is skipped, with
 its reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its stub
 cannot be allocated, or its page cannot be made writable. Each patch is the identity on every input
 the stock code handles correctly. [Binary patches](binary-patches.html) §"Stock engine defects we
@@ -286,8 +287,9 @@ patch" is the one-row-per-bug register. The disassembly is `objdump -d -M intel`
 measurements are `tacli` instances on Two Continents at 1024×768 with
 `scenarios/sort-row-overflow.json` (150 Peewees in one line, every foot at the same world z), on
 Lava Run, Coast To Coast and Dark Side at 1920×1080 to 3840×2160, on the camera branch's build
-for the terrain pass, and on Town & Country at 1024×768 for the two feature fixes. Each compares
-against a build without the patch.
+for the terrain pass, on Town & Country at 1024×768 for the two feature fixes, and on Two
+Continents at 1024×768 for the composite scratch, with oversized units made locally from stock
+models (never committed). Each compares against a build without the patch.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
@@ -786,6 +788,119 @@ Nothing else writes or compares the pool's size: every reference to `main+0x1420
 `+0x14217` and `+0x1421B` was read, and a sweep of the functions that make them for `0x800`,
 `0x7FF`, `0x18000`, `0x6000` and `0x17FD0` found only the eleven limits-table sites. TADR patches
 none of this (its source as of `dcff5dd`).
+
+### The composite scratch frame and the rasterisers' span tables
+
+`[DISASSEMBLED + MEASURED 2026-09-24]` The frame, its five writers and their callers are in *The
+raised effect pools* (below, "The composite scratch frame"): one frame a level at
+`*(main+0x1437B)+0x10`, laid out by `0x4B8E00` as a `0x18`-byte header and two planes of `A`
+pixels, `A = [+0x14] − [+0x10]`. Two ceilings bound what may be written there, and stock checks
+neither.
+
+- **Area.** A writer sets a header and writes that many pixels into both planes: the build-state
+  copy `w·h`, the frame copy its source's `w·h`, the shadow build `w·h` and then its encode, which
+  `0x4B9E60` writes into the depth plane at up to `2h(w+1)` bytes (two a row and two a pixel from
+  `0x4BA000`), and the 2× bakes `4·w·h`.
+- **Rows.** Four of the writers then draw polygons into the frame, and every rasteriser they reach
+  keeps its spans on its own stack, one `0x28`-byte entry a row, appended from the polygon's first
+  row. Each takes its destination as the first argument and clips rows only to `[0, h − 1)`
+  (`0x4C8CB6..0x4C8CE1` in `0x4C8BB0`: `[frame+2] − 1`), so a destination `h` rows tall writes up to
+  `h − 1` entries.
+
+| rasteriser | stack frame | table | entries | reached from |
+|---|---|---|---|---|
+| `0x4C8BB0`, the textured quad | `0x7D60` | `[esp+0x70]` | 799 | `0x45A39C` in the bake `0x459C70`, its one caller |
+| `0x4C8760` | `0x7D58` | `[esp+0x68]` | 799 | `0x459B96` in the bake `0x459830` |
+| `0x4C1000` | `0x14028` | `[esp+0x38]` | 2047 | `0x459BB1` in the bake `0x459830`; `0x45A750` in the shadow's `0x45A610` |
+| `0x4C0C70` | `0x1402C` | `[esp+0x3C]` | 2047 | `0x45A3BA` in the bake `0x459C70` |
+| `0x4C0820` | `0x14024` | `[esp+0x34]` | 2047 | `0x459128` in `0x458FA0`, from `0x458DD0`: the build-state copy's last call (`0x458D0E`) and the cargo loop's (`0x459686`) |
+
+So a destination may be 800 rows tall for the first two and 2048 for the other three. Past that the
+entries run over the saved registers, the return address and the arguments above the table.
+MEASURED: a solar scaled ×11, whose 2× bake grew the frame to 1548 rows, faulted at `0x4C8035`
+reading `[NULL+0x10]` for its polygon's texture, `0x4C8BB0`'s argument at `[esp+0x7D78]`, which its
+own table had overwritten. Stock reaches it too: area bounds a 2× frame, not its height, so a narrow
+structure whose own frame is more than 400 rows tall gets there at 600² as well.
+
+The unit draw also hands the frame to the bake as its own source: `0x459641` pushes `[edi+0x10]`
+with the mode argument 0, which sends the bake down its 1× path before anything is sized
+(`0x459875`).
+
+**The fix** (`fix_composite_scratch`, always on) runs a check before each writer forms its size,
+through a stub that saves every register around a C call (`pushad`, the check, `popad`):
+
+| site | writer | stolen bytes | what the check computes | refused |
+|---|---|---|---|---|
+| `0x458B87` | the build-state copy | `8B 4B 10 F7 D8` | `esi × edx`, the header about to be written; rows `edx` against 2048 | sets a flag and leaves through the epilogue `0x458D13` |
+| the call at `0x459608` | its one caller | `E8` rel32 | — | a wrapper clears the flag, makes the call, and on the flag drops the return and both arguments and jumps to `0x4597D8`, the unit draw's own "no frame" exit (`0x459212`): the unit is not drawn that frame |
+| `0x45A470` | the frame copy, at its entry | `8B 44 24 04 53` | the source's `w·h` | the frame becomes 1 × 1 holding the source's key, with its hotspot and key, and it returns the frame as stock does (`mov eax,[ecx+0x10]; ret 4`) |
+| `0x45A7B9` | the shadow build | `8B 4D 10 66 8B 54 24 10` | `2h(w+1)` from the bounds `0x45A510` left at `[esp+0x10]` and `[esp+0x20]`; rows `h` against 2048 | the frame becomes 1 × 1 holding its own key, hotspot 0, and it resumes at the encode `0x45A853`: the cached shadow is one transparent pixel |
+| `0x459875`, `0x459CB5` | the 2× bakes, on the 2× path only | `85 DB` / `85 C0`, then `0F 84` rel32 | `4·w·h` from the source at `[esp+0x5F18]` / `[esp+0x159E8]`; rows `2h` against 800; `w` and `h` below `0x8000`, since the doubled header is a `u16` | the 1× path, `0x459913` / `0x459D57`, which draws into the source by its own header |
+
+A check that does not fit grows the frame: a block of `0x18 + 2·px` bytes, `px` the need rounded up
+to 256 Ki pixels and at most 2048 × 2048 (4 194 304), with the header and both planes copied and the
+planes laid out as `0x4B8E00` lays them. `ctx+0x10` is repointed, and the old block freed through
+`0x4D85A0`, the free the teardown `0x4581C0` uses. The grow is refused, and the writer takes its
+fallback, when the need is past 2048 × 2048, when the rows are past the table, when the frame is the
+writer's own source, when the allocator has no block, and under `tagpu_scratch.nogrow`. A grown frame
+lasts the level.
+
+**The allocator path.** The engine's `malloc` `0x4D83B0(name, size)` → `0x4D83C0(size)` enters the
+allocator's critical section (`0x4DA780` returns it, `0x528A28`), takes a debug heap when the option
+`0x4D80D0` answers so (`0x4DACF0`, freed through `0x4DB7D0`), else the CRT's `malloc` `0x4E8890`,
+counts the block (`0x4DA7D0(size)`), and applies a fill when the option `0x4D8200` is set
+(`0x4D82C0`). A NULL calls the handler at `[0x5289BC]` in a loop, and the installed handler
+`0x49E700` ends the process. `scratch_alloc` runs the success path by hand, inside the same critical
+section: no block under the debug heap, else `0x4E8890` and, on success, `0x4DA7D0`.
+`0x4D85A0(ptr)` → `0x4D85B0` frees such a block through `0x4D8360`, `0x4DA840` and `0x4E8820`. The
+fill is not applied: every plane is written before it is read.
+
+**The invariant.** Every header a writer sets has `w·h ≤ A` (`2h(w+1) ≤ A` for the shadow) and no
+more rows than the smallest table under it. It rests on a bound: `A` comes from the frame's own two
+pointers, and the frame has exactly two producers, `0x4B8E00` and the grow, both laying it out this
+way. The layout test (colour at `base + 0x18`, depth above it) is a filter on those values; a frame
+failing it is left to stock and logged once. On an ordering: each writer reads `ctx+0x10` only after
+its check, its callers re-read it after every call (`0x459342`, `0x4594E3`, `0x4595B8`, `0x4595D9`,
+`0x459639`), and the only function a writer calls that can reach another writer is `0x458310`, which
+the build-state copy calls before its check (`0x458A0C`, `0x458A77`; a call-graph walk of `.text`).
+A frame is never regrown under a writer reading from it. And on a lifetime: the old block is freed
+only once `ctx+0x10` holds the new one, and nothing else holds it (the render thread never reads the
+frame; our tracer logs only the pointer's value). Every fallback's 1 × 1 fits: `A` is 360 000 or more
+from `0x4B8E00` and at least 64 from a grow. Identical to stock for every unit whose box fits.
+
+**Levers**, read once at attach. `tagpu_scratch.stress` treats every frame as too small, so every
+writer call regrows it to exactly `max(need, 64)` pixels and frees the old one; `tagpu_scratch.nogrow`
+refuses every grow; both together send every writer to its fallback. Each grow and refusal is logged
+(`enginefix: composite scratch grown|refused (<reason>) for <writer>: N px in R rows asked, A held,
+P now (n so far)`, a writer's first 16, then every 1024th).
+
+**Measured**, GDI lane, Two Continents, 1024×768, the nanoframe ladder plus oversized units made
+locally from stock models:
+
+- **Below the cap nothing changes.** The ladder on its own, both builds paused and the tick written
+  to 500 in each (the build-state pulse is a function of the tick): the world is pixel-identical,
+  and the 4845 pixels that differ are the chat line's randomly chosen defeat message.
+- **Past it.** Flat giants 1450 to 6525 pixels wide and under 800 rows tall: the build before the fix
+  faults at `0x459EAA` reading `[NULL+0x241]` through a unit record the overrun had rewritten. With
+  the fix they draw: the 2× bake grew the frame to 2 097 152 pixels for 708 rows, the shadow to
+  3 407 872, the build-state copy of two giant nanoframes to 2 883 584 and then 4 194 304. Refused
+  over the cap were a 5 522 140-pixel shadow and a 4.37-million-pixel nanoframe, and over the rows
+  2× bakes of 1268 and 1332.
+- `tagpu_scratch.nogrow`, and `stress` with `nogrow`: every writer took its fallback, no fault.
+  `stress` alone for 60 s on the giant nanoframes: 87 040 regrows by the build-state copy, the other
+  writers' besides, no fault; on the ladder with a ×6 solar, 182 000 in 12 s.
+- The first bake, `0x459830`, runs when the shading bit (`main+0x37F06` bit 5) is clear, which the
+  settings store never leaves it. A local build that clears it measured the grow for 708 rows and
+  the refusal for 1268 there.
+- The Vulkan lane runs the same writers: the same grows and refusals, no fault.
+
+**What it does not cover.** A unit's own frame (`Object3do+0x10`), which the 1× bakes draw into
+through the same rasterisers, is sized by the model alone (`0x4586A0` → `0x437BE0` / `0x437B50`), so
+a model more than 800 rows tall overflows `0x4C8760`'s or `0x4C8BB0`'s table in stock and with the fix
+alike. MEASURED: a solar scaled ×22, a 1544-row frame, faults at `0x4C8035` with the fix (its 2× path
+refused) and at `0x459D1D` without it. No stock unit is near: the tallest 1× frame is 239 rows
+(`cordev1`, [limits-evidence §10](tadr-port/limits-evidence.md#10-composite-buffer-6002-12802-0x458195)).
+Drawing such a frame in bands of at most 800 rows at those call sites would close it.
 
 ## Built-in cheat/console command surface
 
@@ -4515,7 +4630,10 @@ passes draw there, and the GDI lane shows what they leave) and the 2× bake's ca
 - **So a box larger than the frame's area, or than a quarter of it for the 2× bake, writes past
   it**: 600 × 600 and 300 × 300 in stock, 1280 × 1280 and 640 × 640 raised. The ring's cap does not
   keep a unit frame within the scratch: at 800 × 600 it has room for a frame of 3.1 million pixels
-  against the scratch's 1.6 million. **TADR's raise moves the threshold; nothing bounds it.** Every
+  against the scratch's 1.6 million. **TADR's raise only moves the threshold**; the bound is the engine fix in *Engine defects we
+  patch* ([The composite scratch frame and the rasterisers' span
+  tables](#the-composite-scratch-frame-and-the-rasterisers-span-tables)), which also bounds the
+  rows a writer hands the rasterisers under it. Every
   reader takes the size from the header a writer set earlier in the same call, and the only `0x258`
   immediates in `.text` are the two raised, so the raise lengthens no write.
 - **It runs on every lane** [MEASURED 2026-09-23]. After tier 1 on the Vulkan lane the scratch's

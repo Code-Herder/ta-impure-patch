@@ -9,7 +9,8 @@ build; the unit limit, both `maxunits` keys, the restriction menu's sentinel, th
 budget and the render design point; the particles; sounds and the composite scratch frame; and ten
 players in one network game. **A sixth landing goes beyond TADR**: the wreck pool, raised and made
 safe when full, because the raised unit limit fills it — [Fixed beyond TADR](#fixed-beyond-tadr).
-**A seventh is planned** (2026-09-24): the composite scratch frame's writers get a bound, since
+**A seventh is done** (2026-09-24): the composite scratch frame's writers are bounded, by area and
+by the rows the rasterisers under them hold, and the frame grows for a unit that needs it, since
 landing 4's raise only moved stock's overrun threshold ([landing 7](#the-landings)).
 The module is
 `tagpu_limits.h` and the limits block of `tagpu_patches.c`, which keeps it out of the thread-split
@@ -160,7 +161,9 @@ store key exist for it.
 engine's one work image for drawing a unit. When a unit's box does not fit it, the game thread
 grows it, up to 2048² of area (8 MB), which is 29× the largest stock need. Past that, each writer
 takes a fallback that draws less, never one that writes past the allocation. Landing 4's 1280²
-stays the starting size, so no stock unit ever grows it. Clipping the box was rejected: the cargo
+stays the starting size, so no stock unit ever grows it. The landing added a bound on rows under the
+same decision: the rasterisers below the writers hold 800 or 2048 rows, so a frame taller than that
+takes the fallback too, whatever its area. Clipping the box was rejected: the cargo
 merge downstream clips neither right nor bottom, so a clipped box would move the overrun one call
 further on. The design is [landing 7](#the-landings).
 
@@ -358,49 +361,51 @@ proved, by running it:
   ending as the scar. With the pool full as well, through the centre: +3146 over 82 s, the scar at
   once, the pool still 8192 of 8192 — the two fixes together.
 
-**Landing 7 — the composite scratch bound. Planned 2026-09-24.** Landing 4 raised the scratch to
-1280², which moves stock's overrun threshold without bounding it
-([evidence §10](limits-evidence.md#10-composite-buffer-6002-12802-0x458195)). A stock unit uses at
-most 9 % of it. A modded giant can still overrun it.
+**Landing 7 — the composite scratch bound. Done 2026-09-24.** Landing 4 raised the scratch to
+1280², which moved stock's overrun threshold without bounding it
+([evidence §10](limits-evidence.md#10-composite-buffer-6002-12802-0x458195)). The engine fix
+`fix_composite_scratch` now bounds all five writers; the engine map's *The composite scratch frame
+and the rasterisers' span tables* has every site, the invariant and the measurements, and
+[gpu-status §2.6c](../gpu-status.md) the hook map.
 
-- **The invariant.** Every header a writer sets has `w·h ≤ A`, where `A = [scr+0x14] − [scr+0x10]`,
-  the distance between the two planes. It is the one record of the allocation that nothing
-  rewrites. The shadow build's compression, which encodes into the depth plane, also needs
-  `2h(w+1) ≤ A`.
-- **Grow.** When a box does not fit, the game thread allocates a larger frame and frees the old
-  one.
-  - The allocation must return NULL on failure. `0x4D83B0` cannot: it calls the game's
-    out-of-memory handler, which ends the game. The CRT's own `_nh_malloc` (`0x4E8890`) returns
-    NULL, because nothing sets its new-mode flag. It is called inside the allocator's critical
-    section (`0x4DA780`), with the allocator's bookkeeping (`0x4DA7D0`), so the level's teardown
-    (`0x4581C0`, through `0x4D85A0`) frees it like any engine block. The grown frame is kept until
-    the level ends.
-  - The engine's own save writer gets a NULL-returning allocation differently: it sets the handler
-    to 0 around the call. That is not used, because the handler is a plain global that other
-    threads' allocations read ([evidence §8](limits-evidence.md#8-unit-type-ids-512-16000-increaseunittypelimit-17-writes)).
-  - Under `-memfussy` the grow is refused and the fallback taken: that debug heap loops on the
-    handler too.
-  - It is safe because every writer, and the blit after each call, reloads `[ctx+0x10]` after the
-    size decision (`0x458B87`, `0x45A47C`, `0x45A7B9`, `0x459884`, `0x459CC4`). All of them run on
-    the game thread, and nothing of ours reads the scratch on the render thread.
-- **Fall back** past the cap, or when the allocation fails:
-  - **The 2× bake** takes the engine's own 1× path (the `je` at `0x459875` and at `0x459CB5`). That
-    structure loses anti-aliasing on GDI.
-  - **The frame copy** (`0x45A470`) writes an empty 1×1 transparent frame. No silhouette shadow is
-    drawn that frame on GDI.
-  - **The shadow build** (`0x45A7B9`) builds a 1×1 frame with its hotspot far off, so no slant
-    shadow is drawn on GDI. **[INFERRED]** This assumes the screen blit `0x4B8500` clips a far
-    hotspot; the landing reads it first.
-  - **The build-state copy** (`0x458B87`) skips the unit's blit for that frame. The writer sets a
-    game-thread flag, and a wrapper on the call at `0x459608` returns to the blit's epilogue
-    `0x4597D8`, which has the same stack. It is never clipped: the cargo merge `0x4B90A0` is safe
-    only because the unit's box contains every cargo box.
-- **Gates.**
-  - A test lever lowers the cap, so ordinary units take every fallback in all four writers on GDI.
-  - An oversized test unit, generated locally and never committed, crosses 1280² for the grow.
-  - The same unit reproduces the overrun on the previous build.
-  - Below the cap the GDI picture is unchanged against landing 4's build.
-  - Review at `high`: byte patches that change what the engine writes.
+- **Two ceilings, not one.** Every header a writer sets has `w·h ≤ A`, `A = [scr+0x14] − [scr+0x10]`
+  (and `2h(w+1) ≤ A` for the shadow's encode into the depth plane). The landing found a second: the
+  rasterisers under the writers keep one stack entry a row, and their tables hold 800 rows
+  (`0x4C8BB0`, `0x4C8760`, both 2× bakes) or 2048 (`0x4C0820`, `0x4C0C70`, `0x4C1000`). So each check
+  bounds rows as well: 2048 for the build-state copy and the shadow, `2h ≤ 800` for the 2× bakes. The
+  area alone was not safe: a solar scaled ×11 grew the frame to 1548 rows for its 2× bake and
+  faulted at `0x4C8035`.
+- **Grow.** A check that does not fit allocates `0x18 + 2·px` bytes, `px` rounded up to 256 Ki
+  pixels and at most 2048 × 2048, copies the header and both planes, repoints `ctx+0x10` and frees
+  the old block through `0x4D85A0`. The allocation is `0x4D83C0`'s success path run by hand: the
+  allocator's critical section (`0x4DA780`), no block under the debug heap (`0x4D80D0`), else CRT
+  `malloc` `0x4E8890` and the counters `0x4DA7D0`. It returns NULL instead of calling the handler
+  that ends the process, and the teardown frees the block like the engine's own. A frame is never
+  regrown under a writer that reads from it.
+- **Fall back** past the cap, past the rows, or when the allocation fails:
+  - **the build-state copy** leaves through its epilogue with a flag set, and a wrapper on its one
+    call (`0x459608`) leaves the unit draw through `0x4597D8`, the draw's own "no frame" exit: the
+    unit is not drawn that frame;
+  - **the frame copy** makes the frame 1 × 1, the source's key with its hotspot: no silhouette
+    shadow that frame;
+  - **the shadow build** makes it 1 × 1 of its own key at hotspot 0 and resumes at the encode
+    `0x45A853`: the unit's cached shadow is one transparent pixel;
+  - **the 2× bake** takes the engine's own 1× path: that structure loses anti-aliasing.
+- **Levers**, read at attach: `tagpu_scratch.stress` regrows the frame at every writer call to
+  exactly what it asks; `tagpu_scratch.nogrow` refuses every grow; both together send every writer
+  to its fallback.
+- **Gates, all run on the GDI lane** (Two Continents, 1024×768, oversized units made locally from
+  stock models, never committed):
+  - below the cap the picture is unchanged: the nanoframe ladder with both builds paused on the same
+    tick is pixel-identical in the world (the only difference is the chat line's random message);
+  - the build before the fix faults on flat giants (`0x459EAA`), and this one draws them: grows to
+    2 097 152 pixels (2× bake, 708 rows), 3 407 872 (shadow) and 4 194 304 (build-state copy),
+    refusals over the cap and over the rows;
+  - `nogrow`, and `stress` with `nogrow`: every writer's fallback, no fault; `stress` for 60 s:
+    87 040 regrows by the build-state copy alone, no fault;
+  - the first bake `0x459830`, which runs only with the shading bit clear, measured through a local
+    build that clears it; the Vulkan lane runs the same writers with the same log.
+  - Review at `high`.
 
 L1 came first because it forced the module, the report and the packet changes into existence.
 L2 comes before L3 because the particle measurement needs the raised unit limit.
@@ -416,12 +421,22 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
 - How far a remote unit lags its owner at stock's 500 a player: tier 2's up-to-40-ticks at 1500 is
   measured, stock's is not, so whether the raise stretches the update interval is open.
 - How the game thread's frame at 6000 units splits between the engine and our publisher.
+- A unit's own frame taller than 800 rows (landing 7): the 1× bakes draw it through the same
+  800-row span tables, in stock and with the fix alike. A solar scaled ×22 (1544 rows) faults at
+  `0x4C8035`. No stock unit is near (239 rows at most); drawing such a frame in bands at the
+  rasterisers' call sites would close it.
 - Whether peers disagree about a feature in practice when one pool is full and another is not. The
   engine map shows how they can, in both directions; corpses are made on every peer from the synced
   deaths, so the pools should fill together, but a sequence holds its record for its own length on
   each peer. A full pool still refuses corpses (landing 6).
 
 ## Corrections this plan made
+
+- **The composite scratch's bound is area and rows, not area** (landing 7). The plan's invariant was
+  `w·h ≤ A`; the rasterisers' span tables made a grown frame taller than 800 rows fault in the 2×
+  bake. The plan's shadow fallback put the 1 × 1 frame's hotspot far off and assumed the screen blit
+  clips it [INFERRED]; the landing uses a transparent pixel at hotspot 0 instead, which assumes
+  nothing. Its test lever that lowered the cap became `stress` and `nogrow`.
 
 - **`0x44CAFE` is not a unit-limit site** (`mov ecx,0x65`: 101 into the per-type battleroom table,
   the restriction menu's "no limit"). Corrected in [deep-tadr](../deep-tadr.md) on 2026-09-23.

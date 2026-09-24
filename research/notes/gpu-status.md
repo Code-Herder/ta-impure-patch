@@ -1617,7 +1617,7 @@ effect pools* and *The per-player unit cap*.
 | the pathfinder's budget | `0x40EAD6` | 1333 → 66 650 |
 | the particle layers | twenty compares, `0x471183` … `0x472CD9` (`0x472BF2` against `ecx`) | 400 → 20 480 |
 | the particle pool | `0x471C83`, the `push` in the C runtime's static initializer `0x471C80` | 1000 → 204 800, built at that size because DllMain runs first |
-| the composite scratch frame | `0x45819B` (width), `0x458196` (height), the two `push 0x258` in `0x458180` | 600 → 1280 each; one frame a level at `*(main+0x1437B)+0x10` |
+| the composite scratch frame | `0x45819B` (width), `0x458196` (height), the two `push 0x258` in `0x458180` | 600 → 1280 each; one frame a level at `*(main+0x1437B)+0x10`, where it starts: §2.6c's composite fix bounds its writers and grows it |
 | the wreck pool | `0x421F2A` (bytes), `0x421F41` (the clear's dwords), `0x421F7A` (the free-list loop's end), `0x421F97` (the last record's offset); the "no record" count at `0x4232B9`, `0x42340E`, `0x42343A`, `0x42361E`, `0x42364D`, `0x423DBA`, `0x423DE1` | 2048 → 8192 records of 0x30 (and the offsets with them); the fork's `WR_COUNT` and the packet's wreck table are the same constant |
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
@@ -1780,13 +1780,14 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 
 ### 2.6c The stock engine's own defects (`tagpu_patches.c`, always on)
 
-**What it is.** Three places where the retail image writes or reads memory it does not own (the
-third also leaves a strip of the viewport unpainted, which the same patch paints), one where it
+**What it is.** Four places where the retail image writes or reads memory it does not own (the
+third also leaves a strip of the viewport unpainted, which the same patch paints; the fourth is the
+composite scratch frame's five writers and the rasterisers' span tables under them), one where it
 takes a player's payment and does not deliver (a feature reclaimed or destroyed while the wreck pool
 is full), and one where it takes it twice (a feature reclaimed through a cell that is not its
 anchor while it plays its sequence), patched at every attach by `patch_engine_defects()` at the end of `tagpu_apply_patches()`.
 Each patch is the identity on every input stock handles correctly. Each site is compared with its
-stock bytes and skipped alone, as §2.6's rows are: the five are independent, and any one alone is
+stock bytes and skipped alone, as §2.6's rows are: the six are independent, and any one alone is
 still the identity wherever stock is correct. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
@@ -1798,6 +1799,7 @@ engine defects we patch".
 | `0x484057` | inside the terrain pass `0x483FA0`, where its window of 32-px cells (`row0`, `col0`, `nrows`, `ncols` from the eye and the view) is computed and the tile map `main+0x1428B` not yet read | `tagpu_detour_land` over 10 stolen bytes, compared first. The stub passes the pass's frame to `terrain_window_on_map`: a window stock gets right — `sx ≥ 0`, `sy ≥ 0` and inside the `pxH/32 × pxW/32` tile map (`main+0x14223`/`+0x14227`, the words LoadMap sized it with) — runs the stolen pair and resumes at `0x484061`; any other is drawn by `terrain_window_draw` (black, then each on-map cell whose id is below the tile set's count, inside the OFFSCREEN's clip rect, which must itself lie inside the surface's width and height at `+0x00`/`+0x04`) and leaves through the pass's epilogue `0x4843AC` |
 | `0x423651` | `FeatureDie 0x423550`'s pool-full `jge 0x4236F7`, which returns without swapping the feature while its callers have already paid (the reclaim `0x4237D0`) or told the other peers | the `jge`'s 6 bytes retargeted (opcode `0x3D` at `0x42364C` compared too; its operand is the limits table's) to a stub that reloads `x`/`y` from the arguments and joins `0x4236EF`, the engine's own swap for a feature with no sequence |
 | `0x423892` | the reclaim completion `0x4237D0`'s test that a GAF feature is already playing its sequence, which reads the flags of the cell the builder aimed at while `FeatureDie` marks only the anchor | `tagpu_detour_land` over the 6-byte `test`/`je`, compared first. The stub resolves a `0xFFFE` cell to its anchor exactly as `0x423845..0x423862` does, tests the anchor's bit 0, and rejoins at `0x4238AD` (pay) or `0x423898` (the def's GAF test) |
+| `0x458B87`, `0x45A470`, `0x45A7B9`, `0x459875`, `0x459CB5`; the call at `0x459608` | the composite scratch frame's writers — the build-state copy `0x4589C0`, the frame copy, the shadow build, the 2× bakes `0x459830`/`0x459C70` — each of which sizes `*(main+0x1437B)+0x10` to a unit with no compare against its area, and hands it to rasterisers whose span tables hold 800 or 2048 rows | all six sites compared first and written together or not at all (a failed write puts back the ones written). Each stub runs a C check between `pushad` and `popad`: a need that fits runs the stolen bytes; one that does not grows the frame (the engine's own allocator path by hand, up to 2048 × 2048); a refused grow takes the writer's fallback — the unit not drawn that frame (a flag, and a wrapper on the call at `0x459608` that leaves through `0x4597D8`), a 1 × 1 key-pixel frame, or the bake's 1× path. Levers `tagpu_scratch.stress`, `tagpu_scratch.nogrow` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
 exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
@@ -1810,16 +1812,28 @@ stock leaves a paid-for feature standing. The reclaim's anchor test writes nothi
 refuses, through any cell of a feature whose sequence is in play (a reclaim, a death or a burn), the reclaim stock refuses through its anchor. None is in §2.5. `tagpu_zoom`'s
 `0x498EF9` guard and `vpwide`'s `0x499221` replica still clamp the pointer's world point to the
 scroll extent. With `0x421E60` guarded, those clamps are what keeps
-the hover *right*. They are no longer what keeps the game alive.
+the hover *right*. They are no longer what keeps the game alive. The composite scratch fix writes
+the engine's scratch frame, which is the engine's to write: on a grow it allocates the new block,
+copies the header and both planes, repoints `ctx+0x10` and frees the old one; on a fallback it
+writes a 1 × 1 header and one pixel of each plane. It is drawing state, not simulation state, so it is
+not in §2.5 either.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
-reclaim tests the anchor's mark 0x423892 ARMED`. A site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
+reclaim tests the anchor's mark 0x423892 ARMED; composite scratch bound (0x4589C0 0x45A470 0x45A790
+0x459830 0x459C70) ARMED`, and every grow or refusal of the frame logs its own line (`enginefix:
+composite scratch grown|refused (<reason>) for <writer>: N px in R rows asked, A held, P now`). A
+site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
 `SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
-place of `ARMED`; a stub whose site cannot be written is released. There is no switch: all five
+place of `ARMED`; a stub whose site cannot be written is released. There is no switch: all six
 are installed on every launch, `tagpu_defaults.off` included.
 
 **What it does not cover:**
+
+- A unit's own frame, which the 1× bakes draw into through the same rasterisers, is sized by the
+  model alone, so a model more than 800 rows tall still overflows the 800-row span table, with the
+  fix as in stock. No stock unit is near it (the tallest is 239 rows). The engine map's *The
+  composite scratch frame and the rasterisers' span tables* has the measurement.
 
 - A full wreck pool still skips the feature's sequence, and with it the window in which further hits
   are ignored, so a weapon that hits every frame can take a building through several damage stages
