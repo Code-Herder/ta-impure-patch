@@ -175,7 +175,8 @@ static void fogw_build(const FOGW_SRC* s, unsigned short* out,
        `row0 + gy < 0 <= row0 + gy + 1`, so `gy = -row0 - 1`. The engine writes
        row 0, which is that row only while its window overshoots the map by at
        most one cell (`row0` 0 or -1, which an eye in the engine's own range
-       `[0, map - W]` guarantees); ours reaches as far as the zoom does, and
+       `[0, extent - W]` guarantees, `extent` the scroll extent
+       main+0x1422B); ours reaches as far as the zoom does, and
        the camera's centre range takes the engine's window as far as W/2 past
        the edge, where the literal index lands dozens of rows out in open
        water — which is why the native pass takes this grid whenever the eye
@@ -349,23 +350,34 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
    lerped along the same ease, so `|U| <= (vw/2)(1/z_built - 1/z)` and
    `|U| + (vw/2)/z <= (vw/2)/z_built` — the view is a subset of the one the
    grid was built for. A gesture that only zooms out adds no displacement.
-     A GESTURE THAT REVERSES IS NOT. The displacement a zoom-in owes is paid
-   out along the tween that follows it, zoom-outs included (tagpu_zoom.c, "the
-   wheel"), so `|U|` can hold the zoom-in's displacement while `1/z` climbs
-   back. With the game thread stalled across a whole flick, `|U|` reaches
-   `(vw/2)(1/zmin - 1/zmax)`, and the strip `3.875 (vw/2) - 288` — 1448 px
-   at vw 896, 3184 at vw 1792 (a 100 ms stall at 0.25x with a flick in and
-   out puts a 1792-px view's edge at 4794 against the 3872 the window
-   spans). Without a stall `U` is the last frame or two of posting — at
-   60 Hz the first frame of a tween posts 24 % of what it owes — and a
-   reversal started at the zoom floor can still leave a strip of a few
-   hundred px for those frames.
-     THE RESIDUAL IS VISUAL ONLY AND IT IS STATED, NOT CLOSED: the strip draws
-   the grid's border cell smeared outward (taFog's clamp), nothing reads
-   outside any allocation, and it lasts until the game thread applies the
-   step — the next tick builds this window about the new eye. Covering it by
-   construction would mean a window sized for `|U|max` on top of the view,
-   about four times the area, and the grid rides the frame packet. */
+     A GESTURE THAT REVERSES IS NOT, AND WHAT IT LEAVES IS A VISUAL-ONLY
+   RESIDUAL, stated here and not closed.
+     Which gesture: a notch out that cuts the tween of a notch in whose
+   displacement is still owed — the owed displacement is paid out along the
+   tween that follows, zoom-outs included (tagpu_zoom.c, "the wheel") — so
+   `|U|` can hold the zoom-in's displacement while `1/z` climbs back.
+     Which state: a frame drawn from an eye `U` ahead of the one this window
+   was built about, `U` being the anchor steps the render thread has posted
+   and the game thread has not yet applied.
+     The exact bound: per axis, a strip of
+   `max(0, |U| + (vw/2)/z - (vw/2)/zmin - 32 - MARGIN)` on the leading side
+   (vh for y). `|U|` is at most the unapplied part of the gesture's own
+   displacement, and that is at most `(vw/2)(1/zmin - 1/zmax)`, so the strip
+   is at most `3.875 (vw/2) - 288`: 1448 px at vw 896, 3184 at vw 1792.
+   Nothing but the gesture bounds `|U|`, so no frame count or stall length is
+   part of the bound.
+     What is drawn wrong: in that strip only the FOG TINT — the native pass
+   samples the grid's border entry smeared outward (taFog's clamp), so the
+   strip takes the lit, fogged or unmapped state of the grid's edge instead
+   of the map's there. Terrain, features and units are drawn from their own
+   data and are right. The strip is gone on the first frame whose eye this
+   window covers: the game thread applies the posted steps and the next build
+   is about the new eye.
+     No safety claim rests on it: every read of the grid is inside its
+   allocation for any `U` and any `z`, because the sampler clamps its index
+   into the grid — a bound on the index, not on the timing. Covering the
+   strip by construction would mean a window sized for `|U|max` on top of the
+   view, about four times the area, and the grid rides the frame packet. */
 static int fogw_window(char* ta, int vw, int vh,
                        int* col0, int* row0, int* cols, int* rows)
 {
@@ -450,7 +462,7 @@ static void edge_skip(unsigned char* skip, int n, int literal, int derived)
    completes the entry that straddles the map edge, `-row0-1` and so on (exe
    map, "The four border completions"). Those are the same line while the
    window overshoots the map by at most one cell — every eye in the engine's
-   own range `[0, map - W]` — and not otherwise: past it (`row0 <= -2`, or the
+   own range `[0, extent - W]` — and not otherwise: past it (`row0 <= -2`, or the
    far edges' equivalent, which the camera's centre range reaches) the
    engine's line lies wholly off the map and its completion is a no-op on an
    all-zero line, while ours completes the straddling line the engine leaves

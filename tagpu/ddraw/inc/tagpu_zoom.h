@@ -84,9 +84,11 @@ struct TAGPU_CMD;
        arm has no caller that reaches it and is left alone.
 
      THE WORLD POINT UNDER THE MOUSE (0x498EF9, the GetTPosition call inside
-       0x498DA0) is clamped to the map, because a pointer over the void past
-       the map edge, or outside the viewport, names a point off it once the
-       eye is, and the chain from there dereferences a NULL plot.
+       0x498DA0) is clamped to the SCROLL EXTENT, because a pointer over the
+       void past the map edge, or outside the viewport, names a point past it
+       once the eye is, and GetTPosition's 143-px search from there can leave
+       the map: a NULL plot, which the always-installed guard on 0x421E60
+       turns into "no feature" — the clamp keeps the hover real.
 
      THE MAP DEBUG OVERLAY (0x468DBA, the call of 0x418310) runs only for an
        eye in the engine's own range: its cell window has no lower bound. */
@@ -130,7 +132,9 @@ int   tagpu_zoom_predicted_eye(int* eyeX, int* eyeY);
 
 /* 1 when this frame must take the WIDE fog grid (tagpu_fogwide), built every
    tick from the live eye with a margin around it, over the engine's own: the
-   level is below 1, where the engine's grid cannot span the view; or the
+   level this frame draws with is below 1 (tagpu_zoom_lever(), not the
+   published level, whose `live` is raised after the choice), where the
+   engine's grid cannot span the view; or the
    predicted eye is ahead of the packet's, and the engine's grid spans the
    packet's; or the packet's eye is off the engine's own range, where the
    engine places its border completions off the map. Render thread. */
@@ -207,8 +211,9 @@ float tagpu_zoom_min(void);
    0x41CE90 are both called before the draw call at 0x4969CD, and both can
    be skipped — the stepper when the sim is paused, both under an in-game
    GUI screen) and before the draw's first read of the eye at 0x468DD9; no
-   store to the eye exists inside DrawGameScreen, so nothing moves the camera
-   between the apply and the read. In order: the level it carries becomes
+   store to the eye exists inside DrawGameScreen before that read (the
+   scenario camera's comes after the world draw, at the flip), so nothing
+   moves the camera between the apply and the read. In order: the level it carries becomes
    the level every game-thread reader here uses (the minimap rect's scale,
    the scroll rate); the camera range is chosen — the centre range when
    `terr`, the render thread's terrain request that the publisher latches
@@ -233,6 +238,14 @@ void  tagpu_zoom_apply(char* ta, const struct TAGPU_CMD* c, int terr);
    the old level (a notch in its last frames) carries no delta into the new
    one; the render thread resets its own sum when a packet shows the new epoch. */
 void  tagpu_zoom_level_end(char* ta);
+
+/* GAME THREAD: put the camera at (x, y) from outside the apply — the scenario
+   camera. Clamped into the range in force (this draw's, or the engine's own
+   when it cannot be computed), eye and scroll target written together, the
+   minimap's view box recomputed and bit 3 of main+0x14281 cleared, as every
+   engine eye writer does. The eye actually written goes to outX, outY.
+   Returns 0, writing nothing, when main is not sane. */
+int   tagpu_zoom_place_eye(char* ta, int x, int y, int* outX, int* outY);
 
 /* GAME THREAD: what the apply has done so far, for the packet's
    acknowledgement fields — the last record's cmd_seq, the cumulative delta

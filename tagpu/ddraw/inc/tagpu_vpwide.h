@@ -45,7 +45,8 @@
        the true one), so it can never remove anything the engine would have
        drawn on screen.
 
-     W/H: the eye clamp `0x41C3C0` derives `maxEye = map - W` from them, and a
+     W/H: the eye clamp `0x41C3C0` derives `maxEye = extent - W` from them
+       (`extent` the scroll extent main+0x1422B/0x1422F), and a
        negative maxEye makes it alternate between 0 and a negative eye every
        call. W and H are therefore never DRIVEN — only repaired, see below.
 

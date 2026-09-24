@@ -406,14 +406,22 @@ static void __stdcall vpw_mouse_world(int* pos)
     }
     *fl = (unsigned char)((*fl & ~4) | (((*fl & 3) != 0) << 2));
 
-    /* KEEP THE WORLD POINT ON THE MAP. The widened clamp above reaches world
-       positions the 1x viewport never could, and the engine's own chain from
-       here is not defensive about them: GetGridPosPLOT returns NULL for a cell
-       outside 0x14233 x 0x14237 and GetGridPosFeature dereferences whatever it
-       is handed. That is a real crash, seen once — an edge scroll at 0.5x on
-       Two Continents took an access violation at 0x421E64 reading [NULL+8].
-       At 1x the engine cannot reach it because its own eye clamp keeps the
-       viewport on the map; zoomed out we have to keep it there ourselves. */
+    /* KEEP THE WORLD POINT ON THE SCROLL EXTENT. The widened clamp above
+       reaches world positions past the extent, and GetTPosition answers up to
+       143 px below the point it is handed: past the extent that answer can
+       leave the map, GetGridPosPLOT returns NULL for a cell outside
+       0x14233 x 0x14237, and GetGridPosFeature 0x421E60 is handed it (once
+       seen as an access violation at 0x421E64 reading [NULL+8], an edge scroll
+       at 0.5x on Two Continents). The always-installed guard on 0x421E60
+       (tagpu_patches.c) makes a NULL plot answer "no feature", so this clamp
+       is what keeps the hovered cell and feature real, not what keeps the
+       game alive. The EXTENT and not the map: its 128-px bottom margin is
+       exactly GetTPosition's search window (exe map, "Engine defects we
+       patch"). This replica runs only while the rect is wide; otherwise the
+       engine's own conversion runs, and tagpu_zoom's redirect of its
+       GetTPosition call 0x498EF9 clamps to the same extent there — needed at
+       every zoom, because the camera's centre range lets the eye past the
+       extent at 1x too. */
     {
         int mw = *(const int*)(ta + OFF_MAP_W), mh = *(const int*)(ta + OFF_MAP_H);
         if (mw > 0 && mh > 0) {

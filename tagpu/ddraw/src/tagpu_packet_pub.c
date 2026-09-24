@@ -2098,11 +2098,13 @@ static int __cdecl before_draw(void* entry_esp)
        0x49680C/0x49693E) and the scroll poll 0x41CE90 (0x496976) both precede
        the draw call at 0x4969CD, and both can be skipped: the stepper when the
        sim is paused, both under an in-game GUI screen — and before the draw's
-       first read of the eye at 0x468DD9; no store to the eye exists inside
-       DrawGameScreen (whose extent is 0x468CF0..0x46A3FD; the tail past
+       first read of the eye at 0x468DD9; no ENGINE store to the eye exists
+       inside DrawGameScreen (whose extent is 0x468CF0..0x46A3FD; the tail past
        0x46A200 is status icons, the clock, the GUI blit, the profiler bars,
        the options tab, the cursor and the flip, and none of them stores the
-       eye), so a delta applied here composes
+       eye) — the one store of ours inside it is the scenario camera, from the
+       flip observer at 0x46A3DB, after the world draw's reads
+       (tagpu_zoom_place_eye) — so a delta applied here composes
        with the engine's own camera move and the draw that follows reads the
        commanded eye; its fog rebuild and its minimap box see it too. The
        latest record is taken and every part of it applied by the module that

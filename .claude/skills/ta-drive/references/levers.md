@@ -344,4 +344,5 @@ changes nothing and logs nothing, which is the failure mode to recognise.
 `tagpu_restore_<tag>.rgba` without `_vk` (the GL half of the restore dump), `tagpu_<pass>_gl.ppm`,
 `tagpu_restorevk.on` (the restorer follows Classic++'s `assets=` knob, which the render-options
 screen's `Undithered assets` row writes; `classicpp.cfg=assets=0` is the A/B), `tagpu_zoomedge.off`
-(the camera has one range; there is no 1x range to go back to).
+(there is no camera setting: the centre range holds whenever our terrain pass owns the ground,
+the engine's own range whenever it does not, and nothing else chooses between them).

@@ -47,6 +47,7 @@ static int  in_viewport(int x, int y, int L, int T, int W, int H);
 static void anchor_step(int fromWheel, const TAGPU_PACKET* pk);
 static void predict(const TAGPU_PACKET* pk);
 static int  iround(float v);
+static int  clampi(int v, int lo, int hi);
 
 /* ---- the wheel -------------------------------------------------------------
 
@@ -217,14 +218,31 @@ static void wheel_pin(float z)
 }
 
 /* Take the notches since the last frame, in order, and draw the tween at this
-   frame's time. Leaves s_batch/s_shiftX/s_shiftY for anchor_step. */
-static float wheel_level(void)
+   frame's time. Leaves s_batch/s_shiftX/s_shiftY for anchor_step.
+
+   THE ANCHOR IS BOUNDED HERE, NOT BY THE PRODUCER. The message thread took a
+   notch only inside the viewport it saw — four plain stores it can read
+   mixed, and a HUD-scale or video-mode change can land between the notch and
+   this frame. So each anchor is clamped into the viewport this frame is drawn
+   with (the packet's `vp`, the TRUE 1x rect; the last published one when
+   there is no packet), and the centre `c` is that viewport's: |a - c| <= W/2
+   by construction, which is the bound fogw_window's "a zoom-in is always
+   covered" rests on. For every notch the producer took against the same
+   viewport the clamp is the identity. */
+static float wheel_level(const TAGPU_PACKET* pk)
 {
     LONG  h = s_nqHead, t = s_nqTail, d = 0, lastUs = 0;
-    DWORD now = qpc_us();
-    float cx = (float)(int)s_vpL + (float)(int)s_vw * 0.5f;
-    float cy = (float)(int)s_vpT + (float)(int)s_vh * 0.5f;
+    DWORD now;
+    int   vL = (int)s_vpL, vT = (int)s_vpT, vW = (int)s_vw, vH = (int)s_vh;
+    float cx, cy;
     int   n = 0;
+
+    if (pk && pk->vp[2] > 0 && pk->vp[3] > 0) {
+        vL = pk->vp[0]; vT = pk->vp[1]; vW = pk->vp[2]; vH = pk->vp[3];
+    }
+    cx = (float)vL + (float)vW * 0.5f;
+    cy = (float)vT + (float)vH * 0.5f;
+    now = qpc_us();
 
     MemoryBarrier();                            /* head, then the slots under it */
     s_batch = 0;
@@ -246,11 +264,13 @@ static float wheel_level(void)
         if (z > 0.999f && z < 1.001f) z = 1.0f;
         s_wheelTgt = z;
         iz = 1.0 / (double)z;
-        /* a notch IN holds the point it was aimed at; the producer took it
-           only inside the true viewport, so it is a legal anchor */
-        if (iz < izPrev) {
-            float ax = (float)(int)(short)(e->xy & 0xFFFF);
-            float ay = (float)(int)(short)((e->xy >> 16) & 0xFFFF);
+        /* a notch IN holds the point it was aimed at, clamped into this
+           frame's viewport (above) */
+        if (iz < izPrev && vW > 0 && vH > 0) {
+            int   qx = (int)(short)(e->xy & 0xFFFF);
+            int   qy = (int)(short)((e->xy >> 16) & 0xFFFF);
+            float ax = (float)clampi(qx, vL, vL + vW - 1);
+            float ay = (float)clampi(qy, vT, vT + vH - 1);
             s_shiftX += (ax - cx) * (float)(izPrev - iz);
             s_shiftY += (ay - cy) * (float)(izPrev - iz);
         }
@@ -265,9 +285,15 @@ static float wheel_level(void)
         s_batch  = 1;
         s_izFrom = 1.0f / s_wheelCur;
         s_izTo   = 1.0f / s_wheelTgt;
-        /* The tween counts from the latest notch, not from this frame: the
-           stamp is at most a frame old. A stamp AFTER `now` (taken between
-           the clock read and the ring read) starts it now. */
+        /* The tween counts from the latest notch's own stamp, not from this
+           frame. The head is read BEFORE the clock, so every stamp taken is
+           at or before `now`; a negative difference — a stamp from another
+           core's counter a hair ahead — starts the tween now. A stamp is not
+           bounded to a frame old: frames that skip read_lever (overlay.off,
+           the reclaim teardown) leave notches queued for as long as they
+           last, and an old enough stamp lands the tween on this frame, R
+           posted whole in one step (anchor_step) — a camera jump of at most
+           the gesture's own displacement, clamped like any other step. */
         back = (LONG)(now - (DWORD)lastUs);
         s_tweenUs = back > 0 ? now - (DWORD)back : now;
         /* A tween even when the level does not move (a notch at the end of
@@ -363,7 +389,7 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     int    fromWheel = (zh == INVALID_HANDLE_VALUE);
     if (fromWheel) {
-        s_zoom = wheel_level();
+        s_zoom = wheel_level(pk);
     } else {
         char zb[32]; DWORD zn = 0;
         if (ReadFile(zh, zb, sizeof zb - 1, &zn, 0) && zn > 0) {
@@ -401,9 +427,15 @@ int tagpu_zoom_predicted_eye(int* eyeX, int* eyeY)
     return 1;
 }
 
+/* RENDER THREAD. Which fog grid THIS frame needs, so every term is this
+   frame's: `s_lever` is the level read_lever settled on at the top of it —
+   the one the native pass draws with (tagpu_native.c) — and not
+   tagpu_zoom_level(), whose `live` is raised by this frame's own publish_view,
+   after the grid is chosen: the first in-play frame after the shell, with the
+   wheel level kept below 1, would draw zoomed out on the engine's grid. */
 int tagpu_zoom_wide_fog(void)
 {
-    return tagpu_zoom_level() < 1.0f || s_unacked || s_offGrid;
+    return s_lever < 1.0f || s_unacked || s_offGrid;
 }
 
 int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
@@ -579,8 +611,8 @@ static void apply_scroll_rate(char* ta)
    by the debug-level `Edge` command [DISASSEMBLED]. MEASURED 2026-09-23 on Two
    Continents: PLOT 672 x 800, main+0x14223/0x14227 10752 x 12800, extent
    10720 x 12672. The view centre stops at the MAP's edge, as the lab's does;
-   the engine's range and the pointer's guards stay on the extent, which is
-   what keeps them safe (zoom_tpos_guard). The PLOT grid and not
+   the engine's range and the pointer's guards stay on the extent, the bound
+   they are built on (zoom_tpos_guard). The PLOT grid and not
    main+0x14223 is read for the map because the packet carries it
    (`map_w16/h16`): the two threads then compute the range from the same
    words, and agree by construction.
@@ -623,9 +655,12 @@ static void apply_scroll_rate(char* ta)
      (a main pointer outside the sanity window, a zero viewport or map), each
      one clamps to the engine's own `[0, extent - W]` from the engine's own words
      instead (engine_range), and the apply publishes `centre = 0` for that
-     draw — so no path leaves the eye or the target unclamped. The screenshot tiler's `DrawGameScreen(1, 0)` loop `0x495C76`
-     and the movie recorder never apply or latch, so they draw on exactly
-     that pair.
+     draw — so no path leaves the eye or the target unclamped. The pointer's
+     guard (zoom_tpos_guard) fails closed on the map's own size where the
+     extent is not positive, and passes the point through only where there
+     is no map, or no sane main, to clamp against. The screenshot tiler's
+     `DrawGameScreen(1, 0)` loop `0x495C76` and the movie recorder never
+     apply or latch, so they draw on exactly that pair.
 
    Every other engine reader of the eye is bounded on its own for any eye in
    the centre range at any zoom, with vpwide's widened rect below 1x — the
@@ -655,9 +690,10 @@ static void apply_scroll_rate(char* ta)
    and under the bottom bar is `eye + H - 1`, and a pointer over the void past
    the map edge names a point off the map as well. The chain from there is not
    defensive — `GetGridPosPLOT` returns NULL outside the map and
-   `GetGridPosFeature` dereferences whatever it is handed, the crash vpwide's
-   own stub carries a clamp for — so the one call site that starts it is
-   redirected and the world point clamped to the map (zoom_tpos_guard). */
+   `GetGridPosFeature 0x421E60` is handed it, which the always-installed
+   guard there (tagpu_patches.c) answers with "no feature" — so the one call
+   site that starts it is redirected and the world point clamped to the
+   SCROLL EXTENT (zoom_tpos_guard), which keeps the hovered cell real. */
 
 #define SAVE_SETTING_VA  0x004B6A50u   /* stdcall(section,name,dword), ret 0xC */
 #define SITE_SAVESCROLL  0x00430FAEu   /* the one site that persists ScrollSpeed */
@@ -710,6 +746,8 @@ static void apply_scroll_rate(char* ta)
 #define OFF_EYEY         0x14323
 #define OFF_EXTENT_W     0x1422B       /* the SCROLL EXTENT: the map less 32 px   */
 #define OFF_EXTENT_H     0x1422F       /* ...and less 128 px ("two sizes")        */
+#define OFF_MAPPX_W      0x14223       /* the map's own pixel size, which         */
+#define OFF_MAPPX_H      0x14227       /* GetTPosition clamps to (0x484B67)       */
 #define OFF_PLOT_C       0x14233       /* the map in 16-px cells: the map is 16x  */
 #define OFF_PLOT_R       0x14237
 #define OFF_FIELD_W      0x37E37       /* the true viewport size: the W and H of  */
@@ -762,46 +800,73 @@ static int iround(float v)
    `0x466B70(RECT*)` is a pure computation with two call sites, both in the eye
    clamp `0x41C3C0`:
 
-       out->left   = mmX + mmW * eyeX / mapW          mm* = main+0x142E7..0x142ED
-       out->top    = mmY + mmH * eyeY / mapH          map* = main+0x1422B/0x1422F
-       out->right  = left + mmW * viewCellsW * 16 / mapW - 1   (main+0x1423B)
-       out->bottom = top  + mmH * viewCellsH * 16 / mapH - 1   (main+0x1423F)
+       out->left   = mmX + mmW * eyeX / extW          mm*  = main+0x142E7..0x142ED
+       out->top    = mmY + mmH * eyeY / extH          ext* = the scroll extent,
+       out->right  = left + mmW * viewCellsW * 16 / extW - 1   main+0x1422B/0x1422F
+       out->bottom = top  + mmH * viewCellsH * 16 / extH - 1   (main+0x1423B/0x1423F)
 
    Its size therefore comes from the 1x view, which is exactly what is no longer
    true. Rather than reproduce any of that, let the engine fill the rect and
    scale the RESULT about its own centre by 1/z: at 0.5x the box on the minimap
-   doubles, which is what the player is actually looking at. Then clamped to the
-   minimap AT EVERY ZOOM: the centre clamp puts the eye up to W/2 off the map at
-   1x too, and the engine's box for such an eye starts off the minimap.
+   doubles, which is what the player is actually looking at.
+
+   THE BOX CANNOT INVERT, BY CONSTRUCTION. The engine places it by the EXTENT,
+   and the centre range lets the view centre reach the MAP's edge, 32 px right
+   of and 128 px below the extent's ("two sizes") — so near the far edges the
+   box's centre lies past the minimap, and at a high zoom the whole shrunken box
+   does: an edge clamped on one side only then leaves top below bottom (at z 6
+   on Two Continents), a box the GUI renderer drops and the engine's own drawer
+   would put on the panel below the minimap. So the centre is clamped into the
+   minimap FIRST, then each edge on BOTH sides. `hw`, `hh` >= 0, so the two
+   edges leave `iround` in order, and a clamp to one interval is monotone, so
+   they stay in order: left <= right and top <= bottom on every path. For an
+   eye in the engine's own range at 1x every step is the identity (for a box
+   at least a minimap pixel wide and tall; the float halves are exact).
    GAME THREAD: from the engine's own clamp through the two redirects, and from
    the apply below; the level it scales by is the one the last command carried. */
+static int clampi(int v, int lo, int hi)
+{
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
 static void __stdcall zoom_minimap_rect(int* r)
 {
     const char* ta;
     float zm = game_level();
+    float cx, cy, hw, hh;
     int mx, my, mw, mh;
 
     ((void (__stdcall *)(int*))MINIMAP_RECT_VA)(r);
     if (!r) return;
 
-    if (zm > 0.05f && zm != 1.0f) {
-        float cx = (float)(r[0] + r[2]) * 0.5f;
-        float cy = (float)(r[1] + r[3]) * 0.5f;
-        float hw = (float)(r[2] - r[0]) * 0.5f / zm;
-        float hh = (float)(r[3] - r[1]) * 0.5f / zm;
-        r[0] = iround(cx - hw); r[2] = iround(cx + hw);
-        r[1] = iround(cy - hh); r[3] = iround(cy + hh);
-    }
+    cx = (float)(r[0] + r[2]) * 0.5f;
+    cy = (float)(r[1] + r[3]) * 0.5f;
+    hw = (float)(r[2] - r[0]) * 0.5f;
+    hh = (float)(r[3] - r[1]) * 0.5f;
+    if (zm > 0.05f && zm != 1.0f) { hw /= zm; hh /= zm; }
+    if (hw < 0.0f) hw = 0.0f;           /* a 1x box under one minimap pixel */
+    if (hh < 0.0f) hh = 0.0f;
 
     ta = *(const char* const*)TA_MAINPP;
-    if (!ta_ok(ta)) return;
-    mx = *(const short*)(ta + OFF_MM_X); my = *(const short*)(ta + OFF_MM_Y);
-    mw = *(const short*)(ta + OFF_MM_W); mh = *(const short*)(ta + OFF_MM_H);
-    if (mw <= 0 || mh <= 0) return;
-    if (r[0] < mx) r[0] = mx;
-    if (r[1] < my) r[1] = my;
-    if (r[2] > mx + mw - 1) r[2] = mx + mw - 1;
-    if (r[3] > my + mh - 1) r[3] = my + mh - 1;
+    if (ta_ok(ta)) {
+        mx = *(const short*)(ta + OFF_MM_X); my = *(const short*)(ta + OFF_MM_Y);
+        mw = *(const short*)(ta + OFF_MM_W); mh = *(const short*)(ta + OFF_MM_H);
+    } else {
+        mw = mh = 0;
+    }
+    if (mw <= 0 || mh <= 0) {           /* no minimap to hold it: scaled only */
+        r[0] = iround(cx - hw); r[2] = iround(cx + hw);
+        r[1] = iround(cy - hh); r[3] = iround(cy + hh);
+        return;
+    }
+    if (cx < (float)mx) cx = (float)mx;
+    else if (cx > (float)(mx + mw - 1)) cx = (float)(mx + mw - 1);
+    if (cy < (float)my) cy = (float)my;
+    else if (cy > (float)(my + mh - 1)) cy = (float)(my + mh - 1);
+    r[0] = clampi(iround(cx - hw), mx, mx + mw - 1);
+    r[2] = clampi(iround(cx + hw), mx, mx + mw - 1);
+    r[1] = clampi(iround(cy - hh), my, my + mh - 1);
+    r[3] = clampi(iround(cy + hh), my, my + mh - 1);
 }
 
 /* THE CAMERA'S RANGE, the one arithmetic both threads use: the centre range
@@ -1065,8 +1130,9 @@ static void __stdcall zoom_debug_overlay(void* ctx)
    stepper between the two. The stepper is called from the frame callback
    before the draw call (0x495599 inside 0x495490, from 0x49680C/0x49693E;
    it is skipped when the sim is paused or an in-game GUI screen is up) and
-   does not run again until the next frame callback; nothing inside
-   DrawGameScreen stores the eye. A gesture that moves the eye by NOTHING —
+   does not run again until the next frame callback; nothing of the
+   engine's inside DrawGameScreen stores the eye (the scenario camera does,
+   at the flip, and releases nothing). A gesture that moves the eye by NOTHING —
    the pointer on the viewport centre — releases nothing, so the A/B control
    holds exactly. */
 static void release_follow(char* ta)
@@ -1101,7 +1167,9 @@ static void release_follow(char* ta)
    writers ran this frame (the stepper and the scroll poll both precede the
    draw call at 0x4969CD, and both can be skipped: the stepper when paused,
    both under an in-game GUI screen) and before the draw's first read of the
-   eye at 0x468DD9 — no store to the eye exists inside DrawGameScreen. The
+   eye at 0x468DD9 — no store to the eye exists inside DrawGameScreen before
+   that read (the scenario camera's, tagpu_zoom_place_eye, comes after it,
+   from the flip observer at 0x46A3DB). The
    order below is the order the engine's own camera writers keep: release the
    follow, move the eye and the target together, clamp, then the minimap box
    and the fog flag. Nothing here waits, and nothing here can be torn: every
@@ -1240,6 +1308,36 @@ void tagpu_zoom_level_end(char* ta)
         clamp_pair((int*)(ta + OFF_SCRTX), (int*)(ta + OFF_SCRTY), loX, hiX, loY, hiY);
     }
     if (ta_ok(ta)) apply_scroll_rate(ta);                     /* the player's own value, for the options screen */
+}
+
+/* AN EYE WRITTEN OUTSIDE THE APPLY OWES WHAT EVERY EYE WRITER OWES: the range
+   in force, the scroll target with it, the minimap's view box and the screen
+   fog grid's invalidation. The scenario camera is the one such writer
+   (tagpu_scenario.c's place_camera). GAME THREAD, from the flip observer —
+   inside DrawGameScreen at 0x46A3DB, after this draw's apply and after the
+   world draw read the eye, before the packet's fill: the packet this draw
+   publishes carries the new eye, and the fog grid, anchored where it was
+   built, is rebuilt at the next draw's fog site because bit 3 is cleared here
+   (the only thread that may, see the apply). The range is the one this draw's
+   apply chose — the same the terrain latch holds for it — or the engine's
+   own when it cannot be computed; the next apply clamps again with its own.
+   Returns 0 and writes nothing when main is not sane. */
+int tagpu_zoom_place_eye(char* ta, int x, int y, int* outX, int* outY)
+{
+    int loX, hiX, loY, hiY;
+
+    if (!ta_ok(ta)) return 0;
+    clamp_range(ta, &loX, &hiX, &loY, &hiY);
+    clamp_pair(&x, &y, loX, hiX, loY, hiY);
+    *(volatile int*)(ta + OFF_EYEX)  = x;
+    *(volatile int*)(ta + OFF_EYEY)  = y;
+    *(volatile int*)(ta + OFF_SCRTX) = x;
+    *(volatile int*)(ta + OFF_SCRTY) = y;
+    zoom_minimap_rect((int*)(ta + OFF_MM_RECT));
+    *(unsigned short*)(ta + OFF_LOSTYPE) &= (unsigned short)~8u;
+    if (outX) *outX = x;
+    if (outY) *outY = y;
+    return 1;
 }
 
 void tagpu_zoom_applied(unsigned* seq, int* cum_dx, int* cum_dy, float* level,
@@ -1800,19 +1898,39 @@ static void predict(const TAGPU_PACKET* pk)
    `(mapH - 144) + 144 = mapH`, on the map — the extent's 128-px bottom margin
    is exactly its search window (exe map, "Engine defects we patch"). A clamp
    to the map's own size would leave 128 px in which it answers off the map.
+   Since the always-installed guard on 0x421E60 (tagpu_patches.c) a NULL plot
+   answers "no feature" instead of faulting, so this clamp keeps the hovered
+   cell and feature real; it is no longer what keeps the game alive.
+
+   IT FAILS CLOSED WHEREVER THERE IS A MAP TO CLAMP AGAINST. The bound is the
+   extent; where a size of the extent is not positive, the map's own pixel
+   size main+0x14223/0x14227 less the level load's margins (32, 128) stands in
+   for it; and `y` is held to `mapH - 129` as well — the search window itself,
+   which the extent equals at the level load and which the debug `Edge`
+   command can loosen. The point passes through untouched only when there is
+   nothing to clamp against: main not sane (GetTPosition reads main at
+   0x484B61 unconditionally, as every engine caller of it does) or no map size
+   positive (no map loaded; GetTPosition clamps to the map's size itself).
    A no-op for every eye in the engine's own range, which cannot name a point
    past the extent. */
+static int tpos_bound(int extent, int map, int margin)
+{
+    if (extent > 0) return extent - 1;
+    return map > margin ? map - margin - 1 : -1;       /* -1: no bound */
+}
+
 static void __stdcall zoom_tpos_guard(int x, int y, int* out)
 {
     const char* ta = *(const char* const*)TA_MAINPP;
 
     if (ta_ok(ta)) {
-        int ew = *(const int*)(ta + OFF_EXTENT_W);
-        int eh = *(const int*)(ta + OFF_EXTENT_H);
-        if (ew > 0 && eh > 0) {
-            if (x < 0) x = 0; else if (x > ew - 1) x = ew - 1;
-            if (y < 0) y = 0; else if (y > eh - 1) y = eh - 1;
-        }
+        int mw = *(const int*)(ta + OFF_MAPPX_W);
+        int mh = *(const int*)(ta + OFF_MAPPX_H);
+        int hx = tpos_bound(*(const int*)(ta + OFF_EXTENT_W), mw, 32);
+        int hy = tpos_bound(*(const int*)(ta + OFF_EXTENT_H), mh, 128);
+        if (mh > 128 && (hy < 0 || hy > mh - 129)) hy = mh - 129;
+        if (hx >= 0) x = clampi(x, 0, hx);
+        if (hy >= 0) y = clampi(y, 0, hy);
     }
     ((PFN_GETTPOS)VA_GETTPOS)(x, y, out);
 }

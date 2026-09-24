@@ -746,20 +746,36 @@ cross 1.0 from is **0.5 exactly**, not 0.489, and the engine grid's slack collap
 32 px at 1×, not to zero. `tagpu_fogwide.c`'s coverage derivation holds for a gesture that only
 zooms in, and not for one that reverses (below).
 
-**The wide fog grid's cover, stated [2026-09-23].** The grid is built each tick about the live eye
-with half-width `(vw/2)/zmin + 32 + FOGW_MARGIN`; a frame drawn at level `z` from an eye `U` ahead
-of it is covered while `|U| + (vw/2)/z` fits inside that, and past it a strip of the difference on
-the leading side is not. A gesture that only zooms in is always covered (`|U| ≤ (vw/2)(1/z_built −
-1/z)`, so the view is a subset of the one the grid was built for). **A gesture that reverses is
-not**: the displacement a zoom-in owes is paid out along the tween that follows it, zoom-outs
-included, so `|U|` can hold it while `1/z` climbs back. With the game thread stalled across a whole
-flick the strip reaches `3.875·(vw/2) − 288` (3184 px at vw 1792; the landing review's example, a
-100 ms stall at 0.25× with a flick in and out, puts a 1792-px view's edge at 4794 against 3872);
-without a stall `U` is the last frame or two of posting and a reversal started at the zoom floor
-can still leave a few hundred px for those frames. **The residual is visual only**: the strip
-draws the grid's border cell smeared outward, nothing reads outside an allocation, and it lasts
-until the game thread applies the step. Closing it by construction would need a window about four
-times the area, riding the frame packet; it is not closed.
+**A gesture that reverses leaves
+a visual-only residual, stated and not closed.** *Which gesture:* a notch out that cuts the tween
+of a notch in whose displacement is still owed — it is paid out along the tween that follows,
+zoom-outs included, so `|U|` can hold it while `1/z` climbs back. *Which state:* a frame drawn from
+an eye `U` ahead of the one the grid was built about, `U` the anchor steps posted and not yet
+applied. *The bound:* per axis a strip of `max(0, |U| + (vw/2)/z − (vw/2)/zmin − 32 − MARGIN)` on
+the leading side; `|U|` is at most the gesture's own unapplied displacement, at most
+`(vw/2)(1/zmin − 1/zmax)`, so the strip is at most `3.875·(vw/2) − 288` — 1448 px at vw 896, 3184
+at vw 1792 (the landing review's example, a 100 ms stall at 0.25× with a flick in and out, puts a
+1792-px view's edge at 4794 against 3872). Nothing but the gesture bounds `|U|`, so no frame count
+is part of the bound. *What is drawn wrong:* only the fog tint in the strip — the grid's border
+entry smeared outward (taFog clamps its index to the grid) — while terrain, features and units are
+right; the strip is gone on the first frame whose eye the grid covers. **No safety claim rests on
+it**: the sampler's index clamp keeps every read inside the grid for any `U` and `z`. Closing it by
+construction would need a window about four times the area, riding the frame packet; it is not
+closed. The owner has it to rule on.** *Which gesture:* a notch out that cuts the tween
+of a notch in whose displacement is still owed — it is paid out along the tween that follows,
+zoom-outs included, so `|U|` can hold it while `1/z` climbs back. *Which state:* a frame drawn from
+an eye `U` ahead of the one the grid was built about, `U` the anchor steps posted and not yet
+applied. *The bound:* per axis a strip of `max(0, |U| + (vw/2)/z − (vw/2)/zmin − 32 − MARGIN)` on
+the leading side; `|U|` is at most the gesture's own unapplied displacement, at most
+`(vw/2)(1/zmin − 1/zmax)`, so the strip is at most `3.875·(vw/2) − 288` — 1448 px at vw 896, 3184
+at vw 1792 (the landing review's example, a 100 ms stall at 0.25× with a flick in and out, puts a
+1792-px view's edge at 4794 against 3872). Nothing but the gesture bounds `|U|`, so no frame count
+is part of the bound. *What is drawn wrong:* only the fog tint in the strip — the grid's border
+entry smeared outward (taFog clamps its index to the grid) — while terrain, features and units are
+right; the strip is gone on the first frame whose eye the grid covers. **No safety claim rests on
+it**: the sampler's index clamp keeps every read inside the grid for any `U` and `z`. Closing it by
+construction would need a window about four times the area, riding the frame packet; it is not
+closed.
 
 **And one it raised that measurement refutes.** We do not set the minimap's dirty bit, and at
 `k = 1` the sharp minimap layer returns early (`tagpu_gui_surf.c:1451`), so the engine draws the
@@ -922,7 +938,7 @@ load from the map's pixel size `main+0x14223`/`+0x14227` (`0x4833B8..0x4833E0`, 
 Continents: PLOT 672 × 800 (so the map is 10752 × 12800, which `main+0x14223`/`+0x14227` also
 read), extent 10720 × 12672 [MEASURED]. **The view centre stops at the map's edge**, as the lab's does and
 where the mirrored edge (G20b) reflects. **The engine's range and the pointer's guards stay on the
-extent**, and they are safe *because* they read it: the 128-px bottom margin is `GetTPosition`'s
+extent**, because it is the bound they were built on: the 128-px bottom margin is `GetTPosition`'s
 search window (engine map, "Engine defects we patch"; "The pointer" below).
 
 The range is computed in one function, `camera_range()`, from two sets of the same inputs: the game
@@ -961,7 +977,12 @@ handed (`terr || the rect is still wide`). So:
   apply and the level end all clamp to the engine's own `[0, extent − W]` from the engine's own words
   (`engine_range`: `main+0x1422B`/`+0x1422F` less `main+0x37E37`/`+0x37E3B`, the top held at 0),
   and the apply publishes `cam_centre = 0` for that draw, so no path leaves the eye or the target
-  unclamped. The follow stub clears fog bit 3 on every pass, as the block it replaces did.
+  unclamped. The follow stub clears fog bit 3 on every pass, as the block it replaces did. **The
+  one exception is the pointer's guard** (`zoom_tpos_guard`, "The pointer" below): it clamps to the
+  extent, to the map's own pixel size less the level load's margins where the extent is not
+  positive, and `y` to `mapH − 129` always; it passes the point through only where there is no
+  map (every size ≤ 0) or no sane `main` — `GetTPosition` reads `main` itself at `0x484B61` and
+  clamps to the map's size.
 * **between in-play draws** every engine camera writer ends in `0x41C3C0` or in one of the three
   target clamps below, and all four use the range the last apply chose, which the latch still
   matches. The level end drops both together and walks the eye into `[0, extent − W]`. The
@@ -996,18 +1017,28 @@ the unwind are the engine's own bytes, with the same side effects as each exit t
 same shape (`0x41C4EC`) that is left alone because nothing reaches it: all four of its callers
 push `smooth = 0`, and its address occurs nowhere in the image as data.
 
-**The minimap box** is clamped to the minimap at every zoom (`zoom_minimap_rect`); it is scaled
-by `1/z` only away from 1×. At 1× an eye at `−W/2` would otherwise put the engine's box half a
-view outside the minimap.
+**The minimap box** (`zoom_minimap_rect`) is the engine's box scaled by `1/z` about its centre,
+then held on the minimap **so that it can never invert**. The engine places the box by the
+*extent*, and the view centre reaches the *map's* edge, past it — so near the far edges the box's
+centre lies off the minimap, and at a high zoom the whole shrunken box does. Clamping each edge on
+one side only then left its top below its bottom — measured 2026-09-24 at Two Continents' SE
+corner, 1024x768, minimap `x 10, y 0, 106x126`: top 126 against bottom 125 from 6× on, drawn one
+row below the minimap's last — a box the GUI renderer drops (`R ≥ L && B ≥ T`) and the engine's
+own drawer `0x4BF8C0` would put on the panel below the minimap. Now `114..115 × 125..125` at 6–8×,
+on the minimap's last row. So the **centre** is clamped into
+the minimap first and then each edge on **both** sides: the edges leave the rounding in order and
+a clamp to one interval keeps them in order. At 1× an eye in the engine's range keeps the engine's
+own box.
 
 **The pointer.** `0x498DA0` hands a pointer the world point `eye + clamp(pos, L, R) − L`, and with
-an eye past the map a pointer over the void names a point off it; the chain from there is the
-`GetGridPosPLOT` → NULL → `GetGridPosFeature` crash. The `GetTPosition` call `0x498EF9` that
+an eye past the map a pointer over the void names a point off it; the chain from there is
+`GetGridPosPLOT` → NULL → `GetGridPosFeature 0x421E60`, which the always-installed guard there
+(§2.6c) answers with "no feature" instead of a fault. The `GetTPosition` call `0x498EF9` that
 starts it is redirected and the world point clamped to `[0, extent − 1]` — a no-op for any eye in
-the engine's own range. **The extent and not the map, and that is the safety argument:**
-`GetTPosition`'s answer lies below `(y & ~15) + 144`, so a point with `y ≤ extent − 1 = mapH −
-129` gets an answer on the map, and the 128-px bottom margin is exactly its search window (engine
-map, "Engine defects we patch"). vpwide's replica of `0x498DA0` clamps to the same extent. A
+the engine's own range — so the hovered cell and feature are real ones. **The extent and not the
+map:** `GetTPosition`'s answer lies below `(y & ~15) + 144`, so a point with `y ≤ extent − 1 =
+mapH − 129` gets an answer on the map, and the 128-px bottom margin is exactly its search window
+(engine map, "Engine defects we patch"). vpwide's replica of `0x498DA0` clamps to the same extent. A
 right-click past the edge therefore orders a move to the nearest point of the extent: the
 pointer's reach stops 32 px short of the map's right edge and 128 px short of its bottom, where
 the view centre does not.
@@ -1049,14 +1080,16 @@ Continents: map 10752 × 12800, extent 10720 × 12672, `W = 896`, `H = 704`, so 
   pass at 1× and 2× are **0 px of 3 145 728** apart (`tools/vk-ab.py`), md5-identical; the terrain
   captures carry 2.52 M non-black pixels and the unit captures 8 465 and 22 973. Re-run on the
   final build: the same five md5s.
-* **The scenario camera** (`tagpu_scenario.c`'s `place_camera`, on the game thread from the flip
-  observer) clamps into the engine's own range `[0, extent − W]`, read from the extent — held at 0
-  on a map narrower than the view — so the eye it writes is safe whoever draws the ground. A
-  fixture that asks for a view past that range stops up to 32 px (x) and 128 px (y) short of the
-  map's far edges. Of the fixtures in `scenarios/`, only `tascene-air` and `tascene-base`
-  (`at: [6336, 12192]`) come near one, and they reach it only in a window taller than 1024 px plus
-  the ground's altitude there (stock HUD): at 1024x768 their eye is inside the range; at 1920x1080
-  on level ground it stops 28 px higher.
+* **The scenario camera** (`tagpu_scenario.c`'s `place_camera`) is an eye writer like the
+  engine's own, through `tagpu_zoom_place_eye`: on the game thread from the flip observer, which in
+  play is the call `0x46A3DB` *inside* `DrawGameScreen` — after this draw's apply and after the
+  world draw read the eye, before the packet's fill. It clamps into the range in force (this draw's,
+  the one the terrain latch holds; the engine's own where it cannot be computed), writes the eye
+  and the scroll target together, recomputes the minimap box and clears bit 3 of `main+0x14281`, so
+  the next draw's fog site rebuilds the grid for the new eye whether or not the sim ticks. The
+  packet published after the jump carries the new eye with the grid still built at the old one,
+  anchored there; the next frame's grid is the new eye's. A fixture that asks for a view past the
+  engine's range now frames where it asked while our terrain pass owns the ground.
 * **Without `zoom.on`, what the apply applied is clamped.** `vpwide.on`, `native.on=all` and
   `mark.on`, no `zoom.on` and no `terr.on`, `selbox-facings`, and a diagnostic build that logs every
   applied delta leaving the engine's range. 20 rounds: the eye held at `(3000, 11790..11849)` and

@@ -1052,11 +1052,13 @@ function from `objdump -d -M intel` of `pristine/TotalA.exe.pristine`.
 table holds for them unchanged: no row's bound reads where the centre range ends. Each is its own
 compare, the terrain latch, or a test against the engine's range, which still reads the extent.
 
-**Two stock defects beside these readers, not caused by the eye** — both in "Engine defects we
-patch": the unit sort's append can run past the END of the whole sort buffer (`0x469807..0x469825`),
-reachable in our build below 1× (filling past one row's own capacity is stock behaviour and
-harmless); and a NULL plot faults reading `[NULL+8]` at `0x421E64` in `GetGridPosFeature
-0x421E60`, not reachable in normal stock play.
+**Two stock defects beside these readers, not caused by the eye, both patched** — "Engine defects
+we patch" above: the unit sort's append can run past the END of the whole sort buffer
+(`0x469807..0x469825`), which our build reaches below 1× with an ordinary crowd (filling past one
+row's own capacity is stock behaviour and harmless); and `GetGridPosFeature 0x421E60` faults
+reading `[NULL+8]` at `0x421E64` when handed a NULL plot, which stock reaches only where its own
+range `[0, extent − view]` is empty (a map shorter than the viewport plus 128 px) [INFERRED], under
+the debug `Edge` command, or through `0x4815F0`'s `0xFFFE` cells on a path not audited.
 
 ## The screen fog grid — where it is allocated, and every cell the builder reads — mapped by us
 

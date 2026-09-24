@@ -181,8 +181,8 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
   the scroll extent `main+0x1422B`/`+0x1422F`, the map less 32 px wide and 128 px tall, which the
   engine's clamp `0x41C3C0` and its inline target clamps read. The view centre stops at the map's
   edge, as the lab's does (Two Continents: `(10304, 12448)` at 1024x768, not the extent's
-  `(10272, 12320)`). The engine's range and the pointer's guards stay on the extent, which is what
-  keeps them safe: the 128-px bottom margin is `GetTPosition`'s search window (engine map,
+  `(10272, 12320)`). The engine's range and the pointer's guards stay on the extent, the bound they are
+  built on: the 128-px bottom margin is `GetTPosition`'s search window (engine map,
   "Engine defects we patch").
 * **Which range is in force.** The centre range holds only on a draw whose ground is ours
   (`s_gCentre = installed && terr`), because the engine's terrain pass `0x483FA0` has no bound on
@@ -200,7 +200,9 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
   occurs nowhere in the image as data, so no path reaches it.
 * **The debug overlay.** `0x418310` has no lower bound on its cell window, so its one call site
   `0x468DBA` is redirected to call it only for an eye in the engine's own range.
-* **The minimap box** is clamped to the minimap at every zoom, 1× included.
+* **The minimap box** is scaled about its centre, then its centre is clamped into the minimap
+  and each edge on both sides, so it cannot invert when the view centre is past the extent the
+  engine places it by (gpu-status §2.3c).
 * **The fog.** An eye off [0, extent − W] puts the engine grid's border completions off the map, so
   the native pass draws from `fogwide`'s grid then (`tagpu_zoom_wide_fog`).
 
@@ -217,7 +219,7 @@ note listed:
 | `0x483FA0`, the engine's terrain pass | **none of its own** — the tile index from `eye >> 5` is unchecked at both ends. Bounded by design: the centre range is in force only on draws whose terrain latch skips it |
 | `0x418310`, the map debug overlay | **none below** — the cell window starts at eye/16 with only the upper ends clipped. Bounded by the redirect of `0x468DBA` |
 | `0x498DA0`, the pointer → world point | **bounded twice**: `tagpu_vpwide.c` clamps the world point to the scroll extent, and `zoom_tpos_guard` (`0x498EF9`) clamps the side-panel path to the same. A right-click past the edge orders a move to the nearest point of the extent |
-| the minimap view box | **bounded**: clamped to the minimap at every zoom |
+| the minimap view box | **bounded**: its centre clamped into the minimap, then each edge on both sides, at every zoom — it cannot invert |
 | `0x4843C0`, the screen fog grid builder | **bounded**: every cell is tested unsigned against the LOS block's w/h before either read; the border completions stay inside the grid, but their content is misplaced for an eye off [0, extent − W], which is why the native pass takes `fogwide`'s grid then |
 | `0x4848E0`, the fog draw | **bounded**: a `[0, cols) × [0, rows)` walk; terrown skips it with the terrain pass |
 | `fogwide`'s wide grid | **bounded in the replica**: every read of the mapped bytes checks `idx < mappedCells`, and the edge completions derive their row from `row0` |
