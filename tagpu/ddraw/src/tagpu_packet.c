@@ -94,7 +94,7 @@
    that starts with the three-dword prefix {head_seq, cap_bytes, used_bytes}
    and ends with {crc, tail_seq}; what lies between is the instance's
    business, checked by its own `valid` callback after the structural checks
-   here. The frame packet (s_frame: game thread -> render thread, 16 MB
+   here. The frame packet (s_frame: game thread -> render thread, 20 MB
    slots, FIVE of them, PREV handed out for the pose blend) and the command
    record (s_cmd: render thread -> game thread, 64 KB slots, four of them,
    latest wins with `force`, no PREV) are the two instances. The proof above is written once and holds for

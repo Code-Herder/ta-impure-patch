@@ -171,10 +171,12 @@ process-lifetime static memory, which is a *better* lifetime than stock's.
 **Sites (DIS).**
 - `0x49163F push 0xFA` (the ini default, operand `0x491640`), `0x491658 cmp eax,0x1F4` (operand
   `0x491659`) and `0x491665 mov eax,0x1F4` (operand `0x491666`). The result goes to `main+0x37EEC`.
-- The single-player init `0x4912EE…0x491308` copies it to `+0x37EE6` and `+0x37EEA`.
-- **In MP, `+0x37EEA` is written from the network** (`0x449D9B`, from `0x512D6C`, next to
-  `[ebp+0xA5]`, consistent with the 0x20 status packet's `+0xA6`) **with no clamp**. So the host's
-  value is broadcast and used, the unit array being `10·limit+1`.
+- The process init `0x4912EE…0x491308` (in `0x491200`, before its own ini read) copies it to
+  `+0x37EE6` and `+0x37EEA`; the game start is what carries the configured value into `+0x37EE6`.
+- **In MP, the host's value is broadcast and used**, the unit array being `10·limit+1`: the game
+  start writes `+0x37EE6` from the host record's `+0xA5` (`0x4973B5`), unclamped. A DirectPlay
+  lobby launch writes `+0x37EEA` and `+0xA5` from `0x512D6C` (`0x449D87`, `0x449D9B`), also
+  unclamped. Landing 2 clamps the store at `0x4973B5`.
 - **Two unclamped side doors (DIS).** `0x432646`, in `0x432610`, writes `+0x37EEC` from the key
   **`maxunits`** (`0x4B4800`, default 0) of a saved game's `[Summary]`, read when the game's TDF at
   `main+0x38D6B` has no `BetweenMissions` key (`0x497B29`); TADR's `tdraw.txt:203` "unit limit
@@ -211,14 +213,15 @@ No other `0x1F4` in `.text` belongs to the unit limit; `0x40BBDF` is a resource 
 
 ## 6. Pathfinding cycles 1333 → 66650 (`0x40EAD6`)
 
-**DIS.** `0x40EAD3 mov dword [esi+0x48],0x535` is inside the pathfinder object's init, which sizes
-its own bitmaps from map dimensions (`0x40EA20…`). It is the only `0x535` in `.text`. TADR writes the
+**DIS.** `0x40EAD3 mov dword [esi+0x48],0x535` is inside the pathfinder object's init `0x40E9E0`,
+which sizes its own bitmaps from map dimensions. It is the only `0x535` in `.text`. Its one reader,
+the per-tick `0x40EB70`, shares it among the players as credits (the engine map has the detail). TADR writes the
 dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
 
 **SIM for the owner's units; per game (the init takes the map).**
 - INF: in a state-replicated model each peer paths only its own units (movement travels in `0x2C`),
   so unequal budgets do not desync. Worth one MP measurement before it is relied on.
-- The cost is CPU per tick (the budget caps work per search).
+- The cost is CPU per tick (the budget caps the pathfinder's work a tick, shared among the players).
 
 **Our code: none reads it.**
 

@@ -117,7 +117,9 @@ scores 0 magenta and shows no game.
   `setup.unit_limit` writes one, and it stays until another launch writes a different one, so a
   fixture with no `unit_limit` inherits the instance's last value (the fork then refuses the
   apply with "this game's cap is 500"). Write it in the fixture. Under `ddraw-stocklimits.dll` the
-  engine clamps to 500 again, which `tacli`'s schema does not know.
+  engine clamps to 500 again and defaults to 250, which `tacli`'s schema does not know: `scenario
+  validate` passes up to 1500 a player and 15 000 entities, and the apply then refuses. The apply's
+  own check is against the cap in force (`main+0x37EE6`), which is the host's in a network game.
 - **A single-player fight does not reproduce run to run, even under one DLL**, so a COB-trace or
   roster timeline compared across two runs measures noise from the first impact on. Compare what
   is a function of the build (a static frame, a pose, a table), or two peers of one network game.

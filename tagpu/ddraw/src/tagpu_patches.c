@@ -371,11 +371,12 @@ static unsigned char* lim_seqtab_stub(void)
     return s;
 }
 
-/* A `maxunits` key, clamped to [TAGPU_LIM_UNITS_MIN, TAGPU_LIM_UNITS] before it is stored.
-   Called in place of the stock `mov word [ecx+off],ax`, with ecx = main as stock set it and
-   eax = the key's int. The clamp runs on the whole int, so a value past 65535 cannot wrap
-   into range the way stock's 16-bit store wraps it. Only eax and the flags change; at both
-   sites the next instruction overwrites or ignores them. */
+/* A unit limit from outside the ini, clamped to [TAGPU_LIM_UNITS_MIN, TAGPU_LIM_UNITS] before
+   it is stored. Called in place of the stock `mov word [ecx+off],ax`, with ecx = main as stock
+   set it and eax = the whole value (a `maxunits` key's int, or the host's word zero-extended).
+   The clamp runs on the whole int, so a value past 65535 cannot wrap into range the way
+   stock's 16-bit store wraps it. Only eax and the flags change; at every site the next
+   instruction overwrites or ignores them. */
 static unsigned char* lim_maxunits_stub(unsigned int off)
 {
     unsigned char* s = tagpu_detour_stub();
@@ -507,12 +508,13 @@ static void lim_sites(void)
         lim_add(0x004217DE, 16, head, ours, "piece debris allocator");
     }
 
-    /* ---- units a player. The game-start read 0x491653 (totala.ini [Preferences] UnitLimit)
-       defaults to 250 and clamps to [20, 500] into main+0x37EEC; the default and the ceiling
-       both become TAGPU_LIM_UNITS, and the floor at 0x491678 stays. The unit array is
-       10 x main+0x37EE6 + 1 slots, which the frame packet's design point covers
-       (tagpu_packet_pub.c asserts it). In a network game every peer takes the host's value
-       unclamped (0x449D9B, 0x4973B5): the same-build contract makes that this value. */
+    /* ---- units a player. The process-start read 0x491653 (totala.ini [Preferences]
+       UnitLimit, in 0x491200, which WinMain calls once) defaults to 250 and clamps to
+       [20, 500] into main+0x37EEC; the default and the ceiling both become TAGPU_LIM_UNITS,
+       and the floor at 0x491678 stays. The unit array is 10 x main+0x37EE6 + 1 slots, which
+       the frame packet's design point covers (tagpu_packet_pub.c asserts it), and every
+       writer of +0x37EE6 is held to [20, TAGPU_LIM_UNITS]: the game start copies the clamped
+       +0x37EEC (0x4971F8, 0x4973CD), and the three below clamp what they store. */
     lim_dword(0x00491640, 250, TAGPU_LIM_UNITS, "unit limit default");
     lim_dword(0x00491659, 500, TAGPU_LIM_UNITS, "unit limit ceiling test");
     lim_dword(0x00491666, 500, TAGPU_LIM_UNITS, "unit limit ceiling");
@@ -529,6 +531,22 @@ static void lim_sites(void)
         lim_branch(0x00436037, 7, hdrStore, 0xE8, (unsigned int)(size_t)missionMax,
                    "mission maxunits");
     }
+    {
+        /* THE HOST'S LIMIT. A network game's start overwrites the array's count with the
+           word at +0xA5 of the host's player record (0x4973AE, 0x4973B5). The host's own
+           slider bounds it (ActualUnitLimit - 20, 0x44A2B2), but a lobby launch sets
+           ActualUnitLimit unclamped (0x449D9B) and a peer's record comes off the wire; past
+           6553 the slot count 10 x N + 1 wraps its u16 (0x4854EA) and the unit array is
+           allocated too small. The read becomes a zero-extending movzx, the same 7 bytes,
+           so the whole of eax is the value, and the store goes through the clamp. eax and
+           the flags are dead after it: the next instruction is `jmp 0x4974E3`. */
+        static const unsigned char hostRead[7]  = { 0x66, 0x8B, 0x80, 0xA5, 0x00, 0x00, 0x00 };
+        static const unsigned char hostMovzx[7] = { 0x0F, 0xB7, 0x80, 0xA5, 0x00, 0x00, 0x00 };
+        static const unsigned char hostStore[7] = { 0x66, 0x89, 0x81, 0xE6, 0x7E, 0x03, 0x00 };
+        lim_add(0x004973AE, 7, hostRead, hostMovzx, "host unit limit read");
+        lim_branch(0x004973B5, 7, hostStore, 0xE8, (unsigned int)(size_t)missionMax,
+                   "host unit limit");
+    }
     /* THE BATTLEROOM'S "NO LIMIT" SENTINEL IS A CAP ON ONE PATH. The unit-restriction menu
        keeps each type's count as 0..100, and 101 (`mov ecx,0x65` at 0x44CAFD) for a type
        with no limit. Cancel (0x44C6FC) writes those saved values back into the restriction
@@ -539,7 +557,9 @@ static void lim_sites(void)
     lim_dword(0x0044CAFE, 101, TAGPU_LIM_UNITS, "unrestricted type count");
 
     /* ---- the pathfinder's search budget: `mov dword [esi+0x48],0x535` at 0x40EAD3, in the
-       pathfinder's per-game init (0x40EA20..) and the only 0x535 in .text */
+       pathfinder's per-game init (0x40E9E0) and the only 0x535 in .text. Its one reader is
+       the per-tick 0x40EB70, which shares it among the players; nothing is sized or indexed
+       by it, so the raise costs time, not memory. */
     lim_dword(0x0040EAD6, 1333, TAGPU_LIM_PATH, "pathfinding budget");
 }
 

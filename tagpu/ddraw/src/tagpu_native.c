@@ -2834,8 +2834,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        (gpu-posing.md §4, "the budget"): a posed unit's pose is `bg->nparts`
        pieces, and the bake matches its cache entry on the unit's own
        `nparts`, so the sum below is exactly what the loop can ask for. At the
-       design point that is 10 241 units at stock's worst model (36 pieces,
-       ARMSCORP/CORSCORP), 18 MB of pose. The rest-block degradation below is
+       design point that is 15 001 units at stock's worst model (36 pieces,
+       ARMSCORP/CORSCORP), 26 MB of pose. The rest-block degradation below is
        what an allocation that failed costs: the unit draws at rest, it never
        drops out of the scene. */
     static float* pdPose;

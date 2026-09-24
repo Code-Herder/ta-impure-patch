@@ -161,9 +161,10 @@ are that patch's business, not retail's. (`AISearchMapEntries` is not examined h
 
 ### The per-player unit cap — `0x49163F..0x49168B` — mapped by us [VERIFIED 2026-09-11, objdump of the pristine build]
 
-At game start the engine reads the cap out of `totala.ini` and clamps it before
-writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, and
-`tools/tacli` writes the file before launch for exactly that reason:
+At process start the engine reads the cap out of `totala.ini` and clamps it before
+writing `MaxUnitNumberPerPlayer`. The read is in `0x491200`, which WinMain calls once
+(`0x49EA62`), so the value cannot be raised in a running process, and `tools/tacli` writes
+the file before launch for exactly that reason:
 
 ```
 49163f: push 0xfa                        ; default 250
@@ -189,7 +190,8 @@ writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, 
   between them. Measured live 2026-09-10 with `tacli roster`: at the cap of 500 a
   fresh skirmish hands out idx 1 to player 0, **501** to player 1, **1001** to player 2.
 * The store is a WORD, so the field is an `unsigned short` (where the 6553 figure
-  comes from), but no retail path writes more than 500 into it. Raising the cap means
+  comes from). This path writes at most 500; a saved game's `[Summary]` `maxunits` is stored
+  into it unclamped (`0x432646`, below). Raising the cap means
   patching **both** immediates, the compare and the stored value — the community's
   "two offsets, set identically".
 * `ActualUnitLimit` (`+0x37EEA`) is not touched on this path.
@@ -202,27 +204,40 @@ writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, 
   [gpu-status](gpu-status.html) §2.86 and §2.6b).
 
 **Who writes the array's count, `main+0x37EE6` [DISASSEMBLED 2026-09-23].** It is the field the slot
-count `10·N + 1` is computed from (`0x4854EF`), and five places write it:
-- `0x4912F5`, the single-player init, copies `+0x37EEC` into it (and `0x491308` on into `+0x37EEA`).
-  In a network game `+0x37EEA` is written from the host's broadcast at `0x449D9B` (from
-  `0x512D6C`), unclamped.
+count `10·N + 1` is computed from (`0x4854EF`, a 16-bit `imul` at `0x4854EA` that wraps past 6553,
+after which `0x485502` allocates the array too small). These places write it:
+- `0x4912F5`, in the process init `0x491200`, copies `+0x37EEC` into it (and `0x491308` on into
+  `+0x37EEA`). It runs *before* that function's ini read at `0x491653`, so it copies whatever
+  `+0x37EEC` held before the read; the game start below is what carries the configured value.
 - **Game start, `0x4971C7`, dispatches on `0x435100` (`[ecx]` of `main+0x391E9`):** mode 2 (skirmish)
-  copies `+0x37EEC` at `0x4973CD`; mode 3 (network) copies it at `0x4971F8` and then, for the seat
-  `0x456850` returns (the host <span class="pill pill-warn">INFERRED</span>), overwrites it at `0x4973B5` with the word at `+0xA5` of that player's
-  record (`PlayerStruct + 0x27`, the pointer at `main + 0x1B8A + i·0x14B`); mode 1 (campaign,
-  `0x49745C`) does not write it at all.
+  copies `+0x37EEC` at `0x4973CD`; mode 3 (network) copies it at `0x4971F8`, reloads the map through
+  `0x4972D6` → `0x435A20` → `0x435DA0` (which writes the `.ota` value, next item), and then, for
+  the seat `0x456850` returns (the host <span class="pill pill-warn">INFERRED</span>), overwrites
+  it at `0x4973B5` with the word at `+0xA5` of that player's record (`PlayerStruct + 0x27`, the
+  pointer at `main + 0x1B8A + i·0x14B`). When `0x456850` returns 10 (`0x4972E2`) that overwrite is
+  skipped and the map's value stays. Mode 1 (campaign, `0x49745C`) does not write it at all.
 - `0x436037`, inside `0x435DA0`, the map loader: the map's `.ota` `[GlobalHeader]` key `maxunits`
-  (`0x4C46C0`, default 200), stored unclamped. A campaign mission plays with this value; a skirmish or
-  network game overwrites it at game start. Every retail map sets 200 to 400 (checked over every
-  `.ota` in the retail archives, 2026-09-23).
-- The raised limits clamp that store and its sibling to [20, 1500]: `0x436037`, and `0x432646` in
-  `0x432610`, which reads `maxunits` out of a saved game's `[Summary]` (called from `0x497B29` when
-  the game's `main+0x38D6B` TDF has no `BetweenMissions` key) into `+0x37EEC`. Each 7-byte
-  `mov word [ecx+off],ax` becomes a `call` to a stub that clamps `eax` and stores it, and two NOPs.
+  (`0x4C46C0`, default 200), stored unclamped. A campaign mission plays with this value; a skirmish
+  overwrites it at game start. Every retail map sets 200 to 400 (checked over every `.ota` in the
+  retail archives, 2026-09-23).
+- **Where the host's word comes from.** On the host, `+0xA5` is the battleroom's MAXUNITS slider,
+  whose maximum is `ActualUnitLimit − 20` (`+0x37EEA`, read at `0x44A2B2`). `ActualUnitLimit` is
+  written from `+0x37EEC` by the process init (`0x491308`) and by the battleroom at `0x449C42` when
+  the local record's `+0x97` bit 0 is set; a DirectPlay lobby launch writes it, and the record's
+  `+0xA5`, from `0x512D6C` unclamped (`0x449D87`, `0x449D9B`). On a client the record arrives over
+  the network.
+- **The raised limits hold every writer to [20, 1500]:** the game-start copies take the clamped
+  `+0x37EEC`, and three stores go through a clamp stub: `0x436037`; `0x432646` in `0x432610`, which
+  reads `maxunits` out of a saved game's `[Summary]` (called from `0x497B29` when the game's
+  `main+0x38D6B` TDF has no `BetweenMissions` key) into `+0x37EEC`; and the host's word at
+  `0x4973B5`, whose read at `0x4973AE` becomes `movzx eax, word [eax+0xA5]` (the same seven bytes)
+  so that the stub sees the whole value. Each 7-byte `mov word [ecx+off],ax` becomes a `call` to a
+  stub that clamps `eax` and stores it, and two NOPs. `eax` and the flags are dead after all three.
 
 **A type's own cap, `UnitDef+0x15A` [DISASSEMBLED 2026-09-23].** The unit constructor `0x485F50`
-(`UNITS_CreateUnit`, `(player, type, …)`) checks it before anything else: when `def+0x241` bit 23
-is set and `def+0x15A` is not −1, it counts the player's units of that type (`unit+0xA6`, over the
+(`UNITS_CreateUnit`, `(player, type, …)`) checks it before anything else: a type whose `def+0x241`
+bit 23 is clear is refused outright (`0x485FAA`, `je 0x4861BD`, return 0); when the bit is set and
+`def+0x15A` is not −1, it counts the player's units of that type (`unit+0xA6`, over the
 player's range at `PlayerStruct+0x67..+0x6B`, stride `0x118`) and refuses the unit at the cap
 (`0x485FE4`). The load sets `def+0x15A` = −1 (`0x42B169`); the battleroom's restriction store
 (`main+0x2A30`) sets both in `0x46E160` (called from `0x46CA60`; that this runs at game start is
@@ -236,13 +251,24 @@ back as they are** (`0x44C750` → `0x46E550`), 101 included, so after a cancell
 enabled, unlimited type is capped at 101. The raised
 limits write the unit limit over that sentinel, as TADR does. A default network game never reaches
 it: landing 1's two peers each created 450 of one type through `0x485F50` with none refused.
+**Reset (`0x44C5EB`) is a second, visible path:** it writes 100 into every enabled type
+(`mov ebx,0x64` at `0x44C62D`, stored through `0x46E550` at `0x44C69B`), and the menu shows 100,
+so each type then stops at 100 units in a 1500-unit game. That one is stock's and is left alone:
+the player sees the number they chose.
 
 **The pathfinder's budget [DISASSEMBLED 2026-09-23].** `0x40EAD3 mov dword [esi+0x48],0x535` (1333,
-operand `0x40EAD6`),
-the only `0x535` in `.text`, in the pathfinder's per-game init (`0x40EA20…`, which sizes its bitmaps
-from the map and copies `+0x54` = `0x18000` into a per-player table at `0x5119E8`, stride
-`0x14B`). The raised limits make it 66 650, TADR's value. MEASURED 2026-09-23 at 6000 units: the
-sim held 57–60 ticks a second at game speed 20 outside the apply frame.
+operand `0x40EAD6`), the only `0x535` in `.text`, in the pathfinder's per-game init `0x40E9E0`
+(called from `0x44F6B3`; it sizes its bitmaps from the map, fills `[pf+0x79+4i]` from each
+player's record, `[main+0x1A7F+i·0x14B]`, and stores `+0x54` = `0x18000`). **Its one reader is the
+per-tick `0x40EB70`** (called from `0x464F92`): at `0x40EB91` it divides the budget by the u16 at
+`main+0x2A3C`, adds that to each active player's credit at `[pf+0xA1+4i]`, and the searches spend
+those credits. So it is a budget a tick shared among the players, not one per search. Every 150
+calls (`0x511A38`) the same function rewrites a ten-dword table at `0x5119E8` (stride 4, to
+`0x511A10`): a multiple of `+0x54` chosen by each player's counter at `0x511A10` over the
+per-player count `main+0x1434F`, and the counter is reset. The budget is an `int` that
+nothing sizes or indexes, so raising it costs time, not memory. The raised limits make it 66 650,
+TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
+outside the apply frame.
 
 ## Built-in cheat/console command surface
 

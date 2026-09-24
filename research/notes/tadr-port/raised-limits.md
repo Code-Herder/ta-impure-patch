@@ -45,11 +45,15 @@ TADR's `EngineLimits.cpp` (the four pools) is one month old (`586d71a`, 2026-08-
 
 ## Decisions
 
-**Multiplayer: TADR's behaviour.** In a network game each peer takes the host's unit limit at
-`0x449D9B`, unclamped, and we follow it. Our own reads stay bounded. Past the frame packet's table
-ceiling (16 384 slots, 1638 a player) the renderer draws what fits and logs the truncation. Above
-6553 a player, the engine's 16-bit slot count `10·N + 1` overflows; that is the engine's own
-failure, exactly as under TADR.
+**Multiplayer: TADR's behaviour.** In a network game each peer takes the host's unit limit, and we
+follow it. Our own reads stay bounded. Past the frame packet's table ceiling (16 384 slots, 1638 a
+player) the renderer draws what fits and logs the truncation. **One bound was added in landing 2:**
+the game start's store of the host's value (`0x4973B5`) goes through the same [20, 1500] clamp as
+the two `maxunits` keys. A same-build host sends at most that anyway, since its slider stops at
+`ActualUnitLimit − 20`, so what is followed does not change. What the clamp closes is a DirectPlay
+lobby launch, which writes `ActualUnitLimit` unclamped (`0x449D9B`): past 6553 a player the engine's
+16-bit slot count `10·N + 1` wraps and the unit array is allocated too small. Every peer runs the
+same clamp, so they agree.
 
 **Unit limit: 1500 default and ceiling.**
 - The three immediates at `0x491640` (default), `0x491659` (compare) and `0x491666` (clamp-to)
@@ -169,7 +173,7 @@ moved pools; the stock-limits `make` flag. What it proved, by running it:
   tier-1 battle measures it.
 
 **Landing 2 — units 1500, the `maxunits` clamps, the restriction sentinel, pathfinding 66 650 and
-the design point 15 001. Done 2026-09-23.** Fifty sites now. What it proved, by running it:
+the design point 15 001. Done 2026-09-23.** Fifty-two sites now. What it proved, by running it:
 - **The limit is what the engine holds.** With no `UnitLimit` key the game reads 1500; in the
   four-player skirmish `+0x37EEC` and `+0x37EE6` were 1500 and the unit array 15 001 slots. The
   two clamp stubs were read back out of the running process and disassembled.
@@ -218,6 +222,14 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
   The site is written as TADR writes it; the engine map, *The per-player unit cap*, has the chain.
 - **There are two unclamped `maxunits` keys, not one.** The evidence found the saved game's
   (`0x432646`); landing 2 found the map's `.ota` (`0x436037`), which writes the array's own count.
+- **The host's limit reaches the unit array at `0x4973B5`, not `0x449D9B`** (landing 2's review).
+  `0x449D9B` is a lobby launch writing `ActualUnitLimit`, which bounds the host's slider; the game
+  start copies the host record's word into the array's count. Landing 2 clamps that store.
+- **The pathfinder's budget is spent a tick and shared among the players** (`0x40EB70`), its init
+  is `0x40E9E0`, and `0x5119E8` is a ten-dword table, not one with the players' stride (landing 2's
+  review).
+- **`0x4912F5` is the process init, not a single-player one**, and runs before the ini read, so the
+  game start is what carries `UnitLimit` into the array's count (landing 2's review).
 - `tagpu_packet_pub.c` said "twelve more" particle cap sites; there are twenty (landing 1).
 - The evidence named `0x420E50` as the flying-piece spawner; nothing calls it. The live spawner is
   `0x481140`, and the conclusion (the slot cap gates no simulation draw) holds through it. A piece

@@ -68,6 +68,9 @@
 
 #define OFF_LIMIT     0x37EEA      /* u16 ActualUnitLimit                         */
 #define OFF_PERPLAYER 0x37EEC      /* u16 MaxUnitNumberPerPlayer                  */
+#define OFF_ARRAYCAP  0x37EE6      /* u16 the unit array's count a player: the cap
+                                      in force (the game start copies +0x37EEC, a
+                                      network game the host's value)              */
 #define OFF_CMDRDEATH 0x37EF6      /* u32 ActiveCommanderDeath (0 = game goes on) */
 #define OFF_SWITCHES  0x37F2F      /* u16 SoftwareDebugMode                       */
 #define OFF_GAMETIME  0x38A47      /* int GameTime                                */
@@ -1125,7 +1128,7 @@ static int resolve_all(char* ta)
        the arithmetic here instead: what each player already has (minus what the
        clear is about to remove) plus what the file asks for. */
     {
-        int want[10], have[10], cap = *(unsigned short*)(ta + OFF_PERPLAYER);
+        int want[10], have[10], cap = *(unsigned short*)(ta + OFF_ARRAYCAP);
         char* beg = *(char**)(ta + OFF_BEGIN);
         char* end = *(char**)(ta + OFF_END);
 

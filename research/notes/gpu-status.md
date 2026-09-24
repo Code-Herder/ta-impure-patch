@@ -1552,15 +1552,16 @@ effect pools* and *The per-player unit cap*.
 | the debris records | `0x4217DE` (16 bytes: `call` + `jmp 0x421804`), and `0x420920` (`jmp`), a stock copy of the scan that nothing calls | first-free C allocator over `s_aux` |
 | units a player | `0x491640` (default), `0x491659` (compare), `0x491666` (clamp-to) | immediates → 1500; the floor 20 stays |
 | the two `maxunits` keys | `0x432646` (a saved game's `[Summary]`), `0x436037` (a map's `.ota` `[GlobalHeader]`) | the 7-byte store becomes a `call` to a stub that clamps `eax` to [20, 1500] and stores it |
-| the restriction menu's "no limit" | `0x44CAFE` | 101 → 1500, so a cancelled menu caps no type below the player's own limit |
+| the host's limit in a network game | `0x4973AE` (read), `0x4973B5` (store) | the read becomes `movzx eax, word [eax+0xA5]`, the store the same clamp stub |
+| the restriction menu's "no limit" | `0x44CAFE` | 101 → 1500, so a cancelled menu caps no type below the player's own limit (Reset's 100 each, `0x44C62D`, is stock's and shown as 100) |
 | the pathfinder's budget | `0x40EAD6` | 1333 → 66 650 |
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
 while it changes. It reads every site (through `VirtualQuery`, never assuming the page), compares
-all 50 with the stock bytes, and writes them only if every one matches; a refused write puts back
+all 52 with the stock bytes, and writes them only if every one matches; a refused write puts back
 what was written. The patches last for the process and are never restored. The log line names the
-moved pools' addresses for `tacli peek`: `limits: installed 50 sites -- …, units 1500 a player,
+moved pools' addresses for `tacli peek`: `limits: installed 52 sites -- …, units 1500 a player,
 pathfinding 66650`.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
@@ -1594,8 +1595,9 @@ a player makes **15 001**: `TAGPU_PK_DESIGN_SLOTS`, and every cap sized from it 
 it. `tagpu_packet_pub.c` asserts that the installed limit fits the design point, so raising
 `TAGPU_LIM_UNITS` alone fails the build. The scenario harness holds a game that full too
 (`SCN_MAX_UNITS`, `_ORDERS`, `_CLEAR` = 10 × `TAGPU_LIM_UNITS`; `tacli`'s `SCN_MAX_LIMIT` 1500,
-`SCN_MAX_ENTITIES` 15 000). In a network game every peer takes the host's limit unclamped
-(`0x449D9B`, `0x4973B5`); past the design point the packet's tables truncate and say so.
+`SCN_MAX_ENTITIES` 15 000). In a network game every peer takes the host's limit, through the same
+[20, 1500] clamp as the `maxunits` keys (`0x4973B5`), so every writer of the array's count is held to
+the design point; should a slot count still exceed it, the packet's tables truncate and say so.
 
 **Tier 1, measured 2026-09-23** (`scenarios/limits-tier1.json`: four players at 1500, 6000 kbots on
 Town & Country ordered onto the centre, 1920×1080, the shipped defaults, speed 20): the engine held

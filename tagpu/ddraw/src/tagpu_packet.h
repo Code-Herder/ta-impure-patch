@@ -451,9 +451,10 @@ typedef struct TAGPU_PK_PART {
    15 001. Every cap in the exchange and in the passes it feeds that scales
    with the unit count is asserted against this where it is declared, so a cap
    below it fails the build rather than a large game; tagpu_packet_pub.c
-   asserts that the installed limit fits it. A network game takes the host's
-   limit unclamped (0x449D9B): past the design point the tables below truncate
-   and say so, they never overrun. */
+   asserts that the installed limit fits it. Every engine write of the array's
+   count is clamped to that limit, the host's in a network game included
+   (tagpu_patches.c); should a slot count still exceed it, the tables below
+   truncate and say so, they never overrun. */
 #define TAGPU_PK_DESIGN_SLOTS (10u * 1500u + 1u)
 
 /* The units table's own ceiling: the design point rounded up to a power of
