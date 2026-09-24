@@ -999,7 +999,8 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             put_f(p, FS_FOGORG + 4, s_h.fogOrgY);
             put_f(p, FS_FOGDIM, s_h.fogCols);
             put_f(p, FS_FOGDIM + 4, s_h.fogRows);
-            put_i(p, FS_FOG, s_h.draws[i].fog);
+            /* bit 4 picks the index branch's grey (tagpu_mark.c FS) */
+            put_i(p, FS_FOG, s_h.draws[i].fog | (s_h.index ? 4 : 0));
             s_fsOff[i] = at;
             at += fstride;
         }

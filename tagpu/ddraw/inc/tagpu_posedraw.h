@@ -56,7 +56,7 @@ typedef struct {
     int   scafOn;
     float scafP[4];             /* vpL, vpT, vw, vh                           */
     float fogOrg[2], fogDim[2];
-    int   lit;                  /* Classic++ on                               */
+    int   lit;                  /* the full-colour path: tagpu_classicpp_index */
     float sun[3], amb, norm;    /* the units' sun, ambient, 1/unitLevel       */
     int   shNeutral, shDir;     /* the engine's SHD rows                      */
 } TAGPU_PDVIEW;
@@ -386,6 +386,9 @@ typedef struct TAGPU_PDHAND {
        reason. */
     int                               restoreDim, restoreMips;
     const unsigned char* lut;     int lutW, lutH;          unsigned lutSerial;
+    /* the face-shade multiplier, 32 floats by SHD row (tagpu_r3d_shade_k),
+       aliased like `lut`: both are the material layer's own arrays */
+    const float*         shadeK;
     const unsigned char* pal;     unsigned palSerial;
     /* COPIED, not aliased: the grid points into a frame packet the game thread
        reuses, and tagpu_feat.c's own copy exists for the same reason. NULL when

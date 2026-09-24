@@ -72,8 +72,9 @@ typedef struct TAGPU_FEATHAND {
     float zoom, zoomCx, zoomCy;
     float depthScale;
 
-    /* The fragment stage's. `restored` and `lit` are the two Classic++
-       branches; `fog` is the engine's overlay bit. */
+    /* The fragment stage's. `restored` is the Classic++ restored-colour
+       branch, `lit` the full-colour path both presets take (0 only under
+       tagpu_classicpp_index); `fog` is the engine's overlay bit. */
     int   restored, lit, fog;
     float fogOrgX, fogOrgY, fogCols, fogRows;
 

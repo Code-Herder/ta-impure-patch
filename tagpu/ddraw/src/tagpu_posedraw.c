@@ -601,6 +601,7 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        publish, so a capture here would be a snapshot taken before the frame
        has finished writing it. See the handover for the ordering. */
     s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);
+    s_pub.shadeK = tagpu_r3d_shade_k();
     s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     s_pub.fogLut = tagpu_native_foglut();
     {   /* THE GRID IS COPIED. It points into a frame packet the game thread

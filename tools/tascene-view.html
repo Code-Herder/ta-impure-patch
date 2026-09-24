@@ -11,12 +11,15 @@
                        is Classic alone: `tascene shot pack` with no options
                        is the parity ritual's baseline, and a shot measures
        lane=classic    "Classic" — tagpu's OWN shaders, extracted
-                       from the C sources at export time into pack/shaders/*.
-                       Flat 32-px grid, R8 palette indices, the engine's
-                       PALETTE.SHD LUT. The only renderer that carries a
-                       pixel claim against the game. Was `parity`, which is
-                       still accepted — the code and the notes call it the
-                       parity lane, because that is its property.
+                       from the C sources at export time into pack/shaders/*,
+                       on their full-colour branch with assets=0 light=0 as
+                       the game draws Classic: flat 32-px grid, each texel its
+                       palette colour (the base atlases, baseAtlas below), the
+                       unit faces shaded by PALETTE.SHD's row as an RGB
+                       multiplier (shadeK below). The only renderer that
+                       carries a pixel claim against the game. Was `parity`,
+                       which is still accepted — the code and the notes call
+                       it the parity lane, because that is its property.
        lane=classicpp  "Classic++" — the LAB shaders below: restored colour,
                        a level-normalised per-pixel sun, trilinear textures,
                        cast shadows. Makes no parity claim at all. Was
@@ -949,8 +952,10 @@ void main(){
 // The unit lab shader ignores slot 3 (tagpu's PALETTE.SHD row / 31) and lights
 // from slot 6, the posed face normal, per PIXEL through LAB_LIGHT. Same buffer,
 // same stride, one attribute more — which is the whole difference between the
-// two shading philosophies: a 32-row LUT looked up per face, or a lambert
-// evaluated at every fragment, where a local light can vary across the face.
+// two shading philosophies: 32 shade rows chosen per face (the game turns the
+// row into an RGB multiplier in both of its presets, shadeK below), or a
+// lambert evaluated at every fragment, where a local light can vary across the
+// face.
 const LAB_UNIT_VS = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -1350,6 +1355,53 @@ async function main() {
   const rgbaTex = (unit, buf, w, h) =>
     tex2D(gl, unit, gl.RGBA8, buf ? w : 1, buf ? h : 1, gl.RGBA, gl.UNSIGNED_BYTE,
           buf || DUMMY);
+  // CLASSIC IS tagpu's FULL-COLOUR BRANCH with assets=0 light=0 (uLit 1,
+  // uRestored 0, uLambert 0), so it samples what the game's Classic samples:
+  // the BASE ATLAS -- every index expanded to its palette colour, alpha 0 at a
+  // sprite frame's own key, the game's tagpu_pal_expand over its key plane.
+  // `rects` are the frames with their keys, `pad` the replicated border each
+  // one carries; the terrain has no key and passes none. Texels outside every
+  // frame stay (0,0,0,0), as the game's zeroed mirror leaves them.
+  function baseAtlas(r8, w, h, rects, pad) {
+    const out = new Uint8Array(w * h * 4);
+    const put = (i) => {
+      const p = r8[i] * 4;
+      out[i * 4] = palBuf[p]; out[i * 4 + 1] = palBuf[p + 1];
+      out[i * 4 + 2] = palBuf[p + 2]; out[i * 4 + 3] = 255;
+    };
+    if (!rects) { for (let i = 0; i < w * h; i++) put(i); return out; }
+    for (const r of rects) {
+      const x0 = Math.max(0, r.x - pad), y0 = Math.max(0, r.y - pad);
+      const x1 = Math.min(w, r.x + r.w + pad), y1 = Math.min(h, r.y + r.h + pad);
+      for (let y = y0; y < y1; y++)
+        for (let x = x0; x < x1; x++)
+          if (r8[y * w + x] !== r.key) put(y * w + x);
+    }
+    return out;
+  }
+  // THE FACE-SHADE MULTIPLIER, tagpu_render3do.c's `s_shadeK` in the same
+  // order of operations: per SHD row, the least-squares slope through the
+  // origin of the shaded colour against the unshaded one over every channel
+  // the row does not clip (>= 250), normalised so the neutral row is 1.0
+  function shadeK(shd, rows, neutral) {
+    const raw = new Float64Array(32), k = new Float32Array(32);
+    for (let r = 0; r < 32; r++) {
+      let sxy = 0, sxx = 0;
+      if (r < rows)
+        for (let i = 0; i < 256; i++) {
+          const y = shd[r * 256 + i] * 4;
+          for (let c = 0; c < 3; c++) {
+            if (palBuf[y + c] >= 250) continue;
+            sxy += palBuf[i * 4 + c] * palBuf[y + c];
+            sxx += palBuf[i * 4 + c] * palBuf[i * 4 + c];
+          }
+        }
+      raw[r] = sxx > 0 ? sxy / sxx : 1;
+    }
+    const n = raw[neutral] > 0 ? raw[neutral] : 1;
+    for (let r = 0; r < 32; r++) k[r] = raw[r] / n;
+    return k;
+  }
   let restoreReport = null, restorer = null, palTexObj = null;
   // an RGBA8 destination for the restorer, bound on `unit`
   const restoreDest = (unit, w, h) => {
@@ -1446,8 +1498,13 @@ async function main() {
     gl.bindVertexArray(null);
     U = uniforms(gl, terrProg, ["uGame", "uZoom", "uZoomC", "uDepthScale", "uEnc",
                                 "uAtlas", "uPal", "uFogGrid", "uFogLUT", "uFogOrg",
-                                "uFogDim", "uFog", "uOrigin", "uTile0", "uTexel"]);
+                                "uFogDim", "uFog", "uOrigin", "uTile0", "uTexel",
+                                "uLit", "uLambert", "uRestored", "uBase", "uHDim",
+                                "uShadowOn"]);
     nameShadowUnits(gl, terrProg);
+    tex2D(gl, 16, gl.RGBA8, map.atlas.w, map.atlas.h, gl.RGBA, gl.UNSIGNED_BYTE,
+          baseAtlas(atlasBuf, map.atlas.w, map.atlas.h, null, 0));
+    gl.activeTexture(gl.TEXTURE0);        // tex2D leaves its own unit selected
   }
 
   // ---- terrain, exploration: the 16-px heightfield
@@ -1543,7 +1600,16 @@ async function main() {
       gl.bindVertexArray(null);
       SU = uniforms(gl, sprProg, ["uGame", "uZoom", "uZoomC", "uDepthScale",
                                   "uAtlas", "uPal", "uFogGrid", "uFogLUT",
-                                  "uFogOrg", "uFogDim", "uFog"]);
+                                  "uFogOrg", "uFogDim", "uFog",
+                                  "uLit", "uRestored", "uBase"]);
+      const rects = [];
+      for (const d of Object.values(scene.features.defs))
+        for (const r of [d.body, d.shadow]) if (r) rects.push({ ...r, key: r.ck });
+      tex2D(gl, 17, gl.RGBA8, scene.features.atlas.w, scene.features.atlas.h, gl.RGBA,
+            gl.UNSIGNED_BYTE, baseAtlas(featAtlas, scene.features.atlas.w,
+                                        scene.features.atlas.h, rects,
+                                        scene.features.atlas.pad || 0));
+      gl.activeTexture(gl.TEXTURE0);
     }
     if (wantLab) {
       lsProg = program(gl, LAB_SPR_VS, LAB_SPR_FS, "lab-sprite");
@@ -1634,8 +1700,17 @@ async function main() {
                                 "uWaterT", "uWaterMode", "uDigT",
                                 "uScaf", "uScafOn", "uScafP", "uSS", "uZoomF",
                                 "uZoomCF", "uFogGrid", "uFogLUT", "uFogOrg",
-                                "uFogDim", "uFog"]);
+                                "uFogDim", "uFog", "uLit", "uLambert", "uRestored",
+                                "uBase", "uShadeK", "uSun", "uAmb", "uNorm",
+                                "uShadowOn"]);
       nameShadowUnits(gl, uProg);
+      const rects = Object.values(scene.units.atlas.frames || {});
+      tex2D(gl, 18, gl.RGBA8, scene.units.atlas.w, scene.units.atlas.h, gl.RGBA,
+            gl.UNSIGNED_BYTE, baseAtlas(unitAtlas, scene.units.atlas.w,
+                                        scene.units.atlas.h, rects, unitPad));
+      tex2D(gl, 19, gl.R32F, 32, 1, gl.RED, gl.FLOAT,
+            shadeK(shdBuf, scene.palette.shdRows, SH_NEUTRAL));
+      gl.activeTexture(gl.TEXTURE0);
     }
     if (wantLab) {
       luProg = program(gl, LAB_UNIT_VS, LAB_UNIT_FS, "lab-unit");
@@ -2392,6 +2467,11 @@ async function main() {
       gl.uniform1i(SU.uFogGrid, 2); gl.uniform1i(SU.uFogLUT, 3);
       gl.uniform2f(SU.uFogOrg, 0, 0); gl.uniform2f(SU.uFogDim, 1, 1);
       gl.uniform1i(SU.uFog, 0);
+      gl.uniform1i(SU.uLit, 1); gl.uniform1i(SU.uRestored, 0);
+      gl.uniform1i(SU.uBase, 17);
+      // aLam, the anchor's ground lambert, is not in the parity vertex: the
+      // generic value stands in, and light=0 bakes exactly 1.0 there
+      gl.vertexAttrib1f(4, 1.0);
     }
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);   // the shader premultiplies
@@ -2404,13 +2484,12 @@ async function main() {
 
   // One unit instance: yaw the bind pose, project with the engine's rule, and
   // take the shade row from the POSED normal — rotating before shading is what
-  // makes the LUT row the same one the engine's own pass would pick.
+  // makes the row the same one the engine's own pass would pick.
   //
   // In the exploration lane slot 3 is left at 1.0 and slot 6 carries the same
   // POSED face normal, so LAB_UNIT_FS can light every pixel by (by default)
   // the same light with the 32-row quantisation taken out. That is the whole
-  // "free lighting" half of the undithered decision — there is no SHD LUT to
-  // look a restored colour up in.
+  // "free lighting" half of the undithered decision.
   function buildUnits(L) {
     const lab = L.lane === "explore";
     const U = scene.units, D = scene.depth;
@@ -2626,6 +2705,13 @@ async function main() {
     gl.uniform1i(UU.uFogGrid, 2); gl.uniform1i(UU.uFogLUT, 3);
     gl.uniform2f(UU.uFogOrg, 0, 0); gl.uniform2f(UU.uFogDim, 1, 1);
     gl.uniform1i(UU.uFog, 0);
+    // the full-colour branch with light=0: the base, the face-shade
+    // multiplier, and a lambert that is exactly 1.0 (ambient 1, no shadow)
+    gl.uniform1i(UU.uLit, 1); gl.uniform1i(UU.uLambert, 0);
+    gl.uniform1i(UU.uRestored, 0); gl.uniform1i(UU.uBase, 18);
+    gl.uniform1i(UU.uShadeK, 19);
+    gl.uniform3f(UU.uSun, 0, 1, 0); gl.uniform1f(UU.uAmb, 1); gl.uniform1f(UU.uNorm, 1);
+    gl.uniform1i(UU.uShadowOn, 0);
   }
 
   // THE CLASSIC SILHOUETTE DROP SHADOW, drawn before the bodies as the engine
@@ -2771,6 +2857,10 @@ async function main() {
         gl.uniform1i(U.uFogGrid, 2); gl.uniform1i(U.uFogLUT, 3);
         gl.uniform2f(U.uFogOrg, 0, 0); gl.uniform2f(U.uFogDim, 1, 1);
         gl.uniform1i(U.uFog, 0);
+        // the full-colour branch, unlit: no height grid, so no lambert term
+        gl.uniform1i(U.uLit, 1); gl.uniform1i(U.uLambert, 0);
+        gl.uniform1i(U.uRestored, 0); gl.uniform1i(U.uBase, 16);
+        gl.uniform2f(U.uHDim, 0, 0); gl.uniform1i(U.uShadowOn, 0);
         gl.bindVertexArray(terrVAO);
         gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, nterr);
         gl.bindVertexArray(null);

@@ -141,9 +141,10 @@ typedef struct TAGPU_TERRHAND {
     float tile0X, tile0Y;     /* the map cell grid cell (0,0) IS        */
     float texelW, texelH;     /* 1/atlas width, 1/atlas height          */
 
-    /* The fragment stage's. `restored` and `lit` are the two Classic++
-       branches, `shadowOn` the cast-shadow one, `fog` the engine's overlay
-       bit.
+    /* The fragment stage's. `restored` is the Classic++ restored-colour
+       branch, `lit` the full-colour path both presets take (0 only under
+       tagpu_classicpp_index), `shadowOn` the cast-shadow one, `fog` the
+       engine's overlay bit.
 
        `restored` SAYS A RESTORE REQUEST IS STANDING FOR THIS ATLAS -- it is
        the producer's `s_rFrames`, the published field itself.

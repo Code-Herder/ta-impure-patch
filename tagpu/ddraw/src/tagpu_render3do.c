@@ -84,6 +84,63 @@ static int s_shDir     = 1;            /* +1 = higher row is brighter           
 static unsigned char s_lutMirror[SH_ROWS * 256];
 static unsigned      s_lutSerial;
 
+/* THE FACE-SHADE MULTIPLIER (bar-camera-port.md 2.2): a shade row in full
+   colour. The row a face takes is chosen exactly as for the LUT; the fragment
+   then multiplies its RGB by k[row] and clamps, in both presets, instead of
+   remapping an index. For each row, k is the least-squares slope through the
+   origin of the shaded colour against the unshaded one, over every palette
+   entry and channel the row does not clip, normalised so the neutral row is
+   exactly 1.0.
+
+   "CLIPS" IS THE SHADED CHANNEL AT THE PALETTE'S TOP, >= SH_CLIP. The table
+   saturates on the palette's 251 and 252 entries as well as on 255 (the stock
+   PALETTE.SHD's rows 16..31 land 263 channels there against 2 509 on 255), and
+   a test for 255 alone lets those saturated brights drag the bright rows'
+   slope down: MEASURED on the stock table, k[22] and k[27] are 1.391 and 1.603
+   with >= 250 and 1.365 and 1.543 with == 255.
+
+   Built from the ENGINE's table, not the presented one: Gamma scales the
+   presented palette and clips it again at 255, and the multiplier is a fact
+   about the shade table. Without the engine's SHD it is the computed ramp's
+   own factor, 0.60 + 0.025 * row (row 16 exactly 1.0). */
+#define SH_CLIP 250
+static float s_shadeK[SH_ROWS];
+static int   s_kBuilt;
+static int   s_kFromEngine;          /* built from the engine's SHD AND table */
+
+static void shade_k_build(const unsigned char* shd, const unsigned char* pal)
+{
+    char b[400];
+    double k[SH_ROWS], n;
+    int r, i, c, o;
+    if (shd && pal) {
+        for (r = 0; r < SH_ROWS; r++) {
+            double sxy = 0.0, sxx = 0.0;
+            for (i = 0; i < 256; i++) {
+                const unsigned char* x = pal + (size_t)i * 4;
+                const unsigned char* y = pal + (size_t)shd[r * 256 + i] * 4;
+                for (c = 0; c < 3; c++) {
+                    if (y[c] >= SH_CLIP) continue;
+                    sxy += (double)x[c] * y[c];
+                    sxx += (double)x[c] * x[c];
+                }
+            }
+            k[r] = sxx > 0.0 ? sxy / sxx : 1.0;
+        }
+        n = k[s_shNeutral] > 0.0 ? k[s_shNeutral] : 1.0;
+        for (r = 0; r < SH_ROWS; r++) s_shadeK[r] = (float)(k[r] / n);
+    } else {
+        for (r = 0; r < SH_ROWS; r++) s_shadeK[r] = 0.60f + 0.025f * (float)r;
+    }
+    s_kBuilt = 1;
+    o = _snprintf(b, sizeof b, "r3d shade: face-shade k[] from the %s:",
+                  shd ? "engine SHD" : "computed ramp");
+    for (r = 0; r < SH_ROWS && o > 0 && o < (int)sizeof b - 8; r++)
+        o += _snprintf(b + o, sizeof b - o, " %.3f", (double)s_shadeK[r]);
+    b[sizeof b - 1] = 0;
+    rlog(b);
+}
+
 static void shade_upload(const unsigned char* lut)
 {
     /* `s_lutMirror` is what the Vulkan unit pass samples. */
@@ -126,6 +183,11 @@ static void shade_build_lut(const unsigned char* shd)
             s_shDir     = (lum31 >= lum0) ? 1 : -1;
             shade_upload(shd);
             s_lutFromShd = 1;
+            {
+                const unsigned char* eng = tagpu_pal_engine();
+                shade_k_build(shd, eng ? eng : pal);
+                s_kFromEngine = eng != NULL;
+            }
             { char b[96]; _snprintf(b, sizeof b,
                 "r3d shade: engine SHD table (neutral=%d id=%d/256 dir=%d)",
                 s_shNeutral, bestn, s_shDir); rlog(b); }
@@ -154,6 +216,8 @@ static void shade_build_lut(const unsigned char* shd)
     s_shNeutral = SH_NEUTRAL; s_shDir = 1;
     s_lutFromShd = 0;
     shade_upload(lut);
+    shade_k_build(NULL, NULL);
+    s_kFromEngine = 0;
     /* only reachable with shd == NULL: the SHD branch above returns */
     rlog("r3d shade: computed palette LUT (32 rows, row 16 identity) — no shade table in "
          "the packet yet; it is rebuilt from the engine's own the first frame one arrives");
@@ -404,6 +468,12 @@ void tagpu_r3d_lut_want(const unsigned char* shd)
     /* build once — and REBUILD the first time the engine's own table arrives
        after a frame that had none */
     if (s_state == 1 && (!s_lutBuilt || (shd && !s_lutFromShd))) shade_build_lut(shd);
+    /* the multiplier once more when the engine's table arrives after its SHD:
+       until then it was fitted against the presented palette */
+    else if (s_state == 1 && shd && s_lutFromShd && !s_kFromEngine && tagpu_pal_engine()) {
+        shade_k_build(shd, tagpu_pal_engine());
+        s_kFromEngine = 1;
+    }
 }
 
 /* ---- the Vulkan lane's texels; tagpu_render3do.h has the contract ------- */
@@ -509,6 +579,11 @@ const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial)
     if (h) *h = SH_ROWS;
     if (serial) *serial = s_lutSerial;
     return s_lutBuilt ? s_lutMirror : NULL;
+}
+
+const float* tagpu_r3d_shade_k(void)
+{
+    return s_kBuilt ? s_shadeK : NULL;
 }
 
 int tagpu_r3d_shade_neutral(void) { return s_shNeutral; }

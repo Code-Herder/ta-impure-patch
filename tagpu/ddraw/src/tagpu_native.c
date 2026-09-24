@@ -398,6 +398,9 @@ static const char* FS =
        the key (tagpu_vk_unit.c). Last, so the samplers above keep their
        bindings. */
     "uniform sampler2D uBase;\n"
+    /* the face-shade multiplier by SHD row, 32 x 1 floats
+       (tagpu_render3do.c `s_shadeK`) */
+    "uniform sampler2D uShadeK;\n"
     TAGPU_GLSL_LIGHT_FN
     "void main(){\n"
     "  float idx;\n"
@@ -429,10 +432,9 @@ static const char* FS =
     "  if (vVY <= uDigT) discard;\n"
     "  if (uShadow == 1) { if (vVY <= uWaterT) discard;\n"
     "                      frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
-    /* Classic: the per-face shade row through the 32-row PALETTE.SHD LUT.
-       Classic++ (uLit) skips it and lights the resolved colour per fragment
-       below, from the face normal -- the same light with the 32-row
-       quantisation taken out (renderers.md 1, Units row) */
+    /* the index branch (tagpu_classicpp_index): the per-face shade row
+       through the 32-row PALETTE.SHD LUT. The full-colour path takes the
+       same row as a multiplier on the resolved colour below. */
     "  if (uLit == 0)\n"
     "    idx = texelFetch(uLUT, ivec2(int(idx*255.0+0.5), int(vShade*31.0+0.5)), 0).r;\n"
     /* build-state (nanoframe) recolour, engine 0x458D30 semantics
@@ -464,21 +466,27 @@ static const char* FS =
     "  }\n"
     "  int pi = int(idx*255.0+0.5);\n"
     "  vec3 rgb;\n"
-    /* Classic++: the restored texel where the lazy restore has painted it
-       (alpha 1 -- tagpu_gaf.h; the twin sampled trilinear with its mips, the
-       lab's LAB_UNIT_FS uUndither branch), the base atlas's for a texel not
-       yet restored, the palette's for a flat face or a nanoframe band -- whose
-       colour is an index and not a texel -- then the lab's
-       lambert on either (renderers.md 2.11) and the grey band as the RGB rule
-       (2.6). The hole stays the index test above: the twin's alpha is 0 at a
-       keyed texel too, but the index compare is what keeps it out of the
-       depth buffer. Divided by its alpha: a keyed texel is (0, 0, 0, 0), so a
-       bilinear sample beside one is premultiplied by its coverage and would
-       draw a dark ring where the lab's shader (which takes t.rgb as is) does.
-       Classic: the index remap, as the engine does it. */
+    /* THE FULL-COLOUR PATH, both presets: the restored texel where the lazy
+       restore has painted it (alpha 1 -- tagpu_gaf.h; the twin sampled
+       trilinear with its mips, the lab's LAB_UNIT_FS uUndither branch), the
+       base atlas's for a texel not yet restored (and for every texel under
+       Classic, whose `uRestored` is 0), the palette's for a flat face or a
+       nanoframe band -- whose colour is an index and not a texel. Then the
+       face shade: the SHD row the vertex stage chose, as a multiplier
+       (uShadeK), clamped to 1 -- and not on a nanoframe band, which the engine
+       paints over the shaded index. Then the lab's lambert (renderers.md 2.11)
+       and the grey band as the RGB rule (2.6). The hole stays the index test
+       above: the twin's alpha is 0 at a keyed texel too, but the index compare
+       is what keeps it out of the depth buffer. Divided by its alpha: a keyed
+       texel is (0, 0, 0, 0), so a bilinear sample beside one is premultiplied
+       by its coverage and would draw a dark ring where the lab's shader (which
+       takes t.rgb as is) does.
+       The index branch: the index remap, as the engine does it. */
     "  if (uLit == 1) {\n"
     "    rgb = (t.a > 0.5 && !band) ? t.rgb / t.a\n"
     "        : (band || vUV.x < 0.0) ? texelFetch(uPal, ivec2(pi, 0), 0).rgb : base;\n"
+    "    if (!band)\n"
+    "      rgb = min(rgb * texelFetch(uShadeK, ivec2(int(vShade * 31.0 + 0.5), 0), 0).r, vec3(1.0));\n"
     "    rgb *= taLambert(uLambert == 1 ? vNrm : vec3(0.0, 1.0, 0.0), vShW, taSx, taSy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
     "  } else {\n"
@@ -2805,7 +2813,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         pv.scafP[2] = (float)vw;  pv.scafP[3] = (float)vh;
         pv.fogOrg[0] = (float)s_fogOrgX; pv.fogOrg[1] = (float)s_fogOrgY;
         pv.fogDim[0] = (float)s_fogCols; pv.fogDim[1] = (float)s_fogRows;
-        pv.lit = tagpu_classicpp_on() ? 1 : 0;
+        pv.lit = tagpu_classicpp_index() ? 0 : 1;
         pv.sun[0] = L->unitSun[0]; pv.sun[1] = L->unitSun[1]; pv.sun[2] = L->unitSun[2];
         pv.amb = L->amb;
         pv.norm = 1.0f / L->unitLevel;

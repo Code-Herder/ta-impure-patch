@@ -503,7 +503,7 @@ typedef struct {
 } FEATC;
 static FEATC s_c;
 static int s_logged;
-static int s_cpp;                       /* Classic++ this frame: the colour branch (uLit)        */
+static int s_cpp;                       /* the full-colour branch this frame (uLit), both presets */
 static int s_lit;                       /* light= this frame: anchors take the ground's light    */
 
 /* Classic++: the ground's lambert at an anchor -- the lab's lambertAt(col,
@@ -697,7 +697,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
        arm set, not a gate the defaults depend on. */
     s_ownable = tagpu_native_wrecks_armed();
     s_mute = s_passive || !s_ownable;
-    s_cpp = tagpu_classicpp_on();
+    s_cpp = !tagpu_classicpp_index();
     s_lit = tagpu_classicpp_lit();
 
     {   /* LIVE, once per frame: see the header */

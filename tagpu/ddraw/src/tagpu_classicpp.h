@@ -93,12 +93,20 @@ unsigned tagpu_classicpp_held(void);
 int tagpu_classicpp_assets(void);   /* the restored atlases: uRestored, and the restore jobs */
 int tagpu_classicpp_lit(void);      /* the lambert: uLambert, and the baked one in tagpu_feat.c */
 
-/* NOT the branch. `uLit` -- the Classic++ colour path in the terrain, unit and
+/* NOT the branch. `uLit` -- the full-colour path in the terrain, unit and
    feature shaders, which also carries the RGB fog rule (renderers.md 2.6) --
-   follows tagpu_classicpp_on(), because turning one half off must not drop the
-   frame back to Classic. `light=0` is the level normal handed to taLambert
-   (tagpu_glsl.h) and 1.0 baked into a feature's anchor; `assets=0` is
-   `uRestored` 0, which the branch reads. */
+   is taken by BOTH presets: Classic is that path with `assets=0 light=0`.
+   `light=0` is the level normal handed to taLambert (tagpu_glsl.h) and 1.0
+   baked into a feature's anchor; `assets=0` is `uRestored` 0, which the
+   branch reads. */
+
+/* THE INDEX BRANCH, while Classic's full-colour picture is measured against
+   it: `tagpu_classic8.on` present with Classic selected draws the world passes
+   through the 8bpp index arithmetic instead -- the SHD row, the fog LUT --
+   which is Classic as it was drawn before the full-colour path took it
+   (bar-camera-port.md 2.4, 2b). 1 when the passes are to draw that way. It
+   goes with the 8bpp path itself (2d). */
+int tagpu_classicpp_index(void);
 
 /* The lighting the knobs describe, in the lab's terms (tascene-view.html
    readLook / LAB_LIGHT): a sun as the unit vector TOWARD the light in map

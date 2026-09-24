@@ -1159,7 +1159,7 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.tile0X = (float)s_rectTx0; s_pub.tile0Y = (float)s_rectTy0;
     s_pub.texelW = s_iw; s_pub.texelH = s_ih;
     s_pub.restored = restored;
-    s_pub.lit = tagpu_classicpp_on() ? 1 : 0;
+    s_pub.lit = tagpu_classicpp_index() ? 0 : 1;
     s_pub.lambert = tagpu_classicpp_lit() ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
     /* THE CAST-SHADOW BLOCK: 0. The map is drawn by tagpu_vk_shadow.c into an

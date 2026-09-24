@@ -147,6 +147,9 @@ typedef struct TAGPU_MKHAND {
     int                   fogGridCols, fogGridRows;
     const unsigned char*  fogLut;     /* 256 x R8 */
     int   key;                  /* uKey: the index an untouched layer texel holds */
+    /* 1 = the grey band remaps the index through `fogLut` (uFog bit 4),
+       tagpu_classicpp_index; 0 = the RGB rule every world pass takes */
+    int   index;
     float gw, gh, zoom, zoomCx, zoomCy;
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float ss;                   /* the line width a one-screen-pixel line takes */

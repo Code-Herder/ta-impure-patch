@@ -80,4 +80,8 @@ const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned
    moves when the table is rebuilt -- which happens once, and again the first
    time the engine's own PALETTE.SHD arrives after a frame with none. */
 const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial);
+/* The face-shade multiplier, 32 floats indexed by the SHD row a face takes,
+   or NULL until the LUT beside it is built -- tagpu_render3do.c's
+   `s_shadeK` says how it is fitted. */
+const float* tagpu_r3d_shade_k(void);
 #endif

@@ -19,6 +19,7 @@
 #include "tagpu_settings.h"
 
 #define ON_FILE   "tagpu_classicpp.on"
+#define INDEX_FILE "tagpu_classic8.on"
 #define CFG_FILE  "tagpu_classicpp.cfg"
 #define POLL_MS   500
 #define DEF_SUN_AZ    324.5f
@@ -33,6 +34,7 @@ static void cplog(const char* s)
 }
 
 static int          s_on = 0;
+static int          s_index = 0;          /* tagpu_classic8.on: the index branch */
 static int          s_assets = 1;         /* assets=: the restored atlases  */
 static int          s_lit = 1;            /* light=:  the lambert           */
 static DWORD        s_last = 0;
@@ -335,6 +337,7 @@ static void poll_owned(void)
     if (s_last != 0 && t - s_last <= POLL_MS) return;
     s_last = t;
     s_on = tagpu_opt_on(ON_FILE);
+    s_index = tagpu_opt_on(INDEX_FILE);
     present = GetFileAttributesExA(CFG_FILE, GetFileExInfoStandard, &fad) ? 1 : 0;
     changed = present != s_cfgPresent;
     if (present && !changed)
@@ -361,6 +364,12 @@ int tagpu_classicpp_on(void)
 {
     poll();
     return s_on;
+}
+
+int tagpu_classicpp_index(void)
+{
+    poll();
+    return !s_on && s_index;
 }
 
 int tagpu_classicpp_assets(void)

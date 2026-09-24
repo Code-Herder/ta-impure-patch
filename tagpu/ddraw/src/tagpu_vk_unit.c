@@ -375,9 +375,9 @@ typedef struct {
     unsigned char*  bsmap;
     VkDeviceSize    bscap;
 
-    VkImage         pal, lut, fogGrid, fogLut;
-    VkDeviceMemory  palMem, lutMem, fogGridMem, fogLutMem;
-    VkImageView     palView, lutView, fogGridView, fogLutView;
+    VkImage         pal, lut, fogGrid, fogLut, shk;
+    VkDeviceMemory  palMem, lutMem, fogGridMem, fogLutMem, shkMem;
+    VkImageView     palView, lutView, fogGridView, fogLutView, shkView;
     VkBuffer        smallStage;
     VkDeviceMemory  smallMem;
     unsigned char*  smallMap;
@@ -388,18 +388,19 @@ typedef struct {
 } SLOT;
 static SLOT s_slot[TAGPU_VK_SLOTS];
 
-/* ONE STAGING BUFFER CARRIES THE FOUR SMALL UPLOADS: the palette (256 x 1
-   RGBA8), the shade LUT (256 x 32 R8), the fog shade LUT (256 x 1 R8), then the
-   fog grid (cols x rows RG8, a different size whenever the view walks far
-   enough for the grid to be re-laid). One allocation, four copy regions at four
-   offsets -- and the buffer is rebuilt with the fog image, by the same call, so
+/* ONE STAGING BUFFER CARRIES THE FIVE SMALL UPLOADS: the palette (256 x 1
+   RGBA8), the shade LUT (256 x 32 R8), the fog shade LUT (256 x 1 R8), the
+   face-shade multiplier (32 x 1 R32F), then the fog grid (cols x rows RG8, a
+   different size whenever the view walks far enough for the grid to be
+   re-laid). One allocation, five copy regions at five offsets -- and the buffer is rebuilt with the fog image, by the same call, so
    the two can never disagree about the size. Every offset is a multiple of 4
    and of its image's texel block size, which is what vkCmdCopyBufferToImage
    requires of a bufferOffset. */
 #define SMALL_PALOFF 0                           /* 256 x 1  RGBA8            */
 #define SMALL_SHDOFF (256 * 4)                   /* 256 x 32 R8               */
 #define SMALL_FLTOFF (256 * 4 + 256 * 32)        /* 256 x 1  R8               */
-#define SMALL_FIXED  (256 * 4 + 256 * 32 + 256)
+#define SMALL_SHKOFF (256 * 4 + 256 * 32 + 256)  /* 32 x 1   R32F             */
+#define SMALL_FIXED  (256 * 4 + 256 * 32 + 256 + 32 * 4)
 #define SMALL_FOGOFF SMALL_FIXED                 /* cols x rows RG8           */
 
 /* this frame's draw list, filled by `upload` and read by `cast` and `record` */
@@ -733,12 +734,14 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     kill_image(d, &s->lut, &s->lutMem, &s->lutView);
     kill_image(d, &s->fogGrid, &s->fogGridMem, &s->fogGridView);
     kill_image(d, &s->fogLut, &s->fogLutMem, &s->fogLutView);
+    kill_image(d, &s->shk, &s->shkMem, &s->shkView);
     kill_buffer(d, &s->smallStage, &s->smallMem, &s->smallMap);
     s->fogW = s->fogH = 0;
     s->built = 0;
 }
 
-/* the three fixed-size images and the staging buffer that feeds all four */
+/* the four fixed-size images; slot_fog makes the fifth and the staging
+   buffer that feeds all five */
 static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
 {
     if (s->built) return 1;
@@ -753,6 +756,12 @@ static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
     if (!mk_image(d, 256, 1, 1, VK_FORMAT_R8_UNORM,
                   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                   VK_IMAGE_ASPECT_COLOR_BIT, &s->fogLut, &s->fogLutMem, &s->fogLutView))
+        return 0;
+    /* R32_SFLOAT: a multiplier above 1 with no quantisation, and a sampled
+       format every Vulkan device must support */
+    if (!mk_image(d, 32, 1, 1, VK_FORMAT_R32_SFLOAT,
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                  VK_IMAGE_ASPECT_COLOR_BIT, &s->shk, &s->shkMem, &s->shkView))
         return 0;
     s->built = 1;
     return 1;
@@ -929,14 +938,14 @@ static int build_samplers(const TAGPU_VKPASS* d)
 
 static int build_layouts(const TAGPU_VKPASS* d)
 {
-    VkDescriptorSetLayoutBinding b[13];
+    VkDescriptorSetLayoutBinding b[14];
     VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     int n = 0, i;
 
     memset(b, 0, sizeof b);
     /* the body's: the vertex-stage block, the pose, the fragment-stage block,
-       and the ten samplers inc/spirv/tagpu_native.spv.h names for
+       and the eleven samplers inc/spirv/tagpu_native.spv.h names for
        tagpu_native::FS. The pose is NOT dynamic: every unit binds the whole
        buffer and reaches its own slice through the base indices in its block. */
     b[n].binding = 0;  b[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
@@ -945,7 +954,7 @@ static int build_layouts(const TAGPU_VKPASS* d)
     b[n].descriptorCount = 1; b[n].stageFlags = VK_SHADER_STAGE_VERTEX_BIT; n++;
     b[n].binding = 32; b[n].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     b[n].descriptorCount = 1; b[n].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; n++;
-    for (i = 40; i <= 49; i++) {
+    for (i = 40; i <= 50; i++) {
         b[n].binding = (uint32_t)i;
         b[n].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[n].descriptorCount = 1;
@@ -1344,7 +1353,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     ps[1].descriptorCount = d->slots * 2;          /* the pose, in each set    */
     ps[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[2].descriptorCount = d->slots * 10;
+    ps[2].descriptorCount = d->slots * 11;
     pi.maxSets = d->slots * 2;
     pi.poolSizeCount = 3; pi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &pi, NULL, &s_dpool) != VK_SUCCESS) return 0;
@@ -2261,14 +2270,14 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        be there before the atlas has its dimensions, so the first frames of a
        session legitimately arrive without one. Said once. */
     if (!h.atlas || h.atlasDim < 1 || h.atlasDim > 8192 || !h.lut || !h.pal ||
-        !h.fogLut) {
+        !h.fogLut || !h.shadeK) {
         /* WHICH mirror, periodically: six terms behind one latched message
            would say only that one of them was missing, and only once. */
         if ((d->frame % 300u) == 0u)
             plog(d, "unit: frame %u: mirrors atlas=%d dim=%d lut=%d pal=%d "
-                    "fogLut=%d - nothing drawn until all are there",
+                    "fogLut=%d shadeK=%d - nothing drawn until all are there",
                  (unsigned)d->frame, h.atlas ? 1 : 0, h.atlasDim,
-                 h.lut ? 1 : 0, h.pal ? 1 : 0, h.fogLut ? 1 : 0);
+                 h.lut ? 1 : 0, h.pal ? 1 : 0, h.fogLut ? 1 : 0, h.shadeK ? 1 : 0);
         if (!s_saidNoMirror) {
             s_saidNoMirror = 1;
             plog(d, "unit: a texel mirror this pass needs is not there yet - "
@@ -2748,12 +2757,13 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        point would risk is recorded at `standdown`, because that is where the
        hazard is. */
 
-    /* THE FOUR SMALL IMAGES, per slot, so the one-line invariant covers them:
+    /* THE FIVE SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
        are therefore no contents to preserve and no layout to carry. */
     memcpy(s->smallMap + SMALL_PALOFF, h.pal, 256 * 4);
     memcpy(s->smallMap + SMALL_SHDOFF, h.lut, 256 * 32);
     memcpy(s->smallMap + SMALL_FLTOFF, h.fogLut, 256);
+    memcpy(s->smallMap + SMALL_SHKOFF, h.shadeK, 32 * sizeof(float));
     /* The grid is one `unsigned short` a cell and the image is RG8: the same
        two bytes in the same order. With no grid this frame
        the image is one zero cell, which the shader never reads -- taFog is
@@ -2779,10 +2789,20 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    img_barrier(cb, s->shk, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     copy_rect(cb, s->smallStage, SMALL_PALOFF, s->pal, 0, 256, 1);
     copy_rect(cb, s->smallStage, SMALL_SHDOFF, s->lut, 0, 256, 32);
     copy_rect(cb, s->smallStage, SMALL_FLTOFF, s->fogLut, 0, 256, 1);
     copy_rect(cb, s->smallStage, SMALL_FOGOFF, s->fogGrid, 0, fogW, fogH);
+    copy_rect(cb, s->smallStage, SMALL_SHKOFF, s->shk, 0, 32, 1);
+    img_barrier(cb, s->shk, VK_IMAGE_ASPECT_COLOR_BIT, 1,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT, 1,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2956,8 +2976,8 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
 {
     SLOT* s = &s_slot[slot];
     VkDescriptorBufferInfo bi[3];
-    VkDescriptorImageInfo ii[10];
-    VkWriteDescriptorSet wr[13];
+    VkDescriptorImageInfo ii[11];
+    VkWriteDescriptorSet wr[14];
     VkImageView shadow = tagpu_vk_shadow_view(d->frame, slot);
     VkImageView scaf = tagpu_vk_scaffold_view(d->frame, slot);
     int i, n = 0;
@@ -2981,7 +3001,7 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
     }
 
     /* 40 uAtlas, 41 uLUT, 42 uPal, 43 uAtlasRGB, 44 uScaf, 45 uFogGrid,
-       46 uFogLUT, 47 uShadowCmp, 48 uShadowRaw, 49 uBase -- the order
+       46 uFogLUT, 47 uShadowCmp, 48 uShadowRaw, 49 uBase, 50 uShadeK -- the order
        inc/spirv/tagpu_native.spv.h prints for tagpu_native::FS.
        BINDING 43 IS uAtlasRGB AND IT NAMES THE RESTORED TWIN'S OWN IMAGE.
        The fragment stage reads it on the `uRestored == 1` branch, which this
@@ -3024,7 +3044,8 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
     /* the base with the INDEXED sampler, NEAREST: it is the same texel the
        index names, so the two agree at every fragment */
     ii[9].sampler = s_samp;    ii[9].imageView = s_bView;
-    for (i = 0; i < 10; i++) {
+    ii[10].sampler = s_samp;   ii[10].imageView = s->shkView;
+    for (i = 0; i < 11; i++) {
         ii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         wr[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         wr[n].dstSet = s->dsMain;
