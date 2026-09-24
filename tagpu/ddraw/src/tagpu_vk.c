@@ -148,6 +148,7 @@
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_mark.h"
 #include "tagpu_vk_shot.h"
+#include "tagpu_vk_stage.h"
 
 #define ON_FILE    "tagpu_vk.on"
 /* THE CONTROL, and the module needs one because half of it runs with the lever
@@ -1806,6 +1807,9 @@ static void vk_down(void)
            passes those jobs were using. The other way round would destroy a
            framebuffer a live job still names. */
         tagpu_vk_restore_down(&s_pass);
+        /* AND THE BANDED UPLOAD'S COMMAND POOL AND FENCE, after every pass has
+           given its staging back: they belong to this device. */
+        tagpu_vk_stage_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -2329,6 +2333,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.inst = s_vk.inst;
     s_pass.pd = s_vk.pd;
     s_pass.dev = s_vk.dev;
+    s_pass.queue = s_vk.queue;
+    s_pass.qfam = s_vk.qfam;
     s_pass.rp = s_vk.rp;
     s_pass.fmt = s_vk.fmt;
     s_pass.dfmt = s_vk.dfmt;
@@ -2833,9 +2839,16 @@ static int vk_present(void)
                ORDER is written down once and cannot drift between them. */
             if (draw_world)
                 tagpu_vk_world_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-            else
+            else {
                 world_records(cb, fi, s_vk.ext.width, s_vk.ext.height,
                               draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
+                /* AND THE GAMMA ON IT, which a target would have applied in
+                   its composite: here, after the last world pass and before
+                   the UI, so it reaches the finished world and nothing else. */
+                if (draw_terr || draw_feat || draw_unit || draw_fx || draw_mark)
+                    tagpu_vk_world_record_direct(&s_pass, cb, s_vk.ext.width,
+                                                 s_vk.ext.height);
+            }
             /* THE UI GOES OVER THE WORLD AND UNDER THE READOUT: the readout
                has to sit above the side panel
                and the dialogs or they hide it. The return is not kept: the

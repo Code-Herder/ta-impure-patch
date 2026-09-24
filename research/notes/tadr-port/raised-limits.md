@@ -9,6 +9,8 @@ build; the unit limit, both `maxunits` keys, the restriction menu's sentinel, th
 budget and the render design point; the particles; sounds and the composite scratch frame; and ten
 players in one network game. **A sixth landing goes beyond TADR**: the wreck pool, raised and made
 safe when full, because the raised unit limit fills it — [Fixed beyond TADR](#fixed-beyond-tadr).
+**A seventh is planned** (2026-09-24): the composite scratch frame's writers get a bound, since
+landing 4's raise only moved stock's overrun threshold ([landing 7](#the-landings)).
 The module is
 `tagpu_limits.h` and the limits block of `tagpu_patches.c`, which keeps it out of the thread-split
 allow-list; how it works is [gpu-status §2.6b](../gpu-status.md). The disassembly behind each fact is in [the evidence pass](limits-evidence.md),
@@ -38,8 +40,8 @@ Three findings shaped the plan:
 | composite scratch frame | 600² | 1280² | the unit bake's shared scratch, written on every lane and presented only by GDI's | L4 |
 | wreck records | 2048 | **8192** — not a TADR value | every 3DO wreck, and every GAF feature playing its death or reclaim sequence; **simulation**: a full pool refuses corpses | L6 |
 
-**Deferred to their own plan:** unit-type IDs (512 → 16 000) and weapon IDs (256 → 4096). See
-[the overview](overview.md#the-groups).
+**Deferred to their own plan:** unit-type IDs (512 → 16 384) and weapon IDs (256 → 4096), in
+[A′. Content IDs](content-ids.md).
 
 **The values** are TADR's, with two exceptions, and one limit TADR does not raise at all (the wreck
 pool, below). Units are set to 1500 as both default and ceiling:
@@ -153,6 +155,14 @@ checked both callers and took the probe, which needs neither fact.
 **No runtime opt-out.** `make LIMITS=stock` builds `ddraw-stocklimits.dll` for the comparisons,
 copied over an instance's `ddraw.dll` and launched with `tacli --keep-dll`. No lever file and no
 store key exist for it.
+
+**The composite scratch: grow, then fall back [DECIDED 2026-09-24].** The scratch frame is the
+engine's one work image for drawing a unit. When a unit's box does not fit it, the game thread
+grows it, up to 2048² of area (8 MB), which is 29× the largest stock need. Past that, each writer
+takes a fallback that draws less, never one that writes past the allocation. Landing 4's 1280²
+stays the starting size, so no stock unit ever grows it. Clipping the box was rejected: the cargo
+merge downstream clips neither right nor bottom, so a clipped box would move the overrun one call
+further on. The design is [landing 7](#the-landings).
 
 ## The failure report
 
@@ -347,6 +357,50 @@ proved, by running it:
   and +3143 over 80 s against the anchor's +3140 — paid once, the building playing its sequence and
   ending as the scar. With the pool full as well, through the centre: +3146 over 82 s, the scar at
   once, the pool still 8192 of 8192 — the two fixes together.
+
+**Landing 7 — the composite scratch bound. Planned 2026-09-24.** Landing 4 raised the scratch to
+1280², which moves stock's overrun threshold without bounding it
+([evidence §10](limits-evidence.md#10-composite-buffer-6002-12802-0x458195)). A stock unit uses at
+most 9 % of it. A modded giant can still overrun it.
+
+- **The invariant.** Every header a writer sets has `w·h ≤ A`, where `A = [scr+0x14] − [scr+0x10]`,
+  the distance between the two planes. It is the one record of the allocation that nothing
+  rewrites. The shadow build's compression, which encodes into the depth plane, also needs
+  `2h(w+1) ≤ A`.
+- **Grow.** When a box does not fit, the game thread allocates a larger frame and frees the old
+  one.
+  - The allocation must return NULL on failure. `0x4D83B0` cannot: it calls the game's
+    out-of-memory handler, which ends the game. The CRT's own `_nh_malloc` (`0x4E8890`) returns
+    NULL, because nothing sets its new-mode flag. It is called inside the allocator's critical
+    section (`0x4DA780`), with the allocator's bookkeeping (`0x4DA7D0`), so the level's teardown
+    (`0x4581C0`, through `0x4D85A0`) frees it like any engine block. The grown frame is kept until
+    the level ends.
+  - The engine's own save writer gets a NULL-returning allocation differently: it sets the handler
+    to 0 around the call. That is not used, because the handler is a plain global that other
+    threads' allocations read ([evidence §8](limits-evidence.md#8-unit-type-ids-512-16000-increaseunittypelimit-17-writes)).
+  - Under `-memfussy` the grow is refused and the fallback taken: that debug heap loops on the
+    handler too.
+  - It is safe because every writer, and the blit after each call, reloads `[ctx+0x10]` after the
+    size decision (`0x458B87`, `0x45A47C`, `0x45A7B9`, `0x459884`, `0x459CC4`). All of them run on
+    the game thread, and nothing of ours reads the scratch on the render thread.
+- **Fall back** past the cap, or when the allocation fails:
+  - **The 2× bake** takes the engine's own 1× path (the `je` at `0x459875` and at `0x459CB5`). That
+    structure loses anti-aliasing on GDI.
+  - **The frame copy** (`0x45A470`) writes an empty 1×1 transparent frame. No silhouette shadow is
+    drawn that frame on GDI.
+  - **The shadow build** (`0x45A7B9`) builds a 1×1 frame with its hotspot far off, so no slant
+    shadow is drawn on GDI. **[INFERRED]** This assumes the screen blit `0x4B8500` clips a far
+    hotspot; the landing reads it first.
+  - **The build-state copy** (`0x458B87`) skips the unit's blit for that frame. The writer sets a
+    game-thread flag, and a wrapper on the call at `0x459608` returns to the blit's epilogue
+    `0x4597D8`, which has the same stack. It is never clipped: the cargo merge `0x4B90A0` is safe
+    only because the unit's box contains every cargo box.
+- **Gates.**
+  - A test lever lowers the cap, so ordinary units take every fallback in all four writers on GDI.
+  - An oversized test unit, generated locally and never committed, crosses 1280² for the grow.
+  - The same unit reproduces the overrun on the previous build.
+  - Below the cap the GDI picture is unchanged against landing 4's build.
+  - Review at `high`: byte patches that change what the engine writes.
 
 L1 came first because it forced the module, the report and the packet changes into existence.
 L2 comes before L3 because the particle measurement needs the raised unit limit.

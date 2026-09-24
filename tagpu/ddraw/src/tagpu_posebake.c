@@ -396,7 +396,7 @@ static TAGPU_PBGEOM* geom_bake(const char* const* nd, int nparts, unsigned lvl,
 }
 
 /* ---- the material stream ------------------------------------------------ */
-typedef struct { int nv; int owner; int nskip; int anom; int over; } PBMATCTX;
+typedef struct { int nv; int owner; int nskip; int anom; int over; int defer; } PBMATCTX;
 
 static void mat_emit(void* vctx, int range, int p, const char* nd,
                      const int* rv, int nvert, const char* fa, int fvc,
@@ -418,7 +418,11 @@ static void mat_emit(void* vctx, int range, int p, const char* nd,
        only its skip flag is kept. */
     if (range != TAGPU_PB_SLANT) {
         const char* tg = tagpu_r3d_face_texframe(fa, c->owner);
-        if (tg && tagpu_r3d_atlas_uv(tg, uv, &ckf)) hasTex = 1;
+        const int got = tg ? tagpu_r3d_atlas_uv(tg, uv, &ckf) : 0;
+        if (got > 0) hasTex = 1;
+        /* DEFERRED past the allowance: the bake is refused below, so this face
+           is never baked flat for want of a texel that arrives next frame */
+        if (got < 0) c->defer = 1;
         if (!hasTex) {
             int fc = tagpu_r3d_face_colour(fa);
             /* neither a texture the atlas has nor a flat colour: the engine's
@@ -462,9 +466,15 @@ static TAGPU_PBMAT* mat_bake(const TAGPU_PBGEOM* g, const char* const* nd,
     TAGPU_PBMAT* m;
     int r, slot;
     char b[192];
-    c.nv = 0; c.owner = owner; c.nskip = 0; c.anom = 0; c.over = 0;
+    c.nv = 0; c.owner = owner; c.nskip = 0; c.anom = 0; c.over = 0; c.defer = 0;
     for (r = 0; r < TAGPU_PB_NRANGE; r++)
         pb_walk(nd, g->nparts, r, mat_emit, &c, NULL);
+    /* A FACE WHOSE TEXTURE WAITS FOR THE ALLOWANCE (tagpu_r3d_atlas_uv's -1):
+       no material this frame, so the unit is not drawn, and the next frame
+       bakes it again with the faces that painted here already in the atlas
+       and the rest first in line (tagpu_gaf.h `budget`). Not an anomaly, so
+       no line: the atlas logs the deferral. */
+    if (c.defer) return NULL;
     /* THE INVARIANT the split rests on. If this ever fires, the two walks have
        drifted apart and the material stream would be read against the wrong
        vertices — refuse rather than publish a stream that lies. */

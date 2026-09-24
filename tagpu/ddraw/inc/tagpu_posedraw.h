@@ -58,7 +58,6 @@ typedef struct {
     int   scafOn;
     float scafP[4];             /* vpL, vpT, vw, vh                           */
     float fogOrg[2], fogDim[2];
-    int   lit;                  /* Classic++ on                               */
     float sun[3], amb, norm;    /* the units' sun, ambient, 1/unitLevel       */
     int   shNeutral, shDir;     /* the engine's SHD rows                      */
 } TAGPU_PDVIEW;
@@ -318,7 +317,7 @@ typedef struct TAGPU_PDHAND {
     /* THE FRAGMENT STAGE'S, as `_begin` left it. uLambert IS PUBLISHED AS
        ZERO: tagpu_posedraw.c never sets it, so the Classic++ lambert lights a
        posed unit from a flat up normal rather than from vNrm. */
-    int   restored, scafOn, lit, lambert, shadowOn;
+    int   restored, scafOn, lambert, shadowOn;
     float scafP[4], ss;
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float sun[3], amb, norm;
@@ -346,14 +345,19 @@ typedef struct TAGPU_PDHAND {
 
     /* THE TEXELS, as bytes. Each carries the serial that says when it last
        changed, so the Vulkan pass re-uploads on a change and not per frame.
-       The unit atlas and the shade LUT are tagpu_render3do.h's mirrors; the
-       palette is tagpu_pal's snapshot; the fog pair is what the native pass
-       built this frame.
+       The unit atlas's indices are tagpu_render3do.h's mirror, which the
+       Vulkan pass expands into its base atlas, and the face-shade multipliers
+       its array; the palette is tagpu_pal's snapshot; the fog grid is what the
+       native pass built this frame.
 
        THE CLASSIC++ RESTORED TWIN IS NOT HERE AS TEXELS: it crosses as the
        frame LIST below, which the consuming pass paints into its own twin on
        the device. */
     const unsigned char* atlas;   int atlasDim, atlasRows; unsigned atlasSerial;
+    unsigned atlasWhole;          /* the last whole-page write (tagpu_feat.h) */
+    /* the base atlas's other two inputs -- tagpu_feat.h has them in full */
+    const unsigned char*        atlasKey;
+    const unsigned*             atlasDirty;
     /* the anisotropy the restored twin is filtered at (0 = none). A consumer
        that cannot apply the same ratio draws different art wherever the
        texture is minified at an angle, so this is compared and not assumed.
@@ -365,32 +369,29 @@ typedef struct TAGPU_PDHAND {
        FRAMES to restore; the Vulkan pass paints them into its own twin.
 
        `restoreGen` is the only thing a cursor cannot survive: every
-       discontinuity in the list -- arm, recycle, repack, palette move, an
-       overflow restart -- bumps it, and a consumer whose generation moved
-       starts at 0 again.
-       `restoreRepaint` says the destination is to be recoloured in place
-       rather than blanked, and `restoreBlanks` counts the resets that DID
-       blank, which is how a consumer tells "recolour" from "start again"
-       across a frame it did not see. The struct is declared by tag here
+       discontinuity in the list -- arm, recycle, repack, an overflow restart
+       -- bumps it, and a consumer whose generation moved blanks the twin and
+       starts at 0 again (tagpu_feat.h says why no generation is a recolour).
+       The struct is declared by tag here
        because this header cannot include the one that defines it; the
        consumer includes both. */
     const struct TAGPU_RGLSL_FRAME_S* restoreFrames;
     int                               restoreN;
     unsigned                          restoreGen;
-    int                               restoreRepaint;
-    unsigned                          restoreBlanks;
     /* THE TWIN'S SHAPE: `restoreDim` is the twin's square size and
        `restoreMips` its top level, both from the atlas itself.
        `atlasRgbAniso` above comes from the same accessor for the same
        reason. */
     int                               restoreDim, restoreMips;
-    const unsigned char* lut;     int lutW, lutH;          unsigned lutSerial;
+    /* the face-shade multiplier, 32 floats by SHD row (tagpu_r3d_shade_k),
+       aliased: it is the material layer's own array */
+    const float*         shadeK;
+    /* the engine's table and its serial (tagpu_pal_engine) */
     const unsigned char* pal;     unsigned palSerial;
     /* COPIED, not aliased: the grid points into a frame packet the game thread
        reuses, and tagpu_feat.c's own copy exists for the same reason. NULL when
        this frame had none, which a unit with `uFog & 1` makes a refusal. */
     const unsigned short* fogGrid; int fogGridCols, fogGridRows;
-    const unsigned char*  fogLut;  /* 256 x R8 */
 
     /* the scissor the native pass set around these draws, in game-frame pixels
        from the TOP of the frame -- tagpu_vk_feat.c is where the flip onto
@@ -410,6 +411,14 @@ typedef struct TAGPU_PDHAND {
    been taken, or when the standing one was published on a different frame than
    `now`. Render thread only. */
 int  tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now);
+
+/* THE UNIT ATLAS WITHOUT THE DRAW -- tagpu_feat.h's three, for the unit atlas
+   (tagpu_render3do.h): the hand-over's atlas fields and palette, filled the
+   way the hand-over fills them, for the upload the Vulkan unit pass owes on a
+   frame it has no hand-over. */
+int  tagpu_posedraw_atlas_hand(TAGPU_PDHAND* h);
+int  tagpu_posedraw_atlas_owed(void);
+void tagpu_posedraw_atlas_ack(unsigned serial, int keep);
 
 /* ---- WHO PAINTED A STRUCTURE'S SLANT, REPORTED BY THE PAINTER --------------
    The structure-shadow gate in tagpu_native.c may only be raised on a frame

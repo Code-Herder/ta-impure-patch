@@ -90,6 +90,7 @@
 #include "tagpu_packet.h"     /* the record count TAGPU_PD_MAXHAND must cover,
                                  and tagpu_grow_stress */
 #include "tagpu_render3do.h"
+#include "tagpu_gaf.h"        /* TAGPU_GAFVIEW */
 #include "tagpu_classicpp.h"
 #include "tagpu_vk.h"      /* tagpu_vk_armed(): whether to publish at all */
 #include "tagpu_pal.h"
@@ -546,7 +547,6 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     s_pub.ss = v->ss;
     s_pub.fogOrgX = v->fogOrg[0]; s_pub.fogOrgY = v->fogOrg[1];
     s_pub.fogCols = v->fogDim[0]; s_pub.fogRows = v->fogDim[1];
-    s_pub.lit = v->lit ? 1 : 0;
     s_pub.lambert = 0;                 /* never set -- see the header */
     s_pub.sun[0] = v->sun[0]; s_pub.sun[1] = v->sun[1]; s_pub.sun[2] = v->sun[2];
     s_pub.amb = v->amb; s_pub.norm = v->norm;
@@ -588,7 +588,7 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        `tagpu_classicpp_on()` is `s_on` alone. `assets=` is live cfg the
        render-options menu writes back, so asking `_on()` here would, when
        assets are turned off mid-session, revert terrain, features and effects
-       to the palette path while units kept sampling the restored atlas: mixed
+       to the base atlas while units kept sampling the restored atlas: mixed
        art, silently, until restart. */
     s_pub.restored = (tagpu_r3d_atlas_restore_armed() && tagpu_classicpp_assets()) ? 1 : 0;
     /* THE ARM IS TAKEN HERE AND THE LIST IS NOT. Arming is an ASK and belongs
@@ -600,9 +600,7 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        not yet atlased. That appends to the very list a capture here would
        publish, so a capture here would be a snapshot taken before the frame
        has finished writing it. See the handover for the ordering. */
-    s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);
-    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
-    s_pub.fogLut = tagpu_native_foglut();
+    s_pub.shadeK = tagpu_r3d_shade_k();
     {   /* THE GRID IS COPIED. It points into a frame packet the game thread
            reuses, and `cells` -- not cols*rows -- is what the packet actually
            allocated, so it is the bound the copy is made against. */
@@ -960,14 +958,12 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
        the consumer would see nothing to upload, and the restorer would paint
        the cell from the texels the device still held there: palette index 0,
        opaque black, for the rest of the generation. */
-    s_pub.atlas = tagpu_r3d_atlas_mirror(&s_pub.atlasDim, &s_pub.atlasRows,
-                                         &s_pub.atlasSerial);
+    tagpu_posedraw_atlas_hand(&s_pub);
     {
         float aniso = 0.0f;
         const TAGPU_RGLSL_FRAME* fr =
             tagpu_r3d_atlas_restore_list(&s_pub.restoreDim, &s_pub.restoreN,
-                                         &s_pub.restoreGen, &s_pub.restoreRepaint,
-                                         &s_pub.restoreBlanks, &s_pub.restoreMips,
+                                         &s_pub.restoreGen, &s_pub.restoreMips,
                                          &aniso);
         if (fr) {
             s_pub.atlasRgbAniso  = aniso;
@@ -975,7 +971,6 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
         } else {
             s_pub.restoreFrames  = NULL;
             s_pub.restoreN = 0; s_pub.restoreGen = 0;
-            s_pub.restoreRepaint = 0; s_pub.restoreBlanks = 0;
             s_pub.restoreDim = 0; s_pub.restoreMips = 0;
             /* WRITTEN ON BOTH PATHS, not left to the memset in the publisher.
                It is the only field of this block that would otherwise be set on
@@ -997,6 +992,22 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
     s_pubHave = 0;
     return 1;
 }
+
+/* The atlas's fields and the engine's table, from one writer for both of
+   their readers (tagpu_feat.c `tagpu_feat_atlas_hand` has the argument). */
+int tagpu_posedraw_atlas_hand(TAGPU_PDHAND* h)
+{
+    TAGPU_GAFVIEW av;
+    int ok = tagpu_r3d_atlas_view(&av);
+    h->atlas = av.idx; h->atlasDim = av.dim; h->atlasRows = av.rows;
+    h->atlasSerial = av.serial; h->atlasWhole = av.whole;
+    h->atlasKey = av.key; h->atlasDirty = av.dirty;
+    h->pal = tagpu_pal_engine(); h->palSerial = tagpu_pal_engine_serial();
+    return ok;
+}
+
+int  tagpu_posedraw_atlas_owed(void) { return tagpu_r3d_atlas_owed(); }
+void tagpu_posedraw_atlas_ack(unsigned serial, int keep) { tagpu_r3d_atlas_ack(serial, keep); }
 
 /* ---- frame and reset ---------------------------------------------------- */
 void tagpu_posedraw_frame(unsigned frame_counter)

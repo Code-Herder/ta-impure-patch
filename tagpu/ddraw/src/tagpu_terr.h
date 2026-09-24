@@ -79,7 +79,7 @@ int  tagpu_terr_key(void);
    without re-deriving any of it: the instances are the array the gather
    filled, the uniforms are the numbers the gather computed, the texels are
    buffers this file owns (the atlas, the height grid, the fog copy) and the
-   live palette, and the shader is tagpu_terr.c's GLSL through
+   engine's palette table, and the shader is tagpu_terr.c's GLSL through
    tools/spirv-gen.py.
 
    HANDED OVER EXACTLY ONCE, like the scaffold's and the feature pass's, so one
@@ -141,9 +141,9 @@ typedef struct TAGPU_TERRHAND {
     float tile0X, tile0Y;     /* the map cell grid cell (0,0) IS        */
     float texelW, texelH;     /* 1/atlas width, 1/atlas height          */
 
-    /* The fragment stage's. `restored` and `lit` are the two Classic++
-       branches, `shadowOn` the cast-shadow one, `fog` the engine's overlay
-       bit.
+    /* The fragment stage's. `restored` is the Classic++ restored-colour
+       branch, `lambert` the `light=` half of the preset, `shadowOn` the
+       cast-shadow one, `fog` the engine's overlay bit.
 
        `restored` SAYS A RESTORE REQUEST IS STANDING FOR THIS ATLAS -- it is
        the producer's `s_rFrames`, the published field itself.
@@ -158,7 +158,7 @@ typedef struct TAGPU_TERRHAND {
        it, and it must GATE ON IT: this flag is the request, not the result. A
        consumer that took it for the result would sample an image nothing has
        written and that has never left VK_IMAGE_LAYOUT_UNDEFINED. */
-    int   restored, lit, lambert, fog, shadowOn;
+    int   restored, lambert, fog, shadowOn;
     /* THE REST OF THE CAST-SHADOW BLOCK, and it is only meaningful while
        `shadowOn` is 1. NOTHING PRODUCES IT: tagpu_terr.c publishes `shadowOn`
        0 and never writes these, so they reach the consumer as zero (see
@@ -178,7 +178,9 @@ typedef struct TAGPU_TERRHAND {
        this pass's whole answer to the texel problem: the mirror is the very
        buffer the build loop filled, so it is correct from the instant it
        exists and nothing writes it again. */
-    const unsigned char* atlas;       /* atlasW x atlasH R8                 */
+    const unsigned char* atlas;       /* atlasW x atlasH palette indices, the
+                                         source the Vulkan lane expands its
+                                         base atlas from (tagpu_pal_expand) */
     int                  atlasW, atlasH;
     unsigned             atlasSerial;
     /* THE WORK ITSELF, for the lane that restores on its own -- the only route
@@ -202,24 +204,22 @@ typedef struct TAGPU_TERRHAND {
        between publication and the copy. Do not reason about this field as a
        cross-thread hand-over; it is not one, and neither are `atlas` and
        `height` above. `restoreSerial`
-       changes whenever the list or its destination does, including a repaint;
-       `restoreRepaint` is 1 when the destination already holds a restore and
-       only the palette moved, so it is recoloured in place rather than
-       blanked. The destination's size is the ATLAS's (`atlasW` x `atlasH`):
+       changes whenever the list or its destination does. There is no repaint:
+       the restore reads the base atlas, built from the engine's table, and the
+       Gamma factor is applied after it, to the finished world image
+       (tagpu_pal.h). The destination's size is the ATLAS's (`atlasW` x `atlasH`):
        terrain restores the whole atlas, which is why there is no row count
        here as there is for the mirror. */
     const TAGPU_RGLSL_FRAME* restoreFrames;
     int                      restoreN;
     unsigned                 restoreSerial;
-    int                      restoreRepaint;
     const unsigned char* height;      /* hW x hH R8, or NULL                */
     int                  hW, hH;
     unsigned             heightSerial;
-    const unsigned char* pal;         /* 256 x RGBA8, tagpu_pal_live()      */
-    unsigned             palSerial;
+    const unsigned char* pal;         /* 256 x RGBA8, tagpu_pal_engine()    */
+    unsigned             palSerial;   /* tagpu_pal_engine_serial()          */
     const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog off */
     int                  fogGridCols, fogGridRows;
-    const unsigned char* fogLut;      /* 256 x R8, tagpu_native_foglut()    */
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame -- the engine's own viewport rect.

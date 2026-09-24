@@ -418,9 +418,6 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_FOG_DIMCAP 4096   /* a sanity ceiling on a dimension; the real
                                       bound is `len == cols*rows*2` inside the
                                       record, checked once at acquire          */
-#define TAGPU_PK_FOGSHADE_BYTES 256u  /* the grey band's palette remap,
-                                         *(TAProgram+0xCC): 0x4BFE10 rewrites
-                                         every pixel p as shade[p]             */
 
 /* truncation bits, one per table (TAGPU_PK_TRUNC_FONT/STRESS are above) */
 #define TAGPU_PK_TRUNC_UNITS   0x4u
@@ -435,7 +432,6 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_LHT     0x800u
 #define TAGPU_PK_TRUNC_FOG     0x1000u
 #define TAGPU_PK_TRUNC_FOGW    0x2000u
-#define TAGPU_PK_TRUNC_FOGSH   0x4000u
 #define TAGPU_PK_TRUNC_MM      0x8000u
 #define TAGPU_PK_TRUNC_MMPIC   0x10000u
 #define TAGPU_PK_TRUNC_BUILDS  0x20000u
@@ -658,7 +654,6 @@ typedef struct TAGPU_PACKET {
                                          not building, or has published nothing */
     int32_t  fogw_org[2];
     uint32_t fogw_off, fogw_len;
-    uint32_t fogsh_off, fogsh_len;    /* the grey band's 256-byte palette remap */
 
     /* ---- the UI layer's render half ---- */
     uint32_t cur_rec;                 /* graphics+0x1B2, the sprite record — a
@@ -752,9 +747,6 @@ static __inline const unsigned short* tagpu_pk_fog(const TAGPU_PACKET* p)
 { return p->fog_len ? (const unsigned short*)(const void*)((const unsigned char*)p + p->fog_off) : (const unsigned short*)0; }
 static __inline const unsigned short* tagpu_pk_fogw(const TAGPU_PACKET* p)
 { return p->fogw_len ? (const unsigned short*)(const void*)((const unsigned char*)p + p->fogw_off) : (const unsigned short*)0; }
-/* the grey band's palette remap, 256 bytes, or NULL */
-static __inline const unsigned char* tagpu_pk_fogshade(const TAGPU_PACKET* p)
-{ return p->fogsh_len == TAGPU_PK_FOGSHADE_BYTES ? (const unsigned char*)p + p->fogsh_off : (const unsigned char*)0; }
 /* ---- the UI layer's render half ---- */
 /* the three minimap surfaces interleaved, mm_w * mm_h RGB triples, or NULL */
 static __inline const unsigned char* tagpu_pk_minimap(const TAGPU_PACKET* p)

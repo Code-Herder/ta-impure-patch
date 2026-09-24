@@ -32,14 +32,7 @@ int  tagpu_native_selbox_complete(void);
 struct TAGPU_PK_UNIT;
 int  tagpu_native_unit_pos(const struct TAGPU_PK_UNIT* u, float* x, float* y, float* z);
 
-/* The 256-byte fog shade table this pass last built -- the packet's
-   `fogshade`, or the identity when the packet carries none. NULL before the
-   first frame that built one. Render thread only; the buffer is ours for the
-   process's life. The Vulkan world passes take these BYTES through their
-   hand-overs, so every one of them samples the one construction of the
-   table rather than a second one. */
-const unsigned char* tagpu_native_foglut(void);
-/* the grid that went with it, for a pass that has to copy it -- see the
+/* This frame's fog grid, for a pass that has to copy it -- see the
    implementation for the bound and the lifetime */
 const unsigned short* tagpu_native_foggrid(int* cols, int* rows, int* cells);
 

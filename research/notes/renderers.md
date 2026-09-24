@@ -17,20 +17,28 @@ date; **[OPEN]** = not settled.
 
 | | **Classic** | **Classic++** |
 |---|---|---|
-| What it is | what tagpu draws today; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
+| What it is | **a preset of the Classic++ pipeline**, `assets=0 light=0`, in full colour — what tagpu draws with Classic++ off; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
 | Claim | **pixel parity** with itself: it must not move by a pixel, and the lab's parity ritual is the proof | none against the engine; it is judged by eye and measured against the lab |
-| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c), the feature and effect sprites (G14e) and the unit textures (G14g, 2026-09-05) — the sprites and the units lazily on first draw; the unit atlas padded, aligned and mipped as this row says (§5 step 2).* |
+| Textures | the engine's GAF frames and tiles expanded through the engine's own palette into **RGBA8 base atlases** (alpha 0 at a frame's key), `NEAREST`, nothing restored. A palette index reaches a world shader only as a flat colour — a flat face, an effect's line, a marker — or the unexplored black, and is looked up in the same unscaled table | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c), the feature and effect sprites (G14e) and the unit textures (G14g, 2026-09-05) — the sprites and the units lazily on first draw; the unit atlas padded, aligned and mipped as this row says (§5 step 2).* |
 | Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit). *In the game since G14f (2026-09-05): the engine's height grid as an R8 texture per map, the lab's 16-px grid normals evaluated per fragment; feature sprites take the ground's lambert at their anchor as the lab's do* |
-| Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation. *In the game since G14f: the face normal rides the vertex stream and replaces the LUT row under the switch; pieces the engine draws unshaded stay at exactly 1.0 (the lab lights every face)* |
+| Units | the per-face shade row from `SH_L`, applied as an **RGB multiplier** `k[row]` fitted to the engine's `PALETTE.SHD` ([GPU status](gpu-status.html) §2.88) | the same face shade, then a per-pixel lambert in map space from the posed face normal, same level normalisation — **in the lab**. *In the game the units take the face shade `k[row]` (G20c, both presets) and the lambert of the LEVEL normal only: `tagpu_posedraw.c` publishes `uLambert = 0` (`inc/tagpu_posedraw.h`), so the posed normal is never used and slope shading on a unit does not exist in the game; the shadow term inside `taLambert` stays. Pieces the engine draws unshaded take the neutral row, `k = 1.0` (the lab lights every face)* |
 | Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: both since G14j (2026-09-07) — the silhouette for a mobile unit and, for a structure, the slant from the pack's caster mesh (every face of every visible, cached piece), projected and blended the way `tagpu_native.c`'s `emit_slant` does it. The silhouette only from 2026-09-04 to then; this row claimed the lab had both before that, when it had neither | a depth map along `shadowsun`, PCSS-lite (the blocker search: the receiver's own texel and the 16 Poisson taps since G14i, 8 ring taps before; 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2). *In the game since G14i (2026-09-06): `tagpu_shadow.c`'s map-anchored depth map, the read-back in the terrain and unit shaders, the hills from a static mesh, the replacement meshes casting, the two Classic sub-passes off under the switch; measured against the lab in §5 step 5* |
 | Suns | one, `SH_L = (−0.35, 0.80, −0.49)` in model space | **three** knobs: `sun=324.5,53.1` (terrain), `unitsun=215.5,53.1` (= `SH_L` in map space), `shadowsun=225,40` |
-| Fog of war | the engine's per-index grey LUT | one RGB rule after lighting (§2.6) |
+| Fog of war | one RGB rule after lighting (§2.6): the R+G+B mean, never snapped to a palette entry | the same |
+| Gamma | applied **once**, to the finished world image, through the engine's own per-level curve ([GPU status](gpu-status.html) §2.3f) | the same |
 | Supersampling | 2× box, `tagpu_ss.off` | the same |
 
-**The Classic baselines moved on 2026-09-04, deliberately**, when the lane gained the
-silhouette drop shadow it had always claimed. `tascene-parity.json`: default
-`md5 f42f300a69f843a669d64fc30deb08e2`, `ss=1` `md5 59482d4d2519801fbc41b7d33510b471`
-**[MEASURED]**.
+**The Classic baselines are** `tascene-parity.json`: default
+`md5 55dab14d8f704227322e3841cd44b9e1`, `ss=1` `md5 825d533a3e73c2c61826496ce4aa3172`
+**[MEASURED 2026-09-23]**. They moved with G20c, deliberately, and on the units only: against
+the previous pair — `f42f300a69f843a669d64fc30deb08e2` and `59482d4d2519801fbc41b7d33510b471`,
+reproduced the same day by the previous viewer on its own pack — 330 px differ at the default
+(max 33) and 256 at `ss=1` (max 46), every one inside the commander's box: the face shade as a
+multiplier instead of the shade table's index remap. Terrain and features are 0 px (the fixture
+has no fog, so the grey band's move is not in it).
+
+**They moved before on 2026-09-04, deliberately**, when the lane gained the
+silhouette drop shadow it had always claimed.
 
 **The re-baseline is checkable, and that is the point of it.** `unitshadow=0` reproduces the
 previous pair — `6f7ad6b122591d6db2a2b028938be5b3` and `9c9ab215099e581288b24cc47d41f9be` —
@@ -40,17 +48,17 @@ move by a pixel" can only be re-baselined this way: with a switch that puts the 
 and a diff that says what the new ones are.
 
 
-**Classic moves to full colour [DECIDED 2026-09-23, planned, not built].** The owner's call: Classic
-becomes a preset of the Classic++ pipeline with its options off, and it does not keep fidelity to
-the 8bpp colours.
+**Classic is full colour [DECIDED 2026-09-23, BUILT the same day as G20c/G20d].** The owner's
+call: Classic is a preset of the Classic++ pipeline with its options off, and it does not keep
+fidelity to the 8bpp colours.
 
-- Units are shaded by an RGB multiplier per `PALETTE.SHD` row, and so are Classic++ units, which
-  are flat today.
-- The fog grey is the RGB mean.
+- Units are shaded by an RGB multiplier per `PALETTE.SHD` row, and so are Classic++ units.
+- The fog grey is the RGB mean, in every world pass and both presets.
 - Gamma is applied once, on the finished world image.
-- The R8 atlases and index lookups leave the world passes. The UI stays indexed.
+- The R8 atlases and index lookups are gone from the world passes. The UI stays indexed, through
+  the presented palette; GDI is untouched.
 
-When it lands, the table above and the parity claim change with it. The plan is
+The record is [GPU status](gpu-status.html) §2.88; the plan was
 [BAR camera & full-colour Classic](bar-camera-port.html) Part 2.
 ---
 
@@ -340,9 +348,10 @@ palette (`main+0x143A7`), not in the one the screen is shown with**: the thresho
 colour distance, so a gamma-scaled palette stretches every distance by the same factor and moves
 tiles across it — 177 of Two Continents' 5062 wrap-padded at factor 1.5 against 400 at 1.0, when
 the test briefly read the presented palette on 2026-09-09. Tileability is a property of the ART
-([GPU status](gpu-status.html) §2.3f); the restore itself resolves through the presented one. The restored RGBA atlases are new objects beside
-Classic's indexed ones, which do not change: units 4-texel replicated pad, 4-aligned, mip
-levels 0–2.
+([GPU status](gpu-status.html) §2.3f). The restore reads the same unscaled table, through the
+base atlas it restores from, and the Gamma is applied once to the finished world. The restored
+RGBA atlases are objects beside the base atlases every preset samples: units 4-texel replicated
+pad, 4-aligned, mip levels 0–2.
 
 ### 2.5b No cache for any image map — everything is restored in the running game  [DECIDED 2026-09-05]
 
@@ -370,11 +379,12 @@ has to name them. The routes are enumerated in §4b.
 
 ### 2.6 Fog of war: one RGB rule after lighting
 The engine's grey band remaps each palette index to the palette entry nearest its own
-R+G+B mean (`*(TAProgram+0xCC)`, [shadows & cloaking](shadows-cloak.html) §1) and Classic
-does the same on the index **[SOURCE `tagpu_glsl.h` `TAGPU_GLSL_FOG_SHADE`]**. Classic++
+R+G+B mean (`*(TAProgram+0xCC)`, [shadows & cloaking](shadows-cloak.html) §1). Classic++
 multiplies colours by light and shadow, and restored texels have no index. **Decided: in
-every Classic++ pass, compute the lit and shadowed colour, then in the grey band replace it
-with its own R+G+B mean, without palette quantisation.** Shadows and relief survive as darker
+every pass, compute the lit and shadowed colour, then in the grey band replace it with its own
+R+G+B mean, without palette quantisation** — and since G20d that is every world pass of both
+presets, the markers included (`tagpu_glsl.h` `TAGPU_GLSL_FOG_GREY_RGB`); nothing of ours reads
+the engine's remap table. Shadows and relief survive as darker
 grey; unexplored stays palette-0 black; the unit and effect discards in the band stay as
 they are. One rule, one place.
 
@@ -1110,6 +1120,10 @@ a scrolling list — the gadget system stops paying and the superseded DLL-drawn
   `tagpu_classicpp.cfg`, read by `tagpu_classicpp_assets()` and `tagpu_classicpp_lit()`
   (each is the master arm AND its key, so neither can be on while `tagpu_classicpp.on`
   is absent). *Undithered assets* and *Dynamic lighting* are real, independent rows.
+
+  *`uLit` is deleted since G20d: with Classic a preset of the one full-colour path there is
+  no second branch for it to select ([GPU status](gpu-status.html) §2.88). What follows is the
+  record of the split.*
 
   **`uLit` was not the lambert, and feeding it from `light=` was wrong** — the mistake is
   recorded because this page asserted otherwise. `uLit` is the **Classic++ colour branch

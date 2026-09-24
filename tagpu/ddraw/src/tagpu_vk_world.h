@@ -73,6 +73,40 @@
    dropping either half would either black out the letterbox or double-expose
    the bottom layer.
 
+   THE ENGINE'S GAMMA IS APPLIED HERE, ONCE, AND NOWHERE ELSE IN THE WORLD.
+   Every world colour source is the engine's unscaled table (tagpu_pal.h), and
+   the composite runs the engine's own per-level curve over the finished
+   image -- min(255, trunc(e x factor)), what 0x4BA200 hands DirectDraw -- so a
+   Gamma change in play reaches the whole world on the frame that carries it,
+   with nothing rebuilt. At factor 1.0 the plain composite draws (DFS), so the
+   stock Gamma is the picture with no curve at all. THE CAPTURE READS THE
+   TARGET, BEFORE THE CURVE: a world A/B is the unscaled world at any Gamma.
+
+   A FRAME WITH NO TARGET TAKES THE FACTOR TOO, from
+   `tagpu_vk_world_record_direct`. There the world passes draw straight into
+   the swapchain image and there is no image to sample, so the factor is
+   applied by the blend -- the one stage that reads the frame -- with a
+   full-frame quad: frame x factor, clamped at 1.0, after the last world pass
+   and before the UI. It is the same order as the composite's (the curve on the
+   finished world, blends included) and the same clamp. ON A UNORM SURFACE it
+   differs from the curve only in the last step: the blend rounds e x factor to
+   the nearest level where the engine truncates, so a level lands at most one
+   step from the curve's. ON AN sRGB SURFACE IT DOES NOT: the blend runs on the
+   decoded, linear value, so the factor scales light rather than the level --
+   at factor 1.5, level 128 lands near 155 against the curve's 192. That is
+   the one surface where this path is the only one (the target refuses sRGB,
+   below); the seam prefers B8G8R8A8_UNORM and takes the device's first format
+   only when that is not offered (tagpu_vk.c, the surface format).
+   The frame holds only the clear and the world when it runs --
+   nothing of the engine's is drawn under the world, and the UI comes after --
+   and the default clear is black, which the factor leaves black. A frame takes
+   this path whenever `prepare` returns 0. The target is refused for good on an
+   sRGB surface, with no depth format (where the depth-testing passes stand
+   down and the markers are all the world there is), on a format the device
+   will not both render and filter, and on a slot the device will not give the
+   memory for. A frame whose size is past WORLD_MAXDIM, or whose gather
+   published no geometry for it, has no target for that frame alone.
+
    THE SEAM DRIVES THE RENDER PASS, because it has to wrap the OTHER passes'
    `record` calls -- so this module is not shaped like a pass and deliberately
    does not pretend to be. `prepare` builds and sizes; `begin`/`end` bracket the
@@ -110,6 +144,15 @@ void tagpu_vk_world_end(const TAGPU_VKPASS* d, VkCommandBuffer cb);
 void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                            uint32_t w, uint32_t h);
 
+/* The Gamma on a frame whose `prepare` returned 0: inside the seam's render
+   pass, straight after the world passes have drawn into the frame and before
+   the UI. `w`/`h` are the swapchain extent. Draws nothing at factor 1.0 or
+   when this frame has a target. Its pipelines live until `tagpu_vk_world_down`
+   and survive the target's own refusal, because a refused target is exactly
+   when they are needed. */
+void tagpu_vk_world_record_direct(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                                  uint32_t w, uint32_t h);
+
 /* THE IMAGE THE WORLD WAS DRAWN INTO THIS FRAME, for the A/B capture and for
    nothing else. Returns 1 and fills `img`/`w`/`h` when `slot` is the slot the
    world render pass was opened on this frame; 0 when there is no target, when
@@ -131,7 +174,10 @@ int  tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h,
                          VkFormat* fmt);
 
 /* The teardown handshake every module here has: the seam asks, waits for the
-   device to go idle, then pays. */
+   device to go idle, then pays. `_down` is the device's teardown and frees
+   everything; `_down_paid` settles the target's refusal and frees the target
+   alone, leaving the no-target Gamma's pipelines for the frames that need
+   them. */
 void tagpu_vk_world_down(const TAGPU_VKPASS* d);
 int  tagpu_vk_world_down_owed(void);
 void tagpu_vk_world_down_paid(const TAGPU_VKPASS* d);

@@ -45,7 +45,7 @@
 
    uFog bit0 = fog on, bit1 = this draw HIDES in grey rather than darkening:
    the engine never draws units or effects outside LOS, while terrain,
-   features and wreckage stay visible and are merely shade-remapped.
+   features and wreckage stay visible, in grey (TAGPU_GLSL_FOG_GREY_RGB).
 
    THE CLAMP STOPS ONE CELL SHORT OF THE GRID, and that is a bound, not a
    margin. A builder fills entry gx from map cells col0+gx and col0+gx+1, so
@@ -69,7 +69,6 @@
    any eye the frame is drawn from. */
 #define TAGPU_GLSL_FOG_UNIFORMS \
     "uniform sampler2D uFogGrid;\n"   /* RG8 corner masks, r = b0, g = b1  */ \
-    "uniform sampler2D uFogLUT;\n"    /* 256x1 palette remap for the grey  */ \
     "uniform vec2 uFogOrg;\n"         /* world x,z of grid cell (0,0)      */ \
     "uniform vec2 uFogDim;\n"         /* cols, rows                        */ \
     "uniform int uFog;\n"
@@ -108,19 +107,15 @@
     "      frag = vec4(texelFetch(uPal, ivec2(0, 0), 0).rgb, 1.0); return;\n" \
     "    }\n" \
     "  }\n"
-/* the overlay's darken over what stays visible in grey: the engine remaps
-   every pixel's palette INDEX through *(TAProgram+0xCC) (0x4BFE10 for a full
-   cell, 0x4B86E0 through an edge sprite), so we do the same on the index
-   before the palette fetch rather than scaling the resolved colour. Takes the
-   name of the int index variable. */
-#define TAGPU_GLSL_FOG_SHADE(I) \
-    "  if (taFogC.y >= 0.5) " I " = int(texelFetch(uFogLUT, ivec2(" I ", 0), 0).r * 255.0 + 0.5);\n"
-/* The Classic++ edition of the same band (renderers.md 2.6): a restored texel
-   has no palette index to remap, so the LIT colour is replaced by its own
-   R+G+B mean -- which is exactly what the engine's grey table computes
-   before it quantises to the palette (0x4BAD30: avg RGB/3, then nearest).
-   Takes the name of a vec3 variable. Applied after lighting, so shadows
-   and relief survive as darker grey. */
+/* THE GREY BAND, over what stays visible in it (renderers.md 2.6): the
+   colour is replaced by its own R+G+B mean, which is what the engine's grey
+   table computes before it quantises to the palette (0x4BAD30: avg RGB/3, then
+   nearest) -- in full colour, so the mean is kept and never snapped back to a
+   palette entry. The engine remaps each pixel's INDEX through that table
+   (*(TAProgram+0xCC); 0x4BFE10 for a full cell, 0x4B86E0 through an edge
+   sprite); every world pass here takes the RGB rule instead, in both presets.
+   Takes the name of a vec3 variable. Applied after lighting and the face
+   shade, so shadows and relief survive as darker grey. */
 #define TAGPU_GLSL_FOG_GREY_RGB(V) \
     "  if (taFogC.y >= 0.5) " V " = vec3(dot(" V ", vec3(1.0/3.0)));\n"
 
@@ -151,17 +146,15 @@
    uSun is the unit vector TOWARD the light in map space (x east, y up,
    z south); uAmb 1.0 is "no sun" -- the rule is then exactly 1.0 with no
    branch; uNorm = 1/level, level = uAmb + (1-uAmb)*max(uSun.y, 0), both
-   from tagpu_classicpp.c. uLit = 1 selects the Classic++ colour path in the
-   shader that carries it (light, then the RGB grey band); 0 is Classic,
-   byte for byte. */
-/* uLit is the Classic++ colour branch and follows the MASTER ARM; uLambert is
-   the `light=` half of it. uLambert 0 does not skip taLambert -- it
-   hands it the LEVEL normal instead, so the slope shading goes while the
-   shadow term, which lives inside taLambert, stays. Level ground is exactly
-   1.0 there by construction: uNorm is 1/level and level is that same lambert
-   of the up normal, so the quotient is x/x. */
+   from tagpu_classicpp.c. */
+/* uLambert is the `light=` half of the preset (tagpu_classicpp_lit): Classic
+   is `light=0`, Classic++ `light=1`, and every world pass runs this rule in
+   both. uLambert 0 does not skip taLambert -- it hands it the LEVEL normal
+   instead, so the slope shading goes while the shadow term, which lives
+   inside taLambert, stays. Level ground is exactly 1.0 there by construction:
+   uNorm is 1/level and level is that same lambert of the up normal, so the
+   quotient is x/x. */
 #define TAGPU_GLSL_LIGHT_UNIFORMS \
-    "uniform int uLit;\n" \
     "uniform int uLambert;\n" \
     "uniform vec3 uSun;\n" \
     "uniform float uAmb;\n" \

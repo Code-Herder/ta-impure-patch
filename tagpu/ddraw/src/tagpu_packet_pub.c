@@ -1478,13 +1478,8 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    on this thread, with its origin and size published beside it. */
 
 #define FOG_DESC     0x1421F      /* -> {u16* buf, i32 cols, i32 rows, i32 cells} */
-#define PROG_FOGSH   0x0CC        /* u8[256]: the grey band's palette remap,
-                                     applied by 0x4BFE10 as p -> shade[p]      */
 
-static unsigned char s_fogsh[TAGPU_PK_FOGSHADE_BYTES];
-static const unsigned char* s_fogshPtr;
-static int s_fogshOk;
-static volatile unsigned s_cFogshCopies, s_cFogRefused, s_cFogwSeen, s_cFogNoRec, s_cFogRecOdd;
+static volatile unsigned s_cFogRefused, s_cFogwSeen, s_cFogNoRec, s_cFogRecOdd;
 static volatile int      s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR;
 
 /* THE ENGINE GRID'S BUILD RECORD: the eye its builder `0x4843C0` last read,
@@ -1637,21 +1632,6 @@ static void fog_reach(const TAGPU_PACKET* p, int axis, int* lo, int* hi)
     *lo = l; *hi = h;
 }
 
-static void fogshade_snapshot(void)
-{
-    const char* g = *(const char* const*)TA_GFX_PP;
-    const unsigned char* t;
-    if (!ptr_ok(g)) return;
-    t = *(const unsigned char* const*)(g + PROG_FOGSH);
-    if (!ptr_ok(t)) return;
-    if (t == s_fogshPtr && s_fogshOk) return;
-    /* THE BOUND IS THE FORMAT: 0x4BFE10 indexes it with a palette byte, so it
-       is exactly 256 entries and a copy of that size reads what the remap
-       reads and nothing more. */
-    tagpu_pk_copy(s_fogsh, t, sizeof s_fogsh);
-    s_fogshPtr = t; s_fogshOk = 1; s_cFogshCopies++;
-}
-
 static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 {
     unsigned need = *cursor, e;
@@ -1677,12 +1657,6 @@ static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     }
     s_lastFogC = p->fog_cols;  s_lastFogR = p->fog_rows;
     s_lastFogwC = p->fogw_cols; s_lastFogwR = p->fogw_rows;
-    fogshade_snapshot();
-    if (s_fogshOk) {
-        e = append_area(p, cursor, s_fogsh, (unsigned)sizeof s_fogsh,
-                        &p->fogsh_off, &p->fogsh_len, TAGPU_PK_TRUNC_FOGSH);
-        if (e > need) need = e;
-    }
     return need;
 }
 
@@ -2515,13 +2489,13 @@ static void extra(char* buf, unsigned cap, double secs)
         while (n < cap && buf[n]) n++;
         _snprintf(buf + n, cap > n ? cap - n : 0,
                   " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u thin=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
-                  " | fog: %dx%d wide=%dx%d/%u refused=%u norec=%u recodd=%u shade=%u"
+                  " | fog: %dx%d wide=%dx%d/%u refused=%u norec=%u recodd=%u"
                   " | gui: mm=%dx%d/%u refused=%u pic=%dx%d/%u",
                   s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart, s_cPartMax,
                   s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartThin, s_cLayerBad, s_cSubBad, s_cLhtCopies,
                   tagpu_fxown_want_fx(), tagpu_fxown_want_sfx(),
                   s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR, s_cFogwSeen,
-                  s_cFogRefused, s_cFogNoRec, s_cFogRecOdd, s_cFogshCopies,
+                  s_cFogRefused, s_cFogNoRec, s_cFogRecOdd,
                   s_lastMmW, s_lastMmH, s_cMmCopies, s_cMmRefused,
                   s_mmPicW, s_mmPicH, s_cMmPic);
         n = 0;
@@ -2680,24 +2654,9 @@ static unsigned fill_shell(TAGPU_PACKET* p, void* ctx)
     p->text_fg    = -1;
     p->gamma      = 1.0f;
     if (live) fill_cursor(p);
-    /* THE PALETTE READ HERE IS A KNOWN HAZARD, AND THE GATE FOR IT IS NOT YET
-       KNOWN. fill_pal copies 1 KB from `main+0x143A7`, the live palette, and
-       this channel publishes on the FLIP — ~5000 presents a second, through a
-       loading screen as well as the menu — while the LOADER thread rewrites
-       that palette at a level transition. A torn copy is a wrong-palette frame
-       on the load screen: cosmetic, pre-existing, and not introduced here.
-
-       A gate on `(load_flags & 3) == 1` does not work, because it is a
-       one-shot: bit0 is `or 1` at 0x49832A and bit1 `or 2` at 0x497C5F, and
-       NOTHING IN THE IMAGE CLEARS EITHER (tagpu_engine.h's OFF_LOADFLAGS entry
-       says so). After the first level of a session the word is 3 for ever, so
-       the gate would stop firing exactly when a second load needs it. The only
-       bit both set and cleared is bit2 — set at 0x4975C7, cleared at 0x496868
-       and 0x49855D — which tagpu_engine.h calls half of a loader<->game
-       handshake; whether "bit2 set" spans a whole load or is a narrower
-       one-shot signal is NOT measured, so no gate is written on it here. It
-       wants its own landing, with the window measured across a SECOND level
-       load in one process. */
+    /* NO PALETTE ON THIS CHANNEL: `fill_pal` is not called, so `pal_ok` stays
+       0 from the fill above and nothing here reads `main+0x143A7`; a shell
+       frame draws no world. */
     return sizeof(TAGPU_PACKET);
 }
 

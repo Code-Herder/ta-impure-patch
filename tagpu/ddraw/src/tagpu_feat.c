@@ -327,7 +327,12 @@ static const char* VS =
     "#version 330 core\n"
     "layout(location=0) in vec3 aPos;\n"
     "layout(location=1) in vec2 aUV;\n"
-    "layout(location=2) in vec2 aCM;\n"       /* colour key /255, mode        */
+    "layout(location=2) in vec2 aCM;\n"       /* colour key /255, mode: the
+                                                   fragment stage reads the mode
+                                                   and takes the hole from the
+                                                   base atlas's alpha, which
+                                                   tagpu_gaf.c keys against this
+                                                   same key */
     "layout(location=3) in vec2 aWorld;\n"
     "layout(location=4) in float aLam;\n"   /* Classic++: the ground's lambert */
     "uniform vec2 uGame;\n"
@@ -345,39 +350,35 @@ static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld; flat in float vLam;\n"
     "out vec4 frag;\n"
-    "uniform sampler2D uAtlas;\n"
-    "uniform sampler2D uPal;\n"
     "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the atlas's restored twin */
     "uniform int uRestored;\n"         /* 1 = sample it where its alpha says so */
-    "uniform int uLit;\n"              /* 1 = Classic++: lit, RGB fog rule     */
     TAGPU_GLSL_FOG_UNIFORMS
+    /* the base atlas: the same texels expanded through the engine's table,
+       alpha 0 at the frame's key (tagpu_vk_feat.c) */
+    "uniform sampler2D uBase;\n"
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
     /* features are terrain furniture: the engine draws them under the fog
-       overlay, so they stay visible in grey and are merely shade-remapped */
+       overlay, so they stay visible in grey */
     TAGPU_GLSL_FOG_DISCARD
-    "  float idx = texture(uAtlas, vUV).r;\n"
+    "  vec4 b = texture(uBase, vUV);\n"
     /* colour-keyed: the key texel is a hole, and discarding keeps it out of
-       the depth buffer too — a tree occludes only where it has pixels */
-    "  if (abs(idx - vCM.x) < 0.5/255.0) discard;\n"
+       the depth buffer too -- a tree occludes only where it has pixels. The
+       base's alpha is 0 exactly where the frame's index is its key (NEAREST,
+       the texel the index was) */
+    "  if (b.a < 0.5) discard;\n"
     "  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;\n"
-    /* Classic++ (uLit): the twin's colour where the lazy restore has painted
-       it (alpha 1 -- tagpu_gaf.h), the palette's for a frame not yet
-       restored, times the GROUND's lambert at the anchor (a billboard has no
-       normal of its own; the lab's lambertAt -- a tree on a shaded slope sits
-       in the shade rather than on top of it), then the grey band as the RGB
-       rule (renderers.md 2.6). The hole stays the index test above. */
-    "  if (uLit == 1) {\n"
-    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "    vec3 c = t.a > 0.5 ? t.rgb : texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;\n"
-    "    c *= vLam;\n"
+    /* the twin's colour where the lazy restore has painted it (alpha 1 --
+       tagpu_gaf.h), the base atlas's otherwise -- always, under Classic --
+       times the GROUND's lambert at the anchor (a billboard has no normal of
+       its own; the lab's lambertAt -- a tree on a shaded slope sits in the
+       shade rather than on top of it; 1.0 under `light=0`), then the grey band
+       as the RGB rule (renderers.md 2.6). Premultiplied. */
+    "  vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
+    "  vec3 c = t.a > 0.5 ? t.rgb : b.rgb;\n"
+    "  c *= vLam;\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
-    "    frag = vec4(c * a, a); return;\n"
-    "  }\n"
-    "  int pi = int(idx*255.0+0.5);\n"
-    TAGPU_GLSL_FOG_SHADE("pi")
-    "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
-    "  frag = vec4(rgb * a, a);\n"           /* premultiplied               */
+    "  frag = vec4(c * a, a);\n"
     "}\n";
 #pragma GCC diagnostic pop
 
@@ -392,6 +393,9 @@ static void atlas_setup(void)
     tagpu_gaf_atlas_lost(&s_atlas);          /* laid out again on the create below */
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "feat";
+    /* a world atlas: its base atlas is RGBA, so the key has to travel as a
+       plane beside the indices (tagpu_gaf.h `keyPlane`) */
+    s_atlas.keyPlane = 1;
     /* Every frame in here is a feature standing on the map, so nothing in it
        ever stops being wanted: when it fills, re-lay it tallest-first and
        keep it rather than drop it (tagpu_gaf.h `repack`). Without it the
@@ -402,6 +406,14 @@ static void atlas_setup(void)
        ~200 GAF frames and clearing the Classic++ restore queue before it
        could land. */
     s_atlas.repack = 1;
+    /* and the repack's moves are published, because tagpu_vk_feat.c applies
+       them to its own copy: a repack then sends nothing but the paints it
+       lacked, where the whole page is a wait on the render thread */
+    s_atlas.moveList = 1;
+    /* and its paints are bounded by what one frame's upload holds
+       (tagpu_gaf.h `budget`): tagpu_vk_feat.c sends them in the frame's own
+       command buffer, and a paint past the allowance waits a frame instead */
+    s_atlas.budget = TAGPU_GAF_BUDGET;
     tagpu_gaf_atlas_create(&s_atlas);
 }
 
@@ -463,8 +475,12 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
     if (x1 < (float)v->evpL || x0 > (float)(v->evpL + v->evw) ||
         y1 < (float)v->evpT || y0 > (float)(v->evpT + v->evh)) return;
     if (!feat_room(b, 6)) { s_cOverflow++; return; }
-    e = tagpu_gaf_atlas_get(&s_atlas, g);
-    if (!e) { s_cAtlasFail++; return; }
+    {
+        const unsigned dN = s_atlas.deferN;
+        e = tagpu_gaf_atlas_get(&s_atlas, g);
+        /* a deferral is not a failure: the anchor's rollback counts it */
+        if (!e) { if (s_atlas.deferN == dN) s_cAtlasFail++; return; }
+    }
     c = (float)e->ck / 255.0f;
     {   /* world position of each corner: the anchor plus the corner's offset
            from the projected anchor (screen px and world px are 1:1 here) */
@@ -498,12 +514,11 @@ static int feat_visible(const TAGPU_FXVIEW* v, int col, int row, int fx, int fz,
 
 /* ---- per-frame counters ---- */
 typedef struct {
-    int anchors, flat, tall, gafwreck, wreck3d, losSkip, junk, animated, shadows, outside;
+    int anchors, flat, tall, gafwreck, wreck3d, losSkip, junk, animated, shadows, outside, deferred;
 } FEATC;
 static FEATC s_c;
 static unsigned s_cAnchTrunc;   /* frames whose anchor table was truncated */
 static int s_logged;
-static int s_cpp;                       /* Classic++ this frame: the colour branch (uLit)        */
 static int s_lit;                       /* light= this frame: anchors take the ground's light    */
 
 /* Classic++: the ground's lambert at an anchor -- the lab's lambertAt(col,
@@ -679,6 +694,8 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
         if (!s_atlas.made) return feat_bail();
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
+    /* the allowance's frame, after the reset and before the first lookup */
+    tagpu_gaf_atlas_frame(&s_atlas);
     /* This atlas's restore is the Vulkan restorer's: `tagpu_gaf_atlas_restore_vk`
        above publishes the frame list and `tagpu_vk_restore.c` paints it. */
 
@@ -697,7 +714,6 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
        arm set, not a gate the defaults depend on. */
     s_ownable = tagpu_native_wrecks_armed();
     s_mute = s_passive || !s_ownable;
-    s_cpp = tagpu_classicpp_on();
     s_lit = tagpu_classicpp_lit();
 
     {   /* LIVE, once per frame: see the header */
@@ -853,7 +869,21 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
                 enc = 3.0f + (float)rel * 4.0f
                       + 1.5f * ((float)(col - c0) / (float)nCols);
             }
-            draw_feature(v, pk, a, def, flat, enc, shadowsOn);
+            {
+                /* A FEATURE IS DRAWN WHOLE OR NOT AT ALL: its shadow and body
+                   -- and every sub-frame of either -- are several atlas
+                   entries, and one of them deferred past the allowance takes
+                   the rest of this anchor's quads back out, so no frame shows
+                   a body without its shadow. What did paint stays painted and
+                   draws on the next frame, with the rest. */
+                const int nSh = s_nv[B_SHADOW], nBo = s_nv[B_BODY];
+                const unsigned dN = s_atlas.deferN;
+                draw_feature(v, pk, a, def, flat, enc, shadowsOn);
+                if (s_atlas.deferN != dN) {
+                    s_nv[B_SHADOW] = nSh; s_nv[B_BODY] = nBo;
+                    s_c.deferred++;
+                }
+            }
         }
     }
     s_c.outside = outside;
@@ -883,6 +913,8 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
             if (s_cOverflow || s_cAtlasFail)
                 sappend(b, sizeof b, &p, " DROPPED(full=%d atlas-fail=%d)",
                         s_cOverflow, s_cAtlasFail);
+            if (s_c.deferred)
+                sappend(b, sizeof b, &p, " deferred=%d", s_c.deferred);
             if (s_passive) sappend(b, sizeof b, &p, " (passive: nothing emitted)");
             else if (!s_ownable)
                 sappend(b, sizeof b, &p,
@@ -936,18 +968,10 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     /* THE ROUTE IS THE PUBLISHED LIST: `rlistWant` is what says a restore
        route exists; it is latched by the arm. */
     s_pub.restored = (s_atlas.rlistWant && tagpu_classicpp_assets()) ? 1 : 0;
-    s_pub.lit = s_cpp ? 1 : 0;
     s_pub.fog = v->fogMode & 1;
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
-    s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
-    {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
-        int rows = s_atlas.shelfY + s_atlas.shelfH;
-        if (rows < 0) rows = 0;
-        if (rows > s_atlas.dim) rows = s_atlas.dim;
-        s_pub.atlasRows = rows;
-    }
-    s_pub.atlasSerial = s_atlas.mirrorSerial;
+    tagpu_feat_atlas_hand(&s_pub);
     /* THE REQUEST, NOT THE PICTURE: the restored twin's texels are never
        read back (tagpu_gaf.h), so the list is the only restore route this
        hand-over carries. */
@@ -955,10 +979,7 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.restoreFrames  = s_atlas.rlist;
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
-        s_pub.restoreRepaint = s_atlas.rlistRepaint;
-        s_pub.restoreBlanks  = s_atlas.rlistBlanks;
     }
-    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     /* the grid as the fragment shader will read it, and only when it will:
        `uFog` 0 means taFog is never called and uFogGrid never sampled. */
     if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&
@@ -979,7 +1000,6 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
        uFogDim carried the real size. Refused the way the restored atlas already
        is; tagpu_terr.c has the argument in full. */
     fogBad = (s_pub.fog && !s_pub.fogGrid);
-    s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
        pass's own decision (tagpu_native.c `s_scissorOn`). A pass that clipped
@@ -999,6 +1019,28 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.frame = v->frame_counter;
     s_pubHave = total > 0 && !fogBad;
 }
+
+/* The atlas's half of the hand-over (tagpu_feat.h), and the palette its
+   base atlas is expanded through: THE ENGINE'S TABLE, unscaled -- the world
+   composite applies the Gamma factor once, to the finished image
+   (tagpu_pal.h). One writer for both the draw's hand-over and the upload the
+   consumer owes on a frame it does not draw. */
+int tagpu_feat_atlas_hand(TAGPU_FEATHAND* h)
+{
+    TAGPU_GAFVIEW av;
+    int ok = tagpu_gaf_atlas_view(&s_atlas, &av);
+    h->atlas = av.idx; h->atlasDim = ok ? av.dim : s_atlas.dim;
+    h->atlasKey = av.key; h->atlasDirty = av.dirty;
+    h->atlasRows = av.rows;
+    h->atlasSerial = av.serial; h->atlasWhole = av.whole;
+    h->atlasMoves = av.moves; h->atlasMoveN = av.moveN;
+    h->atlasMoveSerial = av.moveSerial; h->atlasMovePrev = av.movePrev;
+    h->pal = tagpu_pal_engine(); h->palSerial = tagpu_pal_engine_serial();
+    return ok;
+}
+
+int  tagpu_feat_atlas_owed(void) { return tagpu_gaf_atlas_owed(&s_atlas); }
+void tagpu_feat_atlas_ack(unsigned serial, int keep) { tagpu_gaf_atlas_ack(&s_atlas, serial, keep); }
 
 /* Hand it over, ONCE (tagpu_feat.h). */
 int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now)

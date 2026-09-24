@@ -1,7 +1,9 @@
 # BAR's camera and a full-colour Classic — the port plan
 
 **Written** 2026-09-23. **C1–C4 of Part 1 are built (G20a, on its worktree branch, not landed);
-C5 and Part 2 are not.** It is the plan for two changes the lab has already made:
+C5 is not. Part 2 is built** (G20c and G20d, the same day): §2.1–2.4 are the plan it was built
+from, corrected where the work proved them wrong, and §2.5 is what the work learned. It covers
+two changes the lab has already made:
 
 1. **Part 1** covers the camera's pan and zoom. **The BAR camera replaces the game's camera. There
    is one camera and no setting to choose another.** Beyond All Reason's centre clamp, zoom-out
@@ -331,7 +333,10 @@ options off, and the 8bpp path is deleted from the world passes.
   already has a colour twin for Classic++.
 - **The GDI fallback is untouched.** It never used this path.
 
-### 2.1 What the code is today  [SOURCE, surveyed 2026-09-23]
+### 2.1 What the code was before G20c  [SOURCE, surveyed 2026-09-23]
+
+*The survey the work started from. None of it describes the build since G20d; §2.5 and
+[GPU status](gpu-status.html) §2.88 do.*
 
 **The output is already RGB end to end.** Every world fragment shader writes RGB into the
 `ss×` world target, and `native_d` composites that onto the swapchain. "8bpp" survives in two
@@ -393,7 +398,7 @@ One pipeline, two presets. The Renderer row keeps Classic / Classic++ / Custom, 
 | texels | the **base atlas**: each index expanded to its palette colour, RGBA8, alpha 0 at the frame's key | the restored twin over the same base |
 | terrain | unlit | lambert from the heightfield, level ground exactly 1.0 |
 | features | unlit | the ground's lambert at the anchor |
-| units | the **face-shade multiplier** (below) | the **same multiplier** [DECIDED 2026-09-23], where today they are flat |
+| units | the **face-shade multiplier** (below) | the **same multiplier** [DECIDED 2026-09-23], where they were flat before G20c |
 | fog of war | the RGB mean (`TAGPU_GLSL_FOG_GREY_RGB`) | the same |
 | shadows | as the Shadows row says (hard by default) | the same |
 | sampling | `NEAREST` | as today (units trilinear, 4× anisotropic) |
@@ -405,9 +410,12 @@ choosing a shade row exactly as it does now:
 multiplies RGB by `k[row]` instead of remapping the index through the row, and clamps to 1.
 
 `k` is 32 floats, built once from the engine's own SHD table, which the packet already carries
-(`tagpu_r3d_lut_want`). Each row's value is the least-squares slope of shaded against unshaded
-palette colour, ignoring channels the table clips at 255, and normalised so the neutral row is
-exactly 1.0.
+(`tagpu_r3d_shade_want`), and the engine's unscaled palette. Each row's value is the
+least-squares slope through the origin of shaded against unshaded palette colour, over every
+entry and channel whose SHADED value is below **250** (`SH_CLIP` — the table's top is not 255 in
+every channel, and a clipped channel pulls a bright row's slope down), normalised so the neutral
+row is exactly 1.0. The live table's neutral row is **15**; without an SHD the computed ramp
+`0.60 + 0.025·row` stands in, whose neutral is 16.
 
 **MEASURED on the stock `PALETTE.SHD`** (through the lab's pack):
 
@@ -479,15 +487,21 @@ The lab's Classic lane moves to full colour in the same landing, so the lab and 
 
 **2c — Gamma once, at the end.** Everything that makes a world colour — the base atlases, the
 restored twins, `uPal` — is built from the **engine's** unscaled table (`tagpu_pal_engine()`).
-The world composite multiplies by `tagpu_pal_gamma()` and clamps. The UI keeps the presented
-palette, so the two agree.
+The world composite applies **the engine's own per-level curve**, `min(255, trunc(e × factor))`
+built in double as a 256-entry table per slot, rather than a multiply and a clamp: the engine
+truncates each entry, and a float multiply lands on the level above often enough to count. The UI
+keeps the presented palette, so the two agree.
 
 This deletes every world repaint-on-palette path, and with it the gap where the feature, effect
 and unit twins never recoloured. [GPU status](gpu-status.html)' repaint paragraph is corrected in
 the same landing.
 
-**[INFERRED — verify first]:** Gamma is the only thing that moves the palette in play.
-[Renderers](renderers.html) §2.3 establishes that water does not cycle it.
+**[VERIFIED 2026-09-23]:** Gamma is the only thing that moves the palette in play. The engine's
+table has one writer, the PALETTE load `0x42A400`, run once per process from `UIPipelinesInit`;
+every other `0x4BA200` caller is the shell's, the ARMOPT blackout or dead code; and a `big-battle`
+soak logged the table's arrival and no change after it ([engine map](exe-reverse-engineering.html),
+"Who writes the engine's own table"). [Renderers](renderers.html) §2.3 establishes that water does
+not cycle it.
 
 - **Exit:**
   - at Gamma 12 (factor 1.0), **0 px** from 2b in both presets;
@@ -504,6 +518,45 @@ comments, so regenerate rather than hand-edit).
   - atlas memory reported before and after. The R8 goes and the base stays, so the total is
     3 B/texel over today's R8 — about 12 MB per 2048² atlas;
   - the function inventory diffed against HEAD, because a deleted non-static compiles clean.
+
+### 2.5 What the work learned  [MEASURED 2026-09-23]
+
+The record, with every number, is [GPU status](gpu-status.html) §2.88 and §2.3f. What changed the
+plan, or would change the next one:
+
+- **The key is per frame, so it needs a plane of its own.** The old shaders compared the index
+  with the frame's key colour, carried per vertex; an RGBA texel cannot say it was the key. So
+  `tagpu_gaf.c` writes a key plane beside its index mirror, in the same paint and the same
+  allocation (`keym`: 0 where a texel is its frame's key), and `tagpu_pal_expand` turns it into
+  alpha 0. Every reader tests `alpha < 0.5`, which is exactly the old test.
+- **The effects' flash level rides in the base's alpha.** The flash pass remaps an index through
+  the LHT table by `index − 0x4F`; with no index left, the base stores
+  `255 − clamp(index − 0x4F, 0, 31)` in alpha, which never drops below 224, so the hole test is
+  unchanged and the shader recovers the level exactly.
+- **Gamma once is closer to the engine than the scaled palette was, and the sweep says where.**
+  At factor 1.0 nothing moves (the curve is not drawn). Elsewhere, against 2b: ±1 where one
+  truncation replaced two; the fog grey, which 2b took as the mean of already-clipped channels;
+  and, above 1.0, a shaded unit face whose unscaled colour was near white — 2b clipped the scaled
+  palette at 255 and then shaded it, which is not the engine's order (it remaps in index space
+  and scales on presentation). Classic++ moved by design: its twins were restored from the
+  Gamma-brightened art, and the lambert multiplied the presented colour.
+- **The live Gamma change needs nothing rebuilt.** `+gamma 15` on a running Classic++ game: the
+  world follows on the next frame, exact to the engine's curve on 95.8 % of the world and ±1 on
+  the rest; no restore, no repaint.
+- **`shadows=0` under Classic is honoured.** The unit pass drew the hard shadow under Classic
+  whatever the key said; now the key alone decides in both presets. Every state the Shadows row
+  can reach is unchanged, because the row writes the key and the engine's bits together — only a
+  hand-written `shadows=0` under Classic draws differently.
+- **A frame with no world target needs the Gamma too.** With no target the world passes draw
+  straight into the swapchain image, and before the fix they showed the world at factor 1.0
+  whatever the Gamma. Before G20c the palette carried the Gamma on that path, so this was a
+  regression. The fix is one full-frame quad after the last world pass and before the UI, which
+  multiplies the frame by the factor in the blend unit ([GPU status](gpu-status.html) §2.3f). On a
+  UNORM surface it is at most one level from the curve, because the blend rounds where the engine
+  truncates; it is measured against the target path in §2.88. On an sRGB surface the blend scales
+  the decoded, linear value and misses the curve by far more (level 128 at factor 1.5 lands near
+  155, not 192). That is the fallback surface, taken only when the device offers no
+  `B8G8R8A8_UNORM`, and the format choice is left as it is.
 
 ---
 
@@ -530,7 +583,7 @@ comments, so regenerate rather than hand-edit).
 | 1 (track A) | C1–C4: the BAR camera in, the old rules out | **high** — writes engine memory (the eye, the target and their range) and adds byte patches at `0x41C808`, `0x41C93B`, `0x41CAF7` and `0x468DBA` |
 | 2 (after 3) | C5, the mirror | medium — new instances and a new sprite list in two passes, no engine state |
 | 3 (track B) | 2a + 2b | medium — atlases and shaders |
-| 4 (track B) | 2c + 2d | **high** — the packet loses a field, which is the game↔render hand-over |
+| 4 (track B) | 2c + 2d, the no-target Gamma, and the fixes its review asked for: every upload through one bounded staging module, and every palette-derived source keyed on the engine serial ([GPU status](gpu-status.html) §2.88) | **high** — the packet loses a field, which is the game↔render hand-over; and the banded upload submits to the seam's queue and waits on its own fence from the render thread |
 
 ## Decisions [DECIDED 2026-09-23, the owner]
 

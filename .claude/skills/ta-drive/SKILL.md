@@ -73,10 +73,10 @@ registry values.
 by **running** instances, `--slot 0` claims a cell explicitly. A window created off-screen is
 left **unmapped** by GNOME (`xprop -id <wid> WM_STATE` reads `Withdrawn`); a relaunch is the
 clean fix. The grid spans the whole X screen from (0,0), so on a multi-head desktop the window
-lands wherever the grid falls; to park it elsewhere, read `xrandr --query` and
-`xdotool windowmove <id> <x> <y>` **on the id from `tacli ls --json`**, never from a title search
-(a terminal whose title holds the command line matches too). `scenario load --restart`
-relaunches from the recorded tile and undoes a park.
+lands wherever the grid falls. **A resolution re-tiles from the slot** — `--res`, a scenario's
+`setup.res`, a `--defaults` store size unlike the recorded one — undoing any hand-set `tile`, so
+the lever that sticks is `slot` in `instance.json`: pick the cell that lands where the window
+belongs (`tile_for` in `tools/tacli`) and confirm `window=x,y,W,H` in the instance's `impure.cfg`.
 
 **The title names the build and the instance**: `tacli launch` writes `tagpu_title.txt` and the
 DLL appends it, so the bar reads `Total Annihilation - wt:<branch> | tacli:<instance>` — the
@@ -416,8 +416,7 @@ level is pinned at 1.0 and the log says so.
 - **Aim it.** `--at` is a `pmove:` first; notches over the side panel or a menu do nothing, and
   the log says which gate refused. `tools/tacli wheel <i> 1 --at 576 384` (the viewport centre at
   1024x768) is the camera-neutral control.
-- **A round trip does not come back to 1.0** (in then out is 1.020): write `1.0` to
-  `tagpu_zoom.txt`, then delete it.
+- **In then out is 1.020, not 1.0**: to get back to 1.0 write it to `tagpu_zoom.txt`, then delete it.
 - **Re-read the eye after any wheel** — the game thread applies the delta at its next in-play
   draw. An off-centre notch in also **releases a camera follow** (`Ctrl+C`); read `main+0x142F3`
   (0 = nothing followed) rather than assuming.

@@ -338,8 +338,11 @@ static const char* FS =
     "    pi = int(texture(uLayer, vUV).r * 255.0 + 0.5);\n"
     "    if (pi == uKey) discard;\n"
     "  }\n"
-    TAGPU_GLSL_FOG_SHADE("pi")
-    "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 1.0);\n"
+    /* THE GREY BAND: the RGB rule every world pass takes (renderers.md 2.6).
+       SFS below carries the same lines. */
+    "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
+    TAGPU_GLSL_FOG_GREY_RGB("rgb")
+    "  frag = vec4(rgb, 1.0);\n"
     "}\n";
 /* ---- THE SELECTION RECT'S PROGRAM: the engine's own line, pixel for pixel ----
    A plain line drawn into the supersampled target steps on the TARGET'S grid,
@@ -430,8 +433,10 @@ static const char* SFS =
     "  if (!on) discard;\n"
     TAGPU_GLSL_FOG_DISCARD
     "  int pi = int(vCol * 255.0 + 0.5);\n"
-    TAGPU_GLSL_FOG_SHADE("pi")
-    "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 1.0);\n"
+    /* the grey band exactly as FS takes it */
+    "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
+    TAGPU_GLSL_FOG_GREY_RGB("rgb")
+    "  frag = vec4(rgb, 1.0);\n"
     "}\n";
 #pragma GCC diagnostic pop
 
@@ -1176,10 +1181,9 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
         /* the three tagpu_vk_mark.c binds as textures, as bytes -- same shapes
            tagpu_fx.h uses for the same three */
-        s_mkPub.pal = tagpu_pal_live(); s_mkPub.palSerial = tagpu_pal_serial();
+        s_mkPub.pal = tagpu_pal_engine(); s_mkPub.palSerial = tagpu_pal_engine_serial();
         s_mkPub.fogGrid = (v->fogMode & 1) ? v->fogGrid : NULL;
         s_mkPub.fogGridCols = v->fogCols; s_mkPub.fogGridRows = v->fogRows;
-        s_mkPub.fogLut = tagpu_native_foglut();
         s_mkPub.key = tagpu_markown_key();
         s_mkPub.gw = (float)v->gw; s_mkPub.gh = (float)v->gh;
         s_mkPub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;

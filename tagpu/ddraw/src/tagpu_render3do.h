@@ -13,20 +13,29 @@ int          tagpu_r3d_atlas_restore_armed(void);
    (tagpu_posebake.c). */
 unsigned int tagpu_r3d_atlas_gen(void);
 /* Once per frame from the native pass, before its first tagpu_r3d_atlas_uv:
-   recycles a full atlas, never between an emit and its draw. */
+   the allowance's frame (tagpu_gaf.h `budget`). */
 void tagpu_r3d_atlas_frame(void);
 /* Once per frame from the native pass, beside the other level-keyed caches and
    BEFORE tagpu_posebake_frame latches the atlas generation: drops every entry
    when the level changes, because the atlas keys on frame addresses the next
    level's loader may reuse. */
 void tagpu_r3d_atlas_level(unsigned level_gen);
-/* Build the shade LUT and its CPU mirror, once. `shd` is the
+/* Once per frame, right after tagpu_r3d_atlas_level and so also BEFORE the
+   latch: recycles a full atlas, never between an emit and its draw. */
+void tagpu_r3d_atlas_recycle(void);
+/* Build the face-shade calibration and its multipliers, once. `shd` is the
    frame packet's copy of the engine's PALETTE.SHD table (tagpu_pk_shd), or
    NULL to use our own computed ramp — this module does not read the graphics
    globals itself. */
-void tagpu_r3d_lut_want(const unsigned char* shd);
+void tagpu_r3d_shade_want(const unsigned char* shd);
 int tagpu_r3d_shade_neutral(void);
 int tagpu_r3d_shade_dir(void);
+/* The atlas rect of a unit texture frame, painting it on first sight: 1 with
+   `uv` and `ck` set; 0 when there is none (the face draws flat, as the
+   engine's rasteriser would); -1 when its paint was DEFERRED past the
+   allowance (tagpu_gaf.h `budget`), and then nothing that uses this face is
+   drawn this frame -- a face baked flat for want of a texel the consumer did
+   not have yet would stay flat for as long as the bake does. */
 int tagpu_r3d_atlas_uv(const char* gafframe, float uv[4], float* ck);
 int tagpu_r3d_ready(void);
 int tagpu_r3d_ensure(void);
@@ -42,20 +51,24 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
 
 /* ---- THE VULKAN LANE'S TEXELS (Phase G, the unit pass) ------------------
 
-   The unit fragment shader samples the unit atlas and the shade LUT, and
-   both exist on this side only as CPU bytes, which the Vulkan unit pass
-   uploads. The atlas takes tagpu_gaf.h's mechanism unchanged -- the mirror is
-   written by atlas_paint, and asking for one marks every painted entry for
-   repaint so that it is correct from the instant it exists. The LUT is 8 KB
-   and is simply kept.
+   The unit fragment shader samples the unit atlas's base expansion and the
+   face-shade multipliers, and both exist on this side only as CPU bytes, which
+   the Vulkan unit pass expands and uploads. The atlas takes tagpu_gaf.h's
+   mechanism unchanged -- the mirror is written by atlas_paint, and asking for
+   one marks every painted entry for repaint so that it is correct from the
+   instant it exists. The multipliers are 32 floats and are simply kept.
 
-   `_want` is idempotent and costs nothing until it is called. `_mirror`
-   returns NULL while there is none, which a pass treats as "stand down this
-   frame" and not as an error: the atlas re-converges over the next few frames.
+   `_want` is idempotent and costs nothing until it is called. `_view` is 0
+   while there is no mirror, which a pass treats as "stand down this frame"
+   and not as an error: the atlas re-converges over the next few frames. Its
    `rows` is the shelf cursor, so only the rows the packer has used are
-   uploaded. Render thread only, like the rest of this module. */
+   uploaded. `_owed` and `_ack` are the allowance's pair (tagpu_gaf.h
+   `tagpu_gaf_atlas_owed`). Render thread only, like the rest of this module. */
 void tagpu_r3d_atlas_mirror_want(void);
-const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* serial);
+struct TAGPU_GAFVIEW;
+int  tagpu_r3d_atlas_view(struct TAGPU_GAFVIEW* v);
+int  tagpu_r3d_atlas_owed(void);
+void tagpu_r3d_atlas_ack(unsigned serial, int keep);
 
 /* ASK FOR THE CLASSIC++ RESTORED TWIN. Gated on `tagpu_classicpp_assets()`,
    because the twin costs 16 MB that a session with Classic++ off must not pay
@@ -69,10 +82,10 @@ void tagpu_r3d_atlas_restore_want(void);
    `aniso` describe the TWIN and come from the atlas, because nothing reads it
    back. NULL until the list is armed and has entries. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
-                                                      int* repaint, unsigned* blanks,
                                                       int* mips, float* aniso);
-/* 256 x 32 R8, the bytes `shade_upload` last stored. The serial
-   moves when the table is rebuilt -- which happens once, and again the first
-   time the engine's own PALETTE.SHD arrives after a frame with none. */
-const unsigned char* tagpu_r3d_lut_mirror(int* w, int* h, unsigned* serial);
+/* The face-shade multiplier, 32 floats indexed by the SHD row a face takes,
+   or NULL until the calibration is built -- tagpu_render3do.c's `s_shadeK`
+   says how it is fitted. Rebuilt once, and again the first time the engine's
+   own PALETTE.SHD arrives after a frame with none. */
+const float* tagpu_r3d_shade_k(void);
 #endif

@@ -276,76 +276,421 @@ dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
 
 ## 8. Unit-type IDs 512 → 16000 (`IncreaseUnitTypeLimit`, 17 writes)
 
-**DIS.**
+**DIS, completed 2026-09-24 for [the A′ plan](content-ids.md), which raises the limit to 16 384.**
 
-- Category bitmasks are 0x40-byte (512-bit) heap blocks, made in `0x488CC2` (`push 0x40; call
-  0x4B4F10`, cleared with `mov ecx,0x10`), keyed in the map at `0x51E6B0`.
-- TADR widens:
-  - that allocation and its clear count;
-  - the OR loop in `0x488E3D` (`mov edx,0x10`);
-  - two AI parse procs' stack masks (`0x406DB5…0x406E3A`, `0x406E45…0x406ED6`, frame and
-    argument displacements, clear counts `0x406DBD`/`0x406E51`);
-  - ctrl-Z `0x48BE08/0x48BE21/0x48BF1E`.
-- I checked the other 64-byte allocation (`0x48E392`: an object with a vtable, not a mask) and all
-  97 `mov e?x,0x10` in `.text`. The ones in `0x489…0x48C` (`0x489BDF`, `0x48A38A…0x48A6D4`,
-  `0x48CE39/49`) are shift counts for the 64-bit helpers `0x4E43D0`/`0x4E44F0`, not mask loops.
-  `0x40BF49…0x40C10D` and others in `0x40xxxx` (AI) were **not** individually classified.
-- **Open:** ctrl-A/B/C are listed under TADR's §B fixes ("truncation of IDs ≥ 512"), so they are
-  masks this item does *not* widen. Settle it by classifying the remaining AI-range `mov ecx,0x10`
-  sites before trusting it.
-- No loader cap on the type count was found (no `cmp …,0x200` in the loader). Stock simply
-  overflows the 64-byte masks past 512 types.
+**How types get their IDs.** The per-game load (`0x42D4DC..0x42D653`) compacts and sorts the defs,
+then numbers them `0..count−1`. Def 0 is `None`, so real types are `1..count−1`. The def array is
+`(files+1)·0x249` bytes (`0x42AA65..0x42AA98`), sized by the files found, with no loader cap: no
+`cmp …,0x200` anywhere in the loader. The type field is `u16`, at def `+0x21E` and unit `+0xA6`,
+and many loops count in `u16`, so the hard ceiling is 65 535. Stock data holds 278 unit FBIs, so
+`UNITINFOCount` is 279.
 
-**SIM-relevant as content** (AI build targeting, categories). Static immediates; any time before
+**The masks, and where stock breaks.**
+
+- **The mask blocks.** Category bitmasks are 0x40-byte (512-bit) heap blocks. `0x488C50` gets or
+  creates one in the name map at `0x51E6B0`, allocating it at `0x488CC2` (`push 0x40; call
+  0x4B4F10`) and clearing it with `mov ecx,0x10`. They are freed only at teardown (`0x488BF0`, from
+  `0x491C3A`).
+- **Writers, with no bound:**
+  - name → mask, `0x488E03`;
+  - the FBI `Category` tokens, `0x488EC3` (in `0x488E70`, called from `0x42CC40`);
+  - **every type into `ALL`**, `0x488F21`.
+- **Readers:**
+  - the badTarget/noChase masks at def `+0x231/+0x235/+0x239/+0x23D` (built at
+    `0x42C028..0x42C0AB`), read at `0x4063E8`, `0x406493`, `0x4070A1/C3`, `0x407181`, `0x408AF2`,
+    `0x40B94F`, `0x40BA0E`, `0x40FD8E` and `0x40FE39`;
+  - the commander, `0x41C364`;
+  - selection, at `0x48BFCE`, `0x48DA88`, `0x48DBA3`, `0x48DCDA` and `0x49347D`.
+- **Stack masks, 64 bytes each.** The AI weight proc `0x406DB0` and limit proc `0x406E40` fill
+  theirs through `0x488D30`, and they are read by `0x409DC0`/`0x409E90`, which loop to
+  `UNITINFOCount`. Ctrl-Z has its own, at `0x48BE00` (called from `0x496413`).
+- **Stock breaks at 512 real types** (`UNITINFOCount` 513). At game start, `0x42D6C2` → `0x42BF40`
+  → `0x488E70` sets bit 512 in `ALL` and in each of the type's categories. That is a heap write past
+  the 64-byte block, guaranteed for the first type with ID 512 or more. Further effects:
+  - Ctrl-Z with such a unit selected ORs a bit into its own return address at `ESP+0x50`.
+  - An AI line naming such a unit does the same in the AI procs.
+  - An AI line naming a category ORs only 16 dwords, so those types are silently left out.
+  - The exact symptom of the heap write is INF.
+
+**TADR's writes (SRC, each checked against DIS).** All 17 stock byte sequences match the pristine
+exe. TADR replaces each with a 5-byte `jmp` to a trampoline that holds the widened instruction and
+the tail it displaced. No branch lands inside a span except at its first byte. With
+`New = ((N/8/64)+1)·64`, which is 2048 for 16 000:
+
+- the frames of `0x406DB0` (`0x406DB5`, `0x406DC9`, `0x406DFD`, `0x406E3A`) and `0x406E40`
+  (`0x406E45`, `0x406E5D`, `0x406E64`, `0x406EB2`, `0x406ED6`), with every stack displacement
+  moved;
+- the allocation `0x488CC2` (`push New`);
+- the five clear and OR counts `0x488CD3`, `0x488E3E`, `0x406DBE`, `0x406E52` and `0x48BE22`
+  (`New/4` dwords);
+- Ctrl-Z's frame, `0x48BE08` and `0x48BF1E`.
+
+**The five 16-dword loops are exactly TADR's five** (`0x406DBD`, `0x406E51`, `0x488CD2`,
+`0x488E3D`, `0x48BE21`). All 116 `mov r,0x10` in `.text` are now classified:
+
+- The sites in `0x40BF49..0x40C10D` and the rest of `0x40xxxx` are 16.16 shift counts for the
+  64-bit helpers `0x4E43D0`/`0x4E44F0`, and the same holds for those in `0x489…0x48C`.
+- `0x40336A` is a clamp to 16.
+- The rest are 16-byte `rep cmps`, the selection flag 0x10, or graphics.
+
+**Ctrl-A, B, C and F need no site of their own.** Ctrl+letter runs `0x4963D8`, which formats
+`CTRL_%c`, and `0x48BF30` only reads the heap mask. Ctrl-C adds `0x41C310`, which reads the
+`Commander` mask, and Ctrl-F (`0x48D9A0`/`0x48DC30`) also only reads. They widen with the
+allocation. TADR's §B changelog line about them comes from the same commit (`4546d82`) as the OR
+loop and Ctrl-Z.
+
+**Everything else indexed by type is sized by the count**, not by 512:
+
+- the model table, `count·4` (`0x42D693`);
+- the battleroom tables at `[0x5129B4]` (`count·0x62`), `[0x5129B8]`, `[0x5129C4]` and two more
+  (`0x44C900..0x44CA20`);
+- the AI's per-type vectors at `+0x81/+0xA1/+0xB1/+0xC1/+0xD1/+0xE1`, resized to the count
+  (`0x4092F6`, `0x409470`).
+
+Some structures use no type index at all. The restriction store and the unit sync are maps keyed
+on the FBI's CRC at def `+0x13E` (`0x46E330`, `0x46D0E0`), and the per-player count of a type is a
+scan (the unit constructor `0x485F50`).
+
+On the wire, the unit create at `0x45605E` carries a `u16`. The `0x2C` builder (`0x48B710`)
+bit-packs the type into as many bits as the count needs (`main+0x14393`, set at `0x42D65B`): stock
+needs 9, 16 384 needs 15. The packet stays under 0x200 bytes (`0x48B7F6`), so fewer units fit in one
+(INF).
+
+**A separate stock overflow: the build list.** Each builder's entries under `[CANBUILD]`
+(`canbuild%d`, in `gamedata\sidedata.tdf`: the strings are pushed at `0x42D937..0x42D945`, and a
+failure reports "Can't load GAMEDATA.TDF"; builders are the defs with `+0x241` bit 6) are read into one shared
+0x3C-byte heap block the engine names `TEMP UTYPE LIST` (`0x42D971`, through `0x4D83B0`), 30 `u16`
+IDs.
+
+- The append loop `0x42DA46..0x42DA99` stops only when a key is missing.
+- The builder's own copy is a fresh 0x3C-byte block (`0x42DACA`, named `CANBUILD %s` after the
+  unit) at def `+0x156`. It is filled by a `rep movs` of exactly 15 dwords, with the real count at
+  `+0x152`.
+- The shared block is freed after the last builder (`0x42DB07`).
+- **A second writer**, `0x42BE30` (from `0x42E0DE`, later in the load), appends each builder's
+  download-menu entries to the list through `lea ebp,[def+0x152]`. It appends while the count is at
+  most 30 (`0x42BEAF`), so it can write entry 30, two bytes past the block: a stock off-by-one.
+- **Readers.** Three loop to the count:
+  - the AI's pick `0x40BDB0` (reached through the count test at `0x408149`/`0x408781`);
+  - the AI's debug listing `0x46887B..0x468982`;
+  - `0x4894F0`, which has no callers.
+
+  The rest only test the pointer: `0x4094B6`, `0x40ABAD`, `0x4143F9`, `0x41B8F7`, `0x43E828`,
+  `0x43F7A0`, `0x468604`, `0x48CCBC..0x48CCE4`, and our `tagpu_order.c`. No reader assumes 30.
+  (`0x46B04C`/`0x46B2DC` read a UI struct, not a def.)
+- **Lifetime.** The def clone `0x42B370` copies `+0x152`/`+0x156`, but every clone runs before
+  `0x42D9BB`/`0x42D9C7` zero them, so no two defs share a list. Teardown frees each list with
+  `0x4D85A0` (`0x42DC52`, in `0x42DB90`, on the game thread).
+- **So** a builder with more than 30 entries overruns the shared block and makes the counted
+  readers read past its own copy. It depends on the length of the list, not on the number of
+  types. Stock's longest list is exactly 30 (`corch`, `corcsa`, READ), with no download entries.
+
+**A third stock overflow: the download-menu records.** `0x42DCF0` (tag `DOWNLOADMENU`, loader
+thread) builds one 0xBD-byte record per `download\*.tdf` file.
+
+- The block is at `[main+0x391CB]`, its count at `[main+0x391C7]`, allocated at `0x42DD74`.
+- Each record is a dword entry count and five 0x25-byte entries: a `u16` builder type, `u8`
+  `MENU`, `u8` `BUTTON`, and the buildee's name as a 32-byte string.
+- The entry loop `0x42DDD5..0x42DF0C` has no cap, so a file with six or more entries writes past
+  its record.
+- Readers: the build menu `0x41AE0F` (which never checks `BUTTON` against its gadget count), the
+  page count `0x42DF72` (def `+0x22E`), the downloadable check `0x42E04B` (a string compare per
+  type and file), and `0x42BE30`. `0x42BD40` is dead.
+- Stock content (READ): 70 files, at most 4 entries each.
+
+**Saved games store types by name.** A unit's record starts with its def's name (`0x4877DF..
+0x487811`), resolved on load through `0x488B10` (`0x487183`). Build orders use `UTYPENAME%4d`
+(`0x43ABF8`, `0x43A757`), and features are saved by name too. Neither ceiling reaches the format.
+
+**The unit sync (`0x1A`) is keyed on the FBI's CRC, never the type.** Trees, vectors and lists
+(`0x46EF50`, `0x46E9B0`, `0x46E640`), per-peer records of 0x5C bytes, dword counters.
+
+- Each message is 14 bytes: the type, a subtype, fill, the CRC at `+6`, then status and an `i16`
+  limit.
+- A join walks every def (`0x46DD1E`) and sends one subtype 3 per def per peer (`0x46D860`); the
+  peers also exchange one subtype-2 CRC per def.
+- Its matching is linear (`0x46D755`, `0x46D9E3`, `0x46DA7A`, `0x46D906`), so a join costs on the
+  order of N²·P compares. Unmeasured.
+- TADR's `.tad` format keeps all of them in one record with a `u16` length (SRC,
+  `Docs/saveformat.txt`), which overflows above about 2 340 types.
+
+**Memory.** The CRT allocator `0x4D83B0` → `0x4D83C0` retries through the new handler at
+`[0x5289BC]`.
+
+- **The out-of-memory path.** WinMain (`0x49E849`, in `0x49E830`) installs `0x49E700` for the
+  whole process. On any failed allocation it:
+  1. appends "Out of memory! Your hard disk may be full" to `ErrorLog.txt`;
+  2. dumps registers and stack through a deliberate fault (`0x49E680` → `0x4D8E60`);
+  3. shows a system-modal `MessageBoxA`;
+  4. ends in `raise(SIGABRT)`, which leads to `ExitProcess(3)`.
+
+  It never returns.
+- **Where stock clears the handler.** Two places set it to 0 around one allocation: the save
+  writer's compression buffer (`0x4B3B75..0x4B3B8F`, `0x4B4146..0x4B422B`) and BIGSHOT
+  (`0x495ABE`, which reinstalls `0x49E700` instead of what it replaced). The handler is a plain
+  global.
+- **A handler-free entry.** `0x4E8890` is `_nh_malloc(size, _newmode)`, and nothing writes
+  `_newmode` (`[0x52A430]`), so it returns NULL on failure. Called inside the allocator's critical
+  section (`0x4DA780`) with its bookkeeping (`0x4DA7D0`), when `0x4D80D0` (`-memfussy`) is false,
+  it gives memory that `0x4D85A0` frees. That is the composite grow's allocation.
+- **The engine's own counters:** live bytes `[0x5289F8]`, peak `[0x5289D8]`, live blocks
+  `[0x528A08]`.
+- **Per type** (DIS; sizes READ from the retail archives):
+  - the def, 585 bytes, in one contiguous array;
+  - the 3DO at exactly its file size, fixed up in place (`0x42D766` → `0x4CB560` → `0x4BBE50`),
+    with no sharing between types that name the same model;
+  - the COB at its file size, plus a 0x18-byte node (`0x42D8EF` → `0x4B2450`);
+  - the yardmap;
+  - the masks, one per distinct category string.
+
+  Every kept type loads every game. Stock 3DOs have a median of 5.8 KB and a maximum of 20.9 KB;
+  COBs a median of 3.1 KB and a maximum of 36.6 KB. The heaviest type is `armss` at 48 KB. No two
+  stock types name the same model. The unit-selection dialog adds one 4 KB picture a type while it
+  is open.
+- **Measured 2026-09-24 on the reference setup** (Wine 9, whose 32-bit process also maps the
+  host's 32-bit Vulkan drivers; addresses walked with `VirtualQueryEx` from inside the prefix):
+  - A stock game on the current build commits 196 MB.
+  - **200 synthetic types** (the stock Peewee's FBI and COB under new names) **added 3.3 MB
+    committed and 0.7 s of scenario load: 17 KB and 3.6 ms a type.** The engine's count read 479.
+  - A 32-bit process with the Vulkan stack loaded allocated **1439 MB** of heap before failing, in
+    every band below 2 GB. That includes the 0x20000000 and 0x40000000 regions `VirtualQuery`
+    reports as reserved: they are Wine's own reservations, which it hands out to ordinary
+    allocations.
+- **Sharing a model is feasible** (not planned; the lever if a mod runs out of memory):
+  - The load's fixups (relocation, the x/z negation, the texture binding) must run once, so a
+    shared type skips `0x42D75E..0x42D78F`.
+  - Teardown must free each model once.
+  - Two types sharing a model would show the same animated-texture frames: the ticker `0x415B36`
+    writes its frame cursors into the model.
+
+**SIM-relevant as content** (AI build targeting, categories). Static immediates, so any time before
 use is fine.
 
 **Our code:**
 
-- `src/tagpu_weapons.c:30` `WPN_MAXDEFS 4096`: refuses and logs types beyond, gracefully.
-- `src/tagpu_cat.c:47-51` `MAX_DEFS 16384`.
-- `src/tagpu_native.c:99` / `tagpu_packet_pub.c:297,427`: the `UNITINFOCount` bound follows the
-  engine's own count, so it needs nothing.
+- `src/tagpu_weapons.c` `WPN_MAXDEFS 4096`: a type past it keeps three weapons, with a log line.
+- `src/tagpu_weapons.c` `mask_has()` reads `mask[type >> 5]` with a `u16` type from the unit's
+  `+0xA6` and no bound. Bounded masks are the A′ plan's.
+- `src/tagpu_cat.c` `MAX_DEFS 16384` caps only the catalogue file.
+- Already bounded: `tagpu_scenario.c` `unit_type_index` refuses a count above 16 384;
+  `model_root` requires `n <= 0x10000`; the packet's `model_id`, `type_row` and `PK_BUILD.type` are
+  `u16`, bounded by the engine's count (`tagpu_native.c`, `tagpu_packet_pub.c`).
+- The Vulkan unit pass caches 512 models and 1024 (type, owner) streams a frame
+  (`tagpu_posebake.h`), and a frame over either is refused whole. Stock content can reach the
+  stream limit with ten players on screen. The A′ plan sizes them first.
 
 ## 9. Weapon IDs 256 → 4096 (`WeaponIdOverflow` + `WeaponFiredExt`, off by default)
 
-**DIS.**
+**DIS, completed 2026-09-24 for [the A′ plan](content-ids.md).**
 
-- `0x42E463` reads `ID` with default −1 (`0x4C46C0`). Then, with **no bound either way**,
-  `ebp = main + id·0x115 + 0x2CF3` (`0x42E46E…0x42E489`; the stride arithmetic works out to 277).
+**The loader, `LoadWeaponTdf` `0x42E440`.**
+
+- It reads `ID` with default −1 (`call 0x4C46C0` at `0x42E463`). With **no bound in either
+  direction**, it then computes `ebp = main + id·0x115 + 0x2CF3` (`0x42E468..0x42E489`).
 - `Weapons[256]` ends at `0x2CF3 + 0x11500 = main+0x141F3`, **exactly the projectile
-  count/pointer**. So ID ≥ 256 corrupts the projectile pool header, as TADR says. **ID < 0** (a
-  weapon with no `ID=`) writes below `main+0x2CF3`, which TADR does not mention.
-- The name lookup loops 256 (`0x49E5EB cmp esi,0x11500`).
+  count/pointer**, so ID 256 corrupts the projectile pool's header, as TADR says.
+- **ID −1** (a weapon with no `ID=`) writes over `main+0x2BDE..0x2CF2`, the UI and input block,
+  which TADR does not mention: the mouse position, the hovered cell and feature, the build
+  footprint, the mode byte `0x2CC3`, `BuildUnitID` `0x2CC4` and `0x2CC6`. Such a weapon is never
+  found by name, because the lookup starts at slot 0.
+- **The ID byte at weapon `+0x10A` is not the TDF's ID.** The load wipe `0x42E310` sets it to the
+  slot's own index as a byte, and the loader never writes it. The model path indexes by that byte
+  (`0x42ED50`, `0x42ED67`, `0x42ED74`, `0x42F340..0x42F387`). So an ID-less weapon, whose byte comes
+  from `main+0x2CE8`, also overwrites some other weapon's model pointer and name.
+
+**21 references to the array, a complete list.** A raw byte scan of `.text` for every displacement
+in `[0x2CF3, 0x2E08)` and for `0x11500` found 18 displacements and 3 bounds. The scan covers the
+region where objdump's sweep desyncs near `0x49C740`.
+
+- **The displacements:**
+  - `0x42CDE8`;
+  - the wipe, `0x42E322/32A/332`;
+  - the loader, `0x42E489`;
+  - the model path, `0x42ECCA`, `0x42ED67`, `0x42ED74`, `0x42F364`, `0x42F380` and `0x42F387`;
+  - the release, `0x42F3B3`;
+  - the meteor weapon, `0x437CFD` and `0x437D19`;
+  - the `0x0F` receiver, `0x455484`;
+  - the `0x0D` receiver, `0x49D295` and `0x49D29F`;
+  - the name lookup, `0x49E5D1`.
+- **The bounds** are `cmp r,0x11500` at `0x42E33E`, `0x42F431` and `0x49E5EB`.
+- **Why relocation is clean.** Every access is `[main + id + id·276 + disp]` through one register.
+  At 12 sites the `mov reg,[0x511DE8]` feeds only the weapon address, so it can become a
+  same-length immediate. The two receivers share `main` with other fields, so their blocks are
+  rewritten instead. Nothing computes an ID from a pointer, and the name lookup's 7 callers store
+  pointers.
+- **Lifetime.** The array is refilled on every level load (`0x4918BB`) and released at teardown
+  (`0x491C26` → `0x42F3A0`).
+- **Prior art (SRC).** TADR's Recorder `WeaponsExpand.pas` and its commented-out
+  `HardCodedValue.cpp` relocate through the same sites. The second omits both receivers, so it
+  worked in single player only.
+
+**The ID in memory and on the wire.** Unit defs, unit slots, projectiles (`+0x00`), feature defs
+(`+0xE4`) and the meteor global `0x512328` all hold **pointers**. The `+0x10A` byte is read:
+
+- as the "armed" test (`!= 0`): the AI at `0x40954D`, `0x409682` and `0x409940`, then `0x49E0C2`,
+  and our `tagpu_weapons.c`;
+- as the model path's index and loop bound, at `0x42EC99`;
+- by save games, which store it as a dword at `0x487A1C` and write it back at `0x487628`, never
+  indexing by it;
+- by the wire senders:
+  - **`0x0D`, weapon fired, 36 bytes.** The layout: `+1` start and `+0xD` target (three `i32`
+    each), **`+0x19` the ID byte**, `+0x1A` flags, two `u16` at `+0x1B` and `+0x1D`, `+0x1F` the
+    target unit, `+0x21` the shooter, and `+0x23` the weapon slot.
+    - `+0x1A` defines only bit 0, the interceptor, and the senders merge it into an uninitialised
+      stack byte.
+    - `+0x23` from the four unit senders (`0x49D7E5`, `0x49DAD8`, `0x49DCAB`, `0x49DE6D`) is
+      `and dl,3`, and our extra-weapons module uses bits 0..3. The meteor sender `0x49DFA9` leaves
+      `+0x1A..+0x23` uninitialised. `0x499AB0` and `0x499BA0` have no callers.
+    - The receiver indexes `Weapons[byte]` directly (`0x49D27B`) and does not bound the shooter
+      index at `+0x21` (a `u16` scaled by 0x118): a stock hole.
+  - **`0x0E`, interceptor detonation, 14 bytes:** the type, the target point (three 16.16 `i32`),
+    and the ID byte at `+0xD`.
+    - Area damage `0x49A120` sends two whenever an interceptor (weapon mask bit 30) catches a
+      projectile, one for each projectile (`0x49A78C`, `0x49A7CD`).
+    - The receiver `0x49AF90` detonates, through `0x499EB0(proj,0)`, the **first** projectile in
+      the local pool whose target (`+0x28/+0x2C/+0x30`) and ID byte both match. With no match it
+      does nothing.
+    - `0x499EB0` kills the projectile and plays the explosion. If the projectile's owner is local
+      (`+0x66`, player type not 3), it then applies the damage (`0x499CD0`, or area damage
+      `0x49A120`).
+    - **So a mismatch is simulation:** two weapons whose IDs share a low byte, aimed at one point,
+      would detonate the wrong projectile, with its damage.
+  - **`0x0F`, feature hit, 6 bytes:** the type, the ID or a sentinel at `+1`, then `u16` x and y.
+    - The only real-weapon sender is `0x42454B`. The receiver `0x45544D` reads `0xFD`/`0xFE`/`0xFF`
+      as sentinels: `FeatureDie(x,y,0)`, `0x4233A0(x,y,1)` and `FeatureDie(x,y,1)`. Anything else
+      goes to `Weapons[byte]` → `0x4244B0`. So **a weapon with ID 253–255 hitting a feature is
+      misread as a sentinel on every other peer**, a stock defect.
+    - x and y are 16-pixel cells, bounded against the map by `0x481550`, which returns NULL outside
+      it. `0x4244B0` then reads through that NULL at `0x4244CF`, so a malformed `0x0F` can crash
+      the receiver.
+    - The map's size is copied from the TNT header unclamped (`0x48367D`, `0x483684`). But
+      positions are 16.16 `i32` shifted right by 20 (`0x4815A0`), so no reachable cell passes 2047.
+  - `0x0B` and `0x0C` carry no weapon ID. **COB carries none either**: GET `0x480770` and SET
+    `0x480B20` accept values 1..20 only (`cmp eax,0x13`), none of which reads a type or a weapon,
+    and EMIT_SFX and EXPLODE reach only particles and flying pieces.
+  - **`0x05`, chat, 65 bytes:** the type and a 64-byte text field (sent with `push 0x41`).
+    - The dispatch table `0x455F84` sends it (slot `0x455F90`) to `0x45522E`. That drops it unless
+      the addressee is an active local human, then calls `0x463CA0(text, 8, 0, sender)`.
+    - `0x463CA0` returns at `0x463CA7` when the text starts with a zero byte: no line, no log, no
+      sound. TADR's tagged messages (`05 00 <id>`, ids `0x2B..0x31` and `0x60`, SRC
+      `PacketChatRouter.cpp`) rely on exactly that.
+    - Received chat is never logged. Only chat typed locally in a network game goes to
+      `reporter.dll`.
+  - **Threads.** In play, the receive pump `0x453D40` runs on the game thread, from the frame
+    callback (`0x4968CB`) and the sim tick (`0x4954C8`). During a network load, the loader thread
+    (`0x49727D`) pumps it as well.
+- Weapon `+0xBC`, which TADR's Delphi layout calls "reserved": no displacement in the array scan,
+  no loader store, and only unit pointers at `+0xBC` in the weapon code ranges. Unused, with high
+  confidence; about 160 hits elsewhere are unclassified.
+
+**Stock content (READ from the retail archives, counts only).** 195–198 unique weapons across
+`totala1.hpi`, `rev31.gp3`, `ccdata.ccx`, `btdata.ccx` and five root `.ufo` files. Every section
+has `ID=`, **the highest ID is 246**, and no ID or name is duplicated. **ID 0 is used once, by
+`NOWEAPON`**, so it cannot be refused. No weapon uses 253–255.
 
 **TADR's mechanism (SRC).**
 
-- The hook at `0x42E468` substitutes EAX so that the stock address arithmetic lands in a heap
-  overflow array. It works because 0x115 is odd and so invertible mod 2³², and it depends on `main`
-  not moving during a load.
-- It hooks the "name not found" tail `0x49E5F3` and the load wipe `0x42E310`.
-- On the wire, `0x0D WEAPON_FIRED` carries the weapon ID as **one byte at payload `+0x19`** (SRC:
-  `WeaponFiredExt.h`, not re-disassembled here). `WeaponFiredExt` re-sends the whole 36-byte `0x0D`
-  plus a u16 ID inside a hijacked 65-byte `CHAT_05` (msgId `0x2E`).
-- Unpatched peers see an empty chat and **silently drop the fire event**.
+- **The overflow array.** A hook at `0x42E468` replaces EAX for IDs in [256, 4096), so the stock
+  arithmetic lands in a heap array. The array's distance from `&Weapons[0]` is aligned to an exact
+  multiple of 0x115, and the whole trick depends on `main` not moving. **Corrected 2026-09-24:**
+  this section used to say it works "because 0x115 is odd and so invertible"; the alignment is what
+  it relies on.
+- **Three more hooks:**
+  - `0x49E5F3`, the name-not-found tail;
+  - `0x42E310`, the wipe, which clears the overflow array;
+  - a post-parse hook that stamps every overflow slot's ID byte `0xFF`.
+- **`WeaponFiredExt`.** A hook at `0x451DF0` recovers the weapon from the shooter and `slot & 3`.
+  For IDs of 256 and up it broadcasts a 65-byte `CHAT_05` (`05 00 2E`) carrying a `u16` ID and the
+  whole 36-byte `0x0D`, and suppresses the original. Its receiver substitutes EDX at `0x49D27E`.
+- **Defects (DIS+SRC; runtime effects INF):**
+  - the model path writes an overflow weapon's model into `Weapons[255]`;
+  - overflow slots are never freed;
+  - ID < 0 is unhandled;
+  - ID ≥ 4096 lands in slot 0, over the no-weapon entry;
+  - meteor packets carry a garbage shooter, so resolving it reads outside the unit array;
+  - `slot & 3` aliases our extra slots;
+  - `0x0E` keys every overflow weapon as `0xFF`;
+  - `0x0F` sends `0xFF` for one, so remote peers reclaim the feature instead of damaging it.
+- **Peers.** A stock peer sees an empty chat and drops the fire.
 
-**SIM + a new wire message.** Our extra-weapons work's `CRC_weapons` guard covers weapon *slots*,
-not IDs.
+**SIM + the wire.** Our extra-weapons work's `CRC_weapons` guard folds the per-file CRCs of the
+weapon TDFs, `ID=` lines included, so it is independent of the ID's width. Our render and packet
+code follows weapon pointers only. `OFF_WEAPON0` in `tagpu_weapons.c` follows the array. Two of the
+five sender reads (`0x49DAD8`, `0x49DCAB`) sit inside existing extra-weapons splices.
 
 ## 10. Composite buffer 600² → 1280² (`0x458195`)
 
-**DIS.**
+**DIS, completed 2026-09-24 for [landing 7](raised-limits.md#the-landings).**
+
+**The frame.**
 
 - `0x458180` (called from the model loader at `0x42D473`, once a level) does
-  `push 0x258; push 0x258; push 0x506604; call 0x4B8E00` and stores the frame at `+0x10` of the
+  `push 0x258; push 0x258; push 0x506604; call 0x4B8E00`. It stores the frame at `+0x10` of the
   composite draw context `*(main+0x1437B)`: **one shared scratch frame, not the per-unit
-  composite** (landing 4 corrected this; the unit's frame is the AABB's size, capped by the ring).
-- It is the only such pair in `.text`. TADR writes all ten bytes blindly.
-- Four writers in the blit (the build-state copy `0x4589C0`, the frame copy `0x45A470`, the shadow
-  build `0x45A790`, the 2× structure bake in `0x459830` / `0x459C70`) size it to a unit and never
-  compare with the allocation, so the raise moves an overrun threshold
-  rather than bounding it. The writers run on every lane (landing 4 read its header after a Vulkan
-  fight), so this is memory safety everywhere, and only GDI presents the result.
-- The engine map's *The composite scratch frame* has the addresses and the measurements.
+  composite**. Landing 4 corrected this: the unit's own frame is the AABB's size, capped by the
+  ring. It is the only such pair in `.text`, and TADR writes all ten bytes blindly.
+- `0x4B8E00(name, w, h)` allocates `w·h·2 + 0x18` bytes through `0x4D83B0`. Its header:
+  - `+0` `u16` width, `+2` `u16` height;
+  - `+4`/`+6` the `s16` hotspot;
+  - `+8` the transparent index;
+  - `+0x10` the colour plane (base + 0x18), `+0x14` the depth plane (colour + w·h).
+
+  The pitch is the header's width.
+- **The header is not the allocation's record.** Every writer overwrites `+0..+8` with a unit's
+  box, and nothing ever rewrites `+0x10`/`+0x14`. So `A = [+0x14] − [+0x10]` is the allocation's
+  size in pixels, and what bounds a write is **area**, not either axis. Stock `A` is 360 000; at
+  1280² it is 1 638 400.
+
+**Four writers, and a fifth write.** All run on the game thread, reached only through DrawUnit
+`0x45AC20` → `0x45AE6C` → `0x458810` → the blit `0x459200`. None compares with `A`, so the raise
+moves an overrun threshold rather than bounding it.
+
+- **The build-state copy `0x4589C0`.**
+  - Called from `0x459608` every frame, for nanoframes, factories with cargo, and units with
+    `+0x114` bit 0.
+  - It sizes the box to the union of the model's box (`0x458310`), each cargo's box, and the unit's
+    own frame, and writes the header at `0x458B8C`.
+  - The blit then draws the unit's **body** from the scratch.
+  - The cargo merge `0x4B90A0` refuses a negative origin but clips neither right nor bottom. It is
+    safe only because the union provably contains each cargo box.
+  - Hook: `0x458B87`, `8B 4B 10 F7 D8`.
+- **The frame copy `0x45A470`.**
+  - Called from `0x459338`, `0x4594DB` and `0x45958C`.
+  - It copies the unit's own frame header and `w·h` bytes of each plane. The blit draws only the
+    silhouette shadow from it.
+  - Hook: the entry, `8B 44 24 04 53`.
+- **The shadow build `0x45A790`.**
+  - Called from `0x4592FE` and `0x45955B`, once for a completed structure, then cached in
+    `Object3do+0x14`.
+  - It clears `w·h` taken as 32-bit values while the header gets the 16-bit ones.
+  - **The fifth write:** `0x4B9E60` compresses the colour plane **into the depth plane**
+    (`0x45A85B`). At most `2h(w+1)` bytes, so the bound there is `2h(w+1) ≤ A`.
+  - Hook: `0x45A7B9`, `8B 4D 10 66 8B 54 24 10`.
+- **The 2× structure bake in `0x459830` / `0x459C70`.**
+  - Taken for anti-aliasing (which the settings store pins on), the structure bit, and a nonzero
+    mode.
+  - The header is the unit's frame × 2 through a 16-bit `shl`, and it clears `4·w·h`.
+  - Hooks: `0x459875` (`85 DB 0F 84 96 00 00 00`) and `0x459CB5` (`85 C0 0F 84 9A 00 00 00`),
+    whose `je` targets are the engine's own 1× path.
+
+All 15 references to `main+0x1437B` were read: besides these, only the constructor, the teardown
+`0x4581C0`, and the ring's flush and free (`0x437C80`, `0x437C90`). Every other function called on
+the scratch takes its size from the header.
+
+**What sizes the box.** A box is the model's extent in world units, 1 unit = 1 pixel, and zoom
+never enters. The ring (`ctx+0..+0xC`) is `page_round(2·W·H·1.3·f)` with `f = min(RAM_MB/16, 5)`
+(`0x42D3E9..0x42D466`), 13·W·H at most. `0x437A30` refuses only a block larger than the whole ring,
+so nothing keeps a box within `A`. 3DO vertices and COB `move` are unbounded, so no static proof
+exists.
+
+**Stock boxes**, computed from the retail 3DOs (all pieces at rest, the worst heading):
+
+- The largest 1× is `cordev1`/`armdev1`, 184×239 = 43 976 pixels: 12 % of stock `A` and 2.7 % of
+  1280².
+- The largest 2× structure is 4 × 35 708 = 142 832 pixels: 40 % and 8.7 %.
+
+**What each lane sees.** Only GDI presents the scratch. On Vulkan it reaches only the golden
+source, and nothing of ours reads it on the render thread.
 
 ## 11. Simultaneous sounds 8 → 128 (`MixingBuffers`)
 
@@ -437,9 +782,9 @@ read with every peer paused — two and a half stock pools, and 36 % of this one
 | units/player 500→1500 | **SIM**, host-broadcast | per game | 3 immediates + `0x44CAFE` | **two `maxunits` paths (`0x432646`, `0x436037`), unclamped**; **`0x44CAFE` is a per-type sentinel (101), a real cap after a cancelled restriction menu** | design slots, 15 001 since landing 2; scenario `OFF_LIMIT` | beyond the design point: truncation |
 | pathfinding 1333→66650 | sim, owner-local (INF) | per game (map init) | 1 dword, blind | none | none | CPU per tick |
 | SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | the walk's layer bound (drops whole layers), `MAX_PART`, the effects pass's sprite bucket; all follow since landing 3 | about 15 MB |
-| unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | ctrl-A/B/C (in §B); AI-range `0x10` sites unclassified | `WPN_MAXDEFS 4096` refuses | mods only |
-| weapon IDs 256→4096 | **SIM + wire** | load-time hook | 3 hooks + chat-hijack packet | ID < 0 unguarded (stock) | `OFF_WEAPON0` users; `CRC_weapons` does not cover IDs | needs every peer; off in mainline |
-| composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **four writers never compare with the allocation** (the build-state copy, the frame copy, the shadow build, the 2× bake) | none | 3.28 MB a level |
+| unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | none (all 116 `mov r,0x10` classified; ctrl-A/B/C/F only read masks); the separate `CANBUILD` overflow `0x42D971` | `WPN_MAXDEFS 4096`, `mask_has` unbounded, the unit pass's caches | mods only; planned in [A′](content-ids.md) |
+| weapon IDs 256→4096 | **SIM + wire** | per level (`0x4918BB`) | 4 hooks + chat-hijack packet | ID < 0 unguarded (stock); `0x0E` and `0x0F` still 8-bit; the model path | `OFF_WEAPON0`, two extra-weapons splices | needs every peer; off in mainline; planned in [A′](content-ids.md) |
+| composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **four writers never compare with the allocation** (the build-state copy, the frame copy, the shadow build, the 2× bake), and the shadow's compression writes a fifth | none | 3.28 MB a level; the bound is [landing 7](raised-limits.md#the-landings) |
 | MixingBuffers 8→128 | audio | per process (registry load) | none (launcher writes REG) | **the engine tracks 32; past it a sound plays untracked** | the impure.cfg store's loader observer, bounded to 32 | none |
 | wreck records 2048→8192 (**not TADR's**) | **SIM**: corpses, and features dying or reclaimed | per level (`0x421F20`) | none — TADR leaves it | — | `WR_COUNT` ×2, `TAGPU_PK_MAX_WRECKS`, `PK_RESERVE`, `TAGPU_PD_MAXHAND` | a full pool refuses corpses; stock's paid-for feature left standing is fixed at `0x423651` (§12) |
 

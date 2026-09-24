@@ -157,8 +157,12 @@ fixture that only arms the pass produces no picture:
 | order lines | `order.on` **and** SHIFT physically held (`down:shift` … `up:shift`; a bare `shift` is a 150 ms tap) **and** an order that does not complete — `move` completes and takes its markers with it; `patrol` never does |
 | order triangles | the route dots — only for the **hovered** unit; `pmove:x,y` onto it from a fresh roster, at game speed 1 so it does not walk away |
 | labels | `+showranges`, typed into the chat |
-| cursors | a **held** drag (`pmove:x0,y0`, `down:lbutton`, `pmove:x1,y1`, capture, `up:lbutton`) or a build placement |
-| post-fog layer | `mark.on=nocursor`, the only window in normal play that still fills it |
+| cursors | a **held** drag (`pmove:x0,y0`, `down:lbutton`, `pmove:x1,y1`, capture, `up:lbutton`) or a build placement. The one draw with the fog off: over fogged ground it stays undarkened, which is what an A/B of the post-fog draw needs on screen. `mark.on=nocursor` hands both back to the engine and draws neither |
+
+`scenarios/marker-mix.json` is the fixture that opens all of them except the labels. It has
+three tanks at 30, 65 and 100 % health and a Commander, on open ground
+with water and the fog band in view. Its description gives the key sequence. Health bars still
+need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pixel A/B.
 
 - `order: arena=-1` in the heartbeat is normal: SHIFT is not held.
 - `order.on=trace` runs both sides in one pass and logs both node lists (`order TRACE own:` /
@@ -250,7 +254,7 @@ terrain pass owns the ground, when there is no wide grid to take — and they mu
 | `classicpp.on` | polled twice a second | the master arm: restored true-colour terrain, features, effects, unit textures **and the UI** (sidebar, minimap, top bar, shell), the lambert lighting and the cast shadows. Flips live; arming mid-play restores what is on screen |
 | `classicpp.cfg` | live (re-read on the poll when its mtime or size changes) | the knobs: `sun=AZ,EL` or `sun=off`, `unitsun=AZ,EL`, `amb=A`, `assets=0|1`, `light=0|1`, `shadows=0|1|2`, `shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B` or `off`, `shade=S`, `terrainshadow=0|1`, `shadowres=N`, `airshadow=len|physical|drop`, `aniso=N`. Written by `tacli arm <i> 'classicpp.cfg=sun=off shadows=0'`, removed by `classicpp.cfg=off` |
 | `restoreglsl.on` | when the restorer starts (arm before launch) | the restorer core's knobs, in the file that keeps the name it had: `log` (a line per batch), `tiny` (the small model), `fp16`, and the numeric knobs in `tagpu_restore_core.c` |
-| `restoredump.on` | after each queue drains | writes `tagpu_restore_<tag>_vk.{r8,rgba,idx}` per atlas — the byte oracle (`references/measuring.md`) |
+| `restoredump.on` | after each queue drains | writes `tagpu_restore_<tag>_vk.rgba` (`.mips` for the units) and its source, `.base` for a world atlas or `.r8` for the UI's, per atlas — the byte oracle (`references/measuring.md`) |
 
 - The DLL answers every cfg read on its own lines: `classicpp: assets=1 light=1 (…)`,
   `classicpp: light sun=… unitsun=… amb=… level=…/…`, `classicpp: shadows=2(hard) shadowsun=…`;

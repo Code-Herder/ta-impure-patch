@@ -183,6 +183,11 @@ PROGRAMS = [
     # screen: that would be an engine pixel by definition.
     # tagpu_native.c (paired in tagpu_vk_world.c: the world target's resolve)
     ("native_d",     "tagpu_native::DVS",       "tagpu_native::DFS"),
+    # ...and the same resolve with the engine's Gamma curve applied to it
+    ("native_g",     "tagpu_native::DVS",       "tagpu_native::GFS"),
+    # ...and the Gamma on a frame with no world target: a full-frame quad whose
+    # blend multiplies what the world passes drew by the factor
+    ("native_k",     "tagpu_native::DVS",       "tagpu_native::KFS"),
     # src/tagpu_shadow_glsl.h (paired in tagpu_vk_shadow.c) -- the heightfield
     # caster, depth-only, with an empty fragment stage
     ("shadow_hires", "tagpu_shadow::VS_H",      "tagpu_shadow::FS_NONE"),

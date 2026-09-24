@@ -872,14 +872,14 @@ so machine-checked against the real layout rather than guessed. [VERIFIED]
 | Resource accounting | Inside `PlayerStruct`: `fCurrentEnergy`, `fEnergyProducton`, `fEnergyExpense`, `fCurrentMetal`, `fMetalProduction`, `fMetalExpense`, `fMaxEnergyStorage`, `fMaxMetalStorage` as **`float`**; lifetime totals (`fTotalEnergyProduced`, `fEnergyWasted`, …) as **`double`**. |
 | `UnitDefStruct` (FBI) | **`sizeof == 0x249`** (585 bytes). CRCs at 0x13E/0x142/0x146; `buildLimit` 0x15A; **`weapon1/2/3` at 0x1EE/0x1F2/0x1F6**; `nMaxHP` 0x1FA; sight/radar/sonar 0x202/0x204/0x206; **`BuildAngle` 0x210** (the spawn's heading spread, §"`0x485A40`"). |
 | Map / features | `FeatureStruct` is a **13-byte (`0x0D`) per-tile record**; `FeatureMapSizeX/Y` at `0x14233`/`0x14237`; `MAPPED_MEMORY_p` `0x14273`; `FeatureMap` `0x14287`. |
-| Tile set / tile map | **`TILE_SET`** at `main+0x14283` → `{u32 count; u8* pixels}`: `count` 32×32 8bpp tiles of `0x400` bytes each, built by `LoadMap` and static for the map (Two Continents: 5062). **`TILE_MAP`** at `main+0x1428B`: `u16` tile index per 32-px cell, row stride `FeatureMapSizeX/2`. LoadMap allocates the tile map as `(pxW/32)·(pxH/32)` entries from `main+0x14223`/`+0x14227` (`0x48393C..0x483969`) and the tile set as `count·0x400 + 8` bytes (`0x483B53..0x483B80`) [DISASSEMBLED 2026-09-24]. The stock terrain pass checks its reads against neither; our bound is in "Engine defects we patch". Both byte-confirmed against the terrain blit `0x483FA0` ([terrain & depth](terrain-depth.html) §2) and read every frame by `tagpu_terr.c`. The Classic++ restorer reads them once more per map, on the render thread, at the moment its job starts (`tagpu_terr.c` `glsl_begin`/`restore_order`, 2026-09-05): every `TILE_SET` tile's edge texels for the tileability test, and the whole `TILE_MAP` once to rank each tile by its distance in cells from the viewport (the restore runs visible tiles first). The pixels themselves are never copied again — the GLSL passes sample the R8 atlas the terrain pass already uploaded (the ONNX path that copied the whole set was deleted 2026-09-05). Read-only. |
-| Live palette | `main+0x143A7`: 256 entries × 4 bytes, **R, G, B, pad** — and it does **not** cycle. The Classic++ restorer snapshots it once per job into its own 256×1 RGBA8 texture (the fill pass's palette lookup), so a restore is consistent with itself whatever the native pass uploads meanwhile. [MEASURED 2026-09-05] Read out of the live
+| Tile set / tile map | **`TILE_SET`** at `main+0x14283` → `{u32 count; u8* pixels}`: `count` 32×32 8bpp tiles of `0x400` bytes each, built by `LoadMap` and static for the map (Two Continents: 5062). **`TILE_MAP`** at `main+0x1428B`: `u16` tile index per 32-px cell, row stride `FeatureMapSizeX/2`. LoadMap allocates the tile map as `(pxW/32)·(pxH/32)` entries from `main+0x14223`/`+0x14227` (`0x48393C..0x483969`) and the tile set as `count·0x400 + 8` bytes (`0x483B53..0x483B80`) [DISASSEMBLED 2026-09-24]. The stock terrain pass checks its reads against neither; our bound is in "Engine defects we patch". Both byte-confirmed against the terrain blit `0x483FA0` ([terrain & depth](terrain-depth.html) §2) and read every frame by `tagpu_terr.c`. The Classic++ restorer reads them once more per map, on the render thread, at the moment its job starts (`tagpu_terr.c` `glsl_begin`/`restore_order`, 2026-09-05): every `TILE_SET` tile's edge texels for the tileability test, and the whole `TILE_MAP` once to rank each tile by its distance in cells from the viewport (the restore runs visible tiles first). The pixels themselves are never copied again — the GLSL passes sample the RGBA8 base atlas already on the GPU ([GPU status](gpu-status.html) §2.88) (the ONNX path that copied the whole set was deleted 2026-09-05). Read-only. |
+| Live palette | `main+0x143A7`: 256 entries × 4 bytes, **R, G, B, pad** — and it does **not** cycle, and nothing moves it in play: its one writer is the PALETTE load `0x42A400`, run once per process (the writer survey is in "The palette the screen is presented with", below). [MEASURED 2026-09-05] Read out of the live
 process with `tacli peek '*0x511DE8+0x143A7:x256'` ×4 for the whole table: **all 1024 bytes
 identical across 16 samples over 8 s** in a live skirmish, on two maps, with a further 24
 samples of entries 0..63 over 10 s. This row previously called it "the palette the engine
 cycles for water", which was never measured and is wrong; the pixel half of the test is in
-[terrain & depth](terrain-depth.html) §7. Read every frame by `tagpu_native.c`/`tagpu_render3do.c` (uploaded verbatim as a 256×1 RGBA texture; the in-game colours match, which is the byte-order proof) and once per job by the restorer (snapshotted, above). Read-only. |
-| Grey remap table (fog of war) | Built by **`0x4BAD30`** into `*(0x51FBD0) + 0xCC`, 256 bytes — the same object whose `+0xC0` is the blend LUT we swap (see the blend-LUT section); `0x4B6220` is a two-instruction accessor, `mov eax,ds:0x51FBD0; ret`. For each of the 256 palette entries it averages R, G, B — literally `(R+G+B)/3`, compiled as the `0xAAAAAAAB` multiply-high then `shr edx,1` — writes that one value into all three channels of a scratch triple and calls `0x4BA9D0` for the index it stores. `0x4BA9D0` is a nearest-colour search `[INFERRED name]`: it prefilters candidates to a **±0x28 band on the R+G+B sum** and carries a `0x3B9ACA00` (1e9) best-distance sentinel. The builder is gated on `[obj+0xF1] & 1`, and it reads the palette at `main+0x143A7`. **[VERIFIED by disassembly 2026-09-04]**, `0x4BAD30`–`0x4BADE0` and `0x4BA9D0`–`0x4BAA80`; the rest of `0x4BA9D0` was not read. This is the rule `TAGPU_GLSL_FOG_GREY_RGB` reproduces in RGB instead of through the palette, so Classic++'s restored terrain takes the same grey band. Siblings building the other tables from that palette: `0x4BA750`, `0x4BADF0`, `0x4BABD0`, `0x4BAF30` — the table set is mapped in [shadows and cloak](shadows-cloak.html). |
+[terrain & depth](terrain-depth.html) §7. Read on the GAME thread only, by the frame packet's publisher (a 1 KB copy in every packet); `tagpu_pal_engine()` is that copy on the render thread, and **every world colour is built from it** since G20c: the base atlases the world passes and the restorer read, `uPal`, the effects' LHT flash table and the units' face-shade fit. The Gamma is applied once, to the finished world image ([GPU status](gpu-status.html) §2.3f). Read-only. |
+| Grey remap table (fog of war) | Built by **`0x4BAD30`** into `*(0x51FBD0) + 0xCC`, 256 bytes — the same object whose `+0xC0` is the blend LUT we swap (see the blend-LUT section); `0x4B6220` is a two-instruction accessor, `mov eax,ds:0x51FBD0; ret`. For each of the 256 palette entries it averages R, G, B — literally `(R+G+B)/3`, compiled as the `0xAAAAAAAB` multiply-high then `shr edx,1` — writes that one value into all three channels of a scratch triple and calls `0x4BA9D0` for the index it stores. `0x4BA9D0` is a nearest-colour search `[INFERRED name]`: it prefilters candidates to a **±0x28 band on the R+G+B sum** and carries a `0x3B9ACA00` (1e9) best-distance sentinel. The builder is gated on `[obj+0xF1] & 1`, and it reads the palette at `main+0x143A7`. **[VERIFIED by disassembly 2026-09-04]**, `0x4BAD30`–`0x4BADE0` and `0x4BA9D0`–`0x4BAA80`; the rest of `0x4BA9D0` was not read. `TAGPU_GLSL_FOG_GREY_RGB` is the same `(R+G+B)/3` in full colour, kept and never snapped to a palette entry, and every world pass takes it in both presets; **no pass of ours reads this table** (G20d). Siblings building the other tables from that palette: `0x4BA750`, `0x4BADF0`, `0x4BABD0`, `0x4BAF30` — the table set is mapped in [shadows and cloak](shadows-cloak.html). |
 | Spatial index | `SortGridBucket`, stride `0x0A`, list head at +0x06; buckets ptr at `0x1429F`, cols at `0x142A3`, plus a dedicated off-map bucket at `0x142B7`. |
 | Projectiles | Count at `TAdynmemStruct+0x141F3`; **each projectile is `0x6B` (107) bytes**. |
 
@@ -4345,7 +4345,7 @@ its bound.
 | the feature grid | `main+0x14287`, `0x0D` per cell: `+0x04` height, `+0x08` def index, `+0x0A` wreck index, `+0x0C` flags | the rect is clamped to `main+0x14233`/`+0x14237`; a def index `≥ 0xFFFB` is not an anchor |
 | a wreck record | `main+0x1420B + idx·0x30`: `+0x04` Object3do, `+0x08/+0x0C/+0x10` the 16.16 position | reached only from an anchor whose FeatureDef row is inside `main+0x14253` and whose `FeatureMask` bit 0 is clear — **and whose cell index is under the pool's count** (`WR_COUNT` = `TAGPU_LIM_WRECKS`: 2048 in stock, 8192 under the raised limits), the pool `0x421F29` allocates. **[ADDED 2026-09-12, a landing review]** the index had no bound at all before, and this walk is not the engine's: the engine's own read at `0x46A6C4` is equally unbounded but only ever forms the address for a cell it is drawing, where the publisher covers the zoom-floor rect plus a 32-cell margin. The allocator `0x4232A0` returns the count itself when the free list is empty, so the count is the engine's own "no record" value as well as the array's length |
 | the frame's option bytes | `main+0x0DCB` the GUI colour array — **256 bytes, not 64** [CORRECTED 2026-09-12, landing 4a: `0x4AC7D0` rebuilds it from `guipal` and its loop at `0x4AC7FF..0x4AC88F` writes exactly `0x100` of them], `+0x2C76`/`+0x2C7A` the dispatched mouse point, `+0x2C92..+0x2CA6` the build cursor's two corners, `+0x2CC3` the cursor mode, `+0x2CC6` the region flags, `+0x37F06` the option byte (damagebars, Shadow, TShadow, FShadow), `+0x1424B`/`+0x1424F` the feature sweep | none needed: they are values, and every consumer of them already treated them as such |
-| the shade table | `[0x51FBD0]+0xC4`, 32 × 256 bytes | the FORMAT is the bound: `0x459C70`'s Gouraud path indexes it with a 5-bit row and a byte, so a copy of exactly that size reads what the rasteriser reads |
+| the shade table | `[0x51FBD0]+0xC4`, 32 × 256 bytes | the FORMAT is the bound: `0x459C70`'s Gouraud path indexes it with a 5-bit row and a byte, so a copy of exactly that size reads what the rasteriser reads. The unit lane does not remap through it: `tagpu_render3do.c` fits one RGB multiplier per row from it (`shade_k_build`, [GPU status](gpu-status.html) §2.88) |
 
 ### The effects: the four per-frame arrays [VERIFIED 2026-09-12, landing 4a, objdump of the pristine build]
 
@@ -4398,9 +4398,10 @@ cache keyed on such a frame's ADDRESS must also drop at a level boundary, becaus
 allocator can hand a new frame the address an old one had; the effects atlas does that on the
 packet's level generation.
 
-`TAProgram` (`[0x51FBD0]`) carries two tables the effects pass needs beside them: `+0xC8` the
-32 × 256 LHT "lighten" ramp the explosion flash is derived from, `+0xCC` the 256-byte palette remap
-`0x4BFE10` applies to the fog band, and `+0xF0` the capability word (bit 5 the ALP alpha table is
+`TAProgram` (`[0x51FBD0]`) carries two more tables beside them: `+0xC8` the 32 × 256 LHT
+"lighten" ramp the explosion flash is derived from, which the effects pass needs, and `+0xCC` the
+256-byte palette remap `0x4BFE10` applies to the fog band, which no pass of ours reads (the grey
+band is computed in RGB); and `+0xF0` the capability word (bit 5 the ALP alpha table is
 built, **bit 6 the PALETTE.SHD darken table**, bit 7 the LHT one — the three in-place setters
 above are what establish the mapping).
 
@@ -5982,23 +5983,51 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
   `0x41E403` (the fade, below); `0x4ACCC4` (**one entry**: `0x4ACC70(gi, RGBQUAD* pal)`,
   `ret 8`, builds it from three sliders' positions — `gi+0xCB6`, `+0xCBA`, `+0xCBE`, each
   gadget's `+0x140` — into `pal[gi+0x9B2]` and sets index `gi+0x9B2`: an RGB colour editor
-  [INFERRED]; no direct call site, a callback); `0x45FBDF` (a zeroed buffer — all black — then
+  [INFERRED]. **`0x4ACC70` is dead code** [VERIFIED 2026-09-24 against
+  `pristine/TotalA.exe.pristine`]: no `call` or `jmp` in the whole disassembly targets it, and
+  its address appears nowhere in the file as an absolute value, so no callback table or `push`
+  can hand it out either); `0x45FBDF` (a zeroed buffer — all black — then
   `0x4C69A0(main+0x37E1B)`, a `SurfaceFill` with `main+0xDCB[…]` and a flip: the blackout
   `0x45FBC0`, `0x45FC33` its end); `0x428AA9`, `0x44B049`, `0x476798` (palettes loaded from
   files).
+- **Who writes the engine's own table, and what moves the presented one in play** [VERIFIED by
+  disassembly 2026-09-23, for G20c's claim that only the Gamma moves the palette in play]. The
+  one direct writer of `main+0x143A7` is **`0x42A400`**, which loads `"PALETTE"` (the string at
+  `0x5033A4`) into it with `rep movsd`; its one caller is `UIPipelinesInit` at `0x491378`, so it
+  runs once per process. Every other reference passes the address as an argument —
+  `0x444604`/`0x44461C`, `0x478F29`, `0x497FD4`, `0x49813B` and the table builders at
+  `0x491388..0x4913CD`. **None of those arguments reaches a writer** [VERIFIED by disassembly
+  2026-09-24]. `0x4AC7D0(gi, pal, src)`, `ret 0xC`, copies 1 KB from `src` into `gi+0xB2`,
+  then for each of those 256 entries finds the nearest entry of `pal` (the sum of the three
+  channels' absolute differences, first minimum) and writes its index to `gi+0x8B2[i]`: the
+  GUI's 256-byte colour LUT, built at `0x4AC7D0..0x4AC89C`, which calls nothing. `+0x143A7` is
+  its **second** argument, `pal`, at `0x444629`, `0x478F37` and `0x498148` — read and never
+  written — with `gi = main+0x519`. At the first two `src` is `main+0x5CB`, the copy's own
+  destination; at `0x498148` it is the `guipal` file `0x4BBE50` loaded (*The loading screen*,
+  below). A fourth caller, `0x426503`, passes a file loaded the same way as `src` and `edi` as
+  `pal`. And the one single-entry palette writer the survey found, `0x4ACC70` (above), has no
+  caller at all, so it cannot write `+0x143A7` whatever it would be handed. Of the eleven
+  `0x4BA200` callers, three are the shell's (`0x428AA9` inside `0x4288D0`, a `"Palette"` loaded
+  from a file by many shell screens; `0x44B049` inside `0x44A680`, called from `0x42837F` in the
+  shell state machine `0x426E80`; the glamour fade), one is the ARMOPT family's blackout
+  (`0x45FBDF`, `0x45FBC0`, beside `0x4609B0`), and **`0x476740` — whose call is `0x476798`, a
+  `bitmaps\<name>.PCX` loader — has no reference anywhere: dead code.** MEASURED the same day: a
+  `big-battle` soak logged the engine table's arrival and nothing after it (`tagpu_pal.c`'s
+  `pal: the engine's table changed (engine serial=1)`, one line per process), so in play only
+  `SetGamma` moves what the screen is presented with.
 - **So the presented palette is `gamma(globals+0x214)`, and `main+0x143A7` is never scaled.**
   On every normal path the two hold the same entries — `+0x143A7` is what `0x497FDB` and
   `0x44460B` hand over — and at Gamma 12 they are byte-equal. At any other Gamma, or after
   `+gamma`, a pass that reads `+0x143A7` shows the world at the wrong brightness, and every one
   of them did until G15d fixed the UI twin (which resolves through cnc-ddraw's palette object,
   `g_ddraw.primary->palette->data_rgb`, what `ddp_SetEntries` stored — the same table
-  `tacli shot` writes into its PNG, so the walk's oracle and the twin agree by construction) and
-  **2026-09-09 fixed the world**: the resolution moved into `tagpu_pal.c`, and every pass that
-  turns an index into a colour — the world's single `uPal` texture, the three sprite atlases'
-  restores and the terrain restorer's — now takes the presented palette from there ([GPU
-  status](gpu-status.html) §2.3f). The two readers that still want `+0x143A7` want it *because*
-  it is unscaled: the restorer's tileability threshold is a raw colour distance and must classify
-  the ART, not the display, and `tagpu_order.c`'s `seq_ink` walks on the game thread. **The two
+  `tacli shot` writes into its PNG, so the walk's oracle and the twin agree by construction).
+  **The world answers it the other way round since G20c** ([GPU status](gpu-status.html) §2.3f):
+  every world colour is built from the unscaled `+0x143A7`, and `globals+0x614` is applied ONCE,
+  to the finished world image, through the engine's own per-level curve
+  `min(255, trunc(e × factor))` — so the world matches the engine's presented pixels without a
+  scaled table anywhere in it, and the restorer's tileability threshold, a raw colour distance,
+  classifies the ART and not the display. **The two
   formulas are different and both are live**: an option screen writes `main+0x37F08` and applies
   `0.5 + Gamma/24` (registry Gamma 15 → **1.125**, measured), while `+gamma N` applies **`N/10`**
   outright (`+gamma 15` → **1.500**, measured 2026-09-09) and then stores N in the same field —
@@ -6030,7 +6059,9 @@ cnc-ddraw's `ddp_SetEntries`. Returns 1, or 0 when `SetEntries` failed.
   its own pixels **whenever the factor is not 1.0**. In a Classic frame with those passes drawing at 1.125, 14 896
   of a 17 049-pixel viewport sample are exact `palette.pal` colours against 244 presented ones
   (the two palettes share 8 of 256). Not a bug with an obvious side: the browser lab is built on
-  `palette.pal`, so a world matching it is what `tascene ab` parity measures.
+  `palette.pal`, so a world matching it is what `tascene ab` parity measures. Since G20c the
+  passes still read the unscaled table and the world composite applies the factor after them, so
+  the world is presented at the engine's brightness ([GPU status](gpu-status.html) §2.3f).
 
 **The glamour-screen fade — `Palette` / `currentPalette` / `desiredPalette` / `FadeTable` at
 `main+0x3907F..0x3908B`** [mechanism VERIFIED; reach INFERRED]. The corpus glosses these four

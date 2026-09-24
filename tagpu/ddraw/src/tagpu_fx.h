@@ -59,6 +59,18 @@ typedef struct TAGPU_FXMODEL {
 #define TAGPU_FXMODE_ALPHA  2
 #define TAGPU_FXMODE_FLASH  3
 
+/* THE FLASH LEVEL OF A TEXEL, AND WHERE IT TRAVELS. A flash sprite (mode 3)
+   adds the light-table colour of level `index - 0x4F`, the engine's own blit
+   (0x4B8EC0: `dst = LHT[(src - 0x4F) * 256 + dst]`, effects.md), clamped to
+   the table's 32 levels. The base atlas the Vulkan pass samples is RGBA and
+   has no index left, so the level travels in its ALPHA: 255 - level at an art
+   texel (224..255, so the hole test every reader makes, alpha < 0.5, is
+   exact) and 0 at the frame's key (tagpu_pal_expand). The fragment stage
+   reads it back as 255 - alpha. */
+#define TAGPU_FX_FLASH_LO 0x4F
+#define TAGPU_FX_FLASH_ALPHA(i) \
+    (255 - ((i) < TAGPU_FX_FLASH_LO ? 0 : (i) > TAGPU_FX_FLASH_LO + 31 ? 31 : (i) - TAGPU_FX_FLASH_LO))
+
 int  tagpu_fx_armed(unsigned frame_counter);    /* tagpu_fx.on present (30f) */
 int  tagpu_fx_gather(const TAGPU_FXVIEW* v);    /* returns total drawables    */
 int  tagpu_fx_nmodels(void);
@@ -174,10 +186,16 @@ typedef struct TAGPU_FXHAND {
     /* The texels, as CPU-side bytes. Each carries the serial that says when
        it last changed, so the Vulkan pass re-uploads on a change and not per
        frame. */
-    const unsigned char*  atlas;      /* dim x dim R8, tagpu_gaf.c's mirror   */
+    const unsigned char*  atlas;      /* dim x dim palette indices,
+                                         tagpu_gaf.c's mirror: the source of
+                                         the base atlas (tagpu_pal_expand)   */
     int                   atlasDim;
     int                   atlasRows;  /* the rows the shelf packer has used   */
     unsigned              atlasSerial;
+    unsigned              atlasWhole; /* the last whole-page write (tagpu_feat.h) */
+    /* the base atlas's other two inputs -- tagpu_feat.h has them in full */
+    const unsigned char*        atlasKey;
+    const unsigned*             atlasDirty;
 
     /* THE RESTORE WORK, AS REQUESTS.
 
@@ -188,10 +206,9 @@ typedef struct TAGPU_FXHAND {
        which it takes nothing costs nothing, because the entries are still
        there on the next one. `restoreGen` is the discontinuity a cursor cannot
        survive -- the arm, a recycle, a repack, the atlas dropped, the list
-       overflowing, a palette move -- and a consumer that sees a new one drops
-       its job and starts at 0.
-       `restoreRepaint` is 1 only for the palette-move generation, where the
-       destination keeps what it holds and is recoloured in place.
+       overflowing -- and a consumer that sees a new one drops its job and
+       starts at 0. Every generation blanks the destination, for tagpu_feat.h's
+       reason.
 
        LIFETIME: the array is the atlas's, retained for the atlas rather than
        for the frame, but a consumer still copies on the frame it takes it (as
@@ -200,16 +217,8 @@ typedef struct TAGPU_FXHAND {
     const TAGPU_RGLSL_FRAME* restoreFrames;
     int                      restoreN;
     unsigned                 restoreGen;
-    int                      restoreRepaint;
-    /* ...AND HOW MANY TIMES THE DESTINATION HAS BEEN BLANKED, which is what a
-       consumer must actually key its repaint decision on: `restoreRepaint`
-       describes the LATEST generation, and two resets between two of a
-       consumer's looks collapse into one, so a blank followed by a repaint
-       would read as "keep what you have" over an atlas the producer cleared.
-       Blank whenever this has moved. */
-    unsigned                 restoreBlanks;
-    const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()        */
-    unsigned              palSerial;
+    const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_engine()      */
+    unsigned              palSerial;  /* tagpu_pal_engine_serial()            */
     /* THE FLASH LIGHT TABLE, 32 x 1, THREE BYTES A TEXEL (tagpu_fx.c
        `s_lhtRGB`). NULL when it has never been built, and then a frame with
        flash vertices is refused rather than drawn with no colour for its
@@ -217,7 +226,6 @@ typedef struct TAGPU_FXHAND {
     const unsigned char*  lht;        /* 32 x 3 bytes, or NULL                */
     const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
     int                   fogGridCols, fogGridRows;
-    const unsigned char*  fogLut;     /* 256 x R8, tagpu_native_foglut()      */
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame. tagpu_vk_feat.c has the argument for
@@ -239,4 +247,9 @@ typedef struct TAGPU_FXHAND {
    `now` -- the fork's monotonic render-thread counter, which a Vulkan pass has
    as TAGPU_VKPASS::frame. Render thread only. */
 int tagpu_fx_handover(TAGPU_FXHAND* out, unsigned now);
+
+/* THE ATLAS WITHOUT THE DRAW -- tagpu_feat.h's three, for this atlas. */
+int  tagpu_fx_atlas_hand(TAGPU_FXHAND* h);
+int  tagpu_fx_atlas_owed(void);
+void tagpu_fx_atlas_ack(unsigned serial, int keep);
 #endif
