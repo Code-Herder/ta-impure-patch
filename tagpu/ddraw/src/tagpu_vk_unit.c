@@ -2100,7 +2100,6 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
     VkDeviceSize ustride, vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3, poseBytes;
     VkDeviceSize stageOff, stageNeed;
-    int feed = 0;
     int fogW = 1, fogH = 1, i, anyUpload = 0, fogWanted = 0;
 
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
@@ -2334,35 +2333,6 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     } else s_saidAniso = 0;   /* the latch: the branch above falls through
                                  rather than returning, so without it its log
                                  line would fire EVERY frame */
-
-    /* A RESTORE THIS LANE RAN, and the refusal must not always return: there is
-       no painted twin until a job exists, and the job is made below in
-       `restore_want`. So a frame that has the list, the image and no job yet
-       FALLS THROUGH to make one and then returns -- the sprite passes avoid
-       the same deadlock the same way. */
-    feed = 0;
-    if (h.restored && !(s_arView && h.restoreFrames && s_arHave)) {
-        if (h.restoreFrames && s_arImg && !s_rjTried) feed = 1;
-        if (!s_saidRestored) {
-            s_saidRestored = 1;
-            plog(d, "unit: a Classic++ restore is armed and this lane's twin is not "
-                    "painted yet - drawing the base atlas until it is%s",
-                 feed ? " (this frame also makes the restore job)" : "");
-        }
-        /* AN UNPAINTED TWIN DRAWS THE BASE ATLAS, ON BOTH BRANCHES. A stand-down
-           here, with five one-way `s_rjTried` latches above it, would blank
-           every unit for the rest of the SESSION on any restorer refusal, and
-           -- because every generation blanks the twin (`restore_want`
-           clears `s_arHave` on each one) -- for the length of a repaint on
-           every level boundary, recycle and map change. `!feed`
-           is the rare half: a generation change satisfies all three feed terms.
-
-           NOTHING ELSE DRAWS THESE UNITS: `render_vk.c` is the only caller of
-           `tagpu_overlay_draw`. The base atlas is not a disagreement with
-           anybody, it is Classic++ restore off for one frame. A bound on what
-           the flag may promise, not a timing fix. */
-        h.restored = 0;
-    } else s_saidRestored = 0;
 
     /* THE FOG GRID, and the bound re-checked in this file's own terms. A unit
        with `uFog & 1` samples it, so a frame that wants one and has none is a
@@ -2638,15 +2608,6 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
             r->wireFirst + r->wireCount > r->nvert) w->wireCount = 0;
         if (w->wireCount) s_nwire++;
         s_ndraw++;
-
-        {
-            int base[3];
-            base[0] = (int)r->rowOff;
-            base[1] = (int)(h.nrow + r->flagOff / 4);
-            base[2] = (int)(h.nrow + h.nflag / 4 + r->flagOff / 4);
-            fill_blocks(s->umap + (VkDeviceSize)i * ustride, &h, r, base,
-                        vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3);
-        }
     }
 
     /* ONE BARRIER FOR EVERY VERTEX BUFFER WRITTEN THIS FRAME, AND IT IS
@@ -2703,14 +2664,52 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 
     /* THE REQUEST, AFTER THE BASE EXISTS. `restore_want` reads `s_bView`, and
        the upload above is what fills it -- so asking earlier would ask over an
-       image with no contents and paint undefined texels over the art. `feed` is the
-       frame that came here only to make the job: it has nothing to draw yet and
-       says so by returning 0, exactly as the refusal above would have. */
+       image with no contents and paint undefined texels over the art. What a
+       stand-down from below this point would risk is recorded at `standdown`,
+       because that is where the hazard is. */
     restore_want(d, &h);
-    /* AND THE FEED FRAME DRAWS: with `restored` cleared above it draws the
-       base atlas like any other frame. What a stand-down from below this
-       point would risk is recorded at `standdown`, because that is where the
-       hazard is. */
+
+    /* CAN THIS FRAME DRAW RESTORED? DECIDED HERE, AFTER THE UPLOAD AND AFTER
+       `restore_want`, for tagpu_vk_feat.c's reason: `restore_want` can take the
+       twin away in this very frame -- a new generation, the list dying, the
+       base atlas or the twin moving, a failed job -- and `s_arHave`, which
+       each of those clears, is what `bind_main` names binding 41 from. Read
+       here, the flag and the binding are one fact.
+
+       AN UNPAINTED TWIN DRAWS THE BASE ATLAS, it does not stand the frame
+       down. There is no painted twin until a job exists and has painted, and
+       the job is made by the `restore_want` above; a stand-down here, with
+       five one-way `s_rjTried` latches in it, would blank every unit for the
+       rest of the SESSION on any restorer refusal, and -- because every
+       generation blanks the twin (`restore_want` clears `s_arHave` on each
+       one) -- for the length of a repaint on every level boundary, recycle
+       and map change.
+
+       NOTHING ELSE DRAWS THESE UNITS: `render_vk.c` is the only caller of
+       `tagpu_overlay_draw`. The base atlas is not a disagreement with
+       anybody, it is Classic++ restore off for one frame. A bound on what
+       the flag may promise, not a timing fix. */
+    if (h.restored && !(s_arView && h.restoreFrames && s_arHave)) {
+        if (!s_saidRestored) {
+            s_saidRestored = 1;
+            plog(d, "unit: a Classic++ restore is armed and this lane's twin is not "
+                    "painted yet - drawing the base atlas until it is");
+        }
+        h.restored = 0;
+    } else s_saidRestored = 0;
+
+    /* THE UNITS' BLOCKS, WRITTEN ONCE THE FLAG IS FINAL: every fragment block
+       carries `uRestored`. Every unit passed the every-unit-or-none gate
+       above, so unit `i` is draw `i` and its window is the `i`th. */
+    for (i = 0; i < h.nunit; i++) {
+        const TAGPU_PDUREC* r = &h.units[i];
+        int base[3];
+        base[0] = (int)r->rowOff;
+        base[1] = (int)(h.nrow + r->flagOff / 4);
+        base[2] = (int)(h.nrow + h.nflag / 4 + r->flagOff / 4);
+        fill_blocks(s->umap + (VkDeviceSize)i * ustride, &h, r, base,
+                    vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3);
+    }
 
     /* THE THREE SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
@@ -2969,8 +2968,8 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
        pass draws. It FALLS BACK to the base atlas's view when there is no
        painted restored image, and that is not a picture: a descriptor must be
        VALID for the set to be bound, naming the image already here costs no
-       memory and no second object, and `upload` clears `uRestored` on exactly
-       the frames the fallback is in place. */
+       memory and no second object, and `upload` clears `uRestored` on every
+       frame the fallback is in place. */
     ii[0].sampler = s_samp; ii[0].imageView = s->palView;
     /* THE RESTORED TWIN TAKES ITS OWN SAMPLER WITH ITS OWN VIEW. The fallback
        is the base image AND the nearest sampler together, the pair binding 46
@@ -2982,7 +2981,8 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
        `imageLayout = SHADER_READ_ONLY_OPTIMAL` is a descriptor-layout mismatch
        on a statically-used binding. `s_arHave` comes from
        `painted > 0`, so testing it is exactly "this image has left UNDEFINED",
-       and it is the same pair that decides `uRestored` -- which makes the flag
+       and `upload` decides `uRestored` from the same pair after the last
+       change it can make this frame (`restore_want`) -- which makes the flag
        and this descriptor agree BY CONSTRUCTION rather than by a refusal placed
        somewhere else. `tagpu_vk_terr.c` `shared_bind` gives the whole
        argument, for its binding 41. */
