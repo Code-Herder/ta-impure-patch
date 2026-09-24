@@ -108,7 +108,6 @@ PAGES = [
     ("factory-build",             "Factories: build & carry",  "Mechanism"),
 
     ("deep-tadr",                 "TADR / tdraw.dll",          "Projects"),
-    ("tadr-merge-exploration",    "TADR merge exploration",    "Projects"),
     ("release-matrix",            "Releases & feature matrix", "Projects"),
     ("deep-patch-3902",           "Unofficial Patch 3.9.02",   "Projects"),
     ("deep-patch-loader",         "TA Patch Loader",           "Projects"),
@@ -129,6 +128,7 @@ PAGES = [
     ("patching-playbooks",        "Playbooks from other games","Survey"),
 
     ("tadr-port/overview",        "The port",                  "TADR port"),
+    ("tadr-merge-exploration",    "TADR merge exploration",    "TADR port"),
     ("tadr-port/raised-limits",   "A. Raised ceilings — plan", "TADR port"),
     ("tadr-port/limits-evidence", "A. Raised ceilings — evidence", "TADR port"),
 ]
