@@ -1586,12 +1586,12 @@ returns the engine's own location. It is the comparison build, launched with `ta
 **What follows the pools.** The frame packet's publisher reads the explosions through
 `tagpu_limits_expl_pool()` and the flying pieces through `tagpu_limits_psys_begin()`/`_end()`,
 never at a fixed address; `TAGPU_PK_MAX_PROJ`/`_EXPL`/`_DEBRIS` are the pool sizes, so an effect
-table cannot truncate below the engine's own cap. `tagpu_fx.c`'s buckets, `TAGPU_FX_MAXV`
-(65 536 vertices each), are asserted against `6 · (2 · proj + expl)` at compile time: a
-projectile makes at most two sprite quads (its shadow blob and its frame), an explosion one. That
-is a size, not a bound by construction: a composite GAF frame makes a quad per subframe, a
-lightning bolt up to 2 044 line vertices, and the particles share the sprites bucket under their
-own cap. A vertex past a full bucket is dropped and logged (`fx: DROPPED … bucket-full`).
+table cannot truncate below the engine's own cap. `tagpu_fx.c`'s buckets are sized from the tables
+they draw (`tagpu_fx.h`, and *The particles follow the layer cap* below): `SPRITES` holds a
+projectile's two quads (its shadow blob and its frame), an explosion's one and the particle table;
+`UNDER` the particle table; lines and flashes 65 536 vertices each. That is a size, not a bound by
+construction: a composite GAF frame makes a quad per subframe and a lightning bolt up to 2 044 line
+vertices. A quad or line that does not fit is dropped and logged (`fx: DROPPED … bucket-full`).
 
 **The design point follows the unit limit.** The engine's unit array is `10 · N + 1` slots, so 1500
 a player makes **15 001**: `TAGPU_PK_DESIGN_SLOTS`, and every cap sized from it (§2.86) grew with
@@ -1605,12 +1605,24 @@ the design point; should a slot count still exceed it, the packet's tables trunc
 **The particles follow the layer cap on our side too.** The publisher walks a layer up to the
 engine's own steady state, `TAGPU_LIM_SFX + 1` (`tagpu_packet_pub.c`; past it the layer is counted
 in `layerbad` and skipped). The packet's particle table is `TAGPU_PK_MAX_PART` = 24 576
-sub-particles, one and a half times tier 1's frame of 14 510, and truncates past it on its own bit.
+sub-particles, one and a half times tier 1's frame of 14 510. **A frame that holds more is thinned,
+not truncated:** the publisher counts every layer's sub-particles first and, when the total is past
+the table, keeps the same share of each layer (a 16.16 accumulator, so the kept total cannot exceed
+the table), counted in the heartbeat's `thin=`. A table that simply filled would lose the top
+layers whole, because the walk runs bottom to top — the trails and smoke of layer 9 first.
+MEASURED 2026-09-23 with the table forced to 2048 in tier 1: 670 thinned frames, the kept count
+never past 2047, `trunc=0`, and every layer present in proportion (a frame of 8 776: layer 9 kept
+2 024, layers 4 and 5 kept 8 and 15).
 The effects pass's four vertex buckets no longer share one cap (`tagpu_fx.h`): each of the two
 that particles land in holds the whole table, `UNDER` (layers 0–6) at 6 × 24 576 vertices and
 `SPRITES` (layers 7–9, projectiles, explosions) at 6 × (2 × projectiles + explosions + 24 576);
-lines and flashes keep 65 536. At 65 536 for all four, tier 1's opening volley filled `SPRITES` and dropped 169 vertices
-(`fx: DROPPED … bucket-full`); on the landing's build the same fight dropped none.
+lines and flashes keep 65 536. At 65 536 for all four, tier 1's opening volley filled `SPRITES` and refused 169 quads
+(`fx: DROPPED … bucket-full`, which counts quads and lines, not vertices); on the landing's build
+the same fight dropped none. **What that costs in address space**, in a process that is not
+large-address-aware (the exe's characteristics are `0x10B`): the buckets' static arrays grow from
+9.0 to 16.5 MiB, and a Vulkan slot's host-visible vertex buffer, which grows to a power of two and
+never shrinks, can reach 32 MiB at the buckets' worst case, one a swapchain image. The engine's own
+particle pool is 15.6 MB plus a 0.8 MB pointer stack, allocated once at startup.
 
 **Tier 1, measured 2026-09-23** (`scenarios/limits-tier1.json`: four players at 1500, 6000 kbots on
 Town & Country ordered onto the centre, 1920×1080, the shipped defaults, speed 20): the engine held
@@ -1662,7 +1674,9 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 - **The particle layers erase by shifting.** The layer tick `0x471EB0` deletes a finished object and
   moves the tail down one slot, and an emitter at the cap drops the front the same way, so a
   removal costs the layer's length. At 13 529 objects in one layer the sim held 60 ticks a second;
-  a layer at the full 20 481 was not reached.
+  a layer held at the full 20 481, where every emission shifts the whole layer, was not reached.
+  The level-end teardown `0x471DE0` empties each layer front first the same way, about n²/2 moves:
+  some 2 × 10⁸ for a full layer. Not measured.
 - The sound and composite limits are landing 4 of the plan.
 
 ---

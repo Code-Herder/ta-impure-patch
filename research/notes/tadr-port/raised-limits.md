@@ -198,8 +198,13 @@ sites now: the twenty layer compares and the pool's capacity. What it proved, by
 - **Our side follows it.** The publisher walks a layer to `TAGPU_LIM_SFX + 1`; the packet's
   particle table is 24 576, one and a half times tier 1's 14 510 sub-particles in a frame. The
   scratch run showed a third ceiling nobody had listed: the effects pass's sprite bucket filled
-  (65 532 vertices) and dropped 169, so the two buckets particles land in are now sized from the
-  particle table. `PART_SUBCAP`, a filter on one object's sub-particles, did not need to move.
+  (65 532 vertices) and refused 169 quads, so the two buckets particles land in are now sized from
+  the particle table. `PART_SUBCAP`, a filter on one object's sub-particles, did not need to move.
+- **Past the table, thinned rather than cut** (landing 3's review): the walk runs bottom to top, so
+  a full table used to lose the top layers whole, and the raise makes a full table reachable. The
+  publisher now counts first and keeps the same share of every layer. With the table forced to
+  2048 in tier 1: 670 thinned frames, never more than 2047 kept, nothing truncated, every layer
+  present in proportion.
 - **On the landing's build**, the same fight: 73 sites installed, the pool's capacity read back at
   204 800, 15 964 sub-particles in a frame with nothing truncated, no layer refused, no vertex
   dropped, the smoke drawn, and the simulation at 60 ticks a second.

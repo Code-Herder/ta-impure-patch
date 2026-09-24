@@ -128,9 +128,9 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
    holds a projectile's two quads (its shadow blob and its own frame) and an
    explosion's one besides. Lines and flashes keep TAGPU_FX_MAXV. IT IS NOT A
    BOUND BY CONSTRUCTION: a composite GAF frame makes one quad per subframe and
-   a lightning bolt up to 2 044 line vertices. A vertex past a full bucket is
-   dropped and counted (`fx: DROPPED ... bucket-full` in the log), never
-   written past it. */
+   a lightning bolt up to 2 044 line vertices. A quad or line that does not
+   fit its bucket is dropped and counted (`fx: DROPPED ... bucket-full` in the
+   log), never written past it. */
 #define TAGPU_FX_MAXV         65536
 #define TAGPU_FX_MAXV_UNDER   (6 * (int)TAGPU_PK_MAX_PART)
 #define TAGPU_FX_MAXV_SPRITES (6 * (2 * TAGPU_LIM_PROJ + TAGPU_LIM_EXPL + (int)TAGPU_PK_MAX_PART))

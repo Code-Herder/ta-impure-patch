@@ -259,7 +259,8 @@ Objects are 76 bytes from the pool at `0x51E610` (`ParticleBase`), whose capacit
 once a process by the C runtime's static initializer (1000 in stock, 204 800 under the raised
 limits; the engine map, *The raised effect pools*): `0x470EB0` pops a
 pointer from the stack at `+0x14` (`+0x20` = handed out, `+0x1C` = capacity), `0x470ED0`
-pushes it back; `+8/+0xC` hold the vector of all objects. The byte `0x51E608` disables
+pushes it back; `+8/+0xC` hold the vector of the pool's allocated blocks (one: `0x470C10` makes a
+single block, and the destructor `0x470B80` frees each). The byte `0x51E608` disables
 every emitter when set. Layout (`ParticleSystemStruct`):
 
 | Offset | Field |

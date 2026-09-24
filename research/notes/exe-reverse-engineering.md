@@ -3774,7 +3774,8 @@ pools* below.
 **THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
 to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and
 that function calls the grey-smoke emitter `0x472810` (`0x421583`) and the fire emitter `0x472AB0`
-(`0x4215AA`) — both **append to a particle layer**, and past 400 destroy its front object. So the
+(`0x4215AA`) — both **append to a particle layer**, and past its cap (400 in stock, 20 480 raised)
+destroy its front object. So the
 ten layers are not constant within a sim tick: a second draw of one tick can find a layer the first
 draw did not produce. [ESTABLISHED 2026-09-12 by landing 4a's review, which is what corrected the
 frame packet's per-tick cache argument — see the note in `tagpu_packet_pub.c`.]
@@ -3927,9 +3928,19 @@ simulation's generator.
   the particle (`0x471FFC..0x47202E`). DllMain runs before that initializer, so writing the operand
   is enough; TADR hooks `0x471C87` and rewrites the pushed value instead. At 204 800 the block is
   15.6 MB and the stack 0.8 MB, once a process.
+- **Eight of the twenty compares are in code nothing reaches.** The emitters at `0x471160`,
+  `0x471340`, `0x471470`, `0x4715A0`, `0x4716E0`, `0x471820`, `0x471A50` and `0x472720` (the compares
+  `0x471183` … `0x471AD7` and `0x4727B0`) have no call, jump or pointer anywhere in the image, nor
+  does `0x471D10` with its alloc; the twelve live emitters are `0x471FD0`, `0x4720D0`, `0x472200`,
+  `0x472330`, `0x472430`, `0x472530`, `0x472630`, `0x472810`, `0x4728F0`, `0x4729D0`, `0x472AB0`
+  and `0x472C50`. The dead sites are written with the rest, since their bytes are compared anyway.
 - **The layers' tick `0x471EB0` erases by shifting:** for every object of every layer it calls
   `vtbl+0xC`, and a finished object is deleted and the tail moved down one slot. Like the emitter's
-  own front-drop, that is O(layer) a removal. The draw `0x471F40` calls `vtbl+8` on every object.
+  own front-drop, that is O(layer) a removal; it runs in the sim tick (`0x4955BF`). The teardown
+  `0x471DE0` empties a layer front first the same way (`0x471E17..0x471E48`), n²/2 moves a layer.
+  The draw is `0x471F90(ctx, layer)`, called ten times from DrawGameScreen (`0x469849` …
+  `0x469D2C`), which calls `vtbl+8` on each object; `0x471F40`, a whole-table twin of it, has no
+  caller.
 - **MEASURED 2026-09-23 in tier 1** (4 × 1500 units, the scratch build first, then the landing's):
   one layer, layer 9, peaked at **13 529 objects** at the opening volley (its objects' vtable
   `0x4FD618`, dark smoke; the rocket kbots' trails <span class="pill pill-warn">INFERRED</span>),

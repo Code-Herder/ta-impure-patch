@@ -251,8 +251,9 @@ dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
 - The publisher's walk stops a layer at `TAGPU_LIM_SFX + 1` (`tagpu_packet_pub.c`), the engine's
   steady state; past it the layer is counted in `layerbad` and skipped whole, so the bound has to
   move with the cap. It did: the fixed `LAYER_OBJCAP 400` is gone.
-- `TAGPU_PK_MAX_PART` (sub-particles, total) is 24 576, sized from tier 1's frame of 14 510; it
-  truncates with `s_fxPartTrunc` past that, as before.
+- `TAGPU_PK_MAX_PART` (sub-particles, total) is 24 576, sized from tier 1's frame of 14 510. A
+  frame that holds more keeps the same share of every layer (`thin=` in the heartbeat) instead of
+  losing the top layers whole; `s_fxPartTrunc` stays as the table's own bound.
 - **A ceiling this pass missed:** the effects pass's vertex buckets (`tagpu_fx.h`) were 65 536
   each, and tier 1 filled the sprite bucket at the opening volley. The two buckets particles land
   in are now sized from `TAGPU_PK_MAX_PART`.
