@@ -119,6 +119,7 @@
 #include "tagpu_terr.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_restore.h"
+#include "tagpu_pal.h"                  /* tagpu_pal_expand */
 #include "spirv/tagpu_terr.spv.h"
 
 #define UBLK_VS  64                        /* std140, the generated header's   */
@@ -227,6 +228,15 @@ typedef struct {
 #define IMG_RESTORED  (IMG_SAMPLED | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
 static SHARED s_atlas;                     /* the tile atlas, R8              */
 static SHARED s_height;                    /* the height grid, R8             */
+/* THE BASE ATLAS, RGBA8 at the tile atlas's size: every texel its index's
+   colour through the hand-over's palette (tagpu_pal_expand, nothing keyed --
+   a tile has no hole). Classic++ draws it wherever the restored atlas has not
+   been painted, and it is the restorer's source. Binding 48. `serial` is the
+   tile atlas's serial it was expanded from and `s_basePal` the palette's, and
+   a move of either re-sends the whole image -- the tile atlas is rebuilt whole
+   or not at all, so there is no smaller rect to send. */
+static SHARED   s_base;
+static unsigned s_basePal;
 /* CLASSIC++'s RESTORED TILE ATLAS, RGBA8. A
    third shared image with the same retire discipline as the other two; binding
    42 names it instead of being the placeholder `shared_bind` described. It is
@@ -775,7 +785,7 @@ static int build_samplers(const TAGPU_VKPASS* d)
 
 static int build_pipeline(const TAGPU_VKPASS* d)
 {
-    VkDescriptorSetLayoutBinding b[10];
+    VkDescriptorSetLayoutBinding b[11];
     VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st[2];
@@ -819,13 +829,13 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     b[1].binding = 32; b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (i = 2; i < 10; i++) {
+    for (i = 2; i < 11; i++) {
         b[i].binding = (uint32_t)(40 + (i - 2));
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    dli.bindingCount = 10; dli.pBindings = b;
+    dli.bindingCount = 11; dli.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &dli, NULL, &s_dsl) != VK_SUCCESS) return 0;
 
     pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
@@ -924,7 +934,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots * 2;
-    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 8;
+    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 9;
     dpi.maxSets = d->slots;
     dpi.poolSizeCount = 2; dpi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
@@ -1015,8 +1025,8 @@ static void shadow_ready(VkCommandBuffer cb)
    replaced is picked up here rather than by a write that reaches every slot. */
 static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
 {
-    VkDescriptorImageInfo ii[5];
-    VkWriteDescriptorSet wr[5];
+    VkDescriptorImageInfo ii[6];
+    VkWriteDescriptorSet wr[6];
     memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
     ii[0].sampler = s_samp; ii[0].imageView = s_atlas.view;
     ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1073,9 +1083,12 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
         ii[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         wr[3] = wr[0]; wr[3].dstBinding = 46; wr[3].pImageInfo = &ii[3];
         wr[4] = wr[0]; wr[4].dstBinding = 47; wr[4].pImageInfo = &ii[4];
+        /* 48 is uBase, NEAREST like the index it was expanded from */
+        ii[5] = ii[0]; ii[5].imageView = s_base.view;
+        wr[5] = wr[0]; wr[5].dstBinding = 48; wr[5].pImageInfo = &ii[5];
         s_slot[slot].boundShadow = sv;
     }
-    vkUpdateDescriptorSets(d->dev, 5, wr, 0, NULL);
+    vkUpdateDescriptorSets(d->dev, 6, wr, 0, NULL);
     s_slot[slot].boundAtlas  = ii[0].imageView;
     s_slot[slot].boundHeight = ii[2].imageView;
 }
@@ -1174,9 +1187,9 @@ static void terr_scissor(uint32_t w, uint32_t h)
 }
 
 /* ---- THE RESTORE REQUEST, TAKEN --------------------------------------------
-   Called once per `prepare`, AFTER the indexed atlas's upload and before the
+   Called once per `prepare`, AFTER the base atlas's upload and before the
    refusal that asks whether the restored atlas holds a picture. The order is
-   not cosmetic: the restorer samples `s_atlas`, the upload that fills it is
+   not cosmetic: the restorer samples `s_base`, the upload that fills it is
    recorded into THIS frame's command buffer a few lines above, and the slice
    that reads it is recorded into the same buffer a few lines later by the
    seam -- so the source is a fact by the time the first FILL runs, and no
@@ -1244,10 +1257,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
     if (s_rjTried) { s_rgbAtlas.have = 0; return; }
     /* THE DESTINATION AND THE SOURCE BOTH HAVE TO BE THERE. `img` absent means
        the device refused the image (the resize above reads that way); `have`
-       absent on the indexed atlas means its upload has not been recorded yet,
-       and a FILL over an atlas with no contents would paint the palette's
-       entry 0 over the world. Neither is an error -- the next frame asks again. */
-    if (!s_rgbAtlas.img || !s_rgbAtlas.view || !s_atlas.view || !s_atlas.have) return;
+       absent on the base atlas means its upload has not been recorded yet,
+       and a FILL over an image with no contents would paint undefined texels
+       over the world. Neither is an error -- the next frame asks again. */
+    if (!s_rgbAtlas.img || !s_rgbAtlas.view || !s_base.view || !s_base.have) return;
     /* THE CONSUMER IS WHAT ASKS THE DEVICE, and that is deliberate: `up`
        loads the model off disk, so a session that never publishes a request
        never pays for it. It latches its verdict, so this is one integer
@@ -1261,7 +1274,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
        fact, so it is the one that decides. */
     repaint = t->restoreRepaint && s_rgbAtlas.have;
     s_rjob = tagpu_vk_restore_job_new(d, "terr", 0, 1, repaint,
-                                      s_atlas.img, s_atlas.view, s_atlas.w, s_atlas.h,
+                                      s_base.img, s_base.view, s_base.w, s_base.h, 1,
                                       t->pal,
                                       s_rgbAtlas.img, s_rgbAtlas.view,
                                       s_rgbAtlas.w, s_rgbAtlas.h);
@@ -1280,7 +1293,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         return;
     }
     s_rjSerial = t->restoreSerial;
-    s_rjSrcView = s_atlas.view;
+    s_rjSrcView = s_base.view;
     s_rjPainted = 0;
     if (!repaint) s_rgbAtlas.have = 0;     /* it is being blanked and repainted */
     plog(d, "terr: restoring the tile atlas HERE - %d frames over %dx%d, "
@@ -1294,6 +1307,8 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     SLOT* s;
     int restored;                       /* what the SHADER is told, see below */
     VkDeviceSize ibytes, atlasBytes = 0, heightBytes = 0, heightOff = 0, bigBytes = 0;
+    VkDeviceSize baseBytes = 0, baseOff = 0;
+    int doBase;
     /* A UNION, NOT A CAST. Both blocks mix `int` and `float` members and
        writing an int through a float array is the aliasing rule broken at -O2,
        which is not a place to find out that the fog branch took a garbage
@@ -1315,6 +1330,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         shared_slot_done(d, &s_atlas, slot);
         shared_slot_done(d, &s_height, slot);
         shared_slot_done(d, &s_rgbAtlas, slot);
+        shared_slot_done(d, &s_base, slot);
     }
 
     /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW, AND NOTHING PER-SLOT
@@ -1428,9 +1444,9 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* THE SHARED IMAGES FIRST, because a resize that cannot be applied yet
        (one retire at a time) means this frame draws nothing at all rather than
        sampling the previous map's texels. */
-    if (s_rjob && s_rjSrcView && s_atlas.view && s_rjSrcView != s_atlas.view) {
+    if (s_rjob && s_rjSrcView && s_base.view && s_rjSrcView != s_base.view) {
         /* see `s_rjSrcView`: the atlas the job reads from has been retired */
-        plog(d, "terr: the indexed atlas moved under a live restore - dropping it "
+        plog(d, "terr: the base atlas moved under a live restore - dropping it "
                 "and starting over on the new one");
         tagpu_vk_restore_job_free(d, s_rjob);
         s_rjob = NULL; s_rjSerial = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
@@ -1439,6 +1455,10 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (!shared_resize(d, &s_atlas, t.atlasW, t.atlasH, VK_FORMAT_R8_UNORM, IMG_SAMPLED)) {
         if (!s_atlas.img) goto refuse;
         return 0;                          /* a retire is still clearing       */
+    }
+    if (!shared_resize(d, &s_base, t.atlasW, t.atlasH, VK_FORMAT_R8G8B8A8_UNORM, IMG_SAMPLED)) {
+        if (!s_base.img) goto refuse;
+        return 0;
     }
     /* WITH NO HEIGHT GRID THE IMAGE IS ONE TEXEL AND uHDim IS 0: the shader's `uHDim.x > 0.5` test is what keeps it
        unsampled, and a 1x1 image keeps the descriptor valid meanwhile. */
@@ -1483,11 +1503,14 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     doAtlas = !s_atlas.have || s_atlas.serial != t.atlasSerial;
     doHeight = t.height ? (!s_height.have || s_height.serial != t.heightSerial)
                         : !s_height.have;
-    if (doAtlas || doHeight) {
+    doBase = !s_base.have || s_base.serial != t.atlasSerial || s_basePal != t.palSerial;
+    if (doAtlas || doHeight || doBase) {
         atlasBytes = doAtlas ? (VkDeviceSize)t.atlasW * t.atlasH : 0;
         heightOff = ALIGN4(atlasBytes);
         heightBytes = doHeight ? (VkDeviceSize)hW * hH : 0;
-        bigBytes = ALIGN4(heightOff + heightBytes);
+        baseOff = ALIGN4(heightOff + heightBytes);
+        baseBytes = doBase ? (VkDeviceSize)t.atlasW * t.atlasH * 4 : 0;
+        bigBytes = ALIGN4(baseOff + baseBytes);
         if (s->bigCap < bigBytes || !s->bigStage) {
             slot_drop_bigstage(d, s);
             if (!mk_buffer(d, bigBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -1506,6 +1529,13 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             else          memset(s->bigMap + heightOff, 0, 1);
             shared_upload(cb, &s_height, s->bigStage, heightOff);
             s_height.serial = t.height ? t.heightSerial : 0;
+        }
+        if (doBase) {
+            tagpu_pal_expand(s->bigMap + baseOff, t.atlas, NULL, t.atlasW,
+                             0, 0, t.atlasW, t.atlasH, t.pal);
+            shared_upload(cb, &s_base, s->bigStage, baseOff);
+            s_base.serial = t.atlasSerial;
+            s_basePal = t.palSerial;
         }
     } else {
         slot_drop_bigstage(d, s);
@@ -1790,6 +1820,10 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_atlas.img, &s_atlas.mem, &s_atlas.view);
     kill_image(d, &s_atlas.oldImg, &s_atlas.oldMem, &s_atlas.oldView);
     memset(&s_atlas, 0, sizeof s_atlas);
+    kill_image(d, &s_base.img, &s_base.mem, &s_base.view);
+    kill_image(d, &s_base.oldImg, &s_base.oldMem, &s_base.oldView);
+    memset(&s_base, 0, sizeof s_base);
+    s_basePal = 0;
     kill_image(d, &s_height.img, &s_height.mem, &s_height.view);
     kill_image(d, &s_height.oldImg, &s_height.oldMem, &s_height.oldView);
     memset(&s_height, 0, sizeof s_height);

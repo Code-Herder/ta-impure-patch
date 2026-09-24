@@ -227,6 +227,9 @@ static void r3d_init(void)
     tagpu_gaf_atlas_lost(&s_atlas);
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "unit";
+    /* a world atlas: its base atlas is RGBA, so the key has to travel as a
+       plane beside the indices (tagpu_gaf.h `keyPlane`) */
+    s_atlas.keyPlane = 1;
     s_atlas.pad = ATLAS_PAD; s_atlas.align = ATLAS_PAD; s_atlas.mip = ATLAS_MIP;
     if (!tagpu_gaf_atlas_create(&s_atlas)) { rlog("render3do: atlas texture FAILED"); s_state = 2; return; }
 
@@ -430,6 +433,12 @@ const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* seria
     if (rows) *rows = r;
     if (serial) *serial = s_atlas.mirrorSerial;
     return s_atlas.mirror;
+}
+
+const unsigned char* tagpu_r3d_atlas_key(const TAGPU_GAFBAND** bands)
+{
+    if (bands) *bands = s_atlas.mirror ? s_atlas.band : NULL;
+    return s_atlas.mirror ? s_atlas.keym : NULL;
 }
 
 /* THE LIST, THE ONLY ANSWER TO THE QUESTION (the shape features and effects

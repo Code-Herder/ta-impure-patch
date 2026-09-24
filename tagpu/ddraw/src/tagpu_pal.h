@@ -64,4 +64,13 @@ const unsigned char* tagpu_pal_engine(void);
    actually produce. */
 float tagpu_pal_gamma(void);
 
+/* THE BASE ATLAS'S TEXELS: a rectangle of an index plane expanded through
+   `pal` (256 x R,G,B,x) into tight RGBA8 rows at `dst` (w*h*4 bytes). `key`
+   is the atlas's key plane (tagpu_gaf.h `keym`: 0 at a keyed texel) and gives
+   the alpha -- 0 with RGB 0 at a key, 255 elsewhere; NULL means nothing is
+   keyed (the terrain). `pitch` is both planes' row length. Pure, any thread:
+   it reads the three inputs and writes `dst`. */
+void tagpu_pal_expand(unsigned char* dst, const unsigned char* idx, const unsigned char* key,
+                      int pitch, int x0, int y0, int w, int h, const unsigned char* pal);
+
 #endif

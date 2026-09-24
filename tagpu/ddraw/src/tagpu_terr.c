@@ -394,6 +394,9 @@ static const char* FS =
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
+    /* the base atlas: the tile atlas expanded through the palette
+       (tagpu_vk_terr.c). Last, so the samplers above keep their bindings. */
+    "uniform sampler2D uBase;\n"
     TAGPU_GLSL_LIGHT_FN
     /* the lab's normalAt (tascene-view.html): at a grid point, central
        differences of the height over 32 world units, coordinates clamped to
@@ -461,15 +464,14 @@ static const char* FS =
     TAGPU_GLSL_FOG_TERRAIN
     /* Classic++ (uLit): the restored colour where the reveal has painted it
        -- alpha is the restorer's own "painted" mark, a cell it
-       has not reached yet is alpha 0 -- and the palette's colour elsewhere,
-       so the reveal goes lit-indexed to lit-restored; lit by the lab's rule
+       has not reached yet is alpha 0 -- and the base atlas's colour elsewhere,
+       so the reveal goes lit-base to lit-restored; lit by the lab's rule
        from the heightfield normal; then the grey band as the RGB rule
        (renderers.md 2.6) rather than the index LUT. Nothing below this
        branch runs under Classic++, nothing in it runs under Classic. */
     "  if (uLit == 1) {\n"
     "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "    vec3 c = t.a > 0.5 ? t.rgb\n"
-    "           : texelFetch(uPal, ivec2(int(texture(uAtlas, vUV).r * 255.0 + 0.5), 0), 0).rgb;\n"
+    "    vec3 c = t.a > 0.5 ? t.rgb : texture(uBase, vUV).rgb;\n"
     "    if (uHDim.x > 0.5) c *= taLambert(uLambert == 1 ? taTerrN(vWorld) : vec3(0.0, 1.0, 0.0),\n"
     "                                     taW, taWx, taWy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")

@@ -250,6 +250,10 @@ static const char* FS =
     "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_SCAF_UNIFORMS
+    /* the base atlas: the same texels expanded through the palette, alpha 0 at
+       the key (tagpu_vk_fx.c). Last, so the samplers above keep their
+       bindings. */
+    "uniform sampler2D uBase;\n"
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
     "  int mode = int(vCM.y + 0.5);\n"
@@ -264,6 +268,7 @@ static const char* FS =
     "    rgb = texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb;\n"
     "  } else {\n"
     "    float idx = texture(uAtlas, vUV).r;\n"
+    "    vec3 base = texture(uBase, vUV).rgb;\n"
     "    if (abs(idx - vCM.x) < 0.5/255.0) discard;\n"
     "    int ii = int(idx*255.0+0.5);\n"
     "    if (mode == 3) {\n"
@@ -271,11 +276,11 @@ static const char* FS =
     "      rgb = texelFetch(uLht, ivec2(lv, 0), 0).rgb;\n"
     "    } else {\n"
     /* Classic++: the twin's colour where the lazy restore has painted it
-       (alpha 1 -- tagpu_gaf.h), the index otherwise; the flash mode above
-       keeps its index-driven light table. Effects hide in grey, so no RGB
-       fog rule is needed here */
+       (alpha 1 -- tagpu_gaf.h), the base atlas's otherwise; the flash mode
+       above keeps its index-driven light table. Effects hide in grey, so no
+       RGB fog rule is needed here */
     "      vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "      rgb = t.a > 0.5 ? t.rgb : texelFetch(uPal, ivec2(ii, 0), 0).rgb;\n"
+    "      rgb = t.a > 0.5 ? t.rgb : (uRestored == 1 ? base : texelFetch(uPal, ivec2(ii, 0), 0).rgb);\n"
     "      if (mode == 2) a = 0.5;\n"
     "    }\n"
     "  }\n"
@@ -294,6 +299,9 @@ static void atlas_setup(void)
     tagpu_gaf_atlas_lost(&s_atlas);      /* the struct describes nothing yet */
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "fx";
+    /* a world atlas: its base atlas is RGBA, so the key has to travel as a
+       plane beside the indices (tagpu_gaf.h `keyPlane`) */
+    s_atlas.keyPlane = 1;
     tagpu_gaf_atlas_create(&s_atlas);   /* laid out now, not on first use */
 }
 
@@ -912,6 +920,7 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.zoomF = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCFx = v->zoomCx; s_pub.zoomCFy = v->zoomCy;
     s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
+    s_pub.atlasKey = s_atlas.keym; s_pub.atlasBands = s_atlas.band;
     {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
         int rows = s_atlas.shelfY + s_atlas.shelfH;
         if (rows < 0) rows = 0;

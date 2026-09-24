@@ -394,6 +394,10 @@ static const char* FS =
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
+    /* the base atlas: the unit atlas expanded through the palette, alpha 0 at
+       the key (tagpu_vk_unit.c). Last, so the samplers above keep their
+       bindings. */
+    "uniform sampler2D uBase;\n"
     TAGPU_GLSL_LIGHT_FN
     "void main(){\n"
     "  float idx;\n"
@@ -405,9 +409,11 @@ static const char* FS =
        fragment of the quad is still running (the R8 sample has no mips and
        never cared). Zero for a flat face, and zero when the switch is off. */
     "  vec4 t = vec4(0.0);\n"
+    "  vec3 base = vec3(0.0);\n"
     "  if (vUV.x < 0.0) { idx = vFC.x; }\n"
     "  else {\n"
     "    idx = texture(uAtlas, vUV).r;\n"
+    "    base = texture(uBase, vUV).rgb;\n"
     "    if (uRestored == 1) t = texture(uAtlasRGB, vUV);\n"
     "    if (abs(idx - vFC.y) < 0.5/255.0) discard;\n"
     "  }\n"
@@ -460,8 +466,9 @@ static const char* FS =
     "  vec3 rgb;\n"
     /* Classic++: the restored texel where the lazy restore has painted it
        (alpha 1 -- tagpu_gaf.h; the twin sampled trilinear with its mips, the
-       lab's LAB_UNIT_FS uUndither branch), the palette's colour for a flat
-       face, a nanoframe band or a texel not yet restored, then the lab's
+       lab's LAB_UNIT_FS uUndither branch), the base atlas's for a texel not
+       yet restored, the palette's for a flat face or a nanoframe band -- whose
+       colour is an index and not a texel -- then the lab's
        lambert on either (renderers.md 2.11) and the grey band as the RGB rule
        (2.6). The hole stays the index test above: the twin's alpha is 0 at a
        keyed texel too, but the index compare is what keeps it out of the
@@ -471,7 +478,7 @@ static const char* FS =
        Classic: the index remap, as the engine does it. */
     "  if (uLit == 1) {\n"
     "    rgb = (t.a > 0.5 && !band) ? t.rgb / t.a\n"
-    "        : texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
+    "        : (band || vUV.x < 0.0) ? texelFetch(uPal, ivec2(pi, 0), 0).rgb : base;\n"
     "    rgb *= taLambert(uLambert == 1 ? vNrm : vec3(0.0, 1.0, 0.0), vShW, taSx, taSy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
     "  } else {\n"

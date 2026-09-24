@@ -26,8 +26,8 @@
        the same warning for the same reason.
 
    WHAT IT IS FED, AND WHY THERE IS NO MIRROR. A job's two surfaces are
-   ALREADY on the device for every consumer: the indexed source is the pass's
-   own atlas image and the destination is the restored twin it already binds
+   ALREADY on the device for every consumer: the source is the pass's own
+   atlas image (the RGBA base for a world pass, the R8 atlas for the UI) and the destination is the restored twin it already binds
    (binding 42 in tagpu_vk_feat.c, 43 in tagpu_vk_fx.c). So this pass needs no
    CPU mirror and no read-back. What the consumer owes is the
    destination's usage widened to carry COLOR_ATTACHMENT and its view lent
@@ -63,8 +63,10 @@ typedef struct TAGPU_VKRJOB TAGPU_VKRJOB;
    is the shipped fallback, not a fault. */
 int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
 
-/* A job: frames read from `srcView` (the consumer's R8 indexed atlas, srcW x
-   srcH) with the palette `pal` (256 x R,G,B,pad; snapshotted now), painted
+/* A job: frames read from `srcView` (srcW x srcH) -- with `srcBase` 1 the
+   consumer's RGBA8 BASE atlas, colours already expanded and alpha 0 at a key
+   (the world passes); with 0 an R8 atlas of palette indices read through the
+   palette `pal` (256 x R,G,B,pad; snapshotted now), which is the UI's -- painted
    into `dstImg`/`dstView` (RGBA8, dstW x dstH). The destination MUST have been
    created with VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; it is cleared to alpha 0
    here unless `repaint`, which is the palette-moved case that recolours in
@@ -77,7 +79,7 @@ int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
 TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
                                        int prio, int oneshot, int repaint,
                                        VkImage srcImg, VkImageView srcView,
-                                       int srcW, int srcH,
+                                       int srcW, int srcH, int srcBase,
                                        const unsigned char* pal,
                                        VkImage dstImg, VkImageView dstView,
                                        int dstW, int dstH);

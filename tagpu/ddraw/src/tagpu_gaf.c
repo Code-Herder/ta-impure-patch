@@ -186,6 +186,57 @@ static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
     if (restore_frame_of(a, e, &a->rlist[a->rlistN])) a->rlistN++;
 }
 
+/* EVERY MIRROR WRITE GOES THROUGH HERE: the serial moves and the ring records
+   the rect under the new serial, in one place, so the ring can never skip a
+   serial -- which is what makes `tagpu_gaf_band_since`'s per-slot serial test
+   a proof that it holds every write of an interval, stale slots from an
+   earlier mirror included. */
+static void mirror_wrote(TAGPU_GAFATLAS* a, int x0, int y0, int x1, int y1)
+{
+    TAGPU_GAFBAND* b;
+    a->mirrorSerial++;
+    b = &a->band[a->mirrorSerial % TAGPU_GAF_NBAND];
+    b->serial = a->mirrorSerial;
+    b->x0 = (unsigned short)x0; b->y0 = (unsigned short)y0;
+    b->x1 = (unsigned short)x1; b->y1 = (unsigned short)y1;
+}
+
+/* the mirror's bytes: the index plane, and the key plane after it when the
+   mirror was allocated with one -- `keym` is the record of that, so a clear
+   covers exactly what the allocation holds whatever `keyPlane` says now */
+static size_t mirror_bytes(const TAGPU_GAFATLAS* a)
+{
+    return (size_t)a->dim * a->dim * (a->keym ? 2u : 1u);
+}
+
+int tagpu_gaf_band_since(const TAGPU_GAFBAND* ring, unsigned now, unsigned since,
+                         int dim, int rows, int rect[4])
+{
+    unsigned s;
+    int x0 = dim, y0 = dim, x1 = 0, y1 = 0;
+    rect[0] = rect[1] = rect[2] = rect[3] = 0;
+    if (!ring || dim <= 0) return 0;
+    if (now == since) return 1;
+    /* unsigned, so a `since` AHEAD of `now` (a mirror re-armed from 0) is a
+       huge gap and answers "the whole page" too */
+    if (now - since > TAGPU_GAF_NBAND) return 0;
+    for (s = since + 1; ; s++) {
+        const TAGPU_GAFBAND* b = &ring[s % TAGPU_GAF_NBAND];
+        if (b->serial != s) return 0;
+        if (b->x0 < x0) x0 = b->x0;
+        if (b->y0 < y0) y0 = b->y0;
+        if (b->x1 > x1) x1 = b->x1;
+        if (b->y1 > y1) y1 = b->y1;
+        if (s == now) break;
+    }
+    if (rows > dim) rows = dim;
+    if (x1 > dim) x1 = dim;
+    if (y1 > rows) y1 = rows;
+    if (x1 <= x0 || y1 <= y0) return 1;
+    rect[0] = x0; rect[1] = y0; rect[2] = x1; rect[3] = y1;
+    return 1;
+}
+
 /* the job's destination back to unpainted, and the published list with it */
 static void job_clear_dest(TAGPU_GAFATLAS* a)
 {
@@ -410,21 +461,32 @@ int tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a)
     int i, again = 0;
     if (!a || a->dim <= 0) return 0;
     if (a->mirror) return 1;
-    a->mirror = (unsigned char*)calloc((size_t)a->dim * a->dim, 1);
+    /* calloc: index 0 in the index plane and 0 -- keyed -- in the key plane,
+       so a texel no paint has reached is a hole in the base atlas rather than
+       black */
+    a->mirror = (unsigned char*)calloc((size_t)a->dim * a->dim, a->keyPlane ? 2u : 1u);
     if (!a->mirror) {
         _snprintf(b, sizeof b, "%s: no memory for a %d KB atlas mirror — the Vulkan"
                   " edition of this pass stays down", a->tag ? a->tag : "gaf",
-                  (a->dim * a->dim) >> 10);
+                  (a->dim * a->dim * (a->keyPlane ? 2 : 1)) >> 10);
         b[sizeof b - 1] = 0;
         glog(b);
         return 0;
     }
+    a->keym = a->keyPlane ? a->mirror + (size_t)a->dim * a->dim : NULL;
     for (i = 0; i < a->n; i++)
         if (a->ents[i].ok) { a->ents[i].ok = 0; a->ents[i].resv = 1; again++; }
-    a->mirrorSerial = 0;
-    _snprintf(b, sizeof b, "%s: atlas mirror armed, %d KB — %d painted frame(s)"
+    /* THE SERIAL CARRIES ON ACROSS A MIRROR'S LIVES, and the new one opens
+       with a whole-page write: a consumer still holding a copy of an earlier
+       mirror then finds that write in its interval (or a gap the ring cannot
+       cover) and re-sends everything. Restarting at 0 would let a stale copy's
+       serial match a new one's, and the ring's slots from the earlier life
+       would answer for writes they never saw. */
+    mirror_wrote(a, 0, 0, a->dim, a->dim);
+    _snprintf(b, sizeof b, "%s: atlas mirror armed, %d KB%s — %d painted frame(s)"
               " re-decode on their next use so the mirror holds them too",
-              a->tag ? a->tag : "gaf", (a->dim * a->dim) >> 10, again);
+              a->tag ? a->tag : "gaf", (int)(mirror_bytes(a) >> 10),
+              a->keym ? " with its key plane" : "", again);
     b[sizeof b - 1] = 0;
     glog(b);
     return 1;
@@ -555,7 +617,7 @@ void tagpu_gaf_atlas_restore_repalette(TAGPU_GAFATLAS* a)
 void tagpu_gaf_atlas_free_buffers(TAGPU_GAFATLAS* a)
 {
     if (!a) return;
-    free(a->mirror);    a->mirror = NULL;
+    free(a->mirror);    a->mirror = NULL; a->keym = NULL;
     /* AND THE STATE THAT DESCRIBED IT, not just the pointer: `rlistWant` is
        what every writer tests before touching the list, so leaving it set over
        a NULL buffer is the half-state this function exists to avoid. The
@@ -576,7 +638,7 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     /* and so is everything it held, so the mirror of it says nothing. (The
        re-create zeroes it again; doing it here as well means a mirror is never
        stale for the frames between a loss and the next create.) */
-    if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
+    if (a->mirror) { memset(a->mirror, 0, mirror_bytes(a)); mirror_wrote(a, 0, 0, a->dim, a->dim); }
     memset(a->hash, 0, sizeof a->hash);
     /* THE CONSUMER'S DESTINATION DID NOT DIE -- ITS SOURCE DID. Nothing here
        is a Vulkan object, so a consumer's twin still holds the colours of an
@@ -612,7 +674,7 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
        no longer exists. atlas_drop is deliberately NOT here: it leaves the
        texels alone and lets re-inserted entries overwrite them, and the mirror
        follows exactly because it follows the paints. */
-    if (a->mirror) { memset(a->mirror, 0, (size_t)a->dim * a->dim); a->mirrorSerial++; }
+    if (a->mirror) { memset(a->mirror, 0, mirror_bytes(a)); mirror_wrote(a, 0, 0, a->dim, a->dim); }
     a->made = 1;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
@@ -839,7 +901,17 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
             for (k = 0; k < ch; k++)
                 memcpy(a->mirror + (size_t)(y0 + k) * a->dim + x0,
                        s_pad + (size_t)k * pw, (size_t)cw);
-            a->mirrorSerial++;
+            /* THE KEY PLANE FROM THE SAME ROWS, against the key this entry is
+               painted with -- the one every sprite drawn from the cell keys
+               on, border and slack included, since those replicate the edge */
+            if (a->keym) {
+                for (k = 0; k < ch; k++) {
+                    const unsigned char* src = s_pad + (size_t)k * pw;
+                    unsigned char* km = a->keym + (size_t)(y0 + k) * a->dim + x0;
+                    for (i = 0; i < cw; i++) km[i] = src[i] == ck ? 0 : 255;
+                }
+            }
+            mirror_wrote(a, x0, y0, x0 + cw, y0 + ch);
         }
     }
 

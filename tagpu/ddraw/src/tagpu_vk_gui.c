@@ -1662,7 +1662,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_GUIHAND* h)
        what you have" over an image the producer had cleared. */
     repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
     s_rjob = tagpu_vk_restore_job_new(d, "gui", 4, 0, repaint,
-                                      s_atImg, s_atView, s_atDim, s_atDim,
+                                      s_atImg, s_atView, s_atDim, s_atDim, 0,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);
     if (!s_rjob) { s_rjTried = 1; tagpu_gui_col_ready(0, s_arSettled); return; }

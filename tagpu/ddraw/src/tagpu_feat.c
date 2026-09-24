@@ -351,25 +351,30 @@ static const char* FS =
     "uniform int uRestored;\n"         /* 1 = sample it where its alpha says so */
     "uniform int uLit;\n"              /* 1 = Classic++: lit, RGB fog rule     */
     TAGPU_GLSL_FOG_UNIFORMS
+    /* the base atlas: the same texels expanded through the palette, alpha 0 at
+       the key (tagpu_vk_feat.c). Last, so the samplers above keep their
+       bindings. */
+    "uniform sampler2D uBase;\n"
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
     /* features are terrain furniture: the engine draws them under the fog
        overlay, so they stay visible in grey and are merely shade-remapped */
     TAGPU_GLSL_FOG_DISCARD
     "  float idx = texture(uAtlas, vUV).r;\n"
+    "  vec3 base = texture(uBase, vUV).rgb;\n"
     /* colour-keyed: the key texel is a hole, and discarding keeps it out of
        the depth buffer too — a tree occludes only where it has pixels */
     "  if (abs(idx - vCM.x) < 0.5/255.0) discard;\n"
     "  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;\n"
     /* Classic++ (uLit): the twin's colour where the lazy restore has painted
-       it (alpha 1 -- tagpu_gaf.h), the palette's for a frame not yet
+       it (alpha 1 -- tagpu_gaf.h), the base atlas's for a frame not yet
        restored, times the GROUND's lambert at the anchor (a billboard has no
        normal of its own; the lab's lambertAt -- a tree on a shaded slope sits
        in the shade rather than on top of it), then the grey band as the RGB
        rule (renderers.md 2.6). The hole stays the index test above. */
     "  if (uLit == 1) {\n"
     "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "    vec3 c = t.a > 0.5 ? t.rgb : texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb;\n"
+    "    vec3 c = t.a > 0.5 ? t.rgb : base;\n"
     "    c *= vLam;\n"
     TAGPU_GLSL_FOG_GREY_RGB("c")
     "    frag = vec4(c * a, a); return;\n"
@@ -392,6 +397,9 @@ static void atlas_setup(void)
     tagpu_gaf_atlas_lost(&s_atlas);          /* laid out again on the create below */
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "feat";
+    /* a world atlas: its base atlas is RGBA, so the key has to travel as a
+       plane beside the indices (tagpu_gaf.h `keyPlane`) */
+    s_atlas.keyPlane = 1;
     /* Every frame in here is a feature standing on the map, so nothing in it
        ever stops being wanted: when it fills, re-lay it tallest-first and
        keep it rather than drop it (tagpu_gaf.h `repack`). Without it the
@@ -928,6 +936,7 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
     s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
+    s_pub.atlasKey = s_atlas.keym; s_pub.atlasBands = s_atlas.band;
     {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
         int rows = s_atlas.shelfY + s_atlas.shelfH;
         if (rows < 0) rows = 0;

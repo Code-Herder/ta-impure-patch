@@ -89,6 +89,13 @@ typedef struct TAGPU_FEATHAND {
        every time a feature frame is added to the atlas. */
     int                   atlasRows;
     unsigned              atlasSerial;
+    /* THE BASE ATLAS'S TWO OTHER INPUTS, beside the indices: the key plane
+       (dim x dim, 0 at a keyed texel -- tagpu_gaf.h `keym`) and the ring of
+       the mirror's recent writes, which tells a consumer holding serial S
+       which rect to re-send (tagpu_gaf_band_since). Both are the atlas's own
+       buffers, alive as long as the mirror is. */
+    const unsigned char*        atlasKey;
+    const struct TAGPU_GAFBAND* atlasBands;
 
     /* ...AND THE WORK ITSELF IS THE ONLY FORM IT COMES IN. There is no
        restored picture on the CPU side: the restored copy of the atlas reaches

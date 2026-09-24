@@ -118,6 +118,8 @@
 
 #include "tagpu_vk_feat.h"
 #include "tagpu_feat.h"
+#include "tagpu_gaf.h"                     /* tagpu_gaf_band_since             */
+#include "tagpu_pal.h"                     /* tagpu_pal_expand                 */
 #include "spirv/tagpu_feat.spv.h"
 
 #define VST TAGPU_FEAT_VST                 /* floats per vertex, the gather's  */
@@ -194,6 +196,19 @@ static VkImage        s_arImg;
 static VkDeviceMemory s_arMem;
 static VkImageView    s_arView;
 static int            s_arHave;
+
+/* THE BASE ATLAS: the same square in RGBA8, every texel its index's colour
+   through the hand-over's palette and alpha 0 at its frame's key
+   (tagpu_pal_expand). Classic++ draws it wherever the twin has not been
+   painted, and it is the restorer's source. Binding 45. `s_bSerial` and
+   `s_bPal` are the mirror and palette serials it holds; a palette move
+   re-sends the whole page, a paint only the rect the atlas's band ring says
+   changed. */
+static VkImage        s_bImg;
+static VkDeviceMemory s_bMem;
+static VkImageView    s_bView;
+static int            s_bHave;
+static unsigned       s_bSerial, s_bPal;
 /* ---- THE RESTORE THIS LANE RUNS FOR ITSELF --------------------------------
    `s_rjob` paints `s_arImg` from `s_atImg` when the producer publishes a frame
    list instead of a mirror. Three pieces of state make it a CURSOR rather than
@@ -240,6 +255,11 @@ typedef struct {
     VkDeviceMemory  amem;
     unsigned char*  amap;
     VkDeviceSize    acap;
+
+    VkBuffer        bstage;                /* the base atlas's, likewise       */
+    VkDeviceMemory  bmem;
+    unsigned char*  bmap;
+    VkDeviceSize    bcap;
 
     VkImage         pal, lut, fog;         /* the three small per-slot images  */
     VkDeviceMemory  palMem, lutMem, fogMem;
@@ -460,6 +480,10 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     if (s->astage){ vkDestroyBuffer(dev, s->astage, NULL); s->astage = VK_NULL_HANDLE; }
     if (s->amem)  { vkFreeMemory(dev, s->amem, NULL); s->amem = VK_NULL_HANDLE; }
     s->acap = 0;
+    if (s->bmap)  { vkUnmapMemory(dev, s->bmem); s->bmap = NULL; }
+    if (s->bstage){ vkDestroyBuffer(dev, s->bstage, NULL); s->bstage = VK_NULL_HANDLE; }
+    if (s->bmem)  { vkFreeMemory(dev, s->bmem, NULL); s->bmem = VK_NULL_HANDLE; }
+    s->bcap = 0;
     if (s->smallMap) { vkUnmapMemory(dev, s->smallMem); s->smallMap = NULL; }
     if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
     if (s->smallMem) { vkFreeMemory(dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
@@ -480,6 +504,15 @@ static void slot_drop_astage(const TAGPU_VKPASS* d, SLOT* s)
     if (s->astage){ vkDestroyBuffer(d->dev, s->astage, NULL); s->astage = VK_NULL_HANDLE; }
     if (s->amem)  { vkFreeMemory(d->dev, s->amem, NULL); s->amem = VK_NULL_HANDLE; }
     s->acap = 0;
+}
+
+/* ...and the base atlas's, on the same terms */
+static void slot_drop_bstage(const TAGPU_VKPASS* d, SLOT* s)
+{
+    if (s->bmap)  { vkUnmapMemory(d->dev, s->bmem); s->bmap = NULL; }
+    if (s->bstage){ vkDestroyBuffer(d->dev, s->bstage, NULL); s->bstage = VK_NULL_HANDLE; }
+    if (s->bmem)  { vkFreeMemory(d->dev, s->bmem, NULL); s->bmem = VK_NULL_HANDLE; }
+    s->bcap = 0;
 }
 
 /* The fixed-size half of a slot: the palette and LUT images, their shared
@@ -592,7 +625,7 @@ static int build_sampler(const TAGPU_VKPASS* d)
 
 static int build_pipelines(const TAGPU_VKPASS* d)
 {
-    VkDescriptorSetLayoutBinding b[7];
+    VkDescriptorSetLayoutBinding b[8];
     VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st[2];
@@ -617,7 +650,7 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     /* THE BINDINGS ARE THE GENERATOR'S, NOT THIS FILE'S: tools/spirv-gen.py
        allocates them BY STAGE, so set 0 binding 0 is the vertex stage's uniform
        block, 32 the fragment stage's, and 40.. its samplers in declaration
-       order -- uAtlas, uPal, uAtlasRGB, uFogGrid, uFogLUT. The std140 offsets
+       order -- uAtlas, uPal, uAtlasRGB, uFogGrid, uFogLUT, uBase. The std140 offsets
        are printed in the generated header and are the contract for what goes
        into those buffers. */
     memset(b, 0, sizeof b);
@@ -625,13 +658,13 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     b[1].binding = 32; b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (i = 2; i < 7; i++) {
+    for (i = 2; i < 8; i++) {
         b[i].binding = (uint32_t)(40 + (i - 2));
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    dli.bindingCount = 7; dli.pBindings = b;
+    dli.bindingCount = 8; dli.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &dli, NULL, &s_dsl) != VK_SUCCESS) return 0;
 
     pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
@@ -748,7 +781,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots * 2;
-    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 5;
+    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 6;
     dpi.maxSets = d->slots;
     dpi.poolSizeCount = 2; dpi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
@@ -761,8 +794,8 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 
     /* The two uniform blocks are written now and never again -- they name a
        fixed range of a buffer whose CONTENTS change per frame. The samplers are
-       written when there is an image to name: 40 and 42 by `atlas_build`, 41
-       and 44 by `slot_build`, 43 by `slot_fog`. */
+       written when there is an image to name: 40, 42 and 45 by `atlas_build`,
+       41 and 44 by `slot_build`, 43 by `slot_fog`. */
     for (i = 0; i < d->slots; i++) {
         VkDescriptorBufferInfo bi[2];
         VkWriteDescriptorSet w[2];
@@ -786,9 +819,19 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
     VkDescriptorImageInfo irgb;
     if (s_atImg && s_atDim == dim) return 1;
     kill_image(d, &s_atImg, &s_atMem, &s_atView);
+    kill_image(d, &s_bImg, &s_bMem, &s_bView);
     s_atDim = 0; s_atSerial = 0; s_atHave = 0;
+    s_bHave = 0; s_bSerial = 0; s_bPal = 0;
     if (!mk_image(d, dim, dim, VK_FORMAT_R8_UNORM, IMG_SAMPLED,
                   &s_atImg, &s_atMem, &s_atView)) return 0;
+    /* the base atlas is what Classic++ draws wherever the twin is not painted
+       and what the restorer reads, so without it the pass does not draw */
+    if (!mk_image(d, dim, dim, VK_FORMAT_R8G8B8A8_UNORM, IMG_SAMPLED,
+                  &s_bImg, &s_bMem, &s_bView)) {
+        kill_image(d, &s_bImg, &s_bMem, &s_bView);
+        plog(d, "feat: no %d MB device image for the base atlas", (dim * dim * 4) >> 20);
+        return 0;
+    }
     s_atDim = dim;
     /* THE RESTORED TWIN'S IMAGE, and a failure here is not fatal: binding 42
        falls back to the indexed view below and the restored stand-down keeps
@@ -809,8 +852,8 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
              (dim * dim * 4) >> 20);
     }
     for (i = 0; i < TAGPU_VK_SLOTS; i++) {
-        VkDescriptorImageInfo ii;
-        VkWriteDescriptorSet wr[2];
+        VkDescriptorImageInfo ii, ib;
+        VkWriteDescriptorSet wr[3];
         if (!s_slot[i].dset) continue;
         memset(&ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
         ii.sampler = s_samp; ii.imageView = s_atView;
@@ -828,7 +871,9 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
         irgb = ii;
         if (s_arView) irgb.imageView = s_arView;
         wr[1] = wr[0]; wr[1].dstBinding = 42; wr[1].pImageInfo = &irgb;
-        vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
+        ib = ii; ib.imageView = s_bView;
+        wr[2] = wr[0]; wr[2].dstBinding = 45; wr[2].pImageInfo = &ib;
+        vkUpdateDescriptorSets(d->dev, 3, wr, 0, NULL);
     }
     return 1;
 }
@@ -881,9 +926,9 @@ static int build(const TAGPU_VKPASS* d)
 
 /* THE RESTORE, FED FROM THE PUBLISHED LIST.
 
-   Called once a frame after the atlas upload, because the FILL pass reads the
-   indexed atlas and a restore issued before this frame's copy would paint the
-   palette's entry 0 over whatever the atlas had not received yet.
+   Called once a frame after the base atlas's upload, because the FILL pass
+   reads the base and a restore issued before this frame's copy would paint
+   undefined texels over whatever the base had not received yet.
 
    IT IS A CURSOR, AND THE GENERATION IS THE ONLY THING THAT RESTARTS IT. A
    feature atlas is a lazy queue: the producer appends one frame per miss
@@ -916,8 +961,8 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        change and `atlas_build` is what re-creates the image, so this is the
        narrow case rather than the common one -- and it is the one that reads
        from a destroyed view if nothing checks. */
-    if (s_rjob && s_rjSrcView && s_atView && s_rjSrcView != s_atView) {
-        plog(d, "feat: the indexed atlas moved under a live restore - dropping it "
+    if (s_rjob && s_rjSrcView && s_bView && s_rjSrcView != s_bView) {
+        plog(d, "feat: the base atlas moved under a live restore - dropping it "
                 "and starting over on the new one");
         tagpu_vk_restore_job_free(d, s_rjob);
         s_rjob = NULL; s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
@@ -983,9 +1028,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        same fact the failed branch above records, reached by the other route. */
     if (s_rjTried) { s_arHave = 0; return; }
     /* BOTH SURFACES HAVE TO BE THERE, and the source has to have contents: a
-       FILL over an atlas no copy has reached yet would paint entry 0 over the
-       art. Neither is an error -- the next frame asks again. */
-    if (!s_arImg || !s_arView || !s_atView || !s_atHave) return;
+       FILL over a base no copy has reached yet would paint undefined texels
+       over the art. Neither is an error -- the next frame asks again. */
+    if (!s_arImg || !s_arView || !s_bView || !s_bHave) return;
     /* THE CONSUMER IS WHAT ASKS THE DEVICE: `up` loads the model off disk, so
        a session that never publishes a request never pays for it. It latches
        its verdict, so this is one integer compare per frame after the first. */
@@ -1003,14 +1048,14 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        The blank COUNT cannot be hidden that way. */
     repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
     s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, repaint,
-                                      s_atImg, s_atView, s_atDim, s_atDim,
+                                      s_bImg, s_bView, s_atDim, s_atDim, 1,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);
     if (!s_rjob) { s_rjTried = 1; return; }   /* the reason is in the log      */
     s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
     s_rjGen = h->restoreGen;
     s_rjBlanks = h->restoreBlanks;
-    s_rjSrcView = s_atView;
+    s_rjSrcView = s_bView;
     s_rjPainted = 0;
     if (!repaint) s_arHave = 0;            /* it is being blanked and repainted */
     plog(d, "feat: restoring the atlas HERE - %d of %d frames over %dx%d, "
@@ -1094,9 +1139,73 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     s_atSerial = h->atlasSerial;
     s_atHave = 1;
 
-    /* ONLY THE INDEXED IMAGE IS UPLOADED. `s_arImg` is filled by this lane's
-       OWN restore (`restore_want` above), which writes it through a render
-       pass rather than a transfer and carries its own barriers. */
+    /* `s_arImg` is filled by this lane's OWN restore (`restore_want` above),
+       which writes it through a render pass rather than a transfer and carries
+       its own barriers. */
+    return 1;
+}
+
+/* THE BASE ATLAS, when the mirror or the palette moved: the rect the band
+   ring says changed since the serial this image holds, or the whole used page
+   when the palette moved, when nothing is held yet, or when the ring has
+   rolled past what this image holds. Expanded into the slot's own staging
+   and copied behind the same write-after-read barrier as the indexed image,
+   for the same reason: every slot samples this one image. */
+static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
+                       const TAGPU_FEATHAND* h)
+{
+    int rows = h->atlasRows, r[4], w, hh;
+    VkDeviceSize bytes;
+    VkBufferImageCopy rg;
+
+    if (s_bHave && s_bSerial == h->atlasSerial && s_bPal == h->palSerial) {
+        slot_drop_bstage(d, s);
+        return 1;
+    }
+    if (rows < 1) rows = 1;
+    if (rows > h->atlasDim) rows = h->atlasDim;
+    if (!s_bHave || s_bPal != h->palSerial ||
+        !tagpu_gaf_band_since(h->atlasBands, h->atlasSerial, s_bSerial,
+                              h->atlasDim, rows, r)) {
+        r[0] = 0; r[1] = 0; r[2] = h->atlasDim; r[3] = rows;
+    }
+    w = r[2] - r[0]; hh = r[3] - r[1];
+    if (w <= 0 || hh <= 0) {
+        /* every paint since landed below the used rows: nothing to send */
+        s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
+        slot_drop_bstage(d, s);
+        return 1;
+    }
+    bytes = (VkDeviceSize)w * hh * 4;
+    if (s->bcap < bytes || !s->bstage) {
+        slot_drop_bstage(d, s);
+        if (!mk_buffer(d, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       &s->bstage, &s->bmem, &s->bmap)) return 0;
+        s->bcap = bytes;
+    }
+    tagpu_pal_expand(s->bmap, h->atlas, h->atlasKey, h->atlasDim, r[0], r[1], w, hh, h->pal);
+    img_barrier(cb, s_bImg,
+                s_bHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                        : VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                s_bHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                        : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                s_bHave ? VK_ACCESS_SHADER_READ_BIT : 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    memset(&rg, 0, sizeof rg);
+    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg.imageSubresource.layerCount = 1;
+    rg.imageOffset.x = r[0]; rg.imageOffset.y = r[1];
+    rg.imageExtent.width = (uint32_t)w; rg.imageExtent.height = (uint32_t)hh;
+    rg.imageExtent.depth = 1;
+    vkCmdCopyBufferToImage(cb, s->bstage, s_bImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
+    img_barrier(cb, s_bImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
+    s_bHave = 1;
     return 1;
 }
 
@@ -1181,7 +1290,7 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 
        BEFORE THE FIRST PAINT THE FRAME IS DRAWN INDEXED (`h.restored = 0`
        below) rather than sampling a twin that holds nothing -- and it is
-       DRAWN, not returned from: the restore needs THIS frame's indexed atlas
+       DRAWN, not returned from: the restore needs THIS frame's base atlas
        uploaded before it can paint anything, and the upload is below, so
        returning on the frames before the first paint would be a deadlock --
        nothing drawn because nothing painted, nothing painted because the atlas
@@ -1255,6 +1364,7 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                           h.body, (size_t)h.nBody * VST * sizeof(float));
 
     if (!atlas_upload(d, cb, s, &h)) goto refuse;
+    if (!base_upload(d, cb, s, &h)) goto refuse;
 
     /* THE RESTORE, AFTER THE UPLOAD IT READS AND BEFORE ANY DRAW THAT SAMPLES
        WHAT IT PAINTS. The draws themselves are issued by the seam, from
@@ -1450,8 +1560,10 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
     s_rjSrcView = VK_NULL_HANDLE;
     kill_image(d, &s_atImg, &s_atMem, &s_atView);
     kill_image(d, &s_arImg, &s_arMem, &s_arView);
+    kill_image(d, &s_bImg, &s_bMem, &s_bView);
     s_arHave = 0;
     s_atDim = 0; s_atSerial = 0; s_atHave = 0;
+    s_bHave = 0; s_bSerial = 0; s_bPal = 0;
     if (s_pipeShadow) { vkDestroyPipeline(dev, s_pipeShadow, NULL); s_pipeShadow = VK_NULL_HANDLE; }
     if (s_pipeBody)   { vkDestroyPipeline(dev, s_pipeBody, NULL);   s_pipeBody = VK_NULL_HANDLE; }
     if (s_plo)   { vkDestroyPipelineLayout(dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }

@@ -164,6 +164,9 @@ typedef struct TAGPU_FXHAND {
     int                   atlasDim;
     int                   atlasRows;  /* the rows the shelf packer has used   */
     unsigned              atlasSerial;
+    /* the base atlas's other two inputs -- tagpu_feat.h has them in full */
+    const unsigned char*        atlasKey;
+    const struct TAGPU_GAFBAND* atlasBands;
 
     /* THE RESTORE WORK, AS REQUESTS.
 

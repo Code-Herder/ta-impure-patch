@@ -91,6 +91,17 @@ typedef struct TAGPU_GAFENT {
 
 struct TAGPU_RGLSL_JOB;
 
+/* ONE WRITE INTO THE MIRROR: the rect it covered and the mirror serial it left
+   behind. The atlas keeps the last TAGPU_GAF_NBAND of them, so a consumer
+   holding a copy as of serial S can re-send the union of every write since S
+   instead of the whole page -- which matters once that copy is four bytes a
+   texel (the world's base atlas, tagpu_pal_expand). */
+#define TAGPU_GAF_NBAND 64
+typedef struct TAGPU_GAFBAND {
+    unsigned       serial;      /* `mirrorSerial` just after the write       */
+    unsigned short x0, y0, x1, y1;
+} TAGPU_GAFBAND;
+
 /* Caller-owned atlas. Zero it, then point `ents`/`max` at your storage and
    set `dim` and `tag` before the first tagpu_gaf_atlas_get. */
 #define TAGPU_GAF_HASH 8192     /* power of two, > 2x any atlas's max      */
@@ -185,6 +196,18 @@ typedef struct TAGPU_GAFATLAS {
        for the re-decode again. */
     unsigned char* mirror;
     unsigned      mirrorSerial;
+    /* THE KEY PLANE: `dim` x `dim` bytes beside the mirror, 0 where the texel
+       is its frame's colour key and 255 where it is art. The world passes
+       need it because their base atlas is RGBA and the key is per FRAME, so
+       an index alone cannot say whether a texel is a hole. Opt-in: the owner
+       sets `keyPlane` before asking for the mirror, and `keym` then lives in
+       the same allocation, written by the same paint, cleared by the same
+       memsets -- one lifetime, never a second one to keep in step. */
+    int            keyPlane;
+    unsigned char* keym;
+    /* the last TAGPU_GAF_NBAND mirror writes, indexed by serial modulo the
+       ring (tagpu_gaf_band_since) */
+    TAGPU_GAFBAND band[TAGPU_GAF_NBAND];
     /* THERE IS NO MIRROR OF THE RESTORED TWIN. `mirror` above is written by
        the paint, because the CPU holds the source bytes; restored texels are
        the RESTORER'S OUTPUT and exist only on the GPU. The Vulkan lane gets
@@ -359,6 +382,15 @@ int  tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a);
    Render thread only, like the rest of this module. Returns 0 if the memory
    was refused, and the atlas then goes on working without one. Idempotent. */
 int  tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a);
+
+/* THE RECT THAT CHANGED since a consumer's copy: the union of every mirror
+   write with a serial in (since, now], clipped to `rows` x `dim`, as
+   x0, y0, x1, y1 (exclusive). 1 with the rect -- empty (x1 <= x0) when
+   nothing changed -- and 0 when the ring no longer holds all of those writes,
+   which means "send the whole page". `ring` is an atlas's `band`, `now` its
+   `mirrorSerial`. Pure: it reads the ring and nothing else. */
+int  tagpu_gaf_band_since(const TAGPU_GAFBAND* ring, unsigned now, unsigned since,
+                          int dim, int rows, int rect[4]);
 
 /* THE RULE FOR ANYTHING THAT HANDS RESTORED TEXELS ACROSS A THREAD: step it
    where the paint is already visible to this frame's draws -- after the
