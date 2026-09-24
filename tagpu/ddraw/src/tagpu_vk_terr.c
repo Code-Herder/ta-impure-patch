@@ -1456,6 +1456,16 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         if (!tagpu_vk_stage_begin(d, &s->stage, ALIGN4(heightBytes) + baseBytes,
                                   (VkDeviceSize)t.atlasW * 4))
             return 0;
+        /* BOTH ARE WAITS (tagpu_vk_stage.h), so each says why it is here: a
+           level's new atlas or grid, the pass's first upload, a palette move --
+           none of them a frame of play */
+        plog(d, "terr: %s%s%s, %u KB, through the banded path - %s",
+             doBase ? "the base atlas" : "", doBase && doHeight ? " and " : "",
+             doHeight ? "the height grid" : "",
+             (unsigned)((ALIGN4(heightBytes) + baseBytes) >> 10),
+             !s_base.have || !s_height.have ? "the first upload since the images were made"
+             : doBase && s_basePal != t.palSerial ? "the engine's table moved"
+             : "a new level's atlas or height grid");
         if (doHeight) {
             /* no grid: one zero texel, which the shader never reads */
             static const unsigned char zero = 0;
