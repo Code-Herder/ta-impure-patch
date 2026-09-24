@@ -73,10 +73,10 @@ registry values.
 by **running** instances, `--slot 0` claims a cell explicitly. A window created off-screen is
 left **unmapped** by GNOME (`xprop -id <wid> WM_STATE` reads `Withdrawn`); a relaunch is the
 clean fix. The grid spans the whole X screen from (0,0), so on a multi-head desktop the window
-lands wherever the grid falls; to park it elsewhere, read `xrandr --query` and
-`xdotool windowmove <id> <x> <y>` **on the id from `tacli ls --json`**, never from a title search
-(a terminal whose title holds the command line matches too). `scenario load --restart`
-relaunches from the recorded tile and undoes a park.
+lands wherever the grid falls. **A resolution re-tiles from the slot** — `--res`, a scenario's
+`setup.res`, a `--defaults` store size unlike the recorded one — undoing any hand-set `tile`, so
+the lever that sticks is `slot` in `instance.json`: pick the cell that lands where the window
+belongs (`tile_for` in `tools/tacli`) and confirm `window=x,y,W,H` in the instance's `impure.cfg`.
 
 **The title names the build and the instance**: `tacli launch` writes `tagpu_title.txt` and the
 DLL appends it, so the bar reads `Total Annihilation - wt:<branch> | tacli:<instance>` — the
@@ -447,12 +447,13 @@ under zoom, `wheel.off` and `zoomedge.off`: `references/levers.md` §"Camera, vi
 - **`--res` does not always reach the game.** `tacli` records what the game actually came up at,
   so a dropped value becomes sticky; fix `res` in `instance.json`, or drive Screen Size from
   Options > Visuals.
-- **A bare `tacli launch` writes no `ddraw.ini`.** `--res`, `--window`, an explicit `--maxfps`,
-  or an off-screen recorded tile rewrite it (`renderer=vulkan`, the tile, the cap);
-  `scenario load` rewrites it whenever the scenario carries a resolution. Check the ini after the
-  run, not before.
-- **`maxfps=0` is unlimited**, a sticky launch knob (`--maxfps 0`), not an edit — the next
-  rewrite overwrites a hand edit. Two paths that both hold 60 fps have both hit the cap.
+- **There is no `ddraw.ini`.** Every launch rewrites `impure.cfg`'s `display`, `window` and
+  `maxfps` (a window on the tile, the cap), which the DLL reads even under `tagpu_defaults.off`,
+  so a hand edit or menu click to those three lasts one session.
+- **`--maxfps` is 0 (unlimited), 60, 120 or negative (the refresh)**, nothing else; sticky.
+- **`tacli launch <i> --shipped` is the player's launch** — no harness file or shield, the play
+  defaults, the player's own placement and size (kept across ordinary launches); a first run is
+  fullscreen on the primary, the owner's screen on the live display. Refuses arm files and flags.
 - The launch briefly warps the pointer (a wine quirk); tacli restores it (`pointer_restored`).
 - Monitors blanking? Both known causes are in `windowed-mode.md`; read it before theorising.
 - **A scratch worktree cannot run tacli** (`create` wants the gitignored wine prefix template).

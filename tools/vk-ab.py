@@ -76,7 +76,7 @@ def main():
         # `_vk.ppm` per pass, and the pair is two builds' captures.
         raise SystemExit("""vk-ab: give two .ppm files, not a gamedir.
   A gamedir holds one capture per pass, and the pair is two BUILDS' captures:
-  launch with renderer=vulkan, arm ONE pass's .ab (the seam refuses a frame
+  launch on the Vulkan backend, arm ONE pass's .ab (the seam refuses a frame
   that several passes drew into), and diff the _vk.ppm against one kept from
   an earlier build:
       vk-ab.py <old>/tagpu_<pass>_vk.ppm <new>/tagpu_<pass>_vk.ppm""")

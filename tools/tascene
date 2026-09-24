@@ -354,8 +354,8 @@ def read_glsl_macros(header: Path):
 def _macro_body(body: str, params, args) -> str:
     """A macro body is string literals interleaved with bare parameter tokens.
 
-    TAGPU_GLSL_FOG_SHADE(I) is written `"...(" I ", 0)..."`, so collecting only
-    the quoted runs silently drops the argument — the substitution has to walk
+    TAGPU_GLSL_FOG_GREY_RGB(V) is written `"... " V " = vec3(dot(" V ", ..."`,
+    so collecting only the quoted runs silently drops the argument — the substitution has to walk
     literals and bare identifiers together.
     """
     out = []

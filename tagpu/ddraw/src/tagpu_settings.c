@@ -132,9 +132,9 @@ static int  s_win[4], s_winSet;
 static char s_extra[EXTRA_LEN];
 static int  s_extraLen;
 
-/* A windowed frame as ddraw.ini carries one: a position, and a client size
-   that is either 0,0 -- the size the game asks for, cnc-ddraw's own meaning of
-   width=0 -- or at least TA's 320x240 floor. -32000 is the fork's "centre me"
+/* A windowed frame: a position, and a client size that is either 0,0 -- the
+   size the game asks for, cnc-ddraw's own meaning of a zero window_rect size --
+   or at least TA's 320x240 floor. -32000 is the fork's "centre me"
    sentinel and is not a position anybody left. */
 static int frame_ok(const int w[4])
 {
@@ -206,6 +206,13 @@ int tagpu_settings_get(TagpuSetting key, int* out)
 }
 
 int tagpu_settings_ignored(void) { return s_ignored; }
+
+int tagpu_settings_placement(TagpuSetting key, int* out)
+{
+    if ((key != TS_DISPLAY && key != TS_MAXFPS) || !s_attached) return 0;
+    if (out) *out = read_val(key);
+    return 1;
+}
 
 long tagpu_settings_gen(void) { return (long)s_gen; }
 
@@ -576,43 +583,7 @@ static void strip_classicpp_cfg(void)
         DeleteFileA("tagpu_classicpp.cfg.tmp");
 }
 
-/* The ddraw.ini keys the store now owns. Released builds SHIPPED `maxfps=60`
-   in their ddraw.ini, and cnc-ddraw's own save wrote the window keys on exit;
-   either way a present key is a lever and would grey its row. Removed with the
-   profile API, which leaves every other line of the player's file as it was. */
-static void strip_ini(const char* ini_path)
-{
-    static const char* const KEYS[] = { "maxfps", "windowed", "fullscreen",
-                                        "posX", "posY", "width", "height" };
-    static const char* const SECT[] = { "ddraw", "TotalA" };
-    char full[MAX_PATH], back[MAX_PATH], v[64];
-    int i, j, found = 0;
-
-    /* the profile API resolves a path with no directory against the WINDOWS
-       directory, so it is handed a full one */
-    if (!ini_path || !GetFullPathNameA(ini_path, sizeof full, full, NULL) || !exists(full))
-        return;
-    for (i = 0; i < N(SECT); i++)
-        for (j = 0; j < N(KEYS); j++)
-            if (GetPrivateProfileStringA(SECT[i], KEYS[j], "", v, sizeof v, full) > 0)
-                found = 1;
-    if (!found) return;
-
-    _snprintf(back, sizeof back, "%s" MIGRATED, full);
-    back[sizeof back - 1] = 0;
-    if (!CopyFileA(full, back, TRUE)) {
-        slog("migration: could not back up %s - its window keys stay", full);
-        return;
-    }
-    for (i = 0; i < N(SECT); i++)
-        for (j = 0; j < N(KEYS); j++)
-            WritePrivateProfileStringA(SECT[i], KEYS[j], NULL, full);
-    WritePrivateProfileStringA(NULL, NULL, NULL, full);   /* flush the cache */
-    slog("migration: display/frame-cap/window keys removed from %s (backup %s)", full, back);
-    record("removed maxfps/windowed/fullscreen/posX/posY/width/height from ddraw.ini (backup ddraw.ini" MIGRATED ")");
-}
-
-static void migrate(const char* ini_path)
+static void migrate(void)
 {
     static const char* const LEVERS[] = {
         "tagpu_classicpp.on", "tagpu_classicpp.off", "tagpu_ss.off", "tagpu_fps.on",
@@ -633,7 +604,6 @@ static void migrate(const char* ini_path)
     record("# starts at its default; rename a file back to undo its step.");
     for (i = 0; i < N(LEVERS); i++) rename_aside(LEVERS[i]);
     strip_classicpp_cfg();
-    strip_ini(ini_path);
     h = CreateFileA(RECORD, GENERIC_WRITE, 0, 0, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
     if (h == INVALID_HANDLE_VALUE || !WriteFile(h, s_rec, (DWORD)s_recLen, &wrote, 0))
         slog("could not write " RECORD " (error %lu) - a later launch with no " STORE
@@ -641,7 +611,7 @@ static void migrate(const char* ini_path)
     if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
 }
 
-void tagpu_settings_attach(const char* ini_path)
+void tagpu_settings_attach(void)
 {
     int i, first;
     char b[512];
@@ -657,7 +627,7 @@ void tagpu_settings_attach(const char* ini_path)
        and tacli creates the store before every launch -- so a missing store
        there is a tacli that did not, and renaming a measurement's levers aside
        would silently change what it measures. */
-    if (first && !s_ignored) migrate(ini_path);
+    if (first && !s_ignored) migrate();
     else if (!first) load();
     s_attached = 1;
     /* The defaults are written now; if that fails the flag stays set and the
@@ -665,8 +635,9 @@ void tagpu_settings_attach(const char* ini_path)
     if (first && !s_ignored) flush(0);
 
     at = _snprintf(b, sizeof b, "%s%s:", STORE,
-                   s_ignored ? " IGNORED (" MASTER_OFF " present: every setting is the "
-                               "lever's or the compiled default)" : "");
+                   s_ignored ? " IGNORED but for display, maxfps and window (" MASTER_OFF
+                               " present: every other setting is the lever's or the compiled "
+                               "default)" : "");
     for (i = 0; i < TS_NKEYS && at > 0 && at < (int)sizeof b; i++) {
         int k;
         if (i == TS_MONITOR)
@@ -694,14 +665,14 @@ void tagpu_settings_monitors(const char* const* names, int n)
     for (i = 0; i < n; i++) lstrcpynA(s_monName[i], names[i] ? names[i] : "", MON_LEN);
     s_monCount = n;
     /* the stored name, resolved here and nowhere else: a monitor that is no
-       longer attached reads as "none chosen", and the window's own monitor
-       stands -- the name is kept, so plugging it back in restores it */
+       longer attached reads as "none chosen", and util_default_monitor
+       answers -- the name is kept, so plugging it back in restores it */
     s_val[TS_MONITOR] = -1;
     if (s_monStored[0])
         for (i = 0; i < n; i++)
             if (!lstrcmpiA(s_monName[i], s_monStored)) { s_val[TS_MONITOR] = i; break; }
     if (s_monStored[0] && s_val[TS_MONITOR] < 0)
-        slog("monitor=%s is not attached - the window's own monitor stands", s_monStored);
+        slog("monitor=%s is not attached - none is chosen (util_target_monitor)", s_monStored);
 }
 
 const char* tagpu_settings_gpu(void)
@@ -722,7 +693,7 @@ void tagpu_settings_set_gpu(const char* name)
 
 int tagpu_settings_window(int* x, int* y, int* w, int* h)
 {
-    if (s_ignored || !s_winSet) return 0;
+    if (!s_winSet) return 0;
     *x = s_win[0]; *y = s_win[1]; *w = s_win[2]; *h = s_win[3];
     return 1;
 }

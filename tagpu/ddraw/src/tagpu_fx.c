@@ -57,7 +57,7 @@
 #include "tagpu_gaf.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_packet.h"
-#include "tagpu_native.h"   /* tagpu_native_foglut/scissor_on, for the hand-over */
+#include "tagpu_native.h"   /* tagpu_native_scissor_on, for the hand-over */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
 #include "tagpu_log.h"
 
@@ -211,11 +211,16 @@ static TAGPU_FXMODEL s_models_[MAXMODEL];
 static int    s_nm = 0;
 
 static int s_lhtInit = 0;
-static unsigned s_lhtStamp = 0;
 /* THE FLASH LIGHT TABLE'S OWN BYTES, at file scope because the hand-over
    carries them to the Vulkan pass: this array is the table. 32 x 1 RGB, and
    `s_lhtInit` is what says whether it has ever been built. */
 static unsigned char s_lhtRGB[32 * 3];
+/* WHAT IT WAS BUILT FROM, and the key that rebuilds it: the engine palette
+   serial and the LHT bytes. A move of either rebuilds the table on the frame it
+   is seen, so the flash colours are never the old table's beside a base atlas
+   re-sent in the new one. */
+static unsigned s_lhtPal;
+static unsigned char s_lhtSrc[TAGPU_PK_LHT_BYTES];
 
 /* THE SHADER PAIR IS A BUILD INPUT, NOT DEAD CODE, and no C in this file
    references it -- `tools/spirv-gen.py` reads both strings
@@ -247,13 +252,16 @@ static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; flat in vec2 vCM; in vec2 vWorld; in float vEnc;\n"
     "out vec4 frag;\n"
-    "uniform sampler2D uAtlas;\n"
-    "uniform sampler2D uPal;\n"
+    "uniform sampler2D uPal;\n"              /* the engine's table: mode 0's colour */
     "uniform sampler2D uLht;\n"              /* 32x1 RGB additive per level  */
     "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin */
     "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */
     TAGPU_GLSL_FOG_UNIFORMS
     TAGPU_GLSL_SCAF_UNIFORMS
+    /* the base atlas: the same texels expanded through the engine's table,
+       alpha 0 at the frame's key and 255 - the flash level elsewhere
+       (tagpu_fx.h TAGPU_FX_FLASH_ALPHA, tagpu_vk_fx.c) */
+    "uniform sampler2D uBase;\n"
     TAGPU_GLSL_FOG_FN
     "void main(){\n"
     "  int mode = int(vCM.y + 0.5);\n"
@@ -264,22 +272,24 @@ static const char* FS =
     /* effects are transient: the engine's own passes are LOS-gated, so they
        vanish in grey rather than darkening (uFog bit1 is set for this pass) */
     TAGPU_GLSL_FOG_DISCARD
+    /* mode 0 is a flat colour, and the vertex carries its palette index */
     "  if (mode == 0) {\n"
     "    rgb = texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb;\n"
     "  } else {\n"
-    "    float idx = texture(uAtlas, vUV).r;\n"
-    "    if (abs(idx - vCM.x) < 0.5/255.0) discard;\n"
-    "    int ii = int(idx*255.0+0.5);\n"
+    /* colour-keyed: the base's alpha is 0 exactly where the frame's index is
+       its key (NEAREST, the texel the index was) */
+    "    vec4 b = texture(uBase, vUV);\n"
+    "    if (b.a < 0.5) discard;\n"
     "    if (mode == 3) {\n"
-    "      int lv = clamp(ii - 79, 0, 31);\n"
+    "      int lv = 255 - int(b.a * 255.0 + 0.5);\n"
     "      rgb = texelFetch(uLht, ivec2(lv, 0), 0).rgb;\n"
     "    } else {\n"
-    /* Classic++: the twin's colour where the lazy restore has painted it
-       (alpha 1 -- tagpu_gaf.h), the index otherwise; the flash mode above
-       keeps its index-driven light table. Effects hide in grey, so no RGB
-       fog rule is needed here */
+    /* the twin's colour where the lazy restore has painted it (alpha 1 --
+       tagpu_gaf.h), the base atlas's otherwise; the flash mode above keeps
+       its level-driven light table. Effects hide in grey, so no RGB fog rule
+       is needed here */
     "      vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "      rgb = t.a > 0.5 ? t.rgb : texelFetch(uPal, ivec2(ii, 0), 0).rgb;\n"
+    "      rgb = t.a > 0.5 ? t.rgb : b.rgb;\n"
     "      if (mode == 2) a = 0.5;\n"
     "    }\n"
     "  }\n"
@@ -298,6 +308,12 @@ static void atlas_setup(void)
     tagpu_gaf_atlas_lost(&s_atlas);      /* the struct describes nothing yet */
     s_atlas.dim = ATLAS_DIM; s_atlas.max = ATLAS_MAX;
     s_atlas.ents = s_atlasEnts; s_atlas.tag = "fx";
+    /* a world atlas: its base atlas is RGBA, so the key has to travel as a
+       plane beside the indices (tagpu_gaf.h `keyPlane`) */
+    s_atlas.keyPlane = 1;
+    /* its paints are bounded by what one frame's upload holds (tagpu_gaf.h
+       `budget`): tagpu_vk_fx.c sends them in the frame's own command buffer */
+    s_atlas.budget = TAGPU_GAF_BUDGET;
     tagpu_gaf_atlas_create(&s_atlas);   /* laid out now, not on first use */
 }
 
@@ -313,11 +329,28 @@ static void put_vert(int b, float x, float y, float u, float v, float c, int mod
 static int s_cLines = 0, s_cSprites = 0, s_cFlash = 0, s_cAtlasFail = 0;
 static int s_cOverflow = 0, s_cQuads = 0;
 
+/* A PART ASKED FOR AND NOT WRITTEN. Every emitter return that leaves a
+   sprite's quad or a line out of the buckets for want of this frame's room
+   counts here: the atlas deferring a paint past the allowance, the atlas
+   full, a frame whose pixels would not decode (all three are
+   `tagpu_gaf_atlas_get` answering NULL), a bucket full. A sprite and an effect
+   snapshot it and take themselves back out when it moved (`emit_sprite`,
+   `effect_begin`), so the rollback is decided by the one count every such
+   path feeds, not by the paths' own tallies.
+   NOT COUNTED, because no part the frame asks for is lost: the `nosprites`
+   and `nolines` levers and the mute, which ask for none, and a frame the GAF
+   reader refuses (`tagpu_gaf_frame_geom`: zero-sized, or larger than the
+   decoder takes -- the publisher resolved every frame through the same test)
+   or one nested past four levels. That is the frame's own shape and the same
+   on every frame, so it cannot draw an effect half on one frame and whole on
+   the next. */
+static unsigned s_partsLost;
+
 static void put_quad(int b, float x0, float y0, float x1, float y1,
                      float u0, float v0, float u1, float v1, float c, int mode,
                      float wx, float wz)
 {
-    if (s_nv[b] + 6 > TAGPU_FX_MAXV_OF(b)) { s_cOverflow++; return; }
+    if (s_nv[b] + 6 > TAGPU_FX_MAXV_OF(b)) { s_cOverflow++; s_partsLost++; return; }
     put_vert(b, x0, y0, u0, v0, c, mode, wx, wz);
     put_vert(b, x1, y0, u1, v0, c, mode, wx, wz);
     put_vert(b, x0, y1, u0, v1, c, mode, wx, wz);
@@ -332,7 +365,7 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
     if (!s_lines) return;
     s_cLines++;
     if (s_mute) return;
-    if (s_nv[B_LINES] + 2 > TAGPU_FX_MAXV) { s_cOverflow++; return; }
+    if (s_nv[B_LINES] + 2 > TAGPU_FX_MAXV) { s_cOverflow++; s_partsLost++; return; }
     float c = (float)colidx / 255.0f;
     /* pixel centres: the engine's Bresenham paints the cells at both ends */
     put_vert(B_LINES, (float)x0 + 0.5f, (float)y0 + 0.5f, -1, -1, c, MODE_FLAT, wx, wz);
@@ -341,7 +374,7 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
 
 /* the fx pass's own `nosprites` token lives at ITS call sites (fx_sprite),
    not here: the particle pass emits through this path too */
-static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
+static void emit_sprite_r(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
 {
     TAGPU_GAFGEOM gm;
     if (depth > 4) return;
@@ -357,23 +390,42 @@ static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float 
             TAGPU_GAFGEOM sm;
             const unsigned char* sg = tagpu_gaf_subframe(g, k);
             if (!sg || !tagpu_gaf_frame_geom(sg, &sm)) continue;
-            emit_sprite(sg, sx, sy,
-                        (mode == MODE_OPAQUE && sm.subalp) ? MODE_ALPHA : mode,
-                        wx, wz, depth + 1);
+            emit_sprite_r(sg, sx, sy,
+                          (mode == MODE_OPAQUE && sm.subalp) ? MODE_ALPHA : mode,
+                          wx, wz, depth + 1);
         }
         return;
     }
     int b = (mode == MODE_FLASH) ? B_FLASH : (s_under ? B_UNDER : B_SPRITES);
     if (mode == MODE_FLASH) s_cFlash++; else s_cSprites++;
     if (s_mute) return;
+    const unsigned dN = s_atlas.deferN;
     const TAGPU_GAFENT* e = tagpu_gaf_atlas_get(&s_atlas, g);
-    if (!e) { s_cAtlasFail++; return; }
+    /* a deferral is the allowance's and the atlas counts it (`deferN`), so it
+       is not an atlas failure; either way the part is lost */
+    if (!e) { if (s_atlas.deferN == dN) s_cAtlasFail++; s_partsLost++; return; }
     int w = gm.w, h = gm.h;
     float x0 = (float)(sx - gm.hotx);
     float y0 = (float)(sy - gm.hoty);
     float x1 = x0 + (float)w, y1 = y0 + (float)h;
     float c = (float)e->ck / 255.0f;
     put_quad(b, x0, y0, x1, y1, e->u0, e->v0, e->u1, e->v1, c, mode, wx, wz);
+}
+
+/* A SPRITE IS DRAWN WHOLE OR NOT AT ALL. A compound frame is several atlas
+   entries; any one of them lost (`s_partsLost`) takes the sprite's other
+   quads back out, so no frame shows part of an explosion. What did paint
+   stays painted and draws on a later frame. */
+static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
+{
+    int nv[NBUCKET], b, quads = s_cQuads;
+    const unsigned lost = s_partsLost;
+    for (b = 0; b < NBUCKET; b++) nv[b] = s_nv[b];
+    emit_sprite_r(g, sx, sy, mode, wx, wz, depth);
+    if (s_partsLost != lost) {
+        for (b = 0; b < NBUCKET; b++) s_nv[b] = nv[b];
+        s_cQuads = quads;
+    }
 }
 
 /* the fx pass's sprites honour its own nosprites token */
@@ -429,6 +481,47 @@ static void emit_model(unsigned node, float ax, float ay, float wx, float wz,
     TAGPU_FXMODEL* m = &s_models_[s_nm++];
     m->node = (const char*)(size_t)node; m->ax = ax; m->ay = ay; m->wx = wx; m->wz = wz;
     m->turn[0] = t0; m->turn[1] = t1; m->turn[2] = t2; m->owner = owner;
+}
+
+/* ---- AN EFFECT IS DRAWN WHOLE OR NOT AT ALL ---------------------------------
+   One record of the packet is one effect: a projectile with its ground
+   shadow and its body, an explosion with its flash and its body, a laser's
+   lines. Its parts land in different buckets -- a shadow and a body in
+   B_SPRITES, a flash in B_FLASH, a line in B_LINES -- and any one of them can
+   be lost for this frame's want of room (`s_partsLost`: an atlas paint
+   deferred past the allowance, an atlas full, a decode that failed, a bucket
+   full). Taking back that part alone would draw the rest without it for a
+   frame: a flash with no explosion, a shadow under no shell. So every record
+   is emitted inside a bracket, and ANY PART OF IT LOST takes the whole record
+   back out at the bracket's end: every bucket, the quad count and the model
+   list return to where they stood at its start. Nothing else is emitted
+   inside a bracket, so the rollback takes no other effect's vertices with it,
+   and what did paint stays painted and draws whole on a later frame.
+
+   THE MODELS ARE NOT A PART THAT IS DRAWN. The model list is walked by
+   tagpu_native.c's `emit_fx_model` into a vertex array no lane reads, so no
+   frame shows a rocket's or a shell's 3DO body, a debris piece or an
+   explosion's model; a record's drawn parts are its sprites and its lines,
+   and those are what the bracket keeps whole. */
+static int      s_effNv[NBUCKET], s_effNm, s_effQuads;
+static unsigned s_effLost;
+
+static void effect_begin(void)
+{
+    int b;
+    for (b = 0; b < NBUCKET; b++) s_effNv[b] = s_nv[b];
+    s_effNm = s_nm;
+    s_effQuads = s_cQuads;
+    s_effLost = s_partsLost;
+}
+
+static void effect_end(void)
+{
+    int b;
+    if (s_partsLost == s_effLost) return;
+    for (b = 0; b < NBUCKET; b++) s_nv[b] = s_effNv[b];
+    s_nm = s_effNm;
+    s_cQuads = s_effQuads;
 }
 
 /* the shaders' fog rule (tagpu_glsl.h) on the CPU — bilinear coverage over the
@@ -647,6 +740,9 @@ static void gather_fx(const TAGPU_FXVIEW* v)
                 p->node, p->child, p->frame);
             flog(lb);
         }
+        /* THE RECORD IS ONE EFFECT: its shadow and its body, whole or not at
+           all (`effect_begin`) */
+        effect_begin();
         /* ground shadow blob (rendertypes 1,3,4,6): alpha blit of the shadow
            sequence's frame 0 at the projectile's ground point */
         if ((p->flags & TAGPU_PK_FX_SHADOW) && alphaOn && pk->shadow_frame)
@@ -731,6 +827,7 @@ static void gather_fx(const TAGPU_FXVIEW* v)
             s_c.other++;
             break;
         }
+        effect_end();
     }
 
     /* ---- flying debris pieces (drawn by 0x4211D0) ---- */
@@ -748,11 +845,14 @@ static void gather_fx(const TAGPU_FXVIEW* v)
         }
     }
 
-    /* ---- explosions (0x420B00): the flash of every record, then the bodies ---- */
+    /* ---- explosions (0x420B00): the flash of every record, then the bodies.
+       THE ENGINE'S TWO PASSES ARE TWO LAYERS, AND THE SINKS KEEP THEM APART:
+       a flash goes to B_FLASH, a body to B_SPRITES, a model to the model
+       list, and the buckets are drawn in that order. So one walk that emits
+       each record whole draws every flash before every body, as the engine's
+       two walks do, and lets a record be taken back out as one effect. ---- */
     if (s_expl && pk->n_expl) {
-        int pass;
         s_c.expl = (int)pk->n_expl;
-        for (pass = 0; pass < 2; pass++)
         for (i = 0; i < pk->n_expl; i++) {
             const TAGPU_PK_EXPL* e = &ex[i];
             int X = e->pos[0], ALT = e->pos[1], Y = e->pos[2];
@@ -761,27 +861,28 @@ static void gather_fx(const TAGPU_FXVIEW* v)
             float wx, wz;
             if (!in_vprect(pk, sx, sy)) continue;
             wx = (float)hx; wz = (float)(hy - (halt >> 1));
-            if (pass == 0) {
-                if (flashOn && e->flash) {
-                    fx_sprite((const unsigned char*)(size_t)e->flash, sx, sy, MODE_FLASH, wx, wz);
-                    s_c.flash++;
-                }
-            } else {
-                emit_model(e->node, (float)X / 65536.0f - (float)eyeX + (float)vpL,
-                           (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT,
-                           wx, wz, e->turn[0], e->turn[1], e->turn[2], 0);
-                if (e->frame)
-                    fx_sprite((const unsigned char*)(size_t)e->frame, sx, sy, MODE_OPAQUE, wx, wz);
+            effect_begin();
+            if (flashOn && e->flash) {
+                fx_sprite((const unsigned char*)(size_t)e->flash, sx, sy, MODE_FLASH, wx, wz);
+                s_c.flash++;
             }
+            emit_model(e->node, (float)X / 65536.0f - (float)eyeX + (float)vpL,
+                       (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT,
+                       wx, wz, e->turn[0], e->turn[1], e->turn[2], 0);
+            if (e->frame)
+                fx_sprite((const unsigned char*)(size_t)e->frame, sx, sy, MODE_OPAQUE, wx, wz);
+            effect_end();
         }
     }
 
-    /* ---- LHT flash colours from the packet's table + the live palette ---- */
-    if (flashOn && (!s_lhtInit || v->frame_counter - s_lhtStamp >= 300)) {
+    /* ---- LHT flash colours from the packet's table + the engine's palette
+       (unscaled, like every world colour: the composite applies the Gamma) ---- */
+    if (flashOn) {
         const unsigned char* lht = tagpu_pk_lht(pk);
-        const unsigned char* pal = tagpu_pal_live();
+        const unsigned char* pal = tagpu_pal_engine();
         unsigned char* rgb = s_lhtRGB;   /* file scope: the hand-over carries it */
-        if (pal && lht) {
+        if (pal && lht && (!s_lhtInit || s_lhtPal != tagpu_pal_engine_serial() ||
+                           memcmp(lht, s_lhtSrc, sizeof s_lhtSrc) != 0)) {
             int L;
             for (L = 0; L < 32; L++) {
                 long sr = 0, sg = 0, sb = 0; int d;
@@ -799,7 +900,9 @@ static void gather_fx(const TAGPU_FXVIEW* v)
             /* THE TABLE IS THE PASS. `s_pub.lht` hands the bytes to the
                Vulkan pass, which builds its own image from them, so the
                table reaching `rgb` IS the work. */
-            s_lhtInit = 1; s_lhtStamp = v->frame_counter;
+            memcpy(s_lhtSrc, lht, sizeof s_lhtSrc);
+            s_lhtPal = tagpu_pal_engine_serial();
+            s_lhtInit = 1;
         }
     }
 
@@ -846,6 +949,8 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         if (g && g != s_atlasGen) { tagpu_gaf_atlas_forget(&s_atlas); s_atlasGen = g; }
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
+    /* the allowance's frame, after the reset and before the first lookup */
+    tagpu_gaf_atlas_frame(&s_atlas);
     /* `tagpu_gaf_atlas_restore_vk` above publishes this atlas's frame list for
        the Vulkan restorer. */
     memset(s_nv, 0, sizeof s_nv); s_nm = 0;
@@ -915,23 +1020,13 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.uss   = (float)(v->ss > 0 ? v->ss : 1);
     s_pub.zoomF = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCFx = v->zoomCx; s_pub.zoomCFy = v->zoomCy;
-    s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
-    {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
-        int rows = s_atlas.shelfY + s_atlas.shelfH;
-        if (rows < 0) rows = 0;
-        if (rows > s_atlas.dim) rows = s_atlas.dim;
-        s_pub.atlasRows = rows;
-    }
-    s_pub.atlasSerial = s_atlas.mirrorSerial;
+    tagpu_fx_atlas_hand(&s_pub);
     /* THE RESTORE REQUEST, WHICH IS THE ONLY RESTORE ROUTE PUBLISHED HERE. */
     if (s_atlas.rlistWant && s_atlas.rlist) {
         s_pub.restoreFrames  = s_atlas.rlist;
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
-        s_pub.restoreRepaint = s_atlas.rlistRepaint;
-        s_pub.restoreBlanks  = s_atlas.rlistBlanks;
     }
-    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
     /* THE LIGHT TABLE ONLY WHEN IT HAS BEEN BUILT. A frame with flash vertices
        and no table has no colour for its flashes, so tagpu_vk_fx.c refuses it
        rather than guess one. */
@@ -955,7 +1050,6 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
        NOTHING -- the copy can fail, and the port would sample a 1x1 image while
        uFogDim carried the real size. */
     fogBad = ((s_pub.fog & 1) && !s_pub.fogGrid);
-    s_pub.fogLut = tagpu_native_foglut();
     s_pub.vpL = v->vpL; s_pub.vpT = v->vpT; s_pub.vw = v->vw; s_pub.vh = v->vh;
     /* WHETHER THE CLIP IS ACTUALLY ON, not whether a rect exists: the native
        pass decides it (tagpu_native.c `s_scissorOn`). */
@@ -971,6 +1065,24 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.frame = v->frame_counter;
     s_pubHave = total > 0 && !fogBad;
 }
+
+/* The atlas's half of the hand-over and the engine's table it is expanded
+   through -- tagpu_feat.c's `tagpu_feat_atlas_hand`, for the same two
+   readers. */
+int tagpu_fx_atlas_hand(TAGPU_FXHAND* h)
+{
+    TAGPU_GAFVIEW av;
+    int ok = tagpu_gaf_atlas_view(&s_atlas, &av);
+    h->atlas = av.idx; h->atlasDim = ok ? av.dim : s_atlas.dim;
+    h->atlasKey = av.key; h->atlasDirty = av.dirty;
+    h->atlasRows = av.rows;
+    h->atlasSerial = av.serial; h->atlasWhole = av.whole;
+    h->pal = tagpu_pal_engine(); h->palSerial = tagpu_pal_engine_serial();
+    return ok;
+}
+
+int  tagpu_fx_atlas_owed(void) { return tagpu_gaf_atlas_owed(&s_atlas); }
+void tagpu_fx_atlas_ack(unsigned serial, int keep) { tagpu_gaf_atlas_ack(&s_atlas, serial, keep); }
 
 /* Hand it over, ONCE (tagpu_fx.h). */
 int tagpu_fx_handover(TAGPU_FXHAND* out, unsigned now)

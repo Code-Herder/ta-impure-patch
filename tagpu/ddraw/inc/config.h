@@ -2,24 +2,12 @@
 #define CONFIG_H
 
 #include <windows.h>
-#include "ini.h"
 
 #define FILE_EXISTS(a) (GetFileAttributes(a) != INVALID_FILE_ATTRIBUTES)
 
 typedef struct CNCDDRAWCONFIG
 {
     RECT window_rect;
-    int window_state;
-    int upscaled_state;
-    char ini_path[MAX_PATH];
-    char game_path[MAX_PATH];
-    char dll_path[MAX_PATH];
-    char process_file_name[MAX_PATH];
-    char dll_file_name[MAX_PATH];
-    char process_file_ext[MAX_PATH];
-    char dll_file_ext[MAX_PATH];
-    char game_section[MAX_PATH];
-    INIFILE ini;
 
     /* Optional settings */
 
@@ -31,16 +19,14 @@ typedef struct CNCDDRAWCONFIG
     int maxfps;
     BOOL vsync;
     BOOL adjmouse;
-    char renderer[256];
+    BOOL gdi;
     BOOL devmode;
     BOOL border;
-    int save_settings;
     BOOL resizable;
     int anti_aliased_fonts_min_size;
     int min_font_size;
     int center_window;
     char inject_resolution[128];
-    BOOL vhack;
     char screenshot_dir[MAX_PATH];
     BOOL toggle_borderless;
     BOOL toggle_upscaled;
@@ -89,19 +75,6 @@ typedef struct CNCDDRAWCONFIG
         int unlock_cursor2;
         int screenshot;
     } hotkeys;
-
-    /* Game specific settings */
-
-    BOOL armadahack;
-    BOOL tshack;
-    BOOL infantryhack;
-    BOOL stronghold_hack;
-    BOOL mgs_hack;
-    BOOL tlc_hack;
-    BOOL carma95_hack;
-    BOOL sirtech_hack;
-    BOOL flightsim98_hack;
-    BOOL darkcolony_hack;
 
 } CNCDDRAWCONFIG;
 

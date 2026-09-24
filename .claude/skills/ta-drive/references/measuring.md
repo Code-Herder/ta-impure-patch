@@ -44,7 +44,10 @@ once identifies the event and puts no rate on it.
 **Pause the sim** when the fixture animates: `tacli keys <i> tab` opens `ARMOPT`, which pauses
 the game and writes `PAUSED` across the viewport. Confirm with two peeks of the tick
 (`*0x511DE8+0x38A47:4`) four seconds apart. Note that a wheel's camera apply still runs while
-paused (it rides the in-play draw, not the tick).
+paused (it rides the in-play draw, not the tick). **Under `ARMOPT` the keyboard does not reach the
+game**: `ctrl+a` selects nothing and `ctrl+1` tags nothing. To pause and keep selecting, ordering
+and placing, send `tacli keys <i> pause` instead. It pauses with no menu, and a paused game still
+takes selections, `tacli order`, a held drag and a build placement.
 
 ## What moves in a "static" frame
 
@@ -107,7 +110,8 @@ scores 0 magenta and shows no game.
 - **Swap the DLL in the same instance**: replace the worktree's `tagpu/ddraw/ddraw.dll` before
   `scenario load` (tacli copies it into the gamedir at launch; editing the gamedir's copy is
   overwritten), or `cp` it over `<gamedir>/ddraw.dll` and launch with `--keep-dll`. `md5sum` the
-  gamedir copy in the script's own output: that line says the run tested what you think.
+  gamedir copy in the script's own output: that line says the run tested what you think. A build
+  that still reads `ddraw.ini` is refused: run it with a tree of its own age.
 - **The stock engine limits are a second build of the same tree**: `make -C tagpu/ddraw -j$(nproc)
   LIMITS=stock` writes `ddraw-stocklimits.dll` beside `ddraw.dll`, from objects of its own, so the
   two never mix. `cp` it over `<gamedir>/ddraw.dll`, launch with `--keep-dll`, and read
@@ -120,12 +124,9 @@ scores 0 magenta and shows no game.
   engine clamps to 500 again and defaults to 250, which `tacli`'s schema does not know: `scenario
   validate` passes up to 1500 a player and 15 000 entities, and the apply then refuses. The apply's
   own check is against the cap in force (`main+0x37EE6`), which is the host's in a network game.
-- **The GDI lane takes a hand-edited `ddraw.ini` and a fixture with no resolution.** `scenario
-  load` rewrites `ddraw.ini`, `renderer=vulkan` included, whenever it passes a resolution, and it
-  passes `setup.res` whenever the fixture has one. Set `renderer=gdi` in `<gamedir>/ddraw.ini`, load
-  a copy of the fixture without `setup.res` into an instance whose store resolution is the one
-  wanted, and check `ddraw.ini` still says `gdi` after the load. Set it back to `vulkan` after: a
-  plain `tacli launch` keeps whatever the file says.
+- **The GDI lane is `tacli arm <i> gdi.on`**, before the launch and read at attach; every launch
+  path keeps it, `scenario load` included. Confirm with `tacli log <i> -g 'renderer GDI'`, and
+  clear it with `gdi.on=off` afterwards.
 - **Sound goes to a null device, never to the human's speakers.** Export
   `PULSE_SERVER=unix:/nonexistent/pulse` and `ALSA_CONFIG_PATH=<a file holding
   pcm.!default { type null }>` in the shell that runs `tacli`, and set `"sound": true` in the
@@ -201,8 +202,8 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
 ## Frame-time A/Bs
 
 - **`--maxfps 0` on both sides**, or you measure the cap. `0` is unlimited (a negative value maps
-  to the display refresh). It is a sticky launch knob; confirm it survived with
-  `grep maxfps <gamedir>/ddraw.ini`.
+  to the display refresh). It is a sticky launch knob; confirm it with `grep maxfps
+  <gamedir>/impure.cfg` (`uncapped`) or `tacli log <i> -g '^cfg:'` (`maxfps=0`).
 - **Pause the sim first** (`tab`, then peek the tick twice): on a fighting scenario units die under
   the measurement and the second half draws a smaller scene.
 - **`ftime.on`** logs `ftime: vk p50 <ms> p99 <ms> (n=…)`, the GPU frame time on the Vulkan lane
@@ -236,8 +237,10 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
 ## The restore-dump byte oracle
 
 `tagpu_restoredump.on` makes the Vulkan restorer write each atlas's restored twin once its queue
-drains: `tagpu_restore_<tag>_vk.{r8,rgba,idx}` for the terrain, features, effects and units. It
-reads a finished image off the device, so it needs no window, no parked pointer and no settle
+drains, with the source it restored from beside it: `tagpu_restore_<tag>_vk.rgba` (`.mips` for the
+units, whose twin carries a mip chain) and `tagpu_restore_<tag>_vk.base` — the RGBA8 base atlas
+the world passes draw from — for the terrain, features, effects and units; the UI's source is its
+R8 atlas, `.r8`. It reads a finished image off the device, so it needs no window, no parked pointer and no settle
 heuristics, and it answers whether two builds restore the **same bytes** for the whole atlas.
 
 ```bash
@@ -251,8 +254,8 @@ tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
   feature atlas exist — without `native.on … wrecks` the pass never owns its leaf and the log says
   `atlas=0` and `nothing emitted: native.on needs "wrecks"`. `feat` and `fx` arm their jobs on most
   fixtures and often never drain inside the window.
-- **Diff the `.idx` too** — it lists every entry and localises a twin holding the right pixels in
-  the wrong cells to one line.
+- **Diff the `.base` too** — a twin that differs over a source that does not is the restorer's;
+  one whose source differs is the atlas upload's, and the restore is only repeating it.
 - **Compare the code-determined counts** in the restorer's lines (frames, batches, draws), never
   the timings: the slice budget is wall-clock driven.
 - **A difference that is a multiple of the cell pitch squared is a dropped frame, not a wrong

@@ -52,7 +52,7 @@
    is the last COMPLETED frame.
 
    TWO MORE CONFIGURATIONS CAPTURE NOTHING, and in both the render thread is
-   left holding a request that will never be served; both are benign. Under `renderer=gdi` the render
+   left holding a request that will never be served; both are benign. Under the GDI backend the render
    half never runs at all, so no request is ever made and the game thread's
    gate returns on its first compare — zero cost. Under the publisher's
    `s_countOnly` the `after_draw` observer is not registered, so the render

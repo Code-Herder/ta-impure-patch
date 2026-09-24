@@ -72,23 +72,43 @@ typedef struct TAGPU_FEATHAND {
     float zoom, zoomCx, zoomCy;
     float depthScale;
 
-    /* The fragment stage's. `restored` and `lit` are the two Classic++
-       branches; `fog` is the engine's overlay bit. */
-    int   restored, lit, fog;
+    /* The fragment stage's. `restored` is the Classic++ restored-colour
+       branch; `fog` is the engine's overlay bit. */
+    int   restored, fog;
     float fogOrgX, fogOrgY, fogCols, fogRows;
 
     /* The texels, as CPU-side bytes. Each carries the serial that says when
-       it last changed, so the Vulkan pass re-uploads on a change and not per
+       it last changed, so the Vulkan pass re-sends on a change and not per
        frame. */
-    const unsigned char*  atlas;      /* dim x dim R8, tagpu_gaf.c's mirror  */
+    const unsigned char*  atlas;      /* dim x dim palette indices,
+                                         tagpu_gaf.c's mirror: the source the
+                                         Vulkan pass expands its base atlas
+                                         from (tagpu_pal_expand)             */
     int                   atlasDim;
     /* THE ROWS IN USE, which is what a second backend needs to upload and is
        usually a quarter of the page. The shelf packer never places a cell
        below `shelfY + shelfH`, so every texel any of these vertices can name
-       is above this line -- and uploading 4 MB when 1 is live is a cost paid
-       every time a feature frame is added to the atlas. */
+       is above this line -- and expanding and sending 16 MB when 4 are live is
+       a cost paid every time the whole page has to go. */
     int                   atlasRows;
     unsigned              atlasSerial;
+    /* the serial of the atlas's last whole-page write (tagpu_gaf.h
+       `wholeSerial`): a copy behind it takes the page, never tiles */
+    unsigned              atlasWhole;
+    /* THE BASE ATLAS'S TWO OTHER INPUTS, beside the indices: the key plane
+       (dim x dim, 0 at a keyed texel -- tagpu_gaf.h `keym`) and the dirty map,
+       the serial of the last write to each tile, which tells a consumer
+       holding serial S which tiles to re-send (tagpu_gaf_dirty_since). Both
+       are the atlas's own buffers, alive as long as the atlas is. */
+    const unsigned char*        atlasKey;
+    const unsigned*             atlasDirty;
+    /* THE LAST REPACK'S MOVES (tagpu_gaf.h `moves`): the cells a copy as of
+       a serial in [atlasMovePrev, atlasMoveSerial) carries to their new place
+       on the device instead of taking the page again. The atlas's own array,
+       alive as long as the atlas is; NULL until a repack has recorded one. */
+    const struct TAGPU_GAFMOVE* atlasMoves;
+    int                         atlasMoveN;
+    unsigned                    atlasMoveSerial, atlasMovePrev;
 
     /* ...AND THE WORK ITSELF IS THE ONLY FORM IT COMES IN. There is no
        restored picture on the CPU side: the restored copy of the atlas reaches
@@ -100,11 +120,19 @@ typedef struct TAGPU_FEATHAND {
        index into `restoreFrames` and takes `[cursor, restoreN)`; a frame on
        which it takes nothing costs nothing, because the entries are still
        there on the next one. `restoreGen` is the discontinuity a cursor cannot
-       survive -- the arm, an overflow restart, a recycle, a repack, the atlas
-       being laid out afresh, a palette move -- and a consumer that sees a new
-       one drops its job and starts at 0.
-       `restoreRepaint` is 1 only for the palette-move generation, where the
-       destination keeps what it holds and is recoloured in place.
+       survive -- the arm, an overflow restart, a recycle, a repack whose
+       moves are not published, the atlas being laid out afresh -- and a
+       consumer that sees a new one drops its job and starts at 0. Every
+       generation blanks the destination: the restore reads the base atlas,
+       built from the engine's table, and the Gamma factor is applied after
+       it, to the finished world image (tagpu_pal.h), so no generation is a
+       recolour of the last.
+       A REPACK WHOSE MOVES ARE PUBLISHED (`atlasMoves`) IS NOT A GENERATION.
+       The list is rewritten in place -- each moved frame at its new rect, a
+       dropped one blanked to w and h 0, which a consumer skips -- and the
+       consumer carries its twin's cells and its queued frames by the same
+       moves (tagpu_vk_feat.c `twin_move`), so nothing restored is restored
+       again. A frame past a consumer's cursor may therefore be a blank one.
 
        LIFETIME: the array is the atlas's, retained for the atlas rather than
        for the frame, but a consumer still copies on the frame it takes it (as
@@ -113,19 +141,10 @@ typedef struct TAGPU_FEATHAND {
     const TAGPU_RGLSL_FRAME* restoreFrames;
     int                      restoreN;
     unsigned                 restoreGen;
-    int                      restoreRepaint;
-    /* ...AND HOW MANY TIMES THE DESTINATION HAS BEEN BLANKED, which is what a
-       consumer must actually key its repaint decision on: `restoreRepaint`
-       describes the LATEST generation, and two resets between two of a
-       consumer's looks collapse into one, so a blank followed by a repaint
-       would read as "keep what you have" over an atlas the producer cleared.
-       Blank whenever this has moved. */
-    unsigned                 restoreBlanks;
-    const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()       */
-    unsigned              palSerial;
+    const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_engine()     */
+    unsigned              palSerial;  /* tagpu_pal_engine_serial()           */
     const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
     int                   fogGridCols, fogGridRows;
-    const unsigned char*  fogLut;     /* 256 x R8, tagpu_native_foglut()     */
 
     /* THE SCISSOR THE NATIVE PASS SET AROUND THIS DRAW, in game-frame pixels
        measured from the TOP of the frame -- the engine's own viewport rect.
@@ -151,4 +170,14 @@ typedef struct TAGPU_FEATHAND {
    in here alias buffers this file frees and rebuilds, so a hand-over that
    outlived its frame can name memory that is gone. Render thread only. */
 int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now);
+
+/* THE ATLAS WITHOUT THE DRAW, for the upload the Vulkan pass owes on a frame
+   it has nothing to draw (tagpu_gaf.h `tagpu_gaf_atlas_owed`): `_hand` fills
+   the hand-over's atlas fields and palette the way the draw's hand-over is
+   filled, 0 while there is no mirror; `_owed` says the pass's copy is behind;
+   `_ack` is the pass saying what its copy holds (tagpu_gaf_atlas_ack).
+   Render thread only. */
+int  tagpu_feat_atlas_hand(TAGPU_FEATHAND* h);
+int  tagpu_feat_atlas_owed(void);
+void tagpu_feat_atlas_ack(unsigned serial, int keep);
 #endif

@@ -114,10 +114,22 @@
     "  oCol = (vec4((s + 1) / 4) + 0.25) / 255.0;\n" \
     "}\n"
 
+/* THE SOURCE IS ONE OF TWO KINDS, and uBase says which (FILL and OUT alike).
+   0: an R8 atlas of palette indices, looked up through uPal, a texel keyed
+   where its index is the slot's key -- the UI's. 1: a world pass's BASE atlas,
+   RGBA8 already expanded through the palette, a texel keyed where its alpha
+   is 0 -- which is the same answer, taken when the base was built from the
+   same indices and the same key (tagpu_pal_expand). A slot's key of -1 keys
+   nothing on either kind. Declared last, so the other uniforms keep their
+   offsets and a compiler side that never sets it (the lab) gets 0, the index
+   source. `keyOf` and `colOf` are written out in both shaders: the two
+   readers of these macros (tools/spirv-gen.py and tools/tascene) take a
+   macro's string literals and nothing else, so one macro cannot use another. */
+
 /* FILL: the model's input. uSrc per slot = (ax, ay, sw, sh): the frame's
-   first texel in the R8 atlas and its size; uRect per slot = the valid rect;
-   uKey per slot = (key index or -1, 0, 0, 0). pad = (rect - size)/2 is the
-   wrap radius (0 for a zero-padded frame), and the source texel wraps by
+   first texel in the source atlas and its size; uRect per slot = the valid
+   rect; uKey per slot = (key index or -1, 0, 0, 0). pad = (rect - size)/2 is
+   the wrap radius (0 for a zero-padded frame), and the source texel wraps by
    floor division so a pad wider than the frame is still right. A keyed texel
    takes the stand-in described above, searched inside the frame (wrapped
    when the frame wraps, clipped when it does not). Alpha 0: the 4th input
@@ -130,14 +142,22 @@
     "uniform sampler2D uKey;\n" \
     "uniform int uSlot;\n" \
     "uniform int uKeyR;\n" \
+    "uniform int uBase;\n" \
     "out vec4 frag;\n" \
-    "int idxAt(ivec2 o, ivec2 t) { return int(texelFetch(uAtlas, o + t, 0).r * 255.0 + 0.5); }\n" \
+    "bool keyOf(vec4 v, int key) {\n" \
+    "  if (key < 0) return false;\n" \
+    "  return uBase == 1 ? v.a < 0.5 : int(v.r * 255.0 + 0.5) == key;\n" \
+    "}\n" \
+    "vec3 colOf(vec4 v) {\n" \
+    "  return uBase == 1 ? v.rgb : texelFetch(uPal, ivec2(int(v.r * 255.0 + 0.5), 0), 0).rgb;\n" \
+    "}\n" \
+    "vec4 texAt(ivec2 o, ivec2 t) { return texelFetch(uAtlas, o + t, 0); }\n" \
     "void tap(ivec2 t, ivec2 o, ivec2 sz, bool wrap, int key, inout vec3 acc, inout int n) {\n" \
     "  if (wrap) t -= sz * ivec2(floor(vec2(t) / vec2(sz)));\n" \
     "  else if (t.x < 0 || t.y < 0 || t.x >= sz.x || t.y >= sz.y) return;\n" \
-    "  int q = idxAt(o, t);\n" \
-    "  if (q == key) return;\n" \
-    "  acc += texelFetch(uPal, ivec2(q, 0), 0).rgb; n++;\n" \
+    "  vec4 q = texAt(o, t);\n" \
+    "  if (keyOf(q, key)) return;\n" \
+    "  acc += colOf(q); n++;\n" \
     "}\n" \
     "void main(){\n" \
     "  ivec2 f = ivec2(gl_FragCoord.xy);\n" \
@@ -152,8 +172,8 @@
     "  ivec2 s = sl - ivec2(rect.xy) - pad;\n" \
     "  s -= sz * ivec2(floor(vec2(s) / vec2(sz)));\n" \
     "  ivec2 o = ivec2(src.xy);\n" \
-    "  int pi = idxAt(o, s);\n" \
-    "  if (key >= 0 && pi == key) {\n" \
+    "  vec4 pv = texAt(o, s);\n" \
+    "  if (keyOf(pv, key)) {\n" \
     "    bool wrap = pad.x > 0 || pad.y > 0;\n" \
     "    vec3 acc = vec3(0.0); int n = 0;\n" \
     "    for (int r = 1; r <= uKeyR; r++) {\n" \
@@ -168,7 +188,7 @@
     "    frag = vec4(n > 0 ? acc / float(n) : vec3(0.0), 0.0);\n" \
     "    return;\n" \
     "  }\n" \
-    "  frag = vec4(texelFetch(uPal, ivec2(pi, 0), 0).rgb, 0.0);\n" \
+    "  frag = vec4(colOf(pv), 0.0);\n" \
     "}\n"
 
 /* CONV: one 3x3 layer, NK output tiles per fragment (MRT). uJin input tiles
@@ -236,7 +256,7 @@
    row; aSize = the frame's w, h. The fragment clamps into the frame, which is
    what makes the border a copy of the edge, reads the residual at the slot's
    matching texel (pad undoes the wrap padding: a centre crop) and the input
-   colour from the atlas at the destination coordinate itself -- the source R8
+   colour from the atlas at the destination coordinate itself -- the source
    atlas and the RGBA destination share one layout. A keyed texel is written
    (0, 0, 0, 0): alpha 0 is the hole, and the atlas's alpha is also how a
    consumer tells a painted cell from one the job has not reached. */
@@ -258,21 +278,29 @@
     "uniform sampler2D uRect;\n" \
     "uniform sampler2D uKey;\n" \
     "uniform int uSlot;\n" \
+    "uniform int uBase;\n" \
     "flat in vec4 vCell;\n" \
     "flat in vec2 vSize;\n" \
     "out vec4 frag;\n" \
+    "bool keyOf(vec4 v, int key) {\n" \
+    "  if (key < 0) return false;\n" \
+    "  return uBase == 1 ? v.a < 0.5 : int(v.r * 255.0 + 0.5) == key;\n" \
+    "}\n" \
+    "vec3 colOf(vec4 v) {\n" \
+    "  return uBase == 1 ? v.rgb : texelFetch(uPal, ivec2(int(v.r * 255.0 + 0.5), 0), 0).rgb;\n" \
+    "}\n" \
     "void main(){\n" \
     "  ivec2 f = ivec2(gl_FragCoord.xy);\n" \
     "  ivec2 cell = ivec2(vCell.xy), slot = ivec2(vCell.zw), size = ivec2(vSize);\n" \
     "  ivec2 d = clamp(f - cell, ivec2(0), size - 1);\n" \
     "  vec4 rect = texelFetch(uRect, slot, 0);\n" \
     "  int key = int(texelFetch(uKey, slot, 0).x);\n" \
-    "  int pi = int(texelFetch(uAtlas, cell + d, 0).r * 255.0 + 0.5);\n" \
-    "  if (key >= 0 && pi == key) { frag = vec4(0.0); return; }\n" \
+    "  vec4 pv = texelFetch(uAtlas, cell + d, 0);\n" \
+    "  if (keyOf(pv, key)) { frag = vec4(0.0); return; }\n" \
     "  ivec2 pad = (ivec2(rect.zw) - size) / 2;\n" \
     "  ivec2 q = slot * uSlot + ivec2(rect.xy) + pad + d;\n" \
     "  vec3 net = texelFetch(uAct, ivec3(q, 0), 0).rgb;\n" \
-    "  vec3 c = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n" \
+    "  vec3 c = colOf(pv);\n" \
     "  vec3 k = clamp(floor((c - net) * 255.0 + 0.5), 0.0, 255.0);\n" \
     "  frag = vec4((k + 0.25) / 255.0, 1.0);\n" \
     "}\n"

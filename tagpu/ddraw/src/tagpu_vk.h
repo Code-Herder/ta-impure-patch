@@ -23,12 +23,12 @@
 
    `tagpu_vk.off` TURNS THE WHOLE FILE OFF, enumeration included, and is the
    control for any A/B against a DLL built before Phase G. **NEITHER LEVER ARMS
-   A LANE.** `tagpu_vk.on` under `renderer=gdi` brings nothing up: what the
+   A LANE.** `tagpu_vk.on` under the GDI backend brings nothing up: what the
    lever does on that path is make `tagpu_vk_armed()` true, which ungreys the
    menu's GPU row (the choice applies to a launch on the Vulkan lane). It does NOT get read for its `color=` there --
    `read_lever` is only reached from `tagpu_vk_frame` -- and it does not latch
    the gather mirrors, which ask `tagpu_vk_owns_present()`. Under
-   `renderer=vulkan` the lane runs because the renderer choice says so, and
+   the Vulkan backend the lane runs because the backend choice says so, and
    `tagpu_vk.off` only leaves the device list unrefreshed for that launch, which
    the log says.
 
@@ -117,7 +117,7 @@ int tagpu_vk_armed(void);
 /* ---- this backend owns the present --------------------------------------- */
 
 /* Called ONCE from the render thread, before its frame loop, by the backend
-   that has no other backend beside it (`renderer=vulkan`, `render_vk.c`).
+   that has no other backend beside it (the Vulkan backend, `render_vk.c`).
    Two things change and nothing else does:
 
    * the surface goes on the window `tagpu_vk_frame` is handed: with one backend

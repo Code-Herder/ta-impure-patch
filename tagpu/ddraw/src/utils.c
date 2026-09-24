@@ -645,6 +645,47 @@ void util_update_bnet_pos(int new_x, int new_y)
     old_y = new_y;
 }
 
+/* THE MONITOR WHEN NONE IS CHOSEN -- the store's `monitor=-`, or a stored one
+   that is no longer attached.
+   - Windowed: the window's own; its frame placed it.
+   - Fullscreen, with a windowed frame on record (`window_rect`, from the store
+     or from this session's window -- util_toggle_fullscreen records it on the
+     way out): the monitor that frame is on, so Alt+Enter goes fullscreen where
+     the window was: the monitor its client overlaps most. A frame on no
+     monitor (its screen unplugged) counts as none.
+   - Fullscreen with no frame: the PRIMARY, the monitor at the desktop's origin.
+     Never the window's own there: nothing has placed the window, so it is
+     wherever wine created it (ddraw-ini-removal.md, the monitor rule).
+   Read on the render thread too (fpsl_init, through util_target_refresh):
+   `fullscreen` is an aligned BOOL and the frame four aligned LONGs, so a racing
+   read can mix an old and a new value, and every answer is a monitor that
+   exists: a point on none falls through to the primary. */
+HMONITOR util_default_monitor(void)
+{
+    POINT origin = { 0, 0 };
+
+    if (g_ddraw.hwnd && !g_config.fullscreen)
+        return MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST);
+
+    if (g_config.window_rect.left != -32000 && g_config.window_rect.top != -32000)
+    {
+        /* the client, not its origin: a window dragged partly past a
+           monitor's edge, or with its origin in the gap between two monitors
+           of different sizes, is still on the one it overlaps most */
+        LONG w = g_config.window_rect.right ? g_config.window_rect.right : (LONG)g_ddraw.width;
+        LONG h = g_config.window_rect.bottom ? g_config.window_rect.bottom : (LONG)g_ddraw.height;
+        RECT frame = { g_config.window_rect.left, g_config.window_rect.top,
+                       g_config.window_rect.left + (w > 0 ? w : 1),
+                       g_config.window_rect.top + (h > 0 ? h : 1) };
+        HMONITOR mon = MonitorFromRect(&frame, MONITOR_DEFAULTTONULL);
+
+        if (mon)
+            return mon;
+    }
+
+    return MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+}
+
 /* THE MONITOR THE GAME IS PRESENTING TO, and its size in desktop pixels.
 
    NEITHER `EnumDisplaySettings` NOR `g_ddraw.mode` CAN ANSWER THIS ON A
@@ -669,15 +710,14 @@ void util_update_bnet_pos(int new_x, int new_y)
    cap on the resolution picker (6200x2160 offered as the top entry on a
    3840-wide monitor).
 
-   WHICH monitor: the one the render-options screen has selected if the player
-   has been on that screen, else the one the window is on. See
-   `tagpu_menu_monitor` for why the model wins -- the window move behind that
-   row is posted, and the list has to be right before it lands. */
+   WHICH monitor: the one the render-options screen has selected, else
+   `util_default_monitor`. See `tagpu_menu_monitor` for why the model wins --
+   the window move behind that row is posted, and the list has to be right
+   before it lands. */
 BOOL util_target_monitor(RECT* out)
 {
     HMONITOR mon;
     MONITORINFO mi;
-    POINT origin = { 0, 0 };
 
     if (!out)
         return FALSE;
@@ -685,9 +725,7 @@ BOOL util_target_monitor(RECT* out)
     if (tagpu_menu_monitor(out))
         return TRUE;
 
-    mon = g_ddraw.hwnd ?
-        MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST) :
-        MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+    mon = util_default_monitor();
 
     mi.cbSize = sizeof(MONITORINFO);
 
@@ -703,8 +741,7 @@ BOOL util_target_monitor(RECT* out)
 
 /* The target monitor's refresh rate in Hz, for the Refresh frame cap: the
    frequency of that monitor's own adapter's CURRENT mode -- the menu's chosen
-   adapter by name (`tagpu_menu_monitor_device`), else the one the window is on,
-   else the primary. Whether a secondary reports its own rate is not known on
+   adapter by name (`tagpu_menu_monitor_device`), else `util_default_monitor`'s. Whether a secondary reports its own rate is not known on
    wine: on the reference setup the secondaries' current mode reads 0x0 (the
    comment above), and a frequency of 0 falls to the bound below.
    BOUNDED: Windows answers 0 or 1 for "the hardware default", which would be a
@@ -721,10 +758,7 @@ int util_target_refresh(void)
 
     if (!dev)
     {
-        POINT origin = { 0, 0 };
-        HMONITOR mon = g_ddraw.hwnd ?
-            MonitorFromWindow(g_ddraw.hwnd, MONITOR_DEFAULTTONEAREST) :
-            MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+        HMONITOR mon = util_default_monitor();
 
         mi.cbSize = sizeof(mi);
         if (mon && GetMonitorInfoA(mon, (MONITORINFO*)&mi))
@@ -895,8 +929,8 @@ void util_toggle_maximize()
 
 void util_toggle_fullscreen()
 {
-    /* Disable ALT+ENTER on battle.net and Infantry Online Zone List Window */
-    if (g_ddraw.bnet_active || !g_ddraw.width || (g_config.infantryhack && GetMenu(g_ddraw.hwnd)))
+    /* Disable ALT+ENTER on battle.net */
+    if (g_ddraw.bnet_active || !g_ddraw.width)
         return;
 
     /* Do not allow ALT+ENTER while macOS maximize is active */
@@ -907,9 +941,21 @@ void util_toggle_fullscreen()
     {
         if (!g_config.fullscreen)
         {
+            POINT org = { 0, 0 };
+
             mouse_unlock();
 
-            g_config.upscaled_state = g_config.fullscreen = TRUE;
+            /* THE FRAME IS WHERE THE WINDOW IS, not where it was last dragged:
+               a keyboard move or a snap updates nothing else, and the frame
+               names the monitor this goes fullscreen on (util_default_monitor). */
+            if (g_ddraw.hwnd && !util_is_minimized(g_ddraw.hwnd) &&
+                real_ClientToScreen(g_ddraw.hwnd, &org))
+            {
+                g_config.window_rect.left = org.x;
+                g_config.window_rect.top = org.y;
+            }
+
+            g_config.fullscreen = TRUE;
             dd_SetDisplayMode(0, 0, 0, 0);
 
             mouse_lock();
@@ -918,7 +964,7 @@ void util_toggle_fullscreen()
         {
             mouse_unlock();
 
-            g_config.upscaled_state = g_config.fullscreen = FALSE;
+            g_config.fullscreen = FALSE;
             dd_SetDisplayMode(0, 0, 0, 0);
 
             //mouse_lock();
@@ -932,10 +978,10 @@ void util_toggle_fullscreen()
 
             if (g_config.toggle_upscaled)
             {
-                g_config.upscaled_state = g_config.fullscreen = TRUE;
+                g_config.fullscreen = TRUE;
             }
 
-            g_config.window_state = g_config.windowed = FALSE;
+            g_config.windowed = FALSE;
             dd_SetDisplayMode(0, 0, 0, SDM_LEAVE_WINDOWED);
             util_update_bnet_pos(0, 0);
 
@@ -947,10 +993,10 @@ void util_toggle_fullscreen()
 
             if (g_config.toggle_upscaled)
             {
-                g_config.upscaled_state = g_config.fullscreen = FALSE;
+                g_config.fullscreen = FALSE;
             }
 
-            g_config.window_state = g_config.windowed = TRUE;
+            g_config.windowed = TRUE;
 
             {
                 if (g_ddraw.render.thread)
@@ -1142,79 +1188,3 @@ BOOL CALLBACK util_enum_child_proc(HWND hwnd, LPARAM lparam)
 #endif
 }
 
-static unsigned char util_get_pixel(int x, int y)
-{
-    return ((unsigned char*)dds_GetBuffer(
-        g_ddraw.primary))[y * g_ddraw.primary->pitch + x * g_ddraw.primary->bytes_pp];
-}
-
-BOOL util_detect_low_res_screen()
-{
-    /* struct Copied from wkReSolution */
-    typedef struct
-    {
-        PVOID UnkTable1;
-        DWORD Unk1, Unk2, Unk3, Unk4;
-        PVOID UnkDD, UnkTable2;
-        DWORD Unk5;
-        DWORD RenderWidth, RenderHeight;
-        DWORD Unk6, Unk7;
-        DWORD WidthRT, HeightRT;
-        DWORD HalfWidth, HalfHeight;
-        DWORD Unk8;
-        PCHAR UnkC;
-        LPDIRECTDRAW lpDD;
-    } * LPW2DDSTRUCT;
-
-    static int* in_movie = (int*)0x00665F58;
-    static int* is_vqa_640 = (int*)0x0065D7BC;
-    static BYTE* should_stretch = (BYTE*)0x00607D78;
-    static LPW2DDSTRUCT* pW2DS;
-    
-    if (!pW2DS)
-        pW2DS = (LPW2DDSTRUCT*)((DWORD)GetModuleHandleA(NULL) + 0x799C4);
-
-    if (g_ddraw.width <= g_ddraw.upscale_hack_width || g_ddraw.height <= g_ddraw.upscale_hack_height)
-    {
-        return FALSE;
-    }
-
-    if (g_ddraw.isredalert)
-    {
-        if ((*in_movie && !*is_vqa_640) || *should_stretch)
-        {
-            return TRUE;
-        }
-
-        return FALSE;
-    }
-    else if (g_ddraw.iscnc1)
-    {
-        return
-            util_get_pixel(g_ddraw.upscale_hack_width + 1, 0) == 0 ||
-            util_get_pixel(g_ddraw.upscale_hack_width + 5, 1) == 0;
-    }
-    else if (g_ddraw.iskkndx)
-    {
-        return util_get_pixel(g_ddraw.width - 3, 3) == 0;
-    }
-    else if (g_ddraw.isworms2)
-    {
-        DWORD w2_width = *pW2DS ? (*pW2DS)->RenderWidth : 0;
-        DWORD w2_height = *pW2DS ? (*pW2DS)->RenderHeight : 0;
-
-        if (w2_width && w2_width < g_ddraw.width && w2_height && w2_height < g_ddraw.height)
-        {
-            if (g_ddraw.upscale_hack_width != w2_width || g_ddraw.upscale_hack_height != w2_height)
-            {
-                g_ddraw.upscale_hack_width = w2_width;
-                g_ddraw.upscale_hack_height = w2_height;
-                InterlockedExchange(&g_ddraw.upscale_hack_active, FALSE);
-            }
-
-            return TRUE;
-        }
-    }
-
-    return FALSE;
-}

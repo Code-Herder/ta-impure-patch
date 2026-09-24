@@ -371,9 +371,13 @@ typedef struct {
 } RETIRE;
 static RETIRE s_ret;
 
-/* ---- AND A JOB'S OWN RESOURCES NEED THE SAME THING. Three of `job_free`'s
-   four callers are in a consumer's `prepare`, where the seam has waited on
-   THIS SLOT'S fence and no other. The other `slots - 1` submits are still in
+/* ---- AND A JOB'S OWN RESOURCES NEED THE SAME THING. Every consumer's call
+   of `job_free` but the one in its `down` is reached from its per-frame call
+   (`prepare`, the units' `upload`) -- `restore_want`, `refuse_job`, and the
+   drops of a twin or a source that moved (tagpu_vk_feat.c `twin_drop`,
+   tagpu_vk_unit.c `atlas_rgb_build`, tagpu_vk_terr.c's base atlas) -- and so
+   is `job_new`'s own failure path. There the seam has waited on THIS SLOT'S
+   fence and no other. The other `slots - 1` submits are still in
    the queue naming the job's objects: the OUT render pass names `dstFb`, its
    descriptor set is `setOut[i]`, and FILL samples `palView`. Destroying them
    outright on a map change or a repaint within `slots - 1` frames
@@ -386,18 +390,19 @@ static RETIRE s_ret;
    callers -- `down` flushes these unconditionally because the seam has drained
    the device above it, so nothing here depends on which caller knew what.
 
-   THE RING IS SIZED AT THE WORST CASE ITS CALLERS CAN PRODUCE, which is what
-   makes it a bound rather than a guess. A consumer frees at most one job per
-   frame -- the serial it keys on moves at most once per frame -- there are at
-   most `TAGPU_R_MAXJOBS` consumers, and an entry is given back after `slots`
-   frames, so no more than `TAGPU_R_MAXJOBS x TAGPU_VK_SLOTS` can be
-   outstanding at once even if every consumer churned its serial on every
-   frame. At 80-odd bytes an entry that is under 4 KB, so there is no reason to
-   be clever about it.
-   The full case is therefore unreachable, and it is still handled rather than
-   asserted: the device is DRAINED and every entry freed immediately. A stall
-   on a frame is honest; a destroy nobody has licensed is the bug this whole
-   structure exists to prevent. */
+   THE RING HOLDS ONE FREE PER CONSUMER PER FRAME, AND A FULL RING DRAINS. A
+   consumer holds one job and makes at most one a frame, so it frees one in a
+   frame -- when the serial it keys on moves, or what the job reads or paints
+   goes -- and two only when the job made to replace it is refused on the way
+   (`job_new`'s own failure path, the unit twin's chain). There are at most
+   `TAGPU_R_MAXJOBS` consumers and an entry is given back after `slots`
+   frames, so `TAGPU_R_MAXJOBS x TAGPU_VK_SLOTS` entries hold every consumer
+   churning its serial on every frame. At 80-odd bytes an entry that is under
+   4 KB, so there is no reason to be clever about it.
+   Only those refusals, repeated frame after frame, can fill it, and the full
+   case is handled rather than asserted: the device is DRAINED and every entry
+   freed immediately. A stall on a frame is honest; a destroy nobody has
+   licensed is the bug this whole structure exists to prevent. */
 typedef struct {
     VkFramebuffer   fb[1 + TAGPU_VK_MAXMIP];
     int             nfb;
@@ -1222,8 +1227,9 @@ fail:
 struct TAGPU_VKRJOB {
     TAGPU_RCORE*   core;
     VkImage        srcImg;                  /* ...for the dump, not the draw   */
-    VkImageView    srcView;                 /* the consumer's indexed atlas   */
+    VkImageView    srcView;                 /* the consumer's source atlas    */
     int            srcW, srcH;
+    int            srcBase;                 /* 1 RGBA base, 0 R8 indices: uBase */
     VkImage        dstImg;                  /* ...and its restored twin       */
     VkImageView    dstView;
     int            dstW, dstH;
@@ -1283,13 +1289,13 @@ static uint32_t g_alloc(const void* data, size_t bytes)
 {
     VkDeviceSize off;
     if (s_gnext >= GLOBALS_RING || !s_gmap) {
-        /* IT SAYS WHY. The callers return 0 from `draw`, which the core
-           turns into `failed = 1` and a drop -- and the consumer then logs
-           that the restore failed, with no reason anywhere else in the log.
-           This is the one bound a fast enough device can reach:
-           GLOBALS_RING blocks per slot per slice, one for a FILL, one for a
-           CONV and two for an OUT, so a `full`-model batch spends 15 and a
-           slice of more than about seventeen batches exhausts it.
+        /* UNREACHABLE WHILE `vk_room` HOLDS, and it says why if it is not.
+           The core asks `vk_room` before every draw and ends the slice on 0,
+           and `chain_step`'s levels are held back in that answer, so the
+           cursor stops short of GLOBALS_RING by construction. Were it
+           reached, the callers return 0 from `draw`, the core fails the job,
+           and the consumer logs that the restore failed with no reason
+           anywhere else in the log -- hence the line.
            Said once per slice, because the slice that hit it will hit it
            again on the next draw and a per-draw line would bury the rest. */
         if (!s_gSaid) {
@@ -1792,7 +1798,8 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
         fb = fb_for(d, 0, 0, 1);
         if (!fb) { rlog(LANE ": no framebuffer for the fill target"); return 0; }
         gi[0] = r->S; gi[1] = tagpu_rcore_model()->depth;      /* uSlot, uKeyR */
-        dyn[0] = g_alloc(gi, 8);
+        gi[2] = g->srcBase;                                     /* uBase        */
+        dyn[0] = g_alloc(gi, 12);
         if (dyn[0] == 0xFFFFFFFFu) return 0;
         rbi.renderPass = s_rpAct[1]; rbi.framebuffer = fb;
         rbi.renderArea.extent.width = (uint32_t)r->TW;
@@ -1875,8 +1882,8 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
                              0, 1, &vb, 0, NULL, 0, NULL);
         uDst[0] = (float)g->dstW; uDst[1] = (float)g->dstH; uDst[2] = uDst[3] = 0.0f;
         dyn[0] = g_alloc(uDst, 8);                    /* binding 0, the vertex uDst */
-        gi[0] = r->S;
-        dyn[1] = g_alloc(gi, 4);                      /* binding 32, the frag uSlot */
+        gi[0] = r->S; gi[1] = g->srcBase;
+        dyn[1] = g_alloc(gi, 8);                      /* binding 32: uSlot, uBase */
         if (dyn[0] == 0xFFFFFFFFu || dyn[1] == 0xFFFFFFFFu) return 0;
         rbi.renderPass = s_rpOut; rbi.framebuffer = g->dstFb;
         rbi.renderArea.extent.width = (uint32_t)g->dstW;
@@ -1893,6 +1900,31 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
     return 1;
 }
 
+/* THE RING'S BOUND. GLOBALS_RING blocks per slot per slice: a FILL takes one,
+   a CONV one and an OUT two. A `full`-model batch at NK 4 is 47 draws -- the
+   FILL, 45 CONVs (four groups on each of eleven 64-channel layers and one on
+   the output) and the OUT -- so 48 blocks, and a sixth batch in one slice
+   would overflow it. A slice is bounded by GPU time, not by a count, and six
+   small batches fit in 12 ms: MEASURED 2026-09-24 on the reference setup,
+   `fx-rockets` under `--defaults`, four feature batches and two effect
+   batches issued in one slice, the job holding the sixth failed, and so did
+   every job that drew after it in that slice.
+   So the core asks here before every draw. The answer holds back each live
+   job's mip levels, which `chain_step` reduces from the same ring after the
+   slice. The static bound below is what makes the head of a slice always
+   answer 1, which the core needs to make progress. */
+#define DRAW_BLOCKS_MAX 2            /* an OUT's two; a FILL and a CONV take one */
+_Static_assert(TAGPU_R_MAXJOBS * TAGPU_VK_MAXMIP + DRAW_BLOCKS_MAX <= GLOBALS_RING,
+               "a fresh slice must hold every job's mip levels and one draw");
+static int vk_room(void)
+{
+    uint32_t reserve = 0;
+    int i;
+    for (i = 0; i < TAGPU_R_MAXJOBS; i++)
+        if (s_vjob[i].core && s_vjob[i].chainN > 0) reserve += (uint32_t)s_vjob[i].chainN;
+    return s_gnext + reserve + DRAW_BLOCKS_MAX <= GLOBALS_RING;
+}
+
 static const TAGPU_RBACKEND s_be = {
     LANE,
     vk_ready,
@@ -1905,7 +1937,8 @@ static const TAGPU_RBACKEND s_be = {
     vk_timer_off,
     vk_state_push,
     vk_state_pop,
-    vk_may_draw
+    vk_may_draw,
+    vk_room
 };
 
 /* ======================== THE PUBLIC JOB API ======================== */
@@ -1922,7 +1955,7 @@ static void pal_pack(unsigned char* out, const unsigned char* pal)
 TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
                                        int prio, int oneshot, int repaint,
                                        VkImage srcImg, VkImageView srcView,
-                                       int srcW, int srcH,
+                                       int srcW, int srcH, int srcBase,
                                        const unsigned char* pal,
                                        VkImage dstImg, VkImageView dstView,
                                        int dstW, int dstH)
@@ -1944,6 +1977,7 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
     memset(g, 0, sizeof *g);
     c->owner = g; g->core = c;
     g->srcImg = srcImg; g->srcView = srcView; g->srcW = srcW; g->srcH = srcH;
+    g->srcBase = srcBase ? 1 : 0;
     g->dstImg = dstImg; g->dstView = dstView; g->dstW = dstW; g->dstH = dstH;
     g->clearDue = repaint ? 0 : 1;
     g->dstHas   = repaint ? 1 : 0;
@@ -2114,6 +2148,21 @@ int tagpu_vk_restore_job_painted(const TAGPU_VKRJOB* j)
     return (j && j->core && j->core->used) ? j->core->tframes : 0;
 }
 
+int tagpu_vk_restore_job_remap(TAGPU_VKRJOB* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAME* f),
+                               void* ctx, int* kept, int* requeued, int* dropped)
+{
+    if (!j || !j->core || !j->core->used) {
+        *kept = 0; *requeued = 0; *dropped = 0;
+        return 1;
+    }
+    return tagpu_rcore_job_remap(j->core, map, ctx, kept, requeued, dropped);
+}
+
+int tagpu_vk_restore_job_dst_live(const TAGPU_VKRJOB* j)
+{
+    return j && j->core && j->core->used && j->dstReady && j->chainN == 0;
+}
+
 /* below, beside the rest of the dump */
 static void dump_free(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g);
 
@@ -2240,7 +2289,8 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         if (g->dumpSrcBytes && g->dumpMap) {
             char sn[64];
             FILE* sf;
-            _snprintf(sn, sizeof sn, "tagpu_restore_%s_vk.r8", g->tag);
+            _snprintf(sn, sizeof sn, "tagpu_restore_%s_vk.%s", g->tag,
+                      g->srcBase ? "base" : "r8");
             sn[sizeof sn - 1] = 0;
             sf = fopen(sn, "wb");
             if (sf) {
@@ -2277,10 +2327,11 @@ static int dump_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
         g->dumpBytes = (VkDeviceSize)tagpu_gaf_mip_chain(g->chainDim, g->chainN);
     /* AND THE SOURCE AFTER IT, in the same buffer and the same submission, so
        the two halves of the pair are read at the same instant rather than a
-       frame apart. R8, so one byte a texel. */
+       frame apart. One byte a texel from an R8 source, four from a base. */
     g->dumpSrcOff = g->dumpBytes;
     g->dumpSrcBytes = (g->srcImg && g->srcW > 0 && g->srcH > 0)
-                      ? (VkDeviceSize)g->srcW * (VkDeviceSize)g->srcH : 0;
+                      ? (VkDeviceSize)g->srcW * (VkDeviceSize)g->srcH * (g->srcBase ? 4u : 1u)
+                      : 0;
     g->dumpBytes += g->dumpSrcBytes;
     if (!mk_buffer(d, g->dumpBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,

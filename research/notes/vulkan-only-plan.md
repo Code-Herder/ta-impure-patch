@@ -2056,7 +2056,7 @@ that a count which grows is the plan catching up with the work.) The row was
    | the marker/order passes read unit state | `tagpu_native_unit_pos` ← `tagpu_mark.c`, `tagpu_order.c`; `tagpu_native_selbox_complete` ← `tagpu_markown.c` |
    | the sound pass drives the effect emitters | `tagpu_fx_caps`, `tagpu_fx_emit_dot`, `tagpu_fx_emit_frame`, `tagpu_fx_set_mute`, `tagpu_fx_tile_visible` ← `tagpu_sfx.c` |
    | the terrain key is the composite's own constant | `tagpu_terr_key` ← `tagpu_gui_surf.c`, `tagpu_markown.c`, `tagpu_terrown.c` |
-   | the fog LUT and the scissor are asked by five passes each | `tagpu_native_foglut`, `tagpu_native_scissor_on` ← `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_mark.c`, `tagpu_posedraw.c`, `tagpu_terr.c` |
+   | the fog LUT and the scissor are asked by five passes each | `tagpu_native_foglut` (deleted 2026-09-23 with the 8bpp path, G20d), `tagpu_native_scissor_on` ← `tagpu_feat.c`, `tagpu_fx.c`, `tagpu_mark.c`, `tagpu_posedraw.c`, `tagpu_terr.c` |
 
    What is left over after those is the delete set, and it has a shape too: the `_render`,
    `_glreset` and draw entry points (`tagpu_posedraw_begin`/`_unit`/`_end` and their ghost,

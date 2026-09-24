@@ -135,17 +135,16 @@ typedef struct TAGPU_MKHAND {
     /* tagpu_text.c's atlas: one coverage byte a texel. `textGen` moves when a
        raster lands, which is how a backend holding its own copy is told. */
     const unsigned char* text; unsigned textGen; int textW, textH;
-    /* THE THREE SHARED TEXTURES, AS BYTES: the consumer builds its own
+    /* THE TWO SHARED TEXTURES, AS BYTES: the consumer builds its own
        images from them. They come over in the shapes `tagpu_fx.h` already uses
-       for the same three, so the two consumers agree about what they are:
-       the palette is 256 RGBA8 texels of `tagpu_pal_live()`, the fog grid is
-       cols x rows of RG8, and the LUT is 256 R8. A draw that wants fog and
-       whose grid did not cross is refused rather than drawn unfogged. */
+       for the same two, so the two consumers agree about what they are:
+       the palette is 256 RGBA8 texels of `tagpu_pal_engine()` and the fog grid
+       is cols x rows of RG8. A draw that wants fog and whose grid did not
+       cross is refused rather than drawn unfogged. */
     const unsigned char*  pal;        /* 256 x RGBA8 */
     unsigned              palSerial;
     const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
     int                   fogGridCols, fogGridRows;
-    const unsigned char*  fogLut;     /* 256 x R8 */
     int   key;                  /* uKey: the index an untouched layer texel holds */
     float gw, gh, zoom, zoomCx, zoomCy;
     float fogOrgX, fogOrgY, fogCols, fogRows;

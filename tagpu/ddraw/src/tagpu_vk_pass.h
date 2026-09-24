@@ -41,6 +41,13 @@ typedef struct {
     VkInstance                inst;
     VkPhysicalDevice          pd;
     VkDevice                  dev;
+    /* THE SEAM'S QUEUE, AND ITS FAMILY. One user only: tagpu_vk_stage.c's
+       banded upload, which submits a copy of its own and waits on it before
+       the frame's command buffer is submitted. Legal because the seam submits
+       from the render thread too, so the queue's external synchronisation is
+       the thread's order. Nothing else may submit to it. */
+    VkQueue                   queue;
+    uint32_t                  qfam;
     /* One colour attachment in the swapchain's format, LOAD/STORE, ending in
        PRESENT_SRC. Created once per device and valid for its life, so a pass
        may build a pipeline against it and keep it across a resize. */

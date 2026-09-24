@@ -5,17 +5,20 @@
 
    ONE STORE, AND THE MENU IS ITS ONLY WRITER. Every row of the render-options
    screens reads its value from here and writes it back here; nothing on those
-   screens persists through the registry, ddraw.ini or a lever file any more.
+   screens persists through the registry or a lever file.
 
    PRECEDENCE, per setting, and every consumer asks in this order:
      1. a LEVER -- the setting's own file (`tagpu_ss.off`, a key inside
-        `tagpu_classicpp.cfg`, a ddraw.ini key the player typed, ...). The
-        consumer owns that test; the menu greys a row a lever holds.
+        `tagpu_classicpp.cfg`, ...). The consumer owns that test; the menu
+        greys a row a lever holds.
      2. this store -- `tagpu_settings_get` answers 1.
      3. the consumer's compiled default -- `tagpu_settings_get` answers 0.
    With `tagpu_defaults.off` (every tacli control launch) the store has no say
-   at all and `tagpu_settings_get` always answers 0, so such a launch behaves
-   exactly as it did before the store existed.
+   and `tagpu_settings_get` always answers 0 -- except for the window's
+   PLACEMENT, display mode, frame cap and windowed frame, which
+   `tagpu_settings_placement` and `tagpu_settings_window` answer under every
+   launch: the store is the only thing that places a window, and tacli writes
+   those three keys before every launch.
 
    THREADS. Every value a consumer reads is an aligned LONG, written by
    InterlockedExchange and BOUNDED against its key's own table on every read,
@@ -57,13 +60,12 @@ enum { TS_STYLE_CLASSIC, TS_STYLE_PP, TS_STYLE_CUSTOM };
 #define TS_RES_W(v)   ((v) >> 16)
 #define TS_RES_H(v)   ((v) & 0xFFFF)
 
-/* Called from cfg_init (config.c), BEFORE ddraw.ini is parsed and before any
-   other thread exists: the first-run migration may strip keys from that very
-   file. With no `impure.cfg`, migrates -- once per directory, recorded in
+/* Called from cfg_load (config.c), before any other thread exists. With no
+   `impure.cfg`, migrates -- once per directory, recorded in
    `impure-migration.txt` -- and writes the defaults; otherwise loads it. A
    store that exists and cannot be read is never written this session.
    Idempotent. */
-void tagpu_settings_attach(const char* ini_path);
+void tagpu_settings_attach(void);
 
 /* 1 and the value in *out when the store supplies one; 0 when it has no say
    (tagpu_defaults.off), in which case the caller's own default stands. Any
@@ -73,8 +75,12 @@ void tagpu_settings_attach(const char* ini_path);
    shadow switch, so it is the player's under every style. */
 int  tagpu_settings_get(TagpuSetting key, int* out);
 
-/* 1 when the store has no say at all: tagpu_defaults.off is present. */
+/* 1 when the store has no say: tagpu_defaults.off is present. */
 int  tagpu_settings_ignored(void);
+
+/* TS_DISPLAY or TS_MAXFPS, answered under tagpu_defaults.off too (the
+   placement, above); 0 for any other key. Read at attach (tagpu_cfg.c). */
+int  tagpu_settings_placement(TagpuSetting key, int* out);
 
 /* Any thread. Records the value (bounded: an invalid one is refused and
    logged) and marks the store for the next flush. */
@@ -115,8 +121,9 @@ const char* tagpu_settings_gpu(void);
    lock, which the serialiser takes too. */
 void tagpu_settings_set_gpu(const char* name);
 
-/* The windowed frame, as ddraw.ini's posX/posY/width/height carry it. 0 when
-   the store has none or no say. Read at attach (tagpu_cfg.c). */
+/* The windowed frame: x, y and the client size, 0,0 for the size the game
+   asks for. 0 when the store has none; answered under tagpu_defaults.off too.
+   Read at attach (tagpu_cfg.c). */
 int  tagpu_settings_window(int* x, int* y, int* w, int* h);
 /* At shutdown (cfg_save): remember the windowed frame. It only records; the
    write is `tagpu_settings_final`'s. */

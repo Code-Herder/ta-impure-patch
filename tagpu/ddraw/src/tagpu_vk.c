@@ -22,7 +22,7 @@
    never draw to it again for the life of the process, though every GL call
    still succeeds and the window keeps showing Vulkan's last frame. This
    process creates no GL context, so there is nothing on the window to lose.
-   `renderer=vulkan` is dispatched at `dd.c` and cannot change afterwards. The
+   The backend is dispatched at `dd.c` and cannot change afterwards. The
    table matters again for the out-of-process 64-bit renderer, which will own a
    window of its own.
 
@@ -114,7 +114,7 @@
 
    WHAT THE ROW CANNOT DO, stated in the UI and not hidden: it binds the VULKAN
    device only, so it is greyed when the Vulkan lane is not armed
-   (`renderer=gdi`), where no device is being chosen. */
+   (the GDI backend), where no device is being chosen. */
 
 /* VK_NO_PROTOTYPES: every entry point here is resolved through
    vkGetInstanceProcAddr / vkGetDeviceProcAddr and held in a variable of the
@@ -148,6 +148,7 @@
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_mark.h"
 #include "tagpu_vk_shot.h"
+#include "tagpu_vk_stage.h"
 
 #define ON_FILE    "tagpu_vk.on"
 /* THE CONTROL, and the module needs one because half of it runs with the lever
@@ -465,7 +466,7 @@ static void ab_drop(const char* why, int idle)
 static float s_clear[3] = { 0.0f, 0.0f, 0.0f };
 
 /* ---- the window the surface goes on ---------------------------------------
-   THERE IS ONE, AND IT IS THE GAME'S. `renderer=vulkan` reaches
+   THERE IS ONE, AND IT IS THE GAME'S. The Vulkan backend reaches
    `render_vk.c`, which calls `tagpu_vk_own_present()` before its loop, and
    nothing else drives this lane. So the surface goes on the window the caller
    names and `s_ownWin` is set on every frame that gets here.
@@ -544,8 +545,8 @@ static void read_lever(void)
     char b[128];
     HANDLE h;
     DWORD n = 0;
-    /* THE LEVER RETIRES INTO `renderer=` when this backend owns the present:
-       `renderer=vulkan` that a stray `tagpu_vk.off` could disarm would leave
+    /* THE LEVER RETIRES when this backend owns the present: a Vulkan
+       backend that a stray `tagpu_vk.off` could disarm would leave
        the process with NO renderer and a black window, which is a worse
        failure than anything the lever was there to protect against. The ON
        file is still READ below for its `color=`, which every A/B uses; it
@@ -670,7 +671,7 @@ int tagpu_vk_armed(void)
        nothing at the rate a screen is built, and sharing no mutable state is
        worth more than the cached answer.
 
-       AND IT ANSWERS FOR THE OWNING BACKEND TOO. `renderer=vulkan` needs no
+       AND IT ANSWERS FOR THE OWNING BACKEND TOO. The Vulkan backend needs no
        lever file, so without the `s_ownWin` term this would return 0 in
        exactly the configuration where the lane is the ONLY renderer -- and
        `tagpu_menu.c`'s `vrow_greyed(VD_GPU)` would grey the GPU picker, the
@@ -1008,7 +1009,7 @@ int tagpu_vk_max_image_dim(void)
 {
     /* CACHED AGAINST THE DEVICE IT CAME FROM, not just cached. The GPU picker
        tears the lane down and re-picks a physical device on a row change, and
-       it is live under `renderer=vulkan` -- so a bare `static int cached` would
+       it is live under the Vulkan backend -- so a bare `static int cached` would
        keep the old device's limit for the life of the process and a smaller new
        device would have work sized past what it accepts. */
     static int cached;
@@ -1031,7 +1032,7 @@ int tagpu_vk_max_storage_range(void)
 {
     /* CACHED AGAINST THE DEVICE IT CAME FROM, not just cached. The GPU picker
        tears the lane down and re-picks a physical device on a row change, and
-       it is live under `renderer=vulkan` -- so a bare `static int cached` would
+       it is live under the Vulkan backend -- so a bare `static int cached` would
        keep the old device's limit for the life of the process and a smaller new
        device would have work sized past what it accepts. */
     static int cached;
@@ -1232,7 +1233,7 @@ void tagpu_vk_enum_start(void)
                here, the enumeration included: the
                GPU row needs the list whatever the OFF file says, because under
                this backend the row is the only way to choose a device. */
-            vklog("tagpu_vk.off is present and IGNORED - `renderer=vulkan` "
+            vklog("tagpu_vk.off is present and IGNORED - the Vulkan backend "
                   "overrides both levers; nothing in this module stands down");
         }
         else {
@@ -1806,6 +1807,9 @@ static void vk_down(void)
            passes those jobs were using. The other way round would destroy a
            framebuffer a live job still names. */
         tagpu_vk_restore_down(&s_pass);
+        /* AND THE BANDED UPLOAD'S COMMAND POOL AND FENCE, after every pass has
+           given its staging back: they belong to this device. */
+        tagpu_vk_stage_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -2329,6 +2333,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.inst = s_vk.inst;
     s_pass.pd = s_vk.pd;
     s_pass.dev = s_vk.dev;
+    s_pass.queue = s_vk.queue;
+    s_pass.qfam = s_vk.qfam;
     s_pass.rp = s_vk.rp;
     s_pass.fmt = s_vk.fmt;
     s_pass.dfmt = s_vk.dfmt;
@@ -2833,9 +2839,16 @@ static int vk_present(void)
                ORDER is written down once and cannot drift between them. */
             if (draw_world)
                 tagpu_vk_world_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-            else
+            else {
                 world_records(cb, fi, s_vk.ext.width, s_vk.ext.height,
                               draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
+                /* AND THE GAMMA ON IT, which a target would have applied in
+                   its composite: here, after the last world pass and before
+                   the UI, so it reaches the finished world and nothing else. */
+                if (draw_terr || draw_feat || draw_unit || draw_fx || draw_mark)
+                    tagpu_vk_world_record_direct(&s_pass, cb, s_vk.ext.width,
+                                                 s_vk.ext.height);
+            }
             /* THE UI GOES OVER THE WORLD AND UNDER THE READOUT: the readout
                has to sit above the side panel
                and the dialogs or they hide it. The return is not kept: the

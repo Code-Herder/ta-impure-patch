@@ -8,10 +8,11 @@
 
      - geometry: the same engine-posed PrimitiveStruct walk as render3do,
        positioned in VIEWPORT coordinates with the live viewport rect;
-     - materials: the shared 8bpp atlas + engine SHD shade rows, lifted to RGB
-       through the live palette (256x1 RGBA texture, refreshed per frame — not
-       because it cycles: it does NOT cycle in play, measured 2026-09-05, see
-       tagpu_terr.c. Re-reading it is free and survives whatever does write it);
+     - materials: the shared unit atlas as its RGBA8 base (every index
+       expanded through the engine's own table, tagpu_pal.h), shaded per face
+       by an RGB multiplier fitted to the engine's SHD rows
+       (tagpu_render3do.c `shade_k_build`); a flat face's index is looked up
+       in the same table;
      - occlusion: per-fragment test against the scene-depth scaffold
        (painter's row keys; a tall feature in a nearer row hides the unit),
        plus the world target's depth buffer for self/inter-unit occlusion;
@@ -273,10 +274,6 @@ static int    s_nano   = 1;            /* build-state look (tagpu_nano.off)  */
 static int    s_devres = 0;            /* the world at device res — OPT IN, tagpu_devres.on */
 static TAGPU_WORLDTGT s_wt;            /* the world target, published per frame */
 static int    s_wtHave = 0;
-/* the 256-byte fog shade table as this frame built it, for the Vulkan passes
-   (tagpu_native.h) */
-static unsigned char s_fogLutBytes[256];
-static int s_fogLutHave;
 /* whether this frame's world passes are actually scissored to the viewport
    (tagpu_native.h) */
 static int s_scissorOn;
@@ -294,7 +291,6 @@ static int    s_fogCells = 0;         /* the ALLOCATION's cell count (= cols*row
    taFog's clamp. It must read 0 unless `tagpu_fogwide.off` is armed. */
 static unsigned s_fogBare = 0;
 static const unsigned short* s_fogGrid = NULL;
-static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
 /* world origin of fog grid cell 0 on one axis: the builder's rounded eye>>5
    turned back into world px, i.e. 32*col0 + 16 (0x4843C0 head, 0x4848E0).
    `%` truncating toward zero is DELIBERATE, not a floor-mod bug: the builder
@@ -376,9 +372,7 @@ static const char* FS =
     "in vec2 vUV; flat in vec2 vFC; flat in float vShade; in vec2 vWorld;\n"
     "in float vEnc; in float vVY; flat in vec3 vNrm; in vec3 vShW;\n"
     "out vec4 frag;\n"
-    "uniform sampler2D uAtlas;\n"
-    "uniform sampler2D uLUT;\n"
-    "uniform sampler2D uPal;\n"              /* 256x1 RGBA live palette        */
+    "uniform sampler2D uPal;\n"              /* 256x1 RGBA, the engine's table */
     "uniform sampler2D uAtlasRGB;\n"         /* Classic++: the atlas's restored twin, mipped */
     "uniform int uRestored;\n"               /* 1 = sample it where its alpha says so */
     TAGPU_GLSL_SCAF_UNIFORMS                  /* scene scaffold, R8, viewport   */
@@ -394,22 +388,32 @@ static const char* FS =
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
+    /* the base atlas: the unit atlas expanded through the engine's table,
+       alpha 0 at the frame's key (tagpu_vk_unit.c) */
+    "uniform sampler2D uBase;\n"
+    /* the face-shade multiplier by SHD row, 32 x 1 floats
+       (tagpu_render3do.c `s_shadeK`) */
+    "uniform sampler2D uShadeK;\n"
     TAGPU_GLSL_LIGHT_FN
     "void main(){\n"
-    "  float idx;\n"
     /* the shadow point's screen derivatives FIRST, while every fragment of
        the quad is still running -- the discards below end that (tagpu_glsl.h) */
     "  vec3 taSx = dFdx(vShW), taSy = dFdy(vShW);\n"
     /* Classic++: the twin is sampled HERE, before any discard, because it is
        mipmapped and its implicit derivatives are only defined while every
-       fragment of the quad is still running (the R8 sample has no mips and
-       never cared). Zero for a flat face, and zero when the switch is off. */
+       fragment of the quad is still running (the base atlas has no mips and
+       does not care). Zero for a flat face, and zero when the switch is off.
+       The hole is the base's alpha, 0 exactly where the frame's index is its
+       key (NEAREST, the texel the index was): it is what keeps a keyed texel
+       out of the depth buffer, where the twin's own alpha 0 at a key would
+       not. */
     "  vec4 t = vec4(0.0);\n"
-    "  if (vUV.x < 0.0) { idx = vFC.x; }\n"
-    "  else {\n"
-    "    idx = texture(uAtlas, vUV).r;\n"
+    "  vec3 base = vec3(0.0);\n"
+    "  if (vUV.x >= 0.0) {\n"
+    "    vec4 b = texture(uBase, vUV);\n"
     "    if (uRestored == 1) t = texture(uAtlasRGB, vUV);\n"
-    "    if (abs(idx - vFC.y) < 0.5/255.0) discard;\n"
+    "    if (b.a < 0.5) discard;\n"
+    "    base = b.rgb;\n"
     "  }\n"
     /* scaffold occlusion: nearer stamped rows hide this fragment (one copy
        of the rule, shared with the effects shader: tagpu_glsl.h) */
@@ -423,12 +427,6 @@ static const char* FS =
     "  if (vVY <= uDigT) discard;\n"
     "  if (uShadow == 1) { if (vVY <= uWaterT) discard;\n"
     "                      frag = vec4(0.0, 0.0, 0.0, 0.5); return; }\n"
-    /* Classic: the per-face shade row through the 32-row PALETTE.SHD LUT.
-       Classic++ (uLit) skips it and lights the resolved colour per fragment
-       below, from the face normal -- the same light with the 32-row
-       quantisation taken out (renderers.md 1, Units row) */
-    "  if (uLit == 0)\n"
-    "    idx = texelFetch(uLUT, ivec2(int(idx*255.0+0.5), int(vShade*31.0+0.5)), 0).r;\n"
     /* build-state (nanoframe) recolour, engine 0x458D30 semantics
        (build-state.md): classify the fragment by its composite DEPTH byte —
        the model height plus 0x32 — against the threshold that sweeps with the
@@ -448,6 +446,8 @@ static const char* FS =
        wireframe's hidden-line removal is the smaller of the two errors;
        getting it back needs per-sprite isolation (a stencil pass), which is
        not done. */
+    /* a flat face's colour is an index, and so is a nanoframe band's */
+    "  float idx = vFC.x;\n"
     "  bool band = false;\n"
     "  if (uNanoOn == 1) {\n"
     "    float nd = vVY + 50.0;\n"
@@ -456,28 +456,27 @@ static const char* FS =
     "    if (nc < -1.5) discard;\n"
     "    if (nc > -0.5) { idx = nc; band = true; }\n"
     "  }\n"
-    "  int pi = int(idx*255.0+0.5);\n"
-    "  vec3 rgb;\n"
-    /* Classic++: the restored texel where the lazy restore has painted it
-       (alpha 1 -- tagpu_gaf.h; the twin sampled trilinear with its mips, the
-       lab's LAB_UNIT_FS uUndither branch), the palette's colour for a flat
-       face, a nanoframe band or a texel not yet restored, then the lab's
-       lambert on either (renderers.md 2.11) and the grey band as the RGB rule
-       (2.6). The hole stays the index test above: the twin's alpha is 0 at a
-       keyed texel too, but the index compare is what keeps it out of the
-       depth buffer. Divided by its alpha: a keyed texel is (0, 0, 0, 0), so a
-       bilinear sample beside one is premultiplied by its coverage and would
-       draw a dark ring where the lab's shader (which takes t.rgb as is) does.
-       Classic: the index remap, as the engine does it. */
-    "  if (uLit == 1) {\n"
-    "    rgb = (t.a > 0.5 && !band) ? t.rgb / t.a\n"
-    "        : texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
-    "    rgb *= taLambert(uLambert == 1 ? vNrm : vec3(0.0, 1.0, 0.0), vShW, taSx, taSy);\n"
+    /* THE COLOUR, both presets: the restored texel where the lazy restore
+       has painted it (alpha 1 -- tagpu_gaf.h; the twin sampled trilinear with
+       its mips, the lab's LAB_UNIT_FS uUndither branch), the base atlas's for a
+       texel not yet restored (and for every texel under Classic, whose
+       `uRestored` is 0), the palette's for a flat face or a nanoframe band --
+       whose colour is an index and not a texel. Then the face shade: the SHD
+       row the vertex stage chose, as a multiplier (uShadeK), clamped to 1 --
+       and not on a nanoframe band, which the engine paints over the shaded
+       index. Then taLambert of the LEVEL normal: `uLambert` is published as 0
+       (inc/tagpu_posedraw.h), so `vNrm` is never used and a unit has no slope
+       shading in the game (tagpu_glsl.h on what the level normal leaves).
+       Then the grey band as the RGB rule (renderers.md 2.6). The twin is divided
+       by its alpha: a keyed texel is (0, 0, 0, 0), so a bilinear sample beside
+       one is premultiplied by its coverage and would draw a dark ring where
+       the lab's shader (which takes t.rgb as is) does. */
+    "  vec3 rgb = (t.a > 0.5 && !band) ? t.rgb / t.a\n"
+    "      : (band || vUV.x < 0.0) ? texelFetch(uPal, ivec2(int(idx*255.0+0.5), 0), 0).rgb : base;\n"
+    "  if (!band)\n"
+    "    rgb = min(rgb * texelFetch(uShadeK, ivec2(int(vShade * 31.0 + 0.5), 0), 0).r, vec3(1.0));\n"
+    "  rgb *= taLambert(uLambert == 1 ? vNrm : vec3(0.0, 1.0, 0.0), vShW, taSx, taSy);\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
-    "  } else {\n"
-    TAGPU_GLSL_FOG_SHADE("pi")
-    "    rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
-    "  }\n"
     /* engine water table (prog+0xD0): r/2, g/2, b/2+0x32 */
     "  if (vVY <= uWaterT) {\n"
     "    if (uWaterMode == 1) discard;\n"
@@ -502,6 +501,42 @@ static const char* DFS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag; uniform sampler2D uTex;\n"
     "void main(){ frag = texture(uTex, uv); }\n";
+/* ...and the same resolve with the engine's Gamma applied, ONCE, to the
+   finished world image -- the world's every colour source is the engine's
+   unscaled table (tagpu_pal.h). tagpu_vk_world.c draws this one only when the
+   factor is not 1.0, so at the stock Gamma the world is DFS's, bit for bit.
+   `uGam` is the engine's own curve, 256 x 1: texel e holds
+   min(255, trunc(e x factor)) / 255, which is what 0x4BA200 hands DirectDraw
+   for a palette entry of e -- built in double on the CPU because the engine
+   truncates an exact x87 product, and a float product here can land on the
+   integer above it. A level between two (the box filter's average at an edge)
+   takes the line between their two outputs. The target is PREMULTIPLIED, so
+   the curve is applied to the colour and the coverage put back; a texel with
+   no coverage is additive light (the effects' flashes) and takes the curve as
+   it is. */
+static const char* GFS =
+    "#version 330 core\n"
+    "in vec2 uv; out vec4 frag; uniform sampler2D uTex; uniform sampler2D uGam;\n"
+    "float gam(float x){\n"
+    "  float v = clamp(x, 0.0, 1.0) * 255.0;\n"
+    "  int i = int(floor(v)); int j = min(i + 1, 255);\n"
+    "  return mix(texelFetch(uGam, ivec2(i, 0), 0).r, texelFetch(uGam, ivec2(j, 0), 0).r, v - float(i));\n"
+    "}\n"
+    "void main(){\n"
+    "  vec4 c = texture(uTex, uv);\n"
+    "  vec3 rgb = c.a > 0.0 ? c.rgb / c.a : c.rgb;\n"
+    "  rgb = vec3(gam(rgb.r), gam(rgb.g), gam(rgb.b));\n"
+    "  frag = vec4(c.a > 0.0 ? rgb * c.a : rgb, c.a);\n"
+    "}\n";
+/* ...and the Gamma on a frame with NO world target, where the world passes
+   have drawn straight into the frame and there is no image to sample. The
+   factor is applied by the BLEND, which is the one stage that reads the frame:
+   this stage supplies the 1.0 the blend multiplies the frame by
+   (tagpu_vk_world.c, `tagpu_vk_world_record_direct`). */
+static const char* KFS =
+    "#version 330 core\n"
+    "out vec4 frag;\n"
+    "void main(){ frag = vec4(1.0); }\n";
 #pragma GCC diagnostic pop
 
 static int name_ieq(const char* a, const char* b)
@@ -744,6 +779,7 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
     if (nvert <= 0 || nface <= 0 || nface > 512 || !ptr_ok(faces)) return nv;
     if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) return nv;
 
+    const int nv0 = nv;
     int j;
     for (j = 0; j < nface; j++) {
         if (j == skipFace) continue;
@@ -758,7 +794,11 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
         int hasTex = 0;
         {
             const char* tg = tagpu_r3d_face_texframe(fa, owner);
-            if (tg && tagpu_r3d_atlas_uv(tg, uv, &ckf)) hasTex = 1;
+            const int got = tg ? tagpu_r3d_atlas_uv(tg, uv, &ckf) : 0;
+            /* DEFERRED past the allowance (tagpu_gaf.h `budget`): the node is
+               taken back out whole, not drawn with this face flat */
+            if (got < 0) return nv0;
+            if (got > 0) hasTex = 1;
             if (!hasTex) {
                 int fc = tagpu_r3d_face_colour(fa);
                 if (fc < 0) continue;
@@ -1923,9 +1963,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (f->packet) s_lastLevelGen = f->packet->level_gen;
     cache_gen_check(s_lastLevelGen);
     /* and the UNIT ATLAS, which keys on frame ADDRESSES the next level's loader
-       may reuse. Here rather than in tagpu_r3d_atlas_frame below because
-       tagpu_posebake_frame latches tagpu_r3d_atlas_gen() on the next line. */
+       may reuse, and recycles when full. Both move its generation, so both
+       are here, before tagpu_posebake_frame latches tagpu_r3d_atlas_gen() on
+       the next line: a move after the latch would leave this frame's cached
+       materials matching a generation whose rects are being repainted. */
     tagpu_r3d_atlas_level(s_lastLevelGen);
+    tagpu_r3d_atlas_recycle();
     /* the geometry bake's caches take the same three generations one frame
        later than they are bumped, for the same reason and on the same thread —
        and its drop frees the mirrors the Vulkan unit pass reads on the render
@@ -2070,27 +2113,23 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
     char* ta = *(char**)TA_MAINPP;
     if (!ptr_ok(ta)) { SSHADOW_NONE(); return; }
-    /* The palette THE SCREEN IS SHOWN WITH, not the engine's own table: the
-       engine gamma-scales every palette on the way to DirectDraw and never
-       scales main+0x143A7, so a pass reading that table draws the world at
-       the wrong brightness at any Gamma but the default (tagpu_pal.h). One
-       resolve serves the atlas restore here and uPal below. */
-    const unsigned char* pal = tagpu_pal_live();
-    /* No frame is drawn with an unspecified palette. Unreachable in practice --
-       ptr_ok(ta) above is what the engine-table fallback needs. The early-out
-       skips the whole native pass; whether a frame with no live palette should
-       still be skipped is a question about the pass, and it is left as it
-       is. */
+    /* THE ENGINE'S TABLE, which every world colour source is built from --
+       the Gamma factor is applied once, to the finished world image
+       (tagpu_pal.h). No frame is drawn before a packet has carried it: every
+       consumer of this pass's hand-overs refuses a NULL table anyway, and
+       skipping here keeps the gathers from building work nothing can draw. */
+    const unsigned char* pal = tagpu_pal_engine();
     if (!pal) { SSHADOW_NONE(); return; }
-    /* the unit atlas's frame: recycle if full -- before any face asks it for a UV */
+    /* the unit atlas's allowance frame, before any face asks it for a UV (a
+       full atlas was recycled above, before the generation latch) */
     tagpu_r3d_atlas_frame();
-    /* AND THE SHADE LUT, on the same beat and for the same reason: it is the
-       pass's, and the hand-over carries its mirror. */
+    /* AND THE SHADE CALIBRATION, on the same beat and for the same reason: it
+       is the pass's, and the hand-over carries its multipliers. */
     /* `tagpu_pk_shd` DEREFERENCES ITS ARGUMENT -- it reads `p->shd_len` with no
        null test of its own -- and a frame with no packet is ordinary (the shell
        before the first publish). NULL is a legitimate argument to `_want`: it
-       builds the LUT from our own computed ramp. */
-    tagpu_r3d_lut_want(f->packet ? tagpu_pk_shd(f->packet) : NULL);
+       builds the calibration from our own computed ramp. */
+    tagpu_r3d_shade_want(f->packet ? tagpu_pk_shd(f->packet) : NULL);
     /* THE UNIT ARRAY IS NOT READ HERE, AND MUST NOT BE
        (cross-thread-engine-reads.md §5 row 2): `begin` and `end` are an
        unsynchronised pair. The level teardown 0x485980 frees the array and
@@ -2235,7 +2274,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        unexplored corner mask, high byte = the out-of-LOS one — so the engine
        buffer uploads with no conversion. */
     int fogMode = 0;
-    s_fogGrid = NULL; s_fogCells = 0; s_fogLut = 0;
+    s_fogGrid = NULL; s_fogCells = 0;
     {
         /* BOTH GRIDS COME OUT OF THE PACKET, never out of the engine's
            descriptor `*(main+0x1421F)` and the buffer behind it on this thread:
@@ -2302,37 +2341,13 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                delete the grey band outright instead of merely disagreeing with
                it. */
             fogMode = 1 | (lostype & 2);
-            /* the grey band's darken is a palette remap, not a scale: 0x4BFE10
-               rewrites every pixel p as shade[p] (256 bytes, everything folded
-               into the dark-grey ramp), copied into the packet by the game
-               thread. Cheap enough to re-upload each frame. */
-            {
-                const unsigned char* t = tagpu_pk_fogshade(pk);
-                static unsigned char ident[256];
-                s_fogLut = t ? 1 : 0;
-                if (!t) {
-                    /* identity, so an absent table degrades to "grey is not
-                       darkened" — never to "every grey pixel is palette index
-                       0", which is solid black over the whole band */
-                    int i;
-                    for (i = 0; i < 256; i++) ident[i] = (unsigned char)i;
-                    t = ident;
-                }
-                /* THE 256 BYTES, KEPT WHERE THE VULKAN TWINS CAN REACH THEM.
-                   The identity fallback above is part of the pass's INPUT: `t`
-                   is the one construction of the table and this is the one
-                   copy of it. */
-                memcpy(s_fogLutBytes, t, 256);
-                s_fogLutHave = 1;
-            }
         }
     }
 
-    /* ---- the live palette (it does NOT cycle -- terr.c): each Vulkan pass
-       uploads `tagpu_pal_live()`'s bytes itself, which `tagpu_pal_frame` fills
-       from this frame's packet before any pass runs. `pal` above is read only
-       by the `if (!pal)` early-out; a reader deciding whether `pal` can go
-       should start at that early-out's own comment. ---- */
+    /* ---- the engine's palette (it does NOT cycle -- terr.c): each Vulkan
+       pass uploads `tagpu_pal_engine()`'s bytes itself, which `tagpu_pal_frame`
+       fills from this frame's packet before any pass runs. `pal` above is read
+       only by the `if (!pal)` early-out. ---- */
 
     /* ---- gather native-owned on-screen units ---- */
     /* ONE GATHERED DRAWABLE. `pu`/`pw` point into THIS FRAME'S PACKET — our
@@ -2798,7 +2813,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         pv.scafP[2] = (float)vw;  pv.scafP[3] = (float)vh;
         pv.fogOrg[0] = (float)s_fogOrgX; pv.fogOrg[1] = (float)s_fogOrgY;
         pv.fogDim[0] = (float)s_fogCols; pv.fogDim[1] = (float)s_fogRows;
-        pv.lit = tagpu_classicpp_on() ? 1 : 0;
         pv.sun[0] = L->unitSun[0]; pv.sun[1] = L->unitSun[1]; pv.sun[2] = L->unitSun[2];
         pv.amb = L->amb;
         pv.norm = 1.0f / L->unitLevel;
@@ -2882,15 +2896,16 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        and never on the structure branch, so a structure's slant survives it. Bit 4 "FShadow" is the
        FEATURE pass's and is not touched here.
 
-       THE CLASSIC++ KEY IS THE INNER ONE. `shadows=2` (HARD) is Classic's own
-       pair and is the shipped default; `shadows=1` (SOFT) asks for the
-       map-anchored depth map instead, which has no producer --
+       THE SHADOWS KEY IS THE INNER ONE, in both presets. `shadows=2` (HARD)
+       is the engine's own pair and is the shipped default; `shadows=1` (SOFT)
+       asks for the map-anchored depth map instead, which has no producer --
        see `shadow_defaults()` in tagpu_classicpp.c, which says why and is why
-       HARD is the default. `shadows=0` draws neither. With the
-       Classic++ switch OFF the engine's option bits rule alone. */
+       HARD is the default and a persisted `1` is read as HARD. `shadows=0`
+       draws neither. The render-options menu's Shadows row writes this key
+       and the engine's option bits together (tagpu_menu.c), so the two agree
+       under either preset. */
     const TAGPU_LIGHT* cppL = tagpu_classicpp_light();
-    const int cpp  = tagpu_classicpp_on();
-    const int hard = !cpp || cppL->shadows == TAGPU_SHADOWS_HARD;
+    const int hard = cppL->shadows == TAGPU_SHADOWS_HARD;
     /* `shadows=0` needs no term of its own: it makes `hard` false and
        `airDrop` false, so the test below admits nothing. */
     const int airDrop = cppL->airshadow == TAGPU_AIRSHADOW_DROP &&
@@ -3250,11 +3265,6 @@ const unsigned short* tagpu_native_foggrid(int* cols, int* rows, int* cells)
     if (rows) *rows = s_fogRows;
     if (cells) *cells = s_fogCells;
     return s_fogGrid;
-}
-
-const unsigned char* tagpu_native_foglut(void)
-{
-    return s_fogLutHave ? s_fogLutBytes : NULL;
 }
 
 int tagpu_native_worldtgt(TAGPU_WORLDTGT* out)

@@ -1,0 +1,27 @@
+{
+  "format": "ta-scenario/1",
+  "description": "Marker fixture: three tanks at 30, 65 and 100 percent health, so the health bars show three different fills, and a Commander at 80 to build from. All four belong to the local player. Pause it, then select all (ctrl+a) for the selection rects, ctrl+1 for the group digit, a patrol for the order line and its dots (hold SHIFT to see them; hover a tank for the route dots), a held drag for the band box, and the Commander's build menu for the placement ghost and queued sites. The health bars also need the `damagebars` option.",
+  "seed": 20260924,
+  "on_error": "abort",
+
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": true,
+    "switches": { "shootall": false, "noshake": true },
+    "players": [
+      { "slot": 0, "controller": "human", "side": "arm", "color": 0 },
+      { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+    ]
+  },
+
+  "units": [
+    { "id": "t30",   "type": "ARMSTUMP", "owner": 0, "pos": [1400, 1600], "facing": 45,  "health": 30,  "stance": "hold" },
+    { "id": "t65",   "type": "ARMSTUMP", "owner": 0, "pos": [1600, 1640], "facing": 135, "health": 65,  "stance": "hold" },
+    { "id": "t100",  "type": "ARMSTUMP", "owner": 0, "pos": [1800, 1600], "facing": 200, "stance": "hold" },
+    { "id": "com",   "type": "ARMCOM",   "owner": 0, "pos": [1600, 1480], "facing": 90,  "health": 80 },
+    { "id": "spare", "type": "CORSOLAR", "owner": 1, "pos": [4300, 1400] }
+  ],
+
+  "camera": { "center_on": "t65", "pin": true }
+}

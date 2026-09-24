@@ -83,11 +83,6 @@ DWORD WINAPI gdi_render_main(void)
                 }
             }
 
-            BOOL upscale_hack = g_config.vhack && util_detect_low_res_screen();
-
-            if (g_config.vhack)
-                InterlockedExchange(&g_ddraw.upscale_hack_active, upscale_hack);
-
             if (g_config.fixchilds)
             {
                 g_ddraw.child_window_exists = FALSE;
@@ -112,23 +107,6 @@ DWORD WINAPI gdi_render_main(void)
                 RECT rc = { 0, 0, g_ddraw.render.width, g_ddraw.render.height };
                 FillRect(g_ddraw.render.hdc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
                 lines_copied = 1;
-            }
-            else if (upscale_hack)
-            {
-                lines_copied = real_StretchDIBits(
-                    g_ddraw.render.hdc,
-                    g_ddraw.render.viewport.x,
-                    g_ddraw.render.viewport.y,
-                    g_ddraw.render.viewport.width,
-                    g_ddraw.render.viewport.height,
-                    0,
-                    g_ddraw.height - g_ddraw.upscale_hack_height,
-                    g_ddraw.upscale_hack_width,
-                    g_ddraw.upscale_hack_height,
-                    g_ddraw.primary->surface,
-                    g_ddraw.primary->bmi,
-                    DIB_RGB_COLORS,
-                    SRCCOPY);
             }
             else if (!g_ddraw.child_window_exists &&
                 (g_ddraw.render.width != g_ddraw.width || g_ddraw.render.height != g_ddraw.height))

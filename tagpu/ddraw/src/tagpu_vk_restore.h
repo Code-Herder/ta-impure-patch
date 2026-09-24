@@ -6,7 +6,7 @@
    IT IS THE BACKEND OF tagpu_restore_core.c, not a restorer of its own.
    The scheduler -- the job queues, batch formation, the pass sequencer, the
    cost model and the GPU-time budget -- is the core's, and this file
-   implements the twelve-entry TAGPU_RBACKEND against it. Everything below is therefore
+   implements the thirteen-entry TAGPU_RBACKEND against it. Everything below is therefore
    about DEVICE RESOURCES and THREE DRAWS, and nothing below decides when to
    draw.
 
@@ -26,9 +26,9 @@
        the same warning for the same reason.
 
    WHAT IT IS FED, AND WHY THERE IS NO MIRROR. A job's two surfaces are
-   ALREADY on the device for every consumer: the indexed source is the pass's
-   own atlas image and the destination is the restored twin it already binds
-   (binding 42 in tagpu_vk_feat.c, 43 in tagpu_vk_fx.c). So this pass needs no
+   ALREADY on the device for every consumer: the source is the pass's own
+   atlas image (the RGBA base for a world pass, the R8 atlas for the UI) and the destination is the restored twin it already binds
+   (binding 40 in tagpu_vk_feat.c, 42 in tagpu_vk_fx.c). So this pass needs no
    CPU mirror and no read-back. What the consumer owes is the
    destination's usage widened to carry COLOR_ATTACHMENT and its view lent
    here; the palette is the one thing that still crosses as bytes, because it
@@ -63,8 +63,10 @@ typedef struct TAGPU_VKRJOB TAGPU_VKRJOB;
    is the shipped fallback, not a fault. */
 int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
 
-/* A job: frames read from `srcView` (the consumer's R8 indexed atlas, srcW x
-   srcH) with the palette `pal` (256 x R,G,B,pad; snapshotted now), painted
+/* A job: frames read from `srcView` (srcW x srcH) -- with `srcBase` 1 the
+   consumer's RGBA8 BASE atlas, colours already expanded and alpha 0 at a key
+   (the world passes); with 0 an R8 atlas of palette indices read through the
+   palette `pal` (256 x R,G,B,pad; snapshotted now), which is the UI's -- painted
    into `dstImg`/`dstView` (RGBA8, dstW x dstH). The destination MUST have been
    created with VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; it is cleared to alpha 0
    here unless `repaint`, which is the palette-moved case that recolours in
@@ -77,7 +79,7 @@ int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
 TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
                                        int prio, int oneshot, int repaint,
                                        VkImage srcImg, VkImageView srcView,
-                                       int srcW, int srcH,
+                                       int srcW, int srcH, int srcBase,
                                        const unsigned char* pal,
                                        VkImage dstImg, VkImageView dstView,
                                        int dstW, int dstH);
@@ -121,6 +123,18 @@ int  tagpu_vk_restore_job_failed(const TAGPU_VKRJOB* j);
 /* Frames painted over the job's life -- for a consumer that must do something
    after each batch. Never reset by a clear; compare it for change. */
 int  tagpu_vk_restore_job_painted(const TAGPU_VKRJOB* j);
+/* THE ATLAS WAS RE-LAID AND ITS CELLS MOVED ON THE DEVICE, source and
+   destination alike: the job's frames follow them (tagpu_rcore_job_remap --
+   `map` rewrites a frame to its new rect or answers 0 for one whose entry is
+   gone; the batch in flight goes back to the head of the queue). 1 done, 0
+   when the job could not take it and the consumer must drop the job. */
+int  tagpu_vk_restore_job_remap(TAGPU_VKRJOB* j, int (*map)(void* ctx, TAGPU_RGLSL_FRAME* f),
+                                void* ctx, int* kept, int* requeued, int* dropped);
+/* 1 when the destination is a picture a move may carry: made ready by the
+   job's first draw -- cleared, in SHADER_READ_ONLY_OPTIMAL -- and with no mip
+   chain, whose levels a move of level 0 would leave behind. 0 before the first
+   draw, when the job's own clear is still to come. */
+int  tagpu_vk_restore_job_dst_live(const TAGPU_VKRJOB* j);
 void tagpu_vk_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j);
 
 /* `srcImg` IS THE IMAGE `srcView` NAMES, and it is here for the oracle rather

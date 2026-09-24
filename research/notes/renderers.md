@@ -17,20 +17,28 @@ date; **[OPEN]** = not settled.
 
 | | **Classic** | **Classic++** |
 |---|---|---|
-| What it is | what tagpu draws today; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
+| What it is | **a preset of the Classic++ pipeline**, `assets=0 light=0`, in full colour — what tagpu draws with Classic++ off; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
 | Claim | **pixel parity** with itself: it must not move by a pixel, and the lab's parity ritual is the proof | none against the engine; it is judged by eye and measured against the lab |
-| Textures | the engine's 8bpp GAF frames as palette indices, `GL_NEAREST`, the `PALETTE.SHD` shade LUT | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c), the feature and effect sprites (G14e) and the unit textures (G14g, 2026-09-05) — the sprites and the units lazily on first draw; the unit atlas padded, aligned and mipped as this row says (§5 step 2).* |
+| Textures | the engine's GAF frames and tiles expanded through the engine's own palette into **RGBA8 base atlases** (alpha 0 at a frame's key), `NEAREST`, nothing restored. A palette index reaches a world shader only as a flat colour — a flat face, an effect's line, a marker — or the unexplored black, and is looked up in the same unscaled table | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`. *In the game: the terrain (G14c), the feature and effect sprites (G14e) and the unit textures (G14g, 2026-09-05) — the sprites and the units lazily on first draw; the unit atlas padded, aligned and mipped as this row says (§5 step 2).* |
 | Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit). *In the game since G14f (2026-09-05): the engine's height grid as an R8 texture per map, the lab's 16-px grid normals evaluated per fragment; feature sprites take the ground's lambert at their anchor as the lab's do* |
-| Units | per-face shade row from `SH_L` through the 32-row LUT | per-pixel lambert in map space from the posed face normal, same level normalisation. *In the game since G14f: the face normal rides the vertex stream and replaces the LUT row under the switch; pieces the engine draws unshaded stay at exactly 1.0 (the lab lights every face)* |
+| Units | the per-face shade row from `SH_L`, applied as an **RGB multiplier** `k[row]` fitted to the engine's `PALETTE.SHD` ([GPU status](gpu-status.html) §2.88) | the same face shade, then a per-pixel lambert in map space from the posed face normal, same level normalisation — **in the lab**. *In the game the units take the face shade `k[row]` (G20c, both presets) and the lambert of the LEVEL normal only: `tagpu_posedraw.c` publishes `uLambert = 0` (`inc/tagpu_posedraw.h`), so the posed normal is never used and slope shading on a unit does not exist in the game; the shadow term inside `taLambert` stays. Pieces the engine draws unshaded take the neutral row, `k = 1.0` (the lab lights every face)* |
 | Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: both since G14j (2026-09-07) — the silhouette for a mobile unit and, for a structure, the slant from the pack's caster mesh (every face of every visible, cached piece), projected and blended the way `tagpu_native.c`'s `emit_slant` does it. The silhouette only from 2026-09-04 to then; this row claimed the lab had both before that, when it had neither | a depth map along `shadowsun`, PCSS-lite (the blocker search: the receiver's own texel and the 16 Poisson taps since G14i, 8 ring taps before; 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2). *In the game since G14i (2026-09-06): `tagpu_shadow.c`'s map-anchored depth map, the read-back in the terrain and unit shaders, the hills from a static mesh, the replacement meshes casting, the two Classic sub-passes off under the switch; measured against the lab in §5 step 5* |
 | Suns | one, `SH_L = (−0.35, 0.80, −0.49)` in model space | **three** knobs: `sun=324.5,53.1` (terrain), `unitsun=215.5,53.1` (= `SH_L` in map space), `shadowsun=225,40` |
-| Fog of war | the engine's per-index grey LUT | one RGB rule after lighting (§2.6) |
+| Fog of war | one RGB rule after lighting (§2.6): the R+G+B mean, never snapped to a palette entry | the same |
+| Gamma | applied **once**, to the finished world image, through the engine's own per-level curve ([GPU status](gpu-status.html) §2.3f) | the same |
 | Supersampling | 2× box, `tagpu_ss.off` | the same |
 
-**The Classic baselines moved on 2026-09-04, deliberately**, when the lane gained the
-silhouette drop shadow it had always claimed. `tascene-parity.json`: default
-`md5 f42f300a69f843a669d64fc30deb08e2`, `ss=1` `md5 59482d4d2519801fbc41b7d33510b471`
-**[MEASURED]**.
+**The Classic baselines are** `tascene-parity.json`: default
+`md5 55dab14d8f704227322e3841cd44b9e1`, `ss=1` `md5 825d533a3e73c2c61826496ce4aa3172`
+**[MEASURED 2026-09-23]**. They moved with G20c, deliberately, and on the units only: against
+the previous pair — `f42f300a69f843a669d64fc30deb08e2` and `59482d4d2519801fbc41b7d33510b471`,
+reproduced the same day by the previous viewer on its own pack — 330 px differ at the default
+(max 33) and 256 at `ss=1` (max 46), every one inside the commander's box: the face shade as a
+multiplier instead of the shade table's index remap. Terrain and features are 0 px (the fixture
+has no fog, so the grey band's move is not in it).
+
+**They moved before on 2026-09-04, deliberately**, when the lane gained the
+silhouette drop shadow it had always claimed.
 
 **The re-baseline is checkable, and that is the point of it.** `unitshadow=0` reproduces the
 previous pair — `6f7ad6b122591d6db2a2b028938be5b3` and `9c9ab215099e581288b24cc47d41f9be` —
@@ -40,17 +48,17 @@ move by a pixel" can only be re-baselined this way: with a switch that puts the 
 and a diff that says what the new ones are.
 
 
-**Classic moves to full colour [DECIDED 2026-09-23, planned, not built].** The owner's call: Classic
-becomes a preset of the Classic++ pipeline with its options off, and it does not keep fidelity to
-the 8bpp colours.
+**Classic is full colour [DECIDED 2026-09-23, BUILT the same day as G20c/G20d].** The owner's
+call: Classic is a preset of the Classic++ pipeline with its options off, and it does not keep
+fidelity to the 8bpp colours.
 
-- Units are shaded by an RGB multiplier per `PALETTE.SHD` row, and so are Classic++ units, which
-  are flat today.
-- The fog grey is the RGB mean.
+- Units are shaded by an RGB multiplier per `PALETTE.SHD` row, and so are Classic++ units.
+- The fog grey is the RGB mean, in every world pass and both presets.
 - Gamma is applied once, on the finished world image.
-- The R8 atlases and index lookups leave the world passes. The UI stays indexed.
+- The R8 atlases and index lookups are gone from the world passes. The UI stays indexed, through
+  the presented palette; GDI is untouched.
 
-When it lands, the table above and the parity claim change with it. The plan is
+The record is [GPU status](gpu-status.html) §2.88; the plan was
 [BAR camera & full-colour Classic](bar-camera-port.html) Part 2.
 ---
 
@@ -340,9 +348,10 @@ palette (`main+0x143A7`), not in the one the screen is shown with**: the thresho
 colour distance, so a gamma-scaled palette stretches every distance by the same factor and moves
 tiles across it — 177 of Two Continents' 5062 wrap-padded at factor 1.5 against 400 at 1.0, when
 the test briefly read the presented palette on 2026-09-09. Tileability is a property of the ART
-([GPU status](gpu-status.html) §2.3f); the restore itself resolves through the presented one. The restored RGBA atlases are new objects beside
-Classic's indexed ones, which do not change: units 4-texel replicated pad, 4-aligned, mip
-levels 0–2.
+([GPU status](gpu-status.html) §2.3f). The restore reads the same unscaled table, through the
+base atlas it restores from, and the Gamma is applied once to the finished world. The restored
+RGBA atlases are objects beside the base atlases every preset samples: units 4-texel replicated
+pad, 4-aligned, mip levels 0–2.
 
 ### 2.5b No cache for any image map — everything is restored in the running game  [DECIDED 2026-09-05]
 
@@ -370,11 +379,12 @@ has to name them. The routes are enumerated in §4b.
 
 ### 2.6 Fog of war: one RGB rule after lighting
 The engine's grey band remaps each palette index to the palette entry nearest its own
-R+G+B mean (`*(TAProgram+0xCC)`, [shadows & cloaking](shadows-cloak.html) §1) and Classic
-does the same on the index **[SOURCE `tagpu_glsl.h` `TAGPU_GLSL_FOG_SHADE`]**. Classic++
+R+G+B mean (`*(TAProgram+0xCC)`, [shadows & cloaking](shadows-cloak.html) §1). Classic++
 multiplies colours by light and shadow, and restored texels have no index. **Decided: in
-every Classic++ pass, compute the lit and shadowed colour, then in the grey band replace it
-with its own R+G+B mean, without palette quantisation.** Shadows and relief survive as darker
+every pass, compute the lit and shadowed colour, then in the grey band replace it with its own
+R+G+B mean, without palette quantisation** — and since G20d that is every world pass of both
+presets, the markers included (`tagpu_glsl.h` `TAGPU_GLSL_FOG_GREY_RGB`); nothing of ours reads
+the engine's remap table. Shadows and relief survive as darker
 grey; unexplored stays palette-0 black; the unit and effect discards in the band stay as
 they are. One rule, one place.
 
@@ -1111,6 +1121,10 @@ a scrolling list — the gadget system stops paying and the superseded DLL-drawn
   (each is the master arm AND its key, so neither can be on while `tagpu_classicpp.on`
   is absent). *Undithered assets* and *Dynamic lighting* are real, independent rows.
 
+  *`uLit` is deleted since G20d: with Classic a preset of the one full-colour path there is
+  no second branch for it to select ([GPU status](gpu-status.html) §2.88). What follows is the
+  record of the split.*
+
   **`uLit` was not the lambert, and feeding it from `light=` was wrong** — the mistake is
   recorded because this page asserted otherwise. `uLit` is the **Classic++ colour branch
   itself** in all three shaders ("Nothing below this branch runs under Classic++, nothing
@@ -1215,8 +1229,8 @@ question above has two answers and not one.
 ### 2.10b The settings store: every value on the Visual screens is ours  [DECIDED 2026-09-23]
 
 Interviewed with the owner 2026-09-23. **Every control on the Visual screens is backed by one
-store the DLL owns, `impure.cfg`, and none by the engine's registry or the fork's `ddraw.ini`.**
-The defaults are Classic++. Three landings build it (the table at the end); this section is the
+store the DLL owns, `impure.cfg`, and none by the engine's registry.** The DLL reads no
+`ddraw.ini` at all ([removing ddraw.ini](ddraw-ini-removal.html)). The defaults are Classic++. Three landings build it (the table at the end); this section is the
 decision record, and the rows' own mechanics stay where §2.10 puts them.
 
 **Why.** Before this, the Visual tab mixed three owners. Five stock controls (Screen Size, Gamma,
@@ -1245,16 +1259,20 @@ file with them.
 **Precedence: a lever beats the store, and the store beats the compiled default.**
 
 1. A **lever file** that names the setting (`tagpu_classicpp.on/.off`, a menu key inside
-   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`, and in
-   `ddraw.ini` `windowed`/`fullscreen` for Display mode, `maxfps` for Frame cap and
-   `posX`/`posY`/`width`/`height` for the window and the Monitor row) wins. The row shows the lever's value **greyed**, so a click can
-   never silently lose to a file.
+   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`) wins. The row
+   shows the lever's value **greyed**, so a click can never silently lose to a file. Display
+   mode, Monitor and Frame cap have no lever: nothing but the store places the window.
 2. **`impure.cfg`.**
 3. **The compiled default** — the Classic++ table below.
 
-`tagpu_defaults.off` (every tacli control launch) **skips tier 2 as well as the play defaults**:
-the behaviour is exactly what it was before the store existed, so a measurement arms what it
-names and nothing a player once clicked in that instance.
+`tagpu_defaults.off` (every tacli control launch) **skips tier 2 as well as the play defaults**,
+so a measurement arms what it names and nothing a player once clicked in that instance — **except
+the window's placement**: `display`, `maxfps` and `window` are read under every launch
+(`tagpu_settings_placement`, `tagpu_settings_window`), because nothing else can place a window,
+and tacli writes all three before every launch (`write_placement`). A placed window also gets
+`center_window` never (`tagpu_cfg.c`): at cnc-ddraw's `auto`, the switch from the 640×480 shell
+to a larger game re-centres the window and throws a tile off its position. What keeps a player's
+frame in view instead is below.
 
 **The lever files stay, and the menu stops writing them.** They are the interface tacli and the
 `ta-drive` skill drive A/Bs through (`tacli arm <i> 'classicpp.cfg=assets=0'`, `ss.off`,
@@ -1297,35 +1315,35 @@ are literal and are not expected to move. A key the file lacks takes the compile
 **The first run migrates by renaming, and imports nothing.** When `impure.cfg` does not exist
 (and `tagpu_defaults.off` does not either), the files an earlier menu wrote are renamed
 `*.migrated` — `tagpu_classicpp.on/.off`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`,
-`tagpu_vk.cfg` — the four menu keys and `sun=off` (the old spelling of `light=0`) are stripped out
-of `tagpu_classicpp.cfg` with every other token left in place, and `maxfps`, `windowed`,
-`fullscreen`, `posX`, `posY`, `width` and `height` are removed from `ddraw.ini` (after copying it to
-`ddraw.ini.migrated`). Then `impure.cfg` is written from the defaults. The renames are what
-matter: under the precedence above, a file v0.2–v0.2.2's menu left behind is indistinguishable
-from a lever and would hold its row greyed forever — and **every release shipped `maxfps=60` in
-its `ddraw.ini`**, which would have held the Frame cap row on every player's install. Nothing is
-deleted, so a bad migration is undone by hand.
+`tagpu_vk.cfg` — and the four menu keys and `sun=off` (the old spelling of `light=0`) are stripped
+out of `tagpu_classicpp.cfg` with every other token left in place. Then `impure.cfg` is written
+from the defaults. The renames are what matter: under the precedence above, a file
+v0.2–v0.2.2's menu left behind is indistinguishable from a lever and would hold its row greyed
+forever. An old `ddraw.ini` needs nothing: the DLL does not read it. Nothing is deleted, so a bad
+migration is undone by hand.
 
 **It runs once per directory.** A missing `impure.cfg` is not proof of a first run — deleting it
-is how a player resets — and what they have typed into `ddraw.ini` since is theirs. So the
+is how a player resets — and the files they have written since are theirs. So the
 migration leaves `impure-migration.txt`, listing each step, and a directory that has one only
 gets the defaults written. No backup is ever overwritten either: a `*.migrated` that already
 exists means the file it would back up is not the original, and that step is refused.
 MEASURED 2026-09-23 on a hand-staged v0.2 gamedir:
-every file renamed, `penumbra=0.1` kept alone in the cfg, the ini stripped, the game up
-borderless-fullscreen from the store.
+every file renamed, `penumbra=0.1` kept alone in the cfg, the game up borderless-fullscreen from
+the store.
 
-**The shipped files stop carrying the store's keys.** `tagpu/release/ddraw.ini` no longer has
-`maxfps`, and cnc-ddraw's generated template has `width`/`height`/`posX`/`posY`/`maxfps` commented
-out and `savesettings=0` — a present key would be a lever. cnc-ddraw's own save-on-exit is forced
-off (`tagpu_cfg.c`), because it wrote those keys back and would have turned the player's window
-into a lever after one session. The windowed frame is saved to the store instead, by `cfg_save`
-on the way out: `window=x,y,w,h`, where `w,h = 0,0` is cnc-ddraw's "the size the game asks for".
-A saved frame on no attached monitor is re-centred (`dd.c`, `MonitorFromRect`).
+**The windowed frame is saved to the store**, by `cfg_save` on the way out: `window=x,y,w,h`,
+where `w,h = 0,0` is cnc-ddraw's "the size the game asks for". A frame that a mode would leave
+with a corner on no monitor — its screen unplugged, or the shell dragged to a corner before a
+larger game — is moved the least distance that puts the window, decoration included, in the work
+area of the monitor it overlaps most, top-left first if it is the larger, so its title bar stays
+reachable (`dd_SetDisplayMode`); a client straddling two monitors has every corner on one and stays.
 
 **tacli never meets the migration.** It creates an **empty** `impure.cfg` in every instance
 before a launch (and never mirrors `*.migrated` or the record from the template), so the one trigger ("no `impure.cfg`") never fires there and
-the levers a measurement armed survive. Empty means every key at its compiled default.
+the levers a measurement armed survive. Empty means every key at its compiled default; tacli then
+writes the placement (`display=window`, the tile, `maxfps`) on every launch, so a menu change to
+those three lasts one session in an instance. `tacli launch --shipped` is the exception that
+writes nothing a player lacks.
 
 **Restore defaults** resets every key except `display`, `monitor`, `window` and `gpu`, for §2.10's
 reason: it must not move the window somewhere the player cannot see the button, nor rebind the
@@ -1366,9 +1384,7 @@ What each value does:
   are the engine's own unit bake, and the A/B — both toggles, both looks, a paused game —
   changed **0 world pixels** with the bits verified to flip (`0x3E` → `0x1E` → `0x1C`). Pinned to
   on, the stock default, because the GDI lane presents that bake: its behaviour there is the
-  stock game's by construction. GDI was not A/B'd: `scenario load` rewrites `ddraw.ini` to
-  `renderer=vulkan` whenever it passes a resolution (the ta-drive skill's `measuring.md` has the way
-  round it).
+  stock game's by construction. GDI was not A/B'd.
 - **`gamma=`** is bounded to 0..20 and applied through `SetGamma 0x4BA590`. `+gamma N` is
   session-only: stock saves it to the registry (`0x4172CE`), and so does this build, but the store
   never records it and the next launch pushes the store over it. A CANCEL after it puts the
@@ -1383,8 +1399,9 @@ What each value does:
   options, and under tacli that is the one `user.reg` of every instance, so a control launch reads
   32 where stock's missing key gives 8.
 - **`resolution=`** is resolved against the target monitor (`util_target_monitor`); a stored size
-  larger than the monitor falls back to native — unless it is the ini's `inject_resolution`, which
-  the picker offers whatever the monitor — and the Monitor row re-resolves it. It is written
+  larger than the monitor falls back to native — unless it is the injected desktop mode
+  (`inject_resolution`), which the picker offers whatever the monitor — and the Monitor row
+  re-resolves it. It is written
   on the front end only — in game the size is the running game's.
 - **The battleroom mode picker is session-only**: `0x446310`/`0x4461D0` write the pair and
   broadcast `PlayerInfo+0x8B/+0x8D`, and stock saves it (`0x4462FC`), but never to the store, so
@@ -1465,15 +1482,14 @@ Windows 8+ is the compositor's rate whatever monitor the game is on, and under w
 open that fails every frame. Instead the store's cap is a **request** (`fpsl_request_cap`,
 `fps_limiter.h`), and `fpsl_init` resolves Refresh into a plain positive cap — the target
 monitor's rate from `util_target_refresh` (`utils.c`): the menu's chosen adapter by name, else
-the window's monitor, else the primary; bounded to 24..1000 Hz, else 60, because Windows answers
+`util_default_monitor`'s (the window's monitor, or for fullscreen the windowed frame's, else the
+primary); bounded to 24..1000 Hz, else 60, because Windows answers
 0 or 1 for "the hardware default". So Refresh paces on the same tick path as 60 and 120.
 **The render thread is `fpsl_init`'s one owner**: the menu's Frame cap click, the Monitor row and
 `WM_DISPLAYCHANGE` only request it, and the render thread runs it at its next `fpsl_frame_start`
 — `fpsl_init` closes the D3DKMT adapter the render thread waits on and rewrites the tick fields it
 paces by, which a click on the window thread used to do under it. Logged each time: `frame cap:
-Refresh = N fps (<adapter> reports M Hz)`. A `maxfps` typed into `ddraw.ini` still holds the row
-(tacli's instances write one), with cnc-ddraw's own meaning, a negative value included. **Not
-covered:** a window dragged to another monitor without the Monitor row keeps the old rate until
+Refresh = N fps (<adapter> reports M Hz)`. **Not covered:** a window dragged to another monitor without the Monitor row keeps the old rate until
 the next display change or relaunch; and whether a secondary monitor reports its own rate under
 wine is unknown — the reference setup's secondaries report their current mode as 0x0, which the
 bound turns into 60.

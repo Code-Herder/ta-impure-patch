@@ -4,8 +4,9 @@
    IT IS NOT A SECOND IMPLEMENTATION OF THE PASS. Everything arrives through
    `tagpu_terr_handover` (tagpu_terr.h): the instances are the array the
    gather filled, the uniforms are the numbers the gather computed, the texels
-   are tagpu_terr.c's CPU mirrors of the tile atlas and the height grid, and
-   the shader is tagpu_terr.c's GLSL through tools/spirv-gen.py.
+   are tagpu_terr.c's CPU mirrors of the tile atlas and the height grid -- the
+   atlas's palette indices expanded here into the RGBA8 base atlas the shader
+   samples -- and the shader is tagpu_terr.c's GLSL through tools/spirv-gen.py.
 
    ---- THE DESIGN, ITEM BY ITEM ----
 
@@ -28,8 +29,8 @@
       unlike §2.29's GAF atlas, which is painted incrementally and needs a
       mirror that is correct from the instant it exists.
 
-   3. TWO SHARED IMAGES, AND SO A LIFETIME QUESTION §2.28 NAMED AND §2.29 DID
-      NOT HAVE TO ANSWER. The atlas is ~5.9 MB and the height grid up to a few;
+   3. SHARED IMAGES, AND SO A LIFETIME QUESTION §2.28 NAMED AND §2.29 DID
+      NOT HAVE TO ANSWER. The base atlas is ~24 MB and the height grid up to a few;
       per-slot they would be eight copies of each, in a 32-bit address space
       whose largest free block is the number this phase spends its budget
       measuring. So both are ONE image, uploaded when the mirror's serial says
@@ -96,14 +97,14 @@
    A frame whose hand-over reports the cast-shadow map on is refused when THIS
    frame's map was not drawn. tagpu_vk_shadow.c draws the map into an
    offscreen depth image of its own and this pass SAMPLES it, through bindings
-   46 and 47, bound to that slot's view during this slot's own `prepare`; the
+   44 and 45, bound to that slot's view during this slot's own `prepare`; the
    shadow pass has no producer today (tagpu_vk_shadow.h) and tagpu_terr.c
    publishes `shadowOn` as 0, so no frame reaches this refusal. The 1x1 dummy
    stays, because
    the descriptors must still be valid on a frame with no map.
 
    The Classic++ restored tile atlas is NOT a refusal: a frame this lane has
-   not restored draws INDEXED (see `prepare`).
+   not restored draws the base atlas (see `prepare`).
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
    A PASS READS NO ENGINE STATE: every value comes from the hand-over, so this
@@ -119,6 +120,8 @@
 #include "tagpu_terr.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_restore.h"
+#include "tagpu_vk_stage.h"
+#include "tagpu_pal.h"                  /* tagpu_pal_expand */
 #include "spirv/tagpu_terr.spv.h"
 
 #define UBLK_VS  64                        /* std140, the generated header's   */
@@ -225,15 +228,24 @@ typedef struct {
    "already right". */
 #define IMG_SAMPLED   (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
 #define IMG_RESTORED  (IMG_SAMPLED | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-static SHARED s_atlas;                     /* the tile atlas, R8              */
 static SHARED s_height;                    /* the height grid, R8             */
+/* THE BASE ATLAS, RGBA8 at the tile atlas's size: every texel its index's
+   colour through the hand-over's palette -- the engine's table --
+   (tagpu_pal_expand, nothing keyed: a tile has no hole). It is what the
+   terrain is drawn from, the restored atlas over it where that has been
+   painted, and it is the restorer's source. Binding 46. `serial` is the
+   tile atlas's serial it was expanded from and `s_basePal` the palette's, and
+   a move of either re-sends the whole image -- the tile atlas is rebuilt whole
+   or not at all, so there is no smaller rect to send. */
+static SHARED   s_base;
+static unsigned s_basePal;
 /* CLASSIC++'s RESTORED TILE ATLAS, RGBA8. A
    third shared image with the same retire discipline as the other two; binding
-   42 names it instead of being the placeholder `shared_bind` described. It is
+   41 names it instead of the placeholder `shared_bind` describes. It is
    only resized when the hand-over carries a restore list, so a session with
    Classic++ off never creates it.
    `SHARED::serial` IS UNUSED FOR THIS ONE. It is the mirror serial an upload
-   latches, and `s_atlas`/`s_height` latch theirs; this image has no upload,
+   latches, and `s_base`/`s_height` latch theirs; this image has no upload,
    and what says it holds a picture is `have`, written by the restore job
    alone. */
 static SHARED s_rgbAtlas;
@@ -243,16 +255,19 @@ static SHARED s_rgbAtlas;
    through tagpu_vk_restore.c.
    `s_rjSerial` is the hand-over serial the live job was built from: a change
    means the atlas stopped being the one the job's rectangles describe, so the
-   job goes and a new one is built. `s_rjTried` stops a device that refused
-   from being asked once a frame for the rest of the session. */
+   job goes and a new one is built. `s_rjPal` is the engine palette serial it
+   was built with, and a move of it is a new job too: the job keeps the
+   palette it was made with, and the base atlas it reads is re-sent in the new
+   colours. `s_rjTried` stops a device that refused from being asked once a
+   frame for the rest of the session. */
 static TAGPU_VKRJOB* s_rjob;
-static unsigned      s_rjSerial;
+static unsigned      s_rjSerial, s_rjPal;
 static int           s_rjTried;
 static int           s_rjPainted;          /* job_painted at the last report  */
 /* THE SOURCE VIEW THE LIVE JOB NAMES, and it is a separate key from the serial
-   because the two move for different reasons. A job captures `s_atlas.view` at
-   creation and never re-reads it, so ANY resize of the indexed atlas leaves its
-   descriptors naming `s_atlas.oldView` -- which `shared_slot_done` destroys
+   because the two move for different reasons. A job captures `s_base.view` at
+   creation and never re-reads it, so ANY resize of the base atlas leaves its
+   descriptors naming `s_base.oldView` -- which `shared_slot_done` destroys
    `slots` frames later while the restorer is still drawing. `restore_want`
    normally frees the job in the same frame, but it sits BELOW the resize and
    every `return 0` and `goto refuse` between the two skips it. So the drop is
@@ -278,14 +293,11 @@ typedef struct {
     unsigned char*  imap;
     VkDeviceSize    icap;
 
-    VkBuffer        bigStage;              /* the map-scoped uploads, when due  */
-    VkDeviceMemory  bigMem;
-    unsigned char*  bigMap;
-    VkDeviceSize    bigCap;
+    TAGPU_VKSTAGE   stage;                 /* the map-scoped uploads, when due  */
 
-    VkImage         pal, lut, fog;         /* the three small per-slot images  */
-    VkDeviceMemory  palMem, lutMem, fogMem;
-    VkImageView     palView, lutView, fogView;
+    VkImage         pal, fog;              /* the two small per-slot images    */
+    VkDeviceMemory  palMem, fogMem;
+    VkImageView     palView, fogView;
     VkBuffer        smallStage;
     VkDeviceMemory  smallMem;
     unsigned char*  smallMap;
@@ -298,7 +310,7 @@ typedef struct {
        about two functions a hundred lines apart. `shared_bind` writes them,
        `record` refuses to draw unless they are still the live views, and
        `slot_free` clears them. See the retire's second rule. */
-    VkImageView     boundAtlas, boundHeight, boundShadow;
+    VkImageView     boundBase, boundHeight, boundShadow;
 } SLOT;
 static SLOT s_slot[TAGPU_VK_SLOTS];
 
@@ -322,20 +334,19 @@ static SLOT s_slot[TAGPU_VK_SLOTS];
    published would drop the terrain from the whole viewport. */
 #define CELL_MAXBYTES (24u * 1024u * 1024u)
 #define CELL_MAX      ((int)(CELL_MAXBYTES / (TAGPU_TERR_ICOMP * sizeof(short))))
-/* ONE STAGING BUFFER CARRIES ALL THREE SMALL UPLOADS: the palette (256 x 1
-   RGBA), then the fog shade LUT (256 x 1 R8), then the fog grid (cols x rows
-   RG8, a few KB and a different size whenever the view walks far enough for the
-   grid to be re-laid). One allocation, three vkCmdCopyBufferToImage regions at
-   three offsets -- and it is rebuilt with the fog image, by the same call, so
-   the buffer and the image it feeds can never disagree about the size. */
+/* ONE STAGING BUFFER CARRIES BOTH SMALL UPLOADS: the palette (256 x 1 RGBA),
+   then the fog grid (cols x rows RG8, a few KB and a different size whenever
+   the view walks far enough for the grid to be re-laid). One allocation, two
+   vkCmdCopyBufferToImage regions at two offsets -- and it is rebuilt with the
+   fog image, by the same call, so the buffer and the image it feeds can never
+   disagree about the size. */
 #define SMALL_PALOFF 0                     /* 256 x RGBA8                      */
-#define SMALL_LUTOFF (256 * 4)             /* 256 x R8                         */
-#define SMALL_FIXED  (256 * 4 + 256)       /* what the two fixed uploads take  */
+#define SMALL_FIXED  (256 * 4)             /* what the fixed upload takes      */
 #define SMALL_FOGOFF SMALL_FIXED           /* the grid, cols x rows RG8        */
-/* Every one of those three is a multiple of 4 and of its own texel block size,
-   which is what vkCmdCopyBufferToImage requires of a bufferOffset. The two big
-   uploads share one buffer on the same rule -- the atlas at 0 and the height
-   grid at the atlas's size rounded up to 4. */
+/* Both are a multiple of 4 and of their own texel block size, which is what
+   vkCmdCopyBufferToImage requires of a bufferOffset. The two big uploads share
+   one buffer on the same rule -- the height grid at 0 and the base atlas at the
+   grid's size rounded up to 4. */
 #define ALIGN4(n) (((n) + 3u) & ~(VkDeviceSize)3u)
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
@@ -506,14 +517,6 @@ static void copy_rect(VkCommandBuffer cb, VkBuffer src, VkDeviceSize srcOff,
 
 /* ---- the slot ----------------------------------------------------------- */
 
-static void slot_drop_bigstage(const TAGPU_VKPASS* d, SLOT* s)
-{
-    if (s->bigMap)   { vkUnmapMemory(d->dev, s->bigMem); s->bigMap = NULL; }
-    if (s->bigStage) { vkDestroyBuffer(d->dev, s->bigStage, NULL); s->bigStage = VK_NULL_HANDLE; }
-    if (s->bigMem)   { vkFreeMemory(d->dev, s->bigMem, NULL); s->bigMem = VK_NULL_HANDLE; }
-    s->bigCap = 0;
-}
-
 static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
 {
     VkDevice dev = d->dev;
@@ -521,47 +524,41 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     if (s->ibuf) { vkDestroyBuffer(dev, s->ibuf, NULL); s->ibuf = VK_NULL_HANDLE; }
     if (s->imem) { vkFreeMemory(dev, s->imem, NULL); s->imem = VK_NULL_HANDLE; }
     s->icap = 0;
+    tagpu_vk_stage_drop(d, &s->stage);
     /* THE UNMAP IS GUARDED BY THE MAP POINTER, NOT BY THE ALLOCATION: a
        vkMapMemory that failed leaves the allocation standing and unmapping it
        would be an error of its own. */
-    slot_drop_bigstage(d, s);
     if (s->smallMap) { vkUnmapMemory(dev, s->smallMem); s->smallMap = NULL; }
     if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
     if (s->smallMem) { vkFreeMemory(dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
     kill_image(d, &s->pal, &s->palMem, &s->palView);
-    kill_image(d, &s->lut, &s->lutMem, &s->lutView);
     kill_image(d, &s->fog, &s->fogMem, &s->fogView);
     s->fogW = s->fogH = 0;
     /* the set this slot holds names nothing live any more, and `record` tests
        exactly that before it draws */
-    s->boundAtlas = s->boundHeight = s->boundShadow = VK_NULL_HANDLE;
+    s->boundBase = s->boundHeight = s->boundShadow = VK_NULL_HANDLE;
     s->built = 0;
 }
 
-/* The fixed-size half of a slot: the palette and LUT images, and the two
-   descriptor writes that never change again. The shared images' bindings are
-   NOT here -- they are rewritten on every prepare (see `shared_bind`). */
+/* The fixed-size half of a slot: the palette image, and the descriptor write
+   that never changes again. The shared images' bindings are NOT here -- they
+   are rewritten on every prepare (see `shared_bind`). */
 static int slot_build(const TAGPU_VKPASS* d, SLOT* s)
 {
-    VkDescriptorImageInfo ii[2];
-    VkWriteDescriptorSet wr[2];
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet wr;
 
     if (s->built) return 1;
     if (!mk_image(d, 256, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, IMG_SAMPLED,
                   &s->pal, &s->palMem, &s->palView)) return 0;
-    if (!mk_image(d, 256, 1, VK_FORMAT_R8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, IMG_SAMPLED,
-                  &s->lut, &s->lutMem, &s->lutView)) return 0;
 
-    memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
-    ii[0].sampler = s_samp; ii[0].imageView = s->palView;
-    ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    ii[1].sampler = s_samp; ii[1].imageView = s->lutView;
-    ii[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wr[0].dstSet = s->dset; wr[0].dstBinding = 41; wr[0].descriptorCount = 1;
-    wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr[0].pImageInfo = &ii[0];
-    wr[1] = wr[0]; wr[1].dstBinding = 45; wr[1].pImageInfo = &ii[1];
-    vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
+    memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
+    ii.sampler = s_samp; ii.imageView = s->palView;
+    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet = s->dset; wr.dstBinding = 40; wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr.pImageInfo = &ii;
+    vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
     s->built = 1;
     return 1;
 }
@@ -591,7 +588,7 @@ static int slot_fog(const TAGPU_VKPASS* d, SLOT* s, int w, int h)
     ii.sampler = s_samp; ii.imageView = s->fogView;
     ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wr.dstSet = s->dset; wr.dstBinding = 44; wr.descriptorCount = 1;
+    wr.dstSet = s->dset; wr.dstBinding = 43; wr.descriptorCount = 1;
     wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wr.pImageInfo = &ii;
     vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
     s->fogW = w; s->fogH = h;
@@ -667,35 +664,6 @@ static void shared_slot_done(const TAGPU_VKPASS* d, SHARED* sh, uint32_t slot)
     }
 }
 
-/* Upload when the mirror's serial says the bytes moved. `bytes` is what the
-   copy will read out of the staging buffer at `off`. */
-static void shared_upload(VkCommandBuffer cb, SHARED* sh, VkBuffer stage,
-                          VkDeviceSize off)
-{
-    /* THE WRITE-AFTER-READ BARRIER (§2.29). The image is shared by every slot,
-       so the frames still in flight may be sampling it; a barrier's first
-       synchronisation scope includes everything submitted to this queue before
-       it, which is all of them. A WAR hazard needs only an execution dependency
-       -- the access masks here are for the LAYOUT TRANSITION, which is a write.
-       On the very first upload there is nothing to order against and the image
-       has no contents to preserve, so it goes in as UNDEFINED. */
-    img_barrier(cb, sh->img, VK_IMAGE_ASPECT_COLOR_BIT,
-                sh->have ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                         : VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                sh->have ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                         : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                sh->have ? VK_ACCESS_SHADER_READ_BIT : 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    copy_rect(cb, stage, off, sh->img, sh->w, sh->h);
-    img_barrier(cb, sh->img, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    sh->have = 1;
-}
-
 /* ---- build -------------------------------------------------------------- */
 
 static int build_samplers(const TAGPU_VKPASS* d)
@@ -703,7 +671,9 @@ static int build_samplers(const TAGPU_VKPASS* d)
     VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
     VkFormatProperties fp;
     int i;
-    /* the four formats this pass samples, asked for rather than assumed */
+    /* the four formats this pass samples, asked for rather than assumed: the
+       height grid's, the fog grid's, the palette's and the base atlas's, and
+       the shadow dummy's */
     static const VkFormat need[4] = { VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM,
                                       VK_FORMAT_R8G8B8A8_UNORM, SHADOW_DUMMY_FMT };
     for (i = 0; i < 4; i++) {
@@ -714,10 +684,10 @@ static int build_samplers(const TAGPU_VKPASS* d)
             return 0;
         }
     }
-    /* NEAREST AND CLAMP_TO_EDGE. The atlas is the only one the shader reaches through
-       the sampler at all -- the palette, the fog grid, the fog LUT and the
-       height grid are all texelFetch -- and its texels are palette INDICES,
-       which interpolate into numbers that mean nothing in the table. */
+    /* NEAREST AND CLAMP_TO_EDGE. The base atlas is the only one the shader
+       reaches through this sampler at all -- the palette, the fog grid and the
+       height grid are all texelFetch -- and NEAREST is the engine's own tile
+       blit: every screen pixel one tile texel, never a blend of two. */
     sci.magFilter = VK_FILTER_NEAREST;
     sci.minFilter = VK_FILTER_NEAREST;
     sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -775,7 +745,7 @@ static int build_samplers(const TAGPU_VKPASS* d)
 
 static int build_pipeline(const TAGPU_VKPASS* d)
 {
-    VkDescriptorSetLayoutBinding b[10];
+    VkDescriptorSetLayoutBinding b[11];
     VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st[2];
@@ -811,21 +781,21 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     /* THE BINDINGS ARE THE GENERATOR'S, NOT THIS FILE'S: tools/spirv-gen.py
        allocates them BY STAGE, so set 0 binding 0 is the vertex stage's uniform
        block, 32 the fragment stage's, and 40.. its samplers in declaration
-       order -- uAtlas, uPal, uAtlasRGB, uHeight, uFogGrid, uFogLUT, uShadowCmp,
-       uShadowRaw. The std140 offsets are printed in the generated header and
+       order -- uPal, uAtlasRGB, uHeight, uFogGrid, uShadowCmp, uShadowRaw,
+       uBase. The std140 offsets are printed in the generated header and
        are the contract for what goes into those buffers. */
     memset(b, 0, sizeof b);
     b[0].binding = 0;  b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     b[1].binding = 32; b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (i = 2; i < 10; i++) {
+    for (i = 2; i < 9; i++) {
         b[i].binding = (uint32_t)(40 + (i - 2));
         b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
-    dli.bindingCount = 10; dli.pBindings = b;
+    dli.bindingCount = 9; dli.pBindings = b;
     if (vkCreateDescriptorSetLayout(d->dev, &dli, NULL, &s_dsl) != VK_SUCCESS) return 0;
 
     pli.setLayoutCount = 1; pli.pSetLayouts = &s_dsl;
@@ -924,7 +894,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 
     memset(ps, 0, sizeof ps);
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;         ps[0].descriptorCount = d->slots * 2;
-    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 8;
+    ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; ps[1].descriptorCount = d->slots * 7;
     dpi.maxSets = d->slots;
     dpi.poolSizeCount = 2; dpi.pPoolSizes = ps;
     if (vkCreateDescriptorPool(d->dev, &dpi, NULL, &s_dpool) != VK_SUCCESS) return 0;
@@ -937,9 +907,9 @@ static int build_descriptors(const TAGPU_VKPASS* d)
 
     /* The two uniform blocks are written now and never again -- they name a
        fixed range of a buffer whose CONTENTS change per frame. The samplers are
-       written when there is an image to name: 41 and 45 by `slot_build`, 44 by
-       `slot_fog`, 46 and 47 by `shadow_build`, and 40/42/43 on every prepare by
-       `shared_bind`. */
+       written when there is an image to name: 40 by `slot_build`, 43 by
+       `slot_fog`, 44 and 45 by `shadow_build`, and 41/42/46 (and 44/45 again)
+       on every prepare by `shared_bind`. */
     for (i = 0; i < d->slots; i++) {
         VkDescriptorBufferInfo bi[2];
         VkWriteDescriptorSet w[2];
@@ -956,7 +926,7 @@ static int build_descriptors(const TAGPU_VKPASS* d)
     return 1;
 }
 
-/* The 1x1 depth image bindings 46 and 47 name, and the two writes that name it.
+/* The 1x1 depth image bindings 44 and 45 name, and the two writes that name it.
    Done once, at build, before any set has been bound. */
 static int shadow_build(const TAGPU_VKPASS* d)
 {
@@ -972,10 +942,10 @@ static int shadow_build(const TAGPU_VKPASS* d)
         ii[1].sampler = s_samp;    ii[1].imageView = s_shView;
         ii[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        wr[0].dstSet = s_slot[i].dset; wr[0].dstBinding = 46; wr[0].descriptorCount = 1;
+        wr[0].dstSet = s_slot[i].dset; wr[0].dstBinding = 44; wr[0].descriptorCount = 1;
         wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         wr[0].pImageInfo = &ii[0];
-        wr[1] = wr[0]; wr[1].dstBinding = 47; wr[1].pImageInfo = &ii[1];
+        wr[1] = wr[0]; wr[1].dstBinding = 45; wr[1].pImageInfo = &ii[1];
         vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
     }
     return 1;
@@ -1009,7 +979,8 @@ static void shadow_ready(VkCommandBuffer cb)
     s_shReady = 1;
 }
 
-/* Point this slot's 40, 42 and 43 at the shared images as they stand now.
+/* Point this slot's 41, 42 and 46 -- and the shadow pair, 44 and 45 -- at the
+   shared images as they stand now.
    ON EVERY PREPARE, and that is the point: it is the one instant the seam's
    fence proves this set is not in use, so a shared image that had to be
    replaced is picked up here rather than by a write that reaches every slot. */
@@ -1018,13 +989,14 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
     VkDescriptorImageInfo ii[5];
     VkWriteDescriptorSet wr[5];
     memset(ii, 0, sizeof ii); memset(wr, 0, sizeof wr);
-    ii[0].sampler = s_samp; ii[0].imageView = s_atlas.view;
+    /* 46 is uBase, NEAREST: the tile texel as the engine blits it */
+    ii[0].sampler = s_samp; ii[0].imageView = s_base.view;
     ii[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    /* BINDING 42 IS uAtlasRGB, AND IT NAMES THE RESTORED ATLAS -- the
+    /* BINDING 41 IS uAtlasRGB, AND IT NAMES THE RESTORED ATLAS -- the
        ordinary case with Classic++ on. The fragment stage reads it on the
-       `uLit == 1 && uRestored == 1` branch, which this pass draws.
-       IT FALLS BACK TO THE INDEXED VIEW when there is no restored image, and
-       that is not a picture: a descriptor has to be VALID for the set to be
+       `uRestored == 1` branch, which this pass draws.
+       IT FALLS BACK TO THE BASE ATLAS'S VIEW when there is no restored image,
+       and that is not a picture: a descriptor has to be VALID for the set to be
        bound, and naming the image already here costs no memory and no second
        object. Nothing samples it through this binding while the fallback is in
        place, because `uRestored` is computed from `s_rgbAtlas.view` and
@@ -1048,16 +1020,18 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
        the flag and this descriptor agree by construction rather than by a
        refusal placed somewhere else. */
     if (s_rgbAtlas.view && s_rgbAtlas.have) ii[1].imageView = s_rgbAtlas.view;
+    /* 42 is uHeight; with no grid it names the base atlas's view, which the
+       shader never samples -- its `uHDim.x > 0.5` test is what gates it */
     ii[2].sampler = s_samp;
-    ii[2].imageView = s_height.view ? s_height.view : s_atlas.view;
+    ii[2].imageView = s_height.view ? s_height.view : s_base.view;
     ii[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     wr[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wr[0].dstSet = s_slot[slot].dset; wr[0].dstBinding = 40; wr[0].descriptorCount = 1;
+    wr[0].dstSet = s_slot[slot].dset; wr[0].dstBinding = 46; wr[0].descriptorCount = 1;
     wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     wr[0].pImageInfo = &ii[0];
-    wr[1] = wr[0]; wr[1].dstBinding = 42; wr[1].pImageInfo = &ii[1];
-    wr[2] = wr[0]; wr[2].dstBinding = 43; wr[2].pImageInfo = &ii[2];
-    /* BINDINGS 46 AND 47 ARE ANOTHER PASS'S IMAGE, and this is
+    wr[1] = wr[0]; wr[1].dstBinding = 41; wr[1].pImageInfo = &ii[1];
+    wr[2] = wr[0]; wr[2].dstBinding = 42; wr[2].pImageInfo = &ii[2];
+    /* BINDINGS 44 AND 45 ARE ANOTHER PASS'S IMAGE, and this is
        the one instant it may be written: the seam's fence has proved this set
        is not in flight, and tagpu_vk_shadow.c's `prepare` for this same slot
        has already run this frame -- the seam calls it first, and says why. The
@@ -1071,12 +1045,12 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
         ii[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         ii[4].sampler = s_samp;    ii[4].imageView = sv;
         ii[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        wr[3] = wr[0]; wr[3].dstBinding = 46; wr[3].pImageInfo = &ii[3];
-        wr[4] = wr[0]; wr[4].dstBinding = 47; wr[4].pImageInfo = &ii[4];
+        wr[3] = wr[0]; wr[3].dstBinding = 44; wr[3].pImageInfo = &ii[3];
+        wr[4] = wr[0]; wr[4].dstBinding = 45; wr[4].pImageInfo = &ii[4];
         s_slot[slot].boundShadow = sv;
     }
     vkUpdateDescriptorSets(d->dev, 5, wr, 0, NULL);
-    s_slot[slot].boundAtlas  = ii[0].imageView;
+    s_slot[slot].boundBase   = ii[0].imageView;
     s_slot[slot].boundHeight = ii[2].imageView;
 }
 
@@ -1173,23 +1147,32 @@ static void terr_scissor(uint32_t w, uint32_t h)
     s_scX = x0; s_scY = y0; s_scW = ww; s_scH = hh;
 }
 
+/* A REFUSED PASS GIVES ITS RESTORE JOB BACK AT ONCE -- tagpu_vk_feat.c's
+   `refuse_job`, which has the argument: a banded upload the device failed
+   partway leaves `s_base` half written in a transfer layout, and the job's
+   FILL would sample it. */
+static void refuse_job(const TAGPU_VKPASS* d)
+{
+    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
+    s_rjSerial = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
+    s_rgbAtlas.have = 0;
+}
+
 /* ---- THE RESTORE REQUEST, TAKEN --------------------------------------------
-   Called once per `prepare`, AFTER the indexed atlas's upload and before the
+   Called once per `prepare`, AFTER the base atlas's upload and before the
    refusal that asks whether the restored atlas holds a picture. The order is
-   not cosmetic: the restorer samples `s_atlas`, the upload that fills it is
+   not cosmetic: the restorer samples `s_base`, the upload that fills it is
    recorded into THIS frame's command buffer a few lines above, and the slice
    that reads it is recorded into the same buffer a few lines later by the
    seam -- so the source is a fact by the time the first FILL runs, and no
    frame is spent waiting for it.
 
    A CHANGE OF SERIAL IS A NEW JOB, not a re-feed. The serial moves when the
-   atlas stopped being the one the frame list describes -- a new map, a dropped
-   list, a repaint -- and in every one of those cases the rectangles, the
-   palette or the destination is different. Rebuilding is also how the repaint
-   reaches the restorer at all. */
+   atlas stopped being the one the frame list describes -- a new map or a
+   dropped list -- and in both cases the rectangles or the destination are
+   different. */
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
 {
-    int repaint;
     if (!t->restoreFrames || t->restoreN < 1) {
         /* The request went away: a drop (the atlas is not this map's) or the
            lever was never on. Either way the job describes nothing now. */
@@ -1201,10 +1184,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         }
         return;
     }
-    if (s_rjob && s_rjSerial == t->restoreSerial) {
+    if (s_rjob && s_rjSerial == t->restoreSerial && s_rjPal == t->palSerial) {
         /* Live. `painted` is the only thing that changes the pass's own view of
            the atlas: one painted frame is what makes it a picture, and it is
-           what `uRestored` and binding 42 are both computed from, below. */
+           what `uRestored` and binding 41 are both computed from, below. */
         int painted = tagpu_vk_restore_job_painted(s_rjob);
         if (painted > 0) s_rgbAtlas.have = 1;
         if (painted != s_rjPainted) {
@@ -1215,9 +1198,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         }
         if (tagpu_vk_restore_job_failed(s_rjob)) {
             /* WHAT IT PAINTED STANDS UNTIL THE REQUEST CHANGES, and not past
-               that: the serial moves on a map change or a palette repaint, and
-               the give-up path below then drops `have`, because what the image
-               holds was painted for the OLD request. */
+               that: `s_rjSerial` keeps this request's serial, and the line
+               below that drops `have` fires only when the serial moves, on a
+               map change -- what the image holds was painted for the OLD
+               request. */
             plog(d, "terr: the restore of the tile atlas failed on this lane; "
                     "what it painted stands until the request changes, and "
                     "nothing more is queued");
@@ -1228,46 +1212,37 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         return;
     }
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
-    /* PAST THIS POINT THE SERIAL HAS MOVED AND WE ARE NOT PAINTING THE NEW ONE
-       YET, so every path that GIVES UP below must also drop `have`: what the
-       image holds was painted for the PREVIOUS request, through the previous
-       palette or over the previous map's rectangles, and `have` is what tells
-       the shader to sample it. Leaving it set is a silently WRONG picture
-       rather than a missing one -- the old map's colours over this one, or the
-       old palette's brightness beside engine pixels that have moved -- which is
-       the failure class this stack is worst at. Dropping it falls back to the
-       indexed atlas, which is the documented Classic++ fallback.
-       It is dropped at the GIVE-UP sites and not here, because `repaint` below
-       reads it: clearing it up front would turn every palette change into a
-       full blank-and-repaint, which is the one thing the repaint path exists to
-       avoid. */
-    if (s_rjTried) { s_rgbAtlas.have = 0; return; }
+    /* PAST THIS POINT NO JOB IS PAINTING THIS REQUEST. When the serial has
+       moved, `have` drops here and every path below starts from it: what the
+       image holds was painted for the PREVIOUS request, over the previous map's
+       rectangles, and `have` is what tells the shader to sample it. Leaving it
+       set is a silently WRONG picture rather than a missing one -- the old
+       map's colours over this one -- which is the failure class this stack is
+       worst at. Dropping it falls back to the base atlas, which is the
+       documented Classic++ fallback. The palette serial moving is the same
+       fact about colour: the picture was painted in the old table's. Both
+       unmoved is a job that failed on this request, and its picture stands
+       (above). */
+    if (s_rjSerial != t->restoreSerial || s_rjPal != t->palSerial) s_rgbAtlas.have = 0;
+    if (s_rjTried) return;
     /* THE DESTINATION AND THE SOURCE BOTH HAVE TO BE THERE. `img` absent means
        the device refused the image (the resize above reads that way); `have`
-       absent on the indexed atlas means its upload has not been recorded yet,
-       and a FILL over an atlas with no contents would paint the palette's
-       entry 0 over the world. Neither is an error -- the next frame asks again. */
-    if (!s_rgbAtlas.img || !s_rgbAtlas.view || !s_atlas.view || !s_atlas.have) return;
+       absent on the base atlas means its upload has not been recorded yet,
+       and a FILL over an image with no contents would paint undefined texels
+       over the world. Neither is an error -- the next frame asks again. */
+    if (!s_rgbAtlas.img || !s_rgbAtlas.view || !s_base.view || !s_base.have) return;
     /* THE CONSUMER IS WHAT ASKS THE DEVICE, and that is deliberate: `up`
        loads the model off disk, so a session that never publishes a request
        never pays for it. It latches its verdict, so this is one integer
        compare on every frame after the first. */
-    if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; s_rgbAtlas.have = 0; return; }
-    /* A REPAINT ONLY OVER SOMETHING THIS PASS ACTUALLY PAINTED. The producer's
-       flag says the destination it describes already holds a restore; ours
-       may have been created moments ago by the resize
-       above, in which case there is nothing to recolour and a repaint would
-       leave every tile it has not reached yet undefined. `have` is the local
-       fact, so it is the one that decides. */
-    repaint = t->restoreRepaint && s_rgbAtlas.have;
-    s_rjob = tagpu_vk_restore_job_new(d, "terr", 0, 1, repaint,
-                                      s_atlas.img, s_atlas.view, s_atlas.w, s_atlas.h,
+    if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
+    s_rjob = tagpu_vk_restore_job_new(d, "terr", 0, 1, 0,
+                                      s_base.img, s_base.view, s_base.w, s_base.h, 1,
                                       t->pal,
                                       s_rgbAtlas.img, s_rgbAtlas.view,
                                       s_rgbAtlas.w, s_rgbAtlas.h);
     if (!s_rjob) {
         s_rjTried = 1;                     /* the reason is already in the log */
-        s_rgbAtlas.have = 0;
         return;
     }
     if (!tagpu_vk_restore_job_add(s_rjob, t->restoreFrames, t->restoreN)) {
@@ -1276,16 +1251,15 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         tagpu_vk_restore_job_free(d, s_rjob);
         s_rjob = NULL;
         s_rjTried = 1;
-        s_rgbAtlas.have = 0;
         return;
     }
     s_rjSerial = t->restoreSerial;
-    s_rjSrcView = s_atlas.view;
+    s_rjPal = t->palSerial;
+    s_rjSrcView = s_base.view;
     s_rjPainted = 0;
-    if (!repaint) s_rgbAtlas.have = 0;     /* it is being blanked and repainted */
     plog(d, "terr: restoring the tile atlas HERE - %d frames over %dx%d, "
-            "serial %u%s", t->restoreN, s_rgbAtlas.w, s_rgbAtlas.h,
-         t->restoreSerial, repaint ? ", repaint" : "");
+            "serial %u", t->restoreN, s_rgbAtlas.w, s_rgbAtlas.h,
+         t->restoreSerial);
 }
 
 int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
@@ -1293,14 +1267,15 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     TAGPU_TERRHAND t;
     SLOT* s;
     int restored;                       /* what the SHADER is told, see below */
-    VkDeviceSize ibytes, atlasBytes = 0, heightBytes = 0, heightOff = 0, bigBytes = 0;
+    VkDeviceSize ibytes, heightBytes, baseBytes;
+    int doBase, rc;
     /* A UNION, NOT A CAST. Both blocks mix `int` and `float` members and
        writing an int through a float array is the aliasing rule broken at -O2,
        which is not a place to find out that the fog branch took a garbage
        uFog. */
     union { float f[UBLK_FS / 4]; int i[UBLK_FS / 4]; } ub;
     int fogW = 1, fogH = 1, hW = 1, hH = 1;
-    int doAtlas, doHeight;
+    int doHeight;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -1312,9 +1287,9 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        applied because a retire is outstanding returns before binding, so the
        bit that would end the retire would never clear. See `shared_slot_done`. */
     if (s_state == ST_READY) {
-        shared_slot_done(d, &s_atlas, slot);
         shared_slot_done(d, &s_height, slot);
         shared_slot_done(d, &s_rgbAtlas, slot);
+        shared_slot_done(d, &s_base, slot);
     }
 
     /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW, AND NOTHING PER-SLOT
@@ -1336,8 +1311,8 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 
     /* THE CLASSIC++ RESTORED TILE ATLAS IS NOT A REASON TO REFUSE A FRAME.
        "Has this lane got the restored atlas YET" decides only whether
-       `uRestored` is set and which view binding 42 names -- so a frame this
-       lane has not restored draws INDEXED rather than not drawing. */
+       `uRestored` is set and which view binding 41 names -- so a frame this
+       lane has not restored draws the base atlas rather than not drawing. */
     /* THE CAST-SHADOW MAP IS DRAWN BY tagpu_vk_shadow.c, so the question is
        "is there a map for THIS frame". It is asked with our own frame number, which is what stops a
        map left standing from an earlier frame being sampled as though it were
@@ -1389,7 +1364,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         return 0;
     }
     s_saidNoMirror = 0;
-    if (!t.pal || !t.fogLut) return 0;
+    if (!t.pal) return 0;
     if (t.ncell < 1 || !t.cells) return 0;
     if (t.ncell > CELL_MAX) {
         plog(d, "terr: %d cells is outside what this pass carries - nothing drawn", t.ncell);
@@ -1428,16 +1403,16 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* THE SHARED IMAGES FIRST, because a resize that cannot be applied yet
        (one retire at a time) means this frame draws nothing at all rather than
        sampling the previous map's texels. */
-    if (s_rjob && s_rjSrcView && s_atlas.view && s_rjSrcView != s_atlas.view) {
+    if (s_rjob && s_rjSrcView && s_base.view && s_rjSrcView != s_base.view) {
         /* see `s_rjSrcView`: the atlas the job reads from has been retired */
-        plog(d, "terr: the indexed atlas moved under a live restore - dropping it "
+        plog(d, "terr: the base atlas moved under a live restore - dropping it "
                 "and starting over on the new one");
         tagpu_vk_restore_job_free(d, s_rjob);
         s_rjob = NULL; s_rjSerial = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
         s_rgbAtlas.have = 0;
     }
-    if (!shared_resize(d, &s_atlas, t.atlasW, t.atlasH, VK_FORMAT_R8_UNORM, IMG_SAMPLED)) {
-        if (!s_atlas.img) goto refuse;
+    if (!shared_resize(d, &s_base, t.atlasW, t.atlasH, VK_FORMAT_R8G8B8A8_UNORM, IMG_SAMPLED)) {
+        if (!s_base.img) goto refuse;
         return 0;                          /* a retire is still clearing       */
     }
     /* WITH NO HEIGHT GRID THE IMAGE IS ONE TEXEL AND uHDim IS 0: the shader's `uHDim.x > 0.5` test is what keeps it
@@ -1453,11 +1428,11 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 
        THE RETURN IS READ LIKE THE OTHER TWO IMAGES': an image still there means
        a retire is clearing and the frame waits; no image means the device
-       refused, the view stays NULL, binding 42 keeps the indexed view,
+       refused, the view stays NULL, binding 41 keeps the base atlas's view,
        `uRestored` is 0 and `restore_want` below finds no destination. A device
        refusal is NOT fatal to the pass, which is why it does not `goto refuse`:
-       the terrain draws INDEXED, which is what tagpu_vk_restore.h calls the
-       shipped fallback.
+       the terrain draws the base atlas, which is what tagpu_vk_restore.h calls
+       the shipped fallback.
 
        THE ORDERING IS FORCED: it has to come after the bounds, whose return it
        honours, and before `restore_want`, which needs the destination to
@@ -1475,40 +1450,58 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (!slot_inst(d, s, ibytes)) goto refuse;
     memcpy(s->imap, t.cells, (size_t)ibytes);
 
-    /* THE TWO MAP-SCOPED UPLOADS SHARE ONE STAGING BUFFER, allocated on the
-       frame one of them is due and GIVEN BACK at this slot's next prepare on
-       which neither is -- the same fence, one turn of the slots later -- so a
-       settled map holds none of it and the frames after a map change hold at
-       most one per slot. */
-    doAtlas = !s_atlas.have || s_atlas.serial != t.atlasSerial;
+    /* THE TWO MAP-SCOPED UPLOADS SHARE THE SLOT'S BOUNDED STAGING
+       (tagpu_vk_stage.h), allocated on the frame one of them is due and GIVEN
+       BACK at this slot's next prepare on which neither is -- the same fence,
+       one turn of the slots later -- so a settled map holds none of it. The
+       base atlas is a whole map's tiles, far past the cap on a large map, so it
+       goes out in bands, complete before this frame draws.
+       A FRAME WITH NO STAGING IS SKIPPED, NOT REFUSED: the serials are not
+       advanced, and the next frame sends what this one could not. */
     doHeight = t.height ? (!s_height.have || s_height.serial != t.heightSerial)
                         : !s_height.have;
-    if (doAtlas || doHeight) {
-        atlasBytes = doAtlas ? (VkDeviceSize)t.atlasW * t.atlasH : 0;
-        heightOff = ALIGN4(atlasBytes);
+    doBase = !s_base.have || s_base.serial != t.atlasSerial || s_basePal != t.palSerial;
+    if (doHeight || doBase) {
         heightBytes = doHeight ? (VkDeviceSize)hW * hH : 0;
-        bigBytes = ALIGN4(heightOff + heightBytes);
-        if (s->bigCap < bigBytes || !s->bigStage) {
-            slot_drop_bigstage(d, s);
-            if (!mk_buffer(d, bigBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                           &s->bigStage, &s->bigMem, &s->bigMap)) goto refuse;
-            s->bigCap = bigBytes;
-        }
-        if (doAtlas) {
-            memcpy(s->bigMap, t.atlas, (size_t)atlasBytes);
-            shared_upload(cb, &s_atlas, s->bigStage, 0);
-            s_atlas.serial = t.atlasSerial;
-        }
+        baseBytes = doBase ? (VkDeviceSize)t.atlasW * t.atlasH * 4 : 0;
+        if (!tagpu_vk_stage_begin(d, &s->stage, ALIGN4(heightBytes) + baseBytes,
+                                  (VkDeviceSize)t.atlasW * 4))
+            return 0;
+        /* BOTH ARE WAITS (tagpu_vk_stage.h), so each says why it is here: a
+           level's new atlas or grid, the pass's first upload, a palette move --
+           none of them a frame of play */
+        plog(d, "terr: %s%s%s, %u KB, through the banded path - %s",
+             doBase ? "the base atlas" : "", doBase && doHeight ? " and " : "",
+             doHeight ? "the height grid" : "",
+             (unsigned)((ALIGN4(heightBytes) + baseBytes) >> 10),
+             !s_base.have || !s_height.have ? "the first upload since the images were made"
+             : doBase && s_basePal != t.palSerial ? "the engine's table moved"
+             : "a new level's atlas or height grid");
         if (doHeight) {
             /* no grid: one zero texel, which the shader never reads */
-            if (t.height) memcpy(s->bigMap + heightOff, t.height, (size_t)heightBytes);
-            else          memset(s->bigMap + heightOff, 0, 1);
-            shared_upload(cb, &s_height, s->bigStage, heightOff);
+            static const unsigned char zero = 0;
+            rc = t.height
+                ? tagpu_vk_stage_copy(d, cb, &s->stage, s_height.img, s_height.have,
+                                      t.height, hW, hW, hH, 1)
+                : tagpu_vk_stage_copy(d, cb, &s->stage, s_height.img, s_height.have,
+                                      &zero, 1, 1, 1, 1);
+            if (rc < 0) goto refuse;
+            if (rc == 0) return 0;
+            s_height.have = 1;
             s_height.serial = t.height ? t.heightSerial : 0;
         }
+        if (doBase) {
+            rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_base.img, s_base.have,
+                                       t.atlas, NULL, t.atlasW, 0, 0, t.atlasW, t.atlasH,
+                                       t.pal, NULL);
+            if (rc < 0) goto refuse;
+            if (rc == 0) return 0;
+            s_base.have = 1;
+            s_base.serial = t.atlasSerial;
+            s_basePal = t.palSerial;
+        }
     } else {
-        slot_drop_bigstage(d, s);
+        tagpu_vk_stage_drop(d, &s->stage);
     }
 
     /* AND THE REQUEST, if the producer published one --
@@ -1519,10 +1512,10 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* WHETHER THE SHADER SAMPLES THE RESTORED ATLAS IS THIS LANE'S OWN FACT,
        NOT THE PRODUCER'S REQUEST. `t.restored` says a restore request STANDS
        for this atlas; `s_rgbAtlas.have` says THIS LANE HAS PAINTED AT LEAST ONE
-       CELL of it, and `s_rgbAtlas.view` is what binding 42 names. Until both
-       hold, the indexed atlas is the picture -- which is the documented
+       CELL of it, and `s_rgbAtlas.view` is what binding 41 names. Until both
+       hold, the base atlas is the picture -- which is the documented
        Classic++ fallback and, during a restore, is exactly the centre-out
-       reveal: the fragment shader's alpha test picks restored or indexed PER
+       reveal: the fragment shader's alpha test picks restored or base PER
        CELL, so the cells show as they land.
 
        IT MUST NOT STAND THE WHOLE PASS DOWN. Every way the restorer can
@@ -1532,25 +1525,24 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        for the device's life (cleared only in `tagpu_vk_terr_down`). After that
        `have` can never become 1, so a stand-down here would be PERMANENT: no
        terrain at all for the session, said once and silent after that.
-       `tagpu_vk_restore.h` promises that a refusal leaves "Classic++ indexed on
-       this lane, which is the shipped fallback, not a fault"; drawing indexed
-       is what keeps that promise. */
+       `tagpu_vk_restore.h` promises that a refusal leaves Classic++ on the base
+       atlas on this lane, "the shipped fallback, not a fault"; drawing the base
+       atlas is what keeps that promise. */
     restored = t.restored && s_rgbAtlas.view && s_rgbAtlas.have;
     /* SAID ONCE, AND ONLY FOR THE CASE WAITING CANNOT FIX: a request stands and
-       this lane has latched a refusal, so the terrain draws indexed for the
-       rest of the session. The ordinary not-yet-painted frames say nothing --
+       this lane has latched a refusal, so the terrain draws the base atlas for
+       the rest of the session. The ordinary not-yet-painted frames say nothing --
        that is the reveal working, not a fault. */
     if (t.restored && !restored && s_rjTried && !s_saidRestored) {
         s_saidRestored = 1;
         plog(d, "terr: a Classic++ restore request stands but this lane refused "
-                "the restorer - the terrain draws indexed for this session");
+                "the restorer - the terrain draws the base atlas for this session");
     }
 
-    /* THE THREE SMALL IMAGES, per slot, so the one-line invariant covers them:
+    /* THE TWO SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there
        are therefore no contents to preserve and no layout to carry. */
     memcpy(s->smallMap + SMALL_PALOFF, t.pal, 256 * 4);
-    memcpy(s->smallMap + SMALL_LUTOFF, t.fogLut, 256);
     /* The grid is one `unsigned short` a cell and the image is RG8: the same
        two bytes in the same order, so the buffer goes up as it is. With no
        grid this frame
@@ -1563,23 +1555,13 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    img_barrier(cb, s->lut, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     img_barrier(cb, s->fog, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     copy_rect(cb, s->smallStage, SMALL_PALOFF, s->pal, 256, 1);
-    copy_rect(cb, s->smallStage, SMALL_LUTOFF, s->lut, 256, 1);
     copy_rect(cb, s->smallStage, SMALL_FOGOFF, s->fog, fogW, fogH);
     img_barrier(cb, s->pal, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    img_barrier(cb, s->lut, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1609,8 +1591,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     ub.f[4]  = t.fogOrgX; ub.f[5] = t.fogOrgY;   /* uFogOrg      vec2 @16  */
     ub.f[6]  = t.fogCols; ub.f[7] = t.fogRows;   /* uFogDim      vec2 @24  */
     ub.i[8]  = t.fog;                            /* uFog          int @32  */
-    ub.i[9]  = t.lit;                            /* uLit          int @36  */
-    ub.i[10] = t.lambert;                        /* uLambert      int @40  */
+    ub.i[9]  = t.lambert;                        /* uLambert      int @36  */
     ub.f[12] = t.sun[0]; ub.f[13] = t.sun[1];
     ub.f[14] = t.sun[2];                         /* uSun         vec3 @48  */
     ub.f[15] = t.amb;                            /* uAmb        float @60  */
@@ -1663,6 +1644,7 @@ refuse:
        is what this path existed to do; it is given back where that is legal. */
     plog(d, "terr: slot %u would not take this frame's resources - the pass stops "
             "drawing and the seam tears it down", (unsigned)slot);
+    refuse_job(d);
     s_state = ST_REFUSED;
     s_downOwed = 1;
     return 0;
@@ -1695,8 +1677,8 @@ void tagpu_vk_terr_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        reader of this file might well add. Cheap, and it turns a silent sample
        of freed memory into a dropped frame. */
     if (slot >= TAGPU_VK_SLOTS ||
-        s_slot[slot].boundAtlas != s_atlas.view ||
-        s_slot[slot].boundHeight != (s_height.view ? s_height.view : s_atlas.view))
+        s_slot[slot].boundBase != s_base.view ||
+        s_slot[slot].boundHeight != (s_height.view ? s_height.view : s_base.view))
         return;
     {
         VkImageView sv = tagpu_vk_shadow_view(d->frame, slot);
@@ -1787,9 +1769,10 @@ void tagpu_vk_terr_down(const TAGPU_VKPASS* d)
     kill_image(d, &s_rgbAtlas.img, &s_rgbAtlas.mem, &s_rgbAtlas.view);
     kill_image(d, &s_rgbAtlas.oldImg, &s_rgbAtlas.oldMem, &s_rgbAtlas.oldView);
     memset(&s_rgbAtlas, 0, sizeof s_rgbAtlas);
-    kill_image(d, &s_atlas.img, &s_atlas.mem, &s_atlas.view);
-    kill_image(d, &s_atlas.oldImg, &s_atlas.oldMem, &s_atlas.oldView);
-    memset(&s_atlas, 0, sizeof s_atlas);
+    kill_image(d, &s_base.img, &s_base.mem, &s_base.view);
+    kill_image(d, &s_base.oldImg, &s_base.oldMem, &s_base.oldView);
+    memset(&s_base, 0, sizeof s_base);
+    s_basePal = 0;
     kill_image(d, &s_height.img, &s_height.mem, &s_height.view);
     kill_image(d, &s_height.oldImg, &s_height.oldMem, &s_height.oldView);
     memset(&s_height, 0, sizeof s_height);

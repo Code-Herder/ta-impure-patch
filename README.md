@@ -22,7 +22,7 @@ The aim of the Total Annihilation Impure patch is to fully modernize Total Annih
 
 ## Builds
 
-Every push to `main` builds `ddraw.dll` on GitHub Actions. The run's artifact is the release folder: the DLL, its `ddraw.ini`, the Classic++ restorer weights and a README. A `v*` tag publishes the same zip under Releases. Until the game has an options menu, everything is on by default; a `tagpu_<pass>.off` file next to `TotalA.exe` turns one pass off, `tagpu_defaults.off` all of them.
+Every push to `main` builds `ddraw.dll` on GitHub Actions. The run's artifact is the release folder: the DLL, the Classic++ restorer weights and a README (the DLL reads no `ddraw.ini`; its settings are the in-game menu's, in `impure.cfg`). A `v*` tag publishes the same zip under Releases. Until the game has an options menu, everything is on by default; a `tagpu_<pass>.off` file next to `TotalA.exe` turns one pass off, `tagpu_defaults.off` all of them.
 
 ## The wiki
 
