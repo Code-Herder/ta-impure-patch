@@ -1,0 +1,469 @@
+# BAR's camera and a full-colour Classic — the port plan
+
+**Written** 2026-09-23. **Nothing in this note is built in the game yet.** It is the plan for two
+changes the lab has already made:
+
+1. **Part 1** covers the camera's pan and zoom. Beyond All Reason's centre clamp, zoom-out from
+   the centre, notch and ease, plus the lab's mirrored map edge, go into `tagpu`. The projection
+   (TA's fixed oblique view) does not change.
+2. **Part 2** covers the renderer. Classic becomes the Classic++ full-colour pipeline with its
+   rendering options off, and the 8bpp path is deleted.
+
+The reference implementation for both is `tools/tascene-view.html` on `worktree-camera_zoom`
+(4171779..b2574e4). Its **BAR** button in the status bar is `cam=bar&edge=mirror`, and that page
+is what the owner has looked at. Where BAR and the lab disagree, the lab wins, and the difference
+is written down. When a gate here closes, its facts move to [GPU status](gpu-status.html) and
+[renderers](renderers.html), and this note is folded into them the way `g19f-plan.md` is.
+
+Evidence tags as elsewhere: **[SOURCE]** read from the code named, **[MEASURED]** with the
+numbers, **[INFERRED]** not established, **[DECIDED]** the owner's call with a date, **[OPEN]**
+not settled.
+
+---
+
+## Part 1 — The BAR camera: pan and zoom only
+
+**The scope [DECIDED 2026-09-23].** This part changes only **how the camera pans and zooms**.
+It covers BAR's options 1 and 2 (the centre clamp and zoom-out from the centre), BAR's wheel
+notch and ease, and option 3, the mirrored map edge that the centre clamp brings into view.
+
+**TA's projection does not change.** There is no tilt, no rotation, no perspective and no FOV. The
+camera is still TA's fixed oblique view, and every value below is BAR's Spring camera's value for
+pan or zoom only.
+
+### 1.1 The lab's BAR preset is the target  [SOURCE: `tools/tascene-view.html`]
+
+The lab has three camera rules plus the edge. `cam=bar` sets all three rules at once, and the
+BAR button adds `edge=mirror`:
+
+| rule | the game today, `cam=game` | BAR, `cam=bar` — what is ported |
+|---|---|---|
+| **clamp** (how far it pans) | `window`: eye ∈ [−d, map − W + d], where d = ⌊W/2 · (1 − 1/z)⌉ above 1× and 0 at or below it (`zoom_eye_range`). Zoomed out, the map edge stops W/2 from the screen centre | `centre`: the world point at the view centre stays on the map at **every** zoom, so eye ∈ [−W/2, map − W/2]. The map's edge can reach the middle of the screen |
+| **zoom in** | holds the world point under the pointer | the same |
+| **zoom out** | holds the world point under the pointer | `centre`: the camera pulls straight back, and the view centre holds |
+| **notch** | ×1.1 on a target *level*, snapped to exactly 1 inside (0.999, 1.001) | ×(1 − 0.14 n) on the camera *distance*, which is 1/z. That is ×1.163 in and ×0.877 out, so in-then-out lands on 1.020, not 1 |
+| **ease** | each presented frame covers a quarter of the remaining log-distance and snaps at 0.0025. A notch is 82 % done in 6 frames and lands in 13, so its length follows the present rate (0.22 s at 60 Hz) | a 250 ms tween from the **drawn** pose to the new target along g = 1 − (1 − f)⁴. Centre and 1/z are lerped in straight lines. 24 % of the notch lands in the first 60 Hz frame and 80 % by 83 ms. Its length is the same at any frame rate |
+| **edge** | black | `mirror` (§1.4) |
+| **range** | 0.25..8 | 0.25..8 in the lab too. BAR's own range depends on the map (§1.2) |
+| **scroll rate** | the same on screen at every zoom (`apply_scroll_rate` scales `ScrollSpeed` by 1/z) | unchanged. BAR's is the same property (§1.2) |
+
+The notch counts from 0.25× to 8× are 36 for the game, 23 in and 27 out for BAR.
+
+**A pointer off the world viewport zooms about the centre** under both rule sets, as in the
+game today. Under BAR's rules a second notch during a tween starts a new tween from wherever the
+camera is drawn, toward a target built from the **previous target**. Recoil does the same:
+`CameraTransitionExpDecay` takes `startPos` from the drawn camera, and the controller's pose has
+already moved.
+
+### 1.2 BAR's pan and zoom values, and where they come from  [SOURCE]
+
+Read on 2026-09-23 from three repositories:
+
+* [RecoilEngine](https://github.com/beyond-all-reason/RecoilEngine) `e9d1993`: the engine's
+  `CONFIG` defaults and `rts/Game/Camera/SpringController.cpp`, which is the camera BAR plays in.
+* [Beyond-All-Reason](https://github.com/beyond-all-reason/Beyond-All-Reason) `c958cfa`: the game.
+  `luaintro/springconfig.lua` writes values at startup and `luaui/Widgets/gui_options.lua` holds
+  the options menu.
+* [BYAR-Chobby](https://github.com/beyond-all-reason/BYAR-Chobby) `bdfae3c`: the lobby, which
+  ships `LuaMenu/configs/gameConfig/byar/defaultSettings/springsettings.cfg`.
+
+**A BAR player runs the engine default unless one of the last two overrides it**, so the
+effective column is the one to read.
+
+#### Zoom
+
+| setting | engine default | BAR effective | what it does |
+|---|---|---|---|
+| `ScrollWheelSpeed` | −25 | **−20** (Chobby) | the wheel's `move = notches × ScrollWheelSpeed` (`MouseHandler.cpp:665`). Negative means wheel-up zooms in |
+| the zoom step | — | `scaledMove = 1 + move × 0.007` (`SpringController.cpp:199`) | the camera distance is multiplied by this. At −20 that is **0.86 per notch in and 1.14 out** |
+| `CamSpringZoomInToMousePos` | true | true | zoom in moves the camera along the ray through the pointer by `1 − scaledMove` of the distance to the ground, never past `minDist` (`ZoomIn`). The point under the pointer holds |
+| `CamSpringZoomOutFromMousePos` | **false** | false (the menu's `zoomfromcursor` row) | with it false, `ZoomOut` returns with the focus point unmoved, so zoom-out pulls back from the centre |
+| `CamSpringMinZoomDistance` | 20 | **300** (`springconfig.lua` v5; the menu's `mincamheight` slider, 0..1500) | the closest zoom, in elmos along the view ray |
+| max distance | — | `1.333 × max(mapx, mapy) × 8` elmos (`SpringController.cpp:49`) | the farthest zoom: the map's longer side and a third more. It depends on the map; the game's 0.25× floor does not |
+| `CamSpringFastScaleMousewheelMove` × `CameraMoveFastMult` | 0.2 × 10 | the same | Shift on the wheel: `shiftSpeed = 2`, so a Shift notch in is **×0.72** |
+
+#### The ease
+
+| setting | engine default | BAR effective | what it does |
+|---|---|---|---|
+| `CamTransitionMode` | **0, exponential decay** | 0 | the menu's `smoothingmode` offers 1 (spring-damped) as its alternative |
+| the wheel's transition length | — | **0.25 s** (`SpringController.cpp:214`) | `camHandler->CameraTransition(0.25f)` on every notch |
+| `CamTimeFactor` | 1.0 | 1.0 (Chobby) | multiplies the length |
+| `CamTimeExponent` | 4.0 | 4.0 (Chobby) | `tweenFact = 1 − timeRatio^4`, with `timeRatio` running from 1 to 0 (`CameraHandler.cpp:419`), which is g = 1 − (1 − f)⁴, an **ease-out** |
+| `CamFrameTimeCorrection` | 0 | 0 | the tween measures from `lastFrameStart` |
+| `CamSpringHalflife` | 100 ms | 100. The menu's `camerasmoothness` slider (0.18 by default, 0.04..2) writes `0.18 × 200 = 36 ms` **only when the player moves it** | used only by the spring-damped modes, so it is inert under mode 0 |
+
+#### Pan
+
+| setting | engine default | BAR effective | what it does |
+|---|---|---|---|
+| the clamp | — | `pos.x ∈ [0.01, mapx·8 − 0.01]`, `pos.z` likewise, in `Update()` (`SpringController.cpp:394`) | **the focus point — the view centre on the ground — is clamped to the map**, and nothing else is. This is the centre clamp |
+| `CamSpringScrollSpeed` | 10 | 10 (the menu's `cameramovespeed`, 0..100) | key and edge scroll: `pos += dir × pixelSize × 2 × scrollSpeed`, and `pixelSize` scales with distance, so **the screen moves at one rate at every zoom**, as TA's does |
+| `CameraMoveFastMult` / `SlowMult` | 10 / 0.1 | the same | Shift / Ctrl on scrolling |
+| `WindowedEdgeMove` / `FullscreenEdgeMove` | true / true | true (the menu's `screenedgemove`) | |
+| `EdgeMoveWidth` | 0.02 | **0.003** (Chobby) | the band as a fraction of the window: 5 px at 1920 wide (`max(1, ⌊W × w⌋)`). TA scrolls on the exact edge pixel |
+| `EdgeMoveDynamic` | true | **false** (Chobby) | constant speed inside the band, not faded |
+| `MiddleClickScrollSpeed` | 0.01 | **−0.001** (Chobby; the menu slider spans −0.01..−0.00195) | middle-drag pan. Negative means the view follows the drag |
+| `MouseDragScrollThreshold` | 0.3 s | 0.3 (the menu's `middleclicktoggle`) | a middle click shorter than this toggles locked scroll mode |
+| `CamSpringFastScaleMouseMove` | 0.3 | 0.3 | Shift on middle-drag |
+
+#### BAR's Map Edge Extension (`luaui/Widgets/map_edge_extension2.lua`)
+
+| value | BAR | the lab's `edge=mirror` (what is ported) |
+|---|---|---|
+| source | the **minimap texture**, mirrored, on the mirrored heightmap | the map's own **tiles**, texel for texel, with each texel flipped across every edge it is past; plus the map's own **features** |
+| tone | `brightness = 0.3` on the luma (Y of YCbCr), chroma kept | `edgedim = 0.5` × a mix of `edgegrey = 0.75` toward the RGB mean, the fog-of-war grey |
+| fade | alpha = clamp(1 + 6 · (0.18 − r²), 0, 1), with r the distance past the edge over the map's size on each axis. Full strength out to **42 %** of the map's size past the edge, gone at **59 %** | linear to black over `edgefade = 1536` world px, measured on the tile grid. `edgesteps = 0` (smooth), `edgedither = 0` |
+| relief | `curvature`: the ground drops (d / 150)² elmos with distance d past the edge | none, since TA's terrain is flat art |
+| fog | the engine's distance fog | none |
+| lit | the map's normals, flipped with the mirror | **unlit**: the art is painted lit from the north-west, and its reflection is lit from wherever the mirror sent that light |
+
+### 1.3 BAR pan and zoom behaviour the lab did not take
+
+These are listed so nothing is lost. Each would be its own decision **[OPEN]**:
+
+* Shift + wheel at ×0.72.
+* Alt + wheel, which jumps to the whole map and back.
+* A zoom-out floor sized to the map instead of a fixed 0.25×.
+* Middle-drag pan.
+* The 5 px edge-scroll band. TA's single edge pixel stays.
+
+The lab's left-drag "grab the map" is a lab convenience and was never a BAR rule.
+
+### 1.4 How it goes into the game
+
+`tagpu_zoom.c` owns every piece of this, and its mechanisms stay: one level owner on the render
+thread, the incremental eye delta posted to the game thread, the range enforced in engine memory,
+and the fog handshake ([GPU status](gpu-status.html), the zoom-to-cursor gates). The work is
+five changes. The first three are pure camera changes, and the last two draw.
+
+**C1 — two settings, both on by default [DECIDED 2026-09-23].**
+
+* **`camera = bar | classic`, default `bar`.** This is the only camera setting. It switches the
+  clamp, the zoom-out rule, the notch and the ease together, and the lab's separate knobs for
+  those four are not carried over.
+* **`edge = mirror | black`, default `mirror`.** This is an on/off setting, independent of
+  `camera` (C5).
+
+Both are store keys in `impure.cfg` ([renderers](renderers.html) §2.10b), each with a row in the
+in-game settings and a lever file for A/Bs. They follow §2.10b's precedence: a lever beats the
+store, which beats the compiled default.
+
+**`tagpu_defaults.off` skips the store and the play defaults**, so every tacli control launch
+gets `classic` and `black`: the game as it is today. That pair must stay **byte-identical** to
+today at every zoom, and it is the gate on every step below.
+
+**C2 — the centre clamp.**
+
+* **The range.** `zoom_eye_range` and `range_pk` get a second branch, lo = −W/2 and
+  hi = map − W/2, with W the **true** viewport. The two must stay the same arithmetic, which is
+  the invariant the pre-clamp rests on.
+* **The flag.** Today the replacement clamp runs only above 1× (`g_eyeWide = installed && z > 1`),
+  and below that the engine's own `0x41C3C0` runs verbatim. Under `bar` the replacement has to run
+  at every zoom, so the flag becomes `installed && (z > 1 || camera == bar)`.
+* **The follow.** The follow's clamp (`zoom_follow_clamp`) takes the new range for free.
+* **What stays short.** The two smooth centring paths that clamp inline, `0x41C4C0` and
+  `0x41C7F7`, still stop at [0, map − W]. Today they already stop d short above 1×. Under `bar`
+  they stop W/2 short at every zoom. Nothing fights, but a "centre on this unit" near an edge
+  will not centre it.
+
+  **This is the one piece of new engine work in Part 1.** Those two sites need the treatment
+  `0x41CAF7` got: replace the block, don't chase it.
+
+**The audit C2 needs before it is safe.** Every engine reader of the eye has to be bounded for an
+eye W/2 past the map, **at every zoom**. Below 1×, `vpwide`'s widened view adds W/(2z) − W/2
+more. Today the eye reaches −0.4375 W at 8× and never goes below 0 at or under 1×.
+
+| reader | status |
+|---|---|
+| `0x498DA0`, the pointer → world point (GetTPosition → `GetGridPosPLOT` → `GetGridPosFeature`, which crashes on NULL) | **bounded twice**: `tagpu_vpwide.c` clamps the world point to the map (its *KEEP THE WORLD POINT ON THE MAP* block), and `zoom_tpos_guard` clamps the side-panel path. A right-click in the mirror orders a move to the nearest point on the map's edge, as a click in the void does at 0.5× today |
+| the minimap view box (`zoom_minimap_rect`) | **bounded**: clamped to the minimap |
+| the engine's screen fog grid builder `0x4843C0` (bit 3 of `main+0x14281`) | **to audit.** It is a scatter over the map cells in the view, starting at `eye >> 5` ([terrain & depth](terrain-depth.html) §5.2), and it has run with eyes down to −0.4375 W above 1×. Under `bar` it runs at −0.5 W at every zoom. What has to be read is whether its reads of the LOS and mapped bytes are bounded for cells off the map. `tagpu_fogwide.c` says the engine's grid "never reaches more than one cell past the map", and that holds only under the engine's own clamp |
+| `fogwide`'s wide grid (below 1×) | **bounded in the replica**: every read of the mapped bytes checks `idx < mappedCells`, and the edge completions derive their row from `row0` instead of assuming it is 0 or −1 |
+| our feature gather (`tagpu_feat.c`) | **bounded**: rows and columns are clamped to the map (`tagpu_feat.c:740`). The mirror's gather (C5) is a separate list, so this clamp stays |
+| the engine's own sweep rect | **to audit**: the packet carries its `sweep_cols/rows`, and they are bounded to 1024 before use |
+| edge scroll and the scroll target | goes through `0x41C3C0`, which is ours |
+| HotUnits and the on-screen roster | **to audit.** They are culls on screen rectangles, and an off-map rect is empty rather than wild **[INFERRED]** |
+
+Each "to audit" row ends with a bound argument (*Fixes must be safe by construction*), not with
+"it did not crash".
+
+**C3 — zoom out from the centre.** In `anchor_step`, the step is taken only when
+`zNow > zWas || zoomout == cursor`. That is the lab's `hold()` condition, and it is one line.
+
+**C4 — BAR's notch and tween.** `wheel_level()` gains a second mode:
+
+* **The notch.** Each notch multiplies the target *distance* iz = 1/z by `max(0.1, 1 − 0.14 n)`,
+  with n = Δ / `WHEEL_DELTA`. That is `ScrollWheelSpeed −20 × 0.007`. The target is clamped to
+  [1/8, 4].
+* **The tween.** It runs from the level currently drawn, over 250 ms of the render thread's present
+  clock (QPC), with g = 1 − (1 − f)⁴ applied to iz, not to log z.
+* **What stays.** The 0.999..1.001 snap stays. It costs nothing, and the parity fixtures set the
+  level through `tagpu_zoom.txt`, not the wheel, so BAR's off-grid levels never reach a fixture.
+
+**The anchor needs no new mechanism, and this is why.** The lab lerps the centre c and the
+distance iz on straight lines from (c₀, iz₀) to (c₁, iz₁), where c₁ = c₀ + (a − c)(iz₀ − iz₁).
+At every point of that line, c(g) = c₀ + (a − c)(iz₀ − iz(g)). That is exactly the sum of
+`anchor_step`'s per-frame steps (a − c)(1/z_was − 1/z_now). So holding the notch's anchor on every
+frame *is* the lab's path, including a retarget mid-tween.
+
+The one difference: when the pointer moves between two notches, the game holds the **latest**
+notch's point, while the lab aims each target at its own notch's point. A range clamp that cuts
+the step is handled as it is today: the residual is dropped, not banked.
+
+**C5 — the mirror, in the Vulkan world pass.**
+
+* **Independent of the clamp.** The mirror is useful under `camera=classic` as well, because at
+  0.5× the game already shows 1.5 W of black past a map edge. That is why `edge` is its own
+  on/off setting (C1).
+* **Terrain.** Off-map cells join the terrain instances. Each one carries the tile of the cell it
+  reflects to, found with the lab's triangle wave `reflect(m, n)`, and a flip bit per axis. It is
+  drawn with the lab's tone: `edgeT` from the distance to the map on the tile grid, the grey mix,
+  the dim, and the linear fade. This is `EDGE_TONE` in the lab, which ports as GLSL → SPIR-V like
+  every lab shader.
+* **Features.** They are gathered past the map from the **map's own** anchors (the TNT's, not a
+  scenario's):
+  * They are flipped across a side edge and stand upright across the top and bottom.
+  * A y-mirrored anchor **adds** the half height rather than subtracting it, because the art has
+    the height baked in.
+  * Their depth keys come from the same base and formula as the map's own, so the two sort
+    against each other.
+  * They are discarded inside the map rectangle, or the painter's order lets a mirrored tree cover
+    the last rows.
+* **Units stay on the map.** The minimap is unchanged, as BAR's is.
+
+The game's terrain is instanced: `tagpu_terr.c`'s vertex stage reads one quad plus a per-instance
+`aCell` (col, row, cx, cy) as four signed shorts. A mirrored cell is one more instance, with its
+tile taken from the reflected cell and its flip bits in spare bits of the instance.
+
+### 1.5 How each step is verified
+
+* **Every step, `camera=classic edge=black`** (what `tagpu_defaults.off` gives). Run the existing
+  zoom fixtures and the world A/B. Each must be **0 px** from the build before the step.
+* **C2.** Scroll to the north-west corner at 1×. The roster's eye reads (−W/2, −H/2), and a shot
+  has the map's corner at the view centre. Repeat at 0.25× and 8×, and repeat on the south-east
+  corner. Run a scripted edge scroll for a minute at each zoom, and wheel at every edge with
+  `tagpu.log` clean.
+* **C3.** Wheel out with the pointer off-centre. The world point at the view centre
+  (eye + W/2) is unchanged across the notches, give or take the rounding the residual carries.
+* **C4.** The log line reads `zoom: wheel +120 -> 1.163` for one notch in from 1×. The level
+  reaches its target between 240 and 260 ms after the notch, read from the per-frame level. The
+  zoom-to-cursor gate still holds: the world point under the pointer moves < 1 px across a notch
+  in.
+* **C5.** In a shot at 0.5× on a map corner, the off-map strip equals the flipped on-map strip
+  through the tone. Recompute the tone offline from the shot's own on-map pixels and compare to
+  within rounding. Then run an A/B against the lab at the same eye and zoom, using the pack the
+  game shot was taken from.
+
+---
+
+## Part 2 — Classic on the full-colour pipeline
+
+**The scope [DECIDED 2026-09-23].** Classic moves onto the Classic++ pipeline with its rendering
+options off, and the 8bpp path is deleted from the world passes.
+
+- **Full colour is the goal, not fidelity to the 8bpp colours.** Shading and the fog grey are
+  computed in RGB and never snapped back to the palette. So Classic's old "must not move by a
+  pixel" claim is re-baselined once (§2.4, 2b).
+- **The UI stays indexed.** Its source is the engine's own 8-bit drawing into its surfaces, and it
+  already has a colour twin for Classic++.
+- **The GDI fallback is untouched.** It never used this path.
+
+### 2.1 What the code is today  [SOURCE, surveyed 2026-09-23]
+
+**The output is already RGB end to end.** Every world fragment shader writes RGB into the
+`ss×` world target, and `native_d` composites that onto the swapchain. "8bpp" survives in two
+places only:
+
+- **R8 index atlases:** terrain, features, effects and units, sampled `NEAREST`.
+- **index→index arithmetic:**
+  - `PALETTE.SHD`'s face-shade row for units (`tagpu_native.c`'s unit FS, `uLUT`, under `uLit == 0`);
+  - the engine's fog grey table (`TAGPU_GLSL_FOG_SHADE`, `uFogLUT`, copied by `tagpu_packet_pub.c`'s `fogshade_snapshot`);
+  - markers resolved through the same fog LUT.
+
+| pass | Classic samples | Classic++ samples | the switch |
+|---|---|---|---|
+| terrain (`tagpu_terr.c` FS, `tagpu_vk_terr.c`) | R8 → fog LUT → `uPal` | the RGBA twin where its alpha > 0.5, else `uPal[index]`; × lambert; RGB-mean grey | `uLit` = `tagpu_classicpp_on()`, `uLambert` = `_lit()`, `uRestored` = `_assets()` and the twin painted |
+| features (`tagpu_feat.c`, `tagpu_vk_feat.c`) | R8 → fog LUT → `uPal` × alpha | twin or `uPal`; × the ground lambert at the anchor (`vLam`); RGB-mean grey | the same three |
+| units (`tagpu_posedraw.c` VS + `tagpu_native.c` FS, `tagpu_vk_unit.c`) | R8 → **SHD row** → fog LUT → `uPal` | twin or `uPal`; × `taLambert` of the **flat up normal**; RGB-mean grey | the same three |
+| effects (`tagpu_fx.c`, `tagpu_vk_fx.c`) | R8 → `uPal` | twin or `uPal` | `uRestored` only. The grey band discards effects |
+| markers (`tagpu_mark.c`) | index → fog LUT → `uPal` | the same (no Classic++ branch) | — |
+
+Four facts the plan rests on:
+
+- **There is no stored "raw" RGBA atlas.** Classic++'s fallback for a texel the restorer has not
+  painted is computed per fragment, `t.a > 0.5 ? t.rgb : uPal[index]`. So Classic++ still reads
+  every R8 atlas.
+- **Units are never shaded under Classic++.** `tagpu_posedraw.c` publishes `lambert = 0`
+  ("never set"), so a Classic++ unit is lit by the flat up normal. That is exactly 1.0, with no
+  face shading at any `light=` value. The SHD row is only ever applied in Classic.
+- **Gamma.**
+  - The presented palette (`tagpu_pal_live()`) is `min(255, entry × factor)`, with factor
+    `0.5 + Gamma/24` (`SetGamma 0x4BA590`), so the stock Gamma of 12 is exactly 1.0.
+  - Classic is exact under Gamma only because it looks the palette up last.
+  - The restorer's input is that **presented** palette (`s_pub.pal = tagpu_pal_live()`), so the
+    Classic++ twins bake the Gamma in and go stale when it moves.
+  - Only the terrain (`restore_publish(…, repaint)`) and the UI repaint on a palette change. The
+    feature, effect and unit twins have no trigger.
+  - [GPU status](gpu-status.html)' paragraph on `tagpu_rglsl_job_repalette` describes a mechanism
+    that no longer exists.
+- **Team colour is a texture choice** (`frame[owner]`, `tagpu_render3do.c`), not a palette remap,
+  so it survives a full-colour atlas unchanged. The same holds for **translucency**: features'
+  `MODE_ALPHA`, cloak and the build ghost are already RGB blends.
+
+**Measured beforehand.**
+
+- **In the lab**, the full-colour path with every extra off differs from Classic on **0.033 % of
+  pixels at 1×** (603 px): 0 px of terrain, 7 px of features, and 416 px of units. The unit pixels
+  are all the SHD face shade ([tascene](tascene-design.html)).
+- **In the game (G18a, GL lane)**, `assets=0 light=0` reproduced Classic to within 594 px on one
+  unit, falling to 415 px once the hard shadow was on (`shadows=2`). The residual was the SHD row
+  again.
+
+### 2.2 The target
+
+One pipeline, two presets. The Renderer row keeps Classic / Classic++ / Custom, and the
+"Undithered assets" and "Dynamic lighting" rows keep their meaning. `assets=0` now means the
+**raw full-colour** atlas instead of 8bpp indices.
+
+| | Classic (`assets=0 light=0`) | Classic++ (`assets=1 light=1`) |
+|---|---|---|
+| texels | the **base atlas**: each index expanded to its palette colour, RGBA8, alpha 0 at the frame's key | the restored twin over the same base |
+| terrain | unlit | lambert from the heightfield, level ground exactly 1.0 |
+| features | unlit | the ground's lambert at the anchor |
+| units | the **face-shade multiplier** (below) | the **same multiplier** [DECIDED 2026-09-23], where today they are flat |
+| fog of war | the RGB mean (`TAGPU_GLSL_FOG_GREY_RGB`) | the same |
+| shadows | as the Shadows row says (hard by default) | the same |
+| sampling | `NEAREST` | as today (units trilinear, 4× anisotropic) |
+| Gamma | **once, on the finished world image** [DECIDED 2026-09-23] | the same |
+
+**The face-shade multiplier [DECIDED 2026-09-23: an RGB multiplier].** The vertex stage keeps
+choosing a shade row exactly as it does now:
+`row = clamp(neutral + dir · round(12 · N·SH_L), 0, 31)` (`tagpu_posedraw.c`). The fragment then
+multiplies RGB by `k[row]` instead of remapping the index through the row, and clamps to 1.
+
+`k` is 32 floats, built once from the engine's own SHD table, which the packet already carries
+(`tagpu_r3d_lut_want`). Each row's value is the least-squares slope of shaded against unshaded
+palette colour, ignoring channels the table clips at 255, and normalised so the neutral row is
+exactly 1.0.
+
+**MEASURED on the stock `PALETTE.SHD`** (through the lab's pack):
+
+- The neutral row is **15**. The rows a unit can reach are 3..27.
+- `k` runs from **0.196** at row 3, through 0.542 at row 8, 1.000 at row 15 and 1.391 at row 22,
+  to **1.603** at row 27. The table is close to linear below neutral: about 0.066 per row.
+- How well a pure multiply fits the table, as mean |error| in levels:
+  - row 4: 4.7
+  - row 16: 5.6
+  - row 22: 9.3
+  - row 28: 14.6
+
+  The bright rows brighten less like a multiply than the dark ones darken, because they clip and
+  desaturate. That is the look to check at 2b. It is a fact about the table, not a decision.
+
+### 2.3 What stays, what goes
+
+**Stays:**
+
+- the palette as a **256-colour table** for everything that is a colour index and not an atlas
+  texel: untextured 3DO faces (`vFC`), the nanoframe band ramp (0xA0..0xAF), markers and their
+  selection colours, effect lines (mode 0), and unexplored black (index 0);
+- the LHT flash table (`uLht`, already RGB);
+- the UI's RG8 twins;
+- the restorer. Its FILL stage reads the base atlas instead of doing the palette lookup itself.
+
+**Goes, at 2d:**
+
+- the R8 atlases and their samplers;
+- the `uLit == 0` branches in the terrain, feature and unit shaders;
+- `uLUT` (the SHD texture) and the per-index row lookup;
+- `uFogLUT`, `TAGPU_GLSL_FOG_SHADE`, `fogshade_snapshot` and its field in the packet;
+- the per-pass `tagpu_classicpp_on()` gate. Classic vs Classic++ becomes a preset over `assets`
+  and `light` and nothing else.
+
+`tagpu_classicpp.on/.off` stay as the levers that pick a preset, which is what tacli drives. No
+alias is kept for anything deleted (*strip fully*).
+
+### 2.4 The steps
+
+**2a — the base atlas.** Every world atlas gains an RGBA8 base beside its R8, filled at upload
+on the CPU from the index data and the palette. Alpha is 0 where the index is the frame's own key.
+Classic++'s fallback becomes `twin.a > 0.5 ? twin.rgb : base.rgb`. The restorer's FILL reads the
+base.
+
+In this step the base is expanded from the **presented** palette and re-expanded on the palette
+serial, exactly as the restored twins are, so no picture moves.
+
+- **Exit:** Classic++ is **0 px** from the build before, per pass, on the world A/B
+  (`tagpu_<pass>.ab`, `tools/vk-ab.py`), at two Gamma settings. Classic is 0 px too, because it
+  still reads the R8.
+
+**2b — Classic onto the full-colour shaders.** The Classic preset takes the Classic++ branch with
+`assets=0 light=0`:
+
+- the face-shade multiplier for units, in **both** presets;
+- the RGB-mean grey in every world pass, markers included.
+
+The old index branch is still in the build, behind the lever, for one landing. That is what makes
+the re-baseline checkable: the old Classic and the new one can both be shot from the same build.
+The lab's Classic lane moves to full colour in the same landing, so the lab and the game still A/B.
+
+- **Exit:**
+  - old against new Classic, measured and written down, per pass and in the grey band;
+  - the new lab md5s and A/B captures recorded as the new baseline;
+  - Classic++ differs from the build before on unit pixels only (the multiplier) — measured, and
+    shown to the owner;
+  - the owner looks at the new Classic beside the old one, at 1× and zoomed, in and out of fog.
+
+**2c — Gamma once, at the end.** Everything that makes a world colour — the base atlases, the
+restored twins, `uPal` — is built from the **engine's** unscaled table (`tagpu_pal_engine()`).
+The world composite multiplies by `tagpu_pal_gamma()` and clamps. The UI keeps the presented
+palette, so the two agree.
+
+This deletes every world repaint-on-palette path, and with it the gap where the feature, effect
+and unit twins never recoloured. [GPU status](gpu-status.html)' repaint paragraph is corrected in
+the same landing.
+
+**[INFERRED — verify first]:** Gamma is the only thing that moves the palette in play.
+[Renderers](renderers.html) §2.3 establishes that water does not cycle it.
+
+- **Exit:**
+  - at Gamma 12 (factor 1.0), **0 px** from 2b in both presets;
+  - over a sweep of Gamma 0, 6, 12 and 20, the differences from 2b lie only where a shaded or
+    blended colour clips — counted and reported;
+  - after a Gamma change in play, every pass shows the new factor at once, with no repaint queued.
+
+**2d — delete the 8bpp path** (§2.3's list). SPIR-V is regenerated (`spirv-gen.py` hashes its own
+comments, so regenerate rather than hand-edit).
+
+- **Exit:**
+  - both presets **0 px** from 2c on every pass;
+  - `thread-split-check.sh` clean with the packet's fog-table field gone;
+  - atlas memory reported before and after. The R8 goes and the base stays, so the total is
+    3 B/texel over today's R8 — about 12 MB per 2048² atlas;
+  - the function inventory diffed against HEAD, because a deleted non-static compiles clean.
+
+---
+
+## Landings and reviews
+
+Part 1 and Part 2 are independent and can land in either order. If the mirror (C5) lands after
+2c, it has one path to write: RGB in, the tone applied, Gamma at the end.
+
+| landing | contents | review (CLAUDE.md) |
+|---|---|---|
+| 1 | C1–C4, the camera | **high** — writes engine memory (the eye and its range) and adds a byte patch at `0x41C4C0`/`0x41C7F7` |
+| 2 | C5, the mirror | medium — new instances and a new sprite list in two passes, no engine state |
+| 3 | 2a + 2b | medium — atlases and shaders |
+| 4 | 2c + 2d | **high** — the packet loses a field, which is the game↔render hand-over |
+
+## Decisions [DECIDED 2026-09-23, the owner]
+
+1. **Pan and zoom only.** The projection, tilt, rotation and FOV do not change.
+2. **Defaults:** `camera = bar` and `edge = mirror`. `camera` is the only camera setting, and
+   `edge` is an on/off setting.
+3. **Classic is full colour.** No fidelity to the 8bpp colours is kept.
+4. **Unit face shading is an RGB multiplier** from the SHD table.
+5. **Classic++ units get the same face shading** as Classic.
+6. **Gamma is applied once, on the finished world image.**
+7. **The UI stays indexed.**

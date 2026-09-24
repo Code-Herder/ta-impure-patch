@@ -3685,6 +3685,24 @@ clean cut removed the thing the reason was about rather than supplying it — so
 true-sounding and the feature stayed dead through every landing after it. **A stated gap needs the
 condition that closes it to be something a later landing will actually test.**
 
+## BAR's pan and zoom, and a full-colour Classic (G20)  [PLANNED 2026-09-23]
+
+The plan is [BAR camera & full-colour Classic](bar-camera-port.html). Both halves copy what the
+`tascene` lab already does (`worktree-camera_zoom`, its **BAR** button). The owner's decisions of
+2026-09-23 are listed at the foot of that note.
+
+- **Camera:** BAR's centre clamp, zoom-out from the centre, notch and ease, and a mirrored map edge.
+  Both `camera = bar` and `edge = mirror` are on by default. TA's projection does not change.
+- **Renderer:** Classic becomes a preset of the Classic++ pipeline in full colour, and the world
+  passes lose their 8bpp path.
+
+| Gate | Status | Exit |
+|---|---|---|
+| G20a — the camera: `camera` (`bar` or `classic`), the centre clamp (with `0x41C4C0`/`0x41C7F7` replaced), zoom-out from the centre, BAR's notch and 250 ms ease | ○ planned | `camera=classic` 0 px from today at every zoom. Under `bar`: the map corner at the view centre at 0.25×, 1× and 8×; one notch in logs 1.163 and lands in 240–260 ms; the zoom-to-cursor gate holds; the eye-reader audit closed with a bound for each reader |
+| G20b — the mirror: `edge` (`mirror` or `black`), off-map terrain cells and the map's own features, in the lab's tone | ○ planned | the off-map strip is the flipped on-map strip through the tone, and it A/Bs against the lab |
+| G20c — the base atlas and Classic onto the full-colour shaders (the plan's 2a + 2b) | ○ planned | Classic++ 0 px after the base atlas. The old and new Classic measured side by side, the new baseline recorded, and the owner has looked |
+| G20d — Gamma once at the end, and the 8bpp path deleted (2c + 2d) | ○ planned | 0 px at Gamma 12 in both presets; no repaint on a Gamma change; R8 atlases, SHD texture and fog table gone |
+
 ## Shipping — the build people can download (2026-09-08)
 
 Until the game has the render options screen (**Phase F / G18** above; [renderers](renderers.html)

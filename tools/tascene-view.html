@@ -1000,9 +1000,9 @@ void main(){
 // each axis the reflection crossed. It takes TA's own fog-of-war grey — the
 // engine's grey table is (R+G+B)/3 then the nearest palette colour (0x4BAD30,
 // exe-reverse-engineering.md), which TAGPU_GLSL_FOG_GREY_RGB reproduces as the
-// plain RGB mean — dimmed, and faded toward black with the distance from the
-// map in whole bands, ordered-dithered across each band in WORLD texels so the
-// pattern scales with the zoom the way the art's own dithering does. Unlit: the
+// plain RGB mean — dimmed, and faded smoothly toward black with the distance
+// from the map (edgesteps= cuts the fade into bands, and edgedither= dithers
+// across them in WORLD texels, both off by default). Unlit: the
 // art is painted lit from the north-west, and its mirror image is lit from
 // wherever the reflection sent that light, which no sun direction agrees with.
 const EDGE_VS = `#version 300 es

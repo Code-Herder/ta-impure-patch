@@ -39,6 +39,19 @@ previous pair — `6f7ad6b122591d6db2a2b028938be5b3` and `9c9ab215099e581288b24c
 move by a pixel" can only be re-baselined this way: with a switch that puts the old pixels back
 and a diff that says what the new ones are.
 
+
+**Classic moves to full colour [DECIDED 2026-09-23, planned, not built].** The owner's call: Classic
+becomes a preset of the Classic++ pipeline with its options off, and it does not keep fidelity to
+the 8bpp colours.
+
+- Units are shaded by an RGB multiplier per `PALETTE.SHD` row, and so are Classic++ units, which
+  are flat today.
+- The fog grey is the RGB mean.
+- Gamma is applied once, on the finished world image.
+- The R8 atlases and index lookups leave the world passes. The UI stays indexed.
+
+When it lands, the table above and the parity claim change with it. The plan is
+[BAR camera & full-colour Classic](bar-camera-port.html) Part 2.
 ---
 
 ## 2. Decisions for the in-game Classic++  [DECIDED 2026-09-04 unless noted]
