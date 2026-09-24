@@ -5,7 +5,7 @@
 
    ONE STORE, AND THE MENU IS ITS ONLY WRITER. Every row of the render-options
    screens reads its value from here and writes it back here; nothing on those
-   screens persists through the registry or a lever file any more.
+   screens persists through the registry or a lever file.
 
    PRECEDENCE, per setting, and every consumer asks in this order:
      1. a LEVER -- the setting's own file (`tagpu_ss.off`, a key inside

@@ -574,18 +574,50 @@ def write_title(inst: Instance, label: str) -> str:
 # What a launch writes into a gamedir that a player's install does not have.
 HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
                  "tagpu_defaults.off", "totala.ini")
-PLACEMENT_KEYS = ("display", "window", "maxfps")
+# The store keys an ordinary launch writes: the placement (write_placement) and
+# the size (ensure_store). A player's menu writes the same keys, so the store
+# has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
+# after a --shipped one. Each side's values are kept in the meta while the other
+# side owns the file, so neither kind of launch loses what the other chose.
+HARNESS_KEYS = ("display", "window", "maxfps", "resolution")
+
+
+def _split_store(inst: Instance):
+    """The store's lines as (the rest, the HARNESS_KEYS lines); ([], []) with no store."""
+    try:
+        lines = (inst.gamedir / "impure.cfg").read_text().splitlines()
+    except FileNotFoundError:
+        return [], []
+    keys = [ln for ln in lines if ln.partition("=")[0].strip().lower() in HARNESS_KEYS]
+    return [ln for ln in lines if ln not in keys], keys
+
+
+def _hand_store_over(inst: Instance, meta: dict, to: str) -> None:
+    """Give the store's HARNESS_KEYS to `to` ("harness" | "player"): the current
+    owner's lines go into the meta, and `to`'s own lines, kept from its last
+    launch, come back. An instance with no owner recorded is the harness's.
+    Saves the meta, so a launch that dies after this leaves the two consistent."""
+    if meta.get("store", "harness") == to:
+        meta["store"] = to
+        return
+    path = inst.gamedir / "impure.cfg"
+    rest, keys = _split_store(inst)
+    meta[f"store_{meta.get('store', 'harness')}"] = keys
+    back = meta.pop(f"store_{to}", [])
+    if path.exists() or back:
+        path.write_text("\n".join(rest + back) + ("\n" if rest or back else ""))
+    meta["store"] = to
+    inst.save_meta(meta)
 
 
 def strip_to_shipped(inst: Instance, meta: dict) -> str:
     """Make the gamedir what a player has, for a --shipped launch: the release's
     files and the player's own store. Removes the files every launch writes
     (HARNESS_FILES -- the next ordinary launch writes them again from the
-    instance's recorded state) and, when the previous launch was an ordinary one
-    (`meta["placement"]`), the store's placement keys, which that launch wrote.
-    After a --shipped launch they are the menu's, like the rest of the store, and
-    stay. An ARM file (`tagpu_*.on/.off/.cfg`) is a measurement's state, not
-    tacli's to discard, so one refuses the launch instead."""
+    instance's recorded state) and hands the store's HARNESS_KEYS to the player:
+    what the last --shipped session's menu chose comes back, and on the first
+    one there is none. An ARM file (`tagpu_*.on/.off/.cfg`) is a measurement's
+    state, not tacli's to discard, so one refuses the launch instead."""
     armed = sorted(p.name for p in inst.gamedir.glob("tagpu_*")
                    if p.suffix.lower() in (".on", ".off", ".cfg") and p.name not in HARNESS_FILES)
     if armed:
@@ -594,14 +626,10 @@ def strip_to_shipped(inst: Instance, meta: dict) -> str:
             f"({', '.join(armed)}) -- `tacli arm {inst.name} {clear}` clears them")
     for name in HARNESS_FILES:
         (inst.gamedir / name).unlink(missing_ok=True)
-    store = inst.gamedir / "impure.cfg"
-    if meta.pop("placement", False) and store.exists():
-        lines = store.read_text().splitlines()
-        keep = [ln for ln in lines if ln.partition("=")[0].strip().lower() not in PLACEMENT_KEYS]
-        if keep != lines:
-            store.write_text("\n".join(keep) + ("\n" if keep else ""))
-    return ("shipped: no harness files and no placement -- the game places itself "
-            "(with no store: borderless fullscreen on the primary monitor)")
+    _hand_store_over(inst, meta, "player")
+    return ("shipped: no harness files, and the store's placement and size are the "
+            "player's -- the game places itself (with none: borderless fullscreen "
+            "on the primary monitor, at the monitor's own mode)")
 
 
 def write_nowarp(inst: Instance):
@@ -628,6 +656,20 @@ def store_maxfps(v) -> str:
         f"with one of those")
 
 
+def store_window(window):
+    """A --window client size as the store takes it (`frame_ok`, tagpu_settings.c):
+    0,0 for the game's own size, else 320x240 to 16384x16384. The DLL drops a
+    `window=` line outside that WHOLE, position included, so the window would
+    open unplaced -- refused here instead."""
+    if not window:
+        return 0, 0
+    w, h = int(window[0]), int(window[1])
+    if not (320 <= w <= 16384 and 240 <= h <= 16384):
+        die(f"--window {w}x{h}: the store (impure.cfg) takes a client size from "
+            f"320x240 to 16384x16384")
+    return w, h
+
+
 def write_placement(inst: Instance, tile, window=None, maxfps=60):
     """The window's placement, into the instance's settings store (`impure.cfg`,
     renderers.md 2.10b): `display=window`, `window=x,y,W,H` and `maxfps`.
@@ -649,7 +691,7 @@ def write_placement(inst: Instance, tile, window=None, maxfps=60):
     compared, they have both hit the cap: a frame-time A/B needs `--maxfps 0` on
     BOTH sides."""
     x, y = tile
-    w, h = (int(window[0]), int(window[1])) if window else (0, 0)
+    w, h = store_window(window)
     path = inst.gamedir / "impure.cfg"
     try:
         lines = path.read_text().splitlines()
@@ -964,6 +1006,10 @@ def _create(inst: Instance, args) -> dict:
     """Everything `create` does; `load` needs it without the printing."""
     if inst.exists and not args.force:
         die(f"instance {args.name!r} already exists (use --force to recreate)")
+    # the store's refusals, before anything exists to be left half-made
+    if getattr(args, "maxfps", None) is not None:
+        store_maxfps(args.maxfps)
+    store_window(getattr(args, "window", None))
     inst.dir.mkdir(parents=True, exist_ok=True)
     # Only a *running* instance holds a slot. Reserving one per instance that has
     # ever been created walks the grid off the screen after a dozen of them, and
@@ -997,7 +1043,7 @@ def _create(inst: Instance, args) -> dict:
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "res": list(res),
         "maxfps": maxfps,
-        "placement": True,              # mirror_gamedir wrote it (strip_to_shipped)
+        "store": "harness",             # mirror_gamedir wrote the placement (HARNESS_KEYS)
         "window": list(window) if window else None,
         "slot": index,
         "tile": list(tile),
@@ -1197,6 +1243,8 @@ def _launch(args) -> dict:
                 f"{', '.join(clash)} would write something")
     if getattr(args, "maxfps", None) is not None:
         store_maxfps(args.maxfps)           # refused before anything is created
+    if getattr(args, "window", None) is not None:
+        store_window(args.window)
     inst = Instance(args.name)
     created = not inst.exists
     if created:
@@ -1209,8 +1257,19 @@ def _launch(args) -> dict:
     meta = inst.meta()
     if inst.running():
         return dict(meta, already_running=True, pid=inst.pid())
-    # The DLL reads no ddraw.ini; one left in a gamedir would only suggest it counts.
+    # A build that still reads ddraw.ini finds none here and falls back to its own
+    # defaults: borderless fullscreen, unplaced, on whatever monitor -- the owner's,
+    # on the live display -- and it writes a template ddraw.ini beside itself.
+    # Only a --keep-dll launch can run one; this tree's build carries no such string.
+    kept = inst.gamedir / "ddraw.dll"
+    if args.keep_dll and kept.exists() and b"ddraw.ini" in kept.read_bytes():
+        die(f"--keep-dll: {inst.name}'s ddraw.dll is a build that reads ddraw.ini, "
+            f"which tacli no longer writes -- it would open fullscreen and unplaced. "
+            f"Launch it with the tacli of a tree from before the ini was removed")
     (inst.gamedir / "ddraw.ini").unlink(missing_ok=True)
+    if not shipped:
+        # before anything reads the store's size: the harness's own, not a player's
+        _hand_store_over(inst, meta, "harness")
     # The instance's OWN display, not this shell's — a second X server or an
     # Xvfb is a different size, and measuring the wrong one puts the window
     # exactly where this is meant to stop it going.
@@ -1335,7 +1394,6 @@ def _launch(args) -> dict:
         ensure_store(inst, tuple(args.res) if args.res else None,
                      default_res=tuple(meta["res"]))
         write_placement(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
-        meta["placement"] = True        # the store's placement is tacli's (strip_to_shipped)
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.
@@ -4631,9 +4689,10 @@ def build_parser():
     l.add_argument("--shipped", action="store_true",
                    help="launch the gamedir as a player has it, for a hand-over: no "
                         "tagpu_nowarp.on, shield, title, totala.ini or tagpu_defaults.off, "
-                        "and no placement in impure.cfg, so the game places ITSELF "
-                        "(a first run: borderless fullscreen on the primary monitor -- "
-                        "the owner's screen on the live display). Refused with arm files "
+                        "and impure.cfg's placement and size are the player's own, kept "
+                        "across ordinary launches, so the game places ITSELF (a first "
+                        "run: borderless fullscreen on the primary monitor -- the "
+                        "owner's screen on the live display). Refused with arm files "
                         "present or with a flag that writes something. Not sticky")
     l.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
     l.add_argument("--timeout", type=float, default=45)

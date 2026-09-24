@@ -649,16 +649,16 @@ void util_update_bnet_pos(int new_x, int new_y)
    that is no longer attached.
    - Windowed: the window's own; its frame placed it.
    - Fullscreen, with a windowed frame on record (`window_rect`, from the store
-     or from this session's window -- WM_MOVE, util_set_window_rect): the
-     monitor that frame is on, so Alt+Enter goes fullscreen where the window was.
+     or from this session's window -- util_toggle_fullscreen records it on the
+     way out): the monitor that frame is on, so Alt+Enter goes fullscreen where
+     the window was. A frame on no monitor (its screen unplugged) counts as none.
    - Fullscreen with no frame: the PRIMARY, the monitor at the desktop's origin.
      Never the window's own there: nothing has placed the window, so it is
-     wherever wine created it, and on the reference setup a first run with no
-     store went fullscreen on the portrait side monitor that way.
+     wherever wine created it (ddraw-ini-removal.md, the monitor rule).
    Read on the render thread too (fpsl_init, through util_target_refresh):
    `fullscreen` is an aligned BOOL and the frame two aligned LONGs, so a racing
-   read can mix an old and a new value, and every point MonitorFromPoint is
-   given names a monitor that exists (MONITOR_DEFAULTTONEAREST). */
+   read can mix an old and a new value, and every answer is a monitor that
+   exists: a point on none falls through to the primary. */
 HMONITOR util_default_monitor(void)
 {
     POINT origin = { 0, 0 };
@@ -669,7 +669,10 @@ HMONITOR util_default_monitor(void)
     if (g_config.window_rect.left != -32000 && g_config.window_rect.top != -32000)
     {
         POINT frame = { g_config.window_rect.left, g_config.window_rect.top };
-        return MonitorFromPoint(frame, MONITOR_DEFAULTTONEAREST);
+        HMONITOR mon = MonitorFromPoint(frame, MONITOR_DEFAULTTONULL);
+
+        if (mon)
+            return mon;
     }
 
     return MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
@@ -930,7 +933,19 @@ void util_toggle_fullscreen()
     {
         if (!g_config.fullscreen)
         {
+            POINT org = { 0, 0 };
+
             mouse_unlock();
+
+            /* THE FRAME IS WHERE THE WINDOW IS, not where it was last dragged:
+               a keyboard move or a snap updates nothing else, and the frame
+               names the monitor this goes fullscreen on (util_default_monitor). */
+            if (g_ddraw.hwnd && !util_is_minimized(g_ddraw.hwnd) &&
+                real_ClientToScreen(g_ddraw.hwnd, &org))
+            {
+                g_config.window_rect.left = org.x;
+                g_config.window_rect.top = org.y;
+            }
 
             g_config.fullscreen = TRUE;
             dd_SetDisplayMode(0, 0, 0, 0);
