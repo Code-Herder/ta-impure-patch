@@ -223,8 +223,17 @@ The engine's unit array then has `10 × UnitLimit + 1` slots (the u16 at `main+0
 stock tops out at 5 001. `src/Recorder/plugins/UnitLimit.pas:37-67` quotes the same sites with
 `5DCh` (1500) in all three immediates; that listing is of a binary already patched, not of the
 retail one. What TADR does is rewrite those three immediates — `0x491640` (default), `0x491659`
-(compare), `0x491666` (clamp-to) — plus a fourth multiplayer site at `0x44CAFE`
-(`LimitCrack.cpp:466-473`, addresses at `HardCodeFunctions.cpp:832-835`). The Delphi plugin
+(compare), `0x491666` (clamp-to) — plus a fourth site at `0x44CAFE` that TADR names
+`MPUnitLimitAddr` (`LimitCrack.cpp:466-473`, addresses at `HardCodeFunctions.cpp:832-835`).
+**That fourth site is not a unit limit.** `0x44CAFD mov ecx,0x65` is the value 101 stored into
+the battleroom's per-unit-type table (`[0x5129B4]+i+0x5A`, `[0x5129C4]+i·4`) when the
+per-type lookup `0x46E330` returns −1 [DISASSEMBLED 2026-09-23]. It reads as the per-type build
+limit's "unrestricted" sentinel, and TADR's write as the fix that keeps an unrestricted type from
+being capped at 101 [INFERRED — settle it by building more than 101 of one type in a stock network
+game]. In a network game the per-player limit comes from the host instead:
+`0x449D9B` writes `main+0x37EEA` from the status packet with no clamp
+([the port's evidence §5](tadr-port/limits-evidence.md#5-units-per-player-250500-1500-limitcrackcpp466-473)).
+The Delphi plugin
 writes 2 bytes per site (`UnitLimit.pas:93-104`), the C++ writes 4. One live inconsistency:
 `LimitCrack.cpp:43` uses a hard-coded fallback of **3663** if the ini key is missing, while the
 shipped ini says 1500. Same pattern at `:41` — code fallback 16000, shipped ini 20480.
