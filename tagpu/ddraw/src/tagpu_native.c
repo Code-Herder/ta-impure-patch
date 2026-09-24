@@ -2758,7 +2758,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.vpL = vpL; fv.vpT = vpT; fv.vw = vw; fv.vh = vh; fv.scafOn = scafOn;
         fv.evpL = evpL; fv.evpT = evpT; fv.evw = evw; fv.evh = evh;
         fv.gw = gw; fv.gh = gh; fv.ss = ss; fv.fogMode = fogMode;
+        /* THE MAP EDGE, one answer for every gather in the frame, and
+           mirrored only while the feature pass holds the level's features
+           when it is armed (tagpu_feat_mapfeat_sync): ground and trees
+           appear together or not at all. */
         fv.mirror = s_mirror > 0;
+        if (featOn && !tagpu_feat_mapfeat_sync(f->packet, fv.mirror)) fv.mirror = 0;
         fv.zoom = s_zoom;
         fv.zoomCx = (float)vpL + (float)vw * 0.5f;
         fv.zoomCy = (float)vpT + (float)vh * 0.5f;

@@ -200,4 +200,14 @@ void tagpu_feat_atlas_ack(unsigned serial, int keep);
    the copy is keyed on the level it came from. */
 int      tagpu_feat_mapfeat_want(void);
 unsigned tagpu_feat_mapfeat_have(void);
+
+/* RENDER THREAD, before either gather: records whether the map edge wants the
+   table (`want`, the edge setting), takes it out of this frame's packet when
+   it rides there, and answers 1 while this pass holds this level's copy.
+   THE MIRROR IS SHOWN ONLY WHILE THIS IS 1, terrain and features alike
+   (tagpu_native.c), so the mirrored ground never draws a frame without the
+   features that stand on it: the two switch on the same frame by
+   construction, not by the table's arrival time. */
+struct TAGPU_PACKET;
+int      tagpu_feat_mapfeat_sync(const struct TAGPU_PACKET* pk, int want);
 #endif

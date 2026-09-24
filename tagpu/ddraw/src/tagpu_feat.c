@@ -769,6 +769,14 @@ static void mapfeat_take(const TAGPU_PACKET* pk)
     }
 }
 
+int tagpu_feat_mapfeat_sync(const TAGPU_PACKET* pk, int want)
+{
+    s_mfWant = (s_armed == 1 && want) ? 1 : 0;
+    if (s_armed != 1 || !pk || !pk->in_game) return 0;
+    mapfeat_take(pk);
+    return s_mfGen == pk->level_gen + 1u && s_mfW == pk->map_w16 && s_mfH == pk->map_h16;
+}
+
 /* THE RECT THE DEPTH KEYS ARE TAKEN OVER. Under the mirror it is the sweep
    rect NOT clamped to the map, for the map's own features and the mirrored
    ones alike, so the two sort against each other by one painter's order --
@@ -904,9 +912,6 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     int onMap, mirror;
     unsigned ai;
     KEYRECT key;
-    /* the publisher's question, answered before any refusal below: a level
-       that is loading still wants its table in its first packet */
-    s_mfWant = (s_armed == 1 && v->mirror) ? 1 : 0;
     if (s_armed != 1) return feat_bail();
     if (!pk || !pk->in_game) return feat_bail();
     /* THE ATLAS IS WHAT THIS PASS NEEDS BEFORE IT CAN GATHER, and it is the
@@ -927,7 +932,6 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     s_cBody = s_cShadow = s_cAtlasFail = s_cOverflow = 0;
     s_cMBody = s_cMShadow = 0;
     s_logged = 0;
-    mapfeat_take(pk);
     /* `passive` is the explicit A/B lever. The wrecks requirement is not an
        anti-double-draw test and must not be read as one -- the engine's
        features reach the reference surface and no screen (gpu-status 2.81).
@@ -995,9 +999,9 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     key.c0 = c0; key.cols = nCols;
     if (c0 < 0) { nCols += c0; c0 = 0; }
     if (c0 + nCols > mapW - 1) nCols = mapW - c0 - 1;
-    /* THE MIRROR NEEDS THIS LEVEL'S COPY of the map's features, of this map:
-       the copy is keyed on the level it came from, and its dimensions are the
-       ones every index into it was bounded against. */
+    /* `v->mirror` is 1 only while this level's copy is held
+       (tagpu_feat_mapfeat_sync); its dimensions are the ones every index into
+       it was bounded against, so they must be this map's. */
     mirror = v->mirror && s_mfGen == pk->level_gen + 1u && s_mfW == mapW && s_mfH == mapH &&
              key.rows > 0 && key.cols > 0;
     /* A VIEW WHOLLY PAST THE MAP has no cell of its own to sweep, and still
