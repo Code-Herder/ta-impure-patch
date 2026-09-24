@@ -135,9 +135,10 @@ Armed by `tagpu_fx.on` (tokens `log`, `nolines`, `nomodels`, `nosprites`, `noexp
   into the unit atlas.
 - **A record is drawn whole or not at all.** A projectile with its ground shadow, an
   explosion with its flash and its body, is emitted inside one bracket
-  (`effect_begin`/`effect_end`); a sprite whose atlas paint the allowance defers takes the
-  whole record back out for that frame, so a flash never shows without its explosion or
-  a shadow without its shell. The explosions are one walk, flash and body per record;
+  (`effect_begin`/`effect_end`); any part of it lost for want of room — a sprite whose
+  atlas paint the allowance defers, one the full atlas refuses or that would not decode, a
+  quad or a line past a bucket's end (`s_partsLost`) — takes the whole record back out for
+  that frame, so a flash never shows without its explosion or a shadow without its shell. The explosions are one walk, flash and body per record;
   the buckets keep the engine's two layers apart, every flash before every body.
 - **Lines and sprites** are the module's own program: a private 2048² R8 atlas (raw,
   RLE and sub-frame frames decoded on first use), palette lookup, four modes — flat
