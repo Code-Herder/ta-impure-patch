@@ -230,8 +230,9 @@ the battleroom's per-unit-type table (`[0x5129B4]+i+0x5A`, `[0x5129C4]+i·4`) wh
 per-type lookup `0x46E330` returns −1 [DISASSEMBLED 2026-09-23]. It reads as the per-type build
 limit's "unrestricted" sentinel, and TADR's write as the fix that keeps an unrestricted type from
 being capped at 101 [INFERRED — settle it by building more than 101 of one type in a stock network
-game]. In a network game the per-player limit comes from the host instead:
-`0x449D9B` writes `main+0x37EEA` from the status packet with no clamp
+game]. In a network game the per-player limit comes from the host instead: the game start
+writes the unit array's count from the host's record with no clamp (`0x4973B5`), and a lobby
+launch writes `main+0x37EEA` from `0x512D6C` the same way (`0x449D9B`)
 ([the port's evidence §5](tadr-port/limits-evidence.md#5-units-per-player-250500-1500-limitcrackcpp466-473)).
 The Delphi plugin
 writes 2 bytes per site (`UnitLimit.pas:93-104`), the C++ writes 4. One live inconsistency:
@@ -239,9 +240,9 @@ writes 2 bytes per site (`UnitLimit.pas:93-104`), the C++ writes 4. One live inc
 shipped ini says 1500. Same pattern at `:41` — code fallback 16000, shipped ini 20480.
 [DISASSEMBLED for the retail values; VERIFIED against the TADR sources for the patch sites]
 
-The renderer is sized for **1024 a player × 10 players = 10 241 slots**
-(`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`); gpu-status §2.86 lists what that design point
-bounds.
+The renderer is sized for **1500 a player × 10 players = 15 001 slots**
+(`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`), the limit the TADR port installs; gpu-status §2.86
+lists what that design point bounds.
 
 **Weapon IDs 256→16000 is not current.** `tdraw.txt:8` explicitly says the weapon-ID
 crack is "not present in current release"; the ini keys `WeaponType` and

@@ -68,12 +68,10 @@
 #define MODE_ALPHA  TAGPU_FXMODE_ALPHA
 #define MODE_FLASH  TAGPU_FXMODE_FLASH
 
-#define MAXFXV   TAGPU_FX_MAXV  /* vertices per bucket per frame (tagpu_fx.h) */
 /* THE STRIDE IS tagpu_fx.h's, so the vertices written here and the Vulkan
    attribute array cannot drift apart. */
 #define FXST     TAGPU_FX_VST   /* x,y,enc, u,v, c,mode, wx,wz               */
 #define MAXMODEL 1024
-typedef char fx_sprites_fit[(6 * (2 * TAGPU_LIM_PROJ + TAGPU_LIM_EXPL) <= TAGPU_FX_MAXV) ? 1 : -1];
 #define ATLAS_DIM 2048
 #define ATLAS_MAX 2048
 
@@ -199,7 +197,12 @@ int tagpu_fx_armed(unsigned frame_counter)
 #define B_FLASH   TAGPU_FXB_FLASH
 #define B_SPRITES TAGPU_FXB_SPRITES
 #define NBUCKET   TAGPU_FXB_N
-static float  s_verts[NBUCKET][MAXFXV * FXST];
+/* one array a bucket, each at its own cap (tagpu_fx.h) */
+static float  s_vUnder[TAGPU_FX_MAXV_UNDER * FXST], s_vLines[TAGPU_FX_MAXV * FXST],
+              s_vFlash[TAGPU_FX_MAXV * FXST], s_vSprites[TAGPU_FX_MAXV_SPRITES * FXST];
+static float* const s_verts[NBUCKET] = {
+    [B_UNDER] = s_vUnder, [B_LINES] = s_vLines, [B_FLASH] = s_vFlash, [B_SPRITES] = s_vSprites
+};
 static int    s_nv[NBUCKET];
 static float  s_encCur = 403.0f;       /* depth key of what is being emitted  */
 static int    s_under = 0;             /* emit sprites/dots into B_UNDER      */
@@ -314,7 +317,7 @@ static void put_quad(int b, float x0, float y0, float x1, float y1,
                      float u0, float v0, float u1, float v1, float c, int mode,
                      float wx, float wz)
 {
-    if (s_nv[b] + 6 > MAXFXV) { s_cOverflow++; return; }
+    if (s_nv[b] + 6 > TAGPU_FX_MAXV_OF(b)) { s_cOverflow++; return; }
     put_vert(b, x0, y0, u0, v0, c, mode, wx, wz);
     put_vert(b, x1, y0, u1, v0, c, mode, wx, wz);
     put_vert(b, x0, y1, u0, v1, c, mode, wx, wz);
@@ -329,7 +332,7 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
     if (!s_lines) return;
     s_cLines++;
     if (s_mute) return;
-    if (s_nv[B_LINES] + 2 > MAXFXV) { s_cOverflow++; return; }
+    if (s_nv[B_LINES] + 2 > TAGPU_FX_MAXV) { s_cOverflow++; return; }
     float c = (float)colidx / 255.0f;
     /* pixel centres: the engine's Bresenham paints the cells at both ends */
     put_vert(B_LINES, (float)x0 + 0.5f, (float)y0 + 0.5f, -1, -1, c, MODE_FLAT, wx, wz);

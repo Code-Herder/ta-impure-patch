@@ -3484,10 +3484,11 @@ own terrain blit before our terrain pass had taken it back. The rect now widens 
 game thread has latched as ours. [GPU status](gpu-status.html) §2.3b. **The 512-posed-unit cap is
 CLOSED, 2026-09-23**: past it the unit pass drew no bodies at all (`500v500` zoomed out). The poses
 are one storage buffer a frame now, and every cap that scales with the unit count is grown to the
-frame or fixed at the design point of 10 players × 1024 units (`TAGPU_PK_DESIGN_SLOTS`, asserted at
+frame or fixed at the design point, 10 players × 1500 units since the TADR port's landing 2 (`TAGPU_PK_DESIGN_SLOTS`, asserted at
 compile time): 610 posed units drawn on `500v500` where `main` drew none, and 0 px against `main` on
-`selbox-facings`. [GPU status](gpu-status.html) §2.86. Not covered: nothing ran past stock's 5 001
-slots, and frame time at 10 000 units is unmeasured. **Unit bodies over the effects, and cargo over
+`selbox-facings`. [GPU status](gpu-status.html) §2.86. Past stock's 5 001 slots it has run since:
+6000 units in 15 001 slots in the port's tier-1 battle ([§2.6b](gpu-status.html)). Not covered:
+frame time at 10 000 units and more. **Unit bodies over the effects, and cargo over
 its transport, are CLOSED, 2026-09-23**: a negated stage test drew every unit body after the
 effects pass (the nanolathe spray vanished over a factory's pad), and a carried unit sorted as
 though level with its transport. The body stage is the body stage again, and cargo takes the
@@ -3716,11 +3717,12 @@ TADR's engine features, brought in as our own code: the plans live in the wiki's
 [TADR port](tadr-port/overview.html) section, one page per feature group. Group A raises the
 engine's limits over five landings ([the plan](tadr-port/raised-limits.html)); the owner decided
 every choice on 2026-09-23. The standing rules: the same build on every peer, fail closed with a
-report, no runtime opt-out, and stock behaviour exact below every raised limit.
+report, no runtime opt-out, and stock behaviour exact below every raised limit wherever it can be
+kept (the flying pieces' byte ring is the one place it cannot).
 
 | Gate | Status | Result |
 |---|---|---|
-| A — Raised ceilings | ◐ **landing 1 of 5, 2026-09-23** — [the plan](tadr-port/raised-limits.html) | **Exit:** ten players at 1500 units each in one network game, every raised pool past its stock cap on every peer, and the peers agreeing when paused. Landing 1 raised the four effect pools and built the module, the failure report and the stock-limits build ([gpu-status §2.6b](gpu-status.html)). **Not covered by landing 1:** units, pathfinding, particles, sounds and the composite buffer (landings 2–4), and the ten-player proof (landing 5) |
+| A — Raised ceilings | ◐ **landing 3 of 5, 2026-09-23** — [the plan](tadr-port/raised-limits.html) | **Exit:** ten players at 1500 units each in one network game, every raised pool past its stock cap on every peer, and the peers agreeing when paused. Landing 1 raised the four effect pools and built the module, the failure report and the stock-limits build; landing 2 raised units to 1500 a player (default and ceiling), clamped both `maxunits` keys and the host's limit, closed the restriction menu's hidden 101-per-type cap (Cancel's), raised the pathfinder's budget and moved the render design point to 15 001, proved by a four-player skirmish of 6000 units; landing 3 raised the particle layers to 20 480 and their pool to 204 800, which the same battle reaches 13 529 of in one layer, and sized our particle table and effect buckets to follow ([gpu-status §2.6b](gpu-status.html)). **Not covered by landings 1–3:** sounds and the composite buffer (landing 4), the ten-player proof (landing 5), and how the game thread's frame at 6000 units splits between the engine and our publisher |
 
 ## The stock engine's own defects (2026-09-23)
 

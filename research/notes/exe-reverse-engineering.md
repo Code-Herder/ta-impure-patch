@@ -161,9 +161,10 @@ are that patch's business, not retail's. (`AISearchMapEntries` is not examined h
 
 ### The per-player unit cap — `0x49163F..0x49168B` — mapped by us [VERIFIED 2026-09-11, objdump of the pristine build]
 
-At game start the engine reads the cap out of `totala.ini` and clamps it before
-writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, and
-`tools/tacli` writes the file before launch for exactly that reason:
+At process start the engine reads the cap out of `totala.ini` and clamps it before
+writing `MaxUnitNumberPerPlayer`. The read is in `0x491200`, which WinMain calls once
+(`0x49EA62`), so the value cannot be raised in a running process, and `tools/tacli` writes
+the file before launch for exactly that reason:
 
 ```
 49163f: push 0xfa                        ; default 250
@@ -185,24 +186,89 @@ writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, 
 49168b: mov  WORD PTR [ecx+0x37eec], ax
 ```
 
-* **The ceiling is 500 per player**, whatever the file says; four players hold 2000
+* **The stock ceiling is 500 per player**, whatever the file says; four players hold 2000
   between them. Measured live 2026-09-10 with `tacli roster`: at the cap of 500 a
   fresh skirmish hands out idx 1 to player 0, **501** to player 1, **1001** to player 2.
 * The store is a WORD, so the field is an `unsigned short` (where the 6553 figure
-  comes from), but no retail path writes more than 500 into it. Raising the cap means
+  comes from). This path writes at most 500; a saved game's `[Summary]` `maxunits` is stored
+  into it unclamped (`0x432646`, below). Raising the cap means
   patching **both** immediates, the compare and the stored value — the community's
   "two offsets, set identically".
 * `ActualUnitLimit` (`+0x37EEA`) is not touched on this path.
-* **The renderer is sized past this cap**, for a patch that raises it to 1024: the unit
-  array's `10 × cap + 1` slots become 10 241 (`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`),
-  and every render-side table that scales with the unit count is grown to the frame or
-  asserted against that number at compile time — [gpu-status](gpu-status.html) §2.86.
-* What this cost before it was written down: `tools/tacli`'s scenario schema accepted
-  `unit_limit: 1500` from the old `[20, 1500]` line above and a 600-unit scenario
-  failed in the fork after launch instead of at validate time; the schema is now bounded
-  at `SCN_MAX_LIMIT = 500`, and `research/notes/scenario-format.md` carries the
-  scenario-side consequences (`scenarios/ball10.json` asks 625 per player and has never
-  had them).
+* **Under the raised limits the ceiling and the default are 1500** (`tagpu_limits.h`, the TADR
+  port's landing 2): the default operand `0x491640`, the compare `0x491659` and the clamp-to
+  `0x491666` all become `0x5DC`; the floor stays. MEASURED 2026-09-23: with no `UnitLimit` key,
+  `+0x37EEC` reads 1500 at the menu; in a four-player skirmish `+0x37EEC` = `+0x37EE6` = 1500 and
+  the slot count `main+0x14351` = **15 001**, and 6000 units were created without a refusal.
+  The renderer's design point is exactly that game (`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`;
+  [gpu-status](gpu-status.html) §2.86 and §2.6b).
+
+**Who writes the array's count, `main+0x37EE6` [DISASSEMBLED 2026-09-23].** It is the field the slot
+count `10·N + 1` is computed from (`0x4854EF`, a 16-bit `imul` at `0x4854EA` that wraps past 6553,
+after which `0x485502` allocates the array too small). These places write it:
+- `0x4912F5`, in the process init `0x491200`, copies `+0x37EEC` into it (and `0x491308` on into
+  `+0x37EEA`). It runs *before* that function's ini read at `0x491653`, so it copies whatever
+  `+0x37EEC` held before the read; the game start below is what carries the configured value.
+- **Game start, `0x4971C7`, dispatches on `0x435100` (`[ecx]` of `main+0x391E9`):** mode 2 (skirmish)
+  copies `+0x37EEC` at `0x4973CD`; mode 3 (network) copies it at `0x4971F8`, reloads the map through
+  `0x4972D6` → `0x435A20` → `0x435DA0` (which writes the `.ota` value, next item), and then, for
+  the seat `0x456850` returns (the host <span class="pill pill-warn">INFERRED</span>), overwrites
+  it at `0x4973B5` with the word at `+0xA5` of that player's record (`PlayerStruct + 0x27`, the
+  pointer at `main + 0x1B8A + i·0x14B`). When `0x456850` returns 10 (`0x4972E2`) that overwrite is
+  skipped and the map's value stays. Mode 1 (campaign, `0x49745C`) does not write it at all.
+- `0x436037`, inside `0x435DA0`, the map loader: the map's `.ota` `[GlobalHeader]` key `maxunits`
+  (`0x4C46C0`, default 200), stored unclamped. A campaign mission plays with this value; a skirmish
+  overwrites it at game start. Every retail map sets 200 to 400 (checked over every `.ota` in the
+  retail archives, 2026-09-23).
+- **Where the host's word comes from.** On the host, `+0xA5` is the battleroom's MAXUNITS slider,
+  whose maximum is `ActualUnitLimit − 20` (`+0x37EEA`, read at `0x44A2B2`). `ActualUnitLimit` is
+  written from `+0x37EEC` by the process init (`0x491308`) and by the battleroom at `0x449C42` when
+  the local record's `+0x97` bit 0 is set; a DirectPlay lobby launch writes it, and the record's
+  `+0xA5`, from `0x512D6C` unclamped (`0x449D87`, `0x449D9B`). On a client the record arrives over
+  the network.
+- **The raised limits hold every writer to [20, 1500]:** the game-start copies take the clamped
+  `+0x37EEC`, and three stores go through a clamp stub: `0x436037`; `0x432646` in `0x432610`, which
+  reads `maxunits` out of a saved game's `[Summary]` (called from `0x497B29` when the game's
+  `main+0x38D6B` TDF has no `BetweenMissions` key) into `+0x37EEC`; and the host's word at
+  `0x4973B5`, whose read at `0x4973AE` becomes `movzx eax, word [eax+0xA5]` (the same seven bytes)
+  so that the stub sees the whole value. Each 7-byte `mov word [ecx+off],ax` becomes a `call` to a
+  stub that clamps `eax` and stores it, and two NOPs. `eax` and the flags are dead after all three.
+
+**A type's own cap, `UnitDef+0x15A` [DISASSEMBLED 2026-09-23].** The unit constructor `0x485F50`
+(`UNITS_CreateUnit`, `(player, type, …)`) checks it before anything else: a type whose `def+0x241`
+bit 23 is clear is refused outright (`0x485FAA`, `je 0x4861BD`, return 0); when the bit is set and
+`def+0x15A` is not −1, it counts the player's units of that type (`unit+0xA6`, over the
+player's range at `PlayerStruct+0x67..+0x6B`, stride `0x118`) and refuses the unit at the cap
+(`0x485FE4`). The load sets `def+0x15A` = −1 (`0x42B169`); the battleroom's restriction store
+(`main+0x2A30`) sets both in `0x46E160` (called from `0x46CA60`; that this runs at game start is
+<span class="pill pill-warn">INFERRED</span>): the bit when the type's record has `+0x18` set (by
+`0x46E4D0`, cleared by `0x46E450`) and `+0x1A` set, the cap from the record's `+0x1C`. The
+restriction menu keeps each type as 0..100, **101 meaning no limit** (`0x44CAFD`, operand
+`0x44CAFE`: when the per-type lookup `0x46E330` answers −1 from the record's `+0x1C`, the menu
+holds 101); a slider moved past 100 is stored as −1 and shown as "No Limit"
+(`0x44BEC0` → `0x44BF47`), but **Cancel (`0x44C6FC`) writes the values saved when the menu opened
+back as they are** (`0x44C750` → `0x46E550`), 101 included, so after a cancelled menu every
+enabled, unlimited type is capped at 101. The raised
+limits write the unit limit over that sentinel, as TADR does. A default network game never reaches
+it: landing 1's two peers each created 450 of one type through `0x485F50` with none refused.
+**Reset (`0x44C5EB`) is a second, visible path:** it writes 100 into every enabled type
+(`mov ebx,0x64` at `0x44C62D`, stored through `0x46E550` at `0x44C69B`), and the menu shows 100,
+so each type then stops at 100 units in a 1500-unit game. That one is stock's and is left alone:
+the player sees the number they chose.
+
+**The pathfinder's budget [DISASSEMBLED 2026-09-23].** `0x40EAD3 mov dword [esi+0x48],0x535` (1333,
+operand `0x40EAD6`), the only `0x535` in `.text`, in the pathfinder's per-game init `0x40E9E0`
+(called from `0x44F6B3`; it sizes its bitmaps from the map, fills `[pf+0x79+4i]` from each
+player's record, `[main+0x1A7F+i·0x14B]`, and stores `+0x54` = `0x18000`). **Its one reader is the
+per-tick `0x40EB70`** (called from `0x464F92`): at `0x40EB91` it divides the budget by the u16 at
+`main+0x2A3C`, adds that to each active player's credit at `[pf+0xA1+4i]`, and the searches spend
+those credits. So it is a budget a tick shared among the players, not one per search. Every 150
+calls (`0x511A38`) the same function rewrites a ten-dword table at `0x5119E8` (stride 4, to
+`0x511A10`): a multiple of `+0x54` chosen by each player's counter at `0x511A10` over the
+per-player count `main+0x1434F`, and the counter is reset. The budget is an `int` that
+nothing sizes or indexes, so raising it costs time, not memory. The raised limits make it 66 650,
+TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
+outside the apply frame.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23]
 
@@ -3933,7 +3999,7 @@ every publish of that tick.
 | projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **All ten append sites refuse past the cap** — each a `cmp …,0x12C / jge` past the store (`0x49B6EE`, `0x49B809` and eight more; the list is under *The raised effect pools*) — so the count is bounded by the allocation itself and no sanity cap is needed |
 | explosions | stock: count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54`; raised: the same layout in a DLL static | **300 in stock, 3000 raised.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
 | flying debris | stock: the 100 dwords at `0x511DF0..0x511F80`; raised: 1000 dwords in a DLL static. Each names a system whose `+0x2C` is the piece `{node @0, turn @0x12, x @0x16, alt @0x1A, y @0x1E}` | the slot count is the address range |
-| the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **401 objects, not 400.** Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at 400 or fewer it appends, and **past 400 it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So 401 is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
+| the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **The cap plus one: 401 in stock, 20 481 under the raised limits** (*The raised effect pools*, below). Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at the cap or fewer it appends, and **past it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So the cap plus one is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
 
 **"The draw passes only read them" is true of the arrays, not of what their fullness decides.**
 Two of the caps above gate draws from the simulation's random numbers; see *The raised effect
@@ -3942,7 +4008,8 @@ pools* below.
 **THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
 to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and
 that function calls the grey-smoke emitter `0x472810` (`0x421583`) and the fire emitter `0x472AB0`
-(`0x4215AA`) — both **append to a particle layer**, and past 400 destroy its front object. So the
+(`0x4215AA`) — both **append to a particle layer**, and past its cap (400 in stock, 20 480 raised)
+destroy its front object. So the
 ten layers are not constant within a sim tick: a second draw of one tick can find a layer the first
 draw did not produce. [ESTABLISHED 2026-09-12 by landing 4a's review, which is what corrected the
 frame packet's per-tick cache argument — see the note in `tagpu_packet_pub.c`.]
@@ -3980,12 +4047,14 @@ above are what establish the mapping).
 ### The raised effect pools — every site `tagpu_limits.h` rewrites [DISASSEMBLED 2026-09-23, objdump of the pristine build; MEASURED 2026-09-23]
 
 The four pools above are raised tenfold by the limits block of `tagpu_patches.c`, re-derived from
-TADR's `EngineLimits.cpp` (prior art, [the TADR port](tadr-port/raised-limits.md)). **43 sites in
-one table**, compared with the stock bytes as a whole at `DLL_PROCESS_ATTACH` and written as a
-whole or not at all; a mismatch writes nothing and the first DirectDraw call shows the
-startup-failure report and exits. Every site below was read out of the pristine image, and the
-evidence for each is in [the evidence pass](tadr-port/limits-evidence.md) §1–4. Two landing
-reviewers checked all 43 against the image byte for byte and found no site wrong.
+TADR's `EngineLimits.cpp` (prior art, [the TADR port](tadr-port/raised-limits.md)), and the
+particle layers and their object pool with them, from its `LimitCrack.cpp`. They share **one table**
+with the unit limit's sites (*The per-player unit cap*), 73 sites in all, compared with the stock
+bytes as a whole at `DLL_PROCESS_ATTACH` and written as a whole or not at all; a mismatch writes
+nothing and the first DirectDraw call shows the startup-failure report and exits. Every site below
+was read out of the pristine image, and the evidence for each is in
+[the evidence pass](tadr-port/limits-evidence.md) §1–4 and §7. Landing reviewers checked the sites
+against the image byte for byte.
 
 **Projectiles, 300 → 3000.** The pool stays the engine's, allocated per game:
 - `0x499A32` the `push 0x7D64` (the bytes, `300 × 0x6B`) and `0x499A56` the `mov ecx,0x1F59` of the
@@ -4072,6 +4141,46 @@ bit 2) to `0x421700` before it scans for a slot, so that branch does not depend 
 either. `0x420E50`, which has the same shape and also calls `0x421620`, has no caller or pointer
 anywhere in the image; nor do `0x421150`, `0x421170` and `0x4211A0`, three slot helpers whose
 operands are patched with the rest.
+
+**Particles, 400 → 20 480 a layer and 1000 → 204 800 objects.** Two ceilings, both visual: the
+emitter range `0x470F00..0x472F00` draws the C runtime's `rand` (`0x4E4870`) and never the
+simulation's generator.
+- **The layer cap is twenty operands**, every `0x190` compare in the emitters: nineteen
+  `cmp eax,0x190` (`3D imm32`, operand at +1) at `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`,
+  `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`,
+  `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472CD9`, and
+  `cmp ecx,0x190` (`81 F9 imm32`, operand at +2) at `0x472BF2`. Past the cap the emitter destroys
+  the layer's front object and shifts the rest down (`0x472078..0x4720AF`), so a layer holds the
+  cap plus one.
+- **The pool `0x51E610` is built once, by the C runtime's static initializer** `0x471C80`:
+  `push 0x4C; push 0x3E8` (operand `0x471C83`), `call 0x470A90`, then `atexit(0x471CA0)`. The
+  constructor calls `0x470C10` once (its only caller, `0x470ACB`), which `realloc`s the pointer
+  stack at `+0x14` to 4 × capacity and `malloc`s capacity × `0x4C` bytes in one block; nothing grows
+  it later. The alloc `0x470EB0` is `used < capacity ? stack[used++] : 0` (`+0x20` used, `+0x1C`
+  capacity), the free `0x470ED0` is `stack[--used] = p`. All 28 references to `0x51E610` are the
+  twenty allocs, six frees, the constructor and the `atexit`. An empty pool makes the emitter skip
+  the particle (`0x471FFC..0x47202E`). DllMain runs before that initializer, so writing the operand
+  is enough; TADR hooks `0x471C87` and rewrites the pushed value instead. At 204 800 the block is
+  15.6 MB and the stack 0.8 MB, once a process.
+- **Eight of the twenty compares are in code nothing reaches.** The emitters at `0x471160`,
+  `0x471340`, `0x471470`, `0x4715A0`, `0x4716E0`, `0x471820`, `0x471A50` and `0x472720` (the compares
+  `0x471183` … `0x471AD7` and `0x4727B0`) have no call, jump or pointer anywhere in the image, nor
+  does `0x471D10` with its alloc; the twelve live emitters are `0x471FD0`, `0x4720D0`, `0x472200`,
+  `0x472330`, `0x472430`, `0x472530`, `0x472630`, `0x472810`, `0x4728F0`, `0x4729D0`, `0x472AB0`
+  and `0x472C50`. The dead sites are written with the rest, since their bytes are compared anyway.
+- **The layers' tick `0x471EB0` erases by shifting:** for every object of every layer it calls
+  `vtbl+0xC`, and a finished object is deleted and the tail moved down one slot. Like the emitter's
+  own front-drop, that is O(layer) a removal; it runs in the sim tick (`0x4955BF`). The teardown
+  `0x471DE0` empties a layer front first the same way (`0x471E17..0x471E48`), n²/2 moves a layer.
+  The draw is `0x471F90(ctx, layer)`, called ten times from DrawGameScreen (`0x469849` …
+  `0x469D2C`), which calls `vtbl+8` on each object; `0x471F40`, a whole-table twin of it, has no
+  caller.
+- **MEASURED 2026-09-23 in tier 1** (4 × 1500 units, the scratch build first, then the landing's):
+  one layer, layer 9, peaked at **13 529 objects** at the opening volley (its objects' vtable
+  `0x4FD618`, dark smoke; the rocket kbots' trails <span class="pill pill-warn">INFERRED</span>),
+  the pool's used count at **13 571**, and the frame packet's sub-particles at **14 510** and
+  **15 964** in two runs. The simulation held 60 ticks a second throughout. Stock would have held
+  that layer to 401.
 
 **What it measured, 2026-09-23.** Single player, `scenarios/limits-flood.json` (450 Merls against
 450 Diplomats): the engine's own counts peaked at **687 projectiles** and **1727 explosions**, and

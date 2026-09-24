@@ -403,9 +403,10 @@ void tagpu_apply_patches(void)
 }
 
 /* ===== THE RAISED LIMITS (tagpu_limits.h) ===================================================
-   The engine's effect pools, raised the way TADR's EngineLimits.cpp raises them, re-derived
-   from the pristine 3.1 image (research/notes/tadr-port/limits-evidence.md §1-4 holds every
-   site's disassembly). Every site goes into ONE table; the table is compared with the stock
+   The engine limits TADR raises -- the effect pools as its EngineLimits.cpp does, the unit
+   limit and the pathfinding budget as its LimitCrack.cpp does -- re-derived from the
+   pristine 3.1 image (research/notes/tadr-port/limits-evidence.md §1-6 holds every site's
+   disassembly). Every site goes into ONE table; the table is compared with the stock
    bytes as a whole and written as a whole, or not at all.
 
    WHY BEFORE ANYTHING RUNS: DllMain runs before TotalA.exe's entry point (ddraw.dll is its
@@ -584,6 +585,29 @@ static unsigned char* lim_seqtab_stub(void)
     return s;
 }
 
+/* A unit limit from outside the ini, clamped to [TAGPU_LIM_UNITS_MIN, TAGPU_LIM_UNITS] before
+   it is stored. Called in place of the stock `mov word [ecx+off],ax`, with ecx = main as stock
+   set it and eax = the whole value (a `maxunits` key's int, or the host's word zero-extended).
+   The clamp runs on the whole int, so a value past 65535 cannot wrap into range the way
+   stock's 16-bit store wraps it. Only eax and the flags change; at every site the next
+   instruction overwrites or ignores them. */
+static unsigned char* lim_maxunits_stub(unsigned int off)
+{
+    unsigned char* s = tagpu_detour_stub();
+    unsigned char* p = s;
+    const unsigned int lo = TAGPU_LIM_UNITS_MIN, hi = TAGPU_LIM_UNITS;
+    if (!s) return NULL;
+    *p++ = 0x3D; memcpy(p, &lo, 4); p += 4;                      /* cmp eax,lo             */
+    *p++ = 0x7D; *p++ = 0x05;                                    /* jge +5                 */
+    *p++ = 0xB8; memcpy(p, &lo, 4); p += 4;                      /* mov eax,lo             */
+    *p++ = 0x3D; memcpy(p, &hi, 4); p += 4;                      /* cmp eax,hi             */
+    *p++ = 0x7E; *p++ = 0x05;                                    /* jle +5                 */
+    *p++ = 0xB8; memcpy(p, &hi, 4); p += 4;                      /* mov eax,hi             */
+    *p++ = 0x66; *p++ = 0x89; *p++ = 0x81; memcpy(p, &off, 4); p += 4;  /* mov [ecx+off],ax */
+    *p++ = 0xC3;                                                 /* ret                    */
+    return s;
+}
+
 static void lim_sites(void)
 {
     const unsigned int expl = (unsigned int)(size_t)&s_expl;
@@ -591,9 +615,11 @@ static void lim_sites(void)
     const unsigned int psysEnd = (unsigned int)(size_t)&s_psys[TAGPU_LIM_PSYS];
     unsigned char* probe = lim_probe_stub();
     unsigned char* seqtab = lim_seqtab_stub();
+    unsigned char* saveMax = lim_maxunits_stub(0x37EEC);
+    unsigned char* missionMax = lim_maxunits_stub(0x37EE6);
     int k;
 
-    if (!probe || !seqtab) { s_limNoStub = 1; return; }
+    if (!probe || !seqtab || !saveMax || !missionMax) { s_limNoStub = 1; return; }
 
     /* ---- projectiles: allocated per game by 0x499A30, refused past the cap at ten sites */
     lim_dword(0x00499A32, 300 * PROJ_REC, TAGPU_LIM_PROJ * PROJ_REC, "projectile pool bytes");
@@ -695,6 +721,82 @@ static void lim_sites(void)
         for (k = 12; k < 16; k++) ours[k] = 0x90;
         lim_add(0x004217DE, 16, head, ours, "piece debris allocator");
     }
+
+    /* ---- units a player. The process-start read 0x491653 (totala.ini [Preferences]
+       UnitLimit, in 0x491200, which WinMain calls once) defaults to 250 and clamps to
+       [20, 500] into main+0x37EEC; the default and the ceiling both become TAGPU_LIM_UNITS,
+       and the floor at 0x491678 stays. The unit array is 10 x main+0x37EE6 + 1 slots, which
+       the frame packet's design point covers (tagpu_packet_pub.c asserts it), and every
+       writer of +0x37EE6 is held to [20, TAGPU_LIM_UNITS]: the game start copies the clamped
+       +0x37EEC (0x4971F8, 0x4973CD), and the three below clamp what they store. */
+    lim_dword(0x00491640, 250, TAGPU_LIM_UNITS, "unit limit default");
+    lim_dword(0x00491659, 500, TAGPU_LIM_UNITS, "unit limit ceiling test");
+    lim_dword(0x00491666, 500, TAGPU_LIM_UNITS, "unit limit ceiling");
+    {
+        /* the two `maxunits` keys stock stores unclamped: a saved game's [Summary]
+           (0x432610, which writes the per-player limit) and the map's own .ota
+           [GlobalHeader] (0x435DA0, default 200, which writes the array's count directly;
+           a skirmish or network game overwrites it at game start, a campaign mission plays
+           with it). Every retail map sets 200 to 400, inside the clamp. */
+        static const unsigned char sumStore[7] = { 0x66, 0x89, 0x81, 0xEC, 0x7E, 0x03, 0x00 };
+        static const unsigned char hdrStore[7] = { 0x66, 0x89, 0x81, 0xE6, 0x7E, 0x03, 0x00 };
+        lim_branch(0x00432646, 7, sumStore, 0xE8, (unsigned int)(size_t)saveMax,
+                   "saved game maxunits");
+        lim_branch(0x00436037, 7, hdrStore, 0xE8, (unsigned int)(size_t)missionMax,
+                   "mission maxunits");
+    }
+    {
+        /* THE HOST'S LIMIT. A network game's start overwrites the array's count with the
+           word at +0xA5 of the host's player record (0x4973AE, 0x4973B5). The host's own
+           slider bounds it (ActualUnitLimit - 20, 0x44A2B2), but a lobby launch sets
+           ActualUnitLimit unclamped (0x449D9B) and a peer's record comes off the wire; past
+           6553 the slot count 10 x N + 1 wraps its u16 (0x4854EA) and the unit array is
+           allocated too small. The read becomes a zero-extending movzx, the same 7 bytes,
+           so the whole of eax is the value, and the store goes through the clamp. eax and
+           the flags are dead after it: the next instruction is `jmp 0x4974E3`. */
+        static const unsigned char hostRead[7]  = { 0x66, 0x8B, 0x80, 0xA5, 0x00, 0x00, 0x00 };
+        static const unsigned char hostMovzx[7] = { 0x0F, 0xB7, 0x80, 0xA5, 0x00, 0x00, 0x00 };
+        static const unsigned char hostStore[7] = { 0x66, 0x89, 0x81, 0xE6, 0x7E, 0x03, 0x00 };
+        lim_add(0x004973AE, 7, hostRead, hostMovzx, "host unit limit read");
+        lim_branch(0x004973B5, 7, hostStore, 0xE8, (unsigned int)(size_t)missionMax,
+                   "host unit limit");
+    }
+    /* THE BATTLEROOM'S "NO LIMIT" SENTINEL IS A CAP ON ONE PATH. The unit-restriction menu
+       keeps each type's count as 0..100, and 101 (`mov ecx,0x65` at 0x44CAFD) for a type
+       with no limit. Cancel (0x44C6FC) writes those saved values back into the restriction
+       store as they are (0x44C750), the game start copies them to UnitDef+0x15A (0x46E160),
+       and the unit constructor 0x485F50 then refuses a type's 102nd unit. The sentinel
+       becomes the unit limit, as TADR writes it, so a cancelled menu caps nothing a player
+       could reach; the menu shows any value past 100 as "No Limit" (0x44BEC0). */
+    lim_dword(0x0044CAFE, 101, TAGPU_LIM_UNITS, "unrestricted type count");
+
+    /* ---- the pathfinder's search budget: `mov dword [esi+0x48],0x535` at 0x40EAD3, in the
+       pathfinder's per-game init (0x40E9E0) and the only 0x535 in .text. Its one reader is
+       the per-tick 0x40EB70, which shares it among the players; nothing is sized or indexed
+       by it, so the raise costs time, not memory. */
+    lim_dword(0x0040EAD6, 1333, TAGPU_LIM_PATH, "pathfinding budget");
+
+    /* ---- particles: two ceilings. Every emitter (0x470F00..0x472F00) takes its layer's
+       size and `cmp eax,0x190 / jbe append`; past the cap it destroys the layer's oldest
+       object and appends anyway, so a layer holds TAGPU_LIM_SFX + 1. Nineteen compares are
+       `3D imm32` (operand at +1), one is `81 F9 imm32` against ecx (operand at +2): the
+       twenty are every 0x190 compare in the emitters. The objects come from ONE pool,
+       0x51E610, built by the C runtime's static initializer at 0x471C80 (`push 0x4C; push
+       0x3E8; ... call 0x470A90`), which allocates its whole capacity once; its alloc 0x470EB0
+       returns 0 when the pool is empty and every emitter then skips the particle. DllMain
+       runs before that initializer, so the pool is built at the raised capacity. Visual
+       only: the emitters draw the C runtime's rand, never the simulation's generator. */
+    {
+        static const unsigned int cmpEax[19] = {
+            0x00471183, 0x004713D8, 0x00471508, 0x0047163D, 0x00471782, 0x004718B1, 0x00471AD7,
+            0x00472071, 0x0047219F, 0x004722CF, 0x004723D6, 0x004724D5, 0x004725D4, 0x004726C0,
+            0x004727B0, 0x0047289A, 0x0047297A, 0x00472A5A, 0x00472CD9 };
+        int k;
+        for (k = 0; k < 19; k++)
+            lim_dword(cmpEax[k] + 1, 400, TAGPU_LIM_SFX, "particle layer cap");
+        lim_dword(0x00472BF2 + 2, 400, TAGPU_LIM_SFX, "particle layer cap");
+        lim_dword(0x00471C83, 1000, TAGPU_LIM_SFXPOOL, "particle pool");
+    }
 }
 
 /* one site's bytes, without trusting the page to be readable */
@@ -747,10 +849,12 @@ int tagpu_limits_install(void)
     s_limState = 1;
     /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
     tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d at 0x%08X, "
-               "flying pieces %d at 0x%08X, debris records %d at 0x%08X", s_nlim,
+               "flying pieces %d at 0x%08X, debris records %d at 0x%08X, units %d a player, "
+               "pathfinding %d, particles %d a layer from a pool of %d", s_nlim,
                TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
                TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
-               TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux);
+               TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
+               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL);
     return 1;
 }
 
@@ -776,7 +880,8 @@ const void* const* tagpu_limits_psys_end(void)
 int tagpu_limits_install(void)
 {
     plog("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
-         "flying pieces 100, debris records 300)");
+         "flying pieces 100, debris records 300, units 250 a player up to 500, "
+         "pathfinding 1333, particles 400 a layer from a pool of 1000)");
     return 0;
 }
 

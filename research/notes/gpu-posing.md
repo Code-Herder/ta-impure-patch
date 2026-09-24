@@ -345,7 +345,7 @@ each bound does when it is reached, at that scale:
 | `PB_MAXMAT` | 1 024 | `(type, owner, atlas gen)` material streams | a stream is per OWNER, so it is sized for ten players at ~100 types on screen each. An entry evicted mid-frame leaves a record naming a stale serial and the Vulkan pass refuses the frame |
 | `PB_MAXGEOM` | 512 | models baked at once | 279 unit types exist, and a wreck's model and a ghost take entries of their own; sized so one frame of a varied ten-player game fits |
 
-**Only `MAXNV` is step 8's.** The rest are sized for 1024 units a player × 10 players by
+**Only `MAXNV` is step 8's.** The rest are sized for 1500 units a player × 10 players by
 [GPU status](gpu-status.html) §2.86, which also removed the gather's silent drop.
 
 ## 4. The architecture

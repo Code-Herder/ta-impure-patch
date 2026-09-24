@@ -171,45 +171,57 @@ process-lifetime static memory, which is a *better* lifetime than stock's.
 **Sites (DIS).**
 - `0x49163F push 0xFA` (the ini default, operand `0x491640`), `0x491658 cmp eax,0x1F4` (operand
   `0x491659`) and `0x491665 mov eax,0x1F4` (operand `0x491666`). The result goes to `main+0x37EEC`.
-- The single-player init `0x4912EE…0x491308` copies it to `+0x37EE6` and `+0x37EEA`.
-- **In MP, `+0x37EEA` is written from the network** (`0x449D9B`, from `0x512D6C`, next to
-  `[ebp+0xA5]`, consistent with the 0x20 status packet's `+0xA6`) **with no clamp**. So the host's
-  value is broadcast and used, the unit array being `10·limit+1`.
-- **Unclamped side door (DIS):** `0x432646` writes `+0x37EEC` from a TDF key **`maxunits`**
-  (`0x4B4800`, default 0) with no clamp. INF: this is the mission/OTA loader; TADR's
-  `tdraw.txt:203` "unit limit reached in between single player missions" may be this path.
+- The process init `0x4912EE…0x491308` (in `0x491200`, before its own ini read) copies it to
+  `+0x37EE6` and `+0x37EEA`; the game start is what carries the configured value into `+0x37EE6`.
+- **In MP, the host's value is broadcast and used**, the unit array being `10·limit+1`: the game
+  start writes `+0x37EE6` from the host record's `+0xA5` (`0x4973B5`), unclamped. A DirectPlay
+  lobby launch writes `+0x37EEA` and `+0xA5` from `0x512D6C` (`0x449D87`, `0x449D9B`), also
+  unclamped. Landing 2 clamps the store at `0x4973B5`.
+- **Two unclamped side doors (DIS).** `0x432646`, in `0x432610`, writes `+0x37EEC` from the key
+  **`maxunits`** (`0x4B4800`, default 0) of a saved game's `[Summary]`, read when the game's TDF at
+  `main+0x38D6B` has no `BetweenMissions` key (`0x497B29`); TADR's `tdraw.txt:203` "unit limit
+  reached in between single player missions" may be this path. `0x436037`, in the map loader
+  `0x435DA0`, writes the array's own count `+0x37EE6` from the map `.ota`'s `[GlobalHeader]`
+  `maxunits` (default 200). Every retail `.ota` sets 200 to 400. Landing 2 clamps both.
 
 **`0x44CAFE` is NOT a per-player limit (DIS), whatever TADR's name for it, `MPUnitLimitAddr`,
 says.** It is `mov ecx,0x65` (101), taken when
 `0x46E330`'s per-unit-type lookup returns −1. The result is stored in the battleroom's per-type
 table (`[0x5129B4]+i+0x5A`, `[0x5129C4]+i·4`), built per UnitDef from `def+0x186/+0x18A` and
 sprintf.
-- INF: 101 is the "unrestricted" sentinel for the per-type build-limit slider (0..100), and TADR
+- 101 is the "unrestricted" sentinel of the per-type restriction slider (0..100), and TADR
   replaces it with the unit limit so that "unrestricted" is not a cap of 101 a type.
-- Settle it: in a stock MP game with UnitLimit 500, try to build more than 101 of one type.
+- **Settled by disassembly (landing 2).** Cancel in the restriction menu (`0x44C6FC`) writes the
+  saved per-type values, the 101 sentinel included, into the restriction store (`0x44C750` →
+  `0x46E550`); `0x46E160` copies an enabled type's value to `UnitDef+0x15A` and sets `def+0x241`
+  bit 23; the unit constructor `0x485F50` then counts the player's units of the type and refuses
+  the one at the cap. Moving a slider past 100 stores −1 instead ("No Limit", `0x44BEC0`). A
+  default network game does not take the Cancel path: landing 1's peers each created 450 of one
+  type with none refused. Landing 2 writes the site as TADR does.
 
 No other `0x1F4` in `.text` belongs to the unit limit; `0x40BBDF` is a resource clamp.
 
 **SIM, per game, network-significant** (the per-player ID blocks; [networking-lobbies](../networking-lobbies.md)).
 
 **Our code:**
-- `src/tagpu_packet.h:449` `TAGPU_PK_DESIGN_SLOTS 10·1024+1`, and `:454` `TAGPU_PK_MAX_UNITS 16384`.
-  1500 makes 15 001 slots: above the design point, below the table ceiling. Caps asserted only
-  against the design point truncate beyond it (the memory note: "nothing ran past 5 001").
+- `src/tagpu_packet.h` `TAGPU_PK_DESIGN_SLOTS` and `TAGPU_PK_MAX_UNITS 16384`. The design point was
+  10 241 before landing 2; 1500 makes 15 001, below the table ceiling, and landing 2 moved the
+  design point and every cap asserted against it.
 - `src/tagpu_scenario.c:68` `OFF_LIMIT 0x37EEA`.
 - The order arena `MAXORD` and `WR_COUNT` (`inc/tagpu_engine.h:205`, `src/tagpu_feat.c:109`) are
   unit-scaled neighbours to re-check.
 
 ## 6. Pathfinding cycles 1333 → 66650 (`0x40EAD6`)
 
-**DIS.** `0x40EAD3 mov dword [esi+0x48],0x535` is inside the pathfinder object's init, which sizes
-its own bitmaps from map dimensions (`0x40EA20…`). It is the only `0x535` in `.text`. TADR writes the
+**DIS.** `0x40EAD3 mov dword [esi+0x48],0x535` is inside the pathfinder object's init `0x40E9E0`,
+which sizes its own bitmaps from map dimensions. It is the only `0x535` in `.text`. Its one reader,
+the per-tick `0x40EB70`, shares it among the players as credits (the engine map has the detail). TADR writes the
 dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
 
 **SIM for the owner's units; per game (the init takes the map).**
 - INF: in a state-replicated model each peer paths only its own units (movement travels in `0x2C`),
   so unequal budgets do not desync. Worth one MP measurement before it is relied on.
-- The cost is CPU per tick (the budget caps work per search).
+- The cost is CPU per tick (the budget caps the pathfinder's work a tick, shared among the players).
 
 **Our code: none reads it.**
 
@@ -227,22 +239,25 @@ dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
   total, **not** 10 × 401.
 - TADR raises the capacity to 10 × vector (163 840 or 204 800 × 0x4C ≈ 12–15 MB) through an
   inline hook at `0x471C87` that rewrites `[esp]`. This works only because ddraw.dll's `DllMain`
-  runs before the exe's CRT init. INF, from PE loader order.
+  runs before the exe's CRT init; landing 3 writes the `push` operand `0x471C83` instead, and the
+  capacity read back live as 204 800 (MEASURED 2026-09-23).
 
 **VISUAL (DIS).**
 - The emitter range `0x470F00…0x472F00` calls CRT `rand` `0x4E4870` and **never** the sim RNG.
   Emitters are also called from the explosion *draw* `0x420B00`, via `0x421550`, per the engine map.
 - Past the cap the emitter destroys the front object, the "401 steady state".
 
-**Our code that must follow:**
-- `inc/tagpu_engine.h:301` `LAYER_OBJCAP 400`.
-- `src/tagpu_packet_pub.c:1005`: `if (n > LAYER_OBJCAP + 1) { s_cLayerBad++; return; }` **drops the
-  whole layer** once one is larger. That is silent loss of every particle in the layer.
-- `src/tagpu_packet.h:336` `TAGPU_PK_MAX_PART 16384` (sub-particles, total): truncates with
-  `s_fxPartTrunc` at much lower counts than 10 × 20 480 objects.
-- `PART_SUBCAP 4096` (`tagpu_packet_pub.c:930`).
-- Comment drift: `tagpu_packet_pub.c:997` says "0x472071 and twelve more"; the engine map and TADR
-  both have **twenty** sites.
+**Our code that follows it** (landing 3):
+- The publisher's walk stops a layer at `TAGPU_LIM_SFX + 1` (`tagpu_packet_pub.c`), the engine's
+  steady state; past it the layer is counted in `layerbad` and skipped whole, so the bound has to
+  move with the cap. It did: the fixed `LAYER_OBJCAP 400` is gone.
+- `TAGPU_PK_MAX_PART` (sub-particles, total) is 24 576, sized from tier 1's frame of 14 510. A
+  frame that holds more keeps the same share of every layer (`thin=` in the heartbeat) instead of
+  losing the top layers whole; `s_fxPartTrunc` stays as the table's own bound.
+- **A ceiling this pass missed:** the effects pass's vertex buckets (`tagpu_fx.h`) were 65 536
+  each, and tier 1 filled the sprite bucket at the opening volley. The two buckets particles land
+  in are now sized from `TAGPU_PK_MAX_PART`.
+- `PART_SUBCAP 4096` filters one object's sub-particles and did not move.
 
 ## 8. Unit-type IDs 512 → 16000 (`IncreaseUnitTypeLimit`, 17 writes)
 
@@ -365,9 +380,9 @@ the Visuals landing), so this is a store key. Nothing in `tagpu/` or `tools/` me
 | explosions 300→3000 | cap gates **sim-RNG draws** in `0x421700` | reset per level; relocated to a static | 7 base refs + table reload + 2 caps | none | `OFF_NEXPL`/`OFF_EXPL`/`EXPL_COUNT`, `MAX_EXPL`, validator | **we draw no explosions** after relocation; RNG divergence |
 | flying pieces 100→1000 | visual (no RNG on the slot path) | per level | 7 base + 6 end + backing + reset | none (the five `this` loads correctly kept) | `VA_PSYS_*`, `MAX_DEBRIS`, validator | **we draw no debris** after relocation |
 | aux records 300→3000 | fullness gates **sim-RNG draws** | per level, relocated to a static | 2 allocators replaced, C re-init | none | none (pointer-followed) | TADR's "visual-only" comment is wrong on count |
-| units/player 500→1500 | **SIM**, host-broadcast | per game | 3 immediates + `0x44CAFE` | **`maxunits` TDF path `0x432646` (unclamped)**; **`0x44CAFE` is a per-type sentinel (101), not a player limit** | design slots 10 241 < 15 001; scenario `OFF_LIMIT` | beyond the design point: truncation |
+| units/player 500→1500 | **SIM**, host-broadcast | per game | 3 immediates + `0x44CAFE` | **two `maxunits` paths (`0x432646`, `0x436037`), unclamped**; **`0x44CAFE` is a per-type sentinel (101), a real cap after a cancelled restriction menu** | design slots, 15 001 since landing 2; scenario `OFF_LIMIT` | beyond the design point: truncation |
 | pathfinding 1333→66650 | sim, owner-local (INF) | per game (map init) | 1 dword, blind | none | none | CPU per tick |
-| SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | **`LAYER_OBJCAP` drops whole layers**, `MAX_PART` 16384, `PART_SUBCAP` | silent particle loss; about 15 MB |
+| SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | the walk's layer bound (drops whole layers), `MAX_PART`, the effects pass's sprite bucket; all follow since landing 3 | about 15 MB |
 | unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | ctrl-A/B/C (in §B); AI-range `0x10` sites unclassified | `WPN_MAXDEFS 4096` refuses | mods only |
 | weapon IDs 256→4096 | **SIM + wire** | load-time hook | 3 hooks + chat-hijack packet | ID < 0 unguarded (stock) | `OFF_WEAPON0` users; `CRC_weapons` does not cover IDs | needs every peer; off in mainline |
 | composite 600²→1280² | visual, GDI lane only (INF) | per Object3do, static imm. | 1 × 10 bytes, blind | none | none on Vulkan | memory |

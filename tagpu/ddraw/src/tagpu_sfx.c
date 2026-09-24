@@ -1,8 +1,8 @@
 /* tagpu_sfx.c — the particle sfx pass: smoke, fire, wakes, nanolathe spray.
 
    WHAT THE ENGINE DOES. It keeps ten "layer" vectors at *(main+0x38D77) (0x10
-   apart: {u8 flag, void** begin @4, end @8, cap @0xC}, 400 objects max per
-   layer, every emitter refusing past that). Each emitter (EmitSfx_GraySmoke
+   apart: {u8 flag, void** begin @4, end @8, cap @0xC}, TAGPU_LIM_SFX + 1
+   objects a layer, every emitter destroying the oldest past that). Each emitter (EmitSfx_GraySmoke
    0x472810, _BlackSmoke 0x4728F0, _Unk5 0x472AB0 = fire, _NanoParticles
    0x4720D0, _Bubbles 0x472530, ...) takes the LAYER as an argument and
    appends the object to it. DrawGameScreen calls 0x471F90(ctx, n) for

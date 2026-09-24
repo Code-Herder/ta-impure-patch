@@ -334,12 +334,14 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_MAX_PROJ    ((unsigned)TAGPU_LIM_PROJ)
 #define TAGPU_PK_MAX_EXPL    ((unsigned)TAGPU_LIM_EXPL)
 #define TAGPU_PK_MAX_DEBRIS  ((unsigned)TAGPU_LIM_PSYS)
-/* The particle table's ceiling. The engine allows 10 layers x 400 objects and
-   every object carries a sub-particle vector it grows as it burns, so no
-   engine count bounds this one: it is OUR cap, with a truncation bit and a
-   counter, and the heartbeat's `partmax` says how close a 200v200 fight came.
-   16 384 entries is 256 KB per slot. */
-#define TAGPU_PK_MAX_PART    16384u
+/* The particle table's ceiling. The engine allows 10 layers of TAGPU_LIM_SFX + 1
+   objects and every object carries a sub-particle vector it grows as it burns,
+   so no engine count bounds this one: it is OUR cap, with a truncation bit and
+   a counter, and the heartbeat's `part=last/max` says how close a fight came.
+   Sized from the raised limits' tier-1 battle (4 x 1500 units): 14 510
+   sub-particles in one frame at the opening volley, and this holds one and a
+   half times that. 24 576 entries is 384 KB per slot. */
+#define TAGPU_PK_MAX_PART    24576u
 
 /* The engine's LHT "lighten" table, TAProgram+0xC8: 32 rows of 256 bytes, the
    explosion flash's colour ramp. Copied whole, like the shade table. */
@@ -445,14 +447,17 @@ typedef struct TAGPU_PK_PART {
    tagpu_packet_pub.c compiles a static assertion that the two agree. */
 #define TAGPU_PK_MAXPIECE   256u
 
-/* THE DESIGN POINT: ten players of 1024 units each. The engine's unit array
-   has 10 x MaxUnits + 1 slots (the u16 at main+0x14351); stock clamps MaxUnits
-   to 500 (`cmp eax, 0x1f4` at 0x491658, DISASSEMBLED -- scenario-format.md),
-   and a unit-limit patch raising that clamp to 1024 makes 10 241. Every cap
-   in the exchange and in the passes it feeds that scales with the unit count
-   is asserted against this where it is declared, so a cap below it fails the
-   build rather than a large game. */
-#define TAGPU_PK_DESIGN_SLOTS (10u * 1024u + 1u)
+/* THE DESIGN POINT: ten players of 1500 units each. The engine's unit array
+   has 10 x MaxUnits + 1 slots (the u16 at main+0x14351), and tagpu_limits.h
+   raises MaxUnits' ceiling to 1500 (stock clamps it to 500 at 0x491658), so
+   15 001. Every cap in the exchange and in the passes it feeds that scales
+   with the unit count is asserted against this where it is declared, so a cap
+   below it fails the build rather than a large game; tagpu_packet_pub.c
+   asserts that the installed limit fits it. Every engine write of the array's
+   count is clamped to that limit, the host's in a network game included
+   (tagpu_patches.c); should a slot count still exceed it, the tables below
+   truncate and say so, they never overrun. */
+#define TAGPU_PK_DESIGN_SLOTS (10u * 1500u + 1u)
 
 /* The units table's own ceiling: the design point rounded up to a power of
    two. A slot count past it truncates the table (and says so, through
@@ -460,7 +465,7 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_MAX_UNITS    16384u
 #define TAGPU_PK_MAX_WRECKS   4096u
 #define TAGPU_PK_MAX_ANCHORS  65536u
-#define TAGPU_PK_MAX_BUILDS   4096u    /* the order snapshot's own arena cap:
+#define TAGPU_PK_MAX_BUILDS   6144u    /* the order snapshot's own arena cap:
                                           one record per queued marker, and a
                                           build is a subset of those             */
 
