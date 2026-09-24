@@ -1147,6 +1147,17 @@ static void terr_scissor(uint32_t w, uint32_t h)
     s_scX = x0; s_scY = y0; s_scW = ww; s_scH = hh;
 }
 
+/* A REFUSED PASS GIVES ITS RESTORE JOB BACK AT ONCE -- tagpu_vk_feat.c's
+   `refuse_job`, which has the argument: a banded upload the device failed
+   partway leaves `s_base` half written in a transfer layout, and the job's
+   FILL would sample it. */
+static void refuse_job(const TAGPU_VKPASS* d)
+{
+    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
+    s_rjSerial = 0; s_rjPainted = 0; s_rjSrcView = VK_NULL_HANDLE;
+    s_rgbAtlas.have = 0;
+}
+
 /* ---- THE RESTORE REQUEST, TAKEN --------------------------------------------
    Called once per `prepare`, AFTER the base atlas's upload and before the
    refusal that asks whether the restored atlas holds a picture. The order is
@@ -1633,6 +1644,7 @@ refuse:
        is what this path existed to do; it is given back where that is legal. */
     plog(d, "terr: slot %u would not take this frame's resources - the pass stops "
             "drawing and the seam tears it down", (unsigned)slot);
+    refuse_job(d);
     s_state = ST_REFUSED;
     s_downOwed = 1;
     return 0;

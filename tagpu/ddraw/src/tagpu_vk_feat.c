@@ -1006,6 +1006,24 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
          h->restoreGen);
 }
 
+/* A REFUSED PASS GIVES ITS RESTORE JOB BACK AT ONCE, not at the teardown the
+   seam pays frames later. A refusal can be a banded upload the device failed
+   partway (tagpu_vk_stage.c `upload`), which leaves the base atlas half
+   written and in a transfer layout, and the job's FILL samples that image
+   through a descriptor that says SHADER_READ_ONLY. The seam records the
+   restorer's slice after every pass's `prepare`, so a job given back here is
+   never recorded again: nothing samples an image this pass has disowned. The
+   free is legal mid-frame -- `tagpu_vk_restore_job_free` retires what a
+   submitted buffer still names -- and the twin it painted stops being a
+   picture with it. */
+static void refuse_job(const TAGPU_VKPASS* d)
+{
+    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
+    s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+    s_rjSrcView = VK_NULL_HANDLE;
+    s_arHave = 0;
+}
+
 /* ---- THE RESTORED TWIN FOLLOWS A REPACK ----------------------------------
    The moves by the old cell origin, which is how a frame names its cell as
    well: (dx - border, dy - border), the move's (ox, oy) (tagpu_gaf.h). Open
@@ -1460,6 +1478,7 @@ refuse:
        is what this path existed to do; it is given back where that is legal. */
     plog(d, "feat: slot %u would not take this frame's resources - the pass stops "
             "drawing and the seam tears it down", (unsigned)slot);
+    refuse_job(d);
     s_state = ST_REFUSED;
     s_downOwed = 1;
     return 0;
@@ -1489,6 +1508,7 @@ static void atlas_owed(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     if (base_upload(d, cb, &s_slot[slot], &h) < 0) {
         plog(d, "feat: the owed atlas upload failed on the device - the pass stops "
                 "drawing and the seam tears it down");
+        refuse_job(d);
         s_state = ST_REFUSED;
         s_downOwed = 1;
     }

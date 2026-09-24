@@ -1046,6 +1046,18 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FXHAND* h)
          h->restoreGen);
 }
 
+/* A REFUSED PASS GIVES ITS RESTORE JOB BACK AT ONCE -- tagpu_vk_feat.c's
+   `refuse_job`, which has the argument: a banded upload the device failed
+   partway leaves the base atlas half written in a transfer layout, and the
+   job's FILL would sample it. */
+static void refuse_job(const TAGPU_VKPASS* d)
+{
+    if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
+    s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
+    s_rjSrcView = VK_NULL_HANDLE;
+    s_arHave = 0;
+}
+
 /* THE BASE ATLAS -- tagpu_vk_feat.c's `base_upload`, the same two ways, the
    same answers and the same acknowledgement, with this pass's own alpha
    (`s_flashAlpha`). This atlas never repacks, so there is no move. */
@@ -1459,6 +1471,7 @@ refuse:
        submit names these objects" a fact rather than a hope. */
     plog(d, "fx: slot %u would not take this frame's resources - the pass stops "
             "drawing and the seam tears it down", (unsigned)slot);
+    refuse_job(d);
     s_state = ST_REFUSED;
     s_downOwed = 1;
     return 0;
@@ -1480,6 +1493,7 @@ static void atlas_owed(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     if (base_upload(d, cb, &s_slot[slot], &h) < 0) {
         plog(d, "fx: the owed atlas upload failed on the device - the pass stops "
                 "drawing and the seam tears it down");
+        refuse_job(d);
         s_state = ST_REFUSED;
         s_downOwed = 1;
     }
