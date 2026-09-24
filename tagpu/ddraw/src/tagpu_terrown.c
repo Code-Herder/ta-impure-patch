@@ -190,30 +190,14 @@ static void __cdecl terr_fill(void* ctxv)
    Both fog answers below then go stale and neither module can tell:
    `tagpu_fogwide`'s "valid" flag is only ever cleared from inside the tick
    that has stopped. So the tick stamps the publisher's in-play draw counter,
-   and the publisher — which runs in the same draw's `after` — accepts either
-   answer only when the stamp is this draw's. */
-static int s_fogEyeX, s_fogEyeY, s_fogEyeOk;
-static unsigned s_fogEyeGen;                 /* the level the latch was taken in */
+   and the publisher — which runs in the same draw's `after` — accepts the
+   wide grid only when the stamp is this draw's. */
 static unsigned s_fogDrawSeq;
 static int      s_fogDrawSeen;
 
 int tagpu_terrown_fog_site_live(void)
 {
     return s_fogDrawSeen && s_fogDrawSeq == tagpu_packet_pub_draw_seq();
-}
-
-/* AND IT IS ONLY VALID FOR ITS OWN LEVEL. The engine's builder fires when it
-   clears LosType bit 3, and a fresh level can go many draws without doing so —
-   LoadMap leaves the grid current — so a latch kept across the boundary would
-   put the new level's grid at the old level's origin for as long as the camera
-   stood still. Stamping the publisher's level generation beside it makes that
-   impossible without a level-end hook to remember. */
-int tagpu_terrown_fog_eye(int* x, int* y)
-{
-    if (!s_fogEyeOk || !tagpu_terrown_fog_site_live() ||
-        s_fogEyeGen != tagpu_packet_pub_level_gen()) return 0;
-    *x = s_fogEyeX; *y = s_fogEyeY;
-    return 1;
 }
 
 static void __cdecl terr_fogtick(void* ctxv)
@@ -243,18 +227,11 @@ static void __cdecl terr_fogtick(void* ctxv)
            TAdynmem pointer here and so do we */
         ta = *(char**)TA_MAINPP;
         if (!ptr_ok(ta)) return;
+        /* set only here and at the engine's `0x484904`, each right after a
+           build: the packet's publisher reads the grid's build record off
+           this bit (tagpu_packet_pub.c, fog_rec_after) */
         *(unsigned short*)(ta + OFF_LOSTYPE) |= 8;
         rebuilt = 1;
-        /* THE EYE THE ENGINE'S GRID IS ANCHORED AT, latched at the instant its
-           builder read it (0x4843C0 recomputes the origin from these two words
-           itself). The packet's publisher turns it into the grid's world origin
-           later in this same draw; taking it from the packet's own eye instead
-           would be right only while nothing moved the camera between here and
-           the post-flip publish. */
-        s_fogEyeX = *(const int*)(ta + OFF_EYEX);
-        s_fogEyeY = *(const int*)(ta + OFF_EYEY);
-        s_fogEyeGen = tagpu_packet_pub_level_gen();
-        s_fogEyeOk = 1;
     }
     tagpu_fogwide_tick(ta, rebuilt);
 }
@@ -306,10 +283,6 @@ void tagpu_terrown_set_skip(int on)
         g_filled = 0;
         g_terrown_skip = v;
         if (!v) tagpu_owndraw_set_structshadow_terr(0);
-        /* The fog eye is NOT voided here: the fog site follows the
-           game thread's latch, not this request, so a clear from this thread
-           could be undone by a tick still running on the old latch in the
-           draw in flight. `tagpu_terrown_latch` voids it instead. */
         flog(v ? "terrown: engine terrain + fog overlay SKIPPED (ours live)"
                : "terrown: engine terrain + fog overlay restored");
     }
@@ -326,19 +299,6 @@ int tagpu_terrown_request(void) { return g_terrown_skip != 0; }
 void tagpu_terrown_latch(int own)
 {
     g_terrown_own = (unsigned char)(own != 0);
-    /* HANDING THE FOG SITE BACK VOIDS THE EYE WE LATCHED. While the engine
-       calls `0x4843C0` itself we never see it rebuild, and it rebuilds at the
-       live eye -- so on the first tick after ownership returns, LosType bit 3
-       is already set, no rebuild runs, and the latch would hand the publisher
-       the PRE-GAP eye against a live grid. The draw stamp cannot catch that:
-       it proves the observer ran, not that the latch is fresh. The fallback is
-       this packet's own eye.
-       HERE, ON THE GAME THREAD, and on every draw the site is not ours: the
-       engine can only rebuild on such a draw, and this runs before its fog
-       site does, so no tick can re-arm the latch in between. On the render
-       thread (`tagpu_terrown_set_skip`) it would race: a tick on the draw in
-       flight could re-arm it after the clear. */
-    if (!own) s_fogEyeOk = 0;
 }
 
 void tagpu_terrown_flush(unsigned int frame_counter)

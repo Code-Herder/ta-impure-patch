@@ -302,6 +302,9 @@ static unsigned s_fogBare = 0;
 static unsigned s_fogOut = 0;
 /* the grid the last frame actually sampled, for the heartbeat's `fog=` */
 static const char* s_fogSampled = "none";
+/* units inside a frame's gather slab that the packet carried without their
+   pieces, and so were not drawn (`nopieces=`, cumulative) */
+static unsigned s_unitNoPieces = 0;
 static const unsigned short* s_fogGrid = NULL;
 static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
 /* world origin of fog grid cell 0 on one axis: the builder's rounded eye>>5
@@ -2389,8 +2392,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         const TAGPU_PK_PIECE* pc;
         if (!(pu->flags & TAGPU_PK_U_NATIVE)) continue;
         pc = tagpu_pk_pieces(pk, pu->piece_off, pu->piece_n);
-        if (!pc) continue;         /* outside the widest rect: no pose to draw */
         short wx = (short)(pu->pos[0] >> 16), wz = (short)(pu->pos[1] >> 16), wy = (short)(pu->pos[2] >> 16);
+        if (!pc) {
+            /* outside the fog reach the packet was published over: no pose to
+               draw. One inside this frame's slab is a unit the frame should
+               have drawn — the publisher's reach covers every slab the fog
+               bound fits into a grid, so this counts a bare frame whose
+               unapplied steps outran the lead, a frame the bound could only
+               centre (`out=`), or a piece table the arena truncated */
+            int sx0 = wx - eyeX + vpL, sy0 = wy - wz / 2 - eyeY + vpT;
+            if (sx0 >= evpL - TAGPU_GATHER_MARGIN && sx0 <= evpL + evw + TAGPU_GATHER_MARGIN &&
+                sy0 >= evpT - TAGPU_GATHER_MARGIN && sy0 <= evpT + evh + TAGPU_GATHER_MARGIN)
+                s_unitNoPieces++;
+            continue;
+        }
         int ix = pu->pos[0], iz = pu->pos[1], iy = pu->pos[2];
         float fx = (float)ix / 65536.0f, fz = (float)iz / 65536.0f, fy = (float)iy / 65536.0f;
         if (s_subpix) {
@@ -3111,10 +3126,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         _snprintf(hb, sizeof hb,
                   "native: vulkan lane handed over frame %u: terr=%d feat=%d "
                   "fx=%d mark=%d units=%d posed=%d sel=%d/%d selcache=%d full=%u "
-                  "fog=%s bare=%u out=%u held=%u/%dpx paused=%u back=%u",
+                  "fog=%s bare=%u out=%u held=%u/%dpx paused=%u back=%u nopieces=%u",
                   f->frame_counter, nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd,
                   nselDrawn, nsel, s_nsbox, s_sboxFull,
-                  s_fogSampled, s_fogBare, s_fogOut, held, heldMax, paused, back);
+                  s_fogSampled, s_fogBare, s_fogOut, held, heldMax, paused, back,
+                  s_unitNoPieces);
         hb[sizeof hb - 1] = 0;
         nlog(hb);
     }

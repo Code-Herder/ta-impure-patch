@@ -1751,9 +1751,9 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    owns it), so the engine's grid is rebuilt for the commanded eye inside that
    same draw whether the fog draw is the engine's or terrown's replica. What
    remains is the frame drawn from the PREDICTED eye before that packet
-   arrives, and its grids were built about the packet's eye: the fog bound
-   (predict) takes the engine's grid only where it spans the view and
-   otherwise the wide one, clamping the drawn eye into it. Nothing here
+   arrives: the fog bound (predict) takes the engine's grid only where it
+   spans the view and otherwise the wide one, clamping the drawn eye into it,
+   each by the origin and size the grid carries. Nothing here
    depends on terrown owning the fog draw: the invalidation is the engine's
    own mechanism.
 

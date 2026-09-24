@@ -372,15 +372,6 @@ static void fogw_axis(int eye, int v, int* c0, int* n)
     *n = (lo + span - (32 * *c0 + 16) + 31) / 32 + 2;
 }
 
-void tagpu_fogwide_span(int eye, int v, int* lo, int* hi)
-{
-    int c0, n;
-
-    fogw_axis(eye, v, &c0, &n);
-    *lo = 32 * c0 + 16;
-    *hi = *lo + 32 * (n - 1);
-}
-
 static int fogw_window(char* ta, int vw, int vh,
                        int* col0, int* row0, int* cols, int* rows)
 {

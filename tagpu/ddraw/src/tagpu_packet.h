@@ -372,7 +372,8 @@ typedef struct TAGPU_PK_PART {
    nothing to retire.
 
    THE ORIGIN IS THE PUBLISHER'S. `fog_org` is the world point of cell (0,0) —
-   `32*col0 + 16` — derived from the eye the grid was actually built at. The
+   `32*col0 + 16` — derived from the eye the grid was actually built at (the
+   engine grid's build record, tagpu_packet_pub.c `fog_rec_after`). The
    render thread's PREDICTED eye — the packet's eye plus a cursor-anchor step
    the game thread has not applied yet — would put the lattice off its own
    bytes whenever something is unacknowledged. (The pass also takes the wide
