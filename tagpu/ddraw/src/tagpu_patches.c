@@ -529,9 +529,12 @@ int tagpu_limits_install(void)
         return 0;
     }
     s_limState = 1;
-    tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d, flying pieces %d, "
-               "debris records %d", s_nlim, TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, TAGPU_LIM_PSYS,
-               TAGPU_LIM_AUX);
+    /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
+    tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d at 0x%08X, "
+               "flying pieces %d at 0x%08X, debris records %d at 0x%08X", s_nlim,
+               TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
+               TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
+               TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux);
     return 1;
 }
 
@@ -642,54 +645,51 @@ void tagpu_limits_report(void)
     }
     for (i = 0; i < s_nlim; i++) bad += s_lim[i].differs;
 
+    /* ONE LINE PER PARAGRAPH: the box wraps prose to its own width, and a hard break
+       inside a paragraph wraps a second time into ragged half-lines. The report lines
+       are kept short enough that the box never wraps them. */
     if (s_limWriteFail)
-        why = "Windows refused to let Impure change the game's code in\r\n"
-              "memory.";
+        why = "Windows refused to let Impure change the game's code in memory.";
     else if (strcmp(known, "none"))
-        why = "This TotalA.exe IS the 3.1 that Impure is built for,\r\n"
-              "but something else -- another patch or loader -- changed\r\n"
-              "those places in memory before Impure ran.";
+        why = "This TotalA.exe IS the 3.1 that Impure is built for, but something else "
+              "-- another patch or loader -- changed those places in memory before "
+              "Impure ran.";
     else
-        why = "This TotalA.exe is not the Total Annihilation 3.1 that\r\n"
-              "Impure is built for.";
+        why = "This TotalA.exe is not the Total Annihilation 3.1 that Impure is built for.";
 
     _snprintf(text, sizeof text,
-        "Impure could not install its engine limits, so Total\r\n"
-        "Annihilation will now close. Nothing was changed.\r\n"
+        "Impure could not install its engine limits, so Total Annihilation will now "
+        "close. Nothing was changed.\r\n"
         "\r\n"
         "WHY\r\n"
-        "Impure raises the game's limits (units, projectiles,\r\n"
-        "explosions...) by rewriting its code in memory, and it\r\n"
-        "checks every place first.\r\n"
-        "%s\r\n"
-        "Running anyway would let this game play by different\r\n"
-        "rules from other players and break multiplayer\r\n"
-        "without warning.\r\n"
+        "Impure raises the game's limits (units, projectiles, explosions...) by "
+        "rewriting its code in memory, and it checks every place first. %s Running "
+        "anyway would let this game play by different rules from other players and "
+        "break multiplayer without warning.\r\n"
         "\r\n"
         "WHAT TO DO\r\n"
-        "- Use the original 3.1 TotalA.exe (the Steam copy is\r\n"
-        "  3.1). Community patches such as 3.9.02 and\r\n"
-        "  TA: Escalation ship a modified exe.\r\n"
-        "- Or report it: press Ctrl+C to copy this message and\r\n"
-        "  paste it into a new issue at\r\n"
-        "  github.com/Code-Herder/ta-impure-patch/issues\r\n"
-        "  The same report is saved in log\\startup-failure.txt\r\n"
+        "- Use the original 3.1 TotalA.exe (the Steam copy is 3.1). Community patches "
+        "such as 3.9.02 and TA: Escalation ship a modified exe.\r\n"
+        "- Or report it: press Ctrl+C to copy this message and paste it into a new "
+        "issue at\r\n"
+        "github.com/Code-Herder/ta-impure-patch/issues\r\n"
+        "The same report is saved in log\\startup-failure.txt\r\n"
         "\r\n"
         "--- report ---\r\n"
-        "impure  %s (%s)\r\n"
-        "exe     %s  %lu bytes\r\n"
-        "        md5 %s  PE stamp 0x%08lX\r\n"
-        "        known build: %s\r\n",
+        "impure %s (%s)\r\n"
+        "exe %s, %lu bytes\r\n"
+        "md5 %s\r\n"
+        "PE stamp 0x%08lX, known build: %s\r\n",
         why, GIT_COMMIT, GIT_BRANCH, base, size, md5, (unsigned long)stamp, known);
     text[sizeof text - 1] = 0;
 
     if (s_limOverflow)
-        _snprintf(line, sizeof line, "result  the site table overflowed, nothing written\r\n");
+        _snprintf(line, sizeof line, "result: the site table overflowed, nothing written\r\n");
     else if (s_limWriteFail)
-        _snprintf(line, sizeof line, "result  write refused at 0x%08X, everything written was put back\r\n",
+        _snprintf(line, sizeof line, "result: write refused at 0x%08X, all put back\r\n",
                   s_limWriteFail);
     else
-        _snprintf(line, sizeof line, "result  %d of %d sites differ, nothing written\r\n", bad, s_nlim);
+        _snprintf(line, sizeof line, "result: %d of %d sites differ, nothing written\r\n", bad, s_nlim);
     line[sizeof line - 1] = 0;
     strncat(text, line, sizeof text - strlen(text) - 1);
 
@@ -697,14 +697,14 @@ void tagpu_limits_report(void)
         const LIMSITE* s = &s_lim[i];
         if (!s->differs) continue;
         if (++shown > 12) {
-            _snprintf(line, sizeof line, "  ... and %d more (all of them in log\\tagpu.log)\r\n", bad - 12);
+            _snprintf(line, sizeof line, "... and %d more, all of them in log\\tagpu.log\r\n", bad - 12);
             line[sizeof line - 1] = 0;
             strncat(text, line, sizeof text - strlen(text) - 1);
             break;
         }
         lim_hex(want, s->stock, s->n);
         lim_hex(have, s->have, s->n);
-        _snprintf(line, sizeof line, "  0x%08X %s\r\n             want %s  have %s\r\n",
+        _snprintf(line, sizeof line, "0x%08X %s\r\n  want %s\r\n  have %s\r\n",
                   s->va, s->name, want, have);
         line[sizeof line - 1] = 0;
         strncat(text, line, sizeof text - strlen(text) - 1);
