@@ -194,16 +194,14 @@
 #define OFF_FEATCOUNT      0x14253     /* i32 NumFeatureDefs                    */
 #define OFF_WRECKS         0x1420B     /* wreck records, stride 0x30            */
 #define WR_STRIDE          0x30
-/* THE POOL IS FIXED AND ITS SIZE IS THE BOUND. `0x421F29` allocates 0x18000
-   bytes for this array once per level and zeroes them (`mov ecx,0x6000; rep
-   stos`), then threads a free list through them stepping 0x30 from 0 to
-   0x18000 — so 0x18000/0x30 = 2048 records, indices 0..2047, and `0x421F94`
-   terminates the list by writing -1 into record 2047's next word at +0x17FD0
-   (2047*0x30). The allocator `0x4232A0` returns 2048 itself when the free list
-   is empty, so 2048 is also the engine's own "no record" value. The engine's
-   draw path `0x46A6C4` takes the cell's u16 unbounded; we do not, because the
+/* THE POOL IS FIXED FOR A LEVEL AND ITS SIZE IS THE BOUND. `0x421F20` allocates
+   TAGPU_LIM_WRECKS records of 0x30 bytes once per level, zeroes them and
+   threads a free list through them; the limits table writes that count into
+   the allocation, the loop and every allocator's "no record" value together
+   (tagpu_patches.c), and stock's is 2048 (0x18000 / 0x30). The engine's draw
+   path `0x46A6C4` takes the cell's u16 unbounded; we do not, because the
    publisher forms this address for cells the engine never draws. */
-#define WR_COUNT           2048
+#define WR_COUNT           TAGPU_LIM_WRECKS
 #define WR_OBJ3DO          0x04
 #define WR_XPOS            0x08        /* i32 16.16 triple, as a unit's         */
 #define WR_ZPOS            0x0C

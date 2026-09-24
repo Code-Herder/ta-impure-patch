@@ -463,7 +463,9 @@ typedef struct TAGPU_PK_PART {
    two. A slot count past it truncates the table (and says so, through
    TAGPU_PK_TRUNC_UNITS) rather than walking off the publisher's scratch. */
 #define TAGPU_PK_MAX_UNITS    16384u
-#define TAGPU_PK_MAX_WRECKS   4096u
+/* Every record the wreck pool holds, so the wreck table cannot truncate: a wreck
+   in the table is a cell's record, and one record belongs to one cell. */
+#define TAGPU_PK_MAX_WRECKS   ((unsigned)TAGPU_LIM_WRECKS)
 #define TAGPU_PK_MAX_ANCHORS  65536u
 #define TAGPU_PK_MAX_BUILDS   6144u    /* the order snapshot's own arena cap:
                                           one record per queued marker, and a

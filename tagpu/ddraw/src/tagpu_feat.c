@@ -106,7 +106,7 @@
                                /*     b3 shadow alpha                          */
 #define FD_MASKHI    0xFF      /* u8; bit3 = LOS-gated                         */
 #define WR_STRIDE    0x30
-#define WR_COUNT     2048      /* the pool 0x421F29 allocates: 0x18000/0x30   */
+#define WR_COUNT     TAGPU_LIM_WRECKS /* the pool 0x421F20 allocates a level   */
 #define WR_BODYANIM  0x04      /* anim state: GAF wreck body                  */
 #define WR_SHADANIM  0x10      /* anim state: GAF wreck shadow                */
 #define WR_FLAGS     0x2F      /* u8; bit2 = this wreck casts a shadow        */
@@ -573,10 +573,10 @@ static void draw_feature(const TAGPU_FXVIEW* v, const TAGPU_PACKET* pk,
            is engine DATA: unbounded it addresses up to 65535*0x30 ~ 3 MB past
            the pool, and a probe like IsBadReadPtr answers a question about the
            past — never the argument (CLAUDE.md).
-           The pool is FIXED: 0x421F20 allocates 0x18000 bytes at stride 0x30
-           once per level and threads a free list through all of them, so there
-           are WR_COUNT = 2048 records, and 0x4232A0 returns 2048 itself for
-           "no record". The engine's own draw at 0x46A6C4 does not bound this
+           The pool is FIXED for a level: 0x421F20 allocates WR_COUNT records at
+           stride 0x30 and threads a free list through all of them, and the
+           engine's allocators hand back WR_COUNT itself for "no record"
+           (tagpu_engine.h). The engine's own draw at 0x46A6C4 does not bound this
            either, but it only forms the address for a cell it is drawing.
            The LIFETIME argument: the base is read live
            just above, the teardown frees the pool at 0x4221F8 and nulls
