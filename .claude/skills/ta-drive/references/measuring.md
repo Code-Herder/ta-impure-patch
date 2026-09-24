@@ -107,7 +107,8 @@ scores 0 magenta and shows no game.
 - **Swap the DLL in the same instance**: replace the worktree's `tagpu/ddraw/ddraw.dll` before
   `scenario load` (tacli copies it into the gamedir at launch; editing the gamedir's copy is
   overwritten), or `cp` it over `<gamedir>/ddraw.dll` and launch with `--keep-dll`. `md5sum` the
-  gamedir copy in the script's own output: that line says the run tested what you think.
+  gamedir copy in the script's own output: that line says the run tested what you think. A build
+  that still reads `ddraw.ini` is refused: run it with a tree of its own age.
 - **The stock engine limits are a second build of the same tree**: `make -C tagpu/ddraw -j$(nproc)
   LIMITS=stock` writes `ddraw-stocklimits.dll` beside `ddraw.dll`, from objects of its own, so the
   two never mix. `cp` it over `<gamedir>/ddraw.dll`, launch with `--keep-dll`, and read

@@ -451,9 +451,9 @@ under zoom, `wheel.off` and `zoomedge.off`: `references/levers.md` §"Camera, vi
   `maxfps` (a window on the tile, the cap), which the DLL reads even under `tagpu_defaults.off`,
   so a hand edit or menu click to those three lasts one session.
 - **`--maxfps` is 0 (unlimited), 60, 120 or negative (the refresh)**, nothing else; sticky.
-- **`tacli launch <i> --shipped` is the player's launch** — no harness file, no placement, no
-  shield, the play defaults; the game places itself (a first run: fullscreen on the primary, which
-  on the live display is the owner's screen). It refuses arm files and flags that write.
+- **`tacli launch <i> --shipped` is the player's launch** — no harness file or shield, the play
+  defaults, the player's own placement and size (kept across ordinary launches); a first run is
+  fullscreen on the primary, the owner's screen on the live display. Refuses arm files and flags.
 - The launch briefly warps the pointer (a wine quirk); tacli restores it (`pointer_restored`).
 - Monitors blanking? Both known causes are in `windowed-mode.md`; read it before theorising.
 - **A scratch worktree cannot run tacli** (`create` wants the gitignored wine prefix template).

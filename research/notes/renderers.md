@@ -1257,7 +1257,8 @@ the window's placement**: `display`, `maxfps` and `window` are read under every 
 (`tagpu_settings_placement`, `tagpu_settings_window`), because nothing else can place a window,
 and tacli writes all three before every launch (`write_placement`). A placed window also gets
 `center_window` never (`tagpu_cfg.c`): at cnc-ddraw's `auto`, the switch from the 640×480 shell
-to a larger game re-centres the window and throws a tile off its position.
+to a larger game re-centres the window and throws a tile off its position. What keeps a player's
+frame in view instead is below.
 
 **The lever files stay, and the menu stops writing them.** They are the interface tacli and the
 `ta-drive` skill drive A/Bs through (`tacli arm <i> 'classicpp.cfg=assets=0'`, `ss.off`,
@@ -1317,8 +1318,10 @@ every file renamed, `penumbra=0.1` kept alone in the cfg, the game up borderless
 the store.
 
 **The windowed frame is saved to the store**, by `cfg_save` on the way out: `window=x,y,w,h`,
-where `w,h = 0,0` is cnc-ddraw's "the size the game asks for". A saved frame on no attached
-monitor is re-centred (`dd.c`, `MonitorFromRect`).
+where `w,h = 0,0` is cnc-ddraw's "the size the game asks for". A frame that a mode would leave
+with a corner on no monitor — its screen unplugged, or the shell dragged to a corner before a
+larger game — is moved the least distance that puts it wholly on the monitor it overlaps most
+(`dd_SetDisplayMode`); one straddling two monitors has every corner on one and stays.
 
 **tacli never meets the migration.** It creates an **empty** `impure.cfg` in every instance
 before a launch (and never mirrors `*.migrated` or the record from the template), so the one trigger ("no `impure.cfg`") never fires there and
