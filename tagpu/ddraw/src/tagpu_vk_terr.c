@@ -1196,13 +1196,11 @@ static void terr_scissor(uint32_t w, uint32_t h)
    frame is spent waiting for it.
 
    A CHANGE OF SERIAL IS A NEW JOB, not a re-feed. The serial moves when the
-   atlas stopped being the one the frame list describes -- a new map, a dropped
-   list, a repaint -- and in every one of those cases the rectangles, the
-   palette or the destination is different. Rebuilding is also how the repaint
-   reaches the restorer at all. */
+   atlas stopped being the one the frame list describes -- a new map or a
+   dropped list -- and in both cases the rectangles or the destination are
+   different. */
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
 {
-    int repaint;
     if (!t->restoreFrames || t->restoreN < 1) {
         /* The request went away: a drop (the atlas is not this map's) or the
            lever was never on. Either way the job describes nothing now. */
@@ -1228,9 +1226,10 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         }
         if (tagpu_vk_restore_job_failed(s_rjob)) {
             /* WHAT IT PAINTED STANDS UNTIL THE REQUEST CHANGES, and not past
-               that: the serial moves on a map change or a palette repaint, and
-               the give-up path below then drops `have`, because what the image
-               holds was painted for the OLD request. */
+               that: `s_rjSerial` keeps this request's serial, and the line
+               below that drops `have` fires only when the serial moves, on a
+               map change -- what the image holds was painted for the OLD
+               request. */
             plog(d, "terr: the restore of the tile atlas failed on this lane; "
                     "what it painted stands until the request changes, and "
                     "nothing more is queued");
@@ -1241,20 +1240,17 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         return;
     }
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
-    /* PAST THIS POINT THE SERIAL HAS MOVED AND WE ARE NOT PAINTING THE NEW ONE
-       YET, so every path that GIVES UP below must also drop `have`: what the
-       image holds was painted for the PREVIOUS request, through the previous
-       palette or over the previous map's rectangles, and `have` is what tells
-       the shader to sample it. Leaving it set is a silently WRONG picture
-       rather than a missing one -- the old map's colours over this one, or the
-       old palette's brightness beside engine pixels that have moved -- which is
-       the failure class this stack is worst at. Dropping it falls back to the
-       indexed atlas, which is the documented Classic++ fallback.
-       It is dropped at the GIVE-UP sites and not here, because `repaint` below
-       reads it: clearing it up front would turn every palette change into a
-       full blank-and-repaint, which is the one thing the repaint path exists to
-       avoid. */
-    if (s_rjTried) { s_rgbAtlas.have = 0; return; }
+    /* PAST THIS POINT NO JOB IS PAINTING THIS REQUEST. When the serial has
+       moved, `have` drops here and every path below starts from it: what the
+       image holds was painted for the PREVIOUS request, over the previous map's
+       rectangles, and `have` is what tells the shader to sample it. Leaving it
+       set is a silently WRONG picture rather than a missing one -- the old
+       map's colours over this one -- which is the failure class this stack is
+       worst at. Dropping it falls back to the base atlas, which is the
+       documented Classic++ fallback. The serial unmoved is a job that failed
+       on this request, and its picture stands (above). */
+    if (s_rjSerial != t->restoreSerial) s_rgbAtlas.have = 0;
+    if (s_rjTried) return;
     /* THE DESTINATION AND THE SOURCE BOTH HAVE TO BE THERE. `img` absent means
        the device refused the image (the resize above reads that way); `have`
        absent on the base atlas means its upload has not been recorded yet,
@@ -1265,22 +1261,14 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
        loads the model off disk, so a session that never publishes a request
        never pays for it. It latches its verdict, so this is one integer
        compare on every frame after the first. */
-    if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; s_rgbAtlas.have = 0; return; }
-    /* A REPAINT ONLY OVER SOMETHING THIS PASS ACTUALLY PAINTED. The producer's
-       flag says the destination it describes already holds a restore; ours
-       may have been created moments ago by the resize
-       above, in which case there is nothing to recolour and a repaint would
-       leave every tile it has not reached yet undefined. `have` is the local
-       fact, so it is the one that decides. */
-    repaint = t->restoreRepaint && s_rgbAtlas.have;
-    s_rjob = tagpu_vk_restore_job_new(d, "terr", 0, 1, repaint,
+    if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
+    s_rjob = tagpu_vk_restore_job_new(d, "terr", 0, 1, 0,
                                       s_base.img, s_base.view, s_base.w, s_base.h, 1,
                                       t->pal,
                                       s_rgbAtlas.img, s_rgbAtlas.view,
                                       s_rgbAtlas.w, s_rgbAtlas.h);
     if (!s_rjob) {
         s_rjTried = 1;                     /* the reason is already in the log */
-        s_rgbAtlas.have = 0;
         return;
     }
     if (!tagpu_vk_restore_job_add(s_rjob, t->restoreFrames, t->restoreN)) {
@@ -1289,16 +1277,14 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         tagpu_vk_restore_job_free(d, s_rjob);
         s_rjob = NULL;
         s_rjTried = 1;
-        s_rgbAtlas.have = 0;
         return;
     }
     s_rjSerial = t->restoreSerial;
     s_rjSrcView = s_base.view;
     s_rjPainted = 0;
-    if (!repaint) s_rgbAtlas.have = 0;     /* it is being blanked and repainted */
     plog(d, "terr: restoring the tile atlas HERE - %d frames over %dx%d, "
-            "serial %u%s", t->restoreN, s_rgbAtlas.w, s_rgbAtlas.h,
-         t->restoreSerial, repaint ? ", repaint" : "");
+            "serial %u", t->restoreN, s_rgbAtlas.w, s_rgbAtlas.h,
+         t->restoreSerial);
 }
 
 int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)

@@ -780,10 +780,11 @@ static void gather_fx(const TAGPU_FXVIEW* v)
         }
     }
 
-    /* ---- LHT flash colours from the packet's table + the live palette ---- */
+    /* ---- LHT flash colours from the packet's table + the engine's palette
+       (unscaled, like every world colour: the composite applies the Gamma) ---- */
     if (flashOn && (!s_lhtInit || v->frame_counter - s_lhtStamp >= 300)) {
         const unsigned char* lht = tagpu_pk_lht(pk);
-        const unsigned char* pal = tagpu_pal_live();
+        const unsigned char* pal = tagpu_pal_engine();
         unsigned char* rgb = s_lhtRGB;   /* file scope: the hand-over carries it */
         if (pal && lht) {
             int L;
@@ -933,10 +934,8 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.restoreFrames  = s_atlas.rlist;
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
-        s_pub.restoreRepaint = s_atlas.rlistRepaint;
-        s_pub.restoreBlanks  = s_atlas.rlistBlanks;
     }
-    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
+    s_pub.pal = tagpu_pal_engine(); s_pub.palSerial = tagpu_pal_engine_serial();
     /* THE LIGHT TABLE ONLY WHEN IT HAS BEEN BUILT. A frame with flash vertices
        and no table has no colour for its flashes, so tagpu_vk_fx.c refuses it
        rather than guess one. */

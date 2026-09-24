@@ -951,10 +951,10 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.restoreFrames  = s_atlas.rlist;
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
-        s_pub.restoreRepaint = s_atlas.rlistRepaint;
-        s_pub.restoreBlanks  = s_atlas.rlistBlanks;
     }
-    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
+    /* THE ENGINE'S TABLE, unscaled: the world composite applies the Gamma
+       factor once, to the finished image (tagpu_pal.h) */
+    s_pub.pal = tagpu_pal_engine(); s_pub.palSerial = tagpu_pal_engine_serial();
     /* the grid as the fragment shader will read it, and only when it will:
        `uFog` 0 means taFog is never called and uFogGrid never sampled. */
     if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&

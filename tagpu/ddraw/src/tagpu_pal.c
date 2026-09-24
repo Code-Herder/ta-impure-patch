@@ -1,11 +1,13 @@
-/* tagpu_pal.c — the palette the screen is actually shown with (tagpu_pal.h).
+/* tagpu_pal.c — the engine's palette table and the one the screen is shown
+   with (tagpu_pal.h says which consumer takes which).
 
    RENDER THREAD ONLY. tagpu_overlay_draw marks the snapshot stale once per
    present; the first reader after that re-resolves it, so the critical section
    below is entered once a frame however many passes ask.
 
-   A pass that reads main+0x143A7 is wrong by the Gamma factor, so every pass
-   takes the palette from here, the one place it is resolved.
+   Both are resolved here and nowhere else: the world takes the engine's
+   table and the world composite applies the Gamma factor to the finished
+   image; the UI takes the presented table, which already carries it.
 
    NO ENGINE MEMORY: the engine's own table
    and the gamma factor are fields of the packet, copied by the publisher on
@@ -34,6 +36,8 @@ static void plog(const char* s)
 static unsigned char s_pal[1024];       /* R,G,B,255 — what the screen shows  */
 static unsigned char s_eng[1024];       /* R,G,B,255 — the engine's table, from the packet */
 static int      s_haveEng;
+static unsigned s_engSerial;            /* bumped on every change of s_eng     */
+static DWORD    s_engLastLog;
 static float    s_gamma = 1.0f;         /* the engine's factor, from the packet */
 static int      s_have;                 /* s_pal holds a resolved palette      */
 static int      s_presented;            /* it came from the primary's object   */
@@ -50,10 +54,29 @@ void tagpu_pal_frame(const TAGPU_PACKET* pk)
        to 0.05..8.0, the table a fixed 1 KB copy), taken whenever a packet
        carries it, kept when none does */
     if (pk && pk->pal_ok) {
+        unsigned char t[1024];
         int i;
         for (i = 0; i < 256; i++) {
-            s_eng[4*i+0] = pk->pal[4*i+0]; s_eng[4*i+1] = pk->pal[4*i+1];
-            s_eng[4*i+2] = pk->pal[4*i+2]; s_eng[4*i+3] = 255;
+            t[4*i+0] = pk->pal[4*i+0]; t[4*i+1] = pk->pal[4*i+1];
+            t[4*i+2] = pk->pal[4*i+2]; t[4*i+3] = 255;
+        }
+        /* A CHANGE OF THE TABLE IS NEWS, and it is logged every time rather
+           than sampled: the engine writes `main+0x143A7` in one place, the
+           PALETTE load `0x42A400` that UIPipelinesInit runs once, so the
+           expected count in a process is ONE, the arrival. A second line in a
+           log is an engine writer this module does not know about, and every
+           world colour source is built from this table. */
+        if (!s_haveEng || memcmp(t, s_eng, 1024) != 0) {
+            DWORD now = GetTickCount();
+            memcpy(s_eng, t, 1024);
+            s_engSerial++;
+            if (s_engSerial <= 4 || now - s_engLastLog >= LOG_MS) {
+                char b[128];
+                s_engLastLog = now;
+                _snprintf(b, sizeof b, "pal: the engine's table changed (engine serial=%u)", s_engSerial);
+                b[sizeof b - 1] = 0;
+                plog(b);
+            }
         }
         s_haveEng = 1;
         s_gamma = (pk->gamma >= 0.05f && pk->gamma <= 8.0f) ? pk->gamma : 1.0f;
@@ -130,6 +153,7 @@ const unsigned char* tagpu_pal_engine(void)
 }
 
 unsigned tagpu_pal_serial(void)   { return s_serial; }
+unsigned tagpu_pal_engine_serial(void) { return s_engSerial; }
 unsigned tagpu_pal_changes(void)  { return s_changes; }
 int      tagpu_pal_presented(void){ return s_presented; }
 int      tagpu_pal_diff(int* first) { if (first) *first = s_diffAt; return s_diff; }

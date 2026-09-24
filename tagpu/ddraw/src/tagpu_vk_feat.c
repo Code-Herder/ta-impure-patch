@@ -227,7 +227,6 @@ static unsigned       s_bSerial, s_bPal;
                 the same guard, as the terrain consumer's. */
 static TAGPU_VKRJOB*  s_rjob;
 static unsigned       s_rjGen;
-static unsigned       s_rjBlanks;         /* the producer's blank count, seen */
 static int            s_rjTaken;
 static int            s_rjPainted;
 static int            s_rjTried;           /* the device refused; do not ask again */
@@ -934,11 +933,11 @@ static int build(const TAGPU_VKPASS* d)
    feature atlas is a lazy queue: the producer appends one frame per miss
    for the life of the atlas, so the steady state here is "add the few frames
    past my cursor and advance it". Everything that could make the cursor a lie
-   -- the rects moving, the destination blanking, the palette moving -- arrives
-   as a new generation, and then the job is rebuilt from index 0. */
+   -- the rects moving, the destination blanking -- arrives as a new
+   generation, and then the job is rebuilt from index 0. */
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
 {
-    int repaint, n;
+    int n;
 
     if (!h->restoreFrames || h->restoreGen == 0) {
         /* No request: the lever was never on, or the producer's list was
@@ -1035,32 +1034,23 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
        a session that never publishes a request never pays for it. It latches
        its verdict, so this is one integer compare per frame after the first. */
     if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
-    /* A REPAINT ONLY OVER SOMETHING THIS PASS ACTUALLY PAINTED. The producer's
-       flag says the destination may keep what it holds; this pass's image may
-       hold nothing, in which case a repaint would leave every cell it has not
-       reached undefined. `s_arHave` is the local fact. */
-    /* A REPAINT ONLY IF NOTHING WAS BLANKED SINCE THIS PASS LAST LOOKED.
-       `restoreRepaint` describes the LATEST generation and a consumer sees
-       only that one, so a recycle followed in the same producer frame by a
-       palette move (which `tagpu_feat.c` does: it recycles a full atlas and
-       calls `tagpu_gaf_atlas_restore` on the next line) would hand this pass
-       "keep what you have" over an atlas the producer has just cleared.
-       The blank COUNT cannot be hidden that way. */
-    repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
-    s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, repaint,
+    /* EVERY GENERATION BLANKS. Nothing the restore reads moves in play -- its
+       source is the base atlas, built from the engine's table, and the Gamma
+       factor is applied after it, to the finished world image (tagpu_pal.h) --
+       so no generation is a recolour of the last one. */
+    s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, 0,
                                       s_bImg, s_bView, s_atDim, s_atDim, 1,
                                       h->pal,
                                       s_arImg, s_arView, s_atDim, s_atDim);
     if (!s_rjob) { s_rjTried = 1; return; }   /* the reason is in the log      */
     s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
     s_rjGen = h->restoreGen;
-    s_rjBlanks = h->restoreBlanks;
     s_rjSrcView = s_bView;
     s_rjPainted = 0;
-    if (!repaint) s_arHave = 0;            /* it is being blanked and repainted */
+    s_arHave = 0;                          /* it is being blanked and repainted */
     plog(d, "feat: restoring the atlas HERE - %d of %d frames over %dx%d, "
-            "generation %u%s", s_rjTaken, h->restoreN, s_atDim, s_atDim,
-         h->restoreGen, repaint ? ", repaint" : "");
+            "generation %u", s_rjTaken, h->restoreN, s_atDim, s_atDim,
+         h->restoreGen);
 }
 
 /* The atlas, when the mirror says its bytes moved. Returns 0 only when
@@ -1145,9 +1135,9 @@ static int atlas_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     return 1;
 }
 
-/* THE BASE ATLAS, when the mirror or the palette moved: the rect the band
-   ring says changed since the serial this image holds, or the whole used page
-   when the palette moved, when nothing is held yet, or when the ring has
+/* THE BASE ATLAS, when the mirror or the engine's table moved: the rect the
+   band ring says changed since the serial this image holds, or the whole used
+   page when the table moved (its arrival), when nothing is held yet, or when the ring has
    rolled past what this image holds. Expanded into the slot's own staging
    and copied behind the same write-after-read barrier as the indexed image,
    for the same reason: every slot samples this one image. */
@@ -1556,7 +1546,7 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
        AND THE VERDICT DOES NOT SURVIVE THE DEVICE -- `s_rjTried` is a fact
        about a device that refused, so a new one is asked again. */
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
-    s_rjGen = 0; s_rjBlanks = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjTried = 0;
+    s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0; s_rjTried = 0;
     s_rjSrcView = VK_NULL_HANDLE;
     kill_image(d, &s_atImg, &s_atMem, &s_atView);
     kill_image(d, &s_arImg, &s_arMem, &s_arView);

@@ -366,20 +366,15 @@ typedef struct TAGPU_PDHAND {
        FRAMES to restore; the Vulkan pass paints them into its own twin.
 
        `restoreGen` is the only thing a cursor cannot survive: every
-       discontinuity in the list -- arm, recycle, repack, palette move, an
-       overflow restart -- bumps it, and a consumer whose generation moved
-       starts at 0 again.
-       `restoreRepaint` says the destination is to be recoloured in place
-       rather than blanked, and `restoreBlanks` counts the resets that DID
-       blank, which is how a consumer tells "recolour" from "start again"
-       across a frame it did not see. The struct is declared by tag here
+       discontinuity in the list -- arm, recycle, repack, an overflow restart
+       -- bumps it, and a consumer whose generation moved blanks the twin and
+       starts at 0 again (tagpu_feat.h says why no generation is a recolour).
+       The struct is declared by tag here
        because this header cannot include the one that defines it; the
        consumer includes both. */
     const struct TAGPU_RGLSL_FRAME_S* restoreFrames;
     int                               restoreN;
     unsigned                          restoreGen;
-    int                               restoreRepaint;
-    unsigned                          restoreBlanks;
     /* THE TWIN'S SHAPE: `restoreDim` is the twin's square size and
        `restoreMips` its top level, both from the atlas itself.
        `atlasRgbAniso` above comes from the same accessor for the same
@@ -389,6 +384,7 @@ typedef struct TAGPU_PDHAND {
     /* the face-shade multiplier, 32 floats by SHD row (tagpu_r3d_shade_k),
        aliased like `lut`: both are the material layer's own arrays */
     const float*         shadeK;
+    /* the engine's table and its serial (tagpu_pal_engine) */
     const unsigned char* pal;     unsigned palSerial;
     /* COPIED, not aliased: the grid points into a frame packet the game thread
        reuses, and tagpu_feat.c's own copy exists for the same reason. NULL when

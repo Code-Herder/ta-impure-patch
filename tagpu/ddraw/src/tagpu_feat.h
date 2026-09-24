@@ -109,10 +109,11 @@ typedef struct TAGPU_FEATHAND {
        which it takes nothing costs nothing, because the entries are still
        there on the next one. `restoreGen` is the discontinuity a cursor cannot
        survive -- the arm, an overflow restart, a recycle, a repack, the atlas
-       being laid out afresh, a palette move -- and a consumer that sees a new
-       one drops its job and starts at 0.
-       `restoreRepaint` is 1 only for the palette-move generation, where the
-       destination keeps what it holds and is recoloured in place.
+       being laid out afresh -- and a consumer that sees a new one drops its
+       job and starts at 0. Every generation blanks the destination: the
+       restore reads the base atlas, built from the engine's table, and the
+       Gamma factor is applied after it, to the finished world image
+       (tagpu_pal.h), so no generation is a recolour of the last.
 
        LIFETIME: the array is the atlas's, retained for the atlas rather than
        for the frame, but a consumer still copies on the frame it takes it (as
@@ -121,16 +122,8 @@ typedef struct TAGPU_FEATHAND {
     const TAGPU_RGLSL_FRAME* restoreFrames;
     int                      restoreN;
     unsigned                 restoreGen;
-    int                      restoreRepaint;
-    /* ...AND HOW MANY TIMES THE DESTINATION HAS BEEN BLANKED, which is what a
-       consumer must actually key its repaint decision on: `restoreRepaint`
-       describes the LATEST generation, and two resets between two of a
-       consumer's looks collapse into one, so a blank followed by a repaint
-       would read as "keep what you have" over an atlas the producer cleared.
-       Blank whenever this has moved. */
-    unsigned                 restoreBlanks;
-    const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()       */
-    unsigned              palSerial;
+    const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_engine()     */
+    unsigned              palSerial;  /* tagpu_pal_engine_serial()           */
     const unsigned short* fogGrid;    /* cols x rows RG8; NULL when fog is off */
     int                   fogGridCols, fogGridRows;
     const unsigned char*  fogLut;     /* 256 x R8, tagpu_native_foglut()     */

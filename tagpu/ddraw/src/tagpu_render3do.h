@@ -74,7 +74,6 @@ void tagpu_r3d_atlas_restore_want(void);
    `aniso` describe the TWIN and come from the atlas, because nothing reads it
    back. NULL until the list is armed and has entries. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
-                                                      int* repaint, unsigned* blanks,
                                                       int* mips, float* aniso);
 /* 256 x 32 R8, the bytes `shade_upload` last stored. The serial
    moves when the table is rebuilt -- which happens once, and again the first

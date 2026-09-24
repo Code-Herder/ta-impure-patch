@@ -138,7 +138,7 @@ typedef struct TAGPU_MKHAND {
     /* THE THREE SHARED TEXTURES, AS BYTES: the consumer builds its own
        images from them. They come over in the shapes `tagpu_fx.h` already uses
        for the same three, so the two consumers agree about what they are:
-       the palette is 256 RGBA8 texels of `tagpu_pal_live()`, the fog grid is
+       the palette is 256 RGBA8 texels of `tagpu_pal_engine()`, the fog grid is
        cols x rows of RG8, and the LUT is 256 R8. A draw that wants fog and
        whose grid did not cross is refused rather than drawn unfogged. */
     const unsigned char*  pal;        /* 256 x RGBA8 */

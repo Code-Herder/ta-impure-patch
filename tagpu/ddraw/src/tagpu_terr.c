@@ -150,7 +150,6 @@ static int                s_rvkWant;   /* Classic++ `assets=`, latched        */
 static TAGPU_RGLSL_FRAME* s_rFrames;   /* s_rFrameN entries, restore order    */
 static int                s_rFrameN;
 static unsigned           s_rSerial;   /* bumped on every change, drop included */
-static int                s_rRepaint;  /* the list is a repaint over a restore */
 
 /* Forget the list. Every caller is a point where the ATLAS stopped being the
    one the list describes, so the serial moves even though nothing replaces it:
@@ -159,7 +158,7 @@ static int                s_rRepaint;  /* the list is a repaint over a restore *
 static void rlist_drop(void)
 {
     if (s_rFrames) { free(s_rFrames); s_rFrames = NULL; }
-    if (s_rFrameN || s_rRepaint) { s_rFrameN = 0; s_rRepaint = 0; }
+    s_rFrameN = 0;
     s_rSerial++;
 }
 static unsigned char* s_hMirror;       /* s_hW x s_hH, or NULL                */
@@ -288,7 +287,6 @@ static int    s_dimBad;
    writing alpha 1 over the cell it paints, guard ring included, so the
    fragment shader's alpha test is the per-cell flag. */
 static int    s_rgbState = 0;      /* 0 none, 1 request published, -1 failed  */
-static unsigned s_rgbPalSerial;    /* tagpu_pal serial the request was built through */
 static const unsigned char* s_setPix;   /* the current set's tile pixels     */
 /* the last gathered rect, in 32-px cells: the GLSL job restores the tiles
    under it first (renderers.md 4c Q6), so it starts one frame after the atlas */
@@ -698,15 +696,15 @@ static int* restore_order(const char* ta, int count)
     return order;
 }
 
-/* `repaint`: the atlas is already restored and only the palette moved, so the
-   destination keeps what it holds and every tile is queued again over it --
-   the terrain recolours centre-out instead of blanking for the seconds a
-   whole restore takes. Which of the two it is is the consumer's to act on;
-   this side only says which. */
-static int restore_publish(const char* ta, int repaint)
+/* ONE REQUEST PER TILE SET, AND NO REPAINT IS OWED: the restore's input is the
+   base atlas, built from the engine's table, which nothing in play writes
+   (tagpu_pal.h). The Gamma factor is applied to the finished world image,
+   after the restore, so a factor that moves leaves every restored tile
+   right. */
+static int restore_publish(const char* ta)
 {
-    /* the ART's palette for the tileability test; the SCREEN's goes out
-       separately as `s_pub.pal` and is the restore's own input */
+    /* the ART's palette: the tileability test's, and -- through the base
+       atlas -- the restore's own input */
     const unsigned char* art = tagpu_pal_engine();
     int n = s_atlasN, i;
     int* order;
@@ -741,93 +739,40 @@ static int restore_publish(const char* ta, int repaint)
     rlist_drop();                      /* whatever was there is the old list */
     s_rFrames = frames;
     s_rFrameN = n;
-    s_rRepaint = repaint;
-    s_rgbPalSerial = tagpu_pal_serial();
     if (s_log) {
         char b[160];
         _snprintf(b, sizeof b, "terr: restore request published -- %d frames, "
-                  "%dx%d atlas, serial %u%s",
-                  n, ATLAS_W, s_atlasH, s_rSerial, repaint ? ", repaint" : "");
+                  "%dx%d atlas, serial %u",
+                  n, ATLAS_W, s_atlasH, s_rSerial);
         flog(b);
     }
     return 1;
 }
 
 /* Once per frame after the atlas is known: publish the restore request when
-   Classic++ is on and none stands for this tile set, then publish it again
-   when the palette moves under it.
+   Classic++ is on and none stands for this tile set. There is no second
+   publish: nothing the restore reads moves in play (restore_publish).
 
    THE PAINTING IS THE CONSUMER'S; THE ORDER IS OURS. This side owns
    `restore_order` above -- the centre-out reveal the player watches -- and the
    frame list; the Vulkan pass owns the image, the job and the progress
    (tagpu_vk_terr.c). */
-static unsigned s_palSeen;             /* the palette serial seen LAST frame   */
 static void restore_step(const char* ta)
 {
-    unsigned palWas;
     /* the request is only worth building when something asked for it: until
        the arm above takes there is no painter on this lane and the terrain
-       draws indexed */
+       draws its base atlas */
     if (!s_rvkWant) return;
     if (!tagpu_classicpp_assets() || !s_atlasBuilt || !s_setPix) return;
-    /* LAST FRAME'S palette serial, read before anything below can publish and
-       move `s_rgbPalSerial`, so "the same two frames running" is asked of the
-       palette alone. See the repaint branch. */
-    palWas = s_palSeen;
-    s_palSeen = tagpu_pal_serial();
-    if (s_rgbState == 0) {
-        if (!s_rectValid) return;          /* the order wants a viewport: next frame */
-        if (!tagpu_pal_live()) return;     /* ...and a palette: next frame  */
-        if (!restore_publish(ta, 0)) {
-            s_rgbState = -1;
-            flog("terr: the restore request could not be built; Classic++ terrain stays indexed");
-            return;
-        }
-        s_rgbState = 1;
+    if (s_rgbState != 0) return;
+    if (!s_rectValid) return;              /* the order wants a viewport: next frame */
+    if (!tagpu_pal_engine()) return;       /* ...and the engine's table: next frame  */
+    if (!restore_publish(ta)) {
+        s_rgbState = -1;
+        flog("terr: the restore request could not be built; Classic++ terrain draws its base atlas");
         return;
     }
-    /* Published, and then the palette moved under it (the Gamma option, or
-       `+gamma N`): the tiles hold the brightness the old palette gave them
-       while the engine's own pixels beside them moved. Queue them all again
-       over the image that is there.
-
-       NOT WHILE THE PALETTE IS STILL MOVING, and it is worth being exact about
-       what this does and does not buy. `s_rgbPalSerial != s_palSeen` is "the
-       palette has moved since the request went out"; `palWas == s_palSeen` is
-       "the last two CALLS TO THIS FUNCTION read the same serial". That second
-       term is a fact about the palette only in so far as this function is
-       called as often as the palette changes -- and it is not: the render loop
-       wakes on every primary Blt/Flip/Unlock as well as on a palette change,
-       so it usually runs more than one iteration per palette step. A slow fade
-       can therefore still get one republish per step.
-       WHAT IT DOES CLOSE is the worst case, a palette moving on every
-       iteration, where without it the whole list would be republished every
-       single frame -- `restore_order`'s full tile-map scan plus a
-       `tagpu_rglsl_tileable` per tile, and the consumer tearing its job down
-       and rebuilding it with its paint count back at zero, so the restore
-       would make no progress at all for the length of the fade. It narrows the
-       window; it does not close it.
-       THE REAL FIX IS A COMPLETION SIGNAL BACK FROM THE CONSUMER, which this
-       hand-over does not carry. The painting is the consumer's, so "is the
-       previous request still being painted" is a question only it can answer,
-       and until tagpu_terr.h carries the answer this side is guessing from the
-       palette.
-       RESIDUAL BEYOND THAT: a palette that settles, moves and settles again
-       DURING a restore restarts it each time. That much is correct -- those
-       tiles do need the new palette -- but it is slower than "finish first,
-       then repaint". */
-    if (s_rgbState == 1 && s_rgbPalSerial != s_palSeen && palWas == s_palSeen) {
-        char b[128];
-        if (!s_rectValid) return;          /* restore_order wants a viewport: next frame */
-        if (!restore_publish(ta, 1)) {
-            s_rgbPalSerial = tagpu_pal_serial();   /* do not retry every frame */
-            flog("terr: palette changed but the repaint request could not be built; the atlas keeps the old colours");
-            return;
-        }
-        _snprintf(b, sizeof b, "terr: palette changed (serial=%u): %d tiles queued for repaint",
-                  s_rgbPalSerial, s_atlasN);
-        flog(b);
-    }
+    s_rgbState = 1;
 }
 
 /* The cells a rect of `w` x `h` game px can cost the gather. The +2 is the
@@ -1186,7 +1131,6 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
         s_pub.restoreFrames  = s_rFrames;
         s_pub.restoreN       = s_rFrames ? s_rFrameN : 0;
         s_pub.restoreSerial  = s_rSerial;
-        s_pub.restoreRepaint = s_rRepaint;
     }
     /* the height mirror only while it matches the dimensions the shader is
        being told about -- build_height keeps those two in step (see there) */
@@ -1195,7 +1139,9 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
         s_pub.hW = s_hW; s_pub.hH = s_hH;
         s_pub.heightSerial = s_hMirrorSerial;
     }
-    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
+    /* THE ENGINE'S TABLE, unscaled: the world composite applies the Gamma
+       factor once, to the finished image (tagpu_pal.h) */
+    s_pub.pal = tagpu_pal_engine(); s_pub.palSerial = tagpu_pal_engine_serial();
     /* the grid as the fragment shader will read it, and only when it will:
        `uFog` 0 means taFog is never called and uFogGrid never sampled, so no
        grid is published then. */

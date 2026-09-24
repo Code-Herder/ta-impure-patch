@@ -106,7 +106,6 @@ static unsigned      s_lutSerial;
 #define SH_CLIP 250
 static float s_shadeK[SH_ROWS];
 static int   s_kBuilt;
-static int   s_kFromEngine;          /* built from the engine's SHD AND table */
 
 static void shade_k_build(const unsigned char* shd, const unsigned char* pal)
 {
@@ -150,9 +149,9 @@ static void shade_upload(const unsigned char* lut)
 }
 static void shade_build_lut(const unsigned char* shd)
 {
-    /* the palette the screen is SHOWN with (tagpu_pal.h): a snapshot we own,
-       so this reads no engine memory at all */
-    const unsigned char* pal = tagpu_pal_live();
+    /* the ENGINE'S table (tagpu_pal.h), the one every world colour is built
+       from: a snapshot we own, so this reads no engine memory at all */
+    const unsigned char* pal = tagpu_pal_engine();
     static unsigned char lut[SH_ROWS * 256];
     int r, i, c;
     if (!pal) return;
@@ -183,11 +182,7 @@ static void shade_build_lut(const unsigned char* shd)
             s_shDir     = (lum31 >= lum0) ? 1 : -1;
             shade_upload(shd);
             s_lutFromShd = 1;
-            {
-                const unsigned char* eng = tagpu_pal_engine();
-                shade_k_build(shd, eng ? eng : pal);
-                s_kFromEngine = eng != NULL;
-            }
+            shade_k_build(shd, pal);
             { char b[96]; _snprintf(b, sizeof b,
                 "r3d shade: engine SHD table (neutral=%d id=%d/256 dir=%d)",
                 s_shNeutral, bestn, s_shDir); rlog(b); }
@@ -217,7 +212,6 @@ static void shade_build_lut(const unsigned char* shd)
     s_lutFromShd = 0;
     shade_upload(lut);
     shade_k_build(NULL, NULL);
-    s_kFromEngine = 0;
     /* only reachable with shd == NULL: the SHD branch above returns */
     rlog("r3d shade: computed palette LUT (32 rows, row 16 identity) — no shade table in "
          "the packet yet; it is rebuilt from the engine's own the first frame one arrives");
@@ -460,20 +454,12 @@ void tagpu_r3d_atlas_frame(void)
        `tagpu_vk_restore.c` paints it, each reading the palette for itself. */
 }
 /* `shd` is the packet's copy of PALETTE.SHD, or NULL: the LUT is built once
-   out of whichever the caller has, and again when the engine's table first
-   arrives. Called every frame from tagpu_native.c; it is what keeps
-   `s_lutMirror` current for the Vulkan unit pass. */
+   out of whichever the caller has, and again the first time the engine's SHD
+   arrives after a frame with none. Called every frame from tagpu_native.c; it
+   is what keeps `s_lutMirror` current for the Vulkan unit pass. */
 void tagpu_r3d_lut_want(const unsigned char* shd)
 {
-    /* build once — and REBUILD the first time the engine's own table arrives
-       after a frame that had none */
     if (s_state == 1 && (!s_lutBuilt || (shd && !s_lutFromShd))) shade_build_lut(shd);
-    /* the multiplier once more when the engine's table arrives after its SHD:
-       until then it was fitted against the presented palette */
-    else if (s_state == 1 && shd && s_lutFromShd && !s_kFromEngine && tagpu_pal_engine()) {
-        shade_k_build(shd, tagpu_pal_engine());
-        s_kFromEngine = 1;
-    }
 }
 
 /* ---- the Vulkan lane's texels; tagpu_render3do.h has the contract ------- */
@@ -552,22 +538,17 @@ void tagpu_r3d_atlas_restore_want(void)
    entries; a consumer that gets NULL falls back to whatever it did before,
    which is the indexed atlas. */
 const TAGPU_RGLSL_FRAME* tagpu_r3d_atlas_restore_list(int* dim, int* n, unsigned* gen,
-                                                      int* repaint, unsigned* blanks,
                                                       int* mips, float* aniso)
 {
     if (dim) *dim = 0;
     if (n) *n = 0;
     if (gen) *gen = 0;
-    if (repaint) *repaint = 0;
-    if (blanks) *blanks = 0;
     if (mips) *mips = 0;
     if (aniso) *aniso = 0.0f;
     if (!s_atlas.rlistWant || !s_atlas.rlist || s_atlas.dim <= 0) return NULL;
     if (dim) *dim = s_atlas.dim;
     if (n) *n = s_atlas.rlistN;
     if (gen) *gen = s_atlas.rlistGen;
-    if (repaint) *repaint = s_atlas.rlistRepaint;
-    if (blanks) *blanks = s_atlas.rlistBlanks;
     if (mips) *mips = s_atlas.mip;
     if (aniso) *aniso = s_atlas.rgbAniso;
     return s_atlas.rlist;

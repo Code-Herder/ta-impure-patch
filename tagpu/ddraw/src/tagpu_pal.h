@@ -11,15 +11,28 @@
    brightness while the engine's own pixels beside it are right.
    Engine map: "The palette the screen is presented with".
 
-   This module is the one resolution of that question for the whole DLL: the
-   primary's palette object — what cnc-ddraw's ddp_SetEntries stored, the same
-   table `tacli shot` writes into its PNG — with the engine's table as the
-   fallback until a primary exists.
+   TWO TABLES, TWO CONSUMERS, AND THE SPLIT IS THE DESIGN:
+
+     - THE WORLD takes the ENGINE'S table (`tagpu_pal_engine`), unscaled, and
+       the factor is applied ONCE, to the finished world image, by the world
+       composite (tagpu_vk_world.c, `tagpu_pal_gamma`). Every world colour
+       source -- the base atlases, the restored twins, `uPal`, the LHT table,
+       the markers -- is built from that one table, so none of them is stale
+       when the factor moves and none of them repaints: the table is written
+       once per process (the PALETTE load `0x42A400`, from UIPipelinesInit),
+       and only the factor moves in play (engine map: "What moves the
+       palette in play").
+     - THE UI takes the PRESENTED table (`tagpu_pal_live`): the primary's
+       palette object -- what cnc-ddraw's ddp_SetEntries stored, the same
+       table `tacli shot` writes into its PNG -- with the engine's table as
+       the fallback until a primary exists. The shell's fades and its
+       per-screen palettes are presented-palette events, and the UI draws the
+       shell.
 
    RENDER THREAD ONLY, every entry point: they resolve into a shared snapshot,
    so a call from the game thread would race it. tagpu_order.c's seq_ink is the
-   one world reader left on the engine's table directly, and its walk being on
-   the game thread is why.
+   one reader left on the engine's table directly, and its walk being on the
+   game thread is why.
 
    The engine's table and the gamma factor arrive in the PACKET (`pal[]`,
    `gamma`, copied on the game thread by the publisher) and this module reads
@@ -34,14 +47,15 @@ struct TAGPU_PACKET;
    per frame, not per reader. */
 void tagpu_pal_frame(const struct TAGPU_PACKET* pk);
 
-/* 256 x {R,G,B,255}. The buffer is ours and lives as long as the process, so
-   a caller may keep the pointer (the atlases and the restorer jobs do); its
-   CONTENTS follow the screen. NULL only before any palette is readable. */
+/* THE PRESENTED TABLE, the UI's: 256 x {R,G,B,255}. The buffer is ours and
+   lives as long as the process, so a caller may keep the pointer (the UI's
+   atlas and restorer job do); its CONTENTS follow the screen. NULL only before
+   any palette is readable. */
 const unsigned char* tagpu_pal_live(void);
 
-/* Bumped whenever the bytes change, so anything baked FROM the palette — a
-   restored Classic++ twin, a LUT — can tell that what it holds is stale.
-   0 until the first resolve, and never 0 after it. */
+/* Bumped whenever the presented bytes change, so anything the UI bakes FROM
+   them -- its restored twin, the minimap -- can tell that what it holds is
+   stale. 0 until the first resolve, and never 0 after it. */
 unsigned tagpu_pal_serial(void);
 
 /* The heartbeat's numbers: 1 = the presented palette, 0 = the engine's table;
@@ -51,17 +65,21 @@ int      tagpu_pal_presented(void);
 int      tagpu_pal_diff(int* first);
 unsigned tagpu_pal_changes(void);
 
-/* The engine's OWN table (main+0x143A7), R,G,B,255, snapshotted beside the
-   presented one. Not what the screen shows -- the one caller that wants it is
-   the restorer's tileability test, which asks a question about the ART and
-   would otherwise reclassify tiles whenever the player moves the Gamma slider,
-   because a scaled palette stretches every colour distance by the same factor.
-   NULL when the engine's table is unreadable. */
+/* The engine's OWN table (main+0x143A7), R,G,B,255, from the packet: every
+   world colour source is built from it, and the restorer's tileability test
+   asks its question of it because that is a question about the ART. The
+   buffer lives as long as the process. NULL until a packet has carried it. */
 const unsigned char* tagpu_pal_engine(void);
 
-/* The engine's gamma factor itself, which the palette's log line prints
-   beside the serial. 1.0 when unreadable, and bounded to a band a slider can
-   actually produce. */
+/* Bumped whenever the engine's table changes, so a source built from it can
+   key on it. 0 until the first packet carries the table; ONE for the rest of
+   an ordinary process, because nothing in play writes the table. */
+unsigned tagpu_pal_engine_serial(void);
+
+/* The engine's gamma factor, `globals+0x614` from the packet: what the world
+   composite applies, and what the palette's log line prints. 1.0 when
+   unreadable, and bounded to a band a slider or the chat command can
+   produce. */
 float tagpu_pal_gamma(void);
 
 /* THE BASE ATLAS'S TEXELS: a rectangle of an index plane expanded through

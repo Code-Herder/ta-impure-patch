@@ -517,6 +517,33 @@ static const char* DFS =
     "#version 330 core\n"
     "in vec2 uv; out vec4 frag; uniform sampler2D uTex;\n"
     "void main(){ frag = texture(uTex, uv); }\n";
+/* ...and the same resolve with the engine's Gamma applied, ONCE, to the
+   finished world image -- the world's every colour source is the engine's
+   unscaled table (tagpu_pal.h). tagpu_vk_world.c draws this one only when the
+   factor is not 1.0, so at the stock Gamma the world is DFS's, bit for bit.
+   `uGam` is the engine's own curve, 256 x 1: texel e holds
+   min(255, trunc(e x factor)) / 255, which is what 0x4BA200 hands DirectDraw
+   for a palette entry of e -- built in double on the CPU because the engine
+   truncates an exact x87 product, and a float product here can land on the
+   integer above it. A level between two (the box filter's average at an edge)
+   takes the line between their two outputs. The target is PREMULTIPLIED, so
+   the curve is applied to the colour and the coverage put back; a texel with
+   no coverage is additive light (the effects' flashes) and takes the curve as
+   it is. */
+static const char* GFS =
+    "#version 330 core\n"
+    "in vec2 uv; out vec4 frag; uniform sampler2D uTex; uniform sampler2D uGam;\n"
+    "float gam(float x){\n"
+    "  float v = clamp(x, 0.0, 1.0) * 255.0;\n"
+    "  int i = int(floor(v)); int j = min(i + 1, 255);\n"
+    "  return mix(texelFetch(uGam, ivec2(i, 0), 0).r, texelFetch(uGam, ivec2(j, 0), 0).r, v - float(i));\n"
+    "}\n"
+    "void main(){\n"
+    "  vec4 c = texture(uTex, uv);\n"
+    "  vec3 rgb = c.a > 0.0 ? c.rgb / c.a : c.rgb;\n"
+    "  rgb = vec3(gam(rgb.r), gam(rgb.g), gam(rgb.b));\n"
+    "  frag = vec4(c.a > 0.0 ? rgb * c.a : rgb, c.a);\n"
+    "}\n";
 #pragma GCC diagnostic pop
 
 static int name_ieq(const char* a, const char* b)
@@ -2085,17 +2112,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
 
     char* ta = *(char**)TA_MAINPP;
     if (!ptr_ok(ta)) { SSHADOW_NONE(); return; }
-    /* The palette THE SCREEN IS SHOWN WITH, not the engine's own table: the
-       engine gamma-scales every palette on the way to DirectDraw and never
-       scales main+0x143A7, so a pass reading that table draws the world at
-       the wrong brightness at any Gamma but the default (tagpu_pal.h). One
-       resolve serves the atlas restore here and uPal below. */
-    const unsigned char* pal = tagpu_pal_live();
-    /* No frame is drawn with an unspecified palette. Unreachable in practice --
-       ptr_ok(ta) above is what the engine-table fallback needs. The early-out
-       skips the whole native pass; whether a frame with no live palette should
-       still be skipped is a question about the pass, and it is left as it
-       is. */
+    /* THE ENGINE'S TABLE, which every world colour source is built from --
+       the Gamma factor is applied once, to the finished world image
+       (tagpu_pal.h). No frame is drawn before a packet has carried it: every
+       consumer of this pass's hand-overs refuses a NULL table anyway, and
+       skipping here keeps the gathers from building work nothing can draw. */
+    const unsigned char* pal = tagpu_pal_engine();
     if (!pal) { SSHADOW_NONE(); return; }
     /* the unit atlas's frame: recycle if full -- before any face asks it for a UV */
     tagpu_r3d_atlas_frame();
@@ -2343,11 +2365,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
     }
 
-    /* ---- the live palette (it does NOT cycle -- terr.c): each Vulkan pass
-       uploads `tagpu_pal_live()`'s bytes itself, which `tagpu_pal_frame` fills
-       from this frame's packet before any pass runs. `pal` above is read only
-       by the `if (!pal)` early-out; a reader deciding whether `pal` can go
-       should start at that early-out's own comment. ---- */
+    /* ---- the engine's palette (it does NOT cycle -- terr.c): each Vulkan
+       pass uploads `tagpu_pal_engine()`'s bytes itself, which `tagpu_pal_frame`
+       fills from this frame's packet before any pass runs. `pal` above is read
+       only by the `if (!pal)` early-out. ---- */
 
     /* ---- gather native-owned on-screen units ---- */
     /* ONE GATHERED DRAWABLE. `pu`/`pw` point into THIS FRAME'S PACKET — our

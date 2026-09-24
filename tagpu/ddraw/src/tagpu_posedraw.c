@@ -602,7 +602,7 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        has finished writing it. See the handover for the ordering. */
     s_pub.lut = tagpu_r3d_lut_mirror(&s_pub.lutW, &s_pub.lutH, &s_pub.lutSerial);
     s_pub.shadeK = tagpu_r3d_shade_k();
-    s_pub.pal = tagpu_pal_live(); s_pub.palSerial = tagpu_pal_serial();
+    s_pub.pal = tagpu_pal_engine(); s_pub.palSerial = tagpu_pal_engine_serial();
     s_pub.fogLut = tagpu_native_foglut();
     {   /* THE GRID IS COPIED. It points into a frame packet the game thread
            reuses, and `cells` -- not cols*rows -- is what the packet actually
@@ -968,8 +968,7 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
         float aniso = 0.0f;
         const TAGPU_RGLSL_FRAME* fr =
             tagpu_r3d_atlas_restore_list(&s_pub.restoreDim, &s_pub.restoreN,
-                                         &s_pub.restoreGen, &s_pub.restoreRepaint,
-                                         &s_pub.restoreBlanks, &s_pub.restoreMips,
+                                         &s_pub.restoreGen, &s_pub.restoreMips,
                                          &aniso);
         if (fr) {
             s_pub.atlasRgbAniso  = aniso;
@@ -977,7 +976,6 @@ int tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now)
         } else {
             s_pub.restoreFrames  = NULL;
             s_pub.restoreN = 0; s_pub.restoreGen = 0;
-            s_pub.restoreRepaint = 0; s_pub.restoreBlanks = 0;
             s_pub.restoreDim = 0; s_pub.restoreMips = 0;
             /* WRITTEN ON BOTH PATHS, not left to the memset in the publisher.
                It is the only field of this block that would otherwise be set on

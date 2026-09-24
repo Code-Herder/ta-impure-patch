@@ -177,10 +177,9 @@ typedef struct TAGPU_FXHAND {
        which it takes nothing costs nothing, because the entries are still
        there on the next one. `restoreGen` is the discontinuity a cursor cannot
        survive -- the arm, a recycle, a repack, the atlas dropped, the list
-       overflowing, a palette move -- and a consumer that sees a new one drops
-       its job and starts at 0.
-       `restoreRepaint` is 1 only for the palette-move generation, where the
-       destination keeps what it holds and is recoloured in place.
+       overflowing -- and a consumer that sees a new one drops its job and
+       starts at 0. Every generation blanks the destination, for tagpu_feat.h's
+       reason.
 
        LIFETIME: the array is the atlas's, retained for the atlas rather than
        for the frame, but a consumer still copies on the frame it takes it (as
@@ -189,16 +188,8 @@ typedef struct TAGPU_FXHAND {
     const TAGPU_RGLSL_FRAME* restoreFrames;
     int                      restoreN;
     unsigned                 restoreGen;
-    int                      restoreRepaint;
-    /* ...AND HOW MANY TIMES THE DESTINATION HAS BEEN BLANKED, which is what a
-       consumer must actually key its repaint decision on: `restoreRepaint`
-       describes the LATEST generation, and two resets between two of a
-       consumer's looks collapse into one, so a blank followed by a repaint
-       would read as "keep what you have" over an atlas the producer cleared.
-       Blank whenever this has moved. */
-    unsigned                 restoreBlanks;
-    const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_live()        */
-    unsigned              palSerial;
+    const unsigned char*  pal;        /* 256 x RGBA8, tagpu_pal_engine()      */
+    unsigned              palSerial;  /* tagpu_pal_engine_serial()            */
     /* THE FLASH LIGHT TABLE, 32 x 1, THREE BYTES A TEXEL (tagpu_fx.c
        `s_lhtRGB`). NULL when it has never been built, and then a frame with
        flash vertices is refused rather than drawn with no colour for its

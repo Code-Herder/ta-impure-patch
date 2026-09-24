@@ -751,8 +751,8 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        in garbage colours, which is a different picture and not an absent one.
        The fallback's comment ("the uniform that would read it is 0 on such a
        frame") is true of uLayer and false of uPal.
-       `tagpu_pal_live()` returns NULL until it has resolved one
-       (`s_have ? s_pal : NULL`), and `tagpu_vk_fx.c` refuses on it for the same
+       `tagpu_pal_engine()` returns NULL until a packet has carried the
+       engine's table, and `tagpu_vk_fx.c` refuses on it for the same
        reason. */
     if (!s_h.pal) {
         if (!s_saidPal) { s_saidPal = 1;

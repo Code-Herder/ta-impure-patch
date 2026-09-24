@@ -267,9 +267,9 @@ static int            s_atRows;
    index's colour through the hand-over's palette and alpha 0 at its frame's
    key (tagpu_pal_expand). Classic++ draws it wherever the twin has not been
    painted, and it is the restorer's source -- so `s_bRows`, the rows it holds,
-   is what `restore_want` bounds a frame by. A palette move re-sends the whole
-   used page; a paint only the rect the atlas's band ring says changed
-   (tagpu_vk_feat.c `base_upload`). */
+   is what `restore_want` bounds a frame by. A move of the engine's table (its
+   arrival) re-sends the whole used page; a paint only the rect the atlas's
+   band ring says changed (tagpu_vk_feat.c `base_upload`). */
 static VkImage        s_bImg;
 static VkDeviceMemory s_bMem;
 static VkImageView    s_bView;
@@ -322,7 +322,7 @@ static int            s_arLvlN;
    a trilinear fetch reads the rest as whatever the driver left, which is why a
    chainless job is not a picture this pass may draw. */
 static TAGPU_VKRJOB*  s_rjob;
-static unsigned       s_rjGen, s_rjBlanks;
+static unsigned       s_rjGen;
 static int            s_rjTaken, s_rjPainted, s_rjTried, s_rjChain;
 static VkImageView    s_rjSrcView, s_rjDstView;
 static int            s_arHave;
@@ -1433,7 +1433,7 @@ static int covered_prefix(const TAGPU_RGLSL_FRAME* f, int n, int rows)
 
 static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
 {
-    int repaint, n;
+    int n;
 
     if (!h->restoreFrames || h->restoreGen == 0) {
         /* no request: the lever was never on, or the producer's list died. */
@@ -1535,11 +1535,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
         return;
     }
     if (!tagpu_vk_restore_up(d)) { s_rjTried = 1; return; }
-    /* a repaint only over something this pass painted, and only if nothing was
-       blanked since it last looked -- the blank COUNT is what a single
-       `restoreRepaint` flag cannot hide. */
-    repaint = h->restoreRepaint && s_arHave && h->restoreBlanks == s_rjBlanks;
-    s_rjob = tagpu_vk_restore_job_new(d, "unit", 3, 0, repaint,
+    /* EVERY GENERATION BLANKS, for tagpu_vk_feat.c's reason: nothing the
+       restore reads moves in play. */
+    s_rjob = tagpu_vk_restore_job_new(d, "unit", 3, 0, 0,
                                       s_bImg, s_bView, s_atDim, s_atDim, 1,
                                       h->pal,
                                       s_arImg, s_arLvl[0], s_arDim, s_arDim);
@@ -1581,14 +1579,13 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
                  h->restoreN - want, h->restoreN, s_bRows);
     }
     s_rjGen = h->restoreGen;
-    s_rjBlanks = h->restoreBlanks;
     s_rjSrcView = s_bView;
     s_rjDstView = s_arLvl[0];
     s_rjPainted = 0;
-    if (!repaint) s_arHave = 0;
+    s_arHave = 0;
     plog(d, "unit: restoring the twin HERE - %d of %d frames over %dx%d, "
-            "generation %u%s", s_rjTaken, h->restoreN, s_arDim, s_arDim,
-         h->restoreGen, repaint ? ", repaint" : "");
+            "generation %u", s_rjTaken, h->restoreN, s_arDim, s_arDim,
+         h->restoreGen);
 }
 
 static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
@@ -2394,10 +2391,9 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         /* AN UNPAINTED TWIN DRAWS INDEXED, ON BOTH BRANCHES. A stand-down
            here, with five one-way `s_rjTried` latches above it, would blank
            every unit for the rest of the SESSION on any restorer refusal, and
-           -- because the unit atlas's `rlistRepaint` is 0 on every
-           generation (tagpu_gaf.h), so `if (!repaint) s_arHave = 0;` fires on
-           every generation change -- for the length of
-           a repaint on every level boundary, recycle and map change. `!feed`
+           -- because every generation blanks the twin (`restore_want`
+           clears `s_arHave` on each one) -- for the length of a repaint on
+           every level boundary, recycle and map change. `!feed`
            is the rare half: a generation change satisfies all three feed terms.
 
            NOTHING ELSE DRAWS THESE UNITS: `render_vk.c` is the only caller of
@@ -3361,7 +3357,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
        survive the device either. tagpu_vk_feat.c carries the same block for the
        same reason. */
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; }
-    s_rjGen = 0; s_rjBlanks = 0; s_rjTaken = 0; s_rjPainted = 0;
+    s_rjGen = 0; s_rjTaken = 0; s_rjPainted = 0;
     s_rjTried = 0; s_rjChain = 0;
     s_rjSrcView = VK_NULL_HANDLE; s_rjDstView = VK_NULL_HANDLE;
     for (k = 0; k <= TAGPU_VK_MAXMIP; k++)

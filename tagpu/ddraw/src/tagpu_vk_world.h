@@ -73,6 +73,19 @@
    dropping either half would either black out the letterbox or double-expose
    the bottom layer.
 
+   THE ENGINE'S GAMMA IS APPLIED HERE, ONCE, AND NOWHERE ELSE IN THE WORLD.
+   Every world colour source is the engine's unscaled table (tagpu_pal.h), and
+   the composite runs the engine's own per-level curve over the finished
+   image -- min(255, trunc(e x factor)), what 0x4BA200 hands DirectDraw -- so a
+   Gamma change in play reaches the whole world on the frame that carries it,
+   with nothing rebuilt. At factor 1.0 the plain composite draws (DFS), so the
+   stock Gamma is the picture with no curve at all. THE CAPTURE READS THE
+   TARGET, BEFORE THE CURVE: a world A/B is the unscaled world at any Gamma.
+   ON THE FALLBACK PATH THERE IS NO CURVE: with no target the world passes
+   draw straight into the swapchain image and the world shows at factor 1.0
+   whatever the Gamma -- a device that refuses the target (an sRGB surface, no
+   depth format, a format it will not both render and filter) is the case.
+
    THE SEAM DRIVES THE RENDER PASS, because it has to wrap the OTHER passes'
    `record` calls -- so this module is not shaped like a pass and deliberately
    does not pretend to be. `prepare` builds and sizes; `begin`/`end` bracket the

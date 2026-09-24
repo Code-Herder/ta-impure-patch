@@ -1194,7 +1194,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         tagpu_text_dims(&s_mkPub.textW, &s_mkPub.textH);
         /* the three tagpu_vk_mark.c binds as textures, as bytes -- same shapes
            tagpu_fx.h uses for the same three */
-        s_mkPub.pal = tagpu_pal_live(); s_mkPub.palSerial = tagpu_pal_serial();
+        s_mkPub.pal = tagpu_pal_engine(); s_mkPub.palSerial = tagpu_pal_engine_serial();
         s_mkPub.fogGrid = (v->fogMode & 1) ? v->fogGrid : NULL;
         s_mkPub.fogGridCols = v->fogCols; s_mkPub.fogGridRows = v->fogRows;
         s_mkPub.fogLut = tagpu_native_foglut();
