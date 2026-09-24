@@ -800,8 +800,10 @@ neither.
 - **Area.** A writer sets a header and writes that many pixels into both planes: the build-state
   copy `w·h`, the frame copy its source's `w·h`, the shadow build `w·h` and then its encode, which
   `0x4B9E60` writes into the depth plane at up to `2h(w+1)` bytes (two a row and two a pixel from
-  `0x4BA000`), and the 2× bakes `4·w·h`.
-- **Rows.** Four of the writers then draw polygons into the frame, and every rasteriser they reach
+  `0x4BA000`), and the 2× bakes `4·w·h`. A sixth, `0x459170`, is a twin of the frame copy (the
+  source's header and `w·h` of both planes into `[this+0x10]`) with no caller and no pointer to it
+  anywhere in the image: it never runs, and nothing patches it.
+- **Rows.** Polygons are then drawn into the frame, and every rasteriser that draws them
   keeps its spans on its own stack, one `0x28`-byte entry a row, appended from the polygon's first
   row. Each takes its destination as the first argument and clips rows only to `[0, h − 1)`
   (`0x4C8CB6..0x4C8CE1` in `0x4C8BB0`: `[frame+2] − 1`), so a destination `h` rows tall writes up to
@@ -810,7 +812,7 @@ neither.
 | rasteriser | stack frame | table | entries | reached from |
 |---|---|---|---|---|
 | `0x4C8BB0`, the textured quad | `0x7D60` | `[esp+0x70]` | 799 | `0x45A39C` in the bake `0x459C70`, its one caller |
-| `0x4C8760` | `0x7D58` | `[esp+0x68]` | 799 | `0x459B96` in the bake `0x459830` |
+| `0x4C8760` | `0x7D58` | `[esp+0x68]` | 799 | `0x459B96` in the bake `0x459830`, on its 1× path too — which draws into the build-state copy's frame (below) |
 | `0x4C1000` | `0x14028` | `[esp+0x38]` | 2047 | `0x459BB1` in the bake `0x459830`; `0x45A750` in the shadow's `0x45A610` |
 | `0x4C0C70` | `0x1402C` | `[esp+0x3C]` | 2047 | `0x45A3BA` in the bake `0x459C70` |
 | `0x4C0820` | `0x14024` | `[esp+0x34]` | 2047 | `0x459128` in `0x458FA0`, from `0x458DD0`: the build-state copy's last call (`0x458D0E`) and the cargo loop's (`0x459686`) |
@@ -822,20 +824,25 @@ reading `[NULL+0x10]` for its polygon's texture, `0x4C8BB0`'s argument at `[esp+
 own table had overwritten. Stock reaches it too: area bounds a 2× frame, not its height, so a narrow
 structure whose own frame is more than 400 rows tall gets there at 600² as well.
 
-The unit draw also hands the frame to the bake as its own source: `0x459641` pushes `[edi+0x10]`
-with the mode argument 0, which sends the bake down its 1× path before anything is sized
-(`0x459875`).
+The unit draw also hands the frame to the bake as its own source: `0x459641` calls
+`0x459830(ctx+0x10, obj, colour, 0)` — for every unit without the structure bit, and for a
+structure whose `+0x104` is `0.0` (`0x459610..0x45962D`) — and the mode argument 0 sends the bake
+down its 1× path before anything is sized (`0x459875`). The 1× path rasterises into its source by
+the source's own header (`0x459B8E..0x459B96`: `0x4C8760`'s destination is the first argument), so
+the header the build-state copy set is drawn under by `0x4C8760` as well as by `0x4C0820`, and it is
+held to 800 rows.
 
 **The fix** (`fix_composite_scratch`, always on) runs a check before each writer forms its size,
 through a stub that saves every register around a C call (`pushad`, the check, `popad`):
 
 | site | writer | stolen bytes | what the check computes | refused |
 |---|---|---|---|---|
-| `0x458B87` | the build-state copy | `8B 4B 10 F7 D8` | `esi × edx`, the header about to be written; rows `edx` against 2048 | sets a flag and leaves through the epilogue `0x458D13` |
+| `0x458B87` | the build-state copy | `8B 4B 10 F7 D8` | `esi × edx`, the header about to be written; rows `edx` against 800 | sets a flag and leaves through the epilogue `0x458D13` |
 | the call at `0x459608` | its one caller | `E8` rel32 | — | a wrapper clears the flag, makes the call, and on the flag drops the return and both arguments and jumps to `0x4597D8`, the unit draw's own "no frame" exit (`0x459212`): the unit is not drawn that frame |
 | `0x45A470` | the frame copy, at its entry | `8B 44 24 04 53` | the source's `w·h` | the frame becomes 1 × 1 holding the source's key, with its hotspot and key, and it returns the frame as stock does (`mov eax,[ecx+0x10]; ret 4`) |
 | `0x45A7B9` | the shadow build | `8B 4D 10 66 8B 54 24 10` | `2h(w+1)` from the bounds `0x45A510` left at `[esp+0x10]` and `[esp+0x20]`; rows `h` against 2048 | the frame becomes 1 × 1 holding its own key, hotspot 0, and it resumes at the encode `0x45A853`: the cached shadow is one transparent pixel |
 | `0x459875`, `0x459CB5` | the 2× bakes, on the 2× path only | `85 DB` / `85 C0`, then `0F 84` rel32 | `4·w·h` from the source at `[esp+0x5F18]` / `[esp+0x159E8]`; rows `2h` against 800; `w` and `h` below `0x8000`, since the doubled header is a `u16` | the 1× path, `0x459913` / `0x459D57`, which draws into the source by its own header |
+| the call at `0x4596D8` | the cargo merge `0x4B90A0`, its one caller | `E8` rel32 | the rectangle it paints: `x0 = dst.hotx − src.hotx + sx`, `y0` likewise; it runs when `x0 + src.w ≤ dst.w`, `y0 + src.h ≤ dst.h` and `dst.w·dst.h ≤ A` | the cargo is left out of this frame's composite (`scratch_merge` returns as `ret 0x14` does) |
 
 A check that does not fit grows the frame: a block of `0x18 + 2·px` bytes, `px` the need rounded up
 to 256 Ki pixels and at most 2048 × 2048 (4 194 304), with the header and both planes copied and the
@@ -844,6 +851,16 @@ planes laid out as `0x4B8E00` lays them. `ctx+0x10` is repointed, and the old bl
 fallback, when the need is past 2048 × 2048, when the rows are past the table, when the frame is the
 writer's own source, when the allocator has no block, and under `tagpu_scratch.nogrow`. A grown frame
 lasts the level.
+
+**The cargo merge.** `0x4B90A0(src, dst, sx, sy, dbias)` paints a carried unit's own frame into the
+scratch at `(x0, y0)` by the scratch's header width and refuses only a negative origin
+(`0x4B90CF..0x4B90DD`); nothing clips its right or bottom edge. In stock it fits, because the
+build-state copy's box is the union of the carrier's and every cargo's boxes, taken with the same
+projection and the same ±2 margins (`0x4581E0`, `0x458310`). Between the two, though, the cargo's own
+bake runs (`0x459670`, `0x4586A0(cargo, 1, −1)`), and its 2× path would leave the scratch's header at
+the cargo's doubled box. The attach guard should make that unreachable — a structure is never
+attached (`0x48ABC7..0x48AC1D`) — and the bound does not depend on it: `scratch_merge` checks the
+rectangle against the header it is about to be painted by.
 
 **The allocator path.** The engine's `malloc` `0x4D83B0(name, size)` → `0x4D83C0(size)` enters the
 allocator's critical section (`0x4DA780` returns it, `0x528A28`), takes a debug heap when the option
@@ -856,23 +873,29 @@ section: no block under the debug heap, else `0x4E8890` and, on success, `0x4DA7
 fill is not applied: every plane is written before it is read.
 
 **The invariant.** Every header a writer sets has `w·h ≤ A` (`2h(w+1) ≤ A` for the shadow) and no
-more rows than the smallest table under it. It rests on a bound: `A` comes from the frame's own two
+more rows than the smallest table under it, and the merge paints only inside the header's box. It rests on a bound: `A` comes from the frame's own two
 pointers, and the frame has exactly two producers, `0x4B8E00` and the grow, both laying it out this
 way. The layout test (colour at `base + 0x18`, depth above it) is a filter on those values; a frame
 failing it is left to stock and logged once. On an ordering: each writer reads `ctx+0x10` only after
 its check, its callers re-read it after every call (`0x459342`, `0x4594E3`, `0x4595B8`, `0x4595D9`,
-`0x459639`), and the only function a writer calls that can reach another writer is `0x458310`, which
-the build-state copy calls before its check (`0x458A0C`, `0x458A77`; a call-graph walk of `.text`).
+`0x459639`, `0x4596BA`), and no function a writer calls reaches another writer: `0x458310` is a leaf
+(`0x458310..0x458426`, `ret 0x20`, no call), and neither `0x458DD0`, `0x4B8A80`, `0x4B7F90`, `0x45A510`,
+`0x45A610`, `0x4B9D70`, `0x4B9E60`, `0x437B50` nor the bakes' callees reach one. (The call to `0x459200`
+at `0x458468` belongs to `0x458430`, a function with no caller, jump or pointer to it, which a
+nearest-preceding-target walk folds into `0x458310`.)
 A frame is never regrown under a writer reading from it. And on a lifetime: the old block is freed
 only once `ctx+0x10` holds the new one, and nothing else holds it (the render thread never reads the
 frame; our tracer logs only the pointer's value). Every fallback's 1 × 1 fits: `A` is 360 000 or more
 from `0x4B8E00` and at least 64 from a grow. Identical to stock for every unit whose box fits.
 
 **Levers**, read once at attach. `tagpu_scratch.stress` treats every frame as too small, so every
-writer call regrows it to exactly `max(need, 64)` pixels and frees the old one; `tagpu_scratch.nogrow`
-refuses every grow; both together send every writer to its fallback. Each grow and refusal is logged
-(`enginefix: composite scratch grown|refused (<reason>) for <writer>: N px in R rows asked, A held,
-P now (n so far)`, a writer's first 16, then every 1024th).
+writer call regrows it to exactly `max(need, 64)` pixels and frees the old one, after setting the old
+block's two plane pointers to NULL: a freed block the heap keeps mapped would hand a stale reader its
+old bytes rather than fault, and the NULLs make any reader still holding it fault at its first plane
+access. `tagpu_scratch.nogrow` refuses every grow; both together send every writer to its fallback.
+Each grow and refusal is logged (`enginefix: composite scratch grown|refused (<reason>) for <writer>:
+N px in R rows asked, A held, P now (n so far)`, and `composite scratch merge refused: a WxH cargo at
+(x,y) is past the WxH frame (A held)`), each kind's first 16, then every 1024th.
 
 **Measured**, GDI lane, Two Continents, 1024×768, the nanoframe ladder plus oversized units made
 locally from stock models:
@@ -887,11 +910,18 @@ locally from stock models:
   over the cap were a 5 522 140-pixel shadow and a 4.37-million-pixel nanoframe, and over the rows
   2× bakes of 1268 and 1332.
 - `tagpu_scratch.nogrow`, and `stress` with `nogrow`: every writer took its fallback, no fault.
-  `stress` alone for 60 s on the giant nanoframes: 87 040 regrows by the build-state copy, the other
-  writers' besides, no fault; on the ladder with a ×6 solar, 182 000 in 12 s.
-- The first bake, `0x459830`, runs when the shading bit (`main+0x37F06` bit 5) is clear, which the
-  settings store never leaves it. A local build that clears it measured the grow for 708 rows and
-  the refusal for 1268 there.
+  `stress` alone, with the freed frames' plane pointers NULLed: 60 s on the giant nanoframes, 82 944
+  regrows by the build-state copy, no fault; 40 s of a lab building Kbots on its pad and an ARMATLAS
+  carrying one, 364 544 by the build-state copy and 236 544 by the frame copy, no fault and no merge
+  refused. On the ladder with a ×6 solar, before the NULLs were added, 182 000 in 12 s.
+- **The merge.** The same lab and transport on this build: no merge refused. The check's pass is a
+  tail call into `0x4B90A0` with the same five arguments, so every merge ran as stock. A local build
+  whose check refuses every merge: the carried Peewee and the pad's nanoframe are left out of their
+  carriers' composites (the log names them, `49×49 at (27,28)` in a `104×109` frame), no fault.
+- The 2× path of `0x459830` is taken from `0x4586A0` only when the shading bit (`main+0x37F06` bit 5)
+  is clear — `0x45874A` picks which bake that function calls — and the settings store never leaves
+  it clear. A local build that clears it measured the grow for 708 rows and the refusal for 1268
+  there.
 - The Vulkan lane runs the same writers: the same grows and refusals, no fault.
 
 **What it does not cover.** A unit's own frame (`Object3do+0x10`), which the 1× bakes draw into

@@ -371,10 +371,15 @@ and the rasterisers' span tables* has every site, the invariant and the measurem
 - **Two ceilings, not one.** Every header a writer sets has `w·h ≤ A`, `A = [scr+0x14] − [scr+0x10]`
   (and `2h(w+1) ≤ A` for the shadow's encode into the depth plane). The landing found a second: the
   rasterisers under the writers keep one stack entry a row, and their tables hold 800 rows
-  (`0x4C8BB0`, `0x4C8760`, both 2× bakes) or 2048 (`0x4C0820`, `0x4C0C70`, `0x4C1000`). So each check
-  bounds rows as well: 2048 for the build-state copy and the shadow, `2h ≤ 800` for the 2× bakes. The
-  area alone was not safe: a solar scaled ×11 grew the frame to 1548 rows for its 2× bake and
-  faulted at `0x4C8035`.
+  (`0x4C8BB0`, `0x4C8760`) or 2048 (`0x4C0820`, `0x4C0C70`, `0x4C1000`). So each check bounds rows
+  as well, against the smallest table under that writer: 800 for the build-state copy (the unit
+  draw's 1× bake at `0x459641` then rasterises into it through `0x4C8760`) and `2h ≤ 800` for the 2×
+  bakes, 2048 for the shadow. The area alone was not safe: a solar scaled ×11 grew the frame to 1548
+  rows for its 2× bake and faulted at `0x4C8035`.
+- **The cargo merge**, `0x4B90A0` at its one call `0x4596D8`, paints a carried unit's frame into the
+  scratch with no right or bottom clip. It fits whenever the header is the build-state copy's, whose
+  box contains every cargo; the check makes that a bound rather than an argument about which bakes
+  ran in between, and leaves a cargo that would not fit out of that frame's composite.
 - **Grow.** A check that does not fit allocates `0x18 + 2·px` bytes, `px` rounded up to 256 Ki
   pixels and at most 2048 × 2048, copies the header and both planes, repoints `ctx+0x10` and frees
   the old block through `0x4D85A0`. The allocation is `0x4D83C0`'s success path run by hand: the
@@ -392,8 +397,8 @@ and the rasterisers' span tables* has every site, the invariant and the measurem
     `0x45A853`: the unit's cached shadow is one transparent pixel;
   - **the 2× bake** takes the engine's own 1× path: that structure loses anti-aliasing.
 - **Levers**, read at attach: `tagpu_scratch.stress` regrows the frame at every writer call to
-  exactly what it asks; `tagpu_scratch.nogrow` refuses every grow; both together send every writer
-  to its fallback.
+  exactly what it asks, NULLing the freed block's plane pointers so a stale reader faults;
+  `tagpu_scratch.nogrow` refuses every grow; both together send every writer to its fallback.
 - **Gates, all run on the GDI lane** (Two Continents, 1024×768, oversized units made locally from
   stock models, never committed):
   - below the cap the picture is unchanged: the nanoframe ladder with both builds paused on the same
@@ -401,10 +406,13 @@ and the rasterisers' span tables* has every site, the invariant and the measurem
   - the build before the fix faults on flat giants (`0x459EAA`), and this one draws them: grows to
     2 097 152 pixels (2× bake, 708 rows), 3 407 872 (shadow) and 4 194 304 (build-state copy),
     refusals over the cap and over the rows;
-  - `nogrow`, and `stress` with `nogrow`: every writer's fallback, no fault; `stress` for 60 s:
-    87 040 regrows by the build-state copy alone, no fault;
-  - the first bake `0x459830`, which runs only with the shading bit clear, measured through a local
-    build that clears it; the Vulkan lane runs the same writers with the same log.
+  - `nogrow`, and `stress` with `nogrow`: every writer's fallback, no fault; `stress` with the
+    freed frames' pointers NULLed, 60 s on the giant nanoframes (82 944 regrows) and 40 s of a lab
+    building on its pad beside a transport carrying a Kbot (364 544 and 236 544): no fault;
+  - the cargo merge: no merge refused with a lab building and a transport carrying, and a local
+    build that refuses every merge leaves the cargo out, no fault;
+  - the 2× path of `0x459830`, which `0x4586A0` takes only with the shading bit clear, measured
+    through a local build that clears it; the Vulkan lane runs the same writers with the same log.
   - Review at `high`.
 
 L1 came first because it forced the module, the report and the packet changes into existence.

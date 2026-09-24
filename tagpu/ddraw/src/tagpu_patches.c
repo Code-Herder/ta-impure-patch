@@ -626,19 +626,25 @@ static int fix_reclaim_mark_anchor(void)
      - the 2x bakes 0x459830 and 0x459C70(src, ...) set 2w x 2h from src (a `shl` on the u16)
        and fill, draw and downsample that much, when their fourth argument asks for the 2x
        path (0x459875, 0x459CB5); src is [esp+0x5F18] / [esp+0x159E8] there.
+   0x459170 is a sixth, a twin of the frame copy, with no caller and no pointer to it in the
+   image [call and literal scan of .text]: it never runs and is not patched.
    A unit whose box passes A -- a quarter of it for the bake, half for the shadow -- writes
    past the allocation, on every lane (only GDI presents the result, but the game thread
-   builds it on all of them, MEASURED). And A bounds area, not height: four of the writers then
-   draw polygons into the frame through rasterisers that keep one 0x28-byte stack entry a row,
-   clipped only to the frame's height - 1, in tables of 799 rows (0x4C8BB0, 0x4C8760, the bakes'
-   quads) or 2047 (0x4C0820, 0x4C0C70, 0x4C1000; the build-state copy's wireframe, the bakes,
-   the shadow). A frame taller than the table under it overruns the rasteriser's stack: MEASURED,
-   a 2x bake grown to 1548 rows faulted at 0x4C8035 with its texture argument overwritten.
+   builds it on all of them, MEASURED). And A bounds area, not height: polygons are drawn
+   into the frame through rasterisers that keep one 0x28-byte stack entry a row, clipped only
+   to the frame's height - 1, in tables of 799 rows (0x4C8BB0, 0x4C8760) or 2047 (0x4C0820,
+   0x4C0C70, 0x4C1000). A frame taller than the table under it overruns the rasteriser's
+   stack: MEASURED, a 2x bake grown to 1548 rows faulted at 0x4C8035 with its texture argument
+   overwritten. The build-state copy's header is drawn under by 0x4C0820 (its own last call,
+   0x458D0E) and by 0x4C8760: the unit draw's 1x bake at 0x459641 is 0x459830(ctx+0x10, ...,
+   0) with the scratch as its source, and the 1x path rasterises into its source by the
+   source's header (0x459B96). The shadow is drawn under by 0x4C1000 (0x45A750), the 2x bakes
+   by 0x4C8760 / 0x4C8BB0 as well as 0x4C1000 / 0x4C0C70.
 
    THE FIX: before each writer forms its size, a check computes what it will write (need) and
    how many rows, and compares them with A and with the smallest span table under that writer
-   (2048 rows for the build-state copy and the shadow, 800 for the 2x bakes' 2h). If it fits the
-   writer runs unchanged. If not, the frame grows: a new
+   (800 rows for the build-state copy and for the 2x bakes' 2h, 2048 for the shadow). If it
+   fits the writer runs unchanged. If not, the frame grows: a new
    block of 0x18 + 2*px bytes, px >= need rounded up to 256 Ki pixels and at most 2048 x 2048,
    from the engine's own allocator path (below), laid out as 0x4B8E00 lays it out, with the
    header and both planes copied; ctx+0x10 is repointed and the old block freed with 0x4D85A0,
@@ -654,23 +660,36 @@ static int fix_reclaim_mark_anchor(void)
      - shadow build: the frame becomes 1 x 1 holding its own key, hotspot 0, and the function
        resumes at the encode 0x45A853: the unit's cached shadow is one transparent pixel;
      - 2x bake: the 1x path (0x459913 / 0x459D57), which draws into src by src's own header.
-   Never a clip: the cargo merge 0x4B90A0 (0x4596D8) blits the frame with no right or bottom
-   clip, so a header must say what the planes hold.
+   Never a clip: a header must say what the planes hold.
+
+   THE CARGO MERGE 0x4B90A0(src, dst, sx, sy, dbias), whose one caller is 0x4596D8 in the unit
+   draw's cargo loop, paints a carried unit's own frame into the scratch at x0 = dst.hotx -
+   src.hotx + sx, y0 = dst.hoty - src.hoty + sy by the scratch's header width, and refuses only a
+   negative origin: nothing clips its right or bottom edge [0x4B90A0..0x4B9190]. It fits in stock
+   because the build-state copy's box is the union of the carrier's and every cargo's boxes, taken
+   with the same projection and margins (0x4581E0, 0x458310). But between the two the cargo's own
+   bake runs (0x459670, 0x4586A0(cargo, 1, -1)), and its 2x path would leave the scratch's header
+   at the cargo's doubled box -- which the engine's attach guard should make unreachable (a
+   structure is never attached, 0x48ABC7..0x48AC1D), and nothing here depends on that. The call
+   is sent through scratch_merge, which runs the merge only when x0 + src.w <= dst.w, y0 + src.h
+   <= dst.h and dst.w * dst.h <= A, and otherwise leaves the cargo out of this frame's composite.
 
    THE INVARIANT: every header a writer sets has w*h <= A, and a shadow's 2h(w+1) <= A, and no
-   more rows than the span tables under that writer hold, so no writer, no rasteriser and no
-   reader sized by a header leaves its allocation or its stack table. It rests on:
+   more rows than the span tables under that writer hold, and the merge writes only inside the
+   header's box, so no writer, no rasteriser and no reader sized by a header leaves its
+   allocation or its stack table. It rests on:
      - a bound: A is read from the frame's own two pointers, which have exactly two producers,
-       0x4B8E00 at the level load and scratch_grow here, and both lay the frame out this way.
+       0x4B8E00 at the level load and scratch_hold here, and both lay the frame out this way.
        The layout test in scratch_area (colour == base+0x18, depth > colour) is a sanity
        filter on those values, not the argument; a frame failing it is left to stock, logged.
        Every fallback's 1 x 1 fits: A >= 360000 from 0x4B8E00 and >= 64 from a grow;
      - an ordering: each writer reads ctx+0x10 only after its check [every read of +0x10 in
        each writer]; its callers re-read ctx+0x10 after every call (0x45933D..0x459342,
-       0x4594E3, 0x4595B8, 0x4595D9, 0x459639); the only function any writer calls that can
-       reach another writer is 0x458310, which the build-state copy calls before its check
-       (0x458A0C, 0x458A77) [call graph of .text]; and a frame is never regrown under a
-       writer that is reading from it (src == frame refuses the grow instead);
+       0x4594E3, 0x4595B8, 0x4595D9, 0x459639, 0x4596BA); no function a writer calls reaches
+       another writer [call graph of .text: 0x458310 is a leaf, 0x458DD0, 0x4B8A80, 0x4B7F90,
+       0x45A510, 0x45A610, 0x4B9D70, 0x4B9E60, 0x437B50 and the bakes' callees reach none];
+       and a frame is never regrown under a writer that is reading from it (src == frame
+       refuses the grow instead);
      - a lifetime: the old block is freed only after ctx+0x10 points at the new one, and it
        has no other holder -- the render thread never reads it, and our tracer only logs the
        pointer's value.
@@ -685,17 +704,21 @@ static int fix_reclaim_mark_anchor(void)
    must be able to fail, so scratch_alloc runs 0x4D83C0's own success path by hand: inside the
    allocator's critical section (0x4DA780 returns it, 0x528A28), refuse if 0x4D80D0 reports the
    debug heap (its blocks come from 0x4DACF0 and go back through 0x4DB7D0), else CRT malloc
-   0x4E8890 and, on success, the byte counters 0x4DA7D0(size). 0x4D85A0's non-debug path
-   frees exactly such a block (0x4D8360, 0x4DA840, 0x4E8820). The debug fill 0x4D82C0 that
-   0x4D83C0 applies when its option is set is not applied: every plane is written before it
-   is read.
+   0x4E8890 and, on success, the byte counters 0x4DA7D0(size). The CRT's new-handler flag
+   0x52A430 is never written, so 0x4E8890 answers NULL rather than calling a handler.
+   0x4D85A0's non-debug path frees exactly such a block (0x4D8360, 0x4DA840, 0x4E8820). The
+   debug fill 0x4D82C0 that 0x4D83C0 applies when its option is set is not applied: every
+   plane is written before it is read.
 
    Levers, read once at attach: `tagpu_scratch.stress` treats every frame as too small, so
-   every writer call regrows it to exactly max(need, 64) pixels and frees the old one;
-   `tagpu_scratch.nogrow` refuses every grow, so every oversized writer takes its fallback.
+   every writer call regrows it to exactly max(need, 64) pixels and frees the old one, with
+   the old block's two plane pointers set to NULL first so that a reader still holding it
+   faults instead of reading bytes the heap has not yet reused; `tagpu_scratch.nogrow`
+   refuses every grow, so every oversized writer takes its fallback.
    Registers: every stub saves them all (pushad/popad) around the check, and the flags the
    stolen instructions set are set after it. No branch lands inside the stolen bytes
-   [rel8/rel32 scan of .text]; 0x459608's call is the only reference to 0x4589C0. */
+   [rel8/rel32 scan of .text]; 0x459608's call is the only reference to 0x4589C0, and
+   0x4596D8's the only one to 0x4B90A0. */
 
 #define SCR_CAP_PX    (2048u * 2048u)
 #define SCR_ROUND_PX  0x40000u
@@ -716,6 +739,7 @@ enum { SCR_EDI = 0, SCR_ESI = 1, SCR_EBP = 2, SCR_EBX = 4, SCR_EDX = 5, SCR_ECX 
 static int s_scr_stress, s_scr_nogrow;
 static volatile unsigned char s_scr_refused;     /* the build-state copy's answer, GAME THREAD */
 static unsigned s_scr_grows[5], s_scr_refusals[5], s_scr_layout;   /* by writer */
+static unsigned s_scr_merge_refusals;
 
 /* A, or 0 when the frame is not in 0x4B8E00's layout */
 static unsigned scratch_area(const unsigned char* f)
@@ -788,6 +812,10 @@ static int scratch_hold(unsigned char* ctx, unsigned char* f, unsigned a,
             *(unsigned char**)(g + 0x10) = g + 0x18;
             *(unsigned char**)(g + 0x14) = g + 0x18 + px;
             *(unsigned char**)(ctx + 0x10) = g;
+            if (s_scr_stress) {                /* a reader still holding f faults here */
+                *(unsigned char**)(f + 0x10) = NULL;
+                *(unsigned char**)(f + 0x14) = NULL;
+            }
             ((void (__cdecl*)(void*))0x004D85A0)(f);
             scratch_log("grown", who, need, rows, a, px, ++s_scr_grows[who]);
             return 1;
@@ -832,7 +860,8 @@ static int __cdecl scratch_build_state(unsigned int* regs)
     unsigned char* f = scratch_frame(ctx, &a);
     if (!a) return 1;
     if (w >= 0 && h >= 0 && w <= 0xFFFF && h <= 0xFFFF &&
-        scratch_hold(ctx, f, a, (unsigned long long)w * (unsigned)h, (unsigned)h, SCR_ROWS_POLY,
+        scratch_hold(ctx, f, a, (unsigned long long)w * (unsigned)h, (unsigned)h,
+                     SCR_ROWS_SPAN,                /* 0x459641's 1x bake: 0x4C8760 */
                      (const void*)(size_t)regs[SCR_EBP], SCR_BUILD))
         return 1;
     s_scr_refused = 1;
@@ -889,6 +918,35 @@ static int scratch_bake(unsigned int* regs, unsigned slot, int who)
 static int __cdecl scratch_bake1(unsigned int* regs) { return scratch_bake(regs, 0x5F18, SCR_BAKE1); }
 static int __cdecl scratch_bake2(unsigned int* regs) { return scratch_bake(regs, 0x159E8, SCR_BAKE2); }
 
+/* the call at 0x4596D8: the cargo merge, run only when it writes inside dst's header box */
+static void __stdcall scratch_merge(const unsigned char* src, unsigned char* dst, int sx, int sy,
+                                    int dbias)
+{
+    unsigned a = scratch_area(dst);
+    if (a && ptr_sane(src)) {
+        const unsigned sw = *(const unsigned short*)src, sh = *(const unsigned short*)(src + 2);
+        const unsigned dw = *(const unsigned short*)dst, dh = *(const unsigned short*)(dst + 2);
+        const int x0 = *(const short*)(dst + 4) - *(const short*)(src + 4) + sx;
+        const int y0 = *(const short*)(dst + 6) - *(const short*)(src + 6) + sy;
+        /* a negative origin is 0x4B90A0's own refusal and writes nothing */
+        if (x0 >= 0 && y0 >= 0 &&
+            ((unsigned long long)dw * dh > a ||
+             (unsigned)x0 + sw > dw || (unsigned)y0 + sh > dh)) {
+            unsigned n = ++s_scr_merge_refusals;
+            if (n <= 16 || !(n & 1023)) {
+                char b[224];
+                _snprintf(b, sizeof b, "enginefix: composite scratch merge refused: a %ux%u cargo "
+                          "at (%d,%d) is past the %ux%u frame (%u held) (%u so far)",
+                          sw, sh, x0, y0, dw, dh, a, n);
+                b[sizeof b - 1] = 0;
+                plog(b);
+            }
+            return;
+        }
+    }
+    ((void (__stdcall*)(const void*, void*, int, int, int))0x004B90A0)(src, dst, sx, sy, dbias);
+}
+
 /* pushad; push esp; call check; add esp,4; test eax,eax; popad -- ZF set = refused */
 static unsigned char* scratch_call_check(unsigned char* p, int (__cdecl *check)(unsigned int*))
 {
@@ -922,13 +980,14 @@ typedef struct SCRSITE { unsigned int va; unsigned char was[8]; int n; unsigned 
 
 static int fix_composite_scratch(void)
 {
-    SCRSITE site[6] = {
+    SCRSITE site[7] = {
         { 0x00459608, { 0xE8, 0xB3, 0xF3, 0xFF, 0xFF }, 5, NULL },          /* call 0x4589C0 */
         { 0x00458B87, { 0x8B, 0x4B, 0x10, 0xF7, 0xD8 }, 5, NULL },          /* mov ecx,[ebx+0x10]; neg eax */
         { 0x0045A470, { 0x8B, 0x44, 0x24, 0x04, 0x53 }, 5, NULL },          /* mov eax,[esp+4]; push ebx */
         { 0x0045A7B9, { 0x8B, 0x4D, 0x10, 0x66, 0x8B, 0x54, 0x24, 0x10 }, 8, NULL },
         { 0x00459875, { 0x85, 0xDB, 0x0F, 0x84, 0x96, 0x00, 0x00, 0x00 }, 8, NULL }, /* test ebx,ebx; je 0x459913 */
         { 0x00459CB5, { 0x85, 0xC0, 0x0F, 0x84, 0x9A, 0x00, 0x00, 0x00 }, 8, NULL }, /* test eax,eax; je 0x459D57 */
+        { 0x004596D8, { 0xE8, 0xC3, 0xF9, 0x05, 0x00 }, 5, NULL },          /* call 0x4B90A0 */
     };
     const int n = (int)(sizeof site / sizeof site[0]);
     unsigned char* p;
@@ -979,12 +1038,15 @@ static int fix_composite_scratch(void)
     scratch_bake_stub(site[4].stub, 0xDB, scratch_bake1, 0x0045987D, 0x00459913);
     scratch_bake_stub(site[5].stub, 0xC0, scratch_bake2, 0x00459CBD, 0x00459D57);
 
+    p = site[6].stub;
+    *p++ = 0xE9; tagpu_detour_rel(p, (unsigned int)(size_t)scratch_merge); p += 4;
+
     /* the caller's wrapper first: alone it only runs the call. Written together or not at all. */
     for (done = 0; done < n; done++) {
         unsigned char now[8];
         unsigned int rel = (unsigned int)(size_t)site[done].stub - (site[done].va + 5u);
         memset(now, 0x90, sizeof now);
-        now[0] = done == 0 ? 0xE8 : 0xE9;                   /* the call stays a call */
+        now[0] = site[done].was[0] == 0xE8 ? 0xE8 : 0xE9;   /* a call stays a call */
         memcpy(now + 1, &rel, 4);
         if (!tagpu_detour_write(site[done].va, now, site[done].n)) break;
     }
@@ -1012,13 +1074,13 @@ static void patch_engine_defects(void)
     int die  = fix_feature_die_pool_full();
     int mark = fix_reclaim_mark_anchor();
     int scr  = fix_composite_scratch();
-    char b[512];
+    char b[640];
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
               "terrain window bound 0x484057 %s; feature swap on a full wreck pool 0x423651 %s; "
               "reclaim tests the anchor's mark 0x423892 %s; composite scratch bound "
-              "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70) %s",
+              "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70 0x4B90A0) %s",
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
               fix_state(scr));
     b[sizeof b - 1] = 0;

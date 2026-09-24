@@ -651,8 +651,10 @@ moves an overrun threshold rather than bounding it.
   - It sizes the box to the union of the model's box (`0x458310`), each cargo's box, and the unit's
     own frame, and writes the header at `0x458B8C`.
   - The blit then draws the unit's **body** from the scratch.
-  - The cargo merge `0x4B90A0` refuses a negative origin but clips neither right nor bottom. It is
-    safe only because the union provably contains each cargo box.
+  - The cargo merge `0x4B90A0` refuses a negative origin but clips neither right nor bottom. It
+    fits because the union contains each cargo box, as long as the header is still the union's:
+    the cargo's own bake runs in between (`0x459670`). Landing 7 checks the rectangle at the
+    merge's one call, `0x4596D8`.
   - Hook: `0x458B87`, `8B 4B 10 F7 D8`.
 - **The frame copy `0x45A470`.**
   - Called from `0x459338`, `0x4594DB` and `0x45958C`.
