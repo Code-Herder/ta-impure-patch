@@ -1284,13 +1284,13 @@ static uint32_t g_alloc(const void* data, size_t bytes)
 {
     VkDeviceSize off;
     if (s_gnext >= GLOBALS_RING || !s_gmap) {
-        /* IT SAYS WHY. The callers return 0 from `draw`, which the core
-           turns into `failed = 1` and a drop -- and the consumer then logs
-           that the restore failed, with no reason anywhere else in the log.
-           This is the one bound a fast enough device can reach:
-           GLOBALS_RING blocks per slot per slice, one for a FILL, one for a
-           CONV and two for an OUT, so a `full`-model batch spends 15 and a
-           slice of more than about seventeen batches exhausts it.
+        /* UNREACHABLE WHILE `vk_room` HOLDS, and it says why if it is not.
+           The core asks `vk_room` before every draw and ends the slice on 0,
+           and `chain_step`'s levels are held back in that answer, so the
+           cursor stops short of GLOBALS_RING by construction. Were it
+           reached, the callers return 0 from `draw`, the core fails the job,
+           and the consumer logs that the restore failed with no reason
+           anywhere else in the log -- hence the line.
            Said once per slice, because the slice that hit it will hit it
            again on the next draw and a per-draw line would bury the rest. */
         if (!s_gSaid) {
@@ -1895,6 +1895,31 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
     return 1;
 }
 
+/* THE RING'S BOUND. GLOBALS_RING blocks per slot per slice: a FILL takes one,
+   a CONV one and an OUT two. A `full`-model batch at NK 4 is 47 draws -- the
+   FILL, 45 CONVs (four groups on each of eleven 64-channel layers and one on
+   the output) and the OUT -- so 48 blocks, and a sixth batch in one slice
+   would overflow it. A slice is bounded by GPU time, not by a count, and six
+   small batches fit in 12 ms: MEASURED 2026-09-24 on the reference setup,
+   `fx-rockets` under `--defaults`, four feature batches and two effect
+   batches issued in one slice, the job holding the sixth failed, and so did
+   every job that drew after it in that slice.
+   So the core asks here before every draw. The answer holds back each live
+   job's mip levels, which `chain_step` reduces from the same ring after the
+   slice. The static bound below is what makes the head of a slice always
+   answer 1, which the core needs to make progress. */
+#define DRAW_BLOCKS_MAX 2            /* an OUT's two; a FILL and a CONV take one */
+_Static_assert(TAGPU_R_MAXJOBS * TAGPU_VK_MAXMIP + DRAW_BLOCKS_MAX <= GLOBALS_RING,
+               "a fresh slice must hold every job's mip levels and one draw");
+static int vk_room(void)
+{
+    uint32_t reserve = 0;
+    int i;
+    for (i = 0; i < TAGPU_R_MAXJOBS; i++)
+        if (s_vjob[i].core && s_vjob[i].chainN > 0) reserve += (uint32_t)s_vjob[i].chainN;
+    return s_gnext + reserve + DRAW_BLOCKS_MAX <= GLOBALS_RING;
+}
+
 static const TAGPU_RBACKEND s_be = {
     LANE,
     vk_ready,
@@ -1907,7 +1932,8 @@ static const TAGPU_RBACKEND s_be = {
     vk_timer_off,
     vk_state_push,
     vk_state_pop,
-    vk_may_draw
+    vk_may_draw,
+    vk_room
 };
 
 /* ======================== THE PUBLIC JOB API ======================== */

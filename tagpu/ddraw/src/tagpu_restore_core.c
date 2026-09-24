@@ -576,6 +576,13 @@ void tagpu_rcore_step(TAGPU_RSCHED* s)
     q = s->qFrame & 1;
     if (s->timer) { s->be->slice_begin(q); s->qJob[q] = j; }
     do {
+        /* THE SLICE ENDS BEFORE A DRAW THE BACKEND CANNOT HOLD, not at the
+           draw that overflows it: an overflowing draw fails its job, and a
+           failed job latches its lane unrestored (each consumer's
+           `s_rjTried`) until that pass is next torn down.
+           Asked before the batch is formed as well, so a batch is not
+           committed on a slice that cannot draw it. */
+        if (s->be->room && !s->be->room()) break;
         /* every batch boundary re-picks, so a higher-priority job that
            gained work takes the budget as soon as the batch in flight lands */
         if (!j->inflight) {

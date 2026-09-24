@@ -6,7 +6,7 @@
    IT IS THE BACKEND OF tagpu_restore_core.c, not a restorer of its own.
    The scheduler -- the job queues, batch formation, the pass sequencer, the
    cost model and the GPU-time budget -- is the core's, and this file
-   implements the twelve-entry TAGPU_RBACKEND against it. Everything below is therefore
+   implements the thirteen-entry TAGPU_RBACKEND against it. Everything below is therefore
    about DEVICE RESOURCES and THREE DRAWS, and nothing below decides when to
    draw.
 

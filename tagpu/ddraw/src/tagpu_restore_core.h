@@ -163,6 +163,14 @@ typedef struct {
     /* 1 when the backend may draw at all this frame -- the renderer switch
        the jobs pause under. The queues keep filling while it is 0. */
     int    (*may_draw)(void);
+    /* 1 when one more draw of any kind fits what the backend holds PER SLICE.
+       The core asks before every draw and ends the slice on 0; the batch in
+       flight resumes on the next slice, as it does when the budget cuts it.
+       A slice is bounded by GPU time, not by a count, so a per-slice resource
+       of fixed size can only be bounded by the core stopping short of it --
+       tagpu_vk_restore.c's uniform ring is the one there is. A backend must
+       answer 1 at the head of a slice, or no slice would ever draw. */
+    int    (*room)(void);
 } TAGPU_RBACKEND;
 
 /* ---- the scheduler, one instance per backend ---- */
