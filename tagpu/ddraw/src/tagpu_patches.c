@@ -254,50 +254,65 @@ static int fix_feature_null_plot(void)
 
 /* THE TERRAIN PASS'S WINDOW, in 0x483FA0 (stdcall(ctx), ret 4; one caller, 0x468DB0
    in DrawGameScreen). [DISASSEMBLED] From the eye main+0x1431F/0x14323 it takes
-   col0 = eyeX/32 and row0 = eyeY/32 (truncating), the offsets sx = eyeX - 32*col0
-   and sy likewise, and from the view size main+0x37E37/0x37E3B the counts
-   ncols = ceil((W + sx)/32) and nrows likewise. It then reads the tile map
-   *(main+0x1428B) at row*(main+0x14233 / 2) + col for every cell of that window
-   (0x4840A6, 0x4841A9, 0x4841D6, 0x484345) and the tile graphic at
-   *(*(main+0x14283)+4) + id*0x400, with no compare on the index or the id, and
-   hands each tile to the clipped blitter 0x4B8150 (edge cells) or the unclipped
-   0x4C6E70 (whole ones). LoadMap allocates the tile map as (pxW/32)*(pxH/32) u16
-   from the map's pixel size main+0x14223/0x14227 (0x48393C..0x483969), and the
-   tile set as {count, pixels} with count*0x400 bytes of graphics
-   (0x483B53..0x483B80).
+   col0 = eyeX/32 and row0 = eyeY/32, truncating toward zero, the offsets
+   sx = eyeX - 32*col0 and sy likewise (each in (-32, 32), with the eye's sign),
+   and from the view size main+0x37E37/0x37E3B the counts ncols = ceil((W + sx)/32)
+   and nrows likewise. It reads the tile map *(main+0x1428B) at
+   row*(main+0x14233 / 2) + col for every cell of that window (0x4840A6, 0x4841A9,
+   0x4841D6, 0x484345) and the tile graphic at *(*(main+0x14283)+4) + id*0x400,
+   with no compare on the index or the id. It paints cell (i, j) of the window at
+   (L - sx + 32*j, T - sy + 32*i): the edge columns and rows through the clipped
+   blitter 0x4B8150, the rest through the unclipped 0x4C6E70. LoadMap allocates
+   the tile map as (pxW/32)*(pxH/32) u16 from the map's pixel size
+   main+0x14223/0x14227 (0x48393C..0x483969) and copies the TNT's ids in raw
+   (0x48397D), and the tile set as {count, pixels} with count*0x400 bytes of
+   graphics (0x483B53..0x483B80).
 
-   The window lies on the map only while the eye is in [0, map - view], which the
-   camera clamp 0x41C3C0 provides only while the view fits in the scroll extent
-   (the map less 32 px wide and 128 tall). On a map shorter than the view plus
-   128 px, or narrower than it plus 32, that range is empty, the clamp
-   alternates the eye between 0 and a negative value (0x41C40D..0x41C431), and
-   the window starts above or left of the map; at an eye of 0 it runs past the
-   map's far edge instead. The id read there is whatever the heap holds, and the
-   tile pointer made from it is anywhere. MEASURED with the shipped play set: an
-   access violation reading that tile at 0x4CBE44, the row copy 0x4CBDD1 called
-   by 0x4B8150, on the first in-play draw of Lava Run at 1920x1440 (row0 = -7)
-   and at 3840x2160 (row0 = -29), and of Coast To Coast at 3840x2160 (row0 = -6).
+   WHERE STOCK IS RIGHT. ncols = ceil((W + sx)/32) carries the painted span to
+   L + W or past it for any sx, but it starts at L - sx: the viewport's left
+   column is painted only when sx >= 0, and its top row only when sy >= 0. So the
+   pass reads only map cells AND paints every viewport pixel exactly when
+   sx >= 0, sy >= 0 and the window lies inside the tile map; with col0 and row0
+   truncated, that is 0 <= eye and eye + view <= 32 * tiles on each axis. Outside
+   it, stock does one of two wrong things:
+     - an eye in (-32, 0) truncates to col0 = 0: every read is on the map, but the
+       leftmost -sx columns (or top -sy rows) keep the last frame's pixels;
+     - an eye at or below -32 starts the window before the map, and an eye with
+       eye + view past the map's far edge runs it off the end: the id read there
+       is whatever the heap holds, and the tile pointer made from it is anywhere.
+       MEASURED with the shipped play set: an access violation reading that tile
+       at 0x4CBE44 (the row copy 0x4CBDD1 called by 0x4B8150) on the first in-play
+       draw of Lava Run at 1920x1440 (row0 = -7) and 3840x2160 (row0 = -29), and
+       of Coast To Coast at 3840x2160 (row0 = -6).
+   Two things hand the pass such an eye. The camera clamp 0x41C3C0 holds the eye
+   in [0, extent - view] (the extent is the map less 32 px wide and 128 tall), and
+   where the view is larger than the extent it alternates the eye between 0 and
+   the negative extent - view (0x41C40D..0x41C431). And at zoom > 1 our camera
+   range is [-dx, extent - view + dx] (tagpu_zoom.c, zoom_eye_range), so at a left
+   or top edge of any map the eye is negative on every draw the engine's pass runs.
 
    THE FIX, a jump at 0x484057, the first point at which every value the pass
-   indexes with is computed and nothing has been read through it. The stub hands
-   the pass's frame to terrain_window_on_map. When the window
-   [row0, row0+nrows) x [col0, col0+ncols) lies inside the tile map, that
+   places and indexes with is computed and nothing has been read through it. The
+   stub hands the pass's frame to terrain_window_on_map. Where stock is right, it
    returns 1 and the stub runs the two stolen instructions and resumes at
    0x484061: the stock pass, unchanged. Otherwise terrain_window_draw draws the
    window itself and the stub leaves through the pass's own epilogue 0x4843AC.
 
-   THE INVARIANT: the pass never reads the tile map outside (pxW/32)*(pxH/32)
-   entries, nor the tile set outside count*0x400 bytes, whatever the eye and the
-   view. Identical to stock on every draw whose window lies on the map, which is
-   every draw whose eye is in [0, extent - view]; the draws it changes are the
-   ones where stock reads before the tile map, past its end or — on a map
-   narrower than the view — the next row's cells at the right edge, which stays
-   inside the allocation on every row but the last. Registers at 0x484057: ecx
-   (main), esi (sx), edi (sy) and ebp (0) are live, eax and ebx are what the
-   stolen instructions load, edx is overwritten by the `cdq` at 0x484061, and
-   the flags are set again at 0x48406B before anything tests them; pushad/popad
-   keep them all. 0x484050's `je` lands on 0x484057 itself, the jump; no branch
-   lands in 0x484058..0x484060 [rel8/rel32 scan of .text]. */
+   THE INVARIANT: whatever the eye and the view, the pass reads no tile-map entry
+   outside (pxW/32)*(pxH/32) and paints every viewport pixel inside the clip rect
+   (our path refuses a context whose clip rect is not inside its surface, and
+   then draws nothing rather than write outside it). Only our path bounds the
+   tile ids by the tile set's count: the stock path reads them unchecked, so a
+   map whose ids reach past its tile set still reads past it there. Identical
+   to stock on every draw where stock is right; the draws it changes are the ones where stock leaves a strip unpainted,
+   reads before the tile map or past its end, or — on a map narrower than the
+   view — reads the next row's cells at the right edge, which stays inside the
+   allocation on every row but the last. Registers at 0x484057: ecx (main), esi
+   (sx), edi (sy) and ebp (0) are live, eax and ebx are what the stolen
+   instructions load, edx is overwritten by the `cdq` at 0x484061, and the flags
+   are set again at 0x48406B before anything tests them; pushad/popad keep them
+   all. 0x484050's `je` lands on 0x484057 itself, the jump; no branch lands in
+   0x484058..0x484060 [rel8/rel32 scan of .text]. */
 
 /* the pass's frame at 0x484057, as dword indexes from its esp: the four registers
    it saved at +0x00, its 0x48 bytes of locals from +0x10, its return address at
@@ -314,9 +329,11 @@ enum { TPR_EDI = 0, TPR_ESI = 1, TPR_ECX = 6 };
 #define TP_TILE_MAP   0x1428B   /* u16 tile id per 32-px cell                      */
 #define TP_VIEW_W     0x37E37
 #define TP_VIEW_H     0x37E3B
-/* the engine's OFFSCREEN (terrain-depth.md 4): pitch, pixel base, inclusive clip */
-enum { CTX_PITCH = 2, CTX_BASE = 3, CTX_CLIP_L = 7, CTX_CLIP_T = 8,
-       CTX_CLIP_R = 9, CTX_CLIP_B = 10 };
+/* the engine's OFFSCREEN (terrain-depth.md 4): width and height, which
+   SurfaceCreateNamed 0x4C69F0 stores at 0x4C6A2C/0x4C6A35 and sizes the pixels
+   by, then pitch, pixel base and the inclusive clip rect */
+enum { CTX_W = 0, CTX_H = 1, CTX_PITCH = 2, CTX_BASE = 3, CTX_CLIP_L = 7,
+       CTX_CLIP_T = 8, CTX_CLIP_R = 9, CTX_CLIP_B = 10 };
 
 static int ptr_sane(const void* p)
 {
@@ -333,10 +350,11 @@ static int floor32(int v)
    ground with), then each cell of the same window that is on the map, and whose
    id is below the tile set's count, copied to where stock puts it,
    (L - sx + 32*j, T - sy + 32*i). Every write is inside the context's clip rect,
-   the bound the engine's clipped blitter holds each tile to and the only bound
-   the OFFSCREEN carries on its last row; a context whose rect does not validate
-   is not drawn at all. GAME THREAD, inside DrawGameScreen. */
-static void terrain_window_draw(const char* m, const unsigned int* regs, const int* f,
+   and that rect is checked against the surface's own width and height, the size
+   SurfaceCreateNamed allocates the pixels with, before anything is written; a
+   context whose rect or size does not validate is not drawn at all. GAME THREAD,
+   inside DrawGameScreen. */
+static void terrain_window_draw(const char* ta, const unsigned int* regs, const int* f,
                                 int tilesW, int tilesH)
 {
     const int* ctx = (const int*)(size_t)(unsigned)f[TPF_CTX];
@@ -352,15 +370,19 @@ static void terrain_window_draw(const char* m, const unsigned int* regs, const i
     pitch = ctx[CTX_PITCH];
     base = (unsigned char*)(size_t)(unsigned)ctx[CTX_BASE];
     if (!ptr_sane(base) || pitch <= 0 || pitch > 16384) return;
-    W = *(const int*)(m + TP_VIEW_W);
-    H = *(const int*)(m + TP_VIEW_H);
+    W = *(const int*)(ta + TP_VIEW_W);
+    H = *(const int*)(ta + TP_VIEW_H);
     /* sizes and an origin no screen has are refused before any sum is formed */
     if (W <= 0 || H <= 0 || W > 32768 || H > 32768 ||
         L < -65536 || L > 65536 || T < -65536 || T > 65536) return;
     {
+        int sw = ctx[CTX_W], sh = ctx[CTX_H];
         int cl = ctx[CTX_CLIP_L], ct = ctx[CTX_CLIP_T];
         int cr = ctx[CTX_CLIP_R], cb = ctx[CTX_CLIP_B];
-        if (!(cl >= 0 && ct >= 0 && cr >= cl && cb >= ct && cr < pitch && cb < 8192))
+        /* the rect is inclusive, so its last column and row must be inside the
+           surface: cr < width <= pitch and cb < height */
+        if (!(sw > 0 && sh > 0 && sw <= pitch && sh <= 16384 &&
+              cl >= 0 && ct >= 0 && cr >= cl && cb >= ct && cr < sw && cb < sh))
             return;
         x0 = L > cl ? L : cl;
         y0 = T > ct ? T : ct;
@@ -371,8 +393,8 @@ static void terrain_window_draw(const char* m, const unsigned int* regs, const i
     for (y = y0; y < y1; y++)
         memset(base + (size_t)y * (size_t)pitch + x0, 0, (size_t)(x1 - x0));
 
-    tmap = *(const unsigned short* const*)(m + TP_TILE_MAP);
-    tset = *(const unsigned int* const*)(m + TP_TILE_SET);
+    tmap = *(const unsigned short* const*)(ta + TP_TILE_MAP);
+    tset = *(const unsigned int* const*)(ta + TP_TILE_SET);
     if (!ptr_sane(tmap) || !ptr_sane(tset)) return;
     count = tset[0];
     pix = (const unsigned char*)(size_t)tset[1];
@@ -409,28 +431,29 @@ static void terrain_window_draw(const char* m, const unsigned int* regs, const i
     }
 }
 
-/* 1: the window is on the map and the stock pass runs. 0: it was drawn here and
-   the pass returns. The tile map's own dimensions come from the words LoadMap
-   sized it with, and the stock path is taken only where the pass's stride agrees
-   with them, so the bound does not rest on main+0x14233 alone. */
+/* 1: stock is right for this window (see above) and the stock pass runs. 0: it was
+   drawn here and the pass returns. The tile map's own dimensions come from the
+   words LoadMap sized it with, and the stock path is taken only where the pass's
+   stride agrees with them, so the bound does not rest on main+0x14233 alone. */
 static int __cdecl terrain_window_on_map(const unsigned int* regs)
 {
     const int* f = (const int*)(regs + 8);
-    const char* m = (const char*)(size_t)regs[TPR_ECX];
-    int stride = *(const int*)(m + TP_PLOT_C) / 2;
-    int tilesW = *(const int*)(m + TP_MAP_PXW) / 32;
-    int tilesH = *(const int*)(m + TP_MAP_PXH) / 32;
+    const char* ta = (const char*)(size_t)regs[TPR_ECX];
+    int stride = *(const int*)(ta + TP_PLOT_C) / 2;
+    int tilesW = *(const int*)(ta + TP_MAP_PXW) / 32;
+    int tilesH = *(const int*)(ta + TP_MAP_PXH) / 32;
+    int sx = (int)regs[TPR_ESI], sy = (int)regs[TPR_EDI];
     int col0 = f[TPF_COL0], row0 = f[TPF_ROW0];
     int ncols = f[TPF_NCOLS], nrows = f[TPF_NROWS];
 
     if (tilesW <= 0 || tilesH <= 0) {
         tilesW = tilesH = 0;             /* no map to read: the fill alone */
-    } else if (stride == tilesW &&
+    } else if (stride == tilesW && sx >= 0 && sy >= 0 &&
                col0 >= 0 && ncols > 0 && ncols <= tilesW - col0 &&
                row0 >= 0 && nrows > 0 && nrows <= tilesH - row0) {
         return 1;
     }
-    terrain_window_draw(m, regs, f, tilesW, tilesH);
+    terrain_window_draw(ta, regs, f, tilesW, tilesH);
     return 0;
 }
 
