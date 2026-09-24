@@ -223,7 +223,7 @@ chasing it; at 14 a moving scene gives ~30/s. **One `bare=1` per video-mode chan
 | `classicpp.on` | polled twice a second | the master arm: restored true-colour terrain, features, effects, unit textures **and the UI** (sidebar, minimap, top bar, shell), the lambert lighting and the cast shadows. Flips live; arming mid-play restores what is on screen |
 | `classicpp.cfg` | live (re-read on the poll when its mtime or size changes) | the knobs: `sun=AZ,EL` or `sun=off`, `unitsun=AZ,EL`, `amb=A`, `assets=0|1`, `light=0|1`, `shadows=0|1|2`, `shadowsun=AZ,EL`, `penumbra=K`, `shadowlen=A,B` or `off`, `shade=S`, `terrainshadow=0|1`, `shadowres=N`, `airshadow=len|physical|drop`, `aniso=N`. Written by `tacli arm <i> 'classicpp.cfg=sun=off shadows=0'`, removed by `classicpp.cfg=off` |
 | `restoreglsl.on` | when the restorer starts (arm before launch) | the restorer core's knobs, in the file that keeps the name it had: `log` (a line per batch), `tiny` (the small model), `fp16`, and the numeric knobs in `tagpu_restore_core.c` |
-| `restoredump.on` | after each queue drains | writes `tagpu_restore_<tag>_vk.{r8,rgba,idx}` per atlas — the byte oracle (`references/measuring.md`) |
+| `restoredump.on` | after each queue drains | writes `tagpu_restore_<tag>_vk.rgba` (`.mips` for the units) and its source, `.base` for a world atlas or `.r8` for the UI's, per atlas — the byte oracle (`references/measuring.md`) |
 
 - The DLL answers every cfg read on its own lines: `classicpp: assets=1 light=1 (…)`,
   `classicpp: light sun=… unitsun=… amb=… level=…/…`, `classicpp: shadows=2(hard) shadowsun=…`;

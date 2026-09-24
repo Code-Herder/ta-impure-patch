@@ -205,8 +205,10 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
 ## The restore-dump byte oracle
 
 `tagpu_restoredump.on` makes the Vulkan restorer write each atlas's restored twin once its queue
-drains: `tagpu_restore_<tag>_vk.{r8,rgba,idx}` for the terrain, features, effects and units. It
-reads a finished image off the device, so it needs no window, no parked pointer and no settle
+drains, with the source it restored from beside it: `tagpu_restore_<tag>_vk.rgba` (`.mips` for the
+units, whose twin carries a mip chain) and `tagpu_restore_<tag>_vk.base` — the RGBA8 base atlas
+the world passes draw from — for the terrain, features, effects and units; the UI's source is its
+R8 atlas, `.r8`. It reads a finished image off the device, so it needs no window, no parked pointer and no settle
 heuristics, and it answers whether two builds restore the **same bytes** for the whole atlas.
 
 ```bash
@@ -220,8 +222,8 @@ tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
   feature atlas exist — without `native.on … wrecks` the pass never owns its leaf and the log says
   `atlas=0` and `nothing emitted: native.on needs "wrecks"`. `feat` and `fx` arm their jobs on most
   fixtures and often never drain inside the window.
-- **Diff the `.idx` too** — it lists every entry and localises a twin holding the right pixels in
-  the wrong cells to one line.
+- **Diff the `.base` too** — a twin that differs over a source that does not is the restorer's;
+  one whose source differs is the atlas upload's, and the restore is only repeating it.
 - **Compare the code-determined counts** in the restorer's lines (frames, batches, draws), never
   the timings: the slice budget is wall-clock driven.
 - **A difference that is a multiple of the cell pitch squared is a dropped frame, not a wrong

@@ -120,17 +120,22 @@ Arming an attach-time token on a running instance silently does nothing.
 **The presented palette is not the engine's table at `main+0x143A7`.** The engine scales every
 palette it sets by the Gamma factor on the way to DirectDraw and never scales its table. The scale
 truncates, and the factor has two formulas: an option screen applies `0.5 + Gamma/24` (1.0 at the
-engine's default of 12); **`+gamma N` typed in chat sets it to `N/10` outright**. Everything we
-draw follows the **presented** palette, the world included; `tagpu.log`'s `pal: presented palette
-changed (… gamma=…)` line carries the live factor, and `tacli peek <i> '*0x511DE8+0x37F08:4'`
-gives the option, which after a `+gamma` no longer implies the factor.
+engine's default of 12); **`+gamma N` typed in chat sets it to `N/10` outright**. **The UI follows
+the presented palette; the world does not** — every world colour is built from the engine's
+unscaled table and the factor is applied once, by the world composite, to the finished image
+(`tagpu_vk_world.c`; at exactly 1.0 no curve is drawn). So **a world A/B capture is the unscaled
+world at any Gamma** (it reads the world target, before the curve), while a `tacli shot` or a
+window grab shows the world after it. `tagpu.log`'s `pal: presented palette changed (… gamma=…)`
+line carries the live factor, and `tacli peek <i> '*0x511DE8+0x37F08:4'` gives the option, which
+after a `+gamma` no longer implies the factor.
 
 **`Gamma` is one shared, mutable registry value** — the `user.reg` inode every prefix shares,
 rewritten in place by wine at every launch — so it is whatever TA last stored. `paldiff=` in the
 heartbeat is whatever that makes it: 235 entries at Gamma 15 (factor 1.125), 0 at Gamma 12. **Read
 it, never assume it, and never "fix" the registry value** — that moves every measurement taken
-against the prefix. Anything comparing a restored twin to an offline restore must use the
-presented palette, never the archives' `palette.pal`.
+against the prefix. A world restored twin is restored from the engine's unscaled table at any
+Gamma; the UI's twin is restored through the presented palette, so an offline restore of a UI
+atlas must use that one, never the archives' `palette.pal`.
 
 **Type a chat line slowly and check it before sending.** `keys return`, the `char:` tokens and
 `keys return` back to back drop the opening `return` often enough to matter; the run then types
