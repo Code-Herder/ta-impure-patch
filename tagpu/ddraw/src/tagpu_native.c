@@ -84,6 +84,7 @@
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_set_structshadow */
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"  /* the per-type geometry bake and its caches */
+#include "tagpu_vk_unit.h"   /* tagpu_vk_unit_fx_ready: whether the models can be drawn */
 #include "tagpu_lerp.h"      /* smooth-motion.md option A: the pose between two sim ticks */
 #include "crc32.h"          /* the tagpu_posecrc.on gate oracle */
 #include "tagpu_glsl.h"
@@ -2688,10 +2689,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.zoomCy = (float)vpT + (float)vh * 0.5f;
         fv.encFx = encFx; fv.encStep = encStep;
         fv.modelCap = fxBound;
-        /* THE MODELS NEED THE POSED PASS, which records them with the units:
-           on a frame it cannot, every record with a model is taken back
-           whole (tagpu_fx.c) rather than drawn without it */
-        fv.modelsOn = pdReady;
+        /* THE MODELS NEED THE POSED PASS AND THE VULKAN UNIT PASS, which
+           records them with the units and draws them: where either cannot,
+           every record with a model is taken back whole (tagpu_fx.c) rather
+           than drawn without it, and every other effect draws */
+        fv.modelsOn = pdReady && tagpu_vk_unit_fx_ready();
         fv.depthScale = depthScale;
         /* particle layer n -> depth key, from the ten 0x471F90 call sites
            (terrain-depth.md 3): 0..4 before any unit row (under everything

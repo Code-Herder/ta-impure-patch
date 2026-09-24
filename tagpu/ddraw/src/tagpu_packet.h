@@ -358,14 +358,37 @@ typedef struct TAGPU_PK_FXMODEL {
 } TAGPU_PK_FXMODEL;
 
 /* THE BOUNDS a node is copied under: sanity filters on counts read out of the
-   engine, and what the copy and the consumer's loops are sized for. 0x4211D0
-   keeps a node's projected vertices in its 0x3F58-byte stack frame, so no
-   node it can draw has more than ~1990. Neither draw bounds a face's vertex
-   count; 32 is the unit bake's own ceiling (tagpu_posebake.c `pb_walk`), and a
-   face past it is not drawn. */
+   engine, and what the copy and the consumer's loops are sized for. They are
+   above the engine's own capacities, which neither draw checks (DISASSEMBLED):
+
+     0x46BAE0 rotates into "TEMP XFORM PTS" (0x960 bytes, 200 vertices at 12,
+       main+0x14383), projects into "TEMP PROJECTED PTS" (0x640, 200 at 8,
+       +0x14387) and gathers a face into "ASSEM PTS" (0xA0, 20 points at 8,
+       +0x1438B) -- three heap blocks 0x491908..0x49195C allocates at the
+       level load;
+     0x4211D0 gathers a face at esp+0x20..0xE8 (25 points) and projects the
+       node at esp+0xEC.. of its 0x3F58-byte frame (~1990 vertices).
+
+   Past those the engine writes over the neighbouring heap or its own stack
+   and draws whatever that leaves, which nothing can reproduce; no stock model
+   reaches them. A node or face inside the bounds below is carried as the
+   engine's arithmetic describes it, uncorrupted, and one past them is a model
+   this packet does not carry (the record is taken back whole). 32 is the
+   unit bake's own face ceiling (tagpu_posebake.c `pb_walk`). */
 #define TAGPU_PK_FXMAXNV    2048u    /* vertices of one node                  */
 #define TAGPU_PK_FXMAXNF    512u     /* faces of one node                     */
 #define TAGPU_PK_FXMAXFV    32u      /* vertices of one face                  */
+
+/* THE LONGEST TABLE A PACKET CARRIES, in rows. The acquire refuses a packet
+   with any table longer (tagpu_packet.c `table_ok`: a count is a loop bound),
+   and a refused packet costs the frame everything, so every table the
+   publisher grows from engine counts stops here instead: what does not fit is
+   dropped by the publisher, and the packet stays acceptable. */
+#define TAGPU_PK_TABLE_MAX  0x100000u
+/* THE ADDRESS SPACE OF ONE FRAME SLOT (tagpu_packet.c says what it is sized
+   for); no fill can land more bytes than this, so it bounds the effects
+   models' five tables together as well */
+#define TAGPU_PK_RESERVE    (20u << 20)
 /* every model the records can name: a projectile's body and its flame, a
    debris piece, an explosion's body */
 #define TAGPU_PK_MAX_FXMODEL (2u * (unsigned)TAGPU_LIM_PROJ + (unsigned)TAGPU_LIM_PSYS + \

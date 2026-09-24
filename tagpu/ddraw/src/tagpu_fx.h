@@ -23,8 +23,9 @@ typedef struct TAGPU_FXVIEW {
        of this frame takes `encFx + (2k + 1) * encStep`, and a sprite or a
        line emitted after k models `encFx + 2k * encStep`. `modelCap` is the
        count the step was sized for (tagpu_fx_model_bound), so no key leaves
-       the band; `modelsOn` is 0 on a frame the posed pass cannot record, and
-       then no record with a model is drawn. */
+       the band; `modelsOn` is 0 on a frame the posed pass cannot record or
+       the Vulkan unit pass cannot draw (tagpu_vk_unit_fx_ready), and then no
+       record with a model is drawn and every other one is. */
     float encFx, encStep;
     int   modelCap, modelsOn;
     float depthScale;            /* the vertex stages' depth scale             */

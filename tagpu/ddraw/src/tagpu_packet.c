@@ -112,7 +112,7 @@
 #include "tagpu_log.h"
 
 #define PK_MAXSLOTS   5                    /* the frame instance's 5; cmd's 4 */
-#define PK_RESERVE    (20u << 20)          /* address space per FRAME slot    */
+#define PK_RESERVE    TAGPU_PK_RESERVE     /* address space per FRAME slot    */
 #define PK_CMD_RESERVE (64u << 10)         /* ...and per COMMAND slot         */
 #define PK_GRAIN      (64u << 10)          /* commit granularity              */
 #define PK_PAGE       4096u                /* ...under stress, and for commands: one page */
@@ -480,7 +480,7 @@ static int area_ok(const TAGPU_PACKET* p, unsigned off, unsigned len)
 static int table_ok(const TAGPU_PACKET* p, unsigned off, unsigned n, unsigned stride)
 {
     if (!n) return 1;
-    if (n > 0x100000u) return 0;                 /* a count is a loop bound      */
+    if (n > TAGPU_PK_TABLE_MAX) return 0;        /* a count is a loop bound      */
     return area_ok(p, off, n * stride);
 }
 /* one unit's or wreck's piece run, inside the PIECES TABLE rather than merely

@@ -218,8 +218,9 @@ static int    s_nm = 0;
    `modelsOn`), latched by the gather */
 static float  s_encFx, s_encStep;
 static int    s_modelCap, s_modelsOn;
-/* models asked for and not drawn this frame, and why: the posed pass cannot
-   record (`modelsOn`), the band is full, or the rasteriser refused it
+/* models asked for and not drawn this frame, and why: the posed pass or the
+   unit pass cannot take them (`modelsOn`), the band is full, or the
+   rasteriser refused it
    (tagpu_fxmodel.h: not carried, a texel the unit atlas has not painted, no
    room) -- the last reason is kept for the heartbeat */
 static int    s_cModelLost, s_modelWhy;
@@ -828,6 +829,7 @@ static void gather_fx(const TAGPU_FXVIEW* v)
                 i, p->rt, p->col, p->col2, hx, halt, hy,
                 p->start[0] >> 16, p->start[1] >> 16, p->start[2] >> 16,
                 sx, sy, (int)p->model, (int)p->cmodel, p->frame);
+            lb[sizeof lb - 1] = 0;
             flog(lb);
         }
         /* THE RECORD IS ONE EFFECT: its shadow, its body and its flame, whole
@@ -1008,6 +1010,7 @@ static void gather_fx(const TAGPU_FXVIEW* v)
             pk->n_expl, s_c.flash, pk->n_debris, s_cLines, s_cSprites, s_cFlash, s_nm,
             tagpu_fxmodel_mark(), s_cModelLost, s_modelWhy, s_modelCap, s_atlas.n,
             s_passive ? " (passive)" : "");
+        lb[sizeof lb - 1] = 0;      /* _snprintf leaves a full buffer unterminated */
         flog(lb);
     }
     s_mute = 0;

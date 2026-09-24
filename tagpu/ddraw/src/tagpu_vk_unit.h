@@ -75,6 +75,16 @@ int  tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
    (tagpu_fx.h `nmodels`). */
 int  tagpu_vk_unit_fx_count(unsigned frame);
 
+/* Whether this pass can draw effects models at all: 0 once it has refused
+   (for the session, or until the seam's teardown rebuilds it) or was built
+   without the effects pipeline; 1 while it is drawing or not yet built, as
+   the first hand-over builds it. The native pass asks before the effects
+   gather (tagpu_native.c `modelsOn`), so on a pass that cannot draw them
+   only the records that carry a model are taken back and every other effect
+   draws. A frame this pass stands down for is not seen here: that frame's
+   effects are not drawn (`tagpu_vk_unit_fx_count`). RENDER THREAD. */
+int  tagpu_vk_unit_fx_ready(void);
+
 /* Draw the bodies, inside the seam's render pass, then the effects models --
    the latter only when the effects pass is drawing the same frame
    (`tagpu_vk_fx_models_ok`). `w`/`h` are the extent. */

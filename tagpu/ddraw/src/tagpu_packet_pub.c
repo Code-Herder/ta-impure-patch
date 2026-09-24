@@ -1027,7 +1027,13 @@ static TAGPU_PK_DEBRIS s_dScratch[TAGPU_PK_MAX_DEBRIS];
 static TAGPU_PK_PART   s_partScratch[TAGPU_PK_MAX_PART];
 static unsigned s_nProj, s_nExpl, s_nDebris, s_nPart;
 static unsigned s_partN[TAGPU_PK_NLAYER], s_partObj[TAGPU_PK_NLAYER];
+/* THE WORLD RECT THE MODELS' CULL KEEPS: the fog reach (fog_reach) of the
+   packet being filled -- every world point a frame drawn from it can gather
+   in, x across and `y - altitude / 2` down, the space the effects pass
+   projects into (fx_in_reach) */
+typedef struct { int l, r, t, b; } FXREACH;
 static unsigned s_fxTick, s_fxGen, s_fxLevel, s_fxWant;
+static FXREACH  s_fxReach;
 static int      s_fxHave, s_fxPartTrunc;
 static volatile unsigned s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartMax, s_cLayerBad, s_cSubBad;
 #define PART_SUBCAP 4096u   /* sub-particles per object: a containment filter */
@@ -1259,21 +1265,39 @@ static TAGPU_PK_FXSHAPE* s_fsScratch; static unsigned s_fsCap, s_nFs;
 static TAGPU_PK_FXFACE*  s_ffScratch; static unsigned s_ffCap, s_nFf;
 static uint16_t*         s_fiScratch; static unsigned s_fiCap, s_nFi;
 static TAGPU_PK_FXVERT*  s_fvScratch; static unsigned s_fvCap, s_nFv;
+/* each shape's reach from its node's origin, in whole pixels (fx_shape), for
+   the cull; indexed as s_fsScratch */
+static int*              s_fsRad;     static unsigned s_frCap;
 static volatile unsigned s_cLastFm, s_cLastFv, s_cFxLost;
 /* a model the engine draws and the packet cannot carry: any index past
    `n_fxmodel` says that to the consumer (tagpu_packet.h) */
 #define FX_LOST 0xFFFFFFFEu
-/* the most any table grows to, a bound on an allocation driven by engine
-   counts: 64 x the vertices of the largest node, for every model a gather can
-   name, would already be past it */
-#define FX_ROOM_MAX (1u << 22)
 
+/* THE FIVE TABLES' BOUND, checked before a table grows: each at the acquire's
+   own TAGPU_PK_TABLE_MAX rows, and their bytes together at one slot's
+   reserve. A model that would take a table past either is not carried -- FX_LOST, and its
+   record is taken back whole -- so no table this file lands is one the
+   acquire refuses. What fits is appended last of the fill (fill_fxmodels),
+   where a slot too small for the five cuts them together and nothing else. */
+static int fx_fits(unsigned dv, unsigned di, unsigned df, unsigned ds, unsigned dm)
+{
+    const unsigned long long bytes =
+        (unsigned long long)(s_nFv + dv) * sizeof(TAGPU_PK_FXVERT) +
+        (unsigned long long)(s_nFi + di) * sizeof(uint16_t) +
+        (unsigned long long)(s_nFf + df) * sizeof(TAGPU_PK_FXFACE) +
+        (unsigned long long)(s_nFs + ds) * sizeof(TAGPU_PK_FXSHAPE) +
+        (unsigned long long)(s_nFm + dm) * sizeof(TAGPU_PK_FXMODEL);
+    return s_nFv + dv <= TAGPU_PK_TABLE_MAX && s_nFi + di <= TAGPU_PK_TABLE_MAX &&
+           s_nFf + df <= TAGPU_PK_TABLE_MAX && s_nFs + ds <= TAGPU_PK_TABLE_MAX &&
+           s_nFm + dm <= TAGPU_PK_TABLE_MAX && bytes <= TAGPU_PK_RESERVE;
+}
+
+/* grows one table's scratch to `need` rows, which fx_fits has bounded */
 static int fx_room(void** p, unsigned* cap, unsigned need, size_t elem)
 {
     unsigned n;
     void* q;
     if (need <= *cap) return 1;
-    if (need > FX_ROOM_MAX) return 0;
     n = *cap ? *cap : 256u;
     while (n < need) n *= 2u;
     q = realloc(*p, (size_t)n * elem);
@@ -1301,27 +1325,40 @@ static unsigned s_shGen;
                       UNBOUNDED in the engine
      0x4211D0 (a debris piece) the same, except
         bits 1 and 2  0x4B7F30(*(face+0x18), logo): the sequence indexed by
-                      the logo colour of the unit the piece flew off, bounded
-                      by the sequence's count
+                      the logo colour of the unit the piece flew off, which
+                      answers 0 for an index at or past the sequence's count
 
-   EVERY INDEX IS BOUNDED HERE, the engine's unbounded one included, by the
-   sequence's own count (tagpu_gaf_seq_frame is 0x4B7F30's test): an index
-   past it draws nothing where the engine would read past the table, and so
-   does a logo the chain did not validate. A frame that is not a sane header
-   draws nothing, and nor does an RLE-compressed one -- the span 0x4C7310
-   copies the pixel plane as raw rows, which a compressed frame is not. */
+   THREE ANSWERS, because a model is carried whole or not at all. A frame
+   pointer: the face draws it. FXF_NONE: the engine draws NOTHING for the
+   face -- 0x4C7580 returns at once on a NULL frame (0x4C7597), which is what
+   a NULL pointer and 0x4B7F30's out-of-range answer hand it -- so leaving the
+   face out is the engine's picture. FXF_REFUSE: the engine draws something no
+   copy can reproduce -- 0x4B7EE0 reading past its table, a logo reached
+   through a chain that did not validate, a pointer that is not a sane frame
+   header, or an RLE-compressed frame, whose pixel plane the span 0x4C7310
+   copies as raw rows -- and the whole model is refused (fx_shape). */
+#define FXF_NONE   0u
+#define FXF_REFUSE 1u
 static unsigned fx_face_frame(const char* fa, int debris, int logo)
 {
     const unsigned flags = RDU32(fa, F_FLAGS);
     const char* seq = *(const char* const*)(fa + F_TEXSEQ);
+    const void* raw;
     const unsigned char* f;
-    if (!(flags & FF_ANIM))
-        f = tagpu_gaf_frame_sane(*(const void* const*)(fa + F_TEXFRAME));
-    else if (debris && (flags & FF_TEAM))
-        f = logo < 0 ? NULL : tagpu_gaf_seq_frame(seq, logo);
-    else
-        f = tagpu_gaf_seq_frame(seq, (int)RDU16(fa, F_TEXFRAME));
-    if (!f || f[TAGPU_GF_COMP] != 0) return 0u;
+    if (!(flags & FF_ANIM)) {
+        raw = *(const void* const*)(fa + F_TEXFRAME);
+    } else if (debris && (flags & FF_TEAM)) {
+        int r;
+        if (logo < 0) return FXF_REFUSE;
+        r = tagpu_gaf_seq_entry(seq, logo, &raw);
+        if (r < 0) return FXF_REFUSE;
+        if (r == 0) return FXF_NONE;                  /* 0x4B7F30's out-of-range 0 */
+    } else {
+        if (tagpu_gaf_seq_entry(seq, (int)RDU16(fa, F_TEXFRAME), &raw) != 1) return FXF_REFUSE;
+    }
+    if (!raw) return FXF_NONE;
+    f = tagpu_gaf_frame_sane(raw);
+    if (!f || f[TAGPU_GF_COMP] != 0) return FXF_REFUSE;
     return (unsigned)(size_t)f;
 }
 
@@ -1330,38 +1367,70 @@ static unsigned fx_face_frame(const char* fa, int debris, int logo)
    selection primitive; a face with flag bit 0 is a flat fill (0x4C0310 ->
    0x4C0330) in the colour word's low byte, whatever its vertex count; any
    other face is drawn only with exactly four vertices, textured by
-   GAF_DrawTransformed 0x4C7580. What is dropped here draws nothing in the
-   engine either -- a flat fill of one or two vertices has no span, a
-   textured face of another count is never called -- except a face whose
-   index reaches past the node's vertices, which the engine takes out of its
-   projected scratch unchecked (another model's vertex, or a stale one), and
-   a flat face past TAGPU_PK_FXMAXFV. Returns the shape, or -1. */
+   GAF_DrawTransformed 0x4C7580.
+
+   A SHAPE IS WHOLE OR REFUSED. A face the engine draws nothing for is left
+   out, and that is its picture: a flat fill of fewer than three vertices has
+   no span, a textured face of another count is never handed to the
+   rasteriser, and a face whose frame is FXF_NONE is returned on. A face the
+   engine DOES draw and this cannot carry refuses the whole shape rather than
+   leaving a hole in it: a flat face past TAGPU_PK_FXMAXFV, a frame that is
+   FXF_REFUSE, an index pointer that is not one, or an index at or past the
+   node's vertex count (the engine takes that vertex out of its projected
+   scratch unchecked -- another model's, or a stale one).
+
+   Returns the shape; FXS_EMPTY for a node the engine paints no face of -- no
+   vertex, no face, or none its walk draws -- whose record's other parts draw
+   as they would; FXS_REFUSED for a node that did not validate or a shape
+   refused above. Both answers are remembered for the gather, as a shape is. */
+#define FXS_EMPTY   (-2)
+#define FXS_REFUSED (-1)
+#define FXS_HASH_EMPTY   0xFFFFFFFEu
+#define FXS_HASH_REFUSED 0xFFFFFFFFu
+static void fx_shape_remember(unsigned slot, const char* node, int key, unsigned shape)
+{
+    if (slot >= FX_SHAPE_HASH) return;
+    s_shHash[slot].node = node; s_shHash[slot].logo = key;
+    s_shHash[slot].shape = shape; s_shHash[slot].gen = s_shGen;
+}
+
 static int fx_shape(const char* node, int debris, int logo)
 {
     const int key = debris ? logo : -2;
     const unsigned h0 = ((unsigned)(size_t)node * 2654435761u ^ (unsigned)key) & (FX_SHAPE_HASH - 1u);
-    unsigned k, slot = FX_SHAPE_HASH;
+    unsigned k, slot = FX_SHAPE_HASH, f0, i0;
     int nvert, nface, j, j0, t;
+    long long rad = 0;
     const char* faces;
+    const int* vb;
     TAGPU_PK_FXSHAPE* sh;
     for (k = 0; k < FX_SHAPE_PROBE; k++) {
         const unsigned i = (h0 + k) & (FX_SHAPE_HASH - 1u);
         if (s_shHash[i].gen != s_shGen) { slot = i; break; }
-        if (s_shHash[i].node == node && s_shHash[i].logo == key) return (int)s_shHash[i].shape;
+        if (s_shHash[i].node == node && s_shHash[i].logo == key) {
+            const unsigned sv = s_shHash[i].shape;
+            return sv == FXS_HASH_EMPTY ? FXS_EMPTY : sv == FXS_HASH_REFUSED ? FXS_REFUSED : (int)sv;
+        }
     }
     nvert = RD32(node, N_VCOUNT);
     nface = RD32(node, N_FCOUNT);
     faces = *(const char* const*)(node + N_FACES);
-    if (nvert < 1 || nvert > (int)TAGPU_PK_FXMAXNV) return -1;
-    if (nface < 0 || nface > (int)TAGPU_PK_FXMAXNF) return -1;
-    if (nface > 0 && !ptr_ok(faces)) return -1;
-    if (!fx_room((void**)&s_fsScratch, &s_fsCap, s_nFs + 1u, sizeof *s_fsScratch) ||
+    vb = *(const int* const*)(node + N_VERTS);
+    if (nvert < 1 || nface < 1) { fx_shape_remember(slot, node, key, FXS_HASH_EMPTY); return FXS_EMPTY; }
+    if (nvert > (int)TAGPU_PK_FXMAXNV || nface > (int)TAGPU_PK_FXMAXNF ||
+        !ptr_ok(faces) || !ptr_ok(vb) ||
+        !fx_fits(0, (unsigned)nface * TAGPU_PK_FXMAXFV, (unsigned)nface, 1u, 0) ||
+        !fx_room((void**)&s_fsScratch, &s_fsCap, s_nFs + 1u, sizeof *s_fsScratch) ||
+        !fx_room((void**)&s_fsRad, &s_frCap, s_nFs + 1u, sizeof *s_fsRad) ||
         !fx_room((void**)&s_ffScratch, &s_ffCap, s_nFf + (unsigned)nface, sizeof *s_ffScratch) ||
         !fx_room((void**)&s_fiScratch, &s_fiCap, s_nFi + (unsigned)nface * TAGPU_PK_FXMAXFV,
-                 sizeof *s_fiScratch))
-        return -1;
+                 sizeof *s_fiScratch)) {
+        fx_shape_remember(slot, node, key, FXS_HASH_REFUSED);
+        return FXS_REFUSED;
+    }
     sh = &s_fsScratch[s_nFs];
     sh->face = s_nFf; sh->nface = 0; sh->nvert = (uint16_t)nvert;
+    f0 = s_nFf; i0 = s_nFi;
     j0 = RD32(node, N_SELPRIM) != -1 ? 1 : 0;
     for (j = j0; j < nface; j++) {
         const char* fa = faces + (size_t)j * FACE_STRIDE;
@@ -1371,31 +1440,65 @@ static int fx_shape(const char* node, int debris, int logo)
         int ok = 1;
         memset(f, 0, sizeof *f);
         if (RDU32(fa, F_FLAGS) & FF_FLAT) {
-            if (fvc < 3 || fvc > (int)TAGPU_PK_FXMAXFV) continue;
+            if (fvc < 3) continue;                         /* no span: nothing drawn */
+            if (fvc > (int)TAGPU_PK_FXMAXFV) goto refuse;
             f->flat = 1;
             f->colour = (uint8_t)RDU32(fa, F_COLORTAB);
         } else {
-            if (fvc != 4) continue;
+            if (fvc != 4) continue;                        /* never rasterised */
             f->frame = fx_face_frame(fa, debris, logo);
-            if (!f->frame) continue;
+            if (f->frame == FXF_NONE) continue;
+            if (f->frame == FXF_REFUSE) goto refuse;
         }
-        if (!ptr_ok(ip)) continue;
+        if (!ptr_ok(ip)) goto refuse;
         for (t = 0; t < fvc; t++) {
             const uint16_t v = ip[t];
             if (v >= (uint16_t)nvert) { ok = 0; break; }
             s_fiScratch[s_nFi + (unsigned)t] = v;
         }
-        if (!ok) continue;
+        if (!ok) goto refuse;
         f->idx = s_nFi; f->n = (uint8_t)fvc;
         s_nFi += (unsigned)fvc;
         s_nFf++;
         sh->nface++;
     }
-    if (slot < FX_SHAPE_HASH) {
-        s_shHash[slot].node = node; s_shHash[slot].logo = key;
-        s_shHash[slot].shape = s_nFs; s_shHash[slot].gen = s_shGen;
+    if (sh->nface == 0) { fx_shape_remember(slot, node, key, FXS_HASH_EMPTY); return FXS_EMPTY; }
+    /* THE SHAPE'S REACH: every vertex's |x| + |y| + |z|, the L1 norm, is at
+       least its distance from the origin, and a rotation keeps that distance,
+       so no posed vertex lies farther out whatever the triple (fx_in_reach) */
+    for (t = 0; t < nvert; t++) {
+        const long long d = llabs((long long)vb[t * 3]) + llabs((long long)vb[t * 3 + 1]) +
+                            llabs((long long)vb[t * 3 + 2]);
+        if (d > rad) rad = d;
     }
+    s_fsRad[s_nFs] = (int)(rad >> 16) + 1;
+    fx_shape_remember(slot, node, key, s_nFs);
     return (int)s_nFs++;
+
+refuse:
+    s_nFf = f0; s_nFi = i0;
+    fx_shape_remember(slot, node, key, FXS_HASH_REFUSED);
+    return FXS_REFUSED;
+}
+
+/* WHETHER ANY PIXEL OF A MODEL CAN BE ON A FRAME DRAWN FROM THIS PACKET. The
+   model's anchor projects to (X, Y - ALT / 2) as the effects pass projects
+   it; a posed vertex is at most `rad` from the origin, which puts its pixel
+   at most rad + 1 across and 1.5 rad + 3 down from the anchor's (its y and
+   half its altitude, each floored), and a span reaches one pixel past its
+   last vertex. `2 rad + 4` holds all of it on both axes, so a model this
+   refuses has no pixel inside the reach, and no frame drawn from the packet
+   could have shown one. The engine culls explosions and debris by the anchor
+   before it poses them (0x4B6720 at 0x420C4A and 0x42123F) and poses every
+   model projectile it draws wherever it is (0x49BE60 calls 0x46BAE0 with no
+   rect test, DISASSEMBLED), so it is the projectiles off the reach whose
+   rotation this saves. */
+static int fx_in_reach(const int32_t pos[3], int rad, const FXREACH* rc)
+{
+    const int hx = pos[0] >> 16, halt = pos[1] >> 16;
+    const int pz = (pos[2] >> 16) - (halt >> 1);
+    const int m = 2 * rad + 4;
+    return hx + m >= rc->l && hx - m <= rc->r && pz + m >= rc->t && pz - m <= rc->b;
 }
 
 /* ONE POSED MODEL: every vertex of the node through the engine's own
@@ -1408,21 +1511,25 @@ static int fx_shape(const char* node, int debris, int logo)
    and `(v + X - (eye << 16)) >> 16` is `((v + X) >> 16) - eye` exactly.
 
    `debris` selects 0x4211D0's frame rule and `logo` is its team index (-1
-   when the chain did not validate). Returns the model, or FX_LOST. */
+   when the chain did not validate). Returns the model; TAGPU_PK_NOMODEL for a
+   node the engine draws nothing for, or one with no pixel inside the reach;
+   FX_LOST for one the packet cannot carry. */
 static unsigned fx_model(const char* node, const short turn[3], const int32_t pos[3],
-                         int debris, int logo)
+                         int debris, int logo, const FXREACH* rc)
 {
     typedef void (__stdcall *ROTATE3)(const int* src, int* dst, const short* turn);
     const ROTATE3 rot = (ROTATE3)(size_t)ROTATE3_VA;
     const int* vb;
     int shape, nvert, i;
     if (!ptr_ok(node)) { s_cFxLost++; return FX_LOST; }
-    vb = *(const int* const*)(node + N_VERTS);
-    if (!ptr_ok(vb)) { s_cFxLost++; return FX_LOST; }
     shape = fx_shape(node, debris, logo);
+    if (shape == FXS_EMPTY) return TAGPU_PK_NOMODEL;
     if (shape < 0) { s_cFxLost++; return FX_LOST; }
+    if (!fx_in_reach(pos, s_fsRad[shape], rc)) return TAGPU_PK_NOMODEL;
+    vb = *(const int* const*)(node + N_VERTS);
     nvert = s_fsScratch[shape].nvert;
-    if (!fx_room((void**)&s_fmScratch, &s_fmCap, s_nFm + 1u, sizeof *s_fmScratch) ||
+    if (!ptr_ok(vb) || !fx_fits((unsigned)nvert, 0, 0, 0, 1u) ||
+        !fx_room((void**)&s_fmScratch, &s_fmCap, s_nFm + 1u, sizeof *s_fmScratch) ||
         !fx_room((void**)&s_fvScratch, &s_fvCap, s_nFv + (unsigned)nvert, sizeof *s_fvScratch))
         { s_cFxLost++; return FX_LOST; }
     for (i = 0; i < nvert; i++) {
@@ -1446,7 +1553,8 @@ static void fx_models_reset(void)
 }
 
 /* the projectiles, the debris slots and the explosions */
-static void gather_effects(const char* ta, int tick, const unsigned char* coltab)
+static void gather_effects(const char* ta, int tick, const unsigned char* coltab,
+                           const FXREACH* rc)
 {
     const char* pbase = *(const char* const*)(ta + OFF_PROJ);
     const char* xpool = tagpu_limits_expl_pool(ta);
@@ -1511,7 +1619,7 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
                     t[0] = tr[0]; t[1] = tr[1]; t[2] = tr[2];
                 }
                 if (ptr_ok(node)) {
-                    pe->model = fx_model(node, t, pe->pos, 0, -1);
+                    pe->model = fx_model(node, t, pe->pos, 0, -1, rc);
                     /* THE THRUST FLAME, the node's first child, while the
                        projectile is alive (0x49C12C..0x49C185): its first
                        word is the spin when the weapon's mask has bit 21 */
@@ -1522,7 +1630,7 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
                             short ct[3];
                             ct[0] = (mask & (1u << 21)) ? *(const short*)(q + PJ_SPIN) : t[0];
                             ct[1] = t[1]; ct[2] = t[2];
-                            pe->cmodel = fx_model(child, ct, pe->pos, 0, -1);
+                            pe->cmodel = fx_model(child, ct, pe->pos, 0, -1, rc);
                         }
                     }
                 }
@@ -1581,7 +1689,7 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
             t[2] = *(const short*)(pc + DB_TURN_T2);
             if (ptr_ok(node))
                 de->model = fx_model(node, t, de->pos, 1,
-                                     debris_logo(ta, *(const char* const*)(sys + PSYS_UNIT)));
+                                     debris_logo(ta, *(const char* const*)(sys + PSYS_UNIT)), rc);
         }
     }
 
@@ -1604,7 +1712,7 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
             xe->pos[2] = *(const int*)(q + EX_Y);
             /* the body (0x420C53..0x420C68): 0 for an explosion that has
                none, else a piece-explosion record (tagpu_packet.h) */
-            xe->model  = ptr_ok(node) ? fx_model(node, tr, xe->pos, 0, -1) : TAGPU_PK_NOMODEL;
+            xe->model  = ptr_ok(node) ? fx_model(node, tr, xe->pos, 0, -1, rc) : TAGPU_PK_NOMODEL;
             xe->frame  = *(const unsigned*)(q + EX_ST1 + TAGPU_AS_SEQ)
                        ? (unsigned)(size_t)tagpu_gaf_state_frame(q + EX_ST1) : 0u;
             xe->flash  = *(const unsigned*)(q + EX_ST2 + TAGPU_AS_SEQ)
@@ -1613,9 +1721,12 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
     }
 }
 
-/* the whole gather, once per tick; `tick` is the packet's own GameTime */
-static void fx_gather(const char* ta, unsigned tick, unsigned level)
+/* the whole gather, once per tick and reach; `tick` is the packet's own
+   GameTime */
+#define FX_REACH_SLACK 256
+static void fx_gather(const char* ta, unsigned tick, unsigned level, const FXREACH* rc)
 {
+    FXREACH grown;
     const char* layers;
     unsigned want = (tagpu_fxown_want_fx() ? 1u : 0u) | (tagpu_fxown_want_sfx() ? 2u : 0u);
     int L;
@@ -1626,8 +1737,19 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level)
        teardown has freed. The level end clears
        the cache as well (tagpu_packet_pub_level_end), but that is the second
        line — this is the one that holds whichever provider fired. */
-    if (s_fxHave && tick == s_fxTick && level == s_fxLevel && want == s_fxWant)
+    /* AND THE REACH, because the models are culled against it (fx_in_reach):
+       a gather is kept only for a reach INSIDE the rect it culled against,
+       where every model the smaller rect could show was kept. That rect is
+       the reach grown by FX_REACH_SLACK on every side, so a camera that moves
+       inside one tick -- a scroll publishes about twice a tick at 60 frames a
+       second, and more at a higher rate -- finds its reach still inside and
+       the models are not posed again. */
+    if (s_fxHave && tick == s_fxTick && level == s_fxLevel && want == s_fxWant &&
+        rc->l >= s_fxReach.l && rc->r <= s_fxReach.r &&
+        rc->t >= s_fxReach.t && rc->b <= s_fxReach.b)
         { if (!s_fillAgain) s_cFxReuse++; return; }
+    grown.l = rc->l - FX_REACH_SLACK; grown.r = rc->r + FX_REACH_SLACK;
+    grown.t = rc->t - FX_REACH_SLACK; grown.b = rc->b + FX_REACH_SLACK;
     s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
     fx_models_reset();
     s_fxPartTrunc = 0;
@@ -1649,21 +1771,26 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level)
     }
     if (want & 1u) {
         const unsigned char* coltab = (const unsigned char*)(ta + OFF_GUICOL);
-        gather_effects(ta, (int)tick, coltab);
+        gather_effects(ta, (int)tick, coltab, &grown);
     }
     if (s_fxPartTrunc) s_cPartTrunc++;
     if (s_nPart > s_cPartMax) s_cPartMax = s_nPart;
-    s_fxTick = tick; s_fxLevel = level; s_fxWant = want; s_fxHave = 1; s_fxGen++;
+    s_fxTick = tick; s_fxLevel = level; s_fxWant = want; s_fxReach = grown;
+    s_fxHave = 1; s_fxGen++;
     s_cFxScan++;
 }
 
-/* the four tables into the record, after the world's */
+/* the four tables into the record, after the world's; the models' five go
+   last of the fill (fill_fxmodels) */
 static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 {
     unsigned need = *cursor, e;
     const char* g = *(const char* const*)TA_GFX_PP;
+    FXREACH rc;
     p->fx_caps = ptr_ok(g) ? RDU16(g, PROG_CAPS) : 0u;
-    fx_gather(ta, p->tick, p->level_gen);
+    fog_reach(p, 0, &rc.l, &rc.r);
+    fog_reach(p, 1, &rc.t, &rc.b);
+    fx_gather(ta, p->tick, p->level_gen, &rc);
     p->fx_gen  = s_fxGen;
     p->fx_want = s_fxWant;
     /* frame 0 of the ground-shadow sequence: one session asset, resolved once
@@ -1683,11 +1810,38 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     e = append_table(p, cursor, s_partScratch, s_nPart, (unsigned)sizeof(TAGPU_PK_PART),
                      &p->off_part, &p->n_part, TAGPU_PK_TRUNC_PART);
     if (e > need) need = e;
-    /* THE FIVE MODEL TABLES LAND TOGETHER OR NOT AT ALL: a model whose shape
-       or vertices did not fit would name bytes the packet does not carry.
-       With none of them, every record's model is past `n_fxmodel` and the
-       consumer takes each such record as lost, for this slot's one frame --
-       the shortfall grows the slot. */
+    /* the per-layer counts describe the table that LANDED: a truncated
+       particle table carries none of them, because the consumer walks the
+       layers by these counts and a stale set would name another layer's rows */
+    if (p->n_part) {
+        tagpu_pk_copy(p->part_n, s_partN, (unsigned)sizeof p->part_n);
+        tagpu_pk_copy(p->part_obj, s_partObj, (unsigned)sizeof p->part_obj);
+    }
+    lht_snapshot();
+    if (s_lhtOk) {
+        e = append_area(p, cursor, s_lht, (unsigned)sizeof s_lht, &p->lht_off, &p->lht_len,
+                        TAGPU_PK_TRUNC_LHT);
+        if (e > need) need = e;
+    }
+    s_cLastProj = s_nProj; s_cLastExpl = s_nExpl;
+    s_cLastFm = s_nFm; s_cLastFv = s_nFv;
+    s_cLastDebris = s_nDebris; s_cLastPart = s_nPart;
+    return need;
+}
+
+/* THE FIVE MODEL TABLES, LAST OF THE FILL AND TOGETHER OR NOT AT ALL. A model
+   whose shape or vertices did not land would name bytes the packet does not
+   carry, so a slot too small for all five carries none of them: every
+   record's model then lies past `n_fxmodel` and the consumer takes each such
+   record back whole, for this slot's one frame, while the shortfall grows the
+   slot. They go last because they are the one layer an engine count can
+   drive past the reserve's design point (their bound is fx_fits), so a cut
+   costs them and nothing else -- and the cursor goes back to where they began,
+   so what the tables that did fit took is not lost to the packet either. */
+static unsigned fill_fxmodels(TAGPU_PACKET* p, unsigned* cursor)
+{
+    const unsigned mark = *cursor;
+    unsigned need = *cursor, e;
     e = append_table(p, cursor, s_fvScratch, s_nFv, (unsigned)sizeof(TAGPU_PK_FXVERT),
                      &p->off_fxvert, &p->n_fxvert, TAGPU_PK_TRUNC_FXMODEL);
     if (e > need) need = e;
@@ -1706,23 +1860,11 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     if (p->truncated & TAGPU_PK_TRUNC_FXMODEL) {
         p->n_fxvert = p->n_fxidx = p->n_fxface = p->n_fxshape = p->n_fxmodel = 0;
         p->off_fxvert = p->off_fxidx = p->off_fxface = p->off_fxshape = p->off_fxmodel = 0;
+        /* the tables that fitted are owed again with the rest: the slot has
+           to grow by all five */
+        s_fillShort += *cursor - mark;
+        *cursor = mark;
     }
-    /* the per-layer counts describe the table that LANDED: a truncated
-       particle table carries none of them, because the consumer walks the
-       layers by these counts and a stale set would name another layer's rows */
-    if (p->n_part) {
-        tagpu_pk_copy(p->part_n, s_partN, (unsigned)sizeof p->part_n);
-        tagpu_pk_copy(p->part_obj, s_partObj, (unsigned)sizeof p->part_obj);
-    }
-    lht_snapshot();
-    if (s_lhtOk) {
-        e = append_area(p, cursor, s_lht, (unsigned)sizeof s_lht, &p->lht_off, &p->lht_len,
-                        TAGPU_PK_TRUNC_LHT);
-        if (e > need) need = e;
-    }
-    s_cLastProj = s_nProj; s_cLastExpl = s_nExpl;
-    s_cLastFm = s_nFm; s_cLastFv = s_nFv;
-    s_cLastDebris = s_nDebris; s_cLastPart = s_nPart;
     return need;
 }
 
@@ -2315,9 +2457,12 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        world tables straight after them -- the reserve holds all of those at
        the design point (tagpu_packet.c, PK_RESERVE) -- and what an overflow
        can reach is what follows: the build orders, the effects, the UI's
-       render half, the font. A frame below 1x without its fog grids is drawn
-       bare, and one without its unit tables drops its whole unit hand-over;
-       one without an effect layer or the minimap is missing that alone. */
+       render half, the font, and last the effects models' five tables, the
+       one layer an engine count can drive past the design point
+       (fill_fxmodels). A frame below 1x without its fog grids is drawn bare,
+       and one without its unit tables drops its whole unit hand-over; one
+       without an effect layer, the minimap or the models is missing that
+       alone. */
     /* ---- the fog grids, decided first: the world tables are sized by them ---- */
     fog_sources(ta);
     e = fill_fog(p, ta, &cursor);
@@ -2365,6 +2510,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         e = append_area(p, &cursor, NULL, 6144u, &p->stress_off, &p->stress_len, TAGPU_PK_TRUNC_STRESS);
         if (e > need) need = e;
     }
+    /* ---- the effects models, last ---- */
+    e = fill_fxmodels(p, &cursor);
+    if (e > need) need = e;
     p->used_bytes = cursor;
     /* the whole fill's size when a table did not fit (s_fillShort) */
     if (s_fillShort && PKT_ALIGN4(cursor) + s_fillShort > need) need = PKT_ALIGN4(cursor) + s_fillShort;

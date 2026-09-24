@@ -35,10 +35,6 @@
 static TAGPU_FXRUN* s_run;
 static unsigned     s_runCap, s_nrun;
 static int          s_why;
-/* the most runs one frame keeps: a run is at most one pixel of one model on
-   one row, so this is sixty 1080p screens of model pixels -- a bound on an
-   allocation driven by engine counts, never a budget a real frame meets */
-#define RUN_MAX (1u << 23)
 
 void tagpu_fxmodel_frame(void) { s_nrun = 0; }
 unsigned tagpu_fxmodel_mark(void) { return s_nrun; }
@@ -50,7 +46,7 @@ static int run_room(unsigned more)
 {
     unsigned need = s_nrun + more, n;
     TAGPU_FXRUN* q;
-    if (more > RUN_MAX || need > RUN_MAX) return 0;
+    if (more > TAGPU_FXM_RUN_MAX || need > TAGPU_FXM_RUN_MAX) return 0;
     if (need <= s_runCap) return 1;
     n = s_runCap ? s_runCap : 4096u;
     while (n < need) n *= 2u;

@@ -89,6 +89,7 @@
 #include "tagpu_model3do.h"
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"
+#include "tagpu_fxmodel.h"    /* TAGPU_FXM_RUN_MAX, the runs' budget */
 #include "tagpu_native.h"
 #include "tagpu_log.h"
 #include "tagpu_packet.h"     /* the record count TAGPU_PD_MAXHAND must cover,
@@ -172,10 +173,13 @@ static int          s_other;        /* draws the hand-over carries no copy of */
 static TAGPU_PDUREC* s_rec;       static unsigned s_recCap, s_nrec;
 /* the effects models' runs, 8 floats each, every fx record's back to back */
 static float*        s_runArena;  static unsigned s_runCap, s_nrunF;
+/* effects models this window could not carry (tagpu_posedraw_fx), for the
+   heartbeat; every one of them blanks its frame's effects */
+static unsigned      s_fxDropped;
 static float*        s_rowArena;  static unsigned s_rowCap, s_nrow;
 static float*        s_flagArena; static unsigned s_flagCap, s_nflag;
 static float*        s_visArena;  static unsigned s_visCap;
-static int           s_saidCap, s_saidRoom;
+static int           s_saidCap, s_saidRoom, s_saidFxDrop;
 static int           s_polled;      /* the 30-frame lever beat has run once   */
 
 /* the cast-shadow depth record. `s_depthOn` has no writer but the frame
@@ -409,7 +413,7 @@ static const char* VS =
     "      shade = rr / 31.0;\n"
     /* Classic++ lights the fragment from the same outward normal the row is
        quantised from, carried in MAP space (3DO z points north, hence the
-       flip) — emit_node's `un` */
+       flip) */
     "      un = vec3(n.x / nl, n.y / nl, -n.z / nl);\n"
     "    }\n"
     "  }\n"
@@ -898,30 +902,29 @@ void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
 }
 
 /* ONE EFFECTS MODEL, appended to this frame's hand-over as a record of its
-   own kind. Counted in `otherDraws` on every path that does not record it,
-   exactly as a unit is: the effects pass then stands down with the unit pass
-   (tagpu_fx.h `nmodels`), rather than draw the model's sprites without it. */
+   own kind.
+
+   ONE THAT CANNOT BE CARRIED IS DROPPED HERE, AND IT IS NOT `s_other`: that
+   count stands every unit down, and a unit is never refused for an effect.
+   The drop is still whole. The effects' hand-over counts the models it
+   handed (tagpu_fx.h `nmodels`) and the unit pass the records it drew, and
+   the Vulkan effects pass draws nothing on a frame the two disagree -- so a
+   record missing here takes that frame's effects with it, and never leaves a
+   record's sprites standing without its model. */
 void tagpu_posedraw_fx(const TAGPU_PDFX* f)
 {
     TAGPU_PDUREC* r;
     if (s_state != 1 || !f || f->nrun == 0) return;
-    if (!s_recording) { s_other++; return; }
-    /* the runs asked for lie inside the array they are asked of */
+    if (!s_recording) { s_fxDropped++; return; }
+    /* the runs asked for lie inside the array they are asked of, and the
+       arena stays inside the budget every holder of the runs shares */
     if (!f->runs || f->run0 > f->nrunAll || f->nrun > f->nrunAll - f->run0 ||
-        f->nrun > (1u << 24)) { s_other++; return; }
-    if (s_nrec >= (unsigned)TAGPU_PD_MAXHAND) {
-        if (!s_saidCap) {
-            s_saidCap = 1;
-            plog("posedraw: more posed units on screen than the Vulkan hand-over "
-                 "carries - the Vulkan edition stands down on such a frame "
-                 "(TAGPU_PD_MAXHAND)");
-        }
-        s_other++;
-        return;
-    }
-    if (!arena_room((void**)&s_rec, &s_recCap, s_nrec + 1, sizeof s_rec[0]) ||
+        f->nrun > TAGPU_FXM_RUN_MAX || s_nrunF / 8u > TAGPU_FXM_RUN_MAX - f->nrun)
+        { s_fxDropped++; return; }
+    if (s_nrec >= (unsigned)TAGPU_PD_MAXHAND ||
+        !arena_room((void**)&s_rec, &s_recCap, s_nrec + 1, sizeof s_rec[0]) ||
         !arena_room((void**)&s_runArena, &s_runCap, s_nrunF + f->nrun * 8u, sizeof(float)))
-        { s_other++; return; }
+        { s_fxDropped++; return; }
     r = &s_rec[s_nrec++];
     memset(r, 0, sizeof *r);
     r->fx = 1;
@@ -1140,6 +1143,16 @@ void tagpu_posedraw_frame(unsigned frame_counter)
        belt-and-braces check instead of the only one. */
     s_frame = frame_counter;
     s_pubHave = 0;
+    if (s_fxDropped && !s_saidFxDrop) {
+        char lb[200];
+        s_saidFxDrop = 1;
+        _snprintf(lb, sizeof lb, "posedraw: %u effects model(s) could not be carried "
+                  "(past the run budget, or an arena that would not grow) - that "
+                  "frame's effects are not drawn, its units are", s_fxDropped);
+        lb[sizeof lb - 1] = 0;
+        plog(lb);
+    } else if (!s_fxDropped) s_saidFxDrop = 0;
+    s_fxDropped = 0;
     s_win = 0; s_recording = 0; s_other = 0;
     s_abTaking = 0; s_abClaim = 0;
     s_depthOn = 0; s_ncast = 0;

@@ -640,6 +640,21 @@ const unsigned char* tagpu_gaf_subframe(const void* g0, int k)
     return tagpu_gaf_frame_sane(arr[k]);
 }
 
+int tagpu_gaf_seq_entry(const char* seq, int idx, const void** frame)
+{
+    int n;
+    const char* tab;
+    *frame = NULL;
+    if (!ptr_ok(seq) || IsBadReadPtr(seq, 0x2C)) return -1;
+    n = *(const unsigned short*)(seq + TAGPU_SQ_N);
+    if (n > 4096) return -1;
+    if (idx < 0 || idx >= n) return 0;
+    tab = seq + TAGPU_SQ_TAB;
+    if (IsBadReadPtr(tab, (SIZE_T)(idx + 1) * 8)) return -1;
+    *frame = *(const void* const*)(tab + idx * 8);
+    return 1;
+}
+
 int tagpu_gaf_seq_nframes(const char* seq)
 {
     if (!ptr_ok(seq) || IsBadReadPtr(seq, 0x2C)) return 0;

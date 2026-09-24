@@ -34,12 +34,28 @@
    309 of 831 on a large battle. The runs match the engine's pixels exactly
    wherever nothing the engine draws later covers them.
 
-   RENDER THREAD ONLY. It reads the packet it is handed and the unit atlas's
-   mirror (tagpu_render3do.h), and nothing else. */
+   RENDER THREAD ONLY. It reads the packet it is handed and, for each
+   textured face, the unit atlas through `tagpu_r3d_atlas_texels`
+   (tagpu_render3do.h): the mirror's texels where the frame is painted, and
+   where it is not, the engine's GAF frame at the address the packet carries,
+   decoded on this thread under the fence that orders every engine read of
+   the pose bake (thread-split.allow, tagpu_render3do.c). Nothing else. */
 
 #include <stdint.h>
 
 struct TAGPU_PACKET;
+
+/* THE RUN BUDGET: the most runs one frame's models take, 4 MB at 32 bytes a
+   run. The runs are held three times over -- this module's arena, the posed
+   pass's hand-over (tagpu_posedraw.c) and the unit pass's storage buffer
+   (tagpu_vk_unit.c) -- in a 32-bit process, so the budget is what those
+   three may cost together and not what a frame could ask for. All three
+   bound the count by this one constant: a model that would take this
+   module's arena past it is not drawn, and its record is taken back whole
+   (tagpu_fx.c), so the other two never see more. A run is one row's pixels
+   of one texel, so the budget is 131 072 such pieces of model on one frame;
+   the effects gather's numbers against it are in gpu-status.md 2.89. */
+#define TAGPU_FXM_RUN_MAX (1u << 17)
 
 /* The frame the models are drawn into, from the effects pass's view. The
    engine projects `(v >> 16) - eye + 0x80` across and `... + 0x20` down: its

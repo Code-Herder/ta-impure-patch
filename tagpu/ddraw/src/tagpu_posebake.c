@@ -44,7 +44,7 @@
 #define PB_MAXGEOM  TAGPU_PB_MAXGEOM
 #define PB_MAXMAT   TAGPU_PB_MAXMAT
 #define PB_MAXVERT 49152         /* vertices one model may bake to           */
-#define PB_MAXNODEV 4096         /* vertices in one piece (emit_node's bound) */
+#define PB_MAXNODEV 4096         /* vertices in one piece: a sanity bound on the template's count */
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x600000u && (size_t)p < 0x7FFF0000u; }
 
