@@ -61,7 +61,7 @@ against its source as of `dcff5dd`, 2026-09-20).
 |---|---|---|---|
 | **A reclaimed feature is paid for and left standing** | In a big battle, reclaiming a building on Town & Country paid its metal but left the building, and it could be reclaimed again, as often as the builder repeated it. A destroyed building did not change either. | The wreck pool is raised from 2048 to 8192 records, and when it is full the feature is swapped at once instead of not at all | L6 |
 
-**The defect** (the engine map, *The wreck pool*). The engine keeps 2048 wreck records for a
+**The defect** ([the engine map, *The wreck pool*](../exe-reverse-engineering.md#the-wreck-pool-and-a-feature-paid-for-and-left-standing)). The engine keeps 2048 wreck records for a
 level. A 3DO wreck (every unit's corpse, every heap) holds one for as long as it lies there, and a
 GAF feature such as a Town & Country building holds one while it plays its reclaim or collapse
 sequence. `FeatureDie 0x423550` starts that sequence; with no free record it returns having done
