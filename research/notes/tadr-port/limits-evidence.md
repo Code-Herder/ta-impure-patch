@@ -408,8 +408,8 @@ is `0x4B6BA0`'s four 8-bit lanes of byte sums and xors, not a CRC, and two types
 engine map's *The unit sync's keys, and the join's pace* has the protocol, measured in
 [A′2](content-ids.md).
 
-- Each message is 14 bytes: the type, a subtype, fill, a sequence, the key at `+6`, then a value
-  or a count at `+0xA`.
+- Each message is 14 bytes: the type, the subtype at `+1`, a sequence at `+2`, the key at `+6`,
+  then a value or a count at `+0xA`.
 - The joiner sends one subtype-2 key and value per def, four defs a lobby tick (`0x46DE8F`); the
   host answers each new key with a subtype 3 to every peer (`0x46D860`), and when a player comes or
   goes runs the same for every key it holds (`0x46DD1E`).

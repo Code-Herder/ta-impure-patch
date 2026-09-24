@@ -150,7 +150,9 @@ tools/tacli log u1 -g "enginefix|limits"
   time, under 2 s on a rejoin.
 - `--raw-keys` gives thousands of types one unit-sync key, which stock never ends the join on;
   the build re-keys them at load and logs `unit sync keys: N of M types re-keyed`. Stock content
-  logs no re-key. `--pad KB` inflates every script so a mod exhausts the address space: the
+  logs no re-key. `--part K/N` writes every Nth type from the Kth, so a mod splits over archives
+  whose types interleave: two peers holding the parts under swapped archive names load the types
+  in another order, and must still agree on every key. `--pad KB` inflates every script so a mod exhausts the address space: the
   out-of-memory message's test.
 
 ## The render-options screen and the GPU row

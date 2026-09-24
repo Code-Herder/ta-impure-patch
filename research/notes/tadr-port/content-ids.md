@@ -88,7 +88,7 @@ covers them.
 
   The fix is always on: **the builder keeps its whole list [DECIDED 2026-09-24]**.
   - The shared block grows as it fills.
-  - Each copy holds `max(30, count)` entries.
+  - Each copy has room for its count: 30 up to 30 entries, then the next power of two from 64.
   - The appender grows the copy itself when it runs out of room: a new block from `0x4D83B0`, the
     old one freed with `0x4D85A0`, and its cap of 30 removed. It runs on the loader thread before
     any reader exists.
@@ -102,10 +102,13 @@ covers them.
     (`0x42DDD5..0x42DF0C`) never checks the count, so a file with six or more writes past its
     record, and the last file's past the heap block.
   - Stock files hold at most four.
-  - The block is sized by the total number of entries across all files, and a large file continues
-    into as many extra records as it needs. Its readers walk records and need no change: the
-    build menu (`0x41AE0F`), the page count (`0x42DF72`), the downloadable check (`0x42E04B`) and
-    the appender (`0x42BE30`).
+  - The block starts at a record a file, as stock's, and grows when a large file continues into as
+    many extra records as it needs, at the block's end. The build menu (`0x41AE0F`) and the appender
+    (`0x42BE30`) walk every record and read a continuation as they read a five-entry file. The page
+    count (`0x42DF60`) walks its own file count, so it is pointed at the record count
+    (`0x42DF35`). The downloadable check (`0x42E04B`) flags the unit of each record's first entry,
+    a file's first unit, since Cavedog's files name one unit for all their builders; it is bounded
+    to the files' own records (`0x42E0B9`), or it would flag the 6th, 11th, … unit of a long file.
   - Every entry the mod wrote appears, and stock's files get stock's exact records.
   - The owner rejected capping at five, which silently drops a mod's buttons.
 
@@ -151,16 +154,19 @@ kept up; a rejoin in the same processes, whose searches ran again over a fresh r
   both builds.
 
 **The unit sync's keys [DECIDED 2026-09-24].** The key at `+0x13E` is `0x4B6BA0`'s checksum of the
-FBI file: four 8-bit lanes of byte sums and xors, not a CRC. The host keeps one entry a key in a
-list that has to reach the type count, so two types with one key hold the battle room at SYNCHING
-for good. The test's first FBIs, which differed only in their digits, gave 9 991 keys for 16 105
+FBI file: four 8-bit lanes of byte sums and xors, not a CRC. The host keeps each key a joining peer
+sends once, and waits until it holds as many as the peer announced, so a joiner with two types of
+one key holds the battle room at SYNCHING for good. The test's first FBIs, which differed only in their digits, gave 9 991 keys for 16 105
 types, and the join never ended.
 
-- After the menu-time load, every type whose key an earlier type holds takes the next value no
-  type holds (`fix_sync_keys`, at the load's one call `0x42BD29`). Types that do not collide keep
-  their keys, and the install's 278 names share none, so stock is unchanged.
-- Peers with the same content compute the same keys. A type re-keyed on one peer only is reported
-  not synced, which is what different content should get.
+- After the menu-time load, each group of types that share a key is taken in name order: the
+  first keeps it, and each other takes a hash of its name, moved on past every value a type holds
+  (`fix_sync_keys`, at the load's one call `0x42BD29`). Types that do not collide keep their keys,
+  and the install's 278 names share none, so stock is unchanged.
+- The keys depend on the names and the natural keys only, never on the def array's order, which is
+  the order the files were found in and can differ between two peers with the same files (a
+  renamed archive, another file system). A type re-keyed on one peer only is reported not synced,
+  which is what different content should get.
 - The def array is write-protected after the load (the engine's `0x4D8710`), so the pass opens and
   seals it as the engine's own writers do.
 - The owner chose this over documenting the limit: a mod built from copied FBIs can hit it at any
@@ -320,9 +326,11 @@ Only the raises differ between the builds.
   raised pools and four sections of *Engine defects we patch*.
 - **The test content** is `tools/unittypes_fixture.py`: generated kbots on the Peewee's model, one
   small script compiled with tacob, a `CTRL_G` category, and options for a long `[CANBUILD]` list,
-  a download file, an AI `Weight` line naming the highest type, padded scripts and raw keys. The
-  engine loads a type only if its FBI carries the `Copyright` key (`0x42B0E2`), and each generated
-  FBI ends in a tag that makes its unit-sync key unique. Nothing of the game's is committed.
+  a download file, an AI `Weight` line naming the highest type, padded scripts, raw keys, and a
+  mod split over archives whose types interleave. The engine loads a type only if its FBI carries
+  the `Copyright` key (`0x42B0E2`); each generated FBI ends in a tag that makes its unit-sync key
+  unique, and each script in the type's number, so each type has its own unit-sync value. Nothing
+  of the game's is committed.
 - **Measured**, Core Prime Industrial Area:
   - IDs 512 and 543, stock's break: on the previous build Ctrl-Z returns to a corrupted address and
     an AI `Weight` line naming 543 faults during the load; on this build Ctrl+G and Ctrl-Z select
@@ -339,9 +347,22 @@ Only the raises differ between the builds.
     ends in 13 s. The peers fight with types from ID 279 to 16 383, and a Kbot Lab builds ID 16 383
     from its download page; paused, both hold the same slots, types and positions, with no spread.
     A commander's download button for a kbot arms nothing, in both builds; a factory's queues it.
+  - Two peers with the same 2000 colliding types split over two archives, every other type in each,
+    whose names are swapped on the second peer, so every type sits at another index there: the
+    previous build, which re-keyed by index, gave 357 of the types a different key on each peer,
+    and all 357 vanished from both peers at the start, silently; this build gives every type the
+    same key on both, and all 2000 remain.
   - Stock content: nothing re-keyed; the stock-limits build compiles.
-- **Open**: a first join at the ceiling still takes 12.5 s, the engine's value checksum reading
-  every type's files once per process.
+- **Open**:
+  - a first join at the ceiling still takes 12.5 s, the engine's value checksum reading every
+    type's files once per process;
+  - the join's pace was measured between two instances on one machine, not over a lossy or slow
+    link;
+  - a peer without the key fix, with a mod whose keys collide, stalls the room as a joiner, as
+    stock does, and as the host gives the re-keyed types no verdict, so their availability can
+    differ: every peer runs the same build;
+  - a restriction list saved (`*.LST`) names a re-keyed type by its given key, which moves only if
+    another type comes to hold that value.
 - Review at `high`: byte patches, simulation as content, and a network-lobby path.
 
 **A′3 — weapons, 4096. Planned.**

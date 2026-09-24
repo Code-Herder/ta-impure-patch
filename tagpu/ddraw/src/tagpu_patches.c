@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <wincrypt.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "tagpu_patches.h"
 #include "tagpu_limits.h"
@@ -1281,20 +1282,26 @@ static int fix_build_list(void)
    - 0x42DF23: the next file's record is `imul esi,edi,0xBD` with edi the file index, where
      stock adds 0xBD to an esi that may now be at a continuation.
    - 0x42DF35: after the last file, ebx and the page count's [esp+0x10] are the record count.
+   - 0x42E0B9: the downloadable check walks the files' own records only. It flags the unit of a
+     record's first entry (+0x241 |= 0x20, "Somebody forgot to set downloadable=1"), which the
+     AI's pick then skips (0x40BBA0): a file's first unit, since Cavedog's files name one unit
+     for all their builders. Across a continuation it would flag the 6th, 11th, ... as well.
    THE INVARIANT: records [0, files) are the files' own, at file * 0xBD, and every record past
    them is made by dl_section inside the block's room, so each entry written is inside the
-   block. Stock's files, four entries at most, get stock's exact records. Zeroing the block
+   block; the check's bound, the file count, is at most the record count. Stock's files, four entries at most, get stock's exact records. Zeroing the block
    changes one thing stock left to the heap: a section whose unit or builder is not found is
    counted but not filled (0x42DE7F, 0x42DF07), and its entry reads builder 0, None, which no
    reader matches, where stock's held whatever the heap did; so does the count of a file with no
    sections or one that did not open. */
 static unsigned int s_dlRoom;                 /* records the block has room for, LOADER THREAD */
+static unsigned int s_dlFiles;                /* the files' own records, 0x42DCF0's file count  */
 
+/* 0x42DD74 asks for files * 0xBD bytes */
 static void* __cdecl dl_alloc(const char* name, unsigned int size)
 {
     void* p = ENG_ALLOC(name, size);
     if (p) memset(p, 0, size);
-    s_dlRoom = size / 0xBDu;
+    s_dlRoom = s_dlFiles = size / 0xBDu;
     return p;
 }
 
@@ -1327,21 +1334,24 @@ static void __cdecl dl_section(unsigned int* regs)
 
 static int fix_download_records(void)
 {
-    FIXSITE site[5] = {
+    FIXSITE site[6] = {
         { 0x0042DD74, 5, { 0xE8, 0x37, 0xA6, 0x0A, 0x00 }, { 0 } },
         { 0x0042DDF0, 8, { 0xA1, 0xE8, 0x1D, 0x51, 0x00, 0x8D, 0x6B, 0x01 }, { 0 } },
         { 0x0042DE12, 3, { 0x89, 0x2C, 0x31 }, { 0x90, 0x90, 0x90 } },
         { 0x0042DF23, 6, { 0x81, 0xC6, 0xBD, 0x00, 0x00, 0x00 }, { 0x69, 0xF7, 0xBD, 0x00, 0x00, 0x00 } },
         { 0x0042DF35, 6, { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, { 0 } },
+        { 0x0042E0B9, 6, { 0x3B, 0xA8, 0xC7, 0x91, 0x03, 0x00 }, { 0x3B, 0x2D } },  /* cmp ebp,[files] */
     };
+    const unsigned int files = (unsigned int)(size_t)&s_dlFiles;
     static const unsigned char pages[16] = {
         0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00,     /* mov edx,[main]          */
         0x8B, 0x9A, 0xC7, 0x91, 0x03, 0x00,     /* mov ebx,[edx+0x391C7]   */
         0x89, 0x5C, 0x24, 0x14,                 /* mov [esp+0x14],ebx      */
     };
     unsigned char *a, *b, *p;
-    if (!fix_match(site, 5)) return FIX_BYTES;
+    if (!fix_match(site, 6)) return FIX_BYTES;
     if (!(a = fix_code(24)) || !(b = fix_code(24))) return FIX_STUB;
+    memcpy(site[5].now + 2, &files, 4);
     p = fix_call_regs(a, dl_section);
     memcpy(p, site[1].was, 8); p += 8;                     /* mov eax,[main]; lea ebp,[ebx+1] */
     *p = 0xC3;
@@ -1349,7 +1359,7 @@ static int fix_download_records(void)
     fix_branch(&site[0], 0xE8, (const void*)dl_alloc);
     fix_branch(&site[1], 0xE8, a);
     fix_branch(&site[4], 0xE8, b);
-    return fix_write(site, 5);
+    return fix_write(site, 6);
 }
 
 /* THE OUT-OF-MEMORY TEXT [DISASSEMBLED]. WinMain installs 0x49E700 as the allocator's new
@@ -1359,8 +1369,10 @@ static int fix_download_records(void)
    it never returns. The text, "Out of memory! Your hard disk may be full" at 0x509764, is read
    at 0x49E7BD (its length), 0x49E7CD (the log) and 0x49E7F4 (the box), and nowhere else. The fix
    points the three at ours, which a call at the handler's entry writes: the game is a 32-bit
-   program that has used the memory it can address, and how many unit types it has loaded,
-   which is what a mod's size costs [DECIDED 2026-09-24]. The log, the dump and the exit stay
+   program that has used the memory it can address, and how many unit types are installed,
+   which is what a mod's size costs [DECIDED 2026-09-24]. The count is UNITINFOCount - 1: the
+   unit files found (0x42AA77) until the menu-time load's end rewrites it with the types it kept
+   (0x42B2F6). The log, the dump and the exit stay
    the engine's. Nothing here allocates: the text is a static and wsprintfA writes it. */
 static char s_oomText[320];
 
@@ -1370,7 +1382,7 @@ static void __cdecl oom_text(void)
     int types = ta ? *(const int*)(ta + 0x1438F) - 1 : 0;
     if (types > 0)
         wsprintfA(s_oomText, "Out of memory! Total Annihilation is a 32-bit program, and it has "
-                  "used all the memory it can address. %d unit types were loaded.", types);
+                  "used all the memory it can address. %d unit types are installed.", types);
     else
         wsprintfA(s_oomText, "Out of memory! Total Annihilation is a 32-bit program, and it has "
                   "used all the memory it can address.");
@@ -1404,23 +1416,29 @@ static int fix_oom_message(void)
 /* THE UNIT SYNC'S KEYS [DISASSEMBLED]. A network game matches each unit type between the peers by
    a key, def+0x13E: 0x4B6BA0's checksum of the type's FBI file (0x42ABB3), or a units\*.OVR
    file's `Compatability` value (0x42AC43). The checksum is four 8-bit lanes -- the bytes' sum
-   and xor, the sum of i^b and the xor of i+b -- not a CRC. The host keeps one entry a key in a
-   list that has to reach the type count (0x46D906 skips a key it holds), so two types with one
-   key hold the battle room at SYNCHING for good, and the host's walk 0x46D9E3 answers a key
-   with the first type that has it. FBIs that differ in a few digits collide in their thousands:
-   MEASURED 2026-09-24, 16 105 generated types gave 9 991 keys and a join that never ended.
-   THE FIX re-keys, after the menu-time load (its one call, 0x42BD29) returns 1, every type whose
-   key a type before it already holds, to the next value that no type holds and none has been
-   given. A load that returns 0 (a unit file with no [UNITINFO], 0x42AC78) is left as stock
-   leaves it, the array unsealed and part-filled.
+   and xor, the sum of i^b and the xor of i+b -- not a CRC. The host keeps, for each joining peer,
+   the keys it has received from it, dropping one it already holds (0x46D755), and the room waits
+   until that list reaches the count the peer announced (0x46DF40, 0x46E000: "expected %d units,
+   got %d"), so a joiner with two types of one key holds the battle room at SYNCHING for good;
+   and the host's walk 0x46D9E3 answers a key with the first type that has it. FBIs that differ
+   in a few digits collide in their thousands: MEASURED 2026-09-24, 16 105 generated types gave
+   9 991 keys and a join that never ended.
+   THE FIX re-keys, after the menu-time load (its one call, 0x42BD29) returns 1, all but one type
+   of every group that shares a key. A load that returns 0 (a unit file with no [UNITINFO],
+   0x42AC78) is left as stock leaves it, the array unsealed and part-filled.
    The load is the keys' only writer; the def clone 0x42B370 moves a key with its def.
-   THE INVARIANT: after it no two defs share a key. The keys depend only on the defs and their
-   order, so peers with the same content compute the same ones; a type re-keyed on one peer and
-   not on another has a different key there and is reported as not synced, which is what
-   different content should get. Types that do not collide keep stock's keys, so stock content is
-   unchanged: no two of the install's 278 unit names share one. GAME THREAD (the state callback
-   0x496BB0), before any lobby exists. The table holds every key a load can have, natural and
-   given, at most half full, so a probe always ends.
+   THE INVARIANT: after it no two defs share a key, and every key is a function of the loaded
+   types' names and natural keys alone, never of the def array's order -- which is the order the
+   files were found in (0x4BCA30), loose files and then the archives as the directory listed
+   them, and can differ between two peers with the same files. So a group is taken in name order
+   (the name at +0x20, the field the engine's own game-load sort compares, 0x42DB60): the first
+   keeps its key, and each other type's key is a hash of its name, moved on past every value a
+   type already holds. Two types with one name and one key cannot be told apart by the sync
+   either. A type re-keyed on one peer and not on another has a different key there and is
+   reported as not synced, which is what different content should get. Types that do not collide
+   keep stock's keys, so stock content is unchanged: no two of the install's 278 unit names share
+   one. GAME THREAD (the state callback 0x496BB0), before any lobby exists. The table holds every
+   key a load can have, natural and given, at most half full, so a probe always ends.
    THE DEF ARRAY IS READ-ONLY HERE. When the engine's memory protection is on ([0x5289A0], set
    once through 0x4D9FE0 and the `gonzo` switch; on in a plain launch, MEASURED 2026-09-24: an
    unguarded write faulted), the loader's success exit seals the array (0x42B328 -> 0x4D8710,
@@ -1429,9 +1447,15 @@ static int fix_oom_message(void)
    writes. The sync itself: exe-reverse-engineering.md, "The unit sync's keys". */
 #define ENG_WRITABLE(p) (((void (__cdecl*)(void*))0x004D8780)(p))
 #define ENG_READONLY(p) (((void (__cdecl*)(void*))0x004D8710)(p))
+#define DEF_STRIDE 0x249
+#define DEF_KEY    0x13E
+#define DEF_NAME   0x20               /* UnitName, 32 bytes */
 #define KEYTAB (4 * TAGPU_LIM_TYPES)
-static unsigned int  s_keyVal[KEYTAB];
-static unsigned char s_keyUse[KEYTAB];          /* 1 some type's key, 2 claimed by one type  */
+typedef char keytab_is_pow2[(KEYTAB & (KEYTAB - 1)) == 0 ? 1 : -1];   /* key_slot's wrap */
+static unsigned int   s_keyVal[KEYTAB];
+static unsigned char  s_keyUse[KEYTAB];         /* 1 some type's key, 2 claimed by one type  */
+static unsigned short s_keyOrder[TAGPU_LIM_TYPES];
+static const char*    s_keyDefs;                /* key_order's array, GAME THREAD             */
 
 static unsigned int key_slot(unsigned int key)
 {
@@ -1440,11 +1464,36 @@ static unsigned int key_slot(unsigned int key)
     return i;
 }
 
+static unsigned int def_key(const char* defs, unsigned int i)
+{
+    return *(const unsigned int*)(defs + i * DEF_STRIDE + DEF_KEY);
+}
+
+/* by key, then by name; the index only orders two types the sync cannot tell apart */
+static int __cdecl key_order(const void* a, const void* b)
+{
+    unsigned int ia = *(const unsigned short*)a, ib = *(const unsigned short*)b;
+    unsigned int ka = def_key(s_keyDefs, ia), kb = def_key(s_keyDefs, ib);
+    int c;
+    if (ka != kb) return ka < kb ? -1 : 1;
+    c = strncmp(s_keyDefs + ia * DEF_STRIDE + DEF_NAME, s_keyDefs + ib * DEF_STRIDE + DEF_NAME, 32);
+    return c ? c : (ia < ib ? -1 : 1);
+}
+
+static unsigned int name_key(const char* name)
+{
+    unsigned int h = 2166136261u;
+    int i;
+    for (i = 0; i < 32 && name[i]; i++) h = (h ^ (unsigned char)name[i]) * 16777619u;
+    return h;
+}
+
 static void __cdecl sync_keys_unique(void)
 {
     char* ta = *(char**)0x00511DE8;
     char* defs = ta ? *(char**)(ta + 0x1439B) : NULL;
     int n = ta ? *(int*)(ta + 0x1438F) : 0, i, moved = 0;
+    unsigned int keeper = 0;
     char b[200];
     if (!defs || n < 2) return;
     if (n - 1 > TAGPU_LIM_TYPES) {
@@ -1456,23 +1505,29 @@ static void __cdecl sync_keys_unique(void)
     }
     memset(s_keyUse, 0, sizeof s_keyUse);
     for (i = 1; i < n; i++) {
-        unsigned int k = *(unsigned int*)(defs + i * 0x249 + 0x13E), s = key_slot(k);
+        unsigned int k = def_key(defs, (unsigned int)i), s = key_slot(k);
         s_keyVal[s] = k;
         s_keyUse[s] |= 1;
+        s_keyOrder[i - 1] = (unsigned short)i;
     }
-    for (i = 1; i < n; i++) {
-        unsigned int* key = (unsigned int*)(defs + i * 0x249 + 0x13E);
-        unsigned int s = key_slot(*key), c = *key + 1u;
+    s_keyDefs = defs;
+    qsort(s_keyOrder, (size_t)(n - 1), sizeof s_keyOrder[0], key_order);
+    for (i = 0; i < n - 1; i++) {
+        unsigned int d = s_keyOrder[i];
+        unsigned int* key = (unsigned int*)(defs + d * DEF_STRIDE + DEF_KEY);
+        const char* name = defs + d * DEF_STRIDE + DEF_NAME;
+        unsigned int s = key_slot(*key), c = name_key(name);
         if (!(s_keyUse[s] & 2)) {
             s_keyUse[s] |= 2;
+            keeper = d;
             continue;
         }
-        while (s_keyUse[s = key_slot(c)] & 1) c++;
+        while (!c || (s_keyUse[s = key_slot(c)] & 1)) c++;
         s_keyVal[s] = c;
         s_keyUse[s] = 3;
         if (moved < 8) {
-            _snprintf(b, sizeof b, "enginefix: unit sync key 0x%08X of %.32s is an earlier type's; "
-                      "its key is now 0x%08X", *key, defs + i * 0x249 + 0x20, c);
+            _snprintf(b, sizeof b, "enginefix: unit sync key 0x%08X of %.32s is also %.32s's; "
+                      "its key is now 0x%08X", *key, name, defs + keeper * DEF_STRIDE + DEF_NAME, c);
             b[sizeof b - 1] = 0;
             plog(b);
         }

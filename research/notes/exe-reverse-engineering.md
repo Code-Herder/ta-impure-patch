@@ -995,15 +995,21 @@ of 30 entries followed by heap bytes, with no fault that load; this build reads 
 (`0x42DE12`) and fills entry `k` with no cap, so a file of six or more entries writes past its
 record and the last file's past the block. The readers walk the records to `[main+0x391C7]` — the
 build menu `0x41AE0F`, the downloadable check `0x42E04B`, the appender `0x42BE30` — except the page
-count `0x42DF60`, inside `0x42DCF0`, which walks its local file count `[esp+0x10]`. Stock: 70 files,
-at most four entries each.
+count `0x42DF60`, inside `0x42DCF0`, which walks its local file count `[esp+0x10]`. The downloadable
+check, later in `0x42DCF0`, compares each def's name with each record's first entry only and, when
+the def lacks the flag, sets `+0x241 |= 0x20` (the FBI's `downloadable`; the text it formats is
+"Hey!  Somebody forgot to set downloadable=1 for %s", `0x503944`), which the AI's pick skips
+(`0x40BBA0`): a file's first unit, since Cavedog's files name one unit for all their builders.
+Stock: 70 files, at most four entries each.
 
 **The fix**, `fix_download_records`: a file continues into as many records as it needs, at the end of
 the block, section `k` being entry `k % 5` of its `(k / 5)`th record. `0x42DD74` allocates through
 `dl_alloc` (zeroed, its room noted); `0x42DDF0` calls `dl_section`, which starts a record at sections
 5, 10, …, growing the block when full, and writes the record's count; stock's count write at
-`0x42DE12` is NOPped; `0x42DF23` becomes `imul esi,edi,0xBD` (the next file's own record); and
-`0x42DF35` hands the page count the record count.
+`0x42DE12` is NOPped; `0x42DF23` becomes `imul esi,edi,0xBD` (the next file's own record);
+`0x42DF35` hands the page count the record count; and `0x42E0B9` bounds the downloadable check by
+the file count `dl_alloc` noted (`cmp ebp,[s_dlFiles]`), so it reads the files' own records and flags
+a file's first unit only, as stock does, not the 6th, 11th, … of a long file.
 
 **MEASURED**, one download file of 12 entries for one builder: the previous build dies during the
 load in the C runtime's heap (`0x7BD35C8C`, an illegal read at `0xD9330004`, from `0x4E8952` under
@@ -1026,10 +1032,11 @@ buffer (`0x4B3B75..0x4B3B8F`, `0x4B4146..0x4B422B`) and BIGSHOT (`0x495ABE`).
 
 **The fix**, `fix_oom_message`: the three reads point at a static text that a call at the handler's
 entry writes with `wsprintfA` (nothing allocates): the game is a 32-bit program that has used the
-memory it can address, and `UNITINFOCount − 1` unit types were loaded. **MEASURED**: 1500 generated
-types each carrying a 1 MB script: the dump names "Integer Divide by Zero … at `0049e6b0`, Exception
-handler called in Out of memory handler" under our text ("1778 unit types were loaded"), the box
-shows it, and OK exits.
+memory it can address, and `UNITINFOCount − 1` unit types are installed. That count is the unit
+files found (`0x42AA77`) until the menu-time load's end rewrites it with the types it kept
+(`0x42B2F6`). **MEASURED**: 1500 generated types each carrying a 1 MB script: the dump names "Integer
+Divide by Zero … at `0049e6b0`, Exception handler called in Out of memory handler" under our text
+("1778 unit types are installed"), the box shows it, and OK exits.
 
 ### The unit sync's keys, and the join's pace — `0x4B6BA0`, def `+0x13E`, `0x46D6C0..0x46DEC8` [DISASSEMBLED + MEASURED 2026-09-24]
 
@@ -1061,7 +1068,9 @@ after the seal, and `0x42B200` returns 0 without it, when a unit file has no `[U
 **The sync.** The object is `[main+0x2A30]`: `+0x58` nonzero on the host, `+0x64` a disable flag, the
 per-peer records of 0x5C bytes at `[+0x14, +0x18)`, a tree of keys at `+4` (`0x46E9B0` finds,
 `0x46EF50` inserts), a circular list of keys at `+0x24` with its size at `+0x28`, and the joiner's
-cursor into the def array at `+0x60`. Its message is type `0x1A`, 14 bytes: the subtype at `+1`, a
+cursor into the def array at `+0x60`. A peer's record holds the keys received from it (a vector,
+`[+8, +0xC)`), their values (`[+0x18, +0x1C)`), the count it announced (`+0x24`), and `+0x28` and
+`+0x2C`, which the status prints as `packets sent=%d  ackd=%d`. Its message is type `0x1A`, 14 bytes: the subtype at `+1`, a
 sequence at `+2`, the key at `+6`, a value or count at `+0xA`.
 
 - **The joiner's tick** (`0x46DD52`, in `0x46DAD0`, called from `0x44AF44`; about 220 times a second
@@ -1079,26 +1088,60 @@ sequence at `+2`, the key at `+6`, a value or count at `+0xA`.
   `0x46D860`.
 - **The host's tick** (`0x46DAE4..0x46DD4A`) drops the records of players gone, makes records for
   new ones, and when either happened runs `0x46D970` for every key in the tree (`0x46DD1E`).
+- **The room waits** until every peer's record is complete (`0x46E000`): the keys received number
+  the count announced, and `+0x28` equals `+0x2C`. `0x46DF40` says which is missing, as the room's
+  status: `No units_expected sent from player`, `expected %d units, got %d`, or the packet counts.
 - The sequenced channel (`+0x2C`, receive `0x46CEF0`) answers subtype `0x65` with a resend from its
   history (`0x46CF12`, linear); `0x46D500` is the unsequenced path into `0x46D6C0`.
+- **Other readers of the key.** The restriction screen's saved lists, `*.LST`, hold a key and a value
+  a type: `0x44B230` writes them and `0x44B140` reads them back, applying each to the first def
+  with the key (a walk from `defs + 0x387`, def 1's `+0x13E`, so a search for `0x13E` misses it).
+  `0x44C2B7`, the restriction pictures, reads it too. No save-game or in-game packet does.
 
-**What goes wrong.** Two types with one key are one entry in the list, which then never reaches the
-type count, and the battle room shows SYNCHING for good. MEASURED: 16 105 generated FBIs that
-differ only in their digits gave 9 991 keys, the engine's list stopped at 10 269 of 16 383 (the checksum
-above, computed over the install's FBIs and the generated ones, gives the same count), and the join had not ended after 10 minutes. The time a join
+**What goes wrong.** A joining peer with two types of one key sends that key twice, the host keeps it
+once (`0x46D755`), and its record for the peer never reaches the count the peer announced: the
+battle room shows SYNCHING for good. On the host, a shared key answers with the first type that
+has it (`0x46D9E3`). MEASURED: 16 105 generated FBIs that differ only in their digits gave 9 991
+keys, the host's list of keys stopped at 10 269 of 16 383 (the checksum above, computed over the
+install's FBIs and the generated ones, gives the same count), and the join had not ended after 10
+minutes. The time a join
 takes is the joiner's pace, not the searches: at 16 383 types with unique keys, 20 s, the cursor at a
 steady ~880 types a second; at 64 a tick, 12.5 s; and a rejoin in the same processes, whose values
 `0x42A610` had already filled, under 2 s, while the host's record for the joiner was new and its
 searches ran again. So what a first join at the ceiling still costs is the value's file reads.
 Stock content joins in under 2 s.
 
-**The fixes.** `fix_sync_keys` hooks the loader's call (`0x42BD29`): when it returns 1, every type
-whose key an earlier type (by index) holds takes the next value no type holds and none has been
-given, the array opened with `0x4D8780` for the writes and sealed again with `0x4D8710`. Types that
-do not collide keep their keys, so stock content is unchanged: the install's 821 FBI files, 278
-names, share no key between two names. The pace,
-a raised-limits site: 64 types a tick (`0x46DE91`). MEASURED: the colliding 16 105 re-keyed 6 114
-types identically on both peers, and the join ended in 13 s.
+**The def array's order is the order the files were found in.** The loader's list comes from
+`0x4BCA30`: loose files first (the C runtime's find-first, `0x4E7DD0`), then the archives, which
+`0x41D4C0` opens as `rev31.GP3`, `*.CCX`, `*.UFO` and `*.HPI`, each pattern in the order the
+directory lists them (`0x4BC4B0`). Nothing sorts it before the game load (`0x42D4DC`, by name through
+`0x42DB60`). So two peers with the same files can hold the types in a different order: a
+different file system, a renamed archive, a loose copy of a file.
+
+**The fixes.** `fix_sync_keys` hooks the loader's call (`0x42BD29`): when it returns 1, the types are
+taken by key and then by name (`+0x20`, `strncmp` over its 32 bytes); in each group that shares a
+key the first keeps it, and each other type takes an FNV-1a hash of its name, moved on past every
+value a type holds or has been given. So every key is a function of the loaded types' names and
+natural keys, not of their order. The array is opened with `0x4D8780` for the writes and sealed again
+with `0x4D8710`. Types that do not collide keep their keys, so stock content is unchanged: the
+install's 821 FBI files, 278 names, share no key between two names. The pace, a raised-limits site:
+64 types a tick (`0x46DE91`). MEASURED: the colliding 16 105 re-keyed 6 114 types identically on
+both peers, and the join ended in 13 s. And 2000 colliding types split over two archives, every
+other type in each, the archive names swapped on the second peer so that every type sat at another
+index: a re-key by index gave 357 types a different key on each peer, and those 357 vanished from
+both at the start with no message; this one gives all 2000 the same key on both, and all remain.
+
+What the fix leaves:
+
+- **A peer without it** (stock TA, or a build before it) in a game with a mod whose keys collide:
+  as a joiner it stalls the room as stock does; as the host it holds no entry for the keys the
+  others were given, so `0x46D970` gives those types no verdict, and the types' availability can
+  differ between the peers. Every peer runs the same build (the raised limits' contract).
+- **A saved `*.LST` list** names a re-keyed type by its given key, which moves only if another type
+  comes to hold that value; a list saved by stock gives a re-keyed type nothing, and in stock a
+  shared key applied to the first type with it.
+- **Two types with one name and one key** cannot be told apart by the sync either; which of them
+  keeps the key follows the def array's order.
 
 ## Built-in cheat/console command surface
 

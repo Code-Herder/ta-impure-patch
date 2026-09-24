@@ -3,7 +3,10 @@
 
 Each type is SYN00001, SYN00002, ...: an FBI this tool writes, naming a stock model by
 name (the Peewee's, `armpw`, unless --model says otherwise), and one small COB compiled
-from the script below with tools/tacob. Nothing of the game's is copied into the
+from the script below with tools/tacob. Each type's copy of the COB ends in the type's
+number, which the engine loads with it and never runs, so each type has its own unit-sync
+value (0x42A610 checksums the script) and a type the sync pairs with the wrong partner
+reads as not synced. Nothing of the game's is copied into the
 archive except where an option below says so, and the archive is written where you
 point it — an instance's gamedir, never the repository (.gitignore refuses .ufo).
 
@@ -41,6 +44,11 @@ gamedir links into the install.
     --raw-keys     every FBI ends in the same tag, so the unit sync's keys fall as the checksum
                    puts them and thousands collide (sync_state below): the engine fix's test,
                    which re-keys them at load.
+    --part K/N     only every Nth type from the Kth, so one mod splits over N archives whose
+                   types interleave; the keys are those of the whole mod. Two peers holding the
+                   parts under swapped archive names load the types in a different order, which
+                   the unit sync's re-key must not depend on. Types only: not with --canbuild,
+                   --download, --ai or --pad.
 
 The tests themselves are research/notes/tadr-port/content-ids.md's, "A′2".
 """
@@ -238,11 +246,17 @@ def main():
     ap.add_argument("--loose", type=Path)
     ap.add_argument("--pad", type=int, default=0, metavar="KB")
     ap.add_argument("--raw-keys", action="store_true")
+    ap.add_argument("--part", default="1/1", metavar="K/N")
     a = ap.parse_args()
     if (a.canbuild or a.ai) and not a.loose:
         sys.exit("unittypes_fixture: --canbuild and --ai write loose files: pass --loose GAMEDIR")
     if a.types < 1 or a.canbuild > a.types or a.download > a.types:
         sys.exit("unittypes_fixture: --canbuild and --download take from the --types made")
+    part, parts = (int(x) for x in a.part.split("/"))
+    if not 1 <= part <= parts:
+        sys.exit("unittypes_fixture: --part is K/N with 1 <= K <= N")
+    if parts > 1 and (a.canbuild or a.download or a.ai or a.pad):
+        sys.exit("unittypes_fixture: --part writes types only")
 
     with tempfile.TemporaryDirectory() as tmp:
         bos, cob = Path(tmp) / "syn.bos", Path(tmp) / "syn.cob"
@@ -253,10 +267,15 @@ def main():
 
     tree = {}
     used = set() if a.raw_keys else stock_sync_keys()
+    made = 0
     for i in range(1, a.types + 1):
+        fbi = unit_fbi(i, a, used)               # every part's keys, so the parts agree
+        if (i - part) % parts:
+            continue
         name = syn(i)
-        hpipack.insert(tree, f"units/{name.lower()}.fbi", unit_fbi(i, a, used))
-        hpipack.insert(tree, f"scripts/{name.lower()}.cob", script)
+        made += 1
+        hpipack.insert(tree, f"units/{name.lower()}.fbi", fbi)
+        hpipack.insert(tree, f"scripts/{name.lower()}.cob", script + i.to_bytes(4, "little"))
 
     if a.canbuild:
         side = stock_text("gamedata/sidedata.tdf")
@@ -281,7 +300,7 @@ def main():
 
     data = hpipack.build(tree, method=2 if a.pad else 1)
     a.out.write_bytes(data)
-    print(f"{a.out}: {a.types} types ({syn(1)}..{syn(a.types)}), {len(data)} bytes")
+    print(f"{a.out}: {made} types (part {part}/{parts} of {syn(1)}..{syn(a.types)}), {len(data)} bytes")
 
 
 if __name__ == "__main__":

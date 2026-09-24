@@ -2315,9 +2315,9 @@ engine defects we patch".
 | `0x423892` | the reclaim completion `0x4237D0`'s test that a GAF feature is already playing its sequence, which reads the flags of the cell the builder aimed at while `FeatureDie` marks only the anchor | `tagpu_detour_land` over the 6-byte `test`/`je`, compared first. The stub resolves a `0xFFFE` cell to its anchor exactly as `0x423845..0x423862` does, tests the anchor's bit 0, and rejoins at `0x4238AD` (pay) or `0x423898` (the def's GAF test) |
 | `0x458B87`, `0x45A470`, `0x45A7B9`, `0x459875`, `0x459CB5`; the calls at `0x459608` and `0x4596D8` | the composite scratch frame's writers — the build-state copy `0x4589C0`, the frame copy, the shadow build, the 2× bakes `0x459830`/`0x459C70` — each of which sizes `*(main+0x1437B)+0x10` to a unit with no compare against its area, and hands it to rasterisers whose span tables hold 800 or 2048 rows; and the cargo merge `0x4B90A0`, which paints a carried unit into it with no right or bottom clip | all seven sites compared first and written together or not at all (a failed write puts back the ones written). Each check stub runs a C check between `pushad` and `popad`: a need that fits runs the stolen bytes; one that does not grows the frame (the engine's own allocator path by hand, up to 2048 × 2048); a refused grow takes the writer's fallback — the unit not drawn that frame (a flag, and a wrapper on the call at `0x459608` that leaves through `0x4597D8`), a 1 × 1 key-pixel frame, or the bake's 1× path. The merge's call goes through a `jmp` stub to `scratch_merge`, a `__stdcall` that clobbers only what `0x4B90A0` does, and runs `0x4B90A0` only when the cargo's rectangle lies inside the scratch's header box and that box inside the area, and otherwise leaves the cargo out of that frame's composite. Levers `tagpu_scratch.stress` (which also points a freed frame's planes at `0x80000000`, where nothing is mapped), `tagpu_scratch.nogrow` |
 | `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | a builder's build list: the game load's shared `TEMP UTYPE LIST` and each builder's copy at def `+0x156` hold 30 entries, the append and the download appender `0x42BE30` write past them | three `call`s to stubs that grow a block through `0x4D83B0` before the entry that would not fit (`bl_room`: 30, then powers of two from 64), a `jmp` past the copy's `rep movs`, the appender's cap NOPped |
-| `0x42DD74`, `0x42DDF0`, `0x42DE12`, `0x42DF23`, `0x42DF35` | the download menus' records, one of five entries a file at `[main+0x391CB]`, filled with no cap | the block from a zeroing allocator; a file continues into records at the block's end, which grows; stock's count write NOPped; the next file's record by index; the page count reads the record count |
+| `0x42DD74`, `0x42DDF0`, `0x42DE12`, `0x42DF23`, `0x42DF35`, `0x42E0B9` | the download menus' records, one of five entries a file at `[main+0x391CB]`, filled with no cap | the block from a zeroing allocator; a file continues into records at the block's end, which grows; stock's count write NOPped; the next file's record by index; the page count reads the record count; the downloadable check reads the files' own records only |
 | `0x49E700`, `0x49E7BD`, `0x49E7CD`, `0x49E7F4` | the allocator's new handler's text, "Your hard disk may be full" | a call at the handler's entry writes our text into a static; the three reads point at it |
-| `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys every type whose key an earlier type holds, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
+| `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys all but the first by name of each group of types sharing a key, to a hash of the name moved past every held value, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
 exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
@@ -2337,8 +2337,9 @@ writes a 1 × 1 header and one pixel of each plane. It is drawing state, not sim
 not in §2.5 either. The build list and the download records write the engine's own load-time heap
 blocks, as stock does, only larger; what a builder and the AI then read past stock's 30 entries is
 content. The out-of-memory text writes our static. The unit sync's keys are engine state, and
-content: two peers with the same files compute the same keys, so it changes nothing the peers can
-disagree on, and stock content, whose 278 names share no key, is not re-keyed.
+content: the keys depend on the types' names and natural keys only, not on the order the files
+were found in, so two peers with the same files compute the same keys and it changes nothing the
+peers can disagree on; stock content, whose 278 names share no key, is not re-keyed.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
@@ -2352,7 +2353,8 @@ that re-keys logs its first eight types and a total (`enginefix: unit sync keys:
 re-keyed`). A
 site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
 `SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
-place of `ARMED`; a stub whose site cannot be written is released. There is no switch: all ten
+place of `ARMED`. The first six fixes release a stub whose site cannot be written; the last four
+share one page of stubs, which stays. There is no switch: all ten
 fixes are installed on every launch, `tagpu_defaults.off` included.
 
 **What it does not cover:**
@@ -2360,7 +2362,13 @@ fixes are installed on every launch, `tagpu_defaults.off` included.
 - A first network join at 16 383 types still takes about 12.5 s: the joiner's pace is raised
   (§2.6b), and what is left is the engine filling each type's unit-sync value on first use
   (`0x42A610`, which reads the type's script and GUI files). A rejoin in the same processes takes
-  under 2 s.
+  under 2 s. The 64-a-tick pace was measured between two instances on one machine, not over a
+  lossy or slow link; it sends the same messages as stock, sixteen times as fast.
+- A peer without the key fix, in a game with a mod whose keys collide, stalls the room as a joiner,
+  as stock does, and as the host gives the re-keyed types no verdict, so their availability can
+  differ between the peers: every peer runs the same build. A restriction list saved (`*.LST`,
+  keyed on the key) names a re-keyed type by its given key, which moves only if another type comes
+  to hold that value.
 - A unit's own frame, which the 1× bakes draw into through the same rasterisers, is sized by the
   model alone, so a model more than 800 rows tall still overflows the 800-row span table, with the
   fix as in stock. No stock unit is near it (the tallest is 239 rows). The engine map's *The
