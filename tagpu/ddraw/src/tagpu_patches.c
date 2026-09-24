@@ -587,13 +587,13 @@ static void lim_sites(void)
     /* ---- the composite scratch frame. The composite draw context *(main+0x1437B), made once a
        level by the model loader (0x42D473 -> 0x458180), keeps one scratch frame at +0x10 from
        0x4B8E00(name, width, height): a colour and a depth plane of width x height bytes, freed
-       with the context by the level teardown (0x42DC8F -> 0x4581C0). Two writers size it to a
-       unit and neither compares that size with the allocation: the blit's build-state copy
-       (0x4589C0, every frame, for a unit with a depth plane and its cargo) and the 2x bake of a
-       structure (0x459830 and 0x459C70 under the AntiAlias option bit). A box of more than
-       width x height pixels -- a quarter of that for the 2x bake -- therefore writes past the
-       frame, on every lane. The raise moves that threshold from 600 x 600 to 1280 x 1280; it is
-       not a bound. */
+       with the context by the level teardown (0x42DC8F -> 0x4581C0). Four writers in the blit
+       size it to a unit and none compares that size with the allocation: the build-state copy
+       0x4589C0, the frame copy 0x45A470, the shadow build 0x45A790 and the 2x structure bake in
+       0x459830 / 0x459C70. A box of more than width x height pixels -- a quarter of that for the
+       2x bake -- therefore writes past the frame, on every lane. The raise moves that threshold
+       from 600 x 600 to 1280 x 1280; it is not a bound. Every reader takes its size from the
+       header a writer set, so no write grows with the raise. */
     lim_dword(0x0045819B, 600, TAGPU_LIM_COMPOSITE, "composite scratch width");
     lim_dword(0x00458196, 600, TAGPU_LIM_COMPOSITE, "composite scratch height");
 }

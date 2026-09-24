@@ -1377,7 +1377,11 @@ What each value does:
   load, the first and the reloads alike: the loader stores the registry's `MixingBuffers` there
   through a setter with no check, and the store's value replaces it. The engine's table of playing
   sounds has 32 slots, which is the bound (engine map, *The sound object*); TADR's 128 would play
-  sounds it no longer tracks. The engine saves it back to the registry with its other options.
+  sounds it no longer tracks. The bound holds while the store's loader observer is in: under
+  `tagpu_defaults.off`, or with the loader's bytes not as expected, the registry's value stands, as
+  in stock, whatever wrote it. The engine saves the value back to the registry with its other
+  options, and under tacli that is the one `user.reg` of every instance, so a control launch reads
+  32 where stock's missing key gives 8.
 - **`resolution=`** is resolved against the target monitor (`util_target_monitor`); a stored size
   larger than the monitor falls back to native — unless it is the ini's `inject_resolution`, which
   the picker offers whatever the monitor — and the Monitor row re-resolves it. It is written

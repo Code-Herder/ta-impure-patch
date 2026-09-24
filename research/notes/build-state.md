@@ -394,8 +394,9 @@ composite: colour via `0x4B95A0` — a 2×2 box filter through the palette-blend
 `*(TAProgramStruct+0xC0)` (256×256 "average of two palette indices") — and depth
 by point-sampling every 2nd pixel of every 2nd row (`0x45A427..0x45A460`).
 Anti-aliased structure bakes, option-gated (the `0x20000000` test is the structure bit, §1). The
-shared scratch is one 600 × 600 frame (1280 × 1280 in this build) and neither this doubling nor the
-blit's copy `0x4589C0` compares the box with it (exe-reverse-engineering.md, *The composite
+shared scratch is one 600 × 600 frame (1280 × 1280 in this build) and none of its four writers
+(this doubling, the blit's copy `0x4589C0`, the frame copy `0x45A470`, the shadow build `0x45A790`)
+compares the box with it (exe-reverse-engineering.md, *The composite
 scratch frame*).
 
 ---

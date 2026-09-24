@@ -338,11 +338,12 @@ not IDs.
 - `0x458180` (called from the model loader at `0x42D473`, once a level) does
   `push 0x258; push 0x258; push 0x506604; call 0x4B8E00` and stores the frame at `+0x10` of the
   composite draw context `*(main+0x1437B)`: **one shared scratch frame, not the per-unit
-  composite** (landing 4 corrected this; the unit's frame is the AABB's size, uncapped).
+  composite** (landing 4 corrected this; the unit's frame is the AABB's size, capped by the ring).
 - It is the only such pair in `.text`. TADR writes all ten bytes blindly.
-- The blit's build-state copy `0x4589C0` and the 2× structure bake (`0x459830`, `0x459C70`) size it
-  to a unit and never compare with the allocation, so the raise moves an overrun threshold
-  rather than bounding it. The copy runs on every lane (landing 4 read its header after a Vulkan
+- Four writers in the blit (the build-state copy `0x4589C0`, the frame copy `0x45A470`, the shadow
+  build `0x45A790`, the 2× structure bake in `0x459830` / `0x459C70`) size it to a unit and never
+  compare with the allocation, so the raise moves an overrun threshold
+  rather than bounding it. The writers run on every lane (landing 4 read its header after a Vulkan
   fight), so this is memory safety everywhere, and only GDI presents the result.
 - The engine map's *The composite scratch frame* has the addresses and the measurements.
 
@@ -415,7 +416,7 @@ one of 8, 16, 24 or 32.
 | SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | the walk's layer bound (drops whole layers), `MAX_PART`, the effects pass's sprite bucket; all follow since landing 3 | about 15 MB |
 | unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | ctrl-A/B/C (in §B); AI-range `0x10` sites unclassified | `WPN_MAXDEFS 4096` refuses | mods only |
 | weapon IDs 256→4096 | **SIM + wire** | load-time hook | 3 hooks + chat-hijack packet | ID < 0 unguarded (stock) | `OFF_WEAPON0` users; `CRC_weapons` does not cover IDs | needs every peer; off in mainline |
-| composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **two writers never compare with the allocation** (the build-state copy, the 2× bake) | none | 3.28 MB a level |
+| composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **four writers never compare with the allocation** (the build-state copy, the frame copy, the shadow build, the 2× bake) | none | 3.28 MB a level |
 | MixingBuffers 8→128 | audio | per process (registry load) | none (launcher writes REG) | **the engine tracks 32; past it a sound plays untracked** | the impure.cfg store's loader observer, bounded to 32 | none |
 
 **Notes this pass corrected**, both in landing 1: `tagpu_packet_pub.c` said "twelve more" `0x190`

@@ -225,9 +225,10 @@ and one store key. What it proved, by running it:
   `impure.cfg` is 32 by default and one of 8, 16, 24 or 32, pushed into `+0x2C` after every
   registry load, where the loader has just stored the registry's value unchecked. Tier 1 with
   sound on a null device: 32 in use throughout the fight, never more; the store at 8 held 8.
-- **The composite scratch is one frame a level, not one a unit**, and two engine writers size it to
-  a unit without comparing with the allocation: the blit's build-state copy and the 2× structure
-  bake. The raise to 1280² moves the size at which they write past it; it is not a bound. The
+- **The composite scratch is one frame a level, not one a unit**, and four engine writers in the
+  blit size it to a unit without comparing with the allocation: the build-state copy, the frame
+  copy, the shadow build and the 2× structure bake (the landing's two reviews found the middle
+  two). The raise to 1280² moves the size at which they write past it; it is not a bound. The
   frame read back at 1280² on the Vulkan lane, where the copy writes it every frame, and 600² on
   the stock build.
 - **The GDI lane draws the same picture**: the nanoframe ladder on both builds differs only inside
@@ -273,7 +274,7 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
   `0x481140`, and the conclusion (the slot cap gates no simulation draw) holds through it. A piece
   explosion draws the simulation's generator eight times, not six (landing 1's review).
 - **The 600² frame is not the per-unit composite's cap** (landing 4). The unit's own frame is the
-  AABB's size with no cap; 600² is the draw context's one shared scratch. The composite notes and
+  AABB's size, capped by the context's ring; 600² is the draw context's one shared scratch. The composite notes and
   the evidence's §10 said otherwise, and so did its claim that the frame is made per object and
   matters only to the GDI lane: the build-state copy writes it on every lane.
 - **The bit the 2× bake tests is the structure bit**, not "under construction" (build-state.md §1

@@ -3954,8 +3954,8 @@ simulation's generator.
   that layer to 401.
 
 **The composite scratch frame, 600 × 600 → 1280 × 1280** [DISASSEMBLED 2026-09-23; MEASURED
-2026-09-23]. One frame a level: the unit blit's work copy, which is what the GDI lane draws for a
-unit with a depth plane, and the 2× bake's canvas.
+2026-09-23]. One frame a level: the unit blit's work frame (the build-state copy and the shadow
+passes draw there, and the GDI lane shows what they leave) and the 2× bake's canvas.
 
 - **Where it lives.** The composite draw context `*(main+0x1437B)` is a `0x14`-byte object the
   model loader makes once a level (`0x4B4F10(0x14)` at `0x42D3C0`, the constructor `0x458160`,
@@ -3969,20 +3969,34 @@ unit with a depth plane, and the 2× bake's canvas.
   (`MEM_Free [+0x10]`, then `0x437A20` frees the ring), `0x4B4F20` frees the context and
   `0x42DCA3` nulls the pointer. Nothing leaks at 1280², 3.28 MB a level.
 - **It is not the per-unit composite.** The unit's own frame at `Object3do+0x10` is allocated by
-  the builder `0x4586A0` through `0x437BE0(slot, w, h)` at the AABB's size with no cap, a block of
-  the context's ring: `0x437BE0` calls the ring allocator `0x437A30` (the flying pieces' too) with
-  `this` unchanged. 600 × 600 is not a cap on it.
-- **Two writers size it to a unit, and neither compares with the allocation.** The blit's
-  build-state copy `0x4589C0` (from `0x459608`, every frame, for a unit with a depth plane) writes
-  the box of the unit and its cargo into the scratch's header (`0x458B8C`, `0x458B92`) and copies
-  or clears both planes at that size. The 2× bake in both rasterisers, `0x459830` and `0x459C70`
-  (AntiAlias, `main+0x37F06` bit 1; the structure bit, `unit+0x110` bit 29; `mode != 0`), doubles
-  the box (`0x459899` … `0x4598C1`), writes it into the header and clears both planes at the
-  doubled size (`0x4598E4`, `0x459908`). A box larger than the frame's area, or than a quarter of
-  it for the 2× bake, therefore writes past the frame: 600 × 600 and 300 × 300 in stock,
-  1280 × 1280 and 640 × 640 raised. **TADR's raise moves that threshold; nothing bounds it.**
+  the builder `0x4586A0` at the AABB's size, through `0x437BE0(slot, w, h)` (colour and depth,
+  `0x458719`) or `0x437B50` (colour only, `+0x14 = 0`, `0x458702`), both a block of the context's
+  ring: they call the ring allocator `0x437A30` (the flying pieces' too) with `this` unchanged. What
+  caps it is the ring, not 600 × 600: `0x437A30` refuses a block larger than the ring
+  (`0x437A65..0x437A77`: the slot is nulled and it returns 0), and the builder then skips the unit
+  (`0x45871E`). The ring is sized once a level from the screen, `main+0x37E23` (height) ×
+  `main+0x37E1F` (width) at `0x42D3E9`, page-rounded at `0x42D466`: 6 242 304 bytes, 13 × the
+  pixels, on an 800 × 600 peer [MEASURED 2026-09-24].
+- **Four writers size it to a unit, and none compares with the allocation**, all called from the
+  blit `0x459200` with the context as `this`. The build-state copy `0x4589C0` (from `0x459608`,
+  every frame, for a unit with a depth plane) writes the box of the unit and its cargo into the
+  header (`0x458B8C`, `0x458B92`) and copies or clears both planes at that size. The frame copy
+  `0x45A470` (from `0x459338`, `0x4594DB`, `0x45958C`, under the Shadow and TShadow bits) copies a
+  unit's own frame, header and both planes (`0x45A4C8`, `0x45A4F1`). The shadow build `0x45A790`
+  (from `0x4592FE`, `0x45955B`, for an object with no depth plane) takes a box from the model's
+  vertex extents (`0x45A510`), writes it into the header, clears both planes (`0x45A80E`,
+  `0x45A82D`) and rasterises into them (`0x45A610`). The 2× bake in both rasterisers, `0x459830`
+  and `0x459C70` (AntiAlias, `main+0x37F06` bit 1; the structure bit, `unit+0x110` bit 29;
+  `mode != 0`), doubles the box (`0x459899` … `0x4598C1`), writes it into the header and clears
+  both planes at the doubled size (`0x4598E4`, `0x459908`).
+- **So a box larger than the frame's area, or than a quarter of it for the 2× bake, writes past
+  it**: 600 × 600 and 300 × 300 in stock, 1280 × 1280 and 640 × 640 raised. The ring's cap does not
+  keep a unit frame within the scratch: at 800 × 600 it has room for a frame of 3.1 million pixels
+  against the scratch's 1.6 million. **TADR's raise moves the threshold; nothing bounds it.** Every
+  reader takes the size from the header a writer set earlier in the same call, and the only `0x258`
+  immediates in `.text` are the two raised, so the raise lengthens no write.
 - **It runs on every lane** [MEASURED 2026-09-23]. After tier 1 on the Vulkan lane the scratch's
-  header held a 39 × 42 box with a hotspot of 21, 24, the copy's (the 2× bake writes only even
+  header held a 39 × 42 box with a hotspot of 21, 24, a 1× writer's (the 2× bake writes only even
   values), and its planes were `0x190000` = 1280² apart; the stock-limits build reads `0x57E40` =
   600². On the GDI lane the nanoframe ladder (`scenarios/nanoframe-ladder.json`) looks the same
   on both builds: every pixel that differs lies inside the nanoframes, and stock against raised
@@ -5686,7 +5700,7 @@ frame-composition.md), one argument: a slot address. It walks `[ecx+4]`'s `{ptr,
 (advancing by `size`, `[ecx]` the total) and zeroes `entry.ptr` where it equals the argument.
 **The routine contains no `call` — it frees nothing.** The composite frame at `obj+0x10` therefore
 has an owner other than `FreeObjectState`: it is a block of the context's ring, allocated by
-`0x437BE0` through the ring allocator `0x437A30`, and the ring is freed with the context by the
+`0x437BE0` or `0x437B50` through the ring allocator `0x437A30`, and the ring is freed with the context by the
 level teardown (*The composite scratch frame*, above). When the frame's memory can be reused
 before then — the allocator evicting it on a wrap — is still the open item of
 [Thread-safe destruction](thread-safe-destruction.html) §10. The registry pointer

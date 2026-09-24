@@ -1648,14 +1648,17 @@ into the sound object's `+0x2C` after every registry load (`0x42F9A0`), where th
 stored the registry's `MixingBuffers` through a setter that takes anything. 32 is the engine's
 own table: past it a sound plays untracked and a looping one escapes the stop-all (engine map,
 *The sound object*). TADR writes 128. The engine saves the value back to the registry with its
-other options, as it does the store's Gamma. MEASURED 2026-09-23, tier 1 with sound on a null
+other options, as it does the store's Gamma, into the one `user.reg` every instance shares, so a
+control launch (`tagpu_defaults.off`, or the stock DLL) reads 32 where stock's missing key gives
+8. MEASURED 2026-09-23, tier 1 with sound on a null
 device: 32 in use for the whole fight, never more; the store at 8 held 8.
 
 **The composite scratch frame** is the unit bake's one shared frame a level (engine map, *The
-composite scratch frame*), not the per-unit composite, which has no cap. Two engine writers size
-it to a unit and never compare with the allocation, the blit's build-state copy (every frame, on
-every lane) and the 2× structure bake, so the raise moves the box at which they write past it, from
-600 × 600 to 1280 × 1280 (a quarter of each for the 2× bake). It read back at 1280² after tier 1
+composite scratch frame*), not the per-unit composite, which the ring caps. Four engine writers in
+the blit size it to a unit and never compare with the allocation (the build-state copy, the frame
+copy, the shadow build and the 2× structure bake, every frame and on every lane), so the raise
+moves the box at which they write past it, from 600 × 600 to 1280 × 1280 (a quarter of each for
+the 2× bake). It read back at 1280² after tier 1
 on the Vulkan lane and at 600² on the stock build, and the GDI lane draws the nanoframe ladder the
 same on both.
 
@@ -1700,8 +1703,10 @@ stock-limits build is therefore a comparison build, not a proof of equality.
   some 2 × 10⁸ for a full layer. Not measured.
 - **The composite scratch frame is not bounded.** A unit (with its cargo) whose screen box is past
   1280 × 1280, or a structure's past 640 × 640 under the 2× bake, still writes past the frame, as
-  one past 600 × 600 or 300 × 300 does in stock. A bound would test the box in `0x4589C0` and in
-  the two rasterisers' 2× branch and take the 1× path instead; not built.
+  one past 600 × 600 or 300 × 300 does in stock. A bound has to test the box in all four writers
+  (`0x4589C0`, `0x45A470`, `0x45A790`, and the 2× branch of `0x459830` / `0x459C70`, which can
+  take the 1× path instead) and skip or fall back in each; not built. The ring that caps a unit's
+  own frame does not help: at 800 × 600 it admits one of 3.1 million pixels.
 
 ---
 

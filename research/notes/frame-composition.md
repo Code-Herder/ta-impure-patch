@@ -217,7 +217,8 @@ When a unit's model is dirty, `0x458810` calls **`0x4586A0`** [VERIFIED-static]
    The `GAFFrame` header is 0x18 bytes: `Width/Height/HotX/HotY` (words),
    `ColorKey/Compressed/SubFrames/AlphaBlend` (bytes), then pixel ptr at `+0x10`
    and depth ptr at `+0x14` [CORPUS: TADR `buildghost.h` `GhostGAFFrame`, matches
-   our bytes]. The allocation is the AABB's own size, with no cap. **The 600 × 600 that TADR
+   our bytes]. The allocation is the AABB's own size, capped only by the context's ring (a larger
+   block is refused and the unit skipped). **The 600 × 600 that TADR
    raises at `0x458195` is not this frame** but the draw context's one shared scratch
    (`0x458180`; exe-reverse-engineering.md, *The composite scratch frame*) [DISASSEMBLED
    2026-09-23].

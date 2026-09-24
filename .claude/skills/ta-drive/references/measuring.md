@@ -133,7 +133,9 @@ scores 0 magenta and shows no game.
   sounds also need the registry's `fxvol` above 0, and every silent launch writes it to 0 in the one
   `user.reg` all instances share: `wine reg add` it in your own prefix just before the launch and
   back to 0 after the game stops. The sound object is `*(main+0x10)`: `+0x2C` MixingBuffers,
-  `+0x30` the sounds in use.
+  `+0x30` the sounds in use. Any launch of the store's DLL saves its `mixingbuffers` (32) into that
+  shared registry, so a control launch reads 32 there, not stock's 8; write `MixingBuffers` back
+  before a sound A/B that needs stock's.
 - **A single-player fight does not reproduce run to run, even under one DLL**, so a COB-trace or
   roster timeline compared across two runs measures noise from the first impact on. Compare what
   is a function of the build (a static frame, a pose, a table), or two peers of one network game.
