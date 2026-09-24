@@ -620,16 +620,17 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     /* THE TABLES COVER THE FOG REACH: every world point a frame drawn from
        this packet can gather in, taken from the two grids this packet carries
        — their own origins and sizes, the very numbers the render thread's fog
-       bound clamps the drawn eye by (fog_reach) — and never from an eye
-       latched somewhere else. So a slab the bound accepts cannot hold a unit
-       carried without its pieces nor ask for an anchor row the table was not
-       scanned over, whatever moved the camera between the grids' builds and
-       this publish. */
+       bound clamps the drawn eye by (fog_reach). So a slab the bound
+       accepts cannot hold a unit carried outside the reach nor ask for an
+       anchor row the table was not scanned over, whatever moved the camera
+       between the grids' builds and this publish. */
     fog_reach(p, 0, &inL, &inR);
     fog_reach(p, 1, &inT, &inB);
     anchor_rect(p, inL, inR, inT, inB, &c0, &r0, &cols, &rows);
-    /* the centre of the reach, the anchor scan's starting row */
-    midRow = (inT + (inB - inT) / 2) >> 4;
+    /* the anchor scan's starting row: the centre of the view about the
+       packet's eye, which a frame is drawn from plus the steps the game
+       thread has not applied yet (clamped into the rect below) */
+    midRow = (p->eye[1] + p->vp[3] / 2) >> 4;
     p->anch_c0 = c0; p->anch_r0 = r0; p->anch_cols = cols; p->anch_rows = rows;
 
     /* ---- the units, and their pieces ---- */
@@ -756,7 +757,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
             if (s_aTrunc) p->truncated |= TAGPU_PK_TRUNC_ANCHORS;
             s_cAnchReuse++;
         } else {
-            /* ROWS OUTWARD FROM THE REACH'S CENTRE ROW, WHOLE ROWS ONLY. The
+            /* ROWS OUTWARD FROM THE VIEW'S CENTRE ROW, WHOLE ROWS ONLY. The
                rect is the fog reach plus a margin, and the table holds
                TAGPU_PK_MAX_ANCHORS; scanned from its top, an overflow would
                drop the rows at the bottom of the screen. The rows are taken
@@ -766,15 +767,15 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                after it in that order are dropped — the row at the same
                distance on the other side among them. What a truncation keeps
                is therefore a band `[mid - a, mid + b]`, b - a in {0, 1}.
-               The drawn view is not centred on `mid`: its eye is the
-               packet's plus the steps the game thread has not applied yet,
-               which the lead (vh/4, 33 rows at 4K) is sized to hold, and the
-               fog bound caps that offset by the grid — at the lead and the
-               lattice's rounding at the zoom floor, at the room the grid
-               leaves about a smaller slab above it. A frame loses nothing
-               while the band kept holds its own slab, placed at that offset
-               from `mid` — 560 rows at the floor at 4K; the densest stock
-               map puts 12 633 anchors in the WHOLE rect. Put back in row
+               `mid` is the centre row of the view about the packet's eye,
+               clamped into the rect. A frame is drawn from that eye plus the
+               steps the game thread has not applied yet, as far as the fog
+               bound lets them through — at the zoom floor at most the lead
+               (vh/4, 33 rows at 4K) and the lattice's rounding, since the
+               wide grid is built about the packet's eye. A frame loses
+               nothing while the band kept holds its own slab, placed at that
+               offset from `mid` — 560 rows at the floor at 4K; the densest
+               stock map puts 12 633 anchors in the WHOLE rect. Put back in row
                order afterwards: the depth keys come from each anchor's own
                row and column, and the order is what the table has always
                promised. A truncation sets TAGPU_PK_TRUNC_ANCHORS, once per
@@ -1475,12 +1476,11 @@ static volatile int      s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR;
    test `0x4848F2` and the build `0x4848FA` inside the fog function
    `0x4848E0`, which DrawGameScreen calls once (`0x469D8E`); ours is
    `terr_fogtick`, right after its own call of the builder. Every other store
-   to the word (`0x4166AA`, `0x416D68`, `0x416D98`, `0x495B36`, `0x495E30`,
-   `0x495E51`, `0x496E42`..`0x496E86`, `0x497355`..`0x4974D7`, `0x497633`..
-   `0x49767D`) masks bits 0-2 only and writes bit 3 back as it read it. And
-   nothing DrawGameScreen reaches by a direct call clears it (none of the
-   fifteen functions holding an `and 0xFFF7` is in that call graph), nor
-   stores the eye (the publish point's own note, `before_draw`). So:
+   to the word either clears the bit or writes it back as it read it (the
+   exe map's row "who sets `main+0x14281` bit 3" lists all fifty). None of
+   the fifteen functions holding a clear is reached from DrawGameScreen by
+   direct calls, branches or jump tables, and nothing in it stores the eye
+   (the publish point's own note, `before_draw`). So:
      bit 3 clear after this draw's apply and set after the draw — the fog
        function rebuilt the grid IN this draw, from the eye the draw was drawn
        at, which is the eye the packet reads after it;
@@ -1505,10 +1505,18 @@ static void fog_rec_before(char* ta)
     s_fogBitBefore = (*los & 8) != 0;
 }
 
+/* a draw this observer does not bracket: no record survives it, and no
+   "before" reading taken by a tracked draw it is nested in */
+static void fog_rec_drop(void)
+{
+    s_engRecOk = 0;
+    s_fogBitBefore = -1;
+}
+
 static void fog_rec_after(const char* ta)
 {
     int after;
-    if (!ta || s_fogBitBefore < 0) { s_engRecOk = 0; s_fogBitBefore = -1; return; }
+    if (!ta || s_fogBitBefore < 0) { fog_rec_drop(); return; }
     after = (RDU16(ta, OFF_LOSTYPE) & 8) != 0;
     if (!s_fogBitBefore && after) {
         s_engRecX = RD32(ta, OFF_EYE_X); s_engRecY = RD32(ta, OFF_EYE_Y);
@@ -2261,14 +2269,15 @@ static int __cdecl before_draw(void* entry_esp)
            log — the first such draw after a teardown is the loading screen. */
         if (!s_levelOpen && !s_shellSeen) { s_shellFlags = load_flags(); s_shellSeen = 1; }
         /* a draw we do not track may rebuild the engine's fog grid at an eye
-           of its own (the screenshot sweep drives the eye): the record goes */
-        s_engRecOk = 0;
+           of its own (the screenshot sweep drives the eye): the record goes,
+           and so does a "before" reading a tracked draw around it took */
+        fog_rec_drop();
         return 0;
     }
     s_cDraws++;
     s_levelDraws++;
-    if (s_countOnly) { s_engRecOk = 0; return 0; }
-    if (s_retDepth >= RET_DEPTH) { s_cDeep++; s_engRecOk = 0; return 0; }
+    if (s_countOnly) { fog_rec_drop(); return 0; }
+    if (s_retDepth >= RET_DEPTH) { s_cDeep++; fog_rec_drop(); return 0; }
     s_retStack[s_retDepth++] = (void*)(size_t)ret;
     /* THE COMMANDS, on the thread that owns every word they write. This
        runs after whichever of the frame callback's own camera writers ran

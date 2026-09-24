@@ -302,8 +302,8 @@ static unsigned s_fogBare = 0;
 static unsigned s_fogOut = 0;
 /* the grid the last frame actually sampled, for the heartbeat's `fog=` */
 static const char* s_fogSampled = "none";
-/* units inside a frame's gather slab that the packet carried without their
-   pieces, and so were not drawn (`nopieces=`, cumulative) */
+/* units inside a frame's gather slab that the packet carried outside its fog
+   reach, and so without their pieces: not drawn (`nopieces=`, cumulative) */
 static unsigned s_unitNoPieces = 0;
 static const unsigned short* s_fogGrid = NULL;
 static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
@@ -2394,16 +2394,20 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         pc = tagpu_pk_pieces(pk, pu->piece_off, pu->piece_n);
         short wx = (short)(pu->pos[0] >> 16), wz = (short)(pu->pos[1] >> 16), wy = (short)(pu->pos[2] >> 16);
         if (!pc) {
-            /* outside the fog reach the packet was published over: no pose to
-               draw. One inside this frame's slab is a unit the frame should
-               have drawn — the publisher's reach covers every slab the fog
+            /* no pose to draw. A unit OUTSIDE the fog reach the packet was
+               published over that lies inside this frame's slab is one the
+               frame should have drawn — the reach covers every slab the fog
                bound fits into a grid, so this counts a bare frame whose
-               unapplied steps outran the lead, a frame the bound could only
-               centre (`out=`), or a piece table the arena truncated */
-            int sx0 = wx - eyeX + vpL, sy0 = wy - wz / 2 - eyeY + vpT;
-            if (sx0 >= evpL - TAGPU_GATHER_MARGIN && sx0 <= evpL + evw + TAGPU_GATHER_MARGIN &&
-                sy0 >= evpT - TAGPU_GATHER_MARGIN && sy0 <= evpT + evh + TAGPU_GATHER_MARGIN)
-                s_unitNoPieces++;
+               unapplied steps outran the lead or a frame the bound could only
+               centre (`out=`). One inside the reach with no pieces has none
+               to carry (a model of 0 or more than TAGPU_PK_MAXPIECE) or lost
+               them to a full arena, which the packet counts as a truncation. */
+            if (!(pu->flags & TAGPU_PK_U_INRECT)) {
+                int sx0 = wx - eyeX + vpL, sy0 = wy - wz / 2 - eyeY + vpT;
+                if (sx0 >= evpL - TAGPU_GATHER_MARGIN && sx0 <= evpL + evw + TAGPU_GATHER_MARGIN &&
+                    sy0 >= evpT - TAGPU_GATHER_MARGIN && sy0 <= evpT + evh + TAGPU_GATHER_MARGIN)
+                    s_unitNoPieces++;
+            }
             continue;
         }
         int ix = pu->pos[0], iz = pu->pos[1], iy = pu->pos[2];

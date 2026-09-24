@@ -136,7 +136,8 @@ typedef struct TAGPU_PK_UNIT {
 #define TAGPU_PK_U_DEPTHPLANE 0x01u  /* the composite has a depth plane (path B) */
 #define TAGPU_PK_U_NATIVE     0x02u  /* tagpu_native_owns_unit() said yes, on the
                                         GAME thread, with the def in hand        */
-#define TAGPU_PK_U_INRECT     0x04u  /* inside the widest zoom rect: piece_n set  */
+#define TAGPU_PK_U_INRECT     0x04u  /* inside the fog reach: pieces carried when
+                                        the model has any and the arena has room */
 #define TAGPU_PK_U_GROUND     0x08u  /* ground_h is a real cell: the unit's anchor
                                         tile was inside the map                   */
 
@@ -731,8 +732,9 @@ static __inline const TAGPU_PK_WRECK* tagpu_pk_wrecks(const TAGPU_PACKET* p)
 { return p->n_wrecks ? (const TAGPU_PK_WRECK*)(const void*)((const unsigned char*)p + p->off_wrecks) : (const TAGPU_PK_WRECK*)0; }
 static __inline const TAGPU_PK_ANCHOR* tagpu_pk_anchors(const TAGPU_PACKET* p)
 { return p->n_anchors ? (const TAGPU_PK_ANCHOR*)(const void*)((const unsigned char*)p + p->off_anchors) : (const TAGPU_PK_ANCHOR*)0; }
-/* One unit's or wreck's piece run, or NULL when the entry carries none (it sat
-   outside the widest zoom rect, or its model has no pieces). `piece_off` was
+/* One unit's or wreck's piece run, or NULL when the entry carries none: it sat
+   outside the fog reach (TAGPU_PK_U_INRECT clear), its model has no pieces or
+   more than TAGPU_PK_MAXPIECE, or the arena was full. `piece_off` was
    checked to lie inside the pieces area with room for `piece_n` entries. */
 static __inline const TAGPU_PK_PIECE* tagpu_pk_pieces(const TAGPU_PACKET* p, unsigned off, unsigned n)
 { return (n && off) ? (const TAGPU_PK_PIECE*)(const void*)((const unsigned char*)p + off) : (const TAGPU_PK_PIECE*)0; }
