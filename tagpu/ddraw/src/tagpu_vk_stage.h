@@ -7,45 +7,56 @@
 
    WHY A CAP. A full page of a base atlas is its used rows x 2048 x 4 bytes, up
    to 16 MiB for units, features and effects, and the terrain's is its whole
-   atlas, 2176 x 5338 x 4 = 46 461 952 bytes on Town & Country. A full page is
-   sent on a pass's first upload -- the session's first level, and after every
-   teardown (a swapchain rebuild runs every pass's `_down`) -- the terrain's
-   new atlas at a level's start, a palette move and a mirror's arm; in play a
-   pass sends the tiles its atlas's dirty map names, and a feature repack
-   moves its cells on the device (tagpu_vk_stage_move). Staged whole, the
-   pages of one teardown hold 66.6 MiB of host-visible memory mapped at once
-   in a 32-bit process (MEASURED, gpu-status §2.88), and one refused
+   atlas, 2176 x 5338 x 4 = 46 461 952 bytes on Town & Country. Staged whole,
+   the pages of one teardown hold 66.6 MiB of host-visible memory mapped at
+   once in a 32-bit process (MEASURED, gpu-status §2.88), and one refused
    allocation is a pass down for the session.
 
    THE SHAPE. Each slot keeps one TAGPU_VKSTAGE, at most TAGPU_VK_STAGE_CAP
    bytes, allocated on a frame that uploads and given back on that slot's next
-   frame with nothing to send.
+   frame with nothing to send. There are two ways through it, and which one a
+   caller takes is a question of WHEN, not of size:
 
-     * AN UPLOAD THAT FITS is recorded into the frame's own command buffer, as
-       every pass did before: the seam waits on the slot's fence before handing
-       the slot over, and that wait is what frees the buffer for the next
-       frame on this slot.
-     * AN UPLOAD THAT DOES NOT FIT goes out in BANDS of whole rows through this
-       module's own command buffer. Each band is written into the free part of
-       the slot's buffer, copied by a submit of its own, and WAITED ON before the
-       next band overwrites the same bytes. The fence is the ordering: no band
-       is written while the device can still be reading the one before it.
+     * IN PLAY, AN UPLOAD IS IN THE FRAME'S OWN COMMAND BUFFER OR IT IS NOT
+       MADE. `tagpu_vk_stage_expand_rects` -- the tiles an atlas painted since
+       the copy the device holds -- records one copy into `cb` when its bytes
+       fit what the slot mapped, and otherwise records nothing and answers 0:
+       the caller skips the frame and asks again, and nothing waits. The atlas
+       side is what makes it fit: an atlas with an allowance (tagpu_gaf.h
+       `budget`) never has more tiles due than TAGPU_VK_STAGE_CAP holds, and
+       defers a paint past it to a later frame. A repack's move is recorded
+       into `cb` too (tagpu_vk_stage_move).
+     * OUTSIDE PLAY, A WHOLE PAGE GOES IN BANDS (`tagpu_vk_stage_expand`,
+       `tagpu_vk_stage_copy`) of whole rows through this module's own command
+       buffer. Each band is written into the free part of the slot's buffer,
+       copied by a submit of its own, and WAITED ON before the next band
+       overwrites the same bytes. The fence is the ordering: no band is written
+       while the device can still be reading the one before it. The events that
+       send a whole page are a pass's first upload after it is built (the
+       session's first level, and after every teardown or resize, which runs
+       every pass's `_down`), the terrain's new atlas at a level's start, a
+       palette move, and an atlas or mirror made, lost or begun for a new
+       level -- none of them a frame of play, and each caller logs the cause
+       when it sends one. The one way play can reach it is a device that
+       refused the repack's move buffer (tagpu_vk_stage_move_ready); the
+       caller then takes that repack as a whole page and logs it as a wait in
+       play.
 
-   WHAT A FRAME SAMPLES. Never a texel the device has not received. A banded
+   WHAT A FRAME SAMPLES. Never a texel the device has not received. An
+   in-frame copy is ordered before the frame's draws by its barriers. A banded
    upload is complete -- every band copied, the image back in
    SHADER_READ_ONLY_OPTIMAL -- before the call returns, so the frame that asked
-   for it draws the whole page, as the in-frame copy did. Its submits reach the
-   queue before the frame's own command buffer, so every command of that frame
-   runs after the upload, including any recorded before the call; the image
-   leaves in the layout they were recorded against. The price is a wait on the
-   CPU: a fence on this queue completes only after everything submitted
-   before it, so the first wait includes the frames still in flight. It is
-   paid only by an upload larger than the cap -- a full page, or one frame's
-   paints past 1 MiB -- and gpu-status §2.88 has what it costs.
+   for it draws the whole page. Its submits reach the queue before the frame's
+   own command buffer, so every command of that frame runs after the upload,
+   including any recorded before the call; the image leaves in the layout they
+   were recorded against. The price is a wait on the CPU: a fence on this queue
+   completes only after everything submitted before it, so the first wait
+   includes the frames still in flight -- which is why only the events above
+   may take it.
 
    A REFUSAL NEVER LATCHES. `tagpu_vk_stage_begin` asks for what the frame needs
    up to the cap, and halves on a refusal down to one row of the widest upload.
-   A slot that cannot map even that gets 0, and the pass skips the frame without
+   A slot that cannot map what an in-frame upload needs skips the frame without
    advancing its serials: the upload is still due, and the next frame asks
    again. Only a device that fails a submit or a fence is a refusal of the
    pass, and that is the device going away.
@@ -60,12 +71,16 @@
 
 #include "tagpu_vk_pass.h"
 
-/* Bytes one slot may map for its uploads, whatever the image. 1 MiB is 128
-   rows of a 2048-wide RGBA8 atlas, and the steady state -- the paints of one
-   frame -- fits under it (gpu-status §2.88). THE BOUND: a pass holds at most
-   TAGPU_VK_SLOTS of these, 8 MiB, and the four world passes 32 MiB, whatever
-   the atlases. */
-#define TAGPU_VK_STAGE_CAP ((VkDeviceSize)1 << 20)
+/* Bytes one slot may map for its uploads, whatever the image: 2 MiB, which
+   is TAGPU_GAF_BUDGET tiles of RGBA8 (asserted in tagpu_vk_stage.c) and so
+   everything an atlas may have due at once. The largest single-frame paint
+   measured in play is 1.20 MB, a camera jump at 4K (gpu-status §2.88).
+   THE BOUND, IN ADDRESS SPACE: a pass holds at most one of these per frame
+   slot, and only on frames that send -- the four world passes (units,
+   features, effects, terrain) map at most 24 MiB at the three slots the
+   swapchain gives and 64 MiB at the TAGPU_VK_SLOTS ceiling of eight, whatever
+   the atlases. A frame with nothing to send maps nothing. */
+#define TAGPU_VK_STAGE_CAP ((VkDeviceSize)2 << 20)
 
 typedef struct {
     VkBuffer       buf;
@@ -99,14 +114,18 @@ int  tagpu_vk_stage_expand(const TAGPU_VKPASS* d, VkCommandBuffer cb,
                            const unsigned char* pal, const unsigned char* alpha);
 
 /* The most rects one tagpu_vk_stage_expand_rects call takes. A caller sizes
-   its rect array by this and asks tagpu_gaf_dirty_since for no more. */
-#define TAGPU_VK_STAGE_MAXRECT 256
+   its rect array by this and asks tagpu_gaf_dirty_since for no more. It is
+   the allowance's tile count: every rect the dirty map names covers at least
+   one due tile, so an atlas within its allowance never names more rects than
+   this and never has one grown over tiles that were not due. */
+#define TAGPU_VK_STAGE_MAXRECT 1024
 
 /* `n` rects of `img` at once, each x0, y0, x1, y1 (exclusive), from the same
    indices, key, palette and alpha as above -- the tiles an atlas's paints
-   touched since the copy the device holds. When they all fit, ONE copy of `n`
-   regions in the frame's own command buffer; when not, each rect banded.
-   Same answers as above. */
+   touched since the copy the device holds. ONE copy of `n` regions, in the
+   frame's own command buffer, and NEVER BANDED: 1 recorded (or nothing to
+   send), 0 when the bytes do not fit what the slot mapped -- nothing is
+   recorded and the image is untouched, and the caller skips the frame. */
 int  tagpu_vk_stage_expand_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
                                  TAGPU_VKSTAGE* st, VkImage img, int had,
                                  const unsigned char* idx, const unsigned char* key,
@@ -144,16 +163,11 @@ int  tagpu_vk_stage_move_ready(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb, int d
                                const struct TAGPU_GAFMOVE* m, int n);
 
 /* Move the `n` cells of `img` (TRANSFER_SRC and TRANSFER_DST usage, in
-   SHADER_READ_ONLY_OPTIMAL, and left there). In the frame's command buffer
-   when `banded` is 0. `banded` 1 says the uploads that follow it this frame
-   will go banded, and those reach the queue before the frame's own command
-   buffer: the move then goes through the banded path's command buffer,
-   submitted and waited on first, so it lands before them.
+   SHADER_READ_ONLY_OPTIMAL, and left there), in the frame's command buffer.
    1 moved, 0 nothing recorded (the image untouched: the caller keeps its
-   serials and asks again), -1 the device failed a submit or a fence. */
+   serials and asks again). */
 int  tagpu_vk_stage_move(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKMOVEBUF* mb,
-                         VkImage img, int dim, const struct TAGPU_GAFMOVE* m, int n,
-                         int banded);
+                         VkImage img, int dim, const struct TAGPU_GAFMOVE* m, int n);
 
 /* The buffer, given back. Where the pass's images are: behind the seam's
    vkDeviceWaitIdle. */

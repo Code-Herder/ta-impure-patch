@@ -779,6 +779,7 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
     if (nvert <= 0 || nface <= 0 || nface > 512 || !ptr_ok(faces)) return nv;
     if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) return nv;
 
+    const int nv0 = nv;
     int j;
     for (j = 0; j < nface; j++) {
         if (j == skipFace) continue;
@@ -793,7 +794,11 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
         int hasTex = 0;
         {
             const char* tg = tagpu_r3d_face_texframe(fa, owner);
-            if (tg && tagpu_r3d_atlas_uv(tg, uv, &ckf)) hasTex = 1;
+            const int got = tg ? tagpu_r3d_atlas_uv(tg, uv, &ckf) : 0;
+            /* DEFERRED past the allowance (tagpu_gaf.h `budget`): the node is
+               taken back out whole, not drawn with this face flat */
+            if (got < 0) return nv0;
+            if (got > 0) hasTex = 1;
             if (!hasTex) {
                 int fc = tagpu_r3d_face_colour(fa);
                 if (fc < 0) continue;

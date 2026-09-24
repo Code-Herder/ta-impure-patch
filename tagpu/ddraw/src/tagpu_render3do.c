@@ -261,6 +261,9 @@ static void r3d_init(void)
        plane beside the indices (tagpu_gaf.h `keyPlane`) */
     s_atlas.keyPlane = 1;
     s_atlas.pad = ATLAS_PAD; s_atlas.align = ATLAS_PAD; s_atlas.mip = ATLAS_MIP;
+    /* its paints are bounded by what one frame's upload holds (tagpu_gaf.h
+       `budget`): tagpu_vk_unit.c sends them in the frame's own command buffer */
+    s_atlas.budget = TAGPU_GAF_BUDGET;
     if (!tagpu_gaf_atlas_create(&s_atlas)) { rlog("render3do: atlas texture FAILED"); s_state = 2; return; }
 
     /* the shade calibration is built lazily from the packet's table on first
@@ -420,6 +423,8 @@ void tagpu_r3d_atlas_frame(void)
 {
     if (s_state != 1) return;
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
+    /* the allowance's frame, after the reset and before the first lookup */
+    tagpu_gaf_atlas_frame(&s_atlas);
     /* No palette here: this atlas's restore is the Vulkan restorer's --
        `tagpu_gaf_atlas_restore_vk` publishes the frame list and
        `tagpu_vk_restore.c` paints it, each reading the palette for itself. */
@@ -452,30 +457,16 @@ void tagpu_r3d_atlas_mirror_want(void)
         tagpu_gaf_atlas_mirror(&s_atlas);
 }
 
-const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* serial)
+/* the shelf cursor bounds every painted cell, so only the rows the packer has
+   used need uploading -- the feature pass's own bound, and for the same
+   reason: the rest of a 2048-square atlas has never been written */
+int tagpu_r3d_atlas_view(TAGPU_GAFVIEW* v)
 {
-    int r;
-    if (dim) *dim = 0;
-    if (rows) *rows = 0;
-    if (serial) *serial = 0;
-    if (!s_atlas.mirror || s_atlas.dim <= 0) return NULL;
-    /* the shelf cursor bounds every painted cell, so only the rows the packer
-       has used need uploading -- the feature pass's own bound, and for the same
-       reason: the rest of a 2048-square atlas has never been written */
-    r = s_atlas.shelfY + s_atlas.shelfH;
-    if (r < 0) r = 0;
-    if (r > s_atlas.dim) r = s_atlas.dim;
-    if (dim) *dim = s_atlas.dim;
-    if (rows) *rows = r;
-    if (serial) *serial = s_atlas.mirrorSerial;
-    return s_atlas.mirror;
+    return tagpu_gaf_atlas_view(&s_atlas, v);
 }
 
-const unsigned char* tagpu_r3d_atlas_key(const unsigned** dirty)
-{
-    if (dirty) *dirty = s_atlas.mirror ? s_atlas.dirty : NULL;
-    return s_atlas.mirror ? s_atlas.keym : NULL;
-}
+int  tagpu_r3d_atlas_owed(void) { return s_state == 1 && tagpu_gaf_atlas_owed(&s_atlas); }
+void tagpu_r3d_atlas_ack(unsigned serial, int keep) { tagpu_gaf_atlas_ack(&s_atlas, serial, keep); }
 
 /* THE LIST, THE ONLY ANSWER TO THE QUESTION (the shape features and effects
    use). Under Classic++ `assets=1` the Vulkan restorer (tagpu_vk_restore.c)
@@ -544,8 +535,9 @@ int tagpu_r3d_shade_dir(void)     { return s_shDir; }
 int tagpu_r3d_atlas_uv(const char* g, float uv[4], float* ck)
 {
     if (s_state != 1) return 0;
+    const unsigned dN = s_atlas.deferN;
     const TAGPU_GAFENT* e = atlas_get(g);
-    if (!e) return 0;
+    if (!e) return s_atlas.deferN != dN ? -1 : 0;
     uv[0] = e->u0; uv[1] = e->v0; uv[2] = e->u1; uv[3] = e->v1;
     *ck = (float)e->ck / 255.0f;
     return 1;

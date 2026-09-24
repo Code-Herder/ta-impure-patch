@@ -192,6 +192,7 @@ typedef struct TAGPU_FXHAND {
     int                   atlasDim;
     int                   atlasRows;  /* the rows the shelf packer has used   */
     unsigned              atlasSerial;
+    unsigned              atlasWhole; /* the last whole-page write (tagpu_feat.h) */
     /* the base atlas's other two inputs -- tagpu_feat.h has them in full */
     const unsigned char*        atlasKey;
     const unsigned*             atlasDirty;
@@ -246,4 +247,9 @@ typedef struct TAGPU_FXHAND {
    `now` -- the fork's monotonic render-thread counter, which a Vulkan pass has
    as TAGPU_VKPASS::frame. Render thread only. */
 int tagpu_fx_handover(TAGPU_FXHAND* out, unsigned now);
+
+/* THE ATLAS WITHOUT THE DRAW -- tagpu_feat.h's three, for this atlas. */
+int  tagpu_fx_atlas_hand(TAGPU_FXHAND* h);
+int  tagpu_fx_atlas_owed(void);
+void tagpu_fx_atlas_ack(unsigned serial, int keep);
 #endif

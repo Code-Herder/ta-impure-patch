@@ -27,6 +27,12 @@ void tagpu_r3d_atlas_level(unsigned level_gen);
 void tagpu_r3d_shade_want(const unsigned char* shd);
 int tagpu_r3d_shade_neutral(void);
 int tagpu_r3d_shade_dir(void);
+/* The atlas rect of a unit texture frame, painting it on first sight: 1 with
+   `uv` and `ck` set; 0 when there is none (the face draws flat, as the
+   engine's rasteriser would); -1 when its paint was DEFERRED past the
+   allowance (tagpu_gaf.h `budget`), and then nothing that uses this face is
+   drawn this frame -- a face baked flat for want of a texel the consumer did
+   not have yet would stay flat for as long as the bake does. */
 int tagpu_r3d_atlas_uv(const char* gafframe, float uv[4], float* ck);
 int tagpu_r3d_ready(void);
 int tagpu_r3d_ensure(void);
@@ -49,16 +55,17 @@ int tagpu_r3d_nano_state(float nano, unsigned id, unsigned tick,
    one marks every painted entry for repaint so that it is correct from the
    instant it exists. The multipliers are 32 floats and are simply kept.
 
-   `_want` is idempotent and costs nothing until it is called. `_mirror`
-   returns NULL while there is none, which a pass treats as "stand down this
-   frame" and not as an error: the atlas re-converges over the next few frames.
+   `_want` is idempotent and costs nothing until it is called. `_view` is 0
+   while there is no mirror, which a pass treats as "stand down this frame"
+   and not as an error: the atlas re-converges over the next few frames. Its
    `rows` is the shelf cursor, so only the rows the packer has used are
-   uploaded. Render thread only, like the rest of this module. */
+   uploaded. `_owed` and `_ack` are the allowance's pair (tagpu_gaf.h
+   `tagpu_gaf_atlas_owed`). Render thread only, like the rest of this module. */
 void tagpu_r3d_atlas_mirror_want(void);
-const unsigned char* tagpu_r3d_atlas_mirror(int* dim, int* rows, unsigned* serial);
-/* The base atlas's other two inputs from the same atlas: the key plane (NULL
-   while there is no mirror) and, in `*dirty`, its dirty map (tagpu_gaf.h). */
-const unsigned char* tagpu_r3d_atlas_key(const unsigned** dirty);
+struct TAGPU_GAFVIEW;
+int  tagpu_r3d_atlas_view(struct TAGPU_GAFVIEW* v);
+int  tagpu_r3d_atlas_owed(void);
+void tagpu_r3d_atlas_ack(unsigned serial, int keep);
 
 /* ASK FOR THE CLASSIC++ RESTORED TWIN. Gated on `tagpu_classicpp_assets()`,
    because the twin costs 16 MB that a session with Classic++ off must not pay

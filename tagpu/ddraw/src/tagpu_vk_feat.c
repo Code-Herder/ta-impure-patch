@@ -757,6 +757,7 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
     kill_image(d, &s_bImg, &s_bMem, &s_bView);
     s_atDim = 0;
     s_bHave = 0; s_bSerial = 0; s_bPal = 0; s_bMove = 0;
+    tagpu_feat_atlas_ack(0, 0);            /* this copy holds nothing yet */
     /* the base atlas is what the features are drawn from and what the
        restorer reads, so without it the pass does not draw */
     if (!mk_image(d, dim, dim, VK_FORMAT_R8G8B8A8_UNORM, IMG_BASE,
@@ -988,24 +989,40 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
          h->restoreGen);
 }
 
-/* THE BASE ATLAS, when the mirror or the engine's table moved: the tiles the
-   atlas's dirty map says were written since the serial this image holds, or
-   the whole used page when the table moved (its arrival) or nothing is held
-   yet (tagpu_gaf_rects_due). A burst of paints is never a whole page: the map
-   names every tile however many writes there were. Nor is a repack: its
-   cells are moved on the device first (tagpu_vk_stage_move), and the tiles
-   then name only the paints this copy lacked. Expanded through the
-   slot's bounded staging (tagpu_vk_stage.h), behind the write-after-read
-   barrier of the file header: every slot samples this one image.
+/* THE BASE ATLAS, when the mirror or the engine's table moved. Which of two
+   ways is decided by what this copy holds, never by how much is due:
+
+     * THE COPY IS KEPT -- current up to `s_bSerial`, in this palette, and not
+       behind a whole-page write: the tiles the atlas's dirty map says were
+       written since (tagpu_gaf_rects_due), after a repack's move on the device
+       when one is due (tagpu_vk_stage_move). IN THIS FRAME'S COMMAND BUFFER OR
+       NOT AT ALL. The atlas's allowance (tagpu_gaf.h `budget`) keeps what is
+       due within one slot's staging, and a slot that could not map it skips
+       the frame and sends it on the next: nothing waits.
+     * THE COPY IS NOT KEPT -- the first upload after `atlas_build` (a new
+       pass: the session's first level, a teardown, a resize), a move of the
+       engine's table, the atlas's whole page written (made, lost, a new
+       level, its mirror armed): the used page, banded through the slot's
+       staging, which waits on the device. None of those is a frame of play,
+       and the line names the cause. Play reaches it one way, a repack this
+       copy cannot move because the device refused the move buffer, and the
+       line says so.
+
+   Either way the atlas is then told what the copy holds
+   (`tagpu_feat_atlas_ack`), which is what its allowance counts from.
    1 sent or nothing due; 0 no staging this frame -- nothing drawn, the serials
    not advanced, so the next frame sends it; -1 the pass must come down. */
 static int s_rect[TAGPU_VK_STAGE_MAXRECT][4];      /* render thread only */
+static unsigned s_upFrame;                         /* the frame base_upload last ran in */
+static unsigned s_saidSkip;                        /* the skip's line, once a 300 frames */
 static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                        const TAGPU_FEATHAND* h)
 {
     int rows = h->atlasRows, n, rc, keep, move = 0;
+    const char* why = NULL;
     VkDeviceSize bytes;
 
+    s_upFrame = d->frame;
     /* THE IMAGES AND THEIR TWO DESCRIPTOR BINDINGS ARE MADE ONCE, BY
        `atlas_build`, AND THAT IS WHY THEY MAY BE WRITTEN AT ALL.
        vkUpdateDescriptorSets on a set some pending command buffer has bound is
@@ -1025,46 +1042,72 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     }
     if (s_bHave && s_bSerial == h->atlasSerial && s_bPal == h->palSerial) {
         tagpu_vk_stage_drop(d, &s->stage);
+        tagpu_feat_atlas_ack(s_bSerial, 1);
         return 1;
     }
     if (rows < 1) rows = 1;
     if (rows > h->atlasDim) rows = h->atlasDim;
-    keep = s_bHave && s_bPal == h->palSerial;
+    keep = s_bHave && s_bPal == h->palSerial && (int)(h->atlasWhole - s_bSerial) <= 0;
+    if (!keep)
+        why = !s_bHave ? "the first upload since the image was made"
+            : s_bPal != h->palSerial ? "the engine's table moved"
+            : "the atlas is new (made, lost, a new level, its mirror armed)";
     /* A REPACK SINCE THIS COPY: its cells are moved here, on the device, and
-       only the paints the copy lacked are sent (tagpu_gaf.h `moves`). A copy
-       that missed the repack before it -- or a move this pass cannot make --
-       takes the whole page instead, which is always right. */
+       only the paints the copy lacked are sent (tagpu_gaf.h `moves`). The atlas
+       holds a repack until this copy is current (tagpu_gaf_atlas_reset), so
+       the move always applies; a device that refused the buffer takes the
+       page instead, which is right and is a wait. */
     if (keep && h->atlasMoves && (int)(h->atlasMoveSerial - s_bSerial) > 0 &&
         h->atlasMoveSerial != s_bMove) {
         if ((int)(s_bSerial - h->atlasMovePrev) >= 0 &&
             tagpu_vk_stage_move_ready(d, &s_move, h->atlasDim, h->atlasMoves, h->atlasMoveN))
             move = 1;
-        else
+        else {
             keep = 0;
+            why = "a repack this copy cannot move - A WAIT IN PLAY";
+        }
     }
     n = tagpu_gaf_rects_due(h->atlasDirty, h->atlasSerial, s_bSerial, keep,
                             h->atlasDim, rows, s_rect, TAGPU_VK_STAGE_MAXRECT);
     bytes = (VkDeviceSize)tagpu_gaf_rects_area((const int (*)[4])s_rect, n) * 4;
-    if (n > 0 && !tagpu_vk_stage_begin(d, &s->stage, bytes, (VkDeviceSize)h->atlasDim * 4))
-        return 0;
-    if (move) {
-        rc = tagpu_vk_stage_move(d, cb, &s_move, s_bImg, h->atlasDim, h->atlasMoves,
-                                 h->atlasMoveN, n > 0 && !tagpu_vk_stage_fits(&s->stage, bytes));
-        if (rc <= 0) return rc;
-        s_bMove = h->atlasMoveSerial;
-    }
-    if (n == 0) {
+    if (keep) {
+        /* checked before anything is recorded, so a skipped frame leaves the
+           image and every serial as they were */
+        if (n > 0 && (!tagpu_vk_stage_begin(d, &s->stage, bytes, (VkDeviceSize)h->atlasDim * 4) ||
+                      !tagpu_vk_stage_fits(&s->stage, bytes))) {
+            if (!s_saidSkip || d->frame - s_saidSkip >= 300u) {
+                s_saidSkip = d->frame ? d->frame : 1u;
+                plog(d, "feat: %u KB of tiles due and no staging that holds them - the "
+                        "frame is skipped and they go on the next; nothing waited on",
+                     (unsigned)(bytes >> 10));
+            }
+            return 0;
+        }
+        if (move) {
+            if (!tagpu_vk_stage_move(d, cb, &s_move, s_bImg, h->atlasDim, h->atlasMoves,
+                                     h->atlasMoveN))
+                return 0;
+            s_bMove = h->atlasMoveSerial;
+        }
+        if (n > 0 &&
+            !tagpu_vk_stage_expand_rects(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
+                                         h->atlasDim, (const int (*)[4])s_rect, n, h->pal, NULL))
+            return 0;
         /* nothing else due: every paint since landed below the used rows, or
            the move was all there was */
-        s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
-        tagpu_vk_stage_drop(d, &s->stage);
-        return 1;
+        if (n == 0) tagpu_vk_stage_drop(d, &s->stage);
+    } else {
+        plog(d, "feat: the whole base atlas, %u KB, through the banded path - %s",
+             (unsigned)(bytes >> 10), why);
+        if (!tagpu_vk_stage_begin(d, &s->stage, bytes, (VkDeviceSize)h->atlasDim * 4))
+            return 0;
+        rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
+                                   h->atlasDim, 0, 0, h->atlasDim, rows, h->pal, NULL);
+        if (rc <= 0) return rc;
     }
-    rc = tagpu_vk_stage_expand_rects(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
-                                     h->atlasDim, (const int (*)[4])s_rect, n, h->pal, NULL);
-    if (rc <= 0) return rc;
     s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
     s_bHave = 1;
+    tagpu_feat_atlas_ack(s_bSerial, 1);
     return 1;
 }
 
@@ -1106,7 +1149,7 @@ static void feat_scissor(uint32_t w, uint32_t h)
     s_scX = x0; s_scY = y0; s_scW = ww; s_scH = hh;
 }
 
-int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     TAGPU_FEATHAND h;
     SLOT* s;
@@ -1308,6 +1351,42 @@ refuse:
     return 0;
 }
 
+/* THE UPLOAD THIS PASS OWES ON A FRAME IT DID NOT MAKE ONE. The atlas's
+   allowance counts from this copy (tagpu_gaf.h `budget`) and defers paints
+   past it; were the copy brought up to date only on frames that draw, a frame
+   whose every feature waits on the allowance would draw nothing, upload
+   nothing and leave them waiting for good. So whenever the atlas says the copy
+   is behind (`tagpu_feat_atlas_owed`) and `prepare_draw` did not upload --
+   nothing to draw, no hand-over, or any refusal before its upload -- the tiles
+   go here, drawn from or not.
+   AFTER `prepare_draw`, WHICH IS WHAT MAKES IT SAFE: every `slot_free` of this
+   frame is behind us, so the staging this records a copy out of lives until
+   this slot's next frame -- the rule every upload here keeps. Outside any
+   render pass, and before the restorer's slice, like the upload it stands in
+   for. */
+static void atlas_owed(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+{
+    TAGPU_FEATHAND h;
+    if (s_state != ST_READY || s_downOwed || s_upFrame == d->frame) return;
+    if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return;
+    if (!tagpu_feat_atlas_owed()) return;
+    memset(&h, 0, sizeof h);
+    if (!tagpu_feat_atlas_hand(&h) || !h.pal) return;
+    if (base_upload(d, cb, &s_slot[slot], &h) < 0) {
+        plog(d, "feat: the owed atlas upload failed on the device - the pass stops "
+                "drawing and the seam tears it down");
+        s_state = ST_REFUSED;
+        s_downOwed = 1;
+    }
+}
+
+int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
+{
+    const int r = prepare_draw(d, cb, slot);
+    atlas_owed(d, cb, slot);
+    return r;
+}
+
 void tagpu_vk_feat_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                           uint32_t w, uint32_t h)
 {
@@ -1406,6 +1485,7 @@ void tagpu_vk_feat_down(const TAGPU_VKPASS* d)
     s_arHave = 0;
     s_atDim = 0;
     s_bHave = 0; s_bSerial = 0; s_bPal = 0; s_bMove = 0;
+    tagpu_feat_atlas_ack(0, 0);            /* the copy went with the device */
     if (s_pipeShadow) { vkDestroyPipeline(dev, s_pipeShadow, NULL); s_pipeShadow = VK_NULL_HANDLE; }
     if (s_pipeBody)   { vkDestroyPipeline(dev, s_pipeBody, NULL);   s_pipeBody = VK_NULL_HANDLE; }
     if (s_plo)   { vkDestroyPipelineLayout(dev, s_plo, NULL); s_plo = VK_NULL_HANDLE; }

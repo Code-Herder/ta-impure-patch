@@ -352,6 +352,7 @@ typedef struct TAGPU_PDHAND {
        frame LIST below, which the consuming pass paints into its own twin on
        the device. */
     const unsigned char* atlas;   int atlasDim, atlasRows; unsigned atlasSerial;
+    unsigned atlasWhole;          /* the last whole-page write (tagpu_feat.h) */
     /* the base atlas's other two inputs -- tagpu_feat.h has them in full */
     const unsigned char*        atlasKey;
     const unsigned*             atlasDirty;
@@ -408,6 +409,14 @@ typedef struct TAGPU_PDHAND {
    been taken, or when the standing one was published on a different frame than
    `now`. Render thread only. */
 int  tagpu_posedraw_handover(TAGPU_PDHAND* out, unsigned now);
+
+/* THE UNIT ATLAS WITHOUT THE DRAW -- tagpu_feat.h's three, for the unit atlas
+   (tagpu_render3do.h): the hand-over's atlas fields and palette, filled the
+   way the hand-over fills them, for the upload the Vulkan unit pass owes on a
+   frame it has no hand-over. */
+int  tagpu_posedraw_atlas_hand(TAGPU_PDHAND* h);
+int  tagpu_posedraw_atlas_owed(void);
+void tagpu_posedraw_atlas_ack(unsigned serial, int keep);
 
 /* ---- WHO PAINTED A STRUCTURE'S SLANT, REPORTED BY THE PAINTER --------------
    The structure-shadow gate in tagpu_native.c may only be raised on a frame

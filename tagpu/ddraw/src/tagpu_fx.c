@@ -311,6 +311,9 @@ static void atlas_setup(void)
     /* a world atlas: its base atlas is RGBA, so the key has to travel as a
        plane beside the indices (tagpu_gaf.h `keyPlane`) */
     s_atlas.keyPlane = 1;
+    /* its paints are bounded by what one frame's upload holds (tagpu_gaf.h
+       `budget`): tagpu_vk_fx.c sends them in the frame's own command buffer */
+    s_atlas.budget = TAGPU_GAF_BUDGET;
     tagpu_gaf_atlas_create(&s_atlas);   /* laid out now, not on first use */
 }
 
@@ -354,7 +357,7 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
 
 /* the fx pass's own `nosprites` token lives at ITS call sites (fx_sprite),
    not here: the particle pass emits through this path too */
-static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
+static void emit_sprite_r(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
 {
     TAGPU_GAFGEOM gm;
     if (depth > 4) return;
@@ -370,23 +373,41 @@ static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float 
             TAGPU_GAFGEOM sm;
             const unsigned char* sg = tagpu_gaf_subframe(g, k);
             if (!sg || !tagpu_gaf_frame_geom(sg, &sm)) continue;
-            emit_sprite(sg, sx, sy,
-                        (mode == MODE_OPAQUE && sm.subalp) ? MODE_ALPHA : mode,
-                        wx, wz, depth + 1);
+            emit_sprite_r(sg, sx, sy,
+                          (mode == MODE_OPAQUE && sm.subalp) ? MODE_ALPHA : mode,
+                          wx, wz, depth + 1);
         }
         return;
     }
     int b = (mode == MODE_FLASH) ? B_FLASH : (s_under ? B_UNDER : B_SPRITES);
     if (mode == MODE_FLASH) s_cFlash++; else s_cSprites++;
     if (s_mute) return;
+    const unsigned dN = s_atlas.deferN;
     const TAGPU_GAFENT* e = tagpu_gaf_atlas_get(&s_atlas, g);
-    if (!e) { s_cAtlasFail++; return; }
+    /* a deferral is not a failure: emit_sprite counts it */
+    if (!e) { if (s_atlas.deferN == dN) s_cAtlasFail++; return; }
     int w = gm.w, h = gm.h;
     float x0 = (float)(sx - gm.hotx);
     float y0 = (float)(sy - gm.hoty);
     float x1 = x0 + (float)w, y1 = y0 + (float)h;
     float c = (float)e->ck / 255.0f;
     put_quad(b, x0, y0, x1, y1, e->u0, e->v0, e->u1, e->v1, c, mode, wx, wz);
+}
+
+/* A SPRITE IS DRAWN WHOLE OR NOT AT ALL. A compound frame is several atlas
+   entries; one of them deferred past the allowance (tagpu_gaf.h `budget`)
+   takes the sprite's other quads back out, so no frame shows part of an
+   explosion. What did paint stays painted and draws on the next frame. */
+static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
+{
+    int nv[NBUCKET], b, quads = s_cQuads;
+    const unsigned dN = s_atlas.deferN;
+    for (b = 0; b < NBUCKET; b++) nv[b] = s_nv[b];
+    emit_sprite_r(g, sx, sy, mode, wx, wz, depth);
+    if (s_atlas.deferN != dN) {
+        for (b = 0; b < NBUCKET; b++) s_nv[b] = nv[b];
+        s_cQuads = quads;
+    }
 }
 
 /* the fx pass's sprites honour its own nosprites token */
@@ -863,6 +884,8 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         if (g && g != s_atlasGen) { tagpu_gaf_atlas_forget(&s_atlas); s_atlasGen = g; }
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
+    /* the allowance's frame, after the reset and before the first lookup */
+    tagpu_gaf_atlas_frame(&s_atlas);
     /* `tagpu_gaf_atlas_restore_vk` above publishes this atlas's frame list for
        the Vulkan restorer. */
     memset(s_nv, 0, sizeof s_nv); s_nm = 0;
@@ -932,22 +955,13 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.uss   = (float)(v->ss > 0 ? v->ss : 1);
     s_pub.zoomF = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCFx = v->zoomCx; s_pub.zoomCFy = v->zoomCy;
-    s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
-    s_pub.atlasKey = s_atlas.keym; s_pub.atlasDirty = s_atlas.dirty;
-    {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
-        int rows = s_atlas.shelfY + s_atlas.shelfH;
-        if (rows < 0) rows = 0;
-        if (rows > s_atlas.dim) rows = s_atlas.dim;
-        s_pub.atlasRows = rows;
-    }
-    s_pub.atlasSerial = s_atlas.mirrorSerial;
+    tagpu_fx_atlas_hand(&s_pub);
     /* THE RESTORE REQUEST, WHICH IS THE ONLY RESTORE ROUTE PUBLISHED HERE. */
     if (s_atlas.rlistWant && s_atlas.rlist) {
         s_pub.restoreFrames  = s_atlas.rlist;
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
     }
-    s_pub.pal = tagpu_pal_engine(); s_pub.palSerial = tagpu_pal_engine_serial();
     /* THE LIGHT TABLE ONLY WHEN IT HAS BEEN BUILT. A frame with flash vertices
        and no table has no colour for its flashes, so tagpu_vk_fx.c refuses it
        rather than guess one. */
@@ -986,6 +1000,24 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.frame = v->frame_counter;
     s_pubHave = total > 0 && !fogBad;
 }
+
+/* The atlas's half of the hand-over and the engine's table it is expanded
+   through -- tagpu_feat.c's `tagpu_feat_atlas_hand`, for the same two
+   readers. */
+int tagpu_fx_atlas_hand(TAGPU_FXHAND* h)
+{
+    TAGPU_GAFVIEW av;
+    int ok = tagpu_gaf_atlas_view(&s_atlas, &av);
+    h->atlas = av.idx; h->atlasDim = ok ? av.dim : s_atlas.dim;
+    h->atlasKey = av.key; h->atlasDirty = av.dirty;
+    h->atlasRows = av.rows;
+    h->atlasSerial = av.serial; h->atlasWhole = av.whole;
+    h->pal = tagpu_pal_engine(); h->palSerial = tagpu_pal_engine_serial();
+    return ok;
+}
+
+int  tagpu_fx_atlas_owed(void) { return tagpu_gaf_atlas_owed(&s_atlas); }
+void tagpu_fx_atlas_ack(unsigned serial, int keep) { tagpu_gaf_atlas_ack(&s_atlas, serial, keep); }
 
 /* Hand it over, ONCE (tagpu_fx.h). */
 int tagpu_fx_handover(TAGPU_FXHAND* out, unsigned now)

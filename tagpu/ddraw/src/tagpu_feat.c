@@ -410,6 +410,10 @@ static void atlas_setup(void)
        them to its own copy: a repack then sends nothing but the paints it
        lacked, where the whole page is a wait on the render thread */
     s_atlas.moveList = 1;
+    /* and its paints are bounded by what one frame's upload holds
+       (tagpu_gaf.h `budget`): tagpu_vk_feat.c sends them in the frame's own
+       command buffer, and a paint past the allowance waits a frame instead */
+    s_atlas.budget = TAGPU_GAF_BUDGET;
     tagpu_gaf_atlas_create(&s_atlas);
 }
 
@@ -471,8 +475,12 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
     if (x1 < (float)v->evpL || x0 > (float)(v->evpL + v->evw) ||
         y1 < (float)v->evpT || y0 > (float)(v->evpT + v->evh)) return;
     if (!feat_room(b, 6)) { s_cOverflow++; return; }
-    e = tagpu_gaf_atlas_get(&s_atlas, g);
-    if (!e) { s_cAtlasFail++; return; }
+    {
+        const unsigned dN = s_atlas.deferN;
+        e = tagpu_gaf_atlas_get(&s_atlas, g);
+        /* a deferral is not a failure: the anchor's rollback counts it */
+        if (!e) { if (s_atlas.deferN == dN) s_cAtlasFail++; return; }
+    }
     c = (float)e->ck / 255.0f;
     {   /* world position of each corner: the anchor plus the corner's offset
            from the projected anchor (screen px and world px are 1:1 here) */
@@ -499,7 +507,7 @@ static int feat_visible(const TAGPU_FXVIEW* v, int col, int row, int fx, int fz,
 
 /* ---- per-frame counters ---- */
 typedef struct {
-    int anchors, flat, tall, gafwreck, wreck3d, losSkip, junk, animated, shadows, outside;
+    int anchors, flat, tall, gafwreck, wreck3d, losSkip, junk, animated, shadows, outside, deferred;
 } FEATC;
 static FEATC s_c;
 static int s_logged;
@@ -678,6 +686,8 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
         if (!s_atlas.made) return feat_bail();
     }
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
+    /* the allowance's frame, after the reset and before the first lookup */
+    tagpu_gaf_atlas_frame(&s_atlas);
     /* This atlas's restore is the Vulkan restorer's: `tagpu_gaf_atlas_restore_vk`
        above publishes the frame list and `tagpu_vk_restore.c` paints it. */
 
@@ -846,7 +856,21 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
                 enc = 3.0f + (float)rel * 4.0f
                       + 1.5f * ((float)(col - c0) / (float)nCols);
             }
-            draw_feature(v, pk, a, def, flat, enc, shadowsOn);
+            {
+                /* A FEATURE IS DRAWN WHOLE OR NOT AT ALL: its shadow and body
+                   -- and every sub-frame of either -- are several atlas
+                   entries, and one of them deferred past the allowance takes
+                   the rest of this anchor's quads back out, so no frame shows
+                   a body without its shadow. What did paint stays painted and
+                   draws on the next frame, with the rest. */
+                const int nSh = s_nv[B_SHADOW], nBo = s_nv[B_BODY];
+                const unsigned dN = s_atlas.deferN;
+                draw_feature(v, pk, a, def, flat, enc, shadowsOn);
+                if (s_atlas.deferN != dN) {
+                    s_nv[B_SHADOW] = nSh; s_nv[B_BODY] = nBo;
+                    s_c.deferred++;
+                }
+            }
         }
     }
     s_c.outside = outside;
@@ -876,6 +900,8 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
             if (s_cOverflow || s_cAtlasFail)
                 sappend(b, sizeof b, &p, " DROPPED(full=%d atlas-fail=%d)",
                         s_cOverflow, s_cAtlasFail);
+            if (s_c.deferred)
+                sappend(b, sizeof b, &p, " deferred=%d", s_c.deferred);
             if (s_passive) sappend(b, sizeof b, &p, " (passive: nothing emitted)");
             else if (!s_ownable)
                 sappend(b, sizeof b, &p,
@@ -932,17 +958,7 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.fog = v->fogMode & 1;
     s_pub.fogOrgX = (float)v->fogOrgX; s_pub.fogOrgY = (float)v->fogOrgY;
     s_pub.fogCols = (float)v->fogCols; s_pub.fogRows = (float)v->fogRows;
-    s_pub.atlas = s_atlas.mirror; s_pub.atlasDim = s_atlas.dim;
-    s_pub.atlasKey = s_atlas.keym; s_pub.atlasDirty = s_atlas.dirty;
-    s_pub.atlasMoves = s_atlas.moves; s_pub.atlasMoveN = s_atlas.moveN;
-    s_pub.atlasMoveSerial = s_atlas.moveSerial; s_pub.atlasMovePrev = s_atlas.movePrev;
-    {   /* the shelf cursor bounds every cell in the atlas (tagpu_feat.h) */
-        int rows = s_atlas.shelfY + s_atlas.shelfH;
-        if (rows < 0) rows = 0;
-        if (rows > s_atlas.dim) rows = s_atlas.dim;
-        s_pub.atlasRows = rows;
-    }
-    s_pub.atlasSerial = s_atlas.mirrorSerial;
+    tagpu_feat_atlas_hand(&s_pub);
     /* THE REQUEST, NOT THE PICTURE: the restored twin's texels are never
        read back (tagpu_gaf.h), so the list is the only restore route this
        hand-over carries. */
@@ -951,9 +967,6 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
         s_pub.restoreN       = s_atlas.rlistN;
         s_pub.restoreGen     = s_atlas.rlistGen;
     }
-    /* THE ENGINE'S TABLE, unscaled: the world composite applies the Gamma
-       factor once, to the finished image (tagpu_pal.h) */
-    s_pub.pal = tagpu_pal_engine(); s_pub.palSerial = tagpu_pal_engine_serial();
     /* the grid as the fragment shader will read it, and only when it will:
        `uFog` 0 means taFog is never called and uFogGrid never sampled. */
     if (s_pub.fog && v->fogGrid && v->fogCols > 0 && v->fogRows > 0 &&
@@ -993,6 +1006,28 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.frame = v->frame_counter;
     s_pubHave = total > 0 && !fogBad;
 }
+
+/* The atlas's half of the hand-over (tagpu_feat.h), and the palette its
+   base atlas is expanded through: THE ENGINE'S TABLE, unscaled -- the world
+   composite applies the Gamma factor once, to the finished image
+   (tagpu_pal.h). One writer for both the draw's hand-over and the upload the
+   consumer owes on a frame it does not draw. */
+int tagpu_feat_atlas_hand(TAGPU_FEATHAND* h)
+{
+    TAGPU_GAFVIEW av;
+    int ok = tagpu_gaf_atlas_view(&s_atlas, &av);
+    h->atlas = av.idx; h->atlasDim = ok ? av.dim : s_atlas.dim;
+    h->atlasKey = av.key; h->atlasDirty = av.dirty;
+    h->atlasRows = av.rows;
+    h->atlasSerial = av.serial; h->atlasWhole = av.whole;
+    h->atlasMoves = av.moves; h->atlasMoveN = av.moveN;
+    h->atlasMoveSerial = av.moveSerial; h->atlasMovePrev = av.movePrev;
+    h->pal = tagpu_pal_engine(); h->palSerial = tagpu_pal_engine_serial();
+    return ok;
+}
+
+int  tagpu_feat_atlas_owed(void) { return tagpu_gaf_atlas_owed(&s_atlas); }
+void tagpu_feat_atlas_ack(unsigned serial, int keep) { tagpu_gaf_atlas_ack(&s_atlas, serial, keep); }
 
 /* Hand it over, ONCE (tagpu_feat.h). */
 int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now)

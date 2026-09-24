@@ -92,6 +92,9 @@ typedef struct TAGPU_FEATHAND {
        a cost paid every time the whole page has to go. */
     int                   atlasRows;
     unsigned              atlasSerial;
+    /* the serial of the atlas's last whole-page write (tagpu_gaf.h
+       `wholeSerial`): a copy behind it takes the page, never tiles */
+    unsigned              atlasWhole;
     /* THE BASE ATLAS'S TWO OTHER INPUTS, beside the indices: the key plane
        (dim x dim, 0 at a keyed texel -- tagpu_gaf.h `keym`) and the dirty map,
        the serial of the last write to each tile, which tells a consumer
@@ -160,4 +163,14 @@ typedef struct TAGPU_FEATHAND {
    in here alias buffers this file frees and rebuilds, so a hand-over that
    outlived its frame can name memory that is gone. Render thread only. */
 int tagpu_feat_handover(TAGPU_FEATHAND* out, unsigned now);
+
+/* THE ATLAS WITHOUT THE DRAW, for the upload the Vulkan pass owes on a frame
+   it has nothing to draw (tagpu_gaf.h `tagpu_gaf_atlas_owed`): `_hand` fills
+   the hand-over's atlas fields and palette the way the draw's hand-over is
+   filled, 0 while there is no mirror; `_owed` says the pass's copy is behind;
+   `_ack` is the pass saying what its copy holds (tagpu_gaf_atlas_ack).
+   Render thread only. */
+int  tagpu_feat_atlas_hand(TAGPU_FEATHAND* h);
+int  tagpu_feat_atlas_owed(void);
+void tagpu_feat_atlas_ack(unsigned serial, int keep);
 #endif

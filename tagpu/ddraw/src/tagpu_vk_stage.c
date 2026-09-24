@@ -30,6 +30,14 @@ DFNS(DECL)
 
 #define ALIGN4(v) (((v) + 3) & ~(VkDeviceSize)3)
 
+/* THE CAP HOLDS THE ALLOWANCE: everything an atlas may have due at once
+   (tagpu_gaf.h `budget`) goes into one slot's staging, and the dirty map
+   never names more rects for it than one copy takes. */
+typedef char stage_cap_holds_budget[
+    TAGPU_VK_STAGE_CAP >= (VkDeviceSize)TAGPU_GAF_BUDGET * TAGPU_GAF_TILEW * TAGPU_GAF_TILEH * 4
+        ? 1 : -1];
+typedef char stage_rects_hold_budget[TAGPU_VK_STAGE_MAXRECT >= TAGPU_GAF_BUDGET ? 1 : -1];
+
 /* The device the entry points above were resolved for. A new device -- the
    lane came down and back up -- resolves them again. */
 static VkDevice      s_dev;
@@ -286,12 +294,11 @@ static int banded_one(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st, VkDeviceSi
     return 1;
 }
 
-/* `banded` 1 sends it through the banded path even when it would fit: a caller
-   with several rects that do not fit together bands them all, so an earlier
-   one held in-frame cannot leave a later one less than a row to band through. */
+/* A whole page: in the frame's command buffer when it fits, banded when not.
+   Only the whole-page callers reach it (tagpu_vk_stage.h). */
 static int upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st,
                   VkImage img, int had, int x, int y, int w, int h, int bpp,
-                  FILL fill, void* ctx, int banded)
+                  FILL fill, void* ctx)
 {
     VkDeviceSize row = (VkDeviceSize)w * bpp;
     VkDeviceSize bytes = row * (VkDeviceSize)h;
@@ -303,7 +310,7 @@ static int upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st,
     /* IT FITS: into the frame's own command buffer, as the passes always did.
        The bytes stay held until this frame's submit completes, which is the
        seam's fence on this slot. */
-    if (!banded && off + bytes <= st->cap) {
+    if (off + bytes <= st->cap) {
         fill(ctx, st->map + off, 0, h);
         barrier_in(cb, img, had);
         copy_band(cb, st->buf, off, img, x, y, w, h);
@@ -374,7 +381,7 @@ int tagpu_vk_stage_expand(const TAGPU_VKPASS* d, VkCommandBuffer cb,
     if (!idx || !pal) return 0;
     e.idx = idx; e.key = key; e.pal = pal; e.alpha = alpha;
     e.pitch = pitch; e.x = x; e.y = y; e.w = w;
-    return upload(d, cb, st, img, had, x, y, w, h, 4, fill_expand, &e, 0);
+    return upload(d, cb, st, img, had, x, y, w, h, 4, fill_expand, &e);
 }
 
 /* The regions of one in-frame copy. Render thread only, and filled and used
@@ -387,9 +394,10 @@ int tagpu_vk_stage_expand_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
                                 int pitch, const int (*r)[4], int n,
                                 const unsigned char* pal, const unsigned char* alpha)
 {
-    VkDeviceSize off, o, total = 0;
-    int i, m = 0, rc;
+    VkDeviceSize o, total = 0;
+    int i, m = 0;
 
+    (void)d;
     if (!idx || !pal || n < 0 || n > TAGPU_VK_STAGE_MAXRECT) return 0;
     if (!st->buf || !st->map || !img) return 0;
     for (i = 0; i < n; i++) {
@@ -397,47 +405,33 @@ int tagpu_vk_stage_expand_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
         if (w > 0 && h > 0) total += (VkDeviceSize)w * (VkDeviceSize)h * 4;
     }
     if (total == 0) return 1;
-    off = ALIGN4(st->used);
+    /* IN THIS FRAME OR NOT AT ALL: there is no banded branch here, so no
+       partial upload can wait on the device (tagpu_vk_stage.h) */
+    if (!tagpu_vk_stage_fits(st, total)) return 0;
 
-    /* ALL OF THEM FIT: one barrier pair and one copy of `m` regions, in the
-       frame's own command buffer -- no wait, as for a single rect that fits. */
-    if (tagpu_vk_stage_fits(st, total)) {
-        o = off;
-        for (i = 0; i < n; i++) {
-            const int x = r[i][0], y = r[i][1], w = r[i][2] - x, h = r[i][3] - y;
-            VkBufferImageCopy* rg = &s_reg[m];
-            if (w <= 0 || h <= 0) continue;
-            tagpu_pal_expand(st->map + o, idx, key, pitch, x, y, w, h, pal, alpha);
-            memset(rg, 0, sizeof *rg);
-            rg->bufferOffset = o;
-            rg->imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            rg->imageSubresource.layerCount = 1;
-            rg->imageOffset.x = x; rg->imageOffset.y = y;
-            rg->imageExtent.width = (uint32_t)w; rg->imageExtent.height = (uint32_t)h;
-            rg->imageExtent.depth = 1;
-            o += (VkDeviceSize)w * (VkDeviceSize)h * 4;
-            m++;
-        }
-        barrier_in(cb, img, had);
-        vkCmdCopyBufferToImage(cb, st->buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               (uint32_t)m, s_reg);
-        barrier_out(cb, img);
-        st->used = o;
-        return 1;
-    }
-
-    /* THEY DO NOT: every rect banded, one after another. A rect already sent
-       stays sent if a later one fails -- the caller does not advance its
-       serial, and the next frame sends them all again. */
+    /* one barrier pair and one copy of `m` regions, in the frame's own
+       command buffer */
+    o = ALIGN4(st->used);
     for (i = 0; i < n; i++) {
-        EXPAND e;
         const int x = r[i][0], y = r[i][1], w = r[i][2] - x, h = r[i][3] - y;
+        VkBufferImageCopy* rg = &s_reg[m];
         if (w <= 0 || h <= 0) continue;
-        e.idx = idx; e.key = key; e.pal = pal; e.alpha = alpha;
-        e.pitch = pitch; e.x = x; e.y = y; e.w = w;
-        rc = upload(d, cb, st, img, had, x, y, w, h, 4, fill_expand, &e, 1);
-        if (rc <= 0) return rc;
+        tagpu_pal_expand(st->map + o, idx, key, pitch, x, y, w, h, pal, alpha);
+        memset(rg, 0, sizeof *rg);
+        rg->bufferOffset = o;
+        rg->imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        rg->imageSubresource.layerCount = 1;
+        rg->imageOffset.x = x; rg->imageOffset.y = y;
+        rg->imageExtent.width = (uint32_t)w; rg->imageExtent.height = (uint32_t)h;
+        rg->imageExtent.depth = 1;
+        o += (VkDeviceSize)w * (VkDeviceSize)h * 4;
+        m++;
     }
+    barrier_in(cb, img, had);
+    vkCmdCopyBufferToImage(cb, st->buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           (uint32_t)m, s_reg);
+    barrier_out(cb, img);
+    st->used = o;
     return 1;
 }
 
@@ -565,33 +559,13 @@ static void move_record(VkCommandBuffer cb, const TAGPU_VKMOVEBUF* mb, VkImage i
 }
 
 int tagpu_vk_stage_move(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKMOVEBUF* mb,
-                        VkImage img, int dim, const TAGPU_GAFMOVE* m, int n, int banded)
+                        VkImage img, int dim, const TAGPU_GAFMOVE* m, int n)
 {
-    VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-    VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
-
+    (void)d;
     if (!mb->buf || !img || dim <= 0 || n < 0 || (n > 0 && !m) ||
         (VkDeviceSize)dim * (VkDeviceSize)dim * 4 > mb->size)
         return 0;
-    if (!banded) {
-        move_record(cb, mb, img, dim, m, n);
-        return 1;
-    }
-    /* AHEAD OF THE BANDS: through their command buffer, and waited on like
-       one, so its fence orders it before the first band is recorded */
-    if (!banded_ready(d)) return 0;
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    if (vkResetCommandBuffer(s_cb, 0) != VK_SUCCESS ||
-        vkBeginCommandBuffer(s_cb, &bi) != VK_SUCCESS) return 0;
-    move_record(s_cb, mb, img, dim, m, n);
-    if (vkEndCommandBuffer(s_cb) != VK_SUCCESS) return 0;
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &s_cb;
-    if (vkQueueSubmit(d->queue, 1, &si, s_fence) != VK_SUCCESS) return -1;
-    s_inflight = 1;
-    if (vkWaitForFences(d->dev, 1, &s_fence, VK_TRUE, 1000000000ull) != VK_SUCCESS) return -1;
-    if (vkResetFences(d->dev, 1, &s_fence) != VK_SUCCESS) return -1;
-    s_inflight = 0;
+    move_record(cb, mb, img, dim, m, n);
     return 1;
 }
 
@@ -614,7 +588,7 @@ int tagpu_vk_stage_copy(const TAGPU_VKPASS* d, VkCommandBuffer cb,
     COPY c;
     if (!src) return 0;
     c.src = src; c.pitch = pitch; c.rowBytes = w * bpp;
-    return upload(d, cb, st, img, had, 0, 0, w, h, bpp, fill_copy, &c, 0);
+    return upload(d, cb, st, img, had, 0, 0, w, h, bpp, fill_copy, &c);
 }
 
 void tagpu_vk_stage_down(const TAGPU_VKPASS* d)

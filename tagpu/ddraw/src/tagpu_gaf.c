@@ -193,7 +193,10 @@ static void rlist_add(TAGPU_GAFATLAS* a, const TAGPU_GAFENT* e)
    `tagpu_gaf_dirty_since`'s answer cover every write of an interval.
    The clamp is the map's bound, not a correction: a rect is inside the atlas
    by construction and the atlas is at most TAGPU_GAF_DIMMAX (the mirror arm
-   refuses a wider one), so no index here leaves the map. */
+   refuses a wider one), so no index here leaves the map.
+   AND `due` MOVES WITH IT: a tile the consumer held becomes due here and
+   nowhere else (tiles_raise aside), which is what keeps the allowance's count
+   exact rather than an estimate. */
 static void mirror_wrote(TAGPU_GAFATLAS* a, int x0, int y0, int x1, int y1)
 {
     int tx, ty, tx1, ty1;
@@ -206,8 +209,21 @@ static void mirror_wrote(TAGPU_GAFATLAS* a, int x0, int y0, int x1, int y1)
     tx1 = (x1 - 1) / TAGPU_GAF_TILEW;
     ty1 = (y1 - 1) / TAGPU_GAF_TILEH;
     for (ty = y0 / TAGPU_GAF_TILEH; ty <= ty1; ty++)
-        for (tx = x0 / TAGPU_GAF_TILEW; tx <= tx1; tx++)
-            a->dirty[ty * TAGPU_GAF_TCOLS + tx] = a->mirrorSerial;
+        for (tx = x0 / TAGPU_GAF_TILEW; tx <= tx1; tx++) {
+            unsigned* t = &a->dirty[ty * TAGPU_GAF_TCOLS + tx];
+            if ((int)(*t - a->ackSerial) <= 0) a->due++;
+            *t = a->mirrorSerial;
+        }
+}
+
+/* THE WHOLE PAGE WRITTEN -- a create, a loss, the mirror's arm, a move with no
+   list. `wholeSerial` is what tells a consumer to take the page rather than
+   tiles, and what turns the gate off until it has: every tile is due, and no
+   partial upload could carry them. */
+static void mirror_whole(TAGPU_GAFATLAS* a)
+{
+    mirror_wrote(a, 0, 0, a->dim, a->dim);
+    a->wholeSerial = a->mirrorSerial;
 }
 
 /* the mirror's bytes: the index plane, and the key plane after it when the
@@ -296,6 +312,210 @@ unsigned long long tagpu_gaf_rects_area(const int (*rect)[4], int n)
         if (w > 0 && h > 0) t += (unsigned long long)w * (unsigned long long)h;
     }
     return t;
+}
+
+/* ---- the allowance (tagpu_gaf.h `budget`) ------------------------------- */
+
+/* the tiles a rect inside the atlas touches */
+static int rect_tiles(int x0, int y0, int x1, int y1)
+{
+    return ((x1 - 1) / TAGPU_GAF_TILEW - x0 / TAGPU_GAF_TILEW + 1) *
+           ((y1 - 1) / TAGPU_GAF_TILEH - y0 / TAGPU_GAF_TILEH + 1);
+}
+
+/* ...and how many of them are not due yet: what a paint of it adds to `due` */
+static int tiles_fresh(const TAGPU_GAFATLAS* a, int x0, int y0, int x1, int y1)
+{
+    int tx, ty, n = 0;
+    for (ty = y0 / TAGPU_GAF_TILEH; ty <= (y1 - 1) / TAGPU_GAF_TILEH; ty++)
+        for (tx = x0 / TAGPU_GAF_TILEW; tx <= (x1 - 1) / TAGPU_GAF_TILEW; tx++)
+            if ((int)(a->dirty[ty * TAGPU_GAF_TCOLS + tx] - a->ackSerial) <= 0) n++;
+    return n;
+}
+
+static void due_recount(TAGPU_GAFATLAS* a)
+{
+    int i, n = 0;
+    for (i = 0; i < TAGPU_GAF_TROWS * TAGPU_GAF_TCOLS; i++)
+        if ((int)(a->dirty[i] - a->ackSerial) > 0) n++;
+    a->due = n;
+}
+
+/* The gate is on while a consumer keeps a copy that its next upload brings up
+   to date tile by tile. Without one -- no mirror, no ack yet, a copy that is
+   gone or behind a whole-page write -- the next upload is the whole page,
+   outside play, and nothing a paint does can make it larger. */
+static int gate_on(const TAGPU_GAFATLAS* a)
+{
+    return a->budget > 0 && a->mirror && a->ackKeep &&
+           (int)(a->wholeSerial - a->ackSerial) <= 0;
+}
+
+/* The backlog's buckets, oldest first (tagpu_gaf.h `bkEpoch`). With no room a
+   cell goes into the next younger bucket, or the youngest takes its epoch:
+   either way it lands in a bucket labelled no older than itself, so an entry
+   never counts its own cell as ahead of it, and "the first bucket not older"
+   is the one it is in. The buckets are built once a frame and only shrink
+   until the next build. */
+static void bk_add(TAGPU_GAFATLAS* a, unsigned ep, int tiles)
+{
+    int k, j;
+    for (k = 0; k < a->nBk && (int)(a->bkEpoch[k] - ep) < 0; k++) ;
+    if (k < a->nBk && a->bkEpoch[k] == ep) { a->bkTiles[k] += tiles; return; }
+    if (a->nBk < TAGPU_GAF_BKMAX) {
+        for (j = a->nBk; j > k; j--) { a->bkEpoch[j] = a->bkEpoch[j - 1]; a->bkTiles[j] = a->bkTiles[j - 1]; }
+        a->bkEpoch[k] = ep; a->bkTiles[k] = tiles; a->nBk++;
+        return;
+    }
+    if (k < a->nBk) { a->bkTiles[k] += tiles; return; }
+    k = a->nBk - 1;
+    a->bkEpoch[k] = ep; a->bkTiles[k] += tiles;
+}
+
+static void bk_sub(TAGPU_GAFATLAS* a, unsigned ep, int tiles)
+{
+    int k;
+    for (k = 0; k < a->nBk && (int)(a->bkEpoch[k] - ep) < 0; k++) ;
+    if (k < a->nBk) {
+        a->bkTiles[k] -= tiles;
+        if (a->bkTiles[k] < 0) a->bkTiles[k] = 0;
+    }
+}
+
+/* the waiting tiles ahead of an entry first refused at `ep`; 0 is an entry
+   that has never waited, which is behind all of them */
+static int bk_ahead(const TAGPU_GAFATLAS* a, unsigned ep)
+{
+    int k, t = 0;
+    for (k = 0; k < a->nBk; k++)
+        if (!ep || (int)(a->bkEpoch[k] - ep) < 0) t += a->bkTiles[k];
+    return t;
+}
+
+/* MAY THIS ENTRY BE PAINTED NOW? Its rect is assigned. 1 paints it; 0 leaves
+   it reserved and waiting, and the caller returns NULL: nothing is drawn from
+   it this frame, so nothing samples a texel the consumer does not have.
+   THE BOUND: `due` plus the waiting tiles ahead of it plus the tiles this
+   paint makes due stays within `budget`. Every paint passes here, so `due`
+   cannot exceed `budget` while the gate is on. */
+static int gate_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e)
+{
+    const int p = a->pad;
+    const int cw = cell_up(a, (int)e->w + 2 * p), ch = cell_up(a, (int)e->h + 2 * p);
+    const int x0 = (int)e->x - p, y0 = (int)e->y - p;
+    e->askFrame = a->frame;
+    if (gate_on(a) &&
+        a->due + bk_ahead(a, e->deferEpoch) + tiles_fresh(a, x0, y0, x0 + cw, y0 + ch)
+            > a->budget) {
+        if (!e->deferEpoch) {
+            const unsigned b = (unsigned)cw * (unsigned)ch * 4u;
+            e->deferEpoch = a->frame ? a->frame : 1u;
+            a->deferLive++;
+            a->dfBytes += b;
+            a->dfThis += b;
+        }
+        a->deferN++;
+        return 0;
+    }
+    if (e->deferEpoch) {
+        const unsigned w = a->frame - e->deferEpoch;
+        if (w > a->dfMaxWait) a->dfMaxWait = w;
+        if (e->pend) bk_sub(a, e->deferEpoch, rect_tiles(x0, y0, x0 + cw, y0 + ch));
+        e->deferEpoch = 0;
+        e->pend = 0;
+        if (a->deferLive > 0) a->deferLive--;
+        a->dfPainted++;
+    }
+    return 1;
+}
+
+/* No entry is waiting any more: every one was dropped with the layout. */
+static void defer_forget(TAGPU_GAFATLAS* a)
+{
+    a->deferLive = 0;
+    a->nBk = 0;
+}
+
+void tagpu_gaf_atlas_frame(TAGPU_GAFATLAS* a)
+{
+    unsigned long long back = 0;
+    int i, was;
+    char b[256];
+    if (!a) return;
+    /* the frame that just ended */
+    if (a->deferN != a->dfSeenN) { a->dfFrames++; a->dfSeenN = a->deferN; }
+    if (a->dfThis > a->dfMaxFrame) a->dfMaxFrame = a->dfThis;
+    a->dfThis = 0;
+    if (++a->frame == 0) a->frame = 1;
+    a->nBk = 0;
+    was = a->deferLive;
+    if (a->deferLive > 0) {
+        a->deferLive = 0;
+        for (i = 0; i < a->n; i++) {
+            TAGPU_GAFENT* e = &a->ents[i];
+            int x0, y0, cw, ch;
+            e->pend = 0;
+            if (!e->deferEpoch) continue;
+            /* NOT ASKED FOR ON THE FRAME BEFORE: off the screen, so not part
+               of what is waiting. Reserved as before, and new when next asked. */
+            if (e->ok || e->askFrame != a->frame - 1u) {
+                e->deferEpoch = 0;
+                a->dfExpired++;
+                continue;
+            }
+            cw = cell_up(a, (int)e->w + 2 * a->pad);
+            ch = cell_up(a, (int)e->h + 2 * a->pad);
+            x0 = (int)e->x - a->pad; y0 = (int)e->y - a->pad;
+            bk_add(a, e->deferEpoch, rect_tiles(x0, y0, x0 + cw, y0 + ch));
+            e->pend = 1;
+            a->deferLive++;
+            back += (unsigned long long)cw * (unsigned long long)ch * 4u;
+        }
+        if (back > a->dfMaxBacklog) a->dfMaxBacklog = (unsigned)back;
+    }
+    if (was > 0 && a->deferLive == 0) {
+        _snprintf(b, sizeof b, "%s: every deferred paint has landed - so far %u frame(s) deferred"
+                  " %u KB (at most %u KB first deferred in one frame, %u KB waiting at once),"
+                  " the longest wait %u frame(s), %u painted after waiting, %u gone unasked",
+                  a->tag ? a->tag : "gaf", a->dfFrames, (unsigned)(a->dfBytes >> 10),
+                  a->dfMaxFrame >> 10, a->dfMaxBacklog >> 10, a->dfMaxWait, a->dfPainted,
+                  a->dfExpired);
+        b[sizeof b - 1] = 0;
+        glog(b);
+    }
+}
+
+void tagpu_gaf_atlas_ack(TAGPU_GAFATLAS* a, unsigned serial, int keep)
+{
+    if (!a) return;
+    /* A COPY AHEAD OF THE MIRROR is a copy of something else: the consumer's
+       next upload is the whole page, exactly as `keep` 0 says */
+    if (!keep || (int)(serial - a->mirrorSerial) > 0) { a->ackKeep = 0; return; }
+    if (a->ackKeep && a->ackSerial == serial) return;
+    a->ackKeep = 1;
+    a->ackSerial = serial;
+    due_recount(a);
+}
+
+int tagpu_gaf_atlas_owed(const TAGPU_GAFATLAS* a)
+{
+    return a && a->budget > 0 && a->mirror && a->ackKeep && a->ackSerial != a->mirrorSerial;
+}
+
+int tagpu_gaf_atlas_view(const TAGPU_GAFATLAS* a, TAGPU_GAFVIEW* v)
+{
+    int r;
+    memset(v, 0, sizeof *v);
+    if (!a || !a->mirror || a->dim <= 0) return 0;
+    r = a->shelfY + a->shelfH;
+    if (r < 0) r = 0;
+    if (r > a->dim) r = a->dim;
+    v->idx = a->mirror; v->key = a->keym; v->dirty = a->dirty;
+    v->dim = a->dim; v->rows = r;
+    v->serial = a->mirrorSerial; v->whole = a->wholeSerial;
+    v->moves = a->moves; v->moveN = a->moveN;
+    v->moveSerial = a->moveSerial; v->movePrev = a->movePrev;
+    return 1;
 }
 
 /* the job's destination back to unpainted, and the published list with it */
@@ -473,6 +693,7 @@ static void atlas_drop(TAGPU_GAFATLAS* a, const char* why)
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     a->gen++;                   /* every UV in the atlas has just moved */
     memset(a->hash, 0, sizeof a->hash);
+    defer_forget(a);
     /* the twin's rects are about to be re-used by other frames: back to
        unpainted, and whatever was queued is dropped (it re-queues on its miss) */
     job_clear_dest(a);
@@ -491,6 +712,16 @@ void tagpu_gaf_atlas_reset(TAGPU_GAFATLAS* a)
        something. atlas_repack owns the log line and leaves the atlas usable. */
     if (wasFull && a->repack) {
         if (a->repackWall) return;      /* held: nothing a rebuild can improve */
+        /* HELD FULL WHILE THE CONSUMER IS BEHIND. A moved cell's new tiles
+           take the newest serial its old ones held, so a cell painted since
+           the consumer's copy is due again, whole, at its new place -- and a
+           cell can touch more tiles there than it did, so the move could make
+           more due than the allowance holds. With the copy current nothing
+           moved is due, and `due` stays what it was. The consumer uploads on
+           every frame it is owed one, so this waits a frame on a consumer
+           that missed one; meanwhile a new frame finds the atlas full and is
+           not drawn, as on any frame that fills it. */
+        if (gate_on(a) && a->ackSerial != a->mirrorSerial) return;
         if (atlas_repack(a)) return;
     }
     /* the sprite atlases reset when full; the UI atlas also on a PK_RESET
@@ -510,6 +741,15 @@ void tagpu_gaf_atlas_forget(TAGPU_GAFATLAS* a)
 {
     a->repackWall = 0;
     atlas_drop(a, "subject replaced");
+    /* A NEW LEVEL'S ATLAS, AS FAR AS A CONSUMER IS CONCERNED: its next upload
+       is the page -- the rows the level's first frame paints, since the shelf
+       starts again at the top -- and the allowance stays off until it has
+       taken it (tagpu_gaf.h `wholeSerial`). So the level opens with every
+       visible frame at once, as it opens with the terrain's new atlas,
+       rather than filling in over the frames the allowance would spread it
+       across. The mirror's bytes are not cleared: a texel below the new
+       shelf is sampled by nothing until a paint makes its tile due. */
+    if (a->mirror) mirror_whole(a);
 }
 
 /* The CPU mirror (tagpu_gaf.h). Correct from the instant it exists because
@@ -555,7 +795,7 @@ int tagpu_gaf_atlas_mirror(TAGPU_GAFATLAS* a)
        everything. Restarting at 0 would let a stale copy's serial match a new
        one's, and the map's tiles from the earlier life would answer for writes
        they never saw. */
-    mirror_wrote(a, 0, 0, a->dim, a->dim);
+    mirror_whole(a);
     _snprintf(b, sizeof b, "%s: atlas mirror armed, %d KB%s — %d painted frame(s)"
               " re-decode on their next use so the mirror holds them too",
               a->tag ? a->tag : "gaf", (int)(mirror_bytes(a) >> 10),
@@ -714,8 +954,9 @@ void tagpu_gaf_atlas_lost(TAGPU_GAFATLAS* a)
     /* and so is everything it held, so the mirror of it says nothing. (The
        re-create zeroes it again; doing it here as well means a mirror is never
        stale for the frames between a loss and the next create.) */
-    if (a->mirror) { memset(a->mirror, 0, mirror_bytes(a)); mirror_wrote(a, 0, 0, a->dim, a->dim); }
+    if (a->mirror) { memset(a->mirror, 0, mirror_bytes(a)); mirror_whole(a); }
     memset(a->hash, 0, sizeof a->hash);
+    defer_forget(a);
     /* THE CONSUMER'S DESTINATION DID NOT DIE -- ITS SOURCE DID. Nothing here
        is a Vulkan object, so a consumer's twin still holds the colours of an
        atlas whose every entry has just been dropped. The generation is what
@@ -750,10 +991,11 @@ int tagpu_gaf_atlas_create(TAGPU_GAFATLAS* a)
        no longer exists. atlas_drop is deliberately NOT here: it leaves the
        texels alone and lets re-inserted entries overwrite them, and the mirror
        follows exactly because it follows the paints. */
-    if (a->mirror) { memset(a->mirror, 0, mirror_bytes(a)); mirror_wrote(a, 0, 0, a->dim, a->dim); }
+    if (a->mirror) { memset(a->mirror, 0, mirror_bytes(a)); mirror_whole(a); }
     a->made = 1;
     a->n = 0; a->shelfX = a->shelfY = a->shelfH = 0; a->full = 0;
     memset(a->hash, 0, sizeof a->hash);
+    defer_forget(a);
     /* the layout parameters: unset is the sprite atlases' one-texel border */
     if (a->pad < 1) a->pad = 1;
     if (a->pad > TAGPU_GAF_PADMAX) a->pad = TAGPU_GAF_PADMAX;
@@ -787,13 +1029,15 @@ static unsigned tiles_newest(const TAGPU_GAFATLAS* a, int x0, int y0, int x1, in
 }
 
 /* raise the tiles a rect touches to at least `s`: a tile's serial never goes
-   back, so a consumer is only ever due more than it was */
+   back, so a consumer is only ever due more than it was -- and `due` counts
+   the tiles this makes due, as mirror_wrote does */
 static void tiles_raise(TAGPU_GAFATLAS* a, int x0, int y0, int x1, int y1, unsigned s)
 {
     int tx, ty;
     for (ty = y0 / TAGPU_GAF_TILEH; ty <= (y1 - 1) / TAGPU_GAF_TILEH; ty++)
         for (tx = x0 / TAGPU_GAF_TILEW; tx <= (x1 - 1) / TAGPU_GAF_TILEW; tx++) {
             unsigned* t = &a->dirty[ty * TAGPU_GAF_TCOLS + tx];
+            if ((int)(*t - a->ackSerial) <= 0 && (int)(s - a->ackSerial) > 0) a->due++;
             *t = serial_max(*t, s);
         }
 }
@@ -874,7 +1118,7 @@ static int mirror_move(TAGPU_GAFATLAS* a, int before)
     }
     free(old);
     if (!list) {
-        mirror_wrote(a, 0, 0, a->dim, a->dim);
+        mirror_whole(a);
         return 1;
     }
     /* THE MOVE'S OWN SERIAL, which no tile takes: a copy as of any earlier
@@ -1198,9 +1442,14 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
         if (c->frame == g && c->pix == pix && c->w == w && c->h == h && c->win == win) {
             c->hit = 1;                 /* still wanted: survives the next repack */
             if (c->ok) return c;
-            /* a repack reserved this rect and the caller is holding exactly
-               the pixels it wants: paint it where it already sits */
-            if (c->resv) { atlas_paint(a, c, ck, pixels); return c; }
+            /* a repack, the mirror's arm or the allowance reserved this rect
+               and the caller is holding exactly the pixels it wants: paint it
+               where it already sits -- when the allowance has room */
+            if (c->resv) {
+                if (!gate_paint(a, c)) return NULL;
+                atlas_paint(a, c, ck, pixels);
+                return c;
+            }
             return NULL;
         }
     }
@@ -1215,7 +1464,11 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
         if (a->shelfY + ch > a->dim) { a->full = 1; return NULL; }
         e = &a->ents[a->n];
         e->frame = g; e->pix = pix; e->win = win;
-        e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0; e->resv = 0;
+        e->w = (unsigned short)w; e->h = (unsigned short)h; e->ok = 0;
+        /* RESERVED UNTIL PAINTED, so that a paint the allowance defers leaves
+           a rect the next ask paints in place */
+        e->resv = 1;
+        e->pend = 0; e->deferEpoch = 0; e->askFrame = 0;
         e->hit = 1;                     /* asked for by definition: it is being inserted */
         e->x = (unsigned short)(a->shelfX + p);       /* inside the border */
         e->y = (unsigned short)(a->shelfY + p);
@@ -1223,6 +1476,7 @@ static const TAGPU_GAFENT* atlas_insert(TAGPU_GAFATLAS* a, const void* g, const 
         a->shelfX += cw;
         if (ch > a->shelfH) a->shelfH = ch;
     }
+    if (!gate_paint(a, e)) return NULL;
     atlas_paint(a, e, ck, pixels);
     return e;
 }
