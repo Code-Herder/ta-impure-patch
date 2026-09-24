@@ -217,8 +217,8 @@ the instruction behind each bound, is [exe reverse engineering](exe-reverse-engi
 Each row ends with a bound argument (*Fixes must be safe by construction*), not with "it did
 not crash".
 
-**C3 — zoom out from the centre [BUILT, G20a].** In `anchor_step`, the step is taken only when
-`zNow > zWas`. Zoom-out never anchors to the pointer.
+**C3 — zoom out from the centre [BUILT, G20a].** A notch out adds no displacement of its own:
+only a notch in contributes a term to `R` (below). Zoom-out never anchors to the pointer.
 
 **C4 — BAR's notch and tween [BUILT, G20a].** They replace `wheel_level()`'s ×1.1 notch and log
 ease (`WHEEL_STEP`, `WHEEL_EASE`, `WHEEL_SNAP`'s ease role):
@@ -231,15 +231,23 @@ ease (`WHEEL_STEP`, `WHEEL_EASE`, `WHEEL_SNAP`'s ease role):
 * **What stays.** The 0.999..1.001 snap stays. It costs nothing, and the parity fixtures set the
   level through `tagpu_zoom.txt`, not the wheel, so BAR's off-grid levels never reach a fixture.
 
-**The anchor needs no new mechanism, and this is why.** The lab lerps the centre c and the
-distance iz on straight lines from (c₀, iz₀) to (c₁, iz₁), where c₁ = c₀ + (a − c)(iz₀ − iz₁).
-At every point of that line, c(g) = c₀ + (a − c)(iz₀ − iz(g)). That is exactly the sum of
-`anchor_step`'s per-frame steps (a − c)(1/z_was − 1/z_now). So holding the notch's anchor on every
-frame *is* the lab's path, including a retarget mid-tween.
+**The anchor is the lab's model, kept incrementally.** The lab keeps a target pose (c₁, iz₁):
+a notch in at `a` moves it by `c₁ += (a − c)(iz_prev − iz_new)` on the target distances, a notch
+out leaves c₁, and the drawn pose is lerped from where it is to the target along the same `g` for
+both. For a single notch that line happens to equal holding the pointer's point on every frame;
+for a notch that cuts a tween it does not — holding the latest point would re-aim the cut
+tween's remaining displacement, and a notch whose drawn level turns downward would drop it. So
+the game keeps `R`, the world displacement the tween still owes, and each notch carries its own
+point through the ring:
 
-The one difference: when the pointer moves between two notches, the game holds the **latest**
-notch's point, while the lab aims each target at its own notch's point. A range clamp that cuts
-the step is handled as it is today: the residual is dropped, not banked.
+    at a notch   R = R·(1 − g_posted) + (in ? (a − c)(iz_prev − iz_new) : 0);  g_posted = 0
+    each frame   post R·(g − g_posted) through the eye delta;                   g_posted = g
+
+`R·(1 − g_posted)` is what the cut tween had not yet posted — the lab's `c₁ − c_drawn` — so the
+posts telescope to the sum of the notches' own terms and the final eye matches the lab's final
+centre, away from the clamp. The one difference is the clamp: the lab clamps the target centre
+at the notch, the game pre-clamps each frame's step per axis, and an axis the clamp cuts drops
+the rest of `R` and the residual on it rather than banking them.
 
 **C5 — the mirror, in the Vulkan world pass (G20b).**
 

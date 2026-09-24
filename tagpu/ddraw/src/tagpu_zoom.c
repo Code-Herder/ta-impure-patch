@@ -44,7 +44,7 @@ static int            g_mmInstalled;   /* tagpu_zoom_init() patched the engine  
 
 static void zlog(const char* m);
 static int  in_viewport(int x, int y, int L, int T, int W, int H);
-static void anchor_step(float zNow, int fromWheel, const TAGPU_PACKET* pk);
+static void anchor_step(int fromWheel, const TAGPU_PACKET* pk);
 static void predict(const TAGPU_PACKET* pk);
 static int  iround(float v);
 
@@ -60,62 +60,87 @@ static int  iround(float v);
    `1 + move * 0.007` with BAR's ScrollWheelSpeed of -20. One notch in is
    x0.86 on the distance and x1.163 on the level; one out is x1.14 and x0.877,
    so in-then-out lands on 1.020, not on 1. The factor is taken per MESSAGE,
-   as Recoil takes it per event, so a flick is the product of its notches
-   whatever number of them one frame happens to batch. The target distance is
-   clamped to [1/ZOOM_MAX, 1/ZOOM_MIN].
+   as Recoil takes it per event, and the target distance is clamped to
+   [1/ZOOM_MAX, 1/ZOOM_MIN] after each one, as the lab does.
 
-   THE TWEEN. 250 ms of the performance counter, counted from the notch, from
-   the level DRAWN when the notch is taken to the target, along
+   THE TWEEN. 250 ms of the performance counter, counted from the latest notch,
+   from the level DRAWN when the notch is taken to the target, along
    g = 1 - (1 - f)^4 applied to the distance (Recoil's CamTransitionMode 0
    with CamTimeExponent 4, an ease-out). A notch during a tween starts a new
    one from the drawn level toward the previous target times its factor. The
    length is the same at every frame rate; at 60 Hz a quarter of a notch lands
    on the first frame and four fifths of it by 83 ms.
 
-   THE POINTER'S POINT IS HELD BY THE ANCHOR, not by the tween. Recoil lerps
-   the view centre and the distance on straight lines, and the centre it
-   reaches is c0 + (a - c)(iz0 - iz): exactly the sum of anchor_step()'s
-   per-frame steps (a - c)(1/z_was - 1/z_now), so holding the notch's point
-   on every frame of the tween IS that straight line, a retarget included.
-   Zooming out holds the view centre (anchor_step steps only on the way in).
+   THE VIEW CENTRE TWEENS WITH THE SAME g, AND EACH NOTCH IN AIMS IT FROM ITS
+   OWN POINT. Recoil (and the lab, tascene-view.html) keeps a target pose —
+   centre and distance — and lerps the drawn pose to it. A notch in at screen
+   point a moves the target centre by (a - c)(iz_prev - iz_new), c the
+   viewport centre and iz_prev/iz_new the target distance before and after
+   that notch, which is what holds the world point under a at the target; a
+   notch out leaves the target centre where it is. The eye here is not a
+   target but a sum of deltas (anchor_step), so the same thing is kept as R,
+   the displacement the tween still owes:
 
-   ONE OWNER. The message thread only accumulates, into three words: the
-   notches' factor as a fixed-point LOG (so a product crosses the threads as
-   an integer sum), their raw delta for the log line, and the counter time of
-   the latest notch. The target, the tween and the clamp are the render
-   thread's, inside read_lever(), so the level has exactly one owner and no
-   float is shared between the threads. */
+       at a notch      R = R (1 - g_posted) + (in ? (a - c)(iz_prev - iz_new) : 0)
+                       and the tween restarts, g_posted = 0
+       every frame     post R (g - g_posted), g_posted = g
+
+   The first line is the lab's `c1 += ...` seen from the drawn centre: what is
+   left of the old tween's displacement, plus this notch's. Summed over a
+   gesture the posts telescope to the sum of the notches' own terms, so where
+   the eye ends depends only on the notches' points and targets, never on the
+   frame timing — the same final pose the lab computes, away from the clamp.
+
+   ONE OWNER, AND EVERY NOTCH KEEPS ITS OWN POINT. The message thread only
+   queues: one slot per message, holding its delta, the point it was aimed at
+   and the counter time, in a single-producer single-consumer ring (below).
+   The targets, the tween, R and the clamp are the render thread's, inside
+   read_lever(), so the level has exactly one owner and no float crosses the
+   threads. */
 #define NOTCH_PER_UNIT   0.14      /* per WHEEL_DELTA: Recoil's 0.007 x 20    */
 #define NOTCH_FLOOR      0.1       /* the smallest factor one message applies */
 #define TWEEN_US         250000.0  /* Recoil's wheel transition, 0.25 s       */
-#define LOGQ_UNIT        1048576.0 /* 2^20: one unit of log in the sum        */
-/* The sum saturates here: e^8 is far past the whole range (the level spans
-   e^3.47), so a saturated sum still clamps to the end of the range, and the
-   integer cannot overflow however many messages one frame collects. */
-#define LOGQ_CAP         (8L * 1048576L)
 
 #ifndef WHEEL_DELTA
 #define WHEEL_DELTA 120
 #endif
 
-static volatile LONG s_wheelLogQ;               /* sum of log(factor), message thread */
-static volatile LONG s_wheelAccum;              /* raw delta, for the log line       */
-static volatile LONG s_notchUs;                 /* counter time of the latest notch  */
-/* WHERE THE NOTCH WAS AIMED, packed x,y as two shorts in ONE aligned 32-bit
-   slot so the point cannot tear against itself — the pair is what the step
-   below is about, and half of one frame's pointer with half of another's would
-   be a point the player never aimed at. Message thread writes, render thread
-   reads. The notches and the point are two publishes, so they CAN tear against
-   each other; the bound is one frame of pointer travel times one notch of
-   1/z, which is sub-pixel, and a lock on the input path buys nothing for it. */
-static volatile LONG s_anchor;
-static volatile LONG s_anchorSet;
+/* THE NOTCH RING. The producer is tagpu_zoom_wheel(), which runs only inside
+   the window procedure — the fork's wndproc and the shield's delivery, both on
+   the window's owner thread, which is the only thread Windows runs a window
+   procedure on — and calls nothing that pumps messages, so it is one thread
+   and never re-entered. The consumer is the render thread (read_lever and the
+   two pins). THE ORDERING IS THE WHOLE SAFETY ARGUMENT: the producer writes a
+   slot and only then publishes `head` with an interlocked store (a full
+   fence), and never writes a slot while `head - tail == NOTCHQ`; the consumer
+   reads `head`, then the slots below it, and only then publishes `tail` with
+   an interlocked store. So a slot is read only after it is complete and
+   rewritten only after it has been read. The indices are free-running and
+   compared by unsigned difference, which a wrap does not disturb (NOTCHQ
+   divides 2^32). A full ring drops the notch and says so: 256 messages inside
+   one render frame is a stall, and by then the target has hit the end of the
+   range many times over. */
+#define NOTCHQ 256
+typedef struct {
+    LONG delta;                    /* the message's raw wheel delta            */
+    LONG xy;                       /* where it was aimed: x, y as two shorts   */
+    LONG us;                       /* qpc_us() when it was taken               */
+} NOTCH;
+static NOTCH         s_nq[NOTCHQ];
+static volatile LONG s_nqHead;                  /* written by the message thread only */
+static volatile LONG s_nqTail;                  /* written by the render thread only  */
+
 /* render thread only: the target and the drawn level, and the tween between */
 static float         s_wheelTgt = 1.0f;
 static float         s_wheelCur = 1.0f;
 static float         s_izFrom = 1.0f, s_izTo = 1.0f;
 static DWORD         s_tweenUs;                 /* the counter time it counts from   */
 static int           s_tweening;
+static double        s_tweenG = 1.0;            /* this frame's g; 1 when nothing tweens */
+static int           s_batch;                   /* notches were taken this frame     */
+static float         s_shiftX, s_shiftY;        /* ...and their own terms of R       */
+static float         s_remX, s_remY;            /* R: the displacement still owed    */
+static double        s_gPosted = 1.0;           /* the g already posted of R         */
 static LONG          s_wheelPend;               /* notches not yet logged            */
 static float         s_landMs = -1.0f;          /* the last tween's length, for the log */
 
@@ -132,26 +157,37 @@ static DWORD qpc_us(void)
                    (q.QuadPart % f.QuadPart) * 1000000LL / f.QuadPart);
 }
 
-/* One wheel message's factor on the distance, as the log the sum carries. */
-static LONG notch_logq(int delta)
+/* One wheel message's factor on the distance. */
+static double notch_factor(LONG delta)
 {
     double k = 1.0 - NOTCH_PER_UNIT * (double)delta / WHEEL_DELTA;
-    if (k < NOTCH_FLOOR) k = NOTCH_FLOOR;
-    return (LONG)floor(log(k) * LOGQ_UNIT + 0.5);
+    return k < NOTCH_FLOOR ? NOTCH_FLOOR : k;
 }
 
-/* Message thread: add one message's log to the sum, saturating. A CAS loop
-   because the saturation is what bounds the integer, and a plain add
-   could step past it. */
-static void add_logq(LONG q)
+/* Render thread: empty the ring without taking anything from it. The raw
+   delta thrown away, for the caller's log line. */
+static LONG wheel_discard(void)
 {
-    LONG was, now;
-    do {
-        was = s_wheelLogQ;
-        now = was + q;
-        if (now >  LOGQ_CAP) now =  LOGQ_CAP;
-        if (now < -LOGQ_CAP) now = -LOGQ_CAP;
-    } while (InterlockedCompareExchange(&s_wheelLogQ, now, was) != was);
+    LONG h = s_nqHead, t = s_nqTail, d = 0;
+    MemoryBarrier();                            /* head, then the slots under it */
+    for (; t != h; t++) d += s_nq[(ULONG)t % NOTCHQ].delta;
+    InterlockedExchange(&s_nqTail, t);          /* the slots are read: release them */
+    return d;
+}
+
+/* Render thread: the wheel at rest at level z — no tween, nothing owed, the
+   ring emptied. Returns the raw delta thrown away. */
+static LONG wheel_reset(float z)
+{
+    LONG dropped = wheel_discard();
+    s_wheelTgt = s_wheelCur = z;
+    s_tweening = 0;
+    s_tweenG = 1.0;
+    s_batch = 0;
+    s_remX = s_remY = 0.0f;
+    s_gPosted = 1.0;
+    s_wheelPend = 0;
+    return dropped;
 }
 
 /* Pin the wheel to a level without a tween, and throw away any notches that
@@ -159,11 +195,7 @@ static void add_logq(LONG q)
    when it goes away the wheel takes over from exactly where it left the view. */
 static void wheel_pin(float z)
 {
-    LONG dropped = InterlockedExchange(&s_wheelAccum, 0);
-    InterlockedExchange(&s_wheelLogQ, 0);
-    s_wheelTgt = s_wheelCur = z;
-    s_tweening = 0;
-    s_wheelPend = 0;
+    LONG dropped = wheel_reset(z);
     /* Say when the file is the reason the wheel did nothing. This is the only
        gate that swallows a notch silently — the other two report themselves
        from tagpu_zoom_wheel() — and it is the easiest to hit by accident, from
@@ -184,18 +216,24 @@ static void wheel_pin(float z)
     }
 }
 
-/* Fold in the notches since the last frame, and draw the tween at this
-   frame's time. */
+/* Take the notches since the last frame, in order, and draw the tween at this
+   frame's time. Leaves s_batch/s_shiftX/s_shiftY for anchor_step. */
 static float wheel_level(void)
 {
-    LONG  q = InterlockedExchange(&s_wheelLogQ, 0);
-    LONG  d = InterlockedExchange(&s_wheelAccum, 0);
+    LONG  h = s_nqHead, t = s_nqTail, d = 0, lastUs = 0;
     DWORD now = qpc_us();
+    float cx = (float)(int)s_vpL + (float)(int)s_vw * 0.5f;
+    float cy = (float)(int)s_vpT + (float)(int)s_vh * 0.5f;
+    int   n = 0;
 
-    if (q) {
-        double iz = (1.0 / s_wheelTgt) * exp((double)q / LOGQ_UNIT);
+    MemoryBarrier();                            /* head, then the slots under it */
+    s_batch = 0;
+    s_shiftX = s_shiftY = 0.0f;
+    for (; t != h; t++) {
+        const NOTCH* e = &s_nq[(ULONG)t % NOTCHQ];
+        double izPrev = 1.0 / (double)s_wheelTgt;
+        double iz = izPrev * notch_factor(e->delta);
         float  z;
-        LONG   back;
         if (iz < 1.0 / ZOOM_MAX) iz = 1.0 / ZOOM_MAX;
         if (iz > 1.0 / ZOOM_MIN) iz = 1.0 / ZOOM_MIN;
         z = (float)(1.0 / iz);
@@ -207,17 +245,36 @@ static float wheel_level(void)
            sequence that happens to land inside the band. */
         if (z > 0.999f && z < 1.001f) z = 1.0f;
         s_wheelTgt = z;
+        iz = 1.0 / (double)z;
+        /* a notch IN holds the point it was aimed at; the producer took it
+           only inside the true viewport, so it is a legal anchor */
+        if (iz < izPrev) {
+            float ax = (float)(int)(short)(e->xy & 0xFFFF);
+            float ay = (float)(int)(short)((e->xy >> 16) & 0xFFFF);
+            s_shiftX += (ax - cx) * (float)(izPrev - iz);
+            s_shiftY += (ay - cy) * (float)(izPrev - iz);
+        }
+        d += e->delta;
+        lastUs = e->us;
+        n++;
+    }
+    InterlockedExchange(&s_nqTail, t);          /* the slots are read: release them */
+
+    if (n) {
+        LONG back;
+        s_batch  = 1;
         s_izFrom = 1.0f / s_wheelCur;
         s_izTo   = 1.0f / s_wheelTgt;
         /* The tween counts from the latest notch, not from this frame: the
-           stamp is at most a frame old. A stamp read AFTER `now` (the message
-           thread stamped a newer notch between the two reads) starts it now. */
-        back = (LONG)(now - (DWORD)s_notchUs);
+           stamp is at most a frame old. A stamp AFTER `now` (taken between
+           the clock read and the ring read) starts it now. */
+        back = (LONG)(now - (DWORD)lastUs);
         s_tweenUs = back > 0 ? now - (DWORD)back : now;
-        s_tweening = (s_wheelCur != s_wheelTgt);
+        /* A tween even when the level does not move (a notch at the end of
+           the range): R may still owe the displacement of the tween it cut,
+           and it is paid out along this one rather than in one frame. */
+        s_tweening = 1;
         s_landMs = -1.0f;
-    }
-    if (q || d) {
         s_wheelPend += d;
     } else if (s_wheelPend && !s_tweening) {
         /* ONE line per gesture, when it lands, not one per frame that carried
@@ -237,6 +294,7 @@ static float wheel_level(void)
         zlog(b);
     }
 
+    s_tweenG = 1.0;
     if (s_tweening) {
         LONG   el = (LONG)(now - s_tweenUs);
         double f  = el < -1000000 ? 1.0 : el < 0 ? 0.0 : (double)el / TWEEN_US;
@@ -250,6 +308,7 @@ static float wheel_level(void)
             double r = 1.0 - f, g = 1.0 - r * r * r * r;
             double iz = (double)s_izFrom + ((double)s_izTo - (double)s_izFrom) * g;
             s_wheelCur = (float)(1.0 / iz);
+            s_tweenG = g;
         }
     }
     return s_wheelCur;
@@ -285,13 +344,9 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
             zlog("zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not "
                  "installed, so a zoomed world would name the point under the "
                  "SCREEN position. Arm tagpu_zoom.on (or tagpu_vpwide.on).");
-        InterlockedExchange(&s_wheelAccum, 0);
-        InterlockedExchange(&s_wheelLogQ, 0);
-        s_wheelTgt = s_wheelCur = 1.0f;
-        s_tweening = 0;
-        s_wheelPend = 0;
+        wheel_reset(1.0f);
         s_zoom = 1.0f;
-        anchor_step(1.0f, 0, pk);
+        anchor_step(0, pk);
         predict(pk);
         s_lever = 1.0f;
         return 1.0f;
@@ -328,7 +383,7 @@ float tagpu_zoom_read_lever(const TAGPU_PACKET* pk)
        pass reads the eye, so the zoom and the eye it is drawn with change
        together. Only the wheel anchors — the file lever has no gesture behind
        it and every zoom fixture drives it. */
-    anchor_step(s_zoom, fromWheel, pk);
+    anchor_step(fromWheel, pk);
     predict(pk);
     s_lever = s_zoom;
     return s_zoom;
@@ -396,20 +451,26 @@ int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)
 
     delta = (int)(short)HIWORD(wparam);
     if (!delta) return 0;
-    /* AIM AND STAMP FIRST, THEN THE NOTCH. The point and the time are
-       published before the factor so a render thread that sees the notch has,
-       by then, a point and a stamp at least as new as it is — the tear can
-       only be a point or a stamp NEWER than its notch, which is the harmless
-       direction (it anchors where the pointer is now, and the tween starts a
-       frame late at most). The gate above has already proved this point is
-       inside the true viewport, which is what makes it a legal anchor. */
-    InterlockedExchange(&s_anchor,
-                        (LONG)(((unsigned)(unsigned short)y << 16) |
-                               (unsigned)(unsigned short)x));
-    InterlockedExchange(&s_anchorSet, 1);
-    InterlockedExchange(&s_notchUs, (LONG)qpc_us());
-    add_logq(notch_logq(delta));
-    InterlockedExchangeAdd(&s_wheelAccum, (LONG)delta);
+    /* ONE SLOT PER MESSAGE, its point with it: the gate above has already
+       proved this point is inside the true viewport, which is what makes it a
+       legal anchor. The slot is written first and published after — see "the
+       notch ring" for the ordering. */
+    {
+        LONG   h = s_nqHead;                    /* this thread's own index */
+        NOTCH* e;
+        if ((ULONG)(h - s_nqTail) >= NOTCHQ) {
+            if (now - s_gripeTick > 1000) {
+                s_gripeTick = now;
+                zlog("zoom: wheel notch dropped - the ring is full (the render thread is not taking them)");
+            }
+            return 1;
+        }
+        e = &s_nq[(ULONG)h % NOTCHQ];
+        e->delta = (LONG)delta;
+        e->xy    = (LONG)(((unsigned)(unsigned short)y << 16) | (unsigned)(unsigned short)x);
+        e->us    = (LONG)qpc_us();
+        InterlockedExchange(&s_nqHead, h + 1);  /* publish: the slot is complete */
+    }
     return 1;
 }
 
@@ -1389,7 +1450,11 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
 
    applied to the eye. THE DELTA IS EXACT, not an approximation of one: it is
    the difference of two exact solutions, so the constants (the anchored world
-   point, vw/2) cancel and never appear.
+   point, vw/2) cancel and never appear. It is taken per NOTCH, on the notch's
+   own point and on the TARGET distances before and after it, and paid out
+   along the tween's ease as R ("the wheel") — so two notches aimed at two
+   points each hold their own, and a notch that cuts a tween cannot re-aim
+   the displacement the cut tween still owed.
 
    WHY A DELTA AND NOT A SOLVED POSITION. The absolute form — keep the anchored
    world point W* and set the eye from it every frame — is algebraically the
@@ -1420,16 +1485,16 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    the packet like any other engine camera move.
 
    TWO PROPERTIES FALL OUT OF THE DELTA FORM, and the tests lean on both.
-   With the pointer at the viewport centre `a - c` is zero, so the eye never
-   moves and the behaviour is that of a centre-anchored zoom, bit for bit —
-   that is the A/B control, and it is why this needs no lever. The steps
-   TELESCOPE, so the total displacement over a zoom-in is
-   `(a - c)(1/z_start - 1/z_end)` however many frames the tween took and
-   whatever the frame timing was — an exact oracle on `main+0x1431F` with
-   `tacli peek`. That sum is also Recoil's straight line from the drawn centre
-   to the notch's target centre, which is why the tween needs no anchor of its
-   own (see "the wheel"). A zoom-out adds nothing, so in-then-out leaves the
-   eye where the zoom-in put it.
+   With the pointer at the viewport centre `a - c` is zero, so R stays exactly
+   zero, the eye never moves and the behaviour is that of a centre-anchored
+   zoom, bit for bit — that is the A/B control, and it is why this needs no
+   lever. The posts TELESCOPE, so the total displacement over a gesture is
+   the sum over its notches in of `(a_i - c)(iz_before_i - iz_after_i)` on the
+   targets, however many frames the tweens took and whatever the frame timing
+   was — an exact oracle on `main+0x1431F` with `tacli peek`, and the same
+   final pose the lab reaches. A notch out adds nothing of its own: one that
+   cuts a zoom-in's tween lets the zoom-in's displacement finish, and
+   in-then-out leaves the eye where the zoom-in put it.
 
    THE ROUNDING RESIDUAL IS CARRIED; A REFUSED DELTA IS NOT. The eye is an
    integer in world px, so `d` is split into an integer part and a remainder
@@ -1484,17 +1549,17 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    and the zoom composes with the next one — so nothing fights and nothing
    churns. */
 
-/* The level the eye was last stepped at, and the sub-world-pixel carry. Render
-   thread only: the same thread that owns the level itself. */
-static float s_zStep = 1.0f;
+/* The sub-world-pixel carry. Render thread only: the same thread that owns
+   the level itself. */
 static float s_residX, s_residY;
 
 /* THE CARRY'S INVARIANT, kept at every exit that does not step the eye. A
    frame that moves the eye leaves at most half a world pixel behind, by
    construction, so at rest `|resid| <= 0.5` and anything above it is
    displacement that was owed and never taken — which nothing else would ever
-   spend (every later frame returns at `zNow == s_zStep`) until the next notch
-   anywhere on the map discharged it in one frame as a silent camera jump. */
+   spend (every later frame at rest returns before stepping) until the next
+   notch anywhere on the map discharged it in one frame as a silent camera
+   jump. */
 static void drop_claim(void)
 {
     if (s_residX > 0.5f || s_residX < -0.5f) s_residX = 0.0f;
@@ -1521,83 +1586,82 @@ static int anchor_allowed(void)
 }
 
 /* Render thread, once a frame, from read_lever() and BEFORE any pass reads the
-   eye. `fromWheel` is false while the file lever is in force: it changes z with
-   no gesture behind it and every zoom fixture drives it, so it must not move
-   the camera. */
-static void anchor_step(float zNow, int fromWheel, const TAGPU_PACKET* pk)
+   eye, after wheel_level() has taken this frame's notches. `fromWheel` is false
+   while the file lever is in force: it changes z with no gesture behind it and
+   every zoom fixture drives it, so it must not move the camera (the pin has
+   already zeroed R). */
+static void anchor_step(int fromWheel, const TAGPU_PACKET* pk)
 {
-    LONG  a;
-    float ax, ay, cx, cy, k;
-    int   nx, ny, loX, hiX, loY, hiY, px, py, qx, qy, moved;
+    double g = s_tweenG, dg;
+    int    wantX, wantY, nx, ny, loX, hiX, loY, hiY, px, py, qx, qy, cutX = 0, cutY = 0;
 
-    /* Whatever happens below, the level the NEXT step measures from is this
-       one. A frame that declined to move the eye must not leave its change
-       banked for a later frame to apply in one jump. */
-    if (zNow == s_zStep) {                       /* the common case: no gesture */
-        drop_claim();                            /* no gesture, no debt */
+    /* A NOTCH: what the tween it cut had not posted yet, plus the notches'
+       own terms ("the wheel"). The new tween starts at g = 0. */
+    if (s_batch) {
+        s_remX = s_remX * (float)(1.0 - s_gPosted) + s_shiftX;
+        s_remY = s_remY * (float)(1.0 - s_gPosted) + s_shiftY;
+        s_gPosted = 0.0;
+    }
+    /* NOTHING OWED — the common case, and every zoom-out that cut no zoom-in.
+       Exactly zero, not "small": a notch aimed at the viewport centre adds
+       0 * k, so the centred gesture never reaches the lines below, which is
+       what makes the A/B control structural. */
+    if (s_remX == 0.0f && s_remY == 0.0f) {
+        s_gPosted = g;
+        drop_claim();
         return;
     }
-    {
-        float zWas = s_zStep;
-        s_zStep = zNow;
-
-        /* ZOOM-OUT NEVER ANCHORS: the camera pulls straight back, and the
-           view centre (eye + W/2) is the point that holds. A carry from the
-           way in is dropped with it: it is at most half a world pixel. */
-        if (zNow < zWas) { s_residX = s_residY = 0.0f; return; }
-        if (!fromWheel || !s_anchorSet || !anchor_allowed() ||
-            zWas <= 0.05f || zNow <= 0.05f) { s_residX = s_residY = 0.0f; return; }
-        if ((int)s_vw <= 0 || (int)s_vh <= 0) { s_residX = s_residY = 0.0f; return; }
-        /* no in-game packet: no eye to step from, and no world being drawn */
-        if (!pk || !pk->in_game) { s_residX = s_residY = 0.0f; return; }
-
-        a  = s_anchor;
-        ax = (float)(int)(short)(a & 0xFFFF);
-        ay = (float)(int)(short)((a >> 16) & 0xFFFF);
-        cx = (float)(int)s_vpL + (float)(int)s_vw * 0.5f;
-        cy = (float)(int)s_vpT + (float)(int)s_vh * 0.5f;
-
-        k  = 1.0f / zWas - 1.0f / zNow;
-        s_residX += (ax - cx) * k;
-        s_residY += (ay - cy) * k;
+    /* No eye to step, or a camera something else is driving: the gesture's
+       displacement is dropped, not banked for a later frame to land as a jump. */
+    if (!fromWheel || !anchor_allowed() || (int)s_vw <= 0 || (int)s_vh <= 0 ||
+        !pk || !pk->in_game) {
+        s_remX = s_remY = 0.0f;
+        s_residX = s_residY = 0.0f;
+        s_gPosted = g;
+        return;
     }
-    nx = iround(s_residX);
-    ny = iround(s_residY);
-    /* Sub-pixel: carried, not lost. This is NOT what keeps the centred-pointer
-       case honest — that is the `ax == cx && ay == cy` test below, because
-       `nx` is the accumulated residual and a centred gesture can still find a
-       whole pixel sitting in it. */
-    if (!nx && !ny) { drop_claim(); return; }
+
+    /* this frame's share of R, into the carry */
+    dg = g - s_gPosted;
+    s_gPosted = g;
+    s_residX += s_remX * (float)dg;
+    s_residY += s_remY * (float)dg;
+    /* AN AXIS THE GESTURE OWES NOTHING ON IS NEVER STEPPED. `resid` carries
+       the last gesture's rounding, and a carry at exactly -0.5 rounds to -1
+       under iround with nothing feeding it: without this, a notch whose
+       point is level with the centre would still step the eye a pixel along
+       that axis (and release the follow). */
+    wantX = s_remX != 0.0f;
+    wantY = s_remY != 0.0f;
+    if (g >= 1.0) s_remX = s_remY = 0.0f;           /* the tween has landed: all posted */
+    nx = wantX ? iround(s_residX) : 0;
+    ny = wantY ? iround(s_residY) : 0;
+    if (!nx && !ny) return;                         /* sub-pixel: carried, not lost */
 
     /* THE RANGE FIRST, AND NOTHING IS POSTED WITHOUT ONE — from the packet's
        copy of the map size, the true viewport and the range the game thread
        chose for that draw. A frame whose packet carries no sane range (a
-       level change with the view still live) posts nothing and keeps nothing:
-       an unclamped step would otherwise wait in the sum for the next sane
-       frame and land as one jump. */
+       level change with the view still live) posts nothing and keeps no more
+       than the carry: an unclamped step would otherwise wait in the sum for
+       the next sane frame and land as one jump. */
     if (!range_pk(pk, &loX, &hiX, &loY, &hiY)) { drop_claim(); return; }
-    /* A GESTURE THAT ASKS FOR NO DISPLACEMENT NEVER TAKES THE CAMERA, and
-       this is the test that makes the A/B control structural instead of
-       probable. `nx`/`ny` are the ACCUMULATED residual, so the pointer being
-       on the viewport centre is not on its own enough: `iround` rounds half
-       away from zero, and a debit leaves the remainder in the CLOSED interval
-       [-0.5, +0.5], whose -0.5 endpoint is the common one — there `nx` is -1
-       for ever with nothing feeding it, and a centred wheel would step a pixel
-       and release the follow. Asking what THIS gesture is owed closes it by
-       construction rather than by how often the float lands on a half. */
-    if (ax == cx && ay == cy) return;
 
     /* the step, taken against the eye this frame is drawn from — the packet's
        plus what is already posted and unacknowledged — and pre-clamped into
-       the range; refused at a map edge, the residual is dropped rather than
-       banked against the way back out */
+       the range PER AXIS. An axis the clamp cuts drops what the gesture still
+       owes on it, residual included, rather than banking it against the way
+       back out; the other axis carries on. */
     px = pk->eye[0] + (s_cumX - pk->cmd_ack_dx);
     py = pk->eye[1] + (s_cumY - pk->cmd_ack_dy);
     qx = px + nx; qy = py + ny;
-    moved = clamp_pair(&qx, &qy, loX, hiX, loY, hiY);
+    if      (qx < loX) { qx = loX; cutX = 1; }
+    else if (qx > hiX) { qx = hiX; cutX = 1; }
+    if      (qy < loY) { qy = loY; cutY = 1; }
+    else if (qy > hiY) { qy = hiY; cutY = 1; }
     s_residX -= (float)nx;
     s_residY -= (float)ny;
-    if (moved) s_residX = s_residY = 0.0f;
+    if (cutX) { s_remX = 0.0f; s_residX = 0.0f; }
+    if (cutY) { s_remY = 0.0f; s_residY = 0.0f; }
     s_cumX += qx - px;
     s_cumY += qy - py;
 }
@@ -1620,6 +1684,7 @@ static void predict(const TAGPU_PACKET* pk)
         s_epochSeen = pk->cmd_epoch;
         s_cumX = s_cumY = 0; s_ackX = s_ackY = 0;
         s_residX = s_residY = 0.0f;
+        s_remX = s_remY = 0.0f;
     }
     if (!pk->in_game) return;
     s_ackX = pk->cmd_ack_dx; s_ackY = pk->cmd_ack_dy;

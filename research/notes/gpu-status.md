@@ -386,11 +386,15 @@ a bare `DefWindowProcA` tail call at `0x4B5FA8`. Nothing had to be taken away fr
 arrive at (`wndproc.c`'s tail for hardware, the shield's `to_game` for injected; the third,
 `wndproc.c`'s `WM_NCHITTEST` arm, carries no wheel) and consumes it only over a
 live world viewport, so the menus cannot be wheeled and a future scrollable list keeps its
-wheel. It does one thing on the message thread — `InterlockedExchangeAdd` the raw delta — and
-the level itself still moves in exactly one place, `tagpu_zoom_read_lever()` on the render
-thread. **The notch is BAR's**: each one multiplies the target *distance* `iz = 1/z` by
+wheel. It does one thing on the message thread — it queues the message as one slot of a
+single-producer single-consumer ring: its delta, the point it was aimed at and its counter time
+(the slot is written, then the head published with an interlocked store; the render thread
+reads the head, then the slots, then publishes the tail) — and the level itself still moves in
+exactly one place, `tagpu_zoom_read_lever()` on the render thread, which takes the slots in order.
+**The notch is BAR's**: each one multiplies the target *distance* `iz = 1/z` by
 `max(0.1, 1 − 0.14 n)`, `n` = delta / `WHEEL_DELTA` (Recoil's `ScrollWheelSpeed −20 × 0.007`), so
-×1.163 in and ×0.877 out, and the target is clamped to `[1/8, 4]` in `iz` — 0.25..8 in `z`.
+×1.163 in and ×0.877 out, and the target is clamped to `[1/8, 4]` in `iz` — 0.25..8 in `z` —
+after each message, as the lab does.
 **The ease is BAR's too**: a 250 ms tween on the QPC clock from the level currently drawn to the
 target, `g = 1 − (1 − f)⁴` applied to `iz`, starting at the notch's own timestamp, so its length
 is the same at any frame rate; a notch mid-tween retargets from the drawn level toward the
@@ -401,10 +405,18 @@ test for by equality. At the end of a gesture, once the tween has landed, the lo
 the wheel is *pinned* to it, which is what makes deleting the file a handover rather than a
 jump.
 
-A notch at the viewport centre moves no eye at all, and **a notch out moves none wherever it
-is aimed**: zoom-out pulls straight back from the view centre, as BAR's does
-(`CamSpringZoomOutFromMousePos = false`). **A notch in holds the world point under the pointer
-(§2.3e)**, and that is a camera move, not a transient bias (§3.1). **MEASURED 2026-09-23**
+A notch at the viewport centre moves no eye at all, and **a notch out adds no displacement
+wherever it is aimed**: zoom-out pulls straight back from the view centre, as BAR's does
+(`CamSpringZoomOutFromMousePos = false`). **A notch in holds the world point under its own
+pointer position (§2.3e)**, and that is a camera move, not a transient bias (§3.1). **The view
+centre tweens with the same `g` as the distance, and this is the lab's model**
+(`tascene-view.html`, Recoil's target pose): a notch in at `a` moves the target centre by
+`(a − c)(iz_prev − iz_new)` on the *target* distances, a notch out leaves it, and the drawn
+centre is lerped to it. The game's eye is a sum of deltas rather than a pose, so it keeps `R`, the
+displacement the tween still owes: at a notch `R = R·(1 − g_posted) + (in ? (a − c)(iz_prev −
+iz_new) : 0)` and the tween restarts; every frame posts `R·(g − g_posted)`. So a notch that cuts
+a tween neither re-aims nor drops what the cut tween still owed, and where the eye ends depends
+only on the notches' points and targets, never on the frame timing. **MEASURED 2026-09-23**
 (G20a, 1024x768, the play defaults, `selbox-facings` on Two Continents, eye held at
 `(3000,3000)` and released, the level set through the file and the file removed; two other game
 instances were running on the GPU at the time):
@@ -531,10 +543,14 @@ answer. A poll that tears is a poll that hands the engine back the frame.
 
 ### 2.3e Zoom to the cursor (`tagpu_zoom.c`, no arm file)
 
-**Only a zoom IN anchors to the pointer [G20a, 2026-09-23].** `anchor_step()` steps the eye only
-when the level rises; a zoom out pulls straight back from the view centre, as BAR's camera does.
-The measurements below that zoom out at an off-centre point (the "zoom out" row, the −4 gestures)
-are the 2026-09-10 rule's; §2.3 carries the current figures.
+**Only a notch IN anchors, each at its own point, and the displacement is paid along the tween
+(§2.3, G20a).** `wheel_level()` takes each notch's term `(a − c)(iz_prev − iz_new)` on the target
+distances into `R`, and `anchor_step()` posts `R·(g − g_posted)` a frame, pre-clamped per axis (an
+axis the clamp cuts drops what it still owes). A notch out adds nothing and pulls straight back
+from the view centre, as BAR's camera does. The derivation below — `d` across a change in `z` —
+is the same arithmetic taken per notch rather than per frame. The measurements below that zoom
+out at an off-centre point (the "zoom out" row, the −4 gestures) are the 2026-09-10 rule's; §2.3
+carries the current figures.
 
 **[CORRECTED 2026-09-12, frame packet landing 2 — §2.17 is the current mechanism.]** The rule,
 the arithmetic and the three properties below are unchanged and were re-measured on the landing
@@ -615,8 +631,8 @@ Three consequences, all deliberate:
   a paused game still services the request.
 * **The banked debt dies with the claim.** A gesture that ends without ever getting the camera
   voids its residual (`drop_claim()`), and so does every exit that gives the claim up. Without that
-  the bank survives the gesture — nothing else spends it, since every later frame returns at
-  `zNow == s_zStep` — and the next notch anywhere on the map discharges it in one frame as a silent
+  the bank survives the gesture — nothing else spends it, since every frame at rest returns
+  before stepping — and the next notch anywhere on the map discharges it in one frame as a silent
   camera jump. It is also what kept the centre-aimed control honest: `nx` tests the *accumulated*
   residual, not this frame's contribution, so a banked value would make a centred wheel step and
   release. [All four found by the landing review, 2026-09-10.]
