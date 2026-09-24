@@ -3,10 +3,13 @@
 ## Summary
 
 Nine of the engine limits TADR raises come into our stack, as one module over five landings. The
-owner decided every choice below on 2026-09-23 **[DECIDED]**. **Landings 1 and 2 are done**
-(2026-09-23): the effect pools, the module, the failure report and the stock-limits build; then the
-unit limit, both `maxunits` keys, the restriction menu's sentinel, the pathfinder's budget and the
-render design point. The module is
+owner decided every choice below on 2026-09-23 **[DECIDED]**. **All five landings are done**
+(2026-09-23 to 2026-09-24): the effect pools, the module, the failure report and the stock-limits
+build; the unit limit, both `maxunits` keys, the restriction menu's sentinel, the pathfinder's
+budget and the render design point; the particles; sounds and the composite scratch frame; and ten
+players in one network game. **A sixth landing goes beyond TADR**: the wreck pool, raised and made
+safe when full, because the raised unit limit fills it — [Fixed beyond TADR](#fixed-beyond-tadr).
+The module is
 `tagpu_limits.h` and the limits block of `tagpu_patches.c`, which keeps it out of the thread-split
 allow-list; how it works is [gpu-status §2.6b](../gpu-status.md). The disassembly behind each fact is in [the evidence pass](limits-evidence.md),
 and the rules shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
@@ -33,11 +36,13 @@ Three findings shaped the plan:
 | particles | 400 per layer, 1000 objects | 20 480 per layer, 204 800 objects, **checked against** the tier-1 battle | visual (C-runtime `rand` only) | L3 |
 | sounds (`MixingBuffers`) | 8 | **32**, a store key (8, 16, 24 or 32) | audio; a registry value, not a patch; the engine tracks 32 | L4 |
 | composite scratch frame | 600² | 1280² | the unit bake's shared scratch, written on every lane and presented only by GDI's | L4 |
+| wreck records | 2048 | **8192** — not a TADR value | every 3DO wreck, and every GAF feature playing its death or reclaim sequence; **simulation**: a full pool refuses corpses | L6 |
 
 **Deferred to their own plan:** unit-type IDs (512 → 16 000) and weapon IDs (256 → 4096). See
 [the overview](overview.md#the-groups).
 
-**The values** are TADR's, with two exceptions. Units are set to 1500 as both default and ceiling:
+**The values** are TADR's, with two exceptions, and one limit TADR does not raise at all (the wreck
+pool, below). Units are set to 1500 as both default and ceiling:
 the owner's call ("go all in"), and TADR's shipped `totala.ini` value. Sounds stop at 32, not
 TADR's 128, because the engine's table of playing sounds has 32 slots and past it a sound plays
 untracked (landing 4). Particles were measured
@@ -45,6 +50,40 @@ before they were set, because TADR's 20 480 per layer is a 51× jump that nobody
 our frame packet; tier 1 put one layer at 13 529 objects, so TADR's value stands (landing 3).
 TADR's `EngineLimits.cpp` (the four pools) is one month old (`586d71a`, 2026-08-22); its
 `LimitCrack.cpp` (units, pathfinding, particles, composite) dates from 2014.
+
+## Fixed beyond TADR
+
+Issues this port found and fixed that TADR does not. Each one is an engine defect that the raised
+limits made easy to reach; TADR, which raises the same limits, carries it unchanged (checked
+against its source as of `dcff5dd`, 2026-09-20).
+
+| Issue | What a player saw | Fix | Landing |
+|---|---|---|---|
+| **A reclaimed feature is paid for and left standing** | In a big battle, reclaiming a building on Town & Country paid its metal but left the building, and it could be reclaimed again, as often as the builder repeated it. A destroyed building did not change either. | The wreck pool is raised from 2048 to 8192 records, and when it is full the feature is swapped at once instead of not at all | L6 |
+
+**The defect** (the engine map, *The wreck pool*). The engine keeps 2048 wreck records for a
+level. A 3DO wreck (every unit's corpse, every heap) holds one for as long as it lies there, and a
+GAF feature such as a Town & Country building holds one while it plays its reclaim or collapse
+sequence. `FeatureDie 0x423550` starts that sequence; with no free record it returns having done
+nothing. Its callers have already acted: the reclaim `0x4237D0` has paid the feature's metal, and
+in a network game it tells every peer, whose own `FeatureDie` does the same nothing. Stock needs
+2048 corpses on the map at once to get there; ten players at 1500 units do it in the first minutes
+of a battle. In the owner's ten-player game the pool was full on each of the three peers read.
+
+**The fix, in two parts.**
+
+- **Always on, in both builds: a full pool swaps the feature now.** The pool-full branch joins the
+  engine's own path for a feature with no sequence (`0x4236EF`), so a feature that is paid for is
+  always replaced by its successor — the scar for a reclaim, the next damage stage for a collapse.
+  The one thing a full pool still costs is the sequence, and with it the immunity it gives: while a
+  collapse plays, the cell is marked and further hits are ignored, so a weapon that hits in frame
+  after frame (the D-gun) takes a building one stage per sequence. Without the sequence it can take
+  it through several stages at once. Stock with a full pool cannot destroy the building at all.
+- **Raised builds: 8192 records.** Not a TADR value; TADR leaves the pool at 2048. The engine's own
+  ceiling is 32 767 (its list links are signed 16-bit), and 8192 is what the frame packet's wreck
+  table holds inside its existing 20 MB reserve at stock's worst wreck model (19 pieces), so the
+  raise costs no address space. What a full pool refuses that the fix cannot give back is new
+  corpses: `0x423C50` creates no 3DO feature without a record, so a unit dies without leaving one.
 
 ## Decisions
 
@@ -258,6 +297,31 @@ its own 1499 units, the 1500 cap with its commander. What it proved, by running 
   one that way; tier 2 ran with commander death off on every peer (`ActiveCommanderDeath`,
   `main+0x37EF6`, read as 0 on all ten).
 
+**Landing 6 — the wreck pool, beyond TADR. Done 2026-09-24.** Eighty-six sites now, and one
+engine fix in the always-on group ([Fixed beyond TADR](#fixed-beyond-tadr)). Every test fills the
+pool for real, with corpses, rather than faking an empty free list: scenario applies of 1024
+one-cell `armflea_dead` each, on cells no map feature touches, until the engine refuses. What it
+proved, by running it:
+
+- **The pool is the size we say.** The previous build's pool took exactly **2048** corpses and
+  refused the 2049th; this build's took exactly **8192** and refused all of the ninth thousand. A
+  census of the whole pool, read in one pass and walked offline, found the free list and the two
+  in-use lists covering all 8192 records exactly once.
+- **The bug, reproduced on the previous build.** With the pool full, a commander reclaimed
+  `Building15` (2900 metal): the player's total metal produced rose by 2900 and the building stayed.
+  A second reclaim of the same building paid 2900 again.
+- **The fix, on this build**, same procedure: paid once, and the cell held `Buildingscar15` (not
+  reclaimable) with no record attached while the free list stayed empty — the immediate swap. A
+  second reclaim paid nothing.
+- **Over the network.** Two peers, both pools full: the host's reclaim swapped the building on
+  both, the joiner through the event the host sends; only the host was paid.
+- **With free records nothing changed.** On a fresh game the reclaim still ended in the scar, and a
+  D-gun shot at a second `Building15` marked its cell (a record held) for 1.2 s, then left
+  `Building15b`, as stock does. With the pool full the same shot left the scar: the chained stages
+  described in [Fixed beyond TADR](#fixed-beyond-tadr).
+- **Our side follows it.** With 8192 corpses on the map, the packet carried 3729 wrecks in one
+  frame with no record index refused and no table truncated.
+
 L1 came first because it forced the module, the report and the packet changes into existence.
 L2 comes before L3 because the particle measurement needs the raised unit limit.
 
@@ -272,6 +336,9 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
 - How far a remote unit lags its owner at stock's 500 a player: tier 2's up-to-40-ticks at 1500 is
   measured, stock's is not, so whether the raise stretches the update interval is open.
 - How the game thread's frame at 6000 units splits between the engine and our publisher.
+- Whether peers can disagree about a feature when one pool is full and another is not. Corpses are
+  made on every peer from the synced deaths, so the pools should fill together, but a sequence
+  holds its record for its own length on each peer. A full pool still refuses corpses (landing 6).
 
 ## Corrections this plan made
 

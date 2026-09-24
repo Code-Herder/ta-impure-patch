@@ -366,6 +366,27 @@ finds no victim, so a value below 2 is unsafe too. TADR's 128 and the "≥ 33 = 
 community patch's notes both describe that untracked play. The store key is 32 by default and
 one of 8, 16, 24 or 32.
 
+## 12. Wreck records 2048 → 8192 (not a TADR limit; landing 6)
+
+**DIS.** TADR does not touch this pool; no site of its source (`dcff5dd`) is near `0x421F20` or
+`0x423550`. The pool at `main+0x1420B` is allocated for a level by `0x421F20`: `push 0x18000`
+(`0x421F2A`), `mov ecx,0x6000` for the clear (`0x421F41`), the free-list loop's end `cmp eax,0x18000`
+(`0x421F7A`) and the last record's next link at `[eax+0x17FD0]` (`0x421F97`). Every allocator's
+"no record" is the count itself: `0x4232A0` (`0x4232B9`), the burn start `0x4233A0` (`0x42340E`,
+`0x42343A`), `FeatureDie 0x423550` (`0x42361E`, `0x42364D`) and `SpawnFeatureOnMap 0x423C50`
+(`0x423DBA`, `0x423DE1`). The links are signed 16-bit (`0x4232F0`), so the ceiling is 32 767.
+Nothing else sizes the pool; the engine map's *The wreck pool* has the sweep.
+
+**SIM.** A record is what lets a corpse exist and a GAF feature die or be reclaimed properly, so the
+size is simulation state. An empty pool refuses corpses and, in stock, leaves a paid-for feature
+standing — the defect the always-on fix at `0x423651` closes (the engine map, *Engine defects we
+patch*).
+
+**MEASURED.** The previous build's pool took exactly 2048 one-cell corpses, this build's exactly
+8192 (scenario applies until the engine refused). 8192 is what the frame packet's wreck table holds
+inside its 20 MB reserve at stock's worst wreck model, 19 pieces (`armscab_dead`; 265 of the 285
+3DO features are one piece): the raise costs no address space.
+
 ---
 
 ## Safety review of TADR's approach (against *Fixes must be safe by construction*)
@@ -418,6 +439,7 @@ one of 8, 16, 24 or 32.
 | weapon IDs 256→4096 | **SIM + wire** | load-time hook | 3 hooks + chat-hijack packet | ID < 0 unguarded (stock) | `OFF_WEAPON0` users; `CRC_weapons` does not cover IDs | needs every peer; off in mainline |
 | composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **four writers never compare with the allocation** (the build-state copy, the frame copy, the shadow build, the 2× bake) | none | 3.28 MB a level |
 | MixingBuffers 8→128 | audio | per process (registry load) | none (launcher writes REG) | **the engine tracks 32; past it a sound plays untracked** | the impure.cfg store's loader observer, bounded to 32 | none |
+| wreck records 2048→8192 (**not TADR's**) | **SIM**: corpses, and features dying or reclaimed | per level (`0x421F20`) | none — TADR leaves it | — | `WR_COUNT` ×2, `TAGPU_PK_MAX_WRECKS`, `PK_RESERVE`, `TAGPU_PD_MAXHAND` | a full pool refuses corpses; stock's paid-for feature left standing is fixed at `0x423651` (§12) |
 
 **Notes this pass corrected**, both in landing 1: `tagpu_packet_pub.c` said "twelve more" `0x190`
 sites where there are twenty, and the engine map now records that the explosion cap and the debris

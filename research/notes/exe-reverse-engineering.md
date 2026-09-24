@@ -273,9 +273,11 @@ outside the apply frame.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..24]
 
-Three places where the retail 3.1 image writes or reads memory it does not own. `tagpu_patches.c`
-(`patch_engine_defects`) patches all three at every attach: `ddraw.dll` is a static import of the
-exe, so `DllMain` runs before the exe's entry point. The three are independent. Each is skipped,
+Three places where the retail 3.1 image writes or reads memory it does not own, and one where it
+takes a player's payment and does not deliver (a feature reclaimed or destroyed while the wreck
+pool is full). `tagpu_patches.c` (`patch_engine_defects`) patches all four at every attach:
+`ddraw.dll` is a static import of the exe, so `DllMain` runs before the exe's entry point. The four
+are independent. Each is skipped,
 with its reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its
 stub cannot be allocated, or its page cannot be made writable. Each patch is the identity on every
 input the stock code handles safely. [Binary patches](binary-patches.html) §"Stock engine defects
@@ -692,6 +694,59 @@ is drawn.
   command apply holds the eye at its low end, 0 below zoom 1 and `−dx` above it, on every draw a
   zoomed world is live; a level's first draws can still carry the engine's alternating eye.
 
+### The wreck pool, and a feature paid for and left standing
+
+`[DISASSEMBLED 2026-09-24, MEASURED the same day]` The pool at `main+0x1420B` (its allocation is
+in the table above) holds a record for **every 3DO feature for its life** — each unit's corpse,
+each heap — and for **every GAF feature while it plays its death or reclaim sequence**. Three
+lists partition it, each record's `+0x00` next and `+0x02` prev being **signed** 16-bit (`movsx` at
+`0x42331F`), so no index may reach `0x8000`: `main+0x14213` the active in-use list, `main+0x14217`
+the settled one, `main+0x1421B` the free list (−1 = empty). `0x4232F0(idx, &list)` moves a record
+onto a list, unlinking it from whichever head it was. MEASURED with a census that reads the whole
+pool and walks the three lists: with 8192 corpses placed, 0 active + 8192 settled + 0 free, every
+record exactly once.
+
+| address | what | the pool |
+|---|---|---|
+| `0x423550` `FeatureDie(x, y, reclaimed)` | stdcall, `ret 0xC`. Resolves a multi-cell feature's anchor and writes it back over its own `x`/`y` (`0x423580`). A 3DO feature, or a GAF one with no sequence for the event (FeatureDef `+0xC4/+0xC8` reclaim, `+0xBC/+0xC0` death), goes to `0x4236EF`: `push ebx/ebp/esi; call 0x423710`. Otherwise a cell already marked (flags bit 0) returns, and the rest takes a record, stores the def (`+0x2C`), `reclaimed` as bit 1 of `+0x2F`, x/y (`+0x28`/`+0x2A`) and the sequences, and marks the cell (`+0x0A` = the record, flags bit 0) | **pool empty: `0x42361D` sets `eax = count`, `0x423651` `jge 0x4236F7` returns having done nothing** — the fork's engine fix retargets that jge to `0x4236EF` |
+| `0x423710` the swap `(x, y, reclaimed)` | stdcall, `ret 0xC`. A non-anchor cell (def `≥ 0xFFFB`) returns at once. The successor is FeatureDef `+0xF8` (`featurereclamate`) when `reclaimed`, else `+0xF4` (`featuredead`); a marked cell's record bit 1 overrides to `+0xF8`. Then `FEATURES_Destroy 0x4246B0` and `0x423C50` for the successor. Two callers: `0x4236F2` (FeatureDie's no-sequence path) and `0x424495` (a sequence that has ended, in `0x424050`) | frees the record through `0x4246B0` |
+| `0x423C50` `SpawnFeatureOnMap(plot, def, pos, turn, v)` | clears the footprint with `0x4246B0` on every occupied cell, then a 3DO def takes a record | **pool empty: `0x423DB9`/`0x423DDF` return 0 with nothing created** — a unit dies without a corpse, and the footprint was already cleared |
+| `0x4233A0` `(x, y, flag)`, a feature starting to burn [INFERRED from the 0xFE event and FeatureDef `+0xB4`] | returns if the def has no `+0xB4` sequence or the cell is marked | pool empty: `0x42340D`/`0x423439` return — the feature does not burn |
+| `0x4232A0` | a bare allocator: returns the free head, or the count for "none" | no `E8` caller |
+| `0x424050` | the records' update, one caller `0x495585` [the game tick, INFERRED]; walks the **active** list only, moves a settled record to `+0x14217` (`0x4242B8`), and swaps a feature whose sequence has ended (`0x424495`) | — |
+| `0x4237D0` the reclaim completion `(who, pos)` [the first argument INFERRED] | stdcall, `ret 8`, returns 1 when reclaimed. A marked GAF cell returns 0: **a feature playing its sequence cannot be reclaimed again**. Pays FeatureDef `+0xEC` metal and `+0xF0` energy (`0x4238FF`, `0x42395B`), **then** calls `FeatureDie(x, y, 1)` (`0x423965`), then, in a network game (`0x435100` = 3), sends `0x0F, 0xFF, x, y` (6 bytes, `0x4239A4`) | — |
+| `0x4244B0`, a feature taking damage [INFERRED; callers `0x49A626` (a projectile's impact) and the network handler] | calls `FeatureDie(x, y, 0)` at `0x424628`/`0x42465A` and sends subtype `0xFD` | — |
+| `0x455xxx` the feature event handler | subtype `0xFF` → `FeatureDie(x, y, 1)` (`0x4554B0`), `0xFE` → `0x4233A0(x, y, 1)` (`0x4554CA`), `0xFD` → `FeatureDie(x, y, 0)` (`0x4554E4`) | the receiver's own pool decides |
+
+**The defect.** With the pool empty, `FeatureDie` does nothing, and nothing tells its callers. The
+reclaim has already paid, and the cell is left unmarked, so the same feature can be reclaimed
+again, as often as the builder repeats it; a feature hit hard enough to die does not change either.
+MEASURED on the build before the fix, Town & Country, the pool filled with 2048 one-cell corpses
+(`armflea_dead`) until the engine refused the 2049th: a commander's reclaim of `Building15`
+(2900 metal) raised the player's total metal produced (`PlayerStruct+0x8C+0x28`, a double) by
+2900 and left the cell's def at 9, `Building15`; a second reclaim paid 2900 again. In the owner's
+ten-player game at 1500 units a player, the free head read −1 on each of the three peers read.
+
+**The fix** (`fix_feature_die_pool_full`, always on): the pool-full `jge` joins `0x4236EF` with `x`
+and `y` reloaded from the arguments (`[esp+0x1C]`, `[esp+0x20]`; `ebx` still holds `reclaimed`).
+MEASURED, same procedure: paid once, the cell's def 351 (`Buildingscar15`, not reclaimable), no
+record, the free head still −1; a second reclaim paid nothing. Over the network with both pools
+full, the host's reclaim swapped the building on both peers and paid only the host.
+
+**What a full pool still changes.** The sequence is skipped, and with it the window in which the
+cell is marked and further hits are ignored. MEASURED with a commander's D-gun on `Building15`: with
+free records, the cell was marked (flags `0x54` → `0x55`) for 1.2 s and ended at `Building15b`;
+with the pool full it ended at the scar, the successive frames' hits taking it through every stage.
+Each stage is a `0xFD` event to the other peers, and a receiver whose pool is not full marks the
+cell on the first and ignores the rest, so a sender with a full pool and a receiver without one can
+disagree about a feature. A full pool refuses corpses too (`0x423C50`), which no fix can give back.
+
+**Negative results.** `0x422C71` (`mov edi,0x800`) is FeatureMask bit `0x800`, not the pool.
+Nothing else writes or compares the pool's size: every reference to `main+0x1420B`, `+0x14213`,
+`+0x14217` and `+0x1421B` was read, and a sweep of the functions that make them for `0x800`,
+`0x7FF`, `0x18000`, `0x6000` and `0x17FD0` found only the eleven limits-table sites. TADR patches
+none of this (its source as of `dcff5dd`).
+
 ## Built-in cheat/console command surface
 
 This is the richest extension point in the binary, and the evidence is unusually good.
@@ -1092,7 +1147,7 @@ standing instrument — not of the call graph, which stops at a function pointer
 | `main+0x14287` | `FeatureMap` | `[ebp+0x8C]` at `0x4839A2` | nulled at `0x483EE2` |
 | `main+0x14283` | `TILE_SET` `{count, pixels}` | `[ebp+0x88]` at `0x483B68` | nulled at `0x483ECA` |
 | `main+0x1421F` | fog descriptor `{buf, cols, rows, cells}` | `[ebp+0x24]` at `0x483C28` (struct `0x483C03`, buffer `0x483C96`) | `free 0x4B4F20` twice at `0x483F06`/`0x483F0F`, nulled at `0x483F1C` |
-| `main+0x1420B` | wreck records, stride `0x30`, **a fixed pool of 2048** | `0x421F20`, through `esi = main+0x141FB`: `MEM_Alloc(0x18000)` at `0x421F29`/`0x421F39`, pointer into `[esi+0x10]` at `0x421F47`, `rep stos` of `0x6000` dwords, then a doubly-linked free list threaded through every record — `0x421F5F..0x421F7E` steps `eax` by `0x30` from 0 to `0x18000` writing `u16 [rec+0x00] = i+1` (next) and `u16 [rec+0x02] = i−1` (prev), so **`0x18000 / 0x30` = 2048 records, 0..2047**; `0x421F8D` terminates the prev chain at record 0 and `0x421F94` the next chain at `+0x17FD0` = record 2047. `[esi+0x18]`/`[esi+0x1C]` (`main+0x14213`/`+0x14217`) are two live-list heads, both −1; `[esi+0x20]` (`+0x1421B`) the free head, 0 | `0x4221F1`→`0x4221F8` frees it and `0x422214` **nulls** it, inside the feature teardown, after `0x42219A`'s loop has walked both live lists calling `FreeObjectState 0x45AAA0` on each record's `+0x04` |
+| `main+0x1420B` | wreck records, stride `0x30`, **a fixed pool for the level: 2048 in stock, 8192 under the raised limits** ([The wreck pool](#the-wreck-pool-and-a-feature-paid-for-and-left-standing)) | `0x421F20`, through `esi = main+0x141FB`: `MEM_Alloc(0x18000)` at `0x421F29`/`0x421F39`, pointer into `[esi+0x10]` at `0x421F47`, `rep stos` of `0x6000` dwords, then a doubly-linked free list threaded through every record — `0x421F5F..0x421F7E` steps `eax` by `0x30` from 0 to `0x18000` writing `u16 [rec+0x00] = i+1` (next) and `u16 [rec+0x02] = i−1` (prev), so **`0x18000 / 0x30` = 2048 records, 0..2047**; `0x421F8D` terminates the prev chain at record 0 and `0x421F94` the next chain at `+0x17FD0` = record 2047. `[esi+0x18]`/`[esi+0x1C]` (`main+0x14213`/`+0x14217`) are two live-list heads, both −1; `[esi+0x20]` (`+0x1421B`) the free head, 0. The four size constants (`0x421F2A`, `0x421F41`, `0x421F7A`, `0x421F97`) are limits-table sites | `0x4221F1`→`0x4221F8` frees it and `0x422214` **nulls** it, inside the feature teardown, after `0x42219A`'s loop has walked both live lists calling `FreeObjectState 0x45AAA0` on each record's `+0x04` |
 | `main+0x141F7` / `+0x141F3` | projectile array / live count, stride `0x6B` | `0x499A30`: `MEM_Alloc(0x7D64)` = **300 slots** (the `push` operand at `0x499A32`; 3000 under the raised limits), pointer at `0x499A49`, count zeroed at `0x499A6A`; the count is rewritten by the sim at 13 sites (`0x49AF76` … `0x49DF3F`) | `0x499A80`: `MEM_Free`, nulled at `0x499A9A` |
 | `main+0x38D77` | particle layer table, 10 × `{…, begin, end}` | `0x471D90`, pointer at `0x471DCB`; each layer's vector and every object's sub-vector grow **mid-play** (`0x4732E0`) | `0x471DE0`, nulled at `0x471E97` |
 | `main+0x142DB` / `+0x142DF` / `+0x142E3` | minimap composite / fogged base / scaled map (8bpp offscreens) | the minimap build: `0x4669DA`, `0x466A05`, `0x46682E` | `0x466AA0`: `0x466AF5`, `0x466AE9`, `0x466ADD` |

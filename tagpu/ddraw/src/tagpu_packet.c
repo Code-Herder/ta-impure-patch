@@ -136,10 +136,10 @@
    plus the anchor table: 19.6 MB under the raised limits. What follows them --
    effects, fog grids, minimap -- is bounded by its own caps and truncates on its
    own bit, which costs that layer alone. The reserve is address space, five
-   slots of it in a 32-bit process whose largest free block at 4K is tens of MB
-   (gpu-status.md), so it is sized to the design point rather than rounded up;
-   pages are committed as the packets grow (`slot_commit`), so a game pays only
-   for what it publishes. */
+   slots of it in a 32-bit process whose largest free block has been logged as
+   low as 43.6 MB (gpu-status.md §2.86), so it is sized to the design point
+   rather than rounded up; pages are committed as the packets grow
+   (`slot_commit`), so a game pays only for what it publishes. */
 #define PK_DESIGN_PIECES 36u
 #define PK_DESIGN_WRECK_PIECES 19u
 #define PK_UNIT_WORST (sizeof(TAGPU_PACKET) + \
