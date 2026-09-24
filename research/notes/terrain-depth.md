@@ -620,11 +620,20 @@ viewport (`tagpu_terr_clamp_span`). Three things fall out of §2 exactly as pred
   snapshot taken once per map, loses nothing by being static**. What this does *not*
   prove: that the palette never changes anywhere (a mission script or a menu
   transition was not tested), only that nothing cycles in play on these two maps.
-- **The engine's arithmetic is reproduced, not corrected.** `cdq; and edx,0x1f;
-  add; sar 5` is a division *toward zero*, and `cols` is `ceil((viewW+fracX)/32)`
-  with the remainder test the engine does at `0x48403E`. `div32_trunc`/`ceil32`
-  carry a comment saying so, because a floor-based "fix" would be wrong for a
-  negative eye.
+- **The engine's arithmetic, and the one place the gather parts from it.** `cdq;
+  and edx,0x1f; add; sar 5` is a division *toward zero*, and `cols` is
+  `ceil((viewW+fracX)/32)` with the remainder test the engine does at `0x48403E`.
+  For an eye ≥ 0 toward zero is a floor, and that is the only window the stock
+  path draws: the window check at `0x484057` hands any other to
+  `terrain_window_draw`. The Vulkan gather divides with a floor (`div32_floor`),
+  because for a negative eye toward zero starts the grid one cell late and leaves
+  up to 31 game px of the view's leading edge uncovered. Those are cells past the
+  map, so under `edge=black` the off-map skip draws nothing there either way; under
+  the mirror (G20b) toward zero leaves a band of clear colour — 12 px on the left
+  and 8 on top at the eye (−300, −200) at 1×, MEASURED 2026-09-24, and none with
+  the floor. Every on-map cell lands on the same pixel either way, since the origin
+  moves one cell and `fracX` 32 px together: `edge=black` A/Bs at seven eyes
+  below zero, 0.25× to 8×, read 0 px against a build that divides toward zero.
 - **The grid is watertight, at every zoom.** [ANALYSED 2026-09-03] Column *c*'s
   right edge is emitted as `float(N) + 32` and column *c+1*'s left edge as
   `float(N + 32)`, where `N = vpL + c*32 - fracX` is an int; those are the **same

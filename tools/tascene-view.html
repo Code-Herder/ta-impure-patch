@@ -2195,8 +2195,11 @@ async function main() {
   };
   function buildEdge() {
     const stride = map.tilemap.w, mrows = map.tilemap.h;
-    const tx0 = div32trunc(E[0]), fx = E[0] - tx0 * 32;
-    const ty0 = div32trunc(E[1]), fy = E[1] - ty0 * 32;
+    // a FLOOR, not the engine's toward-zero division: the window here starts
+    // past the map's top or left edge, and toward zero would start the sweep a
+    // cell late and leave up to 31 px of the view's leading edge undrawn
+    const tx0 = Math.floor(E[0] / 32), fx = E[0] - tx0 * 32;
+    const ty0 = Math.floor(E[1] / 32), fy = E[1] - ty0 * 32;
     const cols = ceil32(W[0] + fx), rows = ceil32(W[1] + fy);
     const need = cols * rows * 6 * TVST;
     if (edgeVerts.length < need) edgeVerts = new Float32Array(need);

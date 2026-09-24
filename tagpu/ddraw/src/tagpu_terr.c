@@ -887,10 +887,17 @@ void tagpu_terr_clamp_span(int vw, int vh, int* w, int* h)
     }
 }
 
-/* the engine's own arithmetic: `cdq; and edx,0x1f; add; sar 5` is a division
-   toward zero, not a floor — reproduce it, do not "fix" it */
-static int div32_trunc(int v) { return (v + (v < 0 ? 31 : 0)) >> 5; }
-static int ceil32(int v)      { int q = div32_trunc(v); return (v - q * 32) ? q + 1 : q; }
+/* The cell a coordinate lies in: a FLOOR. The engine's own arithmetic
+   (`cdq; and edx,0x1f; add; sar 5`) divides toward zero, which is the same
+   number for every eye >= 0 — and those are the only windows the stock pass
+   draws, since the window check at 0x484057 hands any other to
+   terrain_window_draw. Past the map's top or left edge (an eye < 0, which the
+   centre clamp reaches) toward zero would start the grid one cell late and
+   leave the view's leading edge, up to 31 game px of it, undrawn: off the map,
+   so skipped under black either way, and a band of clear colour under the
+   mirror. */
+static int div32_floor(int v) { return v >= 0 ? v / 32 : -((-v + 31) / 32); }
+static int ceil32(int v)      { int q = div32_floor(v); return (v - q * 32) ? q + 1 : q; }
 
 /* one visible cell: where it is in this frame's grid, and where its tile is in
    the atlas. The shader turns the pair into the six vertices. */
@@ -1005,12 +1012,13 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
        rect is the same as moving the eye to its top-left corner and asking for
        more columns — the quads still land at unzoomed game coordinates, which is
        what the vertex shader's scale-about-the-centre expects. At zoom >= 1
-       these are the engine's own numbers and the arithmetic is untouched. */
+       and an eye >= 0 these are the engine's own numbers; past the top or left
+       edge the origin is a floor where the engine's is not (div32_floor). */
     vpL = v->evpL; vpT = v->evpT; evw = v->evw; evh = v->evh;
     eyeX = v->eyeX + (vpL - v->vpL);
     eyeY = v->eyeY + (vpT - v->vpT);
-    tx0 = div32_trunc(eyeX); fx = eyeX - tx0 * 32;
-    ty0 = div32_trunc(eyeY); fy = eyeY - ty0 * 32;
+    tx0 = div32_floor(eyeX); fx = eyeX - tx0 * 32;    /* fx, fy in [0, 31] */
+    ty0 = div32_floor(eyeY); fy = eyeY - ty0 * 32;
     cols = ceil32(evw + fx);
     rows = ceil32(evh + fy);
     if (cols <= 0 || rows <= 0) return terr_bail();

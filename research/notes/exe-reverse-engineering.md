@@ -515,7 +515,7 @@ in `DrawGameScreen` [E8 scan]. It builds a window of 32-px cells from the eye an
 
 | value | computed at | from |
 |---|---|---|
-| `col0`, `row0` = eye / 32 | `0x483FC2..0x483FD8`, `0x483FDC..0x483FF4` | the eye `main+0x1431F`/`+0x14323`, by `cdq; and edx,0x1F; add; sar 5`: a division that truncates toward zero, not a floor, for a negative eye |
+| `col0`, `row0` = eye / 32 | `0x483FC2..0x483FD8`, `0x483FDC..0x483FF4` | the eye `main+0x1431F`/`+0x14323`, by `cdq; and edx,0x1F; add; sar 5`: a division that truncates toward zero, not a floor, for a negative eye. The stock path never runs on one: the window check at `0x484057` hands any window with an eye < 0 to `terrain_window_draw`, and the Vulkan terrain pass (`tagpu_terr.c`'s gather) takes a floor there ([terrain depth](terrain-depth.html)) |
 | `sx`, `sy` = eye − 32·cell | `0x483FF8`, `0x483FFD` (esi, edi) | negative for a negative eye |
 | `ncols`, `nrows` = ⌈(view + s) / 32⌉ | `0x483FFF..0x484053` | the view `main+0x37E37`/`+0x37E3B` |
 | stride = `main+0x14233` / 2 | `0x484057..0x48406D` | the map's width in 16-px cells |
