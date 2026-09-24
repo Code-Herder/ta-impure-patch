@@ -47,6 +47,8 @@
    RENDER THREAD ONLY: it is called from `tagpu_native_frame`, and
    tagpu_vk_unit.c draws from its hand-over (below). */
 
+#include "tagpu_limits.h"   /* the wreck pool's size: TAGPU_PD_MAXHAND counts its records */
+
 /* Everything the pass shares with tagpu_native.c's frame. */
 typedef struct {
     float game[2];              /* game_width, game_height                    */
@@ -247,7 +249,7 @@ void tagpu_posedraw_end(void);
    count -- so it is a bound on a number handed between two files, which the
    Vulkan pass re-checks, not a budget. A frame past it hands nothing over and
    says so once. */
-#define TAGPU_PD_MAXHAND (16384 + 4096 + 1 + 6144)
+#define TAGPU_PD_MAXHAND (16384 + TAGPU_LIM_WRECKS + 1 + 6144)
 
 typedef struct TAGPU_PDUREC {
     /* the bake entries, and the serial each was baked under. The POINTER alone

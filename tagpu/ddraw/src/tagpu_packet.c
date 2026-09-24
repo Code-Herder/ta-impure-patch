@@ -130,16 +130,21 @@
    straight after (tagpu_packet_pub.c), so those are the part a reserve that is
    too small would truncate -- and a truncated unit, piece or wreck table
    refuses the frame's whole unit hand-over. The sum below is every slot of
-   TAGPU_PK_DESIGN_SLOTS and every wreck the table holds, each at stock's worst
-   model (36 pieces, ARMSCORP/CORSCORP), plus the anchor table: 19.2 MB. What
-   follows them -- effects, fog grids, minimap -- is bounded by its own caps and
-   truncates on its own bit, which costs that layer alone. The reserve is
-   address space; pages are committed as the packets grow (`slot_commit`), so
-   a game pays only for what it publishes. */
+   TAGPU_PK_DESIGN_SLOTS at stock's worst unit model (36 pieces,
+   ARMSCORP/CORSCORP), every record of the wreck pool at stock's worst wreck
+   model (19 pieces, armscab_dead; 265 of the 285 3DO features are one piece),
+   plus the anchor table: 19.6 MB under the raised limits. What follows them --
+   effects, fog grids, minimap -- is bounded by its own caps and truncates on its
+   own bit, which costs that layer alone. The reserve is address space, five
+   slots of it in a 32-bit process whose largest free block has been logged as
+   low as 43.6 MB (gpu-status.md §2.86), so it is sized to the design point
+   rather than rounded up; pages are committed as the packets grow
+   (`slot_commit`), so a game pays only for what it publishes. */
 #define PK_DESIGN_PIECES 36u
+#define PK_DESIGN_WRECK_PIECES 19u
 #define PK_UNIT_WORST (sizeof(TAGPU_PACKET) + \
     TAGPU_PK_DESIGN_SLOTS * (sizeof(TAGPU_PK_UNIT) + PK_DESIGN_PIECES * sizeof(TAGPU_PK_PIECE)) + \
-    TAGPU_PK_MAX_WRECKS * (sizeof(TAGPU_PK_WRECK) + PK_DESIGN_PIECES * sizeof(TAGPU_PK_PIECE)) + \
+    TAGPU_PK_MAX_WRECKS * (sizeof(TAGPU_PK_WRECK) + PK_DESIGN_WRECK_PIECES * sizeof(TAGPU_PK_PIECE)) + \
     TAGPU_PK_MAX_ANCHORS * sizeof(TAGPU_PK_ANCHOR) + 64u /* the tables' 4-alignment */)
 typedef char pk_reserve_design[(PK_RESERVE >= PK_UNIT_WORST) ? 1 : -1];
 
