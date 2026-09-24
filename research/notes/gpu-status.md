@@ -788,7 +788,12 @@ the `feat:` line). The densest stock map, Canal Crossing, puts 12 633 anchors in
 with the lead — every feature it has, 19 % of the table; next are Cavedog Links CC at 10 289 and
 Plains and Passes at 9 603, each also whole; at 1080p Canal Crossing's worst rect holds 9 740
 (the feature cells of the 275 stock maps' TNT files, every placement of the rect, 2026-09-24).
-Wrecks made in play add to those counts. The interval
+Wrecks made in play add to those counts. MEASURED 2026-09-24 on `feat-forest` at 1920×1080 on Xvfb,
+the eye held at three places at 1×, 0.5× and 0.25×, against a diagnostic build whose table held
+1 500: where the rect held more (1 494 and 1 499 kept of rects 393 rows tall), the scan kept rows
+42..413 about centre row 219 and 117..505 about 294 — only the bottom rows, the farthest from the
+view — and the frame's `anchors=` read 41, 89, 561 and 0, 38, 598, exactly the committed build's,
+with `outside=0` on all 193 heartbeats and `trunc=` counting 1 081 frames. The interval
 therefore holds every eye within the lead
 of the build eye; the clamp is the identity for a gesture that only zooms in and for an unapplied
 displacement inside the lead, and what it holds back is a larger one, for as long as that lasts.
@@ -811,6 +816,18 @@ eye moved against the gesture (a step of another gesture, the engine's own camer
 grid was trimmed; then the step is taken, because the fog invariant is the one that cannot give,
 and counted as `back`. The tween restarts from the level actually drawn, so a notch taken during a
 pause does not jump.
+
+*The rule needs an interval.* Where the one at this level is empty — a grid trimmed narrower than
+the slab — the bound centres the domain on the grid, and a centred eye is not a step the gesture
+asked for in either direction; pausing on it would hold the last level for as long as the trim
+lasted. So the rule applies only when the bound fitted the eye into a non-empty interval (`fit` out
+of `fog_bound`), and the retry is taken only when it fitted too; a centred frame is drawn as the
+bound left it and counted in `out`. MEASURED 2026-09-24 on a diagnostic build whose wide grid was
+sized at 60 % of the window (163 × 98 cells), Seven Islands at 1920×1080 on Xvfb, twelve notches
+out at the view centre from 1× and twelve back: the level reached the floor, 0.25, with `paused`
+0, `back` 0 and `out` 1 116 — the centred frames, held 16 px — and came back to 1.53 on the
+engine's grid; with the rule applied regardless of `fit` (the build before) the level stopped at
+0.4556 and `paused` grew by one every frame, 1 120 in two heartbeats, until the zoom-in released it.
 
 The native heartbeat carries the witnesses — `fog=wide|engine|none bare=N out=N held=N/Mpx
 paused=N back=N`: `fog` is the grid the last frame actually sampled; `out` counts frames whose
@@ -869,7 +886,10 @@ committed build publishes; the Xvfb rows at 1080p are the committed build and th
 On Xvfb llvmpipe draws a handful of frames a second, so each held frame there spans several posted
 steps: its cells, bytes and build times hold, its hold counts compare only with each other. Every
 run read `back`, `out` and `bare` 0, and the feature pass's `outside=` 0 on every heartbeat (371
-and 369 of them on the committed build and the one before). The rebuild rate is ~2.8/s during the
+and 369 of them on the committed build and the one before). Re-run on Xvfb at 1080p after the
+tables moved to the fog eye and the pause rule learned to need an interval: 13 held frames, the
+largest 497 world px; with the apply forced 200 ms behind, 42 (9 paused), 779 px; `back`, `out`,
+`bare` 0 and `outside=` 0 on 372 and 371 heartbeats. The rebuild rate is ~2.8/s during the
 gestures, so the lead adds ~50 µs of game-thread time a second at 1080p. The units' piece-cull
 rect is the wide grid's own span, so it grows with the lead, and so does the anchor rect: its
 margin is 16 cells past the published window, the slack past the slab it had before.
@@ -1177,8 +1197,13 @@ overshoots the map by at most one cell — `col0 ≥ −1` and `col0 + cols ≤ 
 which an eye in `[0, extent − W]` guarantees (engine map, "The four border completions"). The
 native pass therefore draws from `fogwide`'s grid on any frame whose engine grid breaks that —
 tested on the grid's own origin and size, since the packet's eye need not be the eye it was built
-at — as well as below 1× and on a frame whose drawn eye the engine's grid does not span: the fog
-bound (§2.3, "The fog bound on the drawn eye").
+at, and against the map's PLOT grid, not the scroll extent — as well as below 1× and on a frame
+whose drawn eye the engine's grid does not span: the fog bound (§2.3, "The fog bound on the drawn
+eye"). MEASURED 2026-09-24, Seven Islands at 3840×2160 on Xvfb with `fogwide.off`, the eye held at
+1× at the engine range's SE corner (extent − view = 16736, 18256), at (0, 0), at the SE corner
+again and 20 px inside it: `fog=engine bare=0` at every stop. The build that judged the grid
+against the extent refused the grid the engine builds there and drew those frames bare — `bare`
+585 at the first SE stop, 1 195 by the end.
 
 **The scroll poll's right edge at zoom > 1** fires because the poll reads the true pointer
 (§2.3d): TA's poll (`0x41CE90`) fires on an **equality on the outermost pixel** — `x == 0`,

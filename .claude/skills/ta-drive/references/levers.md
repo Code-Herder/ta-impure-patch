@@ -225,8 +225,10 @@ spot (nothing but the game thread reads it), and logs `fogwide: grid CxR, N KB (
 chasing it; at 14 a moving scene gives ~30/s.
 
 The native heartbeat's fog fields are the fog bound's witness (`tagpu_zoom.c`, gpu-status §2.3):
-`fog=` is the grid the last frame actually sampled (`engine` on a bare frame, `none` with no
-grid at all); **`out=` must read 0** — frames whose fog domain was not inside that grid; `bare=`
+`fog=` is the grid the last frame actually sampled — `engine` at rest at 1× and above, at every
+resolution (the engine's grid always spans the 1× rect about the eye it was built at), `wide` below 1× or
+once the eye is past that grid's few pixels of slack, `engine` on a bare frame, `none` with no
+grid at all; **`out=` must read 0** — frames whose fog domain was not inside that grid; `bare=`
 counts frames that needed the wide grid and had none; `held=N/Mpx` is the frames whose drawn eye
 the bound held back and the largest hold, never more than the displacement the gesture has posted
 and the game thread not yet applied, less the lead the wide grid carries (a quarter of the view a
