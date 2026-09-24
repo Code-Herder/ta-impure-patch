@@ -87,10 +87,11 @@
 
    The base atlas's STAGING buffer is per-slot either way and cannot be
    anything else: a barrier orders GPU work and the hazard there is a CPU
-   write. It is allocated on the frame that uploads and given back at that
-   slot's next `prepare` -- the same fence, one turn of the slots later -- so a
-   settled scene holds none of it and a map still filling its atlas holds at
-   most one per slot while it does.
+   write. It is tagpu_vk_stage.h's bounded upload: at most
+   TAGPU_VK_STAGE_CAP a slot, allocated on the frame that uploads and given
+   back at that slot's next `prepare` with nothing to send -- the same fence,
+   one turn of the slots later -- so a settled scene holds none of it. A page
+   larger than the cap goes out in bands, complete before the frame draws.
 
    AND NOTHING IS KEPT ONCE THERE IS NOTHING TO DRAW, exactly as §2.28's
    scaffold: a frame the gather handed nothing over gives that slot back.
@@ -112,6 +113,7 @@
 
 #include "tagpu_vk_pass.h"
 #include "tagpu_vk_restore.h"
+#include "tagpu_vk_stage.h"
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -246,10 +248,7 @@ typedef struct {
     unsigned char*  vmap;
     VkDeviceSize    vcap;
 
-    VkBuffer        bstage;                /* the base atlas's upload, when due */
-    VkDeviceMemory  bmem;
-    unsigned char*  bmap;
-    VkDeviceSize    bcap;
+    TAGPU_VKSTAGE   stage;                 /* the base atlas's upload, when due */
 
     VkImage         fog;                   /* the fog grid, per slot           */
     VkDeviceMemory  fogMem;
@@ -454,31 +453,12 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     if (s->vbuf)  { vkDestroyBuffer(dev, s->vbuf, NULL); s->vbuf = VK_NULL_HANDLE; }
     if (s->vmem)  { vkFreeMemory(dev, s->vmem, NULL); s->vmem = VK_NULL_HANDLE; }
     s->vcap = 0;
-    /* THE UNMAP IS GUARDED BY THE MAP POINTER, NOT BY THE ALLOCATION: a
-       vkMapMemory that failed leaves the allocation standing and unmapping it
-       would be an error of its own. */
-    if (s->bmap)  { vkUnmapMemory(dev, s->bmem); s->bmap = NULL; }
-    if (s->bstage){ vkDestroyBuffer(dev, s->bstage, NULL); s->bstage = VK_NULL_HANDLE; }
-    if (s->bmem)  { vkFreeMemory(dev, s->bmem, NULL); s->bmem = VK_NULL_HANDLE; }
-    s->bcap = 0;
+    tagpu_vk_stage_drop(d, &s->stage);
     if (s->smallMap) { vkUnmapMemory(dev, s->smallMem); s->smallMap = NULL; }
     if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
     if (s->smallMem) { vkFreeMemory(dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
     kill_image(d, &s->fog, &s->fogMem, &s->fogView);
     s->fogW = s->fogH = 0;
-}
-
-/* Give this slot's BASE ATLAS STAGING back -- the one piece of it that runs to
-   megabytes and is wanted only on the frames the atlas actually moved. Safe
-   here for the same one-line reason everything else in `prepare` is: the seam
-   has waited on this slot's fence, so the copy that read this buffer has
-   completed. */
-static void slot_drop_bstage(const TAGPU_VKPASS* d, SLOT* s)
-{
-    if (s->bmap)  { vkUnmapMemory(d->dev, s->bmem); s->bmap = NULL; }
-    if (s->bstage){ vkDestroyBuffer(d->dev, s->bstage, NULL); s->bstage = VK_NULL_HANDLE; }
-    if (s->bmem)  { vkFreeMemory(d->dev, s->bmem, NULL); s->bmem = VK_NULL_HANDLE; }
-    s->bcap = 0;
 }
 
 /* This slot's fog-grid image at `w` x `h`, rebuilt when the dimensions move --
@@ -994,16 +974,15 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
 /* THE BASE ATLAS, when the mirror or the engine's table moved: the rect the
    band ring says changed since the serial this image holds, or the whole used
    page when the table moved (its arrival), when nothing is held yet, or when the ring has
-   rolled past what this image holds. Expanded into the slot's own staging
-   and copied behind the write-after-read barrier of the file header: every
-   slot samples this one image. Returns 0 only when something was refused;
-   "nothing to do" is a 1. */
+   rolled past what this image holds. Expanded through the slot's bounded
+   staging (tagpu_vk_stage.h), behind the write-after-read barrier of the file
+   header: every slot samples this one image.
+   1 sent or nothing due; 0 no staging this frame -- nothing drawn, the serials
+   not advanced, so the next frame sends it; -1 the pass must come down. */
 static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                        const TAGPU_FEATHAND* h)
 {
-    int rows = h->atlasRows, r[4], w, hh;
-    VkDeviceSize bytes;
-    VkBufferImageCopy rg;
+    int rows = h->atlasRows, r[4], w, hh, rc;
 
     /* THE IMAGES AND THEIR TWO DESCRIPTOR BINDINGS ARE MADE ONCE, BY
        `atlas_build`, AND THAT IS WHY THEY MAY BE WRITTEN AT ALL.
@@ -1020,10 +999,10 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
         plog(d, "feat: the atlas changed from %d texels square to %d - the pass "
                 "comes down rather than rewrite descriptor sets that frames in "
                 "flight are using", s_atDim, h->atlasDim);
-        return 0;
+        return -1;
     }
     if (s_bHave && s_bSerial == h->atlasSerial && s_bPal == h->palSerial) {
-        slot_drop_bstage(d, s);
+        tagpu_vk_stage_drop(d, &s->stage);
         return 1;
     }
     if (rows < 1) rows = 1;
@@ -1037,37 +1016,14 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     if (w <= 0 || hh <= 0) {
         /* every paint since landed below the used rows: nothing to send */
         s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
-        slot_drop_bstage(d, s);
+        tagpu_vk_stage_drop(d, &s->stage);
         return 1;
     }
-    bytes = (VkDeviceSize)w * hh * 4;
-    if (s->bcap < bytes || !s->bstage) {
-        slot_drop_bstage(d, s);
-        if (!mk_buffer(d, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       &s->bstage, &s->bmem, &s->bmap)) return 0;
-        s->bcap = bytes;
-    }
-    tagpu_pal_expand(s->bmap, h->atlas, h->atlasKey, h->atlasDim, r[0], r[1], w, hh, h->pal, NULL);
-    img_barrier(cb, s_bImg,
-                s_bHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                        : VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                s_bHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                        : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                s_bHave ? VK_ACCESS_SHADER_READ_BIT : 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    memset(&rg, 0, sizeof rg);
-    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    rg.imageSubresource.layerCount = 1;
-    rg.imageOffset.x = r[0]; rg.imageOffset.y = r[1];
-    rg.imageExtent.width = (uint32_t)w; rg.imageExtent.height = (uint32_t)hh;
-    rg.imageExtent.depth = 1;
-    vkCmdCopyBufferToImage(cb, s->bstage, s_bImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
-    img_barrier(cb, s_bImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    if (!tagpu_vk_stage_begin(d, &s->stage, (VkDeviceSize)w * hh * 4, (VkDeviceSize)w * 4))
+        return 0;
+    rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
+                               h->atlasDim, r[0], r[1], w, hh, h->pal, NULL);
+    if (rc <= 0) return rc;
     s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
     s_bHave = 1;
     return 1;
@@ -1128,10 +1084,9 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
 
     /* NOTHING IS BUILT UNTIL THERE IS SOMETHING TO DRAW, AND NOTHING IS KEPT
-       ONCE THERE IS NOT -- §2.28's rule, and here it is worth more: the atlas
-       staging alone runs to 16 MB a slot. Giving slot `slot` back at this point needs
-       no new argument and no timer, because it is the same instant, and the
-       same ownership, that the rest of this function writes it in. */
+       ONCE THERE IS NOT -- §2.28's rule. Giving slot `slot` back at this point
+       needs no new argument and no timer, because it is the same instant, and
+       the same ownership, that the rest of this function writes it in. */
     if (!tagpu_feat_handover(&h, d->frame)) {
         if (s_state == ST_READY) slot_free(d, &s_slot[slot]);
         return 0;
@@ -1226,7 +1181,13 @@ int tagpu_vk_feat_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (h.nBody)   memcpy(s->vmap + (size_t)h.nShadow * VST * sizeof(float),
                           h.body, (size_t)h.nBody * VST * sizeof(float));
 
-    if (!base_upload(d, cb, s, &h)) goto refuse;
+    /* A FRAME WITH NO STAGING IS SKIPPED, NOT REFUSED: the atlas this frame
+       samples has not reached the device, and the next frame sends it. */
+    switch (base_upload(d, cb, s, &h)) {
+    case -1: goto refuse;
+    case 0:  return 0;
+    default: break;
+    }
 
     /* THE RESTORE, AFTER THE UPLOAD IT READS AND BEFORE ANY DRAW THAT SAMPLES
        WHAT IT PAINTS. The draws themselves are issued by the seam, from

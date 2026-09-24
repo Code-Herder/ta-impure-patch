@@ -148,6 +148,7 @@
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_mark.h"
 #include "tagpu_vk_shot.h"
+#include "tagpu_vk_stage.h"
 
 #define ON_FILE    "tagpu_vk.on"
 /* THE CONTROL, and the module needs one because half of it runs with the lever
@@ -1806,6 +1807,9 @@ static void vk_down(void)
            passes those jobs were using. The other way round would destroy a
            framebuffer a live job still names. */
         tagpu_vk_restore_down(&s_pass);
+        /* AND THE BANDED UPLOAD'S COMMAND POOL AND FENCE, after every pass has
+           given its staging back: they belong to this device. */
+        tagpu_vk_stage_down(&s_pass);
         ab_drop("the lane coming down", idle);
         tagpu_vk_shot_down(&s_pass);
         vk_perimage_free();
@@ -2329,6 +2333,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.inst = s_vk.inst;
     s_pass.pd = s_vk.pd;
     s_pass.dev = s_vk.dev;
+    s_pass.queue = s_vk.queue;
+    s_pass.qfam = s_vk.qfam;
     s_pass.rp = s_vk.rp;
     s_pass.fmt = s_vk.fmt;
     s_pass.dfmt = s_vk.dfmt;

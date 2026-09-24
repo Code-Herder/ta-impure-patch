@@ -120,6 +120,7 @@
 #include "tagpu_terr.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_restore.h"
+#include "tagpu_vk_stage.h"
 #include "tagpu_pal.h"                  /* tagpu_pal_expand */
 #include "spirv/tagpu_terr.spv.h"
 
@@ -289,10 +290,7 @@ typedef struct {
     unsigned char*  imap;
     VkDeviceSize    icap;
 
-    VkBuffer        bigStage;              /* the map-scoped uploads, when due  */
-    VkDeviceMemory  bigMem;
-    unsigned char*  bigMap;
-    VkDeviceSize    bigCap;
+    TAGPU_VKSTAGE   stage;                 /* the map-scoped uploads, when due  */
 
     VkImage         pal, fog;              /* the two small per-slot images    */
     VkDeviceMemory  palMem, fogMem;
@@ -516,14 +514,6 @@ static void copy_rect(VkCommandBuffer cb, VkBuffer src, VkDeviceSize srcOff,
 
 /* ---- the slot ----------------------------------------------------------- */
 
-static void slot_drop_bigstage(const TAGPU_VKPASS* d, SLOT* s)
-{
-    if (s->bigMap)   { vkUnmapMemory(d->dev, s->bigMem); s->bigMap = NULL; }
-    if (s->bigStage) { vkDestroyBuffer(d->dev, s->bigStage, NULL); s->bigStage = VK_NULL_HANDLE; }
-    if (s->bigMem)   { vkFreeMemory(d->dev, s->bigMem, NULL); s->bigMem = VK_NULL_HANDLE; }
-    s->bigCap = 0;
-}
-
 static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
 {
     VkDevice dev = d->dev;
@@ -531,10 +521,10 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     if (s->ibuf) { vkDestroyBuffer(dev, s->ibuf, NULL); s->ibuf = VK_NULL_HANDLE; }
     if (s->imem) { vkFreeMemory(dev, s->imem, NULL); s->imem = VK_NULL_HANDLE; }
     s->icap = 0;
+    tagpu_vk_stage_drop(d, &s->stage);
     /* THE UNMAP IS GUARDED BY THE MAP POINTER, NOT BY THE ALLOCATION: a
        vkMapMemory that failed leaves the allocation standing and unmapping it
        would be an error of its own. */
-    slot_drop_bigstage(d, s);
     if (s->smallMap) { vkUnmapMemory(dev, s->smallMem); s->smallMap = NULL; }
     if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
     if (s->smallMem) { vkFreeMemory(dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
@@ -669,35 +659,6 @@ static void shared_slot_done(const TAGPU_VKPASS* d, SHARED* sh, uint32_t slot)
     if (sh->pending == 0) {
         kill_image(d, &sh->oldImg, &sh->oldMem, &sh->oldView);
     }
-}
-
-/* Upload when the mirror's serial says the bytes moved. `bytes` is what the
-   copy will read out of the staging buffer at `off`. */
-static void shared_upload(VkCommandBuffer cb, SHARED* sh, VkBuffer stage,
-                          VkDeviceSize off)
-{
-    /* THE WRITE-AFTER-READ BARRIER (§2.29). The image is shared by every slot,
-       so the frames still in flight may be sampling it; a barrier's first
-       synchronisation scope includes everything submitted to this queue before
-       it, which is all of them. A WAR hazard needs only an execution dependency
-       -- the access masks here are for the LAYOUT TRANSITION, which is a write.
-       On the very first upload there is nothing to order against and the image
-       has no contents to preserve, so it goes in as UNDEFINED. */
-    img_barrier(cb, sh->img, VK_IMAGE_ASPECT_COLOR_BIT,
-                sh->have ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                         : VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                sh->have ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                         : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                sh->have ? VK_ACCESS_SHADER_READ_BIT : 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    copy_rect(cb, stage, off, sh->img, sh->w, sh->h);
-    img_barrier(cb, sh->img, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-    sh->have = 1;
 }
 
 /* ---- build -------------------------------------------------------------- */
@@ -1289,9 +1250,8 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     TAGPU_TERRHAND t;
     SLOT* s;
     int restored;                       /* what the SHADER is told, see below */
-    VkDeviceSize ibytes, heightBytes = 0, heightOff = 0, bigBytes = 0;
-    VkDeviceSize baseBytes = 0, baseOff = 0;
-    int doBase;
+    VkDeviceSize ibytes, heightBytes, baseBytes;
+    int doBase, rc;
     /* A UNION, NOT A CAST. Both blocks mix `int` and `float` members and
        writing an int through a float array is the aliasing rule broken at -O2,
        which is not a place to find out that the fog branch took a garbage
@@ -1473,42 +1433,48 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (!slot_inst(d, s, ibytes)) goto refuse;
     memcpy(s->imap, t.cells, (size_t)ibytes);
 
-    /* THE TWO MAP-SCOPED UPLOADS SHARE ONE STAGING BUFFER, allocated on the
-       frame one of them is due and GIVEN BACK at this slot's next prepare on
-       which neither is -- the same fence, one turn of the slots later -- so a
-       settled map holds none of it and the frames after a map change hold at
-       most one per slot. */
+    /* THE TWO MAP-SCOPED UPLOADS SHARE THE SLOT'S BOUNDED STAGING
+       (tagpu_vk_stage.h), allocated on the frame one of them is due and GIVEN
+       BACK at this slot's next prepare on which neither is -- the same fence,
+       one turn of the slots later -- so a settled map holds none of it. The
+       base atlas is a whole map's tiles, far past the cap on a large map, so it
+       goes out in bands, complete before this frame draws.
+       A FRAME WITH NO STAGING IS SKIPPED, NOT REFUSED: the serials are not
+       advanced, and the next frame sends what this one could not. */
     doHeight = t.height ? (!s_height.have || s_height.serial != t.heightSerial)
                         : !s_height.have;
     doBase = !s_base.have || s_base.serial != t.atlasSerial || s_basePal != t.palSerial;
     if (doHeight || doBase) {
         heightBytes = doHeight ? (VkDeviceSize)hW * hH : 0;
-        baseOff = ALIGN4(heightOff + heightBytes);
         baseBytes = doBase ? (VkDeviceSize)t.atlasW * t.atlasH * 4 : 0;
-        bigBytes = ALIGN4(baseOff + baseBytes);
-        if (s->bigCap < bigBytes || !s->bigStage) {
-            slot_drop_bigstage(d, s);
-            if (!mk_buffer(d, bigBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                           &s->bigStage, &s->bigMem, &s->bigMap)) goto refuse;
-            s->bigCap = bigBytes;
-        }
+        if (!tagpu_vk_stage_begin(d, &s->stage, ALIGN4(heightBytes) + baseBytes,
+                                  (VkDeviceSize)t.atlasW * 4))
+            return 0;
         if (doHeight) {
             /* no grid: one zero texel, which the shader never reads */
-            if (t.height) memcpy(s->bigMap + heightOff, t.height, (size_t)heightBytes);
-            else          memset(s->bigMap + heightOff, 0, 1);
-            shared_upload(cb, &s_height, s->bigStage, heightOff);
+            static const unsigned char zero = 0;
+            rc = t.height
+                ? tagpu_vk_stage_copy(d, cb, &s->stage, s_height.img, s_height.have,
+                                      t.height, hW, hW, hH, 1)
+                : tagpu_vk_stage_copy(d, cb, &s->stage, s_height.img, s_height.have,
+                                      &zero, 1, 1, 1, 1);
+            if (rc < 0) goto refuse;
+            if (rc == 0) return 0;
+            s_height.have = 1;
             s_height.serial = t.height ? t.heightSerial : 0;
         }
         if (doBase) {
-            tagpu_pal_expand(s->bigMap + baseOff, t.atlas, NULL, t.atlasW,
-                             0, 0, t.atlasW, t.atlasH, t.pal, NULL);
-            shared_upload(cb, &s_base, s->bigStage, baseOff);
+            rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_base.img, s_base.have,
+                                       t.atlas, NULL, t.atlasW, 0, 0, t.atlasW, t.atlasH,
+                                       t.pal, NULL);
+            if (rc < 0) goto refuse;
+            if (rc == 0) return 0;
+            s_base.have = 1;
             s_base.serial = t.atlasSerial;
             s_basePal = t.palSerial;
         }
     } else {
-        slot_drop_bigstage(d, s);
+        tagpu_vk_stage_drop(d, &s->stage);
     }
 
     /* AND THE REQUEST, if the producer published one --

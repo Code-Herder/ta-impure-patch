@@ -102,6 +102,7 @@
 
 #include "tagpu_vk_pass.h"
 #include "tagpu_vk_restore.h"
+#include "tagpu_vk_stage.h"
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -236,10 +237,7 @@ typedef struct {
     unsigned char*  vmap;
     VkDeviceSize    vcap;
 
-    VkBuffer        bstage;                /* the base atlas's upload, when due */
-    VkDeviceMemory  bmem;
-    unsigned char*  bmap;
-    VkDeviceSize    bcap;
+    TAGPU_VKSTAGE   stage;                 /* the base atlas's upload, when due */
 
     VkImage         pal, lht, fog;         /* the three small per-slot images  */
     VkDeviceMemory  palMem, lhtMem, fogMem;
@@ -453,13 +451,7 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     if (s->vbuf)  { vkDestroyBuffer(dev, s->vbuf, NULL); s->vbuf = VK_NULL_HANDLE; }
     if (s->vmem)  { vkFreeMemory(dev, s->vmem, NULL); s->vmem = VK_NULL_HANDLE; }
     s->vcap = 0;
-    /* THE UNMAP IS GUARDED BY THE MAP POINTER, NOT BY THE ALLOCATION: a
-       vkMapMemory that failed leaves the allocation standing and unmapping it
-       would be an error of its own. */
-    if (s->bmap)  { vkUnmapMemory(dev, s->bmem); s->bmap = NULL; }
-    if (s->bstage){ vkDestroyBuffer(dev, s->bstage, NULL); s->bstage = VK_NULL_HANDLE; }
-    if (s->bmem)  { vkFreeMemory(dev, s->bmem, NULL); s->bmem = VK_NULL_HANDLE; }
-    s->bcap = 0;
+    tagpu_vk_stage_drop(d, &s->stage);
     if (s->smallMap) { vkUnmapMemory(dev, s->smallMem); s->smallMap = NULL; }
     if (s->smallStage) { vkDestroyBuffer(dev, s->smallStage, NULL); s->smallStage = VK_NULL_HANDLE; }
     if (s->smallMem) { vkFreeMemory(dev, s->smallMem, NULL); s->smallMem = VK_NULL_HANDLE; }
@@ -468,19 +460,6 @@ static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
     kill_image(d, &s->fog, &s->fogMem, &s->fogView);
     s->fogW = s->fogH = 0;
     s->built = 0;
-}
-
-/* Give this slot's BASE ATLAS STAGING back -- the one piece of it that is
-   megabytes and is wanted only on the frames the atlas actually moved. Safe
-   here for the same one-line reason everything else in `prepare` is: the seam
-   has waited on this slot's fence, so the copy that read this buffer has
-   completed. */
-static void slot_drop_bstage(const TAGPU_VKPASS* d, SLOT* s)
-{
-    if (s->bmap)  { vkUnmapMemory(d->dev, s->bmem); s->bmap = NULL; }
-    if (s->bstage){ vkDestroyBuffer(d->dev, s->bstage, NULL); s->bstage = VK_NULL_HANDLE; }
-    if (s->bmem)  { vkFreeMemory(d->dev, s->bmem, NULL); s->bmem = VK_NULL_HANDLE; }
-    s->bcap = 0;
 }
 
 /* The fixed-size half of a slot: the palette and light-table images and the
@@ -1060,14 +1039,12 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FXHAND* h)
          h->restoreGen);
 }
 
-/* THE BASE ATLAS -- tagpu_vk_feat.c's `base_upload`, the same rule, with this
-   pass's own alpha (`s_flashAlpha`). */
+/* THE BASE ATLAS -- tagpu_vk_feat.c's `base_upload`, the same rule and the
+   same answers, with this pass's own alpha (`s_flashAlpha`). */
 static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                        const TAGPU_FXHAND* h)
 {
-    int rows = h->atlasRows, r[4], w, hh;
-    VkDeviceSize bytes;
-    VkBufferImageCopy rg;
+    int rows = h->atlasRows, r[4], w, hh, rc;
 
     /* THE DIMENSIONS ARE FIXED AT `atlas_build`, and the bindings naming the
        images touch every slot's set -- tagpu_vk_feat.c's `base_upload` has
@@ -1077,10 +1054,10 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
         plog(d, "fx: the atlas changed from %d texels square to %d - the pass "
                 "comes down rather than rewrite descriptor sets that frames in "
                 "flight are using", s_atDim, h->atlasDim);
-        return 0;
+        return -1;
     }
     if (s_bHave && s_bSerial == h->atlasSerial && s_bPal == h->palSerial) {
-        slot_drop_bstage(d, s);
+        tagpu_vk_stage_drop(d, &s->stage);
         return 1;
     }
     if (rows < 1) rows = 1;
@@ -1093,38 +1070,14 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     w = r[2] - r[0]; hh = r[3] - r[1];
     if (w <= 0 || hh <= 0) {
         s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
-        slot_drop_bstage(d, s);
+        tagpu_vk_stage_drop(d, &s->stage);
         return 1;
     }
-    bytes = (VkDeviceSize)w * hh * 4;
-    if (s->bcap < bytes || !s->bstage) {
-        slot_drop_bstage(d, s);
-        if (!mk_buffer(d, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       &s->bstage, &s->bmem, &s->bmap)) return 0;
-        s->bcap = bytes;
-    }
-    tagpu_pal_expand(s->bmap, h->atlas, h->atlasKey, h->atlasDim, r[0], r[1], w, hh, h->pal,
-                     s_flashAlpha);
-    img_barrier(cb, s_bImg,
-                s_bHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                        : VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                s_bHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                        : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                s_bHave ? VK_ACCESS_SHADER_READ_BIT : 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    memset(&rg, 0, sizeof rg);
-    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    rg.imageSubresource.layerCount = 1;
-    rg.imageOffset.x = r[0]; rg.imageOffset.y = r[1];
-    rg.imageExtent.width = (uint32_t)w; rg.imageExtent.height = (uint32_t)hh;
-    rg.imageExtent.depth = 1;
-    vkCmdCopyBufferToImage(cb, s->bstage, s_bImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
-    img_barrier(cb, s_bImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    if (!tagpu_vk_stage_begin(d, &s->stage, (VkDeviceSize)w * hh * 4, (VkDeviceSize)w * 4))
+        return 0;
+    rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
+                               h->atlasDim, r[0], r[1], w, hh, h->pal, s_flashAlpha);
+    if (rc <= 0) return rc;
     s_bSerial = h->atlasSerial; s_bPal = h->palSerial;
     s_bHave = 1;
     return 1;
@@ -1352,7 +1305,13 @@ int tagpu_vk_fx_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         off += (size_t)h.n[b] * VST * sizeof(float);
     }
 
-    if (!base_upload(d, cb, s, &h)) goto refuse;
+    /* A FRAME WITH NO STAGING IS SKIPPED, NOT REFUSED: the atlas this frame
+       samples has not reached the device, and the next frame sends it. */
+    switch (base_upload(d, cb, s, &h)) {
+    case -1: goto refuse;
+    case 0:  return 0;
+    default: break;
+    }
 
     /* THE RESTORE, AFTER THE UPLOAD IT READS AND BEFORE ANY DRAW THAT SAMPLES
        WHAT IT PAINTS. The draws themselves are issued by the seam, from

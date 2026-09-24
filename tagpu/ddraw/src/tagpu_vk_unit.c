@@ -142,6 +142,7 @@
 
 #include "tagpu_vk_pass.h"
 #include "tagpu_vk_restore.h"   /* this lane restores the twin itself */
+#include "tagpu_vk_stage.h"     /* the bounded upload of the base atlas */
 #include <windows.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -362,10 +363,7 @@ typedef struct {
     unsigned char*  vsmap;
     VkDeviceSize    vscap;
 
-    VkBuffer        bstage;                /* the base atlas's, when one is due */
-    VkDeviceMemory  bsmem;
-    unsigned char*  bsmap;
-    VkDeviceSize    bscap;
+    TAGPU_VKSTAGE   stage;                 /* the base atlas's, when one is due */
 
     VkImage         pal, fogGrid, shk;
     VkDeviceMemory  palMem, fogGridMem, shkMem;
@@ -713,8 +711,8 @@ static void slot_free_sized(const TAGPU_VKPASS* d, SLOT* s)
     kill_buffer(d, &s->ubuf, &s->umem, &s->umap);
     kill_buffer(d, &s->pbuf, &s->pmem, &s->pmap);
     kill_buffer(d, &s->vstage, &s->vsmem, &s->vsmap);
-    kill_buffer(d, &s->bstage, &s->bsmem, &s->bsmap);
-    s->ucap = s->pcap = s->vscap = s->bscap = 0;
+    tagpu_vk_stage_drop(d, &s->stage);
+    s->ucap = s->pcap = s->vscap = 0;
 }
 
 static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
@@ -1655,6 +1653,19 @@ static int atlas_rgb_build(const TAGPU_VKPASS* d, int dim, int mips)
 static int atlas_build(const TAGPU_VKPASS* d, int dim)
 {
     if (s_bImg && s_atDim == dim) return 1;
+    /* THE SQUARE IS FIXED FOR THE LIFE OF THE PASS. `bind_main` writes this
+       view into the slot's set every frame, and the OTHER slots' submits are
+       still executing against the image, so re-creating it here would free an
+       image a pending command buffer samples. tagpu_render3do.c's ATLAS_DIM is
+       a compile-time constant, so this cannot fire; it is the guard that keeps
+       that true, as the feature and effects passes' `base_upload` is, and the
+       refusal is paid behind the seam's vkDeviceWaitIdle. */
+    if (s_bImg) {
+        plog(d, "unit: the atlas changed from %d texels square to %d - the pass "
+                "comes down rather than free an image frames in flight are "
+                "sampling", s_atDim, dim);
+        return 0;
+    }
     kill_image(d, &s_bImg, &s_bMem, &s_bView);
     s_atDim = 0;
     s_bHave = 0; s_bRows = 0; s_bSerial = 0; s_bPal = 0;
@@ -1805,18 +1816,18 @@ static int build(const TAGPU_VKPASS* d)
    everything submitted to this queue before it, and a write-after-read hazard
    needs only an execution dependency.
    Into its own staging rather than the vertex buffer's tail:
-   the band it sends is sized by the paints, not by the page, and a buffer of
-   its own is created on the frame it is due and given back on this slot's
-   next prepare that has nothing to send -- tagpu_vk_feat.c `base_upload`. */
+   the band it sends is sized by the paints, not by the page, and it goes
+   through the slot's bounded staging (tagpu_vk_stage.h), created on the frame
+   it is due and given back on this slot's next prepare that has nothing to
+   send -- tagpu_vk_feat.c `base_upload`, the same answers: 1 sent or nothing
+   due, 0 no staging this frame, -1 the pass must come down. */
 static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
                        const TAGPU_PDHAND* h)
 {
-    int rows = h->atlasRows, r[4], w, hh;
-    VkDeviceSize bytes;
-    VkBufferImageCopy rg;
+    int rows = h->atlasRows, r[4], w, hh, rc;
 
     if (s_bHave && s_bSerial == h->atlasSerial && s_bPal == h->palSerial) {
-        if (s->bstage) { kill_buffer(d, &s->bstage, &s->bsmem, &s->bsmap); s->bscap = 0; }
+        tagpu_vk_stage_drop(d, &s->stage);
         return 1;
     }
     if (rows < 1) rows = 1;
@@ -1829,39 +1840,14 @@ static int base_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, SLOT* s,
     w = r[2] - r[0]; hh = r[3] - r[1];
     if (w <= 0 || hh <= 0) {
         s_bSerial = h->atlasSerial; s_bPal = h->palSerial; s_bRows = rows;
-        if (s->bstage) { kill_buffer(d, &s->bstage, &s->bsmem, &s->bsmap); s->bscap = 0; }
+        tagpu_vk_stage_drop(d, &s->stage);
         return 1;
     }
-    bytes = (VkDeviceSize)w * hh * 4;
-    if (s->bscap < bytes || !s->bstage) {
-        kill_buffer(d, &s->bstage, &s->bsmem, &s->bsmap);
-        s->bscap = 0;
-        if (!mk_buffer(d, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       &s->bstage, &s->bsmem, &s->bsmap)) return 0;
-        s->bscap = bytes;
-    }
-    tagpu_pal_expand(s->bsmap, h->atlas, h->atlasKey, h->atlasDim, r[0], r[1], w, hh, h->pal, NULL);
-    img_barrier(cb, s_bImg, VK_IMAGE_ASPECT_COLOR_BIT, 1,
-                s_bHave ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                        : VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                s_bHave ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                        : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                s_bHave ? VK_ACCESS_SHADER_READ_BIT : 0,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    memset(&rg, 0, sizeof rg);
-    rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    rg.imageSubresource.layerCount = 1;
-    rg.imageOffset.x = r[0]; rg.imageOffset.y = r[1];
-    rg.imageExtent.width = (uint32_t)w; rg.imageExtent.height = (uint32_t)hh;
-    rg.imageExtent.depth = 1;
-    vkCmdCopyBufferToImage(cb, s->bstage, s_bImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
-    img_barrier(cb, s_bImg, VK_IMAGE_ASPECT_COLOR_BIT, 1,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    if (!tagpu_vk_stage_begin(d, &s->stage, (VkDeviceSize)w * hh * 4, (VkDeviceSize)w * 4))
+        return 0;
+    rc = tagpu_vk_stage_expand(d, cb, &s->stage, s_bImg, s_bHave, h->atlas, h->atlasKey,
+                               h->atlasDim, r[0], r[1], w, hh, h->pal, NULL);
+    if (rc <= 0) return rc;
     s_bSerial = h->atlasSerial; s_bPal = h->palSerial; s_bRows = rows;
     s_bHave = 1;
     return 1;
@@ -2661,7 +2647,18 @@ int tagpu_vk_unit_upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     s_saidShort = 0;
 
-    if (!base_upload(d, cb, s, &h)) goto refuse;
+    /* A FRAME WITH NO STAGING IS SKIPPED, NOT REFUSED: the atlas this frame
+       samples has not reached the device, and the next frame sends it. It
+       is below `slot_vstage`, so it returns without freeing the slot -- the
+       rule `standdown` states -- exactly as the every-unit-or-none gate above
+       does. */
+    switch (base_upload(d, cb, s, &h)) {
+    case -1: goto refuse;
+    case 0:
+        s_ndraw = 0; s_ncast = 0; s_nsil = 0; s_nslant = 0; s_nwire = 0;
+        return 0;
+    default: break;
+    }
 
     /* THE REQUEST, AFTER THE BASE EXISTS. `restore_want` reads `s_bView`, and
        the upload above is what fills it -- so asking earlier would ask over an
