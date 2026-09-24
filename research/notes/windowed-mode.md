@@ -133,26 +133,21 @@ Measured: the pointer now leaves its place for ~0.6 s and returns, instead of st
 
 ## Current known-good windowed config
 
-`ddraw.ini` (instance-private):
+There is no `ddraw.ini` ([removing ddraw.ini](ddraw-ini-removal.html)). The window is placed by
+the instance's `impure.cfg`, which `tacli` rewrites on every launch (`write_placement`) and the
+DLL reads under every launch, `tagpu_defaults.off` included:
 
 ```
-[ddraw]
-renderer=openglcore
-windowed=true
-fullscreen=false      ; true here = borderless fullscreen, NOT a window
-maintas=true
-vsync=false
-maxfps=60
-adjmouse=true
-border=true
-posX=<tile x>         ; CLI assigns per instance
-posY=<tile y>
-[TotalA]
-max_resolutions=32
-lock_surfaces=true
-maxgameticks=0        ; never raise: perturbs the sim
-minfps=0
+display=window        ; fullscreen here = borderless fullscreen, NOT a window
+window=<tile x>,<tile y>,0,0   ; 0,0 = the game's size; --window WxH gives a k != 1 client
+maxfps=60             ; 0 = uncapped (the store spells it `uncapped`), -1 = refresh
 ```
+
+Everything else is set in code (`config.c`, `tagpu_cfg.c`): the Vulkan backend (`tagpu_gdi.on`
+forces GDI), `maintas`, `vsync` off, `adjmouse`, a border, `lock_surfaces`, `singlecpu` off,
+`max_resolutions` 90, `maxgameticks` 0 (never raise: it perturbs the sim), and `center_window`
+never for a placed window — at cnc-ddraw's `auto` the shell-to-game mode switch re-centres it off
+its tile.
 
 Two X windows carry the game's title: the outer frame (client + decoration, e.g. 668×546)
 and the 640×480 client. Match on geometry, and remember the user's Discord and browser

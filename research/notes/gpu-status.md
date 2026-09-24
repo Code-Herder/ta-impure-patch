@@ -14,11 +14,11 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5
 ## 1. Status — what is ours, what is still the engine's
 
 **THERE ARE TWO RENDERER BACKENDS SINCE 2026-09-18, AND THE PROCESS CREATES NO GL CONTEXT ON
-ANY PATH.** `renderer=vulkan` is the patch and `renderer=gdi` the reference. `auto` and every
-value the switch does not name reach the Vulkan lane, which hands the session to GDI late if it
-will not come up; a value that is not `auto` is logged as `ddraw: renderer=X is not a renderer`.
-The old names — `opengl`, `openglcore`, `direct3d9` — are not recognised and take that path
-(§2.85). `render_ogl.c` (2 015 lines) and `render_ogl.h` went in the vulkan-only plan's
+ANY PATH.** The Vulkan backend is the patch and the GDI backend the reference. There is no
+`renderer=` key any more — the DLL reads no `ddraw.ini` (§2.8b) — so the Vulkan lane is what
+every launch gets, handing the session to GDI late if it will not come up, and the harness lever
+`tagpu_gdi.on` forces GDI (`cfg: … renderer GDI (tagpu_gdi.on)`). The `renderer=` spellings
+below and throughout the dated records are the ini key those launches used (§2.85). `render_ogl.c` (2 015 lines) and `render_ogl.h` went in the vulkan-only plan's
 landing 11-2, ahead of the sixteen passes' GL draw halves rather than behind them -- with the
 lane's only other `tagpu_overlay_draw` caller gone, `gl_draws = !tagpu_vk_owns_present()` is
 false at every surviving call, so those halves are now unreachable by an ordering and 11-3/11-4
@@ -1897,53 +1897,33 @@ and `shield`, the three that were never on the table. **Not measured**: a player
 is what the `_local` test VM is for; the defaults on a map change (the `*own` halves are attach
 time, the rest re-read every 30 frames, so nothing new is expected).
 
-### 2.8b The fork defaults (`tagpu_cfg.c`) — since 2026-09-10
+### 2.8b The fork's settings (`tagpu_cfg.c`) — no ddraw.ini
 
-`tagpu_opt.c` arms our passes with no file; this is its sibling for **cnc-ddraw's own settings**,
-so that a player never edits `ddraw.ini` to get a working game. It runs at the END of `cfg_load()`,
-immediately before `ini_free()` — the parsed ini is still in memory there, which is what lets it
-ask whether the player wrote a key, through the same section rule `cfg_get_string` uses (the game
-section, then `ddraw`).
+**The DLL reads no config file.** `cfg_load()` (`config.c`) sets every `g_config` field to
+cnc-ddraw's own default — the value it took when the key was absent — and `tagpu_cfg_defaults()`
+then sets the ones TA needs, attaches nothing else, and logs one line:
+`cfg: max_resolutions 90, toggle_borderless, lock_surfaces, singlecpu off, maintas;
+display=… maxfps=… window=…; renderer Vulkan|GDI (tagpu_gdi.on)`. Upstream's template writer,
+`ini.c`, the per-game section lookup and `cfg_save`'s ini half are deleted, and so are the eleven
+per-game hacks (`vhack`, `tshack`, `infantryhack`, …), none of which TA ever turned on
+([removing ddraw.ini](ddraw-ini-removal.html)).
 
-| key | ours | why |
+| field | ours | why |
 |---|---|---|
-| `windowed` + `fullscreen` | both true | borderless fullscreen (`dd.c` sizes the render target from the desktop mode); **one decision, not two** |
-| `toggle_borderless` | true | alt+enter switches borderless ↔ window instead of taking `util_toggle_fullscreen`'s exclusive branch, which is a real `ChangeDisplaySettings` |
-| `max_resolutions` | 90 | the mode list TA is fed; **and bounded at 100 whatever the ini says** |
-| `inject_resolution` | the desktop mode | the one list entry exempt from the `CDS_TEST` filter, so the monitor's own mode is *guaranteed* into the picker ([resolution](resolution.html) §6.5) |
+| `windowed` + `fullscreen` | both true, then the store's `display` | borderless fullscreen, or a window; never `fullscreen` alone, which is `util_toggle_fullscreen`'s exclusive modeset |
+| `toggle_borderless` | true | alt+enter switches borderless ↔ window instead of taking the exclusive branch, a real `ChangeDisplaySettings` |
+| `max_resolutions` | 90 | the mode list TA is fed; **bounded at 100 by a static assert**, because TA's "DISPLAY MODES" allocation is 100 entries whose writer `0x4B5330` does not bounds-check ([resolution](resolution.html) §6.1/§6.3), and cnc-ddraw's 0 means no cap |
+| `lock_surfaces` | true | `dds_Lock`/`dds_Unlock` hold the surface's critical section, and the GDI backend the primary's while it blits, only when set |
+| `singlecpu` | false | cnc-ddraw's default pins the whole process, the render thread included, to one CPU |
+| `maintas` | true | the aspect-preserving fit |
+| `maxfps`, `window_rect` | the store's `maxfps` and `window` | read under `tagpu_defaults.off` too (`tagpu_settings_placement`): nothing else can place the window |
+| `center_window` | never, when the store placed the window | at cnc-ddraw's `auto`, the shell-to-game mode switch re-centres the window off its tile |
+| `gdi` | `tagpu_gdi.on` present | forces the GDI backend; otherwise Vulkan |
+| `inject_resolution` | the desktop mode | the one list entry exempt from the `CDS_TEST` filter, so the monitor's own mode is *guaranteed* into the picker ([resolution](resolution.html) §6.5); filled lazily in `EnumDisplayModes`, because `cfg_load` runs under the loader lock and must not touch the display |
 
-**A key the player wrote wins**, and that includes the one `cfg_save()` writes back after they
-press alt+enter — so their own choice sticks across launches. One line at attach says which way it
-went: `cfg: tagpu defaults: max_resolutions 0 -> 90, toggle_borderless 0 -> 1, windowed 0 -> 1,
-fullscreen 0 -> 1 (the ini wins; the player set nothing)`.
-
-Four things about it are load-bearing and were each found by measuring rather than by reading:
-
-- **`windowed` and `fullscreen` are atomic.** `cfg_load` defaults `windowed` to FALSE, so owning
-  `fullscreen` alone would give a player with no ini fullscreen-*without*-windowed — the exclusive
-  modeset the `toggle_borderless` row exists to prevent. If the player wrote **either**, we own
-  **neither**. Verified: an ini with only `windowed=false` logs `the player set windowed,
-  fullscreen` and applies neither.
-- **The bound is not a default.** `max_resolutions=0` means *no cap*, and TA's "DISPLAY MODES"
-  allocation is 100 entries whose writer does not bounds-check ([resolution](resolution.html)
-  §6.1/§6.3). The clamp therefore applies to the player's own value too, and says so:
-  `cfg: max_resolutions 250 -> 100 (TA's mode buffer is 100 entries and its callback 0x4B5330
-  does not bounds-check)`.
-- **We had to stop shipping these keys, in two places.** `cfg_create_ini()` writes a full ini for a
-  player who has none, and its **generic `[ddraw]` block** set all four — so every key read as
-  "the player's" and *nothing applied*. That is exactly what the first end-to-end run showed
-  (`the player set max_resolutions, toggle_borderless, windowed, fullscreen`, all four skipped).
-  They are commented out there and gone from `[TotalA]` and from `tagpu/release/ddraw.ini`. **If
-  one comes back, this module silently stops working and nothing warns you.**
-- **No display API at `DLL_PROCESS_ATTACH`.** `cfg_load` runs under the loader lock, so
-  `inject_resolution` is filled lazily inside `EnumDisplayModes`, where the desktop mode has
-  already been read for `max_w`/`max_h`.
-
-**tacli is unaffected and deliberately so:** `write_ddraw_ini` writes all four explicitly, so an
-instance is always explicit and every measurement is unchanged — which also means **an instance
-does not exercise the player path**. To test that path, put `tagpu/release/ddraw.ini` in the
-gamedir (or delete it entirely and let the DLL create one) and launch bare, with no `--res`,
-`--window` or `--maxfps`, which are the only knobs that rewrite the file.
+**tacli writes the placement into `impure.cfg`** on every launch (`write_placement`:
+`display=window`, `window=<tile>,<client>`, `maxfps`), which is what keeps an instance on its
+tile, and `tacli launch --shipped` writes none of it, for the player's path.
 
 ### 2.9 The pose race, and the guard that closed it — HISTORY (removed by G16 step 8, 2026-09-09)
 

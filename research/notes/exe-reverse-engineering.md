@@ -584,7 +584,7 @@ up to 64 MB past the tile set. That read is the fault.
   edge of **any** map the eye is then negative: in `(−32, 0)` just past the edge, and down to
   −448 × −254 at zoom 2 at 1920×1080. The engine's pass sees that eye on every draw it runs while
   zoomed in: every draw with `terrown.off`, a level's first draws before terrown latches the
-  ground when the zoom is already above 1, and every draw under `renderer=gdi`, where none of our
+  ground when the zoom is already above 1, and every draw on the GDI backend, where none of our
   passes draws [INFERRED, not run].
 
 MEASURED, each on the first in-play draw of a scenario load with the shipped play set (`--defaults`)

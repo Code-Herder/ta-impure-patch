@@ -21,7 +21,7 @@
 #                     weapon dump, scenario detection); out of the exchange's scope.
 #                     THEY RUN ON THE GAME THREAD, from the engine's own flip
 #                     (tagpu_gui_hook.c's before_flip) rather than from
-#                     tagpu_overlay_draw -- which is what lets them reach renderer=gdi
+#                     tagpu_overlay_draw -- which is what lets them reach the GDI backend
 #                     -- so they read engine memory from the thread that owns it.
 #   pure-engine-code  render thread executes an engine FUNCTION over our buffers, with
 #                     the disassembly range that shows it reads only its arguments and
