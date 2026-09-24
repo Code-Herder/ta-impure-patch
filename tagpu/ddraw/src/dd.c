@@ -1183,17 +1183,18 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
         }
         else if (g_config.window_rect.left != -32000 && g_config.window_rect.top != -32000)
         {
-            /* tagpu: A PLACED FRAME THAT HANGS OFF EVERY MONITOR IS MOVED ONTO ONE.
+            /* tagpu: A PLACED WINDOW WITH A CORNER ON NO MONITOR IS MOVED ONTO ONE.
                A placed frame is never re-centred (center_window NEVER,
                tagpu_cfg.c), so it keeps its origin while the mode grows under it
                -- the 640x480 shell dragged to a corner becomes a 1600x900 game
                hanging past the edge -- and impure.cfg keeps it across launches,
-               when its screen may be unplugged since. A corner on no monitor
-               means part of the game is where the player cannot see it; the
-               frame then moves the least distance that puts it wholly on the
-               monitor it overlaps most (top-left aligned if it is the larger).
-               A frame straddling two monitors, as tacli's tiles may, has every
-               corner on one and stays. */
+               when its screen may be unplugged since. A client corner on no
+               monitor means part of the game is where the player cannot see it;
+               the window, decoration included, then moves the least distance
+               that puts it in the WORK AREA of the monitor it overlaps most,
+               its top-left kept in view if it is the larger, so the title bar
+               stays reachable. A client straddling two monitors, as tacli's
+               tiles may, has every corner on one and stays. */
             RECT r = { x, y, x + (LONG)g_ddraw.render.width, y + (LONG)g_ddraw.render.height };
             POINT corner[4] = { { r.left, r.top }, { r.right - 1, r.top },
                                 { r.left, r.bottom - 1 }, { r.right - 1, r.bottom - 1 } };
@@ -1205,15 +1206,25 @@ HRESULT dd_SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP, DWORD dwFl
 
             if (off && GetMonitorInfoA(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi))
             {
-                if (r.right > mi.rcMonitor.right)
-                    x -= r.right - mi.rcMonitor.right;
-                if (r.bottom > mi.rcMonitor.bottom)
-                    y -= r.bottom - mi.rcMonitor.bottom;
-                if (x < mi.rcMonitor.left)
-                    x = mi.rcMonitor.left;
-                if (y < mi.rcMonitor.top)
-                    y = mi.rcMonitor.top;
+                RECT f = r, placed;
 
+                AdjustWindowRectEx(&f, real_GetWindowLongA(g_ddraw.hwnd, GWL_STYLE),
+                                   GetMenu(g_ddraw.hwnd) != NULL,
+                                   real_GetWindowLongA(g_ddraw.hwnd, GWL_EXSTYLE));
+                placed = f;
+
+                if (f.right > mi.rcWork.right)
+                    OffsetRect(&f, mi.rcWork.right - f.right, 0);
+                if (f.bottom > mi.rcWork.bottom)
+                    OffsetRect(&f, 0, mi.rcWork.bottom - f.bottom);
+                if (f.left < mi.rcWork.left)
+                    OffsetRect(&f, mi.rcWork.left - f.left, 0);
+                if (f.top < mi.rcWork.top)
+                    OffsetRect(&f, 0, mi.rcWork.top - f.top);
+
+                /* the client moves with its frame */
+                x += f.left - placed.left;
+                y += f.top - placed.top;
                 g_config.window_rect.left = x;
                 g_config.window_rect.top = y;
             }

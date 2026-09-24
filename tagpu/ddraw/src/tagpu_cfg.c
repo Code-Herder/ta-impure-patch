@@ -88,8 +88,8 @@ void tagpu_cfg_defaults(void)
            dd_SetDisplayMode re-centres the window whenever TA switches to a mode
            larger than the window's recorded size -- the 640x480 shell giving way
            to a bigger game -- which throws a tiled instance off its tile. One
-           the bigger mode would push off every monitor is moved onto one
-           instead (dd_SetDisplayMode). */
+           the bigger mode would leave with a corner on no monitor is moved
+           into a monitor's work area instead (dd_SetDisplayMode). */
         g_config.center_window = CENTER_WINDOW_NEVER;
     }
 

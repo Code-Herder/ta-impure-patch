@@ -651,12 +651,13 @@ void util_update_bnet_pos(int new_x, int new_y)
    - Fullscreen, with a windowed frame on record (`window_rect`, from the store
      or from this session's window -- util_toggle_fullscreen records it on the
      way out): the monitor that frame is on, so Alt+Enter goes fullscreen where
-     the window was. A frame on no monitor (its screen unplugged) counts as none.
+     the window was: the monitor its client overlaps most. A frame on no
+     monitor (its screen unplugged) counts as none.
    - Fullscreen with no frame: the PRIMARY, the monitor at the desktop's origin.
      Never the window's own there: nothing has placed the window, so it is
      wherever wine created it (ddraw-ini-removal.md, the monitor rule).
    Read on the render thread too (fpsl_init, through util_target_refresh):
-   `fullscreen` is an aligned BOOL and the frame two aligned LONGs, so a racing
+   `fullscreen` is an aligned BOOL and the frame four aligned LONGs, so a racing
    read can mix an old and a new value, and every answer is a monitor that
    exists: a point on none falls through to the primary. */
 HMONITOR util_default_monitor(void)
@@ -668,8 +669,15 @@ HMONITOR util_default_monitor(void)
 
     if (g_config.window_rect.left != -32000 && g_config.window_rect.top != -32000)
     {
-        POINT frame = { g_config.window_rect.left, g_config.window_rect.top };
-        HMONITOR mon = MonitorFromPoint(frame, MONITOR_DEFAULTTONULL);
+        /* the client, not its origin: a window dragged partly past a
+           monitor's edge, or with its origin in the gap between two monitors
+           of different sizes, is still on the one it overlaps most */
+        LONG w = g_config.window_rect.right ? g_config.window_rect.right : (LONG)g_ddraw.width;
+        LONG h = g_config.window_rect.bottom ? g_config.window_rect.bottom : (LONG)g_ddraw.height;
+        RECT frame = { g_config.window_rect.left, g_config.window_rect.top,
+                       g_config.window_rect.left + (w > 0 ? w : 1),
+                       g_config.window_rect.top + (h > 0 ? h : 1) };
+        HMONITOR mon = MonitorFromRect(&frame, MONITOR_DEFAULTTONULL);
 
         if (mon)
             return mon;

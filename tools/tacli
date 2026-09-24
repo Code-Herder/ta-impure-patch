@@ -1286,7 +1286,8 @@ def _launch(args) -> dict:
     picked = None
     defaults_on = (args.defaults if getattr(args, "defaults", None) is not None
                    else meta.get("defaults"))
-    if not args.res and defaults_on:
+    # a --shipped launch's store is the player's (strip_to_shipped): never the harness's size
+    if not args.res and defaults_on and not shipped:
         picked = store_res(inst)
         if picked and list(picked) == list(meta.get("res") or []):
             picked = None
