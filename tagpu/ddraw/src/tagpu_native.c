@@ -2259,12 +2259,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            ...OR while the eye this frame is drawn from is AHEAD of the
            packet's — a cursor-anchored step the game thread has not applied
            yet. The engine's grid is anchored at the packet's eye with only
-           its two spare columns of slack, and one frame of the tween can
-           carry the eye by up to vw/2 — 896 px at the 1792-px viewport of a
-           1920x1080 screen, against the 32 px those two columns are worth.
-           The wide grid spans it with room over: an anchored zoom-in's view
-           is a subset of the view before it, and the grid is sized at the
-           zoom FLOOR.
+           its two spare columns of slack, and an anchored zoom from z0 to z1
+           moves the eye by up to (vw/2)(1/z0 - 1/z1) — as much as
+           3.875 (vw/2) across the whole range, 3472 px at the 1792-px
+           viewport of a 1920x1080 screen — against the 32 px those two
+           columns are worth. The wide grid is sized at the zoom FLOOR and
+           spans every gesture that only zooms in; a gesture that reverses
+           while the game thread lags can outrun it by a strip, which draws
+           the border cell smeared (tagpu_fogwide.c, fogw_window, states the
+           bound).
 
            ...OR while the packet's eye is off the engine's own range, where
            the engine writes its border completions on literal rows and

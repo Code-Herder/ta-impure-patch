@@ -379,7 +379,7 @@ tools/tacli launch <i> --no-shield --res 1920x1080
 ```
 
 Units and wrecks, terrain, features, effects, particles, the markers and the shift-held order
-overlay, zoom with the widened camera range, the wide viewport that makes zoomed-out clicks
+overlay, zoom with BAR's camera, the wide viewport that makes zoomed-out clicks
 land, and the UI layer. Classic++ (restored true colour, lit, shadowed) is one switch,
 `classicpp.on`, and its `assets=` knob is what feeds the restorer — world, HUD and shell.
 `ghost.on` is a play default and off this bench line because its posed draws perturb a

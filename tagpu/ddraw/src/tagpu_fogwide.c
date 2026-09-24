@@ -333,21 +333,39 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
    whole range means no step of any lever can outrun the grid, at the cost of a
    window that is 16x the 1x viewport's area while any zoom-out is live.
 
-   AND IT COVERS A STEPPED EYE FOR FREE, which is what cursor anchoring needs
-   and why FOGW_MARGIN need not grow for it. The window is centred on
-   `eye + vw/2` with half-width `evw/2 + MARGIN`, so a step `D` to level `z1`
-   is spanned when
+   A STEPPED EYE: WHAT IT COVERS AND WHAT IT DOES NOT. The window is centred
+   on `eye + vw/2` for the eye it was built at, with half-width
+   `(vw/2)/zmin + 32 + MARGIN`. A frame drawn at level `z` from an eye `U`
+   ahead of that one (the cursor anchor's steps the game thread has not
+   applied yet) shows half-width `(vw/2)/z` about a centre `U` away, so it
+   is covered while
 
-       (vw/2)[ |1/z0 - 1/z1| + 1/z1 - 1/zmin ]  <=  MARGIN
+       |U| + (vw/2)/z  <=  (vw/2)/zmin + 32 + MARGIN
 
-   with `|D| <= (vw/2)|1/z0 - 1/z1|`, the anchor being inside the viewport.
-   Only a zoom-IN anchors (tagpu_zoom.c anchor_step), and there that reduces to
-   `(vw/2)(1/z0 - 1/zmin) <= 0` — an anchored zoom-in's view is a SUBSET of the
-   view before it, so there is nothing new to cover. A zoom-out does not move
-   the eye (D = 0), so its view is centred where the window is and needs only
-   `(vw/2)(1/z1 - 1/zmin) <= MARGIN`, true for every `z1 >= zmin`. Neither
-   depends on how far one frame goes, so a tween that crosses the whole range
-   in one frame is covered too. So the margin is slack for this, not budget. */
+   and past it a strip of `|U| + (vw/2)/z - (vw/2)/zmin - 32 - MARGIN` on the
+   leading side falls outside the grid (per axis; vh for y).
+     A GESTURE THAT ONLY ZOOMS IN IS ALWAYS COVERED: each notch's term is at
+   most `(vw/2)` times its drop in distance and the eye and the distance are
+   lerped along the same ease, so `|U| <= (vw/2)(1/z_built - 1/z)` and
+   `|U| + (vw/2)/z <= (vw/2)/z_built` — the view is a subset of the one the
+   grid was built for. A gesture that only zooms out adds no displacement.
+     A GESTURE THAT REVERSES IS NOT. The displacement a zoom-in owes is paid
+   out along the tween that follows it, zoom-outs included (tagpu_zoom.c, "the
+   wheel"), so `|U|` can hold the zoom-in's displacement while `1/z` climbs
+   back. With the game thread stalled across a whole flick, `|U|` reaches
+   `(vw/2)(1/zmin - 1/zmax)`, and the strip `3.875 (vw/2) - 288` — 1448 px
+   at vw 896, 3184 at vw 1792 (a 100 ms stall at 0.25x with a flick in and
+   out puts a 1792-px view's edge at 4794 against the 3872 the window
+   spans). Without a stall `U` is the last frame or two of posting — at
+   60 Hz the first frame of a tween posts 24 % of what it owes — and a
+   reversal started at the zoom floor can still leave a strip of a few
+   hundred px for those frames.
+     THE RESIDUAL IS VISUAL ONLY AND IT IS STATED, NOT CLOSED: the strip draws
+   the grid's border cell smeared outward (taFog's clamp), nothing reads
+   outside any allocation, and it lasts until the game thread applies the
+   step — the next tick builds this window about the new eye. Covering it by
+   construction would mean a window sized for `|U|max` on top of the view,
+   about four times the area, and the grid rides the frame packet. */
 static int fogw_window(char* ta, int vw, int vh,
                        int* col0, int* row0, int* cols, int* rows)
 {

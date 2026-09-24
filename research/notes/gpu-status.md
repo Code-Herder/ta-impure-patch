@@ -731,8 +731,23 @@ frame than `read_lever()` runs, leaving a bump nobody would ever ack. It now ask
 Two claims the review disproved, corrected above and in
 [exe reverse engineering](exe-reverse-engineering.html): the lowest level a single ease step can
 cross 1.0 from is **0.5 exactly**, not 0.489, and the engine grid's slack collapses to the bare
-32 px at 1×, not to zero. `tagpu_fogwide.c`'s coverage derivation was true but its proof was
-not — it holds only under the one-ease-step bound, which the comment now states.
+32 px at 1×, not to zero. `tagpu_fogwide.c`'s coverage derivation holds for a gesture that only
+zooms in, and not for one that reverses (below).
+
+**The wide fog grid's cover, stated [2026-09-23].** The grid is built each tick about the live eye
+with half-width `(vw/2)/zmin + 32 + FOGW_MARGIN`; a frame drawn at level `z` from an eye `U` ahead
+of it is covered while `|U| + (vw/2)/z` fits inside that, and past it a strip of the difference on
+the leading side is not. A gesture that only zooms in is always covered (`|U| ≤ (vw/2)(1/z_built −
+1/z)`, so the view is a subset of the one the grid was built for). **A gesture that reverses is
+not**: the displacement a zoom-in owes is paid out along the tween that follows it, zoom-outs
+included, so `|U|` can hold it while `1/z` climbs back. With the game thread stalled across a whole
+flick the strip reaches `3.875·(vw/2) − 288` (3184 px at vw 1792; the landing review's example, a
+100 ms stall at 0.25× with a flick in and out, puts a 1792-px view's edge at 4794 against 3872);
+without a stall `U` is the last frame or two of posting and a reversal started at the zoom floor
+can still leave a few hundred px for those frames. **The residual is visual only**: the strip
+draws the grid's border cell smeared outward, nothing reads outside an allocation, and it lasts
+until the game thread applies the step. Closing it by construction would need a window about four
+times the area, riding the frame packet; it is not closed.
 
 **And one it raised that measurement refutes.** We do not set the minimap's dirty bit, and at
 `k = 1` the sharp minimap layer returns early (`tagpu_gui_surf.c:1451`), so the engine draws the
@@ -987,8 +1002,9 @@ Continents: map 10720 x 12672, `W = 896`, `H = 704`):
   (`78c22b2`) and this one swapped in the gamedir: the terrain pass at 0.5×, 1× and 2× and the unit
   pass at 1× and 2× are **0 px of 3 145 728** apart (`tools/vk-ab.py`), md5-identical; the terrain
   captures carry 2.52 M non-black pixels and the unit captures 8 465 and 22 973.
-* **The scenario camera** (`tagpu_scenario.c`'s `place_camera`) still clamps into the engine's own
-  range, so a scenario that centres near an edge frames exactly as before and no fixture moved.
+* **The scenario camera** (`tagpu_scenario.c`'s `place_camera`, on the game thread from the flip
+  observer) still clamps into the engine's own range — held at 0 on a map narrower than the view —
+  so a scenario that centres near an edge frames exactly as before and no fixture moved.
 
 ### 2.3d The cursor, and where `u` is allowed to reach the engine (`zoom.on`, G13m)
 

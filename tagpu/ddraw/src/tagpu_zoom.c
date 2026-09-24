@@ -956,8 +956,10 @@ static unsigned char* build_block_stub(void (__cdecl *fn)(void), unsigned resume
    `main+0x14287` and two other grids [DISASSEMBLED 2026-09-23]. It draws
    nothing unless the debug view `main+0x14280` or the Contour command
    `0x511DD0` is on. With the eye inside `[0, map - W]` it runs exactly as
-   stock; outside it the overlay is skipped for that draw, which costs a
-   developer view one frame's lines and nothing else. GAME THREAD, inside
+   stock; outside it the overlay is skipped on EVERY draw, for as long as the
+   eye stays there — which the centre range allows whenever the view is
+   within W/2 (H/2) of a map edge — so a developer view shows no lines at all
+   along the map's edges, and the game loses nothing. GAME THREAD, inside
    DrawGameScreen, where nothing writes the eye. */
 static void __stdcall zoom_debug_overlay(void* ctx)
 {
@@ -1538,9 +1540,12 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    engine grid's slack collapses to 32 px at z -> 1 (exe note), so a frame
    whose predicted eye is ahead of the packet's takes the WIDE grid
    (tagpu_zoom_wide_fog, tagpu_native.c) — built every tick from the live eye
-   with a margin that covers any anchored step, because an anchored zoom-in's
-   view is a subset of the view before it. Nothing here depends on terrown
-   owning the fog draw: the invalidation is the engine's own mechanism.
+   and sized at the zoom floor, which covers every gesture that only zooms
+   in (its view is a subset of the view before it). A gesture that reverses
+   while the game thread lags can outrun it by a strip that draws the border
+   cell smeared until the step is applied; tagpu_fogwide.c's fogw_window
+   states the bound. Nothing here depends on terrown owning the fog draw: the
+   invalidation is the engine's own mechanism.
 
    A FOLLOWED CAMERA IS RELEASED RATHER THAN FOUGHT. The stepper recomputes the
    scroll target from the followed unit every frame (`0x41CAF7`) and clamps it

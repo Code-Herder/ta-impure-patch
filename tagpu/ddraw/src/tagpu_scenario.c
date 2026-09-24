@@ -2083,13 +2083,18 @@ static void write_result(void)
 }
 
 /* The camera is display state, not sim state, so it is set here rather than on
-   the tick. `at` and `center_on` both mean the CENTRE of the window, so the eye
-   is the centre minus half a view, using the projection the roster already
-   reports. The eye is written straight into the field, outside the zoom
-   module's apply, so it is clamped to the engine's own range `[0, map - W]`:
-   that range is inside the camera's range whichever is in force, and an eye
-   off it is only safe on a draw whose ground our terrain pass owns
-   (tagpu_zoom.c, "the camera's range"). A `pin` then holds exactly this eye. */
+   the tick. GAME THREAD: tagpu_scenario_frame runs only from
+   tagpu_triggers_frame, whose one host is the flip observer `before_flip`
+   (tagpu_gui_hook.c), on the thread that presents — the same thread as every
+   other writer of the eye, between two draws. `at` and `center_on` both mean
+   the CENTRE of the window, so the eye is the centre minus half a view, using
+   the projection the roster already reports. The eye is written straight into
+   the field, outside the zoom module's apply, so it is clamped to the engine's
+   own range `[0, map - W]` — the top first, then the bottom, so a map narrower
+   than the view (where `map - W` is negative) holds it at 0: that range is
+   inside the camera's range whichever is in force, and an eye off it is only
+   safe on a draw whose ground our terrain pass owns (tagpu_zoom.c, "the
+   camera's range"). A `pin` then holds exactly this eye. */
 static void place_camera(const TAGPU_FRAME* f)
 {
     char* ta = ta_base();
@@ -2116,8 +2121,10 @@ static void place_camera(const TAGPU_FRAME* f)
     ex = g_cam_x - gw / 2 + 128;
     ey = g_cam_y - g_cam_h / 2 - gh / 2 + 32;
 
-    if (ex < 0) ex = 0; else if (ex > mw - vw) ex = mw - vw;
-    if (ey < 0) ey = 0; else if (ey > mh - vh) ey = mh - vh;
+    if (ex > mw - vw) ex = mw - vw;
+    if (ex < 0) ex = 0;
+    if (ey > mh - vh) ey = mh - vh;
+    if (ey < 0) ey = 0;
 
     *(volatile int*)(ta + OFF_EYEX)  = ex;
     *(volatile int*)(ta + OFF_EYEY)  = ey;
