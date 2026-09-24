@@ -329,11 +329,28 @@ static void put_vert(int b, float x, float y, float u, float v, float c, int mod
 static int s_cLines = 0, s_cSprites = 0, s_cFlash = 0, s_cAtlasFail = 0;
 static int s_cOverflow = 0, s_cQuads = 0;
 
+/* A PART ASKED FOR AND NOT WRITTEN. Every emitter return that leaves a
+   sprite's quad or a line out of the buckets for want of this frame's room
+   counts here: the atlas deferring a paint past the allowance, the atlas
+   full, a frame whose pixels would not decode (all three are
+   `tagpu_gaf_atlas_get` answering NULL), a bucket full. A sprite and an effect
+   snapshot it and take themselves back out when it moved (`emit_sprite`,
+   `effect_begin`), so the rollback is decided by the one count every such
+   path feeds, not by the paths' own tallies.
+   NOT COUNTED, because no part the frame asks for is lost: the `nosprites`
+   and `nolines` levers and the mute, which ask for none, and a frame the GAF
+   reader refuses (`tagpu_gaf_frame_geom`: zero-sized, or larger than the
+   decoder takes -- the publisher resolved every frame through the same test)
+   or one nested past four levels. That is the frame's own shape and the same
+   on every frame, so it cannot draw an effect half on one frame and whole on
+   the next. */
+static unsigned s_partsLost;
+
 static void put_quad(int b, float x0, float y0, float x1, float y1,
                      float u0, float v0, float u1, float v1, float c, int mode,
                      float wx, float wz)
 {
-    if (s_nv[b] + 6 > TAGPU_FX_MAXV_OF(b)) { s_cOverflow++; return; }
+    if (s_nv[b] + 6 > TAGPU_FX_MAXV_OF(b)) { s_cOverflow++; s_partsLost++; return; }
     put_vert(b, x0, y0, u0, v0, c, mode, wx, wz);
     put_vert(b, x1, y0, u1, v0, c, mode, wx, wz);
     put_vert(b, x0, y1, u0, v1, c, mode, wx, wz);
@@ -348,7 +365,7 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
     if (!s_lines) return;
     s_cLines++;
     if (s_mute) return;
-    if (s_nv[B_LINES] + 2 > TAGPU_FX_MAXV) { s_cOverflow++; return; }
+    if (s_nv[B_LINES] + 2 > TAGPU_FX_MAXV) { s_cOverflow++; s_partsLost++; return; }
     float c = (float)colidx / 255.0f;
     /* pixel centres: the engine's Bresenham paints the cells at both ends */
     put_vert(B_LINES, (float)x0 + 0.5f, (float)y0 + 0.5f, -1, -1, c, MODE_FLAT, wx, wz);
@@ -384,8 +401,9 @@ static void emit_sprite_r(const unsigned char* g, int sx, int sy, int mode, floa
     if (s_mute) return;
     const unsigned dN = s_atlas.deferN;
     const TAGPU_GAFENT* e = tagpu_gaf_atlas_get(&s_atlas, g);
-    /* a deferral is not a failure: emit_sprite counts it */
-    if (!e) { if (s_atlas.deferN == dN) s_cAtlasFail++; return; }
+    /* a deferral is the allowance's and the atlas counts it (`deferN`), so it
+       is not an atlas failure; either way the part is lost */
+    if (!e) { if (s_atlas.deferN == dN) s_cAtlasFail++; s_partsLost++; return; }
     int w = gm.w, h = gm.h;
     float x0 = (float)(sx - gm.hotx);
     float y0 = (float)(sy - gm.hoty);
@@ -395,16 +413,16 @@ static void emit_sprite_r(const unsigned char* g, int sx, int sy, int mode, floa
 }
 
 /* A SPRITE IS DRAWN WHOLE OR NOT AT ALL. A compound frame is several atlas
-   entries; one of them deferred past the allowance (tagpu_gaf.h `budget`)
-   takes the sprite's other quads back out, so no frame shows part of an
-   explosion. What did paint stays painted and draws on the next frame. */
+   entries; any one of them lost (`s_partsLost`) takes the sprite's other
+   quads back out, so no frame shows part of an explosion. What did paint
+   stays painted and draws on a later frame. */
 static void emit_sprite(const unsigned char* g, int sx, int sy, int mode, float wx, float wz, int depth)
 {
     int nv[NBUCKET], b, quads = s_cQuads;
-    const unsigned dN = s_atlas.deferN;
+    const unsigned lost = s_partsLost;
     for (b = 0; b < NBUCKET; b++) nv[b] = s_nv[b];
     emit_sprite_r(g, sx, sy, mode, wx, wz, depth);
-    if (s_atlas.deferN != dN) {
+    if (s_partsLost != lost) {
         for (b = 0; b < NBUCKET; b++) s_nv[b] = nv[b];
         s_cQuads = quads;
     }
@@ -467,17 +485,18 @@ static void emit_model(unsigned node, float ax, float ay, float wx, float wz,
 
 /* ---- AN EFFECT IS DRAWN WHOLE OR NOT AT ALL ---------------------------------
    One record of the packet is one effect: a projectile with its ground
-   shadow and its body, an explosion with its flash and its body. Its sprites
-   land in different buckets -- a shadow and a body in B_SPRITES, a flash in
-   B_FLASH -- and a sprite whose atlas paint is deferred past the allowance
-   (tagpu_gaf.h `budget`) is not drawn this frame. Taking back that sprite
-   alone would draw the rest without it for a frame: a flash with no
-   explosion, a shadow under no shell. So every record is emitted inside a
-   bracket, and A SPRITE OF IT DEFERRED takes the whole record back out at the
-   bracket's end: every bucket, the quad count and the model list return to
-   where they stood at its start. Nothing else is emitted inside a bracket, so
-   the rollback takes no other effect's vertices with it, and what did paint
-   stays painted and draws whole on a later frame.
+   shadow and its body, an explosion with its flash and its body, a laser's
+   lines. Its parts land in different buckets -- a shadow and a body in
+   B_SPRITES, a flash in B_FLASH, a line in B_LINES -- and any one of them can
+   be lost for this frame's want of room (`s_partsLost`: an atlas paint
+   deferred past the allowance, an atlas full, a decode that failed, a bucket
+   full). Taking back that part alone would draw the rest without it for a
+   frame: a flash with no explosion, a shadow under no shell. So every record
+   is emitted inside a bracket, and ANY PART OF IT LOST takes the whole record
+   back out at the bracket's end: every bucket, the quad count and the model
+   list return to where they stood at its start. Nothing else is emitted
+   inside a bracket, so the rollback takes no other effect's vertices with it,
+   and what did paint stays painted and draws whole on a later frame.
 
    THE MODELS ARE NOT A PART THAT IS DRAWN. The model list is walked by
    tagpu_native.c's `emit_fx_model` into a vertex array no lane reads, so no
@@ -485,7 +504,7 @@ static void emit_model(unsigned node, float ax, float ay, float wx, float wz,
    explosion's model; a record's drawn parts are its sprites and its lines,
    and those are what the bracket keeps whole. */
 static int      s_effNv[NBUCKET], s_effNm, s_effQuads;
-static unsigned s_effDefer;
+static unsigned s_effLost;
 
 static void effect_begin(void)
 {
@@ -493,13 +512,13 @@ static void effect_begin(void)
     for (b = 0; b < NBUCKET; b++) s_effNv[b] = s_nv[b];
     s_effNm = s_nm;
     s_effQuads = s_cQuads;
-    s_effDefer = s_atlas.deferN;
+    s_effLost = s_partsLost;
 }
 
 static void effect_end(void)
 {
     int b;
-    if (s_atlas.deferN == s_effDefer) return;
+    if (s_partsLost == s_effLost) return;
     for (b = 0; b < NBUCKET; b++) s_nv[b] = s_effNv[b];
     s_nm = s_effNm;
     s_cQuads = s_effQuads;
