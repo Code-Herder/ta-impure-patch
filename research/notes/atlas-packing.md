@@ -828,7 +828,9 @@ painted entry's cell is there to copy. The repack carries each painted cell from
 its new one (`mirror_move`, `tagpu_gaf.c`), border and alignment slack included, through a compact
 copy because old and new rects of different entries overlap. The feature pass then moves its own
 device copy of the atlas the same way (`tagpu_vk_stage_move`) and is sent only the paints it
-lacked ([gpu-status](gpu-status.html) §2.88).
+lacked ([gpu-status](gpu-status.html) §2.88). Its Classic++ restored twin moves by the same list,
+with everything no cell lands on cleared, and the published restore list is rewritten in place
+rather than restarted, so what was restored before the repack stays restored after it.
 
 An entry that was never painted — and every entry when there is no mirror — is only
 **reserved**: the repack assigns its rect and marks it `resv` with `ok = 0`, which keeps

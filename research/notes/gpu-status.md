@@ -16310,35 +16310,42 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
   unit atlas's used rows × 2048 × 4, up to 16 MiB. The terrain's is its whole atlas, 2176 × 5338
   × 4 = 46 461 952 bytes on Town & Country, plus the height grid, all in one mapping. A refused
   allocation took the pass down for the session.
-- **Now each slot keeps one `TAGPU_VKSTAGE` of at most `TAGPU_VK_STAGE_CAP`, 1 MiB**, made on a
-  frame that uploads and given back on the slot's next frame with nothing to send. The bound is
-  a constant whatever the atlas: 1 MiB × `TAGPU_VK_SLOTS` (8) = 8 MiB a pass, 32 MiB for the
-  four.
-    - **An upload that fits** is recorded in the frame's own command buffer, as before; the seam's
-      fence on the slot is what frees the buffer.
-    - **One that does not fit goes out in bands** of whole rows through the rest of the buffer.
-      Each band is copied by a submit of the module's own command buffer to the seam's queue and
-      waited on (its fence, one second) before the next band overwrites the same bytes. A wait that
-      gives up leaves the buffer marked in flight, and it is not recorded again until the device
-      reports that submit done.
-    - **No frame samples a texel the device has not received.** A banded upload is complete —
-      every band copied, the image back in `SHADER_READ_ONLY_OPTIMAL` — before `prepare` returns.
-      Its submits reach the queue before the frame's own, so the frame that asked for the page
-      draws all of it, exactly as the in-frame copy did. The price is a wait on the CPU, and only
-      an upload larger than the cap pays it.
+- **Now each slot keeps one `TAGPU_VKSTAGE` of at most `TAGPU_VK_STAGE_CAP`, 2 MiB**, made on a
+  frame that uploads and given back on the slot's next frame with nothing to send. 2 MiB is the
+  atlases' allowance, 1 024 tiles of RGBA8 (below), and `tagpu_vk_stage.c` asserts that the two
+  agree. **The address-space bound** is a constant whatever the atlas: one buffer per slot per
+  pass, and only on a frame that sends. The four world passes map at most **24 MiB** at the three
+  frame slots the swapchain gives on the reference setup, and **64 MiB** at the `TAGPU_VK_SLOTS`
+  ceiling of eight.
+    - **In play an upload is in the frame's own command buffer, or it is not made.** The tiles an
+      atlas painted since the device's copy go as one copy when they fit what the slot mapped
+      (`tagpu_vk_stage_expand_rects`). The atlas's allowance is what makes them fit. When they do
+      not — a slot that could map less than they need — nothing is recorded and the pass skips
+      the frame. The seam's fence on the slot is what frees the buffer.
+    - **A whole page goes out in bands**, and only on the events *What sends a whole page* lists:
+      whole rows through the rest of the buffer, each band copied by a submit of the module's own
+      command buffer to the seam's queue and waited on (its fence, one second) before the next
+      band overwrites the same bytes. A wait that gives up leaves the buffer marked in flight, and
+      it is not recorded again until the device reports that submit done.
+    - **No frame samples a texel the device has not received.** An in-frame copy is ordered before
+      the frame's draws by its barriers. A banded upload is complete — every band copied, the
+      image back in `SHADER_READ_ONLY_OPTIMAL` — before `prepare` returns. Its submits reach the
+      queue before the frame's own, so the frame that asked for the page draws all of it. The
+      price is a wait on the CPU.
     - **A refusal never latches.** `tagpu_vk_stage_begin` halves its ask on a refused allocation
-      or map, down to one row of the widest upload. A slot that cannot map even that gets 0, and
-      the pass skips the frame without advancing its serials: the upload is still due and the next
-      frame asks again. **A skipped frame draws nothing of that pass** — the terrain, the
-      features, the effects or the units are missing from that one frame — rather than anything
-      sampled from texels the device has not received. Only a device that fails a submit or a
-      fence partway through a banded upload refuses the pass.
+      or map, down to one row of the widest upload. A slot that cannot map what the frame needs
+      gets 0, and the pass skips the frame without advancing its serials: the upload is still due
+      and the next frame asks again. **A skipped frame draws nothing of that pass** — the
+      terrain, the features, the effects or the units are missing from that one frame — rather
+      than anything sampled from texels the device has not received. Only a device that fails a
+      submit or a fence partway through a banded upload refuses the pass.
 
   **MEASURED 2026-09-24**, `scenarios/big-battle.json` (Town & Country, 980 units converging),
   `--defaults`, Gamma 12, through the map load, a scroll burst (the camera jumped across the map
   nine times, 0.3 s apart), one forced swapchain rebuild (the path a window resize takes) and the
   fight. A diagnostic-only build summed each pass's mapped staging over its slots after every
-  frame's prepares; the figure is the largest sum at one frame, in MiB:
+  frame's prepares; the figure is the largest sum at one frame, in MiB. The cap was 1 MiB for
+  this table; at 2 MiB the bound above is the statement:
 
   | | features | effects | units | terrain | all four |
   |---|---|---|---|---|---|
@@ -16347,58 +16354,124 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
   | after, 3840 × 2160 | 1.78 | 2.09 | 1.01 | 1.00 | **5.09** |
   | after, 2560 × 1440 | 2.00 | 1.00 | 1.00 | 1.00 | **4.00** |
 
-  **The banded path's cost**, timed from the first band's fill to the last band's fence:
+  **The banded path's cost**, timed from the first band's fill to the last band's fence, in the
+  same runs (before the dirty map, so play still sent pages then):
 
-  - **At 2560 × 1440, 21 banded uploads in the run:**
-      - seven at the load;
-      - eight feature pages of 4.6–11.6 MB during the scroll burst, each jump painting a new
-        area;
-      - the four atlases re-sent whole at the rebuild (2.3, 46.5, 16.1 and 4.4 MB);
-      - two more of 1.1 and 1.3 MB.
-
-    The terrain's whole atlas takes 63 bands in 6.6–6.7 ms. The worst is 9.3 ms, of which 6.9 ms
-    is the first band waiting behind the frames still in flight.
+  - **At 2560 × 1440** the terrain's whole atlas takes 63 bands in 6.6–6.7 ms. The worst upload
+    took 9.3 ms, of which 6.9 ms was the first band waiting behind the frames still in flight.
   - **At 3840 × 2160** the first band's wait is up to 27.9 ms (28.7 ms in all). A fresh image's
     upload waits too, because its first band still queues behind the frames the queue is
-    executing. The terrain's 63 bands take 6.0–8.2 ms. That run counted 173 banded uploads, most
-    of them the full re-sends of 43 render-thread restarts. The restart loop predates this work:
-    the G20c base build restarts the same way at 4K (below, *Not covered*).
+    executing. The terrain's 63 bands take 6.0–8.2 ms. One of those runs went through 43
+    render-thread restarts, each a full re-send. The restart loop predates this work: the G20c
+    base build restarts the same way at 4K (below, *Not covered*).
 
-  So a full-page event now costs the render thread a wait of up to 28.7 ms at 4K, in place of up
-  to 66.6 MiB mapped at once.
+  So a whole-page event costs the render thread a wait of up to 28.7 ms at 4K, in place of up
+  to 66.6 MiB mapped at once — which is why no frame of play may take one.
 
-**What sends a full page, and what play sends.** A full page — a pass's whole used rows,
-banded when over the cap — is sent on:
+**What sends a whole page — never a frame of play.** A whole page — a pass's whole used rows,
+through the banded path, which waits — is sent on these events and no others:
 
 - a pass's first upload after it is built, so the session's first level and every teardown (a
   swapchain rebuild, which is what a resize runs);
-- the terrain's new atlas at every level's start;
+- the terrain's new atlas and height grid at a level's start;
 - a palette move (the engine serial);
-- a mirror's arm, or an atlas's creation or loss.
+- an atlas made or lost, its mirror armed, or a new level begun on it
+  (`tagpu_gaf_atlas_forget`, which writes the whole page, so a level opens with every visible
+  frame at once, as it does with the terrain's new atlas).
 
-Nothing else sends one. A recycle — a full unit or effects atlas dropped, or any atlas on a map
-change (`atlas_drop`) — writes nothing to the mirror; the live set is painted again as ordinary
-paints, which the map names tile by tile.
+Each pass logs the cause with the upload: `<pass>: the whole base atlas, N KB, through the banded
+path - <cause>`, and the terrain `terr: the base atlas and the height grid, N KB, …`.
+**The one route from play** is a feature repack on a device that refused the move buffer
+(`tagpu_vk_stage_move_ready`): the pass then takes the repack as a whole page, and the line says
+`a repack this copy cannot move - A WAIT IN PLAY`. A recycle — a full unit or effects atlas
+dropped (`atlas_drop`) — writes nothing to the mirror; the live set is painted again as ordinary
+paints, under the allowance.
 
 - **In play a pass sends the tiles its atlas's dirty map names** (`tagpu_gaf.h`): for each 32 × 16
   tile, the mirror serial of the last write to it. The map has a slot per tile, not per write, so
   it cannot overflow: however many paints land between two uploads, every tile they touched is
-  named, and a burst of paints is never a whole page. The tiles go as one copy of up to 256
-  regions (`tagpu_vk_stage_expand_rects`), in the frame's own command buffer when they fit the
-  slot's 1 MiB. A mirror wider than the map's 2048 is refused at its arm.
+  named, and a burst of paints is never a whole page. The tiles go as one copy of up to 1 024
+  regions (`tagpu_vk_stage_expand_rects`, `TAGPU_VK_STAGE_MAXRECT`), in the frame's own command
+  buffer, **never banded**. A mirror wider than the map's 2048 is refused at its arm.
+- **The allowance** keeps them inside one slot's staging. Each of the unit, feature and effects
+  atlases carries `budget` = `TAGPU_GAF_BUDGET`, **1 024 tiles = 2 MiB** of RGBA8, sized from the
+  largest single-frame paint measured in play before it, 1.20 MB after a camera jump at 4K, with
+  headroom (the re-measure below saw 1.79 MB in one frame right after a level's load).
+    - **The consumer says what it holds.** After every upload, and on every frame whose copy is
+      current, the pass acks the serial it holds (`tagpu_gaf_atlas_ack`); a new image or a
+      teardown acks nothing. `due` is the count of tiles written after that serial: every mirror
+      write (`mirror_wrote`, `tiles_raise`) adds the tiles it makes due, and every ack recounts.
+    - **The gate** (`gate_paint`, in `atlas_insert`): a paint that would take `due`, plus the
+      tiles already waiting ahead of it, plus the tiles it would make due, past the allowance is
+      **deferred**. The entry keeps its rect, reserved; `tagpu_gaf_atlas_get` returns NULL and
+      `deferN` moves. So `due` never exceeds the allowance, and the upload never exceeds the
+      staging, by construction. The gate is off while the consumer holds no copy or is behind a
+      whole-page write, when its next upload is the page anyway.
+    - **What is not drawn that frame**, so that nothing is drawn from texels the device lacks: a
+      feature's whole anchor (body and shadow roll back, `tagpu_feat.c`); an effect sprite with
+      every compound sub-frame (`emit_sprite`); a unit whose bake needs a deferred face
+      (`tagpu_r3d_atlas_uv` answers −1, `mat_bake` refuses, and the unit is skipped for the frame).
+      Nothing is drawn from content the device already holds in its place: a deferred entry has
+      no content anywhere yet.
+    - **Why no frame samples an unreceived texel.** Every entry a frame draws was painted before
+      that frame's hand-over, so its tiles are at or below the serial the hand-over carries. The
+      pass brings its copy to that serial in the frame's own command buffer, ordered before the
+      draws, or skips the frame. A deferred entry is not drawn at all.
+    - **First refused, first painted, and it drains.** `tagpu_gaf_atlas_frame`, after the reset
+      and before the first lookup of every frame, puts each entry still waiting — and asked for
+      on the frame before — into a bucket by the frame it was first refused on (at most eight,
+      oldest first; past eight a cell joins the next younger bucket). A new entry counts every waiting tile
+      against the allowance, a waiting one only the older buckets, so nothing waiting is
+      overtaken by anything refused after it. With nothing due at a frame's start — the
+      previous frame's upload acked — the oldest asked entry always paints: the largest cell
+      touches at most 22 × 42 = 924 tiles, which `tagpu_gaf.h` asserts fits 1 024. An entry
+      nothing asked for on the frame before stops waiting and is plainly reserved again. When the
+      last waiting entry lands, the atlas logs `every deferred paint has landed` with its tallies.
+    - **The consumer never waits on a draw.** The gate waits on the consumer, so a consumer that
+      uploaded only when it drew could wait on the gate for ever — a frame whose every feature is
+      deferred draws nothing. Each pass therefore uploads after its prepare on every frame its
+      atlas says it is owed one (`tagpu_gaf_atlas_owed`, the `atlas_owed` step of
+      `tagpu_vk_feat_prepare`, `tagpu_vk_fx_prepare` and `tagpu_vk_unit_upload`), drawn or not.
+    - **A repack waits for a current consumer.** `tagpu_gaf_atlas_reset` holds a full atlas
+      while the consumer is behind the mirror, so a moved cell never carries a due serial to more
+      tiles than it had, and the move adds nothing due.
 - **A feature repack moves its cells** rather than repainting them:
     - `mirror_move` (`tagpu_gaf.c`) carries each painted cell to its new rect in the mirror.
     - The feature pass moves its own device copy the same way (`tagpu_vk_stage_move`): the
       rows the old cells occupy go into a 16 MiB device-local buffer in one copy, and each cell
       comes back at its new rect. Nothing of the move comes from the host. It is recorded in the
-      frame's command buffer, or, when that frame's paints are over the cap and go banded,
-      submitted ahead of the bands through their command buffer, so it always lands first.
+      frame's own command buffer, before that frame's paints.
     - The dirty map gives each moved cell's new tiles the newest serial its old tiles held, so a
       paint the copy lacked before the move is still sent after it, at the new place.
-    - A copy that missed an earlier repack, or a pass that cannot get the buffer, takes the whole
-      page instead.
+    - A pass that cannot get the buffer takes the whole page instead: the one wait in play above.
     - An entry that was never painted is reserved and painted on its next use, as before
       ([atlas-packing](atlas-packing.html) §7).
+- **...and the Classic++ restored twin moves with them.** The twin's texels exist only on the
+  device, so they cannot be sent again; before this they were blanked at every repack and
+  restored anew, and the features drew unrestored for the frames that took.
+    - **The published restore list keeps its generation** (`tagpu_gaf.h` `rlistGen`). An entry
+      knows its frame's index (`rli`), and `rlist_moved` rewrites each moved entry's frame in
+      place at its new rect and blanks the frame of an entry the repack dropped (w and h 0, which
+      a job skips). The consumer's cursor into the list stays good.
+    - **The feature pass carries the twin** (`twin_move`, `tagpu_vk_feat.c`), straight after
+      the base atlas's move in the same command buffer:
+        - the restore job's queued frames move by the same list, and a frame whose entry was
+          dropped is dropped (`tagpu_rcore_job_remap`);
+        - the batch in flight, whose FILL read the old rects, goes back to the head of the queue,
+          so nothing in flight spans the move;
+        - the twin's cells move on the device through the same buffer
+          (`tagpu_vk_stage_move_twin`), with everything no cell lands on cleared to 0 in between.
+          Alpha 0 is what the feature shader reads as "not restored, take the base", and a rect
+          the repack freed must not show another entry what the old one left there.
+    - **Why the twin cannot disagree with the base.** Both move by one list in one command
+      buffer. The job's frames are rewritten before the restorer records its next slice, which
+      it does after every prepare. And nothing in flight spans the move. So after it no FILL
+      reads the base, and no OUT writes the twin, at a rect of the old layout. A twin the job has
+      not drawn into yet is not moved: the job's first draw clears it.
+    - **Only what was never restored is restored after a repack.** Anything that stops the twin
+      following — a base atlas that took the repack whole, a job that cannot take its batch back,
+      a twin the device cannot move — drops the job, logged, and the next frame blanks the twin
+      and restores from the list's start, the rule for any discontinuity.
 
 **MEASURED 2026-09-24 — what play sends.** The setup:
 
@@ -16413,12 +16486,19 @@ paints, which the map names tile by tile.
 - A diagnostic-only build logged every base-atlas upload with its pass, cause and bytes, and
   every banded upload's wait. Two runs of each build.
 
-| in play, each run | before (`6511def`) | after |
-|---|---|---|
-| full page, band-ring overflow | **1** and **1**: the features, 140 and 120 paints in one frame at the repack, 10.1 and 9.2 MB, 4.3 and 3.9 ms | **0**: the cause is gone |
-| full page, any other cause | 0 | 0 |
-| a feature repack | 1 and 1, sent as the overflow above | 1 and 1: 234 and 270 cells moved on the device |
-| a partial upload over the 1 MiB cap (banded) | **12** and **11**: 1.1–13 MB sent, for 30 KB–2.2 MB painted in the run that logged the paints | **1** and **1**: 1.41 and 1.36 MB sent for 1.20 and 1.18 MB painted, waits 0.34 and 0.20 ms |
+| in play, each run | before (`6511def`) | the dirty map and the move (`9cde322`) | the allowance and the twin (`c2929cb`) |
+|---|---|---|---|
+| full page, band-ring overflow | **1** and **1**: the features, 140 and 120 paints in one frame at the repack, 10.1 and 9.2 MB, 4.3 and 3.9 ms | **0**: the cause is gone | 0 |
+| full page, any other cause | 0 | 0 | 0 |
+| a partial upload over the cap (banded) | **12** and **11**: 1.1–13 MB sent, for 30 KB–2.2 MB painted in the run that logged the paints | **1** and **1**: 1.41 and 1.36 MB sent for 1.20 and 1.18 MB painted, waits 0.34 and 0.20 ms | **0** and **0**: the path no longer exists |
+| **waits in play, in all** | 13 and 12 | 1 and 1 | **0** and **0** |
+| the largest upload in play | — | 1.41 and 1.36 MB, banded | 1.79 and 1.79 MB, in-frame: the features' first paints after the load |
+| frames deferred by the allowance | — | — | 0 and 0 (0 bytes) |
+| frames skipped for want of staging | — | — | 0 and 0 |
+| a feature repack | 1 and 1, sent as the overflow above | 1 and 1: 234 and 270 cells moved on the device | 1 and 1: 256 and 269 cells moved, **the twin with them** |
+
+The only waits of the last two runs are the level's first uploads, before play: the terrain's
+46.5 MB in 6.1 and 5.9 ms, the features' 6.1 MB in 1.1 ms, each logged with its cause.
 
 - **Before, the partials were the ring's bounding box**: 64 rects and a union, so scattered
   paints sent the rectangle around them. Several came in the seconds after the repack, as the
@@ -16431,21 +16511,53 @@ paints, which the map names tile by tile.
 - **The terrain sent nothing in play.** The units and the effects stayed in-frame throughout.
 - **The move in the mirror costs the render thread 3.9 ms** at 270 cells, on the reference setup
   with other game instances running beside it.
-- **The device copy is exact.** A diagnostic-only build read the feature base back off the device
-  on the three frames after each repack and on every 600th frame. It compared it texel for texel
-  with the mirror expanded through the same palette, over every painted cell no paint had touched
-  since. That was 236 and 281 cells after the two repacks and 157 on a control frame, with
-  **0 texels different**. In one run the repack went in-frame. In the other, the repack frame's
-  own paints were over the cap, so the move and the paints both went through the banded path, in
-  that order, and again 0 texels differed.
+- **The device copy is exact.** A diagnostic-only build of `9cde322` read the feature base back
+  off the device on the three frames after each repack and on every 600th frame. It compared it
+  texel for texel with the mirror expanded through the same palette, over every painted cell no
+  paint had touched since: 236 and 281 cells after the two repacks and 157 on a control frame,
+  with **0 texels different**.
 - **The waits are the virtual display's.** On the live 4K display the first band also waits
   behind the frames in flight, up to 27.9 ms (above).
 
-  **A refusal degrades and recovers.** Big-battle at 2560 × 1440; mid-fight, a forced swapchain
-  rebuild, so every pass re-sends its atlases, together with 120 forced refusals of
-  `tagpu_vk_stage_begin` (diagnostic-only). The passes skipped frames while refused, no pass
-  refused or tore down, and the census before and after read the same passes drawing
-  (`terr=1 feat=1 unit=1 fx=1`).
+**A refusal degrades and recovers.** Big-battle at 2560 × 1440; mid-fight, a forced swapchain
+rebuild, so every pass re-sends its atlases, together with 120 forced refusals of
+`tagpu_vk_stage_begin` (diagnostic-only). The passes skipped frames while refused, no pass
+refused or tore down, and the census before and after read the same passes drawing
+(`terr=1 feat=1 unit=1 fx=1`).
+
+**MEASURED 2026-09-24 — the deferral, forced.** In the minute above the 2 MiB allowance was never
+reached, so a diagnostic-only build of the same code cut it to 384 tiles (768 KiB) for all three
+atlases and ran the same minute:
+
+- **The features deferred on 3 frames, 1 286 KB first deferred in all** — two events. At the
+  level's start the first paints after the load asked for 58 cells: 38 refusals in one frame, 33
+  entries and 862 KB waiting; the next frame painted 22 of them and the one after the rest.
+  Later a camera jump deferred two cells, 424 KB, for one frame.
+- **Both drained**, each logged `every deferred paint has landed`: the longest wait 2 frames,
+  35 entries painted after waiting, none gone unasked.
+- **Waits in play 0, frames skipped 0.** The units and the effects never reached even 384 tiles.
+- The twin followed that run's repack exactly as in the runs below (252 cells, 20 restored,
+  identical).
+
+**MEASURED 2026-09-24 — the twin follows the repack.** A diagnostic-only build read the
+features' restored twin back off the device just before each repack's move and again on the next
+frame, and compared every moved cell that held restored texels before with the same cell at its
+new rect, texel for texel. It also counted, when the restore job next went idle, the frames
+painted since the move against the frames queued at it plus the frames added since, the
+difference being any frame restored twice.
+
+| | repacks | cells moved | restored cells carried | identical | queued frames moved | in flight, re-queued | dropped with their entry | restored twice |
+|---|---|---|---|---|---|---|---|---|
+| the scripted 4K minute, two runs | 1 and 1 | 256 and 269 | 20 and 20 | **all** | 236 and 249 | 0 | 0 | — |
+| big-battle 1920 × 1080, a repack forced every 30 frames | 47 | 3 384 | 1 781 | **all** | 1 570 | 33 | 359 | **0** in 24 checks |
+| `feat-forest` 1024 × 768, a repack forced every 400 frames | 16 | 178 | 162 | **all** | 16 | 0 | 0 | **0** in 14 checks |
+
+- **No texel outside the moved cells was left non-zero** after any of those moves, so the clear
+  holds: a rect a repack freed shows the base atlas until its new entry is restored.
+- **At 4K the twin is mostly unrestored when the repack comes** (20 of 256 cells): the terrain's
+  restore job has the first claim on the restorer and 10 036 frames to paint at about six frames
+  a second on the virtual display. The moved queue is what carries the rest.
+- **No job was dropped** in any run: every repack's move was followed.
 
 **MEASURED 2026-09-23** — Two Continents, `scenarios/tascene-parity.json` (terrain, units) and
 `feat-forest` (features), 1024 × 768, `ss=2`, the world A/B read off the target
@@ -16553,6 +16665,9 @@ paints, which the map names tile by tile.
       `b14e9b4` again, both builds captured on a private virtual display at 1024 × 768 — the
       terrain over 2 523 124 drawn pixels, the units over 1 550, the features over 529 468. No
       fixture repacks, so the move rests on the read-back above (*what play sends*).
+    - **With the allowance and the twin move** (`d55b18d`): the same 6 of 6 byte-identical to
+      `b14e9b4` once more, on the same private virtual display. No fixture defers or repacks, so
+      those rest on the runs above (*the deferral, forced* and *the twin follows the repack*).
     - **The restorer's input and output:** `fx-rockets` under `--defaults` with
       `tagpu_restoredump.on`, read back off the device. The terrain's base and restored twin
       (23 674 880 bytes each) are byte-identical between the two builds. So are the units' base
@@ -16599,18 +16714,23 @@ paints, which the map names tile by tile.
   by a diagnostic token rather than by `damagebars` itself. The ShowRanges state was read at two
   different ticks, so its 8 px at the waypoint sprite are put down to the animation by where
   they are, not by a pair taken on one tick.
-- **One frame's fresh paints past 1 MiB still wait.** A camera jump into an area whose
-  features are not in the atlas yet paints them all in that frame. In both runs above one jump
-  painted 1.2 MB, over the cap, and went banded. That wait was 0.2–0.34 ms on the virtual
-  display; on the live 4K display the first band waits behind the frames in flight, up to
-  27.9 ms. A frame's paints are bounded by the atlas, 16 MiB, not by a constant. Removing the
-  wait needs a choice this work did not make:
-    - a larger in-frame allowance, which costs address space in the 32-bit process;
-    - or a per-frame paint budget that defers the rest to the next frame, which draws a feature
-      one frame late.
-- **A repack still blanks the features' restored twin.** It is repainted from the moved base by
-  a new restore job (`rlist_restart`), so features draw unrestored for the frames that takes.
-  That predates the move.
+- **The deferral has not been needed in play yet.** In the scripted 4K minute no frame's paints
+  reached the 2 MiB allowance (1.79 MB at most, right after the load), so its path is measured
+  only under a diagnostic build with the allowance cut to 384 tiles (above). A frame's paints are
+  bounded by the atlas, 16 MiB, so a scene denser than big-battle's can defer in play. What that
+  costs is a feature, an effect or a unit drawn one or more frames late, never a wait.
+- **`emit_fx_model`'s lookups spend the unit atlas's allowance on nothing drawn.** The native
+  pass's effects models paint into the unit atlas through `emit_node`, but the vertices it writes
+  (`tagpu_native.c` `s_verts`) are read by nothing. Read from the code, not measured.
+- **The twin move covers the feature atlas alone**, the one atlas that repacks. The unit and
+  effects atlases recycle when full, which is a new list generation and blanks their twins as
+  before.
+- **The batch in flight at a repack is restored again from its FILL**: at most one batch of
+  frames that had not been painted yet — 33 frames over the 47 forced repacks above.
+- **A level now opens with the feature, effect and unit atlases' whole pages**, a wait at the
+  level's start as the terrain's already was: 5.9 MB for the features on big-battle, 1.1 ms on
+  the virtual display.
+
 - **The restorer's ring bound (`vk_room`) was measured on one fixture and one device**:
   `fx-rockets` on the reference setup, in the launches listed in §2.43.
 - **The UI layer stood itself down on some launches of a fresh instance** ("`gui: 8 fresh starts
@@ -16642,8 +16762,17 @@ leaves, and the 1/0/−1 answers each pass maps to draw, skip and refuse; the di
 merge window and its last rect grown past `maxr`; the repack's move — `mirror_move`'s bounds and
 its serials read (`tiles_newest`) before any is raised, the consumer's test in
 `tagpu_vk_feat.c` `base_upload` (`atlasMovePrev`, and `s_bMove`, which keeps a move from being
-applied twice), the banded move submitted ahead of the bands, and the move buffer made once per
-pass life and dropped in `_down`; the palette keys
+applied twice), and the move buffer made once per pass life and dropped in `_down`; the
+allowance — `due` kept by `mirror_wrote` and `tiles_raise` and recounted on every ack, `gate_on`'s
+conditions, the backlog's buckets and `bk_ahead`'s "older than" test, the frame hook's place
+(after the reset, before the first lookup), the repack held while the consumer is behind, the
+owed upload after each prepare (`s_upFrame`, and the ack of 0 at every `atlas_build` and `_down`),
+and each caller's rollback of a deferred lookup (the features' anchor, the effects' sprite, the
+units' bake); the twin move — `rlist_moved`'s in-place rewrite of frames a consumer already
+took, the job's remap and the in-flight batch put back at the head of its queue,
+`tagpu_vk_stage_move_twin`'s barriers (the colour-attachment source scope, the clear before the
+cells), the job dropped when the base atlas took a repack whole, and `restore_take`'s cursor over
+blank frames; the palette keys
 (`s_rjPal`, `s_shadePal`, `s_lhtPal`) and `tagpu_r3d_shade_want`'s kept copy of the shade table;
 the restorer's `room` — asked at the head of every iteration of the core's slice loop, before a
 batch is formed, with `vk_room`'s mip reserve and the static bound that keeps a fresh slice able

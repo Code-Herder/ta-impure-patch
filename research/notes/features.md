@@ -299,7 +299,10 @@ so the shelf stays. What changes is the order it is fed in.
 CPU mirror holds every painted entry's decoded cell, so `mirror_move` (`tagpu_gaf.c`)
 carries each one from its old rect to its new one, and the feature pass moves its own copy
 on the device the same way (`tagpu_vk_stage_move`), sending nothing from the host but the
-paints that copy lacked ([gpu-status](gpu-status.html) §2.88). An entry never painted —
+paints that copy lacked ([gpu-status](gpu-status.html) §2.88). **The Classic++ restored twin
+moves with it**, by the same list in the same command buffer, and the restore job's queued
+frames follow their entries, so a repack restores nothing that was already restored and no
+feature draws unrestored for it. An entry never painted —
 and every entry when there is no mirror — is only *reserved*: it keeps its identity, gets
 a new rect, and is marked `resv` with `ok = 0`, which keeps `tagpu_gaf_atlas_find` refusing
 it. The next `atlas_get` for that frame decodes it and `atlas_paint` paints it into the
