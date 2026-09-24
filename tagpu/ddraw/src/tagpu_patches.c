@@ -180,11 +180,12 @@ static int fix_sort_buffer_end(void)
    GetTPosition's row, and GetTPosition can answer up to 143 px below the point it
    is handed; 0x40514A does not either — an order handler's target lookup through
    0x4815F0 on the order's position. For 0x498F4F stock keeps the point inside
-   the scroll extent main+0x1422F, which is the map's height less 128 (the default
-   of the debug-level `Edge` console command 0x416730), and that margin is exactly
-   what keeps GetTPosition's row on the map. A point past the extent — an eye
-   outside the stock range, a pointer on the bottom bar below one — reads
-   [NULL+8] at 0x421E64: MEASURED, with our clamp at 0x498EF9 disabled.
+   the scroll extent main+0x1422F, which the level load writes as the map's
+   height less 128 (0x4833E0) and only the debug-level `Edge` console command
+   0x416730 rewrites, and that margin is exactly what keeps GetTPosition's row
+   on the map. A point past the extent — an eye outside the stock range, a
+   pointer on the bottom bar below one — reads [NULL+8] at 0x421E64: MEASURED,
+   with our clamp at 0x498EF9 disabled.
 
    THE FIX, a prologue detour: the stub runs the first stolen instruction, and
    for a NULL plot returns the engine's own "no feature" 0xFFFF with the

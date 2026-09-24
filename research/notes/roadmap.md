@@ -3722,6 +3722,18 @@ report, no runtime opt-out, and stock behaviour exact below every raised limit.
 |---|---|---|
 | A — Raised ceilings | ◐ **landing 1 of 5, 2026-09-23** — [the plan](tadr-port/raised-limits.html) | **Exit:** ten players at 1500 units each in one network game, every raised pool past its stock cap on every peer, and the peers agreeing when paused. Landing 1 raised the four effect pools and built the module, the failure report and the stock-limits build ([gpu-status §2.6b](gpu-status.html)). **Not covered by landing 1:** units, pathfinding, particles, sounds and the composite buffer (landings 2–4), and the ten-player proof (landing 5) |
 
+## The stock engine's own defects (2026-09-23)
+
+Two defects of the retail image itself, found by the camera work's audit of every eye reader and
+patched in `tagpu_patches.c` behind `tagpu_enginefix.off` ([gpu-status](gpu-status.html) §2.6c).
+The register is [binary patches](binary-patches.html) §"Stock engine defects we patch", and the
+engine map has the disassembly.
+
+| Defect | Status | Result |
+|---|---|---|
+| `DrawGameScreen`'s unit sort writes past its buffer (`0x469807`) | ● done 2026-09-23 | the append is bounded at the allocation's end. Before: 82 unit pointers past the end on every frame at zoom 0.5 with `vpwide`. After: none, and 0 px from stock at 1×. A per-row bound was built first and dropped, because it erased 7 066 px that stock draws |
+| `GetGridPosFeature 0x421E60` reads a NULL plot | ● done 2026-09-23 | a NULL plot answers "no feature". Unreachable in stock play: the scroll extent's 128-px margin is exactly `GetTPosition`'s search window. The access violation at `0x421E64` reproduced with our pointer clamp off and is gone with the guard |
+
 ## Shipping — the build people can download (2026-09-08)
 
 Until the game has the render options screen (**Phase F / G18** above; [renderers](renderers.html)

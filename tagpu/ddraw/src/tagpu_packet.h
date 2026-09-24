@@ -500,8 +500,8 @@ typedef struct TAGPU_PACKET {
                                    its field holds it: L, T, R, B inclusive —
                                    the true rect, or the widened one at zoom<1 */
     int32_t  screen[2];         /* screen W, H                                  */
-    int32_t  map_pxw, map_pxh;  /* the map in world px                          */
-    int32_t  map_w16, map_h16;  /* ...and in 16-px cells                        */
+    int32_t  map_pxw, map_pxh;  /* the scroll extent: map px less 32 and 128    */
+    int32_t  map_w16, map_h16;  /* the map in 16-px cells                       */
     int32_t  view_cells[2];     /* the view in map cells (the minimap box)      */
     uint32_t udef_count;        /* UNITINFOCount: the bound on every model id   */
     uint32_t unit_slots;        /* the unit array's slot count, 10 x MaxUnits+1 */

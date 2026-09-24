@@ -22,7 +22,7 @@ authority is `tagpu/ddraw/src`; if a lever named here is not read there, delete 
   passive'`). `off`, `0`, `false` or `-` as the value unlinks the file.
 - **Three read times.** *Attach*: the code-patching halves (`owndraw`, `terrown`, `featown`,
   `fxown`, `markown`), `zoom`, `vpwide`, `weapons`, `cobtrace`, `reclaim`, `packet`, `hud`,
-  `lerp`, `curs.off`, the `gui` hook tokens and `restoreglsl.on` — arm before the launch that
+  `lerp`, `curs.off`, `enginefix.off`, the `gui` hook tokens and `restoreglsl.on` — arm before the launch that
   matters, and relaunch to change them. *Live* (polled, 250–500 ms, or every frame): the draw
   passes' tokens (`native`, `terr`, `feat`, `fx`, `sfx`, `mark`, `order`), `classicpp` and its
   `.cfg`, `vk.on`'s `color=`, the `gui` surf tokens, the `.off` toggles. *One-shot*
@@ -281,6 +281,7 @@ that map's size.
 | lever | when read | what |
 |---|---|---|
 | `reclaim.off` | attach | **disables a crash fix**: `tagpu_reclaim` defers the engine's model-object and per-level template frees behind the render thread's quiescence. On by default with no arm file; this is the A/B back to the racing build. Read `reclaim: ARMED FreeObjectState@0x45AAA0 -> deferred …` at launch |
+| `enginefix.off` | attach | **disables two fixes of the stock engine's own defects**: the unit-sort append bounded at the end of its buffer (`0x469807`) and the NULL-plot guard on `GetGridPosFeature 0x421E60`. On by default with no arm file and independent of `tagpu_defaults.off`; the A/B back to the stock engine. Read `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60 ARMED` at launch. `scenarios/sort-row-overflow.json` is the fixture that fills one sort row |
 | `packet.off` | attach | the frame packet exchange off: **no world pass draws at all**, no camera command is applied (`tagpu_eye.txt` and the wheel do nothing) and no text draws. The A/B lever, not a feature switch |
 | `packet.check`, `packet.stress`, `packet.poison` | attach | CRC-32 of every record verified per take; publish on every in-play draw with one-page slots that must grow (the protocol gate's mode); memset the slot handed back so a pointer cached past its frame reads `0xDD` |
 | `grow.stress` | attach | every render array that grows with the unit count moves every frame (freed and reallocated at the exact size; the unit pass rebuilds its slot buffers), so a pointer that outlives a move reads freed memory at stock unit counts. Logs `packet: tagpu_grow.stress - every unit-scaled render array moves every frame`. A measurement lever: an allocation per array per frame |
