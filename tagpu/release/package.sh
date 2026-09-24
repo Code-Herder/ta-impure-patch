@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Assemble the release folder and its zip under dist/: the built ddraw.dll, the ini it
-# wants, the Classic++ restorer's weights and README.txt. CI runs it after
+# Assemble the release folder and its zip under dist/: the built ddraw.dll, the
+# Classic++ restorer's weights and README.txt. CI runs it after
 # `make -C tagpu/ddraw`; locally the same two commands give the same zip.
 # VERSION overrides the `git describe` name (CI passes the tag).
 set -euo pipefail
@@ -20,7 +20,6 @@ done
 rm -rf "$out"
 mkdir -p "$out"
 cp "$dll" "$out/ddraw.dll"
-cp "$here/ddraw.ini" "$out/ddraw.ini"
 sed "s/@VERSION@/$version/g" "$here/README.txt" > "$out/README.txt"
 cp "$root/unditherer/models/full.w32.bin" "$root/unditherer/models/tiny.w32.bin" "$out/"
 

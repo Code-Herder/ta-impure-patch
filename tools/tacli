@@ -150,7 +150,7 @@ def ere_quote(s: str) -> str:
 # Files that must never be shared between instances: each gets its own real copy,
 # everything else in the Steam dir is symlinked.
 PRIVATE_FILES = {
-    "ddraw.dll", "ddraw.ini", "totala.ini",
+    "ddraw.dll", "totala.ini",
     "TotalA.exe",  # symlinked to Steam, but listed so we handle it explicitly
     # The DLL's settings store (renderers.md 2.10b), per instance: a symlink
     # to the template's would be one store shared by every instance.
@@ -433,6 +433,8 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
             continue
         if low.endswith(".migrated") or low == "impure-migration.txt":
             continue   # the DLL's first-run backups and their record: the template's own
+        if low == "ddraw.ini" or low.startswith("ddraw.ini."):
+            continue   # the DLL reads none, and one in a gamedir suggests it counts
         if name == "music" and not sound:
             continue   # Steam MP3 soundtrack: audiere cannot play what is absent
         dst = inst.gamedir / name
@@ -459,12 +461,10 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
     if not (exe_dst.exists() or exe_dst.is_symlink()):
         exe_dst.symlink_to(exe_src)
 
-    write_ddraw_ini(inst, tile, window, maxfps=maxfps)
     write_totala_ini(inst, sound)
     ensure_store(inst)
-    # Never steal the human's pointer: the game snaps and fences the real cursor on
-    # activation otherwise (fork honours this trigger, see mouse.c).
-    (inst.gamedir / "tagpu_nowarp.on").write_text("")
+    write_placement(inst, tile, window, maxfps=maxfps)
+    write_nowarp(inst)
     set_shield(inst, shield)
     deploy_dll(inst)
     link_restorer_files(inst)
@@ -509,12 +509,13 @@ def ensure_store(inst: Instance, res=None, default_res=None) -> None:
     """The DLL's settings store, `impure.cfg`, created EMPTY when it is missing.
 
     An absent store is the DLL's first-run signal: it renames the lever files an
-    earlier menu wrote to `*.migrated` and strips ddraw.ini's display keys, and in
-    an instance those files are the levers a measurement armed. So an instance
-    always has one before it launches. Empty means every key at its compiled
-    default; under tagpu_defaults.off the DLL ignores the store altogether
-    (renderers.md 2.10b). An existing store is left alone -- a --defaults
-    instance keeps what its menu was set to -- except for `resolution=`:
+    earlier menu wrote to `*.migrated`, and in an instance those files are the
+    levers a measurement armed. So an instance always has one before it launches.
+    Empty means every key at its compiled default; under tagpu_defaults.off the
+    DLL ignores the store but for the placement keys (write_placement,
+    renderers.md 2.10b). An existing store is left alone -- a --defaults
+    instance keeps what its menu was set to, the placement aside -- except for
+    `resolution=`:
 
       res          an explicit --res: replaces whatever the store holds.
       default_res  the instance's recorded size: written only when the store has
@@ -570,54 +571,137 @@ def write_title(inst: Instance, label: str) -> str:
     return f"{BASE_TITLE} - {label}"
 
 
-def write_ddraw_ini(inst: Instance, tile, window=None, maxfps=60):
-    """The fork's own config.
+# What a launch writes into a gamedir that a player's install does not have.
+HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
+                 "tagpu_defaults.off", "totala.ini")
+# The store keys an ordinary launch writes: the placement (write_placement) and
+# the size (ensure_store). A player's menu writes the same keys, so the store
+# has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
+# after a --shipped one. Each side's values are kept in the meta while the other
+# side owns the file, so neither kind of launch loses what the other chose.
+HARNESS_KEYS = ("display", "window", "maxfps", "resolution")
+
+
+def _split_store(inst: Instance):
+    """The store's lines as (the rest, the HARNESS_KEYS lines); ([], []) with no store."""
+    try:
+        lines = (inst.gamedir / "impure.cfg").read_text().splitlines()
+    except FileNotFoundError:
+        return [], []
+    keys = [ln for ln in lines if ln.partition("=")[0].strip().lower() in HARNESS_KEYS]
+    return [ln for ln in lines if ln not in keys], keys
+
+
+def _hand_store_over(inst: Instance, meta: dict, to: str) -> None:
+    """Give the store's HARNESS_KEYS to `to` ("harness" | "player"): the current
+    owner's lines go into the meta, and `to`'s own lines, kept from its last
+    launch, come back. An instance with no owner recorded is the harness's.
+    Saves the meta, so a launch that dies after this leaves the two consistent."""
+    if meta.get("store", "harness") == to:
+        meta["store"] = to
+        return
+    path = inst.gamedir / "impure.cfg"
+    rest, keys = _split_store(inst)
+    meta[f"store_{meta.get('store', 'harness')}"] = keys
+    back = meta.pop(f"store_{to}", [])
+    if path.exists() or back:
+        path.write_text("\n".join(rest + back) + ("\n" if rest or back else ""))
+    meta["store"] = to
+    inst.save_meta(meta)
+
+
+def strip_to_shipped(inst: Instance, meta: dict) -> str:
+    """Make the gamedir what a player has, for a --shipped launch: the release's
+    files and the player's own store. Removes the files every launch writes
+    (HARNESS_FILES -- the next ordinary launch writes them again from the
+    instance's recorded state) and hands the store's HARNESS_KEYS to the player:
+    what the last --shipped session's menu chose comes back, and on the first
+    one there is none. An ARM file (`tagpu_*.on/.off/.cfg`) is a measurement's
+    state, not tacli's to discard, so one refuses the launch instead."""
+    armed = sorted(p.name for p in inst.gamedir.glob("tagpu_*")
+                   if p.suffix.lower() in (".on", ".off", ".cfg") and p.name not in HARNESS_FILES)
+    if armed:
+        clear = " ".join(f"{n[len('tagpu_'):]}=off" for n in armed)
+        die(f"--shipped: {inst.name} has arm files a player's install does not "
+            f"({', '.join(armed)}) -- `tacli arm {inst.name} {clear}` clears them")
+    for name in HARNESS_FILES:
+        (inst.gamedir / name).unlink(missing_ok=True)
+    _hand_store_over(inst, meta, "player")
+    return ("shipped: no harness files, and the store's placement and size are the "
+            "player's -- the game places itself (with none: borderless fullscreen "
+            "on the primary monitor, at the monitor's own mode)")
+
+
+def write_nowarp(inst: Instance):
+    """Never steal the human's pointer: the game snaps and fences the real cursor on
+    activation otherwise (fork honours this trigger, see mouse.c)."""
+    (inst.gamedir / "tagpu_nowarp.on").write_text("")
+
+
+STORE_MAXFPS = {0: "uncapped", 60: "60", 120: "120"}
+
+
+def store_maxfps(v) -> str:
+    """The store's spelling of a frame cap (`O_MAXFPS`, tagpu_settings.c): 0 is
+    uncapped, a negative value the display's refresh, and 60 and 120 themselves.
+    The store holds no other cap, so anything else is refused rather than
+    silently becoming one of these."""
+    v = int(v)
+    if v < 0:
+        return "refresh"
+    if v in STORE_MAXFPS:
+        return STORE_MAXFPS[v]
+    die(f"frame cap {v}: the store (impure.cfg) holds 0 (uncapped), 60, 120 or a "
+        f"negative value (the display's refresh), and nothing else -- pass --maxfps "
+        f"with one of those")
+
+
+def store_window(window):
+    """A --window client size as the store takes it (`frame_ok`, tagpu_settings.c):
+    0,0 for the game's own size, else 320x240 to 16384x16384. The DLL drops a
+    `window=` line outside that WHOLE, position included, so the window would
+    open unplaced -- refused here instead."""
+    if not window:
+        return 0, 0
+    w, h = int(window[0]), int(window[1])
+    if not (320 <= w <= 16384 and 240 <= h <= 16384):
+        die(f"--window {w}x{h}: the store (impure.cfg) takes a client size from "
+            f"320x240 to 16384x16384")
+    return w, h
+
+
+def write_placement(inst: Instance, tile, window=None, maxfps=60):
+    """The window's placement, into the instance's settings store (`impure.cfg`,
+    renderers.md 2.10b): `display=window`, `window=x,y,W,H` and `maxfps`.
+
+    The DLL reads these three under every launch, `tagpu_defaults.off` included,
+    and nothing else places the window: the DLL reads no ddraw.ini. Written on
+    EVERY launch, because the store is also the menu's file -- a
+    `display=fullscreen` clicked in an instance's menu and kept by a bare
+    relaunch would open it fullscreen on the owner's screen. Every other line of
+    the store is left as it is.
 
     `window` is the CLIENT size when it must differ from the game's resolution:
-    cnc-ddraw takes `width`/`height` as the client and letterboxes the engine's
+    the fork takes the frame's W,H as the client and letterboxes the engine's
     screen into it (`dd.c` render.width = window_rect, then max'd with the game
-    mode), so this is the one knob that produces k != 1 without an engine patch
-    — which is what phase 2's kill rule has to be measured at (gui-renderer.md
-    13.1, 13.9).
+    mode), which is the one knob that produces k != 1 without an engine patch
+    (gui-renderer.md 13.1, 13.9). `0,0` is the game's own size.
 
-    `maxfps` is the fork's frame cap. **0 is the unlimited setting**, not -1:
-    `fpsl_init` maps a NEGATIVE value onto the display refresh (60) and only 0
-    falls through every branch with `tick_length` left at 0. The DLL reads it at
-    attach. This function does NOT run on every launch: `tacli launch <inst>`
-    with no --maxfps/--res/--window and an on-screen tile writes nothing, so a
-    hand-edited ddraw.ini survives such a launch. Passing --maxfps explicitly
-    always rewrites it, which is the way to be sure of the value. Two
-    paths that both hold 60 fps have not been compared, they have both hit the
-    cap: a frame-time A/B needs `--maxfps 0` on BOTH sides."""
+    `maxfps`: see `store_maxfps`. Two paths that both hold 60 fps have not been
+    compared, they have both hit the cap: a frame-time A/B needs `--maxfps 0` on
+    BOTH sides."""
     x, y = tile
-    win = ""
-    if window:
-        win = f"width={int(window[0])}\nheight={int(window[1])}\n"
-    (inst.gamedir / "ddraw.ini").write_text(
-        "[ddraw]\n"
-        + win +
-        # vulkan by name: `openglcore` also REACHES this
-        # lane, but it reaches it through a fallback that says so in the log,
-        # and a generated file should not need a fallback to be right.
-        "renderer=vulkan\n"
-        "windowed=true\n"
-        "fullscreen=false\n"   # true here means borderless fullscreen, not a window
-        "maintas=true\n"
-        "vsync=false\n"
-        f"maxfps={int(maxfps)}\n"
-        "adjmouse=true\n"
-        "border=true\n"
-        "savesettings=0\n"
-        "center_window=0\n"     # otherwise posX/posY are ignored and instances stack
-        f"posX={x}\n"
-        f"posY={y}\n"
-        "\n[TotalA]\n"
-        "max_resolutions=32\n"
-        "lock_surfaces=true\n"
-        "singlecpu=false\n"
-        "maxgameticks=0\n"      # never raise: perturbs the sim
-        "minfps=0\n"
-    )
+    w, h = store_window(window)
+    path = inst.gamedir / "impure.cfg"
+    try:
+        lines = path.read_text().splitlines()
+    except FileNotFoundError:
+        lines = []
+    keep = [ln for ln in lines
+            if ln.partition("=")[0].strip().lower() not in ("display", "window", "maxfps")]
+    keep += ["display=window", f"window={int(x)},{int(y)},{w},{h}",
+             f"maxfps={store_maxfps(maxfps)}"]
+    path.write_text("\n".join(keep) + "\n")
 
 
 def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
@@ -803,7 +887,7 @@ def apply_prefix_settings(inst: Instance, res, sound: bool = False):
 def place_window(inst: "Instance", display: str):
     """Keep parallel instances from stacking.
 
-    cnc-ddraw honours posX/posY (relative to the primary monitor), but two
+    The store's `window=` places each instance on its tile (write_placement), but two
     instances created concurrently can claim the same slot, and the human may have
     moved things around. So after the window exists, nudge it clear of every other
     running instance's window.
@@ -817,6 +901,8 @@ def place_window(inst: "Instance", display: str):
         other = Instance(meta_path.parent.name)
         if other.name == inst.name or not other.running():
             continue
+        if (other.meta().get("display") or default_display()) != display:
+            continue    # another X server's windows share no pixels with this one
         ow = other.window()
         if ow:
             others.append(ow[1:])
@@ -920,6 +1006,10 @@ def _create(inst: Instance, args) -> dict:
     """Everything `create` does; `load` needs it without the printing."""
     if inst.exists and not args.force:
         die(f"instance {args.name!r} already exists (use --force to recreate)")
+    # the store's refusals, before anything exists to be left half-made
+    if getattr(args, "maxfps", None) is not None:
+        store_maxfps(args.maxfps)
+    store_window(getattr(args, "window", None))
     inst.dir.mkdir(parents=True, exist_ok=True)
     # Only a *running* instance holds a slot. Reserving one per instance that has
     # ever been created walks the grid off the screen after a dozen of them, and
@@ -953,6 +1043,7 @@ def _create(inst: Instance, args) -> dict:
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "res": list(res),
         "maxfps": maxfps,
+        "store": "harness",             # mirror_gamedir wrote the placement (HARNESS_KEYS)
         "window": list(window) if window else None,
         "slot": index,
         "tile": list(tile),
@@ -1139,13 +1230,46 @@ def _launch(args) -> dict:
         if a[:1] in ("-", "/") and a[1:2].lower() in ("r", "d") and len(a) <= 3:
             die(f"refusing {a!r}: see cmdline-options.md (-r registers DirectPlay and "
                 f"quits, -d is the engine's own windowed mode)")
+    shipped = bool(getattr(args, "shipped", False))
+    if shipped:
+        clash = [f for f, v in (("--res", args.res), ("--window", getattr(args, "window", None)),
+                                ("--maxfps", getattr(args, "maxfps", None)),
+                                ("--title", args.title), ("--sound/--no-sound", args.sound),
+                                ("--unit-limit", args.unit_limit), ("--shield/--no-shield", args.shield),
+                                ("--defaults/--no-defaults", getattr(args, "defaults", None)))
+                 if v is not None]
+        if clash:
+            die(f"--shipped launches the gamedir as a player has it, so it writes nothing; "
+                f"{', '.join(clash)} would write something")
+    if getattr(args, "maxfps", None) is not None:
+        store_maxfps(args.maxfps)           # refused before anything is created
+    if getattr(args, "window", None) is not None:
+        store_window(args.window)
     inst = Instance(args.name)
-    if not inst.exists:
+    created = not inst.exists
+    if created:
         args.force = False
         _create(inst, args)
+        if shipped:
+            # a new instance's store holds nothing but what create wrote, and a
+            # player's first run has none
+            (inst.gamedir / "impure.cfg").unlink(missing_ok=True)
     meta = inst.meta()
     if inst.running():
         return dict(meta, already_running=True, pid=inst.pid())
+    # A build that still reads ddraw.ini finds none here and falls back to its own
+    # defaults: borderless fullscreen, unplaced, on whatever monitor -- the owner's,
+    # on the live display -- and it writes a template ddraw.ini beside itself.
+    # Only a --keep-dll launch can run one; this tree's build carries no such string.
+    kept = inst.gamedir / "ddraw.dll"
+    if args.keep_dll and kept.exists() and b"ddraw.ini" in kept.read_bytes():
+        die(f"--keep-dll: {inst.name}'s ddraw.dll is a build that reads ddraw.ini, "
+            f"which tacli no longer writes -- it would open fullscreen and unplaced. "
+            f"Launch it with the tacli of a tree from before the ini was removed")
+    (inst.gamedir / "ddraw.ini").unlink(missing_ok=True)
+    if not shipped:
+        # before anything reads the store's size: the harness's own, not a player's
+        _hand_store_over(inst, meta, "harness")
     # The instance's OWN display, not this shell's — a second X server or an
     # Xvfb is a different size, and measuring the wrong one puts the window
     # exactly where this is meant to stop it going.
@@ -1153,23 +1277,17 @@ def _launch(args) -> dict:
     if getattr(args, "window", None) is not None:
         meta["window"] = list(args.window)
     win = tuple(meta["window"]) if meta.get("window") else None
-    # An EXPLICIT --maxfps always rewrites the file, even when the meta already
-    # agrees: the ini is what the DLL reads, it can drift from the meta (a hand
-    # edit, a copied gamedir), and this knob exists for frame-time A/Bs where a
-    # silent fall back to the 60 cap is exactly the measurement error it was
-    # added to remove. Only a CHANGE is worth persisting to the meta.
-    if getattr(args, "maxfps", None) is not None:
-        if args.maxfps != meta.get("maxfps", 60):
-            meta["maxfps"] = args.maxfps
-            inst.save_meta(meta)
-        write_ddraw_ini(inst, tuple(meta["tile"]), win, maxfps=meta["maxfps"])
+    if getattr(args, "maxfps", None) is not None and args.maxfps != meta.get("maxfps", 60):
+        meta["maxfps"] = args.maxfps
+        inst.save_meta(meta)
     # A size the player picked in the menu is the store's, and a --defaults
     # launch opens at it: follow it, so the tile, the registry keys and what this
     # reports are the game's size rather than an old --res.
     picked = None
     defaults_on = (args.defaults if getattr(args, "defaults", None) is not None
                    else meta.get("defaults"))
-    if not args.res and defaults_on:
+    # a --shipped launch's store is the player's (strip_to_shipped): never the harness's size
+    if not args.res and defaults_on and not shipped:
         picked = store_res(inst)
         if picked and list(picked) == list(meta.get("res") or []):
             picked = None
@@ -1179,7 +1297,6 @@ def _launch(args) -> dict:
         meta["tile"] = list(tile_for(meta.get("slot", 0),
                                      client_box(meta["res"], win), screen=screen))
         inst.save_meta(meta)
-        write_ddraw_ini(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
     # Self-heal a tile recorded against a different (or wrongly assumed) desktop:
     # an off-screen window is a silently broken window grab, so never open one there.
     res = tuple(meta.get("res") or DEFAULT_RES)
@@ -1187,21 +1304,24 @@ def _launch(args) -> dict:
     if not tile_is_onscreen(tuple(meta.get("tile") or (0, 0)), box, screen=screen):
         meta["tile"] = list(tile_for(meta.get("slot", 0), box, screen=screen))
         inst.save_meta(meta)
-        write_ddraw_ini(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
     if args.sound is not None:
         meta["sound"] = args.sound
     if args.unit_limit is not None:
         meta["unit_limit"] = args.unit_limit
-    if args.sound is not None or args.unit_limit is not None:
-        # Both live in the same file, so either one being asked for rewrites it
-        # from the instance's recorded state — a limit set two launches ago is
-        # still in force, and turning sound on does not silently drop it.
-        inst.save_meta(meta)
-        write_totala_ini(inst, meta.get("sound", False), meta.get("unit_limit"))
     if args.shield is not None:
         meta["shield"] = args.shield
+    inst.save_meta(meta)
+    if shipped:
+        shipped_note = strip_to_shipped(inst, meta)
         inst.save_meta(meta)
-    set_shield(inst, meta.get("shield", True))
+    else:
+        shipped_note = None
+        # Both live in the same file, rewritten from the instance's recorded state
+        # on every launch -- a limit set two launches ago is still in force, and a
+        # --shipped launch in between (which removes the file) changes nothing.
+        write_totala_ini(inst, meta.get("sound", False), meta.get("unit_limit"))
+        write_nowarp(inst)
+        set_shield(inst, meta.get("shield", True))
     if args.dplay is not None:
         meta["dplay"] = args.dplay
         inst.save_meta(meta)
@@ -1259,16 +1379,22 @@ def _launch(args) -> dict:
     for log in inst.gamedir.glob("cnc-ddraw-*.log"):
         log.unlink()
 
-    owndraw_note = _ensure_owndraw_for_native(inst)
-    fxown_note = _ensure_fxown_for_fx(inst)
-    featown_note = _ensure_featown_for_feat(inst)
-    terrown_note = _ensure_terrown_for_terr(inst)
-    markown_note = _ensure_markown_for_mark(inst)
-    defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
-    # The size goes into the store when it is asked for on THIS launch, or when
-    # the store has none yet; a recorded --res rewritten every launch would undo
-    # the player's pick (ensure_store).
-    ensure_store(inst, tuple(args.res) if args.res else None, default_res=tuple(meta["res"]))
+    if shipped:
+        owndraw_note = fxown_note = featown_note = terrown_note = markown_note = None
+        defaults_note = None
+    else:
+        owndraw_note = _ensure_owndraw_for_native(inst)
+        fxown_note = _ensure_fxown_for_fx(inst)
+        featown_note = _ensure_featown_for_feat(inst)
+        terrown_note = _ensure_terrown_for_terr(inst)
+        markown_note = _ensure_markown_for_mark(inst)
+        defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
+        # The size goes into the store when it is asked for on THIS launch, or when
+        # the store has none yet; a recorded --res rewritten every launch would undo
+        # the player's pick (ensure_store).
+        ensure_store(inst, tuple(args.res) if args.res else None,
+                     default_res=tuple(meta["res"]))
+        write_placement(inst, meta["tile"], win, maxfps=meta.get("maxfps", 60))
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.
@@ -1281,7 +1407,7 @@ def _launch(args) -> dict:
         else:
             meta["title"] = args.title
     label = meta["title"] if meta.get("title") is not None else default_label(inst)
-    meta["window_title"] = write_title(inst, label)
+    meta["window_title"] = write_title(inst, "" if shipped else label)
 
     env = inst.env()
     display = env["DISPLAY"]
@@ -1312,7 +1438,8 @@ def _launch(args) -> dict:
         if report:
             die(report)
         time.sleep(0.5)
-    win = place_window(inst, display)
+    # a --shipped game places itself, as a player's does
+    win = inst.window() if shipped else place_window(inst, display)
     restored = pointer_restore(display, pointer_before)
     meta["last_launch"] = time.strftime("%Y-%m-%d %H:%M:%S")
     inst.save_meta(meta)
@@ -1325,7 +1452,7 @@ def _launch(args) -> dict:
             "owndraw_note": owndraw_note, "fxown_note": fxown_note,
             "featown_note": featown_note, "terrown_note": terrown_note,
             "markown_note": markown_note, "defaults": bool(meta.get("defaults")),
-            "defaults_note": defaults_note}
+            "defaults_note": defaults_note, "shipped": shipped, "shipped_note": shipped_note}
 
 
 def cmd_launch(args):
@@ -1340,6 +1467,8 @@ def cmd_launch(args):
              f"shield={'on' if res['shield'] else 'off'}"
              f"{' dplay=on' if res.get('dplay') else ''}"
              f"{' defaults=on' if res.get('defaults') else ''}")
+    if res.get("shipped_note"):
+        human += f"\n  {res['shipped_note']}"
     if res.get("defaults_note"):
         human += f"\n  {res['defaults_note']}"
     if res.get("dplay_note"):
@@ -4486,9 +4615,9 @@ def build_parser():
         sp.add_argument("--res", type=res_type, default=default_res,
                         help="game resolution, e.g. 1024x768")
         sp.add_argument("--maxfps", type=int, default=None,
-                        help="frame cap written into the instance's ddraw.ini; "
-                             "0 is UNLIMITED (a negative value means the display "
-                             "refresh, not uncapped). Sticky per instance, like "
+                        help="frame cap written into the instance's impure.cfg: 0 is "
+                             "UNLIMITED, 60 and 120 themselves, a negative value the "
+                             "display refresh; nothing else. Sticky per instance, like "
                              "--res. Needed for any frame-time A/B: at the default "
                              "60 both sides read 60 because both hit the cap")
         sp.add_argument("--window", type=res_type, default=None,
@@ -4559,6 +4688,14 @@ def build_parser():
                         "stays the stock control")
     l.add_argument("--no-defaults", dest="defaults", action="store_false",
                    help="back to arm files only (sticky too)")
+    l.add_argument("--shipped", action="store_true",
+                   help="launch the gamedir as a player has it, for a hand-over: no "
+                        "tagpu_nowarp.on, shield, title, totala.ini or tagpu_defaults.off, "
+                        "and impure.cfg's placement and size are the player's own, kept "
+                        "across ordinary launches, so the game places ITSELF (a first "
+                        "run: borderless fullscreen on the primary monitor -- the "
+                        "owner's screen on the live display). Refused with arm files "
+                        "present or with a flag that writes something. Not sticky")
     l.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
     l.add_argument("--timeout", type=float, default=45)
     l.add_argument("--no-restore-pointer", action="store_true",
@@ -4805,8 +4942,9 @@ def build_parser():
     # re-runs at another resolution, or on another map, without being edited.
     scd.add_argument("--res", type=res_type, help="override setup.res")
     scd.add_argument("--maxfps", type=int, default=None,
-                     help="frame cap for the launch; 0 is UNLIMITED. Sticky per "
-                          "instance — omit it to keep what the instance has")
+                     help="frame cap for the launch: 0 (UNLIMITED), 60, 120, or a "
+                          "negative value (the refresh). Sticky per instance — omit it "
+                          "to keep what the instance has")
     scd.add_argument("--map", help="override setup.map")
     scd.add_argument("--unit-limit", dest="unit_limit", type=int,
                      help="override setup.unit_limit")

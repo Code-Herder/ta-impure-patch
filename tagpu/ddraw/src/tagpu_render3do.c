@@ -250,7 +250,7 @@ static void r3d_init(void)
     /* ASKED OF THE CONSUMER, NOT OF THE LEVER. These latches are one-way, so
     once asked the memory is held for the process's life, and
     `tagpu_vk_armed()` is true whenever `tagpu_vk.on` exists -- including under
-    `renderer=gdi`, where the lever arms nothing and the mirror would be
+    the GDI backend, where the lever arms nothing and the mirror would be
     paid for with no consumer at all. `tagpu_vk_owns_present()` is exactly
     "a Vulkan pass will run in this process", which is the question. */
     if (tagpu_vk_owns_present()) tagpu_r3d_atlas_mirror_want();

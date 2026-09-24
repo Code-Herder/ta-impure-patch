@@ -70,7 +70,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
     tagpu_input_eye_frame(f);
     /* THE ON-DEMAND TRIGGERS ARE NOT HERE. They are called from the engine's
        own flip (tagpu_gui_hook.c's `before_flip`), on the game thread, so that
-       they reach `renderer=gdi` -- which never enters this function at all,
+       they reach the GDI backend -- which never enters this function at all,
        because `render_gdi.c` makes no `tagpu_` call. See
        `tagpu_triggers_frame` below.
 

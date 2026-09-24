@@ -282,15 +282,15 @@ terrain pass owns the ground, when there is no wide grid to take — and they mu
 
 ## The Vulkan lane
 
-The Vulkan backend is the renderer: `ddraw.ini` says `renderer=vulkan` (tacli writes it; the
-`openglcore` spelling reaches the same lane through a fallback that logs), and `renderer=gdi` is
-the other lane, on which nothing of ours draws, no golden source is captured, and every `tacli`
-verb except `eye`, `wheel` and `gui` still works.
+The Vulkan backend is the renderer on every launch. **`tacli arm <i> gdi.on`** before the launch
+forces the GDI backend (`cfg: … renderer GDI (tagpu_gdi.on)`), the other lane, on which nothing
+of ours draws, no golden source is captured, and every `tacli` verb except `eye`, `wheel` and
+`gui` still works. `gdi.on=off` puts Vulkan back; it is read at attach only.
 
 | lever | what |
 |---|---|
 | `vk.on` | not needed to run the lane; read for `color=r,g,b`, the clear colour (black by default; `255,0,255` makes every undrawn pixel a magenta sentinel) |
-| `vk.off` | **ignored** under `renderer=vulkan` (the log says so) |
+| `vk.off` | **ignored** on the Vulkan backend (the log says so) |
 | `tagpu_vk.gpus` | the GPU row's device list (one launch behind); the choice is `gpu=` in `impure.cfg` — `references/modules.md` |
 | `ss.off` | the 2x supersample off, and the lever over the Supersampling row. Live: the world target (`gw*ss x gh*ss`) is rebuilt on the next frames — `vk: world: frame N: 1024x768 target (1024x768 at ss=1)` after arming it on a running game |
 | `devres.on` | the world at the device's resolution: `ss` follows `ceil(k)` (`references/ui-layer.md`) |

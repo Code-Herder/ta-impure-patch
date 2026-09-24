@@ -789,17 +789,8 @@ HRESULT dds_EnumAttachedSurfaces(
 
     if (This->backbuffer)
     {
-        /* Hack for carmageddon 1 lowres mode */
-        if (g_config.carma95_hack && g_ddraw.height == 200)
-        {
-            dds_GetSurfaceDesc(This, (LPDDSURFACEDESC)&desc);
-            lpEnumSurfacesCallback((LPDIRECTDRAWSURFACE)This, (LPDDSURFACEDESC)&desc, lpContext);
-        }
-        else
-        {
-            dds_GetSurfaceDesc(This->backbuffer, (LPDDSURFACEDESC)&desc);
-            lpEnumSurfacesCallback((LPDIRECTDRAWSURFACE)This->backbuffer, (LPDDSURFACEDESC)&desc, lpContext);
-        }
+        dds_GetSurfaceDesc(This->backbuffer, (LPDDSURFACEDESC)&desc);
+        lpEnumSurfacesCallback((LPDIRECTDRAWSURFACE)This->backbuffer, (LPDDSURFACEDESC)&desc, lpContext);
     }
 
     return DD_OK;
@@ -809,7 +800,7 @@ HRESULT dds_Flip(IDirectDrawSurfaceImpl* This, IDirectDrawSurfaceImpl* lpDDSurfa
 {
     dbg_dump_dds_flip_flags(dwFlags);
 
-    if (This->backbuffer && !This->skip_flip && !(g_config.carma95_hack && g_ddraw.height == 200))
+    if (This->backbuffer && !This->skip_flip)
     {
         EnterCriticalSection(&g_ddraw.cs);
         IDirectDrawSurfaceImpl* backbuffer = lpDDSurfaceTargetOverride ? lpDDSurfaceTargetOverride : This->backbuffer;
@@ -1202,39 +1193,6 @@ HRESULT dds_Unlock(IDirectDrawSurfaceImpl* This, LPRECT lpRect)
         }
     }
 
-    /* Hack for Star Trek Armada */
-    hwnd = g_ddraw.ref && g_config.armadahack ? FindWindowEx(HWND_DESKTOP, NULL, "#32770", NULL) : NULL;
-
-    if (hwnd && (This->caps & DDSCAPS_PRIMARYSURFACE))
-    {
-        HDC primary_dc;
-        dds_GetDC(This, &primary_dc);
-
-        RECT rc;
-        if (fake_GetWindowRect(hwnd, &rc))
-        {
-            HDC hdc = GetDC(hwnd);
-
-            GdiTransparentBlt(
-                hdc,
-                0,
-                0,
-                rc.right - rc.left,
-                rc.bottom - rc.top,
-                primary_dc,
-                rc.left,
-                rc.top,
-                rc.right - rc.left,
-                rc.bottom - rc.top,
-                0
-            );
-
-            ReleaseDC(hwnd, hdc);
-        }
-
-        blt_clear(This->surface, 0x00, This->size);
-    }
-
 
     if ((This->caps & DDSCAPS_PRIMARYSURFACE) && g_ddraw.ref && g_ddraw.render.run)
     {
@@ -1473,7 +1431,7 @@ HRESULT dd_CreateSurface(
     }
     else
     {
-        if (!(dst_surface->caps & DDSCAPS_SYSTEMMEMORY) || g_config.tshack)
+        if (!(dst_surface->caps & DDSCAPS_SYSTEMMEMORY))
         {
             dst_surface->caps |= DDSCAPS_VIDEOMEMORY;
         }

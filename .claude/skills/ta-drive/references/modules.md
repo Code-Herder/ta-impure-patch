@@ -144,12 +144,14 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
 ```
 
 - **A lever holds its row, greyed.** `tagpu_classicpp.on/.off`, a menu key inside
-  `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`, and `ddraw.ini`'s
-  `fullscreen`/`windowed`/`maxfps`/`posX`/`posY`/`width`/`height` each beat the store for what they
-  name. tacli's own `ddraw.ini` carries the window keys, so **Display mode, Monitor and Frame cap are
-  greyed in every instance** — the tile is the lever. `tacli arm` still drives the others for A/Bs.
+  `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on` and `tagpu_hud.on/.off` each beat the
+  store for what they name; `tacli arm` drives them for A/Bs. **Display mode, Monitor and Frame
+  cap have no lever and are live under `--defaults`**: tacli writes the instance's placement into
+  the store on every launch, so a click there lasts one session and the next launch puts the
+  instance back on its tile.
 - **Under `tagpu_defaults.off` (every launch without `--defaults`) the store has no say and every
-  row but Shadows is greyed.** Shadows is then the engine's own shadow switch. Test the menu with
+  row but Shadows is greyed** — except that the placement (`display`, `window`, `maxfps`) is read
+  under every launch. Shadows is then the engine's own shadow switch. Test the menu with
   `--defaults`. The engine's Gamma, size and option word come from the one shared `user.reg`, which
   a `--defaults` instance saves its store's values into at every game entry — peek them before
   treating a control launch as stock.
@@ -160,11 +162,11 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
   Visuals screen has no `SHADING`, `ANTI` or `BSHADOWS` gadgets; the in-game `VISUALRT` carries
   `GAMMA`, `RESTORE` and `UNDO` only.
 - **tacli creates an empty `impure.cfg` before every launch.** A missing store is the DLL's
-  first-run signal: it renames the files an older menu wrote to `*.migrated`, strips `ddraw.ini`,
-  and leaves `impure-migration.txt`, after which a missing store only gets the defaults. To test the
+  first-run signal: it renames the files an older menu wrote to `*.migrated` and leaves
+  `impure-migration.txt`, after which a missing store only gets the defaults. To test the
   migration, delete the store and the record, then launch the exe by hand in the gamedir
   (`WINEPREFIX=<prefix> DISPLAY=<d> WINEDLLOVERRIDES=ddraw=n,b wine TotalA.exe`) on a private
-  Xvfb — it goes fullscreen. A migrated instance has lost its tile keys from `ddraw.ini`.
+  Xvfb — it goes fullscreen. `tacli launch --shipped` on a fresh instance is the same first run.
 
 - **The GPU list is one launch behind.** The captions live in a generated `.GUI` written at DLL
   attach, and a Vulkan instance cannot be created there, so a worker enumerates after the render
@@ -180,7 +182,8 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
   Auto alone and greyed. With llvmpipe bound the game dies on opening Options → Visuals and at a
   3840x2160 start-up; that only happens now on a machine with no GPU.
 - **The Frame cap row's first stage is Refresh** (`maxfps=refresh`, the target monitor's rate,
-  logged as `frame cap: Refresh = N fps`); tacli's `ddraw.ini` `maxfps` holds the row.
+  logged as `frame cap: Refresh = N fps`); a tacli instance's `--maxfps` is written over it at
+  every launch.
 - **At most eight devices are listed** (our cap; a stage button's art index is clamped by the
   engine, so a row past four stages draws the four-bar plate and still works). Names are truncated
   to 31 characters at a word boundary.

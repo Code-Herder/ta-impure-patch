@@ -73,7 +73,7 @@ DWORD WINAPI vk_render_main(void)
 
     /* THE LATCH FIRST, BEFORE ANYTHING IN THE SEAM RUNS. After it the surface
        goes on the window handed to `tagpu_vk_frame`, route D's window is never
-       created, and the levers stop deciding because `renderer=vulkan` already
+       created, and the levers stop deciding because the backend choice already
        did. See tagpu_vk.h.
 
        IT MUST PRECEDE `tagpu_vk_enum_start`, and that is an ordering rather

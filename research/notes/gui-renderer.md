@@ -2442,7 +2442,7 @@ engine address, and not one byte read from the engine that the module did not al
   plain bilinear rather than widened past a texel.
   **`k` is NOT 1 on every phase-1 path, and an earlier draft of this page, the roadmap and
   gpu-status all said it was** [the landing review, CONFIRMED 2026-09-09]. `resizable` defaults
-  TRUE (`config.c`, and the shipped `tagpu/release/ddraw.ini` does not turn it off) and
+  TRUE (`config.c`) and
   `maintas` fits the viewport to the client (`dd.c`), so **any window a player drags off the game
   resolution is already at a fractional `k` and already gets this ramp**. Only zooming forces
   `resizable` off (`dd.c:780`). So the ramp is in the field from this landing, not dormant until
@@ -2654,8 +2654,8 @@ lands rather than after it, so the numbers are here when the decision is taken.*
   swallowed — inert since the fork existed ([resolution](resolution.html) §3.1c). *(An earlier
   draft of this line said "missing all of", which inverts the rule and predicts the opposite for
   this very call.)* **Phase 2 adds no new engine patch at all.**
-- **No engine change to reach `k != 1`.** cnc-ddraw takes `ddraw.ini`'s `width`/`height` as the
-  client and maxes them against the game mode, so `tacli --window WxH` gives `k = window / res`
+- **No engine change to reach `k != 1`.** cnc-ddraw takes the window frame's width and height
+  (the store's `window=x,y,W,H`) as the client and maxes them against the game mode, so `tacli --window WxH` gives `k = window / res`
   with the engine keeping its own screen. That is what every measurement below was taken on.
 
 ### What it did need: a click that tests the pointer path

@@ -78,6 +78,7 @@ PAGES = [
     ("ui-markers",                 "UI markers",                  "Renderer"),
     ("native-res-design",          "Native-resolution pass (G12)","Renderer"),
     ("renderers",                  "Classic and Classic++ renderers", "Renderer"),
+    ("ddraw-ini-removal",          "Removing ddraw.ini",   "Renderer"),
     ("bar-camera-port",            "BAR camera & full-colour Classic (plan)", "Renderer"),
     ("gui-renderer",               "GL UI renderer (phase E)",    "Renderer"),
     ("thread-safe-destruction",    "Thread-safe destruction",     "Renderer"),

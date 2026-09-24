@@ -2013,7 +2013,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         user's.
 
    They are emitted here, on the game thread, and not by a renderer: only
-   render_vk.c reaches the overlay, so on `renderer=gdi` a log
+   render_vk.c reaches the overlay, so on the GDI backend a log
    there would never appear, `tacli roster` would answer nothing and `tacli
    scenario load` would TIME OUT -- with the game behind it running perfectly
    well. That was measured rather than assumed: `tacli scenario apply` against
@@ -2045,10 +2045,10 @@ static int ros_due(const LARGE_INTEGER* last, unsigned ms)
 /* WHY THE PUBLISH BELOW IS SOMETIMES FORCED. `fill_frame` runs only when a
    publish is not skipped, and the FRESH gate skips whenever the renderer has
    not taken the last packet. `tagpu_packet_acquire` has exactly one call
-   site -- render_vk.c -- so on `renderer=gdi` NOTHING
+   site -- render_vk.c -- so on the GDI backend NOTHING
    takes, every unforced publish is skipped, and `fill_frame` runs about once
    per level. Hanging the roster off the packet without this would produce
-   nothing on `renderer=gdi`, and produce it silently.
+   nothing on the GDI backend, and produce it silently.
 
    IT ASKS WHEN THE LAST FILL WAS, not when a particular line is next due.
    Against the last FILL it is self-limiting for the right reason: on a lane
@@ -2349,7 +2349,7 @@ static void* __cdecl after_draw(unsigned int* regs)
 
        IT IS NOT THE ONLY FORCED ONE. roster_wants_fill()
        forces a fill whenever none has happened for ROSTER_HDR_MS, so on a lane
-       with no consumer -- renderer=gdi, where nothing calls
+       with no consumer -- the GDI backend, where nothing calls
        tagpu_packet_acquire -- this forces about twice a second and `overrun`
        counts every one; gpu-status.md's exchange health rule says so. */
     {

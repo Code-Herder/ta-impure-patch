@@ -65,7 +65,6 @@
 #include "tagpu_menu.h"
 #include "tagpu_hud.h"
 #include "tagpu_vk.h"
-#include "tagpu_cfg.h"
 #include "tagpu_settings.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
@@ -1781,7 +1780,7 @@ typedef struct {
 
 /* THE GPU ROW'S LABEL SAYS "(Vulkan)" AND THAT IS THE STATED LIMIT, not a
    decoration. The row binds the VULKAN device and nothing else, and under
-   `renderer=gdi` there is no device for it to bind.
+   the GDI backend there is no device for it to bind.
    `vrow_greyed` greys the row whenever the Vulkan lane is not armed, so it
    never looks live while it cannot bite -- which is also what keeps the
    one-stage "(not listed yet)" row inert, since the engine REWRITES a
@@ -1924,8 +1923,8 @@ static void build_gpu_text(void)
    `s_vstage[VD_MON]` is a naturally aligned int, so the read cannot tear, and it
    is BOUNDED against `s_monCount` here before it indexes anything: the worst a
    racing click can do is hand back the monitor selected one click ago. A stale
-   `s_monChosen` reads as "nobody has chosen", whose answer is the window's own
-   monitor -- the correct fallback, not a wrong rect. */
+   `s_monChosen` reads as "nobody has chosen", whose answer is
+   `util_default_monitor` -- the correct fallback, not a wrong rect. */
 const char* tagpu_menu_monitor_device(void)
 {
     int i = s_vstage[VD_MON];
@@ -2317,8 +2316,7 @@ static void read_display_state(void)
     }
 
     /* the cap requested, not the one in force: Refresh is in force as a
-       number (fps_limiter.h), and any negative ini value is cnc-ddraw's own
-       "the refresh" */
+       number (fps_limiter.h) */
     {
         int cap = fpsl_cap_request();
         if (cap == FPSL_CAP_NONE) cap = g_config.maxfps;
@@ -2347,18 +2345,12 @@ static void read_display_state(void)
    immediately after a click -- greying from it would leave the plate saying
    "Window" and UI scale greyed at the same time, one click behind.
    `s_vstage[VD_MODE]` is what the player just asked for. */
-/* A row a ddraw.ini key holds, or every row when the store is ignored: a click
+/* A row a lever file holds, or every row when the store is ignored: a click
    there could not outlive the launch, so it is greyed (renderers.md 2.10b). */
 static int vrow_held(int row)
 {
     if (tagpu_settings_ignored()) return 1;
-    switch (row) {
-    case VD_MODE:  return tagpu_cfg_display_held();
-    case VD_MON:   return tagpu_cfg_display_held() || tagpu_cfg_window_held();
-    case VD_FPS:   return tagpu_cfg_maxfps_held();
-    case VD_SCALE: return tagpu_hud_held();
-    default:       return 0;
-    }
+    return row == VD_SCALE && tagpu_hud_held();
 }
 
 static int vrow_greyed(int row)
@@ -2366,7 +2358,7 @@ static int vrow_greyed(int row)
     if (vrow_held(row))  return 1;
     if (row == VD_MON)   return s_monCount < 2;
     /* Greyed unless there is a choice to make AND something that would act on
-       it. `tagpu_vk_armed()` is 0 under `renderer=gdi` with no `tagpu_vk.on`
+       it. `tagpu_vk_armed()` is 0 under the GDI backend with no `tagpu_vk.on`
        (tagpu_vk.h), where the row retargets nothing, and a live-looking row
        that changes no pixel is exactly what this rule exists to prevent. */
     if (row == VD_GPU)   return tagpu_vk_gpu_count() < 2 || !tagpu_vk_armed();
@@ -2440,7 +2432,7 @@ static const char* vis_actuated(void* gi)
    put back.
 
    ONLY THE WINDOW ROWS THE VISIT TOUCHED, AND TO WHAT THE STORE HELD. A plate
-   shows a resolved value -- the window's own monitor for a store that names
+   shows a resolved value -- the window's monitor for a store that names
    none, the device that came up for a stored GPU that could not -- so putting
    an untouched row back from its plate would pin what the player never chose.
    The Monitor goes back as the store's own value, "none" included; UI scale as
@@ -2644,8 +2636,8 @@ static int eng_resolve(int stored, int* w, int* h)
     nh = r.bottom - r.top;
     if (nw < 640 || nh < 480) return 0;
     /* a stored size the selected monitor cannot show falls back to its own --
-       except the ini's `inject_resolution`, which the picker offers whatever
-       the monitor (dd.c) and so stays the player's to make */
+       except the injected entry, which the picker offers whatever the monitor
+       (dd.c) */
     if (stored && ((TS_RES_W(stored) <= nw && TS_RES_H(stored) <= nh) || eng_injected(stored))) {
         *w = TS_RES_W(stored);
         *h = TS_RES_H(stored);

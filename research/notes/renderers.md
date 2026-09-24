@@ -1215,8 +1215,8 @@ question above has two answers and not one.
 ### 2.10b The settings store: every value on the Visual screens is ours  [DECIDED 2026-09-23]
 
 Interviewed with the owner 2026-09-23. **Every control on the Visual screens is backed by one
-store the DLL owns, `impure.cfg`, and none by the engine's registry or the fork's `ddraw.ini`.**
-The defaults are Classic++. Three landings build it (the table at the end); this section is the
+store the DLL owns, `impure.cfg`, and none by the engine's registry.** The DLL reads no
+`ddraw.ini` at all ([removing ddraw.ini](ddraw-ini-removal.html)). The defaults are Classic++. Three landings build it (the table at the end); this section is the
 decision record, and the rows' own mechanics stay where §2.10 puts them.
 
 **Why.** Before this, the Visual tab mixed three owners. Five stock controls (Screen Size, Gamma,
@@ -1245,16 +1245,20 @@ file with them.
 **Precedence: a lever beats the store, and the store beats the compiled default.**
 
 1. A **lever file** that names the setting (`tagpu_classicpp.on/.off`, a menu key inside
-   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`, and in
-   `ddraw.ini` `windowed`/`fullscreen` for Display mode, `maxfps` for Frame cap and
-   `posX`/`posY`/`width`/`height` for the window and the Monitor row) wins. The row shows the lever's value **greyed**, so a click can
-   never silently lose to a file.
+   `tagpu_classicpp.cfg`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`) wins. The row
+   shows the lever's value **greyed**, so a click can never silently lose to a file. Display
+   mode, Monitor and Frame cap have no lever: nothing but the store places the window.
 2. **`impure.cfg`.**
 3. **The compiled default** — the Classic++ table below.
 
-`tagpu_defaults.off` (every tacli control launch) **skips tier 2 as well as the play defaults**:
-the behaviour is exactly what it was before the store existed, so a measurement arms what it
-names and nothing a player once clicked in that instance.
+`tagpu_defaults.off` (every tacli control launch) **skips tier 2 as well as the play defaults**,
+so a measurement arms what it names and nothing a player once clicked in that instance — **except
+the window's placement**: `display`, `maxfps` and `window` are read under every launch
+(`tagpu_settings_placement`, `tagpu_settings_window`), because nothing else can place a window,
+and tacli writes all three before every launch (`write_placement`). A placed window also gets
+`center_window` never (`tagpu_cfg.c`): at cnc-ddraw's `auto`, the switch from the 640×480 shell
+to a larger game re-centres the window and throws a tile off its position. What keeps a player's
+frame in view instead is below.
 
 **The lever files stay, and the menu stops writing them.** They are the interface tacli and the
 `ta-drive` skill drive A/Bs through (`tacli arm <i> 'classicpp.cfg=assets=0'`, `ss.off`,
@@ -1297,35 +1301,35 @@ are literal and are not expected to move. A key the file lacks takes the compile
 **The first run migrates by renaming, and imports nothing.** When `impure.cfg` does not exist
 (and `tagpu_defaults.off` does not either), the files an earlier menu wrote are renamed
 `*.migrated` — `tagpu_classicpp.on/.off`, `tagpu_ss.off`, `tagpu_fps.on`, `tagpu_hud.on/.off`,
-`tagpu_vk.cfg` — the four menu keys and `sun=off` (the old spelling of `light=0`) are stripped out
-of `tagpu_classicpp.cfg` with every other token left in place, and `maxfps`, `windowed`,
-`fullscreen`, `posX`, `posY`, `width` and `height` are removed from `ddraw.ini` (after copying it to
-`ddraw.ini.migrated`). Then `impure.cfg` is written from the defaults. The renames are what
-matter: under the precedence above, a file v0.2–v0.2.2's menu left behind is indistinguishable
-from a lever and would hold its row greyed forever — and **every release shipped `maxfps=60` in
-its `ddraw.ini`**, which would have held the Frame cap row on every player's install. Nothing is
-deleted, so a bad migration is undone by hand.
+`tagpu_vk.cfg` — and the four menu keys and `sun=off` (the old spelling of `light=0`) are stripped
+out of `tagpu_classicpp.cfg` with every other token left in place. Then `impure.cfg` is written
+from the defaults. The renames are what matter: under the precedence above, a file
+v0.2–v0.2.2's menu left behind is indistinguishable from a lever and would hold its row greyed
+forever. An old `ddraw.ini` needs nothing: the DLL does not read it. Nothing is deleted, so a bad
+migration is undone by hand.
 
 **It runs once per directory.** A missing `impure.cfg` is not proof of a first run — deleting it
-is how a player resets — and what they have typed into `ddraw.ini` since is theirs. So the
+is how a player resets — and the files they have written since are theirs. So the
 migration leaves `impure-migration.txt`, listing each step, and a directory that has one only
 gets the defaults written. No backup is ever overwritten either: a `*.migrated` that already
 exists means the file it would back up is not the original, and that step is refused.
 MEASURED 2026-09-23 on a hand-staged v0.2 gamedir:
-every file renamed, `penumbra=0.1` kept alone in the cfg, the ini stripped, the game up
-borderless-fullscreen from the store.
+every file renamed, `penumbra=0.1` kept alone in the cfg, the game up borderless-fullscreen from
+the store.
 
-**The shipped files stop carrying the store's keys.** `tagpu/release/ddraw.ini` no longer has
-`maxfps`, and cnc-ddraw's generated template has `width`/`height`/`posX`/`posY`/`maxfps` commented
-out and `savesettings=0` — a present key would be a lever. cnc-ddraw's own save-on-exit is forced
-off (`tagpu_cfg.c`), because it wrote those keys back and would have turned the player's window
-into a lever after one session. The windowed frame is saved to the store instead, by `cfg_save`
-on the way out: `window=x,y,w,h`, where `w,h = 0,0` is cnc-ddraw's "the size the game asks for".
-A saved frame on no attached monitor is re-centred (`dd.c`, `MonitorFromRect`).
+**The windowed frame is saved to the store**, by `cfg_save` on the way out: `window=x,y,w,h`,
+where `w,h = 0,0` is cnc-ddraw's "the size the game asks for". A frame that a mode would leave
+with a corner on no monitor — its screen unplugged, or the shell dragged to a corner before a
+larger game — is moved the least distance that puts the window, decoration included, in the work
+area of the monitor it overlaps most, top-left first if it is the larger, so its title bar stays
+reachable (`dd_SetDisplayMode`); a client straddling two monitors has every corner on one and stays.
 
 **tacli never meets the migration.** It creates an **empty** `impure.cfg` in every instance
 before a launch (and never mirrors `*.migrated` or the record from the template), so the one trigger ("no `impure.cfg`") never fires there and
-the levers a measurement armed survive. Empty means every key at its compiled default.
+the levers a measurement armed survive. Empty means every key at its compiled default; tacli then
+writes the placement (`display=window`, the tile, `maxfps`) on every launch, so a menu change to
+those three lasts one session in an instance. `tacli launch --shipped` is the exception that
+writes nothing a player lacks.
 
 **Restore defaults** resets every key except `display`, `monitor`, `window` and `gpu`, for §2.10's
 reason: it must not move the window somewhere the player cannot see the button, nor rebind the
@@ -1366,9 +1370,7 @@ What each value does:
   are the engine's own unit bake, and the A/B — both toggles, both looks, a paused game —
   changed **0 world pixels** with the bits verified to flip (`0x3E` → `0x1E` → `0x1C`). Pinned to
   on, the stock default, because the GDI lane presents that bake: its behaviour there is the
-  stock game's by construction. GDI was not A/B'd: `scenario load` rewrites `ddraw.ini` to
-  `renderer=vulkan` whenever it passes a resolution (the ta-drive skill's `measuring.md` has the way
-  round it).
+  stock game's by construction. GDI was not A/B'd.
 - **`gamma=`** is bounded to 0..20 and applied through `SetGamma 0x4BA590`. `+gamma N` is
   session-only: stock saves it to the registry (`0x4172CE`), and so does this build, but the store
   never records it and the next launch pushes the store over it. A CANCEL after it puts the
@@ -1383,8 +1385,9 @@ What each value does:
   options, and under tacli that is the one `user.reg` of every instance, so a control launch reads
   32 where stock's missing key gives 8.
 - **`resolution=`** is resolved against the target monitor (`util_target_monitor`); a stored size
-  larger than the monitor falls back to native — unless it is the ini's `inject_resolution`, which
-  the picker offers whatever the monitor — and the Monitor row re-resolves it. It is written
+  larger than the monitor falls back to native — unless it is the injected desktop mode
+  (`inject_resolution`), which the picker offers whatever the monitor — and the Monitor row
+  re-resolves it. It is written
   on the front end only — in game the size is the running game's.
 - **The battleroom mode picker is session-only**: `0x446310`/`0x4461D0` write the pair and
   broadcast `PlayerInfo+0x8B/+0x8D`, and stock saves it (`0x4462FC`), but never to the store, so
@@ -1465,15 +1468,14 @@ Windows 8+ is the compositor's rate whatever monitor the game is on, and under w
 open that fails every frame. Instead the store's cap is a **request** (`fpsl_request_cap`,
 `fps_limiter.h`), and `fpsl_init` resolves Refresh into a plain positive cap — the target
 monitor's rate from `util_target_refresh` (`utils.c`): the menu's chosen adapter by name, else
-the window's monitor, else the primary; bounded to 24..1000 Hz, else 60, because Windows answers
+`util_default_monitor`'s (the window's monitor, or for fullscreen the windowed frame's, else the
+primary); bounded to 24..1000 Hz, else 60, because Windows answers
 0 or 1 for "the hardware default". So Refresh paces on the same tick path as 60 and 120.
 **The render thread is `fpsl_init`'s one owner**: the menu's Frame cap click, the Monitor row and
 `WM_DISPLAYCHANGE` only request it, and the render thread runs it at its next `fpsl_frame_start`
 — `fpsl_init` closes the D3DKMT adapter the render thread waits on and rewrites the tick fields it
 paces by, which a click on the window thread used to do under it. Logged each time: `frame cap:
-Refresh = N fps (<adapter> reports M Hz)`. A `maxfps` typed into `ddraw.ini` still holds the row
-(tacli's instances write one), with cnc-ddraw's own meaning, a negative value included. **Not
-covered:** a window dragged to another monitor without the Monitor row keeps the old rate until
+Refresh = N fps (<adapter> reports M Hz)`. **Not covered:** a window dragged to another monitor without the Monitor row keeps the old rate until
 the next display change or relaunch; and whether a secondary monitor reports its own rate under
 wine is unknown — the reference setup's secondaries report their current mode as 0x0, which the
 bound turns into 60.

@@ -6250,6 +6250,17 @@ Mapped 2026-09-06 to close the render thread's use-after-free on a dying unit's 
 disassembly of the retail exe unless marked `[INFERRED]`; the fork's `tagpu_reclaim.c` patches
 exactly two of these addresses (`0x45AAA0`, `0x491B60`) and reads none of the others at runtime.
 
+### `0x4B5330` — the display-mode callback, and why `max_resolutions` is bounded [DISASSEMBLED 2026-09-24]
+
+`stdcall(DDSURFACEDESC* desc, list* ctx)`, `ret 8`, handed to `EnumDisplayModes` by `0x4B5370`
+(`call [vt+0x20]` at `0x4B54EB`). Its **only filter** is `desc+0x54 == 8` (the pixel format's
+bit count); a match writes `{+0x0C width, +0x08 height, +0x18 refresh}` at `modes + count*12`
+(`lea ecx,[ecx+ecx*2]` / `lea ecx,[edx+ecx*4]`) and increments `*ctx` — **with no bounds check**
+against the `"DISPLAY MODES"` allocation, `0x4B0` bytes = 100 entries. It always returns 1
+(`DDENUMRET_OK`). So the fork's mode list must never offer more than 100 descriptors: this DLL
+sets `max_resolutions` 90 in code (`tagpu_cfg.c`, a static assert against 100), since cnc-ddraw's
+default of 0 means no cap. The list object and the windowed path: [resolution](resolution.html) §6.
+
 ### `0x4866D0` — the unit destructor `[INFERRED name: UNITS_Destroy]`
 
 Frame `sub esp,0x68`, two stack args (a death-message record, a mode), `ret 8` at `0x486E60`.
