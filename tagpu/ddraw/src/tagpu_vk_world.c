@@ -133,7 +133,7 @@ static int s_gamOn;                     /* `record` composites through the curve
    here is shared with `build`, and `_down_paid` leaves all of it standing.
    Two pipelines, one per direction, because a blend factor above 1.0 does not
    exist -- a fixed-point attachment clamps its constants to [0,1]:
-     UP   (factor > 1)  frame x DST_COLOR x 1.0 + frame x CONSTANT (factor - 1)
+     UP   (factor > 1)  1.0 x DST_COLOR + frame x CONSTANT (factor - 1)
      DOWN (factor < 1)  frame x CONSTANT (factor)
    and a factor above 2 is UP run more than once (`record_direct`). Nothing
    per slot: the pipelines and the quad are read-only, and the factor rides in

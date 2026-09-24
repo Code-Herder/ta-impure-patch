@@ -500,8 +500,13 @@ plan, or would change the next one:
   whatever the key said; now the key alone decides in both presets. Every state the Shadows row
   can reach is unchanged, because the row writes the key and the engine's bits together — only a
   hand-written `shadows=0` under Classic draws differently.
-- **The fallback path has no Gamma.** With no world target (a device that refuses one) the world
-  draws straight into the swapchain and shows at factor 1.0. Stated, not fixed.
+- **A frame with no world target needs the Gamma too.** With no target the world passes draw
+  straight into the swapchain image, and before the fix they showed the world at factor 1.0
+  whatever the Gamma. Before G20c the palette carried the Gamma on that path, so this was a
+  regression. The fix is one full-frame quad after the last world pass and before the UI, which
+  multiplies the frame by the factor in the blend unit ([GPU status](gpu-status.html) §2.3f). It is
+  at most one level from the curve, because the blend rounds where the engine truncates. It is
+  measured against the target path in §2.88.
 
 ---
 

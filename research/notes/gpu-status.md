@@ -1413,9 +1413,30 @@ a texel with no coverage is additive light (the effects' flashes) and takes the 
   restored twins, the base atlases and every LUT are functions of the unscaled table, so the
   restorer's tileability threshold (`tagpu_rglsl_tileable`, a raw colour distance) classifies the
   ART and not the display without a special case.
-- **The fallback path has no curve** (a stated gap): with no world target — a device that refuses
-  it — the world passes draw straight into the swapchain image and the world shows at factor 1.0
-  whatever the Gamma, while the UI beside it follows the presented palette.
+- **A frame with no world target takes the factor in the blend unit**
+    (`tagpu_vk_world_record_direct`, `tagpu_native.c` `KFS`). Such a frame is one where
+    `tagpu_vk_world_prepare` returned 0:
+    - for good, on an sRGB surface, with no depth format, on a format the device will not both
+      render and filter, or on a slot the device will not give the memory for;
+    - for that frame alone, on a size past `WORLD_MAXDIM`, or when the gather published no geometry.
+
+    Its world passes draw straight into the swapchain image, so there is no image to sample. One
+    full-frame quad, after the last world pass and before the UI, multiplies the frame by the factor:
+
+    - above 1: a source of 1.0 times `DST_COLOR`, plus the frame times `CONSTANT (factor − 1)`,
+      which is frame × factor. Blend constants clamp to [0,1], so a factor above 2 doubles first;
+      a doubling is exact until it clamps, and a clamped level stays clamped;
+    - below 1: `frame × CONSTANT (factor)`;
+    - at 1.0: nothing is drawn.
+
+    The factor lands after the world's own blends, and clamps where the curve does, as on the
+    composite. It differs in one step: the blend rounds `e × factor` where the engine truncates, so a
+    level lands at most one step from the curve. The frame holds only the clear and the world when
+    the quad draws: nothing of the engine's is drawn under the world, the UI comes after, and the
+    default clear is black. Its two pipelines and its quad are its own, so they survive the target's
+    refusal; `tagpu_vk_world_down` frees them with the device or a resize. **MEASURED 2026-09-24**
+    (§2.88): against the target path at `ss=1`, 69.6 % of the world's channels exact at Gamma 16 and
+    75.2 % at Gamma 6, the rest off by 1; byte-identical at Gamma 12.
 - `tagpu_order.c`'s `seq_ink` reads the packet's `pal[]` directly, the same unscaled table, from
   the packet the order walk already holds; its question is a luminance ranking over one sprite's
   colours, which no uniform scale moves.
@@ -16133,7 +16154,10 @@ and is looked up in `uPal`, the same unscaled table.
 
 **The Gamma, once** — §2.3f: the world composite applies the engine's own curve through a
 256 × 1 R8 image per slot (`uGam`, binding 41 of `tagpu_native::GFS`), and at factor 1.0 draws the
-plain resolve.
+plain resolve. A frame with no world target draws its world straight into the swapchain image,
+and takes the factor from one full-frame quad after the last world pass and before the UI. That
+quad multiplies the frame by the factor in the blend unit (`tagpu_vk_world_record_direct`), and
+it lands within one level of the curve.
 
 **What 2d deleted**, and who was ported:
 
@@ -16212,20 +16236,57 @@ is gone. At the reference device's 64-byte alignment that is 1 536 bytes a unit 
       fraction of a tick apart, not a colour. The colour cannot move by construction: the base
       holds the engine's table entry for each index, and the flash level comes back out of the alpha
       exactly.
-    - **The markers** cannot be captured alone: their selection rects need the unit pass up, and the
-      A/B refuses a frame that two passes drew. So they were read off the presented window,
-      `import -window`, 1024 × 768. The fixture was `selbox-facings` with three units selected, fog
-      on, the game paused, in both presets. The whole window is **byte-identical** between the two
-      builds — markers, world, UI and the Gamma composite together. One pixel at the centre (the
-      cursor) blinks between two states in each build, and the two builds' reads of each state are
-      the same file.
+    - **The markers** cannot be captured alone: their selection rects need the unit pass up, and
+      the A/B refuses a frame that two passes drew. So they were read off the presented window
+      (`import -window`, 1024 × 768, `ss=2`, Gamma 12), in both presets.
+
+        - **First fixture:** `selbox-facings`, three units selected, fog on, paused. The whole
+          window is byte-identical between the two builds.
+        - **Second fixture:** `scenarios/marker-mix.json` (MEASURED 2026-09-24). Tanks at 30, 65
+          and 100 % health and a Commander at 80, on Two Continents, with water and the fog band
+          in view, paused. Five states, each read twice with both reads agreeing:
+
+            - every unit selected, which shows the selection rects, the four health bars and
+              group digit 1;
+            - SHIFT held with a patrol queued, which shows the order lines and dots, with a tank
+              hovered for its route dots;
+            - a held drag, which shows the band box;
+            - the Commander's solar collector, showing the placement ghost, its footprint and a
+              SHIFT-queued site with its ghost;
+            - all of that at zoom 1.5.
+
+            Old was 2c with main merged in, new is the branch tip, and all ten pairs are
+            **byte-identical**. The effects passes were off (`fx.off sfx.off`) and the UI layer
+            was off (`gui.off`). Health bars need the `damagebars` registry value, which every
+            instance shares and which nothing may write, so both DLLs carried a diagnostic
+            `mark.on` token that opened that gate alone. It was compiled for this test and is
+            not in the tree.
+
+        - **With the effects on**, every state differed in one 19 × 19 box over the 65 % tank: a
+          smoke puff that one launch drew and the other did not (162 px at zoom 1, 462 at 1.5).
+          It is the damaged unit's smoke at another point of its life, which is effects and not
+          markers.
+
     - **The lab:** its Classic lane, now on the base atlas and `k`, draws byte-identical to 2b's.
       Its Classic++ and relief-sun pictures are unchanged.
 
+- **A frame with no world target, after 2d (MEASURED 2026-09-24).** The target path and the
+  no-target path were compared at `ss=1`, so both draw at the same resolution. The fixture was
+  `selbox-facings`, three tanks selected, fog on, paused, read off the presented window. The
+  no-target path was forced by a diagnostic-only file probe in `prepare`, which is not in the tree.
+
+    - **Gamma 12:** the target, the no-target path, and the no-target path without the quad are
+      all byte-identical over the whole window.
+    - **Gamma 16 (factor 1.1667):** the target is 100 % the engine's curve
+      `min(255, trunc(e × f))` of the unscaled world, using the factor as the engine stores it.
+      Against it, the no-target path is exact on 69.6 % of the world's channels and one level
+      off on the rest. Without the quad it was 1.4 % exact and up to 36 levels off.
+    - **Gamma 6 (factor 0.75):** 75.2 % exact, the rest one level off. Without the quad it was
+      up to 64 off.
+    - Outside the viewport: 0 px in every case.
+
 **Not covered.**
 
-- **The fallback path has no Gamma** (§2.3f): a device that refuses the world target shows the
-  world at factor 1.0.
 - **The UI stays indexed**, through the presented palette, with its own re-restore on a palette
   change; nothing here touched it.
 - **Past factor 1.0 a near-white shaded face and a clipped grey move by more than a level**
@@ -16235,8 +16296,13 @@ is gone. At the reference device's 64-byte alignment that is 1 536 bytes a unit 
   switch and the edge colour read them); only its Classic lane lost the index path.
 - **The effects' 2d exit rests on two matched scenes** (above), not on an A/B paused on one
   tick, which two launches of the fight cannot reach.
-- **The markers' 2d exit is a window read at `ss=2` and Gamma 12**, one fixture: three selection rects
-  with the fog grid on. No health bar, order marker or band box was on screen.
+- **The markers' 2d exit is a window read at `ss=2` and Gamma 12.** No ShowRanges label and no
+  post-fog layer was on screen, and the health bars were opened by a diagnostic token rather
+  than by `damagebars` itself.
+- **The UI layer stood itself down on some launches of a fresh instance** ("`gui: 8 fresh starts
+  have not made the twin store able to follow the producer`", census `gui=0`). The pre-G20 base
+  build did the same on the same instance, so it predates this work. It was not investigated
+  here. The marker A/B turns the layer off in both runs so that it cannot decide the diff.
 
 **Risky spots for a review.** The packet layout (a field removed from the game-to-render
 hand-over; every offset after it moved); each world pass's binding list and uniform offsets
@@ -16244,4 +16310,7 @@ against its regenerated header; the base images shared across slots and written 
 from per-slot staging; `base_upload` as the one atlas upload and its dimension guard, which is
 what makes the once-only descriptor writes safe; the flash level in the effects' alpha; the
 restorer's input switched to the base; the Gamma curve's per-slot images and the premultiplied
-composite; `k[]` and its fallback; the `shadows=0` change.
+composite; `k[]` and its fallback; the `shadows=0` change. The no-target Gamma: the per-frame
+choice between the two arms (`prepare`'s 0 and `record_direct`'s `s_drawThis` guard), the blend
+constants and the doubling above 2, and the teardown split — `_down_paid` now frees the target
+alone and `_down` both.

@@ -156,6 +156,11 @@ fixture that only arms the pass produces no picture:
 | cursors | a **held** drag (`pmove:x0,y0`, `down:lbutton`, `pmove:x1,y1`, capture, `up:lbutton`) or a build placement |
 | post-fog layer | `mark.on=nocursor`, the only window in normal play that still fills it |
 
+`scenarios/marker-mix.json` is the fixture that opens all of them except the labels and the
+post-fog layer. It has three tanks at 30, 65 and 100 % health and a Commander, on open ground
+with water and the fog band in view. Its description gives the key sequence. Health bars still
+need `damagebars`, and the damaged tank smokes, so turn `fx`/`sfx` off for a pixel A/B.
+
 - `order: arena=-1` in the heartbeat is normal: SHIFT is not held.
 - `order.on=trace` runs both sides in one pass and logs both node lists (`order TRACE own:` /
   `order TRACE eng:`), which is the correctness gate — a pixel diff is unavailable because native

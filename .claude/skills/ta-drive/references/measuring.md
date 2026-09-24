@@ -44,7 +44,10 @@ once identifies the event and puts no rate on it.
 **Pause the sim** when the fixture animates: `tacli keys <i> tab` opens `ARMOPT`, which pauses
 the game and writes `PAUSED` across the viewport. Confirm with two peeks of the tick
 (`*0x511DE8+0x38A47:4`) four seconds apart. Note that a wheel's camera apply still runs while
-paused (it rides the in-play draw, not the tick).
+paused (it rides the in-play draw, not the tick). **Under `ARMOPT` the keyboard does not reach the
+game**: `ctrl+a` selects nothing and `ctrl+1` tags nothing. To pause and keep selecting, ordering
+and placing, send `tacli keys <i> pause` instead. It pauses with no menu, and a paused game still
+takes selections, `tacli order`, a held drag and a build placement.
 
 ## What moves in a "static" frame
 
