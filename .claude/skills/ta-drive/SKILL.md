@@ -35,7 +35,7 @@ isolation), `windowed-mode.md` (display bugs), `cmdline-options.md` (every launc
    *reading* window geometry and for capture. **Never run `xrandr` against the live display**,
    never move the human's pointer, never activate windows to "test" something.
 3. **Silence is the default** (`NoDirectSound`, six registry values, no `music/`). Pass
-   `--sound` only when asked.
+   `--sound` only when asked, or to measure sound on a null device (`references/measuring.md`).
 4. **Clean up**: `tacli stop <name>` when done, `tacli rm <name>` when the instance has no
    further use. Every running game is a GPU client.
 5. **Rebuilt the DLL? Relaunch.** `tacli launch` copies `ddraw.dll` into the instance from

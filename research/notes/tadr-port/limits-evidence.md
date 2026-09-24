@@ -23,6 +23,7 @@ every peer must agree on. That is established nowhere for the effect pools; see 
 from `0x491C30` (teardown). **The pool is allocated per game.**
 
 **TADR's writes (SRC; each checked against DIS):**
+
 - The allocation and clear sizes above.
 - Ten cap operands: `0x49B6F0 0x49B80A 0x49C9D2 0x49CC34 0x49CDF3 0x49D011 0x49D2BE 0x49D4B5
   0x49DD96 0x49DF24`. These are the operands of the ten `cmp …,0x12C` at `0x49B6EE 0x49B809
@@ -46,6 +47,7 @@ stack frame in the binary sized for 300 entries is `0x49AE20`'s. Also relocated 
 its damage — does not exist. The cap sits on both the local fire paths and the receive path
 (`0x49D2BD`, `0x49D4B3` are inside the `WEAPON_FIRED` receiver, which TADR's comments place at
 `0x49D27E`).
+
 - **INF:** whether a remote-created projectile that is refused changes damage on that peer depends
   on who computes damage (the `0x0B` damage packet suggests the firer or the victim). Settle it with
   two MP peers, one capped at 300 and one at 3000, a scenario with more than 300 projectiles in
@@ -53,6 +55,7 @@ its damage — does not exist. The cap sits on both the local fire paths and the
 - The projectile code also draws the sim RNG (`0x49B8D1`, `0x49B903`, `0x49D727`, `0x49D733`).
 
 **Our code that must follow:**
+
 - `inc/tagpu_engine.h:241` `PROJ_COUNT 300`, and the comments at `:234-240`.
 - `src/tagpu_packet.h:328` `TAGPU_PK_MAX_PROJ 300u` and `:239-242` ("exactly 300 slots… the bound
   is the allocation itself").
@@ -84,6 +87,7 @@ pool base: every other large displacement there is `main`-relative, not pool-rel
 `0x42176F` it exits when explosions ≥ 300. Otherwise it allocates an aux record (§4) and **draws
 the sim RNG eight times** a piece (`0x421851…0x4218D2`, then `0x421B39` and `0x421B62` on the same
 path). So the explosion cap decides how many sim-RNG draws a death makes.
+
 - **INF:** whether the sim-RNG stream must agree across peers. Stock peers can already differ in
   live-explosion count (remote events land later), which argues that it need not. Settle it by
   comparing `0x51FC88` (or `tagpu_cobtrace` rand lines) on two peers across a mass death, with the
@@ -94,6 +98,7 @@ path). So the explosion cap decides how many sim-RNG draws a death makes.
 process-lifetime static memory.
 
 **Our code that must follow:**
+
 - `inc/tagpu_engine.h` `OFF_NEXPL 0x1491B`, `OFF_EXPL 0x1491F`, `EXPL_COUNT 300` (around
   `:263-268`).
 - `src/tagpu_packet.h:276-277,329` (`TAGPU_PK_MAX_EXPL 300u`).
@@ -111,6 +116,7 @@ object (`this` for `0x4379B0` init and `0x437A30` alloc) with a 100 000-byte bac
 (`push 0x186A0` at `0x4208FB`).
 
 **TADR's writes (SRC, checked DIS):**
+
 - Seven base operands (`0x420B08 0x420F38 0x421153 0x421172 0x4211A7 0x42165F 0x421680`) and six
   end operands (`0x420B28 0x420F53 0x421162 0x42118D 0x4211C3 0x42166D`). These cover **every**
   array use of the two addresses.
@@ -135,6 +141,7 @@ fewer than 100 alive: more landings, more explosions, a different C-runtime `ran
 **Per game:** init runs from `0x4919D2`, teardown from `0x491B9F`.
 
 **Our code that must follow:**
+
 - `inc/tagpu_engine.h` `VA_PSYS_BEGIN/END 0x511DF0/0x511F80`.
 - `src/tagpu_packet.h:288-289,330` (`TAGPU_PK_MAX_DEBRIS 100u`).
 - `src/tagpu_packet_pub.c:1158-1167,923`.
@@ -148,6 +155,7 @@ fewer than 100 alive: more landings, more explosions, a different C-runtime `ran
 **Layout (DIS).** 300 × `0x34` inline at `main+0x1AB9F`, free marker byte `0xFF`, initialised by the
 level-load loop `0x420804…0x420882`. There are two first-free scans, both
 `cmp eax,0x12C`:
+
 - `0x420920`, a standalone allocator, which TADR replaces wholesale with a `jmp` to a round-robin C
   allocator. Nothing in the image calls it or points to it.
 - An inline copy at `0x4217DE…0x4217FB`, which TADR replaces with `call alloc; jmp 0x421804`. That
@@ -169,6 +177,7 @@ process-lifetime static memory, which is a *better* lifetime than stock's.
 ## 5. Units per player 250/500 → 1500 (`LimitCrack.cpp:466-473`)
 
 **Sites (DIS).**
+
 - `0x49163F push 0xFA` (the ini default, operand `0x491640`), `0x491658 cmp eax,0x1F4` (operand
   `0x491659`) and `0x491665 mov eax,0x1F4` (operand `0x491666`). The result goes to `main+0x37EEC`.
 - The process init `0x4912EE…0x491308` (in `0x491200`, before its own ini read) copies it to
@@ -189,6 +198,7 @@ says.** It is `mov ecx,0x65` (101), taken when
 `0x46E330`'s per-unit-type lookup returns −1. The result is stored in the battleroom's per-type
 table (`[0x5129B4]+i+0x5A`, `[0x5129C4]+i·4`), built per UnitDef from `def+0x186/+0x18A` and
 sprintf.
+
 - 101 is the "unrestricted" sentinel of the per-type restriction slider (0..100), and TADR
   replaces it with the unit limit so that "unrestricted" is not a cap of 101 a type.
 - **Settled by disassembly (landing 2).** Cancel in the restriction menu (`0x44C6FC`) writes the
@@ -204,6 +214,7 @@ No other `0x1F4` in `.text` belongs to the unit limit; `0x40BBDF` is a resource 
 **SIM, per game, network-significant** (the per-player ID blocks; [networking-lobbies](../networking-lobbies.md)).
 
 **Our code:**
+
 - `src/tagpu_packet.h` `TAGPU_PK_DESIGN_SLOTS` and `TAGPU_PK_MAX_UNITS 16384`. The design point was
   10 241 before landing 2; 1500 makes 15 001, below the table ceiling, and landing 2 moved the
   design point and every cap asserted against it.
@@ -219,6 +230,7 @@ the per-tick `0x40EB70`, shares it among the players as credits (the engine map 
 dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
 
 **SIM for the owner's units; per game (the init takes the map).**
+
 - INF: in a state-replicated model each peer paths only its own units (movement travels in `0x2C`),
   so unequal budgets do not desync. Worth one MP measurement before it is relied on.
 - The cost is CPU per tick (the budget caps the pathfinder's work a tick, shared among the players).
@@ -228,6 +240,7 @@ dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
 ## 7. SFX (particle) vector 400 → 16000/20480 (`IncreaseSfxLimit`)
 
 **DIS.**
+
 - The twenty `cmp …,0x190` operands TADR writes (`SfxVectorLimitAry`) are exactly the twenty sites
   [the engine map](../exe-reverse-engineering.md) lists (`0x471183 … 0x472CD9`, `0x472BF2` against `ecx`). **Missed
   sites: none** (the other `0x190` hits, `0x44376C 0x46AA2F 0x46AB2B 0x489F06 0x489F1E 0x497F1A`, are
@@ -243,11 +256,13 @@ dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
   capacity read back live as 204 800 (MEASURED 2026-09-23).
 
 **VISUAL (DIS).**
+
 - The emitter range `0x470F00…0x472F00` calls CRT `rand` `0x4E4870` and **never** the sim RNG.
   Emitters are also called from the explosion *draw* `0x420B00`, via `0x421550`, per the engine map.
 - Past the cap the emitter destroys the front object, the "401 steady state".
 
 **Our code that follows it** (landing 3):
+
 - The publisher's walk stops a layer at `TAGPU_LIM_SFX + 1` (`tagpu_packet_pub.c`), the engine's
   steady state; past it the layer is counted in `layerbad` and skipped whole, so the bound has to
   move with the cap. It did: the fixed `LAYER_OBJCAP 400` is gone.
@@ -262,6 +277,7 @@ dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
 ## 8. Unit-type IDs 512 → 16000 (`IncreaseUnitTypeLimit`, 17 writes)
 
 **DIS.**
+
 - Category bitmasks are 0x40-byte (512-bit) heap blocks, made in `0x488CC2` (`push 0x40; call
   0x4B4F10`, cleared with `mov ecx,0x10`), keyed in the map at `0x51E6B0`.
 - TADR widens:
@@ -284,6 +300,7 @@ dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
 use is fine.
 
 **Our code:**
+
 - `src/tagpu_weapons.c:30` `WPN_MAXDEFS 4096`: refuses and logs types beyond, gracefully.
 - `src/tagpu_cat.c:47-51` `MAX_DEFS 16384`.
 - `src/tagpu_native.c:99` / `tagpu_packet_pub.c:297,427`: the `UNITINFOCount` bound follows the
@@ -292,6 +309,7 @@ use is fine.
 ## 9. Weapon IDs 256 → 4096 (`WeaponIdOverflow` + `WeaponFiredExt`, off by default)
 
 **DIS.**
+
 - `0x42E463` reads `ID` with default −1 (`0x4C46C0`). Then, with **no bound either way**,
   `ebp = main + id·0x115 + 0x2CF3` (`0x42E46E…0x42E489`; the stride arithmetic works out to 277).
 - `Weapons[256]` ends at `0x2CF3 + 0x11500 = main+0x141F3`, **exactly the projectile
@@ -300,6 +318,7 @@ use is fine.
 - The name lookup loops 256 (`0x49E5EB cmp esi,0x11500`).
 
 **TADR's mechanism (SRC).**
+
 - The hook at `0x42E468` substitutes EAX so that the stock address arithmetic lands in a heap
   overflow array. It works because 0x115 is odd and so invertible mod 2³², and it depends on `main`
   not moving during a load.
@@ -315,16 +334,17 @@ not IDs.
 ## 10. Composite buffer 600² → 1280² (`0x458195`)
 
 **DIS.**
-- `0x458180` (called from the 3DO loader `0x42D473`) does
-  `push 0x258; push 0x258; push 0x506604; call 0x4B8E00` and stores the frame at `Object3do+0x10`.
-  That is the per-object composite GAFFrame's bounding size ([composite-buffer](../composite-buffer.md): the AABB cap).
-- It is the only such pair in `.text`. TADR writes all ten bytes blindly.
-- It runs on every Object3do creation, so it is a static immediate read at runtime.
 
-**On our renderer (INF from gpu-status §"Units", row 53):** `owndraw` skips the software rasterisers
-and `tagpu_native.c` draws units from the pose, so the composite's pixels are not presented on
-Vulkan. The composite is still built and sized, which costs memory per object. It matters only to
-the `gdi` lane. Settle it: one Vulkan A/B (0 px expected) plus the memory delta at 500 units.
+- `0x458180` (called from the model loader at `0x42D473`, once a level) does
+  `push 0x258; push 0x258; push 0x506604; call 0x4B8E00` and stores the frame at `+0x10` of the
+  composite draw context `*(main+0x1437B)`: **one shared scratch frame, not the per-unit
+  composite** (landing 4 corrected this; the unit's frame is the AABB's size, uncapped).
+- It is the only such pair in `.text`. TADR writes all ten bytes blindly.
+- The blit's build-state copy `0x4589C0` and the 2× structure bake (`0x459830`, `0x459C70`) size it
+  to a unit and never compare with the allocation, so the raise moves an overrun threshold
+  rather than bounding it. The copy runs on every lane (landing 4 read its header after a Vulkan
+  fight), so this is memory safety everywhere, and only GDI presents the result.
+- The engine map's *The composite scratch frame* has the addresses and the measurements.
 
 ## 11. Simultaneous sounds 8 → 128 (`MixingBuffers`)
 
@@ -333,7 +353,17 @@ the `gdi` lane. Settle it: one Vulkan A/B (0 px expected) plus the memory delta 
 TADR only writes the registry value, from its Delphi launcher (`src/Launcher/settings.pas:520`).
 
 **AUDIO only, per process.** Our impure.cfg store already observes this exact loader (`0x42F9A0`, in
-the Visuals landing), so this is a store key. Nothing in `tagpu/` or `tools/` mentions it today.
+the Visuals landing), so this is a store key.
+
+**The engine's table is the bound, and it is 32** (landing 4, DISASSEMBLED). The sound object
+tracks playing sounds in 32 slots (`+0x38` buffer, `+0xB8` sequence, `+0x138` looping flag;
+every loop `cmp 0x20`). The play `0x4CF570` evicts while `+0x30 >= +0x2C`, then takes the first
+empty slot, and with none returns without tracking the sound. So past 32 the eviction never fires
+and the 33rd sound plays untracked, where the stop-all `0x4CF150` cannot reach it; a looping one
+plays on. The eviction `0x4CF180` skips looping sounds and reads slot 32, past the table, when it
+finds no victim, so a value below 2 is unsafe too. TADR's 128 and the "≥ 33 = unlimited" of the
+community patch's notes both describe that untracked play. The store key is 32 by default and
+one of 8, 16, 24 or 32.
 
 ---
 
@@ -385,8 +415,8 @@ the Visuals landing), so this is a store key. Nothing in `tagpu/` or `tools/` me
 | SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | the walk's layer bound (drops whole layers), `MAX_PART`, the effects pass's sprite bucket; all follow since landing 3 | about 15 MB |
 | unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | ctrl-A/B/C (in §B); AI-range `0x10` sites unclassified | `WPN_MAXDEFS 4096` refuses | mods only |
 | weapon IDs 256→4096 | **SIM + wire** | load-time hook | 3 hooks + chat-hijack packet | ID < 0 unguarded (stock) | `OFF_WEAPON0` users; `CRC_weapons` does not cover IDs | needs every peer; off in mainline |
-| composite 600²→1280² | visual, GDI lane only (INF) | per Object3do, static imm. | 1 × 10 bytes, blind | none | none on Vulkan | memory |
-| MixingBuffers 8→128 | audio | per process (registry load) | none (launcher writes REG) | n/a | the impure.cfg store's loader observer | none |
+| composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **two writers never compare with the allocation** (the build-state copy, the 2× bake) | none | 3.28 MB a level |
+| MixingBuffers 8→128 | audio | per process (registry load) | none (launcher writes REG) | **the engine tracks 32; past it a sound plays untracked** | the impure.cfg store's loader observer, bounded to 32 | none |
 
 **Notes this pass corrected**, both in landing 1: `tagpu_packet_pub.c` said "twelve more" `0x190`
 sites where there are twenty, and the engine map now records that the explosion cap and the debris

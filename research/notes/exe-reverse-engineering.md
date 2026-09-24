@@ -206,6 +206,7 @@ the file before launch for exactly that reason:
 **Who writes the array's count, `main+0x37EE6` [DISASSEMBLED 2026-09-23].** It is the field the slot
 count `10·N + 1` is computed from (`0x4854EF`, a 16-bit `imul` at `0x4854EA` that wraps past 6553,
 after which `0x485502` allocates the array too small). These places write it:
+
 - `0x4912F5`, in the process init `0x491200`, copies `+0x37EEC` into it (and `0x491308` on into
   `+0x37EEA`). It runs *before* that function's ini read at `0x491653`, so it copies whatever
   `+0x37EEC` held before the read; the game start below is what carries the configured value.
@@ -3814,15 +3815,17 @@ above are what establish the mapping).
 
 The four pools above are raised tenfold by the limits block of `tagpu_patches.c`, re-derived from
 TADR's `EngineLimits.cpp` (prior art, [the TADR port](tadr-port/raised-limits.md)), and the
-particle layers and their object pool with them, from its `LimitCrack.cpp`. They share **one table**
-with the unit limit's sites (*The per-player unit cap*), 73 sites in all, compared with the stock
+particle layers, their object pool and the composite scratch frame with them, from its
+`LimitCrack.cpp`. They share **one table**
+with the unit limit's sites (*The per-player unit cap*), 75 sites in all, compared with the stock
 bytes as a whole at `DLL_PROCESS_ATTACH` and written as a whole or not at all; a mismatch writes
 nothing and the first DirectDraw call shows the startup-failure report and exits. Every site below
 was read out of the pristine image, and the evidence for each is in
-[the evidence pass](tadr-port/limits-evidence.md) §1–4 and §7. Landing reviewers checked the sites
+[the evidence pass](tadr-port/limits-evidence.md) §1–4, §7 and §10. Landing reviewers checked the sites
 against the image byte for byte.
 
 **Projectiles, 300 → 3000.** The pool stays the engine's, allocated per game:
+
 - `0x499A32` the `push 0x7D64` (the bytes, `300 × 0x6B`) and `0x499A56` the `mov ecx,0x1F59` of the
   clear (the dwords), both scaled by ten.
 - The ten cap operands of the `cmp …,0x12C` that refuse a new projectile: `0x49B6F0`, `0x49B80A`,
@@ -3843,6 +3846,7 @@ against the image byte for byte.
 stays where it is and nothing reads it any more. The layout is kept, `{i32 count; 0x54 × N
 records}`, because the add site `0x420A3C` takes the count's address as its base and reaches the
 records at `+4`.
+
 - The seven base references, the only ones in `.text`: `0x420630` the reset inside `0x420620`
   (called only from the level load `0x4919D2`), `0x420A36` / `0x420A3C` the add `0x420A30`,
   `0x420B35` / `0x420B3B` inside the draw `0x420B00`, `0x420F66` inside the tick `0x420F30`, and
@@ -3911,6 +3915,7 @@ operands are patched with the rest.
 **Particles, 400 → 20 480 a layer and 1000 → 204 800 objects.** Two ceilings, both visual: the
 emitter range `0x470F00..0x472F00` draws the C runtime's `rand` (`0x4E4870`) and never the
 simulation's generator.
+
 - **The layer cap is twenty operands**, every `0x190` compare in the emitters: nineteen
   `cmp eax,0x190` (`3D imm32`, operand at +1) at `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`,
   `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`,
@@ -3948,6 +3953,41 @@ simulation's generator.
   **15 964** in two runs. The simulation held 60 ticks a second throughout. Stock would have held
   that layer to 401.
 
+**The composite scratch frame, 600 × 600 → 1280 × 1280** [DISASSEMBLED 2026-09-23; MEASURED
+2026-09-23]. One frame a level: the unit blit's work copy, which is what the GDI lane draws for a
+unit with a depth plane, and the 2× bake's canvas.
+
+- **Where it lives.** The composite draw context `*(main+0x1437B)` is a `0x14`-byte object the
+  model loader makes once a level (`0x4B4F10(0x14)` at `0x42D3C0`, the constructor `0x458160`,
+  stored at `0x42D3DD`). `0x458180`, called at `0x42D473` with a page-rounded size, allocates the
+  context's ring at `+4` (`0x4379B0`: frees any old one, `[+0]` the size) and then the scratch at
+  `+0x10`: `push 0x258` (the height, operand `0x458196`), `push 0x258` (the width, operand
+  `0x45819B`), `push 0x506604`, `call 0x4B8E00`. It is the only such pair in `.text`.
+  `0x4B8E00(name, w, h)` allocates `w·h·2 + 0x18` bytes: the header (`+0` width and `+2` height,
+  u16), the colour plane at `+0x18` (pointer at `+0x10`) and the depth plane right after it
+  (`+0x14`). The level teardown frees it inside `0x42DB90`: `0x42DC8F` calls `0x4581C0`
+  (`MEM_Free [+0x10]`, then `0x437A20` frees the ring), `0x4B4F20` frees the context and
+  `0x42DCA3` nulls the pointer. Nothing leaks at 1280², 3.28 MB a level.
+- **It is not the per-unit composite.** The unit's own frame at `Object3do+0x10` is allocated by
+  the builder `0x4586A0` through `0x437BE0(slot, w, h)` at the AABB's size with no cap, a block of
+  the context's ring: `0x437BE0` calls the ring allocator `0x437A30` (the flying pieces' too) with
+  `this` unchanged. 600 × 600 is not a cap on it.
+- **Two writers size it to a unit, and neither compares with the allocation.** The blit's
+  build-state copy `0x4589C0` (from `0x459608`, every frame, for a unit with a depth plane) writes
+  the box of the unit and its cargo into the scratch's header (`0x458B8C`, `0x458B92`) and copies
+  or clears both planes at that size. The 2× bake in both rasterisers, `0x459830` and `0x459C70`
+  (AntiAlias, `main+0x37F06` bit 1; the structure bit, `unit+0x110` bit 29; `mode != 0`), doubles
+  the box (`0x459899` … `0x4598C1`), writes it into the header and clears both planes at the
+  doubled size (`0x4598E4`, `0x459908`). A box larger than the frame's area, or than a quarter of
+  it for the 2× bake, therefore writes past the frame: 600 × 600 and 300 × 300 in stock,
+  1280 × 1280 and 640 × 640 raised. **TADR's raise moves that threshold; nothing bounds it.**
+- **It runs on every lane** [MEASURED 2026-09-23]. After tier 1 on the Vulkan lane the scratch's
+  header held a 39 × 42 box with a hotspot of 21, 24, the copy's (the 2× bake writes only even
+  values), and its planes were `0x190000` = 1280² apart; the stock-limits build reads `0x57E40` =
+  600². On the GDI lane the nanoframe ladder (`scenarios/nanoframe-ladder.json`) looks the same
+  on both builds: every pixel that differs lies inside the nanoframes, and stock against raised
+  differs by the same 10 733 pixels as two frames of one run a second apart, the build-state pulse.
+
 **What it measured, 2026-09-23.** Single player, `scenarios/limits-flood.json` (450 Merls against
 450 Diplomats): the engine's own counts peaked at **687 projectiles** and **1727 explosions**, and
 the frame packet carried **687 projectiles, 2439 explosions and 540 flying pieces** at its peaks,
@@ -3963,6 +4003,32 @@ lists itself as player 0, so the same unit reads owner 0 on the peer that owns i
 the other. A peer that creates units for another player's slot makes units no peer owns: they
 exist on that peer alone. The team colour is the owner's player record, `player+0x96` (see
 `0x467C00` above).
+
+### The sound object and its table of 32 playing sounds — `*(main+0x10)` [DISASSEMBLED 2026-09-23; MEASURED 2026-09-23]
+
+`MixingBuffers` is not a site of the limits table: it is a registry value, and the settings store
+owns it (`impure.cfg`'s `mixingbuffers`, renderers.md 2.10b). The engine side:
+
+- **The fields.** `+0x2C` MixingBuffers, `+0x30` the sounds in use, `+0x34` a play sequence, and
+  one table of **32** slots in three arrays: `+0x38` the buffer, `+0xB8` its sequence number,
+  `+0x138` the looping flag. Every loop over it stops at `cmp 0x20`.
+- **Who writes `+0x2C`.** The registry loader `0x42F9A0` reads `MixingBuffers` (default 8) at
+  `0x42FE4F` and stores it through the setter `0x4CF210`, which takes any value. The getter
+  `0x4CF220` has one reader, the registry save (`0x4310A5` / `0x4310AB`).
+- **The play `0x4CF570`.** While `+0x30 >= +0x2C` it evicts (`0x4CF5B2..0x4CF5CB`, `0x4CF180`);
+  after the play it takes the first empty slot of the 32 (`0x4CF792..0x4CF7A3`) and bumps `+0x30`,
+  and **with none free it returns without tracking the sound**. A looping sound is refused while one
+  is tracked (`0x4CF592..0x4CF5A3`), so at most one is.
+- **The eviction `0x4CF180`** stops the oldest non-looping sound. With none it falls out of its loop
+  at 32 and reads slot 32, which is `+0xB8`: past the table.
+- **So the table is the bound.** Past 32 the eviction never fires once 32 are playing, and the 33rd
+  sound plays untracked, out of reach of the stop-all `0x4CF150`; a looping one (`0x4CF540`, the
+  flag at `0x51FF48`) plays on. Below 2, a tracked looping sound leaves the eviction no victim.
+  TADR's 128 is past the table; the store offers 8, 16, 24 and 32.
+- **MEASURED 2026-09-23**, tier 1 with sound on a null device: `+0x2C` read 32 and `+0x30` stood at
+  32 through two minutes of the fight, never above, the sequence at 83 146; the same fight with the
+  store at 8 held `+0x30` at 8. Effect sounds also need the registry's `fxvol` (`main+0x37F0C`)
+  above zero, which `tacli` sets to 0 on every silent launch.
 
 ### The two fog lattices, and the minimap's four surfaces [VERIFIED 2026-09-12, landing 4b and 4c]
 
@@ -5619,8 +5685,11 @@ instead of freeing it; the real body runs later through a trampoline over the st
 frame-composition.md), one argument: a slot address. It walks `[ecx+4]`'s `{ptr, size}` entries
 (advancing by `size`, `[ecx]` the total) and zeroes `entry.ptr` where it equals the argument.
 **The routine contains no `call` — it frees nothing.** The composite frame at `obj+0x10` therefore
-has an owner other than `FreeObjectState`; that frame's lifetime is an open item
-([Thread-safe destruction](thread-safe-destruction.html) §10). The registry pointer
+has an owner other than `FreeObjectState`: it is a block of the context's ring, allocated by
+`0x437BE0` through the ring allocator `0x437A30`, and the ring is freed with the context by the
+level teardown (*The composite scratch frame*, above). When the frame's memory can be reused
+before then — the allocator evicting it on a wrap — is still the open item of
+[Thread-safe destruction](thread-safe-destruction.html) §10. The registry pointer
 `main+0x1437B` is written at `0x42D3DD` (set) and `0x42DCA3` (`mov [ecx+0x1437B],ebx`, `ebx = 0`
 `[INFERRED]` — the teardown nulls it, and `FreeObjectState`'s guard then skips the walk).
 

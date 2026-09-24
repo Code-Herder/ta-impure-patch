@@ -31,14 +31,16 @@ Three findings shaped the plan:
 | units per player | default 250, clamp 500 | **1500, default and ceiling** | **simulation**; in a network game the host's value applies | L2 |
 | pathfinding budget | 1333 | 66 650 | simulation: a budget a tick, shared among the players; CPU per tick | L2 |
 | particles | 400 per layer, 1000 objects | 20 480 per layer, 204 800 objects, **checked against** the tier-1 battle | visual (C-runtime `rand` only) | L3 |
-| sounds (`MixingBuffers`) | 8 | 128 | audio; a registry value, not a patch | L4 |
-| composite buffer | 600² | 1280² | visual, and only in the GDI lane (Vulkan never shows it) | L4 |
+| sounds (`MixingBuffers`) | 8 | **32**, a store key (8, 16, 24 or 32) | audio; a registry value, not a patch; the engine tracks 32 | L4 |
+| composite scratch frame | 600² | 1280² | the unit bake's shared scratch, written on every lane and presented only by GDI's | L4 |
 
 **Deferred to their own plan:** unit-type IDs (512 → 16 000) and weapon IDs (256 → 4096). See
 [the overview](overview.md#the-groups).
 
 **The values** are TADR's, with two exceptions. Units are set to 1500 as both default and ceiling:
-the owner's call ("go all in"), and TADR's shipped `totala.ini` value. Particles were measured
+the owner's call ("go all in"), and TADR's shipped `totala.ini` value. Sounds stop at 32, not
+TADR's 128, because the engine's table of playing sounds has 32 slots and past it a sound plays
+untracked (landing 4). Particles were measured
 before they were set, because TADR's 20 480 per layer is a 51× jump that nobody had costed against
 our frame packet; tier 1 put one layer at 13 529 objects, so TADR's value stands (landing 3).
 TADR's `EngineLimits.cpp` (the four pools) is one month old (`586d71a`, 2026-08-22); its
@@ -57,6 +59,7 @@ lobby launch, which writes `ActualUnitLimit` unclamped (`0x449D9B`): past 6553 a
 same clamp, so they agree.
 
 **Unit limit: 1500 default and ceiling.**
+
 - The three immediates at `0x491640` (default), `0x491659` (compare) and `0x491666` (clamp-to)
   become 1500. A `UnitLimit` in `totala.ini` `[Preferences]` can still lower it, down to the
   engine's floor of 20.
@@ -73,6 +76,7 @@ same clamp, so they agree.
 
 **One module, one table, one rule.** The limits block holds one site table: address, expected
 bytes, replacement, name. It checks every entry, then writes all of them or none.
+
 - It runs at `DLL_PROCESS_ATTACH`. `ddraw.dll` is `TotalA.exe`'s first static import
   (`dllmain.c:221`), so it runs before the exe's C-runtime static initialisers. The particle pool
   (`0x471C80`) needs that ordering; TADR's hook at `0x471C87` relies on the same loader rule.
@@ -146,6 +150,7 @@ result: <k> of <n> sites differ, nothing written
 **Landing 1 — the effect pools, the module and the failure report. Done 2026-09-23.**
 Projectiles, explosions, flying pieces and debris records, 43 sites; the frame packet follows the
 moved pools; the stock-limits `make` flag. What it proved, by running it:
+
 - **Above the caps it works.** `scenarios/limits-flood.json`: the packet carried 687 projectiles,
   2439 explosions and 540 flying pieces, the same projectile count the engine held at that moment,
   with no table truncated.
@@ -175,6 +180,7 @@ moved pools; the stock-limits `make` flag. What it proved, by running it:
 
 **Landing 2 — units 1500, the `maxunits` clamps, the restriction sentinel, pathfinding 66 650 and
 the design point 15 001. Done 2026-09-23.** Fifty-two sites now. What it proved, by running it:
+
 - **The limit is what the engine holds.** With no `UnitLimit` key the game reads 1500; in the
   four-player skirmish `+0x37EEC` and `+0x37EE6` were 1500 and the unit array 15 001 slots. The
   two clamp stubs were read back out of the running process and disassembled.
@@ -190,6 +196,7 @@ the design point 15 001. Done 2026-09-23.** Fifty-two sites now. What it proved,
 
 **Landing 3 — particles: the per-layer cap and the object pool. Done 2026-09-23.** Seventy-three
 sites now: the twenty layer compares and the pool's capacity. What it proved, by running it:
+
 - **The headroom rule, and the value it gave.** A cap must hold the largest layer tier 1 reaches
   with half again to spare. A scratch build at TADR's values put one layer at **13 529 objects**
   at the opening volley (the pool's used count 13 571); 13 529 × 1.5 = 20 294, inside TADR's
@@ -209,9 +216,22 @@ sites now: the twenty layer compares and the pool's capacity. What it proved, by
   204 800, 15 964 sub-particles in a frame with nothing truncated, no layer refused, no vertex
   dropped, the smoke drawn, and the simulation at 60 ticks a second.
 
-**Landing 4 — `MixingBuffers` 128 and the composite buffer.** `MixingBuffers` as an `impure.cfg`
-key (read at `0x42FE4F` inside the registry loader `0x42F9A0`, which the store already observes);
-the composite buffer proved by a GDI-lane comparison.
+**Landing 4 — sounds and the composite scratch frame. Done 2026-09-24.** Seventy-five sites now,
+and one store key. What it proved, by running it:
+
+- **Sounds are 32, not 128.** The sound object tracks at most 32 playing sounds (`+0x38`, `+0xB8`,
+  `+0x138`); `MixingBuffers` is where it starts evicting, and past 32 the eviction never fires and
+  a 33rd sound plays untracked, a looping one beyond the stop-all's reach. So `mixingbuffers` in
+  `impure.cfg` is 32 by default and one of 8, 16, 24 or 32, pushed into `+0x2C` after every
+  registry load, where the loader has just stored the registry's value unchecked. Tier 1 with
+  sound on a null device: 32 in use throughout the fight, never more; the store at 8 held 8.
+- **The composite scratch is one frame a level, not one a unit**, and two engine writers size it to
+  a unit without comparing with the allocation: the blit's build-state copy and the 2× structure
+  bake. The raise to 1280² moves the size at which they write past it; it is not a bound. The
+  frame read back at 1280² on the Vulkan lane, where the copy writes it every frame, and 600² on
+  the stock build.
+- **The GDI lane draws the same picture**: the nanoframe ladder on both builds differs only inside
+  the nanoframes, by exactly as much as two frames of one run a second apart.
 
 **Landing 5 — ten players.** `mp_lobby.sh` extended to N instances. Proof, tier 2: a 10-player
 network game at 1500 each (15 000 units), the proof of the 15 001-slot design point, checked the
@@ -252,6 +272,13 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
 - The evidence named `0x420E50` as the flying-piece spawner; nothing calls it. The live spawner is
   `0x481140`, and the conclusion (the slot cap gates no simulation draw) holds through it. A piece
   explosion draws the simulation's generator eight times, not six (landing 1's review).
+- **The 600² frame is not the per-unit composite's cap** (landing 4). The unit's own frame is the
+  AABB's size with no cap; 600² is the draw context's one shared scratch. The composite notes and
+  the evidence's §10 said otherwise, and so did its claim that the frame is made per object and
+  matters only to the GDI lane: the build-state copy writes it on every lane.
+- **The bit the 2× bake tests is the structure bit**, not "under construction" (build-state.md §1
+  had measured it; its 2× paragraph still said nanoframes).
+- **TADR's 128 sounds is past the engine's table** (landing 4).
 - The engine map said the effect arrays are simulation state that the draw passes only read, and
   did not record that the explosion cap and the debris records' fullness gate synced random-number
   draws. It does now (landing 1).

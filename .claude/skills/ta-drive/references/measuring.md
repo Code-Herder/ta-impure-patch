@@ -120,6 +120,20 @@ scores 0 magenta and shows no game.
   engine clamps to 500 again and defaults to 250, which `tacli`'s schema does not know: `scenario
   validate` passes up to 1500 a player and 15 000 entities, and the apply then refuses. The apply's
   own check is against the cap in force (`main+0x37EE6`), which is the host's in a network game.
+- **The GDI lane takes a hand-edited `ddraw.ini` and a fixture with no resolution.** `scenario
+  load` rewrites `ddraw.ini`, `renderer=vulkan` included, whenever it passes a resolution, and it
+  passes `setup.res` whenever the fixture has one. Set `renderer=gdi` in `<gamedir>/ddraw.ini`, load
+  a copy of the fixture without `setup.res` into an instance whose store resolution is the one
+  wanted, and check `ddraw.ini` still says `gdi` after the load. Set it back to `vulkan` after: a
+  plain `tacli launch` keeps whatever the file says.
+- **Sound goes to a null device, never to the human's speakers.** Export
+  `PULSE_SERVER=unix:/nonexistent/pulse` and `ALSA_CONFIG_PATH=<a file holding
+  pcm.!default { type null }>` in the shell that runs `tacli`, and set `"sound": true` in the
+  instance's `instance.json` (`scenario load` has no `--sound`; set it back to false after). Effect
+  sounds also need the registry's `fxvol` above 0, and every silent launch writes it to 0 in the one
+  `user.reg` all instances share: `wine reg add` it in your own prefix just before the launch and
+  back to 0 after the game stops. The sound object is `*(main+0x10)`: `+0x2C` MixingBuffers,
+  `+0x30` the sounds in use.
 - **A single-player fight does not reproduce run to run, even under one DLL**, so a COB-trace or
   roster timeline compared across two runs measures noise from the first impact on. Compare what
   is a function of the build (a static frame, a pose, a table), or two peers of one network game.

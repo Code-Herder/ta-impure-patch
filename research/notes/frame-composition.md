@@ -217,8 +217,10 @@ When a unit's model is dirty, `0x458810` calls **`0x4586A0`** [VERIFIED-static]
    The `GAFFrame` header is 0x18 bytes: `Width/Height/HotX/HotY` (words),
    `ColorKey/Compressed/SubFrames/AlphaBlend` (bytes), then pixel ptr at `+0x10`
    and depth ptr at `+0x14` [CORPUS: TADR `buildghost.h` `GhostGAFFrame`, matches
-   our bytes]. **TADR patches this allocation's fixed 600×600 dimension at
-   `0x458195`** [CORPUS] — confirming the stock composite buffer is 600×600.
+   our bytes]. The allocation is the AABB's own size, with no cap. **The 600 × 600 that TADR
+   raises at `0x458195` is not this frame** but the draw context's one shared scratch
+   (`0x458180`; exe-reverse-engineering.md, *The composite scratch frame*) [DISASSEMBLED
+   2026-09-23].
 3. Rasterises the posed pieces into that buffer via **`0x459830`** (opaque) or
    **`0x459C70`** (build/nanoframe with shadow). [VERIFIED-static] `0x459830`
    walks each `PrimitiveStruct`, projects vertices (`kNanoframeStart 0x458DF1`

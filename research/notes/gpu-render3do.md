@@ -20,7 +20,8 @@ space — fresh because we do *not* suppress `DrawUnit`, so TA's lazy repose kee
 triangulate each `Model3DOFace` as a fan from index 0, and render flat-coloured triangles
 into a GL FBO with **TA's own dimetric projection**: sprite `px = x + HotspotX`,
 `py = (−z − y/2) + HotspotY`, GL depth `= 2y − z` (the true view-ray depth; nearer wins).
-The FBO is 640×640 (stock composite is AABB-capped 600×600); only the sprite's `W×H`
+The FBO is 640×640 (chosen against a 600 × 600 cap the composite does not have: that size is
+the shared scratch's, exe-reverse-engineering.md *The composite scratch frame*); only the sprite's `W×H`
 corner is used, sized/hotspotted from the header TA itself wrote into the composite.
 Readback rows map 1:1 onto the top-down colour plane because the projection flips Y
 (sprite row 0 → NDC −1 → `glReadPixels` row 0). The composite's **depth plane is left
