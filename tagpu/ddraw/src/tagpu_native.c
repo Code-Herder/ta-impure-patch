@@ -1963,9 +1963,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     if (f->packet) s_lastLevelGen = f->packet->level_gen;
     cache_gen_check(s_lastLevelGen);
     /* and the UNIT ATLAS, which keys on frame ADDRESSES the next level's loader
-       may reuse. Here rather than in tagpu_r3d_atlas_frame below because
-       tagpu_posebake_frame latches tagpu_r3d_atlas_gen() on the next line. */
+       may reuse, and recycles when full. Both move its generation, so both
+       are here, before tagpu_posebake_frame latches tagpu_r3d_atlas_gen() on
+       the next line: a move after the latch would leave this frame's cached
+       materials matching a generation whose rects are being repainted. */
     tagpu_r3d_atlas_level(s_lastLevelGen);
+    tagpu_r3d_atlas_recycle();
     /* the geometry bake's caches take the same three generations one frame
        later than they are bumped, for the same reason and on the same thread —
        and its drop frees the mirrors the Vulkan unit pass reads on the render
@@ -2117,7 +2120,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        skipping here keeps the gathers from building work nothing can draw. */
     const unsigned char* pal = tagpu_pal_engine();
     if (!pal) { SSHADOW_NONE(); return; }
-    /* the unit atlas's frame: recycle if full -- before any face asks it for a UV */
+    /* the unit atlas's allowance frame, before any face asks it for a UV (a
+       full atlas was recycled above, before the generation latch) */
     tagpu_r3d_atlas_frame();
     /* AND THE SHADE CALIBRATION, on the same beat and for the same reason: it
        is the pass's, and the hand-over carries its multipliers. */

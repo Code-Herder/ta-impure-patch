@@ -13,13 +13,16 @@ int          tagpu_r3d_atlas_restore_armed(void);
    (tagpu_posebake.c). */
 unsigned int tagpu_r3d_atlas_gen(void);
 /* Once per frame from the native pass, before its first tagpu_r3d_atlas_uv:
-   recycles a full atlas, never between an emit and its draw. */
+   the allowance's frame (tagpu_gaf.h `budget`). */
 void tagpu_r3d_atlas_frame(void);
 /* Once per frame from the native pass, beside the other level-keyed caches and
    BEFORE tagpu_posebake_frame latches the atlas generation: drops every entry
    when the level changes, because the atlas keys on frame addresses the next
    level's loader may reuse. */
 void tagpu_r3d_atlas_level(unsigned level_gen);
+/* Once per frame, right after tagpu_r3d_atlas_level and so also BEFORE the
+   latch: recycles a full atlas, never between an emit and its draw. */
+void tagpu_r3d_atlas_recycle(void);
 /* Build the face-shade calibration and its multipliers, once. `shd` is the
    frame packet's copy of the engine's PALETTE.SHD table (tagpu_pk_shd), or
    NULL to use our own computed ramp — this module does not read the graphics

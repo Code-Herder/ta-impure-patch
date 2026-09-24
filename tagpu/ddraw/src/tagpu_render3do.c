@@ -40,9 +40,10 @@ static int    s_shadeBuilt = 0;
    still the frame's OWN texels, edge-mapped (TA maps quad corners to texture
    edges; a centre inset shifts every interior sample half a texel and flips
    ~50% of NEAREST lookups on noisy textures), so Classic's samples never
-   reach the border. Recycled when full, at the start of a frame
-   (tagpu_r3d_atlas_frame), never between an emit and its draw. 2048^2 holds
-   ~1,400 median cells (32x64 frames become 40x72). ---- */
+   reach the border. Recycled when full, at the start of a frame and before
+   its generation is latched (tagpu_r3d_atlas_recycle), never between an emit
+   and its draw. 2048^2 holds ~1,400 median cells (32x64 frames become
+   40x72). ---- */
 #define ATLAS_DIM  2048
 #define ATLAS_MAX  2048
 #define ATLAS_PAD  4                      /* tools/tascene UNIT_PAD          */
@@ -399,12 +400,12 @@ unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
    boundary.
 
    It is called from `tagpu_native_frame` beside `cache_gen_check` and
-   `tagpu_posebake_frame`, the other two level-keyed caches, rather than from
-   `tagpu_r3d_atlas_frame` lower down this file: `tagpu_posebake_frame` LATCHES
-   `tagpu_r3d_atlas_gen()` for the frame, so a drop after it would leave this
-   frame's bakes stamped with the generation before the drop and cost a second,
-   pointless drop on the next frame. Taking it here means every consumer sees
-   one generation for the whole frame.
+   `tagpu_posebake_frame`, the other two level-keyed caches, and BEFORE the
+   latch: `tagpu_posebake_frame` LATCHES `tagpu_r3d_atlas_gen()` for the frame,
+   so a drop after it would leave this frame's bakes stamped with the
+   generation before the drop. Taking it here means every consumer sees one
+   generation for the whole frame -- `tagpu_r3d_atlas_recycle` below, the
+   atlas's other generation move, is on the same beat for the same reason.
 
    The cost of being right is one re-decode of whatever is on screen at a level
    change -- the same cost `tagpu_fx.c` pays -- and the first frame of a
@@ -419,11 +420,26 @@ void tagpu_r3d_atlas_level(unsigned level_gen)
     s_atlasGen = g;
 }
 
-void tagpu_r3d_atlas_frame(void)
+/* A FULL ATLAS IS RECYCLED BEFORE THE GENERATION IS LATCHED, never after.
+   The recycle moves every UV and bumps the generation, and a material the
+   geometry bake cached is reused for as long as its stamp equals the
+   generation `tagpu_posebake_frame` latched (tagpu_posebake.c). Were the
+   recycle after the latch, every cached material would still match for the
+   rest of the frame and be drawn through rects this frame's new paints are
+   overwriting -- units in the wrong texels for one frame per recycle. Before
+   it, the latch sees the recycled generation and every stale material drops
+   on the same line. Called from `tagpu_native_frame` right after
+   `tagpu_r3d_atlas_level`, whose drop is the other generation move. */
+void tagpu_r3d_atlas_recycle(void)
 {
     if (s_state != 1) return;
     if (s_atlas.full) tagpu_gaf_atlas_reset(&s_atlas);
-    /* the allowance's frame, after the reset and before the first lookup */
+}
+
+void tagpu_r3d_atlas_frame(void)
+{
+    if (s_state != 1) return;
+    /* the allowance's frame, after the recycle and before the first lookup */
     tagpu_gaf_atlas_frame(&s_atlas);
     /* No palette here: this atlas's restore is the Vulkan restorer's --
        `tagpu_gaf_atlas_restore_vk` publishes the frame list and
