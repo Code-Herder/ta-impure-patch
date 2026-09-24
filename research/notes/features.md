@@ -295,14 +295,16 @@ the cell that opens a shelf is always the tallest on it:
 A real 2D packer is four times the code for five points of span the page does not need,
 so the shelf stays. What changes is the order it is fed in.
 
-**Nothing is evicted and nothing is decoded during the repack.** We do not keep a frame's
-decoded pixels — an entry records the frame's address, its size and its rect — and GL 3.3
-core has no `glCopyImageSubData` to shuffle texels with. So the repack only *reserves*:
-each entry keeps its identity, gets a new rect, and is marked `resv` with `ok = 0`, which
-keeps `tagpu_gaf_atlas_find` refusing it. The next `atlas_get` for that frame decodes it
-as it always did and `atlas_paint` uploads it into the rect already assigned. That is the
-same work one old reset did — done **once**, when the page fills, instead of once per
-frame for as long as it stays full.
+**Nothing is decoded during the repack, and a painted frame's texels move with it.** The
+CPU mirror holds every painted entry's decoded cell, so `mirror_move` (`tagpu_gaf.c`)
+carries each one from its old rect to its new one, and the feature pass moves its own copy
+on the device the same way (`tagpu_vk_stage_move`), sending nothing from the host but the
+paints that copy lacked ([gpu-status](gpu-status.html) §2.88). An entry never painted —
+and every entry when there is no mirror — is only *reserved*: it keeps its identity, gets
+a new rect, and is marked `resv` with `ok = 0`, which keeps `tagpu_gaf_atlas_find` refusing
+it. The next `atlas_get` for that frame decodes it and `atlas_paint` paints it into the
+rect already assigned. Either way the work is done **once**, when the page fills, instead
+of once per frame for as long as it stays full.
 
 **The wall, and what a second page would cost.** A repack cannot beat its predecessor once
 the entries and the sort are the same, so `repackWall` latches when a repack places fewer

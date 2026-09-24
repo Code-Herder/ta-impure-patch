@@ -16165,8 +16165,8 @@ beside its index mirror, and it is the only atlas image the world passes upload:
 | units | 2048² | `tagpu_vk_unit.c` `base_upload` | 0 at the key, else 255 |
 
 - **The colour is the engine's unscaled table** (`tagpu_pal_engine()`, §2.3f), and the base is
-  keyed on the atlas's mirror serial and the engine serial: a paint re-sends only the rectangle
-  the atlas's band ring says changed (`tagpu_gaf_band_since`), an engine-table change the whole
+  keyed on the atlas's mirror serial and the engine serial: a paint re-sends only the tiles the
+  atlas's dirty map says changed (`tagpu_gaf_dirty_since`), an engine-table change the whole
   page. The staging is the slot's own bounded buffer, at most 1 MiB whatever the atlas
   (`tagpu_vk_stage.c`, *The staging* below); the image is shared and written behind a
   write-after-read barrier on the one queue.
@@ -16276,7 +16276,12 @@ it:
   `mem_type`, `mk_stage`, `resolve`, `slog`, `upload` — for `slot_drop_bstage` ×2 and the
   terrain's `shared_upload` and `slot_drop_bigstage`;
 - the palette keys (`4143757`), none;
-- the restorer's ring bound, +1: `vk_room` (§2.43).
+- the restorer's ring bound, +1: `vk_room` (§2.43);
+- the dirty map and the repack's move (`9cde322`), +13 −1: `tagpu_gaf_dirty_since`,
+  `tagpu_gaf_rects_due`, `tagpu_gaf_rects_area`, `mirror_move`, `serial_max`, `tiles_newest`,
+  `tiles_raise`, `tagpu_vk_stage_expand_rects`, `tagpu_vk_stage_fits`,
+  `tagpu_vk_stage_move_ready`, `tagpu_vk_stage_move`, `tagpu_vk_stage_move_drop` and
+  `move_record`, for `tagpu_gaf_band_since`.
 
 Every removed non-static had its callers ported; the build is clean under `-Wall`,
 `thread-split-check.sh` is clean with the packet field gone, and `spirv-check.sh` agrees with the
@@ -16303,10 +16308,8 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
 
 - **Before, each slot staged its whole upload in one buffer.** A full page is a feature, effect or
   unit atlas's used rows × 2048 × 4, up to 16 MiB. The terrain's is its whole atlas, 2176 × 5338
-  × 4 = 46 461 952 bytes on Town & Country, plus the height grid, all in one mapping. A full page
-  is sent on the first upload, an atlas recycle, a band-ring overflow, a palette move, and after
-  every teardown (a swapchain rebuild runs every pass's `_down`). A refused allocation took the
-  pass down for the session.
+  × 4 = 46 461 952 bytes on Town & Country, plus the height grid, all in one mapping. A refused
+  allocation took the pass down for the session.
 - **Now each slot keeps one `TAGPU_VKSTAGE` of at most `TAGPU_VK_STAGE_CAP`, 1 MiB**, made on a
   frame that uploads and given back on the slot's next frame with nothing to send. The bound is
   a constant whatever the atlas: 1 MiB × `TAGPU_VK_SLOTS` (8) = 8 MiB a pass, 32 MiB for the
@@ -16363,6 +16366,80 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
 
   So a full-page event now costs the render thread a wait of up to 28.7 ms at 4K, in place of up
   to 66.6 MiB mapped at once.
+
+**What sends a full page, and what play sends.** A full page — a pass's whole used rows,
+banded when over the cap — is sent on:
+
+- a pass's first upload after it is built, so the session's first level and every teardown (a
+  swapchain rebuild, which is what a resize runs);
+- the terrain's new atlas at every level's start;
+- a palette move (the engine serial);
+- a mirror's arm, or an atlas's creation or loss.
+
+Nothing else sends one. A recycle — a full unit or effects atlas dropped, or any atlas on a map
+change (`atlas_drop`) — writes nothing to the mirror; the live set is painted again as ordinary
+paints, which the map names tile by tile.
+
+- **In play a pass sends the tiles its atlas's dirty map names** (`tagpu_gaf.h`): for each 32 × 16
+  tile, the mirror serial of the last write to it. The map has a slot per tile, not per write, so
+  it cannot overflow: however many paints land between two uploads, every tile they touched is
+  named, and a burst of paints is never a whole page. The tiles go as one copy of up to 256
+  regions (`tagpu_vk_stage_expand_rects`), in the frame's own command buffer when they fit the
+  slot's 1 MiB. A mirror wider than the map's 2048 is refused at its arm.
+- **A feature repack moves its cells** rather than repainting them:
+    - `mirror_move` (`tagpu_gaf.c`) carries each painted cell to its new rect in the mirror.
+    - The feature pass moves its own device copy the same way (`tagpu_vk_stage_move`): the
+      rows the old cells occupy go into a 16 MiB device-local buffer in one copy, and each cell
+      comes back at its new rect. Nothing of the move comes from the host. It is recorded in the
+      frame's command buffer, or, when that frame's paints are over the cap and go banded,
+      submitted ahead of the bands through their command buffer, so it always lands first.
+    - The dirty map gives each moved cell's new tiles the newest serial its old tiles held, so a
+      paint the copy lacked before the move is still sent after it, at the new place.
+    - A copy that missed an earlier repack, or a pass that cannot get the buffer, takes the whole
+      page instead.
+    - An entry that was never painted is reserved and painted on its next use, as before
+      ([atlas-packing](atlas-packing.html) §7).
+
+**MEASURED 2026-09-24 — what play sends.** The setup:
+
+- `scenarios/big-battle.json`, `--defaults`, 3840 × 2160, Gamma 12, on a private virtual display
+  (Xvfb) with the reference setup's discrete GPU.
+- A scripted minute after the load:
+    - 20 s of the fight's start with the camera pinned;
+    - the pointer on each screen edge for 3 s (edge scroll);
+    - nine camera jumps across the map, 0.5 s apart;
+    - eight wheel notches out, an edge scroll while zoomed out, and eight back in;
+    - 20 s on the fight.
+- A diagnostic-only build logged every base-atlas upload with its pass, cause and bytes, and
+  every banded upload's wait. Two runs of each build.
+
+| in play, each run | before (`6511def`) | after |
+|---|---|---|
+| full page, band-ring overflow | **1** and **1**: the features, 140 and 120 paints in one frame at the repack, 10.1 and 9.2 MB, 4.3 and 3.9 ms | **0**: the cause is gone |
+| full page, any other cause | 0 | 0 |
+| a feature repack | 1 and 1, sent as the overflow above | 1 and 1: 234 and 270 cells moved on the device |
+| a partial upload over the 1 MiB cap (banded) | **12** and **11**: 1.1–13 MB sent, for 30 KB–2.2 MB painted in the run that logged the paints | **1** and **1**: 1.41 and 1.36 MB sent for 1.20 and 1.18 MB painted, waits 0.34 and 0.20 ms |
+
+- **Before, the partials were the ring's bounding box**: 64 rects and a union, so scattered
+  paints sent the rectangle around them. Several came in the seconds after the repack, as the
+  reserved entries were repainted one by one.
+- **The dirty map alone** (a run without the move) took the overflow out and left three banded
+  partials, all within two seconds of the repack: 0.88–2.9 MB painted, the reserved entries
+  repainting.
+- **Moved only in the mirror**, the repack is a whole-page write, 10.8 MB, banded. That is why
+  the device moves its own copy.
+- **The terrain sent nothing in play.** The units and the effects stayed in-frame throughout.
+- **The move in the mirror costs the render thread 3.9 ms** at 270 cells, on the reference setup
+  with other game instances running beside it.
+- **The device copy is exact.** A diagnostic-only build read the feature base back off the device
+  on the three frames after each repack and on every 600th frame. It compared it texel for texel
+  with the mirror expanded through the same palette, over every painted cell no paint had touched
+  since. That was 236 and 281 cells after the two repacks and 157 on a control frame, with
+  **0 texels different**. In one run the repack went in-frame. In the other, the repack frame's
+  own paints were over the cap, so the move and the paints both went through the banded path, in
+  that order, and again 0 texels differed.
+- **The waits are the virtual display's.** On the live 4K display the first band also waits
+  behind the frames in flight, up to 27.9 ms (above).
 
   **A refusal degrades and recovers.** Big-battle at 2560 × 1440; mid-fight, a forced swapchain
   rebuild, so every pass re-sends its atlases, together with 120 forced refusals of
@@ -16472,6 +16549,10 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
       2 523 124 drawn pixels, the units over 1 550 and the features over 529 468. The terrain's
       atlas is 23.7 MB, far over the cap, so it reaches the device through the banded path.
       With the restorer's ring bound (§2.43) added, the same 6 of 6 are byte-identical again.
+    - **With the dirty map and the repack's move:** the same 6 of 6 byte-identical to
+      `b14e9b4` again, both builds captured on a private virtual display at 1024 × 768 — the
+      terrain over 2 523 124 drawn pixels, the units over 1 550, the features over 529 468. No
+      fixture repacks, so the move rests on the read-back above (*what play sends*).
     - **The restorer's input and output:** `fx-rockets` under `--defaults` with
       `tagpu_restoredump.on`, read back off the device. The terrain's base and restored twin
       (23 674 880 bytes each) are byte-identical between the two builds. So are the units' base
@@ -16511,13 +16592,25 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
 - **The lab's Classic++ lane keeps its own R8 inputs** beside the restored RGB (its `restore=`
   switch and the edge colour read them); only its Classic lane lost the index path.
 - **The effects' 2d exit rests on two matched scenes** (above), not on an A/B paused on one
-  tick, which two launches of the fight cannot reach. **The bounded upload and the palette keys
-  have no effects A/B at all**; that rests on the features' byte-identical pair and on the code
-  being the same.
+  tick, which two launches of the fight cannot reach. **The bounded upload, the palette keys
+  and the dirty map have no effects A/B at all**; that rests on the features' byte-identical
+  pair and on the code being the same.
 - **The markers' 2d exit is a window read at `ss=2` and Gamma 12.** The health bars were opened
   by a diagnostic token rather than by `damagebars` itself. The ShowRanges state was read at two
   different ticks, so its 8 px at the waypoint sprite are put down to the animation by where
   they are, not by a pair taken on one tick.
+- **One frame's fresh paints past 1 MiB still wait.** A camera jump into an area whose
+  features are not in the atlas yet paints them all in that frame. In both runs above one jump
+  painted 1.2 MB, over the cap, and went banded. That wait was 0.2–0.34 ms on the virtual
+  display; on the live 4K display the first band waits behind the frames in flight, up to
+  27.9 ms. A frame's paints are bounded by the atlas, 16 MiB, not by a constant. Removing the
+  wait needs a choice this work did not make:
+    - a larger in-frame allowance, which costs address space in the 32-bit process;
+    - or a per-frame paint budget that defers the rest to the next frame, which draws a feature
+      one frame late.
+- **A repack still blanks the features' restored twin.** It is repainted from the moved base by
+  a new restore job (`rlist_restart`), so features draw unrestored for the frames that takes.
+  That predates the move.
 - **The restorer's ring bound (`vk_room`) was measured on one fixture and one device**:
   `fx-rockets` on the reference setup, in the launches listed in §2.43.
 - **The UI layer stood itself down on some launches of a fresh instance** ("`gui: 8 fresh starts
@@ -16544,7 +16637,13 @@ from per-slot staging; `base_upload` as the one atlas upload and its dimension g
 effect and unit), which with the terrain's retire are what keep a shared image alive while frames
 in flight sample it; `tagpu_vk_stage.c` — the cap, the halving, the banded path's own command
 buffer on the seam's queue, its one-second fence and the in-flight mark a wait that gives up
-leaves, and the 1/0/−1 answers each pass maps to draw, skip and refuse; the palette keys
+leaves, and the 1/0/−1 answers each pass maps to draw, skip and refuse; the dirty map —
+`mirror_wrote` as its one writer, the 2048 guard at the mirror's arm, `tagpu_gaf_dirty_since`'s
+merge window and its last rect grown past `maxr`; the repack's move — `mirror_move`'s bounds and
+its serials read (`tiles_newest`) before any is raised, the consumer's test in
+`tagpu_vk_feat.c` `base_upload` (`atlasMovePrev`, and `s_bMove`, which keeps a move from being
+applied twice), the banded move submitted ahead of the bands, and the move buffer made once per
+pass life and dropped in `_down`; the palette keys
 (`s_rjPal`, `s_shadePal`, `s_lhtPal`) and `tagpu_r3d_shade_want`'s kept copy of the shade table;
 the restorer's `room` — asked at the head of every iteration of the core's slice loop, before a
 batch is formed, with `vk_room`'s mip reserve and the static bound that keeps a fresh slice able

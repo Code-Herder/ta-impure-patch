@@ -28,8 +28,10 @@ shipped on 2026-09-10. The code-level reference lives in
    the waste affordable rather than removing it (51 % → 55 % stranded, ×4 memory). Multipage is
    genuinely better *and* reaches into every consumer's vertex format and shader.
 6. **What shipped is a repack.** When the atlas fills it re-lays what it holds **tallest cell
-   first** and reserves the rects; each frame re-decodes into its new rect on demand. Live:
-   `atlas-fail` 455 → **0**, resets 37,140 → **0**, one repack for the session.
+   first**. A painted frame's texels move to its new rect, in the CPU mirror and in the
+   feature pass's device copy; a frame never painted is reserved and decodes into its new rect
+   on demand. Live: `atlas-fail` 455 → **0**, resets 37,140 → **0**, one repack for the
+   session.
 
 ---
 
@@ -818,18 +820,22 @@ stranding the five short cells already on it under 50 rows of nothing. Below, ta
 **40 rows saved on 20 frames**, and the short cells end up in a band 30 rows deep instead of
 scattered under tall ones.
 
-## 7. The mechanism — nothing moves; the rects are reserved
+## 7. The mechanism — painted texels move; unpainted rects are reserved
 
-"Repack" usually means moving texels. This one cannot: an entry records the frame's address, its
-size and its rect, and **never its decoded pixels**. There is nowhere to copy from. GL 3.3 core
-also has no `glCopyImageSubData`, so shuffling texels inside the texture would need a scratch
-surface and a blit per frame.
+An entry records the frame's address, its size and its rect, never its decoded pixels. The
+decoded pixels live in the atlas's **CPU mirror**, which is what the Vulkan passes upload, so a
+painted entry's cell is there to copy. The repack carries each painted cell from its old rect to
+its new one (`mirror_move`, `tagpu_gaf.c`), border and alignment slack included, through a compact
+copy because old and new rects of different entries overlap. The feature pass then moves its own
+device copy of the atlas the same way (`tagpu_vk_stage_move`) and is sent only the paints it
+lacked ([gpu-status](gpu-status.html) §2.88).
 
-It does not need one. The repack only assigns rects and marks each entry `resv` with `ok = 0`,
-which keeps `tagpu_gaf_atlas_find` refusing it — there is nothing there to sample yet. The next
-time the pass asks for that frame it decodes it from RLE exactly as it did the first time, and
-`atlas_paint` uploads it into the rect already waiting. **That is the work one old reset did,
-done once instead of sixty times a second.**
+An entry that was never painted — and every entry when there is no mirror — is only
+**reserved**: the repack assigns its rect and marks it `resv` with `ok = 0`, which keeps
+`tagpu_gaf_atlas_find` refusing it, since there is nothing there to sample yet. The next time the
+pass asks for that frame it decodes it from RLE exactly as it did the first time, and
+`atlas_paint` paints it into the rect already waiting. **That is the work one old reset did,
+done once instead of sixty times a second.** The diagram below is that reserved path.
 
 <div class="tablewrap ap">
 <svg class="ap-dia" viewBox="0 0 700 240" role="img" aria-label="An entry through a repack: painted at its old rect, then reserved at a new rect with no upload, then painted at the new rect by the next atlas_get">
@@ -864,7 +870,7 @@ done once instead of sixty times a second.**
   </svg>
 </div>
 
-**Reading the diagram:** one entry through a repack. Step 2 reads **only `w` and `h`** out of the
+**Reading the diagram:** one reserved entry through a repack. Step 2 reads **only `w` and `h`** out of the
 entry — both bounded to 1…`TAGPU_GAF_DECMAX` before the entry existed — and dereferences no
 pointer it stores, so a stale entry cannot make the geometry address outside the atlas. The
 Classic++ twin is cleared once here rather than once per frame, which is what finally lets the
