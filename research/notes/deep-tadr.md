@@ -239,9 +239,9 @@ writes 2 bytes per site (`UnitLimit.pas:93-104`), the C++ writes 4. One live inc
 shipped ini says 1500. Same pattern at `:41` — code fallback 16000, shipped ini 20480.
 [DISASSEMBLED for the retail values; VERIFIED against the TADR sources for the patch sites]
 
-The renderer is sized for **1024 a player × 10 players = 10 241 slots**
-(`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`); gpu-status §2.86 lists what that design point
-bounds.
+The renderer is sized for **1500 a player × 10 players = 15 001 slots**
+(`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`), the limit the TADR port installs; gpu-status §2.86
+lists what that design point bounds.
 
 **Weapon IDs 256→16000 is not current.** `tdraw.txt:8` explicitly says the weapon-ID
 crack is "not present in current release"; the ini keys `WeaponType` and

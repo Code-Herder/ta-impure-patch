@@ -175,27 +175,36 @@ process-lifetime static memory, which is a *better* lifetime than stock's.
 - **In MP, `+0x37EEA` is written from the network** (`0x449D9B`, from `0x512D6C`, next to
   `[ebp+0xA5]`, consistent with the 0x20 status packet's `+0xA6`) **with no clamp**. So the host's
   value is broadcast and used, the unit array being `10·limit+1`.
-- **Unclamped side door (DIS):** `0x432646` writes `+0x37EEC` from a TDF key **`maxunits`**
-  (`0x4B4800`, default 0) with no clamp. INF: this is the mission/OTA loader; TADR's
-  `tdraw.txt:203` "unit limit reached in between single player missions" may be this path.
+- **Two unclamped side doors (DIS).** `0x432646`, in `0x432610`, writes `+0x37EEC` from the key
+  **`maxunits`** (`0x4B4800`, default 0) of a saved game's `[Summary]`, read when the game's TDF at
+  `main+0x38D6B` has no `BetweenMissions` key (`0x497B29`); TADR's `tdraw.txt:203` "unit limit
+  reached in between single player missions" may be this path. `0x436037`, in the map loader
+  `0x435DA0`, writes the array's own count `+0x37EE6` from the map `.ota`'s `[GlobalHeader]`
+  `maxunits` (default 200). Every retail `.ota` sets 200 to 400. Landing 2 clamps both.
 
 **`0x44CAFE` is NOT a per-player limit (DIS), whatever TADR's name for it, `MPUnitLimitAddr`,
 says.** It is `mov ecx,0x65` (101), taken when
 `0x46E330`'s per-unit-type lookup returns −1. The result is stored in the battleroom's per-type
 table (`[0x5129B4]+i+0x5A`, `[0x5129C4]+i·4`), built per UnitDef from `def+0x186/+0x18A` and
 sprintf.
-- INF: 101 is the "unrestricted" sentinel for the per-type build-limit slider (0..100), and TADR
+- 101 is the "unrestricted" sentinel of the per-type restriction slider (0..100), and TADR
   replaces it with the unit limit so that "unrestricted" is not a cap of 101 a type.
-- Settle it: in a stock MP game with UnitLimit 500, try to build more than 101 of one type.
+- **Settled by disassembly (landing 2).** Cancel in the restriction menu (`0x44C6FC`) writes the
+  saved per-type values, the 101 sentinel included, into the restriction store (`0x44C750` →
+  `0x46E550`); `0x46E160` copies an enabled type's value to `UnitDef+0x15A` and sets `def+0x241`
+  bit 23; the unit constructor `0x485F50` then counts the player's units of the type and refuses
+  the one at the cap. Moving a slider past 100 stores −1 instead ("No Limit", `0x44BEC0`). A
+  default network game does not take the Cancel path: landing 1's peers each created 450 of one
+  type with none refused. Landing 2 writes the site as TADR does.
 
 No other `0x1F4` in `.text` belongs to the unit limit; `0x40BBDF` is a resource clamp.
 
 **SIM, per game, network-significant** (the per-player ID blocks; [networking-lobbies](../networking-lobbies.md)).
 
 **Our code:**
-- `src/tagpu_packet.h:449` `TAGPU_PK_DESIGN_SLOTS 10·1024+1`, and `:454` `TAGPU_PK_MAX_UNITS 16384`.
-  1500 makes 15 001 slots: above the design point, below the table ceiling. Caps asserted only
-  against the design point truncate beyond it (the memory note: "nothing ran past 5 001").
+- `src/tagpu_packet.h` `TAGPU_PK_DESIGN_SLOTS` and `TAGPU_PK_MAX_UNITS 16384`. The design point was
+  10 241 before landing 2; 1500 makes 15 001, below the table ceiling, and landing 2 moved the
+  design point and every cap asserted against it.
 - `src/tagpu_scenario.c:68` `OFF_LIMIT 0x37EEA`.
 - The order arena `MAXORD` and `WR_COUNT` (`inc/tagpu_engine.h:205`, `src/tagpu_feat.c:109`) are
   unit-scaled neighbours to re-check.
@@ -365,7 +374,7 @@ the Visuals landing), so this is a store key. Nothing in `tagpu/` or `tools/` me
 | explosions 300→3000 | cap gates **sim-RNG draws** in `0x421700` | reset per level; relocated to a static | 7 base refs + table reload + 2 caps | none | `OFF_NEXPL`/`OFF_EXPL`/`EXPL_COUNT`, `MAX_EXPL`, validator | **we draw no explosions** after relocation; RNG divergence |
 | flying pieces 100→1000 | visual (no RNG on the slot path) | per level | 7 base + 6 end + backing + reset | none (the five `this` loads correctly kept) | `VA_PSYS_*`, `MAX_DEBRIS`, validator | **we draw no debris** after relocation |
 | aux records 300→3000 | fullness gates **sim-RNG draws** | per level, relocated to a static | 2 allocators replaced, C re-init | none | none (pointer-followed) | TADR's "visual-only" comment is wrong on count |
-| units/player 500→1500 | **SIM**, host-broadcast | per game | 3 immediates + `0x44CAFE` | **`maxunits` TDF path `0x432646` (unclamped)**; **`0x44CAFE` is a per-type sentinel (101), not a player limit** | design slots 10 241 < 15 001; scenario `OFF_LIMIT` | beyond the design point: truncation |
+| units/player 500→1500 | **SIM**, host-broadcast | per game | 3 immediates + `0x44CAFE` | **two `maxunits` paths (`0x432646`, `0x436037`), unclamped**; **`0x44CAFE` is a per-type sentinel (101), a real cap after a cancelled restriction menu** | design slots, 15 001 since landing 2; scenario `OFF_LIMIT` | beyond the design point: truncation |
 | pathfinding 1333→66650 | sim, owner-local (INF) | per game (map init) | 1 dword, blind | none | none | CPU per tick |
 | SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | **`LAYER_OBJCAP` drops whole layers**, `MAX_PART` 16384, `PART_SUBCAP` | silent particle loss; about 15 MB |
 | unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | ctrl-A/B/C (in §B); AI-range `0x10` sites unclassified | `WPN_MAXDEFS 4096` refuses | mods only |

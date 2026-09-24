@@ -3,8 +3,10 @@
 ## Summary
 
 Nine of the engine limits TADR raises come into our stack, as one module over five landings. The
-owner decided every choice below on 2026-09-23 **[DECIDED]**. **Landing 1 is done** (2026-09-23):
-the effect pools, the module, the failure report and the stock-limits build. The module is
+owner decided every choice below on 2026-09-23 **[DECIDED]**. **Landings 1 and 2 are done**
+(2026-09-23): the effect pools, the module, the failure report and the stock-limits build; then the
+unit limit, both `maxunits` keys, the restriction menu's sentinel, the pathfinder's budget and the
+render design point. The module is
 `tagpu_limits.h` and the limits block of `tagpu_patches.c`, which keeps it out of the thread-split
 allow-list; how it works is [gpu-status §2.6b](../gpu-status.md). The disassembly behind each fact is in [the evidence pass](limits-evidence.md),
 and the rules shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
@@ -53,12 +55,16 @@ failure, exactly as under TADR.
 - The three immediates at `0x491640` (default), `0x491659` (compare) and `0x491666` (clamp-to)
   become 1500. A `UnitLimit` in `totala.ini` `[Preferences]` can still lower it, down to the
   engine's floor of 20.
-- The mission loader's `maxunits` key (`0x432646`, unclamped) is clamped to [20, 1500].
-- The render design point becomes 10 × 1500 + 1 = **15 001 slots**. It is 10 241 today:
-  `TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h:449`. Every cap
-  [gpu-status §2.86](../gpu-status.md) sized against it follows.
-- `tacli`'s scenario schema ceiling `SCN_MAX_LIMIT` (`tools/tacli:3073`) goes from 500 to 1500.
-  `scenario-format.md`'s statement that the cap can never exceed 500 is replaced.
+- Both `maxunits` keys stock stores unclamped are clamped to [20, 1500]: a saved game's
+  `[Summary]` (`0x432646`) and a map's `.ota` `[GlobalHeader]` (`0x436037`, which writes the
+  array's count directly and is what a campaign mission plays with).
+- The render design point becomes 10 × 1500 + 1 = **15 001 slots** (`TAGPU_PK_DESIGN_SLOTS`), and
+  every cap [gpu-status §2.86](../gpu-status.md) sized against it follows.
+- `tacli`'s scenario schema ceiling `SCN_MAX_LIMIT` goes from 500 to 1500, and
+  `scenario-format.md` says so.
+- The restriction menu's "no limit" sentinel, 101 at `0x44CAFE`, becomes the unit limit, as TADR
+  writes it: a cancelled menu writes the sentinel into the game as a real per-type cap
+  (*Corrections*, below).
 
 **One module, one table, one rule.** The limits block holds one site table: address, expected
 bytes, replacement, name. It checks every entry, then writes all of them or none.
@@ -162,9 +168,20 @@ moved pools; the stock-limits `make` flag. What it proved, by running it:
   hundred times stock's worst tick at 3000 records if a mass death expires together. Landing 2's
   tier-1 battle measures it.
 
-**Landing 2 — units 1500 and the `maxunits` clamp; the design point to 15 001; `tacli` to 1500;
-pathfinding 66 650.** Proof, tier 1: a four-player skirmish at 1500 each (6000 units; a skirmish
-seats four), measuring frame time and every pool's peak.
+**Landing 2 — units 1500, the `maxunits` clamps, the restriction sentinel, pathfinding 66 650 and
+the design point 15 001. Done 2026-09-23.** Fifty sites now. What it proved, by running it:
+- **The limit is what the engine holds.** With no `UnitLimit` key the game reads 1500; in the
+  four-player skirmish `+0x37EEC` and `+0x37EE6` were 1500 and the unit array 15 001 slots. The
+  two clamp stubs were read back out of the running process and disassembled.
+- **Tier 1**, `scenarios/limits-tier1.json` (6000 kbots in a four-way melee on Town & Country,
+  the shipped defaults, speed 20): all 6000 units and orders applied; the packet peaked at 5983
+  units and 88 696 pieces, 2.96 MB of its 20 MB reserve, with no table truncated after the load's
+  growth. Peaks: projectiles 215, explosions 1042, flying pieces 441, 755 particles in a frame.
+  **The simulation held 57–60 ticks a second**: at these counts neither the 66 650 budget nor the
+  explosion tick's quadratic compaction stalled it. The GPU frame stayed under 1 ms at p50. **The
+  game thread published a median of 36 frames a second (21–59)**; how that frame splits between
+  the engine and our publisher is not measured, because the publisher's histogram tops out at
+  512 µs.
 
 **Landing 3 — particles: the per-layer cap and the object pool.** The value is set from tier 1's
 per-layer peaks plus headroom; `LAYER_OBJCAP`, `TAGPU_PK_MAX_PART` and `PART_SUBCAP` follow.
@@ -185,19 +202,22 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
 - Whether a refused remote projectile changes damage on that peer
   ([evidence §1](limits-evidence.md#1-projectiles-300-3000-enginelimitscpp-addprojectilepatches)).
   Landing 1's two-peer check covered the same-build case, which is the contract.
-- `0x44CAFE`: TADR writes the unit limit over the per-type value 101 there. If the engine treats
-  101 as a real cap, then in a network game at 1500 a player no single unit type could pass 101.
-  L2 settles it by building 102 of one type in a two-peer game, and writes the site as TADR does
-  if the cap is real.
 - The particle headroom rule: decided in L3, from the data.
-- Pathfinding cost at 6000 units: tier 1 measures it.
-- The explosion tick's quadratic compaction at 3000 records: tier 1 measures it.
+- The explosion tick's compaction near its 3000-record cap: tier 1 reached 1042 explosions without
+  a stall; a denser fight could still find one.
+- How the game thread's frame at 6000 units splits between the engine and our publisher.
 
 ## Corrections this plan made
 
-- **`0x44CAFE` is not a unit-limit site** (`mov ecx,0x65`: 101 into the per-type battleroom table;
-  read as the "unrestricted" sentinel [INFERRED]). Corrected in [deep-tadr](../deep-tadr.md) on
-  2026-09-23.
+- **`0x44CAFE` is not a unit-limit site** (`mov ecx,0x65`: 101 into the per-type battleroom table,
+  the restriction menu's "no limit"). Corrected in [deep-tadr](../deep-tadr.md) on 2026-09-23.
+  **But the sentinel is a real cap on one path** (landing 2, DISASSEMBLED): Cancel in the
+  restriction menu writes the saved values, 101 included, back into the restriction store, the game
+  copies them to `UnitDef+0x15A`, and the unit constructor `0x485F50` refuses a type's 102nd unit.
+  A default network game never takes that path (landing 1's peers each created 450 of one type).
+  The site is written as TADR writes it; the engine map, *The per-player unit cap*, has the chain.
+- **There are two unclamped `maxunits` keys, not one.** The evidence found the saved game's
+  (`0x432646`); landing 2 found the map's `.ota` (`0x436037`), which writes the array's own count.
 - `tagpu_packet_pub.c` said "twelve more" particle cap sites; there are twenty (landing 1).
 - The evidence named `0x420E50` as the flying-piece spawner; nothing calls it. The live spawner is
   `0x481140`, and the conclusion (the slot cap gates no simulation draw) holds through it. A piece

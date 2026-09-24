@@ -1534,12 +1534,13 @@ live, commander selected on Two Continents at type 1: a left click on ground wal
 the clicked point, and the same click with `tagpu_curs.off` deselected it and moved nothing. The
 full path is `exe-reverse-engineering.md` §"The in-game mouse buttons".
 
-### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landing 1
+### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–2
 
-**What it is.** TA's effect pools, raised the way TADR raises them, as our own C: projectiles
-300 → 3000, explosions 300 → 3000, flying pieces 100 → 1000, debris records 300 → 3000. Planned in
-[the TADR port](tadr-port/raised-limits.md); every site is in the engine map's *The raised effect
-pools*.
+**What it is.** TA's limits, raised the way TADR raises them, as our own C: projectiles
+300 → 3000, explosions 300 → 3000, flying pieces 100 → 1000, debris records 300 → 3000, units a
+player 250 (default) / 500 (ceiling) → 1500 / 1500, and the pathfinder's budget 1333 → 66 650.
+Planned in [the TADR port](tadr-port/raised-limits.md); every site is in the engine map, *The raised
+effect pools* and *The per-player unit cap*.
 
 | What | Sites | Mechanism |
 |---|---|---|
@@ -1549,13 +1550,18 @@ pools*.
 | the flying-piece slots | seven base and six end operands (`0x420B08` … `0x42166D`); the backing `push` at `0x4208FB` | operands become `s_psys`'s bounds |
 | the level's effect reset | `0x42090A` | a `call` to `lim_level_reset` in place of the `rep stosd` |
 | the debris records | `0x4217DE` (16 bytes: `call` + `jmp 0x421804`), and `0x420920` (`jmp`), a stock copy of the scan that nothing calls | first-free C allocator over `s_aux` |
+| units a player | `0x491640` (default), `0x491659` (compare), `0x491666` (clamp-to) | immediates → 1500; the floor 20 stays |
+| the two `maxunits` keys | `0x432646` (a saved game's `[Summary]`), `0x436037` (a map's `.ota` `[GlobalHeader]`) | the 7-byte store becomes a `call` to a stub that clamps `eax` to [20, 1500] and stores it |
+| the restriction menu's "no limit" | `0x44CAFE` | 101 → 1500, so a cancelled menu caps no type below the player's own limit |
+| the pathfinder's budget | `0x40EAD6` | 1333 → 66 650 |
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
 while it changes. It reads every site (through `VirtualQuery`, never assuming the page), compares
-all 43 with the stock bytes, and writes them only if every one matches; a refused write puts back
+all 50 with the stock bytes, and writes them only if every one matches; a refused write puts back
 what was written. The patches last for the process and are never restored. The log line names the
-moved pools' addresses for `tacli peek`: `limits: installed 43 sites -- …`.
+moved pools' addresses for `tacli peek`: `limits: installed 50 sites -- …, units 1500 a player,
+pathfinding 66650`.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -1583,7 +1589,28 @@ is a size, not a bound by construction: a composite GAF frame makes a quad per s
 lightning bolt up to 2 044 line vertices, and the particles share the sprites bucket under their
 own cap. A vertex past a full bucket is dropped and logged (`fx: DROPPED … bucket-full`).
 
-**Measured 2026-09-23** (the numbers are in the engine map): in single player the packet carried
+**The design point follows the unit limit.** The engine's unit array is `10 · N + 1` slots, so 1500
+a player makes **15 001**: `TAGPU_PK_DESIGN_SLOTS`, and every cap sized from it (§2.86) grew with
+it. `tagpu_packet_pub.c` asserts that the installed limit fits the design point, so raising
+`TAGPU_LIM_UNITS` alone fails the build. The scenario harness holds a game that full too
+(`SCN_MAX_UNITS`, `_ORDERS`, `_CLEAR` = 10 × `TAGPU_LIM_UNITS`; `tacli`'s `SCN_MAX_LIMIT` 1500,
+`SCN_MAX_ENTITIES` 15 000). In a network game every peer takes the host's limit unclamped
+(`0x449D9B`, `0x4973B5`); past the design point the packet's tables truncate and say so.
+
+**Tier 1, measured 2026-09-23** (`scenarios/limits-tier1.json`: four players at 1500, 6000 kbots on
+Town & Country ordered onto the centre, 1920×1080, the shipped defaults, speed 20): the engine held
+1500 a player and 15 001 slots; 6000 of 6000 units and orders applied; the packet peaked at **5983
+units and 88 696 pieces**, 2.96 MB used of the 20 MB reserve, never truncated after the load's
+growth. Effect peaks: projectiles 215 and explosions 1042 (the engine's counts, sampled at
+~2 Hz), flying pieces 441 (at the heartbeat) and 755 particles in one frame (the packet's own
+running maximum, under the stock particle caps, which landing 3 raises). **The sim held 57–60 ticks a second** outside the apply frame,
+so neither the pathfinder's budget nor the explosion tick's compaction stalled it at these counts.
+The GPU frame was 0.7–0.8 ms at p50 (`ftime`). **The game thread published 21–59 frames a
+second, median 36**, and the publisher's own cost is past its histogram's 512 µs top at every
+sample — how much of the game thread's frame is ours and how much is the engine's is not
+measured.
+
+**Landing 1, measured 2026-09-23** (the numbers are in the engine map): in single player the packet carried
 687 projectiles, 2439 explosions and 540 flying pieces with no table truncated; in a
 two-peer network game both peers passed every stock cap and, paused, held the same units at
 identical positions; a copy of the exe with one site byte changed got the report, the file and
@@ -1611,7 +1638,11 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 - Whether a peer on a lower cap than its opponent refuses projectiles the other fired, and what that
   does to damage. The contract is the same build on every peer, which is what was measured.
 - The known-build table holds retail 3.1 alone; other builds report `known build: none`.
-- The units, pathfinding, particle, sound and composite limits are landings 2–4 of the plan.
+- **What 6000 units cost the game thread.** The median 36 publications a second at 4000–6000
+  units is measured; its split between the engine's own frame and our publisher is not, because
+  the publisher's histogram stops at 512 µs.
+- **Ten players at 1500 (15 000 units)** is landing 5's proof; tier 1 seats four.
+- The particle, sound and composite limits are landings 3–4 of the plan.
 
 ---
 
@@ -15771,7 +15802,7 @@ parity figure; the viewer feeds the instanced terrain shader since 2026-09-23 (w
 `ARMMAIN2#1` has 574 unexplained px in (502,356)-(520,392), a unit-sized box at the viewport
 centre.
 
-### 2.86 The unit cap goes — one pose buffer a frame, and every cap sized for 10 × 1024
+### 2.86 The unit cap goes — one pose buffer a frame, and every cap sized for the design point
 
 **What was wrong.** Past **512 posed units on screen, no unit body drew at all**. The Vulkan unit
 pass bound one 14 336-byte uniform window per unit per frame slot — the 256-piece ceiling, whatever
@@ -15780,10 +15811,10 @@ frame over the cap was refused whole (§2.84 found it on `500v500`). Behind it s
 fixed caps that scale with the unit count, each sized for stock's 500 a player.
 
 **The design point.** The engine's unit array has `10 × UnitLimit + 1` slots; retail clamps
-`UnitLimit` to 500 (`0x491658`, [deep-tadr](deep-tadr.html)), and a unit-limit patch raising it to
-1024 makes **10 241**. That number is `TAGPU_PK_DESIGN_SLOTS` in `tagpu_packet.h`, and every cap
+`UnitLimit` to 500 (`0x491658`, [deep-tadr](deep-tadr.html)), and the raised limits make it 1500
+(§2.6b), so **15 001**. That number is `TAGPU_PK_DESIGN_SLOTS` in `tagpu_packet.h`, and every cap
 below is either grown to the frame's own count or fixed at a size asserted against it at compile
-time. The patch itself is not part of this; nothing here was run above stock's 5 001 slots.
+time. The fixed sizes below are the 15 001-slot ones.
 
 **The pose is one storage buffer a frame.** The hand-over already kept the poses in three arenas
 (`rows`, `flags`, `vis`) with per-record offsets; the Vulkan pass now copies the three whole into
@@ -15798,7 +15829,7 @@ unit's uniform block carries three base indices into it (`uRowBase`, `uFlagBase`
 | each unit's slices inside the copied arenas | `tagpu_vk_unit_upload` | a unit that fails is not drawn and the every-unit-or-none gate refuses the frame |
 | the frame's packed size ≤ `maxStorageBufferRange` | the same, every frame | the limit is a 32-bit field, so every base index stays under 2^28 vec4 and the `int` bases cannot overflow |
 | one unit at the piece ceiling bindable | `tagpu_posedraw_ready` | 14 336 bytes; the spec's 128 MB floor means it cannot refuse a conformant device |
-| `TAGPU_PD_MAXHAND` = units table + wrecks + 1 + builds (24 577) | `tagpu_posedraw.h`, asserted in `tagpu_posedraw.c` | every record the producer can make, so no frame the packet carries is refused for count; nothing is sized from it |
+| `TAGPU_PD_MAXHAND` = units table + wrecks + 1 + builds (26 625) | `tagpu_posedraw.h`, asserted in `tagpu_posedraw.c` | every record the producer can make, so no frame the packet carries is refused for count; nothing is sized from it |
 | a packet truncated in its unit, piece or wreck table | `tagpu_native.c` → `tagpu_posedraw_uncarried` | refuses the unit hand-over whole: a frame missing units is a different frame |
 
 **Every other cap, and how it scales.**
@@ -15810,13 +15841,13 @@ unit's uniform block carries three base indices into it (`uRowBase`, `uFlagBase`
 | sub-pixel table `s_spx` | 8 192 slots | `TAGPU_PK_MAX_UNITS` 16 384 | render | static, asserted ≥ the design point |
 | marker bars, selection rects | 2 048 each | grown to `n_units` | render | grown at the top of `tagpu_mark_gather`, before anything emits; the cursor rects stay static and the two blocks are pushed back to back, so vertex indices are unchanged |
 | order-marker buckets | 12 000 / 12 000 / 4 800 verts | 24 000 / 24 000 / 9 600 | render | static; overflow counted |
-| order arena `MAXORD` / `MAXWALK` | 2 048 / 8 192 | 4 096 / 16 384 | game fills, render copies | **fixed, never reallocated** — two threads; asserted ≥ 4 records per design-point unit |
-| packet builds table | 2 048 | 4 096 | game | asserted ≥ `MAXORD` |
+| order arena `MAXORD` / `MAXWALK` | 2 048 / 8 192 | 6 144 / 24 576 | game fills, render copies | **fixed, never reallocated** — two threads; asserted ≥ 4 records and 16 visited nodes per design-point unit |
+| packet builds table | 2 048 | 6 144 | game | asserted ≥ `MAXORD` |
 | bake caches `PB_MAXGEOM` / `PB_MAXMAT` | 128 / 256 | 512 / 1 024 | render | an entry evicted mid-frame refuses the frame, so they hold one 10-player frame (a geometry entry is a model: wrecks and ghosts take their own); entries are allocated on bake |
 | Vulkan vertex-buffer table `VB_MAX` | 512 | the bake caches' sum (1 536), with a validated direct-mapped hint in front of the scan | render | the scan ran four times a unit a frame over the whole table |
-| packet slot reserve `PK_RESERVE` | 8 MB | 16 MB | game commits, render reads | asserted ≥ the unit-scaled tables at the design point at 36 pieces a model (14.6 MB); address space, committed as used |
+| packet slot reserve `PK_RESERVE` | 8 MB | 20 MB | game commits, render reads | asserted ≥ the unit-scaled tables at the design point at 36 pieces a model (19.2 MB); address space, committed as used |
 | packet `n_units` / `n_wrecks` | unchecked against the tables | validated at acquire | render | the render arrays are sized from them |
-| reclaim ring | 4 096 | 16 384 | game | a design-point level's objects fit on the timed-out teardown path; a full ring leaks, never frees |
+| reclaim ring | 4 096 | 32 768 | game | a design-point level's objects fit on the timed-out teardown path; a full ring leaks, never frees |
 
 **Measured 2026-09-23**, 1024×768, `ss = 2`, branch against `main` built clean from one tree:
 
@@ -15836,14 +15867,15 @@ rebuilds its two slot buffers. The other growable arrays (the unit pass's draw l
 the marker hand-over) keep their ordinary doubling and are not covered by it. A pointer that
 outlives a move then reads freed memory at stock unit counts.
 
-**What the design point costs in address space, if a frame reaches it.** 10 241 units posed and
-on screen at 36 pieces: the unit pass's pose buffer is 20.6 MB and its uniform blocks 17.7 MB
-**per frame slot** (four on the reference setup), and the native pose arena 17.7 MB. The frame
-packet reserves 16 MB × 5 slots = 80 MB up front (it was 40), committed only as packets grow. A
-stock game pays what it draws.
+**What the design point costs in address space, if a frame reaches it.** 15 001 units posed and
+on screen at 36 pieces: the unit pass's pose buffer is 30.2 MB and its uniform blocks 25.9 MB
+**per frame slot** (four on the reference setup), and the native pose arena 25.9 MB. The frame
+packet reserves 20 MB × 5 slots = 100 MB up front, committed only as packets grow. A stock game
+pays what it draws.
 
 **Not covered.**
-- **Nothing ran past 5 001 slots**; the design point is argued and asserted, not measured.
+- **A full design-point frame has not run.** Tier 1 (§2.6b) ran the 15 001-slot array with 5983
+  units alive, four players' worth; ten players at 1500 is the TADR port's landing 5.
 - **Frame time at 10 000 units is unknown.** The bake's per-unit lookup scans its caches linearly
   and probes every piece's node with `IsBadReadPtr`; at ~600 posed units neither shows (0.36 ms),
   and at 10 000 either may. Instancing is the next step if it does.
@@ -15852,7 +15884,8 @@ stock game pays what it draws.
 - If the unit-limit patch also enlarges the engine's wreck pool (0x18000 bytes at `0x421F29`),
   `WR_COUNT` has to follow it — in `tagpu_engine.h` and in its own copy in `tagpu_feat.c`.
 - Type-scaled caps are unchanged: the selection-box cache (256 root nodes a level) and the
-  scenario harness's `SCN_MAX_*` (4 096 units, 512 selected).
+  scenario harness's selection (`SCN_MAX_SEL` 512); its unit, order and clear arrays follow the
+  unit limit (§2.6b).
 
 ### 2.87 Unit bodies before the effects, and cargo sorted by the merge's height
 

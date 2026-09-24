@@ -185,7 +185,7 @@ writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, 
 49168b: mov  WORD PTR [ecx+0x37eec], ax
 ```
 
-* **The ceiling is 500 per player**, whatever the file says; four players hold 2000
+* **The stock ceiling is 500 per player**, whatever the file says; four players hold 2000
   between them. Measured live 2026-09-10 with `tacli roster`: at the cap of 500 a
   fresh skirmish hands out idx 1 to player 0, **501** to player 1, **1001** to player 2.
 * The store is a WORD, so the field is an `unsigned short` (where the 6553 figure
@@ -193,16 +193,56 @@ writing `MaxUnitNumberPerPlayer`; the value cannot be raised in a running game, 
   patching **both** immediates, the compare and the stored value — the community's
   "two offsets, set identically".
 * `ActualUnitLimit` (`+0x37EEA`) is not touched on this path.
-* **The renderer is sized past this cap**, for a patch that raises it to 1024: the unit
-  array's `10 × cap + 1` slots become 10 241 (`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`),
-  and every render-side table that scales with the unit count is grown to the frame or
-  asserted against that number at compile time — [gpu-status](gpu-status.html) §2.86.
-* What this cost before it was written down: `tools/tacli`'s scenario schema accepted
-  `unit_limit: 1500` from the old `[20, 1500]` line above and a 600-unit scenario
-  failed in the fork after launch instead of at validate time; the schema is now bounded
-  at `SCN_MAX_LIMIT = 500`, and `research/notes/scenario-format.md` carries the
-  scenario-side consequences (`scenarios/ball10.json` asks 625 per player and has never
-  had them).
+* **Under the raised limits the ceiling and the default are 1500** (`tagpu_limits.h`, the TADR
+  port's landing 2): the default operand `0x491640`, the compare `0x491659` and the clamp-to
+  `0x491666` all become `0x5DC`; the floor stays. MEASURED 2026-09-23: with no `UnitLimit` key,
+  `+0x37EEC` reads 1500 at the menu; in a four-player skirmish `+0x37EEC` = `+0x37EE6` = 1500 and
+  the slot count `main+0x14351` = **15 001**, and 6000 units were created without a refusal.
+  The renderer's design point is exactly that game (`TAGPU_PK_DESIGN_SLOTS`, `tagpu_packet.h`;
+  [gpu-status](gpu-status.html) §2.86 and §2.6b).
+
+**Who writes the array's count, `main+0x37EE6` [DISASSEMBLED 2026-09-23].** It is the field the slot
+count `10·N + 1` is computed from (`0x4854EF`), and five places write it:
+- `0x4912F5`, the single-player init, copies `+0x37EEC` into it (and `0x491308` on into `+0x37EEA`).
+  In a network game `+0x37EEA` is written from the host's broadcast at `0x449D9B` (from
+  `0x512D6C`), unclamped.
+- **Game start, `0x4971C7`, dispatches on `0x435100` (`[ecx]` of `main+0x391E9`):** mode 2 (skirmish)
+  copies `+0x37EEC` at `0x4973CD`; mode 3 (network) copies it at `0x4971F8` and then, for the seat
+  `0x456850` returns (the host <span class="pill pill-warn">INFERRED</span>), overwrites it at `0x4973B5` with the word at `+0xA5` of that player's
+  record (`PlayerStruct + 0x27`, the pointer at `main + 0x1B8A + i·0x14B`); mode 1 (campaign,
+  `0x49745C`) does not write it at all.
+- `0x436037`, inside `0x435DA0`, the map loader: the map's `.ota` `[GlobalHeader]` key `maxunits`
+  (`0x4C46C0`, default 200), stored unclamped. A campaign mission plays with this value; a skirmish or
+  network game overwrites it at game start. Every retail map sets 200 to 400 (checked over every
+  `.ota` in the retail archives, 2026-09-23).
+- The raised limits clamp that store and its sibling to [20, 1500]: `0x436037`, and `0x432646` in
+  `0x432610`, which reads `maxunits` out of a saved game's `[Summary]` (called from `0x497B29` when
+  the game's `main+0x38D6B` TDF has no `BetweenMissions` key) into `+0x37EEC`. Each 7-byte
+  `mov word [ecx+off],ax` becomes a `call` to a stub that clamps `eax` and stores it, and two NOPs.
+
+**A type's own cap, `UnitDef+0x15A` [DISASSEMBLED 2026-09-23].** The unit constructor `0x485F50`
+(`UNITS_CreateUnit`, `(player, type, …)`) checks it before anything else: when `def+0x241` bit 23
+is set and `def+0x15A` is not −1, it counts the player's units of that type (`unit+0xA6`, over the
+player's range at `PlayerStruct+0x67..+0x6B`, stride `0x118`) and refuses the unit at the cap
+(`0x485FE4`). The load sets `def+0x15A` = −1 (`0x42B169`); the battleroom's restriction store
+(`main+0x2A30`) sets both in `0x46E160` (called from `0x46CA60`; that this runs at game start is
+<span class="pill pill-warn">INFERRED</span>): the bit when the type's record has `+0x18` set (by
+`0x46E4D0`, cleared by `0x46E450`) and `+0x1A` set, the cap from the record's `+0x1C`. The
+restriction menu keeps each type as 0..100, **101 meaning no limit** (`0x44CAFD`, operand
+`0x44CAFE`: when the per-type lookup `0x46E330` answers −1 from the record's `+0x1C`, the menu
+holds 101); a slider moved past 100 is stored as −1 and shown as "No Limit"
+(`0x44BEC0` → `0x44BF47`), but **Cancel (`0x44C6FC`) writes the values saved when the menu opened
+back as they are** (`0x44C750` → `0x46E550`), 101 included, so after a cancelled menu every
+enabled, unlimited type is capped at 101. The raised
+limits write the unit limit over that sentinel, as TADR does. A default network game never reaches
+it: landing 1's two peers each created 450 of one type through `0x485F50` with none refused.
+
+**The pathfinder's budget [DISASSEMBLED 2026-09-23].** `0x40EAD3 mov dword [esi+0x48],0x535` (1333,
+operand `0x40EAD6`),
+the only `0x535` in `.text`, in the pathfinder's per-game init (`0x40EA20…`, which sizes its bitmaps
+from the map and copies `+0x54` = `0x18000` into a per-player table at `0x5119E8`, stride
+`0x14B`). The raised limits make it 66 650, TADR's value. MEASURED 2026-09-23 at 6000 units: the
+sim held 57–60 ticks a second at game speed 20 outside the apply frame.
 
 ## Built-in cheat/console command surface
 
