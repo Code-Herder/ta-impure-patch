@@ -770,7 +770,9 @@ first no longer exists.
 worked around, it has no mechanism. §3's table said the guarded surface would get *smaller*, and it
 did — the second allocation, freed one block earlier than the object, is simply not read.
 
-**What survived, and why.** `emit_node` stays (the effects models call it through `emit_fx_model`);
+**What survived, and why.** `emit_node` stayed for the effects models, which called it through
+`emit_fx_model`, until G20e drew those from the engine's own rasterisers and deleted both
+([GPU status](gpu-status.html) §2.89);
 `pose_accum_body` stays (`hires_pose` and `pose_dump`); the shared stream stays for the selection
 lines and the effects models. `MAXNV` / `s_vtrunc` no longer apply to units, and `s_emitTop` is gone
 outright — it was written inside `emit_node` and read only by the emitter path.

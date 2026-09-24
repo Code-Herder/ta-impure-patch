@@ -3730,7 +3730,7 @@ consistent pair could name memory just freed ([cross-thread engine reads](cross-
 
 | site | what we do there | thread |
 |---|---|---|
-| `DrawGameScreen 0x468CF0`, the observer's **`after`** | four more tables. `PK_PROJ` (56 B) one per live projectile, with the rendertype's own rotation adjustment applied, the weapon's colour NUMBERS already through `main+0xDCB`, the attacker's owner byte, the ground-shadow blob's world y, and the sprite or flare frame already indexed by this tick; `PK_EXPL` (32 B) the debris node, the two anim states' resolved frames and the turn triple; `PK_DEBRIS` (24 B) one per occupied particle slot; `PK_PART` (16 B) one per drawable sub-particle, **in layer order**, with the projection done (`x` = hi(world x), `zp` = hi(y) − hi(alt)/2) and its GAF frame resolved. The header gained the ALP/LHT capability bits, the ground-shadow frame, the 32×256 LHT ramp and the **whole 256-byte** GUI colour LUT | game |
+| `DrawGameScreen 0x468CF0`, the observer's **`after`** | four more tables. `PK_PROJ` (44 B) one per live projectile: its position and tail, the weapon's model and its thrust flame as indices into the effects models' tables (posed on this thread with the rendertype's own rotation, §2.89), the weapon's colour NUMBERS already through `main+0xDCB`, the ground-shadow blob's world y, and the sprite or flare frame already indexed by this tick; `PK_EXPL` (24 B) its position, its body as an effects model and the two anim states' resolved frames; `PK_DEBRIS` (16 B) one per occupied particle slot, its position and its piece as an effects model; `PK_PART` (16 B) one per drawable sub-particle, **in layer order**, with the projection done (`x` = hi(world x), `zp` = hi(y) − hi(alt)/2) and its GAF frame resolved. The header gained the ALP/LHT capability bits, the ground-shadow frame, the 32×256 LHT ramp and the **whole 256-byte** GUI colour LUT | game |
 | the same `after` | **the gather is taken once per SIM TICK**, keyed on `(level generation, tick)`. Measured on a live `200v200` at 1080p: **5 592 scans against 80 469 reuses, one gather in 15 publishes**, at 634 publishes a second against a 60 Hz sim. The LEVEL half of the key is what stops a hit across a boundary handing the native pass a model root the teardown has freed. **The argument is NOT the anchor scan's** — that grid really is constant within a tick because only the tick writes it, and these four are not: the engine's own explosion DRAW emits particles (`0x420B00` → `0x421550` at `0x420B18`, which calls the grey-smoke emitter `0x472810` and the fire emitter `0x472AB0`, both of which append to a layer). What licenses the cache is weaker: the tables are COPIES, so a later append cannot dangle one; positions are the TICK's, so nothing already present goes stale; and what it costs is the newest smoke or fire of a tick landing one publish late. [The sentence this row carried — "the engine's own draw passes read them and write nothing" — was disproved by landing 4a's review; §2.22 finding 10.] | game |
 | `tagpu_fx.c` | the three effect tables and the engine's DRAWING RULES over them — which rendertype makes which primitive, where the shadow blob goes, how the lightning bolt jitters. It reads no engine memory at all and is **off the allow-list**; the models its records name are indices into the packet's model tables, which `tagpu_fxmodel.c` rasterises (§2.89) | render |
 | `tagpu_sfx.c` | the particle table, walked by layer because the layer IS the draw depth (0..6 before the projectiles, 7..9 after the explosions). Also **off the allow-list** | render |
@@ -17464,13 +17464,14 @@ vertices into an array nothing read, and `fxown` skips the engine's own draw of 
 
 | where | what |
 |---|---|
-| `tagpu_packet_pub.c` `fx_model` (game thread) | poses each model with the engine's own rotation `0x4B6CC0` into a `dst` of its own, adds the effect's 16.16 position, and copies it with its faces and every frame already resolved by the draw's own rule (`0x4B7EE0` for an animated face, `0x4B7F30` with the owner's logo colour for a debris piece's team face) into five tables — model, shape, face, index, vertex (`tagpu_packet.h`, *THE EFFECTS MODELS*). A shape is shared by every model of the gather that draws the same node with the same frames. Every count and index is bounded before it is used (the node's `+0x04` 1..2048 and `+0x08` 0..512, a face's indices by its node's vertex count, a frame index by its sequence's count, a piece's unit and player by the arrays they must belong to); a node that does not validate is not carried, and its record's index then lies past `n_fxmodel` |
+| `tagpu_packet_pub.c` `fx_model` (game thread) | poses each model a frame can show with the engine's own rotation `0x4B6CC0` into a `dst` of its own, adds the effect's 16.16 position, and copies it with its faces and every frame already resolved by the draw's own rule (`0x4B7EE0` for an animated face, `0x4B7F30` with the owner's logo colour for a debris piece's team face) into five tables — model, shape, face, index, vertex (`tagpu_packet.h`, *THE EFFECTS MODELS*). A shape is shared by every model of the gather that draws the same node with the same frames. **A model no frame can show is not posed**: its node's rest vertices give it a margin about its anchor (`2·r + 4` px, `r` the largest sum of a rest vertex's three absolute coordinates), and a model whose margin misses the packet's reach (`fog_reach`: the published window at the zoom floor, the lead and the fog grids) carries none (`fx_in_reach`). **A model is whole or not carried**: a face the engine draws nothing for is left out, one it draws and the packet cannot carry refuses the model (the engine map, *The effects models*), and a node with no face to paint carries no model while its record's other parts draw. Every count and index is bounded before it is used, and every table stops at the acquire's own `TAGPU_PK_TABLE_MAX` rows and the five together at a slot's reserve (`fx_fits`), so no table the publisher lands is one the acquire refuses. A model not carried leaves its record's index past `n_fxmodel` |
+| `tagpu_packet_pub.c` `fill_fxmodels` | the five tables, **last** of the fill and together or not at all: a slot too small for them cuts them alone (`TAGPU_PK_TRUNC_FXMODEL`), gives back the cursor they advanced, and asks for all five in the next fill's size — every record with a model is then taken back whole for that one frame |
 | `tagpu_packet.c` `frame_valid` | the acquire checks every index of the five tables before the render thread sees them, so the consumer follows them without a check of its own |
 | `tagpu_fx.c` `emit_model` | hands each model to the rasteriser as its record is emitted, keeps its runs, its key and its fog anchor, and counts a model it cannot draw as a lost part of its record (the bracket below) |
-| `tagpu_fxmodel.c` (render thread) | projects the posed vertices with the effects pass's own eye, `(v >> 16) − eye + 0x80` across and the engine's `y − alt/2` down, and runs `0x46BAE0`'s and `0x4211D0`'s face rules and the two rasterisers — `0x4C7580` + `0x4C7310` for a textured quad, `0x4C0330` for a flat face — integer for integer, clipped to the packet's `vp_addr` exactly as the engine's context rect is. The result is **runs** (32 B): a row's pixels that take one texel of the unit atlas, or one palette index where the face is flat or the texel is the frame's key (which the span copies and the atlas marks a hole) |
+| `tagpu_fxmodel.c` (render thread) | projects the posed vertices with the effects pass's own eye, `(v >> 16) − eye + 0x80` across and the engine's `y − alt/2` down, and runs `0x46BAE0`'s and `0x4211D0`'s face rules and the two rasterisers — `0x4C7580` + `0x4C7310` for a textured quad, `0x4C0330` for a flat face — integer for integer, clipped to the packet's `vp_addr` exactly as the engine's context rect is. The result is **runs** (32 B): a row's pixels that take one texel of the unit atlas, or one palette index where the face is flat or the texel is the frame's key (which the span copies and the atlas marks a hole). A frame's runs stop at `TAGPU_FXM_RUN_MAX` (131 072, 4 MB), the budget all three holders of them share (this arena, the posed pass's hand-over, the unit pass's storage buffer); a model past it is refused and its record taken back whole |
 | `tagpu_native.c` | sizes the effects band from the packet's own bound on the frame's models, before any key is fixed, and appends one draw per model to the posed pass's list after its units (`tagpu_posedraw_fx`) |
 | `tagpu_posedraw.c` `FXVS` | a vertex stage with no vertex input: six vertices a run, read out of the frame's pose buffer by index, placed in frame px through the world's own zoom transform, at the model's key |
-| `tagpu_vk_unit.c` `s_pipeFx`, `RS_FX` | that stage with the unit program's fragment stage, no cull (a run is a rectangle; the rasterisers already decided which faces paint), depth `LESS_OR_EQUAL` and written, so a model's later runs win over its earlier ones as the engine's face order does. Recorded after every unit body and before the effects pass's sprites |
+| `tagpu_vk_unit.c` `s_pipeFx`, `RS_FX` | that stage with the unit program's fragment stage, no cull (a run is a rectangle; the rasterisers already decided which faces paint), depth `LESS_OR_EQUAL` and written, so a model's later runs win over its earlier ones as the engine's face order does. Recorded after every unit body and before the effects pass's sprites. **The pass never refuses or stands down for an effect**: runs past the budget or past the device's storage range, or slot buffers the models make too large to allocate, drop the frame's models and keep its units — a model's uniform block comes after every unit's, so the retry sizes the buffers for the units alone |
 
 **What a model takes from the unit program**, which is why the runs go through it rather than a
 program of their own: the unit atlas's texels (so a model's texture lookups spend the unit
@@ -17495,11 +17496,20 @@ the handshake: the unit pass draws the frame's models all or none (`s_nfx == nfx
 the effects pass through `tagpu_vk_unit_fx_count`; the effects pass draws only a frame whose
 models the unit pass draws (`h.nmodels == tagpu_vk_unit_fx_count`), and the unit pass records
 `RS_FX` only when `tagpu_vk_fx_models_ok` says the effects pass is drawing that frame. Both
-passes prepare before either records, so the answer is known when it is used.
+passes prepare before either records, so the answer is known when it is used. A model the posed
+pass cannot carry is dropped there without touching the units' refusal count, and the handshake
+turns it into a frame without effects. Before the gather, the native pass asks whether models
+can be drawn at all: `modelsOn` is the posed pass's readiness **and** the unit pass's
+(`tagpu_vk_unit_fx_ready`: not refused, not owed a teardown, its effects pipeline built), so on a
+unit pass that cannot draw them only the records that carry a model are taken back and every
+other effect draws.
 
 **The thread split.** The engine's models are read on the game thread alone, by the publisher;
-`tagpu_fxmodel.c` reads the packet it is handed and the unit atlas's mirror, and is not on the
-allow-list (`thread-split: clean`, 32 files). `0x4B6CC0` is pure — it reads its two inputs and
+`tagpu_fxmodel.c` reads the packet it is handed and the unit atlas through
+`tagpu_r3d_atlas_texels` — whose miss paints the atlas from the engine's GAF frame at the address
+the packet carries, on the render thread under the fence the pose bake reads behind
+(`tagpu_render3do.c`'s allow-list line) — and names no engine memory itself
+(`thread-split: clean`, 32 files). `0x4B6CC0` is pure — it reads its two inputs and
 one constant and writes `dst` alone — which is what lets the publisher call it (engine map,
 *The effects models*).
 
@@ -17508,19 +17518,27 @@ the game paused, the eye pinned):
 
 | check | result |
 |---|---|
-| model pixels at 1×, Classic | `fx-rockets` **28 of 28, 18 of 18, 2 of 2** exact, and 28 of 28 again on the final build (its 16 uncovered engine pixels the two rockets' ground-shadow blobs); `big-battle` **1292 of 1352**, the other 60 all where the engine's finished frame shows a health bar drawn after the effects. Of the 290 engine effect pixels neither capture inks, 73 are black — which the capture cannot tell from its clear — and the presented frame shows every one of them exactly; 198 are the half-alpha ground-shadow blob; 19 lie at a sprite's or a flash's edge, 29 px or more from any model |
+| model pixels at 1×, Classic | `fx-rockets` **28 of 28, 18 of 18, 2 of 2** exact, and 28 of 28 again on the final build (its 16 uncovered engine pixels the two rockets' ground-shadow blobs); `big-battle` **1292 of 1352**, the other 60 all where the engine's finished frame shows a health bar drawn after the effects. On the build with the bounds, the reach and the drops below: `fx-rockets` **15 of 15** and **19 of 19**, `big-battle` **487 of 492** and **587 of 588**, the others under a health bar's outline or at a sprite's edge the engine draws after the models. Of the 290 engine effect pixels neither capture inks, 73 are black — which the capture cannot tell from its clear — and the presented frame shows every one of them exactly; 198 are the half-alpha ground-shadow blob; 19 lie at a sprite's or a flash's edge, 29 px or more from any model |
 | the band order, in the presented frame | where only a model has ink the frame shows it, **857 of 857**; where a model and a sprite overlap the frame shows whichever the engine painted last, **247 of 257** — the 10 others sit under a flash and take its additive RGB approximation of the LHT remap |
 | Classic++ | the same 1192 pixels covered; 812 take a restored colour |
 | zoom 0.49× and 2.35× | every model where the world's own zoom transform puts it: within 0.15 px at 0.49× and under 1 px at 2.35× |
-| a forced texel loss — a test build whose unit atlas answers "not painted yet" for every other GAF frame, then "refused" for all of them, 22 s each on `big-battle` | 38 106 and 50 534 records taken back whole; records left half-drawn **0** |
+| a forced texel loss — a test build whose unit atlas answers "not painted yet" for every other GAF frame, then "refused" for all of them, 22 s each on `big-battle` | 38 106 and 50 534 records taken back whole; records left half-drawn **0**. Again on the final build: 60 628 and 127 767, half-drawn **0** |
+| forced overflows, the same test build, `big-battle` in play, 20 s each | the five tables held to 256 rows and 8 KB: 96 762 records taken back whole; the slot cut where the model tables begin: every model record taken back; the run budget held to 256: 42 630 taken back, the rasteriser's reason 3 (no room); half-drawn **0** in all three, the packet's `viol=0` (not one packet refused), the census `unit=1 fx=1` throughout. The unit pass's own run budget held to 16, and its slot sizing failed on purpose whenever there are models: the census `unit=1 fx=0` — the units drawn, that frame's effects not — and no refusal |
+| the unit pass refused on purpose (test build, 25 s) | the census `unit=0 fx=1`: the effects pass draws (48–141 sprites and up to 84 flashes a heartbeat), 49 915 model records taken back whole, half-drawn **0** |
+| the reach, in a test build that posed every model anyway and checked every posed vertex | of about 2 million vertices on `big-battle`, **0** outside the margin their node's rest vertices give; of about 150 000 models the reach would have skipped, **0** with a pixel inside it |
 | A/B against main, the same fixture and eye, `ss=2` | terrain (`static-terrain`), units (`selbox-facings` with `native.on=all`, and `pose-inventory`) and features (`feat-forest`) **byte-identical** |
-| cost, `big-battle` paused at a pinned eye, `--maxfps 0`, two launches each | the engine publishes 50–53 packets a second on main and 51–56 with 107–114 models, the publisher's p50 294–306 µs against 276–296 µs; the GPU frame's p50 settles at 2.40–2.47 ms against 1.83–2.40 ms. No cost the scene's own spread shows |
+| the GPU frame, `big-battle` paused at a pinned eye, `--maxfps 0`, two launches each | the frame's p50 settles at 2.40–2.47 ms against main's 1.83–2.40 ms. Paused, the publisher poses nothing new — the gather is kept while the tick stands still — so this row says nothing about the game thread |
+| **the publisher in play**, 1024×768, `--maxfps 0`, a test build timing the posing (once a tick) and each whole fill, 256 of each a line | `big-battle` at the battle, 100–200 models posed a tick: the posing p50 **128–182 µs**, p99 183–257 µs; the fill that gathers (once a tick) p50 **0.76–0.91 ms**, p99 1.18–2.33 ms, against **0.60–0.98 ms** and 0.90–1.64 ms with the posing turned off in the same session; the fills that reuse the tick's gather p50 0.29–0.35 ms. `limits-flood`'s first volley, about 1100 models posed a tick: the posing p50 **1.22 ms**, p99 1.92 ms; the gathering fill p50 **2.68 ms**, p99 4.19 ms, against 1.40–1.46 ms and 3.79–3.84 ms without the posing (another launch of the same volley); at 1920×1080, 2.34 ms and 4.12 ms. **The reach skips nothing at a battle on screen** — at 1024×768 the zoom floor's window holds all of `big-battle` — and with the camera 2500 px off it every model is skipped: the posing p50 34–44 µs against 107–154 µs posing them all |
+| the run budget's headroom | `limits-flood`'s volley peaks at **41 819** runs (717 models on screen) at 1024×768 and **61 630** (962 models) at 1920×1080, against 131 072 |
 | the log, a minute of `big-battle` in play | clean |
 
 **The heartbeats.** `fx:` gains `models= runs= (lost= why= of cap )` — drawn, their runs, taken
 back, the rasteriser's last refusal (1 not carried, 2 texel not painted, 3 no room), the frame's
 bound; `packet:` gains `models=N/Vv lost=` — the models carried and their vertices, and the
-running count of models the publisher could not carry (a node that did not validate, or no room).
+running count of models the publisher could not carry (a node that did not validate, a face it
+could not carry, past the tables' bound, or no room). A frame whose models were dropped says so
+once: `posedraw: N effects model(s) could not be carried …` and `unit: … the effects are not
+drawn, the units are`.
 
 **What it does not do.**
 
@@ -17530,14 +17548,27 @@ running count of models the publisher could not carry (a node that did not valid
 - **The flash is still an additive RGB approximation** of the LHT remap, and still draws before
   every sprite of the frame where the engine draws it after the projectiles (effects §4). Both
   predate this work; the 10 overlap pixels above are the approximation's.
-- **A face of more than 32 vertices, or taller than 65 536 scanlines, is not drawn.** Neither
-  engine draw bounds either; no stock model reaches them (`0x4211D0`'s stack frame caps a node at
-  ~1990 vertices, and `0x4C7580`'s its rows).
+- **Past the engine's own capacities the engine's picture is not reproduced.** `0x46BAE0`
+  rotates and projects into heap blocks of 200 vertices and gathers a face into one of 20
+  points; `0x4211D0` gathers a face into 25 points of its stack and projects ~1997 vertices
+  (engine map, *The effects models*). Neither tests a count, so past them the engine writes over
+  its neighbours and draws what that leaves. The packet carries such a model as the arithmetic
+  describes it, uncorrupted, up to 2048 vertices, 512 faces and 32 points a face; past those the
+  model is not carried and its record is taken back whole, and a face taller than 65 536
+  scanlines is not drawn. No stock model reaches any of them.
+- **A frame past the run budget loses the models past it**, each with its whole record — sprites,
+  lines and all — and keeps the ones before. The budget is what three copies of the runs may
+  cost in a 32-bit process, 2.1× the largest frame measured (the flood's volley at 1920×1080); a
+  battle at the raised caps seen whole, zoomed out on a large screen, can pass it.
+- **A frame the unit pass stands down for draws none of its effects**: its models are not drawn,
+  and the effects pass draws nothing on a frame whose models the unit pass is not drawing. A
+  unit pass that has refused for the session, or has no effects pipeline, takes only the models
+  back (`modelsOn`).
 - **Fog is decided at the effect's anchor**, for the model as for its record's sprites and
   lines (`vWorld` is the anchor; the effects pass has decided it there since G13b, and a
   record's parts fog together). The engine's overlay decides per pixel, so a model that crosses
   a fog cell's edge can differ from the engine by the part across it. No scene of this work had
-  a model on such an edge; the fix is per-pixel fog for the whole effects pass, both halves at
-  once.
+  a model on such an edge. The fix is per-pixel fog for every effect, sprites included, and it
+  is the next change to the effects pass.
 - **Classic++ has no engine oracle**: its models were checked for coverage and for taking the
   restored art, not against a reference picture.
