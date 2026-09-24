@@ -86,7 +86,7 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   cached structure shadow once ours is live. A stale `owndraw.on` with `native.on` cleared is
   dropped by `launch`, which says so. The `native:` heartbeat every 300 frames is `native: vulkan
   lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=
-  fog=wide|engine|none bare=N out=N held=N/Mpx paused=N back=N` — what was handed over to the Vulkan passes, not what
+  fog=wide|engine|none bare=N out=N held=N/Mpx paused=N back=N nopieces=N` — what was handed over to the Vulkan passes, not what
   they drew; the fog fields are below. A model that will not bake (over 256
   pieces or 49 152 vertices) logs a `posebake: REFUSED` line and draws nothing. Nothing reads
   `gamedir/hires/`: a `.glb` there changes nothing, because replacement meshes are not in this build.
@@ -205,11 +205,11 @@ Driving the camera at a zoom other than 1:
   lands the eye exactly on `world − (W/2, H/2)` before the clamp:
   `keys <i> mouse:10,0 down:lbutton`, peek `+0x1431F`/`+0x14323`, `keys <i> up:lbutton`.
   `pclick:` alone does not work here; the jump wants the button held across a frame.
-- **Put the camera where you want it by scrolling when the fog matters.** The engine rebuilds
-  its fog grid only when a camera *move* clears its is-current bit; `tacli eye` writes the eye and
-  the scroll target together, so nothing clears it and the stale grid is drawn at the new
-  position — a lit LOS circle over a base you never scouted, which looks like a fog bug and is
-  not. `keys <i> mouse:0,1079` and wait.
+- **`tacli eye` rebuilds the fog.** The engine rebuilds its screen fog grid only when its
+  is-current bit (`main+0x14281` bit 3) is clear, and the game thread's apply clears it whenever
+  it moves the eye, as the engine's own eye writers do: measured with the sim paused under
+  `ARMOPT`, one `tacli eye` jump made exactly one rebuild and no frame drew the old grid at the new
+  eye.
 - **Dialogs drawn inside the viewport keep 1:1 clicks at every zoom** (`ARMOPT`, `EXITMENU`,
   `YESORNO`, the preferences screens); `SHARE.GUI` is the known gap, and `ui press <gadget>` is
   the fallback there.
@@ -228,7 +228,11 @@ The native heartbeat's fog fields are the fog bound's witness (`tagpu_zoom.c`, g
 `fog=` is the grid the last frame actually sampled — `engine` at rest at 1× and above, at every
 resolution (the engine's grid always spans the 1× rect about the eye it was built at), `wide` below 1× or
 once the eye is past that grid's few pixels of slack, `engine` on a bare frame, `none` with no
-grid at all; **`out=` must read 0** — frames whose fog domain was not inside that grid; `bare=`
+grid at all; **`out=` must read 0** — frames whose fog domain was not inside that grid;
+**`nopieces=` must read 0** — units inside a frame's slab that the packet carried without their
+pieces, so they were not drawn (the publisher carries pieces over the whole fog reach, so this
+counts only a bare frame whose unapplied steps outran the lead, a centred frame or a piece table
+the arena cut short); `bare=`
 counts frames that needed the wide grid and had none; `held=N/Mpx` is the frames whose drawn eye
 the bound held back and the largest hold, never more than the displacement the gesture has posted
 and the game thread not yet applied, less the lead the wide grid carries (a quarter of the view a
@@ -341,8 +345,8 @@ that map's size.
 
 | line | every | must read 0 | notes |
 |---|---|---|---|
-| `packet: pub= skip= overrun= foreign= … viol= pviol= crcbad= nopkt= \| … \| cmd: … \| draws= … \| world: … dup= trunc= relbad= woob= …` | 300 render frames | `viol`, `pviol`, `crcbad`, `foreign`, `commitfail`, `vpwh` (both exchanges); `dup` (the stable-id collision oracle), `relbad` (the engine's `end == begin + (count−1)·0x118` relation), `woob` (wreck records outside the 2048-record pool); `trunc` past each slot's first fill; `layerbad`, `subbad` in the `fx:` segment; `refused` in the `fog:` and `gui:` segments | `skip` is the FRESH gate doing its job; `overrun`/`gap` count only under `stress` or across a level end; `unacked=(0,0)` whenever no wheel gesture is in flight; `hold=1` while `tagpu_eye.txt` is in force; `tps` is 3 × `speed`; `font=` non-zero when text can draw; `levelend=reclaim` names who published the level-end packet |
-| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog= bare= out= held=N/Mpx paused= back=` | 300 | `out` past a level's start, `back` | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; the fog fields are the fog bound's witness (§"Camera, viewport and fog") |
+| `packet: pub= skip= overrun= foreign= … viol= pviol= crcbad= nopkt= \| … \| cmd: … \| draws= … \| world: … dup= trunc= relbad= woob= …` | 300 render frames | `viol`, `pviol`, `crcbad`, `foreign`, `commitfail`, `vpwh` (both exchanges); `dup` (the stable-id collision oracle), `relbad` (the engine's `end == begin + (count−1)·0x118` relation), `woob` (wreck records outside the 2048-record pool); `trunc` past each slot's first fill; `layerbad`, `subbad` in the `fx:` segment; `refused` in the `fog:` and `gui:` segments; `recodd` in the `fog:` segment (a draw that cleared the engine fog grid's is-current bit without building it) | `skip` is the FRESH gate doing its job; `overrun`/`gap` count only under `stress` or across a level end; `unacked=(0,0)` whenever no wheel gesture is in flight; `hold=1` while `tagpu_eye.txt` is in force; `tps` is 3 × `speed`; `font=` non-zero when text can draw; `levelend=reclaim` names who published the level-end packet |
+| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog= bare= out= held=N/Mpx paused= back= nopieces=` | 300 | `out` past a level's start, `back`, `nopieces` | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; the fog fields are the fog bound's witness (§"Camera, viewport and fog") |
 | `reclaim: def= drn= ovf= … tmpl=<queued>/<freed by the epoch>/<leaked>` | 300 | `ovf`, the third `tmpl` field | a level change logs `reclaim: level teardown: flushed N …` then `reclaim: teardown post: freed N block(s)` |
 | `fogwide: …`, `fogwide check: … differ=` | 5 s / 120 ticks | `differ` | a video-mode change logs `fogwide: grid CxR, N KB (N cells) — grown` |
 | `gui: twins= …` | 300 | `overflows`, `lost`, `miss`, `reseed` | `references/ui-layer.md` |

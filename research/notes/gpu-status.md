@@ -774,17 +774,32 @@ wide grid, and the drawn eye `e` is clamped per axis until
 the slab `[e + (vw − S)/2 − M, e + (vw − S)/2 + S + M]` (S = `tagpu_zoom_gather_span(vw, z)`, M =
 `TAGPU_GATHER_MARGIN`, 256) lies inside its span. The window is that slab at the floor about the
 eye it was built at, grown by **the lead**, a quarter of the viewport on each side
-(`TAGPU_LEAD_DIV`), through `tagpu_zoom_pub_window`. The tables the frame reads are published
-about the eye both grids were built at — the fog site's latch (`tagpu_terrown_fog_eye`), not the
-packet's eye, which the camera stepper can have moved on from — and each covers what the bound
-lets a slab reach. The units carried with their pieces are those whose projected anchor
-(`wy − wz/2`, the pass's own test, so no bound on altitude is needed) lies in the wide grid's
-written span about that eye (`tagpu_fogwide_span`, the lattice `fogw_window` builds on): every
-point of a slab the bound accepts on the wide grid, and of an engine-grid frame's slab, which lies
-inside the floor's. The feature anchors cover the published window plus 16 cells, scanned in whole
-rows outward from the view's centre row, so an overflow of the 65 536-entry table drops the rows
-farthest from the view and nothing a view covers while that band fits, and says so (`trunc=` on
-the `feat:` line). The densest stock map, Canal Crossing, puts 12 633 anchors in one rect at 4K
+(`TAGPU_LEAD_DIV`), through `tagpu_zoom_pub_window`.
+
+**The tables cover the fog reach, taken from the grids the packet carries and from no eye**
+(`fog_reach` in `tagpu_packet_pub.c`). Per axis it is the union of what each way the bound can draw
+a frame lets it reach: on the wide grid, its written span `[org, org + 32·(n − 1)]`, into which the
+bound clamps the whole slab; on the engine's, taken only at level ≥ 1 where the slab is the 1× rect
+plus M and only with that rect inside the span, `[org − M, org + 32·(n − 1) + M]`; and bare —
+neither grid qualifies (no wide grid reached the render thread, and a level below 1 or a misplaced
+engine grid), so no bound holds the eye, which is the packet's plus the steps not yet applied —
+the window published about the packet's eye. Every slab the bound fits into a grid therefore lies
+inside it, whatever moved the camera between the grids' builds and the publish. The units carried
+with their pieces are those whose projected anchor (`wy − wz/2`, the pass's own test, so no bound
+on altitude is needed) lies in the reach; one the native pass finds inside its slab without its
+pieces is not drawn and is counted, **`nopieces=`** on the `native:` line — a bare frame whose
+steps outran the lead, a frame the bound could only centre (`out=`), or a piece table the arena
+truncated. The feature anchors cover the reach plus 16 cells, scanned in whole rows outward from
+its centre row `mid` in the order `mid, mid+1, mid−1, mid+2, …`: the scan stops at the first row
+that does not fit in the room the table has left, and that row and every later one in the order
+are dropped, the row at the same distance on the other side among them. An overflow of the
+65 536-entry table therefore keeps a band `[mid − a, mid + b]`, `b − a ∈ {0, 1}`, and says so once
+per scan (`trunc=` on the `feat:` line). The drawn view is not centred on `mid`: its eye is the
+packet's plus the steps the game thread has not applied, which the lead (`vh/4`, 33 rows at 4K) is
+sized to hold, and the bound caps that offset by the grid — at the lead and the lattice's rounding
+at the floor, at the room the grid leaves about a smaller slab above it. A frame loses nothing while
+the band holds its own slab at that offset, 560 rows at the floor at 4K. The scan is reused within
+a tick only when the tick, the rect and `mid` all match. The densest stock map, Canal Crossing, puts 12 633 anchors in one rect at 4K
 with the lead — every feature it has, 19 % of the table; next are Cavedog Links CC at 10 289 and
 Plains and Passes at 9 603, each also whole; at 1080p Canal Crossing's worst rect holds 9 740
 (the feature cells of the 275 stock maps' TNT files, every placement of the rect, 2026-09-24).
@@ -801,6 +816,41 @@ The clamp reads the grid's own origin and size, never the lead. It is empty only
 grid trimmed by a failed allocation, where the slab is centred and the frame counted. With no wide
 grid in the packet a frame on a qualifying engine grid is held into it; any other is drawn bare —
 unclamped over the engine's grid — and counted.
+
+**The engine grid's origin is its build record.** The builder `0x4843C0` derives the origin from
+the eye it reads (`32·col0 + 16`, `col0` the eye's half-cell-rounded `>> 5`) and stores it nowhere,
+so the publisher keeps a record of the eye each build read, taken off LosType bit 3
+(`main+0x14281`): only a build sets it — `0x484904` right after the lazy test `0x4848F2` and the
+build `0x4848FA` inside the fog function `0x4848E0`, and `terr_fogtick` right after its own call —
+every other store to the word touches bits 0–2 only, and nothing `DrawGameScreen` reaches by a
+direct call clears it or stores the eye (engine map, "who sets `main+0x14281` bit 3"). The bit is
+read after the command apply, just before the draw, and again right after it: clear then set is a
+build inside the draw at the eye it was drawn at, which the publisher records; set before is no
+build, and the record stands however the eye has moved since — the camera shake `0x41C6F0` moves
+it without clearing the bit; set before and clear after is not expected and drops the record
+(**`recodd=`** on the publisher's `fog:` segment, must read 0). A draw the observer does not track
+(the screenshot sweep, a nested draw, a draw past the return-stack depth) and a new level drop the
+record, and while there is none the apply clears the bit, as every engine eye writer does, so the
+draw rebuilds and makes one; the engine grid is not carried until it has (**`norec=`**, publishes
+without a record). This holds with the fog site handed back to the engine as well — the record
+comes from the bit, not from inside our replica — which is what the fog-site latch it replaced
+could not do: that latch was void on a level's first draws and after a hand-back, and the fallback
+was the packet's eye. MEASURED 2026-09-24 on Two Continents at 1920×1080 on Xvfb, the play set, a
+72-unit fight in view with the screen shake on, then the commander followed (`Ctrl+C`) on a long
+move so the stepper moved the eye every frame — from (−441, 7025) to (1483, 5384) — while the fog
+site was handed back (`terr.on=passive`) and retaken at 1×, and `terr.on` dropped and re-armed at
+0.5× (where a wide rect keeps the site ours): `nopieces`, `norec` and `recodd` 0 on every heartbeat
+from the level's first, `fog=engine` at rest and during the hand-back, `wide` while the followed
+eye stood past the map's west edge (where the engine grid is misplaced) and at 0.5×, and `bare`,
+`out` 0. A diagnostic build (not committed) checksummed
+the engine grid between records and compared each record with `terr_fogtick`'s own eye: 3 639
+records, 2 947 of them at our rebuilds and every one at the eye that rebuild read, 692 from the
+engine's own fog draw during the hand-back, and the grid's bytes unchanged across all 28 641
+draws between records — no build went unrecorded. With the sim paused under `ARMOPT`, one
+`tacli eye` jump made exactly one record: the apply's clear rebuilds the grid at the new eye. A
+second level in the same process, entered through the menu below 1× on Seven Islands, read
+`norec` 0 and `nopieces` 0 across the boundary, with `bare` and `out` at 18 from its first frames
+(a level that starts below 1×, below) and flat after.
 
 *The drawn view never moves against the gesture.* The clamp's upper end `org + 32·(cols − 1) −
 (vw + S)/2 − M` falls as the level falls, so a zoom-out that cuts a zoom-in whose displacement the
@@ -830,10 +880,13 @@ engine's grid; with the rule applied regardless of `fit` (the build before) the 
 0.4556 and `paused` grew by one every frame, 1 120 in two heartbeats, until the zoom-in released it.
 
 The native heartbeat carries the witnesses — `fog=wide|engine|none bare=N out=N held=N/Mpx
-paused=N back=N`: `fog` is the grid the last frame actually sampled; `out` counts frames whose
+paused=N back=N nopieces=N`: `fog` is the grid the last frame actually sampled; `out` counts frames whose
 domain is not inside the grid they took, checked on the pass's own numbers, and must read 0; `held`
 counts frames the bound held back and the largest hold; `paused` the frames drawn at the last
-frame's level; `back` the frames that moved against the gesture anyway, and must read 0.
+frame's level; `back` the frames that moved against the gesture anyway, and must read 0;
+`nopieces` the units inside a frame's slab that the packet carried without their pieces, which
+were not drawn, and must read 0. The publisher's `fog:` segment carries the build record's two:
+`norec` and `recodd` (above).
 
 *Why a bound on the eye and not a bigger grid.* A grid spanning the whole reachable range is the
 map plus half a view each side: on Seven Islands, the largest stock map (20480² px), ~547 k cells
@@ -889,10 +942,13 @@ run read `back`, `out` and `bare` 0, and the feature pass's `outside=` 0 on ever
 and 369 of them on the committed build and the one before). Re-run on Xvfb at 1080p after the
 tables moved to the fog eye and the pause rule learned to need an interval: 13 held frames, the
 largest 497 world px; with the apply forced 200 ms behind, 42 (9 paused), 779 px; `back`, `out`,
-`bare` 0 and `outside=` 0 on 372 and 371 heartbeats. The rebuild rate is ~2.8/s during the
+`bare` 0 and `outside=` 0 on 372 and 371 heartbeats. Re-run again after the tables moved to the
+fog reach and the engine grid's origin to its build record: 15 held frames, the largest 511 world
+px; under the lag, 28 (5 paused), 740 px; `back`, `out`, `bare`, `nopieces`, `norec`, `recodd` 0
+and `outside=` 0 on 372 heartbeats each. The rebuild rate is ~2.8/s during the
 gestures, so the lead adds ~50 µs of game-thread time a second at 1080p. The units' piece-cull
-rect is the wide grid's own span, so it grows with the lead, and so does the anchor rect: its
-margin is 16 cells past the published window, the slack past the slab it had before.
+rect and the anchor rect are the fog reach, which holds the wide grid's span, so both grow with the
+lead; the anchor rect's margin is 16 cells past the reach.
 
 A level that starts below 1× has no wide grid until our terrain pass owns the ground (the wide
 grid is built at the fog site, which is ours only then): measured after a game → shell → game
@@ -3595,7 +3651,7 @@ on 2026-09-03. **The root cause is still not found**; what changes is that the c
 | site | what we do there | thread |
 |---|---|---|
 | `DrawGameScreen`'s `after` | the engine's grid, with its own relation checked (`cells == ((cols*rows + 7) & ~7)`, the allocator's round-up at `0x483C84`) and exactly `cols*rows` entries copied; `tagpu_fogwide`'s wide grid the same way; the grey band's 256-byte palette remap (`*(TAProgram+0xCC)`), latched like the shade and lighten tables | game |
-| the engine's fog site, inside the draw | `terr_fogtick` latches the eye the engine's builder actually read, the instant it ran, so the grid's world ORIGIN is taken from that eye and not from the packet's | game |
+| `DrawGameScreen`'s `before` and `after` | LosType bit 3 read either side of the draw: clear then set is a build inside it, and the eye after the draw is the one the builder read — the grid's build record, from which its world ORIGIN is taken, never from the packet's eye (§2.3e) | game |
 | `tagpu_fogwide.c` | **one buffer, no lock, nothing retired.** The three buffers swapped under a critical section, the retire ring behind `tagpu_reclaim`'s quiescence fence, the wall-clock liveness test, `tagpu_fogwide_dimcap()` and the `ret=` / `held=` / `strand=` / `bare=` counters are all gone with the hand-over they existed for. A grow frees the old block on the spot | game |
 | `tagpu_native.c` | both grids out of the packet; which one this frame uses is unchanged and still this thread's decision, because it is the thread that knows what it is about to draw | render |
 
