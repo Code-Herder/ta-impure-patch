@@ -5,7 +5,7 @@
    The patches are in tagpu_patches.c (tagpu_limits_install); the plan and the evidence
    are research/notes/tadr-port/raised-limits.md and limits-evidence.md. TADR's
    EngineLimits.cpp is the prior art for the four effect pools, its LimitCrack.cpp for the
-   unit limit and the pathfinding budget.
+   unit limit, the pathfinding budget and the particles.
 
    THE RULE IS ALL OR NOTHING, AND A FAILURE ENDS THE PROCESS. Every site is compared with
    the stock 3.1 bytes before any is written; one mismatch writes none, and
@@ -30,6 +30,8 @@
 #define TAGPU_LIM_AUX    300     /* debris records an explosion carries           */
 #define TAGPU_LIM_UNITS  500     /* units a player: the ceiling (the default is 250) */
 #define TAGPU_LIM_PATH   1333    /* the pathfinder's search budget                */
+#define TAGPU_LIM_SFX    400     /* particle objects a layer (the emitters keep one more) */
+#define TAGPU_LIM_SFXPOOL 1000   /* particle objects in all ten layers together   */
 #else
 #define TAGPU_LIM_PROJ   3000
 #define TAGPU_LIM_EXPL   3000
@@ -37,6 +39,8 @@
 #define TAGPU_LIM_AUX    3000
 #define TAGPU_LIM_UNITS  1500    /* the ceiling AND the default                   */
 #define TAGPU_LIM_PATH   66650
+#define TAGPU_LIM_SFX    20480
+#define TAGPU_LIM_SFXPOOL (10 * TAGPU_LIM_SFX)
 #endif
 /* the engine's own floor for a player's units (0x491678: `cmp eax,0x14`) */
 #define TAGPU_LIM_UNITS_MIN 20

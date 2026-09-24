@@ -561,6 +561,28 @@ static void lim_sites(void)
        the per-tick 0x40EB70, which shares it among the players; nothing is sized or indexed
        by it, so the raise costs time, not memory. */
     lim_dword(0x0040EAD6, 1333, TAGPU_LIM_PATH, "pathfinding budget");
+
+    /* ---- particles: two ceilings. Every emitter (0x470F00..0x472F00) takes its layer's
+       size and `cmp eax,0x190 / jbe append`; past the cap it destroys the layer's oldest
+       object and appends anyway, so a layer holds TAGPU_LIM_SFX + 1. Nineteen compares are
+       `3D imm32` (operand at +1), one is `81 F9 imm32` against ecx (operand at +2): the
+       twenty are every 0x190 compare in the emitters. The objects come from ONE pool,
+       0x51E610, built by the C runtime's static initializer at 0x471C80 (`push 0x4C; push
+       0x3E8; ... call 0x470A90`), which allocates its whole capacity once; its alloc 0x470EB0
+       returns 0 when the pool is empty and every emitter then skips the particle. DllMain
+       runs before that initializer, so the pool is built at the raised capacity. Visual
+       only: the emitters draw the C runtime's rand, never the simulation's generator. */
+    {
+        static const unsigned int cmpEax[19] = {
+            0x00471183, 0x004713D8, 0x00471508, 0x0047163D, 0x00471782, 0x004718B1, 0x00471AD7,
+            0x00472071, 0x0047219F, 0x004722CF, 0x004723D6, 0x004724D5, 0x004725D4, 0x004726C0,
+            0x004727B0, 0x0047289A, 0x0047297A, 0x00472A5A, 0x00472CD9 };
+        int k;
+        for (k = 0; k < 19; k++)
+            lim_dword(cmpEax[k] + 1, 400, TAGPU_LIM_SFX, "particle layer cap");
+        lim_dword(0x00472BF2 + 2, 400, TAGPU_LIM_SFX, "particle layer cap");
+        lim_dword(0x00471C83, 1000, TAGPU_LIM_SFXPOOL, "particle pool");
+    }
 }
 
 /* one site's bytes, without trusting the page to be readable */
@@ -614,10 +636,11 @@ int tagpu_limits_install(void)
     /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
     tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d at 0x%08X, "
                "flying pieces %d at 0x%08X, debris records %d at 0x%08X, units %d a player, "
-               "pathfinding %d", s_nlim,
+               "pathfinding %d, particles %d a layer from a pool of %d", s_nlim,
                TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
                TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
-               TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH);
+               TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
+               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL);
     return 1;
 }
 
@@ -644,7 +667,7 @@ int tagpu_limits_install(void)
 {
     plog("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
          "flying pieces 100, debris records 300, units 250 a player up to 500, "
-         "pathfinding 1333)");
+         "pathfinding 1333, particles 400 a layer from a pool of 1000)");
     return 0;
 }
 

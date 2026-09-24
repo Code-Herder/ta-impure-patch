@@ -994,19 +994,20 @@ static void gather_layer(const char* layers, int L)
     const char* const* e = *(const char* const* const*)(lay + LAYER_END);
     unsigned n, i;
     if (!ptr_ok(b) || !ptr_ok(e) || e <= b) return;
-    /* THE BOUND IS THE ENGINE'S OWN RULE, not a probe, and the rule is 401 —
-       one MORE than the number in the compare. Every emitter reads the layer's
-       size and `cmp eax,0x190 / jbe append` (0x472071 and nineteen more across
-       0x471183..0x472CD9; 0x472BF2 compares ecx): at 400
-       or fewer it appends, and past that it destroys the FRONT object, shifts
-       the vector down by one and appends anyway. So a layer at 401 is the
-       engine's steady state, and a walk that stopped at 400 would drop the
-       whole layer every time it filled — measured 2026-09-12: a bound of 400
-       refused 86 layers in one fx-mix run. The pair itself is
-       sound because this thread is the one that runs those emitters; a count
-       past 401 is a fact worth counting, not a walk worth attempting. */
+    /* THE BOUND IS THE ENGINE'S OWN RULE, not a probe, and the rule is the cap
+       plus ONE. Every emitter reads the layer's size and `cmp eax,cap / jbe
+       append` (0x472071 and nineteen more across 0x471183..0x472CD9; 0x472BF2
+       compares ecx), the cap being TAGPU_LIM_SFX, which the limits write into
+       all twenty: at the cap or fewer it appends, and past that it destroys the
+       FRONT object, shifts the vector down by one and appends anyway. So a
+       layer at cap + 1 is the engine's steady state, and a walk that stopped at
+       the cap would drop the whole layer every time it filled — measured
+       2026-09-12 at stock's 400: that bound refused 86 layers in one fx-mix
+       run. The pair itself is sound because this thread is the one that runs
+       those emitters; a count past cap + 1 is a fact worth counting, not a walk
+       worth attempting. */
     n = (unsigned)(e - b);
-    if (n > (unsigned)LAYER_OBJCAP + 1u) { s_cLayerBad++; return; }
+    if (n > (unsigned)TAGPU_LIM_SFX + 1u) { s_cLayerBad++; return; }
     s_partObj[L] = n;
     for (i = 0; i < n; i++) {
         const char* o = b[i];
