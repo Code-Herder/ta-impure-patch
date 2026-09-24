@@ -3701,8 +3701,8 @@ will not honour; at 3840×2160 it walks all six and the store follows.
 closed. The two notes disagreed and the displacement scan settled neither; HUD scale turned out
 to be a better instrument than the two-resolutions run that was planned, because it moves
 viewW/viewH **without** moving the screen mode or the map. Same map, same 1920×1080 surface:
-stock gives `1792/1016` and `112/63`, Auto gives `1632/936` and `102/58`, the map dimensions at
-`+0x1422B/+0x1422F` unchanged at 10720×12672 throughout. All four are exactly `>>4`.
+stock gives `1792/1016` and `112/63`, Auto gives `1632/936` and `102/58`, the scroll extent at
+`+0x1422B/+0x1422F` (the map less 32 and 128 px) unchanged at 10720×12672 throughout. All four are exactly `>>4`.
 [resolution](resolution.html) §3 was right; the [exe map](exe-reverse-engineering.html) is
 corrected, and the write the scan could not find is LoadMap's, through a base at
 `main+0x141FB` that a displacement scan cannot see.

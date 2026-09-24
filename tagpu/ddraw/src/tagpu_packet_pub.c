@@ -987,54 +987,110 @@ PART_FMT[TAGPU_PK_NPARTKIND] = {
     { 0x30, 0,    0, 0x28, 0 }    /* nano    */
 };
 
+/* One layer's object vector, [*b, *b + n): 0 when the layer is empty, and
+   `*bad` when it is larger than the engine's own rule allows. */
+static unsigned layer_objs(const char* layers, int L, const char* const** b, int* bad)
+{
+    const char* lay = layers + (size_t)L * LAYER_STRIDE;
+    const char* const* e = *(const char* const* const*)(lay + LAYER_END);
+    unsigned n;
+    *b = *(const char* const* const*)(lay + LAYER_BEGIN);
+    *bad = 0;
+    if (!ptr_ok(*b) || !ptr_ok(e) || e <= *b) return 0;
+    /* THE BOUND IS THE ENGINE'S OWN RULE, not a probe, and the rule is the cap
+       plus ONE. Every emitter reads the layer's size and `cmp eax,cap / jbe
+       append` (0x472071 and nineteen more across 0x471183..0x472CD9; 0x472BF2
+       compares ecx), the cap being TAGPU_LIM_SFX, which the limits write into
+       all twenty: at the cap or fewer it appends, and past that it destroys the
+       FRONT object, shifts the vector down by one and appends anyway. So a
+       layer at cap + 1 is the engine's steady state, and a walk that stopped at
+       the cap would drop the whole layer every time it filled — measured
+       2026-09-12 at stock's 400: that bound refused 86 layers in one fx-mix
+       run. The pair itself is sound because this thread is the one that runs
+       those emitters; a count past cap + 1 is a fact worth counting, not a walk
+       worth attempting. */
+    n = (unsigned)(e - *b);
+    if (n > (unsigned)TAGPU_LIM_SFX + 1u) { *bad = 1; return 0; }
+    return n;
+}
+
+/* One object's drawable sub-particles: their count, 0 when the object draws
+   nothing, with its class and vector. `*bad` when the count fails the filter. */
+static unsigned obj_subs(const char* o, int* kind, const char** sb, int* bad)
+{
+    const char* se;
+    unsigned ns;
+    *bad = 0;
+    if (!ptr_ok(o)) return 0;
+    *kind = part_kind(*(const unsigned*)o);
+    if (*kind < 0) return 0;                   /* the base class draws nothing */
+    *sb = *(const char* const*)(o + PO_SUB0);
+    se = *(const char* const*)(o + PO_SUB1);
+    if (!ptr_ok(*sb) || !ptr_ok(se) || se <= *sb) return 0;
+    ns = (unsigned)(se - *sb) / (unsigned)PART_FMT[*kind].stride;
+    /* A SANITY FILTER ON A VALUE, not the safety argument — the argument is
+       that this thread is the one that grows these vectors. What it buys is
+       containment: without it one object with a wild `end` fills the whole
+       table and truncates every layer after it, and with it that object is
+       skipped and the frame is otherwise complete. */
+    if (ns > PART_SUBCAP) { *bad = 1; return 0; }
+    return ns;
+}
+
+/* Every layer's drawable sub-particles, counted by the walk's own rules. */
+static unsigned count_subs(const char* layers)
+{
+    unsigned total = 0, n, i;
+    const char* const* b;
+    const char* sb;
+    int L, k, bad;
+    for (L = 0; L < (int)TAGPU_PK_NLAYER; L++) {
+        n = layer_objs(layers, L, &b, &bad);
+        for (i = 0; i < n; i++) total += obj_subs(b[i], &k, &sb, &bad);
+    }
+    return total;
+}
+
+/* THINNED, NOT TRUNCATED. The layers are walked bottom to top, so a table
+   that simply filled would lose the TOP layers whole — the trails and smoke
+   the engine draws last, layer 9 among them. When the frame holds more than
+   the table, every layer keeps the same share instead: the sub-particles are
+   counted first, and a 16.16 accumulator keeps `s_partKeep` of each run,
+   which by construction totals at most TAGPU_PK_MAX_PART. The table's own
+   check stays as the bound; the share is only what makes it rare. */
+static unsigned s_partKeep, s_partAcc;
+static volatile unsigned s_cPartThin;
+
 /* one layer's objects into the particle table */
 static void gather_layer(const char* layers, int L)
 {
-    const char* lay = layers + (size_t)L * LAYER_STRIDE;
-    const char* const* b = *(const char* const* const*)(lay + LAYER_BEGIN);
-    const char* const* e = *(const char* const* const*)(lay + LAYER_END);
+    const char* const* b;
     unsigned n, i;
-    if (!ptr_ok(b) || !ptr_ok(e) || e <= b) return;
-    /* THE BOUND IS THE ENGINE'S OWN RULE, not a probe, and the rule is 401 —
-       one MORE than the number in the compare. Every emitter reads the layer's
-       size and `cmp eax,0x190 / jbe append` (0x472071 and nineteen more across
-       0x471183..0x472CD9; 0x472BF2 compares ecx): at 400
-       or fewer it appends, and past that it destroys the FRONT object, shifts
-       the vector down by one and appends anyway. So a layer at 401 is the
-       engine's steady state, and a walk that stopped at 400 would drop the
-       whole layer every time it filled — measured 2026-09-12: a bound of 400
-       refused 86 layers in one fx-mix run. The pair itself is
-       sound because this thread is the one that runs those emitters; a count
-       past 401 is a fact worth counting, not a walk worth attempting. */
-    n = (unsigned)(e - b);
-    if (n > (unsigned)LAYER_OBJCAP + 1u) { s_cLayerBad++; return; }
+    int bad;
+    n = layer_objs(layers, L, &b, &bad);
+    if (bad) { s_cLayerBad++; return; }
     s_partObj[L] = n;
     for (i = 0; i < n; i++) {
-        const char* o = b[i];
         int k, sub;
         unsigned ns, j;
-        const char* sb; const char* se;
-        if (!ptr_ok(o)) continue;
-        k = part_kind(*(const unsigned*)o);
-        if (k < 0) continue;                       /* the base class draws nothing */
+        const char* sb;
+        ns = obj_subs(b[i], &k, &sb, &bad);
+        if (bad) s_cSubBad++;
+        if (!ns) continue;
         sub = PART_FMT[k].sprite;
-        sb = *(const char* const*)(o + PO_SUB0);
-        se = *(const char* const*)(o + PO_SUB1);
-        if (!ptr_ok(sb) || !ptr_ok(se) || se <= sb) continue;
-        ns = (unsigned)(se - sb) / (unsigned)PART_FMT[k].stride;
-        /* A SANITY FILTER ON A VALUE, not the safety argument — the argument is
-           that this thread is the one that grows these vectors. What it buys is
-           containment: without it one object with a wild `end` fills the whole
-           table and truncates every layer after it, and with it that object is
-           skipped and the frame is otherwise complete. */
-        if (ns > PART_SUBCAP) { s_cSubBad++; continue; }
         for (j = 0; j < ns; j++) {
             const char* q = sb + (size_t)j * (size_t)PART_FMT[k].stride;
             TAGPU_PK_PART* pe;
-            int X = *(const int*)(q + PART_FMT[k].pos);
-            int A = *(const int*)(q + PART_FMT[k].pos + 4);
-            int Y = *(const int*)(q + PART_FMT[k].pos + 8);
+            int X, A, Y;
+            if (s_partKeep < 0x10000u) {
+                s_partAcc += s_partKeep;
+                if (s_partAcc < 0x10000u) continue;
+                s_partAcc -= 0x10000u;
+            }
             if (s_nPart >= TAGPU_PK_MAX_PART) { s_fxPartTrunc = 1; return; }
+            X = *(const int*)(q + PART_FMT[k].pos);
+            A = *(const int*)(q + PART_FMT[k].pos + 4);
+            Y = *(const int*)(q + PART_FMT[k].pos + 8);
             pe = &s_partScratch[s_nPart];
             pe->x  = X >> 16;
             pe->zp = (Y >> 16) - ((A >> 16) >> 1);
@@ -1237,8 +1293,14 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level)
            and NULLS it in the teardown), which is the refusal after a level
            ends; the vectors inside it are this thread's own */
         layers = *(const char* const*)(ta + OFF_LAYERS);
-        if (ptr_ok(layers))
+        if (ptr_ok(layers)) {
+            unsigned total = count_subs(layers);
+            s_partKeep = total > TAGPU_PK_MAX_PART
+                ? (unsigned)(((unsigned long long)TAGPU_PK_MAX_PART << 16) / total) : 0x10000u;
+            s_partAcc = 0;
+            if (s_partKeep < 0x10000u) s_cPartThin++;
             for (L = 0; L < (int)TAGPU_PK_NLAYER; L++) gather_layer(layers, L);
+        }
     }
     if (want & 1u) {
         const unsigned char* coltab = (const unsigned char*)(ta + OFF_GUICOL);
@@ -2235,11 +2297,11 @@ static void extra(char* buf, unsigned cap, double secs)
         unsigned n = 0;
         while (n < cap && buf[n]) n++;
         _snprintf(buf + n, cap > n ? cap - n : 0,
-                  " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
+                  " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u thin=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
                   " | fog: %dx%d wide=%dx%d/%u refused=%u shade=%u"
                   " | gui: mm=%dx%d/%u refused=%u pic=%dx%d/%u",
                   s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart, s_cPartMax,
-                  s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cLayerBad, s_cSubBad, s_cLhtCopies,
+                  s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartThin, s_cLayerBad, s_cSubBad, s_cLhtCopies,
                   tagpu_fxown_want_fx(), tagpu_fxown_want_sfx(),
                   s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR, s_cFogwSeen,
                   s_cFogRefused, s_cFogshCopies,

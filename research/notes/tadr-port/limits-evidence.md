@@ -239,22 +239,25 @@ dword blindly (`SingleHook`, no expected-bytes check). **Missed sites: none.**
   total, **not** 10 × 401.
 - TADR raises the capacity to 10 × vector (163 840 or 204 800 × 0x4C ≈ 12–15 MB) through an
   inline hook at `0x471C87` that rewrites `[esp]`. This works only because ddraw.dll's `DllMain`
-  runs before the exe's CRT init. INF, from PE loader order.
+  runs before the exe's CRT init; landing 3 writes the `push` operand `0x471C83` instead, and the
+  capacity read back live as 204 800 (MEASURED 2026-09-23).
 
 **VISUAL (DIS).**
 - The emitter range `0x470F00…0x472F00` calls CRT `rand` `0x4E4870` and **never** the sim RNG.
   Emitters are also called from the explosion *draw* `0x420B00`, via `0x421550`, per the engine map.
 - Past the cap the emitter destroys the front object, the "401 steady state".
 
-**Our code that must follow:**
-- `inc/tagpu_engine.h:301` `LAYER_OBJCAP 400`.
-- `src/tagpu_packet_pub.c:1005`: `if (n > LAYER_OBJCAP + 1) { s_cLayerBad++; return; }` **drops the
-  whole layer** once one is larger. That is silent loss of every particle in the layer.
-- `src/tagpu_packet.h:336` `TAGPU_PK_MAX_PART 16384` (sub-particles, total): truncates with
-  `s_fxPartTrunc` at much lower counts than 10 × 20 480 objects.
-- `PART_SUBCAP 4096` (`tagpu_packet_pub.c:930`).
-- Comment drift: `tagpu_packet_pub.c:997` says "0x472071 and twelve more"; the engine map and TADR
-  both have **twenty** sites.
+**Our code that follows it** (landing 3):
+- The publisher's walk stops a layer at `TAGPU_LIM_SFX + 1` (`tagpu_packet_pub.c`), the engine's
+  steady state; past it the layer is counted in `layerbad` and skipped whole, so the bound has to
+  move with the cap. It did: the fixed `LAYER_OBJCAP 400` is gone.
+- `TAGPU_PK_MAX_PART` (sub-particles, total) is 24 576, sized from tier 1's frame of 14 510. A
+  frame that holds more keeps the same share of every layer (`thin=` in the heartbeat) instead of
+  losing the top layers whole; `s_fxPartTrunc` stays as the table's own bound.
+- **A ceiling this pass missed:** the effects pass's vertex buckets (`tagpu_fx.h`) were 65 536
+  each, and tier 1 filled the sprite bucket at the opening volley. The two buckets particles land
+  in are now sized from `TAGPU_PK_MAX_PART`.
+- `PART_SUBCAP 4096` filters one object's sub-particles and did not move.
 
 ## 8. Unit-type IDs 512 → 16000 (`IncreaseUnitTypeLimit`, 17 writes)
 
@@ -379,7 +382,7 @@ the Visuals landing), so this is a store key. Nothing in `tagpu/` or `tools/` me
 | aux records 300→3000 | fullness gates **sim-RNG draws** | per level, relocated to a static | 2 allocators replaced, C re-init | none | none (pointer-followed) | TADR's "visual-only" comment is wrong on count |
 | units/player 500→1500 | **SIM**, host-broadcast | per game | 3 immediates + `0x44CAFE` | **two `maxunits` paths (`0x432646`, `0x436037`), unclamped**; **`0x44CAFE` is a per-type sentinel (101), a real cap after a cancelled restriction menu** | design slots, 15 001 since landing 2; scenario `OFF_LIMIT` | beyond the design point: truncation |
 | pathfinding 1333→66650 | sim, owner-local (INF) | per game (map init) | 1 dword, blind | none | none | CPU per tick |
-| SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | **`LAYER_OBJCAP` drops whole layers**, `MAX_PART` 16384, `PART_SUBCAP` | silent particle loss; about 15 MB |
+| SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | the walk's layer bound (drops whole layers), `MAX_PART`, the effects pass's sprite bucket; all follow since landing 3 | about 15 MB |
 | unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | ctrl-A/B/C (in §B); AI-range `0x10` sites unclassified | `WPN_MAXDEFS 4096` refuses | mods only |
 | weapon IDs 256→4096 | **SIM + wire** | load-time hook | 3 hooks + chat-hijack packet | ID < 0 unguarded (stock) | `OFF_WEAPON0` users; `CRC_weapons` does not cover IDs | needs every peer; off in mainline |
 | composite 600²→1280² | visual, GDI lane only (INF) | per Object3do, static imm. | 1 × 10 bytes, blind | none | none on Vulkan | memory |

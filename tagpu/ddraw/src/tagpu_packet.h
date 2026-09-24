@@ -334,12 +334,14 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_MAX_PROJ    ((unsigned)TAGPU_LIM_PROJ)
 #define TAGPU_PK_MAX_EXPL    ((unsigned)TAGPU_LIM_EXPL)
 #define TAGPU_PK_MAX_DEBRIS  ((unsigned)TAGPU_LIM_PSYS)
-/* The particle table's ceiling. The engine allows 10 layers x 400 objects and
-   every object carries a sub-particle vector it grows as it burns, so no
-   engine count bounds this one: it is OUR cap, with a truncation bit and a
-   counter, and the heartbeat's `partmax` says how close a 200v200 fight came.
-   16 384 entries is 256 KB per slot. */
-#define TAGPU_PK_MAX_PART    16384u
+/* The particle table's ceiling. The engine allows 10 layers of TAGPU_LIM_SFX + 1
+   objects and every object carries a sub-particle vector it grows as it burns,
+   so no engine count bounds this one: it is OUR cap, with a truncation bit and
+   a counter, and the heartbeat's `part=last/max` says how close a fight came.
+   Sized from the raised limits' tier-1 battle (4 x 1500 units): 14 510
+   sub-particles in one frame at the opening volley, and this holds one and a
+   half times that. 24 576 entries is 384 KB per slot. */
+#define TAGPU_PK_MAX_PART    24576u
 
 /* The engine's LHT "lighten" table, TAProgram+0xC8: 32 rows of 256 bytes, the
    explosion flash's colour ramp. Copied whole, like the shade table. */

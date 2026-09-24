@@ -196,6 +196,11 @@ if (0 <= row < numRows(main+0x1424F))                               // +16-row t
     SORT_UNIT_LIST[row].append(unit);   // cursor *(main+0x141FF)[row], count (u16)(main+0x14203)[row]
 ```
 
+The append tests nothing against the row's `cap` slots (`main+0x1424B`): a fuller row runs on
+into the next one's slots, which the readers tolerate, and a row near the end can run past the
+list. We bound it at the end of the allocation — [the engine map](exe-reverse-engineering.html),
+§"Engine defects we patch".
+
 **A unit's sort key is the 16-px map-tile row of its world Z (its feet)** — the
 altitude term is *not* applied. (`0x48BAE0` uses height only for view-culling: it
 caps the projection altitude at the tile height via `Position2GridPlot` →

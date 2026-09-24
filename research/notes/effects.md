@@ -250,13 +250,17 @@ Layer table: `*(main+0x38D77)` = `MEM_Alloc(0xA0)` by `0x471D90`, ten entries of
 `{u8 flag @0, void** begin @4, void** end @8, void** cap @0xC}`; `0x471DE0` destroys every
 object (vtable slot 0 with flag 1) and frees the vectors at game end. An emitter appends
 through `0x4732E0(layer, end, 1, &obj)` (a vector insert with grow-by-copy) after capping
-the layer at **400** objects (the oldest is destroyed and the rest shifted down).
+the layer (the oldest is destroyed and the rest shifted down, so a layer holds the cap plus one):
+**400** in stock, 20 480 under the raised limits (`tagpu_limits.h`).
 
 ### 7.2 The object and its pool
 
-Objects are 76 bytes from the pool at `0x51E610` (`ParticleBase`): `0x470EB0` pops a
+Objects are 76 bytes from the pool at `0x51E610` (`ParticleBase`), whose capacity is fixed
+once a process by the C runtime's static initializer (1000 in stock, 204 800 under the raised
+limits; the engine map, *The raised effect pools*): `0x470EB0` pops a
 pointer from the stack at `+0x14` (`+0x20` = handed out, `+0x1C` = capacity), `0x470ED0`
-pushes it back; `+8/+0xC` hold the vector of all objects. The byte `0x51E608` disables
+pushes it back; `+8/+0xC` hold the vector of the pool's allocated blocks (one: `0x470C10` makes a
+single block, and the destructor `0x470B80` frees each). The byte `0x51E608` disables
 every emitter when set. Layout (`ParticleSystemStruct`):
 
 | Offset | Field |

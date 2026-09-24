@@ -49,7 +49,7 @@ page records an exception.
 
 | Group | What it is | State | Pages |
 |---|---|---|---|
-| A. Raised ceilings | projectiles, explosions, flying pieces, debris, units, pathfinding, particles, sounds, composite | **landings 1–2 of 5 done** 2026-09-23 (the effect pools, the module, the failure report; units 1500, pathfinding, the 15 001-slot design point) | [plan](raised-limits.md), [evidence](limits-evidence.md) |
+| A. Raised ceilings | projectiles, explosions, flying pieces, debris, units, pathfinding, particles, sounds, composite | **landings 1–3 of 5 done** 2026-09-23 (the effect pools, the module, the failure report; units 1500, pathfinding, the 15 001-slot design point; particles 20 480 a layer) | [plan](raised-limits.md), [evidence](limits-evidence.md) |
 | A′. Content IDs | unit-type IDs 512 → 16 000, weapon IDs 256 → 4096 | split out of A; not planned. Weapon IDs need a new network message, and stock writes out of bounds for a weapon with no `ID=` | [evidence §8–9](limits-evidence.md#8-unit-type-ids-512-16000-increaseunittypelimit-17-writes) |
 | B. Simulation bug fixes | ~15 fixes, and the four escalation rules | not planned | [merge exploration §B](../tadr-merge-exploration.md#b-simulation-bug-fixes) |
 | C. New data keys | weapon TDF flags, unit FBI keys, read through the engine's own TDF reader | not planned | [merge exploration §C](../tadr-merge-exploration.md#c-new-data-keys) |

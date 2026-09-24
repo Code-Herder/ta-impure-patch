@@ -29,8 +29,8 @@ Three findings shaped the plan:
 | flying pieces | 100 | 1000, moved to DLL memory | visual (no random-number draw depends on it) | L1 |
 | debris records | 300 | 3000, moved to DLL memory | gates the synced random numbers in `0x421700` | L1 |
 | units per player | default 250, clamp 500 | **1500, default and ceiling** | **simulation**; in a network game the host's value applies | L2 |
-| pathfinding budget | 1333 | 66 650 | simulation, per owner (inferred); CPU per tick | L2 |
-| particles | 400 per layer, 1000 objects | **measured** in the tier-1 battle | visual (C-runtime `rand` only) | L3 |
+| pathfinding budget | 1333 | 66 650 | simulation: a budget a tick, shared among the players; CPU per tick | L2 |
+| particles | 400 per layer, 1000 objects | 20 480 per layer, 204 800 objects, **checked against** the tier-1 battle | visual (C-runtime `rand` only) | L3 |
 | sounds (`MixingBuffers`) | 8 | 128 | audio; a registry value, not a patch | L4 |
 | composite buffer | 600² | 1280² | visual, and only in the GDI lane (Vulkan never shows it) | L4 |
 
@@ -38,8 +38,9 @@ Three findings shaped the plan:
 [the overview](overview.md#the-groups).
 
 **The values** are TADR's, with two exceptions. Units are set to 1500 as both default and ceiling:
-the owner's call ("go all in"), and TADR's shipped `totala.ini` value. Particles are measured,
-because TADR's 20 480 per layer is a 51× jump that nobody has costed against our frame packet.
+the owner's call ("go all in"), and TADR's shipped `totala.ini` value. Particles were measured
+before they were set, because TADR's 20 480 per layer is a 51× jump that nobody had costed against
+our frame packet; tier 1 put one layer at 13 529 objects, so TADR's value stands (landing 3).
 TADR's `EngineLimits.cpp` (the four pools) is one month old (`586d71a`, 2026-08-22); its
 `LimitCrack.cpp` (units, pathfinding, particles, composite) dates from 2014.
 
@@ -187,8 +188,26 @@ the design point 15 001. Done 2026-09-23.** Fifty-two sites now. What it proved,
   the engine and our publisher is not measured, because the publisher's histogram tops out at
   512 µs.
 
-**Landing 3 — particles: the per-layer cap and the object pool.** The value is set from tier 1's
-per-layer peaks plus headroom; `LAYER_OBJCAP`, `TAGPU_PK_MAX_PART` and `PART_SUBCAP` follow.
+**Landing 3 — particles: the per-layer cap and the object pool. Done 2026-09-23.** Seventy-three
+sites now: the twenty layer compares and the pool's capacity. What it proved, by running it:
+- **The headroom rule, and the value it gave.** A cap must hold the largest layer tier 1 reaches
+  with half again to spare. A scratch build at TADR's values put one layer at **13 529 objects**
+  at the opening volley (the pool's used count 13 571); 13 529 × 1.5 = 20 294, inside TADR's
+  20 480, so TADR's value stands. The pool is ten layers' worth, TADR's 204 800, so a layer's
+  own cap is what binds.
+- **Our side follows it.** The publisher walks a layer to `TAGPU_LIM_SFX + 1`; the packet's
+  particle table is 24 576, one and a half times tier 1's 14 510 sub-particles in a frame. The
+  scratch run showed a third ceiling nobody had listed: the effects pass's sprite bucket filled
+  (65 532 vertices) and refused 169 quads, so the two buckets particles land in are now sized from
+  the particle table. `PART_SUBCAP`, a filter on one object's sub-particles, did not need to move.
+- **Past the table, thinned rather than cut** (landing 3's review): the walk runs bottom to top, so
+  a full table used to lose the top layers whole, and the raise makes a full table reachable. The
+  publisher now counts first and keeps the same share of every layer. With the table forced to
+  2048 in tier 1: 670 thinned frames, never more than 2047 kept, nothing truncated, every layer
+  present in proportion.
+- **On the landing's build**, the same fight: 73 sites installed, the pool's capacity read back at
+  204 800, 15 964 sub-particles in a frame with nothing truncated, no layer refused, no vertex
+  dropped, the smoke drawn, and the simulation at 60 ticks a second.
 
 **Landing 4 — `MixingBuffers` 128 and the composite buffer.** `MixingBuffers` as an `impure.cfg`
 key (read at `0x42FE4F` inside the registry loader `0x42F9A0`, which the store already observes);
@@ -206,7 +225,6 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
 - Whether a refused remote projectile changes damage on that peer
   ([evidence §1](limits-evidence.md#1-projectiles-300-3000-enginelimitscpp-addprojectilepatches)).
   Landing 1's two-peer check covered the same-build case, which is the contract.
-- The particle headroom rule: decided in L3, from the data.
 - The explosion tick's compaction near its 3000-record cap: tier 1 reached 1042 explosions without
   a stall; a denser fight could still find one.
 - How the game thread's frame at 6000 units splits between the engine and our publisher.

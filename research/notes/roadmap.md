@@ -3728,7 +3728,19 @@ kept (the flying pieces' byte ring is the one place it cannot).
 
 | Gate | Status | Result |
 |---|---|---|
-| A — Raised ceilings | ◐ **landing 2 of 5, 2026-09-23** — [the plan](tadr-port/raised-limits.html) | **Exit:** ten players at 1500 units each in one network game, every raised pool past its stock cap on every peer, and the peers agreeing when paused. Landing 1 raised the four effect pools and built the module, the failure report and the stock-limits build; landing 2 raised units to 1500 a player (default and ceiling), clamped both `maxunits` keys and the host's limit, closed the restriction menu's hidden 101-per-type cap (Cancel's), raised the pathfinder's budget and moved the render design point to 15 001, proved by a four-player skirmish of 6000 units ([gpu-status §2.6b](gpu-status.html)). **Not covered by landings 1–2:** particles, sounds and the composite buffer (landings 3–4), the ten-player proof (landing 5), and how the game thread's frame at 6000 units splits between the engine and our publisher |
+| A — Raised ceilings | ◐ **landing 3 of 5, 2026-09-23** — [the plan](tadr-port/raised-limits.html) | **Exit:** ten players at 1500 units each in one network game, every raised pool past its stock cap on every peer, and the peers agreeing when paused. Landing 1 raised the four effect pools and built the module, the failure report and the stock-limits build; landing 2 raised units to 1500 a player (default and ceiling), clamped both `maxunits` keys and the host's limit, closed the restriction menu's hidden 101-per-type cap (Cancel's), raised the pathfinder's budget and moved the render design point to 15 001, proved by a four-player skirmish of 6000 units; landing 3 raised the particle layers to 20 480 and their pool to 204 800, which the same battle reaches 13 529 of in one layer, and sized our particle table and effect buckets to follow ([gpu-status §2.6b](gpu-status.html)). **Not covered by landings 1–3:** sounds and the composite buffer (landing 4), the ten-player proof (landing 5), and how the game thread's frame at 6000 units splits between the engine and our publisher |
+
+## The stock engine's own defects (2026-09-23)
+
+Two defects of the retail image itself, found by the camera work's audit of every eye reader and
+patched in `tagpu_patches.c` on every launch, with no switch ([gpu-status](gpu-status.html) §2.6c).
+The register is [binary patches](binary-patches.html) §"Stock engine defects we patch", and the
+engine map has the disassembly.
+
+| Defect | Status | Result |
+|---|---|---|
+| `DrawGameScreen`'s unit sort writes past its buffer (`0x469807`) | ● done 2026-09-23 | the append is bounded at the allocation's end. Before: 82 unit pointers past the end on every frame at zoom 0.5 with `vpwide`. After: none, and 0 px from stock at 1×. A per-row bound was built first and dropped, because it erased 7 066 px that stock draws |
+| `GetGridPosFeature 0x421E60` reads a NULL plot | ● done 2026-09-23 | a NULL plot answers "no feature". Stock reaches it on a map shorter than the viewport plus 128 px, where the camera clamp has no valid eye [INFERRED]; no stock skirmish map is that short at retail resolutions, and on Lava Run at 1920×1440 the engine's terrain pass faulted first [MEASURED]. The resurrect order's lookup at `0x40514A` is not audited. The access violation at `0x421E64` reproduced with our pointer clamp off and is gone with the guard |
 
 ## Shipping — the build people can download (2026-09-08)
 
