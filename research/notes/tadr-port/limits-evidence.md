@@ -356,11 +356,21 @@ bit-packs the type into as many bits as the count needs (`main+0x14393`, set at 
 needs 9, 16 384 needs 15. The packet stays under 0x200 bytes (`0x48B7F6`), so fewer units fit in one
 (INF).
 
-**A separate stock overflow: the build list.** Each builder's `[CANBUILD]` entries
-(`canbuild%d`) are read into a 0x3C-byte heap block the engine names `TEMP UTYPE LIST`
-(`0x42D971`, through `0x4D83B0`), 30 `u16` IDs. The append loop `0x42DA46..0x42DA99` stops only
-when a key is missing, so any builder with more than 30 entries overruns it. It depends on the
-length of the list, not on the number of types.
+**A separate stock overflow: the build list.** Each builder's entries under `[CANBUILD]`
+(`canbuild%d`; the section is `sidedata.tdf`'s, INF from the names) are read into one shared
+0x3C-byte heap block the engine names `TEMP UTYPE LIST` (`0x42D971`, through `0x4D83B0`), 30 `u16`
+IDs.
+
+- The append loop `0x42DA46..0x42DA99` stops only when a key is missing.
+- The builder's own copy is a fresh 0x3C-byte block (`0x42DACA`, named `CANBUILD %s` after the
+  unit) at def `+0x156`. It is filled by a `rep movs` of exactly 15 dwords, with the real count at
+  `+0x152`.
+- The shared block is freed after the last builder (`0x42DB07`).
+- **Readers:** `0x4894FD..0x48951B` loops to the count at `+0x152`. The others (`0x4094B6`,
+  `0x40ABAD`, `0x40BDDB`, `0x4143F9`, `0x41B8F7`, `0x43E828`, `0x43F7A0`, `0x468604`, `0x46887B`,
+  `0x48CCBC..0x48CCE4`) are not classified yet.
+- So a builder with more than 30 entries overruns the shared block and makes the counted reader
+  read past its own copy. It depends on the length of the list, not on the number of types.
 
 **SIM-relevant as content** (AI build targeting, categories). Static immediates, so any time before
 use is fine.

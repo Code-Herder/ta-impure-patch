@@ -58,13 +58,21 @@ covers them.
 - `mask_has` in `tagpu_weapons.c` reads `mask[type >> 5]` for a `u16` type taken from the unit's
   `+0xA6` with no bound. It is bounded by the mask's capacity.
 - `WPN_MAXDEFS` (4096) follows the ceiling. Today a type past it silently keeps three weapons.
-- **The build list, fixed beyond TADR.** At game load, each builder's `[CANBUILD]` entries
-  (`canbuild1..N`) go into a 0x3C-byte heap block the engine calls `TEMP UTYPE LIST`, which holds
-  30 `u16` IDs (`0x42D971`). The append loop (`0x42DA46..0x42DA99`) stops only when a key is
-  missing. Any builder with more than 30 entries overruns the block. This is a stock defect, but
-  mods with thousands of types are the ones with long lists. The fix is always on. What happens
-  past 30 entries is settled once the list's readers have been disassembled: either the block holds
-  the list's real length, or the extra entries are refused with a log line.
+- **The build list, fixed beyond TADR.** This is the list of what each builder may build: the
+  `canbuild1..N` keys of a `[CANBUILD]` section, which is `sidedata.tdf`'s **[INFERRED** from the
+  section and key names; the file open was not traced**]**. The engine reads every builder's
+  entries into one shared 0x3C-byte heap block it names `TEMP UTYPE LIST`, which holds 30 `u16`
+  IDs (`0x42D971`). The append loop (`0x42DA46..0x42DA99`) stops only when a key is missing. Each
+  builder then gets its own 0x3C-byte copy of exactly 30 entries at def `+0x156` (`0x42DACA`,
+  `rep movs` of 15 dwords), with the real count at `+0x152`, and `0x4894FD` loops to that count.
+  So a builder with more than 30 entries overruns the shared block and makes readers read past
+  its own copy. This is a stock defect, but mods with thousands of types are the ones with long
+  lists. The fix is always on: **the builder keeps its whole list [DECIDED 2026-09-24]**. The
+  shared block grows as it fills, and each copy holds `max(30, count)` entries: every reader that
+  loops to the count stays inside the list, and one that assumes stock's 30 still finds them. A
+  builder with 30 entries or fewer, every stock builder, gets stock's exact block. The readers not
+  yet classified (evidence §8) are read before the landing writes this. Clamping the count to 30 was rejected: a mod's builder, and the AI,
+  would silently lose every option past the 30th.
 
 ### The unit pass's caches
 
@@ -117,8 +125,13 @@ and `0x0F` do not change.
   each other's projectiles. That makes the match exact by construction, and stock behaviour stays
   exact below 256. The owner rejected an in-place alternative, which put the high bits in the
   target's lowest fraction bits: it made two targets closer than 1/4096 px match, for every weapon.
-  **The carrier is open** until the dispatcher is read: a message type of ours if its size table has
-  a free entry, otherwise a tagged chat message, the way TADR carries its `0x0D` extension.
+  **The companion travels as a tagged `0x05` chat message [DECIDED 2026-09-24]**, the way TADR
+  carries its `0x0D` extension. The engine, TADR's demo recorder and TAF's replay parser all split a
+  packet into messages by each type's known length, so a type of our own would cost any of them
+  the rest of the packet ([networking](../networking-lobbies.md)). With a chat message, a game on
+  our DLL still records and replays. It costs a 65-byte message instead of 14, and only when an
+  interceptor with an ID of 256 or more fires. The chat display skips our tagged messages, so they
+  never show as empty lines.
 
 **Fixed beyond TADR, in the same landing.** We rewrite both ends of these messages anyway:
 
@@ -153,7 +166,8 @@ and `0x0F` do not change.
   - 16 383 real types, the ceiling: a type with an ID above 512 works in every mask reader —
     Ctrl-letter selection, an AI build line and Ctrl-Z.
   - 16 384 real types: the dialog and the exit, with nothing written.
-- A builder with 31 and more build entries.
+- A builder with 31 and more build entries: every entry in its menu and its AI list, with nothing
+  read past the list.
 - A two-peer network game on the synthetic mod, building and fighting with types above 512.
 - Memory and load time are measured at the ceiling. Every def loads its own model (`0x42D766`, no
   sharing). The estimate is 100–250 MB at 16 000 types in a 32-bit process, and it is untested.
@@ -179,7 +193,8 @@ can expose the caches, then A′2, then A′3.
 
 ## Open questions
 
-- The `0x0E` companion's carrier (above).
+- The chat tag's form, and where the chat display is told to skip it. The landing reads the chat
+  receive path first.
 - How a saved game stores a unit's type: by name or by ID.
 - The unit-sync handshake with 16 383 defs sends one 14-byte subpacket per def per peer. How long a
   lobby takes is unmeasured.
