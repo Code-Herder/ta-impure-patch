@@ -48,7 +48,7 @@
    takes the eye out of the expression; what is left moves only when the video
    mode does, which stock TA can only do at game entry (resolution.md §6) and
    this fork does across its game -> shell -> game cycles. */
-#define FOGW_MARGIN  256           /* world px of slack on each side (below)   */
+#define FOGW_MARGIN  TAGPU_GATHER_MARGIN   /* the gathers' slack (tagpu_zoom.h) */
 
 static void flog(const char* s)
 {
@@ -331,53 +331,27 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
    game thread can read is the one the render thread published on the previous
    frame, so a window cut to that level would be a frame behind every outward
    tween — and one frame of the tween can cross the whole range. Sizing for the
-   whole range means no step of any lever can outrun the grid, at the cost of a
+   whole range means no change of level can outrun the grid, at the cost of a
    window that is 16x the 1x viewport's area while any zoom-out is live.
 
-   A STEPPED EYE: WHAT IT COVERS AND WHAT IT DOES NOT. The window is centred
-   on `eye + vw/2` for the eye it was built at, with half-width
-   `(vw/2)/zmin + 32 + MARGIN`. A frame drawn at level `z` from an eye `U`
-   ahead of that one (the cursor anchor's steps the game thread has not
-   applied yet) shows half-width `(vw/2)/z` about a centre `U` away, so it
-   is covered while
-
-       |U| + (vw/2)/z  <=  (vw/2)/zmin + 32 + MARGIN
-
-   and past it a strip of `|U| + (vw/2)/z - (vw/2)/zmin - 32 - MARGIN` on the
-   leading side falls outside the grid (per axis; vh for y).
-     A GESTURE THAT ONLY ZOOMS IN IS ALWAYS COVERED: each notch's term is at
-   most `(vw/2)` times its drop in distance and the eye and the distance are
-   lerped along the same ease, so `|U| <= (vw/2)(1/z_built - 1/z)` and
-   `|U| + (vw/2)/z <= (vw/2)/z_built` — the view is a subset of the one the
-   grid was built for. A gesture that only zooms out adds no displacement.
-     A GESTURE THAT REVERSES IS NOT, AND WHAT IT LEAVES IS A VISUAL-ONLY
-   RESIDUAL, stated here and not closed.
-     Which gesture: a notch out that cuts the tween of a notch in whose
-   displacement is still owed — the owed displacement is paid out along the
-   tween that follows, zoom-outs included (tagpu_zoom.c, "the wheel") — so
-   `|U|` can hold the zoom-in's displacement while `1/z` climbs back.
-     Which state: a frame drawn from an eye `U` ahead of the one this window
-   was built about, `U` being the anchor steps the render thread has posted
-   and the game thread has not yet applied.
-     The exact bound: per axis, a strip of
-   `max(0, |U| + (vw/2)/z - (vw/2)/zmin - 32 - MARGIN)` on the leading side
-   (vh for y). `|U|` is at most the unapplied part of the gesture's own
-   displacement, and that is at most `(vw/2)(1/zmin - 1/zmax)`, so the strip
-   is at most `3.875 (vw/2) - 288`: 1448 px at vw 896, 3184 at vw 1792.
-   Nothing but the gesture bounds `|U|`, so no frame count or stall length is
-   part of the bound.
-     What is drawn wrong: in that strip only the FOG TINT — the native pass
-   samples the grid's border entry smeared outward (taFog's clamp), so the
-   strip takes the lit, fogged or unmapped state of the grid's edge instead
-   of the map's there. Terrain, features and units are drawn from their own
-   data and are right. The strip is gone on the first frame whose eye this
-   window covers: the game thread applies the posted steps and the next build
-   is about the new eye.
-     No safety claim rests on it: every read of the grid is inside its
-   allocation for any `U` and any `z`, because the sampler clamps its index
-   into the grid — a bound on the index, not on the timing. Covering the
-   strip by construction would mean a window sized for `|U|max` on top of the
-   view, about four times the area, and the grid rides the frame packet. */
+   WHAT IT COVERS. The window is the native pass's gather slab at the floor —
+   the effective span tagpu_zoom_gather_span(v, zmin), centred on the 1x
+   viewport's centre as the pass centres it, plus FOGW_MARGIN, the slack the
+   pass accepts anchors in — about the eye of this build, rounded outward to
+   whole cells with the spare column and row the builder needs. At any level
+   the pass's slab is no wider, so the eye of this build is one the render
+   thread may draw from at every level. An eye AHEAD of this build — the
+   cursor anchor's steps the game thread has not applied yet, or the scenario
+   camera's jump after the fog site — is the render thread's to bound: the fog
+   bound in tagpu_zoom.c clamps the eye it draws from until the slab lies
+   inside the grid the packet carries, so no fog sample of any frame lands
+   past this window. A gesture that only zooms in is never held by it: each
+   notch's term is at most `(vw/2)` times its drop in distance and the eye and
+   the distance are lerped along the same ease, so `|U| <= (vw/2)(1/z_built -
+   1/z)` and the view stays a subset of the one before it; a gesture that only
+   zooms out adds no displacement. What it holds is a reversal (a notch out
+   that cuts a notch in whose displacement is still owed) that the game thread
+   has not caught up with, for as long as that lasts. */
 static int fogw_window(char* ta, int vw, int vh,
                        int* col0, int* row0, int* cols, int* rows)
 {
@@ -390,23 +364,18 @@ static int fogw_window(char* ta, int vw, int vh,
     eyeX = *(const int*)(ta + OFF_EYEX);
     eyeY = *(const int*)(ta + OFF_EYEY);
 
-    /* the same span the native pass gathers over (tagpu_native.c), at the
-       widest level the levers reach */
-    evw = (int)((float)vw / zmin) + 64;
-    evh = (int)((float)vh / zmin) + 64;
-    /* No span clamp: this expression IS what the native pass gathers over,
-       and a clamp would only make this grid narrower than the view it exists
-       to cover. The one bound is the allocated set below, and since it is
-       SIZED from this expression (fogw_capacity) it is not a limit on the
-       screen either. */
-    if (evw < vw) evw = vw;
-    if (evh < vh) evh = vh;
+    /* the span the native pass gathers over, at the widest level the levers
+       reach. No further clamp: a clamp would only make this grid narrower
+       than the slab it exists to cover. The one bound is the allocated set
+       below, and since it is SIZED from this expression (fogw_capacity) it is
+       not a limit on the screen either. */
+    evw = tagpu_zoom_gather_span(vw, zmin);
+    evh = tagpu_zoom_gather_span(vh, zmin);
 
     /* World rect, centred on the 1x viewport's centre exactly as the pass
-       centres its own effective rect, plus FOGW_MARGIN: the eye can move
-       between this build and the frames that read it (the render thread is not
-       lock-stepped to the game loop), and the margin is what absorbs that
-       rather than leaving a bare strip at the leading edge. */
+       centres its own effective rect, plus FOGW_MARGIN, the slack it accepts
+       anchors in: the slab the render thread's fog bound keeps every frame
+       inside. */
     x0 = eyeX - (evw - vw) / 2 - FOGW_MARGIN;
     y0 = eyeY - (evh - vh) / 2 - FOGW_MARGIN;
     x1 = x0 + evw + 2 * FOGW_MARGIN;
@@ -428,8 +397,9 @@ static int fogw_window(char* ta, int vw, int vh,
        view's centre keeps the cover. fogw_capacity sized the set for this same
        viewport at the worst residue and fogw_alloc ran first, so in the normal
        case this is inert — it bites only when a malloc failed and we are still
-       running on a smaller set, where a centred window with a smeared outer
-       ring beats no wide grid at all. */
+       running on a smaller set. A zoomed-out slab can then be wider than the
+       grid: the fog bound centres it and the native pass counts the frame
+       (`out=`), which beats no wide grid at all. */
     if (*cols > s_capCols) { *col0 += (*cols - s_capCols) / 2; *cols = s_capCols; }
     if (*rows > s_capRows) { *row0 += (*rows - s_capRows) / 2; *rows = s_capRows; }
     return 1;
@@ -552,8 +522,8 @@ static int fogw_capacity(int vw, int vh, int* capCols, int* capRows)
     float zmin = tagpu_zoom_min();
 
     if (zmin < 0.05f || zmin > 1.0f) return 0;
-    evw = (int)((float)vw / zmin) + 64;  if (evw < vw) evw = vw;
-    evh = (int)((float)vh / zmin) + 64;  if (evh < vh) evh = vh;
+    evw = tagpu_zoom_gather_span(vw, zmin);
+    evh = tagpu_zoom_gather_span(vh, zmin);
     *capCols = (evw + 2 * FOGW_MARGIN + 31 + 31) / 32 + 2;
     *capRows = (evh + 2 * FOGW_MARGIN + 31 + 31) / 32 + 2;
     return (*capCols >= 3 && *capRows >= 3);

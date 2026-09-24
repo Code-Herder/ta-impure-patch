@@ -524,7 +524,7 @@ render thread reading it without a lock.
 
 ```c
 evw   = vw / zmin + 64;                      /* the span the native pass gathers over */
-W     = evw + 2 * FOGW_MARGIN;               /* plus the slack for eye movement       */
+W     = evw + 2 * FOGW_MARGIN;               /* plus the gathers' anchor slack        */
 cols  = ceil((W + r) / 32) + 2;              /* r = (x0 - 16) mod 32 — see below      */
 ```
 

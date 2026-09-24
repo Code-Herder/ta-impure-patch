@@ -1381,9 +1381,9 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 
    THE ORIGIN IS TAKEN HERE, from the eye this packet carries, because that is
    the eye the grid was built at, not the render thread's PREDICTED eye (the
-   packet's plus a cursor-anchor step not yet applied). The render thread takes
-   the wide grid whenever anything is unacknowledged; the origin is right
-   either way.
+   packet's plus a cursor-anchor step not yet applied). The render thread
+   bounds that eye by the grids' own spans (tagpu_zoom.c, the fog bound), so
+   the origin is right either way.
 
    THE WIDE ONE is tagpu_fogwide's, built in `terr_fogtick` during THIS draw,
    on this thread. */

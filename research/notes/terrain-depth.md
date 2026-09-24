@@ -1090,7 +1090,9 @@ Two faults, and only both together made it visible.
    viewport size the allocation accepts and every eye** — worst case 1 px, at a 64-px viewport
    with `eye % 32 == 15`, and 16 px for the negative eyes the widened camera range produces
    (enumerated over `0x483BB8`'s and `0x4843C0`'s own arithmetic; engine map, §"The screen fog
-   grid") — while the wide grid keeps the view a whole `FOGW_MARGIN` inside.
+   grid") — while the wide grid spans the gathers' whole slab, `TAGPU_GATHER_MARGIN` past the view
+   on each side, for any eye a frame is drawn from ([GPU status](gpu-status.html) §2.3, the fog
+   bound on the drawn eye).
 
 **After:** 0 failure frames of 1800 unmapped (max 32 green px in any frame) and 0 of 1561 mapped
 (max **0**), `bare=0` on every heartbeat, and the replication oracle still `differ=0` over
@@ -1134,8 +1136,8 @@ own fog draw there is no one to ask, so the eye is not stepped at all.
 
 **The CPU twin was NOT brought along.** `tagpu_fog_at` (`tagpu_fx.c`) still bounds on
 `gx >= cols`, so the band `[cols−1, cols)` interpolates the same unwritten corners the shader now
-avoids. It is unreachable through the wide grid — that band is ≥ 320 px outside the view
-(`FOGW_MARGIN` plus the window's two spare columns) against a gather that reaches 256 — and
+avoids. It is unreachable through the wide grid — the fog bound on the drawn eye keeps the
+gathers' whole slab inside `[0, cols − 1]` ([GPU status](gpu-status.html) §2.3) — and
 through the engine's grid at zoom ≥ 1 it is reachable for an anchor 1–32 px past the viewport
 edge, where both available answers are the same "no fog" and tightening the bound would change
 only the argument. Recorded rather than changed.

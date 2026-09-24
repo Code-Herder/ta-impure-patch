@@ -12,6 +12,13 @@
 #define TAGPU_ZOOM_MIN  0.25f
 #define TAGPU_ZOOM_MAX  8.0f
 
+/* THE GATHERS' SLACK, in world px: tagpu_native.c accepts a unit, wreck or
+   ghost anchor up to this far outside its effective rect
+   (tagpu_zoom_gather_span), and tagpu_fogwide.c builds the wide fog grid with
+   the same margin around the same rect at the zoom floor. One number, so the
+   grid cannot come out narrower than the slab the gathers test against it. */
+#define TAGPU_GATHER_MARGIN 256
+
 struct TAGPU_PACKET;
 struct TAGPU_CMD;
 
@@ -124,21 +131,36 @@ float tagpu_zoom_lever(void);
 
 /* The eye every pass draws this frame from: the packet's eye plus the cursor
    anchor's deltas the game thread has not acknowledged yet, clamped to the
-   camera range in force. Exact once the packet catches up (the next in-play
-   draw applies the same deltas), so a wheel notch is drawn on the frame it
-   happens and does not wobble. Returns 0 — and leaves the outputs alone —
-   when there is no in-game packet: then there is no world to draw. */
+   camera range in force and then into the fog grid this frame samples (the
+   fog bound, tagpu_zoom.c). Exact once the packet catches up (the next
+   in-play draw applies the same deltas), so a wheel notch is drawn on the
+   frame it happens and does not wobble. Returns 0 — and leaves the outputs
+   alone — when there is no in-game packet: then there is no world to draw. */
 int   tagpu_zoom_predicted_eye(int* eyeX, int* eyeY);
 
-/* 1 when this frame must take the WIDE fog grid (tagpu_fogwide), built every
-   tick from the live eye with a margin around it, over the engine's own: the
-   level this frame draws with is below 1 (tagpu_zoom_lever(), not the
-   published level, whose `live` is raised after the choice), where the
-   engine's grid cannot span the view; or the
-   predicted eye is ahead of the packet's, and the engine's grid spans the
-   packet's; or the packet's eye is off the engine's own range, where the
-   engine places its border completions off the map. Render thread. */
+/* 1 when this frame samples the WIDE fog grid (tagpu_fogwide) rather than the
+   engine's, decided with the predicted eye by tagpu_zoom_read_lever(). The
+   engine's is taken only where it spans this frame's view: the level this
+   frame draws with (tagpu_zoom_lever()) is at least 1, the packet's eye is on
+   the engine's own range (off it the engine places its border completions
+   off the map), and the 1x rect about the predicted eye lies in the grid's
+   cells — tested on the packet's own numbers. Otherwise the wide one, with
+   the predicted eye already clamped so the gathers' whole slab lies inside
+   it. Render thread. */
 int   tagpu_zoom_wide_fog(void);
+
+/* The span a pass gathers over along one axis, for the 1x viewport's extent
+   `v` at level `z`: v/z + 64 below 1 (the 64 is the partial cells at the
+   edge), never more than the zoom floor's and never less than v. The native
+   pass takes it and may only shorten it (its terrain reservation);
+   tagpu_fogwide.c sizes its window with it at the floor; the fog bound
+   clamps the predicted eye with it. One expression for all three. */
+int   tagpu_zoom_gather_span(int v, float z);
+
+/* The fog bound's cost: frames whose predicted eye it held back, and the
+   largest hold in world px along either axis, since the DLL loaded. For the
+   native pass's heartbeat. Render thread. */
+void  tagpu_zoom_fog_held(unsigned* frames, int* maxPx);
 
 /* A mouse message on its way into the engine, offered to the wheel first.
    Returns 1 when the wheel took it — the caller must then NOT pass it on.

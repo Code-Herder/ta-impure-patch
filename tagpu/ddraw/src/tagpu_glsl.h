@@ -67,7 +67,8 @@
    and row for EVERY viewport size the allocation accepts (64..16384) and every
    eye — worst case one pixel, at a 64-px viewport with eye%32 == 15, and 16 px
    for the negative eyes the camera's centre range produces. The wide grid
-   keeps the view a whole FOGW_MARGIN inside. */
+   spans the gathers' whole slab, a TAGPU_GATHER_MARGIN past the view on each
+   side, for any eye the frame is drawn from (the fog bound, tagpu_zoom.c). */
 #define TAGPU_GLSL_FOG_UNIFORMS \
     "uniform sampler2D uFogGrid;\n"   /* RG8 corner masks, r = b0, g = b1  */ \
     "uniform sampler2D uFogLUT;\n"    /* 256x1 palette remap for the grey  */ \

@@ -744,24 +744,58 @@ Two claims the review disproved, corrected above and in
 [exe reverse engineering](exe-reverse-engineering.html): the lowest level a single ease step can
 cross 1.0 from is **0.5 exactly**, not 0.489, and the engine grid's slack collapses to the bare
 32 px at 1×, not to zero. `tagpu_fogwide.c`'s coverage derivation holds for a gesture that only
-zooms in, and not for one that reverses (below).
+zooms in; one that reverses is held by the fog bound (below).
 
-**A gesture that reverses leaves
-a visual-only residual, stated and not closed.** *Which gesture:* a notch out that cuts the tween
-of a notch in whose displacement is still owed — it is paid out along the tween that follows,
-zoom-outs included, so `|U|` can hold it while `1/z` climbs back. *Which state:* a frame drawn from
-an eye `U` ahead of the one the grid was built about, `U` the anchor steps posted and not yet
-applied. *The bound:* per axis a strip of `max(0, |U| + (vw/2)/z − (vw/2)/zmin − 32 − MARGIN)` on
-the leading side; `|U|` is at most the gesture's own unapplied displacement, at most
-`(vw/2)(1/zmin − 1/zmax)`, so the strip is at most `3.875·(vw/2) − 288` — 1448 px at vw 896, 3184
-at vw 1792 (the landing review's example, a 100 ms stall at 0.25× with a flick in and out, puts a
-1792-px view's edge at 4794 against 3872). Nothing but the gesture bounds `|U|`, so no frame count
-is part of the bound. *What is drawn wrong:* only the fog tint in the strip — the grid's border
-entry smeared outward (taFog clamps its index to the grid) — while terrain, features and units are
-right; the strip is gone on the first frame whose eye the grid covers. **No safety claim rests on
-it**: the sampler's index clamp keeps every read inside the grid for any `U` and `z`. Closing it by
-construction would need a window about four times the area, riding the frame packet; it is not
-closed. The owner has it to rule on.** *Which gesture:* a notch out that cuts the tween
+**The fog bound on the drawn eye [2026-09-24].** *The invariant:* every fog sample a frame takes
+lies inside the grid it samples from — every drawn pixel's (`taFog`, at the world point under it)
+and, on the wide grid, every point of the slab the unit, wreck and ghost gathers test their anchors
+against (`tagpu_fog_at`) — for any gesture, reversal or lag. *The bound:* `predict()` in
+`tagpu_zoom.c` chooses the grid together with the eye the frame is drawn from, from the packet's
+own numbers. The engine's grid is taken where it spans the view: level ≥ 1, the packet's eye on the
+engine's range, and the 1× rect about the drawn eye inside its cells `[org, org + 32·cols)` (its
+last column read at its written left corners, `tagpu_glsl.h`). Otherwise the wide grid, and the
+drawn eye `e` is clamped per axis until the slab `[e + (vw − S)/2 − M, e + (vw − S)/2 + S + M]`
+(S = `tagpu_zoom_gather_span(vw, z)`, M = `TAGPU_GATHER_MARGIN`, 256) lies inside
+`[org, org + 32·(cols − 1)]`, where both samplers read four written corners. The window is that
+slab at the floor about the eye it was built at (`fogw_window`, the same two numbers), so the
+interval always holds the build eye and the clamp is the identity for a gesture that only zooms
+in; what it holds back is a reversal the game thread has not applied yet, for as long as that
+lasts. It is empty only for a grid trimmed by a failed allocation, where the slab is centred and
+the frame counted. The native heartbeat carries the witness —
+`fog=wide|engine bare=N out=N held=N/Mpx`: `out` counts frames whose domain is not inside the grid
+they took, checked on the pass's own numbers, and must read 0; `held` counts frames the bound held
+back and the largest hold.
+
+*Why a bound on the eye and not a bigger grid.* A grid spanning the whole reachable range is the
+map plus half a view each side: on Seven Islands, the largest stock map (20480² px), ~547 k cells
+and ~1.1 MB a packet at 1024x768, ~663 k and ~1.3 MB at 1080p, ~1 M and ~2 MB at 4K, rebuilt at
+~2.5 ns a cell — 1.4, 1.65 and 2.5 ms of game-thread time per rebuild, at the sim tick rate
+whenever anything moves. A window sized for the largest unapplied displacement is about four
+times today's area, ~0.35 ms and ~280 KB at 1080p, ~1.4 ms at 4K. The bound costs a few integer
+operations per frame and no byte of the packet.
+
+*Measured 2026-09-24* on Two Continents at 1024x768, `+3` then `−3` and `−3` then `+3` notches in
+one tween (one `keys` call), aimed at the viewport corner facing the interior, at the NW and SE
+corners of the camera's range and mid-map (5000, 6000), from 1× and from the floor. With the game
+thread's apply forced 200 ms behind (a diagnostic build, not committed): **before** — the old
+choice with no bound — `out` 7, 12 and 17 frames on the three `+3 −3` gestures from the floor, the
+slab past the grid by up to 432, 514 and 427 world px (up to 226 px of drawn view on the leading
+side, 57 screen px at 0.265×); **after** `out` 0 on every gesture, the eye held for 15, 11 and 7
+frames by up to 259, 515 and 457 world px. Without the forced lag (the shipped build) `out` 0 and
+the three floor `+3 −3` gestures held 17 frames in all, by up to 189 world px (~49 screen px at
+0.26×): the prediction runs one posted step ahead of the game thread by design, and at the floor
+the slab has no slack beyond the grid's own rounding, so the step of the out-tween's first frames
+waits one frame for the grid. From 1×, and every `−3 +3`, held 0. The cost of the bound, then, is
+a one-frame lag of the pan against the zoom during a reversal near the floor, up to ~50 screen px
+at 1024x768, and on a held frame a click is mapped through the eye the game thread applies, up to
+the hold from where it is drawn; a lead margin on the wide window (a fraction of the viewport per side, ~20 % more
+cells at vw/4) would absorb it at that cost, and is not built.
+
+A level that starts below 1× has no wide grid until our terrain pass owns the ground (the wide
+grid is built at the fog site, which is ours only then): measured after a game → shell → game
+cycle at 0.5×, `bare` 15 — 14 frames with the terrain request still down, 13 of them before the
+new 1024x768 swapchain existed, and 1 on the request's round trip — then 0 for the rest of the
+level. Those frames draw the engine's own terrain and fog overlay.** *Which gesture:* a notch out that cuts the tween
 of a notch in whose displacement is still owed — it is paid out along the tween that follows,
 zoom-outs included, so `|U|` can hold it while `1/z` climbs back. *Which state:* a frame drawn from
 an eye `U` ahead of the one the grid was built about, `U` the anchor steps posted and not yet
@@ -1047,7 +1081,8 @@ the view centre does not.
 first and last-but-one rows and columns, which straddle the map edge only while the eye is in
 `[0, extent − W]` (engine map, "The four border completions"). The native pass therefore draws from
 `fogwide`'s grid on any frame whose packet eye is off that range, as well as below 1× and on a
-frame whose drawn eye is ahead of the packet's (`tagpu_zoom_wide_fog`).
+frame whose drawn eye the engine's grid does not span — the fog bound (§2.3, "The fog bound on
+the drawn eye").
 
 **The scroll poll's right edge at zoom > 1** fires because the poll reads the true pointer
 (§2.3d): TA's poll (`0x41CE90`) fires on an **equality on the outermost pixel** — `x == 0`,
@@ -2930,9 +2965,9 @@ at every steady state. The step is pre-clamped on the render side against the sa
 (`range_pk`, the packet's `vp` and `map_pxw/h`, the same fields `zoom_eye_range` reads), so the
 game thread's clamp fires only when the engine itself scrolled the eye to the edge in between,
 and then the packet reconciles it like any other engine camera move. A frame whose predicted eye
-is ahead of the packet's takes the WIDE fog grid (`tagpu_zoom_wide_fog`), for the reason the old
-handshake did: the engine's grid spans the packet's eye and its slack is 32 px at 1×. So does a
-frame whose packet eye is off the engine's own range (§2.3c, "The fog").
+the engine's grid does not span takes the WIDE fog grid, with the eye bounded into it (§2.3, "The
+fog bound on the drawn eye"): the engine's grid spans the packet's eye and its slack is 32 px at
+1×. So does a frame whose packet eye is off the engine's own range (§2.3c, "The fog").
 
 **What went.** The render thread's stores of the eye, the target, the minimap rect, the viewport
 rect and `ScrollSpeed`; the fog request/ack pair (`tagpu_zoom_fog_pending/seq/ack`) and
@@ -3006,8 +3041,8 @@ at its source now); a notch in a level's last frames could be applied to the nex
 (the command apply's **epoch**: bumped at the level end with the applied sum reset, carried in
 the packet, echoed in the record — an older epoch's record carries no delta, and the render
 thread resets its sum when it sees the new one); the wide-fog gate missed the case where the
-range walks the eye home ahead of the packet (`s_unacked` is now "the drawn eye differs from the
-packet's", whatever moved it); and the ordering claim was over-stated (above). Also from the
+range walks the eye home ahead of the packet (the choice now tests the grid's span against the
+drawn eye directly, the fog bound in §2.3); and the ordering claim was over-stated (above). Also from the
 review: the count-only log lines said only that text goes blank; the UI layer's viewport rect
 keeps the last in-game one on a frame with no in-game packet (an empty rect would have shown the
 key fill raw for one frame at a level's tail); two stale comments in `tagpu_fogwide.c` and

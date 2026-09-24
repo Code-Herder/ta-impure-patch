@@ -548,9 +548,9 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
        one whole cell short, because the last column of any grid never has its right
        corners written and interpolating toward them reads as NO FOG. The band
        `gx in [cols-1, cols)` here has that same hazard and is left alone
-       deliberately: with the WIDE grid it is at least 320 px outside the view
-       (FOGW_MARGIN plus the window's two spare columns) against a gather that
-       reaches 256, so nothing can be sampled there; with the ENGINE's grid at
+       deliberately: with the WIDE grid the fog bound on the drawn eye
+       (tagpu_zoom.c) keeps the gathers' whole slab inside `[0, cols - 1]`,
+       so no anchor they accept can be sampled there; with the ENGINE's grid at
        zoom >= 1 an anchor 1..32 px past the viewport edge does land in it, and
        both answers available there — the interpolation's and the off-grid
        `return 0` a tighter bound would give — are the same "no fog", so

@@ -85,8 +85,9 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   only a husk while `wrecks` is armed, the build-state effect of a unit this pass owns, and the
   cached structure shadow once ours is live. A stale `owndraw.on` with `native.on` cleared is
   dropped by `launch`, which says so. The `native:` heartbeat every 300 frames is `native: vulkan
-  lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=` — what
-  was handed over to the Vulkan passes, not what they drew. A model that will not bake (over 256
+  lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=
+  fog=wide|engine bare=N out=N held=N/Mpx` — what was handed over to the Vulkan passes, not what
+  they drew; the fog fields are below. A model that will not bake (over 256
   pieces or 49 152 vertices) logs a `posebake: REFUSED` line and draws nothing. Nothing reads
   `gamedir/hires/`: a `.glb` there changes nothing, because replacement meshes are not in this build.
 - **`terr.on`** owns the terrain and the fog overlay; `key=N` moves the palette index the engine's
@@ -179,7 +180,7 @@ fixture that only arms the pass produces no picture:
 | `tagpu_eye.txt` | every in-play draw | what `tacli eye X Y` writes; the packet heartbeat's `hold=1` says it is in force; `tacli eye <i> --release` removes it |
 | `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with the mouse->world repair (`zoom.on` or `vpwide.on`) |
 | `vpwide.on` | attach | widens the rect the engine addresses to what the zoom shows, so ring clicks and band boxes land at zoom < 1. Writes `main+0x37E27..0x37E33`. Logs `vpwide: ARMED (mouse->world 0x498DA0, surface …)` and `vpwide: true viewport rect verified (128,32 896x704)`, `vpwide: viewport rect restored to 1x` at 1x. `zoom.on` alone logs `vpwide: mouse->world repair only (0x498DA0) —` |
-| `fogwide.off` | live | the wide fog grid off: the outer ring at zoom < 1 falls back to a smear of the border cell. The native line's `bare=` does not count this |
+| `fogwide.off` | live | the wide fog grid off: the outer ring at zoom < 1 falls back to a smear of the border cell, and the native line's `bare=` and `out=` count every such frame |
 | `fogwide_check.on` | live | the oracle: `fogwide check: … compared=N of cells=M skipped=K differ=N` every 120th tick, **`differ=0`**. It compares only the entries both builders define the same way: `skipped` is the border lines where the engine's literal completion row or column and ours (the straddling one) differ, both left out — 0 for an eye in the engine's own `[0, extent − W]`, non-zero near the map's edge in the centre range (104 of 720 at a corner, 1024x768) |
 
 Driving the camera at a zoom other than 1:
@@ -214,11 +215,19 @@ Driving the camera at a zoom other than 1:
 
 The wide fog grid (`tagpu_fogwide.c`) builds at every zoom from the screen size; its heartbeat is
 `fogwide: CxR cells=N cap=CxR rebuilds=N in 5.0s = R/s ticks=N build=…/… us (mean/max)` once
-per five seconds of wall time. A video-mode change grows the set and hands the old blocks to
-`tagpu_reclaim`'s fence; the grow path's own line carries `held=` (must fall back to 0) and
-`strand=` (must read 0). **`rebuilds=0` is not a fault at LosType 12**
+per five seconds of wall time. A video-mode change grows the set, freeing the old block on the
+spot (nothing but the game thread reads it), and logs `fogwide: grid CxR, N KB (N cells) — grown`.
+**`rebuilds=0` is not a fault at LosType 12**
 (`--los 0`): nothing stamps, so nothing rebuilds — read the word at `*0x511DE8+0x14281` before
-chasing it; at 14 a moving scene gives ~30/s. **One `bare=1` per video-mode change is expected.**
+chasing it; at 14 a moving scene gives ~30/s.
+
+The native heartbeat's fog fields are the fog bound's witness (`tagpu_zoom.c`, gpu-status §2.3):
+`fog=` is the grid the frame at the heartbeat took; **`out=` must read 0** — frames whose fog
+domain was not inside that grid; `bare=` counts frames that needed the wide grid and had none;
+`held=N/Mpx` is the frames whose drawn eye the bound held back and the largest hold, the cost of
+the bound (non-zero on a wheel reversal near the zoom floor, ~50 screen px at most at 1024x768).
+**A level that starts below 1× shows `bare=` and `out=` of about 15** — the frames before the
+terrain pass owns the ground, when there is no wide grid to take — and they must not grow after.
 
 ## Classic++
 
@@ -323,7 +332,7 @@ that map's size.
 | line | every | must read 0 | notes |
 |---|---|---|---|
 | `packet: pub= skip= overrun= foreign= … viol= pviol= crcbad= nopkt= \| … \| cmd: … \| draws= … \| world: … dup= trunc= relbad= woob= …` | 300 render frames | `viol`, `pviol`, `crcbad`, `foreign`, `commitfail`, `vpwh` (both exchanges); `dup` (the stable-id collision oracle), `relbad` (the engine's `end == begin + (count−1)·0x118` relation), `woob` (wreck records outside the 2048-record pool); `trunc` past each slot's first fill; `layerbad`, `subbad` in the `fx:` segment; `refused` in the `fog:` and `gui:` segments | `skip` is the FRESH gate doing its job; `overrun`/`gap` count only under `stress` or across a level end; `unacked=(0,0)` whenever no wheel gesture is in flight; `hold=1` while `tagpu_eye.txt` is in force; `tps` is 3 × `speed`; `font=` non-zero when text can draw; `levelend=reclaim` names who published the level-end packet |
-| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=` | 300 | | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen |
+| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog= bare= out= held=N/Mpx` | 300 | `out` past a level's start | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; the fog fields are the fog bound's witness (§"Camera, viewport and fog") |
 | `reclaim: def= drn= ovf= … tmpl=<queued>/<freed by the epoch>/<leaked>` | 300 | `ovf`, the third `tmpl` field | a level change logs `reclaim: level teardown: flushed N …` then `reclaim: teardown post: freed N block(s)` |
 | `fogwide: …`, `fogwide check: … differ=` | 5 s / 120 ticks | `differ`; on the grow path's line `strand`, and `held` must fall back to 0 | |
 | `gui: twins= …` | 300 | `overflows`, `lost`, `miss`, `reseed` | `references/ui-layer.md` |

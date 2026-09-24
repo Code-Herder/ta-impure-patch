@@ -204,7 +204,9 @@ five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
   and each edge on both sides, so it cannot invert when the view centre is past the extent the
   engine places it by (gpu-status §2.3c).
 * **The fog.** An eye off [0, extent − W] puts the engine grid's border completions off the map, so
-  the native pass draws from `fogwide`'s grid then (`tagpu_zoom_wide_fog`).
+  the native pass draws from `fogwide`'s grid then (`tagpu_zoom_wide_fog`), and the eye each frame
+  is drawn from is bounded into the grid it samples (gpu-status §2.3, "The fog bound on the drawn
+  eye").
 
 **The audit C2 needed.** Every engine reader of the eye had to be bounded for an eye W/2 past the
 map, **at every zoom**, with `vpwide`'s widened rect below 1× adding W/(2z) − W/2 more. Before
