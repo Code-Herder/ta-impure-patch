@@ -80,6 +80,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "dd.h"           /* g_ddraw: the game's own screen, for the roster's on-screen test */
 #include "render_vk.h"     /* vk_render_main: whether the session draws from packets */
@@ -998,13 +999,14 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    EVERY ENGINE POINTER IS RESOLVED HERE. A sprite's GAF frame is looked up
    through the sequence the particle or the anim state names, while the object
    that names it is live on this thread; a weapon's colour NUMBER goes through
-   main+0xDCB here; the attacker's owner byte is read here.
+   main+0xDCB here. Every 3DO model an effect draws is posed and copied here
+   (`fx_model`), so no model crosses at all.
 
    WHAT STILL CROSSES AS AN ADDRESS, and on whose lifetime:
 
-     * a model TEMPLATE root — per LEVEL, freed by 0x42DB90 in the teardown
-       cascade, so tagpu_reclaim's fence. `tagpu_fx.c` passes it straight to the
-       native pass's `emit_fx_model` and reads no byte of it.
+     * a model FACE's GAF frame -- a 3DO texture, which the render thread
+       paints into the unit atlas (tagpu_render3do.c) exactly as it paints the
+       ones the unit bake resolves out of the templates, on the same fence.
      * a PROJECTILE's or a PARTICLE's GAF frame — from the "fx" bank, which
        0x429870 loads once per process (its only caller chain is 0x49134D <-
        0x491200 <- WinMain's 0x49EA62), so a SESSION asset.
@@ -1037,9 +1039,13 @@ static const unsigned char* s_lhtPtr;
 static int s_lhtOk;
 static volatile unsigned s_cLhtCopies;
 
-typedef char pk_proj_size  [(sizeof(TAGPU_PK_PROJ)   == 56) ? 1 : -1];
-typedef char pk_expl_size  [(sizeof(TAGPU_PK_EXPL)   == 32) ? 1 : -1];
-typedef char pk_debris_size[(sizeof(TAGPU_PK_DEBRIS) == 24) ? 1 : -1];
+typedef char pk_proj_size  [(sizeof(TAGPU_PK_PROJ)   == 44) ? 1 : -1];
+typedef char pk_expl_size  [(sizeof(TAGPU_PK_EXPL)   == 24) ? 1 : -1];
+typedef char pk_debris_size[(sizeof(TAGPU_PK_DEBRIS) == 16) ? 1 : -1];
+typedef char pk_fxvert_size [(sizeof(TAGPU_PK_FXVERT)  == 12) ? 1 : -1];
+typedef char pk_fxface_size [(sizeof(TAGPU_PK_FXFACE)  == 12) ? 1 : -1];
+typedef char pk_fxshape_size[(sizeof(TAGPU_PK_FXSHAPE) ==  8) ? 1 : -1];
+typedef char pk_fxmodel_size[(sizeof(TAGPU_PK_FXMODEL) ==  8) ? 1 : -1];
 typedef char pk_part_size  [(sizeof(TAGPU_PK_PART)   == 16) ? 1 : -1];
 
 static void lht_snapshot(void)
@@ -1211,6 +1217,234 @@ static void gather_layer(const char* layers, int L)
     }
 }
 
+/* THE TEAM COLOUR OF A DEBRIS PIECE, as 0x4211D0 takes it: the piece's unit
+   (`sys+0`), that unit's owning player (`+0x96`), the player's PlayerInfo
+   (`+0x27`) and its logo colour (`+0x96`) -- `0x42132F..0x421346`,
+   DISASSEMBLED. The engine walks the chain unchecked; here each link is
+   validated as DATA against the table it must belong to before the next one
+   is read. The unit must be a stride-aligned member of the unit array inside
+   the slot count (`slot_of`), and the player pointer must BE one of the ten
+   PlayerStructs -- an address checked against the engine's own table. The
+   PlayerInfo is the game's own allocation, which 0x45861C reads for every
+   team-coloured face of every unit on every frame; the byte taken out of it
+   is bounded where it is used, against the sequence's frame count (0x4B7F30's
+   own test). The unit is usually DEAD by now -- a piece flies off a destroyed
+   unit -- and its slot may already hold another: the engine reads whatever
+   the slot holds at this moment, and so does this. -1 when a link does not
+   validate, and then a team-coloured face draws nothing. */
+static int debris_logo(const char* ta, const char* u)
+{
+    const char* beg = *(const char* const*)(ta + OFF_UNIT_BEGIN);
+    const char* players = ta + OFF_PLAYERS;
+    const char* pl;
+    const char* pi;
+    size_t d;
+    if (!ptr_ok(beg) || slot_of(beg, u, RDU16(ta, OFF_UNITSLOTS)) < 0) return -1;
+    pl = *(const char* const*)(u + U_PLAYER);
+    if (pl < players) return -1;
+    d = (size_t)(pl - players);
+    if (d % PLAYER_STRIDE || d / PLAYER_STRIDE >= PLAYER_COUNT) return -1;
+    pi = *(const char* const*)(pl + PL_INFO);
+    if (!ptr_ok(pi)) return -1;
+    return *(const unsigned char*)(pi + PI_LOGO);
+}
+
+/* ---- THE EFFECTS MODELS (tagpu_packet.h) ---------------------------------
+   Five tables, grown on this thread and reset with the rest of the gather.
+   A model is taken from the very record the engine is about to draw, on the
+   thread that draws it, so what it copies is what the engine would draw:
+   there is no lifetime to argue, only values to bound. */
+static TAGPU_PK_FXMODEL* s_fmScratch; static unsigned s_fmCap, s_nFm;
+static TAGPU_PK_FXSHAPE* s_fsScratch; static unsigned s_fsCap, s_nFs;
+static TAGPU_PK_FXFACE*  s_ffScratch; static unsigned s_ffCap, s_nFf;
+static uint16_t*         s_fiScratch; static unsigned s_fiCap, s_nFi;
+static TAGPU_PK_FXVERT*  s_fvScratch; static unsigned s_fvCap, s_nFv;
+static volatile unsigned s_cLastFm, s_cLastFv, s_cFxLost;
+/* a model the engine draws and the packet cannot carry: any index past
+   `n_fxmodel` says that to the consumer (tagpu_packet.h) */
+#define FX_LOST 0xFFFFFFFEu
+/* the most any table grows to, a bound on an allocation driven by engine
+   counts: 64 x the vertices of the largest node, for every model a gather can
+   name, would already be past it */
+#define FX_ROOM_MAX (1u << 22)
+
+static int fx_room(void** p, unsigned* cap, unsigned need, size_t elem)
+{
+    unsigned n;
+    void* q;
+    if (need <= *cap) return 1;
+    if (need > FX_ROOM_MAX) return 0;
+    n = *cap ? *cap : 256u;
+    while (n < need) n *= 2u;
+    q = realloc(*p, (size_t)n * elem);
+    if (!q) return 0;
+    *p = q; *cap = n;
+    return 1;
+}
+
+/* THE SHAPES OF THIS GATHER, by (node, logo): a weapon's model is one node
+   for every projectile that fires it, so two hundred rockets are one shape.
+   Probed linearly and stamped with the gather's generation rather than
+   cleared; a key that finds no slot within the probe gets a shape of its own,
+   which costs bytes and never a wrong face. */
+#define FX_SHAPE_HASH  4096u
+#define FX_SHAPE_PROBE 16u
+static struct { const char* node; int logo; unsigned shape, gen; } s_shHash[FX_SHAPE_HASH];
+static unsigned s_shGen;
+
+/* A textured face's frame, BY THE DRAW'S OWN RULE (DISASSEMBLED):
+
+     0x46BAE0 (a weapon's body and flame, an explosion's body)
+        bit 1 clear   the frame pointer at +0x10
+        bit 1 set     0x4B7EE0(face+0x10): the anim state {u16 frame @0,
+                      sequence @8}, the sequence's +0x28 + 8 * frame --
+                      UNBOUNDED in the engine
+     0x4211D0 (a debris piece) the same, except
+        bits 1 and 2  0x4B7F30(*(face+0x18), logo): the sequence indexed by
+                      the logo colour of the unit the piece flew off, bounded
+                      by the sequence's count
+
+   EVERY INDEX IS BOUNDED HERE, the engine's unbounded one included, by the
+   sequence's own count (tagpu_gaf_seq_frame is 0x4B7F30's test): an index
+   past it draws nothing where the engine would read past the table, and so
+   does a logo the chain did not validate. A frame that is not a sane header
+   draws nothing, and nor does an RLE-compressed one -- the span 0x4C7310
+   copies the pixel plane as raw rows, which a compressed frame is not. */
+static unsigned fx_face_frame(const char* fa, int debris, int logo)
+{
+    const unsigned flags = RDU32(fa, F_FLAGS);
+    const char* seq = *(const char* const*)(fa + F_TEXSEQ);
+    const unsigned char* f;
+    if (!(flags & FF_ANIM))
+        f = tagpu_gaf_frame_sane(*(const void* const*)(fa + F_TEXFRAME));
+    else if (debris && (flags & FF_TEAM))
+        f = logo < 0 ? NULL : tagpu_gaf_seq_frame(seq, logo);
+    else
+        f = tagpu_gaf_seq_frame(seq, (int)RDU16(fa, F_TEXFRAME));
+    if (!f || f[TAGPU_GF_COMP] != 0) return 0u;
+    return (unsigned)(size_t)f;
+}
+
+/* A node's faces as the draw walks them (0x46BB76..0x46BC4E, 0x4212A3..
+   0x42138D, DISASSEMBLED): face 0 is skipped when the node carries a
+   selection primitive; a face with flag bit 0 is a flat fill (0x4C0310 ->
+   0x4C0330) in the colour word's low byte, whatever its vertex count; any
+   other face is drawn only with exactly four vertices, textured by
+   GAF_DrawTransformed 0x4C7580. What is dropped here draws nothing in the
+   engine either -- a flat fill of one or two vertices has no span, a
+   textured face of another count is never called -- except a face whose
+   index reaches past the node's vertices, which the engine takes out of its
+   projected scratch unchecked (another model's vertex, or a stale one), and
+   a flat face past TAGPU_PK_FXMAXFV. Returns the shape, or -1. */
+static int fx_shape(const char* node, int debris, int logo)
+{
+    const int key = debris ? logo : -2;
+    const unsigned h0 = ((unsigned)(size_t)node * 2654435761u ^ (unsigned)key) & (FX_SHAPE_HASH - 1u);
+    unsigned k, slot = FX_SHAPE_HASH;
+    int nvert, nface, j, j0, t;
+    const char* faces;
+    TAGPU_PK_FXSHAPE* sh;
+    for (k = 0; k < FX_SHAPE_PROBE; k++) {
+        const unsigned i = (h0 + k) & (FX_SHAPE_HASH - 1u);
+        if (s_shHash[i].gen != s_shGen) { slot = i; break; }
+        if (s_shHash[i].node == node && s_shHash[i].logo == key) return (int)s_shHash[i].shape;
+    }
+    nvert = RD32(node, N_VCOUNT);
+    nface = RD32(node, N_FCOUNT);
+    faces = *(const char* const*)(node + N_FACES);
+    if (nvert < 1 || nvert > (int)TAGPU_PK_FXMAXNV) return -1;
+    if (nface < 0 || nface > (int)TAGPU_PK_FXMAXNF) return -1;
+    if (nface > 0 && !ptr_ok(faces)) return -1;
+    if (!fx_room((void**)&s_fsScratch, &s_fsCap, s_nFs + 1u, sizeof *s_fsScratch) ||
+        !fx_room((void**)&s_ffScratch, &s_ffCap, s_nFf + (unsigned)nface, sizeof *s_ffScratch) ||
+        !fx_room((void**)&s_fiScratch, &s_fiCap, s_nFi + (unsigned)nface * TAGPU_PK_FXMAXFV,
+                 sizeof *s_fiScratch))
+        return -1;
+    sh = &s_fsScratch[s_nFs];
+    sh->face = s_nFf; sh->nface = 0; sh->nvert = (uint16_t)nvert;
+    j0 = RD32(node, N_SELPRIM) != -1 ? 1 : 0;
+    for (j = j0; j < nface; j++) {
+        const char* fa = faces + (size_t)j * FACE_STRIDE;
+        const int fvc = RD32(fa, F_VCOUNT);
+        const uint16_t* ip = *(const uint16_t* const*)(fa + F_INDICES);
+        TAGPU_PK_FXFACE* f = &s_ffScratch[s_nFf];
+        int ok = 1;
+        memset(f, 0, sizeof *f);
+        if (RDU32(fa, F_FLAGS) & FF_FLAT) {
+            if (fvc < 3 || fvc > (int)TAGPU_PK_FXMAXFV) continue;
+            f->flat = 1;
+            f->colour = (uint8_t)RDU32(fa, F_COLORTAB);
+        } else {
+            if (fvc != 4) continue;
+            f->frame = fx_face_frame(fa, debris, logo);
+            if (!f->frame) continue;
+        }
+        if (!ptr_ok(ip)) continue;
+        for (t = 0; t < fvc; t++) {
+            const uint16_t v = ip[t];
+            if (v >= (uint16_t)nvert) { ok = 0; break; }
+            s_fiScratch[s_nFi + (unsigned)t] = v;
+        }
+        if (!ok) continue;
+        f->idx = s_nFi; f->n = (uint8_t)fvc;
+        s_nFi += (unsigned)fvc;
+        s_nFf++;
+        sh->nface++;
+    }
+    if (slot < FX_SHAPE_HASH) {
+        s_shHash[slot].node = node; s_shHash[slot].logo = key;
+        s_shHash[slot].shape = s_nFs; s_shHash[slot].gen = s_shGen;
+    }
+    return (int)s_nFs++;
+}
+
+/* ONE POSED MODEL: every vertex of the node through the engine's own
+   rotation (ROTATE3_VA, called here as 0x46BB1A and 0x4215EE call it), then
+   offset by the effect's 16.16 position the way the draw offsets it before
+   its shifts: rotated x + X, rotated y + altitude, Y - rotated z. This is the
+   engine's arithmetic on the engine's thread, so it is the engine's answer
+   bit for bit -- the x87 precision it runs at is this thread's own. The eye
+   is NOT taken off here: the consumer projects with the eye it draws with,
+   and `(v + X - (eye << 16)) >> 16` is `((v + X) >> 16) - eye` exactly.
+
+   `debris` selects 0x4211D0's frame rule and `logo` is its team index (-1
+   when the chain did not validate). Returns the model, or FX_LOST. */
+static unsigned fx_model(const char* node, const short turn[3], const int32_t pos[3],
+                         int debris, int logo)
+{
+    typedef void (__stdcall *ROTATE3)(const int* src, int* dst, const short* turn);
+    const ROTATE3 rot = (ROTATE3)(size_t)ROTATE3_VA;
+    const int* vb;
+    int shape, nvert, i;
+    if (!ptr_ok(node)) { s_cFxLost++; return FX_LOST; }
+    vb = *(const int* const*)(node + N_VERTS);
+    if (!ptr_ok(vb)) { s_cFxLost++; return FX_LOST; }
+    shape = fx_shape(node, debris, logo);
+    if (shape < 0) { s_cFxLost++; return FX_LOST; }
+    nvert = s_fsScratch[shape].nvert;
+    if (!fx_room((void**)&s_fmScratch, &s_fmCap, s_nFm + 1u, sizeof *s_fmScratch) ||
+        !fx_room((void**)&s_fvScratch, &s_fvCap, s_nFv + (unsigned)nvert, sizeof *s_fvScratch))
+        { s_cFxLost++; return FX_LOST; }
+    for (i = 0; i < nvert; i++) {
+        int r[3];
+        TAGPU_PK_FXVERT* o = &s_fvScratch[s_nFv + (unsigned)i];
+        rot(vb + i * 3, r, turn);
+        o->x   = (int32_t)((uint32_t)r[0] + (uint32_t)pos[0]);
+        o->alt = (int32_t)((uint32_t)r[1] + (uint32_t)pos[1]);
+        o->y   = (int32_t)((uint32_t)pos[2] - (uint32_t)r[2]);
+    }
+    s_fmScratch[s_nFm].vert = s_nFv;
+    s_fmScratch[s_nFm].shape = (uint32_t)shape;
+    s_nFv += (unsigned)nvert;
+    return s_nFm++;
+}
+
+static void fx_models_reset(void)
+{
+    s_nFm = s_nFs = s_nFf = s_nFi = s_nFv = 0;
+    if (++s_shGen == 0) { memset(s_shHash, 0, sizeof s_shHash); s_shGen = 1; }
+}
+
 /* the projectiles, the debris slots and the explosions */
 static void gather_effects(const char* ta, int tick, const unsigned char* coltab)
 {
@@ -1257,32 +1491,38 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
             pe->col  = coltab[color];
             pe->col2 = coltab[color2];
             if (color2) pe->flags |= TAGPU_PK_FX_COL2;
-            {
-                const char* au = *(const char* const*)(q + PJ_ATTACKER);
-                pe->owner = ptr_ok(au) ? *(const unsigned char*)(au + U_OWNER) : 0;
-            }
-            {
+            pe->model = pe->cmodel = TAGPU_PK_NOMODEL;
+            if (rt == 1 || rt == 3 || rt == 6) {
+                /* THE RENDERTYPE'S OWN TRIPLE, as 0x49BE60 hands it to
+                   0x46BAE0: rt 1 the projectile's words with 0x8000 added to
+                   the second and third (0x49C0FA..0x49C11A), rt 6 the words
+                   themselves (0x49C477), rt 3 a local of 0x49BE60's own
+                   ([esp+0x38], 0x49C252) that nothing in the function writes
+                   -- whatever the stack held, taken here as zero, the
+                   unrotated body effects.md §1 records. */
                 const short* tr = (const short*)(q + PJ_TURN);
-                /* the rendertype's own adjustment, applied once, here */
+                const char* node = *(const char* const*)(w + W_MODEL);
+                short t[3] = { 0, 0, 0 };
                 if (rt == 1) {
-                    pe->turn[0] = tr[0];
-                    pe->turn[1] = (short)(tr[1] - 0x8000);
-                    pe->turn[2] = (short)(tr[2] - 0x8000);
+                    t[0] = tr[0];
+                    t[1] = (short)(tr[1] - 0x8000);
+                    t[2] = (short)(tr[2] - 0x8000);
                 } else if (rt == 6) {
-                    pe->turn[0] = tr[0]; pe->turn[1] = tr[1]; pe->turn[2] = tr[2];
+                    t[0] = tr[0]; t[1] = tr[1]; t[2] = tr[2];
                 }
-                if (rt == 1 || rt == 3 || rt == 6) {
-                    const char* node = *(const char* const*)(w + W_MODEL);
-                    if (ptr_ok(node)) {
-                        pe->node = (unsigned)(size_t)node;
-                        if (rt == 1 && tick < *(const int*)(q + PJ_DEATH)) {
-                            const char* child = *(const char* const*)(node + 0x30);
-                            if (ptr_ok(child)) {
-                                unsigned mask = *(const unsigned*)(w + W_MASK);
-                                pe->child  = (unsigned)(size_t)child;
-                                pe->cturn0 = (mask & (1u << 21))
-                                           ? *(const short*)(q + PJ_SPIN) : pe->turn[0];
-                            }
+                if (ptr_ok(node)) {
+                    pe->model = fx_model(node, t, pe->pos, 0, -1);
+                    /* THE THRUST FLAME, the node's first child, while the
+                       projectile is alive (0x49C12C..0x49C185): its first
+                       word is the spin when the weapon's mask has bit 21 */
+                    if (rt == 1 && tick < *(const int*)(q + PJ_DEATH)) {
+                        const char* child = *(const char* const*)(node + N_CHILD);
+                        if (ptr_ok(child)) {
+                            const unsigned mask = *(const unsigned*)(w + W_MASK);
+                            short ct[3];
+                            ct[0] = (mask & (1u << 21)) ? *(const short*)(q + PJ_SPIN) : t[0];
+                            ct[1] = t[1]; ct[2] = t[2];
+                            pe->cmodel = fx_model(child, ct, pe->pos, 0, -1);
                         }
                     }
                 }
@@ -1322,7 +1562,6 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
         const char* sys = (const char*)*ps;
         const char* pc;
         TAGPU_PK_DEBRIS* de;
-        const short* tr;
         if (!ptr_ok(sys)) continue;
         pc = *(const char* const*)(sys + PSYS_PIECE);
         if (!ptr_ok(pc)) continue;
@@ -1331,13 +1570,19 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
         de->pos[0] = *(const int*)(pc + DB_X);
         de->pos[1] = *(const int*)(pc + DB_ALT);
         de->pos[2] = *(const int*)(pc + DB_Y);
+        de->model = TAGPU_PK_NOMODEL;
         {
+            /* the triple 0x421550 builds and poses the piece by, right before
+               it calls 0x4211D0 (tagpu_engine.h DB_TURN_T0..T2) */
             const char* node = *(const char* const*)(pc + DB_NODE);
-            de->node = ptr_ok(node) ? (unsigned)(size_t)node : 0u;
+            short t[3];
+            t[0] = *(const short*)(pc + DB_TURN_T0);
+            t[1] = *(const short*)(pc + DB_TURN_T1);
+            t[2] = *(const short*)(pc + DB_TURN_T2);
+            if (ptr_ok(node))
+                de->model = fx_model(node, t, de->pos, 1,
+                                     debris_logo(ta, *(const char* const*)(sys + PSYS_UNIT)));
         }
-        tr = (const short*)(pc + DB_TURN);
-        de->turn[0] = tr[0]; de->turn[1] = tr[1]; de->turn[2] = tr[2];
-        de->pad = 0;
     }
 
     /* ---- explosions (0x420B00) ---------------------------------------
@@ -1357,13 +1602,13 @@ static void gather_effects(const char* ta, int tick, const unsigned char* coltab
             xe->pos[0] = *(const int*)(q + EX_X);
             xe->pos[1] = *(const int*)(q + EX_ALT);
             xe->pos[2] = *(const int*)(q + EX_Y);
-            xe->node   = ptr_ok(node) ? (unsigned)(size_t)node : 0u;
+            /* the body (0x420C53..0x420C68): 0 for an explosion that has
+               none, else a piece-explosion record (tagpu_packet.h) */
+            xe->model  = ptr_ok(node) ? fx_model(node, tr, xe->pos, 0, -1) : TAGPU_PK_NOMODEL;
             xe->frame  = *(const unsigned*)(q + EX_ST1 + TAGPU_AS_SEQ)
                        ? (unsigned)(size_t)tagpu_gaf_state_frame(q + EX_ST1) : 0u;
             xe->flash  = *(const unsigned*)(q + EX_ST2 + TAGPU_AS_SEQ)
                        ? (unsigned)(size_t)tagpu_gaf_state_frame(q + EX_ST2) : 0u;
-            xe->turn[0] = tr[0]; xe->turn[1] = tr[1]; xe->turn[2] = tr[2];
-            xe->pad = 0;
         }
     }
 }
@@ -1375,14 +1620,16 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level)
     unsigned want = (tagpu_fxown_want_fx() ? 1u : 0u) | (tagpu_fxown_want_sfx() ? 2u : 0u);
     int L;
     /* THE KEY IS (LEVEL, TICK), not the tick alone. A new level restarts
-       GameTime, and every template address in the tables belongs to the level
-       that produced them: a cache hit across a level boundary would hand the
-       native pass a model root the teardown has freed. The level end clears
+       GameTime, and some of the GAF frames in the tables belong to the level
+       that produced them (an explosion's sprite and flash, below): a cache
+       hit across a level boundary would hand the render thread a frame the
+       teardown has freed. The level end clears
        the cache as well (tagpu_packet_pub_level_end), but that is the second
        line — this is the one that holds whichever provider fired. */
     if (s_fxHave && tick == s_fxTick && level == s_fxLevel && want == s_fxWant)
         { if (!s_fillAgain) s_cFxReuse++; return; }
     s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
+    fx_models_reset();
     s_fxPartTrunc = 0;
     tagpu_pk_fill(s_partN, 0, (unsigned)sizeof s_partN);
     tagpu_pk_fill(s_partObj, 0, (unsigned)sizeof s_partObj);
@@ -1436,6 +1683,30 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     e = append_table(p, cursor, s_partScratch, s_nPart, (unsigned)sizeof(TAGPU_PK_PART),
                      &p->off_part, &p->n_part, TAGPU_PK_TRUNC_PART);
     if (e > need) need = e;
+    /* THE FIVE MODEL TABLES LAND TOGETHER OR NOT AT ALL: a model whose shape
+       or vertices did not fit would name bytes the packet does not carry.
+       With none of them, every record's model is past `n_fxmodel` and the
+       consumer takes each such record as lost, for this slot's one frame --
+       the shortfall grows the slot. */
+    e = append_table(p, cursor, s_fvScratch, s_nFv, (unsigned)sizeof(TAGPU_PK_FXVERT),
+                     &p->off_fxvert, &p->n_fxvert, TAGPU_PK_TRUNC_FXMODEL);
+    if (e > need) need = e;
+    e = append_table(p, cursor, s_fiScratch, s_nFi, (unsigned)sizeof(uint16_t),
+                     &p->off_fxidx, &p->n_fxidx, TAGPU_PK_TRUNC_FXMODEL);
+    if (e > need) need = e;
+    e = append_table(p, cursor, s_ffScratch, s_nFf, (unsigned)sizeof(TAGPU_PK_FXFACE),
+                     &p->off_fxface, &p->n_fxface, TAGPU_PK_TRUNC_FXMODEL);
+    if (e > need) need = e;
+    e = append_table(p, cursor, s_fsScratch, s_nFs, (unsigned)sizeof(TAGPU_PK_FXSHAPE),
+                     &p->off_fxshape, &p->n_fxshape, TAGPU_PK_TRUNC_FXMODEL);
+    if (e > need) need = e;
+    e = append_table(p, cursor, s_fmScratch, s_nFm, (unsigned)sizeof(TAGPU_PK_FXMODEL),
+                     &p->off_fxmodel, &p->n_fxmodel, TAGPU_PK_TRUNC_FXMODEL);
+    if (e > need) need = e;
+    if (p->truncated & TAGPU_PK_TRUNC_FXMODEL) {
+        p->n_fxvert = p->n_fxidx = p->n_fxface = p->n_fxshape = p->n_fxmodel = 0;
+        p->off_fxvert = p->off_fxidx = p->off_fxface = p->off_fxshape = p->off_fxmodel = 0;
+    }
     /* the per-layer counts describe the table that LANDED: a truncated
        particle table carries none of them, because the consumer walks the
        layers by these counts and a stale set would name another layer's rows */
@@ -1450,6 +1721,7 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
         if (e > need) need = e;
     }
     s_cLastProj = s_nProj; s_cLastExpl = s_nExpl;
+    s_cLastFm = s_nFm; s_cLastFv = s_nFv;
     s_cLastDebris = s_nDebris; s_cLastPart = s_nPart;
     return need;
 }
@@ -2591,10 +2863,11 @@ static void extra(char* buf, unsigned cap, double secs)
         unsigned n = 0;
         while (n < cap && buf[n]) n++;
         _snprintf(buf + n, cap > n ? cap - n : 0,
-                  " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u thin=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
+                  " | fx: proj=%u expl=%u deb=%u models=%u/%uv lost=%u part=%u/%u scan=%u/%u trunc=%u thin=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
                   " | fog: %dx%d wide=%dx%d/%u refused=%u norec=%u recodd=%u"
                   " | gui: mm=%dx%d/%u refused=%u pic=%dx%d/%u",
-                  s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart, s_cPartMax,
+                  s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastFm, s_cLastFv, s_cFxLost,
+                  s_cLastPart, s_cPartMax,
                   s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartThin, s_cLayerBad, s_cSubBad, s_cLhtCopies,
                   tagpu_fxown_want_fx(), tagpu_fxown_want_sfx(),
                   s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR, s_cFogwSeen,

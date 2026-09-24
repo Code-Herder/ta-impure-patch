@@ -152,6 +152,7 @@
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_scaffold.h"
 #include "tagpu_vk_world.h"   /* the target's ss: the wire's width follows it */
+#include "tagpu_vk_fx.h"      /* tagpu_vk_fx_models_ok: the effects models' gate */
 #include "tagpu_posedraw.h"
 #include "tagpu_posebake.h"
 #include "tagpu_packet.h"    /* tagpu_grow_stress, and nothing else of it */
@@ -220,13 +221,14 @@ static int s_abFrame;
 static int s_saidRestored, s_saidNoMirror, s_saidShadow, s_saidOther;
 static int s_saidNoHand;                /* ...and the hand-over's own stand-down */
 static int s_saidShort, s_saidCmp;      /* a latch each: one message each */
+static int s_saidFxShort;
 static int s_saidFog, s_saidScaf, s_saidVbFull;
 static int s_saidRgbImg;                /* the restored twin's image was refused */
 static int s_saidAniso;                 /* ...and its filter could not be matched */
 
 static VkDescriptorSetLayout s_dslMain, s_dslCast;
 static VkPipelineLayout      s_ploMain, s_ploCast;
-static VkPipeline            s_pipeBody, s_pipeGhost, s_pipeCast;
+static VkPipeline            s_pipeBody, s_pipeGhost, s_pipeFx, s_pipeCast;
 /* the nanoframe wire: the body pipeline as LINE_LIST, width dynamic when the
    device has `wideLines`. VK_NULL_HANDLE = refused, and then no wire is drawn */
 static VkPipeline            s_pipeWire;
@@ -414,6 +416,7 @@ typedef struct {
     uint32_t unit;                         /* its window in the slot buffers   */
     int      casts;
     int      ghost;                        /* depth writes OFF, and drawn last */
+    int      fx;                           /* an effects model: its own stage  */
     /* the Classic hard shadow this unit casts, and the range it draws --
        TAGPU_PDSH_* and the `first`/`count` the hand-over already resolved */
     int      shKind;
@@ -439,6 +442,11 @@ static VkDeviceSize s_poseBytes;
 /* the device's `maxStorageBufferRange`, read in `build` */
 static VkDeviceSize s_ssboMax;
 static unsigned     s_nwire;            /* nanoframe wires recorded this frame */
+/* effects models in this frame's draw list, and what `prepare` told the
+   effects pass about them (tagpu_vk_unit_fx_count) */
+static unsigned     s_nfx;
+static unsigned     s_fxFrame = 0xFFFFFFFFu;
+static int          s_fxWill = -1;
 /* shadow casters recorded this frame, so the pass can REPORT having painted a
    structure slant rather than let the producer predict it (tagpu_posedraw.h) */
 static unsigned     s_nsil, s_nslant;
@@ -1110,6 +1118,49 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
         ok = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
                                        &s_pipeGhost) == VK_SUCCESS;
         ds.depthWriteEnable = VK_TRUE;
+    }
+    /* THE EFFECTS MODELS' PIPELINE: tagpu_posedraw.c's `FXVS` with this
+       fragment stage, and it differs in three things.
+
+       NO VERTEX INPUT. A run is read out of the pose buffer by its vertex
+       index (`pose_fx`), so there is nothing to bind.
+
+       NO CULL. The runs are the pixels the engine's rasterisers painted, and
+       those already decided which faces paint: on a face wound the other way
+       round the two edge chains cross and every span comes out empty
+       (tagpu_fxmodel.c). A run is a rectangle, and its winding says nothing.
+
+       LESS_OR_EQUAL, WRITTEN. A model's runs all carry its one key, so each
+       ties with the ones drawn before it and a later run wins -- the engine's
+       own painting order, face by face; the key sits above every ground row
+       and above the models before it in the sequence, so the test still keeps
+       the model under what the engine draws later.
+
+       NOT A REASON TO REFUSE THE PASS, as the wire is not: without it the
+       units draw and the effects stand down whole (`tagpu_vk_unit_fx_count`
+       answers 0, which no frame with a model accepts). */
+    if (ok) {
+        VkShaderModule fxvs = mk_module(d, tagpu_spv_tagpu_posedraw_FXVS,
+                                        sizeof tagpu_spv_tagpu_posedraw_FXVS / 4);
+        VkPipelineVertexInputStateCreateInfo vin;
+        memset(&vin, 0, sizeof vin);
+        vin.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        s_pipeFx = VK_NULL_HANDLE;
+        if (fxvs) {
+            st[0].module = fxvs;
+            gp.pVertexInputState = &vin;
+            ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+            if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                          &s_pipeFx) != VK_SUCCESS)
+                s_pipeFx = VK_NULL_HANDLE;
+            ds.depthCompareOp = VK_COMPARE_OP_LESS;
+            gp.pVertexInputState = &vi;
+            st[0].module = vs;
+            vkDestroyShaderModule(d->dev, fxvs, NULL);
+        }
+        if (!s_pipeFx)
+            plog(d, "unit: the effects models' pipeline would not build - the "
+                    "effects stand down on every frame that has a model");
     }
     /* THE WIRE PIPELINE, and it differs in the topology and the width. Depth
        is the body's own -- tested LESS and WRITTEN -- and the shader's
@@ -2065,7 +2116,8 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     b.f[30] = h->sun[2];                               /* uSun       vec3 @112 */
     b.f[31] = h->amb;                                  /* uAmb      float @124 */
     b.f[32] = h->norm;                                 /* uNorm     float @128 */
-    b.i[33] = h->shadowOn;                             /* uShadowOn   int @132 */
+    /* an effects model receives no shadow: neither effects draw reads one */
+    b.i[33] = r->fx ? 0 : h->shadowOn;                 /* uShadowOn   int @132 */
     b.f[36] = h->shadowSun[0]; b.f[37] = h->shadowSun[1];
     b.f[38] = h->shadowSun[2];                         /* uShadowSun vec3 @144 */
     memcpy(&b.f[40], h->shadowMat, 64);                /* uShadowMat mat4 @160 */
@@ -2141,9 +2193,10 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     VkDeviceSize ustride, vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3, poseBytes;
     VkDeviceSize stageOff, stageNeed;
     int fogW = 1, fogH = 1, i, anyUpload = 0, fogWanted = 0;
+    unsigned nfxRec = 0, fxDrawn = 0;       /* effects models: carried, drawn */
 
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
-    s_nsil = 0; s_nslant = 0; s_nwire = 0;
+    s_nsil = 0; s_nslant = 0; s_nwire = 0; s_nfx = 0;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -2243,13 +2296,17 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        that succeeds and then stands down here is indistinguishable from one
        that never arrived. Periodic rather than latched: a one-shot spent on an
        ordinary frame points at the wrong function. */
-    if (h.nunit < 1 || h.nunit > TAGPU_PD_MAXHAND ||
-        !h.units || !h.rows || !h.flags || !h.vis) {
+    /* A FRAME OF EFFECTS ALONE IS A FRAME: its records are all effects models
+       and it has no pose at all, so the three pose arenas are asked for only
+       when there is a pose, and the runs only when there are runs. */
+    if (h.nunit < 1 || h.nunit > TAGPU_PD_MAXHAND || !h.units ||
+        (h.nrow && (!h.rows || !h.flags || !h.vis)) || (h.nrun && !h.runs)) {
         if ((d->frame % 300u) == 0u)
             plog(d, "unit: frame %u: the hand-over carries nunit=%d (cap %d) "
-                    "units=%d rows=%d flags=%d vis=%d - nothing drawn",
+                    "units=%d rows=%d flags=%d vis=%d runs=%d - nothing drawn",
                  (unsigned)d->frame, h.nunit, TAGPU_PD_MAXHAND,
-                 h.units ? 1 : 0, h.rows ? 1 : 0, h.flags ? 1 : 0, h.vis ? 1 : 0);
+                 h.units ? 1 : 0, h.rows ? 1 : 0, h.flags ? 1 : 0, h.vis ? 1 : 0,
+                 h.runs ? 1 : 0);
         goto standdown;
     }
 
@@ -2259,12 +2316,20 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        hand-over this file understands. The limit is the device's own, a 32-bit
        field, so a frame under it keeps every base index below 2^28 vec4 and
        the `int` bases the shader takes cannot overflow. */
-    poseBytes = ((VkDeviceSize)h.nrow + (VkDeviceSize)(h.nflag / 4) * 2) * 16;
-    if ((h.nflag & 3u) || h.nrow < 3 || h.nflag < 4 || poseBytes > s_ssboMax) {
+    /* THE EFFECTS MODELS' RUNS FOLLOW THE WORDS, two vec4 a run. A frame that
+       has a pose has at least one unit's (3 rows, 4 words), and one that has
+       runs at least one run, so every vertex stage's clamp has a range to
+       clamp into; a unit record on a frame with no pose, or a model record on
+       one with no runs, is refused with its record below. */
+    poseBytes = ((VkDeviceSize)h.nrow + (VkDeviceSize)(h.nflag / 4) * 2 +
+                 (VkDeviceSize)h.nrun * 2) * 16;
+    if ((h.nflag & 3u) || (h.nrow && (h.nrow < 3 || h.nflag < 4)) ||
+        (!h.nrow && h.nflag) || (!h.nrow && !h.nrun) || h.nrun > (1u << 24) ||
+        poseBytes > s_ssboMax) {
         if ((d->frame % 300u) == 0u)
-            plog(d, "unit: frame %u: the packed pose is %u rows and %u words, "
-                    "%.1f MB against the device's %.1f MB storage range - "
-                    "nothing drawn", (unsigned)d->frame, h.nrow, h.nflag,
+            plog(d, "unit: frame %u: the packed pose is %u rows, %u words and %u "
+                    "runs, %.1f MB against the device's %.1f MB storage range - "
+                    "nothing drawn", (unsigned)d->frame, h.nrow, h.nflag, h.nrun,
                  (double)poseBytes / 1048576.0, (double)s_ssboMax / 1048576.0);
         goto standdown;
     }
@@ -2470,9 +2535,12 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        rows, then the shaded words, then the visibility words. */
     {
         size_t rb = (size_t)h.nrow * 16, fb = (size_t)h.nflag * sizeof(float);
-        memcpy(s->pmap, h.rows, rb);
-        memcpy(s->pmap + rb, h.flags, fb);
-        memcpy(s->pmap + rb + fb, h.vis, fb);
+        if (rb) {
+            memcpy(s->pmap, h.rows, rb);
+            memcpy(s->pmap + rb, h.flags, fb);
+            memcpy(s->pmap + rb + fb, h.vis, fb);
+        }
+        if (h.nrun) memcpy(s->pmap + rb + 2 * fb, h.runs, (size_t)h.nrun * 32);
     }
 
     /* ---- what has to be uploaded this frame, and the staging to carry it ---- */
@@ -2480,6 +2548,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     stageNeed = 0;
     for (i = 0; i < h.nunit; i++) {
         const TAGPU_PDUREC* r = &h.units[i];
+        if (r->fx) continue;                /* runs, not vertices */
         if (!vb_find(r->geomSerial))
             stageNeed += (VkDeviceSize)r->nvert * GEOM_STRIDE;
         if (!vb_find(r->matSerial))
@@ -2498,12 +2567,36 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     }
 
     stageOff = 0;
+    nfxRec = 0;
     for (i = 0; i < h.nunit; i++) {
         const TAGPU_PDUREC* r = &h.units[i];
-        VBENT* g = vb_find(r->geomSerial);
-        VBENT* m = vb_find(r->matSerial);
+        VBENT* g;
+        VBENT* m;
         DRAW* w;
         int j;
+
+        /* AN EFFECTS MODEL: its runs, bounded against the copied arena in this
+           file's own terms, and nothing else to resolve -- no vertex buffer, no
+           pose, no shadow, no wire. Counted apart from the units: the effects
+           are all drawn or none of them are, and that is the hand-shake with
+           the effects pass (`s_nfx` below), not the every-unit gate. */
+        if (r->fx) {
+            nfxRec++;
+            if (!s_pipeFx || r->first < 0 || r->count < 1 ||
+                (unsigned)r->first > h.nrun || (unsigned)r->count > h.nrun - (unsigned)r->first)
+                continue;
+            w = &s_draw[s_ndraw];
+            memset(w, 0, sizeof *w);
+            w->first = (uint32_t)r->first; w->count = (uint32_t)r->count;
+            w->unit = (uint32_t)i;
+            w->fx = 1;
+            w->shKind = TAGPU_PDSH_NONE;
+            s_nfx++;
+            s_ndraw++;
+            continue;
+        }
+        g = vb_find(r->geomSerial);
+        m = vb_find(r->matSerial);
 
         /* THE BOUNDS, RE-CHECKED IN THIS FILE'S OWN TERMS. Each of these sizes
            an allocation or a memcpy, and a bound that lives in the file that
@@ -2619,6 +2712,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         w->first = (uint32_t)r->first; w->count = (uint32_t)r->count;
         w->unit = (uint32_t)i;
         w->ghost = r->ghost ? 1 : 0;
+        w->fx = 0;
         w->casts = (h.depthOn && r->casts) ? 1 : 0;
         if (w->casts) s_ncast++;
         /* THE HARD SHADOW, AND THE ONE PLACE THIS FILE REFUSES IT. `s_shOk` is
@@ -2673,10 +2767,25 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                              1, &mb, 0, NULL, 0, NULL);
     }
 
+    /* THE EFFECTS, ALL OR NONE: a model not drawn takes every model with it,
+       and the effects pass then draws none of their sprites either (it asks
+       `tagpu_vk_unit_fx_count`, which answers `s_nfx`). The draws stay in the
+       list with `fx` set; the stage that would record them is simply not
+       recorded. */
+    fxDrawn = s_nfx;
+    if (s_nfx != nfxRec) {
+        if (!s_saidFxShort) {
+            s_saidFxShort = 1;
+            plog(d, "unit: %u of %u effects models could be drawn this frame - "
+                    "no effect is drawn while that is true", s_nfx, nfxRec);
+        }
+        s_nfx = 0;
+    } else s_saidFxShort = 0;
+
     /* EVERY UNIT OR NONE. A frame drawn with one type missing is a frame the
        A/B reports as a port failure, and the shadow map would be missing a
-       caster besides. */
-    if (s_ndraw != (unsigned)h.nunit) {
+       caster besides. The effects models were settled above. */
+    if (s_ndraw - fxDrawn != (unsigned)h.nunit - nfxRec) {
         if (!s_saidShort) {
             s_saidShort = 1;
             plog(d, "unit: %u of %d posed units could be drawn this frame - the "
@@ -2684,7 +2793,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                     "Nothing drawn while that is true",
                  s_ndraw, h.nunit);
         }
-        s_ndraw = 0; s_ncast = 0; s_nsil = 0; s_nslant = 0; s_nwire = 0;
+        s_ndraw = 0; s_ncast = 0; s_nsil = 0; s_nslant = 0; s_nwire = 0; s_nfx = 0;
         return 0;
     }
 
@@ -2698,7 +2807,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     switch (base_upload(d, cb, s, &h)) {
     case -1: goto refuse;
     case 0:
-        s_ndraw = 0; s_ncast = 0; s_nsil = 0; s_nslant = 0; s_nwire = 0;
+        s_ndraw = 0; s_ncast = 0; s_nsil = 0; s_nslant = 0; s_nwire = 0; s_nfx = 0;
         return 0;
     default: break;
     }
@@ -2748,6 +2857,12 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         base[0] = (int)r->rowOff;
         base[1] = (int)(h.nrow + r->flagOff / 4);
         base[2] = (int)(h.nrow + h.nflag / 4 + r->flagOff / 4);
+        /* an effects model's first run, after the rows and both word
+           sections (tagpu_posedraw.h `runs`) */
+        if (r->fx) {
+            base[0] = (int)(h.nrow + h.nflag / 2 + (unsigned)r->first * 2u);
+            base[1] = base[2] = 0;
+        }
         fill_blocks(s->umap + (VkDeviceSize)i * ustride, &h, r, base,
                     vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3);
     }
@@ -2862,7 +2977,7 @@ refuse:
     s_state = ST_REFUSED;
     s_downOwed = 1;
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
-    s_nsil = 0; s_nslant = 0; s_nwire = 0;
+    s_nsil = 0; s_nslant = 0; s_nwire = 0; s_nfx = 0;
     return 0;
 }
 
@@ -3059,6 +3174,10 @@ static void bind_main(const TAGPU_VKPASS* d, uint32_t slot)
 int tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     (void)cb;
+    /* THIS FRAME'S ANSWER TO THE EFFECTS PASS, "none" until the one path
+       below that draws (tagpu_vk_unit_fx_count) */
+    s_fxFrame = d->frame;
+    s_fxWill = -1;
     if (s_state != ST_READY || !s_drawThis) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
 
@@ -3083,7 +3202,13 @@ int tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
        refusal for it can still reach the census -- see the block there. */
 
     bind_main(d, slot);
+    s_fxWill = (int)s_nfx;
     return 1;
+}
+
+int tagpu_vk_unit_fx_count(unsigned frame)
+{
+    return s_fxFrame == frame ? s_fxWill : -1;
 }
 
 /* the world scissor, the viewport rect itself rather than its vertical
@@ -3133,14 +3258,18 @@ static void unit_scissor(uint32_t w, uint32_t h, VkRect2D* sc)
    explosion under the placement cursor) composites to a different colour, by
    up to the ghost's own alpha share of the effect. The seam's own comment
    states that rule as the reason the body stage sits where it does. */
-/* THE THREE STAGES, and the numbers are the order they are recorded in.
+/* THE STAGES, and the numbers are the order they are recorded in.
    RS_SHADOW is first inside `tagpu_vk_unit_record` because the engine draws a
    unit's shadow before its body (0x459200 blits the blackened composite and
    then the model), and because the shadow does not write depth: recorded after
    the bodies it would still land under them by the depth TEST, but a shadow
    belonging to a unit in FRONT would then be tested against that unit's own
-   body depth and vanish where it overlaps. */
-enum { RS_SHADOW = 0, RS_BODY, RS_WIRE, RS_GHOST };
+   body depth and vanish where it overlaps. RS_FX, the effects models, follows
+   every unit and precedes the effects pass's sprites, which is where the
+   engine draws them: between its ground sweep and its airborne one, and the
+   effects band's keys put them over the one and under the other whatever
+   order the draws are in. */
+enum { RS_SHADOW = 0, RS_BODY, RS_WIRE, RS_FX, RS_GHOST };
 
 static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                          uint32_t w, uint32_t h, int stage)
@@ -3172,11 +3301,12 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     vkCmdSetScissor(cb, 0, 1, &sc);
 
     /* THE PIPELINE IS BOUND PER DRAW KIND, NOT ONCE. The records arrive in the
-       gather's order -- every unit, then every ghost, because tagpu_native.c
-       calls `ghost_record` after its unit loop and `pd_record` appends as each
-       is recorded -- so in practice this switches once. It is written as a
-       compare rather than as two loops so that it stays correct if that order
-       ever stops holding. */
+       gather's order -- every unit, then every effects model, then every
+       ghost, because tagpu_native.c appends the models after its unit loop
+       and calls `ghost_record` after both, and `pd_record` appends as each is
+       recorded -- so in practice each stage binds once. It is written as a
+       compare rather than as one loop per kind so that it stays correct if
+       that order ever stops holding. */
     bound = VK_NULL_HANDLE;
 
     /* ---- the Classic hard shadow ----
@@ -3257,12 +3387,13 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
     for (i = 0; i < s_ndraw; i++) {
         const DRAW* q = &s_draw[i];
         VkPipeline want;
-        /* BOTH SIDES AS 0/1 BEFORE THE COMPARE. `!q->ghost` alone is the
-           negation of the test, and against the stage test it would draw every
-           unit body in the ghost stage -- after the effects, over every
-           particle and projectile, with nothing failing. */
-        if ((q->ghost != 0) != (stage == RS_GHOST)) continue;  /* this stage's only */
-        want = q->ghost ? s_pipeGhost : s_pipeBody;
+        /* EACH DRAW HAS EXACTLY ONE STAGE, named rather than negated: a test
+           written as `!q->ghost` against the stage would draw every unit body
+           in the ghost stage -- after the effects, over every particle and
+           projectile, with nothing failing. */
+        const int kind = q->fx ? RS_FX : q->ghost ? RS_GHOST : RS_BODY;
+        if (kind != stage) continue;
+        want = kind == RS_FX ? s_pipeFx : kind == RS_GHOST ? s_pipeGhost : s_pipeBody;
         VkBuffer vbs[2];
         VkDeviceSize offs[2];
         uint32_t dyn[2];
@@ -3271,6 +3402,14 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
         dyn[1] = (uint32_t)((VkDeviceSize)q->unit * s_uStride + s_fglOff);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploMain,
                                 0, 1, &s_slot[slot].dsMain, 2, dyn);
+        /* AN EFFECTS MODEL BINDS NO VERTEX BUFFER: six vertices a run, found
+           by index from its block's first run. `firstVertex` stays 0 -- the
+           shader's gl_VertexIndex is the run's position in the model, which
+           tools/spirv-gen.py's item 7 relies on. */
+        if (kind == RS_FX) {
+            vkCmdDraw(cb, q->count * 6u, 1, 0, 0);
+            continue;
+        }
         vbs[0] = q->geom; vbs[1] = q->mat;
         offs[0] = 0;      offs[1] = 0;
         vkCmdBindVertexBuffers(cb, 0, 2, vbs, offs);
@@ -3287,6 +3426,10 @@ void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     if (s_nsil || s_nslant) record_stage(d, cb, slot, w, h, RS_SHADOW);
     record_stage(d, cb, slot, w, h, RS_BODY);
     if (s_nwire) record_stage(d, cb, slot, w, h, RS_WIRE);
+    /* the effects models, only on a frame the effects pass draws too: an
+       effect is drawn whole or not at all (tagpu_fx.h `nmodels`) */
+    if (s_nfx && tagpu_vk_fx_models_ok(d->frame))
+        record_stage(d, cb, slot, w, h, RS_FX);
     /* THE PRODUCER IS TOLD, AND ONLY FROM HERE. The structure-shadow gate in
        tagpu_native.c must be raised on a frame something actually painted a
        slant and not on a frame that merely could have -- its own comment says
@@ -3332,7 +3475,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     int owed = s_downPaying;
     s_downOwed = 0;
     s_drawThis = 0; s_abFrame = 0; s_ndraw = 0; s_ncast = 0;
-    s_nsil = 0; s_nslant = 0; s_nwire = 0;
+    s_nsil = 0; s_nslant = 0; s_nwire = 0; s_nfx = 0;
     s_shadowOn = 0;
 
     /* NOTHING TO FREE, BUT THE VERDICT STILL STANDS. */
@@ -3380,6 +3523,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     if (s_dpool) { vkDestroyDescriptorPool(d->dev, s_dpool, NULL); s_dpool = VK_NULL_HANDLE; }
     if (s_pipeBody) { vkDestroyPipeline(d->dev, s_pipeBody, NULL); s_pipeBody = VK_NULL_HANDLE; }
     if (s_pipeGhost) { vkDestroyPipeline(d->dev, s_pipeGhost, NULL); s_pipeGhost = VK_NULL_HANDLE; }
+    if (s_pipeFx) { vkDestroyPipeline(d->dev, s_pipeFx, NULL); s_pipeFx = VK_NULL_HANDLE; }
     if (s_pipeWire) { vkDestroyPipeline(d->dev, s_pipeWire, NULL); s_pipeWire = VK_NULL_HANDLE; }
     if (s_pipeShMark) { vkDestroyPipeline(d->dev, s_pipeShMark, NULL); s_pipeShMark = VK_NULL_HANDLE; }
     if (s_pipeShDraw) { vkDestroyPipeline(d->dev, s_pipeShDraw, NULL); s_pipeShDraw = VK_NULL_HANDLE; }

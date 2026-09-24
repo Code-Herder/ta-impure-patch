@@ -5,11 +5,11 @@
    `Model3DONode` template into two vertex streams, the two caches over them,
    the four things that invalidate an entry, and the lever.
 
-   THE WALK IS THE POINT. `emit_node`, `emit_slant_at` and `emit_wire` each walk
-   the same tree with slightly different rules, and the bake has to reproduce
-   all three EXACTLY — the same faces, the same fan, the same corner-to-UV
-   mapping, the same skips — or the GPU path draws a different model from the
-   one it is being compared against. So there is ONE walk here, `pb_walk`, and
+   THE WALK IS THE POINT. The body, the structure-shadow slant and the
+   nanoframe wire each walk the same tree with slightly different rules, and the
+   bake has to reproduce all three EXACTLY — the same faces, the same fan, the
+   same corner-to-UV mapping, the same skips — or the GPU path draws a different
+   model from the engine's. So there is ONE walk here, `pb_walk`, and
    both bakes and the predictor drive it. A rule that lives in one place cannot
    drift between the geometry buffer and the material stream, and the two
    therefore always agree about how many vertices there are, which is what makes
@@ -170,9 +170,8 @@ static int pb_walk(const char* const* nd, int nparts, int range,
         if (nface <= 0 || nface > 512 || !ptr_ok(faces)) continue;
         if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) { if (st) st->badNode++; continue; }
         /* the slant raster skips face 0 when the node carries a selection
-           primitive (0x45A610's rule); the body raster does not — `emit_geom_at`
-           passes skipFace = -1 (emit_node's `skipFace` is the effects
-           renderer's, not a unit's) */
+           primitive (0x45A610's rule); the body raster does not (skipping it
+           is also the effects draw's rule, 0x46BAE0, not a unit body's) */
         j0 = (range == TAGPU_PB_SLANT && *(const int*)(n + N_SELPRIM) != -1) ? 1 : 0;
         for (j = j0; j < nface; j++) {
             const char* fa = faces + j * FACE_STRIDE;
@@ -230,17 +229,17 @@ static void geom_emit(void* vctx, int range, int p, const char* nd,
        belongs to ONE piece, and a piece's transform is built by rotating basis
        vectors (`piece_local`) and composing those, so it is rigid. A rigid
        transform carries the rest normal to the posed normal and preserves its
-       length — so the degeneracy test `emit_node` applies to the posed normal
-       gives the same answer here, and the shader has only to transform, flip
+       length — so a degeneracy test on the posed normal gives the same answer
+       here, and the shader has only to transform, flip
        toward SH_V and normalise. The flip is NOT baked: it depends on the posed
        direction, which is what the piece matrix decides. */
-    /* THE ONE PLACE THIS IS NOT EXACT. `emit_node` computes its `nl` from the
-       ENGINE's posed vertices, which the compose has rounded into 16.16 at every
-       axis and every level of the tree (`fistp`, 0x4B7173); the bake computes it
-       from the rest vertices. For a face of any real area the two agree, but a
-       NEAR-DEGENERATE one can land on the other side of `nl > 1e-6` there and
-       take the neutral row where we take a shaded one, or the reverse. That is a
-       whole face one SHD row off, which is what Gate B is told to look for. */
+    /* THE ONE PLACE THIS IS NOT EXACT. The ENGINE's posed vertices are rounded
+       into 16.16 at every axis and every level of the tree (`fistp`, 0x4B7173),
+       and the bake computes `nl` from the rest vertices. For a face of any real
+       area the two agree, but a NEAR-DEGENERATE one can land on the other side
+       of `nl > 1e-6` from the posed one and take the neutral row where the posed
+       vertices give a shaded one, or the reverse. That is a whole face one SHD
+       row off, which is what Gate B is told to look for. */
     if (range == TAGPU_PB_BODY) {
         float e1x = V[1][0]-V[0][0], e1y = V[1][1]-V[0][1], e1z = V[1][2]-V[0][2];
         float e2x = V[2][0]-V[0][0], e2y = V[2][1]-V[0][1], e2z = V[2][2]-V[0][2];
@@ -540,7 +539,8 @@ static void mat_emit(void* vctx, int range, int p, const char* nd,
     for (t = 0; t < n; t++) {
         float* o = s_scratchM + (size_t)(c->nv + t) * TAGPU_PB_MATST;
         if (range == TAGPU_PB_BODY && hasTex) {
-            /* the fan's corner onto the quad's UVs, emit_node's own mapping */
+            /* the fan's corner onto the quad's four UV corners; a face of more
+               than four spreads its corners over the four */
             int cc = fvc <= 4 ? slot[t] : slot[t] * 4 / fvc;
             o[0] = (cc == 1 || cc == 2) ? uv[2] : uv[0];
             o[1] = (cc >= 2)            ? uv[3] : uv[1];

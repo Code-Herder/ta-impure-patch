@@ -150,6 +150,17 @@
 #define U_INDEX            0xA8        /* u16 UnitInGameIndex: the stable id    */
 #define U_SQUAD            0xAC        /* the group tag, tested as a DWORD      */
 #define U_OWNER            0xFF        /* u8 player id                          */
+#define U_PLAYER           0x96        /* PlayerStruct* owner: the chain 0x4211D0
+                                          walks to a debris face's team colour  */
+/* the ten players: PlayerStruct[10] inline in the main block (0x49BEDF's
+   `lea [edx+eax*2+0x1B63]`, eax = id*0xA5), and the logo colour the unit
+   and debris rasterisers pick a team-coloured frame by -- PlayerInfo+0x96,
+   reached through the player's +0x27 (0x45861C, 0x421340). DISASSEMBLED. */
+#define OFF_PLAYERS        0x1B63
+#define PLAYER_STRIDE      0x14B
+#define PLAYER_COUNT       10
+#define PL_INFO            0x27        /* PlayerInfo*                          */
+#define PI_LOGO            0x96        /* u8 the logo colour                   */
 #define U_NANO             0x104       /* float, the build fraction REMAINING   */
 #define U_HEALTH           0x108       /* s16                                   */
 #define U_CLOAKF           0x10E       /* u8, bit2 = actively cloaked           */
@@ -251,7 +262,6 @@
 #define PJ_TURN            0x34        /* i16[3] rotation triple               */
 #define PJ_SPAWN           0x42        /* i32 tick                             */
 #define PJ_DEATH           0x46        /* i32 tick                             */
-#define PJ_ATTACKER        0x52        /* UnitStruct*                          */
 #define PJ_GROUNDH         0x5E        /* u16 terrain height under it          */
 #define PJ_HIDDEN          0x60        /* i16; drawn only when 0               */
 #define PJ_SPIN            0x64        /* i16                                  */
@@ -278,12 +288,30 @@
 #define EX_TURN            0x4C        /* i16[3]                               */
 /* the flying-debris particle slots: stock's 100 dwords at 0x511DF0..0x511F80,
    or TAGPU_LIM_PSYS of ours -- tagpu_limits_psys_begin()/_end() */
+#define PSYS_UNIT          0x00        /* UnitStruct* the piece flew off: the
+                                          creator copies it in at 0x4216AA and
+                                          0x421713 reads +0x9E off it         */
 #define PSYS_PIECE         0x2C        /* the system's piece record            */
 #define DB_NODE            0x00
-#define DB_TURN            0x12        /* i16[3]                               */
+/* THE TURN WORDS ARE +0x10/+0x12/+0x14 AND 0x421550 HANDS THEM OVER REVERSED:
+   `0x4215AF..0x4215C5` builds the triple as {w14, w12, w10} before calling
+   0x4B6CC0, and the tick 0x4213B0 spins exactly those three words
+   (`0x421509..0x421519`). DISASSEMBLED. */
+#define DB_TURN_T0         0x14        /* i16: the triple's t0 (Rz)            */
+#define DB_TURN_T1         0x12        /* i16: t1 (Ry)                          */
+#define DB_TURN_T2         0x10        /* i16: t2 (Rx)                          */
 #define DB_X               0x16
 #define DB_ALT             0x1A
 #define DB_Y               0x1E
+/* THE ENGINE'S ROTATION BY A TRIPLE, which poses every effects model:
+   void __stdcall (const int32 src[3], int32 dst[3], const int16 turn[3]),
+   `ret 0xc`. Pure: it reads the two arguments and the double at 0x509EF8
+   (2 pi / 65536) and writes `dst` alone. Three calls of the pair rotator
+   0x4B7173, which skips a zero word -- turn[0] on (x, y), then turn[2] on
+   (y, z), then turn[1] on (x, z) -- each a' = a cos - b sin, b' = a sin +
+   b cos in x87 at the thread's precision, stored back with `fistp`.
+   DISASSEMBLED. */
+#define ROTATE3_VA         0x004B6CC0u
 /* the effect GAF sequences, resolved ONCE PER PROCESS: 0x429870 loads the
    "fx" bank and stores every one of them, and its only caller is 0x49134D
    inside 0x491200, whose only caller is 0x49EA62 in WinMain (0x49E830). So

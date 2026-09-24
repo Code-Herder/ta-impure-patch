@@ -26,9 +26,16 @@
    ALL THREE RANGES. The vertex shader's `uRange` selects the body, the
    structure-shadow SLANT (its own projection, its own integer snap, its own
    per-piece `cached` rule) or the nanoframe WIRE (a LINE_LIST, the body
-   projection, one notch nearer). What is still CPU-built is the selection
-   lines and the effects models. This is the only unit renderer; there is no
+   projection, one notch nearer). This is the only unit renderer; there is no
    CPU unit emitter to fall back to (§7 step 8).
+
+   AND THE EFFECTS MODELS, through a second vertex stage (`FXVS`) paired with
+   the same fragment stage: not geometry but the RUNS the engine's own
+   rasterisers produce (tagpu_fxmodel.h, which says why), each a rectangle one
+   row high with one texel or one palette index. So a weapon's body, its
+   flame, a debris piece and an explosion's body take the unit atlas, the
+   face-shade multiplier, fog and Classic++'s lighting through the very code a
+   unit takes them through. `tagpu_posedraw_fx` below.
 
    THE SLANT IS THE ONE PLACE THE PORT CANNOT BE EXACT BY CONSTRUCTION
    (gpu-posing.md §5). Its snap is an arithmetic FLOOR of the posed 16.16
@@ -128,6 +135,18 @@ typedef struct {
     float shOffY;
 } TAGPU_PDUNIT;
 
+/* ONE EFFECTS MODEL, as the effects gather rasterised it: runs
+   [run0, run0 + nrun) of `runs`, which holds `nrunAll` of them, 8 floats
+   each (tagpu_fxmodel.h TAGPU_FXRUN: x0, x1, y, -, u, v, fc, -). The record
+   copies them; the array is the gather's and is not kept. */
+typedef struct {
+    const float* runs;
+    unsigned nrunAll, run0, nrun;
+    float wx0, wz0;             /* the effect's anchor: world x, projected z  */
+    float enc;                  /* its key in the effects band                */
+    int   fog;                  /* uFog bits, as the native shader takes them */
+} TAGPU_PDFX;
+
 #define TAGPU_PDSH_NONE   0
 #define TAGPU_PDSH_SIL    1
 #define TAGPU_PDSH_SLANT  2
@@ -162,6 +181,8 @@ void tagpu_posedraw_begin(const TAGPU_PDVIEW* v);
    so the two cannot be told apart by counting windows. */
 void tagpu_posedraw_begin_ghost(const TAGPU_PDVIEW* v);
 void tagpu_posedraw_unit(const TAGPU_PDUNIT* u);
+/* one effects model, inside the units' window and after every unit */
+void tagpu_posedraw_fx(const TAGPU_PDFX* f);
 void tagpu_posedraw_end(void);
 
 /* THE SHADOW, SLANT AND WIRE DRAWS HAVE NO ENTRY POINT HERE; they ride the
@@ -243,13 +264,16 @@ void tagpu_posedraw_end(void);
 /* Records one frame can hand over: every one the producer can make, so no
    frame the packet carries is refused for count. A record is a unit-table
    slot (TAGPU_PK_MAX_UNITS), a wreck (TAGPU_PK_MAX_WRECKS), the placement
-   ghost (1) or a queued build ghost (TAGPU_PK_MAX_BUILDS); tagpu_posedraw.c
-   asserts the sum against tagpu_packet.h. NOTHING IS SIZED FROM IT -- the
-   arenas here and the Vulkan pass's slot buffers grow to the frame's own
-   count -- so it is a bound on a number handed between two files, which the
-   Vulkan pass re-checks, not a budget. A frame past it hands nothing over and
-   says so once. */
-#define TAGPU_PD_MAXHAND (16384 + TAGPU_LIM_WRECKS + 1 + 6144)
+   ghost (1), a queued build ghost (TAGPU_PK_MAX_BUILDS) or an effects model
+   (TAGPU_PD_MAXFX); tagpu_posedraw.c asserts the sum against tagpu_packet.h.
+   NOTHING IS SIZED FROM IT -- the arenas here and the Vulkan pass's slot
+   buffers grow to the frame's own count -- so it is a bound on a number
+   handed between two files, which the Vulkan pass re-checks, not a budget. A
+   frame past it hands nothing over and says so once. */
+/* the effects models one frame can make: a projectile's body and its flame,
+   a debris piece, an explosion's body (tagpu_packet.h TAGPU_PK_MAX_FXMODEL) */
+#define TAGPU_PD_MAXFX   (2 * TAGPU_LIM_PROJ + TAGPU_LIM_PSYS + TAGPU_LIM_EXPL)
+#define TAGPU_PD_MAXHAND (16384 + TAGPU_LIM_WRECKS + 1 + 6144 + TAGPU_PD_MAXFX)
 
 typedef struct TAGPU_PDUREC {
     /* the bake entries, and the serial each was baked under. The POINTER alone
@@ -298,6 +322,11 @@ typedef struct TAGPU_PDUREC {
        consumer draws these with depth writes OFF and after the units, which
        is the order they are recorded in. `casts` is always 0 for one. */
     int   ghost;
+    /* 1 = AN EFFECTS MODEL, drawn in the consumer's effects stage by the
+       `pose_fx` program: `first`/`count` are then its runs in `runs` below,
+       not vertices, `geom`/`mat` are NULL, and it has no pose, no shadow, no
+       wire and no cast. */
+    int   fx;
 } TAGPU_PDUREC;
 
 typedef struct TAGPU_PDHAND {
@@ -306,6 +335,11 @@ typedef struct TAGPU_PDHAND {
     const TAGPU_PDUREC* units; int nunit;
     const float* rows;  unsigned nrow;    /* vec4s, 3 per piece per unit      */
     const float* flags; const float* vis; unsigned nflag;
+    /* THE EFFECTS MODELS' RUNS, 8 floats each (TAGPU_PDFX), every fx record's
+       back to back. The storage buffer carries them after the two word
+       sections, so a record's first run is at vec4 `nrow + nflag / 2 +
+       2 * first`. */
+    const float* runs;  unsigned nrun;
 
     /* THE VERTEX STAGE'S BLOCK, as `_begin` left it. Its std140 offsets are
        printed in inc/spirv/tagpu_posedraw.spv.h and are the contract for the

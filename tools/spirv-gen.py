@@ -199,6 +199,9 @@ PROGRAMS = [
     # the half they do not replace.
     ("pose_unit",    "tagpu_posedraw::VS",      "tagpu_native::FS"),
     ("pose_depth",   "tagpu_posedraw::VS",      "tagpu_posedraw::DFS"),
+    # ...and the effects models: the runs of the engine's own rasterisers
+    # (tagpu_fxmodel.c), drawn by the same fragment stage the units take
+    ("pose_fx",      "tagpu_posedraw::FXVS",    "tagpu_native::FS"),
     # one pass each
     ("fps",          "tagpu_fps::VS",           "tagpu_fps::FS"),
     ("mark",         "tagpu_mark::VS",          "tagpu_mark::FS"),

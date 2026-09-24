@@ -68,7 +68,16 @@ int  tagpu_vk_unit_casters(void);
    CALLED AFTER tagpu_vk_shadow_prepare. 0 means `record` must not be called. */
 int  tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 
-/* Draw the bodies, inside the seam's render pass. `w`/`h` are its extent. */
+/* The effects models this pass will draw on frame `frame`, as `prepare` left
+   it: its count of effects records when it is drawing that frame, -1 when it
+   is not (or never prepared it). The effects pass asks after both have
+   prepared and draws only when this is all of the frame's models
+   (tagpu_fx.h `nmodels`). */
+int  tagpu_vk_unit_fx_count(unsigned frame);
+
+/* Draw the bodies, inside the seam's render pass, then the effects models --
+   the latter only when the effects pass is drawing the same frame
+   (`tagpu_vk_fx_models_ok`). `w`/`h` are the extent. */
 void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                           uint32_t w, uint32_t h);
 

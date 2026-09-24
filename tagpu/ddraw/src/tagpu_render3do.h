@@ -37,6 +37,20 @@ int tagpu_r3d_shade_dir(void);
    drawn this frame -- a face baked flat for want of a texel the consumer did
    not have yet would stay flat for as long as the bake does. */
 int tagpu_r3d_atlas_uv(const char* gafframe, float uv[4], float* ck);
+/* THE SAME LOOKUP, FOR A CONSUMER THAT RASTERISES ON THE CPU (tagpu_fxmodel.c):
+   the frame's rect in the atlas and the mirror that holds its texels, so a
+   pixel can be given the very texel the engine's span would copy. The same
+   three answers, and the same allowance spent; 0 as well while the mirror or
+   its key plane does not exist yet (tagpu_r3d_atlas_mirror_want). `idx` and
+   `key` are the atlas's own buffers, valid until the next recycle -- which is
+   once a frame, before the first lookup (tagpu_r3d_atlas_recycle). */
+typedef struct TAGPU_R3DTEX {
+    const unsigned char* idx;   /* dim x dim palette indices                  */
+    const unsigned char* key;   /* dim x dim: 0 where the texel is the key    */
+    int dim;
+    int x, y, w, h;             /* the frame's first texel, and its size      */
+} TAGPU_R3DTEX;
+int tagpu_r3d_atlas_texels(const char* gafframe, TAGPU_R3DTEX* t);
 int tagpu_r3d_ready(void);
 int tagpu_r3d_ensure(void);
 const char* tagpu_r3d_face_texframe(const char* fa, int owner);

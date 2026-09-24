@@ -114,6 +114,8 @@
 
 #include "tagpu_vk_fx.h"
 #include "tagpu_vk_world.h"   /* the target's ss: the line width follows it */
+#include "tagpu_vk_unit.h"    /* tagpu_vk_unit_fx_count: the models' pass */
+#include "tagpu_posedraw.h"   /* TAGPU_PD_MAXFX, the models' bound */
 #include "tagpu_fx.h"
 #include "tagpu_gaf.h"                     /* tagpu_gaf_rects_due              */
 #include "tagpu_pal.h"                     /* tagpu_pal_expand                 */
@@ -158,6 +160,11 @@ static int s_state;
 static int s_downOwed;                     /* a teardown the seam still owes us */
 static int s_downPaying;                   /* ...and the seam is paying it NOW  */
 static int s_drawThis;                     /* `prepare` left a draw for `record` */
+/* the frame whose effects models the posed pass may draw
+   (`tagpu_vk_fx_models_ok`): set by `prepare` on the paths that draw, or
+   that have nothing of their own to draw, and on no other */
+static unsigned s_modelsFrame = 0xFFFFFFFFu;
+static int s_saidModels;                   /* the posed pass's refusal, once   */
 static int s_abFrame;
 static int s_saidRestored;                 /* the Classic++ refusal, said once  */
 static int s_saidNoMirror;                 /* ...and the mirror's, likewise     */
@@ -1251,7 +1258,31 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         }
         total += h.n[b];
     }
-    if (total < 1) return 0;
+
+    /* THE FRAME'S MODELS ARE THE POSED PASS'S, AND AN EFFECT IS DRAWN WHOLE OR
+       NOT AT ALL (tagpu_fx.h `nmodels`). That pass prepared before this one,
+       so what it will draw of them is already known: anything but all of them
+       and this pass draws nothing either -- and says nothing to the posed
+       pass, which then draws none (`tagpu_vk_fx_models_ok`). The count is
+       only compared, but it is bounded like every number that crosses. */
+    if (h.nmodels < 0 || h.nmodels > TAGPU_PD_MAXFX) {
+        plog(d, "fx: the hand-over reports %d models, outside 0..%d - nothing drawn",
+             h.nmodels, TAGPU_PD_MAXFX);
+        return 0;
+    }
+    if (h.nmodels > 0 && tagpu_vk_unit_fx_count(d->frame) != h.nmodels) {
+        if (!s_saidModels) {
+            s_saidModels = 1;
+            plog(d, "fx: the posed pass is not drawing this frame's %d effects "
+                    "models (%d) - no effect is drawn on such a frame",
+                 h.nmodels, tagpu_vk_unit_fx_count(d->frame));
+        }
+        return 0;
+    }
+    s_saidModels = 0;
+    /* nothing of this pass's own to draw, and nothing against the models:
+       they are drawn */
+    if (total < 1) { s_modelsFrame = d->frame; return 0; }
 
     /* A FLASH WITHOUT ITS LIGHT TABLE has nothing to be lit from -- the
        producer has never built the table -- so the pass stands down rather
@@ -1477,6 +1508,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        the pass. */
     s_abFrame = h.ab;
     s_drawThis = 1;
+    s_modelsFrame = d->frame;
     return 1;
 
 refuse:
@@ -1591,6 +1623,13 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         vkCmdDraw(cb, (uint32_t)s_n[b], 1, first, 0);
         first += (uint32_t)s_n[b];
     }
+}
+
+/* READY as well as stamped: `atlas_owed` runs after `prepare_draw` in the same
+   call and can refuse the pass, and then `record` draws nothing. */
+int tagpu_vk_fx_models_ok(unsigned frame)
+{
+    return s_state == ST_READY && !s_downOwed && s_modelsFrame == frame;
 }
 
 int tagpu_vk_fx_ab_frame(void)

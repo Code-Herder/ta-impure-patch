@@ -1464,8 +1464,9 @@ static void atlas_paint(TAGPU_GAFATLAS* a, TAGPU_GAFENT* e, unsigned char ck,
 
        AND IT IS AN ORDERING RATHER THAN A RACE, so no lock belongs here. There
        is no second thread: every paint of an armed atlas is render-thread --
-       the unit atlas through `tagpu_native.c`'s `emit_node` and
-       `tagpu_posebake.c`'s `mat_emit`, both inside `tagpu_native_frame`,
+       the unit atlas through `tagpu_posebake.c`'s `mat_emit` and
+       `tagpu_fxmodel.c`'s `tagpu_fxmodel_raster` (the effects gather), both
+       inside `tagpu_native_frame`,
        itself called only from `tagpu_overlay.c`'s `tagpu_overlay_draw` -- and
        so is every consumer. A fence would fix nothing while reading as though
        it had. */

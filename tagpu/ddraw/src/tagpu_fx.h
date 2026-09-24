@@ -19,7 +19,15 @@ typedef struct TAGPU_FXVIEW {
     int eyeX, eyeY, vpL, vpT;    /* the PREDICTED eye and the true viewport, from the packet */
     int gw, gh, ss;
     float zoom, zoomCx, zoomCy;  /* the native pass's view zoom                */
-    float encSprite, depthScale; /* this frame's sprite depth key and VS scale */
+    /* THE EFFECTS BAND'S SEQUENCE (tagpu_fx.c, "the effects band"): model k
+       of this frame takes `encFx + (2k + 1) * encStep`, and a sprite or a
+       line emitted after k models `encFx + 2k * encStep`. `modelCap` is the
+       count the step was sized for (tagpu_fx_model_bound), so no key leaves
+       the band; `modelsOn` is 0 on a frame the posed pass cannot record, and
+       then no record with a model is drawn. */
+    float encFx, encStep;
+    int   modelCap, modelsOn;
+    float depthScale;            /* the vertex stages' depth scale             */
     float encLayer[10];          /* particle layer n -> depth key (tagpu_sfx)  */
     int r0, rows;                /* the row sweep's base row and count: a row  */
                                  /* key is (feat?3:1) + (row-r0)*4 (tagpu_feat)*/
@@ -41,17 +49,15 @@ typedef struct TAGPU_FXVIEW {
     unsigned int frame_counter;
 } TAGPU_FXVIEW;
 
-/* one 3DO node to emit through the native geometry path */
+/* ONE EFFECTS MODEL, already rasterised: its runs are `nrun` entries of
+   tagpu_fxmodel.c's arena from `run0` (tagpu_fxmodel_runs), in frame pixels,
+   and the unit pass draws them (tagpu_native.c hands each model to
+   tagpu_posedraw_fx). The packet's model itself is not carried: the
+   rasteriser is the one module that reads it. */
 typedef struct TAGPU_FXMODEL {
-    const char* node;            /* Model3DONode*: the per-TYPE template the
-                                    PUBLISHER resolved. tagpu_fx.c only carries
-                                    it; tagpu_native.c's emit_fx_model is the
-                                    (fenced) file that walks it, under
-                                    tagpu_reclaim's teardown fence              */
-    float ax, ay;                /* anchor in frame px (engine projection)     */
+    unsigned run0, nrun;         /* its runs in the arena, this frame's        */
     float wx, wz;                /* world x, projected world z (fog lookup)    */
-    short turn[3];               /* engine rotation triple (65536 = 360 deg)   */
-    int   owner;
+    float enc;                   /* its key in the effects band's sequence     */
 } TAGPU_FXMODEL;
 
 #define TAGPU_FXMODE_FLAT   0
@@ -72,6 +78,11 @@ typedef struct TAGPU_FXMODEL {
     (255 - ((i) < TAGPU_FX_FLASH_LO ? 0 : (i) > TAGPU_FX_FLASH_LO + 31 ? 31 : (i) - TAGPU_FX_FLASH_LO))
 
 int  tagpu_fx_armed(unsigned frame_counter);    /* tagpu_fx.on present (30f) */
+/* An upper bound on the models the gather can emit from this packet: every
+   model a projectile, a debris piece or an explosion names, before any gate.
+   The native pass sizes the effects band's step from it BEFORE it fixes the
+   frame's depth bands, and the gather refuses a model past it. */
+int  tagpu_fx_model_bound(const struct TAGPU_PACKET* pk);
 int  tagpu_fx_gather(const TAGPU_FXVIEW* v);    /* returns total drawables    */
 int  tagpu_fx_nmodels(void);
 const TAGPU_FXMODEL* tagpu_fx_model(int i);
@@ -166,6 +177,13 @@ typedef struct TAGPU_FXHAND {
        TAGPU_FX_VST floats each. */
     const float* vert[TAGPU_FXB_N];
     int          n[TAGPU_FXB_N];
+    /* THE MODELS THIS FRAME'S RECORDS CARRY, which the posed pass draws
+       (tagpu_vk_unit.c's effects stage). An effect is drawn whole or not at
+       all, and its model and its sprites are drawn by two passes, so the two
+       agree per frame: this pass draws only when the posed pass is drawing
+       exactly this many (`tagpu_vk_unit_fx_count`), and the posed pass draws
+       them only when this pass is drawing (`tagpu_vk_fx_models_ok`). */
+    int          nmodels;
 
     /* The vertex stage's uniform block (std140 offsets are printed in
        inc/spirv/tagpu_fx.spv.h and are the contract for the buffer). */

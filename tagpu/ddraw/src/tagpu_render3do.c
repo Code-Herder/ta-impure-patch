@@ -558,6 +558,17 @@ int tagpu_r3d_atlas_uv(const char* g, float uv[4], float* ck)
     *ck = (float)e->ck / 255.0f;
     return 1;
 }
+int tagpu_r3d_atlas_texels(const char* g, TAGPU_R3DTEX* t)
+{
+    if (s_state != 1) return 0;
+    const unsigned dN = s_atlas.deferN;
+    const TAGPU_GAFENT* e = atlas_get(g);
+    if (!e) return s_atlas.deferN != dN ? -1 : 0;
+    if (!s_atlas.mirror || !s_atlas.keym) return 0;
+    t->idx = s_atlas.mirror; t->key = s_atlas.keym; t->dim = s_atlas.dim;
+    t->x = e->x; t->y = e->y; t->w = e->w; t->h = e->h;
+    return 1;
+}
 int tagpu_r3d_ready(void) { return s_state == 1; }
 int tagpu_r3d_ensure(void)             /* init on demand */
 {

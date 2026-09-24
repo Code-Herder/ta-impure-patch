@@ -59,6 +59,7 @@
 #include "tagpu_packet.h"
 #include "tagpu_native.h"   /* tagpu_native_scissor_on, for the hand-over */
 #include "tagpu_vk.h"       /* tagpu_vk_armed(): whether to pay for the mirror */
+#include "tagpu_fxmodel.h" /* a model is rasterised where it is emitted */
 #include "tagpu_log.h"
 
 
@@ -71,7 +72,11 @@
 /* THE STRIDE IS tagpu_fx.h's, so the vertices written here and the Vulkan
    attribute array cannot drift apart. */
 #define FXST     TAGPU_FX_VST   /* x,y,enc, u,v, c,mode, wx,wz               */
-#define MAXMODEL 1024
+/* every model the packet's tables can name: a projectile's body and its
+   flame, a debris piece, an explosion's body -- so the list itself never
+   refuses one, and `tagpu_fx_model_bound` can never exceed it */
+#define MAXMODEL (2 * (int)TAGPU_PK_MAX_PROJ + (int)TAGPU_PK_MAX_DEBRIS + \
+                  (int)TAGPU_PK_MAX_EXPL)
 #define ATLAS_DIM 2048
 #define ATLAS_MAX 2048
 
@@ -204,11 +209,22 @@ static float* const s_verts[NBUCKET] = {
     [B_UNDER] = s_vUnder, [B_LINES] = s_vLines, [B_FLASH] = s_vFlash, [B_SPRITES] = s_vSprites
 };
 static int    s_nv[NBUCKET];
-static float  s_encCur = 403.0f;       /* depth key of what is being emitted  */
+static float  s_encCur;                /* depth key of what is being emitted  */
 static int    s_under = 0;             /* emit sprites/dots into B_UNDER      */
 static int    s_mute = 0;              /* passive: count, emit nothing        */
 static TAGPU_FXMODEL s_models_[MAXMODEL];
 static int    s_nm = 0;
+/* this frame's band (TAGPU_FXVIEW `encFx`, `encStep`, `modelCap`,
+   `modelsOn`), latched by the gather */
+static float  s_encFx, s_encStep;
+static int    s_modelCap, s_modelsOn;
+/* models asked for and not drawn this frame, and why: the posed pass cannot
+   record (`modelsOn`), the band is full, or the rasteriser refused it
+   (tagpu_fxmodel.h: not carried, a texel the unit atlas has not painted, no
+   room) -- the last reason is kept for the heartbeat */
+static int    s_cModelLost, s_modelWhy;
+/* the frame the models are rasterised into, from the view (tagpu_fxmodel.h) */
+static TAGPU_FXRVIEW s_rv;
 
 static int s_lhtInit = 0;
 /* THE FLASH LIGHT TABLE'S OWN BYTES, at file scope because the hand-over
@@ -468,51 +484,109 @@ void tagpu_fx_set_mute(int on) { s_mute = on; }
 static unsigned s_caps;
 unsigned tagpu_fx_caps(void) { return s_caps; }
 
-/* The node is a per-TYPE Model3DONode template the PUBLISHER resolved and
-   range-checked on the game thread; this file only carries it to the native
-   pass's emit_fx_model, which is the (fenced) file that walks it, under
-   tagpu_reclaim's teardown fence — the same argument PK_PIECE.node stands on.
-   Not one byte of it is read here, which is what keeps this file off the
-   thread-split allow-list. */
-static void emit_model(unsigned node, float ax, float ay, float wx, float wz,
-                       short t0, short t1, short t2, int owner)
+/* ---- THE EFFECTS BAND -------------------------------------------------------
+   The engine paints its effects in one order and with no depth at all: every
+   projectile record in turn (its shadow blob, then its lines, its model or
+   its sprite), then the debris pieces, then every explosion's flash, then
+   each explosion's model followed by its sprite (effects.md §1, §2). The
+   models are drawn by the posed pass with depth written and the sprites by
+   the effects pass after it with depth tested, so that order is carried as
+   KEYS: the band above the ground rows (tagpu_native.c) is cut into a
+   sequence, and
+
+     model k of the frame               encFx + (2k + 1) * encStep
+     a sprite or a line after k models  encFx + 2k * encStep
+
+   so a sprite lands over every model emitted before it and under every model
+   after it, which is exactly where the engine's painter puts it. A flash is
+   the exception: the engine draws all of them before any explosion's model,
+   so every flash takes the key the explosion walk starts at.
+
+   THE KEYS REWIND WITH THE BRACKET. A record taken back out restores `s_nm`,
+   and the next key is computed from `s_nm`, so the next record takes the
+   keys the lost one would have had and the sequence never has a hole a
+   later sprite could fall into. */
+static float key_after(int nmodels)
 {
-    if (!s_models || s_mute || s_nm >= MAXMODEL || !node) return;
-    TAGPU_FXMODEL* m = &s_models_[s_nm++];
-    m->node = (const char*)(size_t)node; m->ax = ax; m->ay = ay; m->wx = wx; m->wz = wz;
-    m->turn[0] = t0; m->turn[1] = t1; m->turn[2] = t2; m->owner = owner;
+    return (float)((double)s_encFx + 2.0 * (double)nmodels * (double)s_encStep);
+}
+
+/* ONE MODEL OF A RECORD, RASTERISED WHERE IT IS EMITTED: tagpu_fxmodel.c
+   projects the packet's posed model with this pass's eye and runs the
+   engine's two rasterisers over it, appending its runs; this records which
+   runs are the model's, its key in the band and its fog anchor. The unit pass
+   draws the runs (tagpu_native.c hands them to tagpu_posedraw_fx).
+
+   A MODEL IS A PART OF ITS RECORD, and one that cannot be drawn this frame is
+   a part lost (`s_partsLost`): the posed pass cannot record it, the band is
+   full, or the rasteriser refused it -- a model the packet did not carry, a
+   texel the unit atlas's allowance has not painted yet, no room. The bracket
+   then takes the whole record back. A model that rasterises to no run at all
+   -- off the clip rect, or every face turned away -- draws nothing in the
+   engine either, so it is not a loss and takes no key; nor is a model the
+   `nomodels` lever does not ask for. */
+static void emit_model(const TAGPU_FXVIEW* v, unsigned model, float wx, float wz)
+{
+    TAGPU_FXMODEL* o;
+    unsigned first, n;
+    if (!s_models || s_mute || model == TAGPU_PK_NOMODEL) return;
+    if (!s_modelsOn || s_nm >= s_modelCap || s_nm >= MAXMODEL) {
+        s_cModelLost++;
+        s_partsLost++;
+        return;
+    }
+    first = tagpu_fxmodel_mark();
+    if (!tagpu_fxmodel_raster(v->packet, model, &s_rv)) {
+        s_modelWhy = tagpu_fxmodel_why();
+        s_cModelLost++;
+        s_partsLost++;
+        return;
+    }
+    n = tagpu_fxmodel_mark() - first;
+    if (n == 0) return;
+    o = &s_models_[s_nm];
+    o->run0 = first; o->nrun = n;
+    o->wx = wx; o->wz = wz;
+    o->enc = (float)((double)s_encFx + (2.0 * (double)s_nm + 1.0) * (double)s_encStep);
+    s_nm++;
+    s_encCur = key_after(s_nm);
 }
 
 /* ---- AN EFFECT IS DRAWN WHOLE OR NOT AT ALL ---------------------------------
    One record of the packet is one effect: a projectile with its ground
-   shadow and its body, an explosion with its flash and its body, a laser's
-   lines. Its parts land in different buckets -- a shadow and a body in
-   B_SPRITES, a flash in B_FLASH, a line in B_LINES -- and any one of them can
-   be lost for this frame's want of room (`s_partsLost`: an atlas paint
-   deferred past the allowance, an atlas full, a decode that failed, a bucket
-   full). Taking back that part alone would draw the rest without it for a
-   frame: a flash with no explosion, a shadow under no shell. So every record
-   is emitted inside a bracket, and ANY PART OF IT LOST takes the whole record
-   back out at the bracket's end: every bucket, the quad count and the model
-   list return to where they stood at its start. Nothing else is emitted
-   inside a bracket, so the rollback takes no other effect's vertices with it,
-   and what did paint stays painted and draws whole on a later frame.
+   shadow, its body and its flame, an explosion with its flash, its body and
+   its sprite, a debris piece, a laser's lines. Its parts land in different
+   places -- a shadow and a sprite in B_SPRITES, a flash in B_FLASH, a line in
+   B_LINES, a model in the model list and its runs in tagpu_fxmodel.c's arena
+   -- and any one of them can be lost for this frame's want of room
+   (`s_partsLost`: an atlas paint deferred past the allowance, an atlas full,
+   a decode that failed, a bucket full, a model `emit_model` could not
+   rasterise). Taking back that part alone would draw the
+   rest without it for a frame: a flash with no explosion, a shadow under no
+   shell, a flame with no rocket. So every record is emitted inside a
+   bracket, and ANY PART OF IT LOST takes the whole record back out at the
+   bracket's end: every bucket, the quad count, the model list, the run
+   arena and the sequence key return to where they stood at its start. Nothing else is
+   emitted inside a bracket, so the rollback takes no other effect's parts
+   with it, and what did paint stays painted and draws whole on a later
+   frame.
 
-   THE MODELS ARE NOT A PART THAT IS DRAWN. The model list is walked by
-   tagpu_native.c's `emit_fx_model` into a vertex array no lane reads, so no
-   frame shows a rocket's or a shell's 3DO body, a debris piece or an
-   explosion's model; a record's drawn parts are its sprites and its lines,
-   and those are what the bracket keeps whole. */
+   THE TWO HALVES ARE DRAWN BY TWO PASSES, and a pass can still refuse a whole
+   frame after the gather: the posed pass (the models) and the effects pass
+   (everything else) then agree per frame through the hand-over's `nmodels`
+   (tagpu_fx.h), so neither draws a frame's effects without the other. */
 static int      s_effNv[NBUCKET], s_effNm, s_effQuads;
-static unsigned s_effLost;
+static unsigned s_effLost, s_effRun;
 
 static void effect_begin(void)
 {
     int b;
     for (b = 0; b < NBUCKET; b++) s_effNv[b] = s_nv[b];
     s_effNm = s_nm;
+    s_effRun = tagpu_fxmodel_mark();
     s_effQuads = s_cQuads;
     s_effLost = s_partsLost;
+    s_encCur = key_after(s_nm);
 }
 
 static void effect_end(void)
@@ -521,7 +595,9 @@ static void effect_end(void)
     if (s_partsLost == s_effLost) return;
     for (b = 0; b < NBUCKET; b++) s_nv[b] = s_effNv[b];
     s_nm = s_effNm;
+    tagpu_fxmodel_rewind(s_effRun);
     s_cQuads = s_effQuads;
+    s_encCur = key_after(s_nm);
 }
 
 /* the shaders' fog rule (tagpu_glsl.h) on the CPU — bilinear coverage over the
@@ -723,7 +799,7 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     int alphaOn = (s_caps & 0x20) != 0, flashOn = (s_caps & 0x80) != 0;
     int eyeX = v->eyeX, eyeY = v->eyeY, vpL = v->vpL, vpT = v->vpT;
     unsigned i;
-    char lb[200];
+    char lb[288];
 
     s_mute = s_passive;                /* passive: count + log, emit nothing */
     /* WE ARE DRAWING THIS FRAME ONLY IF THE PACKET WAS FILLED FOR US. The
@@ -742,23 +818,20 @@ static void gather_fx(const TAGPU_FXVIEW* v)
         int hx = X >> 16, halt = ALT >> 16, hy = Y >> 16;
         int hzp = hy - (halt >> 1);
         int sx, sy;
-        float ax, ay, wx, wz;
+        float wx, wz;
         if (!tagpu_fx_tile_visible(v, hx, hzp)) { s_c.fogged++; continue; }
         sx = hx - eyeX + vpL; sy = (hy - eyeY) - (halt >> 1) + vpT;
-        ax = (float)X / 65536.0f - (float)eyeX + (float)vpL;
-        ay = (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT;
         wx = (float)hx; wz = (float)hzp;
         if (s_log && i < 8 && (v->frame_counter % 60) == 0) {
             _snprintf(lb, sizeof lb,
-                "fx: p%u rt=%d col=%d/%d pos=(%d,%d,%d) start=(%d,%d,%d) scr=(%d,%d) turn=(%d,%d,%d) node=%08x/%08x frame=%08x",
+                "fx: p%u rt=%d col=%d/%d pos=(%d,%d,%d) start=(%d,%d,%d) scr=(%d,%d) model=%d/%d frame=%08x",
                 i, p->rt, p->col, p->col2, hx, halt, hy,
                 p->start[0] >> 16, p->start[1] >> 16, p->start[2] >> 16,
-                sx, sy, p->turn[0], p->turn[1], p->turn[2],
-                p->node, p->child, p->frame);
+                sx, sy, (int)p->model, (int)p->cmodel, p->frame);
             flog(lb);
         }
-        /* THE RECORD IS ONE EFFECT: its shadow and its body, whole or not at
-           all (`effect_begin`) */
+        /* THE RECORD IS ONE EFFECT: its shadow, its body and its flame, whole
+           or not at all (`effect_begin`) */
         effect_begin();
         /* ground shadow blob (rendertypes 1,3,4,6): alpha blit of the shadow
            sequence's frame 0 at the projectile's ground point */
@@ -792,9 +865,8 @@ static void gather_fx(const TAGPU_FXVIEW* v)
         }
         case 1: case 3: case 6:
             s_c.model++;
-            emit_model(p->node, ax, ay, wx, wz, p->turn[0], p->turn[1], p->turn[2], p->owner);
-            if (p->child)
-                emit_model(p->child, ax, ay, wx, wz, p->cturn0, p->turn[1], p->turn[2], p->owner);
+            emit_model(v, p->model, wx, wz);
+            emit_model(v, p->cmodel, wx, wz);
             break;
         case 2:
             s_c.ball++;              /* background refraction: engine-only */
@@ -856,19 +928,23 @@ static void gather_fx(const TAGPU_FXVIEW* v)
             int sx = hx - eyeX + vpL, sy = (hy - eyeY) - (halt >> 1) + vpT;
             if (!in_vprect(pk, sx, sy)) continue;
             s_c.debris++;
-            emit_model(d->node, (float)X / 65536.0f - (float)eyeX + (float)vpL,
-                       (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT,
-                       (float)hx, (float)(hy - (halt >> 1)), d->turn[0], d->turn[1], d->turn[2], 0);
+            /* a piece is a record of its own, and its model its one part */
+            effect_begin();
+            emit_model(v, d->model, (float)hx, (float)(hy - (halt >> 1)));
+            effect_end();
         }
     }
 
     /* ---- explosions (0x420B00): the flash of every record, then the bodies.
-       THE ENGINE'S TWO PASSES ARE TWO LAYERS, AND THE SINKS KEEP THEM APART:
-       a flash goes to B_FLASH, a body to B_SPRITES, a model to the model
-       list, and the buckets are drawn in that order. So one walk that emits
-       each record whole draws every flash before every body, as the engine's
-       two walks do, and lets a record be taken back out as one effect. ---- */
+       THE ENGINE'S TWO PASSES ARE TWO LAYERS, AND THE SINKS AND THE KEYS KEEP
+       THEM APART: a flash goes to B_FLASH, drawn before B_SPRITES, and at the
+       key the walk starts at, which is under every explosion's model and over
+       every model before it; a model takes the next key in the sequence and a
+       sprite the one after. So one walk that emits each record whole draws
+       every flash before every body, as the engine's two walks do, and lets a
+       record be taken back out as one effect. ---- */
     if (s_expl && pk->n_expl) {
+        const float flashKey = key_after(s_nm);
         s_c.expl = (int)pk->n_expl;
         for (i = 0; i < pk->n_expl; i++) {
             const TAGPU_PK_EXPL* e = &ex[i];
@@ -880,12 +956,12 @@ static void gather_fx(const TAGPU_FXVIEW* v)
             wx = (float)hx; wz = (float)(hy - (halt >> 1));
             effect_begin();
             if (flashOn && e->flash) {
+                s_encCur = flashKey;
                 fx_sprite((const unsigned char*)(size_t)e->flash, sx, sy, MODE_FLASH, wx, wz);
+                s_encCur = key_after(s_nm);
                 s_c.flash++;
             }
-            emit_model(e->node, (float)X / 65536.0f - (float)eyeX + (float)vpL,
-                       (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT,
-                       wx, wz, e->turn[0], e->turn[1], e->turn[2], 0);
+            emit_model(v, e->model, wx, wz);
             if (e->frame)
                 fx_sprite((const unsigned char*)(size_t)e->frame, sx, sy, MODE_OPAQUE, wx, wz);
             effect_end();
@@ -927,9 +1003,10 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     if (v->frame_counter - last >= 60) {
         last = v->frame_counter;
         _snprintf(lb, sizeof lb,
-            "fx: proj=%u (laser=%d model=%d sprite=%d flare=%d light=%d ball=%d fogged=%d) expl=%u flash=%d debris=%u -> lines=%d sprites=%d flashq=%d models=%d atlas=%d%s",
+            "fx: proj=%u (laser=%d model=%d sprite=%d flare=%d light=%d ball=%d fogged=%d) expl=%u flash=%d debris=%u -> lines=%d sprites=%d flashq=%d models=%d runs=%u (lost=%d why=%d of cap %d) atlas=%d%s",
             pk->n_proj, s_c.laser, s_c.model, s_c.sprite, s_c.flare, s_c.light, s_c.ball, s_c.fogged,
-            pk->n_expl, s_c.flash, pk->n_debris, s_cLines, s_cSprites, s_cFlash, s_nm, s_atlas.n,
+            pk->n_expl, s_c.flash, pk->n_debris, s_cLines, s_cSprites, s_cFlash, s_nm,
+            tagpu_fxmodel_mark(), s_cModelLost, s_modelWhy, s_modelCap, s_atlas.n,
             s_passive ? " (passive)" : "");
         flog(lb);
     }
@@ -971,9 +1048,26 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
     /* `tagpu_gaf_atlas_restore_vk` above publishes this atlas's frame list for
        the Vulkan restorer. */
     memset(s_nv, 0, sizeof s_nv); s_nm = 0;
+    tagpu_fxmodel_frame();
     s_cLines = s_cSprites = s_cFlash = s_cAtlasFail = s_cOverflow = s_cQuads = 0;
+    s_cModelLost = 0; s_modelWhy = 0;
     memset(&s_c, 0, sizeof s_c);
-    s_encCur = v->encSprite; s_under = 0; s_mute = 0;
+    /* the band, latched for the frame (tagpu_fx.h); the cap is also bounded
+       by the list, which `tagpu_fx_model_bound` never exceeds */
+    s_encFx = v->encFx; s_encStep = v->encStep;
+    s_modelCap = v->modelCap < 0 ? 0 : v->modelCap > MAXMODEL ? MAXMODEL : v->modelCap;
+    s_modelsOn = v->modelsOn;
+    /* THE MODELS' FRAME. The engine's projection puts the viewport at (0x80,
+       0x20) and this pass puts it at (vpL, vpT); the clip rect is the one the
+       engine's context holds for these draws, `vp_addr`, in the engine's
+       space -- the rasterisers clip before anything is offset. */
+    s_rv.eyeX = v->eyeX; s_rv.eyeY = v->eyeY;
+    s_rv.ox = v->vpL - 0x80; s_rv.oy = v->vpT - 0x20;
+    if (v->packet) {
+        s_rv.clipL = v->packet->vp_addr[0]; s_rv.clipT = v->packet->vp_addr[1];
+        s_rv.clipR = v->packet->vp_addr[2]; s_rv.clipB = v->packet->vp_addr[3];
+    }
+    s_encCur = key_after(0); s_under = 0; s_mute = 0;
     if (sfxOn) tagpu_sfx_gather(v, 0, 6);
     if (fxOn) gather_fx(v);
     if (sfxOn) { tagpu_sfx_gather(v, 7, 9); tagpu_sfx_frame_done(v); }
@@ -988,6 +1082,31 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
         }
     }
     return s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3] + s_nm;
+}
+
+/* EVERY MODEL THE GATHER COULD ASK FOR, before any of its gates: a
+   projectile's body and its flame, a piece, an explosion's body. The gather
+   emits at most one model per model named here, so the count bounds it
+   whatever the fog, the viewport rect and the levers decide -- and the
+   tables' own sizes bound the count by MAXMODEL. */
+int tagpu_fx_model_bound(const TAGPU_PACKET* pk)
+{
+    const TAGPU_PK_PROJ* pj;
+    const TAGPU_PK_EXPL* ex;
+    const TAGPU_PK_DEBRIS* db;
+    unsigned i;
+    int n = 0;
+    if (!pk) return 0;
+    pj = tagpu_pk_proj(pk);
+    ex = tagpu_pk_expl(pk);
+    db = tagpu_pk_debris(pk);
+    for (i = 0; pj && i < pk->n_proj && i < TAGPU_PK_MAX_PROJ; i++)
+        n += (pj[i].model != TAGPU_PK_NOMODEL) + (pj[i].cmodel != TAGPU_PK_NOMODEL);
+    for (i = 0; db && i < pk->n_debris && i < TAGPU_PK_MAX_DEBRIS; i++)
+        n += db[i].model != TAGPU_PK_NOMODEL;
+    for (i = 0; ex && i < pk->n_expl && i < TAGPU_PK_MAX_EXPL; i++)
+        n += ex[i].model != TAGPU_PK_NOMODEL;
+    return n > MAXMODEL ? MAXMODEL : n;
 }
 
 int tagpu_fx_nmodels(void) { return s_nm; }
@@ -1021,6 +1140,7 @@ static void fx_publish(const TAGPU_FXVIEW* v, int total)
     if (!s_mirrorAsked) { s_pubHave = 0; s_abFrame = 0; return; }
     memset(&s_pub, 0, sizeof s_pub);
     for (b = 0; b < NBUCKET; b++) { s_pub.vert[b] = s_verts[b]; s_pub.n[b] = s_nv[b]; }
+    s_pub.nmodels = s_nm;
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
     s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
@@ -1117,7 +1237,10 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
 {
     /* THIS PASS ONLY GATHERS AND HANDS OVER -- the feature pass's shape
        (tagpu_feat.c). */
-    int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3];
+    /* the models count: a frame whose effects are all models still hands
+       over, because the posed pass draws them only on a frame this pass has
+       taken (tagpu_fx.h `nmodels`) */
+    int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3] + s_nm;
     int taking;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
        frame's hand-over standing would have the Vulkan lane draw last frame's

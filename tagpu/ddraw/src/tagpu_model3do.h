@@ -65,8 +65,29 @@
 #define N_SIB        0x2C
 #define N_CHILD      0x30
 #define FACE_STRIDE  0x20
-#define F_COLORTAB   0x00
+#define F_COLORTAB   0x00      /* the flat colour: 0x4C0330 fills with its low */
+                               /* byte (`mov al,[esp+0x14080]` @0x4C0678)      */
 #define F_VCOUNT     0x04
 #define F_INDICES    0x0C
+/* THE EFFECTS DRAWS' FACE WORDS (0x46BAE0 and 0x4211D0, DISASSEMBLED). The
+   unit rasteriser does not read +0x1C the same way; these are the two draws
+   that decide a face by it. */
+#define F_TEXFRAME   0x10      /* GAFFrame* when F_FLAGS bit 1 is clear; when */
+                               /* set, the u16 frame index of an anim state   */
+                               /* {u16 frame @0, seq @+8} (0x4B7EE0)          */
+#define F_TEXSEQ     0x18      /* the anim state's sequence: u16 nframes @0,  */
+                               /* {GAFFrame*, dword} x nframes from +0x28     */
+#define F_FLAGS      0x1C      /* bit 0 flat fill (any vertex count), else    */
+                               /* only a 4-vertex face is drawn, textured;    */
+                               /* bit 1 the frame comes from the sequence;    */
+                               /* bit 2 (debris only) indexed by the owner's  */
+                               /* logo colour through 0x4B7F30                */
+#define FF_FLAT      0x1u
+#define FF_ANIM      0x2u
+#define FF_TEAM      0x4u
+/* the sequence layout both frame pickers read */
+#define SEQ_NFRAMES  0x00      /* u16                                         */
+#define SEQ_FRAMES   0x28      /* {GAFFrame*, dword} x nframes                */
+#define SEQ_FSTRIDE  8
 
 #endif
