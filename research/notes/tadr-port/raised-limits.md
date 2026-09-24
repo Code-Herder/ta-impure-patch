@@ -53,13 +53,14 @@ TADR's `EngineLimits.cpp` (the four pools) is one month old (`586d71a`, 2026-08-
 
 ## Fixed beyond TADR
 
-Issues this port found and fixed that TADR does not. Each one is an engine defect that the raised
-limits made easy to reach; TADR, which raises the same limits, carries it unchanged (checked
-against its source as of `dcff5dd`, 2026-09-20).
+Issues this port found and fixed that TADR does not: an engine defect the raised limits made easy
+to reach, and one found beside it that any game reaches. TADR, which raises the same limits,
+carries both unchanged (checked against its source as of `dcff5dd`, 2026-09-20).
 
 | Issue | What a player saw | Fix | Landing |
 |---|---|---|---|
 | **A reclaimed feature is paid for and left standing** | In a big battle, reclaiming a building on Town & Country paid its metal but left the building, and it could be reclaimed again, as often as the builder repeated it. A destroyed building did not change either. | The wreck pool is raised from 2048 to 8192 records, and when it is full the feature is swapped at once instead of not at all | L6 |
+| **A building reclaimed by a group is paid for once per builder** | Several builders ordered together onto a Town & Country building were each paid its full metal. Nothing looked wrong: the building went once. | The reclaim's "already being reclaimed" test reads the building's anchor cell, the one the engine marks, instead of the cell the builder aimed at | L6 |
 
 **The defect** ([the engine map, *The wreck pool*](../exe-reverse-engineering.md#the-wreck-pool-and-a-feature-paid-for-and-left-standing)). The engine keeps 2048 wreck records for a
 level. A 3DO wreck (every unit's corpse, every heap) holds one for as long as it lies there, and a
@@ -74,7 +75,10 @@ of a battle. In the owner's ten-player game the pool was full on each of the thr
 
 - **Always on, in both builds: a full pool swaps the feature now.** The pool-full branch joins the
   engine's own path for a feature with no sequence (`0x4236EF`), so a feature that is paid for is
-  always replaced by its successor — the scar for a reclaim, the next damage stage for a collapse.
+  replaced by its successor — the scar for a reclaim, the next damage stage for a collapse — exactly
+  as one with no sequence is. That path has two exceptions of its own, which stock shares for every
+  feature without a sequence: an indestructible feature is not removed, and a successor that is a
+  3DO feature needs a record, so on a full pool nothing takes the old feature's place.
   The one thing a full pool still costs is the sequence, and with it the immunity it gives: while a
   collapse plays, the cell is marked and further hits are ignored, so a weapon that hits in frame
   after frame (the D-gun) takes a building one stage per sequence. Without the sequence it can take
@@ -84,6 +88,14 @@ of a battle. In the owner's ten-player game the pool was full on each of the thr
   table holds inside its existing 20 MB reserve at stock's worst wreck model (19 pieces), so the
   raise costs no address space. What a full pool refuses that the fix cannot give back is new
   corpses: `0x423C50` creates no 3DO feature without a record, so a unit dies without leaving one.
+
+**The reclaim paid twice** ([the engine map](../exe-reverse-engineering.md#the-reclaim-paid-twice)).
+Found by landing 6's review, and independent of the pool. While a building plays its reclaim
+sequence the engine marks its anchor cell, and a reclaim of a marked building is refused before it
+pays — but the refusal tests the cell the builder aimed at, not the anchor. A group ordered onto a
+building finishes in the same moment, so every builder that aimed at any other cell is paid in
+full. The fix (always on, in both builds) makes the test read the anchor: the second builder is
+refused exactly as one aimed at the anchor always was.
 
 ## Decisions
 
@@ -297,8 +309,8 @@ its own 1499 units, the 1500 cap with its commander. What it proved, by running 
   one that way; tier 2 ran with commander death off on every peer (`ActiveCommanderDeath`,
   `main+0x37EF6`, read as 0 on all ten).
 
-**Landing 6 — the wreck pool, beyond TADR. Done 2026-09-24.** Eighty-six sites now, and one
-engine fix in the always-on group ([Fixed beyond TADR](#fixed-beyond-tadr)). Every test fills the
+**Landing 6 — the wreck pool, beyond TADR. Done 2026-09-24.** Eighty-six sites now, and two
+engine fixes in the always-on group ([Fixed beyond TADR](#fixed-beyond-tadr)). Every test fills the
 pool for real, with corpses, rather than faking an empty free list: scenario applies of 1024
 one-cell `armflea_dead` each, on cells no map feature touches, until the engine refuses. What it
 proved, by running it:
@@ -321,6 +333,20 @@ proved, by running it:
   described in [Fixed beyond TADR](#fixed-beyond-tadr).
 - **Our side follows it.** With 8192 corpses on the map, the packet carried 3729 wrecks in one
   frame with no record index refused and no table truncated.
+- **How much of 8192 a big battle uses.** Ten peers at 1499 units each on Town & Country, the
+  landing 5 fixtures, fighting for about 23 minutes of game time (tick 41 442): **5217 to 5268
+  records in use** on the ten peers, the rest free — two and a half stock pools, so stock's was
+  full long before, and this one never filled. The census was taken with every peer paused, since
+  a read spread over seconds of a live battle tears the lists; each peer's lists covered its 8192
+  records exactly once. On every peer no wreck was refused or truncated (`woob=0`, the wreck
+  table's truncation 0); the packet's truncations (11 to 14 a peer) all came by tick 825, while
+  15 000 units spawned and the slots grew — the load-time case of gpu-status §2.86.
+- **The reclaim paid twice, found by the review.** On this build, free records, two commanders
+  ordered together onto `Building15`: through its centre cell the player gained +5959 at the first
+  payout (twice 2900), through its anchor +3056. With the anchor fix, through the centre: +3056,
+  and +3143 over 80 s against the anchor's +3140 — paid once, the building playing its sequence and
+  ending as the scar. With the pool full as well, through the centre: +3146 over 82 s, the scar at
+  once, the pool still 8192 of 8192 — the two fixes together.
 
 L1 came first because it forced the module, the report and the packet changes into existence.
 L2 comes before L3 because the particle measurement needs the raised unit limit.
@@ -336,9 +362,10 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
 - How far a remote unit lags its owner at stock's 500 a player: tier 2's up-to-40-ticks at 1500 is
   measured, stock's is not, so whether the raise stretches the update interval is open.
 - How the game thread's frame at 6000 units splits between the engine and our publisher.
-- Whether peers can disagree about a feature when one pool is full and another is not. Corpses are
-  made on every peer from the synced deaths, so the pools should fill together, but a sequence
-  holds its record for its own length on each peer. A full pool still refuses corpses (landing 6).
+- Whether peers disagree about a feature in practice when one pool is full and another is not. The
+  engine map shows how they can, in both directions; corpses are made on every peer from the synced
+  deaths, so the pools should fill together, but a sequence holds its record for its own length on
+  each peer. A full pool still refuses corpses (landing 6).
 
 ## Corrections this plan made
 

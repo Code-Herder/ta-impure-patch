@@ -385,7 +385,9 @@ patch*).
 **MEASURED.** The previous build's pool took exactly 2048 one-cell corpses, this build's exactly
 8192 (scenario applies until the engine refused). 8192 is what the frame packet's wreck table holds
 inside its 20 MB reserve at stock's worst wreck model, 19 pieces (`armscab_dead`; 265 of the 285
-3DO features are one piece): the raise costs no address space.
+3DO features are one piece): the raise costs no address space. Ten peers at 1499 units each,
+fighting on Town & Country for about 23 minutes of game time, held 5217 to 5268 records at the end,
+read with every peer paused — two and a half stock pools, and 36 % of this one left free.
 
 ---
 

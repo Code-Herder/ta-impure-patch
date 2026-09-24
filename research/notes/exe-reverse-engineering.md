@@ -273,20 +273,21 @@ outside the apply frame.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..24]
 
-Three places where the retail 3.1 image writes or reads memory it does not own, and one where it
-takes a player's payment and does not deliver (a feature reclaimed or destroyed while the wreck
-pool is full). `tagpu_patches.c` (`patch_engine_defects`) patches all four at every attach:
-`ddraw.dll` is a static import of the exe, so `DllMain` runs before the exe's entry point. The four
-are independent. Each is skipped,
-with its reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its
-stub cannot be allocated, or its page cannot be made writable. Each patch is the identity on every
-input the stock code handles safely. [Binary patches](binary-patches.html) §"Stock engine defects
-we patch" is the one-row-per-bug register. The disassembly is `objdump -d -M intel` of
+Three places where the retail 3.1 image writes or reads memory it does not own, and two where it
+takes a player's payment and does not deliver: a feature reclaimed or destroyed while the wreck pool
+is full, and a feature reclaimed twice through a cell that is not its anchor. `tagpu_patches.c`
+(`patch_engine_defects`) patches all five at every attach: `ddraw.dll` is a static import of the
+exe, so `DllMain` runs before the exe's entry point. The five are independent. Each is skipped, with
+its reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its stub
+cannot be allocated, or its page cannot be made writable. Each patch is the identity on every input
+the stock code handles correctly. [Binary patches](binary-patches.html) §"Stock engine defects we
+patch" is the one-row-per-bug register. The disassembly is `objdump -d -M intel` of
 `pristine/TotalA.exe.pristine`, and the callers come from an E8/E9 rel32 scan of `.text`. The
 measurements are `tacli` instances on Two Continents at 1024×768 with
 `scenarios/sort-row-overflow.json` (150 Peewees in one line, every foot at the same world z), on
-Lava Run, Coast To Coast and Dark Side at 1920×1080 to 3840×2160, and on the camera branch's
-build for the terrain pass. Each compares against a build without the patch.
+Lava Run, Coast To Coast and Dark Side at 1920×1080 to 3840×2160, on the camera branch's build
+for the terrain pass, and on Town & Country at 1024×768 for the two feature fixes. Each compares
+against a build without the patch.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
@@ -708,14 +709,15 @@ record exactly once.
 
 | address | what | the pool |
 |---|---|---|
-| `0x423550` `FeatureDie(x, y, reclaimed)` | stdcall, `ret 0xC`. Resolves a multi-cell feature's anchor and writes it back over its own `x`/`y` (`0x423580`). A 3DO feature, or a GAF one with no sequence for the event (FeatureDef `+0xC4/+0xC8` reclaim, `+0xBC/+0xC0` death), goes to `0x4236EF`: `push ebx/ebp/esi; call 0x423710`. Otherwise a cell already marked (flags bit 0) returns, and the rest takes a record, stores the def (`+0x2C`), `reclaimed` as bit 1 of `+0x2F`, x/y (`+0x28`/`+0x2A`) and the sequences, and marks the cell (`+0x0A` = the record, flags bit 0) | **pool empty: `0x42361D` sets `eax = count`, `0x423651` `jge 0x4236F7` returns having done nothing** — the fork's engine fix retargets that jge to `0x4236EF` |
-| `0x423710` the swap `(x, y, reclaimed)` | stdcall, `ret 0xC`. A non-anchor cell (def `≥ 0xFFFB`) returns at once. The successor is FeatureDef `+0xF8` (`featurereclamate`) when `reclaimed`, else `+0xF4` (`featuredead`); a marked cell's record bit 1 overrides to `+0xF8`. Then `FEATURES_Destroy 0x4246B0` and `0x423C50` for the successor. Two callers: `0x4236F2` (FeatureDie's no-sequence path) and `0x424495` (a sequence that has ended, in `0x424050`) | frees the record through `0x4246B0` |
+| `0x423550` `FeatureDie(x, y, reclaimed)` | stdcall, `ret 0xC`. Resolves a multi-cell feature's anchor and writes it back over its own `x`/`y` (`0x423580`). A 3DO feature, or a GAF one with no sequence for the event (FeatureDef `+0xC4/+0xC8` reclaim, `+0xBC/+0xC0` death), goes to `0x4236EF`: `push ebx/ebp/esi; call 0x423710`. Otherwise a cell already marked (flags bit 0) returns, and the rest takes a record, stores the def (`+0x2C`), `reclaimed` as bit 1 of `+0x2F`, x/y (`+0x28`/`+0x2A`) and the sequences, and marks the cell (`+0x0A` = the record, flags bit 0) | **pool empty: `0x42361D` sets `eax = count`, `0x423651` `jge 0x4236F7` returns having done nothing** — the fork's engine fix retargets that jge to a stub that reloads `x`/`y` from the arguments and jumps to `0x4236EF` |
+| `0x423710` the swap `(x, y, reclaimed)` | stdcall, `ret 0xC`. A non-anchor cell (def `≥ 0xFFFB`) returns at once. The successor is FeatureDef `+0xF8` (`featurereclamate`) when `reclaimed`, else `+0xF4` (`featuredead`); a marked cell's record bit 1 overrides to `+0xF8`. Then `FEATURES_Destroy 0x4246B0` with force 0 and `0x423C50` for the successor. Force 0 refuses an indestructible def (FeatureDef `+0xFF` bit 1, `0x42471E`), and `0x423C50`'s own clear then refuses too (`0x423D71`), so **an indestructible feature is left as it was**. Two callers: `0x4236F2` (FeatureDie's no-sequence path) and `0x424495` (a sequence that has ended, in `0x424050`) | frees the record through `0x4246B0` |
 | `0x423C50` `SpawnFeatureOnMap(plot, def, pos, turn, v)` | clears the footprint with `0x4246B0` on every occupied cell, then a 3DO def takes a record | **pool empty: `0x423DB9`/`0x423DDF` return 0 with nothing created** — a unit dies without a corpse, and the footprint was already cleared |
 | `0x4233A0` `(x, y, flag)`, a feature starting to burn [INFERRED from the 0xFE event and FeatureDef `+0xB4`] | returns if the def has no `+0xB4` sequence or the cell is marked | pool empty: `0x42340D`/`0x423439` return — the feature does not burn |
 | `0x4232A0` | a bare allocator: returns the free head, or the count for "none" | no `E8` caller |
 | `0x424050` | the records' update, one caller `0x495585` [the game tick, INFERRED]; walks the **active** list only, moves a settled record to `+0x14217` (`0x4242B8`), and swaps a feature whose sequence has ended (`0x424495`) | — |
-| `0x4237D0` the reclaim completion `(who, pos)` [the first argument INFERRED] | stdcall, `ret 8`, returns 1 when reclaimed. A marked GAF cell returns 0: **a feature playing its sequence cannot be reclaimed again**. Pays FeatureDef `+0xEC` metal and `+0xF0` energy (`0x4238FF`, `0x42395B`), **then** calls `FeatureDie(x, y, 1)` (`0x423965`), then, in a network game (`0x435100` = 3), sends `0x0F, 0xFF, x, y` (6 bytes, `0x4239A4`) | — |
+| `0x4237D0` the reclaim completion `(who, pos)` [the first argument INFERRED] | stdcall, `ret 8`, returns 1 when reclaimed. A GAF feature whose cell is marked returns 0 before anything is paid (`0x423892` the cell's flags bit 0, `0x423898` the def's `+0xFE` bit 0) — **but stock tests the targeted cell, and `FeatureDie` marks only the anchor**, so a reclaim that lands on any other cell of a multi-cell feature while its sequence plays is paid again; the fork's engine fix makes `0x423892` test the anchor ([below](#the-reclaim-paid-twice)). Pays FeatureDef `+0xEC` **energy** (`0x4238FF`, or `0x4238EF` on a branch that scales it by one of two constants chosen by `main+0x37EEE`, for a player whose `+0x73` is 2 [INFERRED: a computer player, by difficulty]) and `+0xF0` **metal** (`0x42395B`, both branches; the order is TADR's `FeatureDefStruct` and our `tagpu_cat.c`, and MEASURED: `Building15` reads energy 0, metal 2900, and pays 2900 metal), **then** calls `FeatureDie(x, y, 1)` (`0x423965`), then, in a network game (`0x435100` = 3), sends `0x0F, 0xFF, x, y` (6 bytes, `0x4239A4`) | — |
 | `0x4244B0`, a feature taking damage [INFERRED; callers `0x49A626` (a projectile's impact) and the network handler] | calls `FeatureDie(x, y, 0)` at `0x424628`/`0x42465A` and sends subtype `0xFD` | — |
+| `0x424890` the save-game loader [INFERRED from what it restores] | restores a feature's sequence with `FeatureDie(x, y, 1)` (`0x42507E`), `FeatureDie(x, y, 0)` (`0x42509D`) or `0x4233A0(x, y, 0)` (`0x4250BB`), then writes the record the cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26`, the low word of `+0x04`, `+0x2E`) **without checking that one was taken** | a load that finds the pool full writes into record 0, in stock and with the fix alike; a save holds no more records than its own pool, so only a save loaded into a smaller pool gets there |
 | `0x455xxx` the feature event handler | subtype `0xFF` → `FeatureDie(x, y, 1)` (`0x4554B0`), `0xFE` → `0x4233A0(x, y, 1)` (`0x4554CA`), `0xFD` → `FeatureDie(x, y, 0)` (`0x4554E4`) | the receiver's own pool decides |
 
 **The defect.** With the pool empty, `FeatureDie` does nothing, and nothing tells its callers. The
@@ -737,9 +739,40 @@ full, the host's reclaim swapped the building on both peers and paid only the ho
 cell is marked and further hits are ignored. MEASURED with a commander's D-gun on `Building15`: with
 free records, the cell was marked (flags `0x54` → `0x55`) for 1.2 s and ended at `Building15b`;
 with the pool full it ended at the scar, the successive frames' hits taking it through every stage.
-Each stage is a `0xFD` event to the other peers, and a receiver whose pool is not full marks the
-cell on the first and ignores the rest, so a sender with a full pool and a receiver without one can
-disagree about a feature. A full pool refuses corpses too (`0x423C50`), which no fix can give back.
+Over the network each peer's own pool decides. A sender with a full pool walks a feature through
+its stages, one `0xFD` event each, while a receiver with free records marks the cell on the first
+and drops the rest at `0x423606`. In the other direction, a receiver with a full pool swaps at once
+while the sender's cell stays marked for its sequence, and an event that receiver later sends about
+the successor is dropped at the sender. Either way a feature can differ between peers once one pool
+is full and another is not; with every pool full they agree, as measured. The successor itself can
+be refused: a GAF feature whose successor is a 3DO feature is destroyed by the swap and the
+successor refused at `0x423DDF`, so nothing takes its place. A full pool refuses corpses too
+(`0x423C50`), which no fix can give back.
+
+#### The reclaim paid twice
+
+`[DISASSEMBLED, MEASURED 2026-09-24]` This one needs no full pool. `0x4237D0` refuses a GAF feature
+that is playing its sequence by testing the flags of the cell the builder aimed at (`esi`, from
+`0x481550` at `0x4237FE`; the test at `0x423892`), while `FeatureDie` marks only the anchor
+(`0x42368B` stores the record in the anchor's `+0x0A`, `0x42368F..0x423695` sets its bit 0) and every
+other cell keeps bit 0 clear (`0x423C50` at `0x423F4D`, `0x4246B0` at `0x4247BB`). A reclaim that
+lands on any other cell while the sequence plays is paid in full, and its `FeatureDie` then returns
+at `0x423606`. Builders ordered together onto one building finish in the same moment, so that is
+the ordinary case, not a race. MEASURED on Town & Country with free records, two commanders ordered
+onto `Building15` together (2900 metal): through its centre cell (312,128), **+5959** at the first
+payout — twice 2900, and income; through its anchor (311,127), +3056 — once.
+
+**The fix** (`fix_reclaim_mark_anchor`, always on): `0x423892`'s six bytes (`test`, `je`) become a
+jump to a stub that resolves a `0xFFFE` cell to its anchor exactly as `0x423845..0x423862` does —
+`cell − (row · width + col) · 13`, `row` and `col` the bytes at `+0x0A`/`+0x0B` — tests the anchor's
+bit 0, and rejoins at `0x4238AD` (pay) or `0x423898` (the def's GAF test). It reads byte `+0x0C` of
+the cell stock itself reads byte `+0x08` of at `0x423864`, so it forms no address stock does not.
+Only `0x423884`'s `jne` branches to `0x423892`, and nothing into the five bytes after it. MEASURED
+with the fix, same procedure: through the centre cell +3056 at the first payout and +3143 over
+80 s, the anchor's +3140 — the building played its sequence with a record held and ended as
+`Buildingscar15`. With the pool full as well: +3062 at the first payout, +3146 over 82 s, the scar
+at once and the pool still 8192 of 8192. The scar is worth nothing (energy 0, metal 0), is not
+reclaimable, and has no `featurereclamate` (−1).
 
 **Negative results.** `0x422C71` (`mov edi,0x800`) is FeatureMask bit `0x800`, not the pool.
 Nothing else writes or compares the pool's size: every reference to `main+0x1420B`, `+0x14213`,
@@ -4232,7 +4265,7 @@ its bound.
 | its Object3do | `+0x00` nparts, `+0x10` the composite GAFFrame (W/H/hot x/y at `+0x00..+0x06`, the depth plane at `+0x14` as a flag), `+0x18` the cached body turn, `+0x1E` the base PrimitiveStruct, `+0x22 + i·0x36` the pieces | `nparts` against `TAGPU_PBMAXPIECE`; the base prim becomes an INDEX and must be inside `nparts` |
 | one piece | `+0x00` the template node (crosses as a value the fence covers), `+0x04` the COB move, `+0x10` the COB turn, `+0x28` the flags | copied whole, `nparts` of them |
 | the feature grid | `main+0x14287`, `0x0D` per cell: `+0x04` height, `+0x08` def index, `+0x0A` wreck index, `+0x0C` flags | the rect is clamped to `main+0x14233`/`+0x14237`; a def index `≥ 0xFFFB` is not an anchor |
-| a wreck record | `main+0x1420B + idx·0x30`: `+0x04` Object3do, `+0x08/+0x0C/+0x10` the 16.16 position | reached only from an anchor whose FeatureDef row is inside `main+0x14253` and whose `FeatureMask` bit 0 is clear — **and whose cell index is under 2048**, the pool `0x421F29` allocates. **[ADDED 2026-09-12, a landing review]** the index had no bound at all before, and this walk is not the engine's: the engine's own read at `0x46A6C4` is equally unbounded but only ever forms the address for a cell it is drawing, where the publisher covers the zoom-floor rect plus a 32-cell margin. The allocator `0x4232A0` returns 2048 itself when the free list is empty, so 2048 is the engine's own "no record" value as well as the array's length |
+| a wreck record | `main+0x1420B + idx·0x30`: `+0x04` Object3do, `+0x08/+0x0C/+0x10` the 16.16 position | reached only from an anchor whose FeatureDef row is inside `main+0x14253` and whose `FeatureMask` bit 0 is clear — **and whose cell index is under the pool's count** (`WR_COUNT` = `TAGPU_LIM_WRECKS`: 2048 in stock, 8192 under the raised limits), the pool `0x421F29` allocates. **[ADDED 2026-09-12, a landing review]** the index had no bound at all before, and this walk is not the engine's: the engine's own read at `0x46A6C4` is equally unbounded but only ever forms the address for a cell it is drawing, where the publisher covers the zoom-floor rect plus a 32-cell margin. The allocator `0x4232A0` returns the count itself when the free list is empty, so the count is the engine's own "no record" value as well as the array's length |
 | the frame's option bytes | `main+0x0DCB` the GUI colour array — **256 bytes, not 64** [CORRECTED 2026-09-12, landing 4a: `0x4AC7D0` rebuilds it from `guipal` and its loop at `0x4AC7FF..0x4AC88F` writes exactly `0x100` of them], `+0x2C76`/`+0x2C7A` the dispatched mouse point, `+0x2C92..+0x2CA6` the build cursor's two corners, `+0x2CC3` the cursor mode, `+0x2CC6` the region flags, `+0x37F06` the option byte (damagebars, Shadow, TShadow, FShadow), `+0x1424B`/`+0x1424F` the feature sweep | none needed: they are values, and every consumer of them already treated them as such |
 | the shade table | `[0x51FBD0]+0xC4`, 32 × 256 bytes | the FORMAT is the bound: `0x459C70`'s Gouraud path indexes it with a 5-bit row and a byte, so a copy of exactly that size reads what the rasteriser reads |
 
