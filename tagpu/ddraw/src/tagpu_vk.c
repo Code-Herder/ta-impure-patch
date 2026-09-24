@@ -2833,9 +2833,16 @@ static int vk_present(void)
                ORDER is written down once and cannot drift between them. */
             if (draw_world)
                 tagpu_vk_world_record(&s_pass, cb, fi, s_vk.ext.width, s_vk.ext.height);
-            else
+            else {
                 world_records(cb, fi, s_vk.ext.width, s_vk.ext.height,
                               draw_terr, draw_feat, draw_unit, draw_fx, draw_mark);
+                /* AND THE GAMMA ON IT, which a target would have applied in
+                   its composite: here, after the last world pass and before
+                   the UI, so it reaches the finished world and nothing else. */
+                if (draw_terr || draw_feat || draw_unit || draw_fx || draw_mark)
+                    tagpu_vk_world_record_direct(&s_pass, cb, s_vk.ext.width,
+                                                 s_vk.ext.height);
+            }
             /* THE UI GOES OVER THE WORLD AND UNDER THE READOUT: the readout
                has to sit above the side panel
                and the dialogs or they hide it. The return is not kept: the

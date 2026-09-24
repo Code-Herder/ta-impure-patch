@@ -526,6 +526,15 @@ static const char* GFS =
     "  rgb = vec3(gam(rgb.r), gam(rgb.g), gam(rgb.b));\n"
     "  frag = vec4(c.a > 0.0 ? rgb * c.a : rgb, c.a);\n"
     "}\n";
+/* ...and the Gamma on a frame with NO world target, where the world passes
+   have drawn straight into the frame and there is no image to sample. The
+   factor is applied by the BLEND, which is the one stage that reads the frame:
+   this stage supplies the 1.0 the blend multiplies the frame by
+   (tagpu_vk_world.c, `tagpu_vk_world_record_direct`). */
+static const char* KFS =
+    "#version 330 core\n"
+    "out vec4 frag;\n"
+    "void main(){ frag = vec4(1.0); }\n";
 #pragma GCC diagnostic pop
 
 static int name_ieq(const char* a, const char* b)

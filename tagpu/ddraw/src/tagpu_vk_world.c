@@ -31,7 +31,7 @@
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
-    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
+    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetBlendConstants) \
     X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage)
 
 #define DECL(n) static PFN_##n n;
@@ -126,6 +126,24 @@ typedef struct {
 } GAM;
 static GAM s_gam[TAGPU_VK_SLOTS];
 static int s_gamOn;                     /* `record` composites through the curve */
+
+/* THE GAMMA ON A FRAME WITH NO TARGET (the header's paragraph). Its own state,
+   its own layout and its own quad, because the target's are freed by the very
+   refusal that makes these the only way the factor reaches the world: nothing
+   here is shared with `build`, and `_down_paid` leaves all of it standing.
+   Two pipelines, one per direction, because a blend factor above 1.0 does not
+   exist -- a fixed-point attachment clamps its constants to [0,1]:
+     UP   (factor > 1)  frame x DST_COLOR x 1.0 + frame x CONSTANT (factor - 1)
+     DOWN (factor < 1)  frame x CONSTANT (factor)
+   and a factor above 2 is UP run more than once (`record_direct`). Nothing
+   per slot: the pipelines and the quad are read-only, and the factor rides in
+   the command buffer as the blend constants. */
+static int            s_dcState;
+static int            s_dcSaid;         /* the refusal said once */
+static VkPipelineLayout s_dcPlo;
+static VkPipeline     s_dcUp, s_dcDown;
+static VkBuffer       s_dcVbuf;
+static VkDeviceMemory s_dcVmem;
 
 static void plog(const TAGPU_VKPASS* d, const char* fmt, ...)
 {
@@ -475,11 +493,16 @@ static int build_sampler(const TAGPU_VKPASS* d)
     return vkCreateSampler(d->dev, &sci, NULL, &s_samp) == VK_SUCCESS;
 }
 
-static int build_pipeline(const TAGPU_VKPASS* d)
+/* ONE FULL-FRAME QUAD PIPELINE against the seam's render pass: DVS over the
+   unit-square strip, no depth test, no cull, and the blend it is handed. The
+   two composites and the two no-target Gamma draws are this pipeline with a
+   different fragment stage and blend, and differ in nothing else. `nDyn` is 2
+   (viewport, scissor) or 3 (and the blend constants, which carry the factor). */
+static VkResult quad_pipeline(const TAGPU_VKPASS* d, VkPipelineLayout lay,
+                              VkShaderModule vs, VkShaderModule fs,
+                              const VkPipelineColorBlendAttachmentState* cba,
+                              uint32_t nDyn, VkPipeline* out)
 {
-    VkDescriptorSetLayoutBinding b[2];
-    VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
     VkPipelineShaderStageCreateInfo st[2];
     VkVertexInputBindingDescription vb;
     VkVertexInputAttributeDescription va;
@@ -488,12 +511,114 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
     VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
     VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-    VkPipelineColorBlendAttachmentState cba;
     VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-    VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkDynamicState dyn[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                              VK_DYNAMIC_STATE_BLEND_CONSTANTS };
     VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
     VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
     VkPipelineDepthStencilStateCreateInfo ds;
+
+    memset(st, 0, sizeof st);
+    st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;   st[0].module = vs; st[0].pName = "main";
+    st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fs; st[1].pName = "main";
+
+    /* ONE vec2 AT LOCATION 0, which is what DVS declares in its own source --
+       `layout(location=0) in vec2 p;` -- so unlike the fork's shaders this one
+       needs no ATTR_LOCATIONS table to agree with. */
+    memset(&vb, 0, sizeof vb);
+    vb.binding = 0; vb.stride = 2 * sizeof(float);
+    vb.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    memset(&va, 0, sizeof va);
+    va.location = 0; va.binding = 0;
+    va.format = VK_FORMAT_R32G32_SFLOAT; va.offset = 0;
+    vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
+    vi.vertexAttributeDescriptionCount = 1; vi.pVertexAttributeDescriptions = &va;
+
+    /* A STRIP OF FOUR, over `{0,0, 1,0, 0,1, 1,1}` -- QUAD below. */
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+
+    vp.viewportCount = 1; vp.scissorCount = 1;
+
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    /* DECLARED AND OFF: the seam's subpass has a depth attachment and a null
+       pDepthStencilState there is invalid (tagpu_vk_pass.h). The world's depth
+       lives in the offscreen pass and died with it; this draw is a flat blit
+       over TA's frame and tests nothing. */
+    memset(&ds, 0, sizeof ds);
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+    ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+
+    cb.attachmentCount = 1; cb.pAttachments = cba;
+
+    dy.dynamicStateCount = nDyn; dy.pDynamicStates = dyn;
+
+    gp.stageCount = 2; gp.pStages = st;
+    gp.pVertexInputState = &vi;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pDepthStencilState = &ds;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &dy;
+    gp.layout = lay;
+    /* THE SEAM'S RENDER PASS, not `s_rp`: every draw built here happens on the
+       FRAME. `s_rp` is where the world goes and none of these ever runs inside
+       it. */
+    gp.renderPass = d->rp;
+    gp.subpass = 0;
+    return vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, out);
+}
+
+/* THE QUAD: `{0,0, 1,0, 0,1, 1,1}` as a triangle strip, in UNIT-SQUARE space
+   because DVS is what maps it to clip (`p * 2 - 1`) and to texcoords
+   (`uv = p`). The quad and the flip are ONE choice (the header's ORIENTATION
+   paragraph): changing either alone draws the world upside down. */
+static const float QUAD[NV * 2] = { 0.f,0.f,  1.f,0.f,  0.f,1.f,  1.f,1.f };
+
+/* A host-visible vertex buffer holding QUAD. */
+static int quad_buffer(const TAGPU_VKPASS* d, VkBuffer* buf, VkDeviceMemory* mem)
+{
+    VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    VkMemoryRequirements req;
+    void* p = NULL;
+    int type;
+
+    bci.size = sizeof QUAD;
+    bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(d->dev, &bci, NULL, buf) != VK_SUCCESS) return 0;
+    vkGetBufferMemoryRequirements(d->dev, *buf, &req);
+    type = mem_type(d, req.memoryTypeBits,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (type < 0) return 0;
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = (uint32_t)type;
+    if (vkAllocateMemory(d->dev, &mai, NULL, mem) != VK_SUCCESS) return 0;
+    if (vkBindBufferMemory(d->dev, *buf, *mem, 0) != VK_SUCCESS) return 0;
+    if (vkMapMemory(d->dev, *mem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) return 0;
+    memcpy(p, QUAD, sizeof QUAD);
+    vkUnmapMemory(d->dev, *mem);
+    return 1;
+}
+
+static int build_pipeline(const TAGPU_VKPASS* d)
+{
+    VkDescriptorSetLayoutBinding b[2];
+    VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    VkPipelineColorBlendAttachmentState cba;
     VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE, gfs = VK_NULL_HANDLE;
     VkResult r;
     int ok = 0;
@@ -524,46 +649,6 @@ static int build_pipeline(const TAGPU_VKPASS* d)
                     sizeof tagpu_spv_tagpu_native_GFS / sizeof(uint32_t));
     if (!vs || !fs || !gfs) { plog(d, "world: a shader module was refused"); goto out; }
 
-    memset(st, 0, sizeof st);
-    st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;   st[0].module = vs; st[0].pName = "main";
-    st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; st[1].module = fs; st[1].pName = "main";
-
-    /* ONE vec2 AT LOCATION 0, which is what DVS declares in its own source --
-       `layout(location=0) in vec2 p;` -- so unlike the fork's shaders this one
-       needs no ATTR_LOCATIONS table to agree with. */
-    memset(&vb, 0, sizeof vb);
-    vb.binding = 0; vb.stride = 2 * sizeof(float);
-    vb.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    memset(&va, 0, sizeof va);
-    va.location = 0; va.binding = 0;
-    va.format = VK_FORMAT_R32G32_SFLOAT; va.offset = 0;
-    vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
-    vi.vertexAttributeDescriptionCount = 1; vi.pVertexAttributeDescriptions = &va;
-
-    /* A STRIP OF FOUR, over `{0,0, 1,0, 0,1, 1,1}` -- the quad in `build`. */
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-
-    vp.viewportCount = 1; vp.scissorCount = 1;
-
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = VK_CULL_MODE_NONE;
-    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth = 1.0f;
-
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    /* DECLARED AND OFF: the seam's subpass has a depth attachment and a null
-       pDepthStencilState there is invalid (tagpu_vk_pass.h). The world's depth
-       lives in the offscreen pass and died with it; this draw is a flat blit
-       over TA's frame and tests nothing. */
-    memset(&ds, 0, sizeof ds);
-    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    ds.depthTestEnable = VK_FALSE;
-    ds.depthWriteEnable = VK_FALSE;
-    ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-
     /* PREMULTIPLIED, over a target cleared to {0,0,0,0}, so a pixel the world
        did not cover leaves what is beneath it untouched. Both halves are
        needed, because either one alone is a different picture -- ONE/ZERO
@@ -579,31 +664,12 @@ static int build_pipeline(const TAGPU_VKPASS* d)
     cba.alphaBlendOp = VK_BLEND_OP_ADD;
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    cb.attachmentCount = 1; cb.pAttachments = &cba;
 
-    dy.dynamicStateCount = 2; dy.pDynamicStates = dyn;
-
-    gp.stageCount = 2; gp.pStages = st;
-    gp.pVertexInputState = &vi;
-    gp.pInputAssemblyState = &ia;
-    gp.pViewportState = &vp;
-    gp.pRasterizationState = &rs;
-    gp.pMultisampleState = &ms;
-    gp.pDepthStencilState = &ds;
-    gp.pColorBlendState = &cb;
-    gp.pDynamicState = &dy;
-    gp.layout = s_plo;
-    /* THE SEAM'S RENDER PASS, not `s_rp`: this draw happens on the FRAME, over
-       TA's own surface. `s_rp` is where the world goes and nothing of this
-       pipeline ever runs inside it. */
-    gp.renderPass = d->rp;
-    gp.subpass = 0;
-    r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipe);
+    r = quad_pipeline(d, s_plo, vs, fs, &cba, 2, &s_pipe);
     if (r != VK_SUCCESS) { plog(d, "world: the composite pipeline was refused (%d)", (int)r); goto out; }
-    /* THE SAME PIPELINE WITH THE GAMMA STAGE: everything above is shared, so
-       the two composites cannot differ in anything but the fragment stage. */
-    st[1].module = gfs;
-    r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeG);
+    /* THE SAME PIPELINE WITH THE GAMMA STAGE: everything but the fragment
+       stage is shared, so the two composites cannot differ in anything else. */
+    r = quad_pipeline(d, s_plo, vs, gfs, &cba, 2, &s_pipeG);
     if (r != VK_SUCCESS) { plog(d, "world: the Gamma composite pipeline was refused (%d)", (int)r); goto out; }
     ok = 1;
 out:
@@ -782,19 +848,6 @@ static int gamma_upload(VkCommandBuffer cb, GAM* g, float f)
 
 static int build(const TAGPU_VKPASS* d)
 {
-    unsigned char* vmap = NULL;
-    VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
-    VkMemoryRequirements req;
-    void* p = NULL;
-    int type;
-    /* THE QUAD: `{0,0, 1,0, 0,1, 1,1}` as a triangle strip, in UNIT-SQUARE
-       space because DVS is what maps it to clip (`p * 2 - 1`) and to texcoords
-       (`uv = p`). The quad and the flip are ONE choice (the header's
-       ORIENTATION paragraph): changing either alone draws the world upside
-       down. */
-    static const float quad[NV * 2] = { 0.f,0.f,  1.f,0.f,  0.f,1.f,  1.f,1.f };
-
     if (d->slots == 0 || d->slots > TAGPU_VK_SLOTS) {
         plog(d, "world: %u frame slots is outside what this module carries (%d)",
              (unsigned)d->slots, TAGPU_VK_SLOTS);
@@ -817,27 +870,65 @@ static int build(const TAGPU_VKPASS* d)
     if (!build_pipeline(d)) return 0;
     if (!build_descriptors(d)) return 0;
     if (!build_gamma(d)) { plog(d, "world: the Gamma curve images were refused"); return 0; }
-
-    bci.size = sizeof quad;
-    bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(d->dev, &bci, NULL, &s_vbuf) != VK_SUCCESS) return 0;
-    vkGetBufferMemoryRequirements(d->dev, s_vbuf, &req);
-    type = mem_type(d, req.memoryTypeBits,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (type < 0) return 0;
-    mai.allocationSize = req.size;
-    mai.memoryTypeIndex = (uint32_t)type;
-    if (vkAllocateMemory(d->dev, &mai, NULL, &s_vmem) != VK_SUCCESS) return 0;
-    if (vkBindBufferMemory(d->dev, s_vbuf, s_vmem, 0) != VK_SUCCESS) return 0;
-    if (vkMapMemory(d->dev, s_vmem, 0, VK_WHOLE_SIZE, 0, &p) != VK_SUCCESS) return 0;
-    vmap = (unsigned char*)p;
-    memcpy(vmap, quad, sizeof quad);
-    vkUnmapMemory(d->dev, s_vmem);
+    if (!quad_buffer(d, &s_vbuf, &s_vmem)) return 0;
 
     plog(d, "world: the offscreen world target is up - %u frame slots, colour "
             "format %d, depth format %d", (unsigned)d->slots, (int)d->fmt, (int)d->dfmt);
     return 1;
+}
+
+static void direct_free(const TAGPU_VKPASS* d)
+{
+    if (!vkDestroyPipeline) return;         /* never resolved: nothing was made */
+    if (s_dcUp)   { vkDestroyPipeline(d->dev, s_dcUp, NULL); s_dcUp = VK_NULL_HANDLE; }
+    if (s_dcDown) { vkDestroyPipeline(d->dev, s_dcDown, NULL); s_dcDown = VK_NULL_HANDLE; }
+    if (s_dcPlo)  { vkDestroyPipelineLayout(d->dev, s_dcPlo, NULL); s_dcPlo = VK_NULL_HANDLE; }
+    if (s_dcVbuf) { vkDestroyBuffer(d->dev, s_dcVbuf, NULL); s_dcVbuf = VK_NULL_HANDLE; }
+    if (s_dcVmem) { vkFreeMemory(d->dev, s_dcVmem, NULL); s_dcVmem = VK_NULL_HANDLE; }
+}
+
+/* The no-target Gamma's two pipelines and its quad. It needs nothing the
+   target needs -- no depth format, no LINEAR filter, no linear colour format --
+   so it builds on every device the target refuses. */
+static int build_direct(const TAGPU_VKPASS* d)
+{
+    VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    VkPipelineColorBlendAttachmentState cba;
+    VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+    int ok = 0;
+
+    if (!resolve(d)) { plog(d, "world: an entry point is missing"); return 0; }
+    /* NO SETS: KFS samples nothing, and the factor is the blend constants */
+    if (vkCreatePipelineLayout(d->dev, &pli, NULL, &s_dcPlo) != VK_SUCCESS) return 0;
+    if (!quad_buffer(d, &s_dcVbuf, &s_dcVmem)) return 0;
+    vs = mk_module(d, tagpu_spv_tagpu_native_DVS,
+                   sizeof tagpu_spv_tagpu_native_DVS / sizeof(uint32_t));
+    fs = mk_module(d, tagpu_spv_tagpu_native_KFS,
+                   sizeof tagpu_spv_tagpu_native_KFS / sizeof(uint32_t));
+    if (!vs || !fs) goto out;
+
+    /* THE ALPHA IS NOT WRITTEN: the factor is a colour transfer, and the
+       frame's alpha is the swapchain's, which nothing here reads. */
+    memset(&cba, 0, sizeof cba);
+    cba.blendEnable = VK_TRUE;
+    cba.colorBlendOp = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.alphaBlendOp = VK_BLEND_OP_ADD;
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT;
+    /* UP: 1.0 x frame + frame x (factor - 1) */
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_CONSTANT_COLOR;
+    if (quad_pipeline(d, s_dcPlo, vs, fs, &cba, 3, &s_dcUp) != VK_SUCCESS) goto out;
+    /* DOWN: frame x factor */
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    if (quad_pipeline(d, s_dcPlo, vs, fs, &cba, 3, &s_dcDown) != VK_SUCCESS) goto out;
+    ok = 1;
+out:
+    if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
+    if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
+    return ok;
 }
 
 int tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
@@ -1057,7 +1148,73 @@ void tagpu_vk_world_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
     vkCmdDraw(cb, NV, 1, 0, 0);
 }
 
-void tagpu_vk_world_down(const TAGPU_VKPASS* d)
+static void direct_draw(VkCommandBuffer cb, VkPipeline pipe, float c)
+{
+    float k[4];
+    k[0] = c; k[1] = c; k[2] = c; k[3] = 0.0f;
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vkCmdSetBlendConstants(cb, k);
+    vkCmdDraw(cb, NV, 1, 0, 0);
+}
+
+void tagpu_vk_world_record_direct(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                                  uint32_t w, uint32_t h)
+{
+    VkViewport vp;
+    VkRect2D sc;
+    VkDeviceSize off = 0;
+    float f = tagpu_pal_gamma();
+
+    /* A FRAME WITH A TARGET TOOK THE CURVE IN `record`; applying the factor
+       here as well would apply it twice. `prepare` decides both arms, and this
+       arm is exactly the frames it returned 0 for. */
+    if (s_drawThis) return;
+    if (f == 1.0f || w < 1 || h < 1) return;
+    if (s_dcState == ST_UNBUILT) {
+        if (!build_direct(d)) {
+            direct_free(d);
+            s_dcState = ST_REFUSED;
+            if (!s_dcSaid) {
+                s_dcSaid = 1;
+                plog(d, "world: the no-target Gamma pipelines were refused - "
+                        "a frame without a world target shows the world at "
+                        "factor 1.0");
+            }
+            return;
+        }
+        s_dcState = ST_READY;
+        plog(d, "world: the no-target Gamma is up - the world passes drew into "
+                "the frame, and the blend applies factor %.3f to it", (double)f);
+    }
+    if (s_dcState != ST_READY) return;
+
+    /* THE WHOLE FRAME, because all it holds yet is the clear and the world:
+       the UI is recorded after this, and nothing of the engine's is drawn
+       under the world. */
+    vp.x = 0.0f; vp.y = 0.0f;
+    vp.width = (float)w; vp.height = (float)h;
+    vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    sc.offset.x = 0; sc.offset.y = 0;
+    sc.extent.width = w; sc.extent.height = h;
+    vkCmdSetScissor(cb, 0, 1, &sc);
+    vkCmdBindVertexBuffers(cb, 0, 1, &s_dcVbuf, &off);
+
+    /* UP ADDS AT MOST ONE FRAME'S WORTH A DRAW, so a factor above 2 doubles
+       first. A doubling is exact until it clamps, and a level that has
+       clamped stays clamped under every later multiply, so the result is
+       the one clamp the curve applies. tagpu_pal_gamma bounds the factor at
+       8, which is two doublings at most. */
+    while (f > 2.0f) {
+        direct_draw(cb, s_dcUp, 1.0f);
+        f *= 0.5f;
+    }
+    if (f > 1.0f) direct_draw(cb, s_dcUp, f - 1.0f);
+    else if (f < 1.0f) direct_draw(cb, s_dcDown, f);
+}
+
+/* The target and everything built with it -- not the no-target Gamma. */
+static void target_down(const TAGPU_VKPASS* d)
 {
     uint32_t i;
     if (!d || !d->dev) return;
@@ -1086,6 +1243,17 @@ void tagpu_vk_world_down(const TAGPU_VKPASS* d)
     if (s_state != ST_REFUSED) s_state = ST_UNBUILT;
     s_downOwed = 0;
     s_downPaying = 0;
+}
+
+void tagpu_vk_world_down(const TAGPU_VKPASS* d)
+{
+    if (!d || !d->dev) return;
+    target_down(d);
+    /* THE NO-TARGET GAMMA GOES WITH THE DEVICE (or the resize that rebuilds
+       the render pass its pipelines were built against), and is rebuilt on the
+       next frame that needs it. */
+    direct_free(d);
+    if (s_dcState != ST_REFUSED) s_dcState = ST_UNBUILT;
 }
 
 int tagpu_vk_world_scale(void) { return s_drawThis ? s_lastSS : 1; }
@@ -1117,5 +1285,7 @@ void tagpu_vk_world_down_paid(const TAGPU_VKPASS* d)
 {
     if (!s_downOwed || s_downPaying) return;
     s_downPaying = 1;
-    tagpu_vk_world_down(d);
+    /* THE TARGET'S DEBT ONLY: the refusal it settles is the case the
+       no-target Gamma exists for, so its pipelines stay up. */
+    target_down(d);
 }
