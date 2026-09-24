@@ -229,10 +229,10 @@ The native heartbeat's fog fields are the fog bound's witness (`tagpu_zoom.c`, g
 resolution (the engine's grid always spans the 1× rect about the eye it was built at), `wide` below 1× or
 once the eye is past that grid's few pixels of slack, `engine` on a bare frame, `none` with no
 grid at all; **`out=` must read 0** — frames whose fog domain was not inside that grid;
-**`nopieces=` must read 0** — units inside a frame's slab that the packet carried without their
-pieces, so they were not drawn (the publisher carries pieces over the whole fog reach, so this
-counts only a bare frame whose unapplied steps outran the lead, a centred frame or a piece table
-the arena cut short); `bare=`
+**`nopieces=` must read 0** — units inside a frame's slab that the packet carried outside its fog
+reach, so without their pieces and not drawn (the reach covers every slab the bound fits into a
+grid, so only a bare frame whose unapplied steps outran the lead, or a centred frame, makes one);
+`bare=`
 counts frames that needed the wide grid and had none; `held=N/Mpx` is the frames whose drawn eye
 the bound held back and the largest hold, never more than the displacement the gesture has posted
 and the game thread not yet applied, less the lead the wide grid carries (a quarter of the view a

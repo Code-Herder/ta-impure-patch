@@ -786,19 +786,20 @@ engine grid), so no bound holds the eye, which is the packet's plus the steps no
 the window published about the packet's eye. Every slab the bound fits into a grid therefore lies
 inside it, whatever moved the camera between the grids' builds and the publish. The units carried
 with their pieces are those whose projected anchor (`wy − wz/2`, the pass's own test, so no bound
-on altitude is needed) lies in the reach; one the native pass finds inside its slab without its
-pieces is not drawn and is counted, **`nopieces=`** on the `native:` line — a bare frame whose
-steps outran the lead, a frame the bound could only centre (`out=`), or a piece table the arena
-truncated. The feature anchors cover the reach plus 16 cells, scanned in whole rows outward from
-its centre row `mid` in the order `mid, mid+1, mid−1, mid+2, …`: the scan stops at the first row
+on altitude is needed) lies in the reach (`TAGPU_PK_U_INRECT`); one carried outside it that the
+native pass finds inside its slab is not drawn and is counted, **`nopieces=`** on the `native:`
+line — only a bare frame whose steps outran the lead, or a frame the bound could only centre
+(`out=`), can make one. The feature anchors cover the reach plus 16 cells, scanned in whole rows
+outward from `mid`, the centre row of the view about the packet's eye clamped into the rect, in
+the order `mid, mid+1, mid−1, mid+2, …`: the scan stops at the first row
 that does not fit in the room the table has left, and that row and every later one in the order
 are dropped, the row at the same distance on the other side among them. An overflow of the
 65 536-entry table therefore keeps a band `[mid − a, mid + b]`, `b − a ∈ {0, 1}`, and says so once
-per scan (`trunc=` on the `feat:` line). The drawn view is not centred on `mid`: its eye is the
-packet's plus the steps the game thread has not applied, which the lead (`vh/4`, 33 rows at 4K) is
-sized to hold, and the bound caps that offset by the grid — at the lead and the lattice's rounding
-at the floor, at the room the grid leaves about a smaller slab above it. A frame loses nothing while
-the band holds its own slab at that offset, 560 rows at the floor at 4K. The scan is reused within
+per scan (`trunc=` on the `feat:` line). A frame is drawn from the packet's eye plus the steps the
+game thread has not applied yet, as far as the bound lets them through — on the wide grid at the
+floor at most the lead (`vh/4`, 33 rows at 4K) and the lattice's rounding, since that grid is built
+about the packet's eye. A frame loses nothing while the band holds its own slab at that offset
+from `mid`, 560 rows at the floor at 4K. The scan is reused within
 a tick only when the tick, the rect and `mid` all match. The densest stock map, Canal Crossing, puts 12 633 anchors in one rect at 4K
 with the lead — every feature it has, 19 % of the table; next are Cavedog Links CC at 10 289 and
 Plains and Passes at 9 603, each also whole; at 1080p Canal Crossing's worst rect holds 9 740
@@ -822,8 +823,9 @@ the eye it reads (`32·col0 + 16`, `col0` the eye's half-cell-rounded `>> 5`) an
 so the publisher keeps a record of the eye each build read, taken off LosType bit 3
 (`main+0x14281`): only a build sets it — `0x484904` right after the lazy test `0x4848F2` and the
 build `0x4848FA` inside the fog function `0x4848E0`, and `terr_fogtick` right after its own call —
-every other store to the word touches bits 0–2 only, and nothing `DrawGameScreen` reaches by a
-direct call clears it or stores the eye (engine map, "who sets `main+0x14281` bit 3"). The bit is
+every other store to the word either clears it or writes it back unchanged, and nothing
+`DrawGameScreen` reaches through direct calls, branches or jump tables clears it or stores the eye
+(engine map, "who sets `main+0x14281` bit 3", with the walk's method and what it leaves out). The bit is
 read after the command apply, just before the draw, and again right after it: clear then set is a
 build inside the draw at the eye it was drawn at, which the publisher records; set before is no
 build, and the record stands however the eye has moved since — the camera shake `0x41C6F0` moves
@@ -884,8 +886,8 @@ paused=N back=N nopieces=N`: `fog` is the grid the last frame actually sampled; 
 domain is not inside the grid they took, checked on the pass's own numbers, and must read 0; `held`
 counts frames the bound held back and the largest hold; `paused` the frames drawn at the last
 frame's level; `back` the frames that moved against the gesture anyway, and must read 0;
-`nopieces` the units inside a frame's slab that the packet carried without their pieces, which
-were not drawn, and must read 0. The publisher's `fog:` segment carries the build record's two:
+`nopieces` the units inside a frame's slab that the packet carried outside its fog reach, and so
+without their pieces, which were not drawn, and must read 0. The publisher's `fog:` segment carries the build record's two:
 `norec` and `recodd` (above).
 
 *Why a bound on the eye and not a bigger grid.* A grid spanning the whole reachable range is the
@@ -1096,9 +1098,9 @@ callers of `DrawGameScreen` (`0x495C76` and `0x495E66` in the screenshot routine
 movie recorder) never latch and keep the last in-play value until the level end. So after the
 render thread withdraws, the key fill and the fog tick can still run for the rest of that draw.
 `tagpu_terrown_filled()` and the structure-shadow gate follow the request, which is already
-down, so no such frame is inverted. The fog-eye latch that handing the site back must void is
-now voided by `tagpu_terrown_latch` on every draw the site is not ours, on the game thread. The
-render thread's clear, which a tick on the draw in flight could undo, is gone.
+down, so no such frame is inverted. Handing the site back leaves nothing to void: the engine
+grid's origin is its build record, read off LosType bit 3 whoever builds it (§2.3e), and the
+wide grid is refused unless the fog site ran in the same draw.
 
 **The cursor is not a reader of this rect and no longer needs to be** — §2.3d is why. Until
 G13m it was: the engine drew its sprite wherever `GetCursorPos` reported, so widening what it
