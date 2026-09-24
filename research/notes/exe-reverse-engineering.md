@@ -3696,7 +3696,7 @@ every publish of that tick.
 
 | array | where | how many, and who says so |
 | --- | --- | --- |
-| projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **Both append sites refuse past 300** — `0x49B6EE` and `0x49B809`, each `cmp …,0x12C / jge` past the store — so the count is bounded by the allocation itself and no sanity cap is needed |
+| projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **All ten append sites refuse past the cap** — each a `cmp …,0x12C / jge` past the store (`0x49B6EE`, `0x49B809` and eight more; the list is under *The raised effect pools*) — so the count is bounded by the allocation itself and no sanity cap is needed |
 | explosions | stock: count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54`; raised: the same layout in a DLL static | **300 in stock, 3000 raised.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
 | flying debris | stock: the 100 dwords at `0x511DF0..0x511F80`; raised: 1000 dwords in a DLL static. Each names a system whose `+0x2C` is the piece `{node @0, turn @0x12, x @0x16, alt @0x1A, y @0x1E}` | the slot count is the address range |
 | the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **401 objects, not 400.** Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at 400 or fewer it appends, and **past 400 it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So 401 is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
@@ -3750,7 +3750,8 @@ TADR's `EngineLimits.cpp` (prior art, [the TADR port](tadr-port/raised-limits.md
 one table**, compared with the stock bytes as a whole at `DLL_PROCESS_ATTACH` and written as a
 whole or not at all; a mismatch writes nothing and the first DirectDraw call shows the
 startup-failure report and exits. Every site below was read out of the pristine image, and the
-evidence for each is in [the evidence pass](tadr-port/limits-evidence.md) §1–4.
+evidence for each is in [the evidence pass](tadr-port/limits-evidence.md) §1–4. Two landing
+reviewers checked all 43 against the image byte for byte and found no site wrong.
 
 **Projectiles, 300 → 3000.** The pool stays the engine's, allocated per game:
 - `0x499A32` the `push 0x7D64` (the bytes, `300 × 0x6B`) and `0x499A56` the `mov ecx,0x1F59` of the
@@ -3775,14 +3776,20 @@ records}`, because the add site `0x420A3C` takes the count's address as its base
 records at `+4`.
 - The seven base references, the only ones in `.text`: `0x420630` the reset inside `0x420620`
   (called only from the level load `0x4919D2`), `0x420A36` / `0x420A3C` the add `0x420A30`,
-  `0x420B35` / `0x420B3B` inside the draw `0x420B00`, `0x420F66` inside `0x420F30`, and `0x421738`
-  in the piece explosion `0x421700`. Each `mov`/`lea` relative to `main` becomes an absolute
+  `0x420B35` / `0x420B3B` inside the draw `0x420B00`, `0x420F66` inside the tick `0x420F30`, and
+  `0x421738` in the piece explosion `0x421700`. Each `mov`/`lea` relative to `main` becomes an absolute
   `mov` of the static's address, same length.
 - **The sequence table `main+0x1AB8F` stays in the engine.** `0x420AA2` reads it as
   `[edi+eax*4+0x6274]` only because stock's pool sits in front of it (`4 + 300 · 0x54 = 0x6274`);
   with `edi` now the static, that load becomes a `call` to a stub that loads `main` and reads
   `[main+eax*4+0x1AB8F]`. Only `eax` changes.
 - The caps `0x420A44` (the add) and `0x421771` (the piece explosion).
+- **The tick's compaction is quadratic.** `0x4210E6..0x42113E` finds the first dead record
+  (`+0`, `+0xC` and `+0x18` all zero), shifts the whole tail down one record (`rep movsd`, `0x15`
+  dwords), decrements the count and rescans from record 0 until a pass removes nothing: O(dead ×
+  live) record moves a tick. At stock's 300 that is small; at 3000, with a mass death's explosions
+  expiring on the same tick, it is about a hundred times stock's worst. Unchanged by the raise,
+  and TADR's too.
 
 **Flying pieces, 100 → 1000, moved into a DLL static.** Seven base operands (`0x420B08`,
 `0x420F38`, `0x421153`, `0x421172`, `0x4211A7`, `0x42165F`, `0x421680`) and six end operands
@@ -3790,7 +3797,12 @@ records at `+4`.
 `0x511DF0` and `0x511F80`. **The five `mov ecx,0x511F80` stay** (`0x4205F0`, `0x420610`,
 `0x420900`, `0x420977`, `0x421691`): `0x511F80` is also the pool allocator that backs the pieces,
 the `this` of `0x4379B0` (init) and `0x437A30` (alloc), and its backing grows tenfold at the
-`push 0x186A0` at `0x4208FB`. The level load's clear at `0x42090A` (`mov ecx,0x64 / xor eax,eax /
+`push 0x186A0` at `0x4208FB`. **`0x437A30` is a ring:** an allocation that reaches the end wraps,
+and every block it then overwrites is evicted, its owner's slot nulled (`0x437A9D`, `0x437ACF`).
+Stock can therefore evict pieces with fewer than 100 alive, and the tenfold ring evicts them later:
+below the stock caps the raised build keeps pieces stock would have dropped, and they land and add
+their explosions. That changes the explosion count and the C-runtime `rand` stream, not the
+simulation's generator unless the explosion pool fills. The level load's clear at `0x42090A` (`mov ecx,0x64 / xor eax,eax /
 mov edi,0x511DF0 / rep stosd`, 14 bytes) becomes a `call` to a C reset that clears the static,
 returns 0 in `eax` as stock leaves it, and initialises the debris records below.
 
@@ -3802,7 +3814,8 @@ from `edi`, set at `0x4207DD`, `+0x20` = 0, `+0x24` the vertices, `+0x28` the fa
 `0x420895..0x4208F9` its faces (`+0x1C |= 1`, `+0` = `0xC8`, `+4` = 4, `+0xC` = `0x502BF8 + k·8`
 for the six faces). The C reset writes the same values into the statics; the stock loops still run
 over the engine's array, which nothing reads. Two first-free scans hand out a record, both
-`cmp eax,0x12C`: the allocator `0x420920` becomes a `jmp` to the C allocator, and the inline copy
+`cmp eax,0x12C`: the standalone allocator `0x420920`, which nothing in the image calls or points
+to, becomes a `jmp` to the C allocator so that no copy of the stock scan survives, and the inline copy
 at `0x4217DE` (16 bytes: `mov edx,[main] / xor esi,esi / xor eax,eax / lea ecx,[edx+0x1AB9F]`)
 becomes `xor esi,esi` / `call alloc` at `0x4217E0` / `jmp 0x421804` at `0x4217E5` and four NOPs. `0x421804` wants `eax` = the
 record or 0 and `esi` = 0, and reloads `ecx` and `edx` before it uses them. **The C allocator is
@@ -3811,16 +3824,25 @@ carries from one game to the next.
 
 **The caps gate the simulation's random numbers.** `0x421700`, the piece explosion, walks a dying
 unit's pieces; for each it leaves when the explosion count reaches the cap (`0x42176F`); when no debris record is free, `0x421802..0x421808` skips the draws that
-follow. Otherwise it **draws the sim RNG `0x4B6C30` six times** (`0x421851..0x4218D2`). So the explosion cap and the debris records'
-fullness decide how many sim-RNG draws a death makes. Below the stock caps the raised build makes
-the same draws in the same order; past them, the raised build draws where stock would have stopped.
-`0x420E50`, the flying-piece spawner, draws its seven values before it asks for a slot, so the
-flying-piece cap gates no draw.
+follow. Otherwise it **draws the sim RNG `0x4B6C30` eight times a piece**: six at
+`0x421851..0x4218D2` and two at `0x421B39` and `0x421B62`, on the same path with no branch
+between. So the explosion cap and the debris records' fullness decide how many sim-RNG draws a
+death makes. Below the stock caps the raised build makes the same draws in the same order; past
+them, the raised build draws where stock would have stopped.
+
+**The flying-piece cap gates no draw.** The live spawner is `0x481140`, reached through the
+function-pointer table entry at `0x4FD6CC` (`.rdata`, among `0x480xxx`/`0x481xxx` handlers), not
+by a call. It draws the sim RNG six times (`0x48116F..0x4811B9`) and only then asks
+`0x421620` for a slot (`0x48123C`). `0x421620` hands a piece flagged to explode (record `+0x28`
+bit 2) to `0x421700` before it scans for a slot, so that branch does not depend on the slots
+either. `0x420E50`, which has the same shape and also calls `0x421620`, has no caller or pointer
+anywhere in the image; nor do `0x421150`, `0x421170` and `0x4211A0`, three slot helpers whose
+operands are patched with the rest.
 
 **What it measured, 2026-09-23.** Single player, `scenarios/limits-flood.json` (450 Merls against
 450 Diplomats): the engine's own counts peaked at **687 projectiles** and **1727 explosions**, and
 the frame packet carried **687 projectiles, 2439 explosions and 540 flying pieces** at its peaks,
-with no table truncated and the native vertex budget never full. Network game, two peers on the
+with no table truncated. Network game, two peers on the
 raised build (`scenarios/limits-mp-west.json` on one, `-east` on the other): projectiles
 **689 on both**, explosions **1770** and **984**. Paused with the game's own `Pause` (`main+0x38A51`
 = 1 on both, their tick counters three apart), **both peers held the same 394 units at identical

@@ -150,7 +150,17 @@ moved pools; the stock-limits `make` flag. What it proved, by running it:
   pinned (the engine map, *the engine's rates*), so the comparison would measure noise. The owner's
   point that TA replicates state rather than running lockstep settled it: what multiplayer needs is
   the two-peer agreement above, and what "stock below the caps" needs is that each rewritten site
-  does what stock did, which the landing review checks site by site against the disassembly.
+  does what stock did. Two landing reviewers checked all 43 sites against the image and found none
+  wrong.
+- **One exception to "stock below the caps", by design.** The flying pieces' backing ring
+  (`0x437A30`) is ten times larger, and a ring evicts by bytes, not by slots: stock can drop a
+  piece with fewer than 100 alive, the raised build keeps it. The piece lands and adds its
+  explosion, so the explosion count and the C-runtime `rand` stream differ from stock; the
+  simulation's generator is reached only if the explosion pool fills. A tenfold slot count needs
+  the tenfold ring, so this is the price of the raise, and TADR pays it too.
+- **Not closed: the explosion tick's cost.** Its compaction (`0x4210E6`) is O(dead × live), about a
+  hundred times stock's worst tick at 3000 records if a mass death expires together. Landing 2's
+  tier-1 battle measures it.
 
 **Landing 2 — units 1500 and the `maxunits` clamp; the design point to 15 001; `tacli` to 1500;
 pathfinding 66 650.** Proof, tier 1: a four-player skirmish at 1500 each (6000 units; a skirmish
@@ -181,6 +191,7 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
   if the cap is real.
 - The particle headroom rule: decided in L3, from the data.
 - Pathfinding cost at 6000 units: tier 1 measures it.
+- The explosion tick's quadratic compaction at 3000 records: tier 1 measures it.
 
 ## Corrections this plan made
 
@@ -188,6 +199,9 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
   read as the "unrestricted" sentinel [INFERRED]). Corrected in [deep-tadr](../deep-tadr.md) on
   2026-09-23.
 - `tagpu_packet_pub.c` said "twelve more" particle cap sites; there are twenty (landing 1).
+- The evidence named `0x420E50` as the flying-piece spawner; nothing calls it. The live spawner is
+  `0x481140`, and the conclusion (the slot cap gates no simulation draw) holds through it. A piece
+  explosion draws the simulation's generator eight times, not six (landing 1's review).
 - The engine map said the effect arrays are simulation state that the draw passes only read, and
   did not record that the explosion cap and the debris records' fullness gate synced random-number
   draws. It does now (landing 1).

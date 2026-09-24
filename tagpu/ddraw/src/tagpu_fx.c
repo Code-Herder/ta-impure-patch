@@ -72,11 +72,8 @@
 /* THE STRIDE IS tagpu_fx.h's, so the vertices written here and the Vulkan
    attribute array cannot drift apart. */
 #define FXST     TAGPU_FX_VST   /* x,y,enc, u,v, c,mode, wx,wz               */
-/* one model per flying piece and per explosion, and two per projectile (a
-   rendertype-1 missile is its body and its thrust flame), so a frame at the
-   engine's own limits (tagpu_limits.h) never runs out */
-#define MAXMODEL (2 * TAGPU_LIM_PROJ + TAGPU_LIM_EXPL + TAGPU_LIM_PSYS)
-typedef char fx_sprites_fit[(6 * (TAGPU_LIM_PROJ + TAGPU_LIM_EXPL) <= TAGPU_FX_MAXV) ? 1 : -1];
+#define MAXMODEL 1024
+typedef char fx_sprites_fit[(6 * (2 * TAGPU_LIM_PROJ + TAGPU_LIM_EXPL) <= TAGPU_FX_MAXV) ? 1 : -1];
 #define ATLAS_DIM 2048
 #define ATLAS_MAX 2048
 

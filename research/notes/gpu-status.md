@@ -1548,7 +1548,7 @@ pools*.
 | the explosion pool | `0x420630`, `0x420A36`, `0x420A3C`, `0x420B35`, `0x420B3B`, `0x420F66`, `0x421738`; caps `0x420A44`, `0x421771` | `main`-relative operands become the address of `s_expl`; `0x420AA2` becomes a `call` to a stub that reads the sequence table from `main` |
 | the flying-piece slots | seven base and six end operands (`0x420B08` … `0x42166D`); the backing `push` at `0x4208FB` | operands become `s_psys`'s bounds |
 | the level's effect reset | `0x42090A` | a `call` to `lim_level_reset` in place of the `rep stosd` |
-| the debris records | `0x420920` (`jmp`), `0x4217DE` (16 bytes: `call` + `jmp 0x421804`) | first-free C allocator over `s_aux` |
+| the debris records | `0x4217DE` (16 bytes: `call` + `jmp 0x421804`), and `0x420920` (`jmp`), a stock copy of the scan that nothing calls | first-free C allocator over `s_aux` |
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
@@ -1560,7 +1560,9 @@ moved pools' addresses for `tacli peek`: `limits: installed 43 sites -- …`.
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
 `tagpu_limits_report()` shows a MessageBox titled *Total Annihilation: Impure cannot start* and
-calls `ExitProcess`. The text says why in plain words, what to do, and ends in a report block for
+calls `ExitProcess`. The text says why in plain words (the exe is not 3.1; it is 3.1 but was
+changed in memory first; Windows refused the write; or Impure failed on its own side, a table
+overflow or a stub it could not allocate), what to do, and ends in a report block for
 whoever debugs it: the impure commit and branch, the exe's name, size, md5 and PE stamp, whether
 the md5 is a known build, and every differing site as `want` and `have` bytes (twelve in the box,
 all of them in `log\tagpu.log`). It prints no path. The same text is written to
@@ -1574,19 +1576,38 @@ returns the engine's own location. It is the comparison build, launched with `ta
 **What follows the pools.** The frame packet's publisher reads the explosions through
 `tagpu_limits_expl_pool()` and the flying pieces through `tagpu_limits_psys_begin()`/`_end()`,
 never at a fixed address; `TAGPU_PK_MAX_PROJ`/`_EXPL`/`_DEBRIS` are the pool sizes, so an effect
-table cannot truncate below the engine's own cap. `tagpu_fx.c`'s `MAXMODEL` is
-`2 · proj + expl + psys`, its sprite budget `TAGPU_FX_MAXV` (65 536) is asserted against
-`6 · (proj + expl)` at compile time, and `tagpu_native.c`'s vertex budget `MAXNV` is 196 608. No
-limit bounds that last one by construction, because a model's vertex count is its artist's, so the
-heartbeat counts what it refuses: `native: … nv=<n> nvfull=<refused triangles>`.
+table cannot truncate below the engine's own cap. `tagpu_fx.c`'s buckets, `TAGPU_FX_MAXV`
+(65 536 vertices each), are asserted against `6 · (2 · proj + expl)` at compile time: a
+projectile makes at most two sprite quads (its shadow blob and its frame), an explosion one. That
+is a size, not a bound by construction: a composite GAF frame makes a quad per subframe, a
+lightning bolt up to 2 044 line vertices, and the particles share the sprites bucket under their
+own cap. A vertex past a full bucket is dropped and logged (`fx: DROPPED … bucket-full`).
 
 **Measured 2026-09-23** (the numbers are in the engine map): in single player the packet carried
-687 projectiles, 2439 explosions and 540 flying pieces with no table truncated and `nvfull=0`; in a
+687 projectiles, 2439 explosions and 540 flying pieces with no table truncated; in a
 two-peer network game both peers passed every stock cap and, paused, held the same units at
 identical positions; a copy of the exe with one site byte changed got the report, the file and
 the exit, and the retail exe was untouched.
 
+**Below the stock caps the raised build is not stock in one respect.** The flying pieces' ring
+allocator `0x437A30` evicts the oldest blocks when it wraps and nulls their slots; its backing is
+ten times larger here, so a piece stock would have evicted to make room lives on, lands and adds
+its explosion. That changes the explosion count and the C-runtime `rand` stream, and reaches the
+simulation's generator only if the explosion pool fills (it gates `0x421700`'s draws). The
+stock-limits build is therefore a comparison build, not a proof of equality.
+
 **What this landing does not close.**
+- **The explosion tick's compaction is quadratic.** `0x4210E6..0x42113E` removes one dead record,
+  shifts the whole tail down one record (`rep movsd`, `0x15` dwords) and rescans from the start,
+  so a tick costs O(dead × live) record moves. At 3000 records with a mass death expiring together
+  that is about a hundred times stock's worst tick. Not measured yet; landing 2's tier-1 battle
+  measures the tick. TADR runs the same loop.
+- **The install fails closed in any process that loads this DLL.** An exe that is not TA and calls
+  `DirectDrawCreate` gets the same box and exits. By design: this `ddraw.dll` is built for
+  `TotalA.exe` alone, and the report names the exe it met.
+- **The native pass still emits effect models into a vertex array no lane reads**
+  (`tagpu_native.c`'s `s_verts`, fed by `emit_fx_model`). Its budgets were left at their stock
+  sizes; the path is a candidate for deletion.
 - Whether a peer on a lower cap than its opponent refuses projectiles the other fired, and what that
   does to damage. The contract is the same build on every peer, which is what was measured.
 - The known-build table holds retail 3.1 alone; other builds report `known build: none`.

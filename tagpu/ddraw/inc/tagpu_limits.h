@@ -15,8 +15,12 @@
 
    THE STOCK BUILD. `make LIMITS=stock` defines TAGPU_LIMITS_STOCK: the counts below are
    stock's, nothing is patched, and the accessors return the engine's own arrays. It exists
-   for the comparisons that prove the raised build equal to stock below the stock caps;
-   there is no runtime switch, because a player must not be able to diverge. */
+   for comparisons with stock; there is no runtime switch, because a player must not be
+   able to diverge. BELOW THE STOCK CAPS THE TWO ARE NOT IDENTICAL in one respect: the
+   flying pieces' ring allocator (0x437A30) is ten times larger, so a piece stock would
+   have evicted to make room lives on, lands, and adds its explosion. That changes the
+   explosion count and the C-runtime rand() stream, never the simulation's own
+   generator unless the explosion pool fills (research/notes/tadr-port/raised-limits.md). */
 
 #ifdef TAGPU_LIMITS_STOCK
 #define TAGPU_LIM_PROJ   300     /* live projectiles                              */

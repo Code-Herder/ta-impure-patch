@@ -215,6 +215,7 @@ static LIMSITE s_lim[LIM_MAXSITE];
 static int     s_nlim;
 static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
 static int     s_limOverflow;        /* the table itself was too small: our bug      */
+static int     s_limNoStub;          /* a code stub could not be allocated           */
 static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 
 #ifndef TAGPU_LIMITS_STOCK
@@ -378,7 +379,7 @@ static void lim_sites(void)
     unsigned char* seqtab = lim_seqtab_stub();
     int k;
 
-    if (!probe || !seqtab) { s_limOverflow = 1; return; }
+    if (!probe || !seqtab) { s_limNoStub = 1; return; }
 
     /* ---- projectiles: allocated per game by 0x499A30, refused past the cap at ten sites */
     lim_dword(0x00499A32, 300 * PROJ_REC, TAGPU_LIM_PROJ * PROJ_REC, "projectile pool bytes");
@@ -410,17 +411,17 @@ static void lim_sites(void)
     {
         static const unsigned char addCnt[6] = { 0x8B, 0x88, 0x1B, 0x49, 0x01, 0x00 };
         static const unsigned char addLea[6] = { 0x8D, 0xB8, 0x1B, 0x49, 0x01, 0x00 };
-        static const unsigned char updCnt[6] = { 0x8B, 0x90, 0x1B, 0x49, 0x01, 0x00 };
-        static const unsigned char updLea[6] = { 0x8D, 0x88, 0x1B, 0x49, 0x01, 0x00 };
-        static const unsigned char drwLea[6] = { 0x8D, 0x98, 0x1B, 0x49, 0x01, 0x00 };
+        static const unsigned char drwCnt[6] = { 0x8B, 0x90, 0x1B, 0x49, 0x01, 0x00 };
+        static const unsigned char drwLea[6] = { 0x8D, 0x88, 0x1B, 0x49, 0x01, 0x00 };
+        static const unsigned char tckLea[6] = { 0x8D, 0x98, 0x1B, 0x49, 0x01, 0x00 };
         static const unsigned char pceLea[6] = { 0x8D, 0xB0, 0x1B, 0x49, 0x01, 0x00 };
         static const unsigned char movEcxM[2] = { 0x8B, 0x0D }, movEdxM[2] = { 0x8B, 0x15 };
         static const unsigned char movEdi = 0xBF, movEcx = 0xB9, movEbx = 0xBB, movEsi = 0xBE;
         lim_op(0x00420A36, 6, addCnt, movEcxM, 2, expl, "explosion add count");  /* mov ecx,[pool] */
         lim_op(0x00420A3C, 6, addLea, &movEdi, 1, expl, "explosion add pool");   /* mov edi,pool   */
-        lim_op(0x00420B35, 6, updCnt, movEdxM, 2, expl, "explosion update count");
-        lim_op(0x00420B3B, 6, updLea, &movEcx, 1, expl, "explosion update pool");
-        lim_op(0x00420F66, 6, drwLea, &movEbx, 1, expl, "explosion draw pool");
+        lim_op(0x00420B35, 6, drwCnt, movEdxM, 2, expl, "explosion draw count");  /* 0x420B00 */
+        lim_op(0x00420B3B, 6, drwLea, &movEcx, 1, expl, "explosion draw pool");
+        lim_op(0x00420F66, 6, tckLea, &movEbx, 1, expl, "explosion tick pool");   /* 0x420F30 */
         lim_op(0x00421738, 6, pceLea, &movEsi, 1, expl, "piece explosion pool");
     }
     {
@@ -499,6 +500,7 @@ int tagpu_limits_install(void)
     int i, bad = 0, written;
     if (s_limState) return s_limState > 0;
     lim_sites();
+    if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be allocated"); return 0; }
     if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
 
     for (i = 0; i < s_nlim; i++) {
@@ -648,7 +650,10 @@ void tagpu_limits_report(void)
     /* ONE LINE PER PARAGRAPH: the box wraps prose to its own width, and a hard break
        inside a paragraph wraps a second time into ragged half-lines. The report lines
        are kept short enough that the box never wraps them. */
-    if (s_limWriteFail)
+    if (s_limNoStub || s_limOverflow)
+        why = "Impure failed on its own side before it compared anything: this is a bug in "
+              "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
+    else if (s_limWriteFail)
         why = "Windows refused to let Impure change the game's code in memory.";
     else if (strcmp(known, "none"))
         why = "This TotalA.exe IS the 3.1 that Impure is built for, but something else "
@@ -683,7 +688,9 @@ void tagpu_limits_report(void)
         why, GIT_COMMIT, GIT_BRANCH, base, size, md5, (unsigned long)stamp, known);
     text[sizeof text - 1] = 0;
 
-    if (s_limOverflow)
+    if (s_limNoStub)
+        _snprintf(line, sizeof line, "result: a code stub could not be allocated, nothing written\r\n");
+    else if (s_limOverflow)
         _snprintf(line, sizeof line, "result: the site table overflowed, nothing written\r\n");
     else if (s_limWriteFail)
         _snprintf(line, sizeof line, "result: write refused at 0x%08X, all put back\r\n",

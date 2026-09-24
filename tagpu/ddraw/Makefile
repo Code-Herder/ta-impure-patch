@@ -52,8 +52,9 @@ CC        = i686-w64-mingw32-gcc
 WINDRES  ?= i686-w64-mingw32-windres
 
 # THE STOCK-LIMITS BUILD (inc/tagpu_limits.h): `make LIMITS=stock` builds
-# ddraw-stocklimits.dll, which raises no engine limit, for the comparisons that prove
-# the raised build equal to stock below the stock caps. Its objects carry their own
+# ddraw-stocklimits.dll, which raises no engine limit, for comparisons with stock. It
+# changes only the engine's limits: the renderer's own budgets are the raised build's in
+# both, which draw more than stock ever asks for. Its objects carry their own
 # suffix, so neither build can ever link the other's -- the two differ in a macro,
 # not in a file, and make would otherwise call a stale object up to date.
 ifeq ($(LIMITS),stock)
@@ -123,6 +124,6 @@ tests/logtest.exe: tests/logtest.c src/tagpu_log.c inc/tagpu_log.h
 	    -static -o $@ tests/logtest.c src/tagpu_log.c
 
 clean:
-	$(RM) $(TARGET) $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe || del $(TARGET) $(subst /,\\,$(ALLOBJS))
+	$(RM) ddraw.dll ddraw-stocklimits.dll $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
 
 -include $(DEPS)

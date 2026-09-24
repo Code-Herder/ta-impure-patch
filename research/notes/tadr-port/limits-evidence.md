@@ -82,8 +82,8 @@ pool base: every other large displacement there is `main`-relative, not pool-rel
 
 **SIM-RNG-coupled (DIS).** `0x421700`, the piece explosion, loops over a unit's pieces. At
 `0x42176F` it exits when explosions ≥ 300. Otherwise it allocates an aux record (§4) and **draws
-the sim RNG six times** (`0x421851…0x4218D2`). So the explosion cap decides how many sim-RNG draws
-a death makes.
+the sim RNG eight times** a piece (`0x421851…0x4218D2`, then `0x421B39` and `0x421B62` on the same
+path). So the explosion cap decides how many sim-RNG draws a death makes.
 - **INF:** whether the sim-RNG stream must agree across peers. Stock peers can already differ in
   live-explosion count (remote events land later), which argues that it need not. Settle it by
   comparing `0x51FC88` (or `tagpu_cobtrace` rand lines) on two peers across a mass death, with the
@@ -121,9 +121,16 @@ object (`this` for `0x4379B0` init and `0x437A30` alloc) with a 100 000-byte bac
   a C reset.
 - Missed sites: none.
 
-**VISUAL as far as the RNG goes (DIS).** The slot allocator `0x421620` draws no sim RNG.
-`0x420E50`, the per-piece death spawner, draws its seven sim-RNG values **before** calling
-`0x421620`, so the draw count does not depend on this cap. INF: that flying pieces deal no damage.
+**VISUAL as far as the RNG goes (DIS).** The slot allocator `0x421620` draws no sim RNG. The live
+spawner `0x481140` (reached through the function table at `0x4FD6CC`) draws its six sim-RNG values
+**before** calling `0x421620` at `0x48123C`, so the draw count does not depend on this cap.
+`0x420E50`, which looks like a second spawner, has no caller or pointer anywhere in the image.
+INF: that flying pieces deal no damage.
+
+**Not stock below the cap (DIS).** The backing allocator `0x437A30` is a
+ring that evicts the blocks it wraps over and nulls their owners' slots (`0x437A9D`, `0x437ACF`).
+A ten-times ring evicts later, so the raised build keeps pieces stock would have dropped even with
+fewer than 100 alive: more landings, more explosions, a different C-runtime `rand` stream.
 
 **Per game:** init runs from `0x4919D2`, teardown from `0x491B9F`.
 
@@ -142,7 +149,7 @@ object (`this` for `0x4379B0` init and `0x437A30` alloc) with a 100 000-byte bac
 level-load loop `0x420804…0x420882`. There are two first-free scans, both
 `cmp eax,0x12C`:
 - `0x420920`, a standalone allocator, which TADR replaces wholesale with a `jmp` to a round-robin C
-  allocator.
+  allocator. Nothing in the image calls it or points to it.
 - An inline copy at `0x4217DE…0x4217FB`, which TADR replaces with `call alloc; jmp 0x421804`. That
   also bypasses the found-branch `0x421D79…0x421D90`.
 
