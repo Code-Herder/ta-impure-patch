@@ -124,11 +124,21 @@ Armed by `tagpu_fx.on` (tokens `log`, `nolines`, `nomodels`, `nosprites`, `noexp
 `nodebris`). It rides the native unit frame: `tagpu_native_frame` builds the view
 (eye, viewport, fog textures, palette), calls `tagpu_fx_gather`, and:
 
-- **Models** (rockets, missiles, shells, debris, flying pieces) are emitted through the
-  unit geometry path — `emit_node`, the face loop shared with units, fed raw node
-  vertices rotated by the engine triple exactly as `0x4B6CC0` does. Unshaded (neutral
-  SHD row), selection-primitive face skipped, textured faces quads-only: the
-  `0x46BAE0` rules. Depth band `FX_ENC_MODEL = 400 ± 1.8`.
+- **Models** (rockets, missiles, shells, debris, flying pieces) are emitted by
+  `emit_fx_model` through `emit_node`, the face loop shared with units, fed raw node
+  vertices rotated by the engine triple exactly as `0x4B6CC0` does — unshaded (neutral
+  SHD row), selection-primitive face skipped, textured faces quads-only: the `0x46BAE0`
+  rules. **They are not drawn.** The vertices go into `tagpu_native.c`'s `s_verts`,
+  which no Vulkan lane reads, while `fxown` skips the engine's own draw of them, so a
+  rocket's body, a shell and a debris piece are not on screen
+  ([gpu-status](gpu-status.html) §2.88, *Not covered*). Their texture lookups still paint
+  into the unit atlas.
+- **A record is drawn whole or not at all.** A projectile with its ground shadow, an
+  explosion with its flash and its body, is emitted inside one bracket
+  (`effect_begin`/`effect_end`); a sprite whose atlas paint the allowance defers takes the
+  whole record back out for that frame, so a flash never shows without its explosion or
+  a shadow without its shell. The explosions are one walk, flash and body per record;
+  the buckets keep the engine's two layers apart, every flash before every body.
 - **Lines and sprites** are the module's own program: a private 2048² R8 atlas (raw,
   RLE and sub-frame frames decoded on first use), palette lookup, four modes — flat
   colour (lines, `GL_LINES` at supersample width), opaque colour-keyed, 50 % alpha
@@ -192,9 +202,8 @@ skip byte and detour (§7.5), armed by `tagpu_sfx.on` independently of `tagpu_fx
 Follow-ups noted by review, not done: the GAF RLE decoder and shelf atlas duplicate
 `tagpu_scaffold.c` / `tagpu_render3do.c` (a shared `tagpu_gaf.c` would serve all three);
 the byte-match/stub/detour machinery is now the fifth private copy across owndraw,
-tracer, suppress, scenario and fxown; effects models share the unit pass's 49 152-vertex
-stream and are emitted last (a `VERTEX-BUDGET-HIT` tag appears in the `native:` log line
-when it caps).
+tracer, suppress, scenario and fxown; the effects models are emitted into a vertex array
+no lane reads (§4).
 
 ## 6. Verification (2026-09-02, `scenarios/fx-mix.json`, `scenarios/fx-lasers.json`)
 

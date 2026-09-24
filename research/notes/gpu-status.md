@@ -16182,8 +16182,8 @@ beside its index mirror, and it is the only atlas image the world passes upload:
 - **The colour is the engine's unscaled table** (`tagpu_pal_engine()`, §2.3f), and the base is
   keyed on the atlas's mirror serial and the engine serial: a paint re-sends only the tiles the
   atlas's dirty map says changed (`tagpu_gaf_dirty_since`), an engine-table change the whole
-  page. The staging is the slot's own bounded buffer, at most 1 MiB whatever the atlas
-  (`tagpu_vk_stage.c`, *The staging* below); the image is shared and written behind a
+  page. The staging is the slot's own bounded buffer, at most 2 MiB (`TAGPU_VK_STAGE_CAP`)
+  whatever the atlas (`tagpu_vk_stage.c`, *The staging* below); the image is shared and written behind a
   write-after-read barrier on the one queue.
 - **The key is per frame, so it has a plane of its own.** `tagpu_gaf.c` writes `keym` beside the
   index mirror in the same paint and the same allocation, 0 where a texel is its frame's key;
@@ -16354,6 +16354,14 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
       terrain, the features, the effects or the units are missing from that one frame — rather
       than anything sampled from texels the device has not received. Only a device that fails a
       submit or a fence partway through a banded upload refuses the pass.
+    - **A refused pass gives its restore job back in the same `prepare`** (`refuse_job`, in the
+      terrain, feature, effect and unit passes, at every refusal). A band that failed partway
+      leaves the base atlas half written and in `TRANSFER_DST_OPTIMAL`, and the job's FILL samples
+      that image through a descriptor that says `SHADER_READ_ONLY_OPTIMAL`. The teardown that
+      frees everything is paid frames later, behind the seam's device drain, so the job cannot wait
+      for it. The seam records the restorer's slice after every pass's `prepare`, so a job given
+      back there is never recorded again. `tagpu_vk_restore_job_free` retires what a submitted
+      buffer still names, which is what makes the free legal mid-frame.
 
   **MEASURED 2026-09-24**, `scenarios/big-battle.json` (Town & Country, 980 units converging),
   `--defaults`, Gamma 12, through the map load, a scroll burst (the camera jumped across the map
@@ -16402,6 +16410,18 @@ path - <cause>`, and the terrain `terr: the base atlas and the height grid, N KB
 dropped (`atlas_drop`) — writes nothing to the mirror; the live set is painted again as ordinary
 paints, under the allowance.
 
+- **The unit atlas recycles before the pose bake latches its generation**
+  (`tagpu_r3d_atlas_recycle`, right after `tagpu_r3d_atlas_level` in `tagpu_native_frame`).
+  A material the bake cached is reused while its stamp equals the generation
+  `tagpu_posebake_frame` latched. A recycle after the latch left every cached material matching
+  for the rest of that frame, drawn through rects the frame's new paints were overwriting: the
+  units in the wrong texels for one frame per recycle. Before it, every stale material drops on
+  the latch's line. `tagpu_r3d_atlas_frame` keeps only the allowance's frame.
+- **An effects recycle draws the base atlas on its frame.** A recycle is a new list generation,
+  and the effects pass replaces its restore job on it; the frame's `uRestored` is decided after
+  that (below), so the new sprites at recycled rects are never drawn through the old sprites'
+  restored texels.
+
 - **In play a pass sends the tiles its atlas's dirty map names** (`tagpu_gaf.h`): for each 32 × 16
   tile, the mirror serial of the last write to it. The map has a slot per tile, not per write, so
   it cannot overflow: however many paints land between two uploads, every tile they touched is
@@ -16423,8 +16443,12 @@ paints, under the allowance.
       staging, by construction. The gate is off while the consumer holds no copy or is behind a
       whole-page write, when its next upload is the page anyway.
     - **What is not drawn that frame**, so that nothing is drawn from texels the device lacks: a
-      feature's whole anchor (body and shadow roll back, `tagpu_feat.c`); an effect sprite with
-      every compound sub-frame (`emit_sprite`); a unit whose bake needs a deferred face
+      feature's whole anchor (body and shadow roll back, `tagpu_feat.c`); an effect's whole
+      record — a projectile with its ground shadow, an explosion with its flash and its body — when
+      any sprite of it is deferred (`effect_begin`/`effect_end`, `tagpu_fx.c`: the buckets, the
+      quad count and the model list go back to where the record started, so a flash never draws
+      without its explosion or a shadow without its shell; the explosions are one walk, flash and
+      body per record, and B_FLASH still draws before B_SPRITES); a unit whose bake needs a deferred face
       (`tagpu_r3d_atlas_uv` answers −1, `mat_bake` refuses, and the unit is skipped for the frame).
       Nothing is drawn from content the device already holds in its place: a deferred entry has
       no content anywhere yet.
@@ -16485,8 +16509,19 @@ paints, under the allowance.
       not drawn into yet is not moved: the job's first draw clears it.
     - **Only what was never restored is restored after a repack.** Anything that stops the twin
       following — a base atlas that took the repack whole, a job that cannot take its batch back,
-      a twin the device cannot move — drops the job, logged, and the next frame blanks the twin
-      and restores from the list's start, the rule for any discontinuity.
+      a twin the device cannot move — drops the job, logged. The frame it happens on already draws
+      the base atlas (the flag below), and the next job blanks the twin and restores from the
+      list's start, the rule for any discontinuity.
+- **`uRestored` is decided after the upload and the job, from what the frame samples.** In the
+  feature and effects passes both `base_upload` and `restore_want` can take the twin away in the
+  frame itself: `twin_drop` on a repack the base took whole or the twin could not follow, and a
+  replaced job on a new generation (an effects recycle) or a move of the engine's table. Bindings
+  40 (features) and 42 (effects) name the twin whatever it holds, and a new job clears it only at
+  its first draw. So the flag is read after both, from `s_arHave`, which every path that disowns
+  the twin clears first — `restore_want` as soon as the old job is gone, before any of its
+  returns, so a new generation whose job cannot be made does not keep the old picture's flag
+  either. The unit pass already bound its view after `restore_want` (`bind_main`), and the
+  terrain decides its flag after its own.
 
 **MEASURED 2026-09-24 — what play sends.** The setup:
 
@@ -16573,6 +16608,40 @@ difference being any frame restored twice.
   restore job has the first claim on the restorer and 10 036 frames to paint at about six frames
   a second on the virtual display. The moved queue is what carries the rest.
 - **No job was dropped** in any run: every repack's move was followed.
+
+**MEASURED 2026-09-24 — the review's residuals.** Diagnostic-only builds of the fixed code, on the
+private virtual display, `--defaults` (Classic++, so every restore job runs), Gamma 12:
+
+- **The twin the frame samples** (the feature and effects passes). The diagnostic counted every
+  frame drawn with `uRestored` 1 while the pass's job was gone, had painted nothing, or belonged to
+  another generation or palette. It also counted the same for the flag as the old order decided
+  it, before `base_upload`. Big-battle at 1920 × 1080, upplay's scripted minute. The features
+  repacked every 30 gathers, every other repack refusing the move buffer: 27 refused — 26 of
+  them whole pages that dropped the job, the last the band failure below — and 26 carried. The
+  effects atlas recycled every 45 gathers (50 recycles), the unit atlas every 60 frames (29). The
+  build is `7c0f25c`'s, whose code these counters read is the tip's:
+
+  | pass | frames drawn | `uRestored` 1 | against a twin it does not own | the old order |
+  |---|---|---|---|---|
+  | features | 1 503 | 832 | **0** | 15 |
+  | effects | 1 984 | 1 096 | **0** | 30 |
+
+- **The unit atlas's recycle.** In the same run, 657 895 cached-material hits over the 29
+  recycles, **0** with a latched generation other than the atlas's. The control, the same
+  build with the recycle moved back after the latch: 8 150 stale hits over 21 recycles.
+- **A band that fails.** With a file probe, the next banded upload failed on its second band: the
+  features' whole page after a refused move, 279 rows. The pass refused, logged its job given
+  back in the same frame, and was torn down behind the device drain. The terrain, units and
+  effects drew on (the census), the effects' restore kept painting, and nothing faulted.
+- **Half-drawn effects.** The diagnostic tagged every vertex with its record, and after the
+  gather counted the records that had a sprite deferred and still had a vertex in the
+  hand-over:
+    - **At a 384-tile allowance** (all three atlases, the 4K minute) no effect deferred: the
+      effects never reach 384 tiles. The features deferred on 4 frames and drained.
+    - **With the effects' allowance cut to 16 tiles** (the units' to 32, the features' 384),
+      big-battle at 1920 × 1080: 160 572 records, 9 191 with a sprite deferred. 8 428 of those
+      had another part that the per-sprite rollback would have drawn alone. **0** records with a
+      deferred sprite had any vertex in a hand-over.
 
 **MEASURED 2026-09-23** — Two Continents, `scenarios/tascene-parity.json` (terrain, units) and
 `feat-forest` (features), 1024 × 768, `ss=2`, the world A/B read off the target
@@ -16683,6 +16752,9 @@ difference being any frame restored twice.
     - **With the allowance and the twin move** (`d55b18d`): the same 6 of 6 byte-identical to
       `b14e9b4` once more, on the same private virtual display. No fixture defers or repacks, so
       those rest on the runs above (*the deferral, forced* and *the twin follows the repack*).
+    - **With the review's residuals fixed** (`e928ce3`): the same 6 of 6 byte-identical to
+      `b14e9b4`, on the same private virtual display. The fixes act on forced events, so they
+      rest on *the review's residuals* below.
     - **The restorer's input and output:** `fx-rockets` under `--defaults` with
       `tagpu_restoredump.on`, read back off the device. The terrain's base and restored twin
       (23 674 880 bytes each) are byte-identical between the two builds. So are the units' base
@@ -16734,9 +16806,16 @@ difference being any frame restored twice.
   only under a diagnostic build with the allowance cut to 384 tiles (above). A frame's paints are
   bounded by the atlas, 16 MiB, so a scene denser than big-battle's can defer in play. What that
   costs is a feature, an effect or a unit drawn one or more frames late, never a wait.
-- **`emit_fx_model`'s lookups spend the unit atlas's allowance on nothing drawn.** The native
-  pass's effects models paint into the unit atlas through `emit_node`, but the vertices it writes
-  (`tagpu_native.c` `s_verts`) are read by nothing. Read from the code, not measured.
+- **No lane draws the effects' models.** The native pass's `emit_fx_model` writes the 3DO
+  bodies of rendertype 1, 3 and 6 projectiles, the debris pieces and the explosions' models into
+  `tagpu_native.c`'s `s_verts`, which has that one writer and no reader, and no Vulkan pass takes
+  `tagpu_fx_model`; `fxown` meanwhile skips the engine's own draw of them (`0x46BAE0`,
+  `0x4211D0`). So a rocket's body and its thrust flame, a shell and a debris piece are not on
+  screen at all. Reads of the presented window on `fx-rockets`, 0.05 s apart (MEASURED
+  2026-09-24), show the rockets' smoke trails and the impact flashes, and no rocket at a
+  trail's head. Their
+  lookups still paint into the unit atlas and spend its allowance. The effect bracket keeps an
+  effect's drawn parts — its sprites and lines — whole; drawing the models is new work.
 - **The twin move covers the feature atlas alone**, the one atlas that repacks. The unit and
   effects atlases recycle when full, which is a new list generation and blanks their twins as
   before.
@@ -16782,8 +16861,11 @@ allowance — `due` kept by `mirror_wrote` and `tiles_raise` and recounted on ev
 conditions, the backlog's buckets and `bk_ahead`'s "older than" test, the frame hook's place
 (after the reset, before the first lookup), the repack held while the consumer is behind, the
 owed upload after each prepare (`s_upFrame`, and the ack of 0 at every `atlas_build` and `_down`),
-and each caller's rollback of a deferred lookup (the features' anchor, the effects' sprite, the
-units' bake); the twin move — `rlist_moved`'s in-place rewrite of frames a consumer already
+and each caller's rollback of a deferred lookup (the features' anchor, the effects' record
+bracket and its one-walk explosions, the units' bake); the feature and effects passes'
+`uRestored` read after `base_upload` and `restore_want`, and `restore_want` clearing `s_arHave`
+before its returns; `refuse_job` at each world pass's refusals; `tagpu_r3d_atlas_recycle` before
+the pose bake's latch; the twin move — `rlist_moved`'s in-place rewrite of frames a consumer already
 took, the job's remap and the in-flight batch put back at the head of its queue,
 `tagpu_vk_stage_move_twin`'s barriers (the colour-attachment source scope, the clear before the
 cells), the job dropped when the base atlas took a repack whole, and `restore_take`'s cursor over
