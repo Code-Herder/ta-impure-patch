@@ -3725,14 +3725,14 @@ report, no runtime opt-out, and stock behaviour exact below every raised limit.
 ## The stock engine's own defects (2026-09-23)
 
 Two defects of the retail image itself, found by the camera work's audit of every eye reader and
-patched in `tagpu_patches.c` behind `tagpu_enginefix.off` ([gpu-status](gpu-status.html) §2.6c).
+patched in `tagpu_patches.c` on every launch, with no switch ([gpu-status](gpu-status.html) §2.6c).
 The register is [binary patches](binary-patches.html) §"Stock engine defects we patch", and the
 engine map has the disassembly.
 
 | Defect | Status | Result |
 |---|---|---|
 | `DrawGameScreen`'s unit sort writes past its buffer (`0x469807`) | ● done 2026-09-23 | the append is bounded at the allocation's end. Before: 82 unit pointers past the end on every frame at zoom 0.5 with `vpwide`. After: none, and 0 px from stock at 1×. A per-row bound was built first and dropped, because it erased 7 066 px that stock draws |
-| `GetGridPosFeature 0x421E60` reads a NULL plot | ● done 2026-09-23 | a NULL plot answers "no feature". Unreachable in stock play: the scroll extent's 128-px margin is exactly `GetTPosition`'s search window. The access violation at `0x421E64` reproduced with our pointer clamp off and is gone with the guard |
+| `GetGridPosFeature 0x421E60` reads a NULL plot | ● done 2026-09-23 | a NULL plot answers "no feature". Stock reaches it on a map shorter than the viewport plus 128 px, where the camera clamp has no valid eye [INFERRED]; no stock skirmish map is that short at retail resolutions, and on Lava Run at 1920×1440 the engine's terrain pass faulted first [MEASURED]. The resurrect order's lookup at `0x40514A` is not audited. The access violation at `0x421E64` reproduced with our pointer clamp off and is gone with the guard |
 
 ## Shipping — the build people can download (2026-09-08)
 

@@ -191,9 +191,9 @@ md5 `df08c41ea3e508a0debb6bfb16af1e5e` (1,178,624 bytes, version resource rewrit
 ## Stock engine defects we patch
 
 Defects in the retail 3.1 image itself, as opposed to limits or features, that our `ddraw.dll`
-patches at attach (`tagpu_patches.c`, `patch_engine_defects`). Each patch is gated on the stock
-bytes and is the identity on every input the stock code handles safely. `tagpu_enginefix.off` in
-the gamedir leaves them all unpatched, for an A/B against stock. The disassembly, callers and
+patches at every attach (`tagpu_patches.c`, `patch_engine_defects`). Each patch is gated on the
+stock bytes, is skipped with its reason logged when they differ, and is the identity on every input
+the stock code handles safely. The disassembly, callers and
 measurements for each row are in [the engine map](exe-reverse-engineering.html), §"Engine defects
 we patch". TADR fixes a different set in `TABugFix.cpp`; the engine map's "Documented patch
 offsets" lists some of them.
@@ -201,7 +201,7 @@ offsets" lists some of them.
 | site | defect | trigger | reachable in stock? | our fix | can the fix change the simulation? |
 |---|---|---|---|---|---|
 | `0x469807..0x469825` in `DrawGameScreen 0x468CF0` (the store at `0x46981D`) | the unit sort's append never tests the row's count, so a full row runs on into the next row and a row near the end writes unit pointers past the end of SORT_UNIT_LIST (`rows·cap·4` bytes, LoadMap `0x483D45`) | more units filed in the last rows of the sweep than the list has slots left. MEASURED in our build at zoom 0.5 with `vpwide`: 150 units in the last row, 82 pointers past the end every frame | the run-on, yes (harmless, and kept). Past the end at 1× needs more than `cap` units whose feet are below the view in one row [INFERRED, not reproduced] | the append is bounded by the allocation's end: `count[row] ≤ (rows − row)·cap`, a `jmp` to a 44-byte stub | no: the list feeds only the two draw loops. Every unit whose slot is inside the list is filed exactly as stock |
-| `0x421E60` `GetGridPosFeature`, reached from `0x498F4F` (and `0x40514A`) | reads `[plot+8]` with no NULL test; `GetGridPosPLOT` returns NULL off the grid | a pointer→world point below the scroll extent's bottom (map height less 128), where `GetTPosition`'s 128-px search answers off the map | not in normal play: the scroll extent's margin is exactly the search window. Only through the debug-level `Edge` command with a margin under 128 [INFERRED] | a prologue detour: a NULL plot returns the engine's own "no feature" `0xFFFF` | only where stock faults: identity for every non-NULL plot. `0x40514A` is on an order's path, so a stock peer crashes where a patched one goes on |
+| `0x421E60` `GetGridPosFeature`, reached from `0x498F4F` (and `0x40514A`) | reads `[plot+8]` with no NULL test. The plot getters return NULL for a cell off the grid, and `0x4815F0` also for an on-grid `0xFFFE` cell whose anchor offset leads off it | a pointer→world point below the scroll extent's bottom (map height less 128), where `GetTPosition`'s 128-px search answers off the map | yes, on a map shorter than the viewport plus 128 px, where the camera clamp `0x41C3C0` has no valid eye [INFERRED from `0x41C40D..0x41C431`]. No stock skirmish map is that short at retail's 1600×1200; on Lava Run at 1920×1440 the engine's terrain pass faulted first [MEASURED]. Also through the debug-level `Edge` command with a margin under 128 [INFERRED]. `0x40514A`, the resurrect order's lookup [INFERRED], is not audited | a prologue detour: a NULL plot returns the engine's own "no feature" `0xFFFF` | only where stock faults: identity for every non-NULL plot. With a stock peer in a network game, the stock peer crashes where the patched one goes on |
 
 ## What the shipped binaries reveal
 

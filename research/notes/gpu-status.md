@@ -1614,20 +1614,20 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 - The known-build table holds retail 3.1 alone; other builds report `known build: none`.
 - The units, pathfinding, particle, sound and composite limits are landings 2–4 of the plan.
 
-### 2.6c The stock engine's own defects (`tagpu_patches.c`, on by default, `tagpu_enginefix.off`)
+### 2.6c The stock engine's own defects (`tagpu_patches.c`, always on)
 
 **What it is.** Two places where the retail image writes or reads memory it does not own, patched
-at attach by `patch_engine_defects()` at the end of `tagpu_apply_patches()`. Each patch is the
-identity on every input stock handles safely. Each site is compared with its stock bytes and
-skipped alone on a mismatch, as §2.6's rows are: the two are independent, and either one alone is
-still the identity wherever stock is safe. The disassembly, callers, invariants and measurements are in the engine
-map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock engine
-defects we patch".
+at every attach by `patch_engine_defects()` at the end of `tagpu_apply_patches()`. Each patch is
+the identity on every input stock handles safely. Each site is compared with its stock bytes and
+skipped alone, as §2.6's rows are: the two are independent, and either one alone is still the
+identity wherever stock is safe. The disassembly, callers, invariants and measurements are in the
+engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
+engine defects we patch".
 
 | VA | What it is | Mechanism |
 |---|---|---|
-| `0x469807..0x469825` | `DrawGameScreen`'s unit-sort append, which never tests a row's count and so can write unit pointers past the end of SORT_UNIT_LIST (`main+0x141FB`) | 31 bytes: a `jmp` to a 44-byte stub from `tagpu_detour_stub`, then NOPs up to the stock join `0x469826`. The stub files a unit only while `count[row] < (rows − row)·cap`, the slots left to the end of the allocation (`[edi+0x50]`, `[edi+0x54]` = `main+0x1424B`/`+0x1424F`). It writes through `patch_bytes`, compared against the whole stock block |
-| `0x421E60` | `GetGridPosFeature`, which reads `[plot+8]` with no NULL test (callers `0x498F4F`, `0x40514A` untested; `0x47EAE3` tests) | a prologue detour (`tagpu_detour_land`, 8 stolen bytes). A NULL plot returns `0xFFFF`, the engine's own "no feature", with the function's `ret 4` |
+| `0x469807..0x469825` | `DrawGameScreen`'s unit-sort append, which never tests a row's count and so can write unit pointers past the end of SORT_UNIT_LIST (`main+0x141FB`) | 31 bytes: a `jmp` to a 44-byte stub from `tagpu_detour_stub`, then NOPs up to the stock join `0x469826`. The stub files a unit only while `count[row] < (rows − row)·cap`, the slots left to the end of the allocation (`[edi+0x50]`, `[edi+0x54]` = `main+0x1424B`/`+0x1424F`). The whole stock block is compared first, then written with `tagpu_detour_write` |
+| `0x421E60` | `GetGridPosFeature`, which reads `[plot+8]` with no NULL test (callers `0x498F4F`, `0x40514A` untested; `0x47EAE3` tests) | a prologue detour (`tagpu_detour_land`, 8 stolen bytes, compared first). A NULL plot returns `0xFFFF`, the engine's own "no feature", with the function's `ret 4` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
 exactly as stock does for every slot inside the list. The plot guard writes nothing. Neither is
@@ -1636,14 +1636,19 @@ pointer's world point to the scroll extent. With `0x421E60` guarded, those clamp
 the hover *right*. They are no longer what keeps the game alive.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
-ARMED`, with `SKIPPED (byte mismatch)` in place of `ARMED` for a site that differs, and `enginefix:
-stock engine defects left unpatched (tagpu_enginefix.off)` under the lever. The lever is read once
-at attach and is independent of `tagpu_defaults.off`.
+ARMED`. A site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
+`SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
+place of `ARMED`; a stub whose site cannot be written is released. There is no switch: both are
+installed on every launch, `tagpu_defaults.off` included.
 
 **What it does not cover:**
 
 - `0x40514A`'s reachability with a NULL plot is not audited. The guard covers it whether or not it
   is reachable.
+- On a map shorter than the viewport plus 128 px the engine's own terrain pass `0x483FA0` faults
+  before any pointer reaches `0x421E60`: MEASURED on Lava Run at 1920×1440 without these patches
+  and without our terrain pass owning the ground. That is a separate stock defect and nothing here
+  covers it.
 - The off-map cell `0x498F2E` leaves in `main+0x2C8E` is untouched. Its readers are not audited.
 - The stock past-the-end write at 1× was not reproduced: it needs more than `cap` units in one of
   the sweep's last rows, the margin below the view [INFERRED].
