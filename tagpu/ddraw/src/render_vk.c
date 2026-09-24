@@ -33,6 +33,7 @@
 #include "tagpu_menu.h"
 #include "tagpu_vk.h"
 #include "tagpu_ftime.h"
+#include "tagpu_native.h"
 
 
 /* THE FRAME NUMBER OUTLIVES THE THREAD, and it has to. `dd_SetDisplayMode`
@@ -165,8 +166,11 @@ DWORD WINAPI vk_render_main(void)
            time against a previous build's. */
         tagpu_ftime_poll();
         if (tagpu_vk_frame(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height,
-                           g_config.vsync, fc))
+                           g_config.vsync, fc)) {
             came_up = 1;
+            /* the world's fog witnesses count what reached the screen */
+            tagpu_native_presented(fc);
+        }
 
         /* THE LOOP'S OWN EXIT WINS OVER A FAILURE, and the order is free. A
            frame that both fails and finds `render.run` clear is a shutdown or a

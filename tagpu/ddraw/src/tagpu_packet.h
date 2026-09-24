@@ -136,7 +136,8 @@ typedef struct TAGPU_PK_UNIT {
 #define TAGPU_PK_U_DEPTHPLANE 0x01u  /* the composite has a depth plane (path B) */
 #define TAGPU_PK_U_NATIVE     0x02u  /* tagpu_native_owns_unit() said yes, on the
                                         GAME thread, with the def in hand        */
-#define TAGPU_PK_U_INRECT     0x04u  /* inside the widest zoom rect: piece_n set  */
+#define TAGPU_PK_U_INRECT     0x04u  /* inside the fog reach: pieces carried when
+                                        the model has any and the arena has room */
 #define TAGPU_PK_U_GROUND     0x08u  /* ground_h is a real cell: the unit's anchor
                                         tile was inside the map                   */
 
@@ -398,7 +399,8 @@ typedef struct TAGPU_PK_PART {
    nothing to retire.
 
    THE ORIGIN IS THE PUBLISHER'S. `fog_org` is the world point of cell (0,0) —
-   `32*col0 + 16` — derived from the eye the grid was actually built at. The
+   `32*col0 + 16` — derived from the eye the grid was actually built at (the
+   engine grid's build record, tagpu_packet_pub.c `fog_rec_after`). The
    render thread's PREDICTED eye — the packet's eye plus a cursor-anchor step
    the game thread has not applied yet — would put the lattice off its own
    bytes whenever something is unacknowledged. (The pass also takes the wide
@@ -561,6 +563,11 @@ typedef struct TAGPU_PACKET {
                                    its own sum when it sees a new one, so a
                                    notch in a level's last frames can never be
                                    applied to the next level's camera         */
+    uint32_t cam_centre;        /* 1 = the apply held the camera to the centre
+                                   range for this draw (its ground is ours);
+                                   0 = the engine's own [0, extent - W]. The
+                                   render thread's anchor and prediction clamp
+                                   with the same range from this              */
     uint32_t pal_ok;            /* 1 = pal[] and gamma below were copied        */
     float    gamma;             /* the engine's gamma factor, bounded 0.05..8.0 */
     uint8_t  pal[1024];         /* the engine's own palette table, 256 x RGBA,
@@ -736,10 +743,8 @@ typedef struct TAGPU_CMD {
     uint32_t live;              /* a zoomed world is on screen: the level above
                                    is what the picture is drawn at; 0 = the
                                    game thread applies 1.0 (the engine's own
-                                   range, rect and scroll rate)                */
-    uint32_t eyeoff;            /* tagpu_zoomedge.off: the camera range is the
-                                   engine's own whatever the level             */
-    uint32_t hold_on;           /* tagpu_eye.txt holds the camera at hold_x/y  */
+                                   rect and scroll rate)                       */
+    uint32_t hold_on;          /* tagpu_eye.txt holds the camera at hold_x/y  */
     int32_t  hold_x, hold_y;
     uint32_t drop_follow;       /* the delta above came from a gesture that
                                    wants the camera: release the follow when
@@ -759,8 +764,9 @@ static __inline const TAGPU_PK_WRECK* tagpu_pk_wrecks(const TAGPU_PACKET* p)
 { return p->n_wrecks ? (const TAGPU_PK_WRECK*)(const void*)((const unsigned char*)p + p->off_wrecks) : (const TAGPU_PK_WRECK*)0; }
 static __inline const TAGPU_PK_ANCHOR* tagpu_pk_anchors(const TAGPU_PACKET* p)
 { return p->n_anchors ? (const TAGPU_PK_ANCHOR*)(const void*)((const unsigned char*)p + p->off_anchors) : (const TAGPU_PK_ANCHOR*)0; }
-/* One unit's or wreck's piece run, or NULL when the entry carries none (it sat
-   outside the widest zoom rect, or its model has no pieces). `piece_off` was
+/* One unit's or wreck's piece run, or NULL when the entry carries none: it sat
+   outside the fog reach (TAGPU_PK_U_INRECT clear), its model has no pieces or
+   more than TAGPU_PK_MAXPIECE, or the arena was full. `piece_off` was
    checked to lie inside the pieces area with room for `piece_n` entries. */
 static __inline const TAGPU_PK_PIECE* tagpu_pk_pieces(const TAGPU_PACKET* p, unsigned off, unsigned n)
 { return (n && off) ? (const TAGPU_PK_PIECE*)(const void*)((const unsigned char*)p + off) : (const TAGPU_PK_PIECE*)0; }

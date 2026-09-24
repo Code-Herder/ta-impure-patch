@@ -48,7 +48,6 @@
    takes the eye out of the expression; what is left moves only when the video
    mode does, which stock TA can only do at game entry (resolution.md §6) and
    this fork does across its game -> shell -> game cycles. */
-#define FOGW_MARGIN  256           /* world px of slack on each side (below)   */
 
 static void flog(const char* s)
 {
@@ -173,12 +172,16 @@ static void fogw_build(const FOGW_SRC* s, unsigned short* out,
        The entry that straddles an edge is the one whose corners on one side are
        the map's outermost cells and on the other side are off it — for the top,
        `row0 + gy < 0 <= row0 + gy + 1`, so `gy = -row0 - 1`. The engine writes
-       row 0 because its own grid never reaches more than one cell past the map
-       (the eye clamp sees to that, so `row0` is only ever 0 or -1) and the two
-       are then the same row; ours reaches as far as the zoom does, and the
-       literal index would land dozens of rows out in open water. The same
-       reading gives `losH-1-row0` for the bottom, which is the engine's
-       `rows-2` whenever its window overshoots by exactly the one cell. */
+       row 0, which is that row only while its window overshoots the map by at
+       most one cell (`row0` 0 or -1, which an eye in the engine's own range
+       `[0, extent - W]` guarantees, `extent` the scroll extent
+       main+0x1422B); ours reaches as far as the zoom does, and
+       the camera's centre range takes the engine's window as far as W/2 past
+       the edge, where the literal index lands dozens of rows out in open
+       water — which is why the native pass takes this grid whenever the eye
+       is off the engine's own range (tagpu_zoom_wide_fog). The same reading
+       gives `losH-1-row0` for the bottom, which is the engine's `rows-2`
+       whenever its window overshoots by exactly the one cell. */
     {
         int gTop = -row0 - 1;
         int gBot = s->plotR / 2 - 1 - row0;
@@ -235,9 +238,10 @@ static void fogw_build(const FOGW_SRC* s, unsigned short* out,
 
    Past the edge entry the completions just fixed, every entry is all-zero: no
    map cell reaches it, so nothing ever ORs a corner bit into it, and an
-   all-zero entry means "no fog". The engine never meets that case — its grid
-   stops one cell past the map — but ours spans the zoom, so at a shore there
-   can be forty rows of "no fog" over open water. Terrain draws nothing there,
+   all-zero entry means "no fog". The engine's grid meets that case only for
+   an eye off its own range, where the native pass takes this one; ours spans
+   the zoom, so at a shore there can be forty rows of "no fog" over open
+   water. Terrain draws nothing there,
    so most of it is invisible; what is not is a sprite whose PROJECTED position
    (`y - alt/2`, the space the grid is built in) lands past the edge while its
    anchor is on the map. A tree on the high north shore does exactly that, and
@@ -273,10 +277,10 @@ static void fogw_edge_fill(const FOGW_SRC* s, unsigned short* out,
 
 /* ---- reading the sources ------------------------------------------------ */
 
-/* Fill `s` from the engine, or return 0. Game thread, at the fog overlay's own
-   call site: the engine's builder reads these very allocations there, which is
-   what makes them safe to read at all. Every field is range-checked, and every
-   index the build takes is bounded by the dimensions collected here. */
+/* Fill `s` from the engine, or return 0. Game thread, inside an in-play draw
+   (tagpu_fogwide.h, WHERE IT RUNS, for why the maps are live there). Every
+   field is range-checked, and every index the build takes is bounded by the
+   dimensions collected here. */
 static int fogw_source(char* ta, FOGW_SRC* s)
 {
     const char* ps;
@@ -322,85 +326,70 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
 /* The window the widest view can need, as the map-cell coordinates the builder
    indexes by. Returns 0 when the engine's viewport does not look sane.
 
-   Sized from `tagpu_zoom_min()` and NOT from the level in force: the level the
+   Sized for the zoom floor (TAGPU_ZOOM_MIN) and NOT for the level in force: the level the
    game thread can read is the one the render thread published on the previous
    frame, so a window cut to that level would be a frame behind every outward
-   ease — and one ease step of a wheel flick is far more than the engine grid's
-   own two cells of slack. Sizing for the whole range means no step of any lever
-   can outrun the grid, at the cost of a window that is 16x the 1x viewport's
-   area while any zoom-out is live.
+   tween — and one frame of the tween can cross the whole range. Sizing for the
+   whole range means no change of level can outrun the grid, at the cost of a
+   window over 20x the 1x viewport's area while any zoom-out is live.
 
-   AND IT COVERS A STEPPED EYE FOR FREE, which is what cursor anchoring needs
-   and why FOGW_MARGIN need not grow for it. The window is centred on
-   `eye + vw/2` with half-width `evw/2 + MARGIN`, so a step `D` to level `z1`
-   is spanned when
-
-       (vw/2)[ |1/z0 - 1/z1| + 1/z1 - 1/zmin ]  <=  MARGIN
-
-   with `|D| <= (vw/2)|1/z0 - 1/z1|`, the anchor being inside the viewport.
-   Zooming IN that reduces to `(vw/2)(1/z0 - 1/zmin) <= 0` — an anchored
-   zoom-in's view is a SUBSET of the view before it, so there is nothing new to
-   cover. Zooming out it is `(vw/2)(2/z1 - 1/z0 - 1/zmin)`, and **the bound
-   holds only because `z1` is ONE EASE STEP from `z0`**, not any level in the
-   range: `z1 = z0^(1-WHEEL_EASE) * ztgt^WHEEL_EASE` with `ztgt >= zmin`. Under
-   that constraint the expression maximises at exactly 0, touched only in the
-   limit `z0 -> zmin` where there is no further out to go. Free of it the sup is
-   3.875 (z0 = 8 against z1 = 0.25, i.e. the whole range crossed in one frame),
-   which is ~3470 px and would need a margin thirteen times this one — so if the
-   ease is ever replaced by something that can jump, this derivation goes with
-   it. So the margin is slack for this, not budget. */
-static int fogw_window(char* ta, int vw, int vh,
-                       int* col0, int* row0, int* cols, int* rows)
+   WHAT IT COVERS. The window is the one the game thread publishes about this
+   eye (tagpu_zoom_pub_window): the native pass's gather slab at the floor —
+   the effective span centred on the 1x viewport's centre as the pass centres
+   it, plus TAGPU_GATHER_MARGIN, the slack the pass accepts anchors in — grown
+   by the lead, a quarter of the viewport on each side, and rounded outward to
+   whole cells with the spare column and row the builder needs. At any level
+   the pass's slab is no wider, so every eye within the lead of this build is
+   one the render thread may draw from at every level. An eye further AHEAD —
+   the cursor anchor's steps the game thread has not applied yet past the
+   lead, or the scenario camera's jump after the fog site — is the render
+   thread's to bound: the fog bound in tagpu_zoom.c clamps the eye it draws
+   from until the slab lies inside the grid the packet carries, so no fog
+   sample of any frame lands past this window. A gesture that only zooms in is never held by it: each
+   notch's term is at most `(vw/2)` times its drop in distance and the eye and
+   the distance are lerped along the same ease, so `|U| <= (vw/2)(1/z_built -
+   1/z)` and the view stays a subset of the one before it; a gesture that only
+   zooms out adds no displacement. What it holds is a reversal (a notch out
+   that cuts a notch in whose displacement is still owed) that the game thread
+   has not caught up with, for as long as that lasts. */
+/* One axis of the window about `eye`: the world rect the game thread publishes
+   about it (tagpu_zoom_pub_window, the function the unit and anchor windows
+   take theirs from), put onto the engine's own lattice. No further clamp: a
+   clamp would only make this grid narrower than the slab it exists to cover. */
+static void fogw_axis(int eye, int v, int* c0, int* n)
 {
-    int eyeX, eyeY, evw, evh, x0, y0, x1, y1;
-    float zmin = tagpu_zoom_min();
+    int lo, span;
 
-    /* vw/vh come from fogw_view, sampled once for this tick and shared with
-       fogw_capacity, so the two cannot derive from different viewports. */
-    if (zmin < 0.05f || zmin > 1.0f) return 0;
-    eyeX = *(const int*)(ta + OFF_EYEX);
-    eyeY = *(const int*)(ta + OFF_EYEY);
-
-    /* the same span the native pass gathers over (tagpu_native.c), at the
-       widest level the levers reach */
-    evw = (int)((float)vw / zmin) + 64;
-    evh = (int)((float)vh / zmin) + 64;
-    /* No span clamp: this expression IS what the native pass gathers over,
-       and a clamp would only make this grid narrower than the view it exists
-       to cover. The one bound is the allocated set below, and since it is
-       SIZED from this expression (fogw_capacity) it is not a limit on the
-       screen either. */
-    if (evw < vw) evw = vw;
-    if (evh < vh) evh = vh;
-
-    /* World rect, centred on the 1x viewport's centre exactly as the pass
-       centres its own effective rect, plus FOGW_MARGIN: the eye can move
-       between this build and the frames that read it (the render thread is not
-       lock-stepped to the game loop), and the margin is what absorbs that
-       rather than leaving a bare strip at the leading edge. */
-    x0 = eyeX - (evw - vw) / 2 - FOGW_MARGIN;
-    y0 = eyeY - (evh - vh) / 2 - FOGW_MARGIN;
-    x1 = x0 + evw + 2 * FOGW_MARGIN;
-    y1 = y0 + evh + 2 * FOGW_MARGIN;
-
-    /* onto the engine's own lattice — a grid corner sits at a map cell's
-       centre, so entry (0,0) covers map cell col0 and the origin is 32*col0+16 */
-    *col0 = floor_div32(x0 - 16);
-    *row0 = floor_div32(y0 - 16);
-    /* +2, not +1: the builder fills entry gx from map cells col0+gx and
-       col0+gx+1, so the LAST column and row of any window are short their
+    tagpu_zoom_pub_window(eye, v, &lo, &span);
+    /* a grid corner sits at a map cell's centre, so entry 0 covers map cell
+       c0 and the origin is 32*c0+16 */
+    *c0 = floor_div32(lo - 16);
+    /* +2, not +1: the builder fills entry gx from map cells c0+gx and
+       c0+gx+1, so the LAST column and row of any window are short their
        right/bottom corners — which is why the engine's own border completion
        works on cols-2 and rows-2. One spare each way keeps the short ones
        outside anything the view can show. */
-    *cols = (x1 - (32 * *col0 + 16) + 31) / 32 + 2;
-    *rows = (y1 - (32 * *row0 + 16) + 31) / 32 + 2;
+    *n = (lo + span - (32 * *c0 + 16) + 31) / 32 + 2;
+}
+
+static int fogw_window(char* ta, int vw, int vh,
+                       int* col0, int* row0, int* cols, int* rows)
+{
+    /* vw/vh come from fogw_view, sampled once for this tick and shared with
+       fogw_capacity, so the two cannot derive from different viewports. The
+       one bound on the window is the allocated set below, and since it is
+       SIZED from the same function (fogw_capacity) it is not a limit on the
+       screen either. */
+    fogw_axis(*(const int*)(ta + OFF_EYEX), vw, col0, cols);
+    fogw_axis(*(const int*)(ta + OFF_EYEY), vh, row0, rows);
     if (*cols < 3 || *rows < 3) return 0;
     /* Clamp to what is ALLOCATED, and take the trim off both ends so the
        view's centre keeps the cover. fogw_capacity sized the set for this same
        viewport at the worst residue and fogw_alloc ran first, so in the normal
        case this is inert — it bites only when a malloc failed and we are still
-       running on a smaller set, where a centred window with a smeared outer
-       ring beats no wide grid at all. */
+       running on a smaller set. A zoomed-out slab can then be wider than the
+       grid: the fog bound centres it and the native pass counts the frame
+       (`out=`), which beats no wide grid at all. */
     if (*cols > s_capCols) { *col0 += (*cols - s_capCols) / 2; *cols = s_capCols; }
     if (*rows > s_capRows) { *row0 += (*rows - s_capRows) / 2; *rows = s_capRows; }
     return 1;
@@ -412,17 +401,46 @@ static int fogw_window(char* ta, int vw, int vh,
    trunc(eye/32), one less when the eye sits in the first half of its cell. */
 static int eng_col0(int eye) { return eye / 32 - ((eye % 32) < 16 ? 1 : 0); }
 
+/* One border completion's two rows (or columns) — the engine's literal index
+   and fogw_build's derived one — marked for the oracle to leave out when they
+   differ. Both are marked: that edge's completion is then defined differently
+   by the two functions on each of them. */
+static void edge_skip(unsigned char* skip, int n, int literal, int derived)
+{
+    if (literal == derived) return;
+    if ((unsigned)literal < (unsigned)n) skip[literal] = 1;
+    if ((unsigned)derived < (unsigned)n) skip[derived] = 1;
+}
+
 /* With tagpu_fogwide_check.on: build over the ENGINE's own window and compare
-   with the grid the engine just built there. A replication that is right is
-   byte-identical; anything else is a number in the log, not a guess. */
+   with the grid the engine just built there, on every entry the two functions
+   define the same way. A replication that is right is byte-identical there;
+   anything else is a number in the log, not a guess.
+
+   THE BORDER COMPLETIONS ARE COMPARED ONLY WHERE BOTH FUNCTIONS PUT THEM. The
+   engine completes its literal row 0 / rows-2 / column 0 / cols-2; fogw_build
+   completes the entry that straddles the map edge, `-row0-1` and so on (exe
+   map, "The four border completions"). Those are the same line while the
+   window overshoots the map by at most one cell — every eye in the engine's
+   own range `[0, extent - W]` — and not otherwise: past it (`row0 <= -2`, or the
+   far edges' equivalent, which the camera's centre range reaches) the
+   engine's line lies wholly off the map and its completion is a no-op on an
+   all-zero line, while ours completes the straddling line the engine leaves
+   half-set. That difference is the derived index doing its job, so for each
+   completion whose gate is up and whose two lines differ, both lines are left
+   out — and nothing else can differ because of them: every entry depends only
+   on its own four cells, and each completion copies bits within one entry.
+   `skipped=` counts the entries left out; 0 for any eye in the engine's own
+   range, where the comparison is the whole grid as before. */
 static void fogw_check(char* ta, const FOGW_SRC* s)
 {
     static unsigned short* scratch;
     static unsigned frames;
     static int armed = -1;
+    static unsigned char skipR[256], skipC[256];
     const int* fg;
     const unsigned short* buf;
-    int cols, rows, cells, i, n, bad = 0, nz = 0;
+    int cols, rows, cells, i, n, bad = 0, nz = 0, cmp = 0, col0, row0;
     char b[192];
 
     if (armed < 0)
@@ -439,9 +457,17 @@ static void fogw_check(char* ta, const FOGW_SRC* s)
     if (!scratch) scratch = (unsigned short*)malloc((size_t)256 * 256 * 2);
     if (!scratch) return;
 
-    fogw_build(s, scratch, cols, rows,
-               eng_col0(*(const int*)(ta + OFF_EYEX)),
-               eng_col0(*(const int*)(ta + OFF_EYEY)));
+    col0 = eng_col0(*(const int*)(ta + OFF_EYEX));
+    row0 = eng_col0(*(const int*)(ta + OFF_EYEY));
+    fogw_build(s, scratch, cols, rows, col0, row0);
+
+    memset(skipR, 0, (size_t)rows);
+    memset(skipC, 0, (size_t)cols);
+    if (row0 < 0)                  edge_skip(skipR, rows, 0, -row0 - 1);
+    if (row0 + rows > s->plotR / 2) edge_skip(skipR, rows, rows - 2, s->plotR / 2 - 1 - row0);
+    if (col0 < 0)                  edge_skip(skipC, cols, 0, -col0 - 1);
+    if (col0 + cols > s->plotC / 2) edge_skip(skipC, cols, cols - 2, s->plotC / 2 - 1 - col0);
+
     /* `cols*rows`, NOT `cells`: the engine ROUNDS ITS ALLOCATION UP to a
        multiple of 8 and clears all of it, while fogw_build fills exactly the
        grid. Comparing the tail would put up to 7 entries of untouched
@@ -449,12 +475,14 @@ static void fogw_check(char* ta, const FOGW_SRC* s)
        difference vanish, but on a reused heap block it invents one. */
     n = cols * rows;
     for (i = 0; i < n; i++) {
+        if (skipR[i / cols] || skipC[i % cols]) continue;
+        cmp++;
         if (scratch[i] != buf[i]) bad++;
         if (buf[i]) nz++;
     }
-    sprintf(b, "fogwide check: %dx%d compared=%d of cells=%d differ=%d "
+    sprintf(b, "fogwide check: %dx%d compared=%d of cells=%d skipped=%d differ=%d "
                "engine-nonzero=%d truelos=%d",
-            cols, rows, n, cells, bad, nz, s->trueLos);
+            cols, rows, cmp, cells, n - cmp, bad, nz, s->trueLos);
     flog(b);
 }
 
@@ -475,19 +503,17 @@ static int fogw_view(char* ta, int* vw, int* vh)
 }
 
 /* The size the CURRENT video mode asks for, independent of where the eye is.
-   Same expression as fogw_window's, evaluated at the worst residue: the span
-   is `evw + 2*MARGIN` and the count is `ceil((span + r)/32) + 2` for a residue
-   r in [0,31], so the largest it can be is at r = 31. */
+   Same function as fogw_window's, evaluated at the worst residue: the count
+   is `ceil((span + r)/32) + 2` for a residue r in [0,31], so the largest it
+   can be is at r = 31. The span does not depend on the eye. */
 static int fogw_capacity(int vw, int vh, int* capCols, int* capRows)
 {
-    int evw, evh;
-    float zmin = tagpu_zoom_min();
+    int lo, spanX, spanY;
 
-    if (zmin < 0.05f || zmin > 1.0f) return 0;
-    evw = (int)((float)vw / zmin) + 64;  if (evw < vw) evw = vw;
-    evh = (int)((float)vh / zmin) + 64;  if (evh < vh) evh = vh;
-    *capCols = (evw + 2 * FOGW_MARGIN + 31 + 31) / 32 + 2;
-    *capRows = (evh + 2 * FOGW_MARGIN + 31 + 31) / 32 + 2;
+    tagpu_zoom_pub_window(0, vw, &lo, &spanX);
+    tagpu_zoom_pub_window(0, vh, &lo, &spanY);
+    *capCols = (spanX + 31 + 31) / 32 + 2;
+    *capRows = (spanY + 31 + 31) / 32 + 2;
     return (*capCols >= 3 && *capRows >= 3);
 }
 

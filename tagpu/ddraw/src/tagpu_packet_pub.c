@@ -21,8 +21,9 @@
    during which the loader thread owns the per-map arrays (below).
      before  = THE COMMANDS: post-tick, pre-draw, the latest
                record the render thread posted is taken and applied on
-               this thread — the zoom level (the camera range, the
-               addressable rect, ScrollSpeed), the cursor anchor's eye
+               this thread — the camera range (centred while the ground
+               is ours), the zoom level (the addressable rect, the minimap
+               box, ScrollSpeed), the cursor anchor's eye
                delta, the camera hold, the follow release — so the frame
                the engine is about to draw, its fog rebuild and its minimap
                box all see the commanded camera (tagpu_zoom_apply,
@@ -81,6 +82,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dd.h"           /* g_ddraw: the game's own screen, for the roster's on-screen test */
+#include "render_vk.h"     /* vk_render_main: whether the session draws from packets */
 #include "tagpu_engine.h"
 #include "tagpu_packet.h"
 #include "tagpu_packet_pub.h"
@@ -90,12 +92,12 @@
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
 #include "tagpu_native.h"   /* tagpu_native_owns_unit: the ownership answer, taken here */
-#include "tagpu_zoom.h"      /* TAGPU_ZOOM_MIN: the widest rect the tables cover */
+#include "tagpu_zoom.h"      /* tagpu_zoom_pub_window: the rect the tables cover */
 #include "tagpu_model3do.h"  /* TAGPU_PBMAXPIECE, to assert the packet's copy of it */
 #include "tagpu_gaf.h"       /* the GAF resolvers: pure reads, taken on THIS thread */
 #include "tagpu_fxown.h"     /* whether the render thread wants the effect tables */
 #include "tagpu_fogwide.h"   /* the wide fog grid, built in THIS draw on this thread */
-#include "tagpu_terrown.h"   /* the eye the engine's own fog grid is anchored at */
+#include "tagpu_terrown.h"   /* whether the fog site ran in this draw */
 #include "tagpu_gui.h"       /* whether the render half wants the minimap surfaces */
 #include "tagpu_log.h"
 #include "tagpu_order.h"     /* tagpu_order_copy_builds: the build-ghost table,
@@ -270,13 +272,37 @@ void tagpu_packet_pub_font_snapshot(void)
 
 /* ---- the fills ----------------------------------------------------------- */
 
+/* WHAT THE TABLES THAT DID NOT FIT WOULD HAVE TAKEN, in this fill. A table
+   that does not fit leaves the cursor where it was, so the tables after it
+   pack into the room it would have used, and the largest end any one of them
+   asked for is not the size of the fill: with several tables cut, a slot grown
+   to that end would cut one again. Every refusal below adds its table's
+   4-aligned length here. In the layout where everything fits, each table
+   after a refused one moves by exactly that length, and a move by a multiple
+   of 4 keeps every alignment, so `ALIGN4(cursor) + s_fillShort` is at least
+   the size of the whole fill (fill_frame returns it). That is what lets
+   pkx_publish grow the slot once and fill it again instead of publishing the
+   cut frame. Zeroed at the top of fill_frame; every appender runs inside it,
+   on the game thread. */
+static unsigned s_fillShort;
+/* 1 while fill_frame redoes the fill it made for this same publish (same
+   head_seq): pkx_publish grew the slot under it. Set at the top of
+   fill_frame; the caches' reuse counters skip a fill that is done again, and
+   PK_FILL_COUNTS / PK_FC_UNDO (above fill_frame) take back what the
+   discarded fill counted. */
+static int      s_fillAgain;
+
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
                             unsigned* off_out, unsigned* len_out, unsigned trunc_bit)
 {
     unsigned at = (*cursor + 3u) & ~3u;
     unsigned end = at + ((len + 3u) & ~3u);
     if (!len) { *off_out = 0; *len_out = 0; return *cursor; }
-    if (end > p->cap_bytes) { p->truncated |= trunc_bit; *off_out = 0; *len_out = 0; return end; }
+    if (end > p->cap_bytes) {
+        p->truncated |= trunc_bit; *off_out = 0; *len_out = 0;
+        s_fillShort += (len + 3u) & ~3u;
+        return end;
+    }
     if (src) tagpu_pk_copy((unsigned char*)p + at, src, len);
     else tagpu_pk_fill((unsigned char*)p + at, 0x5A, len);
     *off_out = at; *len_out = len;
@@ -344,6 +370,11 @@ static TAGPU_PK_UNIT   s_uScratch[TAGPU_PK_MAX_UNITS];
 static const TAGPU_PACKET* s_lastFilled;
 static TAGPU_PK_WRECK  s_wScratch[TAGPU_PK_MAX_WRECKS];
 static TAGPU_PK_ANCHOR s_aScratch[TAGPU_PK_MAX_ANCHORS];
+/* the anchor scan's own order (rows outward from the view's centre row) before
+   it is put back in row order into s_aScratch, and where each row landed */
+#define PK_ANCH_MAXROWS 4096
+static TAGPU_PK_ANCHOR s_aScan[TAGPU_PK_MAX_ANCHORS];
+static unsigned        s_aRowAt[PK_ANCH_MAXROWS], s_aRowN[PK_ANCH_MAXROWS];
 /* slot -> index in the units table, for the cargo links; 0xFFFF = not carried
    in this packet. Sized like the scratch and rewritten for the slots the walk
    actually visits, so no memset of 32 KB per frame. */
@@ -372,7 +403,8 @@ static volatile unsigned s_cShdCopies;
    against a 60 Hz sim that is four publishes out of five; at or below the sim rate it
    costs one comparison and changes nothing. The WRECKS are re-derived from the
    cached anchors either way, because their piece runs go into THIS packet's
-   arena. */
+   arena. The key is everything the scan's result depends on: the tick, the
+   rect and the centre row it scans outward from. */
 /* THE MAP'S OWN FEATURES (TAGPU_PK_MAPFEAT): taken once a level, at its first
    in-play draw, by `mapfeat_snapshot`. `s_mfGen` is the level it was taken
    for, -1 before the first; the level end resets it. */
@@ -382,7 +414,7 @@ static int      s_mfGen = -1, s_mfTrunc;
 static volatile unsigned s_cMfCarried;
 
 static unsigned s_aTick;
-static int      s_aHave, s_aTrunc, s_aRect[4];
+static int      s_aHave, s_aTrunc, s_aRect[4], s_aMid;
 static unsigned s_aN;
 static volatile unsigned s_cAnchScan, s_cAnchReuse;
 
@@ -523,7 +555,7 @@ static unsigned append_table(TAGPU_PACKET* p, unsigned* cursor, const void* src,
     unsigned end = at + n * stride;
     *off_out = 0; *n_out = 0;
     if (!n) return *cursor;
-    if (end > p->cap_bytes) { p->truncated |= trunc_bit; return end; }
+    if (end > p->cap_bytes) { p->truncated |= trunc_bit; s_fillShort += PKT_ALIGN4(n * stride); return end; }
     tagpu_pk_copy((unsigned char*)p + at, src, n * stride);
     *off_out = at; *n_out = n; *cursor = end;
     return end;
@@ -554,25 +586,32 @@ static unsigned fill_pieces(TAGPU_PACKET* p, const char* o3, unsigned nparts,
     return nparts;
 }
 
-/* THE ANCHOR RECT: the engine's own feature sweep grown to the WIDEST zoom the
-   lever allows, plus a margin, and clamped to the map. Never the zoom in force
-   — the render thread may still be drawing from this packet a frame later, and
-   at a level the game thread has not seen; the margin also absorbs the cursor
-   anchor's unacknowledged eye delta, which is how far ahead of `eye` the frame
-   is actually drawn. A consumer at any zoom asks for a sub-rect of this one and
-   counts what falls outside. */
-#define PK_ANCH_MARGIN 32           /* 16-px cells on every side               */
+/* THE ANCHOR RECT: the fog reach (fog_reach: every world point the fog bound
+   lets a frame drawn from this packet gather in), in 16-px cells, plus a
+   margin, and clamped to the map. Never the zoom in force — the render thread
+   may still be drawing from this packet a frame later, and at a level the
+   game thread has not seen. The feature pass asks for the engine's sweep
+   about the eye it draws from: 10 cells left of its effective rect, 16 rows
+   above it, and the sweep's own count on from there (tagpu_feat.c), which
+   ends about 2 cells right of that rect and 16 rows below it — inside the
+   slab, TAGPU_GATHER_MARGIN (16 cells) about the rect, but for the sweep's
+   own rounding of the eye to a cell. The margin and the 16 columns and 40
+   rows past the far edges are the slack for that rounding and for a sweep
+   longer than the engine's own. A consumer at any zoom asks for a sub-rect of
+   this one and counts what falls outside (`outside=`). */
+#define PK_ANCH_MARGIN 16           /* 16-px cells on every side               */
 
-static void anchor_rect(const TAGPU_PACKET* p, int* c0, int* r0, int* cols, int* rows)
+static void fog_reach(const TAGPU_PACKET* p, int axis, int* lo, int* hi);   /* the fog grids, below */
+
+static void anchor_rect(const TAGPU_PACKET* p, int loX, int hiX, int loY, int hiY,
+                        int* c0, int* r0, int* cols, int* rows)
 {
-    int vw = p->vp[2], vh = p->vp[3];
-    int ew = (int)((float)vw / TAGPU_ZOOM_MIN) + 64;
-    int eh = (int)((float)vh / TAGPU_ZOOM_MIN) + 64;
     int mapW = p->map_w16, mapH = p->map_h16;
-    *c0   = ((p->eye[0] + (vw - ew) / 2) >> 4) - PK_ANCH_MARGIN;
-    *r0   = ((p->eye[1] + (vh - eh) / 2) >> 4) - PK_ANCH_MARGIN;
-    *cols = (ew >> 4) + 16 + 2 * PK_ANCH_MARGIN;
-    *rows = (eh >> 4) + 40 + 2 * PK_ANCH_MARGIN;
+    /* `>> 4` floors on either sign (arithmetic shift), as the cells do */
+    *c0   = (loX >> 4) - PK_ANCH_MARGIN;
+    *r0   = (loY >> 4) - PK_ANCH_MARGIN;
+    *cols = (hiX >> 4) - (loX >> 4) + 1 + 16 + 2 * PK_ANCH_MARGIN;
+    *rows = (hiY >> 4) - (loY >> 4) + 1 + 40 + 2 * PK_ANCH_MARGIN;
     if (*c0 < 0) { *cols += *c0; *c0 = 0; }
     if (*r0 < 0) { *rows += *r0; *r0 = 0; }
     if (*c0 + *cols > mapW) *cols = mapW - *c0;
@@ -650,8 +689,9 @@ static unsigned fill_mapfeat(TAGPU_PACKET* p, unsigned* cursor)
 }
 
 /* The four tables, into the slot the producer holds. Returns the byte count
-   the fill NEEDED — past cap_bytes means something truncated this frame and
-   the primitive grows the write slot before the next fill. */
+   the fill NEEDED — past cap_bytes means something did not fit, and the
+   primitive grows the write slot and fills it again before publishing
+   (pkx_publish; fill_frame turns this into the whole fill's size). */
 static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 {
     const char* beg   = *(const char* const*)(ta + OFF_UNIT_BEGIN);
@@ -669,31 +709,33 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        publish and take as many publishes as there are units to converge; this
        counts the whole demand, so one growth is enough. */
     unsigned pkWant = 0;
-    unsigned pieces_base = PKT_ALIGN4((unsigned)sizeof(TAGPU_PACKET));
+    unsigned pieces_base = PKT_ALIGN4(*cursor);   /* after the fog grids and the shade table */
     unsigned need = pieces_base, e;
     unsigned pTrunc = 0;
     int c0, r0, cols, rows, row, col;
     int inL, inT, inR, inB;
+    int midRow;
 
     p->feat_defcount = RD32(ta, OFF_FEATCOUNT);
     p->sweep_cols  = RD32(ta, OFF_SWEEP_C);
     p->sweep_rows  = RD32(ta, OFF_SWEEP_R);
     if (p->feat_defcount < 0 || p->feat_defcount > 4096) p->feat_defcount = 0;
 
-    anchor_rect(p, &c0, &r0, &cols, &rows);
+    /* THE TABLES COVER THE FOG REACH: every world point a frame drawn from
+       this packet can gather in, taken from the two grids this packet carries
+       — their own origins and sizes, the very numbers the render thread's fog
+       bound clamps the drawn eye by (fog_reach). So a slab the bound
+       accepts cannot hold a unit carried outside the reach nor ask for an
+       anchor row the table was not scanned over, whatever moved the camera
+       between the grids' builds and this publish. */
+    fog_reach(p, 0, &inL, &inR);
+    fog_reach(p, 1, &inT, &inB);
+    anchor_rect(p, inL, inR, inT, inB, &c0, &r0, &cols, &rows);
+    /* the anchor scan's starting row: the centre of the view about the
+       packet's eye, which a frame is drawn from plus the steps the game
+       thread has not applied yet (clamped into the rect below) */
+    midRow = (p->eye[1] + p->vp[3] / 2) >> 4;
     p->anch_c0 = c0; p->anch_r0 = r0; p->anch_cols = cols; p->anch_rows = rows;
-
-    /* the piece-cull rect, in world px: the widest viewport about the eye plus
-       the 256-px slack the unit gather already allows itself */
-    {
-        int vw = p->vp[2], vh = p->vp[3];
-        int ew = (int)((float)vw / TAGPU_ZOOM_MIN) + 64 + 512;
-        int eh = (int)((float)vh / TAGPU_ZOOM_MIN) + 64 + 512;
-        inL = p->eye[0] - (ew - vw) / 2;
-        inT = p->eye[1] - (eh - vh) / 2;
-        inR = inL + ew;
-        inB = inT + eh;
-    }
 
     /* ---- the units, and their pieces ---- */
     walk = slots;
@@ -756,8 +798,16 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                     }
                     ue->flags |= TAGPU_PK_U_GROUND;
                 }
-                if (wx >= inL && wx <= inR && wy >= inT && wy <= inB)
-                    ue->flags |= TAGPU_PK_U_INRECT;
+                /* in the reach, tested on the pass's own projection
+                   (tagpu_native.c: `wy - wz / 2` with the altitude as a
+                   short), so the two agree exactly and no bound on a unit's
+                   altitude is needed */
+                {
+                    int wz = (int)(short)(ue->pos[1] >> 16);
+                    int py = wy - wz / 2;
+                    if (wx >= inL && wx <= inR && py >= inT && py <= inB)
+                        ue->flags |= TAGPU_PK_U_INRECT;
+                }
             }
             /* the cargo links, as SLOTS for now: the packet indices they become
                are not all known until the walk ends */
@@ -802,22 +852,57 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 
     /* ---- the feature anchors: scanned once per tick per rect ---- */
     if (ptr_ok(fmap) && mapW > 0 && mapH > 0 && cols > 0 && rows > 0) {
+        int rr = rows < PK_ANCH_MAXROWS ? rows : PK_ANCH_MAXROWS;
+        int mid = midRow < r0 ? r0 : midRow >= r0 + rr ? r0 + rr - 1 : midRow;
         if (s_aHave && s_aTick == p->tick &&
             s_aRect[0] == c0 && s_aRect[1] == r0 &&
-            s_aRect[2] == cols && s_aRect[3] == rows) {
+            s_aRect[2] == cols && s_aRect[3] == rows && s_aMid == mid) {
             na = s_aN;
             if (s_aTrunc) p->truncated |= TAGPU_PK_TRUNC_ANCHORS;
-            s_cAnchReuse++;
+            if (!s_fillAgain) s_cAnchReuse++;
         } else {
-            for (row = r0; row < r0 + rows; row++) {
-                const char* trow = fmap + ((size_t)row * mapW) * FT_STRIDE;
+            /* ROWS OUTWARD FROM THE VIEW'S CENTRE ROW, WHOLE ROWS ONLY. The
+               rect is the fog reach plus a margin, and the table holds
+               TAGPU_PK_MAX_ANCHORS; scanned from its top, an overflow would
+               drop the rows at the bottom of the screen. The rows are taken
+               in the order `mid, mid+1, mid-1, mid+2, mid-2, ...`, and the
+               scan stops at the first row that does not fit in the room the
+               table has left: that row is rolled back, and it and every row
+               after it in that order are dropped — the row at the same
+               distance on the other side among them. What a truncation keeps
+               is therefore a band `[mid - a, mid + b]`, b - a in {0, 1}.
+               `mid` is the centre row of the view about the packet's eye,
+               clamped into the rect. A frame is drawn from that eye plus the
+               steps the game thread has not applied yet, as far as the fog
+               bound lets them through — at the zoom floor at most the lead
+               (vh/4, 33 rows at 4K) and the lattice's rounding, since the
+               wide grid is built about the packet's eye. A frame loses
+               nothing while the band kept holds its own slab, placed at that
+               offset from `mid` — 560 rows at the floor at 4K; the densest
+               stock map puts 12 633 anchors in the WHOLE rect. Put back in row
+               order afterwards: the depth keys come from each anchor's own
+               row and column, and the order is what the table has always
+               promised. A truncation sets TAGPU_PK_TRUNC_ANCHORS, once per
+               scan, which the feature pass counts per frame (`trunc=` on its
+               line). */
+            int k, cut = rr < rows;
+            unsigned out = 0;
+            for (k = 0; k < rr; k++) s_aRowN[k] = 0;
+            for (k = 0; ; k++) {
+                int off = (k & 1) ? (k + 1) / 2 : -(k / 2);
+                unsigned start = na;
+                const char* trow;
+                row = mid + off;
+                if (k > 2 * rr) break;
+                if (row < r0 || row >= r0 + rr) continue;
+                trow = fmap + ((size_t)row * mapW) * FT_STRIDE;
                 for (col = c0; col < c0 + cols; col++) {
                     const char* t = trow + (size_t)col * FT_STRIDE;
                     unsigned d = RDU16(t, FT_DEFIDX);
                     TAGPU_PK_ANCHOR* a;
                     if (d >= 0xFFFBu) continue;
-                    if (na >= TAGPU_PK_MAX_ANCHORS) { s_cAnchTrunc++; p->truncated |= TAGPU_PK_TRUNC_ANCHORS; row = r0 + rows; break; }
-                    a = &s_aScratch[na++];
+                    if (na >= TAGPU_PK_MAX_ANCHORS) break;
+                    a = &s_aScan[na++];
                     a->col = (unsigned short)col; a->row = (unsigned short)row;
                     a->def = (unsigned short)d;
                     a->wreck = RDU16(t, FT_WIDX);
@@ -833,15 +918,28 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
                     } else { a->hd = a->h; a->hrd = a->hr; }
                     a->pad = 0;
                 }
+                if (col < c0 + cols) {      /* this row did not fit: drop it whole */
+                    na = start;
+                    cut = 1;
+                    break;
+                }
+                s_aRowAt[row - r0] = start; s_aRowN[row - r0] = na - start;
+            }
+            if (cut) { s_cAnchTrunc++; p->truncated |= TAGPU_PK_TRUNC_ANCHORS; }
+            for (k = 0; k < rr; k++) {
+                if (!s_aRowN[k]) continue;
+                memcpy(&s_aScratch[out], &s_aScan[s_aRowAt[k]], s_aRowN[k] * sizeof(TAGPU_PK_ANCHOR));
+                out += s_aRowN[k];
             }
             s_aHave = 1; s_aTick = p->tick; s_aN = na;
             /* A TRUNCATED SCAN IS CACHED AS TRUNCATED. Without this every reuse
                publish of the same tick would report a complete anchor table,
-               and the gate we read is "trunc is 0 after the first fill" — so
-               the one number that says the rect overflowed the table would be
+               and the feature pass's `trunc=`, which must read 0, is the one
+               number that says the rect overflowed the table: it would be
                under-reported by exactly the reuse rate, which is 6 in 7. */
             s_aTrunc = (p->truncated & TAGPU_PK_TRUNC_ANCHORS) ? 1 : 0;
             s_aRect[0] = c0; s_aRect[1] = r0; s_aRect[2] = cols; s_aRect[3] = rows;
+            s_aMid = mid;
             s_cAnchScan++;
         }
         /* ---- the 3D husks the anchors name, from THIS packet's arena ----
@@ -915,6 +1013,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
     {
         unsigned want = pieces_base + pkWant * (unsigned)sizeof(TAGPU_PK_PIECE);
         if (want > need) need = want;
+        s_fillShort += PKT_ALIGN4((pkWant - pk) * (unsigned)sizeof(TAGPU_PK_PIECE));
     }
 
     e = append_table(p, cursor, s_uScratch, nu, (unsigned)sizeof(TAGPU_PK_UNIT),
@@ -1360,7 +1459,7 @@ static void fx_gather(const char* ta, unsigned tick, unsigned level)
        the cache as well (tagpu_packet_pub_level_end), but that is the second
        line — this is the one that holds whichever provider fired. */
     if (s_fxHave && tick == s_fxTick && level == s_fxLevel && want == s_fxWant)
-        { s_cFxReuse++; return; }
+        { if (!s_fillAgain) s_cFxReuse++; return; }
     s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
     s_fxPartTrunc = 0;
     tagpu_pk_fill(s_partN, 0, (unsigned)sizeof s_partN);
@@ -1456,80 +1555,253 @@ static unsigned fill_fx(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
    `cols*rows` entries, so the consumer's bound is its own length and the
    round-up is this file's business alone.
 
-   THE ORIGIN IS TAKEN HERE, from the eye this packet carries, because that is
-   the eye the grid was built at, not the render thread's PREDICTED eye (the
-   packet's plus a cursor-anchor step not yet applied). The render thread takes
-   the wide grid whenever anything is unacknowledged; the origin is right
-   either way.
+   THE ORIGIN IS THE GRID'S OWN BUILD RECORD (fog_rec_before/_after below),
+   never a guess from an eye that may have moved since: the builder derives
+   the origin from the eye it reads, and nothing stores it.
 
-   THE WIDE ONE is tagpu_fogwide's, built in `terr_fogtick` during THIS draw,
-   on this thread. */
+   THE WIDE ONE is tagpu_fogwide's, built in THIS draw on this thread -- in
+   `terr_fogtick` when the fog site is ours, in `wide_tick` below when it is
+   the engine's -- with its origin and size published beside it. */
 
 #define FOG_DESC     0x1421F      /* -> {u16* buf, i32 cols, i32 rows, i32 cells} */
 
-static volatile unsigned s_cFogRefused, s_cFogwSeen;
+static volatile unsigned s_cFogRefused, s_cFogwSeen, s_cFogNoRec, s_cFogRecOdd;
 static volatile int      s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR;
+
+/* THE ENGINE GRID'S BUILD RECORD: the eye its builder `0x4843C0` last read,
+   the only thing its origin depends on (origin = `32 col0 + 16`, `col0` the
+   eye's half-cell-rounded `>> 5`, exe map "The builder"). GAME THREAD ONLY.
+
+   IT IS TAKEN FROM LosType BIT 3, WHICH ONLY A BUILD SETS [DISASSEMBLED
+   2026-09-24]. The one engine setter is `0x484904`, right after the lazy
+   test `0x4848F2` and the build `0x4848FA` inside the fog function
+   `0x4848E0`, which DrawGameScreen calls once (`0x469D8E`); ours is
+   `terr_fogtick`, right after its own call of the builder. Every other store
+   to the word either clears the bit or writes it back as it read it (the
+   exe map's row "who sets `main+0x14281` bit 3" lists all fifty). None of
+   the fifteen functions holding a clear is reached from DrawGameScreen by
+   direct calls, branches or jump tables, and nothing in it stores the eye
+   (the publish point's own note, `before_draw`). So:
+     bit 3 clear after this draw's apply and set after the draw — the fog
+       function rebuilt the grid IN this draw, from the eye the draw was drawn
+       at, which is the eye the packet reads after it;
+     set before — nothing rebuilt it, and the record stands, however the eye
+       has moved since without clearing the bit (the camera shake `0x41C6F0`
+       stores it at `0x41C784`/`0x41C797` and does not);
+     set before and clear after — not expected, counted (`recodd=`), and the
+       record dropped.
+   A DrawGameScreen this observer does not track — the screenshot sweep, the
+   movie recorder, the depth guard — may rebuild at another eye, so it drops
+   the record, as a new level does. WHERE THERE IS NO RECORD the apply clears
+   the bit, exactly as every engine eye writer does, so the draw it precedes
+   rebuilds and makes one; the grid is not published until it has. */
+static int      s_engRecOk, s_engRecX, s_engRecY;
+static unsigned s_engRecGen;
+static int      s_fogBitBefore = -1;      /* bit 3 after this draw's apply; -1 untracked */
+/* the LOS state moved in this draw: bit 3 was clear after the apply (the
+   engine grid was not current as the draw began), or it is clear at the draw's
+   end (something cleared it during the draw -- a `recodd` draw), or the draw
+   was untracked. What the wide grid's tick is told as `rebuilt` when the fog
+   site is the engine's (wide_tick). */
+static int      s_fogStale = 1;
+
+static void fog_rec_before(char* ta)
+{
+    unsigned short* los = (unsigned short*)(ta + OFF_LOSTYPE);
+    if (!s_engRecOk || s_engRecGen != s_levelGen) *los &= (unsigned short)~8u;
+    s_fogBitBefore = (*los & 8) != 0;
+}
+
+/* a draw this observer does not bracket: no record survives it, and no
+   "before" reading taken by a tracked draw it is nested in */
+static void fog_rec_drop(void)
+{
+    s_engRecOk = 0;
+    s_fogBitBefore = -1;
+}
+
+static void fog_rec_after(const char* ta)
+{
+    int after;
+    if (!ta || s_fogBitBefore < 0) { s_fogStale = 1; fog_rec_drop(); return; }
+    after = (RDU16(ta, OFF_LOSTYPE) & 8) != 0;
+    s_fogStale = s_fogBitBefore != 1 || !after;
+    if (!s_fogBitBefore && after) {
+        s_engRecX = RD32(ta, OFF_EYE_X); s_engRecY = RD32(ta, OFF_EYE_Y);
+        s_engRecGen = s_levelGen; s_engRecOk = 1;
+    } else if (s_fogBitBefore && !after) {
+        s_cFogRecOdd++; s_engRecOk = 0;
+    }
+    s_fogBitBefore = -1;
+}
+
+/* THE WIDE GRID ON EVERY TRACKED DRAW, not only while the fog site is ours.
+   `terr_fogtick` ticks tagpu_fogwide at the engine's fog call `0x469D8E`,
+   but only on a draw latched to our terrain (`g_terrown_own`), and that latch
+   follows the terrain pass's request: at a level's start, until our pass
+   has gathered a frame and the game thread has seen its request, and under
+   `terr.on=off` or `passive`, the ENGINE's `0x4848E0` runs there instead and
+   our site does not. A frame drawn below 1x from a packet without the wide
+   grid has no grid covering its view (`bare=`). So on the draws where our
+   site did not run, this `after` ticks the wide grid itself, before the fill
+   copies it.
+
+   ONLY WHILE THE SESSION'S RENDERER IS VULKAN. The wide grid's one reader is
+   the native pass, on the Vulkan lane; on the GDI lane nothing reads it, and
+   a build per sim tick there is paid for nothing. This is not the zoom gate
+   the tick itself rules out (tagpu_fogwide.c, "THE LIVE ZOOM LEVEL IS NOT ONE
+   OF THEM": the level is the render thread's to publish, so a producer gated
+   on it builds one frame late at the start of every zoom-out). The renderer
+   is a property of the session, not of a frame: `dd_CreateEx` stores
+   `g_ddraw.renderer` on the game thread before the first draw, and its one
+   later store is render_vk.c's hand-over to GDI, after which no frame is
+   drawn from a packet at all.
+
+   WHAT IT READS IS SAFE HERE FOR THE SAME REASON AS AT THE FOG SITE: every
+   in-play draw falls inside the lifetimes of both maps, and each index the
+   build forms is bounded by the maps' own dimensions (tagpu_fogwide.c,
+   fogw_source). The local player's LOS counters are allocated by `0x464700`,
+   which `0x464990` calls for each active player at `0x4919C8`, inside the
+   level load `LoadGameData_Main 0x4917D0` on the loader thread, and freed by
+   the same `0x464700` at the NEXT level's load; the teardown cascade
+   `0x491B60` does not free them. MAPPED is allocated at `0x483CF6` in the
+   map load and freed at `0x483E70`, by the map-free routine `0x483DD0` in
+   that teardown [DISASSEMBLED 2026-09-24; exe-reverse-engineering.md, "The
+   two routines that bracket a level"]. This `after` runs on the in-play
+   gate, after the load and before the teardown, on the thread that runs the
+   teardown -- the argument every table this publisher copies stands on.
+
+   `rebuilt` IS "the LOS state moved in this draw" (s_fogStale). The engine's
+   `0x4848E0` runs on every in-play draw (its call at `0x469D8E` is gated on
+   `drawUnits`, which the in-play call passes as 1) and rebuilds whenever bit
+   3 is clear, and every LOS stamp and every eye writer clears it; so a clear
+   bit at the apply is the same signal `terr_fogtick` hands over when it
+   rebuilds, a bit set at the apply and clear at the draw's end is a stamp
+   inside the draw (`recodd`), and an untracked draw counts as one. The tick
+   rebuilds on it or on a moved window, and otherwise keeps the grid, which is
+   then still exactly what a build would produce. */
+static unsigned s_wideTickDraw;
+static int      s_wideTickSeen;
+
+static void wide_tick(void)
+{
+    char* ta;
+    if (g_ddraw.renderer != vk_render_main) return;  /* no reader on the GDI lane */
+    if (tagpu_terrown_fog_site_live()) return;       /* ticked at our fog site */
+    ta = (char*)ta_main();
+    if (!ta) return;
+    tagpu_fogwide_tick(ta, s_fogStale);
+    s_wideTickDraw = s_cDraws; s_wideTickSeen = 1;
+}
+
+/* THE TWO GRIDS THIS PACKET CARRIES, decided once per fill, before the
+   tables: fill_world sizes the units' pieces and the anchor table by them
+   (fog_reach) and fill_fog copies them, so both read the same numbers. A
+   grid with `cols == 0` is not carried. */
+typedef struct { const unsigned short* buf; int cols, rows, orgX, orgY; } PK_FOGSRC;
+static PK_FOGSRC s_fsEng, s_fsWide;
 
 /* the eye rounded to the lattice the overlay anchors on: cell (0,0)'s world
    point is 32*col0 + 16, col0 being the builder's half-cell-rounded eye>>5 */
 static int fog_org(int eye) { int r = eye % 32; return eye + (r > 15 ? 16 : -16) - r; }
 
-static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
+static void fog_sources(const char* ta)
 {
-    unsigned need = *cursor, e;
     const int* fg = *(const int* const*)(ta + FOG_DESC);
+    const unsigned short* wb; int wc, wr, wox, woy;
+    memset(&s_fsEng, 0, sizeof s_fsEng);
+    memset(&s_fsWide, 0, sizeof s_fsWide);
     if (ptr_ok(fg)) {
         const unsigned short* buf = (const unsigned short*)(size_t)fg[0];
         int cols = fg[1], rows = fg[2], cells = fg[3];
-        if (ptr_ok(buf) && cols > 0 && rows > 0 &&
-            cols <= FOGW_ENGINE_DIMCAP && rows <= FOGW_ENGINE_DIMCAP &&
-            cells == (((cols * rows) + 7) & ~7)) {
-            int ex = p->eye[0], ey = p->eye[1];
-            /* the eye the grid was ANCHORED at, latched inside the fog site
-               when the engine's builder ran, not the one this packet carries:
-               between the two the engine's own camera stepper may have moved
-               the camera, and the grid does not follow until the next draw.
-               The latch is refused unless the site ran in THIS draw — with
-               terrain ownership dropped the engine calls its own builder where
-               we cannot see it, and a stale latch would put the engine's live
-               grid at an origin from whenever we last owned the site. The
-               fallback is this packet's own eye. */
-            tagpu_terrown_fog_eye(&ex, &ey);
-            p->fog_cols = cols; p->fog_rows = rows;
-            p->fog_org[0] = fog_org(ex);
-            p->fog_org[1] = fog_org(ey);
-            e = append_area(p, cursor, buf, (unsigned)cols * (unsigned)rows * 2u,
-                            &p->fog_off, &p->fog_len, TAGPU_PK_TRUNC_FOG);
-            if (e > need) need = e;
-            if (!p->fog_len) { p->fog_cols = 0; p->fog_rows = 0; }
-        } else {
+        if (!(ptr_ok(buf) && cols > 0 && rows > 0 &&
+              cols <= FOGW_ENGINE_DIMCAP && rows <= FOGW_ENGINE_DIMCAP &&
+              cells == (((cols * rows) + 7) & ~7))) {
             s_cFogRefused++;
+        } else if (!s_engRecOk || s_engRecGen != s_levelGen) {
+            s_cFogNoRec++;          /* built where we could not see it: not carried */
+        } else {
+            s_fsEng.buf = buf; s_fsEng.cols = cols; s_fsEng.rows = rows;
+            s_fsEng.orgX = fog_org(s_engRecX); s_fsEng.orgY = fog_org(s_engRecY);
         }
     } else {
         s_cFogRefused++;
     }
-    {
-        const unsigned short* wb; int wc, wr, wox, woy;
-        /* ONLY WHILE THE FOG SITE RAN IN THIS DRAW. Both grids are stamped by
-           the observer inside it, and if terrain ownership was dropped — the
-           `terr.on` lever removed, `passive`, a `key=` change, a bail-out, or
-           the 90-frame watchdog — that observer stops while this one keeps
-           publishing. The producer's own "valid" flag cannot say so: it is only
-           ever cleared from inside the tick that has stopped running. Without
-           this test the packet would carry the LAST grid ever built, for ever,
-           against a camera and an LOS state that keep moving, and nothing would
-           count it. */
-        if (tagpu_terrown_fog_site_live() &&
-            tagpu_fogwide_current(&wb, &wc, &wr, &wox, &woy) &&
-            wc > 0 && wr > 0 && wc <= TAGPU_PK_FOG_DIMCAP && wr <= TAGPU_PK_FOG_DIMCAP) {
-            p->fogw_cols = wc; p->fogw_rows = wr;
-            p->fogw_org[0] = wox; p->fogw_org[1] = woy;
-            e = append_area(p, cursor, wb, (unsigned)wc * (unsigned)wr * 2u,
-                            &p->fogw_off, &p->fogw_len, TAGPU_PK_TRUNC_FOGW);
-            if (e > need) need = e;
-            if (!p->fogw_len) { p->fogw_cols = 0; p->fogw_rows = 0; }
-            else s_cFogwSeen++;
-        }
+    /* ONLY A GRID TICKED IN THIS DRAW, at our fog site or by wide_tick. The
+       producer's own "valid" flag cannot say so: it is only ever cleared
+       from inside a tick, so a tick that stopped running would leave the
+       packet carrying the LAST grid ever built, against a camera and an LOS
+       state that keep moving. Both tick sites stamp the draw. */
+    if ((tagpu_terrown_fog_site_live() || (s_wideTickSeen && s_wideTickDraw == s_cDraws)) &&
+        tagpu_fogwide_current(&wb, &wc, &wr, &wox, &woy) &&
+        wc > 0 && wr > 0 && wc <= TAGPU_PK_FOG_DIMCAP && wr <= TAGPU_PK_FOG_DIMCAP) {
+        s_fsWide.buf = wb; s_fsWide.cols = wc; s_fsWide.rows = wr;
+        s_fsWide.orgX = wox; s_fsWide.orgY = woy;
+    }
+}
+
+/* THE FOG REACH along one axis (0 = x, 1 = y): a world span holding every
+   point a frame drawn from this packet gathers in. It is the union of what
+   each way the render thread's fog bound (tagpu_zoom.c) can draw a frame
+   lets it reach, taken from the carried grids' own numbers, the very ones
+   that bound reads:
+     on the wide grid, its fully written span `[org, org + 32 (n - 1)]`, into
+       which the bound clamps the whole gather slab;
+     on the engine's, taken only at level >= 1 — where the slab is the 1x
+       rect plus TAGPU_GATHER_MARGIN (tagpu_zoom_gather_span is the view
+       itself there) — and only with that rect inside the same span:
+       `[org - M, org + 32 (n - 1) + M]`;
+     BARE, when neither qualifies (no wide grid reached the render thread —
+       `fogwide.off`, a failed build or append — and a level below 1 or a
+       misplaced engine grid): no bound holds the eye, which is the
+       packet's plus the steps the game thread has not applied yet, so the
+       window published about the packet's eye (tagpu_zoom_pub_window: the
+       floor's slab grown by the lead those steps are sized to fit in).
+   A bare frame whose steps outran the lead can still meet a unit carried
+   without its pieces; the native pass counts that (`nopieces=`, beside
+   `bare=`). */
+static void fog_reach(const TAGPU_PACKET* p, int axis, int* lo, int* hi)
+{
+    int l, h, span;
+    tagpu_zoom_pub_window(p->eye[axis], p->vp[2 + axis], &l, &span);
+    h = l + span;
+    if (s_fsWide.cols > 0) {
+        int o = axis ? s_fsWide.orgY : s_fsWide.orgX;
+        int n = axis ? s_fsWide.rows : s_fsWide.cols;
+        if (o < l) l = o;
+        if (o + 32 * (n - 1) > h) h = o + 32 * (n - 1);
+    }
+    if (s_fsEng.cols > 0) {
+        int o = axis ? s_fsEng.orgY : s_fsEng.orgX;
+        int n = axis ? s_fsEng.rows : s_fsEng.cols;
+        if (o - TAGPU_GATHER_MARGIN < l) l = o - TAGPU_GATHER_MARGIN;
+        if (o + 32 * (n - 1) + TAGPU_GATHER_MARGIN > h) h = o + 32 * (n - 1) + TAGPU_GATHER_MARGIN;
+    }
+    *lo = l; *hi = h;
+}
+
+static unsigned fill_fog(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
+{
+    unsigned need = *cursor, e;
+    (void)ta;
+    if (s_fsEng.cols > 0) {
+        p->fog_cols = s_fsEng.cols; p->fog_rows = s_fsEng.rows;
+        p->fog_org[0] = s_fsEng.orgX; p->fog_org[1] = s_fsEng.orgY;
+        e = append_area(p, cursor, s_fsEng.buf,
+                        (unsigned)s_fsEng.cols * (unsigned)s_fsEng.rows * 2u,
+                        &p->fog_off, &p->fog_len, TAGPU_PK_TRUNC_FOG);
+        if (e > need) need = e;
+        if (!p->fog_len) { p->fog_cols = 0; p->fog_rows = 0; }
+    }
+    if (s_fsWide.cols > 0) {
+        p->fogw_cols = s_fsWide.cols; p->fogw_rows = s_fsWide.rows;
+        p->fogw_org[0] = s_fsWide.orgX; p->fogw_org[1] = s_fsWide.orgY;
+        e = append_area(p, cursor, s_fsWide.buf,
+                        (unsigned)s_fsWide.cols * (unsigned)s_fsWide.rows * 2u,
+                        &p->fogw_off, &p->fogw_len, TAGPU_PK_TRUNC_FOGW);
+        if (e > need) need = e;
+        if (!p->fogw_len) { p->fogw_cols = 0; p->fogw_rows = 0; }
+        else s_cFogwSeen++;
     }
     s_lastFogC = p->fog_cols;  s_lastFogR = p->fog_rows;
     s_lastFogwC = p->fogw_cols; s_lastFogwR = p->fogw_rows;
@@ -1740,6 +2012,25 @@ static void fill_pal(TAGPU_PACKET* p, const char* ta)
     p->pal_ok = 1;
 }
 
+/* THE COUNTS OF A FILL THAT IS DONE AGAIN ARE TAKEN BACK. pkx_publish fills
+   a slot a second time when the first fill did not fit, and publishes only
+   the second, so everything these count -- a cut table, a grid or minimap
+   that landed, a refusal, a duplicate id -- counts the fill that was
+   published, once per publish. The mark is taken before a publish's first
+   fill and restored before each fill that redoes it. Not in the list: the
+   anchor and effect SCANS, which count work done (a refill reuses their
+   caches, and its reuse is not counted either), and the snapshot copies,
+   which a refill does not repeat. */
+#define PK_FILL_COUNTS(X) \
+    X(s_cUnitTrunc) X(s_cWreckTrunc) X(s_cPieceTrunc) X(s_cUnitDup) X(s_cRelBad) \
+    X(s_cWreckOob) X(s_cFogRefused) X(s_cFogNoRec) X(s_cFogwSeen) \
+    X(s_cMmPic) X(s_cMmCopies) X(s_cMmRefused) X(s_cMfCarried)
+#define PK_FC_FIELD(c) unsigned c;
+#define PK_FC_MARK(c)  s_fcMark.c = c;
+#define PK_FC_UNDO(c)  c = s_fcMark.c;
+static struct { PK_FILL_COUNTS(PK_FC_FIELD) } s_fcMark;
+static uint32_t s_fillHead;
+
 /* the in-play frame: every field of the header, from the thread that owns it */
 static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 {
@@ -1760,6 +2051,10 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
        treats as proof the map is live. Stamped here the header is already
        zeroed, so in_game is 0 and roster_log returns at its guard. */
     s_lastFilled = p;
+    s_fillShort = 0;
+    s_fillAgain = p->head_seq == s_fillHead;
+    if (s_fillAgain) { PK_FILL_COUNTS(PK_FC_UNDO) }
+    else { s_fillHead = p->head_seq; PK_FILL_COUNTS(PK_FC_MARK) }
     p->used_bytes = sizeof(TAGPU_PACKET);
     p->text_fg = -1;
     p->gamma = 1.0f;
@@ -1776,7 +2071,8 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->level_gen   = s_levelGen;
     /* what the command apply in `before` had done by this draw: the render
        thread reconciles its prediction against these */
-    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch);
+    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch,
+                       &p->cam_centre);
     p->gui_flips   = tagpu_gui_flips();
     p->draw_seq    = s_cDraws;
     p->eye[0]       = RD32(ta, OFF_EYE_X);      p->eye[1]       = RD32(ta, OFF_EYE_Y);
@@ -1819,6 +2115,26 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->build_unit_id = RDU16(ta, OFF_BUILDUNITID);
     p->game_opt     = RDU8(ta, OFF_GFXOPT);
 
+    /* THE ORDER IS THE CUT ORDER. A fill that does not fit the reserve is
+       published cut (tagpu_packet.c, pkx_publish), and what is cut is what
+       comes last. So the fog grids and the shade table go down first and the
+       world tables straight after them -- the reserve holds all of those at
+       the design point (tagpu_packet.c, PK_RESERVE) -- and what an overflow
+       can reach is what follows: the build orders, the effects, the UI's
+       render half, the font. A frame below 1x without its fog grids is drawn
+       bare, and one without its unit tables drops its whole unit hand-over;
+       one without an effect layer or the minimap is missing that alone. */
+    /* ---- the fog grids, decided first: the world tables are sized by them ---- */
+    fog_sources(ta);
+    e = fill_fog(p, ta, &cursor);
+    if (e > need) need = e;
+    /* ---- the shade table the unit pass shades by ---- */
+    shd_snapshot();
+    if (s_shdOk) {
+        e = append_area(p, &cursor, s_shd, (unsigned)sizeof s_shd, &p->shd_off, &p->shd_len,
+                        TAGPU_PK_TRUNC_SHD);
+        if (e > need) need = e;
+    }
     /* ---- the world tables ---- */
     e = fill_world(p, ta, &cursor);
     if (e > need) need = e;
@@ -1828,21 +2144,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the effects and the particle layers ---- */
     e = fill_fx(p, ta, &cursor);
     if (e > need) need = e;
-    /* ---- the two fog grids ---- */
-    e = fill_fog(p, ta, &cursor);
-    if (e > need) need = e;
     /* ---- the UI's render half ---- */
     e = fill_gui(p, ta, &cursor);
     if (e > need) need = e;
-    /* ---- the map's own features, until the mirror holds them ---- */
-    e = fill_mapfeat(p, &cursor);
-    if (e > need) need = e;
-    shd_snapshot();
-    if (s_shdOk) {
-        e = append_area(p, &cursor, s_shd, (unsigned)sizeof s_shd, &p->shd_off, &p->shd_len,
-                        TAGPU_PK_TRUNC_SHD);
-        if (e > need) need = e;
-    }
 
     /* the font: header + glyph table in the header, the objects in the area */
     p->font_gen   = s_fontGen;
@@ -1862,12 +2166,21 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
         if (s_fontLen) p->font_gen = 0;
     }
 
+    /* ---- the map's own features, until the mirror holds them: LAST, because
+       the cut order cuts what comes last (above) and this is the one table
+       that loses nothing by waiting -- it rides every packet until the
+       feature pass says it holds this level's copy ---- */
+    e = fill_mapfeat(p, &cursor);
+    if (e > need) need = e;
+
     /* stress: a dummy table past a one-page commit, so the growth path runs */
     if (s_stress) {
         e = append_area(p, &cursor, NULL, 6144u, &p->stress_off, &p->stress_len, TAGPU_PK_TRUNC_STRESS);
         if (e > need) need = e;
     }
     p->used_bytes = cursor;
+    /* the whole fill's size when a table did not fit (s_fillShort) */
+    if (s_fillShort && PKT_ALIGN4(cursor) + s_fillShort > need) need = PKT_ALIGN4(cursor) + s_fillShort;
     return need;
 }
 
@@ -2058,7 +2371,8 @@ static unsigned fill_level_end(TAGPU_PACKET* p, void* ctx)
     p->load_flags = (unsigned short)load_flags();
     p->text_fg    = -1;
     p->gamma      = 1.0f;
-    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch);
+    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch,
+                       &p->cam_centre);
     fill_pal(p, ta_main());
     return sizeof(TAGPU_PACKET);
 }
@@ -2139,12 +2453,16 @@ static int __cdecl before_draw(void* entry_esp)
            never apply. Record the loader's flag word once per level for the
            log — the first such draw after a teardown is the loading screen. */
         if (!s_levelOpen && !s_shellSeen) { s_shellFlags = load_flags(); s_shellSeen = 1; }
+        /* a draw we do not track may rebuild the engine's fog grid at an eye
+           of its own (the screenshot sweep drives the eye): the record goes,
+           and so does a "before" reading a tracked draw around it took */
+        fog_rec_drop();
         return 0;
     }
     s_cDraws++;
     s_levelDraws++;
-    if (s_countOnly) return 0;
-    if (s_retDepth >= RET_DEPTH) { s_cDeep++; return 0; }
+    if (s_countOnly) { fog_rec_drop(); return 0; }
+    if (s_retDepth >= RET_DEPTH) { s_cDeep++; fog_rec_drop(); return 0; }
     s_retStack[s_retDepth++] = (void*)(size_t)ret;
     /* THE COMMANDS, on the thread that owns every word they write. This
        runs after whichever of the frame callback's own camera writers ran
@@ -2152,11 +2470,12 @@ static int __cdecl before_draw(void* entry_esp)
        0x49680C/0x49693E) and the scroll poll 0x41CE90 (0x496976) both precede
        the draw call at 0x4969CD, and both can be skipped: the stepper when the
        sim is paused, both under an in-game GUI screen — and before the draw's
-       first read of the eye at 0x468DD9; no store to the eye exists inside
-       DrawGameScreen (whose extent is 0x468CF0..0x46A3FD; the tail past
+       first read of the eye at 0x468DD9; no ENGINE store to the eye exists
+       inside DrawGameScreen (whose extent is 0x468CF0..0x46A3FD; the tail past
        0x46A200 is status icons, the clock, the GUI blit, the profiler bars,
        the options tab, the cursor and the flip, and none of them stores the
-       eye), so a delta applied here composes
+       eye), and none of ours either: the scenario camera is handed to this
+       apply (tagpu_zoom_place_eye) — so a delta applied here composes
        with the engine's own camera move and the draw that follows reads the
        commanded eye; its fog rebuild and its minimap box see it too. The
        latest record is taken and every part of it applied by the module that
@@ -2170,19 +2489,24 @@ static int __cdecl before_draw(void* entry_esp)
         unsigned us;
         QueryPerformanceCounter(&t0);
         c = tagpu_cmd_take();
-        /* THE RECT, THEN THE TERRAIN LATCH: the rect may only be wide on a
-           draw whose ground is ours. The render thread's request is read ONCE,
-           the rect widens only on it, and the stubs are latched on it OR on a
-           rect that is still wide (a `restore` that could not run) -- after the
-           rect is final, on the one thread that writes either, before this
-           draw reaches `0x468DB0`. See `g_terrown_own`. */
+        /* THE CAMERA AND THE RECT, THEN THE TERRAIN LATCH: the eye may only
+           be off the engine's range, and the rect only wide, on a draw whose
+           ground is ours. The render thread's request is read ONCE, the camera
+           range centres and the rect widens only on it, and the stubs are
+           latched on it OR on a rect that is still wide (a `restore` that
+           could not run) -- after both are final, on the one thread that
+           writes any of them, before this draw reaches `0x468DB0`. See
+           `g_terrown_own` and tagpu_zoom.c's "the camera's range". */
         {
             int terr = tagpu_terrown_request();
             if (ta) {
-                tagpu_zoom_apply(ta, c);
+                tagpu_zoom_apply(ta, c, terr);
                 tagpu_vpwide_apply(ta, c, terr);
             }
             tagpu_terrown_latch(terr || tagpu_vpwide_wide());
+            /* LAST, after every write of the eye and of LosType this draw
+               makes before it draws: the engine fog grid's build record */
+            if (ta) fog_rec_before(ta);
         }
         tagpu_cmd_done();
         QueryPerformanceCounter(&t1);
@@ -2197,6 +2521,11 @@ static void* __cdecl after_draw(unsigned int* regs)
 {
     void* ret = s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
     (void)regs;
+    /* the draw is done: did its fog call rebuild the engine's grid, and at
+       which eye — before the publish reads the record */
+    fog_rec_after(ta_main());
+    /* the wide grid, when our fog site did not build it in this draw */
+    wide_tick();
     /* post-flip: the packet. The FRESH gate inside makes most of these a load.
        FORCED WHILE THE LEVEL HAS NO PACKET YET: the shell's cursor
        channel publishes through the load, so the FRESH gate can be set at the
@@ -2355,14 +2684,14 @@ static void extra(char* buf, unsigned cap, double secs)
         while (n < cap && buf[n]) n++;
         _snprintf(buf + n, cap > n ? cap - n : 0,
                   " | fx: proj=%u expl=%u deb=%u part=%u/%u scan=%u/%u trunc=%u thin=%u layerbad=%u subbad=%u lht=%u want=%d/%d"
-                  " | fog: %dx%d wide=%dx%d/%u refused=%u"
+                  " | fog: %dx%d wide=%dx%d/%u refused=%u norec=%u recodd=%u"
                   " | gui: mm=%dx%d/%u refused=%u pic=%dx%d/%u"
                   " | mapfeat=%u%s carried=%u",
                   s_cLastProj, s_cLastExpl, s_cLastDebris, s_cLastPart, s_cPartMax,
                   s_cFxScan, s_cFxReuse, s_cPartTrunc, s_cPartThin, s_cLayerBad, s_cSubBad, s_cLhtCopies,
                   tagpu_fxown_want_fx(), tagpu_fxown_want_sfx(),
                   s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR, s_cFogwSeen,
-                  s_cFogRefused,
+                  s_cFogRefused, s_cFogNoRec, s_cFogRecOdd,
                   s_lastMmW, s_lastMmH, s_cMmCopies, s_cMmRefused,
                   s_mmPicW, s_mmPicH, s_cMmPic,
                   s_mfN, s_mfTrunc ? "(trunc)" : "", s_cMfCarried);

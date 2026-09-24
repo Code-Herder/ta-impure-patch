@@ -291,10 +291,31 @@ static unsigned s_pvFrame = 0xFFFFFFFFu;   /* the frame that fill belongs to —
                                       zeroed view */
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
 static int    s_fogCells = 0;         /* the ALLOCATION's cell count (= cols*rows) */
-/* Frames drawn zoomed out, or from an unacknowledged eye, whose packet carried
-   no WIDE fog grid — so the outer ring falls back to the engine's 1x grid and
-   taFog's clamp. It must read 0 unless `tagpu_fogwide.off` is armed. */
+/* Presented frames that needed the WIDE fog grid and whose packet carried
+   none — so the outer ring falls back to the engine's 1x grid and taFog's
+   clamp. The wide grid is built on every tracked in-play draw (at our fog
+   site, or by the publisher when the site is the engine's), so this counts
+   `tagpu_fogwide.off`, a build or append that failed, and nothing else. */
 static unsigned s_fogBare = 0;
+/* presented frames whose fog domain was not inside the grid they sampled —
+   the fog bound's witness (tagpu_zoom.c). The bare frames above, and nothing
+   else outside a grid trimmed by a failed allocation. */
+static unsigned s_fogOut = 0;
+/* the grid the last frame actually sampled, for the heartbeat's `fog=` */
+static const char* s_fogSampled = "none";
+/* units inside a presented frame's gather slab that the packet carried
+   outside its fog reach, and so without their pieces: not drawn
+   (`nopieces=`, cumulative) */
+static unsigned s_unitNoPieces = 0;
+/* THIS FRAME'S SHARE OF THE THREE WITNESSES ABOVE, held until the frame is
+   presented. They say what reached the screen wrong, and a gather is not a
+   picture: all through the lane's bring-up, a swapchain rebuild or a skipped
+   acquire, this pass gathers and nothing is presented. render_vk.c calls
+   tagpu_native_presented with the frame number tagpu_vk_frame presented;
+   only this frame's share is kept, keyed by the number it was gathered
+   under, and the next frame's gather drops whatever was not presented. */
+static unsigned s_pendFrame = 0xFFFFFFFFu;
+static unsigned s_pendBare, s_pendOut, s_pendNoPieces;
 static const unsigned short* s_fogGrid = NULL;
 /* world origin of fog grid cell 0 on one axis: the builder's rounded eye>>5
    turned back into world px, i.e. 32*col0 + 16 (0x4843C0 head, 0x4848E0).
@@ -1947,8 +1968,10 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
    so it is the widest view the lever allows, not the current viewport. */
 static int ghost_offscreen(float ax, float ay, int evpL, int evpT, int evw, int evh)
 {
-    return ax < (float)(evpL - 256) || ax > (float)(evpL + evw + 256) ||
-           ay < (float)(evpT - 256) || ay > (float)(evpT + evh + 256);
+    return ax < (float)(evpL - TAGPU_GATHER_MARGIN) ||
+           ax > (float)(evpL + evw + TAGPU_GATHER_MARGIN) ||
+           ay < (float)(evpT - TAGPU_GATHER_MARGIN) ||
+           ay > (float)(evpT + evh + TAGPU_GATHER_MARGIN);
 }
 
 
@@ -1956,6 +1979,13 @@ static int ghost_offscreen(float ax, float ay, int evpL, int evpT, int evw, int 
    draw, stamping the heartbeat as it goes. See the one place it is RAISED,
    below the viewport bound. */
 #define SSHADOW_NONE() tagpu_owndraw_set_structshadow(0, f->frame_counter)
+
+void tagpu_native_presented(unsigned int frame_counter)
+{
+    if (frame_counter != s_pendFrame) return;
+    s_fogBare += s_pendBare; s_fogOut += s_pendOut; s_unitNoPieces += s_pendNoPieces;
+    s_pendBare = s_pendOut = s_pendNoPieces = 0;
+}
 
 void tagpu_native_frame(const TAGPU_FRAME* f)
 {
@@ -1967,6 +1997,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        which is right — nothing has told us a level ended. */
     if (f->packet) s_lastLevelGen = f->packet->level_gen;
     cache_gen_check(s_lastLevelGen);
+    /* a new frame's witnesses start from zero, on every path through here */
+    s_pendFrame = f->frame_counter;
+    s_pendBare = s_pendOut = s_pendNoPieces = 0;
     /* and the UNIT ATLAS, which keys on frame ADDRESSES the next level's loader
        may reuse, and recycles when full. Both move its generation, so both
        are here, before tagpu_posebake_frame latches tagpu_r3d_atlas_gen() on
@@ -2231,22 +2264,14 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* ---- the viewport the zoom actually shows (see TAGPU_FXVIEW.evpL) ----
        Every gather below sizes itself from this rather than the engine's own
        viewport, so zooming out reaches further into the map instead of leaving
-       the frame edge bare. At z >= 1 it IS the engine's viewport, bit for bit. */
-    int evpL = vpL, evpT = vpT, evw = vw, evh = vh;
-    int maxeff_w = (int)((float)vw / TAGPU_ZOOM_MIN) + 64;
-    int maxeff_h = (int)((float)vh / TAGPU_ZOOM_MIN) + 64;
-    if (s_zoom > 0.05f && s_zoom < 1.0f) {
-        evw = (int)((float)vw / s_zoom) + 64;      /* +64: partial cells at the edge */
-        evh = (int)((float)vh / s_zoom) + 64;
-        /* THE BOUND IS THE ZOOM FLOOR, AND IT HAS THE SCREEN IN IT. The lever
-           clamps to TAGPU_ZOOM_MIN, so this is the same expression at its
-           extreme and it can never shorten a view the player can actually
-           reach — it is here so that a zoom that somehow slipped below the
-           floor cannot ask for an unbounded rect, which is a property of the
-           value and not of the resolution. */
-        if (evw > maxeff_w) evw = maxeff_w;
-        if (evh > maxeff_h) evh = maxeff_h;
-    }
+       the frame edge bare. At z >= 1 it IS the engine's viewport, bit for bit.
+       The span is v/z + 64 below 1 (the 64 is the partial cells at the edge),
+       capped at the zoom floor's — a bound on the value and not on the
+       resolution, so a zoom that somehow slipped below the floor cannot ask
+       for an unbounded rect. The fog bound on the eye this frame is drawn from
+       (tagpu_zoom.c) reads the same expression. */
+    int evpL, evpT;
+    int evw = tagpu_zoom_gather_span(vw, s_zoom), evh = tagpu_zoom_gather_span(vh, s_zoom);
     /* Reserve the terrain staging for THIS VIEWPORT at the zoom floor and trim
        the rect to what could be reserved. Unconditional, at every zoom: the
        reservation is what the gather draws out of, so a 1x frame needs it made
@@ -2298,41 +2323,52 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            every index this frame can form is inside the bytes it was handed.
            The wide grid arrives the same way.
 
-           WHICH GRID THIS FRAME USES is this thread's decision because it is the one that knows what it is about to draw:
-           the engine's own at zoom >= 1, where it spans the frame by
-           construction (its origin is the eye rounded to a half cell and its
-           count is viewW/32 + 2, so the last column starts at least a pixel
-           past the viewport's right edge — same for the last row); the wide one
-           below 1, where it cannot, and the ring beyond it would otherwise get
-           taFog's clamp smearing the border cell.
-
-           ...OR while the eye this frame is drawn from is AHEAD of the
-           packet's — a cursor-anchored step the game thread has not applied yet
-           (tagpu_zoom_unacked). The engine's grid is anchored at the packet's
-           eye with only its two spare columns of slack, and the frame that
-           eases up THROUGH 1.0 starts at z = 0.5 exactly at the lowest (one
-           ease step of 0.25 in log space is z1 = z0^0.75 * ztgt^0.25, which
-           reaches 1.0 at z0 = 8^(-1/3)), where the eye steps by up to vw/2 in
-           that single frame — 896 px at the 1792-px viewport of a 1920x1080
-           screen, against the 32 px those two columns are worth. The wide grid
-           spans it with room over: sizing at the zoom FLOOR covers any anchored
-           step at any level with the margin untouched. */
+           WHICH GRID THIS FRAME USES is this thread's decision because it
+           is the one that knows what it is about to draw, and it was made
+           together with the eye it is drawn from (tagpu_zoom_wide_fog, the
+           fog bound in tagpu_zoom.c): the engine's grid where it spans the
+           view — level >= 1, the grid's own window at most one cell past the
+           map, the 1x rect about the drawn eye inside its fully written
+           cells — and otherwise the wide one, with the drawn eye clamped so
+           this pass's whole gather slab lies inside it. So every drawn
+           pixel's fog sample, and on the wide grid every gathered anchor's,
+           is inside the grid it reads, for any gesture and however far the
+           game thread lags; the witness below checks it on this pass's own
+           numbers. */
         const unsigned short* buf = tagpu_pk_fog(pk);
         int cols = pk->fog_cols, rows = pk->fog_rows;
         int orgX = pk->fog_org[0], orgY = pk->fog_org[1];
         int bufCells = cols * rows;
         {
             const unsigned short* wb = tagpu_pk_fogw(pk);
-            if (wb && (tagpu_zoom_level() < 1.0f || tagpu_zoom_unacked())) {
+            if (wb && tagpu_zoom_wide_fog()) {
                 buf = wb; cols = pk->fogw_cols; rows = pk->fogw_rows;
                 orgX = pk->fogw_org[0]; orgY = pk->fogw_org[1];
                 bufCells = cols * rows;
-            } else if (!wb && (tagpu_zoom_level() < 1.0f || tagpu_zoom_unacked())) {
-                /* a zoomed frame drawn over the engine's 1x grid: the outer ring
-                   falls back to taFog's clamp. It must read 0 outside a
-                   deliberate `fogwide.off`. */
-                s_fogBare++;
+            } else if (!wb && tagpu_zoom_wide_fog()) {
+                /* a frame that needs the wide grid drawn over the engine's:
+                   the outer ring falls back to taFog's clamp, and an off-map
+                   eye's edge keeps the engine's misplaced completions
+                   (s_fogBare says when that is expected) */
+                s_pendBare++;
             }
+        }
+        /* THE WITNESS: this frame's fog domain inside the grid it took — on
+           the wide grid the gather slab, whose every point is then read with
+           all four corners written; on the engine's the effective rect (the
+           1x one at z >= 1), in its cells. Counted, never acted on: the bound
+           is the eye's, and this is how a regression in it shows (s_fogOut
+           says what else it may count). */
+        if (buf && cols > 0 && rows > 0) {
+            int wide = buf != tagpu_pk_fog(pk);
+            int m = wide ? TAGPU_GATHER_MARGIN : 0;
+            int x0 = eyeX + (evpL - vpL) - m, x1 = eyeX + (evpL - vpL) + evw + m;
+            int y0 = eyeY + (evpT - vpT) - m, y1 = eyeY + (evpT - vpT) + evh + m;
+            int hx = orgX + 32 * (cols - 1), hy = orgY + 32 * (rows - 1);
+            if (x0 < orgX || x1 > hx || y0 < orgY || y1 > hy) s_pendOut++;
+            s_fogSampled = wide ? "wide" : "engine";
+        } else {
+            s_fogSampled = "none";
         }
         if (buf && cols > 0 && rows > 0) {
             /* The statics below are what `tagpu_terr_render`'s hand-over
@@ -2402,8 +2438,24 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         const TAGPU_PK_PIECE* pc;
         if (!(pu->flags & TAGPU_PK_U_NATIVE)) continue;
         pc = tagpu_pk_pieces(pk, pu->piece_off, pu->piece_n);
-        if (!pc) continue;         /* outside the widest rect: no pose to draw */
         short wx = (short)(pu->pos[0] >> 16), wz = (short)(pu->pos[1] >> 16), wy = (short)(pu->pos[2] >> 16);
+        if (!pc) {
+            /* no pose to draw. A unit OUTSIDE the fog reach the packet was
+               published over that lies inside this frame's slab is one the
+               frame should have drawn — the reach covers every slab the fog
+               bound fits into a grid, so this counts a bare frame whose
+               unapplied steps outran the lead or a frame the bound could only
+               centre (`out=`). One inside the reach with no pieces has none
+               to carry (a model of 0 or more than TAGPU_PK_MAXPIECE) or lost
+               them to a full arena, which the packet counts as a truncation. */
+            if (!(pu->flags & TAGPU_PK_U_INRECT)) {
+                int sx0 = wx - eyeX + vpL, sy0 = wy - wz / 2 - eyeY + vpT;
+                if (sx0 >= evpL - TAGPU_GATHER_MARGIN && sx0 <= evpL + evw + TAGPU_GATHER_MARGIN &&
+                    sy0 >= evpT - TAGPU_GATHER_MARGIN && sy0 <= evpT + evh + TAGPU_GATHER_MARGIN)
+                    s_pendNoPieces++;
+            }
+            continue;
+        }
         int ix = pu->pos[0], iz = pu->pos[1], iy = pu->pos[2];
         float fx = (float)ix / 65536.0f, fz = (float)iz / 65536.0f, fy = (float)iy / 65536.0f;
         if (s_subpix) {
@@ -2419,8 +2471,15 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         float ax = fx - (float)eyeX + (float)vpL;
         float ay = fy - fz * 0.5f - (float)eyeY + (float)vpT;
-        if (ax < evpL - 256 || ax > evpL + evw + 256 ||
-            ay < evpT - 256 || ay > evpT + evh + 256)
+        /* THE SLAB TEST, on the drawn anchor AND on the point the fog gate
+           below samples: the sub-pixel anchor trails the unit's position by
+           up to a sim step (spx_sample), and the fog bound keeps only the
+           slab inside the wide grid (tagpu_zoom.c). */
+        int sx = wx - eyeX + vpL, sy = wy - wz / 2 - eyeY + vpT;
+        if (ax < evpL - TAGPU_GATHER_MARGIN || ax > evpL + evw + TAGPU_GATHER_MARGIN ||
+            ay < evpT - TAGPU_GATHER_MARGIN || ay > evpT + evh + TAGPU_GATHER_MARGIN ||
+            sx < evpL - TAGPU_GATHER_MARGIN || sx > evpL + evw + TAGPU_GATHER_MARGIN ||
+            sy < evpT - TAGPU_GATHER_MARGIN || sy > evpT + evh + TAGPU_GATHER_MARGIN)
             continue;
         int owner = pu->owner;
         int cloaked = (pu->cloak & 4) != 0;
@@ -2650,8 +2709,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 if (!wpc) continue;
                 float ax = (float)(rx - eyeX + vpL);
                 float ay = (float)(ry - rz / 2 - eyeY + vpT);
-                if (ax < evpL - 256 || ax > evpL + evw + 256 ||
-                    ay < evpT - 256 || ay > evpT + evh + 256) continue;
+                if (ax < evpL - TAGPU_GATHER_MARGIN ||
+                    ax > evpL + evw + TAGPU_GATHER_MARGIN ||
+                    ay < evpT - TAGPU_GATHER_MARGIN ||
+                    ay > evpT + evh + TAGPU_GATHER_MARGIN) continue;
                 /* wreckage is remembered furniture: hidden only where the
                    map is unexplored, visible (darkened) in grey */
                 if ((fogMode & 1) &&
@@ -3115,12 +3176,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* THE PASS'S HEARTBEAT. It reports what was handed OVER rather than what
        was drawn, which is the only thing this pass decides. */
     if ((f->frame_counter % 300) == 0) {
-        char hb[256];
+        char hb[320];
+        unsigned held, paused, back; int heldMax;
+        tagpu_zoom_fog_held(&held, &heldMax, &paused, &back);
         _snprintf(hb, sizeof hb,
                   "native: vulkan lane handed over frame %u: terr=%d feat=%d "
-                  "fx=%d mark=%d units=%d posed=%d sel=%d/%d selcache=%d full=%u",
+                  "fx=%d mark=%d units=%d posed=%d sel=%d/%d selcache=%d full=%u "
+                  "fog=%s bare=%u out=%u held=%u/%dpx paused=%u back=%u nopieces=%u",
                   f->frame_counter, nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd,
-                  nselDrawn, nsel, s_nsbox, s_sboxFull);
+                  nselDrawn, nsel, s_nsbox, s_sboxFull,
+                  s_fogSampled, s_fogBare, s_fogOut, held, heldMax, paused, back,
+                  s_unitNoPieces);
         hb[sizeof hb - 1] = 0;
         nlog(hb);
     }

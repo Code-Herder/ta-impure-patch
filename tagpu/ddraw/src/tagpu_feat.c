@@ -539,7 +539,14 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
 
 /* ---- the LOS gate, 0x4658E0: two projected footprint corners. The per-tile
    test is the same one the effects pass runs per projectile, so it is shared
-   rather than copied (both are the engine's LosType rule). ---- */
+   rather than copied (both are the engine's LosType rule). Its points reach
+   past the gathers' slab: the sweep's first row lies up to 15 px above it, a
+   cell's height lifts a point up to 127 px more, and a far corner lies up to
+   MAXFOOT cells past its row — and a sprite can reach below its footprint, so
+   a corner past the slab is not a point nothing draws. The shared test
+   answers each point from the grid as it is, moving only a point in the
+   grid's unwritten last column or row onto that band's written edge
+   (tagpu_fx_tile_visible). ---- */
 static int feat_visible(const TAGPU_FXVIEW* v, int col, int row, int fx, int fz, int th)
 {
     int hh = th >> 1;
@@ -553,6 +560,7 @@ typedef struct {
     int mirrored;                /* the map's anchors drawn past its edge */
 } FEATC;
 static FEATC s_c;
+static unsigned s_cAnchTrunc;   /* frames whose anchor table was truncated */
 static int s_logged;
 static int s_lit;                       /* light= this frame: anchors take the ground's light    */
 
@@ -1042,6 +1050,11 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
        0 at every reachable zoom. It is the number to look at if features ever
        stop short of the frame edge. */
     anch = tagpu_pk_anchors(pk);
+    /* a table the publisher could not fit: it keeps the rows nearest the
+       view's centre and drops the rest whole (tagpu_packet_pub.c), so a count
+       here that is not 0 is the number to look at if features ever vanish
+       from the top or bottom of the frame */
+    if (pk->truncated & TAGPU_PK_TRUNC_ANCHORS) s_cAnchTrunc++;
     if (onMap && (r0 < pk->anch_r0 || c0 < pk->anch_c0 ||
         r0 + nRows > pk->anch_r0 + pk->anch_rows ||
         c0 + nCols > pk->anch_c0 + pk->anch_cols)) outside++;
@@ -1142,8 +1155,8 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
                     &p, "feat: rect=%dx%d anchors=%d flat=%d tall=%d gafwreck=%d 3dwreck=%d",
                     nCols, nRows, s_c.anchors, s_c.flat, s_c.tall, s_c.gafwreck, s_c.wreck3d);
             sappend(b, sizeof b, &p, " defs=%d", nDefs);
-            sappend(b, sizeof b, &p, " anim=%d los-skip=%d junk=%d outside=%d -> body=%d shadow=%d atlas=%d",
-                    s_c.animated, s_c.losSkip, s_c.junk, s_c.outside, s_cBody, s_cShadow, s_atlas.n);
+            sappend(b, sizeof b, &p, " anim=%d los-skip=%d junk=%d outside=%d trunc=%u -> body=%d shadow=%d atlas=%d",
+                    s_c.animated, s_c.losSkip, s_c.junk, s_c.outside, s_cAnchTrunc, s_cBody, s_cShadow, s_atlas.n);
             /* repacks should settle at a small number and stop; `wall` means
                the map wants more than one 2048 page holds (tagpu_gaf.h) */
             sappend(b, sizeof b, &p, " repack=%u%s", s_atlas.repacks,
