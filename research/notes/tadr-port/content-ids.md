@@ -5,11 +5,11 @@
 Two ceilings split out of [section A](raised-limits.md) come into our stack: **unit-type IDs**
 (512 → 16 384) and **weapon IDs** (256 → 4096). So does the renderer cache that the first one makes
 easy to overflow. That is three landings. The owner decided every choice below on 2026-09-24
-**[DECIDED]**. **Nothing is built yet.** The disassembly behind each fact is in
+**[DECIDED]**. **A′1 is done; A′2 and A′3 are planned.** The disassembly behind each fact is in
 [the evidence pass](limits-evidence.md), §8 and §9. The rules shared by every group are in
-[the port overview](overview.md#standing-rules-decided-2026-09-23). Section A's own remaining item,
-the composite scratch bound, is [landing 7 of that plan](raised-limits.md#the-landings) and lands
-before these three.
+[the port overview](overview.md#standing-rules-decided-2026-09-23). Section A's last item, the
+composite scratch bound, is [landing 7 of that plan](raised-limits.md#the-landings), done before
+these three.
 
 Three findings shaped the plan:
 
