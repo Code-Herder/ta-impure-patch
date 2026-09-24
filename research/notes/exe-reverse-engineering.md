@@ -273,12 +273,15 @@ outside the apply frame.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..24]
 
-Four places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
-composite scratch frame's writers, with the span tables of the rasterisers under them), and two
-where it takes a player's payment and does not deliver: a feature reclaimed or destroyed while the
-wreck pool is full, and a feature reclaimed twice through a cell that is not its anchor.
-`tagpu_patches.c` (`patch_engine_defects`) patches all six at every attach: `ddraw.dll` is a static
-import of the exe, so `DllMain` runs before the exe's entry point. The six are independent. Each is skipped, with
+Six places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
+composite scratch frame's writers, with the span tables of the rasterisers under them; the fifth
+and sixth are a builder's build list and the download menus' records, which a large mod reaches),
+two where it takes a player's payment and does not deliver (a feature reclaimed or destroyed while
+the wreck pool is full, and a feature reclaimed twice through a cell that is not its anchor), one
+where a network game can never start (two unit types with one unit-sync key), and the
+out-of-memory text, which blames the disk. `tagpu_patches.c` (`patch_engine_defects`) patches all
+ten at every attach, in both builds: `ddraw.dll` is a static
+import of the exe, so `DllMain` runs before the exe's entry point. The ten are independent. Each is skipped, with
 its reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its stub
 cannot be allocated, or its page cannot be made writable. Each patch is the identity on every input
 the stock code handles correctly. [Binary patches](binary-patches.html) §"Stock engine defects we
@@ -287,9 +290,11 @@ patch" is the one-row-per-bug register. The disassembly is `objdump -d -M intel`
 measurements are `tacli` instances on Two Continents at 1024×768 with
 `scenarios/sort-row-overflow.json` (150 Peewees in one line, every foot at the same world z), on
 Lava Run, Coast To Coast and Dark Side at 1920×1080 to 3840×2160, on the camera branch's build
-for the terrain pass, on Town & Country at 1024×768 for the two feature fixes, and on Two
+for the terrain pass, on Town & Country at 1024×768 for the two feature fixes, on Two
 Continents at 1024×768 for the composite scratch, with oversized units made locally from stock
-models (never committed). Each compares against a build without the patch.
+models (never committed), and on Core Prime Industrial Area with the unit types
+`tools/unittypes_fixture.py` generates for the four large-mod fixes. Each compares against a build
+without the patch.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
@@ -954,6 +959,202 @@ alike. MEASURED: a solar scaled ×22, a 1544-row frame, faults at `0x4C8035` wit
 refused) and at `0x459D1D` without it. No stock unit is near: the tallest 1× frame is 239 rows
 (`cordev1`, [limits-evidence §10](tadr-port/limits-evidence.md#10-composite-buffer-6002-12802-0x458195)).
 Drawing such a frame in bands of at most 800 rows at those call sites would close it.
+
+### A builder's build list, `TEMP UTYPE LIST` — `0x42DA58`, `0x42DAC7`, `0x42BEAF..0x42BED3` [DISASSEMBLED + MEASURED 2026-09-24]
+
+**The list.** A builder's `canbuild%d` keys in `gamedata\sidedata.tdf`'s `[CANBUILD]` section are read
+at game load into one shared heap block named `TEMP UTYPE LIST` (`0x42D971`, 0x3C bytes, 30 `u16`
+type IDs). The append at `0x42DA58` (`mov [ebp],ax; inc ebx; add ebp,2`) runs until a key is missing
+(`0x42DA46..0x42DA99`); the count goes back to 0 for each builder (`0x42D91D`, `0x42DAA5`). The
+builder then gets its own copy at def `+0x156`: a fresh 0x3C bytes (`push 0x3C; push eax; call
+0x4D83B0` at `0x42DAC7`, named `CANBUILD %s`) filled by a `rep movs` of 15 dwords, with the real
+count at `+0x152`. The download appender `0x42BE30` (from `0x42E0DE`) adds the builder's download
+entries while the count is at most 30 (`0x42BEAF`: `cmp dword [ebp],0x1E; jg`), so it writes entry 30,
+two bytes past the block (`0x42BEC3..0x42BED3`). The AI's pick `0x40BDB0`, its debug listing
+`0x46887B..0x468982` and the uncalled `0x4894F0` loop to the count; the other readers test the
+pointer only ([limits-evidence §8](tadr-port/limits-evidence.md) lists them). The def clone `0x42B370`
+runs before `0x42D9BB`/`0x42D9C7` zero the pair, and the teardown frees each copy (`0x42DC52`).
+
+**The fix**, `fix_build_list`: a block holding `n` entries has room for `bl_room(n)` — 30, then
+powers of two from 64 — and each writer grows its block through `0x4D83B0` before the entry that
+would not fit, the old block freed through `0x4D85A0`. `0x42DA58` and `0x42BEC3` call the two appends,
+`0x42DAC7` the copy (then `jmp 0x42DAE3`, past the `rep movs`), and the cap at `0x42BEAF` is NOPped.
+A builder with 30 entries or fewer, every stock builder, gets stock's exact blocks.
+
+**MEASURED**, 40 `canbuild` keys added to ARMCOM: the previous build read a count of 59 over a copy
+of 30 entries followed by heap bytes, with no fault that load; this build reads 71 (19 stock, the
+40, and 12 download entries), every ID in order, in a block of 128.
+
+### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
+
+**The records.** `0x42DCF0` (tag `DOWNLOADMENU`, loader thread) makes one 0xBD-byte record per
+`download\*.tdf` file: a dword entry count and five 0x25-byte entries (`u16` builder type, `u8`
+`MENU`, `u8` `BUTTON`, the buildee's name in 32 bytes, entry `k` at `+4 + k·0x25`). The block,
+`files · 0xBD` bytes from `0x4D83B0` at `0x42DD74`, is at `[main+0x391CB]`, the record count at
+`[main+0x391C7]`. The section loop `0x42DDD5..0x42DF0C` writes the count `k + 1` for section `k`
+(`0x42DE12`) and fills entry `k` with no cap, so a file of six or more entries writes past its
+record and the last file's past the block. The readers walk the records to `[main+0x391C7]` — the
+build menu `0x41AE0F`, the downloadable check `0x42E04B`, the appender `0x42BE30` — except the page
+count `0x42DF60`, inside `0x42DCF0`, which walks its local file count `[esp+0x10]`. The downloadable
+check, later in `0x42DCF0`, compares each def's name with each record's first entry only and, when
+the def lacks the flag, sets `+0x241 |= 0x20` (the FBI's `downloadable`; the text it formats is
+"Hey!  Somebody forgot to set downloadable=1 for %s", `0x503944`), which the AI's pick skips
+(`0x40BBA0`, only when `0x435100` answers 1 for `[main+0x391E9]`, a mode whose meaning is not
+known): a file's first unit, since Cavedog's files name one unit for all their builders.
+Stock: 70 files, at most four entries each.
+
+**The fix**, `fix_download_records`: a file continues into as many records as it needs, at the end of
+the block, section `k` being entry `k % 5` of its `(k / 5)`th record. `0x42DD74` allocates through
+`dl_alloc` (zeroed, its room noted); `0x42DDF0` calls `dl_section`, which starts a record at sections
+5, 10, …, growing the block when full, and writes the record's count; stock's count write at
+`0x42DE12` is NOPped; `0x42DF23` becomes `imul esi,edi,0xBD` (the next file's own record);
+`0x42DF35` hands the page count the record count; and `0x42E0B9` bounds the downloadable check by
+the file count `dl_alloc` noted (`cmp ebp,[s_dlFiles]`), so it reads the files' own records and flags
+a file's first unit only, as stock does, not the 6th, 11th, … of a long file.
+
+**MEASURED**, one download file of 12 entries for one builder: the previous build dies during the
+load in the C runtime's heap (`0x7BD35C8C`, an illegal read at `0xD9330004`, from `0x4E8952` under
+`0x4E8890`), while a mod with only the 40 `canbuild` keys loads; this build reads 73 records (the
+70 stock files and 5 + 5 + 2) and the builder's pages show all 12. A factory's download button queues
+its unit (ARMLAB and a synthetic kbot: the button reads `+1` and the unit is built); a mobile
+builder's button for a mobile unit arms nothing (`BuildUnitID` `main+0x2CC4` stays as it was),
+in both builds. With the check bounded, a 12-entry file flags its first unit only; walking every
+record, it flagged the 1st, 6th and 11th. The 120 stock types flagged are the same either way.
+`0x42BD40..0x42BE20` is the same check as a function of its own, with the same walk to
+`[main+0x391C7]` (`0x42BDF1`), and has no call and no absolute reference: dead, and left unpatched.
+
+### The out-of-memory text — `0x49E700` [DISASSEMBLED + MEASURED 2026-09-24]
+
+WinMain (`0x49E849`, in `0x49E830`) installs `0x49E700` as the allocator's new handler for the whole
+process. On any failed allocation it appends its text to `ErrorLog.txt`, dumps the registers and
+stack through a deliberate fault (`0x49E7E4` → `0x49E680`, whose `div dword [ebp-0x1C]` at `0x49E6B0`
+divides by zero inside its own `__try`), shows the text in a system-modal box (`0x49E7FA`) and leaves
+through `raise(SIGABRT)` (`0x49E807`). The text, "Out of memory! Your hard disk may be full" at
+`0x509764`, is read at `0x49E7BD` (its length), `0x49E7CD` (the log) and `0x49E7F4` (the box), and
+nowhere else. Two places clear the handler around one allocation: the save writer's compression
+buffer (`0x4B3B75..0x4B3B8F`, `0x4B4146..0x4B422B`) and BIGSHOT (`0x495ABE`).
+
+**The fix**, `fix_oom_message`: the three reads point at a static text that a call at the handler's
+entry writes with `wsprintfA` (nothing allocates): the game is a 32-bit program that has used the
+memory it can address, and `UNITINFOCount − 1` unit types are installed. That count is the unit
+files found (`0x42AA77`) until the menu-time load's end rewrites it with the types it kept
+(`0x42B2F6`), and a game load's end rewrites it with the types in play (`0x42D542`: the types
+flagged `0x800000` at `+0x241`, a flag the sync clears for a type that did not sync, `0x46E1FE`).
+**MEASURED**: 1500 generated types each carrying a 1 MB script: the dump names "Integer
+Divide by Zero … at `0049e6b0`, Exception handler called in Out of memory handler" under our text
+("1778 unit types are installed"), the box shows it, and OK exits.
+
+### The unit sync's keys, and the join's pace — `0x4B6BA0`, def `+0x13E`, `0x46D6C0..0x46DEC8` [DISASSEMBLED + MEASURED 2026-09-24]
+
+**The key.** The menu-time loader `0x42A8D0` reads each FBI whole (`0x4BB7C0`) and stores
+`0x4B6BA0(bytes, size)` at def `+0x13E` (`0x42ABB3`, `0x42ABBC`). `0x4B6BA0` is four 8-bit lanes, not a
+CRC: with `i` the offset's low byte and `b` the byte, the key is `xor(i+b) << 24 | sum(i^b) << 16 |
+xor(b) << 8 | sum(b)`. A `units\<name>.OVR` file with a `TA Unit Override` header can replace it with
+its `Compatability` value (`0x42ABCB..0x42AC43`; the file's shape is [INFERRED] from the strings
+`units`, `OVR`, `TA Unit Override`, `Compatability`, `%u`). The def clone `0x42B370` copies it. The
+**value** at `+0x142` is filled lazily by `0x42A610`, only while it is 0: the xor of `0x4B6BA0` over
+`scripts\<name>.cob`, every `guis\<name>*.gui` (`0x4BCA30` enumerates them) and
+`download\<name>.tdf`, and then of `+0x146` [role INFERRED]. It reads files, so its first call for a
+type costs a file lookup and a read.
+
+**The engine write-protects the def array.** `0x4D86B0(ptr, size, prot)` calls `VirtualProtect` over
+the range's whole pages when `0x4D8140` answers nonzero (`[0x5289A0]`, set once through `0x4D9FE0`
+with the `gonzo` switch at `0x50C290`/`0x50C298`); `0x4D8690` and `0x4D86F0` pass `PAGE_READONLY` and
+`PAGE_READWRITE` for a range, and `0x4D8710` and `0x4D8780` do the same for a whole heap block
+(`0x4D8720`, its size from `0x4D8360`). The loader seals the def array at its success exit
+(`0x42B328`), and a writer opens and seals it around its writes (`0x42A610`: `0x42A63A`, `0x42A829`).
+MEASURED: protection is on in a plain launch; a write into the array after the load faulted.
+
+**The loader's call.** `0x42A8D0` has one call, `0x42BD29` in `0x42BD10`, which runs it when
+`UNITINFOCount` is 0 or the reload flag `[main+0x14397]` is set and then clears the flag;
+`0x42BD10`'s one call is the state callback `0x496BB0`. The loader has two exits: `0x42B357` returns 1
+after the seal, and `0x42B200` returns 0 without it, when a unit file has no `[UNITINFO]` section
+(`0x42AC78`).
+
+**The sync.** The object is `[main+0x2A30]`: `+0x58` nonzero on the host, `+0x64` a disable flag, the
+per-peer records of 0x5C bytes at `[+0x14, +0x18)`, a tree of keys at `+4` (`0x46E9B0` finds,
+`0x46EF50` inserts), a circular list of keys at `+0x24` with its size at `+0x28`, and the joiner's
+cursor into the def array at `+0x60`. A peer's record holds the keys received from it (a vector,
+`[+8, +0xC)`), their values (`[+0x18, +0x1C)`), the count it announced (`+0x24`), and `+0x28` and
+`+0x2C`, which the status prints as `packets sent=%d  ackd=%d`. Its message is type `0x1A`, 14 bytes: the subtype at `+1`, a
+sequence at `+2`, the key at `+6`, a value or count at `+0xA`.
+
+- **The joiner's tick** (`0x46DD52`, in `0x46DAD0`, called from `0x44AF44`; about 220 times a second
+  in the measured lobby) sends subtype 1 with its number of types, then subtype 2 — a key and its value from `0x42A610` (`0x46DE28`) — for
+  **four types a tick** (`0x46DDFA..0x46DE95`, `cmp ebp,4` at `0x46DE8F`), and subtype 4 every tick
+  once the cursor passes the count (`0x46DEA3`).
+- **The host's receive** `0x46D6C0` finds the sender's record (linear over the peers) and switches on
+  the subtype (table `0x46D84C`): 1 stores the count (`+0x24`), 4 keeps the largest count (`+0x2C`),
+  and 2 (`0x46D748`), when the record has not seen the key (`0x46D755`, linear), appends the key and
+  value to the record's two vectors (`0x46E640`) and calls `0x46D970`. That finds the key in the
+  tree, or walks the defs for the first with the key (`0x46D9E3`) and fills its value, compares it
+  with the value each peer sent for the key (`0x46DA7A`), and calls `0x46D860`, which sends subtype 3 for the key to every
+  peer (`0x46D4C0`) and appends the key to the list unless the list holds it (`0x46D906`, linear).
+- **The joiner's receive** takes subtype 3 only (`0x46D7C0`): the key into its tree, then
+  `0x46D860`.
+- **The host's tick** (`0x46DAE4..0x46DD4A`) drops the records of players gone, makes records for
+  new ones, and when either happened runs `0x46D970` for every key in the tree (`0x46DD1E`).
+- **The room waits** until the peers' records are complete (`0x46E000`): the keys received number
+  the count announced, which must not be 0, and `+0x28` equals `+0x2C`. It skips a peer
+  `0x44FED0` does not find and one whose state byte `+0x73` is 2, or 3 with `+0x94` at 2. The
+  `+syncerr` chat command (the text compared at `0x448427`, `0x46DF40` called at `0x44843F`) says
+  which is missing: `No units_expected sent from player`, `expected %d units, got %d`, or the
+  packet counts.
+- The sequenced channel (`+0x2C`, receive `0x46CEF0`) answers subtype `0x65` with a resend from its
+  history (`0x46CF12`, linear); `0x46D500` is the unsequenced path into `0x46D6C0`.
+- **Other readers of the key.** The restriction screen's saved lists, `*.LST`, hold a key and a value
+  a type: `0x44B230` writes them and `0x44B140` reads them back, applying each to the first def
+  with the key (a walk from `defs + 0x387`, def 1's `+0x13E`, so a search for `0x13E` misses it).
+  `0x44C2B7`, the restriction pictures, reads it too. No save-game or in-game packet does.
+
+**What goes wrong.** A joining peer with two types of one key sends that key twice, the host keeps it
+once (`0x46D755`), and its record for the peer never reaches the count the peer announced: the
+battle room shows SYNCHING for good. On the host, a shared key answers with the first type that
+has it (`0x46D9E3`). MEASURED: 16 105 generated FBIs that differ only in their digits gave 9 991
+keys, the host's list of keys stopped at 10 269 of 16 383 (the checksum above, computed over the
+install's FBIs and the generated ones, gives the same count), and the join had not ended after 10
+minutes. The time a join
+takes is the joiner's pace, not the searches: at 16 383 types with unique keys, 20 s, the cursor at a
+steady ~880 types a second; at 64 a tick, 12.5 s; and a rejoin in the same processes, whose values
+`0x42A610` had already filled, under 2 s, while the host's record for the joiner was new and its
+searches ran again. So what a first join at the ceiling still costs is the value's file reads.
+Stock content joins in under 2 s.
+
+**The def array's order is the order the files were found in.** The loader's list comes from
+`0x4BCA30`: loose files first (the C runtime's find-first, `0x4E7DD0`), then the archives, which
+`0x41D4C0` opens as `rev31.GP3`, `*.CCX`, `*.UFO` and `*.HPI`, each pattern in the order the
+directory lists them (`0x4BC4B0`). Nothing sorts it before the game load (`0x42D4DC`, by name through
+`0x42DB60`); the menu-time load's end only fills the slot of a type it drops with the last def
+(`0x42B2A3..0x42B2BB`, through `0x42B370`). So two peers with the same files can hold the types in a different order: a
+different file system, a renamed archive, a loose copy of a file.
+
+**The fixes.** `fix_sync_keys` hooks the loader's call (`0x42BD29`): when it returns 1, the types are
+taken by key and then by name (`+0x20`, `strncmp` over its 32 bytes); in each group that shares a
+key the first keeps it, and each other type takes an FNV-1a hash of its name, moved on past every
+value a type holds or has been given. So every key is a function of the loaded types' names and
+natural keys, not of their order. The array is opened with `0x4D8780` for the writes and sealed again
+with `0x4D8710`. Types that do not collide keep their keys, so stock content is unchanged: the
+install's 821 FBI files, 278 names, share no key between two names. The pace, a raised-limits site:
+64 types a tick (`0x46DE91`). MEASURED: the colliding 16 105 re-keyed 6 114 types identically on
+both peers, and the join ended in 13 s. And 2000 colliding types split over two archives, every
+other type in each, the archive names swapped on the second peer so that every type sat at another
+index: a re-key by index gave 357 types a different key on each peer, and those 357 vanished from
+both at the start with no message; this one gives all 2000 the same key on both, and all remain.
+
+What the fix leaves:
+
+- **A peer without it** (stock TA, or a build before it) in a game with a mod whose keys collide:
+  as a joiner it stalls the room as stock does; as the host it holds no entry for the keys the
+  others were given, so `0x46D970` gives those types no verdict, and the types' availability can
+  differ between the peers. Every peer runs the same build (the raised limits' contract).
+- **A saved `*.LST` list** names a re-keyed type by its given key. That key is the first free value
+  from a hash of the name, so it moves when the types around it change: a type that held a value
+  in its run comes or goes, or a type with the same natural key and an earlier name arrives and
+  takes the natural key, re-keying the old keeper. The list's entry then applies to whichever type
+  holds the key. A list saved by stock gives a re-keyed type nothing, and in stock a shared key
+  applied to the first type with it.
+- **Two types with one name and one key** cannot be told apart by the sync either; which of them
+  keeps the key follows the def array's order.
 
 ## Built-in cheat/console command surface
 
@@ -4671,11 +4872,12 @@ The four pools above are raised tenfold by the limits block of `tagpu_patches.c`
 TADR's `EngineLimits.cpp` (prior art, [the TADR port](tadr-port/raised-limits.md)), and the
 particle layers, their object pool and the composite scratch frame with them, from its
 `LimitCrack.cpp`. They share **one table**
-with the unit limit's sites (*The per-player unit cap*), 75 sites in all, compared with the stock
+with the unit limit's sites (*The per-player unit cap*), the wreck pool's (*The wreck pool, and a
+feature paid for and left standing*) and the unit-type slots' below, 105 sites in all, compared with the stock
 bytes as a whole at `DLL_PROCESS_ATTACH` and written as a whole or not at all; a mismatch writes
 nothing and the first DirectDraw call shows the startup-failure report and exits. Every site below
 was read out of the pristine image, and the evidence for each is in
-[the evidence pass](tadr-port/limits-evidence.md) §1–4, §7 and §10. Landing reviewers checked the sites
+[the evidence pass](tadr-port/limits-evidence.md) §1–4, §7, §8 and §10. Landing reviewers checked the sites
 against the image byte for byte.
 
 **Projectiles, 300 → 3000.** The pool stays the engine's, allocated per game:
@@ -4858,6 +5060,41 @@ passes draw there, and the GDI lane shows what they leave) and the 2× bake's ca
   600². On the GDI lane the nanoframe ladder (`scenarios/nanoframe-ladder.json`) looks the same
   on both builds: every pixel that differs lies inside the nanoframes, and stock against raised
   differs by the same 10 733 pixels as two frames of one run a second apart, the build-state pulse.
+
+**Unit-type slots, 512 → 16 384** [DISASSEMBLED 2026-09-24; MEASURED 2026-09-24]. A category mask is
+one bit a type: 0x40-byte heap blocks the name map `0x488C50` allocates (`push 0x40; call 0x4B4F10` at
+`0x488CC2`) and clears (`0x488CD3`), ORs (`0x488E3E`), sets a type's own bit in (`0x488E03`, and at game
+start `0x488E70` from `0x42D6C2`), and 0x40-byte stack masks in the AI plan's `Weight` and `Limit`
+commands (`0x406DB0`, `0x406E40`, filled by `0x488D30`) and in Ctrl-Z (`0x48BE00`). Every reader
+indexes one by a type ID below the def count, and nothing else sizes them. The 17 sites: the heap
+allocation (a stub, since `push 0x40` has no room for 2048), its clear and OR counts, and in each
+stack frame the entry, the clear count, the displacements above the mask and the release — the mask
+sits at the frame's foot with at most one dword under it, so it grows upward over the frame and only
+the displacements above it move (`0x406DB5`, `0x406DBE`, `0x406DC9`, `0x406DFD`, `0x406E3A`; `0x406E45`,
+`0x406E52`, `0x406E5D`, `0x406E64`, `0x406EB2`, `0x406ED6`; `0x48BE08`, `0x48BE22`, `0x48BF1E`). A
+0x804-byte frame is inside one page, so no probe is needed.
+
+- **The count check**, `0x42AA65` in the menu-time loader `0x42A8D0` (`inc ebx; mov edx,[main]`, ebx
+  the files found): a call to a stub that refuses more than 16 384 slots with a dialog and
+  `ExitProcess(1)`, before the def array is allocated from the count (`0x42AA8A`). Every later count
+  is that array's: `0x42B2F6`, `0x42D542` and `0x42BD02` only shrink or zero it. MEASURED: 16 106
+  generated types (16 384 real) show the dialog and exit on OK, with no `ErrorLog.txt`.
+- **The join's pace**, `0x46DE91`: the joiner's unit-sync checksums go 64 types a tick instead of 4
+  (*The unit sync's keys, and the join's pace*).
+- **The engine requires the FBI's `Copyright` key.** `0x42B0E2..0x42B162` compares it with the
+  template at `0x5038CC`, the year masked; a mismatch clears def `+0x241` bit 23, and the game load
+  then skips the type (`0x42D224`). A generated FBI without the line is counted and never loaded.
+- **Which Ctrl-letters read a mask.** The in-game key table (`0x496694` indexes `0x4965F4`): Ctrl+A
+  (code `0xAA`) selects everything (`0x4963CE` → `0x48BD50`), Ctrl+C the commander (`0x4963FE`), Ctrl+Z
+  every unit of the selected types (`0x496413` → `0x48BE00`), and Ctrl+B and Ctrl+E..Y but S select by
+  the category `CTRL_<letter>` (`0x4963D8` formats it and calls `0x48BF30`). Stock units carry the
+  categories B, C, F, P, R, V and W.
+- **MEASURED**, Core Prime Industrial Area: at IDs 512 and 543, the previous build's Ctrl-Z returns
+  to `0x80496419` (a return address with bits set by the overrun) and an AI `Weight` line naming ID
+  543 faults at `0x804B79DB` during the load, while ID 512 alone mis-returns silently; this build
+  selects every generated unit by Ctrl+G and by Ctrl-Z. At the ceiling, 16 383 real types:
+  `UNITINFOCount` reads 16 384, a `Weight` line naming ID 16 383 loads, and Ctrl+G and Ctrl-Z each
+  select all 10 generated units.
 
 **What it measured, 2026-09-23.** Single player, `scenarios/limits-flood.json` (450 Merls against
 450 Diplomats): the engine's own counts peaked at **687 projectiles** and **1727 explosions**, and

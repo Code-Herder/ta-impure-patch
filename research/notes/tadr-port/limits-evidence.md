@@ -348,7 +348,7 @@ loop and Ctrl-Z.
   (`0x4092F6`, `0x409470`).
 
 Some structures use no type index at all. The restriction store and the unit sync are maps keyed
-on the FBI's CRC at def `+0x13E` (`0x46E330`, `0x46D0E0`), and the per-player count of a type is a
+on the FBI's checksum at def `+0x13E` (`0x46E330`, `0x46D0E0`), and the per-player count of a type is a
 scan (the unit constructor `0x485F50`).
 
 On the wire, the unit create at `0x45605E` carries a `u16`. The `0x2C` builder (`0x48B710`)
@@ -402,15 +402,21 @@ thread) builds one 0xBD-byte record per `download\*.tdf` file.
 0x487811`), resolved on load through `0x488B10` (`0x487183`). Build orders use `UTYPENAME%4d`
 (`0x43ABF8`, `0x43A757`), and features are saved by name too. Neither ceiling reaches the format.
 
-**The unit sync (`0x1A`) is keyed on the FBI's CRC, never the type.** Trees, vectors and lists
-(`0x46EF50`, `0x46E9B0`, `0x46E640`), per-peer records of 0x5C bytes, dword counters.
+**The unit sync (`0x1A`) is keyed on a checksum of the FBI, never the type.** Trees, vectors and
+lists (`0x46EF50`, `0x46E9B0`, `0x46E640`), per-peer records of 0x5C bytes, dword counters. The key
+is `0x4B6BA0`'s four 8-bit lanes of byte sums and xors, not a CRC, and two types can share one; the
+engine map's *The unit sync's keys, and the join's pace* has the protocol, measured in
+[A′2](content-ids.md).
 
-- Each message is 14 bytes: the type, a subtype, fill, the CRC at `+6`, then status and an `i16`
-  limit.
-- A join walks every def (`0x46DD1E`) and sends one subtype 3 per def per peer (`0x46D860`); the
-  peers also exchange one subtype-2 CRC per def.
-- Its matching is linear (`0x46D755`, `0x46D9E3`, `0x46DA7A`, `0x46D906`), so a join costs on the
-  order of N²·P compares. Unmeasured.
+- Each message is 14 bytes: the type, the subtype at `+1`, a sequence at `+2`, the key at `+6`,
+  then a value or a count at `+0xA`.
+- The joiner sends one subtype-2 key and value per def, four defs a lobby tick (`0x46DE8F`); the
+  host answers each new key with a subtype 3 to every peer (`0x46D860`), and when a player comes or
+  goes runs the same for every key it holds (`0x46DD1E`).
+- Its matching is linear (`0x46D755`, `0x46D9E3`, `0x46DA7A`, `0x46D906`), on the order of N²·P
+  compares, but that is not what a join costs: MEASURED at 16 383 types, the joiner's pace and the
+  values' first computation (`0x42A610`, which reads files) are the time, and a rejoin with the
+  values filled takes under 2 s.
 - TADR's `.tad` format keeps all of them in one record with a `u16` length (SRC,
   `Docs/saveformat.txt`), which overflows above about 2 340 types.
 
@@ -452,6 +458,10 @@ thread) builds one 0xBD-byte record per `download\*.tdf` file.
   - A stock game on the current build commits 196 MB.
   - **200 synthetic types** (the stock Peewee's FBI and COB under new names) **added 3.3 MB
     committed and 0.7 s of scenario load: 17 KB and 3.6 ms a type.** The engine's count read 479.
+  - **The ceiling** ([A′2](content-ids.md), lighter generated types with a small script of ours):
+    16 105 types added 108.9 MiB of the engine's live bytes and 21.4 s of scenario load, 7 092
+    bytes and 1.3 ms a type, and two games in one process loaded at 1280×1024, 1920×1080 and
+    3840×2160 (gpu-status §2.6b).
   - A 32-bit process with the Vulkan stack loaded allocated **1439 MB** of heap before failing, in
     every band below 2 GB. That includes the 0x20000000 and 0x40000000 regions `VirtualQuery`
     reports as reserved: they are Wine's own reservations, which it hands out to ordinary
@@ -468,9 +478,10 @@ use is fine.
 
 **Our code:**
 
-- `src/tagpu_weapons.c` `WPN_MAXDEFS 4096`: a type past it keeps three weapons, with a log line.
-- `src/tagpu_weapons.c` `mask_has()` reads `mask[type >> 5]` with a `u16` type from the unit's
-  `+0xA6` and no bound. Bounded masks are the A′ plan's.
+- `src/tagpu_weapons.c` `WPN_MAXDEFS` was 4096, so a type past it kept three weapons, with a log
+  line; it is `TAGPU_LIM_TYPES` since A′2.
+- `src/tagpu_weapons.c` `mask_has()` read `mask[type >> 5]` with a `u16` type from the unit's
+  `+0xA6` and no bound; since A′2 a type at or past `TAGPU_LIM_TYPES` is in no mask.
 - `src/tagpu_cat.c` `MAX_DEFS 16384` caps only the catalogue file.
 - Already bounded: `tagpu_scenario.c` `unit_type_index` refuses a count above 16 384;
   `model_root` requires `n <= 0x10000`; the packet's `model_id`, `type_row` and `PK_BUILD.type` are
@@ -797,7 +808,7 @@ read with every peer paused — two and a half stock pools, and 36 % of this one
 | units/player 500→1500 | **SIM**, host-broadcast | per game | 3 immediates + `0x44CAFE` | **two `maxunits` paths (`0x432646`, `0x436037`), unclamped**; **`0x44CAFE` is a per-type sentinel (101), a real cap after a cancelled restriction menu** | design slots, 15 001 since landing 2; scenario `OFF_LIMIT` | beyond the design point: truncation |
 | pathfinding 1333→66650 | sim, owner-local (INF) | per game (map init) | 1 dword, blind | none | none | CPU per tick |
 | SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | the walk's layer bound (drops whole layers), `MAX_PART`, the effects pass's sprite bucket; all follow since landing 3 | about 15 MB |
-| unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | none (all 116 `mov r,0x10` classified; ctrl-A/B/C/F only read masks); the separate `CANBUILD` overflow `0x42D971` | `WPN_MAXDEFS 4096`, `mask_has` unbounded, the unit pass's caches | mods only; planned in [A′](content-ids.md) |
+| unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | none (all 116 `mov r,0x10` classified; ctrl-A/B/C/F only read masks); the separate `CANBUILD` overflow `0x42D971` | `WPN_MAXDEFS` and `mask_has` follow the cap, the unit pass's caches | mods only; **done at 16 384** in [A′2](content-ids.md), with the unit sync's keys made unique |
 | weapon IDs 256→4096 | **SIM + wire** | per level (`0x4918BB`) | 4 hooks + chat-hijack packet | ID < 0 unguarded (stock); `0x0E` and `0x0F` still 8-bit; the model path | `OFF_WEAPON0`, two extra-weapons splices | needs every peer; off in mainline; planned in [A′](content-ids.md) |
 | composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **four writers never compare with the allocation** (the build-state copy, the frame copy, the shadow build, the 2× bake), and the shadow's compression writes a fifth; the rasterisers under them hold 800 or 2048 rows | none | 3.28 MB a level, up to 8 MB grown; bounded by area and rows in [landing 7](raised-limits.md#the-landings) |
 | MixingBuffers 8→128 | audio | per process (registry load) | none (launcher writes REG) | **the engine tracks 32; past it a sound plays untracked** | the impure.cfg store's loader observer, bounded to 32 | none |

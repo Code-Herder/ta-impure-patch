@@ -2080,17 +2080,18 @@ live, commander selected on Two Continents at type 1: a left click on ground wal
 the clicked point, and the same click with `tagpu_curs.off` deselected it and moved nothing. The
 full path is `exe-reverse-engineering.md` §"The in-game mouse buttons".
 
-### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–6
+### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–7 and A′2
 
 **What it is.** TA's limits, raised the way TADR raises them, as our own C: projectiles
 300 → 3000, explosions 300 → 3000, flying pieces 100 → 1000, debris records 300 → 3000, units a
 player 250 (default) / 500 (ceiling) → 1500 / 1500, the pathfinder's budget 1333 → 66 650, and
 particles 400 → 20 480 a layer from a pool of 1000 → 204 800 objects, the composite
-scratch frame 600² → 1280², and the wreck pool 2048 → 8192 records, which TADR does not raise
-(landing 6; its full-pool defect is §2.6c's fourth fix). The engine's simultaneous sounds are not a
+scratch frame 600² → 1280², the wreck pool 2048 → 8192 records, which TADR does not raise
+(landing 6; its full-pool defect is §2.6c's fourth fix), and unit-type slots 512 → 16 384
+([A′2](tadr-port/content-ids.md)), with the network join's pace that the raise makes slow. The engine's simultaneous sounds are not a
 site: they are the settings store's `mixingbuffers`, held to 32 (below).
 Planned in [the TADR port](tadr-port/raised-limits.md); every site is in the engine map, *The raised
-effect pools* and *The per-player unit cap*.
+effect pools* (its *Unit-type slots*) and *The per-player unit cap*.
 
 | What | Sites | Mechanism |
 |---|---|---|
@@ -2109,6 +2110,9 @@ effect pools* and *The per-player unit cap*.
 | the particle pool | `0x471C83`, the `push` in the C runtime's static initializer `0x471C80` | 1000 → 204 800, built at that size because DllMain runs first |
 | the composite scratch frame | `0x45819B` (width), `0x458196` (height), the two `push 0x258` in `0x458180` | 600 → 1280 each; one frame a level at `*(main+0x1437B)+0x10`, where it starts: §2.6c's composite fix bounds its writers and grows it |
 | the wreck pool | `0x421F2A` (bytes), `0x421F41` (the clear's dwords), `0x421F7A` (the free-list loop's end), `0x421F97` (the last record's offset); the "no record" count at `0x4232B9`, `0x42340E`, `0x42343A`, `0x42361E`, `0x42364D`, `0x423DBA`, `0x423DE1` | 2048 → 8192 records of 0x30 (and the offsets with them); the fork's `WR_COUNT` and the packet's wreck table are the same constant |
+| the category masks | the heap mask's allocation `0x488CC2` (a stub: `push 0x40` has no room for 2048), clear `0x488CD3` and OR `0x488E3E`; the stack masks' frames in the AI's `Weight` (`0x406DB5`, `0x406DBE`, `0x406DC9`, `0x406DFD`, `0x406E3A`), `Limit` (`0x406E45`, `0x406E52`, `0x406E5D`, `0x406E64`, `0x406EB2`, `0x406ED6`) and Ctrl-Z (`0x48BE08`, `0x48BE22`, `0x48BF1E`) | 0x40 → 2048 bytes; each frame's mask sits at its foot, so the entry, the clear count, the displacements above the mask and the release move, through stubs |
+| the unit-type count | `0x42AA65`, before the def array is allocated from the count | a `call` to a stub that refuses more than 16 384 slots with a dialog and `ExitProcess(1)` |
+| the network join's pace | `0x46DE91` | the joiner's unit-sync checksums 4 → 64 types a lobby tick |
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
@@ -2191,6 +2195,26 @@ second, median 36**, and the publisher's own cost is past its histogram's 512 µ
 sample — how much of the game thread's frame is ours and how much is the engine's is not
 measured.
 
+**Unit types, measured 2026-09-24** (`tools/unittypes_fixture.py`: generated kbots on the Peewee's
+model with one small script of ours, Core Prime Industrial Area). At the ceiling, 16 105 generated
+types and the 278 stock: the scenario load at 1280×1024 took 43.1 s against stock's 21.7 s, 1.3 ms a
+type, and the engine's live bytes (`[0x5289F8]`) grew by 108.9 MiB, 7 092 bytes a type. Two games in
+one process at each resolution, the second started through the menu, in MiB (the address space
+walked with `VirtualQueryEx` from inside the prefix):
+
+| resolution | engine live, game 1 | engine live, game 2 | committed, game 1 | largest free region, game 1 |
+|---|---|---|---|---|
+| 1280×1024 | 173.9 | 165.6 | 426.1 | 83.6 |
+| 1920×1080 | 184.1 | 177.5 | 441.1 | 62.4 |
+| 3840×2160 | 267.3, the 102.8 MiB work ring included | 260.8 | 563.7 | 4.1 |
+
+Without the mod, at 1280×1024: 65.0 MiB live, 308.9 committed. The free regions are small because
+Wine reserves about 1.5 GiB of the 2 GiB and hands it out on demand; both games at 4K got their
+ring out of it. A 32-bit process with the Vulkan stack can still allocate 1.44 GB
+(limits-evidence §8), so a mod of heavier types fits less, and past that says so (§2.6c). 16 384
+real types show the refusal and exit. A first two-peer join at the ceiling takes 20 s at stock's
+pace and 12.5 s at ours.
+
 **Sounds: 32, through the store, not a site.** `mixingbuffers` in `impure.cfg` (renderers.md
 2.10b) is 32 by default and one of 8, 16, 24 or 32. `tagpu_menu.c`'s `eng_push_mixing` writes it
 into the sound object's `+0x2C` after every registry load (`0x42F9A0`), where the loader has just
@@ -2270,14 +2294,17 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 
 ### 2.6c The stock engine's own defects (`tagpu_patches.c`, always on)
 
-**What it is.** Four places where the retail image writes or reads memory it does not own (the
+**What it is.** Six places where the retail image writes or reads memory it does not own (the
 third also leaves a strip of the viewport unpainted, which the same patch paints; the fourth is the
-composite scratch frame's five writers and the rasterisers' span tables under them), one where it
-takes a player's payment and does not deliver (a feature reclaimed or destroyed while the wreck pool
-is full), and one where it takes it twice (a feature reclaimed through a cell that is not its
-anchor while it plays its sequence), patched at every attach by `patch_engine_defects()` at the end of `tagpu_apply_patches()`.
+composite scratch frame's five writers and the rasterisers' span tables under them; the fifth and
+sixth are a builder's build list and the download menus' records, which a large mod reaches), one
+where it takes a player's payment and does not deliver (a feature reclaimed or destroyed while the
+wreck pool is full), one where it takes it twice (a feature reclaimed through a cell that is not its
+anchor while it plays its sequence), one where a network game can never start (two unit types with
+one unit-sync key), and the out-of-memory text, which blames the disk. They are patched at every
+attach, in both builds, by `patch_engine_defects()` at the end of `tagpu_apply_patches()`.
 Each patch is the identity on every input stock handles correctly. Each site is compared with its
-stock bytes and skipped alone, as §2.6's rows are: the six are independent, and any one alone is
+stock bytes and skipped alone, as §2.6's rows are: the ten are independent, and any one alone is
 still the identity wherever stock is correct. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
@@ -2290,6 +2317,10 @@ engine defects we patch".
 | `0x423651` | `FeatureDie 0x423550`'s pool-full `jge 0x4236F7`, which returns without swapping the feature while its callers have already paid (the reclaim `0x4237D0`) or told the other peers | the `jge`'s 6 bytes retargeted (opcode `0x3D` at `0x42364C` compared too; its operand is the limits table's) to a stub that reloads `x`/`y` from the arguments and joins `0x4236EF`, the engine's own swap for a feature with no sequence |
 | `0x423892` | the reclaim completion `0x4237D0`'s test that a GAF feature is already playing its sequence, which reads the flags of the cell the builder aimed at while `FeatureDie` marks only the anchor | `tagpu_detour_land` over the 6-byte `test`/`je`, compared first. The stub resolves a `0xFFFE` cell to its anchor exactly as `0x423845..0x423862` does, tests the anchor's bit 0, and rejoins at `0x4238AD` (pay) or `0x423898` (the def's GAF test) |
 | `0x458B87`, `0x45A470`, `0x45A7B9`, `0x459875`, `0x459CB5`; the calls at `0x459608` and `0x4596D8` | the composite scratch frame's writers — the build-state copy `0x4589C0`, the frame copy, the shadow build, the 2× bakes `0x459830`/`0x459C70` — each of which sizes `*(main+0x1437B)+0x10` to a unit with no compare against its area, and hands it to rasterisers whose span tables hold 800 or 2048 rows; and the cargo merge `0x4B90A0`, which paints a carried unit into it with no right or bottom clip | all seven sites compared first and written together or not at all (a failed write puts back the ones written). Each check stub runs a C check between `pushad` and `popad`: a need that fits runs the stolen bytes; one that does not grows the frame (the engine's own allocator path by hand, up to 2048 × 2048); a refused grow takes the writer's fallback — the unit not drawn that frame (a flag, and a wrapper on the call at `0x459608` that leaves through `0x4597D8`), a 1 × 1 key-pixel frame, or the bake's 1× path. The merge's call goes through a `jmp` stub to `scratch_merge`, a `__stdcall` that clobbers only what `0x4B90A0` does, and runs `0x4B90A0` only when the cargo's rectangle lies inside the scratch's header box and that box inside the area, and otherwise leaves the cargo out of that frame's composite. Levers `tagpu_scratch.stress` (which also points a freed frame's planes at `0x80000000`, where nothing is mapped), `tagpu_scratch.nogrow` |
+| `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | a builder's build list: the game load's shared `TEMP UTYPE LIST` and each builder's copy at def `+0x156` hold 30 entries, the append and the download appender `0x42BE30` write past them | three `call`s to stubs that grow a block through `0x4D83B0` before the entry that would not fit (`bl_room`: 30, then powers of two from 64), a `jmp` past the copy's `rep movs`, the appender's cap NOPped |
+| `0x42DD74`, `0x42DDF0`, `0x42DE12`, `0x42DF23`, `0x42DF35`, `0x42E0B9` | the download menus' records, one of five entries a file at `[main+0x391CB]`, filled with no cap | the block from a zeroing allocator; a file continues into records at the block's end, which grows; stock's count write NOPped; the next file's record by index; the page count reads the record count; the downloadable check reads the files' own records only |
+| `0x49E700`, `0x49E7BD`, `0x49E7CD`, `0x49E7F4` | the allocator's new handler's text, "Your hard disk may be full" | a call at the handler's entry writes our text into a static; the three reads point at it |
+| `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys all but the first by name of each group of types sharing a key, to a hash of the name moved past every held value, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
 exactly as stock does for every slot inside the list. The plot guard writes nothing. The terrain
@@ -2306,21 +2337,42 @@ the hover *right*. They are no longer what keeps the game alive. The composite s
 the engine's scratch frame, which is the engine's to write: on a grow it allocates the new block,
 copies the header and both planes, repoints `ctx+0x10` and frees the old one; on a fallback it
 writes a 1 × 1 header and one pixel of each plane. It is drawing state, not simulation state, so it is
-not in §2.5 either.
+not in §2.5 either. The build list and the download records write the engine's own load-time heap
+blocks, as stock does, only larger; what a builder and the AI then read past stock's 30 entries is
+content. The out-of-memory text writes our static. The unit sync's keys are engine state, and
+content: the keys depend on the types' names and natural keys only, not on the order the files
+were found in, so two peers with the same files compute the same keys and it changes nothing the
+peers can disagree on; stock content, whose 278 names share no key, is not re-keyed.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
 reclaim tests the anchor's mark 0x423892 ARMED; composite scratch bound (0x4589C0 0x45A470 0x45A790
-0x459830 0x459C70 0x4B90A0) ARMED`, and every grow or refusal of the frame logs its own line
+0x459830 0x459C70 0x4B90A0) ARMED; whole build lists (0x42DA58 0x42DAC7 0x42BEC3) ARMED; download
+menus past five entries (0x42DCF0) ARMED; the out-of-memory text (0x49E700) ARMED; unique unit sync
+keys (0x42BD29) ARMED`, and every grow or refusal of the frame logs its own line
 (`enginefix: composite scratch grown|refused (<reason>) for <writer>: N px in R rows asked, A held, P
-now`, and `composite scratch merge refused: a WxH cargo at (x,y) is past the WxH frame`). A
+now`, and `composite scratch merge refused: a WxH cargo at (x,y) is past the WxH frame`); a load
+that re-keys logs its first eight types and a total (`enginefix: unit sync keys: N of M types
+re-keyed`). A
 site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
 `SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
-place of `ARMED`; a stub whose site cannot be written is released. There is no switch: all six
+place of `ARMED`. The first six fixes release a stub whose site cannot be written; the last four
+share one page of stubs, which stays. There is no switch: all ten
 fixes are installed on every launch, `tagpu_defaults.off` included.
 
 **What it does not cover:**
 
+- A first network join at 16 383 types still takes about 12.5 s: the joiner's pace is raised
+  (§2.6b), and what is left is the engine filling each type's unit-sync value on first use
+  (`0x42A610`, which reads the type's script and GUI files). A rejoin in the same processes takes
+  under 2 s. The 64-a-tick pace was measured between two instances on one machine, not over a
+  lossy or slow link; it sends the same messages as stock, sixteen times as fast.
+- A peer without the key fix, in a game with a mod whose keys collide, stalls the room as a joiner,
+  as stock does, and as the host gives the re-keyed types no verdict, so their availability can
+  differ between the peers: every peer runs the same build. A restriction list saved (`*.LST`,
+  keyed on the key) names a re-keyed type by its given key, the first free value from a hash of its
+  name, which moves when the types around it change; the entry then applies to whichever type holds
+  the key.
 - A unit's own frame, which the 1× bakes draw into through the same rasterisers, is sized by the
   model alone, so a model more than 800 rows tall still overflows the 800-row span table, with the
   fix as in stock. No stock unit is near it (the tallest is 239 rows). The engine map's *The

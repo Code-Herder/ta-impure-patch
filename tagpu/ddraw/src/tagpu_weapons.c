@@ -13,6 +13,7 @@
 #include "tagpu_weapons.h"
 #include "tagpu_opt.h"
 #include "tagpu_log.h"
+#include "tagpu_limits.h"
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -27,7 +28,7 @@ typedef int            i32;
 
 #define WPN_CAP      16          /* compile-time capacity: slots 0..15        */
 #define WPN_SIDE     (WPN_CAP - 3)
-#define WPN_MAXDEFS  4096        /* unit types the def side table can hold   */
+#define WPN_MAXDEFS  TAGPU_LIM_TYPES   /* one record per unit-type slot the build plays */
 #define WPN_FLAG     "tagpu_weapons.on"
 #define WPN_TRIGGER  "tagpu_weapons.trigger"
 #define WPN_JSON     "tagpu_weapons.json"
@@ -194,8 +195,11 @@ static u32* def_mask(const char* def, int i)
     return r->mask[i - 3];
 }
 
+/* a category mask holds TAGPU_LIM_TYPES bits (tagpu_patches.c sizes the engine's); the type
+   comes from a unit's +0xA6, so it is bounded here rather than trusted */
 static int mask_has(const u32* mask, u16 type)
 {
+    if (type >= TAGPU_LIM_TYPES) return 0;
     return (mask[type >> 5] >> (type & 31)) & 1;
 }
 

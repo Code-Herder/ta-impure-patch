@@ -127,6 +127,34 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
   Connection For DirectPlay* **by name, never by row number** — it is row 0 under wine's builtin
   DirectPlay and row 3 under the native one.
 
+## Many unit types: the synthetic mod
+
+The build has 16 384 unit-type slots, stock 512 (`research/notes/tadr-port/content-ids.md`).
+`tools/unittypes_fixture.py` writes a mod of N generated kbot types, `SYN00001`…, each an FBI of
+its own on a stock model and one small compiled script:
+
+```bash
+tools/unittypes_fixture.py tagpu/instances/u1/gamedir/zzsyn.ufo --types 16105 \
+    --builder ARMLAB --download 12 --ctrl G      # 16 105 reaches ID 16 383, the ceiling
+rm -f tagpu/instances/u1/catalogue.json          # the cached type list is now stale
+tools/tacli log u1 -g "enginefix|limits"
+```
+
+- **The download buttons are not on a numbered page.** A builder's download entries live on the
+  `ARMDL` GUI pages, which `ui --page` does not reach: open the builder's menu and walk with
+  `ARMNEXT`. `--builder ARMLAB` puts them in the Kbot Lab, which builds kbots; a commander's
+  download button for a kbot arms nothing.
+- `--ctrl G` gives the types the category `CTRL_G`, so Ctrl+G selects exactly them.
+- **A network game needs the same `.ufo` in every peer's gamedir.** The battle room shows
+  SYNCHING while the joiner sends its types, 64 a tick: about 12.5 s at the ceiling the first
+  time, under 2 s on a rejoin.
+- `--raw-keys` gives thousands of types one unit-sync key, which stock never ends the join on;
+  the build re-keys them at load and logs `unit sync keys: N of M types re-keyed`. Stock content
+  logs no re-key. `--part K/N` writes every Nth type from the Kth, so a mod splits over archives
+  whose types interleave: two peers holding the parts under swapped archive names load the types
+  in another order, and must still agree on every key. `--pad KB` inflates every script so a mod exhausts the address space: the
+  out-of-memory message's test.
+
 ## The render-options screen and the GPU row
 
 `tagpu_menu.c` adds our rows to **Options → Visuals**: the frame-rate readout (`VFPS`), the GPU
