@@ -91,8 +91,11 @@
    a restore list, `restore_want` has this pass's restore job paint `s_arImg`
    from the base atlas, and binding 42 samples it. Until the job has
    painted a frame of the current generation the pass draws the base atlas
-   with `uRestored` 0 (see `prepare`), decided after the job has run, so a
-   recycle's frame draws the base atlas too.
+   with `uRestored` 0 (see `prepare`), decided after `restore_want`, which
+   makes and feeds the job -- the job itself paints in
+   `tagpu_vk_restore_step`, after every pass's prepare -- so a recycle's
+   frame draws the base atlas too, and binding 42 names the twin only on the
+   frames it is a picture (`twin_bind`).
 
    THE EFFECTS *MODELS* ARE NOT THIS PASS. RenderType 1/3/6 projectiles are
    emitted as 3DO nodes by tagpu_native.c, not into tagpu_fx.c's buckets.
@@ -847,19 +850,18 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
         wr[0].dstSet = s_slot[i].dset; wr[0].dstBinding = 45; wr[0].descriptorCount = 1;
         wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         wr[0].pImageInfo = &ib;
-        /* BINDING 42 IS uAtlasRGB AND IT NAMES THE RESTORED ATLAS'S IMAGE;
+        /* BINDING 42 IS uAtlasRGB AND STARTS ON THE BASE ATLAS'S VIEW;
            BINDING 44 IS uScaf AND IS THE BASE ATLAS'S VIEW AS A PLACEHOLDER.
-           The difference is which branch is reachable: this pass draws
-           restored frames, so 42 has to be the real thing, while `uScafOn` is
-           0 on every draw (see the file header), so nothing ever samples 44. A
-           placeholder is legitimate only where nothing samples it -- a
-           descriptor must be VALID for the set to bind, and naming the image
-           already here costs no memory and no second object. 42 falls back to
-           it when the restored image could not be created, and `uRestored` 0
-           then keeps its branch unreachable too. The scaffold's image being
-           shared is what would make 44 stop being a placeholder. */
+           42 is the restored twin's on the frames the twin is a picture --
+           `twin_bind` points it there per slot -- and the base's until then,
+           because the twin was just made and is UNDEFINED; `uRestored` 0 keeps
+           its branch unreachable on those frames. `uScafOn` is 0 on every draw
+           (see the file header), so nothing ever samples 44. A placeholder is
+           legitimate only where nothing samples it -- a descriptor must be
+           VALID for the set to bind, and naming the image already here costs
+           no memory and no second object. The scaffold's image being shared is
+           what would make 44 stop being a placeholder. */
         irgb = ib;
-        if (s_arView) irgb.imageView = s_arView;
         wr[1] = wr[0]; wr[1].dstBinding = 42; wr[1].pImageInfo = &irgb;
         wr[2] = wr[0]; wr[2].dstBinding = 44;
         vkUpdateDescriptorSets(d->dev, 3, wr, 0, NULL);
@@ -1159,6 +1161,26 @@ static void fx_scissor(uint32_t w, uint32_t h)
     s_scX = x0; s_scY = y0; s_scW = ww; s_scH = hh;
 }
 
+/* BINDING 42 NAMES THE TWIN ONLY WHILE IT IS A PICTURE -- tagpu_vk_feat.c
+   `twin_bind`, which has the argument: the twin is made UNDEFINED and only
+   the job's OUT leaves it SHADER_READ_ONLY, `s_arHave` is exactly "it has",
+   and the flag is decided from the same `s_arHave`. Per slot, on every
+   prepare that draws, after the flag. */
+static void twin_bind(const TAGPU_VKPASS* d, const SLOT* s)
+{
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet wr;
+    memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
+    ii.sampler = s_samp;
+    ii.imageView = (s_arView && s_arHave) ? s_arView : s_bView;
+    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet = s->dset; wr.dstBinding = 42; wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wr.pImageInfo = &ii;
+    vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
+}
+
 static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     TAGPU_FXHAND h;
@@ -1334,14 +1356,13 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
 
     /* CAN THIS FRAME DRAW RESTORED? DECIDED HERE, AFTER `restore_want`, for
        tagpu_vk_feat.c's reason: this atlas recycles in play, every recycle is
-       a new generation, and `restore_want` replaces the job on it -- while
-       binding 42 names the twin whatever it holds and the new job clears it
-       only at its first draw. A flag decided before that would have the
-       recycle's frame draw the new sprites through the OLD sprites' restored
-       texels at their recycled rects. Read here, it is the state this frame's
-       draw samples: a frame LIST published, the image there, and `s_arHave`
-       -- cleared by every path that disowns the twin -- saying a frame of
-       this generation is painted.
+       a new generation, and `restore_want` replaces the job on it. A flag
+       decided before that would have the recycle's frame draw the new
+       sprites through the OLD sprites' restored texels at their recycled
+       rects. Read here, it is the state this frame's draw samples: a frame
+       LIST published, the image there, and `s_arHave` -- cleared by every
+       path that disowns the twin -- saying a frame of this generation is
+       painted. `twin_bind` below names binding 42 from the same `s_arHave`.
 
        A FRAME WITHOUT ONE IS DRAWN, from the base atlas, not returned from:
        the restore needs this frame's base atlas uploaded before it can paint
@@ -1360,6 +1381,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         }
         h.restored = 0;
     } else s_saidRestored = 0;
+    twin_bind(d, s);
 
     /* THE THREE SMALL IMAGES, per slot, so the one-line invariant covers them:
        UNDEFINED in, because the whole of each is re-sent every frame and there

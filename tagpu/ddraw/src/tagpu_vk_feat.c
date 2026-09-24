@@ -103,11 +103,13 @@
    `restoreFrames`), `restore_want` feeds this lane's own restore job
    (tagpu_vk_restore.h), which paints the RGBA8 twin at binding 40 from the
    base atlas. Until the job has painted a frame, a frame with `uRestored`
-   1 is drawn from the base atlas with `uRestored` 0 (`prepare`), and the
-   flag is decided after the upload and the job have run, so a frame whose
-   upload or job took the twin away draws the base atlas too. That is not
-   latched: it clears by itself within a few frames of the restorer
-   starting.
+   1 is drawn from the base atlas with `uRestored` 0 (`prepare`). The flag is
+   decided after the upload and after `restore_want`, which makes and feeds
+   the job -- the job itself paints in `tagpu_vk_restore_step`, after every
+   pass's prepare -- so a frame whose upload or `restore_want` took the twin
+   away draws the base atlas too, and binding 40 names the twin only on the
+   frames it is a picture (`twin_bind`). That is not latched: it clears by
+   itself within a few frames of the restorer starting.
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
    A PASS READS NO ENGINE STATE: every value comes from the gather's
@@ -802,14 +804,12 @@ static int atlas_build(const TAGPU_VKPASS* d, int dim)
         wr[0].dstSet = s_slot[i].dset; wr[0].dstBinding = 42; wr[0].descriptorCount = 1;
         wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         wr[0].pImageInfo = &ib;
-        /* BINDING 40 IS uAtlasRGB, AND IT NAMES THE RESTORED TWIN'S OWN
-           IMAGE: the branch that samples it is reachable, so the binding has
-           to be the real thing. When the image could not be created it is the
-           base atlas's view as a placeholder -- a descriptor must be VALID for
-           the set to bind, and `uRestored` 0 then keeps the branch
-           unreachable. */
+        /* BINDING 40 IS uAtlasRGB, AND IT STARTS ON THE BASE ATLAS'S VIEW:
+           the twin was just made and is UNDEFINED. `twin_bind` points it at the
+           twin, per slot, on the frames the twin is a picture; a descriptor
+           must be VALID for the set to bind, and `uRestored` 0 keeps the branch
+           that samples it unreachable until then. */
         irgb = ib;
-        if (s_arView) irgb.imageView = s_arView;
         wr[1] = wr[0]; wr[1].dstBinding = 40; wr[1].pImageInfo = &irgb;
         vkUpdateDescriptorSets(d->dev, 2, wr, 0, NULL);
     }
@@ -1007,7 +1007,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
 }
 
 /* A REFUSED PASS GIVES ITS RESTORE JOB BACK AT ONCE, not at the teardown the
-   seam pays frames later. A refusal can be a banded upload the device failed
+   seam pays at the top of the next frame (tagpu_vk.c, behind its device
+   drain) -- the restorer's slice of THIS frame is still to be recorded. A
+   refusal can be a banded upload the device failed
    partway (tagpu_vk_stage.c `upload`), which leaves the base atlas half
    written and in a transfer layout, and the job's FILL samples that image
    through a descriptor that says SHADER_READ_ONLY. The seam records the
@@ -1287,6 +1289,33 @@ static void feat_scissor(uint32_t w, uint32_t h)
     s_scX = x0; s_scY = y0; s_scW = ww; s_scH = hh;
 }
 
+/* BINDING 40 NAMES THE TWIN ONLY WHILE IT IS A PICTURE. `mk_image` creates
+   the twin UNDEFINED and only the restore job's own OUT leaves it
+   SHADER_READ_ONLY, so a binding that named it on every frame -- all of
+   Classic, where no job runs -- would name an image in a layout it is not in.
+   `s_arHave` comes from `painted > 0`, so testing it is exactly "the job has
+   left it SHADER_READ_ONLY"; otherwise the binding is the base atlas's view,
+   which is in that layout on every frame this pass draws, and `uRestored` is
+   0. Written for THIS SLOT, on every prepare that draws, after the flag is
+   decided: the seam waited on fence[slot], so no submit has this set bound,
+   and it reads the same `s_arHave` the flag was decided from, so the two
+   agree by construction. tagpu_vk_unit.c `bind_main` and tagpu_vk_terr.c
+   `shared_bind` keep the same rule. */
+static void twin_bind(const TAGPU_VKPASS* d, const SLOT* s)
+{
+    VkDescriptorImageInfo ii;
+    VkWriteDescriptorSet wr;
+    memset(&ii, 0, sizeof ii); memset(&wr, 0, sizeof wr);
+    ii.sampler = s_samp;
+    ii.imageView = (s_arView && s_arHave) ? s_arView : s_bView;
+    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wr.dstSet = s->dset; wr.dstBinding = 40; wr.descriptorCount = 1;
+    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wr.pImageInfo = &ii;
+    vkUpdateDescriptorSets(d->dev, 1, &wr, 0, NULL);
+}
+
 static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 {
     TAGPU_FEATHAND h;
@@ -1382,12 +1411,12 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        `restore_want`, because both can take the twin away in this very frame:
        a repack the base atlas took whole, or one the twin could not follow,
        drops the job (`twin_drop`); a new generation or a move of the engine's
-       table replaces it. Binding 40 names the twin whatever it holds, and a
-       new job clears it only at its first draw, so a flag decided before them
-       would have this frame sample a twin nobody owns any more. Read here, it
-       is the state this frame's draw samples: the producer published a frame
-       LIST, this lane's job has painted a frame of it, and `s_arHave` -- which
-       every path above that disowns the twin clears -- says so.
+       table replaces it. A flag decided before them would have this frame
+       sample a twin nobody owns any more. Read here, it is the state this
+       frame's draw samples: the producer published a frame LIST, this lane's
+       job has painted a frame of it, and `s_arHave` -- which every path above
+       that disowns the twin clears -- says so. `twin_bind` below names binding
+       40 from the same `s_arHave`.
 
        A FRAME WITHOUT A PAINTED TWIN IS DRAWN, from the base atlas, not
        returned from: the restore needs this frame's base atlas uploaded before
@@ -1412,6 +1441,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         }
         h.restored = 0;
     } else s_saidRestored = 0;
+    twin_bind(d, s);
 
     /* THE FOG GRID, per slot, so the one-line invariant covers it: UNDEFINED
        in, because the whole of it is re-sent every frame and there are
