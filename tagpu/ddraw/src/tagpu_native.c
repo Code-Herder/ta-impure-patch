@@ -2247,39 +2247,44 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            every index this frame can form is inside the bytes it was handed.
            The wide grid arrives the same way.
 
-           WHICH GRID THIS FRAME USES is this thread's decision because it is the one that knows what it is about to draw:
-           the engine's own at zoom >= 1, where it spans the frame by
-           construction (its origin is the eye rounded to a half cell and its
-           count is viewW/32 + 2, so the last column starts at least a pixel
-           past the viewport's right edge — same for the last row); the wide one
-           below 1, where it cannot, and the ring beyond it would otherwise get
-           taFog's clamp smearing the border cell.
+           WHICH GRID THIS FRAME USES is this thread's decision because it
+           is the one that knows what it is about to draw
+           (tagpu_zoom_wide_fog). The engine's own at zoom >= 1, where it
+           spans the frame by construction (its origin is the eye rounded to a
+           half cell and its count is viewW/32 + 2, so the last column starts
+           at least a pixel past the viewport's right edge — same for the last
+           row); the wide one below 1, where it cannot, and the ring beyond it
+           would otherwise get taFog's clamp smearing the border cell.
 
            ...OR while the eye this frame is drawn from is AHEAD of the
-           packet's — a cursor-anchored step the game thread has not applied yet
-           (tagpu_zoom_unacked). The engine's grid is anchored at the packet's
-           eye with only its two spare columns of slack, and the frame that
-           eases up THROUGH 1.0 starts at z = 0.5 exactly at the lowest (one
-           ease step of 0.25 in log space is z1 = z0^0.75 * ztgt^0.25, which
-           reaches 1.0 at z0 = 8^(-1/3)), where the eye steps by up to vw/2 in
-           that single frame — 896 px at the 1792-px viewport of a 1920x1080
-           screen, against the 32 px those two columns are worth. The wide grid
-           spans it with room over: sizing at the zoom FLOOR covers any anchored
-           step at any level with the margin untouched. */
+           packet's — a cursor-anchored step the game thread has not applied
+           yet. The engine's grid is anchored at the packet's eye with only
+           its two spare columns of slack, and one frame of the tween can
+           carry the eye by up to vw/2 — 896 px at the 1792-px viewport of a
+           1920x1080 screen, against the 32 px those two columns are worth.
+           The wide grid spans it with room over: an anchored zoom-in's view
+           is a subset of the view before it, and the grid is sized at the
+           zoom FLOOR.
+
+           ...OR while the packet's eye is off the engine's own range, where
+           the engine writes its border completions on literal rows and
+           columns that no longer straddle the map edge; the wide grid
+           derives the straddling entry. */
         const unsigned short* buf = tagpu_pk_fog(pk);
         int cols = pk->fog_cols, rows = pk->fog_rows;
         int orgX = pk->fog_org[0], orgY = pk->fog_org[1];
         int bufCells = cols * rows;
         {
             const unsigned short* wb = tagpu_pk_fogw(pk);
-            if (wb && (tagpu_zoom_level() < 1.0f || tagpu_zoom_unacked())) {
+            if (wb && tagpu_zoom_wide_fog()) {
                 buf = wb; cols = pk->fogw_cols; rows = pk->fogw_rows;
                 orgX = pk->fogw_org[0]; orgY = pk->fogw_org[1];
                 bufCells = cols * rows;
-            } else if (!wb && (tagpu_zoom_level() < 1.0f || tagpu_zoom_unacked())) {
-                /* a zoomed frame drawn over the engine's 1x grid: the outer ring
-                   falls back to taFog's clamp. It must read 0 outside a
-                   deliberate `fogwide.off`. */
+            } else if (!wb && tagpu_zoom_wide_fog()) {
+                /* a frame that needs the wide grid drawn over the engine's:
+                   the outer ring falls back to taFog's clamp, and an off-map
+                   eye's edge keeps the engine's misplaced completions. It
+                   must read 0 outside a deliberate `fogwide.off`. */
                 s_fogBare++;
             }
         }

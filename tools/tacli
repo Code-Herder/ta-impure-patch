@@ -1465,7 +1465,8 @@ def cmd_wheel(args):
     player, so a position is almost always what you want: without `--at` the
     notches land wherever the injected pointer happens to be, and if that is the
     side panel or a menu they do nothing at all (the game logs `zoom: wheel
-    ignored`). One notch is ~1.1x, geometric, eased over thirteen presented frames.
+    ignored`). One notch in is x1.163, out x0.877 (14 % of the camera distance
+    1/z), tweened over 250 ms; zooming out pulls back from the centre.
     """
     inst = Instance(args.name)
     tokens = []
@@ -4610,7 +4611,7 @@ def build_parser():
     add_common(wh)
     wh.add_argument("name")
     wh.add_argument("notches", type=int,
-                    help="+N zooms in, -N zooms out (~1.1x per notch)")
+                    help="+N zooms in, -N zooms out (x1.163 in, x0.877 out per notch)")
     wh.add_argument("--at", type=int, nargs=2, metavar=("X", "Y"),
                     help="point here first — the wheel is dead off the world viewport")
     wh.set_defaults(func=cmd_wheel)

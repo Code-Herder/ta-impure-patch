@@ -2083,9 +2083,13 @@ static void write_result(void)
 }
 
 /* The camera is display state, not sim state, so it is set here rather than on
-   the tick — the same rule (and the same clamp) as tagpu_input.c's eye hold.
-   `at` and `center_on` both mean the CENTRE of the window, so the eye is the
-   centre minus half a view, using the projection the roster already reports. */
+   the tick. `at` and `center_on` both mean the CENTRE of the window, so the eye
+   is the centre minus half a view, using the projection the roster already
+   reports. The eye is written straight into the field, outside the zoom
+   module's apply, so it is clamped to the engine's own range `[0, map - W]`:
+   that range is inside the camera's range whichever is in force, and an eye
+   off it is only safe on a draw whose ground our terrain pass owns
+   (tagpu_zoom.c, "the camera's range"). A `pin` then holds exactly this eye. */
 static void place_camera(const TAGPU_FRAME* f)
 {
     char* ta = ta_base();

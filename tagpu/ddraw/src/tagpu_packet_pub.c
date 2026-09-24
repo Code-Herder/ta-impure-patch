@@ -21,8 +21,9 @@
    during which the loader thread owns the per-map arrays (below).
      before  = THE COMMANDS: post-tick, pre-draw, the latest
                record the render thread posted is taken and applied on
-               this thread — the zoom level (the camera range, the
-               addressable rect, ScrollSpeed), the cursor anchor's eye
+               this thread — the camera range (centred while the ground
+               is ours), the zoom level (the addressable rect, the minimap
+               box, ScrollSpeed), the cursor anchor's eye
                delta, the camera hold, the follow release — so the frame
                the engine is about to draw, its fog rebuild and its minimap
                box all see the commanded camera (tagpu_zoom_apply,
@@ -1654,7 +1655,8 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->level_gen   = s_levelGen;
     /* what the command apply in `before` had done by this draw: the render
        thread reconciles its prediction against these */
-    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch);
+    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch,
+                       &p->cam_centre);
     p->gui_flips   = tagpu_gui_flips();
     p->draw_seq    = s_cDraws;
     p->eye[0]       = RD32(ta, OFF_EYE_X);      p->eye[1]       = RD32(ta, OFF_EYE_Y);
@@ -1933,7 +1935,8 @@ static unsigned fill_level_end(TAGPU_PACKET* p, void* ctx)
     p->load_flags = (unsigned short)load_flags();
     p->text_fg    = -1;
     p->gamma      = 1.0f;
-    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch);
+    tagpu_zoom_applied(&p->cmd_ack_seq, &p->cmd_ack_dx, &p->cmd_ack_dy, &p->zoom_applied, &p->cmd_epoch,
+                       &p->cam_centre);
     fill_pal(p, ta_main());
     return sizeof(TAGPU_PACKET);
 }
@@ -2043,16 +2046,18 @@ static int __cdecl before_draw(void* entry_esp)
         unsigned us;
         QueryPerformanceCounter(&t0);
         c = tagpu_cmd_take();
-        /* THE RECT, THEN THE TERRAIN LATCH: the rect may only be wide on a
-           draw whose ground is ours. The render thread's request is read ONCE,
-           the rect widens only on it, and the stubs are latched on it OR on a
-           rect that is still wide (a `restore` that could not run) -- after the
-           rect is final, on the one thread that writes either, before this
-           draw reaches `0x468DB0`. See `g_terrown_own`. */
+        /* THE CAMERA AND THE RECT, THEN THE TERRAIN LATCH: the eye may only
+           be off the engine's range, and the rect only wide, on a draw whose
+           ground is ours. The render thread's request is read ONCE, the camera
+           range centres and the rect widens only on it, and the stubs are
+           latched on it OR on a rect that is still wide (a `restore` that
+           could not run) -- after both are final, on the one thread that
+           writes any of them, before this draw reaches `0x468DB0`. See
+           `g_terrown_own` and tagpu_zoom.c's "the camera's range". */
         {
             int terr = tagpu_terrown_request();
             if (ta) {
-                tagpu_zoom_apply(ta, c);
+                tagpu_zoom_apply(ta, c, terr);
                 tagpu_vpwide_apply(ta, c, terr);
             }
             tagpu_terrown_latch(terr || tagpu_vpwide_wide());

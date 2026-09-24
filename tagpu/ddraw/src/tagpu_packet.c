@@ -629,7 +629,7 @@ static const char* cmd_valid(const void* rec)
     const TAGPU_CMD* c = (const TAGPU_CMD*)rec;
     if (c->used_bytes != sizeof(TAGPU_CMD)) return "cmd size";
     if (!(c->zoom >= 0.05f && c->zoom <= 16.0f)) return "cmd zoom";
-    if (c->live > 1u || c->eyeoff > 1u || c->hold_on > 1u || c->drop_follow > 1u) return "cmd flags";
+    if (c->live > 1u || c->hold_on > 1u || c->drop_follow > 1u) return "cmd flags";
     /* the hold is clamped at its source (tagpu_input.c) so that a wild number
        in the file cannot refuse the whole record and with it every other
        command; this bound is the backstop, not the gate */

@@ -66,7 +66,7 @@
    arithmetic the viewport's right and bottom edges sit inside its last column
    and row for EVERY viewport size the allocation accepts (64..16384) and every
    eye — worst case one pixel, at a 64-px viewport with eye%32 == 15, and 16 px
-   for the negative eyes the zoom's widened camera range produces. The wide grid
+   for the negative eyes the camera's centre range produces. The wide grid
    keeps the view a whole FOGW_MARGIN inside. */
 #define TAGPU_GLSL_FOG_UNIFORMS \
     "uniform sampler2D uFogGrid;\n"   /* RG8 corner masks, r = b0, g = b1  */ \

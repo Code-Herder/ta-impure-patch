@@ -173,12 +173,15 @@ static void fogw_build(const FOGW_SRC* s, unsigned short* out,
        The entry that straddles an edge is the one whose corners on one side are
        the map's outermost cells and on the other side are off it — for the top,
        `row0 + gy < 0 <= row0 + gy + 1`, so `gy = -row0 - 1`. The engine writes
-       row 0 because its own grid never reaches more than one cell past the map
-       (the eye clamp sees to that, so `row0` is only ever 0 or -1) and the two
-       are then the same row; ours reaches as far as the zoom does, and the
-       literal index would land dozens of rows out in open water. The same
-       reading gives `losH-1-row0` for the bottom, which is the engine's
-       `rows-2` whenever its window overshoots by exactly the one cell. */
+       row 0, which is that row only while its window overshoots the map by at
+       most one cell (`row0` 0 or -1, which an eye in the engine's own range
+       `[0, map - W]` guarantees); ours reaches as far as the zoom does, and
+       the camera's centre range takes the engine's window as far as W/2 past
+       the edge, where the literal index lands dozens of rows out in open
+       water — which is why the native pass takes this grid whenever the eye
+       is off the engine's own range (tagpu_zoom_wide_fog). The same reading
+       gives `losH-1-row0` for the bottom, which is the engine's `rows-2`
+       whenever its window overshoots by exactly the one cell. */
     {
         int gTop = -row0 - 1;
         int gBot = s->plotR / 2 - 1 - row0;
@@ -235,9 +238,10 @@ static void fogw_build(const FOGW_SRC* s, unsigned short* out,
 
    Past the edge entry the completions just fixed, every entry is all-zero: no
    map cell reaches it, so nothing ever ORs a corner bit into it, and an
-   all-zero entry means "no fog". The engine never meets that case — its grid
-   stops one cell past the map — but ours spans the zoom, so at a shore there
-   can be forty rows of "no fog" over open water. Terrain draws nothing there,
+   all-zero entry means "no fog". The engine's grid meets that case only for
+   an eye off its own range, where the native pass takes this one; ours spans
+   the zoom, so at a shore there can be forty rows of "no fog" over open
+   water. Terrain draws nothing there,
    so most of it is invisible; what is not is a sprite whose PROJECTED position
    (`y - alt/2`, the space the grid is built in) lands past the edge while its
    anchor is on the map. A tree on the high north shore does exactly that, and
@@ -325,10 +329,9 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
    Sized from `tagpu_zoom_min()` and NOT from the level in force: the level the
    game thread can read is the one the render thread published on the previous
    frame, so a window cut to that level would be a frame behind every outward
-   ease — and one ease step of a wheel flick is far more than the engine grid's
-   own two cells of slack. Sizing for the whole range means no step of any lever
-   can outrun the grid, at the cost of a window that is 16x the 1x viewport's
-   area while any zoom-out is live.
+   tween — and one frame of the tween can cross the whole range. Sizing for the
+   whole range means no step of any lever can outrun the grid, at the cost of a
+   window that is 16x the 1x viewport's area while any zoom-out is live.
 
    AND IT COVERS A STEPPED EYE FOR FREE, which is what cursor anchoring needs
    and why FOGW_MARGIN need not grow for it. The window is centred on
@@ -338,17 +341,13 @@ static int floor_div32(int v) { return v >= 0 ? v / 32 : -(((-v) + 31) / 32); }
        (vw/2)[ |1/z0 - 1/z1| + 1/z1 - 1/zmin ]  <=  MARGIN
 
    with `|D| <= (vw/2)|1/z0 - 1/z1|`, the anchor being inside the viewport.
-   Zooming IN that reduces to `(vw/2)(1/z0 - 1/zmin) <= 0` — an anchored
-   zoom-in's view is a SUBSET of the view before it, so there is nothing new to
-   cover. Zooming out it is `(vw/2)(2/z1 - 1/z0 - 1/zmin)`, and **the bound
-   holds only because `z1` is ONE EASE STEP from `z0`**, not any level in the
-   range: `z1 = z0^(1-WHEEL_EASE) * ztgt^WHEEL_EASE` with `ztgt >= zmin`. Under
-   that constraint the expression maximises at exactly 0, touched only in the
-   limit `z0 -> zmin` where there is no further out to go. Free of it the sup is
-   3.875 (z0 = 8 against z1 = 0.25, i.e. the whole range crossed in one frame),
-   which is ~3470 px and would need a margin thirteen times this one — so if the
-   ease is ever replaced by something that can jump, this derivation goes with
-   it. So the margin is slack for this, not budget. */
+   Only a zoom-IN anchors (tagpu_zoom.c anchor_step), and there that reduces to
+   `(vw/2)(1/z0 - 1/zmin) <= 0` — an anchored zoom-in's view is a SUBSET of the
+   view before it, so there is nothing new to cover. A zoom-out does not move
+   the eye (D = 0), so its view is centred where the window is and needs only
+   `(vw/2)(1/z1 - 1/zmin) <= MARGIN`, true for every `z1 >= zmin`. Neither
+   depends on how far one frame goes, so a tween that crosses the whole range
+   in one frame is covered too. So the margin is slack for this, not budget. */
 static int fogw_window(char* ta, int vw, int vh,
                        int* col0, int* row0, int* cols, int* rows)
 {

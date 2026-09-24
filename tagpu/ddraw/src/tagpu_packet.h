@@ -520,6 +520,11 @@ typedef struct TAGPU_PACKET {
                                    its own sum when it sees a new one, so a
                                    notch in a level's last frames can never be
                                    applied to the next level's camera         */
+    uint32_t cam_centre;        /* 1 = the apply held the camera to the centre
+                                   range for this draw (its ground is ours);
+                                   0 = the engine's own [0, map - W]. The
+                                   render thread's anchor and prediction clamp
+                                   with the same range from this              */
     uint32_t pal_ok;            /* 1 = pal[] and gamma below were copied        */
     float    gamma;             /* the engine's gamma factor, bounded 0.05..8.0 */
     uint8_t  pal[1024];         /* the engine's own palette table, 256 x RGBA,
@@ -691,10 +696,8 @@ typedef struct TAGPU_CMD {
     uint32_t live;              /* a zoomed world is on screen: the level above
                                    is what the picture is drawn at; 0 = the
                                    game thread applies 1.0 (the engine's own
-                                   range, rect and scroll rate)                */
-    uint32_t eyeoff;            /* tagpu_zoomedge.off: the camera range is the
-                                   engine's own whatever the level             */
-    uint32_t hold_on;           /* tagpu_eye.txt holds the camera at hold_x/y  */
+                                   rect and scroll rate)                       */
+    uint32_t hold_on;          /* tagpu_eye.txt holds the camera at hold_x/y  */
     int32_t  hold_x, hold_y;
     uint32_t drop_follow;       /* the delta above came from a gesture that
                                    wants the camera: release the follow when
