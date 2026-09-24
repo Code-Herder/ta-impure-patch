@@ -103,8 +103,10 @@
    `restoreFrames`), `restore_want` feeds this lane's own restore job
    (tagpu_vk_restore.h), which paints the RGBA8 twin at binding 40 from the
    base atlas. Until the job has painted a frame, a frame with `uRestored`
-   1 is drawn from the base atlas with `uRestored` 0 (`prepare`). That is
-   not latched: it clears by itself within a few frames of the restorer
+   1 is drawn from the base atlas with `uRestored` 0 (`prepare`), and the
+   flag is decided after the upload and the job have run, so a frame whose
+   upload or job took the twin away draws the base atlas too. That is not
+   latched: it clears by itself within a few frames of the restorer
    starting.
 
    IT KNOWS NOTHING ABOUT A WINDOW. Everything arrives in TAGPU_VKPASS.
@@ -967,10 +969,14 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
         return;
     }
     if (s_rjob) { tagpu_vk_restore_job_free(d, s_rjob); s_rjob = NULL; s_rjTaken = 0; }
-    /* A NEW GENERATION WITH THE RESTORE GIVEN UP ON: the rects have moved and
-       nothing will repaint this twin, so it is not a picture any more -- the
-       same fact the failed branch above records, reached by the other route. */
-    if (s_rjTried) { s_arHave = 0; return; }
+    /* PAST THIS POINT NO JOB PAINTS THIS GENERATION, so the twin is not a
+       picture of it: what it holds was painted for the one before, at rects
+       that have moved or in the old table's colours. Cleared here, before any
+       of the returns below -- a restore given up on, a device that will not
+       run one, a job that cannot be made -- so none of them leaves the flag
+       naming the old picture. */
+    s_arHave = 0;
+    if (s_rjTried) return;
     /* BOTH SURFACES HAVE TO BE THERE, and the source has to have contents: a
        FILL over a base no copy has reached yet would paint undefined texels
        over the art. Neither is an error -- the next frame asks again. */
@@ -995,7 +1001,6 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
     s_rjPal = h->palSerial;
     s_rjSrcView = s_bView;
     s_rjPainted = 0;
-    s_arHave = 0;                          /* it is being blanked and repainted */
     plog(d, "feat: restoring the atlas HERE - %d of %d frames over %dx%d, "
             "generation %u", s_rjTaken, h->restoreN, s_atDim, s_atDim,
          h->restoreGen);
@@ -1034,8 +1039,10 @@ static int twin_map(void* ctx, TAGPU_RGLSL_FRAME* f)
     return 0;
 }
 
-/* The job goes, and with it every claim the twin makes: the next
-   `restore_want` blanks it and restores from the list's first frame. */
+/* The job goes, and with it every claim the twin makes: `s_arHave` drops, so
+   this frame -- whose `uRestored` is decided after the upload -- draws the
+   base atlas, and the next `restore_want` blanks the twin and restores from
+   the list's first frame. */
 static void twin_drop(const TAGPU_VKPASS* d, const char* why)
 {
     if (!s_rjob) return;
@@ -1273,7 +1280,6 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        uFog. */
     union { float f[8]; int i[8]; } ub;
     int fogW = 1, fogH = 1;
-    int feed;
 
     if (s_state == ST_REFUSED) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
@@ -1297,42 +1303,6 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         }
         s_state = ST_READY;
     }
-
-    /* CAN THIS LANE DRAW A RESTORED FRAME? There is exactly one way it can:
-       the producer published a frame LIST, this lane painted its own twin from
-       it, and `s_arHave` says so.
-
-       BEFORE THE FIRST PAINT THE FRAME IS DRAWN FROM THE BASE ATLAS (`h.restored = 0`
-       below) rather than sampling a twin that holds nothing -- and it is
-       DRAWN, not returned from: the restore needs THIS frame's base atlas
-       uploaded before it can paint anything, and the upload is below, so
-       returning on the frames before the first paint would be a deadlock --
-       nothing drawn because nothing painted, nothing painted because the atlas
-       never arrived. `feed` only picks which case the log line names.
-
-       IT IS NOT LATCHED. gpu-status 2.35 measured what a latch costs -- a pass
-       that refuses once stays dark for the process even after the condition
-       clears. This one clears within a few frames of the restorer starting, so
-       `s_saidRestored` gates the LOG LINE only and is cleared again below. */
-    feed = 0;
-    if (h.restored && !(s_arImg && h.restoreFrames && s_arHave)) {
-        if (h.restoreFrames && s_arImg && !s_rjTried) feed = 1;
-        if (!s_saidRestored) {
-            s_saidRestored = 1;
-            plog(d, "feat: a Classic++ restore is armed and this lane has no "
-                    "restored twin of it yet - %s", feed
-                        ? "this frame makes the job and draws the base atlas"
-                        : "drawing the base atlas until one is painted");
-        }
-        /* AN UNPAINTED TWIN DRAWS THE BASE ATLAS, ON BOTH BRANCHES. This atlas
-           changes generation on every map or level change, so this is the
-           routine path and not only the failure one -- and clearing the flag on
-           `!feed` alone is the rare half: a generation change satisfies every
-           feed term and would return without drawing. Same argument as the
-           unit pass: base art is Classic++ restore off for a few frames, not a
-           wrong picture. */
-        h.restored = 0;
-    } else s_saidRestored = 0;
 
     /* THE BOUNDS, RE-CHECKED. Every one of these sizes an allocation or a
        memcpy, and a bound that lives in the file that produced the number is a
@@ -1389,10 +1359,41 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
        `tagpu_vk_restore_step`, after every pass's prepare -- this call only
        creates and feeds the job. */
     restore_want(d, &h);
-    /* A FEED FRAME DRAWS: the base atlas is there to draw against, and it is
-       what this pass draws without Classic++. `restore_want` above has already
-       made the job -- it takes no command buffer and never reads `restored` --
-       so drawing on this frame conflicts with nothing it did. */
+
+    /* CAN THIS FRAME DRAW RESTORED? DECIDED HERE, AFTER THE UPLOAD AND AFTER
+       `restore_want`, because both can take the twin away in this very frame:
+       a repack the base atlas took whole, or one the twin could not follow,
+       drops the job (`twin_drop`); a new generation or a move of the engine's
+       table replaces it. Binding 40 names the twin whatever it holds, and a
+       new job clears it only at its first draw, so a flag decided before them
+       would have this frame sample a twin nobody owns any more. Read here, it
+       is the state this frame's draw samples: the producer published a frame
+       LIST, this lane's job has painted a frame of it, and `s_arHave` -- which
+       every path above that disowns the twin clears -- says so.
+
+       A FRAME WITHOUT A PAINTED TWIN IS DRAWN, from the base atlas, not
+       returned from: the restore needs this frame's base atlas uploaded before
+       it can paint anything, so returning on the frames before the first
+       paint would be a deadlock -- nothing drawn because nothing painted,
+       nothing painted because the atlas never arrived. This atlas changes
+       generation on every map or level change, so this is the routine path
+       and not only the failure one: base art is Classic++ restore off for a
+       few frames, not a wrong picture.
+
+       IT IS NOT LATCHED. gpu-status 2.35 measured what a latch costs -- a pass
+       that refuses once stays dark for the process even after the condition
+       clears. This one clears within a few frames of the restorer starting, so
+       `s_saidRestored` gates the LOG LINE only and is cleared again below. */
+    if (h.restored && !(s_arImg && h.restoreFrames && s_arHave)) {
+        if (!s_saidRestored) {
+            s_saidRestored = 1;
+            plog(d, "feat: a Classic++ restore is armed and this lane has no "
+                    "restored twin of it yet - %s", s_rjob
+                        ? "its job is painting one; the base atlas is drawn until it has"
+                        : "drawing the base atlas until one is painted");
+        }
+        h.restored = 0;
+    } else s_saidRestored = 0;
 
     /* THE FOG GRID, per slot, so the one-line invariant covers it: UNDEFINED
        in, because the whole of it is re-sent every frame and there are
