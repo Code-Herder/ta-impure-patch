@@ -141,10 +141,13 @@ Key facts:
   read or write, no shading. The terrain repaints the whole viewport every frame,
   which is why the offscreen never needs a clear: **terrain is the frame's
   implicit "far plane"**.
-- **No bound on the window.** Nothing compares the cells it reads with the tile map's size: it
-  relies on the eye being in `[0, map − view]`, which the camera clamp gives only while the
-  view fits in the scroll extent. A view larger than the map reads before or past the tile map
-  and faulted at `0x4CBE44`; our window check at `0x484057` bounds it
+- **No bound on the window.** Nothing compares the cells it reads with the tile map's size, and
+  the window is placed from `L − sx`, so the pass is right only when `0 ≤ eye` and
+  `eye + view ≤ map` on each axis. An eye in (−32, 0) leaves a strip of up to 31 px at the
+  viewport's left or top edge unpainted; a lower one, or a window past the far edge, reads before
+  or past the tile map and faulted at `0x4CBE44`. The camera clamp keeps the eye in range only
+  while the view fits in the scroll extent, and our zoom range above 1 takes it below 0 at every
+  left and top edge. Our window check at `0x484057` bounds the reads and paints the strip black
   ([the engine map](exe-reverse-engineering.html), §"Engine defects we patch").
 - **No height/LOS participation.** Neither `FeatureStruct.height` nor any LOS map
   is consulted. Cliff faces, shadows, water — all pre-painted into the 32×32 tile

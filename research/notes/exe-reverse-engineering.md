@@ -533,28 +533,56 @@ The tile set is `count·0x400 + 8` bytes (`0x483B53..0x483B63`), laid out as
 `{count, pixels = base + 8}` (`0x483B72`, `0x483B80`). So the stride equals the allocation's width,
 and nothing in the pass compares a row with `pxH/32`: it never reads `main+0x14237` at all.
 
-**When the window leaves the map.** In play the window lies on the map exactly while the eye is in
-`[0, map − view]`. The camera clamp `0x41C3C0` holds the eye in `[0, extent − view]`, 32 px and
-128 px inside that. When the view is larger than the extent, that range is empty and the clamp
-alternates the eye between 0 and a negative value ("Where stock reaches it" above). Then:
+**Where stock is right.** The pass paints cell `(i, j)` of the window at
+`(L − sx + 32j, T − sy + 32i)`. `ncols = ⌈(W + sx)/32⌉` carries the painted span to `L + W` or
+past it for any `sx`, but the span starts at `L − sx`: the viewport's left column is painted only
+when `sx ≥ 0`, and its top row only when `sy ≥ 0`. So the pass reads only map cells **and** paints
+every viewport pixel exactly when `sx ≥ 0`, `sy ≥ 0` and the window lies inside the tile map.
+With `col0` and `row0` truncated, that is `0 ≤ eye` and `eye + view ≤ 32·tiles` on each axis.
+Every one of the 275 stock map files has an even number of 16-px cells on both axes (their TNT
+headers), so `32·tiles` is the map's pixel size. Outside that, stock does one of two wrong things:
 
-- **A negative eye** starts the window above or left of the map. `row0 < 0` reads before the tile
-  map. `col0 < 0` reads the previous row's last cells, and on row 0 it reads before the tile map.
-- **An eye of 0** runs the window past the far edge. Rows at and past `pxH/32` read past the end of
-  the tile map. Columns at and past the stride read the next row's first cells, which stays inside
-  the allocation on every row but the last.
+- **An eye in `(−32, 0)`** truncates to `col0 = 0` (or `row0 = 0`). Every read is on the map, but
+  the window is drawn from `L − sx`, right of `L`: the viewport's leftmost `−sx` columns (or top
+  `−sy` rows) are not painted and keep the last frame's pixels.
+- **An eye at −32 or below** starts the window left of or above the map. `row0 < 0` reads before
+  the tile map. `col0 < 0` reads the previous row's last cells, and on row 0 before the tile map.
+  **An eye whose `eye + view` is past the map's far edge** runs the window off the end. Rows at
+  and past `pxH/32` read past the end of the tile map. Columns at and past the stride read the
+  next row's first cells, which stays inside the allocation on every row but the last.
 
 An id read outside the allocation is whatever the heap holds there, and `pixels + id·0x400` can be
 up to 64 MB past the tile set. That read is the fault.
 
-**Where it is reached**, from the TNT headers: wherever the view is larger than the extent on
-either axis. At HUD scale 100 % the view is the resolution less 128 × 64 (the side panel and the
-two bars); a HUD scale multiplies those margins. Of the 99 maps in the skirmish list, none is
-reached at 1920×1200 or below, retail's 1600×1200 included. Lava Run (6400×1280) is reached at
-1920×1440 and 2560×1440. At 3440×1440 six are reached: Lava Run by height, and Dark Side, The Desert
-Triad, Sherwood, Great Divide and Etorrep Glacier by width. At 3840×2160 twelve are: those six, plus
-The Pass, Coast To Coast, Shore to Shore, Show Down, Fox Holes and Slated Fate. Among the 275 map
-files, `example.tnt` is also reached at 1600×1200 and `cc01` at 1920×1080.
+**Where it is reached.** Two things hand the pass such an eye.
+
+- **The camera clamp** `0x41C3C0` holds the eye in `[0, extent − view]`, 32 px inside the map on
+  X and 128 on Y. Where the view is larger than the extent that range is inverted, and the clamp
+  alternates the eye between 0 and the negative `extent − view` ("Where stock reaches it"
+  above). At the eye of 0 the window runs past the far edge only if the view is larger than the
+  map; at the negative eye it starts before the map once that eye is −32 or less. So stock
+  **reads off the tile map when the view is at least the map's width on X, or at least its height
+  less 96 on Y**, and only leaves a strip unpainted when the view is in `(map − 32, map)` on X or
+  `(map − 128, map − 96)` on Y. At HUD scale 100 % the view is the resolution less 128 × 64 (the
+  side panel and the two bars); a HUD scale multiplies those margins. From the TNT headers: of the
+  99 maps in the skirmish list, none reads off at 1920×1200 or below, retail's 1600×1200
+  included. Lava Run (6400×1280) does at 1920×1440 and 2560×1440. At 3440×1440 six do: Lava Run
+  by height, and Dark Side, The Desert Triad, Sherwood, Great Divide and Etorrep Glacier by width.
+  At 3840×2160 twelve do: those six, plus The Pass, Coast To Coast, Shore to Shore, Show Down, Fox
+  Holes and Slated Fate. On ten of the twelve the view is larger than the map on one axis, so the
+  window is off the map at both of the clamp's eyes. Shore to Shore (2144 px tall) and Show Down
+  (2176) hold the 2096-px view inside their height and are off the map only at the negative eye.
+  Among the 275 map files, `example.tnt` also reads off at 1600×1200 and `cc01` at 1920×1080. None
+  of the 275 lands in a strip-only band at 1024×768, 1600×1200, 1920×1080, 1920×1200, 1920×1440,
+  2560×1440, 3440×1440 or 3840×2160.
+- **Zoom above 1.** Our camera range at zoom `z > 1` is `[−dx, extent − view + dx]`, with
+  `dx = view/2 · (1 − 1/z)` on each axis (`tagpu_zoom.c`, `zoom_eye_range`), and the command apply
+  holds the eye and the scroll target in it on every draw a zoomed world is live. At a left or top
+  edge of **any** map the eye is then negative: in `(−32, 0)` just past the edge, and down to
+  −448 × −254 at zoom 2 at 1920×1080. The engine's pass sees that eye on every draw it runs while
+  zoomed in: every draw with `terrown.off`, a level's first draws before terrown latches the
+  ground when the zoom is already above 1, and every draw under `renderer=gdi`, where none of our
+  passes draws [INFERRED, not run].
 
 MEASURED, each on the first in-play draw of a scenario load with the shipped play set (`--defaults`)
 unless the row says otherwise. The pass's frame is decoded from the `ErrorLog.txt` stack dump.
@@ -567,7 +595,9 @@ unless the row says otherwise. The pass's frame is decoded from the `ErrorLog.tx
 | main `94e40ed` | Coast To Coast, 1920×1440 | no fault: the view, 1792×1376, fits the extent, 3328×1888 |
 | main `94e40ed` | Dark Side, 3440×1440, the engine's terrain on every draw (`terrown.off`) | no fault. Past the map's right edge (screen x 3200..3439) the pass draws the next row's first cells |
 | the BAR camera branch `b7c3f4a` | Lava Run, 1920×1440 | access violation at `0x4CBE44` from `0x484161` with `row0 = 0`. Its camera range holds the eye at 0 where the engine's inverts, and the window's last three rows (40..42) are past the end of the tile map |
-| each of the above with the patch | the same | no fault |
+| main `09d7d55` | Two Continents, 1920×1080, `terrown.off`, zoom 2, the eye held at −448 × −254 (the NW corner of the zoom-2 range) | access violation at `0x4CBE44` from the top edge row (`0x48422D`). The frame: `col0 = −14`, `row0 = −7`, 56 × 31 cells, stride 336 |
+| main `09d7d55` | the same, the eye held at (−20, −20), (−20, 3000) and (3000, −20) | no fault. The viewport's 20-px strip at the left or top edge keeps the previous frame's ground: 0 of its 20 320 (left) or 35 840 (top) pixels are black |
+| each of the above with the patch | the same | no fault. At the three eyes of −20 the strip is palette index 0: 20 319 of 20 320 pixels at the left edge and 34 288 of 35 840 along the top at the corner, the rest being sprites the engine draws over the ground afterwards |
 
 **Our build at 1920×1080 zoomed out.** On Lava Run the view (1792×1016) fits the extent
 (6368×1152), so the pass stays on the map. It runs only until our terrain pass owns the ground.
@@ -601,28 +631,41 @@ jmp  0x4843AC                 ; the pass's epilogue: pop edi, esi, ebp, ebx; add
 
 `terrain_window_on_map` reads the pass's frame at `0x484057`: `ncols` at `[esp+0x10]`, `col0` at
 `+0x14`, `nrows` at `+0x18`, T at `+0x1C`, L at `+0x20`, `row0` at `+0x24` and the OFFSCREEN at
-`+0x5C`. It takes `sx`, `sy` and `main` from the saved esi, edi and ecx. It returns 1 when the
-stride equals `pxW/32` and `[row0, row0+nrows) × [col0, col0+ncols)` lies inside the
-`pxH/32 × pxW/32` tile map. Otherwise `terrain_window_draw` draws the same window itself. It fills
-the viewport `[L, L+W) × [T, T+H)`, clipped to the OFFSCREEN's clip rect `+0x1C..+0x28`, with
-palette index 0. It then copies every cell of the window that is on the map, and whose id is below
-the tile set's count, to `(L − sx + 32j, T − sy + 32i)`, where stock puts it, with the same clip.
+`+0x5C`. It takes `sx`, `sy` and `main` from the saved esi, edi and ecx. It returns 1 exactly
+where stock is right: `sx ≥ 0`, `sy ≥ 0`, the stride equals `pxW/32`, and
+`[row0, row0+nrows) × [col0, col0+ncols)` lies inside the `pxH/32 × pxW/32` tile map. Otherwise
+`terrain_window_draw` draws the same window itself. It fills the viewport `[L, L+W) × [T, T+H)`,
+clipped to the OFFSCREEN's clip rect `+0x1C..+0x28`, with palette index 0. It then copies every
+cell of the window that is on the map, and whose id is below the tile set's count, to
+`(L − sx + 32j, T − sy + 32i)`, where stock puts it, with the same clip. Before it writes anything
+it checks the inclusive clip rect against the surface's own width and height, `+0x00`/`+0x04`,
+which SurfaceCreateNamed `0x4C69F0` stores at `0x4C6A2C`/`0x4C6A35` and sizes the pixels by: a
+right column at or past the width, or a bottom row at or past the height, is refused, and nothing
+is drawn.
 
 - **The invariant:** for any eye and any view, the pass reads no tile-map entry outside
-  `(pxW/32)·(pxH/32)` and no tile graphic outside `count·0x400`. The drawn window writes nothing
-  outside the clip rect. `DrawGameScreen` sets that rect from the viewport rect (`0x4C6B10`,
-  called at `0x468D85`), and the engine's own clipped blit holds every edge cell to it. Registers
+  `(pxW/32)·(pxH/32)` and paints every viewport pixel inside the clip rect. On our path it also
+  reads no tile graphic outside `count·0x400`; the stock path trusts the ids ("What it leaves").
+  The drawn window writes nothing outside the clip rect, and nothing at all when the rect is not
+  inside the surface. `DrawGameScreen` sets that rect from the viewport rect (`0x4C6B10`, called
+  at `0x468D85`), and the engine's own clipped blit holds every edge cell to it. No path we know
+  hands the pass a rect outside its surface: SurfaceCreateNamed and `0x4C6A60` (the same fields
+  over a buffer the caller owns) initialise it to `(0, 0, w − 1, h − 1)`; `0x468D85` sets the
+  viewport rect, which lies inside the screen-sized OFFSCREEN, and when `vpwide` widens that rect
+  its `vpw_setclip` clamps it to `w − 1`/`h − 1` from the same `+0x00`/`+0x04`.
+  `0x4C6B10`'s other five callers (`0x46964F`, `0x469F95`, `0x495CAC`, `0x4A20A1`, `0x4A22DF`)
+  are not audited. So the refusal is the bound, not a case any run has shown. Registers
   at `0x484057`: ecx (main), esi, edi and ebp (0) are live. eax and ebx are what the stolen pair
   loads, edx is overwritten by the `cdq` at `0x484061`, and the flags are set again at `0x48406B`
   before anything tests them. `0x484050`'s `je` lands on `0x484057`, the jump itself; no branch
   lands in `0x484058..0x484060` [rel8/rel32 scan].
-- **What it changes:** nothing on a draw whose window lies on the map, which is every draw with
+- **What it changes:** nothing on a draw where stock is right, which includes every draw with
   the eye in `[0, extent − view]`. MEASURED on the stock control (no play pass) on Coast To Coast
   at 1920×1440, with the camera at the centre, at the far corner of its range (1536, 512) and at
-  (0, 0). The branch counter saw 1 473 calls or more, every one on the stock path. The engine's frame at
-  the centre and at the far corner is 0 px from a build without the patch. At (0, 0) the two
-  differ only on animated tree sprites, which differ by 763 px between two shots of the same
-  build.
+  (0, 0). The branch counter saw 1 473 calls or more, every one on the stock path. Against main
+  `09d7d55` the engine's frame is 0 px at the centre and at (0, 0), and 1 997 px at the far
+  corner, every one of them the message line "Core has taken the lead with 1 kills" that the
+  engine printed in one run and not the other.
 - **Where the window leaves the map, it draws black where stock read off it.** MEASURED on Lava
   Run at 1920×1440 with the engine drawing the ground on every draw (`terrown.off`): 2 497 calls
   or more through the bound while the camera scrolled from x 4080 to 0, no fault, and exactly the 96 rows
@@ -634,14 +677,20 @@ the tile set's count, to `(L − sx + 32j, T − sy + 32i)`, where stock puts it
   except for 57 px of a GUI line at its top-left corner. In the shipped configuration the bound draws only the level's
   first draws, before our terrain pass takes the ground: on Lava Run at 1920×1440, 193–256 calls,
   first with `row0 = −7` and then with `row0 = 0`. The simulation reads nothing the pass draws.
+- **Where stock leaves a strip, it paints it.** MEASURED on Two Continents at 1920×1080 with
+  `terrown.off` at zoom 2, the eye held at (−20, −20), (−20, 3000) and (3000, −20): the strip is
+  black (the table above), and the rest of the viewport is 0 px from main `09d7d55` at the first
+  two eyes and 985 px at the third, all of them a steam vent's plume.
 - **What it leaves:** on the stock path the interior cells still go through the unclipped
   `0x4C6E70`. They stay inside `[L, L+W) × [T, T+H)` for any sub-cell offset, and terrown's latch,
   not this patch, keeps an origin moved off the offscreen (vpwide's widened rect) away from them
-  ("Two per-cell loops that differ" below). The stock path trusts the map's tile ids, as stock
-  does. The camera clamp's inversion is not patched. In our build, once a zoomed world is live, the
-  command apply re-clamps the eye on every in-play draw into a range that holds an inverted range
-  at 0, and the BAR camera branch's range does the same on every draw. A level's first draws can
-  still carry the engine's negative eye, and the bound draws those.
+  ("Two per-cell loops that differ" below). Only our path bounds the tile ids by the tile set's
+  count: the stock path reads them unchecked, as LoadMap copies them in raw (`0x48397D`), so a
+  map whose ids reach past its tile set still reads past it there. Neither route to a bad eye is
+  patched, and the bound draws what they hand it: the camera clamp's inversion stays, and our zoom
+  range goes below 0 at every left and top edge above zoom 1. Where our range is inverted, the
+  command apply holds the eye at its low end, 0 below zoom 1 and `−dx` above it, on every draw a
+  zoomed world is live; a level's first draws can still carry the engine's alternating eye.
 
 ## Built-in cheat/console command surface
 
@@ -1140,9 +1189,12 @@ the eye, and they do not agree:
   guard here.
 - **`0x483FA0`** (the terrain pass) indexes the tile map at `main+0x1428B` with **no bounds
   check at all**: `0x48409B` does `imul` row × stride, `add` col, `lea ebp,[edx+eax*2]`. A
-  negative eye would read before the array, and a view larger than the map reads past its end.
-  Our window check at `0x484057` bounds those reads ("Engine defects we patch": "The terrain
-  pass reads off its tile map"). It is the reason to keep the eye's excursion a
+  negative eye of −32 or below reads before the array, one above it leaves a strip of the
+  viewport unpainted, and a view larger than the map reads past its end. Our zoom range above 1
+  is negative at every left and top edge, and the engine's pass meets it whenever it draws the
+  ground. Our window check at `0x484057` bounds those reads and paints the strip ("Engine defects
+  we patch": "The terrain pass reads off its tile map"). It is the reason to keep the eye's
+  excursion a
   property of *our* passes. **And it WRITES unbounded too**: it places its 32-px cells from the
   rect's L/T (`main+0x37E27`/`+0x37E2B`, read at `0x483FAC`/`0x483FB8`) over the view's W/H
   (`+0x37E37`/`+0x37E3B`, at `0x483FDF`/`0x484002`) and hands every whole cell to `0x4C6E70` →
@@ -4793,7 +4845,7 @@ clip.
 | `0x4B7F90` | `CopyGafToContext` | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` | `{x−HotX, y−HotY, +w−1, +h−1}`, hotspot **signed** (`movsx` at `0x4B802C/0x4B803F`), clipped by `0x4C6AE0`+`0x4B7E60`; sub-frames route to `0x4B8500` when `+0xB` is set; leaf `0x4CBE70` (raw), `0x4CC51D` (RLE) | `81 EC 94 00 00 00` (6) |
 | `0x4B8500` | `AlphaCompsteBuf2OFFScreen` | stdcall `0x10` | same | same, blended through `[globals+0xC0]`; 24 callers, none in the GUI | `81 EC 94 00 00 00` (6) |
 | `0x4B8310` | the blit `DrawText` takes when its sixth argument, the shade, is non-zero (`0x4A5179..0x4A517F`, and the shade becomes `a5`); also called directly by the gadget painters at `0x4A5EED` and `0x4A619C`. A **blended** GAF blit, not a copy. *[CORRECTED 2026-09-23 by the landing review: this said "the blit DrawText takes under `globals+0xF0` bit 7"; bit 7 is tested only inside this function.]* | stdcall **`0x14`** (`ret 0x14` at `0x4B84F1`) | `(ctx, GAFFrame*, x, y, a5)` — **five**, not the four the call-site inference said | **draws nothing unless `globals+0xF0` bit 7 is set** (tested at `0x4B8329`, `jne 0x4B84E7` at `0x4B832D`, before any write). Sub-frames: each to `0x4B8500` (the loop `0x4B8379..0x4B8397`, the call at `0x4B838A`). Raw frame (`+0x9 == 0`): `0x4CBF2C(ctx, desc, srcR, dstR, key = a5, table = [globals+0xC8])`, whose loop (`0x4CBF96..0x4CBFBC`) skips `src == a5` and writes **`dst = table[src·256 + dst]`** — it reads the destination. RLE frame: `0x4CC3D0(base, pitch, &dstXY, rle, &srcRect, row)` cdecl (`add esp,0x18` at `0x4B84D2`, shared with the raw arm), `row = [globals+0xC8] + a5·256` built at `0x4B84AB`..`0x4B84B7` with **`a5` shifted unmasked** (the table is 32 rows). Its decode is TA-RLE — bit 0 a skip of `b>>1`, bit 1 a run of `(b>>2)+1` copies of one byte, else `(b>>2)+1` literals — and **every texel it draws is `row[src]`** (`mov dl,[esi]` at `0x4CC4AD`, `add edx,[ebp+0x1C]`, then after an `xor eax,eax` `mov al,[edx]` and `mov [edi],al` at `0x4CC4B7`; the other run arm and both literal arms, `0x4CC4C4`/`0x4CC4E5`/`0x4CC500`, are the same load, add, load and store): a remap of the frame through one row, which **never reads the destination**; skips are left alone. [DISASSEMBLED 2026-09-23.] MEASURED 2026-09-23: the post-game screen's player names (`Player`, `Core`) are drawn through it, 18 ops per repaint, and **every one takes the RLE arm** — 6×8..6×10 font glyphs, `+0x9 == 1`, key 9, `a5 == 15`, bit 7 set (caps `0x07E6`); so the names are a remap, not a blend. The raw arm's destination read is real but was not reached on that screen | `81 EC 94 00 00 00` (6) |
-| `0x4B8150` | opaque GAF blit | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` — a **frame**, not a descriptor | leaf `0x4CBDD1`, no key; 4 callers, **all terrain** (`0x484110`, `0x48415C`, `0x484228`, `0x484274`) — not a UI leaf. `0x4CBDD1(dst, src, srcRect*, dstPoint*)` copies the inclusive source rect row by row (`rep movsd` at `0x4CBE44`, word and byte tails by the width's parity), the source at `src+0xC` + y·`src+0x8` + x, with no clip of its own [DISASSEMBLED 2026-09-24]: the terrain fault in "Engine defects we patch" is its source read | |
+| `0x4B8150` | opaque GAF blit | stdcall `0x10` | `(ctx, GAFFrame*, x, y)` — a **frame**, not a descriptor | leaf `0x4CBDD1`, no key; 4 callers, **all terrain** (`0x484110`, `0x48415C`, `0x484228`, `0x484274`) — not a UI leaf. `0x4CBDD1(dst, src, srcRect*, dstPoint*)` copies the inclusive source rect row by row with one element size for the whole rect, chosen from the width at `0x4CBE33..0x4CBE3C`: an odd width copies bytes (`rep movsb` at `0x4CBE61`), a width of 2 mod 4 words (`rep movsw` at `0x4CBE52`), any other dwords (`rep movsd` at `0x4CBE44`, the loop through `0x4CBE4B`); the source at `src+0xC` + y·`src+0x8` + x, with no clip of its own [DISASSEMBLED 2026-09-24]: the terrain fault in "Engine defects we patch" is its source read | |
 | `0x4C6D20` | descriptor blit | stdcall `0x10` | `(ctx, desc {w,h,stride,pixels}, RECT* src, RECT* dst)` | `*dst`; GUI callers `0x4A1C08` (listbox), `0x4A4EC0` (textfield); `0x4C6DC0` is the keyed twin with no callers | `8B 44 24 04 83 EC 30` (7) |
 | **`0x4C7580`** | **textured-quad stamp** (`GAF_DrawTransformed` [CORPUS]) | stdcall `0x10` | `(ctx, src, int xy[8], int uv[8])` — **FOUR** screen vertices and their texture coordinates (`cmp ecx,0x4` at `0x4C7676`, stride 8; `uv == NULL` synthesises `(0,0)(w-1,0)(w-1,h-1)(0,h-1)`), **MEASURED** `(214,94)(233,94)(233,113)…` with uv `(1,1)(31,1)(31,31)…` — *the first three only; the count was corrected from three to four 2026-09-21* | the vertices' bounding box; **the in-game option screens' wide dark backdrop right of the 128-px panel is drawn as these** (13–37 per build), which is why that region has slanted edges | `B8 8C 7D 00 00` (5, the stack probe) |
 | `0x4CCF60` | glyph blitter | cdecl, 9 args | `(base, pitch, font, str, x, y, fg, bg, transparent)` | row `y − (s8)font[2]`, width the sum of `font[off]` per glyph, stops at `\0` **or `\n`**; 2 callers, both in `0x4C14F0` | `55 8B EC 83 C4 F0` (6) |
