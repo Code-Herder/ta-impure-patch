@@ -341,7 +341,13 @@ static int pkx_publish(PKX* m, pkx_fill_fn fill, void* ctx, int force)
     if (!force && !s_stress && (PEEK(m) & PKX_FRESH)) { m->cSkip++; return 0; }
 
     w = m->write;
-    if (m->need > m->cap[w] && slot_commit(m, w, m->need)) m->cGrow++;
+    /* a growth is counted by what it committed, not by whether it reached
+       `need`: at the reserve slot_commit commits all of it and still says no */
+    if (m->need > m->cap[w]) {
+        unsigned was = m->cap[w];
+        slot_commit(m, w, m->need);
+        if (m->cap[w] != was) m->cGrow++;
+    }
     p = m->slot[w];
 
     QueryPerformanceCounter(&t0);
@@ -361,16 +367,29 @@ static int pkx_publish(PKX* m, pkx_fill_fn fill, void* ctx, int force)
        whole fill, not the end of the table that ran out (tagpu_packet_pub.c,
        s_fillShort), so one refill fits unless an input the render thread
        publishes (the fx, ghost and minimap wants) changed in between.
-       BOUNDED: slot_commit succeeds only with cap[w] >= need > the old cap,
-       so every pass grows the slot by at least a grain, and the reserve ends
-       the loop. What leaves it still over capacity (a commit that failed, a
-       fill larger than the reserve) is published cut, and counted in `trunc`. */
+
+       THE LOOP KEYS ON WHAT slot_commit COMMITTED, NOT ON WHAT IT RETURNED.
+       Past the reserve it commits the whole reserve and still returns 0
+       (`cap < need`); the record must then carry the new capacity, because
+       the consumer refuses one whose `cap_bytes` is not the slot's
+       (pk_valid), and the fill must be done again at it, or the tables a
+       smaller slot cut stay cut. So: no new pages, stop and publish what the
+       last fill placed; new pages, record them and fill again; and a commit
+       that did not reach `need` makes that fill the last. BOUNDED: every pass
+       that fills again has grown `cap[w]` by at least the slot's grain (64 KB,
+       one page under `stress`), and the reserve ends it. What is still over
+       capacity after it (a commit that failed, a fill larger than the
+       reserve) is published cut, and counted in `trunc`. */
     while (need > REC_CAP(p)) {
+        unsigned was = m->cap[w];
+        int fits;
         if (need > m->need) m->need = need;
-        if (!slot_commit(m, w, need)) break;
+        fits = slot_commit(m, w, need);
+        if (m->cap[w] == was) break;
         m->cGrow++; m->cRefill++;
         REC_CAP(p) = m->cap[w];
         need = fill(p, ctx);
+        if (!fits) break;
     }
     /* our own bounds on what the fill left — a misbehaving fill is a producer
        violation, and the record is still made valid for the consumer */
