@@ -2143,6 +2143,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        frames, the same one the two skip bytes stand on. */
     tagpu_fxown_set_want(fxOn, sfxOn, f->frame_counter);
     int featOn = tagpu_feat_armed(f->frame_counter);
+    /* THE MAP'S OWN FEATURES ARE ASKED FOR HERE, before the first early
+       return below: the answer rides every packet the publisher fills while it
+       is 1, so it must be this frame's and not the last frame that got as far
+       as the gather (tagpu_feat.h `tagpu_feat_mapfeat_ask`). */
+    tagpu_feat_mapfeat_ask(s_mirror > 0);
     int terrOn = tagpu_terr_armed(f->frame_counter);
     int markOn = tagpu_mark_armed(f->frame_counter);
     /* polled unconditionally, not behind markOn: tagpu_order.c hands the
@@ -2821,10 +2826,9 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.gw = gw; fv.gh = gh; fv.ss = ss; fv.fogMode = fogMode;
         /* THE MAP EDGE, one answer for every gather in the frame, and
            mirrored only while the feature pass holds the level's features
-           when it is armed (tagpu_feat_mapfeat_sync): ground and trees
-           appear together or not at all. */
-        fv.mirror = s_mirror > 0;
-        if (featOn && !tagpu_feat_mapfeat_sync(f->packet, fv.mirror)) fv.mirror = 0;
+           when it draws features at all (tagpu_feat_mapfeat_sync): ground and
+           trees appear together or not at all. */
+        fv.mirror = s_mirror > 0 && tagpu_feat_mapfeat_sync(f->packet, s_mirror > 0);
         fv.zoom = s_zoom;
         fv.zoomCx = (float)vpL + (float)vw * 0.5f;
         fv.zoomCy = (float)vpT + (float)vh * 0.5f;

@@ -109,4 +109,11 @@ unsigned tagpu_packet_pub_level_gen(void);
    caller gated on this can never run ahead of the engine's own first paint of
    the level's chrome. The GUI chrome re-emit (tagpu_gui_hook.c) gates on it. */
 int tagpu_packet_pub_level_open(void);
+/* LOADER THREAD, from inside LoadMap (`mapfeat_at_load`): the map's own
+   features as its TNT lays them out, `n` entries of TAGPU_PK_MAPFEAT in a
+   malloc'd block whose ownership passes here (NULL when n is 0), `trunc` when
+   the list stopped at TAGPU_PK_MAX_MAPFEAT. Stamped with the loading level's
+   generation and adopted by the game thread at that level's first in-play
+   draw; a second hand-over before then replaces the first. */
+void tagpu_packet_pub_mapfeat_loaded(TAGPU_PK_MAPFEAT* e, unsigned n, int trunc);
 #endif

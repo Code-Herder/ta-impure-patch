@@ -193,21 +193,31 @@ void tagpu_feat_atlas_ack(unsigned serial, int keep);
 
 /* THE MAP'S OWN FEATURES, the mirror's source (tagpu_packet.h
    TAGPU_PK_MAPFEAT). The publisher asks, on the GAME thread, whether to carry
-   the table: `_want` is 1 while this pass is armed with the map edge on
-   mirror, `_have` is `level_gen + 1` of the copy this pass holds (0 = none).
-   Each is one aligned word the render thread stores; a stale read costs the
-   table one more packet, or one packet later -- never a wrong picture, since
-   the copy is keyed on the level it came from. */
-int      tagpu_feat_mapfeat_want(void);
-unsigned tagpu_feat_mapfeat_have(void);
+   the table: `_want` is 1 while this pass will draw the mirror's features --
+   armed, not passive, with the wreck half it needs to own the feature leaf --
+   and the map edge is on mirror; `_holds(level)` is 1 once this pass holds that
+   level's copy. The answers are aligned words the render thread stores; a
+   stale read costs the table one more packet, or one packet later -- never a
+   wrong picture, since the copy is keyed on the level it came from. */
+int tagpu_feat_mapfeat_want(void);
+int tagpu_feat_mapfeat_holds(unsigned level_gen);
 
-/* RENDER THREAD, before either gather: records whether the map edge wants the
-   table (`want`, the edge setting), takes it out of this frame's packet when
-   it rides there, and answers 1 while this pass holds this level's copy.
+/* RENDER THREAD, every frame, BEFORE the native pass's first early return:
+   stores `_want` from this frame's edge setting (`mirror`) and from what the
+   pass will emit, so a frame that returns early leaves the answer current and
+   a pass that stops drawing stops the table riding. */
+void tagpu_feat_mapfeat_ask(int mirror);
+
+/* RENDER THREAD, before either gather: takes the table out of this frame's
+   packet when it rides there, and answers whether the mirror may be shown.
    THE MIRROR IS SHOWN ONLY WHILE THIS IS 1, terrain and features alike
    (tagpu_native.c), so the mirrored ground never draws a frame without the
-   features that stand on it: the two switch on the same frame by
-   construction, not by the table's arrival time. */
+   features that stand on it: while this pass draws features, it is 1 only
+   once this level's copy is held, and the two switch on together by
+   construction. While it draws none -- disarmed, `passive`, or without the
+   wreck half -- the engine draws the map's features, never past the edge, and
+   the answer is 1: the mirror is the ground alone, as it is with the pass
+   off. */
 struct TAGPU_PACKET;
-int      tagpu_feat_mapfeat_sync(const struct TAGPU_PACKET* pk, int want);
+int tagpu_feat_mapfeat_sync(const struct TAGPU_PACKET* pk, int mirror);
 #endif

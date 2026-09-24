@@ -80,6 +80,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>         /* free: the loader's hand-over */
 #include <string.h>
 #include "dd.h"           /* g_ddraw: the game's own screen, for the roster's on-screen test */
 #include "render_vk.h"     /* vk_render_main: whether the session draws from packets */
@@ -405,18 +406,33 @@ static volatile unsigned s_cShdCopies;
    cached anchors either way, because their piece runs go into THIS packet's
    arena. The key is everything the scan's result depends on: the tick, the
    rect and the centre row it scans outward from. */
-/* THE MAP'S OWN FEATURES (TAGPU_PK_MAPFEAT): taken once a level, at its first
-   in-play draw, by `mapfeat_snapshot`. `s_mfGen` is the level it was taken
-   for, -1 before the first; the level end resets it. */
-static TAGPU_PK_MAPFEAT s_mfScratch[TAGPU_PK_MAX_MAPFEAT];
-static unsigned s_mfN;
-static int      s_mfGen = -1, s_mfTrunc;
-static volatile unsigned s_cMfCarried;
-
 static unsigned s_aTick;
 static int      s_aHave, s_aTrunc, s_aRect[4], s_aMid;
 static unsigned s_aN;
 static volatile unsigned s_cAnchScan, s_cAnchReuse;
+
+/* THE MAP'S OWN FEATURES (TAGPU_PK_MAPFEAT), the game thread's copy: adopted
+   from the loader's hand-over at the level's first in-play draw
+   (`mapfeat_adopt`), and level `s_mfLevel`'s while `s_mfHeld`. Keyed on the
+   level rather than reset to a sentinel, so no level_gen reads as "none". */
+static TAGPU_PK_MAPFEAT s_mfScratch[TAGPU_PK_MAX_MAPFEAT];
+static unsigned s_mfN, s_mfLevel;
+static int      s_mfHeld, s_mfTrunc;
+static volatile unsigned s_cMfCarried;
+/* ...and the LOADER'S HAND-OVER, the one thing both threads touch. The loader
+   thread builds the list on the heap and parks it here (`mapfeat_at_load`,
+   through `tagpu_packet_pub_mapfeat_loaded`); the game thread takes it over. Every
+   access to the slot is under `s_mfLock`, an interlocked lock: the loader
+   waits for it -- the game thread holds it for one copy of at most 512 KB --
+   and the game thread only tries it, and on a miss adopts at the next draw.
+   So the list is read only after it is written, by an ordering and not by the
+   load having happened to finish, and a second load before the first list is
+   adopted replaces it rather than racing it. */
+static volatile LONG     s_mfLock;
+static TAGPU_PK_MAPFEAT* s_mfLoadE;       /* malloc'd by the loader; freed by whoever
+                                             replaces or adopts it                     */
+static unsigned          s_mfLoadN, s_mfLoadLevel;
+static int               s_mfLoadHave, s_mfLoadTrunc;
 
 /* counters the heartbeat prints; game thread writes, render thread reads */
 static volatile unsigned s_cUnitTrunc, s_cWreckTrunc, s_cAnchTrunc, s_cPieceTrunc;
@@ -620,71 +636,66 @@ static void anchor_rect(const TAGPU_PACKET* p, int loX, int hiX, int loY, int hi
     if (*rows < 0) *rows = 0;
 }
 
-/* THE MAP'S OWN FEATURES, the whole grid once a level (TAGPU_PK_MAPFEAT has
-   why the first in-play draw is the moment). Every bound is the engine's own
-   count: the walk runs over the map_w16 x map_h16 cells the anchor scan above
-   also walks, a def is kept only inside NumFeatureDefs, and the height
-   neighbours take the anchor scan's edge clamps, so `lift` is the number the
-   projection would compute for the anchor. Once a level, so the cost -- one
-   u16 load per cell, 1.6 M cells on a 1280 x 1280 map -- is paid on the frame
-   the level opens and never again. */
-static void mapfeat_snapshot(const char* ta)
+/* THE LOADER'S HAND-OVER (tagpu_packet_pub.h). Runs on the LOADER THREAD,
+   inside LoadMap. The level it is stamped with is `s_levelGen` as the loader
+   reads it: the level end bumps it on the game thread before the next load's
+   thread is created, and nothing writes it again until that level ends, so
+   the stamp is the level the list's packets will carry. The stamp is also the
+   safety, not only the label: `mapfeat_adopt` takes a list only for the level
+   it is stamped with, so a stamp that were ever stale would leave that
+   level's edge black -- never mirror another level's features. */
+void tagpu_packet_pub_mapfeat_loaded(TAGPU_PK_MAPFEAT* e, unsigned n, int trunc)
 {
-    const char* fmap;
-    int mapW, mapH, defs, row, col;
-    s_mfGen = (int)s_levelGen;           /* tried: once a level, whatever it finds */
-    s_mfN = 0; s_mfTrunc = 0;
-    if (!ta) return;
-    fmap = *(const char* const*)(ta + OFF_FEATMAP);
-    mapW = RD32(ta, OFF_MAP_W16);
-    mapH = RD32(ta, OFF_MAP_H16);
-    defs = RD32(ta, OFF_FEATCOUNT);
-    if (!ptr_ok(fmap) || mapW <= 0 || mapH <= 0 || mapW > 4096 || mapH > 4096) return;
-    if (defs <= 0 || defs > 4096) return;
-    for (row = 0; row < mapH; row++) {
-        const char* trow = fmap + ((size_t)row * mapW) * FT_STRIDE;
-        for (col = 0; col < mapW; col++) {
-            const char* t = trow + (size_t)col * FT_STRIDE;
-            unsigned d = RDU16(t, FT_DEFIDX);
-            unsigned h, hr, hd, hrd;
-            TAGPU_PK_MAPFEAT* m;
-            if (d >= (unsigned)defs) continue;          /* 0xFFFB.. and junk alike */
-            if (RDU8(t, FT_FLAGS) & 1u) continue;       /* the wreck pool's        */
-            if (s_mfN >= TAGPU_PK_MAX_MAPFEAT) { s_mfTrunc = 1; row = mapH; break; }
-            h  = RDU8(t, FT_HEIGHT);
-            hr = (col + 1 < mapW) ? RDU8(t + FT_STRIDE, FT_HEIGHT) : h;
-            if (row + 1 < mapH) {
-                const char* t2 = t + (size_t)mapW * FT_STRIDE;
-                hd  = RDU8(t2, FT_HEIGHT);
-                hrd = (col + 1 < mapW) ? RDU8(t2 + FT_STRIDE, FT_HEIGHT) : hd;
-            } else { hd = h; hrd = hr; }
-            m = &s_mfScratch[s_mfN++];
-            m->col = (unsigned short)col; m->row = (unsigned short)row;
-            m->def = (unsigned short)d;
-            m->lift = (unsigned char)((h + hr + hd + hrd) >> 3);
-            m->pad = 0;
-        }
+    TAGPU_PK_MAPFEAT* old;
+    while (InterlockedCompareExchange(&s_mfLock, 1, 0) != 0) SwitchToThread();
+    old = s_mfLoadE;
+    s_mfLoadE = e; s_mfLoadN = n; s_mfLoadTrunc = trunc;
+    s_mfLoadLevel = s_levelGen; s_mfLoadHave = 1;
+    InterlockedExchange(&s_mfLock, 0);
+    free(old);
+}
+
+/* ...and its adoption, on the GAME THREAD, at an in-play draw of a level whose
+   list is not held yet. Bounded by this side's own capacity whatever the
+   loader said. */
+static void mapfeat_adopt(void)
+{
+    TAGPU_PK_MAPFEAT* e = NULL;
+    if (s_mfHeld && s_mfLevel == s_levelGen) return;
+    if (InterlockedCompareExchange(&s_mfLock, 1, 0) != 0) return;
+    if (s_mfLoadHave && s_mfLoadLevel == s_levelGen) {
+        unsigned n = s_mfLoadN < TAGPU_PK_MAX_MAPFEAT ? s_mfLoadN : TAGPU_PK_MAX_MAPFEAT;
+        if (n && s_mfLoadE) tagpu_pk_copy(s_mfScratch, s_mfLoadE, n * (unsigned)sizeof *s_mfScratch);
+        else n = 0;
+        s_mfN = n;
+        s_mfTrunc = s_mfLoadTrunc || n < s_mfLoadN;
+        s_mfLevel = s_levelGen; s_mfHeld = 1;
+        e = s_mfLoadE; s_mfLoadE = NULL; s_mfLoadHave = 0;
     }
-    {
+    InterlockedExchange(&s_mfLock, 0);
+    free(e);
+    if (s_mfHeld && s_mfLevel == s_levelGen) {
         char b[160];
-        _snprintf(b, sizeof b, "packet: level gen %u: the map's own features: %u anchor(s) over %dx%d%s",
-                  s_levelGen, s_mfN, mapW, mapH, s_mfTrunc ? " (TRUNCATED at the table's cap)" : "");
+        _snprintf(b, sizeof b, "packet: level gen %u: the map's own features adopted from the load: %u%s",
+                  s_levelGen, s_mfN, s_mfTrunc ? " (TRUNCATED at the table's cap)" : "");
         b[sizeof b - 1] = 0; plog(b);
     }
 }
 
-/* ...into this packet, while the consumer wants them and does not yet hold
+/* ...into this packet, WHOLE -- `mapfeat_ok` set only when every entry landed,
+   none at all included -- while the consumer wants them and does not yet hold
    this level's. */
 static unsigned fill_mapfeat(TAGPU_PACKET* p, unsigned* cursor)
 {
     unsigned e;
-    if (!s_mfN || s_mfGen != (int)p->level_gen) return *cursor;
-    if (!tagpu_feat_mapfeat_want() || tagpu_feat_mapfeat_have() == p->level_gen + 1u)
-        return *cursor;
+    if (!s_mfHeld || s_mfLevel != p->level_gen) return *cursor;
+    if (!tagpu_feat_mapfeat_want() || tagpu_feat_mapfeat_holds(p->level_gen)) return *cursor;
     e = append_table(p, cursor, s_mfScratch, s_mfN, (unsigned)sizeof(TAGPU_PK_MAPFEAT),
                      &p->off_mapfeat, &p->n_mapfeat, TAGPU_PK_TRUNC_MAPFEAT);
+    if (p->n_mapfeat != s_mfN) return e;                 /* cut: the next packet */
+    p->mapfeat_ok = 1;
     if (s_mfTrunc) p->truncated |= TAGPU_PK_TRUNC_MAPFEAT;
-    if (p->n_mapfeat) s_cMfCarried++;
+    s_cMfCarried++;
     return e;
 }
 
@@ -2117,12 +2128,14 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 
     /* THE ORDER IS THE CUT ORDER. A fill that does not fit the reserve is
        published cut (tagpu_packet.c, pkx_publish), and what is cut is what
-       comes last. So the fog grids and the shade table go down first and the
-       world tables straight after them -- the reserve holds all of those at
-       the design point (tagpu_packet.c, PK_RESERVE) -- and what an overflow
-       can reach is what follows: the build orders, the effects, the UI's
-       render half, the font. A frame below 1x without its fog grids is drawn
-       bare, and one without its unit tables drops its whole unit hand-over;
+       comes last. So the fog grids and the shade table go down first, the
+       world tables straight after them, and then the map's own features while
+       the mirror is taking them -- the reserve holds all of those at the
+       design point (tagpu_packet.c, PK_RESERVE) -- and what an overflow can
+       reach is what follows: the build orders, the effects, the UI's render
+       half, the font. A frame below 1x without its fog grids is drawn bare,
+       one without its unit tables drops its whole unit hand-over, and one
+       without its map-feature table leaves the mirror off another packet;
        one without an effect layer or the minimap is missing that alone. */
     /* ---- the fog grids, decided first: the world tables are sized by them ---- */
     fog_sources(ta);
@@ -2137,6 +2150,12 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     }
     /* ---- the world tables ---- */
     e = fill_world(p, ta, &cursor);
+    if (e > need) need = e;
+    /* ---- the map's own features, until the mirror holds them: inside the
+       reserve's design point with the world tables (tagpu_packet.c), so a cut
+       never reaches them -- a mirror drawn without its trees is a different
+       picture, and this table rides only a level's first packets ---- */
+    e = fill_mapfeat(p, &cursor);
     if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
     e = fill_builds(p, &cursor);
@@ -2165,13 +2184,6 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
            must blank, and stay blank. */
         if (s_fontLen) p->font_gen = 0;
     }
-
-    /* ---- the map's own features, until the mirror holds them: LAST, because
-       the cut order cuts what comes last (above) and this is the one table
-       that loses nothing by waiting -- it rides every packet until the
-       feature pass says it holds this level's copy ---- */
-    e = fill_mapfeat(p, &cursor);
-    if (e > need) need = e;
 
     /* stress: a dummy table past a one-page commit, so the growth path runs */
     if (s_stress) {
@@ -2437,8 +2449,8 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
     s_fxHave = 0; s_nProj = s_nExpl = s_nDebris = s_nPart = 0;
     /* the next level's picture is a different picture, and it has not been sent */
     s_mmPicGen = -1; s_mmPicW = s_mmPicH = 0;
-    /* and its features are a different map's */
-    s_mfGen = -1; s_mfN = 0; s_mfTrunc = 0;
+    /* and its features are a different map's (keyed on the level either way) */
+    s_mfHeld = 0; s_mfN = 0; s_mfTrunc = 0;
 }
 
 /* ---- the observers ------------------------------------------------------- */
@@ -2539,11 +2551,10 @@ static void* __cdecl after_draw(unsigned int* regs)
        with no consumer -- the GDI backend, where nothing calls
        tagpu_packet_acquire -- this forces about twice a second and `overrun`
        counts every one; gpu-status.md's exchange health rule says so. */
-    /* THE MAP'S OWN FEATURES, BEFORE THE PUBLISH AND OUTSIDE ITS GATE: the
-       level's first in-play `after` is the one moment that is before every
-       run of the scenario applier's stub at 0x4969D2 (TAGPU_PK_MAPFEAT), and
-       a publish can be skipped -- this cannot. */
-    if (s_mfGen != (int)s_levelGen) mapfeat_snapshot(ta_main());
+    /* THE MAP'S OWN FEATURES, BEFORE THE PUBLISH AND OUTSIDE ITS GATE: a
+       publish can be skipped, the adoption cannot, and the list it adopts was
+       taken during the load, before anything played on the map. */
+    mapfeat_adopt();
     {
         const int pub = tagpu_packet_publish(fill_frame, NULL,
                                              !s_levelOpen || roster_wants_fill());
@@ -2641,6 +2652,240 @@ static void* __cdecl after_loader(unsigned int* regs)
               s_levelOpen ? "ALREADY PUBLISHED" : "not yet");
     b[sizeof b - 1] = 0; plog(b);
     return ret;
+}
+
+/* ---- the map's own features, from the TNT (TAGPU_PK_MAPFEAT) -------------
+   THE MIRROR IS THE MAP AS ITS TNT LAYS IT OUT, and the one place that list
+   exists is LoadMap 0x483610, on the loader thread, while it holds the TNT.
+   A fresh game places the TNT's features into the grid there; a SAVED game
+   does not (the two `jne 0x483B53` on OFF_SAVEDGAME) -- the save's own records
+   are restored into the grid later, by 0x424C00 from 0x432610 -- so no moment
+   of a saved game's load has the TNT's features in the grid, and a grid read
+   would mirror the saved game, burnt trees and all. So the list is BUILT FROM
+   THE TNT, by LoadMap's own rules, at the join every path reaches
+   (VA_LOADMAP_JOIN), on both paths alike: a fresh game and its save mirror
+   the same features by construction.
+
+   THE RULES ARE SpawnFeatureOnMap 0x423C50(cell, def, 0, 0, 0xA) and the
+   FEATURES_Destroy 0x4246B0(cell, 0) it calls [DISASSEMBLED]:
+   - a v2 map first marks every cell whose TNT feature is 0xFFFC as void;
+     then, cell by cell in row order, every feature below LM_THRESH is spawned
+     with the TNT's index as the FeatureDef index;
+   - a spawn refuses a footprint (FD_FOOTX x FD_FOOTZ, from the anchor right
+     and down) that runs past the map; then, footprint cell by footprint cell,
+     anything that is not empty is destroyed -- a footprint cell (0xFFFE)
+     resolves to its anchor through its dz/dx bytes -- and a destroy that is
+     refused (a void or other marker at 0xFFFB and up, or a def with FD_MASKHI
+     bit1) abandons the spawn, keeping what it destroyed so far;
+   - a 3DO def (FD_MASK bit0 clear) then takes a wreck-pool record, and none
+     left abandons it too; a destroy of one gives its record back;
+   - the anchor takes the def, every other footprint cell 0xFFFE and its
+     dz/dx, and a destroy clears the anchor and every 0xFFFE cell of the
+     destroyed def's rectangle.
+   What is kept is every GAF anchor that survives, row-major; the 3D ones are
+   the wreck pool's and are not mirrored. The schema's own features, which
+   0x423160 adds to a fresh v2 game after the TNT's, are not the TNT's and are
+   not in it either.
+
+   EVERY BOUND IS THE ENGINE'S OWN: the cell records are the W x H the engine
+   has just read on this path (the height loop runs on both), a def is read
+   only under the FeatureDef count 0x421F20 has just set -- the engine spawns a
+   TNT index past it unchecked; we skip it and count it -- and every footprint
+   index is inside the map by the spawn's own refusal. The working grid is
+   ours, W x H words on the heap, freed before the join returns; W and H are
+   the ones the engine allocated its own grid with (main+0x14233/0x14237). */
+typedef struct {
+    const char* defs;
+    unsigned*   g;             /* per cell: the def, or 0xFFFF / 0xFFFC / 0xFFFE;
+                                  a 0xFFFE cell's dz in bits 16..23, dx 24..31   */
+    int         W, H, count;
+    unsigned    pool, poolFull, refused, beyond, placed3d;
+} MF_TNT;
+
+#define MFT_EMPTY 0xFFFFu
+#define MFT_VOID  0xFFFCu
+#define MFT_FOOT  0xFFFEu
+
+static int mft_destroy(MF_TNT* m, int c)
+{
+    unsigned v = m->g[c], d;
+    const char* def;
+    int fx, fz, dz, dx;
+    if ((v & 0xFFFFu) == MFT_FOOT) {
+        c -= (int)((v >> 16) & 0xFFu) * m->W + (int)(v >> 24);
+        if (c < 0) return 0;             /* a mark is only ever made from its anchor */
+        v = m->g[c];
+    }
+    d = v & 0xFFFFu;
+    if (d >= 0xFFFBu) return 0;
+    def = m->defs + (size_t)d * FD_STRIDE;     /* only a def under the count is placed */
+    if (RDU8(def, FD_MASKHI) & 2u) return 0;
+    if (!(RDU8(def, FD_MASK) & 1u) && m->pool) m->pool--;
+    m->g[c] = MFT_EMPTY;
+    fx = RDI16(def, FD_FOOTX); fz = RDI16(def, FD_FOOTZ);
+    for (dz = 0; dz < fz; dz++)
+        for (dx = 0; dx < fx; dx++) {
+            unsigned* q = &m->g[c + dz * m->W + dx];
+            if ((*q & 0xFFFFu) == MFT_FOOT) *q = MFT_EMPTY;
+        }
+    return 1;
+}
+
+static void mft_spawn(MF_TNT* m, int idx, unsigned d)
+{
+    const char* def;
+    int col = idx % m->W, row = idx / m->W, fx, fz, dz, dx;
+    if (d >= (unsigned)m->count) { m->beyond++; return; }
+    def = m->defs + (size_t)d * FD_STRIDE;
+    fx = RDI16(def, FD_FOOTX); fz = RDI16(def, FD_FOOTZ);
+    if (col + fx > m->W || row + fz > m->H) { m->refused++; return; }
+    for (dz = 0; dz < fz; dz++)
+        for (dx = 0; dx < fx; dx++) {
+            int c = idx + dz * m->W + dx;
+            if ((m->g[c] & 0xFFFFu) != MFT_EMPTY && !mft_destroy(m, c)) { m->refused++; return; }
+        }
+    if (!(RDU8(def, FD_MASK) & 1u)) {
+        if (m->pool >= (unsigned)WR_COUNT) { m->poolFull++; return; }
+        m->pool++; m->placed3d++;
+    }
+    m->g[idx] = d;
+    for (dz = 0; dz < fz; dz++)
+        for (dx = 0; dx < fx; dx++)
+            if (dz || dx)
+                m->g[idx + dz * m->W + dx] = MFT_FOOT | ((unsigned)(dz & 0xFF) << 16) |
+                                             ((unsigned)(dx & 0xFF) << 24);
+}
+
+/* LOADER THREAD, at VA_LOADMAP_JOIN. `regs` is the stub's pushad block and
+   LoadMap's own frame follows it. Returns nothing the engine sees: the stub
+   restores every register and runs the stolen bytes. */
+static void __cdecl mapfeat_at_load(const unsigned int* regs)
+{
+    const char* f = (const char*)(regs + 8);
+    const char* ta = ta_main();
+    const unsigned char* v1 = *(const unsigned char* const*)(f + LM_V1RECS);
+    const unsigned char* v2 = *(const unsigned char* const*)(f + LM_V2RECS);
+    unsigned thresh = *(const unsigned*)(f + LM_THRESH);
+    int version = *(const int*)(f + LM_VERSION);
+    const char* grid;
+    MF_TNT m;
+    TAGPU_PK_MAPFEAT* e = NULL;
+    unsigned n = 0, want = 0, idx, cells;
+    int trunc = 0;
+    LARGE_INTEGER t0, t1;
+    char b[320];
+
+    /* the mirror is a Vulkan-lane picture: under any other renderer nothing
+       would take the list, so nothing is built */
+    if (g_ddraw.renderer != vk_render_main || !ta) return;
+    QueryPerformanceCounter(&t0);
+    memset(&m, 0, sizeof m);
+    m.W = RD32(ta, OFF_MAP_W16); m.H = RD32(ta, OFF_MAP_H16);
+    m.count = RD32(ta, OFF_FEATCOUNT);
+    m.defs = *(const char* const*)(ta + OFF_FEATDEF);
+    grid = *(const char* const*)(ta + OFF_FEATMAP);
+    if (m.W <= 0 || m.H <= 0 || m.W > 4096 || m.H > 4096 || !ptr_ok(grid) ||
+        m.count < 0 || m.count > 4096 || (m.count && !ptr_ok(m.defs)) ||
+        (version == 0x2000 ? !ptr_ok(v2) : version == 0x1020 ? (v1 && !ptr_ok(v1)) : 1)) {
+        _snprintf(b, sizeof b, "packet: LoadMap: the map's own features NOT taken: map %dx%d, "
+                  "%d defs, TNT version 0x%X (the mirror stays off this level)", m.W, m.H, m.count, version);
+        b[sizeof b - 1] = 0; plog(b);
+        return;
+    }
+    if (version == 0x2000) { v1 = NULL; if (thresh > 0xFFFBu) thresh = 0xFFFBu; }
+    else { v2 = NULL; if (thresh > 0xFCu) thresh = 0xFCu; }
+    cells = (unsigned)m.W * (unsigned)m.H;
+    m.g = (unsigned*)malloc((size_t)cells * sizeof *m.g);
+    if (!m.g) {
+        _snprintf(b, sizeof b, "packet: LoadMap: the map's own features NOT taken: no %u KB for the "
+                  "working grid (the mirror stays off this level)", (unsigned)(cells * sizeof *m.g >> 10));
+        b[sizeof b - 1] = 0; plog(b);
+        return;
+    }
+    for (idx = 0; idx < cells; idx++) m.g[idx] = MFT_EMPTY;
+    if (v2) {
+        for (idx = 0; idx < cells; idx++)
+            if (*(const unsigned short*)(v2 + (size_t)idx * 4 + 1) == MFT_VOID) m.g[idx] = MFT_VOID;
+        for (idx = 0; idx < cells; idx++) {
+            unsigned d = *(const unsigned short*)(v2 + (size_t)idx * 4 + 1);
+            if (d < thresh) mft_spawn(&m, (int)idx, d);
+        }
+    } else if (v1) {
+        for (idx = 0; idx < cells; idx++) {
+            unsigned d = v1[(size_t)idx * 8 + 2];
+            if (d < thresh) mft_spawn(&m, (int)idx, d);
+        }
+    }
+    for (idx = 0; idx < cells; idx++) {
+        unsigned d = m.g[idx] & 0xFFFFu;
+        if (d < (unsigned)m.count && (RDU8(m.defs + (size_t)d * FD_STRIDE, FD_MASK) & 1u)) want++;
+    }
+    if (want > TAGPU_PK_MAX_MAPFEAT) { want = TAGPU_PK_MAX_MAPFEAT; trunc = 1; }
+    if (want) e = (TAGPU_PK_MAPFEAT*)malloc((size_t)want * sizeof *e);
+    if (want && !e) {
+        free(m.g);
+        plog("packet: LoadMap: the map's own features NOT taken: no memory for the list "
+             "(the mirror stays off this level)");
+        return;
+    }
+    for (idx = 0; idx < cells && n < want; idx++) {
+        unsigned d = m.g[idx] & 0xFFFFu;
+        int col = (int)(idx % (unsigned)m.W), row = (int)(idx / (unsigned)m.W);
+        const char* t;
+        unsigned h, hr, hd, hrd;
+        if (d >= (unsigned)m.count || !(RDU8(m.defs + (size_t)d * FD_STRIDE, FD_MASK) & 1u)) continue;
+        /* the lift from the grid's heights, which LoadMap wrote from the same
+           records on both paths before the join; the anchor table's edge
+           clamps, so it is the projection's own height term */
+        t = grid + (size_t)idx * FT_STRIDE;
+        h  = RDU8(t, FT_HEIGHT);
+        hr = (col + 1 < m.W) ? RDU8(t + FT_STRIDE, FT_HEIGHT) : h;
+        if (row + 1 < m.H) {
+            const char* t2 = t + (size_t)m.W * FT_STRIDE;
+            hd  = RDU8(t2, FT_HEIGHT);
+            hrd = (col + 1 < m.W) ? RDU8(t2 + FT_STRIDE, FT_HEIGHT) : hd;
+        } else { hd = h; hrd = hr; }
+        e[n].col = (unsigned short)col; e[n].row = (unsigned short)row;
+        e[n].def = (unsigned short)d;
+        e[n].lift = (unsigned char)((h + hr + hd + hrd) >> 3);
+        e[n].pad = 0;
+        n++;
+    }
+    free(m.g);
+    tagpu_packet_pub_mapfeat_loaded(e, n, trunc);
+    QueryPerformanceCounter(&t1);
+    _snprintf(b, sizeof b, "packet: LoadMap (loader thread %u, level gen %u): the map's own features "
+              "from its TNT: %u%s over %dx%d (v%d, %s game; %u spawn(s) refused, %u past the %d defs, "
+              "%u 3D, %u refused a pool record) in %.2f ms",
+              (unsigned)GetCurrentThreadId(), s_levelGen, n, trunc ? " (TRUNCATED at the table's cap)" : "",
+              m.W, m.H, v2 ? 2 : 1, RD32(ta, OFF_SAVEDGAME) ? "a saved" : "a new",
+              m.refused, m.beyond, m.count, m.placed3d, m.poolFull,
+              (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)s_freq.QuadPart);
+    b[sizeof b - 1] = 0; plog(b);
+}
+
+static const unsigned char LOADMAP_STOLEN[7] = { 0x8B, 0x54, 0x24, 0x40,   /* mov edx,[esp+0x40] */
+                                                 0xC1, 0xE2, 0x0A };       /* shl edx,0xa        */
+static int mapfeat_install(void)
+{
+    unsigned char* s;
+    unsigned char* p;
+    if (!tagpu_detour_bytes_ok(VA_LOADMAP_JOIN, LOADMAP_STOLEN, sizeof LOADMAP_STOLEN)) return 0;
+    s = p = tagpu_detour_stub();
+    if (!s) return 0;
+    *p++ = 0x60;                                            /* pushad           */
+    *p++ = 0x54;                                            /* push esp         */
+    *p++ = 0xE8;                                            /* call             */
+    tagpu_detour_rel(p, (unsigned int)(size_t)mapfeat_at_load); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                  /* add esp,4        */
+    *p++ = 0x61;                                            /* popad            */
+    memcpy(p, LOADMAP_STOLEN, sizeof LOADMAP_STOLEN); p += sizeof LOADMAP_STOLEN;
+    *p++ = 0xE9; tagpu_detour_rel(p, VA_LOADMAP_JOIN + (unsigned)sizeof LOADMAP_STOLEN); p += 4;
+    if (!tagpu_detour_land(VA_LOADMAP_JOIN, s, (int)sizeof LOADMAP_STOLEN)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return 0;
+    }
+    return 1;
 }
 
 unsigned tagpu_packet_pub_draw_seq(void)  { return s_cDraws; }
@@ -2943,7 +3188,7 @@ static void* __cdecl after_cursor(unsigned int* regs)
 void tagpu_packet_pub_init(void)
 {
     char b[400];
-    int drawOk, loaderOk, cursorOk;
+    int drawOk, loaderOk, cursorOk, mapfeatOk;
     s_gameTid = GetCurrentThreadId();       /* DllMain runs on the game loop's thread */
     QueryPerformanceFrequency(&s_freq);
     s_countOnly = !tagpu_packet_armed();
@@ -2978,6 +3223,11 @@ void tagpu_packet_pub_init(void)
     tagpu_packet_producer(s_gameTid);
     loaderOk = tagpu_detour_bytes_ok(VA_LOADER_ENTRY, LOADER_STOLEN, sizeof LOADER_STOLEN) &&
                tagpu_detour_observe(VA_LOADER_ENTRY, LOADER_STOLEN, sizeof LOADER_STOLEN, before_loader, after_loader);
+    /* the map's own features, taken inside LoadMap: only when something
+       publishes, since the list rides the packet and nothing else reads it.
+       A site that does not take leaves the mirror off -- the consumer never
+       holds a list, so neither ground nor trees are mirrored -- and says so. */
+    mapfeatOk = !s_countOnly && mapfeat_install();
     /* the shell's cursor channel — the cursor draw inside the flip. Only when
        something publishes: in count-only mode it would cost a hijack per
        present to reach a publish that returns 0 at the door. Armed, the site
@@ -2996,6 +3246,12 @@ void tagpu_packet_pub_init(void)
               s_levelEndBy == 1 ? "tagpu_reclaim's teardown post hook" : s_levelEndBy == 2 ? "our own observer on the teardown 0x491B60 (reclaim is not armed; the level generation is this module's own either way)" : "nobody",
               loaderOk, (unsigned)s_gameTid,
               s_countOnly ? " — nothing is published, taken or applied: no world pass draws, no command is applied (the engine's own camera range, rect and scroll rate), every string through tagpu_text_place draws nothing" : "");
+    b[sizeof b - 1] = 0;
+    plog(b);
+    _snprintf(b, sizeof b, "packet: the map's own features from LoadMap's join 0x483B53=%d%s", mapfeatOk,
+              mapfeatOk ? " (loader thread, Vulkan lane only)"
+                        : s_countOnly ? " (count-only: nothing is published at all)"
+                                      : " -- NOT installed: the engine bytes differ, and the map edge stays black");
     b[sizeof b - 1] = 0;
     plog(b);
     /* its own line, because a missing shell cursor is otherwise a silent

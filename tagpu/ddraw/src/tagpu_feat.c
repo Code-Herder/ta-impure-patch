@@ -184,8 +184,10 @@ static int s_pubHave;                  /* this frame's hand-over is waiting   */
 static TAGPU_FEATHAND s_pub;
 static int s_mirrorAsked;              /* the atlas mirror has been asked for */
 /* the map edge's mirror, as the publisher reads it (tagpu_feat.h
-   `tagpu_feat_mapfeat_want`/`_have`): stored here, read on the game thread */
-static volatile LONG s_mfWant, s_mfHave;
+   `tagpu_feat_mapfeat_want`/`_holds`): stored here, read on the game thread.
+   `s_mfHaveLevel` is written before `s_mfHaveOk` is first raised, and neither
+   carries a reserved value, so no level_gen can read as "none". */
+static volatile LONG s_mfWant, s_mfHaveOk, s_mfHaveLevel;
 static int s_rlistAsked;               /* ...or the published restore list    */
 
 int tagpu_feat_armed(unsigned frame_counter)
@@ -720,11 +722,11 @@ static int feat_bail(void)
 
 /* ---- the map edge's mirror -------------------------------------------------
    Past the map, the view shows the MAP'S OWN features reflected with the
-   ground under them (tascene-view.html, buildFeatures): the level's first
-   in-play feature grid (tagpu_packet.h TAGPU_PK_MAPFEAT), never the live
-   anchors -- a tree burnt or a wreck a scenario placed is the game's, not the
-   map's. The table arrives once a level; this pass keeps its own copy,
-   bucketed by row, keyed on the level it came from. */
+   ground under them (tascene-view.html, buildFeatures): the map as its TNT
+   lays it out (tagpu_packet.h TAGPU_PK_MAPFEAT), never the live anchors -- a
+   tree burnt, reclaimed or lost before a save, or a wreck a scenario placed,
+   is the game's, not the map's. The table arrives once a level; this pass
+   keeps its own copy, bucketed by row, keyed on the level it came from. */
 /* THE DIMENSION BOUND, the one this pass already refuses a map past
    (`mapW > 4096` in the gather): every array below is sized by it, so an index
    under the map's own dimension is under the array's. */
@@ -733,7 +735,8 @@ static TAGPU_PK_MAPFEAT s_mf[TAGPU_PK_MAX_MAPFEAT];   /* the copy, by row     */
 static int              s_mfRow[MF_DIM + 1];          /* row starts into s_mf */
 static int              s_mfCur[MF_DIM];              /* the bucketing's cursors */
 static int              s_mfN, s_mfW, s_mfH, s_mfTrunc;
-static unsigned         s_mfGen;       /* level_gen + 1 of the copy; 0 = none    */
+static int              s_mfHeld;      /* the copy is level s_mfLevel's         */
+static unsigned         s_mfLevel;
 /* one source row's anchors by column (index + 1), set and cleared per row */
 static unsigned         s_mfCell[MF_DIM];
 /* this frame's sweep column -> the map column it folds to, and its flip; the
@@ -741,21 +744,40 @@ static unsigned         s_mfCell[MF_DIM];
 static short            s_mfCol[MF_DIM];
 static unsigned char    s_mfColFlip[MF_DIM];
 
-int      tagpu_feat_mapfeat_want(void) { return (int)s_mfWant; }
-unsigned tagpu_feat_mapfeat_have(void) { return (unsigned)s_mfHave; }
+int tagpu_feat_mapfeat_want(void) { return (int)s_mfWant; }
+int tagpu_feat_mapfeat_holds(unsigned level_gen)
+{
+    return s_mfHaveOk && (unsigned)s_mfHaveLevel == level_gen;
+}
 
-/* THE LEVEL'S TABLE, INTO THIS PASS'S COPY. Bucketed by row with a counting
-   sort, and every entry is BOUNDED on the way in: a row or column outside the
-   map it claims is dropped, so the lookups below index `s_mfRow` by a row
-   under mapH and `s_mfCell` by a column under mapW, by construction and not by
-   the publisher's row order. */
+/* what this pass will emit this frame: armed, not the passive A/B lever, and
+   with the wreck half that lets it own the feature leaf (the gather's
+   `s_mute` is the same test) */
+static int feat_emits(void)
+{
+    return s_armed == 1 && !s_passive && tagpu_native_wrecks_armed();
+}
+
+void tagpu_feat_mapfeat_ask(int mirror)
+{
+    s_mfWant = (mirror && feat_emits()) ? 1 : 0;
+}
+
+/* THE LEVEL'S TABLE, INTO THIS PASS'S COPY, from the packet that carries it
+   whole (`mapfeat_ok`): an empty one is a map with no features, and is held
+   like any other. Bucketed by row with a counting sort, and every entry is
+   BOUNDED on the way in: a row or column outside the map it claims is
+   dropped, so the lookups below index `s_mfRow` by a row under mapH and
+   `s_mfCell` by a column under mapW, by construction and not by the
+   publisher's row order. */
 static void mapfeat_take(const TAGPU_PACKET* pk)
 {
     const TAGPU_PK_MAPFEAT* src = tagpu_pk_mapfeat(pk);
     int w = pk->map_w16, h = pk->map_h16, n = (int)pk->n_mapfeat, i, kept = 0;
-    if (!src || s_mfGen == pk->level_gen + 1u) return;
-    if (w <= 0 || h <= 0 || w > MF_DIM || h > MF_DIM || n <= 0 || n > (int)TAGPU_PK_MAX_MAPFEAT)
+    if (!pk->mapfeat_ok || (s_mfHeld && s_mfLevel == pk->level_gen)) return;
+    if (w <= 0 || h <= 0 || w > MF_DIM || h > MF_DIM || n < 0 || n > (int)TAGPU_PK_MAX_MAPFEAT)
         return;
+    if (n > 0 && !src) return;
     memset(s_mfRow, 0, (size_t)(h + 1) * sizeof *s_mfRow);
     memset(s_mfCell, 0, (size_t)w * sizeof *s_mfCell);
     for (i = 0; i < n; i++)
@@ -765,8 +787,9 @@ static void mapfeat_take(const TAGPU_PACKET* pk)
         if (src[i].row < h && src[i].col < w) { s_mf[s_mfCur[src[i].row]++] = src[i]; kept++; }
     s_mfN = kept; s_mfW = w; s_mfH = h;
     s_mfTrunc = (pk->truncated & TAGPU_PK_TRUNC_MAPFEAT) != 0;
-    s_mfGen = pk->level_gen + 1u;
-    InterlockedExchange(&s_mfHave, (LONG)s_mfGen);
+    s_mfLevel = pk->level_gen; s_mfHeld = 1;
+    InterlockedExchange(&s_mfHaveLevel, (LONG)s_mfLevel);
+    InterlockedExchange(&s_mfHaveOk, 1);
     {
         char b[160];
         _snprintf(b, sizeof b, "feat: mirror: the map's own features taken for level %u: "
@@ -777,21 +800,80 @@ static void mapfeat_take(const TAGPU_PACKET* pk)
     }
 }
 
-int tagpu_feat_mapfeat_sync(const TAGPU_PACKET* pk, int want)
+int tagpu_feat_mapfeat_sync(const TAGPU_PACKET* pk, int mirror)
 {
-    s_mfWant = (s_armed == 1 && want) ? 1 : 0;
-    if (s_armed != 1 || !pk || !pk->in_game) return 0;
+    if (!mirror || !feat_emits()) return 1;
+    if (!pk || !pk->in_game) return 0;
     mapfeat_take(pk);
-    return s_mfGen == pk->level_gen + 1u && s_mfW == pk->map_w16 && s_mfH == pk->map_h16;
+    return s_mfHeld && s_mfLevel == pk->level_gen && s_mfW == pk->map_w16 && s_mfH == pk->map_h16;
 }
 
-/* THE RECT THE DEPTH KEYS ARE TAKEN OVER. Under the mirror it is the sweep
-   rect NOT clamped to the map, for the map's own features and the mirrored
-   ones alike, so the two sort against each other by one painter's order --
-   row by row, left to right, across the edge. Inside the map the ORDER is the
-   clamped rect's either way (both keys grow with the row, then the column), so
-   what the mirror changes on the map is only the key's value. */
-typedef struct { int r0, rows, c0, cols; float span; } KEYRECT;
+/* THE DEPTH KEYS' TWO RECTS. The map's own features take their keys over the
+   engine's sweep rect CLAMPED to the map (r0/rows/c0/cols), with the mirror on
+   or off: an on-map key never moves with the edge setting, so the map sorts
+   against units and 3D wrecks exactly as it does without the mirror. The
+   mirrored ones sit in the rest of the UNCLAMPED sweep (ur0/urows/uc0/ucols)
+   and take keys that continue that order across the edge (mirror_key). */
+typedef struct {
+    int r0, rows, c0, cols; float span;      /* clamped: the map's own keys */
+    int ur0, urows, uc0, ucols;              /* unclamped: the whole sweep  */
+} KEYRECT;
+
+/* A MIRRORED FEATURE'S KEY, and it never moves a key on the map. The painter's
+   order over the whole sweep is row by row, left to right, across the edge;
+   the map's keys already encode it inside the clamped rect, and a mirrored
+   cell's key is placed where that order puts it without touching them:
+   - TALL: the map's row key (3 + 4 rel, above this row's units, which reach
+     1 + 4 rel + 1.8) plus a column term. On the map that term is
+     1.5 (col - c0) / cols, in [0, 1.5); a mirrored cell LEFT of the clamped
+     columns takes [-0.19, -0.01) -- still above every unit of its row -- and
+     one RIGHT of them [1.5, 1.9) -- still below the next row's features, and
+     at the last row the band allows (rel = rows + 8) below the effects' keys,
+     which start at 3 + 4 (rows + 8) + 2.2 (tagpu_native.c `fxKey`, less the
+     models' 1.8). Rows are 4 apart and the column term spans 2.09, so rows
+     never interleave.
+   - FLAT: the map's are 0.40 + 0.10 f, f the row-major fraction over the
+     clamped rect, in [0, 1). Rows above that rect take f in [-0.6, -0.1) and
+     rows below it [1.1, 1.6), each row-major over the whole sweep, and a
+     side cell on one of the rect's own rows goes into the gap between that
+     row's last on-map key and the next row's first: f + 1/span in there is
+     the painter's order exactly. Every one stays inside the particles'
+     bracket, 0.30 below and 0.60 above, shadows (0.03 under) included. */
+static float mirror_key(const TAGPU_FXVIEW* v, const KEYRECT* k, int row, int col, int flat)
+{
+    const int L = k->c0, R = k->c0 + (k->cols > 0 ? k->cols : 0);
+    const int T = k->r0, B = k->r0 + (k->rows > 0 ? k->rows : 0);
+    const float left = (float)(L - k->uc0 > 1 ? L - k->uc0 : 1);
+    const float right = (float)(k->uc0 + k->ucols - R > 1 ? k->uc0 + k->ucols - R : 1);
+    if (flat) {
+        float f;
+        if (row < T || row >= B || k->cols <= 0) {
+            /* above or below the clamped rect -- or beside a rect with no
+               columns at all -- row-major over this band of the sweep */
+            const int b0 = row < T ? k->ur0 : row >= B ? B : T;
+            const int b1 = row < T ? T : row >= B ? k->ur0 + k->urows : B;
+            const float u = ((float)(row - b0) * (float)k->ucols + (float)(col - k->uc0)) /
+                            ((float)(b1 - b0 > 1 ? b1 - b0 : 1) * (float)(k->ucols > 1 ? k->ucols : 1));
+            f = row < T ? -0.6f + 0.5f * u : row >= B ? 1.1f + 0.5f * u : u;
+        } else if (col < L) {
+            f = ((float)(row - k->r0) * (float)k->cols - 1.0f +
+                 0.55f + 0.4f * (float)(col - k->uc0) / left) / k->span;
+        } else {
+            f = ((float)(row - k->r0) * (float)k->cols + (float)k->cols - 1.0f +
+                 0.05f + 0.4f * (float)(col - R) / right) / k->span;
+        }
+        return 0.40f + 0.10f * f;
+    } else {
+        int rel = row - v->r0;
+        float c;
+        if (rel < 0) rel = 0;
+        if (rel > v->rows + 8) rel = v->rows + 8;
+        if (col < L)      c = -0.19f + 0.18f * (float)(col - k->uc0) / left;
+        else if (col < R) c = 1.5f * ((float)(col - k->c0) / (float)k->cols);
+        else              c = 1.5f + 0.4f * (float)(col - R) / right;
+        return 3.0f + (float)rel * 4.0f + c;
+    }
+}
 
 /* one of the map's anchors, mirrored to sweep cell (row, col) */
 static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
@@ -827,15 +909,7 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
     waz = flipY ? (row + 1) * 16 - hz + m->lift : row * 16 + hz - m->lift;
     sx = wax + 128 - v->eyeX;
     sy = waz + 32 - v->eyeY;
-    if (flat) {
-        float f = ((float)(row - k->r0) * (float)k->cols + (float)(col - k->c0)) / k->span;
-        enc = 0.40f + 0.10f * f;
-    } else {
-        int rel = row - v->r0;
-        if (rel < 0) rel = 0;
-        if (rel > v->rows + 8) rel = v->rows + 8;
-        enc = 3.0f + (float)rel * 4.0f + 1.5f * ((float)(col - k->c0) / (float)k->cols);
-    }
+    enc = mirror_key(v, k, row, col, flat);
     shadSeq = *(const char* const*)(def + FD_SHADSEQ);
     bodySeq = *(const char* const*)(def + FD_BODYSEQ);
     animating = (mask & 2) != 0;
@@ -881,24 +955,24 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
                           int shadowsOn, const KEYRECT* k)
 {
     int mapW = s_mfW, mapH = s_mfH, row, i;
-    if (k->cols <= 0 || k->cols > MF_DIM || k->rows <= 0) return;
-    for (i = 0; i < k->cols; i++) {
-        int col = k->c0 + i, f = 0;
+    if (k->ucols <= 0 || k->ucols > MF_DIM || k->urows <= 0) return;
+    for (i = 0; i < k->ucols; i++) {
+        int col = k->uc0 + i, f = 0;
         s_mfCol[i] = (short)((col < 0 || col >= mapW) ? tagpu_edge_reflect(col, mapW, &f) : col);
         s_mfColFlip[i] = (unsigned char)f;
     }
-    for (row = k->r0; row < k->r0 + k->rows; row++) {
+    for (row = k->ur0; row < k->ur0 + k->urows; row++) {
         int offRow = row < 0 || row >= mapH, flipY = 0, srow = row, a0, a1, j;
         if (offRow) srow = tagpu_edge_reflect(row, mapH, &flipY);
         if (srow >= mapH - 1) continue;
         a0 = s_mfRow[srow]; a1 = s_mfRow[srow + 1];
         if (a0 == a1) continue;
         for (j = a0; j < a1; j++) s_mfCell[s_mf[j].col] = (unsigned)j + 1u;
-        for (i = 0; i < k->cols; i++) {
-            int col = k->c0 + i, scol;
+        for (i = 0; i < k->ucols; i++) {
+            int col = k->uc0 + i, scol;
             unsigned at;
             /* the map's own cells are the anchor loop's: skip to its right */
-            if (!offRow && col >= 0 && col < mapW) { i = mapW - 1 - k->c0; continue; }
+            if (!offRow && col >= 0 && col < mapW) { i = mapW - 1 - k->uc0; continue; }
             scol = s_mfCol[i];
             if (scol >= mapW - 1) continue;
             at = s_mfCell[scol];
@@ -998,27 +1072,27 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
        bound this further — this is the guard keeping its meaning, not a new
        policy. */
     if (nRows > 4096) nRows = 4096;
-    key.r0 = r0; key.rows = nRows;               /* before the map's clamps */
+    key.ur0 = r0; key.urows = nRows;             /* before the map's clamps */
     if (r0 < 0) { nRows += r0; r0 = 0; }
     if (r0 + nRows > mapH - 1) nRows = mapH - r0 - 1;
     c0 = ((v->eyeX + (v->evpL - v->vpL)) >> 4) - 10;
     nCols += (v->evw - v->vw) >> 4;
     if (nCols > 4096) nCols = 4096;
-    key.c0 = c0; key.cols = nCols;
+    key.uc0 = c0; key.ucols = nCols;
     if (c0 < 0) { nCols += c0; c0 = 0; }
     if (c0 + nCols > mapW - 1) nCols = mapW - c0 - 1;
     /* `v->mirror` is 1 only while this level's copy is held
        (tagpu_feat_mapfeat_sync); its dimensions are the ones every index into
        it was bounded against, so they must be this map's. */
-    mirror = v->mirror && s_mfGen == pk->level_gen + 1u && s_mfW == mapW && s_mfH == mapH &&
-             key.rows > 0 && key.cols > 0;
+    mirror = v->mirror && s_mfHeld && s_mfLevel == pk->level_gen && s_mfW == mapW && s_mfH == mapH &&
+             key.urows > 0 && key.ucols > 0;
     /* A VIEW WHOLLY PAST THE MAP has no cell of its own to sweep, and still
        has the mirror to draw. */
     onMap = nRows > 0 && nCols > 0;
     if (!onMap && !mirror) return feat_bail();
-    /* the keys' rect: the engine's own unless the mirror is on (KEYRECT) */
-    if (!mirror) { key.r0 = r0; key.rows = nRows; key.c0 = c0; key.cols = nCols; }
-    key.span = (float)key.rows * (float)key.cols;
+    /* the map's own keys: the engine's clamped rect, whatever the edge (KEYRECT) */
+    key.r0 = r0; key.rows = nRows; key.c0 = c0; key.cols = nCols;
+    key.span = (float)nRows * (float)nCols;
 
     /* THE FEATUREDEF BOUND IS THE SMALLER OF THE LIVE COUNT AND THE PACKET'S, and
        which one wins is an ORDERING FACT about the engine rather than a preference.
@@ -1101,7 +1175,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
                    draws before the pre-pass (0..2) and below those after it
                    (3..4); the scan fraction keeps the engine's paint order
                    when two flat features overlap */
-                float f = ((float)(row - key.r0) * (float)key.cols + (float)(col - key.c0)) / key.span;
+                float f = ((float)(row - r0) * (float)nCols + (float)(col - c0)) / key.span;
                 enc = 0.40f + 0.10f * f;
             } else {
                 /* the row key the painter's sweep implies: above this row's
@@ -1116,7 +1190,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
                 if (rel < 0) rel = 0;
                 if (rel > v->rows + 8) rel = v->rows + 8;
                 enc = 3.0f + (float)rel * 4.0f
-                      + 1.5f * ((float)(col - key.c0) / (float)key.cols);
+                      + 1.5f * ((float)(col - c0) / (float)nCols);
             }
             {
                 /* A FEATURE IS DRAWN WHOLE OR NOT AT ALL: its shadow and body
@@ -1168,7 +1242,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
                 sappend(b, sizeof b, &p, " deferred=%d", s_c.deferred);
             if (v->mirror)
                 sappend(b, sizeof b, &p, " | mirror: map=%d%s anchors=%d body=%d shadow=%d",
-                        s_mfGen == pk->level_gen + 1u ? s_mfN : -1, s_mfTrunc ? "(trunc)" : "",
+                        (s_mfHeld && s_mfLevel == pk->level_gen) ? s_mfN : -1, s_mfTrunc ? "(trunc)" : "",
                         s_c.mirrored, s_cMBody, s_cMShadow);
             if (s_passive) sappend(b, sizeof b, &p, " (passive: nothing emitted)");
             else if (!s_ownable)

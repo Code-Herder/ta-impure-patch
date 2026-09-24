@@ -86,6 +86,23 @@
    the CRT's _beginthread over CreateThread + ResumeThread), its entry the SEH
    wrapper 0x497C70 -> 0x497180, whose last act sets bit 1 of TA_LOADFLAGS */
 #define VA_LOADER_ENTRY    0x00497C70u
+/* LoadMap 0x483610 (loader thread; its one caller 0x4918C0): every path through
+   the TNT's features joins here -- a fresh game's placement loops, a saved
+   game's skip of them (0x483A44 / 0x483B0A on OFF_SAVEDGAME), and the v2 path's
+   schema features 0x423160 -- before the TNT buffer is freed at 0x483BA6. The
+   seven bytes `mov edx,[esp+0x40]; shl edx,0xa` are position-independent, the
+   flags are dead (the shl sets them), and every branch to the join lands on
+   0x483B53 itself. LoadMap's frame there, from its esp: */
+#define VA_LOADMAP_JOIN    0x00483B53u
+#define LM_VERSION         0x18         /* i32 the TNT's version: 0x1020 or 0x2000   */
+#define LM_V1RECS          0x48         /* v1: 8-byte cell records, feature u8 at +2 */
+#define LM_V2RECS          0x4C         /* v2: 4-byte cell records, height u8 at +0, */
+                                        /* feature u16 at +1 (0xFFFC = void); the   */
+                                        /* other version's pointer is 0             */
+#define LM_THRESH          0x50         /* a feature below this is placed: 0xFFFB   */
+                                        /* for v2, 0xFC for v1                      */
+#define OFF_SAVEDGAME      0x38D6B      /* the saved game being loaded, 0 for a new */
+                                        /* one: set 0x492655, cleared 0x4915F4      */
 #define VA_TEARDOWN        0x00491B60u  /* the level teardown cascade: no stack args, */
                                         /* two exits (ret 0x491C59, tail-jump 0x491C54 */
                                         /* to 0x450DD0 which rets); reclaim wraps it, */
@@ -190,7 +207,11 @@
 #define FT_FLAGS           0x0C        /* u8, bit0 wreckage, bits3.. seen-by    */
 #define OFF_FEATDEF        0x1426F     /* FeatureDef[], stride 0x100            */
 #define FD_STRIDE          0x100
-#define FD_MASK            0xFE        /* u8, bit0 = animated GAF wreck         */
+#define FD_FOOTX           0x94        /* i16 footprint, 16-px cells            */
+#define FD_FOOTZ           0x96
+#define FD_MASK            0xFE        /* u8, bit0 = GAF (else a 3DO: a record  */
+                                       /* of the wreck pool below)              */
+#define FD_MASKHI          0xFF        /* u8, bit1 = a spawn over it is refused */
 #define OFF_FEATCOUNT      0x14253     /* i32 NumFeatureDefs                    */
 #define OFF_WRECKS         0x1420B     /* wreck records, stride 0x30            */
 #define WR_STRIDE          0x30

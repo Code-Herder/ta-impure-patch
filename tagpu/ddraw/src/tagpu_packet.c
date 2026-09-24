@@ -128,15 +128,17 @@
 
 /* THE FRAME SLOT'S RESERVE HOLDS THE FRONT LAYERS AND THE UNIT-SCALED TABLES
    AT THE DESIGN POINT. The publisher lays down the two fog grids and the shade
-   table first, then the pieces, units, wrecks and anchors (tagpu_packet_pub.c,
-   fill_frame), so those are the part a reserve that is too small would cut --
-   and a frame below 1x without its fog grids is drawn bare, and a truncated
-   unit, piece or wreck table refuses the frame's whole unit hand-over. The
-   tables' sum below is every slot of TAGPU_PK_DESIGN_SLOTS at stock's worst
-   unit model (36 pieces, ARMSCORP/CORSCORP), every record of the wreck pool at
-   stock's worst wreck model (19 pieces, armscab_dead; 265 of the 285 3DO
-   features are one piece), plus the anchor table: 19.6 MB under the raised
-   limits. The front is sized by the screen, not by a count, so it is an
+   table first, then the pieces, units, wrecks and anchors, then the map's own
+   features while the mirror is taking them (tagpu_packet_pub.c, fill_frame),
+   so those are the part a reserve that is too small would cut -- and a frame
+   below 1x without its fog grids is drawn bare, a truncated unit, piece or
+   wreck table refuses the frame's whole unit hand-over, and a cut map-feature
+   table holds the mirror off for another packet. The tables' sum below is
+   every slot of TAGPU_PK_DESIGN_SLOTS at stock's worst unit model (36 pieces,
+   ARMSCORP/CORSCORP), every record of the wreck pool at stock's worst wreck
+   model (19 pieces, armscab_dead; 265 of the 285 3DO features are one piece),
+   the anchor table, and the map-feature table at its cap: 20.1 MB under the
+   raised limits. The front is sized by the screen, not by a count, so it is an
    allowance: on a 3840x2160 screen (a 3712 x 2096 viewport inside the stock
    HUD) the wide grid is 543 x 316 cells, 343 176 B (tagpu_fogwide.c,
    fogw_capacity, at the zoom floor), the engine's grid 118 x 68, 16 048 B
@@ -154,7 +156,8 @@
 #define PK_UNIT_WORST (sizeof(TAGPU_PACKET) + \
     TAGPU_PK_DESIGN_SLOTS * (sizeof(TAGPU_PK_UNIT) + PK_DESIGN_PIECES * sizeof(TAGPU_PK_PIECE)) + \
     TAGPU_PK_MAX_WRECKS * (sizeof(TAGPU_PK_WRECK) + PK_DESIGN_WRECK_PIECES * sizeof(TAGPU_PK_PIECE)) + \
-    TAGPU_PK_MAX_ANCHORS * sizeof(TAGPU_PK_ANCHOR) + 64u /* the tables' 4-alignment */)
+    TAGPU_PK_MAX_ANCHORS * sizeof(TAGPU_PK_ANCHOR) + \
+    TAGPU_PK_MAX_MAPFEAT * sizeof(TAGPU_PK_MAPFEAT) + 64u /* the tables' 4-alignment */)
 typedef char pk_reserve_design[(PK_RESERVE >= PK_DESIGN_FRONT + PK_UNIT_WORST) ? 1 : -1];
 
 /* the record's prefix and suffix, wherever the instance's suffix sits */

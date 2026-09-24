@@ -248,8 +248,11 @@ static int __cdecl before_text(void* e)
    `0x483DFE`, inside `0x483DD0`, whose only caller is `0x491BB3` — the level
    TEARDOWN cascade. `0x466780` reads it at `0x46684F` and does not null it
    (objdump of the pristine build). So the packet's publisher decodes it itself
-   on the level's first in-play draw, and nothing of ours runs on the LOADER
-   thread — the one publisher the frame packet plan's rule forbids outright. */
+   on the level's first in-play draw, and nothing publishes from the LOADER
+   thread — the one publisher the frame packet plan's rule forbids outright.
+   (The map's own features are the one thing read there, because a saved game
+   never has them in the grid; the loader hands them to the game thread under
+   a lock and the game thread publishes them: tagpu_packet_pub.c.) */
 
 /* ---- 0x4BE950 DrawLine(ctx, x0, y0, x1, y1, colour) stdcall ----------- */
 static int __cdecl before_line(void* e)

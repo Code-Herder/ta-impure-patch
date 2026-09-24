@@ -198,23 +198,28 @@ typedef struct TAGPU_PK_ANCHOR {
     uint8_t  pad;
 } TAGPU_PK_ANCHOR;
 
-/* 8 B, one per feature the MAP placed: the level's feature grid as it stood at
-   the level's FIRST in-play draw, row-major over the whole map, anchors only
-   (FT_DEFIDX inside the FeatureDef count) and never a cell carrying a wreck
-   record (flags bit0 -- those are the wreck pool's, drawn from its state).
-   What the map edge's mirror draws past the map (tagpu_feat.c): the map as it
-   is, not what the game or a scenario has since done to it.
+/* 8 B, one per feature the MAP placed: the map as its TNT lays it out, before
+   the game, a saved game or a scenario has done anything to it -- the anchors
+   of the GAF features LoadMap places from the TNT's own feature list, row-major
+   over the whole map, and never a 3D one (those are the wreck pool's). What the
+   map edge's mirror draws past the map (tagpu_feat.c): a tree burnt, reclaimed
+   or crushed during play stays in the mirror, and so does one a saved game had
+   lost before it was saved.
 
-   WHY THE FIRST IN-PLAY DRAW IS BEFORE ANY SCENARIO: the scenario applier
-   acts from its tick stub AT 0x4969D2, the address the in-play
-   `DrawGameScreen(1, 1)` call returns to, and this snapshot is taken in that
-   call's observed `after` -- so on the level's first in-play frame it is
-   taken before the stub first runs, whatever the applier has queued.
+   TAKEN ON THE LOADER THREAD, once a load (tagpu_packet_pub.c,
+   `mapfeat_at_load`): LoadMap never
+   places the TNT's features when it loads a saved game -- the save's own
+   records replace them later -- so the grid never holds them there, and the
+   list is rebuilt from the TNT by LoadMap's own placement rules. A fresh game
+   takes the same path, so the two agree by construction. The publisher adopts
+   the result at the level's first in-play draw (tagpu_packet_pub.c).
 
-   PER LEVEL: taken once, and carried in every packet only until the consumer
-   says it holds this level's (`tagpu_feat_mapfeat_have`), and only while it
-   wants it (`tagpu_feat_mapfeat_want`: the feature pass is armed with the
-   mirror on). A consumer copies it and keys the copy on `level_gen`. */
+   PER LEVEL: carried in every packet only until the consumer says it holds
+   this level's (`tagpu_feat_mapfeat_holds`), and only while it wants it
+   (`tagpu_feat_mapfeat_want`: the feature pass draws, with the mirror on).
+   `mapfeat_ok` says the packet carries the WHOLE list, so a map with no
+   features at all is a list of none, and held like any other. A consumer
+   copies it and keys the copy on `level_gen`. */
 typedef struct TAGPU_PK_MAPFEAT {
     uint16_t col, row;       /* the anchor cell, in 16-px tiles, inside the map */
     uint16_t def;            /* cell+0x08 FT_DEFIDX, inside the count when taken */
@@ -646,6 +651,9 @@ typedef struct TAGPU_PACKET {
     uint32_t n_mapfeat, off_mapfeat;  /* PK_MAPFEAT, row-major over the map, in
                                          a level's packets until the consumer
                                          holds them                              */
+    uint32_t mapfeat_ok;              /* 1: this packet carries the level's whole
+                                         list, n_mapfeat entries -- 0 of them on a
+                                         map with no features; 0: no list rides  */
 
     /* ---- the effects and the particle layers ---- */
     uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
