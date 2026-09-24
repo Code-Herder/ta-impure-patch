@@ -999,7 +999,8 @@ count `0x42DF60`, inside `0x42DCF0`, which walks its local file count `[esp+0x10
 check, later in `0x42DCF0`, compares each def's name with each record's first entry only and, when
 the def lacks the flag, sets `+0x241 |= 0x20` (the FBI's `downloadable`; the text it formats is
 "Hey!  Somebody forgot to set downloadable=1 for %s", `0x503944`), which the AI's pick skips
-(`0x40BBA0`): a file's first unit, since Cavedog's files name one unit for all their builders.
+(`0x40BBA0`, only when `0x435100` answers 1 for `[main+0x391E9]`, a mode whose meaning is not
+known): a file's first unit, since Cavedog's files name one unit for all their builders.
 Stock: 70 files, at most four entries each.
 
 **The fix**, `fix_download_records`: a file continues into as many records as it needs, at the end of
@@ -1017,7 +1018,10 @@ load in the C runtime's heap (`0x7BD35C8C`, an illegal read at `0xD9330004`, fro
 70 stock files and 5 + 5 + 2) and the builder's pages show all 12. A factory's download button queues
 its unit (ARMLAB and a synthetic kbot: the button reads `+1` and the unit is built); a mobile
 builder's button for a mobile unit arms nothing (`BuildUnitID` `main+0x2CC4` stays as it was),
-in both builds.
+in both builds. With the check bounded, a 12-entry file flags its first unit only; walking every
+record, it flagged the 1st, 6th and 11th. The 120 stock types flagged are the same either way.
+`0x42BD40..0x42BE20` is the same check as a function of its own, with the same walk to
+`[main+0x391C7]` (`0x42BDF1`), and has no call and no absolute reference: dead, and left unpatched.
 
 ### The out-of-memory text — `0x49E700` [DISASSEMBLED + MEASURED 2026-09-24]
 
@@ -1034,7 +1038,9 @@ buffer (`0x4B3B75..0x4B3B8F`, `0x4B4146..0x4B422B`) and BIGSHOT (`0x495ABE`).
 entry writes with `wsprintfA` (nothing allocates): the game is a 32-bit program that has used the
 memory it can address, and `UNITINFOCount − 1` unit types are installed. That count is the unit
 files found (`0x42AA77`) until the menu-time load's end rewrites it with the types it kept
-(`0x42B2F6`). **MEASURED**: 1500 generated types each carrying a 1 MB script: the dump names "Integer
+(`0x42B2F6`), and a game load's end rewrites it with the types in play (`0x42D542`: the types
+flagged `0x800000` at `+0x241`, a flag the sync clears for a type that did not sync, `0x46E1FE`).
+**MEASURED**: 1500 generated types each carrying a 1 MB script: the dump names "Integer
 Divide by Zero … at `0049e6b0`, Exception handler called in Out of memory handler" under our text
 ("1778 unit types are installed"), the box shows it, and OK exits.
 
@@ -1088,9 +1094,12 @@ sequence at `+2`, the key at `+6`, a value or count at `+0xA`.
   `0x46D860`.
 - **The host's tick** (`0x46DAE4..0x46DD4A`) drops the records of players gone, makes records for
   new ones, and when either happened runs `0x46D970` for every key in the tree (`0x46DD1E`).
-- **The room waits** until every peer's record is complete (`0x46E000`): the keys received number
-  the count announced, and `+0x28` equals `+0x2C`. `0x46DF40` says which is missing, as the room's
-  status: `No units_expected sent from player`, `expected %d units, got %d`, or the packet counts.
+- **The room waits** until the peers' records are complete (`0x46E000`): the keys received number
+  the count announced, which must not be 0, and `+0x28` equals `+0x2C`. It skips a peer
+  `0x44FED0` does not find and one whose state byte `+0x73` is 2, or 3 with `+0x94` at 2. The
+  `+syncerr` chat command (the text compared at `0x448427`, `0x46DF40` called at `0x44843F`) says
+  which is missing: `No units_expected sent from player`, `expected %d units, got %d`, or the
+  packet counts.
 - The sequenced channel (`+0x2C`, receive `0x46CEF0`) answers subtype `0x65` with a resend from its
   history (`0x46CF12`, linear); `0x46D500` is the unsequenced path into `0x46D6C0`.
 - **Other readers of the key.** The restriction screen's saved lists, `*.LST`, hold a key and a value
@@ -1115,7 +1124,8 @@ Stock content joins in under 2 s.
 `0x4BCA30`: loose files first (the C runtime's find-first, `0x4E7DD0`), then the archives, which
 `0x41D4C0` opens as `rev31.GP3`, `*.CCX`, `*.UFO` and `*.HPI`, each pattern in the order the
 directory lists them (`0x4BC4B0`). Nothing sorts it before the game load (`0x42D4DC`, by name through
-`0x42DB60`). So two peers with the same files can hold the types in a different order: a
+`0x42DB60`); the menu-time load's end only fills the slot of a type it drops with the last def
+(`0x42B2A3..0x42B2BB`, through `0x42B370`). So two peers with the same files can hold the types in a different order: a
 different file system, a renamed archive, a loose copy of a file.
 
 **The fixes.** `fix_sync_keys` hooks the loader's call (`0x42BD29`): when it returns 1, the types are
@@ -1137,9 +1147,12 @@ What the fix leaves:
   as a joiner it stalls the room as stock does; as the host it holds no entry for the keys the
   others were given, so `0x46D970` gives those types no verdict, and the types' availability can
   differ between the peers. Every peer runs the same build (the raised limits' contract).
-- **A saved `*.LST` list** names a re-keyed type by its given key, which moves only if another type
-  comes to hold that value; a list saved by stock gives a re-keyed type nothing, and in stock a
-  shared key applied to the first type with it.
+- **A saved `*.LST` list** names a re-keyed type by its given key. That key is the first free value
+  from a hash of the name, so it moves when the types around it change: a type that held a value
+  in its run comes or goes, or a type with the same natural key and an earlier name arrives and
+  takes the natural key, re-keying the old keeper. The list's entry then applies to whichever type
+  holds the key. A list saved by stock gives a re-keyed type nothing, and in stock a shared key
+  applied to the first type with it.
 - **Two types with one name and one key** cannot be told apart by the sync either; which of them
   keeps the key follows the def array's order.
 

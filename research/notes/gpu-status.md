@@ -2367,8 +2367,9 @@ fixes are installed on every launch, `tagpu_defaults.off` included.
 - A peer without the key fix, in a game with a mod whose keys collide, stalls the room as a joiner,
   as stock does, and as the host gives the re-keyed types no verdict, so their availability can
   differ between the peers: every peer runs the same build. A restriction list saved (`*.LST`,
-  keyed on the key) names a re-keyed type by its given key, which moves only if another type comes
-  to hold that value.
+  keyed on the key) names a re-keyed type by its given key, the first free value from a hash of its
+  name, which moves when the types around it change; the entry then applies to whichever type holds
+  the key.
 - A unit's own frame, which the 1× bakes draw into through the same rasterisers, is sized by the
   model alone, so a model more than 800 rows tall still overflows the 800-row span table, with the
   fix as in stock. No stock unit is near it (the tallest is 239 rows). The engine map's *The

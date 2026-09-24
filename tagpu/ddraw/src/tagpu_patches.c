@@ -1284,11 +1284,13 @@ static int fix_build_list(void)
    - 0x42DF35: after the last file, ebx and the page count's [esp+0x10] are the record count.
    - 0x42E0B9: the downloadable check walks the files' own records only. It flags the unit of a
      record's first entry (+0x241 |= 0x20, "Somebody forgot to set downloadable=1"), which the
-     AI's pick then skips (0x40BBA0): a file's first unit, since Cavedog's files name one unit
-     for all their builders. Across a continuation it would flag the 6th, 11th, ... as well.
+     AI's pick skips in one mode (0x40BBA0, when 0x435100 answers 1): a file's first unit, since
+     Cavedog's files name one unit for all their builders. Across a continuation it would flag
+     the 6th, 11th, ... as well. 0x42BD40 is a copy of the check with no caller.
    THE INVARIANT: records [0, files) are the files' own, at file * 0xBD, and every record past
    them is made by dl_section inside the block's room, so each entry written is inside the
-   block; the check's bound, the file count, is at most the record count. Stock's files, four entries at most, get stock's exact records. Zeroing the block
+   block; the check's bound, the file count, is at most the record count. Stock's files, four
+   entries at most, get stock's exact records. Zeroing the block
    changes one thing stock left to the heap: a section whose unit or builder is not found is
    counted but not filled (0x42DE7F, 0x42DF07), and its entry reads builder 0, None, which no
    reader matches, where stock's held whatever the heap did; so does the count of a file with no
@@ -1372,7 +1374,7 @@ static int fix_download_records(void)
    program that has used the memory it can address, and how many unit types are installed,
    which is what a mod's size costs [DECIDED 2026-09-24]. The count is UNITINFOCount - 1: the
    unit files found (0x42AA77) until the menu-time load's end rewrites it with the types it kept
-   (0x42B2F6). The log, the dump and the exit stay
+   (0x42B2F6), and a game load's end with the types in play (0x42D542). The log, the dump and the exit stay
    the engine's. Nothing here allocates: the text is a static and wsprintfA writes it. */
 static char s_oomText[320];
 
@@ -1418,8 +1420,9 @@ static int fix_oom_message(void)
    file's `Compatability` value (0x42AC43). The checksum is four 8-bit lanes -- the bytes' sum
    and xor, the sum of i^b and the xor of i+b -- not a CRC. The host keeps, for each joining peer,
    the keys it has received from it, dropping one it already holds (0x46D755), and the room waits
-   until that list reaches the count the peer announced (0x46DF40, 0x46E000: "expected %d units,
-   got %d"), so a joiner with two types of one key holds the battle room at SYNCHING for good;
+   until that list reaches the count the peer announced (0x46E000; the +syncerr command's reply,
+   0x46DF40, reads "expected %d units, got %d"), so a joiner with two types of one key holds the
+   battle room at SYNCHING for good;
    and the host's walk 0x46D9E3 answers a key with the first type that has it. FBIs that differ
    in a few digits collide in their thousands: MEASURED 2026-09-24, 16 105 generated types gave
    9 991 keys and a join that never ended.
@@ -1477,7 +1480,7 @@ static int __cdecl key_order(const void* a, const void* b)
     int c;
     if (ka != kb) return ka < kb ? -1 : 1;
     c = strncmp(s_keyDefs + ia * DEF_STRIDE + DEF_NAME, s_keyDefs + ib * DEF_STRIDE + DEF_NAME, 32);
-    return c ? c : (ia < ib ? -1 : 1);
+    return c ? c : (ia > ib) - (ia < ib);
 }
 
 static unsigned int name_key(const char* name)

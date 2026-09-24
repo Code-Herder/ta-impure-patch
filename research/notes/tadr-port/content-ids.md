@@ -342,7 +342,8 @@ Only the raises differ between the builds.
   - 1500 types each carrying a 1 MB script: our out-of-memory text, the engine's dump, the exit.
   - 40 `canbuild` keys and 12 download entries on ARMCOM: the whole list of 71, and 73 records.
     The previous build reads 59 entries over a 30-entry copy, and a 12-entry download file alone
-    kills its load.
+    kills its load. The downloadable check flags the 12-entry file's first unit only, and the same
+    120 stock types as stock.
   - Two peers at 16 383 types with colliding keys: both re-key the same 6 114 types, and the join
     ends in 13 s. The peers fight with types from ID 279 to 16 383, and a Kbot Lab builds ID 16 383
     from its download page; paused, both hold the same slots, types and positions, with no spread.
@@ -361,8 +362,9 @@ Only the raises differ between the builds.
   - a peer without the key fix, with a mod whose keys collide, stalls the room as a joiner, as
     stock does, and as the host gives the re-keyed types no verdict, so their availability can
     differ: every peer runs the same build;
-  - a restriction list saved (`*.LST`) names a re-keyed type by its given key, which moves only if
-    another type comes to hold that value.
+  - a restriction list saved (`*.LST`) names a re-keyed type by its given key, the first free value
+    from a hash of its name, which moves when the types around it change; the entry then applies to
+    whichever type holds the key.
 - Review at `high`: byte patches, simulation as content, and a network-lobby path.
 
 **A′3 — weapons, 4096. Planned.**
