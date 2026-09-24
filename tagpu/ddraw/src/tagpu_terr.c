@@ -325,11 +325,13 @@ static int   s_mapCellsW, s_mapCellsH;
    leave the UVs a texel out. This is that change refusing to compile. */
 typedef char terr_atlas_consts_unchanged[
     (CELL_PITCH == 34 && CELL_BORDER == 1 && TILE_PX == 32) ? 1 : -1];
-/* ...and the mirror's two flags, which the vertex shader spells as 8192 and
-   16384, above the largest tile column and row an atlas can hold. */
+/* ...and the mirror's four flags, which the vertex shader spells as 16384,
+   8192, 4096 and 2048, above the largest tile column and row an atlas can
+   hold. */
 typedef char terr_mirror_flags_unchanged[
     (TAGPU_TERR_MIRROR == 8192 && TAGPU_TERR_FLIP == 16384 &&
-     ATLAS_COLS <= TAGPU_TERR_MIRROR && 65536 / ATLAS_COLS <= TAGPU_TERR_MIRROR) ? 1 : -1];
+     TAGPU_TERR_FOLD_LO == 4096 && TAGPU_TERR_FOLD_HI == 2048 &&
+     ATLAS_COLS <= TAGPU_TERR_FOLD_HI && 65536 / ATLAS_COLS <= TAGPU_TERR_FOLD_HI) ? 1 : -1];
 /* ONE QUAD PER VISIBLE CELL, AND THE CELL IS AN INSTANCE. `aCorner` is the
    unit quad's six corners in the engine's own vertex order — one static buffer
    uploaded at init and never touched again — and `aCell` is this frame's four
@@ -375,34 +377,46 @@ static const char* VS =
     "void main(){\n"
     /* CELL_PITCH 34, CELL_BORDER 1, TILE_PX 32 — held to those values by
        terr_atlas_consts_unchanged in tagpu_terr.c. The tile's column and row
-       carry the mirror's flags above their values (TAGPU_TERR_FLIP and
-       TAGPU_TERR_MIRROR, tagpu_terr.h): each is one power of two, taken off
-       exactly, so an on-map cell's tile is aCell.zw itself. A flipped axis
-       runs its corner the other way, which swaps the quad's two texel edges:
-       a pixel centre at i + 0.5 samples texel 31 - i. Either way the quad
-       spans exactly the tile's 32 texels and both its edges sit on the guard
-       ring, a copy of the tile's own border.
-       THE NUDGE, REFLECTED. TAGPU_EDGE_NUDGE moves every sample the same
-       way on screen, NUDGE/uZoom texels further along the tile, which breaks
-       a sample that falls exactly between two texels towards the next one.
-       Reflected, that is the previous one, so a flipped axis adds twice the
-       nudge back: every flipped sample then reads the texel its reflection
-       reads on the map, which at 0.25x -- where every sample sits on a texel
-       boundary -- is the difference between the mirror and a mirror one
-       texel out of phase. The texel coordinate grows by at most 2/32/0.25 =
-       0.25, into the guard ring and never past it, and it reaches the ring
-       only where the unshifted coordinate already reads the tile's last
-       texel, so no sample reads a colour the tile does not end on. */
+       carry the mirror's flags above their values (tagpu_terr.h): each is one
+       power of two, taken off exactly, so an on-map cell's tile is aCell.zw
+       itself and every term below reduces to the map's own. A flipped axis
+       runs its corner the other way, which swaps the quad's two texel edges.
+       THE NUDGE, REFLECTED. TAGPU_EDGE_NUDGE moves every map quad the same
+       way on screen, so a sample reads the texel at its world point plus
+       e = NUDGE/uZoom: at 0.25x, where every sample sits on a texel boundary,
+       that is what breaks the tie toward the next texel. A mirrored sample at
+       w must read what the map's sample at its reflection r(w) reads, the
+       texel under r(w) + e, and on a flipped axis that is an affine function
+       of w running backwards: u = r(w) + e - (the source cell's origin). The
+       quad carries that function exactly at its corners, wherever they sit,
+       so the question is only WHICH quad each sample falls in -- and a sample
+       belongs to the cell whose u lies in [0, 32), which on a flipped axis is
+       the cell's own span moved the OTHER way by e. So a flipped quad is
+       nudged +NUDGE, not -NUDGE: every sample then lands in the quad that
+       owns its texel, the seam between two flipped cells included. At a fold
+       (TAGPU_TERR_FOLD_LO/HI) the neighbour is the map or a copy the right
+       way round, nudged -NUDGE, and the shared edge keeps -NUDGE so the two
+       quads meet with no gap and no overlap; the corner's u there is the same
+       function's value, 32 + 2e or 2e, which reads the guard ring only for the
+       samples within 2e of the fold -- where r(w) + e is past the tile's last
+       texel, whose copy the guard ring is. On-map and unflipped axes are
+       -NUDGE and u = the corner, as before. */
     "  vec2 f = step(16384.0, aCell.zw);\n"
     "  vec2 t = aCell.zw - f * 16384.0;\n"
     "  float m = step(8192.0, t.x);\n"
     "  t.x -= m * 8192.0;\n"
+    "  vec2 lo = step(4096.0, t);\n"
+    "  t -= lo * 4096.0;\n"
+    "  vec2 hi = step(2048.0, t);\n"
+    "  t -= hi * 2048.0;\n"
     "  vec2 k = mix(aCorner, 1.0 - aCorner, f);\n"
+    "  vec2 fold = mix(lo, hi, aCorner);\n"
+    "  vec2 back = f * (1.0 - fold);\n"
     "  vec2 g = aCell.xy + aCorner;\n"
     "  vec2 aPos = uOrigin + g * 32.0;\n"
     "  vec2 aWorld = (uTile0 + g) * 32.0;\n"
-    "  vec2 aUV = (t * 34.0 + 1.0 + k * 32.0 + f * (2.0 * " TAGPU_EDGE_NUDGE " / uZoom)) * uTexel;\n"
-    "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - vec2(" TAGPU_EDGE_NUDGE ");\n"
+    "  vec2 aUV = (t * 34.0 + 1.0 + k * 32.0 + f * fold * (2.0 * " TAGPU_EDGE_NUDGE " / uZoom)) * uTexel;\n"
+    "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - (1.0 - 2.0 * back) * " TAGPU_EDGE_NUDGE ";\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
     "  vUV = aUV; vWorld = aWorld; vMirror = m;\n"
@@ -901,6 +915,17 @@ static int ceil32(int v)      { int q = div32_floor(v); return (v - q * 32) ? q 
 
 /* one visible cell: where it is in this frame's grid, and where its tile is in
    the atlas. The shader turns the pair into the six vertices. */
+/* WHICH EDGES OF A TURNED-OVER CELL LIE ON A FOLD (tagpu_terr.h): cell `m`
+   of an axis `n` cells long starts a map's width on a multiple of n and ends
+   one on the next, which is where the reflection turns and its neighbour is
+   the right way round. */
+static int edge_folds(int m, int n)
+{
+    int p = m % n;
+    if (p < 0) p += n;
+    return (p == 0 ? TAGPU_TERR_FOLD_LO : 0) | (p == n - 1 ? TAGPU_TERR_FOLD_HI : 0);
+}
+
 static void put_cell(int col, int row, int cx, int cy)
 {
     short* o = s_inst + (size_t)s_ncell * ICOMP;
@@ -1037,17 +1062,19 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     s_iw = iw; s_ih = ih;
     s_mapCellsW = stride; s_mapCellsH = mrows;
     for (r = 0; r < rows; r++) {
-        int my = ty0 + r, sy = my, flipY = 0, offY = (my < 0 || my >= mrows);
+        int my = ty0 + r, sy = my, flipY = 0, offY = (my < 0 || my >= mrows), foldY = 0;
         if (offY) {
             if (!v->mirror) { skipped += cols; continue; }
             sy = tagpu_edge_reflect(my, mrows, &flipY);
+            if (flipY) foldY = edge_folds(my, mrows);
         }
         for (c = 0; c < cols; c++) {
-            int mx = tx0 + c, sx = mx, flipX = 0, off = offY;
+            int mx = tx0 + c, sx = mx, flipX = 0, off = offY, foldX = 0;
             int idx;
             if (mx < 0 || mx >= stride) {
                 if (!v->mirror) { skipped++; continue; }
                 sx = tagpu_edge_reflect(mx, stride, &flipX);
+                if (flipX) foldX = edge_folds(mx, stride);
                 off = 1;
             }
             idx = tmap[(size_t)sy * stride + sx];
@@ -1062,8 +1089,8 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
                distance from the map -- and takes the tile of (sx, sy), the
                cell it mirrors (TAGPU_TERR_MIRROR, tagpu_terr.h). */
             if (off) {
-                put_cell(c, r, (idx % ATLAS_COLS) | TAGPU_TERR_MIRROR | (flipX ? TAGPU_TERR_FLIP : 0),
-                         (idx / ATLAS_COLS) | (flipY ? TAGPU_TERR_FLIP : 0));
+                put_cell(c, r, (idx % ATLAS_COLS) | TAGPU_TERR_MIRROR | (flipX ? TAGPU_TERR_FLIP : 0) | foldX,
+                         (idx / ATLAS_COLS) | (flipY ? TAGPU_TERR_FLIP : 0) | foldY);
                 mirrored++;
             } else {
                 put_cell(c, r, idx % ATLAS_COLS, idx / ATLAS_COLS);

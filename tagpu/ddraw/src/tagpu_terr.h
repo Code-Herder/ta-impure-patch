@@ -124,13 +124,20 @@ int  tagpu_terr_key(void);
 /* THE MIRROR'S FLAGS, in the tile's column and row (the edge setting,
    `tagpu_terr_gather`). A cell past the map carries the tile of the cell it
    reflects to, TAGPU_TERR_MIRROR in its tile column, and TAGPU_TERR_FLIP in the
-   column and/or row whose axis the reflection turned over. They are spare bits
-   by bound, not by habit: the tile column is under ATLAS_COLS (64) and the tile
-   row under 65536 / 64 = 1024, because a tile index is a u16 -- so bits 13 and
-   14 are clear in every on-map record, and a flagged one is still a positive
-   short. The vertex stage takes each off as one exact power of two. */
-#define TAGPU_TERR_MIRROR 0x2000
-#define TAGPU_TERR_FLIP   0x4000
+   column and/or row whose axis the reflection turned over. On a turned-over
+   axis, TAGPU_TERR_FOLD_LO and TAGPU_TERR_FOLD_HI say that the cell's low or
+   high edge on that axis lies on a fold of the reflection -- the map's own
+   edge, or a map's width further out -- where its neighbour is NOT turned
+   over (the vertex shader's nudge, in tagpu_terr.c, is why that matters).
+   They are spare bits by bound, not by habit: the tile column is under
+   ATLAS_COLS (64) and the tile row under 65536 / 64 = 1024, because a tile
+   index is a u16 -- so bits 11 to 14 are clear in every on-map record, and a
+   flagged one is still a positive short. The vertex stage takes each off as
+   one exact power of two. */
+#define TAGPU_TERR_MIRROR  0x2000
+#define TAGPU_TERR_FLIP    0x4000
+#define TAGPU_TERR_FOLD_LO 0x1000
+#define TAGPU_TERR_FOLD_HI 0x0800
 
 typedef struct TAGPU_TERRHAND {
     /* THE FRAME THIS WAS PUBLISHED ON (the fork's monotonic render-thread
