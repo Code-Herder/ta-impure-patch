@@ -59,8 +59,23 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
    differs only where the stock code would write past an allocation or read through
    NULL. The engine map (exe-reverse-engineering.md, "Engine defects we patch") has
    the disassembly, the callers and the measurements; binary-patches.md lists them.
-   `tagpu_enginefix.off` in the gamedir leaves both unpatched, for an A/B against
-   stock. */
+   Both are installed at every attach: ddraw.dll is a static import of the exe, so
+   DllMain runs before the exe's entry point. The two are independent: each is
+   skipped, with its reason logged, only when its bytes differ from the retail exe,
+   its stub cannot be allocated, or its page cannot be made writable. */
+
+/* why a defect patch did not go in; the log line names it */
+enum { FIX_ARMED, FIX_BYTES, FIX_STUB, FIX_PROTECT };
+
+static const char* fix_state(int r)
+{
+    switch (r) {
+    case FIX_ARMED: return "ARMED";
+    case FIX_BYTES: return "SKIPPED (the bytes differ from the retail exe)";
+    case FIX_STUB:  return "SKIPPED (VirtualAlloc of the stub failed)";
+    default:        return "SKIPPED (VirtualProtect of the site failed)";
+    }
+}
 
 /* THE SORT BUFFER'S END, in DrawGameScreen's unit binning (0x4697CF..0x469840).
    [DISASSEMBLED] With edi = main+0x141FB, every hot unit (main+0x1435F, NumHotUnits
@@ -110,9 +125,12 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
    a reader walks is inside the allocation and was written this frame. It rests on
    [edi+0x50]/[edi+0x54] being the values the allocation was made with: LoadMap is
    their only writer, through that one base register, and nothing of ours writes
-   them. Registers: eax (row), edi and ebp (unit) are stock's inputs; eax, ecx, edx
-   and esi are dead at 0x469826, which reloads esi. The only branch into the block
-   from outside is the stock NULL-cursor skip to 0x469826 [a rel8/rel32 scan of
+   them. The count is a u16 and cannot wrap: the cull 0x48BAE0 files each slot of
+   the unit array (stride 0x118) at most once, so a frame's appends to any row are
+   at most the unit slots, far below 65536. Registers: eax (row), edi and ebp (unit)
+   are stock's inputs; eax, ecx, edx and esi are dead at 0x469826, which reloads
+   esi. No branch from outside the block lands in 0x469808..0x469825, and stock's
+   own 0x46981B -> 0x469826 is the only branch to the join [a rel8/rel32 scan of
    .text]. Identical to stock for every unit whose slot is inside the buffer; a
    unit whose slot would be past it is not drawn by the engine's sweep that frame.
    Bounding by the row instead would drop units stock draws correctly — a row run
@@ -153,9 +171,9 @@ static int fix_sort_buffer_end(void)
     unsigned char now[31];
     unsigned char* s;
 
-    if (memcmp((const void*)0x00469807, was, sizeof was) != 0) return 0;
+    if (memcmp((const void*)0x00469807, was, sizeof was) != 0) return FIX_BYTES;
     s = tagpu_detour_stub();
-    if (!s) return 0;
+    if (!s) return FIX_STUB;
     memcpy(s, body, sizeof body);
     s[sizeof body] = 0xE9;                                  /* join: jmp 0x469826 */
     tagpu_detour_rel(s + sizeof body + 1, 0x00469826);
@@ -167,25 +185,35 @@ static int fix_sort_buffer_end(void)
         unsigned int rel = (unsigned int)(size_t)s - (0x00469807u + 5u);
         memcpy(now + 1, &rel, 4);
     }
-    return patch_bytes(0x00469807, was, now, sizeof was);
+    if (!tagpu_detour_write(0x00469807, now, sizeof now)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return FIX_PROTECT;
+    }
+    return FIX_ARMED;
 }
 
 /* A NULL PLOT, handed to GetGridPosFeature 0x421E60 (stdcall(plot), ret 4).
    [DISASSEMBLED] Its first two instructions are `mov ecx,[esp+4]` and
    `mov ax,[ecx+8]`: the plot's feature index is read with no test, and "no
-   feature" is `or ax,0xFFFF` at 0x421E9C. GetGridPosPLOT 0x481550 and
-   0x4815F0 return NULL for a cell outside main+0x14233 x main+0x14237. Three
-   callers [E8 scan of .text]: 0x47EAE3 tests the plot first (0x47EADA); 0x498F4F
-   does not — the cursor's hover feature in 0x498DA0, whose cell comes from
-   GetTPosition's row, and GetTPosition can answer up to 143 px below the point it
-   is handed; 0x40514A does not either — an order handler's target lookup through
-   0x4815F0 on the order's position. For 0x498F4F stock keeps the point inside
-   the scroll extent main+0x1422F, which the level load writes as the map's
-   height less 128 (0x4833E0) and only the debug-level `Edge` console command
-   0x416730 rewrites, and that margin is exactly what keeps GetTPosition's row
-   on the map. A point past the extent — an eye outside the stock range, a
-   pointer on the bottom bar below one — reads [NULL+8] at 0x421E64: MEASURED,
-   with our clamp at 0x498EF9 disabled.
+   feature" is `or ax,0xFFFF` at 0x421E9C. GetGridPosPLOT 0x481550 returns NULL
+   for a cell outside main+0x14233 x main+0x14237. 0x4815F0 does too, and also for
+   a cell ON the grid that holds 0xFFFE (a multi-cell feature's non-anchor cell)
+   when the anchor offset in its bytes +0xA/+0xB leads off the grid
+   (0x48164A..0x481682). Three callers [E8 scan of .text]: 0x47EAE3 tests the plot
+   first (0x47EADA). 0x498F4F does not: it is the cursor's hover feature in
+   0x498DA0, whose cell comes from GetTPosition's row, and GetTPosition can answer
+   up to 143 px below the point it is handed. 0x40514A does not either: it is the
+   target lookup of the order handler 0x404DB0 through 0x4815F0 on the order's
+   position, and its reachability is not audited. For 0x498F4F stock keeps the
+   point inside the scroll extent main+0x1422F, which the level load writes as the
+   map's height less 128 (0x4833E0) and only the debug-level `Edge` console
+   command 0x416730 rewrites, and that margin is exactly what keeps GetTPosition's
+   row on the map, as long as the camera clamp 0x41C3C0 can hold the eye in
+   [0, extent - view]. On a map whose extent is shorter than the viewport that
+   range is empty and 0x41C40D..0x41C431 alternate the eye between 0 and a
+   negative value; at 0 the viewport's bottom row is past the extent
+   [INFERRED from the disassembly]. A point past the extent reads [NULL+8] at
+   0x421E64: MEASURED, with our clamp at 0x498EF9 disabled.
 
    THE FIX, a prologue detour: the stub runs the first stolen instruction, and
    for a NULL plot returns the engine's own "no feature" 0xFFFF with the
@@ -206,9 +234,9 @@ static int fix_feature_null_plot(void)
     unsigned char* s;
     unsigned char* p;
 
-    if (memcmp((const void*)0x00421E60, was, sizeof was) != 0) return 0;
+    if (memcmp((const void*)0x00421E60, was, sizeof was) != 0) return FIX_BYTES;
     s = p = tagpu_detour_stub();
-    if (!s) return 0;
+    if (!s) return FIX_STUB;
     *p++ = 0x8B; *p++ = 0x4C; *p++ = 0x24; *p++ = 0x04;     /* mov ecx,[esp+4]  */
     *p++ = 0x85; *p++ = 0xC9;                               /* test ecx,ecx     */
     *p++ = 0x75; *p++ = 0x07;                               /* jnz +7           */
@@ -216,24 +244,23 @@ static int fix_feature_null_plot(void)
     *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;                  /* ret 4            */
     *p++ = 0x66; *p++ = 0x8B; *p++ = 0x41; *p++ = 0x08;     /* mov ax,[ecx+8]   */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x00421E68); p += 4;   /* jmp 0x421E68     */
-    return tagpu_detour_land(0x00421E60, s, 8);
+    if (!tagpu_detour_land(0x00421E60, s, 8)) {
+        VirtualFree(s, 0, MEM_RELEASE);
+        return FIX_PROTECT;
+    }
+    return FIX_ARMED;
 }
 
 static void patch_engine_defects(void)
 {
-    int sort, plot;
-    char b[200];
+    int sort = fix_sort_buffer_end();
+    int plot = fix_feature_null_plot();
+    char b[256];
 
-    if (GetFileAttributesA("tagpu_enginefix.off") != INVALID_FILE_ATTRIBUTES) {
-        plog("enginefix: stock engine defects left unpatched (tagpu_enginefix.off)");
-        return;
-    }
-    sort = fix_sort_buffer_end();
-    plot = fix_feature_null_plot();
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s",
-              sort ? "ARMED" : "SKIPPED (byte mismatch)",
-              plot ? "ARMED" : "SKIPPED (byte mismatch)");
+              fix_state(sort), fix_state(plot));
+    b[sizeof b - 1] = 0;
     plog(b);
 }
 
