@@ -212,7 +212,7 @@ the instruction behind each bound, is [exe reverse engineering](exe-reverse-engi
 | `0x4848E0`, the fog draw | **bounded**: a `[0, cols) × [0, rows)` walk; terrown skips it with the terrain pass |
 | `fogwide`'s wide grid | **bounded in the replica**: every read of the mapped bytes checks `idx < mappedCells`, and the edge completions derive their row from `row0` |
 | our feature gather (`tagpu_feat.c`) | **bounded**: rows and columns are clamped to the map. The mirror's gather (C5) is a separate list, so this clamp stays |
-| the engine's sweep rect and HotUnits (`DrawGameScreen`'s row sweep, `0x48BAE0`) | **bounded**: the sweep's start is clamped to 0 and its end to `PLOT − 1`, signed; the bucket index is refused below 0 and at the row count; the cull is a signed rect test. The per-row bucket append `0x46981D` has no capacity check, which the eye does not cause |
+| the engine's sweep rect and HotUnits (`DrawGameScreen`'s row sweep, `0x48BAE0`) | **bounded**: the sweep's start is clamped to 0 and its end to `PLOT − 1`, signed; the bucket index is refused below 0 and at the row count; the cull is a signed rect test. The append past one row's capacity is stock and harmless; past the end of the whole buffer (`0x469807..0x469825`, below 1×) it is a stock defect, patched (engine map, "Engine defects we patch") |
 | edge scroll and the scroll target | through `0x41C3C0` and the three reachable target clamps, all ours |
 | positional sound, the drag box, the unit hit test, the screenshot tiler, the effect and particle draws | **bounded** or projection only |
 

@@ -735,12 +735,11 @@ function from `objdump -d -M intel` of `pristine/TotalA.exe.pristine`.
 | `0x46A860`, `0x46B9D0`, `0x417E00` | the debug position text, a cell rect, the waypoint path (a vtable slot at `0x4FD480`) | no index | projection only |
 | `0x417BB0`, `0x417C00`, `0x417C70`, `0x417D30` | world-to-screen line helpers | no call site or pointer to any of them in the image | dead code |
 
-**Two defects the audit found that the eye does not cause.** `GetGridPosPLOT 0x481550` returns
-NULL for a point off the map and `0x498F4F` dereferences it with no test; the inputs that reach it
-are reachable at stock 1x, and `0x498EF9`'s clamp is what keeps our pointer paths off it. And the
-HotUnits bucket append at `0x46981D` never checks the row's capacity (`[edi+0x50]` slots): below
-1x the widened rect puts more units in one row than the 1x view ever did [INFERRED to matter only
-with a dense crowd in one 16-px row band; not reproduced].
+**Two stock defects beside these readers, not caused by the eye** — both in "Engine defects we
+patch": the unit sort's append can run past the END of the whole sort buffer (`0x469807..0x469825`),
+reachable in our build below 1× (filling past one row's own capacity is stock behaviour and
+harmless); and a NULL plot faults reading `[NULL+8]` at `0x421E64` in `GetGridPosFeature
+0x421E60`, not reachable in normal stock play.
 
 ## The screen fog grid — where it is allocated, and every cell the builder reads — mapped by us
 
