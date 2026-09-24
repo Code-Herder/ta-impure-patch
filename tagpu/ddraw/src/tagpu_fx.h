@@ -52,6 +52,10 @@ typedef struct TAGPU_FXMODEL {
     float wx, wz;                /* world x, projected world z (fog lookup)    */
     short turn[3];               /* engine rotation triple (65536 = 360 deg)   */
     int   owner;
+    int   effect;                /* the effect it is part of: an effect's
+                                    models are consecutive and share it, and
+                                    a model the unit atlas defers takes the
+                                    whole effect with it (tagpu_fx_effect_drop) */
 } TAGPU_FXMODEL;
 
 #define TAGPU_FXMODE_FLAT   0
@@ -75,6 +79,12 @@ int  tagpu_fx_armed(unsigned frame_counter);    /* tagpu_fx.on present (30f) */
 int  tagpu_fx_gather(const TAGPU_FXVIEW* v);    /* returns total drawables    */
 int  tagpu_fx_nmodels(void);
 const TAGPU_FXMODEL* tagpu_fx_model(int i);
+/* An effect one of whose models was not drawn because the unit atlas deferred
+   a texel it needs (tagpu_gaf.h `budget`): its sprites -- a ground shadow, a
+   flash, a body -- are cut out of the buckets before the hand-over, so no
+   frame draws part of it. `effect` is TAGPU_FXMODEL.effect; after the gather,
+   before tagpu_fx_render. */
+void tagpu_fx_effect_drop(int effect);
 /* lines + sprites into the currently bound FBO (depth test on, mask off);
    uses its own program/VAO; leaves program/VAO/texture bindings dirty */
 void tagpu_fx_render(const TAGPU_FXVIEW* v);

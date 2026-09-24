@@ -12,6 +12,10 @@ int          tagpu_r3d_atlas_restore_armed(void);
    each frame has to be keyed on this. The geometry bake's material stream is
    (tagpu_posebake.c). */
 unsigned int tagpu_r3d_atlas_gen(void);
+/* How many paints the atlas has deferred past its allowance (tagpu_gaf.h
+   `deferN`): a caller that compares it across a group of lookups knows whether
+   any of them was deferred, and so whether the group is drawn whole. */
+unsigned int tagpu_r3d_atlas_deferrals(void);
 /* Once per frame from the native pass, before its first tagpu_r3d_atlas_uv:
    the allowance's frame (tagpu_gaf.h `budget`). */
 void tagpu_r3d_atlas_frame(void);
