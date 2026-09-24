@@ -76,7 +76,7 @@ clean fix. The grid spans the whole X screen from (0,0), so on a multi-head desk
 lands wherever the grid falls. **A resolution re-tiles from the slot** — `--res`, a scenario's
 `setup.res`, a `--defaults` store size unlike the recorded one — undoing any hand-set `tile`, so
 the lever that sticks is `slot` in `instance.json`: pick the cell that lands where the window
-belongs (`tile_for` in `tools/tacli`) and confirm `posX` in the instance's `ddraw.ini`.
+belongs (`tile_for` in `tools/tacli`) and confirm `window=x,y,W,H` in the instance's `impure.cfg`.
 
 **The title names the build and the instance**: `tacli launch` writes `tagpu_title.txt` and the
 DLL appends it, so the bar reads `Total Annihilation - wt:<branch> | tacli:<instance>` — the
