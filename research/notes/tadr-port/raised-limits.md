@@ -234,9 +234,29 @@ and one store key. What it proved, by running it:
 - **The GDI lane draws the same picture**: the nanoframe ladder on both builds differs only inside
   the nanoframes, by exactly as much as two frames of one run a second apart.
 
-**Landing 5 — ten players.** `mp_lobby.sh` extended to N instances. Proof, tier 2: a 10-player
-network game at 1500 each (15 000 units), the proof of the 15 001-slot design point, checked the
-way landing 1 checked two peers: every peer applies its own units, then a paused roster on each.
+**Landing 5 — ten players. Done 2026-09-24.** `mp_lobby.sh` takes a host and up to nine joiners,
+and `scenarios/limits-tier2-p0` … `p9` are one army each. Tier 2, on the landing-4 build: ten
+instances in one network game on Town & Country (it seats ten), 800 × 600 each, every peer applying
+its own 1499 units, the 1500 cap with its commander. What it proved, by running it:
+
+- **The design point holds on every peer.** All ten read a unit array of 15 001 slots and a cap of
+  1500; every apply created 1499 of 1499; the peers' own counts peaked at 14 991 to 15 000 alive (the
+  fight had begun on the first armies before the last arrived).
+- **Every raised pool passed its stock cap on every peer**, sampled from the engine's own counts
+  for three minutes: projectiles 731–854 at their peak (stock 300), explosions 2936–2966 (stock
+  300, the raised cap 3000), particle objects 12 759–14 331 in use (stock pool 1000), and the
+  flying pieces 947–993 in a frame (stock 100). The simulation held **30 ticks a second on every
+  peer**, the full rate of a network game's speed 10.
+- **The peers agree when paused.** After three minutes of fighting, all ten held the same **7307**
+  units in the same engine slots with the same types, and each army the same count on every peer
+  (owners renumbered by each peer's own seat). **6998 (95.8 %) stood at the identical position on
+  all ten.** The other 309, all moving, sat off their owner's own copy by at most 40 ticks of their
+  own top speed (p99 14): a remote unit is where its owner last reported it, and the pause itself
+  landed on ticks 6440 to 6455. No peer disagreed about which units exist.
+- **A trap it found**: with the lobby's default commander death ("game ends"), one dead commander
+  wiped its peer's army on every peer, which looks exactly like a dropped player. The rehearsal lost
+  one that way; tier 2 ran with commander death off on every peer (`ActiveCommanderDeath`,
+  `main+0x37EF6`, read as 0 on all ten).
 
 L1 came first because it forced the module, the report and the packet changes into existence.
 L2 comes before L3 because the particle measurement needs the raised unit limit.
@@ -246,8 +266,11 @@ L2 comes before L3 because the particle measurement needs the raised unit limit.
 - Whether a refused remote projectile changes damage on that peer
   ([evidence §1](limits-evidence.md#1-projectiles-300-3000-enginelimitscpp-addprojectilepatches)).
   Landing 1's two-peer check covered the same-build case, which is the contract.
-- The explosion tick's compaction near its 3000-record cap: tier 1 reached 1042 explosions without
-  a stall; a denser fight could still find one.
+- The explosion tick's compaction at its 3000-record cap: tier 2 held 2936–2966 explosions on
+  every peer at the full 30 ticks a second of a network game's speed 10; at single player's speed
+  20 (60 ticks) that count is not measured.
+- How far a remote unit lags its owner at stock's 500 a player: tier 2's up-to-40-ticks at 1500 is
+  measured, stock's is not, so whether the raise stretches the update interval is open.
 - How the game thread's frame at 6000 units splits between the engine and our publisher.
 
 ## Corrections this plan made

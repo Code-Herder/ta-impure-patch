@@ -562,6 +562,10 @@ between peers. What it relies on from the network model, and what is still open:
   supported"), which is why the first attempt got no further than an empty
   `SELGAME`; native `dplayx` + `dpwsockx` + `dplaysvr.exe` fix that on the stock
   wine 9.0 the instances already use.
+- **Ten peers over loopback work**: ten instances on one machine, 1500 units each, held one game
+  at the full 30 ticks a second, and paused they agreed on every unit that exists; a moving unit
+  on a remote peer sat up to 40 ticks of its own travel behind its owner's copy, which is TA
+  replicating by periodic updates ([the TADR port](tadr-port/raised-limits.md), landing 5).
 
 ## Open questions / uncertainty
 

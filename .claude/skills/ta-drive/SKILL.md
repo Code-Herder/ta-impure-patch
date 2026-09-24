@@ -470,8 +470,8 @@ tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> li
 `--dplay` puts Microsoft's DirectPlay into that instance's prefix (wine's builtin cannot create
 a session); `--free-dplay-port` kills a stale `dplaysvr.exe`, which owns UDP 47624 machine-wide —
 on the **hosting** launch only, and never by hand while another agent's game is hosting.
-`scenario apply` on the host replicates its units to the joiner. The lobby facts and the
-provider-row crash: `references/modules.md`.
+`scenario apply` on a peer creates units that peer owns, and TA replicates them. The lobby facts,
+the commander-death trap and how to compare peers: `references/modules.md`.
 
 ## Maintaining this skill
 

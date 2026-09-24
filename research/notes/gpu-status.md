@@ -1535,7 +1535,7 @@ live, commander selected on Two Continents at type 1: a left click on ground wal
 the clicked point, and the same click with `tagpu_curs.off` deselected it and moved nothing. The
 full path is `exe-reverse-engineering.md` §"The in-game mouse buttons".
 
-### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–4
+### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–5
 
 **What it is.** TA's limits, raised the way TADR raises them, as our own C: projectiles
 300 → 3000, explosions 300 → 3000, flying pieces 100 → 1000, debris records 300 → 3000, units a
@@ -1663,6 +1663,15 @@ the 2× bake). It read back at 1280² after tier 1
 on the Vulkan lane and at 600² on the stock build, and the GDI lane draws the nanoframe ladder the
 same on both.
 
+**Tier 2, measured 2026-09-24**: ten peers in one network game on Town & Country, 1500 a player,
+15 000 units. Every peer held 15 001 slots and peaked at 14 991–15 000 alive; every raised pool
+passed its stock cap on every peer (projectiles 731–854, explosions 2936–2966, particle objects
+12 759–14 331, flying pieces 947–993); the simulation held 30 ticks a second, the full rate at a
+network game's speed 10, on all ten. Paused after three minutes, the ten agreed on the same 7307
+units in the same slots, and 95.8 % stood at the identical position on all ten; the moving rest
+sat off their owner's copy by at most 40 ticks of their own top speed. Details in
+[the plan](tadr-port/raised-limits.md), landing 5.
+
 **Landing 1, measured 2026-09-23** (the numbers are in the engine map): in single player the packet carried
 687 projectiles, 2439 explosions and 540 flying pieces with no table truncated; in a
 two-peer network game both peers passed every stock cap and, paused, held the same units at
@@ -1695,7 +1704,9 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 - **What 6000 units cost the game thread.** The median 36 publications a second at 4000–6000
   units is measured; its split between the engine's own frame and our publisher is not, because
   the publisher's histogram stops at 512 µs.
-- **Ten players at 1500 (15 000 units)** is landing 5's proof; tier 1 seats four.
+- **How long a remote unit lags its owner at stock's 500 a player.** At 1500 a player (tier 2,
+  below) the moving ones sat up to 40 ticks of their own travel behind; stock's figure is not
+  measured, so whether the raise stretches TA's update interval is open.
 - **The particle layers erase by shifting.** The layer tick `0x471EB0` deletes a finished object and
   moves the tail down one slot, and an emitter at the cap drops the front the same way, so a
   removal costs the layer's length. At 13 529 objects in one layer the sim held 60 ticks a second;

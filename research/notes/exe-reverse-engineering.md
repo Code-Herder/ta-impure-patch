@@ -4246,6 +4246,19 @@ raised build (`scenarios/limits-mp-west.json` on one, `-east` on the other): pro
 positions**, 0.00 world units apart, matched by engine index, which is the same slot on every
 peer. A first round (Hammers against Thuds, 630 units) matched the same way.
 
+**Ten peers at 1500, 2026-09-24** (`scenarios/limits-tier2-p0` … `p9`, one per peer, Town &
+Country, network speed 10): `main+0x14351` read **15 001** on all ten and the per-peer counts
+peaked at 14 991–15 000 alive. The engine's own counts, polled on every peer for three minutes,
+peaked at **731–854 projectiles** (`main+0x141F3`), **2936–2966 explosions** (the moved pool's count
+word), and **12 759–14 331 particle objects** in use (`0x51E630`, the pool's used count); `GameTime`
+(`main+0x38A47`) advanced 30 a second on every peer. Paused, the ten rosters held the same 7307 units
+in the same slots with the same types; 6998 stood at identical positions on all ten, and the
+moving rest sat off the owning peer's copy by at most 40 ticks of their own `maxvelocity`: a remote
+unit is where its owner last reported it. The pause landed on `GameTime` 6440–6455 across the ten.
+**`ActiveCommanderDeath` (`main+0x37EF6`) decides whether a dead commander takes its army with it,
+on every peer** (`0x486688` → `UNITS_KillAllForPlayer`); the lobby's default is on, and a run with
+it on lost a whole army to one commander's death.
+
 **`unit+0xFF` is the LOCAL player index**, not a global one [MEASURED 2026-09-23]: every peer
 lists itself as player 0, so the same unit reads owner 0 on the peer that owns it and owner 1 on
 the other. A peer that creates units for another player's slot makes units no peer owns: they

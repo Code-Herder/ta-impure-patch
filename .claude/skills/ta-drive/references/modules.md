@@ -5,7 +5,7 @@ is driven through `tacli` like everything else; what differs is the setup around
 
 1. [Extra weapons](#extra-weapons)
 2. [The COB script trace](#the-cob-script-trace)
-3. [Multiplayer: two instances in one game](#multiplayer-two-instances-in-one-game)
+3. [Multiplayer: two to ten instances in one game](#multiplayer-two-to-ten-instances-in-one-game)
 4. [The render-options screen and the GPU row](#the-render-options-screen-and-the-gpu-row)
 
 ## Extra weapons
@@ -69,7 +69,7 @@ tools/talog.py run tagpu/instances/c1/gamedir --stream tagpu_cobtrace | cut -f1-
 - The file is truncated at every launch and flushed per line, so `tacli stop` loses nothing.
 - `tools/tacob pose-check` reads the pose dump; the dump's fields are what it exists for.
 
-## Multiplayer: two instances in one game
+## Multiplayer: two to ten instances in one game
 
 Works over loopback on the stock wine these instances use, with Microsoft's own DirectPlay in
 front of wine's builtin (which implements the client half only and cannot create a session).
@@ -104,13 +104,23 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
   player's slot on this peer alone, and no peer simulates them. For a fight between peers, apply
   one half on each: `scenario apply h1 limits-mp-west` and `scenario apply j1 limits-mp-east`,
   both written as owner 0. Leave `clear_existing` false, or a peer kills the other's commander
-  locally.
+  locally. A peer's cap counts its commander: at 1500 a player a fixture brings 1499, and 1500 is
+  refused whole. Ten peers, one fixture each: `scenarios/limits-tier2-p0` … `p9`.
+- **A dead commander wipes its peer's army on every peer** while the registry's
+  `MultiCommanderDeath` is 1, the lobby's default (the engine's gate is `ActiveCommanderDeath`,
+  `main+0x37EF6`). In a fight that looks exactly like a network drop: one owner's units vanish from
+  every roster at once. For a stress fight, `wine reg add` it to 0 in your own prefix before the
+  host launches, read `*511DE8+37EF6:1` as 0 on every peer, and set it back after (the registry is
+  one file for every instance).
 - **To compare peers, pause and read both rosters.** `tacli keys h1 shift pause` sends the game's
   own `Pause` (the leading token is the one a `keys` call drops), which pauses every peer; confirm
   with `tacli peek <i> '*511DE8+38A51:1'` reading 1 on each. Then `tacli roster <i> --json` on
-  both: match units by `engine_index`, which is the same slot on every peer, with `owner` flipped
-  (0 ↔ 1 for two players). Stationary units agree exactly. Tab opens the options panel and does
-  not pause a network game.
+  every peer (`tacli units` lists unit TYPES, not live units): match units by `engine_index`,
+  which is the same slot on every peer, and remember `owner` is each peer's own seat numbering.
+  Stationary units agree exactly. A moving unit on a remote peer is where its owner last reported
+  it, so compare against the owning peer (the one where the unit is owner 0) and scale the
+  tolerance by the unit's speed; the pause itself lands a few ticks apart (`GameTime`,
+  `*511DE8+38A47:4`). Tab opens the options panel and does not pause a network game.
 - **Each peer draws its own units in player 0's colour** on the Vulkan lane; the engine's own frame
   is right. A renderer limit (`gpu-status.md` §3.2), not a network fault.
 - `SELPROV`'s `SELECT` crashes the game on the non-TCP/IP rows; select *Internet TCP/IP
