@@ -820,8 +820,25 @@ it. Without the lag the gestures below 1× still hold the eye — 50 frames in a
 world px (~66 screen px at 0.25×): the prediction runs one posted step ahead of the game thread by
 design, and at the floor the slab has no slack beyond the grid's own rounding, so the first steps
 of a tween wait a frame for the grid. On a held frame a click is mapped through the eye the game
-thread applies, up to the hold from where it is drawn. A lead margin on the wide window would
-absorb the holds at a cost in cells, packet bytes and build time, and is not built.
+thread applies, up to the hold from where it is drawn.
+
+**A lead margin on the wide window — measured, not built; the owner's call.** The window grown
+by `vw/4` and `vh/4` per side (a diagnostic build), against the shipped window, on Seven Islands
+with the play set, the same 36 gestures at NW, SE and mid (10240, 10240), counted from the
+heartbeat's `held`, 2026-09-24:
+
+| | cells (bytes a packet) | build, mean / max per rebuild | held frames, largest hold |
+|---|---|---|---|
+| 1080p, shipped | 36 260 (72.5 KB) | 72 / 206 µs over 533 rebuilds | 53, 509 world px |
+| 1080p, margin | 44 772 (89.5 KB), +23 % | 91 / 261 µs | 4, 61 world px |
+| 4K, shipped | 137 255 (274.5 KB) | 313 / 720 µs over 62 rebuilds | 13, 2511 world px |
+| 4K, margin | 171 588 (343.2 KB), +25 % | 386 / 840 µs | 8, 1578 world px |
+
+1080p ran on the live display; 4K on a private Xvfb, where llvmpipe draws a handful of frames a
+second, so each held frame there spans many notches' displacement: its cells, bytes and build
+times hold, its hold counts do not transfer to a real GPU. Every run read `back`, `out` and `bare`
+0, and `paused` 0 except one frame at 4K with the margin. The rebuild rate is ~2.8/s during the
+gestures, so the margin adds ~50 µs of game-thread time a second at 1080p.
 
 A level that starts below 1× has no wide grid until our terrain pass owns the ground (the wide
 grid is built at the fog site, which is ours only then): measured after a game → shell → game
