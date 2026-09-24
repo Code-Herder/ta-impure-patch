@@ -126,28 +126,36 @@
 #define PK_PREFIX     12u                  /* head_seq, cap_bytes, used_bytes  */
 #define PK_SUFFIX     8u                   /* crc, tail_seq                    */
 
-/* THE FRAME SLOT'S RESERVE HOLDS THE UNIT-SCALED TABLES AT THE DESIGN POINT.
-   The publisher lays the pieces down first and the units, wrecks and anchors
-   straight after (tagpu_packet_pub.c), so those are the part a reserve that is
-   too small would truncate -- and a truncated unit, piece or wreck table
-   refuses the frame's whole unit hand-over. The sum below is every slot of
-   TAGPU_PK_DESIGN_SLOTS at stock's worst unit model (36 pieces,
-   ARMSCORP/CORSCORP), every record of the wreck pool at stock's worst wreck
-   model (19 pieces, armscab_dead; 265 of the 285 3DO features are one piece),
-   plus the anchor table: 19.6 MB under the raised limits. What follows them --
-   effects, fog grids, minimap -- is bounded by its own caps and truncates on its
-   own bit, which costs that layer alone. The reserve is address space, five
-   slots of it in a 32-bit process whose largest free block has been logged as
-   low as 43.6 MB (gpu-status.md §2.86), so it is sized to the design point
-   rather than rounded up; pages are committed as the packets grow
-   (`slot_commit`), so a game pays only for what it publishes. */
+/* THE FRAME SLOT'S RESERVE HOLDS THE FRONT LAYERS AND THE UNIT-SCALED TABLES
+   AT THE DESIGN POINT. The publisher lays down the two fog grids and the shade
+   table first, then the pieces, units, wrecks and anchors (tagpu_packet_pub.c,
+   fill_frame), so those are the part a reserve that is too small would cut --
+   and a frame below 1x without its fog grids is drawn bare, and a truncated
+   unit, piece or wreck table refuses the frame's whole unit hand-over. The
+   tables' sum below is every slot of TAGPU_PK_DESIGN_SLOTS at stock's worst
+   unit model (36 pieces, ARMSCORP/CORSCORP), every record of the wreck pool at
+   stock's worst wreck model (19 pieces, armscab_dead; 265 of the 285 3DO
+   features are one piece), plus the anchor table: 19.6 MB under the raised
+   limits. The front is sized by the screen, not by a count, so it is an
+   allowance: on a 3840x2160 screen (a 3712 x 2096 viewport inside the stock
+   HUD) the wide grid is 543 x 316 cells, 343 176 B (tagpu_fogwide.c,
+   fogw_capacity, at the zoom floor), the engine's grid 118 x 68, 16 048 B
+   (0x483BB8's allocation), and the shade table 8 KB [COMPUTED]; the allowance
+   is 512 KB. What follows -- build orders, effects, the UI's render half, the
+   font -- is bounded by its own caps and truncates on its own bit, which costs
+   that layer alone. The reserve is address space, five slots of it in a
+   32-bit process whose largest free block has been logged as low as 43.6 MB
+   (gpu-status.md §2.86), so it is sized to the design point rather than
+   rounded up; pages are committed as the packets grow (`slot_commit`), so a
+   game pays only for what it publishes. */
 #define PK_DESIGN_PIECES 36u
 #define PK_DESIGN_WRECK_PIECES 19u
+#define PK_DESIGN_FRONT (512u << 10)
 #define PK_UNIT_WORST (sizeof(TAGPU_PACKET) + \
     TAGPU_PK_DESIGN_SLOTS * (sizeof(TAGPU_PK_UNIT) + PK_DESIGN_PIECES * sizeof(TAGPU_PK_PIECE)) + \
     TAGPU_PK_MAX_WRECKS * (sizeof(TAGPU_PK_WRECK) + PK_DESIGN_WRECK_PIECES * sizeof(TAGPU_PK_PIECE)) + \
     TAGPU_PK_MAX_ANCHORS * sizeof(TAGPU_PK_ANCHOR) + 64u /* the tables' 4-alignment */)
-typedef char pk_reserve_design[(PK_RESERVE >= PK_UNIT_WORST) ? 1 : -1];
+typedef char pk_reserve_design[(PK_RESERVE >= PK_DESIGN_FRONT + PK_UNIT_WORST) ? 1 : -1];
 
 /* the record's prefix and suffix, wherever the instance's suffix sits */
 #define REC_HEAD(p)     (((uint32_t*)(p))[0])

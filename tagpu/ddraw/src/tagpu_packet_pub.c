@@ -82,6 +82,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "dd.h"           /* g_ddraw: the game's own screen, for the roster's on-screen test */
+#include "render_vk.h"     /* vk_render_main: whether the session draws from packets */
 #include "tagpu_engine.h"
 #include "tagpu_packet.h"
 #include "tagpu_packet_pub.h"
@@ -286,7 +287,8 @@ static unsigned s_fillShort;
 /* 1 while fill_frame redoes the fill it made for this same publish (same
    head_seq): pkx_publish grew the slot under it. Set at the top of
    fill_frame; the caches' reuse counters skip a fill that is done again, and
-   fill_counts_* below take back what the discarded fill counted. */
+   PK_FILL_COUNTS / PK_FC_UNDO (above fill_frame) take back what the
+   discarded fill counted. */
 static int      s_fillAgain;
 
 static unsigned append_area(TAGPU_PACKET* p, unsigned* cursor, const void* src, unsigned len,
@@ -629,7 +631,7 @@ static unsigned fill_world(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
        publish and take as many publishes as there are units to converge; this
        counts the whole demand, so one growth is enough. */
     unsigned pkWant = 0;
-    unsigned pieces_base = PKT_ALIGN4((unsigned)sizeof(TAGPU_PACKET));
+    unsigned pieces_base = PKT_ALIGN4(*cursor);   /* after the fog grids and the shade table */
     unsigned need = pieces_base, e;
     unsigned pTrunc = 0;
     int c0, r0, cols, rows, row, col;
@@ -1518,9 +1520,11 @@ static volatile int      s_lastFogC, s_lastFogR, s_lastFogwC, s_lastFogwR;
 static int      s_engRecOk, s_engRecX, s_engRecY;
 static unsigned s_engRecGen;
 static int      s_fogBitBefore = -1;      /* bit 3 after this draw's apply; -1 untracked */
-/* the engine grid was not current when this draw began (bit 3 clear after the
-   apply, or untracked): what the wide grid's tick is told as `rebuilt` when
-   the fog site is the engine's (wide_tick) */
+/* the LOS state moved in this draw: bit 3 was clear after the apply (the
+   engine grid was not current as the draw began), or it is clear at the draw's
+   end (something cleared it during the draw -- a `recodd` draw), or the draw
+   was untracked. What the wide grid's tick is told as `rebuilt` when the fog
+   site is the engine's (wide_tick). */
 static int      s_fogStale = 1;
 
 static void fog_rec_before(char* ta)
@@ -1541,9 +1545,9 @@ static void fog_rec_drop(void)
 static void fog_rec_after(const char* ta)
 {
     int after;
-    s_fogStale = s_fogBitBefore != 1;
-    if (!ta || s_fogBitBefore < 0) { fog_rec_drop(); return; }
+    if (!ta || s_fogBitBefore < 0) { s_fogStale = 1; fog_rec_drop(); return; }
     after = (RDU16(ta, OFF_LOSTYPE) & 8) != 0;
+    s_fogStale = s_fogBitBefore != 1 || !after;
     if (!s_fogBitBefore && after) {
         s_engRecX = RD32(ta, OFF_EYE_X); s_engRecY = RD32(ta, OFF_EYE_Y);
         s_engRecGen = s_levelGen; s_engRecOk = 1;
@@ -1559,36 +1563,52 @@ static void fog_rec_after(const char* ta)
    follows the terrain pass's request: at a level's start, until our pass
    has gathered a frame and the game thread has seen its request, and under
    `terr.on=off` or `passive`, the ENGINE's `0x4848E0` runs there instead and
-   nothing builds the wide grid. A frame drawn below 1x from such a packet had
-   no grid covering its view (`bare=`). So on the draws where our site did
-   not run, this `after` ticks the wide grid itself, before the fill copies it.
+   our site does not. A frame drawn below 1x from a packet without the wide
+   grid has no grid covering its view (`bare=`). So on the draws where our
+   site did not run, this `after` ticks the wide grid itself, before the fill
+   copies it.
 
-   WHAT IT READS IS SAFE HERE FOR THE SAME REASON AS AT THE FOG SITE: the local
-   player's LOS counters and the MAPPED bitmap are the level's. The counters
-   are (re)allocated only by `0x464700`, which `0x464990` calls for each
-   active player at `0x4919C8`, inside the level load `LoadGameData_Main
-   0x4917D0` on the loader thread; MAPPED is allocated at `0x483CF6` in the
-   map load and freed by the map-free routine `0x483DD0` in the teardown
-   cascade `0x491B60` [DISASSEMBLED 2026-09-24]. This `after` runs on the
-   in-play gate, after the load and before the teardown, on the thread that
-   runs the teardown -- the argument every table this publisher copies
-   stands on -- and every index the build forms is bounded by the maps' own
-   dimensions (tagpu_fogwide.c, fogw_source).
+   ONLY WHILE THE SESSION'S RENDERER IS VULKAN. The wide grid's one reader is
+   the native pass, on the Vulkan lane; on the GDI lane nothing reads it, and
+   a build per sim tick there is paid for nothing. This is not the zoom gate
+   the tick itself rules out (tagpu_fogwide.c, "THE LIVE ZOOM LEVEL IS NOT ONE
+   OF THEM": the level is the render thread's to publish, so a producer gated
+   on it builds one frame late at the start of every zoom-out). The renderer
+   is a property of the session, not of a frame: `dd_CreateEx` stores
+   `g_ddraw.renderer` on the game thread before the first draw, and its one
+   later store is render_vk.c's hand-over to GDI, after which no frame is
+   drawn from a packet at all.
 
-   `rebuilt` IS "the engine grid was not current when this draw began". The
-   engine's `0x4848E0` runs on every in-play draw (its call at `0x469D8E` is
-   gated on `drawUnits`, which the in-play call passes as 1) and rebuilds
-   whenever bit 3 is clear, and every LOS stamp and every eye writer clears
-   it; so a clear bit at the apply is the same signal `terr_fogtick` hands
-   over when it rebuilds, and an untracked draw counts as one. The tick
-   rebuilds on it or on a moved window, and otherwise keeps the grid, which
-   is then still exactly what a build would produce. */
+   WHAT IT READS IS SAFE HERE FOR THE SAME REASON AS AT THE FOG SITE: every
+   in-play draw falls inside the lifetimes of both maps, and each index the
+   build forms is bounded by the maps' own dimensions (tagpu_fogwide.c,
+   fogw_source). The local player's LOS counters are allocated by `0x464700`,
+   which `0x464990` calls for each active player at `0x4919C8`, inside the
+   level load `LoadGameData_Main 0x4917D0` on the loader thread, and freed by
+   the same `0x464700` at the NEXT level's load; the teardown cascade
+   `0x491B60` does not free them. MAPPED is allocated at `0x483CF6` in the
+   map load and freed at `0x483E70`, by the map-free routine `0x483DD0` in
+   that teardown [DISASSEMBLED 2026-09-24; exe-reverse-engineering.md, "The
+   two routines that bracket a level"]. This `after` runs on the in-play
+   gate, after the load and before the teardown, on the thread that runs the
+   teardown -- the argument every table this publisher copies stands on.
+
+   `rebuilt` IS "the LOS state moved in this draw" (s_fogStale). The engine's
+   `0x4848E0` runs on every in-play draw (its call at `0x469D8E` is gated on
+   `drawUnits`, which the in-play call passes as 1) and rebuilds whenever bit
+   3 is clear, and every LOS stamp and every eye writer clears it; so a clear
+   bit at the apply is the same signal `terr_fogtick` hands over when it
+   rebuilds, a bit set at the apply and clear at the draw's end is a stamp
+   inside the draw (`recodd`), and an untracked draw counts as one. The tick
+   rebuilds on it or on a moved window, and otherwise keeps the grid, which is
+   then still exactly what a build would produce. */
 static unsigned s_wideTickDraw;
 static int      s_wideTickSeen;
 
 static void wide_tick(void)
 {
     char* ta;
+    if (g_ddraw.renderer != vk_render_main) return;  /* no reader on the GDI lane */
     if (tagpu_terrown_fog_site_live()) return;       /* ticked at our fog site */
     ta = (char*)ta_main();
     if (!ta) return;
@@ -1914,7 +1934,6 @@ static void fill_pal(TAGPU_PACKET* p, const char* ta)
     p->pal_ok = 1;
 }
 
-/* the in-play frame: every field of the header, from the thread that owns it */
 /* THE COUNTS OF A FILL THAT IS DONE AGAIN ARE TAKEN BACK. pkx_publish fills
    a slot a second time when the first fill did not fit, and publishes only
    the second, so everything these count -- a cut table, a grid or minimap
@@ -1934,6 +1953,7 @@ static void fill_pal(TAGPU_PACKET* p, const char* ta)
 static struct { PK_FILL_COUNTS(PK_FC_FIELD) } s_fcMark;
 static uint32_t s_fillHead;
 
+/* the in-play frame: every field of the header, from the thread that owns it */
 static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
 {
     const char* ta = ta_main();
@@ -2017,8 +2037,26 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     p->build_unit_id = RDU16(ta, OFF_BUILDUNITID);
     p->game_opt     = RDU8(ta, OFF_GFXOPT);
 
-    /* ---- the fog grids decided first: the world tables are sized by them ---- */
+    /* THE ORDER IS THE CUT ORDER. A fill that does not fit the reserve is
+       published cut (tagpu_packet.c, pkx_publish), and what is cut is what
+       comes last. So the fog grids and the shade table go down first and the
+       world tables straight after them -- the reserve holds all of those at
+       the design point (tagpu_packet.c, PK_RESERVE) -- and what an overflow
+       can reach is what follows: the build orders, the effects, the UI's
+       render half, the font. A frame below 1x without its fog grids is drawn
+       bare, and one without its unit tables drops its whole unit hand-over;
+       one without an effect layer or the minimap is missing that alone. */
+    /* ---- the fog grids, decided first: the world tables are sized by them ---- */
     fog_sources(ta);
+    e = fill_fog(p, ta, &cursor);
+    if (e > need) need = e;
+    /* ---- the shade table the unit pass shades by ---- */
+    shd_snapshot();
+    if (s_shdOk) {
+        e = append_area(p, &cursor, s_shd, (unsigned)sizeof s_shd, &p->shd_off, &p->shd_len,
+                        TAGPU_PK_TRUNC_SHD);
+        if (e > need) need = e;
+    }
     /* ---- the world tables ---- */
     e = fill_world(p, ta, &cursor);
     if (e > need) need = e;
@@ -2028,18 +2066,9 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     /* ---- the effects and the particle layers ---- */
     e = fill_fx(p, ta, &cursor);
     if (e > need) need = e;
-    /* ---- the two fog grids ---- */
-    e = fill_fog(p, ta, &cursor);
-    if (e > need) need = e;
     /* ---- the UI's render half ---- */
     e = fill_gui(p, ta, &cursor);
     if (e > need) need = e;
-    shd_snapshot();
-    if (s_shdOk) {
-        e = append_area(p, &cursor, s_shd, (unsigned)sizeof s_shd, &p->shd_off, &p->shd_len,
-                        TAGPU_PK_TRUNC_SHD);
-        if (e > need) need = e;
-    }
 
     /* the font: header + glyph table in the header, the objects in the area */
     p->font_gen   = s_fontGen;

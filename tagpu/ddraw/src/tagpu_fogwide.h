@@ -32,13 +32,15 @@
 
    WHERE IT RUNS. On the GAME thread, once in every tracked in-play draw: from
    `tagpu_terrown.c`'s `terr_fogtick`, the engine's own fog-overlay call site,
-   when that site is ours, and otherwise from the packet publisher's `after`
-   of the same draw (`wide_tick` in tagpu_packet_pub.c) -- so a level that
-   starts below 1x, or runs with our terrain pass off, still has the grid.
-   Both read the LOS and MAPPED maps inside an in-play draw, after the level
-   load that allocates them and before the teardown that frees them, on the
-   thread that runs that teardown (the lifetime is spelled out at
-   `wide_tick`). Every index into them is bounded by the maps' own
+   when that site is ours, and otherwise, while the session renders on
+   Vulkan, from the packet publisher's `after` of the same draw (`wide_tick`
+   in tagpu_packet_pub.c) -- so a level that starts below 1x, or runs with our
+   terrain pass off, still has the grid. On the GDI lane nothing reads it and
+   neither runs. Both read the LOS and MAPPED maps inside an in-play draw,
+   after the level load that allocates them and before the teardown, on the
+   thread that runs that teardown: the teardown frees MAPPED, and the LOS
+   counters live on until the next load frees them (the lifetimes are spelled
+   out at `wide_tick`). Every index into them is bounded by the maps' own
    dimensions, as the engine's own loop bounds it.
 
    WHAT IT COVERS. The window is sized for the WIDEST view the zoom levers can
@@ -79,7 +81,8 @@
 void tagpu_fogwide_init(void);
 
 /* Game thread, once per tracked in-play draw: from the fog-overlay call site
-   when it is ours, else from the publisher's `after` (see WHERE IT RUNS). `ta`
+   when it is ours, else, on the Vulkan renderer, from the publisher's `after`
+   (see WHERE IT RUNS). `ta`
    is the TAdynmem base; `rebuilt` is 1 when the engine's own grid was not
    current on this draw (its is-current flag had been cleared), which is also
    our cue that the LOS state moved under us. It rebuilds only when `rebuilt` is set or the

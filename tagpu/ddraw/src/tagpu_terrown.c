@@ -178,9 +178,11 @@ static void __cdecl terr_fill(void* ctxv)
    WIDE grid, which is ours. The engine's grid spans the 1x viewport and no
    more, so at zoom < 1 the outer ring of the view falls off its lattice
    entirely; tagpu_fogwide builds the same masks over a window the whole zoom
-   range fits in. It runs here because here is where the maps it reads are the
-   engine's own to read (tagpu_fogwide.h), and it needs to know whether the
-   engine rebuilt on this tick — that is the same "the LOS state moved" signal. */
+   range fits in. It is ticked here, when this site is ours, because this is
+   where the lazy rebuild decides whether the engine grid was current, and that
+   is the same "the LOS state moved" signal the tick needs. What makes the maps
+   it reads safe is not this site but the level's lifetime: any in-play draw
+   falls inside it (tagpu_fogwide.h, WHERE IT RUNS). */
 /* THE FOG SITE'S OWN LIVENESS, and it is a stamp rather than a flag. Our
    `terr_fogtick` runs only while `g_terrown_own` is set, and that falls on the
    next latch after the render thread drops its request on any path that hands

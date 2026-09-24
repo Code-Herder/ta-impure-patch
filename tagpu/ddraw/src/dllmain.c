@@ -136,10 +136,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_terrown_init();
 
         /* fogwide: the fog grid over the ZOOMED-OUT view (tagpu_fogwide.h).
-           No engine patch of its own — it rides terrown's fog-overlay call
-           site — but its critical section is created here, before either the
-           game thread or the render thread can reach it. Inert unless a
-           zoomed-out view is live; `tagpu_fogwide.off` turns it off. */
+           No engine patch of its own: it is ticked on the game thread, at
+           terrown's fog-overlay call site when that is ours and otherwise, on
+           the Vulkan renderer, in the packet publisher's `after`; the tick
+           does nothing until this has run. It builds at every zoom;
+           `tagpu_fogwide.off` turns it off. */
         tagpu_fogwide_init();
 
         /* tagpu: own the engine's world-space UI markers — health bars
