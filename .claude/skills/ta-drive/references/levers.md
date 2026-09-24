@@ -174,25 +174,26 @@ fixture that only arms the pass produces no picture:
 
 | lever | when read | what |
 |---|---|---|
-| `zoom.on` | attach | the wheel, `tagpu_zoom.txt`, the minimap view rectangle, the guard that keeps our `ScrollSpeed` scaling out of the registry, and the widened camera range. Logs `zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save …)`. Without it: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed` |
+| `zoom.on` | attach | the wheel, `tagpu_zoom.txt`, the minimap view rectangle, the guard that keeps our `ScrollSpeed` scaling out of the registry, and the camera's centre range. Logs `zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save 0x430FAE, camera centre range 0x41C3C0 + target clamps …)`. Without it: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed` |
 | `tagpu_zoom.txt` | every frame | a bare float 0.25–8.0; written atomically (temp + rename); pins the level and disables the wheel while present; does not move the camera |
 | `tagpu_eye.txt` | every in-play draw | what `tacli eye X Y` writes; the packet heartbeat's `hold=1` says it is in force; `tacli eye <i> --release` removes it |
 | `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with `zoom.on` |
-| `zoomedge.off` | live | the 1x camera range back (a zoomed-in view then stops short of the map edge) |
 | `vpwide.on` | attach | widens the rect the engine addresses to what the zoom shows, so ring clicks and band boxes land at zoom < 1. Writes `main+0x37E27..0x37E33`. Logs `vpwide: ARMED (mouse->world 0x498DA0, surface …)` and `vpwide: true viewport rect verified (128,32 896x704)`, `vpwide: viewport rect restored to 1x` at 1x. `zoom.on` alone logs `vpwide: mouse->world repair only (0x498DA0) —` |
 | `fogwide.off` | live | the wide fog grid off: the outer ring at zoom < 1 falls back to a smear of the border cell. The native line's `bare=` does not count this |
 | `fogwide_check.on` | live | the oracle: `fogwide check: … compared=N of cells=M differ=N` every 120th tick, **`differ=0`** |
 
 Driving the camera at a zoom other than 1:
 
-- **The camera's range widens at zoom > 1** so a zoomed-in view reaches the map edge: `eyeX` goes
-  negative at the left edge and past `map − W` at the right, and walks home on its own when the
-  zoom returns to 1. `tacli eye` clamps with the same range. `zoomedge.off` is the 1x range back.
-- **A round trip lands on exactly 1x**, except one that hit the 0.25 or 8.0 clamp (the grid
-  re-anchors there, so −15/+15 comes back at 1.044). Re-anchor by writing `1.0` to
-  `tagpu_zoom.txt`, then deleting it. Deleting the file hands over, it does not reset; notches
-  sent while the file is present are dropped and logged (`zoom: wheel … ignored - tagpu_zoom.txt
-  is in force`).
+- **The camera keeps the view centre on the map, at every zoom**: the eye ranges over
+  `[−W/2, map − W/2]` (W, H the true viewport, 896x704 at 1024x768), so a map edge can reach the
+  middle of the screen. That range holds only while `terr.on` draws the ground; without it the eye
+  stays in the engine's own `[0, map − W]`. `tacli eye` is clamped into the range in force, so
+  `tacli eye <i> -99999 -99999` puts the map's NW corner at the view centre. A right-click past the
+  edge orders a move to the nearest point on the map.
+- **A wheel round trip does not land on 1x** (x1.163 then x0.877 is 1.020). Re-anchor by writing
+  `1.0` to `tagpu_zoom.txt`, then deleting it. Deleting the file hands over, it does not reset;
+  notches sent while the file is present are dropped and logged (`zoom: wheel … ignored -
+  tagpu_zoom.txt is in force`).
 - **Jump the camera with the minimap, not the arrow keys.** A *held* left button on the minimap
   lands the eye exactly on `world − (W/2, H/2)` before the clamp:
   `keys <i> mouse:10,0 down:lbutton`, peek `+0x1431F`/`+0x14323`, `keys <i> up:lbutton`.
@@ -339,4 +340,5 @@ changes nothing and logs nothing, which is the failure mode to recognise.
 `tagpu_rglsl.step`, `tagpu_shadowdump.on`, `tagpu_shadow.ab`, `tagpu_unit.on`, `tagpu_unit.ab`,
 `tagpu_restore_<tag>.rgba` without `_vk` (the GL half of the restore dump), `tagpu_<pass>_gl.ppm`,
 `tagpu_restorevk.on` (the restorer follows Classic++'s `assets=` knob, which the render-options
-screen's `Undithered assets` row writes; `classicpp.cfg=assets=0` is the A/B).
+screen's `Undithered assets` row writes; `classicpp.cfg=assets=0` is the A/B), `tagpu_zoomedge.off`
+(the camera has one range; there is no 1x range to go back to).

@@ -406,19 +406,19 @@ Every lever, its tokens, its verify line and the heartbeat fields that must read
 
 Zoom has two levers, and the file wins. **`tagpu_zoom.txt`** in the gamedir is a bare float
 0.25–8.0, re-read every frame, written atomically — the scripted lever, and it does not move the
-camera. **The mouse wheel** is what the player uses when the file is absent: one notch is x1.1,
-and it **zooms to the cursor**, so it moves the eye. Both need `zoom.on` at launch, or the level
-is pinned at 1.0 and the log says so.
-
-```bash
-tools/tacli wheel <i> -6 --at 576 384    # six notches out, pointed at the world first
-tools/tacli wheel <i> 6  --at 576 384    # and back — this lands on EXACTLY 1.0
-```
+camera. **The mouse wheel** is what the player uses when the file is absent: one notch in is
+x1.163 and one out x0.877, eased over 250 ms. A notch **in** zooms to the cursor, so it moves the
+eye; a notch **out** pulls back from the view centre and never moves it. The log line at the end
+of a gesture is `zoom: wheel +120 -> 1.163, landed 251.7 ms after the last notch`. Both levers
+need `zoom.on` at launch, or the level is pinned at 1.0 and the log says so.
 
 - **Aim it.** `--at` is a `pmove:` first; notches over the side panel or a menu do nothing, and
-  the log says which gate refused. `--at` the viewport centre is the camera-neutral control.
+  the log says which gate refused. `tools/tacli wheel <i> 1 --at 576 384` (the viewport centre at
+  1024x768) is the camera-neutral control.
+- **A round trip does not come back to 1.0** (in then out is 1.020): write `1.0` to
+  `tagpu_zoom.txt`, then delete it.
 - **Re-read the eye after any wheel** — the game thread applies the delta at its next in-play
-  draw. An off-centre wheel also **releases a camera follow** (`Ctrl+C`); read `main+0x142F3`
+  draw. An off-centre notch in also **releases a camera follow** (`Ctrl+C`); read `main+0x142F3`
   (0 = nothing followed) rather than assuming.
 - **At zoom < 1 the outer ring needs `vpwide.on`** at launch, or a click or band-box drag out
   there is dropped. `tacli click` takes the position **on screen**, the same as your eyes.
@@ -426,7 +426,7 @@ tools/tacli wheel <i> 6  --at 576 384    # and back — this lands on EXACTLY 1.
   1024x768; `mouse:1020,400` does nothing). Arrow keys do not scroll under injection.
 
 The camera range, the minimap jump, the fog grid's rebuild rule, which dialogs keep 1:1 clicks
-under zoom, `wheel.off` and `zoomedge.off`: `references/levers.md` §"Camera, viewport and fog".
+under zoom and `wheel.off`: `references/levers.md` §"Camera, viewport and fog".
 
 ## Things that will bite you
 

@@ -1,19 +1,20 @@
 # BAR's camera and a full-colour Classic — the port plan
 
-**Written** 2026-09-23. **Nothing in this note is built in the game yet.** It is the plan for two
-changes the lab has already made:
+**Written** 2026-09-23. **C1–C4 of Part 1 are built (G20a, on its worktree branch, not landed);
+C5 and Part 2 are not.** It is the plan for two changes the lab has already made:
 
 1. **Part 1** covers the camera's pan and zoom. **The BAR camera replaces the game's camera. There
    is one camera and no setting to choose another.** Beyond All Reason's centre clamp, zoom-out
    from the centre, notch and ease go into `tagpu`, and the rules they replace are deleted. The
-   lab's mirrored map edge comes with them as an on/off setting. The projection (TA's fixed
+   lab's mirrored map edge follows as an on/off setting (C5, G20b). The projection (TA's fixed
    oblique view) does not change.
 2. **Part 2** covers the renderer. Classic becomes the Classic++ full-colour pipeline with its
    rendering options off, and the 8bpp path is deleted.
 
 The reference implementation for both is `tools/tascene-view.html` on `worktree-camera_zoom`
-(4171779..b2574e4). Its **BAR** button in the status bar is `cam=bar&edge=mirror`, and that page
-is what the owner has looked at. Where BAR and the lab disagree, the lab wins, and the difference
+(4171779..b2574e4). At `b2574e4` its **BAR** button in the status bar was `cam=bar&edge=mirror`,
+and that page is what the owner has looked at; since G20a the lab has that camera alone, and
+`edge` is a status-bar toggle. Where BAR and the lab disagree, the lab wins, and the difference
 is written down. When a gate here closes, its facts move to [GPU status](gpu-status.html) and
 [renderers](renderers.html), and this note is folded into them the way `g19f-plan.md` is.
 
@@ -47,8 +48,9 @@ pan or zoom only.
 
 ### 1.1 The lab's BAR preset is the target  [SOURCE: `tools/tascene-view.html`]
 
-In the lab, `cam=bar` sets BAR's camera rules at once and the BAR button adds `edge=mirror`.
-The table is the change: the left column is **what G20a deletes**, the right is what replaces it.
+In the lab at `b2574e4`, `cam=bar` set BAR's camera rules at once and the BAR button added
+`edge=mirror`. The table is the change: the left column is **what G20a deletes**, the right is
+what replaces it.
 
 | rule | the game today — **deleted** | BAR — **the game's only camera** |
 |---|---|---|
@@ -63,9 +65,11 @@ The table is the change: the left column is **what G20a deletes**, the right is 
 
 The notch counts from 0.25× to 8× are 36 for the game, 23 in and 27 out for BAR.
 
-**A pointer off the world viewport zooms about the centre**, as in the game today. A second
-notch during a tween starts a new tween from wherever the
-camera is drawn, toward a target built from the **previous target**. Recoil does the same:
+**A pointer off the world viewport does not zoom at all**: the game takes the wheel only over
+the world viewport, so a notch over the side panel, the bars or a dialog is not consumed
+(`tagpu_zoom_wheel`; *"wheel ignored — pointer is off the world viewport"*). The lab has no such
+region. A second notch during a tween starts a new tween from wherever the camera is drawn, toward
+a target built from the **previous target**. Recoil does the same:
 `CameraTransitionExpDecay` takes `startPos` from the drawn camera, and the controller's pose has
 already moved.
 
@@ -149,63 +153,75 @@ The lab's left-drag "grab the map" is a lab convenience and was never a BAR rule
 `tagpu_zoom.c` owns every piece of this, and its mechanisms stay: one level owner on the render
 thread, the incremental eye delta posted to the game thread, the range enforced in engine memory,
 and the fog handshake ([GPU status](gpu-status.html), the zoom-to-cursor gates). The work is
-five changes. The first three are pure camera changes, and the last two draw.
+five changes. C1–C4 are camera changes (G20a); C5 draws (G20b).
 
-**C1 — the edge setting, and the old camera deleted.**
+**C1 — the old camera deleted [BUILT, G20a].**
 
 * **No camera setting.** C2–C4 replace the old rules in place. Nothing chooses between cameras,
   so the only camera switch that remains is whether the zoom pass is armed at all.
-* **`edge = mirror | black`, default `mirror` [DECIDED 2026-09-23].** This is an on/off setting,
-  the only new one. It is a store key in `impure.cfg` ([renderers](renderers.html) §2.10b) with a
-  row in the in-game settings and a lever file for A/Bs, following §2.10b's precedence: a lever
-  beats the store, which beats the compiled default. `tagpu_defaults.off` skips the store and the
-  play defaults, so a control launch draws `black`.
-* **Deleted with the old camera, callers ported:**
-  * `tagpu_zoomedge.off` and its lines in the `ta-drive` skill (`references/levers.md`);
+* **Deleted, callers ported:**
+  * the window clamp (`d = (W/2)(1 − 1/z)`, `g_eyeWide`), and the flag that ran the replacement
+    clamp only above 1×;
+  * zoom-out about the pointer;
+  * the ×1.1 notch and its log ease (`WHEEL_STEP`, `WHEEL_EASE`, `eye_level()`, `pred_level()`);
+  * `tagpu_zoomedge.off`, the command record's `eyeoff` and its lines in the `ta-drive` skill
+    (`SKILL.md`, `references/levers.md`, which now lists it under "Names that do nothing");
   * the lab's `cam=game`, and its `clamp=`, `zoomout=` and `ease=` knobs. The lab's camera is the
-    game's camera, and the lab keeps no second one.
+    game's camera, and the lab keeps no second one;
+  * `tacli wheel`'s help, which now says ×1.163 in and ×0.877 out.
 
-**C2 — the centre clamp.**
+**C2 — the centre clamp [BUILT, G20a].**
 
-* **The range.** `zoom_eye_range` and `range_pk` get a second branch, lo = −W/2 and
-  hi = map − W/2, with W the **true** viewport. The two must stay the same arithmetic, which is
+* **The range.** `camera_range()` is the one function: lo = −W/2 and hi = map − W/2, with W the
+  **true** viewport, or the engine's own [0, map − W]. `zoom_eye_range` (the game thread's inputs)
+  and `range_pk` (the packet's `vp`, `map_pxw/h` and the new `cam_centre`) both call it, which is
   the invariant the pre-clamp rests on.
-* **The flag.** Today the replacement clamp runs only above 1× (`g_eyeWide = installed && z > 1`),
-  and below that the engine's own `0x41C3C0` runs verbatim. The centre clamp applies at every
-  zoom, so the replacement runs whenever it is installed, and `g_eyeWide` and the `eye_level()`
-  escape-hatch branch go.
-* **The follow.** The follow's clamp (`zoom_follow_clamp`) takes the new range for free.
-* **What stays short.** The two smooth centring paths that clamp inline, `0x41C4C0` and
-  `0x41C7F7`, still stop at [0, map − W]. Today they already stop d short above 1×. With the
-  centre clamp they would stop W/2 short at every zoom. Nothing fights, but a "centre on this unit" near an edge
-  will not centre it.
+* **Which range is in force.** The centre range holds only on a draw whose ground is ours
+  (`s_gCentre = installed && terr`), because the engine's terrain pass `0x483FA0` has no bound on
+  its tile index; the terrain latch is set from the same request right after the apply, so the
+  two agree on every draw. The apply clamps the eye and target into the range in force on every
+  in-play draw; the level end puts the engine's range back and walks the eye into it.
+* **The flag.** The replacement of `0x41C3C0` runs whenever it is installed.
+* **The four inline target clamps** — not two. The smooth arms of `SetCamera 0x41C4C0`, of
+  centre-on-point `0x41C7C0` and of centre-on-object `0x41C8E0` each store the target and clamp it
+  inline (blocks `0x41C4EC`, `0x41C808`, `0x41C93B`); the follow's block `0x41CAF7` is the fourth.
+  All four are replaced, not chased: the first instruction jumps to a stub that clamps into the
+  range in force and resumes at the block's own tail. `0x41C7F7`, which this note named before, is
+  the target store inside `0x41C7C0`, not a function of its own.
+* **The debug overlay.** `0x418310` has no lower bound on its cell window, so its one call site
+  `0x468DBA` is redirected to call it only for an eye in the engine's own range.
+* **The minimap box** is clamped to the minimap at every zoom, 1× included.
+* **The fog.** An eye off [0, map − W] puts the engine grid's border completions off the map, so
+  the native pass draws from `fogwide`'s grid then (`tagpu_zoom_wide_fog`).
 
-  **This is the one piece of new engine work in Part 1.** Those two sites need the treatment
-  `0x41CAF7` got: replace the block, don't chase it.
+**The audit C2 needed.** Every engine reader of the eye had to be bounded for an eye W/2 past the
+map, **at every zoom**, with `vpwide`'s widened rect below 1× adding W/(2z) − W/2 more. Before
+G20a the eye reached −0.4375 W at 8× and never went below 0 at or under 1×. The full table, with
+the instruction behind each bound, is [exe reverse engineering](exe-reverse-engineering.html)
+§"Who reads the eye"; the rows this note listed:
 
-**The audit C2 needs before it is safe.** Every engine reader of the eye has to be bounded for an
-eye W/2 past the map, **at every zoom**. Below 1×, `vpwide`'s widened view adds W/(2z) − W/2
-more. Today the eye reaches −0.4375 W at 8× and never goes below 0 at or under 1×.
-
-| reader | status |
+| reader | bound |
 |---|---|
-| `0x498DA0`, the pointer → world point (GetTPosition → `GetGridPosPLOT` → `GetGridPosFeature`, which crashes on NULL) | **bounded twice**: `tagpu_vpwide.c` clamps the world point to the map (its *KEEP THE WORLD POINT ON THE MAP* block), and `zoom_tpos_guard` clamps the side-panel path. A right-click in the mirror orders a move to the nearest point on the map's edge, as a click in the void does at 0.5× today |
-| the minimap view box (`zoom_minimap_rect`) | **bounded**: clamped to the minimap |
-| the engine's screen fog grid builder `0x4843C0` (bit 3 of `main+0x14281`) | **to audit.** It is a scatter over the map cells in the view, starting at `eye >> 5` ([terrain & depth](terrain-depth.html) §5.2), and it has run with eyes down to −0.4375 W above 1×. With the centre clamp it runs at −0.5 W at every zoom. What has to be read is whether its reads of the LOS and mapped bytes are bounded for cells off the map. `tagpu_fogwide.c` says the engine's grid "never reaches more than one cell past the map", and that holds only under the engine's own clamp |
-| `fogwide`'s wide grid (below 1×) | **bounded in the replica**: every read of the mapped bytes checks `idx < mappedCells`, and the edge completions derive their row from `row0` instead of assuming it is 0 or −1 |
-| our feature gather (`tagpu_feat.c`) | **bounded**: rows and columns are clamped to the map (`tagpu_feat.c:740`). The mirror's gather (C5) is a separate list, so this clamp stays |
-| the engine's own sweep rect | **to audit**: the packet carries its `sweep_cols/rows`, and they are bounded to 1024 before use |
-| edge scroll and the scroll target | goes through `0x41C3C0`, which is ours |
-| HotUnits and the on-screen roster | **to audit.** They are culls on screen rectangles, and an off-map rect is empty rather than wild **[INFERRED]** |
+| `0x483FA0`, the engine's terrain pass | **none of its own** — the tile index from `eye >> 5` is unchecked at both ends. Bounded by design: the centre range is in force only on draws whose terrain latch skips it |
+| `0x418310`, the map debug overlay | **none below** — the cell window starts at eye/16 with only the upper ends clipped. Bounded by the redirect of `0x468DBA` |
+| `0x498DA0`, the pointer → world point | **bounded twice**: `tagpu_vpwide.c` clamps the world point to the map, and `zoom_tpos_guard` (`0x498EF9`) clamps the side-panel path. A right-click past the edge orders a move to the nearest point on the map's edge |
+| the minimap view box | **bounded**: clamped to the minimap at every zoom |
+| `0x4843C0`, the screen fog grid builder | **bounded**: every cell is tested unsigned against the LOS block's w/h before either read; the border completions stay inside the grid, but their content is misplaced for an eye off [0, map − W], which is why the native pass takes `fogwide`'s grid then |
+| `0x4848E0`, the fog draw | **bounded**: a `[0, cols) × [0, rows)` walk; terrown skips it with the terrain pass |
+| `fogwide`'s wide grid | **bounded in the replica**: every read of the mapped bytes checks `idx < mappedCells`, and the edge completions derive their row from `row0` |
+| our feature gather (`tagpu_feat.c`) | **bounded**: rows and columns are clamped to the map. The mirror's gather (C5) is a separate list, so this clamp stays |
+| the engine's sweep rect and HotUnits (`DrawGameScreen`'s row sweep, `0x48BAE0`) | **bounded**: the sweep's start is clamped to 0 and its end to `PLOT − 1`, signed; the bucket index is refused below 0 and at the row count; the cull is a signed rect test. The per-row bucket append `0x46981D` has no capacity check, which the eye does not cause |
+| edge scroll and the scroll target | through `0x41C3C0` and the four target clamps, all ours |
+| positional sound, the drag box, the unit hit test, the screenshot tiler, the effect and particle draws | **bounded** or projection only |
 
-Each "to audit" row ends with a bound argument (*Fixes must be safe by construction*), not with
-"it did not crash".
+Each row ends with a bound argument (*Fixes must be safe by construction*), not with "it did
+not crash".
 
-**C3 — zoom out from the centre.** In `anchor_step`, the step is taken only when `zNow > zWas`.
-Zoom-out never anchors to the pointer.
+**C3 — zoom out from the centre [BUILT, G20a].** In `anchor_step`, the step is taken only when
+`zNow > zWas`. Zoom-out never anchors to the pointer.
 
-**C4 — BAR's notch and tween.** They replace `wheel_level()`'s ×1.1 notch and log ease
-(`WHEEL_STEP`, `WHEEL_EASE`, `WHEEL_SNAP`'s ease role):
+**C4 — BAR's notch and tween [BUILT, G20a].** They replace `wheel_level()`'s ×1.1 notch and log
+ease (`WHEEL_STEP`, `WHEEL_EASE`, `WHEEL_SNAP`'s ease role):
 
 * **The notch.** Each notch multiplies the target *distance* iz = 1/z by `max(0.1, 1 − 0.14 n)`,
   with n = Δ / `WHEEL_DELTA`. That is `ScrollWheelSpeed −20 × 0.007`. The target is clamped to
@@ -225,10 +241,14 @@ The one difference: when the pointer moves between two notches, the game holds t
 notch's point, while the lab aims each target at its own notch's point. A range clamp that cuts
 the step is handled as it is today: the residual is dropped, not banked.
 
-**C5 — the mirror, in the Vulkan world pass.**
+**C5 — the mirror, in the Vulkan world pass (G20b).**
 
-* **Its own on/off setting (C1).** Past the map there is always something to draw once the view
-  centre can reach the edge: up to W/2 at 1×, and up to 2 W at 0.25×.
+* **`edge = mirror | black`, default `mirror` [DECIDED 2026-09-23].** This is an on/off setting,
+  the only new one. It is a store key in `impure.cfg` ([renderers](renderers.html) §2.10b) with a
+  row in the in-game settings and a lever file for A/Bs, following §2.10b's precedence: a lever
+  beats the store, which beats the compiled default. `tagpu_defaults.off` skips the store and the
+  play defaults, so a control launch draws `black`. Past the map there is always something to
+  draw once the view centre can reach the edge: up to W/2 at 1×, and up to 2 W at 0.25×.
 * **Terrain.** Off-map cells join the terrain instances. Each one carries the tile of the cell it
   reflects to, found with the lab's triangle wave `reflect(m, n)`, and a flip bit per axis. It is
   drawn with the lab's tone: `edgeT` from the distance to the map on the tile grid, the grey mix,
@@ -465,12 +485,12 @@ comments, so regenerate rather than hand-edit).
 
 **Two tracks run in parallel, and the mirror waits for the second.**
 
-- **Track A** is G20a, the camera (C1–C4): `tagpu_zoom.c`, the two engine patches, and the lab's
-  camera.
+- **Track A** is G20a, the camera (C1–C4): `tagpu_zoom.c`, the three target-clamp blocks and the
+  debug-overlay guard, and the lab's camera.
 - **Track B** is G20c then G20d, full colour (Part 2): the atlases, the world shaders, the
   restorer's input, the packet and the composite.
-- **The overlap** is `tagpu_settings.c` and `tagpu_menu.c`: A adds the `edge` key and row, and B
-  changes what `assets=0` means. Both are small additions, so they merge cleanly.
+- **The overlap** is `tagpu_settings.c` and `tagpu_menu.c`: G20b adds the `edge` key and row, and
+  B changes what `assets=0` means. Both are small additions, so they merge cleanly.
 - **The mirror (G20b) builds on Track B's base atlas.** It edits the same terrain and feature
   shaders and passes that G20c rewrites. Built after G20c it has one colour path, RGB in with the
   tone applied; built before, it would need an index path that G20d then deletes.
@@ -481,7 +501,7 @@ comments, so regenerate rather than hand-edit).
 
 | landing | contents | review (CLAUDE.md) |
 |---|---|---|
-| 1 (track A) | C1–C4: the BAR camera in, the old rules out | **high** — writes engine memory (the eye and its range) and adds a byte patch at `0x41C4C0`/`0x41C7F7` |
+| 1 (track A) | C1–C4: the BAR camera in, the old rules out | **high** — writes engine memory (the eye, the target and their range) and adds byte patches at `0x41C4EC`, `0x41C808`, `0x41C93B` and `0x468DBA` |
 | 2 (after 3) | C5, the mirror | medium — new instances and a new sprite list in two passes, no engine state |
 | 3 (track B) | 2a + 2b | medium — atlases and shaders |
 | 4 (track B) | 2c + 2d | **high** — the packet loses a field, which is the game↔render hand-over |

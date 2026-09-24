@@ -1423,10 +1423,11 @@ LPARAM tagpu_zoom_mouse_lparam(UINT msg, LPARAM lparam)
    pointer on the viewport centre — releases nothing, so the A/B control still
    holds exactly.
 
-   A SMOOTH CENTRING IN FLIGHT WINS. SetCamera's and the two centre-ons'
-   smooth arms (`0x41C4C0`, `0x41C7C0`, `0x41C8E0`) set the scroll target once
-   and the stepper eases the eye to it, so a step applied while one is in
-   flight moves the eye and not the target, and the stepper eases it back.
+   A SMOOTH CENTRING ISSUED AFTER A STEP WINS. SetCamera's and the two
+   centre-ons' smooth arms (`0x41C4C0`, `0x41C7C0`, `0x41C8E0`) set the scroll
+   target once, from their own point and without our delta, and the stepper
+   eases the eye to it. A step applied while one is in flight moves the eye
+   and the target together, so the centring's destination moves with it.
    Neither is a standing state the way a follow is — each is one camera move,
    and the zoom composes with the next one — so nothing fights and nothing
    churns. */
