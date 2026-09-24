@@ -632,10 +632,11 @@ static int fix_reclaim_mark_anchor(void)
    past the allocation, on every lane (only GDI presents the result, but the game thread
    builds it on all of them, MEASURED). And A bounds area, not height: polygons are drawn
    into the frame through rasterisers that keep one 0x28-byte stack entry a row, clipped only
-   to the frame's height - 1, in tables of 799 rows (0x4C8BB0, 0x4C8760) or 2047 (0x4C0820,
-   0x4C0C70, 0x4C1000). A frame taller than the table under it overruns the rasteriser's
-   stack: MEASURED, a 2x bake grown to 1548 rows faulted at 0x4C8035 with its texture argument
-   overwritten. The build-state copy's header is drawn under by 0x4C0820 (its own last call,
+   to the frame's height - 1, in tables of 800 entries (0x4C8BB0, 0x4C8760) or 2048 (0x4C0820,
+   0x4C0C70, 0x4C1000); an h-row destination writes at most h - 1, so bounding rows at the
+   table's size is one row inside it. A frame taller than the table under it overruns the
+   rasteriser's stack upward, over its return address and then its arguments: MEASURED, a 2x
+   bake grown to 1548 rows faulted at 0x4C8035 with its texture argument overwritten. The build-state copy's header is drawn under by 0x4C0820 (its own last call,
    0x458D0E) and by 0x4C8760: the unit draw's 1x bake at 0x459641 is 0x459830(ctx+0x10, ...,
    0) with the scratch as its source, and the 1x path rasterises into its source by the
    source's header (0x459B96). The shadow is drawn under by 0x4C1000 (0x45A750), the 2x bakes
@@ -687,7 +688,8 @@ static int fix_reclaim_mark_anchor(void)
        each writer]; its callers re-read ctx+0x10 after every call (0x45933D..0x459342,
        0x4594E3, 0x4595B8, 0x4595D9, 0x459639, 0x4596BA); no function a writer calls reaches
        another writer [call graph of .text: 0x458310 is a leaf, 0x458DD0, 0x4B8A80, 0x4B7F90,
-       0x45A510, 0x45A610, 0x4B9D70, 0x4B9E60, 0x437B50 and the bakes' callees reach none];
+       0x45A510, 0x45A610, 0x4B96A0, 0x4B9D70, 0x4B9E60, 0x437B50 and the bakes' callees
+       reach none];
        and a frame is never regrown under a writer that is reading from it (src == frame
        refuses the grow instead);
      - a lifetime: the old block is freed only after ctx+0x10 points at the new one, and it
@@ -712,19 +714,26 @@ static int fix_reclaim_mark_anchor(void)
 
    Levers, read once at attach: `tagpu_scratch.stress` treats every frame as too small, so
    every writer call regrows it to exactly max(need, 64) pixels and frees the old one, with
-   the old block's two plane pointers set to NULL first so that a reader still holding it
-   faults instead of reading bytes the heap has not yet reused; `tagpu_scratch.nogrow`
-   refuses every grow, so every oversized writer takes its fallback.
-   Registers: every stub saves them all (pushad/popad) around the check, and the flags the
-   stolen instructions set are set after it. No branch lands inside the stolen bytes
+   the old block's two plane pointers set to SCR_POISON first so that a reader still holding
+   the frame faults at any plane access instead of reading bytes the heap has not yet reused
+   (a reader that kept a plane pointer itself is not caught); `tagpu_scratch.nogrow` refuses
+   every grow, so every oversized writer takes its fallback.
+   Registers: every check stub saves them all (pushad/popad) around the check, and the flags
+   the stolen instructions set are set after it. The merge's stub is a jmp to scratch_merge, a
+   __stdcall that keeps ebx, esi, edi and ebp and clobbers eax, ecx and edx as 0x4B90A0 does;
+   nothing from 0x4596DD on reads those three before writing them. No branch lands inside the stolen bytes
    [rel8/rel32 scan of .text]; 0x459608's call is the only reference to 0x4589C0, and
    0x4596D8's the only one to 0x4B90A0. */
 
 #define SCR_CAP_PX    (2048u * 2048u)
 #define SCR_ROUND_PX  0x40000u
 #define SCR_MIN_PX    64u
-#define SCR_ROWS_POLY 2048u     /* 0x4C0820, 0x4C0C70, 0x4C1000: 2047 rows of span table */
-#define SCR_ROWS_SPAN 800u      /* 0x4C8760, 0x4C8BB0: 799                               */
+#define SCR_ROWS_POLY 2048u     /* 0x4C0820, 0x4C0C70, 0x4C1000: 2048-entry span tables */
+#define SCR_ROWS_SPAN 800u      /* 0x4C8760, 0x4C8BB0: 800                              */
+/* the stress lever's freed-frame plane pointers: TotalA.exe is not large-address-aware (PE
+   characteristics 0x10B), so nothing at or above 2 GB is the process's and any plane offset
+   (at most 8 MB) from here faults */
+#define SCR_POISON    ((unsigned char*)0x80000000u)
 
 enum { SCR_BUILD, SCR_FRAME, SCR_SHADOW, SCR_BAKE1, SCR_BAKE2 };
 static const char* const SCR_WHO[] = {
@@ -749,9 +758,10 @@ static unsigned scratch_area(const unsigned char* f)
     if (!ptr_sane(f)) return 0;
     colour = *(const unsigned char* const*)(f + 0x10);
     depth  = *(const unsigned char* const*)(f + 0x14);
-    if (colour != f + 0x18 || depth <= colour || (size_t)(depth - colour) > 0x10000000u)
+    if (colour != f + 0x18 || depth <= colour ||
+        (size_t)depth - (size_t)colour > 0x10000000u)       /* unsigned: no ptrdiff overflow */
         return 0;
-    return (unsigned)(depth - colour);
+    return (unsigned)((size_t)depth - (size_t)colour);
 }
 
 static void scratch_log(const char* what, int who, unsigned long long need, unsigned rows,
@@ -813,8 +823,8 @@ static int scratch_hold(unsigned char* ctx, unsigned char* f, unsigned a,
             *(unsigned char**)(g + 0x14) = g + 0x18 + px;
             *(unsigned char**)(ctx + 0x10) = g;
             if (s_scr_stress) {                /* a reader still holding f faults here */
-                *(unsigned char**)(f + 0x10) = NULL;
-                *(unsigned char**)(f + 0x14) = NULL;
+                *(unsigned char**)(f + 0x10) = SCR_POISON;
+                *(unsigned char**)(f + 0x14) = SCR_POISON;
             }
             ((void (__cdecl*)(void*))0x004D85A0)(f);
             scratch_log("grown", who, need, rows, a, px, ++s_scr_grows[who]);

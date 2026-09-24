@@ -811,14 +811,18 @@ neither.
 
 | rasteriser | stack frame | table | entries | reached from |
 |---|---|---|---|---|
-| `0x4C8BB0`, the textured quad | `0x7D60` | `[esp+0x70]` | 799 | `0x45A39C` in the bake `0x459C70`, its one caller |
-| `0x4C8760` | `0x7D58` | `[esp+0x68]` | 799 | `0x459B96` in the bake `0x459830`, on its 1× path too — which draws into the build-state copy's frame (below) |
-| `0x4C1000` | `0x14028` | `[esp+0x38]` | 2047 | `0x459BB1` in the bake `0x459830`; `0x45A750` in the shadow's `0x45A610` |
-| `0x4C0C70` | `0x1402C` | `[esp+0x3C]` | 2047 | `0x45A3BA` in the bake `0x459C70` |
-| `0x4C0820` | `0x14024` | `[esp+0x34]` | 2047 | `0x459128` in `0x458FA0`, from `0x458DD0`: the build-state copy's last call (`0x458D0E`) and the cargo loop's (`0x459686`) |
+| `0x4C8BB0`, the textured quad | `0x7D60` | `[esp+0x70]` | 800 | `0x45A39C` in the bake `0x459C70`, its one caller |
+| `0x4C8760` | `0x7D58` | `[esp+0x68]` | 800 | `0x459B96` in the bake `0x459830`, on its 1× path too — which draws into the build-state copy's frame (below) |
+| `0x4C1000` | `0x14028` | `[esp+0x38]` | 2048 | `0x459BB1` in the bake `0x459830`; `0x45A750` in the shadow's `0x45A610` |
+| `0x4C0C70` | `0x1402C` | `[esp+0x3C]` | 2048 | `0x45A3BA` in the bake `0x459C70` |
+| `0x4C0820` | `0x14024` | `[esp+0x34]` | 2048 | `0x459128` in `0x458FA0`, from `0x458DD0`: the build-state copy's last call (`0x458D0E`) and the cargo loop's (`0x459686`) |
 
-So a destination may be 800 rows tall for the first two and 2048 for the other three. Past that the
-entries run over the saved registers, the return address and the arguments above the table.
+Each table holds exactly its entries — 800 for the first two, 2048 for the other three: the frame
+is `_chkstk`-probed (`0x4E4B20`) and four registers pushed, so for `0x4C8760` the table ends at
+`0x58 + 800·0x28 = 0x7D58`, the frame's size — and an `h`-row destination writes at most `h − 1`
+(each side covers `[max(y0,0), min(y1,h−1))`, `0x4C899B..0x4C89E1`). So a destination may be 800 rows
+tall for the first two and 2048 for the other three, one row inside the table. Past that the entries
+run upward over the return address and then the arguments.
 MEASURED: a solar scaled ×11, whose 2× bake grew the frame to 1548 rows, faulted at `0x4C8035`
 reading `[NULL+0x10]` for its polygon's texture, `0x4C8BB0`'s argument at `[esp+0x7D78]`, which its
 own table had overwritten. Stock reaches it too: area bounds a 2× frame, not its height, so a narrow
@@ -833,7 +837,10 @@ the header the build-state copy set is drawn under by `0x4C8760` as well as by `
 held to 800 rows.
 
 **The fix** (`fix_composite_scratch`, always on) runs a check before each writer forms its size,
-through a stub that saves every register around a C call (`pushad`, the check, `popad`):
+through a stub that saves every register around a C call (`pushad`, the check, `popad`). The
+merge's stub is a `jmp` to `scratch_merge`, a `__stdcall` that keeps `ebx`, `esi`, `edi` and `ebp`
+and clobbers `eax`, `ecx` and `edx` as `0x4B90A0` does; nothing from `0x4596DD` on reads those
+three before writing them.
 
 | site | writer | stolen bytes | what the check computes | refused |
 |---|---|---|---|---|
@@ -880,7 +887,7 @@ failing it is left to stock and logged once. On an ordering: each writer reads `
 its check, its callers re-read it after every call (`0x459342`, `0x4594E3`, `0x4595B8`, `0x4595D9`,
 `0x459639`, `0x4596BA`), and no function a writer calls reaches another writer: `0x458310` is a leaf
 (`0x458310..0x458426`, `ret 0x20`, no call), and neither `0x458DD0`, `0x4B8A80`, `0x4B7F90`, `0x45A510`,
-`0x45A610`, `0x4B9D70`, `0x4B9E60`, `0x437B50` nor the bakes' callees reach one. (The call to `0x459200`
+`0x45A610`, `0x4B96A0`, `0x4B9D70`, `0x4B9E60`, `0x437B50` nor the bakes' callees reach one. (The call to `0x459200`
 at `0x458468` belongs to `0x458430`, a function with no caller, jump or pointer to it, which a
 nearest-preceding-target walk folds into `0x458310`.)
 A frame is never regrown under a writer reading from it. And on a lifetime: the old block is freed
@@ -890,9 +897,11 @@ from `0x4B8E00` and at least 64 from a grow. Identical to stock for every unit w
 
 **Levers**, read once at attach. `tagpu_scratch.stress` treats every frame as too small, so every
 writer call regrows it to exactly `max(need, 64)` pixels and frees the old one, after setting the old
-block's two plane pointers to NULL: a freed block the heap keeps mapped would hand a stale reader its
-old bytes rather than fault, and the NULLs make any reader still holding it fault at its first plane
-access. `tagpu_scratch.nogrow` refuses every grow; both together send every writer to its fallback.
+block's two plane pointers to `0x80000000`: a freed block the heap keeps mapped would hand a stale
+reader its old bytes rather than fault. `TotalA.exe` is not large-address-aware (PE characteristics
+`0x10B`), and under Wine everything from `0x7FFE1000` to `0xF3080000` is reserved with no access, so a
+reader still holding the frame faults at any plane offset. A reader that kept a plane pointer of its
+own is not caught. `tagpu_scratch.nogrow` refuses every grow; both together send every writer to its fallback.
 Each grow and refusal is logged (`enginefix: composite scratch grown|refused (<reason>) for <writer>:
 N px in R rows asked, A held, P now (n so far)`, and `composite scratch merge refused: a WxH cargo at
 (x,y) is past the WxH frame (A held)`), each kind's first 16, then every 1024th.
@@ -910,10 +919,10 @@ locally from stock models:
   over the cap were a 5 522 140-pixel shadow and a 4.37-million-pixel nanoframe, and over the rows
   2× bakes of 1268 and 1332.
 - `tagpu_scratch.nogrow`, and `stress` with `nogrow`: every writer took its fallback, no fault.
-  `stress` alone, with the freed frames' plane pointers NULLed: 60 s on the giant nanoframes, 82 944
-  regrows by the build-state copy, no fault; 40 s of a lab building Kbots on its pad and an ARMATLAS
-  carrying one, 364 544 by the build-state copy and 236 544 by the frame copy, no fault and no merge
-  refused. On the ladder with a ×6 solar, before the NULLs were added, 182 000 in 12 s.
+  `stress` alone, with the freed frames' planes at `0x80000000`: 40 s on the giant nanoframes, 53 248
+  regrows by the build-state copy; 35 s of an ARMATLAS carrying a Peewee, 251 904 by the build-state
+  copy and 137 216 by the frame copy; no fault. With the planes NULLed instead, 40 s of a lab building
+  Kbots on its pad beside the transport: 364 544 and 236 544, no fault and no merge refused. On the ladder with a ×6 solar, before the poisoning, 182 000 in 12 s.
 - **The merge.** The same lab and transport on this build: no merge refused. The check's pass is a
   tail call into `0x4B90A0` with the same five arguments, so every merge ran as stock. A local build
   whose check refuses every merge: the carried Peewee and the pad's nanoframe are left out of their

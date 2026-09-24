@@ -679,10 +679,11 @@ All 15 references to `main+0x1437B` were read: besides these, only the construct
 `0x4581C0`, and the ring's flush and free (`0x437C80`, `0x437C90`). Every other function called on
 the scratch takes its size from the header.
 
-**The header's rows meet a second ceiling** (DIS + MEASURED in landing 7). The rasterisers four of
-the writers draw through keep one `0x28`-byte stack entry per row, clipped only to the destination's
-height: `0x4C8BB0` and `0x4C8760` hold 799 (the bakes), `0x4C0820`, `0x4C0C70` and `0x4C1000` 2047
-(the build-state copy's wireframe, the bakes, the shadow). A 2× bake grown to 1548 rows faulted at
+**The header's rows meet a second ceiling** (DIS + MEASURED in landing 7). The rasterisers that draw
+into the frame keep one `0x28`-byte stack entry per row, clipped only to the destination's height,
+so an `h`-row destination writes up to `h − 1`: `0x4C8BB0` and `0x4C8760` hold 800 entries (the bakes,
+and the unit draw's 1× bake into the build-state copy's frame), `0x4C0820`, `0x4C0C70` and `0x4C1000`
+2048 (the build-state copy's wireframe, the bakes, the shadow). A 2× bake grown to 1548 rows faulted at
 `0x4C8035` with its texture argument overwritten. So the bound is area **and** rows, and the fix
 checks both; the engine map's *The composite scratch frame and the rasterisers' span tables* has the
 table and the call sites. A unit's own 1× frame meets the same tables and is not the scratch: a

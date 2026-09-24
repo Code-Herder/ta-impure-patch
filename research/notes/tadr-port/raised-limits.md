@@ -397,7 +397,7 @@ and the rasterisers' span tables* has every site, the invariant and the measurem
     `0x45A853`: the unit's cached shadow is one transparent pixel;
   - **the 2× bake** takes the engine's own 1× path: that structure loses anti-aliasing.
 - **Levers**, read at attach: `tagpu_scratch.stress` regrows the frame at every writer call to
-  exactly what it asks, NULLing the freed block's plane pointers so a stale reader faults;
+  exactly what it asks, pointing the freed block's planes at `0x80000000` so a stale reader faults;
   `tagpu_scratch.nogrow` refuses every grow; both together send every writer to its fallback.
 - **Gates, all run on the GDI lane** (Two Continents, 1024×768, oversized units made locally from
   stock models, never committed):
@@ -407,8 +407,9 @@ and the rasterisers' span tables* has every site, the invariant and the measurem
     2 097 152 pixels (2× bake, 708 rows), 3 407 872 (shadow) and 4 194 304 (build-state copy),
     refusals over the cap and over the rows;
   - `nogrow`, and `stress` with `nogrow`: every writer's fallback, no fault; `stress` with the
-    freed frames' pointers NULLed, 60 s on the giant nanoframes (82 944 regrows) and 40 s of a lab
-    building on its pad beside a transport carrying a Kbot (364 544 and 236 544): no fault;
+    freed frames' planes poisoned, 40 s on the giant nanoframes (53 248 regrows) and 35 s of a
+    transport carrying a Kbot (251 904 and 137 216), and with them NULLed, a lab building on its pad
+    beside it (364 544 and 236 544): no fault;
   - the cargo merge: no merge refused with a lab building and a transport carrying, and a local
     build that refuses every merge leaves the cargo out, no fault;
   - the 2× path of `0x459830`, which `0x4586A0` takes only with the shading bit clear, measured
