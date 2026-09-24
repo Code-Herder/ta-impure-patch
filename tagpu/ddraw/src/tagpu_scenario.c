@@ -16,6 +16,7 @@
 #include <string.h>
 #include "tagpu_scenario.h"
 #include "tagpu_log.h"
+#include "tagpu_limits.h"   /* TAGPU_LIM_UNITS: the arena holds a full game */
 
 #define SCN_TRIGGER   "tagpu_scenario.trigger"
 #define SCN_OUT       "tagpu_scenario.json"
@@ -136,11 +137,13 @@ static const unsigned char TICK_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
 
 /* ------------------------------------------------------------------ the arena */
 
-#define SCN_MAX_UNITS   4096
+/* a scenario can fill the largest game the installed limit allows, ten players at
+   TAGPU_LIM_UNITS, give each of those units an order, and clear a game that full */
+#define SCN_MAX_UNITS   (10 * TAGPU_LIM_UNITS)
 #define SCN_MAX_FEATS   1024
-#define SCN_MAX_ORDERS  4096
+#define SCN_MAX_ORDERS  (10 * TAGPU_LIM_UNITS)
 #define SCN_MAX_ERRORS  24
-#define SCN_MAX_CLEAR   4096
+#define SCN_MAX_CLEAR   (10 * TAGPU_LIM_UNITS + 1)
 #define SCN_ERRLEN      168
 #define SCN_NAMELEN     32
 #define SCN_FILEMAX     (4u * 1024u * 1024u)

@@ -263,11 +263,11 @@
    THE ARENA IS FIXED AND STAYS FIXED. The game thread fills one of `g_arena`
    while the render thread copies the other, so a realloc would free memory the
    other thread may be reading; its size is chosen at build time instead, for
-   the watched player of the design point (TAGPU_PK_DESIGN_SLOTS, 1 024 units
+   the watched player of the design point (TAGPU_PK_DESIGN_SLOTS, 1 500 units
    a player) at four records and sixteen visited nodes a unit -- the ratio
    stock's 500 units had with 2048 and 8192. */
-#define MAXORD        4096           /* arena records per publication         */
-#define MAXWALK       16384          /* order nodes visited per snapshot      */
+#define MAXORD        6144           /* arena records per publication         */
+#define MAXWALK       24576          /* order nodes visited per snapshot      */
 #define MAXCHAIN      1024           /* nodes on one unit's list              */
 #define MAXDOT        512            /* dots on one route segment             */
 #define MAXSEG        128            /* segments in one native-res circle     */
@@ -448,6 +448,7 @@ static ORDARENA     g_arena[2];
 /* every build record the arena can hold reaches the packet's builds table */
 typedef char ord_builds_fit[(TAGPU_PK_MAX_BUILDS >= MAXORD) ? 1 : -1];
 typedef char ord_design[(MAXORD >= 4u * ((TAGPU_PK_DESIGN_SLOTS - 1u) / 10u)) ? 1 : -1];
+typedef char ord_walk_design[(MAXWALK >= 16u * ((TAGPU_PK_DESIGN_SLOTS - 1u) / 10u)) ? 1 : -1];
 static volatile int g_pub = -1;
 /* Bumped on every publication AND every clear, and never reused. A SLOT INDEX
    CANNOT BE THE READER'S GUARD: it takes two values, so two publications during
