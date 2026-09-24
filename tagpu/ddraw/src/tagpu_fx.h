@@ -120,8 +120,12 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
 #define TAGPU_FX_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28} }
 /* VERTICES PER BUCKET PER FRAME -- the gather's own `MAXFXV`, shared so that
    the Vulkan pass can re-check a handed-over count against the very number that
-   produced it rather than against a second copy of it. */
-#define TAGPU_FX_MAXV   32768
+   produced it rather than against a second copy of it. SIZED FROM THE ENGINE'S
+   POOLS (tagpu_limits.h): the fullest bucket the projectiles and explosions can
+   make is the sprites', one quad for every projectile and one for every
+   explosion (tagpu_fx.c asserts it fits). The particles share the bucket and
+   are bounded by their own cap (TAGPU_PK_MAX_PART), not by this one. */
+#define TAGPU_FX_MAXV   65536
 
 /* THE FOUR BUCKETS, IN DRAW ORDER, which is the order they are concatenated
    into one vertex buffer in. They are not four draws of one

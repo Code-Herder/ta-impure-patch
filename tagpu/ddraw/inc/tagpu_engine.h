@@ -230,15 +230,18 @@
 /* ---- the effects: the four per-frame arrays -------------------------------
    All four are SIM state: the tick moves them, the two engine draw passes
    (0x49BE60 projectiles, 0x420B00 explosions, 0x471F90 particle layers) read
-   and write nothing. research/notes/effects.md has the decompiled rules. */
-#define OFF_NPROJ          0x141F3     /* i32 live projectiles; both append    */
-                                       /* sites refuse past 300 (0x49B6EE,     */
-                                       /* 0x49B809 `cmp ...,0x12C / jge`)      */
+   and write nothing. research/notes/effects.md has the decompiled rules.
+   THEIR SIZES ARE tagpu_limits.h's: raised at attach, all four or none, and
+   the explosion records and flying-piece slots MOVED into our statics. */
+#include "tagpu_limits.h"
+#define OFF_NPROJ          0x141F3     /* i32 live projectiles; ten append     */
+                                       /* sites refuse past PROJ_COUNT         */
+                                       /* (`cmp ...,imm32 / jge`, 0x49B6EE ..) */
 #define OFF_PROJ           0x141F7     /* ProjectileStruct*: 0x499A30 allocates */
-                                       /* 0x7D64 = 300 x 0x6B and 0x499A80     */
-                                       /* frees AND NULLS it in the teardown   */
+                                       /* PROJ_COUNT x 0x6B and 0x499A80 frees */
+                                       /* AND NULLS it in the teardown         */
 #define PROJ_STRIDE        0x6B
-#define PROJ_COUNT         300
+#define PROJ_COUNT         TAGPU_LIM_PROJ
 #define PJ_WEAPON          0x00        /* WeaponStruct*                        */
 #define PJ_X               0x04        /* i32 16.16 world x                    */
 #define PJ_ALT             0x08
@@ -260,11 +263,13 @@
 #define W_COLOR2           0x10E
 #define W_MASK             0x111       /* u32 WeaponTypeMask; bit21 spins the  */
                                        /* thrust flame by PJ_SPIN              */
-#define OFF_NEXPL          0x1491B     /* i32 live explosions; the add site    */
-                                       /* refuses past 300 (0x420A42)          */
-#define OFF_EXPL           0x1491F     /* the array, INLINE in the block       */
+/* THE EXPLOSION POOL is {i32 count; records}: stock keeps it inline at
+   main+0x1491B, the raised build in a static -- tagpu_limits_expl_pool()
+   says which. The add site refuses past EXPL_COUNT (0x420A42). */
+#define EXPL_NCOUNT        0x0         /* i32 live explosions, pool-relative   */
+#define EXPL_RECS          0x4         /* the records, pool-relative           */
 #define EXPL_STRIDE        0x54
-#define EXPL_COUNT         300
+#define EXPL_COUNT         TAGPU_LIM_EXPL
 #define EX_NODE            0x00        /* Model3DONode* debris piece           */
 #define EX_ST1             0x04        /* anim state: u16 frame @0, seq* @8    */
 #define EX_ST2             0x10        /* the LHT flash's anim state           */
@@ -272,9 +277,8 @@
 #define EX_ALT             0x20
 #define EX_Y               0x24
 #define EX_TURN            0x4C        /* i16[3]                               */
-/* the flying-debris particle slots, 100 dwords in .data */
-#define VA_PSYS_BEGIN      0x00511DF0u
-#define VA_PSYS_END        0x00511F80u
+/* the flying-debris particle slots: stock's 100 dwords at 0x511DF0..0x511F80,
+   or TAGPU_LIM_PSYS of ours -- tagpu_limits_psys_begin()/_end() */
 #define PSYS_PIECE         0x2C        /* the system's piece record            */
 #define DB_NODE            0x00
 #define DB_TURN            0x12        /* i16[3]                               */

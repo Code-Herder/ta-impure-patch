@@ -116,7 +116,11 @@
    research/notes/exe-reverse-engineering.md. */
 #include "tagpu_model3do.h"   /* O3_*, PRIM_*, P_*, N_*, F_*: the engine's model structures */
 
-#define MAXNV  49152           /* vertices across all native units per frame */
+/* vertices across all native units and effect models per frame. The effect
+   models follow the engine's pools (tagpu_limits.h), but a model's vertex count
+   is its artist's, so no limit bounds this by construction: `nvfull` in the
+   heartbeat counts every triangle it refused. */
+#define MAXNV  196608
 /* THE GATHER HAS NO UNIT CAP OF ITS OWN. A unit it leaves out is not merely
    undrawn, it is INVISIBLE -- tagpu_overlay.c wipes the engine's composite for
    every unit `tagpu_native_owns_unit` accepts, whether or not this gather
@@ -302,6 +306,7 @@ static int    s_fogLut = 0;   /* grey remap uploaded this frame (logged) */
    division, so a floor-based remainder would disagree with the engine for a
    negative eye (eye = -20: engine origin -16, floor would say -48). */
 static float  s_verts[MAXNV * NVST];
+static unsigned s_nvFull;     /* triangles refused by MAXNV, cumulative */
 /* NOTHING WRITES THIS, AND THAT IS DELIBERATE.
 
    It means "every selection box this frame owed was actually emitted";
@@ -774,7 +779,7 @@ static int emit_node(const char* nd, const float* P, int nvert, int nv,
             tri[1] = idx[k]; slot[1] = k;
             tri[2] = idx[k+1]; slot[2] = k+1;
             if (tri[0] >= nvert || tri[1] >= nvert || tri[2] >= nvert) continue;
-            if (nv + 3 > MAXNV) return nv;   /* the budget */
+            if (nv + 3 > MAXNV) { s_nvFull++; return nv; }   /* the budget */
             float V[3][3]; int t;
             for (t = 0; t < 3; t++) {
                 const float* v = P + tri[t] * 3;
@@ -3085,9 +3090,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         char hb[256];
         _snprintf(hb, sizeof hb,
                   "native: vulkan lane handed over frame %u: terr=%d feat=%d "
-                  "fx=%d mark=%d units=%d posed=%d sel=%d/%d selcache=%d full=%u",
+                  "fx=%d mark=%d units=%d posed=%d sel=%d/%d selcache=%d full=%u "
+                  "nv=%d nvfull=%u",
                   f->frame_counter, nterr, nfeat, nfx, markOn ? 1 : 0, nu, npd,
-                  nselDrawn, nsel, s_nsbox, s_sboxFull);
+                  nselDrawn, nsel, s_nsbox, s_sboxFull, nv, s_nvFull);
         hb[sizeof hb - 1] = 0;
         nlog(hb);
     }

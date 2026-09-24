@@ -11,6 +11,7 @@
 #include "hook.h"
 #include "indeo.h"
 #include "tagpu_patches.h"
+#include "tagpu_limits.h"
 #include "tagpu_tracer.h"
 #include "tagpu_suppress.h"
 #include "tagpu_owndraw.h"
@@ -79,6 +80,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* tagpu: apply our engine byte-patches to the loaded exe before TA runs
            (e.g. skip the DirectX startup warning). Exe on disk stays pristine. */
         tagpu_apply_patches();
+
+        /* tagpu: the raised engine limits (tagpu_limits.h) -- all sites or none, before
+           the exe's own startup code. A failure is reported, and the process ended, at
+           the first DirectDraw call, outside the loader lock. */
+        tagpu_limits_install();
 
         /* tagpu: the play defaults (tagpu_opt.h): the passes below that say
            "no-op unless <file> exists" ask tagpu_opt now, and an absent file
@@ -405,6 +411,8 @@ HRESULT WINAPI DirectDrawCreate(GUID FAR* lpGUID, LPDIRECTDRAW FAR* lplpDD, IUnk
 {
     TRACE("-> %s(lpGUID=%p, lplpDD=%p, pUnkOuter=%p) [%p]\n", __FUNCTION__, lpGUID, lplpDD, pUnkOuter, _ReturnAddress());
 
+    tagpu_limits_report();
+
     HRESULT ret;
 
     if (util_caller_is_ddraw_wrapper(_ReturnAddress()) || g_config.flightsim98_hack)
@@ -449,6 +457,8 @@ HRESULT WINAPI DirectDrawCreateEx(GUID* lpGuid, LPVOID* lplpDD, REFIID iid, IUnk
         iid,
         pUnkOuter, 
         _ReturnAddress());
+
+    tagpu_limits_report();
 
     HRESULT ret;
 

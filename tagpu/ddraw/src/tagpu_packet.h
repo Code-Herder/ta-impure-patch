@@ -42,6 +42,7 @@
    publisher: the engine's two effect passes read their arrays and write
    nothing, so two publishes of one tick must produce the same table. */
 #include <stdint.h>
+#include "tagpu_limits.h"   /* the effect pools' sizes: the tables hold every record */
 
 /* One glyph of the marker font, as a self-contained one-glyph FONT OBJECT the
    engine's own blitter 0x4CCF60 accepts: [rows][0][yoff][code][u16 6][w][bits]
@@ -237,9 +238,11 @@ typedef struct TAGPU_PK_BUILD {
    `emit_fx_model` in the (fenced) native pass and reads no byte of it. */
 
 /* 56 B, one per live projectile, in the engine's own array order. The array
-   is exactly 300 slots (0x499A30 allocates 0x7D64 = 300 x 0x6B) and both
-   append sites refuse past 300 (0x49B6EE, 0x49B809 `cmp ...,0x12C / jge`), so
-   the walk's bound is the allocation itself rather than a sanity cap. */
+   is exactly TAGPU_LIM_PROJ slots (0x499A30 allocates TAGPU_LIM_PROJ x 0x6B)
+   and all ten append sites refuse past it (0x49B6EE, 0x49B809, ... `cmp
+   ...,imm32 / jge`; tagpu_limits.h raises the allocation and the ten caps
+   together), so the walk's bound is the allocation itself rather than a
+   sanity cap. */
 typedef struct TAGPU_PK_PROJ {
     int32_t  pos[3];         /* proj+0x04/+0x08/+0x0C, 16.16: x, altitude, y */
     int32_t  start[3];       /* proj+0x10/+0x14/+0x18, the tail              */
@@ -273,8 +276,9 @@ typedef struct TAGPU_PK_PROJ {
                                        LUT: `col2` below is already an index,
                                        and index 0 is a real colour           */
 
-/* 32 B, one per live explosion. The array is INLINE at main+0x1491F, stride
-   0x54, and the engine's own add site refuses past 300 (0x420A42). */
+/* 32 B, one per live explosion. The records are at tagpu_limits_expl_pool()+4
+   (stock: inline at main+0x1491F), stride 0x54, and the engine's own add site
+   refuses past TAGPU_LIM_EXPL (0x420A42). */
 typedef struct TAGPU_PK_EXPL {
     int32_t  pos[3];         /* expl+0x1C/+0x20/+0x24, 16.16                  */
     uint32_t node;           /* the debris node (+0x00), a template, or 0     */
@@ -285,8 +289,9 @@ typedef struct TAGPU_PK_EXPL {
     uint16_t pad;
 } TAGPU_PK_EXPL;
 
-/* 24 B, one per occupied debris particle slot. The slots are the 100 dwords
-   at 0x511DF0..0x511F80; each names a system whose +0x2C is the piece. */
+/* 24 B, one per occupied debris particle slot. The slots are the
+   TAGPU_LIM_PSYS dwords tagpu_limits_psys_begin() names (stock: 100 at
+   0x511DF0..0x511F80); each names a system whose +0x2C is the piece. */
 typedef struct TAGPU_PK_DEBRIS {
     int32_t  pos[3];         /* piece+0x16/+0x1A/+0x1E, 16.16                 */
     uint32_t node;           /* piece+0x00, a template, or 0                  */
@@ -325,9 +330,10 @@ typedef struct TAGPU_PK_PART {
 
 #define TAGPU_PK_NLAYER     10u
 
-#define TAGPU_PK_MAX_PROJ    300u
-#define TAGPU_PK_MAX_EXPL    300u
-#define TAGPU_PK_MAX_DEBRIS  100u
+/* the engine's own array sizes, so a table holds every record the engine can */
+#define TAGPU_PK_MAX_PROJ    ((unsigned)TAGPU_LIM_PROJ)
+#define TAGPU_PK_MAX_EXPL    ((unsigned)TAGPU_LIM_EXPL)
+#define TAGPU_PK_MAX_DEBRIS  ((unsigned)TAGPU_LIM_PSYS)
 /* The particle table's ceiling. The engine allows 10 layers x 400 objects and
    every object carries a sub-particle vector it grows as it burns, so no
    engine count bounds this one: it is OUR cap, with a truncation bit and a

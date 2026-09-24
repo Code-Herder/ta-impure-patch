@@ -22,11 +22,11 @@
                  5 flare        main+0x147F3, frame by remaining life, alpha
                  6 model        shadow blob + root rotated by the raw triple
                  7 lightning    two jagged polylines start->head, +-5 jitter
-     0x420B00  explosions   — flying debris pieces (particle slots
-               0x511DF0..0x511F80 -> +0x2C piece {node, turn@0x12, pos@0x16})
-               then, over the ExplosionStruct array (count main+0x1491B,
-               inline at main+0x1491F, stride 0x54; anchor must be inside the
-               viewport rect): the LHT "flash" (anim state +0x10, table
+     0x420B00  explosions   — flying debris pieces (the particle slots,
+               tagpu_limits_psys_begin..end -> +0x2C piece {node, turn@0x12,
+               pos@0x16}) then, over the ExplosionStruct array (count then
+               records, tagpu_limits_expl_pool(), stride 0x54; anchor must be
+               inside the viewport rect): the LHT "flash" (anim state +0x10, table
                TAProgram+0xC8) for all, then per record the debris node (+0)
                rotated by +0x4C and the opaque sprite (anim state +0x04).
 
@@ -72,7 +72,11 @@
 /* THE STRIDE IS tagpu_fx.h's, so the vertices written here and the Vulkan
    attribute array cannot drift apart. */
 #define FXST     TAGPU_FX_VST   /* x,y,enc, u,v, c,mode, wx,wz               */
-#define MAXMODEL 1024
+/* one model per flying piece and per explosion, and two per projectile (a
+   rendertype-1 missile is its body and its thrust flame), so a frame at the
+   engine's own limits (tagpu_limits.h) never runs out */
+#define MAXMODEL (2 * TAGPU_LIM_PROJ + TAGPU_LIM_EXPL + TAGPU_LIM_PSYS)
+typedef char fx_sprites_fit[(6 * (TAGPU_LIM_PROJ + TAGPU_LIM_EXPL) <= TAGPU_FX_MAXV) ? 1 : -1];
 #define ATLAS_DIM 2048
 #define ATLAS_MAX 2048
 
