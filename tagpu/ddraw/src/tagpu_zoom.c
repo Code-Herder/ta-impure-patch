@@ -963,7 +963,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
 {
     int* eye = (int*)(ta + OFF_EYEX);
     int* scr = (int*)(ta + OFF_SCRTX);
-    int  loX = 0, hiX = 0, loY = 0, hiY = 0, haveRange, moved = 0;
+    int  loX = 0, hiX = 0, loY = 0, hiY = 0, haveRange, moved = 0, applied = 0;
 
     /* THE LEVEL FIRST: every game-thread reader in this file — the minimap
        rect's scale, the scroll rate — uses the level the last record carried,
@@ -983,10 +983,10 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
     /* A NEW RECORD: its delta is consumed exactly once — the difference
        between its cumulative sum and what was applied so far — and the
        follow is released on the same draw when the gesture asked. The
-       render thread pre-clamped the step against the same range from the
-       packet's copy of the same fields, so the clamp below fires only when
-       the engine moved the eye between the two, and then the packet's eye
-       reconciles the prediction. */
+       render thread pre-clamped the step against the range of the draw it
+       read, which is not a bound on this one: the engine's scroll poll and
+       stepper run between the two, and the range itself can change (see the
+       clamp below). The packet's eye reconciles the prediction. */
     /* A record of an OLDER epoch — posted before the render thread saw the
        level end — carries the old level's sum and applies nothing; the render
        thread's first record after seeing the new epoch starts from zero, as
@@ -1001,7 +1001,7 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
                flight", and it would drag the eye back and rebuild the fog
                grid every frame for as long as the disagreement lasted */
             scr[0] += dx; scr[1] += dy;
-            moved = 1;
+            moved = applied = 1;
         }
         s_appliedSeq = c->cmd_seq; s_appliedDx = c->cum_dx; s_appliedDy = c->cum_dy;
     }
@@ -1014,17 +1014,33 @@ void tagpu_zoom_apply(char* ta, const TAGPU_CMD* c, int terr)
         clamp_pair(&x, &y, loX, hiX, loY, hiY);
         if (eye[0] != x || eye[1] != y) { eye[0] = x; eye[1] = y; moved = 1; }
         if (scr[0] != x || scr[1] != y) { scr[0] = x; scr[1] = y; }
+        applied = 1;
     }
 
-    /* THE RANGE IN FORCE, ON EVERY DRAW, and this is the half of the bound
-       that holds when the ground goes back to the engine: an eye the centre
-       range allowed is walked into `[0, map - W]` here, before the draw that
-       would hand it to `0x483FA0`. It writes only when the eye or the target
-       is actually outside the range — after the ground changes hands, or a
-       delta the engine moved the eye under — and at no other time. The target
-       is clamped rather than assigned the eye, which keeps a camera move that
+    /* THE RANGE IN FORCE, and this is the half of the bound that holds when
+       the ground goes back to the engine: an eye the centre range allowed is
+       walked into `[0, map - W]` here, before the draw that would hand it to
+       `0x483FA0`, which reads the map's grids from eye/16 with no bound of
+       its own.
+
+       ON EVERY DRAW WHERE OUR CLAMP IS THE ENGINE'S (g_eyeInstalled), and on
+       EVERY DRAW THAT APPLIED A DELTA OR A HOLD, WHATEVER IS INSTALLED. The
+       second half is not covered by the first: the wheel and its cursor
+       anchor need only the mouse->world repair, which `vpwide.on` installs
+       without `zoom.on`, and on such a build the engine's own clamp has
+       already run for this frame when the delta lands — an edge scroll that
+       left the eye at `map - H` plus a 20-px anchor step would reach
+       `0x483FA0` unclamped. Here the range is the engine's (s_gCentre is 0
+       without the eye clamp), so this is the engine's clamp, applied once
+       more after the only writer that runs after it.
+
+       It writes only when the eye or the target is actually outside the
+       range: on the draw the ground changes hands (the centre range gives
+       way to the engine's), after a delta the engine's scroll poll or
+       stepper moved the eye under, and at no other time. The target is
+       clamped rather than assigned the eye, which keeps a camera move that
        is genuinely in flight. */
-    if (g_eyeInstalled && haveRange) {
+    if ((g_eyeInstalled || applied) && haveRange) {
         moved |= clamp_pair(eye, eye + 1, loX, hiX, loY, hiY);
         moved |= clamp_pair(scr, scr + 1, loX, hiX, loY, hiY);
     }

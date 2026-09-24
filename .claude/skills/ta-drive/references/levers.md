@@ -174,10 +174,10 @@ fixture that only arms the pass produces no picture:
 
 | lever | when read | what |
 |---|---|---|
-| `zoom.on` | attach | the wheel, `tagpu_zoom.txt`, the minimap view rectangle, the guard that keeps our `ScrollSpeed` scaling out of the registry, and the camera's centre range. Logs `zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save 0x430FAE, camera centre range 0x41C3C0 + target clamps …)`. Without it: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed` |
+| `zoom.on` | attach | the wheel, `tagpu_zoom.txt`, the minimap view rectangle, the guard that keeps our `ScrollSpeed` scaling out of the registry, and the camera's centre range. Logs `zoom: ARMED (minimap rect 0x466B70 x2, ScrollSpeed save 0x430FAE, camera centre range 0x41C3C0 + target clamps …)`. It also installs the `0x498DA0` mouse->world repair, which is what the wheel and the file need; `vpwide.on` installs that repair too, so either one un-pins the level. With neither: `zoom: PINNED AT 1.0 — the 0x498DA0 mouse->world repair is not installed` |
 | `tagpu_zoom.txt` | every frame | a bare float 0.25–8.0; written atomically (temp + rename); pins the level and disables the wheel while present; does not move the camera |
 | `tagpu_eye.txt` | every in-play draw | what `tacli eye X Y` writes; the packet heartbeat's `hold=1` says it is in force; `tacli eye <i> --release` removes it |
-| `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with `zoom.on` |
+| `wheel.off` | live | the wheel does nothing; `wheel.off=off` removes it. Nothing arms the wheel separately: it comes with the mouse->world repair (`zoom.on` or `vpwide.on`) |
 | `vpwide.on` | attach | widens the rect the engine addresses to what the zoom shows, so ring clicks and band boxes land at zoom < 1. Writes `main+0x37E27..0x37E33`. Logs `vpwide: ARMED (mouse->world 0x498DA0, surface …)` and `vpwide: true viewport rect verified (128,32 896x704)`, `vpwide: viewport rect restored to 1x` at 1x. `zoom.on` alone logs `vpwide: mouse->world repair only (0x498DA0) —` |
 | `fogwide.off` | live | the wide fog grid off: the outer ring at zoom < 1 falls back to a smear of the border cell. The native line's `bare=` does not count this |
 | `fogwide_check.on` | live | the oracle: `fogwide check: … compared=N of cells=M differ=N` every 120th tick, **`differ=0`** |

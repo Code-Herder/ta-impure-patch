@@ -410,7 +410,8 @@ camera. **The mouse wheel** is what the player uses when the file is absent: one
 x1.163 and one out x0.877, eased over 250 ms. A notch **in** zooms to the cursor, so it moves the
 eye; a notch **out** pulls back from the view centre and never moves it. The log line at the end
 of a gesture is `zoom: wheel +120 -> 1.163, landed 251.7 ms after the last notch`. Both levers
-need `zoom.on` at launch, or the level is pinned at 1.0 and the log says so.
+need the mouse->world repair, which `zoom.on` or `vpwide.on` installs at launch; with neither the
+level is pinned at 1.0 and the log says so.
 
 - **Aim it.** `--at` is a `pmove:` first; notches over the side panel or a menu do nothing, and
   the log says which gate refused. `tools/tacli wheel <i> 1 --at 576 384` (the viewport centre at
