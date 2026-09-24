@@ -9,7 +9,11 @@ with each other and with the screen.
 §6.2 is what shipped, and §8 records what each of its open questions was answered with and what
 was measured. Everything below is computed from the code's own arithmetic — `fogw_window` in
 `tagpu_fogwide.c` and the `cols > 512 || rows > 512` test in `tagpu_fog_at`
-(`tagpu_fx.c`) — evaluated over every eye residue, not estimated.
+(`tagpu_fx.c`) — evaluated over every eye residue, not estimated. The window has since grown by
+a lead of a quarter of the viewport on each side ([GPU status](gpu-status.html) §2.3e): 147 ×
+120 cells at 1024×768, 273 × 164 at 1920×1080 and 543 × 316 at 3840×2160. The windows below are
+the ones before it; the sizing argument is unchanged, since the capacity is still taken from the
+same expression at the worst residue.
 
 <div class="tablewrap fg">
 <style>
@@ -208,11 +212,11 @@ So the question the bound is answering is not "how big may fog be?" but:
 > Anything past that means these numbers and this buffer have come apart.**
 
 And *that* is why the number went stale. When it was written there were two producers, and 512 was
-comfortably above both: the engine's own grid (`viewW/32 + 2`, against a viewport the native pass
-then capped at 4096) and `tagpu_fogwide`'s window as it was then sized. `FOGW_MAXDIM` has since
-moved to 1024 and the viewport cap to 16384, so the honest answer to the question is now 1024 —
-but the answer lives in a second, hand-typed literal in another file, and only one of the two was
-updated.
+comfortably above both: the engine's own grid (`viewW/32 + 2`, or `+ 3` off a multiple of 32,
+against a viewport the native pass then capped at 4096) and `tagpu_fogwide`'s window as it was
+then sized. `FOGW_MAXDIM` has since moved to 1024 and the viewport cap to 16384, so the honest
+answer to the question is now 1024 — but the answer lives in a second, hand-typed literal in
+another file, and only one of the two was updated.
 
 The sharpest way to see it: **the same three numbers pass a `cols <= 1024 && rows <= 1024` check
 in `tagpu_native.c` when they are read, and then fail a `cols > 512` check in `tagpu_fx.c` when
@@ -524,7 +528,7 @@ render thread reading it without a lock.
 
 ```c
 evw   = vw / zmin + 64;                      /* the span the native pass gathers over */
-W     = evw + 2 * FOGW_MARGIN;               /* plus the slack for eye movement       */
+W     = evw + 2 * FOGW_MARGIN;               /* plus the gathers' anchor slack        */
 cols  = ceil((W + r) / 32) + 2;              /* r = (x0 - 16) mod 32 — see below      */
 ```
 
@@ -540,7 +544,7 @@ the eye stops being an input at all.
 
 **What is left is the viewport.** `vw`/`vh` come from `tagpu_vpwide_true_rect`, which derives the
 *true* engine viewport — `(screenW − 128) × (screenH − 64)` — and `zmin` is a compile-time
-constant (`tagpu_zoom_min` returns `ZOOM_MIN`). So once the residue is removed, the required size
+constant (`TAGPU_ZOOM_MIN`). So once the residue is removed, the required size
 is a pure function of the video mode, and it changes exactly when the video mode does: at game
 entry, after a trip through the shell.
 
@@ -1084,8 +1088,8 @@ per frame.
 
 Two things that are *not* limits, so that nobody spends a session on them: `tagpu_native.c`'s
 `cols <= 1024` on the **engine's** descriptor is fine at any of these — the engine's own grid is
-`viewW/32 + 2`, which is 478 cells at 16K — and the fog texture at 1925×1093 is far inside any
-GL implementation's maximum.
+`viewW/32 + 2` (`+ 3` off a multiple of 32), which is 478 cells at 16K — and the fog texture at
+1925×1093 is far inside any GL implementation's maximum.
 
 ## 8. What was decided, and what it measured
 

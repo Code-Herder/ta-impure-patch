@@ -5,6 +5,10 @@
    armcom). Owned units leave the composite path: writeback must skip+wipe
    them, the owndraw stub wipes instead of restoring. */
 void tagpu_native_frame(const TAGPU_FRAME* f);
+/* Render thread, from render_vk.c, when tagpu_vk_frame presented the frame
+   gathered under `frame_counter`: the fog witnesses (`bare=`, `out=`,
+   `nopieces=`) count that frame. A frame never presented counts nothing. */
+void tagpu_native_presented(unsigned int frame_counter);
 /* Is this unit natively owned right now? GAME THREAD ONLY: it reads the unit record and its UnitDef, and the
    publisher is what calls it per unit per frame — the answer travels to the
    render thread as TAGPU_PK_U_NATIVE in the packet, so the marker pass, the

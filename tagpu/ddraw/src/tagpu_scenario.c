@@ -17,6 +17,7 @@
 #include "tagpu_scenario.h"
 #include "tagpu_log.h"
 #include "tagpu_limits.h"   /* TAGPU_LIM_UNITS: the arena holds a full game */
+#include "tagpu_zoom.h"     /* tagpu_zoom_place_eye: the camera's range */
 
 #define SCN_TRIGGER   "tagpu_scenario.trigger"
 #define SCN_OUT       "tagpu_scenario.json"
@@ -47,13 +48,6 @@
 #define OFF_FMAP      0x14287      /* FeatureStruct* FeatureMap, stride 0x0D      */
 #define FM_STRIDE     0x0D
 #define FM_HEIGHT     0x04         /* unsigned char height                        */
-
-#define OFF_EYEX      0x1431F      /* int EyeBallMapXPos                          */
-#define OFF_EYEY      0x14323
-#define OFF_SCRTX     0x14327      /* MapXScrollingTo — write or the engine eases */
-#define OFF_SCRTY     0x1432B      /* the eye back                                */
-#define OFF_VIEW_W    0x37E37
-#define OFF_VIEW_H    0x37E3B
 
 #define OFF_WATCHED   0x2A42       /* u8 watched player id — whose selection it is */
 
@@ -2089,26 +2083,31 @@ static void write_result(void)
 }
 
 /* The camera is display state, not sim state, so it is set here rather than on
-   the tick — the same rule (and the same clamp) as tagpu_input.c's eye hold.
-   `at` and `center_on` both mean the CENTRE of the window, so the eye is the
-   centre minus half a view, using the projection the roster already reports. */
+   the tick. GAME THREAD: tagpu_scenario_frame runs only from
+   tagpu_triggers_frame, whose one host is the flip observer `before_flip`
+   (tagpu_gui_hook.c) on `0x4C63A0`, game thread only and behind a 16-ms
+   clock gate, at whichever of the flip's 44 call sites comes next — inside
+   DrawGameScreen at `0x46A3DB`, after that draw's fog site, or anywhere else
+   the engine flips. So the eye is NOT written here: tagpu_zoom_place_eye
+   clamps it into the camera's range in force and hands it to the command
+   apply at the top of the next in-play draw, which writes the eye and the
+   scroll target before that draw reads the eye or builds its fog grids,
+   recomputes the minimap's view box, sets its dirty bit and invalidates the
+   screen fog grid — paused or not. The first packet with the new eye
+   therefore carries both fog grids built at it. `at` and `center_on` both
+   mean the CENTRE of the window, so the eye is the centre minus half a view,
+   using the projection the roster already reports. A `pin` then holds
+   exactly the eye handed over. */
 static void place_camera(const TAGPU_FRAME* f)
 {
     char* ta = ta_base();
-    int   gw, gh, mw, mh, vw, vh, ex, ey;
+    int   gw, gh, ex, ey;
 
     if (!g_cam_have || !ta)
         return;
 
     gw = f && f->game_width  > 0 ? f->game_width  : 640;
     gh = f && f->game_height > 0 ? f->game_height : 480;
-    mw = *(int*)(ta + OFF_MAPPXW);
-    mh = *(int*)(ta + OFF_MAPPXH);
-    vw = *(int*)(ta + OFF_VIEW_W);
-    vh = *(int*)(ta + OFF_VIEW_H);
-
-    if (mw <= 0 || mh <= 0 || vw <= 0 || vh <= 0)
-        return;
 
     /* The overlay's own projection, inverted:
            sx = wx - eyeX + 128
@@ -2118,13 +2117,8 @@ static void place_camera(const TAGPU_FRAME* f)
     ex = g_cam_x - gw / 2 + 128;
     ey = g_cam_y - g_cam_h / 2 - gh / 2 + 32;
 
-    if (ex < 0) ex = 0; else if (ex > mw - vw) ex = mw - vw;
-    if (ey < 0) ey = 0; else if (ey > mh - vh) ey = mh - vh;
-
-    *(volatile int*)(ta + OFF_EYEX)  = ex;
-    *(volatile int*)(ta + OFF_EYEY)  = ey;
-    *(volatile int*)(ta + OFF_SCRTX) = ex;
-    *(volatile int*)(ta + OFF_SCRTY) = ey;
+    if (!tagpu_zoom_place_eye(ta, ex, ey, &ex, &ey))
+        return;
 
     /* Reported so `pin` can hold exactly this eye through tagpu_eye.txt rather
        than re-deriving the projection in a second place. */

@@ -55,10 +55,11 @@
    once (VirtualAlloc MEM_RESERVE, PK_RESERVE per frame slot, which the
    design point's unit tables fit -- see below) and pages are COMMITTED as the
    high-water mark rises,
-   by the producer, on the slot it holds as W. A fill that does not fit
-   truncates this frame (a bit per table in the header) and the next publish
-   grows the write slot first; a commit that fails keeps the current size and
-   retries later, never pins it. So no block ever moves, a pointer into a
+   by the producer, on the slot it holds as W. A fill that does not fit grows
+   the slot and fills it again before it is published (`pkx_publish`); only a
+   slot that cannot grow publishes a truncated frame (a bit per table in the
+   header), and a commit that fails keeps the current size and retries later,
+   never pins it. So no block ever moves, a pointer into a
    slot can never dangle, and a rule-breaking cached pointer reaches a slot's
    current bytes and never freed memory. Not reference counting: a count
    cannot see the raw pointer a module copies.
@@ -125,28 +126,36 @@
 #define PK_PREFIX     12u                  /* head_seq, cap_bytes, used_bytes  */
 #define PK_SUFFIX     8u                   /* crc, tail_seq                    */
 
-/* THE FRAME SLOT'S RESERVE HOLDS THE UNIT-SCALED TABLES AT THE DESIGN POINT.
-   The publisher lays the pieces down first and the units, wrecks and anchors
-   straight after (tagpu_packet_pub.c), so those are the part a reserve that is
-   too small would truncate -- and a truncated unit, piece or wreck table
-   refuses the frame's whole unit hand-over. The sum below is every slot of
-   TAGPU_PK_DESIGN_SLOTS at stock's worst unit model (36 pieces,
-   ARMSCORP/CORSCORP), every record of the wreck pool at stock's worst wreck
-   model (19 pieces, armscab_dead; 265 of the 285 3DO features are one piece),
-   plus the anchor table: 19.6 MB under the raised limits. What follows them --
-   effects, fog grids, minimap -- is bounded by its own caps and truncates on its
-   own bit, which costs that layer alone. The reserve is address space, five
-   slots of it in a 32-bit process whose largest free block has been logged as
-   low as 43.6 MB (gpu-status.md §2.86), so it is sized to the design point
-   rather than rounded up; pages are committed as the packets grow
-   (`slot_commit`), so a game pays only for what it publishes. */
+/* THE FRAME SLOT'S RESERVE HOLDS THE FRONT LAYERS AND THE UNIT-SCALED TABLES
+   AT THE DESIGN POINT. The publisher lays down the two fog grids and the shade
+   table first, then the pieces, units, wrecks and anchors (tagpu_packet_pub.c,
+   fill_frame), so those are the part a reserve that is too small would cut --
+   and a frame below 1x without its fog grids is drawn bare, and a truncated
+   unit, piece or wreck table refuses the frame's whole unit hand-over. The
+   tables' sum below is every slot of TAGPU_PK_DESIGN_SLOTS at stock's worst
+   unit model (36 pieces, ARMSCORP/CORSCORP), every record of the wreck pool at
+   stock's worst wreck model (19 pieces, armscab_dead; 265 of the 285 3DO
+   features are one piece), plus the anchor table: 19.6 MB under the raised
+   limits. The front is sized by the screen, not by a count, so it is an
+   allowance: on a 3840x2160 screen (a 3712 x 2096 viewport inside the stock
+   HUD) the wide grid is 543 x 316 cells, 343 176 B (tagpu_fogwide.c,
+   fogw_capacity, at the zoom floor), the engine's grid 118 x 68, 16 048 B
+   (0x483BB8's allocation), and the shade table 8 KB [COMPUTED]; the allowance
+   is 512 KB. What follows -- build orders, effects, the UI's render half, the
+   font -- is bounded by its own caps and truncates on its own bit, which costs
+   that layer alone. The reserve is address space, five slots of it in a
+   32-bit process whose largest free block has been logged as low as 43.6 MB
+   (gpu-status.md §2.86), so it is sized to the design point rather than
+   rounded up; pages are committed as the packets grow (`slot_commit`), so a
+   game pays only for what it publishes. */
 #define PK_DESIGN_PIECES 36u
 #define PK_DESIGN_WRECK_PIECES 19u
+#define PK_DESIGN_FRONT (512u << 10)
 #define PK_UNIT_WORST (sizeof(TAGPU_PACKET) + \
     TAGPU_PK_DESIGN_SLOTS * (sizeof(TAGPU_PK_UNIT) + PK_DESIGN_PIECES * sizeof(TAGPU_PK_PIECE)) + \
     TAGPU_PK_MAX_WRECKS * (sizeof(TAGPU_PK_WRECK) + PK_DESIGN_WRECK_PIECES * sizeof(TAGPU_PK_PIECE)) + \
     TAGPU_PK_MAX_ANCHORS * sizeof(TAGPU_PK_ANCHOR) + 64u /* the tables' 4-alignment */)
-typedef char pk_reserve_design[(PK_RESERVE >= PK_UNIT_WORST) ? 1 : -1];
+typedef char pk_reserve_design[(PK_RESERVE >= PK_DESIGN_FRONT + PK_UNIT_WORST) ? 1 : -1];
 
 /* the record's prefix and suffix, wherever the instance's suffix sits */
 #define REC_HEAD(p)     (((uint32_t*)(p))[0])
@@ -191,7 +200,7 @@ typedef struct PKX {
     DWORD           consTid;
     /* diagnostics: written by one side, read by the heartbeat on the other;
        aligned dwords, so a stale value is the worst a racy read can get   */
-    volatile unsigned cPub, cSkip, cOverrun, cForeign, cGrow, cCommitFail, cTrunc, cPViol;
+    volatile unsigned cPub, cSkip, cOverrun, cForeign, cGrow, cCommitFail, cTrunc, cRefill, cPViol;
     volatile unsigned cAcq, cTaken, cGap, cViol, cCrcBad, cNoPkt, cSameTick, cPaired;
     volatile unsigned hist[PK_HIST_N + 1];
     unsigned        histPrev[PK_HIST_N + 1];
@@ -340,7 +349,13 @@ static int pkx_publish(PKX* m, pkx_fill_fn fill, void* ctx, int force)
     if (!force && !s_stress && (PEEK(m) & PKX_FRESH)) { m->cSkip++; return 0; }
 
     w = m->write;
-    if (m->need > m->cap[w] && slot_commit(m, w, m->need)) m->cGrow++;
+    /* a growth is counted by what it committed, not by whether it reached
+       `need`: at the reserve slot_commit commits all of it and still says no */
+    if (m->need > m->cap[w]) {
+        unsigned was = m->cap[w];
+        slot_commit(m, w, m->need);
+        if (m->cap[w] != was) m->cGrow++;
+    }
     p = m->slot[w];
 
     QueryPerformanceCounter(&t0);
@@ -349,6 +364,41 @@ static int pkx_publish(PKX* m, pkx_fill_fn fill, void* ctx, int force)
     REC_CAP(p)  = m->cap[w];
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
     need = fill(p, ctx);                           /* every engine read is in there */
+    /* A FILL THAT DID NOT FIT IS DONE AGAIN, NOT PUBLISHED, WHILE THE SLOT
+       CAN GROW TO IT. Published, it is a frame with tables missing — at a
+       level's start, when the world tables first outgrow a slot, a frame with
+       no fog grid, no shade table and no units, which the native pass draws
+       with no fog at all. The slot is still this side's alone (W, not yet
+       exchanged), so committing more of its pages and filling it again is
+       invisible to the consumer: the head stored above stays, and the tail is
+       stored after the fill that is kept. The fill reports the size of the
+       whole fill, not the end of the table that ran out (tagpu_packet_pub.c,
+       s_fillShort), so one refill fits unless an input the render thread
+       publishes (the fx, ghost and minimap wants) changed in between.
+
+       THE LOOP KEYS ON WHAT slot_commit COMMITTED, NOT ON WHAT IT RETURNED.
+       Past the reserve it commits the whole reserve and still returns 0
+       (`cap < need`); the record must then carry the new capacity, because
+       the consumer refuses one whose `cap_bytes` is not the slot's
+       (pk_valid), and the fill must be done again at it, or the tables a
+       smaller slot cut stay cut. So: no new pages, stop and publish what the
+       last fill placed; new pages, record them and fill again; and a commit
+       that did not reach `need` makes that fill the last. BOUNDED: every pass
+       that fills again has grown `cap[w]` by at least the slot's grain (64 KB,
+       one page under `stress`), and the reserve ends it. What is still over
+       capacity after it (a commit that failed, a fill larger than the
+       reserve) is published cut, and counted in `trunc`. */
+    while (need > REC_CAP(p)) {
+        unsigned was = m->cap[w];
+        int fits;
+        if (need > m->need) m->need = need;
+        fits = slot_commit(m, w, need);
+        if (m->cap[w] == was) break;
+        m->cGrow++; m->cRefill++;
+        REC_CAP(p) = m->cap[w];
+        need = fill(p, ctx);
+        if (!fits) break;
+    }
     /* our own bounds on what the fill left — a misbehaving fill is a producer
        violation, and the record is still made valid for the consumer */
     if (REC_USED(p) < m->recBytes || REC_USED(p) > REC_CAP(p) || (REC_USED(p) & 3u)) {
@@ -631,7 +681,7 @@ static const char* cmd_valid(const void* rec)
     const TAGPU_CMD* c = (const TAGPU_CMD*)rec;
     if (c->used_bytes != sizeof(TAGPU_CMD)) return "cmd size";
     if (!(c->zoom >= 0.05f && c->zoom <= 16.0f)) return "cmd zoom";
-    if (c->live > 1u || c->eyeoff > 1u || c->hold_on > 1u || c->drop_follow > 1u) return "cmd flags";
+    if (c->live > 1u || c->hold_on > 1u || c->drop_follow > 1u) return "cmd flags";
     /* the hold is clamped at its source (tagpu_input.c) so that a wild number
        in the file cannot refuse the whole record and with it every other
        command; this bound is the backstop, not the gate */
@@ -814,11 +864,11 @@ static void heartbeat(PKX* m, unsigned fc)
     }
     pubs = m->cPub; taken = m->cTaken;
     n = _snprintf(b, sizeof b,
-                  "packet:%s pub=%u skip=%u overrun=%u foreign=%u acq=%u taken=%u gap=%u grow=%u commitfail=%u trunc=%u viol=%u pviol=%u crcbad=%u nopkt=%u"
+                  "packet:%s pub=%u skip=%u overrun=%u foreign=%u acq=%u taken=%u gap=%u grow=%u commitfail=%u trunc=%u refill=%u viol=%u pviol=%u crcbad=%u nopkt=%u"
                   " | pub/s=%.0f taken/s=%.1f pubus p50=%u p99=%s%u",
                   m->fatal ? " STOPPED" : "",
                   m->cPub, m->cSkip, m->cOverrun, m->cForeign, m->cAcq, m->cTaken, m->cGap,
-                  m->cGrow, m->cCommitFail, m->cTrunc, m->cViol, m->cPViol, m->cCrcBad, m->cNoPkt,
+                  m->cGrow, m->cCommitFail, m->cTrunc, m->cRefill, m->cViol, m->cPViol, m->cCrcBad, m->cNoPkt,
                   secs > 0.0 ? (double)(pubs - lastPub) / secs : 0.0,
                   secs > 0.0 ? (double)(taken - lastTaken) / secs : 0.0,
                   p50, p99 >= PK_HIST_N * 2u ? ">" : "", p99);

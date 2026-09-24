@@ -282,16 +282,20 @@ static int fix_feature_null_plot(void)
      - an eye at or below -32 starts the window before the map, and an eye with
        eye + view past the map's far edge runs it off the end: the id read there
        is whatever the heap holds, and the tile pointer made from it is anywhere.
-       MEASURED with the shipped play set: an access violation reading that tile
-       at 0x4CBE44 (the row copy 0x4CBDD1 called by 0x4B8150) on the first in-play
-       draw of Lava Run at 1920x1440 (row0 = -7) and 3840x2160 (row0 = -29), and
+       MEASURED under the engine's alternating clamp (below): an access
+       violation reading that tile at 0x4CBE44 (the row copy 0x4CBDD1 called
+       by 0x4B8150) on the first in-play draw of Lava Run at 1920x1440 (row0 = -7) and 3840x2160 (row0 = -29), and
        of Coast To Coast at 3840x2160 (row0 = -6).
-   Two things hand the pass such an eye. The camera clamp 0x41C3C0 holds the eye
-   in [0, extent - view] (the extent is the map less 32 px wide and 128 tall), and
-   where the view is larger than the extent it alternates the eye between 0 and
-   the negative extent - view (0x41C40D..0x41C431). And at zoom > 1 our camera
-   range is [-dx, extent - view + dx] (tagpu_zoom.c, zoom_eye_range), so at a left
-   or top edge of any map the eye is negative on every draw the engine's pass runs.
+   What hands the pass such a window is the camera clamp 0x41C3C0: it holds the
+   eye in [0, extent - view] (the extent is the map less 32 px wide and 128
+   tall), and where the view is larger than the extent it alternates the eye
+   between 0 and the negative extent - view (0x41C40D..0x41C431). With
+   tagpu_zoom.on our clamp replaces it and holds the eye at 0 there
+   (tagpu_zoom.c, zoom_eye_clamp), so the window leaves the map only where the
+   view is larger than the map; the camera's centre range goes below 0 at every
+   left and top edge, but only on draws our terrain pass owns, where this pass
+   does not run. MEASURED on Lava Run at 1920x1440 with that clamp: the same
+   fault from row0 = 0, the window's rows 40..42 past the tile map.
 
    THE FIX, a jump at 0x484057, the first point at which every value the pass
    places and indexes with is computed and nothing has been read through it. The

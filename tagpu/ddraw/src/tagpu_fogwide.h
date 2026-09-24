@@ -30,20 +30,29 @@
    same lattice — origin `32·col0 + 16` — so nothing downstream changes but the
    numbers in `uFogOrg`/`uFogDim`.
 
-   WHERE IT RUNS. On the GAME thread, from `tagpu_terrown.c`'s `terr_fogtick`,
-   which is the engine's own fog-overlay call site and already calls the engine's
-   builder there. That is the lifetime argument for reading the LOS and MAPPED
-   maps at all: at this call site the engine's builder reads exactly the same two
-   allocations, so a pointer we could not read is one the engine could not read
-   either. Every index into them is bounded by the maps' own dimensions, as the
-   engine's own loop bounds it.
+   WHERE IT RUNS. On the GAME thread, once in every tracked in-play draw: from
+   `tagpu_terrown.c`'s `terr_fogtick`, the engine's own fog-overlay call site,
+   when that site is ours, and otherwise, while the session renders on
+   Vulkan, from the packet publisher's `after` of the same draw (`wide_tick`
+   in tagpu_packet_pub.c) -- so a level that starts below 1x, or runs with our
+   terrain pass off, still has the grid. On the GDI lane nothing reads it and
+   neither runs. Both read the LOS and MAPPED maps inside an in-play draw,
+   after the level load that allocates them and before the teardown, on the
+   thread that runs that teardown: the teardown frees MAPPED, and the LOS
+   counters live on until the next load frees them (the lifetimes are spelled
+   out at `wide_tick`). Every index into them is bounded by the maps' own
+   dimensions, as the engine's own loop bounds it.
 
    WHAT IT COVERS. The window is sized for the WIDEST view the zoom levers can
-   produce — `tagpu_zoom_min()`, not the current level — plus a margin. The
+   produce — TAGPU_ZOOM_MIN, not the current level — plus a margin. The
    level the game thread can see is the one the render thread published on the
    previous frame, so sizing for the current level would leave the ring bare for
    a frame whenever the zoom eased outward; sizing for the whole range means no
-   step of any lever can outrun the grid.
+   change of level can outrun the grid. A step of the EYE can: the cursor
+   anchor moves the drawn eye ahead of the one the grid was built about. The
+   window carries a lead of a quarter of the viewport on each side for that
+   step (TAGPU_LEAD_DIV, tagpu_zoom.h), and the render thread's fog bound
+   (tagpu_zoom.c) holds an eye that runs past it inside the grid.
 
    HANDING IT OVER — IT DOES NOT (frame packet exchange). The render thread
    holds no pointer into this module: the packet's publisher copies the grid
@@ -71,10 +80,12 @@
    has run. */
 void tagpu_fogwide_init(void);
 
-/* Game thread, from the fog-overlay call site, once per engine frame. `ta` is
-   the TAdynmem base; `rebuilt` is 1 when the engine's own grid was rebuilt on
-   this tick (its is-current flag had been cleared), which is also our cue that
-   the LOS state moved under us. It rebuilds only when `rebuilt` is set or the
+/* Game thread, once per tracked in-play draw: from the fog-overlay call site
+   when it is ours, else, on the Vulkan renderer, from the publisher's `after`
+   (see WHERE IT RUNS). `ta`
+   is the TAdynmem base; `rebuilt` is 1 when the engine's own grid was not
+   current on this draw (its is-current flag had been cleared), which is also
+   our cue that the LOS state moved under us. It rebuilds only when `rebuilt` is set or the
    window itself moved — but `rebuilt` is cleared by every LOS stamp as well as
    every scroll, so in a live game that is the SIM TICK rate whenever anything
    is moving, ~30/s at gamespeed 10 (see the tick's own comment for the number).

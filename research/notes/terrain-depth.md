@@ -145,9 +145,11 @@ Key facts:
   the window is placed from `L − sx`, so the pass is right only when `0 ≤ eye` and
   `eye + view ≤ map` on each axis. An eye in (−32, 0) leaves a strip of up to 31 px at the
   viewport's left or top edge unpainted; a lower one, or a window past the far edge, reads before
-  or past the tile map and faulted at `0x4CBE44`. The camera clamp keeps the eye in range only
-  while the view fits in the scroll extent, and our zoom range above 1 takes it below 0 at every
-  left and top edge. Our window check at `0x484057` bounds the reads and paints the strip black
+  or past the tile map and faulted at `0x4CBE44`. The engine's camera clamp keeps the eye in range
+  only while the view fits in the scroll extent; ours holds it at 0 past that, so the window leaves
+  the map only where the view is larger than the map. Our centre range takes the eye below 0 at
+  every left and top edge, but only on draws our terrain pass owns, where this pass does not run.
+  Our window check at `0x484057` bounds the reads and paints the strip black
   ([the engine map](exe-reverse-engineering.html), §"Engine defects we patch").
 - **No height/LOS participation.** Neither `FeatureStruct.height` nor any LOS map
   is consulted. Cliff faces, shadows, water — all pre-painted into the 32×32 tile
@@ -1006,7 +1008,7 @@ ground between them, and, in the black band's case, unexplored map drawn in full
 and buildings the player has never seen. Measured on `feat-forest` at 0.35× — an enemy CORE Solar
 Collector on ground with no LOS, drawn in full colour on the frame's right edge, gone with the fix.
 
-**`tagpu_fogwide.c` builds its own grid** over a window sized for `tagpu_zoom_min()` — the widest
+**`tagpu_fogwide.c` builds its own grid** over a window sized for `TAGPU_ZOOM_MIN` — the widest
 view the levers can reach, not the level in force, because the level the game thread can read is a
 frame old and one ease step of a wheel flick is wider than the slack. It replicates `0x4843C0`
 exactly (engine map §"The screen fog grid"), on the **game thread**, from `terr_fogtick` — the fog
@@ -1025,9 +1027,16 @@ window each 120th tick and compares byte for byte — **0 differing of 720 cells
 Two departures from the engine, both deliberate and both documented in the source:
 
 1. **The border completions use the derived straddling index**, not the engine's literal
-   `0`/`rows−2`/`0`/`cols−2` (engine map, the table). They coincide in every window the engine can
-   produce, which is why the oracle still reads 0; they do not in a window that reaches many cells
-   past the map.
+   `0`/`rows−2`/`0`/`cols−2` (engine map, the table). They coincide in every window an eye in the
+   engine's own range `[0, extent − W]` produces (`extent` the scroll extent `main+0x1422B`, the
+   map less 32 and 128 px; `skipped=0` measured at its far corner `(9824, 11968)` on Two
+   Continents); past it — the camera's centre range takes the view up to `W/2` off the map, so
+   `row0`/`col0` reach −2 and beyond, or the far edges' equivalent — they do
+   not, and there the engine's completion is a no-op on a wholly off-map line while ours completes
+   the straddling one. So the oracle compares only what both functions define the same way: for
+   each completion whose gate is up and whose two lines differ, both lines are left out and counted
+   as `skipped=` (`edge_skip`). Every other entry depends only on its own four cells, and each
+   completion copies bits within one entry, so nothing else can differ because of them.
 2. **`fogw_edge_fill` replicates the edge entry outward** over the entries that lie wholly off the
    map. The engine never meets that case — its grid stops one cell past — but ours can carry forty
    all-zero rows over open water, and an all-zero entry means "no fog": a sprite whose *projected*
@@ -1093,7 +1102,9 @@ Two faults, and only both together made it visible.
    viewport size the allocation accepts and every eye** — worst case 1 px, at a 64-px viewport
    with `eye % 32 == 15`, and 16 px for the negative eyes the widened camera range produces
    (enumerated over `0x483BB8`'s and `0x4843C0`'s own arithmetic; engine map, §"The screen fog
-   grid") — while the wide grid keeps the view a whole `FOGW_MARGIN` inside.
+   grid") — while the wide grid spans the gathers' whole slab, `TAGPU_GATHER_MARGIN` past the view
+   on each side, for any eye a frame is drawn from ([GPU status](gpu-status.html) §2.3, the fog
+   bound on the drawn eye).
 
 **After:** 0 failure frames of 1800 unmapped (max 32 green px in any frame) and 0 of 1561 mapped
 (max **0**), `bare=0` on every heartbeat, and the replication oracle still `differ=0` over
@@ -1137,8 +1148,8 @@ own fog draw there is no one to ask, so the eye is not stepped at all.
 
 **The CPU twin was NOT brought along.** `tagpu_fog_at` (`tagpu_fx.c`) still bounds on
 `gx >= cols`, so the band `[cols−1, cols)` interpolates the same unwritten corners the shader now
-avoids. It is unreachable through the wide grid — that band is ≥ 320 px outside the view
-(`FOGW_MARGIN` plus the window's two spare columns) against a gather that reaches 256 — and
+avoids. It is unreachable through the wide grid — the fog bound on the drawn eye keeps the
+gathers' whole slab inside `[0, cols − 1]` ([GPU status](gpu-status.html) §2.3) — and
 through the engine's grid at zoom ≥ 1 it is reachable for an anchor 1–32 px past the viewport
 edge, where both available answers are the same "no fog" and tightening the bound would change
 only the argument. Recorded rather than changed.

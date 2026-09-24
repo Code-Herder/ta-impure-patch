@@ -338,8 +338,7 @@ static void do_keys(HWND hwnd)
    because the absent case is the common one and an open-fail per frame is not
    free). Render thread only: the point is read here and rides the command
    record; the write is the game thread's (tagpu_zoom_apply), clamped there
-   into the camera's range — not into [0, map - view], which at zoom > 1 would
-   pull a scripted camera back off every map edge.
+   into the camera's range in force for that draw.
 
    AND THIS HALF IS ON THE RENDER THREAD, deliberately.
    These four words are written here and read by tagpu_input_cmd(), which

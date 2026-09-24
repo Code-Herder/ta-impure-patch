@@ -638,16 +638,16 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
        sits past the edge over dark ground, popping sprites in as you scroll.
 
        THE SHADERS DO NOT CLAMP THE SAME WAY: taFog clamps to `uFogDim - 1.0`,
-       one whole cell short, because the last column of any grid never has its right
-       corners written and interpolating toward them reads as NO FOG. The band
-       `gx in [cols-1, cols)` here has that same hazard and is left alone
-       deliberately: with the WIDE grid it is at least 320 px outside the view
-       (FOGW_MARGIN plus the window's two spare columns) against a gather that
-       reaches 256, so nothing can be sampled there; with the ENGINE's grid at
-       zoom >= 1 an anchor 1..32 px past the viewport edge does land in it, and
-       both answers available there — the interpolation's and the off-grid
-       `return 0` a tighter bound would give — are the same "no fog", so
-       tightening it would change nothing but the argument. */
+       one whole cell short, because the last column of any grid never has its
+       right corners written. The band `gx in [cols-1, cols)` here would
+       interpolate toward those unwritten corners. No caller samples it: the
+       unit and wreck gathers test the point they sample against the gathers'
+       slab, which the fog bound on the drawn eye (tagpu_zoom.c) keeps inside
+       `[0, cols - 1]` on the wide grid; tagpu_fx_tile_visible, the feature,
+       effect and particle gate, moves a point in the band onto the band's
+       left edge `cols - 1`, whose right corners carry no weight. On the
+       engine's grid the unit gathers still reach the band past the view's
+       right and bottom edges, for an anchor off the screen. */
     if (gx < 0.0f || gy < 0.0f ||
         gx >= (float)cols || gy >= (float)rows) return 0;
     int cx = (int)gx, cy = (int)gy;
@@ -666,7 +666,24 @@ int tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
    the builder only writes the grey mask in true-LOS mode. */
 int tagpu_fx_tile_visible(const TAGPU_FXVIEW* v, int wx, int wzp)
 {
+    /* ONLY THE UNWRITTEN BAND MOVES. The last column and row of the grid this
+       frame samples (the packet's, wide or engine's: `fogGrid`/`fogCols`/
+       `fogOrg`) are short their right and bottom corners, so a point in
+       `(org + 32 (cols - 1), org + 32 cols)` is answered at the band's left
+       edge, where those corners carry no weight. Every other point keeps the
+       answer the grid gives it — inside the written cells its own value, past
+       the grid tagpu_fog_at's "no fog" — so a laser or a lightning bolt, gated
+       on its head wherever that head is, reads the same fog it always did.
+       The feature sweep's points (a footprint's far corner, a row above the
+       effective rect) and the effect and particle tables' (every effect on
+       the map) reach past the gathers' slab, which is why the bound on the
+       slab does not cover them and this does. */
+    int bx, by;
     if (!(v->fogMode & 1) || !v->fogGrid) return 1;
+    bx = v->fogOrgX + 32 * (v->fogCols - 1);
+    by = v->fogOrgY + 32 * (v->fogRows - 1);
+    if (wx > bx && wx < bx + 32) wx = bx;
+    if (wzp > by && wzp < by + 32) wzp = by;
     return tagpu_fog_at(v->fogGrid, v->fogCols, v->fogRows, v->fogCells,
                         v->fogOrgX, v->fogOrgY, wx, wzp) == 0;
 }

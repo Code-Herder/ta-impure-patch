@@ -42,16 +42,9 @@ int  tagpu_terrown_request(void);
    engine's terrain blit is skipped" true at every moment (see
    `g_terrown_own`). */
 void tagpu_terrown_latch(int own);
-/* GAME THREAD, from the packet's publisher. The eye the ENGINE's own fog grid
-   was last anchored at, latched inside the fog site the moment its builder ran
-   (0x4843C0 recomputes the origin from those two words itself). 0 when this
-   fork has never seen that builder run — terrain ownership disarmed, so the
-   engine calls it where we cannot observe — and the publisher then falls back
-   to the packet's own eye. */
-int tagpu_terrown_fog_eye(int* x, int* y);
 /* GAME THREAD, from the packet's publisher. 1 while our fog observer ran in
    THIS in-play draw — i.e. while terrain ownership is on and the site is ours.
    0 means the engine is calling its own fog builder where we cannot see it, and
-   every fog answer either module holds is from whenever we last owned it. */
+   the wide grid's module holds a grid from whenever we last owned it. */
 int tagpu_terrown_fog_site_live(void);
 #endif
