@@ -1,10 +1,10 @@
 # Removing ddraw.ini — the handoff
 
-**Status: planned, not started.** The owner asked for it on 2026-09-24, as its own landing. This
-page is the brief for whoever builds it: what reads and writes `ddraw.ini` today, what each
-value is for, the plan, the traps found while surveying, the gates, and the decisions that are
-the owner's. Everything under *Today* was read in the source at `b454cbb`; check it again
-before building on it.
+**Status: planned, not started; every decision settled (2026-09-24).** The owner asked for it
+on 2026-09-24, as its own landing. This page is the brief for whoever builds it: what reads and
+writes `ddraw.ini` today, what each value is for, the plan, the traps found while surveying, the
+gates, and the owner's decisions. Everything under *Today* was read in the source at `b454cbb`;
+check it again before building on it.
 
 **The goal.** `impure.cfg` becomes the one settings file. A player's game has no `ddraw.ini`,
 and nothing written anywhere else can hold a row of the Visuals menu. Today a key in `ddraw.ini`
@@ -112,8 +112,19 @@ migration. CI (`.github/workflows/build.yml`) runs `package.sh`.
 - **`ini.c`** has no reader left once `config.c` and `tagpu_cfg.c` stop parsing (checked: no other
   file calls `ini_create` or `ini_get_*`). Delete it.
 - **The compatibility warning** stops naming `ddraw.ini`.
-- **Whether to prune the upstream hacks** (`infantryhack` and the rest) is a separate question.
-  Their fields stay at their defaults either way; leaving them is the smaller diff.
+- **The upstream per-game hacks go too** (decision 3). `vhack`, `tshack`, `infantryhack`,
+  `armadahack`, `stronghold_hack`, `mgs_hack`, `tlc_hack`, `carma95_hack`, `sirtech_hack`,
+  `flightsim98_hack` and `darkcolony_hack` (`config.c:56`, `:106-115`) exist for other games;
+  `[TotalA]` sets none of them and each defaults to `FALSE`, so for TA every branch that reads
+  one is dead. Delete each field and fold each reader to its `FALSE` arm: `dd.c` (132, 284, 731,
+  783, 1384, 1508-1515, 1768), `ddsurface.c` (793, 812, 1206, 1476), `winapi_hooks.c` (114, 633,
+  687, 813, 864), `utils.c:899`, `wndproc.c:1007`, `render_gdi.c:86-88`, `dllmain.c` (418, 465),
+  and `GameHandlesClose`'s `|| g_config.infantryhack` (`config.c:117`). Line numbers are at
+  `545c47f`. Watch the negated ones: `!g_config.tlc_hack` and `!g_config.infantryhack` fold to
+  *true*, not away. `vhack`'s test at `dd.c:1508` also names `isredalert`/`iscnc1`/`iskkndx`/
+  `isworms2`; those flags stay. They are set from the window title (`dd.c:1474-1477`), are
+  false for TA, and have readers of their own (`dd.c:1485-1499`, `ddsurface.c:68`,
+  `utils.c:1182-1201`) that are not hacks and not this decision.
 
 ### 2. The store holds tacli's pins
 
@@ -139,7 +150,19 @@ migration. CI (`.github/workflows/build.yml`) runs `package.sh`.
   relaunch, opens that instance fullscreen on the owner's 4K screen.
 - **`ddraw.ini` leaves `PRIVATE_FILES`**, and a launch deletes one it finds in a gamedir, so no
   stale file suggests it still counts.
-- **The GDI lane gets a switch of its own** (decision 2), and `measuring.md` its recipe.
+- **The GDI lane gets a switch of its own**: the lever file `tagpu_gdi.on` (decision 2), read at
+  attach and logged like every other harness lever, and `measuring.md` its recipe. `dd.c`'s
+  renderer switch reads the lever instead of `renderer`; without it the renderer is Vulkan, with
+  GDI as the fallback when Vulkan fails.
+- **`--shipped`** (decision 4): a launch that writes nothing a player would not have —
+  no `tagpu_nowarp.on`, no `totala.ini`, no title file, no store pins — so the as-shipped
+  hand-over test is a tacli command. It still refuses a tile on the owner's screen.
+
+### 3b. The first-run monitor
+
+`monitor=-` means **the primary monitor** (decision 5), not the one wine first created the window
+on. Today a first run with no store stores whichever monitor the window happened to open on (see
+*Traps*).
 
 ### 4. The release
 
@@ -159,8 +182,8 @@ line and gains one for players upgrading: an old `ddraw.ini` is ignored and can 
   `monitor=-` means the window's own monitor. On the reference setup, a hand launch with no store
   went borderless fullscreen on the portrait `HDMI-0` (1080x1920 at 0,112) and stored
   `monitor=\\.\DISPLAY2`. MEASURED 2026-09-24. Wine does report the 4K panel as the primary
-  display [INFERRED: the desktop mode `inject_resolution` takes is 3840x2160]. Not this landing's defect, but its gates will
-  meet it; defaulting to the primary monitor is decision 5.
+  display [INFERRED: the desktop mode `inject_resolution` takes is 3840x2160]. Plan step 3b
+  fixes it in this landing (decision 5).
 - **`tagpu_cfg.c`'s header reasons from the shipped file** ("the presence test means what it says
   only because we do not ship these keys"). It is rewritten with the module, not annotated.
 
@@ -181,8 +204,13 @@ line and gains one for players upgrading: an old `ddraw.ini` is ignored and can 
    launch line's `at x,y`, and stop at once if x < 4920, the ta-drive skill's tile rule). Set
    Display mode to fullscreen in the menu of a test instance on a **private Xvfb**, then relaunch
    bare: the tile comes back.
-4. **The GDI lane** through its new switch.
+4. **The GDI lane** through `tagpu_gdi.on`: the log names GDI, and the game draws.
 5. **The package**: `package.sh` output has no `ddraw.ini`.
+6. **The hacks pruned**: TA's shell, a skirmish and a clean exit behave as before (the removed
+   branches were all dead for TA), on Vulkan and on GDI.
+7. **`--shipped`**: the gamedir holds only what gate 1's hand launch would, and the game runs.
+8. **The first-run monitor**: a store-less first run on a private Xvfb with two screens, the
+   primary second in the list, opens on the primary and stores it.
 
 **Review at high**: the landing touches `tagpu/ddraw/**` and `tools/tacli`, and writes user state
 (the store). **The docs pass**: this page moves from plan to record; renderers.md §2.10b
@@ -193,23 +221,17 @@ gpu-posing (2), windowed-mode, field-notes and binary-patches; the ta-drive skil
 renderer); `tagpu/release/README.txt`. The mentions in deep-ta-zero and candidates-community are
 about other projects' files and stay.
 
-## Decisions for the owner
+## Decisions (the owner, 2026-09-24)
 
-1. **Rows in test instances.** Recommended: live. tacli rewrites its three keys at every launch,
-   so a menu change lasts one session. The alternative is a harness marker that greys them again:
-   a second mechanism, for a view only agents see.
-2. **The GDI lane's switch.** Recommended: a lever file, `tagpu_gdi.on`, read at attach and
-   logged, like every other harness lever. The alternatives are a store key (then the menu could
-   show it, which a player has no use for), or dropping forced-GDI measurements and keeping GDI
-   only as the fallback when Vulkan fails.
-3. **How deep the strip goes.** Recommended: the file machinery and the template go (plan step
-   1); the upstream hack fields stay, at their defaults, for a later pass.
-4. **An as-shipped tacli launch for hand-overs.** The owner's own test on 2026-09-24 needed a hand
-   launch, because tacli also writes `tagpu_nowarp.on`, a `totala.ini` and the title file. A flag
-   that writes none of it (say `--shipped`) would make that a tacli command. Small, and related,
-   but not required by the removal.
-5. **The first-run monitor.** Default `monitor=-` to the primary monitor rather than the one wine
-   first created the window on. A separate fix, raised here because the gates will meet it.
+1. **Rows in test instances are live.** tacli rewrites its three keys at every launch, so a menu
+   change lasts one session. No harness marker greys them.
+2. **The GDI lane's switch is a lever file, `tagpu_gdi.on`**, read at attach and logged. Not a
+   store key, since a player has no use for it in the menu.
+3. **The strip goes deep**: the file machinery, the template *and* the upstream per-game hack
+   fields with every branch that reads them (plan step 1).
+4. **`--shipped` rides with this landing**: the as-shipped hand-over launch becomes a tacli
+   command (plan step 3).
+5. **The first-run monitor is the primary**, fixed in this landing (plan step 3b).
 
 Related: [the settings store](renderers.html#210b-the-settings-store-every-value-on-the-visual-screens-is-ours-decided-2026-09-23),
 [windowed mode](windowed-mode.html), [the DirectDraw boundary](api-wrappers.html),
