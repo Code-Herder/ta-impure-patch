@@ -4,6 +4,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 #include "tagpu_model3do.h"   /* F_COLORTAB: the Model3DOFace layout */
 #include "tagpu_render3do.h"
@@ -28,12 +29,6 @@ static void rlog(const char* s)
 
 static int    s_state = 0;         /* 0=unloaded 1=ready 2=failed */
 static int    s_shadeBuilt = 0;
-/* 1 when the calibration that is up came from the ENGINE's own PALETTE.SHD
-   rather than our computed ramp. Without it a single frame that arrived with
-   no table — the first fill of a slot truncates until the slot has grown, so
-   this is reachable at startup — would latch the fallback for the whole
-   session and every unit would be shaded by the wrong ramp, quietly. */
-static int    s_shadeFromShd = 0;
 
 /* ---- the unit texture atlas: the unit textures' GAF frames as palette
    indices, which the Vulkan unit pass expands into its RGBA8 base atlas and
@@ -75,6 +70,19 @@ static const TAGPU_GAFENT* atlas_get(const char* g)
    0.025*row, so row 16 is EXACT 1.0. */
 #define SH_ROWS    32
 #define SH_NEUTRAL 16
+/* WHAT THE CALIBRATION IS BUILT FROM, AND THE KEY THAT REBUILDS IT: the
+   engine's table (`s_shadePal`, its serial when the calibration was taken)
+   and the engine's shade table (`s_shd`, the last copy a packet carried). A
+   move of either rebuilds k[], so the unit pass never draws a calibration
+   taken from one table over a base atlas expanded from another.
+   THE COPY IS KEPT because a frame may arrive with no shade table -- the first
+   fill of a slot truncates until the slot has grown, which is reachable at
+   startup -- and a rebuild on such a frame must still calibrate from the
+   engine's own table rather than fall back to the computed ramp for the rest of
+   the session. */
+static unsigned char s_shd[SH_ROWS * 256];
+static int           s_haveShd;
+static unsigned      s_shadePal;
 static int s_shNeutral = SH_NEUTRAL;   /* the row that leaves a colour as it is */
 static int s_shDir     = 1;            /* +1 = higher row is brighter           */
 
@@ -166,8 +174,8 @@ static void shade_build(const unsigned char* shd)
         }
         s_shNeutral = bestr;
         s_shDir     = (lum31 >= lum0) ? 1 : -1;
-        s_shadeFromShd = 1;
         s_shadeBuilt = 1;
+        s_shadePal = tagpu_pal_engine_serial();
         shade_k_build(shd, pal);
         { char b[96]; _snprintf(b, sizeof b,
             "r3d shade: engine SHD table (neutral=%d id=%d/256 dir=%d)",
@@ -175,8 +183,8 @@ static void shade_build(const unsigned char* shd)
         return;
     }
     s_shNeutral = SH_NEUTRAL; s_shDir = 1;
-    s_shadeFromShd = 0;
     s_shadeBuilt = 1;
+    s_shadePal = tagpu_pal_engine_serial();
     shade_k_build(NULL, NULL);
     rlog("r3d shade: computed ramp (32 rows, row 16 exactly 1.0) — no shade table in "
          "the packet yet; it is rebuilt from the engine's own the first frame one arrives");
@@ -417,13 +425,21 @@ void tagpu_r3d_atlas_frame(void)
        `tagpu_vk_restore.c` paints it, each reading the palette for itself. */
 }
 /* `shd` is the packet's copy of PALETTE.SHD, or NULL: the calibration and
-   the multipliers are built once out of whichever the caller has, and again
-   the first time the engine's SHD arrives after a frame with none. Called
-   every frame from tagpu_native.c; it is what keeps `s_shadeK` current for the
-   Vulkan unit pass. */
+   the multipliers are built out of the last one seen, or the computed ramp
+   before any has been, and rebuilt when the shade table's bytes or the
+   engine's palette serial move (`s_shadePal`). Called every frame from
+   tagpu_native.c; it is what keeps `s_shadeK` current for the Vulkan unit
+   pass. */
 void tagpu_r3d_shade_want(const unsigned char* shd)
 {
-    if (s_state == 1 && (!s_shadeBuilt || (shd && !s_shadeFromShd))) shade_build(shd);
+    if (s_state != 1) return;
+    if (shd && (!s_haveShd || memcmp(shd, s_shd, sizeof s_shd) != 0)) {
+        memcpy(s_shd, shd, sizeof s_shd);
+        s_haveShd = 1;
+        s_shadeBuilt = 0;
+    }
+    if (!s_shadeBuilt || s_shadePal != tagpu_pal_engine_serial())
+        shade_build(s_haveShd ? s_shd : NULL);
 }
 
 /* ---- the Vulkan lane's texels; tagpu_render3do.h has the contract ------- */

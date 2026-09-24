@@ -204,9 +204,10 @@ static unsigned char  s_flashAlpha[256];   /* TAGPU_FX_FLASH_ALPHA by index    *
    a serial, which is what a lazy queue needs:
 
      s_rjGen    the producer's generation this job belongs to. A new one is a
-                discontinuity a cursor cannot survive -- a recycle, a repack, a
-                palette move -- so the job is rebuilt and the
-                cursor goes back to 0.
+                discontinuity a cursor cannot survive -- a recycle, a repack --
+                so the job is rebuilt and the cursor goes back to 0.
+     s_rjPal    the engine palette serial the job was built with, a new job
+                when it moves -- tagpu_vk_feat.c's `s_rjPal`.
      s_rjTaken  how many of that generation's frames are already queued here.
                 The producer retains the whole array, so a frame on which this
                 pass took nothing costs nothing: the next one takes more.
@@ -215,7 +216,7 @@ static unsigned char  s_flashAlpha[256];   /* TAGPU_FX_FLASH_ALPHA by index    *
                 old view would paint from freed memory. The terrain consumer has
                 the same hazard and the same guard. */
 static TAGPU_VKRJOB*  s_rjob;
-static unsigned       s_rjGen;
+static unsigned       s_rjGen, s_rjPal;
 static int            s_rjTaken;
 static int            s_rjPainted;
 static int            s_rjTried;           /* the device refused; do not ask again */
@@ -956,7 +957,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FXHAND* h)
         s_rjSrcView = VK_NULL_HANDLE;
         s_arHave = 0;                      /* what it holds is the old layout's */
     }
-    if (s_rjob && s_rjGen == h->restoreGen) {
+    if (s_rjob && s_rjGen == h->restoreGen && s_rjPal == h->palSerial) {
         int painted = tagpu_vk_restore_job_painted(s_rjob);
         /* ONE PAINTED FRAME IS WHAT MAKES THIS A PICTURE, and `s_arHave` is
            what the pass's restored refusal reads. */
@@ -1031,6 +1032,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FXHAND* h)
     if (!s_rjob) { s_rjTried = 1; return; }   /* the reason is in the log      */
     s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
     s_rjGen = h->restoreGen;
+    s_rjPal = h->palSerial;
     s_rjSrcView = s_bView;
     s_rjPainted = 0;
     s_arHave = 0;                          /* it is being blanked and repainted */

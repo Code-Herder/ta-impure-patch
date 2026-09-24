@@ -214,8 +214,14 @@ static unsigned       s_bSerial, s_bPal;
 
      s_rjGen    the producer's generation this job belongs to. A new one is a
                 discontinuity a cursor cannot survive -- a recycle, a repack,
-                the atlas laid out afresh, a palette move -- so the job is
-                rebuilt and the cursor goes back to 0.
+                the atlas laid out afresh -- so the job is rebuilt and the
+                cursor goes back to 0.
+     s_rjPal    the engine palette serial the job was built with. The
+                generation does NOT move with the palette, and the job keeps
+                the palette it was made with, so a move of the serial is a new
+                job too: the base atlas is re-sent in the new colours
+                (`base_upload`) and the twin is blanked and repainted from it,
+                never left in the old ones beside a base in the new.
      s_rjTaken  how many of that generation's frames are already queued here.
                 The producer retains the whole array, so a frame on which this
                 pass took nothing costs nothing: the next one takes more.
@@ -224,7 +230,7 @@ static unsigned       s_bSerial, s_bPal;
                 old view would paint from freed memory -- the same hazard, and
                 the same guard, as the terrain consumer's. */
 static TAGPU_VKRJOB*  s_rjob;
-static unsigned       s_rjGen;
+static unsigned       s_rjGen, s_rjPal;
 static int            s_rjTaken;
 static int            s_rjPainted;
 static int            s_rjTried;           /* the device refused; do not ask again */
@@ -886,7 +892,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
         s_rjSrcView = VK_NULL_HANDLE;
         s_arHave = 0;                      /* what it holds is the old layout's */
     }
-    if (s_rjob && s_rjGen == h->restoreGen) {
+    if (s_rjob && s_rjGen == h->restoreGen && s_rjPal == h->palSerial) {
         int painted = tagpu_vk_restore_job_painted(s_rjob);
         /* ONE PAINTED FRAME IS WHAT MAKES THIS A PICTURE, and `s_arHave` is
            what `prepare`'s restored check reads. */
@@ -955,7 +961,8 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
     /* EVERY GENERATION BLANKS. Nothing the restore reads moves in play -- its
        source is the base atlas, built from the engine's table, and the Gamma
        factor is applied after it, to the finished world image (tagpu_pal.h) --
-       so no generation is a recolour of the last one. */
+       and a move of the table itself is a new job here (`s_rjPal`), so no job
+       is a recolour of the last one. */
     s_rjob = tagpu_vk_restore_job_new(d, "feat", 1, 0, 0,
                                       s_bImg, s_bView, s_atDim, s_atDim, 1,
                                       h->pal,
@@ -963,6 +970,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_FEATHAND* h)
     if (!s_rjob) { s_rjTried = 1; return; }   /* the reason is in the log      */
     s_rjTaken = tagpu_vk_restore_job_add(s_rjob, h->restoreFrames, h->restoreN);
     s_rjGen = h->restoreGen;
+    s_rjPal = h->palSerial;
     s_rjSrcView = s_bView;
     s_rjPainted = 0;
     s_arHave = 0;                          /* it is being blanked and repainted */

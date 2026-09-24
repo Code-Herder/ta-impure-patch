@@ -211,11 +211,16 @@ static TAGPU_FXMODEL s_models_[MAXMODEL];
 static int    s_nm = 0;
 
 static int s_lhtInit = 0;
-static unsigned s_lhtStamp = 0;
 /* THE FLASH LIGHT TABLE'S OWN BYTES, at file scope because the hand-over
    carries them to the Vulkan pass: this array is the table. 32 x 1 RGB, and
    `s_lhtInit` is what says whether it has ever been built. */
 static unsigned char s_lhtRGB[32 * 3];
+/* WHAT IT WAS BUILT FROM, and the key that rebuilds it: the engine palette
+   serial and the LHT bytes. A move of either rebuilds the table on the frame it
+   is seen, so the flash colours are never the old table's beside a base atlas
+   re-sent in the new one. */
+static unsigned s_lhtPal;
+static unsigned char s_lhtSrc[TAGPU_PK_LHT_BYTES];
 
 /* THE SHADER PAIR IS A BUILD INPUT, NOT DEAD CODE, and no C in this file
    references it -- `tools/spirv-gen.py` reads both strings
@@ -786,11 +791,12 @@ static void gather_fx(const TAGPU_FXVIEW* v)
 
     /* ---- LHT flash colours from the packet's table + the engine's palette
        (unscaled, like every world colour: the composite applies the Gamma) ---- */
-    if (flashOn && (!s_lhtInit || v->frame_counter - s_lhtStamp >= 300)) {
+    if (flashOn) {
         const unsigned char* lht = tagpu_pk_lht(pk);
         const unsigned char* pal = tagpu_pal_engine();
         unsigned char* rgb = s_lhtRGB;   /* file scope: the hand-over carries it */
-        if (pal && lht) {
+        if (pal && lht && (!s_lhtInit || s_lhtPal != tagpu_pal_engine_serial() ||
+                           memcmp(lht, s_lhtSrc, sizeof s_lhtSrc) != 0)) {
             int L;
             for (L = 0; L < 32; L++) {
                 long sr = 0, sg = 0, sb = 0; int d;
@@ -808,7 +814,9 @@ static void gather_fx(const TAGPU_FXVIEW* v)
             /* THE TABLE IS THE PASS. `s_pub.lht` hands the bytes to the
                Vulkan pass, which builds its own image from them, so the
                table reaching `rgb` IS the work. */
-            s_lhtInit = 1; s_lhtStamp = v->frame_counter;
+            memcpy(s_lhtSrc, lht, sizeof s_lhtSrc);
+            s_lhtPal = tagpu_pal_engine_serial();
+            s_lhtInit = 1;
         }
     }
 

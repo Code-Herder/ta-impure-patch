@@ -310,12 +310,14 @@ static int            s_arLvlN;
 /* THE RESTORE THIS LANE RUNS FOR ITSELF, from the frame LIST the producer
    publishes. The cursor into that list is `s_rjTaken`; the
    generation is the only thing a cursor cannot survive, so `s_rjGen` is
-   compared and a move restarts from 0. `s_rjChain` records that the twin's mip
+   compared and a move restarts from 0. `s_rjPal` is the engine palette serial
+   the job was built with, and a move of it is a new job too --
+   tagpu_vk_feat.c's `s_rjPal`. `s_rjChain` records that the twin's mip
    levels are reduced here too -- without it the twin has one defined level and
    a trilinear fetch reads the rest as whatever the driver left, which is why a
    chainless job is not a picture this pass may draw. */
 static TAGPU_VKRJOB*  s_rjob;
-static unsigned       s_rjGen;
+static unsigned       s_rjGen, s_rjPal;
 static int            s_rjTaken, s_rjPainted, s_rjTried, s_rjChain;
 static VkImageView    s_rjSrcView, s_rjDstView;
 static int            s_arHave;
@@ -1452,7 +1454,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
         s_rjChain = 0; s_rjSrcView = VK_NULL_HANDLE; s_rjDstView = VK_NULL_HANDLE;
         s_arHave = 0;
     }
-    if (s_rjob && s_rjGen == h->restoreGen) {
+    if (s_rjob && s_rjGen == h->restoreGen && s_rjPal == h->palSerial) {
         int painted = tagpu_vk_restore_job_painted(s_rjob);
         /* ONE PAINTED FRAME MAKES THIS A PICTURE -- but only with the chain,
            because the pass samples the twin trilinearly and the levels below 0
@@ -1558,6 +1560,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_PDHAND* h)
                  h->restoreN - want, h->restoreN, s_bRows);
     }
     s_rjGen = h->restoreGen;
+    s_rjPal = h->palSerial;
     s_rjSrcView = s_bView;
     s_rjDstView = s_arLvl[0];
     s_rjPainted = 0;
