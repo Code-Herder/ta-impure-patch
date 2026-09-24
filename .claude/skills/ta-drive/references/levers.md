@@ -86,7 +86,7 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   cached structure shadow once ours is live. A stale `owndraw.on` with `native.on` cleared is
   dropped by `launch`, which says so. The `native:` heartbeat every 300 frames is `native: vulkan
   lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full=
-  fog=wide|engine bare=N out=N held=N/Mpx` — what was handed over to the Vulkan passes, not what
+  fog=wide|engine|none bare=N out=N held=N/Mpx paused=N back=N` — what was handed over to the Vulkan passes, not what
   they drew; the fog fields are below. A model that will not bake (over 256
   pieces or 49 152 vertices) logs a `posebake: REFUSED` line and draws nothing. Nothing reads
   `gamedir/hires/`: a `.glb` there changes nothing, because replacement meshes are not in this build.
@@ -222,10 +222,14 @@ spot (nothing but the game thread reads it), and logs `fogwide: grid CxR, N KB (
 chasing it; at 14 a moving scene gives ~30/s.
 
 The native heartbeat's fog fields are the fog bound's witness (`tagpu_zoom.c`, gpu-status §2.3):
-`fog=` is the grid the frame at the heartbeat took; **`out=` must read 0** — frames whose fog
-domain was not inside that grid; `bare=` counts frames that needed the wide grid and had none;
-`held=N/Mpx` is the frames whose drawn eye the bound held back and the largest hold, the cost of
-the bound (non-zero on a wheel reversal near the zoom floor, ~50 screen px at most at 1024x768).
+`fog=` is the grid the last frame actually sampled (`engine` on a bare frame, `none` with no
+grid at all); **`out=` must read 0** — frames whose fog domain was not inside that grid; `bare=`
+counts frames that needed the wide grid and had none; `held=N/Mpx` is the frames whose drawn eye
+the bound held back and the largest hold, never more than the displacement the gesture has posted
+and the game thread not yet applied — one frame's step when it keeps up (non-zero on wheel
+gestures below 1×; 263 world px measured at the floor at 1024x768), all of it when it lags;
+`paused=` is the frames drawn at the previous frame's level so the view would not move against
+the gesture; **`back=` must read 0** — frames that moved against it anyway.
 **A level that starts below 1× shows `bare=` and `out=` of about 15** — the frames before the
 terrain pass owns the ground, when there is no wide grid to take — and they must not grow after.
 
@@ -332,9 +336,9 @@ that map's size.
 | line | every | must read 0 | notes |
 |---|---|---|---|
 | `packet: pub= skip= overrun= foreign= … viol= pviol= crcbad= nopkt= \| … \| cmd: … \| draws= … \| world: … dup= trunc= relbad= woob= …` | 300 render frames | `viol`, `pviol`, `crcbad`, `foreign`, `commitfail`, `vpwh` (both exchanges); `dup` (the stable-id collision oracle), `relbad` (the engine's `end == begin + (count−1)·0x118` relation), `woob` (wreck records outside the 2048-record pool); `trunc` past each slot's first fill; `layerbad`, `subbad` in the `fx:` segment; `refused` in the `fog:` and `gui:` segments | `skip` is the FRESH gate doing its job; `overrun`/`gap` count only under `stress` or across a level end; `unacked=(0,0)` whenever no wheel gesture is in flight; `hold=1` while `tagpu_eye.txt` is in force; `tps` is 3 × `speed`; `font=` non-zero when text can draw; `levelend=reclaim` names who published the level-end packet |
-| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog= bare= out= held=N/Mpx` | 300 | `out` past a level's start | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; the fog fields are the fog bound's witness (§"Camera, viewport and fog") |
+| `native: vulkan lane handed over frame N: terr= feat= fx= mark= units= posed= sel=N/M selcache= full= fog= bare= out= held=N/Mpx paused= back=` | 300 | `out` past a level's start, `back` | what was handed over, not what was drawn; `sel=N/M` is rects handed to the marker pass of selected units on screen; the fog fields are the fog bound's witness (§"Camera, viewport and fog") |
 | `reclaim: def= drn= ovf= … tmpl=<queued>/<freed by the epoch>/<leaked>` | 300 | `ovf`, the third `tmpl` field | a level change logs `reclaim: level teardown: flushed N …` then `reclaim: teardown post: freed N block(s)` |
-| `fogwide: …`, `fogwide check: … differ=` | 5 s / 120 ticks | `differ`; on the grow path's line `strand`, and `held` must fall back to 0 | |
+| `fogwide: …`, `fogwide check: … differ=` | 5 s / 120 ticks | `differ` | a video-mode change logs `fogwide: grid CxR, N KB (N cells) — grown` |
 | `gui: twins= …` | 300 | `overflows`, `lost`, `miss`, `reseed` | `references/ui-layer.md` |
 | `surf: golden source WxH on the GAME thread -- captured= unchanged= refused= …` | 300 captures | `refused` | `us avg=` is the game-thread cost (55–58 µs at 1024x768) |
 | `vk: census: frame N: 6 pass(es) drew and 0 claimed (terr= feat= unit= fx= mark= scaf= gui= fps=)` | 300 | | 6 with `gui=1` is the play set; `mark=0` is the marker pass standing down |
