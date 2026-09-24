@@ -3058,26 +3058,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             }
         }
     }
-    /* effects models (missiles, shells, debris) through the same path, ONE
-       EFFECT AT A TIME. An effect's models are consecutive and share its index
-       (tagpu_fx.h `effect`); when the unit atlas defers a texel any of them
-       needs, `emit_node` has dropped that node, and the effect's other models
-       go with it here while tagpu_fx.c cuts its sprites -- the ground shadow,
-       the flash, the body -- out of its buckets before the hand-over. So no
-       frame draws part of an effect. */
+    /* effects models (missiles, shells, debris) through the same path */
     if (nfx) {
-        int k = 0, nm = tagpu_fx_nmodels();
-        while (k < nm) {
-            const int eff = tagpu_fx_model(k)->effect;
-            const int nvE = nv;
-            const unsigned dN = tagpu_r3d_atlas_deferrals();
-            do nv = emit_fx_model(tagpu_fx_model(k++), nv, fxKey);
-            while (eff >= 0 && k < nm && tagpu_fx_model(k)->effect == eff);
-            if (tagpu_r3d_atlas_deferrals() != dN) {
-                nv = nvE;
-                tagpu_fx_effect_drop(eff);
-            }
-        }
+        int k, nm = tagpu_fx_nmodels();
+        for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
     }
     /* npd belongs in this test, and urgently: an ordinary unit contributes no
        vertices, so without this a frame of nothing

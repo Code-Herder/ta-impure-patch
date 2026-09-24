@@ -385,7 +385,6 @@ static const char* face_texframe(const char* fa, int owner)
    is what says it exists. Latched by the arm, so it does not flicker. */
 int tagpu_r3d_atlas_restore_armed(void) { return s_atlas.rlistWant ? 1 : 0; }
 unsigned tagpu_r3d_atlas_gen(void)  { return s_atlas.gen; }
-unsigned tagpu_r3d_atlas_deferrals(void) { return s_atlas.deferN; }
 /* ---- THE LEVEL BOUNDARY ------------------------------------------------
    THIS ATLAS KEYS ON AN ADDRESS AND THE ADDRESSES ARE RECYCLED.
    `tagpu_gaf_atlas_find(a, g, pix, w, h, win)` matches on the frame header's

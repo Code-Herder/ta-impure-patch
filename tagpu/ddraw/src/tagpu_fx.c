@@ -463,37 +463,27 @@ static void emit_model(unsigned node, float ax, float ay, float wx, float wz,
     TAGPU_FXMODEL* m = &s_models_[s_nm++];
     m->node = (const char*)(size_t)node; m->ax = ax; m->ay = ay; m->wx = wx; m->wz = wz;
     m->turn[0] = t0; m->turn[1] = t1; m->turn[2] = t2; m->owner = owner;
-    m->effect = -1;                    /* stamped by `effect_end` */
 }
 
 /* ---- AN EFFECT IS DRAWN WHOLE OR NOT AT ALL ---------------------------------
    One record of the packet is one effect: a projectile with its ground
-   shadow, an explosion with its flash, its model and its body, a piece of
-   debris. Its parts land in different sinks -- a shadow and a body in
-   B_SPRITES, a flash in B_FLASH, a model in the list tagpu_native.c walks --
-   and a part whose atlas paint is deferred past the allowance (tagpu_gaf.h
-   `budget`) is not drawn this frame. Taking back that part alone draws the
-   rest without it for a frame: a flash with no explosion, a shadow under no
-   missile. So every record is emitted inside a bracket:
+   shadow and its body, an explosion with its flash and its body. Its sprites
+   land in different buckets -- a shadow and a body in B_SPRITES, a flash in
+   B_FLASH -- and a sprite whose atlas paint is deferred past the allowance
+   (tagpu_gaf.h `budget`) is not drawn this frame. Taking back that sprite
+   alone would draw the rest without it for a frame: a flash with no
+   explosion, a shadow under no shell. So every record is emitted inside a
+   bracket, and A SPRITE OF IT DEFERRED takes the whole record back out at the
+   bracket's end: every bucket, the quad count and the model list return to
+   where they stood at its start. Nothing else is emitted inside a bracket, so
+   the rollback takes no other effect's vertices with it, and what did paint
+   stays painted and draws whole on a later frame.
 
-     - A SPRITE OF IT DEFERRED takes the whole effect back out at the end of
-       the bracket: every bucket, the quad count and the model list return to
-       where they stood at its start. Nothing else is emitted inside a bracket,
-       so the rollback takes no other effect's vertices with it.
-     - A MODEL OF IT DEFERRED is found later, by tagpu_native.c, whose unit
-       atlas paints it. So an effect that carries a model notes the range it
-       holds in each bucket (`s_eff`) and stamps its models with that entry's
-       index; the native pass takes an effect's models back together and names
-       it (`tagpu_fx_effect_drop`), and `effects_cut` removes its ranges from
-       the buckets before they are handed over.
-
-   Either way what did paint stays painted, and the effect draws whole on a
-   later frame. THE TABLE CANNOT OVERFLOW: an entry is made only for a bracket
-   that added a model, and a model belongs to one bracket, so there are never
-   more entries than models, and `emit_model` caps those at MAXMODEL. */
-typedef struct { int v0[NBUCKET], v1[NBUCKET]; int drop; } FXEFF;
-static FXEFF    s_eff[MAXMODEL];
-static int      s_neff;
+   THE MODELS ARE NOT A PART THAT IS DRAWN. The model list is walked by
+   tagpu_native.c's `emit_fx_model` into a vertex array no lane reads, so no
+   frame shows a rocket's or a shell's 3DO body, a debris piece or an
+   explosion's model; a record's drawn parts are its sprites and its lines,
+   and those are what the bracket keeps whole. */
 static int      s_effNv[NBUCKET], s_effNm, s_effQuads;
 static unsigned s_effDefer;
 
@@ -508,50 +498,11 @@ static void effect_begin(void)
 
 static void effect_end(void)
 {
-    FXEFF* e;
-    int b, k;
-    if (s_atlas.deferN != s_effDefer) {
-        for (b = 0; b < NBUCKET; b++) s_nv[b] = s_effNv[b];
-        s_nm = s_effNm;
-        s_cQuads = s_effQuads;
-        return;
-    }
-    if (s_nm == s_effNm) return;       /* no model: nothing can take it back later */
-    e = &s_eff[s_neff];
-    for (b = 0; b < NBUCKET; b++) { e->v0[b] = s_effNv[b]; e->v1[b] = s_nv[b]; }
-    e->drop = 0;
-    for (k = s_effNm; k < s_nm; k++) s_models_[k].effect = s_neff;
-    s_neff++;
-}
-
-void tagpu_fx_effect_drop(int effect)
-{
-    if (effect >= 0 && effect < s_neff) s_eff[effect].drop = 1;
-}
-
-/* The effects the native pass took back out, cut from the buckets before the
-   hand-over. The entries were made in emission order and every bracket
-   appends, so in each bucket an entry's range lies wholly after the one
-   before it, and what has been cut ahead of it is subtracted from its
-   offsets. The test on the shifted range is a sanity filter on our own
-   numbers, not the argument. */
-static void effects_cut(void)
-{
-    int cut[NBUCKET], b, k;
-    for (b = 0; b < NBUCKET; b++) cut[b] = 0;
-    for (k = 0; k < s_neff; k++) {
-        const FXEFF* e = &s_eff[k];
-        if (!e->drop) continue;
-        for (b = 0; b < NBUCKET; b++) {
-            const int a0 = e->v0[b] - cut[b], a1 = e->v1[b] - cut[b];
-            if (a1 <= a0 || a0 < 0 || a1 > s_nv[b]) continue;
-            memmove(s_verts[b] + (size_t)a0 * FXST, s_verts[b] + (size_t)a1 * FXST,
-                    (size_t)(s_nv[b] - a1) * FXST * sizeof(float));
-            s_nv[b] -= a1 - a0;
-            cut[b] += a1 - a0;
-        }
-    }
-    s_neff = 0;
+    int b;
+    if (s_atlas.deferN == s_effDefer) return;
+    for (b = 0; b < NBUCKET; b++) s_nv[b] = s_effNv[b];
+    s_nm = s_effNm;
+    s_cQuads = s_effQuads;
 }
 
 /* the shaders' fog rule (tagpu_glsl.h) on the CPU — bilinear coverage over the
@@ -869,11 +820,9 @@ static void gather_fx(const TAGPU_FXVIEW* v)
             int sx = hx - eyeX + vpL, sy = (hy - eyeY) - (halt >> 1) + vpT;
             if (!in_vprect(pk, sx, sy)) continue;
             s_c.debris++;
-            effect_begin();
             emit_model(d->node, (float)X / 65536.0f - (float)eyeX + (float)vpL,
                        (float)Y / 65536.0f - (float)ALT / 65536.0f * 0.5f - (float)eyeY + (float)vpT,
                        (float)hx, (float)(hy - (halt >> 1)), d->turn[0], d->turn[1], d->turn[2], 0);
-            effect_end();
         }
     }
 
@@ -985,7 +934,7 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
     tagpu_gaf_atlas_frame(&s_atlas);
     /* `tagpu_gaf_atlas_restore_vk` above publishes this atlas's frame list for
        the Vulkan restorer. */
-    memset(s_nv, 0, sizeof s_nv); s_nm = 0; s_neff = 0;
+    memset(s_nv, 0, sizeof s_nv); s_nm = 0;
     s_cLines = s_cSprites = s_cFlash = s_cAtlasFail = s_cOverflow = s_cQuads = 0;
     memset(&s_c, 0, sizeof s_c);
     s_encCur = v->encSprite; s_under = 0; s_mute = 0;
@@ -1132,11 +1081,8 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
 {
     /* THIS PASS ONLY GATHERS AND HANDS OVER -- the feature pass's shape
        (tagpu_feat.c). */
-    int total, taking;
-    /* the effects whose model the native pass could not draw go whole, before
-       anything is counted or handed over */
-    effects_cut();
-    total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3];
+    int total = s_nv[0] + s_nv[1] + s_nv[2] + s_nv[3];
+    int taking;
     /* A FRAME WITH NOTHING TO DRAW HANDS NOTHING OVER. Leaving the previous
        frame's hand-over standing would have the Vulkan lane draw last frame's
        effects over this frame's -- and on the frame a level is torn down, over
