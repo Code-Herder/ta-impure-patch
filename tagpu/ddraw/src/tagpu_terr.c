@@ -381,7 +381,18 @@ static const char* VS =
        runs its corner the other way, which swaps the quad's two texel edges:
        a pixel centre at i + 0.5 samples texel 31 - i. Either way the quad
        spans exactly the tile's 32 texels and both its edges sit on the guard
-       ring, a copy of the tile's own border. */
+       ring, a copy of the tile's own border.
+       THE NUDGE, REFLECTED. TAGPU_EDGE_NUDGE moves every sample the same
+       way on screen, NUDGE/uZoom texels further along the tile, which breaks
+       a sample that falls exactly between two texels towards the next one.
+       Reflected, that is the previous one, so a flipped axis adds twice the
+       nudge back: every flipped sample then reads the texel its reflection
+       reads on the map, which at 0.25x -- where every sample sits on a texel
+       boundary -- is the difference between the mirror and a mirror one
+       texel out of phase. The texel coordinate grows by at most 2/32/0.25 =
+       0.25, into the guard ring and never past it, and it reaches the ring
+       only where the unshifted coordinate already reads the tile's last
+       texel, so no sample reads a colour the tile does not end on. */
     "  vec2 f = step(16384.0, aCell.zw);\n"
     "  vec2 t = aCell.zw - f * 16384.0;\n"
     "  float m = step(8192.0, t.x);\n"
@@ -390,7 +401,7 @@ static const char* VS =
     "  vec2 g = aCell.xy + aCorner;\n"
     "  vec2 aPos = uOrigin + g * 32.0;\n"
     "  vec2 aWorld = (uTile0 + g) * 32.0;\n"
-    "  vec2 aUV = (t * 34.0 + 1.0 + k * 32.0) * uTexel;\n"
+    "  vec2 aUV = (t * 34.0 + 1.0 + k * 32.0 + f * (2.0 * " TAGPU_EDGE_NUDGE " / uZoom)) * uTexel;\n"
     "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - vec2(" TAGPU_EDGE_NUDGE ");\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
