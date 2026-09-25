@@ -1580,11 +1580,18 @@ class FakeWindows:
             pos, want = map(int, re.search(r"Seek\((\d+), 'Begin'\); \$b = New-Object byte\[\] (\d+)",
                                            st).groups())
             return [base64.b64encode(bytes(data[pos:pos + want])).decode()]
-        if st.startswith("if ([IO.File]::Exists(") and "tacli-original" in st and "throw" in st:
+        if st.startswith("if ([IO.File]::Exists(") and "no record of the original" in st:
             p = s[0]
             if (p.lower() in self.files and (p + ".tacli-original").lower() not in self.files
                     and (p + ".tacli-absent").lower() not in self.files):
                 self.fail("RuntimeException", "refusing to replace " + p)
+            return []
+        if st.startswith("if ([IO.File]::Exists(") and "ReadAllLines" in st:
+            p, b, listed, rel = s[0], s[1], s[2], s[4]
+            lines = bytes(self.get(listed) or b"").decode().lower().splitlines()
+            if (p.lower() in self.files and b.lower() not in self.files
+                    and rel.lower() in lines):
+                self.put(b, bytes(self.get(p)))
             return []
         if st.startswith("[IO.File]::WriteAllBytes("):
             self.put(s[0], base64.b64decode(s[1]))
@@ -1693,6 +1700,11 @@ class RemoteRouting(unittest.TestCase):
             self.win.put(f"{self.FOLDER}\\{name}", b"x")
             self.win.put(f"{self.FOLDER}\\{name}.tacli-original", b"x")
         self.win.put(f"{self.FOLDER}\\totala.ini.tacli-absent", b"")
+        # what `remote add` copied: the player's folder had a GPU list and a crash report
+        self.win.put(f"{self.FOLDER}\\tagpu_vk.gpus", b"1 the player's GPU\n")
+        self.win.put(f"{self.FOLDER}\\ErrorLog.txt", b"the player's crash\n")
+        self.win.put(f"{self.FOLDER}\\tacli-state\\copied.txt",
+                     b"ddraw.dll\nimpure.cfg\ntagpu_vk.gpus\nErrorLog.txt\n")
 
     def restore(self):
         tacli.INSTANCES, taremote.SESSION_FACTORY = self.saved
@@ -1878,6 +1890,27 @@ class RemoteRouting(unittest.TestCase):
             with self.assertRaises(taremote.RemoteError):
                 (tacli.Instance("r1").gamedir / "ddraw.dll").upload(Path(f.name))
         self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")), b"x")
+
+    def test_the_first_overwrite_of_a_copied_file_keeps_the_players_original(self):
+        gpus = self.FOLDER + r"\tagpu_vk.gpus"
+        self.main("arm", "r1", "vk.gpus=0 test")
+        self.assertEqual(bytes(self.win.get(gpus + ".tacli-original")), b"1 the player's GPU\n")
+        self.main("arm", "r1", "vk.gpus=0 again")            # the backup stays the original
+        self.main("arm", "r1", "vk.gpus=off")
+        self.assertIsNone(self.win.get(gpus))
+        self.assertEqual(bytes(self.win.get(gpus + ".tacli-original")), b"1 the player's GPU\n")
+
+    def test_a_file_tacli_made_gets_no_backup(self):
+        self.main("arm", "r1", "gui.on")
+        self.main("arm", "r1", "gui.on=off")
+        self.assertIsNone(self.win.get(self.FOLDER + r"\tagpu_gui.on.tacli-original"))
+
+    def test_the_crash_report_rotation_keeps_the_players_copy(self):
+        self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ErrorLog.txt.tacli-original")),
+                         b"the player's crash\n")
+        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ErrorLog.txt.prev")),
+                         b"the player's crash\n")
 
     def test_an_upload_is_checked_by_its_md5(self):
         with tempfile.NamedTemporaryFile() as f:

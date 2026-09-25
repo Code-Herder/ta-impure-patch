@@ -48,11 +48,17 @@ STATE_DIR = "tacli-state"                 # tacli's own files inside the test fo
 MARKER = "tacli-test-folder.txt"          # written by `remote add`; `rm` requires it
 REG_EXPORT = "registry-before.reg"        # the export taken before a launch
 REG_CHECK = "registry-after.reg"          # the export taken after a restore, to compare
+COPIED = "copied.txt"                     # every file `remote add` copied, relative
 
-# Files of the player's copy that a launch replaces. `remote add` records each one's
-# original state beside it -- a copy (`.tacli-original`) or, when the player's folder
-# had none, an empty `.tacli-absent` -- and nothing replaces or deletes one of them
-# while that record is missing (`RemotePath._guard`).
+# NO FILE OF THE PLAYER'S COPY IS REPLACED OR DELETED WITHOUT ITS ORIGINAL BESIDE IT
+# (`RemotePath._guard`). Two tiers:
+#   * PROTECTED, the files a launch replaces: `remote add` records each one's original
+#     state up front -- a copy (`.tacli-original`) or, when the player's folder had
+#     none, an empty `.tacli-absent` -- and nothing touches one while that record is
+#     missing, since a copy made later could be of a file tacli already changed;
+#   * every other file listed in COPIED: the first replace or delete makes the
+#     `.tacli-original` itself and checks its hash first. tacli has not written such
+#     a file before that moment, so what it copies is still the player's original.
 PROTECTED = ("ddraw.dll", "impure.cfg", "totala.ini")
 BACKUP = ".tacli-original"
 ABSENT = ".tacli-absent"
@@ -493,15 +499,20 @@ class RemotePath:
 
     # -- changes
     def _guard(self):
-        """The statement that refuses to replace or delete a protected file of the
-        player's copy while the record of its original is missing."""
-        if self.name.lower() not in PROTECTED:
-            return []
-        p = self.win
-        return [f"if ([IO.File]::Exists({ps_str(p)}) -and -not [IO.File]::Exists("
-                f"{ps_str(p + BACKUP)}) -and -not [IO.File]::Exists({ps_str(p + ABSENT)})) "
-                f"{{ throw ('refusing to replace ' + {ps_str(p)} + ': no backup of the "
-                f"original beside it') }}"]
+        """The statement that runs before this file is replaced or deleted: it keeps
+        the player's original beside it (the two tiers above PROTECTED)."""
+        p, b = ps_str(self.win), ps_str(self.win + BACKUP)
+        if len(self.parts) == 1 and self.name.lower() in PROTECTED:
+            return [f"if ([IO.File]::Exists({p}) -and -not [IO.File]::Exists({b}) -and -not "
+                    f"[IO.File]::Exists({ps_str(self.win + ABSENT)})) {{ throw ('refusing to "
+                    f"replace ' + {p} + ': no record of the original beside it') }}"]
+        listed = ps_str(self.remote.state(COPIED))
+        return [f"if ([IO.File]::Exists({p}) -and -not [IO.File]::Exists({b}) -and "
+                f"[IO.File]::Exists({listed}) -and ([IO.File]::ReadAllLines({listed}) "
+                f"-contains {ps_str(chr(92).join(self.parts))})) {{ Copy-Item -LiteralPath {p} "
+                f"-Destination {b}; if ((Get-FileHash -LiteralPath {p}).Hash -ne (Get-FileHash "
+                f"-LiteralPath {b}).Hash) {{ throw ('the backup of ' + {p} + ' differs from "
+                f"it') }} }}"]
 
     def write_bytes(self, data: bytes):
         """Replace the file whole: written under a temporary name, then moved over
@@ -559,8 +570,8 @@ class RemotePath:
 
     def rename(self, target):
         target = target if isinstance(target, RemotePath) else self.parent / str(target)
-        stmts = target._guard() + [f"Move-Item -LiteralPath {ps_str(self.win)} -Destination "
-                                   f"{ps_str(target.win)} -Force"]
+        stmts = self._guard() + target._guard() + [
+            f"Move-Item -LiteralPath {ps_str(self.win)} -Destination {ps_str(target.win)} -Force"]
         self._run(stmts)
         return target
 
@@ -697,6 +708,12 @@ class Remote:
         if out[0] != out[1]:
             raise RemoteError(f"the copy holds {out[1]} (files bytes) and the player's "
                               f"folder {out[0]}: the test folder is incomplete")
+        # the list `_guard` reads, taken before tacli adds a file of its own
+        self.run([f"$n = {len(self.folder) + 1}; $l = @(Get-ChildItem -LiteralPath {dst} -Recurse "
+                  f"-File -Force | ForEach-Object {{ $_.FullName.Substring($n) }}); "
+                  f"[void][IO.Directory]::CreateDirectory({ps_str(self.state(''))}); "
+                  f"[IO.File]::WriteAllLines({ps_str(self.state(COPIED))}, [string[]]$l)"],
+                 timeout=300.0)
         stmts = []
         for name in PROTECTED:
             f = ntpath.join(self.folder, name)
