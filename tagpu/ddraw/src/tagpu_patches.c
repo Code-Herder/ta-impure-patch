@@ -1549,7 +1549,7 @@ static int fix_composite_scratch(void)
 /* ===== THE BUILD LIST, THE DOWNLOAD-MENU RECORDS, THE OUT-OF-MEMORY TEXT ==================
    Three stock defects a large mod reaches, fixed in both builds (research/notes/tadr-port/
    content-ids.md, "What rides in the same landing"). Their sites are written all together or
-   not at all, per fix, and their stubs share one page. */
+   not at all, per fix, and their stubs come from fix_code with every other fix's. */
 
 #define ENG_ALLOC(name, size) (((void* (__cdecl*)(const char*, unsigned int))0x004D83B0)((name), (size)))
 #define ENG_FREE(p)           (((void (__cdecl*)(void*))0x004D85A0)(p))
@@ -1581,7 +1581,9 @@ typedef struct FIXSITE { unsigned int va; int n; unsigned char was[20]; unsigned
 
 /* The fixes' stubs, each contiguous inside one page. A stub that does not fit the rest of the
    current page opens another, so no fix fails for want of room; every page is kept for the
-   process, since the patched sites jump into them. */
+   process, since the patched sites jump into them. Two installers take stubs: the engine fixes
+   (patch_engine_defects) and then, in the raised build, the limits' weapon sites (lim_sites ->
+   wpn_build); tagpu_limits_install reports the total once both have. */
 static unsigned char* s_fixCode;              /* the page stubs are placed in now             */
 static unsigned int   s_fixCodeUsed;          /* its bytes taken                              */
 static unsigned int   s_fixPages;             /* pages made                                   */
@@ -2990,9 +2992,14 @@ static int fix_victim_caps(void)
        aircraft to its own death explosion: the destructor's grid clear 0x47CBD0 (called at
        0x48682D) empties its cells and sets +0x82 to NULL (0x47CC19) before the explosion
        0x49B000 it calls at 0x486D50, whose projectile has no shooter (proj+0x52 = 0,
-       0x49B03E), so the shooter's skip 0x49A259 would not keep it out. Either test excludes it;
-       bit 14 alone would not on a peer that does not own it, where 0x489CE0 never sets it
-       (0x489EDC..0x489EE5, a local owner only);
+       0x49B03E), so the shooter's skip 0x49A259 would not keep it out. The bucket test is what
+       excludes it in every case, since the clear always runs first. Bit 14 alone would not:
+       the damage receiver skips that write when the owner's player record has a zero first
+       dword (0x489ECC), and the owner gate 0x49A03F..0x49A047 then lets the explosion's area
+       damage run (its projectile carries the dying unit's player, proj+0x66, 0x49B055); and a
+       death that does not come through 0x489CE0 (Send_UnitDeath's direct callers) need not
+       set it. On a peer that does not own the unit the gate skips the explosion's area damage
+       whatever the bits;
      - is not carried (+0x86 is 0) and has its model (+0x9E not NULL: the engine map's death
        guard, 0x486D9E frees it before the alive bit clears);
      - has a footprint +0x76/+0x78, +0x7E/+0x80 of at least one cell each way that meets the
@@ -4351,11 +4358,6 @@ static void patch_engine_defects(void)
               fix_state(air), (unsigned int)(size_t)&s_airServed);
     b[sizeof b - 1] = 0;
     plog(b);
-
-    _snprintf(b, sizeof b, "enginefix: the fixes' stubs take %u bytes in %u page(s) of 4096",
-              s_fixBytes, s_fixPages);
-    b[sizeof b - 1] = 0;
-    plog(b);
 }
 
 void tagpu_apply_patches(void)
@@ -5122,6 +5124,8 @@ int tagpu_limits_install(void)
 #ifndef TAGPU_LIMITS_STOCK
     lim_sites();
 #endif
+    tagpu_logf("enginefix: the fixes' and limits' stubs take %u bytes in %u page(s) of 4096",
+               s_fixBytes, s_fixPages);
     if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be made"); return 0; }
     if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
     if (lim_overlap()) {
