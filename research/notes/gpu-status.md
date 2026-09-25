@@ -9387,7 +9387,9 @@ silently.
    consumer's own render pass. `TRANSFER` is in both scopes because the dump's copy is exactly the
    reader a dependency naming only the sampling consumer would have left out. Not `BY_REGION`: a
    conv draw reads a 3×3 neighbourhood and OUT reads a different image entirely, so neither read is
-   framebuffer-local.
+   framebuffer-local. The dependencies are what the spec requires, but not every driver honours
+   them. AMD's Windows driver drops them for these passes, so `end_pass` records the same ordering
+   again as a pipeline barrier (§2.95).
 2. **`dst_ready` transitioned the destination from `UNDEFINED` unconditionally, including on a
    repaint** — which licenses the driver to discard every texel of the atlas the repaint exists to
    recolour *in place*. It would have blanked exactly the world it was added to avoid blanking. The
@@ -18731,10 +18733,10 @@ the two GPUs:
   percentile 1, differences along texel edges.
 - **Classic++ features** hold the one visible difference: on the AMD card the restored trees
   carry a few off-hue specks (dim magenta, red, blue) near trunks and edges. 2 388 pixels
-  change hue by more than 32; the mean is 2.2 levels and the 99th percentile 27. The same
-  restorer draws the terrain almost identically, and Classic features differ by 12 pixels, so
-  the difference lies in how the card samples the restored feature twin (a mip or filter choice),
-  not in the restorer's arithmetic [INFERRED, not isolated].
+  change hue by more than 32; the mean is 2.2 levels and the 99th percentile 27. The restorer
+  itself caused them: the card's driver dropped the render-pass dependencies between its
+  passes. §2.95 has the diagnosis and the fix; with it, this capture differs by one level at
+  most.
 - **The nanoframe ladder** (G21b's wire): 13 of 74 931 pixels are drawn on one GPU only, so the
   line rule draws the same shape on both. Colours differ by up to 180 because the build colour
   pulses with game time and the two games paused at different ticks.
@@ -18746,5 +18748,109 @@ the two GPUs:
 
 **Not covered.** The hard shadows' picture: they are drawn (logged, stencil-masked), but a
 one-pass capture has black under them, and there is no presented-frame capture on a remote
-instance. Restored units across the two GPUs (above). The 0.877× zoom, since a remote instance
-cannot write `tagpu_zoom.txt`. The validation layer on either machine.
+instance. The 0.877× zoom, since a remote instance cannot write `tagpu_zoom.txt`. The validation
+layer on either machine. (Restored units across the two GPUs are measured in §2.95.)
+
+### 2.95 The restorer's passes and a driver that drops their render-pass dependencies (`tagpu_vk_restore.c` `end_pass`) — G21d
+
+**What was wrong.** On the Windows test setup's AMD card (§2.94), Classic++ damaged restored,
+keyed art. The owner saw it in the UI first: the Impure menu's gear icon, colour smears on the
+main menu's buttons, and the team colours. The feature pass showed off-hue specks on trees. All
+three lanes are keyed, and all three go through the same restorer passes.
+
+**How it was isolated [MEASURED 2026-09-25].** The captures used `restoredump.on` on
+`feat-forest`, with Classic++ armed before launch and the game paused. The dumps are byte
+dumps of the feature lane's base atlas and its restored twin, taken on both machines.
+
+- **The input is identical.** The base atlas is the same bytes on both machines.
+- **The output is not.** The restored twin differs in 2 807 texels (up to 179 levels), in 6 of
+  its 24 frames.
+- **The damage follows the slot grid.** A per-frame map of the batches (frame → batch → slot)
+  puts every damaged frame in a block of its batch's slot grid, mostly the grid's bottom row.
+  That row is the part of the full-viewport draw that the GPU rasterises last. Frames in the
+  other slots of the same batches are byte-identical to the reference setup's.
+- **The block edges are sharp.** In one 37 × 60 frame, rows 31–48 are wrong and every other
+  row is exact. A fault inside the network would spread one texel per layer, so the damage
+  enters at the last layers.
+- **It is a hazard, not arithmetic.** The damaged texels are the same set in every run, but
+  their values change: two runs of the same build differ from each other in 544 of them.
+
+Each variant below was run on the card and compared with the reference setup:
+
+| variant on the AMD card | texels unlike the reference setup |
+|---|---|
+| as shipped (NK 8) | 2 807 |
+| NK 4 | 2 461 |
+| NK 1 (four times the render-pass boundaries) | 3 605 |
+| slicing budget 100 ms (no batch split across frames) | 2 807, the same texels |
+| fp16 activations (against the reference setup's fp16 run) | 5 595 |
+| `LOAD` instead of `DONT_CARE` on the activation attachments | 2 807 |
+| a full pipeline barrier after every restorer render pass | **0** |
+
+On the reference setup, a 0.5 ms budget, which splits every batch across frames, changes
+nothing (0 texels).
+
+**The cause and the fix [SOURCE + MEASURED].** Every restorer pass states its ordering as
+subpass dependencies (`rp_deps`):
+
+- **incoming:** `EXTERNAL → 0`, from fragment-shader reads, colour writes and transfers, to
+  colour writes;
+- **outgoing:** `0 → EXTERNAL`, from colour writes, to fragment-shader reads, colour writes and
+  transfers.
+
+By the spec, that orders FILL → CONV × depth → OUT → the consumer's sample. The card's driver
+does not honour it for these passes.
+
+What sets them apart from the rest of the backend is that their attachments never change
+layout. The activations stay `GENERAL` at both ends and inside the subpass. That this is why the
+driver skips them is **[INFERRED]**. Whether the driver honours the backend's other passes,
+which do transition, is not isolated either: none of §2.94's captures shows a hazard in them,
+and the owner's review of those captures found none.
+
+`end_pass` now ends every render pass in the file (FILL, CONV, OUT and the mip chain). It
+records the same ordering again as a `vkCmdPipelineBarrier`:
+
+- **source:** `COLOR_ATTACHMENT_OUTPUT | FRAGMENT_SHADER`, access colour write;
+- **destination:** `FRAGMENT_SHADER | COLOR_ATTACHMENT_OUTPUT | TRANSFER`, access shader read,
+  colour read and write, and transfer read and write.
+
+A pipeline barrier's scopes are the whole queue in submission order, so the barrier covers:
+
+- the next pass's sample (RAW);
+- the next pass's write of the same attachment (WAW);
+- a later pass writing what this one sampled (WAR, through the fragment-shader source stage);
+- `dump_step`'s copy.
+
+The subpass dependencies stay. They are what the spec requires, and the OUT and mip passes'
+layout transitions hang on them.
+
+**With the fix [MEASURED 2026-09-25, the same scenes on both machines].**
+
+- **Features.** The restored twin is byte-identical to the reference setup's at NK 8 and at
+  NK 1. The reference setup's own output is unchanged by the barrier (0 texels).
+- **The rendered feature pass.** Its `.ab` capture differs from the reference setup's in
+  22 672 of 927 200 pixels, by one level at most. Before the fix: 217 004 pixels, 6 252 of them
+  past 32 levels, up to 84. The one-level residue is the twin's filtering, which Classic
+  features show too (§2.94).
+- **Units** (`nanoframe-ladder`, `native.on=all wrecks`, 60 frames restored). The base atlas is
+  identical on both machines. The restored twin plus its mip chain (22 MB) differs in 11
+  bytes: four texels of level 0 by one level, plus the border copies and mip texels built from
+  them. This is float rounding between the two GPUs.
+- **GUI.** The UI atlas fills lazily and packs in a different order on each machine, so its
+  texels are compared by content. A texel is matched to one in the other atlas whose 25 × 25
+  source window — the network's receptive field — has the same indices.
+  - Of 99 268 matched texels, 98 730 are identical, 336 differ by one level, and 202 by two to
+    six.
+  - The bug's damage ran to 216 levels, in blocks.
+  - The small residue lies where a matching window can still differ: the frame's rect decides
+    the zero padding, and the colour-key fill searches the whole frame **[INFERRED]**.
+
+**The cost.** On the reference setup, the four feature batches of the first restore take
+8 slices both before and after the fix. On the AMD card they take 16 slices of the 12 ms budget
+(246 ms of wall time). That is paid once per atlas fill, and a settled scene restores nothing.
+
+**Not covered.**
+- A before/after of the shell menus' own pictures. The owner's report is the before; the
+  after is theirs to look at.
+- Other AMD cards and driver versions.
+- The validation layer on either machine.

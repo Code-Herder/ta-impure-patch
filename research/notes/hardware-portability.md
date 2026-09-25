@@ -520,11 +520,15 @@ the difference is counted and reported, not gated.
   - Classic terrain 0 px of 7.3 M, features 12 px by one level, markers 0.
   - Classic++ terrain within one level at the 99th percentile.
   - Units differ in 2.4 % of their pixels, along polygon edges.
-  - Classic++ features carry off-hue specks on the AMD card, 2 388 pixels past 32 levels of hue:
-    a sampling difference, not the restorer's arithmetic [INFERRED].
+  - Classic++ features carried off-hue specks on the AMD card, 2 388 pixels past 32 levels of
+    hue. The restorer caused them, and it damaged the restored UI and team colours the same
+    way: the card's driver drops the render-pass dependencies between the restorer's passes.
+    An explicit pipeline barrier after each of them fixes it. After the fix the restored
+    feature atlas is byte-identical to the reference setup's, and the capture differs by one
+    level at most ([GPU status](gpu-status.html) §2.95).
   - G21b's nanoframe wire has the same shape on both (13 px).
 - **Not covered.** The hard shadows' picture (drawn and logged, but a one-pass capture has
-  nothing under them), restored units across the two GPUs, and the 0.877× zoom.
+  nothing under them), and the 0.877× zoom.
 
 ---
 
