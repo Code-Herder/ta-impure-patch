@@ -326,7 +326,7 @@ made, or its page cannot be made writable. Each of the twenty, and why:
 | weapon IDs `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | simulation | the `0x0F` hit flag is a wire format; in the raised build these are the raise's own rows |
 | one hit a victim an explosion `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | simulation | who is damaged, and how much |
 | the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
-| stacked aircraft `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` | simulation | who is damaged: an aircraft holding no cell takes the splash it stood in |
+| stacked aircraft `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` | simulation | who is damaged: an aircraft no in-rect slot names takes the splash it stood in |
 | line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440`, the sight emitter `0x4825B0` (sixteen sites in 25 rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps, what a unit sees |
 | line of sight in local code: the cursor picker, the build cursor's site test, the feature helper, the radar rebuild's projectile dots, five particle leaves, positional sound (27 sites) | local | a cursor, a draw, a sound |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
@@ -1730,12 +1730,13 @@ within 2 s.
 in slot B `[cell+2]` through `0x47CF98` (`cmp eax,2; jne 0x47D0D5`, the stamping continuing at
 `0x47CFA1 test edi,edi`); any other value stamps no cell. For each cell of the footprint
 (`0x47CFB3..0x47D042`) an empty slot B takes the unit. A held one is contested at `0x47CFDA`: when
-the incumbent's player record (`+0x96`) is not NULL and its `+0x73` is 3 [INFERRED: remote], the
-newcomer takes the cell (`0x47D010..0x47D03A`); otherwise the incumbent keeps it
+the incumbent's player record (`+0x96`, dereferenced unconditionally) has a non-zero first dword
+(`0x47CFE0 cmp dword [ecx],0`) and a `+0x73` of 3 [INFERRED: remote], the newcomer takes the cell (`0x47D010..0x47D03A`); otherwise the incumbent keeps it
 (`0x47CFEB..0x47D00E`). Either way the unit left without the cell gets `+0x110` bit 27
 (`0x8000000`) and the holder bit 26 (`0x4000000`). Area damage reads only the two slots of each
-cell (above), and so does the direct-hit test `0x49B090`, so an aircraft whose every cell another
-aircraft holds is found by neither.
+cell (above), and so does the direct-hit test `0x49B090`, so an aircraft no in-rect slot names is
+found by neither: one holding no cell, or holding cells only outside the rect while others hold
+the ones inside it.
 
 **The walk's end.** The row loop falls through to `0x49A664` (`0x49A65E jl 0x49A1E9` not taken), and
 an empty rect jumps there from `0x49A1DF` (`jge`). `0x49A664..0x49A66E` is `mov eax,[ebp+8]; mov
@@ -1777,12 +1778,25 @@ records them), distance test, falloff and damage with no arithmetic of ours:
 
 `air_first` builds the call's candidate list, in the frame B1's wrapper `dmg_area` already holds
 (32 slots inline, then a block from `0x4D83B0` freed when the call returns), from a pool of airborne
-slots: the rebuild refills the pool at every step with every unit whose `+0x110 & 0x10000003` is
+slots: the rebuild refills the pool at every step with every unit whose `+0x110 & 0x30000003` is
 `0x10000002`, and the stamp's airborne path adds each unit it files. A slot is a candidate when it is
-below the array's count (`u16 main+0x14351`), alive and airborne as above, uncarried (`+0x86` 0),
-its model `+0x9E` not NULL (the death guard, `0x4866D0` below), its bucket `+0x82` not the off-map
-bucket `*(main+0x142B7)`, its footprint (`+0x76`, `+0x78`, `+0x7E`, `+0x80`) at least one cell each
-way and meeting the blast's rect, and not in the call's unit set. The rect is `0x49A120`'s own: the
+below the array's count (`u16 main+0x14351`) and its unit
+
+- is alive and airborne by slot B's own rule: `+0x110 & 0x30000003` is `0x10000002`, since the stamp
+  sends a unit with bit 29 down its yardmap path to slot A (`0x47CD5A`) whatever its `& 3`;
+- is in the grid and not dying: its bucket `+0x82` neither NULL nor the off-map bucket
+  `*(main+0x142B7)`, and no bit 14 (pending death). Stock never offers a dying aircraft to its own
+  death explosion: the destructor's grid clear `0x47CBD0` (called at `0x48682D`) empties its cells
+  and sets `+0x82` to NULL (`0x47CC19`) before the explosion `0x49B000` it calls at `0x486D50`, and
+  that explosion's projectile has no shooter (`proj+0x52` = 0, `0x49B03E`), so the shooter's skip
+  `0x49A259` would not keep it out. Either test excludes it; bit 14 alone would not on a peer that
+  does not own the unit, since the damage receiver sets it for a local owner only
+  (`0x489EDC..0x489EE5`);
+- is uncarried (`+0x86` 0) and has its model (`+0x9E` not NULL, the death guard, `0x4866D0` below);
+- has a footprint (`+0x76`, `+0x78`, `+0x7E`, `+0x80`) at least one cell each way that meets the
+  blast's rect, and is not in the call's unit set.
+
+The rect is `0x49A120`'s own: the
 radius `(u16)w[+0xD6] >> 1`, `radius/16 + 1` cells about the blast point's cell (`at+0x02`, `at+0x0A`,
 each truncated /16), the low ends raised to 0 and the high ends lowered to `W`, `H`
 (`0x49A149..0x49A1C7`). `air_next` re-tests every one of those on the live unit when it hands it
@@ -1794,17 +1808,29 @@ pool below 65 536 entries because a slot enters it at most once (a membership by
 The pool is written by the rebuild on the game thread and by the stamp, which also runs from the
 network pump and from a saved game's restore on the loader thread, and read by `air_first` on
 whichever thread runs area damage: one critical section covers every read and write of it, held
-only inside our C, the one engine call under it being the allocator `0x4D83B0`. A call's list lives
+only inside our C, the one engine call under it being the allocator `0x4D83B0`, which takes its own
+critical section after ours and never the reverse. The pump at `0x4954C8` runs before the rebuild,
+so an explosion from its `0x0E` receiver sees the previous step's pool plus the units stamped since:
+a stale pool can only miss a victim, since every hand-over is decided on the live unit. **A failed
+allocation** is the engine's out-of-memory exit whatever the handler slot holds: `0x4D83C0` calls
+the handler at `[0x5289BC]` (`0x4D8409..0x4D8412`) and returns NULL when the slot is empty, and the
+slot's setter `0x4D8E50` clears it around some of the engine's own allocations (`0x495ABE` until
+`0x49E6F0` puts `0x49E700` back from `0x495AFD`; `0x4B3B75`..`0x4B3B8F`; `0x4B4146`..`0x4B422B`), so
+another thread's failure inside such a window returns NULL; `eng_alloc_or_exit` then calls
+`0x49E700` itself, which ends the process. B1's seen-sets grow through it too. A call's list lives
 in its frame, so the nested call from the interceptor tail `0x49A764`, which runs after the serving,
-has its own. **What it can miss**: a unit whose `+0x110` turns airborne mid-step through a writer
-not followed by the stamp — 150 instructions write `+0x110`, too many to prove each one is — holds
-no slot either, and stays stock's until the next rebuild. **The counter** counts aircraft handed to
-the engine, not aircraft damaged: stock's own filters still apply, and a dying aircraft is handed to
-its own death explosion, whose `proj+0x52` is itself, and skipped at `0x49A259` as stock skips it.
+has its own. **What it can miss**: a unit whose `+0x110` turned airborne since the last rebuild
+through a writer not followed by the stamp — 150 instructions write `+0x110`, too many to prove
+each one is — holds no slot either, and stays stock's until the next rebuild. **The counter** counts aircraft handed to
+the engine, not aircraft damaged: stock's own filters (the distance test above all) still apply.
 
 **MEASURED, new build**, the same fixture and timing: the first burst (429) took all ten from 150 HP to
 10–16, six of them holding no cell at the damage tick; the second (450) killed all ten, five holding
-none. The counter read 40 in that run and 37 on the stock-limits build.
+none. The counter read 40 in that run and 37 on the stock-limits build. After B1's landing was
+merged in, with the candidate rule above (bit 29, bit 14, a real bucket): the raised build installed
+183 sites, the stubs 2 992 bytes in one page; the first burst took all ten from 150 to 11–17, the
+second killed them, the counter read 10; the stock-limits build installed its fixes' 57 sites, stubs
+3 120 bytes, every fix armed or in the table, to the menu.
 
 **MEASURED, cost** (`scenarios/air-war.json`, 200 aircraft over two bases, 2 100 ticks, scratch
 timers around our functions in the raised build): the rebuild 18.5–23.4 µs a tick (it scans every
@@ -1820,7 +1846,13 @@ and 1509 at its GameTime 839 and the host applied both (150 → 19) at its 851, 
 remote unit's HP word `+0x108` reads 0 on a peer that does not own it, before any damage and after
 (and `+0x104` reads 1.0), so there is no second HP to compare: the host's is the only one. Paused
 after the fight, both peers held the same five atlases (1502, 1503, 1505, 1509, 1510) and the
-CORFLAK.
+CORFLAK. **One caller is not gated by the owner**: the fire spread `0x49A0C0` (from the feature
+tick at `0x423BE0`) builds a zeroed projectile on its stack with owner 10 (`proj+0x66`) and no
+shooter (`proj+0x52` = 0) and calls `0x49A120` itself (`0x49A109`), past `0x499EB0`'s local-owner
+test, so every peer computes a burning feature's damage. Stock already does that for the slot
+holders, which each peer picks by its own tie-break (`0x47CFDA`: a remote incumbent loses the
+cell); B2 extends it to the stacked aircraft, and since it serves every airborne unit in the rect
+that no in-rect slot names, the set damaged is the same whichever unit each peer's tie-break kept.
 
 ### Line of sight at the map's edge — `UnitInPlayerLOS 0x465AC0`, `PositionInPlayerMapped 0x408090` [DISASSEMBLED + MEASURED 2026-09-25]
 
@@ -8065,7 +8097,9 @@ So a reader that gates on the alive bit sees the object freed while the bit stil
 (`+0x8A`, the first carried unit) then deals it 30 000 (`0x7530`) through `0x489BB0(attacker,
 victim, damage, kind, 0)` at `0x48680B`, the attacker its own last attacker `+0xF0`, the kind 3 when
 the record's kind nibble is 3 and 6 otherwise (`0x4867DA..0x4867EC`), and detaches it
-(`0x48681D`). Every hit writes its kind into the victim's `+0xF5` (`0x489DAC`), and the unit tick
+(`0x48681D`). A hit the receiver `0x489CE0` accepts writes its kind into the victim's `+0xF5`
+(`0x489DAC`); one it drops at `0x489D39..0x489D53` (no unit, not alive, bit 14 already set) does not,
+nor does a repair (kind `0x0A`, which adds HP and returns at `0x489D8A`). The unit tick
 reaps a pending-death unit through `Send_UnitDeath 0x4864B0(unit, +0xF5)` (`0x48AFD1`).
 `Send_UnitDeath` takes the severity as `(100·(−hp)/maxhp + byte +0xF7) / 2`, clamped to 1..100
 (`0x48655E..0x4865AB`; maxhp the def's `+0x1FA`), and asks the `Killed` script for the corpse type
