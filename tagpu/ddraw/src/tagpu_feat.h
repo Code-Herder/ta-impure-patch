@@ -56,10 +56,19 @@ void tagpu_feat_render(const TAGPU_FXVIEW* v);
 #define TAGPU_FEAT_NATTR  5
 #define TAGPU_FEAT_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28}, {4,1,36} }
 /* Added to a vertex's mode (TAGPU_FXMODE_OPAQUE 1 / _ALPHA 2): the quad is the
-   map edge's mirror of a feature, drawn in the edge's tone and never inside the
-   map. The fragment stage tests `mode > 3.5`, so the flag is a value above
-   every plain mode. */
+   map edge's mirror of a feature, drawn in the edge's tone. The fragment stage
+   reads the mode as bits (tagpu_feat.c's FS). */
 #define TAGPU_FEAT_MIRROR 4
+/* ...and which copy of the map a mirrored quad belongs to, so the fragment
+   stage keeps it inside that copy: OFFROW when the copy's rows lie past the
+   map's top or bottom, and the copy's column index q (the map is copy 0, its
+   reflection to the left -1, to the right 1) above COPY_SHIFT, biased by
+   COPY_BIAS so the field is never negative. The gather emits no quad of a copy
+   outside [-COPY_BIAS, COPY_BIAS), so every mode stays under 2^15 and a float
+   vertex attribute carries it exactly. */
+#define TAGPU_FEAT_OFFROW     8
+#define TAGPU_FEAT_COPY_SHIFT 4
+#define TAGPU_FEAT_COPY_BIAS  1024
 
 typedef struct TAGPU_FEATHAND {
     /* THE FRAME THIS WAS PUBLISHED ON. `tagpu_feat_handover` refuses any other
@@ -86,6 +95,8 @@ typedef struct TAGPU_FEATHAND {
     int   restored, fog;
     float fogOrgX, fogOrgY, fogCols, fogRows;
     float mapPxW, mapPxH;                  /* uMapPx: the map on the tile grid */
+    int   clip;                            /* uClip: 1 while the mirror draws, so the
+                                              map's own quads stay in its columns */
 
     /* The texels, as CPU-side bytes. Each carries the serial that says when
        it last changed, so the Vulkan pass re-sends on a change and not per

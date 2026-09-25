@@ -113,6 +113,9 @@
 
 #define MODE_OPAQUE TAGPU_FXMODE_OPAQUE
 #define MODE_ALPHA  TAGPU_FXMODE_ALPHA
+/* a constant spliced into a shader string, as the preprocessor spells it */
+#define FEAT_S(x)   FEAT_S2(x)
+#define FEAT_S2(x)  #x
 
 /* THE BUCKETS GROW; THESE ARE ONLY WHERE THEY START. One anchor is one quad
    (more with sub-frames), and how many anchors are on screen is the map's
@@ -367,25 +370,40 @@ static const char* FS =
     /* declared LAST, so the block offsets every other uniform already has are
        the ones the generated header printed before it */
     TAGPU_GLSL_EDGE_UNIFORMS
+    "uniform int uClip;\n"            /* 1 while the mirror draws (below) */
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_EDGE_FN
     "void main(){\n"
-    /* THE MAP EDGE'S MIRROR (mode + TAGPU_FEAT_MIRROR): the same texels in the
-       edge's tone and nothing else -- no fog of war and no light, as for the
-       mirrored ground under it (tagpu_terr.c). It is scenery past the map and
-       never covers the map itself: vWorld is the point drawn on the tile
-       grid, and a mirrored tree just south of the edge stands in FRONT of the
-       last rows by the painter's order, so without the test its top would
-       hide the map's own features. The hole is the base atlas's, as below. */
-    "  if (vCM.y > 3.5) {\n"
-    "    if (all(greaterThanEqual(vWorld, vec2(0.0))) && all(lessThan(vWorld, uMapPx))) discard;\n"
+    "  int m = int(vCM.y + 0.5);\n"
+    /* THE MAP EDGE'S MIRROR (TAGPU_FEAT_MIRROR): the same texels in the edge's
+       tone and nothing else -- no fog of war and no light, as for the mirrored
+       ground under it (tagpu_terr.c). EACH COPY OF THE MAP DRAWS ONLY IN ITS
+       OWN COLUMNS, as the ground does: a turned copy is its source reflected,
+       and a quad that reached across a fold would lay one copy's feature over
+       the next copy's reflection of it. And a copy of rows past the top or
+       bottom never draws on the map's own rows: there it would cover the map
+       -- a mirrored tree just south of the edge stands in FRONT of the last
+       rows by the painter's order -- or, in a corner, the side copy that is
+       the reflection of that map. vWorld is the sample's own point on the tile
+       grid (the gather moves the quad, not the point). The hole is the base
+       atlas's, as below. */
+    "  if ((m & " FEAT_S(TAGPU_FEAT_MIRROR) ") != 0) {\n"
+    "    float x0 = float((m >> " FEAT_S(TAGPU_FEAT_COPY_SHIFT) ") - " FEAT_S(TAGPU_FEAT_COPY_BIAS) ") * uMapPx.x;\n"
+    "    if (vWorld.x < x0 || vWorld.x >= x0 + uMapPx.x) discard;\n"
+    "    if ((m & " FEAT_S(TAGPU_FEAT_OFFROW) ") != 0 && vWorld.y >= 0.0 && vWorld.y < uMapPx.y) discard;\n"
     "    vec4 mb = texture(uBase, vUV);\n"
     "    if (mb.a < 0.5) discard;\n"
     "    vec4 mt = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
-    "    float ma = (int(vCM.y + 0.5) == 6) ? 0.5 : 1.0;\n"
+    "    float ma = ((m & 3) == 2) ? 0.5 : 1.0;\n"
     "    frag = vec4(taEdge(mt.a > 0.5 ? mt.rgb : mb.rgb, vWorld) * ma, ma);\n"
     "    return;\n"
     "  }\n"
+    /* THE MAP'S OWN, IN THE MAP'S OWN COLUMNS while the mirror draws: past a
+       side edge the picture is the map reflected, and a tree's overhang there
+       would cover the reflection of the tree itself. Past the top and bottom
+       the copies stand upright, not reflected, so the painter's order stands
+       there and the overhang is kept. Under a black edge nothing is clipped. */
+    "  if (uClip == 1 && (vWorld.x < 0.0 || vWorld.x >= uMapPx.x)) discard;\n"
     /* features are terrain furniture: the engine draws them under the fog
        overlay, so they stay visible in grey */
     TAGPU_GLSL_FOG_DISCARD
@@ -395,7 +413,7 @@ static const char* FS =
        base's alpha is 0 exactly where the frame's index is its key (NEAREST,
        the texel the index was) */
     "  if (b.a < 0.5) discard;\n"
-    "  float a = (int(vCM.y + 0.5) == 2) ? 0.5 : 1.0;\n"
+    "  float a = ((m & 3) == 2) ? 0.5 : 1.0;\n"
     /* the twin's colour where the lazy restore has painted it (alpha 1 --
        tagpu_gaf.h), the base atlas's otherwise -- always, under Classic --
        times the GROUND's lambert at the anchor (a billboard has no normal of
@@ -452,6 +470,9 @@ static int   s_mute = 0;                /* passive: count, emit nothing        *
 static int   s_cBody, s_cShadow, s_cAtlasFail, s_cOverflow;
 static int   s_cMBody, s_cMShadow;     /* the mirror's frames, apart          */
 static int   s_ownable = 0;            /* the wreck pass is up: we may own it  */
+/* this gather draws the mirror, so its map quads keep to the map's columns;
+   set by the gather before the one publish that reads it */
+static int   s_clip = 0;
 
 static void put_vert(int b, float x, float y, float u, float v, float c, int mode,
                      float wx, float wz, float lam)
@@ -493,7 +514,7 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
                 const unsigned char* sg = tagpu_gaf_frame_sane(arr[k]);
                 int m = mode;
                 if (!sg) continue;
-                if ((mode & 3) == MODE_OPAQUE && sg[TAGPU_GF_SUBALP]) m = MODE_ALPHA | (mode & TAGPU_FEAT_MIRROR);
+                if ((mode & 3) == MODE_OPAQUE && sg[TAGPU_GF_SUBALP]) m = MODE_ALPHA | (mode & ~3);
                 emit_frame(v, sg, sx, sy, wax, waz, m, lam, flip, depth + 1);
             }
             return;
@@ -745,10 +766,10 @@ static int feat_bail(void)
    Past the map, the view shows the MAP'S OWN features reflected with the
    ground under them (tascene-view.html, buildFeatures): the map as its TNT
    lays it out (tagpu_packet.h TAGPU_PK_MAPFEAT), never the live anchors -- a
-   tree burnt, reclaimed or lost before a save, or a wreck a scenario placed,
-   is the game's, not the map's. The table arrives once a level; this pass
-   keeps its own copy, bucketed by row and ordered by column inside each row,
-   keyed on the level it came from. */
+   tree burnt, reclaimed or lost before a save, a wreck a scenario placed, or
+   a feature the .ota schema placed, is the game's, not the map file's. The
+   table arrives once a level; this pass keeps its own copy, bucketed by row
+   and ordered by column inside each row, keyed on the level it came from. */
 /* THE DIMENSION BOUND, the one this pass already refuses a map past
    (`mapW > 4096` in the gather): every array below is sized by it, so an index
    under the map's own dimension is under the array's. */
@@ -842,74 +863,116 @@ int tagpu_feat_mapfeat_sync(const TAGPU_PACKET* pk, int mirror)
 /* THE DEPTH KEYS' TWO RECTS. The map's own features take their keys over the
    engine's sweep rect CLAMPED to the map (r0/rows/c0/cols), with the mirror on
    or off: an on-map key never moves with the edge setting, so the map sorts
-   against units and 3D wrecks exactly as it does without the mirror. The
-   mirrored ones sit in the rest of the UNCLAMPED sweep (ur0/urows/uc0/ucols)
-   and take keys that continue that order across the edge (mirror_key). */
+   against units and 3D wrecks exactly as it does without the mirror. A
+   mirrored copy keys as its source (mirror_key); the flats of the mirror's
+   rows above and below the map take their band over the UNCLAMPED sweep
+   (ur0/urows/uc0/ucols). */
 typedef struct {
     int r0, rows, c0, cols; float span;      /* clamped: the map's own keys */
     int ur0, urows, uc0, ucols;              /* unclamped: the whole sweep  */
+    int tuc0;                                /* a turned copy's columns:
+                                                [tuc0, tuc0 + ucols), the sweep
+                                                mirrored about the view
+                                                (mirror_gather)             */
 } KEYRECT;
 
-/* A MIRRORED FEATURE'S KEY, and it never moves a key on the map. The painter's
-   order over the whole sweep is row by row, left to right, across the edge;
-   the map's keys already encode it inside the clamped rect, and a mirrored
-   cell's key is placed where that order puts it without touching them:
-   - TALL: the map's row key (3 + 4 rel, above this row's units, which reach
-     1 + 4 rel + 1.8) plus a column term. On the map that term is
-     1.5 (col - c0) / cols, in [0, 1.5); a mirrored cell LEFT of the clamped
-     columns takes [-0.19, -0.01) -- still above every unit of its row -- and
-     one RIGHT of them [1.5, 1.9) -- still below the next row's features, and
-     at the last row the band allows (rel = rows + 8) below the effects' keys,
-     which start at 3 + 4 (rows + 8) + 2.2 (tagpu_native.c `fxKey`, less the
-     models' 1.8). Rows are 4 apart and the column term spans 2.09, so rows
-     never interleave.
-   - FLAT: the map's are 0.40 + 0.10 f, f the row-major fraction over the
-     clamped rect, in [0, 1). Rows above that rect take f in [-0.6, -0.1) and
-     rows below it [1.1, 1.6), each row-major over the whole sweep, and a
-     side cell on one of the rect's own rows goes into the gap between that
-     row's last on-map key and the next row's first: f + 1/span in there is
-     the painter's order exactly. Every one stays inside the particles'
-     bracket, 0.30 below and 0.60 above, shadows (0.03 under) included. */
-static float mirror_key(const TAGPU_FXVIEW* v, const KEYRECT* k, int row, int col, int flat)
+/* DrawGameScreen starts its feature sweep this many columns left of the
+   eye's (`0x469748..0x4697B3`, exe-reverse-engineering.md) and sweeps the
+   view's columns + 12 (OFF_SWEEP_C): 10 columns left of the view, 2 right. */
+#define SWEEP_COL_LEAD 10
+
+/* THE MAP'S OWN KEY for an anchor at (row, col) of the clamped rect, and the
+   one function that computes it: the mirror takes the same key for a copy
+   (mirror_key), so the two cannot round apart.
+   - FLAT, the backdrop band: 0.40 + 0.10 f, f the row-major fraction over
+     the clamped rect, in [0, 1) -- above the particle layers the engine draws
+     before the pre-pass (0..2) and below those after it (3..4).
+   - TALL, the row key the painter's sweep implies: above this row's units
+     (1 + rel*4), below the next row's, with the column fraction
+     1.5 (col - c0) / cols for left to right inside the row. The engine's
+     edge clamps keep rel inside [0, sweepRows), the same range the unit
+     gather uses; clamping to the band the frame's keys were sized for (rows
+     + the gather's row slack) means no arithmetic here can ever push a
+     feature into the effects band above it.
+   TWO FLATS OF ONE ROW CAN TIE IN THE DEPTH BUFFER. Neighbouring columns are
+   0.1/span apart in the key; the 24-bit buffer resolves about 1.2e-7 of the
+   frame's depth scale (tagpu_native.c `depthScale`, some 360 at 1x and 890
+   at 0.25x at 1024x768), so a key step under ~4e-5 at 1x or ~1e-4 at 0.25x
+   is not a step. Where two such flats overlap, VK_COMPARE_OP_LESS keeps the
+   one drawn first -- the left one, the anchors going left to right. */
+static float map_key(const TAGPU_FXVIEW* v, const KEYRECT* k, int row, int col, int flat)
 {
-    const int L = k->c0, R = k->c0 + (k->cols > 0 ? k->cols : 0);
-    const int T = k->r0, B = k->r0 + (k->rows > 0 ? k->rows : 0);
-    const float left = (float)(L - k->uc0 > 1 ? L - k->uc0 : 1);
-    const float right = (float)(k->uc0 + k->ucols - R > 1 ? k->uc0 + k->ucols - R : 1);
     if (flat) {
-        float f;
-        if (row < T || row >= B || k->cols <= 0) {
-            /* above or below the clamped rect -- or beside a rect with no
-               columns at all -- row-major over this band of the sweep */
-            const int b0 = row < T ? k->ur0 : row >= B ? B : T;
-            const int b1 = row < T ? T : row >= B ? k->ur0 + k->urows : B;
-            const float u = ((float)(row - b0) * (float)k->ucols + (float)(col - k->uc0)) /
-                            ((float)(b1 - b0 > 1 ? b1 - b0 : 1) * (float)(k->ucols > 1 ? k->ucols : 1));
-            f = row < T ? -0.6f + 0.5f * u : row >= B ? 1.1f + 0.5f * u : u;
-        } else if (col < L) {
-            f = ((float)(row - k->r0) * (float)k->cols - 1.0f +
-                 0.55f + 0.4f * (float)(col - k->uc0) / left) / k->span;
-        } else {
-            f = ((float)(row - k->r0) * (float)k->cols + (float)k->cols - 1.0f +
-                 0.05f + 0.4f * (float)(col - R) / right) / k->span;
-        }
+        float f = ((float)(row - k->r0) * (float)k->cols + (float)(col - k->c0)) / k->span;
         return 0.40f + 0.10f * f;
     } else {
         int rel = row - v->r0;
-        float c;
         if (rel < 0) rel = 0;
         if (rel > v->rows + 8) rel = v->rows + 8;
-        if (col < L)      c = -0.19f + 0.18f * (float)(col - k->uc0) / left;
-        else if (col < R) c = 1.5f * ((float)(col - k->c0) / (float)k->cols);
-        else              c = 1.5f + 0.4f * (float)(col - R) / right;
-        return 3.0f + (float)rel * 4.0f + c;
+        return 3.0f + (float)rel * 4.0f + 1.5f * ((float)(col - k->c0) / (float)k->cols);
     }
 }
 
-/* one of the map's anchors, mirrored to sweep cell (row, col) */
+/* A MIRRORED FEATURE'S KEY IS ITS SOURCE'S, AS COPY 0 OF ITS ROW TAKES IT.
+   `col` is the source's own column, whatever copy the feature stands in, so
+   every copy of a row stacks its features exactly as copy 0 does: the same
+   keys, the same ties in the depth buffer (map_key), and the same order of
+   emission (mirror_gather), whichever way round the copy is.
+   - ON THE MAP'S OWN ROWS copy 0 is the map, and the key is map_key: a side
+     copy is the map's picture reflected, overlaps and ties included.
+   - ABOVE AND BELOW the clamped rect copy 0 is the upright band of the
+     mirror, and a TALL key is map_key's rule on its row. A FLAT one takes
+     f in [-0.6, -0.1) above and [1.1, 1.6) below, row-major over the whole
+     sweep; the map's flats are in [0, 1), so the three bands never overlap
+     and the map's own features, which reach into the band above, stay in
+     front of it as the painter's order puts them. Every flat stays inside
+     the particles' bracket, 0.30 below and 0.60 above, shadows (0.03 under)
+     included.
+   The source column is inside the clamped columns for every copy the view
+   can show: the camera keeps the view's centre on the map (tagpu_zoom.c),
+   so the reflection of what the view shows past an edge is on the map in
+   view, and its sweep holds the sources. A column outside them keys as the
+   nearest inside -- a copy only the sweep's margins reach. Different copies
+   of one source share a key and never a sample: the fragment stage keeps
+   each copy inside its own columns. */
+static float mirror_key(const TAGPU_FXVIEW* v, const KEYRECT* k, int row, int col, int flat)
+{
+    const int T = k->r0, B = k->r0 + (k->rows > 0 ? k->rows : 0);
+    if (k->cols > 0 && k->span > 0.0f) {
+        const int L = k->c0, R = k->c0 + k->cols;
+        col = col < L ? L : col >= R ? R - 1 : col;
+        if (!flat || (row >= T && row < B)) return map_key(v, k, row, col, flat);
+    } else {
+        /* no column of the map in the sweep: the camera never leaves one,
+           and the keys run over the whole sweep instead */
+        const int L = k->uc0, R = k->uc0 + (k->ucols > 1 ? k->ucols : 1);
+        col = col < L ? L : col >= R ? R - 1 : col;
+        if (!flat) {
+            int rel = row - v->r0;
+            if (rel < 0) rel = 0;
+            if (rel > v->rows + 8) rel = v->rows + 8;
+            return 3.0f + (float)rel * 4.0f + 1.5f * ((float)(col - L) / (float)(R - L));
+        }
+    }
+    {
+        /* a flat above or below the clamped rect -- or beside a rect with no
+           columns at all -- row-major over this band of the sweep */
+        const int b0 = row < T ? k->ur0 : row >= B ? B : T;
+        const int b1 = row < T ? T : row >= B ? k->ur0 + k->urows : B;
+        const float u = ((float)(row - b0) * (float)k->ucols + (float)(col - k->uc0)) /
+                        ((float)(b1 - b0 > 1 ? b1 - b0 : 1) * (float)(k->ucols > 1 ? k->ucols : 1));
+        const float f = row < T ? -0.6f + 0.5f * u : row >= B ? 1.1f + 0.5f * u : u;
+        return 0.40f + 0.10f * f;
+    }
+}
+
+/* one of the map's anchors, mirrored to sweep cell (row, col); `copy` is
+   its mode bits past the plain mode (TAGPU_FEAT_MIRROR and the copy it
+   belongs to, tagpu_feat.h) */
 static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
                            const char* fdefs, int nDefs, int shadowsOn,
-                           const KEYRECT* k, int row, int col, int flipX, int flipY)
+                           const KEYRECT* k, int row, int col,
+                           int flipX, int flipY, int copy)
 {
     const char* def;
     const char* shadSeq;
@@ -940,7 +1003,7 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
     waz = flipY ? (row + 1) * 16 - hz + m->lift : row * 16 + hz - m->lift;
     sx = wax + 128 - v->eyeX;
     sy = waz + 32 - v->eyeY;
-    enc = mirror_key(v, k, row, col, flat);
+    enc = mirror_key(v, k, row, m->col, flat);
     shadSeq = *(const char* const*)(def + FD_SHADSEQ);
     bodySeq = *(const char* const*)(def + FD_BODYSEQ);
     animating = (mask & 2) != 0;
@@ -955,7 +1018,7 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
                 s_bucketCur = B_MSHADOW;
                 s_encCur = enc - (flat ? 0.03f : 0.3f);
                 emit_frame(v, g, sx, sy, wax, waz,
-                           ((mask & 8) ? MODE_ALPHA : MODE_OPAQUE) | TAGPU_FEAT_MIRROR,
+                           ((mask & 8) ? MODE_ALPHA : MODE_OPAQUE) | copy,
                            1.0f, flipX, 0);
             }
         }
@@ -966,7 +1029,7 @@ static void mirror_feature(const TAGPU_FXVIEW* v, const TAGPU_PK_MAPFEAT* m,
             if (g) {
                 s_bucketCur = B_MBODY; s_encCur = enc;
                 emit_frame(v, g, sx, sy, wax, waz,
-                           ((mask & 4) ? MODE_ALPHA : MODE_OPAQUE) | TAGPU_FEAT_MIRROR,
+                           ((mask & 4) ? MODE_ALPHA : MODE_OPAQUE) | copy,
                            1.0f, flipX, 0);
             }
         }
@@ -992,47 +1055,78 @@ static int floor_div(int a, int b)
    WALKED BY ANCHOR, NOT BY CELL: a sweep row splits at the folds into runs of
    at most one map width, each a copy of the map's row either way round
    (`tagpu_edge_reflect`: copy q = floor(col / mapW), turned over when q is
-   odd). A run the right way round meets its source row's anchors in their
-   column order, a turned one in the reverse, so each run is one pass over the
-   row's bucket (ordered by `mf_keep`) and a cell with no anchor costs nothing
-   -- at a 3840 x 2160 corner at 0.25x the sweep is 944 x 560 cells and a map
-   row has a handful of anchors. The emission order is the cell walk's
-   exactly: runs left to right, and each run left to right. Every index is
-   bounded: a row by the fold into [0, mapH), a bucket by `s_mfRow`, and every
-   column from the bucket is under mapW. */
+   odd), so each run is one pass over the row's bucket (ordered by `mf_keep`)
+   and a cell with no anchor costs nothing -- at a 3840 x 2160 corner at 0.25x
+   the sweep is 944 x 560 cells and a map row has a handful of anchors. Every
+   index is bounded: a row by the fold into [0, mapH), a bucket by `s_mfRow`,
+   and every column from the bucket is under mapW.
+   EVERY RUN IS EMITTED IN ITS SOURCE ROW'S ORDER, a turned one right to left
+   on the screen: the runs follow the rows down, and each run takes the
+   bucket in the order the map's own anchors come (row-major, the engine's
+   sweep). With the keys (mirror_key) the order is the whole of how a copy
+   stacks: the shadows write no depth, so where two overlap the later one
+   blends over the earlier, and where two bodies' keys tie in the depth
+   buffer the one drawn first stays. A copy laid down in its source's order
+   over its source's keys stacks as its source does.
+   A TURNED RUN IS SWEPT OVER THE RECT MIRRORED ABOUT THE VIEW (KEYRECT
+   `tuc0`). The engine's rect reaches 10 columns left of the view and 2 right
+   (SWEEP_COL_LEAD), so the map's own art that overhangs to the right of its
+   anchor is drawn from anchors up to 10 columns off-screen; a turned copy
+   overhangs to the left, and takes its cells from the rect the engine would
+   sweep over the view reflected. A copy is drawn exactly when its source
+   would be, so the strip past a side edge is the map's own picture
+   reflected, up to the edge of the view. */
 static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
                           int shadowsOn, const KEYRECT* k)
 {
     const int mapW = s_mfW, mapH = s_mfH;
     const int c0 = k->uc0, c1 = k->uc0 + k->ucols;
+    const int t0 = k->tuc0, t1 = k->tuc0 + k->ucols;
+    const int s0 = c0 < t0 ? c0 : t0, s1 = c1 > t1 ? c1 : t1;
+    /* the view, the gather's rect in world px */
+    const int vx0 = v->eyeX + (v->evpL - v->vpL), vx1 = vx0 + v->evw;
+    const int vy0 = v->eyeY + (v->evpT - v->vpT), vy1 = vy0 + v->evh;
     int row;
     if (k->ucols <= 0 || k->ucols > MF_DIM || k->urows <= 0 || mapW <= 0 || mapH <= 0) return;
     for (row = k->ur0; row < k->ur0 + k->urows; row++) {
         int offRow = row < 0 || row >= mapH, flipY = 0, srow = row, a0, a1, q;
+        /* A COPY THE VIEW CANNOT SHOW IS NOT EMITTED: the fragment stage keeps
+           every copy inside its own columns, and a row past the top or bottom
+           inside its band, so a copy whose region misses the view draws
+           nothing. The copies left are the ones whose sources the view holds
+           (mirror_key). */
+        if (row < 0 ? vy0 >= 0 : row >= mapH && vy1 <= mapH * 16) continue;
         if (offRow) srow = tagpu_edge_reflect(row, mapH, &flipY);
         if (srow >= mapH - 1) continue;
         a0 = s_mfRow[srow]; a1 = s_mfRow[srow + 1];
         if (a0 == a1) continue;
-        for (q = floor_div(c0, mapW); q * mapW < c1; q++) {
-            const int base = q * mapW;
-            const int lo = base > c0 ? base : c0, hi = base + mapW < c1 ? base + mapW : c1;
+        for (q = floor_div(s0, mapW); q * mapW < s1; q++) {
+            const int base = q * mapW, turned = q & 1;
+            const int w0 = turned ? t0 : c0, w1 = turned ? t1 : c1;
+            const int lo = base > w0 ? base : w0, hi = base + mapW < w1 ? base + mapW : w1;
+            const int copy = TAGPU_FEAT_MIRROR | (offRow ? TAGPU_FEAT_OFFROW : 0) |
+                             ((q + TAGPU_FEAT_COPY_BIAS) << TAGPU_FEAT_COPY_SHIFT);
             int j;
             /* the map's own cells are the anchor loop's */
             if (!offRow && q == 0) continue;
-            if ((q & 1) == 0) {
+            if (lo >= hi || base * 16 >= vx1 || (base + mapW) * 16 <= vx0) continue;
+            /* the mode's copy field is bounded (tagpu_feat.h) */
+            if (q < -TAGPU_FEAT_COPY_BIAS || q >= TAGPU_FEAT_COPY_BIAS) continue;
+            if (!turned) {
                 for (j = a0; j < a1; j++) {
                     const int scol = s_mf[j].col, col = base + scol;
                     if (scol >= mapW - 1 || col >= hi) break;
                     if (col < lo) continue;
-                    mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col, 0, flipY);
+                    mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
+                                   0, flipY, copy);
                 }
             } else {
-                for (j = a1 - 1; j >= a0; j--) {
+                for (j = a0; j < a1; j++) {
                     const int scol = s_mf[j].col, col = base + mapW - 1 - scol;
-                    if (scol >= mapW - 1) continue;
-                    if (col >= hi) break;
-                    if (col < lo) continue;
-                    mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col, 1, flipY);
+                    if (scol >= mapW - 1 || col < lo) break;
+                    if (col >= hi) continue;
+                    mirror_feature(v, &s_mf[j], fdefs, nDefs, shadowsOn, k, row, col,
+                                   1, flipY, copy);
                 }
             }
         }
@@ -1130,10 +1224,13 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
     key.ur0 = r0; key.urows = nRows;             /* before the map's clamps */
     if (r0 < 0) { nRows += r0; r0 = 0; }
     if (r0 + nRows > mapH - 1) nRows = mapH - r0 - 1;
-    c0 = ((v->eyeX + (v->evpL - v->vpL)) >> 4) - 10;
+    c0 = ((v->eyeX + (v->evpL - v->vpL)) >> 4) - SWEEP_COL_LEAD;
     nCols += (v->evw - v->vw) >> 4;
     if (nCols > 4096) nCols = 4096;
     key.uc0 = c0; key.ucols = nCols;
+    /* the same rule applied to the view reflected: its right edge, rounded
+       up, is the reflected view's left edge rounded down (mirror_gather) */
+    key.tuc0 = -floor_div(-(v->eyeX + (v->evpL - v->vpL) + v->evw), 16) + SWEEP_COL_LEAD - nCols;
     if (c0 < 0) { nCols += c0; c0 = 0; }
     if (c0 + nCols > mapW - 1) nCols = mapW - c0 - 1;
     /* `v->mirror` is 1 only while this level's copy is held
@@ -1141,6 +1238,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
        it was bounded against, so they must be this map's. */
     mirror = v->mirror && s_mfHeld && s_mfLevel == pk->level_gen && s_mfW == mapW && s_mfH == mapH &&
              key.urows > 0 && key.ucols > 0;
+    s_clip = mirror;
     /* A VIEW WHOLLY PAST THE MAP has no cell of its own to sweep, and still
        has the mirror to draw. */
     onMap = nRows > 0 && nCols > 0;
@@ -1225,28 +1323,7 @@ int tagpu_feat_gather(const TAGPU_FXVIEW* v)
                     continue;
                 }
             }
-            if (flat) {
-                /* the backdrop band: above the particle layers the engine
-                   draws before the pre-pass (0..2) and below those after it
-                   (3..4); the scan fraction keeps the engine's paint order
-                   when two flat features overlap */
-                float f = ((float)(row - r0) * (float)nCols + (float)(col - c0)) / key.span;
-                enc = 0.40f + 0.10f * f;
-            } else {
-                /* the row key the painter's sweep implies: above this row's
-                   units (1 + rel*4), below the next row's; the column
-                   fraction keeps left-to-right order inside the row.
-                   The engine's edge clamps keep rel inside [0, sweepRows),
-                   the same range the unit gather uses; clamping to the band
-                   the frame's keys were sized for (rows + the gather's row
-                   slack) means no arithmetic here can ever push a feature
-                   into the effects band above it. */
-                int rel = row - v->r0;
-                if (rel < 0) rel = 0;
-                if (rel > v->rows + 8) rel = v->rows + 8;
-                enc = 3.0f + (float)rel * 4.0f
-                      + 1.5f * ((float)(col - c0) / (float)nCols);
-            }
+            enc = map_key(v, &key, row, col, flat);
             {
                 /* A FEATURE IS DRAWN WHOLE OR NOT AT ALL: its shadow and body
                    -- and every sub-frame of either -- are several atlas
@@ -1350,6 +1427,7 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     /* the map on the TILE grid, as the terrain's uMapPx (tagpu_terr.c): the
        two passes test the one edge */
     s_pub.mapPxW = (float)((s_mapW / 2) * 32); s_pub.mapPxH = (float)((s_mapH / 2) * 32);
+    s_pub.clip = s_clip;
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
     s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
     s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
