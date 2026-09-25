@@ -643,7 +643,8 @@ static void emit_model(const TAGPU_FXVIEW* v, unsigned model, float wx, float wz
    shell, a flame with no rocket. So every record is emitted inside a
    bracket, and ANY PART OF IT LOST takes the whole record back out at the
    bracket's end: every bucket, the quad count, the model list, the run
-   arena and the sequence key return to where they stood at its start. Nothing else is
+   arena, the sequence key and an A/B frame's line list (`s_lab`) return to
+   where they stood at its start. Nothing else is
    emitted inside a bracket, so the rollback takes no other effect's parts
    with it, and what did paint stays painted and draws whole on a later
    frame.
@@ -653,7 +654,7 @@ static void emit_model(const TAGPU_FXVIEW* v, unsigned model, float wx, float wz
    (everything else) then agree per frame through the hand-over's `nmodels`
    (tagpu_fx.h), so neither draws a frame's effects without the other. */
 static int      s_effNv[NBUCKET], s_effNm, s_effQuads;
-static unsigned s_effLost, s_effRun;
+static unsigned s_effLost, s_effRun, s_effLab;
 
 static void effect_begin(void)
 {
@@ -663,6 +664,7 @@ static void effect_begin(void)
     s_effRun = tagpu_fxmodel_mark();
     s_effQuads = s_cQuads;
     s_effLost = s_partsLost;
+    s_effLab = s_lab.n;
     s_encCur = key_after(s_nm);
 }
 
@@ -672,6 +674,9 @@ static void effect_end(void)
     if (s_partsLost == s_effLost) return;
     for (b = 0; b < NBUCKET; b++) s_nv[b] = s_effNv[b];
     s_nm = s_effNm;
+    /* the list only ever grows inside a bracket, so its count at the start
+       is a prefix of what it holds now */
+    s_lab.n = s_effLab;
     tagpu_fxmodel_rewind(s_effRun);
     s_cQuads = s_effQuads;
     s_encCur = key_after(s_nm);

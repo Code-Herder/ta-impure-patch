@@ -913,10 +913,13 @@ figure does not follow from the mapping and is probably a slip: the surface's en
 288 is exact for. Re-derived and re-measured at 0.467× in G13n as `[307,785]×[205,563]`,
 which does match. Not re-taken at 0.5×.]
 
-**And the surface bound is not the clip rect — it is `ctx+0x00`/`ctx+0x04`**
-[MEASURED 2026-09-04]. The line writer `0x4CC7AB` opens by calling `0x4CC650`, which reads
-the context's WIDTH and HEIGHT and rejects a line wholly outside `[0,w)×[0,h)` before the
-clip rect at `+0x1C..+0x28` is consulted at all. So the wider-buffer idea this note used to
+**And there are two bounds, the clip rect and the surface — `ctx+0x00`/`ctx+0x04`**
+[MEASURED 2026-09-04; the order DISASSEMBLED 2026-09-25]. Every DrawLine and
+`DrawTranspRectangle` line first passes `0x4BEA20`, which clips its ends to the clip rect at
+`+0x1C..+0x28` (exe-reverse-engineering.md, `0x4BEA20`); the line writer `0x4CC7AB` then opens
+by calling `0x4CC650`, which reads the context's WIDTH and HEIGHT and rejects or clips the line
+to `[0,w)×[0,h)` whatever that rect says. Widening the clip rect therefore cannot carry a line
+past the surface. So the wider-buffer idea this note used to
 propose — give the window its own buffer and own `CTX_PITCH` and the clip fields — would
 also have to lie about `+0x00`/`+0x04`, and every drawer in the window would then be
 rasterising against a geometry the *engine's* frame does not have. That is why the fix for

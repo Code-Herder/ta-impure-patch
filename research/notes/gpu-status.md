@@ -16612,9 +16612,11 @@ pipeline took the whole marker layer with it — now it drops the rects alone. A
 binary.
 
 **Not covered.** The occlusion was compared against the stock game by eye on two trees, not
-swept. `0x4CC650`'s clip at the context edge is not reproduced (the scissor cuts the band
-instead). A device without Bresenham lines, or without a line `ceil(3·scale) + 2` wide, draws no rect —
-the rest of the marker layer still draws and the log says why once.
+swept. The rect's lines are now §2.92's: a band and an integer per-game-pixel test, with
+DrawLine's clip (`0x4BEA20` to the viewport, then `0x4CC650`) applied to their ends where the
+record is built, so the rect follows the engine at the viewport edge and needs no device line
+feature. The line-primitive rule and the width requirement described above belong to the
+pipeline §2.92 replaced.
 
 **Found on the way.** On `500v500` the unit pass stood down for the whole frame
 (`vk: unit: the GL twin drew 348 posed unit(s) this hand-over does not carry`): about 860 units

@@ -301,9 +301,12 @@
    products are UNSIGNED so they cannot overflow for endpoints inside
    tagpu_line.h's TAGPU_LINE_MAXC box. DrawLine's clip (`0x4BEA20` to the
    viewport, then `0x4CC650` to the surface) is not part of it: it moves the
-   ends before the walk, and the CPU does that where a record is built
-   (tagpu_line.h `tagpu_line_clip`), so the ends this walk receives are the
-   clipped ones. */
+   ends before the walk, on the CPU where a record is built (tagpu_line.h
+   `tagpu_line_clip`), for the callers whose engine lines are DrawLine's --
+   the markers (tagpu_mark.c `put_line`) and the effects (tagpu_fx.c
+   `emit_line`). The nanoframe wire (tagpu_native.c FS) reaches this walk
+   unclipped: the engine draws it with the polygon edge walk `0x4C0820`,
+   which moves no end, and its ends are held to the MAXC box instead. */
 #define TAGPU_GLSL_LINE_FN \
     "ivec2 taGamePx(vec2 fc, ivec4 grid) {\n" \
     "  ivec2 t = ivec2(fc);\n" \
