@@ -376,6 +376,7 @@ that map's size.
 | `gui_census.trigger` | with `gui.on=census pgm`: writes the accumulated residual mask to `tagpu_gui_census.pgm` |
 | `tagpu_<pass>.ab` | the one-frame capture (`references/measuring.md`) |
 | `dmgdelay.on=K` | **test only, never on a player's instance**: every hit this peer sends leaves K ticks late (default 30, at most 3600), so a hit lands after its victim's slot has been reused; logs `enginefix: stale hits: TEST LEVER …` and a `take <slot> (first-free <slot>) at <GameTime>` line per local create. Arm it on the attacking peer (`references/modules.md`, *Stale hits*) |
+| `ghostq.off` | **test only**: the ghost-commander queue holds nothing, so a create refused during the load waits for the round robin as on stock; the dirty create's position still applies, which is how that half is measured alone. Logs `enginefix: ghost commander: TEST LEVER …` |
 
 ## The heartbeats: what must read zero
 
@@ -392,6 +393,7 @@ that map's size.
 | `mark: bars= cursor= ordtri= ordline= text=… atlas= zoom=` (`log`) | 120 | | the live zoom is readable here; the file lever logs nothing |
 | `order: arena= recs= drawn= lines= dots= …` (`log`) | 120 | | `arena=-1` = SHIFT not held |
 | `… \| hits: out 09= 0b= B= stockB= unk= in 09= 0b= owner=A/R by=A/R dead= gate= bad= bare 09= 0b= copy exact= bound= unk= held= delay= q= over= young owner= by=` (the end of the `packet:` line) | 300 render frames | `bad`, `bare`, `over`; `young` whenever `dmgdelay.on` is armed | `owner=`/`by=` are hits applied/refused as the victim's owner and as a bystander; `B=` the carried messages' bytes against `stockB=`; `bound=` copies the `0x2C` recreated; `held=` creates the two-tick hold moved |
+| `… \| ghost: q= over= deep= replay= inactive= stale= bad= cleared= offthread= levels= pos ground= air= none= off=` (after `hits:`) | 300 render frames | `over`, `bad`, `offthread` | `q=` creates held during the load and `replay=` those replayed right after the state-6 store (a `replayed slot …` line each); `pos ground=`/`air=` dirty creates placed from their move payload, `none=` left at stock's record, `off=` a payload off the map; ` LEVER-OFF` with `ghostq.off` |
 
 ## Names that do nothing
 

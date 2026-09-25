@@ -5022,7 +5022,7 @@ int tagpu_hits_format(char* buf, unsigned int cap)
 
 /* ===== GHOST COMMANDER: THE CREATES REFUSED DURING THE LOAD, AND THE DIRTY CREATE'S POSITION ===
    Landing B5 of research/notes/tadr-port/sim-fixes.md ("B5 DESIGN" has the argument in full;
-   the addresses are in exe-reverse-engineering.md, "Unit identity on the wire").
+   the addresses are in exe-reverse-engineering.md, "A create refused during the load").
 
    THE DEFECT [DISASSEMBLED; MEASURED on the previous build]. The dispatcher passes a unit
    create only in net state 6 (0x45473F with the table 0x512BC0: 0x09 has mask 4 alone), and a
@@ -5357,7 +5357,8 @@ static void __cdecl ghost_position(unsigned int* r)
     memcpy(rec + 5, &x16, 4);
     memcpy(rec + 13, &z16, 4);
     if (kind == GHOST_POS_AIR) {
-        if (y16 <= 0x01FF0000u) memcpy(rec + 9, &y16, 4);      /* the air ceiling, 0x44E4F1 */
+        /* y up to 0x1FF px, the ceiling the goal point 0x44E3C0 clamps its y to (0x44E4F1) */
+        if (y16 <= 0x01FF0000u) memcpy(rec + 9, &y16, 4);
         s_ghostPosAir++;
     } else {
         s_ghostPosGround++;

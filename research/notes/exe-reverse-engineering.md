@@ -329,6 +329,7 @@ made, or its page cannot be made writable. Each of the nineteen, and why:
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
 | wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`), and the diverged `0x0D` at `0x49D280` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local) |
 | stale hits — the incarnation on the wire and the two-tick hold: first-free `0x486036`, the free `0x486DC1`, `CreateFromNetwork`'s exit `0x48634F`, the array's reset `0x4854A0`, the sends `0x4560AE`, `0x489CB9`, `0x489CCD`, the dispatch slots `0x455F90`, `0x455FA0`, `0x455FA8` (landing B4; the subsection *Unit identity on the wire*) | simulation | which hits a unit takes and which slot a create gets; and it is a wire format: a peer without it sends bare `0x09`/`0x0B`s this build drops, and cannot read the tagged `0x05`s this build sends |
+| ghost commander — the create refused during the load, held and replayed, and the dirty create's position: the load's start `0x497F5E`, the state-6 store `0x498445`, the dirty entry's call `0x48BA00`, and the hold inside B4's `0x05` receiver (landing B5; the subsection *A create refused during the load*) | simulation | which units a peer holds at the start of play and where a dirty create puts one; a peer without it lacks the others' commanders until the round robin, as stock |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -458,7 +459,9 @@ passes the text from `msg+1` to `0x463CA0`, which returns at once when it starts
 **GameTime `main+0x38A47` has five writers** (every store to that offset): the tick's increment
 `0x4954C0`, the shell's network clock `0x44A696` (in `0x44A680`, called from the menu's state
 machine at `0x42837F`), and three zeroings at a level's entry — `0x491979` (just after `0x4854A0`
-in the level init), `0x4971BB` (the loader), `0x498180` (before state 6). In play it only increments.
+in the level init), `0x4971BB` (the loader), `0x498180` (the load state's first call). In play it only
+increments. It is not 0 when play starts: the in-play entry runs up to five catch-up ticks in state 5
+before its state-6 store (below, *A create refused during the load*).
 
 **The send layer** (read, not patched). `0x451DF0(net, msg, len)` `ret 0xC` checks the sender
 (`0x44FFD0`, type 1 or 2) and, with `[0x506DBC]` set, queues through `0x461990` → `0x462710`
@@ -480,6 +483,125 @@ array. All are rows of the fail-closed table, in both builds.
 MEASURED 2026-09-25 (the plan's *B4 BUILT AHEAD*, three peers, every hit held 30 ticks by the test
 lever): hits applied to a unit younger than the delay fell from 1 562 to 0 on the owner and from
 1 406 to 1 on a bystander (0 in a second run); a hit costs 65 bytes on the wire instead of 9.
+
+### A create refused during the load, and the dirty create's position — the load state `0x497F40`, `0x48BA00` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The load state `0x497F40`.** A state function, called once a frame from the main loop's
+`call [main+0x391F5]` at `0x499A1C`, and installed right after state 5 is stored (`0x496C2E` →
+`0x496C3D`, `0x496D65` → `0x496D75`, `0x496D87` → `0x496D9D`, `0x496DEF` → `0x496DFF`; and `0x490BB3`, a case
+of the table after the generic state store `0x490B3D`). Its flags are the word `main+0x38D75`:
+
+| bit | set | cleared | meaning |
+|---|---|---|---|
+| 0 (`1`) | `0x49832D`, the first call | `0x49847E` (with `+0x38D6F..+0x38D76`) | the load has started |
+| 1 (`2`) | `0x497C62`, the loader's **last store** before it returns | `0x49847E` | the loader is done |
+| 2 (`4`) | `0x4975CA`, the loader after the level init | `0x49855D` (and `0x49686E` in the frame function), the game thread | this peer has loaded |
+| 3 (`8`) | `0x498579`, the game thread, when `0x4568C0` returns nonzero | `0x49847E` | [INFERRED] every player has loaded; the loader waits for it at `0x4975D6..0x4975F1`, 50 ms at a time |
+
+**The first call** (bit 0 clear, tested at `0x497F54`) runs `0x497F5E..0x498334` once per level: the
+timing base `main+0x38A37` (`0x498164`), GameTime 0 (`0x498180`), and the loader thread
+(`push 0x497C70; call 0x4B6B20` at `0x4982C5..0x4982CA`; `0x497C70` is an exception frame around
+the body `0x497180`). **Every call** then tests bit 1
+(`0x498342..0x49834D`): clear, it is the loading frame `0x4984DD` — per-player `0x453320`, the pump
+`0x453D40` at `0x49852E`, the barrier above; set, it is **the in-play entry** — `0x467D70`, the
+frame function `0x496790` at `0x49842F`, `0x4C2870`, state 6 at `0x498445`, the next state function
+`0x499200` at `0x498455`, and the flag word zeroed at `0x49847E`.
+
+**Up to five ticks run before state 6.** `0x496790` asks `0x495230` how many ticks are due since the
+timing base (`main+0x38A3B`, capped at 5 at `0x4953F5`), and `0x495490` runs that many, each
+`GameTime++` (`0x4954C0`) and a pump (`0x4954C8`). At `0x49842F` the base is the load's start, so
+the catch-up is the cap: five ticks in state 5, before `0x498445`. MEASURED: GameTime read 5 just
+after the state-6 store in every two-peer start of the B5 build that held a create (its replay
+line, below; four starts). GameTime's five writers stand; it is not 0 at the in-play entry.
+
+**The loader `0x497180`** (loader thread) pumps at `0x49727D` in its early wait, runs the level
+init `0x4917D0` at `0x497581` (the unit array, `0x4854A0` at `0x4918D4`), sets bit 2, waits for bit
+3, creates the local player's commander (`0x485F50` at `0x4977BB`, which sends its `0x09` while this
+peer is still in state 5), and sets bit 1 last. So during a load two threads pump: the game thread
+(`0x49852E`, and the catch-up ticks' `0x4954C8`) and the loader (`0x49727D`). The loader's last pump
+precedes its last store, and the game thread reaches `0x498445` only after reading that store.
+
+**Why a peer loses the others' commanders.** Every peer creates its commander after the barrier,
+still in state 5, and the dispatcher passes `0x09` only in state 6 (`0x45473F`, `0x512BC0`): a peer
+whose remaining load is longer refuses the others' creates at `0x455F50`. In every two-peer start
+measured, the joiner. Since B4 the create rides in a `0x4A` companion, which state 5 passes (`0x05`
+has mask 7) and B4's receiver refuses by the same table (`gate=`).
+
+**A sender, as the dispatcher sees it.** The pump's frame holds the sender's **record index** in
+the low byte of `[esp+0x14]` and its record `main+0x1B63 + k·0x14B` in `edi`, paired by
+`0x453E84..0x453E9B`: the loop `0x453DBD..0x453E12` finds the record whose `+4` is the message's
+DirectPlay id and stores its index at `0x455F78`. The sender test
+(`0x4547AD..0x4547E2`): `[rec] ≠ 0`, `+0x73` 3 (1 and 2, local, are dropped), `+0x146 ≠ 10`; the
+destination record in `ebx` passes the same (`0x454821..0x454844`). A record's index is not its
+block's: blocks are handed out in DirectPlay-id order (`0x485842..0x485853` compares `[rec+4]`
+when `0x435100` returns 3; `0x4858BD` stores the block), records in local order.
+
+**The dirty create's record** (`0x48B9B6..0x48B9FB`, into the 0x2C frame's `esp+0x1C`): `[0]` 9,
+`[1]` the entry's type, `[3]` the slot's `+0xA8`, `[5]`/`[9]`/`[13]` the **slot's own** `+0x6A`,
+`+0x6E`, `+0x72` (zero in a fresh array, the last unit's in a freed slot), `[17]` `+0x64`, `[21]`
+`+0x68`; the player is the slot's `+0xFF`. `CreateFromNetwork` hands that position to `0x485A40` (`0x4862B8`) and
+gives the unit a move object (`0x43DC00`, `0x4862E9`) — only when the def's `+0x22F` is 1
+(`0x4862CF`) — before the rest of its set-up; only then does
+`0x48BA10` parse the entry's move payload with the new object's `[vt+0x24]`.
+
+**The move object `0x43DC00`** (`unit+0`, `0x2F` bytes; the class object is its `+0`). A unit
+whose player is remote (`+0x96` → `+0x73` 3, `0x43DC48..0x43DC57`) gets a proxy: the **air proxy**
+`0x490940` (`0x27` bytes, vtable `0x4FD9E0`) when `def+0x241` bit 11 is set (`0x43DC5F..0x43DC68`),
+else the **ground proxy** `0x44F570` (`0x1C` bytes, vtable `0x4FD488`). The owner's classes are the
+local ones. `[vt+0x1C]` says whether the unit is dirty, `[vt+0x20]` writes its payload and
+`[vt+0x24]` reads it (the dirty list, `0x48B77A..0x48B7FD`, writes delta, type and `[vt+0x20]`):
+
+| vtable | class | dirty `+0x1C` | writes `+0x20` | reads `+0x24` |
+|---|---|---|---|---|
+| `0x4FD428` | base | `0x44EFE0` (never) | `0x44EFC0` (nothing) | `0x44EFD0` (nothing) |
+| `0x4FD458` | local ground mover (`0x44F040`) | `0x44F480` | `0x44F4A0` | `0x44EFD0` |
+| `0x4FD488` | remote ground proxy (`0x44F570`) | never | nothing | `0x44F5C0` |
+| `0x4FD980` | air base (`0x490940` first) | never | nothing | `0x44EFD0` |
+| `0x4FD9B0` | local air mover | `0x4908B0` | `0x4908C0` | `0x44EFD0` |
+| `0x4FD9E0` | remote air proxy | never | nothing | `0x490A10` |
+
+**The payloads, and where a position lands.** The bit reader is `0x415DC0` (`{dwords, word, bit}`,
+least significant bit first; a read that ends on a word boundary still loads the next dword, masked
+to nothing), the writer `0x415C10`.
+
+- **Ground** (`0x44F4A0` → `0x44F5C0`): one flag bit (bit 2 of the move object's `+0x2E`), a 2-bit count n —
+  the local mover's path count `+0x5C`, capped at 3, 0 when `+0x64` bit 0 is clear — then n points
+  of `int16 x, int16 z`, whole world px, from the path's front `+0xC`. At most 99 bits. **No field is
+  the unit's own position.** A path the mover starts itself begins at it: `0x44F3F2..0x44F417`
+  stores count 2, point 0 = the unit's `+0x6C`/`+0x74` (the integer halves of `+0x6A`/`+0x72`),
+  point 1 the goal; `0x44F100` drops points from the front [INFERRED: as they are reached]. The
+  proxy hands the points out as `x<<16, 0, z<<16` (`0x44F650`, its `[vt+0x0C]`) [INFERRED: as the
+  unit's path].
+- **Air** (`0x4908C0` → `0x490A10`): a 2-bit selector, the sub-object's type (`[vt+0x08]`) 2 → 1,
+  3 → 2, none → 0; then that sub-object's own payload (`[vt+0x28]`), then 2 bits of the move object's
+  `+0x2E`. The proxy's `0x490690` (its `[vt+0x08]`) [INFERRED: the per-tick step] asks the sub-object for its point (`[vt+0x20]`, at
+  `0x4906B8`) into its own `+0xC` — the point the unit is steered to (`0x490650`, its `[vt+0x10]`,
+  hands out `+0xC` and the velocity `+0x18`).
+  - selector 2, type 3 (`0x2C` bytes, vtable `0x4FD3F8`; `0x44E930` → `0x44E9C0`): one flag bit, x,
+    y, z (16.16) at `+0xA`/`+0xE`/`+0x12`, a velocity at `+0x16`/`+0x1A`/`+0x1E`, and with the flag
+    a `u16` at `+0x24` — 209 bits at most. Its point `0x44EA60` is the position, then advanced by
+    the velocity: the unit's dead-reckoned position.
+  - selector 1, type 2 (`0x36` bytes, vtable `0x4FD3B8`; `0x44DDC0` → `0x44E080`): 8 flag bits;
+    bit 0 a `u16` and a unit index (the followed unit, `0x489690`), bits 4, 3, 6 a `u16` each, bit 5
+    a vector at `+0x26` — 184 bits at most. Its point `0x44E3C0` is `+0x26`, refreshed from the
+    followed unit (`0x43E060`), its y clamped to `0x1FF` px (`0x44E4F1`): a **goal**, not the
+    unit's own position.
+
+**What B5 patches** (the plan's *B5 DESIGN*; the code is `fix_ghost_commander`): B4's `0x05`
+receiver holds a carried `0x09` its gate refuses in state 5, with the sender's record index and
+DirectPlay id; `0x497F5E` empties the queue at the load's start; `0x498445`, after its store,
+replays it through B4's receiver and `CreateFromNetwork`; `0x48BA00` calls a stub that rewrites the
+dirty create's position from the entry's own payload (ground point 0; air selector 2's x, y, z)
+when it lies on the map, then enters `CreateFromNetwork` under `0x48BA05`. Compared, not written:
+`0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`, `0x49844F`, `0x48B9F5`, `0x4861D0`. All are rows of
+the fail-closed table, in both builds.
+MEASURED 2026-09-25 (the plan's *B5 BUILT AHEAD*, two peers, Two Continents): on the previous
+build the joiner lacked the host's commander until t = 50 s at the 1500-unit limit and t = 18 s at
+500, and one ordered to move at once appeared at `(1,−2)` / `(2,−3)` and walked from the corner;
+on B5 it was present at the host's position at the first sample in all four starts, from an exact
+copy (`replayed slot 1 from sender 1 … at GameTime 5`: record 1 on the joiner is the host, whose
+block holds slot 1), and with the queue turned off the dirty create alone put it at `(368, 7664)`
+where stock's record had `(0, 0)`.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 

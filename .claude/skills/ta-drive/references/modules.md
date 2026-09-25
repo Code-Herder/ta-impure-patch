@@ -133,6 +133,14 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
   `hits:` section of the `packet:` heartbeat on each (`references/levers.md`): `young owner=`
   and `by=` count hits applied to a unit younger than the delay, and must read 0. The victims'
   owner is the owner; a third peer is the bystander.
+- **The ghost commander: the peer that loads last refuses the others' first creates.** On two peers
+  by `tools/mp_lobby.sh`, peek every commander's slot on each peer from the first in-play tick —
+  the first slot of each player's block, `[player+0x67]`; records are in local order and blocks
+  in DirectPlay-id order, so a record's index is not its block's — and read the `ghost:` section
+  (`references/levers.md`): the late peer holds the others' creates (`q=`) and replays them
+  (`replay=`, a `replayed slot … at GameTime 5` line). Order the host's commander to move the
+  moment it is in play to exercise the dirty create; `ghostq.off` on the late peer leaves that
+  half alone (`pos ground=1`).
 - **Each peer draws its own units in player 0's colour** on the Vulkan lane; the engine's own frame
   is right. A renderer limit (`gpu-status.md` §3.2), not a network fault.
 - `SELPROV`'s `SELECT` crashes the game on the non-TCP/IP rows; select *Internet TCP/IP

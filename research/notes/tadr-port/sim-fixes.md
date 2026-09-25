@@ -548,6 +548,123 @@ free slots are held fails the create, as at the unit cap; nothing in the runs ab
 - The fix follows the cause (the item above). Tests: two peers, rosters every 2 s for 60 s; the
   window at 1500 and at 500; after the fix, the joiner matches the host from the first sample.
 
+**B5 DESIGN (2026-09-25).** The cause was measured first, on the previous build (B4's tip
+`a8e529e`), and the owner chose the fix from it: **queue the refused create, and fix the dirty
+create's position** [DECIDED].
+
+*The cause is the state gate, not the sender's block.* Every peer creates its commander from its
+loader thread (`0x485F50` at `0x4977BB`) after the load barrier, while it is still in state 5, and
+the dispatcher passes a create only in state 6 (`0x45473F`, `0x512BC0`; the carried `0x09` since B4,
+whose receiver applies the same table). The peer whose load ends later refuses the others'
+commanders: in every two-peer start measured, the joiner (`gate=1` there, 0 on the host). The
+refused commander then exists on that peer only when the round robin re-creates it, as a lower-bound
+copy (`bound=1`); and a commander that moves first comes back sooner through a dirty `0x2C` entry,
+whose create record (`0x48B9B6..0x48B9FB`) takes the **slot's own** position — `(0,0,0)` in a fresh
+array — after which the proxy walks it toward the owner's goal from the map's corner. The engine
+map's *A create refused during the load* has the load state, the two threads that pump and the
+move classes.
+
+*The queue.* In B4's `0x05` receiver, before the carried `0x09`'s own gate: in state 5, where that
+gate refuses it, the message is held with the case's player argument (`[esp+0x14]`, whose low byte
+is the sender's record index) and the sender's DirectPlay id (`record+4`), only when `edi` is that
+record (the pump pairs them, `0x453E84..0x453E9B`). The queue is emptied at the load's start
+(`0x497F5E`, the load state's first call) and drained right after the state-6 store (`0x498445`).
+A held create is replayed when its sender still passes the dispatcher's own sender test
+(`0x4547AD..0x4547E2`) under the same DirectPlay id, and its slot is empty or holds an older
+incarnation by B4's stamps and is not a local player's unit; it goes through B4's receiver
+(`hit_rx_create`, which now passes the gate and arms B4's stamp, so the copy is exact) and into
+`CreateFromNetwork` from a stub that puts the sender in `edi` as the `0x09` case does. The
+receivers that key on the `0x09` case's return `0x4553E9` (B3's observe, B4's stamp) treat the
+stub's return alike.
+
+*The position.* The dirty create's `call 0x4861D0` at `0x48BA00` calls a stub that reads the
+entry's move payload ahead of its decoder, from a copy of the `0x2C`'s bit reader, in the engine's
+bit order: for the ground proxy (vtable `0x4FD488`, decoder `0x44F5C0`) the path's point 0, x and z;
+for the air proxy (`0x4FD9E0`, `0x490A10`) selector 2's x, y, z (the motion `0x44E9C0`, the unit's
+dead-reckoned position). Selector 1 (`0x44E080`'s vector, a **goal**), selectors 0 and 3, and a
+ground payload with no point leave stock's record. These are every class `0x43DC00` gives a
+remote unit; the local classes' readers read nothing (`0x44EFD0`).
+
+*Invariants* (the code's header states each beside the code):
+
+- **Bounded:** 64 records per sender, ten senders; a record past a full queue is counted and left
+  to the round robin, where stock leaves every one.
+- **Emptied once per level by the level's own lifetime**, never by GameTime: cleared at the load's
+  start, on the game thread before `0x4982CA` creates the loader thread; drained at the in-play
+  entry. Every record leaves exactly once, replayed or counted.
+- **An ordering, not a window.** Two threads pump during a load (the game thread at `0x49852E` and
+  in the catch-up ticks at `0x4954C8`, the loader at `0x49727D`), so records go in under a lock. The
+  loader's last pump precedes its last store (bit 1 of `main+0x38D75`, `0x497C62`), and the game
+  thread reaches `0x498445` only after reading that bit (`0x498342`); after the state-6 store
+  nothing is held, so the drain that follows it is the last.
+- **Only active senders, only empty or older slots**, by the dispatcher's sender test and B4's
+  stamps; never a local player's unit.
+- **The game thread only**: the drain checks its thread and replays nothing on any other.
+- **On the map by construction**: a position is taken only when `0 ≤ x < W·16` and `0 ≤ z < H·16`
+  px (`main+0x14233`/`+0x14237`, each 1..4096); an air unit's y only up to `0x1FF` px, the
+  ceiling the goal point `0x44E3C0` clamps its y to (`0x44E4F1`).
+
+*Class: sim, fail closed, both builds.* Ten rows: `0x497F5E`, `0x498445` and `0x48BA00` written;
+`0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`, `0x49844F`, `0x48B9F5`, `0x4861D0` compared. The
+hold itself is code in B4's receiver, whose slot `0x455F90` is B4's row. Lever `tagpu_ghostq.off`
+(test only: nothing is held, the position still applies); `tagpu_wirecheck.on` runs 13 rule cases
+at attach (the queue's age rule, the map bound, the bit reader, the ground and air payloads, a goal
+not taken). Counters on the heartbeat's `ghost:` section.
+
+**B5 BUILT AHEAD (2026-09-25, from `c2e5850` on its own worktree from B4's `a8e529e`; not
+landed, not reviewed).** `fix_ghost_commander` in `tagpu_patches.c`. The install line reads
+`limits: installed 199 sites` in the raised build (189 before), and `the simulation fixes' 74
+sites installed` in the stock-limits one.
+
+*Measured, two peers on Two Continents* (host and joiner by `tools/mp_lobby.sh`, rosters of both
+commanders' slots every 2 s for 60 s from the first in-play tick; "moved": the host's commander
+ordered to `(848,7344)` the moment the host is in play). The joiner's copy of the host's commander:
+
+| build | limit | commander | joiner at t = 0 | joiner matches the host from | joiner's counters |
+|---|---|---|---|---|---|
+| previous | 1500 | idle | missing | t = 50 s | `gate=1`, `recreate=1`, copy `bound=1` |
+| B5 | 1500 | idle | `(368,7664)`, the host's | t = 0 | `q=1 replay=1`, copy `exact=1` |
+| previous | 500 | idle | missing | t = 18 s | `gate=1`, `recreate=1`, `bound=1` |
+| B5 | 500 | idle | the host's | t = 0 | `q=1 replay=1`, `exact=1` |
+| previous | 1500 | moved | `(1,−2)`, walking to `(45,574)` while the host's reached `(842,7344)` | t = 50 s | `create=1 recreate=1 gate=1 bound=1` |
+| B5 | 1500 | moved | `(369,7660)`, host `(374,7656)` | t = 0 | `q=1 replay=1`, `exact=1` |
+| previous | 500 | moved | `(2,−3)`, walking to `(39,504)` | t = 18 s | `create=1 recreate=1 gate=1 bound=1` |
+| B5 | 500 | moved | `(369,7661)`, host `(375,7656)` | t = 0 | `q=1 replay=1`, `exact=1` |
+| B5, queue off on the joiner | 1500 | moved | `(368,7661)`, host `(375,7655)` | t = 0 | `gate=1 create=1 bound=1`, `pos ground=1`: "at (368, 7664) from its ground payload; stock's record had (0, 0)" |
+
+A moving copy trails the host's by the peers' tick offset (6–9 ticks, 5–10 px) and equals it once
+the unit stops. On every B5 start with the queue on, the joiner's replay line reads `replayed slot 1 from sender 1
+(birth 0, type 34) at GameTime 5`, with `inactive`, `stale`, `bad`, `cleared`, `offthread` and
+`over` 0, and the host holds nothing (`q=0`); the host had both commanders at every sample of
+every run (31 samples each), both builds.
+
+*B4's lower-bound copies at game start are gone.* The refused create now makes an exact copy: the
+joiner's `gate` and `bound` read 0 and `exact` 1 in every B5 start with the queue on, against `gate=1 bound=1` on the
+previous build. A lower-bound copy remains possible only through the round robin or a dirty entry
+for a create the queue did not hold (below). The slot and its sender bear out that a record's index is
+not its block's: on the joiner record 0 is its own and holds the second block (1501 or 501), and
+record 1, the host, the lower DirectPlay id, holds the first, whose slot 1 the replay filled.
+
+*Deviations from the owner's decision.*
+
+- **The replay is at the first tick in state 6, not the first tick.** The in-play entry calls the
+  frame function at `0x49842F` before its state-6 store, and that runs the catch-up ticks — the
+  cap, five — in state 5 (GameTime 5 at every replay). The commander is missing on the late peer
+  for those five ticks. Replaying before `0x49842F` would enter `CreateFromNetwork` while the
+  dispatcher still refuses creates, bypassing B4's mirror of the gate: left to the owner.
+- **Ground point 0 is not the unit's own position.** No field of the ground payload is; a path the
+  owner starts begins at the unit (`0x44F3F2..0x44F417`) and its front is dropped as it is reached
+  [INFERRED], so point 0 is where the unit stands or the next node. It lands on the true start in
+  the run above; a unit well along a long path appears at its next node.
+- **An air unit's selector 1 is a goal and is not taken**; that dirty create keeps stock's record.
+
+*What B5 does not close.* A `0x2C` dirty entry, a `0x0B` or a `0x0C` refused in state 5 is not
+held: only creates. A held create whose unit dies during the load is still replayed, and the
+owner's round robin removes it as stock removes any ghost.
+
+*Not run:* three peers (each peer holds per sender, so a third adds a second queue, not a new
+path), and the departing host in a three-peer game that the plan gives B5's session for group E.
+
 **B6 — loaders and the rest.**
 
 - **Wind** (sim): `0x490C40`'s schedule and value draws from our generator, reset at `0x491903`
