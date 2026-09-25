@@ -286,10 +286,12 @@ static int slot_index(char* unit, WSlot* slot)
     return 0;
 }
 
-/* The 0x0D wire check's read-only accessor (tagpu_patches.c wpn_rx_fired): the
-   slot's WEAPON pointer, or NULL when the slot is out of the unit's range — no
-   clamp, no VIOLATION, no side-row allocation. It never widens the wire check
-   into a state change: a NULL answer only makes the receiver drop the packet.
+/* The 0x0D wire check's accessor (tagpu_patches.c wpn_rx_fired): the slot's WEAPON
+   pointer, or NULL when the slot is out of the unit's range — no clamp, no
+   VIOLATION. It writes no engine state; past slot 2 it goes through side_row, which
+   builds or rebuilds the module's own side table when the unit array has moved
+   (VirtualAlloc, VirtualFree of the old one, a log line), as every other side-row
+   read does. A NULL answer only makes the receiver drop the packet.
    Armed or not: with the module disarmed a unit has three slots, so idx 0..2
    answer from the inline slots and idx >= 3 answers NULL. */
 char* tagpu_weapons_slot_weapon(char* unit, unsigned idx)

@@ -1,0 +1,83 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B1 line-of-sight shear, the observer side: a HUMAN ARMATLAS hovering by patrol 40 wu from Two Continents' north edge at cruise altitude, an AI CORSOLAR below it inside its sight, and no other human unit near (the human's other unit, home, is far south). Load with --los 1 (True LOS). The ray-fan sight emitter 0x4825B0 places the atlas's sight at row (z - h/2) >> 5 and stamps nothing when that row leaves the grid, so stock lights no cell of the human's LOS map there; the fix stamps at the atlas's own row. Read the human's LOS map (player record main+0x1B63, +0x7C base, +0x80 cols, +0x84 rows).",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "watch",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    400,
+    40
+   ],
+   "height": 200,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      400,
+      40
+     ]
+    }
+   ]
+  },
+  {
+   "id": "target",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    400,
+    120
+   ]
+  },
+  {
+   "id": "keepalive",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    300,
+    1400
+   ]
+  },
+  {
+   "id": "home",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    1200,
+    1400
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   500,
+   300
+  ]
+ }
+}

@@ -92,10 +92,10 @@ a factory pad, has the bit clear and is drawn **by its carrier**.
 
 | VA | What it is |
 | --- | --- |
-| `0x455403` | inside a large command dispatcher (every arm `jmp`s to `0x455F50`), taking the packet from `[esp+0x10]`. **Attach/detach is therefore a simulation command**, which is why it is packed by unit *id* |
+| `0x455403` | the network dispatcher's case for code `0x0A` (`0x4553FE`; every arm `jmp`s to `0x455F50`), taking the received packet from `[esp+0x10]`. **Attach/detach is therefore a simulation command**, which is why it is packed by unit *id* |
 | `0x48AB62` | a small wrapper `0x48AAC0..0x48AB6A`, `ret 0x10` (30 callers): builds the packet on the stack (`[esp+0xD] = al & 3`, `[esp+0xE] = cl`), calls `0x44FDB0` then `0x451DF0`, then the attacher |
-| `0x48B58B` | **attach** with a real piece: the point byte comes from `call 0x415DC0` / `0x415E60` results — the unit-script accessors *[INFERRED from the `thiscall` shape and the small integer arguments; the enclosing function was not delimited]* |
-| `0x48B5C5` | **detach**: guarded on `[edi+0x86] != 0`, it fills child id from `[edi+0xA8]`, **parent id `0`**, **point `0xFF`**, and calls the same function. Detaching is "attach to nobody" |
+| `0x48B58B` | **attach**, in the `0x2C` round robin's full-state entry `0x48B3F0`: a remote unit's carrier and attach point, read off the network stream by its bit reader (`0x415DC0`, 15 bits at `0x48B56B`; `0x415E60`, 8 bits at `0x48B579`), where the owner wrote its unit's carrier's `+0xA8` and `+0xF9` (`0x48B2A4..0x48B332`). It replicates an attach that already happened on the owner, not a script decision |
+| `0x48B5C5` | **detach**, in the same entry: when the stream says the owner's unit has no carrier and this copy has one (`[edi+0x86] != 0`), it fills child id from `[edi+0xA8]`, **parent id `0`**, **point `0xFF`**, and calls the same function. Detaching is "attach to nobody" |
 
 **So the moment a unit stops being part of its factory's sprite is chosen by the script**, not by
 the build finishing, not by the renderer, and not by any distance test in the draw path.
@@ -198,9 +198,11 @@ cargo whose origin sits above or below its parent. See [build state](build-state
 
 ## 7. What is not known yet
 
-- **Which COB opcode, and where in a factory's script, the drop happens.** `0x48B58B` and
-  `0x48B5C5` are the attach and detach call sites, but their enclosing function was not
-  delimited and the script opcode that reaches them was not traced.
+- **Which COB opcode, and where in a factory's script, the drop happens.** It is one of the 30
+  callers of the wrapper `0x48AAC0`, which applies the attach and sends it as a `0x0A`; which one
+  was not traced. `0x48B58B` and `0x48B5C5` are not it: they are the `0x2C` round robin
+  replicating a remote unit's carrier ([the engine
+  map](exe-reverse-engineering.md#0x48ab70-attach-and-detach-one-unit-to-another-mapped-by-us)).
 - `0x47CB00` and `0x47CB40` — called on the no-previous-parent and detach paths — were not
   disassembled. Both are in the cluster that also writes `+0x8E` (`0x47CB26`, `0x47CB47`,
   `0x47CBA3`, `0x47CBB0`, `0x47CC13`, `0x47CD0F`, `0x47D0B9`), so there is a **second chain

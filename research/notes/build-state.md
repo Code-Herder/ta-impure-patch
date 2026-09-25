@@ -532,16 +532,20 @@ commander or factory building it. Reported from play, reproduced on a scripted
   traces (1.8 + 0.15 = 1.95 against the 2.0 half-gap between row keys — inside
   it, with 0.05 to spare). It is not decoration: at the top of a build the
   recolour erases the whole model and the skeleton is the only thing on screen.
-- **On the Vulkan lane the wire was missing from the port until 2026-09-23**, and
-  is drawn now by `tagpu_vk_unit.c`: the record carries the WIRE range and the
-  colour (`TAGPU_PDUREC.wireFirst`/`wireCount`/`wire`), and a `LINE_LIST` twin
-  of the body pipeline draws it after every body with `_wire_begin`'s uniforms
-  (uNanoOn 0, uWaterMode 0, uAlpha 1). Seen on the ladder fixture, a commander
-  building a solar (wire → silhouette → texture under the rising band →
-  finished) and an ARM lab building a Peewee. **Its width is the target's scale**
-  through `wideLines`, which is what the GL lane asked for and never got (next
-  item); whether that closes the half-intensity gap was **not measured**. A
-  device without `wideLines` draws it one sample wide rather than not at all.
+- **On the Vulkan lane the wire is drawn by `tagpu_vk_unit.c`** (since 2026-09-23;
+  its present form since G21b). The record carries the colour (`TAGPU_PDUREC.wire`)
+  and the bake's WIRE pairs; `upload_draw` poses each edge of a visible piece on
+  a painted face on the CPU, exactly as the body's vertex stage does (the 16.16
+  rounding, the body projection, the depth key plus 0.15), and writes it as a
+  three-vec4 line record into the pose buffer. `tagpu_posedraw.c`'s `WVS` draws
+  each record after every body as a band whose fragment stage keeps the game
+  pixels `DrawLine 0x4CC7AB` would plot between the two ends, so **the wire is
+  one game pixel wide at any `ss`, each pixel whole** — the half-intensity gap of
+  the GL lane (next item) cannot arise, and no device line feature is asked for.
+  The depth is the segment's: each end's key, mixed along the segment
+  ([Hardware portability](hardware-portability.html) decision 4). Seen on the
+  ladder fixture, and measured there against a CPU model of the walk: 0 px over
+  1 384 edges at 1× and 0.877×, both presets.
 - **GAP (the GL lane) — the wireframe was drawn at HALF the engine's intensity on the shipped
   default, and had been all along** [MEASURED 2026-09-11]. It is `GL_LINES` with
   `glLineWidth(ss)` in the main pass, and the driver clamps an aliased line to

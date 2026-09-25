@@ -1,0 +1,32 @@
+#ifndef TAGPU_DATAKEYS_H
+#define TAGPU_DATAKEYS_H
+
+/* tagpu_datakeys — TADR section C's new data keys
+   (research/notes/tadr-port/data-keys.md).
+
+   The unit-key reader: an observer inside the FBI loader 0x42BF40, at
+   0x42BF97, reads the keys this module owns out of the FBI section the loader
+   is holding, through the engine's own TDF reader, and keeps one record per
+   UnitDef slot. Observers at the unit-data load's start (0x42D2E0) and the
+   loader's entry keep each record to its own load, and one on the checksum
+   0x4B6BA0 records each COB block's length for the mask's bounds. Installed
+   at attach for the process, each site byte-matched; a mismatch leaves that
+   site untouched, skips the sites that rest on it, and logs.
+
+   The build ghost's piece mask (C1): which pieces a type's ghost hides. By
+   default the pieces its COB `Create()` hides before anything else runs; with
+   `PreviewPieces=` in the FBI, every piece that list does not name. Computed
+   on the game thread, cached per type for the level, published in the frame
+   packet as TAGPU_PK_GHOSTMASK. The render thread reads only the packet. */
+
+#include "tagpu_packet.h"
+
+/* DLL attach, before the engine runs: installs the FBI reader. */
+void tagpu_datakeys_init(void);
+
+/* GAME THREAD, inside an in-play packet fill only. The ghost mask of unit type
+   `type`: 1 with `*out` filled when the ghost hides at least one piece, 0 when
+   it shows every piece (no row). Bounded by the engine's own UNITINFOCount. */
+int tagpu_datakeys_ghost_mask(unsigned type, TAGPU_PK_GHOSTMASK* out);
+
+#endif

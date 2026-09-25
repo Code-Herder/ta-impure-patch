@@ -38,7 +38,7 @@ data/script constructs:
 | Upgradable buildings | A cloaked, stealthed, `HideDamage=1` companion **unit** built onto the parent (`corfus_upgrade.fbi`: `Init_cloaked=1; Stealth=1; DamageModifier=0`) | [VERIFIED] FBI |
 | Adjacency bonuses | Same detect-and-modify script pattern over neighbouring buildings | [VERIFIED] changelog + script names |
 | Multi-unit air transports | COB transport scripting (credits thank Zwzsg for "especially transports") | [VERIFIED] credits |
-| Surfacable nuclear subs | **TADR's** `surfacefire=1` weapon TDF flag — 12 weapon entries incl. "Sub Starburst Missile" | [VERIFIED] |
+| Surfacable nuclear subs | **TADR's** `surfacefire=1` weapon TDF flag — 11 weapon sections incl. "Sub Starburst Missile", every one a `waterweapon` | [VERIFIED] |
 | Level 3 tier | Pure unit data + build menus | [VERIFIED] |
 
 Its `TAESC.ini` is the community patch's `Settings.ini`, rebranded: every entry is a TADR knob
@@ -78,7 +78,7 @@ identity is a debug string, and ESC's DLL contains `Process Attached.  config=es
 Every other DLL is likewise community-authored: `eplayx.dll` (298,496) is the TA Demo Recorder
 (`CompanyName=Swedish Yankspankers & TA Universe community`, Delphi paths
 `F:\TA\TADR\SVN\trunk\src\Recorder\*.pas`), differing from `tplayx.dll` in **67 bytes / 31 runs** —
-`.tad`→`.ted`, `Software\OTA\TA Demo`→`Software\TA Esc\TA Demo`, two opcode flips, and version-
+`.tad`→`.ted` (the autorecorded name only: `.record <name>` still writes `.tad`), `Software\OTA\TA Demo`→`Software\TA Esc\TA Demo`, two opcode flips, and version-
 resource bookkeeping. `ddraw.dll` (411,648) is unmodified cnc-ddraw 7.1.0.0 (FunkyFr3sh).
 `emusi.dll` (124,928) is Plobex/Damian Woroch's "TA Music Player". [VERIFIED]
 
@@ -148,19 +148,25 @@ OR when turned back on"*. It also explains the FAQ's requirement that all player
 unit count: the scan iterates the unit-ID table, whose size is `UnitLimit`, so a mismatch desyncs —
 exactly why *"Teleporters … are scripted specifically to each version of TA:ESC"*.
 
-**Crucially, TADR ships a real engine shield** — `UnitInfoExpand.pas` parses a new FBI key
-`ShieldRange`, `UnitSearchHandlers.pas` computes `ShieldedBy` via an engine unit search, and
-`Broadcast_ExtraUnitState` network-syncs it, with a `SHIELDICON` sidedata tag and GAF overlay.
-**TA:ESC uses `ShieldRange` zero times.** Its shields predate and bypass the engine feature. [VERIFIED]
+**TADR's source holds an engine shield, but no shipped build has it.** `UnitInfoExpand.pas` parses a
+new FBI key `ShieldRange`, `UnitSearchHandlers.pas` computes `ShieldedBy` via an engine unit search,
+and `Broadcast_ExtraUnitState` network-syncs it, with a `SHIELDICON` sidedata tag and GAF overlay.
+All of that is the recorder's unreleased 4.0 tree; ESC's `eplayx.dll` (3.9.2.416) links none of it,
+and the effect also needs `[MOD] ID` above 1, which `TAESC.ini` does not set
+([the merge exploration](tadr-merge-exploration.md#what-ships-is-not-what-the-source-holds)).
+**TA:ESC uses `ShieldRange` zero times.** Its shields are pure COB. [VERIFIED, BIN]
 
 ## Engine features consumed vs. authored
 
 **Authored by TA:ESC:** unit data (FBI/TDF), COB scripts, models, textures, GUI, AI, maps, balance.
 Nothing else.
 
-**Consumed from the community patch** — used, not written: `surfacefire=1` (12 weapons — this *is*
-the "surfacable nuclear subs"), `nottoair` (73 uses), `veterancythresholds` +
-`veterancyaccuracybuffrate` (146 FBIs each), plus the whole TADR limit/UI stack via `TAESC.ini`.
+**Consumed from the community patch** — used, not written: `surfacefire=1` (11 weapon sections — this
+*is* the "surfacable nuclear subs", and the D-guns' underwater fire), `nottoair` (73 uses),
+`veterancythresholds` + `veterancyaccuracybuffrate` (197 FBIs each), `PreviewPieces` (15) and
+`PreviewFaceOpponent` (12), plus the whole TADR limit/UI stack via `TAESC.ini`. Counts from the
+2026-09-25 census in [the section-C evidence](tadr-port/data-keys-evidence.md#part-5-what-escalations-content-uses),
+read from the archives' raw bytes.
 
 **Written by others *for* TA:ESC on request.** Upstream `tdraw.txt` gates four features to the
 escalation build — share-abuse guard, repair-rate exploit fix, aircraft wrecks falling, 32-tile
@@ -203,9 +209,11 @@ licensed TA + Core Contingency, minimum 1024×768; incompatible with other mods.
 - **Gap:** 1,725 bytes across 117 `.text` runs in the exe are unattributed. I had ProTA 4.5 and
   Mayhem patch tables only, and no stock TA 3.1 exe for a three-way diff. I found no positive
   evidence of ESC-original engine code, but cannot prove a negative for those bytes.
-- **Gap:** the COB disassembler's opcode names are calibrated for the opcodes actually observed;
-  extended `GET` constants 69/70/73/74 are inferred as unit-ID/ownership queries from usage, not
-  from a published table. The `set ARMORED` finding does not depend on that inference.
+- The extended `GET` constants are the recorder's, and its shipped build answers exactly the ones ESC
+  uses: 32 and 69–75 (`MIN_ID`, `MAX_ID`, `MY_ID`, `UNIT_TEAM`, `UNIT_BUILD_PERCENT_LEFT`,
+  `UNIT_ALLIED`, `UNIT_IS_ON_THIS_COMP`), disassembled in `eplayx.dll` and counted over every ESC
+  script ([the merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)). The
+  `set ARMORED` finding never depended on them.
 - The readme lists sections 11–12 in its contents but the headed sections are absent from the file.
 
 ## Sources

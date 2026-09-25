@@ -252,6 +252,28 @@ typedef struct TAGPU_PK_BUILD {
     int32_t  pos[3];          /* node+0x22.., 16.16 x, altitude, z              */
 } TAGPU_PK_BUILD;
 
+/* 40 B, one per unit type a ghost is drawn for that HIDES a piece: the build
+   cursor's type and every type in PK_BUILD, deduplicated, sorted by `type`.
+   A type with nothing hidden has no row and its ghost shows every piece.
+
+   `bits` is one bit per piece in THE GHOST'S OWN WALK ORDER
+   (tagpu_model3do.h, tagpu_model_walk, the one function both threads call),
+   bit i of bits[i >> 5] set = piece i hidden. What it hides: the pieces the
+   type's COB `Create()` hides before its first opcode of uncertain length,
+   read on the game thread and not run, and matched to the model the way the
+   engine matches them (0x45A950); or, when the FBI sets `PreviewPieces=`,
+   every piece that list does not name (tagpu_datakeys.c).
+
+   A consumer applies a row only when `root` is the template it walked and
+   `npieces` its own count — both VALUES, compared and never dereferenced —
+   so a row can cost a ghost its mask, never a wrong piece. */
+typedef struct TAGPU_PK_GHOSTMASK {
+    uint16_t type;            /* the UnitDef index, as PK_BUILD.type            */
+    uint16_t npieces;         /* the walk's node count, 1..TAGPU_PK_MAXPIECE    */
+    uint32_t root;            /* MODEL_PTRS[type] as the game thread read it    */
+    uint32_t bits[8];         /* TAGPU_PK_MAXPIECE bits                         */
+} TAGPU_PK_GHOSTMASK;
+
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns
    them. All four are SIM STATE — the tick moves a projectile, advances an
@@ -564,6 +586,8 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_FXMODEL 0x40000u   /* the five model tables, together  */
 #define TAGPU_PK_TRUNC_MAPFEAT 0x80000u   /* did not fit this packet, OR the
                                             level's snapshot hit its own cap */
+#define TAGPU_PK_TRUNC_GHOSTMASK 0x100000u /* did not fit, OR more masked types
+                                             than the table's cap          */
 
 #define TAGPU_PK_SHD_ROWS   32u      /* the engine's PALETTE.SHD shade table:  */
 #define TAGPU_PK_SHD_BYTES  (TAGPU_PK_SHD_ROWS * 256u)   /* 32 x 256 bytes     */
@@ -597,6 +621,9 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_MAX_BUILDS   6144u    /* the order snapshot's own arena cap:
                                           one record per queued marker, and a
                                           build is a subset of those             */
+#define TAGPU_PK_MAX_GHOSTMASK 1024u   /* distinct masked types in one frame's
+                                          ghosts; a ghost past it shows every
+                                          piece, and the truncation bit says so  */
 /* The map's own features: the anchor table's cap, and 512 KB of scratch on
    each side. A ceiling, not a census -- a map past it is mirrored with its
    first 65 536 in row order, and TAGPU_PK_TRUNC_MAPFEAT says so. */
@@ -742,6 +769,8 @@ typedef struct TAGPU_PACKET {
     /* ---- the build-orders table (the ghost pass) ---- */
     uint32_t n_builds, off_builds;    /* PK_BUILD: the queued builds whose site
                                          rect the order pass is showing          */
+    uint32_t n_ghostmask, off_ghostmask; /* PK_GHOSTMASK: the hidden pieces of
+                                         the ghosts' types, sorted by type       */
 
     /* ---- the map's own features (the map edge's mirror) ---- */
     uint32_t n_mapfeat, off_mapfeat;  /* PK_MAPFEAT, row-major over the map, in
@@ -927,6 +956,9 @@ static __inline const TAGPU_PK_PART* tagpu_pk_part(const TAGPU_PACKET* p)
 /* the queued builds the order pass is showing site rects for, or NULL */
 static __inline const TAGPU_PK_BUILD* tagpu_pk_builds(const TAGPU_PACKET* p)
 { return p->n_builds ? (const TAGPU_PK_BUILD*)(const void*)((const unsigned char*)p + p->off_builds) : (const TAGPU_PK_BUILD*)0; }
+/* the ghost masks, sorted by type, or NULL */
+static __inline const TAGPU_PK_GHOSTMASK* tagpu_pk_ghostmask(const TAGPU_PACKET* p)
+{ return p->n_ghostmask ? (const TAGPU_PK_GHOSTMASK*)(const void*)((const unsigned char*)p + p->off_ghostmask) : (const TAGPU_PK_GHOSTMASK*)0; }
 /* the map's own features, or NULL: see TAGPU_PK_MAPFEAT for when it rides */
 static __inline const TAGPU_PK_MAPFEAT* tagpu_pk_mapfeat(const TAGPU_PACKET* p)
 { return p->n_mapfeat ? (const TAGPU_PK_MAPFEAT*)(const void*)((const unsigned char*)p + p->off_mapfeat) : (const TAGPU_PK_MAPFEAT*)0; }

@@ -455,9 +455,7 @@ their vtable slots unread: `0x10009000` (two pops → `vt+0x28`), `0x1000A000` (
 ### 2.5 `GET`/`SET` value IDs (engine queries)
 
 `GET`/`SET` take a **value-id** selecting what to read/write. **Standard retail-TA IDs are
-1–20** (below); community engines & mods extend from **21 up** (our vendored
-`COB_extensions.pas` defines the extension range — it explicitly sets `CUSTOM_LOW =
-WEAPON_AIM_ABORTED = 21`, so 1–20 are the original set). [VERIFIED 2026-09-07 — the `GET`
+1–20** (below); community engines & mods extend above them. [VERIFIED 2026-09-07 — the `GET`
 handler `0x480770` bounds-checks `id − 1 <= 0x13` and dispatches through a **20-entry** jump
 table at `0x480AC4`; the `SET` handler `0x480B20` does the same through a byte table at
 `0x480C18`. Every id's arithmetic, its unit fields and the six ids `SET` actually writes are in
@@ -481,10 +479,15 @@ both hypots and `GROUND_HEIGHT` are **16.16**, not world units.
 These are exactly the hooks mods exploit without engine patches — e.g. TA:ESC/TA Zero
 implement "shields" purely in COB by differencing `get HEALTH` and toggling `set ARMORED`
 (see `deep-ta-esc.md`, `_index.md`) — and that one works because `set ARMORED` is one of the
-six, reaching `UNITS_SetStateMask 0x48B090` with selector 2. Extension IDs of note from `COB_extensions.pas`:
-`UNITX/UNITZ/UNITY`(100–102), `TURNX/TURNZ/TURNY`(103–105), `HEALTH_VAL`(107),
-`ATTACKER_ID`(134), `CREATE_UNIT`(151), `KILL_THIS_UNIT`(152) — all TADR/ProTA-era additions,
-not stock. [VERIFIED extension IDs.]
+six, reaching `UNITS_SetStateMask 0x48B090` with selector 2.
+
+**The extensions content actually meets are the TADR recorder's `GET` ids 32 and 69–75**
+(`VETERAN_LEVEL`, `MIN_ID`, `MAX_ID`, `MY_ID`, `UNIT_TEAM`, `UNIT_BUILD_PERCENT_LEFT`, `UNIT_ALLIED`,
+`UNIT_IS_ON_THIS_COMP`): the shipped recorder (3.9.2.416) answers exactly those, hooks no `SET`, and
+TA:ESC's scripts use exactly those. `COB_extensions.pas` at HEAD defines about 129 more
+(`UNITX` 100, `CREATE_UNIT` 151, …, from `WEAPON_AIM_ABORTED` 21 up), but that tree never shipped, and
+TADR's 2026 recorder build numbers the same ideas differently. Details in the
+[merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters). [BIN]
 
 ### 2.6 How COB poses the 3DO tree (the render bridge)
 

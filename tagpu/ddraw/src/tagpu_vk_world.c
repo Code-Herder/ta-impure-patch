@@ -45,8 +45,11 @@ enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
 
 /* THE BOUND ON THE TARGET, AND IT IS A BOUND ON AN ALLOCATION RATHER THAN A
    TASTE. `gw * ss` is arithmetic on a value that reached us through the frame
-   packet and a lever, and this module turns it into a device allocation of
-   `4 * w * h` bytes twice over. TAGPU_SS_MAX is 4 and the largest game
+   packet and a lever, and this module turns it into two device allocations
+   of `w * h` pixels: the colour at 4 bytes a pixel and the depth-stencil at
+   the seam's format's (4 for D24_UNORM_S8_UINT; D32_SFLOAT_S8_UINT holds 5
+   of data, and the reference setup's driver lays it out in 8 [INFERRED from
+   the measured total, gpu-status §2.91]). TAGPU_SS_MAX is 4 and the largest game
    resolution the fork offers is well inside this, so a target past it is a
    value that is not what it claims to be -- refused, and said once. */
 #define WORLD_MAXDIM 8192
@@ -1256,7 +1259,6 @@ void tagpu_vk_world_down(const TAGPU_VKPASS* d)
     if (s_dcState != ST_REFUSED) s_dcState = ST_UNBUILT;
 }
 
-int tagpu_vk_world_scale(void) { return s_drawThis ? s_lastSS : 1; }
 
 int tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h,
                         VkFormat* fmt)

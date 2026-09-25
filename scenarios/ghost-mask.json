@@ -1,0 +1,26 @@
+{
+  "format": "ta-scenario/1",
+  "description": "The build ghost's piece-mask oracle: four finished structures whose Create() hides a piece (ARMLLT's flare, ARMHLT's flashes, ARMAP's dish, CORMOHO's dingles and rotary) at facing 0, the ghost's own heading, with a commander, an ARM construction kbot and a Core advanced constructor to hold each type's build cursor on the open ground south of its twin. With tagpu_ghost.on=alpha=1.0 the ghost and the building must show the same pieces.",
+  "seed": 20260925,
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "clear_existing": true,
+    "switches": { "shootall": false, "noshake": true },
+    "players": [
+      { "slot": 0, "controller": "human", "side": "arm", "color": 0, "metal": 5000, "energy": 20000 },
+      { "slot": 1, "controller": "ai", "side": "core", "color": 1 }
+    ]
+  },
+  "units": [
+    { "id": "llt",   "type": "ARMLLT",  "owner": 0, "pos": [1300, 1350], "facing": 0 },
+    { "id": "hlt",   "type": "ARMHLT",  "owner": 0, "pos": [1450, 1350], "facing": 0 },
+    { "id": "ap",    "type": "ARMAP",   "owner": 0, "pos": [1650, 1350], "facing": 0 },
+    { "id": "moho",  "type": "CORMOHO", "owner": 0, "pos": [1880, 1350], "facing": 0 },
+    { "id": "com",   "type": "ARMCOM",  "owner": 0, "pos": [1500, 1700], "facing": 0 },
+    { "id": "ck",    "type": "ARMCK",   "owner": 0, "pos": [1650, 1700], "facing": 0 },
+    { "id": "ack",   "type": "CORACK",  "owner": 0, "pos": [1800, 1700], "facing": 0 },
+    { "id": "spare", "type": "CORSOLAR", "owner": 1, "pos": [4000, 3500], "facing": 0 }
+  ],
+  "camera": { "center_on": "ap" }
+}
