@@ -1,0 +1,60 @@
+{
+  "format": "ta-scenario/1",
+  "description": "B2 ride-along: a cargo unit killed in its transport over land. Order the ARMATLAS to load the ARMSTUMP (`tacli order <i> --unit <atlas> --expect ARMATLAS load unit <stump> --expect-target ARMSTUMP`), then fly it east over the idle AI's CORFLAK (b2-aa-flak, applied after the pickup) and read the wreck records (hung = altitude above the ground under it).",
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": false,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0,
+        "metal": 100000,
+        "energy": 100000
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1,
+        "metal": 100000,
+        "energy": 100000
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "atlas",
+      "type": "ARMATLAS",
+      "owner": 0,
+      "pos": [
+        1400,
+        1700
+      ],
+      "facing": 90
+    },
+    {
+      "id": "stump",
+      "type": "ARMSTUMP",
+      "owner": 0,
+      "pos": [
+        1480,
+        1700
+      ],
+      "facing": 90
+    }
+  ],
+  "camera": {
+    "at": [
+      1600,
+      1600
+    ]
+  }
+}

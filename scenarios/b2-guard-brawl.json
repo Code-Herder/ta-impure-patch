@@ -1,0 +1,210 @@
+{
+  "format": "ta-scenario/1",
+  "description": "B2 measurement: ten ARMBRAWL kept airborne over (1600,1600) by guarding a solar there; read the stamp grid's slot B for each airborne unit's footprint. b2-aa-flak adds the idle AI's flak.",
+  "on_error": "abort",
+  "setup": {
+    "map": "Two Continents",
+    "res": "1024x768",
+    "clear_existing": false,
+    "switches": {
+      "shootall": true,
+      "noshake": true
+    },
+    "players": [
+      {
+        "slot": 0,
+        "controller": "human",
+        "side": "arm",
+        "color": 0,
+        "metal": 100000,
+        "energy": 100000
+      },
+      {
+        "slot": 1,
+        "controller": "ai",
+        "side": "core",
+        "color": 1,
+        "metal": 100000,
+        "energy": 100000
+      }
+    ]
+  },
+  "units": [
+    {
+      "id": "solar",
+      "type": "ARMSOLAR",
+      "owner": 0,
+      "pos": [
+        1600,
+        1600
+      ],
+      "facing": 0
+    },
+    {
+      "id": "armbrawl0",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1350,
+        1850
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    },
+    {
+      "id": "armbrawl1",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1400,
+        1850
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    },
+    {
+      "id": "armbrawl2",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1450,
+        1850
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    },
+    {
+      "id": "armbrawl3",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1500,
+        1850
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    },
+    {
+      "id": "armbrawl4",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1550,
+        1850
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    },
+    {
+      "id": "armbrawl5",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1350,
+        1910
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    },
+    {
+      "id": "armbrawl6",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1400,
+        1910
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    },
+    {
+      "id": "armbrawl7",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1450,
+        1910
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    },
+    {
+      "id": "armbrawl8",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1500,
+        1910
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    },
+    {
+      "id": "armbrawl9",
+      "type": "ARMBRAWL",
+      "owner": 0,
+      "pos": [
+        1550,
+        1910
+      ],
+      "facing": 0,
+      "orders": [
+        {
+          "cmd": "defend",
+          "target": "solar"
+        }
+      ]
+    }
+  ],
+  "camera": {
+    "at": [
+      1600,
+      1600
+    ]
+  }
+}
