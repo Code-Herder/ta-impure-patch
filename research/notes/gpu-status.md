@@ -2067,8 +2067,9 @@ The fixes for the stock engine's own defects run code of ours too, §2.6c.
 | `0x4266A7` | the `jne` that reaches TA's startup DirectX-version warning | `75` → `EB`, so the warning is always skipped |
 | `0x43E50C` | `je 0x43EB02` — the `Interface Type == 1` arm of `0x43E490`'s order-1 (contextual) case, which suppresses `cursormove`, `cursorreclamate` and the rest | `0F 84 F0 05 00 00` → `90` ×6, so the contextual cursor always takes the classic branch. `0x43E490` has exactly one caller (`CorretCursor_InGame 0x48D220`) and no address literal in the image, so it governs which sprite is chosen — but the index it returns is *also* the left button's state, which is what the row below is for. `tagpu_curs.off` opts out, read once at attach |
 | `0x499041` | the left click's own dispatch inside `0x498F70`: `cmp dl,0x11 / jl` on `main+0x2CBE`, the installed cursor index, deciding "issue the order" against "deselect everything" | 27 bytes for 27, decided on `main+0x37EFA` and the order byte instead: `cmp [eax+0x37EFA],1 / jne classic / cmp cl,1 / jne classic / jmp deselect / classic: cmp dl,0x11 / jl act / jmp done`. Armed only when the `0x43E50C` patch above took, and off with the same `tagpu_curs.off` |
+| `0x49F4B8`, `0x49F4EC` | **in a tacli test folder only** (§2.92): the command-line parser's jump-table entries for `R` and `r`, both `0x49F249`, the `-r` switch's DirectPlay registration through `dsetup.dll` | `0x49F249` → `0x49F461`, the loop tail every unknown letter takes (entry 26 at `0x49F4FC`, checked to hold it), so `-r` is ignored. Any mismatch ends the process: in test mode the switch must not reach the real registry |
 
-Neither writes engine state, so neither appears in §2.5. The engine still draws the cursor
+None writes engine state, so none appears in §2.5. The engine still draws the cursor
 itself — the composite only moves it (§1); what the patch changes is which sequence out of
 `cursor_ary` (`main+0x1487F + idx*4`) the engine hands to `SetUICursor 0x4AB400`.
 
@@ -18375,3 +18376,94 @@ the line struct); `tagpu_vk_shadow_format`'s two-pass choice and what `*linearOk
 the remap in both caster vertex stages and the regenerated `tagpu_posedraw.spv.h` and
 `tagpu_shadow.spv.h` (the body program shares `VS`, so its words moved too; its A/B above is the
 check that its picture did not); `stencilok` now 1 wherever `dfmt` is set.
+
+### 2.92 TotalA.exe's registry in a tacli test folder (`tagpu_regstore.c`, test mode only) — G21c
+
+The plan is [hardware portability](hardware-portability.html) §3 G21c, the contract is
+`tagpu_regstore.h`, and the engine's side, every call site with the keys and values it reads
+and writes, is [exe reverse engineering](exe-reverse-engineering.html) §"The registry".
+
+**Test mode has two signals, and either is enough.** `tagpu_regstore_decide`, which `DllMain`
+attach runs right after the fork's `delay_imports_init` and before the return for cnc-ddraw's
+config tool (so an inherited `cnc_ddraw_config_init` cannot skip it; detach returns early
+exactly when attach did), looks for the token `-xtacli-test` on the command line
+and for a `tacli-state` folder beside the running exe (`GetModuleFileNameW(NULL)`, never the
+working directory). tacli passes the token on every remote launch; the engine skips it (`x` is
+above the `'B'..'w'` of its switch table, `ja 0x49F461`, [command-line
+options](cmdline-options.html)). **Real mode needs both absent**: no token, and the folder not
+found. A folder that cannot be looked at (a share, an access rule), without the token, is real
+mode too, so a player's folder stays inert. Real mode logs `registry: real (no -xtacli-test
+token, and no tacli-state folder beside TotalA.exe)` and installs nothing, so a player's game
+carries no hook of this section.
+
+**Test mode fails closed.** A store that is missing, a folder, unreadable or not loaded whole,
+no memory for it, an exe path that cannot be read, a registry import the hooks do not answer
+(`TotalA.exe`'s or `win32.dll`'s), or a `win32.dll` not loaded at attach (a static import of
+`TotalA.exe`, so the loader maps it before any `DllMain` runs) ends the process with `TerminateProcess` at attach, after one
+log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. The game's
+first instruction never runs. The line names the process (`s_exe`), so a cnc-ddraw config
+tool started in a test folder reads as one. `rs_refuse_run` is `noreturn` by construction:
+`ExitProcess` in a loop follows `TerminateProcess`, since a caller goes on as though the store
+were whole.
+
+**Import-table hooks, not engine addresses.** In test mode, at `DllMain` attach right after
+`tagpu_log_init` (before `cfg_load`, the byte patches and the fork's `hook_init`),
+`hook_patch_iat` replaces:
+
+| module | imports | slots |
+|---|---|---|
+| `TotalA.exe` | `RegOpenKeyExA`, `RegQueryValueExA`, `RegCreateKeyA`, `RegOpenKeyA`, `RegQueryValueA`, `RegCreateKeyExA`, `RegSetValueExA`, `RegFlushKey`, `RegCloseKey` | `0x4FC000..0x4FC020`, one each in that order; every call site is in the engine map |
+| `win32.dll` | `RegOpenKeyExA`, `RegQueryValueExA` | its own; it reads `musicvol` and `cdmode` |
+
+After patching, `rs_count` walks the import directories of the exe and of `win32.dll`: every
+ADVAPI32 import whose name begins with `Reg` must now hold one of the hooks, or the process is
+terminated with a log line before the game's first instruction. The fork's `hook_init`, which runs later, hooks no
+registry function, so nothing overwrites these slots.
+
+**What the hooks do.** `HKCU\Software\Cavedog Entertainment` and every key below it are served
+from the store in memory; each change rewrites the file whole (a temporary file, flushed, moved
+over it with `MoveFileExW`). `HKCU` and `HKCU\Software` get store handles that hold no values.
+Every other key is read-only: an open asking for any right beyond reading, a create and a value
+write are refused with `ERROR_ACCESS_DENIED`, and a read-only open, a query and a close go to
+the real registry. No hook calls a registry function that writes. A store handle is
+`0x6D5A0000 + 4 × index`, above every kernel handle and below the predefined keys.
+
+**One byte patch, also test mode only**: the `-r` switch's two jump-table entries (§2.6), since
+`dsetup.dll` writes the registry through imports of its own.
+
+**The fork's own registry writes.** `indeo.c` writes four `vidc.iv*` values under
+`HKCU\…\Drivers32` at attach and deletes them at detach; in test mode `dllmain.c` skips both
+(the game plays Smacker and loads no Video for Windows codec). `debug.c` and `utils.c` only read,
+and only in a `make DEBUG=1` build or under `age.dll`.
+
+**State and threads.** No engine memory is read or written, so `tagpu_regstore.c` is not on
+`thread-split.allow`. The store's keys and values sit under one critical section, which any
+thread calling the registry may take. Under it run only this module, kernel32 file calls and
+`tagpu_log`, whose own lock is a leaf. Real registry calls run outside it. A change of value
+rewrites the file under that lock, on the calling thread: the game's saver writes about fifty
+values in a burst, but only the ones that changed cost a rewrite (two rewrites in the logged
+run under wine).
+
+**The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
+above are the only way `TotalA.exe`'s and `win32.dll`'s code reaches the registry, and the `-r`
+switch is closed. Nothing hooks the system DLLs the game uses and loads by name; the other
+DLLs it loads at run time (`online.dll`, the extension DLLs `online.dll` loads into the game's
+process, `reporter.dll`, `DebugHelper.dll`); the programs the game starts (what `ShellExecuteA`
+opens, what `online.dll` starts); or Windows' own records (the Task Scheduler's of the task
+while it exists, and those of the programs it runs). The full list: [tacli
+design](tacli-design.html) §"The registry: a file in the test folder".
+
+**Measured** (the plan's G21c gate): under wine, `9 of 9 registry imports, win32.dll 2 of 2`,
+77 distinct values written to the store and TA's section of the prefix's `user.reg` unchanged;
+each fail-closed path (the token without a store, the store as a folder, the folder without a
+store) ended at attach with its line and no registry call from `TotalA.exe` or `ddraw.dll`;
+on the Windows test setup, TA's key and the Indeo key exported byte-identical before and after
+a `scenario load`, with the counters `the real registry was asked for 1 read-only opens, 1
+reads and 1 closes, and for no write ... 1 writes were refused`.
+
+**Risky spots for a review.** The decision ahead of the config tool's return, the token's
+parse of `GetCommandLineW` (the program name quoted or not), and the `TerminateProcess` inside
+`DllMain`; the `PREFIX` handles and `RS_READ_SAM` (what counts as a read-only open);
+`RegFlushKey` on a real key answering success without a call; the persistence under the lock;
+the handle range; the `-r` jump-table patch and its fail-closed mismatch; `win32.dll`
+required at attach (a static import of `TotalA.exe`).

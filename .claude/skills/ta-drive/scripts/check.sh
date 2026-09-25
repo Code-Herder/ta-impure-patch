@@ -26,7 +26,7 @@ body() {
 echo "== levers with no reader in tagpu/ddraw/{src,inc} or tools/tacli =="
 body | grep -oE '\b(tagpu_)?[a-z0-9_]+\.(on|off|ab|cfg|txt|step|trigger|gpus|check|stress|poison)\b' \
   | sed -E 's/^tagpu_//' \
-  | grep -vE '^(ddraw|impure|instance|apply|report|catalogue|tools|scenarios|user|Xorg|ta_symbols|posedump\.txt|migration\.txt)' \
+  | grep -vE '^(ddraw|impure|instance|apply|report|catalogue|tools|scenarios|user|Xorg|ta_symbols|posedump\.txt|migration\.txt|registry\.txt)' \
   | sort -u | while read -r lev; do
     base=${lev%%.*}; ext=${lev##*.}
     # `tagpu_gui.on` is quoted once as the WRONG spelling to give `arm`; skip that literal
