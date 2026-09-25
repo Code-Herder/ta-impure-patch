@@ -72,6 +72,7 @@
 #include "tagpu_render3do.h"
 #include "tagpu_scaffold.h"
 #include "tagpu_fx.h"
+#include "tagpu_fxmodel.h"   /* the effects models' runs, handed to the unit window */
 #include "tagpu_sfx.h"
 #include "tagpu_fxown.h"
 #include "tagpu_feat.h"
@@ -83,6 +84,7 @@
 #include "tagpu_owndraw.h"   /* tagpu_owndraw_set_structshadow */
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"  /* the per-type geometry bake and its caches */
+#include "tagpu_vk_unit.h"   /* tagpu_vk_unit_fx_ready: whether the models can be drawn */
 #include "tagpu_lerp.h"      /* smooth-motion.md option A: the pose between two sim ticks */
 #include "crc32.h"          /* the tagpu_posecrc.on gate oracle */
 #include "tagpu_glsl.h"
@@ -117,7 +119,6 @@
    research/notes/exe-reverse-engineering.md. */
 #include "tagpu_model3do.h"   /* O3_*, PRIM_*, P_*, N_*, F_*: the engine's model structures */
 
-#define MAXNV  49152           /* vertices across all native units per frame */
 /* THE GATHER HAS NO UNIT CAP OF ITS OWN. A unit it leaves out is not merely
    undrawn, it is INVISIBLE -- tagpu_overlay.c wipes the engine's composite for
    every unit `tagpu_native_owns_unit` accepts, whether or not this gather
@@ -125,10 +126,6 @@
    frame (`grow_room`), and those counts are bounded by the packet's tables,
    which cover the design point (TAGPU_PK_DESIGN_SLOTS). An allocation that
    fails refuses the frame's unit hand-over rather than drawing some units. */
-#define NVST   14              /* x,y,depthEnc, u,v, flat,ck, shadeRow, wx,wzp, vy,
-                                  nx,ny,nz (Classic++: the posed face normal in
-                                  map space, unit length, flat per face; level
-                                  for lines and unshaded pieces) */
 /* depth keys: ground rows encode as (feat?3:1) + rel*4 (rel = row − r0, up
    to the sweep's row count plus the ±256 px gather slack); the engine draws
    projectiles/explosions after every ground row and before the airborne sweep
@@ -289,6 +286,13 @@ static unsigned s_pvFrame = 0xFFFFFFFFu;   /* the frame that fill belongs to —
                                       never a real frame, so a ghost armed on
                                       the very first one cannot draw against a
                                       zeroed view */
+/* s_fogOrgX/Y: the world origin of fog grid cell 0 on one axis, the builder's
+   rounded eye>>5 turned back into world px, i.e. 32*col0 + 16 (0x4843C0 head,
+   0x4848E0). `%` truncating toward zero is DELIBERATE, not a floor-mod bug:
+   the builder computes col0 as ((eye + (sign & 31)) >> 5) - 1, which is C's
+   truncating division, so a floor-based remainder would disagree with the
+   engine for a negative eye (eye = -20: engine origin -16, floor would say
+   -48). */
 static int    s_fogCols = 0, s_fogRows = 0, s_fogOrgX = 0, s_fogOrgY = 0;
 static int    s_fogCells = 0;         /* the ALLOCATION's cell count (= cols*rows) */
 /* Presented frames that needed the WIDE fog grid and whose packet carried
@@ -317,13 +321,6 @@ static unsigned s_unitNoPieces = 0;
 static unsigned s_pendFrame = 0xFFFFFFFFu;
 static unsigned s_pendBare, s_pendOut, s_pendNoPieces;
 static const unsigned short* s_fogGrid = NULL;
-/* world origin of fog grid cell 0 on one axis: the builder's rounded eye>>5
-   turned back into world px, i.e. 32*col0 + 16 (0x4843C0 head, 0x4848E0).
-   `%` truncating toward zero is DELIBERATE, not a floor-mod bug: the builder
-   computes col0 as ((eye + (sign & 31)) >> 5) - 1, which is C's truncating
-   division, so a floor-based remainder would disagree with the engine for a
-   negative eye (eye = -20: engine origin -16, floor would say -48). */
-static float  s_verts[MAXNV * NVST];
 /* NOTHING WRITES THIS, AND THAT IS DELIBERATE.
 
    It means "every selection box this frame owed was actually emitted";
@@ -343,10 +340,6 @@ static float  s_verts[MAXNV * NVST];
    deleting the accessor means editing a patch whose job is unchanged, and a
    lane that wants the engine to stand down has its seam here. */
 static volatile int s_selComplete = 0;
-
-/* material constants copied per frame from render3do's calibration */
-static const float SH_V[3] = { 0.0f, 0.8944f, -0.4472f };
-static const float SH_L[3] = { -0.35f, 0.80f, -0.49f };
 
 /* FOUR SHADERS, AND NONE OF THEM HAS A C REFERENCE. They are a BUILD INPUT,
    not dead code: `tools/spirv-gen.py` reads every one out of the PREPROCESSED
@@ -788,159 +781,14 @@ static void pose_rest_block_init(void)
     }
     filled = 1;
 }
-#define MAXNODEV 4096               /* verts of one node staged for emission */
 
-/* faces of one Model3DONode whose vertices are already model-space floats
-   P[nvert*3] — the engine-posed vbuf for units, rotated raw verts for
-   effects models. skipFace: index the engine never draws (-1 = none);
-   quadOnly: textured faces need exactly 4 verts (GAF_DrawTransformed is a
-   quad rasteriser — the generic 3DO draw 0x46BAE0 skips the rest). */
-static int emit_node(const char* nd, const float* P, int nvert, int nv,
-                     float ax, float ay, float wx0, float wz0, float encBase,
-                     int owner, int pieceShaded, int skipFace, int quadOnly)
-{
-    int shNeutral = tagpu_r3d_shade_neutral(), shDir = tagpu_r3d_shade_dir();
-    int nface = *(const int*)(nd + N_FCOUNT);
-    const char* faces = *(const char* const*)(nd + N_FACES);
-    if (nvert <= 0 || nface <= 0 || nface > 512 || !ptr_ok(faces)) return nv;
-    if (IsBadReadPtr(faces, (SIZE_T)nface * FACE_STRIDE)) return nv;
-
-    const int nv0 = nv;
-    int j;
-    for (j = 0; j < nface; j++) {
-        if (j == skipFace) continue;
-        const char* fa = faces + j * FACE_STRIDE;
-        int fvc = *(const int*)(fa + F_VCOUNT);
-        const unsigned short* idx = *(const unsigned short* const*)(fa + F_INDICES);
-        if (fvc < 3 || fvc > 32 || !ptr_ok(idx)) continue;
-        if (IsBadReadPtr(idx, (SIZE_T)fvc * 2)) continue;
-
-        /* material — shared helpers from render3do */
-        float uv[4], ckf = -1.0f, colv = -1.0f;
-        int hasTex = 0;
-        {
-            const char* tg = tagpu_r3d_face_texframe(fa, owner);
-            const int got = tg ? tagpu_r3d_atlas_uv(tg, uv, &ckf) : 0;
-            /* DEFERRED past the allowance (tagpu_gaf.h `budget`): the node is
-               taken back out whole, not drawn with this face flat */
-            if (got < 0) return nv0;
-            if (got > 0) hasTex = 1;
-            if (!hasTex) {
-                int fc = tagpu_r3d_face_colour(fa);
-                if (fc < 0) continue;
-                colv = (float)fc / 255.0f;
-            }
-        }
-        if (quadOnly && hasTex && fvc != 4) continue;
-
-        int k;
-        for (k = 1; k + 1 < fvc; k++) {
-            unsigned short tri[3]; int slot[3];
-            tri[0] = idx[0]; slot[0] = 0;
-            tri[1] = idx[k]; slot[1] = k;
-            tri[2] = idx[k+1]; slot[2] = k+1;
-            if (tri[0] >= nvert || tri[1] >= nvert || tri[2] >= nvert) continue;
-            if (nv + 3 > MAXNV) return nv;   /* the budget */
-            float V[3][3]; int t;
-            for (t = 0; t < 3; t++) {
-                const float* v = P + tri[t] * 3;
-                V[t][0] = v[0]; V[t][1] = v[1]; V[t][2] = v[2];
-            }
-            float shade = (float)shNeutral / 31.0f;
-            /* Classic++ lights the fragment from the same outward normal the
-               shade row is quantised from, carried in MAP space (x east, y up,
-               z south -- 3DO z points north, hence the flip; tascene-view.html
-               buildUnits does the same). Level where the engine draws the
-               piece unshaded (no shade flag, a degenerate face), so the
-               lambert is exactly 1.0 there, as the neutral row is the
-               identity. */
-            float un[3] = { 0.0f, 1.0f, 0.0f };
-            if (pieceShaded) {
-                float e1x = V[1][0]-V[0][0], e1y = V[1][1]-V[0][1], e1z = V[1][2]-V[0][2];
-                float e2x = V[2][0]-V[0][0], e2y = V[2][1]-V[0][1], e2z = V[2][2]-V[0][2];
-                float nx = e1y*e2z - e1z*e2y, ny = e1z*e2x - e1x*e2z, nz = e1x*e2y - e1y*e2x;
-                if (nx*SH_V[0] + ny*SH_V[1] + nz*SH_V[2] < 0.0f) { nx=-nx; ny=-ny; nz=-nz; }
-                float nl = sqrtf(nx*nx + ny*ny + nz*nz);
-                if (nl > 1e-6f) {
-                    float I = (nx*SH_L[0] + ny*SH_L[1] + nz*SH_L[2]) / nl;
-                    int rr = shNeutral + shDir * (int)floorf(I * 12.0f + 0.5f);
-                    if (rr < 0) rr = 0; else if (rr > 31) rr = 31;
-                    shade = (float)rr / 31.0f;
-                    un[0] = nx / nl; un[1] = ny / nl; un[2] = -nz / nl;
-                }
-            }
-            for (t = 0; t < 3; t++) {
-                float x = V[t][0], y = V[t][1], z = V[t][2];
-                float* o = s_verts + nv * NVST;
-                float px = x;
-                float py = -z - y * 0.5f;
-                o[0] = ax + px;
-                o[1] = ay + py;
-                /* depth enc: row base +- intra-model view depth (2y-z),
-                   squeezed into the +-2 gap between row keys */
-                float md = (2.0f * y - z) / 256.0f;
-                if (md > 1.8f) md = 1.8f; if (md < -1.8f) md = -1.8f;
-                o[2] = encBase + md;
-                if (hasTex) {
-                    int c = fvc <= 4 ? slot[t] : slot[t] * 4 / fvc;
-                    o[3] = (c == 1 || c == 2) ? uv[2] : uv[0];
-                    o[4] = (c >= 2)           ? uv[3] : uv[1];
-                    o[5] = 0.0f; o[6] = ckf;
-                } else {
-                    o[3] = -1.0f; o[4] = -1.0f;
-                    o[5] = colv;  o[6] = -1.0f;
-                }
-                o[7] = shade;
-                o[8] = wx0 + px;
-                o[9] = wz0 + py;
-                o[10] = y;
-                o[11] = un[0]; o[12] = un[1]; o[13] = un[2];
-                nv++;
-            }
-        }
-    }
-    return nv;
-}
-
-static float s_P[MAXNODEV * 3];     /* one node's model-space vertices */
-
-
-/* effects models (projectiles, debris): the raw node rotated by the engine
-   triple exactly like 0x4B6CC0 — Rz(t0) on (x,y), then Rx(t2) on (y,z),
-   then Ry(t1) on (x,z); drawn unshaded (GAF_DrawTransformed copies texels);
-   the face at index 0 is skipped when the node has a selection primitive
-   (0x46BAE0's rule); textured faces must be quads */
+/* the engine's pair rotator 0x4B7173 without its rounding: a' = a*cos -
+   b*sin, b' = a*sin + b*cos (DISASSEMBLED; 0x4B6CC0 composes three of them) */
 static void rot2(float c, float s, float* a, float* b)
 {
     float na = *a * c - *b * s;
     *b = *a * s + *b * c;
     *a = na;
-}
-
-static int emit_fx_model(const TAGPU_FXMODEL* m, int nv, float fxKey)
-{
-    const char* nd = m->node;
-    if (!ptr_ok(nd) || IsBadReadPtr(nd, 0x40)) return nv;
-    int nvert = *(const int*)(nd + N_VCOUNT);
-    const int* vb = *(const int* const*)(nd + N_VERTS);
-    if (nvert <= 0 || nvert > MAXNODEV || !ptr_ok(vb) || IsBadReadPtr(vb, (SIZE_T)nvert * 12)) return nv;
-    const float K = 6.2831853f / 65536.0f;
-    float c0 = cosf((float)m->turn[0] * K), s0 = sinf((float)m->turn[0] * K);
-    float c1 = cosf((float)m->turn[1] * K), s1 = sinf((float)m->turn[1] * K);
-    float c2 = cosf((float)m->turn[2] * K), s2 = sinf((float)m->turn[2] * K);
-    int i;
-    for (i = 0; i < nvert; i++) {
-        float x = (float)vb[i*3+0] / 65536.0f;
-        float y = (float)vb[i*3+1] / 65536.0f;
-        float z = (float)vb[i*3+2] / 65536.0f;
-        if (m->turn[0]) rot2(c0, s0, &x, &y);
-        if (m->turn[2]) rot2(c2, s2, &y, &z);
-        if (m->turn[1]) rot2(c1, s1, &x, &z);
-        s_P[i*3+0] = x; s_P[i*3+1] = y; s_P[i*3+2] = z;
-    }
-    int selprim = *(const int*)(nd + N_SELPRIM);
-    return emit_node(nd, s_P, nvert, nv, m->ax, m->ay, m->wx, m->wz, fxKey,
-                     m->owner, 0, selprim != -1 ? 0 : -1, 1);
 }
 
 /* ---- THE SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md §1) ----
@@ -1020,9 +868,8 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
     a = root ? selbox_aabb(root) : NULL;
     if (!a) return 0;
     /* ALL THREE ANGLES, in 0x4B6CC0's order and sense: Rz(+0x64) on (x,y),
-       Rx(+0x68) on (y,z), Ry(+0x66) on (x,z), each `a' = a*cos - b*sin` --
-       the same triple an effects model takes (`emit_fx_model`). The tilt words
-       are live on a slope (17.4 deg of bank, -22.1 of pitch measured on one
+       Rx(+0x68) on (y,z), Ry(+0x66) on (x,z), each `a' = a*cos - b*sin`. The
+       tilt words are live on a slope (17.4 deg of bank, -22.1 of pitch measured on one
        hillside), and a TRANSPOSED heading turns the rect against its unit. */
     c0 = cosf((float)pu->rot[0] * K); s0 = sinf((float)pu->rot[0] * K);
     c1 = cosf((float)pu->rot[1] * K); s1 = sinf((float)pu->rot[1] * K);
@@ -1102,7 +949,7 @@ static int selbox_emit(const TAGPU_PACKET* pk, const TAGPU_PK_UNIT* pu,
 
      - turn[0] rotates about X, turn[1] about Y, turn[2] about Z, each the
        positive-angle rot2 above at 65536 = 360 degrees. NOT the index order
-       the effects models use (emit_fx_model reads a different struct);
+       of the triple 0x4B6CC0 itself takes, whose FIRST word turns (x,y);
      - the ORDER is Z, then X, then Y -- read out of the engine, not guessed:
        UNITS_PieceOffset 0x43DEF0 composes through 0x4B6CC0, which rotates the
        (x,y) pair by the +0x14 word, then (y,z) by +0x10, then (x,z) by +0x12.
@@ -2299,7 +2146,35 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     int rows = scafRows > 0 ? scafRows : (evh >> 4) + 32;
     /* this frame's depth bands (see ROW_SLACK) */
     float fxKey = 3.0f + (float)(rows + ROW_SLACK) * 4.0f + 4.0f;
-    float airKey = fxKey + 12.0f;
+    /* THE EFFECTS BAND, from `encFx` = fxKey - 1.5 (above every ground row's
+       fxKey - 2.2 and the particle layers 5 and 6 at fxKey - 2) up. It holds
+       the effects' paint order as a SEQUENCE of keys (tagpu_fx.c, "the
+       effects band"): 2N + 2 steps for N models, where N is the packet's own
+       bound on them, taken before any key is fixed.
+
+       THE STEP IS NEVER BELOW 16 x 2^-23 OF THE SCALE THE BAND STARTS FROM,
+       and the band grows to hold that rather than the step shrinking, so no
+       frame refuses a model for want of keys. The bound it keeps: a vertex
+       stage writes 1 - enc / depthScale into a [0.5, 1] depth range, so a
+       step moves the stored depth by step / (2 depthScale); with the step at
+       16 x 2^-23 x ds0 and the grown scale at most 2 ds0 (true while
+       2N + 2 <= 2^19, and N is at most 10 000), that is 8 units of the D24
+       buffer's 2^-24 and 8 float ulps of the key itself -- so adjacent keys
+       stay apart through every rounding between the key and the buffer. At
+       six keys wide, the default, the air band and the particle layers sit
+       where they would with no band at all: airKey = fxKey + 12. */
+    int fxBound = fxOn ? tagpu_fx_model_bound(pk) : 0;
+    float encFx = fxKey - 1.5f, encStep, fxBand;
+    {
+        const double ds0 = (double)fxKey + 20.0;     /* the scale at six keys */
+        const double stepMin = 16.0 * ds0 / 8388608.0;
+        const double slots = 2.0 * (double)fxBound + 2.0;
+        double band = 6.0;
+        if (slots * stepMin > band) band = slots * stepMin;
+        fxBand = (float)band;
+        encStep = (float)(band / slots);
+    }
+    float airKey = encFx + fxBand + 7.5f;
     float depthScale = airKey + 8.0f;
 
     unsigned lostype = pk->los_type;
@@ -2433,7 +2308,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     /* sub-pixel motion: see the SPX block at the top of this file for the
        table, the read half and why both are file-static now */
     s_spxFrame = f->frame_counter;
-    int nu = 0, nv = 0, nwr = 0, nsel = 0;
+    int nu = 0, nwr = 0, nsel = 0;
     unsigned uiGates = pk->ui_gates;
     const TAGPU_PK_UNIT* pkUnits = tagpu_pk_units(pk);
     if (s_armed) {                 /* units are gathered only by the unit pass */
@@ -2813,6 +2688,8 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
     /* ---- effects gather (projectiles, explosions, debris, particles) ---- */
     TAGPU_FXVIEW fv;
+    /* asked before the effects gather, which needs the answer (`modelsOn`) */
+    int pdReady = tagpu_posedraw_ready();
     int nfx = 0, nfeat = 0, nterr = 0;
     /* THE VIEW IS FILLED WHATEVER IS ARMED, and only the GATHERS are gated:
        they read `fv` and each of them is gated separately, so a fill inside a
@@ -2832,14 +2709,34 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         fv.zoom = s_zoom;
         fv.zoomCx = (float)vpL + (float)vw * 0.5f;
         fv.zoomCy = (float)vpT + (float)vh * 0.5f;
-        fv.encSprite = fxKey + 3.0f;      /* nearer than fx models (fxKey ± 1.8) */
+        fv.encFx = encFx; fv.encStep = encStep;
+        fv.modelCap = fxBound;
+        /* THE MODELS NEED THE POSED PASS AND THE VULKAN UNIT PASS, which
+           records them with the units and draws them: where either cannot,
+           every record with a model is taken back whole (tagpu_fx.c) rather
+           than drawn without it, and every other effect draws. The unit pass
+           is told what will stand this frame down, as far as it is known
+           here, so a frame it will not draw loses its models alone. Asked
+           only when the posed pass is ready: `fog_carried` makes the room
+           for the grid's copy, which only its publish uses. */
+        fv.modelsOn = 0;
+        if (pdReady) {
+            TAGPU_VKFXASK ask;
+            ask.shadowOn = tagpu_posedraw_shadow_on();
+            ask.otherDraws = tagpu_posedraw_other_forecast();
+            ask.fogWant = fogMode & 1;      /* a model samples it then (`q.fog`) */
+            ask.fogCarried = tagpu_posedraw_fog_carried();
+            ask.scafOn = scafOn ? 1 : 0;
+            tagpu_posedraw_mirrors(&ask.atlas, &ask.atlasDim, &ask.pal, &ask.shadeK);
+            fv.modelsOn = tagpu_vk_unit_fx_ready(&ask);
+        }
         fv.depthScale = depthScale;
         /* particle layer n -> depth key, from the ten 0x471F90 call sites
            (terrain-depth.md 3): 0..4 before any unit row (under everything
            the row sweep and the scaffold stamp), 5/6 after the row sweep and
            before the projectiles (above the last row key fxKey-2.2, below
-           the fx models fxKey-1.8), 7 after the explosions (above the fx
-           sprites at fxKey+3), 8 after the airborne sweep, 9 before the fog */
+           the effects band from fxKey-1.5), 7 after the explosions (above the
+           band), 8 after the airborne sweep, 9 before the fog */
         {
             /* layers 0..2 are drawn before the flat-feature pre-pass and 3..4
                after it, so the flat band (0.40..0.50, tagpu_feat.c) sits
@@ -2848,7 +2745,7 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             for (L = 0; L <= 2; L++) fv.encLayer[L] = 0.30f;
             fv.encLayer[3] = fv.encLayer[4] = 0.60f;
             fv.encLayer[5] = fv.encLayer[6] = fxKey - 2.0f;
-            fv.encLayer[7] = fxKey + 5.0f;
+            fv.encLayer[7] = encFx + fxBand + 0.5f;
             fv.encLayer[8] = airKey + 3.0f;
             fv.encLayer[9] = airKey + 5.0f;
         }
@@ -2942,6 +2839,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     static int saidRest;
     int npd = 0, pdPoseN = 0, pdShadedN = 0;
     int pdPoseMax = 0, pdShadedMax = 0;
+    /* the effects models the gather rasterised, drawn in the unit window
+       below. `nfx` gates the count: a gather that did not run this frame left
+       the previous frame's list standing. */
+    const int nfxm = nfx ? tagpu_fx_nmodels() : 0;
     {
         unsigned pieces = 0;
         int ok;
@@ -2963,7 +2864,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             pdShadedMax = (int)(pdShadedCap < pdPvisCap ? pdShadedCap : pdPvisCap);
         }
     }
-    int pdReady = tagpu_posedraw_ready();
     /* ---- THE CLASSIC HARD SHADOW'S POLICY, DECIDED ONCE PER FRAME ----------
        Everything the decision reads is engine state or a lever, and a Vulkan
        pass may read neither (tagpu_vk_pass.h), so it is settled here and the
@@ -3141,16 +3041,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
             }
         }
     }
-    /* effects models (missiles, shells, debris) through the same path */
-    if (nfx) {
-        int k, nm = tagpu_fx_nmodels();
-        for (k = 0; k < nm; k++) nv = emit_fx_model(tagpu_fx_model(k), nv, fxKey);
-    }
-    /* npd belongs in this test, and urgently: an ordinary unit contributes no
-       vertices, so without this a frame of nothing
-       but units — every unit in the game, on a map with our terrain off —
-       would return here having drawn none of them. */
-    if (nv == 0 && npd == 0 && nfx == 0 && nfeat == 0 && nterr == 0 &&
+    /* npd belongs in this test, and urgently: an ordinary unit is drawn out
+       of its type's bake, so without it a frame of nothing but units -- every
+       unit in the game, on a map with our terrain off -- would return here
+       having drawn none of them. */
+    if (npd == 0 && nfx == 0 && nfeat == 0 && nterr == 0 &&
         !markOn && !terrOwned) return;
 
     /* THE HAND-OVER IS THE END OF THIS FUNCTION, UNCONDITIONALLY. */
@@ -3194,10 +3089,38 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         hb[sizeof hb - 1] = 0;
         nlog(hb);
     }
-    if (npd) {
+    /* THE EFFECTS MODELS RIDE THE UNITS' WINDOW, after every unit: runs the
+       effects gather rasterised (tagpu_fxmodel.h), drawn by the unit program
+       in the Vulkan pass's effects stage. Everything that makes one an effect
+       rather than a unit is here: the band key it was given, fog taken at its
+       anchor and hiding in grey as the effects' sprites do, and nothing else
+       -- no face shade (the neutral row, which is 1.0), no waterline, no
+       digger clip, no nanoframe, and no shadow either cast or received:
+       neither effects draw does any of that (0x46BAE0, 0x4211D0).
+
+       A MODEL THE HAND-OVER CANNOT CARRY IS NOT DROPPED ALONE. The records are
+       exactly the models the effects' hand-over counts (`nmodels`), and the
+       Vulkan effects pass draws nothing on a frame the unit pass is not
+       drawing all of them -- so a model lost here takes every effect of the
+       frame with it rather than leaving its record's sprites standing
+       without it. */
+    if (npd || nfxm) {
         int k;
+        unsigned nrun = 0;
+        const TAGPU_FXRUN* runs = tagpu_fxmodel_runs(&nrun);
         tagpu_posedraw_begin(&s_pv);
         for (k = 0; k < npd; k++) tagpu_posedraw_unit(&pdu[k]);
+        for (k = 0; k < nfxm; k++) {
+            const TAGPU_FXMODEL* m = tagpu_fx_model(k);
+            TAGPU_PDFX q;
+            if (!m) break;
+            q.runs = (const float*)runs; q.nrunAll = nrun;
+            q.run0 = m->run0; q.nrun = m->nrun;
+            q.wx0 = m->wx; q.wz0 = m->wz;
+            q.enc = m->enc;
+            q.fog = (fogMode & 1) | 2;
+            tagpu_posedraw_fx(&q);
+        }
         tagpu_posedraw_end();
     }
     /* AND THE BUILD GHOST, in its own window after the units'. It is AFTER

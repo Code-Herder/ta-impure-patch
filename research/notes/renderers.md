@@ -817,7 +817,7 @@ nothing is regenerated when it changes).*
 | 146 | **Shadow quality** | Low \| Med \| High \| Ultra | `shadowres=` — it sizes the soft map and nothing else, so with no soft map the row is **greyed unconditionally**. It is kept rather than removed: one line un-greys it the day the map's producer is written |
 | 174 | **Supersampling** | Off \| 2× | `ss=` in the store (§2.10b); `tagpu_ss.off` is its lever |
 | 202 | **FPS counter** | Off \| On | `fps=` in the store; `tagpu_fps.on` is its lever — the readout, [GPU status](gpu-status.html) §2.14 |
-| 230 | **Map edge** | Black \| Mirror | `edge=` in the store (§2.10b); `tagpu_mirror.on`/`.off` are its levers — what the view shows past the map, [GPU status](gpu-status.html) §2.89. Never greyed with the lane: the mirror is drawn under either preset |
+| 230 | **Map edge** | Black \| Mirror | `edge=` in the store (§2.10b); `tagpu_mirror.on`/`.off` are its levers — what the view shows past the map, [GPU status](gpu-status.html) §2.90. Never greyed with the lane: the mirror is drawn under either preset |
 
 **Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
 was the seventh row and was **cut**: `tagpu_zoom_init()` runs *once* from `dllmain.c:130` and
@@ -1311,7 +1311,7 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `monitor` | the primary | stored by device name (`\\.\DISPLAY2`), never by index |
 | `window` | — | the windowed frame rect, once there has been one |
 | `gpu` | `auto` | discrete > integrated > virtual > CPU, then the largest `DEVICE_LOCAL` heap; the row's first stage |
-| `edge` | `mirror` | `mirror` or `black`: what the view shows past the map ([GPU status](gpu-status.html) §2.89). Not a render key, so the preset never rewrites it; `tagpu_mirror.on`/`.off` are its levers |
+| `edge` | `mirror` | `mirror` or `black`: what the view shows past the map ([GPU status](gpu-status.html) §2.90). Not a render key, so the preset never rewrites it; `tagpu_mirror.on`/`.off` are its levers |
 | `mixingbuffers` | 32 | 8, 16, 24 or 32: the sounds the engine plays at once. No row; not a Visuals value, but the same loader reads it |
 
 **The preset is derived, so Classic++ can improve under a player.** While `style` is `classic`

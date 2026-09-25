@@ -68,7 +68,55 @@ int  tagpu_vk_unit_casters(void);
    CALLED AFTER tagpu_vk_shadow_prepare. 0 means `record` must not be called. */
 int  tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);
 
-/* Draw the bodies, inside the seam's render pass. `w`/`h` are its extent. */
+/* The effects models this pass will draw on frame `frame`, as `prepare` left
+   it: its count of effects records when it is drawing that frame, -1 when it
+   is not (or never prepared it). The effects pass asks after both have
+   prepared and draws only when this is all of the frame's models
+   (tagpu_fx.h `nmodels`). */
+int  tagpu_vk_unit_fx_count(unsigned frame);
+
+/* The five facts about a frame that stand this pass down, as the effects
+   gather can know them before it gathers (tagpu_native.c `modelsOn`). Each is
+   what the frame's hand-over will then carry: `shadowOn` and `fogCarried` are
+   the posed pass's own answers (tagpu_posedraw.h), `otherDraws` its count so
+   far this frame plus the last frame's, `fogWant` whether the frame samples
+   the fog overlay, `scafOn` whether the scaffold overlay is asked for, and
+   the texel mirrors' four fields as `tagpu_posedraw_mirrors` reads them. */
+typedef struct {
+    int shadowOn;
+    int otherDraws;
+    int fogWant;
+    int fogCarried;
+    int scafOn;
+    const unsigned char* atlas;
+    int                  atlasDim;
+    const unsigned char* pal;
+    const float*         shadeK;
+} TAGPU_VKFXASK;
+
+/* Whether this frame's effects models can be drawn, asked before the effects
+   gather: on a no, only the records that carry a model are taken back and
+   every other effect draws. No while the pass has refused (for the
+   session, or until the seam's teardown rebuilds it), was built without the
+   effects pipeline, did not draw the last hand-over it was given, or has
+   not yet grown every slot by a models' share one would not take; no when
+   `q` says the frame will stand the pass down. A stand-down the forecast
+   knows -- the scaffold, cast shadows on a device that will not filter the
+   depth map, draws the hand-over does not carry, a fog grid it could not
+   carry, a texel mirror not there yet -- costs no frame of effects (the frame
+   after uncarried draws stop still takes its models back, the forecast
+   counting the last frame's); any other, and a slot the models' share will
+   not grow, costs the frame it begins on, and the models are then held back
+   until the pass draws again or every slot holds the share. A FRAME WITH
+   NOTHING TO DRAW ENDS THE HOLD as well (no hand-over, or an empty one), or
+   a view of models alone would hold them back for good; the share is grown
+   only by a frame that draws units. A pass not yet built answers yes, as the
+   first hand-over builds it. RENDER THREAD. */
+int  tagpu_vk_unit_fx_ready(const TAGPU_VKFXASK* q);
+
+/* Draw the bodies, inside the seam's render pass, then the effects models --
+   the latter only when the effects pass is drawing the same frame
+   (`tagpu_vk_fx_models_ok`). `w`/`h` are the extent. */
 void tagpu_vk_unit_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                           uint32_t w, uint32_t h);
 

@@ -112,7 +112,7 @@
 #include "tagpu_log.h"
 
 #define PK_MAXSLOTS   5                    /* the frame instance's 5; cmd's 4 */
-#define PK_RESERVE    (20u << 20)          /* address space per FRAME slot    */
+#define PK_RESERVE    TAGPU_PK_RESERVE     /* address space per FRAME slot    */
 #define PK_CMD_RESERVE (64u << 10)         /* ...and per COMMAND slot         */
 #define PK_GRAIN      (64u << 10)          /* commit granularity              */
 #define PK_PAGE       4096u                /* ...under stress, and for commands: one page */
@@ -483,7 +483,7 @@ static int area_ok(const TAGPU_PACKET* p, unsigned off, unsigned len)
 static int table_ok(const TAGPU_PACKET* p, unsigned off, unsigned n, unsigned stride)
 {
     if (!n) return 1;
-    if (n > 0x100000u) return 0;                 /* a count is a loop bound      */
+    if (n > TAGPU_PK_TABLE_MAX) return 0;        /* a count is a loop bound      */
     return area_ok(p, off, n * stride);
 }
 /* one unit's or wreck's piece run, inside the PIECES TABLE rather than merely
@@ -599,6 +599,46 @@ static const char* frame_valid(const void* rec)
     if (p->n_part   > TAGPU_PK_MAX_PART)   return "more particles than the cap";
     if (p->lht_len && (p->lht_len != TAGPU_PK_LHT_BYTES || !area_ok(p, p->lht_off, p->lht_len)))
         return "lighten table area";
+    /* THE EFFECTS MODELS. Every index the rasteriser follows out of them is
+       bounded here -- a model's vertex run and its shape, a shape's face run,
+       a face's index run and every index against its shape's vertex count --
+       so tagpu_fxmodel.c walks them with no check of its own. A record's
+       index INTO the model table is the consumer's to bound: one past
+       `n_fxmodel` is a model the packet could not carry (tagpu_packet.h). */
+    if (!table_ok(p, p->off_fxmodel, p->n_fxmodel, sizeof(TAGPU_PK_FXMODEL))) return "fx model table";
+    if (!table_ok(p, p->off_fxshape, p->n_fxshape, sizeof(TAGPU_PK_FXSHAPE))) return "fx shape table";
+    if (!table_ok(p, p->off_fxface,  p->n_fxface,  sizeof(TAGPU_PK_FXFACE)))  return "fx face table";
+    if (!table_ok(p, p->off_fxidx,   p->n_fxidx,   sizeof(uint16_t)))         return "fx index table";
+    if (!table_ok(p, p->off_fxvert,  p->n_fxvert,  sizeof(TAGPU_PK_FXVERT)))  return "fx vertex table";
+    if (p->n_fxmodel > TAGPU_PK_MAX_FXMODEL) return "more fx models than records";
+    {
+        const TAGPU_PK_FXMODEL* m = tagpu_pk_fxmodel(p);
+        const TAGPU_PK_FXSHAPE* sh = tagpu_pk_fxshape(p);
+        const TAGPU_PK_FXFACE* fa = tagpu_pk_fxface(p);
+        const uint16_t* ix = tagpu_pk_fxidx(p);
+        unsigned k, j, t;
+        for (k = 0; k < p->n_fxshape; k++) {
+            if (sh[k].nvert < 1 || sh[k].nvert > TAGPU_PK_FXMAXNV) return "fx shape vertex count";
+            if (sh[k].nface > TAGPU_PK_FXMAXNF) return "fx shape face count";
+            if (sh[k].face > p->n_fxface || sh[k].nface > p->n_fxface - sh[k].face)
+                return "fx shape face run";
+            for (j = sh[k].face; j < sh[k].face + sh[k].nface; j++) {
+                const TAGPU_PK_FXFACE* f = &fa[j];
+                if (f->flat > 1u) return "fx face kind";
+                if (f->flat ? (f->n < 3u || f->n > TAGPU_PK_FXMAXFV) : f->n != 4u)
+                    return "fx face vertex count";
+                if (!f->flat && !f->frame) return "fx face frame";
+                if (f->idx > p->n_fxidx || f->n > p->n_fxidx - f->idx) return "fx face index run";
+                for (t = 0; t < f->n; t++)
+                    if (ix[f->idx + t] >= sh[k].nvert) return "fx face index";
+            }
+        }
+        for (k = 0; k < p->n_fxmodel; k++) {
+            if (m[k].shape >= p->n_fxshape) return "fx model shape";
+            if (m[k].vert > p->n_fxvert || sh[m[k].shape].nvert > p->n_fxvert - m[k].vert)
+                return "fx model vertex run";
+        }
+    }
     {
         unsigned k, sum = 0;
         for (k = 0; k < TAGPU_PK_NLAYER; k++) {
