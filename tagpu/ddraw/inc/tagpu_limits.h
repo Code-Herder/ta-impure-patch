@@ -72,8 +72,9 @@ typedef char tagpu_lim_wrecks_fit[(TAGPU_LIM_WRECKS <= 0x7FFF) ? 1 : -1];
 #define TAGPU_LIM_UNITS_MIN 20
 
 /* DllMain, DLL_PROCESS_ATTACH, after tagpu_apply_patches has put the simulation fixes'
-   sites in the table: check every site, then write all or none. Returns 1 when the raised
-   limits are installed (always 0 in the stock build, which installs the fixes alone). */
+   sites in the table: check every site, then write all or none. Returns 1 when the whole table
+   is installed -- the raised limits and the fixes, or in the stock build the fixes alone -- and
+   0 when it is not, which the report at the first DirectDraw call then explains. */
 int tagpu_limits_install(void);
 
 /* The first DirectDraw call: if the install failed, show the report, write it to

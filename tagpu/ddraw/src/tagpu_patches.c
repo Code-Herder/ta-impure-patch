@@ -2617,25 +2617,28 @@ static int fix_weapon_ids(void)
    are the prior art; the code is ours. */
 
 /* THE VICTIM CAPS [DISASSEMBLED]. Area damage 0x49A120(proj, at), __stdcall, walks the cells
-   of the blast's rect and keeps two lists on its stack, so that a victim standing on several
-   cells is damaged once: 20 unit pointers ([esp+0xA0], count [esp+0x98]) and 64 anchor cells
-   ([esp+0xF0], count [esp+0x9C]). Each list records only while it has room (0x49A28F `cmp
-   ecx,0x14`, 0x49A5FA `cmp esi,0x40`), and the damage runs whether or not the victim was
-   recorded: the unit block falls through to its damage at 0x49A2AA, the feature block to its
-   call of 0x4244B0 at 0x49A615. So a unit found after the twentieth, or an anchor after the
-   sixty-fourth, is damaged (or, on a peer that is not the host, reported with 0x0F) once for
-   every cell of it inside the rect -- up to nine times for a 3x3 structure under a
-   commander's blast.
+   of the blast's rect once: for each cell its two unit slots (0x49A214..0x49A421), then the
+   cell's feature (0x49A427..0x49A62B), then the next cell (0x49A62F..0x49A645). It keeps two
+   lists on its stack, so that a victim standing on several cells is damaged once: 20 unit
+   pointers ([esp+0xA0], count [esp+0x98]) and 64 anchor cells ([esp+0xF0], count [esp+0x9C]).
+   Each list records only while it has room (0x49A28F `cmp ecx,0x14`, 0x49A5FA `cmp esi,0x40`),
+   and the damage runs whether or not the victim was recorded: the unit block falls through to
+   its damage at 0x49A2AA, the feature block to its call of 0x4244B0 at 0x49A615. So a unit
+   found after the twentieth, or an anchor after the sixty-fourth, is damaged (or, on a peer
+   that is not the host, reported with 0x0F) once for every cell of it inside the rect -- up to
+   nine times for a 3x3 structure under a commander's blast.
 
    THE FIX replaces the two list blocks with calls that answer "seen: skip" or "record:
-   continue" from a set with no capacity: a bitset over the unit slots (a cell's slot is a
-   u16) and a hash set of anchor-cell ordinals. The damage math, the order of first hits and
-   every value are stock's; only the repeats go. The sets live in a frame per call, on a stack
-   whose depth the wrapper on both calls of 0x49A120 (0x49A0A9 in 0x499EB0, 0x49A109 in the
-   fire spread's 0x49A0C0; no other reference to 0x49A120 exists [call and literal scan of the
-   image]) pushes and pops. After both walks, a weapon with w+0x111 bit 30 (0x49A66F) detonates
-   the projectiles inside its blast through 0x499EB0 (0x49A764), which calls 0x49A120 again
-   from inside it; that call's frame is its own.
+   continue" from sets with no capacity, keyed by the unit's slot and the anchor's ordinal. The
+   calls sit where stock's lists are consulted -- a unit on its first cell, before its distance
+   test; a feature only on a cell that passed its distance test (0x49A5C8) -- so below the caps
+   every record and every skip is stock's, and only the repeats past them go. The damage math
+   and every value are stock's. The sets live in a frame per call of 0x49A120: the wrapper on
+   both of its calls (0x49A0A9 in 0x499EB0, 0x49A109 in the fire spread's 0x49A0C0; no other
+   reference to 0x49A120 exists [call and literal scan of the image]) holds the frame on its
+   own C stack. After the walk, a weapon with w+0x111 bit 30 (0x49A66F) detonates the
+   projectiles inside its blast through 0x499EB0 (0x49A764), which calls 0x49A120 again from
+   inside it; that call has a frame of its own.
 
    THE INVARIANT: one explosion damages a unit at most once and reports a feature at most
    once, and every index is bounded before it is used. It rests on
@@ -2644,122 +2647,61 @@ static int fix_weapon_ids(void)
        the array at 0x4854EF); an anchor by its ordinal, (cell - grid) / 13 with the remainder 0
        and the ordinal below W * H (main+0x14233, +0x14237). A pointer that fails either is not
        damaged: stock would read through it;
-     - an ordering: a frame is pushed before its call reads it and popped after the call
-       returns, and it is emptied as it is popped, so each call starts with empty sets whatever
-       ran before. Nesting follows the machine stack, so the answers go to the innermost call;
-     - GAME THREAD: both callers run on the game thread (the projectile tick, the network pump
-       that 0x4968CB runs on it, the fire spread), and nothing else touches the frames.
-   The sets are grown through the engine's allocator 0x4D83B0, whose failure is the engine's own
+     - a lifetime, per thread: a call's frame is a local of its wrapper, so it exists exactly
+       while that call runs, and the innermost frame is a thread-local pointer (a TLS slot)
+       whose previous value the wrapper keeps and puts back. So a list block reads the frame of
+       the innermost call on its own thread, whatever runs on any other. That matters: besides
+       the projectile tick and the fire spread, 0x499EB0 is reached from the 0x0E receiver
+       (0x49AFEB), which runs on whichever thread pumps the network, the loader's included
+       during a network load. That receiver rarely damages anything -- 0x499EB0 skips a
+       projectile whose owner's player record has +0x73 == 3 (0x49A01B..0x49A047) [INFERRED: a
+       remote player], and the dispatcher passes a code in state 5 only with bit 1 of its
+       entry in the table 0x512BC0 (0x454758), which is filled at run time -- but neither fact
+       is what keeps two threads apart; the TLS slot is.
+   The sets grow through the engine's allocator 0x4D83B0, whose failure is the engine's own
    out-of-memory exit, so no answer is ever given from a set that could not hold it.
+   A list block with no frame cannot run: both calls of 0x49A120 and both blocks are rows of the
+   one fail-closed table, written together or not at all, and nothing else calls 0x49A120. If
+   it ever did, the block counts it, logs it once and damages as though the victim were new.
    CLASS: simulation, fail closed. B2 serves stacked aircraft through the same unit set. */
-#define DMG_UNIT_SLOTS 65536u          /* a cell's unit slot is a u16                      */
 #define DMG_UNIT_CAP   20u             /* stock's list, 0x49A28F                            */
 #define DMG_FEAT_CAP   64u             /* stock's list, 0x49A5FA                            */
-#define DMG_KEY_PAST   0x80000000u     /* a feature key recorded past stock's sixty-fourth  */
+#define DMG_KEY_PAST   0x80000000u     /* a key recorded past stock's list                  */
+#define DMG_INLINE     64u             /* keys a set holds in the frame, a power of two     */
 #define DMG_CELL       13u
 #define DMG_UNIT_STRIDE 0x118u
 
+/* open addressing over value + 1 (0 = empty), DMG_KEY_PAST or'd in; never more than half full */
+typedef struct DMGSET {
+    unsigned int* key;                  /* inl, or a block from 0x4D83B0 once it outgrows it */
+    unsigned int  n, cap;               /* cap a power of two                                */
+    unsigned int  inl[DMG_INLINE];
+} DMGSET;
+
 typedef struct DMGSEEN {
-    unsigned int    unit[DMG_UNIT_SLOTS / 32];  /* slots recorded by this call            */
-    unsigned int    past[DMG_UNIT_SLOTS / 32];  /* ...after stock's twentieth             */
-    unsigned short* ulist;                      /* the slots recorded, to empty the sets  */
-    unsigned int    un, ucap;
-    unsigned int*   fkey;                       /* open addressing, ordinal + 1 | PAST    */
-    unsigned int*   fslot;                      /* the used slots of fkey, in order       */
-    unsigned int    fn, fcap;                   /* fcap a power of two, fn <= fcap / 2    */
+    struct DMGSEEN* outer;              /* this thread's enclosing call's frame, or NULL     */
+    DMGSET unit, feat;
 } DMGSEEN;
 
-static DMGSEEN**    s_dmgFrame;                 /* one per depth, made on first use, kept */
-static unsigned int s_dmgCap, s_dmgDepth;
-/* peekable counters (their addresses are in the enginefix line), GAME THREAD */
-static volatile unsigned int s_dmgUnitRepeats;  /* a victim past stock's 20 found again   */
-static volatile unsigned int s_dmgFeatRepeats;  /* an anchor past stock's 64 found again  */
-static volatile unsigned int s_dmgRefused;      /* a pointer outside its array            */
-static volatile unsigned int s_dmgUnframed;     /* a list block run outside the wrapper   */
+static DWORD s_dmgTls = TLS_OUT_OF_INDEXES;
+/* peekable counters (their addresses are in the enginefix line), any thread */
+static volatile LONG s_dmgUnitRepeats;  /* a victim past stock's 20 found again   */
+static volatile LONG s_dmgFeatRepeats;  /* an anchor past stock's 64 found again  */
+static volatile LONG s_dmgRefused;      /* a pointer outside its array            */
+static volatile LONG s_dmgUnframed;     /* a list block run outside the wrapper   */
 static const char s_dmgTag[] = "tagpu damage seen-set";
 
-static void* dmg_alloc(unsigned int bytes)
+static void dmg_set_init(DMGSET* t)
 {
-    void* p = ENG_ALLOC(s_dmgTag, bytes);     /* NULL is the engine's out-of-memory exit */
-    memset(p, 0, bytes);
-    return p;
+    t->key = t->inl;
+    t->n = 0;
+    t->cap = DMG_INLINE;
+    memset(t->inl, 0, sizeof t->inl);
 }
 
-static DMGSEEN* dmg_push(void)
+static void dmg_set_free(DMGSET* t)
 {
-    DMGSEEN* f;
-    if (s_dmgDepth == s_dmgCap) {
-        unsigned int cap = s_dmgCap ? s_dmgCap * 2u : 8u;
-        DMGSEEN** a = (DMGSEEN**)dmg_alloc(cap * (unsigned int)sizeof *a);
-        if (s_dmgFrame) {
-            memcpy(a, s_dmgFrame, s_dmgCap * sizeof *a);
-            ENG_FREE(s_dmgFrame);
-        }
-        s_dmgFrame = a;
-        s_dmgCap = cap;
-    }
-    f = s_dmgFrame[s_dmgDepth];
-    if (!f) f = s_dmgFrame[s_dmgDepth] = (DMGSEEN*)dmg_alloc((unsigned int)sizeof *f);
-    s_dmgDepth++;
-    return f;
-}
-
-static void dmg_pop(DMGSEEN* f)
-{
-    unsigned int i;
-    for (i = 0; i < f->un; i++) {
-        unsigned int s = f->ulist[i];
-        f->unit[s >> 5] &= ~(1u << (s & 31u));
-        f->past[s >> 5] &= ~(1u << (s & 31u));
-    }
-    for (i = 0; i < f->fn; i++) f->fkey[f->fslot[i]] = 0;
-    f->un = f->fn = 0;
-    s_dmgDepth--;
-}
-
-static DMGSEEN* dmg_top(void)
-{
-    return s_dmgDepth ? s_dmgFrame[s_dmgDepth - 1u] : NULL;
-}
-
-/* In place of 0x49A262..0x49A2A9, esi the unit: 1 = seen, skip it (0x49A415); 0 = recorded,
-   damage it (0x49A2AA). */
-static int __stdcall dmg_unit_seen(const char* unit)
-{
-    DMGSEEN* f = dmg_top();
-    const char* ta = *(const char* const*)0x00511DE8;
-    const char* begin;
-    unsigned int count, slot, bit, w;
-    size_t off;
-
-    if (!f) { s_dmgUnframed++; return 0; }
-    begin = ta ? *(const char* const*)(ta + 0x14357) : NULL;
-    count = ta ? *(const unsigned short*)(ta + 0x14351) : 0;
-    if (!begin || unit < begin) { s_dmgRefused++; return 1; }
-    off = (size_t)(unit - begin);
-    if (off % DMG_UNIT_STRIDE || off / DMG_UNIT_STRIDE >= count) { s_dmgRefused++; return 1; }
-    slot = (unsigned int)(off / DMG_UNIT_STRIDE);
-    w = slot >> 5;
-    bit = 1u << (slot & 31u);
-    if (f->unit[w] & bit) {
-        if (f->past[w] & bit) s_dmgUnitRepeats++;
-        return 1;
-    }
-    if (f->un == f->ucap) {                    /* at most `count` slots are ever recorded */
-        unsigned int cap = f->ucap ? f->ucap * 2u : 64u;
-        unsigned short* l = (unsigned short*)dmg_alloc(cap * (unsigned int)sizeof *l);
-        if (f->ulist) {
-            memcpy(l, f->ulist, f->un * sizeof *l);
-            ENG_FREE(f->ulist);
-        }
-        f->ulist = l;
-        f->ucap = cap;
-    }
-    f->ulist[f->un] = (unsigned short)slot;
-    f->unit[w] |= bit;
-    if (f->un >= DMG_UNIT_CAP) f->past[w] |= bit;
-    f->un++;
-    return 0;
+    if (t->key != t->inl) ENG_FREE(t->key);
 }
 
 static unsigned int dmg_hash(unsigned int key, unsigned int mask)
@@ -2768,55 +2710,90 @@ static unsigned int dmg_hash(unsigned int key, unsigned int mask)
     return (h ^ (h >> 16)) & mask;
 }
 
-/* the set's table doubled, its keys moved; the table is never more than half full */
-static void dmg_feat_grow(DMGSEEN* f)
+/* the table doubled and its keys moved */
+static void dmg_set_grow(DMGSET* t)
 {
-    unsigned int cap = f->fcap ? f->fcap * 2u : 64u, i;
-    unsigned int* key = (unsigned int*)dmg_alloc(cap * 4u);
-    unsigned int* slot = (unsigned int*)dmg_alloc(cap / 2u * 4u);
-    for (i = 0; i < f->fn; i++) {
-        unsigned int k = f->fkey[f->fslot[i]], j = dmg_hash(k & ~DMG_KEY_PAST, cap - 1u);
-        while (key[j]) j = (j + 1u) & (cap - 1u);
-        key[j] = k;
-        slot[i] = j;
+    unsigned int cap = t->cap * 2u, i, j;
+    unsigned int* key = (unsigned int*)ENG_ALLOC(s_dmgTag, cap * 4u); /* NULL: the engine's OOM exit */
+    memset(key, 0, cap * 4u);
+    for (i = 0; i < t->cap; i++) {
+        if (!t->key[i]) continue;
+        for (j = dmg_hash(t->key[i] & ~DMG_KEY_PAST, cap - 1u); key[j]; j = (j + 1u) & (cap - 1u)) {}
+        key[j] = t->key[i];
     }
-    if (f->fkey) { ENG_FREE(f->fkey); ENG_FREE(f->fslot); }
-    f->fkey = key;
-    f->fslot = slot;
-    f->fcap = cap;
+    dmg_set_free(t);
+    t->key = key;
+    t->cap = cap;
+}
+
+/* 1 = already recorded by this call (a repeat past stock's list is counted); 0 = recorded now */
+static int dmg_set_seen(DMGSET* t, unsigned int value, unsigned int stock_cap, volatile LONG* repeats)
+{
+    unsigned int key = value + 1u, j;
+    if (2u * (t->n + 1u) > t->cap) dmg_set_grow(t);
+    for (j = dmg_hash(key, t->cap - 1u); t->key[j]; j = (j + 1u) & (t->cap - 1u))
+        if ((t->key[j] & ~DMG_KEY_PAST) == key) {
+            if (t->key[j] & DMG_KEY_PAST) InterlockedIncrement(repeats);
+            return 1;
+        }
+    t->key[j] = key | (t->n >= stock_cap ? DMG_KEY_PAST : 0u);
+    t->n++;
+    return 0;
+}
+
+static DMGSEEN* dmg_frame(void)
+{
+    DMGSEEN* f = (DMGSEEN*)TlsGetValue(s_dmgTls);
+    if (!f && InterlockedIncrement(&s_dmgUnframed) == 1)
+        tagpu_logf("enginefix: area damage's victim list ran outside its wrapper; its victims are "
+                   "not deduplicated (counted at 0x%08X)", (unsigned int)(size_t)&s_dmgUnframed);
+    return f;
+}
+
+/* In place of 0x49A262..0x49A2A9, esi the unit: 1 = seen, skip it (0x49A415); 0 = recorded,
+   damage it (0x49A2AA). */
+static int __stdcall dmg_unit_seen(const char* unit)
+{
+    DMGSEEN* f = dmg_frame();
+    const char* ta = *(const char* const*)0x00511DE8;
+    const char* begin;
+    unsigned int count;
+    size_t off;
+
+    if (!f) return 0;
+    begin = ta ? *(const char* const*)(ta + 0x14357) : NULL;
+    count = ta ? *(const unsigned short*)(ta + 0x14351) : 0;
+    if (!begin || unit < begin) { InterlockedIncrement(&s_dmgRefused); return 1; }
+    off = (size_t)(unit - begin);
+    if (off % DMG_UNIT_STRIDE || off / DMG_UNIT_STRIDE >= count) {
+        InterlockedIncrement(&s_dmgRefused);
+        return 1;
+    }
+    return dmg_set_seen(&f->unit, (unsigned int)(off / DMG_UNIT_STRIDE), DMG_UNIT_CAP,
+                        &s_dmgUnitRepeats);
 }
 
 /* In place of 0x49A5CE..0x49A614, the anchor cell at [esp+0x10]: 1 = seen, skip it (0x49A62B);
    0 = recorded, hit it (0x49A615). */
 static int __stdcall dmg_feature_seen(const unsigned char* cell)
 {
-    DMGSEEN* f = dmg_top();
+    DMGSEEN* f = dmg_frame();
     const char* ta = *(const char* const*)0x00511DE8;
     const unsigned char* grid;
     unsigned long long cells;
-    unsigned int key, j;
     size_t off;
 
-    if (!f) { s_dmgUnframed++; return 0; }
+    if (!f) return 0;
     grid = ta ? *(const unsigned char* const*)(ta + 0x14287) : NULL;
     cells = ta ? (unsigned long long)*(const unsigned int*)(ta + 0x14233) *
                  *(const unsigned int*)(ta + 0x14237) : 0;
-    if (!grid || cell < grid) { s_dmgRefused++; return 1; }
+    if (!grid || cell < grid) { InterlockedIncrement(&s_dmgRefused); return 1; }
     off = (size_t)(cell - grid);
     if (off % DMG_CELL || off / DMG_CELL >= cells || off / DMG_CELL >= DMG_KEY_PAST - 1u) {
-        s_dmgRefused++;
+        InterlockedIncrement(&s_dmgRefused);
         return 1;
     }
-    key = (unsigned int)(off / DMG_CELL) + 1u;
-    if (2u * (f->fn + 1u) > f->fcap) dmg_feat_grow(f);
-    for (j = dmg_hash(key, f->fcap - 1u); f->fkey[j]; j = (j + 1u) & (f->fcap - 1u))
-        if ((f->fkey[j] & ~DMG_KEY_PAST) == key) {
-            if (f->fkey[j] & DMG_KEY_PAST) s_dmgFeatRepeats++;
-            return 1;
-        }
-    f->fkey[j] = key | (f->fn >= DMG_FEAT_CAP ? DMG_KEY_PAST : 0u);
-    f->fslot[f->fn++] = j;
-    return 0;
+    return dmg_set_seen(&f->feat, (unsigned int)(off / DMG_CELL), DMG_FEAT_CAP, &s_dmgFeatRepeats);
 }
 
 /* In place of both `call 0x49A120`. The engine's eax is handed back: 0x499EB0 and 0x49A0C0
@@ -2824,9 +2801,16 @@ static int __stdcall dmg_feature_seen(const unsigned char* cell)
 typedef unsigned int (__stdcall *dmg_area_fn)(void* proj, void* at);
 static unsigned int __stdcall dmg_area(void* proj, void* at)
 {
-    DMGSEEN* f = dmg_push();
-    unsigned int r = ((dmg_area_fn)0x0049A120)(proj, at);
-    dmg_pop(f);
+    DMGSEEN f;
+    unsigned int r;
+    f.outer = (DMGSEEN*)TlsGetValue(s_dmgTls);
+    dmg_set_init(&f.unit);
+    dmg_set_init(&f.feat);
+    TlsSetValue(s_dmgTls, &f);
+    r = ((dmg_area_fn)0x0049A120)(proj, at);
+    TlsSetValue(s_dmgTls, f.outer);
+    dmg_set_free(&f.unit);
+    dmg_set_free(&f.feat);
     return r;
 }
 
@@ -2852,6 +2836,10 @@ static int fix_victim_caps(void)
     };
     unsigned char u[sizeof units], fe[sizeof feats], p[5];
     unsigned int rel;
+
+    /* the frames' thread-local slot; without one the table is not written, as for a stub */
+    if (s_dmgTls == TLS_OUT_OF_INDEXES) s_dmgTls = TlsAlloc();
+    if (s_dmgTls == TLS_OUT_OF_INDEXES) { lim_no_stub(); return FIX_TABLE; }
 
     /* 0x49A262: push esi; call dmg_unit_seen; test eax,eax; jnz 0x49A415; jmp 0x49A2AA. The
        registers the loop keeps -- ebx the projectile, esi the unit, edi the cell -- are the
@@ -2905,7 +2893,8 @@ static int fix_victim_caps(void)
    THE INVARIANT: no divide in 0x49CDE0 sees a zero divisor -- the second's is tested where it
    is used, the first's is at least 1 from the load on, and the loader is its only writer.
    Identity for every shot stock does not fault on, and for every stock weapon (none has
-   weaponvelocity 0).
+   weaponvelocity 0). The floor also changes the pitch solver's input (0x49A890, handed w+0x68
+   at 0x49D608), but only for such a weapon, which stock faults on the moment it fires.
    CLASS: local. A peer without it faults on the shot, which is not a silent divergence. */
 static volatile unsigned int s_flakFallbacks;   /* peekable, GAME THREAD */
 
@@ -2977,18 +2966,23 @@ static int fix_flak_divides(void)
        X + fw <= W and Z + fh <= H every cell is inside the grid; the clear 0x47D0E0 decides by
        the bucket (0x47D0FD) and walks the same cells, and the re-claim 0x47C790 has no bound
        of its own but reaches only a stamped unit (bit 27, which only the stamp sets) and walks
-       the same footprint. Every writer of +0x76 clears first (0x43DA0F, 0x48AA6B, 0x48B685);
+       the same footprint. Every writer of +0x76 on a stamped unit clears first (0x43DA0F,
+       0x48AA6B, 0x48B685); the other two, the create (0x485BD3) and the saved game's restore
+       (0x487243), write a fresh unit that holds no stamp yet;
      - the sort bucket (0x47CCA9..0x47CCDA) is taken from the unit's position, not its
        footprint: column x >> 23, row z >> 23 (128-px buckets), in a grid of
        ceil(16W / 128) x ceil(16H / 128) (0x482C84..0x482CA6), with no bound. Every writer of
        the footprint computes X = (x - 8 fw + 8) >> 4 in pixels (0x43D877..0x43D895,
        0x485BA3..0x485BC7, 0x48AA24..0x48AA32), so X + fw <= W gives x < 16W - 8 fw + 8, which
        is inside the grid for fw >= 1 -- every stock footprint -- and one bucket past its end
-       for fw = 0. Stock itself indexes the bucket before the grid for fw = 0 near the left
-       edge. So the bucket is bounded too: column and row clamped into the grid, exact
-       whenever stock's index is inside it.
-   THE INVARIANT: a unit is parked only when a cell of its footprint is off the map, and every
-   bucket index the stamp forms is inside the grid LoadMap sized.
+       for fw = 0. Stock itself forms column -1 for fw = 0 and x in [-8, 0) at the west edge,
+       whose linear index row * cols - 1 is the previous row's last bucket, inside the array
+       for row >= 1. Buckets are read by simulation code (0x40F2E9, 0x47E5DA, ...), so stock's
+       index is kept whenever it lands inside the array, and only a linear index outside
+       [0, rows * cols) is replaced: its column and row clamped into the grid.
+   THE INVARIANT: a unit is parked only when a cell of its footprint is off the map, every
+   bucket index the stamp forms is inside the array LoadMap sized, and it is stock's whenever
+   stock's is.
    CLASS: simulation, fail closed (who can be hit). */
 static int fix_last_cell(void)
 {
@@ -3001,32 +2995,43 @@ static int fix_last_cell(void)
         0x03, 0xC1, 0x8D, 0x0C, 0x80, 0x8B, 0x86, 0x82, 0x00, 0x00, 0x00, 0x8D,
         0x14, 0x4A,
     };
-    /* esi the unit, ebp main; out: edx the bucket, eax [esi+0x82], [esp+0x20] = y, as stock */
+    /* esi the unit, ebp main; out: edx the bucket, eax [esi+0x82], [esp+0x20] = y, as stock.
+       ebx (fw) and edi (fh) are live past 0x47CCDB and kept. */
     static const unsigned char stub[] = {
-        0x8B, 0x4E, 0x6A,                   /* mov ecx,[esi+0x6a]             */
-        0xC1, 0xF9, 0x17,                   /* sar ecx,23: the column         */
-        0x8B, 0x85, 0xA3, 0x42, 0x01, 0x00, /* mov eax,[ebp+0x142a3]: columns */
-        0x48,                               /* dec eax                        */
-        0x3B, 0xC8, 0x7E, 0x02,             /* cmp ecx,eax; jle +2            */
-        0x8B, 0xC8,                         /* mov ecx,eax                    */
-        0x85, 0xC9, 0x7D, 0x02,             /* test ecx,ecx; jge +2           */
-        0x33, 0xC9,                         /* xor ecx,ecx                    */
-        0x8B, 0x46, 0x6E,                   /* mov eax,[esi+0x6e]             */
-        0x89, 0x44, 0x24, 0x20,             /* mov [esp+0x20],eax             */
-        0x8B, 0x46, 0x72,                   /* mov eax,[esi+0x72]             */
-        0xC1, 0xF8, 0x17,                   /* sar eax,23: the row            */
-        0x8B, 0x95, 0xA7, 0x42, 0x01, 0x00, /* mov edx,[ebp+0x142a7]: rows    */
-        0x4A,                               /* dec edx                        */
-        0x3B, 0xC2, 0x7E, 0x02,             /* cmp eax,edx; jle +2            */
-        0x8B, 0xC2,                         /* mov eax,edx                    */
-        0x85, 0xC0, 0x7D, 0x02,             /* test eax,eax; jge +2           */
-        0x33, 0xC0,                         /* xor eax,eax                    */
-        0x0F, 0xAF, 0x85, 0xA3, 0x42, 0x01, 0x00, /* imul eax,[ebp+0x142a3]   */
-        0x03, 0xC1,                         /* add eax,ecx                    */
-        0x8D, 0x0C, 0x80,                   /* lea ecx,[eax+eax*4]            */
-        0x8B, 0x95, 0x9F, 0x42, 0x01, 0x00, /* mov edx,[ebp+0x1429f]: buckets */
-        0x8D, 0x14, 0x4A,                   /* lea edx,[edx+ecx*2]            */
-        0x8B, 0x86, 0x82, 0x00, 0x00, 0x00, /* mov eax,[esi+0x82]             */
+        0x8B, 0x4E, 0x6A,                   /* mov ecx,[esi+0x6a]                */
+        0xC1, 0xF9, 0x17,                   /* sar ecx,23: stock's column        */
+        0x8B, 0x46, 0x6E,                   /* mov eax,[esi+0x6e]                */
+        0x89, 0x44, 0x24, 0x20,             /* mov [esp+0x20],eax                */
+        0x8B, 0x56, 0x72,                   /* mov edx,[esi+0x72]                */
+        0xC1, 0xFA, 0x17,                   /* sar edx,23: stock's row           */
+        0x89, 0xD0,                         /* mov eax,edx                       */
+        0x0F, 0xAF, 0x85, 0xA3, 0x42, 0x01, 0x00, /* imul eax,[ebp+0x142a3]      */
+        0x01, 0xC8,                         /* add eax,ecx: stock's index        */
+        0x53,                               /* push ebx                          */
+        0x8B, 0x9D, 0xA3, 0x42, 0x01, 0x00, /* mov ebx,[ebp+0x142a3]: columns    */
+        0x0F, 0xAF, 0x9D, 0xA7, 0x42, 0x01, 0x00, /* imul ebx,[ebp+0x142a7]: rows */
+        0x39, 0xD8,                         /* cmp eax,ebx                       */
+        0x5B,                               /* pop ebx                           */
+        0x72, 0x31,                         /* jb keep: inside the array         */
+        0x8B, 0x85, 0xA3, 0x42, 0x01, 0x00, /* mov eax,[ebp+0x142a3]             */
+        0x48,                               /* dec eax                           */
+        0x39, 0xC1, 0x7E, 0x02,             /* cmp ecx,eax; jle +2               */
+        0x89, 0xC1,                         /* mov ecx,eax                       */
+        0x85, 0xC9, 0x7D, 0x02,             /* test ecx,ecx; jge +2              */
+        0x31, 0xC9,                         /* xor ecx,ecx                       */
+        0x8B, 0x85, 0xA7, 0x42, 0x01, 0x00, /* mov eax,[ebp+0x142a7]             */
+        0x48,                               /* dec eax                           */
+        0x39, 0xC2, 0x7E, 0x02,             /* cmp edx,eax; jle +2               */
+        0x89, 0xC2,                         /* mov edx,eax                       */
+        0x85, 0xD2, 0x7D, 0x02,             /* test edx,edx; jge +2              */
+        0x31, 0xD2,                         /* xor edx,edx                       */
+        0x89, 0xD0,                         /* mov eax,edx                       */
+        0x0F, 0xAF, 0x85, 0xA3, 0x42, 0x01, 0x00, /* imul eax,[ebp+0x142a3]      */
+        0x01, 0xC8,                         /* add eax,ecx                       */
+        0x8D, 0x0C, 0x80,                   /* keep: lea ecx,[eax+eax*4]         */
+        0x8B, 0x95, 0x9F, 0x42, 0x01, 0x00, /* mov edx,[ebp+0x1429f]: buckets    */
+        0x8D, 0x14, 0x4A,                   /* lea edx,[edx+ecx*2]               */
+        0x8B, 0x86, 0x82, 0x00, 0x00, 0x00, /* mov eax,[esi+0x82]                */
     };
     unsigned char gX[6], gZ[6];
     unsigned char* a;
@@ -3044,38 +3049,41 @@ static int fix_last_cell(void)
 
 /* THE LINE-OF-SIGHT SHEAR [DISASSEMBLED]. UnitInPlayerLOS 0x465AC0(player, unit) (callers
    0x40AB11 in the periodic acquisition 0x40AA40, 0x439761, 0x46AF3D, 0x46B5B4, 0x480EE5,
-   0x48BC56, 0x494396, and our order markers through it) tests two points of the unit's box,
-   (x + def+0x15E, y + def+0x16E, z + def+0x166) and the same with x + def+0x176 (0x465AFD,
-   0x465BDB), against the player's LOS grid (player +0x7C, width +0x80, height +0x84, in 32-px
-   cells).
-   With LosType bit 1 (main+0x14281), 0x465B6A..0x465B93 and again 0x465C04..0x465C2D index it
-   at col = x >> 5, row = (z - (y >> 1)) >> 5, the grid being projected by altitude, under an
-   unsigned bound: outside it the unit is not visible. A unit whose height is more than twice
-   its distance from the north edge -- an aircraft at cruise altitude a few tiles inside it,
-   a unit on a hill beside it -- samples a row above the grid and is invisible to every other
-   player, so nothing acquires it. Underwater, y < 0, the same happens at the south edge.
-   THE FIX: when the sheared row is outside the grid and the point's own row, z >> 5, is inside
-   it, the own row is used; otherwise the stock answer stands, so a unit beyond the map's edge
-   stays unseen (the margin TADR adds there is a gameplay change, not a defect).
+   0x48BC56, 0x494396, and our order markers through it) tests up to four points of the unit's
+   box, in turn, until one is visible: (x + def+0x15E, y + def+0x16E, z + def+0x166) (0x465AFD);
+   the same with x + def+0x176 (0x465BDB); then (.., y - def+0x17A, z + def+0x17E) (0x465C73);
+   and that with x - def+0x176 (0x465D19) -- 16.16 dwords at [esp+0x10] x, [esp+0x14] y,
+   [esp+0x18] z, def the unit's type at +0x92. With LosType bit 1 (main+0x14281) each point
+   indexes the player's LOS grid (player +0x7C, width +0x80, height +0x84, in 32-px cells) at
+   col = x >> 5, row = (z - (y >> 1)) >> 5, the grid being projected by altitude, under an
+   unsigned bound: outside it the point is not visible. The four reads are 0x465B6A..0x465B94,
+   0x465C04..0x465C2E, 0x465CA2..0x465CD2 and 0x465D46..0x465D67. A unit whose top is more than
+   twice its distance from the north edge -- an aircraft at cruise altitude a few tiles inside
+   it, a unit on a hill beside it -- samples rows above the grid and is invisible to every
+   other player, so nothing acquires it. Underwater, y < 0, the same happens at the south edge.
+   THE FIX: at each of the four, when the sheared row is outside the grid and the point's own
+   row, z >> 5, is inside it, the own row is used; otherwise the stock answer stands, so a unit
+   beyond the map's edge stays unseen (the margin TADR adds there is a gameplay change, not a
+   defect). Registers: the third read loads dx and di (the point's y and z words) and the fourth
+   reads them again (0x465D46), so its stub loads them as stock does; ebp after the third and
+   edx after the fourth are dead on both exits. The fourth's column comes in ecx from 0x465D3B.
    THE INVARIANT: the grid is read only at a column and a row inside it -- the same unsigned
    bounds as stock, now applied to the row actually used. Exact whenever stock's row is inside.
    CLASS: simulation, fail closed (what is acquired). */
+typedef struct LOSREAD {
+    unsigned int va, in, out;           /* the block, stock's read, stock's "not visible" */
+    unsigned char n;
+    unsigned char stock[49];
+    const unsigned char* stub;
+    unsigned char nstub;
+    const char* name;
+} LOSREAD;
+
 static int fix_los_shear(void)
 {
-    static const unsigned char blockA[43] = {
-        0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
-        0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
-        0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x24, 0x3B,
-        0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1C,
-    };
-    static const unsigned char blockB[43] = {
-        0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
-        0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
-        0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x22, 0x3B,
-        0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1A,
-    };
-    /* the words of the box point at [esp+0x12] x, [esp+0x16] y, [esp+0x1a] z; esi the player */
-    static const unsigned char stub[] = {
+    /* the first two points: the words of the box point at [esp+0x12] x, [esp+0x16] y,
+       [esp+0x1a] z; esi the player */
+    static const unsigned char stubAB[] = {
         0x0F, 0xBF, 0x6C, 0x24, 0x16,       /* movsx ebp,word [esp+0x16]      */
         0x0F, 0xBF, 0x44, 0x24, 0x1A,       /* movsx eax,word [esp+0x1a]      */
         0x0F, 0xBF, 0x4C, 0x24, 0x12,       /* movsx ecx,word [esp+0x12]      */
@@ -3092,19 +3100,79 @@ static int fix_los_shear(void)
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
         0x73, 0x05,                         /* jae out                        */
     };                                      /* in: jmp; out: jmp              */
-    static const unsigned int in[2] = { 0x00465B95, 0x00465C2F }, out[2] = { 0x00465BB1, 0x00465C49 };
-    unsigned char* a[2];
+    /* the third point: dx and di stay loaded for the fourth */
+    static const unsigned char stubC[] = {
+        0x66, 0x8B, 0x54, 0x24, 0x16,       /* mov dx,[esp+0x16]              */
+        0x66, 0x8B, 0x7C, 0x24, 0x1A,       /* mov di,[esp+0x1a]              */
+        0x0F, 0xBF, 0x4C, 0x24, 0x12,       /* movsx ecx,word [esp+0x12]      */
+        0x0F, 0xBF, 0xEA,                   /* movsx ebp,dx                   */
+        0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
+        0xD1, 0xFD,                         /* sar ebp,1                      */
+        0x29, 0xE8,                         /* sub eax,ebp: the shear         */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0x3B, 0x8E, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[esi+0x80]             */
+        0x73, 0x1B,                         /* jae out                        */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x72, 0x0E,                         /* jb in                          */
+        0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x73, 0x05,                         /* jae out                        */
+    };
+    /* the fourth point: ecx its x word, dx and di as the third left them */
+    static const unsigned char stubD[] = {
+        0x0F, 0xBF, 0xD2,                   /* movsx edx,dx                   */
+        0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
+        0xD1, 0xFA,                         /* sar edx,1                      */
+        0x29, 0xD0,                         /* sub eax,edx: the shear         */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0x3B, 0x8E, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[esi+0x80]             */
+        0x73, 0x1B,                         /* jae out                        */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x72, 0x0E,                         /* jb in                          */
+        0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x73, 0x05,                         /* jae out                        */
+    };
+    static const LOSREAD read[4] = {
+        { 0x00465B6A, 0x00465B95, 0x00465BB1, 43, {
+            0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
+            0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
+            0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x24, 0x3B,
+            0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1C }, stubAB, sizeof stubAB,
+          "line of sight: the first point's row" },
+        { 0x00465C04, 0x00465C2F, 0x00465C49, 43, {
+            0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
+            0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
+            0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x22, 0x3B,
+            0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1A }, stubAB, sizeof stubAB,
+          "line of sight: the second point's row" },
+        { 0x00465CA2, 0x00465CD3, 0x00465CED, 49, {
+            0x66, 0x8B, 0x54, 0x24, 0x16, 0x66, 0x8B, 0x7C, 0x24, 0x1A, 0x0F, 0xBF,
+            0x4C, 0x24, 0x12, 0x0F, 0xBF, 0xEA, 0x0F, 0xBF, 0xC7, 0xD1, 0xFD, 0x2B,
+            0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8,
+            0x05, 0x3B, 0xCD, 0x73, 0x22, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x73,
+            0x1A }, stubC, sizeof stubC,
+          "line of sight: the third point's row" },
+        { 0x00465D46, 0x00465D68, 0x00465D94, 34, {
+            0x0F, 0xBF, 0xD2, 0x0F, 0xBF, 0xC7, 0xD1, 0xFA, 0x2B, 0xC2, 0x8B, 0x96,
+            0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCA,
+            0x73, 0x34, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x2C }, stubD, sizeof stubD,
+          "line of sight: the fourth point's row" },
+    };
     int k;
-    for (k = 0; k < 2; k++) {
-        if (!(a[k] = fix_code(sizeof stub + 10))) { lim_no_stub(); return FIX_TABLE; }
-        memcpy(a[k], stub, sizeof stub);
-        a[k][sizeof stub] = 0xE9; tagpu_detour_rel(a[k] + sizeof stub + 1, in[k]);
-        a[k][sizeof stub + 5] = 0xE9; tagpu_detour_rel(a[k] + sizeof stub + 6, out[k]);
+    for (k = 0; k < 4; k++) {
+        const LOSREAD* r = &read[k];
+        unsigned char* a = fix_code(r->nstub + 10u);
+        if (!a) { lim_no_stub(); return FIX_TABLE; }
+        memcpy(a, r->stub, r->nstub);
+        a[r->nstub] = 0xE9; tagpu_detour_rel(a + r->nstub + 1, r->in);
+        a[r->nstub + 5] = 0xE9; tagpu_detour_rel(a + r->nstub + 6, r->out);
+        lim_branch(r->va, r->n, r->stock, 0xE9, (unsigned int)(size_t)a, r->name);
     }
-    lim_branch(0x00465B6A, sizeof blockA, blockA, 0xE9, (unsigned int)(size_t)a[0],
-               "line of sight: the first point's row");
-    lim_branch(0x00465C04, sizeof blockB, blockB, 0xE9, (unsigned int)(size_t)a[1],
-               "line of sight: the second point's row");
     return FIX_TABLE;
 }
 
@@ -3142,7 +3210,8 @@ static void patch_engine_defects(void)
               "one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE) %s; flak's "
               "divides (0x49CF18 0x42F314 0x42F32E) %s; the map's last row and column "
               "(0x47CC8B 0x47CCA3 0x47CCA9) %s; line of sight at the map's edge "
-              "(0x465B6A 0x465C04) %s. Counters: unit repeats refused at 0x%08X, feature repeats "
+              "(0x465B6A 0x465C04 0x465CA2 0x465D46) %s. Counters: unit repeats refused at 0x%08X, "
+              "feature repeats "
               "refused at 0x%08X, victims refused off their arrays at 0x%08X, list blocks run "
               "unwrapped at 0x%08X, flak fallbacks at 0x%08X",
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
@@ -3972,7 +4041,7 @@ int tagpu_limits_install(void)
                "pathfinding 1333, particles 400 a layer from a pool of 1000, composite 600, "
                "wreck records 2048, unit types 511); the simulation fixes' %d sites installed",
                s_nlim);
-    return 0;
+    return 1;
 #endif
 }
 
