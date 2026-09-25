@@ -1031,7 +1031,7 @@ static int build_shared(const TAGPU_VKPASS* d)
     {
         uint32_t att = s_dev.maxColour < s_dev.maxFragOut ? s_dev.maxColour : s_dev.maxFragOut;
         s_sched.be = &s_be;
-        nk = tagpu_rcore_pick_nk(&s_sched, (int)s_dev.maxUniformRange, (int)att);
+        nk = tagpu_rcore_pick_nk(&s_sched, s_dev.maxUniformRange, att);
     }
     if (!nk) return 0;
     s_wrange = (VkDeviceSize)s_sched.wmax * 64;

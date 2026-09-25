@@ -123,6 +123,11 @@ Weapon TDF flags (`nottoair`, `nottounderwater`, `notoverwater`/`notoverland`, `
 `PreviewFaceOpponent=`); weapon `ID=` 0–4095. The mechanism is the portable one: hook the engine's
 own TDF reader (`0x4C46C0`/`0x4c4760`/`0x4C48c0`) — never write a parser.
 
+**Planned 2026-09-25** in [C. New data keys](tadr-port/data-keys.md), after
+[an evidence pass](tadr-port/data-keys-evidence.md): four landings, TADR's key names and documented
+meanings. `ID=` landed with [A′3](tadr-port/content-ids.md). `Rotations=` and `reloadbar` go to
+group D with the features they switch on.
+
 ### D. UI / quality-of-life
 
 Megamap, nanoframe ghost preview, building rotation, Mex/WreckSnap, drag-queued orders, con-unit
@@ -463,9 +468,10 @@ too, not just `tdraw.dll`: [the recorder's shipped features](#the-shipped-featur
 standing rules the owner set on 2026-09-23 — TADR's multiplayer behaviour, fail-closed installs, no
 runtime opt-out for anything that changes the simulation. Group A is done, in
 [the section-A plan](tadr-port/raised-limits.md) and [A′. Content IDs](tadr-port/content-ids.md);
-group B is planned in [B. Simulation bug fixes](tadr-port/sim-fixes.md); groups C to E are not
-planned yet ([the port's groups](tadr-port/overview.md#the-groups)). The recorder's shipped features
-are sorted into the same groups above, plus a group F for its COB getters.
+group B is planned in [B. Simulation bug fixes](tadr-port/sim-fixes.md) and group C in
+[C. New data keys](tadr-port/data-keys.md); groups D and E are not planned yet. The state of
+every group is in [the port's groups](tadr-port/overview.md#the-groups). The recorder's shipped
+features are sorted into the same groups above, plus a group F for its COB getters.
 
 ## Sources
 
