@@ -18383,9 +18383,10 @@ The plan is [hardware portability](hardware-portability.html) §3 G21c, the cont
 `tagpu_regstore.h`, and the engine's side, every call site with the keys and values it reads
 and writes, is [exe reverse engineering](exe-reverse-engineering.html) §"The registry".
 
-**Test mode has two signals, and either is enough.** `tagpu_regstore_decide`, the first thing
-`DllMain` attach does (before the return for cnc-ddraw's config tool, so an inherited
-`cnc_ddraw_config_init` cannot skip it), looks for the token `-xtacli-test` on the command line
+**Test mode has two signals, and either is enough.** `tagpu_regstore_decide`, which `DllMain`
+attach runs right after the fork's `delay_imports_init` and before the return for cnc-ddraw's
+config tool (so an inherited `cnc_ddraw_config_init` cannot skip it; detach returns early
+exactly when attach did), looks for the token `-xtacli-test` on the command line
 and for a `tacli-state` folder beside the running exe (`GetModuleFileNameW(NULL)`, never the
 working directory). tacli passes the token on every remote launch; the engine skips it (`x` is
 above the `'B'..'w'` of its switch table, `ja 0x49F461`, [command-line
@@ -18400,7 +18401,10 @@ no memory for it, an exe path that cannot be read, a registry import the hooks d
 (`TotalA.exe`'s or `win32.dll`'s), or a `win32.dll` not loaded at attach (a static import of
 `TotalA.exe`, so the loader maps it before any `DllMain` runs) ends the process with `TerminateProcess` at attach, after one
 log line: `registry: TEST MODE, entered by <signal>, but <what>: the game is not run`. The game's
-first instruction never runs.
+first instruction never runs. The line names the process (`s_exe`), so a cnc-ddraw config
+tool started in a test folder reads as one. `rs_refuse_run` is `noreturn` by construction:
+`ExitProcess` in a loop follows `TerminateProcess`, since a caller goes on as though the store
+were whole.
 
 **Import-table hooks, not engine addresses.** In test mode, at `DllMain` attach right after
 `tagpu_log_init` (before `cfg_load`, the byte patches and the fork's `hook_init`),
@@ -18442,10 +18446,12 @@ run under wine).
 
 **The guarantee, and its edge.** TA's settings key is never written in test mode: the imports
 above are the only way `TotalA.exe`'s and `win32.dll`'s code reaches the registry, and the `-r`
-switch is closed. Nothing hooks the system DLLs (DirectPlay, DirectSound), what `ShellExecuteA`
-starts, `online.dll`'s extension DLLs and the processes it starts, or the Task Scheduler's and
-Windows' own records of the task and the programs it runs ([tacli design](tacli-design.html)
-§"The registry: a file in the test folder").
+switch is closed. Nothing hooks the system DLLs the game uses and loads by name; the other
+DLLs it loads at run time (`online.dll`, the extension DLLs `online.dll` loads into the game's
+process, `reporter.dll`, `DebugHelper.dll`); the programs the game starts (what `ShellExecuteA`
+opens, what `online.dll` starts); or Windows' own records (the Task Scheduler's of the task
+while it exists, and those of the programs it runs). The full list: [tacli
+design](tacli-design.html) §"The registry: a file in the test folder".
 
 **Measured** (the plan's G21c gate): under wine, `9 of 9 registry imports, win32.dll 2 of 2`,
 77 distinct values written to the store and TA's section of the prefix's `user.reg` unchanged;

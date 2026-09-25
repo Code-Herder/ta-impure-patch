@@ -290,7 +290,9 @@ tools/tacli rm w1                                 # deletes the test folder and 
   writes the harness files a local launch writes, the shield included. It reads the test
   folder's store first and refuses one that is missing or that the DLL would not load, and it
   refuses a DLL that does not fail closed. `--arg` refuses any switch whose character after the
-  dash is `r` or `d` (the engine reads `-register` as `-r`). `--res`, `--maxfps`,
+  dash is `r` or `d` (the engine reads `-register` as `-r`). A launch succeeds only when the
+  run's log says the store is served; a refused run fails it with the DLL's own line.
+  `--res`, `--maxfps`,
   `--map`, `--player`, `--los`, `--mapping`, `--unit-limit`, `--defaults` and `--sound` work as
   locally. `--window`, `--display`, `--slot`, `--dplay`, `--intro` and `--shipped` are refused.
 - **A test folder's registry is a file; TA's settings key on that machine is never written.**

@@ -8421,7 +8421,9 @@ wrote 32).
   that way is another process, and that is what would load `mptaext.dll`: its exports are
   Mplayer's offer negotiation (`MPOpenOffer`, `MPPrelaunchOffer`, …), it imports
   `RegSetValueExA`, and no string of `TotalA.exe` or `online.dll` names it [INFERRED from the
-  exports]. `audiere.dll` and `smackw32.dll` import no registry function.
+  exports]. `audiere.dll` and `smackw32.dll` import no registry function. Neither
+  `reporter.dll` nor `DebugHelper.dll`, which `TotalA.exe` also loads by name, is in the Steam
+  install.
 - **Our DLL**: the fork's `debug.c` reads `HKLM` version values, in `make DEBUG=1` builds only;
   `utils.c` reads a Voobly key only when `age.dll` is loaded; `indeo.c` writes four `vidc.iv*`
   values under `HKCU\…\Drivers32` at attach and deletes them at detach, which test mode skips

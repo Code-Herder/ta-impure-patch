@@ -441,13 +441,20 @@ player's key as it was.
 
 - **What the guarantee covers, and what it does not.** It covers the registry imports of
   `TotalA.exe` and `win32.dll`, which are served from the file, and the `-r` switch, which is
-  closed. It does not cover what no hook reaches: the Task Scheduler's own records of the
-  instance's task in `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache`
-  (`Tree\tacli\<name>`, `Tasks\{GUID}` and each run's information) while the task exists;
-  Windows' own records of the programs it runs; the system DLLs the game uses (DirectPlay,
-  DirectSound); what `ShellExecuteA` starts; and the processes `online.dll` starts
-  ([exe reverse engineering](exe-reverse-engineering.html) §"The registry", "Outside TotalA.exe's
-  own code").
+  closed. It does not cover what no hook reaches ([exe reverse
+  engineering](exe-reverse-engineering.html) §"The registry", "Outside TotalA.exe's own code"):
+    - the system DLLs the game uses (DirectPlay, DirectSound) and loads by name
+      (`IMAGEHLP.DLL`, `psapi.dll`);
+    - the other DLLs it loads at run time: `online.dll`, the extension DLLs `online.dll` loads
+      into the game's process (`tamplayx`, `takalix`, `taheatx`, `tawirepx`, `tadwngox`,
+      `tatenx`; the Steam install's import no registry function but `RegOpenKeyExA`,
+      `RegQueryValueExA` and `RegCloseKey`), and `reporter.dll` and `DebugHelper.dll` (neither
+      is in the Steam install);
+    - the programs the game starts: what `ShellExecuteA` opens, and what `online.dll` starts;
+    - Windows' own records: the Task Scheduler's of the instance's task in
+      `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache`
+      (`Tree\tacli\<name>`, `Tasks\{GUID}` and each run's information) while the task exists,
+      and those of the programs it runs.
 - **Test mode has two signals, and either is enough**: the token `-xtacli-test` on
   TotalA.exe's command line, which every remote launch passes and the engine ignores
   ([command-line options](cmdline-options.html)), and a `tacli-state` folder beside `TotalA.exe`
@@ -463,7 +470,11 @@ player's key as it was.
   not loaded whole, no memory, an exe path that cannot be read, a registry import the hooks
   do not answer, or a `win32.dll` not loaded at attach (a static import of `TotalA.exe`) ends
   the process at attach, with its log line first: `registry: TEST MODE, entered by <signal>,
-  but <what>: the game is not run`. The game's code never runs, so it makes no registry call.
+  but <what>: the game is not run` (the line names the process, so a cnc-ddraw config tool
+  started in a test folder reads as one). The game's code never runs, so it makes no registry
+  call. `launch` succeeds only on the other answer, the run's `registry: TEST MODE, entered
+  by <signal> -- ...` line: a refused run has written its log header and can still be seen as
+  a process, so neither is enough.
 - **What is served, refused and passed.** The DLL replaces TotalA.exe's nine ADVAPI32 imports
   and `win32.dll`'s two in their import tables. `HKCU\Software\Cavedog Entertainment` and every
   key under it are the store. Any other key is read-only: a read goes to the real registry, and
@@ -488,7 +499,11 @@ player's key as it was.
   writes into the test folder goes under a temporary name first and is then put in place with
   `[IO.File]::Replace` (the old file kept as `.tacli-old` until the swap is done) or, onto a free
   name, `[IO.File]::Move`. Windows PowerShell 5.1's `Move-Item -Force` deletes the target and
-  then moves, which would leave a moment with no store.
+  then moves, which would leave a moment with no store. Replace has one failure after the swap
+  began, `ReplaceFile`'s error 1177, which leaves the target renamed to `.tacli-old`: the
+  statement fails, the name is missing until the next write (which moves the `.tacli-old` back
+  first), and meanwhile `launch` refuses the test folder, naming that file, and the DLL does not
+  run the game.
 - **The log is the record of a run.** The first time the game opens, reads or writes a key or
   value, the DLL logs it with the answer (`registry: read … [Gamma]: dword 12`,
   `registry: open HKLM\SOFTWARE\Classes\AudioCD\shell: REFUSED (open, rights 0xF003F)`). Each
@@ -499,12 +514,16 @@ player's key as it was.
 
 `launch` on a remote instance, in order:
 
-1. Refuses a test folder still `adding`, then **reads and checks the store before anything
-   else**: a test folder whose store is missing, does not parse or passes a limit is refused
-   with nothing written. Refuses when any `TotalA.exe` that is not the test folder's runs: it
-   may be the player's game. An instance already running reports so, as locally. `--arg` refuses
-   any switch whose character after the dash is `r` or `d`, whatever follows it (the engine
-   reads `-register` as `-r`), and the token itself.
+1. `--arg` refuses any switch whose character after the dash is `r` or `d`, whatever follows
+   it (the engine reads `-register` as `-r`), which takes in the engine's `-d…` debug switches
+   too (`-dprinton`, `-debughelper`: `0x4DA0E0` sets them aside before the dispatch, and a
+   launch has no use for them), and the token itself. Refuses a test folder still `adding`,
+   and refuses when any `TotalA.exe` that is not the test folder's runs: it may be the
+   player's game. An instance already running reports so, as locally. Then, **after that check
+   and before anything is written, reads and checks the store** (a game that was still exiting
+   has made its last writes to it by then): a test folder whose store is missing, does not
+   parse or passes a limit is refused with nothing written, and one that a half-failed replace
+   left as `registry.txt.tacli-old` is named as such.
 2. Uploads this tree's `ddraw.dll` (the one a local launch pins), unless `--keep-dll`. **A DLL
    that does not fail closed is refused** before the upload (the build) and after it (the test
    folder's file, `Remote.dll_has_test_mode`): such a DLL could run the game against the real
@@ -532,7 +551,10 @@ player's key as it was.
    is seen, the task's `State` and `LastTaskResult` are read, and a task that is neither Running
    nor Queued, with a result that is neither "running" (`0x41301`) nor "not yet run", is
    reported with that result (`0x80070002`: the file was not found; the game's own exit code if
-   it ran and exited). A timeout reports the same pair.
+   it ran and exited). A timeout reports the same pair. **Then waits for the run's `registry: `
+   line**, which the DLL logs right after the header: `entered by … --` is the store served,
+   and anything else, a refusal above all, fails the launch with that line. A refused run has
+   written its header and can still be seen as a process, so the two above are not enough.
 7. Reports the game's priority class (`Get-Process`), which should read `Normal`.
 
 Flags that shape a wine instance on the local desktop (`--window`, `--display`, `--slot`,

@@ -61,7 +61,11 @@ or `/` (`0x49EEDD`) is first matched by `0x4DA0E0` against the debug switches of
 without case), and skipped if it starts with one. Otherwise it dispatches on the *next*
 character, case-insensitive, via jump table `0x49F494` + index bytes `0x49F500` (covering
 `'B'..'w'`; every unlisted letter maps to the loop tail `0x49F461`, i.e. is silently ignored,
-and so does any character above `'w'`, through `ja 0x49F461`). The handler acts on that
+and so does any character outside `'B'..'w'`: the index is the character less `'B'`, and
+`ja 0x49F461` takes everything above `0x35`, a character below `'B'` wrapping round to a large
+unsigned index). The debug switches `0x4DA0E0` takes before that include six that start with
+`-d` (`-dprinton`, `-dprintoff`, `-dprintfile`, `-disableimagehlp`, `-disableimagehlplines`,
+`-debughelper`): they never reach the `-d` case. The handler acts on that
 character whatever follows it: `-register` and `-r12` are `-r`.
 Any other token is copied to `0x51FB50`. Each handler advances `edi` past the two
 switch characters itself, so numeric/string arguments may be glued (`-t120`) or the

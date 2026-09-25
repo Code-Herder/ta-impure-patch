@@ -98,11 +98,13 @@ line rule for the default mode.
      "the registry is saved and restored": a launch killed mid-test (a reboot) left the player's
      key on test values until `tacli` ran again, and a later restore wiped whatever the player
      had changed in between, a gap no save-and-restore design closes.
-   - **Outside that guarantee**, because no hook reaches it: the Task Scheduler's records of the
-     instance's task (`TaskCache`, while the task exists), Windows' own records of the programs
-     it runs, the system DLLs the game uses (DirectPlay, DirectSound), what `ShellExecuteA`
-     starts, and the processes `online.dll` starts. The list, with where each lives, is in
-     [tacli design](tacli-design.html) §"The registry: a file in the test folder".
+   - **Outside that guarantee**, because no hook reaches it: the system DLLs the game uses and
+     loads by name; the other DLLs it loads at run time (`online.dll`, the extension DLLs
+     `online.dll` loads into the game's process, `reporter.dll`, `DebugHelper.dll`); the
+     programs the game starts (what `ShellExecuteA` opens, what `online.dll` starts); and
+     Windows' own records (the Task Scheduler's of the instance's task while it exists, and
+     those of the programs it runs). The list, with where each lives, is in [tacli
+     design](tacli-design.html) §"The registry: a file in the test folder".
    - **The agent drives it fully**: launch, menus, `scenario load`, camera, captures (the DLL's
      own `.ab` PNGs, fetched back), log, stop. No desktop screenshot is needed.
    - The remote machine's address, account and key live in the instance's metadata under
@@ -331,11 +333,19 @@ the plan's shape and what the work settled.
       were left.
   - The first live gate's log (the DLL before the `-r` closure) previews G21d on that card:
     `vk: depth format: D32_SFLOAT_S8_UINT (130)`.
-- **Not closed.** Nothing hooks the system DLLs that call the registry for the game
-  (DirectPlay, DirectSound), what `ShellExecuteA` starts, `online.dll`'s extension DLLs or the
-  processes it starts, or a DLL the game loads after attach; which of them write during a test
-  run is not measured. The Task Scheduler keeps its records of the instance's task under
-  `TaskCache` while the task exists, and Windows its own records of the programs it runs.
+- **Not closed.** Decision 5's list lies outside the guarantee: the system DLLs the game uses
+  and loads by name; the other DLLs it loads at run time (`online.dll`, its extension DLLs,
+  `reporter.dll`, `DebugHelper.dll`); the programs the game starts; and Windows' own records,
+  the Task Scheduler's `TaskCache` among them. Which of them write during a test run is not
+  measured.
+- **The third review's LOWs** (a focused high review of the fail-closed round, nothing HIGH or
+  MEDIUM): `launch` succeeds only on the run's served line, and fails with a refusal's line
+  (a refused run writes its header and can still be seen as a process); the store is read after
+  the running-game check; `rs_refuse_run` cannot return (`noreturn`, and `ExitProcess` in a
+  loop after `TerminateProcess`); detach returns early exactly when attach did, so a test
+  launch with `cnc_ddraw_config_init` inherited logs `registry: test mode, at exit` (under
+  wine, ended by a close request: `the store served 168 opens … 1 writes`), and the refusal
+  line names the process; a half-failed `Replace` is named and healed by the next write.
 - Review: high (a new DLL hook on TotalA.exe's imports; `tools/tacli`, `tools/taremote.py`; the
   player's registry and folder).
 
