@@ -630,27 +630,40 @@ static int fix_reclaim_mark_anchor(void)
    0x43265A, which spawns every saved feature -- "Normal Features" (0x424FBF), "Animating
    Features" (0x425050), "3D Features" (0x425180) -- and never tests the result. So a saved
    feature with its anchor or any footprint cell on a masked cell does not come back. MEASURED
-   on Two Continents: the trees at cells (25,0), (5,1), (27,2) and (33,2). The restore then
+   2026-09-25 on Two Continents (672 x 800 cells, 4893 features), a save and its load: 51 do
+   not, four in rows 0..2 and 47 in rows 794..797, every one of them an anchor the mask had left
+   standing on the new game. The restore then
    goes on as though the spawn had succeeded: an animating or 3D record's state is written
    into the wreck-pool record the cell's +0x0A names (0x4250C8, 0x42518D), a word LoadMap
    never initialises (0x4839D5..0x4839ED writes +0x00, +0x02, +0x07, +0x08 and two bits of
    +0x0C of a fresh cell).
 
    THE FIX retargets the call at 0x43265A to features_restore_under_mask, which opens the mask
-   for the restore and closes it after: every cell holding 0xFFFD is noted in a bitmap and set
+   for the restore and shuts it after: every cell holding 0xFFFD is noted in a bitmap and set
    EMPTY, 0x424C00 runs unchanged, and every noted cell that is then EMPTY or 0xFFFE is set back
-   to 0xFFFD -- the mask's own rule, over the mask's own cells. THE INVARIANT: the grid after the
-   restore is the mask applied to the restored features, as a new game's grid is the mask
-   applied to the TNT's -- a restored feature keeps its anchor on a masked cell and loses its
-   masked footprint cells, and every other masked cell reads 0xFFFD again. It rests on
+   to 0xFFFD -- the mask's own rule, over the mask's own cells. The pathing maps follow. They
+   are built once a load from the grid as the mask left it (0x440940 at 0x4918E3, before the
+   restore), and every spawn refreshes them over its feature's rectangle (0x440A40 from
+   0x424031), a refresh that during the restore reads the mask open; the mask itself never
+   refreshes them. So once the mask is shut, every restored feature's rectangle is refreshed
+   again, with the call and the arguments the spawn uses.
+   THE INVARIANT: the grid after the restore is the mask applied to the restored features, as
+   a new game's grid is the mask applied to the TNT's -- a restored feature keeps its anchor on
+   a masked cell and loses its masked footprint cells, and every other masked cell reads 0xFFFD
+   again -- and the pathing maps are that grid's: an entry inside a restored feature's
+   rectangle is computed again from it, and an entry outside every such rectangle reads no
+   feature cell and no cell the mask did not shut again, so it is the build's. It rests on
      - a bound: the mask is opened only when the grid holds no feature (no def below 0xFFFB and
-       no 0xFFFE), the state 0x424C00 is called in, so no cell it opens is covered by a feature
-       and the restore is the only code that sees one open. The grid is read as LoadMap sized it,
-       W * H cells of 13 bytes (0x483986..0x4839A2), W and H from main+0x14233/+0x14237 and
-       refused outside 1..4096; the pointer and both counts are compared again after the
-       restore, and the cells are closed only when they are unchanged;
+       no 0xFFFE), the state 0x424C00 is called in, so no cell it opens is covered by a feature,
+       every anchor after the restore is a restored feature, and the restore is the only code
+       that sees a cell open. The grid is read as LoadMap sized it, W * H cells of 13 bytes
+       (0x483986..0x4839A2), W and H from main+0x14233/+0x14237 and refused outside 1..4096;
+       the pointer and both counts are compared again after the restore, and the cells are shut
+       only when they are unchanged. A def is used to reach its FeatureDef only below the def
+       count main+0x14253;
      - an ordering: the restore runs on the loader thread, inside the level load, where the
-       engine writes the grid itself; nothing else is running a level yet.
+       engine writes the grid and the pathing maps itself; no unit is down yet (the units are
+       restored after it, 0x486FD0 from 0x432672).
    Anything outside the bound -- a feature already down, a grid out of range, no memory for the
    bitmap -- leaves the restore to stock, logged. 0x424C00 has this one caller and no pointer to
    it in the image; neither has 0x432610 but the one at 0x497B29 [call and literal scan of the
@@ -664,18 +677,26 @@ static int fix_reclaim_mark_anchor(void)
 #define SF_MARKER   0xFFFBu     /* a def at or above is not a feature                */
 #define SF_MASKED   0xFFFDu
 #define SF_FOOT     0xFFFEu
+#define SF_NDEFS    0x14253     /* the FeatureDef count                             */
+#define SF_DEFS     0x1426F     /* FeatureDef[], 0x100 bytes; +0x94 w, +0x96 h (u16) */
 
 typedef void (__stdcall *features_restore_fn)(void* tdf);
+/* 0x440A40(xy, wh), stdcall: every movement class's pathing map recomputed over the cells
+   whose passability reads the rectangle; xy = x | y << 16, wh = w | h << 16 */
+typedef void (__stdcall *path_refresh_fn)(unsigned int xy, unsigned int wh);
 
 static void __stdcall features_restore_under_mask(void* tdf)
 {
     const features_restore_fn restore = (features_restore_fn)0x00424C00;
+    const path_refresh_fn refresh = (path_refresh_fn)0x00440A40;
     char* ta = *(char* const*)0x00511DE8;
     unsigned char* grid;
     unsigned char* bits;
-    unsigned int w, h, n, i, opened = 0, closed = 0, kept = 0;
+    const unsigned char* defs;
+    unsigned int w, h, n, i, ndefs, opened = 0, closed = 0, kept = 0, refreshed = 0;
     const char* why = NULL;
-    char b[200];
+    DWORD t0 = 0, t1 = 0;
+    char b[256];
 
     if (!ptr_sane(ta)) {
         restore(tdf);
@@ -731,9 +752,24 @@ static void __stdcall features_restore_under_mask(void* tdf)
                 kept++;
             }
         }
+        defs = *(const unsigned char* const*)(ta + SF_DEFS);
+        ndefs = *(const unsigned int*)(ta + SF_NDEFS);
+        if (opened && ptr_sane(defs) && ndefs <= 0x10000u) {
+            t0 = GetTickCount();
+            for (i = 0; i < n; i++) {
+                unsigned int def = *(const unsigned short*)(grid + (size_t)i * SF_CELL + 8);
+                if (def >= SF_MARKER || def >= ndefs) continue;
+                refresh((i % w) | ((i / w) << 16),
+                        *(const unsigned int*)(defs + (size_t)def * 0x100 + 0x94));
+                refreshed++;
+            }
+            t1 = GetTickCount();
+        }
         _snprintf(b, sizeof b,
                   "savedfeat: the restore ran with the border mask open: %u cells opened, "
-                  "%u masked again, %u hold a restored feature's anchor", opened, closed, kept);
+                  "%u shut again, %u hold a restored feature's anchor; %u rectangles of the "
+                  "pathing maps refreshed in %lu ms", opened, closed, kept, refreshed,
+                  (unsigned long)(t1 - t0));
     } else {
         _snprintf(b, sizeof b, "savedfeat: the restore replaced the grid; %u opened cells "
                   "left to it", opened);
