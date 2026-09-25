@@ -1688,6 +1688,11 @@ static void oracle(const char* spec, unsigned frame)
     MoveFileExA(WPN_JSON ".tmp", WPN_JSON, MOVEFILE_REPLACE_EXISTING);
 }
 
+int tagpu_weapons_armed(void)
+{
+    return g_armed;
+}
+
 void tagpu_weapons_frame(unsigned int frame)
 {
     char  spec[4096];

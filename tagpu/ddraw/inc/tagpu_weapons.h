@@ -47,5 +47,6 @@
 
 void tagpu_weapons_init(void);                 /* DllMain: arm if the flag file exists */
 void tagpu_weapons_frame(unsigned int frame);  /* overlay: oracle trigger, every 5th frame */
+int  tagpu_weapons_armed(void);                /* the splices are installed, 0x49D364's with them */
 
 #endif

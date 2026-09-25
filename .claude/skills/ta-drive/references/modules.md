@@ -177,8 +177,9 @@ tools/tacli log w1 -n 1000 -g "enginefix: weapon"      # 5000 and the ID-less on
   (`tacli weapons` shows it aiming, `rl=0`), and a unit placed at height 0 stands in the sea.
   Read the height at `*(*0x511DE8+0x14287) + (y/16 · width + x/16) · 13 + 4`, one byte, with the
   width at `*0x511DE8+0x14233`.
-- **In a network game a feature hit is the host's.** A peer that is not the host sends each hit to
-  the host as a `0x0F` and the host damages the feature and broadcasts the outcome. Compare the
+- **In a network game a feature's damage is the host's.** A peer that is not the host sends each
+  hit to the host as a `0x0F` and the host damages the feature; an outcome (destroyed, burned,
+  reclaimed) goes out as a `0x0F` from whichever peer ran it. Compare the
   peers paused, after the fire stops and every projectile has landed: a projectile in flight at
   the pause is damage one peer has applied and the other has not.
 - **An interceptor's detonation reaches only a projectile still in flight** on the peer that owns

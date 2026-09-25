@@ -10,6 +10,7 @@
 #include "tagpu_limits.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_weapons.h"
 #include "git.h"
 
 static void plog(const char* s)
@@ -1624,7 +1625,15 @@ static int fix_sync_keys(void)
 #define WPN_ESP_JMP(r)  ((unsigned char*)&(r)[PR_RET])
 
 #ifndef TAGPU_LIMITS_STOCK
-static unsigned char s_weapons[TAGPU_LIM_WEAPONS][WPN_REC];
+/* The model path copies the TDF's model name, read into a 0x100-byte buffer (0x42EC7B), to a
+   record's +0x80 with no bound (0x42ED7B), so a long name runs up to 0x180 - 0x115 bytes past
+   the record, into the next one as in stock. The tail keeps the last record's overrun inside
+   the array. */
+static struct {
+    unsigned char rec[TAGPU_LIM_WEAPONS][WPN_REC];
+    unsigned char tail[0x80 + 0x100 - WPN_REC];
+} s_wpn;
+#define s_weapons s_wpn.rec
 #endif
 static DWORD         s_wpnGameTid;        /* DllMain's thread, which is the game loop's      */
 static volatile LONG s_wpnNotes;
@@ -1660,9 +1669,11 @@ static int __cdecl wpn_loader_id(unsigned int* regs)
    ecx = main, ebp = the weapon, edx = its flags >> 5, then on at 0x49D2A6. A weapon without flag
    bit 5 fires from a unit, and the receiver scales the shooter (+0x21) and the target (+0x1F),
    both u16, by 0x118 into the unit array. Each is bounded here by the array's last element
-   (main+0x1435B); a packet past it is dropped through the receiver's exit 0x49D55D. The slot
-   byte keeps its low nibble for the reads after this one (0x49D366, or the extra-weapons
-   module's splice there). */
+   (main+0x1435B, inclusive: the engine's sweep 0x48BD00 steps at 0x48BD22 and runs `jbe` to
+   it); a packet past it is dropped through the receiver's exit 0x49D55D. The slot byte keeps
+   its low nibble for the read after this one: stock's 0x49D366 takes the shooter's slot at
+   +4 + slot * 0x1C, three of them, so without the extra-weapons module a slot past 2 is dropped
+   too; with it, the module's splice there bounds the slot by the unit's own count. */
 static int __cdecl wpn_rx_fired(unsigned int* regs)
 {
     unsigned char* pkt = (unsigned char*)(size_t)regs[PR_EAX];
@@ -1688,6 +1699,11 @@ static int __cdecl wpn_rx_fired(unsigned int* regs)
         if (shooter > max || target > max) {
             wpn_note("a weapon-fired message names a unit past the array; dropped",
                      shooter > target ? shooter : target, max);
+            return 0;
+        }
+        if (pkt[0x23] > 2 && !tagpu_weapons_armed()) {
+            wpn_note("a weapon-fired message names a slot past the unit's three; dropped",
+                     pkt[0x23], shooter);
             return 0;
         }
     }
@@ -1735,6 +1751,7 @@ static int __cdecl wpn_rx_feature(unsigned int* regs)
     cell = E_CELL((int)cx, (int)y);
     if (!cell) { wpn_note("a feature message names a cell off the map; dropped", cx, y); return 0; }
     if (b >= 0xFD && !hit) {
+        if (x >> 12) { wpn_note("a feature sentinel's x has bits past the cell; dropped", x, b); return 0; }
         if (b == 0xFD)      E_FEATURE_DIE((int)cx, (int)y, 0);
         else if (b == 0xFE) E_FEATURE_BURN((int)cx, (int)y, 1);
         else                E_FEATURE_DIE((int)cx, (int)y, 1);
@@ -1861,10 +1878,22 @@ static int __cdecl wpn_rx_intercept(unsigned int* regs)
 /* The dispatch table's 0x05 slot (0x455F90), ahead of stock's chat handler 0x45522E, which
    still runs and returns at once for text that starts with a zero byte (0x463CA7). A
    companion detonates, as stock's 0x49AF90 does, the first local projectile whose target point
-   is the message's, with a weapon whose index is its ID. On the game thread in play only (the
-   in-play handler 0x499200 at main+0x391F5): during a network load the loader thread pumps
-   messages too, and a companion then is dropped. The pool's count is engine data, bounded by
-   the pool's allocation. */
+   is the message's, with a weapon whose index is its ID.
+
+   ONLY ON THE GAME THREAD WITH THE IN-PLAY HANDLER 0x499200 AT main+0x391F5, AND THAT IS AN
+   ORDERING. During a network load two threads pump messages, the loader (0x49727D) and the
+   game thread's loading screen (0x49852E), while the loader allocates the projectile pool
+   (0x499A30). 0x499200 is stored in two places: 0x498455, which the game thread reaches after
+   reading bit 1 of main+0x38D75, the loader's last store (0x497C62), and 0x490BC5,
+   SetInputMode 0x490B30's mode 6, which none of its callers passes (they pass 1, 2 and 7).
+   With the handler there, the level's pool is complete and no other thread writes it, and it
+   leaves the slot only when play ends (the post-game 0x4996DF after the teardown, a load's
+   0x497F40). A drop is therefore before play or after it. Before play this peer has fired nothing, so
+   the companion can name only a remote copy, whose detonation is visual: 0x499EB0 applies
+   damage for a projectile of a local owner only. The one residual is the first in-play
+   frame, which 0x49842F runs before 0x498455 installs the handler: a projectile this peer
+   fires in that frame and another peer catches before the frame ends. Stock's 0x0E has no
+   such gate and runs on whichever thread pumps. Drops are logged. */
 static int __cdecl wpn_rx_chat(unsigned int* regs)
 {
     const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
@@ -1873,14 +1902,20 @@ static int __cdecl wpn_rx_chat(unsigned int* regs)
     unsigned int id;
     int count, i;
     if (m[1] != 0 || m[2] != WPN_CHAT_TAG) return 0;
-    if (!ta || *(const unsigned int*)(ta + 0x391F5) != 0x00499200u ||
-        GetCurrentThreadId() != s_wpnGameTid)
-        return 0;
     id = m[15] | (unsigned int)m[16] << 8;
-    if (id < 256 || id >= TAGPU_LIM_WEAPONS) return 0;
+    if (!ta || *(const unsigned int*)(ta + 0x391F5) != 0x00499200u ||
+        GetCurrentThreadId() != s_wpnGameTid) {
+        wpn_note("a companion arrived off the game thread or out of play; dropped", id,
+                 ta ? *(const unsigned int*)(ta + 0x391F5) : 0);
+        return 0;
+    }
+    if (id < 256 || id >= TAGPU_LIM_WEAPONS) {
+        wpn_note("a companion names a weapon outside 256..4095; dropped", id, 0);
+        return 0;
+    }
     count = *(const int*)(ta + 0x141F3);
     pool = *(char* const*)(ta + 0x141F7);
-    if (!pool) return 0;
+    if (!pool) { wpn_note("a companion arrived with no projectile pool; dropped", id, 0); return 0; }
     if (count > TAGPU_LIM_PROJ) count = TAGPU_LIM_PROJ;
     for (i = 0; i < count; i++) {
         char* p = pool + i * 0x6B;

@@ -1172,10 +1172,12 @@ ID 256 overwrites the pool's header; ID −1 overwrites `main+0x2BDE..0x2CF2`, t
 `0x2CC4`). Stock content's highest ID is 246, and every section has one
 ([evidence §9](tadr-port/limits-evidence.md)).
 
-**The weapon-fired receiver `0x49D270` (`0x0D`) takes two unit indexes from the wire unbounded.** It
-indexes `Weapons[+0x19]` (`0x49D27B..0x49D29F`), and for a weapon without flag bit 5 (`0x49D2A6`)
-scales the `u16` shooter at `+0x21` (`0x49D329..0x49D34A`) and the `u16` target at `+0x1F`
-(`0x49D388..0x49D3B7`) by 0x118 into the unit array `main+0x14357`, then reads through both.
+**The weapon-fired receiver `0x49D270` (`0x0D`) takes two unit indexes and a slot from the wire
+unbounded.** It indexes `Weapons[+0x19]` (`0x49D27B..0x49D29F`), and for a weapon without flag bit 5
+(`0x49D2A6`) scales the `u16` shooter at `+0x21` (`0x49D329..0x49D34A`) and the `u16` target at
+`+0x1F` (`0x49D388..0x49D3B7`) by 0x118 into the unit array `main+0x14357`, then reads through both;
+the slot byte `+0x23` becomes the shooter's slot at `+4 + slot·0x1C` (`0x49D366..0x49D370`), which
+it writes (`0x49D37C`, `0x49D384`).
 
 **The feature-hit receiver `0x45544D` (`0x0F`) reads a weapon's ID byte as a sentinel.** The message is
 the type, a byte, and the cell's `u16` x and y. The bytes `0xFD`, `0xFE` and `0xFF` mean "destroyed"
@@ -1193,9 +1195,12 @@ feature whose def lacks bit 9 of `+0xFE`. In a network game (`[main+0x391E9]` re
 the object `[main+0x1B8A + 0x14B·player]` damages the feature; every other peer sends the hit
 instead: `0x42454B` builds the `0x0F` and `0x424575` sends it, `0x451BC0` with four arguments (the
 first `0x44FDB0`'s, a scan of the ten player records; the message third; `ret 0x10`). MEASURED: the
-host damages, the joiner sends. The peer that damages broadcasts the outcome through `0x451DF0`:
-`0xFD` from `0x42469A`, `0xFE` from `0x423537`, `0xFF` from `0x4239A4`. A cell is a 16.16 position
-shifted right by 20 (`0x4815A0`), so no reachable x passes `0x7FF`.
+host damages, the joiner sends. The sentinels are broadcast through `0x451DF0` by whichever peer
+runs the outcome, and none of their senders tests the host bit: `0xFD` from `0x42469A`; `0xFE`
+from `0x423537`, whenever `0x4233A0` runs with its third argument 0 (callers `0x423A4D`,
+`0x423B55`, `0x4245C6`, `0x4250BB`); `0xFF` from `0x4239A4`, on the peer of the reclaiming unit's
+owner, and from `0x405210` in `0x404DB0` [INFERRED: the resurrect order]. A cell is a 16.16
+position shifted right by 20 (`0x4815A0`), so no reachable x passes `0x7FF`.
 
 **The fixes, both builds** (`fix_weapon_ids`; in the raised build they are sites of the limits
 table, *Weapon IDs* in *The raised effect pools*):
@@ -1205,15 +1210,22 @@ table, *Weapon IDs* in *The raised effect pools*):
   its flags at `+0x111` [role INFERRED: the projectile's handler]; nothing of the record is
   written. A duplicate ID keeps stock's rule, the later wins, and is logged.
 - `0x49D280`, 16 bytes: the weapon from the full ID, and the shooter and target each bounded by the
-  unit array's last element (`main+0x1435B`); a message past it is dropped through `0x49D55D`.
+  unit array's last element (`main+0x1435B`, inclusive: `0x4855D6` sets it to begin + (count −
+  1)·0x118, and the engine's own sweep `0x48BD00` steps with `add eax,0x118` at `0x48BD22` and
+  loops `jbe` to it at `0x48BD38`); a message past it is dropped through `0x49D55D`. The slot byte `+0x23`, which
+  `0x49D366..0x49D384` turns into the shooter's slot at `+4 + slot·0x1C` and writes through, is
+  held to the shooter's three slots without the extra-weapons module; with it, the module's
+  splice at `0x49D364` bounds the slot by the unit's own count.
 - `0x424575`: the weapon's sender takes the byte from the weapon's pointer and marks a hit whose
   byte is `0xFD`..`0xFF` with bit 11 of x (`0x800`), which no reachable cell uses. The receiver, the
   dispatch table's `0x0F` slot `0x455FB8` pointed at our stub, which continues at `0x455F50`, reads
   `0xFD`..`0xFF` as a sentinel only without the bit, drops a flagged byte below `0xFD`, and refuses a
   cell `0x481550` does not find. The sentinel senders stay stock's, so with weapons below 253 every
-  `0x0F` is stock's byte for byte. Flagging the sentinels instead would crash a peer on another
-  build: stock's `FeatureDie 0x423550` reads the cell `0x481550` returns for the flagged x, NULL,
-  at `0x423568`.
+  `0x0F` is stock's byte for byte. A peer on another build reads a flagged x as a cell off the
+  map: stock's `FeatureDie 0x423550` reads the NULL `0x481550` returns for it at `0x423568`
+  (`0x4233A0`, the burn, tests it). Flagging the sentinels would reach that in every game; flagging
+  the hit reaches it only for a weapon 253 or 255, and any hit from 256 up reaches `0x4244CF`
+  the same way through its high bits. Every peer runs the same build.
 
 **MEASURED**, two peers on Two Continents (`tools/weaponids_fixture.py`, lasers with the IDs
 253–255 and a blast of 96 against wrecks, the joiner firing): the host read every hit of the
@@ -5116,7 +5128,10 @@ reached as follows:
   reaches. It becomes a stub that walks every lower slot and lends the model (`+0x74`, the name at
   `+0x80` emptied), going on at `0x42EDA1`, or loads it at `0x42ECF9`. The store `0x42ED46..0x42ED7A`
   (`0x42ED67`, `0x42ED74`) is rewritten in place to address the record through `ebp`: `mov
-  [ebp+0x74],esi; lea edi,[esp+0x40]; lea edx,[ebp+0x80]; jmp 0x42ED7B`.
+  [ebp+0x74],esi; lea edi,[esp+0x40]; lea edx,[ebp+0x80]; jmp 0x42ED7B`. The copy at `0x42ED7B` is
+  stock's unbounded one: the name was read into a 0x100-byte buffer (`0x42EC7B`), so a long name
+  runs up to `0x6B` bytes past its record into the next, as in stock; the static carries a tail
+  of that size after its last record, so no write of the model path leaves the array.
 - **`0x0D`, weapon fired.** The five sends, `call 0x451DF0` at `0x49D859`, `0x49DB4D`, `0x49DD27`
   and `0x49DEEE` (a unit's slot, in `esi` or `ebx`, the weapon at its `+0xC`) and `0x49DFF6` (the
   meteor, the weapon its function's argument; its `+0x1A..+0x23` come off the stack uninitialised
@@ -5141,7 +5156,18 @@ reached as follows:
   thread in play (`main+0x391F5` = `0x499200`, the in-play handler) by detonating the first local
   projectile with that target point and a weapon of that index, through `0x499EB0(proj, 0)`, and
   then continues to stock's `0x45522E`, which returns at once for text that starts with a zero
-  byte (`0x463CA7`).
+  byte (`0x463CA7`). The gate is an ordering. During a network load two threads pump messages,
+  the loader (`0x49727D`) and the game thread's loading screen (`0x49852E`), while the loader
+  allocates the projectile pool (`0x499A30`; freed and nulled at `0x499A9A`). `0x499200` is
+  stored in two places: `0x498455`, which the game thread reaches after reading bit 1 of
+  `main+0x38D75`, the loader's last store (`0x497C62`), and `0x490BC5`, `SetInputMode`
+  `0x490B30`'s mode 6, which none of its eleven callers passes (they pass 1, 2 and 7). So it
+  stays for the level and leaves at the post-game `0x4996DF` (mode 7, after the teardown
+  `0x491B60`). With the handler there the pool is complete and no other thread writes it. The
+  residual is the first in-play frame, which `0x49842F` runs (`0x496790`) before `0x498455`: a
+  companion that arrives in it is dropped, and logged. A companion dropped before play can name
+  only a remote copy, whose detonation is visual: `0x499EB0` damages for a projectile of a local
+  owner only.
 - **MEASURED**, `tools/weaponids_fixture.py` on Two Continents. Single player: a tower firing
   weapon 4000 hits its target, 31 a hit, through a projectile whose weapon pointer is the static's
   record 4000, and the weapon borrows the model of the stock weapon it copies, drawn in flight; the
