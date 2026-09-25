@@ -636,7 +636,7 @@ static int fix_reclaim_mark_anchor(void)
    goes on as though the spawn had succeeded: an animating or 3D record's state is written
    into the wreck-pool record the cell's +0x0A names (0x4250C8, 0x42518D), a word LoadMap
    never initialises (0x4839D5..0x4839ED writes +0x00, +0x02, +0x07, +0x08 and two bits of
-   +0x0C of a fresh cell).
+   +0x0C of a fresh cell); fix_restore_record_owner, below, closes that for every refusal.
 
    THE FIX retargets the call at 0x43265A to features_restore_under_mask, which opens the mask
    for the restore and shuts it after: every cell holding 0xFFFD is noted in a bitmap and set

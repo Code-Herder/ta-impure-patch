@@ -281,11 +281,12 @@ where it takes a player's payment and does not deliver (a feature reclaimed or d
 the wreck pool is full, and a feature reclaimed twice through a cell that is not its anchor), one
 where a network game can never start (two unit types with one unit-sync key), one where the peers
 of a network game disagree (a weapon with the ID 253, 254 or 255 hitting a feature, which rides
-with the seventh), one where a saved game loads without the features on the map's border (the
-border mask runs before the restore), and the out-of-memory text, which blames the disk.
-`tagpu_patches.c` (`patch_engine_defects`) patches all of them, twelve fixes, at every attach, in
-both builds: `ddraw.dll` is a static
-import of the exe, so `DllMain` runs before the exe's entry point. The twelve are independent. Each is skipped, with
+with the seventh), two in a saved game's load (the features on the map's border are lost, because
+the border mask runs before the restore; and a restored feature's state is written into a wreck
+record it does not own when it did not come back as saved), and the out-of-memory text, which
+blames the disk. `tagpu_patches.c` (`patch_engine_defects`) patches all of them, thirteen fixes, at
+every attach, in both builds: `ddraw.dll` is a static
+import of the exe, so `DllMain` runs before the exe's entry point. The thirteen are independent. Each is skipped, with
 its reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its stub
 cannot be allocated, or its page cannot be made writable. The weapon IDs' fix is the one exception
 in the raised build: the raise rewrites the same sites, so there they are rows of the limits table,
@@ -745,7 +746,7 @@ record exactly once.
 | `0x424050` | the records' update, one caller `0x495585` [the game tick, INFERRED]; walks the **active** list only, moves a settled record to `+0x14217` (`0x4242B8`), and swaps a feature whose sequence has ended (`0x424495`) | — |
 | `0x4237D0` the reclaim completion `(who, pos)` [the first argument INFERRED] | stdcall, `ret 8`, returns 1 when reclaimed. A GAF feature whose cell is marked returns 0 before anything is paid (`0x423892` the cell's flags bit 0, `0x423898` the def's `+0xFE` bit 0) — **but stock tests the targeted cell, and `FeatureDie` marks only the anchor**, so a reclaim that lands on any other cell of a multi-cell feature while its sequence plays is paid again; the fork's engine fix makes `0x423892` test the anchor ([below](#the-reclaim-paid-twice)). Pays FeatureDef `+0xEC` **energy** (`0x4238FF`, or `0x4238EF` on a branch that scales it by one of two constants chosen by `main+0x37EEE`, for a player whose `+0x73` is 2 [INFERRED: a computer player, by difficulty]) and `+0xF0` **metal** (`0x42395B`, both branches; the order is TADR's `FeatureDefStruct` and our `tagpu_cat.c`, and MEASURED: `Building15` reads energy 0, metal 2900, and pays 2900 metal), **then** calls `FeatureDie(x, y, 1)` (`0x423965`), then, in a network game (`0x435100` = 3), sends `0x0F, 0xFF, x, y` (6 bytes, `0x4239A4`) | — |
 | `0x4244B0`, a feature taking damage [INFERRED; callers `0x49A626` (a projectile's impact) and the network handler] | calls `FeatureDie(x, y, 0)` at `0x424628`/`0x42465A` and sends subtype `0xFD` | — |
-| `0x424C00` the save-game loader's feature half (one caller, `0x43265A` in the game-load routine `0x432610`, which the border fix wraps: "A saved game's features on the map's border") | restores a feature's sequence with `FeatureDie(x, y, 1)` (`0x42507E`), `FeatureDie(x, y, 0)` (`0x42509D`) or `0x4233A0(x, y, 0)` (`0x4250BB`), then writes the record the cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26`, the low word of `+0x04`, `+0x2E`) **without checking that one was taken** | a load that finds the pool full writes into the record the refused cell's `+0x0A` names, a word LoadMap never initialises — record 0 when the grid's block is fresh ("A saved game's features on the map's border") — in stock and with the fix alike; a save holds no more records than its own pool, so only a save loaded into a smaller pool gets there |
+| `0x424C00` the save-game loader's feature half (one caller, `0x43265A` in the game-load routine `0x432610`, which the border fix wraps: "A saved game's features on the map's border") | restores a feature's sequence with `FeatureDie(x, y, 1)` (`0x42507E`), `FeatureDie(x, y, 0)` (`0x42509D`) or `0x4233A0(x, y, 0)` (`0x4250BB`), then writes the record the cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26`, the low word of `+0x04`, `+0x2E`) **without checking that one was taken** | a load that finds the pool full writes, in stock, into the record the cell's `+0x0A` names although the feature took none — record 0 on the zeroed grid a load gets; patched ("A saved feature's state and the wreck record its cell names"). A save holds no more records than its own pool, so only a save loaded into a smaller pool gets there |
 | `0x455xxx` the feature event handler | subtype `0xFF` → `FeatureDie(x, y, 1)` (`0x4554B0`), `0xFE` → `0x4233A0(x, y, 1)` (`0x4554CA`), `0xFD` → `FeatureDie(x, y, 0)` (`0x4554E4`) | the receiver's own pool decides |
 
 **The defect.** With the pool empty, `FeatureDie` does nothing, and nothing tells its callers. The
@@ -1302,14 +1303,11 @@ footprint cell at `0x423F52`), and nothing else ever writes `+0x0A`/`+0x0B` of a
 LoadMap's grid comes from `0x4D83B0` (`W·H·13` bytes at `0x48399D`, CRT malloc with no fill outside
 the allocator's debug mode) and its init loop `0x4839D5..0x4839ED` writes `+0x00`, `+0x02`, `+0x07`,
 `+0x08` and two bits of `+0x0C`. So a refused `Animating` or `3D` record is written into the wreck
-record an uninitialised word names: record 0 when the grid's block is fresh from the system, which a
-block this large usually is [INFERRED: the heap hands a block over 508 KB out of `VirtualAlloc`,
-zero-filled], and any record, or up to `0xFFFF · 0x30` bytes (3 MB) past the pool's base, when the
-block reuses freed memory. MEASURED on the stock build, Two Continents (672 × 800 cells, 4 893 features), a save
+record an uninitialised word names — record 0, on the zeroed grid a load gets — which is a defect of
+its own, patched: "A saved feature's state and the wreck record its cell names", below. MEASURED on the stock build, Two Continents (672 × 800 cells, 4 893 features), a save
 at 14 s and its load: **51 features do not come back**, four in rows 0–2 — the trees at (25, 0),
 (5, 1), (27, 2), (33, 2) — and 47 in rows 794–797, every one a one-cell feature that the new
-game's mask had left standing, each cell reading `0xFFFD` after the load. The write through `+0x0A`
-is disassembled, not measured.
+game's mask had left standing, each cell reading `0xFFFD` after the load.
 
 **The fix** (`fix_saved_features_border`, always on) retargets the call at `0x43265A` (its five
 bytes compared first) to `features_restore_under_mask`. It opens the mask for the restore and
@@ -1358,16 +1356,96 @@ on a trigger:
   stock property of an in-game load, away from every masked cell.
 
 **Multiplayer.** The fix sends nothing, and it changes the simulation: the restored features block
-building and movement, burn, take hits and pay out when reclaimed. On a saved multiplayer game
-loaded by peers with and without the fix, the fixed peers have the border features and the others
-do not, so the peers disagree wherever play reaches those cells; a feature event (`0x0F`) for one
-of them does nothing on a peer that has `0xFFFD` there (`FeatureDie` returns at `0x4236F7`). Every
-peer of a saved game should run the same build.
+building and movement, burn, take hits and pay out when reclaimed. It asks nothing new of a
+multiplayer game: every peer already runs the same build, since a peer on another build faults on
+the raised limits' messages ([content IDs](tadr-port/content-ids.html)), so a saved game loaded by
+mixed builds is unsupported with or without it.
 
-**Not closed.** The write through an uninitialised `+0x0A` is still reachable by a refusal the
-mask does not cause — a record on a void cell, a footprint past the map, or a wreck pool that runs
-out (a save from a build with the raised limits, loaded with stock ones) — for an animating or a 3D
-feature. The in-game load's class-2 pathing difference is stock's and is not investigated here.
+**Not closed.** After a load from inside a running game, 10 dwords of movement class 2's pathing map
+differ from a recompute, under the stock build as under the fix, away from every masked cell; it is
+not investigated here.
+
+### A saved feature's state and the wreck record its cell names — `0x4250C0`, `0x425185` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The defect.** After each `Animating Features` record's spawn (`0x425050`) and its sequence call
+(`FeatureDie(x, y, 1)` at `0x42507E`, `FeatureDie(x, y, 0)` at `0x42509D`, the burn `0x4233A0` at
+`0x4250BB`), the restore `0x424C00` writes the record's saved state into the wreck record that the
+cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26` a word, `+0x04` a word — the sequence's frame,
+inside the state `0x4B8B30` sets up at `+0x04` — and `+0x2E` the high nibble). After each `3D
+Features` record's spawn (`0x425180`) it writes the record's `+6` word into `+0x26` of the record
+`+0x0A` names (`0x425185..0x4251A2`). Neither block tests anything. `+0x0A` names the feature's own
+record only while the feature holds one:
+
+| the feature at the record's cell | `+0x0A` | who writes it |
+|---|---|---|
+| a 3DO anchor | its wreck record, for its whole life | `SpawnFeatureOnMap` at `0x423ED5`, after taking the record; with none left it abandons the spawn (`0x423DB9`/`0x423DDF`) |
+| a GAF anchor whose sequence plays (cell `+0x0C` bit 0, the mark) | its wreck record, until the swap | `FeatureDie` at `0x42368B` (mark at `0x423695`); the burn at `0x42345C` (mark at `0x423468`) |
+| a GAF anchor at rest | 0 | the spawn at `0x423EE9`; a `Normal Features` record's `+6` over it at `0x424FC9` |
+| a footprint cell | the offsets back to the anchor | the spawn at `0x423F52` |
+| a cell no spawn has written | what the allocator handed LoadMap | nothing: LoadMap's init loop `0x4839D5..0x4839ED` writes `+0x00`, `+0x02`, `+0x07`, `+0x08` and two bits of `+0x0C` |
+
+So the saved state lands in a record the feature does not own whenever the record's feature did
+not come back as it was saved: its spawn refused (a void cell, a footprint past the map, a masked
+cell before the border fix, a 3DO def with the pool empty), or its sequence not started (the pool
+empty: the burn returns at `0x42340D`/`0x423439`, and `FeatureDie` swaps the feature for its
+successor at once — `0x423651`, "The wreck pool, and a feature paid for and left standing"). The
+pool empties on a load when a save holds more records than the pool it is loaded into: a save from
+the raised build (8 192 records) loaded with stock limits (2 048).
+
+**What it hits.** MEASURED on Two Continents, with a diagnostic build (never committed) that logs,
+at the restore's entry, how many cells have a nonzero `+0x0A`, and, on a trigger, empties the free
+list (`main+0x1421B` = −1) for the restore, fills every record's `+0x04`, `+0x26` and `+0x2E` with
+`0xA5`, compares the pool afterwards and puts it back:
+
+- **The grid is zeroed**: 0 of 537 600 cells had a nonzero `+0x0A` word before the restore, on each
+  of three saved loads, all from inside a running game. [INFERRED: the grid, 7 MB, is
+  above the heap's threshold for a block of its own, which comes from `VirtualAlloc` zero-filled;
+  the teardown frees it at `0x483E7E`, so every load gets a fresh one.]
+- **So the stray write lands on record 0.** A save holding one wreck (`armlab_dead`, placed by
+  `scenarios/one-wreck.json`) loaded with the free list empty: the 3D spawn was refused, and the
+  previous build wrote the record's `+6` (0) over free record 0's `+0x26` — `A5 A5 → 00 00`, the
+  only change in the pool of 8 192.
+- Record 0 is the first record a load hands out, since the pool's free list starts there (the free
+  head read 0 before both diagnostic loads). An `Animating` record refused after another animating
+  feature has started overwrites that feature's frame, `+0x26` and `+0x2E`; a `3D` record refused
+  overwrites `+0x26` of whichever feature holds record 0 by then. A grid block that reused freed
+  memory would instead reach any record, or up to `0xFFFF · 0x30` bytes (3 MB) past the pool's
+  base; no load measured got one.
+
+**The fix** (`fix_restore_record_owner`, always on): a jump at `0x4250C0` and at `0x425185` over the
+6-byte `mov edx,[0x511de8]` each block begins with (compared first, with the 6 bytes after it), to
+a stub that runs the block as stock only when `restore_record_owned(cell)` holds: the cell lies in
+the grid LoadMap sized, it is an anchor below the def count `main+0x14253`, its FeatureDef `+0xFE`
+bit 0 is clear (3DO) or set with the cell's mark set (a GAF sequence in play), and its `+0x0A` is
+below the pool's count, read from the pool's allocation size (the dword at `0x421F2A`, `0x18000`
+in stock, which the limits table rewrites at attach). Otherwise the stub leaves for the loop's next
+record, `0x4250F7` or `0x4251A7`, where every register but `edi`, `ebx` and `ebp` is reloaded.
+Branches into the sites land only on `0x4250C0` itself (`0x425065`, `0x425083`, `0x4250A2`), none
+inside either stolen instruction [rel8/rel32 scan of `.text`].
+
+**The invariant**: the restore writes a saved state only into the wreck record that the feature on
+the record's cell owns — the record it took in this restore — and never outside the pool. It
+rests on the engine's own ownership rule, a lifetime: an index in an anchor's `+0x0A` is a live
+record exactly while the anchor is 3DO or marked (the swap `0x423710` and `FEATURES_Destroy` clear
+the anchor before the record is freed); and on a bound on every value read. A record whose feature
+did not come back as saved loses its saved state, which has nowhere to go.
+
+**Why not the other shape.** Gating the write on the spawn's success does not hold on the full-pool
+path: an `Animating` record's spawn succeeds, a GAF spawn takes no record, and it is the sequence
+call that takes one. With the pool empty that call starts nothing — or, under the `0x423651` fix,
+swaps the feature for its successor — so the anchor's `+0x0A` is the spawn's 0 and a
+success-gated write still lands on record 0. Bounding the index by the pool's count alone keeps
+the write inside the pool, and still lands it on record 0, another feature's.
+
+**MEASURED 2026-09-25**, same diagnostic, Two Continents: the save with the wreck loaded with the
+free list empty — the previous build: one free record written (record 0, `+0x26`); with the fix: the
+gate refused the one record and no record was written. Loaded normally with the fix, the gate let the
+one record through (`1 allowed, 0 refused`), and the grid after the load matched the grid at the
+save in every def word and every byte but bit 2 of `+0x0C` on 94 cells around the human player's
+commander — the bit the feature draw sets on the cells it walks (`0x469936`), and neither the
+restore nor either fix writes `+0x0C`. The wreck's anchor read record 0 at the save and after the load. A new
+game under the two builds: the def words identical, and only `+0x00`/`+0x01` differ, on 8 cells
+under units that moved between the dumps.
 
 ## Built-in cheat/console command surface
 

@@ -2321,14 +2321,15 @@ where it takes a player's payment and does not deliver (a feature reclaimed or d
 wreck pool is full), one where it takes it twice (a feature reclaimed through a cell that is not its
 anchor while it plays its sequence), one where a network game can never start (two unit types with
 one unit-sync key), one where the peers disagree (a weapon with the ID 253–255 hitting a feature,
-fixed with the seventh), one where a saved game loads without the features on the map's border (the
-border mask runs before the restore), and the out-of-memory text, which blames the disk. They are
-patched at every
+fixed with the seventh), two in a saved game's load (the features on the map's border are lost,
+because the border mask runs before the restore; and a restored feature's state is written into a
+wreck record it does not own when it did not come back as saved), and the out-of-memory text, which
+blames the disk. They are patched at every
 attach, in both builds, by `patch_engine_defects()` at the end of `tagpu_apply_patches()`; the
 weapon IDs' fix alone is written with the raised limits in the raised build (§2.6b), whose sites
 include its own.
 Each patch is the identity on every input stock handles correctly. Each site is compared with its
-stock bytes and skipped alone, as §2.6's rows are: the twelve are independent, and any one alone is
+stock bytes and skipped alone, as §2.6's rows are: the thirteen are independent, and any one alone is
 still the identity wherever stock is correct. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
@@ -2341,6 +2342,7 @@ engine defects we patch".
 | `0x423651` | `FeatureDie 0x423550`'s pool-full `jge 0x4236F7`, which returns without swapping the feature while its callers have already paid (the reclaim `0x4237D0`) or told the other peers | the `jge`'s 6 bytes retargeted (opcode `0x3D` at `0x42364C` compared too; its operand is the limits table's) to a stub that reloads `x`/`y` from the arguments and joins `0x4236EF`, the engine's own swap for a feature with no sequence |
 | `0x423892` | the reclaim completion `0x4237D0`'s test that a GAF feature is already playing its sequence, which reads the flags of the cell the builder aimed at while `FeatureDie` marks only the anchor | `tagpu_detour_land` over the 6-byte `test`/`je`, compared first. The stub resolves a `0xFFFE` cell to its anchor exactly as `0x423845..0x423862` does, tests the anchor's bit 0, and rejoins at `0x4238AD` (pay) or `0x423898` (the def's GAF test) |
 | `0x43265A` | the game-load routine `0x432610`'s one call to the saved-feature restore `0x424C00`, which runs after LoadMap's border mask `0x4833B0` has marked the border `0xFFFD`, so every saved feature touching a masked cell is refused by the spawn and lost | the call's 5 bytes retargeted, compared first, to `features_restore_under_mask`: when the grid holds no feature it notes and empties every `0xFFFD` cell, runs `0x424C00` unchanged, sets every noted cell that is then EMPTY or `0xFFFE` back to `0xFFFD`, and refreshes the pathing maps over every restored feature's rectangle with `0x440A40`, as the spawn does. Loader thread, inside the level load |
+| `0x4250C0`, `0x425185` | the saved-feature restore `0x424C00`'s writes of an `Animating Features` record's state and a `3D Features` record's `+6` into the wreck record the cell's `+0x0A` names, made whether or not the feature came back and took one — record 0 on the zeroed grid a load gets, another feature's | `tagpu_detour_land` over the 6-byte `mov edx,[0x511de8]` each block begins with, compared first with the 6 bytes after it. The stub runs the block only when the cell is an anchor that owns a record — 3DO, or GAF with its sequence mark set — and the index is below the pool's allocated count (`0x421F2A` / `0x30`); otherwise it leaves for the loop's next record (`0x4250F7`, `0x4251A7`). Loader thread, inside the level load |
 | `0x458B87`, `0x45A470`, `0x45A7B9`, `0x459875`, `0x459CB5`; the calls at `0x459608` and `0x4596D8` | the composite scratch frame's writers — the build-state copy `0x4589C0`, the frame copy, the shadow build, the 2× bakes `0x459830`/`0x459C70` — each of which sizes `*(main+0x1437B)+0x10` to a unit with no compare against its area, and hands it to rasterisers whose span tables hold 800 or 2048 rows; and the cargo merge `0x4B90A0`, which paints a carried unit into it with no right or bottom clip | all seven sites compared first and written together or not at all (a failed write puts back the ones written). Each check stub runs a C check between `pushad` and `popad`: a need that fits runs the stolen bytes; one that does not grows the frame (the engine's own allocator path by hand, up to 2048 × 2048); a refused grow takes the writer's fallback — the unit not drawn that frame (a flag, and a wrapper on the call at `0x459608` that leaves through `0x4597D8`), a 1 × 1 key-pixel frame, or the bake's 1× path. The merge's call goes through a `jmp` stub to `scratch_merge`, a `__stdcall` that clobbers only what `0x4B90A0` does, and runs `0x4B90A0` only when the cargo's rectangle lies inside the scratch's header box and that box inside the area, and otherwise leaves the cargo out of that frame's composite. Levers `tagpu_scratch.stress` (which also points a freed frame's planes at `0x80000000`, where nothing is mapped), `tagpu_scratch.nogrow` |
 | `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | a builder's build list: the game load's shared `TEMP UTYPE LIST` and each builder's copy at def `+0x156` hold 30 entries, the append and the download appender `0x42BE30` write past them | three `call`s to stubs that grow a block through `0x4D83B0` before the entry that would not fit (`bl_room`: 30, then powers of two from 64), a `jmp` past the copy's `rep movs`, the appender's cap NOPped |
 | `0x42DD74`, `0x42DDF0`, `0x42DE12`, `0x42DF23`, `0x42DF35`, `0x42E0B9` | the download menus' records, one of five entries a file at `[main+0x391CB]`, filled with no cap | the block from a zeroing allocator; a file continues into records at the block's end, which grows; stock's count write NOPped; the next file's record by index; the page count reads the record count; the downloadable check reads the files' own records only |
@@ -2383,7 +2385,8 @@ and is stock's byte for byte but for the raised build's cleared meteor tail.
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
 reclaim tests the anchor's mark 0x423892 ARMED; saved features restored under the border mask
-(0x43265A) ARMED; composite scratch bound (0x4589C0 0x45A470 0x45A790
+(0x43265A) ARMED; a saved feature's state written only into the record it owns (0x4250C0 0x425185)
+ARMED; composite scratch bound (0x4589C0 0x45A470 0x45A790
 0x459830 0x459C70 0x4B90A0) ARMED; whole build lists (0x42DA58 0x42DAC7 0x42BEC3) ARMED; download
 menus past five entries (0x42DCF0) ARMED; the out-of-memory text (0x49E700) ARMED; unique unit sync
 keys (0x42BD29) ARMED; weapon IDs bounded, feature hits told from sentinels (0x42E468 0x49D280
@@ -2397,10 +2400,11 @@ border mask open: N cells opened, M shut again, K hold a restored feature's anch
 the pathing maps refreshed in T ms`, or why it left the restore to stock). A
 site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
 `SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
-place of `ARMED`. The six fixes that take a stub of their own (the sort buffer, the NULL plot, the
-terrain window, the wreck pool, the reclaim mark, the composite scratch) release it when their site
-cannot be written; the border fix takes none, since it retargets a call to a function in the DLL;
-the last five share one page of stubs, which stays. There is no switch: all twelve
+place of `ARMED`. The seven fixes that take stubs of their own (the sort buffer, the NULL plot, the
+terrain window, the wreck pool, the reclaim mark, the saved record's owner, the composite scratch)
+release them when their sites cannot be written; the border fix takes none, since it retargets a
+call to a function in the DLL; the last five share one page of stubs, which stays. There is no
+switch: all thirteen
 fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
 `enginefix: weapon <name> has ID <id>, outside 0..<max>, and is skipped` or `enginefix: weapon
 <name>... (ID <id>) has a name longer than its record, and is skipped`, a duplicate `enginefix:
