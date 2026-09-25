@@ -138,14 +138,22 @@ reviewed at `high` (every one writes engine state or adds byte patches). Sites b
 **B1 — damage. Built 2026-09-25, awaiting its review.** What was built, and where it differs from
 the plan below:
 
-- **Built as planned:** the victim caps (both calls wrapped, both list blocks replaced, a frame per
-  call on a depth-indexed stack, the unit set reusable by B2), flak's stub and the loader's floor,
-  `jge` → `jg`, the shear, and the fail-closed install in both builds through the existing report.
+- **Built as planned:** the victim caps (both calls wrapped, both list blocks replaced, the unit
+  set reusable by B2), flak's stub and the loader's floor, `jge` → `jg`, the shear, and the
+  fail-closed install in both builds through the existing report.
+- **Changed: the seen-sets are per thread, not a depth-indexed stack.** Each call's frame is a
+  local of its wrapper, found through a TLS slot that the wrapper saves and restores, and holds two
+  hash sets with no capacity. The `0x0E` receiver reaches area damage on whichever thread pumps the
+  network, the loader's included during a network load, so a single stack would rest on an
+  ordering nobody enforces.
+- **Changed: the shear covers four points, not two.** `0x465AC0` tests up to four points of the
+  box; the third and fourth reads (`0x465CA2`, `0x465D46`) take the same rule.
 - **Added: a bound on the sort bucket** (`0x47CCA9`). Settling the plan's question showed the bucket
   is indexed from the unit's position with no bound: inside the grid for every footprint of width 1
   or more once `jg` holds, one past it for width 0, and stock already reaches one before it for
-  width 0 at the west edge. The column and row are clamped into the grid; exact wherever stock's
-  index is inside. The re-claim `0x47C790` has no bound of its own but reaches only a stamped unit
+  width 0 at the west edge, where its linear index is the previous row's last bucket — inside the
+  array, and read by simulation code. So stock's index is kept wherever it lands inside the array,
+  and only an index outside it has its column and row clamped into the grid. The re-claim `0x47C790` has no bound of its own but reaches only a stamped unit
   and walks the stamped footprint, so it needs none.
 - **Changed: the shear has no "else clamp".** When both the sheared and the point's own row are off
   the grid, stock's answer (invisible) stands. Clamping would make a unit beyond the map's edge
@@ -156,13 +164,13 @@ the plan below:
   The weapon IDs join the table in the stock-limits build too.
 - **The install.** One table, `tagpu_limits_install`, in both builds: it now refuses two rows over
   one byte as well, and the report says "engine limits and fixes" ([the failure
-  report](raised-limits.md#the-failure-report)). 156 sites in the raised build (130 + 26), 30 in the
+  report](raised-limits.md#the-failure-report)). 158 sites in the raised build (130 + 28), 32 in the
   stock-limits build.
 - **Measured** on the new build, one peer, the raised and the stock-limits builds alike where both
   ran: every CORFLAK of `b1-victim-units` lost one hit (the unit-repeat counter 48, the 16 past the
   cap found three more times each); all 96 wrecks of `b1-victim-features` took one hit (the
   feature-repeat counter 602); the edge ARMATLAS of `b1-offmap-edge` stamped and shot down within
-  2 s; `north` of `b1-los-shear` shot down on station within 2.5 s; a corrupted expectation of one
+  2 s; `north` of `b1-los-shear` shot down on station, the flak's first target; a corrupted expectation of one
   site (a scratch build, never committed) produced the report and its exit. On the previous build,
   the same fixtures: 16 of 36 CORFLAK lost 4× their mirror mates, 30 of the 32 wrecks past the 64th
   were destroyed, the edge ARMATLAS was parked and untouched for 40 s, and `north` hovered 7 s at

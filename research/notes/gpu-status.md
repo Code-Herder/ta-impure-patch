@@ -2021,7 +2021,7 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `0x512344` / `0x512348` | the order-descriptor array and its end: `+0xC` is the type's marker-capability mask and `+0x10` its `cursor_ary` index. Read only; the end pointer is what lets us bound an index the engine does not |
 | `unit+0xAC` | the squad tag. Read only — and read as a **DWORD** and then used as a byte, because that is what `0x469C55`/`0x469CD1` do |
 | weapon `+0x68` | the ballistic launch speed, `weaponvelocity`·65 536/30, the divisor of `0x49CE6A`. **WRITTEN at load, on the game-load thread, by flak's floor (§2.6c)**: a ballistic weapon (`+0x111` bit 1) whose value is 0 gets 1, logged, before `0x49E010` picks its aim routine. No stock weapon is written |
-| area damage's victims | `unit − begin` against the slot count `u16 main+0x14351`, and `cell − grid` against `W·H` (`main+0x14233`, `+0x14237`), per victim, **read on the GAME THREAD** inside `0x49A120` (§2.6c); nothing written |
+| area damage's victims | `unit − begin` against the slot count `u16 main+0x14351`, and `cell − grid` against `W·H` (`main+0x14233`, `+0x14237`), per victim, **read inside `0x49A120` on whichever thread calls it** — the game thread, or the one pumping the network for the `0x0E` receiver (§2.6c); nothing written |
 | `main+0x2A43` | the player id the health-bar and group-digit loop compares unit owners against (`0x46967D` → `[esp+0x70]`, read at `0x469CA6`/`0x469CC9`). Read only. **Not `main+0x2A42`**, which is what the order-marker driver `0x48CC30` uses for its player range — two bytes, two loops, one block, written independently at `0x416B25`/`0x416B38`. `tagpu_mark.c` was on `0x2A42` from G13d until G13p corrected it |
 | `main+0x1426B`, `+0x142CB`, `+0x142DB`, `+0x142DF`, `+0x142E3`, `+0x142E7..+0x142ED`, `+0xDD9` | the minimap: the TNT's picture, the view rect and its colour, and the three 126-px surfaces (composite, fog base, scaled base). **Read only, and on the GAME THREAD only since the clean cut** (§2.81): the reader is `tagpu_packet_pub.c` (`MM_COMPOSITE`/`MM_FOGBASE`/`MM_SCALEDMAP`/`MM_PICFRAME`), which copies them into the packet. The picture is decoded on the MINIMAP BUILD's own thread inside `BuildMinimapSurface 0x466780` — not the game thread, measured. **The render-thread reader is gone**: `tagpu_gui_surf.c`'s sharp minimap layer read all three per frame while the game thread may have been rewriting them, the same standing as the fork's own surface upload (G17e, [GL UI renderer](gui-renderer.html) §19), and that layer is deleted. The `tagpu_gui_set_want_minimap` / `tagpu_gui_minimap_have` handshake survives in `tagpu_gui.h` with no consumer |
 | `[0x51FBD0]+0x1B2` | the cursor's **GAF frame**. Read only — **on the GAME THREAD**, by `tagpu_packet_pub.c` (the in-play fill, and in the shell its observer of `0x4C67C0`), and published as the packet's `cur_rec`, a KEY; `tagpu_gui_cursor_frame()` resolves it on the render thread through `tagpu_gaf_frame_sane` for the sharp layer's cursor. `+0x1B6`/`+0x1BA`, the position the engine last drew it at, are **not read since 2026-09-23**: the packet's `cur_pos`/`cur_w`/`cur_h`/`cursor_live` had no reader left and were deleted, so `cur_rec` is the whole cursor channel (0 = no cursor this frame). The engine blits its own sprite into the reference frame |
@@ -2128,16 +2128,16 @@ effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
 while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 130 rows of
-the raise and 26 of the fixes in the raised build, 156 in all, and the fixes' 30 in the stock-limits
+the raise and 28 of the fixes in the raised build, 158 in all, and the fixes' 32 in the stock-limits
 build, where the weapon IDs' four sites join them (MEASURED 2026-09-25 from the log lines). It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
 assuming the page), compares all of them with the stock bytes, and writes them only if every one
 matches; a refused write puts back what was written. The patches last for the process and are
 never restored. The log line names the moved pools' addresses for `tacli peek`: `limits:
-installed 156 sites, the simulation fixes' included -- …, units 1500 a player,
+installed 158 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
 8192, unit types 16384, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
-nothing raised (…); the simulation fixes' 30 sites installed`.
+nothing raised (…); the simulation fixes' 32 sites installed`.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -2343,7 +2343,7 @@ Seventeen fixes, built at every attach, in both builds, by `patch_engine_defects
 **Two classes.** A *simulation* fix — one whose absence would let a player silently compute
 different shared state on an input stock does not fault on — hands its sites to the fail-closed
 table of §2.6b, in both builds: they are compared and written with the rest of the table or not at
-all, and a mismatch ends the process through the failure report. The twelve such fixes are the
+all, and a mismatch ends the process through the failure report. The eleven such fixes are the
 full wreck pool, the reclaim mark, the border features, the saved record's owner, whole build lists,
 the download menus, the sync keys, the weapon IDs, the victim caps, the last column and row, and
 the line of sight. A *local* fix — a crash, a draw, a message or a malformed input — compares and
@@ -2369,8 +2369,8 @@ engine defects we patch".
 | `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | a weapon's ID: the loader `0x42E440` takes the record from it with no bound; the `0x0D` receiver `0x49D270` scales the `u16` shooter and target by 0x118 into the unit array with no bound, and indexes the shooter's slots by `+0x23` with none; the `0x0F` receiver `0x45544D` reads the bytes `0xFD`..`0xFF` as sentinels even when a weapon sent them, and reads through `0x481550`'s NULL for a cell off the map | four sites compared and written together: a `call` in place of the loader's `mov edx,[main]` that skips a weapon outside the array, or whose section name (copied to `+0` with no bound at `0x42E490`) does not fit its record; a `call` over the receiver's lookup that bounds both indexes, and the slot byte to the shooter's three slots when the extra-weapons module is off, and drops the message past them; a `call` over the `0x0F` send that marks a hit whose byte is `0xFD`..`0xFF` with bit 11 of x; the `0x0F` dispatch slot pointed at a stub that tells the hit from a sentinel by that bit and refuses a cell off the map |
 | `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | area damage `0x49A120`, whose two stack lists hold 20 units and 64 feature anchors and whose damage runs for a victim past them once per cell of it in the blast | both calls of `0x49A120` retargeted to `dmg_area`, which pushes a seen-set frame, calls it and pops the frame; the 72-byte unit block and the 71-byte feature block replaced by calls of `dmg_unit_seen` / `dmg_feature_seen` that answer skip (`0x49A415`, `0x49A62B`) or damage (`0x49A2AA`, `0x49A615`) from a slot bitset and an ordinal hash set, each index bounded by the unit array's count or `W·H` first |
 | `0x49CF18`, `0x42F314`, `0x42F32E` | the ballistic fire `0x49CDE0`'s burnblow flight time, `idiv` by `v·cos(pitch)`, 0 within 0.35° of vertical; and its `div` by `w+0x68`, 0 for a ballistic weapon with `weaponvelocity` 0 | a `jmp` over the 9-byte `cdq; idiv ebp; mov edx,[main]` to a stub that divides as stock unless `ebp` is 0 and then takes `weapontimer` through `0x49CF29`, counted and logged; the loader's two calls of `0x49E010` routed through a stub that first gives such a weapon a `w+0x68` of 1, logged. Local |
-| `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | the grid stamp `0x47CC30`'s `X + fw ≥ W` and `Z + fh ≥ H`, which park a unit whose footprint ends on the last column or row | the two `jge` become `jg`; the 50-byte bucket block becomes a `jmp` to a stub that clamps the bucket column and row into the grid LoadMap sized and rejoins at `0x47CCDB` |
-| `0x465B6A`, `0x465C04` | `UnitInPlayerLOS 0x465AC0`'s two row reads, `(z − y/2) >> 5` under an unsigned bound, off the grid for a unit high up near the north edge | each 43-byte block becomes a `jmp` to a stub that uses the point's own row `z >> 5` when the sheared row is off the grid and the own row is on it, and otherwise keeps stock's answer |
+| `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | the grid stamp `0x47CC30`'s `X + fw ≥ W` and `Z + fh ≥ H`, which park a unit whose footprint ends on the last column or row | the two `jge` become `jg`; the 50-byte bucket block becomes a `jmp` to a stub that keeps stock's bucket index whenever its linear index is inside the array LoadMap sized — stock's column −1 at the west edge is the previous row's last bucket, which simulation code reads — and clamps the column and row into the grid only for an index outside it; it rejoins at `0x47CCDB` |
+| `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46` | `UnitInPlayerLOS 0x465AC0`'s four row reads, one for each point of the unit's box it tests, `(z − y/2) >> 5` under an unsigned bound, off the grid for a unit high up near the north edge | each block (43, 43, 49 and 34 bytes) becomes a `jmp` to a stub that uses the point's own row `z >> 5` when the sheared row is off the grid and the own row is on it, and otherwise keeps stock's answer |
 | `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys all but the first by name of each group of types sharing a key, to a hash of the name moved past every held value, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
@@ -2406,8 +2406,10 @@ send is skipped). That is simulation, as content: stock's weapons carry neither 
 and is stock's byte for byte but for the raised build's cleared meteor tail. The victim caps
 write nothing of the engine's: they skip a repeat victim, so a unit past the twentieth takes one
 hit and a feature past the sixty-fourth one `0x4244B0` call, as the first twenty and sixty-four
-already did; their frames are DLL heap blocks from `0x4D83B0`, kept for the process, game thread
-only. Flak's floor writes `w+0x68` of a ballistic weapon whose `weaponvelocity` is 0 (§2.5), at
+already did. Their frames are locals of the wrapper on the calling thread's own stack, found through
+a TLS slot, so each thread has its own: the `0x0E` receiver reaches area damage on whichever thread
+pumps the network, the loader's included. A set that outgrows its frame's 64 keys takes a block
+from `0x4D83B0`, freed when its call returns. Flak's floor writes `w+0x68` of a ballistic weapon whose `weaponvelocity` is 0 (§2.5), at
 load; no stock weapon has one. The last column and row change which bucket and cells the stamp
 writes, the engine's own, for a unit stock parked. The line-of-sight fix writes nothing: it reads
 the player's grid at a row inside it.
@@ -2422,7 +2424,8 @@ menus past five entries (0x42DCF0) ARMED; the out-of-memory text (0x49E700) ARME
 keys (0x42BD29) ARMED; weapon IDs bounded, feature hits told from sentinels (0x42E468 0x49D280
 0x455FB8 0x424575) ARMED; one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE)
 ARMED; flak's divides (0x49CF18 0x42F314 0x42F32E) ARMED; the map's last row and column (0x47CC8B
-0x47CCA3 0x47CCA9) ARMED; line of sight at the map's edge (0x465B6A 0x465C04) ARMED. Counters: unit
+0x47CCA3 0x47CCA9) ARMED; line of sight at the map's edge (0x465B6A 0x465C04 0x465CA2 0x465D46)
+ARMED. Counters: unit
 repeats refused at 0x…, feature repeats refused at 0x…, victims refused off their arrays at 0x…,
 list blocks run unwrapped at 0x…, flak fallbacks at 0x…`, where a simulation fix reads `in the
 fail-closed table (the limits line)` in place of `ARMED`, and the counters are `tacli peek`
