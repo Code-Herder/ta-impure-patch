@@ -135,7 +135,7 @@ Each landing meets the evidence bar above, lands its documentation before its re
 reviewed at `high` (every one writes engine state or adds byte patches). Sites below are DIS in
 [the evidence](sim-fixes-evidence.md); the landing re-reads each before writing it.
 
-**B1 — damage. Built 2026-09-25, awaiting its review.** What was built, and where it differs from
+**B1 — damage. Landed 2026-09-25 on local main (`811c311`) after its reviews.** What was built, and where it differs from
 the plan below:
 
 - **Built as planned:** the victim caps (both calls wrapped, both list blocks replaced, the unit
@@ -143,9 +143,10 @@ the plan below:
   fail-closed install in both builds through the existing report.
 - **Changed: the seen-sets are per thread, not a depth-indexed stack.** Each call's frame is a
   local of its wrapper, found through a TLS slot that the wrapper saves and restores, and holds two
-  hash sets with no capacity. The `0x0E` receiver reaches area damage on whichever thread pumps the
-  network, the loader's included during a network load, so a single stack would rest on an
-  ordering nobody enforces.
+  hash sets with no capacity. The `0x0E` receiver reaches area damage only on the game thread — the
+  dispatcher passes its mask 4 (`0x45200B`) only in net state 6 (`0x454762..0x45478B`), set at
+  `0x498445` after the load — so a stack would hold too; the per-thread frames cost nothing and
+  need no argument about who calls area damage.
 - **Changed: the shear covers four points, not two, in every mode.** `0x465AC0` tests up to four
   points of the box; the third and fourth reads (`0x465CA2`, `0x465D46`) take the same rule, and so
   do Permanent and Circular line of sight, where the points go to `PositionInPlayerMapped
@@ -155,10 +156,15 @@ the plan below:
   what the routine keeps depends on it, and the projectile draw pass's (`0x49BEE8`, `0x49BE60`) is a
   local fix, `fix_projectile_view` — the pass still runs, the engine's frame being the golden
   source.
-- **Changed: the defect is the read, wherever it is inlined — 45 copies, not four.** Every bound of
-  a row against a player's grid height is a compare with `+0x84`; `.text` holds 50, and 45 are the
-  read, each the same world point against one player's LOS or mapped grid (a search by the shear's
-  shape alone found 37: eight reuse a `y >> 1` computed far above). Beyond the eight above: the order resolver `0x43F0E0` (six) and the view player's map build
+- **Changed: the defect is the read, wherever it is inlined — 46 copies, not four.** The census is
+  by the data: every compare in `.text` that reads a grid's height in memory — a player's `+0x84`,
+  the sight grid's `main+0x14297`, or `+8` through a register pointing at either — holds 57, and 46
+  are the read, each a world point sheared by its altitude against one player's grid. It does not
+  follow a grid pointer spilled to the stack or a height recomputed from the plot's rows; a second
+  pass over those forms finds only the sight grid's builder, which projects terrain into the grid in
+  sheared space (not the defect), and the circle's row clips. A search by the shear's arithmetic finds
+  39: the builder's and 38 of the 46, the other eight reusing a `y >> 1` computed further up. Beyond
+  the eight above: the order resolver `0x43F0E0` (six) and the view player's map build
   `0x467440` (two, which mark units seen for the acquisition) join the table; the cursor picker
   `0x43E490` (six), the build cursor's site test `0x47D2E0` (one), the feature helper `0x4658E0`
   (four), the radar rebuild `0x466DC0`'s projectile dots (four), the particle leaves `0x473590`,
@@ -168,8 +174,17 @@ the plan below:
   generic stub built from the site's stock bytes; the order resolver's second read, whose point
   register stock overwrites first, is a hand stub over its block. Every stub counts its own rows per
   function, an interlocked `LONG` each. What each generic stub relies on is compared: the bytes from
-  its z load through its row test (the radar's whole loop for its dots). 176 sites in the raised
-  build, 50 in the stock-limits build (MEASURED from the log lines).
+  its z load through its row test (the radar's whole loop for its dots). 179 sites in the raised
+  build, 53 in the stock-limits build (MEASURED from the log lines).
+- **Added: the observer's side, the sight emitter `0x4825B0`.** Under the ray fan (True and
+  Permanent line of sight) a unit's sight is stamped from the same sheared row, stored in the unit
+  and bounded against the sight grid; off it, the unit stamps nothing, so an aircraft by the north
+  edge revealed nothing to its owner (MEASURED on the previous build: stored row −2, rows 0–9 of the
+  owner's map unlit). A census keyed on `+0x84` alone missed it, which is why the census is now by
+  the data. The table's hand stub fixes the row once, before stock compares it with the stored row
+  and stores it, so the stamp and its later removal — both read the stored words — use one row by
+  construction; measured paired (twelve crossings of the boundary, the edge rows all 0 afterwards,
+  no count wrapped).
 - **Added: a bound on the sort bucket** (`0x47CCA9`). Settling the plan's question showed the bucket
   is indexed from the unit's position with no bound: inside the grid for every footprint of width 1
   or more once `jg` holds, one past it for width 0, and stock already reaches one before it for
@@ -186,7 +201,7 @@ the plan below:
   The weapon IDs join the table in the stock-limits build too.
 - **The install.** One table, `tagpu_limits_install`, in both builds: it now refuses two rows over
   one byte as well, and the report says "engine limits and fixes" ([the failure
-  report](raised-limits.md#the-failure-report)). 176 sites in the raised build (130 + 46), 50 in the
+  report](raised-limits.md#the-failure-report)). 179 sites in the raised build (130 + 49), 53 in the
   stock-limits build.
 - **Measured** on the new build, one peer, the raised and the stock-limits builds alike where both
   ran: every CORFLAK of `b1-victim-units` lost one hit (the unit-repeat counter 48, the 16 past the
@@ -248,6 +263,58 @@ The plan as written:
   previous build faults at `0x49CF19`, the new one counts fallbacks. An ARMATLAS on the last column
   and one near the north edge at cruise altitude.
 
+**B2 — stacked aircraft. Built 2026-09-25 on its own branch from B1 and reviewed at high; landing next.** What was
+built, and where it differs from the plan below (the engine map's *Stacked aircraft in area damage*
+has the sites, the disassembly and the numbers):
+
+- **Built as planned:** air only; candidates airborne (`+0x110 & 0x10000003 == 0x10000002`),
+  uncarried, not in the off-map bucket, `+0x9E` non-NULL, footprint meeting the blast's rect, not in
+  B1's unit set, re-validated at hand-over; every index bounded; served through the engine's own
+  per-victim code after every stock victim; simulation, fail closed, in both builds.
+- **Changed: served after the walk, not by looping the last cell.** The stub sits at the walk's end
+  `0x49A664`, which is also where an empty rect jumps (`0x49A1DF`), so the serving runs after the
+  last cell's *feature* too (for a rect that clamps to empty, `air_first` returns NULL and nothing is
+  served); the selector `0x49A415` at 2 means
+  "serve the next". Stock's victims, their order and values are untouched either way; this way
+  stock's last cell is not re-entered.
+- **Changed: the pool is rebuilt at the unit tick's call `0x4954ED`, not at `0x49B720`.** Death
+  explosions run inside the unit tick, before the projectile tick, and would see a pool one step
+  stale. The stamp's airborne path `0x47CF98` adds every unit it files between rebuilds, under a
+  lock, since the stamp also runs from the network pump and the loader's restore.
+- **Changed: "holds no slot inside the rect" is decided by B1's seen-set, not by a slot test.** A
+  unit the walk found is in the set, so the served ones are exactly those stock missed: an aircraft
+  no in-rect slot names.
+- **Changed, from the reviews: the candidate rule is slot B's exactly, and a dying aircraft is never
+  served.** The mask includes bit 29 (the stamp's yardmap path files such a unit in slot A); a
+  candidate needs a real bucket (`+0x82` neither NULL nor off-map) and no bit 14. The death
+  explosion `0x49B000` has no shooter (`proj+0x52` = 0), so stock's shooter test did not keep the
+  dying aircraft out — only the damage receiver's bit-14 drop did; stock never offers it because
+  the destructor clears its cells and NULLs `+0x82` first. A failed allocation calls the handler
+  `0x49E700` directly (`eng_alloc_or_exit`, B1's sets too), since the handler slot can be empty on
+  another thread's window; the stubs open a further page when one fills.
+- **Open**: a unit whose `+0x110` turned airborne since the last rebuild through a writer not
+  followed by the stamp stays stock's until the next rebuild (150 instructions write `+0x110`; not
+  audited one by one); the pump's `0x0E` explosions (`0x4954C8`, before the rebuild) see the
+  previous step's pool plus later stamps. Either way a victim can only be missed, never wrongly
+  offered.
+- **Measured**, the raised build unless said: at the same two bursts of `b2-aa-flak` on
+  `b2-stack-atlas`, the previous build hit 12 times, all holders, and left the five holding none at
+  150; the new one took all ten, six holding none, from 150 to 10–16, then killed them; served 40
+  (37 on the stock-limits build). `air-war`: about 25 µs a sim tick (the rebuild 18.5–23.4, 0.6–0.8
+  µs an area-damage call). Two peers: the firer's peer serves, the owner applies the `0x0B`
+  (1503 and 1509 served on the joiner, both 150 → 19 on the host); a non-owner holds no HP for a
+  remote unit (`+0x108` 0), and both peers held the same five survivors. The fire spread
+  `0x49A0C0` calls area damage past the local-owner gate, so every peer computes burning damage —
+  stock for the slot holders each peer's tie-break keeps, B2 for every stacked aircraft, which makes
+  the damaged set the same on every peer as far as the peers agree on where each aircraft is (a
+  remote unit's position, and so its pool membership, lags its owner's). After B1's landing was
+  merged in, with the reviews'
+  candidate rule: 183 sites installed (130 + 53), 57 in the stock-limits build, the stubs 3 504
+  bytes in one page, the limits' weapon sites included (3 120 in the stock-limits build); all ten hit by the first burst (150 → 11–17)
+  and killed by the second, served 10. The ride-along: a cargo
+  killed in its transport leaves no wreck by design (30 000 from the destructor at `0x48680B`,
+  severity 100, ARMSTUMP's corpse type 3 walks dead → heap → none).
+
 **B2 — stacked aircraft** (needs B1's seen-sets).
 
 - First measure it: ten ARMATLAS or ARMBRAWL ordered to one point, slot B of every footprint cell
@@ -278,16 +345,24 @@ The plan as written:
 - Class: local (malformed input only). Tests: the two-peer weapon-ID fixture and a ten-peer tier 2
   run with every counter at 0.
 
-**B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`; commits `3c2cec1`, `b3c5a83`,
-`569031d`; not landed, not reviewed). What was done, and where it deviates from the plan above:
+**B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`, main merged at `74dc093`;
+commits `3c2cec1`, `b3c5a83`, `569031d`, `49c640c`, `5193986`, the `0x2C`'s nested unit
+references `b9a5692` and the `0x0A` attach `cefcac8`; not landed; two high reviews, their findings
+acted on in `49c640c` and `5193986` — the nested references and the `0x0A` came after them and have
+had no review yet). What was done, and where it deviates from the plan above:
 
 - **No record-injection lever.** The plan's `tagpu_wirefuzz.on` is dropped. A malformed-message fix
   meets the plan's own evidence bar by disassembly (the identity everywhere else), so instead each
   bound is a **pure C predicate** over the record's field values and the engine's counts
-  (`wire_index_ok`, `wire_killer_ok`, `wire_type_ok`, `wire_delta_ok`, `wire_block_ok` in
-  `tagpu_patches.c`), and a test-only self-check, **`tagpu_wirecheck.on`**, evaluates each on a table
+  (`wire_index_ok`, `wire_killer_ok`, `wire_type_ok`, `wire_delta_ok`, `wire_ref_idx`,
+  `wire_attach_ok`, `wire_block_ok` in `tagpu_patches.c`), and a test-only self-check, **`tagpu_wirecheck.on`**, evaluates each on a table
   of boundary values at attach and logs each verdict against the expected one — a unit test of our
-  own code, not traffic. Measured 2026-09-25: 16/16 predicate cases OK.
+  own code, not traffic. The compiler folds every case to a constant, so it checks the predicates'
+  C and nothing more; the stubs and their drop paths rest on the disassembly. Measured 2026-09-25:
+  22/22 predicate cases OK. The table has 33 since `cefcac8` (`wire_ref_idx`'s six, `wire_attach_ok`'s
+  five); those eleven, with six more (a child and parent both 0, no array, the raised limit of
+  15 000), have been run only on the host, against the predicates compiled from the source (8/8 and
+  9/9 OK), not yet through `tagpu_wirecheck.on` in the game.
 - **Every stub is a jmp at a clean 5-byte boundary**, verifies the whole stock span first
   (all-or-nothing: one non-stock span leaves the image untouched, `FIX_BYTES`), sets the registers
   stock sets, and continues at the same address; a failed bound goes to the receiver's own drop/exit.
@@ -297,34 +372,169 @@ The plan as written:
   `s_wire_rr_type`), not a register, so the engine's downstream register state is exactly stock's; a
   misframed `0x2C` points the bit reader at a static zero dword and jumps to the engine's own
   end-of-list `0x48BA28`, so no round-robin entry is parsed from a stream that cannot be re-framed.
+  **Game thread by the gate**: `0x451FD0` (called at `0x491369`) is the only filler of the receive
+  mask table `0x512BC0` for these codes and gives `0x09`, `0x0B`, `0x0C`, `0x0D`, `0x0E` and `0x2C`
+  the mask 4 (`0x451FE7..0x45200B`); the dispatcher passes mask 4 only in net state 6
+  (`0x454762..0x45478B`), which `0x498445` sets on the game thread after the load (state 5 during
+  it). The static also rests on the receiver being serialised with no re-entry between the type
+  check and the after-create check: the direct-call closure of `0x4861D0` never reaches the pump
+  `0x453D40`.
+- **The `0x2C` is parsed from a zero-padded copy of itself** (`wire_s2c_copy`, at `0x48B92B`, before
+  the header's reads), and its reader is bounded by the message's length (`wire_2c_len`). The
+  receive `0x4534E0` takes one message into the buffer at `main+0x2A38` and learns its length, which
+  it hands only to the statistics call `0x415EF0`; the two calls (`0x453595` after the transport
+  `0x462F30`, `0x45361F` after a raw DirectPlay receive, the `-p` switch below 0) go through a note
+  that keeps the buffer and length **per thread** (TLS), since the receive runs on whichever thread
+  pumps. On the transport a `0x2C`'s length **is** its `[16]` size field: the splitter `0x463790`
+  reads it (`0x4639E5`) and queues the message only when it fits the packet (`0x46393E`); a raw
+  receive has no splitter, so the length is the smaller of the two, at most 0xFFFF. The receiver's
+  entry copies that many bytes into this thread's buffer (0xFFFF + 48 bytes, allocated at the
+  thread's first `0x2C`; none → the message is dropped, `nocopy`), zeroes the 48 after them, and
+  hands the copy to stock's `0x48B933` as the reader's buffer. **Every read of the parse is then
+  inside memory we own, whatever the message says**, and a message that ends inside an entry reads
+  zeros for that one entry before the next check stops the stream. Before each read the stubs
+  precede, the position plus the read's width must fit the length: the header and first delta at
+  the entry, each dirty type at the delta stub, the flag bit (and, when it is set, the round-robin
+  type) at `0x48BA5E`, and the round-robin entry at `0x48B40E`; the end is keyed by the reader's
+  address, and the entry checks the reader holds the copy. A `0x2C` that is not the buffer the
+  receive described is dropped (`stale`). The copy changes nothing for a well-formed message:
+  nothing reads the reader after the handler returns (the dispatcher's case `0x4553EE` jumps to the
+  pump's back edge `0x455F50`, the reader is a local of `0x48B920`'s frame), and nothing advances
+  by it — each message is its own receive, and the splitter advances by the size it reads from the
+  packet itself.
+- **The padding's size, by disassembly of every path past the last check.** Two stretches are read
+  by engine code whose width depends on the data, and neither loops on data it reads. A dirty
+  entry's move-class payload `[vt+0x24]` is followed by the next delta (16) at `0x48BA19` before the
+  delta stub checks it; the move classes' vtables (`0x4FD458`, `0x4FD488`, `0x4FD980`, `0x4FD9B0`,
+  `0x4FD9E0`; no other table's `+0x24` reaches the reader) give `0x44EFD0` (reads nothing),
+  `0x44F5C0` (1 + 2 + 3 × 32 = 99: its loop runs a 2-bit count) and `0x490A10` (2 + the larger of
+  `0x44E080`'s 8 + 32 + 16 + 16 + 16 + 96 = 184 and `0x44E9C0`'s 1 + 6 × 32 + 16 = 209, + 2 = 213),
+  so 213 + 16 = **229 bits**. The round robin's tail after `0x48B40E` reads 16 + 8 + 8 + 2 + 1
+  (`0x48B4A9..0x48B557`), then 15 + 8 or 32 × 3 + 16 × 3 (`0x48B56B..0x48B60F`), and 32
+  (`0x48B6F2`): at most 211; the calls on the way (`0x48B090`, `0x48AB70`, `0x47D0E0`, `0x47CC30`,
+  `0x4827B0`) read nothing from it. The header before the entry check is 56. So at most 229 bits,
+  29 bytes, past the last checked bit. The message's end can sit 3 bytes into a dword, and the
+  reader `0x415DC0` also loads the next dword when a read reaches the end of one
+  (`0x415E0C..0x415E3E`): 29 + 3 + 8 = 40, rounded up to **48**. A `typedef` in `tagpu_patches.c`
+  fails the build if the padding falls below that sum.
+- **The pump's message pointer follows the buffer.** The pump `0x453D40` takes its message pointer
+  once, before its loop (`0x453D90` → `[esp+0x10]`; the back edge `0x455F59` re-enters at the call
+  `0x453D94`), and the dispatcher's cases read the message there; nothing else writes that slot or
+  takes its address. `0x4534E0` grows the buffer when a message outgrows it (`0x453565`, `0x4535EE`: `0x4D84A0`,
+  a realloc [INFERRED: block and size in, the block out]), so after a growth that moves the block,
+  every later message of the same pump call was dispatched from the freed one. The fix is the
+  small one: the note re-points the pump's `[esp+0x10]` at the buffer the message was just received
+  into, after checking the return address `0x453D99` (its frame — `0x4534E0`'s one caller, its one
+  push, the three argument pushes — is in the spans verified at install). It is the identity when
+  the buffer did not move, and `pump` counts the times it did. **Well-formed traffic does not reach
+  it**: the buffer holds 0x2000 bytes from the main menu on, before any session (MEASURED
+  2026-09-25, `main+0x2A34`), and stayed there, at the same address, through a four-peer tier-2 game
+  on every peer (`pump` 0, below). On the transport the splitter's longest fixed-length message is
+  186 bytes (code `0x20`, the table `0x512AD8` read live) and a `0x2C` is capped near 0x200 bytes by
+  its sender (`0x48B7F6`), so only a malformed message — a `0x2C` whose size field runs past 8 KB
+  inside a large packet, or an oversized raw receive — grows the buffer. That makes it a
+  malformed-input fault, B3's class; the fix was built before the measurement answered and is
+  kept for that reason.
+- **The splitter ends a packet at a message too short to advance it** (`wire_split_*`). The
+  splitter walks a packet by each message's length and advances by it, so a `0x2C` whose size is 0
+  keeps its counting loop (`0x4638F0..0x463947`) on one message for good, and its third walk
+  (`0x463AD3..0x463B8B`) queues that message until the 512-entry queue is full. Both take the
+  length at one place (`0x463939`, `0x463B33`, after the `0x2C` and table paths join); a length of
+  0, or a `0x2C` below its 7-byte header, ends the split there through the engine's own end for an
+  unknown code (`0x463949`; `0x463B91`), counted (`split`). The length table itself holds 0 for
+  codes 4 and `0x2B` (read live 2026-09-25), so those stop the split too. The counting pass decides how many
+  messages the queuing pass `0x4639BC` takes, so that pass never reaches it. A length of 0 hangs
+  stock's counting loop whatever the code, so no packet stock survives carries one, and every
+  sender writes a `0x2C` with its 7-byte header: it is the identity for a well-formed packet.
 - **The `0x2C` block check is at the receiver's entry `0x48B960`, not per dirty entry**: one check
   there covers the dirty loop, the block sweep `0x48BA28` and the round-robin slot `0x48BAAD`, all of
   which read `[player+0x67]`/`[player+0x6B]`. It is the full slot-run shape
   (`begin + (1 + k·N)·0x118`, `k < 10`, ending `N-1` slots on), not just the `!= 0` stock check.
+  `k` is a **rank**, not the record's index: `0x4858A6..0x4858E0` assigns blocks in the order of an
+  insertion sort (`0x485657..0x4856C0`) that, in a network game, compares the records' DirectPlay ids
+  `[rec+4]` — so record 2 can own the block at slot 6001.
+- **The `0x2C`'s nested unit references** (`b9a5692`). Two values inside the stream are unit indices
+  scaled into the array with no bound, each an optional reference whose 0 the engine itself takes as
+  no unit; an index past the array now takes that 0, counted, and a valid one leaves every register
+  and byte as stock does. One predicate serves both, `wire_ref_idx` (0 stays 0, `[1, max]` stays
+  itself, anything else becomes 0 — `wire_index_ok`'s range). By disassembly of every decoder the
+  dirty list and the round robin reach ([the engine
+  map](../exe-reverse-engineering.md#the-network-receivers-take-a-unit-index-straight-off-the-wire-0x09-0x0b-0x0c-0x2c-disassembled-2026-09-25)):
+  - **A move payload's target**, `0x44E080` (the `0x4FD9E0` class's parse, `0x490A10` → `0x490A4F`):
+    a `u16` at `0x44E0D0`, sent as the target's own `+0xA8` or 0 (`0x44DDC0`); stock sends 0 to
+    `0x44E0DA` (`xor eax,eax`) and scales any other at `0x44E0DE..0x44E0F9`, then hands it to the
+    reference set `0x489690`, which reads the unit's `+0xA6` and links into its `+0xA2`, or for NULL
+    clears the reference. The stub is at `0x44E0DE` (stock `8B 15 E8 1D 51 00`, `mov edx,[0x511DE8]`;
+    span `0x44E0D5..0x44E103` verified) and continues at `0x44E0FC` with the slot, or NULL (`target`).
+  - **The round robin's carrier**: under the full state's flag bit, a 15-bit index at `0x48B56B`, sent
+    as the carrier's own `+0xA8` (`0x48B2A4..0x48B332`), packed as the parent id of the attach record
+    `0x48AB70` applies at `0x48B58B` and scales there unbounded (`0x48ABAF..0x48ABC4`); its 0 is
+    `0x48AB70`'s own no parent (`0x48ABA9`), the detach. The stub replaces the record's
+    `mov [esp+0x17],ax` at `0x48B574` (stock `66 89 44 24 17`; span `0x48B55B..0x48B58F` verified),
+    writes the index or 0 (`carrier`) and continues at `0x48B579`. The skip-the-call alternative
+    was not taken: 0 is the engine's own no-unit value at both sites.
+  - **None needed**: `0x44E080`'s other `u16` (`[this+0x10]`) is a piece number `0x43DEF0` bounds
+    itself; `0x44E9C0` reads flags, six 32-bit values and a heading; `0x44F5C0` a bit, a 2-bit count
+    and that many coordinate pairs into three pairs of room; `0x490A10` a 2-bit selector and a 2-bit
+    value; `0x44EFD0` nothing; and the rest of the round robin's tail (`0x48B4A2..0x48B6FC`) names
+    no other unit: its fields go into the entry's own slot, its state mask to `UNITS_SetStateMask
+    0x48B090`.
+  - The same scaling in `0x48AB70` is reached from the wire by the `0x0A` receiver too: the next
+    bullet.
+- **The `0x0A` attach, bounded at its case** (`cefcac8`). The dispatcher's `0x0A` case `0x4553FE`
+  (jump-table entry 8, `0x455FA4`) hands the wire record to `0x48AB70`, which scales both its
+  child (`+1`, `0x48AB8A`) and its parent (`+3`, `0x48ABAF`) into the unit array unbounded, reads
+  each one's `+0x110` and writes the parent's `+0x8A`. `0x48AB70`'s callers are four: that case,
+  the local wrapper `0x48AAC0` (`0x48AB62`, 30 callers, the ids of live units), and the round robin
+  (`0x48B58B`, the carrier bounded at `0x48B574`; `0x48B5C5`, the slot's own id and parent 0), so
+  the check guards the case, not the function. What 0 means: a child 0 makes `0x48AB70` return
+  having done nothing (`0x48ABC7`), and no sender writes one (the wrapper reads its child's `+0x110`
+  before it sends); a parent 0 is the detach (`0x48ABA9`). So `wire_attach_ok` requires the child
+  in `[1, max]` and the parent 0 or in `[1, max]`. The stub replaces the case's `mov eax,[esp+0x10];
+  push eax` (stock `8B 44 24 10 50`; the case's 15 bytes through its `jmp 0x455F50` and the table
+  entry verified); a record that fails goes to `0x455F50`, the pump's back edge that every case and
+  every unhandled code takes (drop `0a`), and one that passes runs the displaced two instructions
+  and continues at `0x455403` (in `0a`). A dropped child 0 has the effect stock gives it, nothing;
+  only the count differs. Not examined: the attach point `+5`, stored into the child's `+0xF9`,
+  is a piece of the carrier, not a unit index.
 - **After-create guards `0x48BA05` (S7) and `0x48B49C` (S10)** require the slot now holds the created
-  type and, before the parse dereferences it, the dirty create's mover `[[esi]]` or the round robin's
-  `[edi+0x9E]` non-NULL — TADR's 13 field faults at `0x48BA07` and the NULL at `0x48B4A6`.
+  type and, before the parse dereferences it, the dirty create's mover `[esi]` and its object `[[esi]]`,
+  or the round robin's model object `[edi+0x9E]` (the Object3do, set at `0x485DCC`; `+0x9A` is the
+  COB script), non-NULL — TADR's 13 field faults at `0x48BA07` and the NULL at `0x48B4A6`.
 - **The move class is checked in the dirty list only**, not in the round robin as the plan's
   "a move class present" read. The dirty list's sender lists only units with a mover
   (`0x48B782..0x48B786`), so a type without one there is malformed; the round robin carries every
   unit, structures included, and tests the mover itself before its one use (`0x48B6E8`), so there it
   is well-formed and only the type is bounded. The tier-2 run caught the first build refusing the
   AI's structures (types 78 and 112) at the round robin, three entries per joiner (`569031d`).
-- **The `0x09` sender-block rule is NOT shipped; the question it waited on is answered.** S1 bounds
-  the index `[1, max]` and the type `[1, count)` only. The plan's "index lies in the sender's block"
-  is an **observe-only** count on the heartbeat (`send in`/`out`: whether the created slot lies in the
-  block of the TRANSPORT sender, the dispatcher's `edi`, saved at `[esp+0]`; `argdiff`: a player
-  argument that is not the sender; `unk`: a sender that is no player record), and each sender's first
-  create is logged with its name and block. The tier-2 run below settles the AI-seat question: an AI
-  seat's creates arrive from the AI's own player record, inside its own block. Turning the observe
-  into a drop is a one-line change that needs one more multi-peer run; it is left to the landing.
-- **Records accepted, per receiver**, on the heartbeat's `wire:` section (`in 09 0b 0c 0d 2c dirty
-  create rr`): the evidence each bound ran on real traffic. `0x0B` and `0x0C` count only the
+- **The `0x09` sender-block rule is a drop** (`blk`), as the plan intends once the AI-seat question
+  was answered (the tier-2 run below: an AI seat's creates arrive from the AI's own record). A wire
+  `0x09` is dropped when its slot is not in the block of its TRANSPORT sender — the dispatcher's
+  `edi`, saved at `[esp+0]` — or when the sender is no player record (the pump names record ten, one
+  past the ten, for a sender it cannot find, `0x453E14`). `argdiff` still counts a player argument
+  that is not the sender, and each sender's first create is logged with its name and block.
+- **Records accepted, per receiver**, on the heartbeat's `wire:` section (`in 09 0a 0b 0c 0d 2c
+  dirty create rr`): the evidence each bound ran on real traffic. `0x0B` and `0x0C` count only the
   dispatcher's call (return `0x455417`/`0x455428`), not the local damage and kill paths that share
-  the function; `0x0D` counts a live shooter whose slot weapon matched.
-- **`0x0D` diverged shooter** dropped in `wpn_rx_fired` via a new read-only accessor
-  `tagpu_weapons_slot_weapon` (NULL past the unit's count, no clamp/VIOLATION), only for a live
-  shooter.
+  the function; `0x0A`'s stub sits on the dispatcher's path alone; `0x0D` counts a live shooter
+  whose slot weapon matched. Drops: `09 blk 0a 0b 0c kill 2c len stale nocopy 0d split target
+  carrier`; `pump` counts a re-pointed pump pointer.
+- **The B4/B5 oracles**: `morph` (a create onto a live slot whose type changes), `dcreate`
+  (`CreateFromNetwork` called by the dirty list, returning to `0x48BA05`: a dirty entry whose type is
+  not its slot's, the unit made from the entry rather than from its own `0x09` — into an empty slot,
+  the ghost commander's mechanism), `rcreate` (the same from the round robin, `0x48B49C`) and `ghost`
+  (the engine's ghost sweep, a round-robin type 0 over an occupied slot). For B5's cause,
+  `CreateFromNetwork`'s own refusal — `0x486229` returns 0 when the create's player has no block — is
+  counted per caller (`noblock 09 dirty rr`, the first 64 logged with the caller, player, slot and
+  type), and `noarr` counts `wire_s09` finding no unit array to bound against.
+- **`0x0D` diverged shooter** dropped in `wpn_rx_fired` via a new accessor
+  `tagpu_weapons_slot_weapon` (NULL past the unit's count, no clamp/VIOLATION; past slot 2 it reads
+  through `side_row`, which may build or rebuild the module's own side table and log it, as every
+  side-row read does), only for a live shooter. Stock divides by the **local** slot weapon's velocity
+  `+0x68` (`0x49CE62..0x49CE6A`): it faults #DE only when that is 0, and otherwise builds a mixed
+  projectile (the packet weapon's branch, the local weapon's velocity). Evidence §8 classes it
+  simulation, only when diverged; it rides the weapon-ID site `0x49D280`, a row of the fail-closed
+  table, so it is held fail-closed with it.
 
 Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j2`, `b3j3`):
 
@@ -336,7 +546,7 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   (`0x48B985`), type-matched skip (`0x48B9AD`), after (`0x48BA05`), unsigned remainder (`0x48BA9F`),
   round-robin type (`0x48B40E`) and after (`0x48B49C`) — ran every tick on both peers with **every
   drop counter at 0 and no `wire robustness:` drop line**; morph and ghost read 0 (the recreate oracle
-  could not count on that build — below). That is 7 of the 10 `0x2C`-family sites, the most
+  could not count on that build — below). That is 7 `0x2C`-family sites, the most
   timing-sensitive (the round robin fires unconditionally each tick and
   the S9→S10 static type carry is exercised each time).
 - **Tier 2, four peers** (host with an AI seat + three joiners, Town & Country, `limits-tier2-p0..p3`
@@ -345,7 +555,7 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   reading). **PASS**: every drop counter 0 on every peer, every receiver's accepted count above 0, no
   `wire robustness:` drop or stop line, no ErrorLog, no crash:
 
-  | peer | ticks | in `09` | `0b` | `0c` | `0d` | `2c` | dirty | create | rr | morph | recreate | ghost | send in / out / argdiff / unk |
+  | peer | ticks | in `09` | `0b` | `0c` | `0d` | `2c` | dirty | create | rr | morph | recreate (dirty + rr) | ghost | send in / out / argdiff / unk |
   |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
   | host | 5355 | 4497 | 23540 | 2624 | 27106 | 13348 | 420868 | 3 | 13348 | 0 | 3 | 0 | 4497 / 0 / 0 / 0 |
   | j1 | 2605 | 4502 | 17568 | 800 | 16068 | 10499 | 245854 | 2 | 10499 | 0 | 4 | 0 | 4502 / 0 / 0 / 0 |
@@ -362,14 +572,64 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   move-class check that belongs to the dirty list only, above). And the recreate oracle read 0 with
   dirty creates on the counter: it compared `CreateFromNetwork`'s return address with the call sites
   `0x48BA00`/`0x48B497` instead of the return addresses `0x48BA05`/`0x48B49C`, so it could never
-  count. It now reads 3 or 4 per peer: the creates the full-state stream made on that peer. morph and
-  ghost stayed 0: no slot changed type under a create, and
-  the engine's ghost sweep never fired.
+  count. It then read 3 or 4 per peer. It counted the dirty list's and the round robin's creates
+  together (they are `dcreate` and `rcreate` now): the host's 3 are its 3 dirty creates (`create=3`),
+  and with `morph` at 0 every one went into an empty slot — units placed from a dirty entry and not
+  from their own `0x09`, the ghost commander's mechanism, three times on the host. The joiners' 1–2
+  dirty creates leave 2–3 round-robin creates. `ghost` stayed 0: the engine's ghost sweep never
+  fired.
 - **The AI-seat answer.** On each joiner the AI seat's first create logs as
   `0x09 from sender 4 (type 3, 'AI:B3H1'), player arg 4, slot 2, sender block 1..1500: in the sender's
   block`, and across all four peers `send in` equals the accepted `0x09` count (18 011) with `out`,
   `argdiff` and `unk` at 0. The AI's units reach the joiners as `0x09` from the AI's own record, so the
-  plan's sender-block rule would refuse nothing a well-formed game sends, the AI's included.
+  plan's sender-block rule refuses nothing a well-formed game sends, the AI's included; it is a drop
+  since `49c640c`.
+- **The review round, two peers** (`49c640c`, raised ddraw.dll md5 `3a9453029afeb5e4412d0de7fb29d4c9`,
+  stock-limits `dc0c97414ca5fa252464d7d9f45a0c2b`; host + joiner on Town & Country,
+  `limits-tier2-p0`/`p1` after `tools/mp_lobby.sh`, the armies ordered onto the centre). Install
+  **ARMED**, all 14 spans stock; the live sites and stubs disassembled from the running host, each
+  jump and exit as built; stubs 384 bytes, the page 3 888. The fight ran until the host had
+  destroyed the joiner's 1 500 units and the game ended (ENDMSN) at tick 7 005 — the counters are
+  final there. **Every drop counter 0** on both (`09 blk 0b 0c kill 2c len stale 0d`), no ErrorLog, no
+  crash:
+
+  | peer | in `09` | `0b` | `0c` | `0d` | `2c` | dirty | create | rr | morph | dcreate | rcreate | ghost | noblock 09/dirty/rr | noarr |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | host | 1500 | 3473 | 1500 | 7144 | 6981 | 201067 | 0 | 6981 | 0 | 0 | 0 | 0 | 0/0/0 | 0 |
+  | joiner | 1499 | 9103 | 1418 | 16411 | 6994 | 222557 | 0 | 6994 | 0 | 0 | 1 | 0 | 0/0/0 | 0 |
+
+  The length bound passed every one of 13 975 messages and 423 624 dirty entries and every round-robin
+  entry; the sender-block drop passed all 2 999 creates. The joiner's units took slots 1..1500 and
+  the host's 1501..3000: the block is the rank, not the record. `create`/`dcreate` read 0: no unit
+  reached either peer through the stat stream before its `0x09`, which in the four-peer game happened
+  1–3 times a peer; the length checks on that path are the delta stub's, which every dirty entry
+  passed, so a four-peer rerun would add a count, not a covered check. `rcreate` counted one on the
+  joiner. The in-play heartbeat line was then about 1 430 bytes of its 1 700.
+- **The padded-copy round, four peers** (`60f49db`, raised ddraw.dll md5
+  `07bc42e798d9aed808a51651fc2e6c04`, stock-limits `dca01cc3987504b337c7fbe5a93624c3`; host with an AI
+  seat + three joiners, Town & Country, `limits-tier2-p0..p3` after `tools/mp_lobby.sh`, 1 499 units
+  each, the armies ordered onto the centre; every peer paused before reading). Install **ARMED**,
+  all 21 spans stock, 22/22 predicate cases OK; the new sites and stubs disassembled from the
+  running host — `0x48B92B` → the copy, drop `0x48BAC8`, the displaced `xor esi,esi; push 8;
+  lea ecx,[esp+0x14]` then `0x48B933`; `0x463939` → `0x463949` or `and eax,0xFFFF` then `0x46393E`;
+  `0x463B33` → `0x463B91` or `mov edx,eax; and edx,0xFFFF` then `0x463B3B` — each calling the
+  function its offset in an unstripped link of the same objects names. Stubs 480 bytes, the page
+  3 984 of 4 096. **PASS**: every drop counter 0 on every peer (`09 blk 0b 0c kill 2c len stale
+  nocopy 0d split`), `dcreate` above 0 on every peer, no ErrorLog, no crash:
+
+  | peer | ticks | in `09` | `0b` | `0c` | `0d` | `2c` | dirty | create | rr | morph | dcreate | rcreate | ghost | pump | noblock 09/dirty/rr | noarr |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | host | 7873 | 4497 | 24878 | 2957 | 38488 | 17883 | 516832 | 3 | 17883 | 0 | 3 | 0 | 0 | 0 | 0/0/0 | 0 |
+  | j1 | 2125 | 4501 | 13934 | 653 | 11378 | 8583 | 195663 | 2 | 8583 | 0 | 2 | 2 | 0 | 0 | 0/0/0 | 0 |
+  | j2 | 7883 | 4506 | 14331 | 2446 | 28442 | 25742 | 519805 | 1 | 25742 | 0 | 1 | 3 | 0 | 0 | 0/0/0 | 0 |
+  | j3 | 7878 | 4506 | 29475 | 2655 | 41555 | 25749 | 516065 | 3 | 25749 | 0 | 3 | 1 | 0 | 0 | 0/0/0 | 0 |
+
+  j1's commander died at tick 2125 and `MultiCommanderDeath` ended its game (ENDMSN), as in the
+  first four-peer run; its counters stop there. Every one of 77 957 `0x2C` messages was parsed from
+  its copy, and the length bound passed every dirty entry and round-robin entry; the nine dirty
+  creates are the path the plan's ghost commander takes, each passing the delta and type checks and
+  the after-create guard. The receive buffer held 0x2000 bytes at one address from the menu to the
+  pause on every peer. The in-play heartbeat line is now about 1 470 bytes of its 1 700.
 
 **B4 — stale hits.**
 

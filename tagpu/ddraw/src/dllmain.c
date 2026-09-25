@@ -25,6 +25,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_weapons.h"
+#include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
@@ -37,6 +38,7 @@
 #include "delay_imports.h"
 #include "keyboard.h"
 #include "tagpu_log.h"
+#include "tagpu_regstore.h"
 
 
 /* export for cncnet cnc games */
@@ -48,6 +50,9 @@ PVOID FakePrimarySurface;
 
 HMODULE g_ddraw_module;
 static BOOL g_screensaver_disabled;
+/* Attach returned at once for cnc-ddraw's config tool; detach returns at once exactly
+   then, since its steps close what the rest of attach opened. */
+static BOOL g_config_tool_only;
 
 BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 {
@@ -59,15 +64,28 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         delay_imports_init();
 
+        /* tagpu: whether tacli launched this game into a test folder (tagpu_regstore.h),
+           decided before the config tool's return below: an inherited
+           cnc_ddraw_config_init must not run a test launch against the real registry. */
+        int test_launch = tagpu_regstore_decide();
+
         /* cnc-ddraw's config tool loads the DLL to edit a ddraw.ini this DLL
            does not read: it gets nothing, and nothing of ours runs. */
-        if (GetEnvironmentVariable("cnc_ddraw_config_init", NULL, 0))
+        if (!test_launch && GetEnvironmentVariable("cnc_ddraw_config_init", NULL, 0))
+        {
+            g_config_tool_only = TRUE;
             return TRUE;
+        }
 
         /* tagpu: the log sink (tagpu_log.h) before anything that logs -- cfg_load does.
            After the config tool's return above, so opening the tool never rotates the
            player's logs. */
         tagpu_log_init();
+
+        /* tagpu: in a tacli test launch, TotalA.exe's registry is a file (tagpu_regstore.h).
+           Before anything else of ours, and long before TotalA.exe's entry point: the
+           import tables are patched here, while no game code has run. */
+        tagpu_regstore_init();
 
 #ifdef _DEBUG 
         dbg_init();
@@ -194,6 +212,15 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            "tagpu_weapons.on" exists; every site byte-matched, all-or-nothing;
            stock units trampoline to the untouched engine functions. */
         tagpu_weapons_init();
+
+        /* tagpu: TADR section C's unit keys (tagpu_datakeys.h). Always on:
+           observers at the unit-data load 0x42D2E0, the FBI loader's entry
+           0x42BF40 and its read site 0x42BF97, and the COB checksum 0x4B6BA0,
+           each byte-matched and disjoint from every detour above (the
+           extra-weapons loader site is 0x42CEF2); they read and write nothing
+           into the engine. A mismatch skips that site and those resting on
+           it, and logs. */
+        tagpu_datakeys_init();
 
         /* tagpu: the COB script-call oracle. No-op unless
            "tagpu_cobtrace.on" exists; five sites inside the COB engine
@@ -332,14 +359,18 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
             g_screensaver_disabled = TRUE;
         }
 
-        indeo_enable();
+        /* The Indeo codec entries go into the user's registry; in a test folder nothing
+           does (tagpu_regstore.h). TotalA.exe loads no Video for Windows codec -- its
+           movies are Smacker (smackw32.dll) -- so nothing of the game needs them there. */
+        if (!tagpu_regstore_active())
+            indeo_enable();
         timeBeginPeriod(1);
         hook_init();
         break;
     }
     case DLL_PROCESS_DETACH:
     {
-        if (GetEnvironmentVariable("cnc_ddraw_config_init", NULL, 0))
+        if (g_config_tool_only)
             return TRUE;
 
         TRACE("cnc-ddraw DLL_PROCESS_DETACH\n");
@@ -347,11 +378,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* tagpu: every other thread is gone, so neither the log (tagpu_log.h) nor the
            store (tagpu_settings.h) waits on its lock from here */
         tagpu_log_detaching();
+        tagpu_regstore_final();
         tagpu_settings_detaching();
         cfg_save();
         tagpu_settings_final();
 
-        indeo_disable();
+        if (!tagpu_regstore_active())
+            indeo_disable();
         timeEndPeriod(1);
         keyboard_hook_exit();
         dinput_hook_exit();
