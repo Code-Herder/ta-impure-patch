@@ -1674,6 +1674,53 @@ class FakeWindows:
         pass
 
 
+class FakeClock:
+    """time.time and time.sleep for a test: sleeping moves the clock and is recorded."""
+
+    def __init__(self):
+        self.t = 1_000_000.0
+        self.slept = []
+
+    def time(self):
+        return self.t
+
+    def sleep(self, s):
+        self.slept.append(round(s, 3))
+        self.t += max(s, 0.0)
+
+
+class FakeCapturePass(FakeWindows):
+    """The fake machine plus the gui pass's A/B latch, kept the way the DLL keeps it:
+    a capture latches, and the latch clears only once the pass's own poll has seen
+    the lever gone -- modelled as the lever having been gone for POLL seconds."""
+
+    POLL = 1.0
+
+    def __init__(self, folder, player, now):
+        super().__init__(folder, player)
+        self.now = now
+        self.latched = False
+        self.gone_at = None
+        self.captures = 0
+
+    def answer(self, st):
+        lever = (self.folder + r"\tagpu_gui.ab").lower()
+        before = lever in self.files
+        out = super().answer(st)
+        after = lever in self.files
+        if before and not after:
+            self.gone_at = self.now()
+        elif after and not before:
+            if self.latched and (self.gone_at is None or self.now() - self.gone_at < self.POLL):
+                return out                  # no poll has seen it gone: still latched
+            self.latched = True
+            self.captures += 1
+            self.put(self.folder + r"\tagpu_gui_vk.ppm", b"P6\n4 2\n255\n" + bytes(24))
+            self.files[(self.folder + r"\log\tagpu.log").lower()] += \
+                b"vk: shot: wrote tagpu_gui_vk.ppm, 4x2\n"
+        return out
+
+
 class RemoteRouting(unittest.TestCase):
     """A remote instance answers the G21c verbs through the remote machine, and every
     other verb refuses before touching anything."""
@@ -1824,6 +1871,51 @@ class RemoteRouting(unittest.TestCase):
         reads = [s for s in self.win.sent if "Seek(" in s]
         self.assertEqual(len(reads), 1)
         self.assertIn("Seek(42, 'Begin')", reads[0])
+
+    def capture_machine(self):
+        """Swap in the machine with a gui pass on it, a running game and a fake clock."""
+        clock = FakeClock()
+        for name in ("time", "sleep"):
+            self.addCleanup(setattr, tacli.time, name, getattr(tacli.time, name))
+            setattr(tacli.time, name, getattr(clock, name))
+        win = FakeCapturePass(self.FOLDER, self.PLAYER, clock.time)
+        win.files, win.mtime = self.win.files, self.win.mtime
+        win.procs = [(4242, self.FOLDER + r"\TotalA.exe")]
+        win.put(self.FOLDER + r"\log\tagpu.log", b"log: run NEW part 1 of tagpu.log, x\n")
+        self.win = win
+        taremote.SESSION_FACTORY = lambda ssh, key: win
+        taremote._SESSIONS.clear()
+        return win, clock
+
+    def test_ab_fetches_the_capture_and_leaves_no_lever(self):
+        win, clock = self.capture_machine()
+        code, out, err = self.main("ab", "r1", "gui")
+        self.assertEqual(code, 0, err)
+        self.assertIn("gui: 4x2 ->", out)
+        fetched = Path(self.tmp.name) / "r1" / "ab" / "tagpu_gui_vk.ppm"
+        self.assertEqual(fetched.read_bytes(), bytes(win.get(self.FOLDER + r"\tagpu_gui_vk.ppm")))
+        self.assertIsNone(win.get(self.FOLDER + r"\tagpu_gui.ab"))
+        self.assertEqual(clock.slept, [])       # nothing to settle on a first capture
+
+    def test_a_second_ab_waits_for_the_pass_to_see_the_lever_gone(self):
+        # The pass re-arms only once its own poll has seen the lever absent; an `ab`
+        # straight after another would otherwise re-create it inside that window,
+        # find the latch still set, and time out.
+        win, clock = self.capture_machine()
+        self.assertEqual(self.main("ab", "r1", "gui")[0], 0)
+        code, _, err = self.main("ab", "r1", "gui")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(win.captures, 2)
+        self.assertEqual(clock.slept, [2.0])
+
+    def test_ab_clears_a_leftover_lever_before_arming(self):
+        win, clock = self.capture_machine()
+        win.latched = True                      # an earlier arming, never removed
+        win.put(self.FOLDER + r"\tagpu_gui.ab", b"")
+        code, _, err = self.main("ab", "r1", "gui", "--settle", "1.5")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(win.captures, 1)
+        self.assertEqual(clock.slept, [1.5])
 
     def test_launch_refuses_beside_a_game_it_did_not_start(self):
         self.win.procs = [(77, self.PLAYER + r"\TotalA.exe")]

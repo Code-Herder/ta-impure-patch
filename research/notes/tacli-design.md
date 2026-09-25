@@ -448,11 +448,21 @@ carries `shield: ARMED (hardware input blocked)`. An injected `ctrl+a` was polle
   crosses the link. Only the current run is mirrored. Each read takes a file's header and its
   new bytes through **one open handle**: a rename moves the name, not the handle's file, so
   both come from the same file, and a header that no longer matches starts the sync again.
-- **`tacli ab <name> <pass>`** (local or remote) removes a leftover lever and gives the pass
-  `--settle` seconds to see it gone. It then removes the target `.ppm`, creates
+- **`tacli ab <name> <pass>`** (local or remote) removes the target `.ppm`, creates
   `tagpu_<pass>.ab`, waits for `vk: shot: wrote tagpu_<pass>_vk.ppm` or a refusal line, and
   removes the lever. A remote capture is fetched to `tagpu/instances/<name>/ab/`; a local one
-  stays in the gamedir unless `-o` names a place.
+  stays in the gamedir unless `-o` names a place. **The file is this arming's by construction**:
+  the target is removed before the lever exists, `tagpu_vk_ab_arm` removes it again when the
+  claim latches, and only a `wrote` line logged after the call's own log mark counts.
+  **The settle only affects whether a capture happens at all**. A pass clears its latch
+  (`s_abDone`) only when its own poll sees the lever absent, every 30 frames (`tagpu_gui_surf.c`:
+  every `POLL_MS` = 500 ms). No line logs that. So a lever removed less than `--settle` seconds
+  ago (default 2 s, enough at 15 fps and up) is kept gone for the rest of that time before it is
+  created again. A leftover counts, and so does the previous `ab` of the same pass, whose
+  removal time is `ab_cleared` in `instance.json`. Without that, a second `ab` straight after a
+  first re-created the lever before any poll and timed out [MEASURED 2026-09-25, a local
+  instance on a private Xvfb: `ab gui` twice in a row; the second now succeeds after a 2 s
+  settle].
 
 ### What the live gate measured [MEASURED 2026-09-25, the Windows test setup, main `8cbecb6`'s DLL]
 

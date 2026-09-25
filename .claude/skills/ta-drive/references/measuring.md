@@ -170,10 +170,14 @@ sleep 10
 tools/tacli ab <i> terr -o /tmp/terr-B.ppm          # "terr: 2048x1536 -> /tmp/terr-B.ppm"
 ```
 
-`tacli ab <i> <pass>` removes a leftover lever and waits `--settle` seconds for the pass to see it
-gone, removes the old `.ppm`, creates the lever, and waits for `vk: shot: wrote` (or fails on the
-refusal line, quoted). Then it removes the lever again. On a remote instance the file is fetched
-to `tagpu/instances/<i>/ab/`.
+`tacli ab <i> <pass>` removes the old `.ppm`, creates the lever, and waits for `vk: shot: wrote`
+(or fails on the refusal line, quoted). Then it removes the lever again. On a remote instance the
+file is fetched to `tagpu/instances/<i>/ab/`. **A pass re-arms only once its own poll has seen
+the lever gone** (every 30 frames; the UI layer every 500 ms), and nothing logs that moment. So a
+lever removed less than `--settle` seconds ago (default 2) is kept gone for the rest of that time
+first. That covers a leftover, and the previous `ab` of the same pass, whose removal time the
+instance's metadata keeps. Below 15 fps, raise `--settle`. A settle that is too short makes the
+capture time out; it never returns a stale file.
 
 - **Arm one pass and nothing else.** The lane refuses a frame more than one pass drew into, and
   says so: `vk: N A/B levers claimed this frame and M passes drew into it - nothing captured`. The

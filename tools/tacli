@@ -4679,16 +4679,32 @@ AB_REFUSED_RX = re.compile(r"^vk: .*(nothing captured|REFUSED|nothing unlinked)"
 
 
 def cmd_ab(args):
-    """Capture one pass's frame, and fetch the file when the instance is remote."""
+    """Capture one pass's frame, and fetch the file when the instance is remote.
+
+    WHAT MAKES THE FILE THIS ARMING'S: the target is removed before the lever is
+    created, the pass unlinks it again when it latches, and only a `wrote` line
+    logged after this call's own log mark is accepted. So another arming's capture
+    can never be returned for this one.
+
+    WHAT THE SETTLE IS FOR, AND ONLY THAT: a pass re-arms only after its own poll
+    has SEEN the lever gone (every 30 frames, or 500 ms for the UI layer), and no
+    line logs that moment. A lever removed less than `--settle` seconds ago -- by a
+    leftover, or by the previous `ab` of this pass, whose removal time the metadata
+    keeps -- is therefore given the rest of that time before it is created again.
+    Too short a settle costs a capture, which fails here loudly; it cannot cost a
+    wrong one."""
     inst = Instance(args.name)
     if not inst.running():
         die(f"{args.name} is not running")
     lever = inst.gamedir / f"tagpu_{args.pass_}.ab"
     target = inst.gamedir / f"tagpu_{args.pass_}_vk.ppm"
+    meta = inst.meta()
+    cleared = (meta.get("ab_cleared") or {}).get(args.pass_, 0.0)
     if lever.exists():
-        # a pass re-arms only after it has SEEN its lever gone, on its own poll
         lever.unlink(missing_ok=True)
-        time.sleep(args.settle)
+        cleared = time.time()
+    if time.time() - cleared < args.settle:
+        time.sleep(args.settle - (time.time() - cleared))
     target.unlink(missing_ok=True)
     cursor = _log_cursor(inst)
     watch = CrashWatch(inst, "the capture")
@@ -4706,11 +4722,14 @@ def cmd_ab(args):
                 if time.time() >= deadline:
                     die(f"no `vk: shot: wrote {target.name}` in {args.timeout:g}s -- is "
                         f"the {args.pass_} pass armed and drawing? (tacli log {args.name} "
-                        f"-g 'vk: census')")
+                        f"-g 'vk: census'); below 15 fps, raise --settle")
                 watch.die_if_crashed()
                 time.sleep(0.5)
     finally:
         lever.unlink(missing_ok=True)
+        meta = inst.meta()
+        meta.setdefault("ab_cleared", {})[args.pass_] = time.time()
+        inst.save_meta(meta)
     if inst.remote:
         dest = Path(args.output).expanduser() if args.output else inst.dir / "ab" / target.name
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -5472,7 +5491,9 @@ def build_parser():
                                            "tagpu/instances/<name>/ab/)")
     ab.add_argument("--timeout", type=float, default=30.0)
     ab.add_argument("--settle", type=float, default=2.0,
-                    help="seconds to let the pass see a leftover lever gone before re-arming")
+                    help="seconds a removed lever stays gone before it is created again: "
+                         "a pass re-reads it every 30 frames (the UI layer every 500 ms), "
+                         "so 2 s covers 15 fps and up")
     ab.set_defaults(func=cmd_ab)
 
     rmt = sub.add_parser("remote", help="instances on another machine, over SSH")
