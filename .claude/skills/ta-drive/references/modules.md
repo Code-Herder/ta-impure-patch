@@ -125,6 +125,14 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
   it, so compare against the owning peer (the one where the unit is owner 0) and scale the
   tolerance by the unit's speed; the pause itself lands a few ticks apart (`GameTime`,
   `*511DE8+38A47:4`). Tab opens the options panel and does not pause a network game.
+- **Stale hits: a hit names its victim by slot.** To make one land on a reused slot, arm
+  `dmgdelay.on=30` on every peer (the attacker's are the hits delayed, and a receiver counts
+  `young` only while armed), apply
+  `scenarios/b4-guns.json` (laser towers and two fusion plants, Town & Country) on one peer and
+  `scenarios/b4-victims.json` (four ARMCK on hold) on another every two seconds, and read the
+  `hits:` section of the `packet:` heartbeat on each (`references/levers.md`): `young owner=`
+  and `by=` count hits applied to a unit younger than the delay, and must read 0. The victims'
+  owner is the owner; a third peer is the bystander.
 - **Each peer draws its own units in player 0's colour** on the Vulkan lane; the engine's own frame
   is right. A renderer limit (`gpu-status.md` §3.2), not a network fault.
 - `SELPROV`'s `SELECT` crashes the game on the non-TCP/IP rows; select *Internet TCP/IP

@@ -375,6 +375,7 @@ that map's size.
 | `spxlog.on` | the sub-pixel anchor filmstrip log |
 | `gui_census.trigger` | with `gui.on=census pgm`: writes the accumulated residual mask to `tagpu_gui_census.pgm` |
 | `tagpu_<pass>.ab` | the one-frame capture (`references/measuring.md`) |
+| `dmgdelay.on=K` | **test only, never on a player's instance**: every hit this peer sends leaves K ticks late (default 30, at most 3600), so a hit lands after its victim's slot has been reused; logs `enginefix: stale hits: TEST LEVER …` and a `take <slot> (first-free <slot>) at <GameTime>` line per local create. Arm it on the attacking peer (`references/modules.md`, *Stale hits*) |
 
 ## The heartbeats: what must read zero
 
@@ -390,6 +391,7 @@ that map's size.
 | `vk: census: frame N: 6 pass(es) drew and 0 claimed (terr= feat= unit= fx= mark= scaf= gui= fps=)` | 300 | | 6 with `gui=1` is the play set; `mark=0` is the marker pass standing down |
 | `mark: bars= cursor= ordtri= ordline= text=… atlas= zoom=` (`log`) | 120 | | the live zoom is readable here; the file lever logs nothing |
 | `order: arena= recs= drawn= lines= dots= …` (`log`) | 120 | | `arena=-1` = SHIFT not held |
+| `… \| hits: out 09= 0b= B= stockB= unk= in 09= 0b= owner=A/R by=A/R dead= gate= bad= bare 09= 0b= copy exact= bound= unk= held= delay= q= over= young owner= by=` (the end of the `packet:` line) | 300 render frames | `bad`, `bare`, `over`; `young` whenever `dmgdelay.on` is armed | `owner=`/`by=` are hits applied/refused as the victim's owner and as a bystander; `B=` the carried messages' bytes against `stockB=`; `bound=` copies the `0x2C` recreated; `held=` creates the two-tick hold moved |
 
 ## Names that do nothing
 

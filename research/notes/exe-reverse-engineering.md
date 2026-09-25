@@ -328,6 +328,7 @@ made, or its page cannot be made writable. Each of the nineteen, and why:
 | line of sight in local code: the cursor picker, the build cursor's site test, the feature helper, the radar rebuild's projectile dots, five particle leaves, positional sound (27 sites) | local | a cursor, a draw, a sound |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
 | wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`), and the diverged `0x0D` at `0x49D280` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local) |
+| stale hits — the incarnation on the wire and the two-tick hold: first-free `0x486036`, the free `0x486DC1`, `CreateFromNetwork`'s exit `0x48634F`, the array's reset `0x4854A0`, the sends `0x4560AE`, `0x489CB9`, `0x489CCD`, the dispatch slots `0x455F90`, `0x455FA0`, `0x455FA8` (landing B4; the subsection *Unit identity on the wire*) | simulation | which hits a unit takes and which slot a create gets; and it is a wire format: a peer without it sends bare `0x09`/`0x0B`s this build drops, and cannot read the tagged `0x05`s this build sends |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -394,6 +395,91 @@ whole stock span first, and continue at the same address; a misframed `0x2C` poi
 zero dword and jumps to the engine's own end-of-list `0x48BA28`. The diverged `0x0D` is dropped in
 `wpn_rx_fired` (`0x49D280`, [the weapon-ID receiver](#weapon-ids)) by resolving the shooter's own slot
 weapon and comparing it to `&Weapons[id]`.
+
+### Unit identity on the wire: a hit names its victim by slot, and first-free reuses a slot at once — `0x0B`, `0x485F50` [DISASSEMBLED + MEASURED 2026-09-25]
+
+Landing B4 of [the port's section B](tadr-port/sim-fixes.md) ("B4 DESIGN"). Nothing on the wire
+says which unit a slot held when a message was made, and the owner hands a freed slot to its next
+create in the same tick, so a hit in flight lands on whatever the slot holds when it arrives.
+
+**The hit, `0x0B`, 9 bytes.** Built by `0x489BB0` (twelve callers): `[0]` `0x0B`, `[1]` `u16` the
+victim's index, `[3]` `u16` the attacker's (0 for none), `[5]` `u16` the damage (after armour, except
+for kind `0x0A`), `[7]` a byte argument, `[8]` the kind (`0x0A` heal, `0x0B` never sent, `2` the path
+at `0x489DEB` [INFERRED: capture or paralysis]). It applies the hit locally first (`0x489C89`),
+then sends it only when the victim's player (`+0x96`) exists with type 3 at `+0x73`, a remote
+player (`0x489C99`), and the kind is not `0x0B`: from the attacker's player's DPID (`+0x96` → `+4`,
+`0x489CB9`), or the local player's (`0x44FDB0`, `0x489CCD`) when there is no attacker. **The
+receiver `0x489CE0(rec)`** refuses a victim that is not alive (`+0x110` bit `0x10000000`) or already
+pending death (bit `0x4000`) (`0x489D45`, `0x489D50`); a heal adds to hit points up to the type's
+maximum (`0x489D59..0x489D80`); any other kind calls `0x467950(victim)` and, but for kind `0x0B`,
+`0x406F80(attacker, victim, damage)`, and records the kind at `+0xF5` and the attacker at `+0xF0`/
+`+0xF4`. Kind 2 then leaves by `0x489DF5` without touching hit points; the rest subtract from them
+(`0x489EB5`), and hit points at or below 0 set pending death only when the victim's player is local
+(`+0x73` 1 or 2, `0x489EC6..0x489EE5`). So every peer applies every hit to its own copy and the owner alone decides
+the death. The round robin carries hit points (`0x48B235`, written at `0x48B4B2`), so a bystander's
+copy is rewritten within N ticks.
+
+**The create, `0x09`, 23 bytes.** Built by `0x456050(unit)` `ret 4`, whose only caller is the create
+at `0x486115`: `[0]` `0x09`, `[1]` `u16` type (`+0xA6`), `[3]` `u16` index (`+0xA8`), `[5]` twelve
+bytes from `+0x6A` (the position), `[17]` `u32` from `+0x64`, `[21]` `u16` from `+0x68` [INFERRED:
+the orientation]. Of `0x451DF0`'s 57 callers, `0x4560AE` is the only one that sends a `0x09` and
+`0x489CB9`/`0x489CCD` the only ones that send a `0x0B` (an E8 scan, and the type byte each call site
+stores or builds). Every byte of both messages carries a field; neither has room for more.
+
+**The allocator.** `0x485F50` (`ret 0x20`, eleven callers) walks the player's block
+(`[player+0x67]`..`[player+0x6B]`, read as `main+0x1BCA`/`+0x1BCE` + `k·0x14B`) and takes the first
+slot whose type `+0xA6` is 0 (`0x486036`). Its arg 8 is a requested index: then only that slot is
+tried. All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
+index. The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The type word of a
+unit slot has three writers**: this create, `CreateFromNetwork` (`0x4862A2`), and the destructor `0x4866D0`'s
+free (`0x486DC7`, type 0). `0x421FE2` writes the same offset in a record the feature code allocates
+for itself (`0x421F9B`), and `0x485ED2` is in `0x485E90`, which nothing calls and no dword in the
+image points at — dead code. **`0x4854A0`** allocates and zeroes the unit array (`0x485515`,
+`0x485557`); its one call is `0x4918D4`, in the level's init.
+
+**`CreateFromNetwork 0x4861D0`'s exits.** It refuses at `0x48622B` (the player has no block) and
+returns the unit from `0x48634F`. Its three callers are the `0x09` case (`0x4553E4`, returning to
+`0x4553E9`), the `0x2C` dirty entry (`0x48BA00` → `0x48BA05`) and round robin (`0x48B497` →
+`0x48B49C`). The two `0x2C` creates pass the slot's own `+0xFF` as the player (`0x48B9E7`,
+`0x48B47E`), not the sender. **The `0x2C` header's GameTime** (`[32]`, read at `0x48B955`) is
+stored at the sender's `player+0x18` (`0x48B963`) before the first entry.
+
+**The dispatcher's switch and gate.** The jump table `0x455F84` is indexed by `code − 2`
+(`0x454861`): `0x05` at `0x455F90` (→ `0x45522E`), `0x09` at `0x455FA0` (→ `0x4553DA`), `0x0B` at
+`0x455FA8` (→ `0x45540D`), `0x0F` at `0x455FB8`. Before it, `0x45473F` gates on the state
+`main+0x391F1`: `[0x512BC0 + 4·code]` bit 2 in state 5, bit 4 in state 6, bit 1 otherwise; `0x451FD0`
+fills it, `0x05` with 7 (every state), `0x09` and `0x0B` with 4 (state 6 only). The subpacket lengths
+are at `0x512AD8 + 4·code` (`0x05` `0x41`, `0x09` `0x17`, `0x0B` 9). A case finds the message at
+`[esp+0x10]`, the player at `[esp+0x14]` and the sender's record in `edi`, whose `+0x10` counts its
+messages and `+0x1C` holds the time of the last (`0x45484A..0x45485C`). Stock's chat `0x45522E`
+passes the text from `msg+1` to `0x463CA0`, which returns at once when it starts with a zero byte
+(`0x463CA7`).
+
+**GameTime `main+0x38A47` has five writers** (every store to that offset): the tick's increment
+`0x4954C0`, the shell's network clock `0x44A696` (in `0x44A680`, called from the menu's state
+machine at `0x42837F`), and three zeroings at a level's entry — `0x491979` (just after `0x4854A0`
+in the level init), `0x4971BB` (the loader), `0x498180` (before state 6). In play it only increments.
+
+**The send layer** (read, not patched). `0x451DF0(net, msg, len)` `ret 0xC` checks the sender
+(`0x44FFD0`, type 1 or 2) and, with `[0x506DBC]` set, queues through `0x461990` → `0x462710`
+(`ecx = 0x513000`): per destination, a packet of at most `0x42A` bytes and a ring of `0x400` sent
+packets [INFERRED: a resend queue]. Otherwise `0x4C97B0` calls `IDirectPlay::Send` (vtable `+0x68`)
+to DPID 0, every player, guaranteed when `[0x50A780]` is set. **Whether one peer's messages reach
+another in the order sent is not established** (the port's open question); B4 does not rely on it.
+
+**What B4 patches** (the design and its argument are in the plan; the code is `fix_stale_hits`):
+the three sends above call ours with the send's own signature and put the stock record inside a
+tagged `0x05` (`05 00 4A` + the `0x09` + the owner's birth, `05 00 4B` + the `0x0B` + the sender's
+stamp of its victim); the `0x05` slot `0x455F90` becomes the receiver, which applies the carried
+type's own gate and enters stock's handler with the return address stock's case pushes (`0x4553E9`,
+`0x455417`), so B3's bounds and its counters, which key on them, run unchanged; the `0x09` and `0x0B`
+slots drop a bare message; `0x48634F` stamps a copy (exact after a carried `0x09`, the `0x2C`'s
+GameTime as a lower bound after a recreate); `0x486036` holds a slot freed less than two ticks ago
+from first-free (arg 8 = 0 only); `0x486DC1` stamps the free; `0x4854A0` resets every stamp with the
+array. All are rows of the fail-closed table, in both builds.
+MEASURED 2026-09-25 (the plan's *B4 BUILT AHEAD*, three peers, every hit held 30 ticks by the test
+lever): hits applied to a unit younger than the delay fell from 1 562 to 0 on the owner and from
+1 406 to 1 on a bystander (0 in a second run); a hit costs 65 bytes on the wire instead of 9.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
@@ -7820,7 +7906,7 @@ alive bit (`[esi+0x110] & 0x10000000`) and skips a dead unit. The tail runs, in 
 | **`0x486D9E`** | `call 0x45AAA0` | **`FreeObjectState(unit+0x9E)` — the model object is freed here** |
 | **`0x486DA3`** | `mov [esi+0x9E],ebx` (0) | **the pointer is nulled — the instruction after the free returns** |
 | `0x486DB1` / `0x486DB7` | `call 0x43DD10`; `call 0x4B4F20` | `FreeMoveClass` + free of `[unit+0]` |
-| `0x486DC7` | `mov word [esi+0xA6],0` | model index cleared |
+| `0x486DC7` | `mov word [esi+0xA6],0` | the unit's type (the UNITINFO index, the model it draws) cleared: 0 is what first-free's test at `0x486036` takes as a free slot. B4 stamps the free just before it, at `0x486DC1` |
 | **`0x486DCE`** | `and ebp,0xEFFFFFFF` → `[esi+0x110]` | **the alive bit `0x10000000` cleared — after the free** |
 | `0x486DE8` | `and al,0xCF` → `[esi+0x110]` | bits 4 and 5 (selected …) cleared |
 | `0x486DF6` | `mov [esi+0x92],[main+0x1439B]` | the type def reset to a default |

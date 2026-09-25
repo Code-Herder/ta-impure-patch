@@ -406,7 +406,7 @@ The two `call 0x451DF0` sites and the one in `0x456050` call ours instead, with 
 signature (`stdcall(net, msg, len)`, `ret 0xC`), so every caller is covered by three sites. The
 receiver is the `0x05` dispatch slot (`0x455F90`), in BOTH builds; A′3's raised-build receiver
 becomes one branch of it. **A bare `0x09` or `0x0B` is dropped and counted** (their dispatch slots
-`0x455FA4`, `0x455FAC`): no peer of this build sends one, so a bare one is a peer on another build,
+`0x455FA0`, `0x455FA8`): no peer of this build sends one, so a bare one is a peer on another build,
 which is not a supported game. That is the answer to "a `0x0B` with no companion": it cannot come
 from this build, by construction, and one that comes from elsewhere is refused rather than guessed.
 
@@ -457,9 +457,11 @@ empty at least once before a new unit takes it. When a block's only free slots a
 fails, as it does at the unit cap. `0x485F50`'s eleven callers pass arg 8 = 0 except the saved-game
 restore `0x48718E`, which runs before play.
 
-*Class: sim, fail closed, both builds.* Twelve sites in the table: the three dispatch slots, the
-three send calls, the free test, the free, CreateFromNetwork's exit, the array's allocation, and
-the two continuations the carried records return to (`0x4553E9`, `0x455417`) compared unchanged.
+*Class: sim, fail closed, both builds.* Fourteen rows in the table: the three dispatch slots, the
+three send calls, the free test, the free, CreateFromNetwork's exit and the array's allocation,
+written; and compared unchanged, the two continuations the carried records return to (`0x4553E9`,
+`0x455417`) and the two lengths the senders push (`0x45605C` `push 0x17`, `0x489CA8` `push 9`),
+which are the sizes the companions copy.
 
 *Test lever and counters.* `tagpu_dmgdelay.on` holds K: each outgoing hit waits until GameTime has
 advanced K ticks and goes out at the next send opportunity (any outgoing hit, any incoming
@@ -475,6 +477,67 @@ to the right victim can still name a recycled attacker for the retaliation bookk
 sender's order, the open question below; B4 fixes the case that needs no answer to it, a hit from a
 peer that is not the owner. B5's queue now holds `0x4A` companions refused in state 5, not bare
 `0x09`s.
+
+**B4 BUILT AHEAD (2026-09-25, `e10201f` on its own worktree from B3's `bd5582b`; not landed, not
+reviewed).** As designed above; `fix_stale_hits` in `tagpu_patches.c`. The install line reads
+`limits: installed 189 sites` in the raised build (176 before: fourteen rows, less A′3's `0x455F90`
+row, which B4 now owns) and `the simulation fixes' 64 sites installed` in the stock-limits one;
+`tagpu_wirecheck.on` runs the rules' 16 cases, all OK.
+
+*Measured, three peers on Town & Country* (`scenarios/b4-guns.json` on the host, laser towers
+and two fusion plants; `scenarios/b4-victims.json`, four ARMCK on hold, applied on a joiner every
+2 s; the third peer a bystander; `tagpu_dmgdelay.on=30` on every peer; eight minutes, GameTime
+about 14 670 at the pause). The previous build is `bd5582b` with the same lever and oracle as a
+scratch-only patch (the three sends, `CreateFromNetwork`'s exit, B3's `0x0B` bound):
+
+| | previous build | B4 |
+|---|---|---|
+| hits sent by the towers' peer | 10 195 bare, 9 B each | 12 545 carried, 65 B each |
+| owner: applied / refused | 5 772 / — | 5 689 / 2 956 |
+| owner: applied to a unit younger than 30 ticks | **1 562** (27 %) | **0** |
+| bystander: applied / refused | 6 254 / — | 6 481 / 2 370 |
+| bystander: applied to a copy younger than 30 ticks | **1 406** (22 %) | **1** (below) |
+| owner's creates / moved by the hold | 829 / — | 829 / 67 (85 held slots skipped) |
+| bare `0x09`/`0x0B` dropped, malformed, delay overflow | — | 0 everywhere |
+| copies: exact / lower bound | — | 846 / 2 on the bystander, 19 / 1 on the owner |
+
+The lower-bound copies and the three companions refused by the state gate (1 on the owner, 2 on the
+bystander) are the start of the game: the other peers' commanders, whose create arrives while a
+peer still loads and which the `0x2C` recreates — B5's cause, seen from here.
+
+*The one young hit on the bystander is the oracle's, not a stale hit* [INFERRED for its cause]. A
+bystander applies a hit only when its copy's stamp and the hit's are exact and equal, and the
+owner's births rise strictly per slot, so an applied hit names the incarnation the bystander holds.
+The oracle measures something else: the age of the bystander's own copy, in the bystander's own
+ticks. A correct hit counts as young when the bystander made its copy late relative to the
+attacker, or when the attacker's 30 ticks passed faster than the bystander's; the peers are not in
+lockstep (at the pause the host read 14 675 and the joiners 14 685). A second eight-minute run of
+the new build, with every copy, every hit computed and every young application logged (a
+scratch-only patch), read 0 young on both receivers (owner 5 519 applied / 3 129 refused, bystander
+6 398 / 2 483, of 12 176 hits), so the event was not caught in the act.
+
+*Bandwidth.* Every carried message is `0x41` bytes: a hit costs 65 bytes where stock sent 9, a
+create 65 where stock sent 23. At the towers' rate, about 25.6 hits a second, that is 1.66 KB/s of
+payload against 0.23 KB/s. The engine's send layer packs subpackets into packets of up to `0x42A`
+bytes, so the packet count grows less than the bytes; the length is the dispatcher's own for
+`0x05` (`0x512AD8 + 5·4`), fixed.
+
+*Single player* (Two Continents, AI laser towers against ARMCK applied every 2 s, the lever armed
+for its trace): every one of 188 creates took the slot stock's first-free would have taken, except
+3, each skipping exactly the slots the hold counts (`held=3`); on the owner of the network run, 67
+of 829. Across two separate runs the previous build's creates and B4's agree for the first 27,
+until the applies land on different ticks (106 against 118) — wall-clock applies, not the hold.
+The stock-limits build: 86 creates, all first-free (no slot freed within two ticks of a create).
+
+*The stock-limits build*, the same protocol for three minutes: 4 481 hits carried; the owner
+applied 2 064 and refused 1 032, the bystander 2 364 and 844; young 0 on both; nothing bare,
+malformed or overflowed; 38 slots held.
+
+*Deviations from the plan.* The Kbot lab under fire became four ARMCK re-applied every 2 s: a
+build queue is not in the scenario format, and the applies create into the freed slots as fast.
+The delay lever releases a held hit at the next send opportunity (an outgoing hit, an incoming
+companion on the game thread), so a hit waits at least K ticks, not exactly K. A block whose only
+free slots are held fails the create, as at the unit cap; nothing in the runs above reached it.
 
 **B5 — ghost commander.**
 
