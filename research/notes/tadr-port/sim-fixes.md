@@ -386,6 +386,96 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   0 after; a third peer for the bystander's copy; single player's creation indices equal to the
   previous build's except where a slot freed within two ticks would have been taken.
 
+**B4 DESIGN (2026-09-25, written before the code).** What the plan above left open, decided.
+
+*The binding is containment, not adjacency.* Nothing is known about whether one peer's subpackets
+reach another in the order sent (the open question below), so a companion sent NEXT TO a stock
+`0x0B` could arrive apart from it, or without it. The companion therefore **replaces** each message:
+the stock record travels inside it, and a peer applies the record only after checking the
+incarnation that rides in the same bytes. Loss, duplication and reordering then act on the pair as a
+unit, by construction. Both are tagged `0x05` messages, A′3's idiom: `0x41` bytes, `m[1] = 0` so
+stock's chat handler ignores them (`0x463CA7`), and a tag byte outside TADR's (`0x2B..0x31`,
+`0x60`) and A′3's `0x49`:
+
+| tag | replaces | bytes |
+|---|---|---|
+| `0x4A` | the `0x09` of `0x456050` (its only sender, called from the create `0x486115`) | `05 00 4A`, the stock 23-byte `0x09` at `m+3`, the owner's birth `u32` at `m+26`, zeros |
+| `0x4B` | the `0x0B` of `0x489BB0` (its only sender: the calls `0x489CB9`, `0x489CCD`) | `05 00 4B`, the stock 9-byte `0x0B` at `m+3`, the sender's stamp of its victim `u32` at `m+12`, zeros |
+
+The two `call 0x451DF0` sites and the one in `0x456050` call ours instead, with the send's own
+signature (`stdcall(net, msg, len)`, `ret 0xC`), so every caller is covered by three sites. The
+receiver is the `0x05` dispatch slot (`0x455F90`), in BOTH builds; A′3's raised-build receiver
+becomes one branch of it. **A bare `0x09` or `0x0B` is dropped and counted** (their dispatch slots
+`0x455FA4`, `0x455FAC`): no peer of this build sends one, so a bare one is a peer on another build,
+which is not a supported game. That is the answer to "a `0x0B` with no companion": it cannot come
+from this build, by construction, and one that comes from elsewhere is refused rather than guessed.
+
+*The receiver mirrors the dispatcher exactly.* The dispatcher gates a message on its type before the
+switch (`0x45473F`: `[0x512BC0 + 4·type]`, bit 2 in state 5, bit 4 in state 6, bit 1 otherwise,
+filled by `0x451FD0`: `0x05` passes every state, `0x09` and `0x0B` only state 6). The companion's
+`0x05` has passed its own gate; ours then applies the gate of the type it carries, from the same
+table, so a carried `0x09` or `0x0B` is refused wherever the bare one would have been. It then
+enters stock's own handler with the return address stock's case would push — `0x4861D0` returning
+to `0x4553E9`, `0x489CE0` returning to `0x455417`, both `jmp 0x455F50` — so B3's receiver bounds and
+its sender-block rule, which key on those return addresses, run on the carried records unchanged.
+
+*The incarnation is the owner's GameTime at the create, made strictly increasing per slot.* At the
+owner's take (`0x486036`), `birth = max(GameTime, previous birth + 1)`; the previous birth is kept
+from the array's allocation (`0x4854A0`) on. A counter would do for a copy made by a `0x4A`, but not
+for the one path that makes a copy without it: **the `0x2C` recreate** (a dirty entry, `0x48BA05`,
+or the round robin, `0x48B49C`), which B5's ghost commander proves is real. A `0x2C` carries the
+sender's GameTime (`[32]` at `0x48B955`, stored at `player+0x18` at `0x48B963`), so a copy made from
+one records a **lower bound**: "the unit in this slot at the owner's time g₀". So one `u32` stamp,
+bit 31 set for a lower bound:
+
+- a copy made by a `0x4A` takes its birth, exact; a copy made by a `0x2C` takes g₀, a lower bound
+  (`0x48634F`, CreateFromNetwork's success exit, told apart by its return address); a local unit
+  takes its birth, exact;
+- a hit carries the attacker's stamp of its copy of the victim.
+
+**The owner applies a hit iff `birth ≤ stamp`** (bit 31 ignored). For an exact stamp that is
+equality. For a lower bound: the unit the `0x2C` described was alive at g₀, so it was freed at
+g₀ or later; with the hold, the next unit in that slot is taken at g₀ + 2 or later, and its birth is
+at least that; so `birth ≤ g₀` holds for the unit the `0x2C` described and for no later one. It needs
+GameTime not to go back between g₀ and the create, and every `0x2C` is sent in play, where GameTime
+only increments (`0x4954C0`; its other writes are at a level's entry, `0x491979`, `0x4971BB`,
+`0x498180`, and the shell's clock `0x44A696`).
+
+**A bystander applies a hit iff both stamps are exact and equal.** It knows its own copy only, and
+with a lower bound on either side "the same unit" is undecidable, so it refuses and counts. A
+bystander's copy is not authoritative: the owner's round robin rewrites its hit points
+(`0x48B235` → `0x48B4B2`) within N ticks, and its deaths come from the owner's `0x0C`.
+
+*The hold.* The loop's free test at `0x486036` jumps to a stub: an occupied slot continues the loop
+at `0x486040` as stock; a free slot is taken unless the requested index (arg 8) is 0 and the slot
+was freed at GameTime f with `GameTime − f < 2` (unsigned, so a stamp from before a GameTime reset
+never holds). The free is stamped at `0x486DC1`, the destructor's store of type 0; the stamps are
+reset at `0x4854A0`. **Invariant**, from the tick order of `0x495490` (GameTime++ `0x4954C0`, the
+pump `0x4954C8`, units `0x4954ED`, projectiles `0x495513`, players `0x464F80`): a slot freed in tick
+t, in any phase, is empty for the whole of tick t + 1, so every reader that runs once a tick sees it
+empty at least once before a new unit takes it. When a block's only free slots are held, the create
+fails, as it does at the unit cap. `0x485F50`'s eleven callers pass arg 8 = 0 except the saved-game
+restore `0x48718E`, which runs before play.
+
+*Class: sim, fail closed, both builds.* Twelve sites in the table: the three dispatch slots, the
+three send calls, the free test, the free, CreateFromNetwork's exit, the array's allocation, and
+the two continuations the carried records return to (`0x4553E9`, `0x455417`) compared unchanged.
+
+*Test lever and counters.* `tagpu_dmgdelay.on` holds K: each outgoing hit waits until GameTime has
+advanced K ticks and goes out at the next send opportunity (any outgoing hit, any incoming
+companion). The oracle, per receiver: a hit applied to a unit whose local creation is younger than K
+ticks. The previous build gets the same lever and oracle as a scratch-only patch (the three send
+calls and B3's `0x0B` bound), so the two builds are measured with one instrument. Counted on the
+heartbeat's `hits:` section: companions out and bytes, companions in, applied/refused per rule,
+bare messages dropped, held slots skipped, the oracle.
+
+*What B4 does not close.* The attacker named in a hit (`0x0B`'s `+3`) is not stamped: a hit applied
+to the right victim can still name a recycled attacker for the retaliation bookkeeping
+(`0x406F80`, `+0xF0`). A delayed `0x0C` or `0x2C` from the owner itself is a question about one
+sender's order, the open question below; B4 fixes the case that needs no answer to it, a hit from a
+peer that is not the owner. B5's queue now holds `0x4A` companions refused in state 5, not bare
+`0x09`s.
+
 **B5 — ghost commander.**
 
 - Measure: on the joiner, log each `0x4861D0` call with its return address (`0x4553E9` for `0x09`,
