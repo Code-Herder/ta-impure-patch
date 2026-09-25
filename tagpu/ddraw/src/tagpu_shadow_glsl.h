@@ -17,12 +17,17 @@
 #define TAGPU_SHADOW_GLSL_H
 
 /* the heightfield mesh: one world point per vertex. Nothing builds one
-   today; tagpu_vk_shadow.h, TAGPU_SHADOWHAND. */
+   today; tagpu_vk_shadow.h, TAGPU_SHADOWHAND. The light matrix fills [-1, 1]
+   in z and Vulkan clips to [0, w], so z is remapped here; tagpu_vk_shadow.c
+   item 2. */
 static const char* VS_H =
     "#version 330 core\n"
     "layout(location=0) in vec3 aW;\n"
     "uniform mat4 uShadowMat;\n"
-    "void main(){ gl_Position = uShadowMat * vec4(aW, 1.0); }\n";
+    "void main(){\n"
+    "  gl_Position = uShadowMat * vec4(aW, 1.0);\n"
+    "  gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n"
+    "}\n";
 static const char* FS_NONE =
     "#version 330 core\n"
     "void main(){}\n";

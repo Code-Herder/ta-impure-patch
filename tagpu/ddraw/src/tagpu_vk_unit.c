@@ -1398,8 +1398,6 @@ static int build_cast_pipeline(const TAGPU_VKPASS* d, VkRenderPass rp)
     VkPipelineVertexInputStateCreateInfo vi;
     VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
     VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
-    VkPipelineViewportDepthClipControlCreateInfoEXT zc =
-        { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_DEPTH_CLIP_CONTROL_CREATE_INFO_EXT };
     VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
     VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
     VkPipelineDepthStencilStateCreateInfo ds;
@@ -1425,13 +1423,9 @@ static int build_cast_pipeline(const TAGPU_VKPASS* d, VkRenderPass rp)
     vertex_layout(vb, va, &vi);
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-    /* CLIP-SPACE Z IN [-1, 1]. The shadow matrix's contract is a [-1, 1]
-       depth range that the consumers read back as `p.z * 0.5 + 0.5`
-       (tagpu_vk_shadow.c item 2), so without this the near half of every
-       caster is clipped away -- §2.32 at length. The caller has already refused
-       to get here without `zclipok`. */
-    zc.negativeOneToOne = VK_TRUE;
-    vp.pNext = &zc;
+    /* No clip-control state: the vertex stage's `uDepthPass == 1` path remaps
+       the light matrix's [-1, 1] z into Vulkan's clip volume itself, as the
+       heightfield's does (tagpu_vk_shadow.c item 2). */
     vp.viewportCount = 1; vp.scissorCount = 1;
 
     rs.polygonMode = VK_POLYGON_MODE_FILL;
@@ -3406,9 +3400,6 @@ int tagpu_vk_unit_cast(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
 
     if (s_state != ST_READY || !s_drawThis || !s_ncast) return 0;
     if (slot >= d->slots || slot >= TAGPU_VK_SLOTS) return 0;
-    /* The caller has already refused to draw a map at all without it, but this
-       pipeline is built here and the bound belongs with the build. */
-    if (!d->zclipok) return -1;
 
     if (!s_pipeCast || s_castRp != rp) {
         if (s_pipeCast) { vkDestroyPipeline(d->dev, s_pipeCast, NULL); s_pipeCast = VK_NULL_HANDLE; }

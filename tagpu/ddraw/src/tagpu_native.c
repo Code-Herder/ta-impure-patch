@@ -2156,9 +2156,10 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
        stage writes 1 - enc / depthScale into a [0.5, 1] depth range, so a
        step moves the stored depth by step / (2 depthScale); with the step at
        16 x 2^-23 x ds0 and the grown scale at most 2 ds0 (true while
-       2N + 2 <= 2^19, and N is at most 10 000), that is 8 units of the D24
-       buffer's 2^-24 and 8 float ulps of the key itself -- so adjacent keys
-       stay apart through every rounding between the key and the buffer. At
+       2N + 2 <= 2^19, and N is at most 10 000), that is 8 steps of the depth
+       buffer's 2^-24 (D24's, or a float's over [0.5, 1)) and 8 float ulps of
+       the key itself -- so adjacent keys stay apart through every rounding
+       between the key and the buffer. At
        six keys wide, the default, the air band and the particle layers sit
        where they would with no band at all: airKey = fxKey + 12. */
     int fxBound = fxOn ? tagpu_fx_model_bound(pk) : 0;

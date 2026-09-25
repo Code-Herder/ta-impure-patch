@@ -372,7 +372,6 @@ typedef struct {
     int              vsync;
     int              devIndex;             /* into the cached name table, or -1 */
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
-    int              zclipok;              /* VK_EXT_depth_clip_control, -1..1 z */
     /* samplerAnisotropy, a CORE feature bit rather than an extension, and the
        largest ratio this device will apply. The Classic++ restored twins are
        the only textures this fork filters at all, and they are specified at
@@ -896,49 +895,12 @@ static int vk_load(void)
    and the bring-up worker; each destroys its own. */
 static VkInstance vk_instance(void)
 {
-    const char* iexts[3] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-                             NULL };
+    const char* iexts[2] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
     uint32_t niext = 2;
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     VkInstance inst = VK_NULL_HANDLE;
     VkResult r;
-
-    /* VK_KHR_get_physical_device_properties2, WHEN THE LOADER HAS IT, AND IT IS
-       A DEPENDENCY RATHER THAN A WANT. This instance asks for Vulkan 1.0, where
-       VK_EXT_depth_clip_control depends on it, and chaining
-       VkPhysicalDeviceDepthClipControlFeaturesEXT into VkDeviceCreateInfo is
-       only defined with it enabled. A loader that tolerates the omission hides
-       it; a stricter one refuses vkCreateDevice, and the retry there clears
-       `zclipok` ON HARDWARE THAT SUPPORTS THE FEATURE.
-
-       ASKED FOR ONLY WHEN IT IS OFFERED: an instance extension the loader does
-       not have fails vkCreateInstance outright, which would cost the whole lane
-       to buy one feature. Resolved at GLOBAL level (a NULL instance), because
-       this runs before there is one. */
-    {
-        PFN_vkEnumerateInstanceExtensionProperties eiep =
-            (PFN_vkEnumerateInstanceExtensionProperties)
-                s_gipa(NULL, "vkEnumerateInstanceExtensionProperties");
-        if (eiep) {
-            uint32_t ne = 0, k;
-            VkResult er = eiep(NULL, &ne, NULL);
-            VkExtensionProperties* ext = NULL;
-            if ((er == VK_SUCCESS || er == VK_INCOMPLETE) && ne)
-                ext = (VkExtensionProperties*)malloc((size_t)ne * sizeof *ext);
-            if (ext) {
-                er = eiep(NULL, &ne, ext);
-                if (er == VK_SUCCESS || er == VK_INCOMPLETE)
-                    for (k = 0; k < ne; k++)
-                        if (!strcmp(ext[k].extensionName,
-                                    VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
-                            iexts[niext++] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
-                            break;
-                        }
-                free(ext);
-            }
-        }
-    }
 
     app.pApplicationName = "Total Annihilation (impure)";
     app.apiVersion = VK_API_VERSION_1_0;
@@ -1436,19 +1398,49 @@ static int vk_swapchain(int w, int h)
    It is created once and kept for the life of the device so that a pass can
    build a pipeline against it and keep that pipeline across a resize; only the
    framebuffers follow the swapchain. */
-/* THE DEPTH FORMAT IS 24-BIT FIXED POINT OR THERE IS NONE, and that is a
-   specification rather than a preference. The depth-testing passes were
-   measured to 0 px against the OpenGL renderer this replaced, whose depth was
-   24-bit fixed point, so that quantisation is part of the picture they are
-   specified to draw; a D32_SFLOAT attachment would resolve a z-fight the
-   other way in exactly the cases that are too close to call. A device that offers
-   neither 24-bit format gets no depth attachment at all -- the passes that do
-   not test go on working and the ones that do refuse to arm and say so, which
-   is a stated gap rather than a silently different picture. */
-/* 1 when the format carries a stencil plane -- which the 24-bit pair the lane
-   prefers does and its no-stencil fallback does not. One place, because the
-   view's aspect mask, the render pass's load op and `TAGPU_VKPASS.stencilok`
-   have to agree and there is no way to check that they do at run time. */
+/* THE DEPTH FORMAT IS 32-BIT FLOAT WITH STENCIL, ELSE 24-BIT FIXED POINT WITH
+   STENCIL -- one path on every GPU, because the Vulkan specification makes
+   every conformant device offer one of these two as a depth-stencil
+   attachment. It guarantees no 24-bit format in particular.
+
+   WHY FLOAT DRAWS THE SAME PICTURE. Every world pass writes a z in [0, 1]
+   and the viewport maps it onto [0.5, 1] (`minDepth 0.5 / maxDepth 1.0`,
+   tagpu_vk_feat.c item 1). A float32 f in (0.5, 1] is j * 2^-24 for an
+   integer j in (2^23, 2^24], and D24's conversion takes f * (2^24 - 1) =
+   j - f, which lies in [j - 1, j - 1/2): its two neighbouring integers are
+   j - 1 and j. Rounding to nearest or toward zero returns j - 1 for every
+   such f -- one D24 value per float, in the same order -- so a depth test
+   between two float32 fragment depths answers the same on either
+   attachment: equal keys tie on both, which the mirror's partner keys rest
+   on (tagpu_feat.c `map_key`), and keys a float apart are apart on both.
+   The specification lets a device return either neighbour. Whichever it
+   returns, a larger float never gets a smaller D24 value, so no test
+   reverses; the most such a device could do is tie two adjacent floats
+   [INFERRED not to happen on the reference setup from its 0 px, gpu-status
+   §2.91].
+
+   THE RANGE IS (0.5, 1], NOT [0.5, 1]: rounded to nearest, 0.5 and the float
+   above it convert to the same value. No tested depth comes near 0.5. The
+   highest key a depth-tested draw carries is `airKey + 5` (tagpu_native.c
+   `encLayer[9]`) and `depthScale` is `airKey + 8`, so every tested clip z is
+   at least 3 / depthScale and every stored depth at least
+   0.5 + 1.5 / depthScale -- some 28 000 float steps above 0.5 at the 0.25x
+   scale of about 890. The marker draws that write clip z 0 test nothing
+   (tagpu_mark.c). Only a rasteriser that computes a D24 target's depth
+   other than as a float32 could draw the two formats differently
+   [INFERRED].
+
+   WHY THE STENCIL PLANE DECIDES THE FALLBACK. The units' Classic hard shadow
+   is stencil-masked (tagpu_vk_unit.c `build_shadow_pipelines`), so a
+   no-stencil format would take it down. D24_UNORM_S8_UINT keeps it on a device
+   without the float one.
+
+   UNDEFINED is left for a device that offers neither, which the specification
+   rules out: the passes that do not test depth go on working and the ones
+   that do refuse to arm and say so. */
+/* 1 when the format carries a stencil plane. One place, because the view's
+   aspect mask, the render pass's load op and `TAGPU_VKPASS.stencilok` have to
+   agree and there is no way to check that they do at run time. */
 static int vk_depth_has_stencil(VkFormat f)
 {
     return f == VK_FORMAT_D24_UNORM_S8_UINT ||
@@ -1456,11 +1448,20 @@ static int vk_depth_has_stencil(VkFormat f)
            f == VK_FORMAT_D16_UNORM_S8_UINT;
 }
 
+static const char* vk_depth_name(VkFormat f)
+{
+    switch (f) {
+    case VK_FORMAT_D32_SFLOAT_S8_UINT: return "D32_SFLOAT_S8_UINT";
+    case VK_FORMAT_D24_UNORM_S8_UINT:  return "D24_UNORM_S8_UINT";
+    default:                           return "none";
+    }
+}
+
 static VkFormat vk_depth_format(void)
 {
     static const VkFormat want[2] = {
-        VK_FORMAT_D24_UNORM_S8_UINT,        /* 24-bit depth, with stencil */
-        VK_FORMAT_X8_D24_UNORM_PACK32       /* the same 24 bits, no stencil */
+        VK_FORMAT_D32_SFLOAT_S8_UINT,       /* float depth, with stencil  */
+        VK_FORMAT_D24_UNORM_S8_UINT         /* 24-bit depth, with stencil */
     };
     int i;
     for (i = 0; i < 2; i++) {
@@ -1483,9 +1484,11 @@ static int vk_renderpass(void)
 
     s_vk.dfmt = vk_depth_format();
     if (s_vk.dfmt == VK_FORMAT_UNDEFINED)
-        vklog("no 24-bit depth format on this device - the passes that depth-test "
-              "will not arm (their depth is specified as 24-bit fixed point, and a 32-bit "
-              "float attachment would not settle a z-fight the same way)");
+        vklog("depth format: none - the device offers neither D32_SFLOAT_S8_UINT nor "
+              "D24_UNORM_S8_UINT as a depth-stencil attachment, so the passes that "
+              "depth-test will not arm");
+    else
+        vklog("depth format: %s (%d)", vk_depth_name(s_vk.dfmt), (int)s_vk.dfmt);
 
     memset(at, 0, sizeof at);
     at[0].format = s_vk.fmt;
@@ -1983,10 +1986,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
     {
         float prio = 1.0f;
-        const char* dexts[4] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL, NULL, NULL };
+        const char* dexts[2] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL };
         uint32_t ndext = 1;
-        VkPhysicalDeviceDepthClipControlFeaturesEXT dcc =
-            { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT };
         VkDeviceQueueCreateInfo qci = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
         VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         VkPhysicalDeviceFeatures feat;      /* must outlive every vkCreateDevice below */
@@ -2027,8 +2028,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
                 er = vkEnumerateDeviceExtensionProperties(s_vk.pd, NULL, &ne, ext);
                 if (er == VK_SUCCESS || er == VK_INCOMPLETE)
                     for (k = 0; k < ne; k++) {
-                        /* BOUNDED, because the array is three long and two
-                           optional names can each append. The specification says
+                        /* BOUNDED, because the array is two long and one
+                           optional name appends. The specification says
                            a name is not enumerated twice; an ICD or layer that
                            does it anyway would write one past this array, and a
                            bound that costs one comparison is cheaper than
@@ -2037,63 +2038,6 @@ static DWORD WINAPI up_worker(LPVOID arg)
                         if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
                             dexts[ndext++] = "VK_KHR_maintenance1";
                             s_vk.flipok = 1;
-                        }
-                        /* VK_EXT_depth_clip_control, AND IT BUYS EXACTLY ONE
-                           THING: GL'S CLIP-SPACE Z RANGE. GL maps clip z in
-                           [-1, 1] onto the depth range and Vulkan takes [0, 1],
-                           CLIPPING anything below 0. Every world pass writes a
-                           z already in [0, 1] -- so the world passes'
-                           `minDepth 0.5 / maxDepth 1.0` maps it onto (z+1)/2,
-                           the values the OpenGL renderer this replaced wrote
-                           and was measured to 0 px against, and nothing is
-                           clipped; tagpu_vk_feat.c's header says this
-                           extension is the answer only if a shader is ever
-                           found writing a z below 0.
-                           The SHADOW pass is that shader. Its orthographic
-                           light matrix fills [-1, 1] (tagpu_vk_pass.h
-                           `zclipok`; the pass has no producer today,
-                           tagpu_vk_shadow.h), so under Vulkan's own convention
-                           the whole near half of every caster would be clipped
-                           away and the map would be wrong rather than merely
-                           different. With `negativeOneToOne` the stored depth
-                           is (z+1)/2, which is exactly what the consumers'
-                           taShadowAt reads it as (`* 0.5 + 0.5`,
-                           tagpu_glsl.h).
-                           QUERIED, NEVER INFERRED: offering the extension is
-                           not offering the feature, and an ICD that does not
-                           consider the extension enabled is entitled to ignore
-                           the unrecognised pNext struct and return VK_SUCCESS,
-                           which is indistinguishable from having enabled it.
-                           So: query, and on no query, no feature. */
-                        if (!strcmp(ext[k].extensionName,
-                                    VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME)) {
-                            PFN_vkGetPhysicalDeviceFeatures2KHR gpdf2 =
-                                (PFN_vkGetPhysicalDeviceFeatures2KHR)
-                                    s_gipa(s_vk.inst, "vkGetPhysicalDeviceFeatures2KHR");
-                            if (gpdf2) {
-                                VkPhysicalDeviceDepthClipControlFeaturesEXT q;
-                                VkPhysicalDeviceFeatures2 f2;
-                                memset(&q, 0, sizeof q);
-                                memset(&f2, 0, sizeof f2);
-                                q.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT;
-                                f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-                                f2.pNext = &q;
-                                gpdf2(s_vk.pd, &f2);
-                                if (q.depthClipControl) {
-                                    dexts[ndext++] = VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME;
-                                    s_vk.zclipok = 1;
-                                } else {
-                                    vklog("the device offers VK_EXT_depth_clip_control but not "
-                                          "the depthClipControl feature - a ported pass that "
-                                          "needs a clip-space z below 0 kept will stand down");
-                                }
-                            } else {
-                                vklog("VK_EXT_depth_clip_control is offered but "
-                                      "vkGetPhysicalDeviceFeatures2KHR is not, so "
-                                      "depthClipControl cannot be confirmed - a pass that needs "
-                                      "a clip z below 0 kept will stand down rather than chain a struct "
-                                      "the device may ignore");
-                            }
                         }
                     }
                 free(ext);
@@ -2104,11 +2048,6 @@ static DWORD WINAPI up_worker(LPVOID arg)
                   "the WORLD passes will draw (since landing 5b they need no flip), "
                   "but the GUI layer, the FPS readout and the scaffold overlay stay "
                   "down, so the frame is a world with no UI over it");
-
-        if (!s_vk.zclipok)
-            vklog("VK_EXT_depth_clip_control is not offered - a ported pass whose "
-                  "shader writes a clip z below 0 will stand down (Vulkan clips "
-                  "those by default); the world passes are unaffected");
 
         /* ANISOTROPY IS A CORE FEATURE BIT, so it goes in pEnabledFeatures and
            not in the pNext chain -- which is why it is not on the retry ladder
@@ -2137,39 +2076,9 @@ static DWORD WINAPI up_worker(LPVOID arg)
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
         dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = ndext; dci.ppEnabledExtensionNames = dexts;
-        /* THE FEATURE IS ENABLED, NOT MERELY THE EXTENSION. Which feature bits
-           the device actually has was settled above, by asking it; this only
-           turns the one we want on. The retry below is a fallback, NOT the test
-           -- a vkCreateDevice that succeeds proves nothing about a pNext struct
-           an ICD may have ignored. */
-        if (s_vk.zclipok) {
-            dcc.depthClipControl = VK_TRUE;
-            dcc.pNext = (void*)dci.pNext;
-            dci.pNext = &dcc;
-        }
         r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
-        /* THE LADDER DROPS THE CHEAPEST THING FIRST, and each rung REBUILDS
-           both the extension list and the pNext chain rather than unlinking one
-           struct out of the middle of it -- the same reason the list is rebuilt
-           rather than shortened. Depth clip control costs one pass (the shadow
-           map); the flip costs every pass. */
-        if (r != VK_SUCCESS && s_vk.zclipok) {
-            vklog("vkCreateDevice refused VK_EXT_depth_clip_control/depthClipControl "
-                  "(%s) - retrying without it", res_name(r));
-            s_vk.zclipok = 0;
-            dci.pNext = NULL;
-            /* THE LIST IS REBUILT, NOT SHORTENED. The optional extensions go in
-               in the order the DRIVER enumerates them, so `ndext - 1` would
-               drop whichever happened to be last -- maintenance1 on a driver
-               that lists it second, which costs every ported pass for a reason
-               that has nothing to do with depth clipping. */
-            ndext = 1;
-            if (s_vk.flipok) dexts[ndext++] = "VK_KHR_maintenance1";
-            dci.enabledExtensionCount = ndext;
-            r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
-        }
         if (r != VK_SUCCESS && s_vk.flipok) {
-            /* Then the flip, which costs every ported pass. One retry each, so
+            /* THE ONE RUNG: the flip, which costs every ported pass. One retry, so
                this is a real fallback and not a loop. */
             vklog("vkCreateDevice refused VK_KHR_maintenance1 (%s) - retrying without it",
                   res_name(r));
@@ -2233,8 +2142,6 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.flipok = s_vk.flipok;
     s_pass.anisook = s_vk.anisook;
     s_pass.maxAniso = s_vk.maxAniso;
-
-    s_pass.zclipok = s_vk.zclipok;
     s_pass.gipa = s_gipa;
     s_pass.gdpa = vkGetDeviceProcAddr;
     s_pass.log = passlog;
