@@ -216,9 +216,10 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* tagpu: TADR section C's unit keys (tagpu_datakeys.h). Always on:
            observers at the unit-data load 0x42D2E0, the FBI loader's entry
            0x42BF40 and its read site 0x42BF97, and the COB checksum 0x4B6BA0,
-           each byte-matched; 0x42D2E0 chains onto the extra-weapons module's
-           own observer when that is armed, every other site is disjoint from
-           the detours above (the extra-weapons loader site is 0x42CEF2). They
+           each byte-matched; 0x42D2E0 and 0x42BF40 chain onto the
+           extra-weapons module's own observers whenever that module installed
+           them, every other site is disjoint from the detours above (the
+           extra-weapons loader site is 0x42CEF2). They
            read and write nothing into the engine. A mismatch skips that site
            and those resting on it, and logs. */
         tagpu_datakeys_init();
