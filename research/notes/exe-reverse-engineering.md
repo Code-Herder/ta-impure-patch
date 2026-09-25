@@ -329,7 +329,7 @@ made, or its page cannot be made writable. Each of the nineteen, and why:
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
 | wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`), and the diverged `0x0D` at `0x49D280` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local) |
 | stale hits — the incarnation on the wire and the two-tick hold: first-free `0x486036`, the free `0x486DC1`, `CreateFromNetwork`'s exit `0x48634F`, the array's reset `0x4854A0`, the sends `0x4560AE`, `0x489CB9`, `0x489CCD`, the dispatch slots `0x455F90`, `0x455FA0`, `0x455FA8` (landing B4; the subsection *Unit identity on the wire*) | simulation | which hits a unit takes and which slot a create gets; and it is a wire format: a peer without it sends bare `0x09`/`0x0B`s this build drops, and cannot read the tagged `0x05`s this build sends |
-| ghost commander — the create refused during the load, held and replayed, and the dirty create's position: the load's start `0x497F5E`, the state-6 store `0x498445`, the dirty entry's call `0x48BA00`, and the hold inside B4's `0x05` receiver (landing B5; the subsection *A create refused during the load*) | simulation | which units a peer holds at the start of play and where a dirty create puts one; a peer without it lacks the others' commanders until the round robin, as stock |
+| ghost commander — the create refused during the load, held and replayed, a refused kill cancelling it, and the dirty create's position: the load's start `0x497F5E`, the frame function's call `0x49842F`, the state-6 store `0x498445`, the dispatcher's refusal in state 5 `0x45477F`, the dirty entry's call `0x48BA00`, and the hold inside B4's `0x05` receiver (landing B5; the subsection *A create refused during the load*) | simulation | which units a peer holds at the start of play and where a dirty create puts one; a peer without it lacks the others' commanders until the round robin, as stock |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -507,12 +507,16 @@ the body `0x497180`). **Every call** then tests bit 1
 frame function `0x496790` at `0x49842F`, `0x4C2870`, state 6 at `0x498445`, the next state function
 `0x499200` at `0x498455`, and the flag word zeroed at `0x49847E`.
 
-**Up to five ticks run before state 6.** `0x496790` asks `0x495230` how many ticks are due since the
-timing base (`main+0x38A3B`, capped at 5 at `0x4953F5`), and `0x495490` runs that many, each
-`GameTime++` (`0x4954C0`) and a pump (`0x4954C8`). At `0x49842F` the base is the load's start, so
-the catch-up is the cap: five ticks in state 5, before `0x498445`. MEASURED: GameTime read 5 just
-after the state-6 store in every two-peer start of the B5 build that held a create (its replay
-line, below; four starts). GameTime's five writers stand; it is not 0 at the in-play entry.
+**Up to five ticks run before state 6.** The frame function `0x496790` first moves its profile
+counters (`main+0x38D85..`) and reads the clock (`0x4B6560`); in a network game (`main+0x2A44`
+bit 0) it asks `0x495230` how many ticks are due since the timing base (`main+0x38A3B`, capped at
+5 at `0x4953F5`; `0x495230` itself sends and receives nothing), and `0x495490(1)` (`0x49680B`) runs
+that many, each `GameTime++` (`0x4954C0`) and, its argument being nonzero, a pump (`0x4954C8`),
+then the units `0x48AD30` and the rest. At `0x49842F` the base is the load's start, so the catch-up
+is the cap: five ticks in state 5, before `0x498445`. MEASURED: GameTime read 5 just after the
+state-6 store in every two-peer start of B5's first build that held a create (four starts).
+GameTime's five writers stand; it is not 0 when play starts, and nothing ticks before
+`0x49842F`'s call.
 
 **The loader `0x497180`** (loader thread) pumps at `0x49727D` in its early wait, runs the level
 init `0x4917D0` at `0x497581` (the unit array, `0x4854A0` at `0x4918D4`), sets bit 2, waits for bit
@@ -525,7 +529,35 @@ precedes its last store, and the game thread reaches `0x498445` only after readi
 still in state 5, and the dispatcher passes `0x09` only in state 6 (`0x45473F`, `0x512BC0`): a peer
 whose remaining load is longer refuses the others' creates at `0x455F50`. In every two-peer start
 measured, the joiner. Since B4 the create rides in a `0x4A` companion, which state 5 passes (`0x05`
-has mask 7) and B4's receiver refuses by the same table (`gate=`).
+has mask 7) and B4's receiver refuses by the same table (`gate=`). **Every unit message is
+refused alike:** `0x451FD0` gives mask 4 (state 6 only) to `0x09`, `0x0A`..`0x10` and `0x2C`
+among others (`0x451FE0..0x452035`), so in state 5 a peer drops the others' kills (`0x0C`), hits
+(`0x0B`) and full state (`0x2C`) too. A message failing its mask in state 5 leaves by the
+dispatcher's refusal branch `0x45477F..0x454787` (`cmp edx,5; je 0x455F50`), with the message at
+`[esp+0x10]` and the sender as below.
+
+**A create before the first tick is what stock does.** `CreateFromNetwork 0x4861D0` calls
+`0x485A40`, `0x485D40`, `0x49E070`, `0x437840`, `0x4B4F10`, `0x43DC00`, `0x48A870`, `0x47CC30`,
+`0x482AC0` and `0x490580`, every one of which the local create `0x485F50` calls too, and the loader
+runs `0x485F50` for this peer's commander in state 5 before any tick (`0x4977BB`); neither body reads
+the net state `main+0x391F1` or GameTime. Over an occupied slot `CreateFromNetwork` first destroys
+the occupant (`0x486237..0x486244`, `0x4864B0(unit, 0)`), which sends a `0x0C` only for a local
+player's unit (below).
+
+**What removes a copy whose unit is gone: the round robin's type 0.** The owner's `0x2C` sender
+`0x48B710` runs from the unit tick (`0x48B003`) for each local player in a network game
+(`main+0x2A44` bit 0). After the dirty entries and their `0xFFFF` end it always appends one
+round-robin entry (the flag bit set unconditionally, `0x48B81B..0x48B84C`) for the slot
+`GameTime % N` of its block (`N` = `main+0x37EE6`, `0x48B827..0x48B8A4`), written by `0x48B200`:
+the type word first (`0x48B222`), and for an empty slot nothing more (`0x48B227..0x48B22F`). The
+receiver `0x48B920` reads that flag (`0x48BA6A..0x48BA97`), takes the slot from the header's
+GameTime (`0x48B95A`) `% N` (`0x48BA9F..0x48BABA`) and hands it to `0x48B3F0`: a type 0 over an
+occupied slot sets `+0x110` bit 14, pending death (`0x48B415..0x48B42F`). The receiver's unit tick
+then calls `0x4864B0(unit, +0xF5)` for every unit with that bit (`0x48AFB9..0x48AFD1`), which
+destroys it (`0x4866D0` at `0x486679`) and sends a `0x0C` only when the unit's player is local
+(`0x48664B..0x48666D`, the image's one send of the `0x0C`'s 11 bytes). So a copy whose owner's
+slot is empty is gone within N of the owner's ticks: 1500 at the raised limit (50 s at 30 ticks a
+second), 500 at stock's (16.7 s).
 
 **A sender, as the dispatcher sees it.** The pump's frame holds the sender's **record index** in
 the low byte of `[esp+0x14]` and its record `main+0x1B63 + k·0x14B` in `edi`, paired by
@@ -589,19 +621,22 @@ to nothing), the writer `0x415C10`.
 
 **What B5 patches** (the plan's *B5 DESIGN*; the code is `fix_ghost_commander`): B4's `0x05`
 receiver holds a carried `0x09` its gate refuses in state 5, with the sender's record index and
-DirectPlay id; `0x497F5E` empties the queue at the load's start; `0x498445`, after its store,
-replays it through B4's receiver and `CreateFromNetwork`; `0x48BA00` calls a stub that rewrites the
-dirty create's position from the entry's own payload (ground point 0; air selector 2's x, y, z)
-when it lies on the map, then enters `CreateFromNetwork` under `0x48BA05`. Compared, not written:
-`0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`, `0x49844F`, `0x48B9F5`, `0x4861D0`. All are rows of
-the fail-closed table, in both builds.
+DirectPlay id; the refusal branch `0x45477F` notes a refused `0x0C`, which cancels the latest
+create held for its slot from its sender, or marks dying, as `0x48B42C` does, a copy the first
+replay made; `0x497F5E` empties the queue at the load's start; `0x49842F` replays it before the
+frame function runs the first tick, through B4's receiver past its state test and
+`CreateFromNetwork`, and `0x498445`, after its store, replays what the catch-up ticks refused;
+`0x48BA00` calls a stub that rewrites the dirty create's position from the entry's own payload
+(ground point 0; air selector 2's x, y, z) when it lies on the map, then enters `CreateFromNetwork`
+under `0x48BA05`. Compared, not written: `0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`,
+`0x49844F`, `0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`. All are rows of the
+fail-closed table, in both builds.
 MEASURED 2026-09-25 (the plan's *B5 BUILT AHEAD*, two peers, Two Continents): on the previous
 build the joiner lacked the host's commander until t = 50 s at the 1500-unit limit and t = 18 s at
 500, and one ordered to move at once appeared at `(1,−2)` / `(2,−3)` and walked from the corner;
 on B5 it was present at the host's position at the first sample in all four starts, from an exact
-copy (`replayed slot 1 from sender 1 … at GameTime 5`: record 1 on the joiner is the host, whose
-block holds slot 1), and with the queue turned off the dirty create alone put it at `(368, 7664)`
-where stock's record had `(0, 0)`.
+copy (record 1 on the joiner is the host, whose block holds slot 1), and with the queue turned off
+the dirty create alone put it at `(368, 7664)` where stock's record had `(0, 0)`. RUN12
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
