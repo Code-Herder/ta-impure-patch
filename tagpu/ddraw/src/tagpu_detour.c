@@ -54,14 +54,26 @@ typedef struct LANDED { unsigned va; unsigned char* stub; int stolenOff; int nst
 static LANDED s_landed[64];
 static int    s_nlanded = 0;
 
-static void detour_record(unsigned int va, unsigned char* stub, int stolenOff, int nst)
+/* A stub is recorded as a site's owner only once it is reachable: after its
+   jmp has landed on the site, or after the earlier stub it chains from has
+   been rewritten to reach it. Recorded before that, a failed land would leave
+   a later module chaining into code nothing ever enters. */
+static void detour_record(unsigned int va, unsigned char* stub, int stolenOff, int nst,
+                          int hijacks)
 {
     if (s_nlanded < (int)(sizeof s_landed / sizeof s_landed[0])) {
         s_landed[s_nlanded].va = va; s_landed[s_nlanded].stub = stub;
         s_landed[s_nlanded].stolenOff = stolenOff; s_landed[s_nlanded].nst = nst;
-        s_landed[s_nlanded].hijacks = 0;
+        s_landed[s_nlanded].hijacks = hijacks;
         s_nlanded++;
     }
+}
+
+static int land_and_record(unsigned int va, unsigned char* stub, int stolenOff, int nst)
+{
+    if (!tagpu_detour_land(va, stub, nst)) return 0;
+    detour_record(va, stub, stolenOff, nst, 0);
+    return 1;
 }
 
 /* does the newest stub on `va` replace the return address (an observer with
@@ -116,14 +128,15 @@ int tagpu_detour_leaf(unsigned int va, const unsigned char* stolen, int nst,
 {
     unsigned char* s = tagpu_detour_stub();
     unsigned char* p = s;
+    int so;
     if (!s || nst < 5 || nst > 16) return 0;
     p = tagpu_detour_cmp_flag(p, flag);
     *p++ = 0x74; *p++ = 0x03;                          /* jz +3                */
     *p++ = 0xC2; *p++ = retn; *p++ = 0x00;             /* ret n                */
-    detour_record(va, s, (int)(p - s), nst);
+    so = (int)(p - s);
     memcpy(p, stolen, (size_t)nst); p += nst;
     *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
-    return tagpu_detour_land(va, s, nst);
+    return land_and_record(va, s, so, nst);
 }
 
 int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst,
@@ -132,6 +145,7 @@ int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst
 {
     unsigned char* s = tagpu_detour_stub();
     unsigned char* p = s;
+    int so;
     if (!s || !fn || nst < 5 || nst > 16) return 0;
     p = tagpu_detour_cmp_flag(p, flag);
     *p++ = 0x74; *p++ = 0x11;                          /* jz stolen (+17)      */
@@ -144,10 +158,10 @@ int tagpu_detour_leaf_call(unsigned int va, const unsigned char* stolen, int nst
     *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;             /* add esp,4            */
     *p++ = 0x61;                                       /* popad                */
     *p++ = 0xC2; *p++ = retn; *p++ = 0x00;             /* ret n                */
-    detour_record(va, s, (int)(p - s), nst);
+    so = (int)(p - s);
     memcpy(p, stolen, (size_t)nst); p += nst;
     *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
-    return tagpu_detour_land(va, s, nst);
+    return land_and_record(va, s, so, nst);
 }
 
 int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
@@ -157,7 +171,7 @@ int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
     unsigned char* p = s;
     unsigned char* tramp;
     unsigned char* prev;
-    int prevOff = 0, prevN = 0;
+    int prevOff = 0, prevN = 0, so;
     if (!s || !before || nst < 5 || nst > 16) return 0;
     prev = tagpu_detour_landed(va, &prevOff, &prevN);
     if (prev && (prevN != nst || memcmp(prev + prevOff, stolen, (size_t)nst) != 0)) return 0;
@@ -184,8 +198,7 @@ int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
         { unsigned int t = (unsigned int)(size_t)tramp; memcpy(p, &t, 4); p += 4; }
     }
     *p++ = 0x9D;                                       /* popfd                */
-    detour_record(va, s, (int)(p - s), nst);
-    if (after && s_nlanded > 0 && s_landed[s_nlanded - 1].stub == s) s_landed[s_nlanded - 1].hijacks = 1;
+    so = (int)(p - s);
     memcpy(p, stolen, (size_t)nst); p += nst;
     *p++ = 0xE9; tagpu_detour_rel(p, va + (unsigned)nst); p += 4;
     if (after) {
@@ -214,8 +227,11 @@ int tagpu_detour_observe(unsigned int va, const unsigned char* stolen, int nst,
         memset(q, 0x90, (size_t)nst + 5);
         q[0] = 0xE9; memcpy(q + 1, &rel, 4);
         FlushInstructionCache(GetCurrentProcess(), q, (SIZE_T)nst + 5);
+        detour_record(va, s, so, nst, after != NULL);
         return 1;
     }
-    return tagpu_detour_land(va, s, nst);
+    if (!tagpu_detour_land(va, s, nst)) return 0;
+    detour_record(va, s, so, nst, after != NULL);
+    return 1;
 }
 

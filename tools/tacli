@@ -1892,7 +1892,7 @@ def cmd_weapons(args):
     # them across two instances is how a mismatched-peer test reads out.
     types = {}
     for u in data.get("units", []):
-        types.setdefault(u["type"], (u.get("crc_weapons"), u.get("crc_all"), u["count"]))
+        types.setdefault(u["type"], (u.get("crc_weapons"), u.get("crc_all"), u["count"], u.get("pieces")))
     for u in data.get("units", []):
         for s in u["slots"]:
             rows.append(f"u{u['idx']:<5} {u['type']:<12} own={u['owner']} n={u['count']:<2} "
@@ -1902,11 +1902,14 @@ def cmd_weapons(args):
                         f"aim={s['aimed']} thr={s['thread']}")
     hits = " ".join(f"{k}={v}" for k, v in data.get("hits", {}).items())
     fires = " ".join(f"{i}={n}" for i, n in enumerate(data.get("fires", [])) if n)
-    crcs = " ".join(f"{t}(n={n},w={w},all={a})" for t, (w, a, n) in sorted(types.items())
+    crcs = " ".join(f"{t}(n={n},w={w},all={a})" for t, (w, a, n, _) in sorted(types.items())
                     if w is not None)
+    # AimFromWeaponN,QueryWeaponN per extended slot, as the type caches them (-1 = unasked).
+    pieces = " ".join(f"{t}({pc})" for t, (_, _, _, pc) in sorted(types.items()) if pc)
     head = (f"frame={data.get('frame')} armed={data.get('armed')} cap={data.get('cap')} "
             f"units={len(data.get('units', []))}\nhits: {hits}\nfires by slot: {fires or '-'}"
-            + (f"\ntype CRCs: {crcs}" if crcs else ""))
+            + (f"\ntype CRCs: {crcs}" if crcs else "")
+            + (f"\npieces (aimfrom,query from slot 3): {pieces}" if pieces else ""))
     out(data, args.json, human=head + ("\n" + "\n".join(rows) if rows else "\n(no matching units)"))
 
 

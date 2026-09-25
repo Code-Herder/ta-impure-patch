@@ -49,6 +49,11 @@ game**: `ctrl+a` selects nothing and `ctrl+1` tags nothing. To pause and keep se
 and placing, send `tacli keys <i> pause` instead. It pauses with no menu, and a paused game still
 takes selections, `tacli order`, a held drag and a build placement.
 
+**A second skirmish started by clicks can come up paused.** Left through Tab's `EXIT` and started
+again with `ui click SINGLE`, `Skirmish`, `Start`, the new game sat at tick 0 (the packet
+heartbeat's `paused=1`) and nothing fired or moved; `scenario load` does not leave it so. One
+`tacli keys <i> pause` resumes it; read `paused=0` back before measuring anything that runs.
+
 ## What moves in a "static" frame
 
 Mask these, or catch both halves in the same phase. Coordinates are 1024x768.
