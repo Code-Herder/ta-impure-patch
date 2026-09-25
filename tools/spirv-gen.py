@@ -85,15 +85,18 @@ THE TRANSFORM, in full. Each item is mechanical and applies to every shader:
      fragment stage that declares a subset, or declares them in another order,
      still matches. A fragment `in` with no matching vertex `out` is an error
      here rather than a link failure in a driver. Where one fragment shader is
-     used with two different vertex stages, both mappings are computed and
-     must agree. No pairing in the manifest does that today: `tagpu_native`'s
-     fragment shader is paired with `tagpu_posedraw`'s vertex stage alone.
+     used with more than one vertex stage, every mapping is computed and they
+     must agree: `tagpu_native`'s fragment shader is paired with three of
+     `tagpu_posedraw`'s vertex stages (VS, FXVS, WVS), which is why the three
+     declare their outputs identically.
   6. FRAGMENT OUTPUTS take locations in declaration order, unless the source
      already gives one a `layout(location=)`.
   7. `gl_VertexID` / `gl_InstanceID` become `gl_VertexIndex` /
-     `gl_InstanceIndex`. These are the same value for every draw the fork
-     issues (`firstVertex` and `firstInstance` are 0 everywhere), and the day
-     one is not, this line is where it is written down.
+     `gl_InstanceIndex`. `firstVertex` is 0 in every draw that reads
+     `gl_VertexID`, so the two names mean the same value there. The line draws
+     (tagpu_vk_mark.c, tagpu_vk_fx.c) pass a nonzero `firstInstance`, which only
+     moves the fetch of their per-instance attributes; no shader reads
+     `gl_InstanceID`, and one that did would be offset by it under Vulkan.
   8. Vertex `in` declarations are NOT touched: every vertex stage in the fork
      already carries `layout(location=)` on each attribute. One that does not
      is an error here.
@@ -202,13 +205,18 @@ PROGRAMS = [
     # ...and the effects models: the runs of the engine's own rasterisers
     # (tagpu_fxmodel.c), drawn by the same fragment stage the units take
     ("pose_fx",      "tagpu_posedraw::FXVS",    "tagpu_native::FS"),
+    # ...and the nanoframe wire: line records posed on the CPU, drawn as bands
+    ("pose_wire",    "tagpu_posedraw::WVS",     "tagpu_native::FS"),
     # one pass each
     ("fps",          "tagpu_fps::VS",           "tagpu_fps::FS"),
     ("mark",         "tagpu_mark::VS",          "tagpu_mark::FS"),
-    # the selection rect: the engine's Bresenham decided per game pixel
-    ("mark_sel",     "tagpu_mark::SVS",         "tagpu_mark::SFS"),
+    # the marker lines -- the selection rect, order lines, build squares --
+    # as bands whose fragment stage keeps the engine's Bresenham per game pixel
+    ("mark_line",    "tagpu_mark::LVS",         "tagpu_mark::LFS"),
     ("scaffold",     "tagpu_scaffold::VS",      "tagpu_scaffold::FS"),
     ("fx",           "tagpu_fx::VS",            "tagpu_fx::FS"),
+    # ...and the effects lines (lasers, lightning) the same way
+    ("fx_line",      "tagpu_fx::LVS",           "tagpu_fx::LFS"),
     ("feat",         "tagpu_feat::VS",          "tagpu_feat::FS"),
 ]
 

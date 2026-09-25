@@ -35,8 +35,8 @@
    is 1 KB and the engine's own table is the source of truth.
 
    THE PREREQUISITES ARE ASKED OF THE DEVICE, NOT ASSUMED. Four limits and
-   three formats, each refused BY NAME when it does not hold, the way `lineok`
-   and `flipok` already are. They were measured on the reference setup and
+   three formats, each refused BY NAME when it does not hold, the way `flipok`
+   and `zclipok` already are. They were measured on the reference setup and
    again through winevulkan, and they all held -- which is exactly why the
    check is here rather than skipped: a limit that holds on one device is not a
    property of the port. */

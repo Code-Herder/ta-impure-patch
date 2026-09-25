@@ -276,4 +276,82 @@
 #define TAGPU_EDGE_NUDGE "0.03125"
 /* the same distance for a C caller that moves its quads itself (tagpu_feat.c) */
 #define TAGPU_EDGE_NUDGE_PX 0.03125f
+
+/* ---- lines: DrawLine's Bresenham, decided per game pixel -----------------
+   Every line the lane draws -- order lines, selection rects, lasers and
+   lightning, the nanoframe wire -- is two triangles over a BAND around the
+   segment, and the fragment stage keeps a fragment only when the GAME pixel
+   it lies in is one `0x4CC7AB` would plot between the line's two endpoints.
+   Everything that decides a pixel is integer arithmetic on the game-pixel
+   grid: the endpoints arrive as whole game pixels (tagpu_line.h says how they
+   are chosen), the fragment's own game pixel comes from its integer target
+   pixel, and the walk is closed-form. No floating-point decision near a pixel
+   edge is left for two GPUs to take differently, and a line is one game pixel
+   wide -- `ss` target pixels -- because a game pixel is kept or dropped whole.
+
+   `taGamePx`: the game pixel whose span holds the centre of target pixel
+   `fc`, with `grid` = (game w, game h, target w, target h) -- floor((t + 0.5)
+   * gw / tw), written as ((2t + 1) * gw) / (2 * tw) so no float is involved.
+
+   `taOnLine`: `0x4CC7AB`'s walk, as exe-reverse-engineering.md records it.
+   It walks from the smaller-x end; x-major when |dy| <= dx (so 45 degrees is
+   x-major); the pixel `i` major steps along sits at minor offset
+   (2 * minor * i + major) / (2 * major), which is its error term
+   `2 * minor - major` stepping on `>= 0` unrolled; both ends inclusive. The
+   products are UNSIGNED so they cannot overflow for endpoints inside
+   tagpu_line.h's TAGPU_LINE_MAXC box. The engine's CLIP (`0x4CC650`, called
+   first) is not part of it: it moves an end that lies off the surface onto
+   the edge, so on a line that crosses the edge the engine walks from a
+   different pixel than this does (tagpu_line.h). */
+#define TAGPU_GLSL_LINE_FN \
+    "ivec2 taGamePx(vec2 fc, ivec4 grid) {\n" \
+    "  ivec2 t = ivec2(fc);\n" \
+    "  return ((2 * t + 1) * grid.xy) / (2 * grid.zw);\n" \
+    "}\n" \
+    "bool taOnLine(ivec2 g, ivec2 a, ivec2 b) {\n" \
+    "  if (a.x > b.x) { ivec2 s0 = a; a = b; b = s0; }\n" \
+    "  int dx = b.x - a.x, dy = b.y - a.y;\n" \
+    "  int ady = abs(dy), sg = dy < 0 ? -1 : 1;\n" \
+    "  if (ady <= dx) {\n" \
+    "    int i = g.x - a.x;\n" \
+    "    if (i < 0 || i > dx) return false;\n" \
+    "    if (dx == 0) return g.y == a.y;\n" \
+    "    return g.y == a.y + sg * int((2u * uint(ady) * uint(i) + uint(dx)) / (2u * uint(dx)));\n" \
+    "  }\n" \
+    "  int j = (g.y - a.y) * sg;\n" \
+    "  if (j < 0 || j > ady) return false;\n" \
+    "  return g.x == a.x + int((2u * uint(dx) * uint(j) + uint(ady)) / (2u * uint(ady)));\n" \
+    "}\n"
+
+/* THE BAND a line is drawn over, in game px after the zoom: the segment
+   between the two endpoint pixels' CENTRES, widened by taBandR on each side
+   and carried taBandR past each end. `c` is the corner, 0..5 over two
+   triangles (A-, B-, A+) and (A+, B-, B+), where A and B are the ends and
+   the sign the side; `t` comes back as the corner's position ALONG the
+   segment, 0 at A's centre and 1 at B's, so a vertex stage can extend a
+   per-end attribute across the band linearly (the wire's depth does).
+
+   WHY 2 IS ENOUGH, which tools/line-band-check.py checks by brute force.
+   Every pixel the walk lights has its centre within half a pixel, across the
+   segment, of the line between the two end centres (the minor offset is the
+   rounded ideal one), and the two end pixels ARE the end centres. A square
+   pixel reaches at most 0.5 * (|n.x| + |n.y|) <= 0.71 further in any
+   direction, so every lit pixel lies within 1.21 of the segment across it
+   and within 0.71 past either end. A band of 2 therefore holds every target
+   pixel of every lit game pixel with 0.79 of a game pixel to spare, at any
+   supersample, and float error in placing the corners cannot reach that.
+   Being wide costs fill only: the fragment test decides the pixels. */
+#define TAGPU_GLSL_BAND_FN \
+    "const float taBandR = 2.0;\n" \
+    "vec2 taBand(vec2 a, vec2 b, int c, out float t) {\n" \
+    "  vec2 ca = a + 0.5, cb = b + 0.5, d = cb - ca;\n" \
+    "  float len = length(d);\n" \
+    "  vec2 u = len > 0.0 ? d / len : vec2(1.0, 0.0);\n" \
+    "  vec2 n = vec2(-u.y, u.x);\n" \
+    "  bool atB = c == 1 || c == 4 || c == 5;\n" \
+    "  float side = (c == 2 || c == 3 || c == 5) ? 1.0 : -1.0;\n" \
+    "  if (len > 0.0) t = atB ? 1.0 + taBandR / len : -taBandR / len;\n" \
+    "  else t = atB ? 1.0 : 0.0;\n" \
+    "  return (atB ? cb + taBandR * u : ca - taBandR * u) + (taBandR * side) * n;\n" \
+    "}\n"
 #endif

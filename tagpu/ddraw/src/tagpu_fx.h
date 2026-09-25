@@ -156,7 +156,9 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
    rule and for the same reason: the gather that writes the vertices and the
    pass that reads them share this header, and a vertex layout copied into a
    second file is two things that can drift. Each entry is {location,
-   components, byte offset}. */
+   components, byte offset}. The LINES bucket holds line RECORDS in the same
+   layout, one a line: end A's game pixel after the zoom in x,y, end B's in
+   u,v (tagpu_fx.c `emit_line`), read once per instance. */
 #define TAGPU_FX_VST    9          /* x,y,enc, u,v, c,mode, wx,wz            */
 #define TAGPU_FX_NATTR  4
 #define TAGPU_FX_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28} }
@@ -167,9 +169,10 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
    layers the engine draws before its projectiles (0..6) and into SPRITES for
    the rest (7..9), so each of the two holds the whole particle table; SPRITES
    holds a projectile's two quads (its shadow blob and its own frame) and an
-   explosion's one besides. Lines and flashes keep TAGPU_FX_MAXV. IT IS NOT A
-   BOUND BY CONSTRUCTION: a composite GAF frame makes one quad per subframe and
-   a lightning bolt up to 2 044 line vertices. A quad or line that does not
+   explosion's one besides. Lines (in records) and flashes keep
+   TAGPU_FX_MAXV. IT IS NOT A BOUND BY CONSTRUCTION: a composite GAF frame
+   makes one quad per subframe and a lightning bolt up to 1 022 lines. A quad
+   or line that does not
    fit its bucket is dropped and counted (`fx: DROPPED ... bucket-full` in the
    log), never written past it. */
 #define TAGPU_FX_MAXV         65536
@@ -178,8 +181,8 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
 
 /* THE FOUR BUCKETS, IN DRAW ORDER, which is the order they are concatenated
    into one vertex buffer in. They are not four draws of one
-   pipeline: the lines are a LINE_LIST and the flashes blend additively, so
-   this pass needs more than one pipeline for the same shader. */
+   pipeline: the lines are instanced bands with a program of their own
+   (tagpu_fx.c LVS/LFS) and the flashes blend additively. */
 enum { TAGPU_FXB_UNDER = 0, TAGPU_FXB_LINES = 1,
        TAGPU_FXB_FLASH = 2, TAGPU_FXB_SPRITES = 3, TAGPU_FXB_N = 4 };
 #define TAGPU_FX_MAXV_OF(b) ((b) == TAGPU_FXB_UNDER   ? TAGPU_FX_MAXV_UNDER   : \
@@ -191,8 +194,8 @@ typedef struct TAGPU_FXHAND {
        READ of live buffers rather than a freed one. */
     unsigned frame;
 
-    /* The geometry. `vert[b]` is bucket b's array and `n[b]` its vertex count,
-       TAGPU_FX_VST floats each. */
+    /* The geometry. `vert[b]` is bucket b's array and `n[b]` its vertex count
+       -- its record count for the LINES bucket -- TAGPU_FX_VST floats each. */
     const float* vert[TAGPU_FXB_N];
     int          n[TAGPU_FXB_N];
     /* THE MODELS THIS FRAME'S RECORDS CARRY, which the posed pass draws

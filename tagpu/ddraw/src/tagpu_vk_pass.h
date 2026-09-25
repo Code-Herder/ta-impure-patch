@@ -68,7 +68,7 @@ typedef struct {
        build a pipeline with `stencilTestEnable`. The 24-bit format the seam
        prefers is D24_UNORM_S8_UINT and has one; its fallback,
        X8_D24_UNORM_PACK32, has none, and a device that offers only that gets a
-       0 here. Same shape as `flipok` and `lineok`: a capability a pass asks
+       0 here. Same shape as `flipok`: a capability a pass asks
        about rather than assumes, and a pass whose device will not offer it
        stands its stencil-masked work down instead of drawing without the mask.
        THE ONLY USER TODAY is the unit pass's Classic hard shadow, whose mask
@@ -100,29 +100,10 @@ typedef struct {
        pass, and a flip both share cancels. The screen is the only check for
        this one. */
     int                       flipok;
-    /* VK_EXT_line_rasterization WITH `bresenhamLines`, ENABLED ON THE DEVICE.
-       A pass that draws LINES needs it and may not draw without it: the lines
-       follow the diamond-exit rule, which BRESENHAM mode gives and Vulkan's
-       default mode does not. MEASURED 2026-09-15 (the effects pass, against
-       the OpenGL renderer this replaced): under Vulkan's DEFAULT
-       lineRasterizationMode the lasers came out a strict SUPERSET of the
-       diamond-exit lines -- all 126 of their pixels plus exactly one extra
-       fragment at the END of each line segment. It is the same shape as
-       `flipok`: a rule adopted as pipeline state rather than worked around,
-       and a pass whose device will not offer it stands down instead of drawing
-       those extra fragments. */
-    int                       lineok;
-    /* `wideLines` WAS ENABLED ON THE DEVICE, and the widest line it will
-       rasterise. A pass that draws lines into a SUPERSAMPLED target needs
-       it: a line one game pixel wide is `ss` pixels of the target, and a
-       pipeline fixed at 1.0 draws it `ss` times too thin. Same shape as
-       `flipok` and `lineok`: a rule adopted as pipeline state.
-       `maxLineWidth` is `lineWidthRange[1]`, and a width past it is refused
-       rather than clamped: a clamped width is a line a different thickness
-       from one game pixel, which is the thing this family of flags exists to
-       prevent. 0 means the device does not offer it. */
-    int                       wideok;
-    float                     maxLineWidth;
+    /* NO LINE FEATURE IS HERE, AND NONE IS NEEDED: no pass rasterises a line
+       primitive. Every line is two triangles whose fragment stage keeps the
+       game pixels `0x4CC7AB` would plot (tagpu_line.h, tagpu_glsl.h), so a
+       line needs neither VK_EXT_line_rasterization nor `wideLines`. */
     /* VK_EXT_depth_clip_control WITH `depthClipControl`, ENABLED ON THE DEVICE,
        and so a pipeline may ask for OpenGL's CLIP-SPACE Z RANGE: clip z in
        [-1, 1] mapped onto the depth range, where Vulkan takes [0, 1] and CLIPS
@@ -133,8 +114,8 @@ typedef struct {
        TAGPU_SHADOWHAND `mat`, which nothing produces today), so without this
        the near half of every caster is clipped away and the depth map is WRONG
        rather than merely different -- and the depths it stores are what the
-       consumers' taShadowAt compares against. Same shape as `flipok` and
-       `lineok`: a rule adopted as pipeline state rather than worked around,
+       consumers' taShadowAt compares against. Same shape as `flipok`: a rule
+       adopted as pipeline state rather than worked around,
        and a pass whose device will not offer it stands down instead of drawing
        a map with its casters' near halves missing. */
     int                       zclipok;

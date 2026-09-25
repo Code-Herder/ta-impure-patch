@@ -1256,7 +1256,6 @@ void tagpu_vk_world_down(const TAGPU_VKPASS* d)
     if (s_dcState != ST_REFUSED) s_dcState = ST_UNBUILT;
 }
 
-int tagpu_vk_world_scale(void) { return s_drawThis ? s_lastSS : 1; }
 
 int tagpu_vk_world_shot(uint32_t slot, VkImage* img, uint32_t* w, uint32_t* h,
                         VkFormat* fmt)

@@ -19,11 +19,13 @@
    selection rects alone test depth, because the engine draws each one inside
    the unit sweep, under its own unit (tagpu_mark.c).
 
-   THE LINES ARE `ss` DEVICE PIXELS WIDE, which is one SCREEN pixel at any
-   supersample -- the same rule tagpu_vk_fx.c follows, and the reason a marker
-   stays a hairline at 4x instead of a 1997 pixel blown up to sixteen. Wide
-   lines are an optional feature in Vulkan, so a frame with order lines on a
-   device that will not draw them is REFUSED rather than drawn thin. */
+   THE LINES ARE TRIANGLES. Each line record is one instance of tagpu_mark.c's
+   LVS/LFS program: a band of two triangles round the segment, whose fragment
+   stage keeps the game pixels `0x4CC7AB` would plot (tagpu_line.h,
+   tagpu_glsl.h). So a line needs no line rasterisation state and no device
+   feature, it is one game pixel wide at any `ss`, and its pixels are the
+   same on every GPU -- the rule tagpu_vk_fx.c and the nanoframe wire follow
+   too. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +33,6 @@
 #include <stdarg.h>
 #include <math.h>
 #include "tagpu_vk_mark.h"
-#include "tagpu_vk_world.h"   /* the target's ss: the line width follows it */
 #include "tagpu_mark.h"
 #include "spirv/tagpu_mark.spv.h"
 
@@ -53,7 +54,7 @@
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
     X(vkCmdDraw) X(vkCmdPipelineBarrier) X(vkCmdCopyBufferToImage) \
-    X(vkCmdSetLineWidth) X(vkCmdSetViewport) X(vkCmdSetScissor)
+    X(vkCmdSetViewport) X(vkCmdSetScissor)
 
 #define DECL(n) static PFN_##n n;
 IFNS(DECL)
@@ -67,13 +68,13 @@ DFNS(DECL)
 #define VS_ZOOM     8
 #define VS_ZOOMC   16
 
-#define FS_SZ      48          /* SFS's block: FS's five, then uPx at 32 */
+#define FS_SZ      48          /* LFS's block: FS's five, then uGrid at 32 */
 #define FS_KEY      0
 #define FS_TEXT     4
 #define FS_FOGORG   8
 #define FS_FOGDIM  16
 #define FS_FOG     24
-#define FS_PX      32          /* SFS only; padding past FS's own block */
+#define FS_GRID    32          /* LFS only; padding past FS's own block */
 
 #define MVST       8           /* floats a vertex: x,y u,v wx,wz colour z */
 #define MK_VSTRIDE (MVST * 4)
@@ -89,6 +90,7 @@ static int s_drawThis;
 
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout      s_plo;
+/* `s_pipeLine` draws the line records, one instance a line (LVS/LFS). */
 static VkPipeline            s_pipeTri, s_pipeLine;
 /* THE SELECTION RECTS' PIPELINE: the line pipeline with the depth TEST on and
    the write off, so a rect lands under its own unit and every later row --
@@ -96,7 +98,7 @@ static VkPipeline            s_pipeTri, s_pipeLine;
    like every other marker. It is the only draw in this pass that reads depth,
    and the target's depth plane is still the world's when this pass records
    (tagpu_vk.c `world_records`: the markers are the last pass in the same
-   render pass). Built with the line pipeline, and only when that is. */
+   render pass). */
 static VkPipeline            s_pipeLineZ;
 static VkRenderPass          s_pipeRp;
 static VkDescriptorPool      s_pool;
@@ -171,16 +173,7 @@ static VkDeviceSize s_fsOff[TAGPU_MK_MAXDRAW];
 static VkDeviceSize s_ualign = 256;
 static uint32_t s_slot;
 static int s_abFrame;
-static int s_saidLine, s_saidWide, s_saidFog, s_saidRoom, s_saidHand, s_saidDrew, s_saidIn;
-static float s_lineW = 1.0f;   /* line width: THIS frame's target's `ss`  */
-/* whether THIS frame's selection rects can be drawn -- settled in `prepare`,
-   read in `record`. A frame whose rects cannot be is not refused whole the way
-   an order-line frame is: the rects are dropped and every other marker still
-   draws (see `prepare`). */
-static int s_selOk;
-static float s_selW;          /* the rects' band, target px -- set in record */
-static int s_selDraw;         /* and whether this frame's can be drawn        */
-static int s_saidSel, s_saidSelW;
+static int s_saidFog, s_saidRoom, s_saidHand, s_saidDrew, s_saidIn;
 static int s_saidPal;
 /* ONE LATCH PER SITE HERE TOO: one latch over several distinct refusals lets
    the first to fire silence a DIFFERENT one for the rest of the session. */
@@ -445,19 +438,18 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     VkPipelineDepthStencilStateCreateInfo ds;
     VkPipelineColorBlendAttachmentState ba;
     VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-    VkDynamicState dyn[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
-                              VK_DYNAMIC_STATE_LINE_WIDTH };
+    VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
     VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
-    VkPipelineRasterizationLineStateCreateInfoEXT lr =
-        { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT };
     VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
-    VkShaderModule svs = VK_NULL_HANDLE, sfs = VK_NULL_HANDLE;
+    VkShaderModule lvs = VK_NULL_HANDLE, lfs = VK_NULL_HANDLE;
     int ok = 0;
 
     vs = mk_module(d, tagpu_spv_tagpu_mark_VS, sizeof tagpu_spv_tagpu_mark_VS / 4);
     fs = mk_module(d, tagpu_spv_tagpu_mark_FS, sizeof tagpu_spv_tagpu_mark_FS / 4);
-    if (!vs || !fs) goto done;
+    lvs = mk_module(d, tagpu_spv_tagpu_mark_LVS, sizeof tagpu_spv_tagpu_mark_LVS / 4);
+    lfs = mk_module(d, tagpu_spv_tagpu_mark_LFS, sizeof tagpu_spv_tagpu_mark_LFS / 4);
+    if (!vs || !fs || !lvs || !lfs) goto done;
 
     memset(st, 0, sizeof st);
     st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -502,9 +494,6 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     cb.attachmentCount = 1; cb.pAttachments = &ba;
-    /* TWO for the triangle pipeline: it rasterises no line, so declaring
-       LINE_WIDTH there would be a dynamic state nothing sets and nothing
-       reads. The line pipeline below raises it to three. */
     dy.dynamicStateCount = 2; dy.pDynamicStates = dyn;
 
     gp.stageCount = 2; gp.pStages = st;
@@ -524,65 +513,35 @@ static int build_pipelines(const TAGPU_VKPASS* d, VkRenderPass rp)
     if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeTri) != VK_SUCCESS)
         goto done;
 
-    /* THE ORDER LINES, AND THE ONE PIECE OF STATE THAT FIXES THEIR FRAGMENTS.
-       BRESENHAM is the diamond-exit rule these lines are specified by; Vulkan's
-       DEFAULT mode is not it, and the difference is whole fragments along
-       every diagonal. MEASURED without the chain: 4 900 pixels the default
-       mode drew and the OpenGL renderer this replaced (diamond-exit lines) did
-       not, on 436 segments of route line and range circle, with the OpenGL
-       picture a near-perfect SUBSET of the default one.
-       `tagpu_vk_fx.c` carries the same state for the same reason.
-
-       Built ONLY when the device gave us the mode, which is what makes the
-       refusal in `prepare` a refusal rather than a fallback: with `lineok`
-       clear there is no line pipeline to bind, so a frame with lines cannot
-       be drawn a different way by accident. */
-    if (d->lineok) {
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-        dy.dynamicStateCount = 3;
-        lr.lineRasterizationMode = VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
-        lr.stippledLineEnable = VK_FALSE;
-        lr.pNext = rs.pNext;
-        rs.pNext = &lr;
-        if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
-                                      &s_pipeLine) != VK_SUCCESS) {
-            rs.pNext = lr.pNext;
-            goto done;
-        }
-        /* the selection rects' pipeline: the SVS/SFS program (tagpu_mark.c
-           says why it is its own), the depth TEST on with LESS -- the unit
-           pass's own compare, against the keys that pass wrote -- and never
-           written, so a rect cannot hide anything drawn after it.
-
-           NOT A FAILURE OF THE PASS IF IT WILL NOT BUILD: the rects are
-           dropped and the rest of the markers still draw, the same rule as a
-           device without the lines (`prepare`). `s_pipeLineZ` stays NULL and
-           `record`'s `s_selDraw` reads that. */
-        svs = mk_module(d, tagpu_spv_tagpu_mark_SVS, sizeof tagpu_spv_tagpu_mark_SVS / 4);
-        sfs = mk_module(d, tagpu_spv_tagpu_mark_SFS, sizeof tagpu_spv_tagpu_mark_SFS / 4);
-        if (svs && sfs) {
-            st[0].module = svs; st[1].module = sfs;
-            ds.depthTestEnable = VK_TRUE;
-            ds.depthCompareOp = VK_COMPARE_OP_LESS;
-            if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
-                                          &s_pipeLineZ) != VK_SUCCESS)
-                s_pipeLineZ = VK_NULL_HANDLE;
-        }
-        if (!s_pipeLineZ)
-            plog(d, "mark: the selection rects' pipeline would not build - "
-                    "the rects are not drawn, every other marker is");
-        ds.depthTestEnable = VK_FALSE;
-        ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-        st[0].module = vs; st[1].module = fs;
-        rs.pNext = lr.pNext;
+    /* THE LINES: the same vertex layout read once per INSTANCE, so each line
+       record is one band of six vertices (`record` draws 6 x count), and the
+       LVS/LFS program. Triangles, so nothing here depends on how a device
+       rasterises a line. */
+    vb[0].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+    st[0].module = lvs; st[1].module = lfs;
+    if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                  &s_pipeLine) != VK_SUCCESS)
+        goto done;
+    /* the selection rects: the depth TEST on with LESS -- the unit pass's own
+       compare, against the keys that pass wrote -- and never written, so a
+       rect cannot hide anything drawn after it. NOT A FAILURE OF THE PASS IF
+       IT WILL NOT BUILD: the rects are dropped and the rest of the markers
+       still draw (`record` reads the NULL). */
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                  &s_pipeLineZ) != VK_SUCCESS) {
+        s_pipeLineZ = VK_NULL_HANDLE;
+        plog(d, "mark: the selection rects' pipeline would not build - "
+                "the rects are not drawn, every other marker is");
     }
     s_pipeRp = rp;
     ok = 1;
 done:
     if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
     if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
-    if (svs) vkDestroyShaderModule(d->dev, svs, NULL);
-    if (sfs) vkDestroyShaderModule(d->dev, sfs, NULL);
+    if (lvs) vkDestroyShaderModule(d->dev, lvs, NULL);
+    if (lfs) vkDestroyShaderModule(d->dev, lfs, NULL);
     return ok;
 }
 
@@ -679,7 +638,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 {
     VkPhysicalDeviceProperties props;
     VkDeviceSize vsz, usz, ssz, off;
-    int i, needLines = 0, needSel = 0;
+    int i;
 
     s_drawThis = 0; s_abFrame = 0;
     if (s_state == ST_REFUSED) return 0;
@@ -688,12 +647,7 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
 
     if (s_state == ST_UNBUILT) {
         if (!resolve(d)) {
-            /* WHICH ENTRY POINT is the question a bare refusal cannot answer,
-               and this pass asks for one the others do not -- vkCmdSetLineWidth,
-               for the order lines. Named so the next reader is not left
-               guessing at a pass that produced no log line at all. */
-            plog(d, "mark: an entry point would not resolve (this pass asks for "
-                    "vkCmdSetLineWidth, which its siblings do not) - the marker "
+            plog(d, "mark: an entry point would not resolve - the marker "
                     "pass stays down");
             s_state = ST_REFUSED; s_downOwed = 1; return 0;
         }
@@ -708,9 +662,8 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         /* THE `up` LINE EVERY SIBLING PRINTS. Without it, a pass with no
            refusal, no draw and no voice at all says "never reached ready" and
            nothing else. */
-        plog(d, "mark: up - %u frame slots, uniform offset alignment %u, "
-                "bresenham lines %s", (unsigned)d->slots, (unsigned)s_ualign,
-             d->lineok ? "yes" : "NO (a frame with order lines will refuse)");
+        plog(d, "mark: up - %u frame slots, uniform offset alignment %u",
+             (unsigned)d->slots, (unsigned)s_ualign);
     }
 
     if (!tagpu_mark_handover(&s_h, d->frame)) {
@@ -782,17 +735,13 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
                         "count=%d nvert=%d", i, g->first, g->count, s_h.nvert); }
             return 0;
         }
-        /* A DEPTH DRAW IS A SELECTION-RECT LINE LIST AND NOTHING ELSE: it is
-           the only shape the depth pipeline exists for. It does not count as
-           a line frame for the refusals below. */
-        if (g->depth) {
-            if (!g->lines) {
-                if (!s_saidBound) { s_saidBound = 1;
-                    plog(d, "mark: draw %d is depth-tested but not a line list", i); }
-                return 0;
-            }
-            needSel = 1;
-        } else if (g->lines) needLines = 1;
+        /* A DEPTH DRAW IS SELECTION-RECT LINES AND NOTHING ELSE: it is the
+           only shape the depth pipeline exists for. */
+        if (g->depth && !g->lines) {
+            if (!s_saidBound) { s_saidBound = 1;
+                plog(d, "mark: draw %d is depth-tested but not lines", i); }
+            return 0;
+        }
         /* A DRAW THAT WANTED FOG AND HAS NO GRID IS REFUSED, not drawn clear:
            an unfogged marker over fogged ground is a different picture. */
         if (g->fog && !s_h.fogGrid) {
@@ -817,70 +766,6 @@ int tagpu_vk_mark_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
             return 0;
         }
     }
-    /* THE TWO BOUNDS ON A LINE FRAME, and they are different features.
-
-       `lineok` is VK_EXT_line_rasterization with `bresenhamLines` -- the
-       diamond-exit rule these lines are specified by. Without it the line
-       pipeline is not built at all (build_pipelines), so this is a refusal and
-       not a fallback.
-
-       The WIDTH is the other one. A line is one SCREEN pixel wide, `ss` pixels
-       of the target, and a Vulkan `lineWidth` other than 1.0 needs the
-       `wideLines` device feature
-       enabled at device creation -- which is the seam's business, not a
-       pass's. THE SEAM ASKS FOR IT, because the world is drawn into a target
-       `ss` times the game resolution and a 1.0 line there is `ss` times too
-       thin. The width comes from `tagpu_vk_world_scale()` -- the supersample
-       factor of THIS frame's target, which is 1 when the target refused and the
-       world is going into the swapchain image at 1:1 -- and a width the device
-       will not rasterise is still refused rather than clamped. This is
-       `tagpu_vk_fx.c`'s rule, item 2 of its header, and it applies here word
-       for word. */
-    if (needLines && !d->lineok) {
-        if (!s_saidLine) {
-            s_saidLine = 1;
-            plog(d, "mark: order lines need VK_EXT_line_rasterization with "
-                    "bresenhamLines and the device has not got it - the "
-                    "diamond-exit line is a different picture from Vulkan's "
-                    "default, so nothing is drawn");
-        }
-        return 0;
-    }
-    /* THE LINE WIDTH. The world is drawn into a target `ss` times the game
-       resolution, so `ss` is the width of one screen pixel and `record` below
-       sets exactly that. Refused rather than clamped: a clamped width is a
-       line thinner than the one screen pixel it is specified at. */
-    /* THE WIDTH FOLLOWS THE TARGET, NOT THE HAND-OVER -- tagpu_vk_fx.c carries
-       the argument. `s_h.ss` says what the gather was handed; this says what
-       this frame's target is, and on the fallback path (no offscreen target,
-       the world going into the swapchain image at 1:1) they differ. */
-    s_lineW = (float)tagpu_vk_world_scale();
-    /* THE SELECTION RECTS NEED THE SAME TWO FEATURES AND ARE NOT REFUSED WITH
-       THE FRAME, as the order lines are: a selection is on screen far more
-       often than an order line, and refusing the whole marker layer whenever a
-       unit is selected would take the health bars with it.
-       So on a device without Bresenham lines the rects alone are dropped, and
-       said so once; the WIDTH they need is `record`'s to check, because it
-       follows the target's real extent. */
-    s_selOk = d->lineok;
-    if (needSel && !s_selOk && !s_saidSel) {
-        s_saidSel = 1;
-        plog(d, "mark: selection rects need VK_EXT_line_rasterization "
-                "bresenhamLines and this device has not got it - the rects "
-                "are not drawn, every other marker is");
-    }
-    if (needLines && s_lineW != 1.0f &&
-        (!d->wideok || s_lineW > d->maxLineWidth)) {
-        if (!s_saidWide) {
-            s_saidWide = 1;
-            plog(d, "mark: the target is %.0fx supersampled, so the order lines "
-                    "are that many px wide, and this device "
-                    "offers %s - nothing drawn", s_lineW,
-                 d->wideok ? "a narrower maximum" : "no wideLines at all");
-        }
-        return 0;
-    }
-
     /* the images this frame needs, and the staging to fill them */
     ssz = 0;
     if (s_h.text && s_h.textW > 0 && s_h.textH > 0)
@@ -1068,42 +953,20 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     mk_scissor(&s_h, w, h, &sc);
     vkCmdSetScissor(cb, 0, 1, &sc);
 
-    /* THE SELECTION RECTS' PIXEL SCALE AND BAND. SFS asks which GAME pixel a
-       sample lies in, so it needs target pixels per game pixel -- from THIS
-       target's extent, not from the supersample factor, because on the frame
-       the offscreen target refused the world goes into the swapchain image at
-       whatever scale that is, and a wrong scale does not blur the rect, it
-       moves every pixel of it.
-
-       THE BAND IS ceil(3 * scale) + 2 WIDE, and the 3 is a bound, not a
-       margin. Across the minor axis, a sample of a pixel the test keeps can
-       sit 1.5 game px from the ideal line: half a pixel of Bresenham rounding,
-       half of the pixel's own extent, and up to half again because a sample's
-       column is up to half a pixel from the pixel's centre on a slope of up to
-       1. The +2 is the column's own rounding in the target. 2 * scale + 2
-       leaves samples uncovered; a brute-force of every edge within 24 px at
-       every scale from 1 to 6 in 1/16 steps finds none uncovered at this
-       width. It costs nothing to be wide: the fragment test decides the pixels.
-       A device that will not draw that wide loses the rects, not the frame. */
+    /* THE LINES' GRID: LFS asks which GAME pixel a sample lies in, so it needs
+       the game frame and THIS target's extent -- not the supersample factor,
+       because on a frame the offscreen target refused the world goes into the
+       swapchain image at whatever scale that is, and a wrong scale does not
+       blur a line, it moves every pixel of it. Written into every draw's
+       block; only LFS reads it. */
     {
-        float pxX = s_h.gw > 0.0f ? (float)w / s_h.gw : 1.0f;
-        float pxY = s_h.gh > 0.0f ? (float)h / s_h.gh : 1.0f;
-        s_selW = (float)ceil(3.0 * (pxX > pxY ? pxX : pxY)) + 2.0f;
-        s_selDraw = s_selOk && s_pipeLineZ && d->wideok &&
-                    s_selW <= d->maxLineWidth;
+        int gw = (int)(s_h.gw + 0.5f), gh = (int)(s_h.gh + 0.5f);
         for (i = 0; i < s_h.ndraw; i++) {
             unsigned char* p = s_uboMap[slot] + s_fsOff[i];
-            put_f(p, FS_PX, pxX);
-            put_f(p, FS_PX + 4, pxY);
-        }
-        if (!s_selDraw && s_selOk && !s_saidSelW) {
-            for (i = 0; i < s_h.ndraw; i++) if (s_h.draws[i].depth) break;
-            if (i < s_h.ndraw) {
-                s_saidSelW = 1;
-                plog(d, "mark: selection rects need a line %.0f px wide and "
-                        "this device offers %s - the rects are not drawn",
-                     s_selW, d->wideok ? "a narrower maximum" : "no wideLines");
-            }
+            put_i(p, FS_GRID, gw);
+            put_i(p, FS_GRID + 4, gh);
+            put_i(p, FS_GRID + 8, (int)w);
+            put_i(p, FS_GRID + 12, (int)h);
         }
     }
 
@@ -1112,20 +975,16 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         const TAGPU_MKDRAW* g = &s_h.draws[i];
         uint32_t dyno[2];
         VkDescriptorSet set;
-        /* `prepare` refused every frame that has a line draw without the
-           line pipeline, so this cannot be NULL -- and it is checked anyway,
-           because a bind of VK_NULL_HANDLE is undefined rather than loud and
-           the cost of the branch is nothing. */
+        /* `build_pipelines` fails whole without the line pipeline, so this
+           cannot be NULL -- and it is checked anyway, because a bind of
+           VK_NULL_HANDLE is undefined rather than loud and the cost of the
+           branch is nothing. The rects' pipeline may be NULL, and then the
+           rects alone are not drawn. */
         if (g->lines && !s_pipeLine) continue;
-        if (g->depth && !s_selDraw) continue;
+        if (g->depth && !s_pipeLineZ) continue;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           g->depth ? s_pipeLineZ :
                           g->lines ? s_pipeLine : s_pipeTri);
-        /* A line width of `ss`: the seam enables `wideLines` and the world is
-           drawn into a target that many times the game resolution. `s_lineW`
-           is the TARGET's scale, settled in `prepare`, not the hand-over's --
-           the two differ on the frame the target refused. */
-        if (g->lines) vkCmdSetLineWidth(cb, g->depth ? s_selW : s_lineW);
         dyno[0] = 0;
         dyno[1] = (uint32_t)s_fsOff[i];
         /* UNIT 0 IS PER DRAW: the text draws sample the coverage atlas and
@@ -1135,7 +994,10 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
         set = (g->tex == TAGPU_MK_TEX_TEXT) ? s_setT[slot] : s_setN[slot];
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo,
                                 0, 1, &set, 2, dyno);
-        vkCmdDraw(cb, (uint32_t)g->count, 1, (uint32_t)g->first, 0);
+        /* a line draw's `first`/`count` are records: one six-vertex band
+           an instance */
+        if (g->lines) vkCmdDraw(cb, 6, (uint32_t)g->count, 0, (uint32_t)g->first);
+        else          vkCmdDraw(cb, (uint32_t)g->count, 1, (uint32_t)g->first, 0);
     }
     if (!s_saidDrew) {
         s_saidDrew = 1;
@@ -1177,8 +1039,7 @@ void tagpu_vk_mark_down(const TAGPU_VKPASS* d)
     s_state = ST_UNBUILT;
     s_drawThis = 0; s_abFrame = 0;
     s_downOwed = 0; s_downPaying = 0;
-    s_saidLine = s_saidWide = s_saidFog = s_saidRoom = s_saidPal = 0;
-    s_saidSel = s_saidSelW = 0;
+    s_saidFog = s_saidRoom = s_saidPal = 0;
     s_saidEmpty = s_saidMany = s_saidBound = s_saidTexA = 0;
     s_saidImgT = s_saidImgP = s_saidImgF = s_saidImgS = 0;
     s_saidNoDraw = s_saidSlot = 0;

@@ -41,12 +41,11 @@
    the wrong grid. The vertex shader scales this pass by `zoom` about the zoom
    centre, so a one-unit quantisation here is `zoom * ss` DEVICE pixels on
    screen, and the bar steps 2-4 px diagonally at max zoom-in while the body
-   glides underneath it. (The selection box does not floor in these units
-   either: `tagpu_native.c` snaps its corners forward through the zoom, floors
-   THERE, and comes back — a device-pixel step.) The anchor keeps its fraction
-   to the last moment and `snap_device` puts it on the device grid, so the step
-   is one device pixel at every zoom, and the two markers agree because they
-   are quantised on the same grid.
+   glides underneath it. The anchor keeps its fraction to the last moment and
+   `snap_device` puts it on the device grid, so the step is one device pixel
+   at every zoom. (The selection box does not floor in these units either: it
+   is a line, and a line's ends are quantised AFTER the zoom, on the game-pixel
+   grid the engine's walk runs on -- tagpu_line.h.)
 
    THE BUILD CURSOR and the drag band box are re-drawn for the same reason,
    and it is the reason a captured layer can never fix them: the capture is
@@ -91,6 +90,7 @@
 #include "tagpu_order.h"
 #include "tagpu_text.h"
 #include "tagpu_glsl.h"
+#include "tagpu_line.h"
 #include "tagpu_pal.h"
 #include "tagpu_vk.h"      /* tagpu_vk_ab_arm, for the A/B claim */
 #include "tagpu_packet.h"   /* the frame packet: the view, the tables */
@@ -137,7 +137,7 @@
 /* Sized for tagpu_order.c's MAXORD records at the design point; an overflow
    loses markers and is counted, never written past the end. */
 #define MAXORDT      36000                   /* order triangle verts (dots)  */
-#define MAXORDL      36000                   /* order line verts (2 per line)*/
+#define MAXORDL      18000                   /* order lines, one record each */
 /* Text quads: the ShowRanges labels (up to twelve per SELECTED unit with the
    toggle on) and one group digit per watched unit, in ONE bucket — 2 400 quads,
    460 KB. The order gather runs first, so a frame that overruns this loses the
@@ -241,7 +241,7 @@ int tagpu_mark_armed(unsigned frame_counter)
 
 /* THE TWO BUCKETS THAT SCALE WITH THE UNIT COUNT ARE GROWN, NOT FIXED: the
    health bars (two quads per unit of the watched player) and the selection
-   rects (eight vertices per selected unit). `tagpu_mark_gather` grows both to
+   rects (four line records per selected unit). `tagpu_mark_gather` grows both to
    the packet's unit count before anything is emitted into them, and only the
    render thread touches either, so no pointer into one outlives a realloc.
    The vertex INDEX space is unchanged: the cursor rects are 0..BARBASE-1 in
@@ -250,15 +250,16 @@ int tagpu_mark_armed(unsigned frame_counter)
 static float  s_verts[BARBASE * MVST];  /* the cursor rects                   */
 static float* s_barv;  static unsigned s_barvCap;  /* bars, in vertices       */
 static float  s_ordt[MAXORDT * MVST];   /* order markers: filled triangles    */
-static float  s_ordl[MAXORDL * MVST];   /* order markers: a line list         */
+static float  s_ordl[MAXORDL * MVST];   /* order markers: line records        */
 static float  s_ordx[MAXORDX * MVST];   /* text quads: labels, then digits    */
-static float* s_sel;   static unsigned s_selCap;   /* selection rects, verts  */
+static float* s_sel;   static unsigned s_selCap;   /* selection rects, lines  */
 static int    s_saidGrow;
-static int   s_nsel, s_selover;        /* their verts / rects refused, a frame */
+static int   s_nsel, s_selover;        /* their lines / rects refused, a frame */
+static int   s_lfar;                   /* lines past tagpu_line.h's bound     */
 static int   s_nbar;                   /* bars gathered (2 quads each)        */
 static int   s_cBar;                   /* counted, whether emitted or not     */
 static int   s_ncurs;                  /* build cursor / band box verts       */
-static int   s_nordt, s_nordl;         /* order marker verts, this frame      */
+static int   s_nordt, s_nordl;         /* order tri verts / lines, this frame */
 static int   s_nordx;                  /* text verts, this frame              */
 /* Where the ShowRanges labels end and the group digits begin. The engine draws
    the labels from inside the order driver at `0x469BFC` and the digit at
@@ -297,9 +298,8 @@ static const char* VS =
        tracks the unit it belongs to at any zoom */
     "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC;\n"
     /* markers are the frame's top layer, drawn with the depth test off, and
-       carry 0 here; the selection rects alone carry a real z (the unit pass's
-       own `1 - enc/uDepthScale`, computed by the caller) and are the one draw
-       that tests it -- see tagpu_mark_emit_selbox */
+       carry 0 here; the selection rects alone carry a real z and test it, and
+       they are lines, drawn by LVS below -- see tagpu_mark_emit_selbox */
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0, aDepth, 1.0);\n"
     "  vUV = aUV; vWorld = aWorld; vCol = aCol;\n"
     "}\n";
@@ -330,8 +330,7 @@ static const char* FS =
     "    if (texture(uLayer, vUV).r < 0.5) discard;\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
     /* a negative u marks the flat path: the vertex carries a palette index
-       instead of a texel (health bars), the same convention the effects pass
-       uses for its lines */
+       instead of a texel (health bars, order dots) */
     "  } else if (vUV.x < 0.0) {\n"
     "    pi = int(vCol * 255.0 + 0.5);\n"
     "  } else {\n"
@@ -339,98 +338,69 @@ static const char* FS =
     "    if (pi == uKey) discard;\n"
     "  }\n"
     /* THE GREY BAND: the RGB rule every world pass takes (renderers.md 2.6).
-       SFS below carries the same lines. */
+       LFS below carries the same lines. */
     "  vec3 rgb = texelFetch(uPal, ivec2(pi, 0), 0).rgb;\n"
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
     "  frag = vec4(rgb, 1.0);\n"
     "}\n";
-/* ---- THE SELECTION RECT'S PROGRAM: the engine's own line, pixel for pixel ----
-   A plain line drawn into the supersampled target steps on the TARGET'S grid,
-   half a game pixel at a time at ss=2, and the box-filter composite then
-   smears every diagonal across two game pixels at 20-80 % of the colour
-   [MEASURED 2026-09-23 on selbox-facings: 262 of 290 rect pixels below full
-   coverage, where the engine's are all 100 %].
+/* ---- THE LINE PROGRAM: the engine's own line, pixel for pixel ----
+   Every line this pass draws -- the order lines, the range arcs, the waypoint
+   crosshairs and the selection rects -- is `DrawLine`'s Bresenham (`0x4CC7AB`)
+   on the GAME-pixel grid, with each lit game pixel covered whole: all `ss` x
+   `ss` target pixels of it, so it resolves to the full colour at any `ss`.
+   A line primitive cannot promise that. Vulkan's lines step on the TARGET's
+   grid, half a game pixel at a time at ss=2, and even its BRESENHAM mode lets
+   an implementation deviate by one unit -- so the pixels would be the GPU's.
 
-   SO THE LINE PRIMITIVE IS ONLY A BAND THAT COVERS THE PIXELS, and the
-   fragment stage decides which pixels are on the line: it takes the GAME pixel
-   a sample lies in and keeps it only when that pixel is one `DrawLine`'s
-   Bresenham (`0x4CC7AB`, after the clip at `0x4CC650`) would plot. Every
-   sample of a kept pixel survives, so each one resolves to the full colour at
-   any `ss`, and the set of pixels is the engine's at any zoom -- the test runs
-   on the SCREEN's game-pixel grid, where tagpu_native.c has already snapped
-   the corners.
+   SO THE PRIMITIVE IS A BAND AND THE FRAGMENT STAGE DECIDES. One instance a
+   line: `aPos` and `aUV` are its two ends, already INTEGER game pixels after
+   the wheel zoom (tagpu_line.h, decided on the CPU by `put_line` below), and
+   the vertex stage draws a quad around the segment between their centres
+   (`taBand`, tagpu_glsl.h, which states the coverage bound). The fragment
+   stage takes the game pixel the target pixel's centre lies in and keeps it
+   only when `taOnLine` says the engine's walk plots it -- integer arithmetic
+   throughout, so the set cannot differ between two GPUs.
 
-   THE ENGINE'S RULE, read off `0x4CC7AB` [BINARY-VERIFIED 2026-09-23]: the
-   endpoints are swapped so the walk always starts at the SMALLER x
-   (`0x4CC7F1`..`0x4CC804`); a zero dx is a straight column fill and a zero dy a
-   straight run; otherwise the error term starts at `2*minor - major`
-   (`0x4CC82A`..`0x4CC835`) and the minor step is taken when it is NOT
-   negative (`jns`, `0x4CC89A`/`0x4CC8C8`), so a tie steps. Unrolled, the
-   pixel `i` major steps from the start is `minor offset = (2*minor*i + major)
-   / (2*major)` in integers -- which is what the test below evaluates.
-
-   `vA`/`vB` are the edge's two ends, FLAT: the provoking vertex of a line is
-   its first, and the emitter writes each vertex's own end in `aPos` and the
-   other in `aUV`, so both arrive whatever the order. The vertex stage pushes
-   each end one game pixel further out ALONG THE SEGMENT -- one unit of the
-   major axis, and the minor axis in proportion -- so the band covers the end
-   pixels whole; the test clips back to them. Along the major axis alone would
-   TILT the band (slope dy/(dx+2)) and leave it up to 0.9 game px off the line
-   at the ends of a long diagonal -- "the cap must run along the segment"
-   (ui-markers.md §1).
-   The band's WIDTH is tagpu_vk_mark.c's. */
-static const char* SVS =
+   `uGrid` is (game width, game height, target width, target height), set per
+   draw by tagpu_vk_mark.c from the extent it records into: the game pixel of a
+   sample is a fact about THIS target, and on a frame the offscreen target
+   refused the world is drawn into the swapchain image at whatever scale that
+   is. The samplers and the first five uniforms are FS's, in FS's order, so the
+   two programs share one descriptor layout and one uniform window: `uGrid`
+   lands after them at offset 32. */
+static const char* LVS =
     "#version 330 core\n"
-    "layout(location=0) in vec2 aPos;\n"     /* this end of the edge          */
-    "layout(location=1) in vec2 aUV;\n"      /* and the other one             */
+    "layout(location=0) in vec2 aPos;\n"     /* end A, game px after the zoom */
+    "layout(location=1) in vec2 aUV;\n"      /* end B                         */
     "layout(location=2) in vec2 aWorld;\n"
     "layout(location=3) in float aCol;\n"
     "layout(location=4) in float aDepth;\n"
     "uniform vec2 uGame;\n"
-    "uniform float uZoom;\n"
-    "uniform vec2 uZoomC;\n"
-    "out vec2 vWorld; out float vCol; flat out vec2 vA; flat out vec2 vB;\n"
+    "out vec2 vWorld; flat out float vCol; flat out vec4 vLine;\n"
+    TAGPU_GLSL_BAND_FN
     "void main(){\n"
-    "  vec2 a = (aPos - uZoomC) * uZoom + uZoomC;\n"
-    "  vec2 b = (aUV  - uZoomC) * uZoom + uZoomC;\n"
-    "  vec2 d = a - b;\n"
-    "  float m = max(abs(d.x), abs(d.y));\n"
-    "  vec2 p = m > 0.0 ? a + d / m : a;\n"
+    "  float t;\n"
+    "  vec2 p = taBand(aPos, aUV, gl_VertexID, t);\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0, aDepth, 1.0);\n"
-    "  vWorld = aWorld; vCol = aCol; vA = a; vB = b;\n"
+    "  vWorld = aWorld; vCol = aCol; vLine = vec4(aPos, aUV);\n"
     "}\n";
-/* The samplers and the first five uniforms are FS's, in FS's order, so the two
-   programs share one descriptor layout and one uniform window: `uPx` lands
-   after them at offset 32 and the C side writes it into every draw's block. */
-static const char* SFS =
+static const char* LFS =
     "#version 330 core\n"
-    "in vec2 vWorld; in float vCol; flat in vec2 vA; flat in vec2 vB;\n"
+    "in vec2 vWorld; flat in float vCol; flat in vec4 vLine;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uLayer;\n"
     "uniform sampler2D uPal;\n"
     "uniform int uKey;\n"
     "uniform int uText;\n"
     TAGPU_GLSL_FOG_UNIFORMS
-    "uniform vec2 uPx;\n"                    /* target pixels per game pixel  */
+    "uniform ivec4 uGrid;\n"
     TAGPU_GLSL_FOG_FN
+    TAGPU_GLSL_LINE_FN
     "void main(){\n"
     /* gl_FragCoord has its origin top-left under Vulkan, which is the
        engine's own y -- the lane draws with no flip */
-    "  ivec2 g = ivec2(floor(gl_FragCoord.xy / uPx));\n"
-    "  ivec2 a = ivec2(floor(vA)), b = ivec2(floor(vB));\n"
-    "  if (a.x > b.x) { ivec2 t = a; a = b; b = t; }\n"
-    "  int dx = b.x - a.x, dy = b.y - a.y;\n"
-    "  int ady = abs(dy), s = dy < 0 ? -1 : 1;\n"
-    "  bool on;\n"
-    "  if (ady <= dx) {\n"
-    "    int i = g.x - a.x;\n"
-    "    on = i >= 0 && i <= dx &&\n"
-    "         g.y == a.y + (dx == 0 ? 0 : s * ((2 * ady * i + dx) / (2 * dx)));\n"
-    "  } else {\n"
-    "    int j = (g.y - a.y) * s;\n"
-    "    on = j >= 0 && j <= ady && g.x == a.x + (2 * dx * j + ady) / (2 * ady);\n"
-    "  }\n"
-    "  if (!on) discard;\n"
+    "  if (!taOnLine(taGamePx(gl_FragCoord.xy, uGrid), ivec2(vLine.xy), ivec2(vLine.zw)))\n"
+    "    discard;\n"
     TAGPU_GLSL_FOG_DISCARD
     "  int pi = int(vCol * 255.0 + 0.5);\n"
     /* the grey band exactly as FS takes it */
@@ -441,7 +411,7 @@ static const char* SFS =
 #pragma GCC diagnostic pop
 
 /* THE SHADER SOURCES ABOVE ARE THE SOURCE OF TRUTH for the Vulkan shaders.
-   The build reads them out of this file (tools/spirv-gen.py, the `mark` entry
+   The build reads them out of this file (tools/spirv-gen.py, the `mark` and `mark_line` entries
    of its PROGRAMS table), translates them, and `make` fails if
    `inc/spirv/tagpu_mark.spv.h` has drifted from them. They are GLSL strings
    and nothing compiles them at run time. The gather below fills
@@ -472,18 +442,39 @@ static void put_ord(float* base, int i, float x, float y, float wx, float wz,
                     float col)
 {
     /* u < 0 is the flat path — the vertex carries a palette index rather than
-       a texel, the convention the health bars and the effects lines share */
+       a texel, the convention the health bars share */
     put_at(base, i, x, y, -1.0f, -1.0f, wx, wz, col);
 }
 
+/* ONE LINE RECORD, the instance LVS draws: the two ends' game pixels AFTER
+   the wheel zoom (tagpu_line.h's rule, with this frame's zoom from the
+   gather), then the fog cell, the colour and the depth. The ends go in the
+   (x, y) and (u, v) slots of the vertex layout, so a line record and a
+   triangle vertex share one stride and one buffer. 0, and counted in
+   `s_lfar`, for a line tagpu_line.h's bound refuses. */
+static int put_line(float* o, double x0, double y0, double x1, double y1,
+                    float wx, float wz, float col, float depth)
+{
+    int ax, ay, bx, by;
+    if (!tagpu_line_px(x0, y0, s_zoom, s_zcx, s_zcy, &ax, &ay) ||
+        !tagpu_line_px(x1, y1, s_zoom, s_zcx, s_zcy, &bx, &by)) {
+        s_lfar++;
+        return 0;
+    }
+    o[0] = (float)ax; o[1] = (float)ay; o[2] = (float)bx; o[3] = (float)by;
+    o[4] = wx; o[5] = wz; o[6] = col; o[7] = depth;
+    return 1;
+}
+
+/* 0 only when the bucket is full, which the caller counts; a line the bound
+   refuses is counted here and is not the caller's overflow */
 int tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
                          int colidx, float wx, float wz)
 {
-    float c = (float)colidx / 255.0f;
-    if (s_nordl + 2 > MAXORDL) return 0;
-    put_ord(s_ordl, s_nordl + 0, x0, y0, wx, wz, c);
-    put_ord(s_ordl, s_nordl + 1, x1, y1, wx, wz, c);
-    s_nordl += 2;
+    if (s_nordl >= MAXORDL) return 0;
+    if (put_line(s_ordl + (size_t)s_nordl * MVST, x0, y0, x1, y1, wx, wz,
+                 (float)colidx / 255.0f, 0.0f))
+        s_nordl++;
     return 1;
 }
 
@@ -514,37 +505,27 @@ int tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
    `s_armed` is this module's own 30-frame poll and the caller runs between
    this frame's gather and its render, which is where the bucket is reset and
    published; `tagpu_mark_frame` resets it too, so a frame whose gather did not
-   run cannot publish another frame's rects. */
+   run cannot publish another frame's rects.
+
+   The corners are engine pixel centres (tagpu_native.c `selbox_emit`), and
+   four line records follow them round. A ZERO-LENGTH EDGE IS ONE PIXEL, NOT
+   NOTHING: a root piece with fewer than three vertices bounds to the bare
+   origin, so all four corners coincide, and the engine's DrawLine takes its
+   dx == 0 column fill and plots the one pixel (`0x4CC83B`, `inc ecx`). Both
+   ends then land on one game pixel, `taOnLine` keeps exactly it and `taBand`
+   draws a square round it. */
 int tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
                            float wx, float wz, float depth)
 {
     float c = (float)colidx / 255.0f;
     int k;
     if (s_armed != 1 || s_passive || !s_selbox) return 0;
-    if ((unsigned)s_nsel + 8u > s_selCap) { s_selover++; return 0; }
+    if ((unsigned)s_nsel + 4u > s_selCap) { s_selover++; return 0; }
     for (k = 0; k < 4; k++) {
         int k2 = (k + 1) & 3;
-        float x0 = px[k], y0 = py[k], x1 = px[k2], y1 = py[k2];
-        /* A ZERO-LENGTH EDGE IS ONE PIXEL, NOT NOTHING. A root piece with
-           fewer than three vertices bounds to the bare origin, so all four
-           corners coincide; the engine's DrawLine takes its dx == 0 column
-           fill and plots the one pixel (`0x4CC83B`, `inc ecx`), while a line
-           of zero length rasterises no fragment at all. Split the ends a
-           quarter of a SCREEN pixel either way: both still floor to the same
-           game pixel, so the fragment test keeps exactly that one, and the
-           band now has a direction to be drawn in. `s_px` is one screen pixel
-           in these (pre-zoom) units, set by this frame's gather. */
-        if (x0 == x1 && y0 == y1) {
-            float h = (float)(0.25 * s_px);
-            x0 -= h; x1 += h;
-        }
-        /* each vertex carries its own end in (x, y) and the OTHER end in
-           (u, v): the program's fragment test needs both (SVS/SFS above) */
-        put_at(s_sel, s_nsel + 0, x0, y0, x1, y1, wx, wz, c);
-        put_at(s_sel, s_nsel + 1, x1, y1, x0, y0, wx, wz, c);
-        s_sel[(size_t)(s_nsel + 0) * MVST + 7] = depth;
-        s_sel[(size_t)(s_nsel + 1) * MVST + 7] = depth;
-        s_nsel += 2;
+        if (put_line(s_sel + (size_t)s_nsel * MVST, px[k], py[k], px[k2], py[k2],
+                     wx, wz, c, depth))
+            s_nsel++;
     }
     return 1;
 }
@@ -807,7 +788,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     int watched, nv = BARBASE;
 
     s_nbar = 0; s_cBar = 0; s_nordt = 0; s_nordl = 0; s_nordx = 0;
-    s_nsel = 0; s_selover = 0;
+    s_nsel = 0; s_selover = 0; s_lfar = 0;
     s_nordxOrd = 0; s_ntext = 0; s_xover = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit
@@ -815,7 +796,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        bucket that would not grow keeps its old size, and the caps below then
        count what they refuse. */
     if (!grow_verts(&s_barv, &s_barvCap, pk->n_units * 2u * QUADV) ||
-        !grow_verts(&s_sel, &s_selCap, pk->n_units * 8u)) {
+        !grow_verts(&s_sel, &s_selCap, pk->n_units * 4u)) {
         if (!s_saidGrow) {
             s_saidGrow = 1;
             flog("mark: a unit-scaled marker bucket would not grow to the packet's "
@@ -1125,10 +1106,9 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        cursor last of all — after the fog overlay, which is why it carries no
        fog. */
     if (s_nordt || s_nordl) {
-        /* one SCREEN pixel of line, which is `ss` device pixels of the
-           supersampled target — the same rule the effects pass uses, and what
-           keeps a native-res marker a hairline at 4x instead of a 1997 pixel
-           blown up to sixteen */
+        /* the lines are LVS's instances, one GAME pixel wide at any `ss` --
+           the rule the effects lines and the nanoframe wire follow too
+           (tagpu_line.h) */
         if (s_nordt) {
             mk_draw(total, s_nordt, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
         }
@@ -1167,6 +1147,23 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         s_abFrame = tagpu_vk_ab_arm("mark");
         s_abDone = 1;
         s_abTaking = 0;
+        /* and the frame's lines, in the order the list above draws them:
+           the rects, then the order lines (tagpu_line.h) */
+        {
+            FILE* f = tagpu_line_list_open("mark", v->gw, v->gh);
+            int i;
+            for (i = 0; i < s_nsel; i++) {
+                const float* o = s_sel + (size_t)i * MVST;
+                tagpu_line_list_add(f, (int)o[0], (int)o[1], (int)o[2], (int)o[3],
+                                    (int)(o[6] * 255.0f + 0.5f));
+            }
+            for (i = 0; i < s_nordl; i++) {
+                const float* o = s_ordl + (size_t)i * MVST;
+                tagpu_line_list_add(f, (int)o[0], (int)o[1], (int)o[2], (int)o[3],
+                                    (int)(o[6] * 255.0f + 0.5f));
+            }
+            if (f) fclose(f);
+        }
     }
 
     /* PUBLISHED ONLY IF THE RECORD IS THE WHOLE DRAW. A list short of what the
@@ -1207,11 +1204,11 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
             tagpu_text_stats(&nstr, &ndrop);
             _snprintf(b, sizeof b,
                 "mark: bars=%d sel=%d selover=%d cursor=%d ordtri=%d "
-                "ordline=%d text=%d(lab=%d) "
+                "ordline=%d far=%d text=%d(lab=%d) "
                 "atlas=%d/%d over=%d key=%d vp=(%d,%d %dx%d) "
                 "zoom=%.2f%s",
-                s_cBar, s_nsel / 8, s_selover, s_ncurs / QUADV, s_nordt / 3,
-                s_nordl / 2,
+                s_cBar, s_nsel / 4, s_selover, s_ncurs / QUADV, s_nordt / 3,
+                s_nordl, s_lfar,
                 s_ntext, s_nordxOrd / QUADV, nstr, ndrop, s_xover,
                 tagpu_markown_key(), v->vpL, v->vpT, v->vw, v->vh, v->zoom,
                 s_passive ? " (passive: engine still drawing)" : "");

@@ -17,12 +17,11 @@
    that order, in one frame. `prepare` returning 0 means there is nothing to
    draw and `record` must not be called.
 
-   IT IS THE FIRST PASS THAT NEEDS MORE THAN ONE PIPELINE FOR ONE SHADER. The
-   four buckets share one shader but need three different pieces of
-   fixed-function state -- a LINE_LIST for the lasers and the lightning, and
-   additive blending for the flashes -- and all three of those are pipeline
-   state in Vulkan. See the implementation's header for what that costs and for
-   the one parity question it opens, which is line rasterisation. */
+   IT IS THE FIRST PASS THAT NEEDS MORE THAN ONE PIPELINE. The four buckets
+   need three -- the triangles, the lasers and the lightning as instanced
+   bands with a program of their own, and additive blending for the flashes --
+   and each of those is pipeline state in Vulkan. See the implementation's
+   header for what that costs and why the lines are triangles. */
 
 #include "tagpu_vk_pass.h"
 
