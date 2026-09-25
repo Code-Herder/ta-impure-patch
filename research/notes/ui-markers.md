@@ -376,7 +376,7 @@ the viewport edge the rect's lines are DrawLine's: `put_line` puts each edge's i
 through `tagpu_line_clip` — `0x4BEA20` against the viewport, then `0x4CC650` against the surface
 — so an edge crossing it is walked from the end the engine's clip moves (exe-reverse-engineering.md,
 `0x4BEA20`; measured 0 px against the oracle and matching the engine's frame on the one changed
-line of an edge view, gpu-status.md §2.92). The rect needs no device line feature; it
+line of an edge view, gpu-status.md §2.93). The rect needs no device line feature; it
 is not drawn only where its depth-tested pipeline will not build, which drops the rects and not
 the rest of the marker layer, and says so once in the log.
 

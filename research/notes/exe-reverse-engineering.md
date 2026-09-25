@@ -8322,6 +8322,185 @@ but a *freeze* — the engine's own handler reports `Access Violation … at 014
 attempt and every thread then waits on the wineserver, which is what the first tank runs
 looked like before the site's displacement was fixed.
 
+## The registry — every call site, key and value — mapped by us [DISASSEMBLED + MEASURED 2026-09-25]
+
+What the game asks of the registry. It was mapped for the test-mode registry store,
+`tagpu_regstore.c`, which answers these calls from a file in a tacli test folder ([tacli
+design](tacli-design.html) §"The registry: a file in the test folder"). The disassembly is of
+`pristine/TotalA.exe.pristine`. The values come from a logged run of the store under wine
+(startup, the menus, a skirmish started through `tacli ui`): the DLL logs every key and value
+the first time it is opened, read or written, with the answer.
+
+### The imports, and every call through them
+
+Nine ADVAPI32 imports, all by name, at the start of `.rdata`. Several sites load the slot into
+a register once and call through it; the register is given with the load.
+
+| IAT slot | function | call sites |
+|---|---|---|
+| `0x4FC000` | `RegOpenKeyExA` | `0x49EA8D`, `0x49ECF0`, `0x4B5151` |
+| `0x4FC004` | `RegQueryValueExA` | `0x49EAB1`, `0x4B51B1`, `0x4B692D`, `0x4E2D2A`, `0x4E2DBA` |
+| `0x4FC008` | `RegCreateKeyA` | `0x4E2C6A`, `0x4E2C7B`, `0x4E2C90` (`ebp`, loaded at `0x4E2C55`) |
+| `0x4FC00C` | `RegOpenKeyA` | `0x4DA629`, `0x4DA69C` (`ebx`, `0x4DA610`); `0x4E2C17`, `0x4E2C28`, `0x4E2C3D` (`ebp`, `0x4E2C02`) |
+| `0x4FC010` | `RegQueryValueA` | `0x4DA644`, `0x4DA6BA` |
+| `0x4FC014` | `RegCreateKeyExA` | `0x4B68CB`, `0x4B68EE`, `0x4B690D` (`edi`, `0x4B689F`) |
+| `0x4FC018` | `RegSetValueExA` | `0x49EACE`, `0x49ED17`, `0x4B6961`, `0x4E2D83`, `0x4E2E13` |
+| `0x4FC01C` | `RegFlushKey` | `0x49EB63`, `0x49ED22` |
+| `0x4FC020` | `RegCloseKey` | `0x49EB6E`, `0x49ED2D`, `0x4B51BE`, `0x4B6985`/`0x4B6990`/`0x4B699B` (`esi`, `0x4B697A`), `0x4DA65D`, `0x4DA6C9` (`ebp`, `0x4DA656`) |
+
+**The import slots are the only way in** (negative results):
+
+- the nine `jmp [slot]` thunks (`0x49F83C..0x49F854`, `0x4FB422..0x4FB434`) have no caller: no
+  relative call or jump reaches them, and no absolute pointer to them is in the file;
+- no registry function is looked up by name: the only strings of the exe that name one are the
+  import table's;
+- `RegFlushKey` is called only on the CD autoplay key (below). TA never flushes its own key.
+
+### The six sites
+
+1. **The CD autoplay verb** — in `0x49E830` [INFERRED: WinMain; its one caller is `0x49EDDD`,
+   the call TADR hooks as the entry point]. At startup (`0x49EA67..0x49EB6E`, right after
+   `UIPipelinesInit 0x491200` at `0x49EA62`) it opens `HKLM\SOFTWARE\Classes\AudioCD\shell`
+   (`0x5097B0`) with `KEY_ALL_ACCESS` (`0xF003F`), and skips everything below if the open fails
+   (`jne 0x49EB74`). If the key has a default value (read into 50 bytes), it sets the default to
+   the empty string (`0x5119B8`, a zeroed `.data` string that other sites push as `""`), which
+   turns CD autoplay off while the game runs. If TA's own `cdshell` (`0x5097A8`, read through
+   `0x42F980`) is empty, it saves the old default there (`0x42F960`, REG_BINARY). Then it
+   flushes and closes. At exit (`0x49ECDB..0x49ED6A`, after the message loop) it reopens the
+   key the same way, writes the saved default back, flushes, closes, and saves an empty
+   `cdshell` (`0x49ED65`).
+2. **The DirectX version check `0x4B5070`** (one caller, `0x4266A0`; its warning is the one
+   `tagpu_patches.c` patches out at `0x4266A7`): `RegOpenKeyExA(HKLM, "Software\Microsoft\DirectX",
+   KEY_READ)` at `0x4B5151`, one read of `InstalledVersion` (`0x4FDB80`) or `Version` (`0x4FDB78`),
+   chosen at `0x4B5169`, at `0x4B51B1`, and a close. Read-only.
+3. **The settings accessor `0x4B6880(subkey, name, data, size*, type, read)`**, `ret 0x18`. It
+   opens three levels with `RegCreateKeyExA` from `HKCU`: `Software` (`0x509ED0`), `Cavedog
+   Entertainment` (`0x509EB8`), then `subkey`, asking for `KEY_READ` (`0x20019`) when reading
+   and `KEY_WRITE` (`0x20006`) when writing, so **a read creates the keys it does not find**.
+   Then it calls `RegQueryValueExA` with no type pointer (success and `ERROR_MORE_DATA`, 0xEA,
+   both count as success) or `RegSetValueExA(type, data, *size)`, and closes all three. The
+   callers pass the section `Total Annihilation` (`0x5032E8`), except the six values of each
+   skirmish player, whose section is `Total Annihilation\Skirmish` (`0x503300`): six callers of
+   the dword read from `0x430C40` on and six of the dword write from `0x43161B` on. Its
+   wrappers:
+
+   | wrapper | what | callers |
+   |---|---|---|
+   | `0x4B6860`, `0x4B69B0` | read raw bytes into `buf` (size in and out) | 1 (`0x42F980`), 6 |
+   | `0x4B69D0` | read a dword | 61 |
+   | `0x4B6A00` | write REG_BINARY | 1 (`0x42F960`) |
+   | `0x4B6A20` | write a string (REG_SZ, `strlen + 1`) | 7 |
+   | `0x4B6A50` | write a dword (`SaveSetting`) | 92 |
+
+   The dword wrappers carry the options: the loader `0x42F9A0` and the saver
+   `REGISTRY_SaveSettings 0x430F00` ("The Visuals options the store owns" above). `0x42F980` and
+   `0x42F960` are the raw read and the binary write with the section bound, used for `cdshell`,
+   `language` (read at `0x49E9F7`), `CDLISTS` (read at `0x490F58` and `0x491412`, written at
+   `0x490FD1` and `0x4916F1`) and the multiplayer connection values (`TCPADDR`, `SERBAUD`,
+   `SERPORT`, `MODEMNUMBERS`, …).
+4. **Open a document, `0x4DA5B0(hwnd, file)`**: `ShellExecuteA(hwnd, "open", file, NULL, ".",
+   SW_SHOWNORMAL)` at `0x4DA5DD`. When that fails, it reads the file type's association from
+   `HKCR` by hand: `RegOpenKeyA` on the extension (found with `strrchr(file, '.')`) and
+   `RegQueryValueA` for its class, then `%s\shell\open\command` (`0x50D318`) and
+   `RegQueryValueA` for the command, and runs that (`0x4DA730`). Read-only. Callers `0x4DF974`
+   and `0x4E132A` [screens not identified]; the logged runs never reached it.
+5. **A registry-key object, `0x4E2BE0(this, read, subkey, section)`**, `ret 0xC`. It opens
+   (`RegOpenKeyA`, for reading) or creates (`RegCreateKeyA`, for writing)
+   `HKCU\Software\Cavedog Entertainment` (`0x50DDF4`), then `section` (the string at
+   `*0x529E80` when NULL), then `subkey`. Its four constructions name the engine library's own
+   keys [INFERRED from the names]: `CavedogLibrary` (`0x50D74C`) with `PerformanceSettings`
+   (`0x50DD84`) at `0x4E1B26` and with a computed subkey at `0x4E053A`, and `Cavedog library`
+   (`0x50DE40`) with a computed subkey at `0x4E3140` (reading) and `0x4E3481` (writing). It keeps the last handle at `this+0` and the direction at `this+4`, and
+   **never closes any of the three**: no `RegCloseKey` is reached from it or its methods, so
+   every construction leaks three handles. Its value methods clamp: `0x4E2D00` (signed) and
+   `0x4E2D90` (unsigned) read a `REG_DWORD` of exactly 4 bytes and clamp it to `[min, max]`, or
+   return the default; `0x4E2D70` and `0x4E2E00` write a `REG_DWORD`. The exchangers `0x4E2E20`,
+   `0x4E2E60`, `0x4E2EA0`, … pick the read or the write on `this+4`, so one routine both loads
+   and saves a record. The logged runs never reached it: no key under either section was
+   opened.
+6. **The `-r` switch** reaches the registry through no import of its own: the handler
+   `0x49F249` loads `dsetup.dll` (`0x4FDAC0`) and calls `DirectXRegisterApplicationA`
+   (`0x4FDAA0`, found with `GetProcAddress`), which writes DirectPlay's application key through
+   `dsetup.dll`'s own imports, then quits ([command-line options](cmdline-options.html)). In
+   test mode `tagpu_patches.c` points the switch's two jump-table entries (`0x49F4B8` for `R`,
+   `0x49F4EC` for `r`, both `0x49F249`) at the loop tail `0x49F461`, where every unknown letter
+   goes (entry 26, `0x49F4FC`). The parser is `CmdlineArgsNormalize 0x49EE30` (called at
+   `0x49E8D2`, its token loop head `0x49EED3`); the same rule is what lets tacli's token
+   `-xtacli-test` through untouched ([command-line options](cmdline-options.html)).
+   **MEASURED**: `TotalA.exe -r` in a test-mode instance logged `the -r switch (DirectPlay
+   registration through dsetup.dll) is ignored` and stayed in its front end until stopped 45 s
+   later; stock, the switch quits.
+
+### What the game reads and writes [MEASURED 2026-09-25]
+
+The logged run, all under `HKCU\Software\Cavedog Entertainment\Total Annihilation`:
+
+- **Read and written** (52 values): `Interface Type`, `DisplaymodeWidth`,
+  `DisplaymodeHeight`, `side`, `Difficulty`, `scrollspeed`, `Single`/`Multi`/`Skirmish` ×
+  `CommanderDeath`, `Mapping`, `LineOfSight`, `LOSType`, `SkirmishDifficulty`,
+  `SkirmishLocation`, `SkirmishMap`, `screenchat`, `damagebars`, `Sound Mode`, `MixingBuffers`,
+  `RestoreVolume`, `Anti-Alias`, `Shadows`, `FeatureShadows`, `VehicleShadows`, `Shading`,
+  `DitheredFog`, `Gamma`, `SwitchAlt`, `Password`, `Nickname`, `Game Name`, `textlines`,
+  `textscroll`, `mousespeed`, `gamespeed`, `unitchat`, `unitchattext`, `musicmode`, `cdmode`,
+  `ackfx`, `buildfx`, `speechfx`, `fxvol`, `musicvol`, `clock`, `PlayMovie`; and
+  `FixedLocations`, written without being read.
+- **Read only**: `CDLISTS`, and, absent in that key, `language`, `Image Output Directory`,
+  `Movie Output Rate`, `NumSkirmishPlayers`, `DisplaymodeDepth`, `AllMissions`.
+- **`Skirmish\`**: `Player0..3` × `Controller`, `Side`, `Color`, `AllyGroup`, `Metal`, `Energy`,
+  read and written (24 values).
+- Outside the key: the CD autoplay key (refused in test mode, so `cdshell` was never reached)
+  and the DirectX version (passed through, read-only).
+
+The store's counters at its last rewrite of the file in that run (a stopped game logs no exit
+line): 424 opens, 164 reads (11 of them absent) and 48 writes. The accessor (site 3) opens the
+keys again for every value, hence the opens.
+
+**`MixingBuffers` is the settings store's value, written into the registry by the game.** The
+loader reads it at `0x42FE4F` into the sound object through `0x4CF210`; `tagpu_menu.c`'s
+`eng_push_mixing` then writes `impure.cfg`'s value into the same field (`+0x2C`) after every
+load; and the saver reads that field back (`0x4CF220` at `0x4310A5`) and writes it at
+`0x4310AB`. So every launch whose saver runs writes `impure.cfg`'s mixing buffers into the
+registry: a player's into the player's key, a test folder's into its store (the logged run
+wrote 32).
+
+### Outside TotalA.exe's own code
+
+- **`win32.dll`**, which the Steam/GOG build imports where the retail build imported `WINMM.dll`
+  ([binary patches](binary-patches.html)), imports `RegOpenKeyExA` and `RegQueryValueExA` and
+  nothing else of the registry. It reads `musicvol` (`0x100011AE`, `0x100011D4`) and `cdmode`
+  (`0x10001259`, `0x1000127F`) from `HKCU\SOFTWARE\Cavedog Entertainment\Total Annihilation\`
+  with `KEY_READ`, and imports no `RegCloseKey`, so it never closes them [DISASSEMBLED, image
+  base `0x10000000`]. The store hooks its two imports as well.
+- **`online.dll` and what it loads and starts.** `TotalA.exe` loads `online.dll` itself: a
+  path built into `0x512DD0` from `online.dll` (`0x4FD4D0`, at `0x45B30B`), then `LoadLibraryA`
+  at `0x45B33F` (the same at `0x45B557` and `0x45B747`). `online.dll` imports no registry
+  function, but it searches the game folder for `ta*.dll` and loads each as a **Total
+  Annihilation Extension DLL**: `tamplayx.dll`, `takalix.dll`, `taheatx.dll`, `tawirepx.dll`,
+  `tadwngox.dll` and `tatenx.dll` export exactly `TotalAExtVersion`, `TotalAExtGetButtonText`
+  and `TotalAExtAction` (they are not DirectPlay service providers). The first four import
+  `RegOpenKeyExA`, `RegQueryValueExA` and `RegCloseKey`, the other two nothing of the registry.
+  `online.dll` starts each online service's client with `CreateProcessA` or `ShellExecuteA`
+  (its strings: `online.exe returned from CreateProcess`, `exec'ing command`). A client started
+  that way is another process, and that is what would load `mptaext.dll`: its exports are
+  Mplayer's offer negotiation (`MPOpenOffer`, `MPPrelaunchOffer`, …), it imports
+  `RegSetValueExA`, and no string of `TotalA.exe` or `online.dll` names it [INFERRED from the
+  exports]. `audiere.dll` and `smackw32.dll` import no registry function. Neither
+  `reporter.dll` nor `DebugHelper.dll`, which `TotalA.exe` also loads by name, is in the Steam
+  install.
+- **Our DLL**: the fork's `debug.c` reads `HKLM` version values, in `make DEBUG=1` builds only;
+  `utils.c` reads a Voobly key only when `age.dll` is loaded; `indeo.c` writes four `vidc.iv*`
+  values under `HKCU\…\Drivers32` at attach and deletes them at detach, which test mode skips
+  (the game plays Smacker and loads no Video for Windows codec). `tagpu_zoom.c` saves
+  `scrollspeed` through `SaveSetting 0x4B6A50`, so it reaches the registry through TA's own
+  imports.
+- **Not examined**: the system DLLs that may touch the registry for the game (DirectPlay,
+  DirectSound); what `ShellExecuteA` starts, from `0x4DA5B0` or from `online.dll`; what the
+  extension DLLs read, what `online.dll`'s child processes do, and `mptaext.dll` itself; and
+  the other names `TotalA.exe` gives `LoadLibraryA` (`DebugHelper.dll`, `reporter.dll`,
+  `IMAGEHLP.DLL`, `psapi.dll`). None of it is hooked, so none of it is covered by the test
+  mode's guarantee ([tacli design](tacli-design.html) §"The registry: a file in the test
+  folder").
+
 ## Hard-coded limits & constants
 
 [VERIFIED unless noted — from `EngineLimits.cpp`/`.h` and `tamem.h`]
