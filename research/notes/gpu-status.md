@@ -2128,16 +2128,16 @@ effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
 while it changes. The same table holds the simulation fixes of §2.6c, in both builds: 130 rows of
-the raise and 30 of the fixes in the raised build, 160 in all, and the fixes' 34 in the stock-limits
+the raise and 31 of the fixes in the raised build, 161 in all, and the fixes' 35 in the stock-limits
 build, where the weapon IDs' four sites join them (MEASURED 2026-09-25 from the log lines). It
 refuses a table in which two rows share a byte, reads every site (through `VirtualQuery`, never
 assuming the page), compares all of them with the stock bytes, and writes them only if every one
 matches; a refused write puts back what was written. The patches last for the process and are
 never restored. The log line names the moved pools' addresses for `tacli peek`: `limits:
-installed 160 sites, the simulation fixes' included -- …, units 1500 a player,
+installed 161 sites, the simulation fixes' included -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
 8192, unit types 16384, weapons 4096 at 0x…`; the stock-limits build logs `limits: stock build --
-nothing raised (…); the simulation fixes' 34 sites installed`.
+nothing raised (…); the simulation fixes' 35 sites installed`.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -2337,7 +2337,7 @@ hits a unit found past its twentieth victim, or a feature past its sixty-fourth,
 in the blast; flak fired nearly straight up divides by zero; a unit whose footprint ends on the
 map's last column or row is parked off the map, where nothing can hit it; and a unit whose altitude
 is more than twice its distance from the north edge is off every other player's line-of-sight grid.
-Seventeen fixes, built at every attach, in both builds, by `patch_engine_defects()` at the end of
+Eighteen fixes, built at every attach, in both builds, by `patch_engine_defects()` at the end of
 `tagpu_apply_patches()`. Each patch is the identity on every input stock handles correctly.
 
 **Two classes.** A *simulation* fix — one whose absence would let a player silently compute
@@ -2348,7 +2348,7 @@ full wreck pool, the reclaim mark, the border features, the saved record's owner
 the download menus, the sync keys, the weapon IDs, the victim caps, the last column and row, and
 the line of sight. A *local* fix — a crash, a draw, a message or a malformed input — compares and
 writes its own sites and is skipped alone: the sort buffer, the NULL plot, the terrain window, the
-composite scratch, the out-of-memory text and flak's divides. The engine map's table gives each
+composite scratch, the out-of-memory text, flak's divides and the projectile pass's view. The engine map's table gives each
 one's reason. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
@@ -2370,7 +2370,8 @@ engine defects we patch".
 | `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | area damage `0x49A120`, whose two stack lists hold 20 units and 64 feature anchors and whose damage runs for a victim past them once per cell of it in the blast | both calls of `0x49A120` retargeted to `dmg_area`, which holds a frame of two hash sets (unit slots, anchor ordinals; 32 keys each before they grow) as a local on the calling thread's stack, makes it the thread's innermost frame through a TLS slot for the call, and puts the previous one back; the 72-byte unit block and the 71-byte feature block replaced by calls of `dmg_unit_seen` / `dmg_feature_seen` that answer skip (`0x49A415`, `0x49A62B`) or damage (`0x49A2AA`, `0x49A615`) from the innermost frame's sets, each index bounded by the unit array's count or `W·H` first |
 | `0x49CF18`, `0x42F314`, `0x42F32E` | the ballistic fire `0x49CDE0`'s burnblow flight time, `idiv` by `v·cos(pitch)`, 0 within 0.35° of vertical; and its `div` by `w+0x68`, 0 for a ballistic weapon with `weaponvelocity` 0 | a `jmp` over the 9-byte `cdq; idiv ebp; mov edx,[main]` to a stub that divides as stock unless `ebp` is 0 and then takes `weapontimer` through `0x49CF29`, counted and logged; the loader's two calls of `0x49E010` routed through a stub that first gives such a weapon a `w+0x68` of 1, logged. Local |
 | `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | the grid stamp `0x47CC30`'s `X + fw ≥ W` and `Z + fh ≥ H`, which park a unit whose footprint ends on the last column or row | the two `jge` become `jg`; the 50-byte bucket block becomes a `jmp` to a stub that keeps stock's bucket index whenever its linear index is inside the `rows·cols` grid — stock's column −1 at the west edge is the previous row's last bucket, which simulation code reads — and clamps the column and row into the grid only for an index outside it; it rejoins at `0x47CCDB` |
-| `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`; `0x465DA9`, `0x408095` | `UnitInPlayerLOS 0x465AC0`'s four row reads under True line of sight, one for each point of the unit's box it tests, and under Permanent or Circular the same shear in `PositionInPlayerMapped 0x408090` (the first three points) and its inline copy (the fourth), `(z − y/2) >> 5` under an unsigned bound, off the grid for a unit high up near the north edge | each block (43, 43, 49, 34, 34 and 44 bytes) becomes a `jmp` to a stub that uses the point's own row `z >> 5` when the sheared row is off the grid and the own row is on it, and otherwise keeps stock's answer |
+| `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`; `0x465DA9`, `0x408095`; `0x407F74` | `UnitInPlayerLOS 0x465AC0`'s four row reads under True line of sight, one for each point of the unit's box it tests, and under Permanent or Circular the same shear in `PositionInPlayerMapped 0x408090` (the first three points) and its inline copy (the fourth); and the same read inlined in `0x408090`'s AI caller `0x407E90`, whose probe it decides, `(z − y/2) >> 5` under an unsigned bound, off the grid for a unit high up near the north edge | each block (43, 43, 49, 34, 34, 44 and 40 bytes) becomes a `jmp` to a stub that uses the point's own row `z >> 5` when the sheared row is off the grid and the own row is on it, and otherwise keeps stock's answer |
+| `0x49BEE8` | the projectile draw pass `0x49BE60`'s inline copy of the same read, the local player's view of a projectile | the 40-byte block becomes a `jmp` to a stub with the same own-row rule, compared and written alone. Local: a draw of the engine's frame, which still runs as the golden source (`fxown` is not a play default) |
 | `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys all but the first by name of each group of types sharing a key, to a hash of the name moved past every held value, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
@@ -2412,7 +2413,8 @@ pumps the network, the loader's included. A set that outgrows its frame's 32 key
 from `0x4D83B0`, freed when its call returns. Flak's floor writes `w+0x68` of a ballistic weapon whose `weaponvelocity` is 0 (§2.5), at
 load; no stock weapon has one. The last column and row change which bucket and cells the stamp
 writes, the engine's own, for a unit stock parked. The line-of-sight fix writes nothing: it reads
-the player's grid at a row inside it.
+the player's grid at a row inside it; the projectile pass's view writes nothing either, and changes only which projectiles the engine's
+frame draws and poses.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
@@ -2425,7 +2427,8 @@ keys (0x42BD29) ARMED; weapon IDs bounded, feature hits told from sentinels (0x4
 0x455FB8 0x424575) ARMED; one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE)
 ARMED; flak's divides (0x49CF18 0x42F314 0x42F32E) ARMED; the map's last row and column (0x47CC8B
 0x47CCA3 0x47CCA9) ARMED; line of sight at the map's edge (0x465B6A 0x465C04 0x465CA2 0x465D46
-0x465DA9 0x408095) ARMED. Counters: unit
+0x465DA9 0x408095 0x407F74) ARMED; the projectile pass's view at the map's edge (0x49BEE8) ARMED.
+Counters: unit
 repeats refused at 0x…, feature repeats refused at 0x…, victims refused off their arrays at 0x…,
 list blocks run unwrapped at 0x…, flak fallbacks at 0x…`, where a simulation fix reads `in the
 fail-closed table (the limits line)` in place of `ARMED`, and the counters are `tacli peek`
@@ -2441,7 +2444,7 @@ site that is not installed reads `SKIPPED (the bytes differ from the retail exe)
 place of a local fix's `ARMED`. The local fixes that take stubs of their own (the sort buffer, the
 NULL plot, the terrain window, the composite scratch) release them when their sites cannot be
 written; flak's divides and the table's fixes share pages of stubs, which stay, since a simulation
-fix's table either goes in whole or ends the process at the report. There is no switch: all seventeen fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
+fix's table either goes in whole or ends the process at the report. There is no switch: all eighteen fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
 `enginefix: weapon <name> has ID <id>, outside 0..<max>, and is skipped` or `enginefix: weapon
 <name>... (ID <id>) has a name longer than its record, and is skipped`, a duplicate `enginefix:
 weapon ID <id>: <name> replaces <name>`, and a dropped message or companion `enginefix: weapon

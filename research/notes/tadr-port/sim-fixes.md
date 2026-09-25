@@ -150,8 +150,12 @@ the plan below:
   points of the box; the third and fourth reads (`0x465CA2`, `0x465D46`) take the same rule, and so
   do Permanent and Circular line of sight, where the points go to `PositionInPlayerMapped
   0x408090` (`0x408095`) and the fourth point's inline copy (`0x465DA9`) with the same shear.
-  Not patched: the same shear inlined for True line of sight in `0x408090`'s other two callers, an
-  AI probe (`0x407F74`) and the projectile draw (`0x49BEE8`).
+  `0x408090`'s other two callers inline the same True-mode read beside their calls, and both are
+  patched with the same rule: the AI probe's (`0x407F74`, in `0x407E90`) joins the table, since
+  what the routine keeps depends on it, and the projectile draw pass's (`0x49BEE8`, `0x49BE60`) is a
+  local fix, `fix_projectile_view` — the pass still runs, the engine's frame being the golden
+  source. Neither is reached by a fixture: both rest on the disassembly, under the rule measured
+  for units. 161 sites in the raised build, 35 in the stock-limits build.
 - **Added: a bound on the sort bucket** (`0x47CCA9`). Settling the plan's question showed the bucket
   is indexed from the unit's position with no bound: inside the grid for every footprint of width 1
   or more once `jg` holds, one past it for width 0, and stock already reaches one before it for
@@ -168,7 +172,7 @@ the plan below:
   The weapon IDs join the table in the stock-limits build too.
 - **The install.** One table, `tagpu_limits_install`, in both builds: it now refuses two rows over
   one byte as well, and the report says "engine limits and fixes" ([the failure
-  report](raised-limits.md#the-failure-report)). 160 sites in the raised build (130 + 30), 34 in the
+  report](raised-limits.md#the-failure-report)). 161 sites in the raised build (130 + 31), 35 in the
   stock-limits build.
 - **Measured** on the new build, one peer, the raised and the stock-limits builds alike where both
   ran: every CORFLAK of `b1-victim-units` lost one hit (the unit-repeat counter 48, the 16 past the

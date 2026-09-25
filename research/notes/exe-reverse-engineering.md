@@ -290,7 +290,7 @@ for every cell of it in the blast; flak fired nearly straight up divides by zero
 footprint ends on the map's last column or row is parked off the map, where nothing can hit it;
 and a unit whose altitude is more than twice its distance from the north edge falls off the
 line-of-sight grid, so no other player sees it. `tagpu_patches.c` (`patch_engine_defects`)
-patches all of them, seventeen fixes, at every attach, in both builds: `ddraw.dll` is a static
+patches all of them, eighteen fixes, at every attach, in both builds: `ddraw.dll` is a static
 import of the exe, so `DllMain` runs before the exe's entry point. Each patch is the identity on
 every input the stock code handles correctly.
 
@@ -304,7 +304,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log line, when its bytes differ from the retail exe, its stub cannot be
-allocated, or its page cannot be made writable. Each of the seventeen, and why:
+allocated, or its page cannot be made writable. Each of the eighteen, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -324,7 +324,8 @@ allocated, or its page cannot be made writable. Each of the seventeen, and why:
 | weapon IDs `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | simulation | the `0x0F` hit flag is a wire format; in the raised build these are the raise's own rows |
 | one hit a victim an explosion `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | simulation | who is damaged, and how much |
 | the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
-| line of sight at the map's edge `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`, `0x465DA9`, `0x408095` | simulation | what is acquired |
+| line of sight at the map's edge `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`, `0x465DA9`, `0x408095`, `0x407F74` | simulation | what is acquired, and what the AI probe keeps |
+| the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -1750,7 +1751,11 @@ The third read loads `dx` and `di`, the point's y and z words, and the fourth re
 restores the base's `0x4FC980`) [INFERRED: an AI routine], which tests a probe point stepped 320 px
 from a position along a heading it draws; and `0x49BF2F` in the projectile draw pass `0x49BE60`,
 the local player's view of a projectile. Each of the two has an inline copy of the True-mode read
-too (`0x407F74..0x407F9A`, `0x49BEE8..0x49BF0E`), with the same shear, not patched.
+beside the call, with the same shear: `0x407F74..0x407F9B` (esi the point, ecx the player; read
+`0x407F9C`, not visible `0x407FB7`) and `0x49BEE8..0x49BF0F` (ebp the point, eax the player; read
+`0x49BF10`, not visible `0x49BF29`). The projectile pass still runs in play: `fxown`, which would
+stop it, is not a play default, because the engine's frame is the golden source (`tagpu_opt.c`); it
+also poses each model projectile it lets through (`0x49C127`).
 
 **The defect.** The row is the box's north edge less half the box's absolute top, so a unit whose
 top is more than twice its distance from the north edge — an aircraft at cruise altitude a few
@@ -1766,18 +1771,23 @@ there while `north` hovered on station for about 7 s at 150 of 150 HP, in range 
 spotter's lit radius; when the AI dragged it south past z 84 the flak swung north and shot it within
 0.6 s.
 
-**The fix** (`fix_los_shear`, simulation, fail closed): each of the six blocks (43, 43, 49, 34, 34
-and 44 bytes) becomes a jump to a stub that computes stock's column and sheared row; with the column
+**The fix** (`fix_los_shear`, simulation, fail closed): each of the seven blocks (43, 43, 49, 34,
+34, 44 and 40 bytes, the last the AI probe's copy) becomes a jump to a stub that computes stock's column and sheared row; with the column
 out of bounds it leaves invisible; with the row in bounds it continues at stock's read (`0x465B95`,
-`0x465C2F`, `0x465CD3`, `0x465D68`, `0x465DE0`, `0x4080C7`); otherwise it takes the point's own row, `z >> 5`, and reads
+`0x465C2F`, `0x465CD3`, `0x465D68`, `0x465DE0`, `0x4080C7`, `0x407F9C`); otherwise it takes the point's own row, `z >> 5`, and reads
 there if that is in bounds. Otherwise stock's answer stands, so a unit beyond the map's edge stays
 unseen: TADR's margin there is a gameplay change, not a defect. The third stub loads `dx` and `di`
 exactly as stock does, for the fourth; `ebp` after the third and `edx` after the fourth are dead on
 both exits. **The invariant**: the grid is read only at a column and a row inside it. It is exact
 whenever stock's row is inside the grid. `0x408090`'s other two callers change only for a point
 whose sheared row is off the grid and whose own row is on it — the defect, in an AI probe and in the
-projectile draw. No branch from outside lands inside any block but stock's `0x465B07`, `0x465B45`
-and `0x465C80`, which are operands [the same scan].
+projectile draw. The projectile pass's own copy is a **local** fix, `fix_projectile_view` (a draw:
+whether the engine's frame shows and poses a projectile), under the same rule; the probe's stub
+leaves `ebx` holding the width on every exit and the pass's leaves `ebx` the same, as stock's do. No
+branch from outside lands inside any block but stock's `0x465B07`, `0x465B45` and `0x465C80`,
+which are operands [the same scan]. **Resting on the disassembly alone:** the AI probe's and the
+projectile pass's copies, and the mapped-grid places under Circular line of sight; no fixture
+reaches them, and the rule is the one measured for units under True and Permanent.
 
 **MEASURED, new build** (all four reads patched), the same fixture and driver: the flak aimed at
 `north` first and shot it down on station, at z 40.1, within 5 s, then `control`. Under Permanent
