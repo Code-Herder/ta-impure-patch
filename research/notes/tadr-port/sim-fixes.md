@@ -346,22 +346,23 @@ has the sites, the disassembly and the numbers):
   run with every counter at 0.
 
 **B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`, main merged at `74dc093`;
-commits `3c2cec1`, `b3c5a83`, `569031d`, `49c640c`, `5193986`, and the `0x2C`'s nested unit
-references `b9a5692`; not landed; two high reviews, their findings acted on in `49c640c` and
-`5193986` — the nested references came after them and have had no review yet). What was done, and
-where it deviates from the plan above:
+commits `3c2cec1`, `b3c5a83`, `569031d`, `49c640c`, `5193986`, the `0x2C`'s nested unit
+references `b9a5692` and the `0x0A` attach `cefcac8`; not landed; two high reviews, their findings
+acted on in `49c640c` and `5193986` — the nested references and the `0x0A` came after them and have
+had no review yet). What was done, and where it deviates from the plan above:
 
 - **No record-injection lever.** The plan's `tagpu_wirefuzz.on` is dropped. A malformed-message fix
   meets the plan's own evidence bar by disassembly (the identity everywhere else), so instead each
   bound is a **pure C predicate** over the record's field values and the engine's counts
   (`wire_index_ok`, `wire_killer_ok`, `wire_type_ok`, `wire_delta_ok`, `wire_ref_idx`,
-  `wire_block_ok` in `tagpu_patches.c`), and a test-only self-check, **`tagpu_wirecheck.on`**, evaluates each on a table
+  `wire_attach_ok`, `wire_block_ok` in `tagpu_patches.c`), and a test-only self-check, **`tagpu_wirecheck.on`**, evaluates each on a table
   of boundary values at attach and logs each verdict against the expected one — a unit test of our
   own code, not traffic. The compiler folds every case to a constant, so it checks the predicates'
   C and nothing more; the stubs and their drop paths rest on the disassembly. Measured 2026-09-25:
-  22/22 predicate cases OK. The table has 28 since `b9a5692` (`wire_ref_idx`'s six); those six, and
-  two more at the raised limit (15 000), have been run only on the host, against the predicate
-  compiled from the source (8/8 OK), not yet through `tagpu_wirecheck.on` in the game.
+  22/22 predicate cases OK. The table has 33 since `cefcac8` (`wire_ref_idx`'s six, `wire_attach_ok`'s
+  five); those eleven, with six more (a child and parent both 0, no array, the raised limit of
+  15 000), have been run only on the host, against the predicates compiled from the source (8/8 and
+  9/9 OK), not yet through `tagpu_wirecheck.on` in the game.
 - **Every stub is a jmp at a clean 5-byte boundary**, verifies the whole stock span first
   (all-or-nothing: one non-stock span leaves the image untouched, `FIX_BYTES`), sets the registers
   stock sets, and continues at the same address; a failed bound goes to the receiver's own drop/exit.
@@ -478,8 +479,24 @@ where it deviates from the plan above:
     value; `0x44EFD0` nothing; and the rest of the round robin's tail (`0x48B4A2..0x48B6FC`) names
     no other unit: its fields go into the entry's own slot, its state mask to `UNITS_SetStateMask
     0x48B090`.
-  - **Not covered**: the same scaling in `0x48AB70` is reached from the wire by the `0x0A` receiver
-    (the dispatcher's `0x4553FE`), whose child and parent ids nothing bounds — open below.
+  - The same scaling in `0x48AB70` is reached from the wire by the `0x0A` receiver too: the next
+    bullet.
+- **The `0x0A` attach, bounded at its case** (`cefcac8`). The dispatcher's `0x0A` case `0x4553FE`
+  (jump-table entry 8, `0x455FA4`) hands the wire record to `0x48AB70`, which scales both its
+  child (`+1`, `0x48AB8A`) and its parent (`+3`, `0x48ABAF`) into the unit array unbounded, reads
+  each one's `+0x110` and writes the parent's `+0x8A`. `0x48AB70`'s callers are four: that case,
+  the local wrapper `0x48AAC0` (`0x48AB62`, 30 callers, the ids of live units), and the round robin
+  (`0x48B58B`, the carrier bounded at `0x48B574`; `0x48B5C5`, the slot's own id and parent 0), so
+  the check guards the case, not the function. What 0 means: a child 0 makes `0x48AB70` return
+  having done nothing (`0x48ABC7`), and no sender writes one (the wrapper reads its child's `+0x110`
+  before it sends); a parent 0 is the detach (`0x48ABA9`). So `wire_attach_ok` requires the child
+  in `[1, max]` and the parent 0 or in `[1, max]`. The stub replaces the case's `mov eax,[esp+0x10];
+  push eax` (stock `8B 44 24 10 50`; the case's 15 bytes through its `jmp 0x455F50` and the table
+  entry verified); a record that fails goes to `0x455F50`, the pump's back edge that every case and
+  every unhandled code takes (drop `0a`), and one that passes runs the displaced two instructions
+  and continues at `0x455403` (in `0a`). A dropped child 0 has the effect stock gives it, nothing;
+  only the count differs. Not examined: the attach point `+5`, stored into the child's `+0xF9`,
+  is a piece of the carrier, not a unit index.
 - **After-create guards `0x48BA05` (S7) and `0x48B49C` (S10)** require the slot now holds the created
   type and, before the parse dereferences it, the dirty create's mover `[esi]` and its object `[[esi]]`,
   or the round robin's model object `[edi+0x9E]` (the Object3do, set at `0x485DCC`; `+0x9A` is the
@@ -496,11 +513,12 @@ where it deviates from the plan above:
   `edi`, saved at `[esp+0]` — or when the sender is no player record (the pump names record ten, one
   past the ten, for a sender it cannot find, `0x453E14`). `argdiff` still counts a player argument
   that is not the sender, and each sender's first create is logged with its name and block.
-- **Records accepted, per receiver**, on the heartbeat's `wire:` section (`in 09 0b 0c 0d 2c dirty
-  create rr`): the evidence each bound ran on real traffic. `0x0B` and `0x0C` count only the
+- **Records accepted, per receiver**, on the heartbeat's `wire:` section (`in 09 0a 0b 0c 0d 2c
+  dirty create rr`): the evidence each bound ran on real traffic. `0x0B` and `0x0C` count only the
   dispatcher's call (return `0x455417`/`0x455428`), not the local damage and kill paths that share
-  the function; `0x0D` counts a live shooter whose slot weapon matched. Drops: `09 blk 0b 0c kill 2c
-  len stale nocopy 0d split target carrier`; `pump` counts a re-pointed pump pointer.
+  the function; `0x0A`'s stub sits on the dispatcher's path alone; `0x0D` counts a live shooter
+  whose slot weapon matched. Drops: `09 blk 0a 0b 0c kill 2c len stale nocopy 0d split target
+  carrier`; `pump` counts a re-pointed pump pointer.
 - **The B4/B5 oracles**: `morph` (a create onto a live slot whose type changes), `dcreate`
   (`CreateFromNetwork` called by the dirty list, returning to `0x48BA05`: a dirty entry whose type is
   not its slot's, the unit made from the entry rather than from its own `0x09` — into an empty slot,
@@ -672,13 +690,6 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   overload (`0x406789`) (evidence Part 4 §7).
 - Where stock acquisition stops aiming a flak gun upward. B1 measured that it never aimed above
   29.6°, far from the zero band, but did not disassemble the cut-off.
-- **The `0x0A` attach receiver is not bounded.** The dispatcher's case `0x4553FE` hands a wire
-  record to `0x48AB70`, which scales both its child id (`+1`, `0x48AB8A..0x48AB9F`) and its parent id
-  (`+3`, `0x48ABAF..0x48ABC4`) into the unit array unbounded, reads each one's `+0x110` and writes the
-  parent's `+0x8A`. Found while bounding the round robin's carrier (the move payload's target, found
-  deriving the padding, and that carrier are bounded in B3, `b9a5692`); a bound is the same local
-  shape (the child `[1, max]` else drop at `0x48AD2A`, the parent through `wire_ref_idx`). Not built:
-  outside that landing's brief, the owner's call whether it rides B3 or a later landing.
 
 ## Corrections this plan made
 
