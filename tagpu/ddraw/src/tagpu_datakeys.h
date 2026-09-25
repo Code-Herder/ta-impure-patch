@@ -4,11 +4,14 @@
 /* tagpu_datakeys — TADR section C's new data keys
    (research/notes/tadr-port/data-keys.md).
 
-   The unit-key reader: one observer inside the FBI loader 0x42BF40, at
+   The unit-key reader: an observer inside the FBI loader 0x42BF40, at
    0x42BF97, reads the keys this module owns out of the FBI section the loader
    is holding, through the engine's own TDF reader, and keeps one record per
-   UnitDef slot. Installed at attach for the process, byte-matched; a mismatch
-   leaves the image untouched and logs.
+   UnitDef slot. Observers at the unit-data load's start (0x42D2E0) and the
+   loader's entry keep each record to its own load, and one on the checksum
+   0x4B6BA0 records each COB block's length for the mask's bounds. Installed
+   at attach for the process, byte-matched; a mismatch leaves the image
+   untouched and logs.
 
    The build ghost's piece mask (C1): which pieces a type's ghost hides. By
    default the pieces its COB `Create()` hides before anything else runs; with

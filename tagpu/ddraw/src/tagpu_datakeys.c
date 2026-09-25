@@ -32,12 +32,17 @@ static int ptr_ok(const void* p) { return tagpu_m3_ptr_ok(p); }
    1. The unit-key records
    ========================================================================= */
 
-/* ONE RECORD PER UnitDef SLOT, written by the FBI reader below every time the
-   engine loads that slot's FBI, whether or not the file carries a key: a
-   record that is always rewritten is always fresh. A reader asks for slot
-   `type` and takes the row only when its `def` is the def it asked about, so
-   a row left from an earlier game reads as "no keys" (the extra-weapons
-   module's def_rec rule).
+/* ONE RECORD PER UnitDef SLOT, holding only what THIS load's FBI loader
+   wrote. Three observers keep it so (section 2): the start of the unit-data
+   load 0x42D2E0 empties every record; the FBI loader's entry 0x42BF40 resets
+   its slot's record -- a fresh serial and the def it is loading -- whether or
+   not the file then opens; and the read site 0x42BF97, reached only when it
+   does, fills in the keys. So a slot the load skips (no FBI file, 0x42D71A)
+   has no record rather than an earlier game's at the same def address, and a
+   console reload moves the serial even when its FBI fails to open -- the
+   reload that still replaces the COB (0x42D269 runs before 0x42D275). A
+   reader asks for slot `type` and takes the row only when its `def` is the
+   def it asked about.
 
    WHO WRITES AND WHO READS, AND WHY THEY NEVER OVERLAP. The level's unit-data
    load 0x42D2E0 runs the FBI loader on the LOADER thread (LoadGameData_Main
@@ -60,6 +65,61 @@ typedef struct DkUnit {
 static DkUnit   s_unit[TAGPU_LIM_TYPES];
 static unsigned s_serial;
 
+static void unit_clear(DkUnit* r)
+{
+    free(r->pp);
+    r->pp = NULL; r->pp_n = 0;
+}
+
+/* THE COB'S LENGTH, which the loaded script does not carry. 0x4B2450 reads
+   the file whole through 0x4BBE50, which sizes the block from the file's
+   archive entry or its filelength, and then checksums it with
+   0x4B6BA0(buf, size) at 0x4B2477, `size` being 0x4BBC40's answer for the
+   same path -- the same lookup 0x4BBE50 sized the block with. So (buf, size)
+   at that call is the block and its length, by the engine's own contract: it
+   reads every byte of it there. DISASSEMBLED.
+
+   Keyed by the block's address, so a pointer that did not come out of
+   0x4B2450 has no length and gets no mask. Emptied at the start of every
+   unit-data load, which loads every script afresh; a reload's freed block
+   keeps its row until its address comes back, when the new block's row
+   replaces it. The same threads and the same ordering as the records. */
+#define DK_COB_SLOTS (TAGPU_LIM_TYPES * 2)
+typedef char dk_cob_slots_pow2[(DK_COB_SLOTS & (DK_COB_SLOTS - 1)) == 0 ? 1 : -1];
+typedef struct DkCob { const char* cob; unsigned size; } DkCob;
+static DkCob s_cob[DK_COB_SLOTS];
+
+static unsigned cob_hash(const char* cob)
+{
+    unsigned h = (unsigned)(size_t)cob * 2654435761u;
+    return h ^ (h >> 15);
+}
+
+static void cob_put(const char* cob, unsigned size)
+{
+    unsigned h = cob_hash(cob), i;
+    for (i = 0; i < DK_COB_SLOTS; i++) {
+        DkCob* e = &s_cob[(h + i) & (DK_COB_SLOTS - 1)];
+        if (!e->cob || e->cob == cob) { e->cob = cob; e->size = size; return; }
+    }
+    {
+        static int once;
+        if (!once) { once = 1; dlog("COB lengths: the table is full; a script loaded now gets no mask (logged once)"); }
+    }
+}
+
+/* the recorded length of the block at `cob`, 0 when none was recorded */
+static unsigned cob_size(const char* cob)
+{
+    unsigned h = cob_hash(cob), i;
+    for (i = 0; i < DK_COB_SLOTS; i++) {
+        const DkCob* e = &s_cob[(h + i) & (DK_COB_SLOTS - 1)];
+        if (e->cob == cob) return e->size;
+        if (!e->cob) return 0;
+    }
+    return 0;
+}
+
 /* the slot a def pointer names: a stride-aligned member of the engine's def
    array, inside the slots this DLL raised the array to */
 static int def_slot(const char* def, unsigned* slot)
@@ -79,10 +139,65 @@ static int def_slot(const char* def, unsigned* slot)
 }
 
 /* =========================================================================
-   2. The FBI reader: 0x42BF97, inside the FBI loader 0x42BF40
+   2. The observers: the load's start, the FBI loader, the COB checksum and
+      the FBI reader
    ========================================================================= */
 
-/* THE SITE. 0x42BF40(path, def) opens the FBI and finds its [UNITINFO]
+/* THE LOAD'S START, 0x42D2E0's entry (`sub esp,0x610`): the unit-data load's
+   one caller is 0x4918CA on the LOADER thread, and its per-type loop runs
+   every FBI and every COB of the game after this point. */
+#define VA_UNIT_LOAD  0x0042D2E0u
+static const unsigned char UNIT_LOAD_STOLEN[6] = { 0x81, 0xEC, 0x10, 0x06, 0x00, 0x00 };
+
+static int __cdecl unit_load_begin(void* esp)
+{
+    unsigned i;
+    (void)esp;
+    for (i = 0; i < TAGPU_LIM_TYPES; i++) unit_clear(&s_unit[i]);
+    memset(s_unit, 0, sizeof s_unit);
+    memset(s_cob, 0, sizeof s_cob);
+    return 0;
+}
+
+/* THE FBI LOADER'S ENTRY, 0x42BF40(path, def) (`sub esp,0x518`), before the
+   open that can fail (0x42BF66) or find no [UNITINFO] (0x42BF7C). */
+#define VA_FBI_LOADER 0x0042BF40u
+static const unsigned char FBI_LOADER_STOLEN[6] = { 0x81, 0xEC, 0x18, 0x05, 0x00, 0x00 };
+
+static int __cdecl fbi_begin(void* esp)
+{
+    const char* def = (const char*)((void* const*)esp)[2];
+    unsigned slot;
+    DkUnit* r;
+    if (!def_slot(def, &slot)) {
+        static int once;
+        if (!once) { once = 1; dlog("FBI loader: a def outside the def array's slots, skipped (logged once)"); }
+        return 0;
+    }
+    r = &s_unit[slot];
+    unit_clear(r);
+    r->serial = ++s_serial;
+    r->def = def;
+    return 0;
+}
+
+/* THE COB CHECKSUM, 0x4B6BA0(buf, size) (`sub esp,0xC; push edi; mov edi,
+   [esp+0x18]`): eleven callers, and only the one that returns into the COB
+   loader (0x4B247C) is a script's block. */
+#define VA_CHECKSUM     0x004B6BA0u
+#define RA_COB_CHECKSUM 0x004B247Cu
+static const unsigned char CHECKSUM_STOLEN[8] = { 0x83, 0xEC, 0x0C, 0x57, 0x8B, 0x7C, 0x24, 0x18 };
+
+static int __cdecl cob_checksummed(void* esp)
+{
+    void* const* a = (void* const*)esp;
+    int size = (int)(size_t)a[2];
+    if ((unsigned)(size_t)a[0] == RA_COB_CHECKSUM && a[1] && size > 0)
+        cob_put((const char*)a[1], (unsigned)size);
+    return 0;
+}
+
+/* THE READ SITE. 0x42BF40(path, def) opens the FBI and finds its [UNITINFO]
    section; at 0x42BF8C..0x42BF93 it takes `ebp = def` and `ecx = the section`
    and at 0x42BF97 starts pushing the arguments of its first TDF read
    (UnitName, 0x42BFA7). Both registers are live there and nothing has been
@@ -156,16 +271,11 @@ static void __cdecl fbi_at_read(const unsigned int* regs)
     DkUnit*     r;
     int         n;
 
-    if (!def_slot(def, &slot)) {
-        static int once;
-        if (!once) { once = 1; dlog("FBI reader: a def outside the def array's slots, skipped (logged once)"); }
-        return;
-    }
+    /* the entry observer reset this record for this call: the reader lands
+       only with it */
+    if (!def_slot(def, &slot)) return;
     r = &s_unit[slot];
-    free(r->pp);
-    r->pp = NULL; r->pp_n = 0;
-    r->serial = ++s_serial;
-    r->def = def;
+    if (r->def != def) return;
 
     v[0] = 0;
     if (!E_TdfGetStr(sec, v, "PreviewPieces", DK_VALUE_CAP, "")) return;
@@ -210,14 +320,35 @@ static int fbi_install(void)
     return 1;
 }
 
-/* A DRAW KEY, SO A MISMATCH SKIPS AND LOGS: without the reader no type carries
-   PreviewPieces=, and every ghost takes its Create() mask, which needs no
-   reader at all. */
+static int observe(unsigned va, const unsigned char* stolen, int n, tagpu_detour_before_fn fn)
+{
+    return tagpu_detour_bytes_ok(va, stolen, n) && tagpu_detour_observe(va, stolen, n, fn, NULL);
+}
+
+/* DRAW KEYS, SO A MISMATCH SKIPS AND LOGS, and each part lands only on the
+   parts it rests on. The load's start empties both tables, so without it
+   nothing else lands and every ghost shows every piece. Without the checksum
+   observer no script has a length and no Create() mask is computed. Without
+   the loader's entry the reader does not land, so no record can outlive its
+   load. */
 void tagpu_datakeys_init(void)
 {
-    if (fbi_install()) dlog("FBI reader installed at 0x42BF97 (PreviewPieces=)");
-    else dlog("FBI reader NOT installed: the bytes at 0x42BF97 are not the retail loader's; "
-              "PreviewPieces= is not read and every ghost takes its Create() mask");
+    if (!observe(VA_UNIT_LOAD, UNIT_LOAD_STOLEN, (int)sizeof UNIT_LOAD_STOLEN, unit_load_begin)) {
+        dlog("NOT installed: the bytes at 0x42D2E0 are not the retail unit-data load's; "
+             "no PreviewPieces= and no Create() mask, every ghost shows every piece");
+        return;
+    }
+    if (observe(VA_CHECKSUM, CHECKSUM_STOLEN, (int)sizeof CHECKSUM_STOLEN, cob_checksummed))
+        dlog("COB lengths recorded at 0x4B6BA0's call from 0x4B2450 (the Create() mask)");
+    else
+        dlog("COB lengths NOT recorded: the bytes at 0x4B6BA0 are not the retail checksum's; "
+             "no Create() mask is computed");
+    if (observe(VA_FBI_LOADER, FBI_LOADER_STOLEN, (int)sizeof FBI_LOADER_STOLEN, fbi_begin) &&
+        fbi_install())
+        dlog("FBI reader installed at 0x42BF40 and 0x42BF97 (PreviewPieces=)");
+    else
+        dlog("FBI reader NOT installed: the bytes at 0x42BF40 or 0x42BF97 are not the retail "
+             "loader's; PreviewPieces= is not read and every ghost takes its Create() mask");
 }
 
 /* =========================================================================
@@ -228,7 +359,9 @@ void tagpu_datakeys_init(void)
    turned into pointers in place (0x4B24A7..0x4B2527, DISASSEMBLED). The two
    name tables have every entry relocated too; the entry-point table does not,
    its entries being code offsets in dwords. Nothing in the loader checks a
-   count or an offset, so every one of them is DATA here, bounded below. */
+   count or an offset, so every one of them is DATA here, and every read below
+   is bounded by the block's recorded length (section 1): the header, each
+   table whole, each name to its NUL. */
 #define COB_VERSION   0x00
 #define COB_NSCRIPTS  0x04
 #define COB_NPIECES   0x08
@@ -237,14 +370,21 @@ void tagpu_datakeys_init(void)
 #define COB_SNAMES    0x1C      /* char*[nscripts]                             */
 #define COB_PNAMES    0x20      /* char*[npieces]                              */
 #define COB_CODE      0x24      /* int32[codelen]                              */
+#define COB_HEADER    0x2C      /* the last header word the loader reads, +4   */
 
-/* data bounds, an order of magnitude above stock (the largest stock model has
-   36 pieces): they stop a malformed script running away, and a script past
-   one gets no mask rather than part of one */
-#define DK_MAX_SCRIPTS   4096
+/* the piece bits a script can carry, an order of magnitude above stock (the
+   largest stock model has 36 pieces); a script past it gets no mask rather
+   than part of one */
 #define DK_MAX_COBPIECES 1024
-#define DK_MAX_CODE      (1 << 22)
 #define DK_NAMECMP       256    /* the longest name a compare reads            */
+
+/* the bytes from `p` to the end of the block at `cob`, 0 when `p` is outside
+   it (a `p` below `cob` wraps past `size`) */
+static unsigned cob_room(const char* cob, unsigned size, const void* p)
+{
+    size_t o = (size_t)p - (size_t)cob;
+    return o < size ? (unsigned)(size - o) : 0u;
+}
 
 #define OP_SHOW 0x10005000u
 #define OP_HIDE 0x10006000u
@@ -274,15 +414,16 @@ static int op_inline(unsigned op)
 }
 
 /* _stricmp's answer (0x4F8A70, the engine's piece and script matcher: A-Z
-   fold) for two engine strings: 1 equal, 0 not. -1 when a pointer fails the
-   range test or both agree for DK_NAMECMP characters without ending: the
-   caller then refuses the mask rather than guess what the engine's unbounded
-   compare said. */
-static int name_eq(const char* a, const char* b)
+   fold) for a COB name `a`, which has `room` bytes before its block ends, and
+   a model node's name `b`: 1 equal, 0 not. -1 when the two agree until `a`'s
+   room or DK_NAMECMP runs out without ending, or `b` fails the range test:
+   the caller then refuses the mask rather than guess what the engine's
+   unbounded compare said. */
+static int name_eq(const char* a, unsigned room, const char* b)
 {
-    int i;
-    if (!ptr_ok(a) || !ptr_ok(b)) return -1;
-    for (i = 0; i < DK_NAMECMP; i++) {
+    unsigned i, lim = room < DK_NAMECMP ? room : DK_NAMECMP;
+    if (!ptr_ok(b)) return -1;
+    for (i = 0; i < lim; i++) {
         int ca = (unsigned char)a[i], cb = (unsigned char)b[i];
         if (ca >= 'A' && ca <= 'Z') ca += 32;
         if (cb >= 'A' && cb <= 'Z') cb += 32;
@@ -293,11 +434,10 @@ static int name_eq(const char* a, const char* b)
 }
 
 /* the same, against a lower-case literal of ours */
-static int name_is(const char* a, const char* lit)
+static int name_is(const char* a, unsigned room, const char* lit)
 {
-    int i;
-    if (!ptr_ok(a)) return -1;
-    for (i = 0; i < DK_NAMECMP; i++) {
+    unsigned i, lim = room < DK_NAMECMP ? room : DK_NAMECMP;
+    for (i = 0; i < lim; i++) {
         int ca = (unsigned char)a[i];
         if (ca >= 'A' && ca <= 'Z') ca += 32;
         if (ca != (unsigned char)lit[i]) return 0;
@@ -313,25 +453,26 @@ static int name_is(const char* a, const char* lit)
    the ghost shows that piece, as it did before this mask existed.
 
    Returns the COB's piece count with `hid` filled (bits past it clear), 0 for
-   a script with no Create(), -1 for a header the bounds refuse. */
-static int create_hides(const char* cob, unsigned* hid)
+   a script with no Create(), -1 for a script the block's bounds refuse. */
+static int create_hides(const char* cob, unsigned size, unsigned* hid)
 {
     int ns, np, cl, i, ci = -1, pc;
     const int* entries;
     const char* const* snames;
     const int* code;
-    if (*(const int*)(cob + COB_VERSION) != 4) return -1;
+    if (size < COB_HEADER || *(const int*)(cob + COB_VERSION) != 4) return -1;
     ns = *(const int*)(cob + COB_NSCRIPTS);
     np = *(const int*)(cob + COB_NPIECES);
     cl = *(const int*)(cob + COB_CODELEN);
-    if (ns <= 0 || ns > DK_MAX_SCRIPTS || np < 0 || np > DK_MAX_COBPIECES ||
-        cl <= 0 || cl > DK_MAX_CODE) return -1;
+    if (ns <= 0 || np < 0 || np > DK_MAX_COBPIECES || cl <= 0) return -1;
     entries = *(const int* const*)(cob + COB_ENTRIES);
     snames  = *(const char* const* const*)(cob + COB_SNAMES);
     code    = *(const int* const*)(cob + COB_CODE);
-    if (!ptr_ok(entries) || !ptr_ok(snames) || !ptr_ok(code)) return -1;
+    if (cob_room(cob, size, entries) / 4 < (unsigned)ns ||
+        cob_room(cob, size, snames)  / 4 < (unsigned)ns ||
+        cob_room(cob, size, code)    / 4 < (unsigned)cl) return -1;
     for (i = 0; i < ns; i++) {
-        int e = name_is(snames[i], "create");
+        int e = name_is(snames[i], cob_room(cob, size, snames[i]), "create");
         if (e < 0) return -1;
         if (e) { ci = i; break; }
     }
@@ -365,10 +506,11 @@ static int create_hides(const char* cob, unsigned* hid)
    DISASSEMBLED.
 
    Only positions up to `upto` are settled: a later swap never moves a
-   position below its own index. Returns the primitive count, -1 when the
+   position below its own index. `pnames` holds `ncob` names, checked whole
+   against the block by the caller. Returns the primitive count, -1 when the
    tree exceeds TAGPU_PBMAXPIECE or a compare cannot be answered. */
-static int engine_prims(const char* root, const char* const* pnames, int ncob, int upto,
-                        const char** prim)
+static int engine_prims(const char* root, const char* cob, unsigned size,
+                        const char* const* pnames, int ncob, int upto, const char** prim)
 {
     const char* stack[TAGPU_PBMAXPIECE + 2];
     int sp = 0, n = 0, i, j;
@@ -387,7 +529,8 @@ static int engine_prims(const char* root, const char* const* pnames, int ncob, i
     }
     for (i = 0; i < ncob && i < n && i <= upto; i++) {
         for (j = i; j < n; j++) {
-            int e = name_eq(pnames[i], *(const char* const*)(prim[j] + N_NAME));
+            int e = name_eq(pnames[i], cob_room(cob, size, pnames[i]),
+                            *(const char* const*)(prim[j] + N_NAME));
             if (e < 0) return -1;
             if (e) break;
         }
@@ -397,9 +540,10 @@ static int engine_prims(const char* root, const char* const* pnames, int ncob, i
 }
 
 /* the Create() mask, as bits over the ghost's walk: 1 with bits set, 0 when
-   nothing is hidden, -1 when the script or the model is refused */
-static int create_mask(const char* root, const char* cob, const char* const* walk, int np,
-                       uint32_t* bits)
+   nothing is hidden, -1 when the script or the model is refused, -2 when the
+   script's length was not recorded. `size` is cob_size(cob). */
+static int create_mask(const char* root, const char* cob, unsigned size,
+                       const char* const* walk, int np, uint32_t* bits)
 {
     static unsigned    hid[DK_MAX_COBPIECES / 32];
     static const char* prim[TAGPU_PBMAXPIECE];
@@ -407,14 +551,15 @@ static int create_mask(const char* root, const char* cob, const char* const* wal
     const char* const* pnames;
     int ncob, nprim, k, g, nh = 0, upto = -1;
 
-    if (!ptr_ok(cob)) return 0;                        /* no script: nothing hidden */
-    ncob = create_hides(cob, hid);
+    if (!cob) return 0;                                /* no script: nothing hidden */
+    if (!size) return -2;
+    ncob = create_hides(cob, size, hid);
     if (ncob <= 0) return ncob;
     for (k = 0; k < ncob; k++) if (hid[k >> 5] >> (k & 31) & 1) upto = k;
     if (upto < 0) return 0;
     pnames = *(const char* const* const*)(cob + COB_PNAMES);
-    if (!ptr_ok(pnames)) return -1;
-    nprim = engine_prims(root, pnames, ncob, upto, prim);
+    if (cob_room(cob, size, pnames) / 4 < (unsigned)ncob) return -1;
+    nprim = engine_prims(root, cob, size, pnames, ncob, upto, prim);
     if (nprim <= 0) return -1;
     for (k = 0; k <= upto && k < nprim; k++)
         if (hid[k >> 5] >> (k & 31) & 1) hnode[nh++] = prim[k];
@@ -445,9 +590,10 @@ static int listed(const char* name, const char* pp, unsigned n)
 
 /* The per-type cache: a mask is computed once for the level, and again only
    when its inputs move. The key is the frame packet's level generation (the
-   template and the COB are freed at every level end), the record's serial (a
-   console reload re-reads the FBI, and its COB may come back at the same
-   address), and the two pointers themselves. What it holds is VALUES — bits,
+   template and the COB are freed at every level end), the record's serial
+   (every entry to the FBI loader moves it, and a console reload enters it
+   before it replaces the COB, which may come back at the same address), and
+   the two pointers themselves. What it holds is VALUES — bits,
    a count, a pointer compared and never followed. Game thread only. */
 typedef struct DkGhost {
     unsigned       gen, serial;
@@ -460,7 +606,7 @@ typedef struct DkGhost {
 
 static DkGhost s_ghost[TAGPU_LIM_TYPES];
 
-static void ghost_compute(const char* def, const char* root, const char* cob,
+static void ghost_compute(const char* def, const char* root, const char* cob, unsigned cobsz,
                           const DkUnit* rec, DkGhost* g)
 {
     static const char* walk[TAGPU_PBMAXPIECE];
@@ -497,10 +643,11 @@ static void ghost_compute(const char* def, const char* root, const char* cob,
         dlog("ghost mask: %.32s's PreviewPieces= names no piece of its model; ignored, Create()'s hides apply",
              def + UD_NAME);
     }
-    r = create_mask(root, cob, walk, np, g->bits);
+    r = create_mask(root, cob, cobsz, walk, np, g->bits);
     if (r < 0) {
         memset(g->bits, 0, sizeof g->bits);
-        dlog("ghost mask: %.32s's script or model is refused by the bounds; every piece shows",
+        dlog(r == -2 ? "ghost mask: %.32s's script has no recorded length; every piece shows"
+                     : "ghost mask: %.32s's script or model is refused by the bounds; every piece shows",
              def + UD_NAME);
         return;
     }
@@ -538,7 +685,7 @@ int tagpu_datakeys_ghost_mask(unsigned type, TAGPU_PK_GHOSTMASK* out)
     g = &s_ghost[type];
     gen = tagpu_packet_pub_level_gen();
     if (!g->valid || g->gen != gen || g->serial != serial || g->root != root || g->cob != cob) {
-        ghost_compute(def, root, cob, rec, g);
+        ghost_compute(def, root, cob, cob ? cob_size(cob) : 0u, rec, g);
         g->gen = gen; g->serial = serial; g->root = root; g->cob = cob; g->valid = 1;
     }
     if (!g->any) return 0;

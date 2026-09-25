@@ -2386,11 +2386,14 @@ static int gmask_type_cmp(const void* a, const void* b)
     return (int)((const TAGPU_PK_GHOSTMASK*)a)->type - (int)((const TAGPU_PK_GHOSTMASK*)b)->type;
 }
 
-static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, const char* ta, int nb)
+/* The cursor's type is the packet's own `build_unit_id`, under the render
+   thread's own test for drawing it (cursor mode 0x0E), so every packet the
+   cursor ghost is drawn from carries that type's row. */
+static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, int nb)
 {
     static unsigned short types[TAGPU_PK_MAX_BUILDS + 1];
     unsigned nt = 0, nm = 0, k, over = 0;
-    unsigned cur = RDU16(ta, OFF_BUILDUNITID);
+    unsigned cur = p->cursor_mode == 0x0E ? p->build_unit_id : 0u;
     if (cur && cur < TAGPU_LIM_TYPES) {
         s_gmSeen[cur >> 5] |= 1u << (cur & 31);
         types[nt++] = (unsigned short)cur;
@@ -2416,24 +2419,29 @@ static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, const char* ta
                         &p->off_ghostmask, &p->n_ghostmask, TAGPU_PK_TRUNC_GHOSTMASK);
 }
 
-static unsigned fill_builds(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
+static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
 {
     unsigned e, need = *cursor;
-    int n;
-    /* GATED ON THE ONLY PASS THAT READS IT, like the effect tables above. The
-       walk and the copy below are pure cost to a session with no build ghost.
-       `tagpu_native_want_builds()` is the ghost's own 30-frame
-       poll, published from the render thread; being a frame late either way
-       costs one frame of an unused or an empty table. */
-    if (!tagpu_native_want_builds()) return need;
-    n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
-    if (n > 0) {
-        e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
-                         &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);
-        if (e > need) need = e;
+    int n = 0;
+    /* THE BUILDS TABLE IS GATED ON THE ONLY PASS THAT READS IT, like the
+       effect tables above: the walk and the copy are pure cost to a session
+       with no build ghost. `tagpu_native_want_builds()` is the ghost's own
+       30-frame poll, published from the render thread; being a frame late
+       either way costs one frame of an unused or an empty table. */
+    if (tagpu_native_want_builds()) {
+        n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
+        if (n > 0) {
+            e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
+                             &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);
+            if (e > need) need = e;
+        }
+        if (n < 0) n = 0;
     }
-    /* the cursor ghost needs its mask with no queued build at all */
-    e = fill_ghostmask(p, cursor, ta, n > 0 ? n : 0);
+    /* THE MASKS ARE NOT GATED: the cursor ghost draws whenever its lever is
+       on, whatever the poll has published yet, so its row rides every packet
+       that carries its type. What that costs a session with no ghost is one
+       cached lookup a frame while a build is on the cursor. */
+    e = fill_ghostmask(p, cursor, n);
     if (e > need) need = e;
     return need;
 }
@@ -2698,7 +2706,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     e = fill_mapfeat(p, &cursor);
     if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
-    e = fill_builds(p, ta, &cursor);
+    e = fill_builds(p, &cursor);
     if (e > need) need = e;
     /* ---- the effects and the particle layers ---- */
     e = fill_fx(p, ta, &cursor);
