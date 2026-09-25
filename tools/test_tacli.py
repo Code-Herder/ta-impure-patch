@@ -1430,11 +1430,6 @@ class PowerShellScript(unittest.TestCase):
         self.assertIn("$ErrorActionPreference = 'Stop'; try {", line)
         self.assertIn("while ($__e.InnerException) { $__e = $__e.InnerException }", line)
 
-    def test_a_sink_gets_every_marker(self):
-        s = taremote.ps_script(["Write-Output 'a'"], self.TOKEN, 1, sink="'D:\\t\\s.txt'")
-        self.assertIn("[IO.File]::AppendAllText('D:\\t\\s.txt', $t + [Environment]::NewLine)",
-                      s.split("\n")[0])
-
     def test_a_statement_that_would_span_lines_is_refused(self):
         for stmt in ("Write-Output 'a'\nWrite-Output 'b'",    # two lines
                      "Write-Output 'a'\r",                     # a CR
@@ -1562,107 +1557,88 @@ class FakePSError(Exception):
         self.kind, self.msg, self.wrapped = kind, msg, wrapped
 
 
-BLOCK = object()        # an answer meaning: this statement waits (WaitForExit, the TotalA wait)
-
-
 class FakePS:
-    """PowerShell running a script `ps_script` made, line by line: the `__m` function
-    and its sink, the `$__seq` guard, and each statement's try/catch -- whose ERR line
-    names the exception the catch clause reaches (the innermost only when the clause
-    walks InnerException). A line in `skip` is one PowerShell never ran. A statement
-    answered with BLOCK suspends the run; `run()` again retries it."""
+    """PowerShell running a script `ps_script` made, line by line: the `__m` function,
+    the `$__seq` guard, and each statement's try/catch -- whose ERR line names the
+    exception the catch clause reaches (the innermost only when the clause walks
+    InnerException). A line in `skip` is one PowerShell never ran."""
 
     GUARDED = re.compile(r"^if \(\$__seq -eq (\d+)\) \{ \$ErrorActionPreference = 'Stop'; "
                          r"try \{ (.*); \$__seq = (\d+); __m '(@@[0-9a-f]+) DONE (\d+) (\d+)' \} "
                          r"catch \{ (.*) \} \}$")
 
-    def __init__(self, script, answer, stdout, machine, skip=(), context=None):
+    def __init__(self, script, answer, stdout, skip=()):
         self.lines = script.split("\n")
-        self.answer, self.stdout, self.machine = answer, stdout, machine
+        self.answer, self.stdout = answer, stdout
         self.skip = set(skip)
-        self.pos, self.seq, self.sink = 0, None, None
-        self.vars = dict(context or {})
+        self.seq = None
+        self.vars = {}
 
-    def emit(self, text, to_sink):
-        self.stdout(text)
-        if to_sink and self.sink is not None:
-            self.machine.append(self.sink, (text + "\r\n").encode())
-
-    def run(self) -> bool:
-        while self.pos < len(self.lines):
-            n, line = self.pos, self.lines[self.pos]
+    def run(self):
+        for n, line in enumerate(self.lines):
             if n in self.skip or not line.strip():
-                self.pos += 1
                 continue
-            if line.startswith("function __m($t) {"):
-                m = re.search(r"AppendAllText\((" + PS_EXPR + r"), \$t \+", line)
-                self.sink = ps_value(m.group(1)) if m else None
-            elif line == "$__seq = 0":
+            if line == "function __m($t) { Write-Output $t }":
+                continue
+            if line == "$__seq = 0":
                 self.seq = 0
             elif line.startswith("__m '") and line.endswith("'"):
-                self.emit(line[5:-1], True)
+                self.stdout(line[5:-1])
             else:
                 m = self.GUARDED.match(line)
                 if not m:
                     raise AssertionError(f"not a line ps_script makes: {line[:120]}")
                 i, stmt, nxt, tag, b = int(m[1]), m[2], int(m[3]), m[4], m[5]
                 assert nxt == i + 1 and int(m[6]) == i, line[:120]
-                if self.seq == i:
-                    try:
-                        out = self.answer(stmt, self.vars)
-                    except FakePSError as e:
-                        walks = "while ($__e.InnerException) { $__e = $__e.InnerException }" in m[7]
-                        inner = walks or not e.wrapped
-                        kind = e.kind if inner else "MethodInvocationException"
-                        msg = e.msg if inner else f"Exception calling a method: {e.msg}"
-                        self.seq = -1
-                        self.emit(f"{tag} ERR {b} {i} {kind} {b64(msg)}", True)
-                    else:
-                        if out is BLOCK:
-                            return False
-                        for o in out:
-                            if isinstance(o, tuple):
-                                self.emit(o[1], True)       # printed through __m
-                            else:
-                                self.emit(o, False)
-                        self.seq = nxt
-                        self.emit(f"{tag} DONE {b} {i}", True)
-            self.pos += 1
-        return True
+                if self.seq != i:
+                    continue
+                try:
+                    out = self.answer(stmt, self.vars)
+                except FakePSError as e:
+                    walks = "while ($__e.InnerException) { $__e = $__e.InnerException }" in m[7]
+                    inner = walks or not e.wrapped
+                    kind = e.kind if inner else "MethodInvocationException"
+                    msg = e.msg if inner else f"Exception calling a method: {e.msg}"
+                    self.seq = -1
+                    self.stdout(f"{tag} ERR {b} {i} {kind} {b64(msg)}")
+                else:
+                    for o in out:
+                        self.stdout(o)
+                    self.seq = nxt
+                    self.stdout(f"{tag} DONE {b} {i}")
+
+
+TEST_DLL = b"MZ our build " + taremote.TEST_MODE_MARK + b" and the rest"
 
 
 class FakeWindows(taremote.Session):
     """A remote machine in memory, behind the REAL Session: every batch is made by
     `ps_script`, run by FakePS line by line, and its marker lines are parsed by
     `Session._send` as the SSH ones are. The machine holds files, processes,
-    scheduled tasks (whose launch wrapper runs here too, suspending while its game
-    runs) and TA's registry key, with content: an export is bytes, an import puts
-    them back, and a digest is the SHA-256 of an export."""
-
-    HOME = r"D:\Local AppData"
+    scheduled tasks that start TotalA.exe, and TA's real registry key -- which tacli
+    may read (`remote add`'s seed) and which nothing may write: `registry_writes`
+    records any statement that would."""
 
     def __init__(self, folder, player):
         super().__init__("tester@example-host")
         self.folder, self.player = folder, player
         self.files, self.mtime, self.dirs = {}, {}, set()
         self.clock = 638000000000000000
-        self.sent, self.wrapper_sent = [], []   # tacli's statements; the wrapper's
-        self.n = 0                              # every statement, numbered in order
+        self.sent = []                          # every statement tacli sent, in order
         self.procs = []                         # (pid, path)
         self.next_pid = 4242
-        self.key_present = True
-        self.key = {("", "SkirmishMap"): ("String", "the player's map"),
-                    ("", "Interface Type"): ("DWord", 0),
-                    ("Skirmish", "Player1"): ("DWord", 1)}
-        self.key_writes = []                    # (value name, statement number)
-        self.exported_at = self.started_at = None
-        self.tasks, self.action, self.wrapper = {}, None, None
+        self.key = {("", "SkirmishMap"): (1, b"the player's map\0"),
+                    ("", "Interface Type"): (4, (0).to_bytes(4, "little")),
+                    ("Skirmish", "Player1"): (4, (1).to_bytes(4, "little"))}
+        self.registry_writes = []
+        self.tasks, self.action, self.settings = {}, None, None
         self.skip_lines = set()
-        self.import_bug = False                 # the import puts back something else
         self.reparse = set()                    # folders that are junctions
         self.robocopy_fails = False
-        self.hold_start = False                 # the wrapper's Start-Process waits
+        self.task_error = None                  # the task starts no game: this LastTaskResult
+        self.game_exits = False                 # the game exits at once, code 1
         self.vanish_after_listing = None        # a log file deleted right after a listing
+        self.vanish_during_listing = None       # a log file renamed while a listing opens it
         self.extra_listing = []                 # rows a listing adds, as the remote sends them
 
     # -- the transport the real Session drives
@@ -1670,44 +1646,13 @@ class FakeWindows(taremote.Session):
         self.proc = types.SimpleNamespace()
 
     def _write(self, script):
-        self.tick()
-        assert FakePS(script, self.answer, self.q.put, self, self.skip_lines).run(), \
-            "a statement blocked in an SSH batch"
-        self.tick()
+        FakePS(script, self.answer, self.q.put, self.skip_lines).run()
 
     def close(self):
         self.proc = None
 
     def kill(self):
         self.proc = None
-
-    # -- test controls
-    def tick(self):
-        """Let the launch wrapper run on until it blocks or finishes."""
-        if self.wrapper is not None:
-            name, ps = self.wrapper
-            if ps.run():
-                self.wrapper = None
-                self.tasks[name]["state"] = "Ready"
-
-    def end_wrapper(self):
-        """The task ended, or the machine restarted: the wrapper and its game are gone,
-        and the wrapper never reached its restore."""
-        self.wrapper = None
-        for t in self.tasks.values():
-            t["state"] = "Ready"
-        self.procs = []
-
-    def pend(self):
-        return self.HOME + r"\tacli\registry-pending.txt"
-
-    def export(self) -> bytes:
-        return ("REGEDIT " + json.dumps(sorted([list(k) + list(v) for k, v in self.key.items()]))
-                ).encode() if self.key_present else b""
-
-    @staticmethod
-    def parse_export(data: bytes) -> dict:
-        return {(a, b): (c, d) for a, b, c, d in json.loads(data[len("REGEDIT "):])}
 
     # -- files
     def put(self, path, data: bytes):
@@ -1717,11 +1662,6 @@ class FakeWindows(taremote.Session):
 
     def get(self, path):
         return self.files.get(path.lower())
-
-    def append(self, path, data: bytes):
-        if path.lower() not in self.files:
-            self.put(path, b"")
-        self.files[path.lower()] += data
 
     def has_dir(self, p):
         p = p.lower().rstrip("\\")
@@ -1743,10 +1683,13 @@ class FakeWindows(taremote.Session):
             raise FakePSError("FileNotFoundException", f"Could not find file '{p}'.")
         return data
 
+    def store(self, folder=None) -> "taremote.RegStore":
+        return taremote.RegStore.parse(bytes(self.get((folder or self.folder)
+                                                      + r"\tacli-state\registry.txt")))
+
     # -- the statements taremote sends
     def answer(self, st, v):
-        self.n += 1
-        (self.wrapper_sent if v.get("wrapper") else self.sent).append(st)
+        self.sent.append(st)
         E = PS_EXPR
 
         def after(prefix, nth=0):
@@ -1759,148 +1702,81 @@ class FakeWindows(taremote.Session):
 
         if st in taremote.SESSION_INIT:
             return []
+        if re.search(r"reg(\.exe)? (add|delete|import)|New-ItemProperty|Set-ItemProperty|"
+                     r"Remove-ItemProperty|CreateSubKey|SetValue|DeleteValue|HKCU:", st):
+            self.registry_writes.append(st)
         # -- processes and the machine
         if st.startswith("Get-Process TotalA -ErrorAction SilentlyContinue | ForEach-Object"):
             return [f"{pid}|{b64(path)}" for pid, path in self.procs]
         if "Win32_ComputerSystem).UserName" in st or "WindowsIdentity]::GetCurrent().Name" in st:
             return [b64(r"HOST\tester")]
-        if "GetFolderPath('LocalApplicationData')" in st:
-            return [b64(self.HOME)]
         if "$env:USERPROFILE" in st:
             return [b64(r"D:\Profiles\tester")]
         if st.startswith("Stop-Process -Id "):
             pid = int(re.search(r"-Id (\d+)", st).group(1))
             self.procs = [p for p in self.procs if p[0] != pid]
+            for t in self.tasks.values():
+                if t.get("pid") == pid:
+                    t.update(state="Ready", result=1)
             return []
-        if st.startswith("if (@(Get-Process TotalA -ErrorAction SilentlyContinue).Count -gt 0)"):
-            if self.procs:
-                raise FakePSError("RuntimeException", thrown(), wrapped=False)
-            return []
-        if st.startswith("while (@(Get-Process TotalA"):
-            return BLOCK if self.procs else []
+        if st.startswith("Write-Output ('' + (Get-Process -Id"):
+            pid = int(re.search(r"-Id (\d+)", st).group(1))
+            task = next(t for t in self.tasks.values() if t.get("pid") == pid)
+            return ["Normal" if "-Priority 4" in task["settings"] else "BelowNormal"]
+        # -- the registry: read only
+        if "[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(" in st:
+            assert "$false" in st and "SetValue" not in st
+            rows, root = [], "HKEY_CURRENT_USER\\Software\\Cavedog Entertainment"
+            if self.key:
+                rows.append("K|" + b64(root))
+                subs = sorted({sub for sub, _ in self.key})
+                for sub in subs:
+                    path = root + "\\Total Annihilation" + ("\\" + sub if sub else "")
+                    rows.append("K|" + b64(path))
+                    for (s2, name), (kind, data) in self.key.items():
+                        if s2 == sub:
+                            rows.append(f"V|{b64(path)}|{b64(name)}|{kind}|{b64(data)}")
+            return rows
         # -- scheduled tasks
         if st.startswith("$a = New-ScheduledTaskAction"):
-            self.action = after("-Argument ")
+            self.action = {"execute": after("-Execute "), "dir": after("-WorkingDirectory "),
+                           "args": after("-Argument ") if "-Argument " in st else ""}
             return []
-        if st.startswith(("$pr = New-ScheduledTaskPrincipal", "$st = New-ScheduledTaskSettingsSet")):
+        if st.startswith("$pr = New-ScheduledTaskPrincipal"):
+            return []
+        if st.startswith("$st = New-ScheduledTaskSettingsSet"):
+            self.settings = st
             return []
         if st.startswith("Register-ScheduledTask"):
             self.tasks[after("-TaskName ")] = {"state": "Ready", "action": self.action,
+                                              "settings": self.settings, "result": 0x41303,
                                               "path": after("-TaskPath ")}
             return []
         if st.startswith("Start-ScheduledTask"):
-            name = after("-TaskName ")
-            wrapper = re.search(r'-File "(.+)"$', self.tasks[name]["action"]).group(1)
-            self.tasks[name]["state"] = "Running"
-            script = bytes(self.get(wrapper)).decode()
-            self.wrapper = (name, FakePS(script, self.answer, lambda t: None, self,
-                                         context={"wrapper": True}))
-            self.tick()
+            task = self.tasks[after("-TaskName ")]
+            if self.task_error is not None:
+                task.update(state="Ready", result=self.task_error)
+                return []
+            exe = task["action"]["execute"]
+            pid, self.next_pid = self.next_pid, self.next_pid + 1
+            task.update(state="Running", result=taremote.TASK_RUNNING, pid=pid)
+            if self.game_exits:
+                task.update(state="Ready", result=1)
+                return []
+            self.procs.append((pid, exe))
+            self.put(ntpath.dirname(exe) + r"\log\tagpu.log",
+                     f"log: run R{pid} part 1 of tagpu.log, started\n".encode())
             return []
         if st.startswith("$t = Get-ScheduledTask") and "Unregister-ScheduledTask" in st:
             self.tasks.pop(after("-TaskName "), None)
             return []
-        if st.startswith("Get-ScheduledTask -TaskPath") and "('task ' +" in st:
-            return [f"task {b64(n)}" for n, t in self.tasks.items()
-                    if t["state"] in ("Running", "Queued")]
-        if st.startswith("$__busy = @(Get-ScheduledTask"):
-            busy = [n for n, t in self.tasks.items() if t["state"] in ("Running", "Queued")]
-            if busy:
-                raise FakePSError("RuntimeException", f"a launch wrapper is still running ({busy[0]})",
-                                  wrapped=False)
-            return []
-        if "('pending ' +" in st:
-            data = self.get(self.pend())
-            return [] if data is None else ["pending " + b64(data)]
-        # -- the launch wrapper's registry half
-        if st == "$__mine = $false":
-            v["mine"] = False
-            return []
-        if "'CreateNew'" in st:
-            pend = after("[IO.File]::Open(")
-            if self.get(pend) is not None:
-                raise FakePSError("IOException", f"The file '{pend}' already exists.")
-            v["mine"] = True
-            inst = ps_value(re.search(r"'instance=' \+ (" + E + ")", st).group(1))
-            self.put(pend, f"instance={inst}\r\nwrapper=999\r\nstarted=2026-09-25T12:00:00\r\n".encode())
-            return []
-        if "$__line = 'key=present '" in st:
-            exp = ps_value(re.search(r"reg\.exe export " + E + " (" + E + ") /y", st).group(1))
-            self.exported_at = self.n
-            if self.key_present:
-                self.put(exp, self.export())
-                line = "key=present " + sha(self.export())
-            else:
-                line = "key=absent"
-            self.append(after("AppendAllText("), (line + "\r\n").encode())
-            return []
-        if "New-ItemProperty -LiteralPath" in st:
-            path = after("-LiteralPath ")
-            sub = path[len(taremote.REG_PSPATH):].lstrip("\\")
-            m = re.search(r"-PropertyType (\w+) -Value (" + E + r"|\d+) -Force", st)
-            val = int(m.group(2)) if m.group(2).isdigit() else ps_value(m.group(2))
-            self.key[(sub, after("-Name "))] = (m.group(1), val)
-            self.key_present = True
-            self.key_writes.append((after("-Name "), self.n))
-            return []
-        if st.startswith("$__g = Start-Process"):
-            if self.hold_start:
-                return BLOCK
-            exe = after("-FilePath ")
-            pid, self.next_pid = self.next_pid, self.next_pid + 1
-            self.procs.append((pid, exe))
-            self.started_at = self.n
-            self.put(ntpath.dirname(exe) + r"\log\tagpu.log",
-                     f"log: run R{pid} part 1 of tagpu.log, started\n".encode())
-            v["game"] = pid
-            return [("__m", f"game {pid}")]
-        if st == "$__g.WaitForExit()":
-            return BLOCK if any(p == v.get("game") for p, _ in self.procs) else []
-        if st.startswith("if (-not $__mine)"):
-            if not v.get("mine"):
-                raise FakePSError("RuntimeException", thrown(), wrapped=False)
-            return []
-        # -- the restore (the wrapper's, and `remote restore`'s)
-        if st.startswith("if (-not [IO.File]::Exists(") and "no registry record is pending" in st:
-            if self.get(after("[IO.File]::Exists(")) is None:
-                raise FakePSError("RuntimeException", thrown(), wrapped=False)
-            return []
-        if st.startswith("$__k = @([IO.File]::ReadAllLines("):
-            text = bytes(self.read_or_fail(after("ReadAllLines("))).decode()
-            keys = [ln for ln in text.splitlines() if ln.startswith("key=")]
-            v["want"] = keys[-1][4:] if keys else ""
-            return []
-        if "the export taken at launch is missing" in st:
-            if v["want"].startswith("present "):
-                data = self.get(after("[IO.File]::Exists("))
-                if data is None:
-                    raise FakePSError("RuntimeException", "the export taken at launch is missing; "
-                                      "the key was left as it is", wrapped=False)
-                if sha(data) != v["want"][8:]:
-                    raise FakePSError("RuntimeException", "the export taken at launch has changed",
-                                      wrapped=False)
-            return []
-        if "& reg.exe delete" in st:
-            if v["want"] != "" and self.key_present:
-                self.key, self.key_present = {}, False
-            return []
-        if "& reg.exe import" in st:
-            if v["want"].startswith("present "):
-                exp = ps_value(re.search(r"reg\.exe import (" + E + ")", st).group(1))
-                self.key, self.key_present = self.parse_export(bytes(self.get(exp))), True
-                if self.import_bug:
-                    self.key[("", "import bug")] = ("DWord", 1)
-            return []
-        if "& reg.exe export" in st and "$__want.Substring(8)" in st:
-            if v["want"].startswith("present ") and sha(self.export()) != v["want"][8:]:
-                raise FakePSError("RuntimeException", f"TA's registry key reads {sha(self.export())} "
-                                  f"after the restore", wrapped=False)
-            if v["want"] == "absent" and self.key_present:
-                raise FakePSError("RuntimeException", "TA's registry key is still there", wrapped=False)
-            return []
-        if st.startswith("[IO.File]::Delete(") and "('restored ' +" in st:
-            self.files.pop(after("[IO.File]::Delete(").lower(), None)
-            return [("__m", "restored " + v["want"])]
+        if st.startswith("$t = Get-ScheduledTask") and "Get-ScheduledTaskInfo" in st:
+            task = self.tasks.get(after("-TaskName "))
+            return [] if task is None else [f"{task['state']}|{task['result']}"]
+        # -- the DLL
+        if "GetEncoding(28591).GetString([IO.File]::ReadAllBytes(" in st:
+            data = self.get(after("[IO.File]::Exists("))
+            return [str(data is not None and taremote.TEST_MODE_MARK in bytes(data))]
         # -- the folders (`remote add`, `rm`)
         if st.startswith("$__p = [IO.Path]::GetFullPath("):
             p = ntpath.normpath(after("GetFullPath("))
@@ -2056,6 +1932,10 @@ class FakeWindows(taremote.Session):
             return []
         if "-Filter *.log -File" in st:
             logdir = after("[IO.Directory]::Exists(").lower() + "\\"
+            if self.vanish_during_listing:
+                gone, self.vanish_during_listing = self.vanish_during_listing, None
+                self.files.pop(gone.lower(), None)
+                raise FakePSError("FileNotFoundException", f"Could not find file '{gone}'.")
             rows = [f"{b64(k[len(logdir):])}|{len(v_)}|{b64(bytes(v_[:256]))}"
                     for k, v_ in self.files.items()
                     if k.startswith(logdir) and k.endswith(".log") and "\\" not in k[len(logdir):]]
@@ -2138,7 +2018,7 @@ class RemoteRouting(unittest.TestCase):
         taremote.SESSION_FACTORY = lambda ssh, key: self.win
         self.write_meta("r1", self.FOLDER)
         self.fill_test_folder(self.FOLDER)
-        self.before = self.win.export()
+        self.before = dict(self.win.key)
 
     def fill_test_folder(self, folder):
         """What `remote add` leaves: the copied files, their hash list, the protected
@@ -2156,6 +2036,12 @@ class RemoteRouting(unittest.TestCase):
                      f"instance={ntpath.basename(folder)}\nplayer={self.PLAYER}\n".encode())
         self.win.put(f"{folder}\\tacli-state\\copied.txt", "\r\n".join(
             f"{sha(data)} {name}" for name, data in copied.items()).encode())
+        # the registry store `remote add` seeds, and the DLL a launch deployed earlier
+        seed = taremote.RegStore()
+        seed.set_sz(taremote.STORE_TA, "SkirmishMap", "the player's map")
+        seed.set_dword(taremote.STORE_TA + r"\Skirmish", "Player1", 1)
+        self.win.put(f"{folder}\\tacli-state\\registry.txt", seed.format())
+        self.win.put(f"{folder}\\ddraw.dll", TEST_DLL)
 
     def restore(self):
         tacli.INSTANCES, taremote.SESSION_FACTORY = self.saved
@@ -2187,10 +2073,6 @@ class RemoteRouting(unittest.TestCase):
 
     def local_files(self, name="r1"):
         return sorted(p.name for p in (Path(self.tmp.name) / name).rglob("*"))
-
-    def pending(self):
-        data = self.win.get(self.win.pend())
-        return None if data is None else bytes(data).decode()
 
     # -- routing
     def test_every_other_verb_refuses_and_sends_nothing(self):
@@ -2227,8 +2109,7 @@ class RemoteRouting(unittest.TestCase):
                            (["log", "r1"], tacli.cmd_log),
                            (["ab", "r1", "gui"], tacli.cmd_ab),
                            (["crash", "r1"], tacli.cmd_crash),
-                           (["shield", "r1", "off"], tacli.cmd_shield),
-                           (["remote", "restore", "r1"], tacli.cmd_remote_restore)):
+                           (["shield", "r1", "off"], tacli.cmd_shield)):
             with self.subTest(argv=argv):
                 args = parser.parse_args(argv)
                 tacli._route_remote(args)
@@ -2252,6 +2133,34 @@ class RemoteRouting(unittest.TestCase):
         self.assertIn("r1", out)
         self.assertIn("broken: its remote metadata is unusable", err)
         self.assertEqual(self.main("eye", "broken", "1", "2")[0], 1)
+
+    def test_metadata_that_does_not_read_is_refused_by_every_verb(self):
+        # read as {} it would look local, and `rm` would delete the directory
+        d = Path(self.tmp.name) / "torn"
+        d.mkdir()
+        (d / "instance.json").write_text('{"name": "torn", "type": "rem')
+        for argv in (["rm", "torn"], ["launch", "torn"], ["stop", "torn"],
+                     ["eye", "torn", "1", "2"], ["arm", "torn", "gui.on"]):
+            with self.subTest(argv=argv):
+                code, _, err = self.main(*argv)
+                self.assertEqual(code, 1)
+                self.assertIn("does not read", err)
+        self.assertTrue((d / "instance.json").exists())
+        code, out, err = self.main("ls")
+        self.assertEqual(code, 0)
+        self.assertIn("r1", out)
+        self.assertIn("torn: its metadata", err)
+        self.assertEqual(self.win.sent, [])
+
+    def test_metadata_is_replaced_whole(self):
+        inst = tacli.Instance("r1")
+        before = inst.meta_path.read_text()
+        with self.assertRaises(TypeError):
+            inst.save_meta({"name": "r1", "bad": object()})     # fails while writing
+        self.assertEqual(inst.meta_path.read_text(), before)
+        inst.save_meta(dict(json.loads(before), shield=False))
+        self.assertFalse(self.meta_now()["shield"])
+        self.assertEqual(sorted(p.name for p in inst.dir.iterdir()), ["instance.json"])
 
     # -- the file channels
     def test_arm_and_disarm_write_the_lever_in_the_test_folder(self):
@@ -2325,6 +2234,13 @@ class RemoteRouting(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("hello", out)
 
+    def test_a_log_rotated_inside_the_listing_restarts_the_sync(self):
+        self.win.put(self.FOLDER + r"\log\tagpu.log", b"log: run NEW part 1 of tagpu.log, x\nhello\n")
+        self.win.vanish_during_listing = self.FOLDER + r"\log\tagpu.1.log"
+        code, out, err = self.main("log", "r1")
+        self.assertEqual(code, 0, err)
+        self.assertIn("hello", out)
+
     def test_a_listed_name_that_is_not_a_log_file_name_is_ignored(self):
         self.win.put(self.FOLDER + r"\log\tagpu.log", b"log: run NEW part 1 of tagpu.log, x\nhello\n")
         head = b64(b"log: run NEW part 1 of tagpu.log, x\n")
@@ -2381,72 +2297,7 @@ class RemoteRouting(unittest.TestCase):
         self.assertEqual(win.captures, 1)
         self.assertEqual(clock.slept, [1.5])
 
-    # -- launch, stop and TA's registry key
-    def test_launch_refuses_beside_a_game_it_did_not_start(self):
-        self.win.procs = [(77, self.PLAYER + r"\TotalA.exe")]
-        code, _, err = self.main("launch", "r1", "--keep-dll")
-        self.assertEqual(code, 1)
-        self.assertIn("may be the player's game", err)
-        self.assertFalse(any(s.startswith(("Register-ScheduledTask", "Start-ScheduledTask"))
-                             for s in self.win.sent))
-        self.assertIsNone(self.pending())
-
-    def test_launch_refuses_local_only_flags(self):
-        code, _, err = self.main("launch", "r1", "--window", "800x600")
-        self.assertEqual(code, 1)
-        self.assertIn("--window", err)
-        self.assertEqual(self.win.sent, [])
-
-    def test_the_wrapper_exports_the_key_before_writing_it_and_before_the_game(self):
-        code, out, err = self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        self.assertEqual(code, 0, err)
-        # tacli itself never touches the registry: every registry statement is the wrapper's
-        self.assertFalse([s for s in self.win.sent if "reg.exe" in s or "New-ItemProperty" in s])
-        self.assertTrue(self.win.key_writes)
-        self.assertTrue(all(n > self.win.exported_at for _, n in self.win.key_writes))
-        self.assertGreater(self.win.started_at, max(n for _, n in self.win.key_writes))
-        self.assertEqual(self.win.key[("", "SkirmishMap")], ("String", "Two Continents"))
-        # the machine-wide record says whose launch holds the key, and what it was
-        self.assertIn("instance=r1", self.pending())
-        self.assertIn("key=present " + sha(self.before), self.pending())
-        # a copy of the export is kept locally, for `remote restore`
-        self.assertEqual((Path(self.tmp.name) / "r1" / "registry-before.reg").read_bytes(),
-                         self.before)
-        self.assertIn("reads the test values", out)
-        # the task runs the wrapper, from a file, and is the instance's own
-        task = self.win.tasks["r1"]
-        self.assertEqual(task["path"], "\\tacli\\")
-        self.assertRegex(task["action"], r'-ExecutionPolicy Bypass .*-File "D:\\Test Folder\\r1'
-                                         r'\\tacli-state\\launch\.ps1"$')
-        self.assertEqual(task["state"], "Running")
-        # the shield is on by default, as it is locally
-        self.assertIsNotNone(self.win.get(self.FOLDER + r"\tagpu_shield.on"))
-        self.assertIsNotNone(self.win.get(self.FOLDER + r"\tagpu_nowarp.on"))
-        self.assertIsNotNone(self.win.get(self.FOLDER + r"\tagpu_defaults.off"))
-
-    def test_stop_ends_the_game_and_the_wrapper_restores_the_key(self):
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        code, out, err = self.main("stop", "r1")
-        self.assertEqual(code, 0, err)
-        self.assertIn("restored TA's registry key", out)
-        self.assertIn("by the launch wrapper", out)
-        self.assertEqual(self.win.export(), self.before)
-        self.assertIsNone(self.pending())
-        self.assertEqual(self.win.procs, [])
-        self.assertEqual(self.win.tasks["r1"]["state"], "Ready")
-
-    def test_a_game_closed_outside_tacli_is_restored_by_the_wrapper_alone(self):
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        sent = len(self.win.sent)
-        self.win.procs = []                     # closed on the remote desktop
-        self.win.tick()
-        self.assertEqual(len(self.win.sent), sent)      # no tacli command in between
-        self.assertEqual(self.win.export(), self.before)
-        self.assertIsNone(self.pending())
-        code, _, err = self.main("eye", "r1", "1", "2")
-        self.assertEqual(code, 0)
-        self.assertNotIn("WARNING", err)
-
+    # -- launch, stop, and TA's registry as a file
     def use_fake_clock(self):
         clock = FakeClock()
         for name in ("time", "sleep"):
@@ -2454,125 +2305,123 @@ class RemoteRouting(unittest.TestCase):
             setattr(tacli.time, name, getattr(clock, name))
         return clock
 
-    def test_a_game_that_starts_after_the_launch_gave_up_is_restored_after_it(self):
-        # The launch times out before the wrapper's game starts. The wrapper still owns
-        # the key: nothing restores it early, and it is restored when that game exits.
-        self.use_fake_clock()
-        self.win.hold_start = True
-        code, _, err = self.main("launch", "r1", "--keep-dll", "--map", "Two Continents",
-                                 "--timeout", "2")
-        self.assertEqual(code, 1)
-        self.assertIn("started no TotalA.exe", err)
-        self.assertNotEqual(self.win.export(), self.before)
-        self.assertEqual(self.main("eye", "r1", "1", "2")[0], 0)
-        self.win.hold_start = False
-        self.win.tick()                                 # the game starts only now
-        self.assertTrue(self.win.procs)
-        self.assertNotEqual(self.win.export(), self.before)
-        self.win.procs = []                             # and is closed on the desktop
-        self.win.tick()
-        self.assertEqual(self.win.export(), self.before)
-        self.assertIsNone(self.pending())
+    def use_built_dll(self, data):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".dll") as f:
+            f.write(data)
+        self.addCleanup(Path(f.name).unlink)
+        self.addCleanup(setattr, tacli, "BUILT_DLL", tacli.BUILT_DLL)
+        tacli.BUILT_DLL = Path(f.name)
 
-    def test_an_ended_wrapper_is_reported_by_every_command_and_restored_on_request(self):
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        self.win.end_wrapper()                  # a restart: the restore never ran
-        self.assertNotEqual(self.win.export(), self.before)
-        code, _, err = self.main("eye", "r1", "1", "2")
-        self.assertEqual(code, 0)
-        self.assertIn("WARNING", err)
-        self.assertIn("still holds the test values", err)
-        self.assertIn("tacli remote restore r1", err)
+    def test_launch_refuses_beside_a_game_it_did_not_start(self):
+        self.win.procs = [(77, self.PLAYER + r"\TotalA.exe")]
         code, _, err = self.main("launch", "r1", "--keep-dll")
         self.assertEqual(code, 1)
-        self.assertIn("tacli remote restore r1", err)
-        code, out, err = self.main("remote", "restore", "r1")
+        self.assertIn("may be the player's game", err)
+        self.assertFalse(any(s.startswith(("Register-ScheduledTask", "Start-ScheduledTask"))
+                             for s in self.win.sent))
+
+    def test_launch_refuses_local_only_flags(self):
+        code, _, err = self.main("launch", "r1", "--window", "800x600")
+        self.assertEqual(code, 1)
+        self.assertIn("--window", err)
+        self.assertEqual(self.win.sent, [])
+
+    def test_launch_puts_the_test_values_into_the_store_and_never_the_registry(self):
+        code, out, err = self.main("launch", "r1", "--keep-dll", "--map", "Two Continents",
+                                   "--player", "2:2:1")
         self.assertEqual(code, 0, err)
-        self.assertIn("restored TA's registry key", out)
-        self.assertEqual(self.win.export(), self.before)
-        self.assertIsNone(self.pending())
+        self.assertEqual(self.win.registry_writes, [])
+        self.assertEqual(self.win.key, self.before)
+        store = self.win.store()
+        ta = taremote.STORE_TA
+        self.assertEqual(store.get(ta, "SkirmishMap")[1:], (1, b"Two Continents\0"))
+        self.assertEqual(store.get(ta, "Interface Type")[1:], (4, (1).to_bytes(4, "little")))
+        self.assertEqual(store.get(ta, "musicvol")[1:], (4, bytes(4)))
+        self.assertEqual(store.get(ta + r"\Skirmish", "Player2Controller")[1:],
+                         (4, (2).to_bytes(4, "little")))
+        self.assertEqual(store.get(ta + r"\Skirmish", "Player1")[1:],
+                         (4, (1).to_bytes(4, "little")))           # the seed's, kept
+        self.assertIn("the remote registry is not written", out)
+        # the task runs the game itself, from the test folder, at normal priority
+        task = self.win.tasks["r1"]
+        self.assertEqual(task["path"], "\\tacli\\")
+        self.assertEqual(task["action"]["execute"], self.FOLDER + r"\TotalA.exe")
+        self.assertEqual(task["action"]["dir"], self.FOLDER)
+        self.assertIn("-Priority 4", task["settings"])
+        self.assertIn("priority Normal", out)
+        # the shield is on by default, as it is locally
+        self.assertIsNotNone(self.win.get(self.FOLDER + r"\tagpu_shield.on"))
+        self.assertIsNotNone(self.win.get(self.FOLDER + r"\tagpu_nowarp.on"))
+        self.assertIsNotNone(self.win.get(self.FOLDER + r"\tagpu_defaults.off"))
 
-    def test_remote_restore_refuses_under_a_running_game_or_wrapper(self):
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        code, _, err = self.main("remote", "restore", "r1")      # the wrapper is running
-        self.assertEqual(code, 1)
-        self.assertIn("still running", err)
-        self.win.end_wrapper()
-        self.win.procs = [(77, self.PLAYER + r"\TotalA.exe")]    # the player's game
-        code, _, err = self.main("remote", "restore", "r1")
-        self.assertEqual(code, 1)
-        self.assertIn("TotalA.exe is running", err)
-        self.assertNotEqual(self.win.export(), self.before)
-        self.assertIsNotNone(self.pending())
+    def test_a_launch_that_changes_no_value_leaves_the_store_file_alone(self):
+        self.assertEqual(self.main("launch", "r1", "--keep-dll")[0], 0)
+        self.main("stop", "r1")
+        stamp = self.win.mtime[(self.FOLDER + r"\tacli-state\registry.txt").lower()]
+        self.assertEqual(self.main("launch", "r1", "--keep-dll")[0], 0)
+        self.assertEqual(self.win.mtime[(self.FOLDER + r"\tacli-state\registry.txt").lower()], stamp)
 
-    def test_a_second_instance_never_exports_the_first_ones_test_values(self):
-        folder2 = r"D:\Test Folder\r2"
-        self.write_meta("r2", folder2)
-        self.fill_test_folder(folder2)
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        code, _, err = self.main("launch", "r2", "--keep-dll")   # r1's wrapper runs
+    def test_launch_refuses_a_test_folder_without_a_store(self):
+        self.win.files.pop((self.FOLDER + r"\tacli-state\registry.txt").lower())
+        code, _, err = self.main("launch", "r1", "--keep-dll")
         self.assertEqual(code, 1)
-        self.assertIn("a launch wrapper is still running", err)
-        self.win.end_wrapper()                                   # r1's crashes, unrestored
-        code, _, err = self.main("launch", "r2", "--keep-dll")
-        self.assertEqual(code, 1)
-        self.assertIn("still holds the test values of instance r1", err)
-        self.assertEqual(self.main("remote", "restore", "r2")[0], 0)
-        self.assertEqual(self.main("launch", "r2", "--keep-dll", "--map", "Anteer")[0], 0)
-        self.assertEqual(self.main("stop", "r2")[0], 0)
-        self.assertEqual(self.win.export(), self.before)
+        self.assertIn("real registry", err)
+        self.assertEqual(self.win.tasks, {})
 
-    def test_the_restore_waits_for_a_players_game_started_meanwhile(self):
+    def test_launch_refuses_a_store_that_does_not_parse(self):
+        self.win.put(self.FOLDER + r"\tacli-state\registry.txt", b"HKLM\\Software\\x\r\n")
+        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 1)
+        self.assertIn("does not parse", err)
+        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\tacli-state\registry.txt")),
+                         b"HKLM\\Software\\x\r\n")
+        self.assertEqual(self.win.tasks, {})
+
+    def test_launch_refuses_a_dll_without_the_store(self):
+        # --keep-dll on the player's copy: a shipped DLL would serve the real registry
+        self.win.put(self.FOLDER + r"\ddraw.dll", b"MZ a shipped build")
+        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 1)
+        self.assertIn("has no registry store", err)
+        self.assertEqual(self.win.tasks, {})
+        # a build of a tree without it is refused before it is uploaded
+        self.use_built_dll(b"MZ an older build")
+        code, _, err = self.main("launch", "r1")
+        self.assertEqual(code, 1)
+        self.assertIn("has no registry store", err)
+        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")), b"MZ a shipped build")
+
+    def test_launch_deploys_a_dll_with_the_store(self):
+        self.use_built_dll(TEST_DLL + b" v2")
+        code, out, err = self.main("launch", "r1")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")), TEST_DLL + b" v2")
+        self.assertIn("deployed", out)
+
+    def test_a_task_that_starts_no_game_reports_its_result(self):
         self.use_fake_clock()
+        self.win.task_error = 0x80070002
+        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 1)
+        self.assertIn("no TotalA.exe from the test folder is running", err)
+        self.assertIn("last result 0x80070002", err)
+
+    def test_a_game_gone_before_it_was_seen_is_reported_by_its_exit_code(self):
+        self.use_fake_clock()
+        self.win.game_exits = True
+        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.assertEqual(code, 1)
+        self.assertIn("no TotalA.exe from the test folder is running", err)
+        self.assertIn("is Ready, last result 0x00000001", err)
+
+    def test_stop_ends_the_game_and_writes_no_registry(self):
         self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        self.win.procs.append((77, self.PLAYER + r"\TotalA.exe"))
         code, out, err = self.main("stop", "r1")
         self.assertEqual(code, 0, err)
-        self.assertIn("waits for TotalA.exe (pid 77", out)
-        self.assertNotEqual(self.win.export(), self.before)     # not under the player's game
-        self.win.procs = []
-        self.win.tick()
-        self.assertEqual(self.win.export(), self.before)
-
-    def test_a_restore_that_does_not_verify_keeps_the_record_and_says_so(self):
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        self.win.import_bug = True
-        code, _, err = self.main("stop", "r1")
-        self.assertEqual(code, 1)
-        self.assertIn("WAS NOT RESTORED", err)
-        self.assertIn("after the restore", err)
-        self.assertIsNotNone(self.pending())
-        self.win.import_bug = False
-        self.assertEqual(self.main("remote", "restore", "r1")[0], 0)
-        self.assertEqual(self.win.export(), self.before)
-
-    def test_a_lost_remote_export_is_put_back_from_the_local_copy(self):
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        self.win.end_wrapper()
-        self.win.files.pop((self.win.HOME + r"\tacli\registry-before.reg").lower())
-        code, out, err = self.main("remote", "restore", "r1")
-        self.assertEqual(code, 0, err)
-        self.assertIn("put back from the copy kept locally", out)
-        self.assertEqual(self.win.export(), self.before)
-
-    def test_a_local_copy_that_does_not_match_the_record_is_refused(self):
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        self.win.end_wrapper()
-        self.win.files.pop((self.win.HOME + r"\tacli\registry-before.reg").lower())
-        (Path(self.tmp.name) / "r1" / "registry-before.reg").write_bytes(b"REGEDIT []")
-        code, _, err = self.main("remote", "restore", "r1")
-        self.assertEqual(code, 1)
-        self.assertIn("no local copy has its SHA-256", err)
-        self.assertIsNotNone(self.pending())
-
-    def test_an_absent_key_is_removed_again(self):
-        self.win.key, self.win.key_present = {}, False
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        self.assertTrue(self.win.key_present)
-        code, out, _ = self.main("stop", "r1")
-        self.assertEqual(code, 0)
-        self.assertIn("did not exist before the launch", out)
-        self.assertFalse(self.win.key_present)
+        self.assertIn("stopped r1 (pid 4242)", out)
+        self.assertEqual(self.win.procs, [])
+        self.assertEqual(self.win.registry_writes, [])
+        self.assertEqual(self.win.key, self.before)
 
     def test_launch_waits_through_a_test_folder_with_no_log_yet(self):
         # a folder from before the log sink: reading log\tagpu.log fails inside a .NET
@@ -2582,15 +2431,64 @@ class RemoteRouting(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("pid=4242", out)
 
+    # -- the store's format: the DLL's (tagpu_regstore.h), byte for byte
+    STORE_TEXT = (b"# a comment\r\n"
+                  b"HKCU\\Software\\Cavedog Entertainment\r\n"
+                  b"HKCU\\Software\\Cavedog Entertainment\\Total Annihilation\r\n"
+                  b"HKCU\\Software\\Cavedog Entertainment\\Total Annihilation\tGamma\tdword\t12\r\n"
+                  b"HKCU\\Software\\Cavedog Entertainment\\Total Annihilation\t\tsz\t\r\n"
+                  b"HKCU\\Software\\Cavedog Entertainment\\Total Annihilation\tSkirmishMap\tsz\t"
+                  b"100%25 Caf%E9%09x\r\n"
+                  b"HKCU\\Software\\Cavedog Entertainment\\Total Annihilation\tblob\thex(3)\t00ff10\r\n"
+                  b"HKCU\\Software\\Cavedog Entertainment\\Total Annihilation\tnone\thex(0)\t\n"
+                  b"HKCU\\Software\\Cavedog Entertainment\\Total Annihilation\\Skirmish\tP%251\t"
+                  b"hex(1)\t410042\r\n")
+
+    def test_the_store_reads_every_type_and_escape(self):
+        s = taremote.RegStore.parse(self.STORE_TEXT)
+        ta = taremote.STORE_TA
+        self.assertEqual(s.get(ta, "gamma"), (b"Gamma", 4, (12).to_bytes(4, "little")))
+        self.assertEqual(s.get(ta, ""), (b"", 1, b"\0"))
+        self.assertEqual(s.get(ta, "SkirmishMap")[2], b"100% Caf\xe9\tx\0")
+        self.assertEqual(s.get(ta, "blob")[1:], (3, b"\x00\xff\x10"))
+        self.assertEqual(s.get(ta, "none")[1:], (0, b""))
+        self.assertEqual(s.get(ta + r"\Skirmish", "P%1")[1:], (1, b"A\0B"))   # an sz with a NUL
+        self.assertEqual(len(s.keys()), 3)
+
+    def test_the_store_writes_what_it_reads(self):
+        s = taremote.RegStore.parse(self.STORE_TEXT)
+        again = taremote.RegStore.parse(s.format())
+        self.assertEqual(again.format(), s.format())
+        self.assertTrue(s.format().startswith(b"# tacli registry store"))
+        self.assertIn(b"\tSkirmishMap\tsz\t100%25 Caf%E9%09x\r\n", s.format())
+        self.assertIn(b"\\Skirmish\tP%251\thex(1)\t410042\r\n", s.format())
+
+    def test_the_store_refuses_what_the_dll_refuses(self):
+        for bad in (b"HKLM\\Software\\x",                              # outside the root
+                    b"HKCU\\Software\\Cavedog Entertainment\\\\x",     # an empty component
+                    b"HKCU\\Software\\Cavedog Entertainment\\x\\",
+                    b"HKCU\\Software\\Cavedog Entertainment\tn\tdword\t4294967296",
+                    b"HKCU\\Software\\Cavedog Entertainment\tn\tdword\t-1",
+                    b"HKCU\\Software\\Cavedog Entertainment\tn\tsz\ta%00b",
+                    b"HKCU\\Software\\Cavedog Entertainment\tn\tsz\t50%",
+                    b"HKCU\\Software\\Cavedog Entertainment\tn\thex(1)\t0",
+                    b"HKCU\\Software\\Cavedog Entertainment\tn\tqword\t1",
+                    b"HKCU\\Software\\Cavedog Entertainment\tn\tsz",
+                    b"HKCU\\Software\\Cavedog Entertainment\tn\tsz\t\xe9"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    taremote.RegStore.parse(bad + b"\r\n")
+
     # -- writing into the test folder
     def test_a_protected_file_without_its_backup_is_not_replaced(self):
         self.win.files.pop((self.FOLDER + r"\ddraw.dll.tacli-original").lower())
+        before = bytes(self.win.get(self.FOLDER + r"\ddraw.dll"))
         with tempfile.NamedTemporaryFile() as f:
             f.write(b"new dll")
             f.flush()
             with self.assertRaises(taremote.RemoteError):
                 (tacli.Instance("r1").gamedir / "ddraw.dll").upload(Path(f.name))
-        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")), b"x")
+        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")), before)
 
     def test_the_first_overwrite_of_a_copied_file_keeps_the_players_original(self):
         gpus = self.FOLDER + r"\tagpu_vk.gpus"
@@ -2636,7 +2534,7 @@ class RemoteRouting(unittest.TestCase):
         self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")), bytes(range(256)) * 5000)
 
     # -- remote add and rm
-    def test_add_copies_into_a_folder_it_marked_first(self):
+    def test_add_copies_into_a_folder_it_marked_first_and_seeds_the_store(self):
         self.win.put(self.PLAYER + r"\maps\x.tnt", b"map")
         code, out, err = self.main("remote", "add", "a1", "--ssh", "tester@example-host",
                                    "--from", self.PLAYER, "--to", r"D:\Test Folder\a1")
@@ -2647,7 +2545,23 @@ class RemoteRouting(unittest.TestCase):
         listed = bytes(self.win.get(r"D:\Test Folder\a1\tacli-state\copied.txt")).decode()
         self.assertIn(f"{sha(b'map')} maps\\x.tnt", listed)
         self.assertNotIn("tacli-test-folder.txt", listed)
+        self.assertNotIn("registry.txt", listed)
         self.assertIsNotNone(self.win.get(r"D:\Test Folder\a1\ddraw.dll.tacli-original"))
+        # the store holds the player's key, read and not written
+        store = self.win.store(r"D:\Test Folder\a1")
+        ta = taremote.STORE_TA
+        self.assertEqual(store.get(ta, "SkirmishMap")[1:], (1, b"the player's map\0"))
+        self.assertEqual(store.get(ta + r"\Skirmish", "Player1")[1:], (4, (1).to_bytes(4, "little")))
+        self.assertEqual(meta["registry_seed"], {"keys": 3, "values": 3})
+        self.assertEqual(self.win.registry_writes, [])
+        self.assertIn("seeded from the player's key", out)
+
+    def test_add_with_no_player_key_seeds_an_empty_store(self):
+        self.win.key = {}
+        code, _, err = self.main("remote", "add", "a1", "--ssh", "tester@example-host",
+                                 "--from", self.PLAYER, "--to", r"D:\Test Folder\a1")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.win.store(r"D:\Test Folder\a1").keys(), [])
 
     def test_an_add_that_fails_half_way_leaves_what_rm_removes(self):
         self.win.robocopy_fails = True
@@ -2673,23 +2587,16 @@ class RemoteRouting(unittest.TestCase):
         self.assertFalse((Path(self.tmp.name) / "a1").exists())
         self.assertFalse(self.win.has_dir(r"D:\Linked\a1"))
 
-    def test_rm_keeps_an_instance_whose_restore_is_pending(self):
-        self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")
-        self.win.end_wrapper()
-        code, _, err = self.main("rm", "r1")
-        self.assertEqual(code, 1)
-        self.assertIn("tacli remote restore r1", err)
-        self.assertTrue((Path(self.tmp.name) / "r1").exists())
-        self.assertIsNotNone(self.win.get(self.FOLDER + r"\ddraw.dll"))
-
     def test_rm_removes_the_test_folder_and_never_the_players(self):
         self.main("launch", "r1", "--keep-dll")
-        self.assertEqual(self.main("stop", "r1")[0], 0)
-        code, _, err = self.main("rm", "r1")
+        code, _, err = self.main("rm", "r1", "--force")
         self.assertEqual(code, 0, err)
+        self.assertEqual(self.win.procs, [])
         self.assertFalse(self.win.has_dir(self.FOLDER))
         self.assertNotIn("r1", self.win.tasks)
         self.assertEqual(bytes(self.win.get(self.PLAYER + r"\tagpu_vk.gpus")), b"1 the player's GPU\n")
+        self.assertEqual(self.win.registry_writes, [])
+        self.assertEqual(self.win.key, self.before)
 
 
 class RemoteProtocol(unittest.TestCase):

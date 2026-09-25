@@ -23,7 +23,6 @@ import math
 import ntpath
 import os
 import re
-import secrets
 import shutil
 import subprocess
 import sys
@@ -298,15 +297,25 @@ class Instance:
         # which open()/shutil/subprocess refuse, so a verb nobody routed cannot act on
         # a local file of the same name. `self.dir` stays local: it holds the metadata.
         #
-        # `lenient`: a loop over every instance (`ls`, the slot and window layout) must
-        # not die on one remote instance whose metadata is broken; it gets `unusable`
-        # set, and skips it with a warning.
+        # METADATA THAT DOES NOT READ IS AN UNUSABLE INSTANCE, never a local one: read
+        # as `{}` it would look local, and `rm` would delete tagpu/instances/<name>/
+        # whatever it is. Every verb refuses it; a loop over every instance (`ls`,
+        # the slot and window layout) passes `lenient`, gets `unusable` set, and skips
+        # it with a warning. save_meta replaces the file whole, so a crash cannot
+        # leave half of one.
         self.remote = None
         self.unusable = None
         try:
             meta = json.loads(self.meta_path.read_text()) if self.meta_path.exists() else {}
-        except (OSError, ValueError):
-            meta = {}
+            if not isinstance(meta, dict):
+                raise ValueError("not a JSON object")
+        except (OSError, ValueError) as e:
+            self.unusable = (f"{name}: its metadata ({self.meta_path}) does not read ({e}); "
+                             f"tacli does nothing with it until it is fixed or removed by hand")
+            if not lenient:
+                die(self.unusable)
+            self.prefix = None
+            return
         if meta.get("type") == "remote":
             try:
                 self.remote = taremote.Remote(meta["remote"])
@@ -330,7 +339,9 @@ class Instance:
         return json.loads(self.meta_path.read_text())
 
     def save_meta(self, meta: dict):
-        self.meta_path.write_text(json.dumps(meta, indent=2))
+        tmp = self.meta_path.with_name(self.meta_path.name + ".tmp")
+        tmp.write_text(json.dumps(meta, indent=2))
+        os.replace(tmp, self.meta_path)
 
     def env(self) -> dict:
         if self.remote:
@@ -4782,7 +4793,7 @@ def cmd_ab(args):
 # The verbs a remote instance answers. Every other verb refuses on one: it would
 # act on local files, or on wine, that a remote instance does not have.
 REMOTE_VERBS = ("launch", "stop", "rm", "arm", "keys", "ui", "eye", "scenario load",
-                "log", "ab", "crash", "shield", "remote restore")
+                "log", "ab", "crash", "shield")
 
 # `launch` flags that only mean something to a wine instance on the local desktop.
 REMOTE_LOCAL_ONLY = (("--window", "window", None), ("--display", "display", None),
@@ -4802,32 +4813,11 @@ STALE_TRIGGERS = ("tagpu_scenario.trigger", "tagpu_scenario.json",
 TA_ARG_RX = re.compile(r"[-/][A-Za-z0-9._=:]{1,40}|[A-Za-z0-9._=:]{1,40}")
 
 
-def _registry_warning(inst: Instance, busy=None, record=None) -> "str | None":
-    """The restore that never happened, in words, or None.
-
-    TA's key is only ever written by a launch wrapper on the remote machine, inside
-    its game's lifetime, and the wrapper removes its pending record before it exits
-    (`taremote.Remote.wrapper_script`). So a record with no tacli task running is a
-    wrapper that was ended -- a restart, or the task ended by hand -- and there is
-    nothing to race: no running wrapper will restore it."""
-    if busy is None and record is None:
-        busy, record = inst.remote.registry_state()
-    if not record or busy:
-        return None
-    who, since = record.get("instance") or "?", record.get("started") or "?"
-    if not record.get("key"):
-        return (f"a launch wrapper (instance {who}, started {since}) ended before it "
-                f"exported TA's registry key, so nothing was written to it; its record is "
-                f"still pending: `tacli remote restore {inst.name}` clears it")
-    return (f"TA's registry key on the remote machine still holds the test values of "
-            f"instance {who}'s launch (started {since}): its launch wrapper ended before "
-            f"restoring them. `tacli remote restore {inst.name}` puts the key back")
-
-
-def _remote_reg_values(meta: dict, args) -> list:
-    """The values a remote launch's wrapper writes into TA's key after exporting it:
-    those a local launch writes into its prefix (apply_prefix_settings and the
-    skirmish flags). The wrapper's restore puts every one of them back."""
+def _remote_store_values(meta: dict, args) -> list:
+    """The values a remote launch puts into the test folder's registry store: those a
+    local launch writes into its prefix (apply_prefix_settings and the skirmish flags).
+    They go into `tacli-state\\registry.txt`, which the DLL answers the game's registry
+    calls from (tagpu_regstore.h): the remote machine's registry is never written."""
     vals = [("", "Interface Type", "REG_DWORD", 1), ("", "PlayMovie", "REG_DWORD", 0)]
     if not meta.get("sound"):
         vals += [("", v, "REG_DWORD", 0) for v in
@@ -4844,6 +4834,42 @@ def _remote_reg_values(meta: dict, args) -> list:
     if args.mapping is not None:
         vals.append(("", "SkirmishMapping", "REG_DWORD", args.mapping))
     return vals
+
+
+def _remote_store_path(inst: Instance):
+    return inst.gamedir / taremote.STATE_DIR / taremote.STORE
+
+
+def _remote_store_update(inst: Instance, values) -> int:
+    """Put `values` into the test folder's registry store, replacing the file whole
+    (RemotePath.write_bytes: a temporary name, then a move). Only while no game of
+    this instance runs: the DLL owns the file then. Refuses a test folder without a
+    store -- the DLL would run that game against the real registry."""
+    path = _remote_store_path(inst)
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        die(f"{inst.name}: its test folder has no {taremote.STATE_DIR}\\{taremote.STORE}, so the "
+            f"DLL would serve the game from the remote machine's real registry. `tacli rm "
+            f"{inst.name}` and `tacli remote add` again make a test folder that has one")
+    try:
+        store = taremote.RegStore.parse(data)
+    except ValueError as e:
+        die(f"{inst.name}: {taremote.STATE_DIR}\\{taremote.STORE} does not parse ({e}); tacli "
+            f"leaves it as it is")
+    for sub, name, kind, value in values:
+        key = taremote.STORE_TA + (("\\" + sub) if sub else "")
+        if kind == "REG_DWORD":
+            store.set_dword(key, name, int(value))
+        else:
+            try:
+                store.set_sz(key, name, str(value))
+            except UnicodeEncodeError:
+                die(f"{name}={value!r}: a registry string tacli writes is ASCII")
+    new = store.format()
+    if new != data:
+        path.write_bytes(new)
+    return len(values)
 
 
 def _store_set(inst: Instance, key: str, value: str):
@@ -4863,49 +4889,26 @@ def _remote_log_key(inst: Instance):
         return None
 
 
-def _wrapper_status(inst: Instance) -> dict:
-    """What the last launch's wrapper reported (taremote.parse_status), or {} before
-    any launch."""
-    token = inst.meta().get("wrapper_token")
-    if not token:
-        return {}
-    try:
-        text = (inst.gamedir / taremote.STATE_DIR / taremote.WRAPPER_LOG).read_text(
-            errors="replace")
-    except FileNotFoundError:
-        text = ""
-    return taremote.parse_status(text, token)
-
-
-def _keep_export(inst: Instance, meta: dict) -> str:
-    """Fetch the export the wrapper took into the instance's metadata folder, SHA-256
-    checked against its record: what `remote restore` falls back on when the remote
-    copy is lost."""
-    _busy, record = inst.remote.registry_state()
-    if not record or record.get("instance") != inst.name:
-        return "the launch wrapper's registry record was not found after the launch"
-    key = record.get("key", "")
-    if key == "absent":
-        return ("TA's registry key did not exist; the wrapper removes it again when the "
-                "game exits")
-    if not key.startswith("present "):
-        return "the launch wrapper recorded no export"
-    data = inst.remote.home_read(taremote.REG_EXPORT)
-    sha = hashlib.sha256(data).hexdigest().upper()
-    if sha != key[8:]:
-        return (f"the registry export reads {sha[:12]}… and its record says {key[8:20]}…; "
-                f"no local copy was kept")
-    (inst.dir / taremote.REG_EXPORT).write_bytes(data)
-    meta["registry"] = {"sha256": sha, "saved": time.strftime("%Y-%m-%d %H:%M:%S")}
-    return f"TA's registry key exported by the launch wrapper ({sha[:12]}…; a copy kept locally)"
+def _task_words(state, result) -> str:
+    if state is None:
+        return "its scheduled task is gone"
+    if result == taremote.TASK_RUNNING:
+        return f"its scheduled task is {state} and says the game is running"
+    if result is None:
+        return f"its scheduled task is {state} with no last result"
+    return f"its scheduled task is {state}, last result 0x{result:08X}"
 
 
 def _remote_launch(args) -> dict:
-    """`launch` for a remote instance: the harness files into the test folder, then
-    the launch wrapper started on the remote desktop by a scheduled task, and the
-    wait for the DLL's new log run. TA's registry key is the wrapper's alone: it
-    exports the key, writes the test values, runs the game and restores the key
-    when the game exits (taremote.Remote.wrapper_script)."""
+    """`launch` for a remote instance: the harness files and the registry store into
+    the test folder, then TotalA.exe started on the remote desktop by a scheduled task,
+    and the wait for the DLL's new log run.
+
+    NOTHING OF THIS WRITES THE REMOTE MACHINE'S REGISTRY. The test values go into the
+    store, and the DLL answers the game's registry calls from it (tagpu_regstore.h).
+    That holds only for a DLL that has the store, so a launch whose DLL lacks it --
+    an old build, or `--keep-dll` on the player's copy -- is refused before the task
+    starts."""
     inst = Instance(args.name)
     rem = inst.remote
     bad = [flag for flag, attr, off in REMOTE_LOCAL_ONLY if getattr(args, attr, off) not in (off,)]
@@ -4930,18 +4933,17 @@ def _remote_launch(args) -> dict:
     ours = [pid for pid, path in procs if rem.is_ours(path)]
     if ours:
         return dict(meta, already_running=True, pid=ours[0], remote=True)
-    busy, record = rem.registry_state()
-    if busy:
-        die(f"a launch wrapper is still running on the remote machine (task "
-            f"{', '.join(busy)}): it owns TA's registry key until its game exits and it "
-            f"has restored the key, and one launch at a time owns the key")
-    if record:
-        die(_registry_warning(inst, busy, record))
     if procs:
         die(f"TotalA.exe is already running on the remote machine ({len(procs)} "
             f"process{'es' if len(procs) > 1 else ''}, not from {args.name}'s test "
             f"folder): it may be the player's game, so tacli launches nothing beside it "
             f"and stops nothing it did not start")
+    if not args.keep_dll:
+        if not BUILT_DLL.exists():
+            die(f"fork DLL not built: {BUILT_DLL}")
+        if taremote.TEST_MODE_MARK not in BUILT_DLL.read_bytes():
+            die(f"{BUILT_DLL} has no registry store (tagpu_regstore.c): it would run the game "
+                f"against the remote machine's real registry. Build a tree that has it")
     for key, attr in (("sound", "sound"), ("unit_limit", "unit_limit"), ("shield", "shield"),
                       ("maxfps", "maxfps")):
         if getattr(args, attr, None) is not None:
@@ -4951,10 +4953,12 @@ def _remote_launch(args) -> dict:
     inst.save_meta(meta)
 
     if not args.keep_dll:
-        if not BUILT_DLL.exists():
-            die(f"fork DLL not built: {BUILT_DLL}")
         (inst.gamedir / "ddraw.dll").upload(BUILT_DLL)
         notes.append(f"deployed {BUILT_DLL} (md5 {hashlib.md5(BUILT_DLL.read_bytes()).hexdigest()})")
+    if not rem.dll_has_test_mode():
+        die(f"{args.name}: the test folder's ddraw.dll has no registry store "
+            f"(tagpu_regstore.c), so it would run the game against the remote machine's real "
+            f"registry; launch without --keep-dll to deploy {BUILT_DLL.name} from this tree")
     write_totala_ini(inst, meta.get("sound", False), meta.get("unit_limit"))
     write_nowarp(inst)
     set_shield(inst, meta.get("shield", True))
@@ -4978,19 +4982,14 @@ def _remote_launch(args) -> dict:
     auto = (_ensure_owndraw_for_native(inst), _ensure_fxown_for_fx(inst),
             _ensure_featown_for_feat(inst), _ensure_terrown_for_terr(inst),
             _ensure_markown_for_mark(inst))
-
-    token = secrets.token_hex(6)
-    state = inst.gamedir / taremote.STATE_DIR
-    (state / taremote.WRAPPER_LOG).unlink(missing_ok=True)
-    (state / taremote.WRAPPER).write_text(
-        rem.wrapper_script(args.name, argv, _remote_reg_values(meta, args), token))
-    meta["wrapper_token"] = token
-    meta.pop("registry", None)
+    n = _remote_store_update(inst, _remote_store_values(meta, args))
+    notes.append(f"{n} test values put into {taremote.STATE_DIR}\\{taremote.STORE}, which the DLL "
+                 f"answers the game's registry calls from; the remote registry is not written")
     inst.save_meta(meta)
 
     old = _remote_log_key(inst)
     crash_since = crash_mtime(inst)
-    rem.task_start(rem.state(taremote.WRAPPER))
+    rem.task_start(argv)
     deadline = time.time() + args.timeout
     pid, seen = None, False
     while True:
@@ -5002,30 +5001,32 @@ def _remote_launch(args) -> dict:
         report = crash_report(inst, crash_since)
         if report:
             die(report)
-        err = _wrapper_status(inst).get("err", {}).get(1)
-        if err:
-            die(f"{args.name}: the launch wrapper stopped at its statement {err[0]}: "
-                f"{err[2]} [{err[1]}]. It restores TA's registry key if it had exported it "
-                f"(`tacli stop {args.name}` reports what it did)")
-        if seen and pid is None:
-            die(f"{args.name} exited during launch (no ErrorLog.txt); the launch wrapper "
-                f"restores TA's registry key (`tacli stop {args.name}` reports it)")
+        if pid is None:
+            state, result = rem.task_status()
+            started = seen or result == taremote.TASK_RUNNING
+            if state not in ("Running", "Queued") and (state is None or result not in (
+                    None, taremote.TASK_RUNNING, 0x41303)):
+                die(f"{args.name}: " + ("the game exited during launch (no ErrorLog.txt); "
+                                        if started else
+                                        "no TotalA.exe from the test folder is running; ")
+                    + _task_words(state, result))
         if time.time() >= deadline:
+            state, result = rem.task_status()
             die(f"{args.name}: " + ("the game is running but its DLL began no new log in "
                                     f"{args.timeout:g}s" if seen else
-                                    f"the launch wrapper started no TotalA.exe in "
-                                    f"{args.timeout:g}s")
-                + f". The wrapper keeps TA's registry key until its game exits; "
-                  f"`tacli stop {args.name}` ends the game and reports the restore")
+                                    f"no TotalA.exe from the test folder in {args.timeout:g}s")
+                + f"; {_task_words(state, result)}")
         time.sleep(0.5)
-    notes.append(_keep_export(inst, meta))
-    notes.append("the wrapper restores TA's registry key when this game exits; a TA "
-                 "started meanwhile by anyone, the player's own included, reads the test "
-                 "values")
+    try:
+        prio = rem.priority(pid)
+    except taremote.RemoteError:
+        prio = ""                       # it exited since: the next verb says so
+    notes.append(f"TotalA.exe runs at priority {prio or '?'}")
     meta["last_launch"] = time.strftime("%Y-%m-%d %H:%M:%S")
     inst.save_meta(meta)
     names = ("owndraw_note", "fxown_note", "featown_note", "terrown_note", "markown_note")
     return dict({"name": args.name, "remote": True, "pid": pid, "window": None,
+                 "priority": prio,
                  "res": list(args.res) if args.res else store_res(inst),
                  "map": args.map, "unit_limit": meta.get("unit_limit"), "args": argv,
                  "shield": shield_state(inst), "defaults": bool(meta.get("defaults")),
@@ -5049,109 +5050,47 @@ def cmd_remote_launch(args):
     out(res, args.json, human="\n".join(lines))
 
 
-def _await_wrapper(inst: Instance, timeout: float = 30.0):
-    """After the game has gone: wait for the launch wrapper to finish, and say what it
-    did to TA's registry key. Returns (words or None, state): "done" (restored, or
-    never touched), "waiting" (the wrapper is still alive and will restore it), or
-    "failed" (its restore failed, or it was ended before it).
-
-    The wait only decides what is REPORTED: the wrapper restores the key whether or
-    not anyone waits, and a record it could not clear stays pending for
-    `remote restore`."""
-    rem = inst.remote
-    meta = inst.meta()
-    if not meta.get("wrapper_token"):
-        return None, "done"             # no launch since the last reported restore
-    task = rem.task_parts()[1]
-    deadline = time.time() + timeout
-    while True:
-        busy, record = rem.registry_state()
-        if task not in busy:
-            break
-        if time.time() >= deadline:
-            others = [p for p, _path in rem.procs()]
-            if others:
-                return (f"the launch wrapper waits for TotalA.exe (pid "
-                        f"{', '.join(map(str, others))}, not {inst.name}'s game) to exit, "
-                        f"and restores TA's registry key then"), "waiting"
-            return (f"the launch wrapper is still running after {timeout:g}s; it restores "
-                    f"TA's registry key when it finishes"), "waiting"
-        time.sleep(0.5)
-    status = _wrapper_status(inst)
-    err1, err2 = status.get("err", {}).get(1), status.get("err", {}).get(2)
-    if status.get("restored") or (err2 and err2[0] == 0):
-        meta.pop("wrapper_token", None)
-        inst.save_meta(meta)
-        if status.get("restored"):
-            return status["restored"] + ", by the launch wrapper", "done"
-        why = f" ({err1[2]})" if err1 else ""
-        return (f"the launch wrapper took no registry record{why}, so it wrote nothing to "
-                f"TA's key and restored nothing"), "done"
-    if err2:
-        return (f"TA's REGISTRY KEY WAS NOT RESTORED: the launch wrapper failed at its "
-                f"restore: {err2[2]} [{err2[1]}]. `tacli remote restore {inst.name}` "
-                f"retries it"), "failed"
-    warning = _registry_warning(inst, busy, record)
-    return warning, ("failed" if warning else "done")
-
-
 def _remote_stop(inst: Instance) -> dict:
-    """Stop the game that runs from the test folder -- never another TotalA.exe --
-    and report the restore its launch wrapper then runs."""
+    """Stop the game that runs from the test folder -- never another TotalA.exe."""
     rem = inst.remote
     pid = rem.pid()
     if pid and not rem.stop_pid(pid):
-        die(f"{inst.name}: TotalA.exe (pid {pid}) is still running after Stop-Process; "
-            f"its launch wrapper restores TA's registry key once it has gone")
-    note, state = _await_wrapper(inst)
-    return {"name": inst.name, "stopped": True, "was": pid, "registry": note,
-            "registry_state": state}
+        die(f"{inst.name}: TotalA.exe (pid {pid}) is still running after Stop-Process")
+    return {"name": inst.name, "stopped": True, "was": pid}
 
 
 def cmd_remote_stop(args):
     res = _remote_stop(Instance(args.name))
-    failed = res["registry_state"] == "failed"
     out(res, args.json, human=f"stopped {args.name}" + (
-        f" (pid {res['was']})" if res["was"] else " (it was not running)")
-        + (f"\n  {res['registry']}" if res["registry"] and not failed else ""))
-    if failed:
-        die(res["registry"])
+        f" (pid {res['was']})" if res["was"] else " (it was not running)"))
 
 
 def cmd_remote_rm(args):
     """Delete the test folder (its marker must name this instance), the scheduled
-    task and the metadata. The player's folder is not touched, and neither is a
-    registry record still pending: this instance's local copy of the export is what
-    `remote restore` falls back on."""
+    task and the metadata. The player's folder is not touched."""
     inst = Instance(args.name)
     rem = inst.remote
-    note = None
     if inst.meta().get("state") != "adding":
         if rem.pid() and not args.force:
             die(f"{args.name} is running (tacli stop {args.name}, or --force)")
-        stopped = _remote_stop(inst)
-        if stopped["registry_state"] != "done":
-            die(f"{stopped['registry']}; {args.name} is kept until its restore is done")
-        note = stopped["registry"]
-        busy, record = rem.registry_state()
-        if record and record.get("instance") == args.name:
-            die(_registry_warning(inst, busy, record) + f"; {args.name} is kept until then")
+        _remote_stop(inst)
         rem.task_remove()
     if rem.root.exists():
         rem.remove_folder(inst.name)
     shutil.rmtree(inst.dir)
-    out({"name": args.name, "removed": True, "registry": note}, args.json,
-        human=f"removed {args.name}: its test folder, its scheduled task and its metadata"
-              + (f"\n  {note}" if note else ""))
+    out({"name": args.name, "removed": True}, args.json,
+        human=f"removed {args.name}: its test folder, its scheduled task and its metadata")
 
 
 def cmd_remote_add(args):
     """Make a remote instance: copy the player's game folder once into a test folder
-    on the remote machine and record the link in the instance's metadata.
+    on the remote machine, seed its registry store by READING the player's key, and
+    record the link in the instance's metadata.
 
     THE METADATA AND THE TEST FOLDER'S MARKER COME FIRST, before a byte is copied: a
     copy that fails half-way leaves an instance marked `adding` that `tacli rm`
-    removes, instead of a gigabyte nobody can name."""
+    removes, instead of a gigabyte nobody can name. The store is written last, so an
+    instance that is no longer `adding` always has one."""
     inst = Instance(args.name)
     if inst.exists:
         die(f"instance {args.name!r} already exists (tacli rm {args.name} first)")
@@ -5183,58 +5122,24 @@ def cmd_remote_add(args):
     try:
         rem.begin_folder(args.name)
         copied = rem.copy_player()
+        seed = rem.read_player_registry()
+        (rem.root / taremote.STATE_DIR / taremote.STORE).write_bytes(seed.format())
     except taremote.RemoteError as e:
         die(f"{e}\n  the add did not finish: `tacli rm {args.name}` removes what it made")
     meta.pop("state")
+    nvals = sum(len(seed.values(k)) for k in seed.keys())
     meta["copied"] = {"files": copied["files"], "bytes": copied["bytes"],
                       "seconds": round(time.time() - t0, 1)}
+    meta["registry_seed"] = {"keys": len(seed.keys()), "values": nvals}
     inst.save_meta(meta)
     out(meta, args.json,
         human=f"added {args.name}: copied {copied['files']} files "
               f"({copied['bytes'] >> 20} MB, as the player's folder holds: "
               f"{before['files']} files) into its test folder in "
-              f"{time.time() - t0:.0f}s\n  " + "\n  ".join(copied["protected"]))
-
-
-def cmd_remote_restore(args):
-    """Restore TA's registry key from the pending record a launch wrapper left when
-    it was ended before its own restore. Refuses while any TotalA.exe runs or any
-    tacli task is Running or Queued (taremote.Remote.restore). When the export on the
-    remote machine is gone or changed, the copy the launch kept locally is put back
-    first -- only if its SHA-256 is the one the record names."""
-    inst = Instance(args.name)
-    if not inst.remote:
-        die(f"{args.name} is not a remote instance")
-    rem = inst.remote
-    busy, record = rem.registry_state()
-    if not record:
-        out({"name": args.name, "restored": False}, args.json,
-            human="nothing to restore: no registry record is pending on the remote machine")
-        return
-    if busy:
-        die(f"a launch wrapper is still running ({', '.join(busy)}): it restores TA's "
-            f"registry key itself when its game exits")
-    notes = []
-    key = record.get("key", "")
-    if key.startswith("present "):
-        want = key[8:]
-        there = rem.home_exists(taremote.REG_EXPORT) and (
-            hashlib.sha256(rem.home_read(taremote.REG_EXPORT)).hexdigest().upper() == want)
-        if not there:
-            owner = record.get("instance", "")
-            local = (INSTANCES / owner / taremote.REG_EXPORT
-                     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", owner) else None)
-            data = local.read_bytes() if local is not None and local.is_file() else None
-            if data is None or hashlib.sha256(data).hexdigest().upper() != want:
-                die(f"the export taken at launch is missing or changed on the remote machine, "
-                    f"and no local copy has its SHA-256 ({want[:12]}…); TA's registry key "
-                    f"is left as it is")
-            rem.home_write(taremote.REG_EXPORT, data)
-            notes.append(f"the export on the remote machine was missing or changed; put "
-                         f"back from the copy kept locally ({want[:12]}…, SHA-256 checked)")
-    notes.append(rem.restore())
-    out({"name": args.name, "restored": True, "record": record, "notes": notes}, args.json,
-        human="\n".join(notes))
+              f"{time.time() - t0:.0f}s\n  "
+              + "\n  ".join(copied["protected"])
+              + f"\n  registry store seeded from the player's key: {len(seed.keys())} keys, "
+                f"{nvals} values (read, not written)")
 
 
 def _remote_routes() -> dict:
@@ -5248,12 +5153,10 @@ def _remote_routes() -> dict:
 
 
 def _route_remote(args):
-    """Send a verb aimed at a remote instance to its remote form, or refuse it; and
-    say so loudly, before any verb but `launch` (which refuses), when TA's registry
-    key on that machine still holds a test launch's values."""
+    """Send a verb aimed at a remote instance to its remote form, or refuse it."""
     name = getattr(args, "name", None)
     func = getattr(args, "func", None)
-    if (not name or func in (cmd_remote_add, cmd_remote_restore, cmd_ls)
+    if (not name or func in (cmd_remote_add, cmd_ls)
             or not (INSTANCES / name / "instance.json").exists()):
         return
     inst = Instance(name)
@@ -5266,10 +5169,6 @@ def _route_remote(args):
             f"and this verb would act on files or processes here. A remote instance "
             f"answers: {', '.join(REMOTE_VERBS)}")
     args.func = routes[func]
-    if func is not cmd_launch and inst.meta().get("state") != "adding":
-        warning = _registry_warning(inst)
-        if warning:
-            warn(warning)
 
 
 def cmd_scenario_todo(args):
@@ -5707,12 +5606,6 @@ def build_parser():
     ra.add_argument("--to", metavar="FOLDER",
                     help="the test folder to create (default: <user profile>\\tacli\\<name>)")
     ra.set_defaults(func=cmd_remote_add)
-    rr = rmv.add_parser("restore", help="restore TA's registry key on the remote machine "
-                                        "after a launch wrapper was ended before its own "
-                                        "restore")
-    add_common(rr)
-    rr.add_argument("name", help="any remote instance on that machine")
-    rr.set_defaults(func=cmd_remote_restore)
     return p
 
 

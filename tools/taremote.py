@@ -5,9 +5,11 @@ Every channel between tacli and the DLL is a file in the game folder (the key an
 eye files, the lever files, the trigger/result pairs, the `.ab` captures, `log\\`),
 and the DLL on Windows reads and writes the same files. So a remote instance is a
 game folder on another machine plus a way to read and write files there, list its
-processes, start a scheduled task and save the registry. This module is that way;
-tacli routes its verbs through it (`research/notes/tacli-design.md`, "Remote
-instances").
+processes and start a scheduled task. TA's registry is one of those files too: in a
+test folder the DLL answers the game's registry calls from `tacli-state\\registry.txt`
+(tagpu_regstore.h), so nothing here writes the remote machine's registry. This module
+is that way; tacli routes its verbs through it (`research/notes/tacli-design.md`,
+"Remote instances").
 
 THE TRANSPORT is one PowerShell per tacli command: `ssh <user>@<host> powershell
 -NoProfile -NonInteractive -Command -`, fed statements on stdin and kept open, so a
@@ -42,23 +44,9 @@ import threading
 import time
 from pathlib import Path
 
-# TA's registry key: what a remote launch exports first and restores at stop.
-REG_KEY = r"HKCU\Software\Cavedog Entertainment\Total Annihilation"
-REG_PSPATH = r"HKCU:\Software\Cavedog Entertainment\Total Annihilation"
-
 STATE_DIR = "tacli-state"                 # tacli's own files inside the test folder
 MARKER = "tacli-test-folder.txt"          # written by `remote add` first; `rm` requires it
 COPIED = "copied.txt"                     # `<SHA-256> <relative path>`, a line per copied file
-WRAPPER = "launch.ps1"                    # the scheduled task's script (`Remote.wrapper_script`)
-WRAPPER_LOG = "launch.status"             # its marker lines: nobody reads its stdout
-
-# The registry record, ONE PER USER ON THE MACHINE, beside no test folder: TA's key is
-# in HKCU, which every test folder of that user shares, so a record per instance would
-# let a second launch export the first one's test values as "the original".
-HOME_DIR = "tacli"                        # under %LOCALAPPDATA%
-PENDING = "registry-pending.txt"          # exists from before the export until after the verified restore
-REG_EXPORT = "registry-before.reg"
-REG_CHECK = "registry-after.reg"
 
 # NO FILE OF THE PLAYER'S COPY IS REPLACED OR DELETED WITHOUT ITS ORIGINAL BESIDE IT
 # (`RemotePath._guard`). Two tiers:
@@ -200,7 +188,7 @@ def ps_check_statement(s: str) -> None:
                             f"the next line: {s[:60]!r}")
 
 
-def ps_script(statements, token: str, batch: int, sink: "str | None" = None) -> str:
+def ps_script(statements, token: str, batch: int) -> str:
     """THE one place a PowerShell script is made: one statement a line, a blank line
     at the end.
 
@@ -222,18 +210,13 @@ def ps_script(statements, token: str, batch: int, sink: "str | None" = None) -> 
 
     `token` makes the markers unforgeable by anything a statement prints; `batch`
     numbers every marker, so a late line of an earlier batch is never read as this
-    one's. `sink`, a PowerShell expression naming a file, makes every marker line be
-    appended to that file as well: a script that runs with nobody reading its stdout
-    (the launch wrapper) reports through it. Every line is checked, the generated
-    ones too: the rule is about what reaches PowerShell, not about what the caller
-    meant.
+    one's. Every line is checked, the generated ones too: the rule is about what
+    reaches PowerShell, not about what the caller meant.
     """
     if not re.fullmatch(r"[0-9a-f]{8,32}", token or ""):
         raise PSScriptError("the marker token must be 8-32 lowercase hex digits")
     tag, b = f"@@{token}", int(batch)
-    emit = "Write-Output $t" if sink is None else (
-        f"Write-Output $t; [IO.File]::AppendAllText({sink}, $t + [Environment]::NewLine)")
-    lines = [f"function __m($t) {{ {emit} }}", "$__seq = 0"]
+    lines = ["function __m($t) { Write-Output $t }", "$__seq = 0"]
     for i, s in enumerate(statements):
         ps_check_statement(s)
         lines.append(
@@ -653,7 +636,6 @@ class Remote:
         self.folder = ntpath.normpath(spec["folder"])
         self.task = spec.get("task") or ""
         self.console_user = spec.get("console_user") or ""
-        self._home = None
         if not WIN_USER_RX.fullmatch(self.ssh):
             raise ValueError("--ssh: say <user>@<host> (letters, digits, . _ -)")
         check_folders(self.player, self.folder)
@@ -694,8 +676,9 @@ class Remote:
 
     def console(self) -> str:
         """The user logged on at the console (an interactive task runs as them), and
-        a check that it is the SSH login's user: TA reads HKCU, so the registry the
-        launch wrapper exports must be the hive the game will use."""
+        a check that it is the SSH login's user: the test folder and the registry store
+        `remote add` seeds from HKCU are that user's, and the game must run as the
+        player they were taken from."""
         out = self.run([
             f"Write-Output {ps_b64('(Get-CimInstance Win32_ComputerSystem).UserName')}",
             f"Write-Output {ps_b64('[Security.Principal.WindowsIdentity]::GetCurrent().Name')}"])
@@ -706,22 +689,9 @@ class Remote:
                               "launched there has no desktop to open on")
         if console.lower() != me.lower():
             raise RemoteError(f"the console user is {console} but SSH logs in as {me}: "
-                              f"the game would read another user's registry than the one "
-                              f"the launch wrapper saves and restores")
+                              f"the game would run as another user than the one whose "
+                              f"settings and folder the test starts from")
         return console
-
-    def home(self) -> str:
-        """`%LOCALAPPDATA%\\tacli`: where the registry record and its export live, one
-        per user of the machine (HKCU is per user), beside no test folder."""
-        if self._home is None:
-            expr = ps_b64("[Environment]::GetFolderPath('LocalApplicationData')")
-            out = self.run([f"Write-Output {expr}"])
-            base = _unb64(out[0]) if out else ""
-            if not re.fullmatch(r"[A-Za-z]:\\.+", base):
-                raise RemoteError(f"the remote machine reported no local application data "
-                                  f"folder ({base!r})")
-            self._home = ntpath.join(base, HOME_DIR)
-        return self._home
 
     # -- the test folder
     def resolve_folders(self):
@@ -859,29 +829,46 @@ class Remote:
             f"[IO.Directory]::Delete({folder}, $true)",
         ], timeout=900.0)
 
-    # -- the scheduled task and its wrapper
-    def task_start(self, wrapper: str):
-        """Run the launch wrapper on the console user's desktop. A process started from
-        the SSH session runs where nobody can see it; a scheduled task with an
-        interactive principal runs on the desktop, and needs no password. The action
-        is `powershell.exe -File <wrapper>`: a file, not `-EncodedCommand`, because
-        the wrapper is longer than a command line, and not stdin, because nothing
-        stays attached to the task to feed it."""
+    # -- the scheduled task
+    def task_start(self, argv):
+        """Start TotalA.exe from the test folder on the console user's desktop. A process
+        started from the SSH session runs where nobody can see it; a scheduled task with
+        an interactive principal runs on the desktop, and needs no password. The action
+        is the game itself, with the test folder as its working directory.
+
+        `-Priority 4` is NORMAL_PRIORITY_CLASS: a task's default, 7, is below normal,
+        and the game inherits it -- every frame time measured on it would be a
+        below-normal process's."""
         path, name = self.task_parts()
-        argline = (f"-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden "
-                   f"-File \"{wrapper}\"")
+        argline = " ".join(argv)
         self.run([
-            "$a = New-ScheduledTaskAction -Execute ([IO.Path]::Combine($env:SystemRoot, "
-            "'System32\\WindowsPowerShell\\v1.0\\powershell.exe')) -Argument "
-            f"{ps_str(argline)} -WorkingDirectory {ps_str(self.folder)}",
+            f"$a = New-ScheduledTaskAction -Execute {ps_str(ntpath.join(self.folder, 'TotalA.exe'))} "
+            f"-WorkingDirectory {ps_str(self.folder)}"
+            + (f" -Argument {ps_str(argline)}" if argline else ""),
             f"$pr = New-ScheduledTaskPrincipal -UserId {ps_str(self.console_user)} "
             f"-LogonType Interactive",
             "$st = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) "
-            "-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew",
+            "-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew "
+            "-Priority 4",
             f"Register-ScheduledTask -TaskPath {ps_str(path)} -TaskName {ps_str(name)} "
             f"-Action $a -Principal $pr -Settings $st -Force | Out-Null",
             f"Start-ScheduledTask -TaskPath {ps_str(path)} -TaskName {ps_str(name)}",
         ])
+
+    def task_status(self):
+        """(State, LastTaskResult) of this instance's task, or (None, None) when there is
+        none. LastTaskResult is 0x41301 while the game runs, the game's exit code after
+        it, and a Win32 or scheduler error (0x8007xxxx, 0x8004xxxx) when the task could
+        not start it at all."""
+        path, name = self.task_parts()
+        out = self.run([f"$t = Get-ScheduledTask -TaskPath {ps_str(path)} -TaskName {ps_str(name)} "
+                        f"-ErrorAction SilentlyContinue; if ($t) {{ $i = $t | Get-ScheduledTaskInfo; "
+                        f"Write-Output ('' + $t.State + '|' + $i.LastTaskResult) }}"])
+        if not out or "|" not in out[0]:
+            return None, None
+        state, _, result = out[0].partition("|")
+        result = result.strip()
+        return state.strip(), (int(result) & 0xFFFFFFFF if result.lstrip("-").isdigit() else None)
 
     def task_parts(self):
         path, _, name = self.task.rpartition("\\")
@@ -892,6 +879,11 @@ class Remote:
         self.run([f"$t = Get-ScheduledTask -TaskPath {ps_str(path)} -TaskName {ps_str(name)} "
                   f"-ErrorAction SilentlyContinue; if ($t) {{ Unregister-ScheduledTask "
                   f"-TaskPath {ps_str(path)} -TaskName {ps_str(name)} -Confirm:$false }}"])
+
+    def priority(self, pid: int) -> str:
+        """The priority class of a running process, as Windows names it."""
+        out = self.run([f"Write-Output ('' + (Get-Process -Id {int(pid)}).PriorityClass)"])
+        return out[0].strip() if out else ""
 
     def stop_pid(self, pid: int, timeout: float = 15.0) -> bool:
         self.run([f"Stop-Process -Id {int(pid)} -Force -ErrorAction SilentlyContinue"])
@@ -905,218 +897,206 @@ class Remote:
     def state(self, name: str) -> str:
         return ntpath.join(self.folder, STATE_DIR, name)
 
-    # -- the registry: every write is the wrapper's, inside the game's lifetime
-    def registry_state(self):
-        """(the tacli tasks that are Running or Queued, the pending registry record or
-        None), in that order, in one batch. A record with no running task is a
-        restore that never happened: the wrapper removes its record before it
-        exits, and the task is Running for as long as the wrapper lives."""
-        pend = ps_str(ntpath.join(self.home(), PENDING))
+    # -- TA's registry: a file in the test folder (tagpu_regstore.h)
+    def read_player_registry(self) -> "RegStore":
+        """TA's registry as the player's user has it: every key under STORE_ROOT with its
+        values, READ through `RegistryKey.OpenSubKey(name, $false)` -- read-only handles,
+        through which nothing can be written. Names and string data are converted with
+        Windows PowerShell's `Encoding.Default`, the ANSI code page the game's A
+        functions use."""
+        enc = "[Text.Encoding]::Default"
         out = self.run([
-            f"Get-ScheduledTask -TaskPath {ps_str(TASK_DIR)} -ErrorAction SilentlyContinue | "
-            f"Where-Object {{ $_.State -eq 'Running' -or $_.State -eq 'Queued' }} | "
-            f"ForEach-Object {{ Write-Output ('task ' + {ps_b64('$_.TaskName')}) }}",
-            f"if ([IO.File]::Exists({pend})) {{ Write-Output ('pending ' + [Convert]::"
-            f"ToBase64String([IO.File]::ReadAllBytes({pend}))) }}"])
-        busy = [_unb64(ln[5:]) for ln in out if ln.startswith("task ")]
-        record = None
-        for ln in out:
-            if ln.startswith("pending "):
-                record = parse_record(base64.b64decode(ln[8:]).decode("utf-8", "replace"))
-        return busy, record
+            "$__q = New-Object Collections.Queue; $__r = [Microsoft.Win32.Registry]::CurrentUser."
+            f"OpenSubKey({ps_str(STORE_ROOT[5:])}, $false); if ($__r) {{ $__q.Enqueue($__r) }}; "
+            "while ($__q.Count -gt 0) { $__k = $__q.Dequeue(); "
+            f"$__kn = [Convert]::ToBase64String({enc}.GetBytes($__k.Name)); "
+            "Write-Output ('K|' + $__kn); foreach ($__n in $__k.GetValueNames()) { "
+            "$__t = [int]$__k.GetValueKind($__n); $__v = $__k.GetValue($__n, $null, "
+            "'DoNotExpandEnvironmentNames'); "
+            f"if ($__t -eq 1 -or $__t -eq 2) {{ $__b = {enc}.GetBytes([string]$__v + [char]0) }} "
+            "elseif ($__t -eq 4) { $__b = [BitConverter]::GetBytes([int32]$__v) } "
+            "elseif ($__t -eq 11) { $__b = [BitConverter]::GetBytes([int64]$__v) } "
+            f"elseif ($__t -eq 7) {{ $__b = {enc}.GetBytes(([string[]]$__v -join [char]0) + "
+            "[char]0 + [char]0) } else { $__b = [byte[]]$__v; if ($__t -lt 0) { $__t = 0 } }; "
+            "if ($null -eq $__b) { $__b = [byte[]]@() }; "
+            f"Write-Output ('V|' + $__kn + '|' + [Convert]::ToBase64String({enc}.GetBytes($__n)) "
+            "+ '|' + $__t + '|' + [Convert]::ToBase64String($__b)) }; "
+            "foreach ($__s in $__k.GetSubKeyNames()) { $__c = $__k.OpenSubKey($__s, $false); "
+            "if ($__c) { $__q.Enqueue($__c) } }; $__k.Close() }",
+        ], timeout=120.0)
+        return RegStore.from_listing(out)
 
-    def _restore_statements(self) -> list:
-        """Put TA's key back as the pending record says it was, prove it by exporting
-        again, and only then remove the record. The launch wrapper runs these after
-        the game; `restore` runs them on request."""
-        pend = ps_str(ntpath.join(self.home(), PENDING))
-        exp = ps_str(ntpath.join(self.home(), REG_EXPORT))
-        chk = ps_str(ntpath.join(self.home(), REG_CHECK))
-        key, pspath = ps_str(REG_KEY), ps_str(REG_PSPATH)
-        return [
-            f"$__k = @([IO.File]::ReadAllLines({pend}) | Where-Object {{ $_.StartsWith('key=') }}); "
-            f"$__want = ''; if ($__k.Count -gt 0) {{ $__want = $__k[$__k.Count - 1].Substring(4) }}",
-            f"if ($__want.StartsWith('present ')) {{ if (-not [IO.File]::Exists({exp})) {{ throw "
-            f"'the export taken at launch is missing; the key was left as it is' }}; $__h = "
-            f"(Get-FileHash -LiteralPath {exp} -Algorithm SHA256).Hash; if ($__h -ne "
-            f"$__want.Substring(8)) {{ throw ('the export taken at launch has changed (' + $__h + "
-            f"'); the key was left as it is') }} }}",
-            f"if ($__want -ne '' -and (Test-Path -LiteralPath {pspath})) {{ "
-            + _native(f"& reg.exe delete {key} /f", "reg delete") + " }",
-            f"if ($__want.StartsWith('present ')) {{ "
-            + _native(f"& reg.exe import {exp}", "reg import") + " }",
-            f"if ($__want.StartsWith('present ')) {{ "
-            + _native(f"& reg.exe export {key} {chk} /y", "reg export")
-            + f"; $__h = (Get-FileHash -LiteralPath {chk} -Algorithm SHA256).Hash; [IO.File]::"
-            f"Delete({chk}); if ($__h -ne $__want.Substring(8)) {{ throw ('TA''s registry key "
-            f"reads ' + $__h + ' after the restore, not the export''s ' + $__want.Substring(8)) }} "
-            f"}} elseif ($__want -eq 'absent' -and (Test-Path -LiteralPath {pspath})) {{ throw "
-            f"'TA''s registry key is still there after deleting it' }}",
-            f"[IO.File]::Delete({pend}); __m ('restored ' + $__want)",
-        ]
-
-    def wrapper_script(self, instance: str, argv, values, token: str) -> str:
-        """The scheduled task's script, in two batches of `ps_script` whose markers go
-        to `tacli-state\\launch.status`:
-
-          1. refuse beside any running TotalA.exe; take the pending record with
-             CreateNew -- the lock: a second wrapper fails here and touches nothing;
-             export TA's key and record its SHA-256 (or its absence) in the record;
-             write the test values; start TotalA.exe from the test folder and wait
-             for it to exit;
-          2. whatever batch 1 did after taking the record, and only if it took it:
-             wait until no TotalA.exe runs, then restore and verify
-             (`_restore_statements`), which removes the record.
-
-        So the key is exported before the first test value is written, restored after
-        the game has exited, and the record says so the whole time in between. The
-        only way to leave it unrestored is to end the wrapper itself (a restart, the
-        task ended), and the record left behind says exactly that."""
-        home = self.home()
-        pend = ps_str(ntpath.join(home, PENDING))
-        exp = ps_str(ntpath.join(home, REG_EXPORT))
-        key, pspath = ps_str(REG_KEY), ps_str(REG_PSPATH)
-        nl = "[Environment]::NewLine"
-        first = [
-            "$__mine = $false",
-            "if (@(Get-Process TotalA -ErrorAction SilentlyContinue).Count -gt 0) { throw "
-            "'TotalA.exe is already running; the wrapper touches nothing beside it' }",
-            f"[void][IO.Directory]::CreateDirectory({ps_str(home)})",
-            f"$__f = [IO.File]::Open({pend}, 'CreateNew', 'Write', 'Read'); $__mine = $true; "
-            f"try {{ $__b = [Text.Encoding]::UTF8.GetBytes('instance=' + {ps_str(instance)} + {nl} "
-            f"+ 'folder=' + {ps_str(self.folder)} + {nl} + 'wrapper=' + $PID + {nl} + 'started=' "
-            f"+ (Get-Date).ToString('s') + {nl}); $__f.Write($__b, 0, $__b.Length) }} finally "
-            f"{{ $__f.Close() }}",
-            f"if (Test-Path -LiteralPath {pspath}) {{ "
-            + _native(f"& reg.exe export {key} {exp} /y", "reg export")
-            + f"; $__line = 'key=present ' + (Get-FileHash -LiteralPath {exp} -Algorithm "
-            f"SHA256).Hash }} else {{ $__line = 'key=absent' }}; [IO.File]::AppendAllText({pend}, "
-            f"$__line + {nl})",
-        ]
-        for sub, name, kind, data in values:
-            path = ps_str(REG_PSPATH + (("\\" + sub) if sub else ""))
-            ptype = {"REG_DWORD": "DWord", "REG_SZ": "String"}[kind]
-            val = str(int(data)) if kind == "REG_DWORD" else ps_str(data)
-            first.append(f"if (-not (Test-Path -LiteralPath {path})) {{ New-Item -Path {path} "
-                         f"-Force | Out-Null }}; New-ItemProperty -LiteralPath {path} -Name "
-                         f"{ps_str(name)} -PropertyType {ptype} -Value {val} -Force | Out-Null")
-        argline = " ".join(argv)
-        first += [
-            f"$__g = Start-Process -FilePath {ps_str(ntpath.join(self.folder, 'TotalA.exe'))} "
-            f"-WorkingDirectory {ps_str(self.folder)}"
-            + (f" -ArgumentList {ps_str(argline)}" if argline else "")
-            + " -PassThru; __m ('game ' + $__g.Id)",
-            "$__g.WaitForExit()",
-        ]
-        second = [
-            "if (-not $__mine) { throw 'this wrapper took no registry record, so it restores "
-            "nothing' }",
-            "while (@(Get-Process TotalA -ErrorAction SilentlyContinue).Count -gt 0) { "
-            "Start-Sleep -Seconds 2 }",
-        ] + self._restore_statements()
-        sink = ps_str(self.state(WRAPPER_LOG))
-        return (ps_script(first, token, 1, sink=sink) + ps_script(second, token, 2, sink=sink))
-
-    def restore(self) -> str:
-        """`tacli remote restore`: the restore a wrapper that was ended never ran.
-        Refuses, in the same batch, while any TotalA.exe runs (a restore under a
-        running game is overwritten by it, or deletes a key a player's game reads)
-        and while any tacli task is Running or Queued (that wrapper restores the key
-        itself)."""
-        pend = ps_str(ntpath.join(self.home(), PENDING))
-        out = self.run([
-            "if (@(Get-Process TotalA -ErrorAction SilentlyContinue).Count -gt 0) { throw "
-            "'TotalA.exe is running on the remote machine; the key is not restored under a "
-            "running game' }",
-            f"$__busy = @(Get-ScheduledTask -TaskPath {ps_str(TASK_DIR)} -ErrorAction "
-            f"SilentlyContinue | Where-Object {{ $_.State -eq 'Running' -or $_.State -eq "
-            f"'Queued' }}); if ($__busy.Count -gt 0) {{ throw ('a launch wrapper is still "
-            f"running (' + $__busy[0].TaskName + '); it restores the key itself') }}",
-            f"if (-not [IO.File]::Exists({pend})) {{ throw 'no registry record is pending' }}",
-        ] + self._restore_statements(), timeout=120.0)
-        return restore_note(out)
-
-    def home_exists(self, name: str) -> bool:
-        return self.run([f"Write-Output ([IO.File]::Exists("
-                         f"{ps_str(ntpath.join(self.home(), name))}))"]) == ["True"]
-
-    def home_read(self, name: str) -> bytes:
-        out = self.run([_read_stmt(ps_str(ntpath.join(self.home(), name)), 0, CHUNK)],
+    def dll_has_test_mode(self) -> bool:
+        """Whether the test folder's ddraw.dll serves the registry from the store: the
+        line only tagpu_regstore.c logs is in its bytes (read on the far side, latin-1,
+        so every byte is one character)."""
+        dll = ps_str(ntpath.join(self.folder, "ddraw.dll"))
+        out = self.run([f"if ([IO.File]::Exists({dll})) {{ Write-Output ([Text.Encoding]::"
+                        f"GetEncoding(28591).GetString([IO.File]::ReadAllBytes({dll})).Contains("
+                        f"{ps_str(TEST_MODE_MARK.decode('ascii'))})) }} else {{ Write-Output 'False' }}"],
                        timeout=120.0)
-        return base64.b64decode(out[0] if out else "")
-
-    def home_write(self, name: str, data: bytes):
-        """Put a file into the registry home (the export, from its local copy)."""
-        if len(data) > CHUNK:
-            raise RemoteError(f"{name}: {len(data)} bytes is more than a registry export")
-        self.run([f"[void][IO.Directory]::CreateDirectory({ps_str(self.home())})"]
-                 + _write_stmts(ntpath.join(self.home(), name), data), timeout=120.0)
+        return out == ["True"]
 
 
 TASK_DIR = "\\tacli\\"          # every remote instance's task lives in this folder
+TASK_RUNNING = 0x41301          # SCHED_S_TASK_RUNNING
 
 
-def parse_record(text: str) -> dict:
-    """The pending record: `k=v` lines; `key` is `present <SHA-256>` or `absent`, and
-    missing when the wrapper stopped before its export."""
-    rec = {}
-    for line in text.splitlines():
-        k, sep, v = line.partition("=")
-        if sep:
-            rec[k.strip()] = v.strip()
-    return rec
+# ---------------------------------------------------------- the registry store
+#
+# TA's registry in a test folder is `tacli-state\registry.txt`: the DLL serves the game's
+# registry calls from it and writes the game's changes back to it (tagpu_regstore.h, which
+# specifies the format; the two must agree byte for byte). `remote add` seeds it by
+# reading the player's key, `launch` puts its test values in it, and nothing of tacli
+# writes the remote machine's registry at all.
+
+STORE = "registry.txt"
+STORE_ROOT = r"HKCU\Software\Cavedog Entertainment"
+STORE_TA = STORE_ROOT + r"\Total Annihilation"
+REG_SZ, REG_DWORD = 1, 4
+# The line tagpu_regstore.c logs when it serves the registry: a DLL without it would run
+# the game against the real registry, so tacli starts no remote game with one.
+TEST_MODE_MARK = b"registry: TEST MODE"
+_HIVES = {"HKEY_CURRENT_USER": "HKCU"}
 
 
-def restore_note(lines) -> str:
-    """What the restore's last statement printed, in words."""
-    for line in lines:
-        if line.startswith("restored"):
-            what = line[len("restored"):].strip()
-            if what.startswith("present "):
-                return (f"restored TA's registry key ({what[8:20]}…, verified by a fresh "
-                        f"export)")
-            if what == "absent":
-                return ("removed TA's registry key again: it did not exist before the "
-                        "launch")
-            return "nothing to restore: the wrapper ended before its export"
-    return "the restore printed no result"
+def _esc(b: bytes) -> str:
+    return "".join(f"%{c:02X}" if c == 0x25 or c < 0x20 or c >= 0x7F else chr(c) for c in b)
 
 
-def parse_status(text: str, token: str) -> dict:
-    """The launch wrapper's marker lines (`launch.status`): per batch, the statements
-    that finished, the error if one failed, whether it reached its end; and the
-    game's pid and the restore's result, which its statements print."""
-    tag = f"@@{token} "
-    res = {"game": None, "restored": None, "done": {1: set(), 2: set()}, "err": {},
-           "end": set()}
-    for line in text.splitlines():
-        if line.startswith("game ") and line[5:].strip().isdigit():
-            res["game"] = int(line[5:])
-        elif line.startswith("restored"):
-            res["restored"] = restore_note([line])
-        elif line.startswith(tag):
-            parts = line[len(tag):].split(" ", 4)
-            if len(parts) < 2 or not parts[1].isdigit():
+def _unesc(s: str) -> bytes:
+    out, i = bytearray(), 0
+    while i < len(s):
+        c = s[i]
+        if not " " <= c <= "~":
+            raise ValueError(f"a raw {c!r} where the format escapes it")
+        if c == "%":
+            h = s[i + 1:i + 3]
+            if len(h) != 2 or any(x not in "0123456789abcdefABCDEF" for x in h):
+                raise ValueError(f"a broken escape at {s[i:i + 3]!r}")
+            if not int(h, 16):
+                raise ValueError("an escaped NUL")
+            out.append(int(h, 16))
+            i += 3
+        else:
+            out.append(ord(c))
+            i += 1
+    return bytes(out)
+
+
+def _b(s) -> bytes:
+    return s.encode("ascii") if isinstance(s, str) else bytes(s)
+
+
+class RegStore:
+    """The keys and values of a registry store, in file order. Key paths and value names
+    are the ANSI bytes the game's A functions see, matched without case as the registry
+    matches them; a value is (name, type, data bytes)."""
+
+    def __init__(self):
+        self._keys = {}         # lower path -> (path, {lower name: (name, type, data)})
+
+    def _key(self, path: bytes):
+        """The key, created with every missing key between it and STORE_ROOT."""
+        root = STORE_ROOT.encode("ascii")
+        low = path.lower()
+        if not (low == root.lower() or low.startswith(root.lower() + b"\\")) \
+                or b"\\\\" in path or path.endswith(b"\\"):
+            raise ValueError(f"{path!r} is not a key under {STORE_ROOT}")
+        cur = path[:len(root)]
+        self._keys.setdefault(cur.lower(), (cur, {}))
+        for part in (path[len(root) + 1:].split(b"\\") if len(path) > len(root) else []):
+            cur += b"\\" + part
+            self._keys.setdefault(cur.lower(), (cur, {}))
+        return self._keys[low]
+
+    def set(self, key, name, kind: int, data: bytes):
+        name = _b(name)
+        self._key(_b(key))[1][name.lower()] = (name, int(kind), bytes(data))
+
+    def set_dword(self, key, name, value: int):
+        self.set(key, name, REG_DWORD, (int(value) & 0xFFFFFFFF).to_bytes(4, "little"))
+
+    def set_sz(self, key, name, text: str):
+        self.set(key, name, REG_SZ, text.encode("ascii") + b"\0")
+
+    def get(self, key, name):
+        k = self._keys.get(_b(key).lower())
+        return None if k is None else k[1].get(_b(name).lower())
+
+    def keys(self):
+        return [path for path, _ in self._keys.values()]
+
+    def values(self, key):
+        k = self._keys.get(_b(key).lower())
+        return [] if k is None else list(k[1].values())
+
+    def format(self) -> bytes:
+        lines = ["# tacli registry store: <key> or <key>\\t<name>\\t<type>\\t<data> "
+                 "(tagpu_regstore.h)"]
+        for path, vals in self._keys.values():
+            lines.append(_esc(path))
+            for name, kind, data in vals.values():
+                if kind == REG_DWORD and len(data) == 4:
+                    spec = f"dword\t{int.from_bytes(data, 'little')}"
+                elif kind == REG_SZ and data.endswith(b"\0") and b"\0" not in data[:-1]:
+                    spec = "sz\t" + _esc(data[:-1])
+                else:
+                    spec = f"hex({kind})\t{data.hex()}"
+                lines.append(f"{_esc(path)}\t{_esc(name)}\t{spec}")
+        return ("\r\n".join(lines) + "\r\n").encode("ascii")
+
+    @classmethod
+    def parse(cls, data: bytes) -> "RegStore":
+        """The store a file holds; ValueError names the first line that does not parse,
+        as the DLL refuses it (it then serves what parsed and never writes back)."""
+        store = cls()
+        for n, line in enumerate(data.split(b"\n"), 1):
+            line = line[:-1] if line.endswith(b"\r") else line
+            if not line or line.startswith(b"#"):
                 continue
-            b = int(parts[1])
-            if parts[0] == "END":
-                res["end"].add(b)
-            elif parts[0] == "DONE" and len(parts) > 2 and parts[2].isdigit():
-                res["done"].setdefault(b, set()).add(int(parts[2]))
-            elif parts[0] == "ERR" and len(parts) > 3:
-                msg = base64.b64decode((parts[4] if len(parts) > 4 else "").strip() or "")
-                res["err"][b] = (int(parts[2]), parts[3],
-                                 " ".join(msg.decode("utf-8", "replace").split()))
-    return res
+            try:
+                f = line.decode("ascii").split("\t")
+                if len(f) not in (1, 4):
+                    raise ValueError(f"{len(f)} fields")
+                key = _unesc(f[0])
+                store._key(key)
+                if len(f) == 1:
+                    continue
+                name, kind, val = _unesc(f[1]), f[2], f[3]
+                if kind == "dword":
+                    if not re.fullmatch(r"[0-9]{1,10}", val) or int(val) > 0xFFFFFFFF:
+                        raise ValueError(f"dword {val!r}")
+                    store.set(key, name, REG_DWORD, int(val).to_bytes(4, "little"))
+                elif kind == "sz":
+                    store.set(key, name, REG_SZ, _unesc(val) + b"\0")
+                elif re.fullmatch(r"hex\([0-9]{1,10}\)", kind) and int(kind[4:-1]) <= 0xFFFFFFFF:
+                    if not re.fullmatch(r"(?:[0-9a-fA-F]{2})*", val):
+                        raise ValueError(f"hex data {val[:20]!r}")
+                    store.set(key, name, int(kind[4:-1]), bytes.fromhex(val))
+                else:
+                    raise ValueError(f"type {kind!r}")
+            except (ValueError, UnicodeDecodeError) as e:
+                raise ValueError(f"line {n}: {e}") from None
+        return store
 
-
-def _native(cmd: str, what: str) -> str:
-    """A native command inside a statement, judged by its exit code: its stderr is
-    dropped (it would be a terminating error under 'Stop'), and the preference is
-    restored before the check. ps_script also resets it at the next line."""
-    return (f"$ErrorActionPreference = 'Continue'; {cmd} 2>$null | Out-Null; "
-            f"$__rc = $LASTEXITCODE; $ErrorActionPreference = 'Stop'; "
-            f"if ($__rc -ne 0) {{ throw ('{what} exited ' + $__rc) }}")
+    @classmethod
+    def from_listing(cls, lines) -> "RegStore":
+        """The store `Remote.read_player_registry` read: `K|<key>` and
+        `V|<key>|<name>|<type>|<data>` lines, each field base64."""
+        store = cls()
+        for line in lines:
+            f = line.split("|")
+            if f[0] not in ("K", "V"):
+                continue
+            hive, sep, rest = base64.b64decode(f[1]).partition(b"\\")
+            key = _HIVES.get(hive.decode("ascii", "replace"), "?").encode("ascii") + sep + rest
+            if f[0] == "K":
+                store._key(key)
+            else:
+                store.set(key, base64.b64decode(f[2]), int(f[3]) & 0xFFFFFFFF,
+                          base64.b64decode(f[4]))
+        return store
 
 
 def _resolve_stmt(p: str) -> str:
@@ -1259,19 +1239,25 @@ def sync_logs(remote: Remote, local_root: Path, attempts: int = 4) -> Path:
     the mirror, so only what was appended since the last sync crosses the link, and
     a file whose name, header and length are all unchanged is not rewritten. Files of
     older runs are dropped from the mirror (every verb reads the current run). A
-    rotation between the listing and a read shows up as a header that no longer
-    matches or a file that is gone, and the sync starts again, `attempts` times."""
+    rotation inside the listing (a file renamed between its enumeration and its
+    open) or between the listing and a read shows up as a file that is gone or a
+    header that no longer matches, and the sync starts again, `attempts` times."""
     logdir = ntpath.join(remote.folder, "log")
     mirror = Path(local_root) / "log"
     mirror.mkdir(parents=True, exist_ok=True)
     for _ in range(attempts):
-        listing = remote.run([
-            f"if ([IO.Directory]::Exists({ps_str(logdir)})) {{ Get-ChildItem -LiteralPath "
-            f"{ps_str(logdir)} -Filter *.log -File | ForEach-Object {{ $f = [IO.File]::Open("
-            f"$_.FullName, 'Open', 'Read', 'ReadWrite, Delete'); try {{ $n = [Math]::Min("
-            f"{HEAD_BYTES}, $f.Length); $b = New-Object byte[] $n; $r = $f.Read($b, 0, $n); "
-            f"Write-Output ({_B64_NAME} + '|' + $f.Length + '|' + [Convert]::ToBase64String("
-            f"$b, 0, $r)) }} finally {{ $f.Close() }} }} }}"])
+        try:
+            listing = remote.run([
+                f"if ([IO.Directory]::Exists({ps_str(logdir)})) {{ Get-ChildItem -LiteralPath "
+                f"{ps_str(logdir)} -Filter *.log -File | ForEach-Object {{ $f = [IO.File]::Open("
+                f"$_.FullName, 'Open', 'Read', 'ReadWrite, Delete'); try {{ $n = [Math]::Min("
+                f"{HEAD_BYTES}, $f.Length); $b = New-Object byte[] $n; $r = $f.Read($b, 0, $n); "
+                f"Write-Output ({_B64_NAME} + '|' + $f.Length + '|' + [Convert]::ToBase64String("
+                f"$b, 0, $r)) }} finally {{ $f.Close() }} }} }}"])
+        except RemoteError as e:
+            if e.kind not in ("FileNotFoundException", "DirectoryNotFoundException"):
+                raise
+            continue                        # a listed file was rotated away before its open
         remote_files = []
         for line in listing:
             name, length, head = line.split("|", 2)
