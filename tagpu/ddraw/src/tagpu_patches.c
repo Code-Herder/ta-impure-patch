@@ -85,7 +85,7 @@ static LIMSITE s_lim[LIM_MAXSITE];
 static int     s_nlim;
 static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
 static int     s_limOverflow;        /* the table itself was too small: our bug      */
-static int     s_limNoStub;          /* a code stub could not be allocated           */
+static int     s_limNoStub;          /* a code stub could not be made                */
 static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
 
@@ -135,7 +135,7 @@ static void lim_same(unsigned int va, int n, const unsigned char* stock, const c
     lim_add(va, n, stock, stock, name);
 }
 
-/* a fix of the table whose code stub could not be allocated: nothing of the table is written */
+/* a fix of the table whose code stub could not be made: nothing of the table is written */
 static void lim_no_stub(void)
 {
     s_limNoStub = 1;
@@ -187,7 +187,7 @@ static const char* fix_state(int r)
     switch (r) {
     case FIX_ARMED: return "ARMED";
     case FIX_BYTES: return "SKIPPED (the bytes differ from the retail exe)";
-    case FIX_STUB:  return "SKIPPED (VirtualAlloc of the stub failed)";
+    case FIX_STUB:  return "SKIPPED (its stub could not be made)";
     case FIX_LIMITS: return "with the raised limits (the limits line)";
     case FIX_TABLE: return "in the fail-closed table (the limits line)";
     default:        return "SKIPPED (VirtualProtect of the site failed)";
@@ -3080,8 +3080,24 @@ static int fix_last_cell(void)
    cruise altitude a few tiles inside it, a unit on a hill beside it -- samples rows above the
    grid and is invisible to every other player, so nothing acquires it. Underwater, y < 0, the
    same happens at the south edge.
-   THE FIX: at each of the six places, when the sheared row is outside the grid and the point's
-   own row, z >> 5, is inside it, the own row is used; otherwise the stock answer stands, so a unit
+   THE SAME READ, INLINED ELSEWHERE. A search of .text for the shape -- a halved y word taken
+   from a z word, then `sar 5` and the unsigned pair against +0x80 and +0x84, in any registers
+   -- finds 37 copies (exe-reverse-engineering.md, "Line of sight at the map's edge", has the
+   table). Beyond the eight above, 29, each a world point against a player's LOS grid or the
+   mapped grid under that player's bounds, and each ending in a row test `cmp r,[g+0x84]`
+   followed by a jae or jb (LOSROW, below):
+     - the order resolver 0x43F0E0, six: whether the target's cell is mapped for the local
+       player decides the order it resolves -- the table;
+     - the view player's map build 0x467440, two: a unit it sees gets +0x110 bit 8, which the
+       acquisition 0x40AA40 lists for every player -- the table;
+     - the cursor picker 0x43E490, six; the site test 0x47D2E0, one (0x4197D0, the build cursor,
+       is its only caller that passes a player: 0x40A4CD and 0x47DBE5 pass none, and it skips
+       the read); the feature draw's 0x4658E0, two; the particle leaves 0x473590, 0x474170,
+       0x4745E0 and 0x4750B0, two each; positional sound 0x47F300, two -- local, fix_los_local;
+     - 0x474B80, two: left stock, since nothing runs it (no call or jump reaches it in .text
+       and no pointer to it is in the image).
+   THE FIX, at every one of them: when the sheared row is outside the grid and the point's own
+   row, z >> 5, is inside it, the own row is used; otherwise the stock answer stands, so a unit
    beyond the map's edge stays unseen (the margin TADR adds there is a gameplay change, not a
    defect). Registers: the third read loads dx and di (the point's y and z words) and the fourth
    reads them again (0x465D46, 0x465DA9), so its stub loads them as stock does; ebp after the
@@ -3090,7 +3106,38 @@ static int fix_last_cell(void)
    with the player from [esp+8] before either exit.
    THE INVARIANT: the grid is read only at a column and a row inside it -- the same unsigned
    bounds as stock, now applied to the row actually used. Exact whenever stock's row is inside.
-   CLASS: simulation, fail closed (what is acquired). */
+   THE ORACLE: every stub counts, per function, the times it takes the own row (s_losOwnRow) --
+   the one path only the fix runs, so a count above zero is that function's stub at work.
+   CLASS: simulation, fail closed (what is acquired, the order resolved); the local reads are
+   fix_los_local's. */
+
+/* The functions whose reads are fixed, in the order of their counters. */
+enum {
+    LOS_UNIT, LOS_MAPPED, LOS_PROBE, LOS_ORDER, LOS_VIEWMAP,       /* the table */
+    LOS_PROJ, LOS_CURSOR, LOS_BUILD, LOS_FEATURE, LOS_SOUND,       /* local     */
+    LOS_FX_473590, LOS_FX_474170, LOS_FX_4745E0, LOS_FX_4750B0,
+    LOS_NFN
+};
+static const unsigned int s_losFn[LOS_NFN] = {
+    0x465AC0, 0x408090, 0x407E90, 0x43F0E0, 0x467440,
+    0x49BE60, 0x43E490, 0x47D2E0, 0x4658E0, 0x47F300,
+    0x473590, 0x474170, 0x4745E0, 0x4750B0,
+};
+/* the own row taken, one count per function; interlocked, so the count assumes nothing about
+   which thread calls the engine's draw and sound code */
+static volatile LONG s_losOwnRow[LOS_NFN];
+
+/* pushfd; lock inc dword [&s_losOwnRow[fn]]; popfd -- the count, with the flags kept */
+static int los_count(unsigned char* a, int fn)
+{
+    unsigned int at = (unsigned int)(size_t)&s_losOwnRow[fn];
+    a[0] = 0x9C;
+    a[1] = 0xF0; a[2] = 0xFF; a[3] = 0x05;
+    memcpy(a + 4, &at, 4);
+    a[8] = 0x9D;
+    return 9;
+}
+
 typedef struct LOSREAD {
     unsigned int va, in, out;           /* the block, stock's read, stock's "not visible" */
     unsigned char n;
@@ -3098,7 +3145,64 @@ typedef struct LOSREAD {
     const unsigned char* stub;
     unsigned char nstub;
     const char* name;
+    unsigned char fn;
 } LOSREAD;
+
+/* A copy of the read whose row test stands alone: `cmp r,[g+0x84]` and the jae or jb after it,
+   n bytes at va (8 with a short branch, 12 with a near one), and z, the instruction that loaded
+   the point's z word into r before stock took the shear from it. z is still good at va: its
+   base register is not written in between, and a [esp+..] one sees no push. */
+typedef struct LOSROW {
+    unsigned int  va;
+    unsigned char n;
+    unsigned char stock[12];
+    unsigned char z[5];
+    unsigned char nz;
+    unsigned char fn;
+} LOSROW;
+
+/* One LOSROW's stub, at a:
+       cmp r,[g+0x84]; jb in        the sheared row is inside: stock's read
+       movsx r,<z>; sar r,5         the point's own row
+       cmp r,[g+0x84]; jae out      outside too: stock's "not visible"
+       count; jmp in                the own row, read where stock reads a row
+   in and out are the site's own exits, decoded from its stock bytes (after a jae, out is the
+   target; after a jb, in is), and those bytes are compared with the image before any of this
+   is written. Only r and the flags change: r leaves as the row read, and in is reached with CF
+   set and out with CF clear, as stock reaches them.
+   Returns the length (46 at most), or 0 when the bytes are not that shape or z does not load r;
+   nothing is written over the site then. */
+static int los_row_stub(unsigned char* a, const LOSROW* s)
+{
+    const unsigned char* c = s->stock;
+    unsigned int next = s->va + s->n, target, in, out;
+    int r = (c[1] >> 3) & 7, jb, rel, k = 0;
+    if (c[0] != 0x3B || (c[1] & 0xC0) != 0x80 || (c[1] & 7) == 4 || r == 4 ||
+        c[2] != 0x84 || c[3] || c[4] || c[5] || s->nz < 3 || s->nz > 5 ||
+        s->z[0] != 0x0F || s->z[1] != 0xBF || ((s->z[2] >> 3) & 7) != r)
+        return 0;
+    if (s->n == 8 && (c[6] == 0x72 || c[6] == 0x73)) {
+        jb = c[6] == 0x72;
+        target = next + (unsigned int)(int)(signed char)c[7];
+    } else if (s->n == 12 && c[6] == 0x0F && (c[7] == 0x82 || c[7] == 0x83)) {
+        jb = c[7] == 0x82;
+        memcpy(&rel, c + 8, 4);
+        target = next + (unsigned int)rel;
+    } else {
+        return 0;
+    }
+    in  = jb ? target : next;
+    out = jb ? next : target;
+    memcpy(a + k, c, 6); k += 6;
+    a[k++] = 0x0F; a[k++] = 0x82; tagpu_detour_rel(a + k, in); k += 4;
+    memcpy(a + k, s->z, s->nz); k += s->nz;
+    a[k++] = 0xC1; a[k++] = (unsigned char)(0xF8 + r); a[k++] = 0x05;
+    memcpy(a + k, c, 6); k += 6;
+    a[k++] = 0x0F; a[k++] = 0x83; tagpu_detour_rel(a + k, out); k += 4;
+    k += los_count(a + k, s->fn);
+    a[k++] = 0xE9; tagpu_detour_rel(a + k, in); k += 4;
+    return k;
+}
 
 static int fix_los_shear(void)
 {
@@ -3113,14 +3217,14 @@ static int fix_los_shear(void)
         0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
         0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
         0x3B, 0x8E, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[esi+0x80]             */
-        0x73, 0x1D,                         /* jae out                        */
+        0x73, 0x26,                         /* jae out                        */
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
-        0x72, 0x10,                         /* jb in                          */
+        0x72, 0x19,                         /* jb in                          */
         0x0F, 0xBF, 0x44, 0x24, 0x1A,       /* movsx eax,word [esp+0x1a]      */
         0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
-        0x73, 0x05,                         /* jae out                        */
-    };                                      /* in: jmp; out: jmp              */
+        0x73, 0x0E,                         /* jae out                        */
+    };                                      /* count; in: jmp; out: jmp       */
     /* the third point: dx and di stay loaded for the fourth */
     static const unsigned char stubC[] = {
         0x66, 0x8B, 0x54, 0x24, 0x16,       /* mov dx,[esp+0x16]              */
@@ -3133,13 +3237,13 @@ static int fix_los_shear(void)
         0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
         0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
         0x3B, 0x8E, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[esi+0x80]             */
-        0x73, 0x1B,                         /* jae out                        */
+        0x73, 0x24,                         /* jae out                        */
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
-        0x72, 0x0E,                         /* jb in                          */
+        0x72, 0x17,                         /* jb in                          */
         0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
         0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
-        0x73, 0x05,                         /* jae out                        */
+        0x73, 0x0E,                         /* jae out                        */
     };
     /* the fourth point: ecx its x word, dx and di as the third left them */
     static const unsigned char stubD[] = {
@@ -3150,13 +3254,13 @@ static int fix_los_shear(void)
         0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
         0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
         0x3B, 0x8E, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[esi+0x80]             */
-        0x73, 0x1B,                         /* jae out                        */
+        0x73, 0x24,                         /* jae out                        */
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
-        0x72, 0x0E,                         /* jb in                          */
+        0x72, 0x17,                         /* jb in                          */
         0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
         0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
-        0x73, 0x05,                         /* jae out                        */
+        0x73, 0x0E,                         /* jae out                        */
     };
     /* PositionInPlayerMapped: eax the point; out: ecx the column, eax the row, edx the player */
     static const unsigned char stubM[] = {
@@ -3171,15 +3275,16 @@ static int fix_los_shear(void)
         0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
         0xC1, 0xFE, 0x05,                   /* sar esi,5: the point's own row */
         0x3B, 0x8A, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[edx+0x80]             */
-        0x73, 0x17,                         /* jae out                        */
+        0x73, 0x20,                         /* jae out                        */
         0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[edx+0x84]             */
-        0x72, 0x0A,                         /* jb in                          */
+        0x72, 0x13,                         /* jb in                          */
         0x89, 0xF0,                         /* mov eax,esi                    */
         0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[edx+0x84]             */
-        0x73, 0x05,                         /* jae out                        */
+        0x73, 0x0E,                         /* jae out                        */
     };
-    /* the AI probe's copy: esi the point, ecx the player; ebx leaves holding the width, as
-       stock's does on every exit */
+    /* the AI probe's copy: esi the point, ecx the player. ebx is dead on both exits: the read
+       at 0x407F9C writes it, and past 0x408002 it is written at 0x40803E or popped at
+       0x408081 */
     static const unsigned char stubP[] = {
         0x0F, 0xBF, 0x5E, 0x06,             /* movsx ebx,word [esi+6]         */
         0x0F, 0xBF, 0x46, 0x0A,             /* movsx eax,word [esi+0xa]       */
@@ -3190,13 +3295,13 @@ static int fix_los_shear(void)
         0xC1, 0xFA, 0x05,                   /* sar edx,5                      */
         0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
         0x39, 0xDA,                         /* cmp edx,ebx                    */
-        0x73, 0x1C,                         /* jae out                        */
+        0x73, 0x25,                         /* jae out                        */
         0x3B, 0x81, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[ecx+0x84]             */
-        0x72, 0x0F,                         /* jb in                          */
+        0x72, 0x18,                         /* jb in                          */
         0x0F, 0xBF, 0x46, 0x0A,             /* movsx eax,word [esi+0xa]       */
         0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
         0x3B, 0x81, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[ecx+0x84]             */
-        0x73, 0x05,                         /* jae out                        */
+        0x73, 0x0E,                         /* jae out                        */
     };
     static const LOSREAD read[7] = {
         { 0x00465B6A, 0x00465B95, 0x00465BB1, 43, {
@@ -3204,52 +3309,117 @@ static int fix_los_shear(void)
             0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
             0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x24, 0x3B,
             0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1C }, stubAB, sizeof stubAB,
-          "line of sight: the first point's row" },
+          "line of sight: the first point's row", LOS_UNIT },
         { 0x00465C04, 0x00465C2F, 0x00465C49, 43, {
             0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
             0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
             0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x22, 0x3B,
             0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1A }, stubAB, sizeof stubAB,
-          "line of sight: the second point's row" },
+          "line of sight: the second point's row", LOS_UNIT },
         { 0x00465CA2, 0x00465CD3, 0x00465CED, 49, {
             0x66, 0x8B, 0x54, 0x24, 0x16, 0x66, 0x8B, 0x7C, 0x24, 0x1A, 0x0F, 0xBF,
             0x4C, 0x24, 0x12, 0x0F, 0xBF, 0xEA, 0x0F, 0xBF, 0xC7, 0xD1, 0xFD, 0x2B,
             0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8,
             0x05, 0x3B, 0xCD, 0x73, 0x22, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x73,
             0x1A }, stubC, sizeof stubC,
-          "line of sight: the third point's row" },
+          "line of sight: the third point's row", LOS_UNIT },
         { 0x00465D46, 0x00465D68, 0x00465D94, 34, {
             0x0F, 0xBF, 0xD2, 0x0F, 0xBF, 0xC7, 0xD1, 0xFA, 0x2B, 0xC2, 0x8B, 0x96,
             0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCA,
             0x73, 0x34, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x2C }, stubD, sizeof stubD,
-          "line of sight: the fourth point's row" },
+          "line of sight: the fourth point's row", LOS_UNIT },
         { 0x00465DA9, 0x00465DE0, 0x00465DCB, 34, {
             0x0F, 0xBF, 0xD2, 0x0F, 0xBF, 0xC7, 0xD1, 0xFA, 0x2B, 0xC2, 0x8B, 0x96,
             0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCA,
             0x73, 0x08, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x72, 0x15 }, stubD, sizeof stubD,
-          "mapped: the fourth point's row" },
+          "mapped: the fourth point's row", LOS_UNIT },
         { 0x00408095, 0x004080C7, 0x004080C1, 44, {
             0x0F, 0xBF, 0x50, 0x06, 0x0F, 0xBF, 0x48, 0x02, 0x0F, 0xBF, 0x40, 0x0A,
             0xD1, 0xFA, 0x2B, 0xC2, 0x8B, 0x54, 0x24, 0x08, 0xC1, 0xF9, 0x05, 0x8B,
             0xB2, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF8, 0x05, 0x3B, 0xCE, 0x73, 0x08,
             0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x72, 0x06 }, stubM, sizeof stubM,
-          "mapped: PositionInPlayerMapped's row" },
+          "mapped: PositionInPlayerMapped's row", LOS_MAPPED },
         { 0x00407F74, 0x00407F9C, 0x00407FB7, 40, {
             0x0F, 0xBF, 0x5E, 0x06, 0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x56, 0x02,
             0xD1, 0xFB, 0x2B, 0xC3, 0x8B, 0x99, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA,
             0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xD3, 0x73, 0x23, 0x3B, 0x81, 0x84, 0x00,
             0x00, 0x00, 0x73, 0x1B }, stubP, sizeof stubP,
-          "line of sight: the AI probe's row" },
+          "line of sight: the AI probe's row", LOS_PROBE },
     };
+    /* the copies whose row test stands alone */
+    static const LOSROW row[7] = {
+        { 0x0043F5D1, 8, { 0x3B, 0x8D, 0x84, 0x00, 0x00, 0x00, 0x73, 0x3E },
+          { 0x0F, 0xBF, 0x4E, 0x0A }, 4, LOS_ORDER },
+        { 0x0043FC05, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xC4, 0x00, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_ORDER },
+        { 0x0043FD1A, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xD9, 0x00, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_ORDER },
+        { 0x0043FF85, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xD4, 0x00, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_ORDER },
+        { 0x004400AA, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xE7, 0x00, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_ORDER },
+        { 0x0046778A, 8, { 0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1B },
+          { 0x0F, 0xBF, 0x0E }, 3, LOS_VIEWMAP },
+        { 0x004677D0, 8, { 0x3B, 0x90, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 },
+          { 0x0F, 0xBF, 0x16 }, 3, LOS_VIEWMAP },
+    };
+    /* the order resolver's second read, 0x43F631..0x43F654: stock overwrites the point's
+       register (esi, at 0x43F635) before the row test, so the stub is the whole block, with z
+       held on the stack. ebp the player, edx the x word; both exits as stock: ecx the row,
+       edx the column, esi the width */
+    static const unsigned char blockO[36] = {
+        0x0F, 0xBF, 0x4E, 0x0A, 0x0F, 0xBF, 0x76, 0x06, 0xD1, 0xFE, 0x2B, 0xCE,
+        0x8B, 0xB5, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA, 0x05, 0xC1, 0xF9, 0x05,
+        0x3B, 0xD6, 0x73, 0x5D, 0x3B, 0x8D, 0x84, 0x00, 0x00, 0x00, 0x73, 0x55,
+    };
+    static const unsigned char stubO[] = {
+        0x0F, 0xBF, 0x4E, 0x0A,             /* movsx ecx,word [esi+0xa]       */
+        0x51,                               /* push ecx: z                    */
+        0x0F, 0xBF, 0x76, 0x06,             /* movsx esi,word [esi+6]         */
+        0xD1, 0xFE,                         /* sar esi,1                      */
+        0x2B, 0xCE,                         /* sub ecx,esi: the shear         */
+        0x8B, 0xB5, 0x80, 0x00, 0x00, 0x00, /* mov esi,[ebp+0x80]             */
+        0xC1, 0xFA, 0x05,                   /* sar edx,5                      */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0x3B, 0xD6,                         /* cmp edx,esi                    */
+        0x73, 0x28,                         /* jae out                        */
+        0x3B, 0x8D, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[ebp+0x84]             */
+        0x72, 0x17,                         /* jb in                          */
+        0x8B, 0x0C, 0x24,                   /* mov ecx,[esp]: z               */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5: the point's own row */
+        0x3B, 0x8D, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[ebp+0x84]             */
+        0x73, 0x12,                         /* jae out                        */
+    };                                      /* count; in: drop; jmp; out: drop; jmp */
+    static const unsigned char drop[4] = { 0x8D, 0x64, 0x24, 0x04 };   /* lea esp,[esp+4] */
     int k;
     for (k = 0; k < 7; k++) {
         const LOSREAD* r = &read[k];
-        unsigned char* a = fix_code(r->nstub + 10u);
+        unsigned char* a = fix_code(r->nstub + 19u);
+        int m;
         if (!a) { lim_no_stub(); return FIX_TABLE; }
         memcpy(a, r->stub, r->nstub);
-        a[r->nstub] = 0xE9; tagpu_detour_rel(a + r->nstub + 1, r->in);
-        a[r->nstub + 5] = 0xE9; tagpu_detour_rel(a + r->nstub + 6, r->out);
+        m = r->nstub + los_count(a + r->nstub, r->fn);
+        a[m] = 0xE9; tagpu_detour_rel(a + m + 1, r->in);
+        a[m + 5] = 0xE9; tagpu_detour_rel(a + m + 6, r->out);
         lim_branch(r->va, r->n, r->stock, 0xE9, (unsigned int)(size_t)a, r->name);
+    }
+    for (k = 0; k < (int)(sizeof row / sizeof row[0]); k++) {
+        unsigned char* a = fix_code(46);
+        if (!a || !los_row_stub(a, &row[k])) { lim_no_stub(); return FIX_TABLE; }
+        lim_branch(row[k].va, row[k].n, row[k].stock, 0xE9, (unsigned int)(size_t)a,
+                   row[k].fn == LOS_ORDER ? "line of sight: the order resolver's row"
+                                          : "line of sight: the view player's map's row");
+    }
+    {
+        unsigned char* a = fix_code(sizeof stubO + 27u);
+        int m;
+        if (!a) { lim_no_stub(); return FIX_TABLE; }
+        memcpy(a, stubO, sizeof stubO);
+        m = (int)sizeof stubO + los_count(a + sizeof stubO, LOS_ORDER);
+        memcpy(a + m, drop, 4);     a[m + 4] = 0xE9;  tagpu_detour_rel(a + m + 5, 0x0043F655);
+        memcpy(a + m + 9, drop, 4); a[m + 13] = 0xE9; tagpu_detour_rel(a + m + 14, 0x0043F6AA);
+        lim_branch(0x0043F631, sizeof blockO, blockO, 0xE9, (unsigned int)(size_t)a,
+                   "line of sight: the order resolver's second row");
     }
     return FIX_TABLE;
 }
@@ -3263,8 +3433,10 @@ static int fix_los_shear(void)
    is not posed (0x49C127). The pass still runs: fxown, which would stop it, is not a play
    default, because the engine's frame is the golden source (tagpu_opt.c).
    THE FIX: the own row when the sheared one is off the grid and the own one is on it, as for
-   units. ecx leaves as the row read, or unread past 0x49C058 on the not-visible exit; ebx
-   leaves holding the width on every exit, as stock's does.
+   units, counted under LOS_PROJ. ecx leaves as the row read, or unread past 0x49C058 on the
+   not-visible exit. ebx is dead on both exits: the read at 0x49BF10 writes it, and the
+   not-visible one reaches either the loop's top 0x49BEA3, which writes it (0x49BEE8, 0x49BF42)
+   before any read, or its pop at 0x49C07D.
    THE INVARIANT: the grid is read only at a column and a row inside it.
    CLASS: local. A draw. */
 static int fix_projectile_view(void)
@@ -3285,27 +3457,93 @@ static int fix_projectile_view(void)
         0xC1, 0xFA, 0x05,                   /* sar edx,5                      */
         0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
         0x39, 0xDA,                         /* cmp edx,ebx                    */
-        0x73, 0x1C,                         /* jae out                        */
+        0x73, 0x25,                         /* jae out                        */
         0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[eax+0x84]             */
-        0x72, 0x0F,                         /* jb in                          */
+        0x72, 0x18,                         /* jb in                          */
         0x0F, 0xBF, 0x4D, 0x0A,             /* movsx ecx,word [ebp+0xa]       */
         0xC1, 0xF9, 0x05,                   /* sar ecx,5: the point's own row */
         0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[eax+0x84]             */
-        0x73, 0x05,                         /* jae out                        */
-    };                                      /* in: jmp; out: jmp              */
+        0x73, 0x0E,                         /* jae out                        */
+    };                                      /* count; in: jmp; out: jmp       */
     unsigned char now[sizeof was];
     unsigned char* a;
     unsigned int rel;
+    int m;
     if (memcmp((const void*)0x0049BEE8, was, sizeof was) != 0) return FIX_BYTES;
-    if (!(a = fix_code(sizeof stub + 10))) return FIX_STUB;
+    if (!(a = fix_code(sizeof stub + 19))) return FIX_STUB;
     memcpy(a, stub, sizeof stub);
-    a[sizeof stub] = 0xE9; tagpu_detour_rel(a + sizeof stub + 1, 0x0049BF10);
-    a[sizeof stub + 5] = 0xE9; tagpu_detour_rel(a + sizeof stub + 6, 0x0049BF29);
+    m = (int)sizeof stub + los_count(a + sizeof stub, LOS_PROJ);
+    a[m] = 0xE9; tagpu_detour_rel(a + m + 1, 0x0049BF10);
+    a[m + 5] = 0xE9; tagpu_detour_rel(a + m + 6, 0x0049BF29);
     memset(now, 0x90, sizeof now);
     now[0] = 0xE9;
     rel = (unsigned int)(size_t)a - (0x0049BEE8u + 5u);
     memcpy(now + 1, &rel, 4);
     return tagpu_detour_write(0x0049BEE8, now, sizeof now) ? FIX_ARMED : FIX_PROTECT;
+}
+
+/* THE SAME READ IN LOCAL CODE [DISASSEMBLED]: the nineteen copies that decide only what this
+   player is shown or hears -- the cursor picker 0x43E490 (the pointer over a unit, and with it
+   what this player's own left click orders), the build cursor's site test 0x47D2E0, the feature
+   draw's 0x4658E0, the particle leaves 0x473590, 0x474170, 0x4745E0 and 0x4750B0, positional
+   sound 0x47F300. The census is under THE LINE-OF-SIGHT SHEAR, above.
+   THE FIX and THE INVARIANT are the shear's, one LOSROW stub per copy.
+   CLASS: local. A cursor, a draw, a sound: the nineteen are compared together and written
+   together, or not at all. */
+static int fix_los_local(void)
+{
+    static const LOSROW row[19] = {
+        { 0x0043E69D, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xC7, 0x00, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_CURSOR },
+        { 0x0043E904, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xCC, 0x00, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_CURSOR },
+        { 0x0043EBC6, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xC8, 0x00, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_CURSOR },
+        { 0x0043ECDB, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xB1, 0x03, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_CURSOR },
+        { 0x0043EE94, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xCC, 0x00, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_CURSOR },
+        { 0x0043EFA9, 12, { 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xC7, 0x00, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x46, 0x0A }, 4, LOS_CURSOR },
+        { 0x00465942, 8, { 0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1C },
+          { 0x0F, 0xBF, 0xCB }, 3, LOS_FEATURE },
+        { 0x0046598A, 8, { 0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 },
+          { 0x0F, 0xBF, 0xCB }, 3, LOS_FEATURE },
+        { 0x0047360C, 8, { 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x73, 0x19 },
+          { 0x0F, 0xBF, 0x48, 0x0E }, 4, LOS_FX_473590 },
+        { 0x00473657, 8, { 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 },
+          { 0x0F, 0xBF, 0x48, 0x0E }, 4, LOS_FX_473590 },
+        { 0x004741EC, 8, { 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x73, 0x19 },
+          { 0x0F, 0xBF, 0x48, 0x0E }, 4, LOS_FX_474170 },
+        { 0x00474237, 8, { 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 },
+          { 0x0F, 0xBF, 0x48, 0x0E }, 4, LOS_FX_474170 },
+        { 0x00474674, 8, { 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1B },
+          { 0x0F, 0xBF, 0x48, 0x0E }, 4, LOS_FX_4745E0 },
+        { 0x004746BB, 8, { 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 },
+          { 0x0F, 0xBF, 0x48, 0x0E }, 4, LOS_FX_4745E0 },
+        { 0x0047551E, 8, { 0x3B, 0x85, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1B },
+          { 0x0F, 0xBF, 0x44, 0x24, 0x1C }, 5, LOS_FX_4750B0 },
+        { 0x0047556C, 8, { 0x3B, 0x85, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 },
+          { 0x0F, 0xBF, 0x44, 0x24, 0x1C }, 5, LOS_FX_4750B0 },
+        { 0x0047D3B8, 12, { 0x3B, 0x87, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0x4B, 0x04, 0x00, 0x00 },
+          { 0x0F, 0xBF, 0x44, 0x24, 0x3A }, 5, LOS_BUILD },
+        { 0x0047F431, 8, { 0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, 0x73, 0x19 },
+          { 0x0F, 0xBF, 0x4E, 0x0A }, 4, LOS_SOUND },
+        { 0x0047F476, 8, { 0x3B, 0x90, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 },
+          { 0x0F, 0xBF, 0x56, 0x0A }, 4, LOS_SOUND },
+    };
+    FIXSITE s[19];
+    int k;
+    for (k = 0; k < 19; k++) {
+        unsigned char* a = fix_code(46);
+        if (!a || !los_row_stub(a, &row[k])) return FIX_STUB;
+        s[k].va = row[k].va;
+        s[k].n = row[k].n;
+        memcpy(s[k].was, row[k].stock, row[k].n);
+        fix_branch(&s[k], 0xE9, a);
+    }
+    if (!fix_match(s, 19)) return FIX_BYTES;
+    return fix_write(s, 19);
 }
 
 static void patch_engine_defects(void)
@@ -3327,8 +3565,10 @@ static void patch_engine_defects(void)
     int flak = fix_flak_divides();
     int edge = fix_last_cell();
     int los  = fix_los_shear();
+    int losl = fix_los_local();
     int pview = fix_projectile_view();
-    char b[2048];
+    char b[2048], fn[LOS_NFN * 9 + 1];
+    int k;
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
@@ -3342,9 +3582,7 @@ static void patch_engine_defects(void)
               "bounded, feature hits told from sentinels (0x42E468 0x49D280 0x455FB8 0x424575) %s; "
               "one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE) %s; flak's "
               "divides (0x49CF18 0x42F314 0x42F32E) %s; the map's last row and column "
-              "(0x47CC8B 0x47CCA3 0x47CCA9) %s; line of sight at the map's edge "
-              "(0x465B6A 0x465C04 0x465CA2 0x465D46 0x465DA9 0x408095 0x407F74) %s; the projectile "
-              "pass's view at the map's edge (0x49BEE8) %s. Counters: unit repeats "
+              "(0x47CC8B 0x47CCA3 0x47CCA9) %s. Counters: unit repeats "
               "refused at 0x%08X, "
               "feature repeats "
               "refused at 0x%08X, victims refused off their arrays at 0x%08X, list blocks run "
@@ -3352,10 +3590,27 @@ static void patch_engine_defects(void)
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
               fix_state(sfb), fix_state(rro), fix_state(scr), fix_state(list), fix_state(dl),
               fix_state(oom), fix_state(keys), fix_state(wpn), fix_state(caps), fix_state(flak),
-              fix_state(edge), fix_state(los), fix_state(pview),
+              fix_state(edge),
               (unsigned int)(size_t)&s_dmgUnitRepeats, (unsigned int)(size_t)&s_dmgFeatRepeats,
               (unsigned int)(size_t)&s_dmgRefused, (unsigned int)(size_t)&s_dmgUnframed,
               (unsigned int)(size_t)&s_flakFallbacks);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    for (k = 0; k < LOS_NFN; k++) _snprintf(fn + 9 * k, 10, " 0x%06X", s_losFn[k]);
+    fn[sizeof fn - 1] = 0;
+    _snprintf(b, sizeof b,
+              "enginefix: line of sight at the map's edge, in the table (0x465B6A 0x465C04 "
+              "0x465CA2 0x465D46 0x465DA9 0x408095 0x407F74; the order resolver 0x43F5D1 "
+              "0x43F631 0x43FC05 0x43FD1A 0x43FF85 0x4400AA; the view player's map 0x46778A "
+              "0x4677D0) %s; local (the cursor 0x43E69D 0x43E904 0x43EBC6 0x43ECDB 0x43EE94 "
+              "0x43EFA9; the build cursor 0x47D3B8; the feature draw 0x465942 0x46598A; the "
+              "particles 0x47360C 0x473657 0x4741EC 0x474237 0x474674 0x4746BB 0x47551E "
+              "0x47556C; sound 0x47F431 0x47F476) %s; the projectile pass (0x49BEE8) %s. Own row "
+              "taken at 0x%08X, one LONG per function:%s. Stubs: %u of 4096 bytes at 0x%08X",
+              fix_state(los), fix_state(losl), fix_state(pview),
+              (unsigned int)(size_t)s_losOwnRow, fn, s_fixCodeUsed,
+              (unsigned int)(size_t)s_fixCode);
     b[sizeof b - 1] = 0;
     plog(b);
 }
@@ -4121,7 +4376,7 @@ int tagpu_limits_install(void)
 #ifndef TAGPU_LIMITS_STOCK
     lim_sites();
 #endif
-    if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be allocated"); return 0; }
+    if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be made"); return 0; }
     if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
     if (lim_overlap()) {
         s_limState = -1;
@@ -4311,7 +4566,7 @@ void tagpu_limits_report(void)
     text[sizeof text - 1] = 0;
 
     if (s_limNoStub)
-        _snprintf(line, sizeof line, "result: a code stub could not be allocated, nothing written\r\n");
+        _snprintf(line, sizeof line, "result: a code stub could not be made, nothing written\r\n");
     else if (s_limOverflow)
         _snprintf(line, sizeof line, "result: the site table overflowed, nothing written\r\n");
     else if (s_limOverlapA)
