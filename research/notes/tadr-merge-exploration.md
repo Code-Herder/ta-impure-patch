@@ -30,19 +30,28 @@ below is quoted from `tdraw.txt` / `config_escalation.h` / the module source. [V
 
 ### A. Raised ceilings
 
-| Limit | Stock | Patch |
-|---|---|---|
-| active projectiles | 300 | 3000 |
-| explosion effects | 300 | 3000 |
-| flying model-piece slots | 100 | 1000 |
-| aux debris / effect records | 300 | 3000 |
-| units per player | 250 | 1500 (ESC ships 1000) |
-| pathfinding cycles | 1333 | 66650 |
-| special-effects vector | 400 | 20480 |
-| unit-type IDs | 512 | 16000 |
-| weapon IDs | 256 | 4096 (ESC on) |
-| model composite buffer | 600² | 1280² |
-| simultaneous sounds | 8 | 128+ |
+**Ported: every limit below is raised in our stack** (2026-09-24). *Ours* is the value we ship
+and *Landing* where it landed: L1–L7 in [the section-A plan](tadr-port/raised-limits.md), A′2 and
+A′3 in [A′. Content IDs](tadr-port/content-ids.md). Two values differ from TADR's on purpose, in
+bold.
+
+| Limit | Stock | Patch | Ours | Landing |
+|---|---|---|---|---|
+| active projectiles | 300 | 3000 | 3000 | L1 |
+| explosion effects | 300 | 3000 | 3000 | L1 |
+| flying model-piece slots | 100 | 1000 | 1000 | L1 |
+| aux debris / effect records | 300 | 3000 | 3000 | L1 |
+| units per player | 250 | 1500 (ESC ships 1000) | 1500, the default and the ceiling | L2 |
+| pathfinding cycles | 1333 | 66650 | 66 650 | L2 |
+| special-effects vector | 400 | 20480 | 20 480 a layer | L3 |
+| unit-type IDs | 512 | 16000 | **16 384**: the type masks are 2 KB, one bit a type | A′2 |
+| weapon IDs | 256 | 4096 (ESC on) | 4096 | A′3 |
+| model composite buffer | 600² | 1280² | 1280², bounded by area and grown up to 2048² | L4, L7 |
+| simultaneous sounds | 8 | 128+ | **32**: the engine tracks 32 playing sounds, and a 33rd plays untracked | L4 |
+
+We also raise one limit TADR leaves at stock, the wreck pool (2048 → 8192, L6), with two fixes to
+how a reclaim pays: [Fixed beyond TADR](tadr-port/raised-limits.md#fixed-beyond-tadr). What stays
+open is in the plan's [open questions](tadr-port/raised-limits.md#open-questions).
 
 ### B. Simulation bug fixes
 
@@ -165,8 +174,9 @@ the Delphi side too, not just `tdraw.dll`.
 
 **Taken: Way 3.** [The TADR port](tadr-port/overview.md) rewrites the features group by group, under
 standing rules the owner set on 2026-09-23 — TADR's multiplayer behaviour, fail-closed installs, no
-runtime opt-out for anything that changes the simulation. Group A is planned in
-[the section-A plan](tadr-port/raised-limits.md).
+runtime opt-out for anything that changes the simulation. Group A is done, in
+[the section-A plan](tadr-port/raised-limits.md) and [A′. Content IDs](tadr-port/content-ids.md);
+groups B to E are not planned yet ([the port's groups](tadr-port/overview.md#the-groups)).
 
 ## Sources
 
