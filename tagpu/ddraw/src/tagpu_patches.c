@@ -69,7 +69,7 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
    exe, its stub cannot be allocated, or its page cannot be made writable. */
 
 /* why a defect patch did not go in; the log line names it */
-enum { FIX_ARMED, FIX_BYTES, FIX_STUB, FIX_PROTECT };
+enum { FIX_ARMED, FIX_BYTES, FIX_STUB, FIX_PROTECT, FIX_LIMITS };
 
 static const char* fix_state(int r)
 {
@@ -77,6 +77,7 @@ static const char* fix_state(int r)
     case FIX_ARMED: return "ARMED";
     case FIX_BYTES: return "SKIPPED (the bytes differ from the retail exe)";
     case FIX_STUB:  return "SKIPPED (VirtualAlloc of the stub failed)";
+    case FIX_LIMITS: return "with the raised limits (the limits line)";
     default:        return "SKIPPED (VirtualProtect of the site failed)";
     }
 }
@@ -1562,6 +1563,565 @@ static int fix_sync_keys(void)
     return fix_write(site, 1);
 }
 
+/* ===== WEAPON IDS (TAGPU_LIM_WEAPONS) =======================================================
+   The plan is research/notes/tadr-port/content-ids.md, "Weapons"; the disassembly is
+   exe-reverse-engineering.md, "Weapon IDs", and limits-evidence.md §9.
+
+   THE ARRAY. Weapons[256] is in the main block at main+0x2CF3, 0x115 bytes a record, and ends
+   exactly at the projectile pool's header (main+0x141F3). A weapon's TDF `ID` is its slot: the
+   loader 0x42E440 takes the address from it with no bound either way. The raised build moves
+   the array to a DLL static of 4096 and points each reference at it. Every pointer the engine
+   keeps to a weapon (unit defs, unit slots, projectiles, feature defs, the meteor's 0x512328)
+   is then into the static, so a weapon's ID is (pointer - base) / 0x115, exact and bounded.
+
+   THE ID BYTE, weapon+0x10A, is the load wipe's (0x42E310): the slot's own index as a byte,
+   never the TDF's. Below 256 it stays that. From 256 up it is the index's low byte, or 0xFF
+   where that is 0, because the AI's "armed" tests read it as != 0 (0x40954D, 0x409682,
+   0x409940, 0x49E0C2). Nothing here takes it as an index: a saved game writes it back on load
+   (0x487628), so under a changed mod it can be stale. The model path and the wire use the
+   index taken from the pointer instead.
+
+   THE WIRE, twelve bits of ID:
+   - 0x0D, weapon fired, 36 bytes: bits 8..11 in the high nibble of the slot byte +0x23. Stock's
+     unit senders write `and dl,3` there and the extra-weapons module bits 0..3.
+   - 0x0F, feature hit, 6 bytes: bits 8..11 in bits 12..15 of the cell x, and bit 11 of x marks
+     the three sentinels 0xFD..0xFF. A weapon whose ID byte is 0xFD..0xFF is then damage, not
+     "feature destroyed / burned / reclaimed", which stock misreads it as on every other peer.
+     A cell is a 16.16 position >> 20 on the map, so x < 0x800.
+   - 0x0E, interceptor detonation, 14 bytes, has no room. IDs below 256 send stock's message;
+     IDs from 256 up send a companion, a tagged 0x05 message: `05 00 49`, the target point, a
+     u16 ID. Stock's receiver matches only projectiles of a weapon below 256 and the companion's
+     only from 256 up, so neither can detonate the other's projectile.
+
+   BOTH BUILDS carry the loader's bound (a weapon whose ID is outside the array is skipped and
+   logged), the 0x0D receiver's bound on its shooter and target indexes (u16 * 0x118 into the
+   unit array, unbounded in stock), the 0x0F sentinel flag, and the 0x0F receiver's refusal of
+   a cell off the map (stock reads through 0x481550's NULL). The stock build installs them as
+   one fix; the raised build installs them with the raise, all or nothing. */
+
+#define WPN_REC        0x115
+#define WPN_MAIN       0x2CF3             /* Weapons[0] in the main block                    */
+#define WPN_BYTE       0x10A              /* the ID byte                                     */
+#define WPN_FLAGS      0x111
+#define WPN_MODEL      0x74               /* the 3DO, perhaps an earlier weapon's            */
+#define WPN_MODELNAME  0x80               /* empty in a weapon that borrowed its model       */
+#define WPN_CHAT_TAG   0x49               /* outside TADR's tags, 0x2B..0x31 and 0x60         */
+#define WPN_SENTINEL   0x800              /* 0x0F: bit 11 of the cell x                       */
+#define WPN_MAXSITE    32
+
+#define E_SEND(net, m, n)         (((void (__stdcall*)(unsigned int, const void*, unsigned int))0x00451DF0)((net), (m), (n)))
+#define E_CELL(x, y)              (((char* (__stdcall*)(int, int))0x00481550)((x), (y)))
+#define E_FEATURE_HIT(c, x, y, w) (((void (__stdcall*)(char*, int, int, char*))0x004244B0)((c), (x), (y), (w)))
+#define E_FEATURE_DIE(x, y, k)    (((void (__stdcall*)(int, int, int))0x00423550)((x), (y), (k)))
+#define E_FEATURE_BURN(x, y, k)   (((void (__stdcall*)(int, int, int))0x004233A0)((x), (y), (k)))
+#define E_DETONATE(p)             (((void (__stdcall*)(char*, int))0x00499EB0)((p), 0))
+#define E_STRCMP(a, b)            (((int (__cdecl*)(const char*, const char*))0x004F8A70)((a), (b)))
+
+/* the site's esp: above the return address after a `call stub`, at it after a `jmp stub` */
+#define WPN_ESP_CALL(r) ((unsigned char*)&(r)[PR_RET + 1])
+#define WPN_ESP_JMP(r)  ((unsigned char*)&(r)[PR_RET])
+
+#ifndef TAGPU_LIMITS_STOCK
+static unsigned char s_weapons[TAGPU_LIM_WEAPONS][WPN_REC];
+#endif
+static DWORD         s_wpnGameTid;        /* DllMain's thread, which is the game loop's      */
+static volatile LONG s_wpnNotes;
+
+static void wpn_note(const char* what, unsigned int a, unsigned int b)
+{
+    if (InterlockedIncrement(&s_wpnNotes) <= 32)
+        tagpu_logf("enginefix: weapon IDs: %s (%u, %u)", what, a, b);
+}
+
+/* In place of `mov edx,[main]` at 0x42E468, after the loader read `ID` into eax (-1 when the
+   section has none) and the section's name into edi. edx is the base the loader's own
+   arithmetic adds id * 0x115 + 0x2CF3 to. A weapon outside the array is skipped: the stub leaves
+   through the loader's epilogue 0x42F333, past its closing call 0x49E010, and nothing of it is
+   written. A second weapon with an ID keeps stock's rule, the later one wins. */
+static int __cdecl wpn_loader_id(unsigned int* regs)
+{
+    const char* name = (const char*)(size_t)regs[PR_EDI];
+    char* base = tagpu_limits_weapon0();
+    int id = (int)regs[PR_EAX];
+    if (!base || id < 0 || id >= TAGPU_LIM_WEAPONS) {
+        tagpu_logf("enginefix: weapon %.32s has ID %d, outside 0..%d, and is skipped", name, id,
+                   TAGPU_LIM_WEAPONS - 1);
+        return 0;
+    }
+    if (base[id * WPN_REC])
+        tagpu_logf("enginefix: weapon ID %d: %.32s replaces %.32s", id, name, base + id * WPN_REC);
+    regs[PR_EDX] = (unsigned int)(size_t)(base - WPN_MAIN);
+    return 1;
+}
+
+/* In place of the 0x0D receiver's lookup at 0x49D280 (eax the packet, edx its ID byte):
+   ecx = main, ebp = the weapon, edx = its flags >> 5, then on at 0x49D2A6. A weapon without flag
+   bit 5 fires from a unit, and the receiver scales the shooter (+0x21) and the target (+0x1F),
+   both u16, by 0x118 into the unit array. Each is bounded here by the array's last element
+   (main+0x1435B); a packet past it is dropped through the receiver's exit 0x49D55D. The slot
+   byte keeps its low nibble for the reads after this one (0x49D366, or the extra-weapons
+   module's splice there). */
+static int __cdecl wpn_rx_fired(unsigned int* regs)
+{
+    unsigned char* pkt = (unsigned char*)(size_t)regs[PR_EAX];
+    char* ta = *(char* const*)0x00511DE8;
+    char* base = tagpu_limits_weapon0();
+    unsigned int id = pkt[0x19], flags;
+    char* w;
+#ifndef TAGPU_LIMITS_STOCK
+    id |= (unsigned int)(pkt[0x23] >> 4) << 8;
+#endif
+    pkt[0x23] &= 0x0F;
+    if (!ta || !base || id >= TAGPU_LIM_WEAPONS) return 0;
+    w = base + id * WPN_REC;
+    memcpy(&flags, w + WPN_FLAGS, 4);
+    if (!(flags & 0x20)) {
+        const char* first = *(const char* const*)(ta + 0x14357);
+        const char* last  = *(const char* const*)(ta + 0x1435B);
+        unsigned int shooter = pkt[0x21] | (unsigned int)pkt[0x22] << 8;
+        unsigned int target  = pkt[0x1F] | (unsigned int)pkt[0x20] << 8;
+        unsigned int max;
+        if (!first || last < first) return 0;
+        max = (unsigned int)(last - first) / 0x118;
+        if (shooter > max || target > max) {
+            wpn_note("a weapon-fired message names a unit past the array; dropped",
+                     shooter > target ? shooter : target, max);
+            return 0;
+        }
+    }
+    regs[PR_ECX] = (unsigned int)(size_t)ta;
+    regs[PR_EBP] = (unsigned int)(size_t)w;
+    regs[PR_EDX] = flags >> 5;
+    return 1;
+}
+
+/* In place of the 0x0F sender's `call 0x451BC0` at 0x424575: the packet is the send's third
+   argument and the weapon is 0x4244B0's fourth, at the send's esp+0x38. The flag and the ID's
+   high bits share x with the cell, so an x from 0x800 is not sent; none is reachable, since
+   0x4244B0's caller found the cell on the map. */
+static int __cdecl wpn_tx_feature(unsigned int* regs)
+{
+    unsigned char* pkt = (unsigned char*)(size_t)regs[PR_RET + 3];
+    unsigned int x = pkt[2] | (unsigned int)pkt[3] << 8;
+    if (x >= WPN_SENTINEL) { wpn_note("a feature hit at cell x >= 0x800 is not sent", x, pkt[1]); return 0; }
+#ifndef TAGPU_LIMITS_STOCK
+    {
+        int i = tagpu_limits_weapon_index(*(const char* const*)(WPN_ESP_CALL(regs) + 0x38));
+        if (i >= 0) {
+            x |= (unsigned int)(i >> 8) << 12;
+            pkt[1] = (unsigned char)i;
+            pkt[2] = (unsigned char)x;
+            pkt[3] = (unsigned char)(x >> 8);
+        }
+    }
+#endif
+    return 1;
+}
+
+/* In place of the sentinel senders' `call 0x451DF0`, the packet its second argument:
+   0x42469A (0xFD, destroyed), 0x423537 (0xFE, burned), 0x4239A4 (0xFF, reclaimed). */
+static int __cdecl wpn_tx_sentinel(unsigned int* regs)
+{
+    unsigned char* pkt = (unsigned char*)(size_t)regs[PR_RET + 2];
+    unsigned int x = pkt[2] | (unsigned int)pkt[3] << 8;
+    if (x >= WPN_SENTINEL) { wpn_note("a feature sentinel at cell x >= 0x800 is not sent", x, pkt[1]); return 0; }
+    pkt[3] |= WPN_SENTINEL >> 8;
+    return 1;
+}
+
+/* The dispatch table's 0x0F slot (0x455FB8), in place of stock's handler 0x45544D; the stub
+   goes on to the dispatcher's continuation 0x455F50. The message is the handler's [esp+0x10].
+   The cell must be on the map (0x481550 bounds x and y), then: flagged, one of stock's three
+   sentinel calls; unflagged, the weapon's hit, 0x4244B0. */
+static int __cdecl wpn_rx_feature(unsigned int* regs)
+{
+    const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
+    unsigned int b = m[1], x = m[2] | (unsigned int)m[3] << 8, y = m[4] | (unsigned int)m[5] << 8;
+    unsigned int cx = x & (WPN_SENTINEL - 1), id = b;
+    char* base = tagpu_limits_weapon0();
+    char* cell;
+    if (!base) return 0;
+    cell = E_CELL((int)cx, (int)y);
+    if (!cell) { wpn_note("a feature message names a cell off the map; dropped", cx, y); return 0; }
+    if (x & WPN_SENTINEL) {
+        if (b == 0xFD)      E_FEATURE_DIE((int)cx, (int)y, 0);
+        else if (b == 0xFE) E_FEATURE_BURN((int)cx, (int)y, 1);
+        else if (b == 0xFF) E_FEATURE_DIE((int)cx, (int)y, 1);
+        else wpn_note("a feature message is flagged but names no sentinel; dropped", b, x);
+        return 0;
+    }
+#ifndef TAGPU_LIMITS_STOCK
+    id |= (x >> 12) << 8;
+#else
+    if (x >> 12) { wpn_note("a feature message's x has bits past the cell; dropped", x, b); return 0; }
+#endif
+    if (id >= TAGPU_LIM_WEAPONS) return 0;
+    E_FEATURE_HIT(cell, (int)cx, (int)y, base + id * WPN_REC);
+    return 0;
+}
+
+#ifndef TAGPU_LIMITS_STOCK
+/* In place of the load wipe's loop at 0x42E31C (every level load, 0x4918BB): each slot's name
+   emptied and its ID byte set, then on at 0x42E345. */
+static int __cdecl wpn_wipe(unsigned int* regs)
+{
+    int i;
+    (void)regs;
+    for (i = 0; i < TAGPU_LIM_WEAPONS; i++) {
+        s_weapons[i][0] = 0;
+        s_weapons[i][WPN_BYTE] = (unsigned char)(i < 256 ? i : ((i & 0xFF) ? (i & 0xFF) : 0xFF));
+    }
+    return 0;
+}
+
+/* In place of the model path's loop at 0x42EC99 (ebp the weapon, the model's name at the
+   site's esp+0x40): a lower slot whose model has this name lends it, as 0x42F340 does. Stock's
+   loop runs to the ID byte, which is the slot only below 256. Returns 1 when the model was
+   borrowed; the stub then goes on at 0x42EDA1, and otherwise loads it at 0x42ECF9. */
+static int __cdecl wpn_model_reuse(unsigned int* regs)
+{
+    char* w = (char*)(size_t)regs[PR_EBP];
+    const char* name = (const char*)WPN_ESP_JMP(regs) + 0x40;
+    int n = tagpu_limits_weapon_index(w), j;
+    for (j = 0; j < n; j++) {
+        const char* o = (const char*)s_weapons[j];
+        if (E_STRCMP(name, o + WPN_MODELNAME) == 0) {
+            memcpy(w + WPN_MODEL, o + WPN_MODEL, 4);
+            w[WPN_MODELNAME] = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* In place of the five `call 0x451DF0` that send a 0x0D, the packet its second argument. The
+   weapon is the slot's (+0xC) in the four unit senders: the slot is esi at 0x49D859, 0x49DB4D
+   and 0x49DD27, and ebx at 0x49DEEE. The meteor's (0x49DFF6) is its function's argument, at the
+   send's esp+0x40; that sender leaves +0x1A..+0x23 as the stack held them, so they are
+   cleared. */
+static int __cdecl wpn_tx_fired(unsigned int which, unsigned int* regs)
+{
+    unsigned char* pkt = (unsigned char*)(size_t)regs[PR_RET + 2];
+    const char* w;
+    int i;
+    if (which < 4) {
+        w = *(const char* const*)(size_t)(regs[which < 3 ? PR_ESI : PR_EBX] + 0xC);
+    } else {
+        w = *(const char* const*)(WPN_ESP_CALL(regs) + 0x40);
+        memset(pkt + 0x1A, 0, 10);
+    }
+    i = tagpu_limits_weapon_index(w);
+    if (i >= 0) {
+        pkt[0x19] = (unsigned char)i;
+        pkt[0x23] = (unsigned char)((pkt[0x23] & 0x0F) | ((i >> 8) << 4));
+    }
+    return 1;
+}
+
+/* In place of the 0x0E sender's two ID-byte reads in area damage 0x49A120: 0x49A78C (the weapon
+   in edx, the byte into al) and 0x49A7CD (eax, into cl). The packet is at the site's esp+0x58
+   with its target point written. From 256 up the companion goes out here, through the send
+   and the net handle the stock message would use (esi +0x52 -> +0x96 -> +4, the reads stock
+   makes next), and the type byte is cleared so the send that follows is skipped. */
+static int __cdecl wpn_tx_intercept(unsigned int which, unsigned int* regs)
+{
+    unsigned char* pkt = WPN_ESP_CALL(regs) + 0x58;
+    const char* w = (const char*)(size_t)regs[which ? PR_EAX : PR_EDX];
+    unsigned int* out = &regs[which ? PR_ECX : PR_EAX];
+    int i = tagpu_limits_weapon_index(w);
+    unsigned int byte;
+    if (i < 0) byte = *(const unsigned char*)(w + WPN_BYTE);
+    else if (i < 256) byte = (unsigned int)i;
+    else {
+        unsigned char m[0x41];
+        const char* owner = *(const char* const*)(size_t)(regs[PR_ESI] + 0x52);
+        unsigned int net = *(const unsigned int*)(*(const char* const*)(owner + 0x96) + 4);
+        memset(m, 0, sizeof m);
+        m[0] = 0x05;
+        m[2] = WPN_CHAT_TAG;
+        memcpy(m + 3, pkt + 1, 12);
+        m[15] = (unsigned char)i;
+        m[16] = (unsigned char)(i >> 8);
+        E_SEND(net, m, sizeof m);
+        pkt[0] = 0;
+        byte = 0;
+    }
+    *out = (*out & ~0xFFu) | byte;
+    return 0;
+}
+
+/* In place of the 0x0E sender's two `call 0x451DF0` (0x49A7A8, 0x49A7E9): 0 skips the send. */
+static int __cdecl wpn_tx_intercept_send(unsigned int which, unsigned int* regs)
+{
+    (void)which;
+    return ((const unsigned char*)(size_t)regs[PR_RET + 2])[0] == 0x0E;
+}
+
+/* In place of the 0x0E receiver's byte compare at 0x49AFC9 (esi the local projectile, edi the
+   message; the target point has matched): a weapon below 256 whose index is the byte.
+   1 is a match; the stub makes it the zero flag that `je 0x49AFE8` reads. */
+static int __cdecl wpn_rx_intercept(unsigned int* regs)
+{
+    const unsigned char* m = (const unsigned char*)(size_t)regs[PR_EDI];
+    int i = tagpu_limits_weapon_index(*(const char* const*)(size_t)regs[PR_ESI]);
+    return i >= 0 && i < 256 && (unsigned int)i == m[0xD];
+}
+
+/* The dispatch table's 0x05 slot (0x455F90), ahead of stock's chat handler 0x45522E, which
+   still runs and returns at once for text that starts with a zero byte (0x463CA7). A
+   companion detonates, as stock's 0x49AF90 does, the first local projectile whose target point
+   is the message's, with a weapon whose index is its ID. On the game thread in play only (the
+   in-play handler 0x499200 at main+0x391F5): during a network load the loader thread pumps
+   messages too, and a companion then is dropped. The pool's count is engine data, bounded by
+   the pool's allocation. */
+static int __cdecl wpn_rx_chat(unsigned int* regs)
+{
+    const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
+    const char* ta = *(const char* const*)0x00511DE8;
+    char* pool;
+    unsigned int id;
+    int count, i;
+    if (m[1] != 0 || m[2] != WPN_CHAT_TAG) return 0;
+    if (!ta || *(const unsigned int*)(ta + 0x391F5) != 0x00499200u ||
+        GetCurrentThreadId() != s_wpnGameTid)
+        return 0;
+    id = m[15] | (unsigned int)m[16] << 8;
+    if (id < 256 || id >= TAGPU_LIM_WEAPONS) return 0;
+    count = *(const int*)(ta + 0x141F3);
+    pool = *(char* const*)(ta + 0x141F7);
+    if (!pool) return 0;
+    if (count > TAGPU_LIM_PROJ) count = TAGPU_LIM_PROJ;
+    for (i = 0; i < count; i++) {
+        char* p = pool + i * 0x6B;
+        if (!memcmp(p + 0x28, m + 3, 12) &&
+            tagpu_limits_weapon_index(*(const char* const*)p) == (int)id) {
+            E_DETONATE(p);
+            break;
+        }
+    }
+    return 0;
+}
+#endif
+
+/* pushad; push esp; [push which;] call fn; add esp; test eax,eax (cmp eax,1 when `one`); popad.
+   The flags survive popad for the branch after it. */
+static unsigned char* wpn_call(unsigned char* p, const void* fn, int which, int one)
+{
+    *p++ = 0x60;
+    *p++ = 0x54;
+    if (which >= 0) { *p++ = 0x6A; *p++ = (unsigned char)which; }
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)fn); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = (unsigned char)(which >= 0 ? 8 : 4);
+    if (one) { *p++ = 0x83; *p++ = 0xF8; *p++ = 0x01; }
+    else     { *p++ = 0x85; *p++ = 0xC0; }
+    *p++ = 0x61;
+    return p;
+}
+
+static unsigned char* wpn_rel(unsigned char* p, unsigned int target)
+{
+    tagpu_detour_rel(p, target);
+    return p + 4;
+}
+
+/* the function's answer 0: drop the site's return address and leave through `out` */
+static unsigned char* wpn_or_leave(unsigned char* p, unsigned int out)
+{
+    *p++ = 0x74; *p++ = 0x01;                  /* jz leave              */
+    *p++ = 0xC3;                               /* ret                   */
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;     /* leave: add esp,4      */
+    *p++ = 0xE9;
+    return wpn_rel(p, out);
+}
+
+/* the function's answer 0: skip the send, cleaning its arguments as it would */
+static unsigned char* wpn_send_or_skip(unsigned char* p, unsigned int send, unsigned char args)
+{
+    *p++ = 0x74; *p++ = 0x05;                  /* jz skip               */
+    *p++ = 0xE9; p = wpn_rel(p, send);
+    *p++ = 0xC2; *p++ = args; *p++ = 0x00;     /* skip: ret args        */
+    return p;
+}
+
+static unsigned char* wpn_then(unsigned char* p, unsigned int to)
+{
+    *p++ = 0xE9;
+    return wpn_rel(p, to);
+}
+
+typedef struct WPNSITES {
+    FIXSITE     s[WPN_MAXSITE];
+    const char* name[WPN_MAXSITE];
+    int         n;
+    int         over;                     /* a site past WPN_MAXSITE: our bug, nothing installs */
+    FIXSITE     spill;
+} WPNSITES;
+
+static FIXSITE* wpn_site(WPNSITES* t, unsigned int va, int n, const unsigned char* was,
+                         const char* name)
+{
+    FIXSITE* s;
+    if (t->n >= WPN_MAXSITE) { t->over = 1; s = &t->spill; }
+    else { s = &t->s[t->n]; t->name[t->n++] = name; }
+    s->va = va;
+    s->n = n;
+    memcpy(s->was, was, (size_t)n);
+    memcpy(s->now, was, (size_t)n);
+    return s;
+}
+
+/* A dword operand at `at` within the site: an address or a bound. */
+static void wpn_operand(FIXSITE* s, int at, unsigned int v)
+{
+    memcpy(s->now + at, &v, 4);
+}
+
+/* Every weapon site this build writes, with its stubs. 0 when a stub could not be allocated. */
+static int wpn_build(WPNSITES* t)
+{
+    static const unsigned char loader[6]   = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
+    static const unsigned char rxFired[16] = { 0x8D, 0x0C, 0x52, 0xC1, 0xE1, 0x03, 0x2B, 0xCA,
+                                               0x8D, 0x34, 0x49, 0x8B, 0x0D, 0xE8, 0x1D, 0x51 };
+    static const unsigned char rxFeature[4] = { 0x4D, 0x54, 0x45, 0x00 };           /* 0x45544D */
+    static const unsigned char txFeature[5] = { 0xE8, 0x46, 0xD6, 0x02, 0x00 };     /* 0x451BC0 */
+    static const struct { unsigned int va; unsigned char was[5]; const char* name; } sentinel[3] = {
+        { 0x0042469A, { 0xE8, 0x51, 0xD7, 0x02, 0x00 }, "0x0F sender, destroyed" },
+        { 0x00423537, { 0xE8, 0xB4, 0xE8, 0x02, 0x00 }, "0x0F sender, burned" },
+        { 0x004239A4, { 0xE8, 0x47, 0xE4, 0x02, 0x00 }, "0x0F sender, reclaimed" },
+    };
+    FIXSITE* s;
+    unsigned char* a;
+    int k;
+
+    t->n = 0;
+    t->over = 0;
+    s_wpnGameTid = GetCurrentThreadId();
+
+    if (!(a = fix_code(32))) return 0;
+    wpn_or_leave(wpn_call(a, (const void*)wpn_loader_id, -1, 0), 0x0042F333);
+    fix_branch(wpn_site(t, 0x0042E468, 6, loader, "weapon loader, the ID's bound"), 0xE8, a);
+
+    if (!(a = fix_code(32))) return 0;
+    wpn_or_leave(wpn_call(a, (const void*)wpn_rx_fired, -1, 0), 0x0049D55D);
+    s = wpn_site(t, 0x0049D280, 16, rxFired, "0x0D receiver, the weapon and its bounds");
+    fix_branch(s, 0xE8, a);
+    s->now[5] = 0xEB; s->now[6] = 0x1F;                       /* jmp short 0x49D2A6 */
+    memcpy(s->now + 7, rxFired + 7, 9);
+
+    if (!(a = fix_code(32))) return 0;
+    wpn_then(wpn_call(a, (const void*)wpn_rx_feature, -1, 0), 0x00455F50);
+    wpn_operand(wpn_site(t, 0x00455FB8, 4, rxFeature, "0x0F receiver, the dispatch slot"), 0,
+                (unsigned int)(size_t)a);
+
+    if (!(a = fix_code(32))) return 0;
+    wpn_send_or_skip(wpn_call(a, (const void*)wpn_tx_feature, -1, 0), 0x00451BC0, 0x10);
+    fix_branch(wpn_site(t, 0x00424575, 5, txFeature, "0x0F sender, a weapon's hit"), 0xE8, a);
+
+    if (!(a = fix_code(32))) return 0;
+    wpn_send_or_skip(wpn_call(a, (const void*)wpn_tx_sentinel, -1, 0), 0x00451DF0, 0x0C);
+    for (k = 0; k < 3; k++)
+        fix_branch(wpn_site(t, sentinel[k].va, 5, sentinel[k].was, sentinel[k].name), 0xE8, a);
+
+#ifndef TAGPU_LIMITS_STOCK
+    {
+        static const unsigned char movEax[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
+        static const unsigned char movEcx[6] = { 0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00 };
+        static const unsigned char movEdx[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
+        static const unsigned char cmpEbx[6] = { 0x81, 0xFB, 0x00, 0x15, 0x01, 0x00 };
+        static const unsigned char cmpEsi[6] = { 0x81, 0xFE, 0x00, 0x15, 0x01, 0x00 };
+        static const unsigned char idByte[6] = { 0x8A, 0x85, 0x0A, 0x01, 0x00, 0x00 };
+        static const unsigned char store[15] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00, 0x8D, 0x7C,
+                                                 0x24, 0x40, 0x8B, 0x44, 0x24, 0x10, 0x25 };
+        /* mov [ebp+0x74],esi; lea edi,[esp+0x40]; lea edx,[ebp+0x80]; jmp 0x42ED7B, the copy */
+        static const unsigned char storeOurs[15] = { 0x89, 0x75, 0x74, 0x8D, 0x7C, 0x24, 0x40,
+                                                     0x8D, 0x95, 0x80, 0x00, 0x00, 0x00, 0xEB, 0x26 };
+        static const unsigned char icptRead[2][6] = {
+            { 0x8A, 0x82, 0x0A, 0x01, 0x00, 0x00 }, { 0x8A, 0x88, 0x0A, 0x01, 0x00, 0x00 } };
+        static const unsigned char icptSend[2][5] = {
+            { 0xE8, 0x43, 0x76, 0xFB, 0xFF }, { 0xE8, 0x02, 0x76, 0xFB, 0xFF } };
+        static const unsigned char icptCmp[11] = { 0x8B, 0x1E, 0x8A, 0x9B, 0x0A, 0x01, 0x00, 0x00,
+                                                   0x3A, 0x5F, 0x0D };
+        static const unsigned char chat[4] = { 0x2E, 0x52, 0x45, 0x00 };            /* 0x45522E */
+        static const struct { unsigned int va; unsigned char was[5]; } fired[5] = {
+            { 0x0049D859, { 0xE8, 0x92, 0x45, 0xFB, 0xFF } },
+            { 0x0049DB4D, { 0xE8, 0x9E, 0x42, 0xFB, 0xFF } },
+            { 0x0049DD27, { 0xE8, 0xC4, 0x40, 0xFB, 0xFF } },
+            { 0x0049DEEE, { 0xE8, 0xFD, 0x3E, 0xFB, 0xFF } },
+            { 0x0049DFF6, { 0xE8, 0xF5, 0x3D, 0xFB, 0xFF } },
+        };
+        const unsigned int less = (unsigned int)(size_t)s_weapons - WPN_MAIN;
+        const unsigned int bound = TAGPU_LIM_WEAPONS * WPN_REC;
+        unsigned char* p;
+
+        /* `mov reg,[main]` that feeds only a weapon address: the same length as an immediate */
+        s = wpn_site(t, 0x0042CDCD, 5, movEax, "unit loader, Weapons[0] for a missing name");
+        s->now[0] = 0xB8; wpn_operand(s, 1, less);
+        s = wpn_site(t, 0x0042F3AB, 5, movEax, "weapon release, the array");
+        s->now[0] = 0xB8; wpn_operand(s, 1, less);
+        s = wpn_site(t, 0x0049E5CB, 5, movEax, "weapon name lookup, the array");
+        s->now[0] = 0xB8; wpn_operand(s, 1, less);
+        s = wpn_site(t, 0x00437CF7, 6, movEcx, "meteor weapon, Weapons[0] for a missing name");
+        s->now[0] = 0xB9; wpn_operand(s, 1, less); s->now[5] = 0x90;
+        s = wpn_site(t, 0x00437D13, 6, movEdx, "meteor weapon, Weapons[0] for a wrong one");
+        s->now[0] = 0xBA; wpn_operand(s, 1, less); s->now[5] = 0x90;
+        wpn_operand(wpn_site(t, 0x0042F431, 6, cmpEbx, "weapon release, the bound"), 2, bound);
+        wpn_operand(wpn_site(t, 0x0049E5EB, 6, cmpEsi, "weapon name lookup, the bound"), 2, bound);
+
+        if (!(a = fix_code(32))) return 0;
+        wpn_then(wpn_call(a, (const void*)wpn_wipe, -1, 0), 0x0042E345);
+        fix_branch(wpn_site(t, 0x0042E31C, 6, movEcx, "weapon load wipe"), 0xE9, a);
+
+        if (!(a = fix_code(32))) return 0;
+        p = wpn_call(a, (const void*)wpn_model_reuse, -1, 0);
+        *p++ = 0x0F; *p++ = 0x85; p = wpn_rel(p, 0x0042EDA1);     /* jnz: borrowed */
+        wpn_then(p, 0x0042ECF9);
+        fix_branch(wpn_site(t, 0x0042EC99, 6, idByte, "weapon model, an earlier one's"), 0xE9, a);
+        memcpy(wpn_site(t, 0x0042ED46, 15, store, "weapon model, the store")->now, storeOurs, 15);
+
+        for (k = 0; k < 5; k++) {
+            if (!(a = fix_code(32))) return 0;
+            wpn_send_or_skip(wpn_call(a, (const void*)wpn_tx_fired, k, 0), 0x00451DF0, 0x0C);
+            fix_branch(wpn_site(t, fired[k].va, 5, fired[k].was, "0x0D sender, the ID's high bits"),
+                       0xE8, a);
+        }
+
+        for (k = 0; k < 2; k++) {
+            if (!(a = fix_code(32))) return 0;
+            *wpn_call(a, (const void*)wpn_tx_intercept, k, 0) = 0xC3;
+            fix_branch(wpn_site(t, k ? 0x0049A7CD : 0x0049A78C, 6, icptRead[k],
+                                "0x0E sender, the ID"), 0xE8, a);
+        }
+        if (!(a = fix_code(32))) return 0;
+        wpn_send_or_skip(wpn_call(a, (const void*)wpn_tx_intercept_send, 0, 0), 0x00451DF0, 0x0C);
+        for (k = 0; k < 2; k++)
+            fix_branch(wpn_site(t, k ? 0x0049A7E9 : 0x0049A7A8, 5, icptSend[k],
+                                "0x0E sender, stock's message below 256"), 0xE8, a);
+
+        if (!(a = fix_code(32))) return 0;
+        *wpn_call(a, (const void*)wpn_rx_intercept, -1, 1) = 0xC3;
+        fix_branch(wpn_site(t, 0x0049AFC9, 11, icptCmp, "0x0E receiver, the match"), 0xE8, a);
+
+        if (!(a = fix_code(32))) return 0;
+        wpn_then(wpn_call(a, (const void*)wpn_rx_chat, -1, 0), 0x0045522E);
+        wpn_operand(wpn_site(t, 0x00455F90, 4, chat, "0x05 receiver, the companion"), 0,
+                    (unsigned int)(size_t)a);
+    }
+#endif
+    return !t->over;
+}
+
+static int fix_weapon_ids(void)
+{
+#ifdef TAGPU_LIMITS_STOCK
+    static WPNSITES w;
+    if (!wpn_build(&w)) return FIX_STUB;
+    if (!fix_match(w.s, w.n)) return FIX_BYTES;
+    return fix_write(w.s, w.n);
+#else
+    return FIX_LIMITS;
+#endif
+}
+
 static void patch_engine_defects(void)
 {
     int sort = fix_sort_buffer_end();
@@ -1574,7 +2134,8 @@ static void patch_engine_defects(void)
     int dl   = fix_download_records();
     int oom  = fix_oom_message();
     int keys = fix_sync_keys();
-    char b[1024];
+    int wpn  = fix_weapon_ids();
+    char b[1280];
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
@@ -1582,9 +2143,11 @@ static void patch_engine_defects(void)
               "reclaim tests the anchor's mark 0x423892 %s; composite scratch bound "
               "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70 0x4B90A0) %s; whole build lists "
               "(0x42DA58 0x42DAC7 0x42BEC3) %s; download menus past five entries (0x42DCF0) %s; "
-              "the out-of-memory text (0x49E700) %s; unique unit sync keys (0x42BD29) %s",
+              "the out-of-memory text (0x49E700) %s; unique unit sync keys (0x42BD29) %s; weapon IDs "
+              "bounded, the feature sentinels flagged (0x42E468 0x49D280 0x455FB8 0x424575) %s",
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
-              fix_state(scr), fix_state(list), fix_state(dl), fix_state(oom), fix_state(keys));
+              fix_state(scr), fix_state(list), fix_state(dl), fix_state(oom), fix_state(keys),
+              fix_state(wpn));
     b[sizeof b - 1] = 0;
     plog(b);
 }
@@ -1738,7 +2301,7 @@ void tagpu_apply_patches(void)
    first static import), so no game exists yet and no engine thread executes these bytes
    while they change. Nothing here is ever put back: the patches last for the process. */
 
-#define LIM_MAXSITE  128
+#define LIM_MAXSITE  160
 #define LIM_MAXB     16
 
 typedef struct LIMSITE {
@@ -2335,6 +2898,14 @@ static void lim_sites(void)
         static const unsigned char four = 0x04, many = 0x40;
         lim_add(0x0046DE91, 1, &four, &many, "unit sync types a tick");
     }
+
+    /* ---- weapon IDs: the array, its references and the wire ("WEAPON IDS" above), with the
+       sites both builds carry, since they rewrite the same lookups */
+    {
+        static WPNSITES w;
+        if (!wpn_build(&w)) { s_limOverflow = w.over; s_limNoStub = !w.over; return; }
+        for (k = 0; k < w.n; k++) lim_add(w.s[k].va, w.s[k].n, w.s[k].was, w.s[k].now, w.name[k]);
+    }
 }
 
 /* one site's bytes, without trusting the page to be readable */
@@ -2389,12 +2960,12 @@ int tagpu_limits_install(void)
     tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d at 0x%08X, "
                "flying pieces %d at 0x%08X, debris records %d at 0x%08X, units %d a player, "
                "pathfinding %d, particles %d a layer from a pool of %d, composite %d, "
-               "wreck records %d, unit types %d", s_nlim,
+               "wreck records %d, unit types %d, weapons %d at 0x%08X", s_nlim,
                TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
                TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
                TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
                TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE, TAGPU_LIM_WRECKS,
-               TAGPU_LIM_TYPES - 1);
+               TAGPU_LIM_TYPES - 1, TAGPU_LIM_WEAPONS, (unsigned int)(size_t)s_weapons);
     return 1;
 }
 
@@ -2415,6 +2986,16 @@ const void* const* tagpu_limits_psys_end(void)
                           : (const void* const*)(size_t)0x00511F80u;
 }
 
+char* tagpu_limits_weapon0(void)
+{
+    char* ta;
+    if (s_limState > 0) return (char*)s_weapons;
+    ta = *(char* const*)0x00511DE8;
+    return ta ? ta + WPN_MAIN : NULL;
+}
+
+static int wpn_slots(void) { return s_limState > 0 ? TAGPU_LIM_WEAPONS : 256; }
+
 #else  /* TAGPU_LIMITS_STOCK */
 
 int tagpu_limits_install(void)
@@ -2430,7 +3011,25 @@ const char* tagpu_limits_expl_pool(const char* ta) { return ta + 0x1491B; }
 const void* const* tagpu_limits_psys_begin(void) { return (const void* const*)(size_t)0x00511DF0u; }
 const void* const* tagpu_limits_psys_end(void) { return (const void* const*)(size_t)0x00511F80u; }
 
+char* tagpu_limits_weapon0(void)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    return ta ? ta + WPN_MAIN : NULL;
+}
+
+static int wpn_slots(void) { return TAGPU_LIM_WEAPONS; }
+
 #endif /* TAGPU_LIMITS_STOCK */
+
+int tagpu_limits_weapon_index(const void* weapon)
+{
+    const char* base = tagpu_limits_weapon0();
+    size_t d;
+    if (!base || (const char*)weapon < base) return -1;
+    d = (size_t)((const char*)weapon - base);
+    if (d % WPN_REC || d / WPN_REC >= (size_t)wpn_slots()) return -1;
+    return (int)(d / WPN_REC);
+}
 
 /* ---- the report ------------------------------------------------------------------------
    Shown once, at the first DirectDraw call rather than in DllMain: a MessageBox under the
