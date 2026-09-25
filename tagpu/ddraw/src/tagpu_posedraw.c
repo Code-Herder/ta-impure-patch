@@ -30,7 +30,7 @@
 
    The WIRE range is the bake's vertex pairs, one per edge, and VS does not
    draw it: tagpu_vk_unit.c poses each pair on the CPU into a line record --
-   two game pixels decided by tagpu_line.h's rule, their depth keys one notch
+   two line-grid pixels decided by tagpu_line.h's rule, their depth keys one notch
    nearer (+0.15), their heights -- and `WVS` below draws the records as bands
    in the nanoframe's animated blue.
 

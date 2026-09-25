@@ -44,8 +44,8 @@
    glides underneath it. The anchor keeps its fraction to the last moment and
    `snap_device` puts it on the device grid, so the step is one device pixel
    at every zoom. (The selection box does not floor in these units either: it
-   is a line, and a line's ends are quantised AFTER the zoom, on the game-pixel
-   grid the engine's walk runs on -- tagpu_line.h.)
+   is a line, and a line's ends are quantised AFTER the zoom, on the line grid
+   the walk runs on -- tagpu_line.h.)
 
    THE BUILD CURSOR and the drag band box are re-drawn for the same reason,
    and it is the reason a captured layer can never fix them: the capture is
@@ -1123,9 +1123,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
        cursor last of all — after the fog overlay, which is why it carries no
        fog. */
     if (s_nordt || s_nordl) {
-        /* the lines are LVS's instances, one GAME pixel wide at any `ss` --
-           the rule the effects lines and the nanoframe wire follow too
-           (tagpu_line.h) */
+        /* the lines are LVS's instances, `ss` target pixels wide -- the rule
+           the effects lines and the nanoframe wire follow too (tagpu_line.h) */
         if (s_nordt) {
             mk_draw(total, s_nordt, 0, 0, v->fogMode & 1, TAGPU_MK_TEX_NONE, 0);
         }

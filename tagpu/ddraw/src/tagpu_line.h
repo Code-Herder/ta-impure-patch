@@ -29,9 +29,11 @@
    the minor axis (y for a line with |dy| <= |dx|, the walk's own x-major
    test; x otherwise), starting floor(w / 2) before it: the segment moved by
    -(w - 1) / 2 across its minor axis, rounded down to a whole pixel, and each
-   pixel copied one step further. That is the band a wide line of the
-   driver's drew on main; rounded down is the rounding that reproduces it for
-   a line whose ends sit on a game pixel's centre (target 2k + 1 at ss = 2).
+   pixel copied one step further. Rounded down is what puts the band of a
+   line whose ends sit on a game pixel's centre (ss * k + ss / 2) on that game
+   pixel's own ss rows, ss * k .. ss * k + ss - 1: an axis-aligned line then
+   lies on the engine's pixels across its width, and runs from the middle of
+   its first game pixel to the middle of its last along it.
 
    AT ss = 1 IT IS THE ENGINE'S LINE, BY CONSTRUCTION. The line grid is then
    the game-pixel grid, floor(1 * Z(p)) is floor(Z(p)), the clip below runs on

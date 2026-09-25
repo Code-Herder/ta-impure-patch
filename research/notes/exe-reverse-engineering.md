@@ -2825,11 +2825,13 @@ corner. `ctx+0x08` is the pitch and `ctx+0x0C` the pixel base, the same two fiel
 
 Unrolled: pixel `i` of the walk sits at major offset `i` and minor offset
 `(2·minor·i + major) / (2·major)` in integer division — round-half-up of `i·minor/major`, measured
-from the smaller-x end. `tagpu_glsl.h`'s `taOnLine` evaluates exactly this per game pixel for
-every line the Vulkan lane draws (G21b: order markers, build sites, selection rects, lasers and
-lightning, the nanoframe wire), and `tools/line-band-check.py` checks that closed form against a
-step-by-step transcription of the two loops above, pixel for pixel, on every line shape out to 24
-pixels and on long random lines out to ±16383.
+from the smaller-x end. `tagpu_glsl.h`'s `taOnLine` evaluates exactly this for every line the
+Vulkan lane draws (G21b: order markers, build sites, selection rects, lasers and lightning, the
+nanoframe wire), per pixel of the world target (`ss` to a game pixel), and thickens it to `ss`
+pixels across the minor axis; at `ss = 1` it is this walk on game pixels.
+`tools/line-band-check.py` checks that closed form against a step-by-step transcription of the
+two loops above, pixel for pixel, at thickness 1, 2 and 3, on every line shape out to 24 pixels
+and on long random lines out to ±16383.
 
 **The clip `0x4CC650` MOVES ENDPOINTS; it does not only reject** [DISASSEMBLED 2026-09-25 for
 G21b]. Its fast path (`0x4CC66A`..) accepts the line untouched when all four coordinates are in
@@ -2868,7 +2870,8 @@ sites from `0x4BEECF` to `0x4C02AB` (`DrawTranspRectangle 0x4BF8C0` among them).
 - **Its pixels.** A line crossing the viewport edge is walked from the moved end, and that walk
   differs from the unclipped one along the whole visible part — ten pixels a line on average over
   50 000 random short edge-crossing lines. The Vulkan lane reproduces both clips in integers
-  (`tagpu_line.h` `tagpu_line_clip`), and `tools/line-band-check.py` checks it against a Python
+  (`tagpu_line.h` `tagpu_line_clip`), on the world target's pixels against this rect scaled by
+  `ss` — at `ss = 1` exactly this routine's inputs — and `tools/line-band-check.py` checks it against a Python
   transcription of this entry and of `0x4CC650` above on 90 000 lines, same verdict and ends on
   all. Measured against the engine's own frame at 1x: on the one changed line of an edge view,
   the clipped walk's 5 pixels of its own are all the engine's, the unclipped walk's 4 none.
@@ -3089,7 +3092,7 @@ colour B   (xg0, z0) -> (xg0, z1)              (xg1, z0) -> (xg1, z1)
 `alt >> 1` is a `sar`, so a negative altitude halves toward minus infinity, and the `/10` is the
 `0x66666667` multiply with the sign correction, a division that truncates toward zero.
 `tagpu_order.c`'s `draw_build` reproduces all of it in integers and hands the eight lines on as
-integer endpoints (`tagpu_line.h`: the engine pixel's centre, then the zoom).
+integer endpoints (`tagpu_line.h`: the engine pixel's centre, then the zoom, then `ss`).
 
 **`DrawLine 0x4BE950` is `stdcall(ctx, x0, y0, x1, y1, colour)`** — fixed by those eight
 call sites, where the first and third pushed values are the two x's.

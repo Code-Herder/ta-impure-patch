@@ -98,9 +98,10 @@
 
    THE NANOFRAME WIRE IS LINE RECORDS, ITS OWN VERTEX STAGE, AND A SIXTH AND
    SEVENTH BLOCK. `wire_records` poses the bake's WIRE range on the CPU into
-   one record an edge -- its two ends as game pixels, decided by tagpu_line.h's
-   rule -- and tagpu_posedraw.c's WVS draws each as a band that the fragment
-   stage cuts to `0x4CC7AB`'s pixels, one game pixel wide at any `ss`. Drawn
+   one record an edge -- its two ends as line-grid pixels, decided by
+   tagpu_line.h's rule -- and tagpu_posedraw.c's WVS draws each as a band that
+   the fragment stage cuts to `0x4CC7AB`'s walk thickened to `ss`, one game
+   pixel wide at any `ss`. Drawn
    after every body with uNanoOn 0 (the outline carries its own colour and
    must not be re-classified by the recolour it is drawn beside), uWaterMode 0,
    uAlpha 1, uCast (0, 0, 1). It needs no device feature, so no device draws

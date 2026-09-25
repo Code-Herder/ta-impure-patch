@@ -326,35 +326,41 @@ vertex carries clip z for this (`MVST` 8; 0 on every other marker, whose draws t
 covers the rect's front tip in both, and a tree in a nearer row covers the rect's far half in
 both. The same fixture with the test off drew the tip over the tree — wrong.
 
-**Why a program of its own: the line has to be the engine's line, and `ss` makes that hard.**
-A line rasterised in the `ss×` world target steps on the TARGET grid, half a game pixel per
-step at `ss = 2`, and the box-filter composite smears every diagonal. The first cut (the
-plain Bresenham line pipeline at `ss` width) measured **28 of 290 rect pixels at full colour**,
-the rest between 0.2 and 0.8 — visibly faint beside the engine's flat (83,223,79). The GL pass
-avoided this with the 1x detour, which this lane has no buffer for. So the rect is drawn the way
-**every** line on this lane is since G21b ([Hardware portability](hardware-portability.html)
-decision 4):
+**Why a program of its own: the line has to be the same line on every GPU.** A line primitive's
+pixels are the GPU's — even Vulkan's Bresenham mode lets an implementation deviate by one unit —
+so the rect is drawn the way **every** line on this lane is since G21b
+([Hardware portability](hardware-portability.html) decision 4: one rule, smooth when
+supersampled, the engine's line at `ss = 1`):
 
 - **a line is an instanced record drawn as a band of two triangles** (`tagpu_glsl.h` `taBand`):
   the segment between the two end pixels' centres, widened 2 game pixels to each side and carried
   2 past each end. A lit pixel lies within 1.21 game px of the segment across it and 0.71 past
-  an end, so the band holds every sample of every lit pixel with 0.79 to spare at any `ss`
+  an end at every `ss`, so the band holds every sample of every lit pixel with 0.79 to spare
   (`tools/line-band-check.py` checks it by brute force). No line primitive and no device line
   feature is involved;
-- **the endpoints are integers, decided on the CPU** by `tagpu_line.h`'s one rule — the game
-  pixel `floor(Z(p))` of the engine pixel's centre — so a zero-length edge (a root piece with
-  fewer than three vertices) is a line whose two ends are one pixel, which the walk plots once,
-  as `0x4CC83B`'s column fill does;
-- **`LFS` decides membership per GAME pixel**, in integers: `taGamePx` maps the fragment's target
-  pixel onto the game grid and `taOnLine` keeps it only when that pixel is one `DrawLine`'s
-  Bresenham plots (the rule is in exe-reverse-engineering.md at `0x4CC7AB`): endpoints ordered
-  by x, minor offset `(2·minor·i + major) / (2·major)`;
-- **the grid `uGrid` is written at record time from the target's real extent** (game w and h,
-  target w and h), not from the supersample factor: on a frame whose offscreen target refused,
-  the world goes into the swapchain image at whatever scale that is, and a wrong scale would move
-  the rect's pixels rather than blur them.
+- **the endpoints are integers, decided on the CPU** by `tagpu_line.h`'s one rule — the
+  LINE-GRID pixel (the world target's own, `ss` to a game pixel) `floor(ss·Z(p))` of the engine
+  pixel's centre — so a zero-length edge (a root piece with fewer than three vertices) is a line
+  whose two ends are one pixel, which the walk plots once, as `0x4CC83B`'s column fill does;
+- **`LFS` decides membership per line-grid pixel**, in integers: `taLinePx` maps the fragment's
+  target pixel onto the line grid (the identity on the offscreen target) and `taOnLine` keeps it
+  only when that pixel is one `DrawLine`'s walk plots between the two ends (the rule is in
+  exe-reverse-engineering.md at `0x4CC7AB`: endpoints ordered by x, minor offset
+  `(2·minor·i + major) / (2·major)`), thickened to `ss` pixels across the minor axis;
+- **the grid `uGrid` is written at record time from the target's real extent** (line grid, `ss`,
+  target w and h), not from the supersample factor alone: on a frame whose offscreen target
+  refused, the world goes into the swapchain image at whatever scale that is, and a wrong scale
+  would move the rect's pixels rather than blur them.
 
-**Measured on `selbox-facings`, 1024×768, `ss = 2`, one run** (selected minus deselected, on
+**At `ss = 2` the rect is smooth, by the owner's ruling (2026-09-25).** Its steps are target
+pixels, half a game pixel each. Where the window is the target's size it shows pixel for pixel.
+Where the window is the game frame's size the box-filter composite averages each 2 × 2 block, so
+a diagonal resolves to partial colour — the first cut (the plain line pipeline at `ss` width)
+measured **28 of 290 rect pixels at full colour** there, against 173 of 181 for the
+whole-game-pixel rect this rule replaced; the one-rule rect was not measured on the window.
+
+**Measured under the whole-game-pixel rule, `selbox-facings`, 1024×768, `ss = 2`, one run**
+(selected minus deselected, on
 the engine's reference surface and on the window): **176 pixels identical** to the engine's
 own box, **5** of ours the engine does not have, and of our 181 pixels **173 are exactly
 (83,223,79)** — the other 8 all lie on a hull's silhouette, where the body's own supersampled

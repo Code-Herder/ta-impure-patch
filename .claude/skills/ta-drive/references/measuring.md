@@ -197,10 +197,13 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
   Take it with `aniso=1` in `classicpp.cfg` (anisotropic sample placement is implementation-
   defined; 4 is what ships) and `shadows=0`, or the soft-shadow PCF's 1 px is in the figure.
 - **Lines have their own oracle.** A claimed frame of `mark`, `fx` or `posedraw` also writes
-  `tagpu_<pass>_lines.txt`, every line with its integer ends — for `mark` and `fx` the ends
-  BEFORE DrawLine's clip, with the viewport rect in the header;
-  `tools/line-oracle.py <capture.ppm> <lines.txt>` clips (`0x4BEA20`, `0x4CC650`) and walks
-  them with its own reading of `DrawLine 0x4CC7AB` and compares lit pixels, 0 px or not. To put
+  `tagpu_<pass>_lines.txt`: a header `# <pass> <grid w> <grid h> <w>`, then every line with its
+  integer ends in LINE-GRID pixels (the world target's own, `w` = `ss` to a game pixel) — for
+  `mark` and `fx` the ends BEFORE DrawLine's clip, with the clip rect (`<L> <T> <R> <B>`, line
+  grid) after `<w>`; `tools/line-oracle.py <capture.ppm> <lines.txt>` clips (`0x4BEA20`,
+  `0x4CC650`), walks them with its own reading of `DrawLine 0x4CC7AB`, thickens to `w` and
+  compares lit pixels, 0 px or not. `tacli arm <name> ss.off` gives the game grid (`w = 1`),
+  where the rule is the engine's line. To put
   lines across the viewport edge, pin the camera with `tacli eye` after staging. The capture must hold lines ONLY
   (anything else is "only in the capture", and bodies hide the wire), which the shipped build
   cannot arrange: it needs a build whose recorders skip every non-line draw. The waypoint

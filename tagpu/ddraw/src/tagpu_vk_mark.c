@@ -21,11 +21,11 @@
 
    THE LINES ARE TRIANGLES. Each line record is one instance of tagpu_mark.c's
    LVS/LFS program: a band of two triangles round the segment, whose fragment
-   stage keeps the game pixels `0x4CC7AB` would plot (tagpu_line.h,
-   tagpu_glsl.h). So a line needs no line rasterisation state and no device
-   feature, it is one game pixel wide at any `ss`, and its pixels are the
-   same on every GPU -- the rule tagpu_vk_fx.c and the nanoframe wire follow
-   too. */
+   stage keeps the line-grid pixels `0x4CC7AB`'s walk plots, thickened to
+   `ss` (tagpu_line.h, tagpu_glsl.h). So a line needs no line rasterisation
+   state and no device feature, it is one game pixel wide at any `ss`, and
+   its pixels are the same on every GPU -- the rule tagpu_vk_fx.c and the
+   nanoframe wire follow too. */
 
 #include <stdio.h>
 #include <stdlib.h>

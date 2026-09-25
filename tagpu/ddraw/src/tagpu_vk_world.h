@@ -12,7 +12,8 @@
    (tagpu_settings_ss). WITHOUT A TARGET the world goes into the swapchain
    image at client resolution, which is a smaller picture and never a wrong
    one: a pass that needs the grid it draws on asks for the extent it records
-   into rather than `ss` -- the lines' game-pixel test does (tagpu_line.h).
+   into rather than assuming `ss` -- the lines' test maps that extent onto its
+   line grid (tagpu_line.h).
 
    THE TWO IMAGES ARE PER SLOT, and that is a lifetime argument rather than a
    convenience. The composite SAMPLES the colour image in the same command

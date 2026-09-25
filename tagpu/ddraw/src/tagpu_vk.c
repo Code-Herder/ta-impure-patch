@@ -2452,9 +2452,9 @@ static int vk_present(void)
                 published from this frame's gather -- but the passes depend on
                 IT: whether there is a target decides the extent every world
                 pass records into, and a pass that needs the grid it draws on
-                (the lines' game-pixel test, tagpu_line.h) takes that extent
-                rather than the hand-over's `ss`, which says what the gather was
-                told and not whether the target stood.
+                (the lines' test, tagpu_line.h) maps that extent onto its grid
+                rather than taking the hand-over's `ss` as the target's scale:
+                `ss` says what the gather was told, not whether the target stood.
                 It puts no pixel anywhere, so it is not counted in
                 `ndraw`/`nclaim` -- the shadow map's rule for its reason. 0 means
                 there is no target this frame and the world draws into the
