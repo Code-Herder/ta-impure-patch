@@ -1666,8 +1666,8 @@ static unsigned char* fix_call_regs(unsigned char* p, void (__cdecl *fn)(unsigne
    THE FIX keeps the whole list [DECIDED 2026-09-24]. A block holding n entries has room for
    bl_room(n): stock's 30, then powers of two from 64. The shared append, the copy and the
    download appender each grow a block to bl_room(n + 1) before writing entry n when that is
-   more than bl_room(n), through the engine's allocator (0x4D83B0, whose failure is the engine's
-   out-of-memory exit) and its free (0x4D85A0, which the teardown 0x42DC52 frees the copy with).
+   more than bl_room(n), through eng_alloc_or_exit (the engine's allocator 0x4D83B0, whose
+   failure is the engine's out-of-memory exit whatever the handler slot holds) and its free (0x4D85A0, which the teardown 0x42DC52 frees the copy with).
    The copy is made at bl_room(count) entries, copied from the shared block.
 
    THE INVARIANT: every block holds at least bl_room(its count) entries. The shared block starts
@@ -1690,7 +1690,7 @@ static unsigned int bl_room(unsigned int n)
 static void bl_append(unsigned short** list, unsigned int n, unsigned short type, const char* name)
 {
     if (bl_room(n + 1u) > bl_room(n)) {
-        unsigned short* bigger = (unsigned short*)ENG_ALLOC(name, bl_room(n + 1u) * 2u);
+        unsigned short* bigger = (unsigned short*)eng_alloc_or_exit(name, bl_room(n + 1u) * 2u);
         memcpy(bigger, *list, (size_t)n * 2u);
         ENG_FREE(*list);
         *list = bigger;
@@ -1717,7 +1717,7 @@ static void __cdecl bl_copy(unsigned int* regs)
     unsigned char* def = (unsigned char*)(size_t)regs[PR_ESI];
     const unsigned short* shared = (const unsigned short*)(size_t)regs[PR_EBP];
     unsigned int room = bl_room(*(const unsigned int*)(def + 0x152));
-    unsigned short* copy = (unsigned short*)ENG_ALLOC((const char*)(size_t)regs[PR_EAX], room * 2u);
+    unsigned short* copy = (unsigned short*)eng_alloc_or_exit((const char*)(size_t)regs[PR_EAX], room * 2u);
     memcpy(copy, shared, (size_t)room * 2u);
     *(unsigned short**)(def + 0x156) = copy;
     regs[PR_EAX] = (unsigned int)(size_t)copy;              /* what the `rep movs` leaves */
@@ -1809,8 +1809,8 @@ static unsigned int s_dlFiles;                /* the files' own records, 0x42DCF
 /* 0x42DD74 asks for files * 0xBD bytes */
 static void* __cdecl dl_alloc(const char* name, unsigned int size)
 {
-    void* p = ENG_ALLOC(name, size);
-    if (p) memset(p, 0, size);
+    void* p = eng_alloc_or_exit(name, size);
+    memset(p, 0, size);
     s_dlRoom = s_dlFiles = size / 0xBDu;
     return p;
 }
@@ -1826,7 +1826,7 @@ static void __cdecl dl_section(unsigned int* regs)
         if (recs >= s_dlRoom) {
             unsigned int room = s_dlRoom * 2u > recs + 1u ? s_dlRoom * 2u : recs + 1u;
             unsigned int bytes = room > 0x00AAAAAAu ? 0x7FFFFFFFu : room * 0xBDu;  /* fails: the exit */
-            unsigned char* bigger = (unsigned char*)ENG_ALLOC((const char*)0x00503F7C, bytes);
+            unsigned char* bigger = (unsigned char*)eng_alloc_or_exit((const char*)0x00503F7C, bytes);
             unsigned char* old = *(unsigned char**)(ta + 0x391CB);
             memcpy(bigger, old, (size_t)recs * 0xBDu);
             memset(bigger + (size_t)recs * 0xBDu, 0, bytes - recs * 0xBDu);
