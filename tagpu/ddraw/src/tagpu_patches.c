@@ -624,8 +624,9 @@ static int fix_reclaim_mark_anchor(void)
    refuses it: SpawnFeatureOnMap 0x423C50 hands every footprint cell that is not EMPTY to
    FEATURES_Destroy 0x4246B0, which refuses a def at 0xFFFB and up, and the spawn is abandoned.
    On a new game the TNT's features are down before the mask, so a feature there keeps its
-   anchor and loses only its masked footprint cells. On a saved game LoadMap places nothing
-   (main+0x38D6B, the save's TDF, is set), the mask runs over a grid with no feature, and the
+   anchor and loses only its masked footprint cells. On a saved game LoadMap places none of the
+   TNT's features (main+0x38D6B, the save's TDF, is set) -- a v2 map still gets its void markers,
+   0xFFFC, at 0x483ACA..0x483ADE -- so the mask runs over a grid with no feature, and the
    features come back later, from the save: the game-load routine 0x432610 calls 0x424C00 at
    0x43265A, which spawns every saved feature -- "Normal Features" (0x424FBF), "Animating
    Features" (0x425050), "3D Features" (0x425180) -- and never tests the result. So a saved
@@ -636,39 +637,47 @@ static int fix_reclaim_mark_anchor(void)
    goes on as though the spawn had succeeded: an animating or 3D record's state is written
    into the wreck-pool record the cell's +0x0A names (0x4250C8, 0x42518D), a word LoadMap
    never initialises (0x4839D5..0x4839ED writes +0x00, +0x02, +0x07, +0x08 and two bits of
-   +0x0C of a fresh cell); fix_restore_record_owner, below, closes that for every refusal.
+   +0x0C of a fresh cell); fix_restore_record_owner, below, closes that.
 
    THE FIX retargets the call at 0x43265A to features_restore_under_mask, which opens the mask
    for the restore and shuts it after: every cell holding 0xFFFD is noted in a bitmap and set
    EMPTY, 0x424C00 runs unchanged, and every noted cell that is then EMPTY or 0xFFFE is set back
    to 0xFFFD -- the mask's own rule, over the mask's own cells. The pathing maps follow. They
    are built once a load from the grid as the mask left it (0x440940 at 0x4918E3, before the
-   restore), and every spawn refreshes them over its feature's rectangle (0x440A40 from
-   0x424031), a refresh that during the restore reads the mask open; the mask itself never
-   refreshes them. So once the mask is shut, every restored feature's rectangle is refreshed
-   again, with the call and the arguments the spawn uses.
+   restore), and every grid change the restore makes refreshes them over the cells it changed:
+   a spawn (0x440A40 from 0x424031) and a destroy (from 0x424822), both reading the mask open.
+   The shut is the one change made without a refresh, so each cell it rewrites is refreshed
+   after it with 0x440A40(x | y << 16, 1 | 1 << 16): 0x440830 then recomputes, for every
+   movement class, the entries over [x - fw, x + 1] x [y - fh, y + 1], which are the entries
+   whose read region (0x47E1F0) holds that cell.
    THE INVARIANT: the grid after the restore is the mask applied to the restored features, as
    a new game's grid is the mask applied to the TNT's -- a restored feature keeps its anchor on
    a masked cell and loses its masked footprint cells, and every other masked cell reads 0xFFFD
-   again -- and the pathing maps are that grid's: an entry inside a restored feature's
-   rectangle is computed again from it, and an entry outside every such rectangle reads no
-   feature cell and no cell the mask did not shut again, so it is the build's. It rests on
+   again -- and the pathing maps are that grid's. A map entry depends on the def words of its
+   read region and on the units standing there, and no unit is on the grid during the restore
+   (the units are restored after it, 0x486FD0 from 0x432672, and LoadMap's init zeroes every
+   cell's +0x00). So an entry is stale only if a cell of its region changed after its last
+   computation: the open changes cells without a refresh, but every opened cell ends either
+   shut, and refreshed after the shut, or under a feature a spawn placed and refreshed over
+   after the open. It rests on
      - a bound: the mask is opened only when the grid holds no feature (no def below 0xFFFB and
        no 0xFFFE), the state 0x424C00 is called in, so no cell it opens is covered by a feature,
        every anchor after the restore is a restored feature, and the restore is the only code
        that sees a cell open. The grid is read as LoadMap sized it, W * H cells of 13 bytes
        (0x483986..0x4839A2), W and H from main+0x14233/+0x14237 and refused outside 1..4096;
        the pointer and both counts are compared again after the restore, and the cells are shut
-       only when they are unchanged. A def is used to reach its FeatureDef only below the def
-       count main+0x14253;
+       only when they are unchanged;
      - an ordering: the restore runs on the loader thread, inside the level load, where the
-       engine writes the grid and the pathing maps itself; no unit is down yet (the units are
-       restored after it, 0x486FD0 from 0x432672).
-   Anything outside the bound -- a feature already down, a grid out of range, no memory for the
-   bitmap -- leaves the restore to stock, logged. 0x424C00 has this one caller and no pointer to
-   it in the image; neither has 0x432610 but the one at 0x497B29 [call and literal scan of the
-   image]. Identity on a new game, whose load never reaches 0x424C00, and on a saved game with
-   no feature on a masked cell. */
+       engine writes the grid and the pathing maps itself, before any unit is restored.
+   Anything outside the bound -- no main block, a feature already down, a grid out of range,
+   no memory for the bitmap -- leaves the restore to stock, logged. That fallback cannot set
+   two peers apart: a saved game never runs in a network session (ARMOPT.GUI's handler 0x460CC0
+   greys SAVEGAME and LOADGAME in a game of type 3, at 0x460CF7/0x460D37 through 0x4A1200; the
+   console's Save, 0x417430, wants access level 4; a load from the main menu rebuilds the game
+   type from the save's Gametype, 0x49267F -> 0x434AB0). 0x424C00 has this one caller and no
+   pointer to it in the image; neither has 0x432610 but the one at 0x497B29 [call and literal
+   scan of the image]. Identity on a new game, whose load never reaches 0x424C00, and on a saved
+   game with no feature on a masked cell. */
 #define SF_PLOT_W   0x14233     /* 16-px cells across and down                      */
 #define SF_PLOT_H   0x14237
 #define SF_GRID     0x14287     /* FeatureStruct[W * H], 13 bytes, the def at +0x08  */
@@ -678,7 +687,7 @@ static int fix_reclaim_mark_anchor(void)
 #define SF_MASKED   0xFFFDu
 #define SF_FOOT     0xFFFEu
 #define SF_NDEFS    0x14253     /* the FeatureDef count                             */
-#define SF_DEFS     0x1426F     /* FeatureDef[], 0x100 bytes; +0x94 w, +0x96 h (u16) */
+#define SF_DEFS     0x1426F     /* FeatureDef[], 0x100 bytes                         */
 
 typedef void (__stdcall *features_restore_fn)(void* tdf);
 /* 0x440A40(xy, wh), stdcall: every movement class's pathing map recomputed over the cells
@@ -692,14 +701,14 @@ static void __stdcall features_restore_under_mask(void* tdf)
     char* ta = *(char* const*)0x00511DE8;
     unsigned char* grid;
     unsigned char* bits;
-    const unsigned char* defs;
-    unsigned int w, h, n, i, ndefs, opened = 0, closed = 0, kept = 0, refreshed = 0;
+    unsigned int w, h, n, i, opened = 0, closed = 0, kept = 0;
     const char* why = NULL;
     DWORD t0 = 0, t1 = 0;
     char b[256];
 
     if (!ptr_sane(ta)) {
         restore(tdf);
+        plog("savedfeat: no main block; the restore ran with the border mask shut");
         return;
     }
     grid = *(unsigned char* const*)(ta + SF_GRID);
@@ -741,35 +750,24 @@ static void __stdcall features_restore_under_mask(void* tdf)
     if (*(unsigned char* const*)(ta + SF_GRID) == grid &&
         *(const unsigned int*)(ta + SF_PLOT_W) == w &&
         *(const unsigned int*)(ta + SF_PLOT_H) == h) {
+        t0 = GetTickCount();
         for (i = 0; i < n; i++) {
             unsigned short* def;
             if (!(bits[i >> 3] & (1u << (i & 7)))) continue;
             def = (unsigned short*)(grid + (size_t)i * SF_CELL + 8);
             if (*def == SF_EMPTY || *def == SF_FOOT) {
                 *def = (unsigned short)SF_MASKED;
+                refresh((i % w) | ((i / w) << 16), 1u | (1u << 16));
                 closed++;
             } else if (*def < SF_MARKER) {
                 kept++;
             }
         }
-        defs = *(const unsigned char* const*)(ta + SF_DEFS);
-        ndefs = *(const unsigned int*)(ta + SF_NDEFS);
-        if (opened && ptr_sane(defs) && ndefs <= 0x10000u) {
-            t0 = GetTickCount();
-            for (i = 0; i < n; i++) {
-                unsigned int def = *(const unsigned short*)(grid + (size_t)i * SF_CELL + 8);
-                if (def >= SF_MARKER || def >= ndefs) continue;
-                refresh((i % w) | ((i / w) << 16),
-                        *(const unsigned int*)(defs + (size_t)def * 0x100 + 0x94));
-                refreshed++;
-            }
-            t1 = GetTickCount();
-        }
+        t1 = GetTickCount();
         _snprintf(b, sizeof b,
                   "savedfeat: the restore ran with the border mask open: %u cells opened, "
-                  "%u shut again, %u hold a restored feature's anchor; %u rectangles of the "
-                  "pathing maps refreshed in %lu ms", opened, closed, kept, refreshed,
-                  (unsigned long)(t1 - t0));
+                  "%u shut again and the pathing maps refreshed around each in %lu ms, %u hold "
+                  "a restored feature's anchor", opened, closed, (unsigned long)(t1 - t0), kept);
     } else {
         _snprintf(b, sizeof b, "savedfeat: the restore replaced the grid; %u opened cells "
                   "left to it", opened);
@@ -806,29 +804,42 @@ static int fix_saved_features_border(void)
    whole life (SpawnFeatureOnMap takes the record and stores its index at 0x423ED5, or abandons
    the spawn), a GAF anchor while its sequence plays (FeatureDie stores it at 0x42368B and sets
    the mark, +0x0C bit 0, at 0x423695; the burn at 0x42345C and 0x423468). Otherwise it is a word
-   no record stands behind: a GAF anchor's 0 (0x423EE9), a footprint cell's offsets, or a cell
-   nothing has written, which LoadMap leaves as the allocator handed it (its init loop
-   0x4839D5..0x4839ED writes +0x00, +0x02, +0x07, +0x08 and two bits of +0x0C). So the state lands
-   in another feature's record -- record 0 on a grid the system handed over zeroed, which is what
-   a load gets (MEASURED on Two Continents: no cell of the 537 600 had a nonzero +0x0A before the
-   restore, and a 3D record refused for want of a record wrote record 0's +0x26) -- or, through a
-   stale word, up to 0xFFFF records past the pool, whenever the record's feature is not what it
-   was saved as: its spawn refused (a void cell, a footprint past the map, a 3DO def with no record
-   left), or its sequence not started (no record left: the burn returns at 0x42340D/0x423439, and
-   FeatureDie swaps the feature for its successor at once, 0x423651 below).
+   no record of this feature stands behind: a GAF anchor's 0 (0x423EE9), a footprint cell's
+   offsets, the index an anchor kept when FEATURES_Destroy freed its record (0x42476F; +0x0A is
+   never cleared), or a cell nothing has written, which LoadMap leaves as the allocator handed it
+   (its init loop 0x4839D5..0x4839ED writes +0x00, +0x02, +0x07, +0x08 and two bits of +0x0C). So
+   the state lands in another feature's record -- record 0 on a grid the system handed over
+   zeroed, which is what a load gets (MEASURED on Two Continents: no cell of the 537 600 had a
+   nonzero +0x0A before the restore, and a 3D record refused for want of a record wrote record
+   0's +0x26) -- or, through a stale word, up to 0xFFFF records past the pool's base (3 MB),
+   whenever the record's feature is not what it was saved as. Its spawn refused: a void cell, a
+   footprint past the map's edge (0x423CF8/0x423D24), an indestructible occupant (FeatureDef
+   +0xFF bit 1: FEATURES_Destroy returns 0 at 0x42471E), a 3DO def with no record left. Or its
+   sequence not started: with no record left an Animating GAF spawn still succeeds, takes none
+   and leaves +0x0A at 0, and then the burn returns at 0x42340D/0x423439 and FeatureDie swaps the
+   feature for its successor at once (0x423651, above) -- so the write lands on record 0, live on
+   a full pool. And the anchor there may be of the other kind: content changed between the save
+   and the load (a GAF name that now loads a 3DO def, 0x424D23..0x424DE1), or a swap's 3DO
+   successor that destroyed a neighbour, freeing its record, and took it. An Animating write
+   there puts a frame word over the 3DO record's +0x04, the pointer to its object state
+   (0x45A8D0, from 0x423ECB; freed by 0x45AAA0).
 
    THE FIX sends both sites through restore_record_owned, a jump at 0x4250C0 and at 0x425185 (the
    6-byte `mov edx,[0x511de8]` each block begins with, compared first together with the 6 bytes
    after it); the block runs as stock only when the cell at the record's position holds a feature
-   that owns a record -- an anchor, below the def count, whose FeatureDef +0xFE bit 0 is clear
-   (3DO), or set with the cell's mark set (a GAF sequence in play) -- and its +0x0A is below the
-   pool's count. Otherwise the stub leaves for the loop's next record (0x4250F7, 0x4251A7).
+   of the record's own kind that owns a record -- for an Animating record a GAF anchor with its
+   mark set (a sequence in play), for a 3D record a 3DO anchor; either below the def count and
+   with FeatureDef +0xFE bit 0 set for GAF, clear for 3DO -- and its +0x0A is below the pool's
+   count. That is the rule the save writer applies (0x424890: an Animating record only for a GAF
+   anchor with the mark, 0x4249CF -> 0x424A6E; a 3D record only for a 3DO anchor, 0x4249DC).
+   Otherwise the stub leaves for the loop's next record (0x4250F7, 0x4251A7).
    THE INVARIANT: the restore writes a saved state only into the wreck record that the feature
-   standing on the record's cell owns, which is the record the feature took in this restore, and
-   never outside the pool. It rests on
-     - a lifetime: a record is owned exactly while its index is in an anchor's +0x0A with that
-       anchor 3DO or marked, which is how the engine hands records out and takes them back
-       (the swap and FEATURES_Destroy clear both before the record is freed);
+   standing on the record's cell owns, of the kind the state was saved from -- the record the
+   feature took in this restore -- and never outside the pool. It rests on
+     - a lifetime: a record is owned exactly while its index is in +0x0A of an anchor that is 3DO,
+       or GAF and marked. FEATURES_Destroy frees the record (0x42476F) and, in the same call,
+       clears the mark and sets the anchor EMPTY (0x424774..0x424780), and the swap frees through
+       it (0x423792/0x4237B1); the index it leaves in +0x0A is refused by the def test;
      - a bound: the cell must lie in the grid LoadMap sized (W * H cells of 13 bytes), the def
        below main+0x14253, and the index below the pool's count, read from the pool's own
        allocation size, the dword at 0x421F2A that 0x421F20 allocates it with (0x18000 bytes in
@@ -838,14 +849,17 @@ static int fix_saved_features_border(void)
    the loop reloads everything but edi, ebx and ebp, which the stub preserves. Branches into the
    two sites land on 0x4250C0 itself (0x425065, 0x425083, 0x4250A2); none lands inside either
    stolen instruction [rel8/rel32 scan of .text]. Identity for every record whose feature owns
-   its record, which is every record of a save loaded into a pool at least as large as the one
-   it was saved from, with no void or off-map cell under it. */
+   its record, which is every record of a save loaded with the same feature content into a pool
+   at least as large as the one it was saved from, with no void cell, no footprint past the
+   map's edge and no indestructible occupant under it. */
 #define RR_POOL_BYTES 0x00421F2Au   /* 0x421F20's `push imm32`: the pool's size in bytes */
 #define RR_RECORD     0x30u
 #define RR_GAF        0x01          /* FeatureDef +0xFE: a GAF feature, else a 3DO one   */
 #define RR_MARK       0x01          /* cell +0x0C: a sequence in play                    */
+#define RR_ANIMATING  0             /* the stubs' kind argument                          */
+#define RR_3D         1
 
-static int __cdecl restore_record_owned(const unsigned char* cell)
+static int __cdecl restore_record_owned(const unsigned char* cell, int kind)
 {
     const char* ta = *(char* const*)0x00511DE8;
     const unsigned char* grid;
@@ -864,7 +878,11 @@ static int __cdecl restore_record_owned(const unsigned char* cell)
     ndefs = *(const unsigned int*)(ta + SF_NDEFS);
     defs = *(const unsigned char* const*)(ta + SF_DEFS);
     if (def >= SF_MARKER || def >= ndefs || !ptr_sane(defs)) return 0;
-    if ((defs[(size_t)def * 0x100 + 0xFE] & RR_GAF) && !(cell[0x0C] & RR_MARK)) return 0;
+    if (kind == RR_ANIMATING) {
+        if (!(defs[(size_t)def * 0x100 + 0xFE] & RR_GAF) || !(cell[0x0C] & RR_MARK)) return 0;
+    } else if (defs[(size_t)def * 0x100 + 0xFE] & RR_GAF) {
+        return 0;
+    }
     idx = *(const unsigned short*)(cell + 0x0A);
     count = *(const unsigned int*)RR_POOL_BYTES / RR_RECORD;
     return idx < count;
@@ -879,6 +897,7 @@ static int fix_restore_record_owner(void)
     };
     static const unsigned int site[2] = { 0x004250C0, 0x00425185 };
     static const unsigned int next[2] = { 0x004250F7, 0x004251A7 };
+    static const int kind[2] = { RR_ANIMATING, RR_3D };
     unsigned char* s[2] = { NULL, NULL };
     int k;
 
@@ -891,10 +910,11 @@ static int fix_restore_record_owner(void)
             return FIX_STUB;
         }
         *p++ = 0x60;                                            /* pushad           */
+        *p++ = 0x6A; *p++ = (unsigned char)kind[k];             /* push kind        */
         *p++ = 0x56;                                            /* push esi: cell   */
         *p++ = 0xE8;
         tagpu_detour_rel(p, (unsigned int)(size_t)restore_record_owned); p += 4;
-        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                  /* add esp,4        */
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x08;                  /* add esp,8        */
         *p++ = 0x85; *p++ = 0xC0;                               /* test eax,eax     */
         *p++ = 0x61;                                            /* popad            */
         *p++ = 0x74; *p++ = 0x0B;                               /* jz next          */
@@ -902,10 +922,16 @@ static int fix_restore_record_owner(void)
         *p++ = 0xE9; tagpu_detour_rel(p, site[k] + 6); p += 4;  /* the stock write  */
         *p++ = 0xE9; tagpu_detour_rel(p, next[k]); p += 4;      /* next: skip it    */
     }
-    /* both sites are on the page 0x425000, so the second lands whenever the first did */
-    if (!tagpu_detour_land(site[0], s[0], 6) || !tagpu_detour_land(site[1], s[1], 6)) {
+    if (!tagpu_detour_land(site[0], s[0], 6)) {
         VirtualFree(s[0], 0, MEM_RELEASE);
         VirtualFree(s[1], 0, MEM_RELEASE);
+        return FIX_PROTECT;
+    }
+    if (!tagpu_detour_land(site[1], s[1], 6)) {
+        /* the first site jumps into s[0]: its own bytes go back before s[0] is freed, and
+           if they cannot, s[0] stays with the jump that uses it */
+        VirtualFree(s[1], 0, MEM_RELEASE);
+        if (tagpu_detour_write(site[0], was, 6)) VirtualFree(s[0], 0, MEM_RELEASE);
         return FIX_PROTECT;
     }
     return FIX_ARMED;
