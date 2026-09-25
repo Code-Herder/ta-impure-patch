@@ -306,13 +306,15 @@ the division of labour is the order markers':
   where the unit's depth key is decided. The geometry is the GL pass's, unchanged: the root
   piece's bounds unioned with the origin (`selbox_aabb`, cached per template node and dropped
   on the level edge in `cache_gen_check`), the full angle triple in `0x4B6CC0`'s order, the
-  term-by-term truncating projection of `0x467A50`, corners on pixel centres, snapped through
-  the zoom. It is emitted **ahead of every `continue`** in that loop, since `0x46A530` has no
+  term-by-term truncating projection of `0x467A50`, corners on the engine pixels' centres, which
+  every line's one endpoint rule then carries through the zoom (`tagpu_line.h`). It is emitted
+  **ahead of every `continue`** in that loop, since `0x46A530` has no
   model test and draws a box for a unit whose body we could not bake.
 - **`tagpu_mark.c` owns it**: `tagpu_mark_emit_selbox` refuses unless the pass is armed, not
   `passive` and not `noselbox` — the same conditions `mark_selbox` is told. The rects are the
   **first** draw of the marker list and the only **depth-tested** one.
-- **`tagpu_vk_mark.c` draws it** with its own program and pipeline (`SVS`/`SFS`, `s_pipeLineZ`).
+- **`tagpu_vk_mark.c` draws it** with the marker pass's line program (`LVS`/`LFS`) in its own
+  depth-tested pipeline, `s_pipeLineZ`; every other marker line takes `s_pipeLine`.
 
 **Why depth, and which key.** The engine draws each rect immediately before its own unit, so
 it is under that unit and every later row and over everything earlier. The unit pass's depth
@@ -329,30 +331,28 @@ A line rasterised in the `ss×` world target steps on the TARGET grid, half a ga
 step at `ss = 2`, and the box-filter composite smears every diagonal. The first cut (the
 plain Bresenham line pipeline at `ss` width) measured **28 of 290 rect pixels at full colour**,
 the rest between 0.2 and 0.8 — visibly faint beside the engine's flat (83,223,79). The GL pass
-avoided this with the 1x detour, which this lane has no buffer for. So:
+avoided this with the 1x detour, which this lane has no buffer for. So the rect is drawn the way
+**every** line on this lane is since G21b ([Hardware portability](hardware-portability.html)
+decision 4):
 
-- **the line primitive is only a band.** `SVS` pushes each end one game pixel out **along the
-  segment** and the pipeline draws it `ceil(3·scale) + 2` target pixels wide. The 3 is a bound:
-  a sample of a kept pixel can sit 1.5 game px across from the ideal line (half a pixel of
-  Bresenham rounding, half the pixel's extent, half again from the sample's column on a slope
-  of up to 1). A brute force of Vulkan's wide-Bresenham rule over every edge within 24 px, at
-  every scale from 1 to 6 in 1/16 steps, leaves no such sample uncovered. **The first cut
-  pushed the ends along the major axis alone and drew `2·scale + 2` wide; the landing review
-  showed both wrong** — the major-axis push tilts the band (slope `dy/(dx+2)`, the GL pass's own
-  "the cap must run along the segment" trap) and the narrower band misses samples at every
-  scale above 1 (58 edge vectors of 3 720 at `ss = 2`, 1 328 at 3);
-- **a zero-length edge is split a quarter of a screen pixel either way**, because the engine
-  plots one pixel for it (`0x4CC83B`'s column fill) and a zero-length line rasterises nothing —
-  the case of a root piece with fewer than three vertices, whose box is the bare origin;
-- **`SFS` decides membership per GAME pixel.** It takes `floor(gl_FragCoord / uPx)` and keeps
-  the fragment only when that pixel is one `DrawLine`'s Bresenham plots (the rule is in
-  exe-reverse-engineering.md at `0x4CC7AB`): endpoints ordered by x, minor offset
-  `(2·minor·i + major) / (2·major)`. Both ends arrive flat — each vertex carries its own end in
-  `aPos` and the other in `aUV`;
-- **`uPx` is written at record time from the target's real extent** (`w / gw`, `h / gh`), not
-  from the supersample factor: on a frame whose offscreen target refused, the world goes into
-  the swapchain image at whatever scale that is, and a wrong scale moves the rect's pixels
-  rather than blurring them.
+- **a line is an instanced record drawn as a band of two triangles** (`tagpu_glsl.h` `taBand`):
+  the segment between the two end pixels' centres, widened 2 game pixels to each side and carried
+  2 past each end. A lit pixel lies within 1.21 game px of the segment across it and 0.71 past
+  an end, so the band holds every sample of every lit pixel with 0.79 to spare at any `ss`
+  (`tools/line-band-check.py` checks it by brute force). No line primitive and no device line
+  feature is involved;
+- **the endpoints are integers, decided on the CPU** by `tagpu_line.h`'s one rule — the game
+  pixel `floor(Z(p))` of the engine pixel's centre — so a zero-length edge (a root piece with
+  fewer than three vertices) is a line whose two ends are one pixel, which the walk plots once,
+  as `0x4CC83B`'s column fill does;
+- **`LFS` decides membership per GAME pixel**, in integers: `taGamePx` maps the fragment's target
+  pixel onto the game grid and `taOnLine` keeps it only when that pixel is one `DrawLine`'s
+  Bresenham plots (the rule is in exe-reverse-engineering.md at `0x4CC7AB`): endpoints ordered
+  by x, minor offset `(2·minor·i + major) / (2·major)`;
+- **the grid `uGrid` is written at record time from the target's real extent** (game w and h,
+  target w and h), not from the supersample factor: on a frame whose offscreen target refused,
+  the world goes into the swapchain image at whatever scale that is, and a wrong scale would move
+  the rect's pixels rather than blur them.
 
 **Measured on `selbox-facings`, 1024×768, `ss = 2`, one run** (selected minus deselected, on
 the engine's reference surface and on the window): **176 pixels identical** to the engine's
@@ -366,11 +366,11 @@ selover=0`, 60 fps.
 
 **What is not the engine's.** Where our frame's trees and the reference disagree, the stock game
 is the oracle and agreed with the depth test on the two cases looked at; it was not swept. The
-clip `0x4CC650` applies at the context edge is not reproduced — the scissor cuts the band at
-the viewport instead, which can differ by a step at the edge. The rect is not drawn at all on a
-device without `VK_EXT_line_rasterization` Bresenham lines or a line `ceil(3·scale) + 2` wide, or
-where the rect's own pipeline will not build; that
-drops the rects and not the rest of the marker layer, and says so once in the log.
+clip `0x4CC650` applies at the context edge is not reproduced — it moves an end that lies off
+the surface onto the edge, and the lane walks the unclipped line with the scissor cutting it at
+the viewport, which can differ by a step at the edge. The rect needs no device line feature; it
+is not drawn only where its depth-tested pipeline will not build, which drops the rects and not
+the rest of the marker layer, and says so once in the log.
 
 **The engine's own box is not suppressed** (`s_selComplete` stays 0). It lands only in the
 golden source, where it is the reference this rect is measured against, so taking it out would

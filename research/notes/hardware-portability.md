@@ -32,15 +32,18 @@ The menus draw; the census at the shell shows `gui=1` and no world pass, as expe
 |---|---|---|
 | a 24-bit depth format | `vk_depth_format` (`tagpu_vk.c`) offers `D24_UNORM_S8_UINT` or `X8_D24_UNORM_PACK32`, else nothing | the world target (`tagpu_vk_world.c` refuses without `dfmt`), and with it every world pass: terrain, features, units, effects, the markers that depth-test. The units' hard shadows also need the stencil plane (`d->stencilok`) |
 | a 24-bit **sampled** depth format | `tagpu_vk_shadow_format` (`tagpu_vk_shadow.c`) | the sun-shadow map behind `shadows=hard` |
-| `VK_EXT_line_rasterization` with `bresenhamLines`, and `wideLines` | `tagpu_vk_mark.c`, `tagpu_vk_fx.c` | order lines, selection rectangles, effect lines (lasers, lightning) |
+| `VK_EXT_line_rasterization` with `bresenhamLines`, and `wideLines` | `tagpu_vk_mark.c`, `tagpu_vk_fx.c`; `wideLines` also `tagpu_vk_unit.c` | order lines, selection rectangles, effect lines (lasers, lightning); the nanoframe wire, a line list `ss` target pixels wide |
 | `VK_EXT_depth_clip_control` (`negativeOneToOne`) | `tagpu_vk_shadow.c` | the sun-shadow map |
 
 **Why these were required.** The comment above `vk_depth_format` says the 24-bit fixed-point
 depth "is a specification rather than a preference": the depth-testing passes were measured to
 0 px against the OpenGL renderer this one replaced, and a float attachment "would resolve a
-z-fight the other way in exactly the cases that are too close to call". The lines follow the
-diamond-exit rule, which only the extension's `BRESENHAM` mode guarantees (Vulkan's default line
-rule is implementation-dependent). The shadow map's projection writes z in [−1, 1].
+z-fight the other way in exactly the cases that are too close to call". The lines asked for the
+extension's `BRESENHAM` mode because Vulkan's default line rule is implementation-dependent — but
+that mode is not exact either: the specification lets a Bresenham line's fragments deviate from
+the ideal ones by up to one unit, so two conformant devices can still light different pixels.
+It matched on the reference setup's device; it guaranteed nothing across devices. The shadow
+map's projection writes z in [−1, 1].
 
 **What the Vulkan specification guarantees** [SOURCE: the specification's required format
 support]. Every conformant device supports 16-bit depth, and
@@ -71,16 +74,33 @@ line rule for the default mode.
    - The shadow projection's z is remapped to Vulkan's [0, 1] in the vertex shader
      (`z' = (z + w) / 2`), so `VK_EXT_depth_clip_control` is no longer needed.
    - The depth bias is re-checked against float depth.
-4. **Lines are drawn as triangles, and the fragment shader decides which pixels are on the
-   line.**
-   - Each line becomes a thin quad covering the band of game pixels it can touch.
-   - The fragment shader tests its game pixel against the same diamond-exit rule the lines have
-     today. The test is **integer arithmetic on the game-pixel grid**, so no floating-point
-     decision near a pixel edge can differ between vendors. That is the invariant.
-   - A line's width is one screen pixel, `ss` target pixels, and falls out of the band test, so
-     `wideLines` is not needed.
-   - `VK_EXT_line_rasterization`, `wideLines` and `VK_EXT_depth_clip_control` are then removed
-     from device creation (strip fully, no compatibility path).
+4. **Every line is `DrawLine 0x4CC7AB`'s Bresenham on the game-pixel grid, drawn as triangles
+   [DECIDED 2026-09-25].**
+   - Each line becomes a band quad round the segment, and the fragment shader keeps a fragment
+     only when its GAME pixel is one `0x4CC7AB`'s walk plots between the line's two integer
+     endpoints. Each lit game pixel is covered whole, `ss` × `ss` target pixels, so a line is one
+     game pixel wide at any `ss` and `wideLines` is not needed.
+   - The test is **integer arithmetic on the game-pixel grid**, so no floating-point decision
+     near a pixel edge can differ between vendors. That is the invariant.
+   - It covers every line kind: the order markers (waypoint crosshairs), queued build sites
+     (`0x438C00`), selection rectangles, effect lines (lasers, lightning) and the **nanoframe
+     wire**, which is ported so that `wideLines` can go. The wire stays depth-tested; its
+     fragment depth is the segment's by construction, and the +0.15 bias that puts it in front
+     of the surface it traces is kept.
+   - **Endpoints are quantised by one stated integer rule** (`tagpu_line.h`): the game pixel is
+     `floor(Z(p))`, `Z` the wheel zoom about the view centre — the selection rect's notion of the
+     grid. `p` is the engine pixel's centre `k + 0.5` where the engine draws that line from
+     integers (lasers, build-site corners, selection corners), so at 1× the pixel is the
+     engine's own; otherwise `p` is the fractional position (a sub-pixel anchor, a posed wire
+     vertex), and at 1× that is the engine's `>> 16` truncation.
+   - `VK_EXT_line_rasterization` and `wideLines` are removed from device creation, strip fully
+     with no compatibility path; `VK_EXT_depth_clip_control` goes with decision 3.
+   - **What main did** [SOURCE, then MEASURED 2026-09-25]: the order markers, build sites,
+     effect lines and the wire were line primitives on the `ss×` TARGET grid, `ss` target pixels
+     wide, in `BRESENHAM` mode. At `ss = 2` such a line straddles game-pixel boundaries — a step
+     lands half a game pixel off and lights part of a game pixel's block. The selection rect
+     alone already had the game-pixel test, riding a wide `BRESENHAM` line primitive as its band
+     ([GPU status](gpu-status.html) §2.84). The G21b block has the counts.
 5. **Remote instances in `tacli`.** One set of verbs drives a game on another machine over SSH.
    - Remote driving works because every channel between `tacli` and the DLL is a file in the
      game folder: `tagpu_keys.txt`, `tagpu_eye.txt`, the lever files, the `.ab` captures and
@@ -134,17 +154,64 @@ worktree. The fourth follows once they are on main.
 
 ### G21b — lines as triangles
 
-- The mark pass's order lines and selection rectangles and the effects pass's lines, drawn as
-  band quads with the integer diamond-exit test in the fragment shader (decision 4). The line
-  pipelines, the `LINE_LIST` topology and `lineok`, `wideok` and `maxLineWidth` go.
-- **Gate**: 0 px against main on the reference setup (which has the extension), both presets,
-  at `ss=2` and at 1× and a wheel level:
-  - `scenarios/marker-mix.json` for order lines, dots and the band box;
-  - a selection;
-  - `fx-lasers` for effect lines.
+**[DECIDED 2026-09-25; BUILT 2026-09-25 on its branch, not landed]**
 
-  A line is a rule, not a z-fight, so anything but 0 px is a bug.
-- Review: medium.
+- **What it is.** Every line kind of decision 4 is an instanced record drawn as a six-vertex
+  band (`tagpu_glsl.h` `taBand`, radius 2 game px) whose fragment stage keeps the game pixels
+  `0x4CC7AB`'s walk plots (`taGamePx`, `taOnLine`). The endpoints are decided on the CPU
+  (`tagpu_line.h`); the queued build site is `0x438C00`'s integer geometry exactly
+  (`tagpu_order.c` `draw_build`); the nanoframe wire is posed on the CPU into line records in the
+  pose buffer (`tagpu_vk_unit.c` `wire_records`) and drawn by its own vertex stage
+  (`tagpu_posedraw.c` `WVS`). The line pipelines, the `LINE_LIST` topology, `vkCmdSetLineWidth`,
+  `lineok`, `wideok`, `maxLineWidth`, the two device asks and their log lines go; so does
+  `tagpu_vk_world_scale`, which only the line width read.
+- **The gate: 0 px against an independent model of the rule.** An A/B frame of the marker,
+  effects or unit pass also writes `tagpu_<pass>_lines.txt`, the lines it drew and their integer
+  ends. `tools/line-oracle.py` walks each with its own transcription of `0x4CC7AB`'s loops (the
+  one in `tools/line-band-check.py`, which also checks the shader's closed form against it and the
+  band's coverage by brute force) and compares the lit pixels with the capture. The captures hold
+  the lines alone: a diagnostic build, never committed, drew only the line draws while a file was
+  present. [MEASURED 2026-09-25, reference setup, `ss = 2`, `--defaults`] **0 px in every cell**:
+
+  | fixture | lines | Classic 1× | Classic 0.877× | Classic++ 1× | Classic++ 0.877× |
+  |---|---|---|---|---|---|
+  | `marker-mix` (4 selection rects, a queued build site, 12 waypoint crosshairs) | 72 | 0 of 4 752 px | 0 of 4 216 | 0 of 4 752 | 0 of 4 216 |
+  | `selbox-facings`, three tanks selected | 12 | 0 of 1 216 | 0 of 1 072 | 0 of 1 216 | 0 of 1 072 |
+  | `fx-lasers`, three lasers in flight | 6 | 0 of 1 056 | 0 of 836 | 0 of 1 056 | 0 of 836 |
+  | `nanoframe-ladder`, every wire | 1 384 | 0 of 27 536 | 0 of 23 688 | 0 of 27 536 | 0 of 23 688 |
+
+  The log names no line refusal and neither `VK_EXT_line_rasterization` nor `wideLines`; main's
+  `vk: mark: up … bresenham lines yes` is gone.
+- **The difference from main** [MEASURED 2026-09-25, lines-only captures, Classic], target px
+  lit only in main / only in the branch, and at 1× each differing pixel classified against the
+  engine's own frame (`tacli shot`, markers handed back with `mark.on=passive`):
+
+  | fixture | 1× only main / only branch | 1× closer / further / neither | 0.877× only main / only branch |
+  |---|---|---|---|
+  | `marker-mix`, rects and build site | 643 / 651 | 1 294 / 0 / 0 | 708 / 712 |
+  | `selbox-facings` | 0 / 0 | — | 0 / 0 |
+  | `fx-lasers` | 99 / 115 | 180 / 12 / 22 | 91 / 135 |
+  | `nanoframe-ladder` | 6 624 / 5 503 | not established | 4 973 / 4 244 |
+
+  - The build site is the whole marker-mix difference (every differing pixel is inside its box;
+    the selection rects are identical, as `selbox-facings` shows): main's edges straddle game-pixel rows,
+    the branch's sit on the engine's.
+  - The waypoint crosshairs are left out of the marker-mix row: their size follows game time, and
+    the two runs paused on different ticks, so they are not a pair. The oracle covers them.
+  - The fx row is paired by construction: a main build that also wrote its line list, run
+    through the branch's rule, against main's own capture of that frame. The 12 "further" and
+    22 "neither" pixels lie where the engine draws a muzzle flash over the laser, in colours the
+    laser shares **[INFERRED from the crops]**.
+  - **The wire is not classified.** Its engine pixels were matched by colour, and the nanoframe
+    body the engine draws under it shares the wire's palette entries: the match found 14 855
+    engine pixels against the wire's 6 884 game pixels, and the two runs' engine frames gave
+    different answers. The counts stand; the direction is **[OPEN]**.
+- **Gaps it does not close.** The engine's clip `0x4CC650` moves an end that lies off the
+  surface onto its edge; the lane walks the unclipped line, so a line crossing the viewport edge
+  can differ from the engine's by a pixel along the part both draw (`tagpu_line.h`). Not measured.
+- Review: medium. No engine state is written and no byte patch added; the wire's records are
+  built on the render thread, in `upload_draw`, from the same pose hand-over and bake the body
+  upload reads [SOURCE].
 
 ### G21c — `tacli` remote instances
 

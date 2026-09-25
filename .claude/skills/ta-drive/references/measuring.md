@@ -196,6 +196,13 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
   boundaries, deterministic; a *structured* difference (a whole unit, a face, a shift) is real.
   Take it with `aniso=1` in `classicpp.cfg` (anisotropic sample placement is implementation-
   defined; 4 is what ships) and `shadows=0`, or the soft-shadow PCF's 1 px is in the figure.
+- **Lines have their own oracle.** A claimed frame of `mark`, `fx` or `posedraw` also writes
+  `tagpu_<pass>_lines.txt`, every line drawn with its integer ends;
+  `tools/line-oracle.py <capture.ppm> <lines.txt>` walks them with its own reading of
+  `DrawLine 0x4CC7AB` and compares lit pixels, 0 px or not. The capture must hold lines ONLY
+  (anything else is "only in the capture", and bodies hide the wire), which the shipped build
+  cannot arrange: it needs a build whose recorders skip every non-line draw. The waypoint
+  crosshairs change size with game time, so two runs paused on different ticks do not pair.
 - **A world capture at 1080p with `ss=2` is 3840x2160, 33 MB**, in a 32-bit process; the lane
   refuses and logs rather than faulting. 1024x768 is 9.4 MB and nothing to think about.
 

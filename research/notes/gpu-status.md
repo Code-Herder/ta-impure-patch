@@ -5541,7 +5541,10 @@ before them.
 `lineRasterizationMode` drew a **strict superset** of the twin: all 126 of its pixels plus
 **exactly one extra fragment at the END of each segment** (4 px on the fixture, GL 126 ink against
 Vulkan 130, with *no* GL-only pixel anywhere). GL's non-antialiased lines follow the **diamond-exit
-rule** and Vulkan's default mode does not; `VK_LINE_RASTERIZATION_MODE_BRESENHAM` does. The seam
+rule** and Vulkan's default mode does not; `VK_LINE_RASTERIZATION_MODE_BRESENHAM` matched it on
+this device — but it is not a guarantee: the specification lets a Bresenham line deviate from the
+ideal fragments by up to one unit, so two conformant devices can differ (G21b, §2.91, replaced
+every line primitive with an integer test for that reason). The seam
 now asks for `VK_EXT_line_rasterization` and enables **`bresenhamLines`**, publishing it to passes
 as `TAGPU_VKPASS::lineok`, the same shape as `flipok`. A pass with line vertices and no `lineok`
 refuses the frame. That took 4 px to 0.
@@ -18226,3 +18229,46 @@ the gather mirrors; the tie rule's nudge (`TAGPU_EDGE_NUDGE_PX / zoom`, `+x` on 
 the world corners taken after it; `mapfeat_unpark` at every
 join, under the lock, before the build's first check; the table's place in the fill and cut order
 and the reserve's assert.
+
+### 2.91 Every line on the game-pixel grid — G21b (`tagpu_line.h`, `tagpu_glsl.h`, the marker, effects and unit passes)
+
+**What it is.** Every line the Vulkan lane draws is `DrawLine 0x4CC7AB`'s Bresenham on the
+GAME-pixel grid, each lit game pixel covered whole (`ss` × `ss` target pixels), decided in
+integer arithmetic in the fragment stage. That covers the order markers (waypoint crosshairs),
+queued build sites, selection rects, lasers and lightning, and the nanoframe wire. The owner's
+decision and the gate's numbers are in [Hardware portability](hardware-portability.html),
+decision 4 and the G21b block; this section is the map of what implements it.
+
+| where | what |
+|---|---|
+| `tagpu_line.h` `tagpu_line_px` | the one endpoint rule: game pixel `floor(Z(p))`, `Z(p) = (p − c)·zoom + c`; `p = k + 0.5` where the engine draws that line from integers, the fractional position otherwise. An end outside ±`TAGPU_LINE_MAXC` (16383) is not drawn and is counted (`far=` in the pass's log line) |
+| `tagpu_glsl.h` `TAGPU_GLSL_BAND_FN` | `taBand`: six vertices a record over two triangles, the segment between the end pixels' centres widened 2 game px each side and carried 2 past each end; `t` along the segment for per-end attributes |
+| `tagpu_glsl.h` `TAGPU_GLSL_LINE_FN` | `taGamePx` (the target pixel's game pixel, `((2t+1)·gw)/(2·tw)`) and `taOnLine` (`0x4CC7AB`'s walk in closed form, unsigned products) |
+| `tagpu_mark.c` `LVS`/`LFS`; `tagpu_vk_mark.c` `s_pipeLine`, `s_pipeLineZ` | marker lines as instanced records (`MVST` stride, instance rate); the selection rects are the depth-tested pipeline's; `uGrid` at 32 of the 48-byte fragment block, written at record time |
+| `tagpu_order.c` `draw_build` | `0x438C00`'s eight lines in integers, in its order (exe-reverse-engineering.md) |
+| `tagpu_fx.c` `LVS`/`LFS`; `tagpu_vk_fx.c` | the `LINES` bucket holds one record a line at the bucket stride, drawn `vkCmdDraw(6, n, 0, first)`; `uGrid` at 64 of the 80-byte fragment block |
+| `tagpu_vk_unit.c` `wire_records`; `tagpu_posedraw.c` `WVS` | the wire posed on the CPU (the body's 16.16 rounding and projection, key + 0.15) into three-vec4 records after the pose words and before the effects runs; `WVS` mixes the per-end key, height and world point along `t`; `uGrid` at 256 of `tagpu_native::FS`'s 272-byte block |
+| `tagpu_native.c` FS | `vLineOn`/`vLine`: the line test for the wire; 0 from `VS` and `FXVS` |
+
+**The invariant, and why each part holds by construction.** The pixel decision takes only
+integers: two endpoints decided once on the CPU, the fragment's own integer target pixel, and the
+extent the pass records into. The band only has to COVER: a lit pixel lies within 1.21 game px of
+the segment across it and 0.71 past an end, against a band of 2
+(`tools/line-band-check.py`: the closed form equals a step-by-step walk on every shape out to 24
+px and on long lines to ±16383; the least margin found is 0.88). Float error in placing the band
+corners cannot reach that margin, and the unsigned products cannot overflow inside the bound.
+
+**The device.** No line primitive is drawn, so the device is created without
+`VK_EXT_line_rasterization` and without `wideLines`; `lineok`, `wideok`, `maxLineWidth`,
+`vkCmdSetLineWidth` and `tagpu_vk_world_scale` are gone, and nothing logs a line refusal. Every
+pipeline keeps `lineWidth = 1.0`, which the specification requires without `wideLines`.
+
+**The A/B's line list.** A frame claimed by `tagpu_mark.ab`, `tagpu_fx.ab` or `tagpu_posedraw.ab`
+also writes `tagpu_<pass>_lines.txt` — `# <pass> <gw> <gh>`, then `ax ay bx by col` a line in draw
+order. `tools/line-oracle.py CAPTURE LINES` compares a capture holding only lines with its own
+walk of that list.
+
+**Gaps.** The engine's clip `0x4CC650` moves an end that lies off its surface onto the edge; the
+lane walks the unclipped line, so a line crossing the 1x viewport edge can differ from the
+engine's by a pixel along the part both draw — not measured. The line-only capture the gate used
+came from a diagnostic build; the shipped build has no switch for it.

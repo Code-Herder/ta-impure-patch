@@ -2825,7 +2825,23 @@ corner. `ctx+0x08` is the pitch and `ctx+0x0C` the pixel base, the same two fiel
 
 Unrolled: pixel `i` of the walk sits at major offset `i` and minor offset
 `(2·minor·i + major) / (2·major)` in integer division — round-half-up of `i·minor/major`, measured
-from the smaller-x end. `tagpu_mark.c`'s `SFS` evaluates exactly this per game pixel.
+from the smaller-x end. `tagpu_glsl.h`'s `taOnLine` evaluates exactly this per game pixel for
+every line the Vulkan lane draws (G21b: order markers, build sites, selection rects, lasers and
+lightning, the nanoframe wire), and `tools/line-band-check.py` checks that closed form against a
+step-by-step transcription of the two loops above, pixel for pixel, on every line shape out to 24
+pixels and on long random lines out to ±16383.
+
+**The clip `0x4CC650` MOVES ENDPOINTS; it does not only reject** [DISASSEMBLED 2026-09-25 for
+G21b]. Its fast path (`0x4CC66A`..) accepts the line untouched when all four coordinates are in
+`[0,w) x [0,h)` — each compared both signed (`jge`) and unsigned (`jae`), so a negative one fails
+too. Otherwise it rejects a line wholly off one side (`0x4CC693` → `xor eax,eax`) and else moves
+each end that lies outside onto the edge: the other coordinate advances by
+`(distance past the edge) · d(other) / d(this)` in `imul`/`idiv` — **a signed division that
+truncates toward zero** — and the moved coordinate becomes `0` or `w − 1` / `h − 1`
+(`0x4CC6D0`..`0x4CC798`), then it loops back to the test. So **a line that crosses the surface
+edge is walked from the moved end, and its pixels on the surface can sit one off the unclipped
+walk's.** The lane does not apply this clip (`tagpu_line.h`, *THE ENGINE'S CLIP IS NOT
+APPLIED*): at zoom < 1 its lines carry on past the 1x surface, where the engine draws nothing.
 
 **THE NEGATIVE RESULT, and it is the load-bearing one.** `0x4CC7AB` opens by calling
 **`0x4CC650`**, which reads `edi = [ctx+0x00]` and `esi = [ctx+0x04]` — the surface's WIDTH and
@@ -3030,6 +3046,20 @@ Eight `DrawLine 0x4BE950` calls, four in colour A one pixel outside the animated
 and spanning one pixel past the corners, four in colour B exactly on them
 (`0x438DAA`, `0x438DCE`, `0x438DF5`, `0x438E18`, `0x438E34`, `0x438E47`, `0x438E5E`,
 `0x438E6D`). Finally `pos ← node+0x22..0x2A` (`0x438E74..0x438E8B`).
+
+In draw order [DISASSEMBLED 2026-09-25 for G21b], with every coordinate an integer:
+
+```
+colour A   (xg0-1, z0-1) -> (xg0-1, z1+1)      (xg1+1, z0-1) -> (xg1+1, z1+1)
+           (x0-1, zg0-1) -> (x1+1, zg0-1)      (x0-1, zg1+1) -> (x1+1, zg1+1)
+colour B   (xg0, z0) -> (xg0, z1)              (xg1, z0) -> (xg1, z1)
+           (x0, zg0) -> (x1, zg0)              (x0, zg1) -> (x1, zg1)
+```
+
+`alt >> 1` is a `sar`, so a negative altitude halves toward minus infinity, and the `/10` is the
+`0x66666667` multiply with the sign correction, a division that truncates toward zero.
+`tagpu_order.c`'s `draw_build` reproduces all of it in integers and hands the eight lines on as
+integer endpoints (`tagpu_line.h`: the engine pixel's centre, then the zoom).
 
 **`DrawLine 0x4BE950` is `stdcall(ctx, x0, y0, x1, y1, colour)`** — fixed by those eight
 call sites, where the first and third pushed values are the two x's.
