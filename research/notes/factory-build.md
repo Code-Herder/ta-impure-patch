@@ -93,7 +93,7 @@ a factory pad, has the bit clear and is drawn **by its carrier**.
 | VA | What it is |
 | --- | --- |
 | `0x455403` | inside a large command dispatcher (every arm `jmp`s to `0x455F50`), taking the packet from `[esp+0x10]`. **Attach/detach is therefore a simulation command**, which is why it is packed by unit *id* |
-| `0x48AB62` | a small wrapper `0x48AB40..0x48AB6A`, `ret 0x10`: builds the packet on the stack (`[esp+0xD] = al & 3`, `[esp+0xE] = cl`), calls `0x44FDB0` then `0x451DF0`, then the attacher |
+| `0x48AB62` | a small wrapper `0x48AAC0..0x48AB6A`, `ret 0x10` (30 callers): builds the packet on the stack (`[esp+0xD] = al & 3`, `[esp+0xE] = cl`), calls `0x44FDB0` then `0x451DF0`, then the attacher |
 | `0x48B58B` | **attach** with a real piece: the point byte comes from `call 0x415DC0` / `0x415E60` results — the unit-script accessors *[INFERRED from the `thiscall` shape and the small integer arguments; the enclosing function was not delimited]* |
 | `0x48B5C5` | **detach**: guarded on `[edi+0x86] != 0`, it fills child id from `[edi+0xA8]`, **parent id `0`**, **point `0xFF`**, and calls the same function. Detaching is "attach to nobody" |
 

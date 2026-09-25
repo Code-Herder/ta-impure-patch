@@ -55,11 +55,63 @@ open is in the plan's [open questions](tadr-port/raised-limits.md#open-questions
 
 ### B. Simulation bug fixes
 
-~15 fixes: resurrection wireframes, "units exploding in factories" (deceased-ID recycle held 5 s),
-ghost commander, area-damage overflow, grid-claim tie-break, ctrl-Z/A/B/C truncation of IDs ≥ 512,
-black-screen-on-join, zero-shade faces, and the rotated-unit / staircase-yardmap / long-path /
-print-screen / spawned-command crash fixes — plus the four escalation-only rules Wotan requested
-(repair-rate fix ×3/×3, share-abuse guard, aircraft-wreck fall, 32-tile off-map AA).
+TADR's list reads as ~15 fixes. Checked against the retail exe (2026-09-25,
+[the evidence pass](tadr-port/sim-fixes-evidence.md)), each item is one of four kinds, and **only
+the first is ported as B** ([the plan](tadr-port/sim-fixes.md)):
+
+- **Stock defect**: a defect in the 3.1 engine's own code, in any subsystem.
+- **TADR's own feature**: a fix to code only TADR has (rotation, its logger, its map spawns).
+- **Gameplay change**: a rule change presented as a fix.
+- **Diagnostics**: crash reporting, observe-only guards, and code that is dead or a no-op on 3.1.
+
+The items below are the ones this section's summary named; the evidence page covers the rest of
+`TABugFix.cpp` and the recorder's plugins.
+
+#### Stock defects
+
+- **"Units exploding in factories"** (`FixFactoryExplosions`). A damage message names its victim by
+  slot, and the owner reuses a freed slot at once, so a late hit kills the new nanoframe. TADR holds
+  freed slots 5 s, which is timing. **Ported, redesigned**: an incarnation on the wire and a
+  two-tick hold (B4).
+- **The ghost commander** (`GhostComFix`). A remote unit whose first update arrives before it exists
+  is created at (0,0) and corrected only after N ticks. **Ported, redesigned**: the cause measured,
+  then an ordering (B5). TADR's Assist would morph the commander and is not ported.
+- **Area-damage overflow** (`AreaDamageOverflow`). Two defects: past 20 units (and past 64
+  features, which TADR misses) a victim is hit once per footprint cell; and aircraft stacked on one
+  cell take no splash. **Ported, redesigned** (B1, B2).
+- **Resurrection wireframes.** The failure branch is stock, but no stock trigger was found. **Measured,
+  else parked.** TADR's fix writes into grid cells it has not checked.
+- **Ctrl-Z/A/B/C truncating IDs ≥ 512.** **Already done** by A′2's 2 KB masks.
+- **The crash fixes that are stock**: flak's divide by zero (TADR only logs it) and the stockpile HUD
+  divide. **Ported** (B1, B6).
+- **Wind**, per peer in stock. **Ported, redesigned**: one wind a game (B6).
+- **Two stock defects TADR carries but its summary does not name**: a yardmap read past its string
+  (TADR's NULL would crash six readers; **ported, redesigned**, B6), and the download-menu blocks
+  left uninitialised (**already done** by A′2).
+
+#### TADR's own features
+
+- **The rotated-unit crash fixes** (staircase yardmap, the builder inside a rotated footprint, the
+  return stack) and **the resurrection fix's rotation half**. We have no unit rotation.
+- **The long-path and print-screen crashes**: TADR's own logger and surface wrapper.
+- **The spawned-command crash**: TADR's own map-spawn feature passed the wrong context.
+
+#### Gameplay changes
+
+- **The grid-claim tie-break.** Written for lockstep; under state replication the firer's peer
+  decides every hit, and the change alters single-player behaviour. Not ported.
+- **The four escalation rules**: the repair rate (stock heals a flat 1 HP a call per repairer, the
+  game's rule), the share guard (group E), aircraft wrecks falling (no stock flyer leaves a wreck;
+  the cargo path is measured), and off-map anti-air. Under the off-map margin sit two real edge
+  defects, an off-by-one and a line-of-sight shear, which are **ported** (B1); the margin is not.
+
+#### Diagnostics, and items that did not hold
+
+- **Black screen on join**: a "potential" fix with no mechanism found. Parked.
+- **Zero-shade faces**: a real draw defect, moot on Vulkan; the GDI lane stays stock.
+- **The cargo-detach "Option A/B"**: not a defect, since the owner replicates the detach; porting it
+  would add one.
+- The order-dispatch guard, the crash rings, the player-lost guard: observe-only, dead, or a no-op.
 
 ### C. New data keys
 
@@ -176,7 +228,8 @@ the Delphi side too, not just `tdraw.dll`.
 standing rules the owner set on 2026-09-23 — TADR's multiplayer behaviour, fail-closed installs, no
 runtime opt-out for anything that changes the simulation. Group A is done, in
 [the section-A plan](tadr-port/raised-limits.md) and [A′. Content IDs](tadr-port/content-ids.md);
-groups B to E are not planned yet ([the port's groups](tadr-port/overview.md#the-groups)).
+group B is planned in [B. Simulation bug fixes](tadr-port/sim-fixes.md); groups C to E are not
+planned yet ([the port's groups](tadr-port/overview.md#the-groups)).
 
 ## Sources
 

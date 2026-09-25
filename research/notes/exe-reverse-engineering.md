@@ -3159,7 +3159,8 @@ lookup at `0x439952`, frame `(gameTime / (2·period)) % nframes` of
 
 `0x439811..0x439948` is a `ShowRanges`-only limb, and it draws CIRCLES as well as labels: for
 descriptor cursor index 1 or 2 it emits, through `0x438EA0` and **at the resolved target
-position**, each live weapon's AoE (`w+0xD6`) and `attackrunlength` (`w+0xE0`) plus
+position**, each live weapon's AoE (`w+0xD6`) and `coverage` (`w+0xE0`, stored at `0x42E540` from the
+`coverage` key; the label is "weapon %d - coverage") plus
 `def[0x216]`, in the same `gameTime & 1` flash colour. Its weapon-slot flags are the regular
 `0x1F + i·0x1C` (`0x439879`), so this drawer does **not** carry `0x4390A0`'s third-slot quirk
 — the two disagree about the same question in the same build.
@@ -3988,7 +3989,8 @@ by itself nor by its carrier. A unit attached to a *piece* — the one on a fact
 bit clear and is drawn by its carrier, merged through `0x4B90A0`.
 
 **Call sites (4).** `0x455403` in a large command dispatcher (every arm `jmp`s `0x455F50`);
-`0x48AB62` from the wrapper `0x48AB40..0x48AB6A` (`ret 0x10`); `0x48B58B` attaching with a real
+`0x48AB62` from the wrapper `0x48AAC0..0x48AB6A` (`ret 0x10`, 30 callers; it tests the unit alive
+and sends the `0x0A` through `0x44FDB0`/`0x451DF0` before applying it); `0x48B58B` attaching with a real
 piece; and **`0x48B5C5` the detach** — child id from `+0xA8`, parent id `0`, point `0xFF`, guarded
 on `[edi+0x86] != 0`. Detaching is "attach to nobody", and it happens in one step, so there is no
 state in which a unit is still in the chain but positioned away from its carrier.
@@ -8056,8 +8058,11 @@ Helpers the ids reach, all read this session:
   then `s = 16807·s − q·0x7FFFFFFF` (which is `16807·(s mod 127773) − 2836·q`), `s += 0x7FFFFFFF`
   when the result is `<= 0`, and the draw is `s % n`. `n < 2` returns 0 **without touching the
   state** (`0x4B6C38`). `tools/tacob`'s `SimRandom` is that recurrence; what the game seeds it
-  with at match start is still unread (`0x4B6CA0`, called at `0x49719D` just before the CRT seed
-  below, is the candidate [INFERRED]).
+  with at match start is **per peer** [DISASSEMBLED 2026-09-25]: `0x497180` calls
+  `QueryPerformanceCounter` (IAT `0x4FC0BC`) and passes `low + high` to `0x4B6CA0` (`0x49719D`),
+  which stores `(seed ^ 0x66E29572) | 1` at `0x51FC88`; `srand(time(0))` follows (`0x4971A5`). No
+  peer's sim RNG agrees with another's, which fits state-and-event replication (the per-peer wind
+  of [the B evidence](tadr-port/sim-fixes-evidence.md), Part 4 §6a).
 - **The C runtime's `rand` is a second, separate stream** [DISASSEMBLED 2026-09-23]: `rand`
   `0x4E4870` is MSVC's LCG (`·0x343FD + 0x269EC3`, bits 16..30), its state at `+0x14` of the
   per-thread data `0x4EB0F0` returns, and `srand` is `0x4E4860`. The match seeds it from the clock,

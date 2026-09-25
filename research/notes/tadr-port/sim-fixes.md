@@ -1,0 +1,266 @@
+# B. Simulation bug fixes — the plan
+
+## Summary
+
+Section B brings TADR's fixes for **defects in the stock 3.1 engine** into our stack, as our own
+code, over six landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
+grill that followed [the evidence pass](sim-fixes-evidence.md). **Nothing is landed yet.** The rules
+shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
+
+TADR's "~15 fixes" turned out to be four kinds of change mixed together, and only the first is B:
+
+1. **Defects in stock engine code**, whatever the subsystem: simulation, loaders, the network
+   receivers, the UI. Each fix is the identity on every input stock handles correctly.
+2. **Fixes to TADR's own features**: rotation (the staircase yardmap, the footprint, the return
+   stack), its logger (the long path, `int 29`), its surface wrapper (print-screen), its map spawns
+   (initial commands), its hotkeys (ctrl-F/B), its ID recycler ("unit limit between missions").
+   None of these code paths exists in our stack.
+3. **Gameplay changes presented as fixes**: repair rate ×3, aircraft wrecks falling, off-map
+   anti-air (1 or 32 tiles), the share guard, the anti-nuke circle, allied jamming, the grid-claim
+   tie-break. Not in B. Each is a rules decision for later, with its evidence kept.
+4. **Diagnostics**: breadcrumb rings, the vectored crash report, the observe-only order-dispatch
+   guard. Not in B; we have our own log and `ErrorLog` path.
+
+Four findings shaped the plan:
+
+- **Several real defects are live in ordinary stock play, and TADR covers them only in part.** An
+  explosion that reaches more than 20 units, or more than 64 features, hits every victim past the
+  cap once per footprint cell; TADR fixes the units and misses the features. Flak fired nearly
+  straight up divides by zero, on the firing peer and on every peer that receives the shot; TADR
+  only logs it.
+- **Several of TADR's fixes are timing, or assume lockstep.** The factory-explosion fix holds a freed
+  slot for 150 ticks (2.5 s at speed 20, against the TAF tunnel's 5 s of buffering), and its
+  allocator changes single-player slot order. Its stacked-air index is built a step before it is
+  used, and the network pump or the unit tick can free a unit in between. Its grid tie-break fixes a
+  disagreement that nothing peers must agree on reads.
+- **Our 1500-unit raise tripled two stock identity windows.** A remote unit's full state recurs every
+  N ticks (the `0x2C` round robin, `GameTime % N`), so a ghost commander or a ghost left by a lost
+  death message lasts 50 s at 1500, against 16.7 s at stock's 500.
+- **Some of TADR's items would add bugs.** The cargo-detach "Option A/B" would make every non-owner
+  broadcast a duplicate detach. The ghost-commander "Assist" reports every land unit as slot 0 and
+  morphs the commander on every peer. The yardmap fix turns stale bytes into a NULL that six stock
+  readers dereference.
+
+## Decisions
+
+### How B fixes are held
+
+**Always on, in both builds.** B fixes are corrections, not raised limits, so they sit beside the
+thirteen in `patch_engine_defects` (`tagpu_patches.c`) and are in `ddraw.dll` and
+`ddraw-stocklimits.dll` alike. There is no runtime opt-out (rule 4).
+
+**A sim fix fails closed; a local fix skips and logs.** A peer that silently plays stock rules is
+the desync the same-build contract exists to prevent (rule 3), so a fix whose absence would let a
+peer compute different shared state, on an input where stock does not fault, checks its sites
+before any is written and exits through [the failure report](raised-limits.md#the-failure-report)
+on a mismatch. A fix whose absence only changes a crash, a draw, a message or a malformed input's
+fate is local: skipped with its reason in the `enginefix:` line, as today. **The existing enginefixes
+that change the simulation move to fail-closed with B1**; B1 classifies each of the thirteen by
+the same test. Provisionally: the feature swap on a full pool (`0x423651`), the reclaim's anchor
+mark (`0x423892`), the saved features on the border (`0x43265A`), the restored record's owner
+(`0x4250C0`, `0x425185`), whole build lists and unique sync keys are sim; the sort buffer, the
+terrain window and the composite scratch are draw; the NULL-plot guard and the out-of-memory text
+are local; the weapon IDs already fail closed in the raised build, as rows of the limits table.
+
+**The comparison is the previous build.** A before/after measurement runs the parent commit's DLL,
+built in a scratch checkout, against the new one, each through `tacli --keep-dll`. No `make` flag is
+added: `LIMITS=stock` keeps B's fixes too.
+
+### The evidence bar
+
+**A fix lands when it is reproduced, or proven.** Either the defect is reproduced on the previous
+build and gone on the new one, measured, or, where reproducing it is impractical (a rare
+multiplayer race, a malformed message), the disassembly proves the defect and the fix is the
+identity everywhere else; the note says which. An item that is neither reproduced nor proven is
+**parked**, not landed. TADR's "potential" fixes (the join password) are parked on this rule.
+
+**A two-peer test only where peers can disagree.** Two peers (`a2net0`/`a2net1` on `:71`) when the
+fix sits in a network receiver or its decision reads state that differs between peers
+(owner-local fields, local pools, indices the owner assigns). A fix whose decision reads only
+replicated state is tested on one peer, and the landing says why that suffices. Measurement rounds
+are scoped to what each commit can change.
+
+**Draw-side defects that our renderer no longer runs are moot**, recorded with the evidence and not
+ported. The GDI lane (`renderer=gdi`) stays the engine's own drawing: the black and over-bright
+faces of `0x45A2EC` are left there.
+
+### The items
+
+- **Area-damage victim caps: both fixed.** Units past 20 and features past 64 are hit once per
+  explosion. Below the caps nothing changes; above them, dense bases take less from commander
+  blasts and nukes than stock gives, toward the designed values.
+- **Stacked aircraft: fixed, air only, with our design.** Candidates built live at each explosion,
+  validated alive at use, served after stock's walk, so stock's victims, their order and their
+  damage are byte-identical. Stock aircraft losing their cells is measured before anything is built.
+- **Flak's divide: `weapontimer`.** A zero divisor takes the engine's own non-burnblow flight time;
+  a ballistic weapon with `weaponvelocity` 0 gets 1 at load.
+- **The off-map off-by-one and the line-of-sight shear: fixed.** Both are defects at the map's
+  edges. Aircraft *beyond* the edge stay untouchable, as stock designed.
+- **Stale hits: an incarnation on the wire, and a two-tick hold.** A per-slot incarnation, bumped by
+  the owner at create and carried with `0x09` and `0x0B` in a companion message; every receiver
+  drops a hit whose incarnation is not its copy's. Separately, a freed slot is not reused for two
+  ticks, in every game, so every per-tick reader of slot identity (a weapon's target
+  `0x48A295`, the tracked unit `0x4995E4`, our interpolation's pairing) sees it empty once. The
+  allocator otherwise stays stock's first-free. TADR's bump pointer and LRU are not ported.
+- **Ghost commander: measure the cause, then fix it with an ordering.** If a start-of-game `0x09` is
+  dropped because the sender's block does not exist yet, the receiver keeps it and applies it once
+  the block is set: the owner's own position arrives and nothing is guessed. Otherwise the create
+  takes the entry's own position, bounded to the map, for disassembled move classes only. The
+  Assist is not ported in any form.
+- **The wire's unit indices: bounded.** `0x09`, `0x0B`, `0x0C` and the `0x2C` receiver; on a bad
+  `0x2C` field the parser stops at the engine's own end of list, since past it the bitstream cannot
+  be framed.
+- **A `0x0D` whose shooter has diverged: dropped and counted.** Firing from the local slot would
+  invent a projectile the owner never fired.
+- **Wind: one shared wind, re-seeded every game.** Our own generator with its own state, reset at
+  each level load from the host's DirectPlay ID and a hash of the map's name; single player takes
+  the same path, seeded from the counter stock seeds its RNG with.
+- **Yardmaps: parsed inside the terminator.** Past it, the last valid char repeats; a string with
+  no valid char fills `o`. Identical to stock for all 126 retail structures.
+- **Resurrection: a time-boxed measurement, else parked.** If the failure branch fires, the unit is
+  finalised as the success path does, touching no grid cell.
+- **TA's repair rate is the game's rule, not a B defect.** Stock clamps each repairer's HP and
+  energy per call to *at most* 1 (`0x41BD87..0x41BDA3`, `min` where the formula reads as `max`).
+  It is recorded, and a live check of the per-call rate rides along with a landing.
+- **To group E:** `+lostype` at normal command level (`0x501DF4`), the in-game `0x20` overwrite of a
+  player record (`0x454934`), and what a departing host does to the others.
+- TADR's `IsBadReadPtr` finding under Wine (a guard-page violation escapes and kills the process)
+  is recorded in the notes, not in CLAUDE.md.
+
+## The landings
+
+Each landing meets the evidence bar above, lands its documentation before its review, and is
+reviewed at `high` (every one writes engine state or adds byte patches). Sites below are DIS in
+[the evidence](sim-fixes-evidence.md); the landing re-reads each before writing it.
+
+**B1 — damage.**
+
+- **The victim caps.** Wrap the two calls into `0x49A120`, `0x49A0A9` and `0x49A109`. Each call
+  gets its own seen-set: a unit bitset bounded by the array's count, and a feature set keyed by
+  anchor-cell ordinal, bounded by `W·H`, on a depth-indexed stack saved and restored around the
+  call, so nested calls cannot share or clobber one by construction. The list blocks
+  `0x49A262..0x49A2A9` and `0x49A5CE..0x49A614` answer "seen, skip" or "record, continue"; stock
+  still does the damage math. **Invariant:** one explosion damages a unit at most once and reports
+  a feature at most once, and every index is bounded before use. The function's byte-check table is
+  shared with A′3's splices at `0x49A78C`/`0x49A7CD`.
+- **Flak.** `0x49CF18..0x49CF20` (`cdq; idiv ebp; mov edx,[0x511DE8]`) becomes a stub: a zero
+  divisor takes `w+0xE6` and continues at `0x49CF29`. The weapon loader gives a ballistic weapon
+  with `w+0x68 == 0` the value 1, logged (the `0x49CE6A` divide). Shared with extra-weapons'
+  splices at `0x49CF65`/`0x49CF8D`. **Invariant:** no divide in `0x49CDE0` sees a zero divisor.
+- **The off-by-one.** The `jge` at `0x47CC8B` and `0x47CCA3` become `jg`. Before landing, settle
+  that the sort-bucket index at `0x47CCA9` stays inside its grid for a unit on the last cell, and
+  that the re-claim `0x47C790` has no bound of its own.
+- **The shear.** At `0x465B6A..0x465B93` and `0x465C04..0x465C2D`: when the sheared row is out of
+  bounds and the unit's true row is in bounds, use the true row, else clamp. Exact whenever stock's
+  row is in bounds; our order markers call `0x465AC0` and follow.
+- **The install.** The fail-closed path for sim fixes, and the thirteen existing enginefixes
+  classified and moved.
+- **Tests.** A ring of 30+ structures and 70+ multi-cell wrecks round a commander blast, HP and
+  wreck records compared before and after; the feature half on two peers, since every non-host peer
+  reports feature hits. An AI CORFLAK under a hovering ARMATLAS, the flak's pitch peeked: the
+  previous build faults at `0x49CF19`, the new one counts fallbacks. An ARMATLAS on the last column
+  and one near the north edge at cruise altitude.
+
+**B2 — stacked aircraft** (needs B1's seen-sets).
+
+- First measure it: ten ARMATLAS or ARMBRAWL ordered to one point, slot B of every footprint cell
+  peeked.
+- Candidates are airborne (`mask & 3 == 2`), not cargo (`+0x86 == 0`), not in the off-map bucket,
+  alive, with `+0x9E` non-NULL, taken from a pool rebuilt at the entry of `0x49B720` and
+  **re-validated in the wrapper at use**; those whose footprint meets the blast rect and that hold
+  no slot inside it are served. The selector bound `0x49A415..0x49A426` lets the **last** cell of
+  the walk loop `2 + n` times, so new victims go through the engine's own per-victim code after
+  every stock victim, with no per-cell capacity. **Invariant:** every unit handed to the engine was
+  validated alive in this call, and every index was bounded first.
+- Tests: the stack under CORFLAK/CORRL, HP per unit; `scenarios/air-war.json` for cost; two peers
+  paused with equal HP.
+
+**B3 — wire robustness.**
+
+- Bounds in the `fix_weapon_ids` idiom: `0x0C` at `0x4866E0..0x486705` (index 0 or past the array →
+  `0x486E59`; the killer bounded or NULL), `0x0B` at `0x489CED` (victim and attacker; drop →
+  `0x489F93`), `0x09` at `0x4861F7` (the index; the rule that it lie in the sender's block only after
+  measuring that AI players' creates arrive from the AI's own seat), and the `0x2C` receiver at
+  `0x48B985`/`0x48B9AD` (delta, type against the count, a move class present; the round-robin
+  remainder unsigned; a failure stops at `0x48BA28`). A player's first slot is checked against
+  `begin + (1 + k·N)·0x118`.
+- In `wpn_rx_fired` (`0x49D280`): drop a `0x0D` whose shooter slot's weapon is not `&Weapons[id]`,
+  through the extra-weapons accessor past slot 2.
+- A test-only lever, `tagpu_wirefuzz.on`, feeds crafted records to the handlers on the game thread,
+  and three local counters on the heartbeat (morph, recreate, ghost) become the oracles for B4 and
+  B5. Every drop is counted in the `enginefix:` line.
+- Class: local (malformed input only). Tests: the lever on one instance; the two-peer weapon-ID
+  fixture and a ten-peer tier 2 run with every counter at 0.
+
+**B4 — stale hits.**
+
+- The incarnation: a DLL static `u32` per slot (`TAGPU_PK_DESIGN_SLOTS`), bumped at create; the
+  companion message's format and its binding to its `0x09`/`0x0B` are this landing's first design
+  step, after A′3's `0x0E` companion. Bandwidth measured: `0x0B` is the most frequent message.
+- The hold: a detour at `0x486036` (first-free, skipping a slot freed less than two ticks ago; arg 8
+  keeps stock's rule, which the saved-game restore `0x487080` uses) and one at `0x486DC1` stamping
+  the free; the state reset at `0x4854A0`, the array's own lifetime, never keyed to GameTime.
+- Settle first: that `0x485F50` is only called for local players, and whether a loaded game starts
+  at GameTime > 0.
+- Tests: a test-only delay on outgoing `0x0B` (`tagpu_dmgdelay.on=K`) on two peers, a Kbot lab
+  building under fire; the counter "a `0x0B` applied to a unit younger than K ticks" above 0 before,
+  0 after; a third peer for the bystander's copy; single player's creation indices equal to the
+  previous build's except where a slot freed within two ticks would have been taken.
+
+**B5 — ghost commander.**
+
+- Measure: on the joiner, log each `0x4861D0` call with its return address (`0x4553E9` for `0x09`,
+  `0x48BA05` for a dirty entry, `0x48B49C` for the round robin) and the host commander's first
+  appearance; decode the dispatcher's state gate `0x512BC0`.
+- The fix follows the cause (the item above). Tests: two peers, rosters every 2 s for 60 s; the
+  window at 1500 and at 500; after the fix, the joiner matches the host from the first sample.
+
+**B6 — loaders and the rest.**
+
+- **Wind** (sim): `0x490C40`'s schedule and value draws from our generator, reset at `0x491903`
+  before the first call; `max ≤ min` gives `min` as stock. Two peers: equal wind at a paused tick,
+  two games in one process, and a third after restarting one peer.
+- **Yardmaps** (sim, load): a detour at `0x42CF5E` into a parse that never reads past the NUL that
+  `GetString` wrote inside the 0x400 buffer, stock's table and rules byte for byte. A test `.ufo`
+  (a CORSOLAR copy without `YardMap`, and one with `"oo?"`); the 126 retail yardmaps identical.
+- **The save loader's fallback** (local): `0x43A58D` `jbe` → `jb` and `0x43A58F` → the "Ready"
+  branch `0x43A552`.
+- **The stockpile HUD divide** (local): at `0x439D41`, a slot index above 2, a NULL weapon or a zero
+  `+0xE4` goes to `0x439D6B`.
+- **A range circle of radius 1** (local): at `0x438EDE`, N = 0 skips the circle and its label.
+
+**Measured alongside a landing** (time-boxed, each with its session):
+
+- resurrection's failure branch: counters on `0x405155`/`0x405164` over a few hundred CORNECRO
+  resurrections of 1×1 and multi-cell wrecks (B1's session);
+- a tracked unit's death leaving an order armed (`0x2CC3`) and our build ghost drawing (B6);
+- a departing host in a three-peer game (B5's session; the result goes to group E);
+- a cargo unit killed in a transport over land leaving its wreck in the air (B2's session; a
+  floating wreck is raised as a visual residual);
+- the repair rate per call, ARMCOM against ARMCK on an ARMLLT (B1's session).
+
+## Open questions
+
+- Whether each peer pair's subpackets arrive in the order sent (`0x451DF0`'s DirectPlay flags, the
+  TAF tunnel). B4's design does not depend on it; a later acknowledgement scheme would.
+- The `0x2C` dirty list stops at 0x200 bytes a tick, filled in slot order. If a skipped unit's
+  dirty state is not kept, high slots of a busy block wait for the round robin, up to N ticks: this
+  bears on [section A's open question](raised-limits.md#open-questions) about remote lag at 1500.
+- Two stock-fix claims in the Delphi recorder, both inactive for stock content and not yet verified:
+  a veteran's damage reduction scaling the kill damage (`0x489C2F`), and a ground transport's
+  overload (`0x406789`) (evidence Part 4 §7).
+- Whether a flak gun's trajectory solver returns a pitch inside the zero band for a target
+  overhead (B1 measures it).
+
+## Corrections this plan made
+
+- **The engine map named `w+0xE0` `attackrunlength`.** The loader stores the `coverage` key there
+  (`0x42E540`), and the drawer's label says so. Fixed in the engine map and `ui-markers.md`.
+- **The attach wrapper starts at `0x48AAC0`**, not `0x48AB40`: 30 callers, and it sends the `0x0A`
+  before applying it. Fixed in the engine map and `factory-build.md`.
+- **The sim RNG's seed is per peer**, from `QueryPerformanceCounter` at `0x497180`: the engine map's
+  `[INFERRED]` is now disassembled.
+- TADR's own analyses, corrected in the evidence: flak's zero case is two ±0.35° bands, and its
+  `weaponvelocity=0` case faults at `0x49CE6A`, not `0x49CF19`; bit 23 of `+0x111` is `burnblow`;
+  the anti-nuke search tests the projectile's *target*, not its position; the order table holds 68
+  records for the process, and TADR's dispatch crashes were its own re-entrancy.
