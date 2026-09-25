@@ -14,6 +14,7 @@
 #include "tagpu_opt.h"
 #include "tagpu_log.h"
 #include "tagpu_limits.h"
+#include "tagpu_detour.h"
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -153,8 +154,18 @@ static void wlog(const char* fmt, ...)
    def's index in the engine's array: the game-start loader (0x42D2E0) compacts
    the array, numbers it, and only then runs the FBI loader we detour on each
    final slot, so index == UnitTypeID for the life of the game. The record keeps
-   the def pointer it was written for and answers NULL on a mismatch, which is
-   what makes a stale row from an earlier game read as "stock". */
+   the def pointer it was written for and answers NULL on a mismatch.
+
+   THE RECORDS HOLD ONLY THIS LOAD'S WRITES, because the pointer check alone
+   cannot tell two games apart: the def array comes back at the same address
+   (freed 0x42DCCB, reallocated from the same count 0x42AA8A), and a slot the
+   FBI loader skips (no file, 0x42D71A) or leaves before 0x42CEF2 (the open at
+   0x42BF66, no [UNITINFO] at 0x42BF7C) would keep an earlier game's record
+   under a matching pointer. `cb_unit_load` empties every record at the entry
+   of 0x42D2E0, before its def copies (0x42D501, the sorts 0x432D40 and
+   0x432FB0) and its FBI loop, so a slot this load did not write reads as
+   stock. A Reload whose FBI fails to open keeps the record, as the engine
+   keeps the def's own weapon1..3. */
 static WDef* def_rec(const char* def)
 {
     char* ta = TA();
@@ -1040,6 +1051,25 @@ static int __thiscall my_Acquire(char* self, int param)
     return 0;
 }
 
+/* -- the unit-data load's start (0x42D2E0's entry, LOADER thread): every
+   record emptied (def_rec's comment). An observer through the shared
+   primitive rather than a splice of this module's table, so another module
+   observing the same entry chains onto it. ------------------------------------ */
+
+#define VA_UNIT_LOAD 0x0042D2E0u
+static const u8 X_UNITLOAD[] = { 0x81,0xEC,0x10,0x06,0x00,0x00 };   /* sub esp,0x610 */
+
+static int __cdecl cb_unit_load(void* esp)
+{
+    u32 i, held = 0;
+    (void)esp;
+    if (!g_def) return 0;
+    for (i = 0; i < WPN_MAXDEFS; i++) held += g_def[i].def != 0;
+    memset(g_def, 0, sizeof(WDef) * WPN_MAXDEFS);
+    wlog("unit-data load: %u def record(s) of the last load emptied", held);
+    return 0;
+}
+
 /* -- def copy (0x42B370): keep the side record with the type it describes ---- */
 
 static void __thiscall my_DefCopy(void* dst, int src)
@@ -1542,6 +1572,13 @@ static int install(void)
     g_pool = (u8*)VirtualAlloc(NULL, 0x4000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     g_def  = (WDef*)VirtualAlloc(NULL, sizeof(WDef) * WPN_MAXDEFS, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!g_pool || !g_def) { wlog("disarmed: VirtualAlloc failed"); return 0; }
+
+    /* THE RECORDS' LIFETIME FIRST, and nothing else without it: a sim module
+       whose records could outlive their game fails closed. Landed before any
+       other write, so a refusal here leaves the image as it found it. */
+    if (!tagpu_detour_bytes_ok(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD) ||
+        !tagpu_detour_observe(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD, cb_unit_load, NULL))
+    { wlog("disarmed: the unit-data load's entry @0x%08X could not be observed", VA_UNIT_LOAD); return 0; }
 
     for (i = 0; i < N_HOOKS; i++) build_trampoline(&HOOKS[i]);
     for (i = 0; i < N_SPLICES; i++)
