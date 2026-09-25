@@ -267,4 +267,6 @@
    texel at the 0.25 zoom floor, so it can neither be lost nor change which
    texel any other fragment reads. */
 #define TAGPU_EDGE_NUDGE "0.03125"
+/* the same distance for a C caller that moves its quads itself (tagpu_feat.c) */
+#define TAGPU_EDGE_NUDGE_PX 0.03125f
 #endif

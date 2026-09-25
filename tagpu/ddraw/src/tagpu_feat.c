@@ -526,6 +526,27 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
     c = (float)e->ck / 255.0f;
     ua = flip ? e->u1 : e->u0;
     ub = flip ? e->u0 : e->u1;
+    /* ONE TIE RULE FOR EVERY SPRITE, BY ITS OWN TEXEL GRID. The corners lie on
+       whole game px, so a sample centre can fall exactly on a texel boundary --
+       every one does at the 0.25x floor, where every sample centre lands on a
+       whole world px -- and there the texel NEAREST reads, and whether the quad covers the
+       sample at all, would be the rounding's: it follows where the frame sits
+       in the atlas, and a turned quad rounds the other way from an upright one.
+       So every quad moves by TAGPU_EDGE_NUDGE after the zoom, as the terrain's
+       do (tagpu_glsl.h), and a sample on a boundary lies 1/32 px inside the
+       texel after it. An upright quad moves up and left. A TURNED one moves
+       right, because its texels run the other way: its sample at a' then reads
+       the source's texel under r(a') + e, the one the map's own sprite reads at
+       r(a'), so a mirrored sprite is its source's texels reflected. Where no
+       sample lies on a boundary nothing changes: at 1x a sample is 1/4 px
+       (ss=2) or 1/2 px (ss=1) inside its texel, more than the nudge. The world
+       corners below are taken from the moved quad, so vWorld stays the
+       sample's own point for the fog lookup and the edge's clips. */
+    {
+        const float nu = TAGPU_EDGE_NUDGE_PX / (v->zoom > 0.0f ? v->zoom : 1.0f);
+        const float dx = flip ? nu : -nu;
+        x0 += dx; x1 += dx; y0 -= nu; y1 -= nu;
+    }
     {   /* world position of each corner: the anchor plus the corner's offset
            from the projected anchor (screen px and world px are 1:1 here) */
         float wx0 = (float)wax + (x0 - (float)sx), wx1 = (float)wax + (x1 - (float)sx);
