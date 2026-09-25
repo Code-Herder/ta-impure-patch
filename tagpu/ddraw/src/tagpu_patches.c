@@ -3065,12 +3065,17 @@ static int fix_last_cell(void)
        PositionInPlayerMapped 0x408090(player, point), whose place is 0x408095..0x4080C0 and
        which reads the shared mapped grid main+0x14273, and the fourth to an inline copy of it,
        0x465DA9..0x465DCA.
-   0x408090 has two more callers, each handing it a world point whose row means the same:
-   0x407FBD in 0x407E90, the first method of the vtable 0x4FC9A0 (its destructor 0x407E70
-   restores the base's 0x4FC980) [INFERRED: an AI routine], which tests a probe point stepped
-   320 px from a position along a heading it draws; and 0x49BF2F in the projectile draw pass
-   0x49BE60, the local player's view of a projectile. Each sees a changed answer only for a
-   point whose sheared row is off the grid and whose own row is on it -- the defect this fixes.
+   0x408090 has two more callers, each handing it a world point whose row means the same, and
+   each with an inline copy of the True read beside the call:
+     - 0x407FBD in 0x407E90, the first method of the vtable 0x4FC9A0 (its destructor 0x407E70
+       restores the base's 0x4FC980) [INFERRED: an AI routine], which tests a probe point (esi)
+       stepped 320 px from a position along a heading it draws, for the player at ecx; its
+       copy is 0x407F74..0x407F9B (read 0x407F9C, not visible 0x407FB7). The probe's answer
+       decides what the routine keeps, so it joins this table;
+     - 0x49BF2F in the projectile draw pass 0x49BE60, the local player's view of a projectile;
+       its copy is 0x49BEE8..0x49BF0F. That one is a draw: fix_projectile_view, below.
+   Each sees a changed answer only for a point whose sheared row is off the grid and whose own
+   row is on it -- the defect this fixes.
    A unit whose top is more than twice its distance from the north edge -- an aircraft at
    cruise altitude a few tiles inside it, a unit on a hill beside it -- samples rows above the
    grid and is invisible to every other player, so nothing acquires it. Underwater, y < 0, the
@@ -3173,7 +3178,27 @@ static int fix_los_shear(void)
         0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[edx+0x84]             */
         0x73, 0x05,                         /* jae out                        */
     };
-    static const LOSREAD read[6] = {
+    /* the AI probe's copy: esi the point, ecx the player; ebx leaves holding the width, as
+       stock's does on every exit */
+    static const unsigned char stubP[] = {
+        0x0F, 0xBF, 0x5E, 0x06,             /* movsx ebx,word [esi+6]         */
+        0x0F, 0xBF, 0x46, 0x0A,             /* movsx eax,word [esi+0xa]       */
+        0x0F, 0xBF, 0x56, 0x02,             /* movsx edx,word [esi+2]         */
+        0xD1, 0xFB,                         /* sar ebx,1                      */
+        0x29, 0xD8,                         /* sub eax,ebx: the shear         */
+        0x8B, 0x99, 0x80, 0x00, 0x00, 0x00, /* mov ebx,[ecx+0x80]             */
+        0xC1, 0xFA, 0x05,                   /* sar edx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0x39, 0xDA,                         /* cmp edx,ebx                    */
+        0x73, 0x1C,                         /* jae out                        */
+        0x3B, 0x81, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[ecx+0x84]             */
+        0x72, 0x0F,                         /* jb in                          */
+        0x0F, 0xBF, 0x46, 0x0A,             /* movsx eax,word [esi+0xa]       */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0x3B, 0x81, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[ecx+0x84]             */
+        0x73, 0x05,                         /* jae out                        */
+    };
+    static const LOSREAD read[7] = {
         { 0x00465B6A, 0x00465B95, 0x00465BB1, 43, {
             0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
             0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
@@ -3209,9 +3234,15 @@ static int fix_los_shear(void)
             0xB2, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF8, 0x05, 0x3B, 0xCE, 0x73, 0x08,
             0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x72, 0x06 }, stubM, sizeof stubM,
           "mapped: PositionInPlayerMapped's row" },
+        { 0x00407F74, 0x00407F9C, 0x00407FB7, 40, {
+            0x0F, 0xBF, 0x5E, 0x06, 0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x56, 0x02,
+            0xD1, 0xFB, 0x2B, 0xC3, 0x8B, 0x99, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA,
+            0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xD3, 0x73, 0x23, 0x3B, 0x81, 0x84, 0x00,
+            0x00, 0x00, 0x73, 0x1B }, stubP, sizeof stubP,
+          "line of sight: the AI probe's row" },
     };
     int k;
-    for (k = 0; k < 6; k++) {
+    for (k = 0; k < 7; k++) {
         const LOSREAD* r = &read[k];
         unsigned char* a = fix_code(r->nstub + 10u);
         if (!a) { lim_no_stub(); return FIX_TABLE; }
@@ -3221,6 +3252,60 @@ static int fix_los_shear(void)
         lim_branch(r->va, r->n, r->stock, 0xE9, (unsigned int)(size_t)a, r->name);
     }
     return FIX_TABLE;
+}
+
+/* THE PROJECTILE PASS'S VIEW [DISASSEMBLED]. The projectile draw pass 0x49BE60 (called at
+   0x469B22 in DrawGameScreen) asks, for each projectile, whether the local player (main+0x2A43)
+   sees it, with the same altitude-sheared row as UnitInPlayerLOS: inline under True line of
+   sight (0x49BEE8..0x49BF0F, ebp the point, eax the player; read 0x49BF10, not visible
+   0x49BF29), through PositionInPlayerMapped 0x408090 otherwise (0x49BF2F, fixed with the
+   shear above). A projectile high up near the north edge is not drawn, and a model projectile
+   is not posed (0x49C127). The pass still runs: fxown, which would stop it, is not a play
+   default, because the engine's frame is the golden source (tagpu_opt.c).
+   THE FIX: the own row when the sheared one is off the grid and the own one is on it, as for
+   units. ecx leaves as the row read, or unread past 0x49C058 on the not-visible exit; ebx
+   leaves holding the width on every exit, as stock's does.
+   THE INVARIANT: the grid is read only at a column and a row inside it.
+   CLASS: local. A draw. */
+static int fix_projectile_view(void)
+{
+    static const unsigned char was[40] = {
+        0x0F, 0xBF, 0x5D, 0x06, 0x0F, 0xBF, 0x4D, 0x0A, 0x0F, 0xBF, 0x55, 0x02,
+        0xD1, 0xFB, 0x2B, 0xCB, 0x8B, 0x98, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA,
+        0x05, 0xC1, 0xF9, 0x05, 0x3B, 0xD3, 0x73, 0x21, 0x3B, 0x88, 0x84, 0x00,
+        0x00, 0x00, 0x73, 0x19,
+    };
+    static const unsigned char stub[] = {
+        0x0F, 0xBF, 0x5D, 0x06,             /* movsx ebx,word [ebp+6]         */
+        0x0F, 0xBF, 0x4D, 0x0A,             /* movsx ecx,word [ebp+0xa]       */
+        0x0F, 0xBF, 0x55, 0x02,             /* movsx edx,word [ebp+2]         */
+        0xD1, 0xFB,                         /* sar ebx,1                      */
+        0x29, 0xD9,                         /* sub ecx,ebx: the shear         */
+        0x8B, 0x98, 0x80, 0x00, 0x00, 0x00, /* mov ebx,[eax+0x80]             */
+        0xC1, 0xFA, 0x05,                   /* sar edx,5                      */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0x39, 0xDA,                         /* cmp edx,ebx                    */
+        0x73, 0x1C,                         /* jae out                        */
+        0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[eax+0x84]             */
+        0x72, 0x0F,                         /* jb in                          */
+        0x0F, 0xBF, 0x4D, 0x0A,             /* movsx ecx,word [ebp+0xa]       */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5: the point's own row */
+        0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[eax+0x84]             */
+        0x73, 0x05,                         /* jae out                        */
+    };                                      /* in: jmp; out: jmp              */
+    unsigned char now[sizeof was];
+    unsigned char* a;
+    unsigned int rel;
+    if (memcmp((const void*)0x0049BEE8, was, sizeof was) != 0) return FIX_BYTES;
+    if (!(a = fix_code(sizeof stub + 10))) return FIX_STUB;
+    memcpy(a, stub, sizeof stub);
+    a[sizeof stub] = 0xE9; tagpu_detour_rel(a + sizeof stub + 1, 0x0049BF10);
+    a[sizeof stub + 5] = 0xE9; tagpu_detour_rel(a + sizeof stub + 6, 0x0049BF29);
+    memset(now, 0x90, sizeof now);
+    now[0] = 0xE9;
+    rel = (unsigned int)(size_t)a - (0x0049BEE8u + 5u);
+    memcpy(now + 1, &rel, 4);
+    return tagpu_detour_write(0x0049BEE8, now, sizeof now) ? FIX_ARMED : FIX_PROTECT;
 }
 
 static void patch_engine_defects(void)
@@ -3242,6 +3327,7 @@ static void patch_engine_defects(void)
     int flak = fix_flak_divides();
     int edge = fix_last_cell();
     int los  = fix_los_shear();
+    int pview = fix_projectile_view();
     char b[2048];
 
     _snprintf(b, sizeof b,
@@ -3257,7 +3343,8 @@ static void patch_engine_defects(void)
               "one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE) %s; flak's "
               "divides (0x49CF18 0x42F314 0x42F32E) %s; the map's last row and column "
               "(0x47CC8B 0x47CCA3 0x47CCA9) %s; line of sight at the map's edge "
-              "(0x465B6A 0x465C04 0x465CA2 0x465D46 0x465DA9 0x408095) %s. Counters: unit repeats "
+              "(0x465B6A 0x465C04 0x465CA2 0x465D46 0x465DA9 0x408095 0x407F74) %s; the projectile "
+              "pass's view at the map's edge (0x49BEE8) %s. Counters: unit repeats "
               "refused at 0x%08X, "
               "feature repeats "
               "refused at 0x%08X, victims refused off their arrays at 0x%08X, list blocks run "
@@ -3265,7 +3352,7 @@ static void patch_engine_defects(void)
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
               fix_state(sfb), fix_state(rro), fix_state(scr), fix_state(list), fix_state(dl),
               fix_state(oom), fix_state(keys), fix_state(wpn), fix_state(caps), fix_state(flak),
-              fix_state(edge), fix_state(los),
+              fix_state(edge), fix_state(los), fix_state(pview),
               (unsigned int)(size_t)&s_dmgUnitRepeats, (unsigned int)(size_t)&s_dmgFeatRepeats,
               (unsigned int)(size_t)&s_dmgRefused, (unsigned int)(size_t)&s_dmgUnframed,
               (unsigned int)(size_t)&s_flakFallbacks);
