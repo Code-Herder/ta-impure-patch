@@ -4,9 +4,8 @@
    contract and research/notes/gpu-posing.md §4 for the design; what follows is
    what the code does rather than why the design is what it is.
 
-   THE VERTEX SHADER IS THE PORT OF `emit_node`. Every expression below is
-   transcribed from tagpu_native.c's emitter, which is itself transcribed from
-   the engine's raster:
+   THE VERTEX SHADER IS TRANSCRIBED FROM THE ENGINE'S RASTER, expression by
+   expression:
 
      piece transform   the pose matrix, rest -> model space, body turn folded in
      projection        sx = ax + x,  sy = ay + (-z - y/2)
@@ -50,12 +49,12 @@
    65536 = 2^23, where the float32 spacing is still 0.5 and `+ 0.5` is exact);
    the largest stock model is an order of magnitude inside that.
 
-   THE ONE KNOWN INEXACTNESS is not here but in the bake: `emit_node` takes its
-   degeneracy test on the ENGINE's posed vertices, rounded into 16.16 at every
-   axis and every level of the tree, while the bake takes it on the rest
-   vertices (tagpu_posebake.c, "THE ONE PLACE THIS IS NOT EXACT"). A face of any
-   real area gives the same answer; a near-degenerate one can take the neutral
-   SHD row where the CPU path takes a shaded one. Gate B is told to look for
+   THE ONE KNOWN INEXACTNESS is not here but in the bake: the degeneracy test
+   belongs on the ENGINE's posed vertices, rounded into 16.16 at every axis and
+   every level of the tree, and the bake takes it on the rest vertices
+   (tagpu_posebake.c, "THE ONE PLACE THIS IS NOT EXACT"). A face of any real
+   area gives the same answer; a near-degenerate one can take the neutral SHD
+   row where the posed vertices give a shaded one. Gate B is told to look for
    exactly that — a whole face one row off, rather than an edge flip.
 
    THE POSE LIVES IN ONE STORAGE BUFFER PER FRAME, which is what takes the
@@ -71,6 +70,11 @@
    When the pass refuses to arm it says so (`tagpu_posedraw_refused`), and
    `owndraw` repeats the refusal once in its own words.
 
+   THE EFFECTS MODELS ARE `FXVS`, the second vertex stage: no attributes and
+   no pose, a run of the engine's own rasterisers per six vertices, read out
+   of the same storage buffer after the pose words (tagpu_posedraw.h
+   TAGPU_PDFX, tagpu_fxmodel.h for why they are runs).
+
    A HIDDEN PIECE ARRIVES AS AN ALL-ZERO MATRIX and collapses its triangles onto
    the model origin; a face the material stream has nothing for carries the skip
    flag and is pushed outside the clip volume. Neither changes the vertex count,
@@ -85,6 +89,7 @@
 #include "tagpu_model3do.h"
 #include "tagpu_posebake.h"
 #include "tagpu_posedraw.h"
+#include "tagpu_fxmodel.h"    /* TAGPU_FXM_RUN_MAX, the runs' budget */
 #include "tagpu_native.h"
 #include "tagpu_log.h"
 #include "tagpu_packet.h"     /* the record count TAGPU_PD_MAXHAND must cover,
@@ -164,12 +169,18 @@ static int          s_abTaking;     /* THIS window opened the capture         */
 static int          s_saidFrame;
 static int          s_abClaim;      /* it reached the disk; frame-scoped      */
 static int          s_other;        /* draws the hand-over carries no copy of */
+static int          s_otherLast;    /* the last frame's whole `s_other`       */
 
 static TAGPU_PDUREC* s_rec;       static unsigned s_recCap, s_nrec;
+/* the effects models' runs, 8 floats each, every fx record's back to back */
+static float*        s_runArena;  static unsigned s_runCap, s_nrunF;
+/* effects models this window could not carry (tagpu_posedraw_fx), for the
+   heartbeat; every one of them blanks its frame's effects */
+static unsigned      s_fxDropped;
 static float*        s_rowArena;  static unsigned s_rowCap, s_nrow;
 static float*        s_flagArena; static unsigned s_flagCap, s_nflag;
 static float*        s_visArena;  static unsigned s_visCap;
-static int           s_saidCap, s_saidRoom;
+static int           s_saidCap, s_saidRoom, s_saidFxDrop;
 static int           s_polled;      /* the 30-frame lever beat has run once   */
 
 /* the cast-shadow depth record. `s_depthOn` has no writer but the frame
@@ -184,10 +195,11 @@ static float        s_depthMat[16];
 static float        s_lastNanoT, s_lastNanoC[3];
 
 /* THE FOG GRID'S COPY. `cells` is what the packet allocated for this grid,
-   so the read is bounded by the allocation it reads from; the cap bounds OUR
-   allocation, and the Vulkan pass re-checks it because a bound in one file is
-   a bound only while both are read together. */
-#define PD_FOG_MAXDIM 1024
+   so the read is bounded by the allocation it reads from; the cap
+   (TAGPU_PD_FOG_MAXDIM) bounds OUR allocation, and the Vulkan pass re-checks
+   it because a bound in one file is a bound only while both are read
+   together. */
+#define PD_FOG_MAXDIM TAGPU_PD_FOG_MAXDIM
 static unsigned short* s_fogCopy;
 static int             s_fogCopyCells;
 
@@ -235,11 +247,61 @@ void tagpu_posedraw_slant_drew(void) { s_slantDrew = 1; }
    publish. */
 void tagpu_posedraw_uncarried(void) { s_other++; }
 
+int tagpu_posedraw_other_forecast(void) { return s_other + s_otherLast; }
+
+/* NO CAST SHADOWS: nothing in this file writes `shadowMat`, `shadowSun`,
+   `shScale`, `penumbra` or `shade`, so the hand-over's whole cast-shadow
+   block is zero and this is the `shadowOn` it publishes. Reviving cast
+   shadows means writing a producer; see `tagpu_vk_shadow.h` on
+   TAGPU_SHADOWHAND. */
+int tagpu_posedraw_shadow_on(void) { return 0; }
+
+/* WHETHER THE HAND-OVER CARRIES THIS GRID, with the room for its copy made:
+   the test the publish copies against and the forecast asks, so the two are
+   one. `cells` -- not cols*rows -- is what the packet allocated, so it is the
+   bound the copy is read against; the cap bounds OUR allocation, and the
+   copy only grows, so a grid this has answered for is one the publish
+   copies. */
+static int pd_fog_room(const unsigned short* g, int cols, int rows, int cells)
+{
+    int want;
+    if (!g || cols < 1 || rows < 1 || cols > PD_FOG_MAXDIM || rows > PD_FOG_MAXDIM)
+        return 0;
+    want = cols * rows;
+    if (want > cells) return 0;
+    if (want > s_fogCopyCells) {
+        unsigned short* n = (unsigned short*)realloc(s_fogCopy, (size_t)want * 2);
+        if (!n) return 0;
+        s_fogCopy = n; s_fogCopyCells = want;
+    }
+    return 1;
+}
+
+int tagpu_posedraw_fog_carried(void)
+{
+    int cols = 0, rows = 0, cells = 0;
+    const unsigned short* g = tagpu_native_foggrid(&cols, &rows, &cells);
+    return pd_fog_room(g, cols, rows, cells);
+}
+
+/* THE MIRRORS THROUGH THE HAND-OVER'S OWN READERS: `tagpu_posedraw_atlas_hand`
+   is what the hand-over fills its atlas and palette with, and `shadeK` is
+   `pd_view_publish`'s read. Both reads are pure. */
+void tagpu_posedraw_mirrors(const unsigned char** atlas, int* atlasDim,
+                            const unsigned char** pal, const float** shadeK)
+{
+    TAGPU_PDHAND m;
+    tagpu_posedraw_atlas_hand(&m);
+    *atlas = m.atlas; *atlasDim = m.atlasDim; *pal = m.pal;
+    *shadeK = tagpu_r3d_shade_k();
+}
+
 /* TAGPU_PD_MAXHAND is every record the producer can make (tagpu_posedraw.h),
    so a frame is never refused for its count while the packet's tables are the
    size they are -- and the tables cover the design point. */
 typedef char pd_maxhand_covers[(TAGPU_PD_MAXHAND >= (int)(TAGPU_PK_MAX_UNITS +
-    TAGPU_PK_MAX_WRECKS + 1u + TAGPU_PK_MAX_BUILDS)) ? 1 : -1];
+    TAGPU_PK_MAX_WRECKS + 1u + TAGPU_PK_MAX_BUILDS + TAGPU_PK_MAX_FXMODEL)) ? 1 : -1];
+typedef char pd_maxfx_covers[(TAGPU_PD_MAXFX >= (int)TAGPU_PK_MAX_FXMODEL) ? 1 : -1];
 typedef char pd_units_design[(TAGPU_PK_MAX_UNITS >= TAGPU_PK_DESIGN_SLOTS) ? 1 : -1];
 int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; return v; }
 
@@ -250,6 +312,7 @@ int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; ret
    and tagpu_posedraw::DFS, and generates the SPIR-V the two posed pipelines
    are built from -- `pose_unit` pairs this vertex stage with
    tagpu_native::FS, `pose_depth` with the DFS below (spirv-gen.py's manifest).
+   `FXVS` further down is the third, `pose_fx`, with tagpu_native::FS again.
    Deleting either fails the build, and editing one edits the units the player
    sees. `tools/spirv-check.sh` re-extracts them through the preprocessor on
    every link and compares the hashes.
@@ -355,8 +418,8 @@ static const char* VS =
        header for why the representation is exact here — so rounding is what
        makes the port reproduce the chain rather than approximate it. */
     "  m = floor(m * 65536.0 + 0.5) / 65536.0;\n"
-    /* the engine's projection, exactly as emit_node bakes it on the CPU — and,
-       for the slant range, 0x45A610's instead */
+    /* the engine's projection of a unit's body — and, for the slant range,
+       0x45A610's instead */
     "  float px, py;\n"
     "  if (uRange == 1) {\n"
     /* emit_slant_at's snap: `xi = v[0] >> 16`, `nzi = (-v[2]) >> 16`,
@@ -385,8 +448,8 @@ static const char* VS =
        composition of rotations, so the posed normal is unit length too — but
        normalise anyway rather than rest the quantisation on that, since a
        length that drifted would move the whole face a row. The flip toward
-       SH_V is emit_node's, and it is not baked because it depends on the POSED
-       direction, which is what the piece matrix decides. */
+       SH_V is not baked because it depends on the POSED direction, which is
+       what the piece matrix decides. */
     "  float shade = uShd.x / 31.0;\n"
     "  vec3 un = vec3(0.0, 1.0, 0.0);\n"
     "  bool pShaded = uPose[clamp(uFlagBase + (pi >> 2), 0, pl)][pi & 3] > 0.5;\n"
@@ -401,7 +464,7 @@ static const char* VS =
     "      shade = rr / 31.0;\n"
     /* Classic++ lights the fragment from the same outward normal the row is
        quantised from, carried in MAP space (3DO z points north, hence the
-       flip) — emit_node's `un` */
+       flip) */
     "      un = vec3(n.x / nl, n.y / nl, -n.z / nl);\n"
     "    }\n"
     "  }\n"
@@ -421,6 +484,75 @@ static const char* VS =
     "  vShW = vec3(vWorld.x, uCast.y + uCast.z * m.y,\n"
     "              vWorld.y + (uCast.x + m.y) * 0.5);\n"
     "  if (uDepthPass == 1) gl_Position = uShadowMat * vec4(vShW, 1.0);\n"
+    "}\n";
+
+/* THE EFFECTS MODELS' VERTEX STAGE. Six vertices a run, two triangles over
+   [x0, x1) x [y, y + 1) in frame pixels -- the pixels the engine's span
+   painted -- and the run's texel or palette index flat across it. It has to
+   hand `tagpu_native::FS` everything `VS` hands it, so its uniforms and its
+   outputs are VS's own, declared in the same order: the uniform block's
+   offsets are one contract for both (tagpu_vk_unit.c `fill_blocks`), and
+   tools/spirv-gen.py refuses a fragment stage whose two vertex stages lay
+   its inputs out differently.
+
+   WHAT EACH OUTPUT IS FOR AN EFFECT:
+     vUV, vFC   the texel's centre in the unit atlas, or (-1, -1) and the
+                palette index -- the fragment stage's flat path
+     vShade     the NEUTRAL SHD row, whose multiplier is exactly 1.0: neither
+                effects draw shades a face (0x46BAE0, 0x4211D0)
+     vWorld     the effect's anchor, so the whole model reads the fog its
+                record's sprites read
+     vEnc       its key in the effects band, flat: the engine draws a model's
+                faces in order with no depth, and the pipeline's LESS_OR_EQUAL
+                lets a later run paint over an earlier one at the same key
+     vVY        0, under uWaterT and uDigT of -1e9: no waterline, no clip
+     vNrm, vShW the level normal and a point at the anchor: Classic++'s
+                lambert of the level normal is the constant a unit's is, and
+                no shadow is read (the record's uShadowOn is 0) */
+static const char* FXVS =
+    "#version 330 core\n"
+    "layout(std430) readonly buffer Pose {\n"
+    "  vec4 uPose[];\n"
+    "};\n"
+    "uniform vec2 uGame;\n"
+    "uniform vec2 uOffset;\n"
+    "uniform float uZoom;\n"
+    "uniform vec2 uZoomC;\n"
+    "uniform float uDepthScale;\n"
+    "uniform vec4 uAnchor;\n"
+    "uniform float uEnc;\n"
+    "uniform float uMdBias;\n"
+    "uniform vec2 uShd;\n"
+    "uniform vec3 uCast;\n"
+    "uniform int uDepthPass;\n"
+    "uniform mat4 uShadowMat;\n"
+    "uniform int uRange;\n"
+    "uniform float uWire;\n"
+    "uniform int uRowBase;\n"             /* this model's first run, in vec4 */
+    "uniform int uFlagBase;\n"
+    "uniform int uVisBase;\n"
+    "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
+    "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
+    "void main(){\n"
+    "  int r = gl_VertexID / 6, c = gl_VertexID - r * 6;\n"
+    /* THE INDEX IS CLAMPED TO THE BOUND RANGE, as VS's are: the consumer
+       refuses a record whose runs do not lie inside the copied arena
+       (tagpu_vk_unit.c), so on data that reaches a draw this is a no-op */
+    "  int pl = uPose.length() - 1;\n"
+    "  int b = clamp(uRowBase + r * 2, 0, pl - 1);\n"
+    "  vec4 r0 = uPose[b], r1 = uPose[b + 1];\n"
+    /* corners (0,0) (1,0) (0,1), (0,1) (1,0) (1,1) */
+    "  float cx = (c == 1 || c == 4 || c == 5) ? 1.0 : 0.0;\n"
+    "  float cy = (c == 2 || c == 3 || c == 5) ? 1.0 : 0.0;\n"
+    "  vec2 p0 = vec2(mix(r0.x, r0.y, cx), r0.z + cy);\n"
+    "  vec2 p = (p0 + uOffset - uZoomC) * uZoom + uZoomC;\n"
+    "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
+    "                     clamp(1.0 - uEnc/uDepthScale, 0.0, 1.0), 1.0);\n"
+    "  vUV = r1.xy; vFC = vec2(r1.z, -1.0);\n"
+    "  vShade = uShd.x / 31.0;\n"
+    "  vWorld = uAnchor.zw;\n"
+    "  vEnc = uEnc; vVY = 0.0; vNrm = vec3(0.0, 1.0, 0.0);\n"
+    "  vShW = vec3(uAnchor.z, uCast.y, uAnchor.w + uCast.x * 0.5);\n"
     "}\n";
 
 /* the depth stage writes no fragment at all and discards nothing, so a
@@ -551,12 +683,9 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     s_pub.sun[0] = v->sun[0]; s_pub.sun[1] = v->sun[1]; s_pub.sun[2] = v->sun[2];
     s_pub.amb = v->amb; s_pub.norm = v->norm;
 
-    /* NO CAST SHADOWS. This function opens with `memset(&s_pub, 0, sizeof
-       s_pub)` and NOTHING in this file writes `shadowMat`, `shadowSun`,
-       `shScale`, `penumbra` or `shade`, so the whole cast-shadow block is
-       zero, and `shadowOn` is the constant 0. Reviving cast shadows means
-       writing a producer; see `tagpu_vk_shadow.h` on TAGPU_SHADOWHAND. */
-    s_pub.shadowOn = 0;
+    /* NO CAST SHADOWS (`tagpu_posedraw_shadow_on`): the memset above leaves
+       the whole cast-shadow block zero. */
+    s_pub.shadowOn = tagpu_posedraw_shadow_on();
 
     /* the viewport and the clip, which the scaffold rect already carries as
        four floats -- published as the integers the scissor was set from */
@@ -602,30 +731,20 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        has finished writing it. See the handover for the ordering. */
     s_pub.shadeK = tagpu_r3d_shade_k();
     {   /* THE GRID IS COPIED. It points into a frame packet the game thread
-           reuses, and `cells` -- not cols*rows -- is what the packet actually
-           allocated, so it is the bound the copy is made against. */
+           reuses; `pd_fog_room` is the bound and the room. */
         int cols = 0, rows = 0, cells = 0;
         const unsigned short* g = tagpu_native_foggrid(&cols, &rows, &cells);
-        int want = cols * rows;
-        if (g && cols > 0 && rows > 0 && want <= cells &&
-            cols <= PD_FOG_MAXDIM && rows <= PD_FOG_MAXDIM) {
-            if (want > s_fogCopyCells) {
-                unsigned short* n =
-                    (unsigned short*)realloc(s_fogCopy, (size_t)want * 2);
-                if (n) { s_fogCopy = n; s_fogCopyCells = want; }
-            }
-            if (s_fogCopy && want <= s_fogCopyCells) {
-                memcpy(s_fogCopy, g, (size_t)want * 2);
-                s_pub.fogGrid = s_fogCopy;
-                s_pub.fogGridCols = cols; s_pub.fogGridRows = rows;
-            }
+        if (pd_fog_room(g, cols, rows, cells)) {
+            memcpy(s_fogCopy, g, (size_t)cols * rows * 2);
+            s_pub.fogGrid = s_fogCopy;
+            s_pub.fogGridCols = cols; s_pub.fogGridRows = rows;
         }
     }
 
     s_pub.depthOn = s_depthOn;
     if (s_depthOn) memcpy(s_pub.castMat, s_depthMat, sizeof s_pub.castMat);
 
-    s_nrec = 0; s_nrow = 0; s_nflag = 0; s_ncast = 0;
+    s_nrec = 0; s_nrow = 0; s_nflag = 0; s_ncast = 0; s_nrunF = 0;
 }
 
 
@@ -820,6 +939,49 @@ void tagpu_posedraw_unit(const TAGPU_PDUNIT* u)
     pd_record(u, g, m);
 }
 
+/* ONE EFFECTS MODEL, appended to this frame's hand-over as a record of its
+   own kind.
+
+   ONE THAT CANNOT BE CARRIED IS DROPPED HERE, AND IT IS NOT `s_other`: that
+   count stands every unit down, and a unit is never refused for an effect.
+   The drop is still whole. The effects' hand-over counts the models it
+   handed (tagpu_fx.h `nmodels`) and the unit pass the records it drew, and
+   the Vulkan effects pass draws nothing on a frame the two disagree -- so a
+   record missing here takes that frame's effects with it, and never leaves a
+   record's sprites standing without its model. */
+void tagpu_posedraw_fx(const TAGPU_PDFX* f)
+{
+    TAGPU_PDUREC* r;
+    if (s_state != 1 || !f || f->nrun == 0) return;
+    if (!s_recording) { s_fxDropped++; return; }
+    /* the runs asked for lie inside the array they are asked of, and the
+       arena stays inside the budget every holder of the runs shares */
+    if (!f->runs || f->run0 > f->nrunAll || f->nrun > f->nrunAll - f->run0 ||
+        f->nrun > TAGPU_FXM_RUN_MAX || s_nrunF / 8u > TAGPU_FXM_RUN_MAX - f->nrun)
+        { s_fxDropped++; return; }
+    if (s_nrec >= (unsigned)TAGPU_PD_MAXHAND ||
+        !arena_room((void**)&s_rec, &s_recCap, s_nrec + 1, sizeof s_rec[0]) ||
+        !arena_room((void**)&s_runArena, &s_runCap, s_nrunF + f->nrun * 8u, sizeof(float)))
+        { s_fxDropped++; return; }
+    r = &s_rec[s_nrec++];
+    memset(r, 0, sizeof *r);
+    r->fx = 1;
+    r->first = (int)(s_nrunF / 8u);
+    r->count = (int)f->nrun;
+    memcpy(s_runArena + s_nrunF, f->runs + (size_t)f->run0 * 8u,
+           (size_t)f->nrun * 8u * sizeof(float));
+    s_nrunF += f->nrun * 8u;
+    r->shKind = TAGPU_PDSH_NONE;
+    r->anchor[2] = f->wx0; r->anchor[3] = f->wz0;
+    r->enc = f->enc;
+    r->alpha = 1.0f;
+    r->waterT = -1.0e9f; r->digT = -1.0e9f;
+    r->fog = f->fog;
+    r->cast[2] = 1.0f;
+    r->nanoT = s_lastNanoT;
+    r->nanoC[0] = s_lastNanoC[0]; r->nanoC[1] = s_lastNanoC[1]; r->nanoC[2] = s_lastNanoC[2];
+}
+
 /* ---- closing the window -------------------------------------------------- */
 /* CLOSES THE RECORDING WINDOW AND PUBLISHES IT. */
 void tagpu_posedraw_end(void)
@@ -848,6 +1010,7 @@ void tagpu_posedraw_end(void)
     s_pub.rows  = s_rowArena;  s_pub.nrow  = s_nrow / 4;
     s_pub.flags = s_flagArena; s_pub.vis   = s_visArena;
     s_pub.nflag = s_nflag;
+    s_pub.runs  = s_runArena;  s_pub.nrun  = s_nrunF / 8u;
     s_pub.ncast = s_ncast;
     /* `otherDraws` IS NOT SET HERE, and that is deliberate: the wire, the
        slant and the build ghost all draw LATER in this
@@ -1018,6 +1181,19 @@ void tagpu_posedraw_frame(unsigned frame_counter)
        belt-and-braces check instead of the only one. */
     s_frame = frame_counter;
     s_pubHave = 0;
+    if (s_fxDropped && !s_saidFxDrop) {
+        char lb[200];
+        s_saidFxDrop = 1;
+        _snprintf(lb, sizeof lb, "posedraw: %u effects model(s) could not be carried "
+                  "(past the run budget, or an arena that would not grow) - that "
+                  "frame's effects are not drawn, its units are", s_fxDropped);
+        lb[sizeof lb - 1] = 0;
+        plog(lb);
+    } else if (!s_fxDropped) s_saidFxDrop = 0;
+    s_fxDropped = 0;
+    /* the count the last frame's hand-over was taken with: nothing adds to it
+       between that and this */
+    s_otherLast = s_other;
     s_win = 0; s_recording = 0; s_other = 0;
     s_abTaking = 0; s_abClaim = 0;
     s_depthOn = 0; s_ncast = 0;

@@ -432,6 +432,14 @@ typedef struct TAGPU_GAFATLAS {
 const unsigned char* tagpu_gaf_frame_sane(const void* g);
 const unsigned char* tagpu_gaf_seq_frame(const char* seq, int idx);
 int                  tagpu_gaf_seq_nframes(const char* seq);
+/* A sequence's entry `idx` AS THE TABLE HOLDS IT: 1 with the frame pointer in
+   `*frame` -- which may be NULL, and is not checked for sanity -- when `idx`
+   is inside the sequence's own count; 0 when it is not; -1 when the sequence
+   is not readable or its count is not a sane one. What 0x4B7F30 and 0x4B7EE0
+   hand the rasteriser before any test of theirs, so a caller can tell "the
+   engine draws nothing" (a NULL frame, which 0x4C7580 returns on) from "the
+   engine draws a frame" from "this cannot say". */
+int                  tagpu_gaf_seq_entry(const char* seq, int idx, const void** frame);
 const unsigned char* tagpu_gaf_state_frame(const char* animstate);
 
 /* THE HEADER FIELDS A CALLER NEEDS TO PLACE A SPRITE, read inside this module

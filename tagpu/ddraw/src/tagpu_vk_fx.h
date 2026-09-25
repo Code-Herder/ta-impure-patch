@@ -42,6 +42,13 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
    Valid after `prepare`. */
 int  tagpu_vk_fx_ab_frame(void);
 
+/* 1 when the posed pass may draw frame `frame`'s effects models: this pass's
+   `prepare` took that frame's hand-over and found the posed pass drawing all
+   of its models (tagpu_fx.h `nmodels`), and has not been refused since. The
+   posed pass asks at record time, after both passes have prepared, so the two
+   draw a frame's effects together or not at all. */
+int  tagpu_vk_fx_models_ok(unsigned frame);
+
 /* Give everything back. Called by the seam from `vk_down`, after its
    vkDeviceWaitIdle and before the device is destroyed. Safe when nothing was
    ever built. */

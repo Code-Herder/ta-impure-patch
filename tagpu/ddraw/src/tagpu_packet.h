@@ -233,12 +233,20 @@ typedef struct TAGPU_PK_BUILD {
    frame is looked up through its sequence and its frame number at copy time
    (the sequence is the one the particle names, live while the thread that
    wrote it is the thread reading it); a weapon's colour number goes through
-   the GUI colour LUT here; the model roots are the per-type templates the
-   native pass already walks under `tagpu_reclaim`'s fence, and no consumer of
-   these tables dereferences one — `tagpu_fx.c` hands the address straight to
-   `emit_fx_model` in the (fenced) native pass and reads no byte of it. */
+   the GUI colour LUT here. An effect's 3DO MODEL crosses as data, not as an
+   address: the publisher poses it with the engine's own rotation and copies
+   its faces into the model tables below, so no consumer of these tables ever
+   reads a model. */
 
-/* 56 B, one per live projectile, in the engine's own array order. The array
+/* THE MODEL A RECORD DRAWS, as an index into the model table
+   (TAGPU_PK_FXMODEL): TAGPU_PK_NOMODEL when the engine draws none for it.
+   Any other value at or past `n_fxmodel` is a model the engine draws and this
+   packet could not carry -- a node that did not validate, or model tables
+   that did not fit the slot -- so a consumer bounds the index by `n_fxmodel`
+   and treats everything past it as lost. */
+#define TAGPU_PK_NOMODEL    0xFFFFFFFFu
+
+/* 44 B, one per live projectile, in the engine's own array order. The array
    is exactly TAGPU_LIM_PROJ slots (0x499A30 allocates TAGPU_LIM_PROJ x 0x6B)
    and all ten append sites refuse past it (0x49B6EE, 0x49B809, ... `cmp
    ...,imm32 / jge`; tagpu_limits.h raises the allocation and the ten caps
@@ -247,11 +255,9 @@ typedef struct TAGPU_PK_BUILD {
 typedef struct TAGPU_PK_PROJ {
     int32_t  pos[3];         /* proj+0x04/+0x08/+0x0C, 16.16: x, altitude, y */
     int32_t  start[3];       /* proj+0x10/+0x14/+0x18, the tail              */
-    uint32_t node;           /* the weapon's Model3DONode root (rendertypes
-                                1, 3 and 6), 0 = none. A TEMPLATE ADDRESS the
-                                native pass resolves under the fence          */
-    uint32_t child;          /* node+0x30, the thrust flame, only while the
-                                projectile is alive (rendertype 1), else 0    */
+    uint32_t model;          /* the weapon's model (rendertypes 1, 3 and 6)  */
+    uint32_t cmodel;         /* its first child, the thrust flame, only while
+                                the projectile is alive (rendertype 1)       */
     uint32_t frame;          /* the resolved sprite (rt 4) or flare (rt 5)
                                 GAF frame, already indexed by this tick, 0 =
                                 none: an address in the GAF banks, opaque to
@@ -259,15 +265,10 @@ typedef struct TAGPU_PK_PROJ {
     int32_t  shadow_y;       /* the ground-shadow blob's screen y in WORLD
                                 terms: hi(y) - groundh/2 (the blob is drawn
                                 at the terrain point under the projectile)    */
-    int16_t  turn[3];        /* the rotation triple, ALREADY adjusted for the
-                                rendertype (rt 1 subtracts 0x8000 from two)   */
-    int16_t  cturn0;         /* the child's first turn word (rt 1)            */
     uint8_t  rt;             /* WeaponStruct+0x10C RenderType, 0..7           */
     uint8_t  col, col2;      /* PALETTE INDICES: the weapon's colour numbers
                                 are taken through main+0xDCB here             */
-    uint8_t  owner;          /* the attacker's player id, 0 when it is gone    */
     uint8_t  flags;          /* TAGPU_PK_FX_* below                            */
-    uint8_t  pad[2];
 } TAGPU_PK_PROJ;
 
 #define TAGPU_PK_FX_SHADOW  0x01u   /* draw the ground-shadow blob            */
@@ -277,28 +278,122 @@ typedef struct TAGPU_PK_PROJ {
                                        LUT: `col2` below is already an index,
                                        and index 0 is a real colour           */
 
-/* 32 B, one per live explosion. The records are at tagpu_limits_expl_pool()+4
+/* 24 B, one per live explosion. The records are at tagpu_limits_expl_pool()+4
    (stock: inline at main+0x1491F), stride 0x54, and the engine's own add site
    refuses past TAGPU_LIM_EXPL (0x420A42). */
 typedef struct TAGPU_PK_EXPL {
     int32_t  pos[3];         /* expl+0x1C/+0x20/+0x24, 16.16                  */
-    uint32_t node;           /* the debris node (+0x00), a template, or 0     */
+    uint32_t model;          /* the body (+0x00), a piece-explosion record    */
     uint32_t frame;          /* anim state 1's current frame, the opaque
                                 sprite, resolved here; 0 = none               */
     uint32_t flash;          /* anim state 2's, the LHT flash; 0 = none       */
-    int16_t  turn[3];        /* expl+0x4C                                     */
-    uint16_t pad;
 } TAGPU_PK_EXPL;
 
-/* 24 B, one per occupied debris particle slot. The slots are the
+/* 16 B, one per occupied debris particle slot. The slots are the
    TAGPU_LIM_PSYS dwords tagpu_limits_psys_begin() names (stock: 100 at
    0x511DF0..0x511F80); each names a system whose +0x2C is the piece. */
 typedef struct TAGPU_PK_DEBRIS {
     int32_t  pos[3];         /* piece+0x16/+0x1A/+0x1E, 16.16                 */
-    uint32_t node;           /* piece+0x00, a template, or 0                  */
-    int16_t  turn[3];        /* piece+0x12                                    */
-    uint16_t pad;
+    uint32_t model;          /* the piece's node (+0x00)                      */
 } TAGPU_PK_DEBRIS;
+
+/* ---- THE EFFECTS MODELS -------------------------------------------------
+   Every 3DO model an effect draws -- a weapon's body and its thrust flame
+   (0x46BAE0 from 0x49BE60), an explosion's body (0x46BAE0 from 0x420B00), a
+   debris piece (0x4211D0 from 0x421550) -- as the engine is about to draw it:
+   its vertices already rotated by the engine's own 0x4B6CC0 and offset by
+   the effect's 16.16 position, and its faces with every frame already
+   resolved by the draw's own rule. What is left to the consumer is the
+   projection, which needs the eye it draws with, and the two rasterisers;
+   tagpu_fxmodel.c has both.
+
+   AN EXPLOSION'S BODY IS WHY THIS IS DATA RATHER THAN AN ADDRESS. It is not
+   a template: it is a piece-explosion record out of a pool -- stock's 300 at
+   main+0x1AB9F, 0x34 bytes each, laid out by 0x420620 at the level load;
+   tagpu_patches.c's limits block gives both first-free scans (0x420920 and
+   the inline one at 0x4217DE) a larger pool of its own -- which 0x421700
+   takes and fills per explosion from one face of the dying unit's piece,
+   and which the explosion's tick frees by writing 0xFF over its first byte
+   (0x4210A3).
+   Node-shaped, REWRITTEN per explosion, and with face indices that point
+   into a table in the executable's .data (0x502BF8). DISASSEMBLED. Only the
+   game thread can say what one holds at the instant the engine draws it.
+
+   THE TABLES ARE INDEXED, NOT CHAINED, and the acquire checks every index
+   in them (tagpu_packet.c `frame_valid`): a model names its first vertex and
+   its shape, a shape its first face and its vertex count, a face its first
+   index, and every index is below its shape's vertex count. A consumer
+   follows them without a check of its own. */
+
+/* 12 B: one vertex as the engine projects it -- the three sums its
+   projection shifts, rotated x + X, rotated y + altitude and Y - rotated z,
+   all 16.16 */
+typedef struct TAGPU_PK_FXVERT {
+    int32_t  x, alt, y;
+} TAGPU_PK_FXVERT;
+
+/* 12 B: one face of a shape, in the engine's draw order */
+typedef struct TAGPU_PK_FXFACE {
+    uint32_t frame;          /* the GAF frame a textured quad draws, resolved
+                                by the draw's own rule; 0 for a flat face     */
+    uint32_t idx;            /* its first vertex index in the index table     */
+    uint8_t  n;              /* vertex count: 4 textured, 3..32 flat          */
+    uint8_t  flat;           /* 1 = filled with `colour` (0x4C0330)           */
+    uint8_t  colour;         /* the colour word's low byte: a palette index   */
+    uint8_t  pad;
+} TAGPU_PK_FXFACE;
+
+/* 8 B: a node's faces, shared by every model of the gather that draws the
+   same node with the same frames */
+typedef struct TAGPU_PK_FXSHAPE {
+    uint32_t face;           /* its first face in the face table              */
+    uint16_t nface;
+    uint16_t nvert;          /* the node's vertex count: every index is below */
+} TAGPU_PK_FXSHAPE;
+
+/* 8 B: one posed model */
+typedef struct TAGPU_PK_FXMODEL {
+    uint32_t vert;           /* its first vertex; the shape says how many     */
+    uint32_t shape;
+} TAGPU_PK_FXMODEL;
+
+/* THE BOUNDS a node is copied under: sanity filters on counts read out of the
+   engine, and what the copy and the consumer's loops are sized for. They are
+   above the engine's own capacities, which neither draw checks (DISASSEMBLED):
+
+     0x46BAE0 rotates into "TEMP XFORM PTS" (0x960 bytes, 200 vertices at 12,
+       main+0x14383), projects into "TEMP PROJECTED PTS" (0x640, 200 at 8,
+       +0x14387) and gathers a face into "ASSEM PTS" (0xA0, 20 points at 8,
+       +0x1438B) -- three heap blocks 0x491908..0x49195C allocates at the
+       level load;
+     0x4211D0 gathers a face at esp+0x20..0xE8 (25 points) and projects the
+       node from esp+0xE8 to the top of its 0x3F58-byte frame (2000 vertices,
+       the next one over its return address).
+
+   Past those the engine writes over the neighbouring heap or its own stack
+   and draws whatever that leaves, which nothing can reproduce; no stock model
+   reaches them. A node or face inside the bounds below is carried as the
+   engine's arithmetic describes it, uncorrupted, and one past them is a model
+   this packet does not carry (the record is taken back whole). 32 is the
+   unit bake's own face ceiling (tagpu_posebake.c `pb_walk`). */
+#define TAGPU_PK_FXMAXNV    2048u    /* vertices of one node                  */
+#define TAGPU_PK_FXMAXNF    512u     /* faces of one node                     */
+#define TAGPU_PK_FXMAXFV    32u      /* vertices of one face                  */
+
+/* THE LONGEST TABLE A PACKET CARRIES, in rows. The acquire refuses a packet
+   with any table longer (tagpu_packet.c `table_ok`: a count is a loop bound),
+   and a refused packet costs the frame everything, so every table the
+   publisher grows from engine counts stops here instead: what does not fit is
+   dropped by the publisher, and the packet stays acceptable. */
+#define TAGPU_PK_TABLE_MAX  0x100000u
+/* THE ADDRESS SPACE OF ONE FRAME SLOT (tagpu_packet.c says what it is sized
+   for); no fill can land more bytes than this, so it bounds the effects
+   models' five tables together as well */
+#define TAGPU_PK_RESERVE    (20u << 20)
+/* every model the records can name: a projectile's body and its flame, a
+   debris piece, an explosion's body */
+#define TAGPU_PK_MAX_FXMODEL (2u * (unsigned)TAGPU_LIM_PROJ + (unsigned)TAGPU_LIM_PSYS + \
+                              (unsigned)TAGPU_LIM_EXPL)
 
 /* 16 B, one per drawable SUB-PARTICLE, in layer order (the layer IS the draw
    depth: the engine calls 0x471F90(ctx, n) for n = 0..9 at ten fixed points
@@ -435,6 +530,7 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_MM      0x8000u
 #define TAGPU_PK_TRUNC_MMPIC   0x10000u
 #define TAGPU_PK_TRUNC_BUILDS  0x20000u
+#define TAGPU_PK_TRUNC_FXMODEL 0x40000u   /* the five model tables, together  */
 
 #define TAGPU_PK_SHD_ROWS   32u      /* the engine's PALETTE.SHD shade table:  */
 #define TAGPU_PK_SHD_BYTES  (TAGPU_PK_SHD_ROWS * 256u)   /* 32 x 256 bytes     */
@@ -614,6 +710,14 @@ typedef struct TAGPU_PACKET {
     uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
     uint32_t n_expl,   off_expl;      /* PK_EXPL,   the live explosions         */
     uint32_t n_debris, off_debris;    /* PK_DEBRIS, the occupied debris slots   */
+    /* the effects models the three tables above name (TAGPU_PK_FXMODEL). All
+       five land or none does, so a model never names a vertex, a shape, a
+       face or an index this packet does not carry */
+    uint32_t n_fxmodel, off_fxmodel;  /* PK_FXMODEL                             */
+    uint32_t n_fxshape, off_fxshape;  /* PK_FXSHAPE                             */
+    uint32_t n_fxface,  off_fxface;   /* PK_FXFACE                              */
+    uint32_t n_fxidx,   off_fxidx;    /* u16 vertex indices                     */
+    uint32_t n_fxvert,  off_fxvert;   /* PK_FXVERT                              */
     uint32_t n_part,   off_part;      /* PK_PART,   every drawable sub-particle,
                                          IN LAYER ORDER                          */
     uint32_t part_n[TAGPU_PK_NLAYER]; /* how many of them are in each layer, so
@@ -763,6 +867,16 @@ static __inline const TAGPU_PK_EXPL* tagpu_pk_expl(const TAGPU_PACKET* p)
 { return p->n_expl ? (const TAGPU_PK_EXPL*)(const void*)((const unsigned char*)p + p->off_expl) : (const TAGPU_PK_EXPL*)0; }
 static __inline const TAGPU_PK_DEBRIS* tagpu_pk_debris(const TAGPU_PACKET* p)
 { return p->n_debris ? (const TAGPU_PK_DEBRIS*)(const void*)((const unsigned char*)p + p->off_debris) : (const TAGPU_PK_DEBRIS*)0; }
+static __inline const TAGPU_PK_FXMODEL* tagpu_pk_fxmodel(const TAGPU_PACKET* p)
+{ return p->n_fxmodel ? (const TAGPU_PK_FXMODEL*)(const void*)((const unsigned char*)p + p->off_fxmodel) : (const TAGPU_PK_FXMODEL*)0; }
+static __inline const TAGPU_PK_FXSHAPE* tagpu_pk_fxshape(const TAGPU_PACKET* p)
+{ return p->n_fxshape ? (const TAGPU_PK_FXSHAPE*)(const void*)((const unsigned char*)p + p->off_fxshape) : (const TAGPU_PK_FXSHAPE*)0; }
+static __inline const TAGPU_PK_FXFACE* tagpu_pk_fxface(const TAGPU_PACKET* p)
+{ return p->n_fxface ? (const TAGPU_PK_FXFACE*)(const void*)((const unsigned char*)p + p->off_fxface) : (const TAGPU_PK_FXFACE*)0; }
+static __inline const uint16_t* tagpu_pk_fxidx(const TAGPU_PACKET* p)
+{ return p->n_fxidx ? (const uint16_t*)(const void*)((const unsigned char*)p + p->off_fxidx) : (const uint16_t*)0; }
+static __inline const TAGPU_PK_FXVERT* tagpu_pk_fxvert(const TAGPU_PACKET* p)
+{ return p->n_fxvert ? (const TAGPU_PK_FXVERT*)(const void*)((const unsigned char*)p + p->off_fxvert) : (const TAGPU_PK_FXVERT*)0; }
 static __inline const TAGPU_PK_PART* tagpu_pk_part(const TAGPU_PACKET* p)
 { return p->n_part ? (const TAGPU_PK_PART*)(const void*)((const unsigned char*)p + p->off_part) : (const TAGPU_PK_PART*)0; }
 /* the queued builds the order pass is showing site rects for, or NULL */

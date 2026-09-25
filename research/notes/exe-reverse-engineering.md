@@ -4826,7 +4826,7 @@ every publish of that tick.
 | --- | --- | --- |
 | projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **All ten append sites refuse past the cap** — each a `cmp …,0x12C / jge` past the store (`0x49B6EE`, `0x49B809` and eight more; the list is under *The raised effect pools*) — so the count is bounded by the allocation itself and no sanity cap is needed |
 | explosions | stock: count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54`; raised: the same layout in a DLL static | **300 in stock, 3000 raised.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
-| flying debris | stock: the 100 dwords at `0x511DF0..0x511F80`; raised: 1000 dwords in a DLL static. Each names a system whose `+0x2C` is the piece `{node @0, turn @0x12, x @0x16, alt @0x1A, y @0x1E}` | the slot count is the address range |
+| flying debris | stock: the 100 dwords at `0x511DF0..0x511F80`; raised: 1000 dwords in a DLL static. Each names a system whose `+0x2C` is the piece `{node @0, turn words @0x10/0x12/0x14, x @0x16, alt @0x1A, y @0x1E, rotated vertices @0x22}` — the words reach `0x4B6CC0` reversed, as `{w14, w12, w10}` (*The effects models*, below) | the slot count is the address range |
 | the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **The cap plus one: 401 in stock, 20 481 under the raised limits** (*The raised effect pools*, below). Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at the cap or fewer it appends, and **past it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So the cap plus one is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
 
 **"The draw passes only read them" is true of the arrays, not of what their fullness decides.**
@@ -4872,6 +4872,90 @@ packet's level generation.
 band is computed in RGB); and `+0xF0` the capability word (bit 5 the ALP alpha table is
 built, **bit 6 the PALETTE.SHD darken table**, bit 7 the LHT one — the three in-place setters
 above are what establish the mapping).
+
+### The effects models — who poses them, the two draws, and the three rasterisers [DISASSEMBLED 2026-09-24, objdump of the pristine build; MEASURED 2026-09-24]
+
+Every 3DO model an effect draws — a weapon's body and its thrust flame, a debris piece, an
+explosion's body — goes through one rotation and one of two face walks, and each face through
+one of two integer rasterisers. The fork reproduces the chain end to end: the frame packet's
+publisher calls the rotation itself on the game thread, and `tagpu_fxmodel.c` transcribes the
+projection and the rasterisers on the render thread ([GPU status](gpu-status.html) §2.89 has the
+design and the measurements). Nothing here is patched; `fxown`'s detours on `0x46BAE0` and
+`0x4211D0` (§2.1 of GPU status) are what stop the engine's own draw.
+
+| Address | What it is, and how it was established |
+| --- | --- |
+| `0x4B6CC0` | **the rotation by a triple**, `void __stdcall (const int32 src[3], int32 dst[3], const int16 turn[3])`, `ret 0xc`. Three calls of the pair rotator: `turn[0]` on `(x, y)` (`0x4B6CE3`), then `turn[2]` on `(y', z)` (`0x4B6D04`), then `turn[1]` on `(x', z')` (`0x4B6D29`); `dst[1]` is stored after the second, `dst[0]` and `dst[2]` after the third. **Pure**: it reads its two inputs and the constant below and writes `dst` alone, so the publisher calls it with a `dst` of its own. DISASSEMBLED (`0x4B6CC0..0x4B6D43`) |
+| `0x4B7173` | the pair rotator, `cdecl (int16 angle, int32 pair[2])`: a zero angle returns untouched (`cmp word [ebp+8],0 / je`); otherwise `a' = a·cos − b·sin`, `b' = a·sin + b·cos` in x87 (`fild`, `fsincos`) and stored back with `fistp`, so the result is rounded by the thread's control word. The angle is `fild word` — signed. DISASSEMBLED |
+| `0x509EF8` | the double `2π/65536` the angle is scaled by (`fmul qword [0x509EF8]` at `0x4B718C`). DISASSEMBLED |
+| `0x46BAE0` | **the model draw** of the projectile and explosion passes, `stdcall (ctx, pos[3], node, turn[3])`, `ret 0x10`. `pos` is EYE-RELATIVE: its callers subtract `eye << 16` from x and y first (`0x49C0A1..0x49C0CE` for rendertype 1). Per vertex (`0x46BB0F..0x46BB74`) it rotates `node+0x24` into the scratch `*(main+0x14383)` (12 bytes a vertex, **200 of them**) and projects into `*(main+0x14387)` (8 bytes, **200**), with no test of the node's count against either (the three blocks are sized below, `main+0x14383` row): `sx = (int16)((v.x + P.x) >> 16) + 0x80`, `sy = (int16)((P.y − v.z) >> 16) − ((int16)((v.y + P.alt) >> 16) >> 1) + 0x20` — the `(int16)` the `movsx` at `0x46BB3B`, `0x46BB43`, `0x46BB51`, so a vertex 32 768 px or more from the eye lands modulo 65 536. A vertex count of 0 or less skips the rotation and the projection (`test ecx,ecx / jle 0x46BB76` at `0x46BB07`) and still walks the faces, over whatever the scratch holds. Then the faces (`0x46BB76..0x46BC4E`): face 0 skipped when `node+0x0C != −1`; each face's vertices gathered by its `u16` indices into `*(main+0x1438B)` **with no bound on the index, nor on the count against the block's 20 points**; flag bit 0 → `0x4C0310(ctx, xy, n, face+0x00)`; otherwise only a 4-vertex face draws, `0x4C7580(ctx, frame, xy, NULL)`, the frame `face+0x10` or, with flag bit 1, `0x4B7EE0(face+0x10)`. No shade table anywhere. DISASSEMBLED |
+| `0x4211D0` | **the debris piece draw**, `stdcall (ctx, sys, piece)`, `ret 0xC`, reached only from `0x421550`. It takes the eye off the piece's own position (`main+0x1431F`/`+0x14323`), draws nothing unless that point is in the viewport rect (`0x4B6720(main+0x37E27, sx, sy)` at `0x42123F`), and projects the vertices `0x421550` already rotated into `piece+0x22` with the same arithmetic as `0x46BAE0`, into **its own stack frame** of `0x3F58` bytes (the stack probe `0x4E4B20` allocates it with `eax = 0x3F58`, then four pushes, so the locals are `esp+0x10..0x3F68` and the return address is at `esp+0x3F68`): the projected vertices from `esp+0xE8` at 8 bytes each (the `lea` at `0x421256` is vertex 0's y at `esp+0xEC`; the face gather reads `[esp+8·i+0xE8]` and `[+0xEC]`, `0x4212EC`), room for **exactly 2000**, the next one over the return address; and one face's gathered points at `esp+0x20..0xE8` (`0x4212DC`), **25 of them** before the vertices begin — no push between the two `lea`s, so a face of 26 points or more writes over the node's first projected vertex. Neither count is tested; a count of 0 or less skips the projection (`test edx,edx / jle 0x4212A3` at `0x421252`) and still walks the faces. The face rules are `0x46BAE0`'s, plus flag bits 1 **and** 2: `0x4B7F30(face+0x18, logo)` with the logo colour reached as `sys+0` (the unit the piece flew off) `→ +0x96` (its PlayerStruct) `→ +0x27` (PlayerInfo) `→ +0x96` (`0x42132F..0x421346`), every link unchecked. DISASSEMBLED |
+| `0x421550` | the piece's update and draw, `stdcall (ctx, sys)`, `ret 8`, from the explosion pass's slot loop: smoke (`0x472810`) and fire (`0x472AB0`) by `sys+0x28` bits 1 and 0, then the triple built **reversed** as `{w14, w12, w10}` (`0x4215AF..0x4215C5`), every vertex of `*(piece+0)` rotated into `piece+0x22` from the last to the first (`0x4215EE`), then `0x4211D0`. The tick `0x4213B0` spins exactly those three words (`0x421509..0x421519`). DISASSEMBLED |
+| `0x421620` | a piece off a dying unit (callers `0x420F14`, `0x48123C`): with `sys+0x28` bit 2 it hands the piece to `0x421700`; otherwise it takes a free flying-piece slot, allocates the system with room for the rotated vertices (`0x66 + 12·nverts`), copies the 0x30-byte header (its `+0x00`, the unit, at `0x4216AA`) and the 0x36-byte piece, points `piece+0x22` at the vertices behind it and adds the unit's position. DISASSEMBLED |
+| `0x421700` | **the piece-explosion bodies**: one explosion per 4-vertex, non-flat face of the piece's node other than its selection primitive, up to the explosion cap (`0x421771`, raised), each with a record from the pool below as its `+0x00` body, taken at `0x4217DE..0x4217F1` (the same first-free scan as `0x420920`) and filled from the face. DISASSEMBLED |
+| `0x420620` | at the level load (`0x4919D2`): among its tables, **the piece-explosion pool** — 300 records of `0x34` bytes at `main+0x1AB9F` (`0x4207FB..0x42088F`), each node-shaped: `+0x00` the free byte (`0xFF` free, `0` taken), `+0x04` 8 vertices, `+0x08` 6 faces, `+0x0C` −1, `+0x24` its own 96 bytes of vertices, `+0x28` its own six `0x20`-byte faces — **whose index pointers are the executable's `.data` table `0x502BF8`**, 6 × 4 `u16` (`0x42089C..0x4208F2`). Also the explosion sequence table `main+0x1AB8F`. DISASSEMBLED |
+| `0x420920` | the pool's first-free scan: the first record whose byte is `0xFF`, marked `0` and returned; `0` when all 300 are taken. No direct `call` to it in the image; `tagpu_patches.c`'s limits block redirects it and the inline copy at `0x4217DE` to a larger pool of its own with the same layout. DISASSEMBLED |
+| `0x420AE6` | the ordinary explosion add site `0x420A30` writes its `+0x00` body as **0** — only `0x421700`'s explosions carry one. DISASSEMBLED |
+| `0x4210A3` | the explosion tick `0x420F30` frees a body by writing `0xFF` over its first byte (after re-adding an explosion through `0x420A30`), then zeroes the explosion's `+0x00`. DISASSEMBLED |
+| `0x420C53..0x420C68` | the explosion pass's body draw, after the anchor passed `0x4B6720(main+0x37E27, …)`: `+0x00` non-zero → `0x46BAE0(ctx, pos, body, +0x4C)`. DISASSEMBLED |
+| `0x49C0FA..0x49C11A` | rendertype 1's triple: the projectile's `+0x34` words with `0x8000` added to the second and third; `0x49C127` draws the weapon's `+0x74` node. `0x49C12C..0x49C185`: the thrust flame, the node's `+0x30` child, while `+0x46` (death) is after the tick, with `+0x64` as its first word when the weapon's `+0x111` has bit 21. `0x49C477`: rendertype 6 passes the words as they are. `0x49C252`: rendertype 3 passes `[esp+0x38]`, a local nothing in `0x49BE60` writes. DISASSEMBLED |
+| `0x4B7EE0` | the anim-state frame: `state+8` is the sequence, tested first — a NULL sequence returns 0 (`0x4B7EE6..0x4B7EEB`), which `0x4C7580` then draws nothing for; otherwise `*(seq + 0x28 + 8·frame)` with the `u16` at `state+0` **unbounded**. `ret 4`. DISASSEMBLED |
+| `0x4B7F30` | the sequence frame by index, `stdcall (seq, idx)`, `ret 8`: `0 ≤ idx < u16 *seq`, else 0. It reads the count **before** its NULL test on `seq`. DISASSEMBLED |
+| `0x4C0310` → `0x4C0330` | **the flat fill**, `stdcall (ctx, xy[], n, colour)`, `ret 0x10`, any vertex count; fills in the colour word's LOW BYTE (`mov al,[esp+0x14080]` at `0x4C0678`). The chains and the clip are `0x4C7580`'s without the texture coordinates. `0x4C0330..0x4C06D1`, DISASSEMBLED |
+| `0x4C7580` | **`GAF_DrawTransformed`** (its vertex roles, the half-open span and the `uv == NULL` window are in *`GAF_DrawTransformed 0x4C7580`* above). The walk, `0x4C7580..0x4C7A1C`: the FIRST vertex at the strict least y is the top and the first at the strict greatest y the bottom; the left chain runs backwards (`cur − 1`, wrapping to `n − 1`), the right forwards. An edge is skipped when it ends at or above the clip's top or does not go down; x starts at `(xa << 16) + 0xFFFF`, `dx = ((xb − xa) << 16) / dy` and the texture steps by the same **truncating** `idiv`; a clipped top advances all three in ONE multiply; each covered scanline appends one 40-byte row to that side's buffer, and the fill reads the buffers BY POSITION, row `i` at `max(ymin, T) + i`. All of it wraps at 32 bits and shifts arithmetically. DISASSEMBLED; the transcription reproduces the engine's pixels, MEASURED below |
+| `0x4C7310` | the textured span, `0x4C7310..0x4C74E5`: `du = (uR − uL) / (xR − xL)` from the UNCLIPPED width, a left clip advancing u and v by one multiply, `xR` cut to the clip's right, a fill only when `xR − xL > 0`, one texel per pixel **copied whatever its value — the frame's key colour included**. The texel's address by the frame's width (`0x4C73BD`, table `0x4C7500` into `0x4C74E8`): 8 inline; 16, 32, 64 and 128 through `0x4CD962`, `0x4CD91E`, `0x4CD8DA`, `0x4CD896`, which mask `v` shifted by `log2 w` and add `u` before the shift; any other width `(v >> 16)·w + (u >> 16)`. DISASSEMBLED |
+| `0x4C6AE0`, `0x4C6B10`, `0x468D85` | the clip every one of these reads is the context's `+0x1C` rect, fetched through `0x4C6AE0`; `DrawGameScreen` sets it at `0x468D85` (`0x4C6B10`) to the viewport rect `main+0x37E27` — the frame packet's `vp_addr`. L and T are the first column and row drawn, R and B the first NOT drawn. DISASSEMBLED |
+| `0x4C5E70`, `0x4C5FA0` | when a rasteriser is handed no context (`ctx == 0`) it builds one from the graphics globals through `0x4C5E70` and gives it back through `0x4C5FA0` on each exit; both effects draws always pass the frame's. DISASSEMBLED |
+| `main+0x14383`, `+0x14387`, `+0x1438B` | `0x46BAE0`'s three scratch arrays, heap blocks the level load allocates at `0x491908..0x49195C` through the named allocator `0x4D83B0(name, size)`: **"TEMP XFORM PTS"** `0x960` bytes (`0x509298`; 200 rotated vertices at 12), **"TEMP PROJECTED PTS"** `0x640` (`0x509284`; 200 projected at 8) and **"ASSEM PTS"** `0xA0` (`0x509278`; one face's 20 points at 8). `0x46BAE0` bounds none of them, so a node of more than 200 vertices or a face of more than 20 writes past its block into the heap's next, and what it then draws is whatever that leaves. No stock model reaches them. Engine state on the game thread; the fork reads none of them. DISASSEMBLED, the names read out of `.rdata` |
+| `0x49BE60` model cases | **the projectile pass poses every model projectile it draws, on screen or not**: rendertypes 1, 3 and 6 call `0x46BAE0` at `0x49C127` (the body), `0x49C16F`/`0x49C185` (the flame), `0x49C25E` and `0x49C482` after the LOS gate alone, and the rasterisers clip. Its one `0x4B6720` rect test (`0x49C1C7`) is rendertype 2's refraction sprite. The explosion pass tests the anchor first (`0x420C4A`) and so does the debris draw (`0x42123F`). DISASSEMBLED |
+| `main+0x1B63` | the ten `PlayerStruct`s inline, stride `0x14B` (`0x49BEDF`'s `lea [edx+eax*2+0x1B63]` with `eax = id·0xA5`): what a unit's `+0x96` player pointer must be one of before the publisher follows it. DISASSEMBLED |
+
+**What the publisher reads for a model**, on the game thread, per draw of the tick it gathers:
+the node's `+0x04` vertex count (past 2048 it is not carried; with none and a face the walk
+paints it is refused, because both draws then walk the faces over points nothing projected this
+call), `+0x08` face count (a node with no face the walk paints draws nothing and carries no
+model; past 512 not carried), `+0x0C`, `+0x24`, `+0x28`
+and `+0x30`; per face `+0x00`, `+0x04`, `+0x0C` (every index checked against the vertex count —
+the engine's walk does not), `+0x10`, `+0x18` and `+0x1C`; a sequence's `u16` count and its
+`+0x28` frames (every index bounded by the count, `0x4B7EE0`'s unbounded one included); for a
+piece the chain above, each link validated as data — the unit a stride-aligned member of the unit
+array inside the slot count, the player pointer one of the ten `main+0x1B63` records — before the
+next is read. A frame that is RLE-compressed is refused: `0x4C7310` copies the pixel plane as raw
+rows. The unit that owned a piece is usually dead by the time it is read, and its slot may hold
+another; the engine reads whatever the slot holds, and so does the publisher.
+
+**A model is carried whole or not at all.** A face the engine draws nothing for is left out, and
+that is the engine's picture: a flat face of fewer than three points (no span), a textured face
+of other than four (never rasterised), a frame pointer that is NULL, `0x4B7EE0`'s answer for a
+NULL sequence, or `0x4B7F30`'s out-of-range 0 (`0x4C7580` returns at `0x4C7597`). A face the
+engine does draw and the publisher cannot carry — an index at or past the vertex count (so every
+painted face of a node with no vertex), a flat face of more than 32 points, an index pointer that
+is not one, an unreadable or RLE frame, `0x4B7EE0`'s index past its table, a piece whose logo
+chain did not validate or whose sequence is NULL (`0x4B7F30` reads the count before its NULL
+test, so the engine faults there) — refuses the whole model, and the record it belongs to is
+taken back whole. **Past the engine's capacities** above (200 vertices or a 20-point face in `0x46BAE0`, a
+25-point face in `0x4211D0`) the engine's picture is whatever the overrun leaves; the publisher
+carries such a node as the arithmetic describes it, uncorrupted, up to its own bounds of 2048
+vertices, 512 faces and 32 points a face.
+
+**It poses only what a frame can show.** Before the rotation, and before it reads a face, the
+publisher tests the model against the frame's reach — the published window at the zoom floor
+plus the lead and the fog grids, the rect every frame drawn from that packet stays inside — with
+a margin from the node's rest vertices (`2·r + 4` pixels, `r` their largest `|x|+|y|+|z|`), and a
+model outside it is not posed, whatever its faces would have answered. It differs from the
+engine only in cost: `0x49BE60` poses every model projectile, and none the publisher skips could
+have put a pixel on the frame (MEASURED below). The reach and the projection keep the whole
+pixel where the engine cuts it to 16 bits (`0x46BAE0` above), so they agree while the model is
+within 32 768 px of the eye — on every stock map, the largest being 20 480 px square.
+
+**MEASURED 2026-09-24** (paused, 1×, 1024×768, the engine's own draw with `fxown` off as the
+oracle): the transcription paints the engine's pixels — `fx-rockets` 28 of 28, 18 of 18, 2 of 2,
+15 of 15 and 19 of 19 model-only pixels; `big-battle` 1292 of 1352, 487 of 492 and 587 of 588,
+the others where the engine's finished frame shows a health bar or a sprite's edge drawn after
+the models (the comparison lays the models over that frame). The reach test, in a
+test build that posed every model anyway and checked each posed vertex: over about 2 million
+vertices of `big-battle`, none outside the margin its node's rest vertices give, and of about
+150 000 models the test would have skipped, none with a pixel inside the reach.
 
 ### The raised effect pools — every site `tagpu_limits.h` rewrites [DISASSEMBLED 2026-09-23, objdump of the pristine build; MEASURED 2026-09-23]
 
