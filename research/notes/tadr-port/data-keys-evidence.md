@@ -3,9 +3,9 @@
 A read-only pass made 2026-09-25 over every key of
 [the merge exploration's §C](../tadr-merge-exploration.md#c-new-data-keys), to settle what each one
 does in TADR, what stock does where it acts, which peer decides it, and whether TADR's
-implementation holds by construction. It was made in four parts, one per area. The decisions it fed
-are in [the plan](data-keys.md); each part records the owner's answer where it raised a question.
-Sources: `pristine/TotalA.exe.pristine` (main checkout), disassembled with
+implementation holds by construction. It was made in four parts, one per area, and a census of
+Escalation's content (Part 5). The decisions it fed are in [the plan](data-keys.md); each part
+records the owner's answer where it raised a question. Sources: `pristine/TotalA.exe.pristine` (main checkout), disassembled with
 `i686-w64-mingw32-objdump -d -M intel`; `vendor/TADR` at `dcff5dd`; the retail archives read
 through `tools/hpipack.py` for stock-content counts (counts and names only; nothing extracted into
 the repo). Every address was re-read in the disassembly; where TADR's number is quoted it was
@@ -38,6 +38,7 @@ is the case rule 3 exists for.
 | `Rotations=` (the switch for building rotation: sim + wire, ~25–30 sites; TADR's fails by construction five ways) | a D feature | group D · Part 4 §1 |
 | `reloadbar` (TADR's full value ignores health and veterancy; our marker pass is its home) | display, a D feature | group D · Part 2 §2 |
 | weapon `ID=` 0–4095 | done | [A′3](content-ids.md) |
+| what Escalation's content uses: every `surfacefire` weapon is a water weapon; every veterancy list has 5 entries; `PreviewFaceOpponent` rests on the recorder's COB getters | census | settles the plan's open questions · Part 5 |
 | a hit above 32 767 wraps the HP word; kill-outright spares a veteran above 24 000 HP; a NULL read at `0x4673B1`; meteors per peer | stock defects | B7 · Part 3 §2, Part 2 adjacent |
 
 ---
@@ -527,8 +528,9 @@ documentation is the meaning, unless real content relies on the code** (the plan
 1. **`nottoair` holds at fire time too.** The documentation says the weapon "cannot target or fire
    at flying units". A held unit target that is flying is dropped at the fire gate the way
    `0x48A1E0` drops a dead one, and acquisition picks again through the filtered verdict.
-2. **`surfacefire` never engages aircraft.** Whether it acts on a weapon without `waterweapon`
-   waits on the Escalation census ([the plan](data-keys.md#open-questions)).
+2. **`surfacefire` never engages aircraft**, and it acts on water weapons only, as documented:
+   every one of Escalation's 11 `surfacefire` weapons is a water weapon (Part 5), so no content
+   relies on TADR's non-water behaviour.
 3. **The mirrors.** Each flag applies to the order action wherever stock tests its counterpart,
    since the documentation says "cannot target".
 4. **Yes.** Every site is written at attach in both builds and fails closed. The lazy install is not
@@ -2029,3 +2031,51 @@ that may disagree with the script) and TADR's rule (a documented leak).
 - **TADR's stale yardmap cache in a second game (§1c.5)**: the frees and the missing clear are
   DIS and SRC; the dangling pointer was not observed.
 - **Mod usage** of any of these keys: no stock FBI uses them, and no mod content was read.
+
+---
+
+## Part 5. What Escalation's content uses
+
+A census made 2026-09-25 of TA: Escalation GOLD 10.2.0, the largest mod written against these
+keys, to settle the contract's exception (content that relies on TADR's code rather than its
+documentation). Source: the distribution's RAR (`vendor/taesc/`, gitignored; sha256 `a9873e55…`),
+its HPI archives read with `tools/hpipack.py`, a tolerant TDF parser, and `tools/tacob` for two
+scripts. Counts and names only; nothing from it is in the repo, and nothing in it was run.
+
+**Escalation does not load stock data folders.** Its hex-edited `TotalA.exe` reads `weaponE\*.tdf`,
+`unitsE`, `gamedatE` and the other renamed folders, never `Weapons\`. So it does not run on our
+stack as shipped: our patches are checked against the stock 3.1 exe, which reads the stock folders.
+What the census gives is the shape of real content written for these keys.
+
+| key | uses | shape |
+|---|---|---|
+| `surfacefire` | 11 weapon sections | **all 11 carry `waterweapon=1`.** Four D-guns (`DGUN_*`: `lineofsight`, `beamweapon`, `commandfire`, `weapon3` of the commanders and decoys, which walk on land and on the seabed); five sub-launched `vlaunch`+`selfprop` missiles fired from submerged submarines (`VSPAM_UW`, `VLAUNCH_SUB_*`, `NUKE_SUB_*`), all five also `nottounderwater`; two beams no unit names. 10 of 11 carry `nottoair`; `DGUN_DECOY_CORE` does not, where its three siblings do. |
+| `nottoair` | 73 weapon sections | only surface-attack weapons (cannons, torpedoes and depth charges, rockets, nukes, sub missiles, three of the four D-guns); never with `toairweapon`. 43 of the 161 units carrying one also carry an AA weapon, nearly always `weapon3`. |
+| `nottounderwater` | 5 | the five sub-launched missiles above. |
+| `VeterancyThresholds` | 197 FBIs | **every list has exactly 5 entries**, strictly increasing, one of four tier lists (`10…50`, `20…100`, `50…250`, `100…500`). None malformed. The other 352 FBIs take the default. |
+| `VeterancyAccuracyBuffRate` | the same 197 | 24 / 48 / 120 / 240, one per tier. None zero or negative. |
+| `PreviewPieces` | 15 FBIs | the whole-model list; no per-facing variant. |
+| `PreviewFaceOpponent` | 12 FBIs | long-range defences (Big Bertha, Intimidator, Guardian, Punisher …). Their scripts find the enemy through the recorder's extended COB getters (`GET` 69, 70, 73, 74, walking every unit ID; `tools/tacob` on `ARMBRTHA.cob` and `CORINT.cob`), which stock COB and our stack do not have. |
+| `Rotations` | 0 | only in comments, in two FBIs. |
+| `notoverwater`, `notoverland`, `nomapweaponalert`, `reloadbar`, `TransportedExplodeAs`, `TransportedSelfDestructAs`, `PreviewPiecesS/E/N/W`, `PreviewObject3D` | 0 | — |
+| weapon `ID=` | 240 sections | 0..243; none above 255. |
+
+**What it settles.**
+
+- **`surfacefire` follows its documentation**: every use is a water weapon, so no content relies
+  on TADR's non-water behaviour, and the can-aim hook it would need is not ported. The two shapes
+  C2 must work for are the ones Escalation uses: a D-gun that is a water beam weapon, fired by a
+  commander on land at land units and from the seabed at surface units; and a `vlaunch` missile
+  from a submerged submarine that must steer once above water (the guidance at `0x49B9EB`).
+- **"Never aircraft" changes one Escalation weapon.** Under TADR's code `DGUN_DECOY_CORE`, whose
+  siblings all say `nottoair=1`, can be ordered onto an aircraft; here it cannot. That follows the
+  documentation and the author's pattern, and it is recorded rather than excepted.
+- **Veterancy's 25-level ceiling touches no Escalation unit.** With five thresholds a list reaches
+  five levels. Escalation's changelog records the ceiling as "up to 5 levels (up to 25 levels in
+  future version)".
+- **`PreviewPieces=` is live content** (C1's override), and **`PreviewObject3D=` has none**: it stays
+  parked.
+- **`PreviewFaceOpponent=` depends on the recorder's COB extensions**, not only on rotation: the
+  buildings it previews turn by getters our stack does not implement.
+- Side findings, not C's: 4 FBIs name weapons no file defines, and 17 `explodeas` or
+  `selfdestructas` values name missing weapons.

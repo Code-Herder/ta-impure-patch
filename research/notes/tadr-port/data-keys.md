@@ -9,9 +9,9 @@ rules shared by every group are in
 [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 The keys are not a blank slate. TA: Escalation, the largest live mod, ships TADR's DLL and uses
-`nottoair` on 73 weapons, `surfacefire` on 12, and both veterancy keys on 146 unit files
-([deep-ta-esc](../deep-ta-esc.md)). So each key is a contract with mod authors that already exists,
-and C keeps it.
+`nottoair` on 73 weapons, `surfacefire` on 11, and both veterancy keys on 197 unit files
+([evidence Part 5](data-keys-evidence.md#part-5-what-escalations-content-uses)). So each key is a
+contract with mod authors that already exists, and C keeps it.
 
 Four findings shaped the plan:
 
@@ -94,8 +94,12 @@ kept in the evidence pass.
   refuses those targets.
 - **`surfacefire`: a water weapon may engage surface units, never aircraft.** Inside the same
   filter, a water-path rejection becomes stock's own range test, so no ordering between flags can
-  loop; the order action's hover refusal (`0x43F24F`); guidance (`0x49B9EB`). TADR's can-aim hook
-  is not ported. On a weapon without `waterweapon`: see [open questions](#open-questions).
+  loop; the order action's hover refusal (`0x43F24F`); guidance (`0x49B9EB`). On a weapon without
+  `waterweapon` it does nothing and is logged at load, as documented, and TADR's can-aim hook is not
+  ported: every one of Escalation's 11 `surfacefire` weapons is a water weapon
+  ([evidence Part 5](data-keys-evidence.md#part-5-what-escalations-content-uses)). One of them,
+  `DGUN_DECOY_CORE`, lacks the `nottoair` its three siblings carry, and so can no longer be ordered
+  onto an aircraft; recorded, not excepted.
 - **`notoverwater` / `notoverland`: the gate sits at `0x49E1FD`, after the per-tick target read.**
   The weapon keeps reloading and spends nothing, and a dead target is still dropped every tick, so
   B4's two-tick hold keeps its meaning. Off the map the weapon is not gated, as TADR.
@@ -128,9 +132,11 @@ kept in the evidence pass.
   counts). The result is a per-type mask in the ghost's own walk order, computed by the same walk
   `ghost_pieces` uses, carried to the render thread through the packet, and applied only when its
   piece count matches. No file change is needed for stock content.
-- **`PreviewObject3D=`: parked** until a mod the owner plays uses it. **`PreviewFaceOpponent=`: waits
-  for rotation**; its premise needs a COB getter no stack here implements, and TADR's version reads
-  fogged enemy positions.
+- **`PreviewObject3D=`: parked**; no known content uses it, Escalation included.
+  **`PreviewFaceOpponent=`: waits for rotation and for the recorder's COB extensions.** Escalation
+  uses it on 12 long-range defences whose scripts find the enemy through the recorder's extended
+  `GET` values, which stock COB and our stack do not have; and TADR's version reads fogged enemy
+  positions.
 
 ## The landings
 
@@ -153,7 +159,10 @@ commit can change.
    threads read (CLAUDE.md).
 2. **C2 — the weapon keys.** The weapon-key store; `nottoair`, `nottounderwater`, `surfacefire`,
    `notoverwater`, `notoverland`, with the extra-weapons module's C paths; `nomapweaponalert`'s
-   silence. Sim sites fail closed, the silence skips and logs. Reviewed at `high`.
+   silence. Sim sites fail closed, the silence skips and logs. The fixtures include the two
+   `surfacefire` shapes real content uses: a water beam D-gun fired by a commander on land and from
+   the seabed, and a `vlaunch` missile from a submerged submarine that must steer above water.
+   Reviewed at `high`.
 3. **C3 — the unit-key store and veterancy.** Every effect site and the panels, the fold site C4
    will use, the saturation for keyed types. It measures what the evidence left open: kill counts
    equal on two peers after a paused fight, and whether a loaded saved game runs `0x42D2E0` with
@@ -177,9 +186,11 @@ commit can change.
 
 ## Open questions
 
-- **`surfacefire` on a weapon without `waterweapon`.** The documentation defines it for water
-  weapons; TADR's code also lets a non-water weapon skip the firer-above-water check in its can-aim
-  hook. Escalation names 12 `surfacefire` weapons, one a "Sub Starburst Missile". If they are not
-  water weapons, the documentation rule's exception applies (real content relying on the code). A
-  census of Escalation 10.2.0's files settles it.
-- **`PreviewObject3D=`** stays parked unless the same census finds it in use.
+None of C's own. Both that the grill left open were settled by the census of Escalation's content
+([evidence Part 5](data-keys-evidence.md#part-5-what-escalations-content-uses)): `surfacefire` acts on
+water weapons only, and `PreviewObject3D=` stays parked.
+
+**Escalation itself does not run on our stack as shipped.** Its own exe reads renamed data folders
+(`unitsE`, `weaponE` …), and its scripts use the recorder's COB extensions. C keeps the keys'
+contract for any content written against them; running Escalation is a separate question for the
+owner, outside C.
