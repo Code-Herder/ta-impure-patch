@@ -17995,31 +17995,81 @@ discrete GPU on a private Xvfb display:
   passes, in the span from the last of them to the frame's end (the marker pass, the end of the
   world target, the composite and the UI, none of which the mirror changes): 1.53 ms p50 and
   2.8–2.9 ms p99 with the mirror against 0.26 and 0.26 under black in one round, while in another
-  the whole frame read 1.26/2.49 ms against 0.82/0.96. That a span which draws the same with and
-  without the mirror is where its cost appears says the world passes' fragment work drains there,
-  past the timestamps written inside their render pass [INFERRED — not settled: another session's
-  instance was drawing on the same GPU throughout both rounds, relaunched several times, and the
-  two rounds disagree by 1.3 ms at p50; a quiet GPU was not available].
+  the whole frame read 1.26/2.49 ms against 0.82/0.96. Another session's instance was drawing on
+  the same GPU throughout both rounds; without one (next block), the same tail is there under
+  black as well.
 - **The LOS cull is not the cost**: the engine LOS-tests only FeatureDefs with `+0xFF` bit 3, and
   no tree has it, so the map's own pass culls none of what the mirror draws either.
 
+**MEASURED 2026-09-24, the tie rule and the stacking** — the same setup; the build merged with
+main at the effects' models (§2.89) unless a line names the build before the merge:
+
+- **`edge=black` draws what main draws**, against main's DLL at the effects' models, each world
+  pass alone at `ss=2`, both presets. Terrain: 30 of 30 at 0 px (the fifteen views above, the
+  off-grid eyes among them). Units: 8 of 8 at 0 px in Classic, at (2566, 616) and (2567, 617)
+  at 1×, 0.5× and 0.25× and at (0, 0) at 1× and 0.5×; in Classic++ this build's eight captures equal
+  main's own second launch before the merge, and main's equal its first, sample for sample — the
+  launch spread above. Features: 12 of 12 at 0 px at 1×, 0.5× and 8×, the eye (1201, 2001) off
+  the cell grid among them, and neither side takes a capture at (2566, 616) at 0.25× or (2567, 617)
+  at 1×, where no feature is in view; at 0.25× the tie rule (above) changes the map's own sprites, (0, 3000)
+  by 18 253 samples and (0, 0) by 69 303 in Classic, 22 279 and 84 026 in Classic++, of 3 145 728 —
+  at the floor every sample centre is a tie, so every change is a former tie. Those four pictures
+  are identical in three launches of three builds, two before the merge and one after. Main's two
+  DLLs, before and after the effects' models, draw every one of these captures alike.
+- **The side strips are the map reflected, to one level but for one sample.** The feature pass
+  over the terrain (a capture-diagnostic build), the strip against the map's own pixels through
+  `taEdge`, at the north-west corner, the left side (−448, 600) and (−448, 2000), and the right
+  side (10304, 6000), each on the cell grid and one px off it, at 1×, 0.5× and 0.25×: 17 of 18
+  views with every sample within one level (about 1 260 000 samples a side view, 630 000 a
+  corner), and the right side at 0.25× with 1 of 1 261 410 two levels off. Two launches before
+  the merge and one after are identical at all 24 views of the set, the top strips' included.
+  **That one sample is a translucent shadow's rounding** (*What it does not do*): with the bodies
+  not drawn, 2 of 1 261 412 at 0.25× and 8 of 1 261 560 at 1× on that side are two levels off and
+  none on the left; drawn opaque, the same shadows are exact at all three (0 of 1 247 112,
+  1 261 270 and 1 207 004).
+- **The top strip's sprites are their sources moved straight up.** A diagnostic build that draws
+  no terrain and only features standing apart (greedy in row order, 6 rows and 5 columns clear):
+  every whole sprite in the band equals its source on the map moved up by a whole number of
+  samples, through the tone, within one level — over the map's top-row trees at (4132, −352) and
+  one px off it, 2 and 2 sprites at 1×, 2 and 2 at 0.5×, 60 and 59 at 0.25×, and 2 and 2 at
+  (3000, −352) at 0.25× (every tenth row and column). A tree in the map's first rows overhangs
+  the edge, so its source straddles it.
+- **The depth keys, offline** (the shipped text lifted from `tagpu_feat.c`, x87 float semantics as
+  the DLL is built): over 20 000 random maps and views under the centre clamp, 65 419 838 copies —
+  in every copy the keys rise row by row (0 violations, flats and talls apart) and no two anchors
+  of one row share a key (0), no source column falls outside the clamped columns (0), and the
+  map's own keys equal main's inline arithmetic bit for bit, no two of them equal.
+- **The frame's tail is not the mirror's.** Per-bucket GPU timestamps (the span after the world
+  passes split into the marker pass, the world target's end, the composite with the UI, and the
+  frame's close), the shipped play set, the north-west corner at 1024 × 768, `--maxfps 0`, mirror
+  and black alternated, no other game on the GPU. At 0.25×, nine reports a side: frame p99
+  3.94–5.60 ms with the mirror and 3.08–5.21 under black, p50 0.54–1.27 and 0.65–0.82; the tail
+  on both sides in the world target's end (p99 1.92–3.85 and 1.64–3.62) and the frame's close
+  (up to 2.36 and 3.58); the mirror's own two buckets 0.03 and 0.07 ms at p99. At 1×, six reports
+  a side: frame p99 2.52–5.36 and 2.66–4.21. The earlier rounds' tail-free black did not
+  reproduce, and the tail moves between reports on both sides by more than the mirror costs
+  [INFERRED: the GPU's own clock and queue state at an uncapped frame under a millisecond; the
+  desktop's own clients still shared the GPU]. `mirror_gather` on the CPU at this size: 37 µs
+  p50, 73 µs p99, 345 mirrored anchors.
+
 **What it does not do.**
 
-- **At the 0.25× floor a mirrored feature is not an exact reflection.** There every sample lies
-  exactly on a texel boundary, so which texel a sample takes is decided by the interpolation's
-  rounding — for the map's own sprites (main's) and for a turned one alike, and the two round
-  differently. MEASURED, Two Continents' north-west corner, the feature pass alone: the side strip
-  against its reflection differs in 7 % of its lit samples at 0.25× and in 1 of 95 970 at 0.5×. The
-  rounding moves with where the frame sits in the atlas, so two launches of either walk differed by
-  1 555 of 3 145 728 samples, all in the turned copy. A nudge that decides every tie by a margin
-  makes it repeatable (six variants, each identical across two launches) but no closer to the
-  reflection (7–11 %), since the map's own sprites keep their rounding; nor does emitting the turned
-  quad as the upright one's mirror image, triangle for triangle (7 %). Open.
+- **A translucent shadow past the edge can round two levels from its reflection.** The world
+  target is linear RGBA8, so every blend into it rounds to 8 bits. On the map a shadow blends over
+  the ground and the reflection is that pixel toned; past the edge each layer is toned first and
+  then blends. The two orders agree within a level almost everywhere, not everywhere. MEASURED
+  with the feature pass's bodies not drawn, Two Continents' right side from (10304, 6000): 2 of
+  1 261 412 samples two levels off at 0.25× and 8 of 1 261 560 at 1× (none on the left side at
+  0.25×), and 0 at all three with the same shadows drawn opaque — the texels, the layers and their
+  order are the map's; the arithmetic is not. With the bodies drawn, 1 of 1 261 410 at 0.25× and
+  none at 1×. An exact strip needs the tone applied to the map's own finished pixels, or a world
+  target wider than 8 bits, which would change the rounding of every blend on the map as well.
 - **A 3D feature the map placed — a hulk — is not mirrored** (the owner's ruling). It takes a record
   of the wreck pool, which moves with play; the list skips it rather than freeze a copy.
-- **The schema's own features are not mirrored.** A map's `.ota` can place features of its own
-  (`0x423160`, after the TNT's, on a new game only: one on Steel Jungle, eight on King of the
-  Hill); they are not the TNT's.
+- **The schema's own features are not mirrored — the rule, not a gap** (the owner's ruling: the
+  mirror's map is the map file). A map's `.ota` can place features of its own (`0x423160` through
+  `0x4224B0`/`0x423C50`, after the TNT's, on a new game only: one on Steel Jungle, eight on King of
+  the Hill); they are not the map file's, and a TNT feature one of them destroys stays mirrored.
 - **A map with more than 65 536 features** is mirrored with its first 65 536 in row order.
 - **Under the GDI renderer nothing is built**, since nothing would draw it.
 - **The mirror carries no fog of war, no light and no units** — by the owner's call, as in the lab.

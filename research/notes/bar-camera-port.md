@@ -288,10 +288,10 @@ the rest of `R` and the residual on it rather than banking them.
   * They are flipped across a side edge and stand upright across the top and bottom.
   * A y-mirrored anchor **adds** the half height rather than subtracting it, because the art has
     the height baked in.
-  * Their depth keys come from the same base and formula as the map's own, so the two sort
-    against each other.
-  * They are discarded inside the map rectangle, or the painter's order lets a mirrored tree cover
-    the last rows.
+  * A copy takes its source's depth key and is emitted in its source's order, so it stacks as
+    the map does.
+  * Each copy draws only in its own columns, and a copy past the top or bottom never on the map's
+    rows, or the painter's order lets a mirrored tree cover the last rows.
 * **Units stay on the map.** The minimap is unchanged, as BAR's is.
 
 The game's terrain is instanced: `tagpu_terr.c`'s vertex stage reads one quad plus a per-instance
@@ -326,8 +326,10 @@ tile taken from the reflected cell and its flip bits in spare bits of the instan
   grid as the terrain is, a turned one the other way, so at 0.25× the map's own features change
   (only there: 0 px at 1× and 0.5×) and a turned copy is its source's texels reflected. With the
   copies swept over the reflected rect, emitted in their source's order, kept to their own columns
-  and keyed as their sources, the side strips are the map reflected at 0.25×, 0.5× and 1×
-  ([GPU status](gpu-status.html) §2.90).
+  and keyed as their sources, the side strips are the map reflected at 0.25×, 0.5× and 1× to
+  within a level, and the top strip's sprites their sources moved up, except where a translucent
+  shadow blends: an 8-bit blend toned before and one toned after can land two levels apart (one
+  sample in 1.26 million at 0.25×; [GPU status](gpu-status.html) §2.90).
 * **The grid's origin is a floor**, in the game and in the lab. The engine's toward-zero division
   left up to 31 px of the view's leading edge with no cell past the top or left edge, which the
   mirror showed as a band of clear colour ([terrain depth](terrain-depth.html)).
