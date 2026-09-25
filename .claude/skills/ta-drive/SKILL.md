@@ -19,7 +19,7 @@ the research notes and in `git log`, not here (*Maintaining this skill*, at the 
 | `references/levers.md` | you arm anything beyond the bench line, drive zoom or the camera, or read a `tagpu.log` heartbeat |
 | `references/measuring.md` | before any A/B, pixel diff, cross-build comparison or frame-time figure |
 | `references/ui-layer.md` | the question is the HUD, the shell, the cursor, text, the minimap, HUD scale or a windowed `k` |
-| `references/modules.md` | extra weapons, the COB trace, multiplayer, many unit types (the synthetic mod), the render-options screen and the GPU row |
+| `references/modules.md` | extra weapons, the COB trace, multiplayer, many unit types (the synthetic mod), weapons past 256, the render-options screen and the GPU row |
 
 Design and mechanism: `research/notes/tacli-design.md` (the tool), `input-firewall.md` (input
 isolation), `windowed-mode.md` (display bugs), `cmdline-options.md` (every launch knob),
@@ -331,9 +331,9 @@ Design and engine recipe: `research/notes/scenario-format.md`.
   `*`, `+hex`, `:1|2|4|s<N>|x<N>`; grammar in `tagpu/ddraw/inc/tagpu_peek.h`). Camera: eye
   `+0x1431F`/`+0x14323`, scroll target `+0x14327`/`+0x1432B`, view size `+0x37E37`/`+0x37E3B`,
   screen size `+0x37E1F`/`+0x37E23`, mouse `+0x2C76`/`+0x2C7A` (y is at `+0x2C7A`).
-- **`tacli log <name> -g <regex>`** (a Python regex: `(a|b)`, not `a\|b`) and
-  **`tacli wait <name> <regex>`**. The log is `gamedir/log/tagpu.log` and **rotates** (every
-  launch, and at 16 MB; `tagpu.1.log` … `.10.log` behind it): read a run with
+- **`tacli log <name> -g <regex>`** (a Python regex: `(a|b)`, not `a\|b`; the **last 40** matches,
+  `-n 100000` to count a run) and **`tacli wait <name> <regex>`**. The log is `gamedir/log/tagpu.log`
+  and **rotates** (every launch, and at 16 MB; `tagpu.1.log` … `.10.log` behind it): read a run with
   `tools/talog.py run <gamedir>`, slice one with `talog.py mark`/`since`, never by byte offset
   (`research/notes/logging.md`). It holds binary bytes: `grep -a`.
 - Video and frame-by-frame analysis: the **ta-capture** skill.
