@@ -2081,18 +2081,20 @@ live, commander selected on Two Continents at type 1: a left click on ground wal
 the clicked point, and the same click with `tagpu_curs.off` deselected it and moved nothing. The
 full path is `exe-reverse-engineering.md` §"The in-game mouse buttons".
 
-### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–7 and A′2
+### 2.6b The raised engine limits (`tagpu_limits.h`, the limits block of `tagpu_patches.c`, always on) — the TADR port, landings 1–7, A′2 and A′3
 
 **What it is.** TA's limits, raised the way TADR raises them, as our own C: projectiles
 300 → 3000, explosions 300 → 3000, flying pieces 100 → 1000, debris records 300 → 3000, units a
 player 250 (default) / 500 (ceiling) → 1500 / 1500, the pathfinder's budget 1333 → 66 650, and
 particles 400 → 20 480 a layer from a pool of 1000 → 204 800 objects, the composite
 scratch frame 600² → 1280², the wreck pool 2048 → 8192 records, which TADR does not raise
-(landing 6; its full-pool defect is §2.6c's fourth fix), and unit-type slots 512 → 16 384
-([A′2](tadr-port/content-ids.md)), with the network join's pace that the raise makes slow. The engine's simultaneous sounds are not a
+(landing 6; its full-pool defect is §2.6c's fourth fix), unit-type slots 512 → 16 384
+([A′2](tadr-port/content-ids.md)), with the network join's pace that the raise makes slow, and
+weapon IDs 256 → 4096 ([A′3](tadr-port/content-ids.md)), the array moved into the DLL and the ID
+widened on the wire. The engine's simultaneous sounds are not a
 site: they are the settings store's `mixingbuffers`, held to 32 (below).
 Planned in [the TADR port](tadr-port/raised-limits.md); every site is in the engine map, *The raised
-effect pools* (its *Unit-type slots*) and *The per-player unit cap*.
+effect pools* (its *Unit-type slots* and *Weapon IDs*) and *The per-player unit cap*.
 
 | What | Sites | Mechanism |
 |---|---|---|
@@ -2114,15 +2116,20 @@ effect pools* (its *Unit-type slots*) and *The per-player unit cap*.
 | the category masks | the heap mask's allocation `0x488CC2` (a stub: `push 0x40` has no room for 2048), clear `0x488CD3` and OR `0x488E3E`; the stack masks' frames in the AI's `Weight` (`0x406DB5`, `0x406DBE`, `0x406DC9`, `0x406DFD`, `0x406E3A`), `Limit` (`0x406E45`, `0x406E52`, `0x406E5D`, `0x406E64`, `0x406EB2`, `0x406ED6`) and Ctrl-Z (`0x48BE08`, `0x48BE22`, `0x48BF1E`) | 0x40 → 2048 bytes; each frame's mask sits at its foot, so the entry, the clear count, the displacements above the mask and the release move, through stubs |
 | the unit-type count | `0x42AA65`, before the def array is allocated from the count | a `call` to a stub that refuses more than 16 384 slots with a dialog and `ExitProcess(1)` |
 | the network join's pace | `0x46DE91` | the joiner's unit-sync checksums 4 → 64 types a lobby tick |
+| the weapon array's references | `0x42CDCD`, `0x42F3AB`, `0x49E5CB`, `0x437CF7`, `0x437D13`; bounds `0x42F431`, `0x49E5EB` | `mov reg,[main]` → an immediate of `s_weapons − 0x2CF3`; `0x11500` → `4096 · 0x115` |
+| the weapon loader, wipe and model | `0x42E468` (the base, and the ID's bound, both builds), `0x42E31C` (the wipe's loop), `0x42EC99` (the model's loop), `0x42ED46` (the model's store, rewritten in place) | stubs that take the record from the full index; the ID byte `+0x10A` is the slot below 256 and nonzero above |
+| `0x0D`, weapon fired | the five sends `0x49D859`, `0x49DB4D`, `0x49DD27`, `0x49DEEE`, `0x49DFF6`; the receiver's block `0x49D280` (both builds) | ID bits 8..11 in the high nibble of `+0x23`; the receiver bounds the shooter and target |
+| `0x0F`, feature hit | the send `0x424575` and the receiver's dispatch slot `0x455FB8` (both builds) | ID bits 8..11 in bits 12..15 of the cell x; bit 11 marks a hit whose byte is a sentinel's |
+| `0x0E`, interceptor detonation | the byte reads `0x49A78C`, `0x49A7CD`, the sends `0x49A7A8`, `0x49A7E9`, the receiver's compare `0x49AFC9`, and the `0x05` dispatch slot `0x455F90` | below 256 stock's message; from 256 a companion chat message, `05 00 49`, the target point and a `u16` ID |
 
 **The rule, one table and all or nothing.** `tagpu_limits_install()` runs from `DllMain` right
 after `tagpu_apply_patches()`, before the exe's entry point, so no engine thread executes a site
 while it changes. It reads every site (through `VirtualQuery`, never assuming the page), compares
-all 86 with the stock bytes, and writes them only if every one matches; a refused write puts back
+all 130 with the stock bytes, and writes them only if every one matches; a refused write puts back
 what was written. The patches last for the process and are never restored. The log line names the
-moved pools' addresses for `tacli peek`: `limits: installed 86 sites -- …, units 1500 a player,
+moved pools' addresses for `tacli peek`: `limits: installed 130 sites -- …, units 1500 a player,
 pathfinding 66650, particles 20480 a layer from a pool of 204800, composite 1280, wreck records
-8192`.
+8192, unit types 16384, weapons 4096 at 0x…`.
 
 **Fail closed.** If any site differs, nothing is written. At the first `DirectDrawCreate` or
 `DirectDrawCreateEx` — outside the loader lock, before the game window exists —
@@ -2142,7 +2149,7 @@ returns the engine's own location. It is the comparison build, launched with `ta
 
 **What follows the pools.** The frame packet's publisher reads the explosions through
 `tagpu_limits_expl_pool()` and the flying pieces through `tagpu_limits_psys_begin()`/`_end()`,
-never at a fixed address; `TAGPU_PK_MAX_PROJ`/`_EXPL`/`_DEBRIS` are the pool sizes, so an effect
+and `tagpu_weapons.c` the weapon array through `tagpu_limits_weapon0()`, never at a fixed address; `TAGPU_PK_MAX_PROJ`/`_EXPL`/`_DEBRIS` are the pool sizes, so an effect
 table cannot truncate below the engine's own cap. `tagpu_fx.c`'s buckets are sized from the tables
 they draw (`tagpu_fx.h`, and *The particles follow the layer cap* below): `SPRITES` holds a
 projectile's two quads (its shadow blob and its frame), an explosion's one and the particle table;
@@ -2215,6 +2222,16 @@ ring out of it. A 32-bit process with the Vulkan stack can still allocate 1.44 G
 (limits-evidence §8), so a mod of heavier types fits less, and past that says so (§2.6c). 16 384
 real types show the refusal and exit. A first two-peer join at the ceiling takes 20 s at stock's
 pace and 12.5 s at ours.
+
+**Weapon IDs, measured 2026-09-24** (`tools/weaponids_fixture.py`, Two Continents). Single player:
+a tower firing weapon 4000 damages its target through the static's record 4000, and the weapon's
+model is the stock one it copies, borrowed and drawn; the ID-less and 5000 weapons log their skip
+and their towers stay unarmed. Two peers, the joiner's towers firing at the host's wrecks, solars
+and interceptor: every feature hit reaches the host at its full ID; the host's interceptor 3000
+caught 11 of the joiner's rockets 250 and 3322, one low byte and one target, and the joiner
+detonated the right rocket each time, 6 through stock's `0x0E` and 5 through the companion.
+Paused once the fire stopped, the peers held the same units at the same health and the same
+feature cells. The extra-weapons module stays armed beside the raise.
 
 **Sounds: 32, through the store, not a site.** `mixingbuffers` in `impure.cfg` (renderers.md
 2.10b) is 32 by default and one of 8, 16, 24 or 32. `tagpu_menu.c`'s `eng_push_mixing` writes it
@@ -2295,17 +2312,21 @@ stock-limits build is therefore a comparison build, not a proof of equality.
 
 ### 2.6c The stock engine's own defects (`tagpu_patches.c`, always on)
 
-**What it is.** Six places where the retail image writes or reads memory it does not own (the
+**What it is.** Seven places where the retail image writes or reads memory it does not own (the
 third also leaves a strip of the viewport unpainted, which the same patch paints; the fourth is the
 composite scratch frame's five writers and the rasterisers' span tables under them; the fifth and
-sixth are a builder's build list and the download menus' records, which a large mod reaches), one
+sixth are a builder's build list and the download menus' records, which a large mod reaches; the
+seventh is a weapon's ID, which the loader and two network receivers take unbounded), one
 where it takes a player's payment and does not deliver (a feature reclaimed or destroyed while the
 wreck pool is full), one where it takes it twice (a feature reclaimed through a cell that is not its
 anchor while it plays its sequence), one where a network game can never start (two unit types with
-one unit-sync key), and the out-of-memory text, which blames the disk. They are patched at every
-attach, in both builds, by `patch_engine_defects()` at the end of `tagpu_apply_patches()`.
+one unit-sync key), one where the peers disagree (a weapon with the ID 253–255 hitting a feature,
+fixed with the seventh), and the out-of-memory text, which blames the disk. They are patched at every
+attach, in both builds, by `patch_engine_defects()` at the end of `tagpu_apply_patches()`; the
+weapon IDs' fix alone is written with the raised limits in the raised build (§2.6b), whose sites
+include its own.
 Each patch is the identity on every input stock handles correctly. Each site is compared with its
-stock bytes and skipped alone, as §2.6's rows are: the ten are independent, and any one alone is
+stock bytes and skipped alone, as §2.6's rows are: the eleven are independent, and any one alone is
 still the identity wherever stock is correct. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
@@ -2321,6 +2342,7 @@ engine defects we patch".
 | `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | a builder's build list: the game load's shared `TEMP UTYPE LIST` and each builder's copy at def `+0x156` hold 30 entries, the append and the download appender `0x42BE30` write past them | three `call`s to stubs that grow a block through `0x4D83B0` before the entry that would not fit (`bl_room`: 30, then powers of two from 64), a `jmp` past the copy's `rep movs`, the appender's cap NOPped |
 | `0x42DD74`, `0x42DDF0`, `0x42DE12`, `0x42DF23`, `0x42DF35`, `0x42E0B9` | the download menus' records, one of five entries a file at `[main+0x391CB]`, filled with no cap | the block from a zeroing allocator; a file continues into records at the block's end, which grows; stock's count write NOPped; the next file's record by index; the page count reads the record count; the downloadable check reads the files' own records only |
 | `0x49E700`, `0x49E7BD`, `0x49E7CD`, `0x49E7F4` | the allocator's new handler's text, "Your hard disk may be full" | a call at the handler's entry writes our text into a static; the three reads point at it |
+| `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | a weapon's ID: the loader `0x42E440` takes the record from it with no bound; the `0x0D` receiver `0x49D270` scales the `u16` shooter and target by 0x118 into the unit array with no bound, and indexes the shooter's slots by `+0x23` with none; the `0x0F` receiver `0x45544D` reads the bytes `0xFD`..`0xFF` as sentinels even when a weapon sent them, and reads through `0x481550`'s NULL for a cell off the map | four sites compared and written together: a `call` in place of the loader's `mov edx,[main]` that skips a weapon outside the array, or whose section name (copied to `+0` with no bound at `0x42E490`) does not fit its record; a `call` over the receiver's lookup that bounds both indexes, and the slot byte to the shooter's three slots when the extra-weapons module is off, and drops the message past them; a `call` over the `0x0F` send that marks a hit whose byte is `0xFD`..`0xFF` with bit 11 of x; the `0x0F` dispatch slot pointed at a stub that tells the hit from a sentinel by that bit and refuses a cell off the map |
 | `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys all but the first by name of each group of types sharing a key, to a hash of the name moved past every held value, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
@@ -2343,23 +2365,41 @@ blocks, as stock does, only larger; what a builder and the AI then read past sto
 content. The out-of-memory text writes our static. The unit sync's keys are engine state, and
 content: the keys depend on the types' names and natural keys only, not on the order the files
 were found in, so two peers with the same files compute the same keys and it changes nothing the
-peers can disagree on; stock content, whose 278 names share no key, is not re-keyed.
+peers can disagree on; stock content, whose 278 names share no key, is not re-keyed. The weapon IDs'
+fix writes no engine state, only message bytes: a skipped weapon is one the loader never writes, a
+dropped message one the receiver never acts on, and a flagged hit is damage where stock's host
+destroyed, burned or reclaimed the feature. In both builds the bytes are the `0x0D` it receives
+(`+0x23` masked to its low nibble in the receive buffer before stock reads it) and the `0x0F`
+hit's flag. The raised build adds the `0x0D` it sends (the ID's bits 8..11 in `+0x23`'s high
+nibble, and the meteor's `+0x1A`..`+0x23`, which stock sends as the stack held them, cleared) and
+from 256 up the `0x0E` (the companion goes out, and the stock message's type byte is zeroed so its
+send is skipped). That is simulation, as content: stock's weapons carry neither an ID outside
+0..246 nor the bytes `0xFD`..`0xFF`, so with stock content every message means what stock's does,
+and is stock's byte for byte but for the raised build's cleared meteor tail.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
 reclaim tests the anchor's mark 0x423892 ARMED; composite scratch bound (0x4589C0 0x45A470 0x45A790
 0x459830 0x459C70 0x4B90A0) ARMED; whole build lists (0x42DA58 0x42DAC7 0x42BEC3) ARMED; download
 menus past five entries (0x42DCF0) ARMED; the out-of-memory text (0x49E700) ARMED; unique unit sync
-keys (0x42BD29) ARMED`, and every grow or refusal of the frame logs its own line
+keys (0x42BD29) ARMED; weapon IDs bounded, feature hits told from sentinels (0x42E468 0x49D280
+0x455FB8 0x424575) ARMED` (in the raised build the last reads `with the raised limits (the limits
+line)`), and every grow or refusal of the frame logs its own line
 (`enginefix: composite scratch grown|refused (<reason>) for <writer>: N px in R rows asked, A held, P
 now`, and `composite scratch merge refused: a WxH cargo at (x,y) is past the WxH frame`); a load
 that re-keys logs its first eight types and a total (`enginefix: unit sync keys: N of M types
 re-keyed`). A
 site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
 `SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
-place of `ARMED`. The first six fixes release a stub whose site cannot be written; the last four
-share one page of stubs, which stays. There is no switch: all ten
-fixes are installed on every launch, `tagpu_defaults.off` included.
+place of `ARMED`. The first six fixes release a stub whose site cannot be written; the last five
+share one page of stubs, which stays. There is no switch: all eleven
+fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
+`enginefix: weapon <name> has ID <id>, outside 0..<max>, and is skipped` or `enginefix: weapon
+<name>... (ID <id>) has a name longer than its record, and is skipped`, a duplicate `enginefix:
+weapon ID <id>: <name> replaces <name>`, and a dropped message or companion `enginefix: weapon
+IDs: <why> (<a>, <b>)` (the first 32, and the first 32 companions on a budget of their own, since
+out of play a companion drops by design; one the gate refuses names the weapon and the in-play
+handler's slot).
 
 **What it does not cover:**
 

@@ -155,6 +155,37 @@ tools/tacli log u1 -g "enginefix|limits"
   in another order, and must still agree on every key. `--pad KB` inflates every script so a mod exhausts the address space: the
   out-of-memory message's test.
 
+## Weapons past 256: the test weapons
+
+The build has 4096 weapon IDs, stock 256 (`research/notes/tadr-port/content-ids.md`).
+`tools/weaponids_fixture.py` writes stock weapons under new IDs, each on a copy of a stock tower
+(the docstring lists them): 4000, 5000 and one with no `ID=`; lasers 253–255 and 3581–3583; slow
+targetable rockets 250 and 3322, one low byte; and `WIDAMD`, an interceptor at 3000. `--low`
+keeps the IDs below 256, for a build without the raise.
+
+```bash
+tools/weaponids_fixture.py tagpu/instances/w1/gamedir/zzwid.ufo
+tools/tacli log w1 -n 1000 -g "enginefix: weapon"      # 5000 and the ID-less one: skipped
+```
+
+- **An interceptor fires only from stock**, and stock is built only by an order from the unit's
+  build page: `tacli click` the unit (it must be on screen), then `tacli ui <i> click ARMMAKEANTI`
+  once a missile. `tacli weapons <i>` shows the count as `stk=`.
+- **A weapon reaches a feature through its blast**: area damage hits the feature cells inside its
+  radius, so the lasers carry a blast of 96; a stock laser's 8 does not reach a wreck's cells.
+- **Place a test on level ground.** A tower below a cliff aims at a target on top and never fires
+  (`tacli weapons` shows it aiming, `rl=0`), and a unit placed at height 0 stands in the sea.
+  Read the height at `*(*0x511DE8+0x14287) + (y/16 · width + x/16) · 13 + 4`, one byte, with the
+  width at `*0x511DE8+0x14233`.
+- **In a network game a feature's damage is the host's.** A peer that is not the host sends each
+  hit to the host as a `0x0F` and the host damages the feature; an outcome (destroyed, burned,
+  reclaimed) goes out as a `0x0F` from whichever peer ran it. Compare the
+  peers paused, after the fire stops and every projectile has landed: a projectile in flight at
+  the pause is damage one peer has applied and the other has not.
+- **An interceptor's detonation reaches only a projectile still in flight** on the peer that owns
+  it, which is ahead of the host's copy by the link's delay: a fast rocket caught near its target
+  has often already hit there. The fixture's rockets are slow for that reason.
+
 ## The render-options screen and the GPU row
 
 `tagpu_menu.c` adds our rows to **Options → Visuals**: the frame-rate readout (`VFPS`), the GPU

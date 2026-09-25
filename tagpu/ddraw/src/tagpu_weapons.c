@@ -37,7 +37,6 @@ typedef int            i32;
 #define OFF_UNITS_BEGIN  0x14357       /* UnitStruct* BeginUnitsArray_p        */
 #define OFF_UNITS_END    0x1435B       /* UnitStruct* EndOfUnitsArray_p        */
 #define OFF_DEFS         0x1439B       /* UnitDefStruct* array base            */
-#define OFF_WEAPON0      0x2CF3        /* Weapons[0]: the "no weapon" entry    */
 #define OFF_PROJ_COUNT   0x141F3
 #define OFF_PROJ_BASE    0x141F7
 #define OFF_TICK         0x38A47
@@ -182,7 +181,7 @@ static char* def_weapon(const char* def, int i)
     WDef* r;
     if (i < 3) return *(char**)(def + 0x1EE + 4 * i);
     r = def_rec(def);
-    if (!r || i >= r->count) return TA() + OFF_WEAPON0;
+    if (!r || i >= r->count) return tagpu_limits_weapon0();
     return r->w[i - 3];
 }
 
@@ -1184,7 +1183,7 @@ static void __cdecl cb_loader(char* def, void* ctx)
     r->count = 3;
     for (n = 4; n <= WPN_CAP; n++)
     {
-        char* w = TA() + OFF_WEAPON0;
+        char* w = tagpu_limits_weapon0();
         _snprintf(key, sizeof key, "weapon%d", n);
         buf[0] = 0;
         E_TdfGetStr(ctx, buf, key, 0x80, "");
@@ -1687,6 +1686,11 @@ static void oracle(const char* spec, unsigned frame)
     fwrite(buf, 1, (size_t)(o.p - buf), f);
     fclose(f);
     MoveFileExA(WPN_JSON ".tmp", WPN_JSON, MOVEFILE_REPLACE_EXISTING);
+}
+
+int tagpu_weapons_armed(void)
+{
+    return g_armed;
 }
 
 void tagpu_weapons_frame(unsigned int frame)

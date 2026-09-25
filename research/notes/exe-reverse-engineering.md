@@ -273,18 +273,23 @@ outside the apply frame.
 
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..24]
 
-Six places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
+Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
 composite scratch frame's writers, with the span tables of the rasterisers under them; the fifth
-and sixth are a builder's build list and the download menus' records, which a large mod reaches),
-two where it takes a player's payment and does not deliver (a feature reclaimed or destroyed while
+and sixth are a builder's build list and the download menus' records, which a large mod reaches;
+the seventh is a weapon's ID, which the loader and two network receivers take unbounded), two
+where it takes a player's payment and does not deliver (a feature reclaimed or destroyed while
 the wreck pool is full, and a feature reclaimed twice through a cell that is not its anchor), one
-where a network game can never start (two unit types with one unit-sync key), and the
-out-of-memory text, which blames the disk. `tagpu_patches.c` (`patch_engine_defects`) patches all
-ten at every attach, in both builds: `ddraw.dll` is a static
-import of the exe, so `DllMain` runs before the exe's entry point. The ten are independent. Each is skipped, with
+where a network game can never start (two unit types with one unit-sync key), one where the peers
+of a network game disagree (a weapon with the ID 253, 254 or 255 hitting a feature, which rides
+with the seventh), and the out-of-memory text, which blames the disk. `tagpu_patches.c`
+(`patch_engine_defects`) patches all of them, eleven fixes, at every attach, in both builds:
+`ddraw.dll` is a static
+import of the exe, so `DllMain` runs before the exe's entry point. The eleven are independent. Each is skipped, with
 its reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its stub
-cannot be allocated, or its page cannot be made writable. Each patch is the identity on every input
-the stock code handles correctly. [Binary patches](binary-patches.html) §"Stock engine defects we
+cannot be allocated, or its page cannot be made writable. The weapon IDs' fix is the one exception
+in the raised build: the raise rewrites the same sites, so there they are rows of the limits table,
+written with the raise or not at all, and the `enginefix:` line points to the limits line. Each
+patch is the identity on every input the stock code handles correctly. [Binary patches](binary-patches.html) §"Stock engine defects we
 patch" is the one-row-per-bug register. The disassembly is `objdump -d -M intel` of
 `pristine/TotalA.exe.pristine`, and the callers come from an E8/E9 rel32 scan of `.text`. The
 measurements are `tacli` instances on Two Continents at 1024×768 with
@@ -292,8 +297,9 @@ measurements are `tacli` instances on Two Continents at 1024×768 with
 Lava Run, Coast To Coast and Dark Side at 1920×1080 to 3840×2160, on the camera branch's build
 for the terrain pass, on Town & Country at 1024×768 for the two feature fixes, on Two
 Continents at 1024×768 for the composite scratch, with oversized units made locally from stock
-models (never committed), and on Core Prime Industrial Area with the unit types
-`tools/unittypes_fixture.py` generates for the four large-mod fixes. Each compares against a build
+models (never committed), on Core Prime Industrial Area with the unit types
+`tools/unittypes_fixture.py` generates for the four large-mod fixes, and on Two Continents with the
+weapons `tools/weaponids_fixture.py` generates for the weapon IDs. Each compares against a build
 without the patch.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
@@ -1155,6 +1161,84 @@ What the fix leaves:
   applied to the first type with it.
 - **Two types with one name and one key** cannot be told apart by the sync either; which of them
   keeps the key follows the def array's order.
+
+### A weapon's ID, and the messages that carry it — `0x42E440`, `0x49D270`, `0x45544D`, `0x42454B` [DISASSEMBLED + MEASURED 2026-09-24]
+
+**The loader writes wherever the ID points.** `LoadWeaponTdf 0x42E440` reads `ID` with a default of
+−1 (`0x42E463`) and takes the record at `main + id·0x115 + 0x2CF3` (`0x42E468..0x42E489`) with no
+bound either way. `Weapons[256]` ends at `main+0x141F3`, the projectile pool's count and pointer, so
+ID 256 overwrites the pool's header; ID −1 overwrites `main+0x2BDE..0x2CF2`, the UI and input block
+(the mouse position, the hovered cell, the build footprint, the mode byte `0x2CC3`, `BuildUnitID`
+`0x2CC4`). Stock content's highest ID is 246, and every section has one
+([evidence §9](tadr-port/limits-evidence.md)).
+
+**The weapon-fired receiver `0x49D270` (`0x0D`) takes two unit indexes and a slot from the wire
+unbounded.** It indexes `Weapons[+0x19]` (`0x49D27B..0x49D29F`), and for a weapon without flag bit 5
+(`0x49D2A6`) scales the `u16` shooter at `+0x21` (`0x49D329..0x49D34A`) and the `u16` target at
+`+0x1F` (`0x49D388..0x49D3B7`) by 0x118 into the unit array `main+0x14357`, then reads through both;
+the slot byte `+0x23` becomes the shooter's slot at `+4 + slot·0x1C` (`0x49D366..0x49D370`), which
+it writes (`0x49D37C`, `0x49D384`).
+
+**The feature-hit receiver `0x45544D` (`0x0F`) reads a weapon's ID byte as a sentinel.** The message is
+the type, a byte, and the cell's `u16` x and y. The bytes `0xFD`, `0xFE` and `0xFF` mean "destroyed"
+(`FeatureDie(x, y, 0)`, `0x423550`), "burned" (`0x4233A0(x, y, 1)`) and "reclaimed" (`FeatureDie(x, y,
+1)`); anything else is `Weapons[byte]` and goes to `0x4244B0`. So a weapon with ID 253–255 that hits a
+feature destroys, burns or reclaims it on every other peer, where the peer that fired it damaged it.
+The cell comes from `0x481550`, which returns NULL off the map, and `0x4244B0` reads through it at
+`0x4244CF`.
+
+**Who sends a feature hit.** Area damage `0x49A120` calls `0x4244B0(cell, x, y, weapon)` for every
+cell of its radius that holds a feature (`0x49A626`). `0x4244B0` acts only while `main+0x37F2F` has
+bit 3 (`0x4244C2`; it holds `0x041C` in play), on an anchor cell (`+0x08` below `0xFFFB`) of a
+feature whose def lacks bit 9 of `+0xFE`. In a network game (`[main+0x391E9]` read through
+`0x435100` is 3 [INFERRED role]) a peer whose local player (`main+0x2A43`) has bit 0 at `+0x97` of
+the object `[main+0x1B8A + 0x14B·player]` damages the feature; every other peer sends the hit
+instead: `0x42454B` builds the `0x0F` and `0x424575` sends it, `0x451BC0` with four arguments (the
+first `0x44FDB0`'s, a scan of the ten player records; the message third; `ret 0x10`). MEASURED: the
+host damages, the joiner sends. The sentinels are broadcast through `0x451DF0` by whichever peer
+runs the outcome, and none of their senders tests the host bit: `0xFD` from `0x42469A`; `0xFE`
+from `0x423537`, whenever `0x4233A0` runs with its third argument 0 (callers `0x423A4D`,
+`0x423B55`, `0x4245C6`, `0x4250BB`); `0xFF` from `0x4239A4`, on the peer of the reclaiming unit's
+owner, and from `0x405210` in `0x404DB0` [INFERRED: the resurrect order]. A cell is a 16.16
+position shifted right by 20 (`0x4815A0`), so no reachable x passes `0x7FF`.
+
+**The fixes, both builds** (`fix_weapon_ids`; in the raised build they are sites of the limits
+table, *Weapon IDs* in *The raised effect pools*):
+
+- `0x42E468`: a weapon whose ID is outside the array is skipped and logged, through the loader's
+  epilogue `0x42F333`, past its last call `0x49E010(weapon)`, which sets the record's `+0x60` from
+  its flags at `+0x111` [role INFERRED: the projectile's handler]; nothing of the record is
+  written. So is a weapon whose section name does not fit its 0x115-byte record: `0x42E490` copies
+  it to `+0` with `repnz scas` / `rep movs` and no bound, and the TDF parser cuts a section name
+  out of the file's text (`0x4C4340`, trimmed of blanks), so nothing bounds its length. A name of
+  0x20 or more already runs into the description the loader writes next at `+0x20` (`0x4C48C0`,
+  at most 0x40), as in stock. A duplicate ID keeps stock's rule, the later wins, and is logged.
+- `0x49D280`, 16 bytes: the weapon from the full ID, and the shooter and target each bounded by the
+  unit array's last element (`main+0x1435B`, inclusive: `0x4855D6` sets it to begin + (count −
+  1)·0x118, and the engine's own sweep `0x48BD00` steps with `add eax,0x118` at `0x48BD22` and
+  loops `jbe` to it at `0x48BD38`); a message past it is dropped through `0x49D55D`. The slot byte `+0x23`, which
+  `0x49D366..0x49D384` turns into the shooter's slot at `+4 + slot·0x1C` and writes through, is
+  held to the shooter's three slots without the extra-weapons module; with it, the module's
+  splice at `0x49D364` bounds the slot by the unit's own count.
+- `0x424575`: the weapon's sender takes the byte from the weapon's pointer and marks a hit whose
+  byte is `0xFD`..`0xFF` with bit 11 of x (`0x800`), which no reachable cell uses. The receiver, the
+  dispatch table's `0x0F` slot `0x455FB8` pointed at our stub, which continues at `0x455F50`, reads
+  `0xFD`..`0xFF` as a sentinel only without the bit, drops a flagged byte below `0xFD`, and refuses a
+  cell `0x481550` does not find. The sentinel senders stay stock's, so with weapons below 253 every
+  `0x0F` is stock's byte for byte. A peer on another build reads a flagged x as a cell off the
+  map: stock's `FeatureDie 0x423550` reads the NULL `0x481550` returns for it at `0x423568`
+  (`0x4233A0`, the burn, tests it). Flagging the sentinels would reach that in every game; flagging
+  the hit reaches it only for a weapon 253 or 255, and any hit from 256 up reaches `0x4244CF`
+  the same way through its high bits. Every peer runs the same build.
+
+**MEASURED**, two peers on Two Continents (`tools/weaponids_fixture.py`, lasers with the IDs
+253–255 and a blast of 96 against wrecks, the joiner firing): the host read every hit of the
+joiner's lasers as the weapon's, 140, 141 and 151 of them, and the joiner read the host's
+unflagged broadcasts, 107 `0xFD` and 10 `0xFE`, as sentinels; paused after the fire stopped,
+both peers held the same wrecks cell for cell and the same units at the same health. The
+stock-limits build, on the fixture's `--low` half, the same. The previous build, on the same
+`--low` run of 60 s: the host held 35 feature cells and the joiner 87, the three wrecks the
+lasers hit gone from the host alone.
 
 ## Built-in cheat/console command surface
 
@@ -4964,11 +5048,11 @@ TADR's `EngineLimits.cpp` (prior art, [the TADR port](tadr-port/raised-limits.md
 particle layers, their object pool and the composite scratch frame with them, from its
 `LimitCrack.cpp`. They share **one table**
 with the unit limit's sites (*The per-player unit cap*), the wreck pool's (*The wreck pool, and a
-feature paid for and left standing*) and the unit-type slots' below, 105 sites in all, compared with the stock
+feature paid for and left standing*), the unit-type slots' and the weapon IDs' below, 130 sites in all, compared with the stock
 bytes as a whole at `DLL_PROCESS_ATTACH` and written as a whole or not at all; a mismatch writes
 nothing and the first DirectDraw call shows the startup-failure report and exits. Every site below
 was read out of the pristine image, and the evidence for each is in
-[the evidence pass](tadr-port/limits-evidence.md) §1–4, §7, §8 and §10. Landing reviewers checked the sites
+[the evidence pass](tadr-port/limits-evidence.md) §1–4 and §7–10. Landing reviewers checked the sites
 against the image byte for byte.
 
 **Projectiles, 300 → 3000.** The pool stays the engine's, allocated per game:
@@ -5186,6 +5270,99 @@ the displacements above it move (`0x406DB5`, `0x406DBE`, `0x406DC9`, `0x406DFD`,
   selects every generated unit by Ctrl+G and by Ctrl-Z. At the ceiling, 16 383 real types:
   `UNITINFOCount` reads 16 384, a `Weight` line naming ID 16 383 loads, and Ctrl+G and Ctrl-Z each
   select all 10 generated units.
+
+**Weapon IDs, 256 → 4096** [DISASSEMBLED 2026-09-24; MEASURED 2026-09-24]. `Weapons[]` moves to a
+DLL static of 4096 records of 0x115 bytes (1.1 MB, for the life of the process); the block at
+`main+0x2CF3` stays and nothing reads it. A weapon's ID is then `(pointer − base) / 0x115`, exact
+and bounded, since every pointer the engine keeps to a weapon (unit defs, unit slots, projectiles
+`+0x00`, feature defs `+0xE4`, the meteor's `0x512328`) is into the static. 25 sites, the
+evidence's complete list of 18 displacements and 3 bounds ([§9](tadr-port/limits-evidence.md))
+reached as follows:
+
+- **Five `mov reg,[0x511DE8]` that feed only a weapon's address** become an immediate of the
+  static's base less `0x2CF3`: `0x42CDCD` (the unit loader's `Weapons[0]` for a weapon name it does
+  not find, read at `0x42CDE8`), `0x42F3AB` (the release, `0x42F3B3`), `0x49E5CB` (the name lookup,
+  `0x49E5D1`), and the meteor's `0x437CF7` and `0x437D13` (`0x437CFD`, `0x437D19`; six bytes, the
+  last a NOP). The bounds `cmp r,0x11500` at `0x42F431` (release) and `0x49E5EB` (lookup) become
+  `4096 · 0x115`. The loader's base is the both-builds site `0x42E468` (*A weapon's ID, and the
+  messages that carry it*).
+- **The wipe**, the loop `0x42E31C..0x42E345` inside `0x42E310` (every level load, `0x4918BB`; its
+  displacements `0x42E322`, `0x42E32A`, `0x42E332` and bound `0x42E33E`), becomes a jump to a stub
+  that empties each slot's name and sets its **ID byte `+0x10A`**: the slot's index below 256, from
+  256 its low byte, or `0xFF` where that is 0. The AI's "armed" tests read the byte as `!= 0`
+  (`0x40954D`, `0x409682`, `0x409940`, `0x49E0C2`); nothing reads it as an index any more. A saved
+  game stores it with each unit's weapon (`0x487A1C`) and a load writes it back into the weapon's
+  record (`0x487628`, `mov [edx+0x10A],cl`, `edx` the slot's weapon), so under a changed mod it
+  can be stale: every reader of ours takes the index from the pointer.
+- **The model path.** Its loop `0x42EC99..0x42ECF7` (`0x42ECCA`) runs to the ID byte, looking for a
+  lower slot whose model has this weapon's model name, and on a match branches to
+  `0x42F340..0x42F38E` (`0x42F364`, `0x42F380`, `0x42F387`), which only that `je` at `0x42ECE1`
+  reaches. It becomes a stub that walks every lower slot and lends the model (`+0x74`, the name at
+  `+0x80` emptied), going on at `0x42EDA1`, or loads it at `0x42ECF9`. The store `0x42ED46..0x42ED7A`
+  (`0x42ED67`, `0x42ED74`) is rewritten in place to address the record through `ebp`: `mov
+  [ebp+0x74],esi; lea edi,[esp+0x40]; lea edx,[ebp+0x80]; jmp 0x42ED7B`. The copy at `0x42ED7B` is
+  stock's unbounded one: the name was read into a 0x100-byte buffer (`0x42EC7B`), so a long name
+  runs up to `0x6B` bytes past its record into the next, as in stock; the static carries a tail
+  of that size after its last record, so no write of the model path leaves the array.
+- **`0x0D`, weapon fired.** The five sends, `call 0x451DF0` at `0x49D859`, `0x49DB4D`, `0x49DD27`
+  and `0x49DEEE` (a unit's slot, in `esi` or `ebx`, the weapon at its `+0xC`) and `0x49DFF6` (the
+  meteor, the weapon its function's argument; its `+0x1A..+0x23` come off the stack uninitialised
+  and are cleared), write the ID's low byte at `+0x19` and bits 8..11 into the high nibble of the
+  slot byte `+0x23`, which stock's unit senders fill with `and dl,3`. The receiver's block
+  `0x49D280` reads them back (`0x49D295`, `0x49D29F`) and keeps the slot byte's low nibble for
+  `0x49D366` and the extra-weapons splice there.
+- **`0x0F`, feature hit.** The weapon's send `0x424575` carries bits 8..11 in bits 12..15 of the
+  cell x; the receiver (the dispatch slot `0x455FB8`, the both-builds site) adds them back.
+- **`0x0E`, interceptor detonation.** Area damage `0x49A120` sends two when an interceptor catches a
+  projectile: the first (`0x49A769..0x49A7A8`) carries the caught projectile's target point and
+  weapon byte, the second (`0x49A7AD..0x49A7E9`) the interceptor's. The two byte reads `0x49A78C`
+  and `0x49A7CD` become calls that take the index from the weapon pointer: below 256 the byte, and
+  the stock message goes; from 256 up the stub sends the companion itself, a 65-byte `0x05` of
+  `05 00 49`, the 12-byte target point and a `u16` ID, through the same net handle (`esi+0x52` →
+  `+0x96` → `+4`), and clears the type byte; the sends at `0x49A7A8` and `0x49A7E9` become calls
+  that send only a message whose type is still `0x0E`. The receiver `0x49AF90` compares the target point (`+0x28`, `+0x2C`, `+0x30`
+  against the message's `+1`, `+5`, `+9`) and then the byte (`0x49AFC9`, 11 bytes, whose `je
+  0x49AFE8` detonates the first match): that compare becomes a call that matches a weapon whose
+  index is below 256 and equal to the byte, its answer in the zero flag the `je` reads. The dispatch
+  table's `0x05` slot `0x455F90` goes to a stub that handles a companion (`05 00 49`) on the game
+  thread in play (`main+0x391F5` = `0x499200`, the in-play handler) by detonating the first local
+  projectile with that target point and a weapon of that index, through `0x499EB0(proj, 0)`, and
+  then continues to stock's `0x45522E`, which returns at once for text that starts with a zero
+  byte (`0x463CA7`). The gate is an ordering. During a network load two threads pump messages,
+  the loader (`0x49727D`) and the game thread's loading screen (`0x49852E`), while the loader
+  allocates the projectile pool (`0x499A30`; freed and nulled at `0x499A9A`). `0x499200` is
+  stored in two places: `0x498455`, which the game thread reaches after reading bit 1 of
+  `main+0x38D75`, the loader's last store (`0x497C62`), and `0x490BC5`, `SetInputMode`
+  `0x490B30`'s mode 6, which none of its eleven callers passes (they pass 1, 2 and 7).
+  `0x49847E` and `0x498480` clear the flag word `main+0x38D6F..0x38D76` right after the install,
+  so each load waits on its own loader. With the handler there the pool is complete and no other
+  thread writes it. The handler stays for the level. Every way out of play replaces it
+  (`SetInputMode(7)` at `0x41F668` and `0x427736`, `(1)` at `0x460653`, the post-game
+  `0x4996DF`, the stores at `0x49297E`, `0x492A7F` and `0x499852`), after which the gate drops;
+  where the teardown runs before the replacement, it nulls the pool at `0x499A9A` on the game
+  thread, and the stub's `!pool` test drops.
+  `0x497F40`, the loading screen, is stored only by the menu handlers (`0x496C3D`, `0x496D75`,
+  `0x496D9D`, `0x496DFF`) and by `SetInputMode`'s mode 5 (`0x490BB3`), never over `0x499200`. The
+  residual is the first in-play frame, which `0x49842F` runs (`0x496790`) before `0x498455`: a
+  companion that arrives in it is dropped, and logged. A companion dropped before play can name
+  only a remote copy, whose detonation is visual: `0x499EB0` damages for a projectile of a local
+  owner only.
+- **MEASURED**, `tools/weaponids_fixture.py` on Two Continents. Single player: a tower firing
+  weapon 4000 hits its target, 31 a hit, through a projectile whose weapon pointer is the static's
+  record 4000, and the weapon borrows the model of the stock weapon it copies, drawn in flight; the
+  weapons with no `ID=` and with 5000 are skipped with their log lines and their towers stay
+  unarmed; the extra-weapons module stays armed. Two peers, the joiner firing at the host's
+  wrecks and units: the host decoded every feature hit at its full ID, 3581, 3582, 3583, 3322
+  and 4000, and told 250's and 3322's hits on one cell apart (both send the byte `0xFA`); the
+  host's interceptor, ID 3000, caught 11 of the joiner's rockets, 250 and 3322 aimed at one point,
+  and the joiner detonated the right one every time: the 6 of 250 through stock's `0x0E`, the 5 of
+  3322 and the 11 interceptors through the companion. Paused once the fire stopped, both peers held
+  the same units at the same health, the same features cell for cell, and the same `GameTime`.
+- **What a detonation can reach.** Either message detonates only a projectile still in flight on
+  the receiver. With the Merl's own speed the host caught the rocket near its target, and the
+  companion found no rocket on the joiner 4 times of 4 — [INFERRED] the joiner's own copy, ahead of
+  the host's by the link's delay, had already hit, which is stock's window for its `0x0E` as well;
+  the test's rockets fly at 120 so that the catch is early. The peers still agreed.
 
 **What it measured, 2026-09-23.** Single player, `scenarios/limits-flood.json` (450 Merls against
 450 Diplomats): the engine's own counts peaked at **687 projectiles** and **1727 explosions**, and

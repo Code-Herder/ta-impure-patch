@@ -35,6 +35,7 @@
 #define TAGPU_LIM_COMPOSITE 600  /* the composite scratch frame, a side          */
 #define TAGPU_LIM_WRECKS 2048    /* wreck records: 3DO wrecks and feature animations */
 #define TAGPU_LIM_TYPES  512     /* unit-type slots, None's included: a category mask's bits */
+#define TAGPU_LIM_WEAPONS 256    /* weapon IDs: the slots of the weapon array                */
 #else
 #define TAGPU_LIM_PROJ   3000
 #define TAGPU_LIM_EXPL   3000
@@ -53,10 +54,14 @@
    menu-time count (0x42AA65), before the def array exists, so no type ID reaches a mask bit it
    does not have. The engine's own ceiling is the u16 type field. */
 #define TAGPU_LIM_TYPES  16384
+/* 4096 IDs, 0..4095: the wire carries twelve bits of a weapon ID, the byte and a nibble
+   (tagpu_patches.c, "WEAPON IDS"). */
+#define TAGPU_LIM_WEAPONS 4096
 #endif
 typedef char tagpu_lim_types_fit[(TAGPU_LIM_TYPES % 32 == 0 && TAGPU_LIM_TYPES <= 0xFFFF) ? 1 : -1];
 /* the wreck pool's list links are signed 16-bit words (0x4232F0 reads them with movsx), so
    every record index has to stay below 0x8000 */
+typedef char tagpu_lim_weapons_fit[(TAGPU_LIM_WEAPONS >= 256 && TAGPU_LIM_WEAPONS <= 4096) ? 1 : -1];
 typedef char tagpu_lim_wrecks_fit[(TAGPU_LIM_WRECKS <= 0x7FFF) ? 1 : -1];
 /* the engine's own floor for a player's units (0x491678: `cmp eax,0x14`) */
 #define TAGPU_LIM_UNITS_MIN 20
@@ -72,6 +77,13 @@ void tagpu_limits_report(void);
 /* Where the explosion pool is: {i32 count; records of 0x54 bytes}. `ta` is the engine's
    main block, which holds the pool in the stock build. GAME THREAD. */
 const char* tagpu_limits_expl_pool(const char* ta);
+
+/* The weapon array: Weapons[0], the no-weapon entry, and a weapon's slot, which is its ID.
+   Records are 0x115 bytes. The engine's own array (main+0x2CF3) when the raise is not
+   installed, and NULL before the engine allocates its main block. The index is -1 for a
+   pointer that is not a record of the array. */
+char* tagpu_limits_weapon0(void);
+int   tagpu_limits_weapon_index(const void* weapon);
 
 /* The flying-piece slots, [begin, end): pointers to particle systems, NULL = free. */
 const void* const* tagpu_limits_psys_begin(void);

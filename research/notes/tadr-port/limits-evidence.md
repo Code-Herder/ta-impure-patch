@@ -552,8 +552,9 @@ region where objdump's sweep desyncs near `0x49C740`.
     - `+0x23` from the four unit senders (`0x49D7E5`, `0x49DAD8`, `0x49DCAB`, `0x49DE6D`) is
       `and dl,3`, and our extra-weapons module uses bits 0..3. The meteor sender `0x49DFA9` leaves
       `+0x1A..+0x23` uninitialised. `0x499AB0` and `0x499BA0` have no callers.
-    - The receiver indexes `Weapons[byte]` directly (`0x49D27B`) and does not bound the shooter
-      index at `+0x21` (a `u16` scaled by 0x118): a stock hole.
+    - The receiver indexes `Weapons[byte]` directly (`0x49D27B`) and bounds neither the shooter
+      index at `+0x21` (`0x49D329`) nor the target index at `+0x1F` (`0x49D388`), each a `u16`
+      scaled by 0x118: a stock hole.
   - **`0x0E`, interceptor detonation, 14 bytes:** the type, the target point (three 16.16 `i32`),
     and the ID byte at `+0xD`.
     - Area damage `0x49A120` sends two whenever an interceptor (weapon mask bit 30) catches a
@@ -626,8 +627,11 @@ has `ID=`, **the highest ID is 246**, and no ID or name is duplicated. **ID 0 is
 
 **SIM + the wire.** Our extra-weapons work's `CRC_weapons` guard folds the per-file CRCs of the
 weapon TDFs, `ID=` lines included, so it is independent of the ID's width. Our render and packet
-code follows weapon pointers only. `OFF_WEAPON0` in `tagpu_weapons.c` follows the array. Two of the
-five sender reads (`0x49DAD8`, `0x49DCAB`) sit inside existing extra-weapons splices.
+code follows weapon pointers only. `tagpu_weapons.c` finds the array through
+`tagpu_limits_weapon0()`. Two of the five sender reads (`0x49DAD8`, `0x49DCAB`) sit inside existing
+extra-weapons splices; A′3 patches the sends themselves (`0x49DB4D`, `0x49DD27`), which follow them.
+**As built** (A′3, 2026-09-24), every site is in [the engine map](../exe-reverse-engineering.md),
+*Weapon IDs* in *The raised effect pools* and *A weapon's ID, and the messages that carry it*.
 
 ## 10. Composite buffer 600² → 1280² (`0x458195`)
 
@@ -809,7 +813,7 @@ read with every peer paused — two and a half stock pools, and 36 % of this one
 | pathfinding 1333→66650 | sim, owner-local (INF) | per game (map init) | 1 dword, blind | none | none | CPU per tick |
 | SFX vector 400→20480 | visual (CRT rand) | vector static; **object pool per process (static init)** | 20 caps + pool ×10 by hook | none | the walk's layer bound (drops whole layers), `MAX_PART`, the effects pass's sprite bucket; all follow since landing 3 | about 15 MB |
 | unit types 512→16000 | sim as content | static immediates | 17 (masks, AI frames, ctrl-Z) | none (all 116 `mov r,0x10` classified; ctrl-A/B/C/F only read masks); the separate `CANBUILD` overflow `0x42D971` | `WPN_MAXDEFS` and `mask_has` follow the cap, the unit pass's caches | mods only; **done at 16 384** in [A′2](content-ids.md), with the unit sync's keys made unique |
-| weapon IDs 256→4096 | **SIM + wire** | per level (`0x4918BB`) | 4 hooks + chat-hijack packet | ID < 0 unguarded (stock); `0x0E` and `0x0F` still 8-bit; the model path | `OFF_WEAPON0`, two extra-weapons splices | needs every peer; off in mainline; planned in [A′](content-ids.md) |
+| weapon IDs 256→4096 | **SIM + wire** | per level (`0x4918BB`) | 4 hooks + chat-hijack packet | ID < 0 unguarded (stock); `0x0E` and `0x0F` still 8-bit; the model path | `tagpu_limits_weapon0()`, two extra-weapons splices | needs every peer; off in TADR's mainline; **done at 4096** in [A′3](content-ids.md), with the `0x0F` sentinel clash and the receivers' bounds fixed |
 | composite 600²→1280² | the unit bake's scratch, written on every lane, presented by GDI | one frame a level, static imm. | 1 × 10 bytes, blind | **four writers never compare with the allocation** (the build-state copy, the frame copy, the shadow build, the 2× bake), and the shadow's compression writes a fifth; the rasterisers under them hold 800 or 2048 rows | none | 3.28 MB a level, up to 8 MB grown; bounded by area and rows in [landing 7](raised-limits.md#the-landings) |
 | MixingBuffers 8→128 | audio | per process (registry load) | none (launcher writes REG) | **the engine tracks 32; past it a sound plays untracked** | the impure.cfg store's loader observer, bounded to 32 | none |
 | wreck records 2048→8192 (**not TADR's**) | **SIM**: corpses, and features dying or reclaimed | per level (`0x421F20`) | none — TADR leaves it | — | `WR_COUNT` ×2, `TAGPU_PK_MAX_WRECKS`, `PK_RESERVE`, `TAGPU_PD_MAXHAND` | a full pool refuses corpses; stock's paid-for feature left standing is fixed at `0x423651` (§12) |

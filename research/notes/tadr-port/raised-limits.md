@@ -41,8 +41,8 @@ Three findings shaped the plan:
 | composite scratch frame | 600² | 1280² | the unit bake's shared scratch, written on every lane and presented only by GDI's | L4 |
 | wreck records | 2048 | **8192** — not a TADR value | every 3DO wreck, and every GAF feature playing its death or reclaim sequence; **simulation**: a full pool refuses corpses | L6 |
 
-**Deferred to their own plan:** unit-type IDs (512 → 16 384) and weapon IDs (256 → 4096), in
-[A′. Content IDs](content-ids.md).
+**Moved to their own plan, and done there:** unit-type IDs (512 → 16 384) and weapon IDs (256 →
+4096), in [A′. Content IDs](content-ids.md).
 
 **The values** are TADR's, with two exceptions, and one limit TADR does not raise at all (the wreck
 pool, below). Units are set to 1500 as both default and ceiling:

@@ -5,7 +5,7 @@
 Two ceilings split out of [section A](raised-limits.md) come into our stack: **unit-type IDs**
 (512 → 16 384) and **weapon IDs** (256 → 4096). So does the renderer cache that the first one makes
 easy to overflow. That is three landings. The owner decided every choice below on 2026-09-24
-**[DECIDED]**. **A′1 and A′2 are done; A′3 is planned.** The disassembly behind each fact is in
+**[DECIDED]**. **All three are done.** The disassembly behind each fact is in
 [the evidence pass](limits-evidence.md), §8 and §9. The rules shared by every group are in
 [the port overview](overview.md#standing-rules-decided-2026-09-23). Section A's last item, the
 composite scratch bound, is [landing 7 of that plan](raised-limits.md#the-landings), done before
@@ -40,7 +40,7 @@ Three findings shaped the plan:
 | running out of memory | "Your hard disk may be full", then exit | an honest message, then the same exit | what a player reads | A′2 |
 | the unit sync's keys | two types may share one, and the join never ends | unique, re-keyed at load | a network game's start | A′2 |
 | the network join's pace | 4 types a lobby tick | 64 | the join's time | A′2 |
-| weapon IDs | 256 | **4096** | **simulation, and the wire** | A′3 |
+| weapon IDs | 256 | **done**: 4096 | **simulation, and the wire** | A′3 |
 
 ## Decisions
 
@@ -198,9 +198,10 @@ drops them was not traced.
 ### Weapons
 
 **The array moves.** `Weapons[]` becomes a DLL static of 4096 entries (0x115 bytes each, 1.1 MB)
-for the life of the process, the same way landing 1 moved the explosion pool. The work is 12
-operand swaps, 3 loop bounds, and a rewritten block in each of the two network receivers. The full
-ID becomes `(pointer − base) / 0x115`, which is exact and bounded. The owner rejected TADR's
+for the life of the process, the same way landing 1 moved the explosion pool. The work is 25 sites
+(the engine map's *Weapon IDs* in *The raised effect pools*): five operand swaps and two loop
+bounds, the loader's base, the load wipe and the model path as stubs, and both ends of the three
+messages. The full ID becomes `(pointer − base) / 0x115`, which is exact and bounded. The owner rejected TADR's
 approach, which swaps a register so stock's address arithmetic lands in a second heap array. It
 depends on 32-bit wrap-around and an aligned allocation, and it carries the defects listed in
 evidence §9.
@@ -226,8 +227,8 @@ and `0x0F` do not change.
   extra-weapons module uses bits 0..3. The meteor sender (`0x49DFA9`) leaves `+0x1A..+0x23`
   uninitialised, so it is patched to write them clean.
 - **`0x0F` (feature hit)** carries bits 8..11 in bits 12..15 of the cell x. A cell is a 16.16 world
-  position shifted right by 20, so no cell a projectile can reach is past 2047. Our sender still
-  checks x and y against 0x1000.
+  position shifted right by 20, so no cell a projectile can reach is past 2047. Bit 11 is the
+  sentinel flag (below), so our senders refuse an x from `0x800`, which no reachable cell has.
 - **`0x0E` (interceptor detonation)** has no room: its 14 bytes are the type, the target point and
   one ID byte. The receiver detonates the first local projectile that matches both, and the peer
   that owns that projectile applies its damage. **IDs below 256 keep sending the exact stock
@@ -246,8 +247,8 @@ and `0x0F` do not change.
     the packet ([networking](../networking-lobbies.md)). With a chat message, a game on our DLL
     still records and replays, within the `.tad` limit above. It costs a 65-byte message instead
     of 14, and only when an interceptor with an ID of 256 or more fires.
-  - **The layout.** `0x05`, a zero byte, our tag, then the payload. The tag is one outside TADR's
-    set (`0x2B..0x31`, `0x60`).
+  - **The layout.** `0x05`, a zero byte, our tag `0x49`, the 12-byte target point, the `u16` ID. The
+    tag is one outside TADR's set (`0x2B..0x31`, `0x60`).
   - **No display hook is needed.** The chat receiver `0x463CA0` returns at once for text that starts
     with a zero byte (`0x463CA7`): nothing is shown, logged or sounded. That is how TADR's tagged
     messages stay invisible.
@@ -259,12 +260,19 @@ and `0x0F` do not change.
 **Fixed beyond TADR, in the same landing.** We rewrite both ends of these messages anyway:
 
 - **The `0x0F` sentinel clash.** The receiver reads the ID byte `0xFD`/`0xFE`/`0xFF` as "feature
-  destroyed / burned / reclaimed". So a weapon with ID 253–255 that hits a feature makes every other
-  peer destroy or reclaim it instead of damaging it. Our senders mark a sentinel with a flag bit in
+  destroyed / burned / reclaimed". So a weapon with ID 253–255 that hits a feature makes the host
+  destroy, burn or reclaim it instead of damaging it. Our sender marks such a hit with a flag bit in
   the cell x's free high bits, and the receiver treats `0xFD..0xFF` as a sentinel only when that bit
-  is set. Stock content uses none of those IDs.
-- **The `0x0D` receiver bounds the shooter index** at `+0x21`: a `u16` scaled by 0x118, with no
-  bound in stock.
+  is clear. Stock content uses none of those IDs, so its messages stay stock's byte for byte. A
+  peer on another build reads a flagged x as a cell off the map, and its `FeatureDie` faults on
+  it (`0x423568`); flagging the sentinels, as the landing first did, would reach that fault in
+  every game at the first wreck destroyed, and flagging the hit reaches it only in a game of a
+  mod with a weapon 253 or 255, which stock merely desyncs.
+- **The `0x0D` receiver bounds the shooter and target indexes** at `+0x21` and `+0x1F`: each a
+  `u16` scaled by 0x118 into the unit array, with no bound in stock. Its slot byte at `+0x23`
+  indexes the shooter's three slots (`0x49D366`), unbounded too: without the extra-weapons
+  module a slot past 2 is dropped, and with it the module's splice there bounds it by the
+  unit's own count.
 - **The `0x0F` receiver refuses a cell outside the map.** Stock goes on to read through the NULL
   that `0x481550` returns for one (`0x4244CF`).
 
@@ -367,19 +375,57 @@ Only the raises differ between the builds.
     whichever type holds the key.
 - Review at `high`: byte patches, simulation as content, and a network-lobby path.
 
-**A′3 — weapons, 4096. Planned.**
+**A′3 — weapons, 4096. Done 2026-09-24.**
 
-- Test weapons with IDs from 256 up are generated locally.
-- **Single player:**
-  - A unit firing weapon 4000: the projectile, the damage and the weapon's model drawn.
-  - A weapon with no `ID=` and one at 5000: skipped and logged, with nothing written outside the
-    array.
-- **Two peers:**
-  - Fire with IDs from 256 up agrees on both.
-  - An interceptor from 256 up stopping a missile from 256 up and one below 256 whose IDs share a
-    low byte, aimed at the same point: the right projectile detonates on both peers.
-  - Feature hits by weapons 253–255 and from 256 up damage the feature on both peers.
-- A stock-content network game shows no change.
+- **The sites**: 25 in the raised-limits table, 130 with the others. The four both-builds fixes —
+  the loader's bound (the ID, and a section name that must fit its record), the `0x0D`
+  receiver's two bounds, the `0x0F` hit flag and its receiver's refusal of a cell off the map —
+  are one engine fix in the stock-limits build and rows of the table in the raised one, where the
+  raise rewrites the same sites. `tagpu_weapons.c` finds the
+  array through `tagpu_limits_weapon0()`. The engine map has every address: *Weapon IDs* in the
+  raised pools, and *A weapon's ID, and the messages that carry it* in *Engine defects we patch*.
+- **The test content** is `tools/weaponids_fixture.py`: stock weapons under new names and IDs
+  (4000; no `ID=`; 5000; 253–255 and 3581–3583, lasers with a blast of 96 so that they reach a
+  feature's cells; 250 and 3322, one low byte, as slow targetable rockets; 3000, an interceptor
+  stocked cheaply), each on a copy of a stock tower, a weapon named in 300 characters at 4095,
+  the last record, on none, and the interceptor on a copy of the ARM
+  anti-nuke with its build page, since an interceptor fires only from stock and stock is built
+  only by an order from that page. `--low` keeps the IDs below 256, for a build without the raise.
+  Nothing of the game's is committed.
+- **Measured**, Two Continents:
+  - single player: weapon 4000 fires and damages through the static's record 4000, with its
+    model borrowed from the stock weapon it copies and drawn; the weapons with no `ID=` and 5000
+    are skipped and logged, and their towers are unarmed;
+  - two peers, the joiner firing at the host: every feature hit reaches the host at its full ID,
+    253–255 as damage and not as sentinels; the host's interceptor 3000 caught 11 rockets, 250 and
+    3322 aimed at one point, and the joiner detonated the right one each time, 6 through stock's
+    `0x0E` and 5 through the companion, and each interceptor's own missile through its companion;
+    paused once the fire stopped, the peers held the same units at the same health and the same
+    features cell for cell; the final build, with the extra-weapons module armed and with it off
+    (so the `0x0D` slot bound is ours), again agreed cell for cell and unit for unit, the
+    interceptor emptied its stock of 10, and neither peer dropped a message; the weapon named in
+    300 characters at 4095 is skipped and logged on both;
+  - the stock-limits build on the `--low` half: the same agreement; the previous build on it: the
+    host held 35 feature cells and the joiner 87, the wrecks the lasers 253–255 hit gone from the
+    host alone;
+  - stock content, section A's network flood (`limits-mp-west`/`-east`, 900 rocket units, 60 s):
+    on this build and on the previous one the peers agreed on the type and position of every unit
+    both held, and differed only by the pause, which lands two or three ticks apart: health on 16
+    units and 11 cells of trees that finished burning on one peer here; health on 11 units, 4
+    units dead on one peer and 4 such cells there. No weapon-ID message was dropped.
+- **Open**:
+  - a detonation reaches only a projectile still in flight on its owner's peer, stock's window
+    too: at the Merl's own speed the host catches a rocket near its target, and the companion
+    finds the owner's copy already gone;
+  - a peer on another build (stock TA, or ours before this landing) reads every message we send
+    as it reads stock's while the weapons are below 253. A hit by 253 or 255, or by any weapon
+    from 256 up, whose high bits put x off its map, faults it in `FeatureDie` or `0x4244B0`
+    where stock desynced or could not load the mod at all. Every peer runs the same build;
+  - a companion is acted on only on the game thread with the in-play handler installed, an
+    ordering (the handler goes in after the loader's last store, so the pool is complete). One
+    frame falls outside it: the first in-play frame runs before the handler is installed, so a
+    companion for a projectile this peer fires in that frame and another peer catches within it
+    is dropped, and logged. Stock's `0x0E` has no gate at all.
 - Review at `high`: byte patches, simulation and the wire.
 
 **The order** is section A's landing 7 first, a gap in landed code. Then A′1, before the type raise
