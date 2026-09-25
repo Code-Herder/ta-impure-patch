@@ -161,16 +161,19 @@ captured from the world target, `gw*ss x gh*ss` — 2048x1536 at 1024x768 with t
 the UI-side passes are the window's size. Compare two builds' files with
 `tools/vk-ab.py <old.ppm> <new.ppm>`, which reports them as `A` and `B` (a gamedir argument is
 refused). Its exit status is 0 only when every pixel agrees. It does not check that a capture is
-from this run, so remove the old `.ppm` before re-arming, as below.
+from this run; `tacli ab` removes the old `.ppm` before it arms, so take captures with it.
 
 ```bash
 tools/tacli arm <i> terr.on                                          # ONE pass; the clear is black
 tools/tacli scenario load <i> feat-forest --restart --res 1024x768 --maxfps 0
 sleep 10
-G=<main checkout>/tagpu/instances/<i>/gamedir
-rm -f $G/tagpu_terr.ab $G/tagpu_terr_*.ppm; sleep 2; touch $G/tagpu_terr.ab; sleep 8
-tools/tacli log <i> -g 'vk: shot'                                    # "wrote tagpu_terr_vk.ppm, 2048x1536"
+tools/tacli ab <i> terr -o /tmp/terr-B.ppm          # "terr: 2048x1536 -> /tmp/terr-B.ppm"
 ```
+
+`tacli ab <i> <pass>` removes a leftover lever and waits `--settle` seconds for the pass to see it
+gone, removes the old `.ppm`, creates the lever, and waits for `vk: shot: wrote` (or fails on the
+refusal line, quoted). Then it removes the lever again. On a remote instance the file is fetched
+to `tagpu/instances/<i>/ab/`.
 
 - **Arm one pass and nothing else.** The lane refuses a frame more than one pass drew into, and
   says so: `vk: N A/B levers claimed this frame and M passes drew into it - nothing captured`. The
@@ -179,9 +182,9 @@ tools/tacli log <i> -g 'vk: shot'                                    # "wrote ta
   nothing (`native.on=nosuchunit`) or the unit pass draws too; features need `native.on … wrecks`
   and a camera with the 3D wreck off screen. The readout needs the font, which `markown` produces:
   launch with `mark.on`, then `arm <i> mark.on=off` and wait a few seconds before arming the `.ab`.
-- **`rm` it, settle, then `touch` it.** The lever latches until the file goes away; a `touch` on a
-  file that is already there re-arms nothing. Armed before a `--restart` it is consumed before the
-  pass is ready.
+- **The lever latches until its file goes away**, and a file already there re-arms nothing, which
+  is why `ab` removes it first. Armed before a `--restart` it is consumed before the pass is
+  ready: capture after the load.
 - **A missing `_vk.ppm` means "no capture"**: the pass unlinks the target when it latches the claim
   and writes it only after `vk: shot: wrote …`. Every refusal names itself (`could not be removed
   (error N) - this arming is REFUSED` — usually an image viewer holding the last capture;

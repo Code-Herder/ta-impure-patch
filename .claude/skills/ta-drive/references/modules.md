@@ -1,8 +1,8 @@
 # Modules with their own workflow
 
 Extra weapons, the COB trace, multiplayer, many unit types, weapons past 256, the render-options
-screen with its GPU row, and a remote Windows machine. Each but the last is driven through
-`tacli`; what differs is the setup around it.
+screen with its GPU row, and a remote Windows machine. Each is driven through `tacli`; what
+differs is the setup around it.
 
 1. [Extra weapons](#extra-weapons)
 2. [The COB script trace](#the-cob-script-trace)
@@ -257,31 +257,51 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
 ## A remote Windows machine
 
 A native Windows run is the test for anything Wine hides: a driver's formats and extensions, the
-real `ddraw.dll` loader, a player's folder. **No `tacli` verb reaches a remote machine**, so it is
-driven by hand over SSH. The machine is somebody's desktop: ask before deploying, and never start
-or stop the game while they are using it.
+real `ddraw.dll` loader, a player's folder. A **remote instance** is a test folder on that
+machine, driven over SSH by the ordinary verbs. The machine is somebody's desktop: ask before
+using it, and never start or stop a game you did not launch.
 
-- **Access** is OpenSSH on the Windows side with a key. **The login shell is PowerShell**, so
-  `&` does not chain commands (`;` does), and error text comes in the machine's own language.
-- **Send a script, not a one-liner**: `ssh <user>@<host> powershell -NoProfile -Command - <
-  script.ps1`. It runs line by line, and **a statement that spans lines is skipped silently** —
-  no output, no error. Keep every statement on one line and end the file with an empty line.
-- **Deploy** into the player's game folder:
-  1. Refuse if `Get-Process TotalA` finds the game running.
-  2. Rename the old `ddraw.dll` aside and **check the copy exists** before anything overwrites it.
-  3. `scp` the build to `<user>@<host>:C:/<game folder>/ddraw.dll` (forward slashes).
-  4. Compare `Get-FileHash -Algorithm MD5` with your `md5sum`.
+```bash
+tools/tacli remote add w1 --ssh <user>@<host> --key <private key> --from '<player folder>'
+tools/tacli arm w1 gui.on                         # arm files go into the test folder
+tools/tacli scenario load w1 marker-mix --res 1920x1080   # launch -> menus -> live -> applied
+tools/tacli ui w1; tools/tacli keys w1 ctrl+a; tools/tacli eye w1 1700 1640
+tools/tacli ab w1 gui                             # capture one pass, fetched to tagpu/instances/w1/ab/
+tools/tacli log w1 -g 'vk: (census|shot)'
+tools/tacli stop w1                               # stops the game, restores TA's registry key
+tools/tacli rm w1                                 # deletes the test folder and the task
+```
 
-  The folder needs `ddraw.dll`, `full.w32.bin` and `tiny.w32.bin` (what
-  `tagpu/release/package.sh` ships). The DLL reads no ini. With no `impure.cfg` it opens
-  borderless fullscreen on the primary monitor and writes one.
-- **Launch on the desktop through a scheduled task.** A process started from the SSH session runs
-  where the user cannot see it. Register a task with `New-ScheduledTaskPrincipal -UserId <the
-  console user> -LogonType Interactive` (no password needed). Give it the game folder as
-  `-WorkingDirectory` and `-ExecutionTimeLimit` zero, since the default stops it after three days.
-  Run it with `Start-ScheduledTask`. `(Get-CimInstance Win32_ComputerSystem).UserName` names the
-  console user.
-- **Read the result** from the newest file in the game folder's `log\` and from `ErrorLog.txt`:
-  - the `vk:` lines name the device, its depth format, and each missing extension;
-  - each refusal says which pass stood down and why;
-  - the `vk: census` line says which passes drew.
+- **`remote add` copies the player's folder once** into its own test folder (default
+  `<user profile>\tacli\<name>`, or `--to`) and never writes the player's folder. It refuses
+  while any `TotalA.exe` runs there, and when the console user is not the SSH user. The address,
+  the account, the key and both folders live only in `tagpu/instances/<name>/instance.json`,
+  which is gitignored; never copy them into tracked content.
+- **The verbs a remote instance answers**: `launch`, `stop`, `rm`, `arm` (and its `=off`), `keys`,
+  `ui`, `eye`, `shield`, `scenario load`, `log`, `ab`, `crash`. Every other verb refuses before
+  it touches anything. `tacli ls` lists a remote instance without contacting the machine.
+- **`launch` refuses beside any `TotalA.exe` it did not start** (it may be the player's game).
+  It uploads this tree's `ddraw.dll` and checks its MD5 (`--keep-dll` keeps the one there), and it
+  writes the harness files a local launch writes, the shield included. It exports TA's registry
+  key **before** writing the skirmish and display values into it, and starts the game on the
+  console user's desktop through a scheduled task of the instance's own, `\tacli\<name>`.
+  `--res`, `--maxfps`, `--map`, `--player`, `--los`, `--mapping`, `--unit-limit`, `--defaults`
+  and `--sound` work as locally. `--window`, `--display`, `--slot`, `--dplay`, `--intro` and
+  `--shipped` are refused.
+- **The registry comes back by itself.** `stop` restores the key from the export and verifies it
+  by exporting again. If the game went some other way (closed on that desktop, crashed), **the
+  next remote command of any kind restores it** and says so: "restored TA's registry key … the
+  game had exited without `tacli stop`". Read that line; it is the only sign a stop was missed.
+- **The shield is on**, as locally: that desktop's keyboard and mouse do not reach the game,
+  and `tacli shield w1 off` hands it over. With the player's `impure.cfg` the game opens
+  fullscreen on that machine's primary monitor; `--res` at the monitor's own size avoids a
+  mode change.
+- **Nothing tacli replaces is lost.** Before a file of the player's copy is first replaced or
+  deleted in the test folder, its original is kept beside it as `<name>.tacli-original`.
+- **Read the result with `log`**: the `vk:` lines name the device, its depth format and each
+  missing extension; each refusal says which pass stood down and why; the `vk: census` line says
+  which passes drew. `crash` reads the test folder's `ErrorLog.txt`.
+- **Every statement is one line of PowerShell**, made by `ps_script` in `tools/taremote.py`.
+  PowerShell reading stdin skips a statement that spans lines, silently. Add remote operations
+  there, through that function, never as a hand-written script. How the link, the routing and the
+  registry restore work: `research/notes/tacli-design.md`, "Remote instances".

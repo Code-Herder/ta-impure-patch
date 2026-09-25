@@ -279,6 +279,207 @@ the game on a display with no monitor behind it. It now skips virtual X servers
 (Xvfb/Xephyr/Xnest, identified from `ps`) unless `TACLI_DISPLAY` names one
 explicitly.
 
+## Remote instances: a test folder on a Windows machine (G21c)
+
+A remote instance is a game folder on another machine, driven by the same verbs as a local
+one. It works because every channel between `tacli` and the DLL is a file in the game folder
+(the key and eye files, the lever files, the trigger/result pairs, the `.ab` captures, `log\`),
+and the DLL on Windows reads and writes the same files. The plan is
+[Hardware portability](hardware-portability.html) §2 decision 5; the code is `tools/taremote.py`
+(the link and every PowerShell statement) and the remote section of `tools/tacli` (the verbs).
+
+### Making one
+
+```
+tacli remote add <name> --ssh <user>@<host> [--key <file>] --from <player folder> [--to <test folder>]
+```
+
+- **The player's folder is read once and never written.** `remote add` copies it with
+  `robocopy` into the test folder (default `<user profile>\tacli\<name>`), then checks the copy
+  holds as many files and bytes as the source. `taremote.check_folders` refuses a test folder
+  that is the player's folder, inside it or around it.
+- **It refuses** when a `TotalA.exe` is running anywhere on the machine (the player's folder may
+  be in use), when the folder has no `TotalA.exe`, when the test folder exists, and when its
+  drive lacks the room. It also refuses when the user logged on at the console
+  (`Win32_ComputerSystem.UserName`) is not the SSH login's user. TA reads `HKCU`, so the
+  registry this link saves must be the hive the game will use.
+- **The metadata is the only local trace**: `tagpu/instances/<name>/instance.json` (gitignored)
+  holds `type: remote` and `remote: {ssh, key, player, folder, task, console_user}`. The same
+  directory holds the log mirror (`remote-log/`), fetched captures (`ab/`) and a copy of the
+  last registry export. Human output never prints the address, the account or the folders;
+  `ls --json` prints the metadata as it is.
+- **The test folder carries tacli's own files**: `tacli-state\` (the copied-file list, the
+  registry export) and the marker `tacli-test-folder.txt`, whose first line names the instance.
+  `rm` deletes the folder only when the marker names the instance being removed.
+
+### Routing
+
+`_route_remote` runs before every verb. A verb aimed at a remote instance runs its remote form,
+or it refuses before a statement is sent or a local file is touched. The table is keyed by the
+verb's **handler function**, not by `args.cmd`, because a subcommand's own positional can carry
+that name: `order`'s order is `cmd`, so `tacli order r1 stop` parses with `args.cmd == "stop"`.
+
+| verb | on a remote instance |
+|---|---|
+| `launch`, `stop`, `rm` | their remote forms (`cmd_remote_*`) |
+| `arm`, `keys`, `ui`, `eye`, `shield`, `crash`, `scenario load`, `ab` | the local code, over a `RemotePath` |
+| `log` | the local code, over a local mirror of the current run |
+| everything else | refused: "`<verb>` does not reach a remote instance" |
+
+`Instance` reads its metadata on construction. For a remote instance `gamedir` is a
+`taremote.RemotePath`, which offers the `pathlib.Path` methods the file channels use
+(`exists`, `stat`, `read_text`, `write_text`, `unlink`, `rename`, `glob`, `mkdir`). It is
+**not** `os.PathLike`, so `open()`, `shutil` or `subprocess` raise `TypeError` on it rather
+than act on a local file of the same name. Every `RemotePath` is built from components checked
+by `_component`, so none can name anything outside the test folder. `Instance.pid()` is the
+`TotalA.exe` whose path lies in the test folder; `window()` is None.
+
+### The link, and the one-statement rule
+
+One PowerShell per tacli command: `ssh -T -o BatchMode=yes … <user>@<host> powershell
+-NoProfile -NonInteractive -Command -`, fed statements on stdin and kept open (`Session`). One
+session serves every `Instance` object naming the same link (`session_for`), and `close_all`
+ends each with a blank line at exit. `-o IdentitiesOnly=yes` goes with `--key`, so no other
+key of the agent is offered. **[MEASURED 2026-09-25, the Windows test setup]:** 0.7–0.9 s to
+open the session, 25–80 ms per statement after that, 9.5 MB/s reading a file.
+
+PowerShell reading stdin runs line by line, and **a statement that spans lines is skipped
+silently**. So `ps_script` is the one function that makes a script, and it is unit-tested:
+
+- `ps_check_statement` refuses anything that could continue onto the next line: control
+  characters, an unclosed bracket or single-quoted string, a trailing `|` or `,`, a backtick,
+  a here-string. It also refuses what tacli never needs: double-quoted strings (they expand `$`
+  and backticks), `#` comments and non-ASCII.
+- **Each statement is wrapped** to run only while every earlier one succeeded, report a
+  failure as an `ERR` line (the .NET exception's type, and its message in base64), and print
+  `DONE <i>` either way. `Session.run` turns a missing `DONE` into an error. What the static
+  check cannot see is caught here: `if ($true)` without its block is a parse error on stderr
+  and no output at all **[MEASURED]**, and it fails the run instead of returning nothing.
+- The markers carry a random per-session token, and `END <batch>` closes each batch, so a late
+  line from an earlier batch is never read as the current one.
+- The error message travels in base64 because the session's stdout stays in the console's code
+  page even after `[Console]::OutputEncoding` is set to UTF-8. The Windows test setup's French
+  accents came out as replacement characters **[MEASURED]**.
+- `ps_str` gives any string as one line of PowerShell: printable ASCII as a single-quoted
+  literal (quotes doubled; `$`, backticks and `"` stay plain), anything else, a newline
+  included, as a base64 literal decoded on the far side.
+- Native commands (`reg.exe`, `robocopy.exe`) run with stderr discarded under
+  `$ErrorActionPreference = 'Continue'` and are judged by `$LASTEXITCODE`, never by what they
+  print, which is in the machine's language.
+
+### Writing into the test folder
+
+- **Every write replaces the file whole**: written as `<name>.tacli-tmp`, then moved over the
+  target, so the DLL never reads half of one. The move is retried when a reader holds the target.
+- **Key batches are never appended.** The DLL reads `tagpu_keys.txt` whole and deletes it; an
+  append could land between the read and the delete and be lost with the file. A remote batch
+  is written under a temporary name and **moved into place only when the name is free**
+  (`RemotePath.create_new`), and `.NET`'s `File.Move` never overwrites. So the DLL only ever
+  sees a complete batch, and tacli, the only writer of the name, waits for each to be taken.
+- **Nothing of the player's copy is replaced or deleted without its original beside it**
+  (`RemotePath._guard`, which runs before every write, delete and rename, on both ends of a
+  rename):
+  - The three files a launch replaces (`ddraw.dll`, `impure.cfg`, `totala.ini`) have their
+    original recorded by `remote add`: a `.tacli-original` copy, hash-checked, or an empty
+    `.tacli-absent` when the player's folder has none. Nothing touches one while that record is
+    missing, since a copy taken later could be of a file tacli already changed.
+  - Every other file `remote add` copied is listed in `tacli-state\copied.txt`. Its first
+    replace, delete or rename makes the `.tacli-original` itself and checks the hash before
+    going on. tacli has not written such a file before that moment.
+- **A DLL upload is proved**: `RemotePath.upload` compares the far side's MD5 with the local one.
+
+### Launch, stop, and the registry
+
+`launch` on a remote instance, in order:
+
+1. Restores a registry export a missed stop left pending (below).
+2. Refuses when any `TotalA.exe` that is not the test folder's runs: it may be the player's
+   game. An instance already running reports so, as locally.
+3. Uploads this tree's `ddraw.dll` (the one a local launch pins), unless `--keep-dll`.
+4. Writes the harness files as a local launch does: `tagpu_shield.on` (unless `--no-shield`),
+   `tagpu_nowarp.on`, `tagpu_defaults.off` (unless `--defaults`), the title label, `totala.ini`
+   (silence, `--unit-limit`), the store's `resolution=` for `--res` and `maxfps=` for
+   `--maxfps`. It rotates `ErrorLog.txt`, clears stale triggers and the key file, and auto-arms
+   the `*own` halves.
+5. **Exports TA's key** (`HKCU\Software\Cavedog Entertainment\Total Annihilation`, subkeys
+   included) with `reg export` into `tacli-state\registry-before.reg`, keeps a copy in the
+   instance's metadata directory, and marks the export *pending* in the metadata **before**
+   anything writes to the key.
+6. Writes what a local launch writes into its prefix (`Interface Type` 1, `PlayMovie` 0, the six
+   sound values unless `--sound`, the display mode for `--res`), plus `--map`, `--player`,
+   `--los` and `--mapping`.
+7. Registers the task `\tacli\<name>` (an interactive principal for the console user, the test
+   folder as working directory, `-ExecutionTimeLimit` zero, `IgnoreNew`) and starts it. A
+   process started from the SSH session would run where nobody can see it.
+8. Waits for the test folder's `TotalA.exe` **and** a `log\tagpu.log` whose `run/part` header
+   differs from the one before the start: the DLL has attached and begun this run. A crash
+   report fails the wait with its fault, as locally.
+
+Flags that shape a wine instance on the local desktop (`--window`, `--display`, `--slot`,
+`--dplay`, `--intro`, `--free-dplay-port`, `--shipped`, `--no-restore-pointer`) are refused.
+
+**The restore** (`Remote.reg_restore`) checks that the export is there with the hash recorded
+at launch, deletes the key, imports the export, then exports again and compares the hashes;
+a key that was absent before the launch is deleted and checked gone. It runs at `stop`, and at
+**the next remote command of any kind** when the export is pending and the test folder's game
+has gone (closed on the desktop, crashed, the machine restarted). Every restore says so; the
+missed-stop one ends "the game had exited without `tacli stop`". `launch` never exports over a
+pending export.
+
+`stop` stops only the test folder's `TotalA.exe` (`Stop-Process`), waits for it to go, then
+restores. `rm` stops and restores the same way, removes the task, and deletes the test folder
+when its marker names the instance.
+
+### The shield on a remote desktop
+
+It is the same file, with the same meaning. `tagpu_shield.on` in the test folder makes the DLL
+drop the Windows desktop's hardware keyboard and mouse, so whoever sits at that machine cannot
+perturb a test. The injected input still arrives, and `shield <name> off` hands the game to
+them. `tagpu_nowarp.on` keeps the game off their pointer. **[MEASURED 2026-09-25]:** the log
+carries `shield: ARMED (hardware input blocked)`. An injected `ctrl+a` was polled by the game
+(`shield: vk=17 released after 172ms, polls=4 down=4`) and selected the units.
+
+### Logs and captures
+
+- **`log` and every log wait read a local mirror** (`taremote.sync_logs` into
+  `tagpu/instances/<name>/remote-log/log/`) that talog reads like any gamedir. A file is known
+  by its `run/part` header, as talog knows it. After a rotation, the bytes of the file that was
+  `tagpu.log` are reused under its new name, so only what was appended since the last sync
+  crosses the link. Only the current run is mirrored. Each read takes a file's header and its
+  new bytes through **one open handle**: a rename moves the name, not the handle's file, so
+  both come from the same file, and a header that no longer matches starts the sync again.
+- **`tacli ab <name> <pass>`** (local or remote) removes a leftover lever and gives the pass
+  `--settle` seconds to see it gone. It then removes the target `.ppm`, creates
+  `tagpu_<pass>.ab`, waits for `vk: shot: wrote tagpu_<pass>_vk.ppm` or a refusal line, and
+  removes the lever. A remote capture is fetched to `tagpu/instances/<name>/ab/`; a local one
+  stays in the gamedir unless `-o` names a place.
+
+### What the live gate measured [MEASURED 2026-09-25, the Windows test setup, main `8cbecb6`'s DLL]
+
+- `remote add` copied 94 files (1051 MB) in 7 s.
+- `scenario load marker-mix --res 1920x1080` went from a stopped instance to 5 units applied,
+  the camera pinned, in 13 s: launch, `SINGLE → Skirmish → Mapped → Start`, the live wait, the
+  loaded map read back (`Maps\Two Continents.TNT`).
+- `ui` read `ARMMAIN2.GUI 1920x1080`, `eye` held the camera, `keys` delivered `ctrl+a`. The
+  census read `gui=1` and no world pass: that card stands the world passes down (G21a).
+- `ab g21c gui` wrote and fetched a 1920x1080 capture of the UI layer (the panel, the resource
+  bars, the minimap and the cursor over a black world) in 3 s. It was the capture that works on
+  that card today.
+- `crash` read no report, and `stop` restored the key.
+- **TA's registry key**: the 22 882-byte export was byte-identical before the launch, after
+  `stop`, and after a stop missed on purpose (the game killed outside tacli, then `tacli log`).
+  A mid-test export differed where the launch writes: `Interface Type`, the display mode,
+  `SkirmishMap` and six sound values.
+- **The player's folder**: every file's SHA-256, size and write time were identical before
+  and after the whole run, `rm` included.
+
+**Not covered live:** the general backup tier of `_guard` and its copied-file list
+(unit-tested; the machine went offline before the re-check); `ui` verbs beyond the snapshot
+and the clicks of the `scenario load` path; a non-ASCII path (carried in base64 and
+unit-tested, not run); `rm --force` on a running game. Two tacli commands driving one remote
+instance at once are not supported: the key-file protocol assumes one writer. `rm` leaves the
+empty `<user profile>\tacli` folder and the Task Scheduler folder `\tacli\` behind.
+
 ## Why (constraints that shaped it)
 
 Human keeps the PC: no fullscreen grabs, no X-level injection, no focus stealing; the

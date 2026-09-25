@@ -3746,7 +3746,7 @@ plan.
 |---|---|---|
 | G21a — 32-bit float depth on every GPU (24-bit + stencil only where float + stencil is missing), and the sun-shadow map the same, its z remapped so `VK_EXT_depth_clip_control` goes | ○ planned | The A/B against main at 1× and 0.877×, both presets, counted per pass, each class of change classified against the engine's own frame, and the numbers in front of the owner before it lands; frame time compared |
 | G21b — lines drawn as band quads, with an integer diamond-exit test per game pixel; `VK_EXT_line_rasterization` and `wideLines` removed | ○ planned | 0 px against main on order lines, the band box, a selection and effect lines, both presets |
-| G21c — `tacli` remote instances over SSH: their own test folder, the registry saved and restored, the verbs a gate needs | ○ planned | A scenario loaded, a capture fetched, the log read and the instance stopped on the Windows test setup; the player's folder and TA's registry key byte-identical before and after |
+| G21c — `tacli` remote instances over SSH: their own test folder, the registry saved and restored, the verbs a gate needs | ◐ built 2026-09-25, gate met, not landed — [tacli design](tacli-design.html) §"Remote instances" | A scenario loaded, a capture fetched, the log read and the instance stopped on the Windows test setup; the player's folder and TA's registry key byte-identical before and after |
 | G21d — the Windows gate | ○ planned | Every world pass arms and draws in a skirmish on the Windows test setup; the depth format is logged; the captures are with the owner; frame time recorded |
 
 ## The stock engine's own defects (2026-09-23)

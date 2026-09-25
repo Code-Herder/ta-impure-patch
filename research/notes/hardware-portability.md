@@ -1,10 +1,10 @@
 # Hardware portability: depth, lines, and a remote Windows test — the plan (G21)
 
-**Written** 2026-09-25. Nothing is built yet. This plan is for the Vulkan renderer to draw every
-pass on the GPUs players actually have. Today it requires three things that a common class of
-card does not offer, and when one is missing the passes that need it stand down. When a gate
-here closes, its facts move to [GPU status](gpu-status.html), and this note is folded into it
-the way `g19f-plan.md` was.
+**Written** 2026-09-25. G21c is built (§3); the rest is not yet. This plan is for the Vulkan
+renderer to draw every pass on the GPUs players actually have. Today it requires three things
+that a common class of card does not offer, and when one is missing the passes that need it
+stand down. When a gate here closes, its facts move to [GPU status](gpu-status.html), and this
+note is folded into it the way `g19f-plan.md` was.
 
 Evidence tags as elsewhere: **[SOURCE]** read from the code named, **[MEASURED]** with the
 numbers, **[INFERRED]** not established, **[DECIDED]** the owner's call with a date, **[OPEN]**
@@ -148,37 +148,55 @@ worktree. The fourth follows once they are on main.
 
 ### G21c — `tacli` remote instances
 
-- `tacli remote add <name> --ssh <user>@<host> [--key <file>] --from <player folder>` creates the
-  test folder on the remote machine (decision 5) and records the transport in the instance's
-  metadata. Every verb then routes by instance type. The file channels go over SSH.
-- **Launch** is the scheduled task in `.claude/skills/ta-drive/references/modules.md`: an
-  interactive principal for the console user, the test folder as working directory, no time
-  limit. The registry export comes before it.
-- **Scripts go over SSH as PowerShell on stdin, one statement a line.** A statement that spans
-  lines is skipped silently. `tacli` generates these scripts, so the rule lives in one function.
-- **The minimum set of verbs for G21d:**
+**Built 2026-09-25, the gate met; not landed.** What it is and how it works is in
+[tacli design](tacli-design.html) §"Remote instances"; this block keeps the plan's shape and
+what the work settled.
+
+- `tacli remote add <name> --ssh <user>@<host> [--key <file>] --from <player folder>` copies the
+  player's folder once into a test folder (default `<user profile>\tacli\<name>`, or `--to`) and
+  records the transport only in the gitignored metadata. Every verb routes by instance type, keyed
+  by its handler function (a positional of `order` is named like the subcommand). The file
+  channels go over one PowerShell session per command (`tools/taremote.py`).
+- **Launch** is a scheduled task of the instance's own, `\tacli\<name>`: an interactive principal
+  for the console user, the test folder as working directory, no time limit. TA's registry key is
+  exported first and marked pending before anything writes to it. `stop` restores it, and so does
+  the next remote command when the game went without a stop; each restore is verified by a
+  second export.
+- **The one-statement rule lives in `ps_script`**, which refuses a statement that could span lines
+  and makes every statement print a DONE marker. A statement PowerShell skipped is an error, not
+  an empty answer.
+- **The verbs a remote instance answers:**
   - `remote add` and `rm`;
   - `launch` and `stop`;
-  - `arm` and `disarm`;
+  - `arm`, whose `<lever>=off` form is the disarm;
   - `keys` and `ui`;
-  - `eye`;
+  - `eye` and `shield`;
   - `scenario load`;
   - `log`;
-  - the `.ab` capture and its fetch;
+  - `ab`, the capture and its fetch (a new verb, which works locally too);
   - `crash`.
 
-  Every other verb refuses on a remote instance with a message, rather than acting on the local
-  filesystem.
-- The shield is on by default, as it is locally.
-- **Gate:**
-  - `python3 tools/test_tacli.py` covers the script generation and the routing offline;
-  - live, on the Windows test setup: one scenario loaded, one capture fetched, the log read, the
-    instance stopped;
-  - the player's folder is byte-identical before and after, and the registry key is
-    byte-identical before and after.
-- The ta-drive skill's by-hand section in `references/modules.md` is replaced by the verbs,
-  per the skill's own rules.
-- Review: medium (`tools/tacli`).
+  Every other verb refuses before it sends a statement or touches a local file.
+- **The shield is the same file with the same meaning**: the DLL drops that desktop's hardware
+  input, and `tacli shield <name> off` hands the game over.
+- **Gate, met:**
+  - `python3 tools/test_tacli.py`: 37 new tests over the script rule, the quoting, the path
+    confinement, the protocol markers, the routing of every verb and the registry order, run
+    against an in-memory machine that passes every statement it receives through `ps_script`.
+    All pass. The one failure in the file, `test_over_tas_stock_cap_only_warns`, fails on main as
+    well.
+  - **Live, on the Windows test setup** (main `8cbecb6`'s DLL):
+    - `scenario load marker-mix` went from a stopped instance to applied in 13 s;
+    - the UI layer's capture (`ab gui`, 1920x1080) was fetched: the world passes stand down on
+      that card, the UI draws;
+    - the log was read and the instance stopped;
+    - TA's registry key (22 882 bytes) was byte-identical before, after `stop`, and after a stop
+      missed on purpose;
+    - all 94 files of the player's folder had identical hashes, sizes and write times before and
+      after, `rm` included.
+- **Not covered:** the general backup tier (a copied file's original kept on its first
+  replacement) ran offline only, since the machine went offline before its live re-check.
+- Review: medium (`tools/tacli`, `tools/taremote.py`).
 
 ### G21d — the Windows gate
 
