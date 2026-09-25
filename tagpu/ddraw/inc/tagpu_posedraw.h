@@ -479,4 +479,24 @@ int  tagpu_posedraw_slant_take(void);
    Vulkan pass draws no unit rather than some of them. Render thread, after
    `tagpu_posedraw_frame` and before the frame's last window closes. */
 void tagpu_posedraw_uncarried(void);
+
+/* WHAT THIS FRAME'S HAND-OVER WILL CARRY, asked before the effects gather
+   (tagpu_vk_unit.h TAGPU_VKFXASK). Render thread, after
+   `tagpu_posedraw_frame`.
+
+   `_other_forecast`: this frame's `otherDraws` so far plus the last frame's
+   whole count. Neither depends on the effects models -- a unit is recorded
+   before any model of its window -- so a count that stands the units down
+   is known here from the frame it begins on, or from the next when it first
+   appears after the gather. `_fog_carried`: whether the hand-over will carry
+   the fog grid the native pass holds, with the room for its copy made now;
+   the publish makes the same test on the same grid (`pd_fog_room`), so it
+   cannot answer otherwise. `_shadow_on`: the `shadowOn` the hand-over
+   publishes. */
+int  tagpu_posedraw_other_forecast(void);
+int  tagpu_posedraw_fog_carried(void);
+int  tagpu_posedraw_shadow_on(void);
+
+/* the widest fog grid the hand-over carries, cells a side */
+#define TAGPU_PD_FOG_MAXDIM 1024
 #endif

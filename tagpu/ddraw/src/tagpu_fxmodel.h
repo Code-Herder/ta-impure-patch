@@ -46,15 +46,17 @@
 struct TAGPU_PACKET;
 
 /* THE RUN BUDGET: the most runs one frame's models take, 4 MB at 32 bytes a
-   run. The runs are held three times over -- this module's arena, the posed
-   pass's hand-over (tagpu_posedraw.c) and the unit pass's storage buffer
-   (tagpu_vk_unit.c) -- in a 32-bit process, so the budget is what those
-   three may cost together and not what a frame could ask for. All three
-   bound the count by this one constant: a model that would take this
-   module's arena past it is not drawn, and its record is taken back whole
-   (tagpu_fx.c), so the other two never see more. A run is one row's pixels
-   of one texel, so the budget is 131 072 such pieces of model on one frame;
-   the effects gather's numbers against it are in gpu-status.md 2.89. */
+   run. The runs are held 2 + nimg times over -- this module's arena, the
+   posed pass's hand-over (tagpu_posedraw.c), and the unit pass's storage
+   buffer, host-visible, one per swapchain image (tagpu_vk_unit.c, up to
+   TAGPU_VK_SLOTS) -- in a 32-bit process: 20 MB at the full budget with
+   three images. So the budget is what those copies may cost together and
+   not what a frame could ask for. All of them bound the count by this one
+   constant: a model that would take this module's arena past it is not
+   drawn, and its record is taken back whole (tagpu_fx.c), so the others
+   never see more. A run is one row's pixels of one texel, so the budget is
+   131 072 such pieces of model on one frame; the effects gather's numbers
+   against it are in gpu-status.md 2.89. */
 #define TAGPU_FXM_RUN_MAX (1u << 17)
 
 /* The frame the models are drawn into, from the effects pass's view. The

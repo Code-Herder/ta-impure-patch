@@ -2692,8 +2692,18 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         /* THE MODELS NEED THE POSED PASS AND THE VULKAN UNIT PASS, which
            records them with the units and draws them: where either cannot,
            every record with a model is taken back whole (tagpu_fx.c) rather
-           than drawn without it, and every other effect draws */
-        fv.modelsOn = pdReady && tagpu_vk_unit_fx_ready();
+           than drawn without it, and every other effect draws. The unit pass
+           is told what will stand this frame down, as far as it is known
+           here, so a frame it will not draw loses its models alone. */
+        {
+            TAGPU_VKFXASK ask;
+            ask.shadowOn = tagpu_posedraw_shadow_on();
+            ask.otherDraws = tagpu_posedraw_other_forecast();
+            ask.fogWant = fogMode & 1;      /* a model samples it then (`q.fog`) */
+            ask.fogCarried = tagpu_posedraw_fog_carried();
+            ask.scafOn = scafOn ? 1 : 0;
+            fv.modelsOn = pdReady && tagpu_vk_unit_fx_ready(&ask);
+        }
         fv.depthScale = depthScale;
         /* particle layer n -> depth key, from the ten 0x471F90 call sites
            (terrain-depth.md 3): 0..4 before any unit row (under everything

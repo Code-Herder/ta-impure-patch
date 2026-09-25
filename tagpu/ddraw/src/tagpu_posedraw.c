@@ -169,6 +169,7 @@ static int          s_abTaking;     /* THIS window opened the capture         */
 static int          s_saidFrame;
 static int          s_abClaim;      /* it reached the disk; frame-scoped      */
 static int          s_other;        /* draws the hand-over carries no copy of */
+static int          s_otherLast;    /* the last frame's whole `s_other`       */
 
 static TAGPU_PDUREC* s_rec;       static unsigned s_recCap, s_nrec;
 /* the effects models' runs, 8 floats each, every fx record's back to back */
@@ -194,10 +195,11 @@ static float        s_depthMat[16];
 static float        s_lastNanoT, s_lastNanoC[3];
 
 /* THE FOG GRID'S COPY. `cells` is what the packet allocated for this grid,
-   so the read is bounded by the allocation it reads from; the cap bounds OUR
-   allocation, and the Vulkan pass re-checks it because a bound in one file is
-   a bound only while both are read together. */
-#define PD_FOG_MAXDIM 1024
+   so the read is bounded by the allocation it reads from; the cap
+   (TAGPU_PD_FOG_MAXDIM) bounds OUR allocation, and the Vulkan pass re-checks
+   it because a bound in one file is a bound only while both are read
+   together. */
+#define PD_FOG_MAXDIM TAGPU_PD_FOG_MAXDIM
 static unsigned short* s_fogCopy;
 static int             s_fogCopyCells;
 
@@ -244,6 +246,43 @@ void tagpu_posedraw_slant_drew(void) { s_slantDrew = 1; }
    The count is reset by `tagpu_posedraw_frame` and read only by this frame's
    publish. */
 void tagpu_posedraw_uncarried(void) { s_other++; }
+
+int tagpu_posedraw_other_forecast(void) { return s_other + s_otherLast; }
+
+/* NO CAST SHADOWS: nothing in this file writes `shadowMat`, `shadowSun`,
+   `shScale`, `penumbra` or `shade`, so the hand-over's whole cast-shadow
+   block is zero and this is the `shadowOn` it publishes. Reviving cast
+   shadows means writing a producer; see `tagpu_vk_shadow.h` on
+   TAGPU_SHADOWHAND. */
+int tagpu_posedraw_shadow_on(void) { return 0; }
+
+/* WHETHER THE HAND-OVER CARRIES THIS GRID, with the room for its copy made:
+   the test the publish copies against and the forecast asks, so the two are
+   one. `cells` -- not cols*rows -- is what the packet allocated, so it is the
+   bound the copy is read against; the cap bounds OUR allocation, and the
+   copy only grows, so a grid this has answered for is one the publish
+   copies. */
+static int pd_fog_room(const unsigned short* g, int cols, int rows, int cells)
+{
+    int want;
+    if (!g || cols < 1 || rows < 1 || cols > PD_FOG_MAXDIM || rows > PD_FOG_MAXDIM)
+        return 0;
+    want = cols * rows;
+    if (want > cells) return 0;
+    if (want > s_fogCopyCells) {
+        unsigned short* n = (unsigned short*)realloc(s_fogCopy, (size_t)want * 2);
+        if (!n) return 0;
+        s_fogCopy = n; s_fogCopyCells = want;
+    }
+    return 1;
+}
+
+int tagpu_posedraw_fog_carried(void)
+{
+    int cols = 0, rows = 0, cells = 0;
+    const unsigned short* g = tagpu_native_foggrid(&cols, &rows, &cells);
+    return pd_fog_room(g, cols, rows, cells);
+}
 
 /* TAGPU_PD_MAXHAND is every record the producer can make (tagpu_posedraw.h),
    so a frame is never refused for its count while the packet's tables are the
@@ -632,12 +671,9 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
     s_pub.sun[0] = v->sun[0]; s_pub.sun[1] = v->sun[1]; s_pub.sun[2] = v->sun[2];
     s_pub.amb = v->amb; s_pub.norm = v->norm;
 
-    /* NO CAST SHADOWS. This function opens with `memset(&s_pub, 0, sizeof
-       s_pub)` and NOTHING in this file writes `shadowMat`, `shadowSun`,
-       `shScale`, `penumbra` or `shade`, so the whole cast-shadow block is
-       zero, and `shadowOn` is the constant 0. Reviving cast shadows means
-       writing a producer; see `tagpu_vk_shadow.h` on TAGPU_SHADOWHAND. */
-    s_pub.shadowOn = 0;
+    /* NO CAST SHADOWS (`tagpu_posedraw_shadow_on`): the memset above leaves
+       the whole cast-shadow block zero. */
+    s_pub.shadowOn = tagpu_posedraw_shadow_on();
 
     /* the viewport and the clip, which the scaffold rect already carries as
        four floats -- published as the integers the scissor was set from */
@@ -683,23 +719,13 @@ static void pd_view_publish(const TAGPU_PDVIEW* v)
        has finished writing it. See the handover for the ordering. */
     s_pub.shadeK = tagpu_r3d_shade_k();
     {   /* THE GRID IS COPIED. It points into a frame packet the game thread
-           reuses, and `cells` -- not cols*rows -- is what the packet actually
-           allocated, so it is the bound the copy is made against. */
+           reuses; `pd_fog_room` is the bound and the room. */
         int cols = 0, rows = 0, cells = 0;
         const unsigned short* g = tagpu_native_foggrid(&cols, &rows, &cells);
-        int want = cols * rows;
-        if (g && cols > 0 && rows > 0 && want <= cells &&
-            cols <= PD_FOG_MAXDIM && rows <= PD_FOG_MAXDIM) {
-            if (want > s_fogCopyCells) {
-                unsigned short* n =
-                    (unsigned short*)realloc(s_fogCopy, (size_t)want * 2);
-                if (n) { s_fogCopy = n; s_fogCopyCells = want; }
-            }
-            if (s_fogCopy && want <= s_fogCopyCells) {
-                memcpy(s_fogCopy, g, (size_t)want * 2);
-                s_pub.fogGrid = s_fogCopy;
-                s_pub.fogGridCols = cols; s_pub.fogGridRows = rows;
-            }
+        if (pd_fog_room(g, cols, rows, cells)) {
+            memcpy(s_fogCopy, g, (size_t)cols * rows * 2);
+            s_pub.fogGrid = s_fogCopy;
+            s_pub.fogGridCols = cols; s_pub.fogGridRows = rows;
         }
     }
 
@@ -1153,6 +1179,9 @@ void tagpu_posedraw_frame(unsigned frame_counter)
         plog(lb);
     } else if (!s_fxDropped) s_saidFxDrop = 0;
     s_fxDropped = 0;
+    /* the count the last frame's hand-over was taken with: nothing adds to it
+       between that and this */
+    s_otherLast = s_other;
     s_win = 0; s_recording = 0; s_other = 0;
     s_abTaking = 0; s_abClaim = 0;
     s_depthOn = 0; s_ncast = 0;

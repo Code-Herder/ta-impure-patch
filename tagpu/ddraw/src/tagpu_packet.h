@@ -367,7 +367,8 @@ typedef struct TAGPU_PK_FXMODEL {
        +0x1438B) -- three heap blocks 0x491908..0x49195C allocates at the
        level load;
      0x4211D0 gathers a face at esp+0x20..0xE8 (25 points) and projects the
-       node at esp+0xEC.. of its 0x3F58-byte frame (~1990 vertices).
+       node from esp+0xE8 to the top of its 0x3F58-byte frame (2000 vertices,
+       the next one over its return address).
 
    Past those the engine writes over the neighbouring heap or its own stack
    and draws whatever that leaves, which nothing can reproduce; no stock model

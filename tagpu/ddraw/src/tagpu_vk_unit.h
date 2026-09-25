@@ -75,15 +75,37 @@ int  tagpu_vk_unit_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
    (tagpu_fx.h `nmodels`). */
 int  tagpu_vk_unit_fx_count(unsigned frame);
 
-/* Whether this pass can draw effects models at all: 0 once it has refused
-   (for the session, or until the seam's teardown rebuilds it) or was built
-   without the effects pipeline; 1 while it is drawing or not yet built, as
-   the first hand-over builds it. The native pass asks before the effects
-   gather (tagpu_native.c `modelsOn`), so on a pass that cannot draw them
-   only the records that carry a model are taken back and every other effect
-   draws. A frame this pass stands down for is not seen here: that frame's
-   effects are not drawn (`tagpu_vk_unit_fx_count`). RENDER THREAD. */
-int  tagpu_vk_unit_fx_ready(void);
+/* The four facts about a frame that stand this pass down, as the effects
+   gather can know them before it gathers (tagpu_native.c `modelsOn`). Each is
+   what the frame's hand-over will then carry: `shadowOn` and `fogCarried` are
+   the posed pass's own answers (tagpu_posedraw.h), `otherDraws` its count so
+   far this frame or the last frame's, `fogWant` whether the frame samples the
+   fog overlay, `scafOn` whether the scaffold overlay is asked for. */
+typedef struct {
+    int shadowOn;
+    int otherDraws;
+    int fogWant;
+    int fogCarried;
+    int scafOn;
+} TAGPU_VKFXASK;
+
+/* Whether this frame's effects models can be drawn, asked before the effects
+   gather: on a no, only the records that carry a model are taken back and
+   every other effect draws. No while the pass has refused (for the
+   session, or until the seam's teardown rebuilds it), was built without the
+   effects pipeline, or did not draw the last hand-over it was given; no when
+   `q` says the frame will stand the pass down. A stand-down the forecast
+   knows -- the scaffold, cast shadows on a device that will not filter the
+   depth map, draws the hand-over does not carry, a fog grid it could not
+   carry -- costs no frame of effects; any other costs the frame it begins
+   on, and the models are then held back until the pass draws again.
+   A FRAME WITH NOTHING TO DRAW ENDS THE HOLD as well (no hand-over, or an
+   empty one), or a view of models alone would hold them back for good. So
+   on such a view an unforeseen stand-down costs every other frame while it
+   lasts; the one play reaches is the texel mirrors converging in a session's
+   first frames. A pass not yet built answers yes, as the first hand-over
+   builds it. RENDER THREAD. */
+int  tagpu_vk_unit_fx_ready(const TAGPU_VKFXASK* q);
 
 /* Draw the bodies, inside the seam's render pass, then the effects models --
    the latter only when the effects pass is drawing the same frame

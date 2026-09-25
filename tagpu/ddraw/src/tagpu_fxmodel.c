@@ -19,9 +19,10 @@
    least y to the first at the greatest, so the edges it walks downward cover
    every scanline in between at least once, clipped or not: each side writes at
    least `ymax - ymin` rows, which is every row the fill reads. The buffer is
-   sized per face from the same count and a face that would need more than the
-   bound is not drawn and says so (`TAGPU_FXM_ROOM`); on data from the packet
-   neither can happen, and the check is the bound on a value, not the argument.
+   sized per face from the same count, and a face that would need more than
+   the bound refuses its model and says so (`TAGPU_FXM_ROOM`); on data from
+   the packet neither can happen, and the check is the bound on a value, not
+   the argument.
 
    RENDER THREAD ONLY. */
 
@@ -63,9 +64,9 @@ static int run_room(unsigned more)
 typedef struct { int32_t xl, xr, ul, vl, ur, vr; } ROW;
 static ROW*     s_row;
 static unsigned s_rowCap;
-/* a face taller than this many scanlines per edge is not drawn: 0x4C7580
-   keeps its rows in a 32 140-byte frame, so no face the engine can draw has
-   more than ~800 */
+/* a face taller than this many scanlines per edge refuses its model, and the
+   record is taken back whole (TAGPU_FXM_ROOM): 0x4C7580 keeps its rows in a
+   32 140-byte frame, so no face the engine can draw has more than ~800 */
 #define ROW_MAX 65536u
 
 static int row_room(unsigned need)

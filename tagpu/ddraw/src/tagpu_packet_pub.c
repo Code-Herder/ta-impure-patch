@@ -1265,9 +1265,6 @@ static TAGPU_PK_FXSHAPE* s_fsScratch; static unsigned s_fsCap, s_nFs;
 static TAGPU_PK_FXFACE*  s_ffScratch; static unsigned s_ffCap, s_nFf;
 static uint16_t*         s_fiScratch; static unsigned s_fiCap, s_nFi;
 static TAGPU_PK_FXVERT*  s_fvScratch; static unsigned s_fvCap, s_nFv;
-/* each shape's reach from its node's origin, in whole pixels (fx_shape), for
-   the cull; indexed as s_fsScratch */
-static int*              s_fsRad;     static unsigned s_frCap;
 static volatile unsigned s_cLastFm, s_cLastFv, s_cFxLost;
 /* a model the engine draws and the packet cannot carry: any index past
    `n_fxmodel` says that to the consumer (tagpu_packet.h) */
@@ -1321,7 +1318,8 @@ static unsigned s_shGen;
      0x46BAE0 (a weapon's body and flame, an explosion's body)
         bit 1 clear   the frame pointer at +0x10
         bit 1 set     0x4B7EE0(face+0x10): the anim state {u16 frame @0,
-                      sequence @8}, the sequence's +0x28 + 8 * frame --
+                      sequence @8}; 0 for a NULL sequence (0x4B7EE6..
+                      0x4B7EEB), else the sequence's +0x28 + 8 * frame --
                       UNBOUNDED in the engine
      0x4211D0 (a debris piece) the same, except
         bits 1 and 2  0x4B7F30(*(face+0x18), logo): the sequence indexed by
@@ -1331,12 +1329,15 @@ static unsigned s_shGen;
    THREE ANSWERS, because a model is carried whole or not at all. A frame
    pointer: the face draws it. FXF_NONE: the engine draws NOTHING for the
    face -- 0x4C7580 returns at once on a NULL frame (0x4C7597), which is what
-   a NULL pointer and 0x4B7F30's out-of-range answer hand it -- so leaving the
-   face out is the engine's picture. FXF_REFUSE: the engine draws something no
-   copy can reproduce -- 0x4B7EE0 reading past its table, a logo reached
-   through a chain that did not validate, a pointer that is not a sane frame
-   header, or an RLE-compressed frame, whose pixel plane the span 0x4C7310
-   copies as raw rows -- and the whole model is refused (fx_shape). */
+   a NULL pointer, 0x4B7EE0's NULL sequence and 0x4B7F30's out-of-range answer
+   hand it -- so leaving the face out is the engine's picture. FXF_REFUSE: the
+   engine draws something no copy can reproduce -- 0x4B7EE0 reading past its
+   table, a logo reached through a chain that did not validate, a pointer
+   that is not a sane frame header, or an RLE-compressed frame, whose pixel
+   plane the span 0x4C7310 copies as raw rows -- and the whole model is
+   refused (fx_shape). A NULL sequence on a team face is a refusal too:
+   0x4B7F30 reads its count before its NULL test (0x4B7F41, 0x4B7F48), so
+   there the engine faults rather than draws nothing. */
 #define FXF_NONE   0u
 #define FXF_REFUSE 1u
 static unsigned fx_face_frame(const char* fa, int debris, int logo)
@@ -1354,6 +1355,7 @@ static unsigned fx_face_frame(const char* fa, int debris, int logo)
         if (r < 0) return FXF_REFUSE;
         if (r == 0) return FXF_NONE;                  /* 0x4B7F30's out-of-range 0 */
     } else {
+        if (!seq) return FXF_NONE;                    /* 0x4B7EE0's NULL test */
         if (tagpu_gaf_seq_entry(seq, (int)RDU16(fa, F_TEXFRAME), &raw) != 1) return FXF_REFUSE;
     }
     if (!raw) return FXF_NONE;
@@ -1377,12 +1379,15 @@ static unsigned fx_face_frame(const char* fa, int debris, int logo)
    leaving a hole in it: a flat face past TAGPU_PK_FXMAXFV, a frame that is
    FXF_REFUSE, an index pointer that is not one, or an index at or past the
    node's vertex count (the engine takes that vertex out of its projected
-   scratch unchecked -- another model's, or a stale one).
+   scratch unchecked -- another model's, or a stale one). A node with no
+   vertex is walked the same way: 0x46BAE0 skips the rotation on a count of
+   0 or less (`jle` at 0x46BB09) and still walks the faces, so every face it
+   paints reads stale points, and refuses.
 
    Returns the shape; FXS_EMPTY for a node the engine paints no face of -- no
-   vertex, no face, or none its walk draws -- whose record's other parts draw
-   as they would; FXS_REFUSED for a node that did not validate or a shape
-   refused above. Both answers are remembered for the gather, as a shape is. */
+   face, or none its walk draws -- whose record's other parts draw as they
+   would; FXS_REFUSED for a node that did not validate or a shape refused
+   above. Both answers are remembered for the gather, as a shape is. */
 #define FXS_EMPTY   (-2)
 #define FXS_REFUSED (-1)
 #define FXS_HASH_EMPTY   0xFFFFFFFEu
@@ -1400,9 +1405,7 @@ static int fx_shape(const char* node, int debris, int logo)
     const unsigned h0 = ((unsigned)(size_t)node * 2654435761u ^ (unsigned)key) & (FX_SHAPE_HASH - 1u);
     unsigned k, slot = FX_SHAPE_HASH, f0, i0;
     int nvert, nface, j, j0, t;
-    long long rad = 0;
     const char* faces;
-    const int* vb;
     TAGPU_PK_FXSHAPE* sh;
     for (k = 0; k < FX_SHAPE_PROBE; k++) {
         const unsigned i = (h0 + k) & (FX_SHAPE_HASH - 1u);
@@ -1415,13 +1418,12 @@ static int fx_shape(const char* node, int debris, int logo)
     nvert = RD32(node, N_VCOUNT);
     nface = RD32(node, N_FCOUNT);
     faces = *(const char* const*)(node + N_FACES);
-    vb = *(const int* const*)(node + N_VERTS);
-    if (nvert < 1 || nface < 1) { fx_shape_remember(slot, node, key, FXS_HASH_EMPTY); return FXS_EMPTY; }
+    if (nface < 1) { fx_shape_remember(slot, node, key, FXS_HASH_EMPTY); return FXS_EMPTY; }
+    if (nvert < 0) nvert = 0;          /* the rotation's `jle`: no vertex at all */
     if (nvert > (int)TAGPU_PK_FXMAXNV || nface > (int)TAGPU_PK_FXMAXNF ||
-        !ptr_ok(faces) || !ptr_ok(vb) ||
+        !ptr_ok(faces) ||
         !fx_fits(0, (unsigned)nface * TAGPU_PK_FXMAXFV, (unsigned)nface, 1u, 0) ||
         !fx_room((void**)&s_fsScratch, &s_fsCap, s_nFs + 1u, sizeof *s_fsScratch) ||
-        !fx_room((void**)&s_fsRad, &s_frCap, s_nFs + 1u, sizeof *s_fsRad) ||
         !fx_room((void**)&s_ffScratch, &s_ffCap, s_nFf + (unsigned)nface, sizeof *s_ffScratch) ||
         !fx_room((void**)&s_fiScratch, &s_fiCap, s_nFi + (unsigned)nface * TAGPU_PK_FXMAXFV,
                  sizeof *s_fiScratch)) {
@@ -1453,7 +1455,7 @@ static int fx_shape(const char* node, int debris, int logo)
         if (!ptr_ok(ip)) goto refuse;
         for (t = 0; t < fvc; t++) {
             const uint16_t v = ip[t];
-            if (v >= (uint16_t)nvert) { ok = 0; break; }
+            if ((int)v >= nvert) { ok = 0; break; }
             s_fiScratch[s_nFi + (unsigned)t] = v;
         }
         if (!ok) goto refuse;
@@ -1463,15 +1465,6 @@ static int fx_shape(const char* node, int debris, int logo)
         sh->nface++;
     }
     if (sh->nface == 0) { fx_shape_remember(slot, node, key, FXS_HASH_EMPTY); return FXS_EMPTY; }
-    /* THE SHAPE'S REACH: every vertex's |x| + |y| + |z|, the L1 norm, is at
-       least its distance from the origin, and a rotation keeps that distance,
-       so no posed vertex lies farther out whatever the triple (fx_in_reach) */
-    for (t = 0; t < nvert; t++) {
-        const long long d = llabs((long long)vb[t * 3]) + llabs((long long)vb[t * 3 + 1]) +
-                            llabs((long long)vb[t * 3 + 2]);
-        if (d > rad) rad = d;
-    }
-    s_fsRad[s_nFs] = (int)(rad >> 16) + 1;
     fx_shape_remember(slot, node, key, s_nFs);
     return (int)s_nFs++;
 
@@ -1479,6 +1472,41 @@ refuse:
     s_nFf = f0; s_nFi = i0;
     fx_shape_remember(slot, node, key, FXS_HASH_REFUSED);
     return FXS_REFUSED;
+}
+
+/* THE NODE'S REACH FROM ITS ORIGIN, in whole pixels, by node for the gather
+   (the shapes' generation): every rest vertex's |x| + |y| + |z|, the L1 norm,
+   is at least its distance from the origin, and a rotation keeps that
+   distance, so no posed vertex lies farther out whatever the triple. -1 when
+   the node has no vertex or they cannot be read: no bound, so nothing is
+   culled by it. */
+static struct { const char* node; int rad; unsigned gen; } s_rdHash[FX_SHAPE_HASH];
+static int fx_rad(const char* node)
+{
+    const unsigned h0 = ((unsigned)(size_t)node * 2654435761u) & (FX_SHAPE_HASH - 1u);
+    unsigned k, slot = FX_SHAPE_HASH;
+    int nvert, t, rad = -1;
+    const int* vb;
+    for (k = 0; k < FX_SHAPE_PROBE; k++) {
+        const unsigned i = (h0 + k) & (FX_SHAPE_HASH - 1u);
+        if (s_rdHash[i].gen != s_shGen) { slot = i; break; }
+        if (s_rdHash[i].node == node) return s_rdHash[i].rad;
+    }
+    nvert = RD32(node, N_VCOUNT);
+    vb = *(const int* const*)(node + N_VERTS);
+    if (nvert >= 1 && nvert <= (int)TAGPU_PK_FXMAXNV && ptr_ok(vb)) {
+        long long m = 0;
+        for (t = 0; t < nvert; t++) {
+            const long long d = llabs((long long)vb[t * 3]) + llabs((long long)vb[t * 3 + 1]) +
+                                llabs((long long)vb[t * 3 + 2]);
+            if (d > m) m = d;
+        }
+        rad = (int)(m >> 16) + 1;
+    }
+    if (slot < FX_SHAPE_HASH) {
+        s_rdHash[slot].node = node; s_rdHash[slot].rad = rad; s_rdHash[slot].gen = s_shGen;
+    }
+    return rad;
 }
 
 /* WHETHER ANY PIXEL OF A MODEL CAN BE ON A FRAME DRAWN FROM THIS PACKET. The
@@ -1510,6 +1538,11 @@ static int fx_in_reach(const int32_t pos[3], int rad, const FXREACH* rc)
    is NOT taken off here: the consumer projects with the eye it draws with,
    and `(v + X - (eye << 16)) >> 16` is `((v + X) >> 16) - eye` exactly.
 
+   THE REACH IS TESTED FIRST, because it needs only the node's rest
+   vertices: a model no frame can show is TAGPU_PK_NOMODEL whatever its faces
+   would answer, so its record's other parts draw, and a face it could not
+   have shown never takes them back with it.
+
    `debris` selects 0x4211D0's frame rule and `logo` is its team index (-1
    when the chain did not validate). Returns the model; TAGPU_PK_NOMODEL for a
    node the engine draws nothing for, or one with no pixel inside the reach;
@@ -1520,12 +1553,13 @@ static unsigned fx_model(const char* node, const short turn[3], const int32_t po
     typedef void (__stdcall *ROTATE3)(const int* src, int* dst, const short* turn);
     const ROTATE3 rot = (ROTATE3)(size_t)ROTATE3_VA;
     const int* vb;
-    int shape, nvert, i;
+    int shape, nvert, rad, i;
     if (!ptr_ok(node)) { s_cFxLost++; return FX_LOST; }
+    rad = fx_rad(node);
+    if (rad >= 0 && !fx_in_reach(pos, rad, rc)) return TAGPU_PK_NOMODEL;
     shape = fx_shape(node, debris, logo);
     if (shape == FXS_EMPTY) return TAGPU_PK_NOMODEL;
     if (shape < 0) { s_cFxLost++; return FX_LOST; }
-    if (!fx_in_reach(pos, s_fsRad[shape], rc)) return TAGPU_PK_NOMODEL;
     vb = *(const int* const*)(node + N_VERTS);
     nvert = s_fsScratch[shape].nvert;
     if (!ptr_ok(vb) || !fx_fits((unsigned)nvert, 0, 0, 0, 1u) ||
@@ -1549,7 +1583,11 @@ static unsigned fx_model(const char* node, const short turn[3], const int32_t po
 static void fx_models_reset(void)
 {
     s_nFm = s_nFs = s_nFf = s_nFi = s_nFv = 0;
-    if (++s_shGen == 0) { memset(s_shHash, 0, sizeof s_shHash); s_shGen = 1; }
+    if (++s_shGen == 0) {
+        memset(s_shHash, 0, sizeof s_shHash);
+        memset(s_rdHash, 0, sizeof s_rdHash);
+        s_shGen = 1;
+    }
 }
 
 /* the projectiles, the debris slots and the explosions */
@@ -1862,7 +1900,7 @@ static unsigned fill_fxmodels(TAGPU_PACKET* p, unsigned* cursor)
         p->off_fxvert = p->off_fxidx = p->off_fxface = p->off_fxshape = p->off_fxmodel = 0;
         /* the tables that fitted are owed again with the rest: the slot has
            to grow by all five */
-        s_fillShort += *cursor - mark;
+        s_fillShort += PKT_ALIGN4(*cursor) - mark;
         *cursor = mark;
     }
     return need;
