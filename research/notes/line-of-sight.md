@@ -76,7 +76,7 @@ world units** (every index is `worldCoord >> 5`); the row index is
 `(worldZ - altitude/2) >> 5`, TA's usual isometric shear. A point high up near the north edge
 shears off the grid and reads as unseen, and a unit there stamps no sight of its own (the sight
 emitter `0x4825B0` places its stamp at the same sheared row); the DLL uses the point's own row there
-instead, at every copy of this row that runs — 44 of the 46 the engine inlines, the emitter's among
+instead, at every copy of this row that runs — 44 of the 46 the census finds, the emitter's among
 them ([the engine map](exe-reverse-engineering.md), *Line of sight at the map's edge*). The shared *explored* map is
 separate — `TAdynmem+0x14273`, one word per cell, bit `TAdynmem+0x2A43` for the local
 player — and is what `PositionInPlayerMapped` reads when LOS is off.

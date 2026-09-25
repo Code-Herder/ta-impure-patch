@@ -156,10 +156,14 @@ the plan below:
   local fix, `fix_projectile_view` — the pass still runs, the engine's frame being the golden
   source.
 - **Changed: the defect is the read, wherever it is inlined — 46 copies, not four.** The census is
-  by the data: every compare in `.text` with a grid's height — a player's `+0x84`, the sight grid's
-  `main+0x14297`, or `+8` through a pointer to either — holds 57, and 46 are the read, each a world
-  point sheared by its altitude against one player's grid (a search by the shear's shape alone finds
-  38: eight reuse a `y >> 1` computed far above). Beyond the eight above: the order resolver `0x43F0E0` (six) and the view player's map build
+  by the data: every compare in `.text` that reads a grid's height in memory — a player's `+0x84`,
+  the sight grid's `main+0x14297`, or `+8` through a register pointing at either — holds 57, and 46
+  are the read, each a world point sheared by its altitude against one player's grid. It does not
+  follow a grid pointer spilled to the stack or a height recomputed from the plot's rows; a second
+  pass over those forms finds only the sight grid's builder, which projects terrain into the grid in
+  sheared space (not the defect), and the circle's row clips. A search by the shear's arithmetic finds
+  39: the builder's and 38 of the 46, the other eight reusing a `y >> 1` computed further up. Beyond
+  the eight above: the order resolver `0x43F0E0` (six) and the view player's map build
   `0x467440` (two, which mark units seen for the acquisition) join the table; the cursor picker
   `0x43E490` (six), the build cursor's site test `0x47D2E0` (one), the feature helper `0x4658E0`
   (four), the radar rebuild `0x466DC0`'s projectile dots (four), the particle leaves `0x473590`,
