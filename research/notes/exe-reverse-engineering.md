@@ -324,8 +324,8 @@ made, or its page cannot be made writable. Each of the nineteen, and why:
 | weapon IDs `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | simulation | the `0x0F` hit flag is a wire format; in the raised build these are the raise's own rows |
 | one hit a victim an explosion `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | simulation | who is damaged, and how much |
 | the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
-| line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440` (fifteen rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps |
-| line of sight in local code: the cursor picker, the build cursor's site test, the feature draw, four particle leaves, positional sound (nineteen sites) | local | a cursor, a draw, a sound |
+| line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440` (fifteen sites in 22 rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps |
+| line of sight in local code: the cursor picker, the build cursor's site test, the feature helper, the radar rebuild's projectile dots, five particle leaves, positional sound (27 sites) | local | a cursor, a draw, a sound |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
@@ -1772,33 +1772,79 @@ there while `north` hovered on station for about 7 s at 150 of 150 HP, in range 
 spotter's lit radius; when the AI dragged it south past z 84 the flak swung north and shot it within
 0.6 s.
 
-**The census** [DISASSEMBLED 2026-09-25]. The read is inlined far beyond `0x465AC0`. A search of
-`.text` for its shape — a halved y word subtracted from a z word, then `sar 5` and the unsigned
-pair against `+0x80` and `+0x84`, in any registers, the mapped-grid form included — finds **37
-copies**. Each is the same computation: a world point placed at `(z − y/2) >> 5` against one
-player's grid bounds, then that player's LOS grid (`+0x7C`) or the shared mapped grid
-`main+0x14273` read at the player's bit. The sites are the row tests:
+**The census** [DISASSEMBLED 2026-09-25]. The read is inlined far beyond `0x465AC0`. Every bound
+of a row against a player's grid height is a compare with `+0x84`, so the census is those compares,
+**exhaustive by construction**: a byte scan of `.text` for `3B` or `39` with a disp32 of `0x84`
+(`cmp r,[g+0x84]`, `cmp [g+0x84],r`, 47 and 3) finds 50, each at an instruction boundary. **45**
+are the read — a world point placed at `(z − y/2) >> 5` against one player's grid, then that
+player's LOS grid (`+0x7C`) or the shared mapped grid `main+0x14273` at the player's bit — and 43 of
+them are patched: 15 in the table, 28 local. Two are the dead `0x474B80`'s. Of the other five, two
+re-test a row already bounded and three compare another structure's `+0x84` with zero. A search by
+the shear's shape alone missed eight of the 45, which reuse a `y >> 1` computed far above the
+subtraction; the compare is what every copy has to make.
 
-| row test(s) | function | what the answer decides | class | patched |
+| compare | function | what the answer decides | grid | verdict |
 |---|---|---|---|---|
-| `0x465B6A` `0x465C04` `0x465CA2` `0x465D46` (LOS), `0x465DA9` (mapped) | `UnitInPlayerLOS 0x465AC0` | whether a player sees a unit: the acquisition `0x40AA40` and six more callers | simulation | yes |
-| `0x408095` | `PositionInPlayerMapped 0x408090` | whether a point is mapped for a player (Permanent, Circular) | simulation | yes |
-| `0x407F74` | `0x407E90` [INFERRED: an AI routine] | the probe point the routine keeps | simulation | yes |
-| `0x43F5D1`, `0x43F64D`, `0x43FC05`, `0x43FD1A`, `0x43FF85`, `0x4400AA` (all mapped) | the order resolver `0x43F0E0` | whether the target's cell is mapped for the local player (`main+0x2A43`'s bit), which steers the order it returns; among its 22 call sites are AI routines (`0x40804C` in `0x407E90`) and the unit order code (`0x405265`) | simulation | yes |
-| `0x46778A` (LOS), `0x4677D0` (mapped) | the view player's map build `0x467440`, its fourth pass `0x46770D..0x46782F` | a unit the view player sees gets `+0x110` bit 8, which the acquisition `0x40AA40` puts on every player's radar list | simulation | yes |
-| `0x49BEE8` (LOS) | the projectile draw pass `0x49BE60` | whether the frame shows, and poses, a projectile | local | yes |
-| `0x43E69D` `0x43E904` `0x43EBC6` `0x43ECDB` `0x43EE94` `0x43EFA9` (all mapped) | the cursor picker `0x43E490` | the pointer's sprite and, through `main+0x2CBE`, what this player's own left click orders | local | yes |
-| `0x47D3B8` (mapped) | the site test `0x47D2E0` | the build cursor's green or blocked (`main+0x2CC6` bit 6). It reads only when given a player (`0x47D366`); of its callers only `0x4198C6` in `0x4197D0`, the build cursor, passes one — `0x40A4CD` and `0x47DBE5` pass 0 | local | yes |
-| `0x465942` (LOS), `0x46598A` (mapped) | the feature LOS helper `0x4658E0` | whether `DrawGameScreen` draws a feature (`0x46990F`, `0x469A9C`) | local | yes |
-| `0x47360C` `0x473657`; `0x4741EC` `0x474237`; `0x474674` `0x4746BB` | the particle leaves `0x473590`, `0x474170` (fire), `0x4745E0` (foam) | whether a particle is drawn | local | yes |
-| `0x47551E` `0x47556C` | the particle layers' `0x4750B0` | whether a particle is drawn | local | yes |
-| `0x47F431` `0x47F476` | positional sound `0x47F300` | whether a sound plays for this player | local | yes |
-| `0x474BFC` `0x474C49` | `0x474B80` | a particle's blit (`0x4B7F30`, `0x4B8500`) | — | **no**: nothing runs it — no `rel32` call or jump in `.text` reaches it and no pointer to it is in the image |
+| `0x407F94` | the AI probe `0x407E90` [INFERRED: an AI routine] | the probe point the routine keeps | LOS grid | sheared, patched: table (hand stub over `0x407F74..0x407F9B`) |
+| `0x4080B9` | `PositionInPlayerMapped 0x408090` | whether a point is mapped for a player (Permanent, Circular) | mapped grid | sheared, patched: table (hand stub over `0x408095..0x4080C0`) |
+| `0x43E69D` | the cursor picker `0x43E490` | the pointer sprite, and through `main+0x2CBE` what this player's left click orders | mapped grid | sheared, patched: local |
+| `0x43E904` | the cursor picker | as above | mapped grid | sheared, patched: local |
+| `0x43EBC6` | the cursor picker | as above | mapped grid | sheared, patched: local |
+| `0x43ECDB` | the cursor picker | as above | mapped grid | sheared, patched: local |
+| `0x43EE94` | the cursor picker | as above | mapped grid | sheared, patched: local |
+| `0x43EFA9` | the cursor picker | as above | mapped grid | sheared, patched: local |
+| `0x43F5D1` | the order resolver `0x43F0E0` | whether the target's cell is mapped for the local player, which steers the order it returns; among its 22 call sites are AI routines (`0x40804C` in `0x407E90`) and the unit order code (`0x405265`) | mapped grid | sheared, patched: table |
+| `0x43F64D` | the order resolver | as above; stock overwrites the point's register (`esi`, `0x43F635`) before this test | mapped grid | sheared, patched: table (hand stub over `0x43F631..0x43F654`) |
+| `0x43FC05` | the order resolver | as above | mapped grid | sheared, patched: table |
+| `0x43FD1A` | the order resolver | as above | mapped grid | sheared, patched: table |
+| `0x43FF85` | the order resolver | as above | mapped grid | sheared, patched: table |
+| `0x4400AA` | the order resolver | as above | mapped grid | sheared, patched: table |
+| `0x465942` | the feature LOS helper `0x4658E0`, first corner | whether `DrawGameScreen` draws a feature (`0x46990F`, `0x469A9C`) | LOS grid | sheared, patched: local |
+| `0x46598A` | the feature helper, first corner | as above | mapped grid | sheared, patched: local |
+| `0x465A17` | the feature helper, second corner: z is `bx` after `add bx,cx` (`0x4659F4`), less the `y >> 1` still in `esi` from `0x465934` | as above | LOS grid | sheared, patched: local |
+| `0x465A63` | the feature helper, second corner (`esi` from `0x46597C`) | as above | mapped grid | sheared, patched: local |
+| `0x465B8D` | `UnitInPlayerLOS 0x465AC0`, first point | whether a player sees a unit: the acquisition `0x40AA40` and six more callers | LOS grid | sheared, patched: table (hand stub over `0x465B6A..0x465B94`) |
+| `0x465C27` | `UnitInPlayerLOS`, second point | as above | LOS grid | sheared, patched: table (`0x465C04..0x465C2E`) |
+| `0x465CCB` | `UnitInPlayerLOS`, third point | as above | LOS grid | sheared, patched: table (`0x465CA2..0x465CD2`) |
+| `0x465D60` | `UnitInPlayerLOS`, fourth point | as above | LOS grid | sheared, patched: table (`0x465D46..0x465D67`) |
+| `0x465DC3` | `UnitInPlayerLOS`, fourth point, inline copy of `0x408090` | as above | mapped grid | sheared, patched: table (`0x465DA9..0x465DCA`) |
+| `0x46725F` | the radar rebuild `0x466DC0`, its projectile dots (records `main+0x141F7`, stride `0x6B`; the row `[ebx+4] − ([ebx] >> 1)`, `0x4671E5..0x4671EB`) | whether a projectile's dot is drawn on the minimap | LOS grid | sheared, patched: local |
+| `0x467294` | the radar rebuild | as above | mapped grid | sheared, patched: local |
+| `0x467340` | the radar rebuild; `ebx` overwritten at `0x467315`, `0x467322` | as above | LOS grid | sheared, patched: local (z through `[esp+0x18]`) |
+| `0x467375` | the radar rebuild; `ebx` overwritten at `0x467365` too | as above | mapped grid | sheared, patched: local (z through `[esp+0x18]`) |
+| `0x46778A` | the view player's map build `0x467440`, its fourth pass `0x46770D..0x46782F` | a unit the view player sees gets `+0x110` bit 8, which the acquisition `0x40AA40` puts on every player's radar list | LOS grid | sheared, patched: table |
+| `0x4677D0` | the view player's map build | as above | mapped grid | sheared, patched: table |
+| `0x47360C` | the particle leaf `0x473590` | whether a particle is drawn | LOS grid | sheared, patched: local |
+| `0x473657` | the particle leaf `0x473590` | as above | mapped grid | sheared, patched: local |
+| `0x473A94` | the particle leaf `0x473A00` (called at `0x472FBB`): z is `bp`, less the `y >> 1` in `edx` from `0x473A3B` | whether a particle is drawn | LOS grid | sheared, patched: local |
+| `0x473AD3` | the particle leaf `0x473A00` | as above | mapped grid | sheared, patched: local |
+| `0x4741EC` | the particle leaf `0x474170` (fire) | whether a particle is drawn | LOS grid | sheared, patched: local |
+| `0x474237` | the particle leaf `0x474170` | as above | mapped grid | sheared, patched: local |
+| `0x474674` | the particle leaf `0x4745E0` (foam) | whether a particle is drawn | LOS grid | sheared, patched: local |
+| `0x4746BB` | the particle leaf `0x4745E0` | as above | mapped grid | sheared, patched: local |
+| `0x474BFC` | `0x474B80` | a particle's blit (`0x4B7F30`, `0x4B8500`) | LOS grid | sheared, **no caller**: no call or jump in `.text` reaches `0x474B80` and no pointer to it is in the image; left stock |
+| `0x474C49` | `0x474B80` | as above | mapped grid | sheared, **no caller**; left stock |
+| `0x47551E` | the particle leaf `0x475470`, slot 2 of the vtable `0x4FD618` (pointer at `0x4FD620`); `0x4750B0` beside it is a 0x35-byte constructor that installs the vtable `0x4FD638` | whether a particle is drawn | LOS grid | sheared, patched: local |
+| `0x47556C` | the particle leaf `0x475470` | as above | mapped grid | sheared, patched: local |
+| `0x47BE94` | `cmp [eax+0x84],ebx` in `0x47BDF0` [function start from the preceding padding] | another structure's `+0x84`, compared with zero | — | **not the shear**: no grid |
+| `0x47D3B8` | the site test `0x47D2E0` | the build cursor's green or blocked (`main+0x2CC6` bit 6); it reads only when given a player (`0x47D366`), and only `0x4198C6` in the build cursor `0x4197D0` passes one — `0x40A4CD` and `0x47DBE5` pass 0 | mapped grid | sheared, patched: local |
+| `0x47D41A` | the site test | re-tests the row `0x47D3B8` bounded (`eax` is not written in between) before reading the LOS grid | LOS grid | **not a separate shear**: it follows `0x47D3B8`'s row |
+| `0x47D44E` | the site test | as `0x47D41A`, before reading the mapped grid | mapped grid | **not a separate shear**: it follows `0x47D3B8`'s row |
+| `0x47F431` | positional sound `0x47F300` | whether a sound plays for this player | LOS grid | sheared, patched: local |
+| `0x47F476` | positional sound | as above | mapped grid | sheared, patched: local |
+| `0x48E9A8` | `cmp [ebp+0x84],ebx` in `0x48E010` [function start from the preceding padding] | another structure's `+0x84`, compared with zero | — | **not the shear**: no grid |
+| `0x49BF08` | the projectile draw pass `0x49BE60` | whether the frame shows, and poses, a projectile | LOS grid | sheared, patched: local (hand stub over `0x49BEE8..0x49BF0F`) |
+| `0x4B4FF8` | `cmp [esi+0x84],edi` at the top of `0x4B4FF0` | another structure's `+0x84`, compared with zero | — | **not the shear**: no grid |
 
-Not the formula, and left stock: `0x40D817`, `0x466D01` and `0x47E37B` read the mapped grid with a
-halving that scales a coordinate, not the altitude shear; `0x49C1B1` is a screen projection; and
-`0x465A8B`, `0x4672A6`, `0x46738C`, `0x473AEA`, `0x4816CC`, `0x481A48`, `0x481B58`, `0x481CAA`,
-`0x483E69`, `0x484F8B`, `0x484FEE` and `0x485460` read `main+0x14273` at a cell with no shear.
+Readers of `main+0x14273` that no `+0x84` compare bounds — `0x40D817`, `0x466D01` and `0x47E37B`,
+which halve a coordinate to scale it; `0x4816CC`, `0x481A48`, `0x481B58`, `0x481CAA`, `0x483E69`,
+`0x484F8B`, `0x484FEE` and `0x485460` — index it by a cell or a scaled minimap coordinate, not by a
+world point's row, and `0x49C1B1` is a screen projection. **The site test's accumulator** `0x51E688`
+(zeroed at `0x47D2F4`, summed at `0x47D4E7`) is also read by AI code, `0x40A76A`, through the getter
+`0x47C770`, after `0x47DB70`, whose `[+0x22F]` path returns 1 without calling the site test — so the
+value can be one the build cursor left, a per-peer leak stock already has. The fix changes only its
+value at the north edge (the footprint's sum instead of 0), no new kind of divergence, so the site
+test stays local.
 
 **The fix** (`fix_los_shear`, simulation, fail closed; `fix_los_local` and `fix_projectile_view`,
 local): at every patched copy, when the sheared row is outside the grid and the point's own row,
@@ -1806,29 +1852,35 @@ local): at every patched copy, when the sheared row is outside the grid and the 
 map's edge stays unseen — TADR's margin there is a gameplay change, not a defect. **The invariant**:
 the grid is read only at a column and a row inside it; exact whenever stock's row is inside.
 
-- **The eight first found** are hand stubs over whole blocks (43, 43, 49, 34, 34, 44, 40 and 40
+- **Nine hand stubs** over whole blocks: the eight first found (43, 43, 49, 34, 34, 44, 40 and 40
   bytes), each computing stock's column and sheared row and leaving at stock's read (`0x465B95`,
   `0x465C2F`, `0x465CD3`, `0x465D68`, `0x465DE0`, `0x4080C7`, `0x407F9C`, `0x49BF10`) or its "not
-  visible". The third stub loads `dx` and `di` exactly as stock does, for the fourth; `ebp` after the
-  third and `edx` after the fourth are dead on both exits. `ebx` is dead on both exits of the AI
-  probe's copy (the read writes it at `0x407F9C`; past `0x408002` it is written at `0x40803E` or
-  popped at `0x408081`) and of the projectile pass's (`0x49BF10` writes it; the other exit reaches the
-  loop's top `0x49BEA3`, which writes it before any read, or its pop at `0x49C07D`).
-- **Twenty-eight** end in a lone row test, `cmp r,[g+0x84]` and a `jae` or `jb` (8 bytes, or 12 with
-  a near branch). Each is replaced by a jump to a generic stub: the same compare and `jb` to stock's
-  read; else `movsx r,<z>` — the instruction that loaded the point's z word for the shear, still
-  good there because its base is not written in between and a `[esp+..]` one sees no push —
-  `sar r,5`, the compare again and `jae` to "not visible"; else the count and stock's read. The exits
-  are decoded from the stock bytes the check compares; only `r` and the flags change, and each exit
-  is reached with the carry stock reaches it with.
-- **`0x43F64D`**, the order resolver's second read, is the one whose point register (`esi`) stock
-  overwrites (`0x43F635`) before the row test, so its whole block `0x43F631..0x43F654` (36 bytes) is
-  the stub, with z held on the stack.
+  visible"; and `0x43F631..0x43F654` (36 bytes), the order resolver's second read, whose point
+  register stock overwrites before its test, with z held on the stack. The third stub loads `dx` and
+  `di` exactly as stock does, for the fourth; `ebp` after the third and `edx` after the fourth are
+  dead on both exits. `ebx` is dead on both exits of the AI probe's copy (the read writes it at
+  `0x407F9C`; past `0x408002` it is written at `0x40803E` or popped at `0x408081`) and of the
+  projectile pass's (`0x49BF10` writes it; the other exit reaches the loop's top `0x49BEA3`, which
+  writes it before any read, or its pop at `0x49C07D`).
+- **Thirty-four generic stubs** (7 in the table, 27 local) at lone row tests, `cmp r,[g+0x84]` and a
+  `jae` or `jb` (8 bytes, or 12 with a near branch): the same compare and `jb` to stock's read; else
+  `movsx r,<z>` — the instruction that loaded the point's z word for the shear — `sar r,5`, the
+  compare again and `jae` to "not visible"; else the count and stock's read. The exits are decoded
+  from the stock bytes; only `r` and the flags change, and each exit is reached with the carry stock
+  reaches it with. **What each relies on is compared**: the bytes from the z load through the row
+  test, the reload being exact only while nothing in between writes what it reads — for the table a
+  compare-only row beside the branch row, for the local fix one compare per site before anything is
+  written. The generator refuses a z that is not a `movsx` into `r` of its stated length, a z whose
+  base, index or source is `r`, and a compare whose base is `r`. The radar's last two tests come
+  after stock overwrites `ebx` (`0x467315`, `0x467322`, `0x467365`), so their stubs first take the
+  pointer back from `[esp+0x18]`, where the loop keeps it (`0x4671C3`, `0x467425`), with `ebx` dead on
+  both exits (reloaded at `0x4673A9`, cleared at `0x467381`); the whole loop `0x4671C0..0x46742E` is
+  compared for them.
 
-No branch from outside lands inside any replaced range (a `rel8`/`rel32` scan of `.text`: the only
-hits are operand bytes, `0x465B07`, `0x465B45`, `0x465C80` inside the first blocks, `0x43F637` and
-`0x4677FF` inside the new ones), and no absolute pointer into one is in the image. **Every stub
-counts** the times it takes the own row, one interlocked `LONG` per function, the second
+No branch from outside lands inside any replaced range or any compared span (a `rel8`/`rel32` scan
+of `.text`: every hit is an operand byte, and the one literal equal to a site, `0x474674`, is the
+text `"tFG"` in `.data`), and no absolute pointer into one is in the image. **Every stub counts**
+the times it takes the own row, one interlocked `LONG` per function (sixteen), the second
 `enginefix:` line printing the array's address and order — the path only the fix runs, so a count
 above zero is that function's stub at work.
 
@@ -1836,37 +1888,39 @@ above zero is that function's stub at work.
 not the hovered unit but the world point under the pointer (`main+0x2CAA`, filled by `0x484B50`),
 whose sheared row is the pointer's own row in the world view — **MEASURED**: with the view at the
 map's north edge (eye 116, 0), the pointer at game (500, 40), 8 px below the view's top, read the
-world point (488, 85, 50), sheared row 0. So on the map its reads are inside the grid, and the cursor copies change nothing
-there. And `z − y/2` is also where the unit is drawn [INFERRED from the projection]: a unit whose
-sheared row is negative is drawn above the view's top, where the pointer cannot reach it — the human
-cannot click the north atlas below; the fix lets their units acquire it, not their pointer.
+world point (488, 85, 50), sheared row 0. So on the map its reads are inside the grid, and the cursor
+copies change nothing there. And `z − y/2` is also where the unit is drawn [INFERRED from the
+projection]: a unit whose sheared row is negative is drawn above the view's top, where the pointer
+cannot reach it — the human cannot click the north atlas below; the fix lets their units acquire it,
+not their pointer.
 
 **MEASURED, previous builds.** With the first four reads patched, the same fixture: the flak aimed at
 `north` first and shot it down on station at z 40.1 within 5 s, then `control`. Under Permanent line
 of sight (`scenario load --los 0`, `LosType` read 12, so every point went through the mapped grid) the
 same: `north` hit first at z 40.0 within 2.5 s and dead within 5 s, then `control`.
 
-**MEASURED, every copy patched** (build `ea7eabe`, raised, True line of sight, the same fixture and
-driver, one launch): the table installed 169 sites. All 35 patched sites were read back from the
-running process: each is a jump to a stub that disassembles as intended, with stock's exits and its
-function's counter. The flak shot `control`, then `north` on station (z 40.4, altitude 175), both
-within the first seconds. The counters then held still once both were dead:
+**MEASURED, every copy patched** (build `74fcfc2`, raised, True line of sight, the same fixture and
+driver, one launch): the table installed 176 sites (the stock-limits build, to the menu: 50). All 43
+patched sites were read back from the running process: each is a jump to a stub that disassembles
+as intended, with stock's exits and its function's counter. The flak shot `control`, then `north` on
+station (z 42.2, altitude 175), both within the first seconds. The counters:
 
 | function | own row taken |
 |---|---|
-| `0x465AC0` | 1884 |
+| `0x465AC0` | 2548 |
 | `0x467440` | 4 |
-| `0x49BE60` | 32 |
-| `0x474170` | 253 761 |
-| `0x4750B0` | 832 791 |
-| the other nine | 0 |
+| `0x49BE60` | 24 |
+| `0x466DC0` | 2 |
+| `0x474170` | 679 342 |
+| `0x475470` | 2 395 955 |
+| the other ten | 0 |
 
-The two particle counts are fire and smoke at altitude near the north edge, from the flak bursts and
-the atlases' deaths; drawn at a negative row, they land above the view. **Not reached by this
-fixture**, so resting on the disassembly and on the live decode alone: `0x408090` (True line of sight
-reads the LOS grid inline), the AI probe `0x407E90`, the order resolver (the AI's targets were the
-human's units, well inside the grid, and the human could not point at `north`), the cursor picker
-(above), the site test, the feature helper, positional sound, and the leaves `0x473590` and
+The particle counts are fire and smoke at altitude near the north edge, from the flak bursts and the
+atlases' deaths; drawn at a negative row, they land above the view. **Not reached by this fixture**,
+so resting on the disassembly and on the live decode alone: `0x408090` (True line of sight reads the
+LOS grid inline), the AI probe `0x407E90`, the order resolver (the AI's targets were the human's
+units, well inside the grid, and the human could not point at `north`), the cursor picker (above),
+the site test, the feature helper, positional sound, and the leaves `0x473590`, `0x473A00` and
 `0x4745E0`.
 
 ## Built-in cheat/console command surface
@@ -2445,7 +2499,7 @@ function from `objdump -d -M intel` of `pristine/TotalA.exe.pristine`.
 | `0x48C6A0` | the unit hit test inside `GetUnitAtMouse 0x48CD80` | projects the footprint's corners and tests the point against the quad (`0x4C1320`) | projection only |
 | `0x420B00`, `0x4211D0`, `0x49BE60` | explosions, debris, projectiles | projection, then `IsPositionInRect`; fxown redirects all three | projection only |
 | `0x458810`, `0x46A530`, `0x46A610` | a unit's draw, the selection boxes, the feature leaf | the eye as the camera origin; the feature leaf's grid index comes from its tile arguments | projection only |
-| `0x472E30` family, `0x4750B0` | the particle layers | the eye as an `i16` screen offset; the LOS index uses the particle's own position, bounded unsigned (`0x473608..0x473620`) | projection only |
+| `0x472E30` family, `0x475470` | the particle layers | the eye as an `i16` screen offset; the LOS index uses the particle's own position, bounded unsigned (`0x473608..0x473620`), at the altitude-sheared row "Line of sight at the map's edge" patches | projection only |
 | `0x46A860`, `0x46B9D0`, `0x417E00` | the debug position text, a cell rect, the waypoint path (a vtable slot at `0x4FD480`) | no index | projection only |
 | `0x417BB0`, `0x417C00`, `0x417C70`, `0x417D30` | world-to-screen line helpers | no call site or pointer to any of them in the image | dead code |
 

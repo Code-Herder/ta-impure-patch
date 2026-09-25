@@ -75,7 +75,7 @@ A unit points at its owner's record through **`UnitStruct+0x96`**. One LOS **cel
 world units** (every index is `worldCoord >> 5`); the row index is
 `(worldZ - altitude/2) >> 5`, TA's usual isometric shear. A point high up near the north edge
 shears off the grid and reads as unseen; the DLL reads its own row there instead, at every copy of this read that
-runs — 35 of the 37 the engine inlines ([the engine map](exe-reverse-engineering.md), *Line of
+runs — 43 of the 45 the engine inlines ([the engine map](exe-reverse-engineering.md), *Line of
 sight at the map's edge*). The shared *explored* map is
 separate — `TAdynmem+0x14273`, one word per cell, bit `TAdynmem+0x2A43` for the local
 player — and is what `PositionInPlayerMapped` reads when LOS is off.

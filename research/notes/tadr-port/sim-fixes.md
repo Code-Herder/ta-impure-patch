@@ -155,19 +155,21 @@ the plan below:
   what the routine keeps depends on it, and the projectile draw pass's (`0x49BEE8`, `0x49BE60`) is a
   local fix, `fix_projectile_view` — the pass still runs, the engine's frame being the golden
   source.
-- **Changed: the defect is the read, wherever it is inlined — 37 copies, not four.** A search of
-  `.text` for the read's shape (a halved y word taken from a z word, `sar 5`, the unsigned pair
-  against `+0x80`/`+0x84`) finds 37, each the same world point against one player's LOS or mapped
-  grid. Beyond the eight above: the order resolver `0x43F0E0` (six) and the view player's map build
+- **Changed: the defect is the read, wherever it is inlined — 45 copies, not four.** Every bound of
+  a row against a player's grid height is a compare with `+0x84`; `.text` holds 50, and 45 are the
+  read, each the same world point against one player's LOS or mapped grid (a search by the shear's
+  shape alone found 37: eight reuse a `y >> 1` computed far above). Beyond the eight above: the order resolver `0x43F0E0` (six) and the view player's map build
   `0x467440` (two, which mark units seen for the acquisition) join the table; the cursor picker
-  `0x43E490` (six), the build cursor's site test `0x47D2E0` (one), the feature draw's `0x4658E0`
-  (two), the particle leaves `0x473590`, `0x474170`, `0x4745E0`, `0x4750B0` (two each) and
-  positional sound `0x47F300` (two) are local, `fix_los_local`, all or none; `0x474B80`'s two stay
+  `0x43E490` (six), the build cursor's site test `0x47D2E0` (one), the feature helper `0x4658E0`
+  (four), the radar rebuild `0x466DC0`'s projectile dots (four), the particle leaves `0x473590`,
+  `0x473A00`, `0x474170`, `0x4745E0`, `0x475470` (two each) and positional sound `0x47F300` (two)
+  are local, `fix_los_local`, all or none; `0x474B80`'s two stay
   stock, since nothing calls it. The engine map's census has the table. The lone row tests take one
   generic stub built from the site's stock bytes; the order resolver's second read, whose point
   register stock overwrites first, is a hand stub over its block. Every stub counts its own rows per
-  function, an interlocked `LONG` each. 169 sites in the raised build, 43 in the stock-limits build
-  (MEASURED from the log lines).
+  function, an interlocked `LONG` each. What each generic stub relies on is compared: the bytes from
+  its z load through its row test (the radar's whole loop for its dots). 176 sites in the raised
+  build, 50 in the stock-limits build (MEASURED from the log lines).
 - **Added: a bound on the sort bucket** (`0x47CCA9`). Settling the plan's question showed the bucket
   is indexed from the unit's position with no bound: inside the grid for every footprint of width 1
   or more once `jg` holds, one past it for width 0, and stock already reaches one before it for
@@ -184,19 +186,19 @@ the plan below:
   The weapon IDs join the table in the stock-limits build too.
 - **The install.** One table, `tagpu_limits_install`, in both builds: it now refuses two rows over
   one byte as well, and the report says "engine limits and fixes" ([the failure
-  report](raised-limits.md#the-failure-report)). 169 sites in the raised build (130 + 39), 43 in the
+  report](raised-limits.md#the-failure-report)). 176 sites in the raised build (130 + 46), 50 in the
   stock-limits build.
 - **Measured** on the new build, one peer, the raised and the stock-limits builds alike where both
   ran: every CORFLAK of `b1-victim-units` lost one hit (the unit-repeat counter 48, the 16 past the
   cap found three more times each); all 96 wrecks of `b1-victim-features` took one hit (the
   feature-repeat counter 602); the edge ARMATLAS of `b1-offmap-edge` stamped and shot down within
   2 s; `north` of `b1-los-shear` shot down on station, the flak's first target, and with every
-  copy patched (one launch, True line of sight) all 35 sites read back from the running process as
-  jumps to stubs that decode as intended, and own rows were taken by `UnitInPlayerLOS` (1884), the
-  view player's map (4), the projectile pass (32) and the particle leaves `0x474170` (253 761) and
-  `0x4750B0` (832 791) — fire and smoke at altitude by the edge. Not reached by that fixture:
-  `0x408090`, the AI probe, the order resolver, the cursor, the site test, the feature helper,
-  sound, and two leaves. The cursor's point is the world point under the pointer, whose sheared row
+  copy patched (one launch, True line of sight) all 43 sites read back from the running process as
+  jumps to stubs that decode as intended, and own rows were taken by `UnitInPlayerLOS` (2548), the
+  view player's map (4), the projectile pass (24), the radar's dots (2) and the particle leaves
+  `0x474170` (679 342) and `0x475470` (2 395 955) — fire and smoke at altitude by the edge. Not
+  reached by that fixture: `0x408090`, the AI probe, the order resolver, the cursor, the site test,
+  the feature helper, sound, and three leaves. The cursor's point is the world point under the pointer, whose sheared row
   is the pointer's own, so on the map it never leaves the grid; and a unit at a negative sheared row
   is drawn above the view [INFERRED from the projection], so the human cannot point at `north` at all — its units acquire it, their
   pointer cannot; a corrupted expectation of one
