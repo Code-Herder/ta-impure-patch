@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <wincrypt.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "tagpu_patches.h"
 #include "tagpu_limits.h"
@@ -54,14 +55,14 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
 
 /* ---- defects of the stock engine -------------------------------------------
 
-   Three places where TotalA.exe itself writes or reads memory it does not own,
+   Four places where TotalA.exe itself writes or reads memory it does not own,
    and two where it takes a player's payment and does not deliver. Each patch
    below is the identity on every input the stock code handles correctly and
    differs only where the stock code would write past an allocation, read
    through NULL, read off the end of the tile map, leave a paid-for feature
    standing, or pay for one feature twice. The engine map
    (exe-reverse-engineering.md, "Engine defects we patch") has the disassembly,
-   the callers and the measurements; binary-patches.md lists them. All five are
+   the callers and the measurements; binary-patches.md lists them. All six are
    installed at every attach: ddraw.dll is a static import of the exe, so
    DllMain runs before the exe's entry point. They are independent: each is
    skipped, with its reason logged, only when its bytes differ from the retail
@@ -610,6 +611,957 @@ static int fix_reclaim_mark_anchor(void)
     return FIX_ARMED;
 }
 
+/* THE COMPOSITE SCRATCH FRAME. [DISASSEMBLED] The composite draw context ctx = *(main+0x1437B)
+   keeps one frame at ctx+0x10, made at the level load by 0x458180 through 0x4B8E00(name, w, h)
+   and freed by the teardown 0x4581C0 through 0x4D85A0. 0x4B8E00 lays it out as a 0x18-byte
+   header -- +0 width u16, +2 height u16, +4/+6 hotspot s16, +8 key, +9..+B flags -- then a
+   colour plane at +0x10 = base+0x18 and a depth plane at +0x14 = colour + w*h, w*h bytes each:
+   A = [f+0x14] - [f+0x10] is the frame's area. The limits table sizes it 1280 x 1280 (stock
+   600 x 600). Five writers size it to one unit and none compares that size with A, all
+   thiscall on ctx, all on the game thread:
+     - the build-state copy 0x4589C0 sets the header to the box of the unit and its build
+       pieces (esi x edx at 0x458B87) and fills or copies w*h of both planes; one caller,
+       0x459608 in the unit draw 0x459200;
+     - the frame copy 0x45A470(src) copies src's header and w*h of both planes; three callers
+       (0x459338, 0x4594DB, 0x45958C);
+     - the shadow build 0x45A790 sets w x h from the bounds 0x45A510 leaves at [esp+0x10] and
+       [esp+0x20] (at 0x45A7B9), fills w*h of both planes, draws, then run-length encodes the
+       colour plane INTO the depth plane (0x4B9E60 from 0x45A85B: two bytes a row and at most
+       two a pixel, so 2h(w+1) bytes); callers 0x4592FE, 0x45955B;
+     - the 2x bakes 0x459830 and 0x459C70(src, ...) set 2w x 2h from src (a `shl` on the u16)
+       and fill, draw and downsample that much, when their fourth argument asks for the 2x
+       path (0x459875, 0x459CB5); src is [esp+0x5F18] / [esp+0x159E8] there.
+   0x459170 is a sixth, a twin of the frame copy, with no caller and no pointer to it in the
+   image [call and literal scan of .text]: it never runs and is not patched.
+   A unit whose box passes A -- a quarter of it for the bake, half for the shadow -- writes
+   past the allocation, on every lane (only GDI presents the result, but the game thread
+   builds it on all of them, MEASURED). And A bounds area, not height: polygons are drawn
+   into the frame through rasterisers that keep one 0x28-byte stack entry a row, clipped only
+   to the frame's height - 1, in tables of 800 entries (0x4C8BB0, 0x4C8760) or 2048 (0x4C0820,
+   0x4C0C70, 0x4C1000); an h-row destination writes at most h - 1, so bounding rows at the
+   table's size is one row inside it. A frame taller than the table under it overruns the
+   rasteriser's stack upward, over its return address and then its arguments: MEASURED, a 2x
+   bake grown to 1548 rows faulted at 0x4C8035 with its texture argument overwritten. The build-state copy's header is drawn under by 0x4C0820 (its own last call,
+   0x458D0E) and by 0x4C8760: the unit draw's 1x bake at 0x459641 is 0x459830(ctx+0x10, ...,
+   0) with the scratch as its source, and the 1x path rasterises into its source by the
+   source's header (0x459B96). The shadow is drawn under by 0x4C1000 (0x45A750), the 2x bakes
+   by 0x4C8760 / 0x4C8BB0 as well as 0x4C1000 / 0x4C0C70.
+
+   THE FIX: before each writer forms its size, a check computes what it will write (need) and
+   how many rows, and compares them with A and with the smallest span table under that writer
+   (800 rows for the build-state copy and for the 2x bakes' 2h, 2048 for the shadow). If it
+   fits the writer runs unchanged. If not, the frame grows: a new
+   block of 0x18 + 2*px bytes, px >= need rounded up to 256 Ki pixels and at most 2048 x 2048,
+   from the engine's own allocator path (below), laid out as 0x4B8E00 lays it out, with the
+   header and both planes copied; ctx+0x10 is repointed and the old block freed with 0x4D85A0,
+   the free 0x4581C0 uses. If the grow is refused -- the need is over 2048 x 2048, the rows are
+   over the span table, the lever `tagpu_scratch.nogrow`, the allocator is out of memory or in
+   its debug-heap mode, or the frame is the writer's own source -- the writer takes a fallback
+   that writes nothing past A:
+     - build-state copy: leaves through its epilogue 0x458D13 and flags the refusal, and the
+       wrapper on its one call (0x459608) leaves the unit draw through 0x4597D8, the draw's
+       own "no frame" exit (0x459212): the unit is not drawn this frame;
+     - frame copy: the frame becomes 1 x 1 holding src's key, with src's hotspot and key, and
+       the function returns it as stock does (`mov eax,[ecx+0x10]; ret 4`): nothing drawn;
+     - shadow build: the frame becomes 1 x 1 holding its own key, hotspot 0, and the function
+       resumes at the encode 0x45A853: the unit's cached shadow is one transparent pixel;
+     - 2x bake: the 1x path (0x459913 / 0x459D57), which draws into src by src's own header.
+   Never a clip: a header must say what the planes hold.
+
+   THE CARGO MERGE 0x4B90A0(src, dst, sx, sy, dbias), whose one caller is 0x4596D8 in the unit
+   draw's cargo loop, paints a carried unit's own frame into the scratch at x0 = dst.hotx -
+   src.hotx + sx, y0 = dst.hoty - src.hoty + sy by the scratch's header width, and refuses only a
+   negative origin: nothing clips its right or bottom edge [0x4B90A0..0x4B9190]. It fits in stock
+   because the build-state copy's box is the union of the carrier's and every cargo's boxes, taken
+   with the same projection and margins (0x4581E0, 0x458310). But between the two the cargo's own
+   bake runs (0x459670, 0x4586A0(cargo, 1, -1)), and its 2x path would leave the scratch's header
+   at the cargo's doubled box -- which the engine's attach guard should make unreachable (a
+   structure is never attached, 0x48ABC7..0x48AC1D), and nothing here depends on that. The call
+   is sent through scratch_merge, which runs the merge only when x0 + src.w <= dst.w, y0 + src.h
+   <= dst.h and dst.w * dst.h <= A, and otherwise leaves the cargo out of this frame's composite.
+
+   THE INVARIANT: every header a writer sets has w*h <= A, and a shadow's 2h(w+1) <= A, and no
+   more rows than the span tables under that writer hold, and the merge writes only inside the
+   header's box, so no writer, no rasteriser and no reader sized by a header leaves its
+   allocation or its stack table. It rests on:
+     - a bound: A is read from the frame's own two pointers, which have exactly two producers,
+       0x4B8E00 at the level load and scratch_hold here, and both lay the frame out this way.
+       The layout test in scratch_area (colour == base+0x18, depth > colour) is a sanity
+       filter on those values, not the argument; a frame failing it is left to stock, logged.
+       Every fallback's 1 x 1 fits: A >= 360000 from 0x4B8E00 and >= 64 from a grow;
+     - an ordering: each writer reads ctx+0x10 only after its check [every read of +0x10 in
+       each writer]; its callers re-read ctx+0x10 after every call (0x45933D..0x459342,
+       0x4594E3, 0x4595B8, 0x4595D9, 0x459639, 0x4596BA); no function a writer calls reaches
+       another writer [call graph of .text: 0x458310 is a leaf, 0x458DD0, 0x4B8A80, 0x4B7F90,
+       0x45A510, 0x45A610, 0x4B96A0, 0x4B9D70, 0x4B9E60, 0x437B50 and the bakes' callees
+       reach none];
+       and a frame is never regrown under a writer that is reading from it (src == frame
+       refuses the grow instead);
+     - a lifetime: the old block is freed only after ctx+0x10 points at the new one, and it
+       has no other holder -- the render thread never reads it, and our tracer only logs the
+       pointer's value.
+   Identical to stock for every unit whose box fits the frame as allocated. Grows persist for
+   the level: the teardown frees whichever block ctx+0x10 holds. Not bounded here: a unit's own
+   frame (Object3do+0x10), which the 1x bakes draw into through the same rasterisers, so a model
+   more than 800 rows tall still overruns their table (exe-reverse-engineering.md, "The composite
+   scratch frame and the rasterisers' span tables").
+
+   THE ALLOCATOR. The engine's malloc 0x4D83B0 -> 0x4D83C0 calls the out-of-memory handler at
+   [0x5289BC] when malloc fails, and the installed handler 0x49E700 ends the process. A grow
+   must be able to fail, so scratch_alloc runs 0x4D83C0's own success path by hand: inside the
+   allocator's critical section (0x4DA780 returns it, 0x528A28), refuse if 0x4D80D0 reports the
+   debug heap (its blocks come from 0x4DACF0 and go back through 0x4DB7D0), else CRT malloc
+   0x4E8890 and, on success, the byte counters 0x4DA7D0(size). The CRT's new-handler flag
+   0x52A430 is never written, so 0x4E8890 answers NULL rather than calling a handler.
+   0x4D85A0's non-debug path frees exactly such a block (0x4D8360, 0x4DA840, 0x4E8820). The
+   debug fill 0x4D82C0 that 0x4D83C0 applies when its option is set is not applied: every
+   plane is written before it is read.
+
+   Levers, read once at attach: `tagpu_scratch.stress` treats every frame as too small, so
+   every writer call regrows it to exactly max(need, 64) pixels and frees the old one, with
+   the old block's two plane pointers set to SCR_POISON first so that a reader still holding
+   the frame faults at any plane access instead of reading bytes the heap has not yet reused
+   (a reader that kept a plane pointer itself is not caught); `tagpu_scratch.nogrow` refuses
+   every grow, so every oversized writer takes its fallback.
+   Registers: every check stub saves them all (pushad/popad) around the check, and the flags
+   the stolen instructions set are set after it. The merge's stub is a jmp to scratch_merge, a
+   __stdcall that keeps ebx, esi, edi and ebp and clobbers eax, ecx and edx as 0x4B90A0 does;
+   nothing from 0x4596DD on reads those three before writing them. No branch lands inside the stolen bytes
+   [rel8/rel32 scan of .text]; 0x459608's call is the only reference to 0x4589C0, and
+   0x4596D8's the only one to 0x4B90A0. */
+
+#define SCR_CAP_PX    (2048u * 2048u)
+#define SCR_ROUND_PX  0x40000u
+#define SCR_MIN_PX    64u
+#define SCR_ROWS_POLY 2048u     /* 0x4C0820, 0x4C0C70, 0x4C1000: 2048-entry span tables */
+#define SCR_ROWS_SPAN 800u      /* 0x4C8760, 0x4C8BB0: 800                              */
+/* the stress lever's freed-frame plane pointers: TotalA.exe is not large-address-aware (PE
+   characteristics 0x10B), so nothing at or above 2 GB is the process's and any plane offset
+   (at most 8 MB) from here faults */
+#define SCR_POISON    ((unsigned char*)0x80000000u)
+
+enum { SCR_BUILD, SCR_FRAME, SCR_SHADOW, SCR_BAKE1, SCR_BAKE2 };
+static const char* const SCR_WHO[] = {
+    "the build-state copy 0x4589C0", "the frame copy 0x45A470", "the shadow build 0x45A790",
+    "the 2x bake 0x459830", "the 2x bake 0x459C70",
+};
+
+/* the stubs' pushad block, as dword indexes; the site's esp is regs + 8 */
+enum { SCR_EDI = 0, SCR_ESI = 1, SCR_EBP = 2, SCR_EBX = 4, SCR_EDX = 5, SCR_ECX = 6,
+       SCR_SITE = 8 };
+
+static int s_scr_stress, s_scr_nogrow;
+static volatile unsigned char s_scr_refused;     /* the build-state copy's answer, GAME THREAD */
+static unsigned s_scr_grows[5], s_scr_refusals[5], s_scr_layout;   /* by writer */
+static unsigned s_scr_merge_refusals;
+
+/* A, or 0 when the frame is not in 0x4B8E00's layout */
+static unsigned scratch_area(const unsigned char* f)
+{
+    const unsigned char* colour;
+    const unsigned char* depth;
+    if (!ptr_sane(f)) return 0;
+    colour = *(const unsigned char* const*)(f + 0x10);
+    depth  = *(const unsigned char* const*)(f + 0x14);
+    if (colour != f + 0x18 || depth <= colour ||
+        (size_t)depth - (size_t)colour > 0x10000000u)       /* unsigned: no ptrdiff overflow */
+        return 0;
+    return (unsigned)((size_t)depth - (size_t)colour);
+}
+
+static void scratch_log(const char* what, int who, unsigned long long need, unsigned rows,
+                        unsigned a, unsigned px, unsigned n)
+{
+    char b[288];
+    if (n > 16 && (n & 1023)) return;        /* a writer's first 16, then every 1024th */
+    _snprintf(b, sizeof b, "enginefix: composite scratch %s for %s: %u px in %u rows asked, "
+              "%u held, %u now (%u so far)", what, SCR_WHO[who],
+              need > 0xFFFFFFFFull ? 0xFFFFFFFFu : (unsigned)need, rows, a, px, n);
+    b[sizeof b - 1] = 0;
+    plog(b);
+}
+
+static unsigned char* scratch_alloc(size_t bytes)
+{
+    CRITICAL_SECTION* lock = ((CRITICAL_SECTION* (__cdecl*)(void))0x004DA780)();
+    unsigned char* p = NULL;
+    EnterCriticalSection(lock);
+    if (!((char (__cdecl*)(void))0x004D80D0)()) {
+        p = ((unsigned char* (__cdecl*)(size_t))0x004E8890)(bytes);
+        if (p) ((void (__cdecl*)(size_t))0x004DA7D0)(bytes);
+    }
+    LeaveCriticalSection(lock);
+    return p;
+}
+
+/* Make the frame at ctx+0x10 (f, area a) hold `need` pixels. 1: it does, and the writer runs;
+   0: it does not, and the writer takes its fallback on f, which is unchanged. */
+static int scratch_hold(unsigned char* ctx, unsigned char* f, unsigned a,
+                        unsigned long long need, unsigned rows, unsigned rows_max,
+                        const void* src, int who)
+{
+    unsigned char* g;
+    unsigned px, keep;
+    const char* why;
+
+    if (rows > rows_max)         why = rows_max == SCR_ROWS_SPAN
+                                       ? "refused (taller than 800 rows, the span table of 0x4C8760 / 0x4C8BB0)"
+                                       : "refused (taller than 2048 rows, the span table of 0x4C0820 / 0x4C1000)";
+    else if (need <= a && (!s_scr_stress || src == f)) return 1;
+    else if (src == f)           why = "refused (the frame is the writer's own source)";
+    else if (need > SCR_CAP_PX)  why = "refused (over 2048 x 2048)";
+    else if (s_scr_nogrow)       why = "refused (tagpu_scratch.nogrow)";
+    else {
+        if (s_scr_stress)
+            px = need > SCR_MIN_PX ? (unsigned)need : SCR_MIN_PX;
+        else {
+            px = ((unsigned)need + SCR_ROUND_PX - 1) & ~(SCR_ROUND_PX - 1);
+            if (px > SCR_CAP_PX) px = SCR_CAP_PX;
+        }
+        g = scratch_alloc(0x18u + 2u * (size_t)px);
+        if (g) {
+            keep = a < px ? a : px;
+            memcpy(g, f, 0x10);
+            memcpy(g + 0x18, f + 0x18, keep);
+            memcpy(g + 0x18 + px, f + 0x18 + a, keep);
+            *(unsigned char**)(g + 0x10) = g + 0x18;
+            *(unsigned char**)(g + 0x14) = g + 0x18 + px;
+            *(unsigned char**)(ctx + 0x10) = g;
+            if (s_scr_stress) {                /* a reader still holding f faults here */
+                *(unsigned char**)(f + 0x10) = SCR_POISON;
+                *(unsigned char**)(f + 0x14) = SCR_POISON;
+            }
+            ((void (__cdecl*)(void*))0x004D85A0)(f);
+            scratch_log("grown", who, need, rows, a, px, ++s_scr_grows[who]);
+            return 1;
+        }
+        why = "refused (the allocator has no block)";
+    }
+    scratch_log(why, who, need, rows, a, a, ++s_scr_refusals[who]);
+    return 0;
+}
+
+/* the frame at ctx+0x10 and its area; 0 leaves the write to stock (see THE INVARIANT) */
+static unsigned char* scratch_frame(unsigned char* ctx, unsigned* a)
+{
+    unsigned char* f = ptr_sane(ctx) ? *(unsigned char**)(ctx + 0x10) : NULL;
+    *a = scratch_area(f);
+    if (!*a && s_scr_layout++ == 0)
+        plog("enginefix: composite scratch at ctx+0x10 is not in 0x4B8E00's layout; "
+             "its writers are left to stock");
+    return f;
+}
+
+/* a 1 x 1 frame of one key pixel: every fallback that must still hand a frame on */
+static void scratch_one_pixel(unsigned char* f, short hx, short hy, unsigned char key)
+{
+    unsigned char* colour = *(unsigned char**)(f + 0x10);
+    unsigned char* depth  = *(unsigned char**)(f + 0x14);
+    *(unsigned short*)(f + 0) = 1;
+    *(unsigned short*)(f + 2) = 1;
+    *(short*)(f + 4) = hx;
+    *(short*)(f + 6) = hy;
+    f[8] = key;
+    colour[0] = key;
+    depth[0] = 0;
+}
+
+/* 0x458B87: esi x edx is the header about to be written; ebx is ctx, ebp the source frame */
+static int __cdecl scratch_build_state(unsigned int* regs)
+{
+    unsigned char* ctx = (unsigned char*)(size_t)regs[SCR_EBX];
+    int w = (int)regs[SCR_ESI], h = (int)regs[SCR_EDX];
+    unsigned a;
+    unsigned char* f = scratch_frame(ctx, &a);
+    if (!a) return 1;
+    if (w >= 0 && h >= 0 && w <= 0xFFFF && h <= 0xFFFF &&
+        scratch_hold(ctx, f, a, (unsigned long long)w * (unsigned)h, (unsigned)h,
+                     SCR_ROWS_SPAN,                /* 0x459641's 1x bake: 0x4C8760 */
+                     (const void*)(size_t)regs[SCR_EBP], SCR_BUILD))
+        return 1;
+    s_scr_refused = 1;
+    return 0;
+}
+
+/* 0x45A470, the entry: ecx is ctx, [esp+4] the source frame */
+static int __cdecl scratch_frame_copy(unsigned int* regs)
+{
+    unsigned char* ctx = (unsigned char*)(size_t)regs[SCR_ECX];
+    const unsigned char* src = (const unsigned char*)(size_t)regs[SCR_SITE + 1];
+    unsigned a;
+    unsigned char* f = scratch_frame(ctx, &a);
+    if (!a || !ptr_sane(src)) return 1;
+    if (scratch_hold(ctx, f, a, (unsigned long long)*(const unsigned short*)src *
+                     *(const unsigned short*)(src + 2), *(const unsigned short*)(src + 2),
+                     0xFFFFu, src, SCR_FRAME))              /* nothing rasterizes into it */
+        return 1;
+    scratch_one_pixel(f, *(const short*)(src + 4), *(const short*)(src + 6), src[8]);
+    return 0;
+}
+
+/* 0x45A7B9: ebp is ctx; the bounds 0x45A510 left are w at [esp+0x10] and h at [esp+0x20] */
+static int __cdecl scratch_shadow(unsigned int* regs)
+{
+    unsigned char* ctx = (unsigned char*)(size_t)regs[SCR_EBP];
+    int w = (int)regs[SCR_SITE + 0x10 / 4], h = (int)regs[SCR_SITE + 0x20 / 4];
+    unsigned a;
+    unsigned char* f = scratch_frame(ctx, &a);
+    if (!a) return 1;
+    if (w >= 0 && h >= 0 && w <= 0xFFFF && h <= 0xFFFF &&
+        scratch_hold(ctx, f, a, 2ull * (unsigned)h * ((unsigned)w + 1u), (unsigned)h,
+                     SCR_ROWS_POLY, NULL, SCR_SHADOW))
+        return 1;
+    scratch_one_pixel(f, 0, 0, f[8]);
+    return 0;
+}
+
+/* 0x459875 / 0x459CB5, on the 2x path: ecx is ctx, the source frame at [esp+slot] */
+static int scratch_bake(unsigned int* regs, unsigned slot, int who)
+{
+    unsigned char* ctx = (unsigned char*)(size_t)regs[SCR_ECX];
+    const unsigned char* src =
+        *(const unsigned char* const*)((const unsigned char*)(regs + SCR_SITE) + slot);
+    unsigned a, w, h;
+    unsigned char* f = scratch_frame(ctx, &a);
+    if (!a || !ptr_sane(src)) return 1;
+    w = *(const unsigned short*)src;
+    h = *(const unsigned short*)(src + 2);
+    return w < 0x8000 && h < 0x8000 &&         /* the doubled header is a u16 as well */
+           scratch_hold(ctx, f, a, 4ull * w * h, 2u * h, SCR_ROWS_SPAN, src, who);
+}
+
+static int __cdecl scratch_bake1(unsigned int* regs) { return scratch_bake(regs, 0x5F18, SCR_BAKE1); }
+static int __cdecl scratch_bake2(unsigned int* regs) { return scratch_bake(regs, 0x159E8, SCR_BAKE2); }
+
+/* the call at 0x4596D8: the cargo merge, run only when it writes inside dst's header box */
+static void __stdcall scratch_merge(const unsigned char* src, unsigned char* dst, int sx, int sy,
+                                    int dbias)
+{
+    unsigned a = scratch_area(dst);
+    if (a && ptr_sane(src)) {
+        const unsigned sw = *(const unsigned short*)src, sh = *(const unsigned short*)(src + 2);
+        const unsigned dw = *(const unsigned short*)dst, dh = *(const unsigned short*)(dst + 2);
+        const int x0 = *(const short*)(dst + 4) - *(const short*)(src + 4) + sx;
+        const int y0 = *(const short*)(dst + 6) - *(const short*)(src + 6) + sy;
+        /* a negative origin is 0x4B90A0's own refusal and writes nothing */
+        if (x0 >= 0 && y0 >= 0 &&
+            ((unsigned long long)dw * dh > a ||
+             (unsigned)x0 + sw > dw || (unsigned)y0 + sh > dh)) {
+            unsigned n = ++s_scr_merge_refusals;
+            if (n <= 16 || !(n & 1023)) {
+                char b[224];
+                _snprintf(b, sizeof b, "enginefix: composite scratch merge refused: a %ux%u cargo "
+                          "at (%d,%d) is past the %ux%u frame (%u held) (%u so far)",
+                          sw, sh, x0, y0, dw, dh, a, n);
+                b[sizeof b - 1] = 0;
+                plog(b);
+            }
+            return;
+        }
+    }
+    ((void (__stdcall*)(const void*, void*, int, int, int))0x004B90A0)(src, dst, sx, sy, dbias);
+}
+
+/* pushad; push esp; call check; add esp,4; test eax,eax; popad -- ZF set = refused */
+static unsigned char* scratch_call_check(unsigned char* p, int (__cdecl *check)(unsigned int*))
+{
+    *p++ = 0x60;                                            /* pushad           */
+    *p++ = 0x54;                                            /* push esp         */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)check); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                  /* add esp,4        */
+    *p++ = 0x85; *p++ = 0xC0;                               /* test eax,eax     */
+    *p++ = 0x61;                                            /* popad            */
+    return p;
+}
+
+/* the bakes' 2x test, stolen: `test reg,reg; je one_x`; the check runs on the 2x path only */
+static unsigned char* scratch_bake_stub(unsigned char* s, unsigned char test_rr,
+                                        int (__cdecl *check)(unsigned int*),
+                                        unsigned int two_x, unsigned int one_x)
+{
+    unsigned char* p = s;
+    unsigned char* jz0;
+    *p++ = 0x85; *p++ = test_rr;                            /* test reg,reg     */
+    *p++ = 0x74; jz0 = p++;                                 /* jz one_x         */
+    p = scratch_call_check(p, check);
+    *p++ = 0x74; *p++ = 0x05;                               /* jz one_x         */
+    *p++ = 0xE9; tagpu_detour_rel(p, two_x); p += 4;        /* jmp: the 2x path */
+    *jz0 = (unsigned char)(p - (jz0 + 1));
+    *p++ = 0xE9; tagpu_detour_rel(p, one_x); p += 4;        /* one_x            */
+    return p;
+}
+
+typedef struct SCRSITE { unsigned int va; unsigned char was[8]; int n; unsigned char* stub; } SCRSITE;
+
+static int fix_composite_scratch(void)
+{
+    SCRSITE site[7] = {
+        { 0x00459608, { 0xE8, 0xB3, 0xF3, 0xFF, 0xFF }, 5, NULL },          /* call 0x4589C0 */
+        { 0x00458B87, { 0x8B, 0x4B, 0x10, 0xF7, 0xD8 }, 5, NULL },          /* mov ecx,[ebx+0x10]; neg eax */
+        { 0x0045A470, { 0x8B, 0x44, 0x24, 0x04, 0x53 }, 5, NULL },          /* mov eax,[esp+4]; push ebx */
+        { 0x0045A7B9, { 0x8B, 0x4D, 0x10, 0x66, 0x8B, 0x54, 0x24, 0x10 }, 8, NULL },
+        { 0x00459875, { 0x85, 0xDB, 0x0F, 0x84, 0x96, 0x00, 0x00, 0x00 }, 8, NULL }, /* test ebx,ebx; je 0x459913 */
+        { 0x00459CB5, { 0x85, 0xC0, 0x0F, 0x84, 0x9A, 0x00, 0x00, 0x00 }, 8, NULL }, /* test eax,eax; je 0x459D57 */
+        { 0x004596D8, { 0xE8, 0xC3, 0xF9, 0x05, 0x00 }, 5, NULL },          /* call 0x4B90A0 */
+    };
+    const int n = (int)(sizeof site / sizeof site[0]);
+    unsigned char* p;
+    int i, done;
+
+    for (i = 0; i < n; i++)
+        if (memcmp((const void*)(size_t)site[i].va, site[i].was, (size_t)site[i].n) != 0)
+            return FIX_BYTES;
+    for (i = 0; i < n; i++)
+        if (!(site[i].stub = tagpu_detour_stub())) {
+            while (i-- > 0) VirtualFree(site[i].stub, 0, MEM_RELEASE);
+            return FIX_STUB;
+        }
+    s_scr_stress = GetFileAttributesA("tagpu_scratch.stress") != INVALID_FILE_ATTRIBUTES;
+    s_scr_nogrow = GetFileAttributesA("tagpu_scratch.nogrow") != INVALID_FILE_ATTRIBUTES;
+
+    /* the build-state copy's caller: run it, and on a refusal leave the unit draw */
+    p = site[0].stub;
+    p = tagpu_detour_set_flag(p, &s_scr_refused, 0);
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;     /* push [esp+8]     */
+    *p++ = 0xFF; *p++ = 0x74; *p++ = 0x24; *p++ = 0x08;     /* push [esp+8]     */
+    *p++ = 0xE8; tagpu_detour_rel(p, 0x004589C0); p += 4;   /* call 0x4589C0    */
+    p = tagpu_detour_cmp_flag(p, &s_scr_refused);
+    *p++ = 0x75; *p++ = 0x03;                               /* jnz refused      */
+    *p++ = 0xC2; *p++ = 0x08; *p++ = 0x00;                  /* ret 8            */
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x0C;                  /* refused: add esp,0xC (return, 2 args) */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x004597D8); p += 4;   /* jmp 0x4597D8     */
+
+    p = scratch_call_check(site[1].stub, scratch_build_state);
+    *p++ = 0x74; *p++ = 0x0A;                               /* jz refused       */
+    memcpy(p, site[1].was, 5); p += 5;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00458B8C); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00458D13); p += 4;   /* refused: epilogue */
+
+    p = scratch_call_check(site[2].stub, scratch_frame_copy);
+    *p++ = 0x74; *p++ = 0x0A;                               /* jz refused       */
+    memcpy(p, site[2].was, 5); p += 5;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0045A475); p += 4;
+    *p++ = 0x8B; *p++ = 0x41; *p++ = 0x10;                  /* refused: mov eax,[ecx+0x10] */
+    *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;                  /* ret 4            */
+
+    p = scratch_call_check(site[3].stub, scratch_shadow);
+    *p++ = 0x74; *p++ = 0x0D;                               /* jz refused       */
+    memcpy(p, site[3].was, 8); p += 8;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0045A7C1); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0045A853); p += 4;   /* refused: the encode */
+
+    scratch_bake_stub(site[4].stub, 0xDB, scratch_bake1, 0x0045987D, 0x00459913);
+    scratch_bake_stub(site[5].stub, 0xC0, scratch_bake2, 0x00459CBD, 0x00459D57);
+
+    p = site[6].stub;
+    *p++ = 0xE9; tagpu_detour_rel(p, (unsigned int)(size_t)scratch_merge); p += 4;
+
+    /* the caller's wrapper first: alone it only runs the call. Written together or not at all. */
+    for (done = 0; done < n; done++) {
+        unsigned char now[8];
+        unsigned int rel = (unsigned int)(size_t)site[done].stub - (site[done].va + 5u);
+        memset(now, 0x90, sizeof now);
+        now[0] = site[done].was[0] == 0xE8 ? 0xE8 : 0xE9;   /* a call stays a call */
+        memcpy(now + 1, &rel, 4);
+        if (!tagpu_detour_write(site[done].va, now, site[done].n)) break;
+    }
+    if (done < n) {
+        while (done-- > 0) tagpu_detour_write(site[done].va, site[done].was, site[done].n);
+        for (i = 0; i < n; i++) VirtualFree(site[i].stub, 0, MEM_RELEASE);
+        return FIX_PROTECT;
+    }
+    if (s_scr_stress || s_scr_nogrow)
+        plog(s_scr_stress && s_scr_nogrow
+             ? "enginefix: composite scratch levers: tagpu_scratch.stress + tagpu_scratch.nogrow "
+               "(every writer takes its fallback)"
+             : s_scr_stress ? "enginefix: composite scratch lever: tagpu_scratch.stress "
+                              "(every writer call regrows the frame)"
+                            : "enginefix: composite scratch lever: tagpu_scratch.nogrow "
+                              "(an oversized writer takes its fallback)");
+    return FIX_ARMED;
+}
+
+/* ===== THE BUILD LIST, THE DOWNLOAD-MENU RECORDS, THE OUT-OF-MEMORY TEXT ==================
+   Three stock defects a large mod reaches, fixed in both builds (research/notes/tadr-port/
+   content-ids.md, "What rides in the same landing"). Their sites are written all together or
+   not at all, per fix, and their stubs share one page. */
+
+#define ENG_ALLOC(name, size) (((void* (__cdecl*)(const char*, unsigned int))0x004D83B0)((name), (size)))
+#define ENG_FREE(p)           (((void (__cdecl*)(void*))0x004D85A0)(p))
+
+/* pushad's registers, as a stub hands them to C; PR_RET is the return address when the site
+   is a call, so the site's own esp is regs + PR_RET + 1 */
+enum { PR_EDI, PR_ESI, PR_EBP, PR_ESP, PR_EBX, PR_EDX, PR_ECX, PR_EAX, PR_RET };
+
+typedef struct FIXSITE { unsigned int va; int n; unsigned char was[20]; unsigned char now[20]; } FIXSITE;
+
+static unsigned char* s_fixCode;
+static unsigned int   s_fixCodeUsed;
+
+static unsigned char* fix_code(unsigned int n)
+{
+    unsigned char* p;
+    if (!s_fixCode)
+        s_fixCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
+                                                 PAGE_EXECUTE_READWRITE);
+    if (!s_fixCode || s_fixCodeUsed + n > 0x1000) return NULL;
+    p = s_fixCode + s_fixCodeUsed;
+    s_fixCodeUsed += (n + 15u) & ~15u;
+    return p;
+}
+
+static int fix_match(const FIXSITE* s, int n)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        if (memcmp((const void*)(size_t)s[i].va, s[i].was, (size_t)s[i].n) != 0) return 0;
+    return 1;
+}
+
+static int fix_write(const FIXSITE* s, int n)
+{
+    int done;
+    for (done = 0; done < n; done++)
+        if (!tagpu_detour_write(s[done].va, s[done].now, s[done].n)) break;
+    if (done == n) return FIX_ARMED;
+    while (done-- > 0) tagpu_detour_write(s[done].va, s[done].was, s[done].n);
+    return FIX_PROTECT;
+}
+
+/* E8/E9 to `target` at the site, NOP-padded */
+static void fix_branch(FIXSITE* s, unsigned char op, const void* target)
+{
+    unsigned int rel = (unsigned int)(size_t)target - (s->va + 5u);
+    memset(s->now, 0x90, (size_t)s->n);
+    s->now[0] = op;
+    memcpy(s->now + 1, &rel, 4);
+}
+
+/* pushad; push esp; call fn; add esp,4; popad */
+static unsigned char* fix_call_regs(unsigned char* p, void (__cdecl *fn)(unsigned int*))
+{
+    *p++ = 0x60;
+    *p++ = 0x54;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)fn); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x61;
+    return p;
+}
+
+/* A BUILDER'S LIST OF WHAT IT MAY BUILD: the `canbuild%d` keys of sidedata.tdf's [CANBUILD]
+   section [DISASSEMBLED]. The game load reads each builder's keys into one shared heap block,
+   `TEMP UTYPE LIST` (0x42D971, 30 u16 type IDs), appending at 0x42DA58 until a key is missing
+   (0x42DA46..0x42DA99), and gives the builder its own copy at def+0x156: a fresh 0x3C bytes
+   filled by a `rep movs` of 15 dwords (0x42DAC7..0x42DAE1), with the real count at def+0x152.
+   Later the download menus' appender 0x42BE30 adds the builder's download entries to its copy
+   while the count is at most 30 (0x42BEAF), so it writes entry 30, two bytes past the block.
+   The AI's pick 0x40BDB0 and its debug listing loop to the count. So a builder with more than 30
+   entries writes past the shared block, and every reader that loops to the count reads past its
+   copy.
+
+   THE FIX keeps the whole list [DECIDED 2026-09-24]. A block holding n entries has room for
+   bl_room(n): stock's 30, then powers of two from 64. The shared append, the copy and the
+   download appender each grow a block to bl_room(n + 1) before writing entry n when that is
+   more than bl_room(n), through the engine's allocator (0x4D83B0, whose failure is the engine's
+   out-of-memory exit) and its free (0x4D85A0, which the teardown 0x42DC52 frees the copy with).
+   The copy is made at bl_room(count) entries, copied from the shared block.
+
+   THE INVARIANT: every block holds at least bl_room(its count) entries. The shared block starts
+   at 30 with a count of 0, and its count goes back to 0 for each builder (0x42D91D, 0x42DAA5),
+   where bl_room is 30; each append keeps it; the copy is made at bl_room(count) from a shared
+   block holding at least that many; nothing else writes either (the def clone 0x42B370 runs
+   before 0x42D9BB zeroes the pair, and no reader writes). So no entry is written past a block
+   and the copy reads inside the shared one. A builder with 30 entries or fewer, every stock
+   builder, gets stock's exact blocks. The load runs on one thread, before any reader exists. */
+static unsigned int bl_room(unsigned int n)
+{
+    unsigned int r = 64;
+    if (n <= 30) return 30;
+    if (n > (1u << 28)) return 1u << 30;      /* its allocation fails: the engine's exit */
+    while (r < n) r <<= 1;
+    return r;
+}
+
+/* `*list` holds n entries: make room for entry n, then write it */
+static void bl_append(unsigned short** list, unsigned int n, unsigned short type, const char* name)
+{
+    if (bl_room(n + 1u) > bl_room(n)) {
+        unsigned short* bigger = (unsigned short*)ENG_ALLOC(name, bl_room(n + 1u) * 2u);
+        memcpy(bigger, *list, (size_t)n * 2u);
+        ENG_FREE(*list);
+        *list = bigger;
+    }
+    (*list)[n] = type;
+}
+
+/* 0x42DA58, the shared append, in place of `mov [ebp],ax; inc ebx; add ebp,2`: ax the type,
+   ebx the count, ebp the cursor, and the block at the frame's [esp+0x14], which 0x42DA9B
+   reloads ebp from and 0x42DB06 frees */
+static void __cdecl bl_shared_append(unsigned int* regs)
+{
+    unsigned short** list = (unsigned short**)((unsigned char*)(regs + PR_RET + 1) + 0x14);
+    unsigned int n = regs[PR_EBX];
+    bl_append(list, n, (unsigned short)regs[PR_EAX], (const char*)0x00503EF0);
+    regs[PR_EBX] = n + 1u;
+    regs[PR_EBP] = (unsigned int)(size_t)(*list + n + 1u);
+}
+
+/* 0x42DAC7, the builder's copy, in place of `push 0x3C; push eax; call 0x4D83B0` and the
+   `rep movs` after it: esi the def, eax the copy's name, ebp the shared block */
+static void __cdecl bl_copy(unsigned int* regs)
+{
+    unsigned char* def = (unsigned char*)(size_t)regs[PR_ESI];
+    const unsigned short* shared = (const unsigned short*)(size_t)regs[PR_EBP];
+    unsigned int room = bl_room(*(const unsigned int*)(def + 0x152));
+    unsigned short* copy = (unsigned short*)ENG_ALLOC((const char*)(size_t)regs[PR_EAX], room * 2u);
+    memcpy(copy, shared, (size_t)room * 2u);
+    *(unsigned short**)(def + 0x156) = copy;
+    regs[PR_EAX] = (unsigned int)(size_t)copy;              /* what the `rep movs` leaves */
+    regs[PR_ECX] = 0;
+    regs[PR_ESI] = (unsigned int)(size_t)(shared + room);
+    regs[PR_EDI] = (unsigned int)(size_t)(copy + room);
+}
+
+/* 0x42BEC3, the download entries' append to a builder's copy: ebp is def+0x152 ({count,
+   list}), ax the type; eax, ecx and edx as stock's own append leaves them */
+static void __cdecl bl_download_append(unsigned int* regs)
+{
+    unsigned int* hdr = (unsigned int*)(size_t)regs[PR_EBP];
+    unsigned int n = hdr[0];
+    unsigned short* list = (unsigned short*)(size_t)hdr[1];
+    bl_append(&list, n, (unsigned short)regs[PR_EAX], "CANBUILD");
+    hdr[1] = (unsigned int)(size_t)list;
+    hdr[0] = n + 1u;
+    regs[PR_EAX] = n + 1u;
+    regs[PR_ECX] = n;
+    regs[PR_EDX] = (unsigned int)(size_t)list;
+}
+
+static int fix_build_list(void)
+{
+    FIXSITE site[4] = {
+        { 0x0042DA58, 8, { 0x66, 0x89, 0x45, 0x00, 0x43, 0x83, 0xC5, 0x02 }, { 0 } },
+        { 0x0042DAC7, 8, { 0x6A, 0x3C, 0x50, 0xE8, 0xE1, 0xA8, 0x0A, 0x00 }, { 0 } },
+        { 0x0042BEAF, 6, { 0x83, 0x7D, 0x00, 0x1E, 0x7F, 0x25 }, { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 } },
+        { 0x0042BEC3, 17, { 0x8B, 0x4D, 0x00, 0x8B, 0x55, 0x04, 0x66, 0x89, 0x04, 0x4A,
+                            0x8B, 0x45, 0x00, 0x40, 0x89, 0x45, 0x00 }, { 0 } },
+    };
+    unsigned char *a, *b, *c, *p;
+    if (!fix_match(site, 4)) return FIX_BYTES;
+    if (!(a = fix_code(16)) || !(b = fix_code(16)) || !(c = fix_code(16))) return FIX_STUB;
+    p = fix_call_regs(a, bl_shared_append); *p = 0xC3;
+    p = fix_call_regs(b, bl_copy); *p = 0xC3;
+    p = fix_call_regs(c, bl_download_append); *p = 0xC3;
+    fix_branch(&site[0], 0xE8, a);
+    fix_branch(&site[1], 0xE8, b);
+    site[1].now[5] = 0xEB; site[1].now[6] = 0x15;          /* jmp 0x42DAE3, past the rep movs */
+    fix_branch(&site[3], 0xE8, c);
+    return fix_write(site, 4);
+}
+
+/* THE DOWNLOAD MENUS' RECORDS [DISASSEMBLED]. 0x42DCF0 (loader thread) makes one 0xBD-byte
+   record per download\*.tdf file: a dword entry count and five 0x25-byte entries ({u16 builder
+   type, u8 MENU, u8 BUTTON, char unit[32]}, entry k at +4 + k*0x25). The block, files * 0xBD
+   bytes from 0x4D83B0 (0x42DD74), is at main+0x391CB and the record count at main+0x391C7. The
+   section loop 0x42DDD5..0x42DF0C takes a file's sections in order, writes the count k + 1 for
+   section k (0x42DE12) and fills entry k, with no cap: a file with six or more sections writes
+   past its record, and the last file's past the block. The readers walk the records to
+   main+0x391C7 -- the build menu 0x41AE0F, the downloadable check 0x42E04B and the build-list
+   appender 0x42BE30 -- except the page count 0x42DF60, inside 0x42DCF0, which walks its local
+   file count at [esp+0x10].
+
+   THE FIX continues a file into as many records as it needs, at the end of the block
+   [DECIDED 2026-09-24]: section k of a file is entry k % 5 of the file's (k / 5)th record. A
+   record is a self-contained list of entries, each naming its builder, so every reader reads a
+   continued file as it reads five-entry ones.
+   - 0x42DD74: the block comes from dl_alloc, which zeroes it and notes its room.
+   - 0x42DDF0, each section: dl_section starts a record at section 5, 10, ... -- the block grown
+     when full, the new record at index main+0x391C7, which it counts -- with esi at it and edi
+     at its first entry, and writes the record's count, k % 5 + 1. Stock's own count write,
+     k + 1 at 0x42DE12, is NOPped.
+   - 0x42DF23: the next file's record is `imul esi,edi,0xBD` with edi the file index, where
+     stock adds 0xBD to an esi that may now be at a continuation.
+   - 0x42DF35: after the last file, ebx and the page count's [esp+0x10] are the record count.
+   - 0x42E0B9: the downloadable check walks the files' own records only. It flags the unit of a
+     record's first entry (+0x241 |= 0x20, "Somebody forgot to set downloadable=1"), which the
+     AI's pick skips in one mode (0x40BBA0, when 0x435100 answers 1): a file's first unit, since
+     Cavedog's files name one unit for all their builders. Across a continuation it would flag
+     the 6th, 11th, ... as well. 0x42BD40 is a copy of the check with no caller.
+   THE INVARIANT: records [0, files) are the files' own, at file * 0xBD, and every record past
+   them is made by dl_section inside the block's room, so each entry written is inside the
+   block; the check's bound, the file count, is at most the record count. Stock's files, four
+   entries at most, get stock's exact records. Zeroing the block
+   changes one thing stock left to the heap: a section whose unit or builder is not found is
+   counted but not filled (0x42DE7F, 0x42DF07), and its entry reads builder 0, None, which no
+   reader matches, where stock's held whatever the heap did; so does the count of a file with no
+   sections or one that did not open. */
+static unsigned int s_dlRoom;                 /* records the block has room for, LOADER THREAD */
+static unsigned int s_dlFiles;                /* the files' own records, 0x42DCF0's file count  */
+
+/* 0x42DD74 asks for files * 0xBD bytes */
+static void* __cdecl dl_alloc(const char* name, unsigned int size)
+{
+    void* p = ENG_ALLOC(name, size);
+    if (p) memset(p, 0, size);
+    s_dlRoom = s_dlFiles = size / 0xBDu;
+    return p;
+}
+
+/* 0x42DDF0: ebx is the section index k, esi this file's record offset, edi the entry offset */
+static void __cdecl dl_section(unsigned int* regs)
+{
+    char* ta = *(char**)0x00511DE8;
+    unsigned int k = regs[PR_EBX];
+    unsigned char* block;
+    if (k && k % 5u == 0) {
+        unsigned int recs = *(unsigned int*)(ta + 0x391C7);
+        if (recs >= s_dlRoom) {
+            unsigned int room = s_dlRoom * 2u > recs + 1u ? s_dlRoom * 2u : recs + 1u;
+            unsigned int bytes = room > 0x00AAAAAAu ? 0x7FFFFFFFu : room * 0xBDu;  /* fails: the exit */
+            unsigned char* bigger = (unsigned char*)ENG_ALLOC((const char*)0x00503F7C, bytes);
+            unsigned char* old = *(unsigned char**)(ta + 0x391CB);
+            memcpy(bigger, old, (size_t)recs * 0xBDu);
+            memset(bigger + (size_t)recs * 0xBDu, 0, bytes - recs * 0xBDu);
+            ENG_FREE(old);
+            *(unsigned char**)(ta + 0x391CB) = bigger;
+            s_dlRoom = room;
+        }
+        *(unsigned int*)(ta + 0x391C7) = recs + 1u;
+        regs[PR_ESI] = recs * 0xBDu;
+        regs[PR_EDI] = 0;
+    }
+    block = *(unsigned char**)(ta + 0x391CB);
+    *(unsigned int*)(block + regs[PR_ESI]) = k % 5u + 1u;
+}
+
+static int fix_download_records(void)
+{
+    FIXSITE site[6] = {
+        { 0x0042DD74, 5, { 0xE8, 0x37, 0xA6, 0x0A, 0x00 }, { 0 } },
+        { 0x0042DDF0, 8, { 0xA1, 0xE8, 0x1D, 0x51, 0x00, 0x8D, 0x6B, 0x01 }, { 0 } },
+        { 0x0042DE12, 3, { 0x89, 0x2C, 0x31 }, { 0x90, 0x90, 0x90 } },
+        { 0x0042DF23, 6, { 0x81, 0xC6, 0xBD, 0x00, 0x00, 0x00 }, { 0x69, 0xF7, 0xBD, 0x00, 0x00, 0x00 } },
+        { 0x0042DF35, 6, { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, { 0 } },
+        { 0x0042E0B9, 6, { 0x3B, 0xA8, 0xC7, 0x91, 0x03, 0x00 }, { 0x3B, 0x2D } },  /* cmp ebp,[files] */
+    };
+    const unsigned int files = (unsigned int)(size_t)&s_dlFiles;
+    static const unsigned char pages[16] = {
+        0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00,     /* mov edx,[main]          */
+        0x8B, 0x9A, 0xC7, 0x91, 0x03, 0x00,     /* mov ebx,[edx+0x391C7]   */
+        0x89, 0x5C, 0x24, 0x14,                 /* mov [esp+0x14],ebx      */
+    };
+    unsigned char *a, *b, *p;
+    if (!fix_match(site, 6)) return FIX_BYTES;
+    if (!(a = fix_code(24)) || !(b = fix_code(24))) return FIX_STUB;
+    memcpy(site[5].now + 2, &files, 4);
+    p = fix_call_regs(a, dl_section);
+    memcpy(p, site[1].was, 8); p += 8;                     /* mov eax,[main]; lea ebp,[ebx+1] */
+    *p = 0xC3;
+    memcpy(b, pages, sizeof pages); b[sizeof pages] = 0xC3;
+    fix_branch(&site[0], 0xE8, (const void*)dl_alloc);
+    fix_branch(&site[1], 0xE8, a);
+    fix_branch(&site[4], 0xE8, b);
+    return fix_write(site, 6);
+}
+
+/* THE OUT-OF-MEMORY TEXT [DISASSEMBLED]. WinMain installs 0x49E700 as the allocator's new
+   handler for the whole process (0x49E849). On any failed allocation it appends its text to
+   ErrorLog.txt, dumps the registers and stack through a deliberate fault (0x49E7E4 -> 0x49E680),
+   shows the text in a system-modal box (0x49E7FA) and leaves through raise(SIGABRT) (0x49E807):
+   it never returns. The text, "Out of memory! Your hard disk may be full" at 0x509764, is read
+   at 0x49E7BD (its length), 0x49E7CD (the log) and 0x49E7F4 (the box), and nowhere else. The fix
+   points the three at ours, which a call at the handler's entry writes: the game is a 32-bit
+   program that has used the memory it can address, and how many unit types are installed,
+   which is what a mod's size costs [DECIDED 2026-09-24]. The count is UNITINFOCount - 1: the
+   unit files found (0x42AA77) until the menu-time load's end rewrites it with the types it kept
+   (0x42B2F6), and a game load's end with the types in play (0x42D542). The log, the dump and the exit stay
+   the engine's. Nothing here allocates: the text is a static and wsprintfA writes it. */
+static char s_oomText[320];
+
+static void __cdecl oom_text(void)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    int types = ta ? *(const int*)(ta + 0x1438F) - 1 : 0;
+    if (types > 0)
+        wsprintfA(s_oomText, "Out of memory! Total Annihilation is a 32-bit program, and it has "
+                  "used all the memory it can address. %d unit types are installed.", types);
+    else
+        wsprintfA(s_oomText, "Out of memory! Total Annihilation is a 32-bit program, and it has "
+                  "used all the memory it can address.");
+}
+
+static int fix_oom_message(void)
+{
+    FIXSITE site[4] = {
+        { 0x0049E700, 6, { 0x81, 0xEC, 0xEC, 0x03, 0x00, 0x00 }, { 0 } },
+        { 0x0049E7BD, 4, { 0x64, 0x97, 0x50, 0x00 }, { 0 } },
+        { 0x0049E7CD, 4, { 0x64, 0x97, 0x50, 0x00 }, { 0 } },
+        { 0x0049E7F4, 4, { 0x64, 0x97, 0x50, 0x00 }, { 0 } },
+    };
+    const unsigned int text = (unsigned int)(size_t)s_oomText;
+    unsigned char *a, *p;
+    int i;
+    if (!fix_match(site, 4)) return FIX_BYTES;
+    if (!(a = fix_code(24))) return FIX_STUB;
+    p = a;
+    *p++ = 0x60;                                            /* pushad             */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)oom_text); p += 4;
+    *p++ = 0x61;                                            /* popad              */
+    memcpy(p, site[0].was, 6); p += 6;                      /* sub esp,0x3EC      */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049E706);
+    oom_text();                                             /* the text before any failure */
+    fix_branch(&site[0], 0xE9, a);
+    for (i = 1; i < 4; i++) memcpy(site[i].now, &text, 4);
+    return fix_write(site, 4);
+}
+
+/* THE UNIT SYNC'S KEYS [DISASSEMBLED]. A network game matches each unit type between the peers by
+   a key, def+0x13E: 0x4B6BA0's checksum of the type's FBI file (0x42ABB3), or a units\*.OVR
+   file's `Compatability` value (0x42AC43). The checksum is four 8-bit lanes -- the bytes' sum
+   and xor, the sum of i^b and the xor of i+b -- not a CRC. The host keeps, for each joining peer,
+   the keys it has received from it, dropping one it already holds (0x46D755), and the room waits
+   until that list reaches the count the peer announced (0x46E000; the +syncerr command's reply,
+   0x46DF40, reads "expected %d units, got %d"), so a joiner with two types of one key holds the
+   battle room at SYNCHING for good;
+   and the host's walk 0x46D9E3 answers a key with the first type that has it. FBIs that differ
+   in a few digits collide in their thousands: MEASURED 2026-09-24, 16 105 generated types gave
+   9 991 keys and a join that never ended.
+   THE FIX re-keys, after the menu-time load (its one call, 0x42BD29) returns 1, all but one type
+   of every group that shares a key. A load that returns 0 (a unit file with no [UNITINFO],
+   0x42AC78) is left as stock leaves it, the array unsealed and part-filled.
+   The load is the keys' only writer; the def clone 0x42B370 moves a key with its def.
+   THE INVARIANT: after it no two defs share a key, and every key is a function of the loaded
+   types' names and natural keys alone, never of the def array's order -- which is the order the
+   files were found in (0x4BCA30), loose files and then the archives as the directory listed
+   them, and can differ between two peers with the same files. So a group is taken in name order
+   (the name at +0x20, the field the engine's own game-load sort compares, 0x42DB60): the first
+   keeps its key, and each other type's key is a hash of its name, moved on past every value a
+   type already holds. Two types with one name and one key cannot be told apart by the sync
+   either. A type re-keyed on one peer and not on another has a different key there and is
+   reported as not synced, which is what different content should get. Types that do not collide
+   keep stock's keys, so stock content is unchanged: no two of the install's 278 unit names share
+   one. GAME THREAD (the state callback 0x496BB0), before any lobby exists. The table holds every
+   key a load can have, natural and given, at most half full, so a probe always ends.
+   THE DEF ARRAY IS READ-ONLY HERE. When the engine's memory protection is on ([0x5289A0], set
+   once through 0x4D9FE0 and the `gonzo` switch; on in a plain launch, MEASURED 2026-09-24: an
+   unguarded write faulted), the loader's success exit seals the array (0x42B328 -> 0x4D8710,
+   PAGE_READONLY over the block's whole pages), and a writer opens it with 0x4D8780 and seals it
+   again (the value checksum 0x42A610: 0x42A63A, 0x42A829). This pass does the same around its
+   writes. The sync itself: exe-reverse-engineering.md, "The unit sync's keys". */
+#define ENG_WRITABLE(p) (((void (__cdecl*)(void*))0x004D8780)(p))
+#define ENG_READONLY(p) (((void (__cdecl*)(void*))0x004D8710)(p))
+#define DEF_STRIDE 0x249
+#define DEF_KEY    0x13E
+#define DEF_NAME   0x20               /* UnitName, 32 bytes */
+#define KEYTAB (4 * TAGPU_LIM_TYPES)
+typedef char keytab_is_pow2[(KEYTAB & (KEYTAB - 1)) == 0 ? 1 : -1];   /* key_slot's wrap */
+static unsigned int   s_keyVal[KEYTAB];
+static unsigned char  s_keyUse[KEYTAB];         /* 1 some type's key, 2 claimed by one type  */
+static unsigned short s_keyOrder[TAGPU_LIM_TYPES];
+static const char*    s_keyDefs;                /* key_order's array, GAME THREAD             */
+
+static unsigned int key_slot(unsigned int key)
+{
+    unsigned int h = key * 0x9E3779B1u, i = (h ^ (h >> 16)) & (KEYTAB - 1u);
+    while ((s_keyUse[i] & 1) && s_keyVal[i] != key) i = (i + 1u) & (KEYTAB - 1u);
+    return i;
+}
+
+static unsigned int def_key(const char* defs, unsigned int i)
+{
+    return *(const unsigned int*)(defs + i * DEF_STRIDE + DEF_KEY);
+}
+
+/* by key, then by name; the index only orders two types the sync cannot tell apart */
+static int __cdecl key_order(const void* a, const void* b)
+{
+    unsigned int ia = *(const unsigned short*)a, ib = *(const unsigned short*)b;
+    unsigned int ka = def_key(s_keyDefs, ia), kb = def_key(s_keyDefs, ib);
+    int c;
+    if (ka != kb) return ka < kb ? -1 : 1;
+    c = strncmp(s_keyDefs + ia * DEF_STRIDE + DEF_NAME, s_keyDefs + ib * DEF_STRIDE + DEF_NAME, 32);
+    return c ? c : (ia > ib) - (ia < ib);
+}
+
+static unsigned int name_key(const char* name)
+{
+    unsigned int h = 2166136261u;
+    int i;
+    for (i = 0; i < 32 && name[i]; i++) h = (h ^ (unsigned char)name[i]) * 16777619u;
+    return h;
+}
+
+static void __cdecl sync_keys_unique(void)
+{
+    char* ta = *(char**)0x00511DE8;
+    char* defs = ta ? *(char**)(ta + 0x1439B) : NULL;
+    int n = ta ? *(int*)(ta + 0x1438F) : 0, i, moved = 0;
+    unsigned int keeper = 0;
+    char b[200];
+    if (!defs || n < 2) return;
+    if (n - 1 > TAGPU_LIM_TYPES) {
+        _snprintf(b, sizeof b, "enginefix: unit sync keys not checked: %d types, the table holds %d",
+                  n - 1, TAGPU_LIM_TYPES);
+        b[sizeof b - 1] = 0;
+        plog(b);
+        return;
+    }
+    memset(s_keyUse, 0, sizeof s_keyUse);
+    for (i = 1; i < n; i++) {
+        unsigned int k = def_key(defs, (unsigned int)i), s = key_slot(k);
+        s_keyVal[s] = k;
+        s_keyUse[s] |= 1;
+        s_keyOrder[i - 1] = (unsigned short)i;
+    }
+    s_keyDefs = defs;
+    qsort(s_keyOrder, (size_t)(n - 1), sizeof s_keyOrder[0], key_order);
+    for (i = 0; i < n - 1; i++) {
+        unsigned int d = s_keyOrder[i];
+        unsigned int* key = (unsigned int*)(defs + d * DEF_STRIDE + DEF_KEY);
+        const char* name = defs + d * DEF_STRIDE + DEF_NAME;
+        unsigned int s = key_slot(*key), c = name_key(name);
+        if (!(s_keyUse[s] & 2)) {
+            s_keyUse[s] |= 2;
+            keeper = d;
+            continue;
+        }
+        while (!c || (s_keyUse[s = key_slot(c)] & 1)) c++;
+        s_keyVal[s] = c;
+        s_keyUse[s] = 3;
+        if (moved < 8) {
+            _snprintf(b, sizeof b, "enginefix: unit sync key 0x%08X of %.32s is also %.32s's; "
+                      "its key is now 0x%08X", *key, name, defs + keeper * DEF_STRIDE + DEF_NAME, c);
+            b[sizeof b - 1] = 0;
+            plog(b);
+        }
+        if (!moved) ENG_WRITABLE(defs);
+        *key = c;
+        moved++;
+    }
+    if (moved) {
+        ENG_READONLY(defs);
+        _snprintf(b, sizeof b, "enginefix: unit sync keys: %d of %d types re-keyed", moved, n - 1);
+        b[sizeof b - 1] = 0;
+        plog(b);
+    }
+}
+
+static int fix_sync_keys(void)
+{
+    FIXSITE site[1] = { { 0x0042BD29, 5, { 0xE8, 0xA2, 0xEB, 0xFF, 0xFF }, { 0 } } };  /* call 0x42A8D0 */
+    unsigned char *a, *p;
+    if (!fix_match(site, 1)) return FIX_BYTES;
+    if (!(a = fix_code(16))) return FIX_STUB;
+    p = a;
+    *p++ = 0xE8; tagpu_detour_rel(p, 0x0042A8D0); p += 4;
+    *p++ = 0x85; *p++ = 0xC0;                                  /* test eax,eax        */
+    *p++ = 0x74; *p++ = 0x05;                                  /* jz ret              */
+    *p++ = 0xE9; tagpu_detour_rel(p, (unsigned int)(size_t)sync_keys_unique); p += 4;
+    *p = 0xC3;
+    fix_branch(&site[0], 0xE8, a);
+    return fix_write(site, 1);
+}
+
 static void patch_engine_defects(void)
 {
     int sort = fix_sort_buffer_end();
@@ -617,13 +1569,22 @@ static void patch_engine_defects(void)
     int terr = fix_terrain_window();
     int die  = fix_feature_die_pool_full();
     int mark = fix_reclaim_mark_anchor();
-    char b[448];
+    int scr  = fix_composite_scratch();
+    int list = fix_build_list();
+    int dl   = fix_download_records();
+    int oom  = fix_oom_message();
+    int keys = fix_sync_keys();
+    char b[1024];
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
               "terrain window bound 0x484057 %s; feature swap on a full wreck pool 0x423651 %s; "
-              "reclaim tests the anchor's mark 0x423892 %s",
-              fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark));
+              "reclaim tests the anchor's mark 0x423892 %s; composite scratch bound "
+              "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70 0x4B90A0) %s; whole build lists "
+              "(0x42DA58 0x42DAC7 0x42BEC3) %s; download menus past five entries (0x42DCF0) %s; "
+              "the out-of-memory text (0x49E700) %s; unique unit sync keys (0x42BD29) %s",
+              fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
+              fix_state(scr), fix_state(list), fix_state(dl), fix_state(oom), fix_state(keys));
     b[sizeof b - 1] = 0;
     plog(b);
 }
@@ -972,6 +1933,93 @@ static unsigned char* lim_maxunits_stub(unsigned int off)
     return s;
 }
 
+/* ONE PAGE FOR THE STUBS OF THE UNIT-TYPE RAISE, carved in order: seventeen small stubs do
+   not need seventeen 64 KB reservations of the address space a 16 383-type mod is short of. */
+static unsigned char* s_limCode;
+static unsigned int   s_limCodeUsed;
+
+static unsigned char* lim_code(unsigned int n)
+{
+    unsigned char* p;
+    if (!s_limCode)
+        s_limCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
+                                                 PAGE_EXECUTE_READWRITE);
+    if (!s_limCode || s_limCodeUsed + n > 0x1000) { s_limNoStub = 1; return NULL; }
+    p = s_limCode + s_limCodeUsed;
+    s_limCodeUsed += (n + 15u) & ~15u;
+    return p;
+}
+
+/* A site whose widened instruction does not fit: `jmp stub` at va, NOP-padded to n, and the
+   stub runs `code` and then jumps back to va + n, unless `code` ends in its own ret. Every
+   such site's bytes are position-independent, so they run the same from the stub. */
+static void lim_reloc(unsigned int va, int n, const unsigned char* stock,
+                      const unsigned char* code, int nc, int back, const char* name)
+{
+    unsigned char* s = lim_code((unsigned int)nc + 5u);
+    if (!s) return;
+    memcpy(s, code, (size_t)nc);
+    if (back) { s[nc] = 0xE9; tagpu_detour_rel(s + nc + 1, va + (unsigned int)n); }
+    lim_branch(va, n, stock, 0xE9, (unsigned int)(size_t)s, name);
+}
+
+/* `op` then a 32-bit operand, into a stub's code */
+static unsigned char* lim_emit(unsigned char* p, const unsigned char* op, int n, unsigned int v)
+{
+    memcpy(p, op, (size_t)n);
+    memcpy(p + n, &v, 4);
+    return p + n + 4;
+}
+
+/* A MOD WITH MORE UNIT TYPES THAN THE MASKS HOLD. Called from the menu-time count (0x42AA65),
+   on the main thread, before the def array is allocated: nothing has been loaded that a
+   half-run game could use, and every later count comes from this array (the game load compacts
+   it, 0x42D542). Refusing is the owner's decision: dropping types would depend on the order
+   the engine walks the archives, and two peers with different files would drop different
+   ones. Never returns. */
+static void __cdecl lim_types_refused(unsigned int slots)
+{
+    static char text[2048];
+    _snprintf(text, sizeof text,
+        "This game's files hold %u unit types, and Total Annihilation: Impure plays at most "
+        "%u, so the game will now close.\r\n"
+        "\r\n"
+        "WHY\r\n"
+        "Impure raises the game's limit from 511 unit types to %u. Past it the engine would "
+        "write outside its unit tables, and leaving some types out would make this a different "
+        "mod from the one installed, one that plays differently from another player's copy.\r\n"
+        "\r\n"
+        "WHAT TO DO\r\n"
+        "Remove unit archives (.ufo, .hpi, .ccx, .gp3) from the game folder until %u unit types "
+        "or fewer remain.\r\n",
+        slots - 1u, (unsigned int)TAGPU_LIM_TYPES - 1u, (unsigned int)TAGPU_LIM_TYPES - 1u,
+        (unsigned int)TAGPU_LIM_TYPES - 1u);
+    text[sizeof text - 1] = 0;
+    tagpu_logf("limits: %u unit types found, %u is the most this build plays -- refused", slots - 1u,
+               (unsigned int)TAGPU_LIM_TYPES - 1u);
+    MessageBoxA(NULL, text, "Total Annihilation: Impure cannot load these units",
+                MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    ExitProcess(1);
+}
+
+/* In place of `inc ebx; mov edx,[main]` at 0x42AA65: ebx is the unitinfo files found, and the
+   def array about to be allocated is ebx + 1 slots, None first. */
+static unsigned char* lim_types_stub(void)
+{
+    static const unsigned char head[3] = { 0x43, 0x81, 0xFB };          /* inc ebx; cmp ebx,imm32 */
+    static const unsigned char tail[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };  /* mov edx,[main] */
+    unsigned char* s = lim_code(32);
+    unsigned char* p = s;
+    if (!s) return NULL;
+    p = lim_emit(p, head, 3, TAGPU_LIM_TYPES);
+    *p++ = 0x77; *p++ = 0x07;                                           /* ja refuse          */
+    memcpy(p, tail, 6); p += 6;
+    *p++ = 0xC3;                                                        /* ret                */
+    *p++ = 0x53;                                                        /* refuse: push ebx   */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)&lim_types_refused); p += 4;
+    return s;
+}
+
 static void lim_sites(void)
 {
     const unsigned int expl = (unsigned int)(size_t)&s_expl;
@@ -1168,10 +2216,10 @@ static void lim_sites(void)
        with the context by the level teardown (0x42DC8F -> 0x4581C0). Four writers in the blit
        size it to a unit and none compares that size with the allocation: the build-state copy
        0x4589C0, the frame copy 0x45A470, the shadow build 0x45A790 and the 2x structure bake in
-       0x459830 / 0x459C70. A box of more than width x height pixels -- a quarter of that for the
-       2x bake -- therefore writes past the frame, on every lane. The raise moves that threshold
-       from 600 x 600 to 1280 x 1280; it is not a bound. Every reader takes its size from the
-       header a writer set, so no write grows with the raise. */
+       0x459830 / 0x459C70. The engine fix fix_composite_scratch bounds them all and grows the
+       frame when a unit needs more; this raise is only where it starts, so that no unit of the
+       shipped content needs a grow. Every reader takes its size from the header a writer set,
+       so no write grows with the raise. */
     lim_dword(0x0045819B, 600, TAGPU_LIM_COMPOSITE, "composite scratch width");
     lim_dword(0x00458196, 600, TAGPU_LIM_COMPOSITE, "composite scratch height");
 
@@ -1196,6 +2244,96 @@ static void lim_sites(void)
         int k;
         for (k = 0; k < (int)(sizeof none / sizeof none[0]); k++)
             lim_dword(none[k], 0x800, TAGPU_LIM_WRECKS, "wreck pool none");
+    }
+
+    /* ---- unit-type slots. A category mask is one bit a type: 0x40-byte heap blocks the name
+       map 0x488C50 allocates and clears (a type's own bit set by 0x488E03 and at game start by
+       0x488E70, from 0x42D6C2), and 0x40-byte stack masks in the AI plan's `Weight` and `Limit`
+       commands (0x406DB0, 0x406E40, filled by 0x488D30) and in Ctrl-Z (0x48BE00). Every reader
+       indexes one by a type ID below the def count, and nothing else sizes them: the 17 sites
+       below are the allocation, the five 16-dword clear and OR loops and the three stack
+       frames, each of which is its mask plus at most one dword under it, so the mask grows
+       upward over the frame and only the displacements above it move. A 0x804-byte frame is
+       inside one page, so no probe is needed. The count check at 0x42AA65 makes the bound
+       hold: the def array is allocated from it, and every later count is that array's. */
+    {
+        enum { MB = TAGPU_LIM_TYPES / 8, G = MB - 0x40 };
+        unsigned char c[24], *p;
+        static const unsigned char subEsp[2] = { 0x81, 0xEC }, addEsp[2] = { 0x81, 0xC4 };
+        static const unsigned char movEsi[3] = { 0x8B, 0xB4, 0x24 }, movEbp[3] = { 0x8B, 0xAC, 0x24 };
+        static const unsigned char movEcx[3] = { 0x8B, 0x8C, 0x24 }, leaEax[3] = { 0x8D, 0x84, 0x24 };
+        static const unsigned char fstp[3] = { 0xD9, 0x9C, 0x24 };
+        static const unsigned char pushImm = 0x68;
+        static const unsigned char wEntry[5] = { 0x83, 0xEC, 0x44, 0x85, 0xC0 };
+        static const unsigned char wArg[6]   = { 0x8B, 0x74, 0x24, 0x50, 0xF3, 0xAB };
+        static const unsigned char wFstp[8]  = { 0xD9, 0x5C, 0x24, 0x58, 0x8B, 0x6C, 0x24, 0x58 };
+        static const unsigned char wExit[6]  = { 0x83, 0xC4, 0x44, 0xC2, 0x04, 0x00 };
+        static const unsigned char lEntry[5] = { 0x83, 0xEC, 0x40, 0x85, 0xC0 };
+        static const unsigned char lArg[6]   = { 0x8B, 0x74, 0x24, 0x4C, 0xF3, 0xAB };
+        static const unsigned char lOut[5]   = { 0x8D, 0x44, 0x24, 0x50, 0x53 };
+        static const unsigned char lArg2[8]  = { 0x8B, 0x4C, 0x24, 0x54, 0x8D, 0x54, 0x24, 0x10 };
+        static const unsigned char lExit[6]  = { 0x83, 0xC4, 0x40, 0xC2, 0x04, 0x00 };
+        static const unsigned char hAlloc[7] = { 0x6A, 0x40, 0xE8, 0x47, 0xC2, 0x02, 0x00 };
+        static const unsigned char zEntry[9] = { 0x83, 0xEC, 0x40, 0x8A, 0x8A, 0x42, 0x2A, 0x00, 0x00 };
+        static const unsigned char zExit[5]  = { 0x83, 0xC4, 0x40, 0xC3, 0x90 };
+        static const unsigned char count[7]  = { 0x43, 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
+        unsigned char* types = lim_types_stub();
+        unsigned char* halloc;
+
+        /* the AI's Weight: a dword local at the frame's foot, the mask above it, one argument */
+        p = lim_emit(c, subEsp, 2, 0x44 + G); *p++ = 0x85; *p++ = 0xC0;           /* test eax,eax */
+        lim_reloc(0x00406DB5, 5, wEntry, c, (int)(p - c), 1, "AI weight mask frame");
+        lim_dword(0x00406DBE, 0x10, MB / 4, "AI weight mask clear");
+        p = lim_emit(c, movEsi, 3, 0x50 + G); *p++ = 0xF3; *p++ = 0xAB;           /* rep stosd    */
+        lim_reloc(0x00406DC9, 6, wArg, c, (int)(p - c), 1, "AI weight argument");
+        p = lim_emit(c, fstp, 3, 0x58 + G); p = lim_emit(p, movEbp, 3, 0x58 + G);
+        lim_reloc(0x00406DFD, 8, wFstp, c, (int)(p - c), 1, "AI weight argument slot");
+        p = lim_emit(c, addEsp, 2, 0x44 + G); *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;  /* ret 4   */
+        lim_reloc(0x00406E3A, 6, wExit, c, (int)(p - c), 0, "AI weight mask frame release");
+
+        /* the AI's Limit: the mask at the frame's foot, one argument */
+        p = lim_emit(c, subEsp, 2, 0x40 + G); *p++ = 0x85; *p++ = 0xC0;
+        lim_reloc(0x00406E45, 5, lEntry, c, (int)(p - c), 1, "AI limit mask frame");
+        lim_dword(0x00406E52, 0x10, MB / 4, "AI limit mask clear");
+        p = lim_emit(c, movEsi, 3, 0x4C + G); *p++ = 0xF3; *p++ = 0xAB;
+        lim_reloc(0x00406E5D, 6, lArg, c, (int)(p - c), 1, "AI limit argument");
+        p = lim_emit(c, leaEax, 3, 0x50 + G); *p++ = 0x53;                         /* push ebx     */
+        lim_reloc(0x00406E64, 5, lOut, c, (int)(p - c), 1, "AI limit argument slot");
+        p = lim_emit(c, movEcx, 3, 0x54 + G); memcpy(p, lArg2 + 4, 4); p += 4;     /* lea edx,[esp+0x10] */
+        lim_reloc(0x00406EB2, 8, lArg2, c, (int)(p - c), 1, "AI limit argument read");
+        p = lim_emit(c, addEsp, 2, 0x40 + G); *p++ = 0xC2; *p++ = 0x04; *p++ = 0x00;
+        lim_reloc(0x00406ED6, 6, lExit, c, (int)(p - c), 0, "AI limit mask frame release");
+
+        /* the heap masks: `push 0x40; call 0x4B4F10` has no room for a 32-bit size */
+        halloc = lim_code(16);
+        if (halloc) {
+            p = lim_emit(halloc, &pushImm, 1, MB);
+            *p++ = 0xE8; tagpu_detour_rel(p, 0x004B4F10); p += 4;
+            *p++ = 0xE9; tagpu_detour_rel(p, 0x00488CC9);
+            lim_branch(0x00488CC2, 7, hAlloc, 0xE9, (unsigned int)(size_t)halloc, "category mask bytes");
+        }
+        lim_dword(0x00488CD3, 0x10, MB / 4, "category mask clear");
+        lim_dword(0x00488E3E, 0x10, MB / 4, "category mask OR");
+
+        /* Ctrl-Z: the mask at the frame's foot, no argument */
+        p = lim_emit(c, subEsp, 2, 0x40 + G); memcpy(p, zEntry + 3, 6); p += 6;    /* mov cl,[edx+0x2A42] */
+        lim_reloc(0x0048BE08, 9, zEntry, c, (int)(p - c), 1, "Ctrl-Z mask frame");
+        lim_dword(0x0048BE22, 0x10, MB / 4, "Ctrl-Z mask clear");
+        p = lim_emit(c, addEsp, 2, 0x40 + G); *p++ = 0xC3;                         /* ret          */
+        lim_reloc(0x0048BF1E, 5, zExit, c, (int)(p - c), 0, "Ctrl-Z mask frame release");
+
+        if (types)
+            lim_branch(0x0042AA65, 7, count, 0xE8, (unsigned int)(size_t)types, "unit type count");
+    }
+
+    /* ---- the join's pace. A joining peer sends its unit-sync checksums, one message a type,
+       four types a lobby tick (0x46DDFA..0x46DE95, `cmp ebp,4` at 0x46DE8F), and the battle room
+       shows SYNCHING until the last is in. MEASURED 2026-09-24, two peers at 16 383 types: 20 s,
+       the cursor at a steady ~880 types a second while the host kept up, so the pace and not
+       the host's searches is the cost. 64 a tick sends the same messages sooner. */
+    {
+        static const unsigned char four = 0x04, many = 0x40;
+        lim_add(0x0046DE91, 1, &four, &many, "unit sync types a tick");
     }
 }
 
@@ -1251,11 +2389,12 @@ int tagpu_limits_install(void)
     tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d at 0x%08X, "
                "flying pieces %d at 0x%08X, debris records %d at 0x%08X, units %d a player, "
                "pathfinding %d, particles %d a layer from a pool of %d, composite %d, "
-               "wreck records %d", s_nlim,
+               "wreck records %d, unit types %d", s_nlim,
                TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
                TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
                TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
-               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE, TAGPU_LIM_WRECKS);
+               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE, TAGPU_LIM_WRECKS,
+               TAGPU_LIM_TYPES - 1);
     return 1;
 }
 
@@ -1283,7 +2422,7 @@ int tagpu_limits_install(void)
     plog("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
          "flying pieces 100, debris records 300, units 250 a player up to 500, "
          "pathfinding 1333, particles 400 a layer from a pool of 1000, composite 600, "
-         "wreck records 2048)");
+         "wreck records 2048, unit types 511)");
     return 0;
 }
 

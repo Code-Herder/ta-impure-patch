@@ -34,6 +34,7 @@
 #define TAGPU_LIM_SFXPOOL 1000   /* particle objects in all ten layers together   */
 #define TAGPU_LIM_COMPOSITE 600  /* the composite scratch frame, a side          */
 #define TAGPU_LIM_WRECKS 2048    /* wreck records: 3DO wrecks and feature animations */
+#define TAGPU_LIM_TYPES  512     /* unit-type slots, None's included: a category mask's bits */
 #else
 #define TAGPU_LIM_PROJ   3000
 #define TAGPU_LIM_EXPL   3000
@@ -48,7 +49,12 @@
    table holds inside its existing reserve (tagpu_packet.c), so the raise costs no address
    space; the engine's own ceiling is 0x7FFF, its list links being signed 16-bit. */
 #define TAGPU_LIM_WRECKS 8192
+/* 16 384 slots: None and 16 383 real types, a 2048-byte mask. A mod with more is refused at the
+   menu-time count (0x42AA65), before the def array exists, so no type ID reaches a mask bit it
+   does not have. The engine's own ceiling is the u16 type field. */
+#define TAGPU_LIM_TYPES  16384
 #endif
+typedef char tagpu_lim_types_fit[(TAGPU_LIM_TYPES % 32 == 0 && TAGPU_LIM_TYPES <= 0xFFFF) ? 1 : -1];
 /* the wreck pool's list links are signed 16-bit words (0x4232F0 reads them with movsx), so
    every record index has to stay below 0x8000 */
 typedef char tagpu_lim_wrecks_fit[(TAGPU_LIM_WRECKS <= 0x7FFF) ? 1 : -1];

@@ -148,6 +148,9 @@ unit names by scanning the live definition table. This design follows its recipe
   of them, so a slot **is** the engine's 0-based `Players[]` index, `0..9`. (Phase A
   bounded it `1..10` and so could not name the human seat a plain launch uses.)
   When `setup.players` is present, an `owner` outside it is an error.
+- **A skirmish seats four players.** MEASURED 2026-09-24: ten named in `setup.players` on Core
+  Prime Industrial Area, a ten-player map, and the engine refused every unit of slots 4–9 as
+  `player slot N is not in this game`. Ten players are a network game (`tools/mp_lobby.sh`).
 - Handles are `[A-Za-z0-9][A-Za-z0-9_.-]{0,31}`. An entity with no `id` gets a synthesized
   one containing `#`, which an author's cannot — so a file that names nothing is still
   reported entity by entity, with no chance of collision. Group members are

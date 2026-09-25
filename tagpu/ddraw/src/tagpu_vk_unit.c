@@ -175,12 +175,11 @@
    allocation (the scaffold's rule) */
 #define FOG_MAXDIM 1024
 
-/* per-type vertex buffers cached at once: one per bake entry the bake can
-   hold, so this table is never the binding limit on a frame the bake could
-   serve -- it is the bound on a leak, and eviction is LRU. */
+/* per-type vertex buffers: one per bake entry the bake can hold, so this
+   table is never the binding limit on a frame the bake could serve, and
+   recycling from the bake's two keeps (`vb_slot` has the rule) */
 #define VB_MAX  (TAGPU_PB_MAXGEOM + TAGPU_PB_MAXMAT)
-/* buffers waiting for every slot to turn over once before they are destroyed */
-#define RET_MAX 64
+#define VB_KEEP (TAGPU_PB_KEEPGEOM + TAGPU_PB_KEEPMAT)
 
 /* ---- the entry points ----------------------------------------------------
    Resolved from the seam's `gdpa`/`gipa`, never linked, and this pass's own:
@@ -339,13 +338,28 @@ typedef struct {
     unsigned       lastFrame;
 } VBENT;
 static VBENT s_vb[VB_MAX];
+/* THE LOOKUP IS A HASH ON THE SERIAL: `vb_find` runs four times a unit a
+   frame, so a scan is O(units x table). Chains hold index + 1, so 0 ends one
+   and a zeroed table is empty. Beside it the free slots below the high-water
+   mark `s_vbTop` and the live count the keep is tested on. */
+#define VB_HBITS 16
+#define VB_HSIZE (1u << VB_HBITS)
+typedef char vb_chain_fits[(VB_MAX < 0xFFFF) ? 1 : -1];
+static unsigned short s_vbHead[VB_HSIZE], s_vbNext[VB_MAX], s_vbFree[VB_MAX];
+static int            s_vbTop, s_nvbFree, s_vbLive;
 
+/* buffers waiting for every slot to turn over once before they are
+   destroyed. A heap array that grows: a buffer stays here for as many frames
+   as there are slots, so the most it can hold is the slot count times the
+   buffers a frame can evict, and a fixed size below that would refuse an
+   eviction. Nothing points into it, so a move is safe. */
 typedef struct {
     VkBuffer       buf;
     VkDeviceMemory mem;
     unsigned       pending;                /* bit per slot still to turn over  */
 } VBRET;
-static VBRET s_ret[RET_MAX];
+static VBRET*   s_ret;
+static unsigned s_nret, s_retCap;
 
 /* ---- one of these per frame slot, and every field of it is ours for the
    duration of the hooks we are handed that slot on. ---- */
@@ -633,78 +647,104 @@ static void copy_rect(VkCommandBuffer cb, VkBuffer src, VkDeviceSize srcOff,
    still clear this slot's bit, or the retire stalls for ever. */
 static void ret_slot_done(const TAGPU_VKPASS* d, uint32_t slot)
 {
-    int i;
-    for (i = 0; i < RET_MAX; i++) {
-        if (!s_ret[i].buf) continue;
+    unsigned i = 0;
+    while (i < s_nret) {
         s_ret[i].pending &= ~(1u << slot);
         if (s_ret[i].pending == 0) {
             kill_buffer(d, &s_ret[i].buf, &s_ret[i].mem, NULL);
-            s_ret[i].pending = 0;
+            s_ret[i] = s_ret[--s_nret];
+        } else {
+            i++;
         }
     }
 }
 
-/* Hand a buffer to the retire, or -- if the list is full -- say so. A full
-   list is not a reason to destroy it here: this is the middle of a frame and
-   other slots' submitted command buffers may still name it. */
+/* Hand a buffer to the retire, or -- if the list cannot grow -- say so. A
+   refusal is not a reason to destroy it here: this is the middle of a frame
+   and other slots' submitted command buffers may still name it. */
 static int ret_push(const TAGPU_VKPASS* d, VkBuffer buf, VkDeviceMemory mem)
 {
-    int i;
-    for (i = 0; i < RET_MAX; i++)
-        if (!s_ret[i].buf) {
-            s_ret[i].buf = buf; s_ret[i].mem = mem;
-            /* EVERY SLOT, not only the live ones: `d->slots` can only shrink at
-               a swapchain rebuild, which goes through vkDeviceWaitIdle anyway,
-               and a bit for a slot that never comes round again would hold the
-               buffer for ever. So the mask is exactly the slots the seam
-               drives. */
-            s_ret[i].pending = (d->slots >= 32) ? 0xFFFFFFFFu
-                                                : ((1u << d->slots) - 1u);
-            return 1;
-        }
-    return 0;
+    if (s_nret == s_retCap) {
+        unsigned cap = s_retCap ? s_retCap * 2u : 64u;
+        VBRET* r = (VBRET*)realloc(s_ret, (size_t)cap * sizeof *r);
+        if (!r) return 0;
+        s_ret = r; s_retCap = cap;
+    }
+    s_ret[s_nret].buf = buf; s_ret[s_nret].mem = mem;
+    /* EVERY SLOT, not only the live ones: `d->slots` can only shrink at a
+       swapchain rebuild, which goes through vkDeviceWaitIdle anyway, and a bit
+       for a slot that never comes round again would hold the buffer for ever.
+       So the mask is exactly the slots the seam drives. */
+    s_ret[s_nret].pending = (d->slots >= 32) ? 0xFFFFFFFFu
+                                             : ((1u << d->slots) - 1u);
+    s_nret++;
+    return 1;
 }
 
-/* A DIRECT-MAPPED HINT IN FRONT OF THE SCAN. `vb_find` runs four times a unit
-   a frame and the table is VB_MAX long, so a scan alone is O(units x table).
-   Units of one type share a serial, so the hint almost always answers; it is
-   only ever a guess -- an index, checked against the entry's own serial before
-   it is believed -- and an evicted entry is zeroed, so a stale hint misses
-   and falls through to the scan. */
-#define VB_HINT 1024                        /* a power of two */
-static unsigned short s_vbHint[VB_HINT];
-typedef char vb_hint_fits[(VB_MAX <= 0xFFFF) ? 1 : -1];
+static unsigned vb_bucket(unsigned serial)
+{
+    return (serial * 0x9E3779B9u) >> (32 - VB_HBITS);
+}
 
 static VBENT* vb_find(unsigned serial)
 {
-    int i;
-    unsigned h;
+    unsigned k;
     if (!serial) return NULL;
-    h = s_vbHint[serial & (VB_HINT - 1)];
-    if (h < VB_MAX && s_vb[h].serial == serial) return &s_vb[h];
-    for (i = 0; i < VB_MAX; i++)
-        if (s_vb[i].serial == serial) {
-            s_vbHint[serial & (VB_HINT - 1)] = (unsigned short)i;
-            return &s_vb[i];
-        }
+    for (k = s_vbHead[vb_bucket(serial)]; k; k = s_vbNext[k - 1])
+        if (s_vb[k - 1].serial == serial) return &s_vb[k - 1];
     return NULL;
 }
 
+/* a new entry, once its buffer exists and its serial is set */
+static void vb_link(VBENT* e)
+{
+    const int k = (int)(e - s_vb);
+    const unsigned b = vb_bucket(e->serial);
+    s_vbNext[k] = s_vbHead[b];
+    s_vbHead[b] = (unsigned short)(k + 1);
+    s_vbLive++;
+}
+
+/* an entry back to the free slots: a live one leaves its chain first; one
+   `vb_slot` handed out and whose buffer was never made has no chain to leave */
+static void vb_release(VBENT* e)
+{
+    const int k = (int)(e - s_vb);
+    if (e->serial) {
+        unsigned short* at = &s_vbHead[vb_bucket(e->serial)];
+        while (*at && *at != (unsigned short)(k + 1)) at = &s_vbNext[*at - 1];
+        if (*at) *at = s_vbNext[k];
+        s_vbNext[k] = 0;
+        s_vbLive--;
+    }
+    memset(e, 0, sizeof *e);
+    s_vbFree[s_nvbFree++] = (unsigned short)k;
+}
+
+/* THE SLOT A NEW BUFFER TAKES, on tagpu_posebake.h's rule and for its reason:
+   never an entry this frame has drawn -- the frame in hand has already
+   recorded draws naming it -- and at the keep the least recently drawn of the
+   rest is evicted first. A unit record names two serials and the bake hands a
+   frame at most TAGPU_PB_FRAMEMAX of each, which is what the table holds, so a
+   table with every slot live has one this frame has not drawn. An eviction
+   also needs the retire to take the buffer; when it cannot, the table grows
+   instead, so the retire never bounds what a frame can draw. Nothing drops the
+   table at a level change: the last level's buffers are the least recently
+   drawn, so they are the first recycled. The NULL is the table full with the
+   retire unable to grow: host memory, not the frame. */
 static VBENT* vb_slot(const TAGPU_VKPASS* d, unsigned frame)
 {
     int i, worst = -1;
-    for (i = 0; i < VB_MAX; i++)
-        if (!s_vb[i].serial) return &s_vb[i];
-    /* the least recently drawn, and never one drawn THIS frame: the frame in
-       hand has already recorded draws naming it */
-    for (i = 0; i < VB_MAX; i++) {
-        if (s_vb[i].lastFrame == frame) continue;
-        if (worst < 0 || s_vb[i].lastFrame < s_vb[worst].lastFrame) worst = i;
+    if (s_vbLive >= VB_KEEP || (!s_nvbFree && s_vbTop >= VB_MAX)) {
+        for (i = 0; i < s_vbTop; i++)
+            if (s_vb[i].serial && s_vb[i].lastFrame != frame &&
+                (worst < 0 || s_vb[i].lastFrame < s_vb[worst].lastFrame)) worst = i;
+        if (worst >= 0 && ret_push(d, s_vb[worst].buf, s_vb[worst].mem))
+            vb_release(&s_vb[worst]);
     }
-    if (worst < 0) return NULL;
-    if (!ret_push(d, s_vb[worst].buf, s_vb[worst].mem)) return NULL;
-    memset(&s_vb[worst], 0, sizeof s_vb[worst]);
-    return &s_vb[worst];
+    if (s_nvbFree) return &s_vb[s_vbFree[--s_nvbFree]];
+    if (s_vbTop < VB_MAX) return &s_vb[s_vbTop++];
+    return NULL;
 }
 
 /* ---- the slot ----------------------------------------------------------- */
@@ -2540,8 +2580,8 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                 if (!s_saidVbFull) {
                     s_saidVbFull = 1;
                     plog(d, "unit: the per-type vertex buffer table is full and "
-                            "every entry is in this frame - nothing drawn this "
-                            "frame (VB_MAX %d)", VB_MAX);
+                            "the retire cannot take an eviction - nothing drawn "
+                            "this frame (VB_MAX %d)", VB_MAX);
                 }
                 break;
             }
@@ -2550,11 +2590,12 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                            &(*e)->buf, &(*e)->mem, NULL)) {
-                memset(*e, 0, sizeof **e);
+                vb_release(*e);
                 goto refuse;
             }
             (*e)->serial = serial;
             (*e)->size = bytes;
+            vb_link(*e);
             /* STAMPED AT CREATION, not only when the unit is finally drawn. The
                copy below is already recorded into `cb`, so an entry left at
                frame 0 could be chosen by `vb_slot` for the NEXT unit of this
@@ -3304,12 +3345,15 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
         s_slot[i].dsMain = VK_NULL_HANDLE;   /* both go back with the pool */
         s_slot[i].dsCast = VK_NULL_HANDLE;
     }
-    for (k = 0; k < VB_MAX; k++)
-        if (s_vb[k].buf) { kill_buffer(d, &s_vb[k].buf, &s_vb[k].mem, NULL);
-                           memset(&s_vb[k], 0, sizeof s_vb[k]); }
-    for (k = 0; k < RET_MAX; k++)
-        if (s_ret[k].buf) { kill_buffer(d, &s_ret[k].buf, &s_ret[k].mem, NULL);
-                            s_ret[k].pending = 0; }
+    for (k = 0; k < s_vbTop; k++)
+        if (s_vb[k].buf) kill_buffer(d, &s_vb[k].buf, &s_vb[k].mem, NULL);
+    memset(s_vb, 0, sizeof s_vb);
+    memset(s_vbHead, 0, sizeof s_vbHead);
+    memset(s_vbNext, 0, sizeof s_vbNext);
+    s_vbTop = s_nvbFree = s_vbLive = 0;
+    for (k = 0; k < (int)s_nret; k++)
+        kill_buffer(d, &s_ret[k].buf, &s_ret[k].mem, NULL);
+    s_nret = 0;
     /* THE RESTORE JOB GOES BACK BEFORE THE IMAGES IT NAMES, and before the
        per-level views: it holds a framebuffer over each of them, and a view
        still named by a live framebuffer may not be destroyed. Every caller of
