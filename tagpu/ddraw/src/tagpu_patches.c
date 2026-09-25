@@ -56,14 +56,15 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
 
 /* ---- defects of the stock engine -------------------------------------------
 
-   Four places where TotalA.exe itself writes or reads memory it does not own,
-   and two where it takes a player's payment and does not deliver. Each patch
-   below is the identity on every input the stock code handles correctly and
-   differs only where the stock code would write past an allocation, read
-   through NULL, read off the end of the tile map, leave a paid-for feature
-   standing, or pay for one feature twice. The engine map
-   (exe-reverse-engineering.md, "Engine defects we patch") has the disassembly,
-   the callers and the measurements; binary-patches.md lists them. All six are
+   Places where TotalA.exe itself goes wrong: it writes or reads memory it does
+   not own, takes a player's payment and does not deliver, or loads a saved game
+   without all of what it saved. Each patch below is the identity on every input
+   the stock code handles correctly and differs only where the stock code would
+   write past an allocation, read through NULL, read off the end of the tile
+   map, leave a paid-for feature standing, pay for one feature twice, or drop a
+   saved feature. The engine map (exe-reverse-engineering.md, "Engine defects
+   we patch") has the disassembly, the callers and the measurements;
+   binary-patches.md lists them. All are
    installed at every attach: ddraw.dll is a static import of the exe, so
    DllMain runs before the exe's entry point. They are independent: each is
    skipped, with its reason logged, only when its bytes differ from the retail
@@ -610,6 +611,151 @@ static int fix_reclaim_mark_anchor(void)
         VirtualFree(s, 0, MEM_RELEASE);
         return FIX_PROTECT;
     }
+    return FIX_ARMED;
+}
+
+/* A SAVED FEATURE ON THE MAP'S BORDER. [DISASSEMBLED] LoadMap 0x483610 ends by calling
+   0x4833B0 (at 0x483CF1), which masks the border of the feature grid: over a fixed set of
+   cells -- columns W-2 and W-1, the top rows whose projected y (row*16 - height/2) is
+   negative, the row above each bottom cell whose projected y is past the scroll extent, and,
+   when [main+0x391E9]+0xD44 is set, every cell at or below the sea level -- it writes 0xFFFD
+   over a cell that is EMPTY (0xFFFF) or a footprint cell (0xFFFE) and leaves an anchor alone.
+   That function is the only producer of 0xFFFD [every 0xFFFD immediate in .text]. A spawn
+   refuses it: SpawnFeatureOnMap 0x423C50 hands every footprint cell that is not EMPTY to
+   FEATURES_Destroy 0x4246B0, which refuses a def at 0xFFFB and up, and the spawn is abandoned.
+   On a new game the TNT's features are down before the mask, so a feature there keeps its
+   anchor and loses only its masked footprint cells. On a saved game LoadMap places nothing
+   (main+0x38D6B, the save's TDF, is set), the mask runs over a grid with no feature, and the
+   features come back later, from the save: the game-load routine 0x432610 calls 0x424C00 at
+   0x43265A, which spawns every saved feature -- "Normal Features" (0x424FBF), "Animating
+   Features" (0x425050), "3D Features" (0x425180) -- and never tests the result. So a saved
+   feature with its anchor or any footprint cell on a masked cell does not come back. MEASURED
+   on Two Continents: the trees at cells (25,0), (5,1), (27,2) and (33,2). The restore then
+   goes on as though the spawn had succeeded: an animating or 3D record's state is written
+   into the wreck-pool record the cell's +0x0A names (0x4250C8, 0x42518D), a word LoadMap
+   never initialises (0x4839D5..0x4839ED writes +0x00, +0x02, +0x07, +0x08 and two bits of
+   +0x0C of a fresh cell).
+
+   THE FIX retargets the call at 0x43265A to features_restore_under_mask, which opens the mask
+   for the restore and closes it after: every cell holding 0xFFFD is noted in a bitmap and set
+   EMPTY, 0x424C00 runs unchanged, and every noted cell that is then EMPTY or 0xFFFE is set back
+   to 0xFFFD -- the mask's own rule, over the mask's own cells. THE INVARIANT: the grid after the
+   restore is the mask applied to the restored features, as a new game's grid is the mask
+   applied to the TNT's -- a restored feature keeps its anchor on a masked cell and loses its
+   masked footprint cells, and every other masked cell reads 0xFFFD again. It rests on
+     - a bound: the mask is opened only when the grid holds no feature (no def below 0xFFFB and
+       no 0xFFFE), the state 0x424C00 is called in, so no cell it opens is covered by a feature
+       and the restore is the only code that sees one open. The grid is read as LoadMap sized it,
+       W * H cells of 13 bytes (0x483986..0x4839A2), W and H from main+0x14233/+0x14237 and
+       refused outside 1..4096; the pointer and both counts are compared again after the
+       restore, and the cells are closed only when they are unchanged;
+     - an ordering: the restore runs on the loader thread, inside the level load, where the
+       engine writes the grid itself; nothing else is running a level yet.
+   Anything outside the bound -- a feature already down, a grid out of range, no memory for the
+   bitmap -- leaves the restore to stock, logged. 0x424C00 has this one caller and no pointer to
+   it in the image; neither has 0x432610 but the one at 0x497B29 [call and literal scan of the
+   image]. Identity on a new game, whose load never reaches 0x424C00, and on a saved game with
+   no feature on a masked cell. */
+#define SF_PLOT_W   0x14233     /* 16-px cells across and down                      */
+#define SF_PLOT_H   0x14237
+#define SF_GRID     0x14287     /* FeatureStruct[W * H], 13 bytes, the def at +0x08  */
+#define SF_CELL     13
+#define SF_EMPTY    0xFFFFu
+#define SF_MARKER   0xFFFBu     /* a def at or above is not a feature                */
+#define SF_MASKED   0xFFFDu
+#define SF_FOOT     0xFFFEu
+
+typedef void (__stdcall *features_restore_fn)(void* tdf);
+
+static void __stdcall features_restore_under_mask(void* tdf)
+{
+    const features_restore_fn restore = (features_restore_fn)0x00424C00;
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* grid;
+    unsigned char* bits;
+    unsigned int w, h, n, i, opened = 0, closed = 0, kept = 0;
+    const char* why = NULL;
+    char b[200];
+
+    if (!ptr_sane(ta)) {
+        restore(tdf);
+        return;
+    }
+    grid = *(unsigned char* const*)(ta + SF_GRID);
+    w = *(const unsigned int*)(ta + SF_PLOT_W);
+    h = *(const unsigned int*)(ta + SF_PLOT_H);
+    if (!ptr_sane(grid) || w < 1 || w > 4096 || h < 1 || h > 4096) {
+        restore(tdf);
+        plog("savedfeat: the grid is out of range; the restore ran with the border mask shut");
+        return;
+    }
+    n = w * h;
+    for (i = 0; i < n; i++) {
+        unsigned int def = *(const unsigned short*)(grid + (size_t)i * SF_CELL + 8);
+        if (def < SF_MARKER || def == SF_FOOT) {
+            why = "a feature is already down";
+            break;
+        }
+    }
+    bits = why ? NULL : (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n + 7) / 8);
+    if (!why && !bits) why = "no memory for the bitmap";
+    if (why) {
+        restore(tdf);
+        _snprintf(b, sizeof b, "savedfeat: %s; the restore ran with the border mask shut", why);
+        b[sizeof b - 1] = 0;
+        plog(b);
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        unsigned short* def = (unsigned short*)(grid + (size_t)i * SF_CELL + 8);
+        if (*def == SF_MASKED) {
+            bits[i >> 3] |= (unsigned char)(1u << (i & 7));
+            *def = (unsigned short)SF_EMPTY;
+            opened++;
+        }
+    }
+
+    restore(tdf);
+
+    if (*(unsigned char* const*)(ta + SF_GRID) == grid &&
+        *(const unsigned int*)(ta + SF_PLOT_W) == w &&
+        *(const unsigned int*)(ta + SF_PLOT_H) == h) {
+        for (i = 0; i < n; i++) {
+            unsigned short* def;
+            if (!(bits[i >> 3] & (1u << (i & 7)))) continue;
+            def = (unsigned short*)(grid + (size_t)i * SF_CELL + 8);
+            if (*def == SF_EMPTY || *def == SF_FOOT) {
+                *def = (unsigned short)SF_MASKED;
+                closed++;
+            } else if (*def < SF_MARKER) {
+                kept++;
+            }
+        }
+        _snprintf(b, sizeof b,
+                  "savedfeat: the restore ran with the border mask open: %u cells opened, "
+                  "%u masked again, %u hold a restored feature's anchor", opened, closed, kept);
+    } else {
+        _snprintf(b, sizeof b, "savedfeat: the restore replaced the grid; %u opened cells "
+                  "left to it", opened);
+    }
+    b[sizeof b - 1] = 0;
+    plog(b);
+    HeapFree(GetProcessHeap(), 0, bits);
+}
+
+static int fix_saved_features_border(void)
+{
+    static const unsigned char was[5] = { 0xE8, 0xA1, 0x25, 0xFF, 0xFF };  /* call 0x424C00 */
+    unsigned char now[5];
+
+    if (memcmp((const void*)0x0043265A, was, sizeof was) != 0) return FIX_BYTES;
+    now[0] = 0xE8;
+    /* encoded against 0x43265A, where the call runs -- not against this buffer */
+    {
+        unsigned int rel = (unsigned int)(size_t)features_restore_under_mask - (0x0043265Au + 5u);
+        memcpy(now + 1, &rel, 4);
+    }
+    if (!tagpu_detour_write(0x0043265A, now, sizeof now)) return FIX_PROTECT;
     return FIX_ARMED;
 }
 
@@ -2161,25 +2307,27 @@ static void patch_engine_defects(void)
     int terr = fix_terrain_window();
     int die  = fix_feature_die_pool_full();
     int mark = fix_reclaim_mark_anchor();
+    int sfb  = fix_saved_features_border();
     int scr  = fix_composite_scratch();
     int list = fix_build_list();
     int dl   = fix_download_records();
     int oom  = fix_oom_message();
     int keys = fix_sync_keys();
     int wpn  = fix_weapon_ids();
-    char b[1280];
+    char b[1536];
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
               "terrain window bound 0x484057 %s; feature swap on a full wreck pool 0x423651 %s; "
-              "reclaim tests the anchor's mark 0x423892 %s; composite scratch bound "
+              "reclaim tests the anchor's mark 0x423892 %s; saved features restored under the "
+              "border mask (0x43265A) %s; composite scratch bound "
               "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70 0x4B90A0) %s; whole build lists "
               "(0x42DA58 0x42DAC7 0x42BEC3) %s; download menus past five entries (0x42DCF0) %s; "
               "the out-of-memory text (0x49E700) %s; unique unit sync keys (0x42BD29) %s; weapon IDs "
               "bounded, feature hits told from sentinels (0x42E468 0x49D280 0x455FB8 0x424575) %s",
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
-              fix_state(scr), fix_state(list), fix_state(dl), fix_state(oom), fix_state(keys),
-              fix_state(wpn));
+              fix_state(sfb), fix_state(scr), fix_state(list), fix_state(dl), fix_state(oom),
+              fix_state(keys), fix_state(wpn));
     b[sizeof b - 1] = 0;
     plog(b);
 }
