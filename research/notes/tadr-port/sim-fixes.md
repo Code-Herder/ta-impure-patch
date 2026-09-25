@@ -104,11 +104,12 @@ faces of `0x45A2EC` are left there.
   ticks, in every game, so every per-tick reader of slot identity (a weapon's target
   `0x48A295`, the tracked unit `0x4995E4`, our interpolation's pairing) sees it empty once. The
   allocator otherwise stays stock's first-free. TADR's bump pointer and LRU are not ported.
-- **Ghost commander: measure the cause, then fix it with an ordering.** If a start-of-game `0x09` is
-  dropped because the sender's block does not exist yet, the receiver keeps it and applies it once
-  the block is set: the owner's own position arrives and nothing is guessed. Otherwise the create
-  takes the entry's own position, bounded to the map, for disassembled move classes only. The
-  Assist is not ported in any form.
+- **Ghost commander: the cause measured, then both halves.** A start-of-game create is refused by
+  the dispatcher's state gate on a peer still loading, not for want of the sender's block; the
+  receiver keeps it and replays it at the in-play entry, so the owner's own create arrives and
+  nothing is guessed. And a dirty `0x2C` create takes the position its entry's move payload
+  carries, bounded to the map, for disassembled move classes only (the owner chose both,
+  2026-09-25, from B5's measurement). The Assist is not ported in any form.
 - **The wire's unit indices: bounded.** `0x09`, `0x0B`, `0x0C` and the `0x2C` receiver; on a bad
   `0x2C` field the parser stops at the engine's own end of list, since past it the bitstream cannot
   be framed.
