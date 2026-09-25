@@ -2894,7 +2894,7 @@ static int __cdecl wire_rx_note(unsigned int* r)
        0x48AB70, 0x47D0E0, 0x47CC30 and 0x4827B0 read nothing.
      - the header, before the entry check: 56.
    229 bits is 29 bytes past the last checked bit; the message's end can sit 3 bytes into a
-   dword, and 0x415DC0 reads the dword after the last bit's when a read ends on a boundary
+   dword, and 0x415DC0 also loads the next dword when a read reaches the end of one
    (0x415E0C..0x415E3E): 8 more. */
 enum {
     WIRE_2C_OVER_BITS = 229,
@@ -2948,7 +2948,7 @@ static int __cdecl wire_s2c_copy(unsigned int* r)
 
 /* The transport's splitter 0x463790 walks a packet by each message's length and advances by
    it, so a length of 0 keeps its counting loop (0x4638F0..0x463947) on one message for good,
-   and its third walk (0x463AD5..0x463B8B) queues that message until the queue is full. Both
+   and its third walk (0x463AD3..0x463B8B) queues that message until the queue is full. Both
    take the length at one place; a length wire_split_ok refuses ends the split there, through
    the engine's own end for a code it does not know (0x463949; 0x463B91). The counting pass
    decides how many messages the queuing pass 0x4639BC takes, so that pass never reaches it. */
