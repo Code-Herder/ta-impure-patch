@@ -273,11 +273,67 @@ The plan as written:
   `begin + (1 + k·N)·0x118`.
 - In `wpn_rx_fired` (`0x49D280`): drop a `0x0D` whose shooter slot's weapon is not `&Weapons[id]`,
   through the extra-weapons accessor past slot 2.
-- A test-only lever, `tagpu_wirefuzz.on`, feeds crafted records to the handlers on the game thread,
-  and three local counters on the heartbeat (morph, recreate, ghost) become the oracles for B4 and
+- Three local counters on the heartbeat (morph, recreate, ghost) become the oracles for B4 and
   B5. Every drop is counted in the `enginefix:` line.
-- Class: local (malformed input only). Tests: the lever on one instance; the two-peer weapon-ID
-  fixture and a ten-peer tier 2 run with every counter at 0.
+- Class: local (malformed input only). Tests: the two-peer weapon-ID fixture and a ten-peer tier 2
+  run with every counter at 0.
+
+**B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`; commit `3c2cec1`; not landed,
+not reviewed). What was done, and where it deviates from the plan above:
+
+- **No record-injection lever.** The plan's `tagpu_wirefuzz.on` is dropped. A malformed-message fix
+  meets the plan's own evidence bar by disassembly (the identity everywhere else), so instead each
+  bound is a **pure C predicate** over the record's field values and the engine's counts
+  (`wire_index_ok`, `wire_killer_ok`, `wire_type_ok`, `wire_delta_ok`, `wire_block_ok` in
+  `tagpu_patches.c`), and a test-only self-check, **`tagpu_wirecheck.on`**, evaluates each on a table
+  of boundary values at attach and logs each verdict against the expected one — a unit test of our
+  own code, not traffic. Measured 2026-09-25: 16/16 predicate cases OK.
+- **Every stub is a jmp at a clean 5-byte boundary**, verifies the whole stock span first
+  (all-or-nothing: one non-stock span leaves the image untouched, `FIX_BYTES`), sets the registers
+  stock sets, and continues at the same address; a failed bound goes to the receiver's own drop/exit.
+  The `0x0C` destructor is entered at `0x4866E5` so stock's `push edi` (`0x4866E4`) stays and the
+  drop's `pop edi` at `0x486E59` still balances.
+- **The paired `0x2C` stubs carry the validated type in a game-thread static** (`s_wire_2c_type`,
+  `s_wire_rr_type`), not a register, so the engine's downstream register state is exactly stock's; a
+  misframed `0x2C` points the bit reader at a static zero dword and jumps to the engine's own
+  end-of-list `0x48BA28`, so no round-robin entry is parsed from a stream that cannot be re-framed.
+- **The `0x2C` block check is at the receiver's entry `0x48B960`, not per dirty entry**: one check
+  there covers the dirty loop, the block sweep `0x48BA28` and the round-robin slot `0x48BAAD`, all of
+  which read `[player+0x67]`/`[player+0x6B]`. It is the full slot-run shape
+  (`begin + (1 + k·N)·0x118`, `k < 10`, ending `N-1` slots on), not just the `!= 0` stock check.
+- **After-create guards `0x48BA05` (S7) and `0x48B49C` (S10)** require the slot now holds the created
+  type and its mover/script object is non-NULL before the parse dereferences it — TADR's 13 field
+  faults at `0x48BA07` and the NULL at `0x48B4A6`.
+- **The `0x09` sender-block rule is NOT shipped.** S1 bounds the index `[1, max]` and the type
+  `[1, count)` only. The plan's "index lies in the sender's block" is present as an **observe-only
+  counter** (`s_wireBlockObs`, a wire `0x09` whose unit index is outside its named owner's own block),
+  not a drop, pending the AI-seat measurement — which **was not answered** (see below).
+- **`0x0D` diverged shooter** dropped in `wpn_rx_fired` via a new read-only accessor
+  `tagpu_weapons_slot_weapon` (NULL past the unit's count, no clamp/VIOLATION), only for a live
+  shooter.
+
+Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`/`b3h1`/`b3j1`):
+
+- **Self-check** (`tagpu_wirecheck.on`): 16/16 predicate cases OK; install **ARMED**, all 11 stock
+  spans matched byte-for-byte, stubs 384 bytes.
+- **Real two-peer traffic** (host + joiner, Two Continents) and **a three-seat AI game** (host +
+  AI-on-host + joiner, Town & Country): ~5500 ticks per peer at speed 10, both `in_game=1`, no
+  freeze/crash/desync. The `0x2C` receiver's every-tick paths — entry/block (`0x48B960`), delta
+  (`0x48B985`), type-matched skip (`0x48B9AD`), after (`0x48BA05`), unsigned remainder (`0x48BA9F`),
+  round-robin type (`0x48B40E`) and after (`0x48B49C`) — ran every tick on both peers with **every
+  drop counter at 0, every oracle at 0, and no `wire robustness:` drop line**. That is 7 of the 10
+  `0x2C`-family sites, the most timing-sensitive (the round robin fires unconditionally each tick and
+  the S9→S10 static type carry is exercised each time).
+- **GAP — create/damage/death receivers not reached live.** `0x09` (`0x4861F7`), `0x0C`
+  (`0x4866E5`/`0x486753`), `0x0B` (`0x489CED`), the `0x2C` dirty-create (S6-create), and the `0x0D`
+  drop did not fire: no wire unit creation, death, or inter-peer combat occurred (commanders could not
+  path together on either map; the AI stayed passive/isolated). They rest on the self-check and the
+  disassembly for now. **The completing regression is the ten-peer (or four-peer) tier-2 run**, whose
+  fighting armies flood all receivers; run it at landing with every counter at 0.
+- **GAP — AI-seat question unanswered.** An AI seat on the host works (a lobby slot cycles
+  `AI:B3H1`) and the game ran, but the AI produced no wire `0x09` in the window, so `s_wireBlockObs`
+  has no data. The block rule stays out of the shipped code (observe-only), per the plan's
+  "apply the block rule only after that". Re-run with an active AI (or the tier-2 armies) to settle it.
 
 **B4 — stale hits.**
 

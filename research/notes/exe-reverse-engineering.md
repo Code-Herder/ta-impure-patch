@@ -327,6 +327,7 @@ made, or its page cannot be made writable. Each of the nineteen, and why:
 | line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440` (fifteen sites in 22 rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps |
 | line of sight in local code: the cursor picker, the build cursor's site test, the feature helper, the radar rebuild's projectile dots, five particle leaves, positional sound (27 sites) | local | a cursor, a draw, a sound |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
+| wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`), and the diverged `0x0D` at `0x49D280` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local) |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -340,6 +341,46 @@ locally from stock models (never committed), on Core Prime Industrial Area with 
 weapons `tools/weaponids_fixture.py` generates for the weapon IDs, on Two Continents with a save
 and its load for the border features, and on Two Continents with the `scenarios/b1-*.json`
 fixtures for the four combat fixes. Each compares against a build without the patch.
+
+### The network receivers take a unit index straight off the wire — `0x09`, `0x0B`, `0x0C`, `0x2C` [DISASSEMBLED 2026-09-25]
+
+Landing B3 of [the port's section B](tadr-port/sim-fixes.md). The dispatcher `0x45486D` indexes the
+jump table `0x455F84` by `code − 2` and gives each case the sender's player record in `edi` and the
+record pointer on the stack. Four cases index the unit array — begin `*(main+0x14357)`, last
+inclusive `*(main+0x1435B)`, stride `0x118` — by a `u16` from the record with no bound, and one also
+by a signed delta, an unbounded type, and a signed round-robin remainder:
+
+| code | case | handler | the unbounded reads |
+|---|---|---|---|
+| `0x09` | `0x4553DA` (→ `0x4553E9`) | `CreateFromNetwork 0x4861D0(player [esp+0x14], rec)` `ret 8` | index `rec+3` (0 faults at `0x486237`), type `rec+1` (indexes the def table `main+0x1439B + type·0x249` at `0x48626F`) |
+| `0x0B` | `0x45540D` | `0x489CE0(rec)` `ret 4` | victim `rec+1`, attacker `rec+3` (`0x489CED..0x489D36`); a heal-kind writes HP at `0x489D80` |
+| `0x0C` | `0x45541C` | `0x4866D0(rec, 0)` `ret 8` | index `rec+1` (0 faults at `0x486706`), killer `rec+7` (`0x486753..0x486777`; 0 → NULL, handled) |
+| `0x2C` | `0x4553EE` | `0x48B920(player edi, pkt)` `ret 8` | dirty-entry delta (signed, `0x48B985`), type (`0x48B9AD`), the mover after a refused create (`0x48BA05`, TADR's 13 field faults at `0x48BA07`), the round-robin type (`0x48B40E`) and mover (`0x48B49C`), and the **signed** `idiv` remainder at `0x48BAAB` |
+
+**The player block** each `0x2C` path trusts: `[player+0x67]` = first slot, `[player+0x6B]` = last, and
+`10·[main+0x37EE6]+1` slots with slot 0 a sentinel. The block is assigned at `0x4858A6..0x4858E0` as
+`first = begin + (1 + k·N)·0x118` for player `k`, `last = first + (N−1)·0x118`; that is the shape the
+entry check `0x48B960` verifies (a wild `[player+0x67]` fails it even where a 16-bit delta could not).
+Confirmed live 2026-09-25: player 0 at slot 1, player 1 at slot 1501, player 2 at slot 3001, `N` 1500.
+
+**The `0x2C` stream.** `0x48B920` reads `[8] code, [16] size, [32] GameTime` (the bit reader
+`0x415DC0(nbits)`, thiscall `ret 4`, ecx the reader `{u32* buf, u32 dword_idx, u32 bit_idx}`), then a
+dirty list of `[16] delta, [typeBits] type` (typeBits `main+0x14393`) and the move class's payload
+(capped 0x200 bytes at `0x48B7F6`), a `[16] 0xFFFF` terminator, and one round-robin full-state entry
+for slot `GameTime % N` (`0x48B3F0`). A dirty entry whose type differs from its slot creates the unit
+(`0x48BA00 → 0x4861D0`); the round robin creates at `0x48B497`. A type with no move class
+(`def+0x22F != 1`, `0x4862CF`) leaves `[esi]` at 0, so `0x48BA05`/`0x48B4A6` dereference NULL — the
+reason the move-class check and the after-create null-check exist. GameTime is `main+0x38A47`,
+incremented at `0x4954C0`; `UNITINFOCount` is `main+0x1438F` (the type bound `[1, count)`).
+
+Locally none of these indices can be 0 (`0x4864B0` writes the live unit's own `+0xA8`, ≥ 1), so only a
+malformed or foreign message reaches them — the fix is stock-exact for every well-formed one and is
+[class local](tadr-port/sim-fixes.md#b3-built-ahead-2026-09-25). Our stubs are entered by a jmp at a
+clean 5-byte boundary (the `0x0C` destructor at `0x4866E5`, after stock's `push edi`), verify the
+whole stock span first, and continue at the same address; a misframed `0x2C` points the reader at a
+zero dword and jumps to the engine's own end-of-list `0x48BA28`. The diverged `0x0D` is dropped in
+`wpn_rx_fired` (`0x49D280`, [the weapon-ID receiver](#weapon-ids)) by resolving the shooter's own slot
+weapon and comparing it to `&Weapons[id]`.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
