@@ -365,10 +365,12 @@ full colour. On `500v500` with 400 selected: `sel=401
 selover=0`, 60 fps.
 
 **What is not the engine's.** Where our frame's trees and the reference disagree, the stock game
-is the oracle and agreed with the depth test on the two cases looked at; it was not swept. The
-clip `0x4CC650` applies at the context edge is not reproduced — it moves an end that lies off
-the surface onto the edge, and the lane walks the unclipped line with the scissor cutting it at
-the viewport, which can differ by a step at the edge. The rect needs no device line feature; it
+is the oracle and agreed with the depth test on the two cases looked at; it was not swept. At
+the viewport edge the rect's lines are DrawLine's: `put_line` puts each edge's integer ends
+through `tagpu_line_clip` — `0x4BEA20` against the viewport, then `0x4CC650` against the surface
+— so an edge crossing it is walked from the end the engine's clip moves (exe-reverse-engineering.md,
+`0x4BEA20`; measured 0 px against the oracle and matching the engine's frame on the one changed
+line of an edge view, gpu-status.md §2.92). The rect needs no device line feature; it
 is not drawn only where its depth-tested pipeline will not build, which drops the rects and not
 the rest of the marker layer, and says so once in the log.
 

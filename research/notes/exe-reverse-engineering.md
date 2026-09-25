@@ -2838,10 +2838,40 @@ too. Otherwise it rejects a line wholly off one side (`0x4CC693` → `xor eax,ea
 each end that lies outside onto the edge: the other coordinate advances by
 `(distance past the edge) · d(other) / d(this)` in `imul`/`idiv` — **a signed division that
 truncates toward zero** — and the moved coordinate becomes `0` or `w − 1` / `h − 1`
-(`0x4CC6D0`..`0x4CC798`), then it loops back to the test. So **a line that crosses the surface
-edge is walked from the moved end, and its pixels on the surface can sit one off the unclipped
-walk's.** The lane does not apply this clip (`tagpu_line.h`, *THE ENGINE'S CLIP IS NOT
-APPLIED*): at zoom < 1 its lines carry on past the 1x surface, where the engine draws nothing.
+(`0x4CC6D0`..`0x4CC798`), then it loops back to the test. The deltas are re-taken from the
+current ends on every pass, and the product is the one-operand `imul` (64-bit `edx:eax`). So a
+line that crosses the SURFACE edge is walked from the moved end. It is the second of DrawLine's
+two clips and acts only at the surface: every DrawLine caller has already been through
+`0x4BEA20` (below), whose rect lies inside the surface, so on the world's lines this half moves
+an end only where `0x4BEA20`'s single pass left one just past a corner.
+
+**`0x4BEA20` — DrawLine's clip to the context's clip rect, the one that shapes an
+edge-crossing line** [DISASSEMBLED 2026-09-25, `objdump` of the pristine exe]. `stdcall(ctx,
+&x0, &y0, &x1, &y1)`, `ret 0x14`, clips the four ints in place and returns 1 to draw, 0 not to.
+Every call of `0x4CC7AB` in the binary but one helper's four (`0x4CCD34..0x4CCD79`) is
+preceded by it — DrawLine `0x4BE950` (`0x4BE989`/`0x4BE9E0`, 83 callers) and the other call
+sites from `0x4BEECF` to `0x4C02AB` (`DrawTranspRectangle 0x4BF8C0` among them).
+- **The rect** is read by `0x4C6AE0` (thiscall, copies `ctx+0x1C..+0x28` out): L, T, R, B,
+  **inclusive on every side** (`x < L` and `x > R` are the tests). In the world's context it is
+  the viewport: `DrawGameScreen` stores `main+0x37E27` = {128, 32, W − 1, H − 33} there through
+  `0x4C6B10` at `0x468D85`, and at zoom < 1 `vpwide`'s `vpw_setclip` clamps the widened rect
+  back to the true viewport and to the surface.
+- **The rule.** `xle = x0 ≤ x1`, `yle = y0 ≤ y1` (`0x4BEA3E`/`0x4BEA4F`, `setle`); `dx = x1 − x0`,
+  `dy = y1 − y0`, taken once and never updated. One pass: end 0 against `x < L` (`0x4BEA72`),
+  `y < T` (`0x4BEAAD`), `x > R` (`0x4BEAE7`), `y > B` (`0x4BEB23`), then end 1 against the same
+  four (`0x4BEB5E`, `0x4BEBA1`, `0x4BEBDC`, `0x4BEC11`). An end off a side the line runs away from
+  — end 0 left of L with `!xle`, end 1 left of L with `xle`, and so on — or a zero delta on that
+  axis returns 0. Otherwise the other coordinate moves by `(edge − end) · d(other) / d(this)`,
+  two-operand `imul` then `cdq`/`idiv` (**truncating toward zero**), and the end lands on the edge.
+  There is no second pass, so an end can be left just past a corner: 33 of 149 282 accepted
+  random lines in a scratch run.
+- **Its pixels.** A line crossing the viewport edge is walked from the moved end, and that walk
+  differs from the unclipped one along the whole visible part — ten pixels a line on average over
+  50 000 random short edge-crossing lines. The Vulkan lane reproduces both clips in integers
+  (`tagpu_line.h` `tagpu_line_clip`), and `tools/line-band-check.py` checks it against a Python
+  transcription of this entry and of `0x4CC650` above on 90 000 lines, same verdict and ends on
+  all. Measured against the engine's own frame at 1x: on the one changed line of an edge view,
+  the clipped walk's 5 pixels of its own are all the engine's, the unclipped walk's 4 none.
 
 **THE NEGATIVE RESULT, and it is the load-bearing one.** `0x4CC7AB` opens by calling
 **`0x4CC650`**, which reads `edi = [ctx+0x00]` and `esi = [ctx+0x04]` — the surface's WIDTH and

@@ -18389,7 +18389,8 @@ decision 4 and the G21b block; this section is the map of what implements it.
 
 | where | what |
 |---|---|
-| `tagpu_line.h` `tagpu_line_px` | the one endpoint rule: game pixel `floor(Z(p))`, `Z(p) = (p − c)·zoom + c`; `p = k + 0.5` where the engine draws that line from integers, the fractional position otherwise. An end outside ±`TAGPU_LINE_MAXC` (16383) is not drawn and is counted (`far=` in the pass's log line) |
+| `tagpu_line.h` `tagpu_line_px` | the one endpoint rule: game pixel `floor(Z(p))`, `Z(p) = (p − c)·zoom + c`; `p = k + 0.5` where the engine draws that line from integers, the fractional position otherwise. An end outside the caller's bound is not drawn and is counted (`far=` in the pass's log line): `TAGPU_LINE_FAR` (2^29) for a line that is clipped next, `TAGPU_LINE_MAXC` (16383) for the wire |
+| `tagpu_line.h` `tagpu_line_clip` | DrawLine `0x4BE950`'s clip on the integer ends, in its order: `0x4BEA20` against the viewport rect (inclusive; the same screen rect in the zoomed grid), then `0x4CC650` against the surface. Called where the marker (`put_line`) and effects (`emit_line`) records are built; its ends lie on the surface, which is what keeps them inside the fragment test's ±16383. 64-bit products; the loop of the second half is bounded at four passes (never more than one needed) |
 | `tagpu_glsl.h` `TAGPU_GLSL_BAND_FN` | `taBand`: six vertices a record over two triangles, the segment between the end pixels' centres widened 2 game px each side and carried 2 past each end; `t` along the segment for per-end attributes |
 | `tagpu_glsl.h` `TAGPU_GLSL_LINE_FN` | `taGamePx` (the target pixel's game pixel, `((2t+1)·gw)/(2·tw)`) and `taOnLine` (`0x4CC7AB`'s walk in closed form, unsigned products) |
 | `tagpu_mark.c` `LVS`/`LFS`; `tagpu_vk_mark.c` `s_pipeLine`, `s_pipeLineZ` | marker lines as instanced records (`MVST` stride, instance rate); the selection rects are the depth-tested pipeline's; `uGrid` at 32 of the 48-byte fragment block, written at record time |
@@ -18405,6 +18406,23 @@ the segment across it and 0.71 past an end, against a band of 2
 (`tools/line-band-check.py`: the closed form equals a step-by-step walk on every shape out to 24
 px and on long lines to ±16383; the least margin found is 0.88). Float error in placing the band
 corners cannot reach that margin, and the unsigned products cannot overflow inside the bound.
+A clipped line is inside that bound by construction — `tagpu_line_clip` returns ends on the
+surface and refuses a surface over 16384 — so a segment with one end far off at a deep zoom is
+clipped and drawn, not refused whole; only the wire, which is not clipped, is held to ±16383
+itself.
+
+**The clip.** Every line kind the lane redraws from the engine's DrawLine (selection rect
+`0x467A50`, build site `0x438C00`, the target and range circles' chords, the lasers) passes
+DrawLine `0x4BE950`, which runs `0x4BEA20` and then `0x4CC7AB` (whose first act is `0x4CC650`).
+A line crossing the viewport edge is walked from where `0x4BEA20` moved its end, and that walk
+differs from the unclipped one along the whole visible part — on 50 000 random short
+edge-crossing lines, ten pixels a line on average. `tagpu_line_clip` reproduces both halves; the
+rect is `{vpL, vpT, vpL + vw − 1, vpT + vh − 1}` — `main+0x37E27`'s {128, 32, W − 1, H − 33} —
+held to the surface as `vpwide` holds the engine's. `tools/line-band-check.py` compiles the C
+function with the host gcc and checks it against its own transcription of the two routines on
+90 000 lines (same verdict and same ends on all; 44 338 moved, 40 527 rejected). The wire is not
+clipped: the engine draws it with the polygon edge walk `0x4C0820`, which clips scanlines, so its
+visible pixels stay where the unclipped line puts them.
 
 **The device.** No line primitive is drawn, so the device is created without
 `VK_EXT_line_rasterization` and without `wideLines`; `lineok`, `wideok`, `maxLineWidth`,
@@ -18415,11 +18433,14 @@ G21a's depth clip control also gone, the device asks for no optional extension b
 `VK_KHR_get_physical_device_properties2`, which only those two extensions depended on.
 
 **The A/B's line list.** A frame claimed by `tagpu_mark.ab`, `tagpu_fx.ab` or `tagpu_posedraw.ab`
-also writes `tagpu_<pass>_lines.txt` — `# <pass> <gw> <gh>`, then `ax ay bx by col` a line in draw
-order. `tools/line-oracle.py CAPTURE LINES` compares a capture holding only lines with its own
-walk of that list.
+also writes `tagpu_<pass>_lines.txt` — `# <pass> <gw> <gh>`, then `ax ay bx by col` a line. The
+marker and effects lists carry the rect as well (`# <pass> <gw> <gh> <L> <T> <R> <B>`) and the
+ends BEFORE the clip, collected where each record is built (`TAGPU_LINE_AB`); the wire's list is
+its records as drawn. `tools/line-oracle.py CAPTURE LINES` compares a capture holding only lines
+with its own walk of that list, clipping first — with `line-band-check.py`'s transcription, not
+the C — and dropping what lies outside the rect, as the viewport scissor does.
 
-**Gaps.** The engine's clip `0x4CC650` moves an end that lies off its surface onto the edge; the
-lane walks the unclipped line, so a line crossing the 1x viewport edge can differ from the
-engine's by a pixel along the part both draw — not measured. The line-only capture the gate used
-came from a diagnostic build; the shipped build has no switch for it.
+**Gaps.** The line-only capture the gate used came from a diagnostic build; the shipped build has
+no switch for it. The wire's rule is the walk, not the engine's polygon edge walk: they agree on
+steep edges and differ on shallow ones, where the engine lights two pixels a scanline and the
+walk a full run (hardware-portability.md, G21b).

@@ -230,13 +230,43 @@ worktree. The fourth follows once they are on main.
     through the branch's rule, against main's own capture of that frame. The 12 "further" and
     22 "neither" pixels lie where the engine draws a muzzle flash over the laser, in colours the
     laser shares **[INFERRED from the crops]**.
-  - **The wire is not classified.** Its engine pixels were matched by colour, and the nanoframe
-    body the engine draws under it shares the wire's palette entries: the match found 14 855
-    engine pixels against the wire's 6 884 game pixels, and the two runs' engine frames gave
-    different answers. The counts stand; the direction is **[OPEN]**.
-- **Gaps it does not close.** The engine's clip `0x4CC650` moves an end that lies off the
-  surface onto its edge; the lane walks the unclipped line, so a line crossing the viewport edge
-  can differ from the engine's by a pixel along the part both draw (`tagpu_line.h`). Not measured.
+  - **The wire is not classified, and cannot be by endpoints.** Its engine pixels were matched
+    by colour, and the nanoframe body the engine draws under it shares the wire's palette
+    entries: the match found 14 855 engine pixels against the wire's 6 884 game pixels, and the
+    two runs' engine frames gave different answers. Comparing the engine's DrawLine arguments
+    with our ends is not available either: the engine's wire does not pass `0x4CC7AB`.
+    `0x458FA0` calls only `0x4C0820`, the polygon edge walk, which lights the two edge pixels of
+    each scanline of each face (`0x4C0A90`), depth-tested [DISASSEMBLED 2026-09-25]. So the
+    rule of decision 4 is not the engine's rule for the wire: on a steep edge the two agree, on a
+    shallow one the engine lights one pixel a scanline where the walk lights a run. Matching it
+    would need a per-face scanline-edge test in place of the walk — the owner's call. The counts
+    stand; the direction is **[OPEN]**.
+- **The clip** [BUILT 2026-09-25, after the landing review]. Every other line kind passes
+  DrawLine `0x4BE950`, which clips its ends with `0x4BEA20` against the viewport rect and then
+  with `0x4CC650` against the surface, and walks from the moved end. `tagpu_line_clip` does both
+  on the integer ends where the marker and effects records are built — against the same screen
+  rect in the zoomed grid at a wheel zoom — so an edge-crossing line walks from the engine's end,
+  and a clipped line's ends lie on the surface, which makes the ±16383 bound of the fragment test
+  an invariant rather than a refusal (the review found a far end at 8× refused a whole visible
+  segment). The A/B list now carries the ends before the clip and the rect, and the oracle clips
+  with its own transcription. [MEASURED 2026-09-25, reference setup, `ss = 2`, Classic,
+  `marker-mix` with the camera pinned so its lines cross the edges] **0 px in every cell**:
+
+  | view | lines | moved by the clip / rejected | oracle |
+  |---|---|---|---|
+  | `marker-mix` as staged, 1× | 40 | — | 0 of 4 416 px |
+  | eye (1416, 1446): the build site across the top edge, a selection rect across the left, 1× | 38 | 6 / 6 | 0 of 2 412 |
+  | eye (1008, 1230), a selection rect across the left edge, 8× | 40 | 2 / 38 | 0 of 1 316 |
+  | `nanoframe-ladder`, every wire, 1× (not clipped; unchanged) | 1 384 | — | 0 of 27 536 |
+
+  At the 1× edge view one line's pixels change: the clipped walk lights 5 pixels the unclipped
+  one did not, and the engine's own frame has the line's colour at all 5; the unclipped walk's 4
+  pixels of its own match the engine at none. At 8× the one changed line differs by 56 pixels
+  each way (no engine frame to compare at 8×). `line-band-check.py` checks the C clip against
+  its transcription on 90 000 random lines: same verdict and ends on all.
+- **Gaps it does not close.** The wire (above). The clip moves an axis-aligned line's end along
+  its own axis, so the build site's edges light the same pixels either way; the edge views above
+  exercise it on the rotated rects. No laser crossing the edge was captured.
 - Review: medium. No engine state is written and no byte patch added; the wire's records are
   built on the render thread, in `upload_draw`, from the same pose hand-over and bake the body
   upload reads [SOURCE].
