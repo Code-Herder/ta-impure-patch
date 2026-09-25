@@ -10,6 +10,7 @@
 #include "tagpu_limits.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_regstore.h"
 #include "tagpu_weapons.h"
 #include "git.h"
 
@@ -52,6 +53,37 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
             p[i] = val[i];
     VirtualProtect(p, n, old, &old);
     return ok;
+}
+
+/* ---- the -r switch, in a tacli test folder ----------------------------------
+
+   In a test folder TotalA.exe's registry is a file (tagpu_regstore.h), answered through
+   its registry imports. The one registry write of the game that passes through none of
+   them is the `-r` switch's: its handler 0x49F249 loads dsetup.dll and calls
+   DirectXRegisterApplicationA, which writes DirectPlay's application key through
+   dsetup.dll's own imports, then quits (cmdline-options.md). The parser 0x49EEC0
+   dispatches on the letter after the dash through the index bytes 0x49F500 ('B'..'w')
+   into the jump table 0x49F494: 'R' holds case 9 and 'r' case 22, and both entries
+   (0x49F4B8, 0x49F4EC) are 0x49F249; case 26 (0x49F4FC) is the loop tail 0x49F461, where
+   every letter the parser does not know goes [DISASSEMBLED 2026-09-25]. Pointing both
+   entries at the tail makes -r an unknown switch, ignored. A test folder whose exe
+   differs there is not run: the switch would still reach the real registry. */
+static void close_register_switch(void)
+{
+    static const unsigned char handler[4] = { 0x49, 0xF2, 0x49, 0x00 };   /* 0x49F249 */
+    static const unsigned char tail[4]    = { 0x61, 0xF4, 0x49, 0x00 };   /* 0x49F461 */
+
+    /* expect == val: a match test, nothing written */
+    if (patch_bytes(0x0049F4FC, tail, tail, 4) &&
+        patch_bytes(0x0049F4B8, handler, tail, 4) &&
+        patch_bytes(0x0049F4EC, handler, tail, 4)) {
+        plog("registry: test mode -- the -r switch (DirectPlay registration through dsetup.dll) "
+             "is ignored (jump table 0x49F494, cases 9 and 22 -> 0x49F461)");
+        return;
+    }
+    plog("registry: TEST MODE, but the -r switch's jump table at 0x49F494 is not the one this DLL "
+         "knows, so the switch could write the real registry: the game is not run");
+    TerminateProcess(GetCurrentProcess(), 1);
 }
 
 /* ---- defects of the stock engine -------------------------------------------
@@ -2522,6 +2554,9 @@ void tagpu_apply_patches(void)
     int ok = patch_byte(0x004266A7, 0x75, 0xEB);
     plog(ok ? "tagpu: patched out DirectX version warning (0x4266A7 jne->jmp)"
             : "tagpu: DirectX-warning patch skipped (byte mismatch — not stock 3.1?)");
+
+    if (tagpu_regstore_active())
+        close_register_switch();
 
     /* Contextual order cursors under Interface Type 1. Opt out with `tagpu_curs.off`,
        which — like every byte patch here — is read once, now.

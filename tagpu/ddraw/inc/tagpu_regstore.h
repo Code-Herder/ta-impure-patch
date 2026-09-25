@@ -36,6 +36,10 @@
    hooks do not answer is not run at all: the process is terminated at attach, with a log
    line, before the game's first instruction.
 
+   The game's one registry write outside its imports, the `-r` switch's DirectPlay
+   registration through dsetup.dll, is closed in test mode by tagpu_patches.c
+   (close_register_switch), under the same rule: an exe that differs there is not run.
+
    HANDLES. A store key's handle is 0x6D5A0000 + 4 * its index, one per key path for the
    life of the process: interned and never freed, so a caller that never closes (win32.dll)
    costs nothing. A kernel handle is below 0x04000000 (the handle table holds 2^24 entries)
