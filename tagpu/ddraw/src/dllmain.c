@@ -80,9 +80,11 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            (e.g. skip the DirectX startup warning). Exe on disk stays pristine. */
         tagpu_apply_patches();
 
-        /* tagpu: the raised engine limits (tagpu_limits.h) -- all sites or none, before
-           the exe's own startup code. A failure is reported, and the process ended, at
-           the first DirectDraw call, outside the loader lock. */
+        /* tagpu: the raised engine limits and the simulation fixes (tagpu_limits.h) --
+           all sites or none, before the exe's own startup code. After
+           tagpu_apply_patches, which puts the fixes' sites in the table. A failure is
+           reported, and the process ended, at the first DirectDraw call, outside the
+           loader lock. */
         tagpu_limits_install();
 
         /* tagpu: the play defaults (tagpu_opt.h): the passes below that say

@@ -54,6 +54,106 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
     return ok;
 }
 
+/* ===== THE FAIL-CLOSED SITE TABLE ======================================================
+   Every site that changes the simulation goes into ONE table: the raised limits (tagpu_limits.h,
+   the raised build only) and the defect fixes whose absence would let a player silently play
+   by stock rules (the fixes below that say so, in both builds). The table is compared with the
+   stock 3.1 bytes as a whole and written as a whole, or not at all, by tagpu_limits_install,
+   and a mismatch ends the process through tagpu_limits_report. A fix whose absence changes only
+   a crash, a draw, a message or a malformed input's fate is local instead: it checks and writes
+   its own sites, and is skipped with its reason logged (research/notes/tadr-port/sim-fixes.md,
+   "How B fixes are held").
+
+   WHY BEFORE ANYTHING RUNS: DllMain runs before TotalA.exe's entry point (ddraw.dll is its
+   first static import), so no game exists yet and no engine thread executes these bytes
+   while they change. Nothing here is ever put back: the patches last for the process. */
+
+#define LIM_MAXSITE  256
+#define LIM_MAXB     80    /* a whole replaced block, so the check covers what the stub stands for */
+
+typedef struct LIMSITE {
+    unsigned int  va;
+    unsigned char n;
+    unsigned char stock[LIM_MAXB];
+    unsigned char ours[LIM_MAXB];
+    unsigned char have[LIM_MAXB];   /* what the image held when compared            */
+    unsigned char differs;
+    const char*   name;
+} LIMSITE;
+
+static LIMSITE s_lim[LIM_MAXSITE];
+static int     s_nlim;
+static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
+static int     s_limOverflow;        /* the table itself was too small: our bug      */
+static int     s_limNoStub;          /* a code stub could not be allocated           */
+static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
+static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
+
+static void lim_add(unsigned int va, int n, const unsigned char* stock,
+                    const unsigned char* ours, const char* name)
+{
+    LIMSITE* s;
+    if (s_nlim >= LIM_MAXSITE || n <= 0 || n > LIM_MAXB) { s_limOverflow = 1; return; }
+    s = &s_lim[s_nlim++];
+    memset(s, 0, sizeof *s);
+    s->va = va; s->n = (unsigned char)n; s->name = name;
+    memcpy(s->stock, stock, (size_t)n);
+    memcpy(s->ours, ours, (size_t)n);
+}
+
+#ifndef TAGPU_LIMITS_STOCK
+static void lim_dword(unsigned int va, unsigned int stock, unsigned int ours, const char* name)
+{
+    lim_add(va, 4, (const unsigned char*)&stock, (const unsigned char*)&ours, name);
+}
+#endif
+
+/* an instruction whose last four bytes are an address or an operand we choose */
+static void lim_op(unsigned int va, int n, const unsigned char* stock,
+                   const unsigned char* prefix, int np, unsigned int value, const char* name)
+{
+    unsigned char ours[LIM_MAXB];
+    int k;
+    if (np + 4 > n || n > LIM_MAXB) { s_limOverflow = 1; return; }
+    memcpy(ours, prefix, (size_t)np);
+    memcpy(ours + np, &value, 4);
+    for (k = np + 4; k < n; k++) ours[k] = 0x90;
+    lim_add(va, n, stock, ours, name);
+}
+
+/* E8/E9 rel32 at `va` to `target`, NOP-padded to n bytes */
+static void lim_branch(unsigned int va, int n, const unsigned char* stock, unsigned char op,
+                       unsigned int target, const char* name)
+{
+    unsigned int rel = target - (va + 5);
+    lim_op(va, n, stock, &op, 1, rel, name);
+}
+
+/* a site that is compared and never changed: bytes a stub relies on without writing them */
+static void lim_same(unsigned int va, int n, const unsigned char* stock, const char* name)
+{
+    lim_add(va, n, stock, stock, name);
+}
+
+/* a fix of the table whose code stub could not be allocated: nothing of the table is written */
+static void lim_no_stub(void)
+{
+    s_limNoStub = 1;
+}
+
+/* one site's bytes, without trusting the page to be readable */
+static int lim_read(unsigned int va, unsigned char* out, int n)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery((const void*)(size_t)va, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT ||
+        (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        return 0;
+    if ((size_t)va + (size_t)n > (size_t)mbi.BaseAddress + mbi.RegionSize) return 0;
+    memcpy(out, (const void*)(size_t)va, (size_t)n);
+    return 1;
+}
+
+
 /* ---- defects of the stock engine -------------------------------------------
 
    Places where TotalA.exe itself goes wrong: it writes or reads memory it does
@@ -62,16 +162,25 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
    the stock code handles correctly and differs only where the stock code would
    write past an allocation, read through NULL, read off the end of the tile
    map, leave a paid-for feature standing, pay for one feature twice, or drop a
-   saved feature. The engine map (exe-reverse-engineering.md, "Engine defects
-   we patch") has the disassembly, the callers and the measurements;
-   binary-patches.md lists them. All are
-   installed at every attach: ddraw.dll is a static import of the exe, so
-   DllMain runs before the exe's entry point. They are independent: each is
-   skipped, with its reason logged, only when its bytes differ from the retail
-   exe, its stub cannot be allocated, or its page cannot be made writable. */
+   saved feature, or where it silently plays against its own rules: an explosion
+   that hits one victim once per cell, an aircraft on the map's last column that
+   nothing can hit, a unit near the north edge that nobody can see. The engine
+   map (exe-reverse-engineering.md, "Engine defects we patch") has the
+   disassembly, the callers and the measurements; binary-patches.md lists them.
+   All are installed at every attach: ddraw.dll is a static import of the exe,
+   so DllMain runs before the exe's entry point.
+
+   TWO CLASSES [DECIDED 2026-09-25, research/notes/tadr-port/sim-fixes.md]. A fix
+   whose absence would let a player silently compute different shared state, on
+   an input stock does not fault on, is a SIMULATION fix: its sites go into the
+   fail-closed table above, and a mismatch ends the process with the report. A
+   fix whose absence changes only a crash, a draw, a message or a malformed
+   input's fate is LOCAL: it is skipped, with its reason logged, when its bytes
+   differ from the retail exe, its stub cannot be allocated, or its page cannot
+   be made writable. Each fix below names its class. */
 
 /* why a defect patch did not go in; the log line names it */
-enum { FIX_ARMED, FIX_BYTES, FIX_STUB, FIX_PROTECT, FIX_LIMITS };
+enum { FIX_ARMED, FIX_BYTES, FIX_STUB, FIX_PROTECT, FIX_LIMITS, FIX_TABLE };
 
 static const char* fix_state(int r)
 {
@@ -80,6 +189,7 @@ static const char* fix_state(int r)
     case FIX_BYTES: return "SKIPPED (the bytes differ from the retail exe)";
     case FIX_STUB:  return "SKIPPED (VirtualAlloc of the stub failed)";
     case FIX_LIMITS: return "with the raised limits (the limits line)";
+    case FIX_TABLE: return "in the fail-closed table (the limits line)";
     default:        return "SKIPPED (VirtualProtect of the site failed)";
     }
 }
@@ -143,6 +253,7 @@ static const char* fix_state(int r)
    Bounding by the row instead would drop units stock draws correctly — a row run
    on into an empty neighbour is drawn whole. The list feeds nothing but
    DrawGameScreen's two draw loops, so the simulation reads nothing different. */
+/* CLASS: local. The list feeds DrawGameScreen's draw loops alone. */
 static int fix_sort_buffer_end(void)
 {
     static const unsigned char was[31] = {
@@ -229,6 +340,7 @@ static int fix_sort_buffer_end(void)
    the plot. Identity for every non-NULL plot; for a NULL one the stock code
    faults, so nothing the simulation reads changes except where it would have
    crashed. No branch lands inside the eight stolen bytes [rel8/rel32 scan]. */
+/* CLASS: local. Without it the read through NULL faults. */
 static int fix_feature_null_plot(void)
 {
     static const unsigned char was[16] = {
@@ -467,6 +579,7 @@ static int __cdecl terrain_window_on_map(const unsigned int* regs)
     return 0;
 }
 
+/* CLASS: local. A draw, and a fault where stock reads off the tile map. */
 static int fix_terrain_window(void)
 {
     static const unsigned char was[10] = {
@@ -525,18 +638,17 @@ static int fix_terrain_window(void)
    without the sequence. The only other branch to 0x4236EF is stock's own at 0x4235FC
    [rel8/rel32 scan]. The cmp's operand at 0x42364D belongs to the limits table (the pool's
    count), so it is not compared here -- only its opcode and the jge's six bytes. */
+/* CLASS: simulation, fail closed. Without it a player keeps a feature the reclaim paid for. */
 static int fix_feature_die_pool_full(void)
 {
+    static const unsigned char cmp = 0x3D;                                     /* cmp eax,imm32 */
     static const unsigned char jge[6] = { 0x0F, 0x8D, 0xA0, 0x00, 0x00, 0x00 }; /* jge 0x4236F7 */
     unsigned char now[6];
     unsigned char* s;
     unsigned char* p;
 
-    if (*(const unsigned char*)0x0042364C != 0x3D ||                    /* cmp eax,imm32 */
-        memcmp((const void*)0x00423651, jge, sizeof jge) != 0)
-        return FIX_BYTES;
     s = p = tagpu_detour_stub();
-    if (!s) return FIX_STUB;
+    if (!s) { lim_no_stub(); return FIX_TABLE; }
     *p++ = 0x8B; *p++ = 0x74; *p++ = 0x24; *p++ = 0x1C;     /* mov esi,[esp+0x1c]  x  */
     *p++ = 0x8B; *p++ = 0x6C; *p++ = 0x24; *p++ = 0x20;     /* mov ebp,[esp+0x20]  y  */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x004236EF); p += 4;   /* jmp 0x4236EF: the swap */
@@ -545,11 +657,9 @@ static int fix_feature_die_pool_full(void)
         unsigned int rel = (unsigned int)(size_t)s - (0x00423651u + 6u);
         memcpy(now + 2, &rel, 4);
     }
-    if (!tagpu_detour_write(0x00423651, now, sizeof now)) {
-        VirtualFree(s, 0, MEM_RELEASE);
-        return FIX_PROTECT;
-    }
-    return FIX_ARMED;
+    lim_same(0x0042364C, 1, &cmp, "full wreck pool: FeatureDie's pool test");
+    lim_add(0x00423651, sizeof now, jge, now, "full wreck pool: the feature swap");
+    return FIX_TABLE;
 }
 
 /* A FEATURE THAT IS PAID FOR TWICE. [DISASSEMBLED] The reclaim completion 0x4237D0(who, pos),
@@ -578,6 +688,7 @@ static int fix_feature_die_pool_full(void)
    paid only once: through another cell of a multi-cell feature that is burning or dying and
    has no reclaim sequence, which FeatureDie swaps before it reads the mark (0x4235FC) -- the
    reclaim stock already refuses through the anchor. */
+/* CLASS: simulation, fail closed. Without it a group reclaim pays once per builder. */
 static int fix_reclaim_mark_anchor(void)
 {
     static const unsigned char was[6] = {
@@ -601,17 +712,14 @@ static int fix_reclaim_mark_anchor(void)
     unsigned char* s;
     unsigned char* p;
 
-    if (memcmp((const void*)0x00423892, was, sizeof was) != 0) return FIX_BYTES;
     s = p = tagpu_detour_stub();
-    if (!s) return FIX_STUB;
+    if (!s) { lim_no_stub(); return FIX_TABLE; }
     memcpy(p, anchor, sizeof anchor); p += sizeof anchor;
     *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x004238AD); p += 4;  /* je 0x4238AD  */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x00423898); p += 4;               /* jmp 0x423898 */
-    if (!tagpu_detour_land(0x00423892, s, (int)sizeof was)) {
-        VirtualFree(s, 0, MEM_RELEASE);
-        return FIX_PROTECT;
-    }
-    return FIX_ARMED;
+    lim_branch(0x00423892, (int)sizeof was, was, 0xE9, (unsigned int)(size_t)s,
+               "reclaim: the anchor's mark");
+    return FIX_TABLE;
 }
 
 /* A SAVED FEATURE ON THE MAP'S BORDER. [DISASSEMBLED] LoadMap 0x483610 ends by calling
@@ -777,20 +885,22 @@ static void __stdcall features_restore_under_mask(void* tdf)
     HeapFree(GetProcessHeap(), 0, bits);
 }
 
+/* CLASS: simulation, fail closed. Without it a loaded game silently lacks the border's
+   features. Retail has no saved multiplayer game, so the class follows from what the fix changes
+   -- the game's own state -- rather than from a second peer. */
 static int fix_saved_features_border(void)
 {
     static const unsigned char was[5] = { 0xE8, 0xA1, 0x25, 0xFF, 0xFF };  /* call 0x424C00 */
     unsigned char now[5];
 
-    if (memcmp((const void*)0x0043265A, was, sizeof was) != 0) return FIX_BYTES;
     now[0] = 0xE8;
     /* encoded against 0x43265A, where the call runs -- not against this buffer */
     {
         unsigned int rel = (unsigned int)(size_t)features_restore_under_mask - (0x0043265Au + 5u);
         memcpy(now + 1, &rel, 4);
     }
-    if (!tagpu_detour_write(0x0043265A, now, sizeof now)) return FIX_PROTECT;
-    return FIX_ARMED;
+    lim_add(0x0043265A, sizeof now, was, now, "saved features: the restore under the mask");
+    return FIX_TABLE;
 }
 
 /* A SAVED FEATURE'S STATE WRITTEN INTO A WRECK RECORD IT DOES NOT OWN. [DISASSEMBLED] The
@@ -888,6 +998,7 @@ static int __cdecl restore_record_owned(const unsigned char* cell, int kind)
     return idx < count;
 }
 
+/* CLASS: simulation, fail closed, as the restore above. */
 static int fix_restore_record_owner(void)
 {
     static const unsigned char was[12] = {
@@ -901,14 +1012,10 @@ static int fix_restore_record_owner(void)
     unsigned char* s[2] = { NULL, NULL };
     int k;
 
-    for (k = 0; k < 2; k++)
-        if (memcmp((const void*)(size_t)site[k], was, sizeof was) != 0) return FIX_BYTES;
     for (k = 0; k < 2; k++) {
         unsigned char* p = s[k] = tagpu_detour_stub();
-        if (!p) {
-            if (k) VirtualFree(s[0], 0, MEM_RELEASE);
-            return FIX_STUB;
-        }
+        unsigned char now[sizeof was];
+        if (!p) { lim_no_stub(); return FIX_TABLE; }
         *p++ = 0x60;                                            /* pushad           */
         *p++ = 0x6A; *p++ = (unsigned char)kind[k];             /* push kind        */
         *p++ = 0x56;                                            /* push esi: cell   */
@@ -921,20 +1028,18 @@ static int fix_restore_record_owner(void)
         memcpy(p, was, 6); p += 6;                              /* the stolen mov   */
         *p++ = 0xE9; tagpu_detour_rel(p, site[k] + 6); p += 4;  /* the stock write  */
         *p++ = 0xE9; tagpu_detour_rel(p, next[k]); p += 4;      /* next: skip it    */
+        /* the jmp and a NOP over the stolen mov; the six bytes after it are compared too */
+        now[0] = 0xE9;
+        {
+            unsigned int rel = (unsigned int)(size_t)s[k] - (site[k] + 5u);
+            memcpy(now + 1, &rel, 4);
+        }
+        now[5] = 0x90;
+        memcpy(now + 6, was + 6, sizeof was - 6);
+        lim_add(site[k], sizeof was, was, now, k ? "saved features: a 3D record's owner"
+                                                 : "saved features: an Animating record's owner");
     }
-    if (!tagpu_detour_land(site[0], s[0], 6)) {
-        VirtualFree(s[0], 0, MEM_RELEASE);
-        VirtualFree(s[1], 0, MEM_RELEASE);
-        return FIX_PROTECT;
-    }
-    if (!tagpu_detour_land(site[1], s[1], 6)) {
-        /* the first site jumps into s[0]: its own bytes go back before s[0] is freed, and
-           if they cannot, s[0] stays with the jump that uses it */
-        VirtualFree(s[1], 0, MEM_RELEASE);
-        if (tagpu_detour_write(site[0], was, 6)) VirtualFree(s[0], 0, MEM_RELEASE);
-        return FIX_PROTECT;
-    }
-    return FIX_ARMED;
+    return FIX_TABLE;
 }
 
 /* THE COMPOSITE SCRATCH FRAME. [DISASSEMBLED] The composite draw context ctx = *(main+0x1437B)
@@ -1319,6 +1424,7 @@ static unsigned char* scratch_bake_stub(unsigned char* s, unsigned char test_rr,
 
 typedef struct SCRSITE { unsigned int va; unsigned char was[8]; int n; unsigned char* stub; } SCRSITE;
 
+/* CLASS: local. The frame is drawn state; stock writes past it. */
 static int fix_composite_scratch(void)
 {
     SCRSITE site[7] = {
@@ -1463,6 +1569,14 @@ static void fix_branch(FIXSITE* s, unsigned char op, const void* target)
     memcpy(s->now + 1, &rel, 4);
 }
 
+/* a simulation fix's sites, into the fail-closed table rather than written here */
+static int fix_table(const FIXSITE* s, int n, const char* name)
+{
+    int i;
+    for (i = 0; i < n; i++) lim_add(s[i].va, s[i].n, s[i].was, s[i].now, name);
+    return FIX_TABLE;
+}
+
 /* pushad; push esp; call fn; add esp,4; popad */
 static unsigned char* fix_call_regs(unsigned char* p, void (__cdecl *fn)(unsigned int*))
 {
@@ -1563,6 +1677,8 @@ static void __cdecl bl_download_append(unsigned int* regs)
     regs[PR_EDX] = (unsigned int)(size_t)list;
 }
 
+/* CLASS: simulation, fail closed. A builder's list is what the AI's pick 0x40BDB0 and the
+   build menu offer, so a player without it builds by a different list. */
 static int fix_build_list(void)
 {
     FIXSITE site[4] = {
@@ -1573,8 +1689,10 @@ static int fix_build_list(void)
                             0x8B, 0x45, 0x00, 0x40, 0x89, 0x45, 0x00 }, { 0 } },
     };
     unsigned char *a, *b, *c, *p;
-    if (!fix_match(site, 4)) return FIX_BYTES;
-    if (!(a = fix_code(16)) || !(b = fix_code(16)) || !(c = fix_code(16))) return FIX_STUB;
+    if (!(a = fix_code(16)) || !(b = fix_code(16)) || !(c = fix_code(16))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
     p = fix_call_regs(a, bl_shared_append); *p = 0xC3;
     p = fix_call_regs(b, bl_copy); *p = 0xC3;
     p = fix_call_regs(c, bl_download_append); *p = 0xC3;
@@ -1582,7 +1700,7 @@ static int fix_build_list(void)
     fix_branch(&site[1], 0xE8, b);
     site[1].now[5] = 0xEB; site[1].now[6] = 0x15;          /* jmp 0x42DAE3, past the rep movs */
     fix_branch(&site[3], 0xE8, c);
-    return fix_write(site, 4);
+    return fix_table(site, 4, "whole build lists");
 }
 
 /* THE DOWNLOAD MENUS' RECORDS [DISASSEMBLED]. 0x42DCF0 (loader thread) makes one 0xBD-byte
@@ -1660,6 +1778,8 @@ static void __cdecl dl_section(unsigned int* regs)
     *(unsigned int*)(block + regs[PR_ESI]) = k % 5u + 1u;
 }
 
+/* CLASS: simulation, fail closed. The records feed the builders' lists (0x42BE30) and the
+   build menus, as the build lists above. */
 static int fix_download_records(void)
 {
     FIXSITE site[6] = {
@@ -1677,8 +1797,10 @@ static int fix_download_records(void)
         0x89, 0x5C, 0x24, 0x14,                 /* mov [esp+0x14],ebx      */
     };
     unsigned char *a, *b, *p;
-    if (!fix_match(site, 6)) return FIX_BYTES;
-    if (!(a = fix_code(24)) || !(b = fix_code(24))) return FIX_STUB;
+    if (!(a = fix_code(24)) || !(b = fix_code(24))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
     memcpy(site[5].now + 2, &files, 4);
     p = fix_call_regs(a, dl_section);
     memcpy(p, site[1].was, 8); p += 8;                     /* mov eax,[main]; lea ebp,[ebx+1] */
@@ -1687,7 +1809,7 @@ static int fix_download_records(void)
     fix_branch(&site[0], 0xE8, (const void*)dl_alloc);
     fix_branch(&site[1], 0xE8, a);
     fix_branch(&site[4], 0xE8, b);
-    return fix_write(site, 6);
+    return fix_table(site, 6, "download menus past five entries");
 }
 
 /* THE OUT-OF-MEMORY TEXT [DISASSEMBLED]. WinMain installs 0x49E700 as the allocator's new
@@ -1716,6 +1838,7 @@ static void __cdecl oom_text(void)
                   "used all the memory it can address.");
 }
 
+/* CLASS: local. A message. */
 static int fix_oom_message(void)
 {
     FIXSITE site[4] = {
@@ -1872,12 +1995,13 @@ static void __cdecl sync_keys_unique(void)
     }
 }
 
+/* CLASS: simulation, fail closed. A player without it keeps colliding keys, which the
+   host's walk 0x46D9E3 answers with the first type that has them. */
 static int fix_sync_keys(void)
 {
     FIXSITE site[1] = { { 0x0042BD29, 5, { 0xE8, 0xA2, 0xEB, 0xFF, 0xFF }, { 0 } } };  /* call 0x42A8D0 */
     unsigned char *a, *p;
-    if (!fix_match(site, 1)) return FIX_BYTES;
-    if (!(a = fix_code(16))) return FIX_STUB;
+    if (!(a = fix_code(16))) { lim_no_stub(); return FIX_TABLE; }
     p = a;
     *p++ = 0xE8; tagpu_detour_rel(p, 0x0042A8D0); p += 4;
     *p++ = 0x85; *p++ = 0xC0;                                  /* test eax,eax        */
@@ -1885,7 +2009,7 @@ static int fix_sync_keys(void)
     *p++ = 0xE9; tagpu_detour_rel(p, (unsigned int)(size_t)sync_keys_unique); p += 4;
     *p = 0xC3;
     fix_branch(&site[0], 0xE8, a);
-    return fix_write(site, 1);
+    return fix_table(site, 1, "unique unit sync keys");
 }
 
 /* ===== WEAPON IDS (TAGPU_LIM_WEAPONS) =======================================================
@@ -2466,16 +2590,519 @@ static int wpn_build(WPNSITES* t)
     return !t->over;
 }
 
+/* CLASS: simulation, fail closed. The 0x0F hit flag is a wire format: a player without it
+   reads a flagged hit as stock reads it. In the raised build its sites are rows of the limits
+   table; in the stock build they join the table here. */
 static int fix_weapon_ids(void)
 {
 #ifdef TAGPU_LIMITS_STOCK
     static WPNSITES w;
-    if (!wpn_build(&w)) return FIX_STUB;
-    if (!fix_match(w.s, w.n)) return FIX_BYTES;
-    return fix_write(w.s, w.n);
+    int k;
+    if (!wpn_build(&w)) {
+        if (w.over) s_limOverflow = 1;
+        else lim_no_stub();
+        return FIX_TABLE;
+    }
+    for (k = 0; k < w.n; k++) lim_add(w.s[k].va, w.s[k].n, w.s[k].was, w.s[k].now, w.name[k]);
+    return FIX_TABLE;
 #else
     return FIX_LIMITS;
 #endif
+}
+
+/* ===== DAMAGE: THE VICTIM CAPS, FLAK'S DIVIDES, THE MAP'S EDGES ============================
+   Landing B1 of research/notes/tadr-port/sim-fixes.md; the disassembly is in
+   sim-fixes-evidence.md, Part 2 §1, §4 and §11, and exe-reverse-engineering.md, "Engine
+   defects we patch". TADR's AreaDamageOverflow (the unit cap) and OffMapAircraft (the shear)
+   are the prior art; the code is ours. */
+
+/* THE VICTIM CAPS [DISASSEMBLED]. Area damage 0x49A120(proj, at), __stdcall, walks the cells
+   of the blast's rect and keeps two lists on its stack, so that a victim standing on several
+   cells is damaged once: 20 unit pointers ([esp+0xA0], count [esp+0x98]) and 64 anchor cells
+   ([esp+0xF0], count [esp+0x9C]). Each list records only while it has room (0x49A28F `cmp
+   ecx,0x14`, 0x49A5FA `cmp esi,0x40`), and the damage runs whether or not the victim was
+   recorded: the unit block falls through to its damage at 0x49A2AA, the feature block to its
+   call of 0x4244B0 at 0x49A615. So a unit found after the twentieth, or an anchor after the
+   sixty-fourth, is damaged (or, on a peer that is not the host, reported with 0x0F) once for
+   every cell of it inside the rect -- up to nine times for a 3x3 structure under a
+   commander's blast.
+
+   THE FIX replaces the two list blocks with calls that answer "seen: skip" or "record:
+   continue" from a set with no capacity: a bitset over the unit slots (a cell's slot is a
+   u16) and a hash set of anchor-cell ordinals. The damage math, the order of first hits and
+   every value are stock's; only the repeats go. The sets live in a frame per call, on a stack
+   whose depth the wrapper on both calls of 0x49A120 (0x49A0A9 in 0x499EB0, 0x49A109 in the
+   fire spread's 0x49A0C0; no other reference to 0x49A120 exists [call and literal scan of the
+   image]) pushes and pops. An interceptor's tail (0x49A66F) detonates projectiles inside the
+   blast through 0x499EB0 and so nests a call inside the walk's caller; its frame is its own.
+
+   THE INVARIANT: one explosion damages a unit at most once and reports a feature at most
+   once, and every index is bounded before it is used. It rests on
+     - a bound: a unit is recorded by its slot, (unit - begin) / 0x118 with the remainder 0 and
+       the slot below the array's count (u16 main+0x14351, 10 * units a player + 1, set with
+       the array at 0x4854EF); an anchor by its ordinal, (cell - grid) / 13 with the remainder 0
+       and the ordinal below W * H (main+0x14233, +0x14237). A pointer that fails either is not
+       damaged: stock would read through it;
+     - an ordering: a frame is pushed before its call reads it and popped after the call
+       returns, and it is emptied as it is popped, so each call starts with empty sets whatever
+       ran before. Nesting follows the machine stack, so the answers go to the innermost call;
+     - GAME THREAD: both callers run on the game thread (the projectile tick, the network pump
+       that 0x4968CB runs on it, the fire spread), and nothing else touches the frames.
+   The sets are grown through the engine's allocator 0x4D83B0, whose failure is the engine's own
+   out-of-memory exit, so no answer is ever given from a set that could not hold it.
+   CLASS: simulation, fail closed. B2 serves stacked aircraft through the same unit set. */
+#define DMG_UNIT_SLOTS 65536u          /* a cell's unit slot is a u16                      */
+#define DMG_UNIT_CAP   20u             /* stock's list, 0x49A28F                            */
+#define DMG_FEAT_CAP   64u             /* stock's list, 0x49A5FA                            */
+#define DMG_KEY_PAST   0x80000000u     /* a feature key recorded past stock's sixty-fourth  */
+#define DMG_CELL       13u
+#define DMG_UNIT_STRIDE 0x118u
+
+typedef struct DMGSEEN {
+    unsigned int    unit[DMG_UNIT_SLOTS / 32];  /* slots recorded by this call            */
+    unsigned int    past[DMG_UNIT_SLOTS / 32];  /* ...after stock's twentieth             */
+    unsigned short* ulist;                      /* the slots recorded, to empty the sets  */
+    unsigned int    un, ucap;
+    unsigned int*   fkey;                       /* open addressing, ordinal + 1 | PAST    */
+    unsigned int*   fslot;                      /* the used slots of fkey, in order       */
+    unsigned int    fn, fcap;                   /* fcap a power of two, fn <= fcap / 2    */
+} DMGSEEN;
+
+static DMGSEEN**    s_dmgFrame;                 /* one per depth, made on first use, kept */
+static unsigned int s_dmgCap, s_dmgDepth;
+/* peekable counters (their addresses are in the enginefix line), GAME THREAD */
+static volatile unsigned int s_dmgUnitRepeats;  /* a victim past stock's 20 found again   */
+static volatile unsigned int s_dmgFeatRepeats;  /* an anchor past stock's 64 found again  */
+static volatile unsigned int s_dmgRefused;      /* a pointer outside its array            */
+static volatile unsigned int s_dmgUnframed;     /* a list block run outside the wrapper   */
+static const char s_dmgTag[] = "tagpu damage seen-set";
+
+static void* dmg_alloc(unsigned int bytes)
+{
+    void* p = ENG_ALLOC(s_dmgTag, bytes);     /* NULL is the engine's out-of-memory exit */
+    memset(p, 0, bytes);
+    return p;
+}
+
+static DMGSEEN* dmg_push(void)
+{
+    DMGSEEN* f;
+    if (s_dmgDepth == s_dmgCap) {
+        unsigned int cap = s_dmgCap ? s_dmgCap * 2u : 8u;
+        DMGSEEN** a = (DMGSEEN**)dmg_alloc(cap * (unsigned int)sizeof *a);
+        if (s_dmgFrame) {
+            memcpy(a, s_dmgFrame, s_dmgCap * sizeof *a);
+            ENG_FREE(s_dmgFrame);
+        }
+        s_dmgFrame = a;
+        s_dmgCap = cap;
+    }
+    f = s_dmgFrame[s_dmgDepth];
+    if (!f) f = s_dmgFrame[s_dmgDepth] = (DMGSEEN*)dmg_alloc((unsigned int)sizeof *f);
+    s_dmgDepth++;
+    return f;
+}
+
+static void dmg_pop(DMGSEEN* f)
+{
+    unsigned int i;
+    for (i = 0; i < f->un; i++) {
+        unsigned int s = f->ulist[i];
+        f->unit[s >> 5] &= ~(1u << (s & 31u));
+        f->past[s >> 5] &= ~(1u << (s & 31u));
+    }
+    for (i = 0; i < f->fn; i++) f->fkey[f->fslot[i]] = 0;
+    f->un = f->fn = 0;
+    s_dmgDepth--;
+}
+
+static DMGSEEN* dmg_top(void)
+{
+    return s_dmgDepth ? s_dmgFrame[s_dmgDepth - 1u] : NULL;
+}
+
+/* In place of 0x49A262..0x49A2A9, esi the unit: 1 = seen, skip it (0x49A415); 0 = recorded,
+   damage it (0x49A2AA). */
+static int __stdcall dmg_unit_seen(const char* unit)
+{
+    DMGSEEN* f = dmg_top();
+    const char* ta = *(const char* const*)0x00511DE8;
+    const char* begin;
+    unsigned int count, slot, bit, w;
+    size_t off;
+
+    if (!f) { s_dmgUnframed++; return 0; }
+    begin = ta ? *(const char* const*)(ta + 0x14357) : NULL;
+    count = ta ? *(const unsigned short*)(ta + 0x14351) : 0;
+    if (!begin || unit < begin) { s_dmgRefused++; return 1; }
+    off = (size_t)(unit - begin);
+    if (off % DMG_UNIT_STRIDE || off / DMG_UNIT_STRIDE >= count) { s_dmgRefused++; return 1; }
+    slot = (unsigned int)(off / DMG_UNIT_STRIDE);
+    w = slot >> 5;
+    bit = 1u << (slot & 31u);
+    if (f->unit[w] & bit) {
+        if (f->past[w] & bit) s_dmgUnitRepeats++;
+        return 1;
+    }
+    if (f->un == f->ucap) {                    /* at most `count` slots are ever recorded */
+        unsigned int cap = f->ucap ? f->ucap * 2u : 64u;
+        unsigned short* l = (unsigned short*)dmg_alloc(cap * (unsigned int)sizeof *l);
+        if (f->ulist) {
+            memcpy(l, f->ulist, f->un * sizeof *l);
+            ENG_FREE(f->ulist);
+        }
+        f->ulist = l;
+        f->ucap = cap;
+    }
+    f->ulist[f->un] = (unsigned short)slot;
+    f->unit[w] |= bit;
+    if (f->un >= DMG_UNIT_CAP) f->past[w] |= bit;
+    f->un++;
+    return 0;
+}
+
+static unsigned int dmg_hash(unsigned int key, unsigned int mask)
+{
+    unsigned int h = key * 0x9E3779B1u;
+    return (h ^ (h >> 16)) & mask;
+}
+
+/* the set's table doubled, its keys moved; the table is never more than half full */
+static void dmg_feat_grow(DMGSEEN* f)
+{
+    unsigned int cap = f->fcap ? f->fcap * 2u : 64u, i;
+    unsigned int* key = (unsigned int*)dmg_alloc(cap * 4u);
+    unsigned int* slot = (unsigned int*)dmg_alloc(cap / 2u * 4u);
+    for (i = 0; i < f->fn; i++) {
+        unsigned int k = f->fkey[f->fslot[i]], j = dmg_hash(k & ~DMG_KEY_PAST, cap - 1u);
+        while (key[j]) j = (j + 1u) & (cap - 1u);
+        key[j] = k;
+        slot[i] = j;
+    }
+    if (f->fkey) { ENG_FREE(f->fkey); ENG_FREE(f->fslot); }
+    f->fkey = key;
+    f->fslot = slot;
+    f->fcap = cap;
+}
+
+/* In place of 0x49A5CE..0x49A614, the anchor cell at [esp+0x10]: 1 = seen, skip it (0x49A62B);
+   0 = recorded, hit it (0x49A615). */
+static int __stdcall dmg_feature_seen(const unsigned char* cell)
+{
+    DMGSEEN* f = dmg_top();
+    const char* ta = *(const char* const*)0x00511DE8;
+    const unsigned char* grid;
+    unsigned long long cells;
+    unsigned int key, j;
+    size_t off;
+
+    if (!f) { s_dmgUnframed++; return 0; }
+    grid = ta ? *(const unsigned char* const*)(ta + 0x14287) : NULL;
+    cells = ta ? (unsigned long long)*(const unsigned int*)(ta + 0x14233) *
+                 *(const unsigned int*)(ta + 0x14237) : 0;
+    if (!grid || cell < grid) { s_dmgRefused++; return 1; }
+    off = (size_t)(cell - grid);
+    if (off % DMG_CELL || off / DMG_CELL >= cells || off / DMG_CELL >= DMG_KEY_PAST - 1u) {
+        s_dmgRefused++;
+        return 1;
+    }
+    key = (unsigned int)(off / DMG_CELL) + 1u;
+    if (2u * (f->fn + 1u) > f->fcap) dmg_feat_grow(f);
+    for (j = dmg_hash(key, f->fcap - 1u); f->fkey[j]; j = (j + 1u) & (f->fcap - 1u))
+        if ((f->fkey[j] & ~DMG_KEY_PAST) == key) {
+            if (f->fkey[j] & DMG_KEY_PAST) s_dmgFeatRepeats++;
+            return 1;
+        }
+    f->fkey[j] = key | (f->fn >= DMG_FEAT_CAP ? DMG_KEY_PAST : 0u);
+    f->fslot[f->fn++] = j;
+    return 0;
+}
+
+/* In place of both `call 0x49A120`. The engine's eax is handed back: 0x499EB0 and 0x49A0C0
+   return it as their own. */
+typedef unsigned int (__stdcall *dmg_area_fn)(void* proj, void* at);
+static unsigned int __stdcall dmg_area(void* proj, void* at)
+{
+    DMGSEEN* f = dmg_push();
+    unsigned int r = ((dmg_area_fn)0x0049A120)(proj, at);
+    dmg_pop(f);
+    return r;
+}
+
+static int fix_victim_caps(void)
+{
+    static const unsigned char callA[5] = { 0xE8, 0x72, 0x00, 0x00, 0x00 };   /* 0x49A0A9 */
+    static const unsigned char callB[5] = { 0xE8, 0x12, 0x00, 0x00, 0x00 };   /* 0x49A109 */
+    static const unsigned char units[72] = {
+        0x8B, 0x8C, 0x24, 0x98, 0x00, 0x00, 0x00, 0x33, 0xC0, 0x85, 0xC9, 0x7E,
+        0x20, 0x8D, 0x8C, 0x24, 0xA0, 0x00, 0x00, 0x00, 0x39, 0x31, 0x0F, 0x84,
+        0x97, 0x01, 0x00, 0x00, 0x8B, 0x94, 0x24, 0x98, 0x00, 0x00, 0x00, 0x40,
+        0x83, 0xC1, 0x04, 0x3B, 0xC2, 0x7C, 0xE9, 0x8B, 0xCA, 0x83, 0xF9, 0x14,
+        0x7D, 0x16, 0x89, 0xB4, 0x8C, 0xA0, 0x00, 0x00, 0x00, 0x8B, 0x84, 0x24,
+        0x98, 0x00, 0x00, 0x00, 0x40, 0x89, 0x84, 0x24, 0x98, 0x00, 0x00, 0x00,
+    };
+    static const unsigned char feats[71] = {
+        0x8B, 0xB4, 0x24, 0x9C, 0x00, 0x00, 0x00, 0x33, 0xC9, 0x85, 0xF6, 0x7E,
+        0x1B, 0x8D, 0x94, 0x24, 0xF0, 0x00, 0x00, 0x00, 0x8B, 0x44, 0x24, 0x10,
+        0x8B, 0x3A, 0x3B, 0xF8, 0x74, 0x3F, 0x41, 0x83, 0xC2, 0x04, 0x3B, 0xCE,
+        0x7C, 0xEE, 0xEB, 0x04, 0x8B, 0x44, 0x24, 0x10, 0x83, 0xFE, 0x40, 0x7D,
+        0x16, 0x89, 0x84, 0xB4, 0xF0, 0x00, 0x00, 0x00, 0x8B, 0x8C, 0x24, 0x9C,
+        0x00, 0x00, 0x00, 0x41, 0x89, 0x8C, 0x24, 0x9C, 0x00, 0x00, 0x00,
+    };
+    unsigned char u[sizeof units], fe[sizeof feats], p[5];
+    unsigned int rel;
+
+    /* 0x49A262: push esi; call dmg_unit_seen; test eax,eax; jnz 0x49A415; jmp 0x49A2AA. The
+       registers the loop keeps -- ebx the projectile, esi the unit, edi the cell -- are the
+       callee's to preserve; eax, ecx and edx are dead at both exits, as after stock's block. */
+    memset(u, 0x90, sizeof u);
+    u[0] = 0x56;
+    u[1] = 0xE8; rel = (unsigned int)(size_t)dmg_unit_seen - (0x0049A263u + 5u); memcpy(u + 2, &rel, 4);
+    u[6] = 0x85; u[7] = 0xC0;
+    u[8] = 0x0F; u[9] = 0x85; rel = 0x0049A415u - (0x0049A26Au + 6u); memcpy(u + 10, &rel, 4);
+    u[14] = 0xEB; u[15] = (unsigned char)(0x0049A2AAu - (0x0049A270u + 2u));
+
+    /* 0x49A5CE: mov eax,[esp+0x10]; push eax; call dmg_feature_seen; test eax,eax;
+       jnz 0x49A62B; mov eax,[esp+0x10]; jmp 0x49A615 -- 0x49A615 passes eax, the anchor, to
+       0x4244B0. esi and edi, which stock's block used, are reloaded before their next read. */
+    memset(fe, 0x90, sizeof fe);
+    fe[0] = 0x8B; fe[1] = 0x44; fe[2] = 0x24; fe[3] = 0x10;
+    fe[4] = 0x50;
+    fe[5] = 0xE8; rel = (unsigned int)(size_t)dmg_feature_seen - (0x0049A5D3u + 5u); memcpy(fe + 6, &rel, 4);
+    fe[10] = 0x85; fe[11] = 0xC0;
+    fe[12] = 0x75; fe[13] = (unsigned char)(0x0049A62Bu - (0x0049A5DAu + 2u));
+    fe[14] = 0x8B; fe[15] = 0x44; fe[16] = 0x24; fe[17] = 0x10;
+    fe[18] = 0xEB; fe[19] = (unsigned char)(0x0049A615u - (0x0049A5E0u + 2u));
+
+    p[0] = 0xE8;
+    rel = (unsigned int)(size_t)dmg_area - (0x0049A0A9u + 5u); memcpy(p + 1, &rel, 4);
+    lim_add(0x0049A0A9, 5, callA, p, "area damage from a projectile, the call");
+    rel = (unsigned int)(size_t)dmg_area - (0x0049A109u + 5u); memcpy(p + 1, &rel, 4);
+    lim_add(0x0049A109, 5, callB, p, "area damage from the fire spread, the call");
+    lim_add(0x0049A262, sizeof units, units, u, "area damage, the unit victims' list");
+    lim_add(0x0049A5CE, sizeof feats, feats, fe, "area damage, the feature victims' list");
+    return FIX_TABLE;
+}
+
+/* FLAK'S DIVIDES [DISASSEMBLED]. The ballistic fire 0x49CDE0 (callers 0x49D0F8 in the fire
+   dispatch, 0x49D44E in the 0x0D receiver, 0x49D76E; all three only for a weapon with
+   w+0x111 bit 1, ballistic) divides twice.
+     - 0x49CE6A `div ecx`, ecx = w+0x68, weaponvelocity x 65536/30 (the loader, 0x42E4C6..
+       0x42E4DC), for every shot: a ballistic weapon with velocity 0 faults here.
+     - 0x49CF19 `idiv ebp`, for a burnblow weapon (bit 23, 0x49CECC): flight time = the
+       horizontal distance / ebp, ebp = 0x4B7123(pitch, v) = v * cos(pitch) from the 512-entry
+       table 0x509F00, which is 0 at entries 0 and 256: a pitch within 0.35 degrees of
+       straight up or down. Stock's flak guns (ARMFLAK_GUN, CORFLAK_GUN, ARMYORK_GUN,
+       CORSENT_GUN) are ballistic and burnblow, and an aircraft overhead asks for that pitch.
+       The 0x0D receiver calls the same function, so every peer that gets the shot divides.
+   THE FIX. 0x49CF18 (`cdq; idiv ebp; mov edx,[0x511DE8]`, nine bytes; no branch lands inside
+   [rel8/rel32 scan of .text]) jumps to a stub that divides as stock for ebp != 0, and for
+   ebp == 0 takes the engine's own non-burnblow rule instead, w+0xE6 = weapontimer (0x49CF29,
+   with eax the weapon, as 0x49CEC6 left it). And the loader's closing call 0x49E010 (the aim
+   routine's choice by flags, w+0x60; its only callers are the loader's two exits 0x42F314 and
+   0x42F32E) is preceded by a floor: a ballistic weapon whose w+0x68 is 0 gets 1, logged.
+   THE INVARIANT: no divide in 0x49CDE0 sees a zero divisor -- the second's is tested where it
+   is used, the first's is at least 1 from the load on, and the loader is its only writer.
+   Identity for every shot stock does not fault on, and for every stock weapon (none has
+   weaponvelocity 0).
+   CLASS: local. A peer without it faults on the shot, which is not a silent divergence. */
+static volatile unsigned int s_flakFallbacks;   /* peekable, GAME THREAD */
+
+static void __cdecl flak_fallback(const unsigned char* slot)
+{
+    const char* w = *(const char* const*)(slot + 0x0C);
+    unsigned int n = ++s_flakFallbacks;
+    if (n <= 8 || !(n & (n - 1u)))
+        tagpu_logf("enginefix: flak: a burnblow shot at pitch 0x%04X has no horizontal speed; "
+                   "%.32s flies its weapontimer (%u so far)", *(const unsigned short*)(slot + 0x18),
+                   w ? w : "?", n);
+}
+
+static void __cdecl wpn_velocity_floor(unsigned int* regs)
+{
+    unsigned char* w = (unsigned char*)(size_t)regs[PR_EBP];
+    unsigned int flags, v;
+    memcpy(&flags, w + WPN_FLAGS, 4);
+    memcpy(&v, w + 0x68, 4);
+    if ((flags & 2u) && v == 0) {
+        v = 1;
+        memcpy(w + 0x68, &v, 4);
+        tagpu_logf("enginefix: flak: weapon %.32s is ballistic with weaponvelocity 0; its "
+                   "velocity is 1, so 0x49CE6A does not divide by zero", (const char*)w);
+    }
+}
+
+static int fix_flak_divides(void)
+{
+    FIXSITE site[3] = {
+        { 0x0049CF18, 9, { 0x99, 0xF7, 0xFD, 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, { 0 } },
+        { 0x0042F314, 5, { 0xE8, 0xF7, 0xEC, 0x06, 0x00 }, { 0 } },     /* call 0x49E010 */
+        { 0x0042F32E, 5, { 0xE8, 0xDD, 0xEC, 0x06, 0x00 }, { 0 } },
+    };
+    unsigned char *a, *b, *p;
+    int k;
+    if (!fix_match(site, 3)) return FIX_BYTES;
+    if (!(a = fix_code(48)) || !(b = fix_code(32))) return FIX_STUB;
+    p = a;
+    *p++ = 0x85; *p++ = 0xED;                                   /* test ebp,ebp        */
+    *p++ = 0x74; *p++ = 0x0E;                                   /* jz zero             */
+    memcpy(p, site[0].was, 9); p += 9;                          /* cdq; idiv; mov edx  */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049CF21); p += 4;
+    *p++ = 0x60;                                                /* zero: pushad        */
+    *p++ = 0x56;                                                /* push esi, the slot  */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)flak_fallback); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                      /* add esp,4           */
+    *p++ = 0x61;                                                /* popad               */
+    *p++ = 0x8B; *p++ = 0x46; *p++ = 0x0C;                      /* mov eax,[esi+0xC]   */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049CF29);
+    p = fix_call_regs(b, wpn_velocity_floor);
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049E010);
+    fix_branch(&site[0], 0xE9, a);
+    for (k = 1; k < 3; k++) fix_branch(&site[k], 0xE8, b);
+    return fix_write(site, 3);
+}
+
+/* THE LAST ROW AND COLUMN [DISASSEMBLED]. The grid stamp 0x47CC30 (the motion relink's call
+   0x43DA41 after its clear 0x47D0E0, and 0x48610F, 0x48630C, 0x48AA9A, 0x48B6B9) parks a unit
+   in the off-map bucket main+0x142B7 when its footprint leaves the map: X < 0, Z < 0, or
+   X + fw >= W (0x47CC85/0x47CC8B), Z + fh >= H (0x47CCA1/0x47CCA3). The last two are one
+   past: a footprint that ends on the last column or row, every cell of it on the map, is
+   parked, and a parked unit holds no cell, so area damage and the direct-hit test 0x49B090
+   never find it. Ground units never stand there (LoadMap masks the border with 0xFFFD); an
+   aircraft over the bottom or right edge does.
+   THE FIX: `jge` -> `jg` at 0x47CC8B and 0x47CCA3, and a bound on the unit's sort bucket.
+   What the rest of the stamp and its readers need, settled from the disassembly:
+     - the stamp's cell walk starts at (Z * W + X) * 13 and covers fh rows of fw cells: with
+       X + fw <= W and Z + fh <= H every cell is inside the grid; the clear 0x47D0E0 decides by
+       the bucket (0x47D0FD) and walks the same cells, and the re-claim 0x47C790 has no bound
+       of its own but reaches only a stamped unit (bit 27, which only the stamp sets) and walks
+       the same footprint. Every writer of +0x76 clears first (0x43DA0F, 0x48AA6B, 0x48B685);
+     - the sort bucket (0x47CCA9..0x47CCDA) is taken from the unit's position, not its
+       footprint: column x >> 23, row z >> 23 (128-px buckets), in a grid of
+       ceil(16W / 128) x ceil(16H / 128) (0x482C84..0x482CA6), with no bound. Every writer of
+       the footprint computes X = (x - 8 fw + 8) >> 4 in pixels (0x43D877..0x43D895,
+       0x485BA3..0x485BC7, 0x48AA24..0x48AA32), so X + fw <= W gives x < 16W - 8 fw + 8, which
+       is inside the grid for fw >= 1 -- every stock footprint -- and one bucket past its end
+       for fw = 0. Stock itself indexes the bucket before the grid for fw = 0 near the left
+       edge. So the bucket is bounded too: column and row clamped into the grid, exact
+       whenever stock's index is inside it.
+   THE INVARIANT: a unit is parked only when a cell of its footprint is off the map, and every
+   bucket index the stamp forms is inside the grid LoadMap sized.
+   CLASS: simulation, fail closed (who can be hit). */
+static int fix_last_cell(void)
+{
+    static const unsigned char jgeX[6] = { 0x0F, 0x8D, 0xE8, 0x03, 0x00, 0x00 };
+    static const unsigned char jgeZ[6] = { 0x0F, 0x8D, 0xD0, 0x03, 0x00, 0x00 };
+    static const unsigned char bucket[50] = {
+        0x8D, 0x4E, 0x6A, 0x8B, 0xD1, 0x8B, 0x0A, 0xC1, 0xF9, 0x17, 0x8B, 0x42,
+        0x04, 0x89, 0x44, 0x24, 0x20, 0x8B, 0x42, 0x08, 0x8B, 0x95, 0x9F, 0x42,
+        0x01, 0x00, 0xC1, 0xF8, 0x17, 0x0F, 0xAF, 0x85, 0xA3, 0x42, 0x01, 0x00,
+        0x03, 0xC1, 0x8D, 0x0C, 0x80, 0x8B, 0x86, 0x82, 0x00, 0x00, 0x00, 0x8D,
+        0x14, 0x4A,
+    };
+    /* esi the unit, ebp main; out: edx the bucket, eax [esi+0x82], [esp+0x20] = y, as stock */
+    static const unsigned char stub[] = {
+        0x8B, 0x4E, 0x6A,                   /* mov ecx,[esi+0x6a]             */
+        0xC1, 0xF9, 0x17,                   /* sar ecx,23: the column         */
+        0x8B, 0x85, 0xA3, 0x42, 0x01, 0x00, /* mov eax,[ebp+0x142a3]: columns */
+        0x48,                               /* dec eax                        */
+        0x3B, 0xC8, 0x7E, 0x02,             /* cmp ecx,eax; jle +2            */
+        0x8B, 0xC8,                         /* mov ecx,eax                    */
+        0x85, 0xC9, 0x7D, 0x02,             /* test ecx,ecx; jge +2           */
+        0x33, 0xC9,                         /* xor ecx,ecx                    */
+        0x8B, 0x46, 0x6E,                   /* mov eax,[esi+0x6e]             */
+        0x89, 0x44, 0x24, 0x20,             /* mov [esp+0x20],eax             */
+        0x8B, 0x46, 0x72,                   /* mov eax,[esi+0x72]             */
+        0xC1, 0xF8, 0x17,                   /* sar eax,23: the row            */
+        0x8B, 0x95, 0xA7, 0x42, 0x01, 0x00, /* mov edx,[ebp+0x142a7]: rows    */
+        0x4A,                               /* dec edx                        */
+        0x3B, 0xC2, 0x7E, 0x02,             /* cmp eax,edx; jle +2            */
+        0x8B, 0xC2,                         /* mov eax,edx                    */
+        0x85, 0xC0, 0x7D, 0x02,             /* test eax,eax; jge +2           */
+        0x33, 0xC0,                         /* xor eax,eax                    */
+        0x0F, 0xAF, 0x85, 0xA3, 0x42, 0x01, 0x00, /* imul eax,[ebp+0x142a3]   */
+        0x03, 0xC1,                         /* add eax,ecx                    */
+        0x8D, 0x0C, 0x80,                   /* lea ecx,[eax+eax*4]            */
+        0x8B, 0x95, 0x9F, 0x42, 0x01, 0x00, /* mov edx,[ebp+0x1429f]: buckets */
+        0x8D, 0x14, 0x4A,                   /* lea edx,[edx+ecx*2]            */
+        0x8B, 0x86, 0x82, 0x00, 0x00, 0x00, /* mov eax,[esi+0x82]             */
+    };
+    unsigned char gX[6], gZ[6];
+    unsigned char* a;
+    if (!(a = fix_code(sizeof stub + 5))) { lim_no_stub(); return FIX_TABLE; }
+    memcpy(a, stub, sizeof stub);
+    a[sizeof stub] = 0xE9; tagpu_detour_rel(a + sizeof stub + 1, 0x0047CCDB);
+    memcpy(gX, jgeX, 6); gX[1] = 0x8F;                          /* jg */
+    memcpy(gZ, jgeZ, 6); gZ[1] = 0x8F;
+    lim_add(0x0047CC8B, 6, jgeX, gX, "the grid stamp: the last column is on the map");
+    lim_add(0x0047CCA3, 6, jgeZ, gZ, "the grid stamp: the last row is on the map");
+    lim_branch(0x0047CCA9, sizeof bucket, bucket, 0xE9, (unsigned int)(size_t)a,
+               "the grid stamp: the sort bucket, bounded");
+    return FIX_TABLE;
+}
+
+/* THE LINE-OF-SIGHT SHEAR [DISASSEMBLED]. UnitInPlayerLOS 0x465AC0(unit, player) (callers
+   0x40AB11 in the periodic acquisition 0x40AA40, 0x439761, 0x46AF3D, 0x46B5B4, 0x480EE5,
+   0x48BC56, 0x494396, and our order markers through it) tests two points of the unit's box
+   against the player's LOS grid (player +0x7C, width +0x80, height +0x84, in 32-px cells).
+   With LosType bit 1 (main+0x14281), 0x465B6A..0x465B93 and again 0x465C04..0x465C2D index it
+   at col = x >> 5, row = (z - (y >> 1)) >> 5, the grid being projected by altitude, under an
+   unsigned bound: outside it the unit is not visible. A unit whose height is more than twice
+   its distance from the north edge -- an aircraft at cruise altitude a few tiles inside it,
+   a unit on a hill beside it -- samples a row above the grid and is invisible to every other
+   player, so nothing acquires it. Underwater, y < 0, the same happens at the south edge.
+   THE FIX: when the sheared row is outside the grid and the unit's own row, z >> 5, is inside
+   it, the own row is used; otherwise the stock answer stands, so a unit beyond the map's edge
+   stays unseen (the margin TADR adds there is a gameplay change, not a defect).
+   THE INVARIANT: the grid is read only at a column and a row inside it -- the same unsigned
+   bounds as stock, now applied to the row actually used. Exact whenever stock's row is inside.
+   CLASS: simulation, fail closed (what is acquired). */
+static int fix_los_shear(void)
+{
+    static const unsigned char blockA[43] = {
+        0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
+        0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
+        0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x24, 0x3B,
+        0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1C,
+    };
+    static const unsigned char blockB[43] = {
+        0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
+        0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
+        0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x22, 0x3B,
+        0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1A,
+    };
+    /* the words of the box point at [esp+0x12] x, [esp+0x16] y, [esp+0x1a] z; esi the player */
+    static const unsigned char stub[] = {
+        0x0F, 0xBF, 0x6C, 0x24, 0x16,       /* movsx ebp,word [esp+0x16]      */
+        0x0F, 0xBF, 0x44, 0x24, 0x1A,       /* movsx eax,word [esp+0x1a]      */
+        0x0F, 0xBF, 0x4C, 0x24, 0x12,       /* movsx ecx,word [esp+0x12]      */
+        0xD1, 0xFD,                         /* sar ebp,1                      */
+        0x2B, 0xC5,                         /* sub eax,ebp: the shear         */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0x3B, 0x8E, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[esi+0x80]             */
+        0x73, 0x1D,                         /* jae out                        */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x72, 0x10,                         /* jb in                          */
+        0x0F, 0xBF, 0x44, 0x24, 0x1A,       /* movsx eax,word [esp+0x1a]      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the unit's own row  */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x73, 0x05,                         /* jae out                        */
+    };                                      /* in: jmp; out: jmp              */
+    static const unsigned int in[2] = { 0x00465B95, 0x00465C2F }, out[2] = { 0x00465BB1, 0x00465C49 };
+    unsigned char* a[2];
+    int k;
+    for (k = 0; k < 2; k++) {
+        if (!(a[k] = fix_code(sizeof stub + 10))) { lim_no_stub(); return FIX_TABLE; }
+        memcpy(a[k], stub, sizeof stub);
+        a[k][sizeof stub] = 0xE9; tagpu_detour_rel(a[k] + sizeof stub + 1, in[k]);
+        a[k][sizeof stub + 5] = 0xE9; tagpu_detour_rel(a[k] + sizeof stub + 6, out[k]);
+    }
+    lim_branch(0x00465B6A, sizeof blockA, blockA, 0xE9, (unsigned int)(size_t)a[0],
+               "line of sight: the first point's row");
+    lim_branch(0x00465C04, sizeof blockB, blockB, 0xE9, (unsigned int)(size_t)a[1],
+               "line of sight: the second point's row");
+    return FIX_TABLE;
 }
 
 static void patch_engine_defects(void)
@@ -2493,7 +3120,11 @@ static void patch_engine_defects(void)
     int oom  = fix_oom_message();
     int keys = fix_sync_keys();
     int wpn  = fix_weapon_ids();
-    char b[1536];
+    int caps = fix_victim_caps();
+    int flak = fix_flak_divides();
+    int edge = fix_last_cell();
+    int los  = fix_los_shear();
+    char b[2048];
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
@@ -2504,10 +3135,20 @@ static void patch_engine_defects(void)
               "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70 0x4B90A0) %s; whole build lists "
               "(0x42DA58 0x42DAC7 0x42BEC3) %s; download menus past five entries (0x42DCF0) %s; "
               "the out-of-memory text (0x49E700) %s; unique unit sync keys (0x42BD29) %s; weapon IDs "
-              "bounded, feature hits told from sentinels (0x42E468 0x49D280 0x455FB8 0x424575) %s",
+              "bounded, feature hits told from sentinels (0x42E468 0x49D280 0x455FB8 0x424575) %s; "
+              "one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE) %s; flak's "
+              "divides (0x49CF18 0x42F314 0x42F32E) %s; the map's last row and column "
+              "(0x47CC8B 0x47CCA3 0x47CCA9) %s; line of sight at the map's edge "
+              "(0x465B6A 0x465C04) %s. Counters: unit repeats refused at 0x%08X, feature repeats "
+              "refused at 0x%08X, victims refused off their arrays at 0x%08X, list blocks run "
+              "unwrapped at 0x%08X, flak fallbacks at 0x%08X",
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
               fix_state(sfb), fix_state(rro), fix_state(scr), fix_state(list), fix_state(dl),
-              fix_state(oom), fix_state(keys), fix_state(wpn));
+              fix_state(oom), fix_state(keys), fix_state(wpn), fix_state(caps), fix_state(flak),
+              fix_state(edge), fix_state(los),
+              (unsigned int)(size_t)&s_dmgUnitRepeats, (unsigned int)(size_t)&s_dmgFeatRepeats,
+              (unsigned int)(size_t)&s_dmgRefused, (unsigned int)(size_t)&s_dmgUnframed,
+              (unsigned int)(size_t)&s_flakFallbacks);
     b[sizeof b - 1] = 0;
     plog(b);
 }
@@ -2654,72 +3295,11 @@ void tagpu_apply_patches(void)
    The engine limits TADR raises -- the effect pools as its EngineLimits.cpp does, the unit
    limit and the pathfinding budget as its LimitCrack.cpp does -- re-derived from the
    pristine 3.1 image (research/notes/tadr-port/limits-evidence.md §1-6 holds every site's
-   disassembly). Every site goes into ONE table; the table is compared with the stock
-   bytes as a whole and written as a whole, or not at all.
+   disassembly). Every site goes into the fail-closed table (top of this file), with the
+   simulation fixes' sites, and is compared and written with them. */
 
-   WHY BEFORE ANYTHING RUNS: DllMain runs before TotalA.exe's entry point (ddraw.dll is its
-   first static import), so no game exists yet and no engine thread executes these bytes
-   while they change. Nothing here is ever put back: the patches last for the process. */
-
-#define LIM_MAXSITE  160
-#define LIM_MAXB     16
-
-typedef struct LIMSITE {
-    unsigned int  va;
-    unsigned char n;
-    unsigned char stock[LIM_MAXB];
-    unsigned char ours[LIM_MAXB];
-    unsigned char have[LIM_MAXB];   /* what the image held when compared            */
-    unsigned char differs;
-    const char*   name;
-} LIMSITE;
-
-static LIMSITE s_lim[LIM_MAXSITE];
-static int     s_nlim;
-static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
-static int     s_limOverflow;        /* the table itself was too small: our bug      */
-static int     s_limNoStub;          /* a code stub could not be allocated           */
-static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 
 #ifndef TAGPU_LIMITS_STOCK
-
-static void lim_add(unsigned int va, int n, const unsigned char* stock,
-                    const unsigned char* ours, const char* name)
-{
-    LIMSITE* s;
-    if (s_nlim >= LIM_MAXSITE || n <= 0 || n > LIM_MAXB) { s_limOverflow = 1; return; }
-    s = &s_lim[s_nlim++];
-    memset(s, 0, sizeof *s);
-    s->va = va; s->n = (unsigned char)n; s->name = name;
-    memcpy(s->stock, stock, (size_t)n);
-    memcpy(s->ours, ours, (size_t)n);
-}
-
-static void lim_dword(unsigned int va, unsigned int stock, unsigned int ours, const char* name)
-{
-    lim_add(va, 4, (const unsigned char*)&stock, (const unsigned char*)&ours, name);
-}
-
-/* an instruction whose last four bytes are an address or an operand we choose */
-static void lim_op(unsigned int va, int n, const unsigned char* stock,
-                   const unsigned char* prefix, int np, unsigned int value, const char* name)
-{
-    unsigned char ours[LIM_MAXB];
-    int k;
-    if (np + 4 > n || n > LIM_MAXB) { s_limOverflow = 1; return; }
-    memcpy(ours, prefix, (size_t)np);
-    memcpy(ours + np, &value, 4);
-    for (k = np + 4; k < n; k++) ours[k] = 0x90;
-    lim_add(va, n, stock, ours, name);
-}
-
-/* E8/E9 rel32 at `va` to `target`, NOP-padded to n bytes */
-static void lim_branch(unsigned int va, int n, const unsigned char* stock, unsigned char op,
-                       unsigned int target, const char* name)
-{
-    unsigned int rel = target - (va + 5);
-    lim_op(va, n, stock, &op, 1, rel, name);
-}
 
 /* ---- the pools that move out of the engine ---------------------------------------------
    Process-lifetime statics: longer-lived than stock's per-level block, which is the better
@@ -3268,67 +3848,6 @@ static void lim_sites(void)
     }
 }
 
-/* one site's bytes, without trusting the page to be readable */
-static int lim_read(unsigned int va, unsigned char* out, int n)
-{
-    MEMORY_BASIC_INFORMATION mbi;
-    if (!VirtualQuery((const void*)(size_t)va, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT ||
-        (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
-        return 0;
-    if ((size_t)va + (size_t)n > (size_t)mbi.BaseAddress + mbi.RegionSize) return 0;
-    memcpy(out, (const void*)(size_t)va, (size_t)n);
-    return 1;
-}
-
-int tagpu_limits_install(void)
-{
-    int i, bad = 0, written;
-    if (s_limState) return s_limState > 0;
-    lim_sites();
-    if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be allocated"); return 0; }
-    if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
-
-    for (i = 0; i < s_nlim; i++) {
-        LIMSITE* s = &s_lim[i];
-        if (!lim_read(s->va, s->have, s->n) || memcmp(s->have, s->stock, s->n)) {
-            s->differs = 1;
-            bad++;
-        }
-    }
-    if (bad) {
-        s_limState = -1;
-        tagpu_logf("limits: FAILED -- %d of %d sites differ from stock 3.1, nothing written; "
-                   "the report shows at the first DirectDraw call", bad, s_nlim);
-        return 0;
-    }
-    for (written = 0; written < s_nlim; written++) {
-        LIMSITE* s = &s_lim[written];
-        if (!tagpu_detour_write(s->va, s->ours, s->n)) break;
-    }
-    if (written < s_nlim) {
-        /* PUT BACK WHAT WAS WRITTEN: the process ends at the report either way, but
-           nothing runs meanwhile on a half-raised engine. */
-        s_limWriteFail = s_lim[written].va;
-        while (written-- > 0) tagpu_detour_write(s_lim[written].va, s_lim[written].stock, s_lim[written].n);
-        s_limState = -1;
-        tagpu_logf("limits: FAILED -- the write at 0x%08X was refused; everything written was put back",
-                   s_limWriteFail);
-        return 0;
-    }
-    s_limState = 1;
-    /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
-    tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d at 0x%08X, "
-               "flying pieces %d at 0x%08X, debris records %d at 0x%08X, units %d a player, "
-               "pathfinding %d, particles %d a layer from a pool of %d, composite %d, "
-               "wreck records %d, unit types %d, weapons %d at 0x%08X", s_nlim,
-               TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
-               TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
-               TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
-               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE, TAGPU_LIM_WRECKS,
-               TAGPU_LIM_TYPES - 1, TAGPU_LIM_WEAPONS, (unsigned int)(size_t)s_weapons);
-    return 1;
-}
-
 const char* tagpu_limits_expl_pool(const char* ta)
 {
     return s_limState > 0 ? (const char*)&s_expl : ta + 0x1491B;
@@ -3358,15 +3877,6 @@ static int wpn_slots(void) { return s_limState > 0 ? TAGPU_LIM_WEAPONS : 256; }
 
 #else  /* TAGPU_LIMITS_STOCK */
 
-int tagpu_limits_install(void)
-{
-    plog("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
-         "flying pieces 100, debris records 300, units 250 a player up to 500, "
-         "pathfinding 1333, particles 400 a layer from a pool of 1000, composite 600, "
-         "wreck records 2048, unit types 511)");
-    return 0;
-}
-
 const char* tagpu_limits_expl_pool(const char* ta) { return ta + 0x1491B; }
 const void* const* tagpu_limits_psys_begin(void) { return (const void* const*)(size_t)0x00511DF0u; }
 const void* const* tagpu_limits_psys_end(void) { return (const void* const*)(size_t)0x00511F80u; }
@@ -3380,6 +3890,88 @@ char* tagpu_limits_weapon0(void)
 static int wpn_slots(void) { return TAGPU_LIM_WEAPONS; }
 
 #endif /* TAGPU_LIMITS_STOCK */
+
+/* Two sites of the table that cover one byte: two fixes, or a fix and a raised limit, would
+   each have been checked against stock bytes the other rewrites. Our bug, found before
+   anything is compared. */
+static int lim_overlap(void)
+{
+    int i, j;
+    for (i = 0; i < s_nlim; i++)
+        for (j = i + 1; j < s_nlim; j++)
+            if (s_lim[i].va < s_lim[j].va + s_lim[j].n && s_lim[j].va < s_lim[i].va + s_lim[i].n) {
+                s_limOverlapA = s_lim[i].va;
+                s_limOverlapB = s_lim[j].va;
+                return 1;
+            }
+    return 0;
+}
+
+int tagpu_limits_install(void)
+{
+    int i, bad = 0, written;
+    if (s_limState) return s_limState > 0;
+#ifndef TAGPU_LIMITS_STOCK
+    lim_sites();
+#endif
+    if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be allocated"); return 0; }
+    if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
+    if (lim_overlap()) {
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- the sites at 0x%08X and 0x%08X overlap", s_limOverlapA,
+                   s_limOverlapB);
+        return 0;
+    }
+
+    for (i = 0; i < s_nlim; i++) {
+        LIMSITE* s = &s_lim[i];
+        if (!lim_read(s->va, s->have, s->n) || memcmp(s->have, s->stock, s->n)) {
+            s->differs = 1;
+            bad++;
+        }
+    }
+    if (bad) {
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- %d of %d sites differ from stock 3.1, nothing written; "
+                   "the report shows at the first DirectDraw call", bad, s_nlim);
+        return 0;
+    }
+    for (written = 0; written < s_nlim; written++) {
+        LIMSITE* s = &s_lim[written];
+        if (!tagpu_detour_write(s->va, s->ours, s->n)) break;
+    }
+    if (written < s_nlim) {
+        /* PUT BACK WHAT WAS WRITTEN: the process ends at the report either way, but
+           nothing runs meanwhile on a half-changed engine. */
+        s_limWriteFail = s_lim[written].va;
+        while (written-- > 0) tagpu_detour_write(s_lim[written].va, s_lim[written].stock, s_lim[written].n);
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- the write at 0x%08X was refused; everything written was put back",
+                   s_limWriteFail);
+        return 0;
+    }
+    s_limState = 1;
+#ifndef TAGPU_LIMITS_STOCK
+    /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
+    tagpu_logf("limits: installed %d sites, the simulation fixes' included -- projectiles %d, "
+               "explosions %d at 0x%08X, flying pieces %d at 0x%08X, debris records %d at 0x%08X, "
+               "units %d a player, pathfinding %d, particles %d a layer from a pool of %d, "
+               "composite %d, wreck records %d, unit types %d, weapons %d at 0x%08X", s_nlim,
+               TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
+               TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
+               TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
+               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE, TAGPU_LIM_WRECKS,
+               TAGPU_LIM_TYPES - 1, TAGPU_LIM_WEAPONS, (unsigned int)(size_t)s_weapons);
+    return 1;
+#else
+    tagpu_logf("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
+               "flying pieces 100, debris records 300, units 250 a player up to 500, "
+               "pathfinding 1333, particles 400 a layer from a pool of 1000, composite 600, "
+               "wreck records 2048, unit types 511); the simulation fixes' %d sites installed",
+               s_nlim);
+    return 0;
+#endif
+}
 
 int tagpu_limits_weapon_index(const void* weapon)
 {
@@ -3431,18 +4023,21 @@ static int lim_md5(const char* path, char out[33], unsigned long* size)
     return ok;
 }
 
-static void lim_hex(char* out, const unsigned char* b, int n)
+/* at most `max` bytes, then "..." -- the box shows a long site's head, the log all of it */
+static void lim_hex(char* out, const unsigned char* b, int n, int max)
 {
     int i;
     out[0] = 0;
-    for (i = 0; i < n; i++) sprintf(out + strlen(out), i ? " %02X" : "%02X", b[i]);
+    for (i = 0; i < n && i < max; i++) sprintf(out + strlen(out), i ? " %02X" : "%02X", b[i]);
+    if (n > max) strcat(out, " ...");
 }
 
 void tagpu_limits_report(void)
 {
     static char text[8192];
     static LONG once;
-    char exe[MAX_PATH], md5[33] = "unknown", line[256], want[64], have[64];
+    char exe[MAX_PATH], md5[33] = "unknown", line[768], want[3 * LIM_MAXB + 8],
+         have[3 * LIM_MAXB + 8];
     const char* base;
     const char* known = "none";
     const char* why;
@@ -3469,7 +4064,7 @@ void tagpu_limits_report(void)
     /* ONE LINE PER PARAGRAPH: the box wraps prose to its own width, and a hard break
        inside a paragraph wraps a second time into ragged half-lines. The report lines
        are kept short enough that the box never wraps them. */
-    if (s_limNoStub || s_limOverflow)
+    if (s_limNoStub || s_limOverflow || s_limOverlapA)
         why = "Impure failed on its own side before it compared anything: this is a bug in "
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
     else if (s_limWriteFail)
@@ -3482,12 +4077,13 @@ void tagpu_limits_report(void)
         why = "This TotalA.exe is not the Total Annihilation 3.1 that Impure is built for.";
 
     _snprintf(text, sizeof text,
-        "Impure could not install its engine limits, so Total Annihilation will now "
-        "close. Nothing was changed.\r\n"
+        "Impure could not install its engine limits and fixes, so Total Annihilation will "
+        "now close. Nothing was changed.\r\n"
         "\r\n"
         "WHY\r\n"
-        "Impure raises the game's limits (units, projectiles, explosions...) by "
-        "rewriting its code in memory, and it checks every place first. %s Running "
+        "Impure raises the game's limits (units, projectiles, explosions...) and fixes "
+        "some of its defects by rewriting its code in memory, and it checks every place "
+        "first. %s Running "
         "anyway would let this game play by different rules from other players and "
         "break multiplayer without warning.\r\n"
         "\r\n"
@@ -3511,6 +4107,9 @@ void tagpu_limits_report(void)
         _snprintf(line, sizeof line, "result: a code stub could not be allocated, nothing written\r\n");
     else if (s_limOverflow)
         _snprintf(line, sizeof line, "result: the site table overflowed, nothing written\r\n");
+    else if (s_limOverlapA)
+        _snprintf(line, sizeof line, "result: the sites at 0x%08X and 0x%08X overlap, nothing "
+                  "written\r\n", s_limOverlapA, s_limOverlapB);
     else if (s_limWriteFail)
         _snprintf(line, sizeof line, "result: write refused at 0x%08X, all put back\r\n",
                   s_limWriteFail);
@@ -3528,8 +4127,8 @@ void tagpu_limits_report(void)
             strncat(text, line, sizeof text - strlen(text) - 1);
             break;
         }
-        lim_hex(want, s->stock, s->n);
-        lim_hex(have, s->have, s->n);
+        lim_hex(want, s->stock, s->n, 16);
+        lim_hex(have, s->have, s->n, 16);
         _snprintf(line, sizeof line, "0x%08X %s\r\n  want %s\r\n  have %s\r\n",
                   s->va, s->name, want, have);
         line[sizeof line - 1] = 0;
@@ -3541,8 +4140,8 @@ void tagpu_limits_report(void)
     for (i = 0; i < s_nlim; i++) {
         const LIMSITE* s = &s_lim[i];
         if (!s->differs) continue;
-        lim_hex(want, s->stock, s->n);
-        lim_hex(have, s->have, s->n);
+        lim_hex(want, s->stock, s->n, LIM_MAXB);
+        lim_hex(have, s->have, s->n, LIM_MAXB);
         tagpu_logf("limits:   0x%08X %s want %s have %s", s->va, s->name, want, have);
     }
     {
