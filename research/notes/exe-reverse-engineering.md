@@ -1789,9 +1789,13 @@ below the array's count (`u16 main+0x14351`) and its unit
   death explosion: the destructor's grid clear `0x47CBD0` (called at `0x48682D`) empties its cells
   and sets `+0x82` to NULL (`0x47CC19`) before the explosion `0x49B000` it calls at `0x486D50`, and
   that explosion's projectile has no shooter (`proj+0x52` = 0, `0x49B03E`), so the shooter's skip
-  `0x49A259` would not keep it out. Either test excludes it; bit 14 alone would not on a peer that
-  does not own the unit, since the damage receiver sets it for a local owner only
-  (`0x489EDC..0x489EE5`);
+  `0x49A259` would not keep it out. The bucket test excludes it in every case, since the clear
+  always runs first. Bit 14 alone would not: the damage receiver skips that write when the owner's
+  player record has a zero first dword (`0x489ECC`), and the owner gate `0x49A03F..0x49A047` then
+  lets the explosion's area damage run (its projectile carries the dying unit's player,
+  `proj+0x66`, set at `0x49B055`); and a death that does not come through `0x489CE0`
+  (`Send_UnitDeath`'s direct callers) need not set it. On a peer that does not own the unit, the
+  gate skips the explosion's area damage whatever the bits;
 - is uncarried (`+0x86` 0) and has its model (`+0x9E` not NULL, the death guard, `0x4866D0` below);
 - has a footprint (`+0x76`, `+0x78`, `+0x7E`, `+0x80`) at least one cell each way that meets the
   blast's rect, and is not in the call's unit set.
@@ -1828,7 +1832,7 @@ the engine, not aircraft damaged: stock's own filters (the distance test above a
 10–16, six of them holding no cell at the damage tick; the second (450) killed all ten, five holding
 none. The counter read 40 in that run and 37 on the stock-limits build. After B1's landing was
 merged in, with the candidate rule above (bit 29, bit 14, a real bucket): the raised build installed
-183 sites, the stubs 2 992 bytes in one page; the first burst took all ten from 150 to 11–17, the
+183 sites, the stubs (the engine fixes' and the limits' weapon sites) 3 504 bytes in one page; the first burst took all ten from 150 to 11–17, the
 second killed them, the counter read 10; the stock-limits build installed its fixes' 57 sites, stubs
 3 120 bytes, every fix armed or in the table, to the menu.
 

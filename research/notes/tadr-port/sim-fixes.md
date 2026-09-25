@@ -305,9 +305,11 @@ has the sites, the disassembly and the numbers):
   remote unit (`+0x108` 0), and both peers held the same five survivors. The fire spread
   `0x49A0C0` calls area damage past the local-owner gate, so every peer computes burning damage —
   stock for the slot holders each peer's tie-break keeps, B2 for every stacked aircraft, which makes
-  the damaged set the same on every peer. After B1's landing was merged in, with the reviews'
-  candidate rule: 183 sites installed (130 + 53), 57 in the stock-limits build, the stubs 2 992
-  bytes in one page (3 120 in the stock-limits build); all ten hit by the first burst (150 → 11–17)
+  the damaged set the same on every peer as far as the peers agree on where each aircraft is (a
+  remote unit's position, and so its pool membership, lags its owner's). After B1's landing was
+  merged in, with the reviews'
+  candidate rule: 183 sites installed (130 + 53), 57 in the stock-limits build, the stubs 3 504
+  bytes in one page, the limits' weapon sites included (3 120 in the stock-limits build); all ten hit by the first burst (150 → 11–17)
   and killed by the second, served 10. The ride-along: a cargo
   killed in its transport leaves no wreck by design (30 000 from the destructor at `0x48680B`,
   severity 100, ARMSTUMP's corpse type 3 walks dead → heap → none).
