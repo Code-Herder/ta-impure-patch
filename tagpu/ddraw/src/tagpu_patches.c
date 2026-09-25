@@ -2695,7 +2695,7 @@ static int wire_block_ok(const char* first, const char* last, const char* begin,
 }
 
 /* the B4/B5 oracle counters (§10): morph = a create onto an occupied slot whose type changes;
-   recreate = a create the 0x2C full-state path made (return address 0x48BA00 or 0x48B497)
+   recreate = a create the 0x2C full-state path made (return address 0x48BA05 or 0x48B49C)
    rather than a plain 0x09; ghost = the engine's own ghost sweep firing (a round-robin type 0
    over an occupied slot). Observe-only, reported on the heartbeat. */
 static unsigned int s_wireMorph, s_wireRecreate, s_wireGhost;
@@ -2759,7 +2759,7 @@ static int __cdecl wire_s09(unsigned int* r)
             *(const unsigned short*)(slot + 0xA6) &&
             *(const unsigned short*)(slot + 0xA6) != (unsigned short)type)
             s_wireMorph++;
-        if (ret == 0x0048BA00u || ret == 0x0048B497u) {
+        if (ret == 0x0048BA05u || ret == 0x0048B49Cu) {
             s_wireRecreate++;
         } else if (ret == 0x004553E9u) {
             const char* players = ta + 0x1B63;
@@ -2983,14 +2983,17 @@ static int __cdecl wire_s2c_after(unsigned int* r)
 
 /* 0x2C round-robin type, branch at 0x48B40E. esi = the reader, [esp+0x38] = the slot, ax = the
    type, and ebp is zeroed as stock's xor ebp,ebp. Returns 0 stop (-> 0x48B435), 1 the engine's
-   own type-0 ghost path (-> 0x48B415), 2 create (-> 0x48B43F). A type 0 over an occupied slot
-   is the engine's ghost sweep and is counted, not dropped. */
+   own type-0 ghost path (-> 0x48B415), 2 the typed path (-> 0x48B43F). A type 0 over an
+   occupied slot is the engine's ghost sweep and is counted, not dropped. Only the type is
+   bounded: the round robin carries every unit, structures included, and tests the mover itself
+   before its one use (0x48B6E8: [edi] == 0 skips to 0x48B6FC), so a type with no move class is
+   well-formed here, unlike in the dirty list, whose sender lists only units with a mover
+   (0x48B782..0x48B786). */
 static int __cdecl wire_s2c_rr(unsigned int* r)
 {
     char* ta = *(char* const*)0x00511DE8;
     unsigned char* sp = WPN_ESP_JMP(r);
     const char* slot;
-    const char* defs;
     unsigned int count, type;
     if (!ta) return 0;
     slot  = *(const char* const*)(sp + 0x38);
@@ -3004,11 +3007,6 @@ static int __cdecl wire_s2c_rr(unsigned int* r)
     }
     if (!wire_type_ok(type, count)) {
         wire_drop(&s_wire2C, "a 0x2C round-robin type is out of range; entry stopped", type, count);
-        return 0;
-    }
-    defs = *(const char* const*)(ta + 0x1439B);
-    if (!defs || *(const unsigned char*)(defs + (size_t)type * 0x249 + 0x22F) != 1) {
-        wire_drop(&s_wire2C, "a 0x2C round-robin type has no move class; entry stopped", type, count);
         return 0;
     }
     s_wire_rr_type = (int)type;
@@ -4524,7 +4522,7 @@ static void patch_engine_defects(void)
 
     _snprintf(b, sizeof b,
               "enginefix: wire robustness %s: 0x09 create (0x4861F7), 0x0C destroy + killer "
-              "(0x4866E5 0x486753), 0x0B damage (0x489CED), 0x2C stat/move -- block, delta, type, "
+              "(0x4866E5 0x486753), 0x0B damage (0x489CED), 0x2C stat/move -- block, delta, type, dirty-list "
               "move class, after-create, and the unsigned round-robin remainder (0x48B960 0x48B985 "
               "0x48B9AD 0x48BA05 0x48B40E 0x48B49C 0x48BA9F); the diverged 0x0D dropped in "
               "wpn_rx_fired (0x49D280). Records accepted, drops, the morph/recreate/ghost oracles "
