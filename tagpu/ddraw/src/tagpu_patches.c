@@ -10,6 +10,7 @@
 #include "tagpu_limits.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_regstore.h"
 #include "tagpu_weapons.h"
 #include "git.h"
 
@@ -153,6 +154,38 @@ static int lim_read(unsigned int va, unsigned char* out, int n)
     return 1;
 }
 
+
+/* ---- the -r switch, in a tacli test launch ----------------------------------
+
+   In a test launch TotalA.exe's registry is a file (tagpu_regstore.h), answered through
+   its registry imports. The one registry write of the exe's own code that passes through
+   none of them is the `-r` switch's: its handler 0x49F249 loads dsetup.dll and calls
+   DirectXRegisterApplicationA, which writes DirectPlay's application key through
+   dsetup.dll's own imports, then quits (cmdline-options.md). The parser
+   CmdlineArgsNormalize 0x49EE30 (called at 0x49E8D2; token loop head 0x49EED3) dispatches
+   on the letter after the dash through the index bytes 0x49F500 ('B'..'w') into the jump
+   table 0x49F494: 'R' holds case 9 and 'r' case 22, and both entries
+   (0x49F4B8, 0x49F4EC) are 0x49F249; case 26 (0x49F4FC) is the loop tail 0x49F461, where
+   every letter the parser does not know goes [DISASSEMBLED 2026-09-25]. Pointing both
+   entries at the tail makes -r an unknown switch, ignored. A test folder whose exe
+   differs there is not run: the switch would still reach the real registry. */
+static void close_register_switch(void)
+{
+    static const unsigned char handler[4] = { 0x49, 0xF2, 0x49, 0x00 };   /* 0x49F249 */
+    static const unsigned char tail[4]    = { 0x61, 0xF4, 0x49, 0x00 };   /* 0x49F461 */
+
+    /* expect == val: a match test, nothing written */
+    if (patch_bytes(0x0049F4FC, tail, tail, 4) &&
+        patch_bytes(0x0049F4B8, handler, tail, 4) &&
+        patch_bytes(0x0049F4EC, handler, tail, 4)) {
+        plog("registry: test mode -- the -r switch (DirectPlay registration through dsetup.dll) "
+             "is ignored (jump table 0x49F494, cases 9 and 22 -> 0x49F461)");
+        return;
+    }
+    plog("registry: TEST MODE, but the -r switch's jump table at 0x49F494 is not the one this DLL "
+         "knows, so the switch could write the real registry: the game is not run");
+    TerminateProcess(GetCurrentProcess(), 1);
+}
 
 /* ---- defects of the stock engine -------------------------------------------
 
@@ -1516,10 +1549,29 @@ static int fix_composite_scratch(void)
 /* ===== THE BUILD LIST, THE DOWNLOAD-MENU RECORDS, THE OUT-OF-MEMORY TEXT ==================
    Three stock defects a large mod reaches, fixed in both builds (research/notes/tadr-port/
    content-ids.md, "What rides in the same landing"). Their sites are written all together or
-   not at all, per fix, and their stubs share one page. */
+   not at all, per fix, and their stubs come from fix_code with every other fix's. */
 
 #define ENG_ALLOC(name, size) (((void* (__cdecl*)(const char*, unsigned int))0x004D83B0)((name), (size)))
 #define ENG_FREE(p)           (((void (__cdecl*)(void*))0x004D85A0)(p))
+
+/* The engine's allocator with its out-of-memory exit made unconditional [DISASSEMBLED].
+   0x4D83C0 calls the new handler at [0x5289BC] when malloc fails (0x4D8409..0x4D8412), inside
+   the allocator's critical section, and returns NULL when the slot is empty. The slot is
+   process-global and its setter 0x4D8E50 is called around some of the engine's own
+   allocations -- 0x495ABE until 0x49E6F0 (from 0x495AFD) puts 0x49E700 back, 0x4B3B75 until
+   0x4B3B8F, 0x4B4146 until 0x4B422B -- so a failure on another thread inside such a window
+   returns NULL. On NULL this calls the installed handler 0x49E700 itself (through the
+   out-of-memory text's stub when that fix is armed), which ends the process and never returns;
+   TerminateProcess stands behind it, so nothing after a failed allocation ever runs. */
+static void* eng_alloc_or_exit(const char* name, unsigned int size)
+{
+    void* p = ENG_ALLOC(name, size);
+    if (!p) {
+        ((void (__cdecl*)(void))0x0049E700)();
+        TerminateProcess(GetCurrentProcess(), 3);
+    }
+    return p;
+}
 
 /* pushad's registers, as a stub hands them to C; PR_RET is the return address when the site
    is a call, so the site's own esp is regs + PR_RET + 1 */
@@ -1527,18 +1579,32 @@ enum { PR_EDI, PR_ESI, PR_EBP, PR_ESP, PR_EBX, PR_EDX, PR_ECX, PR_EAX, PR_RET };
 
 typedef struct FIXSITE { unsigned int va; int n; unsigned char was[20]; unsigned char now[20]; } FIXSITE;
 
-static unsigned char* s_fixCode;
-static unsigned int   s_fixCodeUsed;
+/* The fixes' stubs, each contiguous inside one page. A stub that does not fit the rest of the
+   current page opens another, so no fix fails for want of room; every page is kept for the
+   process, since the patched sites jump into them. Two installers take stubs: the engine fixes
+   (patch_engine_defects) and then, in the raised build, the limits' weapon sites (lim_sites ->
+   wpn_build); tagpu_limits_install reports the total once both have. */
+static unsigned char* s_fixCode;              /* the page stubs are placed in now             */
+static unsigned int   s_fixCodeUsed;          /* its bytes taken                              */
+static unsigned int   s_fixPages;             /* pages made                                   */
+static unsigned int   s_fixBytes;             /* bytes taken over every page                  */
 
 static unsigned char* fix_code(unsigned int n)
 {
+    unsigned int take = (n + 15u) & ~15u;
     unsigned char* p;
-    if (!s_fixCode)
-        s_fixCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
-                                                 PAGE_EXECUTE_READWRITE);
-    if (!s_fixCode || s_fixCodeUsed + n > 0x1000) return NULL;
+    if (!n || take > 0x1000u) return NULL;
+    if (!s_fixCode || s_fixCodeUsed + n > 0x1000u) {
+        unsigned char* page = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
+                                                           PAGE_EXECUTE_READWRITE);
+        if (!page) return NULL;
+        s_fixCode = page;
+        s_fixCodeUsed = 0;
+        s_fixPages++;
+    }
     p = s_fixCode + s_fixCodeUsed;
-    s_fixCodeUsed += (n + 15u) & ~15u;
+    s_fixCodeUsed += take;
+    s_fixBytes += take;
     return p;
 }
 
@@ -1602,8 +1668,8 @@ static unsigned char* fix_call_regs(unsigned char* p, void (__cdecl *fn)(unsigne
    THE FIX keeps the whole list [DECIDED 2026-09-24]. A block holding n entries has room for
    bl_room(n): stock's 30, then powers of two from 64. The shared append, the copy and the
    download appender each grow a block to bl_room(n + 1) before writing entry n when that is
-   more than bl_room(n), through the engine's allocator (0x4D83B0, whose failure is the engine's
-   out-of-memory exit) and its free (0x4D85A0, which the teardown 0x42DC52 frees the copy with).
+   more than bl_room(n), through eng_alloc_or_exit (the engine's allocator 0x4D83B0, whose
+   failure is the engine's out-of-memory exit whatever the handler slot holds) and its free (0x4D85A0, which the teardown 0x42DC52 frees the copy with).
    The copy is made at bl_room(count) entries, copied from the shared block.
 
    THE INVARIANT: every block holds at least bl_room(its count) entries. The shared block starts
@@ -1626,7 +1692,7 @@ static unsigned int bl_room(unsigned int n)
 static void bl_append(unsigned short** list, unsigned int n, unsigned short type, const char* name)
 {
     if (bl_room(n + 1u) > bl_room(n)) {
-        unsigned short* bigger = (unsigned short*)ENG_ALLOC(name, bl_room(n + 1u) * 2u);
+        unsigned short* bigger = (unsigned short*)eng_alloc_or_exit(name, bl_room(n + 1u) * 2u);
         memcpy(bigger, *list, (size_t)n * 2u);
         ENG_FREE(*list);
         *list = bigger;
@@ -1653,7 +1719,7 @@ static void __cdecl bl_copy(unsigned int* regs)
     unsigned char* def = (unsigned char*)(size_t)regs[PR_ESI];
     const unsigned short* shared = (const unsigned short*)(size_t)regs[PR_EBP];
     unsigned int room = bl_room(*(const unsigned int*)(def + 0x152));
-    unsigned short* copy = (unsigned short*)ENG_ALLOC((const char*)(size_t)regs[PR_EAX], room * 2u);
+    unsigned short* copy = (unsigned short*)eng_alloc_or_exit((const char*)(size_t)regs[PR_EAX], room * 2u);
     memcpy(copy, shared, (size_t)room * 2u);
     *(unsigned short**)(def + 0x156) = copy;
     regs[PR_EAX] = (unsigned int)(size_t)copy;              /* what the `rep movs` leaves */
@@ -1745,8 +1811,8 @@ static unsigned int s_dlFiles;                /* the files' own records, 0x42DCF
 /* 0x42DD74 asks for files * 0xBD bytes */
 static void* __cdecl dl_alloc(const char* name, unsigned int size)
 {
-    void* p = ENG_ALLOC(name, size);
-    if (p) memset(p, 0, size);
+    void* p = eng_alloc_or_exit(name, size);
+    memset(p, 0, size);
     s_dlRoom = s_dlFiles = size / 0xBDu;
     return p;
 }
@@ -1762,7 +1828,7 @@ static void __cdecl dl_section(unsigned int* regs)
         if (recs >= s_dlRoom) {
             unsigned int room = s_dlRoom * 2u > recs + 1u ? s_dlRoom * 2u : recs + 1u;
             unsigned int bytes = room > 0x00AAAAAAu ? 0x7FFFFFFFu : room * 0xBDu;  /* fails: the exit */
-            unsigned char* bigger = (unsigned char*)ENG_ALLOC((const char*)0x00503F7C, bytes);
+            unsigned char* bigger = (unsigned char*)eng_alloc_or_exit((const char*)0x00503F7C, bytes);
             unsigned char* old = *(unsigned char**)(ta + 0x391CB);
             memcpy(bigger, old, (size_t)recs * 0xBDu);
             memset(bigger + (size_t)recs * 0xBDu, 0, bytes - recs * 0xBDu);
@@ -3351,8 +3417,9 @@ static void wire_selfcheck(void)
        remote player], and the dispatcher passes a code in state 5 only with bit 1 of its
        entry in the table 0x512BC0 (0x454758), which is filled at run time -- but neither fact
        is what keeps two threads apart; the TLS slot is.
-   The sets grow through the engine's allocator 0x4D83B0, whose failure is the engine's own
-   out-of-memory exit, so no answer is ever given from a set that could not hold it.
+   The sets grow through eng_alloc_or_exit, whose failure is the engine's own out-of-memory
+   exit whatever the handler slot holds, so no answer is ever given from a set that could not
+   hold it.
    A list block with no frame cannot run: both calls of 0x49A120 and both blocks are rows of the
    one fail-closed table, written together or not at all, and nothing else calls 0x49A120. If
    it ever did, the block counts it, logs it once and damages as though the victim were new.
@@ -3371,9 +3438,18 @@ typedef struct DMGSET {
     unsigned int  inl[DMG_INLINE];
 } DMGSET;
 
+/* the stacked aircraft one call serves after stock's walk (the stacked-aircraft block below) */
+typedef struct DMGAIR {
+    int xs, xe, zs, ze;                 /* the blast's cell rect, as 0x49A120 clamps it      */
+    unsigned short* idx;                /* inl, or a block from 0x4D83B0 once it outgrows it */
+    unsigned int n, next, cap;
+    unsigned short inl[32];
+} DMGAIR;
+
 typedef struct DMGSEEN {
     struct DMGSEEN* outer;              /* this thread's enclosing call's frame, or NULL     */
     DMGSET unit, feat;
+    DMGAIR air;
 } DMGSEEN;
 
 static DWORD s_dmgTls = TLS_OUT_OF_INDEXES;
@@ -3407,7 +3483,7 @@ static unsigned int dmg_hash(unsigned int key, unsigned int mask)
 static void dmg_set_grow(DMGSET* t)
 {
     unsigned int cap = t->cap * 2u, i, j;
-    unsigned int* key = (unsigned int*)ENG_ALLOC(s_dmgTag, cap * 4u); /* NULL: the engine's OOM exit */
+    unsigned int* key = (unsigned int*)eng_alloc_or_exit(s_dmgTag, cap * 4u);
     memset(key, 0, cap * 4u);
     for (i = 0; i < t->cap; i++) {
         if (!t->key[i]) continue;
@@ -3499,11 +3575,15 @@ static unsigned int __stdcall dmg_area(void* proj, void* at)
     f.outer = (DMGSEEN*)TlsGetValue(s_dmgTls);
     dmg_set_init(&f.unit);
     dmg_set_init(&f.feat);
+    f.air.idx = f.air.inl;
+    f.air.n = f.air.next = 0;
+    f.air.cap = sizeof f.air.inl / sizeof f.air.inl[0];
     TlsSetValue(s_dmgTls, &f);
     r = ((dmg_area_fn)0x0049A120)(proj, at);
     TlsSetValue(s_dmgTls, f.outer);
     dmg_set_free(&f.unit);
     dmg_set_free(&f.feat);
+    if (f.air.idx != f.air.inl) ENG_FREE(f.air.idx);
     return r;
 }
 
@@ -3563,6 +3643,334 @@ static int fix_victim_caps(void)
     lim_add(0x0049A109, 5, callB, p, "area damage from the fire spread, the call");
     lim_add(0x0049A262, sizeof units, units, u, "area damage, the unit victims' list");
     lim_add(0x0049A5CE, sizeof feats, feats, fe, "area damage, the feature victims' list");
+    return FIX_TABLE;
+}
+
+/* STACKED AIRCRAFT [DISASSEMBLED + MEASURED]. Landing B2 of research/notes/tadr-port/
+   sim-fixes.md (evidence Part 2 §2; TADR's AreaDamageOverflow is the prior art, the design is
+   ours). A feature-grid cell holds two unit slots: the grid stamp 0x47CC30 files a unit whose
+   state +0x110 has (& 3) == 1 in slot A and one with == 2 -- airborne -- in slot B
+   (0x47CF98), and a contested slot keeps one of them (the loser gets +0x110 bit 27). Area
+   damage reads only the two slots of each cell (above), and so does the direct-hit test
+   0x49B090. So of several aircraft over one spot, only the ones an in-rect slot names are ever
+   found: the others -- holding no cell, or holding cells only outside the rect while others
+   hold the ones inside it -- take no splash at all. MEASURED on the previous build: ten
+   ARMATLAS ordered to one point, up to seven held no cell; a CORFLAK's first burst took the
+   four holders from 150 HP to 5-11 and left the five holding none, each within a cell of
+   them, at 150. On this build the same burst took all ten, six holding none, to 10-16.
+
+   THE FIX serves the missing aircraft to the engine's own per-victim code AFTER stock's walk
+   has finished, so stock's victims, their order and every value they take are unchanged, and
+   the new victims go through stock's distance test, falloff and damage with no new arithmetic:
+     - the walk's end 0x49A664 (the fall-through of the row loop, and 0x49A1DF's jump for an
+       empty rect) jumps to a stub that asks air_first for the first candidate; with one, it
+       puts the selector [esp+0x10] at 2 -- stock's selector is only ever 0 or 1 at 0x49A415 --
+       and enters stock's unit block at 0x49A24E with esi the unit; with none, it runs the
+       11 bytes it displaced and joins the tail at 0x49A66F;
+     - the selector step 0x49A415 is stock's for 0 and 1 and, at 2, asks air_next for the next
+       candidate, entering 0x49A24E again, or joins the tail when there is none. Every path
+       from 0x49A24E (the NULL test, the shooter's skip 0x49A259, the seen-set's skip, the
+       damage and its reload 0x49A411) comes back to 0x49A415, and none of them writes
+       [esp+0x10]. The tail at 0x49A66F reloads every register it reads.
+   A candidate goes through the seen-set block at 0x49A262 like any victim, and one the set
+   already holds is never offered, so an aircraft stock found (it holds a slot the walk
+   visited) is left to stock and a served one is damaged once.
+
+   WHICH AIRCRAFT. air_first builds this call's list from the pool (below). A slot is a
+   candidate when the unit in it
+     - has the alive bit 0x10000000 and (& 3) == 2, and not bit 29 -- slot B's own rule: the
+       stamp sends a bit-29 unit down its yardmap path to slot A (0x47CD5A) whatever its & 3;
+     - is in the grid: its sort bucket +0x82 is neither NULL nor the off-map bucket
+       *(main+0x142B7), and it is not pending death (bit 14). Stock never offers a dying
+       aircraft to its own death explosion: the destructor's grid clear 0x47CBD0 (called at
+       0x48682D) empties its cells and sets +0x82 to NULL (0x47CC19) before the explosion
+       0x49B000 it calls at 0x486D50, whose projectile has no shooter (proj+0x52 = 0,
+       0x49B03E), so the shooter's skip 0x49A259 would not keep it out. The bucket test is what
+       excludes it in every case, since the clear always runs first. Bit 14 alone would not:
+       the damage receiver skips that write when the owner's player record has a zero first
+       dword (0x489ECC), and the owner gate 0x49A03F..0x49A047 then lets the explosion's area
+       damage run (its projectile carries the dying unit's player, proj+0x66, 0x49B055); and a
+       death that does not come through 0x489CE0 (Send_UnitDeath's direct callers) need not
+       set it. On a peer that does not own the unit the gate skips the explosion's area damage
+       whatever the bits;
+     - is not carried (+0x86 is 0) and has its model (+0x9E not NULL: the engine map's death
+       guard, 0x486D9E frees it before the alive bit clears);
+     - has a footprint +0x76/+0x78, +0x7E/+0x80 of at least one cell each way that meets the
+       blast's rect, and is not in this call's unit set.
+   The rect is 0x49A120's own: the radius (u16)w[+0xD6] >> 1, c = radius/16 + 1 cells about the
+   blast point's cell (x, z of `at` +0x02/+0x0A, each truncated /16 as cdq/and 15/add/sar 4
+   do), the low ends raised to 0 and the high ends lowered to W, H (0x49A149..0x49A1C7).
+   air_next re-tests every one of those, on the live unit, at the moment it hands it over:
+   a unit the damage before it killed, or whose slot a new unit took, is re-judged, not
+   trusted.
+
+   THE POOL. s_airPool holds the slots of every unit the grid stamp has filed as airborne since
+   the last rebuild, and the rebuild refills it with every alive unit whose state is airborne
+   now: the stub on the step's call of the unit tick (0x4954ED, 0x48AD30's only caller) rebuilds
+   it, and the stamp's airborne path adds each unit it files. So at any explosion the pool
+   holds every unit that is airborne and was stamped since the step began, and every unit that
+   was airborne when it began: the unit tick's death explosions, the projectile tick 0x49B720,
+   the fire spread and the interceptor tail all see it. The network pump at 0x4954C8 runs
+   before the rebuild, so an explosion from its 0x0E receiver sees the previous step's pool
+   plus the units stamped since. What it can miss: a unit whose state turned airborne through
+   a writer of +0x110 that is not followed by the stamp, since the last rebuild; such a unit
+   holds no slot either, so it is stock's result until the next rebuild. A stale pool can only
+   miss a victim, never offer a wrong one: air_unit decides every hand-over on the live unit.
+
+   THE INVARIANT: every unit handed to the engine was validated alive, airborne, uncarried, on
+   the map and inside the rect in this call, at the moment it was handed over, and every index
+   was bounded first -- a pool slot below the array's count (u16 main+0x14351), the pool's
+   length below 65 536 because a slot enters it at most once (s_airIn, kept with it). It rests
+   on
+     - a bound, above, on every value read from the engine;
+     - a lock: the pool is written by the rebuild (the game thread) and by the stamp, which also
+       runs from the network pump and from a saved game's restore on the loader thread, and is
+       read by air_first on whatever thread runs area damage; s_airLock covers every read and
+       write of it and of s_airIn, and is held only inside this C code, never across engine
+       code but one: the allocator 0x4D83B0 growing a call's list, which takes its own critical
+       section and calls nothing that takes this one. The lock order is s_airLock, then the
+       allocator's, and never the reverse; the out-of-memory handler 0x49E700 runs inside the
+       allocator's section, or after it from eng_alloc_or_exit, and ends the process;
+     - a lifetime: a call's list lives in its frame (the wrapper above), which exists exactly
+       while that call runs, so nesting (the interceptor tail at 0x49A764 re-enters area damage
+       after the serving is done) gets a list of its own.
+   CLASS: simulation, fail closed. Air only [DECIDED 2026-09-25]: a ground unit that loses slot
+   A stays stock's. */
+#define AIR_SLOTS 65536u               /* a cell's unit slot is a u16                      */
+
+static CRITICAL_SECTION s_airLock;
+static unsigned short   s_airPool[AIR_SLOTS];
+static unsigned char    s_airIn[AIR_SLOTS];  /* 1 iff the slot is in s_airPool[0, s_airN)   */
+static unsigned int     s_airN;
+static volatile LONG    s_airServed;         /* aircraft handed to the engine, any thread   */
+
+/* the unit array, or NULL; *count its slots */
+static const unsigned char* air_array(const char** main_out, unsigned int* count)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    *main_out = ta;
+    *count = 0;
+    if (!ta) return NULL;
+    *count = *(const unsigned short*)(ta + 0x14351);
+    return *(const unsigned char* const*)(ta + 0x14357);
+}
+
+/* the unit in `slot` if it may be served against `r`: see WHICH AIRCRAFT */
+static const unsigned char* air_unit(unsigned int slot, const DMGAIR* r)
+{
+    const char* ta;
+    unsigned int count, st, cargo, bucket;
+    const unsigned char* u = air_array(&ta, &count);
+    short x, z, fw, fh;
+    if (!u || slot >= count) return NULL;
+    u += (size_t)slot * DMG_UNIT_STRIDE;
+    memcpy(&st, u + 0x110, 4);
+    if ((st & 0x30004003u) != 0x10000002u) return NULL;
+    memcpy(&cargo, u + 0x86, 4);
+    if (cargo || !*(void* const*)(u + 0x9E)) return NULL;
+    memcpy(&bucket, u + 0x82, 4);
+    if (!bucket || bucket == *(const unsigned int*)(ta + 0x142B7)) return NULL;
+    memcpy(&x, u + 0x76, 2); memcpy(&z, u + 0x78, 2);
+    memcpy(&fw, u + 0x7E, 2); memcpy(&fh, u + 0x80, 2);
+    if (fw <= 0 || fh <= 0) return NULL;
+    if (x >= r->xe || x + fw <= r->xs || z >= r->ze || z + fh <= r->zs) return NULL;
+    return u;
+}
+
+static int dmg_set_has(const DMGSET* t, unsigned int value)
+{
+    unsigned int key = value + 1u, j;
+    for (j = dmg_hash(key, t->cap - 1u); t->key[j]; j = (j + 1u) & (t->cap - 1u))
+        if ((t->key[j] & ~DMG_KEY_PAST) == key) return 1;
+    return 0;
+}
+
+/* this call's next candidate, re-judged now, or NULL: stdcall, from the selector stub */
+static const unsigned char* __stdcall air_next(void)
+{
+    DMGSEEN* f = (DMGSEEN*)TlsGetValue(s_dmgTls);
+    if (!f) return NULL;
+    while (f->air.next < f->air.n) {
+        unsigned int slot = f->air.idx[f->air.next++];
+        const unsigned char* u = air_unit(slot, &f->air);
+        if (u && !dmg_set_has(&f->unit, slot)) {
+            InterlockedIncrement(&s_airServed);
+            return u;
+        }
+    }
+    return NULL;
+}
+
+/* the walk is over: this call's rect, its list from the pool, its first candidate */
+static const unsigned char* __stdcall air_first(const unsigned char* proj, const unsigned char* at)
+{
+    DMGSEEN* f = dmg_frame();
+    const char* ta;
+    unsigned int count, i, radius, c;
+    short ax, az;
+    int xc, zc;
+    const unsigned char* w;
+    if (!f || !air_array(&ta, &count) || !proj || !at) return NULL;
+    if (!(w = *(const unsigned char* const*)proj)) return NULL;
+    radius = (unsigned int)*(const unsigned short*)(w + 0xD6) >> 1;
+    c = (radius >> 4) + 1u;
+    memcpy(&ax, at + 0x02, 2);
+    memcpy(&az, at + 0x0A, 2);
+    xc = ax / 16;                      /* C truncates toward zero, as cdq/and 15/add/sar 4 */
+    zc = az / 16;
+    f->air.xs = xc - (int)c; if (f->air.xs < 0) f->air.xs = 0;
+    f->air.xe = xc + (int)c; if (f->air.xe > *(const int*)(ta + 0x14233)) f->air.xe = *(const int*)(ta + 0x14233);
+    f->air.zs = zc - (int)c; if (f->air.zs < 0) f->air.zs = 0;
+    f->air.ze = zc + (int)c; if (f->air.ze > *(const int*)(ta + 0x14237)) f->air.ze = *(const int*)(ta + 0x14237);
+    f->air.n = f->air.next = 0;
+    if (f->air.xs >= f->air.xe || f->air.zs >= f->air.ze) return NULL;
+
+    EnterCriticalSection(&s_airLock);
+    for (i = 0; i < s_airN; i++) {
+        unsigned int slot = s_airPool[i];
+        if (!air_unit(slot, &f->air) || dmg_set_has(&f->unit, slot)) continue;
+        if (f->air.n == f->air.cap) {
+            unsigned int cap = f->air.cap * 2u;
+            unsigned short* p = (unsigned short*)eng_alloc_or_exit(s_dmgTag, cap * 2u);
+            memcpy(p, f->air.idx, f->air.n * 2u);
+            if (f->air.idx != f->air.inl) ENG_FREE(f->air.idx);
+            f->air.idx = p;
+            f->air.cap = cap;
+        }
+        f->air.idx[f->air.n++] = (unsigned short)slot;
+    }
+    LeaveCriticalSection(&s_airLock);
+    return air_next();
+}
+
+/* the stamp filed `unit` as airborne (0x47CF98): it joins the pool */
+static void __cdecl air_note(const unsigned char* unit)
+{
+    const char* ta;
+    unsigned int count;
+    const unsigned char* begin = air_array(&ta, &count);
+    size_t off, slot;
+    if (!begin || unit < begin) return;
+    off = (size_t)(unit - begin);
+    slot = off / DMG_UNIT_STRIDE;
+    if (off % DMG_UNIT_STRIDE || slot >= count) return;
+    EnterCriticalSection(&s_airLock);
+    if (!s_airIn[slot]) {
+        s_airIn[slot] = 1;
+        s_airPool[s_airN++] = (unsigned short)slot;
+    }
+    LeaveCriticalSection(&s_airLock);
+}
+
+/* the step's unit tick is about to run (0x4954ED): the pool is every airborne unit now */
+static void __cdecl air_rebuild(void)
+{
+    const char* ta;
+    unsigned int count, i, st;
+    const unsigned char* begin = air_array(&ta, &count);
+    EnterCriticalSection(&s_airLock);
+    for (i = 0; i < s_airN; i++) s_airIn[s_airPool[i]] = 0;
+    s_airN = 0;
+    for (i = 0; begin && i < count; i++) {
+        memcpy(&st, begin + (size_t)i * DMG_UNIT_STRIDE + 0x110, 4);
+        if ((st & 0x30000003u) == 0x10000002u) {
+            s_airIn[i] = 1;
+            s_airPool[s_airN++] = (unsigned short)i;
+        }
+    }
+    LeaveCriticalSection(&s_airLock);
+}
+
+static int fix_stacked_air(void)
+{
+    static const unsigned char tail[11] = {             /* 0x49A664                          */
+        0x8B, 0x45, 0x08,                   /* mov eax,[ebp+8]                   */
+        0x8B, 0x08,                         /* mov ecx,[eax]                     */
+        0x8B, 0x91, 0x11, 0x01, 0x00, 0x00, /* mov edx,[ecx+0x111]               */
+    };
+    static const unsigned char sel[18] = {              /* 0x49A415                          */
+        0x8B, 0x44, 0x24, 0x10,             /* mov eax,[esp+0x10]                */
+        0x40,                               /* inc eax                           */
+        0x83, 0xF8, 0x01,                   /* cmp eax,1                         */
+        0x89, 0x44, 0x24, 0x10,             /* mov [esp+0x10],eax                */
+        0x0F, 0x8E, 0xED, 0xFD, 0xFF, 0xFF, /* jle 0x49A214                      */
+    };
+    static const unsigned char stamp[9] = {             /* 0x47CF98                          */
+        0x83, 0xF8, 0x02,                   /* cmp eax,2                         */
+        0x0F, 0x85, 0x34, 0x01, 0x00, 0x00, /* jne 0x47D0D5                      */
+    };
+    static const unsigned char tick[5] = { 0xE8, 0x3E, 0x58, 0xFF, 0xFF };   /* call 0x48AD30 */
+    unsigned char *t, *s, *m, *k, *p;
+
+    InitializeCriticalSection(&s_airLock);
+    t = fix_code(64); s = fix_code(64); m = fix_code(32); k = fix_code(16);
+    if (!t || !s || !m || !k) { lim_no_stub(); return FIX_TABLE; }
+
+    /* the walk's end: push [ebp+0xC]; push [ebp+8]; call air_first; test eax,eax; jz tail;
+       mov esi,eax; mov dword [esp+0x10],2; jmp 0x49A24E; tail: the 11 bytes; jmp 0x49A66F */
+    p = t;
+    *p++ = 0xFF; *p++ = 0x75; *p++ = 0x0C;
+    *p++ = 0xFF; *p++ = 0x75; *p++ = 0x08;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_first); p += 4;
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x74; *p++ = 0x0F;
+    *p++ = 0x89; *p++ = 0xC6;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10; *p++ = 2; *p++ = 0; *p++ = 0; *p++ = 0;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A24E); p += 4;
+    memcpy(p, tail, sizeof tail); p += sizeof tail;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A66F); p += 4;
+
+    /* the selector: mov eax,[esp+0x10]; cmp eax,2; jae serve; inc eax; cmp eax,1;
+       mov [esp+0x10],eax; jle 0x49A214; jmp 0x49A427; serve: call air_next; test eax,eax;
+       jz tail; mov esi,eax; jmp 0x49A24E; tail: the 11 bytes; jmp 0x49A66F. For 0 and 1 the
+       flags jle reads are stock's: inc, cmp, then a mov that leaves them. */
+    p = s;
+    *p++ = 0x8B; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x02;
+    *p++ = 0x73; *p++ = 0x13;
+    *p++ = 0x40;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x01;
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10;
+    *p++ = 0x0F; *p++ = 0x8E; tagpu_detour_rel(p, 0x0049A214); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A427); p += 4;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_next); p += 4;
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x74; *p++ = 0x07;
+    *p++ = 0x89; *p++ = 0xC6;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A24E); p += 4;
+    memcpy(p, tail, sizeof tail); p += sizeof tail;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A66F); p += 4;
+
+    /* the stamp's airborne path: cmp eax,2; jne 0x47D0D5; pushad; push esi; call air_note;
+       add esp,4; popad; jmp 0x47CFA1 -- 0x47CFA1 sets its own flags (test edi,edi) */
+    p = m;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x02;
+    *p++ = 0x0F; *p++ = 0x85; tagpu_detour_rel(p, 0x0047D0D5); p += 4;
+    *p++ = 0x60;
+    *p++ = 0x56;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_note); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x61;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0047CFA1); p += 4;
+
+    /* the unit tick's call: pushfd; pushad; call air_rebuild; popad; popfd; jmp 0x48AD30 --
+       the return address the site's call pushed stays on top, so 0x48AD30 returns to 0x4954F2 */
+    p = k;
+    *p++ = 0x9C;
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_rebuild); p += 4;
+    *p++ = 0x61;
+    *p++ = 0x9D;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0048AD30); p += 4;
+
+    lim_branch(0x0049A664, sizeof tail, tail, 0xE9, (unsigned int)(size_t)t,
+               "stacked aircraft: served at the end of area damage's walk");
+    lim_branch(0x0049A415, sizeof sel, sel, 0xE9, (unsigned int)(size_t)s,
+               "stacked aircraft: area damage's slot selector");
+    lim_branch(0x0047CF98, sizeof stamp, stamp, 0xE9, (unsigned int)(size_t)m,
+               "stacked aircraft: the stamp's airborne path joins the pool");
+    lim_branch(0x004954ED, sizeof tick, tick, 0xE8, (unsigned int)(size_t)k,
+               "stacked aircraft: the pool rebuilt before the unit tick");
     return FIX_TABLE;
 }
 
@@ -3773,13 +4181,55 @@ static int fix_last_cell(void)
    cruise altitude a few tiles inside it, a unit on a hill beside it -- samples rows above the
    grid and is invisible to every other player, so nothing acquires it. Underwater, y < 0, the
    same happens at the south edge.
-   THE SAME READ, INLINED ELSEWHERE. Every bound of a row against a player's grid height is a
-   compare with +0x84, so the census is those compares: a byte scan of .text for 3B/39 with a
-   disp32 of 0x84 finds 50 (exe-reverse-engineering.md, "Line of sight at the map's edge", lists
-   each). 45 are this read, a world point placed at (z - y/2) >> 5 against one player's LOS or
-   mapped grid; the other five are two re-tests of a row 0x47D3B8 already bounded (0x47D41A,
-   0x47D44E) and three compares of another structure's +0x84 with zero. Beyond the eight above,
-   37, each ending in a row test `cmp r,[g+0x84]` and a jae or jb (LOSROW, below):
+   THE SAME READ, INLINED ELSEWHERE. The census enumerates by the data, not by one instruction
+   shape: every instruction of .text that reads a grid's height in memory -- the player's +0x84
+   (the LOS and mapped grids), the sight grid's main+0x14297, and [r+8] through a register that
+   a lea of main+0x1428F or of +0x7C (or an add r,0x7C) set -- and every compare with a register
+   loaded from one of them (exe-reverse-engineering.md, "Line of sight at the map's edge", lists
+   each). 57 compares read such a height. 46 are this read, a point placed at (z - h/2) >> 5
+   against one player's grid; three re-test the row the sight emitter stored (0x4819B7,
+   0x481DE4, 0x482304), three bound a ray's cell (0x481B0B, 0x481F15, 0x482435), two re-test a
+   row 0x47D3B8 already bounded (0x47D41A, 0x47D44E), and three compare another structure's
+   +0x84 with zero. The 13 compares with a register loaded from a +0x84 are other structures'
+   counts.
+   WHAT IT DOES NOT ENUMERATE, found by a second pass over those two forms: a grid pointer
+   spilled to the stack and reloaded, and a height recomputed from the plot's rows
+   main+0x14237 >> 1. Of four spills, the mapped stamp's, the removal's and the stamp's
+   (0x4819AD, 0x481DDA, 0x4822FA) are reloaded on each ray's back edge and reach compares the
+   census has (0x481B0B, 0x481F15, 0x482435). The sight grid's builder's (0x482F2A) reaches two
+   it has not: the builder projects every terrain tile to its sheared row (0x482FFC..0x483002)
+   and writes it only inside the grid (cmp ecx,-1 at 0x483005, then 0x48307C and 0x4830C6
+   through [esp+0x14]), so the sight grid is BUILT in sheared space, and that is the space the
+   ray fan reads, from the own row as from stock's. A tile sheared off the grid loses only its
+   occlusion, never anyone's sight, so it stays stock. The recomputed heights reach four
+   compares -- the circle's row clips (0x481C28, 0x481FF9, 0x482519) and 0x40D80A, a
+   mapped-grid reader by a scaled coordinate -- and one scale (0x466CB3, a minimap pixel to a
+   cell), none of them this read. A scan of the shear's arithmetic (a halving subtracted from a z,
+   then >> 5, following one register copy) finds 39 computations: the builder's, and one
+   feeding each of 38 of the 46 -- the other eight reuse a y >> 1 computed further up.
+   Beyond the eight above:
+     - the sight emitter 0x4825B0 (called at 0x481836 in the all-units rebuild, 0x482824 in
+       0x4827B0, which builds a unit's record -- itself called at 0x43DA59, 0x464DBF,
+       0x465053, 0x48AAA0 and 0x48B6BF --, 0x482B5E in 0x482AC0, which does the same after
+       zeroing the unit's height byte (called at 0x486178 and 0x486312), and 0x4829F4 in
+       0x482910, which builds a temporary sight record; 0x482868 is in 0x482830, which nothing
+       calls and no pointer names): under
+       the ray fan (LosType bit 0x4) it places a unit's sight at the sheared row of its
+       clamped sight height h (0x482615..0x48261E), stores the column and row in the record's
+       words (the unit's +0x7A/+0x7C, 0x48264C/0x482652) and stamps it only inside the grid
+       (0x482663); outside, it zeroes the height byte and stamps nothing, so an aircraft near
+       the north edge reveals nothing to its owner. The stamp 0x482270, the mapped stamp
+       0x481930 and the removal 0x481D50 all read the stored words, and the height byte decides
+       whether there is a stamp to remove (0x482634), so the row is fixed once, before it is
+       stored: every stamp and its removal use the same row by construction. Every removal --
+       the emitter's own (0x482644), the death removal 0x482090 (called at 0x486845), the
+       temporary record's expiry 0x482130 (0x482161) -- goes through 0x481D50, which re-tests
+       the stored column and row, so a record whose stored words the bound refused removes
+       nothing. The stored
+       words are otherwise written only by the create (0 at 0x485C0A), a saved game's restore
+       (0x48724D, with the height byte at 0x4872BF, as saved), and the temporary records'
+       compaction (main+0x1427B, at most 20 of 36 bytes, each holding its own words and byte),
+       which moves the words (0x482220) and the byte (0x48222D) together -- the table;
      - the order resolver 0x43F0E0, six: whether the target's cell is mapped for the local
        player decides the order it resolves -- the table;
      - the view player's map build 0x467440, two: a unit it sees gets +0x110 bit 8, which the
@@ -3790,6 +4240,9 @@ static int fix_last_cell(void)
        each; positional sound 0x47F300, two;
      - 0x474B80, two: left stock, since nothing runs it (no call or jump reaches it in .text
        and no pointer to it is in the image).
+   The circle (LosType bit 0x4 clear) places sight at the circle's corner, (z >> 5) - (y >> 6)
+   less its offset (0x4826B7), and the stamp clips each row to the grid (0x4824F8..0x482547),
+   so every row of the circle that is inside the grid is stamped.
    THE FIX, at every one of them: when the sheared row is outside the grid and the point's own
    row, z >> 5, is inside it, the own row is used; otherwise the stock answer stands, so a unit
    beyond the map's edge stays unseen (the margin TADR adds there is a gameplay change, not a
@@ -3807,21 +4260,27 @@ static int fix_last_cell(void)
 
 /* The functions whose reads are fixed, in the order of their counters. */
 enum {
-    LOS_UNIT, LOS_MAPPED, LOS_PROBE, LOS_ORDER, LOS_VIEWMAP,       /* the table */
+    LOS_UNIT, LOS_MAPPED, LOS_PROBE, LOS_ORDER, LOS_VIEWMAP, LOS_EMIT, /* the table */
     LOS_PROJ, LOS_CURSOR, LOS_BUILD, LOS_FEATURE, LOS_SOUND,       /* local     */
     LOS_FX_473590, LOS_FX_474170, LOS_FX_4745E0, LOS_FX_475470, LOS_FX_473A00, LOS_RADAR,
     LOS_NFN
 };
 static const unsigned int s_losFn[LOS_NFN] = {
-    0x465AC0, 0x408090, 0x407E90, 0x43F0E0, 0x467440,
+    0x465AC0, 0x408090, 0x407E90, 0x43F0E0, 0x467440, 0x4825B0,
     0x49BE60, 0x43E490, 0x47D2E0, 0x4658E0, 0x47F300,
     0x473590, 0x474170, 0x4745E0, 0x475470, 0x473A00, 0x466DC0,
 };
 /* the own row taken, one count per function; interlocked, so the count assumes nothing about
-   which thread calls the engine's draw and sound code */
+   which thread calls the engine's draw and sound code. It counts the row taken, not a read or a
+   stamp made: where the column is bounded after the row, as at the sight emitter (0x48265B), a
+   counted row can still be refused by its column, and nothing is read or stamped. */
 static volatile LONG s_losOwnRow[LOS_NFN];
 
-/* pushfd; lock inc dword [&s_losOwnRow[fn]]; popfd -- the count, with the flags kept */
+/* pushfd; lock inc dword [&s_losOwnRow[fn]]; popfd -- the count, with the flags kept. The hand
+   stubs' literal rel8s (stubAB .. stubO, the projectile pass's stub) jump over it, so they are
+   written for this length, and a different one fails the build here. */
+#define LOS_COUNT_LEN 9
+typedef char los_count_len_is_the_hand_stubs[(LOS_COUNT_LEN == 9) ? 1 : -1];
 static int los_count(unsigned char* a, int fn)
 {
     unsigned int at = (unsigned int)(size_t)&s_losOwnRow[fn];
@@ -3829,7 +4288,7 @@ static int los_count(unsigned char* a, int fn)
     a[1] = 0xF0; a[2] = 0xFF; a[3] = 0x05;
     memcpy(a + 4, &at, 4);
     a[8] = 0x9D;
-    return 9;
+    return LOS_COUNT_LEN;
 }
 
 typedef struct LOSREAD {
@@ -3893,8 +4352,9 @@ static int los_z_ok(const unsigned char* z, int nz, int r)
    target; after a jb, in is), and those bytes are compared with the image before any of this
    is written. Only r, the flags and what lead writes change: r leaves as the row read, and in
    is reached with CF set and out with CF clear, as stock reaches them.
-   Returns the length (46 + nlead at most), or 0 when c is not that shape, z is not a movsx
-   into r, or either reads r for its address; nothing is written over the site then. */
+   Returns the length, LOS_STUB_LEN(nz, nlead), or 0 when c is not that shape, z is not a
+   movsx into r, or either reads r for its address; nothing is written over the site then. */
+#define LOS_STUB_LEN(nz, nlead) (32 + LOS_COUNT_LEN + (nz) + (nlead))
 static int los_stub(unsigned char* a, unsigned int va, int n, const unsigned char* c,
                     const unsigned char* z, int nz, const unsigned char* lead, int nlead, int fn)
 {
@@ -3924,7 +4384,7 @@ static int los_stub(unsigned char* a, unsigned int va, int n, const unsigned cha
     a[k++] = 0x0F; a[k++] = 0x83; tagpu_detour_rel(a + k, out); k += 4;
     k += los_count(a + k, fn);
     a[k++] = 0xE9; tagpu_detour_rel(a + k, in); k += 4;
-    return k;
+    return k == LOS_STUB_LEN(nz, nlead) ? k : 0;
 }
 
 static int los_row_stub(unsigned char* a, const LOSROW* s)
@@ -4141,10 +4601,59 @@ static int fix_los_shear(void)
         0x73, 0x12,                         /* jae out                        */
     };                                      /* count; in: drop; jmp; out: drop; jmp */
     static const unsigned char drop[4] = { 0x8D, 0x64, 0x24, 0x04 };   /* lea esp,[esp+4] */
+    /* the sight emitter 0x4825B0, from its point (ebp the column, ebx the clamped height h,
+       edi the z word, eax |old h - h|, edx the record's stored column/row) to its row: compared,
+       never written */
+    static const unsigned char emitSpan[65] = {
+        0x0F, 0xBF, 0x6E, 0x12, 0x0F, 0xBF, 0x46, 0x16, 0x33, 0xDB, 0x8A, 0x5E,
+        0x0A, 0xC1, 0xFD, 0x05, 0x03, 0xD8, 0x79, 0x02, 0x33, 0xDB, 0x81, 0xFB,
+        0xFF, 0x00, 0x00, 0x00, 0x7E, 0x05, 0xBB, 0xFF, 0x00, 0x00, 0x00, 0x8B,
+        0x56, 0x0C, 0x8B, 0xCB, 0x0F, 0xBF, 0x7E, 0x1A, 0x8A, 0x02, 0x88, 0x44,
+        0x24, 0x18, 0x25, 0xFF, 0x00, 0x00, 0x00, 0x2B, 0xC3, 0x99, 0x33, 0xC2,
+        0x2B, 0xC2, 0x8B, 0x56, 0x04,
+    };
+    static const unsigned char emitRow[10] = {
+        0xD1, 0xF9,                         /* sar ecx,1                      */
+        0x2B, 0xF9,                         /* sub edi,ecx: the shear         */
+        0x0F, 0xBF, 0x0A,                   /* movsx ecx,word [edx]: stored   */
+        0xC1, 0xFF, 0x05,                   /* sar edi,5                      */
+    };
+    /* from the stub's landing point to the bound it mirrors, which the stub's argument rests on:
+       the compare with the stored words and the early-out, the removal, the store, then
+       cmp ebp,[eax+0x14293]; jae; cmp edi,[eax+0x14297]; jae -- compared, never written */
+    static const unsigned char emitAfter[76] = {
+        0x3B, 0xCD, 0x75, 0x11, 0x0F, 0xBF, 0x52, 0x02, 0x3B, 0xD7, 0x75, 0x09,
+        0x83, 0xF8, 0x05, 0x0F, 0x8E, 0x6C, 0x01, 0x00, 0x00, 0x8A, 0x44, 0x24,
+        0x18, 0x84, 0xC0, 0x74, 0x0D, 0xF6, 0x44, 0x24, 0x10, 0x02, 0x74, 0x06,
+        0x56, 0xE8, 0x07, 0xF7, 0xFF, 0xFF, 0x8B, 0x46, 0x04, 0x66, 0x89, 0x28,
+        0x8B, 0x4E, 0x04, 0x66, 0x89, 0x79, 0x02, 0xA1, 0xE8, 0x1D, 0x51, 0x00,
+        0x3B, 0xA8, 0x93, 0x42, 0x01, 0x00, 0x73, 0x46, 0x3B, 0xB8, 0x97, 0x42,
+        0x01, 0x00, 0x73, 0x3E,
+    };
+    static const unsigned char emitHead[] = {
+        0x50,                               /* push eax: |dh|, read at 0x48262B */
+        0x89, 0xF8,                         /* mov eax,edi: z                 */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0xD1, 0xF9,                         /* sar ecx,1                      */
+        0x2B, 0xF9,                         /* sub edi,ecx: the shear         */
+        0xC1, 0xFF, 0x05,                   /* sar edi,5                      */
+        0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00, /* mov ecx,[0x511DE8]             */
+        0x3B, 0xB9, 0x97, 0x42, 0x01, 0x00, /* cmp edi,[ecx+0x14297]          */
+        0x72, 0x00,                         /* jb keep: inside, stock's row   */
+        0x3B, 0x81, 0x97, 0x42, 0x01, 0x00, /* cmp eax,[ecx+0x14297]          */
+        0x73, 0x00,                         /* jae keep: outside too          */
+        0x89, 0xC7,                         /* mov edi,eax: the own row       */
+    };                                      /* count                          */
+    enum { EMIT_JB = 25, EMIT_JAE = 33 };   /* the two branches in emitHead; keep follows the count */
+    static const unsigned char emitTail[] = {
+        0x58,                               /* keep: pop eax                  */
+        0x0F, 0xBF, 0x0A,                   /* movsx ecx,word [edx]           */
+        0xE9, 0x00, 0x00, 0x00, 0x00,       /* jmp 0x48261F                   */
+    };
     int k;
     for (k = 0; k < 7; k++) {
         const LOSREAD* r = &read[k];
-        unsigned char* a = fix_code(r->nstub + 19u);
+        unsigned char* a = fix_code(r->nstub + LOS_COUNT_LEN + 10u);
         int m;
         if (!a) { lim_no_stub(); return FIX_TABLE; }
         memcpy(a, r->stub, r->nstub);
@@ -4157,13 +4666,13 @@ static int fix_los_shear(void)
         const LOSROW* w = &row[k];
         const char* name = w->fn == LOS_ORDER ? "line of sight: the order resolver's row"
                                               : "line of sight: the view player's map's row";
-        unsigned char* a = fix_code(46);
+        unsigned char* a = fix_code(LOS_STUB_LEN(w->nz, 0));
         if (!a || !los_row_stub(a, w)) { lim_no_stub(); return FIX_TABLE; }
         lim_same(w->va - w->pre, w->pre, w->stock, name);
         lim_branch(w->va, w->n, w->stock + w->pre, 0xE9, (unsigned int)(size_t)a, name);
     }
     {
-        unsigned char* a = fix_code(sizeof stubO + 27u);
+        unsigned char* a = fix_code(sizeof stubO + LOS_COUNT_LEN + 18u);
         int m;
         if (!a) { lim_no_stub(); return FIX_TABLE; }
         memcpy(a, stubO, sizeof stubO);
@@ -4172,6 +4681,25 @@ static int fix_los_shear(void)
         memcpy(a + m + 9, drop, 4); a[m + 13] = 0xE9; tagpu_detour_rel(a + m + 14, 0x0043F6AA);
         lim_branch(0x0043F631, sizeof blockO, blockO, 0xE9, (unsigned int)(size_t)a,
                    "line of sight: the order resolver's second row");
+    }
+    {
+        unsigned char* a = fix_code(sizeof emitHead + LOS_COUNT_LEN + sizeof emitTail);
+        unsigned int rel;
+        int m;
+        if (!a) { lim_no_stub(); return FIX_TABLE; }
+        memcpy(a, emitHead, sizeof emitHead);
+        if (a[EMIT_JB] != 0x72 || a[EMIT_JAE] != 0x73) { lim_no_stub(); return FIX_TABLE; }
+        a[EMIT_JB + 1]  = (unsigned char)(sizeof emitHead + LOS_COUNT_LEN - (EMIT_JB + 2));
+        a[EMIT_JAE + 1] = (unsigned char)(sizeof emitHead + LOS_COUNT_LEN - (EMIT_JAE + 2));
+        m = (int)sizeof emitHead + los_count(a + sizeof emitHead, LOS_EMIT);
+        memcpy(a + m, emitTail, sizeof emitTail);
+        rel = 0x0048261Fu - ((unsigned int)(size_t)a + (unsigned int)m + sizeof emitTail);
+        memcpy(a + m + sizeof emitTail - 4, &rel, 4);
+        lim_same(0x004825D4, sizeof emitSpan, emitSpan, "line of sight: the sight emitter's point");
+        lim_branch(0x00482615, sizeof emitRow, emitRow, 0xE9, (unsigned int)(size_t)a,
+                   "line of sight: the sight emitter's row");
+        lim_same(0x0048261F, sizeof emitAfter, emitAfter,
+                 "line of sight: the sight emitter's store and bound");
     }
     return FIX_TABLE;
 }
@@ -4222,7 +4750,7 @@ static int fix_projectile_view(void)
     unsigned int rel;
     int m;
     if (memcmp((const void*)0x0049BEE8, was, sizeof was) != 0) return FIX_BYTES;
-    if (!(a = fix_code(sizeof stub + 19))) return FIX_STUB;
+    if (!(a = fix_code(sizeof stub + LOS_COUNT_LEN + 10))) return FIX_STUB;
     memcpy(a, stub, sizeof stub);
     m = (int)sizeof stub + los_count(a + sizeof stub, LOS_PROJ);
     a[m] = 0xE9; tagpu_detour_rel(a + m + 1, 0x0049BF10);
@@ -4426,7 +4954,7 @@ static int fix_los_local(void)
         unsigned char* a;
         int ok;
         if (k < 23) {
-            if (!(a = fix_code(46))) return FIX_STUB;
+            if (!(a = fix_code(LOS_STUB_LEN(row[k].nz, 0)))) return FIX_STUB;
             ok = los_row_stub(a, &row[k]);
             s[k].va = row[k].va;
             s[k].n = row[k].n;
@@ -4434,7 +4962,7 @@ static int fix_los_local(void)
         } else {
             const unsigned char* test = dots + (dotVa[k - 23] - 0x004671C0u);
             int late = k >= 25;
-            if (!(a = fix_code(50))) return FIX_STUB;
+            if (!(a = fix_code(LOS_STUB_LEN(4, late ? 4 : 0)))) return FIX_STUB;
             ok = los_stub(a, dotVa[k - 23], 8, test, dots + (0x004671E5u - 0x004671C0u), 4,
                           late ? lead : NULL, late ? 4 : 0, LOS_RADAR);
             s[k].va = dotVa[k - 23];
@@ -4463,6 +4991,7 @@ static void patch_engine_defects(void)
     int keys = fix_sync_keys();
     int wpn  = fix_weapon_ids();
     int caps = fix_victim_caps();
+    int air  = fix_stacked_air();
     int flak = fix_flak_divides();
     int edge = fix_last_cell();
     int los  = fix_los_shear();
@@ -4506,17 +5035,24 @@ static void patch_engine_defects(void)
     fn[sizeof fn - 1] = 0;
     _snprintf(b, sizeof b,
               "enginefix: line of sight at the map's edge, in the table (0x465B6A 0x465C04 "
-              "0x465CA2 0x465D46 0x465DA9 0x408095 0x407F74; the order resolver 0x43F5D1 "
+              "0x465CA2 0x465D46 0x465DA9 0x408095 0x407F74; the sight emitter 0x482615; the order resolver 0x43F5D1 "
               "0x43F631 0x43FC05 0x43FD1A 0x43FF85 0x4400AA; the view player's map 0x46778A "
               "0x4677D0) %s; local (the cursor 0x43E69D 0x43E904 0x43EBC6 0x43ECDB 0x43EE94 "
               "0x43EFA9; the build cursor 0x47D3B8; the feature helper 0x465942 0x46598A "
               "0x465A17 0x465A63; the radar's projectile dots 0x46725F 0x467294 0x467340 "
               "0x467375; the particles 0x47360C 0x473657 0x473A94 0x473AD3 0x4741EC 0x474237 "
               "0x474674 0x4746BB 0x47551E 0x47556C; sound 0x47F431 0x47F476) %s; the projectile pass (0x49BEE8) %s. Own row "
-              "taken at 0x%08X, one LONG per function:%s. Stubs: %u of 4096 bytes at 0x%08X",
+              "taken at 0x%08X, one LONG per function:%s",
               fix_state(los), fix_state(losl), fix_state(pview),
-              (unsigned int)(size_t)s_losOwnRow, fn, s_fixCodeUsed,
-              (unsigned int)(size_t)s_fixCode);
+              (unsigned int)(size_t)s_losOwnRow, fn);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: stacked aircraft served to area damage after its walk (0x49A664 "
+              "0x49A415; the pool: the stamp 0x47CF98, the unit tick's call 0x4954ED) %s. "
+              "Aircraft served, counted at 0x%08X",
+              fix_state(air), (unsigned int)(size_t)&s_airServed);
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -4543,6 +5079,9 @@ void tagpu_apply_patches(void)
     int ok = patch_byte(0x004266A7, 0x75, 0xEB);
     plog(ok ? "tagpu: patched out DirectX version warning (0x4266A7 jne->jmp)"
             : "tagpu: DirectX-warning patch skipped (byte mismatch — not stock 3.1?)");
+
+    if (tagpu_regstore_active())
+        close_register_switch();
 
     /* Contextual order cursors under Interface Type 1. Opt out with `tagpu_curs.off`,
        which — like every byte patch here — is read once, now.
@@ -5294,6 +5833,8 @@ int tagpu_limits_install(void)
 #ifndef TAGPU_LIMITS_STOCK
     lim_sites();
 #endif
+    tagpu_logf("enginefix: the fixes' and limits' stubs take %u bytes in %u page(s) of 4096",
+               s_fixBytes, s_fixPages);
     if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be made"); return 0; }
     if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
     if (lim_overlap()) {

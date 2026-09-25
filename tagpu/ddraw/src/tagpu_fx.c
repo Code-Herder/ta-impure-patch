@@ -54,6 +54,7 @@
 #include "tagpu_fxown.h"
 #include "tagpu_sfx.h"
 #include "tagpu_glsl.h"
+#include "tagpu_line.h"
 #include "tagpu_gaf.h"
 #include "tagpu_classicpp.h"
 #include "tagpu_packet.h"
@@ -313,6 +314,56 @@ static const char* FS =
     /* premultiplied target: flashes are pure additive light (alpha 0) */
     "  if (mode == 3) frag = vec4(rgb, 0.0); else frag = vec4(rgb * a, a);\n"
     "}\n";
+/* THE LINES' PROGRAM: lasers and lightning by tagpu_line.h's one rule --
+   `0x4CC7AB`'s walk on the line grid, thickened to ss pixels; tagpu_mark.c's
+   LVS and LFS say how, and tagpu_glsl.h holds the band and the walk. One
+   instance a line record (`emit_line`): `aPos.xy` and `aUV` are its two ends,
+   their line-grid pixels' centres in game units after the zoom, and `aPos.z`
+   its depth key. LVS declares VS's uniforms, and LFS FS's samplers and
+   uniforms, in their order, so the two programs share this pass's one layout;
+   `uGrid` (tagpu_line.h `tagpu_line_grid`) follows FS's block at offset 64.
+   LFS is FS's mode-0 path -- the fog and the flat palette colour -- behind
+   the line test; FS's scaffold test is left out because `uScafOn` is 0 on
+   every draw of this pass (tagpu_vk_fx.c, WHAT IT DOES NOT DO). */
+static const char* LVS =
+    "#version 330 core\n"
+    "layout(location=0) in vec3 aPos;\n"
+    "layout(location=1) in vec2 aUV;\n"
+    "layout(location=2) in vec2 aCM;\n"
+    "layout(location=3) in vec2 aWorld;\n"
+    "uniform vec2 uGame;\n"
+    "uniform float uZoom;\n"
+    "uniform vec2 uZoomC;\n"
+    "uniform float uDepthScale;\n"
+    "out vec2 vWorld; flat out vec2 vCM; flat out vec4 vLine;\n"
+    TAGPU_GLSL_BAND_FN
+    "void main(){\n"
+    "  float t;\n"
+    "  vec2 p = taBand(aPos.xy, aUV, gl_VertexID, t);\n"
+    "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
+    "                     clamp(1.0 - aPos.z/uDepthScale, 0.0, 1.0), 1.0);\n"
+    "  vWorld = aWorld; vCM = aCM; vLine = vec4(aPos.xy, aUV);\n"
+    "}\n";
+static const char* LFS =
+    "#version 330 core\n"
+    "in vec2 vWorld; flat in vec2 vCM; flat in vec4 vLine;\n"
+    "out vec4 frag;\n"
+    "uniform sampler2D uPal;\n"
+    "uniform sampler2D uLht;\n"
+    "uniform sampler2D uAtlasRGB;\n"
+    "uniform int uRestored;\n"
+    TAGPU_GLSL_FOG_UNIFORMS
+    TAGPU_GLSL_SCAF_UNIFORMS
+    "uniform sampler2D uBase;\n"
+    "uniform ivec4 uGrid;\n"
+    TAGPU_GLSL_FOG_FN
+    TAGPU_GLSL_LINE_FN
+    "void main(){\n"
+    "  if (!taLineKeeps(gl_FragCoord.xy, vLine, uGrid))\n"
+    "    discard;\n"
+    TAGPU_GLSL_FOG_DISCARD
+    "  frag = vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0);\n"
+    "}\n";
 #pragma GCC diagnostic pop
 
 /* THE ATLAS IS THE PASS, NOT THE BACKEND -- the feature pass's shape and the
@@ -344,7 +395,15 @@ static void put_vert(int b, float x, float y, float u, float v, float c, int mod
 }
 
 static int s_cLines = 0, s_cSprites = 0, s_cFlash = 0, s_cAtlasFail = 0;
-static int s_cOverflow = 0, s_cQuads = 0;
+static int s_cOverflow = 0, s_cQuads = 0, s_cLineFar = 0;
+/* this frame's wheel zoom, latched by the gather: a line's ends are
+   quantised through it where the line is emitted (tagpu_line.h) */
+static double s_lzoom = 1.0, s_lzcx, s_lzcy;
+/* and DrawLine's clip rect -- the viewport, inclusive -- and the surface, in
+   line-grid pixels (tagpu_line_clip) */
+static int s_lclipL, s_lclipT, s_lclipR, s_lclipB, s_lclipW, s_lclipH;
+static int s_lss = 1;                   /* the line grid's ss, latched with the zoom */
+static TAGPU_LINE_AB s_lab;             /* an A/B frame's lines before the clip */
 
 /* A PART ASKED FOR AND NOT WRITTEN. Every emitter return that leaves a
    sprite's quad or a line out of the buckets for want of this frame's room
@@ -377,16 +436,35 @@ static void put_quad(int b, float x0, float y0, float x1, float y1,
     s_cQuads++;
 }
 
+/* ONE LINE RECORD, the instance LVS draws: the two ends after the wheel zoom
+   in (x, y) and (u, v) -- their line-grid pixels' centres -- the depth key,
+   the colour on the flat path and the fog point. The engine draws these lines
+   from integer pixels through DrawLine `0x4BE950`, so each end is that pixel's
+   CENTRE put through tagpu_line.h's rule -- at 1x and ss = 1 the engine's own
+   pixel -- and then through DrawLine's clip to the viewport on the line grid
+   (tagpu_line_clip). A line past TAGPU_LINE_FAR is counted (`s_cLineFar`) and
+   not drawn; one the clip leaves nothing of is not drawn either. */
 static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, float wz)
 {
+    int ax, ay, bx, by;
     if (!s_lines) return;
     s_cLines++;
     if (s_mute) return;
-    if (s_nv[B_LINES] + 2 > TAGPU_FX_MAXV) { s_cOverflow++; s_partsLost++; return; }
-    float c = (float)colidx / 255.0f;
-    /* pixel centres: the engine's Bresenham paints the cells at both ends */
-    put_vert(B_LINES, (float)x0 + 0.5f, (float)y0 + 0.5f, -1, -1, c, MODE_FLAT, wx, wz);
-    put_vert(B_LINES, (float)x1 + 0.5f, (float)y1 + 0.5f, -1, -1, c, MODE_FLAT, wx, wz);
+    if (s_nv[B_LINES] + 1 > TAGPU_FX_MAXV) { s_cOverflow++; s_partsLost++; return; }
+    if (!tagpu_line_px(x0 + 0.5, y0 + 0.5, s_lzoom, s_lzcx, s_lzcy, s_lss,
+                       TAGPU_LINE_FAR, &ax, &ay) ||
+        !tagpu_line_px(x1 + 0.5, y1 + 0.5, s_lzoom, s_lzcx, s_lzcy, s_lss,
+                       TAGPU_LINE_FAR, &bx, &by)) {
+        s_cLineFar++;
+        return;
+    }
+    tagpu_line_ab_add(&s_lab, ax, ay, bx, by, colidx);
+    if (!tagpu_line_clip(&ax, &ay, &bx, &by, s_lclipL, s_lclipT, s_lclipR, s_lclipB,
+                         s_lclipW, s_lclipH))
+        return;
+    put_vert(B_LINES, tagpu_line_centre(ax, s_lss), tagpu_line_centre(ay, s_lss),
+             tagpu_line_centre(bx, s_lss), tagpu_line_centre(by, s_lss),
+             (float)colidx / 255.0f, MODE_FLAT, wx, wz);
 }
 
 /* the fx pass's own `nosprites` token lives at ITS call sites (fx_sprite),
@@ -567,7 +645,8 @@ static void emit_model(const TAGPU_FXVIEW* v, unsigned model, float wx, float wz
    shell, a flame with no rocket. So every record is emitted inside a
    bracket, and ANY PART OF IT LOST takes the whole record back out at the
    bracket's end: every bucket, the quad count, the model list, the run
-   arena and the sequence key return to where they stood at its start. Nothing else is
+   arena, the sequence key and an A/B frame's line list (`s_lab`) return to
+   where they stood at its start. Nothing else is
    emitted inside a bracket, so the rollback takes no other effect's parts
    with it, and what did paint stays painted and draws whole on a later
    frame.
@@ -577,7 +656,7 @@ static void emit_model(const TAGPU_FXVIEW* v, unsigned model, float wx, float wz
    (everything else) then agree per frame through the hand-over's `nmodels`
    (tagpu_fx.h), so neither draws a frame's effects without the other. */
 static int      s_effNv[NBUCKET], s_effNm, s_effQuads;
-static unsigned s_effLost, s_effRun;
+static unsigned s_effLost, s_effRun, s_effLab;
 
 static void effect_begin(void)
 {
@@ -587,6 +666,7 @@ static void effect_begin(void)
     s_effRun = tagpu_fxmodel_mark();
     s_effQuads = s_cQuads;
     s_effLost = s_partsLost;
+    s_effLab = s_lab.n;
     s_encCur = key_after(s_nm);
 }
 
@@ -596,6 +676,9 @@ static void effect_end(void)
     if (s_partsLost == s_effLost) return;
     for (b = 0; b < NBUCKET; b++) s_nv[b] = s_effNv[b];
     s_nm = s_effNm;
+    /* the list only ever grows inside a bracket, so its count at the start
+       is a prefix of what it holds now */
+    s_lab.n = s_effLab;
     tagpu_fxmodel_rewind(s_effRun);
     s_cQuads = s_effQuads;
     s_encCur = key_after(s_nm);
@@ -1005,9 +1088,9 @@ static void gather_fx(const TAGPU_FXVIEW* v)
     if (v->frame_counter - last >= 60) {
         last = v->frame_counter;
         _snprintf(lb, sizeof lb,
-            "fx: proj=%u (laser=%d model=%d sprite=%d flare=%d light=%d ball=%d fogged=%d) expl=%u flash=%d debris=%u -> lines=%d sprites=%d flashq=%d models=%d runs=%u (lost=%d why=%d of cap %d) atlas=%d%s",
+            "fx: proj=%u (laser=%d model=%d sprite=%d flare=%d light=%d ball=%d fogged=%d) expl=%u flash=%d debris=%u -> lines=%d (far=%d) sprites=%d flashq=%d models=%d runs=%u (lost=%d why=%d of cap %d) atlas=%d%s",
             pk->n_proj, s_c.laser, s_c.model, s_c.sprite, s_c.flare, s_c.light, s_c.ball, s_c.fogged,
-            pk->n_expl, s_c.flash, pk->n_debris, s_cLines, s_cSprites, s_cFlash, s_nm,
+            pk->n_expl, s_c.flash, pk->n_debris, s_cLines, s_cLineFar, s_cSprites, s_cFlash, s_nm,
             tagpu_fxmodel_mark(), s_cModelLost, s_modelWhy, s_modelCap, s_atlas.n,
             s_passive ? " (passive)" : "");
         lb[sizeof lb - 1] = 0;      /* _snprintf leaves a full buffer unterminated */
@@ -1053,7 +1136,17 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
     memset(s_nv, 0, sizeof s_nv); s_nm = 0;
     tagpu_fxmodel_frame();
     s_cLines = s_cSprites = s_cFlash = s_cAtlasFail = s_cOverflow = s_cQuads = 0;
+    s_cLineFar = 0;
     s_cModelLost = 0; s_modelWhy = 0;
+    s_lzoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
+    s_lzcx = (double)v->zoomCx; s_lzcy = (double)v->zoomCy;
+    s_lss = v->ss > 0 ? v->ss : 1;
+    tagpu_line_rect(v->vpL, v->vpT, v->vw, v->vh, s_lss,
+                    &s_lclipL, &s_lclipT, &s_lclipR, &s_lclipB);
+    s_lclipW = v->gw * s_lss; s_lclipH = v->gh * s_lss;
+    /* the lines of a frame the A/B may claim, kept before the clip for the
+       oracle; the claim in tagpu_fx_render writes them */
+    tagpu_line_ab_begin(&s_lab, s_ab && !s_abDone);
     memset(&s_c, 0, sizeof s_c);
     /* the band, latched for the frame (tagpu_fx.h); the cap is also bounded
        by the list, which `tagpu_fx_model_bound` never exceeds */
@@ -1270,6 +1363,10 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
            it against a capture taken from another BUILD. */
         s_abDone = 1;
         s_abFrame = tagpu_vk_ab_arm("fx");
+        /* and the frame's lines as emit_line had them before the clip, with
+           the rect it clipped to (tagpu_line.h) */
+        tagpu_line_ab_write(&s_lab, "fx", s_lclipW, s_lclipH, s_lss,
+                            s_lclipL, s_lclipT, s_lclipR, s_lclipB);
     }
 
     /* PUBLISHED AFTER THE GATHER: these are the vertices, the numbers and the

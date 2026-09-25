@@ -62,16 +62,19 @@ int  tagpu_mark_gather(const TAGPU_FXVIEW* v);
    a PALETTE index, as gui[] holds — not a GUI slot number. 0 = the bucket is
    full and nothing was emitted, so the caller can count the drop.
 
-   Lines are drawn as a line list `ss` device pixels wide (tagpu_vk_mark.c),
-   i.e. one SCREEN pixel at any zoom; triangles carry no such trick and must
-   be sized by the caller. */
+   A line is `0x4CC7AB`'s walk on the line grid (the world target's pixels),
+   one game pixel wide at any zoom and any `ss`: its ends are quantised AFTER
+   the wheel zoom by tagpu_line.h's rule, so a caller hands the end it means -- an engine
+   pixel's CENTRE where the engine draws the line from integers, the
+   fractional position where the geometry is ours. Triangles carry no such
+   rule and must be sized by the caller. */
 int  tagpu_mark_emit_line(float x0, float y0, float x1, float y1,
                           int colidx, float wx, float wz);
 int  tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
                          float x2, float y2, int colidx, float wx, float wz);
 /* One unit's SELECTION RECT (`DrawUnitSelectBoxRect 0x46A530`, ui-markers.md
-   §1): the closed loop p0->p1->p2->p3->p0 as four lines at `ss` width, in
-   palette index `colidx`, fogged at (wx, wz).
+   §1): the closed loop p0->p1->p2->p3->p0 as four lines, in palette index
+   `colidx`, fogged at (wx, wz).
 
    IT IS THE ONLY MARKER HERE THAT IS DEPTH-TESTED, because it is the only one
    the engine draws INSIDE the unit sweep -- under its own unit's sprite and
@@ -96,7 +99,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v);
 /* ---- the hand-over to the Vulkan lane ----
 
    THIS PASS IS NOT ONE DRAW AND THAT IS THE WHOLE POINT OF THE RECORD. It is
-   order triangles, order lines at `ss` line width, order labels, health bars,
+   order triangles, order lines, order labels, health bars,
    group digits, the post-fog layer and the build cursors -- in the engine's own
    order (`0x469BFC` -> `0x469CB9` -> `0x469CF9`, then the cursor after the fog
    overlay), each with its own `uText` and `uFog`, and the last two with fog
@@ -113,8 +116,11 @@ enum { TAGPU_MK_TEX_NONE = 0,   /* no sampler feeds uLayer this draw */
        TAGPU_MK_TEX_TEXT = 2 }; /* tagpu_text.c's coverage atlas */
 
 typedef struct TAGPU_MKDRAW {
-    int first, count;           /* vertices into `verts` below              */
-    int lines;                  /* 1 = LINE_LIST at `ss` width, 0 = TRIANGLES */
+    int first, count;           /* vertices into `verts` below, or for a
+                                   line draw its records, which sit in the
+                                   same block at the same stride            */
+    int lines;                  /* 1 = line records, each an instance of
+                                   LVS's band; 0 = TRIANGLES               */
     int text;                   /* uText */
     int fog;                    /* uFog, AS THE DRAW SET IT -- not derived  */
     int tex;                    /* TAGPU_MK_TEX_*                           */
@@ -128,8 +134,10 @@ typedef struct TAGPU_MKDRAW {
 typedef struct TAGPU_MKHAND {
     unsigned frame;
     /* 8 floats a vertex: x,y  u,v  wx,wz  colour  depth -- this file's MVST,
-       and the layout `tagpu_mark.spv.h`'s vertex stage expects. `depth` is
-       clip z and is 0 on every vertex but a selection rect's. */
+       and the layout `tagpu_mark.spv.h`'s vertex stages expect. A line record
+       is the same 8 floats with its two ends, in game pixels after the zoom,
+       in x,y and u,v. `depth` is clip z and is 0 everywhere but a selection
+       rect's. */
     const float* verts; int nvert;
     const TAGPU_MKDRAW* draws; int ndraw;
     /* tagpu_text.c's atlas: one coverage byte a texel. `textGen` moves when a

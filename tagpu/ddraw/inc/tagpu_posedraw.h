@@ -23,11 +23,12 @@
    model height the waterline clips on, and the shade quantised off the baked
    rest normal.
 
-   ALL THREE RANGES. The vertex shader's `uRange` selects the body, the
+   ALL THREE RANGES. The vertex shader's `uRange` selects the body or the
    structure-shadow SLANT (its own projection, its own integer snap, its own
-   per-piece `cached` rule) or the nanoframe WIRE (a LINE_LIST, the body
-   projection, one notch nearer). This is the only unit renderer; there is no
-   CPU unit emitter to fall back to (§7 step 8).
+   per-piece `cached` rule); the nanoframe WIRE is posed on the CPU into line
+   records (the body projection, one notch nearer) that a third vertex stage,
+   `WVS`, draws as bands. This is the only unit renderer; there is no CPU unit
+   emitter to fall back to (§7 step 8).
 
    AND THE EFFECTS MODELS, through a second vertex stage (`FXVS`) paired with
    the same fragment stage: not geometry but the RUNS the engine's own
@@ -191,8 +192,8 @@ void tagpu_posedraw_end(void);
    tagpu_vk_unit.c records them as a stage of its own, stencil-masked, before
    the bodies, with two pipelines. `wireFirst`/`wireCount` carry the bake's
    WIRE range for a unit with `nanoOn`, `wire` its colour, and tagpu_vk_unit.c
-   records them after the bodies through a LINE_LIST twin of the body
-   pipeline.
+   poses the range's vertex pairs on the CPU into line records and draws them
+   after the bodies with tagpu_posedraw.c's WVS.
 
    NO POSED UNIT CASTS INTO THE CAST-SHADOW MAP, and this is the one that looks
    done. tagpu_vk_unit.c builds a `pose_depth` pipeline from the VS + DFS in
@@ -337,7 +338,8 @@ typedef struct TAGPU_PDHAND {
     const float* flags; const float* vis; unsigned nflag;
     /* THE EFFECTS MODELS' RUNS, 8 floats each (TAGPU_PDFX), every fx record's
        back to back. The storage buffer carries them after the two word
-       sections, so a record's first run is at vec4 `nrow + nflag / 2 +
+       sections and the consumer's wire records (tagpu_vk_unit.c), so a
+       record's first run is at vec4 `nrow + nflag / 2 + <the wire's vec4> +
        2 * first`. */
     const float* runs;  unsigned nrun;
 
