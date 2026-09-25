@@ -137,10 +137,11 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
   by `tools/mp_lobby.sh`, peek every commander's slot on each peer from the first in-play tick —
   the first slot of each player's block, `[player+0x67]`; records are in local order and blocks
   in DirectPlay-id order, so a record's index is not its block's — and read the `ghost:` section
-  (`references/levers.md`): the late peer holds the others' creates (`q=`) and replays them
-  before its first tick (`early=`, a `replayed slot … at GameTime 0, before the first tick`
-  line). Order the host's commander to move the moment it is in play to exercise the dirty
-  create; `ghostq.off` on the late peer leaves that half alone (`pos ground=1`).
+  (`references/levers.md`): the late peer holds creates refused during its load (`q=`) and
+  replays them before its first tick, and makes one refused in a catch-up tick at once (`now=`,
+  a `created slot … at GameTime 1, in a catch-up tick` line — where the host's commander lands
+  in a two-peer start). Order the host's commander to move the moment it is in play to exercise
+  the dirty create; `ghostq.off` on the late peer leaves that half alone (`pos ground=1`).
 - **Each peer draws its own units in player 0's colour** on the Vulkan lane; the engine's own frame
   is right. A renderer limit (`gpu-status.md` §3.2), not a network fault.
 - `SELPROV`'s `SELECT` crashes the game on the non-TCP/IP rows; select *Internet TCP/IP

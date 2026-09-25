@@ -568,9 +568,12 @@ move classes.
 gate refuses it, the message is held with the case's player argument (`[esp+0x14]`, whose low byte
 is the sender's record index) and the sender's DirectPlay id (`record+4`), only when `edi` is that
 record (the pump pairs them, `0x453E84..0x453E9B`). The queue is emptied at the load's start
-(`0x497F5E`, the load state's first call) and drained **before the first tick**: at the in-play
-entry's call of the frame function (`0x49842F`), which runs the catch-up ticks — up to five, in
-state 5 — and then again right after the state-6 store (`0x498445`), for what those ticks refused.
+(`0x497F5E`, the load state's first call) and drained **before the first tick**, at the in-play
+entry's call of the frame function (`0x49842F`). That function's catch-up ticks — up to five —
+still run in state 5, and **a create refused in one of them is made at once**, in the pump of the
+tick it arrives in (`0x4954C8`), which is where state 6 makes a create: the dispatcher's sender
+test has just passed on it, and only the state test is skipped. The measurement below is why:
+the host's create reaches the late peer in its catch-up ticks, after the load's last pump.
 A held create is replayed when its sender still passes the dispatcher's own sender test
 (`0x4547AD..0x4547E2`) under the same DirectPlay id, and its slot is empty or holds an older
 incarnation by B4's stamps and is not a local player's unit; it goes through B4's receiver past its
@@ -584,7 +587,9 @@ the local create `0x485F50` calls, and stock's loader runs `0x485F50` for this p
 state 5 before any tick (`0x4977BB`); neither body reads the net state or GameTime, and B4's stamp
 at `0x48634F` keys on the return address and the armed index, not the state. Nothing ticks before
 `0x49842F`'s call: the frame function only moves its profile counters and reads the clock before
-`0x495490`. The replay skips the dispatcher's state test and nothing else.
+`0x495490`. A create in a catch-up tick is made in the tick loop's own pump, `0x4954C8`, the one
+play reaches through the same frame function (`0x4995B8`, `0x4996A5` in the state-6 function
+`0x499200`). The replay skips the dispatcher's state test and nothing else.
 
 *The kills.* Every unit message is state 6 only (`0x451FD0` gives `0x0B`, `0x0C` and `0x2C` mask 4
 like `0x09`), so a unit the owner destroys while this peer loads has its `0x0C` refused too, and a
@@ -593,8 +598,9 @@ robin sends type 0 for its empty slot and the receiver marks the copy dying (`0x
 within N of the owner's ticks, 50 s at 1500 — but B5 would have made it, so B5 closes it: the
 dispatcher's refusal branch in state 5 (`0x45477F`) notes a refused `0x0C`, which cancels the
 latest create held for its slot from its sender (counted `killed=`). One refused during the
-catch-up ticks, after the first replay made the copy, marks that copy dying exactly as the
-engine's ghost sweep does, bit 14 of `+0x110` (`swept=`), and the unit tick destroys it. The
+catch-up ticks, for a copy made before state 6 (by the replay or in a catch-up tick; up to 1024
+are listed), marks that copy dying exactly as the engine's ghost sweep does, bit 14 of `+0x110`
+(`swept=`), and the unit tick destroys it. The
 owner alone sends a unit's `0x0C` (`0x48666D`, the one send of its 11 bytes), and a slot is taken
 only once free, so one sender's stream for a slot alternates create, kill: the latest held create
 is the unit the kill names.
@@ -617,28 +623,27 @@ remote unit; the local classes' readers read nothing (`0x44EFD0`).
   to the round robin, where stock leaves every one.
 - **Emptied once per level by the level's own lifetime**, never by GameTime: cleared at the load's
   start, on the game thread before `0x4982CA` creates the loader thread; drained before the first
-  tick and at the state-6 store. Every record leaves exactly once: replayed, cancelled by its kill,
-  or counted.
+  tick. Every record leaves exactly once: replayed, cancelled by its kill, or counted.
 - **An ordering, not a window.** Two threads pump during a load (the game thread at `0x49852E`, the
   loader at `0x49727D`), so records go in under a lock. The loader's last pump precedes its last
   store (bit 1 of `main+0x38D75`, `0x497C62`), and the game thread reaches `0x49842F` only after
-  reading that bit (`0x498342`), so the first drain sees every create the load refused. After it
-  only the game thread pumps (the catch-up ticks, `0x4954C8`), and after the state-6 store nothing
-  is refused, so the second drain is the last.
+  reading that bit (`0x498342`), so the drain sees every create the load refused. After it only
+  the game thread pumps (the catch-up ticks, `0x4954C8`), and nothing more is held: a create
+  refused there is made in that pump.
 - **Kills in one sender's arrival order.** If one peer's messages could reach another out of order
   (the open question below), a kill could arrive before its create; the create is then replayed,
   and the owner's round robin marks the copy within N ticks — stock's bound for any ghost.
 - **Only active senders, only empty or older slots**, by the dispatcher's sender test and B4's
   stamps; never a local player's unit.
-- **The game thread only**: the drains and the dying mark check their thread and do nothing on
-  any other.
+- **The game thread only**: the drain, the catch-up ticks' creates and the dying mark check their
+  thread and do nothing on any other.
 - **On the map by construction**: a position is taken only when `0 ≤ x < W·16` and `0 ≤ z < H·16`
   px (`main+0x14233`/`+0x14237`, each 1..4096); an air unit's y only up to `0x1FF` px, the
   ceiling the goal point `0x44E3C0` clamps its y to (`0x44E4F1`).
 
-*Class: sim, fail closed, both builds.* Fifteen rows: `0x497F5E`, `0x49842F`, `0x498445`,
-`0x45477F` and `0x48BA00` written; `0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`, `0x49844F`,
-`0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50` compared. The hold itself is code in
+*Class: sim, fail closed, both builds.* Thirteen rows: `0x497F5E`, `0x49842F`, `0x45477F` and
+`0x48BA00` written; `0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`, `0x48B9F5`, `0x4861D0`,
+`0x496790`, `0x454788`, `0x455F50` compared. The hold itself is code in
 B4's receiver, whose slot `0x455F90` is B4's row; B4's `hit_rx_create` is split into its gate and
 `hit_rx_create_armed`. Lever `tagpu_ghostq.off` (test only: nothing is held or noted, the position
 still applies); `tagpu_wirecheck.on` runs 17 rule cases at attach (the queue's age rule, the map
@@ -647,8 +652,10 @@ cancels). Counters on the heartbeat's `ghost:` section.
 
 **B5 BUILT AHEAD (2026-09-25, from `c2e5850` on its own worktree from B4's `a8e529e`; not
 landed, not reviewed).** `fix_ghost_commander` in `tagpu_patches.c`. The install line reads
-`limits: installed 199 sites` in the raised build (189 before), and `the simulation fixes' 74
-sites installed` in the stock-limits one.
+`limits: installed 202 sites` in the raised build (189 before), and `the simulation fixes' 77
+sites installed` in the stock-limits one; `tagpu_wirecheck.on` runs the 17 rule cases, all OK, in
+both. The table ran on the first build, which replayed at the state-6 store; the two starts after
+it (below the table) on the builds that replay before the first tick.
 
 *Measured, two peers on Two Continents* (host and joiner by `tools/mp_lobby.sh`, rosters of both
 commanders' slots every 2 s for 60 s from the first in-play tick; "moved": the host's commander
@@ -667,10 +674,18 @@ ordered to `(848,7344)` the moment the host is in play). The joiner's copy of th
 | B5, queue off on the joiner | 1500 | moved | `(368,7661)`, host `(375,7655)` | t = 0 | `gate=1 create=1 bound=1`, `pos ground=1`: "at (368, 7664) from its ground payload; stock's record had (0, 0)" |
 
 A moving copy trails the host's by the peers' tick offset (6–9 ticks, 5–10 px) and equals it once
-the unit stops. On every B5 start with the queue on, the joiner's replay line reads `replayed slot 1 from sender 1
-(birth 0, type 34) at GameTime 5`, with `inactive`, `stale`, `bad`, `cleared`, `offthread` and
-`over` 0, and the host holds nothing (`q=0`); the host had both commanders at every sample of
-every run (31 samples each), both builds.
+the unit stops. On every start of the first build with the queue on, the joiner's replay line
+reads `replayed slot 1 from sender 1 (birth 0, type 34) at GameTime 5`, with `inactive`, `stale`,
+`bad`, `cleared`, `offthread` and `over` 0, and the host holds nothing (`q=0`); the host had both
+commanders at every sample of every run (31 samples each), both builds.
+
+*Before the first tick* (1500, moved, one start each). With a drain before the first tick and one
+after the state-6 store, the first found nothing (`q=1`, made by the second at GameTime 5): the
+host's create reaches the joiner in its catch-up ticks, after the load's last pump. On the final
+build the drain at GameTime 0 again finds nothing, and the create is made in the pump of the
+joiner's first tick — `created slot 1 from sender 1 (birth 0, type 34) at GameTime 1, in a
+catch-up tick`, `now=1`, copy `exact=1`, `gate=0`; the commander at the first sample `(368,7663)`
+against the host's `(369,7660)`, equal at `(842,7344)` from t = 20 s.
 
 *B4's lower-bound copies at game start are gone.* The refused create now makes an exact copy: the
 joiner's `gate` and `bound` read 0 and `exact` 1 in every B5 start with the queue on, against `gate=1 bound=1` on the
@@ -681,6 +696,10 @@ record 1, the host, the lower DirectPlay id, holds the first, whose slot 1 the r
 
 *Where the build differs from the owner's decision.*
 
+- **A create refused in a catch-up tick is made in that tick, not held.** The decision replays
+  held creates before the first tick; the create that matters arrives after that point, in the
+  five catch-up ticks, and holding it to the state-6 store left the commander missing for those
+  ticks. It is made where play makes it, so the late peer has it from the tick it arrives in.
 - **Ground point 0 is not the unit's own position.** No field of the ground payload is; a path the
   owner starts begins at the unit (`0x44F3F2..0x44F417`) and its front is dropped as it is reached
   [INFERRED], so point 0 is where the unit stands or the next node. It lands on the true start in

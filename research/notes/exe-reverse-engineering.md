@@ -329,7 +329,7 @@ made, or its page cannot be made writable. Each of the nineteen, and why:
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
 | wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`), and the diverged `0x0D` at `0x49D280` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local) |
 | stale hits — the incarnation on the wire and the two-tick hold: first-free `0x486036`, the free `0x486DC1`, `CreateFromNetwork`'s exit `0x48634F`, the array's reset `0x4854A0`, the sends `0x4560AE`, `0x489CB9`, `0x489CCD`, the dispatch slots `0x455F90`, `0x455FA0`, `0x455FA8` (landing B4; the subsection *Unit identity on the wire*) | simulation | which hits a unit takes and which slot a create gets; and it is a wire format: a peer without it sends bare `0x09`/`0x0B`s this build drops, and cannot read the tagged `0x05`s this build sends |
-| ghost commander — the create refused during the load, held and replayed, a refused kill cancelling it, and the dirty create's position: the load's start `0x497F5E`, the frame function's call `0x49842F`, the state-6 store `0x498445`, the dispatcher's refusal in state 5 `0x45477F`, the dirty entry's call `0x48BA00`, and the hold inside B4's `0x05` receiver (landing B5; the subsection *A create refused during the load*) | simulation | which units a peer holds at the start of play and where a dirty create puts one; a peer without it lacks the others' commanders until the round robin, as stock |
+| ghost commander — the create refused during the load, held and replayed, a refused kill cancelling it, and the dirty create's position: the load's start `0x497F5E`, the frame function's call `0x49842F`, the dispatcher's refusal in state 5 `0x45477F`, the dirty entry's call `0x48BA00`, and the hold inside B4's `0x05` receiver (landing B5; the subsection *A create refused during the load*) | simulation | which units a peer holds at the start of play and where a dirty create puts one; a peer without it lacks the others' commanders until the round robin, as stock |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -622,21 +622,28 @@ to nothing), the writer `0x415C10`.
 **What B5 patches** (the plan's *B5 DESIGN*; the code is `fix_ghost_commander`): B4's `0x05`
 receiver holds a carried `0x09` its gate refuses in state 5, with the sender's record index and
 DirectPlay id; the refusal branch `0x45477F` notes a refused `0x0C`, which cancels the latest
-create held for its slot from its sender, or marks dying, as `0x48B42C` does, a copy the first
-replay made; `0x497F5E` empties the queue at the load's start; `0x49842F` replays it before the
-frame function runs the first tick, through B4's receiver past its state test and
-`CreateFromNetwork`, and `0x498445`, after its store, replays what the catch-up ticks refused;
+create held for its slot from its sender, or marks dying, as `0x48B42C` does, a copy made before
+state 6; `0x497F5E` empties the queue at the load's start; `0x49842F` replays it before the frame
+function runs the first tick, through B4's receiver past its state test and `CreateFromNetwork`,
+and from there on B4's receiver makes a create the gate refuses in a catch-up tick at once, in
+that tick's pump;
 `0x48BA00` calls a stub that rewrites the dirty create's position from the entry's own payload
 (ground point 0; air selector 2's x, y, z) when it lies on the map, then enters `CreateFromNetwork`
 under `0x48BA05`. Compared, not written: `0x497F54`, `0x497F64`, `0x497C5F`, `0x498348`,
-`0x49844F`, `0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`. All are rows of the
-fail-closed table, in both builds.
+`0x48B9F5`, `0x4861D0`, `0x496790`, `0x454788`, `0x455F50`. All are rows of the fail-closed table,
+in both builds.
 MEASURED 2026-09-25 (the plan's *B5 BUILT AHEAD*, two peers, Two Continents): on the previous
 build the joiner lacked the host's commander until t = 50 s at the 1500-unit limit and t = 18 s at
 500, and one ordered to move at once appeared at `(1,−2)` / `(2,−3)` and walked from the corner;
 on B5 it was present at the host's position at the first sample in all four starts, from an exact
 copy (record 1 on the joiner is the host, whose block holds slot 1), and with the queue turned off
-the dirty create alone put it at `(368, 7664)` where stock's record had `(0, 0)`. RUN12
+the dirty create alone put it at `(368, 7664)` where stock's record had `(0, 0)`. **The host's
+create reaches the joiner in its catch-up ticks, not its load**: with a drain before the first
+tick and one after the state-6 store, the first found nothing (GameTime 0) and the second made the
+commander at GameTime 5; on the final build the drain again finds nothing and the create is made
+in the pump of the joiner's first tick (`created slot 1 from sender 1 … at GameTime 1, in a
+catch-up tick`), present at the host's position at the first sample, `(368,7663)` against
+`(369,7660)`.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
