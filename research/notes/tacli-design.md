@@ -362,8 +362,13 @@ key of the agent is offered. A restarted session reads from a fresh queue, so th
 end-of-stream never reaches it. **[MEASURED 2026-09-25, the Windows test setup]:** 0.7–0.9 s to
 open the session, 25–80 ms per statement after that, 9.5 MB/s reading a file.
 
-PowerShell reading stdin runs line by line, and **a statement that spans lines is skipped
-silently**. So `ps_script` is the one function that makes a script, and it is unit-tested:
+PowerShell reading stdin runs line by line, and **a line that does not parse as a complete
+statement is skipped**, with nothing but a parser error on stderr. **[MEASURED 2026-09-25, the
+Windows test setup]:** `if ($true)` and `foreach ($i in 1..2)` without their blocks
+(`MissingStatementBlock`, `MissingForeachStatement`). In the same test a statement split after
+an open `{` was read on into the next line and ran as one, so which split statements are
+skipped and which are joined is not a rule tacli can lean on either way. So `ps_script` is the
+one function that makes a script, and it is unit-tested:
 
 - `ps_check_statement` refuses anything that could continue onto the next line: control
   characters, an unclosed bracket or single-quoted string, a trailing `|` or `,`, a backtick,
@@ -377,8 +382,10 @@ silently**. So `ps_script` is the one function that makes a script, and it is un
 - Each line resets `$ErrorActionPreference` to `Stop` first, prints `DONE <batch> <i>` after its
   statement, and on a failure prints `ERR <batch> <i> <type> <message>`. `Session.run` fails on
   an `ERR` and on a statement with no `DONE`. What the static check cannot see, such as
-  `if ($true)` without its block (a parse error on stderr and no output at all **[MEASURED]**),
-  fails the run instead of returning nothing.
+  `if ($true)` without its block, fails the run instead of returning nothing. **[MEASURED
+  2026-09-25]:** a script of `Write-Output 'first ran'`, `if ($true)`, `Write-Output 'third
+  ran'` printed `first ran` and its DONE, then nothing until END; `Session.run` reported
+  "PowerShell did not run statement 1".
 - **The reported exception is the innermost one.** PowerShell hands a catch block a .NET
   method's exception wrapped in `MethodInvocationException`, so a missing file would read as
   that and not as `FileNotFoundException`, which the callers key on.
@@ -547,34 +554,49 @@ carries `shield: ARMED (hardware input blocked)`. An injected `ctrl+a` was polle
   instance on a private Xvfb: `ab gui` twice in a row; the second now succeeds after a 2 s
   settle].
 
-### What the live gate measured [MEASURED 2026-09-25, the Windows test setup, main `8cbecb6`'s DLL]
+### What the live gates measured [MEASURED 2026-09-25, the Windows test setup]
 
-These runs used the first design, in which tacli exported and restored the key itself. The
-launch wrapper replaced it after the landing review (above); the wrapper's own live check is
-listed under *Not covered live*.
+**The launch wrapper** (this design; the DLL built from this branch after main's G21a,
+md5 `6ecb3839…`):
 
-- `remote add` copied 94 files (1051 MB) in 7 s.
+- `remote add` copied 94 files (1051 MB) and hashed them in 15 s.
+- `launch --res 1920x1080` came up in 9 s. `-ExecutionPolicy Bypass` ran the wrapper, and the
+  wrapper's export was the baseline (`ADC010B4…`). While the game ran, the record read
+  `instance=g21r … key=present ADC010B4…`, the task `\tacli\g21r` was Running, and the key
+  exported as `CFEE3096…`: the test values.
+- `stop` came back in 3 s with "restored TA's registry key (ADC010B4A68C…, verified by a fresh
+  export), by the launch wrapper". The 22 882-byte export was byte-identical to the one taken
+  before `remote add`; the record was gone and the task Ready.
+- **The game killed outside tacli** (`Stop-Process` over a separate session): 6 s later, with no
+  tacli command in between, the key was byte-identical, the record gone, the task Ready. The
+  next `tacli stop` said "(it was not running)" and reported the wrapper's restore.
+- **A test folder with no `log\`** (renamed aside inside the test folder): `launch` waited for
+  the DLL's first log and succeeded; `stop` restored the key byte-identical.
+- `rm` deleted the test folder, a read-only file planted in it included, and the task.
+- The player's folder: every file's SHA-256, size and write time identical before and after
+  (94 files); the key identical at the end.
+- PowerShell on that machine: `Get-ScheduledTask -TaskPath '\tacli\'` with no task in it
+  returns nothing and raises nothing under `Stop`; `C:\PROGRA~1\Common Files` resolves to
+  `C:\Program Files\Common Files`; a remote error arrives in French with its accents intact.
+
+**The first design**, in which tacli exported and restored the key itself (main `8cbecb6`'s
+DLL). The launch wrapper replaced it after the landing review:
+
 - `scenario load marker-mix --res 1920x1080` went from a stopped instance to 5 units applied,
   the camera pinned, in 13 s: launch, `SINGLE → Skirmish → Mapped → Start`, the live wait, the
   loaded map read back (`Maps\Two Continents.TNT`).
 - `ui` read `ARMMAIN2.GUI 1920x1080`, `eye` held the camera, `keys` delivered `ctrl+a`. The
-  census read `gui=1` and no world pass: that card stands the world passes down (G21a).
+  census read `gui=1` and no world pass: that DLL predates G21a, and the card stood the world
+  passes down.
 - `ab g21c gui` wrote and fetched a 1920x1080 capture of the UI layer (the panel, the resource
-  bars, the minimap and the cursor over a black world) in 3 s. It was the capture that works on
-  that card today.
-- `crash` read no report, and `stop` restored the key.
-- **TA's registry key**: the 22 882-byte export was byte-identical before the launch, after
-  `stop`, and after a stop missed on purpose (the game killed outside tacli, then `tacli log`).
-  A mid-test export differed where the launch writes: `Interface Type`, the display mode,
-  `SkirmishMap` and six sound values. So `reg export` of the key after `reg import` of its own
+  bars, the minimap and the cursor over a black world) in 3 s.
+- A mid-test export differed where the launch writes: `Interface Type`, the display mode,
+  `SkirmishMap` and six sound values. `reg export` of the key after `reg import` of its own
   export reproduces it byte for byte, which the wrapper's verification relies on.
-- **The player's folder**: every file's SHA-256, size and write time were identical before
-  and after the whole run, `rm` included.
 
-**Not covered live:** the launch wrapper as a whole (its task action, `-ExecutionPolicy
-Bypass`, its restore, the pending record), `remote restore`, the resolved-folder checks and
-the SHA-256 backup tier. All are unit-tested against a model of PowerShell that runs the
-generated lines. The Windows test setup was offline when they were built. Also not covered
+**Not covered live:** `remote restore` (no wrapper was ended during a test), a junction or
+`subst` refusal, and the SHA-256 backup tier's fallback to the player's file. All are
+unit-tested against a model of PowerShell that runs the generated lines. Also not covered
 live: `ui` verbs beyond the snapshot and the clicks of the `scenario load` path; a non-ASCII
 path (carried in base64 and unit-tested, not run); `rm --force` on a running game. Two tacli
 commands driving one remote instance at once are not supported: the key-file protocol assumes

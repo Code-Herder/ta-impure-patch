@@ -13,8 +13,9 @@ THE TRANSPORT is one PowerShell per tacli command: `ssh <user>@<host> powershell
 -NoProfile -NonInteractive -Command -`, fed statements on stdin and kept open, so a
 statement costs one round trip instead of a PowerShell start-up. The remote login
 shell is PowerShell with messages in the machine's own language, and PowerShell
-reading stdin has one hazard that shapes everything below: A STATEMENT SPANNING TWO
-LINES IS SKIPPED, SILENTLY. So:
+reading stdin has one hazard that shapes everything below: A LINE THAT DOES NOT PARSE AS
+ONE STATEMENT IS SKIPPED, with nothing but a parser error on stderr (`if ($true)` with no
+block; while a statement split after an open brace is read on into the next line). So:
 
   * every script is made by ONE function, `ps_script`, which refuses any statement
     that could continue onto a second line (`ps_check_statement`);
@@ -131,9 +132,10 @@ def ps_check_statement(s: str) -> None:
 
     PowerShell reading a script from stdin runs it line by line. A line whose
     brackets or quotes are still open, or that ends in a pipe or a comma, makes it
-    read the NEXT line as the rest of the statement -- and in `-Command -` mode such
-    a statement is then skipped with no output and no error. So a statement here is
-    one line that closes everything it opens:
+    read the NEXT line as the rest of the statement: the next line's statement is then
+    swallowed into this one, or the pair fails to parse and is skipped with only a
+    parser error on stderr. So a statement here is one line that closes everything it
+    opens:
 
       * no control characters (a newline or CR splits it) and no non-ASCII (the
         console code page would mangle it; `ps_str` carries such text);

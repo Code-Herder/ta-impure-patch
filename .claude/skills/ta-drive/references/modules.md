@@ -312,7 +312,8 @@ tools/tacli remote restore w1                     # only when a command warned t
   missing extension; each refusal says which pass stood down and why; the `vk: census` line says
   which passes drew. `crash` reads the test folder's `ErrorLog.txt`.
 - **Every statement is one line of PowerShell**, made by `ps_script` in `tools/taremote.py`.
-  PowerShell reading stdin skips a statement that spans lines, silently, and `ps_script` makes
+  PowerShell reading stdin skips a line that does not parse as one statement, with only a
+  parser error on stderr, and `ps_script` makes
   every line after a skipped one run nothing. Add remote operations there, through that
   function, never as a hand-written script. How the link, the routing and the launch wrapper
   work: `research/notes/tacli-design.md`, "Remote instances".

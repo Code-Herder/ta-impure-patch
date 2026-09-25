@@ -177,8 +177,8 @@ worktree. The fourth follows once they are on main.
 ### G21c — `tacli` remote instances
 
 **Built 2026-09-25; not landed.** The first build met the gate. The landing review (high) then
-moved TA's registry key into a launch wrapper on the remote machine; that design is
-unit-tested, and its live re-check is below. What it is and how it works is in
+moved TA's registry key into a launch wrapper on the remote machine; that design met the gate
+again, live, below. What it is and how it works is in
 [tacli design](tacli-design.html) §"Remote instances"; this block keeps the plan's shape and
 what the work settled.
 
@@ -231,8 +231,18 @@ what the work settled.
       missed on purpose;
     - all 94 files of the player's folder had identical hashes, sizes and write times before and
       after, `rm` included.
-  - **Live, the launch wrapper:** not run yet. The Windows test setup was offline when it was
-    built.
+  - **Live, the launch wrapper** (this branch's DLL, after main's G21a):
+    - `remote add` of a fresh folder, then launch → `stop`: TA's key byte-identical to the
+      export taken before the add;
+    - launch, then the game killed outside tacli: the wrapper alone restored the key
+      byte-identical, with no tacli command in between;
+    - a test folder with its `log\` moved aside: the launch waited for the first log and
+      succeeded;
+    - `rm` deleted the test folder, a read-only file in it included; the player's folder was
+      identical before and after (94 files).
+  - The same launch's log previews G21d on that card: `vk: depth format: D32_SFLOAT_S8_UINT
+    (130)`, and `VK_EXT_line_rasterization is not offered - a ported pass that draws LINES will
+    stand down` (G21b).
 - Review: high (`tools/tacli`, `tools/taremote.py`; it writes the player's registry key).
 
 ### G21d — the Windows gate
