@@ -1,10 +1,11 @@
 # Hardware portability: depth, lines, and a remote Windows test — the plan (G21)
 
-**Written** 2026-09-25. G21c is built (§3); the rest is not yet. This plan is for the Vulkan
-renderer to draw every pass on the GPUs players actually have. Today it requires three things
-that a common class of card does not offer, and when one is missing the passes that need it
-stand down. When a gate here closes, its facts move to [GPU status](gpu-status.html), and this
-note is folded into it the way `g19f-plan.md` was.
+**Written** 2026-09-25. G21a is built on its branch and waits for the owner; G21c is built
+(§3); the rest is not built. This plan is for the Vulkan renderer to draw every
+pass on the GPUs players actually have. Today it requires three things that a common class of
+card does not offer, and when one is missing the passes that need it stand down. When a gate
+here closes, its facts move to [GPU status](gpu-status.html), and this note is folded into it
+the way `g19f-plan.md` was.
 
 Evidence tags as elsewhere: **[SOURCE]** read from the code named, **[MEASURED]** with the
 numbers, **[INFERRED]** not established, **[DECIDED]** the owner's call with a date, **[OPEN]**
@@ -59,7 +60,8 @@ line rule for the default mode.
      cost was set out:
      - writing depth per pixel switches off the GPU's early depth rejection;
      - plain float changes only pixels where two *different* keys are closer than one 24-bit
-       step (about 2⁻²⁴).
+       step (about 2⁻²⁴). [MEASURED 2026-09-25: it changes none on the reference setup, and why
+       is in §3 G21a.]
    - Equal keys still tie exactly, so the mirror's partner keys stack as before.
    - The rule that depth is 24-bit or nothing, and its log line, are deleted.
 2. **The stencil fallback is 24-bit.** A device without `D32_SFLOAT_S8_UINT` takes
@@ -125,11 +127,37 @@ worktree. The fourth follows once they are on main.
     engine's own frame at 1×: closer to it, further from it, or neither.
   - The report goes to the owner, who decides whether it lands.
   - Frame time is compared too: GPU p50 and p99 at 1080p.
-- **The expected result [INFERRED].** Changes only where two keys lie within one 24-bit step.
-  The known class is neighbouring flat features of one row, which tie today and draw the first
-  one on top; the engine draws the later one ([GPU status](gpu-status.html) §2.90, the flat-key
-  paragraph). Whether float resolves that class toward the engine is part of what the A/B
-  answers.
+- **Status: BUILT 2026-09-25, not landed** — the owner decides on the numbers below.
+  [GPU status](gpu-status.html) §2.91 has the whole of it.
+- **The result [MEASURED].** 0 changed pixels on every capture a paused frame repeats: terrain,
+  features, units and markers one pass at a time, and the presented frame with `shadows=hard`,
+  both presets and both zooms; the table is §2.91's. So there is no class of change to classify
+  against the engine's frame. The effects' live fight cannot be paused on one frame twice, and
+  its difference sits inside each build's own run-to-run floor.
+- **Why none [SOURCE, checked numerically].** The plan expected changes where two keys lie within
+  one 24-bit step. There are none, because every tested depth lies in (0.5, 1]: the viewport's
+  range is [0.5, 1] (`minDepth 0.5`) and no depth-tested key comes near its bottom. A float32
+  there is `j·2⁻²⁴`, and D24's conversion of it is `j − 1` when the device rounds to nearest or
+  toward zero: one D24 value per float, in the same order, so a depth test between two float
+  fragment depths answers the same on both attachments. A device that may return either
+  neighbouring integer still never reverses two depths; at most it could tie two adjacent floats.
+  At 0.5 itself the conversion is not one-to-one, which is why the range is open there. The
+  neighbouring flats of one row (§2.90) still tie as floats and still draw the first one on top;
+  float does not resolve that class toward the engine. Only a rasteriser that computes a D24
+  target's depth other than as a float32 could differ [INFERRED].
+- **The shadow map's remap and format are built but cannot be run**: nothing produces its
+  hand-over (§2.83). The depth bias is the receiver's, in stored units the remap keeps, and
+  neither caster pipeline has a rasteriser bias, so no constant changes.
+- **Frame time and memory [MEASURED].** No measurable change in GPU frame time at 1080p. The
+  process holds 121 MiB more video memory at 1920 × 1080 `ss=2` (599 against 478 MiB): the
+  driver lays the float depth-stencil out at eight bytes a pixel, D24's at four [INFERRED from
+  the total]. Since the two
+  formats draw the same picture, decision 1's order buys one format on every GPU at that price
+  where D24 exists. Preferring D24 and falling back to float would draw the same on any
+  rasteriser that computes depth as a float32, and cost nothing where D24 exists; what it would
+  give up is one format on every GPU. That is the owner's call.
+- **Not covered:** a rasteriser other than the reference setup's under float depth, which is
+  G21d's Windows card.
 - Review: medium (`tagpu/ddraw/**`, no engine state, no thread synchronisation).
 
 ### G21b — lines as triangles

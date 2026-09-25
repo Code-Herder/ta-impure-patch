@@ -62,9 +62,10 @@ VkImageView tagpu_vk_shadow_view(unsigned frame, uint32_t slot);
    image its descriptor set names on a frame with no map -- which has to be one
    the same sampler is valid against. Exposed rather than re-derived so that the
    two files agree by construction instead of by both happening to try the same
-   candidates in the same order. VK_FORMAT_UNDEFINED when the device has no
-   24-bit depth format that is both a depth attachment and a sampled image, and
-   `*linearOk` says whether it can be filtered. Safe to call before `prepare`
+   candidates in the same order: D32_SFLOAT, then X8_D24_UNORM_PACK32, then
+   D24_UNORM_S8_UINT, one that can be filtered before one that cannot.
+   VK_FORMAT_UNDEFINED when none of them is both a depth attachment and a
+   sampled image, and `*linearOk` says whether the one chosen can be filtered. Safe to call before `prepare`
    and before anything is built; it resolves the one entry point it needs. */
 VkFormat tagpu_vk_shadow_format(const TAGPU_VKPASS* d, int* linearOk);
 

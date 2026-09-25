@@ -213,7 +213,7 @@ Armed by `tagpu_fx.on` (tokens `log`, `nolines`, `nomodels`, `nosprites`, `noexp
   and holds `2N + 2` keys for `N` = the packet's own bound on the frame's models
   (`tagpu_fx_model_bound`), six wide by default; its step is never below `16·2⁻²³` of the
   depth scale, and the band grows rather than the step shrinking, so adjacent keys stay
-  apart in the D24 buffer and no frame refuses a model for want of keys. The air band is
+  apart in the depth buffer (D24 or float, [GPU status](gpu-status.html) §2.91) and no frame refuses a model for want of keys. The air band is
   `encFx + band + 7.5` (`fxKey + 12` at six keys) and the vertex stages divide by `airKey +
   8`, so any viewport keeps the order ground → effects → aircraft.
 - **The world target is premultiplied** for the additive flash (blend `ONE,
