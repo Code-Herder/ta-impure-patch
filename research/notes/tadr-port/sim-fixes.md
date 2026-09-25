@@ -135,7 +135,7 @@ Each landing meets the evidence bar above, lands its documentation before its re
 reviewed at `high` (every one writes engine state or adds byte patches). Sites below are DIS in
 [the evidence](sim-fixes-evidence.md); the landing re-reads each before writing it.
 
-**B1 — damage. Built 2026-09-25, awaiting its review.** What was built, and where it differs from
+**B1 — damage. Landed 2026-09-25 on local main (`811c311`) after its reviews.** What was built, and where it differs from
 the plan below:
 
 - **Built as planned:** the victim caps (both calls wrapped, both list blocks replaced, the unit
@@ -262,7 +262,7 @@ The plan as written:
   previous build faults at `0x49CF19`, the new one counts fallbacks. An ARMATLAS on the last column
   and one near the north edge at cruise altitude.
 
-**B2 — stacked aircraft. Built ahead 2026-09-25 on its own branch from B1, not landed.** What was
+**B2 — stacked aircraft. Built 2026-09-25 on its own branch from B1 and reviewed at high; landing next.** What was
 built, and where it differs from the plan below (the engine map's *Stacked aircraft in area damage*
 has the sites, the disassembly and the numbers):
 
