@@ -4785,8 +4785,9 @@ static int hit_rx_hit(const char* ta, const unsigned char* m)
     return 3;
 }
 
-/* 1 when the ghost-commander queue takes a carried 0x09 the gate refuses in state 5 */
-static int ghost_hold(const unsigned int* regs, const char* ta, const unsigned char* m);
+/* For a carried 0x09 the gate refuses in state 5: 1 when the ghost-commander queue holds it,
+   2 when it is created now (the catch-up ticks), 0 when it is not the queue's */
+static int ghost_take(const unsigned int* regs, const char* ta, const unsigned char* m);
 
 /* The dispatch table's 0x05 slot 0x455F90, entered by the dispatcher's `jmp [eax*4+0x455F84]`
    with its frame: the message at the site's esp + 0x10. */
@@ -4799,7 +4800,10 @@ static int __cdecl hit_rx_chat(unsigned int* regs)
 #ifndef TAGPU_LIMITS_STOCK
     case WPN_CHAT_TAG:   wpn_rx_chat(regs); return 0;
 #endif
-    case HIT_TAG_CREATE: return ghost_hold(regs, ta, m) ? 1 : hit_rx_create(ta, m);
+    case HIT_TAG_CREATE: {
+        int g = ghost_take(regs, ta, m);
+        return g ? g : hit_rx_create(ta, m);
+    }
     case HIT_TAG_HIT:    return hit_rx_hit(ta, m);
     default:             return 0;
     }
@@ -5040,18 +5044,19 @@ int tagpu_hits_format(char* buf, unsigned int cap)
    (0x48B9B6..0x48B9FB) takes the SLOT's own stale position, (0,0,0) in a fresh array.
 
    THE FIX, three parts.
-   - The queue: a carried 0x09 the gate refuses in state 5 is kept per sender, in arrival
-     order, and replayed before the level's first tick -- at the in-play entry's call of the
-     frame function (0x49842F), whose catch-up ticks (up to five, 0x495490) run in state 5 --
-     and again right after the state-6 store (0x498445) for what those ticks refused. The
-     replay passes B4's receiver past its state test only (hit_rx_create_armed), so its
-     incarnation is set as a live create sets it, and enters CreateFromNetwork with the
-     sender in edi as the case has it, so B3's bounds and observe run on it too.
+   - The queue: a carried 0x09 the gate refuses while the level loads is kept per sender, in
+     arrival order, and replayed before the level's first tick, at the in-play entry's call of
+     the frame function (0x49842F). That function's catch-up ticks (up to five, 0x495490) still
+     run in state 5; a create refused in one of them is made at once, in the pump of the tick
+     it arrives in (0x4954C8), which is where state 6 makes it. Both pass B4's receiver past
+     its state test only (hit_rx_create_armed), so the incarnation is set as a live create sets
+     it, and enter CreateFromNetwork with the sender in edi as the case has it, so B3's bounds
+     and observe run on them too.
    - The kills: a 0x0C the gate refuses in state 5 (the dispatcher's refusal branch
      0x45477F) cancels the latest create held for its slot from its sender, so a unit the
-     owner destroyed during the load is never made. One refused after the first replay, for
-     a copy that replay made, marks the copy dying as the engine's own ghost sweep does
-     (0x48B42C), and the unit tick destroys it (0x48AFB9 -> 0x4864B0).
+     owner destroyed during the load is never made. One refused in the catch-up ticks, for a
+     copy the replay or a catch-up tick made, marks the copy dying as the engine's own ghost
+     sweep does (0x48B42C), and the unit tick destroys it (0x48AFB9 -> 0x4864B0).
    - The position: the dirty create's record takes the position its entry's own move payload
      carries, read ahead in the engine's bit order, for the payloads disassembled to carry one
      (ghost_payload_pos says which, and where each lands).
@@ -5061,20 +5066,21 @@ int tagpu_hits_format(char* buf, unsigned int cap)
      counted and left to the round robin, which is where stock leaves every one of them.
    - Emptied by the level's own lifetime, never by GameTime: cleared at the load's start
      (0x497F5E, the load state 0x497F40's first call, on the game thread before 0x4982CA
-     creates the loader thread), drained before the first tick and at the state-6 store.
-     Every record leaves exactly once: replayed, cancelled by its kill, or counted.
+     creates the loader thread), drained before the first tick. Every record leaves exactly
+     once: replayed, cancelled by its kill, or counted.
    - An ordering, not a window. During the load two threads pump (the game thread at 0x49852E,
      the loader at 0x49727D), so records go in under a lock. The loader's last pump comes
      before its last store, bit 1 (value 2) of main+0x38D75 at 0x497C62, and the game thread
-     reaches 0x49842F only after reading that bit at 0x498342, so the first drain sees every
-     create the load refused. After it only the game thread pumps (the catch-up ticks,
-     0x4954C8), and after the state-6 store nothing is refused, so the second drain is the last.
+     reaches 0x49842F only after reading that bit at 0x498342, so the drain sees every create
+     the load refused. After it only the game thread pumps (the catch-up ticks, 0x4954C8), and
+     nothing more is held: a create refused there is made in that pump.
    - Before the first tick is safe: CreateFromNetwork calls exactly what the local create
      0x485F50 calls (0x485A40, 0x485D40, 0x49E070, 0x437840, 0x43DC00, 0x48A870, 0x47CC30,
      0x482AC0, 0x490580), and stock's loader runs 0x485F50 for this peer's commander in state
      5, before any tick (0x4977BB); neither body reads the net state or GameTime. What the
      replay skips of the dispatcher is the state test alone: the sender test is re-run on the
-     record under the DirectPlay id it had.
+     record under the DirectPlay id it had. A create made in a catch-up tick has just passed
+     the dispatcher's sender test (0x4547AD) and is made where state 6 makes it.
    - A record is replayed only when its sender passes the dispatcher's own sender test now
      (0x4547AD..0x4547E2: present, type 3, +0x146 not 10) under the DirectPlay id it had, and
      its slot is empty or holds an older incarnation by B4's stamps -- never a local player's.
@@ -5083,8 +5089,8 @@ int tagpu_hits_format(char* buf, unsigned int cap)
      it is free, so its stream for a slot alternates create, kill. If one sender's messages could arrive out of order (the
      plan's open question), a replayed ghost lasts until the owner's round robin marks it
      (0x48B415), at most N of its ticks -- stock's bound for any ghost.
-   - The game thread only: the drains and the dying mark check their thread and do nothing on
-     any other.
+   - The game thread only: the drain, the catch-up creates and the dying mark check their
+     thread and do nothing on any other.
    - On the map by construction: a position is taken only when 0 <= x < W*16 and 0 <= z < H*16
      px (W, H at main+0x14233/+0x14237, each 1..4096), and the record keeps stock's otherwise.
 
@@ -5102,7 +5108,9 @@ typedef struct {
     int           dead;                     /* cancelled by a later refused 0x0C for its slot   */
 } GHOSTREC;
 
-typedef struct { unsigned int idx, k, birth; } GHOSTDONE;   /* a copy the first drain made */
+#define GHOST_DONE    1024                  /* copies made before state 6 a kill can still mark */
+
+typedef struct { unsigned int idx, k, birth; } GHOSTDONE;
 
 typedef void* (__stdcall* GHOSTCALL)(unsigned int arg, const unsigned char* rec, const char* sender);
 
@@ -5111,7 +5119,7 @@ static GHOSTREC     s_ghostQ[GHOST_SENDERS][GHOST_DEPTH];
 static unsigned int s_ghostN[GHOST_SENDERS];
 static int          s_ghostPhase;           /* 1 once this level's first drain has run          */
 static GHOSTREC     s_ghostTake[GHOST_SENDERS][GHOST_DEPTH];   /* the drain's copy, game thread */
-static GHOSTDONE    s_ghostDone[GHOST_SENDERS * GHOST_DEPTH];  /* game thread                   */
+static GHOSTDONE    s_ghostDone[GHOST_DONE];    /* the drain's and the catch-up ticks' copies */
 static unsigned int s_ghostDoneN;
 static DWORD        s_ghostGameTid;         /* DllMain's thread, which runs the main loop       */
 static int          s_ghostOff;             /* TEST LEVER tagpu_ghostq.off                      */
@@ -5121,7 +5129,7 @@ static GHOSTCALL    s_ghostCall;
 /* counters for the heartbeat's ghost: section; u32. q, over, killed and nokill are written
    under the lock, the rest on the game thread. */
 static unsigned int s_ghostQueued, s_ghostOverflow, s_ghostDeep, s_ghostKilled, s_ghostNoKill;
-static unsigned int s_ghostReplayed, s_ghostEarly, s_ghostSwept;
+static unsigned int s_ghostReplayed, s_ghostNow, s_ghostSwept, s_ghostUntracked;
 static unsigned int s_ghostInactive, s_ghostStale, s_ghostBad, s_ghostCleared;
 static unsigned int s_ghostOffThread, s_ghostLevels;
 static unsigned int s_ghostPosGround, s_ghostPosAir, s_ghostPosNone, s_ghostPosOff;
@@ -5251,10 +5259,23 @@ static int ghost_local_owner(const char* ta, const char* slot)
 /* In B4's 0x05 receiver, before the carried 0x09's own gate: in state 5, where that gate
    refuses it, hold it. regs is the receiver's frame: edi the sender's record, the case's
    player argument at the site's esp + 0x14, paired by 0x453E84..0x453E9B. */
-static int ghost_hold(const unsigned int* regs, const char* ta, const unsigned char* m)
+/* a copy made before state 6, which a kill refused in the catch-up ticks can still mark;
+   game thread. Past GHOST_DONE a copy is not tracked, and its kill waits for the round robin. */
+static void ghost_made(unsigned int idx, unsigned int k, unsigned int birth)
+{
+    GHOSTDONE* d;
+    if (s_ghostDoneN >= GHOST_DONE) { s_ghostUntracked++; return; }
+    d = &s_ghostDone[s_ghostDoneN++];
+    d->idx = idx;
+    d->k = k;
+    d->birth = birth;
+}
+
+static int ghost_take(const unsigned int* regs, const char* ta, const unsigned char* m)
 {
     const char* snd = (const char*)(size_t)regs[PR_EDI];
-    unsigned int arg, k;
+    unsigned int arg, k, birth;
+    int now;
     if (s_ghostOff || m[3] != 0x09 || *(const unsigned int*)(ta + 0x391F1) != 5u ||
         hit_gate(ta, 0x09))
         return 0;
@@ -5262,22 +5283,35 @@ static int ghost_hold(const unsigned int* regs, const char* ta, const unsigned c
     k = arg & 0xFFu;
     if (k >= GHOST_SENDERS || snd != ta + 0x1B63 + k * 0x14B) return 0;
     EnterCriticalSection(&s_ghostLock);
-    if (s_ghostN[k] < GHOST_DEPTH) {
-        GHOSTREC* q = &s_ghostQ[k][s_ghostN[k]++];
-        memcpy(q->m, m, HIT_MSG);
-        q->arg = arg;
-        q->dpid = *(const unsigned int*)(snd + 4);
-        q->dead = 0;
-        s_ghostQueued++;
-        if (s_ghostN[k] > s_ghostDeep) s_ghostDeep = s_ghostN[k];
-    } else {
-        s_ghostOverflow++;
+    now = s_ghostPhase;
+    if (!now) {
+        if (s_ghostN[k] < GHOST_DEPTH) {
+            GHOSTREC* q = &s_ghostQ[k][s_ghostN[k]++];
+            memcpy(q->m, m, HIT_MSG);
+            q->arg = arg;
+            q->dpid = *(const unsigned int*)(snd + 4);
+            q->dead = 0;
+            s_ghostQueued++;
+            if (s_ghostN[k] > s_ghostDeep) s_ghostDeep = s_ghostN[k];
+        } else {
+            s_ghostOverflow++;
+        }
     }
     LeaveCriticalSection(&s_ghostLock);
-    return 1;
+    if (!now) return 1;
+    /* a catch-up tick: only the game thread pumps after the drain (0x4954C8) */
+    if (GetCurrentThreadId() != s_ghostGameTid) { s_ghostOffThread++; return 0; }
+    memcpy(&birth, m + 26, 4);
+    ghost_made(m[6] | (unsigned int)m[7] << 8, k, birth);
+    s_ghostNow++;
+    if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
+        tagpu_logf("enginefix: ghost commander: created slot %u from sender %u (birth %u, type %u) "
+                   "at GameTime %u, in a catch-up tick", m[6] | (unsigned int)m[7] << 8, k,
+                   birth, m[4] | (unsigned int)m[5] << 8, HIT_GAMETIME(ta));
+    return hit_rx_create_armed(m);
 }
 
-/* A copy the first drain made from sender k's create for slot idx, still that copy: marked
+/* A copy made before state 6 from sender k's create for slot idx, still that copy: marked
    dying as the engine's ghost sweep marks one (0x48B426..0x48B42F, bit 14 of +0x110), which
    the unit tick then destroys without a message (0x48AFB9 -> 0x4864B0; it sends a 0x0C only
    for a local player's unit, 0x48664B). Game thread, from the pump, as that sweep runs. */
@@ -5304,7 +5338,8 @@ static int ghost_sweep(const char* ta, unsigned int k, unsigned int idx)
 
 /* The dispatcher's refusal of a message in state 5 (0x45477F), on whichever thread pumps: a
    0x0C there names a unit its owner destroyed while this peer loaded. Its held create is
-   cancelled; failing that, the copy the first drain made is marked dying. */
+   cancelled; failing that, in the catch-up ticks, the copy made before state 6 is marked
+   dying. */
 static void __cdecl ghost_refused(unsigned int* regs)
 {
     const char* ta = *(const char* const*)0x00511DE8;
@@ -5359,16 +5394,16 @@ static void __cdecl ghost_reset(unsigned int* regs)
     }
 }
 
-/* Every held create, replayed through B4's receiver past its state test and CreateFromNetwork,
-   or counted. early: at 0x49842F, before the frame function runs the level's first tick;
-   otherwise just after 0x498445's state-6 store, for what the catch-up ticks refused. */
-static void ghost_drain(int early)
+/* At 0x49842F, on the game thread, before the frame function runs the level's first tick:
+   every held create is replayed through B4's receiver past its state test and
+   CreateFromNetwork, or counted. From here on a create refused in state 5 is made at once. */
+static void __cdecl ghost_replay(unsigned int* regs)
 {
     const char* ta = *(const char* const*)0x00511DE8;
     const char* first;
     const char* last;
-    const char* when = early ? "before the first tick" : "at the state-6 store";
     unsigned int n[GHOST_SENDERS], k, i, total = 0, max = 0, done = 0, dead = 0, before;
+    (void)regs;
     EnterCriticalSection(&s_ghostLock);
     for (k = 0; k < GHOST_SENDERS; k++) {
         n[k] = s_ghostN[k];
@@ -5376,10 +5411,9 @@ static void ghost_drain(int early)
         s_ghostN[k] = 0;
         total += n[k];
     }
-    if (early) s_ghostPhase = 1;
+    s_ghostPhase = 1;
     LeaveCriticalSection(&s_ghostLock);
-    if (!early) s_ghostLevels++;
-    if (!total) return;
+    s_ghostLevels++;
     if (!ta || GetCurrentThreadId() != s_ghostGameTid) {
         s_ghostOffThread += total;
         tagpu_logf("enginefix: ghost commander: the in-play entry ran off the game thread; %u "
@@ -5407,37 +5441,20 @@ static void ghost_drain(int early)
             }
             hit_rx_create_armed(q->m);
             s_ghostCall(q->arg, q->m + 3, ta + 0x1B63 + k * 0x14B);
+            ghost_made(idx, k, birth);
             s_ghostReplayed++;
             done++;
-            if (early) {
-                GHOSTDONE* d = &s_ghostDone[s_ghostDoneN++];    /* at most the queue's size */
-                d->idx = idx;
-                d->k = k;
-                d->birth = birth;
-                s_ghostEarly++;
-            }
             if (InterlockedIncrement(&s_ghostNotes) <= GHOST_NOTES)
                 tagpu_logf("enginefix: ghost commander: replayed slot %u from sender %u (birth %u, "
-                           "type %u) at GameTime %u, %s; the slot now holds type %u", idx, k,
-                           birth, q->m[4] | (unsigned int)q->m[5] << 8, HIT_GAMETIME(ta), when,
-                           *(const unsigned short*)(slot + 0xA6));
+                           "type %u) at GameTime %u, before the first tick; the slot now holds "
+                           "type %u", idx, k, birth, q->m[4] | (unsigned int)q->m[5] << 8,
+                           HIT_GAMETIME(ta), *(const unsigned short*)(slot + 0xA6));
         }
-    tagpu_logf("enginefix: ghost commander: %s, %u held creates: %u replayed, %u killed while "
-               "held, %u not (inactive %u, stale %u, bad %u in total)", when, total, done, dead,
+    tagpu_logf("enginefix: ghost commander: before the first tick (GameTime %u), %u held creates: "
+               "%u replayed, %u killed while held, %u not (inactive %u, stale %u, bad %u in "
+               "total)", HIT_GAMETIME(ta), total, done, dead,
                s_ghostInactive + s_ghostStale + s_ghostBad - before, s_ghostInactive,
                s_ghostStale, s_ghostBad);
-}
-
-static void __cdecl ghost_replay_early(unsigned int* regs)
-{
-    (void)regs;
-    ghost_drain(1);
-}
-
-static void __cdecl ghost_replay(unsigned int* regs)
-{
-    (void)regs;
-    ghost_drain(0);
 }
 
 /* In place of the dirty create's `call 0x4861D0` at 0x48BA00, entered by a call so that
@@ -5573,9 +5590,6 @@ static int fix_ghost_commander(void)
     static const unsigned char loadNext[2]   = { 0x33, 0xED };                    /* 0x497F64 */
     static const unsigned char loaderDone[3] = { 0x83, 0xC9, 0x02 };              /* 0x497C5F */
     static const unsigned char doneTest[5]   = { 0xD0, 0xEA, 0xF6, 0xC2, 0x01 };  /* 0x498348 */
-    static const unsigned char inPlay[10]    = { 0xC7, 0x81, 0xF1, 0x91, 0x03, 0x00, 0x06, 0x00,
-                                                 0x00, 0x00 };                   /* 0x498445 */
-    static const unsigned char inPlayNext[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 };
     static const unsigned char dirtyFrame[11] = { 0x8D, 0x4C, 0x24, 0x1C, 0x51, 0x52, 0x66, 0x89,
                                                   0x44, 0x24, 0x39 };            /* 0x48B9F5 */
     static const unsigned char dirtyCall[5]  = { 0xE8, 0xCB, 0xA7, 0xFF, 0xFF };  /* 0x48BA00 */
@@ -5587,7 +5601,7 @@ static int fix_ghost_commander(void)
     static const unsigned char notState5[9]  = { 0x83, 0xFA, 0x06, 0x0F, 0x84, 0xBF, 0x17, 0x00,
                                                  0x00 };                         /* 0x454788 */
     static const unsigned char nextSub[7]    = { 0x8B, 0x84, 0x24, 0xF0, 0x00, 0x00, 0x00 };
-    unsigned char *aCall, *aReset, *aReplay, *aPos, *aEarly, *aRefused, *p;
+    unsigned char *aCall, *aReset, *aPos, *aEarly, *aRefused, *p;
 
     InitializeCriticalSection(&s_ghostLock);
     s_ghostGameTid = GetCurrentThreadId();
@@ -5597,8 +5611,8 @@ static int fix_ghost_commander(void)
                    "the dirty create's position still applies");
     if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) ghost_selfcheck();
 
-    if (!(aCall = ghost_code(32)) || !(aReset = ghost_code(32)) || !(aReplay = ghost_code(32)) ||
-        !(aPos = ghost_code(32)) || !(aEarly = ghost_code(32)) || !(aRefused = ghost_code(32))) {
+    if (!(aCall = ghost_code(32)) || !(aReset = ghost_code(32)) || !(aPos = ghost_code(32)) ||
+        !(aEarly = ghost_code(32)) || !(aRefused = ghost_code(32))) {
         lim_no_stub();
         return FIX_TABLE;
     }
@@ -5621,15 +5635,9 @@ static int fix_ghost_commander(void)
     memcpy(p, loadStart, 6); p += 6;
     hit_jmp(p, 0xE9, 0x00497F64);
 
-    /* 0x49842F: the first drain, then the frame function under the return 0x498434 */
-    p = fix_call_regs(aEarly, ghost_replay_early);
+    /* 0x49842F: the drain, then the frame function under the return 0x498434 */
+    p = fix_call_regs(aEarly, ghost_replay);
     hit_jmp(p, 0xE9, 0x00496790);
-
-    /* 0x498445: stock's state-6 store, then the second drain */
-    p = aReplay;
-    memcpy(p, inPlay, 10); p += 10;
-    p = fix_call_regs(p, ghost_replay);
-    hit_jmp(p, 0xE9, 0x0049844F);
 
     /* 0x45477F: stock's `cmp edx,5; je 0x455F50`, the refusal in state 5 noted first */
     p = aRefused;
@@ -5644,14 +5652,12 @@ static int fix_ghost_commander(void)
 
     hit_site(0x00497F5E, 6, loadStart, 0xE9, aReset, "ghost commander: the queue emptied at the load's start");
     hit_site(0x0049842F, 5, frameCall, 0xE8, aEarly, "ghost commander: the queue replayed before the first tick");
-    hit_site(0x00498445, 10, inPlay, 0xE9, aReplay, "ghost commander: the queue replayed at the state-6 store");
     hit_site(0x0045477F, 9, refused, 0xE9, aRefused, "ghost commander: a kill refused in state 5");
     hit_site(0x0048BA00, 5, dirtyCall, 0xE8, aPos, "ghost commander: the dirty create's position");
     lim_same(0x00497F54, 10, firstCall, "ghost commander: the load state's first-call test");
     lim_same(0x00497F64, 2, loadNext, "ghost commander: the load state's continuation");
     lim_same(0x00497C5F, 3, loaderDone, "ghost commander: the loader's last store, bit 1");
     lim_same(0x00498348, 5, doneTest, "ghost commander: the game thread's test of bit 1");
-    lim_same(0x0049844F, 6, inPlayNext, "ghost commander: the in-play entry's continuation");
     lim_same(0x0048B9F5, 11, dirtyFrame, "ghost commander: the dirty create's record and reader");
     lim_same(0x004861D0, 3, cfnEntry, "ghost commander: CreateFromNetwork's entry");
     lim_same(0x00496790, 5, frameEntry, "ghost commander: the frame function's entry");
@@ -5661,18 +5667,19 @@ static int fix_ghost_commander(void)
 }
 
 /* the heartbeat's ghost section (tagpu_packet_pub.c): DLL counters only. q= held, over= refused
-   by a full queue, deep= the deepest queue, replay= replayed (early= of them before the first
-   tick); killed= held creates their refused 0x0C cancelled, swept= early copies marked dying,
-   nokill= refused 0x0Cs that matched neither; inactive/stale/bad are the drops at the drains,
+   by a full queue, deep= the deepest queue, replay= replayed before the first tick, now= made
+   in a catch-up tick; killed= held creates their refused 0x0C cancelled,
+   swept= copies made before state 6 marked dying, nokill= refused 0x0Cs that matched neither,
+   untracked= copies past the list a kill can mark; inactive/stale/bad are the drain's drops,
    cleared= held by a load that never reached play; pos= the dirty creates' kind */
 int tagpu_ghost_format(char* buf, unsigned int cap)
 {
     return _snprintf(buf, cap,
-                     " | ghost: q=%u over=%u deep=%u replay=%u early=%u killed=%u swept=%u"
-                     " nokill=%u inactive=%u stale=%u bad=%u"
+                     " | ghost: q=%u over=%u deep=%u replay=%u now=%u killed=%u swept=%u"
+                     " nokill=%u untracked=%u inactive=%u stale=%u bad=%u"
                      " cleared=%u offthread=%u levels=%u pos ground=%u air=%u none=%u off=%u%s",
-                     s_ghostQueued, s_ghostOverflow, s_ghostDeep, s_ghostReplayed, s_ghostEarly,
-                     s_ghostKilled, s_ghostSwept, s_ghostNoKill, s_ghostInactive,
+                     s_ghostQueued, s_ghostOverflow, s_ghostDeep, s_ghostReplayed, s_ghostNow,
+                     s_ghostKilled, s_ghostSwept, s_ghostNoKill, s_ghostUntracked, s_ghostInactive,
                      s_ghostStale, s_ghostBad, s_ghostCleared, s_ghostOffThread, s_ghostLevels,
                      s_ghostPosGround, s_ghostPosAir, s_ghostPosNone, s_ghostPosOff,
                      s_ghostOff ? " LEVER-OFF" : "");
@@ -5766,8 +5773,8 @@ static void patch_engine_defects(void)
     _snprintf(b, sizeof b,
               "enginefix: ghost commander %s: a carried 0x09 the gate refuses in state 5 held per "
               "sender in the 0x05 receiver (0x455F90) and replayed through it before the first "
-              "tick (0x49842F) and at the state-6 store (0x498445), a 0x0C refused in state 5 "
-              "cancelling its held create (0x45477F), the queue emptied at the load's start "
+              "tick (0x49842F), one refused in a catch-up tick made at once, a 0x0C refused in "
+              "state 5 cancelling its held create (0x45477F), the queue emptied at the load's start "
               "(0x497F5E); the dirty create's position from its move payload (0x48BA00). Counters "
               "on the heartbeat's 'ghost:' section. Stubs: %u of 4096 bytes at 0x%08X",
               fix_state(ghost), s_ghostCodeUsed, (unsigned int)(size_t)s_ghostCode);
