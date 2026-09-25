@@ -1,0 +1,417 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B1 unit victim cap: 36 CORFLAK (2x2, 1655 HP, anti-air only, so they ignore the bomb) on a mirror-symmetric ring of radius 212 about an ARMVADER, on flat ground (height 84-89) in Two Continents' south-west. Select the bomb and self-destruct it (ctrl+d): CRAWL_BLAST, AOE 556, damage 2500, edgeeffectiveness 0, about 240 HP per hit at the ring's box distance. Stock records only 20 victims per explosion (0x49A28F), so every victim the row-major cell walk finds after the 20th is damaged once per footprint cell inside the rect, four times for a 2x2. Read HP (u16 unit+0x108) before and after.",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "bomb",
+   "type": "ARMVADER",
+   "owner": 0,
+   "pos": [
+    640,
+    7680
+   ],
+   "facing": 0,
+   "stance": "hold"
+  },
+  {
+   "id": "keepalive",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    1300,
+    7680
+   ]
+  },
+  {
+   "id": "ring00",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    432,
+    7632
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring01",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    432,
+    7664
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring02",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    432,
+    7696
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring03",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    432,
+    7728
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring04",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    448,
+    7584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring05",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    448,
+    7776
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring06",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    464,
+    7552
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring07",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    464,
+    7808
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring08",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    496,
+    7536
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring09",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    496,
+    7824
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring10",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    512,
+    7504
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring11",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    512,
+    7856
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring12",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    544,
+    7488
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring13",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    544,
+    7872
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring14",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    592,
+    7472
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring15",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    592,
+    7888
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring16",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    624,
+    7472
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring17",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    624,
+    7888
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring18",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    656,
+    7472
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring19",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    656,
+    7888
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring20",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    688,
+    7472
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring21",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    688,
+    7888
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring22",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    736,
+    7488
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring23",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    736,
+    7872
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring24",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    768,
+    7504
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring25",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    768,
+    7856
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring26",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    784,
+    7536
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring27",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    784,
+    7824
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring28",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    816,
+    7552
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring29",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    816,
+    7808
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring30",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    832,
+    7584
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring31",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    832,
+    7776
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring32",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    848,
+    7632
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring33",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    848,
+    7664
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring34",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    848,
+    7696
+   ],
+   "facing": 0
+  },
+  {
+   "id": "ring35",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    848,
+    7728
+   ],
+   "facing": 0
+  }
+ ],
+ "camera": {
+  "at": [
+   640,
+   7680
+  ]
+ }
+}

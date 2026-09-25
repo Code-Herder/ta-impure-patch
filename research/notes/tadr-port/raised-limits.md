@@ -177,10 +177,10 @@ line per paragraph, so the box wraps it once; the owner reviewed it as it shows 
 ```text
 Title: Total Annihilation: Impure cannot start
 
-Impure could not install its engine limits, so Total Annihilation will now close. Nothing was changed.
+Impure could not install its engine limits and fixes, so Total Annihilation will now close. Nothing was changed.
 
 WHY
-Impure raises the game's limits (units, projectiles, explosions...) by rewriting its code in memory, and it checks every place first. <why> Running anyway would let this game play by different rules from other players and break multiplayer without warning.
+Impure raises the game's limits (units, projectiles, explosions...) and fixes some of its defects by rewriting its code in memory, and it checks every place first. <why> Running anyway would let this game play by different rules from other players and break multiplayer without warning.
 
 WHAT TO DO
 - Use the original 3.1 TotalA.exe (the Steam copy is 3.1). Community patches such as 3.9.02 and TA: Escalation ship a modified exe.
@@ -199,8 +199,12 @@ result: <k> of <n> sites differ, nothing written
   have <found bytes>
 ```
 
-- **`<why>` has three forms**: an exe that is not 3.1; the 3.1 exe, changed in memory before we ran
-  (another patch or loader); and Windows refusing the write.
+- **The same table holds the simulation fixes** of [section B](sim-fixes.md#how-b-fixes-are-held),
+  in both builds, so the stock-limits build shows this report too when one of their sites differs.
+- **`<why>` has four forms**: an exe that is not 3.1; the 3.1 exe, changed in memory before we ran
+  (another patch or loader); Windows refusing the write; and a failure on our own side (a stub that
+  could not be allocated, a table overflow, or two sites over one byte, whose result line reads
+  `the sites at <a> and <b> overlap`).
 - **The report block exists for whoever debugs it, person or agent.** It names our build and
   identifies the exe exactly. It lists every differing site, twelve in the box and all of them in
   `log\tagpu.log`. It prints no path, because a report is meant to be pasted publicly and an

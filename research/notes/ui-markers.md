@@ -628,7 +628,7 @@ cached last-seen `node+0x32/0x34` — then alpha-blits
 `cursor_ary[entry+0x10]` (`*(main+0x1487F + idx*4)`, tamem `cursor_ary[0x15]`),
 frame = `(gameTime / (2·seq.period)) % seq.count`. This is the pulsing
 cross/crosshair at move/attack/patrol targets. Also (debug, `main+0x391BF`
-only) per-weapon AoE/coverage + `attackrunlength` labelled circles.
+only) per-weapon AoE and `coverage` (`w+0xE0`) labelled circles.
 
 **Range circles `0x4390A0`** [BINARY-VERIFIED]: normal play draws only
 (a) the **cloak radius** (`mincloakdistance` def+0x208) around cloaked units

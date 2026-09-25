@@ -1,0 +1,94 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B1 off-map off-by-one: two human ARMATLAS (3x3 footprint) hovering by patrol at Two Continents' east edge (W = 672 cells), one whose footprint ENDS on the last column (x = 10728, footprint cells 669..671) and a control one column in (x = 10712, 668..670), with an AI CORFLAK 330 wu west. Stock's stamp 0x47CC30 parks a unit with X + fw >= W in the off-map bucket (0x47CC8B jge), so the edge atlas takes no splash and no direct hits although every cell is on the map. Peek unit+0x82 against *(main+0x142B7) and read HP (u16 +0x108).",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "edge",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    10728,
+    5760
+   ],
+   "height": 200,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      10728,
+      5760
+     ]
+    }
+   ]
+  },
+  {
+   "id": "inner",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    10712,
+    5960
+   ],
+   "height": 200,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      10712,
+      5960
+     ]
+    }
+   ]
+  },
+  {
+   "id": "flak",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    10400,
+    5760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "keepalive",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    10300,
+    4600
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   10500,
+   5800
+  ]
+ }
+}

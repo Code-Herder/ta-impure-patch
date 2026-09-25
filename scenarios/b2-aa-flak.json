@@ -1,0 +1,20 @@
+{
+  "format": "ta-scenario/1",
+  "description": "B2 measurement: the idle AI's flak 350 east of (1600,1600): one CORFLAK, far enough off that a stack over the point is at about 32 degrees of pitch (clear of 0x49CF19's vertical bands). Apply onto a running b2-stack-* game.",
+  "on_error": "abort",
+  "setup": {
+    "clear_existing": false
+  },
+  "units": [
+    {
+      "id": "flak1",
+      "type": "CORFLAK",
+      "owner": 1,
+      "pos": [
+        1950,
+        1600
+      ],
+      "facing": 0
+    }
+  ]
+}
