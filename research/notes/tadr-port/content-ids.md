@@ -378,15 +378,17 @@ Only the raises differ between the builds.
 **A′3 — weapons, 4096. Done 2026-09-24.**
 
 - **The sites**: 25 in the raised-limits table, 130 with the others. The four both-builds fixes —
-  the loader's bound, the `0x0D` receiver's two bounds, the `0x0F` hit flag and its receiver's
-  refusal of a cell off the map — are one engine fix in the stock-limits build and rows of the
-  table in the raised one, where the raise rewrites the same sites. `tagpu_weapons.c` finds the
+  the loader's bound (the ID, and a section name that must fit its record), the `0x0D`
+  receiver's two bounds, the `0x0F` hit flag and its receiver's refusal of a cell off the map —
+  are one engine fix in the stock-limits build and rows of the table in the raised one, where the
+  raise rewrites the same sites. `tagpu_weapons.c` finds the
   array through `tagpu_limits_weapon0()`. The engine map has every address: *Weapon IDs* in the
   raised pools, and *A weapon's ID, and the messages that carry it* in *Engine defects we patch*.
 - **The test content** is `tools/weaponids_fixture.py`: stock weapons under new names and IDs
   (4000; no `ID=`; 5000; 253–255 and 3581–3583, lasers with a blast of 96 so that they reach a
   feature's cells; 250 and 3322, one low byte, as slow targetable rockets; 3000, an interceptor
-  stocked cheaply), each on a copy of a stock tower, and the interceptor on a copy of the ARM
+  stocked cheaply), each on a copy of a stock tower, a weapon named in 300 characters at 4095,
+  the last record, on none, and the interceptor on a copy of the ARM
   anti-nuke with its build page, since an interceptor fires only from stock and stock is built
   only by an order from that page. `--low` keeps the IDs below 256, for a build without the raise.
   Nothing of the game's is committed.
@@ -401,7 +403,8 @@ Only the raises differ between the builds.
     paused once the fire stopped, the peers held the same units at the same health and the same
     features cell for cell; the final build, with the extra-weapons module armed and with it off
     (so the `0x0D` slot bound is ours), again agreed cell for cell and unit for unit, the
-    interceptor emptied its stock of 10, and neither peer dropped a message;
+    interceptor emptied its stock of 10, and neither peer dropped a message; the weapon named in
+    300 characters at 4095 is skipped and logged on both;
   - the stock-limits build on the `--low` half: the same agreement; the previous build on it: the
     host held 35 feature cells and the joiner 87, the wrecks the lasers 253–255 hit gone from the
     host alone;

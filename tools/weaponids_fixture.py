@@ -13,6 +13,8 @@ Weapons, in weapons/weaponids.tdf:
 
     WID_MSL4000    ARMKBOT_MISSILE, the Rocko's, as ID 4000: a weapon drawn with a model
     WID_NOID       the same with no ID line, and WID_MSL5000 as ID 5000: both skipped at load
+    WID_LONG_X...  the same under a name of 300 characters as ID 4095, the last record: skipped
+                   at load, since the loader copies the name into the record with no bound
     WID_LAS253..255, WID_LAS3581..3583
                    ARM_LIGHTLASER as IDs 253..255 and 3581..3583, whose low bytes are the
                    feature sentinels' 0xFD..0xFF, with a blast wide enough to reach a feature's
@@ -104,7 +106,7 @@ def main():
     rkt, amd = section(text, "ARMTRUCK_ROCKET"), section(text, "AMD_ROCKET")
 
     tdf = [weapon(msl, "WID_MSL4000", 4000), weapon(msl, "WID_NOID", None),
-           weapon(msl, "WID_MSL5000", 5000)]
+           weapon(msl, "WID_MSL5000", 5000), weapon(msl, "WID_LONG_" + "X" * 291, 4095)]
     tdf += [weapon(las, f"WID_LAS{i}", i, {"areaofeffect": 96}, damage=1 if i < 256 else 5000)
             for i in (253, 254, 255, 3581, 3582, 3583)]
     tdf += [weapon(rkt, f"WID_RKT{i}", i, {"targetable": 1, "weaponvelocity": 120,

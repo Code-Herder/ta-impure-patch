@@ -2338,7 +2338,7 @@ engine defects we patch".
 | `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | a builder's build list: the game load's shared `TEMP UTYPE LIST` and each builder's copy at def `+0x156` hold 30 entries, the append and the download appender `0x42BE30` write past them | three `call`s to stubs that grow a block through `0x4D83B0` before the entry that would not fit (`bl_room`: 30, then powers of two from 64), a `jmp` past the copy's `rep movs`, the appender's cap NOPped |
 | `0x42DD74`, `0x42DDF0`, `0x42DE12`, `0x42DF23`, `0x42DF35`, `0x42E0B9` | the download menus' records, one of five entries a file at `[main+0x391CB]`, filled with no cap | the block from a zeroing allocator; a file continues into records at the block's end, which grows; stock's count write NOPped; the next file's record by index; the page count reads the record count; the downloadable check reads the files' own records only |
 | `0x49E700`, `0x49E7BD`, `0x49E7CD`, `0x49E7F4` | the allocator's new handler's text, "Your hard disk may be full" | a call at the handler's entry writes our text into a static; the three reads point at it |
-| `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | a weapon's ID: the loader `0x42E440` takes the record from it with no bound; the `0x0D` receiver `0x49D270` scales the `u16` shooter and target by 0x118 into the unit array with no bound, and indexes the shooter's slots by `+0x23` with none; the `0x0F` receiver `0x45544D` reads the bytes `0xFD`..`0xFF` as sentinels even when a weapon sent them, and reads through `0x481550`'s NULL for a cell off the map | four sites compared and written together: a `call` in place of the loader's `mov edx,[main]` that skips a weapon outside the array; a `call` over the receiver's lookup that bounds both indexes, and the slot byte to the shooter's three slots when the extra-weapons module is off, and drops the message past them; a `call` over the `0x0F` send that marks a hit whose byte is `0xFD`..`0xFF` with bit 11 of x; the `0x0F` dispatch slot pointed at a stub that tells the hit from a sentinel by that bit and refuses a cell off the map |
+| `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | a weapon's ID: the loader `0x42E440` takes the record from it with no bound; the `0x0D` receiver `0x49D270` scales the `u16` shooter and target by 0x118 into the unit array with no bound, and indexes the shooter's slots by `+0x23` with none; the `0x0F` receiver `0x45544D` reads the bytes `0xFD`..`0xFF` as sentinels even when a weapon sent them, and reads through `0x481550`'s NULL for a cell off the map | four sites compared and written together: a `call` in place of the loader's `mov edx,[main]` that skips a weapon outside the array, or whose section name (copied to `+0` with no bound at `0x42E490`) does not fit its record; a `call` over the receiver's lookup that bounds both indexes, and the slot byte to the shooter's three slots when the extra-weapons module is off, and drops the message past them; a `call` over the `0x0F` send that marks a hit whose byte is `0xFD`..`0xFF` with bit 11 of x; the `0x0F` dispatch slot pointed at a stub that tells the hit from a sentinel by that bit and refuses a cell off the map |
 | `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys all but the first by name of each group of types sharing a key, to a hash of the name moved past every held value, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
@@ -2364,14 +2364,14 @@ were found in, so two peers with the same files compute the same keys and it cha
 peers can disagree on; stock content, whose 278 names share no key, is not re-keyed. The weapon IDs'
 fix writes no engine state, only message bytes: a skipped weapon is one the loader never writes, a
 dropped message one the receiver never acts on, and a flagged hit is damage where stock's host
-destroyed, burned or reclaimed the feature. The bytes are the `0x0D` it sends (the ID's bits 8..11
-in `+0x23`'s high nibble, and the meteor's `+0x1A`..`+0x23`, which stock sends as the stack held
-them, cleared), the `0x0D` it receives (`+0x23` masked to its low nibble in the receive buffer
-before stock reads it), and from 256 up the `0x0E` (the companion goes out, and the stock
-message's type byte is zeroed so its send is skipped). That is simulation, as content: stock's
-weapons carry neither an ID outside 0..246 nor the bytes `0xFD`..`0xFF`, so with stock content
-every message means what stock's does, and is stock's byte for byte but for the meteor's cleared
-tail.
+destroyed, burned or reclaimed the feature. In both builds the bytes are the `0x0D` it receives
+(`+0x23` masked to its low nibble in the receive buffer before stock reads it) and the `0x0F`
+hit's flag. The raised build adds the `0x0D` it sends (the ID's bits 8..11 in `+0x23`'s high
+nibble, and the meteor's `+0x1A`..`+0x23`, which stock sends as the stack held them, cleared) and
+from 256 up the `0x0E` (the companion goes out, and the stock message's type byte is zeroed so its
+send is skipped). That is simulation, as content: stock's weapons carry neither an ID outside
+0..246 nor the bytes `0xFD`..`0xFF`, so with stock content every message means what stock's does,
+and is stock's byte for byte but for the raised build's cleared meteor tail.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
@@ -2390,10 +2390,12 @@ site that is not installed reads `SKIPPED (the bytes differ from the retail exe)
 place of `ARMED`. The first six fixes release a stub whose site cannot be written; the last five
 share one page of stubs, which stays. There is no switch: all eleven
 fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
-`enginefix: weapon <name> has ID <id>, outside 0..<max>, and is skipped`, a duplicate `enginefix:
+`enginefix: weapon <name> has ID <id>, outside 0..<max>, and is skipped` or `enginefix: weapon
+<name>... (ID <id>) has a name longer than its record, and is skipped`, a duplicate `enginefix:
 weapon ID <id>: <name> replaces <name>`, and a dropped message or companion `enginefix: weapon
-IDs: <why> (<a>, <b>)` (the first 32; a companion the gate refuses names the weapon and the
-in-play handler's slot).
+IDs: <why> (<a>, <b>)` (the first 32, and the first 32 companions on a budget of their own, since
+out of play a companion drops by design; one the gate refuses names the weapon and the in-play
+handler's slot).
 
 **What it does not cover:**
 

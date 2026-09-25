@@ -1628,7 +1628,8 @@ static int fix_sync_keys(void)
 /* The model path copies the TDF's model name, read into a 0x100-byte buffer (0x42EC7B), to a
    record's +0x80 with no bound (0x42ED7B), so a long name runs up to 0x180 - 0x115 bytes past
    the record, into the next one as in stock. The tail keeps the last record's overrun inside
-   the array. */
+   the static. The section name copied to +0 has no such bound in the engine; wpn_loader_id
+   holds it to the record. */
 static struct {
     unsigned char rec[TAGPU_LIM_WEAPONS][WPN_REC];
     unsigned char tail[0x80 + 0x100 - WPN_REC];
@@ -1638,17 +1639,20 @@ static struct {
 static DWORD         s_wpnGameTid;        /* DllMain's thread, which is the game loop's      */
 static volatile LONG s_wpnNotes;
 
-static void wpn_note(const char* what, unsigned int a, unsigned int b)
+static void wpn_note_in(volatile LONG* budget, const char* what, unsigned int a, unsigned int b)
 {
-    if (InterlockedIncrement(&s_wpnNotes) <= 32)
+    if (InterlockedIncrement(budget) <= 32)
         tagpu_logf("enginefix: weapon IDs: %s (%u, %u)", what, a, b);
 }
+#define wpn_note(what, a, b) wpn_note_in(&s_wpnNotes, (what), (a), (b))
 
 /* In place of `mov edx,[main]` at 0x42E468, after the loader read `ID` into eax (-1 when the
    section has none) and the section's name into edi. edx is the base the loader's own
    arithmetic adds id * 0x115 + 0x2CF3 to. A weapon outside the array is skipped: the stub leaves
    through the loader's epilogue 0x42F333, past its closing call 0x49E010, and nothing of it is
-   written. A second weapon with an ID keeps stock's rule, the later one wins. */
+   written. So is a weapon whose name does not fit its record: 0x42E490 copies the name to +0
+   with no bound, and the TDF parser (0x4C4340) cuts a section name from the file's text, so
+   nothing else bounds it. A second weapon with an ID keeps stock's rule, the later one wins. */
 static int __cdecl wpn_loader_id(unsigned int* regs)
 {
     const char* name = (const char*)(size_t)regs[PR_EDI];
@@ -1657,6 +1661,11 @@ static int __cdecl wpn_loader_id(unsigned int* regs)
     if (!base || id < 0 || id >= TAGPU_LIM_WEAPONS) {
         tagpu_logf("enginefix: weapon %.32s has ID %d, outside 0..%d, and is skipped", name, id,
                    TAGPU_LIM_WEAPONS - 1);
+        return 0;
+    }
+    if (strnlen(name, WPN_REC) >= WPN_REC) {
+        tagpu_logf("enginefix: weapon %.32s... (ID %d) has a name longer than its record, and is "
+                   "skipped", name, id);
         return 0;
     }
     if (base[id * WPN_REC])
@@ -1886,14 +1895,21 @@ static int __cdecl wpn_rx_intercept(unsigned int* regs)
    (0x499A30). 0x499200 is stored in two places: 0x498455, which the game thread reaches after
    reading bit 1 of main+0x38D75, the loader's last store (0x497C62), and 0x490BC5,
    SetInputMode 0x490B30's mode 6, which none of its callers passes (they pass 1, 2 and 7).
-   With the handler there, the level's pool is complete and no other thread writes it, and it
-   leaves the slot only when play ends (the post-game 0x4996DF after the teardown, a load's
-   0x497F40). A drop is therefore before play or after it. Before play this peer has fired nothing, so
+   0x49847E clears that flag word right after the install, so each load waits on its own
+   loader. With the handler there, the level's pool is complete and no other thread writes it.
+   It leaves the slot only when play ends: every exit replaces the handler, after which the
+   gate drops, and where the teardown runs before the replacement it nulls the pool at
+   0x499A9A on this thread, and the `!pool` test drops. A drop is therefore before play or
+   after it. Before play this peer has fired nothing, so
    the companion can name only a remote copy, whose detonation is visual: 0x499EB0 applies
    damage for a projectile of a local owner only. The one residual is the first in-play
    frame, which 0x49842F runs before 0x498455 installs the handler: a projectile this peer
    fires in that frame and another peer catches before the frame ends. Stock's 0x0E has no
    such gate and runs on whichever thread pumps. Drops are logged. */
+static volatile LONG s_wpnChatNotes;     /* its own budget: out of play a companion drops by design,
+                                            and must not use up the malformed messages' notes */
+#define wpn_chat_note(what, a, b) wpn_note_in(&s_wpnChatNotes, (what), (a), (b))
+
 static int __cdecl wpn_rx_chat(unsigned int* regs)
 {
     const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
@@ -1905,17 +1921,17 @@ static int __cdecl wpn_rx_chat(unsigned int* regs)
     id = m[15] | (unsigned int)m[16] << 8;
     if (!ta || *(const unsigned int*)(ta + 0x391F5) != 0x00499200u ||
         GetCurrentThreadId() != s_wpnGameTid) {
-        wpn_note("a companion arrived off the game thread or out of play; dropped", id,
+        wpn_chat_note("a companion arrived off the game thread or out of play; dropped", id,
                  ta ? *(const unsigned int*)(ta + 0x391F5) : 0);
         return 0;
     }
     if (id < 256 || id >= TAGPU_LIM_WEAPONS) {
-        wpn_note("a companion names a weapon outside 256..4095; dropped", id, 0);
+        wpn_chat_note("a companion names a weapon outside 256..4095; dropped", id, 0);
         return 0;
     }
     count = *(const int*)(ta + 0x141F3);
     pool = *(char* const*)(ta + 0x141F7);
-    if (!pool) { wpn_note("a companion arrived with no projectile pool; dropped", id, 0); return 0; }
+    if (!pool) { wpn_chat_note("a companion arrived with no projectile pool; dropped", id, 0); return 0; }
     if (count > TAGPU_LIM_PROJ) count = TAGPU_LIM_PROJ;
     for (i = 0; i < count; i++) {
         char* p = pool + i * 0x6B;

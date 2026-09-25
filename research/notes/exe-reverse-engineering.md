@@ -1208,7 +1208,11 @@ table, *Weapon IDs* in *The raised effect pools*):
 - `0x42E468`: a weapon whose ID is outside the array is skipped and logged, through the loader's
   epilogue `0x42F333`, past its last call `0x49E010(weapon)`, which sets the record's `+0x60` from
   its flags at `+0x111` [role INFERRED: the projectile's handler]; nothing of the record is
-  written. A duplicate ID keeps stock's rule, the later wins, and is logged.
+  written. So is a weapon whose section name does not fit its 0x115-byte record: `0x42E490` copies
+  it to `+0` with `repnz scas` / `rep movs` and no bound, and the TDF parser cuts a section name
+  out of the file's text (`0x4C4340`, trimmed of blanks), so nothing bounds its length. A name of
+  0x20 or more already runs into the description the loader writes next at `+0x20` (`0x4C48C0`,
+  at most 0x40), as in stock. A duplicate ID keeps stock's rule, the later wins, and is logged.
 - `0x49D280`, 16 bytes: the weapon from the full ID, and the shooter and target each bounded by the
   unit array's last element (`main+0x1435B`, inclusive: `0x4855D6` sets it to begin + (count −
   1)·0x118, and the engine's own sweep `0x48BD00` steps with `add eax,0x118` at `0x48BD22` and
@@ -5161,9 +5165,16 @@ reached as follows:
   allocates the projectile pool (`0x499A30`; freed and nulled at `0x499A9A`). `0x499200` is
   stored in two places: `0x498455`, which the game thread reaches after reading bit 1 of
   `main+0x38D75`, the loader's last store (`0x497C62`), and `0x490BC5`, `SetInputMode`
-  `0x490B30`'s mode 6, which none of its eleven callers passes (they pass 1, 2 and 7). So it
-  stays for the level and leaves at the post-game `0x4996DF` (mode 7, after the teardown
-  `0x491B60`). With the handler there the pool is complete and no other thread writes it. The
+  `0x490B30`'s mode 6, which none of its eleven callers passes (they pass 1, 2 and 7).
+  `0x49847E` and `0x498480` clear the flag word `main+0x38D6F..0x38D76` right after the install,
+  so each load waits on its own loader. With the handler there the pool is complete and no other
+  thread writes it. The handler stays for the level. Every way out of play replaces it
+  (`SetInputMode(7)` at `0x41F668` and `0x427736`, `(1)` at `0x460653`, the post-game
+  `0x4996DF`, the stores at `0x49297E`, `0x492A7F` and `0x499852`), after which the gate drops;
+  where the teardown runs before the replacement, it nulls the pool at `0x499A9A` on the game
+  thread, and the stub's `!pool` test drops.
+  `0x497F40`, the loading screen, is stored only by the menu handlers (`0x496C3D`, `0x496D75`,
+  `0x496D9D`, `0x496DFF`) and by `SetInputMode`'s mode 5 (`0x490BB3`), never over `0x499200`. The
   residual is the first in-play frame, which `0x49842F` runs (`0x496790`) before `0x498455`: a
   companion that arrives in it is dropped, and logged. A companion dropped before play can name
   only a remote copy, whose detonation is visual: `0x499EB0` damages for a projectile of a local
