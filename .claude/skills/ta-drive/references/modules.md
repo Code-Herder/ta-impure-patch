@@ -318,6 +318,14 @@ tools/tacli rm w1                                 # deletes the test folder and 
 - **Nothing tacli replaces is lost.** Before a file of the player's copy is first replaced or
   deleted in the test folder, its original, as `remote add` copied it (by SHA-256), is kept
   beside it as `<name>.tacli-original`.
+- **Comparing with the reference setup.** The store is the player's key, so the skirmish values
+  are theirs: pass `--los 0 --mapping 1`, the reference prefixes' values, or line-of-sight fog
+  and unmapped ground differ between the machines (`--mapping 0` blacks the terrain out). Health
+  bars need `damagebars` 1 in the store, and no launch flag sets it; a stopped instance's store
+  is changed through `_remote_store_update` in `tools/tacli`. Nothing writes `tagpu_zoom.txt`
+  there, so the captures are at 1×. `ab` refuses a frame two passes drew into: the effects alone
+  need `fx.on=nomodels`, since their 3D models are the unit pass's. A shadow cannot be captured,
+  because a one-pass frame has nothing under it.
 - **Read the result with `log`**: the `vk:` lines name the device, its depth format and each
   missing extension; each refusal says which pass stood down and why; the `vk: census` line says
   which passes drew. `crash` reads the test folder's `ErrorLog.txt`.

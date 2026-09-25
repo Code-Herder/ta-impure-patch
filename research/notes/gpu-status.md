@@ -10382,8 +10382,9 @@ Two forms, then: **a GL handle used as a validity test**, and **a construction r
 through one**. Both are invisible while one backend exists, because the handle is always there.
 
 **The counterpart rule that came out of it**: a device limit belongs to the device that will
-consume it. `tagpu_vk_max_image_dim()` and `tagpu_vk_max_uniform_range()` read
-`maxImageDimension2D` and `maxUniformBufferRange` from the physical device actually bound, and
+consume it. `tagpu_vk_max_image_dim()` and `tagpu_vk_max_storage_range()` read
+`maxImageDimension2D` and `maxStorageBufferRange` from the physical device actually bound (the
+storage range capped at `INT_MAX`, since a driver may report `UINT32_MAX`; §2.94), and
 both return **0 for "no device yet" rather than a default** — the lane takes ~200 ms to come up
 while the gathers run from the first frame, so a pass that read 0 as a bound would cache a ruined
 atlas for the life of the process. That is measured, not hypothetical: it is what
@@ -18616,3 +18617,77 @@ no switch for it. The wire's rule is the walk, not the engine's polygon edge wal
 steep edges and differ on shallow ones, where the engine lights two pixels a scanline and the
 walk a full run (hardware-portability.md, G21b). The clip at 8× was measured under the
 game-pixel rule the branch had before and not re-run under this one.
+
+### 2.94 The Windows gate: every pass on an AMD GCN card, and the restorer's unsigned limits (`tagpu_restore_core.c`, `tagpu_vk_restore.c`) — G21d
+
+The plan is [hardware portability](hardware-portability.html) §3 G21d. It ran on the Windows test
+setup (an AMD Radeon R9 200-series card on its Windows driver, 1920 × 1080) through a `tacli`
+remote instance (§2.92), with main carrying G21a–c, and beside the reference setup on a private
+1920 × 1080 Xvfb display. Both ran the same DLL at `ss=2`.
+
+**What the card does now [MEASURED 2026-09-25].** The log names `vk: depth format:
+D32_SFLOAT_S8_UINT (130)`; the world target, terrain, features, units (`hard shadows on
+(stencil-masked), nanoframe wire on`) and markers come up on it; and with the play arm set on
+`feat-forest` the census reads `6 pass(es) drew … (terr=1 feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1
+fps=0)`. G21b's device asks for no line extension, and none is logged missing. GPU frame time
+(`ftime.on`, paused, `maxfps` uncapped, four reports of 256 frames each): Classic p50 1.68 ms,
+p99 1.84 ms; Classic++ p50 2.64 ms, p99 2.66 ms. The Classic++ terrain restore ran 5 062 frames
+in 10.6 s of wall time and 7.0 s of GPU time at NK=8.
+
+**The one refusal the run found, and its fix [SOURCE].** Before the fix the log read
+`restorevk: uniform block -1 < one k-block (9472)`, and the terrain, feature, unit and effects
+lanes each logged that they draw their base atlas: Classic++ restored nothing on that card. The driver reports
+`maxUniformBufferRange` as `UINT32_MAX` (the restorer's own line prints it as `4194303 KB`). The
+Vulkan backend passed it to `tagpu_rcore_pick_nk` through an `(int)` cast, where it became -1,
+less than one k-block. `tagpu_rcore_pick_nk` now takes both limits as `unsigned`, as Vulkan
+reports them, and clamps the quotient to `TAGPU_R_MAXNK` before narrowing it; the call passes
+them uncast. Below 2³¹ the arithmetic is unchanged, so no device that restored before picks a
+different NK. The other device limits read into an `int` are bounded first:
+`tagpu_vk_max_storage_range` caps `maxStorageBufferRange` at `INT_MAX`, and
+`tagpu_vk_max_image_dim` returns 0 ("no device yet") for a dimension above it. After the fix, the card's log holds no
+refusal line.
+
+**Its pictures against the reference setup [MEASURED].** These are the `.ab` world captures of
+G21a's fixtures and two of G21b's, at 1× in both presets, one pass at a time, 3840 × 2160 target
+pixels. They ran with `--los 0 --mapping 1` on both machines, because a remote test folder's
+store carries the player's own skirmish values. Every capture was taken twice, and each
+machine's own run-to-run floor is 0 everywhere, so every count below is a difference between
+the two GPUs:
+
+| capture | differ (of drawn) | > 8 levels | > 32 | largest |
+|---|---|---|---|---|
+| terrain, Classic | 0 of 7 282 264 | 0 | 0 | 0 |
+| features, Classic | 12 of 926 348 | 0 | 0 | 1 |
+| markers (health bars), both presets | 0 of 1 080 | 0 | 0 | 0 |
+| terrain, Classic++ | 180 359 (2.5 %) | 474 | 0 | 29 |
+| features, Classic++ | 216 876 (23 %) | 89 864 | 4 320 | 64 |
+| units, both presets | 1 207 (2.4 %) | 280 | 158 | 240 |
+
+- **Units**: 12 pixels are drawn on one GPU only; the 158 over 32 levels fall in 50 spots of at
+  most 33 pixels, single rows and short runs along polygon edges. The two rasterisers round a
+  triangle's edge differently. The Classic++ row matches the Classic one because on each machine
+  the two presets' unit captures are identical (0 px): the unit pass drew its base atlas. On the
+  AMD card its log gives the reason — the restored twin was published for 1.0× anisotropic
+  (`classicpp.cfg=aniso=1`, the A/B's setting) after its sampler was built for 4.0×, and a
+  sampler is not rebuilt mid-frame; the reference setup's log of that run was not kept.
+- **Classic++ terrain** is the same picture: mean 0.03 levels over the drawn pixels, 99th
+  percentile 1, differences along texel edges.
+- **Classic++ features** hold the one visible difference: on the AMD card the restored trees
+  carry a few off-hue specks (dim magenta, red, blue) near trunks and edges. 2 388 pixels
+  change hue by more than 32; the mean is 2.2 levels and the 99th percentile 27. The same
+  restorer draws the terrain almost identically, and Classic features differ by 12 pixels, so
+  the difference lies in how the card samples the restored feature twin (a mip or filter choice),
+  not in the restorer's arithmetic [INFERRED, not isolated].
+- **The nanoframe ladder** (G21b's wire): 13 of 74 931 pixels are drawn on one GPU only, so the
+  line rule draws the same shape on both. Colours differ by up to 180 because the build colour
+  pulses with game time and the two games paused at different ticks.
+- **Timing, not the GPU**: `shadow-lab`'s units (the dish and turrets stand at other angles),
+  `fx-lasers` and `fx-rockets` are live and paused at different ticks. The reference setup's
+  rockets had not fired when it paused, so `fx-rockets` has a Windows capture only.
+- The effects captures need `fx.on=nomodels`: the effects' 3D models are drawn by the unit pass,
+  and a one-pass capture refuses a frame two passes drew into.
+
+**Not covered.** The hard shadows' picture: they are drawn (logged, stencil-masked), but a
+one-pass capture has black under them, and there is no presented-frame capture on a remote
+instance. Restored units across the two GPUs (above). The 0.877× zoom, since a remote instance
+cannot write `tagpu_zoom.txt`. The validation layer on either machine.
