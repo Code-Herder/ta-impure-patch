@@ -1447,17 +1447,30 @@ static int vk_swapchain(int w, int h)
 
    WHY FLOAT DRAWS THE SAME PICTURE. Every world pass writes a z in [0, 1]
    and the viewport maps it onto [0.5, 1] (`minDepth 0.5 / maxDepth 1.0`,
-   tagpu_vk_feat.c item 1). A float32 in (0.5, 1) is j * 2^-24 for an integer
-   j, and D24's conversion of it, j - j/2^24 rounded, is j - 1 whether the
-   device rounds to nearest or toward zero: one D24 value per float, in the
-   same order. (0.5 itself rounds to nearest onto the next float's value; it
-   is a clip z of 0, which no key reaches, because tagpu_native.c puts
-   `depthScale` above the highest key.) So a depth test between two float32
-   fragment depths answers the same on either attachment -- equal keys tie on
-   both, which the mirror's partner keys rest on (tagpu_feat.c `map_key`), and
-   keys a float apart are apart on both. Only a rasteriser that computes a
-   D24 target's depth other than as a float32 could draw it differently
-   [INFERRED]; the reference setup measures 0 px (gpu-status §2.91).
+   tagpu_vk_feat.c item 1). A float32 f in (0.5, 1] is j * 2^-24 for an
+   integer j in (2^23, 2^24], and D24's conversion takes f * (2^24 - 1) =
+   j - f, which lies in [j - 1, j - 1/2): its two neighbouring integers are
+   j - 1 and j. Rounding to nearest or toward zero returns j - 1 for every
+   such f -- one D24 value per float, in the same order -- so a depth test
+   between two float32 fragment depths answers the same on either
+   attachment: equal keys tie on both, which the mirror's partner keys rest
+   on (tagpu_feat.c `map_key`), and keys a float apart are apart on both.
+   The specification lets a device return either neighbour. Whichever it
+   returns, a larger float never gets a smaller D24 value, so no test
+   reverses; the most such a device could do is tie two adjacent floats
+   [INFERRED not to happen on the reference setup from its 0 px, gpu-status
+   §2.91].
+
+   THE RANGE IS (0.5, 1], NOT [0.5, 1]: rounded to nearest, 0.5 and the float
+   above it convert to the same value. No tested depth comes near 0.5. The
+   highest key a depth-tested draw carries is `airKey + 5` (tagpu_native.c
+   `encLayer[9]`) and `depthScale` is `airKey + 8`, so every tested clip z is
+   at least 3 / depthScale and every stored depth at least
+   0.5 + 1.5 / depthScale -- some 28 000 float steps above 0.5 at the 0.25x
+   scale of about 890. The marker draws that write clip z 0 test nothing
+   (tagpu_mark.c). Only a rasteriser that computes a D24 target's depth
+   other than as a float32 could draw the two formats differently
+   [INFERRED].
 
    WHY THE STENCIL PLANE DECIDES THE FALLBACK. The units' Classic hard shadow
    is stencil-masked (tagpu_vk_unit.c `build_shadow_pipelines`), so a

@@ -48,8 +48,8 @@ enum { ST_UNBUILT = 0, ST_READY = 1, ST_REFUSED = 2 };
    packet and a lever, and this module turns it into two device allocations
    of `w * h` pixels: the colour at 4 bytes a pixel and the depth-stencil at
    the seam's format's (4 for D24_UNORM_S8_UINT; D32_SFLOAT_S8_UINT holds 5
-   of data, and the reference setup's driver lays it out in 8 -- gpu-status
-   §2.91). TAGPU_SS_MAX is 4 and the largest game
+   of data, and the reference setup's driver lays it out in 8 [INFERRED from
+   the measured total, gpu-status §2.91]). TAGPU_SS_MAX is 4 and the largest game
    resolution the fork offers is well inside this, so a target past it is a
    value that is not what it claims to be -- refused, and said once. */
 #define WORLD_MAXDIM 8192

@@ -135,10 +135,13 @@ worktree. The fourth follows once they are on main.
   against the engine's frame. The effects' live fight cannot be paused on one frame twice, and
   its difference sits inside each build's own run-to-run floor.
 - **Why none [SOURCE, checked numerically].** The plan expected changes where two keys lie within
-  one 24-bit step. There are none, because the world's depth range is [0.5, 1]
-  (`minDepth 0.5`). A float32 there is `j·2⁻²⁴`, and D24's conversion of it is `j − 1` whether
-  the device rounds to nearest or toward zero: one D24 value per float, in the same order. A depth
-  test between two float fragment depths therefore answers the same on both attachments. The
+  one 24-bit step. There are none, because every tested depth lies in (0.5, 1]: the viewport's
+  range is [0.5, 1] (`minDepth 0.5`) and no depth-tested key comes near its bottom. A float32
+  there is `j·2⁻²⁴`, and D24's conversion of it is `j − 1` when the device rounds to nearest or
+  toward zero: one D24 value per float, in the same order, so a depth test between two float
+  fragment depths answers the same on both attachments. A device that may return either
+  neighbouring integer still never reverses two depths; at most it could tie two adjacent floats.
+  At 0.5 itself the conversion is not one-to-one, which is why the range is open there. The
   neighbouring flats of one row (§2.90) still tie as floats and still draw the first one on top;
   float does not resolve that class toward the engine. Only a rasteriser that computes a D24
   target's depth other than as a float32 could differ [INFERRED].

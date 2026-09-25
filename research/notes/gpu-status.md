@@ -5890,9 +5890,8 @@ is ever used against — the map's and the 1×1 dummy's — and a device that wi
 keeps the NEAREST sampler and stands the pass down on a frame that would actually sample it. The
 map's format is **exposed by the shadow pass** (`tagpu_vk_shadow_format`) rather than re-derived in
 the consumer, so the two files agree by construction instead of by both happening to try the same
-candidates in the same order. On the reference setup it is
-`VK_FORMAT_X8_D24_UNORM_PACK32` — `GL_DEPTH_COMPONENT24` exactly — and linear filtering is
-available.
+candidates in the same order. On the reference setup it is `VK_FORMAT_D32_SFLOAT`, with linear
+filtering (§2.91).
 
 **So the terrain pass has a third way to stand down**, beside the restored atlas and a map this
 frame's shadow pass could not draw: a device that will not filter a depth format linearly. **And
@@ -18248,17 +18247,29 @@ main). The world target, the seam's own attachment and the passes' `up` lines fo
 
 **Why float draws the same picture** [SOURCE: `tagpu_vk.c` above `vk_depth_format`; checked
 numerically]. Every world pass writes a clip z in [0, 1] and the viewport maps it onto [0.5, 1]
-(§2.28). A float32 in (0.5, 1) is `j·2⁻²⁴` for an integer `j`, and D24's conversion of it,
-`round(j − j/2²⁴)`, is `j − 1` whether the device rounds to nearest or toward zero: one D24 value
-per float, in the same order. Checked over all 2²³ floats in [0.5, 1): the only exception is 0.5
-itself, which rounds to nearest onto the next float's value; it is a clip z of 0, which no key
-reaches because `depthScale` sits above the highest key (`tagpu_native.c`). So a depth test between
-two float32 fragment depths gives the same answer on either attachment: equal keys tie on both and
-keys a float apart are apart on both. The plan expected changes where two keys lie within one
+(§2.28). A float32 `f` in (0.5, 1] is `j·2⁻²⁴` for an integer `j` in (2²³, 2²⁴], and D24's
+conversion takes `f·(2²⁴ − 1) = j − f`, which lies in [`j − 1`, `j − ½`): its two neighbouring
+integers are `j − 1` and `j`. Rounding to nearest or toward zero returns `j − 1` for every such
+float (checked over all 2²³ of them): one D24 value per float, in the same order. So on such a
+device a depth test between two float32 fragment depths gives the same answer on either
+attachment: equal keys tie on both and keys a float apart are apart on both. Vulkan's
+float-to-normalized conversion lets a device return either neighbour. Whichever it returns, a
+larger float never gets a smaller D24 value, so no test reverses; the most such a device could do
+is tie two adjacent floats, and the reference setup ties none it draws [INFERRED from the 0 px
+below].
+
+**The range is (0.5, 1], not [0.5, 1]**: rounded to nearest, 0.5 and the float above it
+(`0.5 + 2⁻²⁴`) convert to the same value, 2²³. No tested depth comes near 0.5. The highest key a
+depth-tested draw carries is `airKey + 5` (`encLayer[9]`) and `depthScale` is `airKey + 8`
+(`tagpu_native.c`), so every tested clip z is at least `3/depthScale` and every stored depth at
+least `0.5 + 1.5/depthScale`: some 28 000 float steps above 0.5 at the 0.25× scale of about 890.
+The marker draws that write clip z 0 have the depth test off (the selection rects, which test,
+carry the unit pass's keys). The plan expected changes where two keys lie within one
 24-bit step, and named the neighbouring flat features of one row (§2.90) as the known class. That
 class does not change: the flats that tie in D24 tie as floats, and the flats a step apart are a
 step apart in both. **The format changes a pixel only on a rasteriser that computes a D24
-target's depth other than as a float32** [INFERRED]; the reference setup's does not.
+target's depth other than as a float32** [INFERRED]; that the reference setup's does not is
+[INFERRED from the 0 px below].
 
 **The sun-shadow map** (`tagpu_vk_shadow_format`) prefers `D32_SFLOAT`, then
 `X8_D24_UNORM_PACK32`, then `D24_UNORM_S8_UINT`, taking a candidate with the depth-attachment,
