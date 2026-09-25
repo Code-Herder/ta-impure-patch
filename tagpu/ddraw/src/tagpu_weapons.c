@@ -1077,8 +1077,9 @@ static int __cdecl cb_unit_load(void* esp)
 
 /* -- the FBI loader's entry (0x42BF40(path, def)): the record's piece caches
    forgotten (def_rec's comment), on the thread that loads the def. In the
-   level's load the record is already empty; at a Reload this is what keeps
-   the caches to the COB the Reload is about to load. ------------------------- */
+   level's load the record is already empty and def_rec answers NULL, so the
+   log line below marks a Reload; there this is what keeps the caches to the
+   COB the Reload is about to load, whether or not the FBI then opens. ------- */
 
 #define VA_FBI_LOADER 0x0042BF40u
 static const u8 X_FBILOADER[] = { 0x81,0xEC,0x18,0x05,0x00,0x00 };  /* sub esp,0x518 */
@@ -1087,6 +1088,8 @@ static int __cdecl cb_fbi_load(void* esp)
 {
     WDef* r = def_rec((const char*)((void* const*)esp)[2]);
     if (r) {
+        wlog("reload: %.12s (def #%u) forgets its piece caches (slot 3 held %d,%d)",
+             r->def + 0x20, (u32)(r - g_def), r->pc_aimfrom[0], r->pc_query[0]);
         memset(r->pc_aimfrom, -1, sizeof r->pc_aimfrom);
         memset(r->pc_query,   -1, sizeof r->pc_query);
     }
@@ -1201,11 +1204,17 @@ static void __cdecl cb_ground_order(char* unit, int* pos)
    itself (0x49727D), and nothing on the way to 0x49D364 asks whether a game
    is running. What it reads of the def records is safe stale or mid-clear:
    g_def is one array allocated at install and never freed, and every value
-   taken out of it is bounded (count <= WPN_CAP, slot_ptr's own bound). The
-   side table is not: side_row reallocates g_side when the unit array moves,
-   and nothing orders a receiver in a load against the loader thread creating
-   units (a saved game's restore, side_reset): an open gap, stated in
-   extra-weapons.md §Known gaps. */
+   taken out of it is bounded (count <= WPN_CAP, slot_ptr's own bound). It
+   also writes one: InitProjectile (0x49D4FC -> 0x49C740, whose slot search
+   stops at 3) asks my_QueryPiece for slot 3, which can run the unit's
+   QueryWeapon4 and cache the answer in pc_query[0] -- a byte into the same
+   never-freed array, holding the answer stock's 0x43E1E0 would hand the
+   engine for a stock slot; this module uses a cached piece only through
+   0x43DEF0, which tests it against the unit's own piece count
+   (0x43DF14..0x43DF1E). The side table is not safe: side_row reallocates
+   g_side when the unit array moves, and nothing orders a receiver in a load
+   against the loader thread creating units (a saved game's restore,
+   side_reset): an open gap, stated in extra-weapons.md §Known gaps. */
 static WSlot* __cdecl cb_recv_slot(char* unit, u8* pkt)
 {
     u32 idx = pkt[0x23];
@@ -1610,7 +1619,9 @@ static int install(void)
     /* THE RECORDS' LIFETIME FIRST, and nothing else without it: a sim module
        whose records could outlive their game or their script fails closed.
        Both sites are matched before either lands, and both land before any
-       other write, so a refusal here leaves the image as it found it. */
+       other write. A byte mismatch leaves the image as it found it; the
+       second observer failing to land after the first did leaves the first
+       in place, and it touches only the module's own table. */
     if (!tagpu_detour_bytes_ok(VA_UNIT_LOAD, X_UNITLOAD, (int)sizeof X_UNITLOAD) ||
         !tagpu_detour_bytes_ok(VA_FBI_LOADER, X_FBILOADER, (int)sizeof X_FBILOADER))
     { wlog("disarmed: the unit-data load's or the FBI loader's entry bytes differ"); return 0; }

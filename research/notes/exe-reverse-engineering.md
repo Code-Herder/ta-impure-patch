@@ -2288,8 +2288,8 @@ the unit array (`main+0x14357..+0x1435B`, stride `0x118`) and calls `Send_UnitDe
 survives into the reload, and every unit that runs the reloaded COB is created after it.
 `0x486ED0` right after it is the same walk with the test `[unit+0xA6] != 0` — every live unit
 — and its one caller is the console command **`Kill`** (`{0x502244 "Kill", 0x4164B0, 4}` at
-`0x501FE8`), which with no argument calls it and then `0x4904B0` on `main+0x391ED`
-(`0x4164BD..0x4164CD`). Measured: `+reload armllt` without the bit left the type's record as it
+`0x501FE8`), which with no argument calls it and then `0x4904B0` with `ecx` = `[main+0x391ED]`, a method
+on the object stored there (`0x4164BD..0x4164CD`). Measured: `+reload armllt` without the bit left the type's record as it
 was (its ghost mask did not recompute); with it, `+reload ppllt` re-ran the FBI loader.
 **MEASURED 2026-09-25**: `+reload armllt10` with two `ARMLLT10` towers, an `ARMSOLAR` and three
 `CORSOLAR`s in play removed both towers and nothing else; without the `ARMSOLAR` the ARM side
@@ -8341,7 +8341,11 @@ FBI loader.
   the new COB are all created after it. **MEASURED 2026-09-25** with `tagpu_weapons` armed: after
   `+reload armllt10`, two `ARMLLT10`s spawned into the same game re-asked their per-type piece
   caches (`AimFromWeaponN`/`QueryWeaponN` = pieces 2 and 1 on slots 3–9, as before the reload)
-  and launched from slots 0, 3 and 4; `violation`, `mismatch` and `cob_full` stayed 0.
+  and launched from slots 0, 3 and 4; `violation`, `mismatch` and `cob_full` stayed 0. Again with
+  a loose `units/ARMLLT10.fbi` holding no `[UNITINFO]` placed before the reload: `0x4BBC40` found
+  it, `0x42BF40` ran and left before its weapon reads (no second loader line from the module's
+  `0x42CEF2` splice), the def kept its weapons and its CRC, and the COB was replaced all the same —
+  new towers asked their pieces again and launched from slots 0, 3 and 4.
 - **A table keyed on the def pointer alone can outlive its game.** The teardown frees the def
   array (`0x42DCCB`) and the menu-time loader `0x42A8D0` allocates it again from the same count
   before the next game (`0x42AA8A`), so the address can repeat; and the FBI loader can stop before it reads anything (the open at

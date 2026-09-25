@@ -27,7 +27,7 @@ ln -s $PWD/scenarios/content/wpn-test.ufo tagpu/instances/w1/gamedir/   # the te
 rm -f tagpu/instances/w1/catalogue.json              # cached type list is now stale
 tools/tacli scenario load w1 wpn-llt10 --restart     # two ten-laser towers vs solars
 tools/tacli weapons w1                               # every slot of every unit + counters
-tools/tacli log w1 -g "weapons: (unit-data|loader|VIOL|MISM)"   # each load empties, then fills
+tools/tacli log w1 -g "weapons: (unit-data|loader|reload|VIOL|MISM)"   # each load empties, then fills
 ```
 
 - **`tacli weapons <inst> [idx…]` is the oracle**: per slot the state byte, weapon, target,
