@@ -1,0 +1,103 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B1 line-of-sight shear: two AI ARMATLAS hovering by patrol, `north` 40 wu from Two Continents' north edge and `control` at z 330, and a human CORFLAK between them with a human spotter, under True LOS (load with --los 1). The AI re-orders its own aircraft within seconds, so the driver re-issues both patrols every 0.3 s. UnitInPlayerLOS 0x465AC0 samples row = (z - alt/2) >> 5 under an unsigned bound, so an aircraft at cruise altitude with z < alt/2 lands on a negative row and is invisible to every other player: stock's human flak shoots the control and never acquires `north`. The AI's own flak ignores this test (measured: an AI CORFLAK shot a human atlas hovering at z 40).",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "north",
+   "type": "ARMATLAS",
+   "owner": 1,
+   "pos": [
+    400,
+    40
+   ],
+   "height": 200,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      400,
+      40
+     ]
+    }
+   ]
+  },
+  {
+   "id": "control",
+   "type": "ARMATLAS",
+   "owner": 1,
+   "pos": [
+    640,
+    330
+   ],
+   "height": 200,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      640,
+      330
+     ]
+    }
+   ]
+  },
+  {
+   "id": "flak",
+   "type": "CORFLAK",
+   "owner": 0,
+   "pos": [
+    400,
+    330
+   ],
+   "facing": 0
+  },
+  {
+   "id": "spotter",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    400,
+    150
+   ]
+  },
+  {
+   "id": "keepalive",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    300,
+    1400
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   500,
+   300
+  ]
+ }
+}
