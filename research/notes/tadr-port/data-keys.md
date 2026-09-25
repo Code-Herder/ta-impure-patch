@@ -58,7 +58,9 @@ ill-defined, and each one is written down as a finding.
   weapon's validated ID (`tagpu_limits_weapon_index`, A′3's bound), written at A′3's loader site
   `0x42E468` and cleared at the weapon wipe. Unit keys: one fixed-size record per type, indexed by
   def and valid only when its stored def pointer matches (the `def_rec` rule `tagpu_weapons` uses),
-  written at the game-start loader `0x42BF97` for every def, keyed or not. Both are written on the
+  emptied at the start of every unit-data load (`0x42D2E0`), reset at the FBI loader's entry
+  (`0x42BF40`) for every def it visits, and filled at `0x42BF97` — so it holds only what this
+  load wrote, keyed or not ([C1, as built](#c1-as-built)). Both are written on the
   loader thread inside the level's load (the unit records also on the game thread, at a console
   `Reload`) and read on the game thread after it: the ordering the engine's own weapon and def
   arrays rest on. The render thread reads only the frame packet.
@@ -175,15 +177,26 @@ commit can change.
 - **The unit-key reader** (`tagpu_datakeys.c`, a `publisher` on `thread-split.allow`): an observer
   at `0x42BF97` inside the FBI loader `0x42BF40`, where `ebp` is the def and `ecx` the FBI's
   `[UNITINFO]` section, byte-matched at attach, skip-and-log. It runs on the loader thread at the
-  level's load and on the game thread at the console's one-type `Reload` (`0x42D1F0`). It writes
-  one record per def slot, whether or not the file has a key, so every in-play row is fresh; a
-  reader takes a row only when its stored def pointer is the def it asks about. C1 reads one key,
-  `PreviewPieces=`, through the engine's own reader `0x4C48C0` with TADR's 1024-byte buffer.
+  level's load and on the game thread at the console's one-type `Reload` (`0x42D1F0`). One record
+  per def slot, holding only what this load's loader wrote: an observer at the unit-data load's
+  start (`0x42D2E0`) empties them all, one at the loader's entry resets the slot's record with a
+  fresh serial before the open that can fail, and the read site fills only a record its own call
+  reset. So a slot the load skips, or whose FBI does not open, has no row rather than an earlier
+  game's at the same def address (the def array can come back at the same address), and a
+  `Reload` moves the serial whether or not its FBI opens. A reader takes a row only when its stored
+  def pointer is the def it asks about. C1 reads one key, `PreviewPieces=`, through the engine's
+  own reader `0x4C48C0` with TADR's 1024-byte buffer.
 - **The mask**, on the game thread inside the packet fill, once per type per level: `Create()`'s
   hides read and not run, with the engine's own piece match (`0x45A950`'s pre-order and swap,
   [the engine map](../exe-reverse-engineering.html)), or every piece `PreviewPieces=` does not
-  name. The cache is keyed by the packet's level generation, the record's serial (a `Reload` can
-  bring the COB back at the same address) and the root and COB pointers. It reaches the render
+  name. Every read of the COB is bounded by the block's own length, which a fourth observer
+  records: the checksum `0x4B6BA0(buf, size)` that `0x4B2450` calls over exactly the block it
+  read, kept only for the call that returns into the loader (`0x4B247C`). A script with no
+  recorded length gets no mask. The cache is keyed by the packet's level generation, the record's
+  serial (a `Reload` can bring the COB back at the same address) and the root and COB pointers.
+  The cursor's row is published whenever a build is on the cursor, from the packet's own
+  `build_unit_id`, so the cursor ghost never draws from a packet without it; the queued sites'
+  types ride the builds table's gate. It reaches the render
   thread as `TAGPU_PK_GHOSTMASK`, bits in the order of `tagpu_model_walk`, the one walk both
   threads call; the ghost applies a row only to the template root and piece count it was written
   for. Detail: [gpu-status §2.23](../gpu-status.html).
@@ -202,7 +215,10 @@ commit can change.
   to `Create()`'s flare, and a 64-character name is refused at load. Queued ghosts take the mask
   as the cursor's does, and `+reload` of a keyed type re-reads the key and recomputes the mask.
   `nobake`, `trunc` and `maskmiss` stayed 0 throughout.
-- **Not covered:** the 102 structures without a row were not each drawn; they take the exact
+- **Not covered:** the model template has no recorded length (`0x4CB560` passes none out of
+  `0x4BBE50`), so the node names the mask compares are read with a 256-character cap, the type
+  bound and the level lifetime, the terms every reader of the tree has, and not against the
+  template's block. The 102 structures without a row were not each drawn; they take the exact
   path they took before the change (no row, no bit read), which ARMSOLAR, ARMVP and CORFUS show.
   The engine also hides a piece with fewer than three vertices (`0x45AF1B`); the ghost does not,
   and such a piece should cover no pixel, since no face on it has three distinct vertices

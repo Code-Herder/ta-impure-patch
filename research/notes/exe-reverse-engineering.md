@@ -8100,8 +8100,9 @@ FBI loader.
 - **`0x42D2E0` runs on the LOADER thread.** Its one caller is `0x4918CA`, inside
   `LoadGameData_Main 0x4917D0`, which the loader body `0x497180` calls. Its per-type loop
   (`esi = 1` while `esi < UNITINFOCount`, `0x42D6B6` / `0x42D915`) does three things per type, in
-  this order: the FBI — its path (`0x4290F0`), its size (`0x4BBC40`) and **the FBI loader
-  `0x42BF40(path, def)` at `0x42D722`**; the model — `0x4CB560` open, `0x4CB590` parse, `0x42A140`
+  this order: the FBI — its path (`0x4290F0`), its size (`0x4BBC40`) and, **only when that
+  finds the file** (`0x42D71A` jumps past it on 0), **the FBI loader `0x42BF40(path, def)` at
+  `0x42D722`**; the model — `0x4CB560` open, `0x4CB590` parse, `0x42A140`
   texture-match, stored to `MODEL_PTRS[esi]` at `0x42D7A2` (the section above); and the script —
   `scripts\<name>.COB` (`0x42D8E5`) through `0x4B2450` into **`def+0x18E`** at `0x42D8F4`.
 - **`0x42BF40(path, def)`** (`sub esp,0x518`) opens the file (`0x4C2F60`) and finds `[UNITINFO]`
@@ -8115,15 +8116,28 @@ FBI loader.
   of `len` bytes, then `buf[len-1] = 0`, and it returns 1 — a value that fills the buffer is cut
   silently. Absent: an **unbounded** copy of `dflt` (`0x4C4963..0x4C4988`), and it returns 0.
 - **`0x42D1F0(type)`, the one-type reload**, `stdcall`, `ret 4`. It skips type 0 and a type
-  whose def lacks the in-play flag `0x800000` at `+0x241`, opens the def array (`0x4D8780`),
-  rebuilds the FBI path and re-runs **`0x42BF40` at `0x42D269`**, frees the COB (`0x4B2540`,
-  `0x42D275`), loads it anew (`0x42D294`) into `def+0x18E` (`0x42D299`), and closes the array
-  (`0x4D8710`). The model is **not** reloaded. Its one caller is `0x4174BE` in the console
+  whose def lacks the in-play flag `0x800000` at `+0x241`, makes the def array writable
+  (`0x4D8780`: `PAGE_READWRITE` over its heap block, through `0x4D8720` → `0x4D86B0`; the array
+  is read-only in play), rebuilds the FBI path, and — **only when `0x4BBC40` finds the file**
+  (`0x42D261`; otherwise it re-protects and returns, `0x42D2BF`) — re-runs **`0x42BF40` at
+  `0x42D269`**, frees the COB (`0x4B2540`, `0x42D275`) whether or not that loader got as far as
+  reading anything, loads it anew (`0x42D294`) into `def+0x18E` (`0x42D299`), and seals the array
+  again (`0x4D8710`: `PAGE_READONLY`). The model is **not** reloaded. Its one caller is `0x4174BE` in the console
   command `Reload` (`0x417490`, *Built-in cheat/console command surface* above), so it runs on
   the **GAME thread**, mid-play. The freed COB is reallocated at once, so it can come back at
   the same address: a cache keyed on the COB pointer alone would not see the reload.
   **MEASURED 2026-09-25**: `+reload ppllt` with SoftwareDebugMode `0x2` set re-ran the FBI loader
   (`tagpu_datakeys`' reader logged it a second time), no crash.
+- **A table keyed on the def pointer alone can outlive its game.** The teardown frees the def
+  array (`0x42DCCB`) and the menu-time loader `0x42A8D0` allocates it again from the same count
+  before the next game (`0x42AA8A`), so the address can repeat; and the FBI loader can stop before it reads anything (the open at
+  `0x42BF66`, no `[UNITINFO]` at `0x42BF7C`) or not run for a slot at all (`0x42D71A`). A row
+  written for slot *k* in one game then answers for slot *k*'s def in the next.
+  `tagpu_datakeys.c` closes it by observing the two entries as well: `0x42D2E0`'s (`sub
+  esp,0x610`) empties its records at every unit-data load, and `0x42BF40`'s (`sub esp,0x518`)
+  resets the slot's record with a fresh serial before the open, so the read site fills only a
+  record its own call reset. `tagpu_weapons.c`'s `def_rec` keys on the def pointer alone and has
+  the same gap for a slot whose FBI the loader skips or fails to open.
 
 ### `0x42DB90` — the model templates are freed here, and only here
 
@@ -8327,6 +8341,26 @@ tables:
 follows them bounds each first (`tagpu_datakeys.c`'s `create_hides`). The script is freed by
 `0x4B2540` and lives from the level's load to its teardown (`0x42DC3C`, zeroed at `0x42DC41`),
 or to a console `Reload` of its type.
+
+**The block's length is the checksum's.** The loaded script does not record its size, and the
+engine's allocator (`0x4D83B0` → the CRT's `malloc 0x4E8890`) keeps none we can read. But
+`0x4BBE50(path, 0)` sizes the block from the file's archive entry (`[[h+8]+4]`) or its
+`filelength` (`0x4E79D0`), and `0x4BBC40(path)` answers the same lookup the same way
+(`0x4BB2E0` with the same mode `0x505F10`, `0x4BBC5A..0x4BBC7E` against `0x4BBE9A..0x4BBEBC`);
+`0x4B6BA0(buf, size)` — a four-byte checksum, `stdcall`, `ret 8` (`0x4B6C1E`), that reads exactly
+`size` bytes (`0x4B6BC2..0x4B6BF0`) — is called with that pair at `0x4B2475..0x4B2477` and
+returns to `0x4B247C`. So the arguments of that one call are the block and its length, and the
+engine itself reads every byte of it there. `0x4B6BA0` has eleven callers; `tagpu_datakeys.c`
+observes its entry and keeps the pair only for the call that returns to `0x4B247C`, which is how
+the ghost mask bounds every read of a script by its own block.
+
+**The model template has no such length.** `0x4CB560(path)` reads the `.3do` whole through the
+same `0x4BBE50` but passes no size out (`push 0`, `0x4CB565`), relocates it in place
+(`0x4CB4C0`: the name `+0x1C`, `+0x20`, the vertices `+0x24`, the faces `+0x28`, the sibling
+`+0x2C` and the child `+0x30`, recursively, and each face's pointers), and returns the block,
+which is the root node itself: `MODEL_PTRS[type]` is the file's first byte. So a reader of the
+tree (the pose bake, the native pass, the ghost's walk and its name compares) has the type bound
+and the level lifetime, and no length to bound a node's pointers against.
 
 ### The eight records — `cob+0x1C + slot × 0xA4`
 
@@ -8563,9 +8597,12 @@ node or one the unit's `Create` hides, with no exceptions and no false positives
 
 **How COB piece *i* comes to name primitive *i*, exactly** `[DISASSEMBLED 2026-09-25]`. The count
 `0x45AE80` is `1 + count(child) + count(sibling)`, so it includes the root's own siblings.
-`0x45AEC0(o3, node, counter)` lays the primitives out in **pre-order**: the node at `[counter]`,
-then its child's whole subtree (`[ebp+0x30]`, `0x45AF44`), then its sibling's (`[ebp+0x2C]`,
-`0x45AF63`). Then `0x45A950`'s loop (`0x45A9E3..0x45AA70`) runs over the COB's pieces: for piece
+`0x45AEC0(o3, node, parent)` lays the primitives out in **pre-order**: the node at the index
+the count at `o3+0x00` holds (read `0x45AECA`, incremented `0x45AF35`), its parent primitive
+stored at `+0x32` (`0x45AF6B` / `0x45AF77`), then its child's whole subtree with itself as the
+parent (`[ebp+0x30]`, `0x45AF41..0x45AF44`), then its sibling's with its own parent
+(`[ebp+0x2C]`, `0x45AF60..0x45AF63`); it returns the primitive, stored as the child link `+0x2E`
+and the sibling link `+0x2A`. Then `0x45A950`'s loop (`0x45A9E3..0x45AA70`) runs over the COB's pieces: for piece
 *i* below the primitive count (`0x45A9E8`), it searches the primitives **from index *i* up** for
 the first whose node name `_stricmp`s equal to COB piece *i*'s (`0x45A9FD`), and if that is at
 *j* ≠ *i* it swaps the two whole `0x36`-byte primitives (`0x45AA1A..0x45AA51`); `0x45AF90`

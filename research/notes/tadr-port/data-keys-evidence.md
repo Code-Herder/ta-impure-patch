@@ -1169,7 +1169,8 @@ wholesale rewrite of `+0x110` drops it; the create path masks other bits.]
   reproduces.
 - **Game start, `0x42BF40`.** The game-start loader `0x42D2E0` numbers each def (`+0x21E` =
   index, `0x42D702`) and then calls `0x42BF40` for it (`0x42D722`). The loader has one other
-  caller, `0x42D1F0` at `0x42D269`, for a single def [its caller `0x4174BE`: role not established].
+  caller, `0x42D1F0` at `0x42D269`, for a single def: the console command `Reload`, whose handler
+  `0x417490` calls it at `0x4174BE` on the game thread (the engine map's `0x42D2E0` section).
   TADR's hook `0x42BF97` is the instruction after the loader finds `[UNITINFO]`: a clean 5-byte
   `push 0x5119B8`, with `ebp` = def and `[esp+0x14]` = the TDF context. Our extra-weapons loader
   hook is at `0x42CEF2` in the same function.
@@ -1239,7 +1240,9 @@ is needed for keys that name another file's content** (§3).
   (weapon4..N), and at menu time, `cb_crc_weapons` at `0x42B004`, which folds them into
   `CRC_weapons` **only while the module is armed**.
 - It keys `g_def[]` by def index, and `def_rec()` answers NULL when the stored def pointer differs,
-  which makes a stale row read as stock.
+  which makes a stale row read as stock only at a def address that changed: a slot whose FBI the
+  loader skips or fails to open keeps an earlier game's row at a repeated address (the engine
+  map's `0x42D2E0` section).
 - It hooks the def copy `0x42B370` to carry records with their type.
 - A′2 made 16 384 type slots (`TAGPU_LIM_TYPES`) and found the def array write-protected after the
   load. Our records live in the DLL, so that does not bite.
@@ -1251,8 +1254,11 @@ is needed for keys that name another file's content** (§3).
 - **Reader: `0x42BF97`,** byte-checked and failing closed. It is a different site from
   `tagpu_weapons`' `0x42CEF2`, so no bytes are shared.
 - **Records:** for every def the loader visits, write a fixed-size POD record. Write one **whether
-  or not the FBI has any key** (defaults = stock). That is the invariant that makes every in-play
-  row fresh:
+  or not the FBI has any key** (defaults = stock). That alone does not make every in-play row
+  fresh: the def array can come back at the same address in the next game, and the loader skips a
+  slot with no FBI (`0x42D71A`) or stops before `0x42BF97` when the open fails, so the row must
+  also be emptied at each unit-data load and reset at the loader's entry, as C1 builds it
+  ([C1, as built](data-keys.md#c1-as-built)). The record:
   `{ const char* def; u8 flags; u8 nthr; u16 thr[32]; u16 accrate; i16 wpn_texp; i16 wpn_tsd; }`.
 - **Read through the engine's reader:** `0x4C48C0` for strings, `0x4C46C0` for ints. Parse once,
   here.
@@ -1609,8 +1615,8 @@ syncs clean; the new one drops the type.
   Measure with two peers and a paused census.
 - Whether a hit above 32 767 reaches the HP word (the disintegrator at vet 5). This one goes to
   section B.
-- The roles of damage kinds 4, 5 and 9, and of `0x46A860`, `0x42D1F0`'s caller `0x4174BE`, and the
-  capture order's `+0x36`/`+0x3A`.
+- The roles of damage kinds 4, 5 and 9, and of `0x46A860`, and the capture order's
+  `+0x36`/`+0x3A`.
 - Whether `+0x86` is set on a non-owner peer for a remote passenger, which only affects the
   picture.
 - Whether a loaded saved game runs `0x42D2E0`. `tagpu_weapons` relies on it; measure with a
