@@ -1,12 +1,16 @@
 # Modules with their own workflow
 
-Extra weapons, the COB trace, multiplayer, and the render-options screen with its GPU row. Each
-is driven through `tacli` like everything else; what differs is the setup around it.
+Extra weapons, the COB trace, multiplayer, many unit types, weapons past 256, the render-options
+screen with its GPU row, and a remote Windows machine. Each but the last is driven through
+`tacli`; what differs is the setup around it.
 
 1. [Extra weapons](#extra-weapons)
 2. [The COB script trace](#the-cob-script-trace)
 3. [Multiplayer: two to ten instances in one game](#multiplayer-two-to-ten-instances-in-one-game)
-4. [The render-options screen and the GPU row](#the-render-options-screen-and-the-gpu-row)
+4. [Many unit types: the synthetic mod](#many-unit-types-the-synthetic-mod)
+5. [Weapons past 256: the test weapons](#weapons-past-256-the-test-weapons)
+6. [The render-options screen and the GPU row](#the-render-options-screen-and-the-gpu-row)
+7. [A remote Windows machine](#a-remote-windows-machine)
 
 ## Extra weapons
 
@@ -249,3 +253,35 @@ tacli log <i> -g '^settings:'                 # what the store loaded, migrated 
 - **A dialog over the world at zoom ≠ 1 takes 1:1 clicks** (the transform reads the engine's
   ownership bit at `main+0x37EBE`), so the rows are driven at any zoom; `SHARE.GUI` is the one
   screen whose zoomed clicks are a known gap.
+
+## A remote Windows machine
+
+A native Windows run is the test for anything Wine hides: a driver's formats and extensions, the
+real `ddraw.dll` loader, a player's folder. **No `tacli` verb reaches a remote machine**, so it is
+driven by hand over SSH. The machine is somebody's desktop: ask before deploying, and never start
+or stop the game while they are using it.
+
+- **Access** is OpenSSH on the Windows side with a key. **The login shell is PowerShell**, so
+  `&` does not chain commands (`;` does), and error text comes in the machine's own language.
+- **Send a script, not a one-liner**: `ssh <user>@<host> powershell -NoProfile -Command - <
+  script.ps1`. It runs line by line, and **a statement that spans lines is skipped silently** —
+  no output, no error. Keep every statement on one line and end the file with an empty line.
+- **Deploy** into the player's game folder:
+  1. Refuse if `Get-Process TotalA` finds the game running.
+  2. Rename the old `ddraw.dll` aside and **check the copy exists** before anything overwrites it.
+  3. `scp` the build to `<user>@<host>:C:/<game folder>/ddraw.dll` (forward slashes).
+  4. Compare `Get-FileHash -Algorithm MD5` with your `md5sum`.
+
+  The folder needs `ddraw.dll`, `full.w32.bin` and `tiny.w32.bin` (what
+  `tagpu/release/package.sh` ships). The DLL reads no ini. With no `impure.cfg` it opens
+  borderless fullscreen on the primary monitor and writes one.
+- **Launch on the desktop through a scheduled task.** A process started from the SSH session runs
+  where the user cannot see it. Register a task with `New-ScheduledTaskPrincipal -UserId <the
+  console user> -LogonType Interactive` (no password needed). Give it the game folder as
+  `-WorkingDirectory` and `-ExecutionTimeLimit` zero, since the default stops it after three days.
+  Run it with `Start-ScheduledTask`. `(Get-CimInstance Win32_ComputerSystem).UserName` names the
+  console user.
+- **Read the result** from the newest file in the game folder's `log\` and from `ErrorLog.txt`:
+  - the `vk:` lines name the device, its depth format, and each missing extension;
+  - each refusal says which pass stood down and why;
+  - the `vk: census` line says which passes drew.
