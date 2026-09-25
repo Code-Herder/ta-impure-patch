@@ -8301,8 +8301,16 @@ FBI loader.
   `tagpu_datakeys.c` closes it by observing the two entries as well: `0x42D2E0`'s (`sub
   esp,0x610`) empties its records at every unit-data load, and `0x42BF40`'s (`sub esp,0x518`)
   resets the slot's record with a fresh serial before the open, so the read site fills only a
-  record its own call reset. `tagpu_weapons.c`'s `def_rec` keys on the def pointer alone and has
-  the same gap for a slot whose FBI the loader skips or fails to open.
+  record its own call reset. `tagpu_weapons.c` observes `0x42D2E0`'s entry too (the two observers
+  chain through `tagpu_detour_observe`) and empties its def records there, so a slot this load
+  did not write reads as stock; it does not reset at the loader's entry, because a `Reload`
+  whose FBI fails to open leaves the def's own `weapon1..3` as they were, and the record for
+  `weapon4..N` stays consistent with them. Every def copy of the load (`0x42D501`, and the sorts
+  `0x432D40` / `0x432FB0`, whose only callers are `0x42D573..0x42D590` and themselves) runs after
+  that entry and before the FBI loop (`0x42D6B6`). **MEASURED 2026-09-25**: two skirmishes in one
+  process with `tagpu_weapons.on`: the second load logged 284 records emptied before its loader
+  wrote ARMLLT10's ten weapons, and the towers fired slots 3–9 in the second game
+  (`violation=0 mismatch=0`).
 
 ### `0x42DB90` — the model templates are freed here, and only here
 
