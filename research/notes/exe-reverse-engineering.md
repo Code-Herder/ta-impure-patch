@@ -4770,22 +4770,42 @@ is refused (the void and border markers), and so is a def with `+0xFF` bit 1; ot
 the game-load routine `0x432610`, calls `LoadFeature 0x4224B0` (`0x424DE1`)
 and places each record with `GetGridPosPLOT 0x481550` and `SpawnFeatureOnMap` (`0x424FBF`,
 `0x425050`), then restores its sequence (the calls at `0x42507E`, `0x42509D`, `0x4250BB`, below).
-**Between the two, `0x4833B0` masks the border** (called at `0x483CF1`, after the join): every cell
-the projection pushes off the map, and every lava cell ([terrain depth](terrain-depth.html)), that is
-still EMPTY becomes `0xFFFD` (the `cmp dx,0xffff` at
-`0x483432`, `0x48344E` and `0x4834C5` before each store), and a spawn onto `0xFFFD` is refused by
-`FEATURES_Destroy`. A new game's TNT features are already down when the mask runs, so they survive
-it; **a saved game's are not, so a feature on a masked cell does not come back from a save at
-all** — a stock defect. MEASURED 2026-09-24 on Two Continents: after a save and its load, the
-cells (25, 0), (5, 1), (27, 2) and (33, 2), each a tree in the TNT and on the map before the save,
-read `0xFFFD` and draw nothing (the same under two builds of the DLL).
+**Between the two, `0x4833B0` masks the border** (called at `0x483CF1`, after the join)
+[DISASSEMBLED 2026-09-24]. It writes the scroll extent first (`main+0x1422B`/`+0x1422F`, the map's
+pixel size less `0x20` and `0x80`), then makes four passes over the grid. Every store is guarded by
+the same pair, `cmp dx,0xffff; je` then `cmp dx,0xfffe; jne`, so it turns an EMPTY cell and a
+footprint cell (`0xFFFE`) alike into `0xFFFD` and leaves an anchor alone: five stores, each after
+its `0xFFFE` compare (`0x483439`, `0x483455`, `0x4834CC`, `0x483572`, `0x4835E8`).
+
+| pass | cells | store |
+| --- | --- | --- |
+| 1 | columns W−2 and W−1 of every row (`+0x08` and `+0x15` of the cell at W−2), unconditionally | `0x483440`, `0x48345C` |
+| 2 | down each column from the top, while the projected y, row·16 − height/2, is negative | `0x4834D3` |
+| 3 | up each column from the bottom, while row·16 − height/2 is past the extent's height `main+0x1422F` — the cell ONE ROW ABOVE the one tested (`sub eax, W·13`) | `0x483579` |
+| 4 | only when `[main+0x391E9]+0xD44` is set (a lava world [INFERRED]): every cell whose 2×2 minimum height `+0x06` is at or below the sea level `main+0x1427F` | `0x4835EF` |
+
+A spawn onto `0xFFFD` is refused by `FEATURES_Destroy` (a def at `0xFFFB` and up). A new game's TNT
+features are down when the mask runs, so their ANCHORS survive it, but a footprint cell of theirs
+that the mask reaches becomes `0xFFFD`. A saved game's features are not down yet: the loader body
+`0x497180` calls `LoadGameData_Main 0x4917D0` at `0x497581` — which reaches LoadMap at `0x4918C0`,
+and the mask with it — and only later, at `0x497B29`, the game-load routine `0x432610` that restores
+them, all on the loader thread. So **a saved feature whose footprint touches a masked cell does not
+come back from a save at all** — a stock defect. MEASURED 2026-09-24 on Two Continents: after a save
+and its load, the cells (25, 0), (5, 1), (27, 2) and (33, 2), each a tree in the TNT and on the map
+before the save, read `0xFFFD` and draw nothing (the same under two builds of the DLL). The defect
+is the engine's and is left as it is here; the mirror does not depend on it (below).
 
 **The mirror's list** (`tagpu_packet_pub.c` `mapfeat_at_load`, a stub at the join) replays the
 paths above on a private `W × H` grid: v2's void markers first, then the TNT's features in row
 order, with the spawn's refusals, its destroys, their resolution through the anchor offsets and
 the pool count (`WR_COUNT`) as LoadMap applies them. What it keeps is every GAF anchor that
 survives, row-major, with the anchor scan's height term from the grid's heights (written on both
-paths before the join). It never places the schema's features, which the TNT does not hold.
+paths before the join). **The rule: the mirror's map is the MAP FILE alone.** The schema's features
+are not in it — the ones `0x423160` places on a new v2 game through `LoadFeature 0x4224B0` and
+`SpawnFeatureOnMap 0x423C50` after the TNT's — and neither is the effect of those spawns on the
+TNT's own: a TNT feature a schema spawn destroys stays in the list. Every join empties the hand-over
+slot before it builds (`mapfeat_unpark`), so a level whose build fails has no list and a black edge,
+never a list parked by an earlier, abandoned load.
 MEASURED 2026-09-24 against the engine's own grid at the join, on a new game of each map (a
 diagnostic build, not the shipped one): Two Continents 4 893 of 4 893, Pincushion 1 536 (68
 spawns refused, as the engine refuses them), Lava Alley 800 (15 refused), Town & Country 6 206,

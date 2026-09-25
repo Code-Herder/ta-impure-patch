@@ -17567,10 +17567,13 @@ no fog of war and no light, and returns.
   counts the cells drawn past the map (`terr: … off-map=0 mirror=705 …` at the north-west corner at
   0.5× on Two Continents).
 
-**Features: the map's own, as its TNT lays them out.** The mirror is a pristine copy of the map
-(the owner's ruling): what the map's TNT places, never what a game, a saved game or a scenario has
-since done to it — a tree burnt, reclaimed or crushed in play stays in the mirror, and so does one
-a saved game had lost before it was saved; a wreck left or a scenario's own feature never appears.
+**Features: the map's own, as its TNT lays them out.** **The rule (the owner's ruling): the
+mirror's map is the MAP FILE alone** — what the map's TNT places, never what a game, a saved game,
+a scenario or the map's schema has since done to it. A tree burnt, reclaimed or crushed in play
+stays in the mirror, and so does one a saved game had lost before it was saved; a wreck left or a
+scenario's own feature never appears. The schema is not the map file: the `.ota`'s own features,
+which `0x423160` places through `0x4224B0`/`0x423C50` on a new game only, are not mirrored, and a
+TNT feature that one of those spawns destroys still is.
 
 - **Built on the loader thread, from the TNT** (`tagpu_packet_pub.c` `mapfeat_at_load`, the stub at
   LoadMap's join `0x483B53`, §2.16). No moment of a saved game's load has the TNT's features in the
@@ -17590,7 +17593,12 @@ a saved game had lost before it was saved; a wreck left or a scenario's own feat
   Vulkan. The log: `packet: LoadMap (loader thread T, level gen N): the map's own features from
   its TNT: 4893 over 672x800 (v2, a new game; 0 spawn(s) refused, 0 past the 31 defs, 0 3D, 0
   refused a pool record) in 1.86 ms`.
-- **The hand-over is an ordering, not a timing.** The loader parks its malloc'd list in a slot
+- **The hand-over is an ordering, not a timing.** Every LoadMap join first empties the slot
+  (`mapfeat_unpark`, under the lock), so a load whose build fails — a bound refused, a failed
+  allocation — leaves nothing parked, and its edge stays black rather than mirror the previous
+  load's features (a load abandoned on the loading screen does not move the level number, so its
+  list would otherwise pass for the next map's). Nothing parked is not an empty list: an empty
+  list is a map with no features, and mirrors bare ground. The loader parks its malloc'd list in a slot
   stamped with the loading level's generation, under an interlocked lock it waits for; the game
   thread only tries the lock, at every in-play draw until it holds this level's list
   (`mapfeat_adopt`, above the publish and outside its FRESH gate, because a publish can be skipped
@@ -17626,47 +17634,95 @@ a saved game had lost before it was saved; a wreck left or a scenario's own feat
   the map's last row or column are skipped, as the engine's sweep skips them. **It walks anchors,
   not cells**: a sweep row splits at the folds into runs of at most one map width, each a copy of
   the source row the right way round (copy `q = floor(col / mapW)` even) or turned (odd), and each
-  run is one pass over the row's bucket, forward or backward — the emission order of a walk over
-  every cell, left to right, at the cost of the anchors alone. MEASURED 2026-09-24 on a diagnostic
-  build, Two Continents' north-west corner at 3840 × 2160 and 0.25× (a 944 × 560-cell sweep, 2 193
-  mirrored anchors): 433 µs p50, 753 µs p99 walking every cell; 239 µs p50, 436 µs p99 walking the
-  anchors, which is the emission itself. A mirrored feature
-  **ends** on the cell its source begins on (`wax = (col + 1)·16 − hx` on a flipped x), and across
-  the top or bottom the half height is **added** (`waz = (row + 1)·16 − hz + lift`), because the
-  mirrored ground is the tile art, with the height painted in. The quad is flipped about its
-  anchor on a side edge — `x0 = sx − (w − hotx)`, the u's swapped — and never on a y one.
-- **The depth keys** (`KEYRECT`, `mirror_key`). **The map's own features keep main's keys**, taken
-  over the engine's sweep rect clamped to the map with the mirror on or off, so an on-map feature
-  sorts against units and 3D wrecks exactly as it does under black. A mirrored feature takes a key
-  that continues the painter's order — row by row, left to right, across the edge — **without
-  moving any on-map key**. A tall one takes its row's key `3 + 4·rel` and a column term: main's
-  `1.5·(col − c0)/cols` inside the clamped columns, `[−0.19, −0.01)` left of them — still above
-  every unit of its row, whose keys reach `1 + 4·rel + 1.8` — and `[1.5, 1.9)` right of them —
-  below the next row's features, and at the last row the band allows (`rel = rows + 8`) below the
-  effects' keys, which start at `fxKey − 1.8 = 3 + 4·(rows + 8) + 2.2`. Rows are 4 apart and the
-  column term spans 2.09, so rows never interleave. A flat one takes `0.40 + 0.10·f` with `f` in
-  `[−0.6, −0.1)` above the clamped rows and `[1.1, 1.6)` below them, row-major over the whole sweep,
-  and a side cell on one of the clamped rows goes into the gap between that row's last on-map key
-  and the next row's first (`f` + a fraction of `1/span`), which is the painter's order exactly;
-  every flat key, shadows (0.03 under) included, stays inside the particle layers' bracket, 0.30
-  and 0.60. The lab takes one key rect for both; the game cannot, because moving an on-map key
-  moves an on-map feature past a 3D wreck of its row.
-- **The fragment stage** (mode + `TAGPU_FEAT_MIRROR`, 4, tested as `mode > 3.5`) discards inside
-  the map rectangle — a mirrored tree just past the bottom edge stands in front of the map's last
-  rows by the painter's order — then takes the hole from the base's alpha, the twin's colour where
-  the reveal painted it, `taEdge`, and premultiplies half-alpha frames. No fog, no light.
+  run is one pass over the row's bucket, at the cost of the anchors alone. MEASURED 2026-09-24 on a
+  diagnostic build, Two Continents' north-west corner at 3840 × 2160 and 0.25× (a 944 × 560-cell
+  sweep, 2 193 mirrored anchors): 433 µs p50, 753 µs p99 walking every cell; 239 µs p50, 436 µs
+  p99 walking the anchors, which is the emission itself. A mirrored feature **ends** on the cell
+  its source begins on (`wax = (col + 1)·16 − hx` on a flipped x), and across the top or bottom
+  the half height is **added** (`waz = (row + 1)·16 − hz + lift`), because the mirrored ground is
+  the tile art, with the height painted in. The quad is flipped about its anchor on a side edge —
+  `x0 = sx − (w − hotx)`, the u's swapped — and never on a y one.
+  - **Every run is emitted in its source row's order**, a turned one right to left on the screen:
+    the runs follow the rows down and each takes its bucket in the order the map's own anchors
+    come. With the keys (below) the order is the whole of how a copy stacks — the shadows write no
+    depth, so where two overlap the later blends over the earlier, and where two bodies' keys tie
+    in the depth buffer the first drawn stays — so a copy laid down in its source's order over its
+    source's keys stacks as its source does.
+  - **A turned run sweeps the rect mirrored about the view** (`KEYRECT.tuc0`). The engine's rect
+    reaches 10 columns left of the view and 2 right (`SWEEP_COL_LEAD`, `0x469748..0x4697B3`), so
+    the map's art that overhangs right of its anchor is drawn from anchors up to 10 columns off
+    screen; a turned copy overhangs left, and takes its cells from the rect the engine would sweep
+    over the view reflected, `tuc0 = ceil(right edge / 16) + 10 − nCols`. A copy is drawn exactly
+    when its source would be, so the side strip is the map's picture reflected up to the view's
+    edge.
+  - **A copy the view cannot show is not emitted**: a row past the top while the view does not
+    reach above the map, or past the bottom while it does not reach below, and a copy `q` whose
+    columns `[q·mapW, (q + 1)·mapW)` (in cells) miss the view. The fragment stage would discard
+    every sample of it.
+- **The depth keys** (`KEYRECT`, `map_key`, `mirror_key`). **The map's own features keep main's
+  keys**, taken over the engine's sweep rect clamped to the map with the mirror on or off, so an
+  on-map feature sorts against units and 3D wrecks exactly as it does under black; `map_key` is
+  the one function that computes them. **A mirrored feature takes its source's key, as copy 0 of
+  its row takes it**: the source's own column, whatever copy the feature stands in. On the map's
+  rows copy 0 is the map, so a side copy's key is `map_key` — the same float, the same D24
+  quantization, the same ties. Above and below the clamped rows copy 0 is the mirror's upright
+  band: a tall key is `map_key`'s rule on its row (`3 + 4·rel` plus `1.5·(col − c0)/cols`, `rel`
+  clamped to the band the frame's keys were sized for, `rows + 8`, below the effects), and a flat
+  one takes `0.40 + 0.10·f` with `f` in `[−0.6, −0.1)` above the map and `[1.1, 1.6)` below it,
+  row-major over the whole sweep, so the three flat bands never overlap and every flat key,
+  shadows (0.03 under) included, stays inside the particle layers' bracket, 0.30 and 0.60.
+  **Different copies of one source share a key and never a sample** — the fragment stage keeps
+  each copy inside its own columns. The source's column is inside the clamped columns for every
+  copy the view can show, because the centre clamp keeps the view's centre on the map, so the
+  reflection of what the view shows past an edge is on the map in view and its sweep holds the
+  sources; a column outside them keys as the nearest inside, which only the sweep's margins reach.
+  **Why partner keys and not a painter's order across the edge**: two flats of one row are
+  `0.1/span` apart in the key, and the 24-bit buffer resolves about `1.2e-7` of the frame's depth
+  scale (`depthScale`, some 360 at 1× and 890 at 0.25× at 1024 × 768), so neighbouring flats of the
+  map's own tie in the depth buffer and `VK_COMPARE_OP_LESS` keeps the first drawn. Main draws the
+  map that way; a mirror keyed to continue the order would stack those same flats differently
+  from the map it reflects, and a copy keyed as its source repeats the map's picture exactly.
+- **The fragment stage** reads the mode as bits: `TAGPU_FEAT_MIRROR` (4), `TAGPU_FEAT_OFFROW` (8)
+  when the copy's rows lie past the top or bottom, and the copy's column index `q` biased by 1024
+  above bit 4 — the gather emits no copy outside `[−1024, 1024)`, so every mode stays under 2¹⁵
+  and the float attribute carries it exactly. **Each copy draws only in its own columns**, as the
+  ground does — a quad reaching across a fold would lay one copy's feature over the next copy's
+  reflection of it — and an off-row copy never draws on the map's rows, where it would cover the
+  map (a mirrored tree just past the bottom edge stands in front of the map's last rows by the
+  painter's order) or, in a corner, the side copy that reflects it. **While the mirror draws, the
+  map's own quads keep to the map's columns** (`uClip`, the block's int at 40): past a side edge
+  the picture is the map reflected, and a tree's overhang there would cover the reflection of the
+  tree itself; across the top and bottom the copies stand upright, so the overhang is kept, and
+  under a black edge nothing is clipped. Then the hole from the base's alpha, the twin's colour
+  where the reveal painted it, `taEdge`, and premultiplied half-alpha frames. No fog, no light.
 - **Draw order**: four buckets, the map's shadows and bodies, then the mirror's shadows
-  (`s_pipeShadow`, no depth writes) and bodies (`s_pipeBody`). The fragment block grew to 48 B
-  (`uMapPx` at 32); each block is rounded to `minUniformBufferOffsetAlignment`.
+  (`s_pipeShadow`, no depth writes) and bodies (`s_pipeBody`). The fragment block is 48 B
+  (`uMapPx` at 32, `uClip` at 40); each block is rounded to `minUniformBufferOffsetAlignment`.
+- **One tie rule for every sprite** (`emit_frame`). A quad's corners lie on whole game px, so at
+  the 0.25× floor, where every sample centre lands on a whole world px, every sample lies on a
+  texel boundary, and which texel it reads — and whether the quad covers it at all — would be the
+  interpolation's rounding, which follows where the frame sits in the atlas and runs the other way
+  for a turned quad. Every feature quad, the map's and the mirror's, moves by
+  `TAGPU_EDGE_NUDGE_PX / zoom` on the CPU, as the terrain's do: an upright one up and left, a
+  turned one right and up, because its texels run the other way. A sample on a boundary then lies
+  `NUDGE/zoom` world px (1/32 game px on screen) inside the texel after it, and a turned copy's
+  sample reads the texel its reflection reads on the map. The world corners are taken from the moved quad, so `vWorld` stays the
+  sample's own point for the fog lookup and the edge's clips. At 1× and 0.5× at `ss=2` no sample
+  lies on a boundary and nothing changes.
 
-**Ground and trees together, by construction** (`tagpu_feat_mapfeat_sync`). The render thread asks
-the feature pass before either gather, and the sync answers from what the pass will emit this
-frame. While it draws features, `fv.mirror` is 1 only once it holds this level's copy of this map,
-so at a level's start, or a switch to mirror, ground and trees switch on the same frame — one or
-two frames after the setting — and never ground without trees. While it draws none — unarmed,
-under `feat.on=passive`, or without the wreck half (`native.on` without `wrecks`) — the engine
-draws the map's features, which never reach past the edge, and the ground mirrors alone, as it
-does with the pass off.
+**The mirror reflects what the world passes draw** (`tagpu_feat_mapfeat_sync`). The render thread
+asks the feature pass before either gather, and the sync answers from what the pass will emit this
+frame. **While it draws the map's features, ground and trees mirror together or not at all**:
+`fv.mirror` is 1 only once the pass holds this level's copy of this map, so at a level's start, or
+a switch to mirror, both switch on the same frame, one or two frames after the setting. **While it
+draws none** — unarmed, under `feat.on=passive`, or without the wreck half (`native.on` without
+`wrecks`) — the map on screen has no trees either (the engine's own feature draw reaches only the
+reference surface, §2.81), and the ground mirrors alone. **A gather that bails after the sync said
+1** — the atlas not set up, the FeatureDefs unreadable, the dimensions or the sweep out of bounds —
+draws no feature on the map or past it that frame, so no bail gives a bare mirror beside a wooded
+map; and a gather that runs mirrors exactly when the sync said so, since the sync has already
+checked the level, the dimensions and the copy the gather tests again. A load whose list was not
+built leaves the level with none, and the sync keeps the edge black.
 
 **MEASURED 2026-09-24** — Two Continents, `feat-forest` at 1024 × 768, `ss=2`, the reference setup's
 discrete GPU on a private Xvfb display:
@@ -17679,8 +17735,11 @@ discrete GPU on a private Xvfb display:
   and 0.25×. Features: 14 of 14 at 0 px, at seven of those views and (1200, 2000) at 0.5×; the
   south-east corner at 0.25× is open sea, and with no feature in view neither build takes a
   capture. Units: 10 of 10 at 0 px — the scenario's own at (2566, 616) at 1×, 0.5× and 0.25×, and
-  nine more placed at the north-west corner, seen from (0, 0) at 0.5× and from the corner at 1×; at
-  (−300, −200) at 8× no unit is in view and both builds draw nothing.
+  nine more placed at the north-west corner, seen from (0, 0) at 0.5× and 1×; at (0, 0) at 8× no
+  unit is in view and both builds draw nothing. **The feature and unit passes armed alone keep the
+  engine's own eye range**, `[0, extent − view]` — the centre clamp that reaches past the edge
+  comes with the terrain pass — so their captures asked for at an eye past the map were taken at
+  the nearest eye inside it: the north-west corner's and (−300, −200)'s at (0, 0).
 - **The mirror is the map reflected through the tone, to the rounding.** With the features hidden
   (`feat.on=noflat notall noshadow nowreck`), every off-map pixel whose reflection is on screen was
   predicted offline from that on-map pixel through `taEdge`, averaged over the `ss` samples: at the
@@ -17718,12 +17777,14 @@ discrete GPU on a private Xvfb display:
 - **`edge=black` draws what main draws, 0 px**, against main's DLL at the BAR camera's landing,
   each world pass alone at `ss=2`, both presets, at the views above plus the eye off the cell grid,
   (−447, −351) at 1×, 0.5× and 0.25× and (−301, −201) at 0.25×. Terrain: 30 of 30 at 0 px (fifteen
-  views a preset). Features: 24 of 24 at 0 px (twelve views a preset).
+  views a preset). Features: 24 of 24 at 0 px (twelve views a preset), the eyes past the map taken
+  at (0, 0), as above — so these are on the cell grid; the round after puts one off the grid
+  inside the map.
   Units: 17 of 20 at 0 px; the other three, Classic++ at (2566, 616) at 1×, 0.5× and 0.25×, differ
   by 66, 6 and 7 samples of at most 2 levels, and main differs from itself between two launches by
   exactly those — this build's capture equals main's second launch. The anchor walk (above) changes
   only the mirror's gather; its build's feature pass under black reads 0 px against main at eight
-  more captures, both presets, the off-grid eyes among them.
+  more captures, both presets.
 - **The map's own features keep main's keys under the mirror.** Features, five 3D wrecks and three
   units at the north-west corner, window grabs of the presented frame, this build mirroring against
   main drawing black: 0 px on the map at six views (1× at the corner and at (−150, −100), 0.5× and
@@ -17805,6 +17866,14 @@ the gather's own mute; `tagpu_feat_mapfeat_sync` and its caller in `tagpu_native
 flags' spare-bit bound, the fold flags and the vertex stage's decode and nudge; the gather's floor
 origin (`div32_floor`) and what else reads `s_rectTx0`; the fold for negative and far distances;
 `mf_keep`'s order test and `mirror_gather`'s runs (`floor_div`, the copy's parity, copy 0 skipped on an
-on-map row, the backward walk of a turned copy); `mirror_key`'s bands
-against the unit, wreck and effects keys; the fragment stage's in-map discard; the table's place
-in the fill and cut order and the reserve's assert.
+on-map row, a turned copy walked in its source's order and broken off at the run's low column);
+the turned window `tuc0` against the engine's 10-left, 2-right sweep, and the view cull's row and
+copy tests; `map_key` as the one computation of the map's keys (the anchor loop calls it, and it
+must stay bit-identical to main's inline arithmetic under x87 excess precision), and
+`mirror_key`'s source-column clamp and its off-row flat bands against the unit, wreck and effects
+keys; the mode's copy field (`TAGPU_FEAT_COPY_*`, bounded to `[−1024, 1024)` so the float
+attribute is exact) and the fragment stage's per-copy and off-row discards; `uClip` at 40 in the
+48-byte block, set only while the gather mirrors; the tie rule's nudge (`TAGPU_EDGE_NUDGE_PX /
+zoom`, `+x` on a turned quad) and the world corners taken after it; `mapfeat_unpark` at every
+join, under the lock, before the build's first check; the table's place in the fill and cut order
+and the reserve's assert.

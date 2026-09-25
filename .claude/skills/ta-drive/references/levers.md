@@ -219,20 +219,27 @@ Driving the camera at a zoom other than 1:
 - **Dialogs drawn inside the viewport keep 1:1 clicks at every zoom** (`ARMOPT`, `EXITMENU`,
   `YESORNO`, the preferences screens); `SHARE.GUI` is the known gap, and `ui press <gadget>` is
   the fallback there.
-- **The mirror is ground and features together or neither.** Its features are the map as its TNT
-  lays it out — never a scenario's, never a wreck, never what play or a saved game did to the map:
-  a tree reclaimed before a save is still in the mirror after the load. The list is built on the
-  loader thread inside LoadMap (`packet: LoadMap (loader thread T, level gen N): the map's own
-  features from its TNT: K over WxH (v2, a new game|a saved game; …) in X ms`), adopted by the game
-  thread at the level's first in-play draw (`packet: level gen N: the map's own features adopted
-  from the load: K`), and carried only while the feature pass draws features with the edge on
-  `mirror`. While it does, the ground waits for that table: nothing mirrors until `feat: mirror:
-  the map's own features taken for level N: K of K over WxH` has logged — `0 of 0` on a map with
-  no features, whose ground then mirrors. While it draws none (`feat.on` unarmed, `feat.on=passive`,
-  or `native.on` without `wrecks`) the ground mirrors alone. Under GDI nothing is built. Heartbeats:
-  `terr: … mirror=N` (off-map cells drawn), `feat: … | mirror: map=K anchors= body= shadow=` under
-  `log` (`map=-1` while the pass holds no copy), and `packet: … mapfeat=K carried=N`, where `carried` stops climbing once the feature pass
-  holds the table.
+- **The mirror reflects what the world passes draw.** While the feature pass draws the map's
+  features, the edge mirrors ground and features together or not at all; while it draws none
+  (`feat.on` unarmed, `feat.on=passive`, or `native.on` without `wrecks`), the map shows no trees
+  either and the ground mirrors alone. A gather that bails draws no features on the map or past
+  it that frame (the engine's own feature draw reaches only the reference surface, gpu-status
+  §2.81), so no bail gives a bare mirror beside a wooded map. Its features are the map FILE as its
+  TNT lays it out — never a scenario's or the `.ota` schema's, never a wreck, never what play or a
+  saved game did to the map: a tree reclaimed before a save is still in the mirror after the load.
+  The list is built on the loader thread inside LoadMap (`packet: LoadMap (loader thread T, level
+  gen N): the map's own features from its TNT: K over WxH (v2, a new game|a saved game; …) in X
+  ms`), adopted by the game thread at the level's first in-play draw (`packet: level gen N: the
+  map's own features adopted from the load: K`), and carried only while the feature pass draws
+  features with the edge on `mirror`. While it does, the ground waits for that table: nothing
+  mirrors until `feat: mirror: the map's own features taken for level N: K of K over WxH` has
+  logged — `0 of 0` on a map with no features, whose ground then mirrors. A build that fails
+  (`packet: LoadMap: the map's own features NOT taken: …`) leaves the level with no table and the
+  edge black; every LoadMap empties the hand-over first, so no earlier load's table stands in.
+  Under GDI nothing is built. Heartbeats: `terr: … mirror=N` (off-map cells drawn), `feat: … |
+  mirror: map=K anchors= body= shadow=` under `log` (`map=-1` while the pass holds no copy), and
+  `packet: … mapfeat=K carried=N`, where `carried` stops climbing once the feature pass holds the
+  table.
 - **An edge=black A/B is the control launch as it is**: `tagpu_defaults.off` already draws black,
   so arm `mirror.on` only on the side that should mirror.
 - **Edge scroll is an equality on the outermost pixel** (`x == 0`, `y == 0`, `x == W−1`,

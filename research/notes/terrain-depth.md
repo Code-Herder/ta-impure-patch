@@ -94,7 +94,7 @@ SeaLevel (byte, height units); `main+0x1423B/0x1423F` = view W/H in 16-px tiles,
 | +0x05 | u8 | maxHeight2x2 | max of the 2×2 patch starting here (built by `0x483210`) |
 | +0x06 | u8 | minHeight2x2 | min of the 2×2 patch (ditto) |
 | +0x07 | u8 | MetalValue | |
-| +0x08 | u16 | FeatureDefIndex | `<0xFFFB` = anchor of a live feature; `0xFFFF` none, `0xFFFE` extension tile (`+0x0A/0x0B` = Dy/Dx back to anchor), `0xFFFD` masked-off border (set by `LoadMap_PLOT3 0x4833B0` for tiles the projection pushes off-map + lava tiles), `0xFFFC` void |
+| +0x08 | u16 | FeatureDefIndex | `<0xFFFB` = anchor of a live feature; `0xFFFF` none, `0xFFFE` extension tile (`+0x0A/0x0B` = Dy/Dx back to anchor), `0xFFFD` masked-off border (set by `LoadMap_PLOT3 0x4833B0` on empty and `0xFFFE` cells alike: the last two columns, the tiles the projection pushes off the top or bottom, and lava tiles — [exe map](exe-reverse-engineering.html)), `0xFFFC` void |
 | +0x0A | u16 | wreckage index **or** Dy/Dx | when `+0x0C bit0` set: index into the 0x30-stride wreckage array at `*(main+0x1420B)` |
 | +0x0C | u8 | flags | bit0 = wreckage present; **bit2 = "tall feature deferred to row sweep"** (recomputed every frame, §3); bits3–6 = last-seen player nibble (0xA = none) [INFERRED for the nibble] |
 
@@ -1186,7 +1186,7 @@ only the argument. Recorded rather than changed.
 | `0x4B86E0` / `0x4B88D0` | edge-sprite darken (mask→LUT / mask→dither) | — |
 | `0x483610` | **TNT map loader** (TADR label `LoadMap_Addr` = `0x483638`) | builds §1 stores |
 | `0x483370`→`0x483210` | (re)build min/max 2×2 heights | — |
-| `0x4833B0` | `LoadMap_PLOT3` — mask off-projection border tiles (`0xFFFD`) | — |
+| `0x4833B0` | `LoadMap_PLOT3` — mask border tiles (`0xFFFD`): the last two columns, the off-projection rows, lava tiles | — |
 | `0x482270` / `0x481930` | LOS counter stamp / MAPPED bit stamp (GAF circle `*(main+0x1485B)`) | — |
 | `0x4816A0` | `Game_SetLOSState` — re-prime both maps + restamp all units | — |
 | `0x482AC0` | `UNITS_RebuildLOS` — per-unit stamp refresh | — |
