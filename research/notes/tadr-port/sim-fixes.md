@@ -279,7 +279,36 @@ The plan as written:
 - The fix follows the cause (the item above). Tests: two peers, rosters every 2 s for 60 s; the
   window at 1500 and at 500; after the fix, the joiner matches the host from the first sample.
 
-**B6 — loaders and the rest.**
+**B6 — loaders and the rest. Built ahead 2026-09-25 on its own branch (`worktree-tadr_port_b6`,
+from B1's tip at the time), awaiting its review; not landed.** What was built, and where it differs
+from the plan below:
+
+- **Built as planned:** the wind and the yardmaps as rows of the fail-closed table (four and three
+  rows: 168 sites in the raised build), and the three local fixes, each checked and skipped alone.
+  The engine map's *The wind*, *A yardmap parsed past its string*, *The saved-game loader's order
+  fallback*, *The stockpile bar's divide* and *A range circle of radius 1* have the disassembly.
+- **The host is found by its record, not through the lobby's player info.** It is the active
+  record with PlayerNum 1 and a human type (`+0x73` 1 local or 3 remote), and its DirectPlay ID must
+  not be 0, where TADR tests the ID as a signed int above 0. MEASURED: the host's record reads
+  number 1 and the same ID on both peers, the joiner's 2; in single player every record reads 0 and
+  an ID equal to its slot, so single player takes the counter path.
+- **Stock's load call draws nothing.** It finds `next` = 0 (`0x4918FD`) and GameTime 0, so the seed
+  at `0x491903` precedes every draw, and the first draw is the first tick's.
+- **Changed: B6 logs a line of its own** (`patch_loader_defects`), not a clause of B1's
+  `enginefix:` line, plus one line per level load naming the seed.
+- **Changed: a stockpile order whose slot index is above 2 draws no bar.** The extra-weapons
+  module's slots past the third are not inline slots, and the engine's bar has no reader for them.
+- **Evidence.** The wind is reproduced on the previous build: two peers paused at GameTime 825
+  read speed 2525, heading `0xF5C6`, and 1498, `0xC827`. On the new build both peers read the same
+  next change, speed and heading in three games: a first one, sampled twice (at 795 and at 2003
+  or 2006); a second in the same processes; and a third after restarting the joiner, where the host
+  was on its third level load and the joiner on its first. The yardmaps' 2440 retail cells are
+  byte-identical to the previous build's. The two scratch structures read `2f2f31313100002b2b…`
+  from the stack on the previous build and all `0x2F` on the new one, on two launches each. The
+  three local fixes rest on the disassembly: none of their inputs is in stock content, and the
+  `ShowRanges` cheat could not be typed under injected input.
+- **Not measured:** the side measurement this landing was to carry (a tracked unit's death leaving
+  an order armed, and our build ghost drawing) did not fit its time budget.
 
 - **Wind** (sim): `0x490C40`'s schedule and value draws from our generator, reset at `0x491903`
   before the first call; `max ≤ min` gives `min` as stock. Two peers: equal wind at a paused tick,
@@ -318,6 +347,9 @@ The plan as written:
 
 ## Corrections this plan made
 
+- **The yardmap's stale bytes repeat from launch to launch** for one build on the reference
+  setup (B6): the evidence expected two launches to differ. The fix does not rest on it; the bytes
+  are still the stack's.
 - **The engine map named `w+0xE0` `attackrunlength`.** The loader stores the `coverage` key there
   (`0x42E540`), and the drawer's label says so. Fixed in the engine map and `ui-markers.md`.
 - **The attach wrapper starts at `0x48AAC0`**, not `0x48AB40`: 30 callers, and it sends the `0x0A`

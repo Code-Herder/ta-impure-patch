@@ -1613,8 +1613,11 @@ value when the string has none. Stock's allocation stays (never NULL).
 
 **Test.** A test `.ufo` (`tools/hpipack.py`, one unit = one `.ufo`): a copy of `CORSOLAR` (5×5)
 without `YardMap`, and one whose value is `"oo?"`. On the stock-rules build, `tacli peek` the 25
-bytes at `*(*0x511DE8+0x1439B)+type·0x249+0x14E` across two launches (expected to differ); with
-the fix, the chosen fill both times. A retail-units regression: all 126 structures' yardmap bytes
+bytes at `*(*0x511DE8+0x1439B)+type·0x249+0x14E` across two launches; with the fix, the chosen
+fill both times. MEASURED 2026-09-25 (B6): the stock-rules bytes did **not** differ between two
+launches of one build on the reference setup (`"oo?"` read `2f2f31313100002b2b…` both times, the missing
+key all `0x2F`), so the stack's leftovers are repeatable there; the defect is that they are the
+stack's, whatever a given build leaves in it. A retail-units regression: all 126 structures' yardmap bytes
 identical with and without the fix.
 
 **Decided 2026-09-25.** Past the terminator, the last valid char repeats; a string with no valid char fills `o`. The same rule covers a trailing invalid char ([the plan, B6](sim-fixes.md#the-landings)).

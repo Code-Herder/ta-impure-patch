@@ -2049,6 +2049,8 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | `*(0x51FBD0) + 0x614` | the gamma factor `0x4BA200` multiplies every palette entry by on its way to DirectDraw (`SetGamma 0x4BA590`). Read only, **on the game thread by the packet publisher since 2026-09-12** (a bounded float in every packet; `tagpu_pal_gamma()` answers from the copy). **Its consumer is the world composite** (`tagpu_vk_world.c`, §2.3f): the engine's own curve `min(255, trunc(e × factor))`, uploaded per slot when the factor changes and applied to the finished world; at exactly 1.0 no curve is drawn. It also reaches the `pal:` log lines. **Bounded** to 0.05..8.0 against the slider's own 0.5..1.5 and the chat command's N/10; anything else, NaN included, reads as 1.0, the identity |
 | **`main+0x14287`** | the `FeatureStruct` grid, one 13-byte record per 16-px cell, `mapW16 × mapH16` (`main+0x14233`/`+0x14237`). **WRITTEN, on the LOADER thread, by the saved-feature border fix** (§2.6c): the def word `+0x08` of the border cells only, `0xFFFD` → `0xFFFF` before the saved-feature restore `0x424C00` and back to `0xFFFD` after it for every such cell then EMPTY or `0xFFFE`, inside the call at `0x43265A`, before any unit is restored and before the level's first in-play draw. Otherwise read only. `tagpu_feat.c` reads the height byte (`+0x04`) of the anchor's four corners per anchor per frame for the engine's own projection, and since G14f the four central-difference neighbours too, for the ground's lambert (Classic++ only); `tagpu_terr.c` (G14f) copies the height byte of **every** cell once per map, when it builds the atlas, into an R8 texture the terrain shader samples — keyed on the grid pointer, the dims and the tile set, re-checked every frame; the grid is `IsBadReadPtr`-checked whole before the copy (7 MB on Two Continents), and an unreadable grid leaves Classic++ terrain **unlit** (the restored colour and the grey rule stay, the lambert is skipped), logged and retried every 60 frames. **The map edge's mirror reads the height bytes of every anchor it keeps and of its right, lower and lower-right neighbours, once a load**, on the LOADER thread at LoadMap's join `0x483B53`, right after LoadMap wrote them (`mapfeat_at_load`, §2.90); its feature list comes from the TNT's records, not from the grid's def indices |
 | **`0x512358`** | the pathing maps: 32 movement classes of stride `0x20`, each with its map at `+0x18` and its class tick at `+0x1C` (built by `0x440940`, called at `0x4918E3`). **WRITTEN, on the LOADER thread, by the saved-feature border fix** (§2.6c), only through the engine's own refresh `0x440A40` over the 1 × 1 rectangle of each cell it sets back to `0xFFFD` — the call the engine makes for a grid change — inside the level load, before any unit is restored. Nothing of ours reads them |
+| **`main+0x37EC4`, `+0x37EDA`, `+0x37ED8`** | the wind: the GameTime of its next change (dword), its speed (dword) and its heading (word). **WRITTEN, and it is SIM state, on the GAME THREAD by the wind fix** (§2.6c): `wind_draw`, called from the tick's call of the updater `0x490C40` (`0x49558F`) in place of stock's three draws, by stock's rules, from our own generator; stock's derivations (`+0x37ECC`, `+0x37ED4`, the ratio `+0x37EDE`, the changed flag `+0x37EE2`) then run on its values. The generator is seeded on the LOADER thread, inside the level load's call at `0x491903`, before the loader's last store (bit 1 of `main+0x38D75`, `0x497C62`) that the game thread waits for (`0x498342`). Nothing of ours reads them |
+| **the unit def's yardmap, `def+0x14E`** (`main+0x1439B`, stride `0x249`) | a pointer to `footX · footZ` bytes (`+0x14A`, `+0x14C`). **WRITTEN, and it is SIM state, by the yardmap fix** (§2.6c), inside the unit-def parser `0x42BF40` for a def whose BMcode `+0x22F` is 0: the engine's own allocation through `0x4D83B0` at stock's size, filled by stock's rules and, past the `YardMap` string, with its last valid char or `o`. Stock's bytes for every string stock parses inside its NUL. The thread is the parser's; which one runs it was not checked. Nothing of ours reads them |
 | **`main+0x1434D`** | **`ScrollSpeed`** — sim-neutral (a local camera preference no other machine ever sees), driven at base/z **by the command apply on the game thread since 2026-09-12** (every in-play draw, before the next frame's scroll poll reads it; the base restored at the level end), and its save path is guarded (§2.3) |
 | **`UnitOrders->Pos`, `unit+0x5C` → `+0x22`/`+0x26`/`+0x2A`** | **WRITTEN, and it is SIM state** — not by us directly but by `ORDERS_NewMainOrder2Unit 0x43AFC0`, which the scenario applier calls on the game thread from the tick site. Three 16.16 dwords, `{x, altitude, depth}`, copied verbatim by the constructor `0x43A0C0`. An order is a sim command and replicates in multiplayer, so a wrong value here is a wrong game, not a wrong picture; the applier is a fixture tool and is never armed in a played session |
 | **`*(0x51FBD0) + 0xC0`** | **the blend LUT pointer. WRITTEN, transiently, and this is the one field we write that is NOT in `main`.** Swapped to an identity table across the target sprite's draw and restored on return, so the star composites as a copy (§2.2). Game thread only, bracketed around one call that always returns, restored only if ours is still installed, with a belt-and-braces restore at hook 8. It must never be left installed across a frame: `0x4BA5C0` allocates that buffer, `0x4BA5F0` frees it and `0x4BAAD0` refills 64 KB through the pointer, so a stale one of ours would be clobbered or cross-heap-freed |
@@ -2336,19 +2338,24 @@ blames the disk, and four in combat ([section B's landing 1](tadr-port/sim-fixes
 hits a unit found past its twentieth victim, or a feature past its sixty-fourth, once per cell of it
 in the blast; flak fired nearly straight up divides by zero; a unit whose footprint ends on the
 map's last column or row is parked off the map, where nothing can hit it; and a unit whose altitude
-is more than twice its distance from the north edge is off every other player's line-of-sight grid.
-Eighteen fixes, built at every attach, in both builds, by `patch_engine_defects()` at the end of
-`tagpu_apply_patches()`. Each patch is the identity on every input stock handles correctly.
+is more than twice its distance from the north edge is off every other player's line-of-sight grid;
+and five outside the battle ([section B's landing 6](tadr-port/sim-fixes.md)):
+each peer of a network game draws a wind of its own, a yardmap string is parsed past its end, the
+saved-game loader's order fallback walks one record past its table, the stockpile bar divides by a
+weapon's reload time without testing it, and a range circle of radius 1 divides by zero.
+Twenty-three fixes, built at every attach, in both builds, by `patch_engine_defects()` and then
+`patch_loader_defects()` at the end of `tagpu_apply_patches()`. Each patch is the identity on every input stock handles correctly.
 
 **Two classes.** A *simulation* fix — one whose absence would let a player silently compute
 different shared state on an input stock does not fault on — hands its sites to the fail-closed
 table of §2.6b, in both builds: they are compared and written with the rest of the table or not at
-all, and a mismatch ends the process through the failure report. The eleven such fixes are the
+all, and a mismatch ends the process through the failure report. The thirteen such fixes are the
 full wreck pool, the reclaim mark, the border features, the saved record's owner, whole build lists,
-the download menus, the sync keys, the weapon IDs, the victim caps, the last column and row, and
-the line of sight. A *local* fix — a crash, a draw, a message or a malformed input — compares and
+the download menus, the sync keys, the weapon IDs, the victim caps, the last column and row, the
+line of sight, the wind and the yardmaps. A *local* fix — a crash, a draw, a message or a malformed input — compares and
 writes its own sites and is skipped alone: the sort buffer, the NULL plot, the terrain window, the
-composite scratch, the out-of-memory text, flak's divides and the projectile pass's view. The engine map's table gives each
+composite scratch, the out-of-memory text, flak's divides, the projectile pass's view, the
+saved-game order fallback, the stockpile bar's divide and the range circle. The engine map's table gives each
 one's reason. The disassembly, callers, invariants and measurements are in the
 engine map's *Engine defects we patch*; the register of defects is `binary-patches.md` §"Stock
 engine defects we patch".
@@ -2372,6 +2379,11 @@ engine defects we patch".
 | `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | the grid stamp `0x47CC30`'s `X + fw ≥ W` and `Z + fh ≥ H`, which park a unit whose footprint ends on the last column or row | the two `jge` become `jg`; the 50-byte bucket block becomes a `jmp` to a stub that keeps stock's bucket index whenever its linear index is inside the `rows·cols` grid — stock's column −1 at the west edge is the previous row's last bucket, which simulation code reads — and clamps the column and row into the grid only for an index outside it; it rejoins at `0x47CCDB` |
 | `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`; `0x465DA9`, `0x408095`; `0x407F74` | `UnitInPlayerLOS 0x465AC0`'s four row reads under True line of sight, one for each point of the unit's box it tests, and under Permanent or Circular the same shear in `PositionInPlayerMapped 0x408090` (the first three points) and its inline copy (the fourth); and the same read inlined in `0x408090`'s AI caller `0x407E90`, whose probe it decides, `(z − y/2) >> 5` under an unsigned bound, off the grid for a unit high up near the north edge | each block (43, 43, 49, 34, 34, 44 and 40 bytes) becomes a `jmp` to a stub that uses the point's own row `z >> 5` when the sheared row is off the grid and the own row is on it, and otherwise keeps stock's answer |
 | `0x49BEE8` | the projectile draw pass `0x49BE60`'s inline copy of the same read, the local player's view of a projectile | the 40-byte block becomes a `jmp` to a stub with the same own-row rule, compared and written alone. Local: a draw of the engine's frame, which still runs as the golden source (`fxown` is not a play default) |
+| `0x490C5A`, `0x491903` | the wind updater `0x490C40`'s three draws (the next change, the speed, the heading), which each peer makes from its own RNGs, seeded from its own clock | four rows of the fail-closed table: a `jmp` over the draws' first instruction to a stub that calls `wind_draw` (stock's rules, our own splitmix64 generator) and rejoins at `0x490CE8` with `eax` the main pointer; a stub on the level load's call that seeds the generator first, from the host's DirectPlay ID and a hash of the map's name in a network game and from the performance counter outside one; `0x490C40` (26 bytes) and `0x490CE8` (13) compared |
+| `0x42CF5E` | the unit-def parser `0x42BF40`'s yardmap fill, which steps past the `YardMap` string's NUL onto the stack when the key is missing or ends on an invalid char | three rows: a `jmp` through `fix_call_regs` into `yard_parse` (stock's allocation, table, skip and repeat rules; a cell past the string takes the last valid char or `o`), rejoining at `0x42D079`; the 32-byte key read `0x42CF3E` and `0x42D079` compared |
+| `0x43A58D` | the saved-game order loader `0x43A420`'s fallback, which walks the order table one record past its end and keeps a count it did not find as the order's type | local, 4 bytes: `jbe` → `jb`, and the not-found `jmp` → `0x43A552`, "Ready" |
+| `0x439D41` | the stockpile bar `0x439D20`'s `idiv` by the slot weapon's `+0xE4`, with the slot index unbounded | local: a `jmp` to a 38-byte stub that bounds the index to 0..2, tests the weapon for NULL and `+0xE4` for 0, and takes the function's `return 0` (`0x439D6B`) on any of them |
+| `0x438EDE` | `DrawRangeCircle 0x438EA0`'s guard, which lets N = 0 segments (radius 1) through to `idiv` | local: the `jl` becomes a `jmp` to `jl 0x43904D; je 0x43908F; jmp 0x438EE4`, so N = 0 takes the radius-0 epilogue |
 | `0x42BD29` | the menu-time loader's one call, after which the unit sync's keys (def `+0x13E`, `0x4B6BA0`'s checksum of the FBI) may collide | a `call` to a stub that calls the loader and, when it returns 1, re-keys all but the first by name of each group of types sharing a key, to a hash of the name moved past every held value, opening and sealing the write-protected def array with `0x4D8780` / `0x4D8710` |
 
 **It writes no engine state.** The sort stub writes only the engine's own per-frame sort tables,
@@ -2414,7 +2426,13 @@ from `0x4D83B0`, freed when its call returns. Flak's floor writes `w+0x68` of a 
 load; no stock weapon has one. The last column and row change which bucket and cells the stamp
 writes, the engine's own, for a unit stock parked. The line-of-sight fix writes nothing: it reads
 the player's grid at a row inside it; the projectile pass's view writes nothing either, and changes only which projectiles the engine's
-frame draws and poses.
+frame draws and poses. The wind writes the engine's wind fields (`main+0x37EC4`, `+0x37EDA`,
+`+0x37ED8`, §2.5) on the game thread, in the tick's call, where stock writes them, with values from
+our generator where stock drew its own: that is simulation state, and the point. Its seed is ours,
+written on the loader thread inside the level load. The yardmap fix writes each def's yardmap
+(`def+0x14E`, §2.5), through the engine's own allocator and at stock's size, the same bytes as stock
+for every string stock parses inside its NUL. The saved-game fallback, the stockpile bar and the
+range circle write nothing: they change one register or take a branch.
 
 **The log line** is `enginefix: sort-buffer end bound 0x469807 ARMED; NULL-plot guard 0x421E60
 ARMED; terrain window bound 0x484057 ARMED; feature swap on a full wreck pool 0x423651 ARMED;
@@ -2438,13 +2456,23 @@ now`, and `composite scratch merge refused: a WxH cargo at (x,y) is past the WxH
 that re-keys logs its first eight types and a total (`enginefix: unit sync keys: N of M types
 re-keyed`); a saved game's load logs what the border fix did (`savedfeat: the restore ran with the
 border mask open: N cells opened, M shut again and the pathing maps refreshed around each in T ms,
-K hold a restored feature's anchor`, or why it left the restore to stock). A
+K hold a restored feature's anchor`, or why it left the restore to stock). Landing 6's five fixes
+log a second line of their own, `enginefix: one wind for every peer (0x490C5A 0x491903) …; yardmaps
+parsed inside their string (0x42CF5E) …; the saved-game order fallback (0x43A58D) …; the
+stockpile bar's divide (0x439D41) …; a range circle of radius 1 (0x438EDE) …. Counters: levels
+seeded at 0x…, yardmaps filled past their string at 0x…`, with the same readings in place of `…`.
+Each level load logs its wind seed (`enginefix: wind: level N seeded from the host's DirectPlay ID
+0x… and the map "…" (0x…)`, or `… seeded from the performance counter (no network host), map
+"…"`), and a def whose yardmap is filled past its string logs `enginefix: yardmaps: <name>: N of
+its M cells lie past its YardMap string and take 0xXX (K so far)`, the first 32 and then every
+power of two. A
 site that is not installed reads `SKIPPED (the bytes differ from the retail exe)`,
 `SKIPPED (VirtualAlloc of the stub failed)` or `SKIPPED (VirtualProtect of the site failed)` in
 place of a local fix's `ARMED`. The local fixes that take stubs of their own (the sort buffer, the
 NULL plot, the terrain window, the composite scratch) release them when their sites cannot be
-written; flak's divides and the table's fixes share pages of stubs, which stay, since a simulation
-fix's table either goes in whole or ends the process at the report. There is no switch: all eighteen fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
+written; flak's divides, the stockpile bar, the range circle and the table's fixes share pages of
+stubs, which stay, since a simulation fix's table either goes in whole or ends the process at the
+report. There is no switch: all twenty-three fixes are installed on every launch, `tagpu_defaults.off` included. A skipped weapon logs
 `enginefix: weapon <name> has ID <id>, outside 0..<max>, and is skipped` or `enginefix: weapon
 <name>... (ID <id>) has a name longer than its record, and is skipped`, a duplicate `enginefix:
 weapon ID <id>: <name> replaces <name>`, and a dropped message or companion `enginefix: weapon
@@ -2507,6 +2535,15 @@ handler's slot).
   stock; only a unit whose own row is on the grid is fixed.
 - A stock unit with `fw = 0` near the east edge already indexes a sort bucket one past the grid and
   near the west edge one before it; the bucket clamp now covers both, and neither was measured.
+- The saved-game order fallback, the stockpile bar's divide and the range circle were not run:
+  no save lacks an order's name, no stock stockpile weapon has a zero reload, the `ShowRanges`
+  cheat could not be typed under injected input, and no stock unit has a range of 1. All three rest
+  on the disassembly.
+- The wind was measured with two peers. A third peer, and a peer whose player records differ from
+  the others', were not run.
+- The wind no longer draws from the sim RNG `0x4B6C30` or the CRT's `rand`, so each peer's sequence
+  of those two moves by the draws stock made. Both are seeded per peer from its own clock
+  (`0x497180`), so neither sequence was shared between peers before.
 
 ---
 

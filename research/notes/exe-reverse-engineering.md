@@ -289,8 +289,12 @@ an explosion hits a unit found past its twentieth victim, or a feature past its 
 for every cell of it in the blast; flak fired nearly straight up divides by zero; a unit whose
 footprint ends on the map's last column or row is parked off the map, where nothing can hit it;
 and a unit whose altitude is more than twice its distance from the north edge falls off the
-line-of-sight grid, so no other player sees it. `tagpu_patches.c` (`patch_engine_defects`)
-patches all of them, eighteen fixes, at every attach, in both builds: `ddraw.dll` is a static
+line-of-sight grid, so no other player sees it; and five outside the battle, landing B6: each peer
+of a network game draws a wind of its own, a yardmap string is parsed past its end, the
+saved-game loader's order fallback walks one record past its table, the stockpile bar divides by
+a weapon's reload time without testing it, and a range circle of radius 1 divides by zero.
+`tagpu_patches.c` (`patch_engine_defects`, then `patch_loader_defects` for the last five)
+patches all of them, twenty-three fixes, at every attach, in both builds: `ddraw.dll` is a static
 import of the exe, so `DllMain` runs before the exe's entry point. Each patch is the identity on
 every input the stock code handles correctly.
 
@@ -304,7 +308,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log line, when its bytes differ from the retail exe, its stub cannot be
-allocated, or its page cannot be made writable. Each of the eighteen, and why:
+allocated, or its page cannot be made writable. Each of the twenty-three, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -326,6 +330,11 @@ allocated, or its page cannot be made writable. Each of the eighteen, and why:
 | the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
 | line of sight at the map's edge `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`, `0x465DA9`, `0x408095`, `0x407F74` | simulation | what is acquired, and what the AI probe keeps |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
+| one wind for every peer `0x490C5A`, `0x491903` | simulation | a wind generator's energy follows the wind's ratio, and each peer draws its own |
+| yardmaps inside their string `0x42CF5E` | simulation | the yardmap decides where a unit can be placed, what it occupies and where others path |
+| the saved-game order fallback `0x43A58D` | local | a malformed save's fate; this exe's writer always stores the order's name |
+| the stockpile bar's divide `0x439D41` | local | a HUD draw |
+| a range circle of radius 1 `0x438EDE` | local | a HUD draw |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -1535,6 +1544,236 @@ fire on a save loaded with its own content.
 **Not closed.** `FeatureDie` follows a `0xFFFE` cell to its anchor (`0x423568..0x42358D`), so a
 refused `Animating` record of mode 1 or 2 whose cell is an indestructible neighbour's footprint
 starts or swaps that neighbour's sequence. That is stock; the gate skips only the write.
+
+### The wind — `0x490C40`, its draws `0x490C5A` and the level load's call `0x491903` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The updater.** `0x490C40()` takes no argument and returns with `ret`. It has exactly two callers:
+the level load `LoadGameData_Main 0x4917D0` at `0x491903`, on the loader thread, and the tick
+`0x495490` at `0x49558F`. `0x4917D0`'s only caller is `0x497581`. The updater compares `next`
+(`main+0x37EC4`, a dword) with GameTime (`main+0x38A47`) (`0x490C45..0x490C53`). While
+`next >= GameTime` it clears the changed flag `+0x37EE2` and returns (`0x490D87`). Otherwise it
+draws three values:
+
+| value | stock's draw | where |
+|---|---|---|
+| `next` `+0x37EC4` | `next += 30 · (5 + rand() · 10 / 0x8000)`, from the CRT's `rand 0x4E4870` through `_allmul 0x4E4400` and `_alldiv 0x4E4440` | `0x490C60..0x490C8E` |
+| speed `+0x37EDA` (dword) | `min + simrand(max − min)`, where min is `main+0x1425B` and max is `main+0x1425F` (the map's minimum and maximum wind [INFERRED]; Two Continents reads 0 and 3000); the difference is a 32-bit `sub` at `0x490CA1` | `0x490C90..0x490CB7` |
+| heading `+0x37ED8` (word) | `simrand(0x10000)`, drawn only when the speed is not 0 | `0x490CC8..0x490CDC` |
+
+`simrand` is the sim RNG `0x4B6C30(n)`, which answers 0 for `n < 2` (`0x4B6C35`). The
+updater then derives the components `+0x37ECC` and `+0x37ED4` from the speed and the heading
+(`0x490CE8..0x490D35`), and the ratio `+0x37EDE`: the speed over `+0x37EC8`, capped at 1.0
+(`0x490D3B..0x490D7B`). `+0x37EC8` is 5000, written only by the load (`0x4918ED`). It sets the changed flag to 1 (`0x490D7B`) and pops `esi` (`0x490D85`).
+
+**The writers and readers.** The only writers of `+0x37EC4`, `+0x37EDA` and `+0x37ED8` are
+`0x490C8E`, `0x490CB7`, `0x490CDC` and the load's `mov [ecx+0x37EC4],esi` at `0x4918FD`, which sets
+`next` to 0: `esi` is 0 from `0x4917E5`. The readers are the updater's own derivations and
+three more:
+- `0x40156F`, in the resource step [INFERRED]: the ratio times the def's `WindGenerator` (`+0x1D2`, a
+  float) is added to the player's energy income;
+- `0x488F68`: the same product, negated, returned to the caller;
+- `0x437910(unit)`, called from `0x48ADC4`: for a def with `WindGenerator > 0`, and only on a
+  draw where the changed flag is set, it calls the unit's script `SetDirection(heading)` and
+  `SetSpeed(speed << 4)` through `0x4B0A70` (the names at `0x50500C` and `0x505000`).
+
+So the wind is simulation state. It is each wind generator's income, and the argument of two
+COB calls that run on every peer.
+
+**Each peer draws its own.** The loader `0x497180` seeds the sim RNG from
+`QueryPerformanceCounter` and the CRT's `rand` from `time(0)`. Both are local to the machine, and
+the updater runs on every peer, so each peer draws its own wind. MEASURED on the previous build,
+two peers on Two Continents (wind 0 to 3000) paused at GameTime 825:
+
+| peer | next | speed | heading |
+|---|---|---|---|
+| host | 990 | 2525 | `0xF5C6` |
+| joiner | 840 | 1498 | `0xC827` |
+
+The load's call draws nothing: it finds `next` = 0 and GameTime 0 (`0x4971BB`). The first draw
+is the first tick's.
+
+**The fix: one wind for every peer.** `fix_wind` (`tagpu_patches.c`) writes two rows of the
+fail-closed table:
+- a `jmp` at `0x490C5A` replaces `lea esi,[eax+0x37EC4]`, the draws' first instruction. It goes to
+  a stub `pushad; call wind_draw; popad; mov eax,[0x511DE8]; jmp 0x490CE8`, which leaves `eax`
+  as stock's `0x490CE3` leaves it. After `0x490CE8`, `esi` is read only by the pop at
+  `0x490D85`.
+- a `call` at `0x491903` goes to a stub that calls `wind_seed` and then jumps to `0x490C40`.
+
+`wind_draw` makes stock's three draws, by stock's rules, from a splitmix64 generator of its own.
+It uses neither engine RNG:
+- `next += 30 · (5 + r % 10)`;
+- the speed is `min + r % (max − min)`, or `min` when the 32-bit difference is below 2;
+- the heading is `r % 0x10000`, drawn only when the speed is not 0.
+
+Two more rows check the bytes the stubs rest on, and the fix adds four rows in all:
+- `0x490C40`, 26 bytes: the schedule test and its `push esi`;
+- `0x490CE8`, 13 bytes: the loads where the draws rejoin.
+
+**The seed.** `wind_seed` runs at every level load, so nothing crosses from one game to the next.
+In a network game it seeds from the host's DirectPlay ID in the high half and a hash of the map
+in the low half. Outside one it seeds from `QueryPerformanceCounter`, as stock seeds its own RNG.
+- **The host** is the active player record (`main+0x1B63`, stride `0x14B`) with PlayerNum 1
+  (`+0x0C`) whose type `+0x73` is a human, 1 local or 3 remote, and whose DirectPlay ID (`+0x04`)
+  is not 0. MEASURED:
+  - on both peers, the host's record reads PlayerNum 1 and the ID `0x49576F42`;
+  - the joiner's record reads 2 and `0x49576F40`;
+  - `+0x73` is 1 for the local player and 3 for the remote one;
+  - in single player every record reads PlayerNum 0 and a DirectPlay ID equal to its slot index,
+    0 to 3, so the slot-0 record has ID 0, and no record is a host.
+- **The map** is FNV-1a over the lower-cased stem of the TNT path, `GameingState +0x204` through
+  `main+0x391E9`: "Maps\Two Continents.TNT" on both peers, hashed as "two continents". The load
+  reads the same pointer, as `this` for `0x435100`, at `0x491984`.
+
+**The ordering.** The seed is written on the loader thread before the loader's last store, bit 1
+of `main+0x38D75` (`0x497C62`). The tick reads it only after the game thread has seen that bit
+(`0x498342`).
+
+**MEASURED on the new build, two peers:**
+
+| game | host's DirectPlay ID | GameTime | next | speed | heading |
+|---|---|---|---|---|---|
+| 1 | `0x4961C0AB` (map hash `0x4934CBDE`) | 795 / 796 | 930 | 1983 | `0x3E40` |
+| 1, later | | 2003 / 2006 | 2220 | 1027 | `0x2643` |
+| 2, same processes (the level counter reads 2) | `0x4962F926` | 795 | 1170 | 2632 | `0x6CAC` |
+| 3, joiner restarted (host level 3, joiner level 1) | `0x4964DA8F` | 796 | 960 | 556 | `0xABFA` |
+
+The values in each row were read on both peers and are identical on both. In game 1 the ratio
+`+0x37EDE` also read `0x3ECB0F28` on both peers. In single player the log reads `seeded from the
+performance counter (no network host), map "two continents"`, and the wind draws. The install
+line reads `limits: installed 168 sites`: the 161 before, plus these four rows and the
+yardmaps' three.
+
+### A yardmap parsed past its string — `0x42CF5E` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**Where it is.** The unit-def parser `0x42BF40` (`sub esp,0x518`, `ret 8`) is called from
+`0x42D269` and `0x42D722`. The yardmap is read only for a def whose BMcode `[def+0x22F]` is 0
+(`0x42CF30..0x42CF38`):
+- **The read.** The parser reads the FBI's `YardMap` key with
+  `GetString 0x4C48C0(buf, "YardMap", 0x400, "")` into a 0x400-byte stack buffer at
+  `[esp+0x128]` (`0x42CF3E..0x42CF59`). GetString has 120 callers. It NUL-terminates inside the
+  size, or copies the `""` default when the key is missing, and the parser ignores its return.
+- **The allocation.** The parser allocates `footX · footZ` bytes (`+0x14A`, `+0x14C`, words) at
+  `def+0x14E` through `0x4D83B0` (`0x42CF5E..0x42CF7A`).
+- **The fill.** It fills the cells row by row (`0x42CF9D..0x42D06B`). The byte map `0x42D198`
+  sends each char into the jump table `0x42D16C`, and a char of `.CGOYcfowy` writes one cell:
+
+  | char | `.` | `C` | `G` | `O` | `Y` | `c` | `f` | `o` | `w` | `y` |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | cell | `00` | `35` | `8F` | `2B` | `31` | `2D` | `6F` | `2F` | `37` | `29` |
+
+  After writing a cell, the parser moves on to the next char unless that char is the NUL, so a
+  short string repeats its last char. Any other char, the NUL included, is skipped without
+  filling a cell (`0x42CFB5` → `0x42D049`).
+- **The rejoin.** The parse ends at `0x42D079`, where the footprint's box is loaded. Nothing after
+  it reads the parse's registers or `[esp+0x1C]` before writing them: `ebx` is written at
+  `0x42D0E3` and `edi` at `0x42D0F1`.
+
+**The defect.** Two strings walk past the NUL: a missing key, and a string that ends on an
+invalid char. The walk goes on up the stack until every cell has a byte. The yardmap decides
+placement (`0x47D2E0`), occupancy (`0x47CC30`) and pathing, and each peer's stack is its own.
+
+No retail unit reaches it. MEASURED: 279 defs, 126 of them with a yardmap (81 cells at most,
+2440 in all), and every one ends on a valid char. A mod reaches it. MEASURED with two
+scratch-built copies of a 5 × 5 retail structure, on the previous build:
+- `B6YARD0` has no key, and its cells read all `0x2F`: the stack held `o` bytes on both
+  launches;
+- `B6YARD1` has the key `oo?`. Its cells read `2f2f31313100002b2b…`: the `Y`, `.` and `O` bytes
+  come from past the string. The run was identical from launch to launch: what one build
+  leaves on its stack on the reference setup, not a rule.
+
+**The fix: the parse stays inside its string.** A `jmp` at `0x42CF5E`, a row of the fail-closed
+table, goes through `fix_call_regs` into `yard_parse`, and the stub rejoins at `0x42D079`.
+`yard_parse`:
+- makes stock's allocation through the same allocator;
+- fills the cells by stock's table, stock's skip rule and stock's repeat rule;
+- reads nothing past the string's NUL or past the buffer's 0x400 bytes;
+- gives each cell stock would have filled from past the NUL the last valid char's byte, or `o`
+  (`0x2F`) when the string had none [DECIDED 2026-09-25].
+
+Two more rows check the bytes around the site: `0x42CF3E`, the 32 bytes of the key's read into
+its 0x400 bytes, and `0x42D079`, 7 bytes.
+
+TADR's fix leaves `def+0x14E` NULL, and six readers dereference it unchecked. MEASURED on the new
+build:
+- the 2440 retail cells are identical to the previous build's, 0 of 2440 differing;
+- `B6YARD0` and `B6YARD1` read all `0x2F` on both launches, with the log lines `25 of its 25
+  cells` and `23 of its 25 cells ... take 0x2F`.
+
+### The saved-game loader's order fallback — `0x43A58D` [DISASSEMBLED 2026-09-25]
+
+**The walk.** The order loader `0x43A420` has one caller, `0x487594`. It takes an order's type
+from its `<key>_name` (`0x43C6B0`, then a `strcmp` against the table). A name not found goes to
+`0x43A552`, "Ready", with `dl` = 0. A record without the name falls back to its stored index. It
+walks the order table `0x512344` counting records whose `+0x14` bit 0 is clear
+(`0x43A556..0x43A58F`).
+
+**The defect.** The walk runs while the record is at most the table's end `0x512348`
+(`0x43A58B`, `cmp eax,esi; jbe 0x43A56D`). That is one record past the end. An index the walk
+does not meet goes from `0x43A58F` to `0x43A598`, which leaves `dl` at the count
+(`mov dl,cl`): 68 or 69 against a table of 68 records. That becomes the order's type byte, and a
+wild dispatch on its first tick.
+
+This exe's writer always stores the name (`0x43AA90..0x43AAE3`), so only a foreign or damaged
+save reaches the walk. The table holds 68 records for the whole process:
+`UIPipelinesInit 0x491200` fills it once. So the walk's first record, examined before the bound,
+is always a real one.
+
+**The fix, two bytes of one local site:**
+- `jbe` → `jb` at `0x43A58D`, so the table's end is exclusive;
+- the not-found `jmp` at `0x43A58F` → `0x43A552` (`EB 07` → `EB C1`), the by-name branch's own
+  "Ready".
+
+`ebx` and the other registers reach `0x43A59A` as before. Only `dl` differs, and only for an index
+the table does not hold. It is not run: it rests on the disassembly.
+
+### The stockpile bar's divide — `0x439D41` [DISASSEMBLED 2026-09-25]
+
+**The bar.** `0x439D20(unit)` has one caller, `0x46B446`, which draws the bottom panel. It finds
+the unit's first order with `+0x42` bit 19 (`0x80000`, the weapon build) and reads:
+- the order's slot index `+0x36` and progress `+0x3E`;
+- the slot's weapon, `[unit + 0x10 + idx · 0x1C]` (`0x439D51`);
+- that weapon's reload word `+0xE4`.
+
+It divides `progress · 100` by the reload word at `0x439D65` (`idiv esi`).
+
+**The defect.** Nothing bounds the index to the three inline slots, and nothing tests the divisor.
+Two slots hold a zero reload:
+- an unarmed slot, which holds `&Weapons[0]`, whose `+0xE4` is 0;
+- a stockpile weapon with no `reloadtime`.
+
+No stock weapon reaches it: every stockpile weapon's `reloadtime` is 120 to 180. A mod reaches
+it, and so does a remote unit whose type differs on this peer.
+
+**The fix.** A local site: a `jmp` at `0x439D41` replaces `mov ecx,[eax+0x36]; mov eax,[eax+0x3E]`.
+It goes to a stub that takes `0x439D6B`, the function's own `return 0`, for any of three:
+- an index above 2;
+- a NULL weapon;
+- a zero `+0xE4`.
+
+Otherwise the stub repeats the two loads and rejoins at `0x439D47`, with `ecx` the index and `eax`
+the progress. `esi`, pushed at `0x439D24`, is free until `0x439D47` rewrites it, and `0x439D6B`
+pops it.
+
+The only branch to the site is `0x439D34` → `0x439D41`, the site's own start. It is not run: it
+rests on the disassembly.
+
+### A range circle of radius 1 — `0x438EDE` [DISASSEMBLED 2026-09-25]
+
+**The defect.** `DrawRangeCircle 0x438EA0` (19 callers, `0x439106` … `0x439943`) divides `0x10000`
+by its segment count N at `0x438EEE`. Its only guard, `jl 0x43904D` at `0x438EDE`, catches a
+negative N, and radius 1 gives N = 0 (see the function's own entry below). TADR's `jle` sends
+N = 0 to `0x43904D`, which draws the circle's label at the screen's corner (0, 4).
+
+**The fix.** A local site: the six-byte `jl` becomes a `jmp` to `jl 0x43904D; je 0x43908F;
+jmp 0x438EE4`, on the flags of `0x438ED8`'s compare, which the `mov` at `0x438EDA` leaves alone.
+- N = 0 goes to `0x43908F`, the epilogue that radius 0 takes, with the same stack: no circle and
+  no label.
+- A negative N keeps stock's path.
+
+No branch or absolute literal points into any of the three local sites' replaced bytes. It is
+not run: the `ShowRanges` cheat could not be typed under injected input, so it rests on the
+disassembly.
 
 ### Area damage's victim lists — `0x49A120`, its lists `0x49A262` and `0x49A5CE` [DISASSEMBLED + MEASURED 2026-09-25]
 
@@ -3530,10 +3769,11 @@ belongs to the TARGET circle `0x4399F0`, which multiplies **only** its y radius 
 both drawers and drew every range circle 11 % flat until G13p; the projection maps world z to
 screen y 1:1, so a round circle in world space is a round circle on screen.
 
-**And it can divide by zero.** `mov eax,0x10000` at `0x438EE4`, `cdq`, then **`idiv ecx` at
-`0x438EEE`** with `ecx` = N, guarded only by `jl` against a *negative* N (`0x438EDE`). A radius
-of 1 gives `(int)(1 · 0.7854) == 0` and faults inside TA. Nothing in stock content is that
-small.
+**And stock divides by zero there — patched.** `mov eax,0x10000` at `0x438EE4`, `cdq`, then
+**`idiv ecx` at `0x438EEE`** with `ecx` = N, guarded only by `jl` against a *negative* N
+(`0x438EDE`). A radius of 1 gives `(int)(1 · 0.7854) == 0` and faults inside TA. Nothing in stock
+content is that small. `fix_range_circle` sends N = 0 to the radius-0 epilogue `0x43908F` — see
+[A range circle of radius 1](#a-range-circle-of-radius-1-0x438ede-disassembled-2026-09-25).
 
 **`TurnXLookup 0x4B70EF` is a SINE and `TurnZLookup 0x4B7123` a COSINE**, off one shared
 table at **`0x509F00`**: 512 `s16` entries, `8192 = 1.0` (`shrd …,0xD` after a `+0x1000`
