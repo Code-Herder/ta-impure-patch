@@ -5662,8 +5662,9 @@ static void __cdecl hit_freed(unsigned int* r)
 
 /* The owner's time g0 of the 0x2C being parsed, as a lower bound. A 0x2C's creates are in its
    sender's block (a dirty entry at +0x67 + delta, the round robin at +0x67 + GameTime % N), so
-   the record whose block holds the slot is the sender, whose +0x18 0x48B963 wrote from the
-   header's [32] field before the first entry. The blocks go to the ten records in DPID order
+   the record whose block holds the slot is the sender, whose +0x18 holds the header's [32]
+   field before the first entry: wire_s2c_entry stores it in place of stock's 0x48B963, after
+   the copy and length checks, and a 0x2C that fails them creates nothing. The blocks go to the ten records in DPID order
    in a network game (0x485842 sorts the record pointers on +4 before 0x4858BD hands out
    1 + k*N), not in record order, so the record is found by its block, [+0x67, +0x6B]: the
    range first-free walks. */
