@@ -433,14 +433,41 @@ stores or builds). Every byte of both messages carries a field; neither has room
 (`[player+0x67]`..`[player+0x6B]`, read as `main+0x1BCA`/`+0x1BCE` + `k·0x14B`) and takes the first
 slot whose type `+0xA6` is 0 (`0x486036`). Its arg 8 is a requested index: then only that slot is
 tried. All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
-index. It returns NULL when no slot is free (`0x486053`). **Its callers and NULL**: the four
-factory and build callers (`0x4028EA`, `0x403D5B`, `0x405104`, `0x41409B`) link the result to
-the order (`0x489690` takes NULL) and test the link: NULL says "Unable to create any more units"
-(`0x4028FF` → `0x47F780`) and sleeps the order 300 ticks (`0x439E80`); `0x41794F` ignores it;
-`0x48718E`, `0x488462` and `0x488700` test it; `0x497002` and `0x4977BB` are the level load's;
-**`0x4653D9`**, the players phase's timed create for the controlled player (`main+0x2A42`, when the
-countdown `main+0x39239` fires), uses it at `0x465414` with no test, so stock faults there at the
-cap. The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The blocks go to the
+index. It returns NULL when no slot is free (`0x486053`), and below the cap for a type 0
+(`0x485F7C`), a type without def `+0x241` bit `0x800000` (`0x485FAA`) and a type at its own
+limit, def `+0x15A` (`0x485FE4`). **Its callers and NULL**: the four factory and build callers
+(`0x4028EA`, `0x403D5B`, `0x405104`, `0x41409B`) link the result to the order (`0x489690` takes
+NULL) and test the link: NULL says "Unable to create any more units" (`0x4028FF` → `0x47F780`),
+and the first three sleep the order 300 ticks (`0x439E80`) while `0x41409B` returns 8 at once
+(`0x4140BD`); `0x41794F` ignores it; `0x48718E`, `0x488462` and `0x488700` test it; `0x497002`
+and `0x4977BB` are the level load's; **`0x4653D9`**, the Deathmatch respawn below, uses it at
+`0x465414` with no test, so stock faults there on every NULL.
+
+**The Deathmatch respawn, `0x4653D9`** [DISASSEMBLED; its trigger's meaning INFERRED]. It is in
+the players phase `0x464F80`, which walks the ten players and does a player's periodic work only
+on its pass, when GameTime reaches its `+0xF0` (`0x465083`, then `+0xF0 += 0x1E`: every 30
+ticks). On the controlled player's pass (`main+0x2A42`, `0x46509D`) outside a campaign
+(`0x435100` ≠ 1), with the options word's bit `0x40` clear (`[player+0x27]+0x9B`, `0x465154`) and
+`0x490360` nonzero (a test on `main+0x391ED` with a GameTime-keyed timer at `0x51E6C4`), it runs
+the countdown **`main+0x39239`**: below 0 it reloads to 4 and stops (`0x46518B`), else it
+decrements, and on reaching −1 it fires (`0x4651A4`). A fire with `ActiveCommanderDeath`
+(`main+0x37EF6`) at 2 creates a unit of a type named in the side's record (`0x488B10`)
+[INFERRED: the side's commander] for the controlled player at a free place: up to 9999 random
+points (`0x465236`), each tested over a 3 × 3 block of cells (`0x47DB70`); at any other value it
+goes to `0x465643`, which sets the player's options bit `0x40` (`0x46569D`, the bit `0x465154`
+tests, so the path stops) or the game-over bits of `main+0x3923B` (`0x46582E`) [INFERRED: the
+player is out]. Mode 2 is "Deathmatch" (the in-game options label, `0x45F279`), reachable from the
+multiplayer battle room, whose button cycles 0 → 1 → 2 → 0 (`0x448504..0x448546`, the options
+word's bits 11–12), and not from the skirmish screen, whose toggle is `xor [options+0x108],1`
+(`0x47B690`). **The countdown's readers and writers**: set to `0xFFFF` at a level's entry
+(`0x498199`); the respawn's path above (`0x46517F..0x4651A4`); two objective copies that set
+bits of `main+0x3923B` at their fire, `0x4650F3..0x465118` (a campaign, behind `0x490360`) and
+`0x465881..0x4658A6` (behind `0x490230`, campaign or not); a copy after the loop
+(`0x4655E8..0x465610`, a network game whose `ActiveCommanderDeath` is not 2, behind `0x457CB0`)
+[INFERRED: the end of a network game]; and **`0x46554F`**, on every
+player's pass, which calls `0x401360(player)` for a local player only while the countdown is below
+0 and `main+0x3923B` bit 2 is clear — `0x401360` zeroes the player's `+0xA4`/`+0xA8` and adds up
+each live unit's production [INFERRED: the economy's per-pass sum]. The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The blocks go to the
 records in DPID order in a network game**: `0x485842` sorts the ten record pointers on `+4` when
 `0x435100` answers 3 (otherwise on the pointer itself), and `0x4858BD` gives the k-th of the sorted
 list the block `1 + k·N` (`+0x67`, and its last slot at `+0x6B`, `0x4858E0`), so record k owns
@@ -493,7 +520,8 @@ lower bound, from the record whose block holds the slot); `0x486036` decides fir
 the block's first free slot: an unheld one, else the one freed longest ago if in an earlier tick,
 never one freed this tick (arg 8 = 0 only); `0x486DC1` stamps the free; `0x4854A0` resets the
 tables with the array and sizes them from its count; `0x4653DE` sends a NULL from `0x4653D9` to
-the block's end `0x4654FB` with the countdown set back to 0, a retry the next tick. All are rows of
+the block's end `0x4654FB` and writes nothing, so the countdown stays at −1 as stock's fire leaves
+it and fires again six passes later while its trigger holds. All are rows of
 the fail-closed table, in both builds.
 MEASURED 2026-09-25 (the plan's *B4 BUILT AHEAD*, three peers, every hit held 30 ticks by the test
 lever): hits applied to a unit younger than the delay fell from 1 562 to 0 on the owner and from

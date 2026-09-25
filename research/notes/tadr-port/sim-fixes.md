@@ -373,7 +373,8 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
 
 **B4 — stale hits.**
 
-- The incarnation: a DLL static `u32` per slot (`TAGPU_PK_DESIGN_SLOTS`), bumped at create; the
+- The incarnation: a `u32` per slot, in DLL tables sized from the engine's own slot count at the
+  unit array's allocation (the design below), bumped at create; the
   companion message's format and its binding to its `0x09`/`0x0B` are this landing's first design
   step, after A′3's `0x0E` companion. Bandwidth measured: `0x0B` is the most frequent message.
 - The hold: a detour at `0x486036` (first-free, skipping a slot freed less than two ticks ago; arg 8
@@ -482,18 +483,33 @@ incarnation now in the slot, so it is not stale by the rule's definition.
 create returns NULL below the cap. `0x485F50`'s callers [DISASSEMBLED]: the four factory and build
 callers (`0x4028EA`, `0x403D5B`, `0x405104`, `0x41409B`) link the result to the order
 (`0x489690`, which takes NULL) and test the link: NULL shows "Unable to create any more units"
-(`0x4028FF` → `0x47F780`) and sleeps the order 300 ticks (`0x439E80`); `0x41794F` ignores it;
+(`0x4028FF` → `0x47F780`), and the first three sleep the order 300 ticks (`0x439E80`) while
+`0x41409B` returns 8 at once (`0x4140BD`); `0x41794F` ignores it;
 `0x48718E` (the saved-game restore, arg 8 nonzero, never held), `0x488462` and `0x488700` test it;
-`0x497002` and `0x4977BB` run in the level load, before anything is freed. **`0x4653D9`**, the
-players phase's timed create (it spawns a unit for the controlled player `main+0x2A42` when the
-countdown `main+0x39239` fires), uses the unit at `0x465414` with no test: stock faults there at
-the cap, and the hold would add a fault below it. B4 guards it by construction at `0x4653DE`: a
-NULL sets the countdown back to 0 and takes the block's own end `0x4654FB`, so the next tick's
-decrement fires it again, where the slots freed in this tick are the fallback's; at the cap it
-retries each tick until a slot frees, where stock faults. **The remaining exception** [rule 7]:
-a factory whose build completes in a tick that freed every free slot of its player's block gets
-stock's "Unable to create" and its 300-tick sleep, one tick after which stock would have had a
-slot; nothing below the cap faults. `0x485F50`'s eleven callers pass arg 8 = 0 except the
+`0x497002` and `0x4977BB` run in the level load, before anything is freed. **`0x4653D9`** is
+the Deathmatch respawn (described in the engine map, *Unit identity on the wire*): it uses the unit
+at `0x465414` with no test, so stock faults there on every NULL `0x485F50` can return — the block
+with no free slot, and below the cap a type 0 (`0x485F7C`), a type without def `+0x241` bit
+`0x800000` (`0x485FAA`) or the type's own limit def `+0x15A` (`0x485FE4`) — and the hold would add
+one more. B4 tests it at `0x4653DE` and **writes nothing**: a NULL takes the block's own end
+`0x4654FB` and leaves the countdown `main+0x39239` at −1, exactly as stock's fire leaves it.
+That is the rule the guard keeps: every reader of the countdown sees stock's own sequence. It
+could not be a reset to "one decrement before the fire": the countdown's readers include
+`0x46554F`, which runs `0x401360` for a local player only while the countdown is below 0 (and
+`main+0x3923B` bit 2 is clear) — `0x401360` zeroes the player's `+0xA4`/`+0xA8` and adds up each
+live unit's production [INFERRED: the economy's per-pass sum] — and the path that decrements it runs only while the respawn's trigger holds (`0x465154`'s options
+bit `0x40` clear and `0x490360` nonzero), so a 0 left behind when the trigger lapses would stop
+`0x401360` for good where stock leaves −1. As it is, while the trigger holds the countdown reloads
+at the controlled player's next pass (`0x46518B`, to 4) and fires six of its passes later (a pass
+is the player's `+0xF0` gate, every 30 ticks, `0x465083..0x465092`): the retry, placement search
+included, about 180 ticks on. On a NULL that never clears — the block full, or one of the type
+refusals above — stock faults; ours retries at every fire while the trigger holds.
+
+**The remaining exception** [rule 7]: a create that comes in a tick that freed every free slot of
+its player's block fails where stock would have taken one of those slots — a factory or builder
+then says "Unable to create any more units" (three of the four callers also sleep the order 300
+ticks), and a Deathmatch respawn waits for its countdown's next fire. Nothing faults that stock
+does not. `0x485F50`'s eleven callers pass arg 8 = 0 except the
 saved-game restore `0x48718E`, which runs before play.
 
 *Class: sim, fail closed, both builds.* Fifteen rows in the table: the three dispatch slots, the
@@ -510,7 +526,7 @@ calls and B3's `0x0B` bound), so the two builds are measured with one instrument
 heartbeat's `hits:` section: companions out and bytes, companions in, applied/refused per rule
 (the bystander's applies split into proven and undecidable), bare messages dropped, copies by
 kind (exact, a real lower bound, unknown), creates the hold moved, took by the fallback or
-failed, the players phase's retries, the oracle.
+failed, the Deathmatch respawns put off to their countdown's next fire, the oracle.
 
 *The tables.* Sized from the engine's own slot count, `u16 10·N + 1` as `0x4854A0` computes it
 (`0x4854E3..0x4854EF`), bounded by it at every index, and never freed: a level whose count exceeds
@@ -593,7 +609,7 @@ companion on the game thread), so a hit waits at least K ticks, not exactly K.
 *The fix round* (`c9f939b`, from the two high reviews; each finding verified against the
 disassembly first). The `0x2C`'s record is found by the block that holds the slot; the bystander
 refuses only what is provably stale; the hold decides once per create and falls back to a slot
-freed in an earlier tick; the players phase's untested create retries; the tables are sized from
+freed in an earlier tick; the Deathmatch respawn's untested create is tested; the tables are sized from
 the engine's count and never freed; the carried record reaches the stub in `eax`. Install: 190
 sites raised (fifteen B4 rows), `the simulation fixes' 65 sites` stock-limits; hitcheck 23 cases,
 all OK; `slots=15001` raised and `slots=2501` stock-limits (N = 250), one table each.
