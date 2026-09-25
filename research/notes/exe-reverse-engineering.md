@@ -332,7 +332,7 @@ made, or its page cannot be made writable. Each of the twenty-one, and why:
 | line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440`, the sight emitter `0x4825B0` (sixteen sites in 25 rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps, what a unit sees |
 | line of sight in local code: the cursor picker, the build cursor's site test, the feature helper, the radar rebuild's projectile dots, five particle leaves, positional sound (27 sites) | local | a cursor, a draw, a sound |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
-| wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`, with the sender's block), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B92B`/`0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48BA5E`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`, parsed from a zero-padded copy), the `0x2C` length's capture in the receive `0x453595`/`0x45361F` (which also keeps the pump's message pointer on the buffer), and the splitter's short messages `0x463939`/`0x463B33` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local). The diverged `0x0D` drop rides the weapon-ID row `0x49D280` above: evidence §8 classes it simulation, only when diverged |
+| wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`, with the sender's block), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B92B`/`0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48BA5E`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`, parsed from a zero-padded copy), the `0x2C`'s two nested unit references `0x44E0DE` (a move payload's target) and `0x48B574` (the round robin's carrier), the `0x2C` length's capture in the receive `0x453595`/`0x45361F` (which also keeps the pump's message pointer on the buffer), and the splitter's short messages `0x463939`/`0x463B33` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local). The diverged `0x0D` drop rides the weapon-ID row `0x49D280` above: evidence §8 classes it simulation, only when diverged |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -360,7 +360,8 @@ by a signed delta, an unbounded type, and a signed round-robin remainder:
 | `0x09` | `0x4553DA` (→ `0x4553E9`) | `CreateFromNetwork 0x4861D0(player [esp+0x14], rec)` `ret 8` | index `rec+3` (0 faults at `0x486237`), type `rec+1` (indexes the def table `main+0x1439B + type·0x249` at `0x48626F`) |
 | `0x0B` | `0x45540D` | `0x489CE0(rec)` `ret 4` | victim `rec+1`, attacker `rec+3` (`0x489CED..0x489D36`); a heal-kind writes HP at `0x489D80` |
 | `0x0C` | `0x45541C` | `0x4866D0(rec, 0)` `ret 8` | index `rec+1` (0 faults at `0x486706`), killer `rec+7` (`0x486753..0x486777`; 0 → NULL, handled) |
-| `0x2C` | `0x4553EE` | `0x48B920(player edi, pkt)` `ret 8` | dirty-entry delta (signed, `0x48B985`), type (`0x48B9AD`), the mover after a refused create (`0x48BA05`, TADR's 13 field faults at `0x48BA07`), the round-robin type (`0x48B40E`) and model object (`0x48B49C`), and the **signed** `idiv` remainder at `0x48BAAB`; the bit reader has no end, and the message's own `[16]` size is read and discarded (`0x48B944`) |
+| `0x2C` | `0x4553EE` | `0x48B920(player edi, pkt)` `ret 8` | dirty-entry delta (signed, `0x48B985`), type (`0x48B9AD`), the mover after a refused create (`0x48BA05`, TADR's 13 field faults at `0x48BA07`), the round-robin type (`0x48B40E`) and model object (`0x48B49C`), and the **signed** `idiv` remainder at `0x48BAAB`; the bit reader has no end, and the message's own `[16]` size is read and discarded (`0x48B944`). Two unit references ride inside it: a `0x4FD9E0`-class move payload's target (`0x44E0D0`, scaled at `0x44E0DE..0x44E0F9`) and the round robin's carrier (`0x48B56B`, scaled inside `0x48AB70` at `0x48ABAF..0x48ABC4`) — below |
+| `0x0A` | `0x4553FE` (→ `0x455408`) | `0x48AB70(rec)` `ret 4`, [attach and detach](#0x48ab70-attach-and-detach-one-unit-to-another-mapped-by-us) | child `rec+1` (`0x48AB8A..0x48AB9F`), parent `rec+3` (`0x48ABAF..0x48ABC4`), each 0 → NULL; the child is then read at `+0x110` (`0x48ABCF`) and the parent at `+0x110` (`0x48ABFD`) and written at `+0x8A` (`0x48AC82`). **Not bounded by B3** — found while bounding the round robin's carrier, which reaches the same scaling |
 
 **The player block** each `0x2C` path trusts: `[player+0x67]` = first slot, `[player+0x6B]` = last, and
 `10·[main+0x37EE6]+1` slots with slot 0 a sentinel. The block is assigned at `0x4858A6..0x4858E0` as
@@ -452,10 +453,52 @@ last check the engine reads at most **229 bits** (DISASSEMBLED, every path): the
 robin's tail after `0x48B40E` at most 211 (`0x48B4A9..0x48B6F2`); none loops on data it reads. The
 reader `0x415DC0` also loads the next dword whenever a read reaches the end of one
 (`0x415E0C..0x415E3E`; a read from bit 0 of a dword takes it alone, `0x415DF5`), so 29 + 3 + 8 bytes
-cover it and the padding is 48. **Not bounded**: `0x44E080` takes a `u16` unit index off the wire at
-`0x44E0C8..0x44E0D0` and, when it is not 0, hands `first + idx·0x118` to `0x489690` with no bound
-(`0x44E0DE..0x44E0FF`), which reads that record's `+0xA6` and links the reference into its `+0xA2`
-(a write) — reached from a dirty entry of a `0x4FD9E0`-class unit (DISASSEMBLED; open). The
+cover it and the padding is 48.
+
+**The unit references inside a `0x2C`** (DISASSEMBLED 2026-09-25, every decoder the dirty list and
+the round robin reach). Two of the values the stream carries are unit indices that address the array,
+each an optional reference whose 0 the engine itself takes as no unit; both are bounded:
+
+- **A move payload's target.** `0x44E080` (thiscall `ret 8`: `this`, a `+0x12` pointer, the
+  reader) is the payload parse of the `0x4FD9E0` move class, reached only from `0x490A10` (its
+  `[vt+0x24]`, called for a dirty entry at `0x48BA10`) at `0x490A4F` when the 2-bit selector read at
+  `0x490A30` is 1. Under flag bit 0 of the 8-bit `[this+8]` it reads `[16]` into `[this+0x10]` and
+  then `[16]` the target index (`0x44E0D0`); index 0 takes `0x44E0DA` (`xor eax,eax`), any other is
+  scaled to `first + idx·0x118` with no bound (`0x44E0DE..0x44E0F9`), and either is handed at
+  `0x44E0FC..0x44E0FF` to `0x489690`, the reference set (thiscall on the reference at `[this+0x16]`,
+  `ret 4`): it unlinks the reference from its old unit's `+0xA2` chain (`0x489690..0x4896BC`), then
+  links it into the new unit's — reading `+0xA6` and writing `+0xA2` — or, for NULL or a slot whose
+  `+0xA6` is 0, clears it (`0x4896BF..0x4896ED`). The owner's writer `0x44DDC0` sends the target's
+  own `+0xA8`, or 0 for none (`0x44DDEC..0x44DDF9`). `[this+0x10]` is not a unit index: the class
+  passes it as the piece to `0x43E060(out, unit, piece)` (`0x44E400`), and `0x43DEF0` bounds a piece
+  itself; the `0x44E190` constructor sets it `0xFFFF`. **Bounded at `0x44E0DE`**: an index past the
+  array takes `0x44E0DA`'s own NULL, counted (`target`).
+- **The round robin's carrier.** The round-robin entry `0x48B3F0` (`ret 8`, called once, at
+  `0x48BAC3`) is the full-state reader, `0x48B409..0x48B6F9`. After the type and the create it reads
+  `[16]` into `+0x108`, `[8]` ÷ 255 (the float at `0x4FD750`) into `+0x104` when it differs, `[8]` a state mask handed to
+  `UNITS_SetStateMask 0x48B090` (`0x48B50E`, `0x48B519`), `[2]` into `ebx` and one flag bit read in
+  place (`0x48B527..0x48B557`). With the flag set it reads a **15-bit carrier index** (`0x48B56B`) and
+  an 8-bit attach point (`0x415E60`, `0x48B579`) and applies the attach record `{+1 the unit's own
+  +0xA8, +3 the carrier, +5 the point, +6 ebx}` through `0x48AB70` (`0x48B58B`), which scales the
+  carrier with no bound; with it clear, a unit whose `+0x86` is set is detached (`0x48B59A..0x48B5C5`,
+  parent 0, point `0xFF`). The owner's writer sets the flag exactly when its unit has a carrier and
+  sends the carrier's own `+0xA8` in 15 bits and `+0xF9` in 8 (`0x48B2A4..0x48B332`). The flag-set
+  path returns after the attach (`0x48B590`); the flag-clear path goes on to `[32] × 3`, the
+  position, into `+0x6A` (`0x48B5CA..0x48B5E6`), `[16] × 3`, the body turn, into `+0x64`
+  (`0x48B5EB..0x48B60F`, stored `0x48B6C4..0x48B6E4`) and `[32]` into the mover's `+0x20`
+  (`0x48B6F2`) — all into the entry's own slot. **Bounded at `0x48B574`** (the record's
+  `mov [esp+0x17],ax`): a carrier past the array becomes 0, `0x48AB70`'s own no parent
+  (`0x48ABA9`), counted (`carrier`).
+- **The other decoders carry no unit index.** `0x44E9C0` (the `0x490A10` selector's 2): `[1]` flags,
+  `[32] × 6` and, under flag bit 0, `[16]` into `+0x24`, which the class's `0x44EA60` (vtable
+  `0x4FD3F8` `+0x20`) takes as a signed angle to step toward, by the def's `+0x1BA` over 8 — a
+  heading [INFERRED from `0x44EABA..0x44EB0F`], not an index. `0x44F5C0` (`0x4FD488`): one bit, a 2-bit count
+  into `+0x18`, and that many `[16]`,`[16]` pairs into `+0x0C..+0x16` — three pairs of room, and the
+  count cannot exceed 3. `0x490A10` itself: the 2-bit selector and a 2-bit value handed to
+  `0x43D210` (`0x490A7C..0x490A8C`). `0x44EFD0` reads nothing.
+
+The same scaling of both ids sits in `0x48AB70` for the `0x0A` receiver (the table above), and
+there nothing bounds them: the carrier's bound is in the round robin's tail, before the call. The
 diverged `0x0D` is dropped in `wpn_rx_fired` (`0x49D280`, [the
 weapon-ID receiver](#weapon-ids)) by resolving the shooter's own slot weapon and comparing it to
 `&Weapons[id]`: stock divides by the local slot weapon's `+0x68` (`0x49CE62..0x49CE6A`) and faults only
@@ -4850,18 +4893,27 @@ clear); a unit that is itself carrying something cannot be attached (`+0x8A` mus
 by itself nor by its carrier. A unit attached to a *piece* — the one on a factory pad — has the
 bit clear and is drawn by its carrier, merged through `0x4B90A0`.
 
-**Call sites (4).** `0x455403` in a large command dispatcher (every arm `jmp`s `0x455F50`);
+**Call sites (4).** `0x455403`, the network dispatcher's case for code `0x0A` (`0x4553FE`, entry 8
+of the jump table `0x455F84`, indexed by `code − 2`), which hands it the received record;
 `0x48AB62` from the wrapper `0x48AAC0..0x48AB6A` (`ret 0x10`, 30 callers; it tests the unit alive
-and sends the `0x0A` through `0x44FDB0`/`0x451DF0` before applying it); `0x48B58B` attaching with a real
-piece; and **`0x48B5C5` the detach** — child id from `+0xA8`, parent id `0`, point `0xFF`, guarded
-on `[edi+0x86] != 0`. Detaching is "attach to nobody", and it happens in one step, so there is no
-state in which a unit is still in the chain but positioned away from its carrier.
+and sends the `0x0A` through `0x44FDB0`/`0x451DF0` before applying it); and the two in the `0x2C`
+round robin's full-state entry `0x48B3F0` (called once, at `0x48BAC3`), which replicates a remote
+unit's carrier: `0x48B58B` attaches to the carrier the stream names (a 15-bit id read at
+`0x48B56B`, the point an 8-bit read at `0x48B579`, both by the stream's bit reader), and
+**`0x48B5C5` the detach** — child id from `+0xA8`, parent id `0`, point `0xFF`, guarded on
+`[edi+0x86] != 0` when the stream says the owner's unit has no carrier. Detaching is "attach to
+nobody", and it happens in one step, so there is no state in which a unit is still in the chain but
+positioned away from its carrier (DISASSEMBLED 2026-09-25).
+
+**Neither id is bounded here.** Both are scaled into the array as they come (`0x48AB8A..0x48AB9F`,
+`0x48ABAF..0x48ABC4`), so a `0x0A` from the wire can name any 16-bit id; the round robin's carrier
+is bounded before the call, in B3's stub at `0x48B574` ([the network
+receivers](#the-network-receivers-take-a-unit-index-straight-off-the-wire-0x09-0x0b-0x0c-0x2c-disassembled-2026-09-25)),
+and the `0x0A` receiver is not.
 
 **Negative results.** `0x47CB00` (no-previous-parent path) and `0x47CB40` (detach path) were not
 disassembled, and there is a **second `+0x8E` writer** in `0x47Cxxx` (`0x47CB26`, `0x47CB47`,
-`0x47CBA3`, `0x47CBB0`, `0x47CC13`, `0x47CD0F`, `0x47D0B9`) that has not been read. The enclosing
-function of `0x48B58B`/`0x48B5C5` was not delimited — `0x48B43C`'s `ret 8` is an early return
-inside it, not its end — so the COB opcode that reaches them is unidentified.
+`0x47CBA3`, `0x47CBB0`, `0x47CC13`, `0x47CD0F`, `0x47D0B9`) that has not been read.
 
 ## The mouse object, its event ring, and the two ways the cursor gets drawn — mapped by us
 

@@ -346,18 +346,22 @@ has the sites, the disassembly and the numbers):
   run with every counter at 0.
 
 **B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`, main merged at `74dc093`;
-commits `3c2cec1`, `b3c5a83`, `569031d`, `49c640c`, `5193986`; not landed; two high reviews, their
-findings acted on in `49c640c` and `5193986`). What was done, and where it deviates from the plan above:
+commits `3c2cec1`, `b3c5a83`, `569031d`, `49c640c`, `5193986`, and the `0x2C`'s nested unit
+references `b9a5692`; not landed; two high reviews, their findings acted on in `49c640c` and
+`5193986` — the nested references came after them and have had no review yet). What was done, and
+where it deviates from the plan above:
 
 - **No record-injection lever.** The plan's `tagpu_wirefuzz.on` is dropped. A malformed-message fix
   meets the plan's own evidence bar by disassembly (the identity everywhere else), so instead each
   bound is a **pure C predicate** over the record's field values and the engine's counts
-  (`wire_index_ok`, `wire_killer_ok`, `wire_type_ok`, `wire_delta_ok`, `wire_block_ok` in
-  `tagpu_patches.c`), and a test-only self-check, **`tagpu_wirecheck.on`**, evaluates each on a table
+  (`wire_index_ok`, `wire_killer_ok`, `wire_type_ok`, `wire_delta_ok`, `wire_ref_idx`,
+  `wire_block_ok` in `tagpu_patches.c`), and a test-only self-check, **`tagpu_wirecheck.on`**, evaluates each on a table
   of boundary values at attach and logs each verdict against the expected one — a unit test of our
   own code, not traffic. The compiler folds every case to a constant, so it checks the predicates'
   C and nothing more; the stubs and their drop paths rest on the disassembly. Measured 2026-09-25:
-  22/22 predicate cases OK.
+  22/22 predicate cases OK. The table has 28 since `b9a5692` (`wire_ref_idx`'s six); those six, and
+  two more at the raised limit (15 000), have been run only on the host, against the predicate
+  compiled from the source (8/8 OK), not yet through `tagpu_wirecheck.on` in the game.
 - **Every stub is a jmp at a clean 5-byte boundary**, verifies the whole stock span first
   (all-or-nothing: one non-stock span leaves the image untouched, `FIX_BYTES`), sets the registers
   stock sets, and continues at the same address; a failed bound goes to the receiver's own drop/exit.
@@ -448,6 +452,34 @@ findings acted on in `49c640c` and `5193986`). What was done, and where it devia
   `k` is a **rank**, not the record's index: `0x4858A6..0x4858E0` assigns blocks in the order of an
   insertion sort (`0x485657..0x4856C0`) that, in a network game, compares the records' DirectPlay ids
   `[rec+4]` — so record 2 can own the block at slot 6001.
+- **The `0x2C`'s nested unit references** (`b9a5692`). Two values inside the stream are unit indices
+  scaled into the array with no bound, each an optional reference whose 0 the engine itself takes as
+  no unit; an index past the array now takes that 0, counted, and a valid one leaves every register
+  and byte as stock does. One predicate serves both, `wire_ref_idx` (0 stays 0, `[1, max]` stays
+  itself, anything else becomes 0 — `wire_index_ok`'s range). By disassembly of every decoder the
+  dirty list and the round robin reach ([the engine
+  map](../exe-reverse-engineering.md#the-network-receivers-take-a-unit-index-straight-off-the-wire-0x09-0x0b-0x0c-0x2c-disassembled-2026-09-25)):
+  - **A move payload's target**, `0x44E080` (the `0x4FD9E0` class's parse, `0x490A10` → `0x490A4F`):
+    a `u16` at `0x44E0D0`, sent as the target's own `+0xA8` or 0 (`0x44DDC0`); stock sends 0 to
+    `0x44E0DA` (`xor eax,eax`) and scales any other at `0x44E0DE..0x44E0F9`, then hands it to the
+    reference set `0x489690`, which reads the unit's `+0xA6` and links into its `+0xA2`, or for NULL
+    clears the reference. The stub is at `0x44E0DE` (stock `8B 15 E8 1D 51 00`, `mov edx,[0x511DE8]`;
+    span `0x44E0D5..0x44E103` verified) and continues at `0x44E0FC` with the slot, or NULL (`target`).
+  - **The round robin's carrier**: under the full state's flag bit, a 15-bit index at `0x48B56B`, sent
+    as the carrier's own `+0xA8` (`0x48B2A4..0x48B332`), packed as the parent id of the attach record
+    `0x48AB70` applies at `0x48B58B` and scales there unbounded (`0x48ABAF..0x48ABC4`); its 0 is
+    `0x48AB70`'s own no parent (`0x48ABA9`), the detach. The stub replaces the record's
+    `mov [esp+0x17],ax` at `0x48B574` (stock `66 89 44 24 17`; span `0x48B55B..0x48B58F` verified),
+    writes the index or 0 (`carrier`) and continues at `0x48B579`. The skip-the-call alternative
+    was not taken: 0 is the engine's own no-unit value at both sites.
+  - **None needed**: `0x44E080`'s other `u16` (`[this+0x10]`) is a piece number `0x43DEF0` bounds
+    itself; `0x44E9C0` reads flags, six 32-bit values and a heading; `0x44F5C0` a bit, a 2-bit count
+    and that many coordinate pairs into three pairs of room; `0x490A10` a 2-bit selector and a 2-bit
+    value; `0x44EFD0` nothing; and the rest of the round robin's tail (`0x48B4A2..0x48B6FC`) names
+    no other unit: its fields go into the entry's own slot, its state mask to `UNITS_SetStateMask
+    0x48B090`.
+  - **Not covered**: the same scaling in `0x48AB70` is reached from the wire by the `0x0A` receiver
+    (the dispatcher's `0x4553FE`), whose child and parent ids nothing bounds — open below.
 - **After-create guards `0x48BA05` (S7) and `0x48B49C` (S10)** require the slot now holds the created
   type and, before the parse dereferences it, the dirty create's mover `[esi]` and its object `[[esi]]`,
   or the round robin's model object `[edi+0x9E]` (the Object3do, set at `0x485DCC`; `+0x9A` is the
@@ -468,7 +500,7 @@ findings acted on in `49c640c` and `5193986`). What was done, and where it devia
   create rr`): the evidence each bound ran on real traffic. `0x0B` and `0x0C` count only the
   dispatcher's call (return `0x455417`/`0x455428`), not the local damage and kill paths that share
   the function; `0x0D` counts a live shooter whose slot weapon matched. Drops: `09 blk 0b 0c kill 2c
-  len stale nocopy 0d split`; `pump` counts a re-pointed pump pointer.
+  len stale nocopy 0d split target carrier`; `pump` counts a re-pointed pump pointer.
 - **The B4/B5 oracles**: `morph` (a create onto a live slot whose type changes), `dcreate`
   (`CreateFromNetwork` called by the dirty list, returning to `0x48BA05`: a dirty entry whose type is
   not its slot's, the unit made from the entry rather than from its own `0x09` — into an empty slot,
@@ -640,13 +672,13 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   overload (`0x406789`) (evidence Part 4 §7).
 - Where stock acquisition stops aiming a flak gun upward. B1 measured that it never aimed above
   29.6°, far from the zero band, but did not disassemble the cut-off.
-- **A wire unit index B3 does not bound.** The move-class payload parser `0x44E080` (reached from a
-  dirty `0x2C` entry through `0x490A10`, the `0x4FD9E0` class) reads a `u16` unit index at
-  `0x44E0C8..0x44E0D0` and, when it is not 0, hands `first + idx·0x118` to `0x489690` unbounded
-  (`0x44E0DE..0x44E0FF`), which reads that record's `+0xA6` and writes its `+0xA2`. Found while
-  deriving the padding; a bound there is the same local shape as B3's others (`[1, max]`, else
-  NULL, which `0x44E0DA` already passes for index 0). Not built: the owner's call whether it rides
-  B3 or a later landing.
+- **The `0x0A` attach receiver is not bounded.** The dispatcher's case `0x4553FE` hands a wire
+  record to `0x48AB70`, which scales both its child id (`+1`, `0x48AB8A..0x48AB9F`) and its parent id
+  (`+3`, `0x48ABAF..0x48ABC4`) into the unit array unbounded, reads each one's `+0x110` and writes the
+  parent's `+0x8A`. Found while bounding the round robin's carrier (the move payload's target, found
+  deriving the padding, and that carrier are bounded in B3, `b9a5692`); a bound is the same local
+  shape (the child `[1, max]` else drop at `0x48AD2A`, the parent through `wire_ref_idx`). Not built:
+  outside that landing's brief, the owner's call whether it rides B3 or a later landing.
 
 ## Corrections this plan made
 
