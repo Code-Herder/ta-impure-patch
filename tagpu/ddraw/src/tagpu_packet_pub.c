@@ -93,6 +93,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_gui.h"
 #include "tagpu_native.h"   /* tagpu_native_owns_unit: the ownership answer, taken here */
+#include "tagpu_patches.h"   /* tagpu_wire_counters: the B3 wire oracles, DLL counters only */
 #include "tagpu_zoom.h"      /* tagpu_zoom_pub_window: the rect the tables cover */
 #include "tagpu_model3do.h"  /* TAGPU_PBMAXPIECE, to assert the packet's copy of it */
 #include "tagpu_gaf.h"       /* the GAF resolvers: pure reads, taken on THIS thread */
@@ -3452,6 +3453,16 @@ static void extra(char* buf, unsigned cap, double secs)
                   " | cursor: draws=%u owned=%u hidden=%u pub=%u skip=%u foreign=%u stuck=%u",
                   s_cCursorDraws, s_cCursorOwned, s_cCursorHidden,
                   s_cCursorPub, s_cCursorSkip, s_cCursorForeign, s_cCursorStuck);
+        n = 0;
+        while (n < cap && buf[n]) n++;
+        {   /* B3's wire-robustness oracles (sim-fixes.md B3, evidence §10): DLL counters,
+               no engine read — morph and recreate feed B5 (the ghost commander), ghost is
+               the engine's own sweep firing, an oracle for B4. */
+            unsigned morph = 0, recreate = 0, ghost = 0;
+            tagpu_wire_counters(&morph, &recreate, &ghost);
+            _snprintf(buf + n, cap > n ? cap - n : 0,
+                      " | wire: morph=%u recreate=%u ghost=%u", morph, recreate, ghost);
+        }
     }
     if (cap) buf[cap - 1] = 0;
     lastAll = all; lastIn = in;

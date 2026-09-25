@@ -49,4 +49,8 @@ void tagpu_weapons_init(void);                 /* DllMain: arm if the flag file 
 void tagpu_weapons_frame(unsigned int frame);  /* overlay: oracle trigger, every 5th frame */
 int  tagpu_weapons_armed(void);                /* the splices are installed, 0x49D364's with them */
 
+/* A slot's weapon pointer for the 0x0D wire check, or NULL when the slot is past
+   the unit's own count. Read-only: no clamp, no side-row allocation, no log. */
+char* tagpu_weapons_slot_weapon(char* unit, unsigned idx);
+
 #endif

@@ -2094,6 +2094,11 @@ static void wpn_note_in(volatile LONG* budget, const char* what, unsigned int a,
 }
 #define wpn_note(what, a, b) wpn_note_in(&s_wpnNotes, (what), (a), (b))
 
+/* B3's diverged-0x0D drop counter, incremented in wpn_rx_fired above and reported by
+   the wire-robustness block below (its own enginefix line). It is defined here so the
+   0x0D fix that owns wpn_rx_fired keeps counting it whichever build is compiled. */
+static unsigned int s_wireWpnxDrops;
+
 /* In place of `mov edx,[main]` at 0x42E468, after the loader read `ID` into eax (-1 when the
    section has none) and the section's name into edi. edx is the base the loader's own
    arithmetic adds id * 0x115 + 0x2CF3 to. A weapon outside the array is skipped: the stub leaves
@@ -2162,6 +2167,27 @@ static int __cdecl wpn_rx_fired(unsigned int* regs)
             wpn_note("a weapon-fired message names a slot past the unit's three; dropped",
                      pkt[0x23], shooter);
             return 0;
+        }
+        /* B3: the diverged-shooter drop (sim-fixes.md B3; evidence §8). Stock branches
+           the projectile on the PACKET's weapon flags but divides by the LOCAL slot
+           weapon's velocity (0x49CE6A), so a peer whose copy of the shooter is a live
+           unit of another type reads the all-zero slot weapon and faults #DE. Resolve
+           the shooter's own slot weapon (the extra-weapons accessor past slot 2, NULL
+           when the slot is past the unit's count) and drop when it is not &Weapons[id].
+           A bound on engine + wire data, and the identity between consistent peers: the
+           sender fills the packet from that same slot (0x49D742), so they never differ.
+           Only for a live shooter, since a dead one the receiver drops anyway. */
+        {
+            char* shooter_u = (char*)first + shooter * 0x118;
+            if ((*(const unsigned int*)(shooter_u + 0x110)) & 0x10000000) {
+                char* sw = tagpu_weapons_slot_weapon(shooter_u, pkt[0x23]);
+                if (sw != w) {
+                    s_wireWpnxDrops++;
+                    wpn_note("a weapon-fired message whose shooter slot holds another weapon; dropped",
+                             id, pkt[0x23]);
+                    return 0;
+                }
+            }
         }
     }
     regs[PR_ECX] = (unsigned int)(size_t)ta;
@@ -2608,6 +2634,626 @@ static int fix_weapon_ids(void)
 #else
     return FIX_LIMITS;
 #endif
+}
+
+/* ===== WIRE ROBUSTNESS: THE RECEIVERS' UNBOUNDED INDICES ==================================
+   Landing B3 of research/notes/tadr-port/sim-fixes.md; the disassembly is in
+   sim-fixes-evidence.md Part 1 §3 (the unbounded 0x09/0x0B/0x0C indices), §8 (the diverged
+   0x0D, handled in wpn_rx_fired above) and §9 (the 0x2C receiver's bounds), and §10 (the
+   oracle counters). CLASS: local — every bound is stock-exact for a well-formed message and
+   drops only a malformed or foreign one, so a peer without the fix computes the same shared
+   state. The identity is proven by disassembly, not by injected traffic (the plan's evidence
+   bar); tagpu_wirecheck.on unit-tests the predicates at attach.
+
+   Four network receivers index the unit array (stride 0x118, first at main+0x14357, last
+   inclusive at main+0x1435B) by a u16 taken straight off the wire, with no bound:
+     - 0x09 CreateFromNetwork 0x4861D0: index at rec+3, type at rec+1. Index 0 faults at
+       0x486237; an index past the array points esi beyond the array. Type indexes the def
+       table main+0x1439B + type*0x249 unbounded.
+     - 0x0C the destructor 0x4866D0: index at rec+1 (0 faults at 0x486706), killer at rec+7.
+     - 0x0B the damage receiver 0x489CE0: victim at rec+1, attacker at rec+3.
+     - 0x2C the stat/move receiver 0x48B920: a dirty entry's slot delta (signed, relative to
+       the player's block), its type, and a round-robin full-state entry whose type and remainder
+       (a SIGNED idiv, 0x48BAAB) are likewise unbounded, and whose player block pointer is
+       trusted.
+
+   THE FIX bounds each value before use. Every stub is entered by a jmp at a clean 5-byte
+   boundary, verifies the whole stock span first (all-or-nothing: one non-stock span leaves the
+   image untouched), sets the same registers stock would, and continues at the same address; a
+   failed bound goes to the receiver's own drop/exit. The paired 0x2C stubs carry the validated
+   type in a game-thread static (s_wire_2c_type / s_wire_rr_type), never in a register, so the
+   engine's register state downstream is exactly stock's. On a misframed 0x2C the parser is
+   pointed at a static zero dword and sent to the engine's own end-of-list 0x48BA28, so no
+   round-robin entry is parsed from a stream that cannot be re-framed. All of these run on the
+   game thread (the dispatcher 0x45486D). */
+
+/* pure predicates over field values and engine counts — no I/O, no engine reads; the
+   tagpu_wirecheck.on self-check exercises exactly these on boundary values */
+static int wire_index_ok(unsigned int idx, unsigned int max)  { return idx >= 1u && idx <= max; }
+static int wire_killer_ok(unsigned int idx, unsigned int max) { return idx == 0u || idx <= max; }
+static int wire_type_ok(unsigned int type, unsigned int count){ return type >= 1u && type < count; }
+static int wire_delta_ok(int delta, int n)                    { return delta >= 0 && delta < n; }
+
+/* A player's block is a run of N slots starting at begin + (1 + k*N)*0x118 for its player
+   index k < 10 (10*N+1 slots, slot 0 the sentinel; the assignment is 0x4858A6..0x4858E0), and
+   ending N-1 slots later, all inside [begin, arr_last]. A wild [player+0x67] fails this even
+   when a 16-bit delta could not, which is TADR's own worry (§9) answered by construction. */
+static int wire_block_ok(const char* first, const char* last, const char* begin,
+                         const char* arr_last, unsigned int n)
+{
+    long long off;
+    unsigned int slot;
+    if (!first || !begin || !last || n == 0u) return 0;
+    if (first < begin || first > arr_last || last > arr_last || last < first) return 0;
+    off = (long long)(first - begin);
+    if (off % 0x118 != 0) return 0;
+    slot = (unsigned int)(off / 0x118);
+    if (slot < 1u || (slot - 1u) % n != 0u || (slot - 1u) / n >= 10u) return 0;
+    return last == first + (long long)(n - 1u) * 0x118;
+}
+
+/* the B4/B5 oracle counters (§10): morph = a create onto an occupied slot whose type changes;
+   recreate = a create the 0x2C full-state path made (return address 0x48BA00 or 0x48B497)
+   rather than a plain 0x09; ghost = the engine's own ghost sweep firing (a round-robin type 0
+   over an occupied slot). Observe-only, reported on the heartbeat. */
+static unsigned int s_wireMorph, s_wireRecreate, s_wireGhost;
+/* drop counters, per message, in the enginefix line */
+static unsigned int s_wire09, s_wire0C, s_wire0Ckill, s_wire0B, s_wire2C;
+/* AI-seat observe: a wire 0x09 whose unit index is not inside its named owner's own block */
+static unsigned int s_wireBlockObs;
+/* the type carried from the type check to the after-create check, game thread only */
+static int s_wire_2c_type, s_wire_rr_type;
+/* the stop path's zero dword: a misframed 0x2C reader points here so its flag bit reads 0 */
+static const unsigned int s_wireZero;
+
+static volatile LONG s_wireNotes;
+static void wire_drop(unsigned int* c, const char* what, unsigned int a, unsigned int b)
+{
+    (*c)++;
+    if (InterlockedIncrement(&s_wireNotes) <= 64)
+        tagpu_logf("enginefix: wire robustness: %s (%u, %u)", what, a, b);
+}
+
+/* ---- the checkers, one per site; regs is the stub's pushad frame (PR_* order) ------------- */
+
+/* 0x09, branch at 0x4861F7. edi = rec, edx = player*0x14B, ebx = main. Continue -> 0x486220
+   (esi = the unit, [esp+0x20] = edx as stock stored it); drop -> 0x48622B. */
+static int __cdecl wire_s09(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* rec = (unsigned char*)(size_t)r[PR_EDI];
+    unsigned char* sp = WPN_ESP_JMP(r);
+    const char* first;
+    const char* last;
+    unsigned int max, count, idx, type;
+    if (!ta || !rec) return 0;
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    if (!first || last < first) return 0;
+    max   = (unsigned int)(last - first) / 0x118;
+    count = *(const unsigned int*)(ta + 0x1438F);
+    idx   = *(const unsigned short*)(rec + 3);
+    type  = *(const unsigned short*)(rec + 1);
+    if (!wire_index_ok(idx, max) || !wire_type_ok(type, count)) {
+        wire_drop(&s_wire09, "a unit-create names a unit past the array or a bad type; dropped",
+                  idx, type);
+        return 0;
+    }
+    {
+        char* slot = (char*)first + (size_t)idx * 0x118;
+        unsigned int ret = *(const unsigned int*)(sp + 0x1C);   /* CreateFromNetwork's caller */
+        if ((*(const unsigned int*)(slot + 0x110) & 0x10000000u) &&
+            *(const unsigned short*)(slot + 0xA6) &&
+            *(const unsigned short*)(slot + 0xA6) != (unsigned short)type)
+            s_wireMorph++;
+        if (ret == 0x0048BA00u || ret == 0x0048B497u) {
+            s_wireRecreate++;
+        } else if (ret == 0x004553E9u) {
+            const char* bfirst = *(const char* const*)(ta + 0x1BCA + r[PR_EDX]);  /* owner +0x67 */
+            const char* blast  = *(const char* const*)(ta + 0x1BCE + r[PR_EDX]);  /* owner +0x6B */
+            if (bfirst && blast && (slot < bfirst || slot > blast)) s_wireBlockObs++;
+        }
+        r[PR_ESI] = (unsigned int)(size_t)slot;
+        *(unsigned int*)(sp + 0x20) = r[PR_EDX];   /* stock's mov [esp+0x20],edx at 0x4861FE */
+    }
+    return 1;
+}
+
+/* 0x0C destructor, branch at 0x4866E5 (stock's push edi at 0x4866E4 is left in place, so the
+   drop's pop edi at 0x486E59 balances). ebx = rec, edx = main. Continue -> 0x486706 (esi = the
+   unit); drop -> 0x486E59. */
+static int __cdecl wire_s0c(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* rec = (unsigned char*)(size_t)r[PR_EBX];
+    const char* first;
+    const char* last;
+    unsigned int max, idx;
+    if (!ta || !rec) return 0;
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    if (!first || last < first) return 0;
+    max = (unsigned int)(last - first) / 0x118;
+    idx = *(const unsigned short*)(rec + 1);
+    if (!wire_index_ok(idx, max)) {
+        wire_drop(&s_wire0C, "a unit-destroy names a unit past the array; dropped", idx, max);
+        return 0;
+    }
+    r[PR_ESI] = (unsigned int)(size_t)((char*)first + (size_t)idx * 0x118);
+    return 1;
+}
+
+/* 0x0C's killer, branch at 0x486753. ebx = rec, esi = the victim, edx = main. Always continues
+   to 0x486778 (mov [esi+0xF0],eax) with eax = the killer pointer, 0 for index 0 or a bounded
+   miss (counted). */
+static int __cdecl wire_s0ckill(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* rec = (unsigned char*)(size_t)r[PR_EBX];
+    r[PR_EAX] = 0;
+    if (ta && rec) {
+        const char* first = *(const char* const*)(ta + 0x14357);
+        const char* last  = *(const char* const*)(ta + 0x1435B);
+        if (first && last >= first) {
+            unsigned int max = (unsigned int)(last - first) / 0x118;
+            unsigned int kidx = *(const unsigned short*)(rec + 7);
+            if (kidx == 0) {
+                r[PR_EAX] = 0;
+            } else if (!wire_killer_ok(kidx, max)) {
+                wire_drop(&s_wire0Ckill, "a unit-destroy names a killer past the array; made NULL",
+                          kidx, max);
+                r[PR_EAX] = 0;
+            } else {
+                r[PR_EAX] = (unsigned int)(size_t)((char*)first + (size_t)kidx * 0x118);
+            }
+        }
+    }
+    return 1;
+}
+
+/* 0x0B, branch at 0x489CED. edi = rec, edx = main. Continue -> 0x489D37 (esi = victim, 0 for
+   index 0 which stock then drops; ebx = attacker, 0 allowed); drop -> 0x489F93. */
+static int __cdecl wire_s0b(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* rec = (unsigned char*)(size_t)r[PR_EDI];
+    const char* first;
+    const char* last;
+    unsigned int max, vidx, aidx;
+    if (!ta || !rec) return 0;
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    if (!first || last < first) return 0;
+    max  = (unsigned int)(last - first) / 0x118;
+    vidx = *(const unsigned short*)(rec + 1);
+    aidx = *(const unsigned short*)(rec + 3);
+    if (vidx > max || aidx > max) {
+        wire_drop(&s_wire0B, "a damage message names a unit past the array; dropped",
+                  vidx > aidx ? vidx : aidx, max);
+        return 0;
+    }
+    r[PR_ESI] = vidx ? (unsigned int)(size_t)((char*)first + (size_t)vidx * 0x118) : 0;
+    r[PR_EBX] = aidx ? (unsigned int)(size_t)((char*)first + (size_t)aidx * 0x118) : 0;
+    return 1;
+}
+
+/* 0x2C entry, branch at 0x48B960. edi = player record, ebp = GameTime. Stock's
+   mov [edi+0x18],ebp runs regardless. Continue -> 0x48B96E; a block that is not a valid slot
+   run drops to 0x48BAC8, the engine's own clean 'no block' exit (which stock reaches when the
+   block pointer is 0). This one check covers the dirty loop, the block sweep 0x48BA28 and the
+   round-robin slot 0x48BAAD, all of which read [edi+0x67]/[edi+0x6B]. */
+static int __cdecl wire_s2c_entry(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    char* pr = (char*)(size_t)r[PR_EDI];
+    const char* arr_first;
+    const char* arr_last;
+    const char* bfirst;
+    const char* blast;
+    unsigned int n;
+    if (!pr) return 0;
+    *(unsigned int*)(pr + 0x18) = r[PR_EBP];
+    if (!ta) return 0;
+    arr_first = *(const char* const*)(ta + 0x14357);
+    arr_last  = *(const char* const*)(ta + 0x1435B);
+    n = *(const unsigned short*)(ta + 0x37EE6);
+    bfirst = *(const char* const*)(pr + 0x67);
+    blast  = *(const char* const*)(pr + 0x6B);
+    if (!wire_block_ok(bfirst, blast, arr_first, arr_last, n)) {
+        wire_drop(&s_wire2C, "a 0x2C names a player whose block is not a valid slot run; dropped",
+                  0, n);
+        return 0;
+    }
+    return 1;
+}
+
+/* 0x2C dirty-entry delta, branch at 0x48B985. edi = player record, ax = the signed delta.
+   Continue -> 0x48B99D (esi = the slot, eax = main); a delta outside [0, N) stops the stream. */
+static int __cdecl wire_s2c_delta(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    char* pr = (char*)(size_t)r[PR_EDI];
+    const char* bfirst;
+    int delta;
+    unsigned int n;
+    if (!ta || !pr) return 0;
+    bfirst = *(const char* const*)(pr + 0x67);
+    n = *(const unsigned short*)(ta + 0x37EE6);
+    delta = (int)(short)(unsigned short)(r[PR_EAX] & 0xFFFF);
+    if (!bfirst || !wire_delta_ok(delta, (int)n)) {
+        wire_drop(&s_wire2C, "a 0x2C dirty entry's slot delta is out of range; stream stopped",
+                  (unsigned int)delta, n);
+        return 0;
+    }
+    r[PR_ESI] = (unsigned int)(size_t)(bfirst + (size_t)delta * 0x118);
+    r[PR_EAX] = (unsigned int)(size_t)ta;
+    return 1;
+}
+
+/* 0x2C dirty-entry type, branch at 0x48B9AD. esi = the slot, ax = the type. Returns
+   0 stop, 1 create (-> 0x48B9B6), 2 the type matched the slot's own (-> 0x48BA05, parse in
+   place). A type outside [1, count) or one whose def has no move class stops the stream:
+   0x48BA05 would otherwise dereference a NULL mover (§9's 13 field faults at 0x48BA07). */
+static int __cdecl wire_s2c_type(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    char* slot = (char*)(size_t)r[PR_ESI];
+    const char* defs;
+    unsigned int count, type;
+    if (!ta || !slot) return 0;
+    count = *(const unsigned int*)(ta + 0x1438F);
+    type  = r[PR_EAX] & 0xFFFF;
+    if (!wire_type_ok(type, count)) {
+        wire_drop(&s_wire2C, "a 0x2C dirty entry's type is out of range; stream stopped",
+                  type, count);
+        return 0;
+    }
+    defs = *(const char* const*)(ta + 0x1439B);
+    if (!defs || *(const unsigned char*)(defs + (size_t)type * 0x249 + 0x22F) != 1) {
+        wire_drop(&s_wire2C, "a 0x2C dirty entry's type has no move class; stream stopped",
+                  type, count);
+        return 0;
+    }
+    s_wire_2c_type = (int)type;
+    return (*(const unsigned short*)(slot + 0xA6) == (unsigned short)type) ? 2 : 1;
+}
+
+/* 0x2C after the dirty create, branch at 0x48BA05. esi = the slot. Requires the slot now holds
+   the created type, [esi] != 0 and [[esi]] != 0 before the payload parse dereferences them.
+   Continue -> 0x48BA0D (eax = &reader at [esp+0x10], ecx = [[esi]]); a failed create stops. */
+static int __cdecl wire_s2c_after(unsigned int* r)
+{
+    unsigned char* sp = WPN_ESP_JMP(r);
+    char* slot = (char*)(size_t)r[PR_ESI];
+    const char* obj;
+    if (!slot || *(const unsigned short*)(slot + 0xA6) != (unsigned short)s_wire_2c_type) {
+        wire_drop(&s_wire2C, "a 0x2C dirty create did not take; stream stopped",
+                  (unsigned int)s_wire_2c_type, 0);
+        return 0;
+    }
+    obj = *(const char* const*)slot;
+    if (!obj || !*(const char* const*)obj) {
+        wire_drop(&s_wire2C, "a 0x2C dirty unit has no mover object; stream stopped", 0, 0);
+        return 0;
+    }
+    r[PR_EAX] = (unsigned int)(size_t)(sp + 0x10);
+    r[PR_ECX] = *(const unsigned int*)obj;
+    return 1;
+}
+
+/* 0x2C round-robin type, branch at 0x48B40E. esi = the reader, [esp+0x38] = the slot, ax = the
+   type, and ebp is zeroed as stock's xor ebp,ebp. Returns 0 stop (-> 0x48B435), 1 the engine's
+   own type-0 ghost path (-> 0x48B415), 2 create (-> 0x48B43F). A type 0 over an occupied slot
+   is the engine's ghost sweep and is counted, not dropped. */
+static int __cdecl wire_s2c_rr(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* sp = WPN_ESP_JMP(r);
+    const char* slot;
+    const char* defs;
+    unsigned int count, type;
+    if (!ta) return 0;
+    slot  = *(const char* const*)(sp + 0x38);
+    count = *(const unsigned int*)(ta + 0x1438F);
+    type  = r[PR_EAX] & 0xFFFF;
+    r[PR_EBP] = 0;
+    if (type == 0) {
+        if (slot && *(const unsigned short*)(slot + 0xA6)) s_wireGhost++;
+        return 1;
+    }
+    if (!wire_type_ok(type, count)) {
+        wire_drop(&s_wire2C, "a 0x2C round-robin type is out of range; entry stopped", type, count);
+        return 0;
+    }
+    defs = *(const char* const*)(ta + 0x1439B);
+    if (!defs || *(const unsigned char*)(defs + (size_t)type * 0x249 + 0x22F) != 1) {
+        wire_drop(&s_wire2C, "a 0x2C round-robin type has no move class; entry stopped", type, count);
+        return 0;
+    }
+    s_wire_rr_type = (int)type;
+    return 2;
+}
+
+/* 0x2C after the round-robin create, branch at 0x48B49C. edi = the slot. Requires the slot
+   holds the created type and [edi+0x9E] != 0 (0x48B4A6 dereferences it). Continue -> 0x48B4A2
+   (eax = [edi+0x9E]); otherwise stop -> 0x48B435. */
+static int __cdecl wire_s2c_rr_after(unsigned int* r)
+{
+    char* slot = (char*)(size_t)r[PR_EDI];
+    const char* obj;
+    if (!slot || *(const unsigned short*)(slot + 0xA6) != (unsigned short)s_wire_rr_type) {
+        wire_drop(&s_wire2C, "a 0x2C round-robin create did not take; entry stopped",
+                  (unsigned int)s_wire_rr_type, 0);
+        return 0;
+    }
+    obj = *(const char* const*)(slot + 0x9E);
+    if (!obj) {
+        wire_drop(&s_wire2C, "a 0x2C round-robin unit has no script object; entry stopped", 0, 0);
+        return 0;
+    }
+    r[PR_EAX] = (unsigned int)(size_t)obj;
+    return 1;
+}
+
+/* ---- stub emission into B3's own RWX page ------------------------------------------------ */
+
+static unsigned char* s_wireCode;
+static unsigned int   s_wireCodeUsed;
+
+static unsigned char* wire_code(unsigned int n)
+{
+    unsigned char* p;
+    if (!s_wireCode)
+        s_wireCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
+                                                  PAGE_EXECUTE_READWRITE);
+    if (!s_wireCode || s_wireCodeUsed + n > 0x1000) return NULL;
+    p = s_wireCode + s_wireCodeUsed;
+    s_wireCodeUsed += (n + 15u) & ~15u;
+    return p;
+}
+
+/* pushad; push esp; call fn; add esp,4 — the shared prologue; eax holds fn's return */
+static unsigned char* wire_pro(unsigned char* p, int (__cdecl *fn)(unsigned int*))
+{
+    *p++ = 0x60;
+    *p++ = 0x54;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)fn); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    return p;
+}
+
+/* two-way: test before popad (flags survive it), jz drop else jmp cont */
+static unsigned char* wire_emit2(unsigned char* p, int (__cdecl *fn)(unsigned int*),
+                                 unsigned int drop, unsigned int cont)
+{
+    p = wire_pro(p, fn);
+    *p++ = 0x85; *p++ = 0xC0;                                  /* test eax,eax   */
+    *p++ = 0x61;                                               /* popad          */
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, drop); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, cont); p += 4;
+    return p;
+}
+
+/* one-way: always continue (the killer's bound never drops) */
+static unsigned char* wire_emit1(unsigned char* p, int (__cdecl *fn)(unsigned int*),
+                                 unsigned int cont)
+{
+    p = wire_pro(p, fn);
+    *p++ = 0x61;                                               /* popad          */
+    *p++ = 0xE9; tagpu_detour_rel(p, cont); p += 4;
+    return p;
+}
+
+/* three-way: cmp eax,1 before popad, then jb t0 / je t1 / jmp t2 (0/1/2) */
+static unsigned char* wire_emit3(unsigned char* p, int (__cdecl *fn)(unsigned int*),
+                                 unsigned int t0, unsigned int t1, unsigned int t2)
+{
+    p = wire_pro(p, fn);
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x01;                     /* cmp eax,1      */
+    *p++ = 0x61;                                               /* popad          */
+    *p++ = 0x0F; *p++ = 0x82; tagpu_detour_rel(p, t0); p += 4; /* jb  t0 (==0)   */
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, t1); p += 4; /* je  t1 (==1)   */
+    *p++ = 0xE9; tagpu_detour_rel(p, t2); p += 4;              /* jmp t2 (==2)   */
+    return p;
+}
+
+/* the 0x2C stop stub: registers already restored, esp is the receiver's own; point the reader
+   (buf,dword,bit at [esp+0x10..0x18]) at s_wireZero and jump to the engine's end-of-list. */
+static unsigned char* wire_emit_stop(unsigned char* p)
+{
+    unsigned int z = (unsigned int)(size_t)&s_wireZero;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10; memcpy(p, &z, 4); p += 4;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x14; memset(p, 0, 4); p += 4;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x18; memset(p, 0, 4); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0048BA28u); p += 4;
+    return p;
+}
+
+/* ---- install: verify every stock span, build stubs, write the branches all-or-nothing ---- */
+
+typedef struct WIRESPAN { unsigned int va; int n; const unsigned char* stock; } WIRESPAN;
+
+static int wire_span_ok(const WIRESPAN* s)
+{
+    return memcmp((const void*)(size_t)s->va, s->stock, (size_t)s->n) == 0;
+}
+
+/* E9/E8 rel32 to target at va, NOP-padded to n bytes */
+static void wire_branch(unsigned char out[8], int n, unsigned char op, unsigned int va,
+                        unsigned int target)
+{
+    unsigned int rel = target - (va + 5u);
+    memset(out, 0x90, (size_t)n);
+    out[0] = op;
+    memcpy(out + 1, &rel, 4);
+}
+
+static int fix_wire_bounds(void)
+{
+    /* the whole stock span of each site, verified before any write */
+    static const unsigned char k09[41]  = {
+        0x66,0x8B,0x47,0x03,0x66,0x85,0xC0,0x89,0x54,0x24,0x20,0x75,0x04,0x33,0xF6,0xEB,
+        0x18,0x25,0xFF,0xFF,0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8B,0x57,
+        0x43,0x01,0x00,0x8D,0x04,0x80,0x8D,0x34,0xC1 };
+    static const unsigned char k0c[38]  = {
+        0x66,0x8B,0x43,0x01,0x57,0x66,0x85,0xC0,0x75,0x04,0x33,0xF6,0xEB,0x18,0x25,0xFF,
+        0xFF,0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8A,0x57,0x43,0x01,0x00,
+        0x8D,0x04,0x80,0x8D,0x34,0xC1 };
+    static const unsigned char k0ck[37] = {
+        0x66,0x8B,0x43,0x07,0x66,0x85,0xC0,0x75,0x04,0x33,0xC0,0xEB,0x18,0x25,0xFF,0xFF,
+        0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8A,0x57,0x43,0x01,0x00,0x8D,
+        0x04,0x80,0x8D,0x04,0xC1 };
+    static const unsigned char k0b[74]  = {
+        0x66,0x8B,0x47,0x01,0x66,0x85,0xC0,0x75,0x04,0x33,0xF6,0xEB,0x18,0x25,0xFF,0xFF,
+        0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8A,0x57,0x43,0x01,0x00,0x8D,
+        0x04,0x80,0x8D,0x34,0xC1,0x66,0x8B,0x47,0x03,0x66,0x85,0xC0,0x75,0x04,0x33,0xDB,
+        0xEB,0x18,0x25,0xFF,0xFF,0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8B,0x8A,
+        0x57,0x43,0x01,0x00,0x8D,0x04,0x80,0x8D,0x1C,0xC1 };
+    static const unsigned char ken[14] = {
+        0x8B,0x47,0x67,0x89,0x6F,0x18,0x3B,0xC6,0x0F,0x84,0x5A,0x01,0x00,0x00 };
+    static const unsigned char kdl[24] = {
+        0x0F,0xBF,0xC8,0x8B,0x57,0x67,0x8B,0xC1,0xC1,0xE0,0x03,0x2B,0xC1,0x8D,0x0C,0x80,
+        0xA1,0xE8,0x1D,0x51,0x00,0x8D,0x34,0xCA };
+    static const unsigned char kty[9]  = { 0x66,0x39,0x86,0xA6,0x00,0x00,0x00,0x74,0x4F };
+    static const unsigned char kaf[8]  = { 0x8B,0x06,0x8B,0x08,0x8D,0x44,0x24,0x10 };
+    static const unsigned char krem[14]= {
+        0x33,0xC9,0x8B,0xC5,0x66,0x8B,0x8A,0xE6,0x7E,0x03,0x00,0x99,0xF7,0xF9 };
+    static const unsigned char krr[7]  = { 0x33,0xED,0x66,0x3B,0xC5,0x75,0x2A };
+    static const unsigned char krra[6] = { 0x8B,0x87,0x9E,0x00,0x00,0x00 };
+    static const WIRESPAN span[13] = {
+        { 0x004861F7, 41, k09 }, { 0x004866E0, 38, k0c }, { 0x00486753, 37, k0ck },
+        { 0x00489CED, 74, k0b }, { 0x0048B960, 14, ken }, { 0x0048B985, 24, kdl },
+        { 0x0048B9AD,  9, kty }, { 0x0048BA05,  8, kaf }, { 0x0048BA9F, 14, krem },
+        { 0x0048B40E,  7, krr }, { 0x0048B49C,  6, krra },
+    };
+    /* S8, the unsigned remainder, patched in place (movzx ecx,[edx+0x37EE6]; mov eax,ebp;
+       xor edx,edx; div ecx; nop) */
+    static const unsigned char remNow[14] = {
+        0x0F,0xB7,0x8A,0xE6,0x7E,0x03,0x00,0x8B,0xC5,0x33,0xD2,0xF7,0xF1,0x90 };
+
+    unsigned char* stop;
+    unsigned char* a09;
+    unsigned char* a0c;
+    unsigned char* a0ck;
+    unsigned char* a0b;
+    unsigned char* aen;
+    unsigned char* adl;
+    unsigned char* aty;
+    unsigned char* aaf;
+    unsigned char* arr;
+    unsigned char* arra;
+    unsigned char b[8];
+    int i, done;
+    struct { unsigned int va; unsigned char now[14]; int n; } wr[12];
+    int nwr = 0;
+
+    for (i = 0; i < 11; i++)
+        if (!wire_span_ok(&span[i])) {
+            tagpu_logf("enginefix: wire robustness SKIPPED (%08X not stock)", span[i].va);
+            return FIX_BYTES;
+        }
+    if (memcmp((const void*)0x0048BA9Fu, krem, 14) != 0) {
+        tagpu_logf("enginefix: wire robustness SKIPPED (0048BA9F not stock)");
+        return FIX_BYTES;
+    }
+
+    if (!(stop = wire_code(28)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit_stop(stop);
+    if (!(a09  = wire_code(32)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit2(a09, wire_s09, 0x0048622Bu, 0x00486220u);
+    if (!(a0c  = wire_code(32)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit2(a0c, wire_s0c, 0x00486E59u, 0x00486706u);
+    if (!(a0ck = wire_code(24)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit1(a0ck, wire_s0ckill, 0x00486778u);
+    if (!(a0b  = wire_code(32)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit2(a0b, wire_s0b, 0x00489F93u, 0x00489D37u);
+    if (!(aen  = wire_code(32)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit2(aen, wire_s2c_entry, 0x0048BAC8u, 0x0048B96Eu);
+    if (!(adl  = wire_code(32)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit2(adl, wire_s2c_delta, (unsigned int)(size_t)stop, 0x0048B99Du);
+    if (!(aty  = wire_code(36)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit3(aty, wire_s2c_type, (unsigned int)(size_t)stop, 0x0048B9B6u, 0x0048BA05u);
+    if (!(aaf  = wire_code(32)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit2(aaf, wire_s2c_after, (unsigned int)(size_t)stop, 0x0048BA0Du);
+    if (!(arr  = wire_code(36)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit3(arr, wire_s2c_rr, 0x0048B435u, 0x0048B415u, 0x0048B43Fu);
+    if (!(arra = wire_code(32)))                              { lim_no_stub(); return FIX_TABLE; }
+    wire_emit2(arra, wire_s2c_rr_after, 0x0048B435u, 0x0048B4A2u);
+
+    /* the branch each site takes, at its clean 5-byte boundary */
+    wire_branch(b, 5, 0xE9, 0x004861F7, (unsigned int)(size_t)a09);  wr[nwr].va=0x004861F7; memcpy(wr[nwr].now,b,5); wr[nwr].n=5; nwr++;
+    wire_branch(b, 5, 0xE9, 0x004866E5, (unsigned int)(size_t)a0c);  wr[nwr].va=0x004866E5; memcpy(wr[nwr].now,b,5); wr[nwr].n=5; nwr++;
+    wire_branch(b, 5, 0xE9, 0x00486753, (unsigned int)(size_t)a0ck); wr[nwr].va=0x00486753; memcpy(wr[nwr].now,b,5); wr[nwr].n=5; nwr++;
+    wire_branch(b, 5, 0xE9, 0x00489CED, (unsigned int)(size_t)a0b);  wr[nwr].va=0x00489CED; memcpy(wr[nwr].now,b,5); wr[nwr].n=5; nwr++;
+    wire_branch(b, 5, 0xE9, 0x0048B960, (unsigned int)(size_t)aen);  wr[nwr].va=0x0048B960; memcpy(wr[nwr].now,b,5); wr[nwr].n=5; nwr++;
+    wire_branch(b, 5, 0xE9, 0x0048B985, (unsigned int)(size_t)adl);  wr[nwr].va=0x0048B985; memcpy(wr[nwr].now,b,5); wr[nwr].n=5; nwr++;
+    wire_branch(b, 5, 0xE9, 0x0048B9AD, (unsigned int)(size_t)aty);  wr[nwr].va=0x0048B9AD; memcpy(wr[nwr].now,b,5); wr[nwr].n=5; nwr++;
+    wire_branch(b, 5, 0xE9, 0x0048BA05, (unsigned int)(size_t)aaf);  wr[nwr].va=0x0048BA05; memcpy(wr[nwr].now,b,5); wr[nwr].n=5; nwr++;
+    wire_branch(b, 5, 0xE9, 0x0048B40E, (unsigned int)(size_t)arr);  wr[nwr].va=0x0048B40E; memcpy(wr[nwr].now,b,5); wr[nwr].n=5; nwr++;
+    wire_branch(b, 6, 0xE9, 0x0048B49C, (unsigned int)(size_t)arra); wr[nwr].va=0x0048B49C; memcpy(wr[nwr].now,b,6); wr[nwr].n=6; nwr++;
+    memcpy(wr[nwr].now, remNow, 14); wr[nwr].va = 0x0048BA9F; wr[nwr].n = 14; nwr++;   /* S8 */
+
+    for (done = 0; done < nwr; done++)
+        if (!tagpu_detour_write(wr[done].va, wr[done].now, wr[done].n)) break;
+    if (done == nwr) return FIX_ARMED;
+    while (done-- > 0) {                                       /* one failed: revert stock */
+        const WIRESPAN* s = 0;
+        int j;
+        for (j = 0; j < 11; j++) if (span[j].va == wr[done].va) { s = &span[j]; break; }
+        if (wr[done].va == 0x0048BA9Fu) tagpu_detour_write(0x0048BA9Fu, krem, 14);
+        else if (wr[done].va == 0x004866E5u) { unsigned char o[5]; memcpy(o, k0c + 5, 5); tagpu_detour_write(0x004866E5u, o, 5); }
+        else if (s) tagpu_detour_write(s->va, s->stock, wr[done].n);
+    }
+    return FIX_PROTECT;
+}
+
+/* the heartbeat's three oracle counters (§10), read by tagpu_packet_pub.c's extra() */
+void tagpu_wire_counters(unsigned int* morph, unsigned int* recreate, unsigned int* ghost)
+{
+    if (morph)    *morph    = s_wireMorph;
+    if (recreate) *recreate = s_wireRecreate;
+    if (ghost)    *ghost    = s_wireGhost;
+}
+
+/* tagpu_wirecheck.on: a unit test of the predicates on boundary values (0, the last valid
+   index, one past, the receivers' own sentinels), each verdict logged against the expected —
+   our own code checked at attach, not traffic. */
+static void wire_selfcheck(void)
+{
+    struct { const char* name; int got; int want; } t[16];
+    int n = 0, bad = 0, i;
+    t[n].name = "index 0 rejected";        t[n].got = wire_index_ok(0, 100);      t[n].want = 0; n++;
+    t[n].name = "index 1 accepted";        t[n].got = wire_index_ok(1, 100);      t[n].want = 1; n++;
+    t[n].name = "index max accepted";      t[n].got = wire_index_ok(100, 100);    t[n].want = 1; n++;
+    t[n].name = "index max+1 rejected";    t[n].got = wire_index_ok(101, 100);    t[n].want = 0; n++;
+    t[n].name = "killer 0 accepted";       t[n].got = wire_killer_ok(0, 100);     t[n].want = 1; n++;
+    t[n].name = "killer max accepted";     t[n].got = wire_killer_ok(100, 100);   t[n].want = 1; n++;
+    t[n].name = "killer max+1 rejected";   t[n].got = wire_killer_ok(101, 100);   t[n].want = 0; n++;
+    t[n].name = "type 0 rejected";         t[n].got = wire_type_ok(0, 50);        t[n].want = 0; n++;
+    t[n].name = "type 1 accepted";         t[n].got = wire_type_ok(1, 50);        t[n].want = 1; n++;
+    t[n].name = "type count-1 accepted";   t[n].got = wire_type_ok(49, 50);       t[n].want = 1; n++;
+    t[n].name = "type count rejected";     t[n].got = wire_type_ok(50, 50);       t[n].want = 0; n++;
+    t[n].name = "delta -1 rejected";       t[n].got = wire_delta_ok(-1, 500);     t[n].want = 0; n++;
+    t[n].name = "delta 0 accepted";        t[n].got = wire_delta_ok(0, 500);      t[n].want = 1; n++;
+    t[n].name = "delta N-1 accepted";      t[n].got = wire_delta_ok(499, 500);    t[n].want = 1; n++;
+    t[n].name = "delta N rejected";        t[n].got = wire_delta_ok(500, 500);    t[n].want = 0; n++;
+    {   /* the block-shape predicate on a synthetic array: begin, N=4, two players */
+        char base[1];
+        const char* begin = base;
+        const char* arr_last = begin + (4 * 2 + 1 - 1) * 0x118;   /* 10*N+1 shrunk to 2 players */
+        const char* p0 = begin + 1 * 0x118;                       /* player 0: slot 1 */
+        const char* p0l = p0 + 3 * 0x118;
+        int ok = wire_block_ok(p0, p0l, begin, arr_last, 4) &&
+                 !wire_block_ok(begin, begin + 3 * 0x118, begin, arr_last, 4) &&   /* slot 0 */
+                 !wire_block_ok(p0 + 1, p0l, begin, arr_last, 4);                  /* unaligned */
+        t[n].name = "block shape ok/rejects"; t[n].got = ok; t[n].want = 1; n++;
+    }
+    for (i = 0; i < n; i++) {
+        if (t[i].got != t[i].want) bad++;
+        tagpu_logf("enginefix: wirecheck %-24s got=%d want=%d %s",
+                   t[i].name, t[i].got, t[i].want, t[i].got == t[i].want ? "OK" : "FAIL");
+    }
+    tagpu_logf("enginefix: wirecheck %d predicate cases, %d failed", n, bad);
 }
 
 /* ===== DAMAGE: THE VICTIM CAPS, FLAK'S DIVIDES, THE MAP'S EDGES ============================
@@ -3775,8 +4421,12 @@ static void patch_engine_defects(void)
     int los  = fix_los_shear();
     int losl = fix_los_local();
     int pview = fix_projectile_view();
+    int wire = fix_wire_bounds();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
+
+    if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES)
+        wire_selfcheck();
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
@@ -3820,6 +4470,21 @@ static void patch_engine_defects(void)
               fix_state(los), fix_state(losl), fix_state(pview),
               (unsigned int)(size_t)s_losOwnRow, fn, s_fixCodeUsed,
               (unsigned int)(size_t)s_fixCode);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: wire robustness %s: 0x09 create (0x4861F7), 0x0C destroy + killer "
+              "(0x4866E5 0x486753), 0x0B damage (0x489CED), 0x2C stat/move -- block, delta, type, "
+              "move class, after-create, and the unsigned round-robin remainder (0x48B960 0x48B985 "
+              "0x48B9AD 0x48BA05 0x48B40E 0x48B49C 0x48BA9F); the diverged 0x0D dropped in "
+              "wpn_rx_fired (0x49D280). Drops: 0x09=%u 0x0C=%u killer=%u 0x0B=%u 0x2C=%u 0x0D=%u. "
+              "Oracles (heartbeat): morph=%u recreate=%u ghost=%u; wire 0x09 out of owner block=%u. "
+              "Stubs: %u of 4096 bytes at 0x%08X",
+              fix_state(wire),
+              s_wire09, s_wire0C, s_wire0Ckill, s_wire0B, s_wire2C, s_wireWpnxDrops,
+              s_wireMorph, s_wireRecreate, s_wireGhost, s_wireBlockObs,
+              s_wireCodeUsed, (unsigned int)(size_t)s_wireCode);
     b[sizeof b - 1] = 0;
     plog(b);
 }

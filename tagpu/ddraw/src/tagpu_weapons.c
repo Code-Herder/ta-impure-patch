@@ -286,6 +286,23 @@ static int slot_index(char* unit, WSlot* slot)
     return 0;
 }
 
+/* The 0x0D wire check's read-only accessor (tagpu_patches.c wpn_rx_fired): the
+   slot's WEAPON pointer, or NULL when the slot is out of the unit's range — no
+   clamp, no VIOLATION, no side-row allocation. It never widens the wire check
+   into a state change: a NULL answer only makes the receiver drop the packet.
+   Armed or not: with the module disarmed a unit has three slots, so idx 0..2
+   answer from the inline slots and idx >= 3 answers NULL. */
+char* tagpu_weapons_slot_weapon(char* unit, unsigned idx)
+{
+    WSlot* row;
+    if (!unit) return 0;
+    if (idx < 3u) return ((WSlot*)(unit + 4 + idx * SLOT_STRIDE))->weapon;
+    if (!g_armed || idx >= (unsigned)wpn_count(unit) || idx >= WPN_CAP) return 0;
+    row = side_row(unit);
+    if (!row) return 0;
+    return row[idx - 3].weapon;
+}
+
 /* =========================================================================
    5. Script names — stock strings for 0-2, Spring's names beyond
    ========================================================================= */
