@@ -1240,7 +1240,7 @@ is needed for keys that name another file's content** (§3).
   (weapon4..N), and at menu time, `cb_crc_weapons` at `0x42B004`, which folds them into
   `CRC_weapons` **only while the module is armed**.
 - It keys `g_def[]` by def index, and `def_rec()` answers NULL when the stored def pointer differs.
-  The pointer alone cannot tell two games apart (the def array comes back at the same address, and
+  The pointer alone cannot tell two games apart (the def array can come back at the same address, and
   the loader skips a slot with no FBI), so the records are also emptied at the unit-data load's
   entry `0x42D2E0` (the engine map's `0x42D2E0` section).
 - It hooks the def copy `0x42B370` to carry records with their type.

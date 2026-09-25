@@ -2249,9 +2249,20 @@ when `runLevel & level` is non-zero (`0x4B79CD..0x4B79D9`), and otherwise a fall
 here — `PrintWeights`, `Profile`, `Reload`, `ReloadAIProfiles`, `Save` — is level 4, so it needs
 the SoftwareDebugMode bit. **`Reload`** is `{0x5021A8 "Reload", 0x417490, 4}` at `0x5020C0`: with
 an argument (`[argv+0xD0] > 1`) it resolves the unit name (`0x488B10`), calls `0x486E80(type)`
-`[not read]` and then the one-type reload `0x42D1F0(type)` (*The level's unit-data load*,
-below). Measured: `+reload armllt` without the bit left the type's record as it was (its
-ghost mask did not recompute); with it, `+reload ppllt` re-ran the FBI loader.
+and then the one-type reload `0x42D1F0(type)` (*The level's unit-data load*, below).
+`0x486E80` (one caller, `0x4174B8`) kills every unit of that type before the reload: it walks
+the unit array (`main+0x14357..+0x1435B`, stride `0x118`) and calls `Send_UnitDeath
+0x4864B0(unit, 8)` for each unit whose type index `[unit+0xA6]` equals the argument
+(`0x486EA6..0x486EBF`); a type of 0 returns at once (`0x486E99`). So no live unit of the type
+survives into the reload, and every unit that runs the reloaded COB is created after it.
+`0x486ED0` right after it is the same walk with the test `[unit+0xA6] != 0` — every live unit
+— and its one caller is the console command **`Kill`** (`{0x502244 "Kill", 0x4164B0, 4}` at
+`0x501FE8`), which with no argument calls it and then `0x4904B0` on `main+0x391ED`
+(`0x4164BD..0x4164CD`). Measured: `+reload armllt` without the bit left the type's record as it
+was (its ghost mask did not recompute); with it, `+reload ppllt` re-ran the FBI loader.
+**MEASURED 2026-09-25**: `+reload armllt10` with two `ARMLLT10` towers, an `ARMSOLAR` and three
+`CORSOLAR`s in play removed both towers and nothing else; without the `ARMSOLAR` the ARM side
+had no unit left and the game went to `ENDMSN.GUI`.
 
 ## Mapped internal data structures
 
@@ -8292,7 +8303,12 @@ FBI loader.
   the **GAME thread**, mid-play. The freed COB is reallocated at once, so it can come back at
   the same address: a cache keyed on the COB pointer alone would not see the reload.
   **MEASURED 2026-09-25**: `+reload ppllt` with SoftwareDebugMode `0x2` set re-ran the FBI loader
-  (`tagpu_datakeys`' reader logged it a second time), no crash.
+  (`tagpu_datakeys`' reader logged it a second time), no crash. The console kills every unit of
+  the type first (`0x486E80`, *Built-in cheat/console command surface*), so the units that run
+  the new COB are all created after it. **MEASURED 2026-09-25** with `tagpu_weapons` armed: after
+  `+reload armllt10`, two `ARMLLT10`s spawned into the same game re-asked their per-type piece
+  caches (`AimFromWeaponN`/`QueryWeaponN` = pieces 2 and 1 on slots 3–9, as before the reload)
+  and launched from slots 0, 3 and 4; `violation`, `mismatch` and `cob_full` stayed 0.
 - **A table keyed on the def pointer alone can outlive its game.** The teardown frees the def
   array (`0x42DCCB`) and the menu-time loader `0x42A8D0` allocates it again from the same count
   before the next game (`0x42AA8A`), so the address can repeat; and the FBI loader can stop before it reads anything (the open at
@@ -8303,11 +8319,14 @@ FBI loader.
   resets the slot's record with a fresh serial before the open, so the read site fills only a
   record its own call reset. `tagpu_weapons.c` observes `0x42D2E0`'s entry too (the two observers
   chain through `tagpu_detour_observe`) and empties its def records there, so a slot this load
-  did not write reads as stock; it does not reset at the loader's entry, because a `Reload`
-  whose FBI fails to open leaves the def's own `weapon1..3` as they were, and the record for
-  `weapon4..N` stays consistent with them. Every def copy of the load (`0x42D501`, and the sorts
-  `0x432D40` / `0x432FB0`, whose only callers are `0x42D573..0x42D590` and themselves) runs after
-  that entry and before the FBI loop (`0x42D6B6`). **MEASURED 2026-09-25**: two skirmishes in one
+  did not write reads as stock. At the loader's entry it forgets only the record's piece caches
+  (the COB's `AimFromWeaponN` / `QueryWeaponN` answers): a `Reload` whose FBI fails to open
+  leaves the def's own `weapon1..3` as they were, so the record's weapons stay consistent with
+  them, but it replaces the COB anyway (`0x42D275` / `0x42D294`). Every def copy of the load runs
+  after that entry and before the FBI loop (`0x42D6B6`): `0x42D501`; the quicksort `0x432D40`
+  (called at `0x42D57D` and by itself, `0x432F54` / `0x432F64`) and `0x432FB0` (called at
+  `0x42D573` and `0x42D590`); and the insertion pass `0x42D599..0x42D60E` (`0x42D5CD`,
+  `0x42D5FF`, through a stack temp). **MEASURED 2026-09-25**: two skirmishes in one
   process with `tagpu_weapons.on`: the second load logged 284 records emptied before its loader
   wrote ARMLLT10's ten weapons, and the towers fired slots 3–9 in the second game
   (`violation=0 mismatch=0`).
