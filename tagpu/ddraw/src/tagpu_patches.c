@@ -795,6 +795,122 @@ static int fix_saved_features_border(void)
     return FIX_ARMED;
 }
 
+/* A SAVED FEATURE'S STATE WRITTEN INTO A WRECK RECORD IT DOES NOT OWN. [DISASSEMBLED] The
+   restore 0x424C00 spawns each "Animating Features" record (0x425050) and starts its sequence --
+   FeatureDie(x, y, 1) at 0x42507E, FeatureDie(x, y, 0) at 0x42509D or the burn 0x4233A0 at
+   0x4250BB -- and then, at 0x4250C0..0x4250F4, writes the record's saved state into the wreck
+   record the cell's +0x0A names: +0x26 (word), +0x04 (word, the sequence's frame) and +0x2E (the
+   high nibble). Each "3D Features" record is spawned (0x425180) and then, at 0x425185..0x4251A2,
+   writes its +6 word into +0x26 of the record the cell's +0x0A names. Neither tests anything
+   first. +0x0A names the feature's record only when the feature holds one: a 3DO anchor for its
+   whole life (SpawnFeatureOnMap takes the record and stores its index at 0x423ED5, or abandons
+   the spawn), a GAF anchor while its sequence plays (FeatureDie stores it at 0x42368B and sets
+   the mark, +0x0C bit 0, at 0x423695; the burn at 0x42345C and 0x423468). Otherwise it is a word
+   no record stands behind: a GAF anchor's 0 (0x423EE9), a footprint cell's offsets, or a cell
+   nothing has written, which LoadMap leaves as the allocator handed it (its init loop
+   0x4839D5..0x4839ED writes +0x00, +0x02, +0x07, +0x08 and two bits of +0x0C). So the state lands
+   in another feature's record -- record 0 on a grid the system handed over zeroed, which is what
+   a load gets (MEASURED on Two Continents: no cell of the 537 600 had a nonzero +0x0A before the
+   restore, and a 3D record refused for want of a record wrote record 0's +0x26) -- or, through a
+   stale word, up to 0xFFFF records past the pool, whenever the record's feature is not what it
+   was saved as: its spawn refused (a void cell, a footprint past the map, a 3DO def with no record
+   left), or its sequence not started (no record left: the burn returns at 0x42340D/0x423439, and
+   FeatureDie swaps the feature for its successor at once, 0x423651 below).
+
+   THE FIX sends both sites through restore_record_owned, a jump at 0x4250C0 and at 0x425185 (the
+   6-byte `mov edx,[0x511de8]` each block begins with, compared first together with the 6 bytes
+   after it); the block runs as stock only when the cell at the record's position holds a feature
+   that owns a record -- an anchor, below the def count, whose FeatureDef +0xFE bit 0 is clear
+   (3DO), or set with the cell's mark set (a GAF sequence in play) -- and its +0x0A is below the
+   pool's count. Otherwise the stub leaves for the loop's next record (0x4250F7, 0x4251A7).
+   THE INVARIANT: the restore writes a saved state only into the wreck record that the feature
+   standing on the record's cell owns, which is the record the feature took in this restore, and
+   never outside the pool. It rests on
+     - a lifetime: a record is owned exactly while its index is in an anchor's +0x0A with that
+       anchor 3DO or marked, which is how the engine hands records out and takes them back
+       (the swap and FEATURES_Destroy clear both before the record is freed);
+     - a bound: the cell must lie in the grid LoadMap sized (W * H cells of 13 bytes), the def
+       below main+0x14253, and the index below the pool's count, read from the pool's own
+       allocation size, the dword at 0x421F2A that 0x421F20 allocates it with (0x18000 bytes in
+       stock, which the limits table rewrites before any level exists).
+   A record whose feature did not come back as saved loses its saved state, which has nowhere to
+   go. Registers: pushad/popad around the test, whose flags survive the popad; at both skip targets
+   the loop reloads everything but edi, ebx and ebp, which the stub preserves. Branches into the
+   two sites land on 0x4250C0 itself (0x425065, 0x425083, 0x4250A2); none lands inside either
+   stolen instruction [rel8/rel32 scan of .text]. Identity for every record whose feature owns
+   its record, which is every record of a save loaded into a pool at least as large as the one
+   it was saved from, with no void or off-map cell under it. */
+#define RR_POOL_BYTES 0x00421F2Au   /* 0x421F20's `push imm32`: the pool's size in bytes */
+#define RR_RECORD     0x30u
+#define RR_GAF        0x01          /* FeatureDef +0xFE: a GAF feature, else a 3DO one   */
+#define RR_MARK       0x01          /* cell +0x0C: a sequence in play                    */
+
+static int __cdecl restore_record_owned(const unsigned char* cell)
+{
+    const char* ta = *(char* const*)0x00511DE8;
+    const unsigned char* grid;
+    const unsigned char* defs;
+    unsigned int w, h, def, ndefs, idx, count;
+    size_t off;
+
+    if (!ptr_sane(ta)) return 0;
+    grid = *(const unsigned char* const*)(ta + SF_GRID);
+    w = *(const unsigned int*)(ta + SF_PLOT_W);
+    h = *(const unsigned int*)(ta + SF_PLOT_H);
+    if (!ptr_sane(grid) || w < 1 || w > 4096 || h < 1 || h > 4096 || cell < grid) return 0;
+    off = (size_t)(cell - grid);
+    if (off % SF_CELL || off / SF_CELL >= (size_t)w * h) return 0;
+    def = *(const unsigned short*)(cell + 8);
+    ndefs = *(const unsigned int*)(ta + SF_NDEFS);
+    defs = *(const unsigned char* const*)(ta + SF_DEFS);
+    if (def >= SF_MARKER || def >= ndefs || !ptr_sane(defs)) return 0;
+    if ((defs[(size_t)def * 0x100 + 0xFE] & RR_GAF) && !(cell[0x0C] & RR_MARK)) return 0;
+    idx = *(const unsigned short*)(cell + 0x0A);
+    count = *(const unsigned int*)RR_POOL_BYTES / RR_RECORD;
+    return idx < count;
+}
+
+static int fix_restore_record_owner(void)
+{
+    static const unsigned char was[12] = {
+        0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00,     /* mov edx,[0x511de8]  (stolen) */
+        0x33, 0xC0,                             /* xor eax,eax                  */
+        0x66, 0x8B, 0x46, 0x0A,                 /* mov ax,[esi+0xa]             */
+    };
+    static const unsigned int site[2] = { 0x004250C0, 0x00425185 };
+    static const unsigned int next[2] = { 0x004250F7, 0x004251A7 };
+    unsigned char* s[2] = { NULL, NULL };
+    int k;
+
+    for (k = 0; k < 2; k++)
+        if (memcmp((const void*)(size_t)site[k], was, sizeof was) != 0) return FIX_BYTES;
+    for (k = 0; k < 2; k++) {
+        unsigned char* p = s[k] = tagpu_detour_stub();
+        if (!p) {
+            if (k) VirtualFree(s[0], 0, MEM_RELEASE);
+            return FIX_STUB;
+        }
+        *p++ = 0x60;                                            /* pushad           */
+        *p++ = 0x56;                                            /* push esi: cell   */
+        *p++ = 0xE8;
+        tagpu_detour_rel(p, (unsigned int)(size_t)restore_record_owned); p += 4;
+        *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                  /* add esp,4        */
+        *p++ = 0x85; *p++ = 0xC0;                               /* test eax,eax     */
+        *p++ = 0x61;                                            /* popad            */
+        *p++ = 0x74; *p++ = 0x0B;                               /* jz next          */
+        memcpy(p, was, 6); p += 6;                              /* the stolen mov   */
+        *p++ = 0xE9; tagpu_detour_rel(p, site[k] + 6); p += 4;  /* the stock write  */
+        *p++ = 0xE9; tagpu_detour_rel(p, next[k]); p += 4;      /* next: skip it    */
+    }
+    /* both sites are on the page 0x425000, so the second lands whenever the first did */
+    if (!tagpu_detour_land(site[0], s[0], 6) || !tagpu_detour_land(site[1], s[1], 6)) {
+        VirtualFree(s[0], 0, MEM_RELEASE);
+        VirtualFree(s[1], 0, MEM_RELEASE);
+        return FIX_PROTECT;
+    }
+    return FIX_ARMED;
+}
+
 /* THE COMPOSITE SCRATCH FRAME. [DISASSEMBLED] The composite draw context ctx = *(main+0x1437B)
    keeps one frame at ctx+0x10, made at the level load by 0x458180 through 0x4B8E00(name, w, h)
    and freed by the teardown 0x4581C0 through 0x4D85A0. 0x4B8E00 lays it out as a 0x18-byte
@@ -2344,6 +2460,7 @@ static void patch_engine_defects(void)
     int die  = fix_feature_die_pool_full();
     int mark = fix_reclaim_mark_anchor();
     int sfb  = fix_saved_features_border();
+    int rro  = fix_restore_record_owner();
     int scr  = fix_composite_scratch();
     int list = fix_build_list();
     int dl   = fix_download_records();
@@ -2356,14 +2473,15 @@ static void patch_engine_defects(void)
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
               "terrain window bound 0x484057 %s; feature swap on a full wreck pool 0x423651 %s; "
               "reclaim tests the anchor's mark 0x423892 %s; saved features restored under the "
-              "border mask (0x43265A) %s; composite scratch bound "
+              "border mask (0x43265A) %s; a saved feature's state written only into the record it "
+              "owns (0x4250C0 0x425185) %s; composite scratch bound "
               "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70 0x4B90A0) %s; whole build lists "
               "(0x42DA58 0x42DAC7 0x42BEC3) %s; download menus past five entries (0x42DCF0) %s; "
               "the out-of-memory text (0x49E700) %s; unique unit sync keys (0x42BD29) %s; weapon IDs "
               "bounded, feature hits told from sentinels (0x42E468 0x49D280 0x455FB8 0x424575) %s",
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
-              fix_state(sfb), fix_state(scr), fix_state(list), fix_state(dl), fix_state(oom),
-              fix_state(keys), fix_state(wpn));
+              fix_state(sfb), fix_state(rro), fix_state(scr), fix_state(list), fix_state(dl),
+              fix_state(oom), fix_state(keys), fix_state(wpn));
     b[sizeof b - 1] = 0;
     plog(b);
 }
