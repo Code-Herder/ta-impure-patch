@@ -10,6 +10,7 @@
 #include "tagpu_limits.h"
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
+#include "tagpu_regstore.h"
 #include "tagpu_weapons.h"
 #include "git.h"
 
@@ -153,6 +154,38 @@ static int lim_read(unsigned int va, unsigned char* out, int n)
     return 1;
 }
 
+
+/* ---- the -r switch, in a tacli test launch ----------------------------------
+
+   In a test launch TotalA.exe's registry is a file (tagpu_regstore.h), answered through
+   its registry imports. The one registry write of the exe's own code that passes through
+   none of them is the `-r` switch's: its handler 0x49F249 loads dsetup.dll and calls
+   DirectXRegisterApplicationA, which writes DirectPlay's application key through
+   dsetup.dll's own imports, then quits (cmdline-options.md). The parser
+   CmdlineArgsNormalize 0x49EE30 (called at 0x49E8D2; token loop head 0x49EED3) dispatches
+   on the letter after the dash through the index bytes 0x49F500 ('B'..'w') into the jump
+   table 0x49F494: 'R' holds case 9 and 'r' case 22, and both entries
+   (0x49F4B8, 0x49F4EC) are 0x49F249; case 26 (0x49F4FC) is the loop tail 0x49F461, where
+   every letter the parser does not know goes [DISASSEMBLED 2026-09-25]. Pointing both
+   entries at the tail makes -r an unknown switch, ignored. A test folder whose exe
+   differs there is not run: the switch would still reach the real registry. */
+static void close_register_switch(void)
+{
+    static const unsigned char handler[4] = { 0x49, 0xF2, 0x49, 0x00 };   /* 0x49F249 */
+    static const unsigned char tail[4]    = { 0x61, 0xF4, 0x49, 0x00 };   /* 0x49F461 */
+
+    /* expect == val: a match test, nothing written */
+    if (patch_bytes(0x0049F4FC, tail, tail, 4) &&
+        patch_bytes(0x0049F4B8, handler, tail, 4) &&
+        patch_bytes(0x0049F4EC, handler, tail, 4)) {
+        plog("registry: test mode -- the -r switch (DirectPlay registration through dsetup.dll) "
+             "is ignored (jump table 0x49F494, cases 9 and 22 -> 0x49F461)");
+        return;
+    }
+    plog("registry: TEST MODE, but the -r switch's jump table at 0x49F494 is not the one this DLL "
+         "knows, so the switch could write the real registry: the game is not run");
+    TerminateProcess(GetCurrentProcess(), 1);
+}
 
 /* ---- defects of the stock engine -------------------------------------------
 
@@ -3400,13 +3433,55 @@ static int fix_last_cell(void)
    cruise altitude a few tiles inside it, a unit on a hill beside it -- samples rows above the
    grid and is invisible to every other player, so nothing acquires it. Underwater, y < 0, the
    same happens at the south edge.
-   THE SAME READ, INLINED ELSEWHERE. Every bound of a row against a player's grid height is a
-   compare with +0x84, so the census is those compares: a byte scan of .text for 3B/39 with a
-   disp32 of 0x84 finds 50 (exe-reverse-engineering.md, "Line of sight at the map's edge", lists
-   each). 45 are this read, a world point placed at (z - y/2) >> 5 against one player's LOS or
-   mapped grid; the other five are two re-tests of a row 0x47D3B8 already bounded (0x47D41A,
-   0x47D44E) and three compares of another structure's +0x84 with zero. Beyond the eight above,
-   37, each ending in a row test `cmp r,[g+0x84]` and a jae or jb (LOSROW, below):
+   THE SAME READ, INLINED ELSEWHERE. The census enumerates by the data, not by one instruction
+   shape: every instruction of .text that reads a grid's height in memory -- the player's +0x84
+   (the LOS and mapped grids), the sight grid's main+0x14297, and [r+8] through a register that
+   a lea of main+0x1428F or of +0x7C (or an add r,0x7C) set -- and every compare with a register
+   loaded from one of them (exe-reverse-engineering.md, "Line of sight at the map's edge", lists
+   each). 57 compares read such a height. 46 are this read, a point placed at (z - h/2) >> 5
+   against one player's grid; three re-test the row the sight emitter stored (0x4819B7,
+   0x481DE4, 0x482304), three bound a ray's cell (0x481B0B, 0x481F15, 0x482435), two re-test a
+   row 0x47D3B8 already bounded (0x47D41A, 0x47D44E), and three compare another structure's
+   +0x84 with zero. The 13 compares with a register loaded from a +0x84 are other structures'
+   counts.
+   WHAT IT DOES NOT ENUMERATE, found by a second pass over those two forms: a grid pointer
+   spilled to the stack and reloaded, and a height recomputed from the plot's rows
+   main+0x14237 >> 1. Of four spills, the mapped stamp's, the removal's and the stamp's
+   (0x4819AD, 0x481DDA, 0x4822FA) are reloaded on each ray's back edge and reach compares the
+   census has (0x481B0B, 0x481F15, 0x482435). The sight grid's builder's (0x482F2A) reaches two
+   it has not: the builder projects every terrain tile to its sheared row (0x482FFC..0x483002)
+   and writes it only inside the grid (cmp ecx,-1 at 0x483005, then 0x48307C and 0x4830C6
+   through [esp+0x14]), so the sight grid is BUILT in sheared space, and that is the space the
+   ray fan reads, from the own row as from stock's. A tile sheared off the grid loses only its
+   occlusion, never anyone's sight, so it stays stock. The recomputed heights reach four
+   compares -- the circle's row clips (0x481C28, 0x481FF9, 0x482519) and 0x40D80A, a
+   mapped-grid reader by a scaled coordinate -- and one scale (0x466CB3, a minimap pixel to a
+   cell), none of them this read. A scan of the shear's arithmetic (a halving subtracted from a z,
+   then >> 5, following one register copy) finds 39 computations: the builder's, and one
+   feeding each of 38 of the 46 -- the other eight reuse a y >> 1 computed further up.
+   Beyond the eight above:
+     - the sight emitter 0x4825B0 (called at 0x481836 in the all-units rebuild, 0x482824 in
+       0x4827B0, which builds a unit's record -- itself called at 0x43DA59, 0x464DBF,
+       0x465053, 0x48AAA0 and 0x48B6BF --, 0x482B5E in 0x482AC0, which does the same after
+       zeroing the unit's height byte (called at 0x486178 and 0x486312), and 0x4829F4 in
+       0x482910, which builds a temporary sight record; 0x482868 is in 0x482830, which nothing
+       calls and no pointer names): under
+       the ray fan (LosType bit 0x4) it places a unit's sight at the sheared row of its
+       clamped sight height h (0x482615..0x48261E), stores the column and row in the record's
+       words (the unit's +0x7A/+0x7C, 0x48264C/0x482652) and stamps it only inside the grid
+       (0x482663); outside, it zeroes the height byte and stamps nothing, so an aircraft near
+       the north edge reveals nothing to its owner. The stamp 0x482270, the mapped stamp
+       0x481930 and the removal 0x481D50 all read the stored words, and the height byte decides
+       whether there is a stamp to remove (0x482634), so the row is fixed once, before it is
+       stored: every stamp and its removal use the same row by construction. Every removal --
+       the emitter's own (0x482644), the death removal 0x482090 (called at 0x486845), the
+       temporary record's expiry 0x482130 (0x482161) -- goes through 0x481D50, which re-tests
+       the stored column and row, so a record whose stored words the bound refused removes
+       nothing. The stored
+       words are otherwise written only by the create (0 at 0x485C0A), a saved game's restore
+       (0x48724D, with the height byte at 0x4872BF, as saved), and the temporary records'
+       compaction (main+0x1427B, at most 20 of 36 bytes, each holding its own words and byte),
+       which moves the words (0x482220) and the byte (0x48222D) together -- the table;
      - the order resolver 0x43F0E0, six: whether the target's cell is mapped for the local
        player decides the order it resolves -- the table;
      - the view player's map build 0x467440, two: a unit it sees gets +0x110 bit 8, which the
@@ -3417,6 +3492,9 @@ static int fix_last_cell(void)
        each; positional sound 0x47F300, two;
      - 0x474B80, two: left stock, since nothing runs it (no call or jump reaches it in .text
        and no pointer to it is in the image).
+   The circle (LosType bit 0x4 clear) places sight at the circle's corner, (z >> 5) - (y >> 6)
+   less its offset (0x4826B7), and the stamp clips each row to the grid (0x4824F8..0x482547),
+   so every row of the circle that is inside the grid is stamped.
    THE FIX, at every one of them: when the sheared row is outside the grid and the point's own
    row, z >> 5, is inside it, the own row is used; otherwise the stock answer stands, so a unit
    beyond the map's edge stays unseen (the margin TADR adds there is a gameplay change, not a
@@ -3434,21 +3512,27 @@ static int fix_last_cell(void)
 
 /* The functions whose reads are fixed, in the order of their counters. */
 enum {
-    LOS_UNIT, LOS_MAPPED, LOS_PROBE, LOS_ORDER, LOS_VIEWMAP,       /* the table */
+    LOS_UNIT, LOS_MAPPED, LOS_PROBE, LOS_ORDER, LOS_VIEWMAP, LOS_EMIT, /* the table */
     LOS_PROJ, LOS_CURSOR, LOS_BUILD, LOS_FEATURE, LOS_SOUND,       /* local     */
     LOS_FX_473590, LOS_FX_474170, LOS_FX_4745E0, LOS_FX_475470, LOS_FX_473A00, LOS_RADAR,
     LOS_NFN
 };
 static const unsigned int s_losFn[LOS_NFN] = {
-    0x465AC0, 0x408090, 0x407E90, 0x43F0E0, 0x467440,
+    0x465AC0, 0x408090, 0x407E90, 0x43F0E0, 0x467440, 0x4825B0,
     0x49BE60, 0x43E490, 0x47D2E0, 0x4658E0, 0x47F300,
     0x473590, 0x474170, 0x4745E0, 0x475470, 0x473A00, 0x466DC0,
 };
 /* the own row taken, one count per function; interlocked, so the count assumes nothing about
-   which thread calls the engine's draw and sound code */
+   which thread calls the engine's draw and sound code. It counts the row taken, not a read or a
+   stamp made: where the column is bounded after the row, as at the sight emitter (0x48265B), a
+   counted row can still be refused by its column, and nothing is read or stamped. */
 static volatile LONG s_losOwnRow[LOS_NFN];
 
-/* pushfd; lock inc dword [&s_losOwnRow[fn]]; popfd -- the count, with the flags kept */
+/* pushfd; lock inc dword [&s_losOwnRow[fn]]; popfd -- the count, with the flags kept. The hand
+   stubs' literal rel8s (stubAB .. stubO, the projectile pass's stub) jump over it, so they are
+   written for this length, and a different one fails the build here. */
+#define LOS_COUNT_LEN 9
+typedef char los_count_len_is_the_hand_stubs[(LOS_COUNT_LEN == 9) ? 1 : -1];
 static int los_count(unsigned char* a, int fn)
 {
     unsigned int at = (unsigned int)(size_t)&s_losOwnRow[fn];
@@ -3456,7 +3540,7 @@ static int los_count(unsigned char* a, int fn)
     a[1] = 0xF0; a[2] = 0xFF; a[3] = 0x05;
     memcpy(a + 4, &at, 4);
     a[8] = 0x9D;
-    return 9;
+    return LOS_COUNT_LEN;
 }
 
 typedef struct LOSREAD {
@@ -3520,8 +3604,9 @@ static int los_z_ok(const unsigned char* z, int nz, int r)
    target; after a jb, in is), and those bytes are compared with the image before any of this
    is written. Only r, the flags and what lead writes change: r leaves as the row read, and in
    is reached with CF set and out with CF clear, as stock reaches them.
-   Returns the length (46 + nlead at most), or 0 when c is not that shape, z is not a movsx
-   into r, or either reads r for its address; nothing is written over the site then. */
+   Returns the length, LOS_STUB_LEN(nz, nlead), or 0 when c is not that shape, z is not a
+   movsx into r, or either reads r for its address; nothing is written over the site then. */
+#define LOS_STUB_LEN(nz, nlead) (32 + LOS_COUNT_LEN + (nz) + (nlead))
 static int los_stub(unsigned char* a, unsigned int va, int n, const unsigned char* c,
                     const unsigned char* z, int nz, const unsigned char* lead, int nlead, int fn)
 {
@@ -3551,7 +3636,7 @@ static int los_stub(unsigned char* a, unsigned int va, int n, const unsigned cha
     a[k++] = 0x0F; a[k++] = 0x83; tagpu_detour_rel(a + k, out); k += 4;
     k += los_count(a + k, fn);
     a[k++] = 0xE9; tagpu_detour_rel(a + k, in); k += 4;
-    return k;
+    return k == LOS_STUB_LEN(nz, nlead) ? k : 0;
 }
 
 static int los_row_stub(unsigned char* a, const LOSROW* s)
@@ -3768,10 +3853,59 @@ static int fix_los_shear(void)
         0x73, 0x12,                         /* jae out                        */
     };                                      /* count; in: drop; jmp; out: drop; jmp */
     static const unsigned char drop[4] = { 0x8D, 0x64, 0x24, 0x04 };   /* lea esp,[esp+4] */
+    /* the sight emitter 0x4825B0, from its point (ebp the column, ebx the clamped height h,
+       edi the z word, eax |old h - h|, edx the record's stored column/row) to its row: compared,
+       never written */
+    static const unsigned char emitSpan[65] = {
+        0x0F, 0xBF, 0x6E, 0x12, 0x0F, 0xBF, 0x46, 0x16, 0x33, 0xDB, 0x8A, 0x5E,
+        0x0A, 0xC1, 0xFD, 0x05, 0x03, 0xD8, 0x79, 0x02, 0x33, 0xDB, 0x81, 0xFB,
+        0xFF, 0x00, 0x00, 0x00, 0x7E, 0x05, 0xBB, 0xFF, 0x00, 0x00, 0x00, 0x8B,
+        0x56, 0x0C, 0x8B, 0xCB, 0x0F, 0xBF, 0x7E, 0x1A, 0x8A, 0x02, 0x88, 0x44,
+        0x24, 0x18, 0x25, 0xFF, 0x00, 0x00, 0x00, 0x2B, 0xC3, 0x99, 0x33, 0xC2,
+        0x2B, 0xC2, 0x8B, 0x56, 0x04,
+    };
+    static const unsigned char emitRow[10] = {
+        0xD1, 0xF9,                         /* sar ecx,1                      */
+        0x2B, 0xF9,                         /* sub edi,ecx: the shear         */
+        0x0F, 0xBF, 0x0A,                   /* movsx ecx,word [edx]: stored   */
+        0xC1, 0xFF, 0x05,                   /* sar edi,5                      */
+    };
+    /* from the stub's landing point to the bound it mirrors, which the stub's argument rests on:
+       the compare with the stored words and the early-out, the removal, the store, then
+       cmp ebp,[eax+0x14293]; jae; cmp edi,[eax+0x14297]; jae -- compared, never written */
+    static const unsigned char emitAfter[76] = {
+        0x3B, 0xCD, 0x75, 0x11, 0x0F, 0xBF, 0x52, 0x02, 0x3B, 0xD7, 0x75, 0x09,
+        0x83, 0xF8, 0x05, 0x0F, 0x8E, 0x6C, 0x01, 0x00, 0x00, 0x8A, 0x44, 0x24,
+        0x18, 0x84, 0xC0, 0x74, 0x0D, 0xF6, 0x44, 0x24, 0x10, 0x02, 0x74, 0x06,
+        0x56, 0xE8, 0x07, 0xF7, 0xFF, 0xFF, 0x8B, 0x46, 0x04, 0x66, 0x89, 0x28,
+        0x8B, 0x4E, 0x04, 0x66, 0x89, 0x79, 0x02, 0xA1, 0xE8, 0x1D, 0x51, 0x00,
+        0x3B, 0xA8, 0x93, 0x42, 0x01, 0x00, 0x73, 0x46, 0x3B, 0xB8, 0x97, 0x42,
+        0x01, 0x00, 0x73, 0x3E,
+    };
+    static const unsigned char emitHead[] = {
+        0x50,                               /* push eax: |dh|, read at 0x48262B */
+        0x89, 0xF8,                         /* mov eax,edi: z                 */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0xD1, 0xF9,                         /* sar ecx,1                      */
+        0x2B, 0xF9,                         /* sub edi,ecx: the shear         */
+        0xC1, 0xFF, 0x05,                   /* sar edi,5                      */
+        0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00, /* mov ecx,[0x511DE8]             */
+        0x3B, 0xB9, 0x97, 0x42, 0x01, 0x00, /* cmp edi,[ecx+0x14297]          */
+        0x72, 0x00,                         /* jb keep: inside, stock's row   */
+        0x3B, 0x81, 0x97, 0x42, 0x01, 0x00, /* cmp eax,[ecx+0x14297]          */
+        0x73, 0x00,                         /* jae keep: outside too          */
+        0x89, 0xC7,                         /* mov edi,eax: the own row       */
+    };                                      /* count                          */
+    enum { EMIT_JB = 25, EMIT_JAE = 33 };   /* the two branches in emitHead; keep follows the count */
+    static const unsigned char emitTail[] = {
+        0x58,                               /* keep: pop eax                  */
+        0x0F, 0xBF, 0x0A,                   /* movsx ecx,word [edx]           */
+        0xE9, 0x00, 0x00, 0x00, 0x00,       /* jmp 0x48261F                   */
+    };
     int k;
     for (k = 0; k < 7; k++) {
         const LOSREAD* r = &read[k];
-        unsigned char* a = fix_code(r->nstub + 19u);
+        unsigned char* a = fix_code(r->nstub + LOS_COUNT_LEN + 10u);
         int m;
         if (!a) { lim_no_stub(); return FIX_TABLE; }
         memcpy(a, r->stub, r->nstub);
@@ -3784,13 +3918,13 @@ static int fix_los_shear(void)
         const LOSROW* w = &row[k];
         const char* name = w->fn == LOS_ORDER ? "line of sight: the order resolver's row"
                                               : "line of sight: the view player's map's row";
-        unsigned char* a = fix_code(46);
+        unsigned char* a = fix_code(LOS_STUB_LEN(w->nz, 0));
         if (!a || !los_row_stub(a, w)) { lim_no_stub(); return FIX_TABLE; }
         lim_same(w->va - w->pre, w->pre, w->stock, name);
         lim_branch(w->va, w->n, w->stock + w->pre, 0xE9, (unsigned int)(size_t)a, name);
     }
     {
-        unsigned char* a = fix_code(sizeof stubO + 27u);
+        unsigned char* a = fix_code(sizeof stubO + LOS_COUNT_LEN + 18u);
         int m;
         if (!a) { lim_no_stub(); return FIX_TABLE; }
         memcpy(a, stubO, sizeof stubO);
@@ -3799,6 +3933,25 @@ static int fix_los_shear(void)
         memcpy(a + m + 9, drop, 4); a[m + 13] = 0xE9; tagpu_detour_rel(a + m + 14, 0x0043F6AA);
         lim_branch(0x0043F631, sizeof blockO, blockO, 0xE9, (unsigned int)(size_t)a,
                    "line of sight: the order resolver's second row");
+    }
+    {
+        unsigned char* a = fix_code(sizeof emitHead + LOS_COUNT_LEN + sizeof emitTail);
+        unsigned int rel;
+        int m;
+        if (!a) { lim_no_stub(); return FIX_TABLE; }
+        memcpy(a, emitHead, sizeof emitHead);
+        if (a[EMIT_JB] != 0x72 || a[EMIT_JAE] != 0x73) { lim_no_stub(); return FIX_TABLE; }
+        a[EMIT_JB + 1]  = (unsigned char)(sizeof emitHead + LOS_COUNT_LEN - (EMIT_JB + 2));
+        a[EMIT_JAE + 1] = (unsigned char)(sizeof emitHead + LOS_COUNT_LEN - (EMIT_JAE + 2));
+        m = (int)sizeof emitHead + los_count(a + sizeof emitHead, LOS_EMIT);
+        memcpy(a + m, emitTail, sizeof emitTail);
+        rel = 0x0048261Fu - ((unsigned int)(size_t)a + (unsigned int)m + sizeof emitTail);
+        memcpy(a + m + sizeof emitTail - 4, &rel, 4);
+        lim_same(0x004825D4, sizeof emitSpan, emitSpan, "line of sight: the sight emitter's point");
+        lim_branch(0x00482615, sizeof emitRow, emitRow, 0xE9, (unsigned int)(size_t)a,
+                   "line of sight: the sight emitter's row");
+        lim_same(0x0048261F, sizeof emitAfter, emitAfter,
+                 "line of sight: the sight emitter's store and bound");
     }
     return FIX_TABLE;
 }
@@ -3849,7 +4002,7 @@ static int fix_projectile_view(void)
     unsigned int rel;
     int m;
     if (memcmp((const void*)0x0049BEE8, was, sizeof was) != 0) return FIX_BYTES;
-    if (!(a = fix_code(sizeof stub + 19))) return FIX_STUB;
+    if (!(a = fix_code(sizeof stub + LOS_COUNT_LEN + 10))) return FIX_STUB;
     memcpy(a, stub, sizeof stub);
     m = (int)sizeof stub + los_count(a + sizeof stub, LOS_PROJ);
     a[m] = 0xE9; tagpu_detour_rel(a + m + 1, 0x0049BF10);
@@ -4053,7 +4206,7 @@ static int fix_los_local(void)
         unsigned char* a;
         int ok;
         if (k < 23) {
-            if (!(a = fix_code(46))) return FIX_STUB;
+            if (!(a = fix_code(LOS_STUB_LEN(row[k].nz, 0)))) return FIX_STUB;
             ok = los_row_stub(a, &row[k]);
             s[k].va = row[k].va;
             s[k].n = row[k].n;
@@ -4061,7 +4214,7 @@ static int fix_los_local(void)
         } else {
             const unsigned char* test = dots + (dotVa[k - 23] - 0x004671C0u);
             int late = k >= 25;
-            if (!(a = fix_code(50))) return FIX_STUB;
+            if (!(a = fix_code(LOS_STUB_LEN(4, late ? 4 : 0)))) return FIX_STUB;
             ok = los_stub(a, dotVa[k - 23], 8, test, dots + (0x004671E5u - 0x004671C0u), 4,
                           late ? lead : NULL, late ? 4 : 0, LOS_RADAR);
             s[k].va = dotVa[k - 23];
@@ -4130,7 +4283,7 @@ static void patch_engine_defects(void)
     fn[sizeof fn - 1] = 0;
     _snprintf(b, sizeof b,
               "enginefix: line of sight at the map's edge, in the table (0x465B6A 0x465C04 "
-              "0x465CA2 0x465D46 0x465DA9 0x408095 0x407F74; the order resolver 0x43F5D1 "
+              "0x465CA2 0x465D46 0x465DA9 0x408095 0x407F74; the sight emitter 0x482615; the order resolver 0x43F5D1 "
               "0x43F631 0x43FC05 0x43FD1A 0x43FF85 0x4400AA; the view player's map 0x46778A "
               "0x4677D0) %s; local (the cursor 0x43E69D 0x43E904 0x43EBC6 0x43ECDB 0x43EE94 "
               "0x43EFA9; the build cursor 0x47D3B8; the feature helper 0x465942 0x46598A "
@@ -4163,6 +4316,9 @@ void tagpu_apply_patches(void)
     int ok = patch_byte(0x004266A7, 0x75, 0xEB);
     plog(ok ? "tagpu: patched out DirectX version warning (0x4266A7 jne->jmp)"
             : "tagpu: DirectX-warning patch skipped (byte mismatch — not stock 3.1?)");
+
+    if (tagpu_regstore_active())
+        close_register_switch();
 
     /* Contextual order cursors under Interface Type 1. Opt out with `tagpu_curs.off`,
        which — like every byte patch here — is read once, now.

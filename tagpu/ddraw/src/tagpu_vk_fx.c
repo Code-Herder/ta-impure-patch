@@ -11,38 +11,29 @@
 
    ---- WHAT THIS PASS HAS TO ANSWER, AND WHERE EACH ANSWER IS ----
 
-   1. THREE PIPELINES FOR ONE SHADER. The gather fills four buckets, all
-      drawn with one shader:
+   1. THREE PIPELINES, TWO PROGRAMS. The gather fills four buckets:
 
         B_UNDER    TRIANGLES, blend ONE / ONE_MINUS_SRC_ALPHA
-        B_LINES    LINES,     the same blend
+        B_LINES    line records, the same blend, the LVS/LFS program
         B_FLASH    TRIANGLES, blend ONE / ONE -- pure additive light
         B_SPRITES  TRIANGLES, back to the first blend
 
-      Topology and blend are both baked into a VkPipeline, so that is three
-      objects off one layout: `s_pipeTri`, `s_pipeLine`, `s_pipeFlash`. The
-      feature pass needed two for its depth-write modes and this is the same
-      shape, one step further. VK_EXT_extended_dynamic_state3 would make the
-      blend dynamic and buy exactly one object; it is not worth an extension.
+      Program, vertex rate and blend are all baked into a VkPipeline, so that
+      is three objects off one layout: `s_pipeTri`, `s_pipeLine`,
+      `s_pipeFlash`. The feature pass needed two for its depth-write modes and
+      this is the same shape, one step further. VK_EXT_extended_dynamic_state3
+      would make the blend dynamic and buy exactly one object; it is not worth
+      an extension.
 
-   2. LINE RASTERISATION IS THE ONE THING HERE THE SPECIFICATION DOES NOT
-      PIN DOWN. Triangles rasterise to the fragments the specification
-      defines; LINES DO NOT: Vulkan's default `lineRasterizationMode` is
-      implementation-dependent. The lasers and the lightning are specified by
-      the diamond-exit rule, which is VK_EXT_line_rasterization's
-      `BRESENHAM`, so the line pipeline asks for it and a device that will not
-      give it draws no lines at all (`prepare`).
-
-      THE WIDTH IS THE PART THAT IS BOUNDED. The world is drawn into a target
-      `ss` times the game resolution, where a 1.0 line is `ss` times too thin,
-      and a Vulkan `lineWidth` other than 1.0 needs the `wideLines` device
-      feature ENABLED AT DEVICE CREATION -- which is the seam's business, not
-      a pass's. THE SEAM ASKS FOR IT. The width is dynamic on the line
-      pipeline when `d->wideok`, set to `tagpu_vk_world_scale()` -- the
-      supersample factor of the target this frame, which is 1 when the target
-      refused and the world is going into the swapchain image at 1:1. A width
-      the device will not rasterise is still REFUSED rather than clamped, which
-      is what the rest of this item is about.
+   2. THE LINES ARE TRIANGLES. Vulkan does not pin down which pixels a line
+      primitive lights -- its default mode is implementation-dependent, and
+      even VK_EXT_line_rasterization's BRESENHAM mode allows a deviation of one
+      unit -- and a line wider than one target pixel needs `wideLines`. So a
+      laser or a lightning segment is one record in the LINES bucket, drawn as
+      an instance of tagpu_fx.c's LVS/LFS: a band of two triangles round the
+      segment whose fragment stage keeps exactly the line-grid pixels of
+      `0x4CC7AB`'s walk, `ss` wide (tagpu_line.h, tagpu_glsl.h). No device
+      feature is asked for and none can refuse the lines.
 
    3. THE FLASH LIGHT TABLE IS A THREE-BYTE FORMAT, AND VULKAN DOES NOT HAVE
       ONE. The producer hands it over as 32 x 3 bytes (tagpu_fx.h `lht`);
@@ -113,17 +104,17 @@
 #include <string.h>
 
 #include "tagpu_vk_fx.h"
-#include "tagpu_vk_world.h"   /* the target's ss: the line width follows it */
 #include "tagpu_vk_unit.h"    /* tagpu_vk_unit_fx_count: the models' pass */
 #include "tagpu_posedraw.h"   /* TAGPU_PD_MAXFX, the models' bound */
 #include "tagpu_fx.h"
+#include "tagpu_line.h"       /* tagpu_line_grid, the line test's uGrid */
 #include "tagpu_gaf.h"                     /* tagpu_gaf_rects_due              */
 #include "tagpu_pal.h"                     /* tagpu_pal_expand                 */
 #include "spirv/tagpu_fx.spv.h"
 
 #define VST    TAGPU_FX_VST                /* floats per vertex, the gather's  */
 #define UBLK_VS 32                         /* std140 bytes, the generated header */
-#define UBLK_FS 64
+#define UBLK_FS 80                         /* LFS's: FS's 64, then uGrid */
 
 /* ---- the entry points ----------------------------------------------------
    Resolved from the seam's `gdpa`/`gipa`, never linked, and this pass's own:
@@ -146,7 +137,7 @@
     X(vkCreateSampler) X(vkDestroySampler) \
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
-    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetLineWidth) \
+    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
     X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier)
 
 #define DECL(n) static PFN_##n n;
@@ -169,9 +160,6 @@ static int s_abFrame;
 static int s_saidRestored;                 /* the Classic++ refusal, said once  */
 static int s_saidNoMirror;                 /* ...and the mirror's, likewise     */
 static int s_saidLht;                      /* ...the light table's              */
-static int s_saidWide;
-static float s_lineW = 1.0f;   /* the line width, this frame's ss */                     /* ...the line width's               */
-static int s_saidLine;                     /* ...and the line rasterisation mode */
 
 static VkDescriptorSetLayout s_dsl;
 static VkPipelineLayout      s_plo;
@@ -241,6 +229,7 @@ static int s_scX, s_scY, s_scW, s_scH;     /* the scissor, in Vulkan framebuffer
    static holding those past the frame they were handed over on is a dangling
    read waiting for someone to add a line that follows one. */
 static float s_hGw, s_hGh;
+static int   s_hSs;                     /* the ss the line records were built at */
 static int   s_hVpL, s_hVpT, s_hVw, s_hVh, s_hScissorOn;
 
 typedef struct {
@@ -603,13 +592,11 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     VkPipelineDepthStencilStateCreateInfo ds;
     VkPipelineColorBlendAttachmentState cba;
     VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-    VkDynamicState dyn[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
-                              VK_DYNAMIC_STATE_LINE_WIDTH };
+    VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
     VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
     VkGraphicsPipelineCreateInfo gp = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
-    VkPipelineRasterizationLineStateCreateInfoEXT lr =
-        { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT };
     VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+    VkShaderModule lvs = VK_NULL_HANDLE, lfs = VK_NULL_HANDLE;
     VkResult r;
     int i, ok = 0;
 
@@ -640,7 +627,11 @@ static int build_pipelines(const TAGPU_VKPASS* d)
                    sizeof tagpu_spv_tagpu_fx_VS / sizeof(uint32_t));
     fs = mk_module(d, tagpu_spv_tagpu_fx_FS,
                    sizeof tagpu_spv_tagpu_fx_FS / sizeof(uint32_t));
-    if (!vs || !fs) { plog(d, "fx: a shader module was refused"); goto out; }
+    lvs = mk_module(d, tagpu_spv_tagpu_fx_LVS,
+                    sizeof tagpu_spv_tagpu_fx_LVS / sizeof(uint32_t));
+    lfs = mk_module(d, tagpu_spv_tagpu_fx_LFS,
+                    sizeof tagpu_spv_tagpu_fx_LFS / sizeof(uint32_t));
+    if (!vs || !fs || !lvs || !lfs) { plog(d, "fx: a shader module was refused"); goto out; }
 
     memset(st, 0, sizeof st);
     st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -674,14 +665,7 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     /* NO CULLING. */
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    /* THE STATIC WIDTH, WHICH THE LINE PIPELINE THEN OVERRIDES. The seam
-       enables `wideLines` and the line pipeline below declares
-       VK_DYNAMIC_STATE_LINE_WIDTH, so for THAT pipeline this value is ignored
-       and `record` supplies the target's scale. It still applies to the
-       triangle and flash pipelines, which declare no such state and draw no
-       lines. A width the device will not take is refused in `prepare` -- item
-       2. */
-    rs.lineWidth = 1.0f;
+    rs.lineWidth = 1.0f;          /* no pipeline here rasterises a line */
 
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
@@ -730,33 +714,19 @@ static int build_pipelines(const TAGPU_VKPASS* d)
     r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeTri);
     if (r != VK_SUCCESS) { plog(d, "fx: the triangle pipeline was refused (%d)", (int)r); goto out; }
 
-    /* THE LASERS AND THE LIGHTNING, AND THE ONE PIECE OF STATE THAT DEFINES
-       THEM -- see item 2 of the file header. BRESENHAM is the diamond-exit
-       rule these lines are specified by; Vulkan's DEFAULT mode is not it, and
-       the difference is one extra fragment at the end of every segment. The
-       pass refuses to draw lines at all when the device would not give us
-       this, so the pipeline is only built when it did. */
-    if (d->lineok) {
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-        /* AND THE WIDTH IS DYNAMIC, on this pipeline alone. The world is
-           drawn into a target `ss` times the game resolution, so the width is
-           a per-frame number. `dyn[2]` exists only here: the
-           triangle and flash pipelines have no line width to set and declaring
-           one for them would be state nothing writes. */
-        if (d->wideok) dy.dynamicStateCount = 3;
-        lr.lineRasterizationMode = VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT;
-        lr.stippledLineEnable = VK_FALSE;
-        lr.pNext = rs.pNext;
-        rs.pNext = &lr;
-        r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeLine);
-        rs.pNext = lr.pNext;
-        dy.dynamicStateCount = 2;
-        if (r != VK_SUCCESS) { plog(d, "fx: the line pipeline was refused (%d)", (int)r); goto out; }
-    }
+    /* THE LASERS AND THE LIGHTNING -- item 2 of the file header. The same
+       vertex layout read once per INSTANCE, so each line record is one band
+       of six vertices (`record` draws 6 x count), with the LVS/LFS program
+       and the triangle pipeline's blend. */
+    vb.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+    st[0].module = lvs; st[1].module = lfs;
+    r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeLine);
+    vb.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    st[0].module = vs; st[1].module = fs;
+    if (r != VK_SUCCESS) { plog(d, "fx: the line pipeline was refused (%d)", (int)r); goto out; }
 
     /* THE FLASHES ARE PURE ADDITIVE LIGHT: ONE / ONE, and the shader gives
        them alpha 0 so the target keeps its own. */
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
     cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     r = vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL, &s_pipeFlash);
@@ -766,6 +736,8 @@ static int build_pipelines(const TAGPU_VKPASS* d)
 out:
     if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
     if (fs) vkDestroyShaderModule(d->dev, fs, NULL);
+    if (lvs) vkDestroyShaderModule(d->dev, lvs, NULL);
+    if (lfs) vkDestroyShaderModule(d->dev, lfs, NULL);
     return ok;
 }
 
@@ -899,12 +871,13 @@ static int build(const TAGPU_VKPASS* d)
        `minUniformBufferOffsetAlignment` is 16 on some devices and 256 on
        others, and a bound buffer offset that is not a multiple of it is
        undefined behaviour rather than a slow path. The larger block is the
-       fragment stage's 64 bytes, so the stride is the larger of the two,
-       twice. */
+       fragment stage's, so each block takes that size ROUNDED UP to the
+       alignment -- 80 bytes is a multiple of 16 but not of 64 -- and the
+       stride is two of them. */
     ualign = props.limits.minUniformBufferOffsetAlignment;
-    if (ualign < UBLK_FS) ualign = UBLK_FS;
-    s_ublock = ualign;
-    s_ustride = ualign * 2;
+    if (ualign < 1) ualign = 1;
+    s_ublock = ((UBLK_FS + ualign - 1) / ualign) * ualign;
+    s_ustride = s_ublock * 2;
 
     if (!mk_buffer(d, s_ustride * d->slots, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -1193,12 +1166,11 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     TAGPU_FXHAND h;
     SLOT* s;
     VkDeviceSize vbytes;
-    int ss;                    /* samples per game pixel in THIS frame's target */
     /* A UNION, NOT A CAST. Both blocks mix `int` and `float` members and
        writing an int through a float array is the aliasing rule broken at -O2,
        which is not a place to find out that the fog branch took a garbage
        uFog. */
-    union { float f[16]; int i[16]; } ub;
+    union { float f[UBLK_FS / 4]; int i[UBLK_FS / 4]; } ub;
     int fogW = 1, fogH = 1;
     int b, total = 0;
     size_t off;
@@ -1295,52 +1267,6 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         }
         return 0;
     }
-
-    /* NO BRESENHAM, NO LINES. Vulkan's default line rasterisation puts one
-       extra fragment at the end of every segment (item 2 of the file header;
-       measured against the OpenGL renderer this pass replaced), so a device
-       that will not give us the diamond-exit rule gets no lines drawn rather
-       than lines four pixels off. */
-    if (h.n[TAGPU_FXB_LINES] > 0 && !d->lineok) {
-        if (!s_saidLine) {
-            s_saidLine = 1;
-            plog(d, "fx: there are line vertices and this device has no "
-                    "VK_EXT_line_rasterization/bresenhamLines - nothing drawn "
-                    "while there are, because the default mode is not the "
-                    "diamond-exit rule these lines are specified by");
-        }
-        return 0;
-    }
-
-    /* THE LINE WIDTH, AND IT IS A REAL BOUND RATHER THAN A CAUTION, though
-       one that can usually be MET. The world is drawn into a target `ss`
-       times the game resolution, so a 1.0 line here is `ss` times too thin and
-       a width of exactly `ss` is the line at its game-pixel width. `wideok`
-       says the device will rasterise one, `maxLineWidth` says how wide.
-       REFUSED, NEVER CLAMPED: a clamped width is a line of the wrong
-       thickness drawn without a word, which is the whole thing this check
-       exists to stop. */
-    /* ...AND THE WIDTH FOLLOWS THE TARGET WE WILL ACTUALLY DRAW INTO, not the
-       hand-over's `ss`. They are the same number whenever the offscreen
-       world target exists, and they are NOT when it refused -- in which case
-       the seam records this pass into the swapchain image at client resolution,
-       where one game pixel is one device pixel and an `ss`-wide line is `ss`
-       times too thick. Reading `h.ss` here would assert an invariant nothing
-       establishes. `tagpu_vk_world_prepare` runs before every pass's `prepare`
-       so that this answer exists. */
-    ss = tagpu_vk_world_scale();
-    if (h.n[TAGPU_FXB_LINES] > 0 &&
-        (ss != 1 && (!d->wideok || (float)ss > d->maxLineWidth))) {
-        if (!s_saidWide) {
-            s_saidWide = 1;
-            plog(d, "fx: the target is %dx supersampled, which makes a "
-                    "line %d px wide, and this device offers %s - "
-                    "nothing drawn while there are line vertices", ss, ss,
-                 d->wideok ? "a narrower maximum" : "no wideLines at all");
-        }
-        return 0;
-    }
-    s_lineW = (float)ss;
 
     if (h.fogGrid) {
         if (h.fogGridCols < 1 || h.fogGridRows < 1 ||
@@ -1497,7 +1423,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     memcpy(s_umap + (size_t)slot * s_ustride + s_ublock, ub.f, UBLK_FS);
 
     for (b = 0; b < TAGPU_FXB_N; b++) s_n[b] = h.n[b];
-    s_hGw = h.gw; s_hGh = h.gh;
+    s_hGw = h.gw; s_hGh = h.gh; s_hSs = h.ss;
     s_hVpL = h.vpL; s_hVpT = h.vpT; s_hVw = h.vw; s_hVh = h.vh;
     s_hScissorOn = h.scissorOn;
 
@@ -1593,6 +1519,20 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     sc.extent.width = (uint32_t)s_scW; sc.extent.height = (uint32_t)s_scH;
     vkCmdSetScissor(cb, 0, 1, &sc);
 
+    /* THE LINES' GRID, uGrid @64 of the fragment block (tagpu_line.h
+       `tagpu_line_grid`): the line grid the records were built on -- the game
+       frame at the hand-over's ss -- and THIS target's extent, which only
+       `record` knows: on a frame the offscreen target refused, the world goes
+       into the swapchain image at whatever scale that is, and LFS's line-grid
+       pixel has to be that one's (tagpu_vk_mark.c says the same). The block is
+       host-coherent and read only when `cb` executes, after this. */
+    {
+        int g[4];
+        tagpu_line_grid(g, (int)(s_hGw + 0.5f), (int)(s_hGh + 0.5f), s_hSs,
+                        (int)w, (int)h);
+        memcpy(s_umap + (size_t)slot * s_ustride + s_ublock + 64, g, sizeof g);
+    }
+
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_plo, 0, 1,
                             &s_slot[slot].dset, 0, NULL);
     vkCmdBindVertexBuffers(cb, 0, 1, &s_slot[slot].vbuf, &off);
@@ -1608,19 +1548,10 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
         pipe = (b == TAGPU_FXB_LINES) ? s_pipeLine
              : (b == TAGPU_FXB_FLASH) ? s_pipeFlash : s_pipeTri;
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-        /* THE LINE WIDTH, on the one pipeline that declared the state --
-           AND WHENEVER IT DECLARED IT, not only when the width is interesting.
-           A pipeline that lists a dynamic state and is drawn without the
-           command that supplies it has an UNDEFINED value for it: the static
-           `rs.lineWidth` is ignored precisely because the state is dynamic.
-           Gated on `s_lineW != 1.0f`, the width would be undefined on every
-           ss=1 frame -- the A/B's own configuration, on any device with
-           `wideLines`, which is to say the one this is measured on.
-           `prepare` refused the frame unless the width is one the device will
-           take, so there is nothing to clamp here. tagpu_vk_mark.c does the
-           same: `if (g->lines) vkCmdSetLineWidth(cb, s_h.ss)`. */
-        if (b == TAGPU_FXB_LINES && d->wideok) vkCmdSetLineWidth(cb, s_lineW);
-        vkCmdDraw(cb, (uint32_t)s_n[b], 1, first, 0);
+        /* the lines bucket holds records, one six-vertex band an instance,
+           at the same stride as every other bucket's vertices */
+        if (b == TAGPU_FXB_LINES) vkCmdDraw(cb, 6, (uint32_t)s_n[b], 0, first);
+        else                      vkCmdDraw(cb, (uint32_t)s_n[b], 1, first, 0);
         first += (uint32_t)s_n[b];
     }
 }

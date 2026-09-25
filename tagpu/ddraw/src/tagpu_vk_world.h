@@ -8,22 +8,12 @@
    times `ss`, and that block is then composited into the letterboxed viewport
    rect of the window.
 
-   WHY IT IS NOT MERELY A QUALITY LEVER. Two of the lane's passes stand DOWN on
-   the shipped default without it. `ss` is 2 unless the Supersampling row or
-   its lever says Off (tagpu_settings_ss),
-   lines are drawn `ss` pixels wide, and with no ss target there is nowhere to
-   put a 2-px line -- so tagpu_vk_fx.c and tagpu_vk_mark.c refuse the WHOLE
-   pass on any frame carrying line vertices:
-
-       vk: fx: the target is 2x supersampled, which makes a line 2 px wide,
-               and this device offers no wideLines at all - nothing drawn
-               while there are line vertices
-
-   MEASURED ON THE LANE 2026-09-18, in a live game on the Vulkan backend with
-   `fx.on` and no ss target. The census read `fx=1` on frames without lasers
-   and the pass dropped every frame with one. That is what "ss=2 has no
-   target" actually costs, and it is why the device is also asked for
-   `wideLines`.
+   `ss` is 2 unless the Supersampling row or its lever says Off
+   (tagpu_settings_ss). WITHOUT A TARGET the world goes into the swapchain
+   image at client resolution, which is a smaller picture and never a wrong
+   one: a pass that needs the grid it draws on asks for the extent it records
+   into rather than assuming `ss` -- the lines' test maps that extent onto its
+   line grid (tagpu_line.h).
 
    THE TWO IMAGES ARE PER SLOT, and that is a lifetime argument rather than a
    convenience. The composite SAMPLES the colour image in the same command
@@ -65,7 +55,7 @@
    selection rect, which the marker pass draws into this target, answers it in
    its fragment stage instead: it keeps every sample of a game pixel on the
    engine's Bresenham path and none of any other, so the downsample resolves it
-   to the full colour (tagpu_mark.c, SVS/SFS; ui-markers.md §1).
+   to the full colour (tagpu_mark.c, LVS/LFS; ui-markers.md §1).
 
    THE CLEAR IS TRANSPARENT AND THE COMPOSITE IS PREMULTIPLIED, which together
    are what leave TA's own frame showing where the world drew nothing: the
@@ -124,16 +114,6 @@
 int  tagpu_vk_world_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot,
                             uint32_t* tw, uint32_t* th);
 
-/* HOW MANY SAMPLES PER GAME PIXEL THIS FRAME'S TARGET ACTUALLY HAS, or 1 when
-   there is none and the world is going into the swapchain image at client
-   resolution. A pass that scales something by `ss` -- the line width
-   is the only one today -- must ask THIS rather than read `ss` out of its own
-   hand-over, because the hand-over says what the gather was told (tagpu_native.c's
-   `ss`) and this says what this frame's target is, and on the fallback path
-   those differ. Valid only
-   after `tagpu_vk_world_prepare` has run for this frame, which is why the seam
-   calls it before any pass's `prepare`. */
-int  tagpu_vk_world_scale(void);
 
 /* Open and close the world render pass around the world passes' `record`s. */
 void tagpu_vk_world_begin(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot);

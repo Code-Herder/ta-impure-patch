@@ -923,9 +923,10 @@ typedef struct {
      + the gather's row slack) means no arithmetic here can ever push a
      feature into the effects band above it.
    TWO FLATS OF ONE ROW CAN TIE IN THE DEPTH BUFFER. Neighbouring columns are
-   0.1/span apart in the key; the 24-bit buffer resolves about 1.2e-7 of the
-   frame's depth scale (tagpu_native.c `depthScale`, some 360 at 1x and 890
-   at 0.25x at 1024x768), so a key step under ~4e-5 at 1x or ~1e-4 at 0.25x
+   0.1/span apart in the key; the depth buffer steps 2^-24 over [0.5, 1],
+   D24 or float, which is about 1.2e-7 of the frame's depth scale
+   (tagpu_native.c `depthScale`, some 360 at 1x and 890 at 0.25x at
+   1024x768), so a key step under ~4e-5 at 1x or ~1e-4 at 0.25x
    is not a step. Where two such flats overlap, VK_COMPARE_OP_LESS keeps the
    one drawn first -- the left one, the anchors going left to right. */
 static float map_key(const TAGPU_FXVIEW* v, const KEYRECT* k, int row, int col, int flat)
