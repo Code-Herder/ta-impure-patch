@@ -2694,15 +2694,19 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            every record with a model is taken back whole (tagpu_fx.c) rather
            than drawn without it, and every other effect draws. The unit pass
            is told what will stand this frame down, as far as it is known
-           here, so a frame it will not draw loses its models alone. */
-        {
+           here, so a frame it will not draw loses its models alone. Asked
+           only when the posed pass is ready: `fog_carried` makes the room
+           for the grid's copy, which only its publish uses. */
+        fv.modelsOn = 0;
+        if (pdReady) {
             TAGPU_VKFXASK ask;
             ask.shadowOn = tagpu_posedraw_shadow_on();
             ask.otherDraws = tagpu_posedraw_other_forecast();
             ask.fogWant = fogMode & 1;      /* a model samples it then (`q.fog`) */
             ask.fogCarried = tagpu_posedraw_fog_carried();
             ask.scafOn = scafOn ? 1 : 0;
-            fv.modelsOn = pdReady && tagpu_vk_unit_fx_ready(&ask);
+            tagpu_posedraw_mirrors(&ask.atlas, &ask.atlasDim, &ask.pal, &ask.shadeK);
+            fv.modelsOn = tagpu_vk_unit_fx_ready(&ask);
         }
         fv.depthScale = depthScale;
         /* particle layer n -> depth key, from the ten 0x471F90 call sites

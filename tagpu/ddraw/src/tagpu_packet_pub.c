@@ -1899,8 +1899,9 @@ static unsigned fill_fxmodels(TAGPU_PACKET* p, unsigned* cursor)
         p->n_fxvert = p->n_fxidx = p->n_fxface = p->n_fxshape = p->n_fxmodel = 0;
         p->off_fxvert = p->off_fxidx = p->off_fxface = p->off_fxshape = p->off_fxmodel = 0;
         /* the tables that fitted are owed again with the rest: the slot has
-           to grow by all five */
-        s_fillShort += PKT_ALIGN4(*cursor) - mark;
+           to grow by all five. They began at `ALIGN4(mark)` (append_table),
+           so this is their 4-aligned length exactly. */
+        s_fillShort += PKT_ALIGN4(*cursor) - PKT_ALIGN4(mark);
         *cursor = mark;
     }
     return need;

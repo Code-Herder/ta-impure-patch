@@ -284,6 +284,18 @@ int tagpu_posedraw_fog_carried(void)
     return pd_fog_room(g, cols, rows, cells);
 }
 
+/* THE MIRRORS THROUGH THE HAND-OVER'S OWN READERS: `tagpu_posedraw_atlas_hand`
+   is what the hand-over fills its atlas and palette with, and `shadeK` is
+   `pd_view_publish`'s read. Both reads are pure. */
+void tagpu_posedraw_mirrors(const unsigned char** atlas, int* atlasDim,
+                            const unsigned char** pal, const float** shadeK)
+{
+    TAGPU_PDHAND m;
+    tagpu_posedraw_atlas_hand(&m);
+    *atlas = m.atlas; *atlasDim = m.atlasDim; *pal = m.pal;
+    *shadeK = tagpu_r3d_shade_k();
+}
+
 /* TAGPU_PD_MAXHAND is every record the producer can make (tagpu_posedraw.h),
    so a frame is never refused for its count while the packet's tables are the
    size they are -- and the tables cover the design point. */

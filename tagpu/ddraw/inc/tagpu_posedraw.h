@@ -492,10 +492,14 @@ void tagpu_posedraw_uncarried(void);
    the fog grid the native pass holds, with the room for its copy made now;
    the publish makes the same test on the same grid (`pd_fog_room`), so it
    cannot answer otherwise. `_shadow_on`: the `shadowOn` the hand-over
-   publishes. */
+   publishes. `_mirrors`: the texel mirrors' four fields, read by the same
+   two readers the hand-over's are (`tagpu_posedraw_atlas_hand` and
+   `tagpu_r3d_shade_k`). */
 int  tagpu_posedraw_other_forecast(void);
 int  tagpu_posedraw_fog_carried(void);
 int  tagpu_posedraw_shadow_on(void);
+void tagpu_posedraw_mirrors(const unsigned char** atlas, int* atlasDim,
+                            const unsigned char** pal, const float** shadeK);
 
 /* the widest fog grid the hand-over carries, cells a side */
 #define TAGPU_PD_FOG_MAXDIM 1024

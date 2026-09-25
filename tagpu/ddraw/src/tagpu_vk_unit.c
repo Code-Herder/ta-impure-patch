@@ -39,13 +39,18 @@
                           whole, in tagpu_posebake.h's layout, so a unit costs
                           what its model has: 48 bytes a piece plus two word
                           runs padded to a vec4 -- 2 016 bytes for stock's
-                          worst, 36 pieces. Its size is checked every frame
-                          against the device's `maxStorageBufferRange`, which
-                          the spec puts at 128 MB or more.
+                          worst, 36 pieces -- and after them the effects
+                          models' runs, 32 bytes each (tagpu_fxmodel.h). Its
+                          size is checked every frame against the device's
+                          `maxStorageBufferRange`, which the spec puts at
+                          128 MB or more.
         the SMALL buffer  four vertex-stage blocks (body, caster, hard shadow,
                           wire) and three fragment-stage blocks a unit, each
                           at a device-accepted offset: 1 536 bytes a unit at
-                          the reference device's 64-byte alignment.
+                          the reference device's 64-byte alignment. After
+                          every unit's window, an effects model's two -- the
+                          body's vertex and fragment block, all `RS_FX`
+                          binds -- 448 bytes a model.
 
       Both grow to the frame's own size and are given back the moment a frame
       hands nothing over -- §2.28's rule. AT THE DESIGN POINT, 15 001 units
@@ -465,6 +470,17 @@ static int          s_fxWill = -1;
    an empty one, or models alone that the pass dropped -- which is not a
    stand-down. */
 static int          s_fxHold;
+/* THE MODELS' SHARE A SLOT WOULD NOT GROW BY: its blocks, its runs and its
+   draws, latched when the models' growth fails (`upload_draw`). While it is
+   owed, `tagpu_vk_unit_fx_ready` answers no, so the frame it failed on is the
+   only one that loses its effects and the frames after it take back only
+   their model records. Every frame that draws units grows its own slot by the
+   same share (`s_fxShortOk`, a bit a slot, cleared when a slot is given back),
+   and once every slot holds it the models are asked for again -- no slot left
+   that the share has not been allocated in. */
+static VkDeviceSize s_fxShortU, s_fxShortP;
+static unsigned     s_fxShortN, s_fxShortOk;
+static int          s_fxShort;
 /* shadow casters recorded this frame, so the pass can REPORT having painted a
    structure slant rather than let the producer predict it (tagpu_posedraw.h) */
 static unsigned     s_nsil, s_nslant;
@@ -781,6 +797,8 @@ static void slot_free_sized(const TAGPU_VKPASS* d, SLOT* s)
     kill_buffer(d, &s->vstage, &s->vsmem, &s->vsmap);
     tagpu_vk_stage_drop(d, &s->stage);
     s->ucap = s->pcap = s->vscap = 0;
+    /* the models' share went with the buffers (`s_fxShort`) */
+    s_fxShortOk &= ~(1u << (unsigned)(s - s_slot));
 }
 
 static void slot_free(const TAGPU_VKPASS* d, SLOT* s)
@@ -2237,13 +2255,25 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
    what the frame then meets cannot drift apart. The compare sampler is known
    only once the pass is built, so an unbuilt pass is not held to it here;
    its first frame is. */
-enum { FD_DRAW = 0, FD_CMP, FD_OTHER, FD_FOG, FD_SCAF };
-static int frame_down(int shadowOn, int otherDraws, int fogWant, int fogGrid, int scafOn)
+enum { FD_DRAW = 0, FD_CMP, FD_OTHER, FD_FOG, FD_SCAF, FD_MIRROR };
+/* THE TEXEL MIRRORS THIS PASS SAMPLES, all there and the atlas's side one an
+   image can take: the unit atlas's indices, the engine's palette and the
+   face-shade table. */
+static int mirrors_there(const unsigned char* atlas, int atlasDim,
+                         const unsigned char* pal, const float* shadeK)
+{
+    return atlas && atlasDim >= 1 && atlasDim <= 8192 && pal && shadeK;
+}
+/* Last, because `upload_draw` meets the mirrors after the pose and the
+   models' checks and says which one is missing there. */
+static int frame_down(int shadowOn, int otherDraws, int fogWant, int fogGrid, int scafOn,
+                      int mirrors)
 {
     if (shadowOn && s_state == ST_READY && !s_cmpLinear) return FD_CMP;
     if (otherDraws > 0) return FD_OTHER;
     if (fogWant && !fogGrid) return FD_FOG;
     if (scafOn) return FD_SCAF;
+    if (!mirrors) return FD_MIRROR;
     return FD_DRAW;
 }
 
@@ -2357,11 +2387,13 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 
     /* THE FRAME'S OWN STAND-DOWNS, IN ONE TEST, `frame_down`, which
        `tagpu_vk_unit_fx_ready` asks of the effects gather's forecast of the
-       same four facts before this frame was gathered -- so the answer the
+       same five facts before this frame was gathered -- so the answer the
        models were gathered on and the test the frame meets here are one
-       function. Each reason's argument and its line follow. */
+       function. Each reason's argument and its line follow; the mirrors'
+       is below, after the pose. */
     for (i = 0; i < h.nunit; i++) if (h.units[i].fog & 1) { fogWanted = 1; break; }
-    fd = frame_down(h.shadowOn, h.otherDraws, fogWanted, h.fogGrid != NULL, h.scafOn);
+    fd = frame_down(h.shadowOn, h.otherDraws, fogWanted, h.fogGrid != NULL, h.scafOn,
+                    mirrors_there(h.atlas, h.atlasDim, h.pal, h.shadeK));
 
     /* A COMPARE SAMPLER THAT IS NOT LINEAR, AND THE DECISION IS TAKEN HERE.
        The PCF is meant to be bilinear, and linear filtering of a depth format
@@ -2527,8 +2559,13 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
 
     /* THE TEXELS. The mirrors are asked for on the producer's beat and cannot
        be there before the atlas has its dimensions, so the first frames of a
-       session legitimately arrive without one. Said once. */
-    if (!h.atlas || h.atlasDim < 1 || h.atlasDim > 8192 || !h.pal || !h.shadeK) {
+       session legitimately arrive without one. Said once. The effects gather
+       asked the same test (`mirrors_there`) of the same three before this
+       frame was gathered, and each of them, once there, stays for the
+       process's life (the unit atlas's mirror is never freed, the palette and
+       the shade table are only ever set), so a frame that fails it here
+       gathered no model. */
+    if (fd == FD_MIRROR) {
         /* WHICH mirror, periodically: four terms behind one latched message
            would say only that one of them was missing, and only once. */
         if ((d->frame % 300u) == 0u)
@@ -2680,9 +2717,11 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        has. THE MODELS' SIZE SECOND, GROWN WITH THE UNITS' BUFFERS KEPT until
        the larger ones exist (`slot_grow`'s `keep`, and `realloc` keeps the
        draw list), so a failure there leaves the slot holding what the units
-       need and costs the frame its models alone: no allocation the units need
-       is ever lost to the models. Above `slot_vstage`, so a stand-down below
-       is still safe. */
+       need: no allocation the units need is ever lost to the models. It still
+       costs the frame EVERY effect -- the effects pass draws none of a frame
+       whose models this pass drops -- so the share is owed (`s_fxShort`) and
+       the frames after it take back only their model records. Above
+       `slot_vstage`, so a stand-down below is still safe. */
     if (tagpu_grow_stress()) s->ucap = s->pcap = 0;   /* the lever: rebuilt every frame */
     if (!slot_sized(d, s, ubase, poseBase, 0) || !draw_room(nbase)) goto refuse;
     if (!dropFx && nfxAll) {
@@ -2692,15 +2731,35 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
             if (!s_saidFxRoom) {
                 s_saidFxRoom = 1;
                 plog(d, "unit: the slot would not take %u effects models' blocks and "
-                        "%u runs (%u KB) - the effects are not drawn while that is "
-                        "true, the units are", nfxAll, nrun,
+                        "%u runs (%u KB) - this frame's effects are not drawn, its "
+                        "units are, and the models are left out until every slot "
+                        "takes them", nfxAll, nrun,
                      (unsigned)((fxBytes + (VkDeviceSize)nrun * 32 + 1023) >> 10));
             }
+            s_fxShort = 1;
+            s_fxShortU = fxBytes;
+            s_fxShortP = (VkDeviceSize)nrun * 32;
+            s_fxShortN = nfxAll;
+            s_fxShortOk = 0;
             dropFx = 1;
             nrun = 0;
             poseBytes = poseBase;
             if (!nbase) { s_fxHold = 0; goto standdown; }
         } else s_saidFxRoom = 0;
+    } else if (s_fxShort) {
+        /* THE SHARE OWED, GROWN INTO THIS SLOT with the units' buffers kept
+           as above, so a failure again costs nothing but the attempt. A slot
+           that already holds it grows nothing; one whose units' growth has
+           just replaced its buffers loses its bit until it holds it again.
+           Only the slots this pass draws (`upload_draw`'s own bound) count. */
+        const uint32_t n = d->slots < TAGPU_VK_SLOTS ? d->slots : TAGPU_VK_SLOTS;
+        const unsigned all = (1u << n) - 1u;
+        if (slot_sized(d, s, ubase + s_fxShortU, poseBase + s_fxShortP, 1) &&
+            draw_room(nbase + s_fxShortN))
+            s_fxShortOk |= 1u << slot;
+        else
+            s_fxShortOk &= ~(1u << slot);
+        if ((s_fxShortOk & all) == all) { s_fxShort = 0; s_fxShortOk = 0; s_saidFxRoom = 0; }
     }
     /* THE POSE, ONE COPY OF EACH ARENA, laid out as tagpu_posebake.h states:
        rows, then the shaded words, then the visibility words. */
@@ -3390,22 +3449,23 @@ int tagpu_vk_unit_fx_count(unsigned frame)
     return s_fxFrame == frame ? s_fxWill : -1;
 }
 
-/* THREE ANSWERS OF NO, AND BETWEEN THEM A STAND-DOWN COSTS AT MOST ONE FRAME
-   OF EFFECTS WHILE UNITS ARE DRAWN. The pass cannot draw models at all
-   (refused, owed a teardown, no effects pipeline). The frame's own settings
-   will stand it down (`frame_down` on the forecast): known before the
-   gather, so no frame is lost to them. Or the last hand-over was not drawn
-   (`s_fxHold`) for any other reason: that frame's effects were lost, and from
-   this one on only the records that carry a model are taken back, until the
-   pass draws a hand-over again. The header states what a view of models
-   alone costs. RENDER THREAD, before `upload_draw` of the same frame, so the
-   hold is the previous frame's. */
+/* FOUR ANSWERS OF NO, AND BETWEEN THEM A STAND-DOWN COSTS AT MOST ONE FRAME
+   OF EFFECTS. The pass cannot draw models at all (refused, owed a teardown,
+   no effects pipeline). The frame's own state will stand it down
+   (`frame_down` on the forecast): known before the gather, so no frame is
+   lost to it. A slot would not grow by the models' share (`s_fxShort`): that
+   frame's effects were lost, and until every slot holds the share only the
+   records that carry a model are taken back. Or the last hand-over was not
+   drawn (`s_fxHold`) for any other reason: likewise, until the pass draws a
+   hand-over again. The header states what a view of models alone costs.
+   RENDER THREAD, before `upload_draw` of the same frame, so the hold and
+   the share are the previous frame's. */
 int tagpu_vk_unit_fx_ready(const TAGPU_VKFXASK* q)
 {
-    if (!q || s_state == ST_REFUSED || s_downOwed) return 0;
+    if (!q || s_state == ST_REFUSED || s_downOwed || s_fxShort) return 0;
     if (s_state == ST_READY && (s_pipeFx == VK_NULL_HANDLE || s_fxHold)) return 0;
-    return frame_down(q->shadowOn, q->otherDraws, q->fogWant, q->fogCarried,
-                      q->scafOn) == FD_DRAW;
+    return frame_down(q->shadowOn, q->otherDraws, q->fogWant, q->fogCarried, q->scafOn,
+                      mirrors_there(q->atlas, q->atlasDim, q->pal, q->shadeK)) == FD_DRAW;
 }
 
 /* the world scissor, the viewport rect itself rather than its vertical
@@ -3676,6 +3736,7 @@ void tagpu_vk_unit_down(const TAGPU_VKPASS* d)
     s_drawThis = 0; s_abFrame = 0; s_ndraw = 0; s_ncast = 0;
     s_nsil = 0; s_nslant = 0; s_nwire = 0; s_nfx = 0;
     s_fxHold = 0;
+    s_fxShort = 0; s_fxShortOk = 0; s_fxShortU = s_fxShortP = 0; s_fxShortN = 0;
     s_shadowOn = 0;
 
     /* NOTHING TO FREE, BUT THE VERDICT STILL STANDS. */
