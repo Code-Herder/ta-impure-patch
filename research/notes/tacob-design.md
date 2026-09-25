@@ -276,7 +276,7 @@ that cost a live run, and each message says which note holds the measurement:
 | `thread-peak` | warning | a static estimate of concurrently live records above eight — per script, itself if it can block plus everything it starts or calls |
 | `query-piece-shown` | warning | the muzzle a `Query*` hands back that neither `Create` nor `0x45AF1B` hides: the flare cone stuck on the hull |
 | `set-ignored` | warning | a `set` retail TA drops — only six of the twenty ids have a case in `0x480B20` |
-| `get-extension` | warning | a value id above 20: the jump table at `0x480AC4` stops there and returns 0 |
+| `get-extension` | warning | a value id above 20: the jump table at `0x480AC4` stops there and returns 0. Only TADR's recorder answers more (32 and 69–75), and our stack does not load it |
 | `piece-unknown` | warning | a declared piece the model has no node for, so every move and hide on it moves nothing |
 
 `play-sound` and `map-command` are **compile errors**, not lints: the compiler refuses them and

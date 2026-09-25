@@ -271,6 +271,37 @@ nothing sizes or indexes, so raising it costs time, not memory. The raised limit
 TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame.
 
+### The recorder's patch sites — `tplayx.dll` 3.9.2.416 [DISASSEMBLED 2026-09-25]
+
+TADR's demo recorder patches the engine as well, through its Delphi plugins. These are the sites of
+the build players run (Escalation's `eplayx.dll`), each checked in the pristine exe and its immediate
+found in that binary. What each feature does, and what to port, is in the
+[merge exploration](tadr-merge-exploration.md#the-shipped-features-by-port-group). The recorder
+writes some sites at a transient splice of the entry point `0x4E6FA0` (`push ebp; mov ebp,esp`), and
+the rest at the game's first call into a DirectPlay export.
+
+| VA | Stock code there | The recorder's patch |
+|---|---|---|
+| `0x491640`, `0x491659`, `0x491666` | the unit-cap default and ceiling (*The per-player unit cap* above) | 2-byte operand writes: 1500 |
+| `0x447D87` | `jne` after `call 0x457B90` (the count of controller-2 players) in the battleroom's Multi handler | NOP 6: several AIs in one game |
+| `0x45130F` | `push ecx; push "AI:%s"` and the `sprintf` that names an AI | a 16-character name buffer |
+| `0x490DF9` | inside `SetGameSpeed 0x490DF0`, which clamps to [1, 20] (`cmp ebx,0x14`); the speed packet handler calls it too (`0x455952`) | clamp to the speed lock's range instead |
+| `0x4965B3`, `0x496559` | the + and − keys' speed tests | the same clamp |
+| `0x496099` | the in-game key handler's pause case | a jump created disabled and never written; tdraw's `LagSwitchGuard` hooks the same site |
+| `0x480770` | COB `get` (`vt+0x44`) | a jump to the eight extra getters |
+| `0x416BBB` | inside `+View` (`0x416B50`), before it writes `main+0x2A43` at `0x416BC1` | line-of-sight bookkeeping |
+| `0x452B54`, `0x452B5E` | the two epilogues of the alliance setter | mark "alliances changed" |
+| `0x46555F` | in the per-tick player loop `0x464F80` | after a change, run the full rebuild `Game_SetLOSState 0x4816A0` once |
+| `0x481D63` (epilogues `0x481FAF`, `0x48207B`) | the sight removal `0x481D50` | repeat it for each ally |
+| `0x482283` (epilogues `0x4824CF`, `0x482597`) | the true-LOS stamp `0x482270` | repeat it for each ally |
+| `0x465AD4` | `UnitInPlayerLOS 0x465AC0`: its owner == player test | an allied owner answers "visible", before the cloak and submerged tests |
+| `0x48BC3D` | the HotUnits cull `0x48BAE0` | NOP 0x13 bytes: the own-player shortcut |
+| `0x4674AB`, `0x46750E`, `0x46782F` | the view player's radar scan `0x467440` | re-run passes 2–4 per ally, writing each into `main+0x2A43` |
+| `0x466E6F` | the minimap rebuild `0x466DC0` | draw allied units |
+| `0x46AC85`, `0x46B013`, `0x46B10E` | the unit panel's owner tests | show allied units' details |
+| `0x4D989B` | the crash writer: `push esi; call [0x4FC0EC]` (`CloseHandle`) | append a module list |
+| `0x417B9B` | `call 0x4B7900`, the console command interpreter | a command table, empty in the shipped build |
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
@@ -2842,7 +2873,7 @@ Clears `cells*2` bytes, then walks the map cells `[col0, col0+cols) × [row0, ro
 
 | Where | What it reads |
 | --- | --- |
-| `0x4843CD` | `main+0x2A43` — the **LOCAL** player id (not `+0x2A42`, the watched one). `mask = 1 << id` |
+| `0x4843CD` | `main+0x2A43` — the **viewed** player id, whose sight the screen shows (not `+0x2A42`, the controlled one; see *The order-marker chain*, "`+0x2A42` is the controlled player"). `mask = 1 << id` |
 | `0x4843F0` | `ebp = main + 0x1B63 + id*0x14B + 0x7C` — that player's LOS block: `{u8* counters; i32 w; i32 h}` at `+0`/`+4`/`+8` |
 | `0x48442D..0x484485` | `col0 = eyeX/32 − (eyeX % 32 < 16)`, `row0` the same from `eyeY`. Equivalently **origin = `32·col0 + 16`** |
 | `0x4844B9`/`0x4844C7` | `cx`/`cy` bounded against the LOS block's own `w`/`h`, **unsigned**, so a negative index is skipped |
@@ -4211,13 +4242,15 @@ independently — `0x416B25` and `0x416B38`, from two separate calls in one load
 function — so the two can hold different values, and code that reproduces either
 loop has to use the byte that loop uses.
 
-**Which of the pair is "watched" and which "local" is NOT established here, and
-this note's own pages disagree** [INFERRED, unresolved]: `ui-markers.md`'s
-appendix calls `+0x2A42` watched and `+0x2A43` local, while `effects.md`,
-`features.md` and `line-of-sight.md` all call `+0x2A43` the local player and the
-"Mapped internal data structures" table below calls `+0x2A42` the local player
-index. Nothing in this landing needed the names — only the addresses — so the
-question is left open rather than guessed at.
+**`+0x2A42` is the controlled player and `+0x2A43` the viewed one** [DISASSEMBLED 2026-09-25]. The
+two writers are the cheat commands in the table at `0x501D80`: `+Control N` (`0x416AB0`, run level 4)
+writes N to both bytes (`0x416B25`, `0x416B38`), and `+View N` (`0x416B50`, run level 2) writes only
+`+0x2A43` (`0x416BC1`). The LOS bit test at `0x43EBF4` shifts by `+0x2A43` (`0x43EBE5`). So `+0x2A42`
+is the player whose units the order driver and the selection use, and `+0x2A43` the player whose line
+of sight, fog and bars the screen shows. TADR names them the same way (`tamem.h`:
+`LocalHumanPlayer_PlayerID`, `LOS_Sight_PlayerID`). They are equal in ordinary play [INFERRED]. Some
+notes and code comments still call `+0x2A43` "local" and `+0x2A42` "watched"; the addresses in the
+code are right, only those names are wrong.
 
 Two further things are not obvious and both matter to a port. **The squad tag is
 tested as a DWORD** — `mov ecx,[edi+0xac]; test ecx,ecx` at both `0x469C55` and `0x469CD1` — and only
@@ -5237,7 +5270,7 @@ seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
 | `main+0x2C8E` / `+0x2C90` | the map cell pair, `world >> 0x14` |
 | `main+0x391F1` / `+0x391F5` | input mode, and the handler pointer for it |
 | `main+0x14903` | the `cursors` GAF handle |
-| `main+0x2A42` / `+0x2A43` | local player index, and the player's LOS bit (`shl 1, cl` at `0x43EBF4`) |
+| `main+0x2A42` / `+0x2A43` | the controlled player index / the viewed player index, whose LOS bit `0x43EBF4` tests (`shl 1, cl`, `cl` = `+0x2A43` at `0x43EBE5`); `+View` writes only `+0x2A43` |
 
 **Negative results worth the line.**
 
@@ -8568,7 +8601,7 @@ and the level lifetime, and no length to bound a node's pointers against.
 | `+0x18` | the child slot a `call-script` waits on — **`-1` when the child was refused** | `0x4B1965` |
 | `+0x1C` | signal mask; `1` at alloc, inherited from the parent by START/CALL | `0x4B091A`, `0x4B18F4`, `0x4B1961`, `0x4B1B14` |
 | `+0x20` | completion callback object pointer (above), `0` at alloc | `0x4B0913`, `0x4B0B37`, `0x4B0C69` |
-| `+0x24` | the stack, 32 words to the end of the record | every push |
+| `+0x24` | the stack, 32 words to the end of the record. **`PUSH` has no bound**: `0x4B13CF..0x4B13D9` increments `+0x08` and stores, so a thread that holds more than 32 words writes into the next record, and past the eighth into the COB object. Stock content peaks at 11 words; three Escalation scripts need 54 to 85 ([merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)) [DISASSEMBLED 2026-09-25] | every push |
 
 **`COBEngine_AllocThread 0x4B08C0`** — `thiscall(cob, scriptIndex)` → slot 0..7 or `-1`: rejects an
 index outside `0..nscripts-1` (`0x4B08C5..0x4B08D0`) — so **the engine asking for a script the
@@ -8901,6 +8934,8 @@ else nulls `o3+0x10`, not because this test fires; the repose above runs in `Dra
 **`0x480B20`**. Both are `thiscall(cob, id, a, b, c, d)` / `thiscall(cob, id, value)` and both
 open with `lea eax,[ecx-1]; cmp eax,0x13; ja` — so **the value ids really are 1..20** and
 anything else returns 0 / does nothing. `esi` is the unit, taken as `[[cob+0x540]+0x0C]`.
+TADR's recorder takes over `get` with a jump at `0x480770` and answers ids 32 and 69–75 as well; it
+never hooks `set` ([merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)).
 Read out of the binary at the addresses below; the arithmetic is what `tools/tacob`'s
 `EditorWorld` reproduces, and `tools/test_tacob.py` §`ValueIds` pins it.
 

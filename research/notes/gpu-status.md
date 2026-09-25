@@ -9387,7 +9387,9 @@ silently.
    consumer's own render pass. `TRANSFER` is in both scopes because the dump's copy is exactly the
    reader a dependency naming only the sampling consumer would have left out. Not `BY_REGION`: a
    conv draw reads a 3×3 neighbourhood and OUT reads a different image entirely, so neither read is
-   framebuffer-local.
+   framebuffer-local. The dependencies are what the spec requires, but not every driver honours
+   them. AMD's Windows driver drops them for these passes, so `end_pass` records the same ordering
+   again as a pipeline barrier (§2.95).
 2. **`dst_ready` transitioned the destination from `UNDEFINED` unconditionally, including on a
    repaint** — which licenses the driver to discard every texel of the atlas the repaint exists to
    recolour *in place*. It would have blanked exactly the world it was added to avoid blanking. The
@@ -10439,8 +10441,9 @@ Two forms, then: **a GL handle used as a validity test**, and **a construction r
 through one**. Both are invisible while one backend exists, because the handle is always there.
 
 **The counterpart rule that came out of it**: a device limit belongs to the device that will
-consume it. `tagpu_vk_max_image_dim()` and `tagpu_vk_max_uniform_range()` read
-`maxImageDimension2D` and `maxUniformBufferRange` from the physical device actually bound, and
+consume it. `tagpu_vk_max_image_dim()` and `tagpu_vk_max_storage_range()` read
+`maxImageDimension2D` and `maxStorageBufferRange` from the physical device actually bound (the
+storage range capped at `INT_MAX`, since a driver may report `UINT32_MAX`; §2.94), and
 both return **0 for "no device yet" rather than a default** — the lane takes ~200 ms to come up
 while the gathers run from the first frame, so a pass that read 0 as a bound would cache a ruined
 atlas for the life of the process. That is measured, not hypothetical: it is what
@@ -18673,3 +18676,185 @@ no switch for it. The wire's rule is the walk, not the engine's polygon edge wal
 steep edges and differ on shallow ones, where the engine lights two pixels a scanline and the
 walk a full run (hardware-portability.md, G21b). The clip at 8× was measured under the
 game-pixel rule the branch had before and not re-run under this one.
+
+### 2.94 The Windows gate: every pass on an AMD GCN card, and the restorer's unsigned limits (`tagpu_restore_core.c`, `tagpu_vk_restore.c`) — G21d
+
+The plan is [hardware portability](hardware-portability.html) §3 G21d. It ran on the Windows test
+setup (an AMD Radeon R9 200-series card on its Windows driver, 1920 × 1080) through a `tacli`
+remote instance (§2.92), with main carrying G21a–c, and beside the reference setup on a private
+1920 × 1080 Xvfb display. Both ran the same DLL at `ss=2`.
+
+**What the card does now [MEASURED 2026-09-25].** The log names `vk: depth format:
+D32_SFLOAT_S8_UINT (130)`; the world target, terrain, features, units (`hard shadows on
+(stencil-masked), nanoframe wire on`) and markers come up on it; and with the play arm set on
+`feat-forest` the census reads `6 pass(es) drew … (terr=1 feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1
+fps=0)`. G21b's device asks for no line extension, and none is logged missing. GPU frame time
+(`ftime.on`, paused, `maxfps` uncapped, four reports of 256 frames each): Classic p50 1.68 ms,
+p99 1.84 ms; Classic++ p50 2.64 ms, p99 2.66 ms. The Classic++ terrain restore ran 5 062 frames
+in 10.6 s of wall time and 7.0 s of GPU time at NK=8.
+
+**The one refusal the run found, and its fix [SOURCE].** Before the fix the log read
+`restorevk: uniform block -1 < one k-block (9472)`, and the terrain, feature, unit and effects
+lanes each logged that they draw their base atlas: Classic++ restored nothing on that card. The driver reports
+`maxUniformBufferRange` as `UINT32_MAX` (the restorer's own line prints it as `4194303 KB`). The
+Vulkan backend passed it to `tagpu_rcore_pick_nk` through an `(int)` cast, where it became -1,
+less than one k-block. `tagpu_rcore_pick_nk` now takes both limits as `unsigned`, as Vulkan
+reports them, and clamps the quotient to `TAGPU_R_MAXNK` before narrowing it; the call passes
+them uncast. Below 2³¹ the arithmetic is unchanged, so no device that restored before picks a
+different NK. The other device limits read into an `int` are bounded first:
+`tagpu_vk_max_storage_range` caps `maxStorageBufferRange` at `INT_MAX`, and
+`tagpu_vk_max_image_dim` returns 0 ("no device yet") for a dimension above it. After the fix, the card's log holds no
+refusal line.
+
+**Its pictures against the reference setup [MEASURED].** These are the `.ab` world captures of
+G21a's fixtures and two of G21b's, at 1× in both presets, one pass at a time, 3840 × 2160 target
+pixels. They ran with `--los 0 --mapping 1` on both machines, because a remote test folder's
+store carries the player's own skirmish values. Every capture was taken twice, and each
+machine's own run-to-run floor is 0 everywhere, so every count below is a difference between
+the two GPUs:
+
+| capture | differ (of drawn) | > 8 levels | > 32 | largest |
+|---|---|---|---|---|
+| terrain, Classic | 0 of 7 282 264 | 0 | 0 | 0 |
+| features, Classic | 12 of 926 348 | 0 | 0 | 1 |
+| markers (health bars), both presets | 0 of 1 080 | 0 | 0 | 0 |
+| terrain, Classic++ | 180 359 (2.5 %) | 474 | 0 | 29 |
+| features, Classic++ | 216 876 (23 %) | 89 864 | 4 320 | 64 |
+| units, both presets | 1 207 (2.4 %) | 280 | 158 | 240 |
+
+- **Units**: 12 pixels are drawn on one GPU only; the 158 over 32 levels fall in 50 spots of at
+  most 33 pixels, single rows and short runs along polygon edges. The two rasterisers round a
+  triangle's edge differently. The Classic++ row matches the Classic one because on each machine
+  the two presets' unit captures are identical (0 px): the unit pass drew its base atlas. On the
+  AMD card its log gives the reason — the restored twin was published for 1.0× anisotropic
+  (`classicpp.cfg=aniso=1`, the A/B's setting) after its sampler was built for 4.0×, and a
+  sampler is not rebuilt mid-frame; the reference setup's log of that run was not kept.
+- **Classic++ terrain** is the same picture: mean 0.03 levels over the drawn pixels, 99th
+  percentile 1, differences along texel edges.
+- **Classic++ features** hold the one visible difference: on the AMD card the restored trees
+  carry a few off-hue specks (dim magenta, red, blue) near trunks and edges. 2 388 pixels
+  change hue by more than 32; the mean is 2.2 levels and the 99th percentile 27. The restorer
+  itself caused them: the card's driver dropped the render-pass dependencies between its
+  passes. §2.95 has the diagnosis and the fix; with it, this capture differs by one level at
+  most.
+- **The nanoframe ladder** (G21b's wire): 13 of 74 931 pixels are drawn on one GPU only, so the
+  line rule draws the same shape on both. Colours differ by up to 180 because the build colour
+  pulses with game time and the two games paused at different ticks.
+- **Timing, not the GPU**: `shadow-lab`'s units (the dish and turrets stand at other angles),
+  `fx-lasers` and `fx-rockets` are live and paused at different ticks. The reference setup's
+  rockets had not fired when it paused, so `fx-rockets` has a Windows capture only.
+- The effects captures need `fx.on=nomodels`: the effects' 3D models are drawn by the unit pass,
+  and a one-pass capture refuses a frame two passes drew into.
+
+**Not covered.** The hard shadows' picture: they are drawn (logged, stencil-masked), but a
+one-pass capture has black under them, and there is no presented-frame capture on a remote
+instance. The 0.877× zoom, since a remote instance cannot write `tagpu_zoom.txt`. The validation
+layer on either machine. (Restored units across the two GPUs are measured in §2.95.)
+
+### 2.95 The restorer's passes and a driver that drops their render-pass dependencies (`tagpu_vk_restore.c` `end_pass`) — G21d
+
+**What was wrong.** On the Windows test setup's AMD card (§2.94), Classic++ damaged restored,
+keyed art. The owner saw it in the UI first: the Impure menu's gear icon, colour smears on the
+main menu's buttons, and the team colours. The feature pass showed off-hue specks on trees. All
+three lanes are keyed, and all three go through the same restorer passes.
+
+**How it was isolated [MEASURED 2026-09-25].** The captures used `restoredump.on` on
+`feat-forest`, with Classic++ armed before launch and the game paused. The dumps are byte
+dumps of the feature lane's base atlas and its restored twin, taken on both machines.
+
+- **The input is identical.** The base atlas is the same bytes on both machines.
+- **The output is not.** The restored twin differs in 2 807 texels (up to 179 levels), in 6 of
+  its 24 frames.
+- **The damage follows the slot grid.** A per-frame map of the batches (frame → batch → slot)
+  puts every damaged frame in a block of its batch's slot grid, mostly the grid's bottom row.
+  That row is the part of the full-viewport draw that the GPU rasterises last. Frames in the
+  other slots of the same batches are byte-identical to the reference setup's.
+- **The block edges are sharp.** In one 37 × 60 frame, rows 31–48 are wrong and every other
+  row is exact. A fault inside the network would spread one texel per layer, so the damage
+  enters at the last layers.
+- **It is a hazard, not arithmetic.** The damaged texels are the same set in every run, but
+  their values change: two runs of the same build differ from each other in 544 of them.
+
+Each variant below was run on the card and compared with the reference setup:
+
+| variant on the AMD card | texels unlike the reference setup |
+|---|---|
+| as shipped (NK 8) | 2 807 |
+| NK 4 | 2 461 |
+| NK 1 (179 render passes a batch, against NK 8's 25) | 3 605 |
+| slicing budget 100 ms (no batch split across frames) | 2 807, the same texels |
+| fp16 activations (against the reference setup's fp16 run) | 5 595 |
+| `LOAD` instead of `DONT_CARE` on the activation attachments | 2 807 |
+| a full pipeline barrier after every restorer render pass | **0** |
+
+On the reference setup, a 0.5 ms budget, which splits every batch across frames, changes
+nothing (0 texels).
+
+**The cause and the fix [SOURCE + MEASURED].** Every restorer pass states its ordering as
+subpass dependencies (`rp_deps`):
+
+- **incoming:** `EXTERNAL → 0`, from fragment-shader reads, colour writes and transfers, to
+  colour writes;
+- **outgoing:** `0 → EXTERNAL`, from colour writes, to fragment-shader reads, colour writes and
+  transfers.
+
+By the spec, that orders FILL → CONV × depth → OUT → the consumer's sample. The card's driver
+does not honour it for these passes.
+
+What sets FILL and CONV apart from the rest of the backend is that their attachments never
+change layout. The activations stay `GENERAL` at both ends and inside the subpass, while OUT and
+the mip pass transition their attachments. That this is why the driver skips the dependencies
+is **[INFERRED]**. Whether the driver honours the backend's other passes,
+which do transition, is not isolated either: none of §2.94's captures shows a hazard in them,
+and the owner's review of those captures found none.
+
+`end_pass` now ends every render pass in the file (FILL, CONV, OUT and the mip chain). It
+records the same ordering again as a `vkCmdPipelineBarrier`:
+
+- **source:** `COLOR_ATTACHMENT_OUTPUT | FRAGMENT_SHADER`, access colour write;
+- **destination:** `FRAGMENT_SHADER | COLOR_ATTACHMENT_OUTPUT | TRANSFER`, access shader read,
+  colour read and write, and transfer read and write.
+
+A pipeline barrier's scopes are the whole queue in submission order, so the barrier covers:
+
+- the next pass's sample (RAW);
+- the next pass's write of the same attachment (WAW);
+- a later pass writing what this one sampled (WAR, through the fragment-shader source stage);
+- `dump_step`'s copy.
+
+The subpass dependencies stay. They are what the spec requires, and the OUT and mip passes'
+layout transitions hang on them. `dst_ready`'s last barrier before a job's first OUT names
+OUT's own stage and accesses (colour-attachment output, read and write) as well as the
+consumer's sample, so the cleared destination does not rely on OUT's incoming dependency
+either.
+
+**With the fix [MEASURED 2026-09-25, the same scenes on both machines].**
+
+- **Features.** The restored twin is byte-identical to the reference setup's at NK 8 and at
+  NK 1. The reference setup's own output is unchanged by the barrier (0 texels).
+- **The rendered feature pass.** Its `.ab` capture differs from the reference setup's in
+  22 672 of 927 200 pixels, by one level at most. Before the fix: 217 004 pixels, 6 252 of them
+  past 32 levels, up to 84. The one-level residue is the twin's filtering, which Classic
+  features show too (§2.94).
+- **Units** (`nanoframe-ladder`, `native.on=all wrecks`, 60 frames restored). The base atlas is
+  identical on both machines. The restored twin plus its mip chain (22 MB) differs in 11
+  bytes: four texels of level 0 by one level, plus the border copies and mip texels built from
+  them. This is float rounding between the two GPUs.
+- **GUI.** The UI atlas fills lazily and packs in a different order on each machine, so its
+  texels are compared by content. A texel is matched to one in the other atlas whose 25 × 25
+  source window — the network's receptive field — has the same indices.
+  - Of 99 268 matched texels, 98 730 are identical, 336 differ by one level, and 202 by two to
+    six.
+  - The bug's damage ran to 216 levels, in blocks.
+  - The small residue lies where a matching window can still differ: the frame's rect decides
+    the zero padding, and the colour-key fill searches the whole frame **[INFERRED]**.
+
+**The cost.** On the reference setup, the four feature batches of the first restore take
+8 slices both before and after the fix. On the AMD card they take 16 slices of the 12 ms budget
+(246 ms of wall time). That is paid once per atlas fill, and a settled scene restores nothing.
+
+**Not covered.**
+- A before/after of the shell menus' own pictures. The owner's report is the before; the
+  after is theirs to look at.
+- Other AMD cards and driver versions.
+- The validation layer on either machine.
