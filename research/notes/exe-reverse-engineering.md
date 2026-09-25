@@ -1602,7 +1602,7 @@ receiver (`0x49AFEB`), which runs on whichever thread pumps the network, the loa
 during a network load. Two facts make that receiver rarely damage anything — `0x499EB0` skips a
 projectile whose owner's player record (`main+0x1B63 + 0x14B·owner`) has `+0x73 == 3`
 (`0x49A01B..0x49A047`) [INFERRED: a remote player], and in state 5 the dispatcher passes a code
-only with bit 1 of its entry in the table `0x512BC0` (`0x454745..0x454760`; the table is zero in
+only with bit 1 of its entry in the table `0x512BC0` (`0x454745..0x454760`, the entry read at `0x454758`; the table is zero in
 the image and filled at run time) — but neither is the safety argument. The sets live in the frame
 (64 slots each, so 32 keys before one grows) and grow through `0x4D83B0`, whose failure is the engine's own out-of-memory exit.
 Both calls and both blocks are rows of the one fail-closed table and nothing else calls
@@ -1743,7 +1743,7 @@ the shear is the same in every mode:
   `PositionInPlayerMapped 0x408090(player, point)` (`0x465BBB`, `0x465C53`, `0x465CF7`), which places
   the point at `0x408095..0x4080C0` — not visible at `0x4080C1` — and reads the shared mapped grid
   `main+0x14273`, a `u16` a cell and a bit a player; the fourth goes to an inline copy of it,
-  `0x465DA9..0x465DCA` (not visible `0x465DCB`, read `0x465DE0`).
+  `0x465DA9..0x465DCA` (not visible `0x465DCB`, read `0x465DE0`). Inside `0x408090`, `esi` is pushed at `0x408094` and is free until the `pop esi` of either exit, which is what the stub over its row block uses.
 
 The third read loads `dx` and `di`, the point's y and z words, and the fourth reads them again
 (`0x465D46`, `0x465DA9`); the fourth takes its column in `ecx` from `0x465D3B`, in both modes.
@@ -1827,7 +1827,7 @@ the other eight reuse a `y >> 1` computed further up (`0x4658E0`'s second corner
 | `0x43EE94` | the cursor picker | as above | mapped grid | sheared, patched: local |
 | `0x43EFA9` | the cursor picker | as above | mapped grid | sheared, patched: local |
 | `0x43F5D1` | the order resolver `0x43F0E0` | whether the target's cell is mapped for the local player, which steers the order it returns; among its 22 call sites are AI routines (`0x40804C` in `0x407E90`) and the unit order code (`0x405265`) | mapped grid | sheared, patched: table |
-| `0x43F64D` | the order resolver | as above; stock overwrites the point's register (`esi`, `0x43F635`) before this test | mapped grid | sheared, patched: table (hand stub over `0x43F631..0x43F654`) |
+| `0x43F64D` | the order resolver | as above; stock overwrites the point's register (`esi`, `0x43F635`) before this test | mapped grid | sheared, patched: table (hand stub over `0x43F631..0x43F654`; it rejoins at `0x43F655`, or drops to stock's not-mapped exit `0x43F6AA`) |
 | `0x43FC05` | the order resolver | as above | mapped grid | sheared, patched: table |
 | `0x43FD1A` | the order resolver | as above | mapped grid | sheared, patched: table |
 | `0x43FF85` | the order resolver | as above | mapped grid | sheared, patched: table |
@@ -1874,7 +1874,7 @@ the other eight reuse a `y >> 1` computed further up (`0x4658E0`'s second corner
 | `0x482663` | the sight emitter `0x4825B0` (below) | whether a unit stamps its sight at all, and where | sight grid (`main+0x14297`) | sheared, patched: table (`0x482615..0x48261E`) |
 | `0x48307C`, `0x4830C6` (outside the 57: a spilled pointer) | the sight grid's builder | whether a terrain tile's height is written, at its sheared row | sight grid (through `[esp+0x14]`) | **not the defect**: the grid is built in sheared space; an off-grid tile loses only its occlusion |
 | `0x48E9A8` | `cmp [ebp+0x84],ebx` in `0x48E010` [function start from the preceding padding] | another structure's `+0x84`, compared with zero | — | **not the shear**: no grid |
-| `0x49BF08` | the projectile draw pass `0x49BE60` | whether the frame shows, and poses, a projectile | LOS grid | sheared, patched: local (hand stub over `0x49BEE8..0x49BF0F`) |
+| `0x49BF08` | the projectile draw pass `0x49BE60` | whether the frame shows, and poses, a projectile | LOS grid | sheared, patched: local (hand stub over `0x49BEE8..0x49BF0F`; `ecx` is next written by the loop's top `0x49BEA3` through `0x49BF42`, or reloaded at `0x49C058`) |
 | `0x4B4FF8` | `cmp [esi+0x84],edi` at the top of `0x4B4FF0` | another structure's `+0x84`, compared with zero | — | **not the shear**: no grid |
 
 Readers of `main+0x14273` that no `+0x84` compare bounds — `0x40D817`, `0x466D01` and `0x47E37B`,
