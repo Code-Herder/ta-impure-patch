@@ -42,7 +42,8 @@ and the room for its `continued in` line.
 
 `NOTE_MAX` (192 bytes) stays free at the end of every file for the `continued in` line its
 rotation writes. One line is at most `LINE_MAX` (2048) bytes of text, above every buffer that
-feeds the sink (the `packet:` heartbeat's is 1 700 bytes and its lines run to 1 210); a longer
+feeds the sink (the `packet:` heartbeat's is 1 700 bytes and its lines run to about 1 430 in play,
+measured 2026-09-25 with the `wire:` section); a longer
 one is cut and ends `...[truncated]`. A block is at most `TLOG_FILE_CAP - 4 × NOTE_MAX`; a longer one is cut and ends
 with a `...[block truncated]` line.
 

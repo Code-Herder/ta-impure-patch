@@ -332,7 +332,7 @@ made, or its page cannot be made writable. Each of the twenty-one, and why:
 | line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440`, the sight emitter `0x4825B0` (sixteen sites in 25 rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps, what a unit sees |
 | line of sight in local code: the cursor picker, the build cursor's site test, the feature helper, the radar rebuild's projectile dots, five particle leaves, positional sound (27 sites) | local | a cursor, a draw, a sound |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
-| wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`), and the diverged `0x0D` at `0x49D280` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local) |
+| wire robustness — the receivers' unbounded indices `0x4861F7` (`0x09`, with the sender's block), `0x4866E5`/`0x486753` (`0x0C` + killer), `0x489CED` (`0x0B`), `0x48B960`/`0x48B985`/`0x48B9AD`/`0x48BA05`/`0x48BA5E`/`0x48B40E`/`0x48B49C`/`0x48BA9F` (`0x2C`), and the `0x2C` length's capture in the receive `0x453595`/`0x45361F` (landing B3) | local | every bound is stock-exact for a well-formed message and drops only a malformed or foreign one: a peer without the fix computes the same shared state (the same argument that makes the sort-buffer and terrain-window fixes local). The diverged `0x0D` drop rides the weapon-ID row `0x49D280` above: evidence §8 classes it simulation, only when diverged |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -360,14 +360,37 @@ by a signed delta, an unbounded type, and a signed round-robin remainder:
 | `0x09` | `0x4553DA` (→ `0x4553E9`) | `CreateFromNetwork 0x4861D0(player [esp+0x14], rec)` `ret 8` | index `rec+3` (0 faults at `0x486237`), type `rec+1` (indexes the def table `main+0x1439B + type·0x249` at `0x48626F`) |
 | `0x0B` | `0x45540D` | `0x489CE0(rec)` `ret 4` | victim `rec+1`, attacker `rec+3` (`0x489CED..0x489D36`); a heal-kind writes HP at `0x489D80` |
 | `0x0C` | `0x45541C` | `0x4866D0(rec, 0)` `ret 8` | index `rec+1` (0 faults at `0x486706`), killer `rec+7` (`0x486753..0x486777`; 0 → NULL, handled) |
-| `0x2C` | `0x4553EE` | `0x48B920(player edi, pkt)` `ret 8` | dirty-entry delta (signed, `0x48B985`), type (`0x48B9AD`), the mover after a refused create (`0x48BA05`, TADR's 13 field faults at `0x48BA07`), the round-robin type (`0x48B40E`) and mover (`0x48B49C`), and the **signed** `idiv` remainder at `0x48BAAB` |
+| `0x2C` | `0x4553EE` | `0x48B920(player edi, pkt)` `ret 8` | dirty-entry delta (signed, `0x48B985`), type (`0x48B9AD`), the mover after a refused create (`0x48BA05`, TADR's 13 field faults at `0x48BA07`), the round-robin type (`0x48B40E`) and model object (`0x48B49C`), and the **signed** `idiv` remainder at `0x48BAAB`; the bit reader has no end, and the message's own `[16]` size is read and discarded (`0x48B944`) |
 
 **The player block** each `0x2C` path trusts: `[player+0x67]` = first slot, `[player+0x6B]` = last, and
 `10·[main+0x37EE6]+1` slots with slot 0 a sentinel. The block is assigned at `0x4858A6..0x4858E0` as
-`first = begin + (1 + k·N)·0x118` for player `k`, `last = first + (N−1)·0x118`; that is the shape the
-entry check `0x48B960` verifies (a wild `[player+0x67]` fails it even where a 16-bit delta could not).
-Confirmed live 2026-09-25 in a four-player game with an AI seat: blocks at slots 1, 1501, 3001, 4501
-and 6001, `N` 1500.
+`first = begin + (1 + k·N)·0x118`, `last = first + (N−1)·0x118`; that is the shape the entry check
+`0x48B960` verifies (a wild `[player+0x67]` fails it even where a 16-bit delta could not). `k` is a
+**rank**, not the record's index: the blocks are handed out in the order of an insertion sort
+(`0x485657..0x4856C0`) that, in a network game, compares the records' DirectPlay ids `[rec+4]`
+(DISASSEMBLED). Confirmed live 2026-09-25 in a four-player game with an AI seat: blocks at slots 1,
+1501, 3001, 4501 and 6001, `N` 1500, and on one joiner record 2 held the block at 6001.
+
+**Which thread.** The receivers above run on the game thread only, by the dispatcher's gate:
+`0x451FD0` (called at `0x491369`) is the only filler of the receive-mask table `0x512BC0` for these
+codes, and gives `0x09`, `0x0A`..`0x10` and `0x2C` the mask 4 (`0x451FE7..0x452017`, one store each;
+`0x0E`'s is `0x45200B`). The dispatcher passes a code in net state 5 only with mask bit 1
+(`0x454745..0x454760`), in state 6 only with bit 2 (`0x454762..0x45477D`), and in any other state only
+with bit 0; state 6 is set at `0x498445`, on the game thread after the load (state 5 during it).
+
+**One receive, one message.** The pump `0x453D40` calls `0x4534E0` per message (`0x453D94`), which
+receives into the buffer at `main+0x2A38` — through the transport `0x462F30` when `[0x506DBC]` is set
+(the image's 1), or straight from DirectPlay (`0x4C9840`, `IDirectPlay::Receive`) when a `-p` switch
+below 0 has cleared it (`0x49F23F` → `0x4578D0` → `0x4619EB`). A too-small buffer is grown and the receive retried
+(`0x453565`, `0x4535EE`). The delivered length is handed only to the statistics call `0x415EF0` (code,
+length, 0; at `0x453595` and `0x45361F`) and then dropped. The transport's splitter `0x463790` walks a
+packet after its 4-byte header, taking each message's length from the table at `0x512AD8` by code —
+except a `0x2C`, whose length is its own `[16]` size, read at `0x46391F`/`0x4639E5` — and stops at a
+message that does not fit what is left (`0x46393E`, `0x463B3B`), so on the transport a delivered
+`0x2C`'s length **is** its size field. A code outside `[2, 0x2C]` ends the walk (`0x4638F2..0x4638FC`).
+The pump takes its message pointer once, before its loop (`0x453D90`), so a growth inside the loop
+leaves it on the old block (DISASSEMBLED; not seen in a run). A `0x2C` with size 0 would keep the
+splitter's counting loop (`0x4638F0..0x463947`) on the same message for good [DISASSEMBLED, not run].
 
 **A wire `0x09` comes from its unit's own player.** The transport sender is the dispatcher's `edi`,
 which `CreateFromNetwork` pushes last (`0x4861EC`), so it is `[esp+0]` at `0x4861F7`. MEASURED
@@ -386,7 +409,8 @@ to `0x48B49C`). A type with no move class (`def+0x22F != 1`, `0x4862CF`) leaves 
 sender's own rule (it lists only units with a mover, `0x48B782..0x48B786`). The **round robin**
 carries every unit, structures included, and tests the mover itself before its one use (`0x48B6E8`:
 `[edi] == 0` skips to `0x48B6FC`), so there a type with no move class is well-formed and only the
-type is bounded; its after-create guard is on `[edi+0x9E]`, which `0x48B4A6` writes through
+type is bounded; its after-create guard is on the model object `[edi+0x9E]` (the Object3do, set at
+`0x485DCC`; `+0x9A` is the COB script), which `0x48B4A6` writes through
 (DISASSEMBLED; MEASURED 2026-09-25: the AI's structures, types 78 and 112, arrive in the round robin
 on every joiner of a four-peer game). GameTime is `main+0x38A47`,
 incremented at `0x4954C0`; `UNITINFOCount` is `main+0x1438F` (the type bound `[1, count)`).
@@ -396,9 +420,18 @@ malformed or foreign message reaches them — the fix is stock-exact for every w
 [class local](tadr-port/sim-fixes.md#b3-built-ahead-2026-09-25). Our stubs are entered by a jmp at a
 clean 5-byte boundary (the `0x0C` destructor at `0x4866E5`, after stock's `push edi`), verify the
 whole stock span first, and continue at the same address; a misframed `0x2C` points the reader at a
-zero dword and jumps to the engine's own end-of-list `0x48BA28`. The diverged `0x0D` is dropped in
-`wpn_rx_fired` (`0x49D280`, [the weapon-ID receiver](#weapon-ids)) by resolving the shooter's own slot
-weapon and comparing it to `&Weapons[id]`.
+zero dword and jumps to the engine's own end-of-list `0x48BA28`. The `0x2C` reader is bounded by the
+message's length — the receive's delivered length, kept per thread at the two statistics calls, and
+the size field, the smaller — before each read the stubs precede: the entry (header and first
+delta), the delta (the type read next), `0x48BA5E` (the flag bit read directly at `0x48BA71`, and
+when set the round-robin type read `0x48B409`) and `0x48B40E`. The move class's payload parse
+(`[vt+0x24]`: `0x44E080`, `0x44E9C0`, `0x44F5C0`) and the round robin's full-state tail
+(`0x48B4A2..0x48B6FC`) branch on the bits they read, so a message ending inside one is read to its
+end before a check sees it. The diverged `0x0D` is dropped in `wpn_rx_fired` (`0x49D280`, [the
+weapon-ID receiver](#weapon-ids)) by resolving the shooter's own slot weapon and comparing it to
+`&Weapons[id]`: stock divides by the local slot weapon's `+0x68` (`0x49CE62..0x49CE6A`) and faults only
+when that is 0, otherwise building a projectile from the packet weapon's branch and the local
+weapon's velocity.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
@@ -1657,13 +1690,13 @@ remainder 0 and below the array's count (`u16 main+0x14351`); an anchor by its o
 either is not damaged, and is counted. **Per thread, by a lifetime**: a call's frame is a local of
 its wrapper, on the calling thread's own C stack, and the innermost frame is a TLS slot whose
 previous value the wrapper keeps and restores, so a list block reads the innermost call's frame on
-its own thread whatever another thread runs. It has to be: `0x499EB0` is reached from the `0x0E`
-receiver (`0x49AFEB`), which runs on whichever thread pumps the network, the loader's included
-during a network load. Two facts make that receiver rarely damage anything — `0x499EB0` skips a
-projectile whose owner's player record (`main+0x1B63 + 0x14B·owner`) has `+0x73 == 3`
-(`0x49A01B..0x49A047`) [INFERRED: a remote player], and in state 5 the dispatcher passes a code
-only with bit 1 of its entry in the table `0x512BC0` (`0x454745..0x454760`, the entry read at `0x454758`; the table is zero in
-the image and filled at run time) — but neither is the safety argument. The sets live in the frame
+its own thread whatever another thread runs. `0x499EB0` is also reached from the `0x0E` receiver
+(`0x49AFEB`), which runs on the game thread only: its receive mask is 4 (`0x45200B`), which the
+dispatcher passes only in net state 6 (`0x454762..0x45477D`), set at `0x498445` after the load
+([which thread](#the-network-receivers-take-a-unit-index-straight-off-the-wire-0x09-0x0b-0x0c-0x2c-disassembled-2026-09-25)).
+The frames stay per thread: that costs nothing and asks nothing of who calls area damage.
+`0x499EB0` also skips a projectile whose owner's player record (`main+0x1B63 + 0x14B·owner`) has
+`+0x73 == 3` (`0x49A01B..0x49A047`) [INFERRED: a remote player]. The sets live in the frame
 (64 slots each, so 32 keys before one grows) and grow through `0x4D83B0`, whose failure is the engine's own out-of-memory exit.
 Both calls and both blocks are rows of the one fail-closed table and nothing else calls
 `0x49A120`, so a block never runs without a frame; if one did, it would be counted and logged once
