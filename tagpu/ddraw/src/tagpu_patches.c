@@ -3371,6 +3371,8 @@ static void patch_engine_defects(void)
 #define B6_PLAYERS     0x1B63u        /* main+ : PlayerStruct[10], stride 0x14B            */
 #define B6_PSTRIDE     0x14Bu
 #define B6_TNT         0x391E9u       /* main+ : GameingState*; its +0x204 the TNT path    */
+#define B6_NETWORK     3              /* GameingState's +0: 1 campaign, 2 skirmish, 3 network */
+#define B6_HOST_SEAT   0x00456850u    /* the seat with the host bit, 10 for none            */
 
 /* THE WIND [DISASSEMBLED]. The wind updater 0x490C40 has two callers: the level load
    LoadGameData_Main 0x4917D0 at 0x491903, on the loader thread, and the tick 0x495490 at
@@ -3382,30 +3384,38 @@ static void patch_engine_defects(void)
        sim RNG 0x4B6C30, which answers 0 for an argument below 2 (0x4B6C35) (0x490C90..0x490CB7);
      - when the speed is not 0, the heading +0x37ED8 = simrand(0x10000) (0x490CC8..0x490CDC);
    then derives the components +0x37ECC and +0x37ED4 (0x490CE8..0x490D35) and the ratio
-   +0x37EDE, capped at 1.0, that a wind generator's energy follows (0x490D3B..0x490D7B, read
-   at 0x40156F). The loader 0x497180 seeds the sim RNG from QueryPerformanceCounter and the
-   CRT's from time(0), so each peer draws a wind of its own: MEASURED on two peers paused at
-   GameTime 825, speed 2525 heading 0xF5C6 on the host against 1498 and 0xC827 on the joiner.
+   +0x37EDE, capped at 1.0 (0x490D3B..0x490D7B). The wind is simulation state: the projectile
+   pass 0x49B720 adds the components to a projectile's position (0x49BC58, 0x49BD04), the fire
+   spread 0x4239C0 reads them (0x423AA1, 0x423AC1), and a wind generator's energy follows the
+   ratio (0x40156F). The sim RNG is seeded from QueryPerformanceCounter by the loader 0x497180;
+   the CRT's rand keeps its state per thread, and the game thread's, which the tick's draw
+   uses, is seeded from time(0) by WinMain (0x49E8BB). So each peer draws a wind of its own:
+   MEASURED on two peers paused at GameTime 825, speed 2525 heading 0xF5C6 on the host against
+   1498 and 0xC827 on the joiner.
    The load's call finds next = 0 (0x4918FD) and GameTime 0 (0x4971BB), so it draws nothing;
    the first draw is the first tick's.
    THE FIX draws the three values from our own generator (splitmix64, its own state; neither
    engine RNG) with stock's rules: next += 30 * (5 + r % 10); the speed min + r % (max - min),
    or min when max - min, taken in 32 bits as 0x490CA1 takes it, is below 2; the heading
    r % 0x10000, drawn only when the speed is not 0. A jmp at 0x490C5A, the draws' first
-   instruction (after 0x490C59's push esi), goes to a stub
-   that calls wind_draw and rejoins at 0x490CE8 with eax the main pointer, as stock's 0x490CE3
-   leaves it; esi, which stock points at `next`, is read after 0x490CE8 only by its pop at
+   instruction (after 0x490C59's push esi), goes to a stub that calls wind_draw and rejoins at
+   0x490CE8 with eax the main pointer, as stock's 0x490CE3 leaves it; esi, which stock points at `next`, is read after 0x490CE8 only by its pop at
    0x490D85. The load's call at 0x491903 goes through a stub that seeds the generator first:
-   in a network game from the host's DirectPlay ID and a hash of the map's name, otherwise
-   from QueryPerformanceCounter, the counter stock seeds its own RNG with.
+   in a network game from the host's DirectPlay ID and a hash of the map's name, or from the
+   map's hash alone when the engine names no host seat; otherwise from QueryPerformanceCounter,
+   the counter stock seeds its own RNG with.
    THE INVARIANT: in a network game every peer draws the same wind at the same GameTime. It
    rests on
      - the seed, the same on every peer and made again at every level load, so nothing crosses
-       from one game to the next: the host is the active human player numbered 1 (+0x0C), the
-       rule TADR uses — MEASURED, the host's record reads number 1 and the same DirectPlay ID
-       (+0x04) on both peers, the joiner's 2, and every single-player record reads 0 — and the
-       map is the TNT stem every peer loaded (GameingState +0x204, "Maps\Two Continents.TNT"
-       on both);
+       from one game to the next. Which path it takes is the engine's own network test,
+       GameingState's +0 == 3 (0x435100 is `mov eax,[ecx]`; the load dispatches on it at
+       0x4971C7), and inside a network game no path reads anything local to a peer. The host
+       is the engine's own host seat, 0x456850: the first seat whose type +0x73 is set and
+       whose PlayerInfo (+0x27) has bit 0 of +0x97. Earlier in the same load the engine waits
+       for that seat (0x497213..0x4972AB, pumping the network while it answers 10) and takes
+       from it the map (0x4972D6) and the unit limit (0x4972DB..0x4973B5), values every peer
+       must agree on. Its DirectPlay ID (+0x04) is session-wide. The map is the TNT stem every peer loaded
+       (GameingState +0x204, "Maps\Two Continents.TNT" on both peers MEASURED);
      - the draws, made only by the tick's call, once for each GameTime value on every peer, each
        consuming a number of values fixed by the map's range and the values drawn before it;
      - an ordering: the seed is written on the loader thread before the loader's last store,
@@ -3423,31 +3433,15 @@ static unsigned int wind_next(void)
     return (unsigned int)((z ^ (z >> 31)) >> 32);
 }
 
-/* the host's DirectPlay ID, or 0 outside a network game */
-static unsigned int wind_host(const char* ta)
-{
-    int i;
-    for (i = 0; i < 10; i++) {
-        const unsigned char* p = (const unsigned char*)ta + B6_PLAYERS + (unsigned int)i * B6_PSTRIDE;
-        unsigned int active, dpid;
-        memcpy(&active, p, 4);
-        memcpy(&dpid, p + 0x04, 4);
-        if (active && p[0x0C] == 1 && (p[0x73] == 1 || p[0x73] == 3) && dpid) return dpid;
-    }
-    return 0;
-}
+static volatile LONG s_windMapOnly;             /* network loads with no host seat, peekable */
 
 /* FNV-1a over the TNT path's stem, case folded: "Maps\Two Continents.TNT" -> "two continents" */
-static unsigned int wind_map_hash(const char* ta, char* stem, unsigned int room)
+static unsigned int wind_map_hash(const char* gs, char* stem, unsigned int room)
 {
-    const char* gs;
     const char* s;
     const char* q;
     unsigned int h = 0x811C9DC5u, n = 0;
-    /* the load reads the same pointer as `this` for 0x435100 right after (0x491984) */
-    memcpy(&gs, ta + B6_TNT, sizeof gs);
     stem[0] = 0;
-    if (!gs) return h;
     s = gs + 0x204;
     for (q = s; q < s + MAX_PATH && *q; q++)
         if (*q == '\\' || *q == '/' || *q == ':') s = q + 1;
@@ -3463,23 +3457,39 @@ static unsigned int wind_map_hash(const char* ta, char* stem, unsigned int room)
 static void __cdecl wind_seed(void)
 {
     const char* ta = *(const char* const*)(size_t)B6_MAIN;
+    const char* gs;
     char stem[48];
-    unsigned int host = wind_host(ta), map = wind_map_hash(ta, stem, sizeof stem);
+    int mode;
+    unsigned int map;
     LONG level = InterlockedIncrement(&s_windLevels);
-    if (host) {
-        s_windState = ((unsigned long long)host << 32) | map;
+    /* GameingState is not NULL here: the load dereferences it right after, as `this` for
+       0x435100 (0x491984) */
+    memcpy(&gs, ta + B6_TNT, sizeof gs);
+    memcpy(&mode, gs, sizeof mode);
+    map = wind_map_hash(gs, stem, sizeof stem);
+    if (mode == B6_NETWORK) {
+        unsigned int seat = ((unsigned char (__cdecl*)(void))(size_t)B6_HOST_SEAT)() & 0xFFu;
+        if (seat < 10) {
+            unsigned int host;
+            memcpy(&host, ta + B6_PLAYERS + seat * B6_PSTRIDE + 0x04, sizeof host);
+            s_windState = ((unsigned long long)host << 32) | map;
+            tagpu_logf("enginefix: wind: level %ld seeded from host seat %u's DirectPlay ID "
+                       "0x%08X and the map \"%s\" (0x%08X)", (long)level, seat, host, stem, map);
+        } else {
+            LONG n = InterlockedIncrement(&s_windMapOnly);
+            s_windState = map;
+            tagpu_logf("enginefix: wind: level %ld is a network game with no host seat: seeded "
+                       "from the map \"%s\" (0x%08X) alone (%ld so far)", (long)level, stem, map,
+                       (long)n);
+        }
     } else {
         LARGE_INTEGER c;
         QueryPerformanceCounter(&c);
         s_windState = (unsigned long long)c.QuadPart ^ ((unsigned long long)map << 32);
+        tagpu_logf("enginefix: wind: level %ld seeded from the performance counter (game mode "
+                   "%d, not a network game), map \"%s\"", (long)level, mode, stem);
     }
     wind_next();                                /* one step, so a seed of 0 is no special case */
-    if (host)
-        tagpu_logf("enginefix: wind: level %ld seeded from the host's DirectPlay ID 0x%08X and "
-                   "the map \"%s\" (0x%08X)", (long)level, host, stem, map);
-    else
-        tagpu_logf("enginefix: wind: level %ld seeded from the performance counter (no network "
-                   "host), map \"%s\"", (long)level, stem);
 }
 
 static void __cdecl wind_draw(void)
@@ -3740,10 +3750,11 @@ static void patch_loader_defects(void)
     tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903) %s; yardmaps parsed "
                "inside their string (0x42CF5E) %s; the saved-game order fallback (0x43A58D) %s; "
                "the stockpile bar's divide (0x439D41) %s; a range circle of radius 1 "
-               "(0x438EDE) %s. Counters: levels seeded at 0x%08X, yardmaps filled past their "
-               "string at 0x%08X", fix_state(wind), fix_state(yard), fix_state(save),
-               fix_state(bar), fix_state(ring), (unsigned int)(size_t)&s_windLevels,
-               (unsigned int)(size_t)&s_yardFilled);
+               "(0x438EDE) %s. Counters: levels seeded at 0x%08X, network levels seeded from "
+               "the map alone at 0x%08X, yardmaps filled past their string at 0x%08X",
+               fix_state(wind), fix_state(yard), fix_state(save), fix_state(bar),
+               fix_state(ring), (unsigned int)(size_t)&s_windLevels,
+               (unsigned int)(size_t)&s_windMapOnly, (unsigned int)(size_t)&s_yardFilled);
 }
 
 void tagpu_apply_patches(void)
