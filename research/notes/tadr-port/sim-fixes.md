@@ -146,8 +146,12 @@ the plan below:
   hash sets with no capacity. The `0x0E` receiver reaches area damage on whichever thread pumps the
   network, the loader's included during a network load, so a single stack would rest on an
   ordering nobody enforces.
-- **Changed: the shear covers four points, not two.** `0x465AC0` tests up to four points of the
-  box; the third and fourth reads (`0x465CA2`, `0x465D46`) take the same rule.
+- **Changed: the shear covers four points, not two, in every mode.** `0x465AC0` tests up to four
+  points of the box; the third and fourth reads (`0x465CA2`, `0x465D46`) take the same rule, and so
+  do Permanent and Circular line of sight, where the points go to `PositionInPlayerMapped
+  0x408090` (`0x408095`) and the fourth point's inline copy (`0x465DA9`) with the same shear.
+  Not patched: the same shear inlined for True line of sight in `0x408090`'s other two callers, an
+  AI probe (`0x407F74`) and the projectile draw (`0x49BEE8`).
 - **Added: a bound on the sort bucket** (`0x47CCA9`). Settling the plan's question showed the bucket
   is indexed from the unit's position with no bound: inside the grid for every footprint of width 1
   or more once `jg` holds, one past it for width 0, and stock already reaches one before it for
@@ -164,7 +168,7 @@ the plan below:
   The weapon IDs join the table in the stock-limits build too.
 - **The install.** One table, `tagpu_limits_install`, in both builds: it now refuses two rows over
   one byte as well, and the report says "engine limits and fixes" ([the failure
-  report](raised-limits.md#the-failure-report)). 158 sites in the raised build (130 + 28), 32 in the
+  report](raised-limits.md#the-failure-report)). 160 sites in the raised build (130 + 30), 34 in the
   stock-limits build.
 - **Measured** on the new build, one peer, the raised and the stock-limits builds alike where both
   ran: every CORFLAK of `b1-victim-units` lost one hit (the unit-repeat counter 48, the 16 past the
@@ -178,8 +182,14 @@ the plan below:
 - **Not reproduced: flak's zero divide.** Stock acquisition never aimed a flak gun above 29.6°
   (`b1-flak-overhead`, and an ARMBRAWL flown overhead), so the fix rests on the disassembly; its
   fallback counter read 0 in every run.
-- **Not run:** the feature cap on two peers (every non-host peer reports feature hits), and
-  resurrection's failure branch (parked: no resurrect verb to drive a few hundred of them). The
+- **The feature cap on two peers** (every non-host peer reports feature hits; host and joiner by
+  `tools/mp_lobby.sh`, `b1-victim-features-wrecks.json` on both and `-blast.json` on the joiner, whose
+  ARMCOM self-destructed, all peers paused): on the previous build the host's ranks 65–96 lost 30
+  wrecks, 2 standing, and the joiner lost the same 30 with its own damage fields all 0; on the new
+  build all 96 stand at 9 999 on the host and all stand on the joiner, whose feature-repeat counter
+  read 602, every other B1 counter 0 on both.
+- **Not run:** resurrection's failure branch (parked: no resurrect verb to drive a few hundred of
+  them). The
   repair rate was measured flat per repairer, ARMCOM (WorkerTime 300) and ARMCK (80) alike, as the
   disassembly says.
 

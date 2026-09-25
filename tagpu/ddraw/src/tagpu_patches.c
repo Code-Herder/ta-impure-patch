@@ -2976,13 +2976,14 @@ static int fix_flak_divides(void)
        0x485BA3..0x485BC7, 0x48AA24..0x48AA32), so X + fw <= W gives x < 16W - 8 fw + 8, which
        is inside the grid for fw >= 1 -- every stock footprint -- and one bucket past its end
        for fw = 0. Stock itself forms column -1 for fw = 0 and x in [-8, 0) at the west edge,
-       whose linear index row * cols - 1 is the previous row's last bucket, inside the array
+       whose linear index row * cols - 1 is the previous row's last bucket, inside the grid
        for row >= 1. Buckets are read by simulation code (0x40F2E9, 0x47E5DA, ...), so stock's
-       index is kept whenever it lands inside the array, and only a linear index outside
-       [0, rows * cols) is replaced: its column and row clamped into the grid.
+       index is kept whenever it lands inside the rows * cols grid, and only a linear index
+       outside [0, rows * cols) is replaced: its column and row clamped into the grid.
    THE INVARIANT: a unit is parked only when a cell of its footprint is off the map, every
-   bucket index the stamp forms is inside the array LoadMap sized, and it is stock's whenever
-   stock's is.
+   bucket index the stamp forms is inside the rows * cols grid -- LoadMap allocates
+   (rows * cols + 7) & ~7 buckets (0x482CAE..0x482CBA), so inside the block too -- and it is
+   stock's whenever stock's is inside the grid.
    CLASS: simulation, fail closed (who can be hit). */
 static int fix_last_cell(void)
 {

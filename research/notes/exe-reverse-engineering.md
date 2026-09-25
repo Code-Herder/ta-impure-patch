@@ -324,7 +324,7 @@ allocated, or its page cannot be made writable. Each of the seventeen, and why:
 | weapon IDs `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | simulation | the `0x0F` hit flag is a wire format; in the raised build these are the raise's own rows |
 | one hit a victim an explosion `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | simulation | who is damaged, and how much |
 | the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
-| line of sight at the map's edge `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46` | simulation | what is acquired |
+| line of sight at the map's edge `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46`, `0x465DA9`, `0x408095` | simulation | what is acquired |
 
 [Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
 register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
@@ -1602,7 +1602,7 @@ projectile whose owner's player record (`main+0x1B63 + 0x14B·owner`) has `+0x73
 (`0x49A01B..0x49A047`) [INFERRED: a remote player], and in state 5 the dispatcher passes a code
 only with bit 1 of its entry in the table `0x512BC0` (`0x454745..0x454760`; the table is zero in
 the image and filled at run time) — but neither is the safety argument. The sets live in the frame
-(64 keys each) and grow through `0x4D83B0`, whose failure is the engine's own out-of-memory exit.
+(64 slots each, so 32 keys before one grows) and grow through `0x4D83B0`, whose failure is the engine's own out-of-memory exit.
 Both calls and both blocks are rows of the one fail-closed table and nothing else calls
 `0x49A120`, so a block never runs without a frame; if one did, it would be counted and logged once
 and would damage as though the victim were new. The unit set is what B2 serves stacked aircraft
@@ -1613,6 +1613,17 @@ ring): every CORFLAK of the ring lost one hit, each of the 16 past the twentieth
 its mirror mate, and the unit-repeat counter read 48, the 16 victims past the cap found three more
 times each; all 96 wrecks stand at 9 999, and the feature-repeat counter read 602. The refused and
 unframed counters stayed 0.
+
+**MEASURED, two peers** — the feature half, since every non-host peer reports a feature hit with
+`0x0F` instead of damaging it. A host and a joiner on Two Continents (`tools/mp_lobby.sh`), both
+loading `scenarios/b1-victim-features-wrecks.json` and the joiner `b1-victim-features-blast.json`;
+the joiner's ARMCOM self-destructed, every peer paused, the 96 anchors read on both. Previous build
+(`d87e506`): on the host the first 64 in walk order stand at 9 999 and of ranks 65–96, 30 were
+destroyed and 2 stand (ranks 75 and 96, only their anchors inside the radius); the joiner lost the
+same 30, its own damage fields all 0 — a joiner never damages a feature, it sends `0x0F` and the
+host's result comes back. New build (`629cfc7`): all 96 stand at 9 999 on the host and all 96 stand
+on the joiner; the joiner's feature-repeat counter read 602 and every other B1 counter was 0 on
+both peers.
 
 ### Flak's two divides — `0x49CDE0`, `0x49CE6A`, `0x49CF19` [DISASSEMBLED + MEASURED 2026-09-25]
 
@@ -1697,17 +1708,18 @@ on every sample and held 150 of 150 HP for 40 s in range of an AI CORFLAK, which
 
 **The fix** (`fix_last_cell`, simulation, fail closed): `jge` → `jg` at `0x47CC8B` and `0x47CCA3`, and
 the 50-byte bucket block at `0x47CCA9` replaced by a jump to a stub that forms stock's index and
-keeps it whenever the linear index lies in `[0, rows·cols)`; only an index outside has its column
+keeps it whenever the linear index lies inside the `rows·cols` grid, `[0, rows·cols)`; only an index outside has its column
 clamped into `[0, cols − 1]` and its row into `[0, rows − 1]`. It leaves `edx` (the bucket), `eax`
 (`[esi+0x82]`) and `[esp+0x20]` (y) as stock does and keeps `ebx` and `edi`, rejoining at
 `0x47CCDB`. No branch from outside lands inside the block [rel8/rel32 scan; the four hits the
 byte-level scan reports are operands]. **The invariant**: a unit is parked only when a cell of its
-footprint is off the map, and every bucket index the stamp forms is inside the array LoadMap sized —
-stock's own whenever stock's is. MEASURED on the
+footprint is off the map, and every bucket index the stamp forms is inside the `rows·cols` grid —
+stock's own whenever stock's is. (LoadMap allocates `(rows·cols + 7) & ~7` buckets,
+`0x482CAE..0x482CBA`, so the grid is never larger than the block.) MEASURED on the
 new build: the edge ARMATLAS was stamped (`+0x82` not the off-map bucket) and both were shot down
 within 2 s.
 
-### Line of sight at the map's edge — `UnitInPlayerLOS 0x465AC0`, `0x465B6A`, `0x465C04`, `0x465CA2`, `0x465D46` [DISASSEMBLED + MEASURED 2026-09-25]
+### Line of sight at the map's edge — `UnitInPlayerLOS 0x465AC0`, `PositionInPlayerMapped 0x408090` [DISASSEMBLED + MEASURED 2026-09-25]
 
 **The function.** `0x465AC0(player, unit)`, `__stdcall`, `ret 8`, has seven callers: `0x40AB11`
 (in the periodic acquisition `0x40AA40`), `0x439761`, `0x46AF3D`, `0x46B5B4`, `0x480EE5`,
@@ -1717,14 +1729,28 @@ until one is visible, as [line of sight](line-of-sight.md) describes — 16.16 d
 (x), `+0x14` (y) and `+0x18` (z), `def` the unit's type at `+0x92`: `(x + def+0x15E, y + def+0x16E,
 z + def+0x166)` (`0x465AFD..0x465B3B`); the same with `x + def+0x176` (`0x465BDB..0x465BED`); then
 `y − def+0x17A`, `z + def+0x17E` (`0x465C73..0x465C90`); and that with `x − def+0x176`
-(`0x465D19..0x465D31`). With `LosType` bit 1 (`main+0x14281`, True or Circular line of sight) each
-point indexes the player's LOS grid (`+0x7C`, width `+0x80`, height `+0x84`, 32-px cells) at
-`col = x >> 5` and `row = (z − (y >> 1)) >> 5` — `0x465B6A..0x465B94`, `0x465C04..0x465C2E`,
-`0x465CA2..0x465CD2` and `0x465D46..0x465D67` — the grid being projected by altitude, under
-unsigned bounds; outside them the point is not visible (`0x465BB1`, `0x465C49`, `0x465CED`,
-`0x465D94`). The third read loads `dx` and `di`, the point's y and z words, and the fourth reads them
-again (`0x465D46`); the fourth takes its column in `ecx` from `0x465D3B`. Without bit 1 each point
-asks `0x408090`.
+(`0x465D19..0x465D31`). Every point is placed at `col = x >> 5` and `row = (z − (y >> 1)) >> 5`
+(32-px cells), projected by altitude, under unsigned bounds on the player's grid size (width `+0x80`,
+height `+0x84`); outside them the point is not visible. What is read there depends on the mode, and
+the shear is the same in every mode:
+
+- **`LosType` bit 1** (`main+0x14281`; True line of sight, `LosType` 14): the player's LOS grid
+  (`+0x7C`) inline — `0x465B6A..0x465B94`, `0x465C04..0x465C2E`, `0x465CA2..0x465CD2` and
+  `0x465D46..0x465D67`, not visible at `0x465BB1`, `0x465C49`, `0x465CED`, `0x465D94`.
+- **Without it** (Permanent 12, Circular 8, whose LOS grids are all lit): the first three points go to
+  `PositionInPlayerMapped 0x408090(player, point)` (`0x465BBB`, `0x465C53`, `0x465CF7`), which places
+  the point at `0x408095..0x4080C0` — not visible at `0x4080C1` — and reads the shared mapped grid
+  `main+0x14273`, a `u16` a cell and a bit a player; the fourth goes to an inline copy of it,
+  `0x465DA9..0x465DCA` (not visible `0x465DCB`, read `0x465DE0`).
+
+The third read loads `dx` and `di`, the point's y and z words, and the fourth reads them again
+(`0x465D46`, `0x465DA9`); the fourth takes its column in `ecx` from `0x465D3B`, in both modes.
+`0x408090` has two more callers, each handing it a world point whose row means the same:
+`0x407FBD` in `0x407E90`, the first method of the vtable `0x4FC9A0` (its destructor `0x407E70`
+restores the base's `0x4FC980`) [INFERRED: an AI routine], which tests a probe point stepped 320 px
+from a position along a heading it draws; and `0x49BF2F` in the projectile draw pass `0x49BE60`,
+the local player's view of a projectile. Each of the two has an inline copy of the True-mode read
+too (`0x407F74..0x407F9A`, `0x49BEE8..0x49BF0E`), with the same shear, not patched.
 
 **The defect.** The row is the box's north edge less half the box's absolute top, so a unit whose
 top is more than twice its distance from the north edge — an aircraft at cruise altitude a few
@@ -1740,19 +1766,24 @@ there while `north` hovered on station for about 7 s at 150 of 150 HP, in range 
 spotter's lit radius; when the AI dragged it south past z 84 the flak swung north and shot it within
 0.6 s.
 
-**The fix** (`fix_los_shear`, simulation, fail closed): each of the four blocks (43, 43, 49 and 34
-bytes) becomes a jump to a stub that computes stock's column and sheared row; with the column out of
-bounds it leaves invisible; with the row in bounds it continues at stock's read (`0x465B95`,
-`0x465C2F`, `0x465CD3`, `0x465D68`); otherwise it takes the point's own row, `z >> 5`, and reads
+**The fix** (`fix_los_shear`, simulation, fail closed): each of the six blocks (43, 43, 49, 34, 34
+and 44 bytes) becomes a jump to a stub that computes stock's column and sheared row; with the column
+out of bounds it leaves invisible; with the row in bounds it continues at stock's read (`0x465B95`,
+`0x465C2F`, `0x465CD3`, `0x465D68`, `0x465DE0`, `0x4080C7`); otherwise it takes the point's own row, `z >> 5`, and reads
 there if that is in bounds. Otherwise stock's answer stands, so a unit beyond the map's edge stays
 unseen: TADR's margin there is a gameplay change, not a defect. The third stub loads `dx` and `di`
 exactly as stock does, for the fourth; `ebp` after the third and `edx` after the fourth are dead on
 both exits. **The invariant**: the grid is read only at a column and a row inside it. It is exact
-whenever stock's row is inside the grid. No branch from outside lands inside any block but stock's
-`0x465B07`, `0x465B45` and `0x465C80`, which are operands [the same scan].
+whenever stock's row is inside the grid. `0x408090`'s other two callers change only for a point
+whose sheared row is off the grid and whose own row is on it — the defect, in an AI probe and in the
+projectile draw. No branch from outside lands inside any block but stock's `0x465B07`, `0x465B45`
+and `0x465C80`, which are operands [the same scan].
 
 **MEASURED, new build** (all four reads patched), the same fixture and driver: the flak aimed at
-`north` first and shot it down on station, at z 40.1, within 5 s, then `control`.
+`north` first and shot it down on station, at z 40.1, within 5 s, then `control`. Under Permanent
+line of sight (`scenario load --los 0`, `LosType` read 12, so every point went through the mapped
+grid; six blocks patched) the same: `north` hit first at z 40.0 within 2.5 s and dead within 5 s,
+then `control`. The previous build was not run under Permanent.
 
 ## Built-in cheat/console command surface
 
