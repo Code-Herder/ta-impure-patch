@@ -380,7 +380,11 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   keeps stock's rule, which the saved-game restore `0x487080` uses) and one at `0x486DC1` stamping
   the free; the state reset at `0x4854A0`, the array's own lifetime, never keyed to GameTime.
 - Settle first: that `0x485F50` is only called for local players, and whether a loaded game starts
-  at GameTime > 0.
+  at GameTime > 0. **SETTLED [DISASSEMBLED].** The level start's creates filter the player's
+  `+0x73` to 1 or 2 (`0x4976BB`); the other, `0x496EE0`, also takes a type-3 player, but only when
+  `0x435100` answers 2 (`0x4978EB`), skirmish, which has no remote player (a network game answers
+  3, the value the block sort `0x485842` tests). GameTime is 0 at every level entry, a loaded save
+  included (`0x498180` before state 6 at `0x498445`).
 - Tests: a test-only delay on outgoing `0x0B` (`tagpu_dmgdelay.on=K`) on two peers, a Kbot lab
   building under fire; the counter "a `0x0B` applied to a unit younger than K ticks" above 0 before,
   0 after; a third peer for the bystander's copy; single player's creation indices equal to the
@@ -434,32 +438,67 @@ bit 31 set for a lower bound:
 - a hit carries the attacker's stamp of its copy of the victim.
 
 **The owner applies a hit iff `birth ≤ stamp`** (bit 31 ignored). For an exact stamp that is
-equality. For a lower bound: the unit the `0x2C` described was alive at g₀, so it was freed at
-g₀ or later; with the hold, the next unit in that slot is taken at g₀ + 2 or later, and its birth is
-at least that; so `birth ≤ g₀` holds for the unit the `0x2C` described and for no later one. It needs
+equality. For a lower bound: the unit the `0x2C` described was alive at g₀, so it was freed at some
+f ≥ g₀; the hold never reuses a slot in the tick that freed it, so the next unit's birth is at
+least f + 1 > g₀; so `birth ≤ g₀` holds for the unit the `0x2C` described and for no later one. It needs
 GameTime not to go back between g₀ and the create, and every `0x2C` is sent in play, where GameTime
 only increments (`0x4954C0`; its other writes are at a level's entry, `0x491979`, `0x4971BB`,
 `0x498180`, and the shell's clock `0x44A696`).
 
-**A bystander applies a hit iff both stamps are exact and equal.** It knows its own copy only, and
-with a lower bound on either side "the same unit" is undecidable, so it refuses and counts. A
-bystander's copy is not authoritative: the owner's round robin rewrites its hit points
-(`0x48B235` → `0x48B4B2`) within N ticks, and its deaths come from the owner's `0x0C`.
+**A bystander refuses only a hit provably aimed at another incarnation**, and applies the rest as
+stock does, counting the undecidable ones. Every value is the owner's GameTime: both exact, it
+applies iff they are equal; an exact birth b against a lower bound g₀ on the other side (the unit
+alive at g₀, so born at or before it), it refuses iff b > g₀; two lower bounds, or a stamp with no
+information, are undecidable. Refusing only what is proven matters because a `0x2C` copy keeps its
+lower bound for its life (the `0x2C` recreates a slot only when the type changes): the first
+build's "exact and equal" made every bystander drop every hit on the other players' start
+commanders, and with them `0x467950`, the health bar's timer. Applying cannot change shared
+state [DISASSEMBLED]: `0x489CE0` sets pending death only for a victim whose player is local
+(`+0x73` 1 or 2, `0x489EC6`), paralysis likewise (`0x489E24`), every branch of `0x406F80` tests the
+same, and the owner's round robin rewrites a copy's hit points (`0x48B235` → `0x48B4B2`) within N
+ticks; a copy's death comes from the owner's `0x0C`.
 
 *The hold.* The loop's free test at `0x486036` jumps to a stub: an occupied slot continues the loop
 at `0x486040` as stock; a free slot is taken unless the requested index (arg 8) is 0 and the slot
 was freed at GameTime f with `GameTime − f < 2` (unsigned, so a stamp from before a GameTime reset
 never holds). The free is stamped at `0x486DC1`, the destructor's store of type 0; the stamps are
-reset at `0x4854A0`. **Invariant**, from the tick order of `0x495490` (GameTime++ `0x4954C0`, the
-pump `0x4954C8`, units `0x4954ED`, projectiles `0x495513`, players `0x464F80`): a slot freed in tick
-t, in any phase, is empty for the whole of tick t + 1, so every reader that runs once a tick sees it
-empty at least once before a new unit takes it. When a block's only free slots are held, the create
-fails, as it does at the unit cap. `0x485F50`'s eleven callers pass arg 8 = 0 except the saved-game
-restore `0x48718E`, which runs before play.
+reset at `0x4854A0`. The decision is made once per create, at the block's first free slot: when
+it is held, the block's first unheld free slot is taken instead; when every free slot is held,
+the one freed longest ago is taken if that was in an earlier tick (the fallback, counted); a slot
+freed in THIS tick is never taken, because a birth equal to its free time would accept a lower
+bound from a `0x2C` sent earlier that tick, and forcing it to f + 1 would refuse a later `0x2C`'s
+bound for the unit's whole life. **Invariant — the owner's**, from the tick order of `0x495490`
+(GameTime++ `0x4954C0`, the pump `0x4954C8`, units `0x4954ED`, projectiles `0x495513`, players
+`0x464F80`): a slot freed in tick t, in any phase, and not needed by the fallback is empty for the
+whole of tick t + 1, so every reader on the owner that runs once a tick sees it empty at least once
+before a new unit takes it. **It does not hold on the other peers, and B4 does not change that:**
+`CreateFromNetwork 0x4861D0` writes a copy's type at `0x4862A2` with no hold, so a `0x0C` and the
+slot's next `0x4A` can arrive in one pump batch, and a per-tick reader there (a local weapon aimed
+at a remote enemy, `0x48A295`; the smooth-motion pose pairing) never sees the slot empty. That is
+stock behaviour, and it does not break the owner's rule: a hit such a reader then sends carries the
+incarnation now in the slot, so it is not stale by the rule's definition.
 
-*Class: sim, fail closed, both builds.* Fourteen rows in the table: the three dispatch slots, the
-three send calls, the free test, the free, CreateFromNetwork's exit and the array's allocation,
-written; and compared unchanged, the two continuations the carried records return to (`0x4553E9`,
+*When the hold fails a create.* With every free slot of the block freed in this very tick, the
+create returns NULL below the cap. `0x485F50`'s callers [DISASSEMBLED]: the four factory and build
+callers (`0x4028EA`, `0x403D5B`, `0x405104`, `0x41409B`) link the result to the order
+(`0x489690`, which takes NULL) and test the link: NULL shows "Unable to create any more units"
+(`0x4028FF` → `0x47F780`) and sleeps the order 300 ticks (`0x439E80`); `0x41794F` ignores it;
+`0x48718E` (the saved-game restore, arg 8 nonzero, never held), `0x488462` and `0x488700` test it;
+`0x497002` and `0x4977BB` run in the level load, before anything is freed. **`0x4653D9`**, the
+players phase's timed create (it spawns a unit for the controlled player `main+0x2A42` when the
+countdown `main+0x39239` fires), uses the unit at `0x465414` with no test: stock faults there at
+the cap, and the hold would add a fault below it. B4 guards it by construction at `0x4653DE`: a
+NULL sets the countdown back to 0 and takes the block's own end `0x4654FB`, so the next tick's
+decrement fires it again, where the slots freed in this tick are the fallback's; at the cap it
+retries each tick until a slot frees, where stock faults. **The remaining exception** [rule 7]:
+a factory whose build completes in a tick that freed every free slot of its player's block gets
+stock's "Unable to create" and its 300-tick sleep, one tick after which stock would have had a
+slot; nothing below the cap faults. `0x485F50`'s eleven callers pass arg 8 = 0 except the
+saved-game restore `0x48718E`, which runs before play.
+
+*Class: sim, fail closed, both builds.* Fifteen rows in the table: the three dispatch slots, the
+three send calls, the free test, the free, CreateFromNetwork's exit, the array's allocation and the
+players phase's create, written; and compared unchanged, the two continuations the carried records return to (`0x4553E9`,
 `0x455417`) and the two lengths the senders push (`0x45605C` `push 0x17`, `0x489CA8` `push 9`),
 which are the sizes the companions copy.
 
@@ -468,8 +507,19 @@ advanced K ticks and goes out at the next send opportunity (any outgoing hit, an
 companion). The oracle, per receiver: a hit applied to a unit whose local creation is younger than K
 ticks. The previous build gets the same lever and oracle as a scratch-only patch (the three send
 calls and B3's `0x0B` bound), so the two builds are measured with one instrument. Counted on the
-heartbeat's `hits:` section: companions out and bytes, companions in, applied/refused per rule,
-bare messages dropped, held slots skipped, the oracle.
+heartbeat's `hits:` section: companions out and bytes, companions in, applied/refused per rule
+(the bystander's applies split into proven and undecidable), bare messages dropped, copies by
+kind (exact, a real lower bound, unknown), creates the hold moved, took by the fallback or
+failed, the players phase's retries, the oracle.
+
+*The tables.* Sized from the engine's own slot count, `u16 10·N + 1` as `0x4854A0` computes it
+(`0x4854E3..0x4854EF`), bounded by it at every index, and never freed: a level whose count exceeds
+the room gets a new table published through one pointer, and the old one stays, so a stale pointer
+still reads memory the DLL owns (rooms are powers of two from 16 384, so three tables at most).
+The loading thread (`0x497C70` → `0x497180`) resets them in the level init (`0x497581` →
+`0x4917D0` → `0x4854A0`) and makes the level's first creates (`0x496EE0`, `0x4977BB`) while the
+main thread pumps the network in state 5, where the gate keeps the dispatch out of them; in play
+every access is on the game thread [INFERRED from the tick's order].
 
 *What B4 does not close.* The attacker named in a hit (`0x0B`'s `+3`) is not stamped: a hit applied
 to the right victim can still name a recycled attacker for the retaliation bookkeeping
@@ -478,8 +528,9 @@ sender's order, the open question below; B4 fixes the case that needs no answer 
 peer that is not the owner. B5's queue now holds `0x4A` companions refused in state 5, not bare
 `0x09`s.
 
-**B4 BUILT AHEAD (2026-09-25, `e10201f` on its own worktree from B3's `bd5582b`; not landed, not
-reviewed).** As designed above; `fix_stale_hits` in `tagpu_patches.c`. The install line reads
+**B4 BUILT AHEAD (2026-09-25, `e10201f` on its own worktree from B3's `bd5582b`; reviewed at high by
+two reviewers, fix round `c9f939b`; not landed).** The first build's numbers follow; the fix
+round's are after them. As designed above; `fix_stale_hits` in `tagpu_patches.c`. The install line reads
 `limits: installed 189 sites` in the raised build (176 before: fourteen rows, less A′3's `0x455F90`
 row, which B4 now owns) and `the simulation fixes' 64 sites installed` in the stock-limits one;
 `tagpu_wirecheck.on` runs the rules' 16 cases, all OK.
@@ -499,14 +550,15 @@ scratch-only patch (the three sends, `CreateFromNetwork`'s exit, B3's `0x0B` bou
 | bystander: applied to a copy younger than 30 ticks | **1 406** (22 %) | **1** (below) |
 | owner's creates / moved by the hold | 829 / — | 829 / 67 (85 held slots skipped) |
 | bare `0x09`/`0x0B` dropped, malformed, delay overflow | — | 0 everywhere |
-| copies: exact / lower bound | — | 846 / 2 on the bystander, 19 / 1 on the owner |
+| copies: exact / made by the `0x2C` | — | 846 / 2 on the bystander, 19 / 1 on the owner |
 
-The lower-bound copies and the three companions refused by the state gate (1 on the owner, 2 on the
+The first build counted every `0x2C` copy as a lower bound, found or not; most were not (the
+review's first finding, below). The `0x2C` copies and the three companions refused by the state gate (1 on the owner, 2 on the
 bystander) are the start of the game: the other peers' commanders, whose create arrives while a
 peer still loads and which the `0x2C` recreates — B5's cause, seen from here.
 
-*The one young hit on the bystander is the oracle's, not a stale hit* [INFERRED for its cause]. A
-bystander applies a hit only when its copy's stamp and the hit's are exact and equal, and the
+*The one young hit on the bystander is the oracle's, not a stale hit* [INFERRED for its cause]. The
+first build's bystander applied a hit only when its copy's stamp and the hit's were exact and equal, and the
 owner's births rise strictly per slot, so an applied hit names the incarnation the bystander holds.
 The oracle measures something else: the age of the bystander's own copy, in the bystander's own
 ticks. A correct hit counts as young when the bystander made its copy late relative to the
@@ -536,8 +588,35 @@ malformed or overflowed; 38 slots held.
 *Deviations from the plan.* The Kbot lab under fire became four ARMCK re-applied every 2 s: a
 build queue is not in the scenario format, and the applies create into the freed slots as fast.
 The delay lever releases a held hit at the next send opportunity (an outgoing hit, an incoming
-companion on the game thread), so a hit waits at least K ticks, not exactly K. A block whose only
-free slots are held fails the create, as at the unit cap; nothing in the runs above reached it.
+companion on the game thread), so a hit waits at least K ticks, not exactly K.
+
+*The fix round* (`c9f939b`, from the two high reviews; each finding verified against the
+disassembly first). The `0x2C`'s record is found by the block that holds the slot; the bystander
+refuses only what is provably stale; the hold decides once per create and falls back to a slot
+freed in an earlier tick; the players phase's untested create retries; the tables are sized from
+the engine's count and never freed; the carried record reaches the stub in `eax`. Install: 190
+sites raised (fifteen B4 rows), `the simulation fixes' 65 sites` stock-limits; hitcheck 23 cases,
+all OK; `slots=15001` raised and `slots=2501` stock-limits (N = 250), one table each.
+
+Measured, the same three peers and protocol, eight minutes, plus one light laser tower of the
+host's beside each joiner's start commander for the last minute (a scratch fixture):
+
+| | owner (the victims' peer) | bystander (the third peer) |
+|---|---|---|
+| hits applied / refused | 5 434 / 3 200 | 6 212 same + 52 undecidable / 2 582 stale |
+| applied to a unit younger than 30 ticks | **0** | 4 (among the undecidable, below) |
+| copies: exact / real lower bound / unknown | 20 / 2 / 0 | 848 / 2 / 0 |
+| creates moved by the hold / fallback / failed | 73 / 0 / 0 | — |
+
+Both joiners computed real lower bounds for the two start commanders the `0x2C` recreated, with
+none left unknown, so the peer that is not first in DPID order found its sender's record too. The
+bystander's 52 undecidable applies are the host's hits on the other joiner's commander, whose
+copy there is the `0x2C`'s: the first build refused every one of them. The other commander's owner
+applied the 4 hits on it, and the first joiner, a bystander there, applied them undecidable. The bystander's 4 young applies are
+undecidable ones, by definition not provably stale; the owner's rule is the one that decides a
+death, and it applied none young. The fallback and the retry did not fire: both need a block
+with no unheld free slot, which eight minutes of four kbots at a time do not reach; they rest on the
+disassembly above and the self-check's cases.
 
 **B5 — ghost commander.**
 

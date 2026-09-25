@@ -404,8 +404,8 @@ create in the same tick, so a hit in flight lands on whatever the slot holds whe
 
 **The hit, `0x0B`, 9 bytes.** Built by `0x489BB0` (twelve callers): `[0]` `0x0B`, `[1]` `u16` the
 victim's index, `[3]` `u16` the attacker's (0 for none), `[5]` `u16` the damage (after armour, except
-for kind `0x0A`), `[7]` a byte argument, `[8]` the kind (`0x0A` heal, `0x0B` never sent, `2` the path
-at `0x489DEB` [INFERRED: capture or paralysis]). It applies the hit locally first (`0x489C89`),
+for kind `0x0A`), `[7]` a byte argument, `[8]` the kind (`0x0A` heal, `0x0B` never sent, `2`
+paralysis: its path pushes `0x508D80`, "paralyze", at `0x489E49`). It applies the hit locally first (`0x489C89`),
 then sends it only when the victim's player (`+0x96`) exists with type 3 at `+0x73`, a remote
 player (`0x489C99`), and the kind is not `0x0B`: from the attacker's player's DPID (`+0x96` → `+4`,
 `0x489CB9`), or the local player's (`0x44FDB0`, `0x489CCD`) when there is no attacker. **The
@@ -413,9 +413,12 @@ receiver `0x489CE0(rec)`** refuses a victim that is not alive (`+0x110` bit `0x1
 pending death (bit `0x4000`) (`0x489D45`, `0x489D50`); a heal adds to hit points up to the type's
 maximum (`0x489D59..0x489D80`); any other kind calls `0x467950(victim)` and, but for kind `0x0B`,
 `0x406F80(attacker, victim, damage)`, and records the kind at `+0xF5` and the attacker at `+0xF0`/
-`+0xF4`. Kind 2 then leaves by `0x489DF5` without touching hit points; the rest subtract from them
-(`0x489EB5`), and hit points at or below 0 set pending death only when the victim's player is local
-(`+0x73` 1 or 2, `0x489EC6..0x489EE5`). So every peer applies every hit to its own copy and the owner alone decides
+`+0xF4`. Kind 2 then leaves by `0x489DF5` without touching hit points, and paralyses only a
+victim whose player is local (`0x489E24`); the rest subtract from them (`0x489EB5`), and hit points
+at or below 0 set pending death only when the victim's player is local (`+0x73` 1 or 2,
+`0x489EC6..0x489EE5`), a remote copy's being clamped to 0 (`0x489EF1`). `0x406F80` tells the
+victim's orders (`0x4897B0`, event `0x10`) and does everything else only for a local victim
+(`0x406FC3`, `0x407013`). So every peer applies every hit to its own copy and the owner alone decides
 the death. The round robin carries hit points (`0x48B235`, written at `0x48B4B2`), so a bystander's
 copy is rewritten within N ticks.
 
@@ -430,7 +433,18 @@ stores or builds). Every byte of both messages carries a field; neither has room
 (`[player+0x67]`..`[player+0x6B]`, read as `main+0x1BCA`/`+0x1BCE` + `k·0x14B`) and takes the first
 slot whose type `+0xA6` is 0 (`0x486036`). Its arg 8 is a requested index: then only that slot is
 tried. All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
-index. The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The type word of a
+index. It returns NULL when no slot is free (`0x486053`). **Its callers and NULL**: the four
+factory and build callers (`0x4028EA`, `0x403D5B`, `0x405104`, `0x41409B`) link the result to
+the order (`0x489690` takes NULL) and test the link: NULL says "Unable to create any more units"
+(`0x4028FF` → `0x47F780`) and sleeps the order 300 ticks (`0x439E80`); `0x41794F` ignores it;
+`0x48718E`, `0x488462` and `0x488700` test it; `0x497002` and `0x4977BB` are the level load's;
+**`0x4653D9`**, the players phase's timed create for the controlled player (`main+0x2A42`, when the
+countdown `main+0x39239` fires), uses it at `0x465414` with no test, so stock faults there at the
+cap. The type is written at `0x486086` and the `0x09` sent at `0x486115`. **The blocks go to the
+records in DPID order in a network game**: `0x485842` sorts the ten record pointers on `+4` when
+`0x435100` answers 3 (otherwise on the pointer itself), and `0x4858BD` gives the k-th of the sorted
+list the block `1 + k·N` (`+0x67`, and its last slot at `+0x6B`, `0x4858E0`), so record k owns
+block k only on the peer first in DPID order. **The type word of a
 unit slot has three writers**: this create, `CreateFromNetwork` (`0x4862A2`), and the destructor `0x4866D0`'s
 free (`0x486DC7`, type 0). `0x421FE2` writes the same offset in a record the feature code allocates
 for itself (`0x421F9B`), and `0x485ED2` is in `0x485E90`, which nothing calls and no dword in the
@@ -473,13 +487,19 @@ tagged `0x05` (`05 00 4A` + the `0x09` + the owner's birth, `05 00 4B` + the `0x
 stamp of its victim); the `0x05` slot `0x455F90` becomes the receiver, which applies the carried
 type's own gate and enters stock's handler with the return address stock's case pushes (`0x4553E9`,
 `0x455417`), so B3's bounds and its counters, which key on them, run unchanged; the `0x09` and `0x0B`
-slots drop a bare message; `0x48634F` stamps a copy (exact after a carried `0x09`, the `0x2C`'s
-GameTime as a lower bound after a recreate); `0x486036` holds a slot freed less than two ticks ago
-from first-free (arg 8 = 0 only); `0x486DC1` stamps the free; `0x4854A0` resets every stamp with the
-array. All are rows of the fail-closed table, in both builds.
+slots drop a bare message; `0x48634F` stamps a copy (exact after a carried `0x09`, its birth
+read from `CreateFromNetwork`'s own record argument; after a recreate, the `0x2C`'s GameTime as a
+lower bound, from the record whose block holds the slot); `0x486036` decides first-free once, at
+the block's first free slot: an unheld one, else the one freed longest ago if in an earlier tick,
+never one freed this tick (arg 8 = 0 only); `0x486DC1` stamps the free; `0x4854A0` resets the
+tables with the array and sizes them from its count; `0x4653DE` sends a NULL from `0x4653D9` to
+the block's end `0x4654FB` with the countdown set back to 0, a retry the next tick. All are rows of
+the fail-closed table, in both builds.
 MEASURED 2026-09-25 (the plan's *B4 BUILT AHEAD*, three peers, every hit held 30 ticks by the test
 lever): hits applied to a unit younger than the delay fell from 1 562 to 0 on the owner and from
-1 406 to 1 on a bystander (0 in a second run); a hit costs 65 bytes on the wire instead of 9.
+1 406 to 1 on a bystander (0 in a second run); a hit costs 65 bytes on the wire instead of 9. After
+the fix round the owner still applied none young, both joiners computed real lower bounds with
+none unknown, and a bystander applied 52 undecidable hits on a `0x2C`-made commander copy.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
