@@ -4,7 +4,7 @@
 
 Section C brings the weapon and unit keys that TADR taught the engine to read into our stack, as
 our own code, over four landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**,
-in a grill that followed [the evidence pass](data-keys-evidence.md). **C1 is built**; C2, C3 and C4
+in a grill that followed [the evidence pass](data-keys-evidence.md). **C1 has landed**; C2, C3 and C4
 are not. The rules shared by every group are in
 [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
@@ -155,7 +155,7 @@ against the previous build where a number can be compared. A two-peer test (`a2n
 `:71`) runs where a decision or a message crosses peers. Measurement rounds are scoped to what each
 commit can change.
 
-1. **C1 — the ghost's piece mask. Built 2026-09-25.** Display only, touches nothing of section B's.
+1. **C1 — the ghost's piece mask. Landed 2026-09-25.** Display only, touches nothing of section B's.
    `Create()`'s hides by default, `PreviewPieces=` as the override; the unit-key reader it needs
    for that one key. How it is built is in [C1, as built](#c1-as-built) below.
 2. **C2 — the weapon keys.** The weapon-key store; `nottoair`, `nottounderwater`, `surfacefire`,
