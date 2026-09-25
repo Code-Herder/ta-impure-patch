@@ -778,7 +778,7 @@ pushed `1` at `0x4654ED` and `0x4654F4`) — and reloads `edi`, `bl` and `ebp` i
 (`0x4654FB..0x465503`). The stub writes nothing, so the countdown stays at −1 as stock's fire leaves
 it and fires again six passes later while its trigger holds. All are rows of
 the fail-closed table, in both builds.
-MEASURED 2026-09-25 (the plan's *B4 BUILT AHEAD*, three peers, every hit held 30 ticks by the test
+MEASURED 2026-09-25 (the plan's *B4 LANDED* section, three peers, every hit held 30 ticks by the test
 lever): hits applied to a unit younger than the delay fell from 1 562 to 0 on the owner and from
 1 406 to 1 on a bystander (0 in a second run); a hit costs 65 bytes on the wire instead of 9. After
 the fix round the owner still applied none young, both joiners computed real lower bounds with
