@@ -263,7 +263,7 @@ The plan as written:
   previous build faults at `0x49CF19`, the new one counts fallbacks. An ARMATLAS on the last column
   and one near the north edge at cruise altitude.
 
-**B2 — stacked aircraft. Built 2026-09-25 on its own branch from B1 and reviewed at high; landing next.** What was
+**B2 — stacked aircraft. Landed 2026-09-25 on local main (`74dc093`) after its reviews.** What was
 built, and where it differs from the plan below (the engine map's *Stacked aircraft in area damage*
 has the sites, the disassembly and the numbers):
 
@@ -345,11 +345,11 @@ has the sites, the disassembly and the numbers):
 - Class: local (malformed input only). Tests: the two-peer weapon-ID fixture and a ten-peer tier 2
   run with every counter at 0.
 
-**B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`, main merged at `74dc093`;
-commits `3c2cec1`, `b3c5a83`, `569031d`, `49c640c`, `5193986`, the `0x2C`'s nested unit
-references `b9a5692` and the `0x0A` attach `cefcac8`; not landed; two high reviews, their findings
-acted on in `49c640c` and `5193986` — the nested references and the `0x0A` came after them and have
-had no review yet). What was done, and where it deviates from the plan above:
+**B3 LANDED 2026-09-25** on local main (worktree-tadr_port_b3, from `e0ba336`, main merged at `74dc093`
+and again before landing; two high reviews, their findings acted on in `49c640c` and `5193986`, and two
+focused reviews of the rounds after them — the padded copy, the splitter, the pump's pointer, the
+`0x2C`'s nested unit references `b9a5692` and the `0x0A` attach `cefcac8` — whose three lows were
+acted on in `18667b4`). What was done, and where it deviates from the plan above:
 
 - **No record-injection lever.** The plan's `tagpu_wirefuzz.on` is dropped. A malformed-message fix
   meets the plan's own evidence bar by disassembly (the identity everywhere else), so instead each
@@ -361,8 +361,8 @@ had no review yet). What was done, and where it deviates from the plan above:
   C and nothing more; the stubs and their drop paths rest on the disassembly. Measured 2026-09-25:
   22/22 predicate cases OK. The table has 33 since `cefcac8` (`wire_ref_idx`'s six, `wire_attach_ok`'s
   five); those eleven, with six more (a child and parent both 0, no array, the raised limit of
-  15 000), have been run only on the host, against the predicates compiled from the source (8/8 and
-  9/9 OK), not yet through `tagpu_wirecheck.on` in the game.
+  15 000), ran first on the host against the predicates compiled from the source (8/8 and 9/9 OK),
+  then through `tagpu_wirecheck.on` in the game: 33/33 OK on both peers of the final round below.
 - **Every stub is a jmp at a clean 5-byte boundary**, verifies the whole stock span first
   (all-or-nothing: one non-stock span leaves the image untouched, `FIX_BYTES`), sets the registers
   stock sets, and continues at the same address; a failed bound goes to the receiver's own drop/exit.
@@ -630,6 +630,20 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   creates are the path the plan's ghost commander takes, each passing the delta and type checks and
   the after-create guard. The receive buffer held 0x2000 bytes at one address from the menu to the
   pause on every peer. The in-play heartbeat line is now about 1 470 bytes of its 1 700.
+- **The final round, two peers** (`3e6a684`, raised ddraw.dll md5
+  `65b43b35f3fdccc47c93821b395ed83a`; host + joiner through `tools/mp_lobby.sh`, `limits-tier2-p0`/`p1`,
+  the armies ordered onto each other, a factory building; both paused before reading). Install
+  **ARMED** on both, stubs 544 bytes, `limits: installed 183 sites`, `tagpu_wirecheck.on` 33/33 OK.
+  **PASS**: every drop counter 0 on both peers (`09 blk 0a 0b 0c kill 2c len stale nocopy 0d split
+  target carrier`), the `0x0A` attach receiver on real traffic, no ErrorLog, no crash:
+
+  | peer | ticks | in `09` | `0a` | `0b` | `0c` | `0d` | `2c` | dirty | rr | rcreate |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | host | 1951 | 1503 | 2 | 6226 | 777 | 24936 | 12315 | 342850 | 12315 | 0 |
+  | joiner | — | 1510 | 13 | 11270 | 614 | 10575 | 12306 | 333682 | 12306 | 1 |
+
+  The landed build adds to it only the site table's bound (`18667b4`, install code) and main's merge;
+  its install lines were read again on it before landing.
 
 **B4 — stale hits.**
 
