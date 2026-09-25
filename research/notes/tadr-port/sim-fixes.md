@@ -388,7 +388,7 @@ had no review yet). What was done, and where it deviates from the plan above:
   pumps. On the transport a `0x2C`'s length **is** its `[16]` size field: the splitter `0x463790`
   reads it (`0x4639E5`) and queues the message only when it fits the packet (`0x46393E`); a raw
   receive has no splitter, so the length is the smaller of the two, at most 0xFFFF. The receiver's
-  entry copies that many bytes into this thread's buffer (0x10000 + 48 bytes, allocated at the
+  entry copies that many bytes into this thread's buffer (0xFFFF + 48 bytes, allocated at the
   thread's first `0x2C`; none → the message is dropped, `nocopy`), zeroes the 48 after them, and
   hands the copy to stock's `0x48B933` as the reader's buffer. **Every read of the parse is then
   inside memory we own, whatever the message says**, and a message that ends inside an entry reads

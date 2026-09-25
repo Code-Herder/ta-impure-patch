@@ -3683,10 +3683,13 @@ static int fix_wire_bounds(void)
     wire_emit1(acr, wire_2c_carrier, 0x0048B579u);
     wire_emit_tail(a0a, wire_s0a, 0x00455F50u, k0a, 5, 0x00455403u);
 
-    /* the branch each site takes, at its clean boundary; the stock bytes were verified above */
-#define WIRE_SITE(va_, n_, op_, to_) \
-    (s[n].va = (va_), s[n].n = (n_), memcpy(s[n].was, (const void*)(size_t)(va_), (n_)), \
-     fix_branch(&s[n], (op_), (to_)), n++)
+    /* the branch each site takes, at its clean boundary; the stock bytes were verified above.
+       The last entry of s is S8's, so a site past the one before it is refused, not written. */
+#define WIRE_SITE(va_, n_, op_, to_) do { \
+    if (n >= (int)(sizeof s / sizeof s[0]) - 1) return FIX_STUB; \
+    s[n].va = (va_); s[n].n = (n_); memcpy(s[n].was, (const void*)(size_t)(va_), (n_)); \
+    fix_branch(&s[n], (op_), (to_)); n++; \
+} while (0)
     WIRE_SITE(0x004861F7, 5, 0xE9, a09);
     WIRE_SITE(0x004866E5, 5, 0xE9, a0c);
     WIRE_SITE(0x00486753, 5, 0xE9, a0ck);
