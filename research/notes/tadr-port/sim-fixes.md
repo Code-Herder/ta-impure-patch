@@ -346,8 +346,8 @@ has the sites, the disassembly and the numbers):
   run with every counter at 0.
 
 **B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`, main merged at `74dc093`;
-commits `3c2cec1`, `b3c5a83`, `569031d`, `49c640c`; not landed; two high reviews, their findings
-acted on in `49c640c`). What was done, and where it deviates from the plan above:
+commits `3c2cec1`, `b3c5a83`, `569031d`, `49c640c`, `5193986`; not landed; two high reviews, their
+findings acted on in `49c640c` and `5193986`). What was done, and where it deviates from the plan above:
 
 - **No record-injection lever.** The plan's `tagpu_wirefuzz.on` is dropped. A malformed-message fix
   meets the plan's own evidence bar by disassembly (the identity everywhere else), so instead each
@@ -357,7 +357,7 @@ acted on in `49c640c`). What was done, and where it deviates from the plan above
   of boundary values at attach and logs each verdict against the expected one — a unit test of our
   own code, not traffic. The compiler folds every case to a constant, so it checks the predicates'
   C and nothing more; the stubs and their drop paths rest on the disassembly. Measured 2026-09-25:
-  18/18 predicate cases OK.
+  22/22 predicate cases OK.
 - **Every stub is a jmp at a clean 5-byte boundary**, verifies the whole stock span first
   (all-or-nothing: one non-stock span leaves the image untouched, `FIX_BYTES`), sets the registers
   stock sets, and continues at the same address; a failed bound goes to the receiver's own drop/exit.
@@ -374,27 +374,65 @@ acted on in `49c640c`). What was done, and where it deviates from the plan above
   it). The static also rests on the receiver being serialised with no re-entry between the type
   check and the after-create check: the direct-call closure of `0x4861D0` never reaches the pump
   `0x453D40`.
-- **The `0x2C` reader is bounded by the message's length** (`wire_2c_len`). The receive `0x4534E0`
-  takes one message into the buffer at `main+0x2A38` and learns its length, which it hands only to
-  the statistics call `0x415EF0`; the two calls (`0x453595` after the transport `0x462F30`,
-  `0x45361F` after a raw DirectPlay receive, the `-p` switch below 0) go through a note that keeps
-  the buffer and length **per thread** (TLS), since the receive runs on whichever thread pumps. On
-  the transport a `0x2C`'s length **is** its `[16]` size field: the splitter `0x463790` reads it
-  (`0x4639E5`) and queues the message only when it fits the packet (`0x46393E`); a raw receive has
-  no splitter, so the bound is the smaller of the two. Before each read the stubs precede, the
-  position plus the read's width must fit: the header and first delta at the entry, each dirty
-  type at the delta stub, the flag bit (and, when it is set, the round-robin type) at a new site
-  `0x48BA5E`, and the round-robin entry at `0x48B40E`. A `0x2C` whose reader does not start at the
-  buffer the length describes is dropped (`stale`): the pump takes its message pointer once
-  (`0x453D90`), and `0x4534E0` can move the buffer when it grows it (`0x453565`, `0x4535EE`). The
-  end is keyed by the reader's address, so a check that meets another reader stops.
-  **Not closed**: two stretches are read by engine code whose width depends on the data — a dirty
-  entry's move-class payload (`[vt+0x24]`: `0x44E080`, `0x44E9C0`, `0x44F5C0`, each branching on
-  bits it reads) and the round robin's full-state tail after `0x48B49C` (`0x48B4A2..0x48B6FC`). A
-  message that ends inside one is read to that stretch's end before the next check stops the
-  stream (the dirty payload's at the next delta; the tail is the message's last), and those values
-  reach that one unit. Closing them needs the reads kept inside the message (a padded copy, or each
-  format's width), which is a decision for the owner.
+- **The `0x2C` is parsed from a zero-padded copy of itself** (`wire_s2c_copy`, at `0x48B92B`, before
+  the header's reads), and its reader is bounded by the message's length (`wire_2c_len`). The
+  receive `0x4534E0` takes one message into the buffer at `main+0x2A38` and learns its length, which
+  it hands only to the statistics call `0x415EF0`; the two calls (`0x453595` after the transport
+  `0x462F30`, `0x45361F` after a raw DirectPlay receive, the `-p` switch below 0) go through a note
+  that keeps the buffer and length **per thread** (TLS), since the receive runs on whichever thread
+  pumps. On the transport a `0x2C`'s length **is** its `[16]` size field: the splitter `0x463790`
+  reads it (`0x4639E5`) and queues the message only when it fits the packet (`0x46393E`); a raw
+  receive has no splitter, so the length is the smaller of the two, at most 0xFFFF. The receiver's
+  entry copies that many bytes into this thread's buffer (0x10000 + 48 bytes, allocated at the
+  thread's first `0x2C`; none → the message is dropped, `nocopy`), zeroes the 48 after them, and
+  hands the copy to stock's `0x48B933` as the reader's buffer. **Every read of the parse is then
+  inside memory we own, whatever the message says**, and a message that ends inside an entry reads
+  zeros for that one entry before the next check stops the stream. Before each read the stubs
+  precede, the position plus the read's width must fit the length: the header and first delta at
+  the entry, each dirty type at the delta stub, the flag bit (and, when it is set, the round-robin
+  type) at `0x48BA5E`, and the round-robin entry at `0x48B40E`; the end is keyed by the reader's
+  address, and the entry checks the reader holds the copy. A `0x2C` that is not the buffer the
+  receive described is dropped (`stale`). The copy changes nothing for a well-formed message:
+  nothing reads the reader after the handler returns (the dispatcher's case `0x4553EE` jumps to the
+  pump's back edge `0x455F50`, the reader is a local of `0x48B920`'s frame), and nothing advances
+  by it — each message is its own receive, and the splitter advances by the size it reads from the
+  packet itself.
+- **The padding's size, by disassembly of every path past the last check.** Two stretches are read
+  by engine code whose width depends on the data, and neither loops on data it reads:
+  - a dirty entry's move-class payload `[vt+0x24]`, then the next delta (16) at `0x48BA19` before
+    the delta stub checks it. The move classes' vtables (`0x4FD458`, `0x4FD488`, `0x4FD980`,
+    `0x4FD9B0`, `0x4FD9E0`; no other table's `+0x24` reaches the reader) give `0x44EFD0` (reads
+    nothing), `0x44F5C0` (1 + 2 + 3 × 32 = 99: its loop runs a 2-bit count) and `0x490A10`
+    (2 + the larger of `0x44E080`'s 8 + 32 + 16 + 16 + 16 + 96 = 184 and `0x44E9C0`'s
+    1 + 6 × 32 + 16 = 209, + 2 = 213). 213 + 16 = **229 bits**.
+  - the round robin's tail after `0x48B40E`: 16 + 8 + 8 + 2 + 1 (`0x48B4A9..0x48B557`), then 15 + 8
+    or 32 × 3 + 16 × 3 (`0x48B56B..0x48B60F`), and 32 (`0x48B6F2`): at most 211. The calls on the
+    way (`0x48B090`, `0x48AB70`, `0x47D0E0`, `0x47CC30`, `0x4827B0`) read nothing from it.
+  - the header before the entry check: 56.
+  So at most 229 bits, 29 bytes, past the last checked bit. The message's end can sit 3 bytes into
+  a dword, and the reader `0x415DC0` also loads the next dword when a read reaches the end of one
+  (`0x415E0C..0x415E3E`): 29 + 3 + 8 = 40, rounded up to **48**. A `typedef` in
+  `tagpu_patches.c` fails the build if the padding falls below that sum.
+- **The pump's message pointer follows the buffer.** The pump `0x453D40` takes its message pointer
+  once, before its loop (`0x453D90` → `[esp+0x10]`; the back edge `0x455F59` re-enters at the call
+  `0x453D94`), and every dispatcher case reads it there; nothing else writes that slot or takes its
+  address. `0x4534E0` grows the buffer when a message outgrows it (`0x453565`, `0x4535EE`: `0x4D84A0`,
+  a realloc [INFERRED: block and size in, the block out]), so after a growth that moves the block,
+  every later message of the same pump call was dispatched from the freed one. The fix is the
+  small one: the note re-points the pump's `[esp+0x10]` at the buffer the message was just received
+  into, after checking the return address `0x453D99` (its frame — `0x4534E0`'s one caller, its one
+  push, the three argument pushes — is in the spans verified at install). It is the identity when
+  the buffer did not move, and `pump` counts the times it did.
+- **The splitter ends a packet at a message too short to advance it** (`wire_split_*`). The
+  splitter walks a packet by each message's length and advances by it, so a `0x2C` whose size is 0
+  keeps its counting loop (`0x4638F0..0x463947`) on one message for good, and its third walk
+  (`0x463AD3..0x463B8B`) queues that message until the 512-entry queue is full. Both take the
+  length at one place (`0x463939`, `0x463B33`, after the `0x2C` and table paths join); a length of
+  0, or a `0x2C` below its 7-byte header, ends the split there through the engine's own end for an
+  unknown code (`0x463949`; `0x463B91`), counted (`split`). The counting pass decides how many
+  messages the queuing pass `0x4639BC` takes, so that pass never reaches it. A length of 0 hangs
+  stock's counting loop whatever the code, so no packet stock survives carries one, and every
+  sender writes a `0x2C` with its 7-byte header: it is the identity for a well-formed packet.
 - **The `0x2C` block check is at the receiver's entry `0x48B960`, not per dirty entry**: one check
   there covers the dirty loop, the block sweep `0x48BA28` and the round-robin slot `0x48BAAD`, all of
   which read `[player+0x67]`/`[player+0x6B]`. It is the full slot-run shape
@@ -422,7 +460,7 @@ acted on in `49c640c`). What was done, and where it deviates from the plan above
   create rr`): the evidence each bound ran on real traffic. `0x0B` and `0x0C` count only the
   dispatcher's call (return `0x455417`/`0x455428`), not the local damage and kill paths that share
   the function; `0x0D` counts a live shooter whose slot weapon matched. Drops: `09 blk 0b 0c kill 2c
-  len stale 0d`.
+  len stale nocopy 0d split`; `pump` counts a re-pointed pump pointer.
 - **The B4/B5 oracles**: `morph` (a create onto a live slot whose type changes), `dcreate`
   (`CreateFromNetwork` called by the dirty list, returning to `0x48BA05`: a dirty entry whose type is
   not its slot's, the unit made from the entry rather than from its own `0x09` — into an empty slot,
