@@ -1007,12 +1007,14 @@ still applies); `tagpu_wirecheck.on` runs 17 rule cases at attach (the queue's a
 bound, the bit reader, the ground and air payloads, a goal not taken, which create a kill
 cancels). Counters on the heartbeat's `ghost:` section.
 
-**B5 BUILT AHEAD (2026-09-25, from `c2e5850` on its own worktree from B4's `a8e529e`; not
-landed, not reviewed).** `fix_ghost_commander` in `tagpu_patches.c`. The install line reads
-`limits: installed 202 sites` in the raised build (189 before), and `the simulation fixes' 77
-sites installed` in the stock-limits one; `tagpu_wirecheck.on` runs the 17 rule cases, all OK, in
-both. The table ran on the first build, which replayed at the state-6 store; the two starts after
-it (below the table) on the builds that replay before the first tick.
+**B5 BUILT AHEAD (2026-09-25, from `c2e5850` on its own worktree from B4's `a8e529e`, B4's fix
+rounds merged at `fbda477`; not landed, not reviewed).** `fix_ghost_commander` in
+`tagpu_patches.c`. On the merged tree the install line reads `limits: installed 210 sites` in the
+raised build and `the simulation fixes' 85 sites installed` in the stock-limits one — the thirteen
+rows' sites on top of B4's (before the merge 202 against 189, and 77 against 64);
+`tagpu_wirecheck.on` runs the 17 rule cases, all OK, in both, beside B4's 23 and B3's 33. The
+table ran on the first build, which replayed at the state-6 store; the starts after it (below the
+table) on the builds that replay before the first tick.
 
 *Measured, two peers on Two Continents* (host and joiner by `tools/mp_lobby.sh`, rosters of both
 commanders' slots every 2 s for 60 s from the first in-play tick; "moved": the host's commander
@@ -1043,6 +1045,15 @@ build the drain at GameTime 0 again finds nothing, and the create is made in the
 joiner's first tick — `created slot 1 from sender 1 (birth 0, type 34) at GameTime 1, in a
 catch-up tick`, `now=1`, copy `exact=1`, `gate=0`; the commander at the first sample `(368,7663)`
 against the host's `(369,7660)`, equal at `(842,7344)` from t = 20 s.
+
+*On the merged tree* (`fbda477`, 1500, moved, one start). This start dealt the host the second
+block, so its commander is slot 1501 (the move order went to 1501 on the host). The joiner's drain
+at GameTime 0 again finds nothing, and the create is made in its first tick: `created slot 1501
+from sender 1 (birth 0, type 34) at GameTime 1, in a catch-up tick`, `now=1`, copy `exact=1`,
+`gate=0`; the commander at the joiner's first sample `(369,7661)` against the host's
+`(375,7655)`, equal at `(841,7344)` from t = 20 s. On both peers the carried create went out at
+65 bytes (the bare `0x09`'s 23), `bad`, `bare`, `over` and `holdfail` read 0, and every `wire:`
+drop and `noblock` count is 0 over 1 743 and 1 676 parsed `0x2C`.
 
 *B4's lower-bound copies at game start are gone.* The refused create now makes an exact copy: the
 joiner's `gate` and `bound` read 0 and `exact` 1 in every B5 start with the queue on, against `gate=1 bound=1` on the
