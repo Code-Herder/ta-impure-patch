@@ -299,10 +299,11 @@
    (2 * minor * i + major) / (2 * major), which is its error term
    `2 * minor - major` stepping on `>= 0` unrolled; both ends inclusive. The
    products are UNSIGNED so they cannot overflow for endpoints inside
-   tagpu_line.h's TAGPU_LINE_MAXC box. The engine's CLIP (`0x4CC650`, called
-   first) is not part of it: it moves an end that lies off the surface onto
-   the edge, so on a line that crosses the edge the engine walks from a
-   different pixel than this does (tagpu_line.h). */
+   tagpu_line.h's TAGPU_LINE_MAXC box. DrawLine's clip (`0x4BEA20` to the
+   viewport, then `0x4CC650` to the surface) is not part of it: it moves the
+   ends before the walk, and the CPU does that where a record is built
+   (tagpu_line.h `tagpu_line_clip`), so the ends this walk receives are the
+   clipped ones. */
 #define TAGPU_GLSL_LINE_FN \
     "ivec2 taGamePx(vec2 fc, ivec4 grid) {\n" \
     "  ivec2 t = ivec2(fc);\n" \

@@ -399,6 +399,10 @@ static int s_cOverflow = 0, s_cQuads = 0, s_cLineFar = 0;
 /* this frame's wheel zoom, latched by the gather: a line's ends are
    quantised through it where the line is emitted (tagpu_line.h) */
 static double s_lzoom = 1.0, s_lzcx, s_lzcy;
+/* and DrawLine's clip rect -- the viewport, inclusive -- and the surface, in
+   game pixels (tagpu_line_clip) */
+static int s_lclipL, s_lclipT, s_lclipR, s_lclipB, s_lclipW, s_lclipH;
+static TAGPU_LINE_AB s_lab;             /* an A/B frame's lines before the clip */
 
 /* A PART ASKED FOR AND NOT WRITTEN. Every emitter return that leaves a
    sprite's quad or a line out of the buckets for want of this frame's room
@@ -433,10 +437,12 @@ static void put_quad(int b, float x0, float y0, float x1, float y1,
 
 /* ONE LINE RECORD, the instance LVS draws: the two ends' game pixels after
    the wheel zoom in (x, y) and (u, v), the depth key, the colour on the flat
-   path and the fog point. The engine draws these lines from integer pixels,
-   so each end is that pixel's CENTRE put through tagpu_line.h's rule -- at
-   1x the engine's own pixel. A line past the rule's bound is counted
-   (`s_cLineFar`) and not drawn. */
+   path and the fog point. The engine draws these lines from integer pixels
+   through DrawLine `0x4BE950`, so each end is that pixel's CENTRE put through
+   tagpu_line.h's rule -- at 1x the engine's own pixel -- and then through
+   DrawLine's clip to the viewport (tagpu_line_clip). A line past
+   TAGPU_LINE_FAR is counted (`s_cLineFar`) and not drawn; one the clip
+   leaves nothing of is not drawn either. */
 static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, float wz)
 {
     int ax, ay, bx, by;
@@ -444,11 +450,17 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
     s_cLines++;
     if (s_mute) return;
     if (s_nv[B_LINES] + 1 > TAGPU_FX_MAXV) { s_cOverflow++; s_partsLost++; return; }
-    if (!tagpu_line_px(x0 + 0.5, y0 + 0.5, s_lzoom, s_lzcx, s_lzcy, &ax, &ay) ||
-        !tagpu_line_px(x1 + 0.5, y1 + 0.5, s_lzoom, s_lzcx, s_lzcy, &bx, &by)) {
+    if (!tagpu_line_px(x0 + 0.5, y0 + 0.5, s_lzoom, s_lzcx, s_lzcy, TAGPU_LINE_FAR,
+                       &ax, &ay) ||
+        !tagpu_line_px(x1 + 0.5, y1 + 0.5, s_lzoom, s_lzcx, s_lzcy, TAGPU_LINE_FAR,
+                       &bx, &by)) {
         s_cLineFar++;
         return;
     }
+    tagpu_line_ab_add(&s_lab, ax, ay, bx, by, colidx);
+    if (!tagpu_line_clip(&ax, &ay, &bx, &by, s_lclipL, s_lclipT, s_lclipR, s_lclipB,
+                         s_lclipW, s_lclipH))
+        return;
     put_vert(B_LINES, (float)ax, (float)ay, (float)bx, (float)by,
              (float)colidx / 255.0f, MODE_FLAT, wx, wz);
 }
@@ -1121,6 +1133,12 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
     s_cModelLost = 0; s_modelWhy = 0;
     s_lzoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
     s_lzcx = (double)v->zoomCx; s_lzcy = (double)v->zoomCy;
+    s_lclipL = v->vpL; s_lclipT = v->vpT;
+    s_lclipR = v->vpL + v->vw - 1; s_lclipB = v->vpT + v->vh - 1;
+    s_lclipW = v->gw; s_lclipH = v->gh;
+    /* the lines of a frame the A/B may claim, kept before the clip for the
+       oracle; the claim in tagpu_fx_render writes them */
+    tagpu_line_ab_begin(&s_lab, s_ab && !s_abDone);
     memset(&s_c, 0, sizeof s_c);
     /* the band, latched for the frame (tagpu_fx.h); the cap is also bounded
        by the list, which `tagpu_fx_model_bound` never exceeds */
@@ -1337,17 +1355,10 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
            it against a capture taken from another BUILD. */
         s_abDone = 1;
         s_abFrame = tagpu_vk_ab_arm("fx");
-        /* and the frame's lines, in bucket order (tagpu_line.h) */
-        {
-            FILE* f = tagpu_line_list_open("fx", v->gw, v->gh);
-            int i;
-            for (i = 0; i < s_nv[B_LINES]; i++) {
-                const float* o = s_verts[B_LINES] + (size_t)i * FXST;
-                tagpu_line_list_add(f, (int)o[0], (int)o[1], (int)o[3], (int)o[4],
-                                    (int)(o[5] * 255.0f + 0.5f));
-            }
-            if (f) fclose(f);
-        }
+        /* and the frame's lines as emit_line had them before the clip, with
+           the rect it clipped to (tagpu_line.h) */
+        tagpu_line_ab_write(&s_lab, "fx", s_lclipW, s_lclipH,
+                            s_lclipL, s_lclipT, s_lclipR, s_lclipB);
     }
 
     /* PUBLISHED AFTER THE GATHER: these are the vertices, the numbers and the

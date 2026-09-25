@@ -36,7 +36,7 @@
 
    THE PREREQUISITES ARE ASKED OF THE DEVICE, NOT ASSUMED. Four limits and
    three formats, each refused BY NAME when it does not hold, the way `flipok`
-   and `zclipok` already are. They were measured on the reference setup and
+   already is. They were measured on the reference setup and
    again through winevulkan, and they all held -- which is exactly why the
    check is here rather than skipped: a limit that holds on one device is not a
    property of the port. */

@@ -2340,7 +2340,7 @@ static unsigned wire_records(float* dst, const TAGPU_PDHAND* h, const TAGPU_PDUR
             qy[k] = -m[2] - m[1] * 0.5f;
             if (!tagpu_line_px((double)r->anchor[0] + qx[k], (double)r->anchor[1] + qy[k],
                                h->zoom > 0.0f ? h->zoom : 1.0, h->zoomCx, h->zoomCy,
-                               &gx[k], &gy[k])) {
+                               TAGPU_LINE_MAXC, &gx[k], &gy[k])) {
                 (*nfar)++;
                 ok = 0;
                 break;

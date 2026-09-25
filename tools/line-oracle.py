@@ -6,9 +6,13 @@
 WHAT IT COMPARES. A pass whose A/B claims a frame writes the capture
 (`tagpu_<pass>_vk.ppm`) and, beside it, the lines it handed the GPU that frame
 (`tagpu_<pass>_lines.txt`: a header `# <pass> <game w> <game h>`, then
-`ax ay bx by col` a line, the ends as tagpu_line.h decided them). This walks
-every line with `walk` below -- a transcription of `0x4CC7AB`'s loops from the
-disassembly, not of the fragment stage's closed form -- covers each lit game
+`ax ay bx by col` a line, the ends as tagpu_line.h decided them). When the
+header carries a rect as well (`... <L> <T> <R> <B>`, the markers and the
+effects), the ends are the ones BEFORE DrawLine's clip, and each line is first
+clipped with line-band-check.py's transcription of `0x4BEA20` and `0x4CC650`
+and the pixels outside the rect dropped, as the viewport scissor drops them.
+This walks every line with `walk` -- a transcription of `0x4CC7AB`'s loops
+from the disassembly, not of the fragment stage's closed form -- covers each lit game
 pixel with its `ss` x `ss` block, and compares that set with the capture's lit
 pixels. The verdict is 0 px or not: exit 0 only when no pixel is lit in one
 and not the other.
@@ -34,12 +38,12 @@ import numpy as np
 HERE = pathlib.Path(__file__).resolve().parent
 
 
-def _walk():
+def _engine():
     spec = importlib.util.spec_from_file_location("line_band_check",
                                                   HERE / "line-band-check.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.walk
+    return mod
 
 
 def read_ppm(path):
@@ -65,25 +69,41 @@ def read_ppm(path):
 
 
 def read_lines(path):
+    """(pass, gw, gh, rect or None, lines). A header with a rect lists the
+    lines before DrawLine's clip (tagpu_line.h)."""
     rows = pathlib.Path(path).read_text().split("\n")
     head = rows[0].split()
-    if len(head) != 4 or head[0] != "#":
-        raise SystemExit("%s: no `# <pass> <gw> <gh>` header" % path)
+    if len(head) not in (4, 8) or head[0] != "#":
+        raise SystemExit("%s: no `# <pass> <gw> <gh> [<L> <T> <R> <B>]` header" % path)
     gw, gh = int(head[2]), int(head[3])
+    rect = tuple(map(int, head[4:8])) if len(head) == 8 else None
     lines = []
     for r in rows[1:]:
         if r.strip():
             ax, ay, bx, by, col = map(int, r.split())
             lines.append((ax, ay, bx, by, col))
-    return head[1], gw, gh, lines
+    return head[1], gw, gh, rect, lines
 
 
-def model(lines, gw, gh, walk):
+def model(lines, gw, gh, rect, eng):
+    """The game pixels the engine's DrawLine lights for `lines`: with a rect,
+    each line clipped as 0x4BEA20 and 0x4CC650 clip it and the pixels outside
+    the rect dropped, as the pass's viewport scissor drops them."""
     lit = np.zeros((gh, gw), bool)
     for ax, ay, bx, by, _ in lines:
-        for x, y in walk(ax, ay, bx, by):
+        if rect:
+            c = eng.clip(ax, ay, bx, by, *rect, gw, gh)
+            if c is None:
+                continue
+            ax, ay, bx, by = c
+        for x, y in eng.walk(ax, ay, bx, by):
             if 0 <= x < gw and 0 <= y < gh:
                 lit[y, x] = True
+    if rect:
+        L, T, R, B = rect
+        keep = np.zeros_like(lit)
+        keep[max(T, 0):B + 1, max(L, 0):R + 1] = True
+        lit &= keep
     return lit
 
 
@@ -97,13 +117,13 @@ def main():
 
     img = read_ppm(a.capture)
     th, tw = img.shape[:2]
-    which, gw, gh, lines = read_lines(a.lines)
+    which, gw, gh, rect, lines = read_lines(a.lines)
     if tw % gw or th % gh or tw // gw != th // gh:
         raise SystemExit("line-oracle: the capture is %dx%d and the game %dx%d - "
                          "not a whole supersample, so there is no honest "
                          "game-pixel grid to compare on" % (tw, th, gw, gh))
     ss = tw // gw
-    g = model(lines, gw, gh, _walk())
+    g = model(lines, gw, gh, rect, _engine())
     want = np.repeat(np.repeat(g, ss, 0), ss, 1)
     got = img.any(axis=2)
     only_model = want & ~got

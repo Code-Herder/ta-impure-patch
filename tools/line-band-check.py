@@ -16,14 +16,23 @@ WHAT IS CHECKED, for every line with both ends in a box around the origin
      of a lit game pixel is rasterised whatever the supersample.
   3. THE GRID MAP IS FLOOR. `taGamePx`'s ((2t + 1) * gw) / (2 * tw) is
      floor((t + 0.5) * gw / tw) for the grids the lane uses.
+  4. THE CLIP IS DrawLine's. tagpu_line.h's `tagpu_line_clip`, compiled with
+     the host gcc, gives the same verdict and the same ends as `clip` below
+     -- `0x4BEA20` then `0x4CC650` -- on random lines across each edge, long
+     ones and ones with an end out to TAGPU_LINE_FAR, and its ends lie on the
+     surface.
 
-The walk here is written from the disassembly (exe-reverse-engineering.md,
-`0x4CC7AB`), not from the closed form, so the two are independent readings.
+The walk and the clips here are written from the disassembly
+(exe-reverse-engineering.md, `0x4CC7AB`, `0x4BEA20`, `0x4CC650`), not from the
+closed form or the C, so each pair is two independent readings.
 """
 
 import math
+import pathlib
 import random
 import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
 
 MAXC = 16383          # tagpu_line.h TAGPU_LINE_MAXC
 R = 2.0               # tagpu_glsl.h taBandR
@@ -68,6 +77,103 @@ def walk(x0, y0, x1, y1):
                 err += inc_hi
                 y += sy
     return out
+
+
+def tdiv(a, b):
+    """idiv: the quotient truncated toward zero."""
+    q = abs(a) // abs(b)
+    return q if (a >= 0) == (b >= 0) else -q
+
+
+def clip_rect(x0, y0, x1, y1, L, T, R, B):
+    """0x4BEA20, as the disassembly steps it: one pass, end 0 then end 1, each
+    against x < L, y < T, x > R, y > B, moved with the ORIGINAL deltas.
+    None when it returns 0."""
+    xle, yle = x0 <= x1, y0 <= y1          # 0x4BEA3E / 0x4BEA4F setle
+    dx, dy = x1 - x0, y1 - y0
+    if x0 < L:                             # 0x4BEA72
+        if not xle or dx == 0:
+            return None
+        y0 += tdiv((L - x0) * dy, dx); x0 = L
+    if y0 < T:                             # 0x4BEAAD
+        if not yle or dy == 0:
+            return None
+        x0 += tdiv((T - y0) * dx, dy); y0 = T
+    if x0 > R:                             # 0x4BEAE7
+        if xle or dx == 0:
+            return None
+        y0 += tdiv((R - x0) * dy, dx); x0 = R
+    if y0 > B:                             # 0x4BEB23
+        if yle or dy == 0:
+            return None
+        x0 += tdiv((B - y0) * dx, dy); y0 = B
+    if x1 < L:                             # 0x4BEB5E
+        if xle or dx == 0:
+            return None
+        y1 += tdiv((L - x1) * dy, dx); x1 = L
+    if y1 < T:                             # 0x4BEBA1
+        if yle or dy == 0:
+            return None
+        x1 += tdiv((T - y1) * dx, dy); y1 = T
+    if x1 > R:                             # 0x4BEBDC
+        if not xle or dx == 0:
+            return None
+        y1 += tdiv((R - x1) * dy, dx); x1 = R
+    if y1 > B:                             # 0x4BEC11
+        if not yle or dy == 0:
+            return None
+        x1 += tdiv((B - y1) * dx, dy); y1 = B
+    return x0, y0, x1, y1
+
+
+def clip_surface(x0, y0, x1, y1, w, h, passes=None):
+    """0x4CC650: loop until every end is on [0, w) x [0, h), rejecting a line
+    wholly off one side, moving ends with the CURRENT deltas. None on reject.
+    `passes`, a list, gets the number of moving passes appended."""
+    n = 0
+    while True:
+        if 0 <= x0 < w and 0 <= x1 < w and 0 <= y0 < h and 0 <= y1 < h:
+            if passes is not None:
+                passes.append(n)
+            return x0, y0, x1, y1
+        n += 1
+        ddx, ddy = x1 - x0, y1 - y0
+        if ddx >= 0:                       # 0x4CC69E jns
+            if x0 >= w or x1 < 0:
+                return None
+        elif x0 < 0 or x1 >= w:
+            return None
+        if ddy >= 0:
+            if y0 >= h or y1 < 0:
+                return None
+        elif y0 < 0 or y1 >= h:
+            return None
+        if x0 < 0:
+            y0 += tdiv(-x0 * ddy, ddx); x0 = 0
+        elif x0 >= w:
+            y0 += tdiv((w - 1 - x0) * ddy, ddx); x0 = w - 1
+        if y0 < 0:
+            x0 += tdiv(-y0 * ddx, ddy); y0 = 0
+        elif y0 >= h:
+            x0 += tdiv((h - 1 - y0) * ddx, ddy); y0 = h - 1
+        if x1 < 0:
+            y1 += tdiv(-x1 * ddy, ddx); x1 = 0
+        elif x1 >= w:
+            y1 += tdiv((w - 1 - x1) * ddy, ddx); x1 = w - 1
+        if y1 < 0:
+            x1 += tdiv(-y1 * ddx, ddy); y1 = 0
+        elif y1 >= h:
+            x1 += tdiv((h - 1 - y1) * ddx, ddy); y1 = h - 1
+
+
+def clip(x0, y0, x1, y1, L, T, R, B, w, h, passes=None):
+    """DrawLine 0x4BE950's two clips in its order, the rect held to the
+    surface as vpwide holds it. None when nothing is drawn."""
+    L, T, R, B = max(L, 0), max(T, 0), min(R, w - 1), min(B, h - 1)
+    if L > R or T > B:
+        return None
+    r = clip_rect(x0, y0, x1, y1, L, T, R, B)
+    return None if r is None else clip_surface(*r, w, h, passes)
 
 
 U32 = 1 << 32
@@ -183,10 +289,87 @@ def main():
             if ((2 * t + 1) * gw) // (2 * tw) != math.floor((t + 0.5) * gw / tw):
                 print("FAIL taGamePx gw=%d tw=%d t=%d" % (gw, tw, t))
                 return 1
+    e = check_clip()
+    if e:
+        print("FAIL clip: %s" % e)
+        return 1
     print("line-band-check: %d lines, closed form == walk, every lit corner at "
-          "least %.3f inside the band (required %.2f); taGamePx is floor"
-          % (stats["lines"], stats["slack"], MARGIN))
+          "least %.3f inside the band (required %.2f); taGamePx is floor; %s"
+          % (stats["lines"], stats["slack"], MARGIN, CLIP_SAID[0]))
     return 0
+
+
+CLIP_SAID = [""]
+FAR = 1 << 29                              # tagpu_line.h TAGPU_LINE_FAR
+CLIP_C = r"""
+#include "tagpu_line.h"
+int clip(int* e, int L, int T, int R, int B, int w, int h)
+{ return tagpu_line_clip(&e[0], &e[1], &e[2], &e[3], L, T, R, B, w, h); }
+"""
+
+
+def check_clip():
+    """4. tagpu_line_clip IS THE ENGINE'S CLIP: the C function, compiled from
+    tagpu_line.h, against clip() above on random lines -- short ones across
+    each edge, long ones, and ends out to TAGPU_LINE_FAR -- with the same
+    verdict and the same ends, the ends inside the surface, and no line
+    needing more than the passes the C bound allows."""
+    import ctypes
+    import subprocess
+    import tempfile
+    src = HERE.parent / "tagpu" / "ddraw" / "src"
+    with tempfile.TemporaryDirectory() as td:
+        c = pathlib.Path(td) / "clip.c"
+        so = pathlib.Path(td) / "clip.so"
+        c.write_text(CLIP_C)
+        r = subprocess.run(["gcc", "-shared", "-fPIC", "-O1", "-D__inline=inline",
+                            "-D_snprintf=snprintf", "-I", str(src), "-o", str(so), str(c)],
+                           capture_output=True, text=True)
+        if r.returncode:
+            return "gcc: " + r.stderr.strip()
+        lib = ctypes.CDLL(str(so))
+        lib.clip.restype = ctypes.c_int
+        rng = random.Random(0x4BEA20)
+        n = moved = rejected = 0
+        passes = []
+        for (L, T, R, B, w, h) in ((128, 32, 1023, 735, 1024, 768),
+                                   (128, 32, 1919, 1047, 1920, 1080),
+                                   (-40, -40, 2000, 900, 1024, 768)):
+            for i in range(30000):
+                k = i % 3
+                if k == 0:                 # short, across one edge
+                    cx = rng.choice((L, R, rng.randint(L, R)))
+                    cy = rng.choice((T, B, rng.randint(T, B)))
+                    e = [cx + rng.randint(-60, 60), cy + rng.randint(-60, 60),
+                         cx + rng.randint(-60, 60), cy + rng.randint(-60, 60)]
+                elif k == 1:               # long, anywhere near the frame
+                    e = [rng.randint(-3000, 4000) for _ in range(4)]
+                else:                      # one end far out, as a deep zoom makes
+                    e = [rng.randint(-FAR, FAR), rng.randint(-FAR, FAR),
+                         rng.randint(0, w - 1), rng.randint(0, h - 1)]
+                    if rng.random() < 0.5:
+                        e = e[2:] + e[:2]
+                want = clip(*e, L, T, R, B, w, h, passes)
+                arr = (ctypes.c_int * 4)(*e)
+                ok = lib.clip(arr, L, T, R, B, w, h)
+                got = tuple(arr) if ok else None
+                if got != want:
+                    return "%s rect %s: C %s, transcription %s" % (e, (L, T, R, B, w, h),
+                                                                   got, want)
+                n += 1
+                if want is None:
+                    rejected += 1
+                    continue
+                if not (0 <= want[0] < w and 0 <= want[2] < w and
+                        0 <= want[1] < h and 0 <= want[3] < h):
+                    return "%s: ends off the surface %s" % (e, want)
+                moved += tuple(e) != want
+        if max(passes) > 3:
+            return "a line took %d passes of 0x4CC650" % max(passes)
+    CLIP_SAID[0] = ("tagpu_line_clip == 0x4BEA20 + 0x4CC650 on %d lines (%d moved, "
+                    "%d rejected, at most %d surface pass(es))"
+                    % (n, moved, rejected, max(passes)))
+    return None
 
 
 if __name__ == "__main__":
