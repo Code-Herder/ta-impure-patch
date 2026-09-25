@@ -18055,7 +18055,9 @@ main at the effects' models (§2.89) unless a line names the build before the me
   by 18 253 samples and (0, 0) by 69 303 in Classic, 22 279 and 84 026 in Classic++, of 3 145 728 —
   at the floor every sample centre is a tie, so every change is a former tie. Those four pictures
   are identical in three launches of three builds, two before the merge and one after. Main's two
-  DLLs, before and after the effects' models, draw every one of these captures alike.
+  DLLs, before and after the effects' models, draw every one of these captures alike. Merged once
+  more, with main after the weapon IDs to 4096, the set reads the same against that main, capture
+  for capture, on both sides.
 - **The side strips are the map reflected, to one level but for one sample.** The feature pass
   over the terrain (a capture-diagnostic build), the strip against the map's own pixels through
   `taEdge`, at the north-west corner, the left side (−448, 600) and (−448, 2000), and the right
