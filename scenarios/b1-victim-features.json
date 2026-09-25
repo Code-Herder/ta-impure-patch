@@ -1,0 +1,932 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B1 feature victim cap: 96 armcs_dead wrecks (5x5, 24000 HP, no featuredead) tiled at 80 wu round an ARMCOM on flat, feature-free seabed (Two Continents, height 0, no map feature within 34 cells). Select the commander and self-destruct it (ctrl+d): COMMANDER_BLAST, AOE 950, and a feature takes the weapon's flat damage (w+0xD4, 9999) per 0x4244B0 call. Stock records only 64 feature anchors per explosion (0x49A5FA) and calls 0x4244B0 for every cell regardless, so the wrecks the row-major walk finds after the 64th take 9999 once per footprint cell inside the rect and are destroyed (3 hits pass 24000), while the first 64 hold 9999 and stand. Read each anchor cell's accumulator (the record's +0x26, or the cell's +0x0A) before and after.",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    7680,
+    1920
+   ],
+   "facing": 0,
+   "stance": "hold"
+  },
+  {
+   "id": "keepalive",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    640,
+    7680
+   ]
+  },
+  {
+   "id": "ai_keepalive",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    900,
+    7300
+   ]
+  }
+ ],
+ "features": [
+  {
+   "id": "w00",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    1520
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w01",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    1520
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w02",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    1520
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w03",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    1520
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w04",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    1520
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w05",
+   "type": "armcs_dead",
+   "pos": [
+    7440,
+    1600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w06",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    1600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w07",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    1600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w08",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    1600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w09",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    1600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w10",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    1600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w11",
+   "type": "armcs_dead",
+   "pos": [
+    7920,
+    1600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w12",
+   "type": "armcs_dead",
+   "pos": [
+    7360,
+    1680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w13",
+   "type": "armcs_dead",
+   "pos": [
+    7440,
+    1680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w14",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    1680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w15",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    1680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w16",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    1680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w17",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    1680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w18",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    1680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w19",
+   "type": "armcs_dead",
+   "pos": [
+    7920,
+    1680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w20",
+   "type": "armcs_dead",
+   "pos": [
+    8000,
+    1680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w21",
+   "type": "armcs_dead",
+   "pos": [
+    7280,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w22",
+   "type": "armcs_dead",
+   "pos": [
+    7360,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w23",
+   "type": "armcs_dead",
+   "pos": [
+    7440,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w24",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w25",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w26",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w27",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w28",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w29",
+   "type": "armcs_dead",
+   "pos": [
+    7920,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w30",
+   "type": "armcs_dead",
+   "pos": [
+    8000,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w31",
+   "type": "armcs_dead",
+   "pos": [
+    8080,
+    1760
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w32",
+   "type": "armcs_dead",
+   "pos": [
+    7280,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w33",
+   "type": "armcs_dead",
+   "pos": [
+    7360,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w34",
+   "type": "armcs_dead",
+   "pos": [
+    7440,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w35",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w36",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w37",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w38",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w39",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w40",
+   "type": "armcs_dead",
+   "pos": [
+    7920,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w41",
+   "type": "armcs_dead",
+   "pos": [
+    8000,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w42",
+   "type": "armcs_dead",
+   "pos": [
+    8080,
+    1840
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w43",
+   "type": "armcs_dead",
+   "pos": [
+    7280,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w44",
+   "type": "armcs_dead",
+   "pos": [
+    7360,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w45",
+   "type": "armcs_dead",
+   "pos": [
+    7440,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w46",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w47",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w48",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w49",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w50",
+   "type": "armcs_dead",
+   "pos": [
+    7920,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w51",
+   "type": "armcs_dead",
+   "pos": [
+    8000,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w52",
+   "type": "armcs_dead",
+   "pos": [
+    8080,
+    1920
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w53",
+   "type": "armcs_dead",
+   "pos": [
+    7280,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w54",
+   "type": "armcs_dead",
+   "pos": [
+    7360,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w55",
+   "type": "armcs_dead",
+   "pos": [
+    7440,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w56",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w57",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w58",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w59",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w60",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w61",
+   "type": "armcs_dead",
+   "pos": [
+    7920,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w62",
+   "type": "armcs_dead",
+   "pos": [
+    8000,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w63",
+   "type": "armcs_dead",
+   "pos": [
+    8080,
+    2000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w64",
+   "type": "armcs_dead",
+   "pos": [
+    7280,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w65",
+   "type": "armcs_dead",
+   "pos": [
+    7360,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w66",
+   "type": "armcs_dead",
+   "pos": [
+    7440,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w67",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w68",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w69",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w70",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w71",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w72",
+   "type": "armcs_dead",
+   "pos": [
+    7920,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w73",
+   "type": "armcs_dead",
+   "pos": [
+    8000,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w74",
+   "type": "armcs_dead",
+   "pos": [
+    8080,
+    2080
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w75",
+   "type": "armcs_dead",
+   "pos": [
+    7360,
+    2160
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w76",
+   "type": "armcs_dead",
+   "pos": [
+    7440,
+    2160
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w77",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    2160
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w78",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    2160
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w79",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    2160
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w80",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    2160
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w81",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    2160
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w82",
+   "type": "armcs_dead",
+   "pos": [
+    7920,
+    2160
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w83",
+   "type": "armcs_dead",
+   "pos": [
+    8000,
+    2160
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w84",
+   "type": "armcs_dead",
+   "pos": [
+    7440,
+    2240
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w85",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    2240
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w86",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    2240
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w87",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    2240
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w88",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    2240
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w89",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    2240
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w90",
+   "type": "armcs_dead",
+   "pos": [
+    7920,
+    2240
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w91",
+   "type": "armcs_dead",
+   "pos": [
+    7520,
+    2320
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w92",
+   "type": "armcs_dead",
+   "pos": [
+    7600,
+    2320
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w93",
+   "type": "armcs_dead",
+   "pos": [
+    7680,
+    2320
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w94",
+   "type": "armcs_dead",
+   "pos": [
+    7760,
+    2320
+   ],
+   "facing": 0
+  },
+  {
+   "id": "w95",
+   "type": "armcs_dead",
+   "pos": [
+    7840,
+    2320
+   ],
+   "facing": 0
+  }
+ ],
+ "camera": {
+  "at": [
+   7680,
+   1920
+  ]
+ }
+}
