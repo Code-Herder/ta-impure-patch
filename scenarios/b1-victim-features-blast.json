@@ -1,0 +1,24 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B1 feature victim cap on two peers, part 2: an ARMCOM at the wrecks' centre for THIS peer (owner 0 is the local player), camera on it. Apply on the joiner after b1-victim-features-wrecks is on every peer; select it and self-destruct it (ctrl+d). A non-host peer does not damage a feature itself: 0x4244B0 sends a 0x0F per call to the host, which applies each. Set MultiCommanderDeath to 0 for the launch, or the commander's death wipes the joiner's army.",
+ "on_error": "abort",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {
+   "id": "com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    7680,
+    1920
+   ],
+   "facing": 0,
+   "stance": "hold"
+  }
+ ],
+ "camera": {
+  "center_on": "com"
+ }
+}
