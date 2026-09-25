@@ -2830,8 +2830,9 @@ Vulkan lane draws (G21b: order markers, build sites, selection rects, lasers and
 nanoframe wire), per pixel of the world target (`ss` to a game pixel), and thickens it to `ss`
 pixels across the minor axis; at `ss = 1` it is this walk on game pixels.
 `tools/line-band-check.py` checks that closed form against a step-by-step transcription of the
-two loops above, pixel for pixel, at thickness 1, 2 and 3, on every line shape out to 24 pixels
-and on long random lines out to ±16383.
+two loops above, pixel for pixel, at thickness 1, 2, 3 and 4 — every shape with one end at
+the origin and the other in a box of 24, 12, 10 and 8 pixels respectively — and on long random
+lines out to ±16383.
 
 **The clip `0x4CC650` MOVES ENDPOINTS; it does not only reject** [DISASSEMBLED 2026-09-25 for
 G21b]. Its fast path (`0x4CC66A`..) accepts the line untouched when all four coordinates are in

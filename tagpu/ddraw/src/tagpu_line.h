@@ -29,18 +29,24 @@
    the minor axis (y for a line with |dy| <= |dx|, the walk's own x-major
    test; x otherwise), starting floor(w / 2) before it: the segment moved by
    -(w - 1) / 2 across its minor axis, rounded down to a whole pixel, and each
-   pixel copied one step further. Rounded down is what puts the band of a
-   line whose ends sit on a game pixel's centre (ss * k + ss / 2) on that game
-   pixel's own ss rows, ss * k .. ss * k + ss - 1: an axis-aligned line then
-   lies on the engine's pixels across its width, and runs from the middle of
-   its first game pixel to the middle of its last along it.
+   pixel copied one step further. The walk is first carried the same window
+   along its major axis: floor(w / 2) pixels before its lower end and
+   w - 1 - floor(w / 2) after its upper end, at that end's minor coordinate,
+   so each END is a w x w block, [e - floor(w/2), e - floor(w/2) + w - 1] on
+   both axes. For an end on a game pixel's centre (ss * k + ss / 2) that block
+   is exactly the game pixel's own ss x ss block, ss * k .. ss * k + ss - 1:
+   an axis-aligned engine line covers exactly the blocks of the game pixels
+   the engine lights, a rect's or a build site's corners close, and a
+   zero-length edge is one whole game pixel, as `0x4CC83B` plots it. Without
+   the major-axis window each line would start floor(w / 2) pixels late and
+   stop w - 1 - floor(w / 2) early, and every corner would lose pixels.
 
    AT ss = 1 IT IS THE ENGINE'S LINE, BY CONSTRUCTION. The line grid is then
    the game-pixel grid, floor(1 * Z(p)) is floor(Z(p)), the clip below runs on
-   the viewport rect itself, and w = 1 copies each pixel once with no offset
-   (floor(1 / 2) = 0) -- so the pixels are `0x4CC7AB`'s walk of DrawLine's
-   clipped ends, with no second path. Supersampled, the steps are 1/ss of a
-   game pixel and the downsample softens them.
+   the viewport rect itself, and w = 1 makes both windows the pixel itself
+   (floor(1 / 2) = 0, w - 1 - 0 = 0) -- so the pixels are `0x4CC7AB`'s walk
+   of DrawLine's clipped ends, with no second path. Supersampled, the steps
+   are 1/ss of a game pixel and the downsample softens them.
 
    THE ENGINE'S CLIP, AFTER THE ZOOM (tagpu_line_clip below). Every line the
    engine draws that this lane redraws as a line -- the selection rect

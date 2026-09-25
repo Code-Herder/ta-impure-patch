@@ -304,9 +304,12 @@
    |dy| <= dx (so 45 degrees is x-major); the pixel `i` major steps along
    sits at minor offset (2 * minor * i + major) / (2 * major), which is its
    error term `2 * minor - major` stepping on `>= 0` unrolled; both ends
-   inclusive. A fragment is kept when it lies in the walk's major range and
-   within [r - w/2, r - w/2 + w - 1] across the minor axis of the walk's pixel
-   r there. At w = 1 that is the walk itself. The products are UNSIGNED so
+   inclusive. A fragment is kept when it lies in the walk's major range
+   widened by the same window, [lower end - w/2, upper end - w/2 + w - 1],
+   and within [r - w/2, r - w/2 + w - 1] across the minor axis of the walk's
+   pixel r at its major position clamped to the walk -- so each end is a
+   w x w block (tagpu_line.h, THE THICKENING). At w = 1 the window is the
+   pixel itself and that is the walk. The products are UNSIGNED so
    they cannot overflow for ends inside tagpu_line.h's TAGPU_LINE_MAXC box.
    DrawLine's clip (`0x4BEA20` to the viewport, then `0x4CC650` to the
    surface) is not part of it: it moves the ends before the walk, on the CPU
@@ -331,15 +334,15 @@
     "  int ady = abs(dy), sg = dy < 0 ? -1 : 1;\n" \
     "  int lo = w / 2;\n" \
     "  if (ady <= dx) {\n" \
-    "    int i = g.x - a.x;\n" \
-    "    if (i < 0 || i > dx) return false;\n" \
+    "    if (g.x < a.x - lo || g.x > b.x - lo + w - 1) return false;\n" \
+    "    int i = clamp(g.x - a.x, 0, dx);\n" \
     "    int r = dx == 0 ? a.y\n" \
     "          : a.y + sg * int((2u * uint(ady) * uint(i) + uint(dx)) / (2u * uint(dx)));\n" \
     "    int k = g.y - r + lo;\n" \
     "    return k >= 0 && k < w;\n" \
     "  }\n" \
-    "  int j = (g.y - a.y) * sg;\n" \
-    "  if (j < 0 || j > ady) return false;\n" \
+    "  if (g.y < min(a.y, b.y) - lo || g.y > max(a.y, b.y) - lo + w - 1) return false;\n" \
+    "  int j = clamp((g.y - a.y) * sg, 0, ady);\n" \
     "  int c = a.x + int((2u * uint(dx) * uint(j) + uint(ady)) / (2u * uint(ady)));\n" \
     "  int k = g.x - c + lo;\n" \
     "  return k >= 0 && k < w;\n" \
@@ -362,13 +365,15 @@
    line-grid pixels: every pixel the walk lights has its centre within half a
    pixel of the segment between the two end centres, measured along the minor
    axis, and the thickening moves a copy at most floor(w/2) further along it;
-   a square pixel reaches 0.71 beyond its centre. So every lit pixel lies
-   within 1.21 + floor(w/2) line-grid pixels of the segment across it and
-   within 0.71 * (1 + floor(w/2)) past either end -- at most 1.21 GAME pixels
-   across and 0.71 past an end for every w = ss, since a line-grid pixel is
-   1/ss of one. A band of 2 game pixels holds them with 0.79 to spare, and
-   float error in placing the corners cannot reach that. Being wide costs fill
-   only: the fragment test decides the pixels. */
+   a square pixel reaches 0.71 beyond its centre. So every walk pixel's copy
+   lies within 1.21 + floor(w/2) line-grid pixels of the segment across it.
+   The w x w block at each end reaches at most floor(w/2) + 0.5 from the end
+   centre along either axis, so within 1.41 * (floor(w/2) + 0.5) of it. In
+   GAME pixels, a line-grid pixel being 1/ss of one and w = ss: at most 1.21
+   across and 1.06 past an end (w = 2; 0.71 at w = 1 and 3, 0.88 at 4). A
+   band of 2 game pixels holds them with 0.79 to spare, and float error in
+   placing the corners cannot reach that. Being wide costs fill only: the
+   fragment test decides the pixels. */
 #define TAGPU_GLSL_BAND_FN \
     "const float taBandR = 2.0;\n" \
     "vec2 taBand(vec2 ca, vec2 cb, int c, out float t) {\n" \

@@ -3,15 +3,20 @@
 
     tools/line-band-check.py            # exit 0 when every claim holds
 
-WHAT IS CHECKED, for every line with both ends in a box around the origin
-(exhaustively) and for random long lines out to tagpu_line.h's TAGPU_LINE_MAXC,
-at thickness w = 1 (the engine's line), 2 and 3 (supersampled):
+WHAT IS CHECKED, for every line with one end at the origin and the other in a
+box around it (exhaustively: 24 pixels at w = 1, 12 at 2, 10 at 3, 8 at 4) and
+for random long lines out to tagpu_line.h's TAGPU_LINE_MAXC, at thickness
+w = 1 (the engine's line) and 2, 3 and 4 (supersampled, up to TAGPU_SS_MAX):
 
   1. THE CLOSED FORM IS THE RULE. `taOnLine`'s per-pixel test, transcribed with
      the same unsigned 32-bit arithmetic, keeps exactly the pixels a
-     step-by-step transcription of `0x4CC7AB`'s loops lights, each copied w
-     times along the minor axis from floor(w/2) before it (`thicken`) -- no
-     pixel more, none fewer -- and no product in it passes 2^32.
+     step-by-step transcription of `0x4CC7AB`'s loops lights, carried along
+     the major axis to a w x w block at each end and each copied w times
+     along the minor axis from floor(w/2) before it (`thicken`) -- no pixel
+     more, none fewer -- and no product in it passes 2^32.
+  1b. THE CORNERS CLOSE. An engine line put on the line grid at ss = w lights
+     exactly the ss x ss blocks of the game pixels the walk lights at 1x, for
+     rows, columns, single pixels and a rect's four edges (`check_blocks`).
   2. THE BAND HOLDS EVERY LIT PIXEL. Each corner of each lit pixel's square lies
      inside `taBand`'s rectangle (radius taBandR = 2 game pixels, 2w line-grid
      pixels, about the segment between the two end centres) with at least
@@ -182,11 +187,23 @@ U32 = 1 << 32
 
 
 def thicken(lit, a, b, w):
-    """tagpu_line.h's thickening, from the walk's pixels: each copied to w
-    pixels along the minor axis, from floor(w/2) before it. The minor axis is
-    y when |dy| <= |dx| -- the walk's own x-major test -- and x otherwise."""
+    """tagpu_line.h's thickening, from the walk's pixels: the walk carried
+    floor(w/2) pixels before its lower end and w - 1 - floor(w/2) after its
+    upper end along the major axis, at that end's minor coordinate, then each
+    pixel copied to w pixels along the minor axis, from floor(w/2) before it.
+    The minor axis is y when |dy| <= |dx| -- the walk's own x-major test --
+    and x otherwise."""
     xmaj = abs(b[1] - a[1]) <= abs(b[0] - a[0])
     lo = w // 2
+    lit = list(lit)
+    if xmaj:
+        (lx, ly), (hx, hy) = sorted((a, b))
+        lit += [(lx - s, ly) for s in range(1, lo + 1)]
+        lit += [(hx + s, hy) for s in range(1, w - lo)]
+    else:
+        (ly, lx), (hy, hx) = sorted(((a[1], a[0]), (b[1], b[0])))
+        lit += [(lx, ly - s) for s in range(1, lo + 1)]
+        lit += [(hx, hy + s) for s in range(1, w - lo)]
     out = set()
     for (x, y) in lit:
         for k in range(w):
@@ -202,9 +219,9 @@ def on_line(g, a, b, w=1):
     ady, sg = abs(dy), (-1 if dy < 0 else 1)
     lo = w // 2
     if ady <= dx:
-        i = g[0] - a[0]
-        if i < 0 or i > dx:
+        if g[0] < a[0] - lo or g[0] > b[0] - lo + w - 1:
             return False
+        i = min(max(g[0] - a[0], 0), dx)
         if dx == 0:
             r = a[1]
         else:
@@ -213,9 +230,9 @@ def on_line(g, a, b, w=1):
             r = a[1] + sg * (num // (2 * dx))
         k = g[1] - r + lo
         return 0 <= k < w
-    j = (g[1] - a[1]) * sg
-    if j < 0 or j > ady:
+    if g[1] < min(a[1], b[1]) - lo or g[1] > max(a[1], b[1]) - lo + w - 1:
         return False
+    j = min(max((g[1] - a[1]) * sg, 0), ady)
     num = 2 * dx * j + ady
     assert num < U32, "unsigned overflow"
     c = a[0] + num // (2 * ady)
@@ -280,8 +297,10 @@ def main():
     # every shape out to a box: the walk and the test are both invariant
     # under a whole-pixel translation, so one end at the origin covers them
     # all, and the other end in every quadrant covers both walking directions.
-    # w = 1 is the engine's line; 2 and 3 the supersampled thicknesses.
-    for w, box in ((1, 24), (2, 12), (3, 10)):
+    # w = 1 is the engine's line; 2, 3 and 4 (TAGPU_SS_MAX) the supersampled
+    # thicknesses. The box shrinks as w grows because the brute force grows
+    # with the lit area.
+    for w, box in BOXES:
         for bx in range(-box, box + 1):
             for by in range(-box, box + 1):
                 e = check((0, 0), (bx, by), stats, w)
@@ -289,8 +308,8 @@ def main():
                     print("FAIL (0,0)-(%d,%d): %s" % (bx, by, e))
                     return 1
     rng = random.Random(0x4CC7AB)
-    for i in range(600):
-        w = (1, 2, 3)[i % 3]
+    for i in range(800):
+        w = (1, 2, 3, 4)[i % 4]
         a = (rng.randint(-MAXC, MAXC), rng.randint(-MAXC, MAXC))
         if rng.random() < 0.5:
             b = (rng.randint(-MAXC, MAXC), rng.randint(-MAXC, MAXC))
@@ -304,10 +323,15 @@ def main():
     # the extreme corners, where the unsigned products are largest
     for a, b in (((-MAXC, -MAXC), (MAXC, MAXC)), ((-MAXC, MAXC), (MAXC, -MAXC)),
                  ((-MAXC, 0), (MAXC, 1)), ((0, -MAXC), (1, MAXC))):
-        e = check(a, b, stats, 2)
-        if e:
-            print("FAIL %s-%s: %s" % (a, b, e))
-            return 1
+        for w in (2, 4):
+            e = check(a, b, stats, w)
+            if e:
+                print("FAIL %s-%s: %s" % (a, b, e))
+                return 1
+    e = check_blocks()
+    if e:
+        print("FAIL blocks: %s" % e)
+        return 1
     for lw, tw in ((2048, 2048), (1024, 1024), (2048, 3072), (1920, 1920),
                    (2048, 1920), (1536, 1080), (3840, 3840)):
         for t in range(tw):
@@ -318,10 +342,59 @@ def main():
     if e:
         print("FAIL clip: %s" % e)
         return 1
-    print("line-band-check: %d lines at w = 1, 2, 3, closed form == walk + thickening, every lit corner at "
-          "least %.3f game px inside the band (required %.2f); taLinePx is floor; %s"
-          % (stats["lines"], stats["slack"], MARGIN, CLIP_SAID[0]))
+    print("line-band-check: %d lines (every shape in a box of %s, and long ones), "
+          "closed form == walk + thickening, every lit corner at least %.3f game px inside "
+          "the band (required %.2f); %s; taLinePx is floor; %s"
+          % (stats["lines"], ", ".join("%d at w=%d" % (b, w) for w, b in BOXES),
+             stats["slack"], MARGIN, BLOCKS_SAID[0], CLIP_SAID[0]))
     return 0
+
+
+BOXES = ((1, 24), (2, 12), (3, 10), (4, 8))
+BLOCKS_SAID = [""]
+
+
+def check_blocks():
+    """THE CORNERS CLOSE. An engine line whose ends are integer game pixels,
+    put on the line grid at ss * k + ss // 2 (tagpu_line_px of the pixel's
+    centre at 1x), lights at ss = w exactly the ss x ss blocks of the game
+    pixels 0x4CC7AB lights at 1x -- for rows, columns and single pixels, and
+    for the four edges of a rect, whose union must be the blocks of the
+    rect's outline with every corner block whole."""
+    rng = random.Random(0x438C00)
+
+    def at(k, ss):
+        return ss * k + ss // 2
+
+    def blocks(pixels, ss):
+        return {(ss * x + u, ss * y + v) for (x, y) in pixels
+                for u in range(ss) for v in range(ss)}
+
+    def lit(a, b, ss):
+        A, B = (at(a[0], ss), at(a[1], ss)), (at(b[0], ss), at(b[1], ss))
+        return thicken(walk(A[0], A[1], B[0], B[1]), A, B, ss)
+
+    n = 0
+    for ss in (2, 3, 4):
+        for _ in range(400):
+            x0, y0 = rng.randint(-40, 40), rng.randint(-40, 40)
+            ln = rng.randint(0, 30)
+            for a, b in (((x0, y0), (x0 + ln, y0)), ((x0 + ln, y0), (x0, y0)),
+                         ((x0, y0), (x0, y0 + ln)), ((x0, y0 + ln), (x0, y0))):
+                if lit(a, b, ss) != blocks(walk(a[0], a[1], b[0], b[1]), ss):
+                    return "ss %d: %s-%s is not its game pixels' blocks" % (ss, a, b)
+                n += 1
+            x1, y1 = x0 + rng.randint(0, 30), y0 + rng.randint(0, 30)
+            edges = (((x0, y0), (x1, y0)), ((x0, y1), (x1, y1)),
+                     ((x0, y0), (x0, y1)), ((x1, y0), (x1, y1)))
+            got = set().union(*(lit(a, b, ss) for a, b in edges))
+            want = blocks(set().union(*(walk(a[0], a[1], b[0], b[1]) for a, b in edges)), ss)
+            if got != want:
+                return "ss %d: rect (%d,%d)-(%d,%d) is not its outline's blocks" % (ss, x0, y0, x1, y1)
+            n += 1
+    BLOCKS_SAID[0] = ("axis-aligned engine lines and rects light exactly their game pixels' "
+                      "blocks at ss = 2, 3, 4 (%d cases)" % n)
+    return None
 
 
 CLIP_SAID = [""]

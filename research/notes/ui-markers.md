@@ -334,7 +334,7 @@ supersampled, the engine's line at `ss = 1`):
 
 - **a line is an instanced record drawn as a band of two triangles** (`tagpu_glsl.h` `taBand`):
   the segment between the two end pixels' centres, widened 2 game pixels to each side and carried
-  2 past each end. A lit pixel lies within 1.21 game px of the segment across it and 0.71 past
+  2 past each end. A lit pixel lies within 1.21 game px of the segment across it and 1.06 past
   an end at every `ss`, so the band holds every sample of every lit pixel with 0.79 to spare
   (`tools/line-band-check.py` checks it by brute force). No line primitive and no device line
   feature is involved;
@@ -346,7 +346,8 @@ supersampled, the engine's line at `ss = 1`):
   target pixel onto the line grid (the identity on the offscreen target) and `taOnLine` keeps it
   only when that pixel is one `DrawLine`'s walk plots between the two ends (the rule is in
   exe-reverse-engineering.md at `0x4CC7AB`: endpoints ordered by x, minor offset
-  `(2·minor·i + major) / (2·major)`), thickened to `ss` pixels across the minor axis;
+  `(2·minor·i + major) / (2·major)`), thickened to `ss` pixels across the minor axis, each end
+  an `ss` × `ss` block — the engine pixel's own, so the rect's corners close;
 - **the grid `uGrid` is written at record time from the target's real extent** (line grid, `ss`,
   target w and h), not from the supersample factor alone: on a frame whose offscreen target
   refused, the world goes into the swapchain image at whatever scale that is, and a wrong scale

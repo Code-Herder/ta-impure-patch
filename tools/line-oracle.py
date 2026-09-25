@@ -13,8 +13,9 @@ the ends are the ones BEFORE DrawLine's clip, and each line is first clipped
 with line-band-check.py's transcription of `0x4BEA20` and `0x4CC650` and the
 pixels outside the rect dropped, as the viewport scissor drops them. This
 walks every line with `walk` -- a transcription of `0x4CC7AB`'s loops from
-the disassembly, not of the fragment stage's closed form -- copies each lit
-pixel w times along the line's minor axis (`thicken`), and compares that set
+the disassembly, not of the fragment stage's closed form -- carries it along
+its major axis to a w x w block at each end and copies each pixel w times
+along the minor axis (`thicken`), and compares that set
 with the capture's lit pixels. The verdict is 0 px or not: exit 0 only when no
 pixel is lit in one and not the other. At w = 1 the model is DrawLine's own
 line on the game-pixel grid.

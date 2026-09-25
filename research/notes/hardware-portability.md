@@ -84,8 +84,11 @@ line rule for the default mode.
      only when its pixel of the **line grid** — the world target's own pixels, `ss` to a game
      pixel — is one the rule lights: `0x4CC7AB`'s walk between the line's two integer line-grid
      ends, **thickened to `w = ss` pixels across its minor axis** (the segment moved by
-     −(w−1)/2 rounded down, each pixel copied one step further along that axis). A line is one
-     game pixel wide at any `ss`, its steps are target pixels, and `wideLines` is not needed.
+     −(w−1)/2 rounded down, each pixel copied one step further along that axis), and carried the
+     same window along its major axis so that **each end is a `w` × `w` block** — for an engine
+     pixel's end, exactly that game pixel's `ss` × `ss` block, so an axis-aligned engine line
+     covers exactly its game pixels' blocks and a rect's corners close. A line is one game pixel
+     wide at any `ss`, its steps are target pixels, and `wideLines` is not needed.
    - The test is **integer arithmetic on the line grid**, so no floating-point decision near a
      pixel edge can differ between vendors. That is the invariant.
    - **At `ss = 1` it is the engine's line, by construction**: the line grid is the game grid,
@@ -215,7 +218,8 @@ on its branch, not landed]**
   band (`tagpu_glsl.h` `taBand`, radius 2 game px round the ends' pixel centres) whose fragment
   stage keeps the line-grid pixels the rule lights: `taLinePx` maps the target pixel to its
   line-grid pixel, `taLineEnd` recovers an end's integer pixel from its centre, `taOnLine` is
-  `0x4CC7AB`'s walk in closed form thickened to `w`, and `taLineKeeps` is the three together.
+  `0x4CC7AB`'s walk in closed form thickened to `w` with a `w` × `w` block at each end, and
+  `taLineKeeps` is the three together.
   `uGrid` carries the line grid, `ss` and the target extent (`tagpu_line_grid`). The ends are
   decided on the CPU (`tagpu_line.h` `tagpu_line_px`, then `tagpu_line_clip` on
   `tagpu_line_rect`), and a record carries each end's pixel centre in game units,
@@ -233,29 +237,43 @@ on its branch, not landed]**
   `tools/line-oracle.py` clips each line with its own transcription of `0x4BEA20` and
   `0x4CC650`, walks it with its own transcription of `0x4CC7AB`'s loops, thickens it to `w`, and
   compares the lit pixels with the capture. `tools/line-band-check.py` checks the shader's
-  closed form against that walk at `w` = 1, 2 and 3, the band's coverage, the target-to-grid
-  map, and the C clip against its transcription on 90 000 random lines. The captures hold the
+  closed form against that walk at `w` = 1, 2, 3 and 4 (every shape with one end at the origin
+  and the other in a box of 24, 12, 10 and 8 pixels respectively, and long random lines), the
+  band's coverage (least slack 0.882 game px), that axis-aligned engine lines and rects light
+  exactly their game pixels' blocks at `ss` = 2, 3 and 4, the target-to-grid map, and the C clip
+  against its transcription on 90 000 random lines. That last check exists because the oracle
+  cannot see such a fault: it models the same rule, and a first build that walked the ends
+  without the major-axis window left every corner of a rect a target pixel short, 0 px against
+  the oracle all the same. The captures hold the
   lines alone: a diagnostic build, never committed, drew only the line draws while a file was
   present. [MEASURED 2026-09-25, reference setup, `--defaults`, `ss = 2`] **0 px in every
   cell**:
 
   | fixture | lines | Classic 1× | Classic 0.877× | Classic++ 1× |
   |---|---|---|---|---|
-  | `marker-mix` (selection rects, a queued build site, waypoint crosshairs) | 40 | 0 of 4 408 px | 0 of 3 876 | 0 of 4 408 |
-  | `marker-mix`, eye (1416, 1446): the build site across the top edge, a selection rect across the left; 6 lines moved by the clip, 6 rejected | 38 | 0 of 2 404 | — | — |
-  | `selbox-facings`, three tanks selected | 12 | 0 of 1 217 | 0 of 1 071 | — |
-  | `fx-lasers`, two lasers in flight | 2 | 0 of 204 | 0 of 180 | — |
-  | `nanoframe-ladder`, every wire (not clipped) | 1 384 | 0 of 27 738 | 0 of 23 878 | — |
+  | `marker-mix` (selection rects, a queued build site, waypoint crosshairs) | 40 | 0 of 4 424 px | 0 of 3 876 † | 0 of 4 408 † |
+  | `marker-mix`, eye (1416, 1446): the build site across the top edge, a selection rect across the left; 6 lines moved by the clip, 6 rejected | 38 | 0 of 2 404 † | — | — |
+  | `selbox-facings`, three tanks selected | 12 | 0 of 1 224 | 0 of 1 071 † | — |
+  | `fx-lasers`, two lasers in flight | 2 | 0 of 204 † | 0 of 180 † | — |
+  | `nanoframe-ladder`, every wire (not clipped) | 1 384 | 0 of 27 738 † | 0 of 23 878 † | — |
+
+  † measured on the build before the end blocks. The end blocks change only the pixels at a
+  line's ends — on the two cells re-measured they add 16 (`marker-mix`) and 7
+  (`selbox-facings`) pixels, all within 2.5 px of an end, and remove none — so these cells were
+  not re-run.
 
   The log names no line refusal and neither `VK_EXT_line_rasterization` nor `wideLines`; main's
   `vk: mark: up … bresenham lines yes` is gone.
 - **Parity at `ss = 1`** [MEASURED 2026-09-25, the edge view above, `tacli arm … ss.off`]. The
   list is on the game grid (`# mark 1024 768 1 128 32 1023 735`), and the capture is 0 of 603 px
   off both the one-rule oracle and `line-oracle.py` as it stood before this rule (`a5286c4`:
-  `0x4CC7AB`'s walk on game pixels, with the clip), with the same 6 lines moved and 6 rejected.
+  `0x4CC7AB`'s walk on game pixels, with the clip), with the same 6 lines moved and 6 rejected —
+  on the build with the end blocks as on the one before, byte for byte the same capture.
   That model is the one measured against the engine's own frame: at this view the clipped walk
   lit 5 pixels the unclipped one did not, and the engine has the line's colour at all 5.
-- **The difference from main** [MEASURED 2026-09-25, lines-only captures, Classic, `ss = 2`, 1×].
+- **The difference from main** [MEASURED 2026-09-25, lines-only captures, Classic, `ss = 2`, 1×,
+  on the build before the end blocks, which adds 16 px to `marker-mix` and 7 to `selbox-facings`,
+  all at ends].
   Target px lit only in main / only in the branch, each put in one class by its distance to the
   branch's lines: within 2.5 px of an end, or along a line. **No differing pixel is farther than
   that from every branch line.**

@@ -18479,7 +18479,7 @@ required at attach (a static import of `TotalA.exe`).
 
 **What it is.** Every line the Vulkan lane draws is `DrawLine 0x4CC7AB`'s walk on the LINE GRID
 — the world target's own pixels, `ss` to a game pixel — thickened to `w = ss` pixels across its
-minor axis, decided in integer arithmetic in the fragment stage. One rule for every preset:
+minor axis, each end a `w` × `w` block, decided in integer arithmetic in the fragment stage. One rule for every preset:
 smooth when supersampled, and at `ss = 1` the engine's own line by construction. That covers the
 order markers (waypoint crosshairs), queued build sites, selection rects, lasers and lightning,
 and the nanoframe wire. The owner's decision and the gate's numbers are in
@@ -18494,7 +18494,7 @@ the map of what implements it.
 | `tagpu_line.h` `tagpu_line_centre` | a record's end: the line-grid pixel's centre in game units, `(T + 0.5) / ss`, so every vertex stage keeps its game-frame mapping |
 | `tagpu_line.h` `tagpu_line_grid` | `uGrid` = (line-grid w \| `ss` << 16, line-grid h, target w, target h), from the game frame, `ss` and the extent the pass records into; a grid over 16384 or an `ss` out of range gives `ss = w = 0`, which keeps no fragment |
 | `tagpu_glsl.h` `TAGPU_GLSL_BAND_FN` | `taBand`: six vertices a record over two triangles, the segment between the end centres widened 2 game px each side and carried 2 past each end; `t` along the segment for per-end attributes |
-| `tagpu_glsl.h` `TAGPU_GLSL_LINE_FN` | `taLinePx` (the target pixel's line-grid pixel, `((2t+1)·lw)/(2·tw)`, the identity on the offscreen target), `taLineEnd` (an end's pixel back from its centre, `floor(c·ss)`), `taOnLine` (`0x4CC7AB`'s walk in closed form, unsigned products, thickened to `w`: kept when within `[r − w/2, r − w/2 + w − 1]` across the minor axis of the walk's pixel `r`), `taLineKeeps` (the three) |
+| `tagpu_glsl.h` `TAGPU_GLSL_LINE_FN` | `taLinePx` (the target pixel's line-grid pixel, `((2t+1)·lw)/(2·tw)`, the identity on the offscreen target), `taLineEnd` (an end's pixel back from its centre, `floor(c·ss)`), `taOnLine` (`0x4CC7AB`'s walk in closed form, unsigned products, thickened to `w`: kept when within the walk's major range widened by the same window, `[lower − w/2, upper − w/2 + w − 1]`, and within `[r − w/2, r − w/2 + w − 1]` across the minor axis of the walk's pixel `r` at the major position clamped to the walk — so each end is a `w` × `w` block, an engine pixel's end exactly its game pixel's block), `taLineKeeps` (the three) |
 | `tagpu_mark.c` `LVS`/`LFS`; `tagpu_vk_mark.c` `s_pipeLine`, `s_pipeLineZ` | marker lines as instanced records (`MVST` stride, instance rate); the selection rects are the depth-tested pipeline's; `uGrid` at 32 of the 48-byte fragment block, written at record time |
 | `tagpu_order.c` `draw_build` | `0x438C00`'s eight lines in integers, in its order (exe-reverse-engineering.md) |
 | `tagpu_fx.c` `LVS`/`LFS`; `tagpu_vk_fx.c` | the `LINES` bucket holds one record a line at the bucket stride, drawn `vkCmdDraw(6, n, 0, first)`; `uGrid` at 64 of the 80-byte fragment block, `ss` from the hand-over |
@@ -18504,10 +18504,11 @@ the map of what implements it.
 **The invariant, and why each part holds by construction.** The pixel decision takes only
 integers: two line-grid ends decided once on the CPU, the fragment's own integer target pixel,
 and the extent the pass records into. The band only has to COVER: a lit pixel lies within 1.21
-game px of the segment across it and 0.71 past an end at every `w = ss`, against a band of 2
+game px of the segment across it and 1.06 past an end at every `w = ss`, against a band of 2
 (`tools/line-band-check.py`: the closed form equals a step-by-step walk plus thickening at
-`w` = 1, 2 and 3 on every shape out to 24 px and on long lines to ±16383; the least margin found
-is 0.882 game px, 0.75 required). Float error in placing the band corners cannot reach that
+`w` = 1, 2, 3 and 4, on every shape with one end at the origin and the other in a box of 24,
+12, 10 and 8 px respectively, and on long lines to ±16383; the least margin found is 0.882 game
+px, 0.75 required). Float error in placing the band corners cannot reach that
 margin, and the unsigned products cannot overflow inside the bound. A clipped line is inside
 that bound by construction — `tagpu_line_clip` returns ends on the surface and refuses a surface
 over 16384 — so a segment with one end far off at a deep zoom is clipped and drawn, not refused
