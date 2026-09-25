@@ -2678,9 +2678,18 @@ typedef struct DMGSET {
     unsigned int  inl[DMG_INLINE];
 } DMGSET;
 
+/* the stacked aircraft one call serves after stock's walk (the stacked-aircraft block below) */
+typedef struct DMGAIR {
+    int xs, xe, zs, ze;                 /* the blast's cell rect, as 0x49A120 clamps it      */
+    unsigned short* idx;                /* inl, or a block from 0x4D83B0 once it outgrows it */
+    unsigned int n, next, cap;
+    unsigned short inl[32];
+} DMGAIR;
+
 typedef struct DMGSEEN {
     struct DMGSEEN* outer;              /* this thread's enclosing call's frame, or NULL     */
     DMGSET unit, feat;
+    DMGAIR air;
 } DMGSEEN;
 
 static DWORD s_dmgTls = TLS_OUT_OF_INDEXES;
@@ -2806,11 +2815,15 @@ static unsigned int __stdcall dmg_area(void* proj, void* at)
     f.outer = (DMGSEEN*)TlsGetValue(s_dmgTls);
     dmg_set_init(&f.unit);
     dmg_set_init(&f.feat);
+    f.air.idx = f.air.inl;
+    f.air.n = f.air.next = 0;
+    f.air.cap = sizeof f.air.inl / sizeof f.air.inl[0];
     TlsSetValue(s_dmgTls, &f);
     r = ((dmg_area_fn)0x0049A120)(proj, at);
     TlsSetValue(s_dmgTls, f.outer);
     dmg_set_free(&f.unit);
     dmg_set_free(&f.feat);
+    if (f.air.idx != f.air.inl) ENG_FREE(f.air.idx);
     return r;
 }
 
@@ -2870,6 +2883,313 @@ static int fix_victim_caps(void)
     lim_add(0x0049A109, 5, callB, p, "area damage from the fire spread, the call");
     lim_add(0x0049A262, sizeof units, units, u, "area damage, the unit victims' list");
     lim_add(0x0049A5CE, sizeof feats, feats, fe, "area damage, the feature victims' list");
+    return FIX_TABLE;
+}
+
+/* STACKED AIRCRAFT [DISASSEMBLED + MEASURED]. Landing B2 of research/notes/tadr-port/
+   sim-fixes.md (evidence Part 2 §2; TADR's AreaDamageOverflow is the prior art, the design is
+   ours). A feature-grid cell holds two unit slots: the grid stamp 0x47CC30 files a unit whose
+   state +0x110 has (& 3) == 1 in slot A and one with == 2 -- airborne -- in slot B
+   (0x47CF98), and a contested slot keeps one of them (the loser gets +0x110 bit 27). Area
+   damage reads only the two slots of each cell (above), and so does the direct-hit test
+   0x49B090. So of several aircraft over one spot, only the ones holding a slot inside the blast
+   are ever found: the others take no splash at all. MEASURED on the previous build: ten
+   ARMATLAS ordered to one point, up to seven held no cell; a CORFLAK's first burst took the
+   four holders from 150 HP to 5-11 and left the five holding none, each within a cell of
+   them, at 150. On this build the same burst took all ten, six holding none, to 10-16.
+
+   THE FIX serves the missing aircraft to the engine's own per-victim code AFTER stock's walk
+   has finished, so stock's victims, their order and every value they take are unchanged, and
+   the new victims go through stock's distance test, falloff and damage with no new arithmetic:
+     - the walk's end 0x49A664 (the fall-through of the row loop, and 0x49A1DF's jump for an
+       empty rect) jumps to a stub that asks air_first for the first candidate; with one, it
+       puts the selector [esp+0x10] at 2 -- stock's selector is only ever 0 or 1 at 0x49A415 --
+       and enters stock's unit block at 0x49A24E with esi the unit; with none, it runs the
+       11 bytes it displaced and joins the tail at 0x49A66F;
+     - the selector step 0x49A415 is stock's for 0 and 1 and, at 2, asks air_next for the next
+       candidate, entering 0x49A24E again, or joins the tail when there is none. Every path
+       from 0x49A24E (the NULL test, the shooter's skip 0x49A259, the seen-set's skip, the
+       damage and its reload 0x49A411) comes back to 0x49A415, and none of them writes
+       [esp+0x10]. The tail at 0x49A66F reloads every register it reads.
+   A candidate goes through the seen-set block at 0x49A262 like any victim, and one the set
+   already holds is never offered, so an aircraft stock found (it holds a slot the walk
+   visited) is left to stock and a served one is damaged once.
+
+   WHICH AIRCRAFT. air_first builds this call's list from the pool (below): an aircraft is a
+   candidate when its slot in the unit array holds a unit whose +0x110 has the alive bit
+   0x10000000 and (& 3) == 2, whose cargo link +0x86 is 0, whose model +0x9E is not NULL (the
+   engine map's death guard: 0x486D9E frees it before the alive bit clears), whose sort bucket
+   +0x82 is not the off-map bucket *(main+0x142B7), whose footprint +0x76/+0x78, +0x7E/+0x80
+   is at least one cell each way and meets the blast's rect, and which this call has not seen.
+   The rect is 0x49A120's own: the radius (u16)w[+0xD6] >> 1, c = radius/16 + 1 cells about the
+   blast point's cell (x, z of `at` +0x02/+0x0A, each truncated /16 as cdq/and 15/add/sar 4
+   do), the low ends raised to 0 and the high ends lowered to W, H (0x49A149..0x49A1C7).
+   air_next re-tests every one of those, on the live unit, at the moment it hands it over:
+   a unit the damage before it killed, or whose slot a new unit took, is re-judged, not
+   trusted.
+
+   THE POOL. s_airPool holds the slots of every unit the grid stamp has filed as airborne since
+   the last rebuild, and the rebuild refills it with every alive unit whose state is airborne
+   now: the stub on the step's call of the unit tick (0x4954ED, 0x48AD30's only caller) rebuilds
+   it, and the stamp's airborne path adds each unit it files. So at any explosion the pool
+   holds every unit that is airborne and was stamped since the step began, and every unit that
+   was airborne when it began: the unit tick's death explosions, the projectile tick 0x49B720,
+   the fire spread and the interceptor tail all see it. What it can miss: a unit whose state
+   turned airborne mid-step through a writer of +0x110 that is not followed by the stamp; such
+   a unit holds no slot either, so it is stock's result for the rest of that step.
+
+   THE INVARIANT: every unit handed to the engine was validated alive, airborne, uncarried, on
+   the map and inside the rect in this call, at the moment it was handed over, and every index
+   was bounded first -- a pool slot below the array's count (u16 main+0x14351), the pool's
+   length below 65 536 because a slot enters it at most once (s_airIn, kept with it). It rests
+   on
+     - a bound, above, on every value read from the engine;
+     - a lock: the pool is written by the rebuild (the game thread) and by the stamp, which also
+       runs from the network pump and from a saved game's restore on the loader thread, and is
+       read by air_first on whatever thread runs area damage; s_airLock covers every read and
+       write of it and of s_airIn, and is held only inside this C code, never across engine
+       code. The one engine call made under it is the allocator 0x4D83B0 growing a call's list,
+       and the allocator's own lock is never held while it calls anything that takes this one;
+     - a lifetime: a call's list lives in its frame (the wrapper above), which exists exactly
+       while that call runs, so nesting (the interceptor tail at 0x49A764 re-enters area damage
+       after the serving is done) gets a list of its own.
+   CLASS: simulation, fail closed. Air only [DECIDED 2026-09-25]: a ground unit that loses slot
+   A stays stock's. */
+#define AIR_SLOTS 65536u               /* a cell's unit slot is a u16                      */
+
+static CRITICAL_SECTION s_airLock;
+static unsigned short   s_airPool[AIR_SLOTS];
+static unsigned char    s_airIn[AIR_SLOTS];  /* 1 iff the slot is in s_airPool[0, s_airN)   */
+static unsigned int     s_airN;
+static volatile LONG    s_airServed;         /* aircraft handed to the engine, any thread   */
+
+/* the unit array, or NULL; *count its slots */
+static const unsigned char* air_array(const char** main_out, unsigned int* count)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    *main_out = ta;
+    *count = 0;
+    if (!ta) return NULL;
+    *count = *(const unsigned short*)(ta + 0x14351);
+    return *(const unsigned char* const*)(ta + 0x14357);
+}
+
+/* the unit in `slot` if it may be served against `r`: see WHICH AIRCRAFT */
+static const unsigned char* air_unit(unsigned int slot, const DMGAIR* r)
+{
+    const char* ta;
+    unsigned int count, st, cargo, bucket;
+    const unsigned char* u = air_array(&ta, &count);
+    short x, z, fw, fh;
+    if (!u || slot >= count) return NULL;
+    u += (size_t)slot * DMG_UNIT_STRIDE;
+    memcpy(&st, u + 0x110, 4);
+    if ((st & 0x10000003u) != 0x10000002u) return NULL;
+    memcpy(&cargo, u + 0x86, 4);
+    if (cargo || !*(void* const*)(u + 0x9E)) return NULL;
+    memcpy(&bucket, u + 0x82, 4);
+    if (bucket == *(const unsigned int*)(ta + 0x142B7)) return NULL;
+    memcpy(&x, u + 0x76, 2); memcpy(&z, u + 0x78, 2);
+    memcpy(&fw, u + 0x7E, 2); memcpy(&fh, u + 0x80, 2);
+    if (fw <= 0 || fh <= 0) return NULL;
+    if (x >= r->xe || x + fw <= r->xs || z >= r->ze || z + fh <= r->zs) return NULL;
+    return u;
+}
+
+static int dmg_set_has(const DMGSET* t, unsigned int value)
+{
+    unsigned int key = value + 1u, j;
+    for (j = dmg_hash(key, t->cap - 1u); t->key[j]; j = (j + 1u) & (t->cap - 1u))
+        if ((t->key[j] & ~DMG_KEY_PAST) == key) return 1;
+    return 0;
+}
+
+/* this call's next candidate, re-judged now, or NULL: stdcall, from the selector stub */
+static const unsigned char* __stdcall air_next(void)
+{
+    DMGSEEN* f = (DMGSEEN*)TlsGetValue(s_dmgTls);
+    if (!f) return NULL;
+    while (f->air.next < f->air.n) {
+        unsigned int slot = f->air.idx[f->air.next++];
+        const unsigned char* u = air_unit(slot, &f->air);
+        if (u && !dmg_set_has(&f->unit, slot)) {
+            InterlockedIncrement(&s_airServed);
+            return u;
+        }
+    }
+    return NULL;
+}
+
+/* the walk is over: this call's rect, its list from the pool, its first candidate */
+static const unsigned char* __stdcall air_first(const unsigned char* proj, const unsigned char* at)
+{
+    DMGSEEN* f = dmg_frame();
+    const char* ta;
+    unsigned int count, i, radius, c;
+    short ax, az;
+    int xc, zc;
+    const unsigned char* w;
+    if (!f || !air_array(&ta, &count) || !proj || !at) return NULL;
+    if (!(w = *(const unsigned char* const*)proj)) return NULL;
+    radius = (unsigned int)*(const unsigned short*)(w + 0xD6) >> 1;
+    c = (radius >> 4) + 1u;
+    memcpy(&ax, at + 0x02, 2);
+    memcpy(&az, at + 0x0A, 2);
+    xc = ax / 16;                      /* C truncates toward zero, as cdq/and 15/add/sar 4 */
+    zc = az / 16;
+    f->air.xs = xc - (int)c; if (f->air.xs < 0) f->air.xs = 0;
+    f->air.xe = xc + (int)c; if (f->air.xe > *(const int*)(ta + 0x14233)) f->air.xe = *(const int*)(ta + 0x14233);
+    f->air.zs = zc - (int)c; if (f->air.zs < 0) f->air.zs = 0;
+    f->air.ze = zc + (int)c; if (f->air.ze > *(const int*)(ta + 0x14237)) f->air.ze = *(const int*)(ta + 0x14237);
+    f->air.n = f->air.next = 0;
+    if (f->air.xs >= f->air.xe || f->air.zs >= f->air.ze) return NULL;
+
+    EnterCriticalSection(&s_airLock);
+    for (i = 0; i < s_airN; i++) {
+        unsigned int slot = s_airPool[i];
+        if (!air_unit(slot, &f->air) || dmg_set_has(&f->unit, slot)) continue;
+        if (f->air.n == f->air.cap) {
+            unsigned int cap = f->air.cap * 2u;
+            unsigned short* p = (unsigned short*)ENG_ALLOC(s_dmgTag, cap * 2u); /* NULL: the engine's OOM exit */
+            memcpy(p, f->air.idx, f->air.n * 2u);
+            if (f->air.idx != f->air.inl) ENG_FREE(f->air.idx);
+            f->air.idx = p;
+            f->air.cap = cap;
+        }
+        f->air.idx[f->air.n++] = (unsigned short)slot;
+    }
+    LeaveCriticalSection(&s_airLock);
+    return air_next();
+}
+
+/* the stamp filed `unit` as airborne (0x47CF98): it joins the pool */
+static void __cdecl air_note(const unsigned char* unit)
+{
+    const char* ta;
+    unsigned int count;
+    const unsigned char* begin = air_array(&ta, &count);
+    size_t off, slot;
+    if (!begin || unit < begin) return;
+    off = (size_t)(unit - begin);
+    slot = off / DMG_UNIT_STRIDE;
+    if (off % DMG_UNIT_STRIDE || slot >= count) return;
+    EnterCriticalSection(&s_airLock);
+    if (!s_airIn[slot]) {
+        s_airIn[slot] = 1;
+        s_airPool[s_airN++] = (unsigned short)slot;
+    }
+    LeaveCriticalSection(&s_airLock);
+}
+
+/* the step's unit tick is about to run (0x4954ED): the pool is every airborne unit now */
+static void __cdecl air_rebuild(void)
+{
+    const char* ta;
+    unsigned int count, i, st;
+    const unsigned char* begin = air_array(&ta, &count);
+    EnterCriticalSection(&s_airLock);
+    for (i = 0; i < s_airN; i++) s_airIn[s_airPool[i]] = 0;
+    s_airN = 0;
+    for (i = 0; begin && i < count; i++) {
+        memcpy(&st, begin + (size_t)i * DMG_UNIT_STRIDE + 0x110, 4);
+        if ((st & 0x10000003u) == 0x10000002u) {
+            s_airIn[i] = 1;
+            s_airPool[s_airN++] = (unsigned short)i;
+        }
+    }
+    LeaveCriticalSection(&s_airLock);
+}
+
+static int fix_stacked_air(void)
+{
+    static const unsigned char tail[11] = {             /* 0x49A664                          */
+        0x8B, 0x45, 0x08,                   /* mov eax,[ebp+8]                   */
+        0x8B, 0x08,                         /* mov ecx,[eax]                     */
+        0x8B, 0x91, 0x11, 0x01, 0x00, 0x00, /* mov edx,[ecx+0x111]               */
+    };
+    static const unsigned char sel[18] = {              /* 0x49A415                          */
+        0x8B, 0x44, 0x24, 0x10,             /* mov eax,[esp+0x10]                */
+        0x40,                               /* inc eax                           */
+        0x83, 0xF8, 0x01,                   /* cmp eax,1                         */
+        0x89, 0x44, 0x24, 0x10,             /* mov [esp+0x10],eax                */
+        0x0F, 0x8E, 0xED, 0xFD, 0xFF, 0xFF, /* jle 0x49A214                      */
+    };
+    static const unsigned char stamp[9] = {             /* 0x47CF98                          */
+        0x83, 0xF8, 0x02,                   /* cmp eax,2                         */
+        0x0F, 0x85, 0x34, 0x01, 0x00, 0x00, /* jne 0x47D0D5                      */
+    };
+    static const unsigned char tick[5] = { 0xE8, 0x3E, 0x58, 0xFF, 0xFF };   /* call 0x48AD30 */
+    unsigned char *t, *s, *m, *k, *p;
+
+    InitializeCriticalSection(&s_airLock);
+    t = fix_code(64); s = fix_code(64); m = fix_code(32); k = fix_code(16);
+    if (!t || !s || !m || !k) { lim_no_stub(); return FIX_TABLE; }
+
+    /* the walk's end: push [ebp+0xC]; push [ebp+8]; call air_first; test eax,eax; jz tail;
+       mov esi,eax; mov dword [esp+0x10],2; jmp 0x49A24E; tail: the 11 bytes; jmp 0x49A66F */
+    p = t;
+    *p++ = 0xFF; *p++ = 0x75; *p++ = 0x0C;
+    *p++ = 0xFF; *p++ = 0x75; *p++ = 0x08;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_first); p += 4;
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x74; *p++ = 0x0F;
+    *p++ = 0x89; *p++ = 0xC6;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10; *p++ = 2; *p++ = 0; *p++ = 0; *p++ = 0;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A24E); p += 4;
+    memcpy(p, tail, sizeof tail); p += sizeof tail;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A66F); p += 4;
+
+    /* the selector: mov eax,[esp+0x10]; cmp eax,2; jae serve; inc eax; cmp eax,1;
+       mov [esp+0x10],eax; jle 0x49A214; jmp 0x49A427; serve: call air_next; test eax,eax;
+       jz tail; mov esi,eax; jmp 0x49A24E; tail: the 11 bytes; jmp 0x49A66F. For 0 and 1 the
+       flags jle reads are stock's: inc, cmp, then a mov that leaves them. */
+    p = s;
+    *p++ = 0x8B; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x02;
+    *p++ = 0x73; *p++ = 0x13;
+    *p++ = 0x40;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x01;
+    *p++ = 0x89; *p++ = 0x44; *p++ = 0x24; *p++ = 0x10;
+    *p++ = 0x0F; *p++ = 0x8E; tagpu_detour_rel(p, 0x0049A214); p += 4;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A427); p += 4;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_next); p += 4;
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x74; *p++ = 0x07;
+    *p++ = 0x89; *p++ = 0xC6;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A24E); p += 4;
+    memcpy(p, tail, sizeof tail); p += sizeof tail;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049A66F); p += 4;
+
+    /* the stamp's airborne path: cmp eax,2; jne 0x47D0D5; pushad; push esi; call air_note;
+       add esp,4; popad; jmp 0x47CFA1 -- 0x47CFA1 sets its own flags (test edi,edi) */
+    p = m;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x02;
+    *p++ = 0x0F; *p++ = 0x85; tagpu_detour_rel(p, 0x0047D0D5); p += 4;
+    *p++ = 0x60;
+    *p++ = 0x56;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_note); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x61;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0047CFA1); p += 4;
+
+    /* the unit tick's call: pushfd; pushad; call air_rebuild; popad; popfd; jmp 0x48AD30 --
+       the return address the site's call pushed stays on top, so 0x48AD30 returns to 0x4954F2 */
+    p = k;
+    *p++ = 0x9C;
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)air_rebuild); p += 4;
+    *p++ = 0x61;
+    *p++ = 0x9D;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0048AD30); p += 4;
+
+    lim_branch(0x0049A664, sizeof tail, tail, 0xE9, (unsigned int)(size_t)t,
+               "stacked aircraft: served at the end of area damage's walk");
+    lim_branch(0x0049A415, sizeof sel, sel, 0xE9, (unsigned int)(size_t)s,
+               "stacked aircraft: area damage's slot selector");
+    lim_branch(0x0047CF98, sizeof stamp, stamp, 0xE9, (unsigned int)(size_t)m,
+               "stacked aircraft: the stamp's airborne path joins the pool");
+    lim_branch(0x004954ED, sizeof tick, tick, 0xE8, (unsigned int)(size_t)k,
+               "stacked aircraft: the pool rebuilt before the unit tick");
     return FIX_TABLE;
 }
 
@@ -3770,6 +4090,7 @@ static void patch_engine_defects(void)
     int keys = fix_sync_keys();
     int wpn  = fix_weapon_ids();
     int caps = fix_victim_caps();
+    int air  = fix_stacked_air();
     int flak = fix_flak_divides();
     int edge = fix_last_cell();
     int los  = fix_los_shear();
@@ -3820,6 +4141,14 @@ static void patch_engine_defects(void)
               fix_state(los), fix_state(losl), fix_state(pview),
               (unsigned int)(size_t)s_losOwnRow, fn, s_fixCodeUsed,
               (unsigned int)(size_t)s_fixCode);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: stacked aircraft served to area damage after its walk (0x49A664 "
+              "0x49A415; the pool: the stamp 0x47CF98, the unit tick's call 0x4954ED) %s. "
+              "Aircraft served, counted at 0x%08X",
+              fix_state(air), (unsigned int)(size_t)&s_airServed);
     b[sizeof b - 1] = 0;
     plog(b);
 }
