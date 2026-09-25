@@ -268,9 +268,8 @@ tools/tacli scenario load w1 marker-mix --res 1920x1080   # launch -> menus -> l
 tools/tacli ui w1; tools/tacli keys w1 ctrl+a; tools/tacli eye w1 1700 1640
 tools/tacli ab w1 gui                             # capture one pass, fetched to tagpu/instances/w1/ab/
 tools/tacli log w1 -g 'vk: (census|shot)'
-tools/tacli stop w1                               # stops the game; its wrapper restores TA's key
+tools/tacli stop w1                               # stops the game
 tools/tacli rm w1                                 # deletes the test folder and the task
-tools/tacli remote restore w1                     # only when a command warned that a restore never ran
 ```
 
 - **`remote add` copies the player's folder once** into its own test folder (default
@@ -279,28 +278,29 @@ tools/tacli remote restore w1                     # only when a command warned t
   `subst` drive that would put one inside the other. It refuses while any `TotalA.exe` runs
   there, and when the console user is not the SSH user. The address, the account, the key and
   both folders live only in `tagpu/instances/<name>/instance.json`, which is gitignored; never
-  copy them into tracked content. An add that failed half-way is removed with `tacli rm`.
+  copy them into tracked content. An add that failed half-way is removed with `tacli rm`. Its
+  last step seeds the test folder's registry store by reading the player's key (below).
 - **The verbs a remote instance answers**: `launch`, `stop`, `rm`, `arm` (and its `=off`), `keys`,
-  `ui`, `eye`, `shield`, `scenario load`, `log`, `ab`, `crash`, and `remote restore`. Every
-  other verb refuses before it touches anything. `tacli ls` lists a remote instance without
-  contacting the machine.
+  `ui`, `eye`, `shield`, `scenario load`, `log`, `ab` and `crash`. Every other verb refuses
+  before it touches anything. `tacli ls` lists a remote instance without contacting the
+  machine. An `instance.json` that does not read is an unusable instance: every verb refuses it,
+  `rm` included, until it is fixed or removed by hand.
 - **`launch` refuses beside any `TotalA.exe` it did not start** (it may be the player's game).
   It uploads this tree's `ddraw.dll` and checks its MD5 (`--keep-dll` keeps the one there), and it
-  writes the harness files a local launch writes, the shield included. `--res`, `--maxfps`,
+  writes the harness files a local launch writes, the shield included. It refuses a DLL without
+  the registry store, and a test folder without its store file. `--res`, `--maxfps`,
   `--map`, `--player`, `--los`, `--mapping`, `--unit-limit`, `--defaults` and `--sound` work as
   locally. `--window`, `--display`, `--slot`, `--dplay`, `--intro` and `--shipped` are refused.
-- **TA's registry key belongs to a launch wrapper on that machine, never to tacli.** The
-  instance's scheduled task, `\tacli\<name>`, runs a generated PowerShell script. It exports
-  the key, writes the skirmish and display values, runs the game on the console user's desktop,
-  and when the game exits (by `tacli stop`, closed on that desktop, crashed) it waits until no
-  `TotalA.exe` runs, then restores the key and verifies it. `stop` reports it: "restored TA's
-  registry key (…), by the launch wrapper". A TA the player starts meanwhile reads the test
-  values, and the restore waits for it to exit.
-- **One launch owns the key at a time**, on the whole machine: `launch` refuses while another
-  instance's wrapper runs or a restore is pending. A wrapper ended before its restore (a
-  restart, the task ended by hand) leaves its record, and every remote command then prints
-  `tacli: WARNING: TA's registry key … still holds the test values`. `tacli remote restore
-  <any remote instance there>` puts it back, and refuses while any `TotalA.exe` runs.
+- **A test folder's registry is a file; the machine's registry is never written.**
+  `tacli-state\registry.txt` holds TA's key. The DLL finds it beside `TotalA.exe` and answers the
+  game's registry calls from it; any other key is read-only. `launch` puts its values (sound off,
+  `Interface Type`, the display and skirmish values) into that file. The log's second line says
+  which mode ran: `registry: TEST MODE -- … hooks: TotalA.exe 9 of 9 registry imports, …`. A
+  player's own folder has no such file and logs `registry: real (…)`. Nothing is restored after
+  a test, and a test killed at any moment leaves the player's key as it was.
+- **The game runs from the instance's scheduled task**, `\tacli\<name>`: TotalA.exe itself on
+  the console user's desktop, at normal priority. `launch` reports `TotalA.exe runs at priority
+  Normal`. A task that starts no game fails the launch with the task's own result code.
 - **The shield is on**, as locally: that desktop's keyboard and mouse do not reach the game,
   and `tacli shield w1 off` hands it over. With the player's `impure.cfg` the game opens
   fullscreen on that machine's primary monitor; `--res` at the monitor's own size avoids a
@@ -315,5 +315,5 @@ tools/tacli remote restore w1                     # only when a command warned t
   PowerShell reading stdin skips a line that does not parse as one statement, with only a
   parser error on stderr, and `ps_script` makes
   every line after a skipped one run nothing. Add remote operations there, through that
-  function, never as a hand-written script. How the link, the routing and the launch wrapper
+  function, never as a hand-written script. How the link, the routing, the store and the task
   work: `research/notes/tacli-design.md`, "Remote instances".
