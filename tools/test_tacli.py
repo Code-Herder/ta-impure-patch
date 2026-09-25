@@ -1608,7 +1608,7 @@ class FakePS:
                     self.stdout(f"{tag} DONE {b} {i}")
 
 
-TEST_DLL = b"MZ our build " + taremote.TEST_MODE_MARK + b" and the rest"
+TEST_DLL = b"MZ our build " + b" ".join(taremote.TEST_MODE_MARKS) + b" and the rest"
 
 
 class FakeWindows(taremote.Session):
@@ -1631,7 +1631,9 @@ class FakeWindows(taremote.Session):
                     ("", "Interface Type"): (4, (0).to_bytes(4, "little")),
                     ("Skirmish", "Player1"): (4, (1).to_bytes(4, "little"))}
         self.registry_writes = []
+        self.replaced = []                      # files put in place by [IO.File]::Replace
         self.tasks, self.action, self.settings = {}, None, None
+        self.task_folders = set()               # the Task Scheduler's folders, lower-case
         self.skip_lines = set()
         self.reparse = set()                    # folders that are junctions
         self.robocopy_fails = False
@@ -1751,6 +1753,7 @@ class FakeWindows(taremote.Session):
             self.tasks[after("-TaskName ")] = {"state": "Ready", "action": self.action,
                                               "settings": self.settings, "result": 0x41303,
                                               "path": after("-TaskPath ")}
+            self.task_folders.add(after("-TaskPath ").strip("\\").lower())
             return []
         if st.startswith("Start-ScheduledTask"):
             task = self.tasks[after("-TaskName ")]
@@ -1770,13 +1773,23 @@ class FakeWindows(taremote.Session):
         if st.startswith("$t = Get-ScheduledTask") and "Unregister-ScheduledTask" in st:
             self.tasks.pop(after("-TaskName "), None)
             return []
+        if st.startswith("$__s = New-Object -ComObject Schedule.Service"):
+            folder = after("$_.Name -eq ").lower()
+            if folder not in self.task_folders:
+                return ["absent"]
+            if any(t["path"].strip("\\").lower() == folder for t in self.tasks.values()):
+                return ["kept"]
+            self.task_folders.discard(folder)
+            return ["removed"]
         if st.startswith("$t = Get-ScheduledTask") and "Get-ScheduledTaskInfo" in st:
             task = self.tasks.get(after("-TaskName "))
             return [] if task is None else [f"{task['state']}|{task['result']}"]
         # -- the DLL
         if "GetEncoding(28591).GetString([IO.File]::ReadAllBytes(" in st:
             data = self.get(after("[IO.File]::Exists("))
-            return [str(data is not None and taremote.TEST_MODE_MARK in bytes(data))]
+            marks = [ps_value(m) for m in re.findall(r"\$__t\.Contains\((" + E + r")\)", st)]
+            return [str(data is not None and bool(marks)
+                        and all(m.encode("latin-1") in bytes(data) for m in marks))]
         # -- the folders (`remote add`, `rm`)
         if st.startswith("$__p = [IO.Path]::GetFullPath("):
             p = ntpath.normpath(after("GetFullPath("))
@@ -1915,6 +1928,12 @@ class FakeWindows(taremote.Session):
         if st.startswith("Move-Item -LiteralPath"):
             data = self.files.pop(after("-LiteralPath ").lower())
             self.put(after("-Destination "), bytes(data))
+            return []
+        if "[IO.File]::Replace(" in st:
+            dst, tmp = after("[IO.File]::Exists("), after("[IO.File]::Replace(")
+            if self.get(dst) is not None:
+                self.replaced.append(dst)       # the name was never free
+            self.put(dst, bytes(self.files.pop(tmp.lower())))
             return []
         if "'busy'" in st:
             p, tmp = after("[IO.File]::Exists("), after("[IO.File]::Delete(")
@@ -2158,8 +2177,33 @@ class RemoteRouting(unittest.TestCase):
         with self.assertRaises(TypeError):
             inst.save_meta({"name": "r1", "bad": object()})     # fails while writing
         self.assertEqual(inst.meta_path.read_text(), before)
+        self.assertEqual(sorted(p.name for p in inst.dir.iterdir()), ["instance.json"])
         inst.save_meta(dict(json.loads(before), shield=False))
         self.assertFalse(self.meta_now()["shield"])
+        self.assertEqual(sorted(p.name for p in inst.dir.iterdir()), ["instance.json"])
+
+    def test_metadata_saved_by_two_commands_at_once_stays_whole(self):
+        # a temporary name shared by both writers let one truncate what the other was
+        # moving; each writer's own name leaves one whole file or the other
+        import threading
+        inst = tacli.Instance("r1")
+        bad = []
+
+        def saver(tag):
+            for i in range(60):
+                try:
+                    inst.save_meta({"name": "r1", "tag": tag, "i": i, "pad": tag * 20000})
+                    json.loads(inst.meta_path.read_text())
+                except (OSError, ValueError) as e:
+                    bad.append(e)
+
+        threads = [threading.Thread(target=saver, args=(t,)) for t in "abcd"]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(bad, [])
+        self.assertIn(json.loads(inst.meta_path.read_text())["tag"], "abcd")
         self.assertEqual(sorted(p.name for p in inst.dir.iterdir()), ["instance.json"])
 
     # -- the file channels
@@ -2341,12 +2385,14 @@ class RemoteRouting(unittest.TestCase):
                          (4, (2).to_bytes(4, "little")))
         self.assertEqual(store.get(ta + r"\Skirmish", "Player1")[1:],
                          (4, (1).to_bytes(4, "little")))           # the seed's, kept
-        self.assertIn("the remote registry is not written", out)
-        # the task runs the game itself, from the test folder, at normal priority
+        self.assertIn("TA's settings key there is not written", out)
+        # the task runs the game itself, from the test folder, at normal priority, with
+        # the token that tells the DLL this is a test launch
         task = self.win.tasks["r1"]
         self.assertEqual(task["path"], "\\tacli\\")
         self.assertEqual(task["action"]["execute"], self.FOLDER + r"\TotalA.exe")
         self.assertEqual(task["action"]["dir"], self.FOLDER)
+        self.assertEqual(task["action"]["args"], taremote.TEST_TOKEN)
         self.assertIn("-Priority 4", task["settings"])
         self.assertIn("priority Normal", out)
         # the shield is on by default, as it is locally
@@ -2363,10 +2409,40 @@ class RemoteRouting(unittest.TestCase):
 
     def test_launch_refuses_a_test_folder_without_a_store(self):
         self.win.files.pop((self.FOLDER + r"\tacli-state\registry.txt").lower())
-        code, _, err = self.main("launch", "r1", "--keep-dll")
+        self.use_built_dll(TEST_DLL + b" v2")
+        code, _, err = self.main("launch", "r1")
         self.assertEqual(code, 1)
-        self.assertIn("real registry", err)
+        self.assertIn("would not run the game", err)
         self.assertEqual(self.win.tasks, {})
+        # read first: nothing was written, the DLL not deployed
+        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")), TEST_DLL)
+        self.assertFalse(any("WriteAllBytes(" in st for st in self.win.sent))
+
+    def test_the_store_is_put_in_place_without_ever_being_missing(self):
+        # Move-Item -Force deletes the target and then moves: a launch in between would
+        # find no store. Replace swaps the file in; the name never goes free.
+        self.assertEqual(self.main("launch", "r1", "--keep-dll", "--map", "Two Continents")[0], 0)
+        self.assertIn(self.FOLDER + r"\tacli-state\registry.txt", self.win.replaced)
+        self.assertFalse(any(st.startswith("Move-Item") and "registry.txt" in st
+                             for st in self.win.sent))
+        self.assertIsNone(self.win.get(self.FOLDER + r"\tacli-state\registry.txt.tacli-old"))
+        self.assertIsNone(self.win.get(self.FOLDER + r"\tacli-state\registry.txt.tacli-tmp"))
+
+    def test_launch_refuses_the_r_and_d_switches_by_their_second_character(self):
+        # the engine dispatches on the character after the dash, whatever follows it
+        for a in ("-r", "/R", "-register", "-r12", "/Reg", "-d", "-df", "/Display"):
+            with self.subTest(a=a):
+                for argv in (["launch", "r1", "--keep-dll", "--arg=" + a],
+                             ["launch", "nosuch", "--arg=" + a]):
+                    code, _, err = self.main(*argv)
+                    self.assertEqual(code, 1)
+                    self.assertIn(f"refusing {a!r}", err)
+        self.assertEqual(self.win.tasks, {})
+        for argv in (["launch", "r1", "--keep-dll", "--arg=" + taremote.TEST_TOKEN],
+                     ["launch", "nosuch", "--arg=" + taremote.TEST_TOKEN]):
+            code, _, err = self.main(*argv)
+            self.assertEqual(code, 1)
+            self.assertIn("marks a tacli test launch", err)
 
     def test_launch_refuses_a_store_that_does_not_parse(self):
         self.win.put(self.FOLDER + r"\tacli-state\registry.txt", b"HKLM\\Software\\x\r\n")
@@ -2382,14 +2458,18 @@ class RemoteRouting(unittest.TestCase):
         self.win.put(self.FOLDER + r"\ddraw.dll", b"MZ a shipped build")
         code, _, err = self.main("launch", "r1", "--keep-dll")
         self.assertEqual(code, 1)
-        self.assertIn("has no registry store", err)
+        self.assertIn("is not one that fails closed", err)
         self.assertEqual(self.win.tasks, {})
-        # a build of a tree without it is refused before it is uploaded
-        self.use_built_dll(b"MZ an older build")
-        code, _, err = self.main("launch", "r1")
-        self.assertEqual(code, 1)
-        self.assertIn("has no registry store", err)
-        self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")), b"MZ a shipped build")
+        # a build of a tree without it is refused before it is uploaded; so is a build with
+        # the store but not the fail-closed test mode and the -r closure
+        for old in (b"MZ an older build", b"MZ registry: TEST MODE -- an earlier store"):
+            with self.subTest(old=old):
+                self.use_built_dll(old)
+                code, _, err = self.main("launch", "r1")
+                self.assertEqual(code, 1)
+                self.assertIn("is not a DLL that fails closed", err)
+                self.assertEqual(bytes(self.win.get(self.FOLDER + r"\ddraw.dll")),
+                                 b"MZ a shipped build")
 
     def test_launch_deploys_a_dll_with_the_store(self):
         self.use_built_dll(TEST_DLL + b" v2")
@@ -2430,6 +2510,21 @@ class RemoteRouting(unittest.TestCase):
         code, out, err = self.main("launch", "r1", "--keep-dll")
         self.assertEqual(code, 0, err)
         self.assertIn("pid=4242", out)
+
+    def test_rm_keeps_the_task_folder_while_another_task_is_in_it(self):
+        other = r"D:\Test Folder\r2"
+        self.write_meta("r2", other)
+        self.fill_test_folder(other)
+        self.assertEqual(self.main("launch", "r1", "--keep-dll")[0], 0)
+        self.main("stop", "r1")
+        self.assertEqual(self.main("launch", "r2", "--keep-dll")[0], 0)
+        code, out, err = self.main("rm", "r1")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.win.task_folders, {"tacli"})
+        self.assertIn("kept: it holds another task", out)
+        code, out, err = self.main("rm", "r2", "--force")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.win.task_folders, set())
 
     # -- the store's format: the DLL's (tagpu_regstore.h), byte for byte
     STORE_TEXT = (b"# a comment\r\n"
@@ -2478,6 +2573,44 @@ class RemoteRouting(unittest.TestCase):
             with self.subTest(bad=bad):
                 with self.assertRaises(ValueError):
                     taremote.RegStore.parse(bad + b"\r\n")
+
+    def test_the_store_holds_to_the_dlls_limits(self):
+        # the DLL's buffers (tagpu_regstore.c): measured on its rs_unesc, a key path of 511
+        # bytes, a name of 1023 and an sz of 65535 load, one byte more does not
+        root = taremote.STORE_ROOT.encode("ascii")
+        key = lambda n: root + b"\\" + b"k" * (n - len(root) - 1)
+        line = lambda k, rest=b"": k + rest + b"\r\n"
+        ok = {"key": line(key(511)),
+              "name": line(root, b"\t" + b"n" * 1023 + b"\tdword\t1"),
+              "sz": line(root, b"\tn\tsz\t" + b"a" * 65535),
+              "hex": line(root, b"\tn\thex(3)\t" + b"00" * 65536),
+              "values": b"".join(line(root, b"\tv%d\tdword\t1" % i) for i in range(512)),
+              "keys": b"".join(line(root + b"\\k%d" % i) for i in range(1023))}
+        over = {"key": line(key(512)),
+                "name": line(root, b"\t" + b"n" * 1024 + b"\tdword\t1"),
+                "sz": line(root, b"\tn\tsz\t" + b"a" * 65536),
+                "hex": line(root, b"\tn\thex(3)\t" + b"00" * 65537),
+                "values": b"".join(line(root, b"\tv%d\tdword\t1" % i) for i in range(513)),
+                "keys": b"".join(line(root + b"\\k%d" % i) for i in range(1024)),
+                "file": b"#" * (4 << 20) + b"\r\n"}
+        for what, data in ok.items():
+            with self.subTest(ok=what):
+                store = taremote.RegStore.parse(data)
+                self.assertEqual(taremote.RegStore.parse(store.format()).format(), store.format())
+        self.assertEqual(len(taremote.RegStore.parse(ok["keys"]).keys()), 1024)
+        for what, data in over.items():
+            with self.subTest(over=what):
+                with self.assertRaises(ValueError):
+                    taremote.RegStore.parse(data)
+        # the writer refuses to make what the reader refuses
+        store = taremote.RegStore()
+        for i in range(512):
+            store.set_dword(taremote.STORE_ROOT, f"v{i}", i)
+        with self.assertRaises(ValueError):
+            store.set_dword(taremote.STORE_ROOT, "one more", 1)
+        store.set_dword(taremote.STORE_ROOT, "V7", 8)       # an existing name, any case: fine
+        with self.assertRaises(ValueError):
+            store.set(taremote.STORE_ROOT, "big", 3, bytes(65537))
 
     # -- writing into the test folder
     def test_a_protected_file_without_its_backup_is_not_replaced(self):
@@ -2589,11 +2722,13 @@ class RemoteRouting(unittest.TestCase):
 
     def test_rm_removes_the_test_folder_and_never_the_players(self):
         self.main("launch", "r1", "--keep-dll")
-        code, _, err = self.main("rm", "r1", "--force")
+        code, out, err = self.main("rm", "r1", "--force")
         self.assertEqual(code, 0, err)
         self.assertEqual(self.win.procs, [])
         self.assertFalse(self.win.has_dir(self.FOLDER))
         self.assertNotIn("r1", self.win.tasks)
+        self.assertEqual(self.win.task_folders, set())      # its last task: the folder goes too
+        self.assertIn("removed, as it held no other task", out)
         self.assertEqual(bytes(self.win.get(self.PLAYER + r"\tagpu_vk.gpus")), b"1 the player's GPU\n")
         self.assertEqual(self.win.registry_writes, [])
         self.assertEqual(self.win.key, self.before)

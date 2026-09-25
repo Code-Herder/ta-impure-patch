@@ -55,15 +55,16 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
     return ok;
 }
 
-/* ---- the -r switch, in a tacli test folder ----------------------------------
+/* ---- the -r switch, in a tacli test launch ----------------------------------
 
-   In a test folder TotalA.exe's registry is a file (tagpu_regstore.h), answered through
-   its registry imports. The one registry write of the game that passes through none of
-   them is the `-r` switch's: its handler 0x49F249 loads dsetup.dll and calls
+   In a test launch TotalA.exe's registry is a file (tagpu_regstore.h), answered through
+   its registry imports. The one registry write of the exe's own code that passes through
+   none of them is the `-r` switch's: its handler 0x49F249 loads dsetup.dll and calls
    DirectXRegisterApplicationA, which writes DirectPlay's application key through
-   dsetup.dll's own imports, then quits (cmdline-options.md). The parser 0x49EEC0
-   dispatches on the letter after the dash through the index bytes 0x49F500 ('B'..'w')
-   into the jump table 0x49F494: 'R' holds case 9 and 'r' case 22, and both entries
+   dsetup.dll's own imports, then quits (cmdline-options.md). The parser
+   CmdlineArgsNormalize 0x49EE30 (called at 0x49E8D2; token loop head 0x49EED3) dispatches
+   on the letter after the dash through the index bytes 0x49F500 ('B'..'w') into the jump
+   table 0x49F494: 'R' holds case 9 and 'r' case 22, and both entries
    (0x49F4B8, 0x49F4EC) are 0x49F249; case 26 (0x49F4FC) is the loop tail 0x49F461, where
    every letter the parser does not know goes [DISASSEMBLED 2026-09-25]. Pointing both
    entries at the tail makes -r an unknown switch, ignored. A test folder whose exe

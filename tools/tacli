@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -339,9 +340,18 @@ class Instance:
         return json.loads(self.meta_path.read_text())
 
     def save_meta(self, meta: dict):
-        tmp = self.meta_path.with_name(self.meta_path.name + ".tmp")
-        tmp.write_text(json.dumps(meta, indent=2))
-        os.replace(tmp, self.meta_path)
+        """Replace instance.json whole: written under a name of this process's own, then
+        moved over it, so two tacli commands saving at once leave one whole file or the
+        other, never a mix of both."""
+        fd, tmp = tempfile.mkstemp(dir=self.meta_path.parent, prefix="instance.json.",
+                                   suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(meta, indent=2))
+            os.replace(tmp, self.meta_path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
     def env(self) -> dict:
         if self.remote:
@@ -1277,16 +1287,27 @@ def _ensure_markown_for_mark(inst) -> "str | None":
     return ("auto-armed markown.on (mark.on is set and markown must be installed at "
             "launch, not after)")
 
+def refuse_ta_switches(argv):
+    """Refuse the TotalA.exe switches a launch must never pass (cmdline-options.md): -r
+    registers DirectPlay and quits, -d bypasses the ddraw path our stack lives in. The
+    engine acts on a token's SECOND character whatever follows it, so `-register`,
+    `-r12` and `/Reg` are -r too; refused before anything is created."""
+    for a in argv:
+        if a[:1] in ("-", "/") and a[1:2].lower() in ("r", "d"):
+            die(f"refusing {a!r}: TotalA.exe reads it as -{a[1:2].lower()} (the character "
+                f"after the dash decides); see cmdline-options.md (-r registers DirectPlay "
+                f"and quits, -d is the engine's own windowed mode)")
+        if a == taremote.TEST_TOKEN:
+            die(f"refusing {a!r}: it marks a tacli test launch (tagpu_regstore.h), which a "
+                f"remote launch passes itself; a local game with it has no store and is not run")
+
+
 def _launch(args) -> dict:
     """Everything `launch` does, minus the printing — `load` composes with it."""
     # Extra TotalA.exe switches. Only a handful are worth passing (see
-    # research/notes/cmdline-options.md); -r aborts the launch and -d bypasses the
-    # ddraw path our stack lives in, so both are refused — before anything is created.
+    # research/notes/cmdline-options.md).
     argv = list(args.arg or [])
-    for a in argv:
-        if a[:1] in ("-", "/") and a[1:2].lower() in ("r", "d") and len(a) <= 3:
-            die(f"refusing {a!r}: see cmdline-options.md (-r registers DirectPlay and "
-                f"quits, -d is the engine's own windowed mode)")
+    refuse_ta_switches(argv)
     shipped = bool(getattr(args, "shipped", False))
     if shipped:
         clash = [f for f, v in (("--res", args.res), ("--window", getattr(args, "window", None)),
@@ -4816,8 +4837,8 @@ TA_ARG_RX = re.compile(r"[-/][A-Za-z0-9._=:]{1,40}|[A-Za-z0-9._=:]{1,40}")
 def _remote_store_values(meta: dict, args) -> list:
     """The values a remote launch puts into the test folder's registry store: those a
     local launch writes into its prefix (apply_prefix_settings and the skirmish flags).
-    They go into `tacli-state\\registry.txt`, which the DLL answers the game's registry
-    calls from (tagpu_regstore.h): the remote machine's registry is never written."""
+    They go into `tacli-state\\registry.txt`, which the DLL answers TotalA.exe's registry
+    calls from (tagpu_regstore.h), so TA's settings key on that machine is not written."""
     vals = [("", "Interface Type", "REG_DWORD", 1), ("", "PlayMovie", "REG_DWORD", 0)]
     if not meta.get("sound"):
         vals += [("", v, "REG_DWORD", 0) for v in
@@ -4840,35 +4861,43 @@ def _remote_store_path(inst: Instance):
     return inst.gamedir / taremote.STATE_DIR / taremote.STORE
 
 
-def _remote_store_update(inst: Instance, values) -> int:
-    """Put `values` into the test folder's registry store, replacing the file whole
-    (RemotePath.write_bytes: a temporary name, then a move). Only while no game of
-    this instance runs: the DLL owns the file then. Refuses a test folder without a
-    store -- the DLL would run that game against the real registry."""
+def _remote_store_read(inst: Instance):
+    """The test folder's registry store as (RegStore, the file's bytes). Refuses one that
+    is missing or that the DLL would not load whole: its game would not run (in a test
+    launch the DLL ends the process rather than touch the real registry)."""
     path = _remote_store_path(inst)
     try:
         data = path.read_bytes()
     except FileNotFoundError:
         die(f"{inst.name}: its test folder has no {taremote.STATE_DIR}\\{taremote.STORE}, so the "
-            f"DLL would serve the game from the remote machine's real registry. `tacli rm "
-            f"{inst.name}` and `tacli remote add` again make a test folder that has one")
+            f"DLL would not run the game. `tacli rm {inst.name}` and `tacli remote add` again "
+            f"make a test folder that has one")
     try:
-        store = taremote.RegStore.parse(data)
+        return taremote.RegStore.parse(data), data
     except ValueError as e:
         die(f"{inst.name}: {taremote.STATE_DIR}\\{taremote.STORE} does not parse ({e}); tacli "
             f"leaves it as it is")
-    for sub, name, kind, value in values:
-        key = taremote.STORE_TA + (("\\" + sub) if sub else "")
-        if kind == "REG_DWORD":
-            store.set_dword(key, name, int(value))
-        else:
-            try:
-                store.set_sz(key, name, str(value))
-            except UnicodeEncodeError:
-                die(f"{name}={value!r}: a registry string tacli writes is ASCII")
-    new = store.format()
+
+
+def _remote_store_update(inst: Instance, store, data: bytes, values) -> int:
+    """Put `values` into the store `_remote_store_read` gave, replacing the file whole
+    (RemotePath.write_bytes: a temporary name, then put in its place) when anything
+    changed. Only while no game of this instance runs: the DLL owns the file then."""
+    try:
+        for sub, name, kind, value in values:
+            key = taremote.STORE_TA + (("\\" + sub) if sub else "")
+            if kind == "REG_DWORD":
+                store.set_dword(key, name, int(value))
+            else:
+                try:
+                    store.set_sz(key, name, str(value))
+                except UnicodeEncodeError:
+                    die(f"{name}={value!r}: a registry string tacli writes is ASCII")
+        new = store.format()
+    except ValueError as e:
+        die(f"{inst.name}: the launch's values would make a store the DLL does not load ({e})")
     if new != data:
-        path.write_bytes(new)
+        _remote_store_path(inst).write_bytes(new)
     return len(values)
 
 
@@ -4904,11 +4933,12 @@ def _remote_launch(args) -> dict:
     the test folder, then TotalA.exe started on the remote desktop by a scheduled task,
     and the wait for the DLL's new log run.
 
-    NOTHING OF THIS WRITES THE REMOTE MACHINE'S REGISTRY. The test values go into the
-    store, and the DLL answers the game's registry calls from it (tagpu_regstore.h).
-    That holds only for a DLL that has the store, so a launch whose DLL lacks it --
-    an old build, or `--keep-dll` on the player's copy -- is refused before the task
-    starts."""
+    TA'S SETTINGS KEY ON THAT MACHINE IS NOT WRITTEN. The test values go into the store,
+    and the DLL answers TotalA.exe's registry calls from it (tagpu_regstore.h, which also
+    says what lies outside that). That holds only for a DLL that fails closed in a test
+    launch, so a launch whose DLL lacks it -- an old build, or `--keep-dll` on the
+    player's copy -- is refused before the task starts. The store is read and checked
+    first, before anything is written."""
     inst = Instance(args.name)
     rem = inst.remote
     bad = [flag for flag, attr, off in REMOTE_LOCAL_ONLY if getattr(args, attr, off) not in (off,)]
@@ -4916,10 +4946,8 @@ def _remote_launch(args) -> dict:
         die(f"{', '.join(bad)}: {args.name} is a remote instance, and these place or "
             f"shape a wine instance on the local desktop")
     argv = list(args.arg or [])
+    refuse_ta_switches(argv)
     for a in argv:
-        if a[:1] in ("-", "/") and a[1:2].lower() in ("r", "d") and len(a) <= 3:
-            die(f"refusing {a!r}: see cmdline-options.md (-r registers DirectPlay and "
-                f"quits, -d is the engine's own windowed mode)")
         if not TA_ARG_RX.fullmatch(a):
             die(f"--arg {a!r}: a TotalA.exe switch is letters, digits and . _ = : here")
     if getattr(args, "maxfps", None) is not None:
@@ -4929,6 +4957,7 @@ def _remote_launch(args) -> dict:
     if meta.get("state") == "adding":
         die(f"{args.name}: `remote add` did not finish; `tacli rm {args.name}` removes what "
             f"it made")
+    store, store_data = _remote_store_read(inst)
     procs = rem.procs()
     ours = [pid for pid, path in procs if rem.is_ours(path)]
     if ours:
@@ -4941,9 +4970,11 @@ def _remote_launch(args) -> dict:
     if not args.keep_dll:
         if not BUILT_DLL.exists():
             die(f"fork DLL not built: {BUILT_DLL}")
-        if taremote.TEST_MODE_MARK not in BUILT_DLL.read_bytes():
-            die(f"{BUILT_DLL} has no registry store (tagpu_regstore.c): it would run the game "
-                f"against the remote machine's real registry. Build a tree that has it")
+        built = BUILT_DLL.read_bytes()
+        if not all(m in built for m in taremote.TEST_MODE_MARKS):
+            die(f"{BUILT_DLL} is not a DLL that fails closed in a test launch (tagpu_regstore.c, "
+                f"the -r closure): it could run the game against the remote machine's real "
+                f"registry. Build a tree that has both")
     for key, attr in (("sound", "sound"), ("unit_limit", "unit_limit"), ("shield", "shield"),
                       ("maxfps", "maxfps")):
         if getattr(args, attr, None) is not None:
@@ -4956,9 +4987,10 @@ def _remote_launch(args) -> dict:
         (inst.gamedir / "ddraw.dll").upload(BUILT_DLL)
         notes.append(f"deployed {BUILT_DLL} (md5 {hashlib.md5(BUILT_DLL.read_bytes()).hexdigest()})")
     if not rem.dll_has_test_mode():
-        die(f"{args.name}: the test folder's ddraw.dll has no registry store "
-            f"(tagpu_regstore.c), so it would run the game against the remote machine's real "
-            f"registry; launch without --keep-dll to deploy {BUILT_DLL.name} from this tree")
+        die(f"{args.name}: the test folder's ddraw.dll is not one that fails closed in a test "
+            f"launch (tagpu_regstore.c, the -r closure), so it could run the game against the "
+            f"remote machine's real registry; launch without --keep-dll to deploy "
+            f"{BUILT_DLL.name} from this tree")
     write_totala_ini(inst, meta.get("sound", False), meta.get("unit_limit"))
     write_nowarp(inst)
     set_shield(inst, meta.get("shield", True))
@@ -4982,9 +5014,10 @@ def _remote_launch(args) -> dict:
     auto = (_ensure_owndraw_for_native(inst), _ensure_fxown_for_fx(inst),
             _ensure_featown_for_feat(inst), _ensure_terrown_for_terr(inst),
             _ensure_markown_for_mark(inst))
-    n = _remote_store_update(inst, _remote_store_values(meta, args))
+    n = _remote_store_update(inst, store, store_data, _remote_store_values(meta, args))
     notes.append(f"{n} test values put into {taremote.STATE_DIR}\\{taremote.STORE}, which the DLL "
-                 f"answers the game's registry calls from; the remote registry is not written")
+                 f"answers TotalA.exe's registry calls from; TA's settings key there is not "
+                 f"written")
     inst.save_meta(meta)
 
     old = _remote_log_key(inst)
@@ -5074,12 +5107,17 @@ def cmd_remote_rm(args):
         if rem.pid() and not args.force:
             die(f"{args.name} is running (tacli stop {args.name}, or --force)")
         _remote_stop(inst)
-        rem.task_remove()
+        tasks = rem.task_remove()
+    else:
+        tasks = "not looked at"
     if rem.root.exists():
         rem.remove_folder(inst.name)
     shutil.rmtree(inst.dir)
-    out({"name": args.name, "removed": True}, args.json,
-        human=f"removed {args.name}: its test folder, its scheduled task and its metadata")
+    folder = {"removed": "removed, as it held no other task", "kept": "kept: it holds another task",
+              "absent": "not there"}.get(tasks, tasks)
+    out({"name": args.name, "removed": True, "task_folder": tasks}, args.json,
+        human=f"removed {args.name}: its test folder, its scheduled task and its metadata; the "
+              f"task folder {taremote.TASK_DIR} {folder}")
 
 
 def cmd_remote_add(args):
@@ -5126,6 +5164,9 @@ def cmd_remote_add(args):
         (rem.root / taremote.STATE_DIR / taremote.STORE).write_bytes(seed.format())
     except taremote.RemoteError as e:
         die(f"{e}\n  the add did not finish: `tacli rm {args.name}` removes what it made")
+    except ValueError as e:
+        die(f"the player's key cannot become a registry store the DLL loads ({e})\n  the add "
+            f"did not finish: `tacli rm {args.name}` removes what it made")
     meta.pop("state")
     nvals = sum(len(seed.values(k)) for k in seed.keys())
     meta["copied"] = {"files": copied["files"], "bytes": copied["bytes"],

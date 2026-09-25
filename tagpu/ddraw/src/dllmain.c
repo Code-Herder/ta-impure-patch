@@ -60,9 +60,14 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         delay_imports_init();
 
+        /* tagpu: whether tacli launched this game into a test folder (tagpu_regstore.h),
+           decided before the config tool's return below: an inherited
+           cnc_ddraw_config_init must not run a test launch against the real registry. */
+        int test_launch = tagpu_regstore_decide();
+
         /* cnc-ddraw's config tool loads the DLL to edit a ddraw.ini this DLL
            does not read: it gets nothing, and nothing of ours runs. */
-        if (GetEnvironmentVariable("cnc_ddraw_config_init", NULL, 0))
+        if (!test_launch && GetEnvironmentVariable("cnc_ddraw_config_init", NULL, 0))
             return TRUE;
 
         /* tagpu: the log sink (tagpu_log.h) before anything that logs -- cfg_load does.
@@ -70,7 +75,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            player's logs. */
         tagpu_log_init();
 
-        /* tagpu: in a tacli test folder, TotalA.exe's registry is a file (tagpu_regstore.h).
+        /* tagpu: in a tacli test launch, TotalA.exe's registry is a file (tagpu_regstore.h).
            Before anything else of ours, and long before TotalA.exe's entry point: the
            import tables are patched here, while no game code has run. */
         tagpu_regstore_init();

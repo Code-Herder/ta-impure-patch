@@ -12,15 +12,30 @@
 
 #define RS_ROOT        "HKCU\\Software\\Cavedog Entertainment"
 #define RS_ROOT_LEN    (sizeof(RS_ROOT) - 1)
+#define RS_STATE_DIR   L"tacli-state"
 #define RS_FILE        L"tacli-state\\registry.txt"
 #define RS_TMP         L"tacli-state\\registry.txt.tmp"
+
+/* The launch's token: tacli's scheduled task puts it on TotalA.exe's command line, and the
+   engine ignores it. CmdlineArgsNormalize 0x49EE30 splits its arguments at blanks (strtok,
+   loop head 0x49EED3); a token starting with '-' or '/' dispatches on its SECOND character,
+   less 'B', and anything above 0x35 ('w') takes `ja 0x49F461`, the loop tail every unknown
+   switch goes to [DISASSEMBLED 2026-09-25]. 'x' is 0x36 there. The token starts with none of
+   the debug switches 0x4DA0E0 sets aside before that (-memfussy, -dprinton, -gonzo, ...). */
+#define RS_TOKEN       L"-xtacli-test"
+#define RS_TOKEN_A     "-xtacli-test"
 
 /* The handle range: above every kernel handle (the table's 2^24 entries * 4 = 0x04000000)
    and below the predefined keys (0x80000000..). */
 #define RS_BASE        0x6D5A0000u
+
+/* The store's limits, which tools/taremote.py's RegStore enforces too: a key path of up to
+   RS_PATH_MAX - 1 bytes, a value name of up to RS_NAME_MAX - 1, a value of up to RS_MAX_DATA
+   (an sz's text and its NUL), RS_MAX_VALUES values a key, RS_MAX_KEYS keys (the root and every
+   key under it), a file of up to RS_MAX_FILE bytes. */
 #define RS_MAX_KEYS    1024
-#define RS_MAX_VALUES  512            /* per key */
-#define RS_MAX_DATA    65536u         /* per value */
+#define RS_MAX_VALUES  512
+#define RS_MAX_DATA    65536u
 #define RS_MAX_FILE    (4u << 20)
 #define RS_PATH_MAX    512
 #define RS_NAME_MAX    1024
@@ -47,8 +62,12 @@ typedef struct {
     int       nv, cap;
 } RS_KEY;
 
+enum { RS_BY_TOKEN = 1, RS_BY_FOLDER = 2 };
+
+static int              s_by;         /* the signals tagpu_regstore_decide found */
+static char             s_why[160];   /* what it could not establish, for the log */
+static WCHAR*           s_dir;        /* the exe's folder, with its trailing backslash */
 static int              s_active;
-static int              s_writable;   /* the file loaded whole: changes are written back */
 static int              s_dirty;
 static CRITICAL_SECTION s_lock;
 static RS_KEY*          s_keys;       /* RS_MAX_KEYS entries, allocated once: never moves */
@@ -310,7 +329,7 @@ static void rs_counters(char* out, size_t cap)
     out[cap - 1] = 0;
 }
 
-/* Write the whole store back when it changed and the file loaded whole, and log the
+/* Write the whole store back when it changed, and log the
    counters: a game stopped by tacli is terminated, so the exit line never comes, and
    the last write's line is the latest count. Under s_lock. */
 static void rs_save(void)
@@ -320,7 +339,7 @@ static void rs_save(void)
     DWORD wrote = 0;
     int i, j, ok;
 
-    if (!s_dirty || !s_writable) return;
+    if (!s_dirty) return;
     rs_puts(&b, "# tacli registry store: <key> or <key>\\t<name>\\t<type>\\t<data> (tagpu_regstore.h)\r\n");
     for (i = 0; i < s_nkeys; i++) {
         const RS_KEY* k = &s_keys[i];
@@ -937,79 +956,153 @@ static void rs_hook(HMODULE m)
         hook_patch_iat(m, FALSE, "ADVAPI32.dll", (char*)s_hooks[j].name, s_hooks[j].fn);
 }
 
-void tagpu_regstore_init(void)
+/* Whether the command line carries RS_TOKEN as a whole argument. The program name is
+   skipped as the CRT skips it (quoted, or up to the first blank); the rest is split at
+   blanks, as the engine's parser splits it. */
+static int rs_has_token(void)
+{
+    const WCHAR* p = GetCommandLineW();
+    const size_t n = wcslen(RS_TOKEN);
+
+    if (!p) return 0;
+    if (*p == L'"') {
+        for (p++; *p && *p != L'"'; p++) {}
+        if (*p) p++;
+    } else {
+        while (*p && *p != L' ' && *p != L'\t') p++;
+    }
+    for (;;) {
+        const WCHAR* s;
+        while (*p == L' ' || *p == L'\t') p++;
+        if (!*p) return 0;
+        for (s = p; *p && *p != L' ' && *p != L'\t'; p++) {}
+        if ((size_t)(p - s) == n && !wcsncmp(s, RS_TOKEN, n)) return 1;
+    }
+}
+
+int tagpu_regstore_decide(void)
 {
     const DWORD cap = 32768;
     WCHAR* exe;
-    WCHAR* slash;
-    DWORD n, at, aterr;
-    size_t dir;
-    HMODULE w32;
-    int whole, nvalues, regs, ours, wregs = 0, wours = 0;
+    WCHAR* slash = NULL;
+    WCHAR* dir;
+    DWORD n, at, err;
+    size_t len;
 
+    if (rs_has_token()) s_by |= RS_BY_TOKEN;
     exe = (WCHAR*)malloc(cap * sizeof(WCHAR));
     n = exe ? GetModuleFileNameW(NULL, exe, cap) : 0;
-    if (!n || n >= cap || !(slash = wcsrchr(exe, L'\\'))) {
-        tagpu_log("registry: real (the exe's own path could not be read, so no store was looked for)");
+    if (n && n < cap) slash = wcsrchr(exe, L'\\');
+    if (!slash) {
+        _snprintf(s_why, sizeof s_why, exe ? "the exe's own path could not be read"
+                                           : "no memory to read the exe's own path");
         free(exe);
+        return s_by != 0;
+    }
+    slash[1] = 0;
+    s_dir = exe;
+    len = wcslen(s_dir);
+    dir = (WCHAR*)malloc((len + wcslen(RS_STATE_DIR) + 1) * sizeof(WCHAR));
+    if (!dir) {
+        _snprintf(s_why, sizeof s_why, "no memory to look for tacli-state beside TotalA.exe");
+        return s_by != 0;
+    }
+    memcpy(dir, s_dir, len * sizeof(WCHAR));
+    wcscpy(dir + len, RS_STATE_DIR);
+    at = GetFileAttributesW(dir);
+    err = at == INVALID_FILE_ATTRIBUTES ? GetLastError() : 0;
+    free(dir);
+    if (at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY))
+        s_by |= RS_BY_FOLDER;
+    else if (at != INVALID_FILE_ATTRIBUTES)
+        _snprintf(s_why, sizeof s_why, "tacli-state beside TotalA.exe is a file, not a folder");
+    else if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+        _snprintf(s_why, sizeof s_why, "no tacli-state folder beside TotalA.exe");
+    else
+        _snprintf(s_why, sizeof s_why, "tacli-state beside TotalA.exe could not be looked at "
+                  "(error %lu), which is not a sign of a test folder", (unsigned long)err);
+    s_why[sizeof s_why - 1] = 0;
+    return s_by != 0;
+}
+
+/* Test mode, and something it needs is not there: the game is not run. Logged first. */
+static void rs_refuse_run(const char* by, const char* what)
+{
+    tagpu_logf("registry: TEST MODE, entered by %s, but %s: the game is not run", by, what);
+    TerminateProcess(GetCurrentProcess(), 1);
+}
+
+void tagpu_regstore_init(void)
+{
+    const char* by;
+    char what[160];
+    DWORD at, aterr;
+    size_t dir;
+    HMODULE w32;
+    int nvalues, regs, ours, wregs = 0, wours = 0;
+
+    if (!s_by) {
+        tagpu_logf("registry: real (no " RS_TOKEN_A " token, and %s)", s_why);
         return;
     }
-    dir = (size_t)(slash - exe) + 1;
+
+    /* TEST MODE from here: whatever it needs and does not find ends the process. */
+    by = s_by == (RS_BY_TOKEN | RS_BY_FOLDER) ? "the " RS_TOKEN_A " token and the tacli-state folder"
+       : s_by == RS_BY_TOKEN ? "the " RS_TOKEN_A " token"
+       : "the tacli-state folder beside TotalA.exe";
+    s_active = 1;
+    InitializeCriticalSection(&s_lock);
+    if (!s_dir) rs_refuse_run(by, s_why);
+    dir = wcslen(s_dir);
     s_file = (WCHAR*)malloc((dir + wcslen(RS_FILE) + 1) * sizeof(WCHAR));
     s_tmp  = (WCHAR*)malloc((dir + wcslen(RS_TMP) + 1) * sizeof(WCHAR));
-    if (!s_file || !s_tmp) {
-        tagpu_log("registry: real (no memory to look for the store)");
-        free(exe);
-        return;
-    }
-    memcpy(s_file, exe, dir * sizeof(WCHAR));
-    memcpy(s_tmp, exe, dir * sizeof(WCHAR));
+    s_keys = (RS_KEY*)calloc(RS_MAX_KEYS, sizeof *s_keys);
+    if (!s_file || !s_tmp || !s_keys) rs_refuse_run(by, "there is no memory for the store");
+    memcpy(s_file, s_dir, dir * sizeof(WCHAR));
+    memcpy(s_tmp, s_dir, dir * sizeof(WCHAR));
     wcscpy(s_file + dir, RS_FILE);
     wcscpy(s_tmp + dir, RS_TMP);
-    free(exe);
 
     at = GetFileAttributesW(s_file);
     aterr = at == INVALID_FILE_ATTRIBUTES ? GetLastError() : 0;
-    if (aterr == ERROR_FILE_NOT_FOUND || aterr == ERROR_PATH_NOT_FOUND) {
-        tagpu_log("registry: real (no tacli-state\\registry.txt beside TotalA.exe)");
-        return;
+    if (aterr == ERROR_FILE_NOT_FOUND || aterr == ERROR_PATH_NOT_FOUND)
+        rs_refuse_run(by, "there is no tacli-state\\registry.txt beside TotalA.exe");
+    if (aterr) {
+        _snprintf(what, sizeof what, "tacli-state\\registry.txt could not be looked at (error %lu)",
+                  (unsigned long)aterr);
+        what[sizeof what - 1] = 0;
+        rs_refuse_run(by, what);
     }
-
-    /* TEST MODE from here: whatever fails below fails closed -- the store is served from
-       memory and never written back, or the process does not run at all. */
-    s_active = 1;
-    InitializeCriticalSection(&s_lock);
-    s_keys = (RS_KEY*)calloc(RS_MAX_KEYS, sizeof *s_keys);
-    if (!s_keys) {
-        tagpu_log("registry: TEST MODE, but no memory for the store: the game is not run");
-        TerminateProcess(GetCurrentProcess(), 1);
-    }
-    nvalues = 0;
-    if (aterr || (at & FILE_ATTRIBUTE_DIRECTORY)) {
-        whole = 0;
-        tagpu_logf("registry: tacli-state\\registry.txt is there but not a readable file (attributes "
-                   "0x%lX, error %lu)", (unsigned long)at, (unsigned long)aterr);
-    } else {
-        whole = rs_load(&nvalues);
-    }
-    s_writable = whole;
+    if (at & FILE_ATTRIBUTE_DIRECTORY)
+        rs_refuse_run(by, "tacli-state\\registry.txt is a folder, not a file");
+    if (!rs_load(&nvalues))
+        rs_refuse_run(by, "tacli-state\\registry.txt did not load whole (the line above says why)");
     s_dirty = 0;
 
     rs_hook(GetModuleHandleW(NULL));
     rs_count(GetModuleHandleW(NULL), &regs, &ours);
     if (!regs || ours != regs) {
-        tagpu_logf("registry: TEST MODE, but %d of TotalA.exe's %d registry imports are not answered "
-                   "by the store: the game is not run", regs - ours, regs);
-        TerminateProcess(GetCurrentProcess(), 1);
+        _snprintf(what, sizeof what, "%d of TotalA.exe's %d registry imports are not answered by "
+                  "the store", regs - ours, regs);
+        what[sizeof what - 1] = 0;
+        rs_refuse_run(by, what);
     }
-    if ((w32 = GetModuleHandleW(L"win32.dll")) != NULL) {
-        rs_hook(w32);
-        rs_count(w32, &wregs, &wours);
+    /* win32.dll is a static import of TotalA.exe, so the loader has mapped it before any
+       DllMain runs; one that is not there now would load later with its imports unhooked. */
+    if ((w32 = GetModuleHandleW(L"win32.dll")) == NULL)
+        rs_refuse_run(by, "win32.dll, a static import of TotalA.exe, is not loaded at attach");
+    rs_hook(w32);
+    rs_count(w32, &wregs, &wours);
+    if (wours != wregs) {
+        _snprintf(what, sizeof what, "%d of win32.dll's %d registry imports are not answered "
+                  "by the store", wregs - wours, wregs);
+        what[sizeof what - 1] = 0;
+        rs_refuse_run(by, what);
     }
-    tagpu_logf("registry: TEST MODE -- TotalA.exe's registry is tacli-state\\registry.txt: %d keys, %d "
-               "values loaded%s; hooks: TotalA.exe %d of %d registry imports, win32.dll %s%d of %d",
-               s_nkeys, nvalues, whole ? "" : " (NOT WHOLE: served as read, never written back)",
-               ours, regs, w32 ? "" : "(not loaded) ", wours, wregs);
+    tagpu_logf("registry: TEST MODE, entered by %s -- TotalA.exe's registry is "
+               "tacli-state\\registry.txt: %d keys, %d values loaded; hooks: TotalA.exe %d of %d "
+               "registry imports, win32.dll %d of %d",
+               by, s_nkeys, nvalues, ours, regs, wours, wregs);
 }
 
 int tagpu_regstore_active(void)

@@ -6,9 +6,10 @@ eye files, the lever files, the trigger/result pairs, the `.ab` captures, `log\\
 and the DLL on Windows reads and writes the same files. So a remote instance is a
 game folder on another machine plus a way to read and write files there, list its
 processes and start a scheduled task. TA's registry is one of those files too: in a
-test folder the DLL answers the game's registry calls from `tacli-state\\registry.txt`
-(tagpu_regstore.h), so nothing here writes the remote machine's registry. This module
-is that way; tacli routes its verbs through it (`research/notes/tacli-design.md`,
+test launch the DLL answers TotalA.exe's registry calls from `tacli-state\\registry.txt`
+(tagpu_regstore.h), so TA's settings key on the remote machine is never written, and
+nothing here writes a registry value. (What the hooks do not reach, the Task Scheduler's
+own records among it, is listed there.) This module is that way; tacli routes its verbs through it (`research/notes/tacli-design.md`,
 "Remote instances").
 
 THE TRANSPORT is one PowerShell per tacli command: `ssh <user>@<host> powershell
@@ -834,17 +835,17 @@ class Remote:
         """Start TotalA.exe from the test folder on the console user's desktop. A process
         started from the SSH session runs where nobody can see it; a scheduled task with
         an interactive principal runs on the desktop, and needs no password. The action
-        is the game itself, with the test folder as its working directory.
+        is the game itself, with the test folder as its working directory and TEST_TOKEN
+        first on its command line: the DLL's sign of a test launch (tagpu_regstore.h).
 
         `-Priority 4` is NORMAL_PRIORITY_CLASS: a task's default, 7, is below normal,
         and the game inherits it -- every frame time measured on it would be a
         below-normal process's."""
         path, name = self.task_parts()
-        argline = " ".join(argv)
+        argline = " ".join([TEST_TOKEN] + list(argv))
         self.run([
             f"$a = New-ScheduledTaskAction -Execute {ps_str(ntpath.join(self.folder, 'TotalA.exe'))} "
-            f"-WorkingDirectory {ps_str(self.folder)}"
-            + (f" -Argument {ps_str(argline)}" if argline else ""),
+            f"-WorkingDirectory {ps_str(self.folder)} -Argument {ps_str(argline)}",
             f"$pr = New-ScheduledTaskPrincipal -UserId {ps_str(self.console_user)} "
             f"-LogonType Interactive",
             "$st = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) "
@@ -874,11 +875,24 @@ class Remote:
         path, _, name = self.task.rpartition("\\")
         return (path + "\\") if path else "\\", name
 
-    def task_remove(self):
+    def task_remove(self) -> str:
+        """Remove this instance's task, then the task folder TASK_DIR when nothing is left
+        in it (no task, hidden ones included, and no subfolder). The answer says what
+        happened to the folder; a folder that could not be removed is reported, not
+        fatal: the instance's own task is gone either way."""
         path, name = self.task_parts()
-        self.run([f"$t = Get-ScheduledTask -TaskPath {ps_str(path)} -TaskName {ps_str(name)} "
-                  f"-ErrorAction SilentlyContinue; if ($t) {{ Unregister-ScheduledTask "
-                  f"-TaskPath {ps_str(path)} -TaskName {ps_str(name)} -Confirm:$false }}"])
+        folder = TASK_DIR.strip("\\")
+        out = self.run([
+            f"$t = Get-ScheduledTask -TaskPath {ps_str(path)} -TaskName {ps_str(name)} "
+            f"-ErrorAction SilentlyContinue; if ($t) {{ Unregister-ScheduledTask "
+            f"-TaskPath {ps_str(path)} -TaskName {ps_str(name)} -Confirm:$false }}",
+            f"$__s = New-Object -ComObject Schedule.Service; $__s.Connect(); $__f = @($__s."
+            f"GetFolder('\\').GetFolders(0) | Where-Object {{ $_.Name -eq {ps_str(folder)} }}); "
+            f"if ($__f.Count -ne 1) {{ Write-Output 'absent' }} elseif ($__f[0].GetTasks(1).Count "
+            f"-ne 0 -or $__f[0].GetFolders(0).Count -ne 0) {{ Write-Output 'kept' }} else {{ try "
+            f"{{ $__s.GetFolder('\\').DeleteFolder({ps_str(folder)}, 0); Write-Output 'removed' "
+            f"}} catch {{ Write-Output ('not removed: ' + $_.Exception.Message) }} }}"])
+        return out[-1] if out else "absent"
 
     def priority(self, pid: int) -> str:
         """The priority class of a running process, as Windows names it."""
@@ -927,13 +941,14 @@ class Remote:
         return RegStore.from_listing(out)
 
     def dll_has_test_mode(self) -> bool:
-        """Whether the test folder's ddraw.dll serves the registry from the store: the
-        line only tagpu_regstore.c logs is in its bytes (read on the far side, latin-1,
-        so every byte is one character)."""
+        """Whether the test folder's ddraw.dll is one tacli may launch: every line of
+        TEST_MODE_MARKS is in its bytes (read on the far side, latin-1, so every byte is
+        one character)."""
         dll = ps_str(ntpath.join(self.folder, "ddraw.dll"))
-        out = self.run([f"if ([IO.File]::Exists({dll})) {{ Write-Output ([Text.Encoding]::"
-                        f"GetEncoding(28591).GetString([IO.File]::ReadAllBytes({dll})).Contains("
-                        f"{ps_str(TEST_MODE_MARK.decode('ascii'))})) }} else {{ Write-Output 'False' }}"],
+        has = " -and ".join(f"$__t.Contains({ps_str(m.decode('ascii'))})" for m in TEST_MODE_MARKS)
+        out = self.run([f"if ([IO.File]::Exists({dll})) {{ $__t = [Text.Encoding]::GetEncoding(28591)."
+                        f"GetString([IO.File]::ReadAllBytes({dll})); Write-Output ({has}) }} "
+                        f"else {{ Write-Output 'False' }}"],
                        timeout=120.0)
         return out == ["True"]
 
@@ -944,19 +959,31 @@ TASK_RUNNING = 0x41301          # SCHED_S_TASK_RUNNING
 
 # ---------------------------------------------------------- the registry store
 #
-# TA's registry in a test folder is `tacli-state\registry.txt`: the DLL serves the game's
+# TA's registry in a test launch is `tacli-state\registry.txt`: the DLL serves TotalA.exe's
 # registry calls from it and writes the game's changes back to it (tagpu_regstore.h, which
-# specifies the format; the two must agree byte for byte). `remote add` seeds it by
-# reading the player's key, `launch` puts its test values in it, and nothing of tacli
-# writes the remote machine's registry at all.
+# specifies the format and the limits; the two must agree byte for byte). `remote add`
+# seeds it by reading the player's key, `launch` puts its test values in it, and tacli
+# writes no registry value on the remote machine.
 
 STORE = "registry.txt"
 STORE_ROOT = r"HKCU\Software\Cavedog Entertainment"
 STORE_TA = STORE_ROOT + r"\Total Annihilation"
 REG_SZ, REG_DWORD = 1, 4
-# The line tagpu_regstore.c logs when it serves the registry: a DLL without it would run
-# the game against the real registry, so tacli starts no remote game with one.
-TEST_MODE_MARK = b"registry: TEST MODE"
+# The token every remote launch puts first on TotalA.exe's command line: the DLL's sign
+# of a test launch, which the engine ignores (tagpu_regstore.c, RS_TOKEN).
+TEST_TOKEN = "-xtacli-test"
+# Lines only a DLL that fails closed in test mode and closes the -r switch logs: tacli
+# starts no remote game with a DLL that lacks any of them.
+TEST_MODE_MARKS = (b"registry: TEST MODE, entered by",
+                   b"the -r switch (DirectPlay registration through dsetup.dll) is ignored")
+# The DLL's limits (tagpu_regstore.c): a store past any of them does not load whole, and
+# the game is not run, so RegStore refuses to read or write one.
+STORE_MAX_KEY = 511             # bytes of a key path
+STORE_MAX_NAME = 1023           # bytes of a value name
+STORE_MAX_DATA = 65536          # bytes of a value; an sz's text and its NUL
+STORE_MAX_VALUES = 512          # values of one key
+STORE_MAX_KEYS = 1024           # keys: the root and every key under it
+STORE_MAX_FILE = 4 << 20        # bytes of the file
 _HIVES = {"HKEY_CURRENT_USER": "HKCU"}
 
 
@@ -991,7 +1018,8 @@ def _b(s) -> bytes:
 class RegStore:
     """The keys and values of a registry store, in file order. Key paths and value names
     are the ANSI bytes the game's A functions see, matched without case as the registry
-    matches them; a value is (name, type, data bytes)."""
+    matches them; a value is (name, type, data bytes). The DLL's limits (STORE_MAX_*)
+    hold for every store this class holds: past one, ValueError."""
 
     def __init__(self):
         self._keys = {}         # lower path -> (path, {lower name: (name, type, data)})
@@ -1003,16 +1031,30 @@ class RegStore:
         if not (low == root.lower() or low.startswith(root.lower() + b"\\")) \
                 or b"\\\\" in path or path.endswith(b"\\"):
             raise ValueError(f"{path!r} is not a key under {STORE_ROOT}")
+        if len(path) > STORE_MAX_KEY:
+            raise ValueError(f"a key path of {len(path)} bytes (the DLL takes {STORE_MAX_KEY})")
         cur = path[:len(root)]
+        parts = path[len(root) + 1:].split(b"\\") if len(path) > len(root) else []
+        new = sum(1 for i in range(len(parts) + 1)
+                  if (b"\\".join([cur] + parts[:i])).lower() not in self._keys)
+        if len(self._keys) + new > STORE_MAX_KEYS:
+            raise ValueError(f"more than {STORE_MAX_KEYS} keys (the DLL's limit)")
         self._keys.setdefault(cur.lower(), (cur, {}))
-        for part in (path[len(root) + 1:].split(b"\\") if len(path) > len(root) else []):
+        for part in parts:
             cur += b"\\" + part
             self._keys.setdefault(cur.lower(), (cur, {}))
         return self._keys[low]
 
     def set(self, key, name, kind: int, data: bytes):
-        name = _b(name)
-        self._key(_b(key))[1][name.lower()] = (name, int(kind), bytes(data))
+        name, data = _b(name), bytes(data)
+        if len(name) > STORE_MAX_NAME:
+            raise ValueError(f"a value name of {len(name)} bytes (the DLL takes {STORE_MAX_NAME})")
+        if len(data) > STORE_MAX_DATA:
+            raise ValueError(f"a value of {len(data)} bytes (the DLL takes {STORE_MAX_DATA})")
+        vals = self._key(_b(key))[1]
+        if name.lower() not in vals and len(vals) >= STORE_MAX_VALUES:
+            raise ValueError(f"more than {STORE_MAX_VALUES} values in one key (the DLL's limit)")
+        vals[name.lower()] = (name, int(kind), data)
 
     def set_dword(self, key, name, value: int):
         self.set(key, name, REG_DWORD, (int(value) & 0xFFFFFFFF).to_bytes(4, "little"))
@@ -1044,12 +1086,17 @@ class RegStore:
                 else:
                     spec = f"hex({kind})\t{data.hex()}"
                 lines.append(f"{_esc(path)}\t{_esc(name)}\t{spec}")
-        return ("\r\n".join(lines) + "\r\n").encode("ascii")
+        data = ("\r\n".join(lines) + "\r\n").encode("ascii")
+        if len(data) > STORE_MAX_FILE:
+            raise ValueError(f"a store file of {len(data)} bytes (the DLL takes {STORE_MAX_FILE})")
+        return data
 
     @classmethod
     def parse(cls, data: bytes) -> "RegStore":
-        """The store a file holds; ValueError names the first line that does not parse,
-        as the DLL refuses it (it then serves what parsed and never writes back)."""
+        """The store a file holds; ValueError names the first line that does not parse or
+        the limit it passes, as the DLL refuses it (it then does not run the game)."""
+        if len(data) > STORE_MAX_FILE:
+            raise ValueError(f"a store file of {len(data)} bytes (the DLL takes {STORE_MAX_FILE})")
         store = cls()
         for n, line in enumerate(data.split(b"\n"), 1):
             line = line[:-1] if line.endswith(b"\r") else line
@@ -1132,9 +1179,14 @@ def _read_stmt(p: str, pos: int, want: int) -> str:
 
 
 def _write_stmts(win: str, data: bytes) -> list:
-    """Write `data` whole to `win`: under a temporary name, then moved over it, so a
-    reader never sees half of it."""
+    """Write `data` whole to `win`: under a temporary name, then put in its place so that
+    the name never goes missing -- `[IO.File]::Replace` over a file that is there (never
+    Move-Item -Force, which in Windows PowerShell 5.1 deletes the target and then moves),
+    `[IO.File]::Move` onto a name that is free. A reader sees the old file or the new one,
+    whole. Replace keeps the old one as `.tacli-old` (with no backup name, ReplaceFile's
+    one failure after the swap began leaves the target gone) and that is deleted after."""
     tmp = ps_str(win + ".tacli-tmp")
+    old = ps_str(win + ".tacli-old")
     stmts = []
     view = memoryview(data)
     for off in range(0, max(len(data), 1), CHUNK):
@@ -1145,7 +1197,9 @@ def _write_stmts(win: str, data: bytes) -> list:
             stmts.append(f"$s = [IO.File]::Open({tmp}, 'Append', 'Write'); try {{ "
                          f"$c = [Convert]::FromBase64String('{b64}'); "
                          f"$s.Write($c, 0, $c.Length) }} finally {{ $s.Close() }}")
-    stmts.append(f"Move-Item -LiteralPath {tmp} -Destination {ps_str(win)} -Force")
+    dst = ps_str(win)
+    stmts.append(f"if ([IO.File]::Exists({dst})) {{ [IO.File]::Replace({tmp}, {dst}, {old}); "
+                 f"[IO.File]::Delete({old}) }} else {{ [IO.File]::Move({tmp}, {dst}) }}")
     return stmts
 
 
