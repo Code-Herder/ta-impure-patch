@@ -361,16 +361,29 @@ by a signed delta, an unbounded type, and a signed round-robin remainder:
 `10·[main+0x37EE6]+1` slots with slot 0 a sentinel. The block is assigned at `0x4858A6..0x4858E0` as
 `first = begin + (1 + k·N)·0x118` for player `k`, `last = first + (N−1)·0x118`; that is the shape the
 entry check `0x48B960` verifies (a wild `[player+0x67]` fails it even where a 16-bit delta could not).
-Confirmed live 2026-09-25: player 0 at slot 1, player 1 at slot 1501, player 2 at slot 3001, `N` 1500.
+Confirmed live 2026-09-25 in a four-player game with an AI seat: blocks at slots 1, 1501, 3001, 4501
+and 6001, `N` 1500.
+
+**A wire `0x09` comes from its unit's own player.** The transport sender is the dispatcher's `edi`,
+which `CreateFromNetwork` pushes last (`0x4861EC`), so it is `[esp+0]` at `0x4861F7`. MEASURED
+2026-09-25 on four peers of a tier-2 game (three humans and an AI seat on the host): all 18 011 wire
+creates put the unit in the sender's own block, the player argument always equal to the sender —
+including the AI's, which arrive from the AI's own player record, not from the human hosting it.
 
 **The `0x2C` stream.** `0x48B920` reads `[8] code, [16] size, [32] GameTime` (the bit reader
 `0x415DC0(nbits)`, thiscall `ret 4`, ecx the reader `{u32* buf, u32 dword_idx, u32 bit_idx}`), then a
 dirty list of `[16] delta, [typeBits] type` (typeBits `main+0x14393`) and the move class's payload
 (capped 0x200 bytes at `0x48B7F6`), a `[16] 0xFFFF` terminator, and one round-robin full-state entry
 for slot `GameTime % N` (`0x48B3F0`). A dirty entry whose type differs from its slot creates the unit
-(`0x48BA00 → 0x4861D0`); the round robin creates at `0x48B497`. A type with no move class
-(`def+0x22F != 1`, `0x4862CF`) leaves `[esi]` at 0, so `0x48BA05`/`0x48B4A6` dereference NULL — the
-reason the move-class check and the after-create null-check exist. GameTime is `main+0x38A47`,
+(`0x48BA00 → 0x4861D0`, returning to `0x48BA05`); the round robin creates at `0x48B497` (returning
+to `0x48B49C`). A type with no move class (`def+0x22F != 1`, `0x4862CF`) leaves the mover `[esi]` at
+0, and `0x48BA05` dereferences it — so the **dirty list** checks the move class, which is also the
+sender's own rule (it lists only units with a mover, `0x48B782..0x48B786`). The **round robin**
+carries every unit, structures included, and tests the mover itself before its one use (`0x48B6E8`:
+`[edi] == 0` skips to `0x48B6FC`), so there a type with no move class is well-formed and only the
+type is bounded; its after-create guard is on `[edi+0x9E]`, which `0x48B4A6` writes through
+(DISASSEMBLED; MEASURED 2026-09-25: the AI's structures, types 78 and 112, arrive in the round robin
+on every joiner of a four-peer game). GameTime is `main+0x38A47`,
 incremented at `0x4954C0`; `UNITINFOCount` is `main+0x1438F` (the type bound `[1, count)`).
 
 Locally none of these indices can be 0 (`0x4864B0` writes the live unit's own `+0xA8`, ≥ 1), so only a

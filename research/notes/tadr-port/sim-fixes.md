@@ -278,8 +278,8 @@ The plan as written:
 - Class: local (malformed input only). Tests: the two-peer weapon-ID fixture and a ten-peer tier 2
   run with every counter at 0.
 
-**B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`; commit `3c2cec1`; not landed,
-not reviewed). What was done, and where it deviates from the plan above:
+**B3 BUILT AHEAD 2026-09-25** (worktree-tadr_port_b3, from `e0ba336`; commits `3c2cec1`, `b3c5a83`,
+`569031d`; not landed, not reviewed). What was done, and where it deviates from the plan above:
 
 - **No record-injection lever.** The plan's `tagpu_wirefuzz.on` is dropped. A malformed-message fix
   meets the plan's own evidence bar by disassembly (the identity everywhere else), so instead each
@@ -302,17 +302,31 @@ not reviewed). What was done, and where it deviates from the plan above:
   which read `[player+0x67]`/`[player+0x6B]`. It is the full slot-run shape
   (`begin + (1 + k·N)·0x118`, `k < 10`, ending `N-1` slots on), not just the `!= 0` stock check.
 - **After-create guards `0x48BA05` (S7) and `0x48B49C` (S10)** require the slot now holds the created
-  type and its mover/script object is non-NULL before the parse dereferences it — TADR's 13 field
-  faults at `0x48BA07` and the NULL at `0x48B4A6`.
-- **The `0x09` sender-block rule is NOT shipped.** S1 bounds the index `[1, max]` and the type
-  `[1, count)` only. The plan's "index lies in the sender's block" is present as an **observe-only
-  counter** (`s_wireBlockObs`, a wire `0x09` whose unit index is outside its named owner's own block),
-  not a drop, pending the AI-seat measurement — which **was not answered** (see below).
+  type and, before the parse dereferences it, the dirty create's mover `[[esi]]` or the round robin's
+  `[edi+0x9E]` non-NULL — TADR's 13 field faults at `0x48BA07` and the NULL at `0x48B4A6`.
+- **The move class is checked in the dirty list only**, not in the round robin as the plan's
+  "a move class present" read. The dirty list's sender lists only units with a mover
+  (`0x48B782..0x48B786`), so a type without one there is malformed; the round robin carries every
+  unit, structures included, and tests the mover itself before its one use (`0x48B6E8`), so there it
+  is well-formed and only the type is bounded. The tier-2 run caught the first build refusing the
+  AI's structures (types 78 and 112) at the round robin, three entries per joiner (`569031d`).
+- **The `0x09` sender-block rule is NOT shipped; the question it waited on is answered.** S1 bounds
+  the index `[1, max]` and the type `[1, count)` only. The plan's "index lies in the sender's block"
+  is an **observe-only** count on the heartbeat (`send in`/`out`: whether the created slot lies in the
+  block of the TRANSPORT sender, the dispatcher's `edi`, saved at `[esp+0]`; `argdiff`: a player
+  argument that is not the sender; `unk`: a sender that is no player record), and each sender's first
+  create is logged with its name and block. The tier-2 run below settles the AI-seat question: an AI
+  seat's creates arrive from the AI's own player record, inside its own block. Turning the observe
+  into a drop is a one-line change that needs one more multi-peer run; it is left to the landing.
+- **Records accepted, per receiver**, on the heartbeat's `wire:` section (`in 09 0b 0c 0d 2c dirty
+  create rr`): the evidence each bound ran on real traffic. `0x0B` and `0x0C` count only the
+  dispatcher's call (return `0x455417`/`0x455428`), not the local damage and kill paths that share
+  the function; `0x0D` counts a live shooter whose slot weapon matched.
 - **`0x0D` diverged shooter** dropped in `wpn_rx_fired` via a new read-only accessor
   `tagpu_weapons_slot_weapon` (NULL past the unit's count, no clamp/VIOLATION), only for a live
   shooter.
 
-Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`/`b3h1`/`b3j1`):
+Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j2`, `b3j3`):
 
 - **Self-check** (`tagpu_wirecheck.on`): 16/16 predicate cases OK; install **ARMED**, all 11 stock
   spans matched byte-for-byte, stubs 384 bytes.
@@ -321,19 +335,41 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`/`b3h1`/`b3j1`):
   freeze/crash/desync. The `0x2C` receiver's every-tick paths — entry/block (`0x48B960`), delta
   (`0x48B985`), type-matched skip (`0x48B9AD`), after (`0x48BA05`), unsigned remainder (`0x48BA9F`),
   round-robin type (`0x48B40E`) and after (`0x48B49C`) — ran every tick on both peers with **every
-  drop counter at 0, every oracle at 0, and no `wire robustness:` drop line**. That is 7 of the 10
-  `0x2C`-family sites, the most timing-sensitive (the round robin fires unconditionally each tick and
+  drop counter at 0 and no `wire robustness:` drop line**; morph and ghost read 0 (the recreate oracle
+  could not count on that build — below). That is 7 of the 10 `0x2C`-family sites, the most
+  timing-sensitive (the round robin fires unconditionally each tick and
   the S9→S10 static type carry is exercised each time).
-- **GAP — create/damage/death receivers not reached live.** `0x09` (`0x4861F7`), `0x0C`
-  (`0x4866E5`/`0x486753`), `0x0B` (`0x489CED`), the `0x2C` dirty-create (S6-create), and the `0x0D`
-  drop did not fire: no wire unit creation, death, or inter-peer combat occurred (commanders could not
-  path together on either map; the AI stayed passive/isolated). They rest on the self-check and the
-  disassembly for now. **The completing regression is the ten-peer (or four-peer) tier-2 run**, whose
-  fighting armies flood all receivers; run it at landing with every counter at 0.
-- **GAP — AI-seat question unanswered.** An AI seat on the host works (a lobby slot cycles
-  `AI:B3H1`) and the game ran, but the AI produced no wire `0x09` in the window, so `s_wireBlockObs`
-  has no data. The block rule stays out of the shipped code (observe-only), per the plan's
-  "apply the block rule only after that". Re-run with an active AI (or the tier-2 armies) to settle it.
+- **Tier 2, four peers** (host with an AI seat + three joiners, Town & Country, `limits-tier2-p0..p3`
+  applied one per human peer after `tools/mp_lobby.sh`, 1499 units each, the armies ordered onto the
+  centre; build `569031d`, ddraw.dll md5 `e41dd4166b8253927173f4f22f308558`; every peer paused before
+  reading). **PASS**: every drop counter 0 on every peer, every receiver's accepted count above 0, no
+  `wire robustness:` drop or stop line, no ErrorLog, no crash:
+
+  | peer | ticks | in `09` | `0b` | `0c` | `0d` | `2c` | dirty | create | rr | morph | recreate | ghost | send in / out / argdiff / unk |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | host | 5355 | 4497 | 23540 | 2624 | 27106 | 13348 | 420868 | 3 | 13348 | 0 | 3 | 0 | 4497 / 0 / 0 / 0 |
+  | j1 | 2605 | 4502 | 17568 | 800 | 16068 | 10499 | 245854 | 2 | 10499 | 0 | 4 | 0 | 4502 / 0 / 0 / 0 |
+  | j2 | 5376 | 4506 | 11498 | 2181 | 17784 | 18679 | 413202 | 2 | 18679 | 0 | 4 | 0 | 4506 / 0 / 0 / 0 |
+  | j3 | 5370 | 4506 | 26321 | 2389 | 29816 | 18684 | 402929 | 1 | 18684 | 0 | 4 | 0 | 4506 / 0 / 0 / 0 |
+
+  j1's commander died at tick 2605 and the lobby's default `MultiCommanderDeath` ended its game
+  (ENDMSN, `in_game=0`) — the rule, not a fault; its counters stop there. Every other peer played on.
+  Every `0x09`, `0x0B`, `0x0C`, `0x0D`, `0x2C` dirty-create and round-robin site ran on real traffic,
+  which closes the two-peer runs' gap for the receivers. The drop paths themselves rest on the
+  self-check and the disassembly: a well-formed game sends no malformed record, by construction.
+- **What the run caught, both fixed in `569031d` and re-run to the table above.** On the first build
+  every joiner stopped three round-robin entries (types 78 and 112, the AI's structures — the
+  move-class check that belongs to the dirty list only, above). And the recreate oracle read 0 with
+  dirty creates on the counter: it compared `CreateFromNetwork`'s return address with the call sites
+  `0x48BA00`/`0x48B497` instead of the return addresses `0x48BA05`/`0x48B49C`, so it could never
+  count. It now reads 3 or 4 per peer: the creates the full-state stream made on that peer. morph and
+  ghost stayed 0: no slot changed type under a create, and
+  the engine's ghost sweep never fired.
+- **The AI-seat answer.** On each joiner the AI seat's first create logs as
+  `0x09 from sender 4 (type 3, 'AI:B3H1'), player arg 4, slot 2, sender block 1..1500: in the sender's
+  block`, and across all four peers `send in` equals the accepted `0x09` count (18 011) with `out`,
+  `argdiff` and `unk` at 0. The AI's units reach the joiners as `0x09` from the AI's own record, so the
+  plan's sender-block rule would refuse nothing a well-formed game sends, the AI's included.
 
 **B4 — stale hits.**
 
