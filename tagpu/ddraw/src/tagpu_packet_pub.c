@@ -106,6 +106,7 @@
 #include "tagpu_surf.h"      /* the golden source: TA's composed frame, copied on
                                 THIS thread at the one point it is finished      */
 #include "tagpu_feat.h"      /* whether the mirror wants the map's own features */
+#include "tagpu_datakeys.h"  /* the build ghost's piece masks, computed on THIS thread */
 
 /* DrawGameScreen's prologue, `sub esp,0x214` — the same six bytes
    tagpu_menu.c observes */
@@ -2370,7 +2371,52 @@ static void fill_cursor(TAGPU_PACKET* p)
    in the packet's `truncated` bit. */
 static TAGPU_PK_BUILD s_builds[TAGPU_PK_MAX_BUILDS];
 
-static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
+/* THE GHOSTS' PIECE MASKS: one row per type a ghost may be drawn for this
+   frame that hides a piece — the build cursor's type and every type in the
+   table above whose site is not started yet — sorted by type, because the
+   consumer binary-searches it per ghost. tagpu_datakeys computes each type
+   once a level, so a frame costs a pass over the builds and a cache hit per
+   distinct type. A type is taken ONCE through `s_gmSeen`, which is cleared
+   again from the collected list rather than wholesale. */
+static TAGPU_PK_GHOSTMASK s_gmask[TAGPU_PK_MAX_GHOSTMASK];
+static unsigned           s_gmSeen[TAGPU_LIM_TYPES / 32];
+
+static int gmask_type_cmp(const void* a, const void* b)
+{
+    return (int)((const TAGPU_PK_GHOSTMASK*)a)->type - (int)((const TAGPU_PK_GHOSTMASK*)b)->type;
+}
+
+static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, const char* ta, int nb)
+{
+    static unsigned short types[TAGPU_PK_MAX_BUILDS + 1];
+    unsigned nt = 0, nm = 0, k, over = 0;
+    unsigned cur = RDU16(ta, OFF_BUILDUNITID);
+    if (cur && cur < TAGPU_LIM_TYPES) {
+        s_gmSeen[cur >> 5] |= 1u << (cur & 31);
+        types[nt++] = (unsigned short)cur;
+    }
+    for (k = 0; k < (unsigned)nb; k++) {
+        unsigned t = s_builds[k].type;
+        if (s_builds[k].started || !t || t >= TAGPU_LIM_TYPES) continue;
+        if (s_gmSeen[t >> 5] >> (t & 31) & 1) continue;
+        s_gmSeen[t >> 5] |= 1u << (t & 31);
+        types[nt++] = (unsigned short)t;
+    }
+    for (k = 0; k < nt; k++) {
+        TAGPU_PK_GHOSTMASK row;
+        s_gmSeen[types[k] >> 5] &= ~(1u << (types[k] & 31));
+        if (!tagpu_datakeys_ghost_mask(types[k], &row)) continue;
+        if (nm >= TAGPU_PK_MAX_GHOSTMASK) { over = 1; continue; }
+        s_gmask[nm++] = row;
+    }
+    if (over) p->truncated |= TAGPU_PK_TRUNC_GHOSTMASK;
+    if (!nm) return *cursor;
+    qsort(s_gmask, nm, sizeof s_gmask[0], gmask_type_cmp);
+    return append_table(p, cursor, s_gmask, nm, (unsigned)sizeof(TAGPU_PK_GHOSTMASK),
+                        &p->off_ghostmask, &p->n_ghostmask, TAGPU_PK_TRUNC_GHOSTMASK);
+}
+
+static unsigned fill_builds(TAGPU_PACKET* p, const char* ta, unsigned* cursor)
 {
     unsigned e, need = *cursor;
     int n;
@@ -2381,9 +2427,13 @@ static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
        costs one frame of an unused or an empty table. */
     if (!tagpu_native_want_builds()) return need;
     n = tagpu_order_copy_builds(s_builds, TAGPU_PK_MAX_BUILDS);
-    if (n <= 0) return need;
-    e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
-                     &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);
+    if (n > 0) {
+        e = append_table(p, cursor, s_builds, (unsigned)n, (unsigned)sizeof(TAGPU_PK_BUILD),
+                         &p->off_builds, &p->n_builds, TAGPU_PK_TRUNC_BUILDS);
+        if (e > need) need = e;
+    }
+    /* the cursor ghost needs its mask with no queued build at all */
+    e = fill_ghostmask(p, cursor, ta, n > 0 ? n : 0);
     if (e > need) need = e;
     return need;
 }
@@ -2648,7 +2698,7 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     e = fill_mapfeat(p, &cursor);
     if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */
-    e = fill_builds(p, &cursor);
+    e = fill_builds(p, ta, &cursor);
     if (e > need) need = e;
     /* ---- the effects and the particle layers ---- */
     e = fill_fx(p, ta, &cursor);

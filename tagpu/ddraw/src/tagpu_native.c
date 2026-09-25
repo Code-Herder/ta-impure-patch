@@ -1370,6 +1370,8 @@ static unsigned s_ghostCheck = 0;
 static int   s_ghostLogged = -1;     /* the armed state the log last named */
 static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
 static unsigned s_ghostNoBake = 0, s_ghostTrunc = 0;
+static unsigned s_ghostMasked = 0;   /* ghosts drawn with a mask row          */
+static unsigned s_ghostMaskMiss = 0; /* rows refused: another root or count   */
 static unsigned s_ghostBuilt = 0;    /* queue sites already under construction */
 static int   s_ghostNoDraw = 0;      /* the missing prerequisite was logged */
 
@@ -1476,7 +1478,8 @@ static int ghost_armed(unsigned frame_counter)
 /* the model's piece list, parents first, as the packet would carry it for a
    live unit: one TAGPU_PK_PIECE per template node, at rest (pos and turn 0,
    visible). The tree is the per-type template PK_PIECE.node already
-   dereferences for units — the fenced read, nothing more.
+   dereferences for units — the fenced read, nothing more. The order is
+   tagpu_model_walk's, the one the game thread's ghost mask is written in.
 
    A MODEL THE WALK CANNOT HOLD IS REFUSED, NOT HALVED. Dropping what does not
    fit either cap — the piece count and the stack of pending siblings — and
@@ -1502,38 +1505,37 @@ static int ghost_armed(unsigned frame_counter)
    1 s timeout (thread-safe-destruction.md §6a), which this walk cannot
    close.
 
-   EVERY PIECE IS MARKED VISIBLE, which is the one place the ghost is not the
-   finished building: piece visibility is the COB script's (the live path takes
-   it from the unit's primitives), and no script runs for a preview. A
-   building whose script hides a piece at rest — doors, alternate geometry —
-   therefore shows it in the ghost. Every stock 3DO's full tree is what most
-   previews want, and a trigger in a stock building is unproven; it is a
-   known deviation, stated in gpu-status §2.23, not a hidden one. */
+   Every piece is marked visible here; which ones the ghost hides is the
+   packet's TAGPU_PK_GHOSTMASK, applied by ghost_one. */
 static int ghost_pieces(const char* root, TAGPU_PK_PIECE* out, int max)
 {
-    const char* stack[TAGPU_PBMAXPIECE];
-    int sp = 0, n = 0, over = 0;
-    if (!ptr_ok(root)) return 0;
-    stack[sp++] = root;
-    while (sp > 0) {
-        const char* nd = stack[--sp];
-        const char* ch;
-        if (n >= max) { over = 1; break; }
-        out[n].pos[0] = 0; out[n].pos[1] = 0; out[n].pos[2] = 0;
-        out[n].turn[0] = 0; out[n].turn[1] = 0; out[n].turn[2] = 0;
-        out[n].flags = 1;                     /* visible; bit1 unused here    */
-        out[n].node = (uint32_t)(size_t)nd;
-        n++;
-        for (ch = *(const char* const*)(nd + N_CHILD);
-             ptr_ok(ch);
-             ch = *(const char* const*)(ch + N_SIB)) {
-            if (sp >= TAGPU_PBMAXPIECE) { over = 1; break; }
-            stack[sp++] = ch;
-        }
-        if (over) break;
+    const char* nodes[TAGPU_PBMAXPIECE];
+    int n, i;
+    if (max > TAGPU_PBMAXPIECE) max = TAGPU_PBMAXPIECE;
+    n = tagpu_model_walk(root, nodes, max);
+    if (n < 0) { s_ghostTrunc++; return 0; }
+    for (i = 0; i < n; i++) {
+        out[i].pos[0] = 0; out[i].pos[1] = 0; out[i].pos[2] = 0;
+        out[i].turn[0] = 0; out[i].turn[1] = 0; out[i].turn[2] = 0;
+        out[i].flags = 1;                     /* visible; bit1 unused here    */
+        out[i].node = (uint32_t)(size_t)nodes[i];
     }
-    if (over) { s_ghostTrunc++; return 0; }
     return n;
+}
+
+/* the packet's mask row for model id `mid`, or NULL: the rows are sorted by
+   type, which the packet's validation checks */
+static const TAGPU_PK_GHOSTMASK* ghost_mask_row(const TAGPU_PACKET* pk, unsigned mid)
+{
+    const TAGPU_PK_GHOSTMASK* gm = tagpu_pk_ghostmask(pk);
+    unsigned lo = 0, hi = pk->n_ghostmask;
+    if (!gm) return NULL;
+    while (lo < hi) {
+        unsigned m = lo + (hi - lo) / 2;
+        if (gm[m].type == mid) return &gm[m];
+        if (gm[m].type < mid) lo = m + 1; else hi = m;
+    }
+    return NULL;
 }
 
 /* one ghost: the type's bake, a rest pose, one posed body draw.
@@ -1559,6 +1561,7 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     const char* root;
     const TAGPU_PBGEOM* bg;
     const TAGPU_PBMAT* bm;
+    const TAGPU_PK_GHOSTMASK* gm;
     TAGPU_PDUNIT q;
     int np, i;
 
@@ -1567,6 +1570,16 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
     if (!root) { s_ghostNoBake++; return 0; }
     np = ghost_pieces(root, s_pc, TAGPU_PBMAXPIECE);
     if (np <= 0) { s_ghostNoBake++; return 0; }
+    /* THE PIECES THE FINISHED BUILDING WILL NOT SHOW (the packet's mask). It
+       is applied only to the model it was written for — the same template
+       root and the same node count, both compared as values — so a row that
+       does not describe this walk costs the ghost its mask, never a piece. */
+    gm = ghost_mask_row(pk, mid);
+    if (gm && (gm->root != (uint32_t)(size_t)root || gm->npieces != (unsigned)np)) {
+        s_ghostMaskMiss++;
+        gm = NULL;
+    }
+    if (gm) s_ghostMasked++;
     /* owner = the human whose cursor this is: the material's team-coloured
        frames, so the ghost shows the model exactly as the player's built
        unit will look. ghost=1 keys the bake APART from the units' entries:
@@ -1605,7 +1618,13 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
        root: ghost_pieces emits parents before children, so piece 0 is it. A
        chain in which nothing but the base turns collapses to ONE rotation
        about the root's own rest point, which is what this loop writes
-       directly rather than walking the tree a second time. */
+       directly rather than walking the tree a second time.
+
+       A hidden piece takes posed_pose's form for one: an all-zero matrix,
+       which collapses its triangles, and visibility 0. Its children keep
+       their own matrices, as the engine keeps drawing a hidden piece's
+       children. `bg->nparts` is the `np` pieces the bake was given, so bit
+       i of the mask is part i. */
     {
         static const unsigned short bt[3] = { 0, 0x8000u, 0 };  /* X, Y, Z */
         const float* r0 = bg->restOff[0];
@@ -1626,6 +1645,10 @@ static int ghost_one(const TAGPU_PACKET* pk, unsigned mid,
             }
             s_shaded[i] = 1;
             s_pvis[i] = 1;
+            if (gm && (gm->bits[i >> 5] >> (i & 31) & 1)) {
+                memset(o, 0, 12 * sizeof *o);
+                s_pvis[i] = 0;
+            }
         }
     }
     memset(&q, 0, sizeof q);
@@ -1702,12 +1725,13 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
        draws. The counters are cumulative, so printing them on
        a frame that drew nothing is exactly as meaningful. */
     if ((frame_counter % 300) == 0) {
-        char b[160];
+        char b[224];
         _snprintf(b, sizeof b,
                   "ghost: curs=%u queue=%u drawn=%u built=%u nobake=%u trunc=%u"
-                  " alpha=%.2f",
+                  " masked=%u maskmiss=%u alpha=%.2f",
                   s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostBuilt,
-                  s_ghostNoBake, s_ghostTrunc, s_ghostAlpha);
+                  s_ghostNoBake, s_ghostTrunc, s_ghostMasked, s_ghostMaskMiss,
+                  s_ghostAlpha);
         nlog(b);
     }
     /* the cursor: the square's own gate — mode 14, and either the band bit or

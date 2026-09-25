@@ -25,6 +25,7 @@
 #include "tagpu_zoom.h"
 #include "tagpu_vpwide.h"
 #include "tagpu_weapons.h"
+#include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
@@ -209,6 +210,13 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            "tagpu_weapons.on" exists; every site byte-matched, all-or-nothing;
            stock units trampoline to the untouched engine functions. */
         tagpu_weapons_init();
+
+        /* tagpu: TADR section C's unit keys (tagpu_datakeys.h). Always on: one
+           observer inside the FBI loader at 0x42BF97, byte-matched, disjoint
+           from every detour above (the extra-weapons loader site is
+           0x42CEF2); it reads keys and writes nothing into the engine. A
+           mismatch skips and logs. */
+        tagpu_datakeys_init();
 
         /* tagpu: the COB script-call oracle. No-op unless
            "tagpu_cobtrace.on" exists; five sites inside the COB engine
