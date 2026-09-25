@@ -4,7 +4,8 @@
 
 Section B brings TADR's fixes for **defects in the stock 3.1 engine** into our stack, as our own
 code, over six landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**, in a
-grill that followed [the evidence pass](sim-fixes-evidence.md). **Nothing is landed yet.** The rules
+grill that followed [the evidence pass](sim-fixes-evidence.md). **Landing B1 is built (2026-09-25) and
+awaits its review; nothing is landed yet.** The rules
 shared by every group are in [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 TADR's "~15 fixes" turned out to be four kinds of change mixed together, and only the first is B:
@@ -56,11 +57,12 @@ before any is written and exits through [the failure report](raised-limits.md#th
 on a mismatch. A fix whose absence only changes a crash, a draw, a message or a malformed input's
 fate is local: skipped with its reason in the `enginefix:` line, as today. **The existing enginefixes
 that change the simulation move to fail-closed with B1**; B1 classifies each of the thirteen by
-the same test. Provisionally: the feature swap on a full pool (`0x423651`), the reclaim's anchor
+the same test. As built in B1: the feature swap on a full pool (`0x423651`), the reclaim's anchor
 mark (`0x423892`), the saved features on the border (`0x43265A`), the restored record's owner
-(`0x4250C0`, `0x425185`), whole build lists and unique sync keys are sim; the sort buffer, the
-terrain window and the composite scratch are draw; the NULL-plot guard and the out-of-memory text
-are local; the weapon IDs already fail closed in the raised build, as rows of the limits table.
+(`0x4250C0`, `0x425185`), whole build lists, the download menus' records, unique sync keys and the
+weapon IDs are sim; the sort buffer, the terrain window and the composite scratch are draw; the
+NULL-plot guard and the out-of-memory text are local. The engine map's *Engine defects we patch*
+gives each one's reason, and the register in `binary-patches.md` tags each row.
 
 **The comparison is the previous build.** A before/after measurement runs the parent commit's DLL,
 built in a scratch checkout, against the new one, each through `tacli --keep-dll`. No `make` flag is
@@ -133,7 +135,47 @@ Each landing meets the evidence bar above, lands its documentation before its re
 reviewed at `high` (every one writes engine state or adds byte patches). Sites below are DIS in
 [the evidence](sim-fixes-evidence.md); the landing re-reads each before writing it.
 
-**B1 — damage.**
+**B1 — damage. Built 2026-09-25, awaiting its review.** What was built, and where it differs from
+the plan below:
+
+- **Built as planned:** the victim caps (both calls wrapped, both list blocks replaced, a frame per
+  call on a depth-indexed stack, the unit set reusable by B2), flak's stub and the loader's floor,
+  `jge` → `jg`, the shear, and the fail-closed install in both builds through the existing report.
+- **Added: a bound on the sort bucket** (`0x47CCA9`). Settling the plan's question showed the bucket
+  is indexed from the unit's position with no bound: inside the grid for every footprint of width 1
+  or more once `jg` holds, one past it for width 0, and stock already reaches one before it for
+  width 0 at the west edge. The column and row are clamped into the grid; exact wherever stock's
+  index is inside. The re-claim `0x47C790` has no bound of its own but reaches only a stamped unit
+  and walks the stamped footprint, so it needs none.
+- **Changed: the shear has no "else clamp".** When both the sheared and the point's own row are off
+  the grid, stock's answer (invisible) stands. Clamping would make a unit beyond the map's edge
+  visible and acquirable, which is TADR's margin — a gameplay change, not a defect.
+- **Classified differently from the provisional list:** flak's divides are **local** (a peer
+  without them faults on the shot, which is not a silent divergence), and the download menus'
+  records are **sim** (they feed the builders' lists and the build menus, as the build lists do).
+  The weapon IDs join the table in the stock-limits build too.
+- **The install.** One table, `tagpu_limits_install`, in both builds: it now refuses two rows over
+  one byte as well, and the report says "engine limits and fixes" ([the failure
+  report](raised-limits.md#the-failure-report)). 156 sites in the raised build (130 + 26), 30 in the
+  stock-limits build.
+- **Measured** on the new build, one peer, the raised and the stock-limits builds alike where both
+  ran: every CORFLAK of `b1-victim-units` lost one hit (the unit-repeat counter 48, the 16 past the
+  cap found three more times each); all 96 wrecks of `b1-victim-features` took one hit (the
+  feature-repeat counter 602); the edge ARMATLAS of `b1-offmap-edge` stamped and shot down within
+  2 s; `north` of `b1-los-shear` shot down on station within 2.5 s; a corrupted expectation of one
+  site (a scratch build, never committed) produced the report and its exit. On the previous build,
+  the same fixtures: 16 of 36 CORFLAK lost 4× their mirror mates, 30 of the 32 wrecks past the 64th
+  were destroyed, the edge ARMATLAS was parked and untouched for 40 s, and `north` hovered 7 s at
+  full HP. The engine map has the numbers.
+- **Not reproduced: flak's zero divide.** Stock acquisition never aimed a flak gun above 29.6°
+  (`b1-flak-overhead`, and an ARMBRAWL flown overhead), so the fix rests on the disassembly; its
+  fallback counter read 0 in every run.
+- **Not run:** the feature cap on two peers (every non-host peer reports feature hits), and
+  resurrection's failure branch (parked: no resurrect verb to drive a few hundred of them). The
+  repair rate was measured flat per repairer, ARMCOM (WorkerTime 300) and ARMCK (80) alike, as the
+  disassembly says.
+
+The plan as written:
 
 - **The victim caps.** Wrap the two calls into `0x49A120`, `0x49A0A9` and `0x49A109`. Each call
   gets its own seen-set: a unit bitset bounded by the array's count, and a feature set keyed by
@@ -249,8 +291,8 @@ reviewed at `high` (every one writes engine state or adds byte patches). Sites b
 - Two stock-fix claims in the Delphi recorder, both inactive for stock content and not yet verified:
   a veteran's damage reduction scaling the kill damage (`0x489C2F`), and a ground transport's
   overload (`0x406789`) (evidence Part 4 §7).
-- Whether a flak gun's trajectory solver returns a pitch inside the zero band for a target
-  overhead (B1 measures it).
+- Where stock acquisition stops aiming a flak gun upward. B1 measured that it never aimed above
+  29.6°, far from the zero band, but did not disassemble the cut-off.
 
 ## Corrections this plan made
 

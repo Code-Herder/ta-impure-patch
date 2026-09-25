@@ -2633,8 +2633,9 @@ static int fix_weapon_ids(void)
    every value are stock's; only the repeats go. The sets live in a frame per call, on a stack
    whose depth the wrapper on both calls of 0x49A120 (0x49A0A9 in 0x499EB0, 0x49A109 in the
    fire spread's 0x49A0C0; no other reference to 0x49A120 exists [call and literal scan of the
-   image]) pushes and pops. An interceptor's tail (0x49A66F) detonates projectiles inside the
-   blast through 0x499EB0 and so nests a call inside the walk's caller; its frame is its own.
+   image]) pushes and pops. After both walks, a weapon with w+0x111 bit 30 (0x49A66F) detonates
+   the projectiles inside its blast through 0x499EB0 (0x49A764), which calls 0x49A120 again
+   from inside it; that call's frame is its own.
 
    THE INVARIANT: one explosion damages a unit at most once and reports a feature at most
    once, and every index is bounded before it is used. It rests on
@@ -3041,17 +3042,19 @@ static int fix_last_cell(void)
     return FIX_TABLE;
 }
 
-/* THE LINE-OF-SIGHT SHEAR [DISASSEMBLED]. UnitInPlayerLOS 0x465AC0(unit, player) (callers
+/* THE LINE-OF-SIGHT SHEAR [DISASSEMBLED]. UnitInPlayerLOS 0x465AC0(player, unit) (callers
    0x40AB11 in the periodic acquisition 0x40AA40, 0x439761, 0x46AF3D, 0x46B5B4, 0x480EE5,
-   0x48BC56, 0x494396, and our order markers through it) tests two points of the unit's box
-   against the player's LOS grid (player +0x7C, width +0x80, height +0x84, in 32-px cells).
+   0x48BC56, 0x494396, and our order markers through it) tests two points of the unit's box,
+   (x + def+0x15E, y + def+0x16E, z + def+0x166) and the same with x + def+0x176 (0x465AFD,
+   0x465BDB), against the player's LOS grid (player +0x7C, width +0x80, height +0x84, in 32-px
+   cells).
    With LosType bit 1 (main+0x14281), 0x465B6A..0x465B93 and again 0x465C04..0x465C2D index it
    at col = x >> 5, row = (z - (y >> 1)) >> 5, the grid being projected by altitude, under an
    unsigned bound: outside it the unit is not visible. A unit whose height is more than twice
    its distance from the north edge -- an aircraft at cruise altitude a few tiles inside it,
    a unit on a hill beside it -- samples a row above the grid and is invisible to every other
    player, so nothing acquires it. Underwater, y < 0, the same happens at the south edge.
-   THE FIX: when the sheared row is outside the grid and the unit's own row, z >> 5, is inside
+   THE FIX: when the sheared row is outside the grid and the point's own row, z >> 5, is inside
    it, the own row is used; otherwise the stock answer stands, so a unit beyond the map's edge
    stays unseen (the margin TADR adds there is a gameplay change, not a defect).
    THE INVARIANT: the grid is read only at a column and a row inside it -- the same unsigned
@@ -3085,7 +3088,7 @@ static int fix_los_shear(void)
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
         0x72, 0x10,                         /* jb in                          */
         0x0F, 0xBF, 0x44, 0x24, 0x1A,       /* movsx eax,word [esp+0x1a]      */
-        0xC1, 0xF8, 0x05,                   /* sar eax,5: the unit's own row  */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
         0x73, 0x05,                         /* jae out                        */
     };                                      /* in: jmp; out: jmp              */

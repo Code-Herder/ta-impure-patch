@@ -271,7 +271,7 @@ nothing sizes or indexes, so raising it costs time, not memory. The raised limit
 TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame.
 
-## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..24]
+## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
 composite scratch frame's writers, with the span tables of the rasterisers under them; the fifth
@@ -283,26 +283,61 @@ where a network game can never start (two unit types with one unit-sync key), on
 of a network game disagree (a weapon with the ID 253, 254 or 255 hitting a feature, which rides
 with the seventh), two in a saved game's load (the features on the map's border are lost, because
 the border mask runs before the restore; and a restored feature's state is written into a wreck
-record it does not own when it did not come back as saved), and the out-of-memory text, which
-blames the disk. `tagpu_patches.c` (`patch_engine_defects`) patches all of them, thirteen fixes, at
-every attach, in both builds: `ddraw.dll` is a static
-import of the exe, so `DllMain` runs before the exe's entry point. The thirteen are independent. Each is skipped, with
-its reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its stub
-cannot be allocated, or its page cannot be made writable. The weapon IDs' fix is the one exception
-in the raised build: the raise rewrites the same sites, so there they are rows of the limits table,
-written with the raise or not at all, and the `enginefix:` line points to the limits line. Each
-patch is the identity on every input the stock code handles correctly. [Binary patches](binary-patches.html) §"Stock engine defects we
-patch" is the one-row-per-bug register. The disassembly is `objdump -d -M intel` of
-`pristine/TotalA.exe.pristine`, and the callers come from an E8/E9 rel32 scan of `.text`. The
-measurements are `tacli` instances on Two Continents at 1024×768 with
-`scenarios/sort-row-overflow.json` (150 Peewees in one line, every foot at the same world z), on
-Lava Run, Coast To Coast and Dark Side at 1920×1080 to 3840×2160, on the camera branch's build
-for the terrain pass, on Town & Country at 1024×768 for the two feature fixes, on Two
-Continents at 1024×768 for the composite scratch, with oversized units made locally from stock
-models (never committed), on Core Prime Industrial Area with the unit types
+record it does not own when it did not come back as saved), the out-of-memory text, which
+blames the disk, and four in combat, landing B1 of [the TADR port's section B](tadr-port/sim-fixes.md):
+an explosion hits a unit found past its twentieth victim, or a feature past its sixty-fourth, once
+for every cell of it in the blast; flak fired nearly straight up divides by zero; a unit whose
+footprint ends on the map's last column or row is parked off the map, where nothing can hit it;
+and a unit whose altitude is more than twice its distance from the north edge falls off the
+line-of-sight grid, so no other player sees it. `tagpu_patches.c` (`patch_engine_defects`)
+patches all of them, seventeen fixes, at every attach, in both builds: `ddraw.dll` is a static
+import of the exe, so `DllMain` runs before the exe's entry point. Each patch is the identity on
+every input the stock code handles correctly.
+
+**Two classes** [DECIDED 2026-09-25, [How B fixes are held](tadr-port/sim-fixes.md#how-b-fixes-are-held)].
+A **simulation** fix is one whose absence would let a player silently compute different shared
+state, on an input stock does not fault on. Its sites are rows of the one fail-closed table the
+raised limits use (`tagpu_limits_install`): the whole table is compared with the retail bytes
+before any site is written, written as a whole or not at all, and a mismatch, a stub that cannot
+be allocated, two rows over one byte, or a refused write ends the process through [the failure
+report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits build as in the
+raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
+malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
+the `enginefix:` log line, when its bytes differ from the retail exe, its stub cannot be
+allocated, or its page cannot be made writable. Each of the seventeen, and why:
+
+| fix | class | why |
+|---|---|---|
+| the sort buffer's end `0x469807` | local | the list feeds `DrawGameScreen`'s draw loops alone |
+| the NULL plot `0x421E60` | local | without it the read through NULL faults |
+| the terrain window `0x484057` | local | a draw, and a fault where stock reads off the tile map |
+| the composite scratch | local | the frame is drawn state; stock writes past it |
+| the out-of-memory text `0x49E700` | local | a message |
+| flak's divides `0x49CF18`, `0x42F314`, `0x42F32E` | local | a player without it faults on the shot, which is not a silent divergence |
+| the full wreck pool `0x423651` | simulation | without it a player keeps a feature the reclaim paid for |
+| the reclaim's anchor mark `0x423892` | simulation | without it a group reclaim pays once per builder |
+| the saved features on the border `0x43265A` | simulation | a loaded game silently lacks the border's features; retail has no saved multiplayer game, so the class follows from what the fix changes, the game's own state |
+| a saved feature's record `0x4250C0`, `0x425185` | simulation | as the border fix |
+| whole build lists `0x42DA58`, `0x42DAC7`, `0x42BEAF`, `0x42BEC3` | simulation | a builder's list is what the AI's pick `0x40BDB0` and the build menu offer |
+| the download menus `0x42DCF0` | simulation | its records feed the builders' lists (`0x42BE30`) and the build menus |
+| unique sync keys `0x42BD29` | simulation | a player without it keeps colliding keys, which the host's walk `0x46D9E3` answers with the first type that has them |
+| weapon IDs `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | simulation | the `0x0F` hit flag is a wire format; in the raised build these are the raise's own rows |
+| one hit a victim an explosion `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | simulation | who is damaged, and how much |
+| the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
+| line of sight at the map's edge `0x465B6A`, `0x465C04` | simulation | what is acquired |
+
+[Binary patches](binary-patches.html) §"Stock engine defects we patch" is the one-row-per-bug
+register. The disassembly is `objdump -d -M intel` of `pristine/TotalA.exe.pristine`, and the
+callers come from an E8/E9 rel32 scan of `.text`. The measurements are `tacli` instances on Two
+Continents at 1024×768 with `scenarios/sort-row-overflow.json` (150 Peewees in one line, every
+foot at the same world z), on Lava Run, Coast To Coast and Dark Side at 1920×1080 to 3840×2160,
+on the camera branch's build for the terrain pass, on Town & Country at 1024×768 for the two
+feature fixes, on Two Continents at 1024×768 for the composite scratch, with oversized units made
+locally from stock models (never committed), on Core Prime Industrial Area with the unit types
 `tools/unittypes_fixture.py` generates for the four large-mod fixes, on Two Continents with the
-weapons `tools/weaponids_fixture.py` generates for the weapon IDs, and on Two Continents with a save
-and its load for the border features. Each compares against a build without the patch.
+weapons `tools/weaponids_fixture.py` generates for the weapon IDs, on Two Continents with a save
+and its load for the border features, and on Two Continents with the `scenarios/b1-*.json`
+fixtures for the four combat fixes. Each compares against a build without the patch.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
@@ -1204,8 +1239,8 @@ from `0x423537`, whenever `0x4233A0` runs with its third argument 0 (callers `0x
 owner, and from `0x405210` in `0x404DB0` [INFERRED: the resurrect order]. A cell is a 16.16
 position shifted right by 20 (`0x4815A0`), so no reachable x passes `0x7FF`.
 
-**The fixes, both builds** (`fix_weapon_ids`; in the raised build they are sites of the limits
-table, *Weapon IDs* in *The raised effect pools*):
+**The fixes, both builds** (`fix_weapon_ids`; rows of the fail-closed table in both builds, and in
+the raised build the raise's own rows, *Weapon IDs* in *The raised effect pools*):
 
 - `0x42E468`: a weapon whose ID is outside the array is skipped and logged, through the loader's
   epilogue `0x42F333`, past its last call `0x49E010(weapon)`, which sets the record's `+0x60` from
@@ -1465,8 +1500,8 @@ below the def count `main+0x14253` of the record's own kind — for an `Animatin
 sorts its records by (`0x4249CF` → `0x424A6E`, `0x4249DC`). Otherwise the stub leaves for the
 loop's next record, `0x4250F7` or `0x4251A7`, where every register but `edi`, `ebx` and `ebp` is
 reloaded. Branches into the sites land only on `0x4250C0` itself (`0x425065`, `0x425083`,
-`0x4250A2`), none inside either stolen instruction [rel8/rel32 scan of `.text`]. If the second
-site cannot be written, the first gets its own bytes back before its stub is freed.
+`0x4250A2`), none inside either stolen instruction [rel8/rel32 scan of `.text`]. Both sites are
+rows of the fail-closed table, so both are written or neither is.
 
 **The invariant**: the restore writes a saved state only into the wreck record that the feature on
 the record's cell owns, of the kind the state was saved from — the record it took in this restore —
@@ -1499,6 +1534,198 @@ fire on a save loaded with its own content.
 **Not closed.** `FeatureDie` follows a `0xFFFE` cell to its anchor (`0x423568..0x42358D`), so a
 refused `Animating` record of mode 1 or 2 whose cell is an indestructible neighbour's footprint
 starts or swaps that neighbour's sequence. That is stock; the gate skips only the write.
+
+### Area damage's victim lists — `0x49A120`, its lists `0x49A262` and `0x49A5CE` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The function.** Area damage `0x49A120(proj, at)` is `__stdcall`, `ret 8`, with an 8-aligned frame
+(`and esp,0xfffffff8` at `0x49A123`). It has exactly two callers: `0x49A0A9` in `0x499EB0` (a
+projectile's detonation, itself called from ten sites: `0x49A764`, `0x49AFEB`, `0x49B074`,
+`0x49B1A9`, `0x49B213`, `0x49B275`, `0x49B3CD`, `0x49BA6F`, `0x49BACC`, `0x49BC70`), and `0x49A109` in
+`0x49A0C0`, whose one caller is the fire spread `0x423BE0`. No literal reference to `0x49A120`
+exists anywhere in the image [call and literal scan]. Its radius is the weapon's `+0xD6` halved
+(`0x49A149`). It walks the cells of the blast's rect twice: the unit walk (two slots a cell, the
+selector `[esp+0x10]` stepped at `0x49A415..0x49A421`, `jle` while it is at most 1), then the
+feature walk (the cell pointer `[esp+0x14]`, stride 13, at `0x49A62B..0x49A645`). The shooter
+itself is skipped (`0x49A259`, `cmp esi,[ebx+0x52]`). After both walks a weapon with `+0x111` bit
+30 (`0x49A66F`) detonates the projectiles inside its blast through `0x499EB0` (`0x49A764`), so the
+function can run inside itself, and sends two `0x0E` (`0x49A7A8`, `0x49A7E9`).
+
+**The defect.** Each walk keeps a list on the stack so that a victim standing on several cells is
+hit once: 20 unit pointers at `[esp+0xA0]` (count `[esp+0x98]`), 64 anchor cells at `[esp+0xF0]`
+(count `[esp+0x9C]`). Each list records only while it has room (`0x49A28F` `cmp ecx,0x14`,
+`0x49A5FA` `cmp esi,0x40`), and the damage runs whether the victim was recorded or not: the unit
+block falls through to its damage at `0x49A2AA`, the feature block to its call of
+`0x4244B0(cell, x, y, weapon)` at `0x49A615..0x49A626`. So a unit found after the twentieth, or an
+anchor after the sixty-fourth, is damaged once per cell of it in the rect — or, on a peer that is not
+the host, a feature hit is sent once per cell ("Who sends a feature hit", above). For a feature
+the repeat count is its cells whose own position is inside the radius, not its cells in the rect:
+at `0x49A4BB` the flags and `+0x0A` come from the current walk cell, so an anchor is measured from
+its record's position (`0x49A850`) and a `0xFFFE` cell from a position derived from the cell itself
+(`0x421EB0`). The anchor's coordinates reach `0x4244B0` from `0x49A457..0x49A46F` (`x − [cell+0x0B]`,
+`z − [cell+0x0A]`).
+
+**MEASURED, previous build** (`scenarios/b1-victim-units.json`: 36 CORFLAK, 2×2, in a mirror-symmetric
+ring round a self-destructed ARMVADER, CRAWL_BLAST): the row-major walk meets exactly 20 of them
+first, and each lost one hit (222–304); each of the 16 found after the twentieth lost exactly four
+times its mirror mate's loss, the 2×2 footprint's cells in the rect. `scenarios/b1-victim-features.json`
+(96 `armcs_dead`, 5×5, 24 000 HP, round a self-destructed ARMCOM, a feature taking 9 999 a call):
+the first 64 in walk order stand at 9 999; of the 32 after them, 30 were destroyed and 2 stand at
+9 999, the two whose other cells all lie beyond the radius.
+
+**The fix** (`fix_victim_caps`, simulation, fail closed). Both calls of `0x49A120` become calls of
+`dmg_area`, a `__stdcall` of the same shape that pushes a seen-set frame, calls `0x49A120` and pops
+it, handing back `eax`. The unit block (72 bytes at `0x49A262`) becomes `push esi; call
+dmg_unit_seen; test eax,eax; jnz 0x49A415; jmp 0x49A2AA`; the feature block (71 bytes at
+`0x49A5CE`) becomes `mov eax,[esp+0x10]; push eax; call dmg_feature_seen; test eax,eax; jnz
+0x49A62B; mov eax,[esp+0x10]; jmp 0x49A615`. A frame holds a bitset over the 65 536 possible unit
+slots and a hash set of anchor ordinals, with no capacity; the damage math, the order of first hits
+and every value stay stock's. Each call sits exactly where stock's list is consulted, so below the
+caps every record and every skip is stock's: the unit block runs on the first cell a unit is found
+on (after the shooter's skip, before its distance and damage at `0x49A2AA`), and the feature block
+only for a cell that passed the distance test at `0x49A5C8` — a feature whose first cell fails the
+test is recorded at its first cell that passes, as stock records it. No branch from outside lands
+inside either block [rel8/rel32 scan of `.text`]; `ebx`, `esi` and `edi` are preserved by the callee, and `eax`, `ecx` and `edx` are dead at
+every exit, as after stock's blocks.
+
+**The invariant**: one explosion damages a unit at most once and reports a feature at most once,
+and every index is bounded before use. A unit is recorded by its slot, `(unit − begin) / 0x118`,
+remainder 0 and below the array's count (`u16 main+0x14351`); an anchor by its ordinal,
+`(cell − grid) / 13`, remainder 0 and below `W·H` (`main+0x14233`, `+0x14237`). A pointer that fails
+either is not damaged, and is counted. A frame is pushed before its call reads it and emptied as it
+is popped, so nesting follows the machine stack. Both callers run on the game thread. The sets grow
+through `0x4D83B0`, whose failure is the engine's own out-of-memory exit. The unit set is what B2
+serves stacked aircraft through.
+
+**MEASURED, new build** (the raised build; the stock-limits build gave the same HP and counter on the
+ring): every CORFLAK of the ring lost one hit, each of the 16 past the twentieth now equal to
+its mirror mate, and the unit-repeat counter read 48, the 16 victims past the cap found three more
+times each; all 96 wrecks stand at 9 999, and the feature-repeat counter read 602. The refused and
+unframed counters stayed 0.
+
+### Flak's two divides — `0x49CDE0`, `0x49CE6A`, `0x49CF19` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The function.** The ballistic fire `0x49CDE0` is called from `0x49D0F8` (the fire dispatch),
+`0x49D44E` (the `0x0D` receiver) and `0x49D76E`, each only for a weapon with `+0x111` bit 1
+(ballistic). It divides twice.
+
+- `0x49CE6A` `div ecx`, `ecx` = `w+0x68`, for every shot. The loader stores `weaponvelocity` there
+  scaled by 65 536/30 (`0x42E4C6` `fmul [0x4FD240]`, the double 2 184.533…; stored at `0x42E4DC`),
+  and nothing else writes it. A ballistic weapon with `weaponvelocity` 0 faults here; no stock
+  weapon has one.
+- `0x49CF19` `idiv ebp`, only for a `burnblow` weapon (`+0x111` bit 23, tested at `0x49CECC`): the
+  flight time is the horizontal distance over `ebp`, which is `TurnZLookup 0x4B7123(pitch, v)` =
+  `v·cos(pitch)` from the 512-entry table at `0x509F00`, 0 at entries 0 and 256 — a pitch within
+  0.35° of straight up or down. The non-burnblow branch `0x49CF29` takes `weapontimer`, `w+0xE6`,
+  instead, with `eax` the weapon as `0x49CEC6` left it. Stock's flak guns (ARMFLAK_GUN,
+  CORFLAK_GUN, ARMYORK_GUN, CORSENT_GUN) are ballistic and burnblow, and the `0x0D` receiver runs the
+  same code, so every peer that receives such a shot would divide.
+
+**The loader's closing call.** `0x49E010(weapon)` (`ret 4`) picks the weapon's aim routine at
+`w+0x60` from its flags: bit 19 → `0x49D580`, bit 4 → `0x49DB70`, bit 0 or bit 20 → `0x49D9C0`, bit 8
+→ `0x49DD60`, and otherwise leaves it. Its only callers are the loader's two exits, `0x42F314` and
+`0x42F32E`.
+
+**MEASURED, previous build** (`scenarios/b1-flak-overhead.json`): the divide was **not reproduced**.
+An AI CORFLAK never aimed at an ARMATLAS held exactly overhead, nor at one 30–40 wu to the side at
+67° and above, in 30 s; at 31° it engaged at once. An ARMBRAWL flown straight over it raised the aim
+to 28.9° and froze it while overhead. The highest pitch seen while firing was 29.6°. So stock
+acquisition does not approach the zero band in these runs, and the fix rests on the disassembly.
+Where acquisition cuts off was not disassembled.
+
+**The fix** (`fix_flak_divides`, local). `0x49CF18..0x49CF20` (`cdq; idiv ebp; mov edx,[0x511DE8]`)
+jumps to a stub that divides as stock when `ebp ≠ 0`, and otherwise takes `weapontimer` through
+`0x49CF29` and counts the fallback (logged for the first 8 and every power of two). The loader's two
+calls of `0x49E010` go through a stub that first gives a ballistic weapon whose `w+0x68` is 0 the
+value 1, and logs it. No branch from outside lands in `0x49CF19..0x49CF20` but stock's own
+`0x49CF15` and `0x49CF8F`, which the scan's byte-level decoding reports and the disassembly shows are
+operands, not branches. **The invariant**: no divide in `0x49CDE0` sees a zero divisor. It is local:
+a peer without it faults on the shot rather than diverging silently. MEASURED on the new build: the
+flak shot down an ARMATLAS moved beside it (pitch 4 331), and no fallback was counted.
+
+### The grid stamp's last column and row — `0x47CC30`, `0x47CC8B`, `0x47CCA3`, `0x47CCA9` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The stamp.** `0x47CC30(unit)` writes a unit's footprint into the feature grid's unit slots and
+files it in a 128-px sort bucket. Its callers are `0x43DA41` (the motion relink, after its clear
+`0x47D0E0`), `0x48610F`, `0x48630C`, `0x48AA9A` and `0x48B6B9`. It reads the footprint origin
+`X = +0x76`, `Z = +0x78` and the footprint `fw`, `fh` from `+0x7E`. A unit with `X < 0` or `Z < 0`
+(`0x47CC5E`, `0x47CC6B`), `X + fw ≥ W` (`0x47CC85`/`0x47CC8B` `jge`) or `Z + fh ≥ H`
+(`0x47CCA1`/`0x47CCA3` `jge`) goes to `0x47D079`, which files it in the off-map bucket
+`main+0x142B7` and stamps no cell. The last two are one past: a footprint that ends on the last
+column or row, every cell of it on the map, is parked, and a parked unit holds no cell, so area
+damage and the direct-hit test never find it. Ground units never stand there (LoadMap masks the
+border with `0xFFFD`); an aircraft over the east or south edge does.
+
+**What `jg` needs** (settled before landing):
+
+- The cell walk starts at `(Z·W + X)·13` (`0x47CD31..0x47CD4A`) and covers `fh` rows of `fw`
+  cells: with `X + fw ≤ W` and `Z + fh ≤ H`, every cell is inside the grid. The clear `0x47D0E0`
+  decides by the bucket (`0x47D0FD`) and walks the same cells. The re-claim `0x47C790` has **no map
+  bound of its own**, but reaches only a stamped unit (`+0x110` bit 27, which only the stamp sets)
+  and walks the stamped footprint from `0x481550(X, Z)` with a stride of `W − fw`. Every writer of
+  `+0x76` clears first (`0x43DA0F`, `0x48AA6B`, `0x48B685`).
+- **The sort bucket is taken from the position, not the footprint, with no bound**
+  (`0x47CCA9..0x47CCDA`): column `x >> 23`, row `z >> 23`, index `row·cols + col`, 10 bytes a bucket
+  from `main+0x1429F`. LoadMap sizes the grid `ceil(16W/128) × ceil(16H/128)` into `main+0x142A3`
+  (columns) and `+0x142A7` (rows) at `0x482C84..0x482CA6`. Every writer of the footprint computes
+  `X = (x − 8·fw + 8) >> 4` in pixels (`0x43D877..0x43D895`, `0x485BA3..0x485BC7`,
+  `0x48AA24..0x48AA32`), so `X + fw ≤ W` gives `x < 16W − 8·fw + 8`: inside the bucket grid for
+  `fw ≥ 1`, every stock footprint, and one bucket past its end for `fw = 0`. Stock itself already
+  indexes a bucket before the grid for `fw = 0` near the west edge.
+
+**MEASURED, previous build** (`scenarios/b1-offmap-edge.json`: two ARMATLAS, `fw` 3, hovering at the
+east edge of Two Continents, `W` 672): the one at `X = 669` (cells 669–671) was in the off-map bucket
+on every sample and held 150 of 150 HP for 40 s in range of an AI CORFLAK, which shot the one at
+`X = 668` within 12 s.
+
+**The fix** (`fix_last_cell`, simulation, fail closed): `jge` → `jg` at `0x47CC8B` and `0x47CCA3`, and
+the 50-byte bucket block at `0x47CCA9` replaced by a jump to a stub that clamps the column into
+`[0, cols − 1]` and the row into `[0, rows − 1]` and leaves `edx` (the bucket), `eax` (`[esi+0x82]`)
+and `[esp+0x20]` (y) as stock does, rejoining at `0x47CCDB`. No branch from outside lands inside the
+block [rel8/rel32 scan; the four hits the byte-level scan reports are operands]. **The invariant**: a
+unit is parked only when a cell of its footprint is off the map, and every bucket index the stamp
+forms is inside the grid LoadMap sized — exact whenever stock's index is inside it. MEASURED on the
+new build: the edge ARMATLAS was stamped (`+0x82` not the off-map bucket) and both were shot down
+within 2 s.
+
+### Line of sight at the map's edge — `UnitInPlayerLOS 0x465AC0`, `0x465B6A`, `0x465C04` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The function.** `0x465AC0(player, unit)`, `__stdcall`, `ret 8`, has seven callers: `0x40AB11`
+(in the periodic acquisition `0x40AA40`), `0x439761`, `0x46AF3D`, `0x46B5B4`, `0x480EE5`,
+`0x48BC56` and `0x494396`; our order markers call it too. A unit of the player's own is visible
+(`0x465AD4`); one with `+0x10E` bit 2 is not. It tests two points of the unit's box, 16.16 dwords at
+`[esp+0x10]` (x), `+0x14` (y) and `+0x18` (z): `(x + def+0x15E, y + def+0x16E, z + def+0x166)`
+(`0x465AFD..0x465B3B`, `def` the unit's type at `+0x92`), then the same with `x + def+0x176`
+(`0x465BDB..0x465BED`) when the first is not visible. With `LosType` bit 1 (`main+0x14281`, True or Circular
+line of sight) each point indexes the player's LOS grid (`+0x7C`, width `+0x80`, height `+0x84`,
+32-px cells) at `col = x >> 5` and `row = (z − (y >> 1)) >> 5` (`0x465B6A..0x465B93` and
+`0x465C04..0x465C2D`), the grid being projected by altitude, under unsigned bounds; outside them the
+point is not visible (`0x465BB1`, `0x465C49`). Without bit 1 it asks `0x408090`.
+
+**The defect.** The row is the box's north edge less half the box's absolute top, so a unit whose
+top is more than twice its distance from the north edge — an aircraft at cruise altitude a few
+tiles inside it, a unit on a hill beside it — samples a row above the grid and is invisible to every
+other player, so nothing acquires it: at altitude 175 over ground at 84 the row is negative until
+z is about 100. Underwater, `y < 0`, the same happens at the south edge. The AI's own acquisition
+does not go through this test: an AI CORFLAK shot a human ARMATLAS hovering at z 40.
+
+**MEASURED, previous build** (`scenarios/b1-los-shear.json`, True LOS: two AI ARMATLAS held on
+station by re-issued patrols, `north` at z 40 and altitude 175, `control` at z 330, a human CORFLAK
+between them and a human spotter beside `north`): the flak shot `control` at once and held its aim
+there while `north` hovered on station for about 7 s at 150 of 150 HP, in range and inside the
+spotter's lit radius; when the AI dragged it south past z 84 the flak swung north and shot it within
+0.6 s.
+
+**The fix** (`fix_los_shear`, simulation, fail closed): each 43-byte block becomes a jump to a stub
+that computes stock's column and sheared row; with the column out of bounds it leaves invisible;
+with the row in bounds it continues at stock's read (`0x465B95`, `0x465C2F`); otherwise it takes
+the point's own row, `z >> 5`, and reads there if that is in bounds. Otherwise stock's answer stands,
+so a unit beyond the map's edge stays unseen: TADR's margin there is a gameplay change, not a
+defect. **The invariant**: the grid is read only at a column and a row inside it. It is exact
+whenever stock's row is inside the grid. No branch from outside lands inside either block but
+stock's `0x465B07` and `0x465B45`, which are operands [the same scan].
+
+**MEASURED, new build**, the same fixture and driver: `north` was shot down on station, at z 40.1,
+within 2.5 s, with `control`.
 
 ## Built-in cheat/console command surface
 
