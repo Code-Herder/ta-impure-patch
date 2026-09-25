@@ -371,10 +371,29 @@ static const char* FS =
        the ones the generated header printed before it */
     TAGPU_GLSL_EDGE_UNIFORMS
     "uniform int uClip;\n"            /* 1 while the mirror draws (below) */
+    "uniform float uNudgeW;\n"        /* TAGPU_EDGE_NUDGE / zoom, world px  */
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_EDGE_FN
     "void main(){\n"
     "  int m = int(vCM.y + 0.5);\n"
+    /* THE FOLDS ARE THE GROUND'S, AND SO IS EVERY SAMPLE ON ONE. The terrain
+       puts every fold -- the map's four edges and each copy's own x = q W --
+       at the fold less e on screen, e = TAGPU_EDGE_NUDGE / zoom world px (the
+       shared corner keeps the map's nudge, tagpu_terr.c), so a sample belongs
+       to the side its point moved by e lies on. Every clip below tests that
+       point, `s`, never vWorld itself: at the 0.25x floor every sample centre
+       is a whole world px, so with the eye's parity a whole column or row of
+       samples lies ON a fold, where vWorld alone would sit on the line and
+       take whichever side the interpolation's rounding gave it. THE MARGIN IS
+       THE INVARIANT: a sample on a fold is e from the line -- 1/8 world px at
+       the floor, 128 ulps of a world coordinate under 16 384, and at every
+       zoom 8 ss times the rasteriser's snap of the ground's own edge (1/256 of
+       a framebuffer px, subPixelPrecisionBits 8, as the reference setup's GPU
+       and llvmpipe report). What the margin cannot decide is a sample that lies
+       within that snap of the line without lying on a fold, which only a zoom
+       whose samples fall off the world's px lattice can produce: the line is
+       the ground's, its rounding is not. */
+    "  vec2 s = vWorld + vec2(uNudgeW);\n"
     /* THE MAP EDGE'S MIRROR (TAGPU_FEAT_MIRROR): the same texels in the edge's
        tone and nothing else -- no fog of war and no light, as for the mirrored
        ground under it (tagpu_terr.c). EACH COPY OF THE MAP DRAWS ONLY IN ITS
@@ -385,12 +404,13 @@ static const char* FS =
        -- a mirrored tree just south of the edge stands in FRONT of the last
        rows by the painter's order -- or, in a corner, the side copy that is
        the reflection of that map. vWorld is the sample's own point on the tile
-       grid (the gather moves the quad, not the point). The hole is the base
-       atlas's, as below. */
+       grid (the gather moves the quad, not the point), and `s` is it moved to
+       the ground's side of a fold (above). The hole is the base atlas's, as
+       below. */
     "  if ((m & " FEAT_S(TAGPU_FEAT_MIRROR) ") != 0) {\n"
     "    float x0 = float((m >> " FEAT_S(TAGPU_FEAT_COPY_SHIFT) ") - " FEAT_S(TAGPU_FEAT_COPY_BIAS) ") * uMapPx.x;\n"
-    "    if (vWorld.x < x0 || vWorld.x >= x0 + uMapPx.x) discard;\n"
-    "    if ((m & " FEAT_S(TAGPU_FEAT_OFFROW) ") != 0 && vWorld.y >= 0.0 && vWorld.y < uMapPx.y) discard;\n"
+    "    if (s.x < x0 || s.x >= x0 + uMapPx.x) discard;\n"
+    "    if ((m & " FEAT_S(TAGPU_FEAT_OFFROW) ") != 0 && s.y >= 0.0 && s.y < uMapPx.y) discard;\n"
     "    vec4 mb = texture(uBase, vUV);\n"
     "    if (mb.a < 0.5) discard;\n"
     "    vec4 mt = uRestored == 1 ? texture(uAtlasRGB, vUV) : vec4(0.0);\n"
@@ -403,7 +423,7 @@ static const char* FS =
        would cover the reflection of the tree itself. Past the top and bottom
        the copies stand upright, not reflected, so the painter's order stands
        there and the overhang is kept. Under a black edge nothing is clipped. */
-    "  if (uClip == 1 && (vWorld.x < 0.0 || vWorld.x >= uMapPx.x)) discard;\n"
+    "  if (uClip == 1 && (s.x < 0.0 || s.x >= uMapPx.x)) discard;\n"
     /* features are terrain furniture: the engine draws them under the fog
        overlay, so they stay visible in grey */
     TAGPU_GLSL_FOG_DISCARD
@@ -549,20 +569,28 @@ static void emit_frame(const TAGPU_FXVIEW* v, const unsigned char* g, int sx, in
     ub = flip ? e->u0 : e->u1;
     /* ONE TIE RULE FOR EVERY SPRITE, BY ITS OWN TEXEL GRID. The corners lie on
        whole game px, so a sample centre can fall exactly on a texel boundary --
-       every one does at the 0.25x floor, where every sample centre lands on a
-       whole world px -- and there the texel NEAREST reads, and whether the quad covers the
-       sample at all, would be the rounding's: it follows where the frame sits
-       in the atlas, and a turned quad rounds the other way from an upright one.
-       So every quad moves by TAGPU_EDGE_NUDGE after the zoom, as the terrain's
-       do (tagpu_glsl.h), and a sample on a boundary lies 1/32 px inside the
-       texel after it. An upright quad moves up and left. A TURNED one moves
-       right, because its texels run the other way: its sample at a' then reads
-       the source's texel under r(a') + e, the one the map's own sprite reads at
-       r(a'), so a mirrored sprite is its source's texels reflected. Where no
-       sample lies on a boundary nothing changes: at 1x a sample is 1/4 px
-       (ss=2) or 1/2 px (ss=1) inside its texel, more than the nudge. The world
-       corners below are taken from the moved quad, so vWorld stays the
-       sample's own point for the fog lookup and the edge's clips. */
+       at the 0.25x floor every sample centre is a whole world px -- and there
+       the texel NEAREST reads, and whether the quad covers the sample at all,
+       would be the rounding's: it follows where the frame sits in the atlas,
+       and a turned quad rounds the other way from an upright one. So every
+       quad moves by TAGPU_EDGE_NUDGE after the zoom, as the terrain's do
+       (tagpu_glsl.h): an upright one up and left, a TURNED one right, because
+       its texels run the other way -- its sample at a' then reads the source's
+       texel under r(a') + e, the one the map's own sprite reads at r(a'), so a
+       mirrored sprite is its source's texels reflected.
+       IT IS A 1/32-PX SHIFT AT EVERY ZOOM, the ground's own: every sample reads
+       the texel under its point plus e = NUDGE / zoom world px. On the dyadic
+       zooms from 0.5x to 8x no sample lies within e before a texel boundary (at
+       1x a sample is 1/4 world px inside its texel), so none changes; at the
+       floor every tie takes the texel after it; and at the wheel's other
+       resting levels (its 1.14 steps, tagpu_zoom.c) every sample within e
+       before a boundary reads the next texel -- which is where the ground
+       under the sprite is read too. Which zoom has the ties is the zoom
+       centre's parity: that is for an even viewport width, whose centre is a
+       whole px; with an odd one it is a half px, which takes the 0.25x
+       samples off the whole world px and puts the 0.5x ones on them. The
+       world corners below are taken from the moved quad, so vWorld
+       stays the sample's own point for the fog lookup and the edge's clips. */
     {
         const float nu = TAGPU_EDGE_NUDGE_PX / (v->zoom > 0.0f ? v->zoom : 1.0f);
         const float dx = flip ? nu : -nu;
@@ -1047,11 +1075,13 @@ static int floor_div(int a, int b)
     return (a % b != 0 && a < 0) ? q - 1 : q;
 }
 
-/* THE SWEEP PAST THE MAP: every cell of the unclamped rect that is off the
-   map, row by row and left to right -- the painter's order the keys encode --
-   takes the map's anchor at the cell it folds to. The engine's sweep never
-   reaches the map's last row or column (the clamps in the gather), so an
-   anchor there is not drawn on the map and is not mirrored either.
+/* THE SWEEP PAST THE MAP: every cell past the map of the rect the engine
+   would sweep -- the unclamped rect for a copy the right way round, the rect
+   mirrored about the view for a turned one (below) -- takes the map's anchor
+   at the cell it folds to, and its source's key (mirror_key). The engine's
+   sweep never reaches the map's last row or column (the clamps in the
+   gather), so an anchor there is not drawn on the map and is not mirrored
+   either.
    WALKED BY ANCHOR, NOT BY CELL: a sweep row splits at the folds into runs of
    at most one map width, each a copy of the map's row either way round
    (`tagpu_edge_reflect`: copy q = floor(col / mapW), turned over when q is
@@ -1104,14 +1134,15 @@ static void mirror_gather(const TAGPU_FXVIEW* v, const char* fdefs, int nDefs,
             const int base = q * mapW, turned = q & 1;
             const int w0 = turned ? t0 : c0, w1 = turned ? t1 : c1;
             const int lo = base > w0 ? base : w0, hi = base + mapW < w1 ? base + mapW : w1;
-            const int copy = TAGPU_FEAT_MIRROR | (offRow ? TAGPU_FEAT_OFFROW : 0) |
-                             ((q + TAGPU_FEAT_COPY_BIAS) << TAGPU_FEAT_COPY_SHIFT);
-            int j;
+            int copy, j;
             /* the map's own cells are the anchor loop's */
             if (!offRow && q == 0) continue;
             if (lo >= hi || base * 16 >= vx1 || (base + mapW) * 16 <= vx0) continue;
-            /* the mode's copy field is bounded (tagpu_feat.h) */
+            /* THE MODE'S COPY FIELD IS BOUNDED BEFORE IT IS BUILT (tagpu_feat.h):
+               q + COPY_BIAS is in [0, 2 COPY_BIAS), so the mode stays under 2^15 */
             if (q < -TAGPU_FEAT_COPY_BIAS || q >= TAGPU_FEAT_COPY_BIAS) continue;
+            copy = TAGPU_FEAT_MIRROR | (offRow ? TAGPU_FEAT_OFFROW : 0) |
+                   ((q + TAGPU_FEAT_COPY_BIAS) << TAGPU_FEAT_COPY_SHIFT);
             if (!turned) {
                 for (j = a0; j < a1; j++) {
                     const int scol = s_mf[j].col, col = base + scol;
@@ -1430,6 +1461,7 @@ static void feat_publish(const TAGPU_FXVIEW* v, int total)
     s_pub.clip = s_clip;
     s_pub.gw = (float)v->gw; s_pub.gh = (float)v->gh;
     s_pub.zoom = v->zoom > 0.0f ? v->zoom : 1.0f;
+    s_pub.nudgeW = TAGPU_EDGE_NUDGE_PX / s_pub.zoom;
     s_pub.zoomCx = v->zoomCx; s_pub.zoomCy = v->zoomCy;
     s_pub.depthScale = v->depthScale > 1.0f ? v->depthScale : 512.0f;
     /* THE ROUTE IS THE PUBLISHED LIST: `rlistWant` is what says a restore

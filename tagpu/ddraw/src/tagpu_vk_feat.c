@@ -1491,6 +1491,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     ub.i[6] = h.fog;                                   /* uFog         int @24 */
     ub.f[8] = h.mapPxW; ub.f[9] = h.mapPxH;            /* uMapPx      vec2 @32 */
     ub.i[10] = h.clip;                                 /* uClip        int @40 */
+    ub.f[11] = h.nudgeW;                               /* uNudgeW    float @44 */
     memcpy(s_umap + (size_t)slot * s_ustride + s_ublock, ub.f, UBLK_FS);
 
     s_nShadow = h.nShadow;

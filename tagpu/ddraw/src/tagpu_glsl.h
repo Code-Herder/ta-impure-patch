@@ -264,8 +264,15 @@
    sampling cadence uniform. The value is in game-screen pixels, applied
    AFTER the zoom scale so it is the same sub-pixel distance at every zoom:
    1/32 px is ~300x the float noise in a coordinate that size and 1/8 of a
-   texel at the 0.25 zoom floor, so it can neither be lost nor change which
-   texel any other fragment reads. */
+   texel at the 0.25 zoom floor, so it cannot be lost.
+   IT SHIFTS THE PICTURE 1/32 PX AT EVERY ZOOM: a fragment reads the texel
+   under its point plus NUDGE/zoom world px. On the dyadic zooms from 0.5x to
+   8x no fragment centre lies that near before a texel boundary (with an even
+   viewport width, whose zoom centre is a whole px), so none reads another
+   texel; at the floor every tie takes the texel after it; and at the wheel's
+   other resting levels every fragment within NUDGE/zoom world px before a
+   boundary reads the next texel. The feature pass takes the same nudge
+   (tagpu_feat.c), so a sprite and the ground under it shift together. */
 #define TAGPU_EDGE_NUDGE "0.03125"
 /* the same distance for a C caller that moves its quads itself (tagpu_feat.c) */
 #define TAGPU_EDGE_NUDGE_PX 0.03125f

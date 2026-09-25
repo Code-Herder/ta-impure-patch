@@ -97,6 +97,9 @@ typedef struct TAGPU_FEATHAND {
     float mapPxW, mapPxH;                  /* uMapPx: the map on the tile grid */
     int   clip;                            /* uClip: 1 while the mirror draws, so the
                                               map's own quads stay in its columns */
+    float nudgeW;                          /* uNudgeW: TAGPU_EDGE_NUDGE_PX / zoom, the
+                                              world px every fold clip moves a sample
+                                              by (tagpu_feat.c's FS) */
 
     /* The texels, as CPU-side bytes. Each carries the serial that says when
        it last changed, so the Vulkan pass re-sends on a change and not per
