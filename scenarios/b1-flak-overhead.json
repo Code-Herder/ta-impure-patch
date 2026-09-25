@@ -1,0 +1,76 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B1 flak divide: an AI CORFLAK and a human ARMATLAS spawned 200 above the flak's exact position and ordered to hover there, on flat ground (Two Continents SW, height 84). CORFLAK_GUN is ballistic + burnblow, so its flight time is hypot(dx,dz) / (v cos pitch) at 0x49CF19, and cos is exactly 0 in the table for a pitch within 0.35 degrees of vertical: stock faults there. Peek the flak's slot-0 pitch (u16 unit+0x1C) while it fires; `tacli crash` names the fault.",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "flak",
+   "type": "CORFLAK",
+   "owner": 1,
+   "pos": [
+    640,
+    7680
+   ],
+   "facing": 0
+  },
+  {
+   "id": "atlas",
+   "type": "ARMATLAS",
+   "owner": 0,
+   "pos": [
+    640,
+    7680
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "patrol",
+     "to": [
+      640,
+      7680
+     ]
+    }
+   ],
+   "height": 200
+  },
+  {
+   "id": "keepalive",
+   "type": "ARMSOLAR",
+   "owner": 0,
+   "pos": [
+    1300,
+    7680
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   640,
+   7680
+  ]
+ }
+}
