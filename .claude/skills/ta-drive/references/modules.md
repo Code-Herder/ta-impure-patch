@@ -124,7 +124,10 @@ MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
   Stationary units agree exactly. A moving unit on a remote peer is where its owner last reported
   it, so compare against the owning peer (the one where the unit is owner 0) and scale the
   tolerance by the unit's speed; the pause itself lands a few ticks apart (`GameTime`,
-  `*511DE8+38A47:4`). Tab opens the options panel and does not pause a network game.
+  `*511DE8+38A47:4`). **HP lives on the owning peer only**: a peer reads 0 in a remote unit's
+  `+0x108` (and 1.0 in `+0x104`) whatever it has taken, so read a unit's HP where it is owner 0;
+  the firer's peer computes a hit and sends it to the owner as a `0x0B`. Tab opens the options
+  panel and does not pause a network game.
 - **Each peer draws its own units in player 0's colour** on the Vulkan lane; the engine's own frame
   is right. A renderer limit (`gpu-status.md` §3.2), not a network fault.
 - `SELPROV`'s `SELECT` crashes the game on the non-TCP/IP rows; select *Internet TCP/IP

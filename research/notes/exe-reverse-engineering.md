@@ -289,8 +289,10 @@ an explosion hits a unit found past its twentieth victim, or a feature past its 
 for every cell of it in the blast; flak fired nearly straight up divides by zero; a unit whose
 footprint ends on the map's last column or row is parked off the map, where nothing can hit it;
 and a unit whose altitude is more than twice its distance from the north edge falls off the
-line-of-sight grid, so no other player sees it. `tagpu_patches.c` (`patch_engine_defects`)
-patches all of them, nineteen fixes, at every attach, in both builds: `ddraw.dll` is a static
+line-of-sight grid, so no other player sees it; and one more in combat, landing B2: an aircraft
+that shares its cells with other aircraft can hold none of them, and then no explosion finds it.
+`tagpu_patches.c` (`patch_engine_defects`) patches all of them, twenty fixes, at every attach, in
+both builds: `ddraw.dll` is a static
 import of the exe, so `DllMain` runs before the exe's entry point. Each patch is the identity on
 every input the stock code handles correctly.
 
@@ -304,7 +306,7 @@ report](tadr-port/raised-limits.md#the-failure-report), in the stock-limits buil
 raised one. A **local** fix is one whose absence changes only a crash, a draw, a message or a
 malformed input's fate: it compares and writes its own sites and is skipped, with its reason in
 the `enginefix:` log lines, when its bytes differ from the retail exe, its stub cannot be
-made, or its page cannot be made writable. Each of the nineteen, and why:
+made, or its page cannot be made writable. Each of the twenty, and why:
 
 | fix | class | why |
 |---|---|---|
@@ -324,6 +326,7 @@ made, or its page cannot be made writable. Each of the nineteen, and why:
 | weapon IDs `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | simulation | the `0x0F` hit flag is a wire format; in the raised build these are the raise's own rows |
 | one hit a victim an explosion `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | simulation | who is damaged, and how much |
 | the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
+| stacked aircraft `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` | simulation | who is damaged: an aircraft holding no cell takes the splash it stood in |
 | line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440` (fifteen sites in 22 rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps |
 | line of sight in local code: the cursor picker, the build cursor's site test, the feature helper, the radar rebuild's projectile dots, five particle leaves, positional sound (27 sites) | local | a cursor, a draw, a sound |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
@@ -1720,6 +1723,104 @@ stock's own whenever stock's is. (LoadMap allocates `(rows·cols + 7) & ~7` buck
 `0x482CAE..0x482CBA`, so the grid is never larger than the block.) MEASURED on the
 new build: the edge ARMATLAS was stamped (`+0x82` not the off-map bucket) and both were shot down
 within 2 s.
+
+### Stacked aircraft in area damage — `0x49A664`, `0x49A415`, `0x47CF98`, `0x4954ED` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**Slot B.** The stamp `0x47CC30` files a unit by `+0x110 & 3`: 1 in slot A `[cell+0]`, 2 (airborne)
+in slot B `[cell+2]` through `0x47CF98` (`cmp eax,2; jne 0x47D0D5`, the stamping continuing at
+`0x47CFA1 test edi,edi`); any other value stamps no cell. For each cell of the footprint
+(`0x47CFB3..0x47D042`) an empty slot B takes the unit. A held one is contested at `0x47CFDA`: when
+the incumbent's player record (`+0x96`) is not NULL and its `+0x73` is 3 [INFERRED: remote], the
+newcomer takes the cell (`0x47D010..0x47D03A`); otherwise the incumbent keeps it
+(`0x47CFEB..0x47D00E`). Either way the unit left without the cell gets `+0x110` bit 27
+(`0x8000000`) and the holder bit 26 (`0x4000000`). Area damage reads only the two slots of each
+cell (above), and so does the direct-hit test `0x49B090`, so an aircraft whose every cell another
+aircraft holds is found by neither.
+
+**The walk's end.** The row loop falls through to `0x49A664` (`0x49A65E jl 0x49A1E9` not taken), and
+an empty rect jumps there from `0x49A1DF` (`jge`). `0x49A664..0x49A66E` is `mov eax,[ebp+8]; mov
+ecx,[eax]; mov edx,[ecx+0x111]`, the weapon's flags for the tail's bit-30 test at `0x49A66F`, and
+the tail reloads every register it reads. The selector step `0x49A415..0x49A426` is `mov
+eax,[esp+0x10]; inc eax; cmp eax,1; mov [esp+0x10],eax; jle 0x49A214`; it falls through to the
+cell's feature at `0x49A427`. Every path out of the unit block that starts at `0x49A24E` — the NULL
+test, the shooter's skip `0x49A259` (`cmp esi,[proj+0x52]`), B1's seen-set skip, the damage and its
+reload `0x49A411` — comes back to `0x49A415`, and none of them writes `[esp+0x10]`. No branch from
+outside lands in `0x49A665..0x49A66E`, `0x49A416..0x49A426`, `0x47CF99..0x47CFA0` or
+`0x4954EE..0x4954F1` [rel8/rel32 scan of `.text` and an absolute-dword scan of the image: two hits,
+`0x49A642 → 0x49A668` and `0x49A6DE → 0x49A66B`, are the modrm and the displacement of two `mov`s,
+not branches].
+
+**The step.** `0x4954ED` is the sim step `0x495490`'s call of the unit tick `0x48AD30` (`E8 3E 58 FF
+FF`), its only caller; the projectile tick `0x49B720` follows at `0x495513`, also its only caller.
+A unit's death explosion runs inside the unit tick, a projectile's detonation inside the projectile
+tick.
+
+**MEASURED, previous build** (`b2-stack-atlas`, ten ARMATLAS ordered to (1600, 1600) on Two Continents,
+then `b2-aa-flak`, an idle AI's CORFLAK 350 east, applied at GameTime 360; a scratch census of every
+airborne unit's footprint cells whose slot B holds its own `+0xA8`, each tick): up to seven of ten
+held no cell. The CORFLAK's first burst (GameTime 429) took the four holders from 150 HP to 5–11
+and left the five holding none, each within a cell of them, at 150; its second (450) again hit
+only holders, and three of the five were still at 150 holding none. Across both bursts, 12 hits,
+all on holders.
+
+**The fix** (`fix_stacked_air`, simulation, fail closed, air only). It serves the aircraft stock
+missed to stock's own per-victim code *after* the walk, so stock's victims, their order and their
+values are untouched, and the new ones go through stock's shooter skip, B1's seen-set (which
+records them), distance test, falloff and damage with no arithmetic of ours:
+
+| site | stock | the stub |
+|---|---|---|
+| `0x49A664` | the 11 bytes above | `push [ebp+0xC]; push [ebp+8]; call air_first`; a unit → `esi`, `[esp+0x10] = 2`, `jmp 0x49A24E`; none → the 11 bytes and `jmp 0x49A66F` |
+| `0x49A415` | the 18 bytes above | a selector below 2 steps exactly as stock (the flags `jle` reads are stock's: `inc`, `cmp`, then a `mov`) and leaves for `0x49A214` or `0x49A427`; at 2, `call air_next` and `0x49A24E` again, or the 11 bytes and `0x49A66F` |
+| `0x47CF98` | `cmp eax,2; jne 0x47D0D5` | the same test, then `pushad; push esi; call air_note; add esp,4; popad; jmp 0x47CFA1` |
+| `0x4954ED` | `call 0x48AD30` | `call` to `pushfd; pushad; call air_rebuild; popad; popfd; jmp 0x48AD30`, which returns to `0x4954F2` |
+
+`air_first` builds the call's candidate list, in the frame B1's wrapper `dmg_area` already holds
+(32 slots inline, then a block from `0x4D83B0` freed when the call returns), from a pool of airborne
+slots: the rebuild refills the pool at every step with every unit whose `+0x110 & 0x10000003` is
+`0x10000002`, and the stamp's airborne path adds each unit it files. A slot is a candidate when it is
+below the array's count (`u16 main+0x14351`), alive and airborne as above, uncarried (`+0x86` 0),
+its model `+0x9E` not NULL (the death guard, `0x4866D0` below), its bucket `+0x82` not the off-map
+bucket `*(main+0x142B7)`, its footprint (`+0x76`, `+0x78`, `+0x7E`, `+0x80`) at least one cell each
+way and meeting the blast's rect, and not in the call's unit set. The rect is `0x49A120`'s own: the
+radius `(u16)w[+0xD6] >> 1`, `radius/16 + 1` cells about the blast point's cell (`at+0x02`, `at+0x0A`,
+each truncated /16), the low ends raised to 0 and the high ends lowered to `W`, `H`
+(`0x49A149..0x49A1C7`). `air_next` re-tests every one of those on the live unit when it hands it
+over, so a unit the damage before it killed, or whose slot a new unit took, is re-judged.
+
+**The invariant** (a bound, a lock and a lifetime): every unit handed to the engine was validated
+in this call, at hand-over, and every index was bounded first — a pool slot below the count, the
+pool below 65 536 entries because a slot enters it at most once (a membership byte kept with it).
+The pool is written by the rebuild on the game thread and by the stamp, which also runs from the
+network pump and from a saved game's restore on the loader thread, and read by `air_first` on
+whichever thread runs area damage: one critical section covers every read and write of it, held
+only inside our C, the one engine call under it being the allocator `0x4D83B0`. A call's list lives
+in its frame, so the nested call from the interceptor tail `0x49A764`, which runs after the serving,
+has its own. **What it can miss**: a unit whose `+0x110` turns airborne mid-step through a writer
+not followed by the stamp — 150 instructions write `+0x110`, too many to prove each one is — holds
+no slot either, and stays stock's until the next rebuild. **The counter** counts aircraft handed to
+the engine, not aircraft damaged: stock's own filters still apply, and a dying aircraft is handed to
+its own death explosion, whose `proj+0x52` is itself, and skipped at `0x49A259` as stock skips it.
+
+**MEASURED, new build**, the same fixture and timing: the first burst (429) took all ten from 150 HP to
+10–16, six of them holding no cell at the damage tick; the second (450) killed all ten, five holding
+none. The counter read 40 in that run and 37 on the stock-limits build.
+
+**MEASURED, cost** (`scenarios/air-war.json`, 200 aircraft over two bases, 2 100 ticks, scratch
+timers around our functions in the raised build): the rebuild 18.5–23.4 µs a tick (it scans every
+slot to the count), `air_first` 0.6–0.8 µs an area-damage call, 40–73 stamp notes a tick; about
+25 µs a tick in all, against a unit tick of 240–530 µs in the same runs. The battles themselves
+diverge between builds (the fix kills aircraft sooner: 122 units on the roster at the end against
+240), so whole-tick times are not a comparison.
+
+**MEASURED, two peers** (`tools/mp_lobby.sh`, both on the new build; the stack applied on the host,
+a CORFLAK on the joiner): the firer's peer computes a hit and the victim's owner applies it
+(`0x489BB0` sends the `0x0B`), so the joiner's pool is the one that serves. The joiner served 1503
+and 1509 at its GameTime 839 and the host applied both (150 → 19) at its 851, among nine hit. A
+remote unit's HP word `+0x108` reads 0 on a peer that does not own it, before any damage and after
+(and `+0x104` reads 1.0), so there is no second HP to compare: the host's is the only one. Paused
+after the fight, both peers held the same five atlases (1502, 1503, 1505, 1509, 1510) and the
+CORFLAK.
 
 ### Line of sight at the map's edge — `UnitInPlayerLOS 0x465AC0`, `PositionInPlayerMapped 0x408090` [DISASSEMBLED + MEASURED 2026-09-25]
 
@@ -7775,6 +7876,31 @@ alive bit (`[esi+0x110] & 0x10000000`) and skips a dead unit. The tail runs, in 
 So a reader that gates on the alive bit sees the object freed while the bit still reads set
 (measured live: dead units logged `st=80284101` with `unit+0x9E` already null). Re-reading
 `unit+0x9E` is the correct guard; re-reading the bit is not.
+
+**The cargo, and the corpse** [DISASSEMBLED + MEASURED 2026-09-25]. A unit that is itself cargo
+(`+0x86`) is detached first (`0x48AAC0(unit, 0, −1, 1)` at `0x4867CB`). A unit that carries cargo
+(`+0x8A`, the first carried unit) then deals it 30 000 (`0x7530`) through `0x489BB0(attacker,
+victim, damage, kind, 0)` at `0x48680B`, the attacker its own last attacker `+0xF0`, the kind 3 when
+the record's kind nibble is 3 and 6 otherwise (`0x4867DA..0x4867EC`), and detaches it
+(`0x48681D`). Every hit writes its kind into the victim's `+0xF5` (`0x489DAC`), and the unit tick
+reaps a pending-death unit through `Send_UnitDeath 0x4864B0(unit, +0xF5)` (`0x48AFD1`).
+`Send_UnitDeath` takes the severity as `(100·(−hp)/maxhp + byte +0xF7) / 2`, clamped to 1..100
+(`0x48655E..0x4865AB`; maxhp the def's `+0x1FA`), and asks the `Killed` script for the corpse type
+(`0x4865C3`). Kind 7 skips the script with corpse type 1 and severity 0; kinds 4, 5 and 9, and a unit
+with HP left, give 0 and 0; a nanoframe (`+0x104` not 0.0) gives corpse type 0. The `0x0C` record
+carries the severity at `rec+9` and the kind and corpse type as the high and low nibbles of
+`rec+0x0A` (`0x4865E9..0x486621`). The destructor hands a corpse type above 0 to `0x486360(unit,
+type, kind ≠ 7)` (`0x486D55..0x486D6F`), which starts from the def's corpse feature `+0x1BC`, steps
+`type − 1` times through each feature def's FeatureDead (`+0xF4`; the defs at `main+0x1426F`,
+stride `0x100`), and spawns nothing once the index is `0xFFFB` or above; otherwise it spawns at the
+unit's footprint cell (`0x481550(+0x76, +0x78)`, `0x423C50` at `0x4863F9`).
+
+So a carried unit dies at severity 100 whatever its HP was. ARMSTUMP's `Killed` gives corpse type 3
+above severity 50 (`tacob decompile ARMSTUMP`), and `armstump_dead` (feature 123) → `armstump_heap`
+(339) → `0xFFFF` (`+0xF4` read live), so it leaves nothing — which is why an ARMSTUMP killed inside
+its ARMATLAS over land left no wreck record in B2's measurements: by design, not a lost wreck. A
+cargo type whose `Killed` gives 1 or 2 at severity 100 would spawn at its own `+0x76`/`+0x78`; that
+path was not measured.
 
 ### `0x45AAA0` `FreeObjectState` — the `Object3do` destructor
 

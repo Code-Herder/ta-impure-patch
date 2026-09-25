@@ -248,6 +248,38 @@ The plan as written:
   previous build faults at `0x49CF19`, the new one counts fallbacks. An ARMATLAS on the last column
   and one near the north edge at cruise altitude.
 
+**B2 — stacked aircraft. Built ahead 2026-09-25 on its own branch from B1, not landed.** What was
+built, and where it differs from the plan below (the engine map's *Stacked aircraft in area damage*
+has the sites, the disassembly and the numbers):
+
+- **Built as planned:** air only; candidates airborne (`+0x110 & 0x10000003 == 0x10000002`),
+  uncarried, not in the off-map bucket, `+0x9E` non-NULL, footprint meeting the blast's rect, not in
+  B1's unit set, re-validated at hand-over; every index bounded; served through the engine's own
+  per-victim code after every stock victim; simulation, fail closed, in both builds.
+- **Changed: served after the walk, not by looping the last cell.** The stub sits at the walk's end
+  `0x49A664`, which is also where an empty rect jumps (`0x49A1DF`), so the serving runs after the
+  last cell's *feature* too and for a rect with no cell at all; the selector `0x49A415` at 2 means
+  "serve the next". Stock's victims, their order and values are untouched either way; this way
+  stock's last cell is not re-entered.
+- **Changed: the pool is rebuilt at the unit tick's call `0x4954ED`, not at `0x49B720`.** Death
+  explosions run inside the unit tick, before the projectile tick, and would see a pool one step
+  stale. The stamp's airborne path `0x47CF98` adds every unit it files between rebuilds, under a
+  lock, since the stamp also runs from the network pump and the loader's restore.
+- **Changed: "holds no slot inside the rect" is decided by B1's seen-set, not by a slot test.** A
+  unit the walk found is in the set, so the served ones are exactly those stock missed, and a
+  dying aircraft handed to its own death explosion is skipped by stock's shooter test `0x49A259`.
+- **Open**: a unit whose `+0x110` turns airborne mid-step through a writer not followed by the stamp
+  stays stock's until the next rebuild (150 instructions write `+0x110`; not audited one by one).
+- **Measured**, the raised build unless said: at the same two bursts of `b2-aa-flak` on
+  `b2-stack-atlas`, the previous build hit 12 times, all holders, and left the five holding none at
+  150; the new one took all ten, six holding none, from 150 to 10–16, then killed them; served 40
+  (37 on the stock-limits build). `air-war`: about 25 µs a sim tick (the rebuild 18.5–23.4, 0.6–0.8
+  µs an area-damage call). Two peers: the firer's peer serves, the owner applies the `0x0B`
+  (1503 and 1509 served on the joiner, both 150 → 19 on the host); a non-owner holds no HP for a
+  remote unit (`+0x108` 0), and both peers held the same five survivors. The ride-along: a cargo
+  killed in its transport leaves no wreck by design (30 000 from the destructor at `0x48680B`,
+  severity 100, ARMSTUMP's corpse type 3 walks dead → heap → none).
+
 **B2 — stacked aircraft** (needs B1's seen-sets).
 
 - First measure it: ten ARMATLAS or ARMBRAWL ordered to one point, slot B of every footprint cell
