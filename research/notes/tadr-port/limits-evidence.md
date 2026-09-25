@@ -785,8 +785,9 @@ read with every peer paused — two and a half stock pools, and 36 % of this one
 - **Fail-closed.** `AbortIfInstallFailed` shows a MessageBox and exits, so a player whose patch
   failed cannot join a game with different limits. This is TADR's whole MP-safety argument.
   **There is no handshake:** nothing puts the limits on the wire except the unit limit, which the
-  engine already broadcasts, and `DataShare->IniCRC`, which the recorder DLL exchanges (SRC,
-  `LimitCrack.cpp:47`; the consumer is not traced here).
+  engine already broadcasts, and `DataShare->IniCRC`, which tdraw writes into the memory block it
+  shares with the recorder (SRC, `LimitCrack.cpp:47`). No recorder source reads it: the recorder's
+  view of that block ends before the field (`MemMappedDataStructure.pas`).
 - **Relocation lifetime.** The relocated explosion, model-effect and aux pools are DLL statics, so
   they live for the process. That is safer than stock's per-level block for any cross-thread reader.
   The published tables still need the level fence only for the pointers inside the records.

@@ -78,7 +78,7 @@ identity is a debug string, and ESC's DLL contains `Process Attached.  config=es
 Every other DLL is likewise community-authored: `eplayx.dll` (298,496) is the TA Demo Recorder
 (`CompanyName=Swedish Yankspankers & TA Universe community`, Delphi paths
 `F:\TA\TADR\SVN\trunk\src\Recorder\*.pas`), differing from `tplayx.dll` in **67 bytes / 31 runs** —
-`.tad`→`.ted`, `Software\OTA\TA Demo`→`Software\TA Esc\TA Demo`, two opcode flips, and version-
+`.tad`→`.ted` (the autorecorded name only: `.record <name>` still writes `.tad`), `Software\OTA\TA Demo`→`Software\TA Esc\TA Demo`, two opcode flips, and version-
 resource bookkeeping. `ddraw.dll` (411,648) is unmodified cnc-ddraw 7.1.0.0 (FunkyFr3sh).
 `emusi.dll` (124,928) is Plobex/Damian Woroch's "TA Music Player". [VERIFIED]
 
@@ -148,10 +148,13 @@ OR when turned back on"*. It also explains the FAQ's requirement that all player
 unit count: the scan iterates the unit-ID table, whose size is `UnitLimit`, so a mismatch desyncs —
 exactly why *"Teleporters … are scripted specifically to each version of TA:ESC"*.
 
-**Crucially, TADR ships a real engine shield** — `UnitInfoExpand.pas` parses a new FBI key
-`ShieldRange`, `UnitSearchHandlers.pas` computes `ShieldedBy` via an engine unit search, and
-`Broadcast_ExtraUnitState` network-syncs it, with a `SHIELDICON` sidedata tag and GAF overlay.
-**TA:ESC uses `ShieldRange` zero times.** Its shields predate and bypass the engine feature. [VERIFIED]
+**TADR's source holds an engine shield, but no shipped build has it.** `UnitInfoExpand.pas` parses a
+new FBI key `ShieldRange`, `UnitSearchHandlers.pas` computes `ShieldedBy` via an engine unit search,
+and `Broadcast_ExtraUnitState` network-syncs it, with a `SHIELDICON` sidedata tag and GAF overlay.
+All of that is the recorder's unreleased 4.0 tree; ESC's `eplayx.dll` (3.9.2.416) links none of it,
+and the effect also needs `[MOD] ID` above 1, which `TAESC.ini` does not set
+([the merge exploration](tadr-merge-exploration.md#what-ships-is-not-what-the-source-holds)).
+**TA:ESC uses `ShieldRange` zero times.** Its shields are pure COB. [VERIFIED, BIN]
 
 ## Engine features consumed vs. authored
 
@@ -203,9 +206,11 @@ licensed TA + Core Contingency, minimum 1024×768; incompatible with other mods.
 - **Gap:** 1,725 bytes across 117 `.text` runs in the exe are unattributed. I had ProTA 4.5 and
   Mayhem patch tables only, and no stock TA 3.1 exe for a three-way diff. I found no positive
   evidence of ESC-original engine code, but cannot prove a negative for those bytes.
-- **Gap:** the COB disassembler's opcode names are calibrated for the opcodes actually observed;
-  extended `GET` constants 69/70/73/74 are inferred as unit-ID/ownership queries from usage, not
-  from a published table. The `set ARMORED` finding does not depend on that inference.
+- The extended `GET` constants are the recorder's, and its shipped build answers exactly the ones ESC
+  uses: 32 and 69–75 (`MIN_ID`, `MAX_ID`, `MY_ID`, `UNIT_TEAM`, `UNIT_BUILD_PERCENT_LEFT`,
+  `UNIT_ALLIED`, `UNIT_IS_ON_THIS_COMP`), disassembled in `eplayx.dll` and counted over every ESC
+  script ([the merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)). The
+  `set ARMORED` finding never depended on them.
 - The readme lists sections 11–12 in its contents but the headed sections are absent from the file.
 
 ## Sources

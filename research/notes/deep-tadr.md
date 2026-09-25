@@ -185,7 +185,9 @@ MakeStaticCall / MakeNOPReplacement` (`PluginEngine.pas:104-127`) with backup/re
 `TCodeInjection` (`:32-49`); ~40 plugins registered in `Plugins.pas:57-103`
 (`UnitLimit`, `WeaponsExpand`, `UnitInfoExpand`, `MaxScriptSlots`, `OrdersOverride`,
 `COB_extensions`, `SpeedHack`, `LOS_*`, …). No expected-bytes check there either — the
-TODO at `PluginEngine.pas:4-7` admits it. [VERIFIED]
+TODO at `PluginEngine.pas:4-7` admits it. [VERIFIED] That list is the unreleased 4.0 tree: the
+recorder players run (3.9.2.416) links about a dozen of them
+([the merge exploration](tadr-merge-exploration.md#what-ships-is-not-what-the-source-holds)).
 
 ## Engine limits raised (resolved table)
 
@@ -246,7 +248,8 @@ lists what that design point bounds.
 
 **Weapon IDs 256→16000 is not current.** `tdraw.txt:8` explicitly says the weapon-ID
 crack is "not present in current release"; the ini keys `WeaponType` and
-`MultiGameWeapon` are documented in `totala.ini:64-76` but read nowhere in the code. The
+`MultiGameWeapon` are documented in `totala.ini:64-76` but read nowhere in tdraw's code. Both shipped
+recorder binaries carry the two key names, from a source that is not in the repo [BIN]. The
 live replacement is `WeaponIdOverflow` — a heap array for IDs ≥ 256 up to 4096
 (`WeaponIdOverflow.h:29-30`) plus a `WeaponFiredExt` packet, both behind
 `TDRAW_EXTENDED_WEAPON_IDS`, which `config.h:69` defaults to **0**. [VERIFIED]
