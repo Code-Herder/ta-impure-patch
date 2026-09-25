@@ -2667,7 +2667,7 @@ static int fix_weapon_ids(void)
 #define DMG_UNIT_CAP   20u             /* stock's list, 0x49A28F                            */
 #define DMG_FEAT_CAP   64u             /* stock's list, 0x49A5FA                            */
 #define DMG_KEY_PAST   0x80000000u     /* a key recorded past stock's list                  */
-#define DMG_INLINE     64u             /* keys a set holds in the frame, a power of two     */
+#define DMG_INLINE     64u             /* slots of a set in the frame: 32 keys before it grows */
 #define DMG_CELL       13u
 #define DMG_UNIT_STRIDE 0x118u
 
@@ -3053,20 +3053,35 @@ static int fix_last_cell(void)
    box, in turn, until one is visible: (x + def+0x15E, y + def+0x16E, z + def+0x166) (0x465AFD);
    the same with x + def+0x176 (0x465BDB); then (.., y - def+0x17A, z + def+0x17E) (0x465C73);
    and that with x - def+0x176 (0x465D19) -- 16.16 dwords at [esp+0x10] x, [esp+0x14] y,
-   [esp+0x18] z, def the unit's type at +0x92. With LosType bit 1 (main+0x14281) each point
-   indexes the player's LOS grid (player +0x7C, width +0x80, height +0x84, in 32-px cells) at
-   col = x >> 5, row = (z - (y >> 1)) >> 5, the grid being projected by altitude, under an
-   unsigned bound: outside it the point is not visible. The four reads are 0x465B6A..0x465B94,
-   0x465C04..0x465C2E, 0x465CA2..0x465CD2 and 0x465D46..0x465D67. A unit whose top is more than
-   twice its distance from the north edge -- an aircraft at cruise altitude a few tiles inside
-   it, a unit on a hill beside it -- samples rows above the grid and is invisible to every
-   other player, so nothing acquires it. Underwater, y < 0, the same happens at the south edge.
-   THE FIX: at each of the four, when the sheared row is outside the grid and the point's own
-   row, z >> 5, is inside it, the own row is used; otherwise the stock answer stands, so a unit
+   [esp+0x18] z, def the unit's type at +0x92. Every point is placed at col = x >> 5,
+   row = (z - (y >> 1)) >> 5 (32-px cells), projected by altitude, under unsigned bounds on the
+   player's grid size (player +0x80 width, +0x84 height): outside them the point is not
+   visible. What it then reads depends on the line-of-sight mode, and the shear is the same in
+   every mode:
+     - LosType bit 1 (main+0x14281; True, LosType 14) reads the player's LOS grid (+0x7C) inline:
+       0x465B6A..0x465B94, 0x465C04..0x465C2E, 0x465CA2..0x465CD2 and 0x465D46..0x465D67;
+     - without it (Permanent 12, Circular 8) the first three points go to
+       PositionInPlayerMapped 0x408090(player, point), whose place is 0x408095..0x4080C0 and
+       which reads the shared mapped grid main+0x14273, and the fourth to an inline copy of it,
+       0x465DA9..0x465DCA.
+   0x408090 has two more callers, each handing it a world point whose row means the same:
+   0x407FBD in 0x407E90, the first method of the vtable 0x4FC9A0 (its destructor 0x407E70
+   restores the base's 0x4FC980) [INFERRED: an AI routine], which tests a probe point stepped
+   320 px from a position along a heading it draws; and 0x49BF2F in the projectile draw pass
+   0x49BE60, the local player's view of a projectile. Each sees a changed answer only for a
+   point whose sheared row is off the grid and whose own row is on it -- the defect this fixes.
+   A unit whose top is more than twice its distance from the north edge -- an aircraft at
+   cruise altitude a few tiles inside it, a unit on a hill beside it -- samples rows above the
+   grid and is invisible to every other player, so nothing acquires it. Underwater, y < 0, the
+   same happens at the south edge.
+   THE FIX: at each of the six places, when the sheared row is outside the grid and the point's
+   own row, z >> 5, is inside it, the own row is used; otherwise the stock answer stands, so a unit
    beyond the map's edge stays unseen (the margin TADR adds there is a gameplay change, not a
    defect). Registers: the third read loads dx and di (the point's y and z words) and the fourth
-   reads them again (0x465D46), so its stub loads them as stock does; ebp after the third and
-   edx after the fourth are dead on both exits. The fourth's column comes in ecx from 0x465D3B.
+   reads them again (0x465D46, 0x465DA9), so its stub loads them as stock does; ebp after the
+   third and edx after the fourth are dead on both exits. The fourth's column comes in ecx from
+   0x465D3B, in both modes. In 0x408090, esi (pushed at 0x408094) is free and edx is reloaded
+   with the player from [esp+8] before either exit.
    THE INVARIANT: the grid is read only at a column and a row inside it -- the same unsigned
    bounds as stock, now applied to the row actually used. Exact whenever stock's row is inside.
    CLASS: simulation, fail closed (what is acquired). */
@@ -3137,7 +3152,27 @@ static int fix_los_shear(void)
         0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
         0x73, 0x05,                         /* jae out                        */
     };
-    static const LOSREAD read[4] = {
+    /* PositionInPlayerMapped: eax the point; out: ecx the column, eax the row, edx the player */
+    static const unsigned char stubM[] = {
+        0x0F, 0xBF, 0x70, 0x0A,             /* movsx esi,word [eax+0xa]       */
+        0x0F, 0xBF, 0x50, 0x06,             /* movsx edx,word [eax+6]         */
+        0x0F, 0xBF, 0x48, 0x02,             /* movsx ecx,word [eax+2]         */
+        0x89, 0xF0,                         /* mov eax,esi                    */
+        0xD1, 0xFA,                         /* sar edx,1                      */
+        0x29, 0xD0,                         /* sub eax,edx: the shear         */
+        0x8B, 0x54, 0x24, 0x08,             /* mov edx,[esp+8]: the player    */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0xC1, 0xFE, 0x05,                   /* sar esi,5: the point's own row */
+        0x3B, 0x8A, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[edx+0x80]             */
+        0x73, 0x17,                         /* jae out                        */
+        0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[edx+0x84]             */
+        0x72, 0x0A,                         /* jb in                          */
+        0x89, 0xF0,                         /* mov eax,esi                    */
+        0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[edx+0x84]             */
+        0x73, 0x05,                         /* jae out                        */
+    };
+    static const LOSREAD read[6] = {
         { 0x00465B6A, 0x00465B95, 0x00465BB1, 43, {
             0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
             0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
@@ -3162,9 +3197,20 @@ static int fix_los_shear(void)
             0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCA,
             0x73, 0x34, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x2C }, stubD, sizeof stubD,
           "line of sight: the fourth point's row" },
+        { 0x00465DA9, 0x00465DE0, 0x00465DCB, 34, {
+            0x0F, 0xBF, 0xD2, 0x0F, 0xBF, 0xC7, 0xD1, 0xFA, 0x2B, 0xC2, 0x8B, 0x96,
+            0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCA,
+            0x73, 0x08, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x72, 0x15 }, stubD, sizeof stubD,
+          "mapped: the fourth point's row" },
+        { 0x00408095, 0x004080C7, 0x004080C1, 44, {
+            0x0F, 0xBF, 0x50, 0x06, 0x0F, 0xBF, 0x48, 0x02, 0x0F, 0xBF, 0x40, 0x0A,
+            0xD1, 0xFA, 0x2B, 0xC2, 0x8B, 0x54, 0x24, 0x08, 0xC1, 0xF9, 0x05, 0x8B,
+            0xB2, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF8, 0x05, 0x3B, 0xCE, 0x73, 0x08,
+            0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x72, 0x06 }, stubM, sizeof stubM,
+          "mapped: PositionInPlayerMapped's row" },
     };
     int k;
-    for (k = 0; k < 4; k++) {
+    for (k = 0; k < 6; k++) {
         const LOSREAD* r = &read[k];
         unsigned char* a = fix_code(r->nstub + 10u);
         if (!a) { lim_no_stub(); return FIX_TABLE; }
@@ -3210,7 +3256,8 @@ static void patch_engine_defects(void)
               "one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE) %s; flak's "
               "divides (0x49CF18 0x42F314 0x42F32E) %s; the map's last row and column "
               "(0x47CC8B 0x47CCA3 0x47CCA9) %s; line of sight at the map's edge "
-              "(0x465B6A 0x465C04 0x465CA2 0x465D46) %s. Counters: unit repeats refused at 0x%08X, "
+              "(0x465B6A 0x465C04 0x465CA2 0x465D46 0x465DA9 0x408095) %s. Counters: unit repeats "
+              "refused at 0x%08X, "
               "feature repeats "
               "refused at 0x%08X, victims refused off their arrays at 0x%08X, list blocks run "
               "unwrapped at 0x%08X, flak fallbacks at 0x%08X",
