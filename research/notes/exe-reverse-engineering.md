@@ -1574,9 +1574,9 @@ the first 64 in walk order stand at 9 999; of the 32 after them, 30 were destroy
 
 **The fix** (`fix_victim_caps`, simulation, fail closed). Both calls of `0x49A120` become calls of
 `dmg_area`, a `__stdcall` of the same shape that pushes a seen-set frame, calls `0x49A120` and pops
-it, handing back `eax`. The unit block (72 bytes at `0x49A262`) becomes `push esi; call
-dmg_unit_seen; test eax,eax; jnz 0x49A415; jmp 0x49A2AA`; the feature block (71 bytes at
-`0x49A5CE`) becomes `mov eax,[esp+0x10]; push eax; call dmg_feature_seen; test eax,eax; jnz
+it, handing back `eax`. The unit block (72 bytes, `0x49A262..0x49A2A9`) becomes `push esi; call
+dmg_unit_seen; test eax,eax; jnz 0x49A415; jmp 0x49A2AA`; the feature block (71 bytes,
+`0x49A5CE..0x49A614`) becomes `mov eax,[esp+0x10]; push eax; call dmg_feature_seen; test eax,eax; jnz
 0x49A62B; mov eax,[esp+0x10]; jmp 0x49A615`. A frame holds a bitset over the 65 536 possible unit
 slots and a hash set of anchor ordinals, with no capacity; the damage math, the order of first hits
 and every value stay stock's. Each call sits exactly where stock's list is consulted, so below the
@@ -1592,7 +1592,8 @@ and every index is bounded before use. A unit is recorded by its slot, `(unit �
 remainder 0 and below the array's count (`u16 main+0x14351`); an anchor by its ordinal,
 `(cell − grid) / 13`, remainder 0 and below `W·H` (`main+0x14233`, `+0x14237`). A pointer that fails
 either is not damaged, and is counted. A frame is pushed before its call reads it and emptied as it
-is popped, so nesting follows the machine stack. Both callers run on the game thread. The sets grow
+is popped, so nesting follows the machine stack. Both callers run on the game thread (the projectile tick,
+the network pump — which the frame callback also runs, at `0x4968CB` — and the fire spread). The sets grow
 through `0x4D83B0`, whose failure is the engine's own out-of-memory exit. The unit set is what B2
 serves stacked aircraft through.
 
@@ -1633,7 +1634,7 @@ acquisition does not approach the zero band in these runs, and the fix rests on 
 Where acquisition cuts off was not disassembled.
 
 **The fix** (`fix_flak_divides`, local). `0x49CF18..0x49CF20` (`cdq; idiv ebp; mov edx,[0x511DE8]`)
-jumps to a stub that divides as stock when `ebp ≠ 0`, and otherwise takes `weapontimer` through
+jumps to a stub that divides as stock when `ebp ≠ 0` and returns to `0x49CF21`, and otherwise takes `weapontimer` through
 `0x49CF29` and counts the fallback (logged for the first 8 and every power of two). The loader's two
 calls of `0x49E010` go through a stub that first gives a ballistic weapon whose `w+0x68` is 0 the
 value 1, and logs it. No branch from outside lands in `0x49CF19..0x49CF20` but stock's own
@@ -1652,7 +1653,7 @@ files it in a 128-px sort bucket. Its callers are `0x43DA41` (the motion relink,
 (`0x47CCA1`/`0x47CCA3` `jge`) goes to `0x47D079`, which files it in the off-map bucket
 `main+0x142B7` and stamps no cell. The last two are one past: a footprint that ends on the last
 column or row, every cell of it on the map, is parked, and a parked unit holds no cell, so area
-damage and the direct-hit test never find it. Ground units never stand there (LoadMap masks the
+damage and the direct-hit test `0x49B090` never find it. Ground units never stand there (LoadMap masks the
 border with `0xFFFD`); an aircraft over the east or south edge does.
 
 **What `jg` needs** (settled before landing):
