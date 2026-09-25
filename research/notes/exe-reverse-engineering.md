@@ -556,7 +556,8 @@ for kind `0x0A`), `[7]` a byte argument, `[8]` the kind (`0x0A` heal, `0x0B` nev
 paralysis: its path pushes `0x508D80`, "paralyze", at `0x489E49`). It applies the hit locally first (`0x489C89`),
 then sends it only when the victim's player (`+0x96`) exists with type 3 at `+0x73`, a remote
 player (`0x489C99`), and the kind is not `0x0B`: from the attacker's player's DPID (`+0x96` → `+4`,
-`0x489CB9`), or the local player's (`0x44FDB0`, `0x489CCD`) when there is no attacker. **The
+`0x489CB9`), or the local player's (`0x44FDB0`, `0x489CCD`) when there is no attacker; both sends
+take the length 9 from one `push 0x9` at `0x489CA8`, before the attacker test. **The
 receiver `0x489CE0(rec)`** refuses a victim that is not alive (`+0x110` bit `0x10000000`) or already
 pending death (bit `0x4000`) (`0x489D45`, `0x489D50`); a heal adds to hit points up to the type's
 maximum (`0x489D59..0x489D80`); any other kind calls `0x467950(victim)` and, but for kind `0x0B`,
@@ -573,13 +574,18 @@ copy is rewritten within N ticks.
 **The create, `0x09`, 23 bytes.** Built by `0x456050(unit)` `ret 4`, whose only caller is the create
 at `0x486115`: `[0]` `0x09`, `[1]` `u16` type (`+0xA6`), `[3]` `u16` index (`+0xA8`), `[5]` twelve
 bytes from `+0x6A` (the position), `[17]` `u32` from `+0x64`, `[21]` `u16` from `+0x68` [INFERRED:
-the orientation]. Of `0x451DF0`'s 57 callers, `0x4560AE` is the only one that sends a `0x09` and
+the orientation]; its send `0x4560AE` takes the length 23 from `push 0x17` at `0x45605C`. Of
+`0x451DF0`'s 57 callers, `0x4560AE` is the only one that sends a `0x09` and
 `0x489CB9`/`0x489CCD` the only ones that send a `0x0B` (an E8 scan, and the type byte each call site
 stores or builds). Every byte of both messages carries a field; neither has room for more.
 
 **The allocator.** `0x485F50` (`ret 0x20`, eleven callers) walks the player's block
 (`[player+0x67]`..`[player+0x6B]`, read as `main+0x1BCA`/`+0x1BCE` + `k·0x14B`) and takes the first
-slot whose type `+0xA6` is 0 (`0x486036`). Its arg 8 is a requested index: then only that slot is
+slot whose type `+0xA6` is 0 (`0x486036`, `cmp word [esi+0xA6],0; je 0x48605D`). A free slot goes on
+at `0x48605D` (`test esi,esi`), the take, which writes the type at `0x486086`; a taken one goes to
+`0x486040`, the step: `test dx,dx` ends a requested index there (`jne 0x4861BD`, which returns NULL
+like `0x486053`), and otherwise the next slot is tried while it is at most `[player+0x6B]`
+(`0x486049..0x486051`). Its arg 8 is a requested index: then only that slot is
 tried. All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
 index. It returns NULL when no slot is free (`0x486053`), and below the cap for a type 0
 (`0x485F7C`), a type without def `+0x241` bit `0x800000` (`0x485FAA`) and a type at its own
@@ -624,10 +630,14 @@ unit slot has three writers**: this create, `CreateFromNetwork` (`0x4862A2`), an
 free (`0x486DC7`, type 0). `0x421FE2` writes the same offset in a record the feature code allocates
 for itself (`0x421F9B`), and `0x485ED2` is in `0x485E90`, which nothing calls and no dword in the
 image points at — dead code. **`0x4854A0`** allocates and zeroes the unit array (`0x485515`,
-`0x485557`); its one call is `0x4918D4`, in the level's init.
+`0x485557`); its one call is `0x4918D4`, in the level's init. Before it allocates, it sets the slot
+count, `u16 main+0x14351`, to `10·[main+0x37EE6] + 1` in 16-bit arithmetic (`0x4854E3..0x4854EF`:
+`mov dx,[eax+0x37EE6]; imul dx,dx,0xA; inc edx; mov [eax+0x14351],dx`).
 
 **`CreateFromNetwork 0x4861D0`'s exits.** It refuses at `0x48622B` (the player has no block) and
-returns the unit from `0x48634F`. Its three callers are the `0x09` case (`0x4553E4`, returning to
+returns the unit from `0x48634F` (`mov eax,esi; pop edi; pop esi; pop ebp`, then `0x486354` `pop ebx`
+… `ret 8`). At `0x48634F` its frame is the one `0x4861ED` reads the record argument from (`mov
+edi,[esp+0x24]`), with the caller's return address at `[esp+0x1C]`. Its three callers are the `0x09` case (`0x4553E4`, returning to
 `0x4553E9`), the `0x2C` dirty entry (`0x48BA00` → `0x48BA05`) and round robin (`0x48B497` →
 `0x48B49C`). The two `0x2C` creates pass the slot's own `+0xFF` as the player (`0x48B9E7`,
 `0x48B47E`), not the sender. **The `0x2C` header's GameTime** (`[32]`, read at `0x48B955`) is
@@ -659,16 +669,28 @@ another in the order sent is not established** (the port's open question); B4 do
 **What B4 patches** (the design and its argument are in the plan; the code is `fix_stale_hits`):
 the three sends above call ours with the send's own signature and put the stock record inside a
 tagged `0x05` (`05 00 4A` + the `0x09` + the owner's birth, `05 00 4B` + the `0x0B` + the sender's
-stamp of its victim); the `0x05` slot `0x455F90` becomes the receiver, which applies the carried
+stamp of its victim), and the stock lengths the tagged copy takes, `push 0x17` at `0x45605C` and `push
+0x9` at `0x489CA8`, are compared rows of the table, not written; the `0x05` slot `0x455F90` becomes
+the receiver, which applies the carried
 type's own gate and enters stock's handler with the return address stock's case pushes (`0x4553E9`,
 `0x455417`), so B3's bounds and its counters, which key on them, run unchanged; the `0x09` and `0x0B`
 slots drop a bare message; `0x48634F` stamps a copy (exact after a carried `0x09`, its birth
 read from `CreateFromNetwork`'s own record argument; after a recreate, the `0x2C`'s GameTime as a
-lower bound, from the record whose block holds the slot); `0x486036` decides first-free once, at
+lower bound, from the record whose block holds the slot), then replays `mov eax,esi; pop edi; pop
+esi; pop ebp` and goes on at `0x486354`; `0x486036` decides first-free once, at
 the block's first free slot: an unheld one, else the one freed longest ago if in an earlier tick,
-never one freed this tick (arg 8 = 0 only); `0x486DC1` stamps the free; `0x4854A0` resets the
-tables with the array and sizes them from its count; `0x4653DE` sends a NULL from `0x4653D9` to
-the block's end `0x4654FB` and writes nothing, so the countdown stays at −1 as stock's fire leaves
+never one freed this tick (arg 8 = 0 only) — a slot it takes goes on at `0x48605D`, a taken one to
+`0x486040`, and with none to take it leaves `esi` at the block's last slot and goes to `0x486040`,
+whose step ends the loop at `0x486053`, NULL, as at the unit cap; `0x486DC1` stamps the free;
+`0x4854A0` resets the tables with the array and sizes them from its count, computed as
+`0x4854E3..0x4854EF` computes it, in place of `sub esp,0x30; mov eax,[0x511DE8]`, going on at
+`0x4854A8`; `0x4653DE` sends a NULL from `0x4653D9` to the block's end `0x4654FB` (a unit goes on at
+`0x4653E6`, after the replayed `mov esi,eax; xor eax,eax; mov edi,[esp+0x34]`). `0x4654FB` runs on
+the site's own stack — the calls between clean their own arguments: `0x496E90` (`ret 0xC` at
+`0x496ED4`; it sets bit 0 of its first argument's `+0x149` and stores the other two, each at least
+200, as floats at `+0xE0` and `+0xDC`), `Game_SetLOSState 0x4816A0` and `0x48D630` (each `ret 4`,
+pushed `1` at `0x4654ED` and `0x4654F4`) — and reloads `edi`, `bl` and `ebp` itself
+(`0x4654FB..0x465503`). The stub writes nothing, so the countdown stays at −1 as stock's fire leaves
 it and fires again six passes later while its trigger holds. All are rows of
 the fail-closed table, in both builds.
 MEASURED 2026-09-25 (the plan's *B4 BUILT AHEAD*, three peers, every hit held 30 ticks by the test
