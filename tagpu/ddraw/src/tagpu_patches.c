@@ -2734,10 +2734,12 @@ static int fix_weapon_ids(void)
    THE FIX bounds each value before use. Every stub is entered by a jmp at a clean 5-byte
    boundary, verifies the whole stock span first (all-or-nothing: one non-stock span leaves the
    image untouched), sets the same registers stock would, and continues at the same address; a
-   failed bound goes to the receiver's own drop/exit. The 0x2C reader's position is bounded by
-   the message's length before each read the stubs precede (see wire_2c_len). On a misframed
-   0x2C the reader is pointed at a static zero dword and sent to the engine's own end-of-list
-   0x48BA28, so no round-robin entry is parsed from a stream that cannot be re-framed.
+   failed bound goes to the receiver's own drop/exit. A 0x2C is parsed from a zero-padded copy
+   of itself (wire_s2c_copy), and its reader's position is bounded by the message's length
+   before each read the stubs precede (wire_2c_len). On a misframed 0x2C the reader is pointed
+   at a static zero dword and sent to the engine's own end-of-list 0x48BA28, so no round-robin
+   entry is parsed from a stream that cannot be re-framed. The transport's splitter ends a
+   packet at a message too short to advance it (wire_split_*).
 
    THREADS. These receivers run on the game thread only, by the dispatcher's gate: 0x451FD0
    (called at 0x491369) is the only filler of the receive-mask table 0x512BC0 for their codes,
@@ -2758,6 +2760,12 @@ static int wire_delta_ok(int delta, int n)                    { return delta >= 
 static int wire_bits_ok(unsigned long long pos, unsigned int need, unsigned long long end)
 {
     return pos + need <= end;
+}
+/* a message the splitter may take: a length that advances it, and for a 0x2C at least its
+   7-byte header ([8] code, [16] size, [32] GameTime), which every sender writes */
+static int wire_split_ok(unsigned int code, unsigned int len)
+{
+    return len != 0u && (code != 0x2Cu || len >= 7u);
 }
 
 /* A player's block is a run of N slots starting at begin + (1 + k*N)*0x118, k < 10 (10*N+1
@@ -2792,7 +2800,9 @@ static unsigned int s_wireMorph, s_wireDCreate, s_wireRCreate, s_wireGhost;
 static unsigned int s_wireNoBlk09, s_wireNoBlkDirty, s_wireNoBlkRR, s_wireNoArr;
 /* drop counters, per message */
 static unsigned int s_wire09, s_wire09Blk, s_wire0C, s_wire0Ckill, s_wire0B, s_wire2C;
-static unsigned int s_wire2CLen, s_wire2CStale;
+static unsigned int s_wire2CLen, s_wire2CStale, s_wire2CNoCopy;
+/* the splitter's stops and the pump's re-pointed message pointer run on whichever thread pumps */
+static volatile LONG s_wireSplit, s_wirePump;
 /* records accepted off the wire, per receiver: evidence each bound ran on real traffic (the
    same role as the line-of-sight own-row counters). 0x0B and 0x0C count only the dispatcher's
    call (return 0x455417 / 0x455428), not the local kill and damage paths that share the
@@ -2812,10 +2822,13 @@ static int s_wire_2c_type, s_wire_rr_type;
    whose reader is not this one stops, so a nested or stale parse cannot borrow the bound. */
 static const unsigned char* s_wire2cRd;
 static unsigned long long   s_wire2cEnd;
+static const unsigned char* s_wire2cCopy;
 /* the stop path's zero dword: a misframed 0x2C reader points here so its flag bit reads 0 */
 static const unsigned int s_wireZero;
 /* the receive's buffer and delivered length, per thread (see wire_rx_note) */
 static DWORD s_wireTlsBuf = TLS_OUT_OF_INDEXES, s_wireTlsLen = TLS_OUT_OF_INDEXES;
+/* each thread's copy buffer for the 0x2C parse (see wire_s2c_copy) */
+static DWORD s_wireTlsCopy = TLS_OUT_OF_INDEXES;
 
 static volatile LONG s_wireNotes;
 static void wire_drop(unsigned int* c, const char* what, unsigned int a, unsigned int b)
@@ -2833,18 +2846,129 @@ static void wire_drop(unsigned int* c, const char* what, unsigned int a, unsigne
    transport 0x462F30, 0x45361F for a raw DirectPlay receive, `-p` below 0). On the transport
    the length of a 0x2C IS its [16] size field (the splitter 0x463790 reads it at 0x4639E5 and
    queues a 0x2C only when it fits the packet, 0x46393E); a raw receive has no splitter, so the
-   bound is the smaller of the two. A 0x2C whose reader does not start at the buffer the
-   length describes is stopped: the pump takes its message pointer once, at 0x453D90, and
-   0x4534E0 can move the buffer when it grows it (0x453565, 0x4535EE). */
+   bound is the smaller of the two.
+
+   THE PUMP'S POINTER. The pump 0x453D40 takes its message pointer once, before its loop
+   (0x453D90 -> [esp+0x10]), and 0x4534E0 grows the buffer when a message outgrows it
+   (0x453565, 0x4535EE: 0x4D84A0, a realloc [INFERRED: (block, size) in, the block out]), so
+   after a growth that moves the block, every later message of the same pump call was
+   dispatched from the freed one. Nothing else writes the pump's [esp+0x10] or takes its
+   address. The note re-points the pump's
+   [esp+0x10] at the buffer the message was just received into, so the dispatcher reads the
+   message the length describes: the identity when the buffer did not move. The frame is the
+   pump's by construction: 0x4534E0's one caller is 0x453D94, its prologue is one push
+   (0x4534E0) and the three argument pushes are the span verified at install, and the note
+   checks the return address 0x453D99 before it writes. */
 
 /* call-entered at 0x453595 / 0x45361F in place of `call 0x415EF0` (code, len, 0), which the
-   stub then jumps to with the stack as stock left it */
+   stub then jumps to with the stack as stock left it. r[PR_RET+1..3] are the arguments,
+   r[PR_RET+4] 0x4534E0's local, r[PR_RET+5] its return into the pump, and the pump's frame
+   starts at r[PR_RET+6], so its [esp+0x10] is r[PR_RET+10]. */
 static int __cdecl wire_rx_note(unsigned int* r)
 {
     char* ta = *(char* const*)0x00511DE8;
-    TlsSetValue(s_wireTlsBuf, ta ? *(void* const*)(ta + 0x2A38) : NULL);
+    void* buf = ta ? *(void* const*)(ta + 0x2A38) : NULL;
+    TlsSetValue(s_wireTlsBuf, buf);
     TlsSetValue(s_wireTlsLen, (void*)(size_t)r[PR_RET + 2]);
+    if (buf && r[PR_RET + 5] == 0x00453D99u && r[PR_RET + 10] != (unsigned int)(size_t)buf) {
+        if (InterlockedIncrement(&s_wirePump) <= 16)
+            tagpu_logf("enginefix: wire robustness: the receive buffer moved to %p (capacity %u) "
+                       "inside a pump call; its message pointer follows (code %u, %u bytes)",
+                       buf, *(const unsigned int*)(ta + 0x2A34), r[PR_RET + 1] & 0xFFu,
+                       r[PR_RET + 2]);
+        r[PR_RET + 10] = (unsigned int)(size_t)buf;
+    }
     return 1;
+}
+
+/* The copy's padding: the most the engine can read past the last check we control, by
+   disassembly of every path.
+     - a dirty entry: after the type check, the move class's payload parse [vt+0x24] and then
+       the next delta (16) at 0x48BA19, before the delta stub checks. The move classes'
+       vtables (0x4FD458, 0x4FD488, 0x4FD980, 0x4FD9B0, 0x4FD9E0; no other table's +0x24
+       reaches the reader) give 0x44EFD0 (reads 0), 0x44F5C0 (1 + 2 + 3 * 32 = 99: its loop
+       runs a 2-bit count) and 0x490A10 (2 + max(0x44E080's 8+32+16+16+16+96 = 184,
+       0x44E9C0's 1+6*32+16 = 209) + 2 = 213). 213 + 16 = 229.
+     - the round robin after 0x48B40E: 16+8+8+2+1 at 0x48B4A9..0x48B557, then 15+8 or
+       32*3+16*3 at 0x48B56B..0x48B60F and 32 at 0x48B6F2: 35 + 176 = 211. 0x48B090,
+       0x48AB70, 0x47D0E0, 0x47CC30 and 0x4827B0 read nothing.
+     - the header, before the entry check: 56.
+   229 bits is 29 bytes past the last checked bit; the message's end can sit 3 bytes into a
+   dword, and 0x415DC0 reads the dword after the last bit's when a read ends on a boundary
+   (0x415E0C..0x415E3E): 8 more. */
+enum {
+    WIRE_2C_OVER_BITS = 229,
+    WIRE_2C_PAD       = 48,
+    WIRE_2C_MAX       = 0xFFFF,                   /* the [16] size bounds the copied length */
+    WIRE_2C_COPY      = WIRE_2C_MAX + WIRE_2C_PAD
+};
+typedef char wire_2c_pad_covers[(WIRE_2C_PAD >= (WIRE_2C_OVER_BITS + 7) / 8 + 3 + 8) ? 1 : -1];
+
+/* 0x2C, the receiver's first instruction after its pushes, branch at 0x48B92B (before the
+   header's reads). eax = the message. Copies it -- the receive's delivered length, and the
+   size field when that is smaller, so at most 0xFFFF bytes -- into this thread's buffer,
+   zeroes WIRE_2C_PAD bytes after it, and hands the copy back in eax, which stock's
+   0x48B933 stores as the reader's buffer. Every read of the parse is then inside memory we
+   own, whatever the message says. A message that is not the buffer the receive described,
+   or no buffer, drops to 0x48BAC8. Continue -> xor esi,esi; push 8; lea ecx,[esp+0x14];
+   0x48B933. Nothing reads the reader after the handler returns: the dispatcher's case
+   jumps to the next receive (0x4553F9). */
+static int __cdecl wire_s2c_copy(unsigned int* r)
+{
+    const unsigned char* pkt = (const unsigned char*)(size_t)r[PR_EAX];
+    const unsigned char* buf = (const unsigned char*)TlsGetValue(s_wireTlsBuf);
+    unsigned int len = (unsigned int)(size_t)TlsGetValue(s_wireTlsLen);
+    unsigned char* copy = (unsigned char*)TlsGetValue(s_wireTlsCopy);
+    s_wire2cRd = 0;
+    s_wire2cCopy = 0;
+    if (!pkt || pkt != buf) {
+        wire_drop(&s_wire2CStale, "a 0x2C is not the message the receive delivered; dropped",
+                  0, len);
+        return 0;
+    }
+    if (len >= 3u && *(const unsigned short*)(pkt + 1) < len) len = *(const unsigned short*)(pkt + 1);
+    if (len > WIRE_2C_MAX) len = WIRE_2C_MAX;
+    if (!copy) {
+        copy = (unsigned char*)VirtualAlloc(NULL, WIRE_2C_COPY, MEM_COMMIT | MEM_RESERVE,
+                                            PAGE_READWRITE);
+        if (!copy) {
+            wire_drop(&s_wire2CNoCopy, "no copy buffer for a 0x2C; dropped", len, 0);
+            return 0;
+        }
+        TlsSetValue(s_wireTlsCopy, copy);
+    }
+    memcpy(copy, pkt, len);
+    memset(copy + len, 0, WIRE_2C_PAD);
+    s_wire2cRd   = WPN_ESP_JMP(r) + 0x10;
+    s_wire2cEnd  = (unsigned long long)len * 8u;
+    s_wire2cCopy = copy;
+    r[PR_EAX] = (unsigned int)(size_t)copy;
+    return 1;
+}
+
+/* The transport's splitter 0x463790 walks a packet by each message's length and advances by
+   it, so a length of 0 keeps its counting loop (0x4638F0..0x463947) on one message for good,
+   and its third walk (0x463AD5..0x463B8B) queues that message until the queue is full. Both
+   take the length at one place; a length wire_split_ok refuses ends the split there, through
+   the engine's own end for a code it does not know (0x463949; 0x463B91). The counting pass
+   decides how many messages the queuing pass 0x4639BC takes, so that pass never reaches it. */
+static int wire_split(unsigned int code, unsigned int len)
+{
+    if (wire_split_ok(code, len)) return 1;
+    if (InterlockedIncrement(&s_wireSplit) <= 16)
+        tagpu_logf("enginefix: wire robustness: a packet's message of code %u has length %u, too "
+                   "short to advance; the packet's split ends there", code, len);
+    return 0;
+}
+/* 0x463939 in the counting loop: ax = the length, the code at [esp+0x28] (0x4638F4) */
+static int __cdecl wire_split_count(unsigned int* r)
+{
+    return wire_split(*(const unsigned char*)(WPN_ESP_JMP(r) + 0x28), r[PR_EAX] & 0xFFFF);
+}
+/* 0x463B33 in the third walk: ax = the length, the code at [esp+0x2C] (0x463AD9) */
+static int __cdecl wire_split_walk(unsigned int* r)
+{
+    return wire_split(*(const unsigned char*)(WPN_ESP_JMP(r) + 0x2C), r[PR_EAX] & 0xFFFF);
 }
 
 static unsigned long long wire_pos(const unsigned char* rd)
@@ -3030,36 +3154,25 @@ static int __cdecl wire_s0b(unsigned int* r)
 }
 
 /* 0x2C entry, branch at 0x48B960, after the header's three reads ([8] code, [16] size,
-   [32] GameTime, 56 bits). edi = player record, ebp = GameTime, the reader at [esp+0x10] and
-   the message at [esp+0x3C]. Continue -> 0x48B96E (stock's mov [edi+0x18],ebp done here); a
-   message that is not the buffer's, or whose header and first delta do not fit its length,
-   or a block that is not a valid slot run, drops to 0x48BAC8, the engine's own clean 'no
-   block' exit. The block check covers the dirty loop, the block sweep 0x48BA28 and the
+   [32] GameTime, 56 bits, from the copy). edi = player record, ebp = GameTime, the reader at
+   [esp+0x10]. Continue -> 0x48B96E (stock's mov [edi+0x18],ebp done here); a reader that is
+   not the copy's, a header and first delta that do not fit the message, or a block that is
+   not a valid slot run, drops to 0x48BAC8, the engine's own clean 'no block' exit. The block check covers the dirty loop, the block sweep 0x48BA28 and the
    round-robin slot 0x48BAAD, all of which read [edi+0x67]/[edi+0x6B]. */
 static int __cdecl wire_s2c_entry(unsigned int* r)
 {
     char* ta = *(char* const*)0x00511DE8;
     char* pr = (char*)(size_t)r[PR_EDI];
     unsigned char* sp = WPN_ESP_JMP(r);
-    const unsigned char* pkt = *(const unsigned char* const*)(sp + 0x3C);
-    const unsigned char* buf = (const unsigned char*)TlsGetValue(s_wireTlsBuf);
-    unsigned int len = (unsigned int)(size_t)TlsGetValue(s_wireTlsLen);
+    const unsigned char* rd = sp + 0x10;
     const char* arr_first;
     const char* arr_last;
     const char* bfirst;
     const char* blast;
-    unsigned int n, size;
-    s_wire2cRd = 0;
+    unsigned int n;
     if (!pr || !ta) return 0;
-    if (!pkt || pkt != buf || *(const unsigned char* const*)(sp + 0x10) != pkt) {
-        wire_drop(&s_wire2CStale, "a 0x2C is not the message the receive delivered; dropped",
-                  0, len);
-        return 0;
-    }
-    size = len >= 3u ? *(const unsigned short*)(pkt + 1) : 0u;
-    s_wire2cRd  = sp + 0x10;
-    s_wire2cEnd = (unsigned long long)(size < len ? size : len) * 8u;
-    if (!wire_2c_len(s_wire2cRd, 16, "the first delta")) {
+    if (!s_wire2cCopy || *(const unsigned char* const*)rd != s_wire2cCopy ||
+        !wire_2c_len(rd, 16, "the first delta")) {
         s_wire2cRd = 0;
         return 0;
     }
@@ -3245,7 +3358,7 @@ enum {
     WIRE_EMIT1_LEN = WIRE_PRO_LEN + 1 + 5,      /* popad; jmp                                */
     WIRE_EMIT2_LEN = WIRE_PRO_LEN + 2 + 1 + 6 + 5,
     WIRE_EMIT3_LEN = WIRE_PRO_LEN + 3 + 1 + 6 + 6 + 5,
-    WIRE_FLAG_LEN  = WIRE_PRO_LEN + 2 + 1 + 6 + 8 + 5,
+    WIRE_TAIL_LEN  = WIRE_PRO_LEN + 2 + 1 + 6 + 5,       /* plus the displaced bytes       */
     WIRE_STOP_LEN  = 8 + 8 + 8 + 5
 };
 
@@ -3294,17 +3407,18 @@ static unsigned char* wire_emit3(unsigned char* p, int (__cdecl *fn)(unsigned in
     return p;
 }
 
-/* the flag site: jz 0x48BAC8, else the two loads the branch displaced
-   (mov ecx,[esp+0x18]; mov eax,[esp+0x10]) and on at 0x48BA66 */
-static unsigned char* wire_emit_flag(unsigned char* p)
+/* two-way over displaced code: jz drop, else the n stock bytes the branch replaced (no
+   relative operand among them) and on at cont */
+static unsigned char* wire_emit_tail(unsigned char* p, int (__cdecl *fn)(unsigned int*),
+                                     unsigned int drop, const unsigned char* bytes, int n,
+                                     unsigned int cont)
 {
-    static const unsigned char loads[8] = { 0x8B,0x4C,0x24,0x18,0x8B,0x44,0x24,0x10 };
-    p = wire_pro(p, wire_s2c_flag);
+    p = wire_pro(p, fn);
     *p++ = 0x85; *p++ = 0xC0;                                  /* test eax,eax   */
     *p++ = 0x61;                                               /* popad          */
-    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x0048BAC8u); p += 4;
-    memcpy(p, loads, 8); p += 8;
-    *p++ = 0xE9; tagpu_detour_rel(p, 0x0048BA66u); p += 4;
+    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, drop); p += 4;
+    memcpy(p, bytes, (size_t)n); p += n;
+    *p++ = 0xE9; tagpu_detour_rel(p, cont); p += 4;
     return p;
 }
 
@@ -3373,20 +3487,33 @@ static int fix_wire_bounds(void)
     static const unsigned char krx2[21] = {
         0x8B,0x44,0x24,0x00,0x6A,0x00,0x50,0x8B,0x91,0x38,0x2A,0x00,0x00,0x8A,0x02,0x50,
         0xE8,0xCC,0x28,0xFC,0xFF };
+    /* the frame the note writes: 0x4534E0's one push, and the pump's pointer and call */
+    static const unsigned char kpro[1] = { 0x51 };
+    static const unsigned char kpump[9] = { 0x89,0x4C,0x24,0x10,0xE8,0x47,0xF7,0xFF,0xFF };
+    /* the 0x2C receiver's reader set-up, and the splitter's two length points */
+    static const unsigned char kcp[8]  = { 0x33,0xF6,0x6A,0x08,0x8D,0x4C,0x24,0x14 };
+    static const unsigned char ksc[5]  = { 0x25,0xFF,0xFF,0x00,0x00 };
+    static const unsigned char ksw[8]  = { 0x8B,0xD0,0x81,0xE2,0xFF,0xFF,0x00,0x00 };
+    static const unsigned char kscode[8] = { 0x8A,0x06,0x3C,0x01,0x88,0x44,0x24,0x28 };
+    static const unsigned char kswcode[8] = { 0x8A,0x06,0x3C,0x01,0x88,0x44,0x24,0x2C };
     static const WIRESPAN span[] = {
         { 0x004861F7, 41, k09 }, { 0x004866E0, 38, k0c }, { 0x00486753, 37, k0ck },
         { 0x00489CED, 74, k0b }, { 0x0048B960, 14, ken }, { 0x0048B985, 24, kdl },
         { 0x0048B9AD,  9, kty }, { 0x0048BA05,  8, kaf }, { 0x0048BA9F, 14, krem },
         { 0x0048B40E,  7, krr }, { 0x0048B49C,  6, krra }, { 0x0048BA5E,  8, kfl },
-        { 0x00453585, 21, krx1 }, { 0x0045360F, 21, krx2 },
+        { 0x00453585, 21, krx1 }, { 0x0045360F, 21, krx2 }, { 0x004534E0, 1, kpro },
+        { 0x00453D90,  9, kpump }, { 0x0048B92B,  8, kcp }, { 0x00463939,  5, ksc },
+        { 0x00463B33,  8, ksw }, { 0x004638F0,  8, kscode }, { 0x00463AD5,  8, kswcode },
     };
+    static const unsigned char loads[8] = { 0x8B,0x4C,0x24,0x18,0x8B,0x44,0x24,0x10 };
     /* S8, the unsigned remainder, patched in place (movzx ecx,[edx+0x37EE6]; mov eax,ebp;
        xor edx,edx; div ecx; nop) */
     static const unsigned char remNow[14] = {
         0x0F,0xB7,0x8A,0xE6,0x7E,0x03,0x00,0x8B,0xC5,0x33,0xD2,0xF7,0xF1,0x90 };
 
     unsigned char *stop, *a09, *a0c, *a0ck, *a0b, *aen, *adl, *aty, *aaf, *arr, *arra, *afl, *arx;
-    FIXSITE s[15];
+    unsigned char *acp, *asc, *asw;
+    FIXSITE s[18];
     int i, n = 0;
 
     for (i = 0; i < (int)(sizeof span / sizeof span[0]); i++)
@@ -3397,15 +3524,19 @@ static int fix_wire_bounds(void)
 
     if (s_wireTlsBuf == TLS_OUT_OF_INDEXES) s_wireTlsBuf = TlsAlloc();
     if (s_wireTlsLen == TLS_OUT_OF_INDEXES) s_wireTlsLen = TlsAlloc();
-    if (s_wireTlsBuf == TLS_OUT_OF_INDEXES || s_wireTlsLen == TLS_OUT_OF_INDEXES) return FIX_STUB;
+    if (s_wireTlsCopy == TLS_OUT_OF_INDEXES) s_wireTlsCopy = TlsAlloc();
+    if (s_wireTlsBuf == TLS_OUT_OF_INDEXES || s_wireTlsLen == TLS_OUT_OF_INDEXES ||
+        s_wireTlsCopy == TLS_OUT_OF_INDEXES)
+        return FIX_STUB;
 
     if (!(stop = wire_code(WIRE_STOP_LEN)) || !(a09 = wire_code(WIRE_EMIT2_LEN)) ||
         !(a0c = wire_code(WIRE_EMIT2_LEN)) || !(a0ck = wire_code(WIRE_EMIT1_LEN)) ||
         !(a0b = wire_code(WIRE_EMIT2_LEN)) || !(aen = wire_code(WIRE_EMIT2_LEN)) ||
         !(adl = wire_code(WIRE_EMIT2_LEN)) || !(aty = wire_code(WIRE_EMIT3_LEN)) ||
         !(aaf = wire_code(WIRE_EMIT2_LEN)) || !(arr = wire_code(WIRE_EMIT3_LEN)) ||
-        !(arra = wire_code(WIRE_EMIT2_LEN)) || !(afl = wire_code(WIRE_FLAG_LEN)) ||
-        !(arx = wire_code(WIRE_EMIT1_LEN)))
+        !(arra = wire_code(WIRE_EMIT2_LEN)) || !(afl = wire_code(WIRE_TAIL_LEN + 8)) ||
+        !(arx = wire_code(WIRE_EMIT1_LEN)) || !(acp = wire_code(WIRE_TAIL_LEN + 8)) ||
+        !(asc = wire_code(WIRE_TAIL_LEN + 5)) || !(asw = wire_code(WIRE_TAIL_LEN + 8)))
         return FIX_STUB;
     wire_emit_stop(stop);
     wire_emit2(a09, wire_s09, 0x0048622Bu, 0x00486220u);
@@ -3418,8 +3549,11 @@ static int fix_wire_bounds(void)
     wire_emit2(aaf, wire_s2c_after, (unsigned int)(size_t)stop, 0x0048BA0Du);
     wire_emit3(arr, wire_s2c_rr, 0x0048B435u, 0x0048B415u, 0x0048B43Fu);
     wire_emit2(arra, wire_s2c_rr_after, 0x0048B435u, 0x0048B4A2u);
-    wire_emit_flag(afl);
+    wire_emit_tail(afl, wire_s2c_flag, 0x0048BAC8u, loads, 8, 0x0048BA66u);
     wire_emit1(arx, wire_rx_note, 0x00415EF0u);
+    wire_emit_tail(acp, wire_s2c_copy, 0x0048BAC8u, kcp, 8, 0x0048B933u);
+    wire_emit_tail(asc, wire_split_count, 0x00463949u, ksc, 5, 0x0046393Eu);
+    wire_emit_tail(asw, wire_split_walk, 0x00463B91u, ksw, 8, 0x00463B3Bu);
 
     /* the branch each site takes, at its clean boundary; the stock bytes were verified above */
 #define WIRE_SITE(va_, n_, op_, to_) \
@@ -3438,6 +3572,9 @@ static int fix_wire_bounds(void)
     WIRE_SITE(0x0048BA5E, 8, 0xE9, afl);
     WIRE_SITE(0x00453595, 5, 0xE8, arx);
     WIRE_SITE(0x0045361F, 5, 0xE8, arx);
+    WIRE_SITE(0x0048B92B, 8, 0xE9, acp);
+    WIRE_SITE(0x00463939, 5, 0xE9, asc);
+    WIRE_SITE(0x00463B33, 8, 0xE9, asw);
 #undef WIRE_SITE
     s[n].va = 0x0048BA9F; s[n].n = 14;                         /* S8, in place */
     memcpy(s[n].was, krem, 14); memcpy(s[n].now, remNow, 14); n++;
@@ -3450,14 +3587,17 @@ int tagpu_wire_format(char* buf, unsigned int cap)
 {
     return _snprintf(buf, cap,
                      " | wire: in 09=%u 0b=%u 0c=%u 0d=%u 2c=%u dirty=%u create=%u rr=%u"
-                     " drop 09=%u blk=%u 0b=%u 0c=%u kill=%u 2c=%u len=%u stale=%u 0d=%u"
-                     " morph=%u dcreate=%u rcreate=%u ghost=%u argdiff=%u"
+                     " drop 09=%u blk=%u 0b=%u 0c=%u kill=%u 2c=%u len=%u stale=%u nocopy=%u"
+                     " 0d=%u split=%u"
+                     " morph=%u dcreate=%u rcreate=%u ghost=%u argdiff=%u pump=%u"
                      " noblock 09=%u dirty=%u rr=%u noarr=%u",
                      s_wireIn09, s_wireIn0B, s_wireIn0C, s_wireIn0D, s_wireIn2C, s_wireIn2CDirty,
                      s_wireIn2CCreate, s_wireIn2CRR,
                      s_wire09, s_wire09Blk, s_wire0B, s_wire0C, s_wire0Ckill, s_wire2C,
-                     s_wire2CLen, s_wire2CStale, s_wireWpnxDrops,
+                     s_wire2CLen, s_wire2CStale, s_wire2CNoCopy, s_wireWpnxDrops,
+                     (unsigned int)s_wireSplit,
                      s_wireMorph, s_wireDCreate, s_wireRCreate, s_wireGhost, s_wireArgDiff,
+                     (unsigned int)s_wirePump,
                      s_wireNoBlk09, s_wireNoBlkDirty, s_wireNoBlkRR, s_wireNoArr);
 }
 
@@ -3467,7 +3607,7 @@ int tagpu_wire_format(char* buf, unsigned int cap)
    else: the stubs and the drop paths rest on the disassembly. */
 static void wire_selfcheck(void)
 {
-    struct { const char* name; int got; int want; } t[20];
+    struct { const char* name; int got; int want; } t[24];
     int n = 0, bad = 0, i;
     t[n].name = "index 0 rejected";        t[n].got = wire_index_ok(0, 100);      t[n].want = 0; n++;
     t[n].name = "index 1 accepted";        t[n].got = wire_index_ok(1, 100);      t[n].want = 1; n++;
@@ -3486,6 +3626,10 @@ static void wire_selfcheck(void)
     t[n].name = "delta N rejected";        t[n].got = wire_delta_ok(500, 500);    t[n].want = 0; n++;
     t[n].name = "bits to the end accepted"; t[n].got = wire_bits_ok(56, 16, 72);  t[n].want = 1; n++;
     t[n].name = "bits past the end rejected"; t[n].got = wire_bits_ok(57, 16, 72); t[n].want = 0; n++;
+    t[n].name = "split length 0 rejected";  t[n].got = wire_split_ok(0x0B, 0);     t[n].want = 0; n++;
+    t[n].name = "split length 1 accepted";  t[n].got = wire_split_ok(0x0B, 1);     t[n].want = 1; n++;
+    t[n].name = "split 0x2C of 6 rejected"; t[n].got = wire_split_ok(0x2C, 6);     t[n].want = 0; n++;
+    t[n].name = "split 0x2C of 7 accepted"; t[n].got = wire_split_ok(0x2C, 7);     t[n].want = 1; n++;
     {   /* the block-shape predicate on a synthetic array: begin, N=4, two players */
         char base[1];
         const char* begin = base;
@@ -5194,10 +5338,12 @@ static void patch_engine_defects(void)
     _snprintf(b, sizeof b,
               "enginefix: wire robustness %s: 0x09 create -- index, type, the sender's block "
               "(0x4861F7), 0x0C destroy + killer (0x4866E5 0x486753), 0x0B damage (0x489CED), "
-              "0x2C stat/move -- the message's length (the receive's 0x453595 0x45361F), block, "
-              "delta, type, dirty-list move class, after-create, the round-robin flag and type, "
-              "and the unsigned round-robin remainder (0x48B960 0x48B985 0x48B9AD 0x48BA05 "
-              "0x48BA5E 0x48B40E 0x48B49C 0x48BA9F); the diverged 0x0D dropped in wpn_rx_fired "
+              "0x2C stat/move -- parsed from a zero-padded copy (0x48B92B), the message's length "
+              "(the receive's 0x453595 0x45361F, which also keeps the pump's message pointer on "
+              "the buffer), block, delta, type, dirty-list move class, after-create, the "
+              "round-robin flag and type, and the unsigned round-robin remainder (0x48B960 "
+              "0x48B985 0x48B9AD 0x48BA05 0x48BA5E 0x48B40E 0x48B49C 0x48BA9F); the splitter's "
+              "short messages (0x463939 0x463B33); the diverged 0x0D dropped in wpn_rx_fired "
               "(0x49D280). Records accepted, drops, the morph/dcreate/rcreate/ghost oracles and "
               "CreateFromNetwork's no-block refusals are on the heartbeat's 'wire:' section. "
               "Stubs: %u bytes",
