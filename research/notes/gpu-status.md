@@ -17837,8 +17837,10 @@ TNT feature that one of those spawns destroys still is.
   row — so the lookups index by a row under `mapH` and a column under `mapW`, and each row's
   bucket is ordered by column, by this side's own test and not by the publisher's order (which is
   row-major already, so nothing is dropped there).
-- **The gather** (`mirror_gather`, after the map's own anchors): every cell of the sweep rect **not
-  clamped to the map** that lies past it takes the map's anchor at the cell it folds to. Cells in
+- **The gather** (`mirror_gather`, after the map's own anchors): every cell past the map of the
+  rect the engine would sweep — the unclamped rect for a copy the right way round, the rect
+  mirrored about the view for a turned one (below) — takes the map's anchor at the cell it folds
+  to. Cells in
   the map's last row or column are skipped, as the engine's sweep skips them. **It walks anchors,
   not cells**: a sweep row splits at the folds into runs of at most one map width, each a copy of
   the source row the right way round (copy `q = floor(col / mapW)` even) or turned (odd), and each
@@ -17901,11 +17903,22 @@ TNT feature that one of those spawns destroys still is.
   map's own quads keep to the map's columns** (`uClip`, the block's int at 40): past a side edge
   the picture is the map reflected, and a tree's overhang there would cover the reflection of the
   tree itself; across the top and bottom the copies stand upright, so the overhang is kept, and
-  under a black edge nothing is clipped. Then the hole from the base's alpha, the twin's colour
-  where the reveal painted it, `taEdge`, and premultiplied half-alpha frames. No fog, no light.
+  under a black edge nothing is clipped. **Every one of these clips tests the sample's point
+  moved to the ground's side of a fold**, `s = vWorld + e` with `e = TAGPU_EDGE_NUDGE / zoom`
+  world px (`uNudgeW`), never `vWorld` itself. The terrain puts every fold — the map's four edges
+  and each copy's own `x = q·W` — at the fold less `e` on screen, so a sample belongs to the side
+  its point moved by `e` lies on; at the 0.25× floor, with the eye's parity, a whole column or row
+  of samples lies on a fold, where `vWorld` alone would sit on the line and take whichever side
+  the interpolation rounded it to. **The margin is the invariant**: a sample on a fold is `e` from
+  the line, 1/8 world px at the floor (128 ulps of a coordinate under 16 384), and at every zoom
+  `8·ss` times the rasteriser's snap of the ground's own edge (1/256 of a framebuffer px,
+  `subPixelPrecisionBits` 8 on the reference setup's GPU and on llvmpipe). Then the hole from the
+  base's alpha, the twin's colour where the reveal painted it, `taEdge`, and premultiplied
+  half-alpha frames. No fog, no light.
 - **Draw order**: four buckets, the map's shadows and bodies, then the mirror's shadows
   (`s_pipeShadow`, no depth writes) and bodies (`s_pipeBody`). The fragment block is 48 B
-  (`uMapPx` at 32, `uClip` at 40); each block is rounded to `minUniformBufferOffsetAlignment`.
+  (`uMapPx` at 32, `uClip` at 40, `uNudgeW` at 44); each block is rounded to
+  `minUniformBufferOffsetAlignment`.
 - **One tie rule for every sprite** (`emit_frame`). A quad's corners lie on whole game px, so at
   the 0.25× floor, where every sample centre lands on a whole world px, every sample lies on a
   texel boundary, and which texel it reads — and whether the quad covers it at all — would be the
@@ -17914,9 +17927,21 @@ TNT feature that one of those spawns destroys still is.
   `TAGPU_EDGE_NUDGE_PX / zoom` on the CPU, as the terrain's do: an upright one up and left, a
   turned one right and up, because its texels run the other way. A sample on a boundary then lies
   `NUDGE/zoom` world px (1/32 game px on screen) inside the texel after it, and a turned copy's
-  sample reads the texel its reflection reads on the map. The world corners are taken from the moved quad, so `vWorld` stays the
-  sample's own point for the fog lookup and the edge's clips. At 1× and 0.5× at `ss=2` no sample
-  lies on a boundary and nothing changes.
+  sample reads the texel its reflection reads on the map. The world corners are taken from the
+  moved quad, so `vWorld` stays the sample's own point for the fog lookup and the edge's clips.
+  **It is the ground's 1/32-px shift, at every zoom and under a black edge too**, so a sprite and
+  the ground under it shift together: every sample reads the texel under its point plus `e`. On
+  the dyadic zooms from 0.5× to 8× no sample lies within `e` before a texel boundary (at 1× a
+  sample is 1/4 world px inside its texel), so no sample changes; at 0.25× every tie reads the
+  texel after it; and at the wheel's other resting levels (its 1.14 steps, `tagpu_zoom.c`) every
+  sample within `e` before a boundary reads the next texel — about a share `e` of the sample
+  columns and of the rows, the level's alone and the same at every whole-px eye: 4.0 % of each
+  at one notch out (0.877×), 11.6–11.7 % at ten notches (0.270×), 3.0 % one notch in (1.163×)
+  and 0.43–0.45 % at thirteen in (7.10×) at 1024 × 768 — every level the wheel rests on but 1×,
+  8× and the 0.25× floor, whose samples lie on the boundaries themselves. Which zooms carry
+  exact ties is the viewport width's parity: an even
+  width puts the zoom centre on a whole px, the case above; an odd one puts it on a half px, which
+  takes the 0.25× samples off the whole world px and puts the 0.5× ones on them.
 
 **The mirror reflects what the world passes draw** (`tagpu_feat_mapfeat_sync`). The render thread
 asks the feature pass before either gather, and the sync answers from what the pass will emit this
@@ -18051,7 +18076,8 @@ main at the effects' models (§2.89) unless a line names the build before the me
   main's own second launch before the merge, and main's equal its first, sample for sample — the
   launch spread above. Features: 12 of 12 at 0 px at 1×, 0.5× and 8×, the eye (1201, 2001) off
   the cell grid among them, and neither side takes a capture at (2566, 616) at 0.25× or (2567, 617)
-  at 1×, where no feature is in view; at 0.25× the tie rule (above) changes the map's own sprites, (0, 3000)
+  at 1×, where a second pass draws into the same frame and the A/B capture refuses it (`tagpu.log`:
+  `1 A/B levers claimed this frame and 2 passes drew into it - nothing captured`); at 0.25× the tie rule (above) changes the map's own sprites, (0, 3000)
   by 18 253 samples and (0, 0) by 69 303 in Classic, 22 279 and 84 026 in Classic++, of 3 145 728 —
   at the floor every sample centre is a tie, so every change is a former tie. Those four pictures
   are identical in three launches of three builds, two before the merge and one after. Main's two
@@ -18094,6 +18120,43 @@ main at the effects' models (§2.89) unless a line names the build before the me
   desktop's own clients still shared the GPU]. `mirror_gather` on the CPU at this size: 37 µs
   p50, 73 µs p99, 345 mirrored anchors.
 
+**MEASURED 2026-09-25, the fold clips and the nudge's reach** — the same setup, Classic, one
+launch a mode:
+
+- **The fold samples fall on the ground's side.** The feature pass over the terrain (the capture
+  diagnostic), mirror against black, at 0.25× from eyes whose parity puts a whole sample column
+  or row on a fold: (−447, −351) (x = 0 and y = 0), (−447, 2001) (x = 0), (10303, 6001) (x = W),
+  (3001, −351) (y = 0, under the map's top-row trees) and (4001, 12349) (y = H). On the map, by
+  the ground's own partition (`w + e` inside it), the mirror equals black at every sample —
+  632 385 to 1 349 376 a view, the fold samples on the map's side among them (1 601, 1 408 and
+  1 792 at x = 0 and y = 0, 38 of them under a sprite). On the x = W fold column the map's own
+  frames overhang at 50 samples (translucent shadows); the build before this one drew them over
+  the mirrored ground at all 50 (`M = B + ground/2`, within a level), this one at none — its copy
+  draws there, as on the ground. Past that column the map's frames overhang at 56 more samples,
+  where both builds draw the copy; 2 of them share the map frame's value by chance (a grey, the
+  neighbours not), in both builds alike. No sprite reaches the
+  y = H row on Two Continents (the copies below stand 20 px clear of it), so that clip is shown
+  by the ground's side of it alone. 1× and 0.5× at the north-west corner: 0 samples differ from
+  the build before, mirror or black.
+- **The nudge at a wheel level, counted against a prediction.** The feature pass alone under
+  `edge=black`, this build against main's DLL at the weapon IDs, one notch out (0.877×): a sample
+  whose `frac(w) ≥ 1 − e` on an axis should read what main reads with the eye one world px on
+  along it, so the prediction is main's own capture at the eye moved by (1, 0), (0, 1) or (1, 1).
+  At (3, 3), 2 472 956 of the viewport's 2 523 136 samples lie more than two sub-pixel steps
+  (1/256 of a framebuffer px) from both texel decisions; there 23 009 changed, 23 009 were
+  predicted and 0 differ from the prediction. The other 50 180, in the tie columns and rows whose
+  point lies within that snap of `1 − e` (18 columns, 14 rows), change or not as the rounding
+  gives: 932 differ from the prediction. The same at (1203, 2003) (13 034 decided, 0 off; 650 in
+  the snap band), at ten notches out (0.270×: 11 660, 0 off; 507 in a band) and one notch in
+  (1.163×: 21 361 and 10 335 decided, 0 off, and 0 in the band either). The shares of tie
+  columns and rows are the arithmetic's: 3.96 % and 4.05 % at 0.877×.
+- **The mirror moves a borderline sample of the map's own sprite at a wheel level.** At the
+  north-west corner at 0.877×, mirror against black, 10 on-map samples differ, all in one
+  column whose point lies 0.0006 world px past `1 − e` — inside the 0.0022 of the snap — where
+  the texel read follows the frame's place in the atlas, and the mirror's own frames move places
+  (two mirror launches of two builds differ at 19 samples of that column). See *What it does not
+  do*.
+
 **What it does not do.**
 
 - **A translucent shadow past the edge can round two levels from its reflection.** The world
@@ -18106,6 +18169,16 @@ main at the effects' models (§2.89) unless a line names the build before the me
   order are the map's; the arithmetic is not. With the bodies drawn, 1 of 1 261 410 at 0.25× and
   none at 1×. An exact strip needs the tone applied to the map's own finished pixels, or a world
   target wider than 8 bits, which would change the rounding of every blend on the map as well.
+- **A sample within the rasteriser's snap of a decision is the rounding's, at a wheel level.**
+  The nudge moves every texel decision `e` off the sample lattice of 0.25×, 0.5×, 1× and 8×; at
+  the wheel's other levels a column or row can still lie within one sub-pixel step of the nudged
+  boundary (about 1 % of the columns at 0.877×). Such a sample reads either texel as the frame's
+  place in the atlas rounds it, and the mirror's own frames move places, so turning the mirror on
+  can change it on the map (10 samples of one column, measured above). The same holds for a fold
+  line: a sample within the snap of it can take the ground's side in one pass and the other in
+  the clip — one column or row along the fold, not observed. Deciding both from the sample's
+  screen position against one shared expression (`gl_FragCoord` with `precise`, the texel by
+  `texelFetch` from the frame's integer origin) would make them exact.
 - **A 3D feature the map placed — a hulk — is not mirrored** (the owner's ruling). It takes a record
   of the wreck pool, which moves with play; the list skips it rather than freeze a copy.
 - **The schema's own features are not mirrored — the rule, not a gap** (the owner's ruling: the
@@ -18120,7 +18193,8 @@ main at the effects' models (§2.89) unless a line names the build before the me
 through `regs + 8`, and that every path joins there; `mapfeat_at_load`'s emulation of the spawn
 and destroy rules (the anchor offsets, the refusal that keeps its earlier destroys, the pool
 count) and its bounds (the dimensions, the def count, the version, the 65 536 cap); the
-hand-over's lock, the level stamp and who frees what; `mapfeat_ok`, the empty list, and
+hand-over's lock (taken by a full-barrier exchange, released by a release store), the level
+stamp and who frees what; `mapfeat_ok`, the empty list, and
 `mapfeat_take`'s bounds and bucketing; `want` before the early returns and `feat_emits` against
 the gather's own mute; `tagpu_feat_mapfeat_sync` and its caller in `tagpu_native.c`; the terrain
 flags' spare-bit bound, the fold flags and the vertex stage's decode and nudge; the gather's floor
@@ -18132,8 +18206,9 @@ copy tests; `map_key` as the one computation of the map's keys (the anchor loop 
 must stay bit-identical to main's inline arithmetic under x87 excess precision), and
 `mirror_key`'s source-column clamp and its off-row flat bands against the unit, wreck and effects
 keys; the mode's copy field (`TAGPU_FEAT_COPY_*`, bounded to `[−1024, 1024)` so the float
-attribute is exact) and the fragment stage's per-copy and off-row discards; `uClip` at 40 in the
-48-byte block, set only while the gather mirrors; the tie rule's nudge (`TAGPU_EDGE_NUDGE_PX /
-zoom`, `+x` on a turned quad) and the world corners taken after it; `mapfeat_unpark` at every
+attribute is exact) and the fragment stage's per-copy and off-row discards, each testing
+`s = vWorld + e`; `uClip` at 40 and `uNudgeW` at 44 in the 48-byte block, `uClip` set only while
+the gather mirrors; the tie rule's nudge (`TAGPU_EDGE_NUDGE_PX / zoom`, `+x` on a turned quad) and
+the world corners taken after it; `mapfeat_unpark` at every
 join, under the lock, before the build's first check; the table's place in the fill and cut order
 and the reserve's assert.

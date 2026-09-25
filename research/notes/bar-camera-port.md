@@ -323,8 +323,14 @@ tile taken from the reflected cell and its flip bits in spare bits of the instan
 * **One tie rule for every feature sprite.** At 0.25× every sample lies on a texel boundary, and a
   sprite's ties fell to the interpolation's rounding, which follows the atlas and runs the other way
   on a turned quad. Every feature quad, the map's and the mirror's, is now nudged by its own texel
-  grid as the terrain is, a turned one the other way, so at 0.25× the map's own features change
-  (only there: 0 px at 1× and 0.5×) and a turned copy is its source's texels reflected. With the
+  grid as the terrain is, a turned one the other way, so a turned copy is its source's texels
+  reflected. The nudge is the ground's 1/32-px shift and it applies at every zoom, under a black
+  edge too: at the dyadic zooms from 0.5× to 8× no sample changes, at 0.25× every tie reads the
+  texel after it, and at the wheel's other levels the samples within 1/32 ÷ zoom world px before a
+  texel boundary read the next texel (the ground's samples do the same). Which zooms carry exact
+  ties is the viewport width's parity. Every fold clip — the copies' own columns, the map's own
+  under the mirror, the off rows — tests the sample's point moved by that same distance, so a
+  sample on a fold falls on the ground's side of it. With the
   copies swept over the reflected rect, emitted in their source's order, kept to their own columns
   and keyed as their sources, the side strips are the map reflected at 0.25×, 0.5× and 1× to
   within a level, and the top strip's sprites their sources moved up, except where a translucent

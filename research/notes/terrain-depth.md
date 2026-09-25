@@ -926,9 +926,19 @@ terrain vertex shader, *after* the zoom scale so it is the same sub-pixel distan
 every zoom. That puts a coincident fragment centre inside the **following** quad, where
 it samples that cell's first texel — the thing it is standing on — and the cadence stays
 uniform. 1/32 px is ~300× the float noise in a coordinate that size and 1/8 of a texel at
-the 0.25 zoom floor, so it can neither be lost nor change which texel any other fragment
-reads. Sprites need no nudge: repeating a silhouette's edge column is correct, because a
-sprite's neighbour is not another piece of the same picture.
+the 0.25 zoom floor, so it cannot be lost.
+
+**It shifts the picture 1/32 px at every zoom**, not only where a sample lies on a boundary:
+every fragment reads the texel under its world point plus `e = 1/32 ÷ zoom` world px. On the
+dyadic zooms from 0.5× to 8× no fragment centre lies within `e` before a texel boundary (at 1×
+at `ss = 2` a sample is 1/4 world px inside its texel), so none reads another texel; at 0.25×
+every tie reads the texel after it; and at the wheel's other resting levels (its 1.14 steps,
+`tagpu_zoom.c`) the fragments within `e` before a boundary read the next texel — a share of
+about `e` of the columns and of the rows. Which zooms carry exact ties is the viewport width's
+parity: an even width puts the zoom centre on a whole px, the case above; an odd one puts it on
+a half px, which takes the 0.25× samples off the whole world px and puts the 0.5× ones on them.
+The feature sprites take the same nudge ([GPU status](gpu-status.html) §2.90), so a sprite and
+the ground under it shift together.
 
 **Verified.** Two Continents, `feat-forest`. Period-8 row anomaly **1.03–1.13×** at every
 camera phase, at `ss=1` and `ss=2`, 1024×768 and 1920×1080 — against 1.92×/2.05× before,
@@ -948,8 +958,8 @@ periodic detector, not a colour one: score each row against its own two neighbou
 group by `y mod (32·z)`; a clean frame is flat across the phases and a leaking one has
 one phase standing 2× above the rest.
 
-**What this does not close.** The nudge is applied to the terrain pass only, so features,
-effects, particles and markers still rasterise on the un-nudged grid — they are correct
+**What this does not close.** The nudge is applied to the terrain and feature passes only,
+so effects, particles and markers still rasterise on the un-nudged grid — they are correct
 today because their atlases now have borders and a repeated silhouette edge is harmless,
 but a future filtered sampler will want the same treatment and the same reasoning. The
 three leads that were never tried are still untried and now unmotivated: a tile set that
