@@ -314,17 +314,17 @@ static const char* FS =
     /* premultiplied target: flashes are pure additive light (alpha 0) */
     "  if (mode == 3) frag = vec4(rgb, 0.0); else frag = vec4(rgb * a, a);\n"
     "}\n";
-/* THE LINES' PROGRAM: lasers and lightning as `0x4CC7AB` draws them, on the
-   game-pixel grid, each lit game pixel covered whole -- tagpu_mark.c's LVS
-   and LFS say how, and tagpu_glsl.h holds the band and the walk. One instance
-   a line record (`emit_line`): `aPos.xy` and `aUV` are its two ends, integer
-   game pixels after the zoom, and `aPos.z` its depth key. LVS declares VS's
-   uniforms, and LFS FS's samplers and uniforms, in their order, so the two
-   programs share this pass's one layout; `uGrid` (game w, h, target w, h)
-   follows FS's block at offset 64. LFS is FS's mode-0 path -- the fog and
-   the flat palette colour -- behind the line test; FS's scaffold test is
-   left out because `uScafOn` is 0 on every draw of this pass
-   (tagpu_vk_fx.c, WHAT IT DOES NOT DO). */
+/* THE LINES' PROGRAM: lasers and lightning by tagpu_line.h's one rule --
+   `0x4CC7AB`'s walk on the line grid, thickened to ss pixels; tagpu_mark.c's
+   LVS and LFS say how, and tagpu_glsl.h holds the band and the walk. One
+   instance a line record (`emit_line`): `aPos.xy` and `aUV` are its two ends,
+   their line-grid pixels' centres in game units after the zoom, and `aPos.z`
+   its depth key. LVS declares VS's uniforms, and LFS FS's samplers and
+   uniforms, in their order, so the two programs share this pass's one layout;
+   `uGrid` (tagpu_line.h `tagpu_line_grid`) follows FS's block at offset 64.
+   LFS is FS's mode-0 path -- the fog and the flat palette colour -- behind
+   the line test; FS's scaffold test is left out because `uScafOn` is 0 on
+   every draw of this pass (tagpu_vk_fx.c, WHAT IT DOES NOT DO). */
 static const char* LVS =
     "#version 330 core\n"
     "layout(location=0) in vec3 aPos;\n"
@@ -359,7 +359,7 @@ static const char* LFS =
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LINE_FN
     "void main(){\n"
-    "  if (!taOnLine(taGamePx(gl_FragCoord.xy, uGrid), ivec2(vLine.xy), ivec2(vLine.zw)))\n"
+    "  if (!taLineKeeps(gl_FragCoord.xy, vLine, uGrid))\n"
     "    discard;\n"
     TAGPU_GLSL_FOG_DISCARD
     "  frag = vec4(texelFetch(uPal, ivec2(int(vCM.x*255.0+0.5), 0), 0).rgb, 1.0);\n"
@@ -400,8 +400,9 @@ static int s_cOverflow = 0, s_cQuads = 0, s_cLineFar = 0;
    quantised through it where the line is emitted (tagpu_line.h) */
 static double s_lzoom = 1.0, s_lzcx, s_lzcy;
 /* and DrawLine's clip rect -- the viewport, inclusive -- and the surface, in
-   game pixels (tagpu_line_clip) */
+   line-grid pixels (tagpu_line_clip) */
 static int s_lclipL, s_lclipT, s_lclipR, s_lclipB, s_lclipW, s_lclipH;
+static int s_lss = 1;                   /* the line grid's ss, latched with the zoom */
 static TAGPU_LINE_AB s_lab;             /* an A/B frame's lines before the clip */
 
 /* A PART ASKED FOR AND NOT WRITTEN. Every emitter return that leaves a
@@ -435,14 +436,14 @@ static void put_quad(int b, float x0, float y0, float x1, float y1,
     s_cQuads++;
 }
 
-/* ONE LINE RECORD, the instance LVS draws: the two ends' game pixels after
-   the wheel zoom in (x, y) and (u, v), the depth key, the colour on the flat
-   path and the fog point. The engine draws these lines from integer pixels
-   through DrawLine `0x4BE950`, so each end is that pixel's CENTRE put through
-   tagpu_line.h's rule -- at 1x the engine's own pixel -- and then through
-   DrawLine's clip to the viewport (tagpu_line_clip). A line past
-   TAGPU_LINE_FAR is counted (`s_cLineFar`) and not drawn; one the clip
-   leaves nothing of is not drawn either. */
+/* ONE LINE RECORD, the instance LVS draws: the two ends after the wheel zoom
+   in (x, y) and (u, v) -- their line-grid pixels' centres -- the depth key,
+   the colour on the flat path and the fog point. The engine draws these lines
+   from integer pixels through DrawLine `0x4BE950`, so each end is that pixel's
+   CENTRE put through tagpu_line.h's rule -- at 1x and ss = 1 the engine's own
+   pixel -- and then through DrawLine's clip to the viewport on the line grid
+   (tagpu_line_clip). A line past TAGPU_LINE_FAR is counted (`s_cLineFar`) and
+   not drawn; one the clip leaves nothing of is not drawn either. */
 static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, float wz)
 {
     int ax, ay, bx, by;
@@ -450,10 +451,10 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
     s_cLines++;
     if (s_mute) return;
     if (s_nv[B_LINES] + 1 > TAGPU_FX_MAXV) { s_cOverflow++; s_partsLost++; return; }
-    if (!tagpu_line_px(x0 + 0.5, y0 + 0.5, s_lzoom, s_lzcx, s_lzcy, TAGPU_LINE_FAR,
-                       &ax, &ay) ||
-        !tagpu_line_px(x1 + 0.5, y1 + 0.5, s_lzoom, s_lzcx, s_lzcy, TAGPU_LINE_FAR,
-                       &bx, &by)) {
+    if (!tagpu_line_px(x0 + 0.5, y0 + 0.5, s_lzoom, s_lzcx, s_lzcy, s_lss,
+                       TAGPU_LINE_FAR, &ax, &ay) ||
+        !tagpu_line_px(x1 + 0.5, y1 + 0.5, s_lzoom, s_lzcx, s_lzcy, s_lss,
+                       TAGPU_LINE_FAR, &bx, &by)) {
         s_cLineFar++;
         return;
     }
@@ -461,7 +462,8 @@ static void emit_line(int x0, int y0, int x1, int y1, int colidx, float wx, floa
     if (!tagpu_line_clip(&ax, &ay, &bx, &by, s_lclipL, s_lclipT, s_lclipR, s_lclipB,
                          s_lclipW, s_lclipH))
         return;
-    put_vert(B_LINES, (float)ax, (float)ay, (float)bx, (float)by,
+    put_vert(B_LINES, tagpu_line_centre(ax, s_lss), tagpu_line_centre(ay, s_lss),
+             tagpu_line_centre(bx, s_lss), tagpu_line_centre(by, s_lss),
              (float)colidx / 255.0f, MODE_FLAT, wx, wz);
 }
 
@@ -1138,9 +1140,10 @@ int tagpu_fx_gather(const TAGPU_FXVIEW* v)
     s_cModelLost = 0; s_modelWhy = 0;
     s_lzoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
     s_lzcx = (double)v->zoomCx; s_lzcy = (double)v->zoomCy;
-    s_lclipL = v->vpL; s_lclipT = v->vpT;
-    s_lclipR = v->vpL + v->vw - 1; s_lclipB = v->vpT + v->vh - 1;
-    s_lclipW = v->gw; s_lclipH = v->gh;
+    s_lss = v->ss > 0 ? v->ss : 1;
+    tagpu_line_rect(v->vpL, v->vpT, v->vw, v->vh, s_lss,
+                    &s_lclipL, &s_lclipT, &s_lclipR, &s_lclipB);
+    s_lclipW = v->gw * s_lss; s_lclipH = v->gh * s_lss;
     /* the lines of a frame the A/B may claim, kept before the clip for the
        oracle; the claim in tagpu_fx_render writes them */
     tagpu_line_ab_begin(&s_lab, s_ab && !s_abDone);
@@ -1362,7 +1365,7 @@ void tagpu_fx_render(const TAGPU_FXVIEW* v)
         s_abFrame = tagpu_vk_ab_arm("fx");
         /* and the frame's lines as emit_line had them before the clip, with
            the rect it clipped to (tagpu_line.h) */
-        tagpu_line_ab_write(&s_lab, "fx", s_lclipW, s_lclipH,
+        tagpu_line_ab_write(&s_lab, "fx", s_lclipW, s_lclipH, s_lss,
                             s_lclipL, s_lclipT, s_lclipR, s_lclipB);
     }
 

@@ -269,8 +269,8 @@ static int   s_nordx;                  /* text verts, this frame              */
 static int   s_nordxOrd;
 static double s_px;                    /* one SCREEN pixel in game-frame units */
 static double s_zoom, s_zcx, s_zcy;    /* the transform the text snap inverts  */
-/* DrawLine's clip rect -- the viewport, inclusive -- and the surface, in game
-   pixels, latched by the gather for put_line (tagpu_line_clip) */
+/* DrawLine's clip rect -- the viewport, inclusive -- and the surface, in
+   line-grid pixels, latched by the gather for put_line (tagpu_line_clip) */
 static int    s_clipL, s_clipT, s_clipR, s_clipB, s_clipW, s_clipH;
 static TAGPU_LINE_AB s_lab;            /* an A/B frame's lines before the clip */
 static int    s_ss;
@@ -347,34 +347,33 @@ static const char* FS =
     TAGPU_GLSL_FOG_GREY_RGB("rgb")
     "  frag = vec4(rgb, 1.0);\n"
     "}\n";
-/* ---- THE LINE PROGRAM: the engine's own line, pixel for pixel ----
+/* ---- THE LINE PROGRAM: one rule for every line ----
    Every line this pass draws -- the order lines, the range arcs, the waypoint
-   crosshairs and the selection rects -- is `DrawLine`'s Bresenham (`0x4CC7AB`)
-   on the GAME-pixel grid, with each lit game pixel covered whole: all `ss` x
-   `ss` target pixels of it, so it resolves to the full colour at any `ss`.
-   A line primitive cannot promise that. Vulkan's lines step on the TARGET's
-   grid, half a game pixel at a time at ss=2, and even its BRESENHAM mode lets
-   an implementation deviate by one unit -- so the pixels would be the GPU's.
+   crosshairs, the build sites and the selection rects -- is tagpu_line.h's
+   rule: `DrawLine`'s walk (`0x4CC7AB`) on the line grid, the world target's
+   own pixels, thickened to ss pixels across its minor axis; at ss = 1 that is
+   the engine's line exactly. A line primitive cannot promise any of it: even
+   Vulkan's BRESENHAM mode lets an implementation deviate by one unit, so the
+   pixels would be the GPU's.
 
    SO THE PRIMITIVE IS A BAND AND THE FRAGMENT STAGE DECIDES. One instance a
-   line: `aPos` and `aUV` are its two ends, already INTEGER game pixels after
-   the wheel zoom (tagpu_line.h, decided on the CPU by `put_line` below), and
-   the vertex stage draws a quad around the segment between their centres
+   line: `aPos` and `aUV` are its two ends, the CENTRES of their line-grid
+   pixels in game units (tagpu_line.h, decided on the CPU by `put_line`
+   below), and the vertex stage draws a quad around the segment between them
    (`taBand`, tagpu_glsl.h, which states the coverage bound). The fragment
-   stage takes the game pixel the target pixel's centre lies in and keeps it
-   only when `taOnLine` says the engine's walk plots it -- integer arithmetic
-   throughout, so the set cannot differ between two GPUs.
+   stage takes its line-grid pixel and keeps it only when `taLineKeeps` says
+   the rule lights it -- integer arithmetic throughout, so the set cannot
+   differ between two GPUs.
 
-   `uGrid` is (game width, game height, target width, target height), set per
-   draw by tagpu_vk_mark.c from the extent it records into: the game pixel of a
-   sample is a fact about THIS target, and on a frame the offscreen target
-   refused the world is drawn into the swapchain image at whatever scale that
-   is. The samplers and the first five uniforms are FS's, in FS's order, so the
-   two programs share one descriptor layout and one uniform window: `uGrid`
-   lands after them at offset 32. */
+   `uGrid` is (line-grid width | ss << 16, line-grid height, target width,
+   target height), set per draw by tagpu_vk_mark.c from the extent it records
+   into: on a frame the offscreen target refused the world is drawn into the
+   swapchain image at whatever scale that is. The samplers and the first five
+   uniforms are FS's, in FS's order, so the two programs share one descriptor
+   layout and one uniform window: `uGrid` lands after them at offset 32. */
 static const char* LVS =
     "#version 330 core\n"
-    "layout(location=0) in vec2 aPos;\n"     /* end A, game px after the zoom */
+    "layout(location=0) in vec2 aPos;\n"     /* end A: its line-grid pixel centre */
     "layout(location=1) in vec2 aUV;\n"      /* end B                         */
     "layout(location=2) in vec2 aWorld;\n"
     "layout(location=3) in float aCol;\n"
@@ -403,7 +402,7 @@ static const char* LFS =
     "void main(){\n"
     /* gl_FragCoord has its origin top-left under Vulkan, which is the
        engine's own y -- the lane draws with no flip */
-    "  if (!taOnLine(taGamePx(gl_FragCoord.xy, uGrid), ivec2(vLine.xy), ivec2(vLine.zw)))\n"
+    "  if (!taLineKeeps(gl_FragCoord.xy, vLine, uGrid))\n"
     "    discard;\n"
     TAGPU_GLSL_FOG_DISCARD
     "  int pi = int(vCol * 255.0 + 0.5);\n"
@@ -450,20 +449,20 @@ static void put_ord(float* base, int i, float x, float y, float wx, float wz,
     put_at(base, i, x, y, -1.0f, -1.0f, wx, wz, col);
 }
 
-/* ONE LINE RECORD, the instance LVS draws: the two ends' game pixels AFTER
-   the wheel zoom (tagpu_line.h's rule, with this frame's zoom from the
-   gather) and after DrawLine's clip to the viewport (tagpu_line_clip, the
-   rect the gather latched), then the fog cell, the colour and the depth. The
-   ends go in the (x, y) and (u, v) slots of the vertex layout, so a line
-   record and a triangle vertex share one stride and one buffer. 0 for a line
-   the clip leaves nothing of, and for one past TAGPU_LINE_FAR, which is
-   counted in `s_lfar`. */
+/* ONE LINE RECORD, the instance LVS draws: the two ends' line-grid pixels
+   AFTER the wheel zoom (tagpu_line.h's rule, with this frame's zoom and ss
+   from the gather) and after DrawLine's clip to the viewport
+   (tagpu_line_clip, the rect the gather latched), carried as their centres,
+   then the fog cell, the colour and the depth. The ends go in the (x, y) and
+   (u, v) slots of the vertex layout, so a line record and a triangle vertex
+   share one stride and one buffer. 0 for a line the clip leaves nothing of,
+   and for one past TAGPU_LINE_FAR, which is counted in `s_lfar`. */
 static int put_line(float* o, double x0, double y0, double x1, double y1,
                     float wx, float wz, float col, float depth)
 {
     int ax, ay, bx, by;
-    if (!tagpu_line_px(x0, y0, s_zoom, s_zcx, s_zcy, TAGPU_LINE_FAR, &ax, &ay) ||
-        !tagpu_line_px(x1, y1, s_zoom, s_zcx, s_zcy, TAGPU_LINE_FAR, &bx, &by)) {
+    if (!tagpu_line_px(x0, y0, s_zoom, s_zcx, s_zcy, s_ss, TAGPU_LINE_FAR, &ax, &ay) ||
+        !tagpu_line_px(x1, y1, s_zoom, s_zcx, s_zcy, s_ss, TAGPU_LINE_FAR, &bx, &by)) {
         s_lfar++;
         return 0;
     }
@@ -471,7 +470,8 @@ static int put_line(float* o, double x0, double y0, double x1, double y1,
     if (!tagpu_line_clip(&ax, &ay, &bx, &by, s_clipL, s_clipT, s_clipR, s_clipB,
                          s_clipW, s_clipH))
         return 0;
-    o[0] = (float)ax; o[1] = (float)ay; o[2] = (float)bx; o[3] = (float)by;
+    o[0] = tagpu_line_centre(ax, s_ss); o[1] = tagpu_line_centre(ay, s_ss);
+    o[2] = tagpu_line_centre(bx, s_ss); o[3] = tagpu_line_centre(by, s_ss);
     o[4] = wx; o[5] = wz; o[6] = col; o[7] = depth;
     return 1;
 }
@@ -522,8 +522,8 @@ int tagpu_mark_emit_tri(float x0, float y0, float x1, float y1,
    NOTHING: a root piece with fewer than three vertices bounds to the bare
    origin, so all four corners coincide, and the engine's DrawLine takes its
    dx == 0 column fill and plots the one pixel (`0x4CC83B`, `inc ecx`). Both
-   ends then land on one game pixel, `taOnLine` keeps exactly it and `taBand`
-   draws a square round it. */
+   ends then land on one line-grid pixel, `taOnLine` keeps it and its
+   thickening, and `taBand` draws a square round it. */
 int tagpu_mark_emit_selbox(const float px[4], const float py[4], int colidx,
                            float wx, float wz, float depth)
 {
@@ -821,13 +821,14 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_px  = 1.0 / (double)(v->zoom > 0.0f ? v->zoom : 1.0f);
     s_zoom = v->zoom > 0.0f ? (double)v->zoom : 1.0;
     s_zcx = (double)v->zoomCx; s_zcy = (double)v->zoomCy;
-    s_clipL = v->vpL; s_clipT = v->vpT;
-    s_clipR = v->vpL + v->vw - 1; s_clipB = v->vpT + v->vh - 1;
-    s_clipW = v->gw; s_clipH = v->gh;
+    s_ss  = v->ss > 0 ? v->ss : 1;
+    /* the viewport and the surface on the line grid (tagpu_line.h) */
+    tagpu_line_rect(v->vpL, v->vpT, v->vw, v->vh, s_ss,
+                    &s_clipL, &s_clipT, &s_clipR, &s_clipB);
+    s_clipW = v->gw * s_ss; s_clipH = v->gh * s_ss;
     /* the lines of a frame the A/B may claim, kept before the clip for the
        oracle; the claim in tagpu_mark_render writes them */
     tagpu_line_ab_begin(&s_lab, s_ab && !s_abDone);
-    s_ss  = v->ss > 0 ? v->ss : 1;
     /* first, and outside every gate below: neither the cursor nor the order
        markers are health bars, and neither `damagebars` nor `nobars` has
        anything to say about them */
@@ -1165,7 +1166,7 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
         s_abTaking = 0;
         /* and the frame's lines as put_line had them before the clip, with
            the rect it clipped to (tagpu_line.h) */
-        tagpu_line_ab_write(&s_lab, "mark", s_clipW, s_clipH,
+        tagpu_line_ab_write(&s_lab, "mark", s_clipW, s_clipH, s_ss,
                             s_clipL, s_clipT, s_clipR, s_clipB);
     }
 

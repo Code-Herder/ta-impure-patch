@@ -4,18 +4,20 @@
     tools/line-band-check.py            # exit 0 when every claim holds
 
 WHAT IS CHECKED, for every line with both ends in a box around the origin
-(exhaustively) and for random long lines out to tagpu_line.h's TAGPU_LINE_MAXC:
+(exhaustively) and for random long lines out to tagpu_line.h's TAGPU_LINE_MAXC,
+at thickness w = 1 (the engine's line), 2 and 3 (supersampled):
 
-  1. THE CLOSED FORM IS THE WALK. `taOnLine`'s per-pixel test, transcribed with
-     the same unsigned 32-bit arithmetic, keeps exactly the pixels a step-by-step
-     transcription of `0x4CC7AB`'s loops lights -- no pixel more, none fewer --
-     and no product in it passes 2^32.
+  1. THE CLOSED FORM IS THE RULE. `taOnLine`'s per-pixel test, transcribed with
+     the same unsigned 32-bit arithmetic, keeps exactly the pixels a
+     step-by-step transcription of `0x4CC7AB`'s loops lights, each copied w
+     times along the minor axis from floor(w/2) before it (`thicken`) -- no
+     pixel more, none fewer -- and no product in it passes 2^32.
   2. THE BAND HOLDS EVERY LIT PIXEL. Each corner of each lit pixel's square lies
-     inside `taBand`'s rectangle (radius taBandR = 2 about the segment between
-     the two end centres) with at least MARGIN to spare, so every target pixel
-     of a lit game pixel is rasterised whatever the supersample.
-  3. THE GRID MAP IS FLOOR. `taGamePx`'s ((2t + 1) * gw) / (2 * tw) is
-     floor((t + 0.5) * gw / tw) for the grids the lane uses.
+     inside `taBand`'s rectangle (radius taBandR = 2 game pixels, 2w line-grid
+     pixels, about the segment between the two end centres) with at least
+     MARGIN game pixels to spare, so every lit pixel is rasterised.
+  3. THE GRID MAP IS FLOOR. `taLinePx`'s ((2t + 1) * lw) / (2 * tw) is
+     floor((t + 0.5) * lw / tw) for the grids the lane uses.
   4. THE CLIP IS DrawLine's. tagpu_line.h's `tagpu_line_clip`, compiled with
      the host gcc, gives the same verdict and the same ends as `clip` below
      -- `0x4BEA20` then `0x4CC650` -- on random lines across each edge, long
@@ -179,32 +181,54 @@ def clip(x0, y0, x1, y1, L, T, R, B, w, h, passes=None):
 U32 = 1 << 32
 
 
-def on_line(g, a, b):
+def thicken(lit, a, b, w):
+    """tagpu_line.h's thickening, from the walk's pixels: each copied to w
+    pixels along the minor axis, from floor(w/2) before it. The minor axis is
+    y when |dy| <= |dx| -- the walk's own x-major test -- and x otherwise."""
+    xmaj = abs(b[1] - a[1]) <= abs(b[0] - a[0])
+    lo = w // 2
+    out = set()
+    for (x, y) in lit:
+        for k in range(w):
+            out.add((x, y - lo + k) if xmaj else (x - lo + k, y))
+    return out
+
+
+def on_line(g, a, b, w=1):
     """taOnLine, line for line, with the GLSL's uint wrap made explicit."""
     if a[0] > b[0]:
         a, b = b, a
     dx, dy = b[0] - a[0], b[1] - a[1]
     ady, sg = abs(dy), (-1 if dy < 0 else 1)
+    lo = w // 2
     if ady <= dx:
         i = g[0] - a[0]
         if i < 0 or i > dx:
             return False
         if dx == 0:
-            return g[1] == a[1]
-        num = 2 * ady * i + dx
-        assert num < U32, "unsigned overflow"
-        return g[1] == a[1] + sg * (num // (2 * dx))
+            r = a[1]
+        else:
+            num = 2 * ady * i + dx
+            assert num < U32, "unsigned overflow"
+            r = a[1] + sg * (num // (2 * dx))
+        k = g[1] - r + lo
+        return 0 <= k < w
     j = (g[1] - a[1]) * sg
     if j < 0 or j > ady:
         return False
     num = 2 * dx * j + ady
     assert num < U32, "unsigned overflow"
-    return g[0] == a[0] + num // (2 * ady)
+    c = a[0] + num // (2 * ady)
+    k = g[0] - c + lo
+    return 0 <= k < w
 
 
-def band_slack(a, b, lit):
-    """The least distance by which any corner of a lit pixel sits inside the
-    band's rectangle (negative = outside)."""
+def band_slack(a, b, lit, w):
+    """The least distance, in GAME pixels, by which any corner of a lit
+    line-grid pixel sits inside the band's rectangle (negative = outside):
+    the band is taBandR game pixels, R * w line-grid pixels, about the segment
+    between the two end pixels' centres."""
+    rw = R * w
     ca = (a[0] + 0.5, a[1] + 0.5)
     cb = (b[0] + 0.5, b[1] + 0.5)
     d = (cb[0] - ca[0], cb[1] - ca[1])
@@ -217,84 +241,85 @@ def band_slack(a, b, lit):
             rx, ry = cx - ca[0], cy - ca[1]
             along = rx * u[0] + ry * u[1]
             across = rx * n[0] + ry * n[1]
-            s = min(R - abs(across), along + R, (ln + R) - along)
+            s = min(rw - abs(across), along + rw, (ln + rw) - along)
             worst = min(worst, s)
-    return worst
+    return worst / w
 
 
-def check(a, b, stats):
-    lit = walk(a[0], a[1], b[0], b[1])
-    lit_set = set(lit)
-    if len(lit_set) != len(lit):
+def check(a, b, stats, w):
+    walked = walk(a[0], a[1], b[0], b[1])
+    if len(set(walked)) != len(walked):
         return "the walk lit a pixel twice"
+    lit_set = thicken(walked, a, b, w)
     # the closed form over the lit pixels' bounding box plus one
-    xs = [p[0] for p in lit]
-    ys = [p[1] for p in lit]
-    if len(lit) <= 4096:
+    xs = [p[0] for p in lit_set]
+    ys = [p[1] for p in lit_set]
+    if len(lit_set) <= 4096:
         for x in range(min(xs) - 1, max(xs) + 2):
             for y in range(min(ys) - 1, max(ys) + 2):
-                if on_line((x, y), a, b) != ((x, y) in lit_set):
-                    return "closed form and walk disagree at (%d, %d)" % (x, y)
+                if on_line((x, y), a, b, w) != ((x, y) in lit_set):
+                    return "closed form and walk disagree at (%d, %d), w %d" % (x, y, w)
     else:
-        # long lines: every lit pixel is kept, and its neighbours across the
-        # minor axis are not
-        for (x, y) in lit:
-            if not on_line((x, y), a, b):
-                return "closed form drops lit (%d, %d)" % (x, y)
+        # long lines: every lit pixel is kept, and its unlit neighbours are not
+        for (x, y) in lit_set:
+            if not on_line((x, y), a, b, w):
+                return "closed form drops lit (%d, %d), w %d" % (x, y, w)
             for q in ((x, y - 1), (x, y + 1), (x - 1, y), (x + 1, y)):
-                if q not in lit_set and on_line(q, a, b):
-                    return "closed form keeps unlit (%d, %d)" % q
-    s = band_slack(a, b, lit)
+                if q not in lit_set and on_line(q, a, b, w):
+                    return "closed form keeps unlit (%d, %d), w %d" % (q + (w,))
+    s = band_slack(a, b, lit_set, w)
     stats["slack"] = min(stats["slack"], s)
     if s < MARGIN:
-        return "a lit pixel's corner is %.3f inside the band" % s
+        return "a lit pixel's corner is %.3f inside the band, w %d" % (s, w)
     stats["lines"] += 1
     return None
 
 
 def main():
     stats = {"lines": 0, "slack": float("inf")}
-    # every shape out to BOX pixels: the walk and the test are both invariant
+    # every shape out to a box: the walk and the test are both invariant
     # under a whole-pixel translation, so one end at the origin covers them
-    # all, and the other end in every quadrant covers both walking directions
-    box = 24
-    for bx in range(-box, box + 1):
-        for by in range(-box, box + 1):
-            e = check((0, 0), (bx, by), stats)
-            if e:
-                print("FAIL (0,0)-(%d,%d): %s" % (bx, by, e))
-                return 1
+    # all, and the other end in every quadrant covers both walking directions.
+    # w = 1 is the engine's line; 2 and 3 the supersampled thicknesses.
+    for w, box in ((1, 24), (2, 12), (3, 10)):
+        for bx in range(-box, box + 1):
+            for by in range(-box, box + 1):
+                e = check((0, 0), (bx, by), stats, w)
+                if e:
+                    print("FAIL (0,0)-(%d,%d): %s" % (bx, by, e))
+                    return 1
     rng = random.Random(0x4CC7AB)
-    for _ in range(400):
+    for i in range(600):
+        w = (1, 2, 3)[i % 3]
         a = (rng.randint(-MAXC, MAXC), rng.randint(-MAXC, MAXC))
         if rng.random() < 0.5:
             b = (rng.randint(-MAXC, MAXC), rng.randint(-MAXC, MAXC))
         else:
             b = (a[0] + rng.randint(-600, 600), a[1] + rng.randint(-600, 600))
             b = (max(-MAXC, min(MAXC, b[0])), max(-MAXC, min(MAXC, b[1])))
-        e = check(a, b, stats)
+        e = check(a, b, stats, w)
         if e:
             print("FAIL %s-%s: %s" % (a, b, e))
             return 1
     # the extreme corners, where the unsigned products are largest
     for a, b in (((-MAXC, -MAXC), (MAXC, MAXC)), ((-MAXC, MAXC), (MAXC, -MAXC)),
                  ((-MAXC, 0), (MAXC, 1)), ((0, -MAXC), (1, MAXC))):
-        e = check(a, b, stats)
+        e = check(a, b, stats, 2)
         if e:
             print("FAIL %s-%s: %s" % (a, b, e))
             return 1
-    for gw, tw in ((1024, 2048), (1024, 1024), (1024, 3072), (640, 1920),
-                   (1024, 1920), (768, 1080), (1920, 3840)):
+    for lw, tw in ((2048, 2048), (1024, 1024), (2048, 3072), (1920, 1920),
+                   (2048, 1920), (1536, 1080), (3840, 3840)):
         for t in range(tw):
-            if ((2 * t + 1) * gw) // (2 * tw) != math.floor((t + 0.5) * gw / tw):
-                print("FAIL taGamePx gw=%d tw=%d t=%d" % (gw, tw, t))
+            if ((2 * t + 1) * lw) // (2 * tw) != math.floor((t + 0.5) * lw / tw):
+                print("FAIL taLinePx lw=%d tw=%d t=%d" % (lw, tw, t))
                 return 1
     e = check_clip()
     if e:
         print("FAIL clip: %s" % e)
         return 1
-    print("line-band-check: %d lines, closed form == walk, every lit corner at "
-          "least %.3f inside the band (required %.2f); taGamePx is floor; %s"
+    print("line-band-check: %d lines at w = 1, 2, 3, closed form == walk + thickening, every lit corner at "
+          "least %.3f game px inside the band (required %.2f); taLinePx is floor; %s"
           % (stats["lines"], stats["slack"], MARGIN, CLIP_SAID[0]))
     return 0
 

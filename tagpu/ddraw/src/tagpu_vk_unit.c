@@ -446,6 +446,7 @@ static DRAW*    s_draw;
 static unsigned s_drawCap, s_ndraw, s_ncast;
 static int      s_scissorOn, s_vpL, s_vpT, s_vw, s_vh;
 static float    s_gw, s_gh;            /* the game frame those four are in */
+static int      s_ss = 1;              /* the ss the wire records were built at */
 static int      s_shadowOn;            /* the hand-over's `shadowOn`         */
 /* the offsets inside a window that `upload` settled and the three draw hooks
    bind with: a unit's six blocks after its first, and a model's fragment
@@ -2318,6 +2319,7 @@ static unsigned wire_records(float* dst, const TAGPU_PDHAND* h, const TAGPU_PDUR
     const float* mat = tagpu_posebake_mat_mirror((const TAGPU_PBMAT*)r->mat,
                                                  r->matSerial, &nvm);
     unsigned n = 0;
+    const int ss = h->ss >= 1.0f ? (int)(h->ss + 0.5f) : 1;
     if (!geo || !mat || nvg != r->nvert || nvm != r->nvert) return 0;
     for (e = r->wireFirst; e + 1 < r->wireFirst + r->wireCount; e += 2) {
         int gx[2], gy[2], k, ok = 1;
@@ -2340,7 +2342,7 @@ static unsigned wire_records(float* dst, const TAGPU_PDHAND* h, const TAGPU_PDUR
             qy[k] = -m[2] - m[1] * 0.5f;
             if (!tagpu_line_px((double)r->anchor[0] + qx[k], (double)r->anchor[1] + qy[k],
                                h->zoom > 0.0f ? h->zoom : 1.0, h->zoomCx, h->zoomCy,
-                               TAGPU_LINE_MAXC, &gx[k], &gy[k])) {
+                               ss, TAGPU_LINE_MAXC, &gx[k], &gy[k])) {
                 (*nfar)++;
                 ok = 0;
                 break;
@@ -2352,8 +2354,8 @@ static unsigned wire_records(float* dst, const TAGPU_PDHAND* h, const TAGPU_PDUR
             vy[k] = m[1];
         }
         if (!ok) continue;
-        dst[0] = (float)gx[0]; dst[1] = (float)gy[0];
-        dst[2] = (float)gx[1]; dst[3] = (float)gy[1];
+        dst[0] = tagpu_line_centre(gx[0], ss); dst[1] = tagpu_line_centre(gy[0], ss);
+        dst[2] = tagpu_line_centre(gx[1], ss); dst[3] = tagpu_line_centre(gy[1], ss);
         dst[4] = enc[0]; dst[5] = enc[1]; dst[6] = vy[0]; dst[7] = vy[1];
         dst[8] = qx[0]; dst[9] = qy[0]; dst[10] = qx[1]; dst[11] = qy[1];
         dst += WIRE_REC_F;
@@ -3275,6 +3277,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     s_scissorOn = h.scissorOn;
     s_vpL = h.vpL; s_vpT = h.vpT; s_vw = h.vw; s_vh = h.vh;
     s_gw = h.gw; s_gh = h.gh;       /* the frame those four are measured in */
+    s_ss = h.ss >= 1.0f ? (int)(h.ss + 0.5f) : 1;
     s_shadowOn = h.shadowOn;
 
     /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST. A
@@ -3287,13 +3290,17 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     /* and the A/B frame's wire, as tagpu_line.h's line list: every record in
        draw order, in its unit's colour */
     if (h.ab) {
-        FILE* f = tagpu_line_list_open("posedraw", (int)(h.gw + 0.5f), (int)(h.gh + 0.5f));
+        /* the records carry centres (T + 0.5) / ss; the list names T */
+        const int ss = h.ss >= 1.0f ? (int)(h.ss + 0.5f) : 1;
+        FILE* f = tagpu_line_list_open("posedraw", (int)(h.gw + 0.5f) * ss,
+                                       (int)(h.gh + 0.5f) * ss, ss);
         for (k = 0; k < s_ndraw; k++) {
             const DRAW* w = &s_draw[k];
             const float* o = (const float*)(s->pmap + (size_t)w->wireBase * 16);
             uint32_t j;
             for (j = 0; j < w->wireCount; j++, o += WIRE_REC_F)
-                tagpu_line_list_add(f, (int)o[0], (int)o[1], (int)o[2], (int)o[3],
+                tagpu_line_list_add(f, (int)floorf(o[0] * ss), (int)floorf(o[1] * ss),
+                                    (int)floorf(o[2] * ss), (int)floorf(o[3] * ss),
                                     (int)(h.units[w->rec].wire * 255.0f + 0.5f));
         }
         if (f) fclose(f);
@@ -3751,14 +3758,15 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
        out of the pose buffer from `uRowBase`, six vertices a record.
 
        THE GRID IS WRITTEN HERE, into each wire's fragment block (`uGrid`,
-       FGL_GRID): the line test's game pixel is a fact about THIS target's
-       extent, which only `record` knows -- on a frame the offscreen target
-       refused, the world goes into the swapchain image at whatever scale that
-       is. The block is host-coherent and read only when `cb` executes. */
+       FGL_GRID, tagpu_line.h `tagpu_line_grid`): the line grid the records
+       were built on, and THIS target's extent, which only `record` knows --
+       on a frame the offscreen target refused, the world goes into the
+       swapchain image at whatever scale that is. The block is host-coherent
+       and read only when `cb` executes. */
     if (stage == RS_WIRE) {
         int g[4];
-        g[0] = (int)(s_gw + 0.5f); g[1] = (int)(s_gh + 0.5f);
-        g[2] = (int)w;             g[3] = (int)h;
+        tagpu_line_grid(g, (int)(s_gw + 0.5f), (int)(s_gh + 0.5f), s_ss,
+                        (int)w, (int)h);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeWire);
         for (i = 0; i < s_ndraw; i++) {
             const DRAW* q = &s_draw[i];

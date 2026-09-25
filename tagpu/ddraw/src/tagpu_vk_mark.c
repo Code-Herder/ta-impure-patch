@@ -34,6 +34,7 @@
 #include <math.h>
 #include "tagpu_vk_mark.h"
 #include "tagpu_mark.h"
+#include "tagpu_line.h"     /* tagpu_line_grid, the line test's uGrid */
 #include "spirv/tagpu_mark.spv.h"
 
 #define IFNS(X) \
@@ -953,20 +954,23 @@ void tagpu_vk_mark_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     mk_scissor(&s_h, w, h, &sc);
     vkCmdSetScissor(cb, 0, 1, &sc);
 
-    /* THE LINES' GRID: LFS asks which GAME pixel a sample lies in, so it needs
-       the game frame and THIS target's extent -- not the supersample factor,
-       because on a frame the offscreen target refused the world goes into the
+    /* THE LINES' GRID (tagpu_line.h `tagpu_line_grid`): LFS asks which
+       line-grid pixel a sample lies in, so it needs the grid the CPU put the
+       ends on -- the game frame at the hand-over's ss -- and THIS target's
+       extent: on a frame the offscreen target refused the world goes into the
        swapchain image at whatever scale that is, and a wrong scale does not
        blur a line, it moves every pixel of it. Written into every draw's
        block; only LFS reads it. */
     {
-        int gw = (int)(s_h.gw + 0.5f), gh = (int)(s_h.gh + 0.5f);
+        int g[4];
+        tagpu_line_grid(g, (int)(s_h.gw + 0.5f), (int)(s_h.gh + 0.5f),
+                        (int)(s_h.ss + 0.5f), (int)w, (int)h);
         for (i = 0; i < s_h.ndraw; i++) {
             unsigned char* p = s_uboMap[slot] + s_fsOff[i];
-            put_i(p, FS_GRID, gw);
-            put_i(p, FS_GRID + 4, gh);
-            put_i(p, FS_GRID + 8, (int)w);
-            put_i(p, FS_GRID + 12, (int)h);
+            put_i(p, FS_GRID, g[0]);
+            put_i(p, FS_GRID + 4, g[1]);
+            put_i(p, FS_GRID + 8, g[2]);
+            put_i(p, FS_GRID + 12, g[3]);
         }
     }
 

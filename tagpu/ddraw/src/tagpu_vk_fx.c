@@ -107,6 +107,7 @@
 #include "tagpu_vk_unit.h"    /* tagpu_vk_unit_fx_count: the models' pass */
 #include "tagpu_posedraw.h"   /* TAGPU_PD_MAXFX, the models' bound */
 #include "tagpu_fx.h"
+#include "tagpu_line.h"       /* tagpu_line_grid, the line test's uGrid */
 #include "tagpu_gaf.h"                     /* tagpu_gaf_rects_due              */
 #include "tagpu_pal.h"                     /* tagpu_pal_expand                 */
 #include "spirv/tagpu_fx.spv.h"
@@ -228,6 +229,7 @@ static int s_scX, s_scY, s_scW, s_scH;     /* the scissor, in Vulkan framebuffer
    static holding those past the frame they were handed over on is a dangling
    read waiting for someone to add a line that follows one. */
 static float s_hGw, s_hGh;
+static int   s_hSs;                     /* the ss the line records were built at */
 static int   s_hVpL, s_hVpT, s_hVw, s_hVh, s_hScissorOn;
 
 typedef struct {
@@ -1421,7 +1423,7 @@ static int prepare_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     memcpy(s_umap + (size_t)slot * s_ustride + s_ublock, ub.f, UBLK_FS);
 
     for (b = 0; b < TAGPU_FXB_N; b++) s_n[b] = h.n[b];
-    s_hGw = h.gw; s_hGh = h.gh;
+    s_hGw = h.gw; s_hGh = h.gh; s_hSs = h.ss;
     s_hVpL = h.vpL; s_hVpT = h.vpT; s_hVw = h.vw; s_hVh = h.vh;
     s_hScissorOn = h.scissorOn;
 
@@ -1517,16 +1519,17 @@ void tagpu_vk_fx_record(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot
     sc.extent.width = (uint32_t)s_scW; sc.extent.height = (uint32_t)s_scH;
     vkCmdSetScissor(cb, 0, 1, &sc);
 
-    /* THE LINES' GRID, uGrid @64 of the fragment block: the game frame and
-       THIS target's extent, which only `record` knows -- on a frame the
-       offscreen target refused, the world goes into the swapchain image at
-       whatever scale that is, and LFS's game pixel has to be that one's
-       (tagpu_vk_mark.c says the same). The block is host-coherent and read
-       only when `cb` executes, after this. */
+    /* THE LINES' GRID, uGrid @64 of the fragment block (tagpu_line.h
+       `tagpu_line_grid`): the line grid the records were built on -- the game
+       frame at the hand-over's ss -- and THIS target's extent, which only
+       `record` knows: on a frame the offscreen target refused, the world goes
+       into the swapchain image at whatever scale that is, and LFS's line-grid
+       pixel has to be that one's (tagpu_vk_mark.c says the same). The block is
+       host-coherent and read only when `cb` executes, after this. */
     {
         int g[4];
-        g[0] = (int)(s_hGw + 0.5f); g[1] = (int)(s_hGh + 0.5f);
-        g[2] = (int)w;              g[3] = (int)h;
+        tagpu_line_grid(g, (int)(s_hGw + 0.5f), (int)(s_hGh + 0.5f), s_hSs,
+                        (int)w, (int)h);
         memcpy(s_umap + (size_t)slot * s_ustride + s_ublock + 64, g, sizeof g);
     }
 

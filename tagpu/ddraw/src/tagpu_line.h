@@ -1,30 +1,44 @@
 #ifndef TAGPU_LINE_H
 #define TAGPU_LINE_H
-/* tagpu_line.h -- where a line's two endpoints land on the game-pixel grid.
+/* tagpu_line.h -- where a line's two endpoints land, and the one rule every
+   line of the Vulkan lane is drawn by.
 
-   EVERY LINE THE VULKAN LANE DRAWS FOLLOWS ONE RULE: DrawLine `0x4CC7AB`'s
-   Bresenham on the GAME-PIXEL grid, each lit game pixel covered whole (`ss` x
-   `ss` target pixels). That covers the markers' order lines and selection
-   rects (tagpu_mark.c), the effects' lasers and lightning (tagpu_fx.c) and the
-   nanoframe wire (tagpu_vk_unit.c). The walk itself is decided per game pixel
-   by the fragment stage, in integers (tagpu_glsl.h `TAGPU_GLSL_LINE_FN`), so
-   it cannot differ between two GPUs. What reaches that test is two INTEGER
-   endpoints, and they are decided here, on the CPU, by one rule:
+   EVERY LINE THE VULKAN LANE DRAWS FOLLOWS ONE RULE, on every preset:
+   DrawLine `0x4CC7AB`'s walk on the LINE GRID -- the world target's own
+   pixels, `ss` to a game pixel each way -- thickened to w = ss pixels across
+   its minor axis. That covers the markers' order lines, build sites and
+   selection rects (tagpu_mark.c), the effects' lasers and lightning
+   (tagpu_fx.c) and the nanoframe wire (tagpu_vk_unit.c). The walk and the
+   thickening are decided per pixel by the fragment stage, in integers
+   (tagpu_glsl.h `TAGPU_GLSL_LINE_FN`), so they cannot differ between two
+   GPUs. What reaches that test is two INTEGER ends on the line grid, and they
+   are decided here, on the CPU:
 
-     an endpoint's game pixel is floor(Z(p)), where p is its position in the
-     1x frame and Z the wheel zoom about the view centre,
+     an end's line-grid pixel is floor(ss * Z(p)), where p is its position in
+     the 1x frame in game pixels and Z the wheel zoom about the view centre,
      Z(p) = (p - c) * zoom + c.
 
    `p` carries the engine's own rounding wherever the engine draws that line
    from integers -- a laser's two pixels, a queued build site's corners, a
-   selection rect's corners -- and is then that engine pixel's CENTRE, k + 0.5,
-   so at 1x the pixel is the engine's own and at any other zoom it is the pixel
-   the engine's pixel centre lands in (the selection rect's notion of the grid
-   since it was first drawn this way). For our own geometry -- the sub-pixel
-   anchor of a walking unit, a range arc, a waypoint crosshair, a posed
-   nanoframe vertex -- `p` is the fractional position itself, and at 1x the
-   rule is `floor(p)`, which is the engine's `>> 16` truncation of a 16.16
-   position.
+   selection rect's corners -- and is then that engine pixel's CENTRE, k + 0.5;
+   for our own geometry -- the sub-pixel anchor of a walking unit, a range
+   arc, a waypoint crosshair, a posed nanoframe vertex -- it is the fractional
+   position itself.
+
+   THE THICKENING. Each pixel the walk lights is copied to w = ss pixels along
+   the minor axis (y for a line with |dy| <= |dx|, the walk's own x-major
+   test; x otherwise), starting floor(w / 2) before it: the segment moved by
+   -(w - 1) / 2 across its minor axis, rounded down to a whole pixel, and each
+   pixel copied one step further. That is the band a wide line of the
+   driver's drew on main; rounded down is the rounding that reproduces it for
+   a line whose ends sit on a game pixel's centre (target 2k + 1 at ss = 2).
+
+   AT ss = 1 IT IS THE ENGINE'S LINE, BY CONSTRUCTION. The line grid is then
+   the game-pixel grid, floor(1 * Z(p)) is floor(Z(p)), the clip below runs on
+   the viewport rect itself, and w = 1 copies each pixel once with no offset
+   (floor(1 / 2) = 0) -- so the pixels are `0x4CC7AB`'s walk of DrawLine's
+   clipped ends, with no second path. Supersampled, the steps are 1/ss of a
+   game pixel and the downsample softens them.
 
    THE ENGINE'S CLIP, AFTER THE ZOOM (tagpu_line_clip below). Every line the
    engine draws that this lane redraws as a line -- the selection rect
@@ -34,9 +48,12 @@
    crosses the viewport edge is walked from where that clip MOVED the end, not
    from the end, and the two walks disagree along the whole visible part. So
    the markers and the effects put their integer ends through the same two
-   clips before a record is built. The nanoframe wire does not: the engine's
-   wire is the polygon edge walk `0x4C0820`, which clips scanlines rather than
-   ends, so its visible pixels stay where the unclipped line puts them.
+   clips before a record is built, on the line grid: the rect is the
+   viewport's line-grid pixels, {ss * L, ss * T, ss * (R + 1) - 1,
+   ss * (B + 1) - 1} (tagpu_line_rect), the surface the whole line grid. The
+   nanoframe wire is not clipped: the engine's wire is the polygon edge walk
+   `0x4C0820`, which clips scanlines rather than ends, so its visible pixels
+   stay where the unclipped line puts them.
 
    THE BOUNDS, TWO OF THEM. The fragment test multiplies two coordinate
    differences in unsigned 32-bit arithmetic, `2 * minor * i`, which holds for
@@ -45,11 +62,17 @@
    2^32). A CLIPPED line meets that by construction: tagpu_line_clip returns
    its ends inside the surface, and it refuses a surface wider or taller than
    MAXC + 1. What bounds a clipped line BEFORE the clip is TAGPU_LINE_FAR, the
-   box the clip's 64-bit products are exact in; it is 2^29 game pixels, which
-   no world position reaches at any zoom the wheel allows, and an end past it
-   is counted by the caller and not drawn. The wire is not clipped, so its
-   ends are held to the MAXC box itself; a nanoframe's edge is a few hundred
-   world pixels long and its unit is culled to the view. */
+   box the clip's 64-bit products are exact in; it is 2^29 line-grid pixels,
+   which no world position reaches at any zoom the wheel allows, and an end
+   past it is counted by the caller and not drawn. The wire is not clipped, so
+   its ends are held to the MAXC box itself; a nanoframe's edge is a few
+   hundred world pixels long and its unit is culled to the view.
+
+   THE RECORD CARRIES CENTRES. A record's ends are the line-grid pixels'
+   centres in GAME units, (T + 0.5) / ss (tagpu_line_centre), so a vertex stage
+   places the band in the game frame it already maps, and the fragment stage
+   takes T back as floor(c * ss) -- half a pixel from either neighbour, which
+   no float error reaches. */
 
 #include <math.h>
 #include <stdio.h>
@@ -58,22 +81,55 @@
 #define TAGPU_LINE_MAXC 16383
 #define TAGPU_LINE_FAR  (1 << 29)
 
-/* 1 and the endpoint's game pixel, or 0 when it lies outside [-bound, bound]:
-   TAGPU_LINE_FAR for a line tagpu_line_clip will clip, TAGPU_LINE_MAXC for
-   one drawn as it stands. */
+/* 1 and the end's line-grid pixel floor(ss * Z(p)), or 0 when it lies outside
+   [-bound, bound]: TAGPU_LINE_FAR for a line tagpu_line_clip will clip,
+   TAGPU_LINE_MAXC for one drawn as it stands. */
 static __inline int tagpu_line_px(double x, double y, double zoom, double zcx,
-                                  double zcy, int bound, int* gx, int* gy)
+                                  double zcy, int ss, int bound, int* gx, int* gy)
 {
-    double fx = floor((x - zcx) * zoom + zcx);
-    double fy = floor((y - zcy) * zoom + zcy);
+    double fx = floor(((x - zcx) * zoom + zcx) * ss);
+    double fy = floor(((y - zcy) * zoom + zcy) * ss);
     if (!(fx >= -bound && fx <= bound && fy >= -bound && fy <= bound)) return 0;
     *gx = (int)fx;
     *gy = (int)fy;
     return 1;
 }
 
+/* a line-grid pixel's centre in game units, the value a record carries */
+static __inline float tagpu_line_centre(int t, int ss)
+{
+    return (float)(((double)t + 0.5) / (double)ss);
+}
+
+/* THE FRAGMENT STAGE'S `uGrid` (tagpu_glsl.h `TAGPU_GLSL_LINE_FN`): the line
+   grid's width with the thickness ss above bit 16, its height, and the
+   extent of the target the draw records into. The line grid is at most
+   16384 wide (tagpu_line_clip refuses a wider surface), so the width fits
+   its 16 bits; a draw whose game frame or ss would not is given ss = 0,
+   which keeps no fragment. */
+static __inline void tagpu_line_grid(int g[4], int gw, int gh, int ss, int tw, int th)
+{
+    int ok = ss >= 1 && ss < 32768 && gw >= 1 && gh >= 1 &&
+             gw * ss <= TAGPU_LINE_MAXC + 1 && gh * ss <= TAGPU_LINE_MAXC + 1;
+    g[0] = ok ? (gw * ss) | (ss << 16) : 1;
+    g[1] = ok ? gh * ss : 1;
+    g[2] = tw > 0 ? tw : 1;
+    g[3] = th > 0 ? th : 1;
+}
+
+/* The viewport's line-grid pixels, inclusive: game pixels [l, l + w - 1]
+   cover line-grid pixels [ss * l, ss * (l + w) - 1]. */
+static __inline void tagpu_line_rect(int vpL, int vpT, int vw, int vh, int ss,
+                                     int* L, int* T, int* R, int* B)
+{
+    *L = ss * vpL;
+    *T = ss * vpT;
+    *R = ss * (vpL + vw) - 1;
+    *B = ss * (vpT + vh) - 1;
+}
+
 /* THE CLIP DrawLine `0x4BE950` APPLIES, both halves, in its order, on ends
-   already on the game-pixel grid. 1 with the ends moved in place, and then
+   already on the line grid. 1 with the ends moved in place, and then
    inside [0, w) x [0, h); 0 when the engine would draw nothing.
 
    First `0x4BEA20` [DISASSEMBLED 2026-09-25], against the context's clip rect
@@ -81,7 +137,7 @@ static __inline int tagpu_line_px(double x, double y, double zoom, double zcx,
    `ctx+0x1C..+0x28`). That rect is the viewport: `DrawGameScreen` stores
    `main+0x37E27` = {128, 32, W - 1, H - 33} into its context through
    `0x4C6B10` (`0x468D85`), and at zoom < 1 `vpwide` clamps the widened rect
-   back to it. The lane passes the same screen rect in the ZOOMED grid,
+   back to it. The lane passes the same screen rect on the ZOOMED line grid,
    because that is where the viewport's edge is once the world is scaled
    about its centre. One pass, end 0 then end 1, each tested x < L, y < T,
    x > R, y > B in that order and moved along the line with the ORIGINAL
@@ -152,24 +208,25 @@ static __inline int tagpu_line_clip(int* px0, int* py0, int* px1, int* py1,
    whose A/B claims a frame writes every line it built that frame to
    `tagpu_<pass>_lines.txt` beside the capture: a header, then
    `<ax> <ay> <bx> <by> <palette index>` a line, the ends as tagpu_line_px
-   decided them. tools/line-oracle.py walks each line with its own reading of
-   `0x4CC7AB` and compares the pixels with the capture, so the ends are the one
-   input the model and the shader share.
+   decided them, in line-grid pixels. tools/line-oracle.py walks and thickens
+   each line with its own reading of `0x4CC7AB` and compares the pixels with
+   the capture, so the ends are the one input the model and the shader share.
 
-   Two headers. `# <pass> <game w> <game h>` is a list of lines drawn as they
-   stand (the wire). `# <pass> <game w> <game h> <L> <T> <R> <B>` is a list of
-   lines BEFORE tagpu_line_clip, with the rect it was given: the oracle then
-   clips each line with its own transcription of the two clips and drops what
-   falls outside the rect, as the pass's viewport scissor does. NULL when the
-   file will not open; the capture goes on without it. */
-static __inline FILE* tagpu_line_list_open(const char* pass, int gw, int gh)
+   Two headers, both naming the line grid's size and the thickness w (= ss).
+   `# <pass> <grid w> <grid h> <w>` is a list of lines drawn as they stand (the
+   wire). `# <pass> <grid w> <grid h> <w> <L> <T> <R> <B>` is a list of lines
+   BEFORE tagpu_line_clip, with the rect it was given: the oracle then clips
+   each line with its own transcription of the two clips and drops what falls
+   outside the rect, as the pass's viewport scissor does. NULL when the file
+   will not open; the capture goes on without it. */
+static __inline FILE* tagpu_line_list_open(const char* pass, int lw, int lh, int w)
 {
     char name[64];
     FILE* f;
     _snprintf(name, sizeof name, "tagpu_%s_lines.txt", pass);
     name[sizeof name - 1] = 0;
     f = fopen(name, "w");
-    if (f) fprintf(f, "# %s %d %d\n", pass, gw, gh);
+    if (f) fprintf(f, "# %s %d %d %d\n", pass, lw, lh, w);
     return f;
 }
 
@@ -216,7 +273,8 @@ static __inline void tagpu_line_ab_add(TAGPU_LINE_AB* a, int ax, int ay, int bx,
 }
 
 static __inline void tagpu_line_ab_write(TAGPU_LINE_AB* a, const char* pass,
-                                         int gw, int gh, int L, int T, int R, int B)
+                                         int lw, int lh, int w,
+                                         int L, int T, int R, int B)
 {
     char name[64];
     FILE* f;
@@ -227,7 +285,7 @@ static __inline void tagpu_line_ab_write(TAGPU_LINE_AB* a, const char* pass,
     name[sizeof name - 1] = 0;
     f = fopen(name, "w");
     if (!f) return;
-    fprintf(f, "# %s %d %d %d %d %d %d\n", pass, gw, gh, L, T, R, B);
+    fprintf(f, "# %s %d %d %d %d %d %d %d\n", pass, lw, lh, w, L, T, R, B);
     for (i = 0; i < a->n; i++) {
         const int* r = a->v + (size_t)i * 5u;
         fprintf(f, "%d %d %d %d %d\n", r[0], r[1], r[2], r[3], r[4]);

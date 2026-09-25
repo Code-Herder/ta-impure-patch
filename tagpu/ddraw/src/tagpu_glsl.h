@@ -277,78 +277,102 @@
 /* the same distance for a C caller that moves its quads itself (tagpu_feat.c) */
 #define TAGPU_EDGE_NUDGE_PX 0.03125f
 
-/* ---- lines: DrawLine's Bresenham, decided per game pixel -----------------
-   Every line the lane draws -- order lines, selection rects, lasers and
-   lightning, the nanoframe wire -- is two triangles over a BAND around the
-   segment, and the fragment stage keeps a fragment only when the GAME pixel
-   it lies in is one `0x4CC7AB` would plot between the line's two endpoints.
-   Everything that decides a pixel is integer arithmetic on the game-pixel
-   grid: the endpoints arrive as whole game pixels (tagpu_line.h says how they
-   are chosen), the fragment's own game pixel comes from its integer target
-   pixel, and the walk is closed-form. No floating-point decision near a pixel
-   edge is left for two GPUs to take differently, and a line is one game pixel
-   wide -- `ss` target pixels -- because a game pixel is kept or dropped whole.
+/* ---- lines: DrawLine's walk on the line grid, decided per pixel ----------
+   Every line the lane draws -- order lines, build sites, selection rects,
+   lasers and lightning, the nanoframe wire -- is two triangles over a BAND
+   around the segment, and the fragment stage keeps a fragment only when its
+   LINE-GRID pixel is one the rule of tagpu_line.h lights: `0x4CC7AB`'s walk
+   between the line's two ends, thickened to w pixels across its minor axis.
+   Everything that decides a pixel is integer arithmetic on that grid: the
+   ends arrive as whole line-grid pixels (tagpu_line.h says how they are
+   chosen), the fragment's own pixel comes from its integer target pixel, and
+   the walk is closed-form. No floating-point decision near a pixel edge is
+   left for two GPUs to take differently.
 
-   `taGamePx`: the game pixel whose span holds the centre of target pixel
-   `fc`, with `grid` = (game w, game h, target w, target h) -- floor((t + 0.5)
-   * gw / tw), written as ((2t + 1) * gw) / (2 * tw) so no float is involved.
+   `grid` is (line-grid w | w << 16, line-grid h, target w, target h), set per
+   draw by the pass from the extent it records into. The line grid is the
+   world target at ss x the game frame, so on the offscreen target the map is
+   the identity; on a frame the offscreen target refused, the world is drawn
+   into the swapchain image at whatever scale that is, and `taLinePx` takes
+   the line-grid pixel whose span holds the target pixel's centre --
+   floor((t + 0.5) * lw / tw), written ((2t + 1) * lw) / (2 * tw) so no float
+   is involved. `taLineEnd` takes an end's pixel back from the centre a record
+   carries (tagpu_line.h, THE RECORD CARRIES CENTRES).
 
-   `taOnLine`: `0x4CC7AB`'s walk, as exe-reverse-engineering.md records it.
-   It walks from the smaller-x end; x-major when |dy| <= dx (so 45 degrees is
-   x-major); the pixel `i` major steps along sits at minor offset
-   (2 * minor * i + major) / (2 * major), which is its error term
-   `2 * minor - major` stepping on `>= 0` unrolled; both ends inclusive. The
-   products are UNSIGNED so they cannot overflow for endpoints inside
-   tagpu_line.h's TAGPU_LINE_MAXC box. DrawLine's clip (`0x4BEA20` to the
-   viewport, then `0x4CC650` to the surface) is not part of it: it moves the
-   ends before the walk, on the CPU where a record is built (tagpu_line.h
-   `tagpu_line_clip`), for the callers whose engine lines are DrawLine's --
-   the markers (tagpu_mark.c `put_line`) and the effects (tagpu_fx.c
-   `emit_line`). The nanoframe wire (tagpu_native.c FS) reaches this walk
-   unclipped: the engine draws it with the polygon edge walk `0x4C0820`,
-   which moves no end, and its ends are held to the MAXC box instead. */
+   `taOnLine`: `0x4CC7AB`'s walk, as exe-reverse-engineering.md records it,
+   and the thickening. It walks from the smaller-x end; x-major when
+   |dy| <= dx (so 45 degrees is x-major); the pixel `i` major steps along
+   sits at minor offset (2 * minor * i + major) / (2 * major), which is its
+   error term `2 * minor - major` stepping on `>= 0` unrolled; both ends
+   inclusive. A fragment is kept when it lies in the walk's major range and
+   within [r - w/2, r - w/2 + w - 1] across the minor axis of the walk's pixel
+   r there. At w = 1 that is the walk itself. The products are UNSIGNED so
+   they cannot overflow for ends inside tagpu_line.h's TAGPU_LINE_MAXC box.
+   DrawLine's clip (`0x4BEA20` to the viewport, then `0x4CC650` to the
+   surface) is not part of it: it moves the ends before the walk, on the CPU
+   where a record is built (tagpu_line.h `tagpu_line_clip`), for the callers
+   whose engine lines are DrawLine's -- the markers (tagpu_mark.c `put_line`)
+   and the effects (tagpu_fx.c `emit_line`). The nanoframe wire
+   (tagpu_native.c FS) reaches this walk unclipped: the engine draws it with
+   the polygon edge walk `0x4C0820`, which moves no end, and its ends are held
+   to the MAXC box instead. */
 #define TAGPU_GLSL_LINE_FN \
-    "ivec2 taGamePx(vec2 fc, ivec4 grid) {\n" \
+    "ivec2 taLinePx(vec2 fc, ivec4 grid) {\n" \
     "  ivec2 t = ivec2(fc);\n" \
-    "  return ((2 * t + 1) * grid.xy) / (2 * grid.zw);\n" \
+    "  ivec2 lg = ivec2(grid.x & 65535, grid.y);\n" \
+    "  return ((2 * t + 1) * lg) / (2 * grid.zw);\n" \
     "}\n" \
-    "bool taOnLine(ivec2 g, ivec2 a, ivec2 b) {\n" \
+    "ivec2 taLineEnd(vec2 c, ivec4 grid) {\n" \
+    "  return ivec2(floor(c * float(grid.x >> 16)));\n" \
+    "}\n" \
+    "bool taOnLine(ivec2 g, ivec2 a, ivec2 b, int w) {\n" \
     "  if (a.x > b.x) { ivec2 s0 = a; a = b; b = s0; }\n" \
     "  int dx = b.x - a.x, dy = b.y - a.y;\n" \
     "  int ady = abs(dy), sg = dy < 0 ? -1 : 1;\n" \
+    "  int lo = w / 2;\n" \
     "  if (ady <= dx) {\n" \
     "    int i = g.x - a.x;\n" \
     "    if (i < 0 || i > dx) return false;\n" \
-    "    if (dx == 0) return g.y == a.y;\n" \
-    "    return g.y == a.y + sg * int((2u * uint(ady) * uint(i) + uint(dx)) / (2u * uint(dx)));\n" \
+    "    int r = dx == 0 ? a.y\n" \
+    "          : a.y + sg * int((2u * uint(ady) * uint(i) + uint(dx)) / (2u * uint(dx)));\n" \
+    "    int k = g.y - r + lo;\n" \
+    "    return k >= 0 && k < w;\n" \
     "  }\n" \
     "  int j = (g.y - a.y) * sg;\n" \
     "  if (j < 0 || j > ady) return false;\n" \
-    "  return g.x == a.x + int((2u * uint(dx) * uint(j) + uint(ady)) / (2u * uint(ady)));\n" \
+    "  int c = a.x + int((2u * uint(dx) * uint(j) + uint(ady)) / (2u * uint(ady)));\n" \
+    "  int k = g.x - c + lo;\n" \
+    "  return k >= 0 && k < w;\n" \
+    "}\n" \
+    "bool taLineKeeps(vec2 fc, vec4 ends, ivec4 grid) {\n" \
+    "  return taOnLine(taLinePx(fc, grid), taLineEnd(ends.xy, grid),\n" \
+    "                  taLineEnd(ends.zw, grid), grid.x >> 16);\n" \
     "}\n"
 
-/* THE BAND a line is drawn over, in game px after the zoom: the segment
-   between the two endpoint pixels' CENTRES, widened by taBandR on each side
-   and carried taBandR past each end. `c` is the corner, 0..5 over two
-   triangles (A-, B-, A+) and (A+, B-, B+), where A and B are the ends and
-   the sign the side; `t` comes back as the corner's position ALONG the
-   segment, 0 at A's centre and 1 at B's, so a vertex stage can extend a
-   per-end attribute across the band linearly (the wire's depth does).
+/* THE BAND a line is drawn over, in game units after the zoom: the segment
+   between the two ends' line-grid pixel CENTRES (the values a record
+   carries), widened by taBandR game pixels on each side and carried taBandR
+   past each end. `c` is the corner, 0..5 over two triangles (A-, B-, A+) and
+   (A+, B-, B+), where A and B are the ends and the sign the side; `t` comes
+   back as the corner's position ALONG the segment, 0 at A's centre and 1 at
+   B's, so a vertex stage can extend a per-end attribute across the band
+   linearly (the wire's depth does).
 
-   WHY 2 IS ENOUGH, which tools/line-band-check.py checks by brute force.
-   Every pixel the walk lights has its centre within half a pixel, across the
-   segment, of the line between the two end centres (the minor offset is the
-   rounded ideal one), and the two end pixels ARE the end centres. A square
-   pixel reaches at most 0.5 * (|n.x| + |n.y|) <= 0.71 further in any
-   direction, so every lit pixel lies within 1.21 of the segment across it
-   and within 0.71 past either end. A band of 2 therefore holds every target
-   pixel of every lit game pixel with 0.79 of a game pixel to spare, at any
-   supersample, and float error in placing the corners cannot reach that.
-   Being wide costs fill only: the fragment test decides the pixels. */
+   WHY 2 IS ENOUGH, which tools/line-band-check.py checks by brute force. In
+   line-grid pixels: every pixel the walk lights has its centre within half a
+   pixel of the segment between the two end centres, measured along the minor
+   axis, and the thickening moves a copy at most floor(w/2) further along it;
+   a square pixel reaches 0.71 beyond its centre. So every lit pixel lies
+   within 1.21 + floor(w/2) line-grid pixels of the segment across it and
+   within 0.71 * (1 + floor(w/2)) past either end -- at most 1.21 GAME pixels
+   across and 0.71 past an end for every w = ss, since a line-grid pixel is
+   1/ss of one. A band of 2 game pixels holds them with 0.79 to spare, and
+   float error in placing the corners cannot reach that. Being wide costs fill
+   only: the fragment test decides the pixels. */
 #define TAGPU_GLSL_BAND_FN \
     "const float taBandR = 2.0;\n" \
-    "vec2 taBand(vec2 a, vec2 b, int c, out float t) {\n" \
-    "  vec2 ca = a + 0.5, cb = b + 0.5, d = cb - ca;\n" \
+    "vec2 taBand(vec2 ca, vec2 cb, int c, out float t) {\n" \
+    "  vec2 d = cb - ca;\n" \
     "  float len = length(d);\n" \
     "  vec2 u = len > 0.0 ? d / len : vec2(1.0, 0.0);\n" \
     "  vec2 n = vec2(-u.y, u.x);\n" \

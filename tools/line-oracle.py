@@ -1,31 +1,32 @@
 #!/usr/bin/env python3
-"""A capture of the lane's lines against a CPU model of DrawLine's walk.
+"""A capture of the lane's lines against a CPU model of tagpu_line.h's rule.
 
     tools/line-oracle.py CAPTURE.ppm LINES.txt [--diff out.png]
 
 WHAT IT COMPARES. A pass whose A/B claims a frame writes the capture
 (`tagpu_<pass>_vk.ppm`) and, beside it, the lines it handed the GPU that frame
-(`tagpu_<pass>_lines.txt`: a header `# <pass> <game w> <game h>`, then
-`ax ay bx by col` a line, the ends as tagpu_line.h decided them). When the
-header carries a rect as well (`... <L> <T> <R> <B>`, the markers and the
-effects), the ends are the ones BEFORE DrawLine's clip, and each line is first
-clipped with line-band-check.py's transcription of `0x4BEA20` and `0x4CC650`
-and the pixels outside the rect dropped, as the viewport scissor drops them.
-This walks every line with `walk` -- a transcription of `0x4CC7AB`'s loops
-from the disassembly, not of the fragment stage's closed form -- covers each lit game
-pixel with its `ss` x `ss` block, and compares that set with the capture's lit
-pixels. The verdict is 0 px or not: exit 0 only when no pixel is lit in one
-and not the other.
+(`tagpu_<pass>_lines.txt`: a header `# <pass> <grid w> <grid h> <w>`, then
+`ax ay bx by col` a line, the ends as tagpu_line.h decided them, in LINE-GRID
+pixels -- the world target's own, `w` = ss to a game pixel). When the header
+carries a rect as well (`... <L> <T> <R> <B>`, the markers and the effects),
+the ends are the ones BEFORE DrawLine's clip, and each line is first clipped
+with line-band-check.py's transcription of `0x4BEA20` and `0x4CC650` and the
+pixels outside the rect dropped, as the viewport scissor drops them. This
+walks every line with `walk` -- a transcription of `0x4CC7AB`'s loops from
+the disassembly, not of the fragment stage's closed form -- copies each lit
+pixel w times along the line's minor axis (`thicken`), and compares that set
+with the capture's lit pixels. The verdict is 0 px or not: exit 0 only when no
+pixel is lit in one and not the other. At w = 1 the model is DrawLine's own
+line on the game-pixel grid.
 
 THE CAPTURE MUST HOLD ONLY LINES. Anything else the pass draws (a marker's
 bar, an effect's sprite, a unit's body) is lit pixels the model does not have,
 and a unit's body hides wire behind it. The captures this was run on come from
 a build whose recorders drew the line draws alone; the gate's notes say how.
 
-`ss` is the capture's width over the game width and must be a whole number
-equal to the height's; a grid that is not an integer multiple is refused
-rather than resampled. Pixels that fall off the target are dropped from the
-model, as the rasteriser drops them.
+The capture must be the line grid itself (the world target at ss); one of any
+other size is refused rather than resampled. Pixels that fall off it are
+dropped from the model, as the rasteriser drops them.
 """
 
 import argparse
@@ -69,35 +70,38 @@ def read_ppm(path):
 
 
 def read_lines(path):
-    """(pass, gw, gh, rect or None, lines). A header with a rect lists the
+    """(pass, lw, lh, w, rect or None, lines). A header with a rect lists the
     lines before DrawLine's clip (tagpu_line.h)."""
     rows = pathlib.Path(path).read_text().split("\n")
     head = rows[0].split()
-    if len(head) not in (4, 8) or head[0] != "#":
-        raise SystemExit("%s: no `# <pass> <gw> <gh> [<L> <T> <R> <B>]` header" % path)
-    gw, gh = int(head[2]), int(head[3])
-    rect = tuple(map(int, head[4:8])) if len(head) == 8 else None
+    if len(head) not in (5, 9) or head[0] != "#":
+        raise SystemExit("%s: no `# <pass> <grid w> <grid h> <w> [<L> <T> <R> <B>]` "
+                         "header" % path)
+    lw, lh, w = int(head[2]), int(head[3]), int(head[4])
+    rect = tuple(map(int, head[5:9])) if len(head) == 9 else None
     lines = []
     for r in rows[1:]:
         if r.strip():
             ax, ay, bx, by, col = map(int, r.split())
             lines.append((ax, ay, bx, by, col))
-    return head[1], gw, gh, rect, lines
+    return head[1], lw, lh, w, rect, lines
 
 
-def model(lines, gw, gh, rect, eng):
-    """The game pixels the engine's DrawLine lights for `lines`: with a rect,
-    each line clipped as 0x4BEA20 and 0x4CC650 clip it and the pixels outside
-    the rect dropped, as the pass's viewport scissor drops them."""
-    lit = np.zeros((gh, gw), bool)
+def model(lines, lw, lh, w, rect, eng):
+    """The line-grid pixels tagpu_line.h's rule lights for `lines`: DrawLine's
+    walk, thickened to w; with a rect, each line clipped first as 0x4BEA20 and
+    0x4CC650 clip it and the pixels outside the rect dropped, as the pass's
+    viewport scissor drops them."""
+    lit = np.zeros((lh, lw), bool)
     for ax, ay, bx, by, _ in lines:
         if rect:
-            c = eng.clip(ax, ay, bx, by, *rect, gw, gh)
+            c = eng.clip(ax, ay, bx, by, *rect, lw, lh)
             if c is None:
                 continue
             ax, ay, bx, by = c
-        for x, y in eng.walk(ax, ay, bx, by):
-            if 0 <= x < gw and 0 <= y < gh:
+        walked = eng.walk(ax, ay, bx, by)
+        for x, y in eng.thicken(walked, (ax, ay), (bx, by), w):
+            if 0 <= x < lw and 0 <= y < lh:
                 lit[y, x] = True
     if rect:
         L, T, R, B = rect
@@ -117,20 +121,18 @@ def main():
 
     img = read_ppm(a.capture)
     th, tw = img.shape[:2]
-    which, gw, gh, rect, lines = read_lines(a.lines)
-    if tw % gw or th % gh or tw // gw != th // gh:
-        raise SystemExit("line-oracle: the capture is %dx%d and the game %dx%d - "
-                         "not a whole supersample, so there is no honest "
-                         "game-pixel grid to compare on" % (tw, th, gw, gh))
-    ss = tw // gw
-    g = model(lines, gw, gh, rect, _engine())
-    want = np.repeat(np.repeat(g, ss, 0), ss, 1)
+    which, lw, lh, w, rect, lines = read_lines(a.lines)
+    if (tw, th) != (lw, lh):
+        raise SystemExit("line-oracle: the capture is %dx%d and the line grid %dx%d - "
+                         "the capture must be the grid the ends were put on"
+                         % (tw, th, lw, lh))
+    want = model(lines, lw, lh, w, rect, _engine())
     got = img.any(axis=2)
     only_model = want & ~got
     only_cap = got & ~want
-    print("line-oracle: %s, %d lines, ss=%d: model %d px, capture %d px, "
+    print("line-oracle: %s, %d lines, w=%d: model %d px, capture %d px, "
           "only in the model %d, only in the capture %d"
-          % (which, len(lines), ss, int(want.sum()), int(got.sum()),
+          % (which, len(lines), w, int(want.sum()), int(got.sum()),
              int(only_model.sum()), int(only_cap.sum())))
     if a.diff:
         from PIL import Image

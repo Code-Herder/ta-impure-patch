@@ -561,15 +561,15 @@ static const char* FXVS =
 /* THE NANOFRAME WIRE'S VERTEX STAGE, paired with tagpu_native::FS as VS and
    FXVS are, and declaring their uniforms and outputs in their order for the
    same reason. Six vertices a record, a band over one edge (tagpu_glsl.h
-   `taBand`); the fragment stage keeps the game pixels `0x4CC7AB` would plot
-   between the record's two ends (`vLineOn` 1), so the wire is the engine's
-   line on the game-pixel grid, one game pixel wide at any `ss`.
+   `taBand`); the fragment stage keeps the line-grid pixels tagpu_line.h's
+   rule lights between the record's two ends (`vLineOn` 1) -- `0x4CC7AB`'s
+   walk on the world target's own pixels, thickened to `ss` of them.
 
    A RECORD, three vec4 from `uRowBase + 3 * edge` in the pose buffer, made on
    the CPU by tagpu_vk_unit.c from the bake's WIRE pairs, this unit's pose
    and its visibility words -- only edges of visible pieces on painted faces
    are there, so nothing here has to hide a vertex:
-     r0  the two ends' game pixels after the zoom (tagpu_line.h)
+     r0  the two ends' line-grid pixel centres after the zoom (tagpu_line.h)
      r1  the two ends' depth keys, `uEnc + md + 0.15`, then their heights m.y
      r2  the two ends' projected offsets from the anchor, (m.x, -m.z - m.y/2)
    THE +0.15 puts the wire one notch NEARER than the surface it traces, so it

@@ -441,10 +441,10 @@ static const char* FS =
     "    if (b.a < 0.5) discard;\n"
     "    base = b.rgb;\n"
     "  }\n"
-    /* A LINE (the nanoframe wire): the band WVS drew keeps only the game
-       pixels `0x4CC7AB` would plot between its two ends (tagpu_glsl.h) */
+    /* A LINE (the nanoframe wire): the band WVS drew keeps only the line-grid
+       pixels tagpu_line.h's rule lights between its two ends (tagpu_glsl.h) */
     "  if (vLineOn == 1 &&\n"
-    "      !taOnLine(taGamePx(gl_FragCoord.xy, uGrid), ivec2(vLine.xy), ivec2(vLine.zw)))\n"
+    "      !taLineKeeps(gl_FragCoord.xy, vLine, uGrid))\n"
     "    discard;\n"
     /* scaffold occlusion: nearer stamped rows hide this fragment (one copy
        of the rule, shared with the effects shader: tagpu_glsl.h) */
