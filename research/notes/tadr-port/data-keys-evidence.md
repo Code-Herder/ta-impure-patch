@@ -1239,10 +1239,10 @@ is needed for keys that name another file's content** (§3).
 - `tagpu_weapons.c` already reads FBI keys: at the game-start loader, `cb_loader` at `0x42CEF2`
   (weapon4..N), and at menu time, `cb_crc_weapons` at `0x42B004`, which folds them into
   `CRC_weapons` **only while the module is armed**.
-- It keys `g_def[]` by def index, and `def_rec()` answers NULL when the stored def pointer differs,
-  which makes a stale row read as stock only at a def address that changed: a slot whose FBI the
-  loader skips or fails to open keeps an earlier game's row at a repeated address (the engine
-  map's `0x42D2E0` section).
+- It keys `g_def[]` by def index, and `def_rec()` answers NULL when the stored def pointer differs.
+  The pointer alone cannot tell two games apart (the def array can come back at the same address, and
+  the loader skips a slot with no FBI), so the records are also emptied at the unit-data load's
+  entry `0x42D2E0` (the engine map's `0x42D2E0` section).
 - It hooks the def copy `0x42B370` to carry records with their type.
 - A′2 made 16 384 type slots (`TAGPU_LIM_TYPES`) and found the def array write-protected after the
   load. Our records live in the DLL, so that does not bite.

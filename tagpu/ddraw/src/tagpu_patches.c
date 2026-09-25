@@ -2810,8 +2810,9 @@ static int wire_block_ok(const char* first, const char* last, const char* begin,
    the round robin (returning to 0x48B49C). ghost = the engine's own ghost sweep firing (a
    round-robin type 0 over an occupied slot). */
 static unsigned int s_wireMorph, s_wireDCreate, s_wireRCreate, s_wireGhost;
-/* CreateFromNetwork's own refusal, for B5: 0x486229 returns 0 when the create's player has no
-   block ([rec+0x67] == 0), per caller; noarr = wire_s09 found no unit array to bound against */
+/* CreateFromNetwork's own refusal, for B5: when the create's player has no block
+   ([rec+0x67] == 0) the jne at 0x486229 falls through to 0x48622B, which returns 0; counted per
+   caller. noarr = wire_s09 found no unit array to bound against */
 static unsigned int s_wireNoBlk09, s_wireNoBlkDirty, s_wireNoBlkRR, s_wireNoArr;
 /* drop counters, per message */
 static unsigned int s_wire09, s_wire09Blk, s_wire0A, s_wire0C, s_wire0Ckill, s_wire0B, s_wire2C;

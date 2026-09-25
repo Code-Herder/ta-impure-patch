@@ -27,12 +27,13 @@ ln -s $PWD/scenarios/content/wpn-test.ufo tagpu/instances/w1/gamedir/   # the te
 rm -f tagpu/instances/w1/catalogue.json              # cached type list is now stale
 tools/tacli scenario load w1 wpn-llt10 --restart     # two ten-laser towers vs solars
 tools/tacli weapons w1                               # every slot of every unit + counters
-tools/tacli log w1 -g "weapons: (loader|VIOL|MISM)"
+tools/tacli log w1 -g "weapons: (unit-data|loader|reload|VIOL|MISM)"   # each load empties, then fills
 ```
 
 - **`tacli weapons <inst> [idx…]` is the oracle**: per slot the state byte, weapon, target,
-  reload, heading, pitch, stock, aim result and COB thread, plus `armed`, the C-path hit counters
-  and projectile launches per slot. It works **unarmed** too — that instance is your control. With
+  reload, heading, pitch, stock, aim result and COB thread, plus `armed`, the C-path hit counters,
+  projectile launches per slot, and each extended type's cached `AimFromWeaponN,QueryWeaponN`
+  pieces from slot 3 on (`-1` = not asked yet). It works **unarmed** too — that instance is your control. With
   stock content and the module armed, every counter but `loader`/`stock_splice` must read 0 and
   `mismatch`/`violation` must be 0; that is the regression check.
 - It also prints each unit type's `CRC_weapons` and `CRC_all`, the unit-sync values. Armed and
@@ -226,9 +227,12 @@ tools/tacli log c1 -g datakeys            # every key read at load, every mask a
   succeeds ends on a download page whose name carries no number (`ARMDL`), which `--page` cannot
   page away from; `ui click ARMPREV` returns to a numbered one.
 - **`+reload <unit>` re-reads one type's FBI and COB mid-game, and runs only with `tacli switches
-  <i> cheats=on`**: the chat grants the debug run level only with that bit.
-- **Type into the chat bar a few characters per `keys` call and read the line back** (`import
-  -window`): a long `char:` run loses characters.
+  <i> cheats=on`**: the chat grants the debug run level only with that bit. **It kills every unit
+  of that type first** — a side left with no unit ends the game on `ENDMSN.GUI` — so keep another
+  unit per side, and spawn the type again with `scenario apply` to test the reloaded def.
+- **Type into the chat bar four characters per `keys` call, with a `tacli shot` between calls,
+  and read the line back**: a long `char:` run loses characters, and the first batch after the
+  `return` that opens the bar can be lost too. Clear a wrong line with `backspace`.
 
 ## The render-options screen and the GPU row
 
