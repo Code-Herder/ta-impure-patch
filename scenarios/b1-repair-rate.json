@@ -1,0 +1,98 @@
+{
+ "format": "ta-scenario/1",
+ "description": "B1 ride-along, the repair rate per call: two ARMLLT (750 HP) at 10 percent health on flat ground (Two Continents SW), an ARMCOM (WorkerTime 300, t = 10) repairing one and an ARMCK (WorkerTime 80, t = 2) the other. Stock's 0x41BD10 clamps each repairer's HP and energy per call to AT MOST 1 (0x41BD87..0x41BDA3), so both heal at the same flat rate. Read HP (u16 +0x108) at t0 and t0 + 10 s at gamespeed 10.",
+ "seed": 20260925,
+ "on_error": "abort",
+ "setup": {
+  "map": "Two Continents",
+  "res": "1024x768",
+  "clear_existing": true,
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 10000,
+    "energy": 10000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "core",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "lltA",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    560,
+    7600
+   ],
+   "health": 10
+  },
+  {
+   "id": "lltB",
+   "type": "ARMLLT",
+   "owner": 0,
+   "pos": [
+    800,
+    7760
+   ],
+   "health": 10
+  },
+  {
+   "id": "com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    560,
+    7680
+   ],
+   "orders": [
+    {
+     "cmd": "repair",
+     "target": "lltA"
+    }
+   ]
+  },
+  {
+   "id": "ck",
+   "type": "ARMCK",
+   "owner": 0,
+   "pos": [
+    800,
+    7840
+   ],
+   "orders": [
+    {
+     "cmd": "repair",
+     "target": "lltB"
+    }
+   ]
+  },
+  {
+   "id": "ai_keepalive",
+   "type": "CORSOLAR",
+   "owner": 1,
+   "pos": [
+    1400,
+    7300
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   680,
+   7680
+  ]
+ }
+}

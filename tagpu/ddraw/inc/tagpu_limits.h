@@ -14,10 +14,15 @@
    same-build contract), so a process that silently kept stock limits would desync the
    first time a raised one was exceeded.
 
+   THE SAME TABLE HOLDS THE SIMULATION FIXES: the stock-engine defect fixes whose absence
+   would let a player silently play by stock rules (tagpu_patches.c, "defects of the stock
+   engine") go into it in both builds, so they are checked, written and refused together
+   with the limits.
+
    THE STOCK BUILD. `make LIMITS=stock` defines TAGPU_LIMITS_STOCK: the counts below are
-   stock's, nothing is patched, and the accessors return the engine's own arrays. It exists
-   for comparisons with stock; there is no runtime switch, because a player must not be
-   able to diverge. BELOW THE STOCK CAPS THE TWO ARE NOT IDENTICAL in one respect: the
+   stock's, no limit is raised, and the accessors return the engine's own arrays; the
+   simulation fixes are installed as in the raised build. It exists for comparisons with
+   stock limits; there is no runtime switch, because a player must not be able to diverge. BELOW THE STOCK CAPS THE TWO ARE NOT IDENTICAL in one respect: the
    flying pieces' ring allocator (0x437A30) is ten times larger, so a piece stock would
    have evicted to make room lives on, lands, and adds its explosion. That changes the
    explosion count and the C-runtime rand() stream, never the simulation's own
@@ -66,8 +71,10 @@ typedef char tagpu_lim_wrecks_fit[(TAGPU_LIM_WRECKS <= 0x7FFF) ? 1 : -1];
 /* the engine's own floor for a player's units (0x491678: `cmp eax,0x14`) */
 #define TAGPU_LIM_UNITS_MIN 20
 
-/* DllMain, DLL_PROCESS_ATTACH: check every site, then write all or none. Returns 1 when
-   the raised limits are installed (always 0 in the stock build). */
+/* DllMain, DLL_PROCESS_ATTACH, after tagpu_apply_patches has put the simulation fixes'
+   sites in the table: check every site, then write all or none. Returns 1 when the whole table
+   is installed -- the raised limits and the fixes, or in the stock build the fixes alone -- and
+   0 when it is not, which the report at the first DirectDraw call then explains. */
 int tagpu_limits_install(void);
 
 /* The first DirectDraw call: if the install failed, show the report, write it to

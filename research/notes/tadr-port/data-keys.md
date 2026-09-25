@@ -219,7 +219,8 @@ commit can change.
 - **Section B, as B7, measured first:** a hit above 32 767 wrapping the HP word; kill-outright
   sparing a veteran above 24 000 HP (a vet-5 `CORKROG` survives its own self-destruct, INF); the
   NULL read at `0x4673B1` for an attacker-less targetable projectile out of sight; whether a meteor
-  hits once per peer in a network game. B's plan page records them when that branch next lands.
+  hits once per peer in a network game. [B's plan](sim-fixes.md) does not list them yet; this is
+  their record until it does.
 
 ## Open questions
 

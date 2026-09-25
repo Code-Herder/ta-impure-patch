@@ -39,23 +39,25 @@
                           whole, in tagpu_posebake.h's layout, so a unit costs
                           what its model has: 48 bytes a piece plus two word
                           runs padded to a vec4 -- 2 016 bytes for stock's
-                          worst, 36 pieces -- and after them the effects
-                          models' runs, 32 bytes each (tagpu_fxmodel.h). Its
+                          worst, 36 pieces -- then a nanoframe's wire, 48
+                          bytes an edge (`wire_records`), and after them the
+                          effects models' runs, 32 bytes each
+                          (tagpu_fxmodel.h). Its
                           size is checked every frame against the device's
                           `maxStorageBufferRange`, which the spec puts at
                           128 MB or more.
         the SMALL buffer  four vertex-stage blocks (body, caster, hard shadow,
                           wire) and three fragment-stage blocks a unit, each
-                          at a device-accepted offset: 1 536 bytes a unit at
+                          at a device-accepted offset: 1 728 bytes a unit at
                           the reference device's 64-byte alignment. After
                           every unit's window, an effects model's two -- the
                           body's vertex and fragment block, all `RS_FX`
-                          binds -- 448 bytes a model.
+                          binds -- 512 bytes a model.
 
       Both grow to the frame's own size and are given back the moment a frame
       hands nothing over -- §2.28's rule. AT THE DESIGN POINT, 15 001 units
       (TAGPU_PK_DESIGN_SLOTS) all posed and on screen at stock's worst model,
-      that is 30.2 MB of pose and 23.0 MB of blocks per frame slot, times the
+      that is 30.2 MB of pose and 25.9 MB of blocks per frame slot, times the
       slot count in address space. Only a frame that large pays it.
 
    3. PER-TYPE VERTEX BUFFERS, AND A SERIAL RATHER THAN A POINTER. Every unit
@@ -94,16 +96,16 @@
 
    ---- WHAT IT DOES NOT DO ----
 
-   THE NANOFRAME WIRE IS A LINE PIPELINE AND A SIXTH AND SEVENTH BLOCK.
-   `uRange` 2 over the bake's WIRE range, the same program, drawn after every
-   body with uNanoOn 0 (the outline carries its own colour and must not be
-   re-classified by the recolour it is drawn beside), uWaterMode 0, uAlpha 1,
-   uCast (0, 0, 1). THE WIDTH IS THE TARGET'S SCALE: a line one supersample
-   wide draws the wire at half the engine's intensity (build-state.md 7), so
-   `wideLines` gives it the full game pixel. A device without it, or with a
-   narrower maximum, draws the wire at the widest it offers rather than not at
-   all -- the wire is one part of a unit's look, and refusing the frame would
-   lose the unit.
+   THE NANOFRAME WIRE IS LINE RECORDS, ITS OWN VERTEX STAGE, AND A SIXTH AND
+   SEVENTH BLOCK. `wire_records` poses the bake's WIRE range on the CPU into
+   one record an edge -- its two ends as line-grid pixels, decided by
+   tagpu_line.h's rule -- and tagpu_posedraw.c's WVS draws each as a band that
+   the fragment stage cuts to `0x4CC7AB`'s walk thickened to `ss`, one game
+   pixel wide at any `ss`. Drawn
+   after every body with uNanoOn 0 (the outline carries its own colour and
+   must not be re-classified by the recolour it is drawn beside), uWaterMode 0,
+   uAlpha 1, uCast (0, 0, 1). It needs no device feature, so no device draws
+   it thinner or not at all.
 
 
    THE HARD SHADOW DOES NOT CHECK THAT THERE IS GROUND UNDER IT, which only
@@ -156,10 +158,10 @@
 #include "tagpu_vk_unit.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_scaffold.h"
-#include "tagpu_vk_world.h"   /* the target's ss: the wire's width follows it */
 #include "tagpu_vk_fx.h"      /* tagpu_vk_fx_models_ok: the effects models' gate */
 #include "tagpu_posedraw.h"
 #include "tagpu_posebake.h"
+#include "tagpu_line.h"     /* the wire records' ends, and the A/B's line list */
 #include "tagpu_packet.h"    /* tagpu_grow_stress, and nothing else of it */
 #include "tagpu_classicpp.h" /* aniso=: the knob the producer publishes too */
 #include "tagpu_gaf.h"       /* tagpu_gaf_rects_due */
@@ -171,7 +173,10 @@
 /* the two std140 blocks, at the sizes the generated SPIR-V headers print for
    them. The pose is a storage buffer sized per frame, so it has no size here. */
 #define VGL_SZ  192                        /* tagpu_posedraw::VS  _Globals    */
-#define FGL_SZ  256                        /* tagpu_native::FS    _Globals    */
+#define FGL_SZ  272                        /* tagpu_native::FS    _Globals    */
+#define FGL_GRID 256                       /* ...its `uGrid`, the line test's */
+/* a wire line record: three vec4 (tagpu_posedraw.c WVS) */
+#define WIRE_REC_F 12
 
 /* the two vertex bindings, which are the bake's two streams */
 #define GEOM_STRIDE (TAGPU_PB_GEOMST * 4)  /* 32 */
@@ -211,7 +216,7 @@ typedef char unit_fog_holds_carried[(FOG_MAXDIM >= TAGPU_PD_FOG_MAXDIM) ? 1 : -1
     X(vkCreateSampler) X(vkDestroySampler) \
     X(vkAllocateMemory) X(vkFreeMemory) X(vkMapMemory) X(vkUnmapMemory) \
     X(vkCmdBindPipeline) X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) \
-    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetLineWidth) \
+    X(vkCmdDraw) X(vkCmdSetViewport) X(vkCmdSetScissor) \
     X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdPipelineBarrier) \
     X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage)
 
@@ -238,8 +243,8 @@ static int s_saidAniso;                 /* ...and its filter could not be matche
 static VkDescriptorSetLayout s_dslMain, s_dslCast;
 static VkPipelineLayout      s_ploMain, s_ploCast;
 static VkPipeline            s_pipeBody, s_pipeGhost, s_pipeFx, s_pipeCast;
-/* the nanoframe wire: the body pipeline as LINE_LIST, width dynamic when the
-   device has `wideLines`. VK_NULL_HANDLE = refused, and then no wire is drawn */
+/* the nanoframe wire: WVS's bands over the CPU's line records, into the body's
+   depth. VK_NULL_HANDLE = refused, and then no wire is drawn */
 static VkPipeline            s_pipeWire;
 /* THE CLASSIC HARD SHADOW'S PAIR, and it is a pair because one blend per
    silhouette PIXEL is not one blend per surface the model has there. See
@@ -434,13 +439,15 @@ typedef struct {
        TAGPU_PDSH_* and the `first`/`count` the hand-over already resolved */
     int      shKind;
     uint32_t shFirst, shCount;
-    /* the nanoframe wire's range, 0 = none (tagpu_posedraw.h) */
-    uint32_t wireFirst, wireCount;
+    /* the nanoframe wire: its first line record in the pose buffer, in vec4,
+       and how many records -- 0 = none (`wire_records`) */
+    uint32_t wireBase, wireCount;
 } DRAW;
 static DRAW*    s_draw;
 static unsigned s_drawCap, s_ndraw, s_ncast;
 static int      s_scissorOn, s_vpL, s_vpT, s_vw, s_vh;
 static float    s_gw, s_gh;            /* the game frame those four are in */
+static int      s_ss = 1;              /* the ss the wire records were built at */
 static int      s_shadowOn;            /* the hand-over's `shadowOn`         */
 /* the offsets inside a window that `upload` settled and the three draw hooks
    bind with: a unit's six blocks after its first, and a model's fragment
@@ -1207,21 +1214,31 @@ static int build_body_pipeline(const TAGPU_VKPASS* d)
             plog(d, "unit: the effects models' pipeline would not build - every "
                     "effect with a model is not drawn, the other effects are");
     }
-    /* THE WIRE PIPELINE, and it differs in the topology and the width. Depth
-       is the body's own -- tested LESS and WRITTEN -- and the shader's
-       one-notch-nearer bias (+0.15 on the key, `uRange == 2`) is what lets an
-       edge win against the surface it traces. NOT A REASON TO REFUSE THE PASS:
-       without it a nanoframe keeps its recolour and loses only the outline. */
+    /* THE WIRE PIPELINE: tagpu_posedraw.c's `WVS` with this fragment stage,
+       and like the effects models' it has NO VERTEX INPUT -- an edge's record
+       is read out of the pose buffer by its vertex index. Triangles, six a
+       record, each a band the fragment stage cuts to `0x4CC7AB`'s pixels.
+       Depth is the body's own -- tested LESS and WRITTEN -- and the records'
+       one-notch-nearer keys (+0.15) are what let an edge win against the
+       surface it traces. NOT A REASON TO REFUSE THE PASS: without it a
+       nanoframe keeps its recolour and loses only the outline. */
     if (ok) {
-        VkDynamicState dynw[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
-                                   VK_DYNAMIC_STATE_LINE_WIDTH };
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-        dy.dynamicStateCount = d->wideok ? 3 : 2; dy.pDynamicStates = dynw;
-        if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
-                                      &s_pipeWire) != VK_SUCCESS)
-            s_pipeWire = VK_NULL_HANDLE;
-        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        dy.dynamicStateCount = 2; dy.pDynamicStates = dyn;
+        VkShaderModule wvs = mk_module(d, tagpu_spv_tagpu_posedraw_WVS,
+                                       sizeof tagpu_spv_tagpu_posedraw_WVS / 4);
+        VkPipelineVertexInputStateCreateInfo vin;
+        memset(&vin, 0, sizeof vin);
+        vin.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        s_pipeWire = VK_NULL_HANDLE;
+        if (wvs) {
+            st[0].module = wvs;
+            gp.pVertexInputState = &vin;
+            if (vkCreateGraphicsPipelines(d->dev, VK_NULL_HANDLE, 1, &gp, NULL,
+                                          &s_pipeWire) != VK_SUCCESS)
+                s_pipeWire = VK_NULL_HANDLE;
+            gp.pVertexInputState = &vi;
+            st[0].module = vs;
+            vkDestroyShaderModule(d->dev, wvs, NULL);
+        }
     }
 done:
     if (vs) vkDestroyShaderModule(d->dev, vs, NULL);
@@ -1939,8 +1956,7 @@ static int build(const TAGPU_VKPASS* d)
          s_shOk ? "on (stencil-masked)"
                 : (d->stencilok ? "OFF - the pipelines were refused"
                                 : "OFF - no stencil plane on this device"),
-         !s_pipeWire ? "OFF - the pipeline was refused"
-                     : d->wideok ? "on" : "on at 1 px (no wideLines)");
+         !s_pipeWire ? "OFF - the pipeline was refused" : "on");
     /* the stand-ins, in the map's own format so that one compare sampler is
        valid against both (tagpu_vk_shadow_format, and tagpu_vk_terr.c's note) */
     dfmt = tagpu_vk_shadow_format(d, NULL);
@@ -2119,10 +2135,11 @@ static void fill_fx_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
 
 /* One unit's window: the vertex stage's block four times (body, caster, hard
    shadow, wire) and the fragment stage's three times. `base` is `vs_body`'s,
-   and every vertex-stage block carries it. */
+   and every vertex-stage block but the wire's carries it; the wire's carries
+   `wireBase`, its first line record. */
 static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
                         const TAGPU_PDUREC* r, const int base[3],
-                        VkDeviceSize vglOff2,
+                        uint32_t wireBase, VkDeviceSize vglOff2,
                         VkDeviceSize vglOff3, VkDeviceSize vglOff4,
                         VkDeviceSize fglOff, VkDeviceSize fglOff2,
                         VkDeviceSize fglOff3)
@@ -2156,14 +2173,16 @@ static void fill_blocks(unsigned char* ub, const TAGPU_PDHAND* h,
     memcpy(ub + vglOff3, b.f, VGL_SZ);
 
     /* ---- the vertex stage, the NANOFRAME WIRE ----
-       The body block with no shift, uRange WIRE, the unit's own outline
-       colour, and uCast (0, 0, 1) -- which reaches only the shadow-space
-       point. Written for every unit, read only for one that has a
-       wire range. */
+       WVS's block: the body block with no shift, the unit's own outline
+       colour, uCast (0, 0, 1) -- which reaches only the shadow-space point --
+       and uRowBase at the unit's first line record (`wire_records`). WVS
+       reads no range, so uRange goes back to BODY. Written for every unit,
+       read only for one that has wire records. */
     b.f[2] = 0.0f; b.f[3] = 0.0f;                      /* uOffset              */
     b.f[20] = 0.0f; b.f[21] = 0.0f; b.f[22] = 1.0f;    /* uCast                */
-    b.i[40] = 2;                                       /* uRange = WIRE        */
+    b.i[40] = 0;                                       /* uRange               */
     b.f[41] = r->wire;                                 /* uWire                */
+    b.i[42] = (int)wireBase;                           /* uRowBase             */
     memcpy(ub + vglOff4, b.f, VGL_SZ);
 
     /* ---- the vertex stage, the CASTER draw ----
@@ -2273,6 +2292,79 @@ static int frame_down(int shadowOn, int otherDraws, int fogWant, int fogGrid, in
     return FD_DRAW;
 }
 
+/* THE NANOFRAME WIRE'S LINE RECORDS for one unit, into `dst`, and how many
+   were written -- at most `r->wireCount / 2`, one an edge, which is what the
+   caller reserved.
+
+   WHAT VS DID FOR THE WIRE, ON THE CPU, so the two ends of every edge are
+   decided here by tagpu_line.h's one rule and the fragment test only walks
+   between them. Per end: the rest vertex through its piece's pose rows,
+   rounded onto the engine's 16.16 grid (VS's "THE POSED VERTEX ONTO THE
+   ENGINE'S OWN 16.16 GRID"); the body projection `(m.x, -m.z - m.y/2)` from
+   the anchor; the depth key `enc + clamp(md) + 0.15`. An edge is left out --
+   as VS collapsed it -- when its face is one the engine paints nothing for
+   (`aSkip`) or its piece is hidden (`P_FLAGS & 1` clear, the visibility word
+   below 0.5), and it is counted in `*nfar` when an end lies past tagpu_line.h's
+   bound. Both ends of an edge share a face and a piece, so the two tests
+   agree for them.
+
+   THE BOUNDS: `pi < npose` and the unit's slice inside the copied arenas
+   (checked by the caller before a unit is drawn), and the mirrors' vertex
+   count against `nvert`, which bounds every `e + k` below. */
+static unsigned wire_records(float* dst, const TAGPU_PDHAND* h, const TAGPU_PDUREC* r,
+                             unsigned* nfar)
+{
+    int nvg = 0, nvm = 0, e;
+    const float* geo = tagpu_posebake_geom_mirror((const TAGPU_PBGEOM*)r->geom,
+                                                  r->geomSerial, &nvg);
+    const float* mat = tagpu_posebake_mat_mirror((const TAGPU_PBMAT*)r->mat,
+                                                 r->matSerial, &nvm);
+    unsigned n = 0;
+    const int ss = h->ss >= 1.0f ? (int)(h->ss + 0.5f) : 1;
+    if (!geo || !mat || nvg != r->nvert || nvm != r->nvert) return 0;
+    for (e = r->wireFirst; e + 1 < r->wireFirst + r->wireCount; e += 2) {
+        int gx[2], gy[2], k, ok = 1;
+        float enc[2], vy[2], qx[2], qy[2];
+        for (k = 0; k < 2 && ok; k++) {
+            const float* gv = geo + (size_t)(e + k) * TAGPU_PB_GEOMST;
+            const float* row;
+            float m[3], md;
+            int pi = (int)(gv[6] + 0.5f), j;
+            if (mat[(size_t)(e + k) * TAGPU_PB_MATST + 4] > 0.5f) { ok = 0; break; }
+            if (pi < 0 || pi >= r->npose) { ok = 0; break; }
+            if (h->vis[r->flagOff + (unsigned)pi] < 0.5f) { ok = 0; break; }
+            row = h->rows + ((size_t)r->rowOff + (size_t)pi * 3) * 4;
+            for (j = 0; j < 3; j++) {
+                m[j] = row[j * 4 + 0] * gv[0] + row[j * 4 + 1] * gv[1] +
+                       row[j * 4 + 2] * gv[2] + row[j * 4 + 3];
+                m[j] = floorf(m[j] * 65536.0f + 0.5f) / 65536.0f;
+            }
+            qx[k] = m[0];
+            qy[k] = -m[2] - m[1] * 0.5f;
+            if (!tagpu_line_px((double)r->anchor[0] + qx[k], (double)r->anchor[1] + qy[k],
+                               h->zoom > 0.0f ? h->zoom : 1.0, h->zoomCx, h->zoomCy,
+                               ss, TAGPU_LINE_MAXC, &gx[k], &gy[k])) {
+                (*nfar)++;
+                ok = 0;
+                break;
+            }
+            md = (2.0f * m[1] - m[2]) / 256.0f + r->mdBias;
+            if (md < -1.8f) md = -1.8f;
+            if (md > 1.8f) md = 1.8f;
+            enc[k] = r->enc + md + 0.15f;
+            vy[k] = m[1];
+        }
+        if (!ok) continue;
+        dst[0] = tagpu_line_centre(gx[0], ss); dst[1] = tagpu_line_centre(gy[0], ss);
+        dst[2] = tagpu_line_centre(gx[1], ss); dst[3] = tagpu_line_centre(gy[1], ss);
+        dst[4] = enc[0]; dst[5] = enc[1]; dst[6] = vy[0]; dst[7] = vy[1];
+        dst[8] = qx[0]; dst[9] = qy[0]; dst[10] = qx[1]; dst[11] = qy[1];
+        dst += WIRE_REC_F;
+        n++;
+    }
+    return n;
+}
+
 static int draw_room(unsigned n)
 {
     DRAW* q;
@@ -2300,6 +2392,10 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        drops the models (`dropFx`), and the runs it then copies (`nrun`) */
     unsigned nfxAll = 0, nbase, nrun, kBase, kFx;
     int dropFx = 0;
+    /* the wire's line records: where they start in the pose buffer, the vec4
+       reserved for them, how many are written, and the ends past the bound */
+    VkDeviceSize wireOff = 0;
+    unsigned wireVec = 0, wireRec = 0, wireFar = 0;
 
     s_ndraw = 0; s_ncast = 0; s_drawThis = 0;
     s_nsil = 0; s_nslant = 0; s_nwire = 0; s_nfx = 0;
@@ -2515,6 +2611,30 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
                  (double)poseBase / 1048576.0, (double)s_ssboMax / 1048576.0);
         goto standdown;
     }
+    /* THE NANOFRAME WIRE'S LINE RECORDS FOLLOW THE WORDS, three vec4 an edge,
+       and the effects models' runs follow them. The room is the bake's own
+       count, an edge per two WIRE-range vertices of every unit that carries
+       one, so `wire_records` below can never write past it. A frame whose
+       records would pass the device's storage range draws no wire rather
+       than no units -- the wire is one part of a unit's look. */
+    if (s_pipeWire) {
+        VkDeviceSize want = 0;
+        for (i = 0; i < h.nunit; i++) {
+            const TAGPU_PDUREC* r = &h.units[i];
+            if (r->fx || r->wireFirst < 0 || r->wireCount <= 0 ||
+                r->wireFirst + r->wireCount > r->nvert) continue;
+            want += (VkDeviceSize)(r->wireCount / 2) * 3;
+        }
+        if (poseBase + want * 16 <= s_ssboMax) wireVec = (unsigned)want;
+        else if ((d->frame % 300u) == 0u)
+            plog(d, "unit: frame %u: %.1f MB of nanoframe wire records would pass "
+                    "the device's %.1f MB storage range - the wires are not drawn, "
+                    "the units are", (unsigned)d->frame,
+                 (double)(want * 16) / 1048576.0, (double)s_ssboMax / 1048576.0);
+    }
+    wireOff = poseBase;
+    poseBase += (VkDeviceSize)wireVec * 16;
+
     /* A UNIT IS NEVER REFUSED FOR AN EFFECT. The models are drawn all or
        none, so they are checked whole before anything is sized for them:
        runs past the budget every holder of them shares (tagpu_fxmodel.h
@@ -2685,11 +2805,11 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        body's, the caster's, the hard shadow's, the nanoframe wire's) and three
        fragment-stage (the body's, the hard shadow's, the wire's). The wire's
        pair is written for every unit, nanoframe or not, because the window is
-       per unit and fixed-stride: 448 bytes a unit of the 1 536 on the
-       reference device's 64-byte alignment (192 + 256).
+       per unit and fixed-stride: 512 bytes a unit of the 1 728 on the
+       reference device's 64-byte alignment (192 + 320).
 
        TWO BLOCKS A MODEL, the body's vertex block and its fragment block --
-       the only two RS_FX binds -- so 448 bytes a model on that device. The
+       the only two RS_FX binds -- so 512 bytes a model on that device. The
        units' windows come first, in record order, and the models' after
        every one of them (`ubase`), so the units' run is one whatever the
        models do. */
@@ -2758,7 +2878,8 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         if ((s_fxShortOk & all) == all) { s_fxShort = 0; s_fxShortOk = 0; s_saidFxRoom = 0; }
     }
     /* THE POSE, ONE COPY OF EACH ARENA, laid out as tagpu_posebake.h states:
-       rows, then the shaded words, then the visibility words. */
+       rows, then the shaded words, then the visibility words -- and then this
+       file's own wire records (written per unit below), then the runs. */
     {
         size_t rb = (size_t)h.nrow * 16, fb = (size_t)h.nflag * sizeof(float);
         if (rb) {
@@ -2766,7 +2887,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
             memcpy(s->pmap + rb, h.flags, fb);
             memcpy(s->pmap + rb + fb, h.vis, fb);
         }
-        if (nrun) memcpy(s->pmap + rb + 2 * fb, h.runs, (size_t)nrun * 32);
+        if (nrun) memcpy(s->pmap + (size_t)poseBase, h.runs, (size_t)nrun * 32);
     }
 
     /* ---- what has to be uploaded this frame, and the staging to carry it ---- */
@@ -2962,12 +3083,19 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         if (w->shKind == TAGPU_PDSH_SLANT)    s_nslant++;
         else if (w->shKind == TAGPU_PDSH_SIL) s_nsil++;
         /* THE WIRE'S RANGE, BOUNDED THE SAME WAY AND FOR THE SAME REASON: a
-           third range out of the one buffer, from its own two fields. An
-           out-of-range one loses the outline, never the unit. */
-        w->wireFirst = (uint32_t)r->wireFirst;
-        w->wireCount = (uint32_t)r->wireCount;
-        if (!s_pipeWire || r->wireFirst < 0 || r->wireCount <= 0 ||
-            r->wireFirst + r->wireCount > r->nvert) w->wireCount = 0;
+           third range out of the one bake, from its own two fields, posed here
+           into line records inside the room reserved above -- the same test
+           reserved it. An out-of-range one loses the outline, never the
+           unit. */
+        w->wireBase = 0;
+        w->wireCount = 0;
+        if (wireVec && !(r->wireFirst < 0 || r->wireCount <= 0 ||
+                         r->wireFirst + r->wireCount > r->nvert)) {
+            float* dst = (float*)(s->pmap + (size_t)wireOff) + (size_t)wireRec * WIRE_REC_F;
+            w->wireBase = (uint32_t)(wireOff / 16) + wireRec * 3u;
+            w->wireCount = wire_records(dst, &h, r, &wireFar);
+            wireRec += w->wireCount;
+        }
         if (w->wireCount) s_nwire++;
         s_ndraw++;
     }
@@ -3086,9 +3214,9 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         const TAGPU_PDUREC* r = &h.units[w->rec];
         int base[3];
         if (w->fx) {
-            /* its first run, after the rows and both word sections
-               (tagpu_posedraw.h `runs`) */
-            base[0] = (int)(h.nrow + h.nflag / 2 + (unsigned)r->first * 2u);
+            /* its first run, after the rows, both word sections and the wire
+               records (tagpu_posedraw.h `runs`) */
+            base[0] = (int)(h.nrow + h.nflag / 2 + wireVec + (unsigned)r->first * 2u);
             base[1] = base[2] = 0;
             fill_fx_blocks(s->umap + w->uoff, &h, r, base, fxFglOff);
             continue;
@@ -3096,7 +3224,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
         base[0] = (int)r->rowOff;
         base[1] = (int)(h.nrow + r->flagOff / 4);
         base[2] = (int)(h.nrow + h.nflag / 4 + r->flagOff / 4);
-        fill_blocks(s->umap + w->uoff, &h, r, base,
+        fill_blocks(s->umap + w->uoff, &h, r, base, w->wireBase,
                     vglOff2, vglOff3, vglOff4, fglOff, fglOff2, fglOff3);
     }
 
@@ -3150,6 +3278,7 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
     s_scissorOn = h.scissorOn;
     s_vpL = h.vpL; s_vpT = h.vpT; s_vw = h.vw; s_vh = h.vh;
     s_gw = h.gw; s_gh = h.gh;       /* the frame those four are measured in */
+    s_ss = h.ss >= 1.0f ? (int)(h.ss + 0.5f) : 1;
     s_shadowOn = h.shadowOn;
 
     /* THE A/B FRAME IS CLAIMED LAST, AFTER EVERY REASON NOT TO DRAW IS PAST. A
@@ -3159,6 +3288,27 @@ static int upload_draw(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slot)
        of the capture. */
     s_abFrame = h.ab;
     s_drawThis = 1;
+    /* and the A/B frame's wire, as tagpu_line.h's line list: every record in
+       draw order, in its unit's colour */
+    if (h.ab) {
+        /* the records carry centres (T + 0.5) / ss; the list names T */
+        const int ss = h.ss >= 1.0f ? (int)(h.ss + 0.5f) : 1;
+        FILE* f = tagpu_line_list_open("posedraw", (int)(h.gw + 0.5f) * ss,
+                                       (int)(h.gh + 0.5f) * ss, ss);
+        for (k = 0; k < s_ndraw; k++) {
+            const DRAW* w = &s_draw[k];
+            const float* o = (const float*)(s->pmap + (size_t)w->wireBase * 16);
+            uint32_t j;
+            for (j = 0; j < w->wireCount; j++, o += WIRE_REC_F)
+                tagpu_line_list_add(f, (int)floorf(o[0] * ss), (int)floorf(o[1] * ss),
+                                    (int)floorf(o[2] * ss), (int)floorf(o[3] * ss),
+                                    (int)(h.units[w->rec].wire * 255.0f + 0.5f));
+        }
+        if (f) fclose(f);
+    }
+    if (wireFar && (d->frame % 300u) == 0u)
+        plog(d, "unit: frame %u: %u nanoframe wire edge(s) past the line bound "
+                "(tagpu_line.h) - not drawn", (unsigned)d->frame, wireFar);
     /* the offsets `cast`, `prepare` and `record` bind with */
     s_vglOff2 = vglOff2; s_vglOff3 = vglOff3; s_vglOff4 = vglOff4;
     s_fglOff = fglOff;   s_fglOff2 = fglOff2; s_fglOff3 = fglOff3;
@@ -3603,33 +3753,32 @@ static void record_stage(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t slo
 
     /* ---- the nanoframe wires ----
        After every body, so that every body is in the depth buffer first.
-       Depth-tested against the bodies and writing its own, so
-       an edge behind another unit is hidden and one on its own model wins by
-       the shader's +0.15. THE WIDTH IS SET ON EVERY BIND OF A PIPELINE THAT
-       DECLARED IT DYNAMIC, whatever its value -- an unset dynamic state is
-       undefined, which is the trap tagpu_vk_fx.c records. */
+       Depth-tested against the bodies and writing its own, so an edge behind
+       another unit is hidden and one on its own model wins by the records'
+       +0.15. Nothing is bound for vertex input: WVS reads the unit's records
+       out of the pose buffer from `uRowBase`, six vertices a record.
+
+       THE GRID IS WRITTEN HERE, into each wire's fragment block (`uGrid`,
+       FGL_GRID, tagpu_line.h `tagpu_line_grid`): the line grid the records
+       were built on, and THIS target's extent, which only `record` knows --
+       on a frame the offscreen target refused, the world goes into the
+       swapchain image at whatever scale that is. The block is host-coherent
+       and read only when `cb` executes. */
     if (stage == RS_WIRE) {
+        int g[4];
+        tagpu_line_grid(g, (int)(s_gw + 0.5f), (int)(s_gh + 0.5f), s_ss,
+                        (int)w, (int)h);
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pipeWire);
-        if (d->wideok) {
-            float lw = (float)tagpu_vk_world_scale();
-            if (lw < 1.0f) lw = 1.0f;
-            if (lw > d->maxLineWidth) lw = d->maxLineWidth;
-            vkCmdSetLineWidth(cb, lw);
-        }
         for (i = 0; i < s_ndraw; i++) {
             const DRAW* q = &s_draw[i];
-            VkBuffer vbs[2];
-            VkDeviceSize offs[2];
             uint32_t dyn[2];
             if (!q->wireCount) continue;
+            memcpy(s_slot[slot].umap + q->uoff + s_fglOff3 + FGL_GRID, g, sizeof g);
             dyn[0] = (uint32_t)(q->uoff + s_vglOff4);
             dyn[1] = (uint32_t)(q->uoff + s_fglOff3);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploMain,
                                     0, 1, &s_slot[slot].dsMain, 2, dyn);
-            vbs[0] = q->geom; vbs[1] = q->mat;
-            offs[0] = 0;      offs[1] = 0;
-            vkCmdBindVertexBuffers(cb, 0, 2, vbs, offs);
-            vkCmdDraw(cb, q->wireCount, 1, q->wireFirst, 0);
+            vkCmdDraw(cb, 6u * q->wireCount, 1, 0, 0);
         }
         return;
     }

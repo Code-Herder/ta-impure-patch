@@ -55,6 +55,106 @@ static int patch_bytes(unsigned int addr, const unsigned char* expect,
     return ok;
 }
 
+/* ===== THE FAIL-CLOSED SITE TABLE ======================================================
+   Every site that changes the simulation goes into ONE table: the raised limits (tagpu_limits.h,
+   the raised build only) and the defect fixes whose absence would let a player silently play
+   by stock rules (the fixes below that say so, in both builds). The table is compared with the
+   stock 3.1 bytes as a whole and written as a whole, or not at all, by tagpu_limits_install,
+   and a mismatch ends the process through tagpu_limits_report. A fix whose absence changes only
+   a crash, a draw, a message or a malformed input's fate is local instead: it checks and writes
+   its own sites, and is skipped with its reason logged (research/notes/tadr-port/sim-fixes.md,
+   "How B fixes are held").
+
+   WHY BEFORE ANYTHING RUNS: DllMain runs before TotalA.exe's entry point (ddraw.dll is its
+   first static import), so no game exists yet and no engine thread executes these bytes
+   while they change. Nothing here is ever put back: the patches last for the process. */
+
+#define LIM_MAXSITE  256
+#define LIM_MAXB     80    /* a whole replaced block, so the check covers what the stub stands for */
+
+typedef struct LIMSITE {
+    unsigned int  va;
+    unsigned char n;
+    unsigned char stock[LIM_MAXB];
+    unsigned char ours[LIM_MAXB];
+    unsigned char have[LIM_MAXB];   /* what the image held when compared            */
+    unsigned char differs;
+    const char*   name;
+} LIMSITE;
+
+static LIMSITE s_lim[LIM_MAXSITE];
+static int     s_nlim;
+static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
+static int     s_limOverflow;        /* the table itself was too small: our bug      */
+static int     s_limNoStub;          /* a code stub could not be made                */
+static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
+static unsigned int s_limOverlapA, s_limOverlapB;   /* two sites over one byte: our bug  */
+
+static void lim_add(unsigned int va, int n, const unsigned char* stock,
+                    const unsigned char* ours, const char* name)
+{
+    LIMSITE* s;
+    if (s_nlim >= LIM_MAXSITE || n <= 0 || n > LIM_MAXB) { s_limOverflow = 1; return; }
+    s = &s_lim[s_nlim++];
+    memset(s, 0, sizeof *s);
+    s->va = va; s->n = (unsigned char)n; s->name = name;
+    memcpy(s->stock, stock, (size_t)n);
+    memcpy(s->ours, ours, (size_t)n);
+}
+
+#ifndef TAGPU_LIMITS_STOCK
+static void lim_dword(unsigned int va, unsigned int stock, unsigned int ours, const char* name)
+{
+    lim_add(va, 4, (const unsigned char*)&stock, (const unsigned char*)&ours, name);
+}
+#endif
+
+/* an instruction whose last four bytes are an address or an operand we choose */
+static void lim_op(unsigned int va, int n, const unsigned char* stock,
+                   const unsigned char* prefix, int np, unsigned int value, const char* name)
+{
+    unsigned char ours[LIM_MAXB];
+    int k;
+    if (np + 4 > n || n > LIM_MAXB) { s_limOverflow = 1; return; }
+    memcpy(ours, prefix, (size_t)np);
+    memcpy(ours + np, &value, 4);
+    for (k = np + 4; k < n; k++) ours[k] = 0x90;
+    lim_add(va, n, stock, ours, name);
+}
+
+/* E8/E9 rel32 at `va` to `target`, NOP-padded to n bytes */
+static void lim_branch(unsigned int va, int n, const unsigned char* stock, unsigned char op,
+                       unsigned int target, const char* name)
+{
+    unsigned int rel = target - (va + 5);
+    lim_op(va, n, stock, &op, 1, rel, name);
+}
+
+/* a site that is compared and never changed: bytes a stub relies on without writing them */
+static void lim_same(unsigned int va, int n, const unsigned char* stock, const char* name)
+{
+    lim_add(va, n, stock, stock, name);
+}
+
+/* a fix of the table whose code stub could not be made: nothing of the table is written */
+static void lim_no_stub(void)
+{
+    s_limNoStub = 1;
+}
+
+/* one site's bytes, without trusting the page to be readable */
+static int lim_read(unsigned int va, unsigned char* out, int n)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery((const void*)(size_t)va, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT ||
+        (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        return 0;
+    if ((size_t)va + (size_t)n > (size_t)mbi.BaseAddress + mbi.RegionSize) return 0;
+    memcpy(out, (const void*)(size_t)va, (size_t)n);
+    return 1;
+}
+
+
 /* ---- the -r switch, in a tacli test launch ----------------------------------
 
    In a test launch TotalA.exe's registry is a file (tagpu_regstore.h), answered through
@@ -95,24 +195,34 @@ static void close_register_switch(void)
    the stock code handles correctly and differs only where the stock code would
    write past an allocation, read through NULL, read off the end of the tile
    map, leave a paid-for feature standing, pay for one feature twice, or drop a
-   saved feature. The engine map (exe-reverse-engineering.md, "Engine defects
-   we patch") has the disassembly, the callers and the measurements;
-   binary-patches.md lists them. All are
-   installed at every attach: ddraw.dll is a static import of the exe, so
-   DllMain runs before the exe's entry point. They are independent: each is
-   skipped, with its reason logged, only when its bytes differ from the retail
-   exe, its stub cannot be allocated, or its page cannot be made writable. */
+   saved feature, or where it silently plays against its own rules: an explosion
+   that hits one victim once per cell, an aircraft on the map's last column that
+   nothing can hit, a unit near the north edge that nobody can see. The engine
+   map (exe-reverse-engineering.md, "Engine defects we patch") has the
+   disassembly, the callers and the measurements; binary-patches.md lists them.
+   All are installed at every attach: ddraw.dll is a static import of the exe,
+   so DllMain runs before the exe's entry point.
+
+   TWO CLASSES [DECIDED 2026-09-25, research/notes/tadr-port/sim-fixes.md]. A fix
+   whose absence would let a player silently compute different shared state, on
+   an input stock does not fault on, is a SIMULATION fix: its sites go into the
+   fail-closed table above, and a mismatch ends the process with the report. A
+   fix whose absence changes only a crash, a draw, a message or a malformed
+   input's fate is LOCAL: it is skipped, with its reason logged, when its bytes
+   differ from the retail exe, its stub cannot be allocated, or its page cannot
+   be made writable. Each fix below names its class. */
 
 /* why a defect patch did not go in; the log line names it */
-enum { FIX_ARMED, FIX_BYTES, FIX_STUB, FIX_PROTECT, FIX_LIMITS };
+enum { FIX_ARMED, FIX_BYTES, FIX_STUB, FIX_PROTECT, FIX_LIMITS, FIX_TABLE };
 
 static const char* fix_state(int r)
 {
     switch (r) {
     case FIX_ARMED: return "ARMED";
     case FIX_BYTES: return "SKIPPED (the bytes differ from the retail exe)";
-    case FIX_STUB:  return "SKIPPED (VirtualAlloc of the stub failed)";
+    case FIX_STUB:  return "SKIPPED (its stub could not be made)";
     case FIX_LIMITS: return "with the raised limits (the limits line)";
+    case FIX_TABLE: return "in the fail-closed table (the limits line)";
     default:        return "SKIPPED (VirtualProtect of the site failed)";
     }
 }
@@ -176,6 +286,7 @@ static const char* fix_state(int r)
    Bounding by the row instead would drop units stock draws correctly — a row run
    on into an empty neighbour is drawn whole. The list feeds nothing but
    DrawGameScreen's two draw loops, so the simulation reads nothing different. */
+/* CLASS: local. The list feeds DrawGameScreen's draw loops alone. */
 static int fix_sort_buffer_end(void)
 {
     static const unsigned char was[31] = {
@@ -262,6 +373,7 @@ static int fix_sort_buffer_end(void)
    the plot. Identity for every non-NULL plot; for a NULL one the stock code
    faults, so nothing the simulation reads changes except where it would have
    crashed. No branch lands inside the eight stolen bytes [rel8/rel32 scan]. */
+/* CLASS: local. Without it the read through NULL faults. */
 static int fix_feature_null_plot(void)
 {
     static const unsigned char was[16] = {
@@ -500,6 +612,7 @@ static int __cdecl terrain_window_on_map(const unsigned int* regs)
     return 0;
 }
 
+/* CLASS: local. A draw, and a fault where stock reads off the tile map. */
 static int fix_terrain_window(void)
 {
     static const unsigned char was[10] = {
@@ -558,18 +671,17 @@ static int fix_terrain_window(void)
    without the sequence. The only other branch to 0x4236EF is stock's own at 0x4235FC
    [rel8/rel32 scan]. The cmp's operand at 0x42364D belongs to the limits table (the pool's
    count), so it is not compared here -- only its opcode and the jge's six bytes. */
+/* CLASS: simulation, fail closed. Without it a player keeps a feature the reclaim paid for. */
 static int fix_feature_die_pool_full(void)
 {
+    static const unsigned char cmp = 0x3D;                                     /* cmp eax,imm32 */
     static const unsigned char jge[6] = { 0x0F, 0x8D, 0xA0, 0x00, 0x00, 0x00 }; /* jge 0x4236F7 */
     unsigned char now[6];
     unsigned char* s;
     unsigned char* p;
 
-    if (*(const unsigned char*)0x0042364C != 0x3D ||                    /* cmp eax,imm32 */
-        memcmp((const void*)0x00423651, jge, sizeof jge) != 0)
-        return FIX_BYTES;
     s = p = tagpu_detour_stub();
-    if (!s) return FIX_STUB;
+    if (!s) { lim_no_stub(); return FIX_TABLE; }
     *p++ = 0x8B; *p++ = 0x74; *p++ = 0x24; *p++ = 0x1C;     /* mov esi,[esp+0x1c]  x  */
     *p++ = 0x8B; *p++ = 0x6C; *p++ = 0x24; *p++ = 0x20;     /* mov ebp,[esp+0x20]  y  */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x004236EF); p += 4;   /* jmp 0x4236EF: the swap */
@@ -578,11 +690,9 @@ static int fix_feature_die_pool_full(void)
         unsigned int rel = (unsigned int)(size_t)s - (0x00423651u + 6u);
         memcpy(now + 2, &rel, 4);
     }
-    if (!tagpu_detour_write(0x00423651, now, sizeof now)) {
-        VirtualFree(s, 0, MEM_RELEASE);
-        return FIX_PROTECT;
-    }
-    return FIX_ARMED;
+    lim_same(0x0042364C, 1, &cmp, "full wreck pool: FeatureDie's pool test");
+    lim_add(0x00423651, sizeof now, jge, now, "full wreck pool: the feature swap");
+    return FIX_TABLE;
 }
 
 /* A FEATURE THAT IS PAID FOR TWICE. [DISASSEMBLED] The reclaim completion 0x4237D0(who, pos),
@@ -611,6 +721,7 @@ static int fix_feature_die_pool_full(void)
    paid only once: through another cell of a multi-cell feature that is burning or dying and
    has no reclaim sequence, which FeatureDie swaps before it reads the mark (0x4235FC) -- the
    reclaim stock already refuses through the anchor. */
+/* CLASS: simulation, fail closed. Without it a group reclaim pays once per builder. */
 static int fix_reclaim_mark_anchor(void)
 {
     static const unsigned char was[6] = {
@@ -634,17 +745,14 @@ static int fix_reclaim_mark_anchor(void)
     unsigned char* s;
     unsigned char* p;
 
-    if (memcmp((const void*)0x00423892, was, sizeof was) != 0) return FIX_BYTES;
     s = p = tagpu_detour_stub();
-    if (!s) return FIX_STUB;
+    if (!s) { lim_no_stub(); return FIX_TABLE; }
     memcpy(p, anchor, sizeof anchor); p += sizeof anchor;
     *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x004238AD); p += 4;  /* je 0x4238AD  */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x00423898); p += 4;               /* jmp 0x423898 */
-    if (!tagpu_detour_land(0x00423892, s, (int)sizeof was)) {
-        VirtualFree(s, 0, MEM_RELEASE);
-        return FIX_PROTECT;
-    }
-    return FIX_ARMED;
+    lim_branch(0x00423892, (int)sizeof was, was, 0xE9, (unsigned int)(size_t)s,
+               "reclaim: the anchor's mark");
+    return FIX_TABLE;
 }
 
 /* A SAVED FEATURE ON THE MAP'S BORDER. [DISASSEMBLED] LoadMap 0x483610 ends by calling
@@ -810,20 +918,22 @@ static void __stdcall features_restore_under_mask(void* tdf)
     HeapFree(GetProcessHeap(), 0, bits);
 }
 
+/* CLASS: simulation, fail closed. Without it a loaded game silently lacks the border's
+   features. Retail has no saved multiplayer game, so the class follows from what the fix changes
+   -- the game's own state -- rather than from a second peer. */
 static int fix_saved_features_border(void)
 {
     static const unsigned char was[5] = { 0xE8, 0xA1, 0x25, 0xFF, 0xFF };  /* call 0x424C00 */
     unsigned char now[5];
 
-    if (memcmp((const void*)0x0043265A, was, sizeof was) != 0) return FIX_BYTES;
     now[0] = 0xE8;
     /* encoded against 0x43265A, where the call runs -- not against this buffer */
     {
         unsigned int rel = (unsigned int)(size_t)features_restore_under_mask - (0x0043265Au + 5u);
         memcpy(now + 1, &rel, 4);
     }
-    if (!tagpu_detour_write(0x0043265A, now, sizeof now)) return FIX_PROTECT;
-    return FIX_ARMED;
+    lim_add(0x0043265A, sizeof now, was, now, "saved features: the restore under the mask");
+    return FIX_TABLE;
 }
 
 /* A SAVED FEATURE'S STATE WRITTEN INTO A WRECK RECORD IT DOES NOT OWN. [DISASSEMBLED] The
@@ -921,6 +1031,7 @@ static int __cdecl restore_record_owned(const unsigned char* cell, int kind)
     return idx < count;
 }
 
+/* CLASS: simulation, fail closed, as the restore above. */
 static int fix_restore_record_owner(void)
 {
     static const unsigned char was[12] = {
@@ -934,14 +1045,10 @@ static int fix_restore_record_owner(void)
     unsigned char* s[2] = { NULL, NULL };
     int k;
 
-    for (k = 0; k < 2; k++)
-        if (memcmp((const void*)(size_t)site[k], was, sizeof was) != 0) return FIX_BYTES;
     for (k = 0; k < 2; k++) {
         unsigned char* p = s[k] = tagpu_detour_stub();
-        if (!p) {
-            if (k) VirtualFree(s[0], 0, MEM_RELEASE);
-            return FIX_STUB;
-        }
+        unsigned char now[sizeof was];
+        if (!p) { lim_no_stub(); return FIX_TABLE; }
         *p++ = 0x60;                                            /* pushad           */
         *p++ = 0x6A; *p++ = (unsigned char)kind[k];             /* push kind        */
         *p++ = 0x56;                                            /* push esi: cell   */
@@ -954,20 +1061,18 @@ static int fix_restore_record_owner(void)
         memcpy(p, was, 6); p += 6;                              /* the stolen mov   */
         *p++ = 0xE9; tagpu_detour_rel(p, site[k] + 6); p += 4;  /* the stock write  */
         *p++ = 0xE9; tagpu_detour_rel(p, next[k]); p += 4;      /* next: skip it    */
+        /* the jmp and a NOP over the stolen mov; the six bytes after it are compared too */
+        now[0] = 0xE9;
+        {
+            unsigned int rel = (unsigned int)(size_t)s[k] - (site[k] + 5u);
+            memcpy(now + 1, &rel, 4);
+        }
+        now[5] = 0x90;
+        memcpy(now + 6, was + 6, sizeof was - 6);
+        lim_add(site[k], sizeof was, was, now, k ? "saved features: a 3D record's owner"
+                                                 : "saved features: an Animating record's owner");
     }
-    if (!tagpu_detour_land(site[0], s[0], 6)) {
-        VirtualFree(s[0], 0, MEM_RELEASE);
-        VirtualFree(s[1], 0, MEM_RELEASE);
-        return FIX_PROTECT;
-    }
-    if (!tagpu_detour_land(site[1], s[1], 6)) {
-        /* the first site jumps into s[0]: its own bytes go back before s[0] is freed, and
-           if they cannot, s[0] stays with the jump that uses it */
-        VirtualFree(s[1], 0, MEM_RELEASE);
-        if (tagpu_detour_write(site[0], was, 6)) VirtualFree(s[0], 0, MEM_RELEASE);
-        return FIX_PROTECT;
-    }
-    return FIX_ARMED;
+    return FIX_TABLE;
 }
 
 /* THE COMPOSITE SCRATCH FRAME. [DISASSEMBLED] The composite draw context ctx = *(main+0x1437B)
@@ -1352,6 +1457,7 @@ static unsigned char* scratch_bake_stub(unsigned char* s, unsigned char test_rr,
 
 typedef struct SCRSITE { unsigned int va; unsigned char was[8]; int n; unsigned char* stub; } SCRSITE;
 
+/* CLASS: local. The frame is drawn state; stock writes past it. */
 static int fix_composite_scratch(void)
 {
     SCRSITE site[7] = {
@@ -1496,6 +1602,14 @@ static void fix_branch(FIXSITE* s, unsigned char op, const void* target)
     memcpy(s->now + 1, &rel, 4);
 }
 
+/* a simulation fix's sites, into the fail-closed table rather than written here */
+static int fix_table(const FIXSITE* s, int n, const char* name)
+{
+    int i;
+    for (i = 0; i < n; i++) lim_add(s[i].va, s[i].n, s[i].was, s[i].now, name);
+    return FIX_TABLE;
+}
+
 /* pushad; push esp; call fn; add esp,4; popad */
 static unsigned char* fix_call_regs(unsigned char* p, void (__cdecl *fn)(unsigned int*))
 {
@@ -1596,6 +1710,8 @@ static void __cdecl bl_download_append(unsigned int* regs)
     regs[PR_EDX] = (unsigned int)(size_t)list;
 }
 
+/* CLASS: simulation, fail closed. A builder's list is what the AI's pick 0x40BDB0 and the
+   build menu offer, so a player without it builds by a different list. */
 static int fix_build_list(void)
 {
     FIXSITE site[4] = {
@@ -1606,8 +1722,10 @@ static int fix_build_list(void)
                             0x8B, 0x45, 0x00, 0x40, 0x89, 0x45, 0x00 }, { 0 } },
     };
     unsigned char *a, *b, *c, *p;
-    if (!fix_match(site, 4)) return FIX_BYTES;
-    if (!(a = fix_code(16)) || !(b = fix_code(16)) || !(c = fix_code(16))) return FIX_STUB;
+    if (!(a = fix_code(16)) || !(b = fix_code(16)) || !(c = fix_code(16))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
     p = fix_call_regs(a, bl_shared_append); *p = 0xC3;
     p = fix_call_regs(b, bl_copy); *p = 0xC3;
     p = fix_call_regs(c, bl_download_append); *p = 0xC3;
@@ -1615,7 +1733,7 @@ static int fix_build_list(void)
     fix_branch(&site[1], 0xE8, b);
     site[1].now[5] = 0xEB; site[1].now[6] = 0x15;          /* jmp 0x42DAE3, past the rep movs */
     fix_branch(&site[3], 0xE8, c);
-    return fix_write(site, 4);
+    return fix_table(site, 4, "whole build lists");
 }
 
 /* THE DOWNLOAD MENUS' RECORDS [DISASSEMBLED]. 0x42DCF0 (loader thread) makes one 0xBD-byte
@@ -1693,6 +1811,8 @@ static void __cdecl dl_section(unsigned int* regs)
     *(unsigned int*)(block + regs[PR_ESI]) = k % 5u + 1u;
 }
 
+/* CLASS: simulation, fail closed. The records feed the builders' lists (0x42BE30) and the
+   build menus, as the build lists above. */
 static int fix_download_records(void)
 {
     FIXSITE site[6] = {
@@ -1710,8 +1830,10 @@ static int fix_download_records(void)
         0x89, 0x5C, 0x24, 0x14,                 /* mov [esp+0x14],ebx      */
     };
     unsigned char *a, *b, *p;
-    if (!fix_match(site, 6)) return FIX_BYTES;
-    if (!(a = fix_code(24)) || !(b = fix_code(24))) return FIX_STUB;
+    if (!(a = fix_code(24)) || !(b = fix_code(24))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
     memcpy(site[5].now + 2, &files, 4);
     p = fix_call_regs(a, dl_section);
     memcpy(p, site[1].was, 8); p += 8;                     /* mov eax,[main]; lea ebp,[ebx+1] */
@@ -1720,7 +1842,7 @@ static int fix_download_records(void)
     fix_branch(&site[0], 0xE8, (const void*)dl_alloc);
     fix_branch(&site[1], 0xE8, a);
     fix_branch(&site[4], 0xE8, b);
-    return fix_write(site, 6);
+    return fix_table(site, 6, "download menus past five entries");
 }
 
 /* THE OUT-OF-MEMORY TEXT [DISASSEMBLED]. WinMain installs 0x49E700 as the allocator's new
@@ -1749,6 +1871,7 @@ static void __cdecl oom_text(void)
                   "used all the memory it can address.");
 }
 
+/* CLASS: local. A message. */
 static int fix_oom_message(void)
 {
     FIXSITE site[4] = {
@@ -1905,12 +2028,13 @@ static void __cdecl sync_keys_unique(void)
     }
 }
 
+/* CLASS: simulation, fail closed. A player without it keeps colliding keys, which the
+   host's walk 0x46D9E3 answers with the first type that has them. */
 static int fix_sync_keys(void)
 {
     FIXSITE site[1] = { { 0x0042BD29, 5, { 0xE8, 0xA2, 0xEB, 0xFF, 0xFF }, { 0 } } };  /* call 0x42A8D0 */
     unsigned char *a, *p;
-    if (!fix_match(site, 1)) return FIX_BYTES;
-    if (!(a = fix_code(16))) return FIX_STUB;
+    if (!(a = fix_code(16))) { lim_no_stub(); return FIX_TABLE; }
     p = a;
     *p++ = 0xE8; tagpu_detour_rel(p, 0x0042A8D0); p += 4;
     *p++ = 0x85; *p++ = 0xC0;                                  /* test eax,eax        */
@@ -1918,7 +2042,7 @@ static int fix_sync_keys(void)
     *p++ = 0xE9; tagpu_detour_rel(p, (unsigned int)(size_t)sync_keys_unique); p += 4;
     *p = 0xC3;
     fix_branch(&site[0], 0xE8, a);
-    return fix_write(site, 1);
+    return fix_table(site, 1, "unique unit sync keys");
 }
 
 /* ===== WEAPON IDS (TAGPU_LIM_WEAPONS) =======================================================
@@ -2499,16 +2623,1288 @@ static int wpn_build(WPNSITES* t)
     return !t->over;
 }
 
+/* CLASS: simulation, fail closed. The 0x0F hit flag is a wire format: a player without it
+   reads a flagged hit as stock reads it. In the raised build its sites are rows of the limits
+   table; in the stock build they join the table here. */
 static int fix_weapon_ids(void)
 {
 #ifdef TAGPU_LIMITS_STOCK
     static WPNSITES w;
-    if (!wpn_build(&w)) return FIX_STUB;
-    if (!fix_match(w.s, w.n)) return FIX_BYTES;
-    return fix_write(w.s, w.n);
+    int k;
+    if (!wpn_build(&w)) {
+        if (w.over) s_limOverflow = 1;
+        else lim_no_stub();
+        return FIX_TABLE;
+    }
+    for (k = 0; k < w.n; k++) lim_add(w.s[k].va, w.s[k].n, w.s[k].was, w.s[k].now, w.name[k]);
+    return FIX_TABLE;
 #else
     return FIX_LIMITS;
 #endif
+}
+
+/* ===== DAMAGE: THE VICTIM CAPS, FLAK'S DIVIDES, THE MAP'S EDGES ============================
+   Landing B1 of research/notes/tadr-port/sim-fixes.md; the disassembly is in
+   sim-fixes-evidence.md, Part 2 §1, §4 and §11, and exe-reverse-engineering.md, "Engine
+   defects we patch". TADR's AreaDamageOverflow (the unit cap) and OffMapAircraft (the shear)
+   are the prior art; the code is ours. */
+
+/* THE VICTIM CAPS [DISASSEMBLED]. Area damage 0x49A120(proj, at), __stdcall, walks the cells
+   of the blast's rect once: for each cell its two unit slots (0x49A214..0x49A421), then the
+   cell's feature (0x49A427..0x49A62B), then the next cell (0x49A62F..0x49A645). It keeps two
+   lists on its stack, so that a victim standing on several cells is damaged once: 20 unit
+   pointers ([esp+0xA0], count [esp+0x98]) and 64 anchor cells ([esp+0xF0], count [esp+0x9C]).
+   Each list records only while it has room (0x49A28F `cmp ecx,0x14`, 0x49A5FA `cmp esi,0x40`),
+   and the damage runs whether or not the victim was recorded: the unit block falls through to
+   its damage at 0x49A2AA, the feature block to its call of 0x4244B0 at 0x49A615. So a unit
+   found after the twentieth, or an anchor after the sixty-fourth, is damaged (or, on a peer
+   that is not the host, reported with 0x0F) once for every cell of it inside the rect -- up to
+   nine times for a 3x3 structure under a commander's blast.
+
+   THE FIX replaces the two list blocks with calls that answer "seen: skip" or "record:
+   continue" from sets with no capacity, keyed by the unit's slot and the anchor's ordinal. The
+   calls sit where stock's lists are consulted -- a unit on its first cell, before its distance
+   test; a feature only on a cell that passed its distance test (0x49A5C8) -- so below the caps
+   every record and every skip is stock's, and only the repeats past them go. The damage math
+   and every value are stock's. The sets live in a frame per call of 0x49A120: the wrapper on
+   both of its calls (0x49A0A9 in 0x499EB0, 0x49A109 in the fire spread's 0x49A0C0; no other
+   reference to 0x49A120 exists [call and literal scan of the image]) holds the frame on its
+   own C stack. After the walk, a weapon with w+0x111 bit 30 (0x49A66F) detonates the
+   projectiles inside its blast through 0x499EB0 (0x49A764), which calls 0x49A120 again from
+   inside it; that call has a frame of its own.
+
+   THE INVARIANT: one explosion damages a unit at most once and reports a feature at most
+   once, and every index is bounded before it is used. It rests on
+     - a bound: a unit is recorded by its slot, (unit - begin) / 0x118 with the remainder 0 and
+       the slot below the array's count (u16 main+0x14351, 10 * units a player + 1, set with
+       the array at 0x4854EF); an anchor by its ordinal, (cell - grid) / 13 with the remainder 0
+       and the ordinal below W * H (main+0x14233, +0x14237). A pointer that fails either is not
+       damaged: stock would read through it;
+     - a lifetime, per thread: a call's frame is a local of its wrapper, so it exists exactly
+       while that call runs, and the innermost frame is a thread-local pointer (a TLS slot)
+       whose previous value the wrapper keeps and puts back. So a list block reads the frame of
+       the innermost call on its own thread, whatever runs on any other. That matters: besides
+       the projectile tick and the fire spread, 0x499EB0 is reached from the 0x0E receiver
+       (0x49AFEB), which runs on whichever thread pumps the network, the loader's included
+       during a network load. That receiver rarely damages anything -- 0x499EB0 skips a
+       projectile whose owner's player record has +0x73 == 3 (0x49A01B..0x49A047) [INFERRED: a
+       remote player], and the dispatcher passes a code in state 5 only with bit 1 of its
+       entry in the table 0x512BC0 (0x454758), which is filled at run time -- but neither fact
+       is what keeps two threads apart; the TLS slot is.
+   The sets grow through the engine's allocator 0x4D83B0, whose failure is the engine's own
+   out-of-memory exit, so no answer is ever given from a set that could not hold it.
+   A list block with no frame cannot run: both calls of 0x49A120 and both blocks are rows of the
+   one fail-closed table, written together or not at all, and nothing else calls 0x49A120. If
+   it ever did, the block counts it, logs it once and damages as though the victim were new.
+   CLASS: simulation, fail closed. B2 serves stacked aircraft through the same unit set. */
+#define DMG_UNIT_CAP   20u             /* stock's list, 0x49A28F                            */
+#define DMG_FEAT_CAP   64u             /* stock's list, 0x49A5FA                            */
+#define DMG_KEY_PAST   0x80000000u     /* a key recorded past stock's list                  */
+#define DMG_INLINE     64u             /* slots of a set in the frame: 32 keys before it grows */
+#define DMG_CELL       13u
+#define DMG_UNIT_STRIDE 0x118u
+
+/* open addressing over value + 1 (0 = empty), DMG_KEY_PAST or'd in; never more than half full */
+typedef struct DMGSET {
+    unsigned int* key;                  /* inl, or a block from 0x4D83B0 once it outgrows it */
+    unsigned int  n, cap;               /* cap a power of two                                */
+    unsigned int  inl[DMG_INLINE];
+} DMGSET;
+
+typedef struct DMGSEEN {
+    struct DMGSEEN* outer;              /* this thread's enclosing call's frame, or NULL     */
+    DMGSET unit, feat;
+} DMGSEEN;
+
+static DWORD s_dmgTls = TLS_OUT_OF_INDEXES;
+/* peekable counters (their addresses are in the enginefix line), any thread */
+static volatile LONG s_dmgUnitRepeats;  /* a victim past stock's 20 found again   */
+static volatile LONG s_dmgFeatRepeats;  /* an anchor past stock's 64 found again  */
+static volatile LONG s_dmgRefused;      /* a pointer outside its array            */
+static volatile LONG s_dmgUnframed;     /* a list block run outside the wrapper   */
+static const char s_dmgTag[] = "tagpu damage seen-set";
+
+static void dmg_set_init(DMGSET* t)
+{
+    t->key = t->inl;
+    t->n = 0;
+    t->cap = DMG_INLINE;
+    memset(t->inl, 0, sizeof t->inl);
+}
+
+static void dmg_set_free(DMGSET* t)
+{
+    if (t->key != t->inl) ENG_FREE(t->key);
+}
+
+static unsigned int dmg_hash(unsigned int key, unsigned int mask)
+{
+    unsigned int h = key * 0x9E3779B1u;
+    return (h ^ (h >> 16)) & mask;
+}
+
+/* the table doubled and its keys moved */
+static void dmg_set_grow(DMGSET* t)
+{
+    unsigned int cap = t->cap * 2u, i, j;
+    unsigned int* key = (unsigned int*)ENG_ALLOC(s_dmgTag, cap * 4u); /* NULL: the engine's OOM exit */
+    memset(key, 0, cap * 4u);
+    for (i = 0; i < t->cap; i++) {
+        if (!t->key[i]) continue;
+        for (j = dmg_hash(t->key[i] & ~DMG_KEY_PAST, cap - 1u); key[j]; j = (j + 1u) & (cap - 1u)) {}
+        key[j] = t->key[i];
+    }
+    dmg_set_free(t);
+    t->key = key;
+    t->cap = cap;
+}
+
+/* 1 = already recorded by this call (a repeat past stock's list is counted); 0 = recorded now */
+static int dmg_set_seen(DMGSET* t, unsigned int value, unsigned int stock_cap, volatile LONG* repeats)
+{
+    unsigned int key = value + 1u, j;
+    if (2u * (t->n + 1u) > t->cap) dmg_set_grow(t);
+    for (j = dmg_hash(key, t->cap - 1u); t->key[j]; j = (j + 1u) & (t->cap - 1u))
+        if ((t->key[j] & ~DMG_KEY_PAST) == key) {
+            if (t->key[j] & DMG_KEY_PAST) InterlockedIncrement(repeats);
+            return 1;
+        }
+    t->key[j] = key | (t->n >= stock_cap ? DMG_KEY_PAST : 0u);
+    t->n++;
+    return 0;
+}
+
+static DMGSEEN* dmg_frame(void)
+{
+    DMGSEEN* f = (DMGSEEN*)TlsGetValue(s_dmgTls);
+    if (!f && InterlockedIncrement(&s_dmgUnframed) == 1)
+        tagpu_logf("enginefix: area damage's victim list ran outside its wrapper; its victims are "
+                   "not deduplicated (counted at 0x%08X)", (unsigned int)(size_t)&s_dmgUnframed);
+    return f;
+}
+
+/* In place of 0x49A262..0x49A2A9, esi the unit: 1 = seen, skip it (0x49A415); 0 = recorded,
+   damage it (0x49A2AA). */
+static int __stdcall dmg_unit_seen(const char* unit)
+{
+    DMGSEEN* f = dmg_frame();
+    const char* ta = *(const char* const*)0x00511DE8;
+    const char* begin;
+    unsigned int count;
+    size_t off;
+
+    if (!f) return 0;
+    begin = ta ? *(const char* const*)(ta + 0x14357) : NULL;
+    count = ta ? *(const unsigned short*)(ta + 0x14351) : 0;
+    if (!begin || unit < begin) { InterlockedIncrement(&s_dmgRefused); return 1; }
+    off = (size_t)(unit - begin);
+    if (off % DMG_UNIT_STRIDE || off / DMG_UNIT_STRIDE >= count) {
+        InterlockedIncrement(&s_dmgRefused);
+        return 1;
+    }
+    return dmg_set_seen(&f->unit, (unsigned int)(off / DMG_UNIT_STRIDE), DMG_UNIT_CAP,
+                        &s_dmgUnitRepeats);
+}
+
+/* In place of 0x49A5CE..0x49A614, the anchor cell at [esp+0x10]: 1 = seen, skip it (0x49A62B);
+   0 = recorded, hit it (0x49A615). */
+static int __stdcall dmg_feature_seen(const unsigned char* cell)
+{
+    DMGSEEN* f = dmg_frame();
+    const char* ta = *(const char* const*)0x00511DE8;
+    const unsigned char* grid;
+    unsigned long long cells;
+    size_t off;
+
+    if (!f) return 0;
+    grid = ta ? *(const unsigned char* const*)(ta + 0x14287) : NULL;
+    cells = ta ? (unsigned long long)*(const unsigned int*)(ta + 0x14233) *
+                 *(const unsigned int*)(ta + 0x14237) : 0;
+    if (!grid || cell < grid) { InterlockedIncrement(&s_dmgRefused); return 1; }
+    off = (size_t)(cell - grid);
+    if (off % DMG_CELL || off / DMG_CELL >= cells || off / DMG_CELL >= DMG_KEY_PAST - 1u) {
+        InterlockedIncrement(&s_dmgRefused);
+        return 1;
+    }
+    return dmg_set_seen(&f->feat, (unsigned int)(off / DMG_CELL), DMG_FEAT_CAP, &s_dmgFeatRepeats);
+}
+
+/* In place of both `call 0x49A120`. The engine's eax is handed back: 0x499EB0 and 0x49A0C0
+   return it as their own. */
+typedef unsigned int (__stdcall *dmg_area_fn)(void* proj, void* at);
+static unsigned int __stdcall dmg_area(void* proj, void* at)
+{
+    DMGSEEN f;
+    unsigned int r;
+    f.outer = (DMGSEEN*)TlsGetValue(s_dmgTls);
+    dmg_set_init(&f.unit);
+    dmg_set_init(&f.feat);
+    TlsSetValue(s_dmgTls, &f);
+    r = ((dmg_area_fn)0x0049A120)(proj, at);
+    TlsSetValue(s_dmgTls, f.outer);
+    dmg_set_free(&f.unit);
+    dmg_set_free(&f.feat);
+    return r;
+}
+
+static int fix_victim_caps(void)
+{
+    static const unsigned char callA[5] = { 0xE8, 0x72, 0x00, 0x00, 0x00 };   /* 0x49A0A9 */
+    static const unsigned char callB[5] = { 0xE8, 0x12, 0x00, 0x00, 0x00 };   /* 0x49A109 */
+    static const unsigned char units[72] = {
+        0x8B, 0x8C, 0x24, 0x98, 0x00, 0x00, 0x00, 0x33, 0xC0, 0x85, 0xC9, 0x7E,
+        0x20, 0x8D, 0x8C, 0x24, 0xA0, 0x00, 0x00, 0x00, 0x39, 0x31, 0x0F, 0x84,
+        0x97, 0x01, 0x00, 0x00, 0x8B, 0x94, 0x24, 0x98, 0x00, 0x00, 0x00, 0x40,
+        0x83, 0xC1, 0x04, 0x3B, 0xC2, 0x7C, 0xE9, 0x8B, 0xCA, 0x83, 0xF9, 0x14,
+        0x7D, 0x16, 0x89, 0xB4, 0x8C, 0xA0, 0x00, 0x00, 0x00, 0x8B, 0x84, 0x24,
+        0x98, 0x00, 0x00, 0x00, 0x40, 0x89, 0x84, 0x24, 0x98, 0x00, 0x00, 0x00,
+    };
+    static const unsigned char feats[71] = {
+        0x8B, 0xB4, 0x24, 0x9C, 0x00, 0x00, 0x00, 0x33, 0xC9, 0x85, 0xF6, 0x7E,
+        0x1B, 0x8D, 0x94, 0x24, 0xF0, 0x00, 0x00, 0x00, 0x8B, 0x44, 0x24, 0x10,
+        0x8B, 0x3A, 0x3B, 0xF8, 0x74, 0x3F, 0x41, 0x83, 0xC2, 0x04, 0x3B, 0xCE,
+        0x7C, 0xEE, 0xEB, 0x04, 0x8B, 0x44, 0x24, 0x10, 0x83, 0xFE, 0x40, 0x7D,
+        0x16, 0x89, 0x84, 0xB4, 0xF0, 0x00, 0x00, 0x00, 0x8B, 0x8C, 0x24, 0x9C,
+        0x00, 0x00, 0x00, 0x41, 0x89, 0x8C, 0x24, 0x9C, 0x00, 0x00, 0x00,
+    };
+    unsigned char u[sizeof units], fe[sizeof feats], p[5];
+    unsigned int rel;
+
+    /* the frames' thread-local slot; without one the table is not written, as for a stub */
+    if (s_dmgTls == TLS_OUT_OF_INDEXES) s_dmgTls = TlsAlloc();
+    if (s_dmgTls == TLS_OUT_OF_INDEXES) { lim_no_stub(); return FIX_TABLE; }
+
+    /* 0x49A262: push esi; call dmg_unit_seen; test eax,eax; jnz 0x49A415; jmp 0x49A2AA. The
+       registers the loop keeps -- ebx the projectile, esi the unit, edi the cell -- are the
+       callee's to preserve; eax, ecx and edx are dead at both exits, as after stock's block. */
+    memset(u, 0x90, sizeof u);
+    u[0] = 0x56;
+    u[1] = 0xE8; rel = (unsigned int)(size_t)dmg_unit_seen - (0x0049A263u + 5u); memcpy(u + 2, &rel, 4);
+    u[6] = 0x85; u[7] = 0xC0;
+    u[8] = 0x0F; u[9] = 0x85; rel = 0x0049A415u - (0x0049A26Au + 6u); memcpy(u + 10, &rel, 4);
+    u[14] = 0xEB; u[15] = (unsigned char)(0x0049A2AAu - (0x0049A270u + 2u));
+
+    /* 0x49A5CE: mov eax,[esp+0x10]; push eax; call dmg_feature_seen; test eax,eax;
+       jnz 0x49A62B; mov eax,[esp+0x10]; jmp 0x49A615 -- 0x49A615 passes eax, the anchor, to
+       0x4244B0. esi and edi, which stock's block used, are reloaded before their next read. */
+    memset(fe, 0x90, sizeof fe);
+    fe[0] = 0x8B; fe[1] = 0x44; fe[2] = 0x24; fe[3] = 0x10;
+    fe[4] = 0x50;
+    fe[5] = 0xE8; rel = (unsigned int)(size_t)dmg_feature_seen - (0x0049A5D3u + 5u); memcpy(fe + 6, &rel, 4);
+    fe[10] = 0x85; fe[11] = 0xC0;
+    fe[12] = 0x75; fe[13] = (unsigned char)(0x0049A62Bu - (0x0049A5DAu + 2u));
+    fe[14] = 0x8B; fe[15] = 0x44; fe[16] = 0x24; fe[17] = 0x10;
+    fe[18] = 0xEB; fe[19] = (unsigned char)(0x0049A615u - (0x0049A5E0u + 2u));
+
+    p[0] = 0xE8;
+    rel = (unsigned int)(size_t)dmg_area - (0x0049A0A9u + 5u); memcpy(p + 1, &rel, 4);
+    lim_add(0x0049A0A9, 5, callA, p, "area damage from a projectile, the call");
+    rel = (unsigned int)(size_t)dmg_area - (0x0049A109u + 5u); memcpy(p + 1, &rel, 4);
+    lim_add(0x0049A109, 5, callB, p, "area damage from the fire spread, the call");
+    lim_add(0x0049A262, sizeof units, units, u, "area damage, the unit victims' list");
+    lim_add(0x0049A5CE, sizeof feats, feats, fe, "area damage, the feature victims' list");
+    return FIX_TABLE;
+}
+
+/* FLAK'S DIVIDES [DISASSEMBLED]. The ballistic fire 0x49CDE0 (callers 0x49D0F8 in the fire
+   dispatch, 0x49D44E in the 0x0D receiver, 0x49D76E; all three only for a weapon with
+   w+0x111 bit 1, ballistic) divides twice.
+     - 0x49CE6A `div ecx`, ecx = w+0x68, weaponvelocity x 65536/30 (the loader, 0x42E4C6..
+       0x42E4DC), for every shot: a ballistic weapon with velocity 0 faults here.
+     - 0x49CF19 `idiv ebp`, for a burnblow weapon (bit 23, 0x49CECC): flight time = the
+       horizontal distance / ebp, ebp = 0x4B7123(pitch, v) = v * cos(pitch) from the 512-entry
+       table 0x509F00, which is 0 at entries 0 and 256: a pitch within 0.35 degrees of
+       straight up or down. Stock's flak guns (ARMFLAK_GUN, CORFLAK_GUN, ARMYORK_GUN,
+       CORSENT_GUN) are ballistic and burnblow, and an aircraft overhead asks for that pitch.
+       The 0x0D receiver calls the same function, so every peer that gets the shot divides.
+   THE FIX. 0x49CF18 (`cdq; idiv ebp; mov edx,[0x511DE8]`, nine bytes; no branch lands inside
+   [rel8/rel32 scan of .text]) jumps to a stub that divides as stock for ebp != 0, and for
+   ebp == 0 takes the engine's own non-burnblow rule instead, w+0xE6 = weapontimer (0x49CF29,
+   with eax the weapon, as 0x49CEC6 left it). And the loader's closing call 0x49E010 (the aim
+   routine's choice by flags, w+0x60; its only callers are the loader's two exits 0x42F314 and
+   0x42F32E) is preceded by a floor: a ballistic weapon whose w+0x68 is 0 gets 1, logged.
+   THE INVARIANT: no divide in 0x49CDE0 sees a zero divisor -- the second's is tested where it
+   is used, the first's is at least 1 from the load on, and the loader is its only writer.
+   Identity for every shot stock does not fault on, and for every stock weapon (none has
+   weaponvelocity 0). The floor also changes the pitch solver's input (0x49A890, handed w+0x68
+   at 0x49D608), but only for such a weapon, which stock faults on the moment it fires.
+   CLASS: local. A peer without it faults on the shot, which is not a silent divergence. */
+static volatile unsigned int s_flakFallbacks;   /* peekable, GAME THREAD */
+
+static void __cdecl flak_fallback(const unsigned char* slot)
+{
+    const char* w = *(const char* const*)(slot + 0x0C);
+    unsigned int n = ++s_flakFallbacks;
+    if (n <= 8 || !(n & (n - 1u)))
+        tagpu_logf("enginefix: flak: a burnblow shot at pitch 0x%04X has no horizontal speed; "
+                   "%.32s flies its weapontimer (%u so far)", *(const unsigned short*)(slot + 0x18),
+                   w ? w : "?", n);
+}
+
+static void __cdecl wpn_velocity_floor(unsigned int* regs)
+{
+    unsigned char* w = (unsigned char*)(size_t)regs[PR_EBP];
+    unsigned int flags, v;
+    memcpy(&flags, w + WPN_FLAGS, 4);
+    memcpy(&v, w + 0x68, 4);
+    if ((flags & 2u) && v == 0) {
+        v = 1;
+        memcpy(w + 0x68, &v, 4);
+        tagpu_logf("enginefix: flak: weapon %.32s is ballistic with weaponvelocity 0; its "
+                   "velocity is 1, so 0x49CE6A does not divide by zero", (const char*)w);
+    }
+}
+
+static int fix_flak_divides(void)
+{
+    FIXSITE site[3] = {
+        { 0x0049CF18, 9, { 0x99, 0xF7, 0xFD, 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00 }, { 0 } },
+        { 0x0042F314, 5, { 0xE8, 0xF7, 0xEC, 0x06, 0x00 }, { 0 } },     /* call 0x49E010 */
+        { 0x0042F32E, 5, { 0xE8, 0xDD, 0xEC, 0x06, 0x00 }, { 0 } },
+    };
+    unsigned char *a, *b, *p;
+    int k;
+    if (!fix_match(site, 3)) return FIX_BYTES;
+    if (!(a = fix_code(48)) || !(b = fix_code(32))) return FIX_STUB;
+    p = a;
+    *p++ = 0x85; *p++ = 0xED;                                   /* test ebp,ebp        */
+    *p++ = 0x74; *p++ = 0x0E;                                   /* jz zero             */
+    memcpy(p, site[0].was, 9); p += 9;                          /* cdq; idiv; mov edx  */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049CF21); p += 4;
+    *p++ = 0x60;                                                /* zero: pushad        */
+    *p++ = 0x56;                                                /* push esi, the slot  */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)flak_fallback); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;                      /* add esp,4           */
+    *p++ = 0x61;                                                /* popad               */
+    *p++ = 0x8B; *p++ = 0x46; *p++ = 0x0C;                      /* mov eax,[esi+0xC]   */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049CF29);
+    p = fix_call_regs(b, wpn_velocity_floor);
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049E010);
+    fix_branch(&site[0], 0xE9, a);
+    for (k = 1; k < 3; k++) fix_branch(&site[k], 0xE8, b);
+    return fix_write(site, 3);
+}
+
+/* THE LAST ROW AND COLUMN [DISASSEMBLED]. The grid stamp 0x47CC30 (the motion relink's call
+   0x43DA41 after its clear 0x47D0E0, and 0x48610F, 0x48630C, 0x48AA9A, 0x48B6B9) parks a unit
+   in the off-map bucket main+0x142B7 when its footprint leaves the map: X < 0, Z < 0, or
+   X + fw >= W (0x47CC85/0x47CC8B), Z + fh >= H (0x47CCA1/0x47CCA3). The last two are one
+   past: a footprint that ends on the last column or row, every cell of it on the map, is
+   parked, and a parked unit holds no cell, so area damage and the direct-hit test 0x49B090
+   never find it. Ground units never stand there (LoadMap masks the border with 0xFFFD); an
+   aircraft over the bottom or right edge does.
+   THE FIX: `jge` -> `jg` at 0x47CC8B and 0x47CCA3, and a bound on the unit's sort bucket.
+   What the rest of the stamp and its readers need, settled from the disassembly:
+     - the stamp's cell walk starts at (Z * W + X) * 13 and covers fh rows of fw cells: with
+       X + fw <= W and Z + fh <= H every cell is inside the grid; the clear 0x47D0E0 decides by
+       the bucket (0x47D0FD) and walks the same cells, and the re-claim 0x47C790 has no bound
+       of its own but reaches only a stamped unit (bit 27, which only the stamp sets) and walks
+       the same footprint. Every writer of +0x76 on a stamped unit clears first (0x43DA0F,
+       0x48AA6B, 0x48B685); the other two, the create (0x485BD3) and the saved game's restore
+       (0x487243), write a fresh unit that holds no stamp yet;
+     - the sort bucket (0x47CCA9..0x47CCDA) is taken from the unit's position, not its
+       footprint: column x >> 23, row z >> 23 (128-px buckets), in a grid of
+       ceil(16W / 128) x ceil(16H / 128) (0x482C84..0x482CA6), with no bound. Every writer of
+       the footprint computes X = (x - 8 fw + 8) >> 4 in pixels (0x43D877..0x43D895,
+       0x485BA3..0x485BC7, 0x48AA24..0x48AA32), so X + fw <= W gives x < 16W - 8 fw + 8, which
+       is inside the grid for fw >= 1 -- every stock footprint -- and one bucket past its end
+       for fw = 0. Stock itself forms column -1 for fw = 0 and x in [-8, 0) at the west edge,
+       whose linear index row * cols - 1 is the previous row's last bucket, inside the grid
+       for row >= 1. Buckets are read by simulation code (0x40F2E9, 0x47E5DA, ...), so stock's
+       index is kept whenever it lands inside the rows * cols grid, and only a linear index
+       outside [0, rows * cols) is replaced: its column and row clamped into the grid.
+   THE INVARIANT: a unit is parked only when a cell of its footprint is off the map, every
+   bucket index the stamp forms is inside the rows * cols grid -- LoadMap allocates
+   (rows * cols + 7) & ~7 buckets (0x482CAE..0x482CBA), so inside the block too -- and it is
+   stock's whenever stock's is inside the grid.
+   CLASS: simulation, fail closed (who can be hit). */
+static int fix_last_cell(void)
+{
+    static const unsigned char jgeX[6] = { 0x0F, 0x8D, 0xE8, 0x03, 0x00, 0x00 };
+    static const unsigned char jgeZ[6] = { 0x0F, 0x8D, 0xD0, 0x03, 0x00, 0x00 };
+    static const unsigned char bucket[50] = {
+        0x8D, 0x4E, 0x6A, 0x8B, 0xD1, 0x8B, 0x0A, 0xC1, 0xF9, 0x17, 0x8B, 0x42,
+        0x04, 0x89, 0x44, 0x24, 0x20, 0x8B, 0x42, 0x08, 0x8B, 0x95, 0x9F, 0x42,
+        0x01, 0x00, 0xC1, 0xF8, 0x17, 0x0F, 0xAF, 0x85, 0xA3, 0x42, 0x01, 0x00,
+        0x03, 0xC1, 0x8D, 0x0C, 0x80, 0x8B, 0x86, 0x82, 0x00, 0x00, 0x00, 0x8D,
+        0x14, 0x4A,
+    };
+    /* esi the unit, ebp main; out: edx the bucket, eax [esi+0x82], [esp+0x20] = y, as stock.
+       ebx (fw) and edi (fh) are live past 0x47CCDB and kept. */
+    static const unsigned char stub[] = {
+        0x8B, 0x4E, 0x6A,                   /* mov ecx,[esi+0x6a]                */
+        0xC1, 0xF9, 0x17,                   /* sar ecx,23: stock's column        */
+        0x8B, 0x46, 0x6E,                   /* mov eax,[esi+0x6e]                */
+        0x89, 0x44, 0x24, 0x20,             /* mov [esp+0x20],eax                */
+        0x8B, 0x56, 0x72,                   /* mov edx,[esi+0x72]                */
+        0xC1, 0xFA, 0x17,                   /* sar edx,23: stock's row           */
+        0x89, 0xD0,                         /* mov eax,edx                       */
+        0x0F, 0xAF, 0x85, 0xA3, 0x42, 0x01, 0x00, /* imul eax,[ebp+0x142a3]      */
+        0x01, 0xC8,                         /* add eax,ecx: stock's index        */
+        0x53,                               /* push ebx                          */
+        0x8B, 0x9D, 0xA3, 0x42, 0x01, 0x00, /* mov ebx,[ebp+0x142a3]: columns    */
+        0x0F, 0xAF, 0x9D, 0xA7, 0x42, 0x01, 0x00, /* imul ebx,[ebp+0x142a7]: rows */
+        0x39, 0xD8,                         /* cmp eax,ebx                       */
+        0x5B,                               /* pop ebx                           */
+        0x72, 0x31,                         /* jb keep: inside the array         */
+        0x8B, 0x85, 0xA3, 0x42, 0x01, 0x00, /* mov eax,[ebp+0x142a3]             */
+        0x48,                               /* dec eax                           */
+        0x39, 0xC1, 0x7E, 0x02,             /* cmp ecx,eax; jle +2               */
+        0x89, 0xC1,                         /* mov ecx,eax                       */
+        0x85, 0xC9, 0x7D, 0x02,             /* test ecx,ecx; jge +2              */
+        0x31, 0xC9,                         /* xor ecx,ecx                       */
+        0x8B, 0x85, 0xA7, 0x42, 0x01, 0x00, /* mov eax,[ebp+0x142a7]             */
+        0x48,                               /* dec eax                           */
+        0x39, 0xC2, 0x7E, 0x02,             /* cmp edx,eax; jle +2               */
+        0x89, 0xC2,                         /* mov edx,eax                       */
+        0x85, 0xD2, 0x7D, 0x02,             /* test edx,edx; jge +2              */
+        0x31, 0xD2,                         /* xor edx,edx                       */
+        0x89, 0xD0,                         /* mov eax,edx                       */
+        0x0F, 0xAF, 0x85, 0xA3, 0x42, 0x01, 0x00, /* imul eax,[ebp+0x142a3]      */
+        0x01, 0xC8,                         /* add eax,ecx                       */
+        0x8D, 0x0C, 0x80,                   /* keep: lea ecx,[eax+eax*4]         */
+        0x8B, 0x95, 0x9F, 0x42, 0x01, 0x00, /* mov edx,[ebp+0x1429f]: buckets    */
+        0x8D, 0x14, 0x4A,                   /* lea edx,[edx+ecx*2]               */
+        0x8B, 0x86, 0x82, 0x00, 0x00, 0x00, /* mov eax,[esi+0x82]                */
+    };
+    unsigned char gX[6], gZ[6];
+    unsigned char* a;
+    if (!(a = fix_code(sizeof stub + 5))) { lim_no_stub(); return FIX_TABLE; }
+    memcpy(a, stub, sizeof stub);
+    a[sizeof stub] = 0xE9; tagpu_detour_rel(a + sizeof stub + 1, 0x0047CCDB);
+    memcpy(gX, jgeX, 6); gX[1] = 0x8F;                          /* jg */
+    memcpy(gZ, jgeZ, 6); gZ[1] = 0x8F;
+    lim_add(0x0047CC8B, 6, jgeX, gX, "the grid stamp: the last column is on the map");
+    lim_add(0x0047CCA3, 6, jgeZ, gZ, "the grid stamp: the last row is on the map");
+    lim_branch(0x0047CCA9, sizeof bucket, bucket, 0xE9, (unsigned int)(size_t)a,
+               "the grid stamp: the sort bucket, bounded");
+    return FIX_TABLE;
+}
+
+/* THE LINE-OF-SIGHT SHEAR [DISASSEMBLED]. UnitInPlayerLOS 0x465AC0(player, unit) (callers
+   0x40AB11 in the periodic acquisition 0x40AA40, 0x439761, 0x46AF3D, 0x46B5B4, 0x480EE5,
+   0x48BC56, 0x494396, and our order markers through it) tests up to four points of the unit's
+   box, in turn, until one is visible: (x + def+0x15E, y + def+0x16E, z + def+0x166) (0x465AFD);
+   the same with x + def+0x176 (0x465BDB); then (.., y - def+0x17A, z + def+0x17E) (0x465C73);
+   and that with x - def+0x176 (0x465D19) -- 16.16 dwords at [esp+0x10] x, [esp+0x14] y,
+   [esp+0x18] z, def the unit's type at +0x92. Every point is placed at col = x >> 5,
+   row = (z - (y >> 1)) >> 5 (32-px cells), projected by altitude, under unsigned bounds on the
+   player's grid size (player +0x80 width, +0x84 height): outside them the point is not
+   visible. What it then reads depends on the line-of-sight mode, and the shear is the same in
+   every mode:
+     - LosType bit 1 (main+0x14281; True, LosType 14) reads the player's LOS grid (+0x7C) inline:
+       0x465B6A..0x465B94, 0x465C04..0x465C2E, 0x465CA2..0x465CD2 and 0x465D46..0x465D67;
+     - without it (Permanent 12, Circular 8) the first three points go to
+       PositionInPlayerMapped 0x408090(player, point), whose place is 0x408095..0x4080C0 and
+       which reads the shared mapped grid main+0x14273, and the fourth to an inline copy of it,
+       0x465DA9..0x465DCA.
+   0x408090 has two more callers, each handing it a world point whose row means the same, and
+   each with an inline copy of the True read beside the call:
+     - 0x407FBD in 0x407E90, the first method of the vtable 0x4FC9A0 (its destructor 0x407E70
+       restores the base's 0x4FC980) [INFERRED: an AI routine], which tests a probe point (esi)
+       stepped 320 px from a position along a heading it draws, for the player at ecx; its
+       copy is 0x407F74..0x407F9B (read 0x407F9C, not visible 0x407FB7). The probe's answer
+       decides what the routine keeps, so it joins this table;
+     - 0x49BF2F in the projectile draw pass 0x49BE60, the local player's view of a projectile;
+       its copy is 0x49BEE8..0x49BF0F. That one is a draw: fix_projectile_view, below.
+   Each sees a changed answer only for a point whose sheared row is off the grid and whose own
+   row is on it -- the defect this fixes.
+   A unit whose top is more than twice its distance from the north edge -- an aircraft at
+   cruise altitude a few tiles inside it, a unit on a hill beside it -- samples rows above the
+   grid and is invisible to every other player, so nothing acquires it. Underwater, y < 0, the
+   same happens at the south edge.
+   THE SAME READ, INLINED ELSEWHERE. The census enumerates by the data, not by one instruction
+   shape: every instruction of .text that reads a grid's height in memory -- the player's +0x84
+   (the LOS and mapped grids), the sight grid's main+0x14297, and [r+8] through a register that
+   a lea of main+0x1428F or of +0x7C (or an add r,0x7C) set -- and every compare with a register
+   loaded from one of them (exe-reverse-engineering.md, "Line of sight at the map's edge", lists
+   each). 57 compares read such a height. 46 are this read, a point placed at (z - h/2) >> 5
+   against one player's grid; three re-test the row the sight emitter stored (0x4819B7,
+   0x481DE4, 0x482304), three bound a ray's cell (0x481B0B, 0x481F15, 0x482435), two re-test a
+   row 0x47D3B8 already bounded (0x47D41A, 0x47D44E), and three compare another structure's
+   +0x84 with zero. The 13 compares with a register loaded from a +0x84 are other structures'
+   counts.
+   WHAT IT DOES NOT ENUMERATE, found by a second pass over those two forms: a grid pointer
+   spilled to the stack and reloaded, and a height recomputed from the plot's rows
+   main+0x14237 >> 1. Of four spills, the mapped stamp's, the removal's and the stamp's
+   (0x4819AD, 0x481DDA, 0x4822FA) are reloaded on each ray's back edge and reach compares the
+   census has (0x481B0B, 0x481F15, 0x482435). The sight grid's builder's (0x482F2A) reaches two
+   it has not: the builder projects every terrain tile to its sheared row (0x482FFC..0x483002)
+   and writes it only inside the grid (cmp ecx,-1 at 0x483005, then 0x48307C and 0x4830C6
+   through [esp+0x14]), so the sight grid is BUILT in sheared space, and that is the space the
+   ray fan reads, from the own row as from stock's. A tile sheared off the grid loses only its
+   occlusion, never anyone's sight, so it stays stock. The recomputed heights reach four
+   compares -- the circle's row clips (0x481C28, 0x481FF9, 0x482519) and 0x40D80A, a
+   mapped-grid reader by a scaled coordinate -- and one scale (0x466CB3, a minimap pixel to a
+   cell), none of them this read. A scan of the shear's arithmetic (a halving subtracted from a z,
+   then >> 5, following one register copy) finds 39 computations: the builder's, and one
+   feeding each of 38 of the 46 -- the other eight reuse a y >> 1 computed further up.
+   Beyond the eight above:
+     - the sight emitter 0x4825B0 (called at 0x481836 in the all-units rebuild, 0x482824 in
+       0x4827B0, which builds a unit's record -- itself called at 0x43DA59, 0x464DBF,
+       0x465053, 0x48AAA0 and 0x48B6BF --, 0x482B5E in 0x482AC0, which does the same after
+       zeroing the unit's height byte (called at 0x486178 and 0x486312), and 0x4829F4 in
+       0x482910, which builds a temporary sight record; 0x482868 is in 0x482830, which nothing
+       calls and no pointer names): under
+       the ray fan (LosType bit 0x4) it places a unit's sight at the sheared row of its
+       clamped sight height h (0x482615..0x48261E), stores the column and row in the record's
+       words (the unit's +0x7A/+0x7C, 0x48264C/0x482652) and stamps it only inside the grid
+       (0x482663); outside, it zeroes the height byte and stamps nothing, so an aircraft near
+       the north edge reveals nothing to its owner. The stamp 0x482270, the mapped stamp
+       0x481930 and the removal 0x481D50 all read the stored words, and the height byte decides
+       whether there is a stamp to remove (0x482634), so the row is fixed once, before it is
+       stored: every stamp and its removal use the same row by construction. Every removal --
+       the emitter's own (0x482644), the death removal 0x482090 (called at 0x486845), the
+       temporary record's expiry 0x482130 (0x482161) -- goes through 0x481D50, which re-tests
+       the stored column and row, so a record whose stored words the bound refused removes
+       nothing. The stored
+       words are otherwise written only by the create (0 at 0x485C0A), a saved game's restore
+       (0x48724D, with the height byte at 0x4872BF, as saved), and the temporary records'
+       compaction (main+0x1427B, at most 20 of 36 bytes, each holding its own words and byte),
+       which moves the words (0x482220) and the byte (0x48222D) together -- the table;
+     - the order resolver 0x43F0E0, six: whether the target's cell is mapped for the local
+       player decides the order it resolves -- the table;
+     - the view player's map build 0x467440, two: a unit it sees gets +0x110 bit 8, which the
+       acquisition 0x40AA40 lists for every player -- the table;
+     - local, fix_los_local: the cursor picker 0x43E490, six; the site test 0x47D2E0, one; the
+       feature helper 0x4658E0, four (two corners); the radar rebuild 0x466DC0's projectile
+       dots, four; the particle leaves 0x473590, 0x473A00, 0x474170, 0x4745E0 and 0x475470, two
+       each; positional sound 0x47F300, two;
+     - 0x474B80, two: left stock, since nothing runs it (no call or jump reaches it in .text
+       and no pointer to it is in the image).
+   The circle (LosType bit 0x4 clear) places sight at the circle's corner, (z >> 5) - (y >> 6)
+   less its offset (0x4826B7), and the stamp clips each row to the grid (0x4824F8..0x482547),
+   so every row of the circle that is inside the grid is stamped.
+   THE FIX, at every one of them: when the sheared row is outside the grid and the point's own
+   row, z >> 5, is inside it, the own row is used; otherwise the stock answer stands, so a unit
+   beyond the map's edge stays unseen (the margin TADR adds there is a gameplay change, not a
+   defect). Registers: the third read loads dx and di (the point's y and z words) and the fourth
+   reads them again (0x465D46, 0x465DA9), so its stub loads them as stock does; ebp after the
+   third and edx after the fourth are dead on both exits. The fourth's column comes in ecx from
+   0x465D3B, in both modes. In 0x408090, esi (pushed at 0x408094) is free and edx is reloaded
+   with the player from [esp+8] before either exit.
+   THE INVARIANT: the grid is read only at a column and a row inside it -- the same unsigned
+   bounds as stock, now applied to the row actually used. Exact whenever stock's row is inside.
+   THE ORACLE: every stub counts, per function, the times it takes the own row (s_losOwnRow) --
+   the one path only the fix runs, so a count above zero is that function's stub at work.
+   CLASS: simulation, fail closed (what is acquired, the order resolved); the local reads are
+   fix_los_local's. */
+
+/* The functions whose reads are fixed, in the order of their counters. */
+enum {
+    LOS_UNIT, LOS_MAPPED, LOS_PROBE, LOS_ORDER, LOS_VIEWMAP, LOS_EMIT, /* the table */
+    LOS_PROJ, LOS_CURSOR, LOS_BUILD, LOS_FEATURE, LOS_SOUND,       /* local     */
+    LOS_FX_473590, LOS_FX_474170, LOS_FX_4745E0, LOS_FX_475470, LOS_FX_473A00, LOS_RADAR,
+    LOS_NFN
+};
+static const unsigned int s_losFn[LOS_NFN] = {
+    0x465AC0, 0x408090, 0x407E90, 0x43F0E0, 0x467440, 0x4825B0,
+    0x49BE60, 0x43E490, 0x47D2E0, 0x4658E0, 0x47F300,
+    0x473590, 0x474170, 0x4745E0, 0x475470, 0x473A00, 0x466DC0,
+};
+/* the own row taken, one count per function; interlocked, so the count assumes nothing about
+   which thread calls the engine's draw and sound code. It counts the row taken, not a read or a
+   stamp made: where the column is bounded after the row, as at the sight emitter (0x48265B), a
+   counted row can still be refused by its column, and nothing is read or stamped. */
+static volatile LONG s_losOwnRow[LOS_NFN];
+
+/* pushfd; lock inc dword [&s_losOwnRow[fn]]; popfd -- the count, with the flags kept. The hand
+   stubs' literal rel8s (stubAB .. stubO, the projectile pass's stub) jump over it, so they are
+   written for this length, and a different one fails the build here. */
+#define LOS_COUNT_LEN 9
+typedef char los_count_len_is_the_hand_stubs[(LOS_COUNT_LEN == 9) ? 1 : -1];
+static int los_count(unsigned char* a, int fn)
+{
+    unsigned int at = (unsigned int)(size_t)&s_losOwnRow[fn];
+    a[0] = 0x9C;
+    a[1] = 0xF0; a[2] = 0xFF; a[3] = 0x05;
+    memcpy(a + 4, &at, 4);
+    a[8] = 0x9D;
+    return LOS_COUNT_LEN;
+}
+
+typedef struct LOSREAD {
+    unsigned int va, in, out;           /* the block, stock's read, stock's "not visible" */
+    unsigned char n;
+    unsigned char stock[49];
+    const unsigned char* stub;
+    unsigned char nstub;
+    const char* name;
+    unsigned char fn;
+} LOSREAD;
+
+/* A copy of the read whose row test stands alone: `cmp r,[g+0x84]` and the jae or jb after it,
+   n bytes at va (8 with a short branch, 12 with a near one). stock holds the retail bytes from
+   the instruction that loaded the point's z word into r (nz bytes, pre bytes before va) through
+   the row test, and the whole span is compared before anything is written: the stub reloads z
+   with that instruction at va, which is exact only while nothing in between writes what it
+   reads -- and the span is everything in between. */
+typedef struct LOSROW {
+    unsigned int  va;
+    unsigned char n, pre, nz, fn;
+    unsigned char stock[52];
+} LOSROW;
+
+/* 1 when z is `movsx r,word <operand>`, exactly nz bytes, and the operand reads no r: at the row
+   test r holds the sheared row, so a z whose base or source is r would reload garbage */
+static int los_z_ok(const unsigned char* z, int nz, int r)
+{
+    int mod, rm, len = 3, base = -1, index = -1;
+    if (nz < 3 || z[0] != 0x0F || z[1] != 0xBF || ((z[2] >> 3) & 7) != r) return 0;
+    mod = z[2] >> 6;
+    rm = z[2] & 7;
+    if (mod == 3) {
+        base = rm;                                  /* movsx r,<reg16>: its source */
+    } else {
+        if (rm == 4) {                              /* a SIB byte */
+            if (nz < 4) return 0;
+            len++;
+            base = z[3] & 7;
+            index = (z[3] >> 3) & 7;
+            if (index == 4) index = -1;
+            if (mod == 0 && base == 5) { base = -1; len += 4; }
+        } else if (mod == 0 && rm == 5) {
+            len += 4;                               /* an absolute address */
+        } else {
+            base = rm;
+        }
+        if (mod == 1) len += 1;
+        else if (mod == 2) len += 4;
+    }
+    return len == nz && base != r && index != r;
+}
+
+/* One stub at a, for the row test c (n bytes at va) of a point whose z word z reloads into r,
+   after lead (nlead bytes, where stock has overwritten z's base by the test):
+       cmp r,[g+0x84]; jb in        the sheared row is inside: stock's read
+       lead; movsx r,<z>; sar r,5   the point's own row
+       cmp r,[g+0x84]; jae out      outside too: stock's "not visible"
+       count; jmp in                the own row, read where stock reads a row
+   in and out are the site's own exits, decoded from its stock bytes (after a jae, out is the
+   target; after a jb, in is), and those bytes are compared with the image before any of this
+   is written. Only r, the flags and what lead writes change: r leaves as the row read, and in
+   is reached with CF set and out with CF clear, as stock reaches them.
+   Returns the length, LOS_STUB_LEN(nz, nlead), or 0 when c is not that shape, z is not a
+   movsx into r, or either reads r for its address; nothing is written over the site then. */
+#define LOS_STUB_LEN(nz, nlead) (32 + LOS_COUNT_LEN + (nz) + (nlead))
+static int los_stub(unsigned char* a, unsigned int va, int n, const unsigned char* c,
+                    const unsigned char* z, int nz, const unsigned char* lead, int nlead, int fn)
+{
+    unsigned int next = va + (unsigned int)n, target, in, out;
+    int r = (c[1] >> 3) & 7, jb, rel, k = 0;
+    if (c[0] != 0x3B || (c[1] & 0xC0) != 0x80 || (c[1] & 7) == 4 || (c[1] & 7) == r ||
+        r == 4 || c[2] != 0x84 || c[3] || c[4] || c[5] || !los_z_ok(z, nz, r))
+        return 0;
+    if (n == 8 && (c[6] == 0x72 || c[6] == 0x73)) {
+        jb = c[6] == 0x72;
+        target = next + (unsigned int)(int)(signed char)c[7];
+    } else if (n == 12 && c[6] == 0x0F && (c[7] == 0x82 || c[7] == 0x83)) {
+        jb = c[7] == 0x82;
+        memcpy(&rel, c + 8, 4);
+        target = next + (unsigned int)rel;
+    } else {
+        return 0;
+    }
+    in  = jb ? target : next;
+    out = jb ? next : target;
+    memcpy(a + k, c, 6); k += 6;
+    a[k++] = 0x0F; a[k++] = 0x82; tagpu_detour_rel(a + k, in); k += 4;
+    if (nlead) { memcpy(a + k, lead, (size_t)nlead); k += nlead; }
+    memcpy(a + k, z, (size_t)nz); k += nz;
+    a[k++] = 0xC1; a[k++] = (unsigned char)(0xF8 + r); a[k++] = 0x05;
+    memcpy(a + k, c, 6); k += 6;
+    a[k++] = 0x0F; a[k++] = 0x83; tagpu_detour_rel(a + k, out); k += 4;
+    k += los_count(a + k, fn);
+    a[k++] = 0xE9; tagpu_detour_rel(a + k, in); k += 4;
+    return k == LOS_STUB_LEN(nz, nlead) ? k : 0;
+}
+
+static int los_row_stub(unsigned char* a, const LOSROW* s)
+{
+    return los_stub(a, s->va, s->n, s->stock + s->pre, s->stock, s->nz, NULL, 0, s->fn);
+}
+
+static int fix_los_shear(void)
+{
+    /* the first two points: the words of the box point at [esp+0x12] x, [esp+0x16] y,
+       [esp+0x1a] z; esi the player */
+    static const unsigned char stubAB[] = {
+        0x0F, 0xBF, 0x6C, 0x24, 0x16,       /* movsx ebp,word [esp+0x16]      */
+        0x0F, 0xBF, 0x44, 0x24, 0x1A,       /* movsx eax,word [esp+0x1a]      */
+        0x0F, 0xBF, 0x4C, 0x24, 0x12,       /* movsx ecx,word [esp+0x12]      */
+        0xD1, 0xFD,                         /* sar ebp,1                      */
+        0x2B, 0xC5,                         /* sub eax,ebp: the shear         */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0x3B, 0x8E, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[esi+0x80]             */
+        0x73, 0x26,                         /* jae out                        */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x72, 0x19,                         /* jb in                          */
+        0x0F, 0xBF, 0x44, 0x24, 0x1A,       /* movsx eax,word [esp+0x1a]      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x73, 0x0E,                         /* jae out                        */
+    };                                      /* count; in: jmp; out: jmp       */
+    /* the third point: dx and di stay loaded for the fourth */
+    static const unsigned char stubC[] = {
+        0x66, 0x8B, 0x54, 0x24, 0x16,       /* mov dx,[esp+0x16]              */
+        0x66, 0x8B, 0x7C, 0x24, 0x1A,       /* mov di,[esp+0x1a]              */
+        0x0F, 0xBF, 0x4C, 0x24, 0x12,       /* movsx ecx,word [esp+0x12]      */
+        0x0F, 0xBF, 0xEA,                   /* movsx ebp,dx                   */
+        0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
+        0xD1, 0xFD,                         /* sar ebp,1                      */
+        0x29, 0xE8,                         /* sub eax,ebp: the shear         */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0x3B, 0x8E, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[esi+0x80]             */
+        0x73, 0x24,                         /* jae out                        */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x72, 0x17,                         /* jb in                          */
+        0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x73, 0x0E,                         /* jae out                        */
+    };
+    /* the fourth point: ecx its x word, dx and di as the third left them */
+    static const unsigned char stubD[] = {
+        0x0F, 0xBF, 0xD2,                   /* movsx edx,dx                   */
+        0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
+        0xD1, 0xFA,                         /* sar edx,1                      */
+        0x29, 0xD0,                         /* sub eax,edx: the shear         */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0x3B, 0x8E, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[esi+0x80]             */
+        0x73, 0x24,                         /* jae out                        */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x72, 0x17,                         /* jb in                          */
+        0x0F, 0xBF, 0xC7,                   /* movsx eax,di                   */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[esi+0x84]             */
+        0x73, 0x0E,                         /* jae out                        */
+    };
+    /* PositionInPlayerMapped: eax the point; out: ecx the column, eax the row, edx the player */
+    static const unsigned char stubM[] = {
+        0x0F, 0xBF, 0x70, 0x0A,             /* movsx esi,word [eax+0xa]       */
+        0x0F, 0xBF, 0x50, 0x06,             /* movsx edx,word [eax+6]         */
+        0x0F, 0xBF, 0x48, 0x02,             /* movsx ecx,word [eax+2]         */
+        0x89, 0xF0,                         /* mov eax,esi                    */
+        0xD1, 0xFA,                         /* sar edx,1                      */
+        0x29, 0xD0,                         /* sub eax,edx: the shear         */
+        0x8B, 0x54, 0x24, 0x08,             /* mov edx,[esp+8]: the player    */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0xC1, 0xFE, 0x05,                   /* sar esi,5: the point's own row */
+        0x3B, 0x8A, 0x80, 0x00, 0x00, 0x00, /* cmp ecx,[edx+0x80]             */
+        0x73, 0x20,                         /* jae out                        */
+        0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[edx+0x84]             */
+        0x72, 0x13,                         /* jb in                          */
+        0x89, 0xF0,                         /* mov eax,esi                    */
+        0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[edx+0x84]             */
+        0x73, 0x0E,                         /* jae out                        */
+    };
+    /* the AI probe's copy: esi the point, ecx the player. ebx is dead on both exits: the read
+       at 0x407F9C writes it, and past 0x408002 it is written at 0x40803E or popped at
+       0x408081 */
+    static const unsigned char stubP[] = {
+        0x0F, 0xBF, 0x5E, 0x06,             /* movsx ebx,word [esi+6]         */
+        0x0F, 0xBF, 0x46, 0x0A,             /* movsx eax,word [esi+0xa]       */
+        0x0F, 0xBF, 0x56, 0x02,             /* movsx edx,word [esi+2]         */
+        0xD1, 0xFB,                         /* sar ebx,1                      */
+        0x29, 0xD8,                         /* sub eax,ebx: the shear         */
+        0x8B, 0x99, 0x80, 0x00, 0x00, 0x00, /* mov ebx,[ecx+0x80]             */
+        0xC1, 0xFA, 0x05,                   /* sar edx,5                      */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5                      */
+        0x39, 0xDA,                         /* cmp edx,ebx                    */
+        0x73, 0x25,                         /* jae out                        */
+        0x3B, 0x81, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[ecx+0x84]             */
+        0x72, 0x18,                         /* jb in                          */
+        0x0F, 0xBF, 0x46, 0x0A,             /* movsx eax,word [esi+0xa]       */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0x3B, 0x81, 0x84, 0x00, 0x00, 0x00, /* cmp eax,[ecx+0x84]             */
+        0x73, 0x0E,                         /* jae out                        */
+    };
+    static const LOSREAD read[7] = {
+        { 0x00465B6A, 0x00465B95, 0x00465BB1, 43, {
+            0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
+            0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
+            0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x24, 0x3B,
+            0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1C }, stubAB, sizeof stubAB,
+          "line of sight: the first point's row", LOS_UNIT },
+        { 0x00465C04, 0x00465C2F, 0x00465C49, 43, {
+            0x0F, 0xBF, 0x6C, 0x24, 0x16, 0x0F, 0xBF, 0x44, 0x24, 0x1A, 0x0F, 0xBF,
+            0x4C, 0x24, 0x12, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00,
+            0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x73, 0x22, 0x3B,
+            0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1A }, stubAB, sizeof stubAB,
+          "line of sight: the second point's row", LOS_UNIT },
+        { 0x00465CA2, 0x00465CD3, 0x00465CED, 49, {
+            0x66, 0x8B, 0x54, 0x24, 0x16, 0x66, 0x8B, 0x7C, 0x24, 0x1A, 0x0F, 0xBF,
+            0x4C, 0x24, 0x12, 0x0F, 0xBF, 0xEA, 0x0F, 0xBF, 0xC7, 0xD1, 0xFD, 0x2B,
+            0xC5, 0x8B, 0xAE, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8,
+            0x05, 0x3B, 0xCD, 0x73, 0x22, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x73,
+            0x1A }, stubC, sizeof stubC,
+          "line of sight: the third point's row", LOS_UNIT },
+        { 0x00465D46, 0x00465D68, 0x00465D94, 34, {
+            0x0F, 0xBF, 0xD2, 0x0F, 0xBF, 0xC7, 0xD1, 0xFA, 0x2B, 0xC2, 0x8B, 0x96,
+            0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCA,
+            0x73, 0x34, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x2C }, stubD, sizeof stubD,
+          "line of sight: the fourth point's row", LOS_UNIT },
+        { 0x00465DA9, 0x00465DE0, 0x00465DCB, 34, {
+            0x0F, 0xBF, 0xD2, 0x0F, 0xBF, 0xC7, 0xD1, 0xFA, 0x2B, 0xC2, 0x8B, 0x96,
+            0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCA,
+            0x73, 0x08, 0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x72, 0x15 }, stubD, sizeof stubD,
+          "mapped: the fourth point's row", LOS_UNIT },
+        { 0x00408095, 0x004080C7, 0x004080C1, 44, {
+            0x0F, 0xBF, 0x50, 0x06, 0x0F, 0xBF, 0x48, 0x02, 0x0F, 0xBF, 0x40, 0x0A,
+            0xD1, 0xFA, 0x2B, 0xC2, 0x8B, 0x54, 0x24, 0x08, 0xC1, 0xF9, 0x05, 0x8B,
+            0xB2, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF8, 0x05, 0x3B, 0xCE, 0x73, 0x08,
+            0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x72, 0x06 }, stubM, sizeof stubM,
+          "mapped: PositionInPlayerMapped's row", LOS_MAPPED },
+        { 0x00407F74, 0x00407F9C, 0x00407FB7, 40, {
+            0x0F, 0xBF, 0x5E, 0x06, 0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x56, 0x02,
+            0xD1, 0xFB, 0x2B, 0xC3, 0x8B, 0x99, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA,
+            0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xD3, 0x73, 0x23, 0x3B, 0x81, 0x84, 0x00,
+            0x00, 0x00, 0x73, 0x1B }, stubP, sizeof stubP,
+          "line of sight: the AI probe's row", LOS_PROBE },
+    };
+    /* the copies whose row test stands alone */
+    static const LOSROW row[7] = {
+        { 0x0043F5D1, 8, 38, 4, LOS_ORDER, {   /* r = ecx */
+            0x0F, 0xBF, 0x4E, 0x0A, 0x8B, 0xA8, 0x96, 0x00, 0x00, 0x00, 0x0F, 0xBF,
+            0x46, 0x06, 0x0F, 0xBF, 0x56, 0x02, 0xD1, 0xF8, 0x2B, 0xC8, 0x8B, 0x85,
+            0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA, 0x05, 0xC1, 0xF9, 0x05, 0x3B, 0xD0,
+            0x73, 0x46, 0x3B, 0x8D, 0x84, 0x00, 0x00, 0x00, 0x73, 0x3E } },
+        { 0x0043FC05, 12, 38, 4, LOS_ORDER, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0x8B, 0x97, 0x96, 0x00,
+            0x00, 0x00, 0xD1, 0xFB, 0x2B, 0xC3, 0x8B, 0x9A, 0x80, 0x00, 0x00, 0x00,
+            0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCB, 0x0F, 0x83, 0xD0, 0x00,
+            0x00, 0x00, 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xC4, 0x00,
+            0x00, 0x00 } },
+        { 0x0043FD1A, 12, 38, 4, LOS_ORDER, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0x8B, 0x97, 0x96, 0x00,
+            0x00, 0x00, 0xD1, 0xFB, 0x2B, 0xC3, 0x8B, 0x9A, 0x80, 0x00, 0x00, 0x00,
+            0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCB, 0x0F, 0x83, 0xE5, 0x00,
+            0x00, 0x00, 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xD9, 0x00,
+            0x00, 0x00 } },
+        { 0x0043FF85, 12, 32, 4, LOS_ORDER, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0xD1, 0xFB, 0x2B, 0xC3,
+            0x8B, 0x9A, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05,
+            0x3B, 0xCB, 0x0F, 0x83, 0xE0, 0x00, 0x00, 0x00, 0x3B, 0x82, 0x84, 0x00,
+            0x00, 0x00, 0x0F, 0x83, 0xD4, 0x00, 0x00, 0x00 } },
+        { 0x004400AA, 12, 38, 4, LOS_ORDER, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0x8B, 0x92, 0x96, 0x00,
+            0x00, 0x00, 0xD1, 0xFB, 0x2B, 0xC3, 0x8B, 0x9A, 0x80, 0x00, 0x00, 0x00,
+            0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCB, 0x0F, 0x83, 0xF3, 0x00,
+            0x00, 0x00, 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xE7, 0x00,
+            0x00, 0x00 } },
+        { 0x0046778A, 8, 27, 3, LOS_VIEWMAP, {   /* r = ecx */
+            0x0F, 0xBF, 0x0E, 0x0F, 0xBF, 0x56, 0xF8, 0xD1, 0xFF, 0x2B, 0xCF, 0x8B,
+            0xB8, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA, 0x05, 0xC1, 0xF9, 0x05, 0x3B,
+            0xD7, 0x73, 0x23, 0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1B } },
+        { 0x004677D0, 8, 27, 3, LOS_VIEWMAP, {   /* r = edx */
+            0x0F, 0xBF, 0x16, 0x0F, 0xBF, 0x7E, 0xF8, 0xD1, 0xFB, 0x2B, 0xD3, 0x8B,
+            0x98, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFF, 0x05, 0xC1, 0xFA, 0x05, 0x3B,
+            0xFB, 0x73, 0x08, 0x3B, 0x90, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 } },
+    };
+    /* the order resolver's second read, 0x43F631..0x43F654: stock overwrites the point's
+       register (esi, at 0x43F635) before the row test, so the stub is the whole block, with z
+       held on the stack. ebp the player, edx the x word; both exits as stock: ecx the row,
+       edx the column, esi the width */
+    static const unsigned char blockO[36] = {
+        0x0F, 0xBF, 0x4E, 0x0A, 0x0F, 0xBF, 0x76, 0x06, 0xD1, 0xFE, 0x2B, 0xCE,
+        0x8B, 0xB5, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA, 0x05, 0xC1, 0xF9, 0x05,
+        0x3B, 0xD6, 0x73, 0x5D, 0x3B, 0x8D, 0x84, 0x00, 0x00, 0x00, 0x73, 0x55,
+    };
+    static const unsigned char stubO[] = {
+        0x0F, 0xBF, 0x4E, 0x0A,             /* movsx ecx,word [esi+0xa]       */
+        0x51,                               /* push ecx: z                    */
+        0x0F, 0xBF, 0x76, 0x06,             /* movsx esi,word [esi+6]         */
+        0xD1, 0xFE,                         /* sar esi,1                      */
+        0x2B, 0xCE,                         /* sub ecx,esi: the shear         */
+        0x8B, 0xB5, 0x80, 0x00, 0x00, 0x00, /* mov esi,[ebp+0x80]             */
+        0xC1, 0xFA, 0x05,                   /* sar edx,5                      */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0x3B, 0xD6,                         /* cmp edx,esi                    */
+        0x73, 0x28,                         /* jae out                        */
+        0x3B, 0x8D, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[ebp+0x84]             */
+        0x72, 0x17,                         /* jb in                          */
+        0x8B, 0x0C, 0x24,                   /* mov ecx,[esp]: z               */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5: the point's own row */
+        0x3B, 0x8D, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[ebp+0x84]             */
+        0x73, 0x12,                         /* jae out                        */
+    };                                      /* count; in: drop; jmp; out: drop; jmp */
+    static const unsigned char drop[4] = { 0x8D, 0x64, 0x24, 0x04 };   /* lea esp,[esp+4] */
+    /* the sight emitter 0x4825B0, from its point (ebp the column, ebx the clamped height h,
+       edi the z word, eax |old h - h|, edx the record's stored column/row) to its row: compared,
+       never written */
+    static const unsigned char emitSpan[65] = {
+        0x0F, 0xBF, 0x6E, 0x12, 0x0F, 0xBF, 0x46, 0x16, 0x33, 0xDB, 0x8A, 0x5E,
+        0x0A, 0xC1, 0xFD, 0x05, 0x03, 0xD8, 0x79, 0x02, 0x33, 0xDB, 0x81, 0xFB,
+        0xFF, 0x00, 0x00, 0x00, 0x7E, 0x05, 0xBB, 0xFF, 0x00, 0x00, 0x00, 0x8B,
+        0x56, 0x0C, 0x8B, 0xCB, 0x0F, 0xBF, 0x7E, 0x1A, 0x8A, 0x02, 0x88, 0x44,
+        0x24, 0x18, 0x25, 0xFF, 0x00, 0x00, 0x00, 0x2B, 0xC3, 0x99, 0x33, 0xC2,
+        0x2B, 0xC2, 0x8B, 0x56, 0x04,
+    };
+    static const unsigned char emitRow[10] = {
+        0xD1, 0xF9,                         /* sar ecx,1                      */
+        0x2B, 0xF9,                         /* sub edi,ecx: the shear         */
+        0x0F, 0xBF, 0x0A,                   /* movsx ecx,word [edx]: stored   */
+        0xC1, 0xFF, 0x05,                   /* sar edi,5                      */
+    };
+    /* from the stub's landing point to the bound it mirrors, which the stub's argument rests on:
+       the compare with the stored words and the early-out, the removal, the store, then
+       cmp ebp,[eax+0x14293]; jae; cmp edi,[eax+0x14297]; jae -- compared, never written */
+    static const unsigned char emitAfter[76] = {
+        0x3B, 0xCD, 0x75, 0x11, 0x0F, 0xBF, 0x52, 0x02, 0x3B, 0xD7, 0x75, 0x09,
+        0x83, 0xF8, 0x05, 0x0F, 0x8E, 0x6C, 0x01, 0x00, 0x00, 0x8A, 0x44, 0x24,
+        0x18, 0x84, 0xC0, 0x74, 0x0D, 0xF6, 0x44, 0x24, 0x10, 0x02, 0x74, 0x06,
+        0x56, 0xE8, 0x07, 0xF7, 0xFF, 0xFF, 0x8B, 0x46, 0x04, 0x66, 0x89, 0x28,
+        0x8B, 0x4E, 0x04, 0x66, 0x89, 0x79, 0x02, 0xA1, 0xE8, 0x1D, 0x51, 0x00,
+        0x3B, 0xA8, 0x93, 0x42, 0x01, 0x00, 0x73, 0x46, 0x3B, 0xB8, 0x97, 0x42,
+        0x01, 0x00, 0x73, 0x3E,
+    };
+    static const unsigned char emitHead[] = {
+        0x50,                               /* push eax: |dh|, read at 0x48262B */
+        0x89, 0xF8,                         /* mov eax,edi: z                 */
+        0xC1, 0xF8, 0x05,                   /* sar eax,5: the point's own row */
+        0xD1, 0xF9,                         /* sar ecx,1                      */
+        0x2B, 0xF9,                         /* sub edi,ecx: the shear         */
+        0xC1, 0xFF, 0x05,                   /* sar edi,5                      */
+        0x8B, 0x0D, 0xE8, 0x1D, 0x51, 0x00, /* mov ecx,[0x511DE8]             */
+        0x3B, 0xB9, 0x97, 0x42, 0x01, 0x00, /* cmp edi,[ecx+0x14297]          */
+        0x72, 0x00,                         /* jb keep: inside, stock's row   */
+        0x3B, 0x81, 0x97, 0x42, 0x01, 0x00, /* cmp eax,[ecx+0x14297]          */
+        0x73, 0x00,                         /* jae keep: outside too          */
+        0x89, 0xC7,                         /* mov edi,eax: the own row       */
+    };                                      /* count                          */
+    enum { EMIT_JB = 25, EMIT_JAE = 33 };   /* the two branches in emitHead; keep follows the count */
+    static const unsigned char emitTail[] = {
+        0x58,                               /* keep: pop eax                  */
+        0x0F, 0xBF, 0x0A,                   /* movsx ecx,word [edx]           */
+        0xE9, 0x00, 0x00, 0x00, 0x00,       /* jmp 0x48261F                   */
+    };
+    int k;
+    for (k = 0; k < 7; k++) {
+        const LOSREAD* r = &read[k];
+        unsigned char* a = fix_code(r->nstub + LOS_COUNT_LEN + 10u);
+        int m;
+        if (!a) { lim_no_stub(); return FIX_TABLE; }
+        memcpy(a, r->stub, r->nstub);
+        m = r->nstub + los_count(a + r->nstub, r->fn);
+        a[m] = 0xE9; tagpu_detour_rel(a + m + 1, r->in);
+        a[m + 5] = 0xE9; tagpu_detour_rel(a + m + 6, r->out);
+        lim_branch(r->va, r->n, r->stock, 0xE9, (unsigned int)(size_t)a, r->name);
+    }
+    for (k = 0; k < (int)(sizeof row / sizeof row[0]); k++) {
+        const LOSROW* w = &row[k];
+        const char* name = w->fn == LOS_ORDER ? "line of sight: the order resolver's row"
+                                              : "line of sight: the view player's map's row";
+        unsigned char* a = fix_code(LOS_STUB_LEN(w->nz, 0));
+        if (!a || !los_row_stub(a, w)) { lim_no_stub(); return FIX_TABLE; }
+        lim_same(w->va - w->pre, w->pre, w->stock, name);
+        lim_branch(w->va, w->n, w->stock + w->pre, 0xE9, (unsigned int)(size_t)a, name);
+    }
+    {
+        unsigned char* a = fix_code(sizeof stubO + LOS_COUNT_LEN + 18u);
+        int m;
+        if (!a) { lim_no_stub(); return FIX_TABLE; }
+        memcpy(a, stubO, sizeof stubO);
+        m = (int)sizeof stubO + los_count(a + sizeof stubO, LOS_ORDER);
+        memcpy(a + m, drop, 4);     a[m + 4] = 0xE9;  tagpu_detour_rel(a + m + 5, 0x0043F655);
+        memcpy(a + m + 9, drop, 4); a[m + 13] = 0xE9; tagpu_detour_rel(a + m + 14, 0x0043F6AA);
+        lim_branch(0x0043F631, sizeof blockO, blockO, 0xE9, (unsigned int)(size_t)a,
+                   "line of sight: the order resolver's second row");
+    }
+    {
+        unsigned char* a = fix_code(sizeof emitHead + LOS_COUNT_LEN + sizeof emitTail);
+        unsigned int rel;
+        int m;
+        if (!a) { lim_no_stub(); return FIX_TABLE; }
+        memcpy(a, emitHead, sizeof emitHead);
+        if (a[EMIT_JB] != 0x72 || a[EMIT_JAE] != 0x73) { lim_no_stub(); return FIX_TABLE; }
+        a[EMIT_JB + 1]  = (unsigned char)(sizeof emitHead + LOS_COUNT_LEN - (EMIT_JB + 2));
+        a[EMIT_JAE + 1] = (unsigned char)(sizeof emitHead + LOS_COUNT_LEN - (EMIT_JAE + 2));
+        m = (int)sizeof emitHead + los_count(a + sizeof emitHead, LOS_EMIT);
+        memcpy(a + m, emitTail, sizeof emitTail);
+        rel = 0x0048261Fu - ((unsigned int)(size_t)a + (unsigned int)m + sizeof emitTail);
+        memcpy(a + m + sizeof emitTail - 4, &rel, 4);
+        lim_same(0x004825D4, sizeof emitSpan, emitSpan, "line of sight: the sight emitter's point");
+        lim_branch(0x00482615, sizeof emitRow, emitRow, 0xE9, (unsigned int)(size_t)a,
+                   "line of sight: the sight emitter's row");
+        lim_same(0x0048261F, sizeof emitAfter, emitAfter,
+                 "line of sight: the sight emitter's store and bound");
+    }
+    return FIX_TABLE;
+}
+
+/* THE PROJECTILE PASS'S VIEW [DISASSEMBLED]. The projectile draw pass 0x49BE60 (called at
+   0x469B22 in DrawGameScreen) asks, for each projectile, whether the local player (main+0x2A43)
+   sees it, with the same altitude-sheared row as UnitInPlayerLOS: inline under True line of
+   sight (0x49BEE8..0x49BF0F, ebp the point, eax the player; read 0x49BF10, not visible
+   0x49BF29), through PositionInPlayerMapped 0x408090 otherwise (0x49BF2F, fixed with the
+   shear above). A projectile high up near the north edge is not drawn, and a model projectile
+   is not posed (0x49C127). The pass still runs: fxown, which would stop it, is not a play
+   default, because the engine's frame is the golden source (tagpu_opt.c).
+   THE FIX: the own row when the sheared one is off the grid and the own one is on it, as for
+   units, counted under LOS_PROJ. ecx leaves as the row read, or unread past 0x49C058 on the
+   not-visible exit. ebx is dead on both exits: the read at 0x49BF10 writes it, and the
+   not-visible one reaches either the loop's top 0x49BEA3, which writes it (0x49BEE8, 0x49BF42)
+   before any read, or its pop at 0x49C07D.
+   THE INVARIANT: the grid is read only at a column and a row inside it.
+   CLASS: local. A draw. */
+static int fix_projectile_view(void)
+{
+    static const unsigned char was[40] = {
+        0x0F, 0xBF, 0x5D, 0x06, 0x0F, 0xBF, 0x4D, 0x0A, 0x0F, 0xBF, 0x55, 0x02,
+        0xD1, 0xFB, 0x2B, 0xCB, 0x8B, 0x98, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA,
+        0x05, 0xC1, 0xF9, 0x05, 0x3B, 0xD3, 0x73, 0x21, 0x3B, 0x88, 0x84, 0x00,
+        0x00, 0x00, 0x73, 0x19,
+    };
+    static const unsigned char stub[] = {
+        0x0F, 0xBF, 0x5D, 0x06,             /* movsx ebx,word [ebp+6]         */
+        0x0F, 0xBF, 0x4D, 0x0A,             /* movsx ecx,word [ebp+0xa]       */
+        0x0F, 0xBF, 0x55, 0x02,             /* movsx edx,word [ebp+2]         */
+        0xD1, 0xFB,                         /* sar ebx,1                      */
+        0x29, 0xD9,                         /* sub ecx,ebx: the shear         */
+        0x8B, 0x98, 0x80, 0x00, 0x00, 0x00, /* mov ebx,[eax+0x80]             */
+        0xC1, 0xFA, 0x05,                   /* sar edx,5                      */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5                      */
+        0x39, 0xDA,                         /* cmp edx,ebx                    */
+        0x73, 0x25,                         /* jae out                        */
+        0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[eax+0x84]             */
+        0x72, 0x18,                         /* jb in                          */
+        0x0F, 0xBF, 0x4D, 0x0A,             /* movsx ecx,word [ebp+0xa]       */
+        0xC1, 0xF9, 0x05,                   /* sar ecx,5: the point's own row */
+        0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, /* cmp ecx,[eax+0x84]             */
+        0x73, 0x0E,                         /* jae out                        */
+    };                                      /* count; in: jmp; out: jmp       */
+    unsigned char now[sizeof was];
+    unsigned char* a;
+    unsigned int rel;
+    int m;
+    if (memcmp((const void*)0x0049BEE8, was, sizeof was) != 0) return FIX_BYTES;
+    if (!(a = fix_code(sizeof stub + LOS_COUNT_LEN + 10))) return FIX_STUB;
+    memcpy(a, stub, sizeof stub);
+    m = (int)sizeof stub + los_count(a + sizeof stub, LOS_PROJ);
+    a[m] = 0xE9; tagpu_detour_rel(a + m + 1, 0x0049BF10);
+    a[m + 5] = 0xE9; tagpu_detour_rel(a + m + 6, 0x0049BF29);
+    memset(now, 0x90, sizeof now);
+    now[0] = 0xE9;
+    rel = (unsigned int)(size_t)a - (0x0049BEE8u + 5u);
+    memcpy(now + 1, &rel, 4);
+    return tagpu_detour_write(0x0049BEE8, now, sizeof now) ? FIX_ARMED : FIX_PROTECT;
+}
+
+/* THE SAME READ IN LOCAL CODE [DISASSEMBLED]: the 27 copies that decide only what this player
+   is shown or hears -- the cursor picker 0x43E490 (the pointer over a point, and with it what
+   this player's own left click orders), the build cursor's site test 0x47D2E0, the feature
+   helper 0x4658E0 (both corners), the radar rebuild 0x466DC0's projectile dots, the particle
+   leaves 0x473590, 0x473A00, 0x474170, 0x4745E0 and 0x475470, positional sound 0x47F300. The
+   census is under THE LINE-OF-SIGHT SHEAR, above.
+   The site test's accumulator 0x51E688 is also read by AI code: 0x40A76A, through the getter
+   0x47C770, after 0x47DB70, whose [+0x22F] path returns 1 without calling the site test -- so
+   the value can be one this player's build cursor left, a per-peer leak stock already has. The
+   fix changes only its value at the north edge (the footprint's sum instead of 0), no new kind
+   of divergence, so the site test stays local.
+   The radar's dots: the first two tests reload z from [ebx+4] (0x4671E5) with ebx intact; by
+   the second two stock has overwritten ebx (0x467315, 0x467322, 0x467365), so their stubs take
+   it back from [esp+0x18], where the loop keeps the same pointer (0x4671C3, 0x467425) -- ebx is
+   dead on both exits of those two (reloaded at 0x4673A9, cleared at 0x467381). The whole loop
+   is compared for them, since that pointer is its invariant.
+   THE FIX and THE INVARIANT are the shear's, one generic stub per copy.
+   CLASS: local. A cursor, a draw, a sound: the 27 are compared together, each from its z load
+   through its row test, and written together, or not at all. */
+static int fix_los_local(void)
+{
+    static const LOSROW row[23] = {
+        { 0x0043E69D, 12, 32, 4, LOS_CURSOR, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0xD1, 0xFD, 0x2B, 0xC5,
+            0x8B, 0xAA, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05,
+            0x3B, 0xCD, 0x0F, 0x83, 0xD3, 0x00, 0x00, 0x00, 0x3B, 0x82, 0x84, 0x00,
+            0x00, 0x00, 0x0F, 0x83, 0xC7, 0x00, 0x00, 0x00 } },
+        { 0x0043E904, 12, 32, 4, LOS_CURSOR, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0xD1, 0xFB, 0x2B, 0xC3,
+            0x8B, 0x9A, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05,
+            0x3B, 0xCB, 0x0F, 0x83, 0xD8, 0x00, 0x00, 0x00, 0x3B, 0x82, 0x84, 0x00,
+            0x00, 0x00, 0x0F, 0x83, 0xCC, 0x00, 0x00, 0x00 } },
+        { 0x0043EBC6, 12, 32, 4, LOS_CURSOR, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0xD1, 0xFF, 0x2B, 0xC7,
+            0x8B, 0xBA, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05,
+            0x3B, 0xCF, 0x0F, 0x83, 0xD4, 0x00, 0x00, 0x00, 0x3B, 0x82, 0x84, 0x00,
+            0x00, 0x00, 0x0F, 0x83, 0xC8, 0x00, 0x00, 0x00 } },
+        { 0x0043ECDB, 12, 32, 4, LOS_CURSOR, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0xD1, 0xFF, 0x2B, 0xC7,
+            0x8B, 0xBA, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05,
+            0x3B, 0xCF, 0x0F, 0x83, 0xBD, 0x03, 0x00, 0x00, 0x3B, 0x82, 0x84, 0x00,
+            0x00, 0x00, 0x0F, 0x83, 0xB1, 0x03, 0x00, 0x00 } },
+        { 0x0043EE94, 12, 32, 4, LOS_CURSOR, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0xD1, 0xFD, 0x2B, 0xC5,
+            0x8B, 0xAA, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05,
+            0x3B, 0xCD, 0x0F, 0x83, 0xD8, 0x00, 0x00, 0x00, 0x3B, 0x82, 0x84, 0x00,
+            0x00, 0x00, 0x0F, 0x83, 0xCC, 0x00, 0x00, 0x00 } },
+        { 0x0043EFA9, 12, 38, 4, LOS_CURSOR, {   /* r = eax */
+            0x0F, 0xBF, 0x46, 0x0A, 0x0F, 0xBF, 0x4E, 0x02, 0x8B, 0x92, 0x96, 0x00,
+            0x00, 0x00, 0xD1, 0xFD, 0x2B, 0xC5, 0x8B, 0xAA, 0x80, 0x00, 0x00, 0x00,
+            0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCD, 0x0F, 0x83, 0xD3, 0x00,
+            0x00, 0x00, 0x3B, 0x82, 0x84, 0x00, 0x00, 0x00, 0x0F, 0x83, 0xC7, 0x00,
+            0x00, 0x00 } },
+        { 0x00465942, 8, 23, 3, LOS_FEATURE, {   /* r = ecx */
+            0x0F, 0xBF, 0xCB, 0x8B, 0xA8, 0x80, 0x00, 0x00, 0x00, 0xD1, 0xFE, 0x2B,
+            0xCE, 0xC1, 0xFA, 0x05, 0xC1, 0xF9, 0x05, 0x3B, 0xD5, 0x73, 0x24, 0x3B,
+            0x88, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1C } },
+        { 0x0046598A, 8, 23, 3, LOS_FEATURE, {   /* r = ecx */
+            0x0F, 0xBF, 0xCB, 0x8B, 0xA8, 0x80, 0x00, 0x00, 0x00, 0xD1, 0xFE, 0x2B,
+            0xCE, 0xC1, 0xFA, 0x05, 0xC1, 0xF9, 0x05, 0x3B, 0xD5, 0x73, 0x08, 0x3B,
+            0x88, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 } },
+        { 0x00465A17, 8, 21, 3, LOS_FEATURE, {   /* r = ecx */
+            0x0F, 0xBF, 0xCB, 0x2B, 0xCE, 0x8B, 0xB0, 0x80, 0x00, 0x00, 0x00, 0xC1,
+            0xFA, 0x05, 0xC1, 0xF9, 0x05, 0x3B, 0xD6, 0x73, 0x2B, 0x3B, 0x88, 0x84,
+            0x00, 0x00, 0x00, 0x73, 0x23 } },
+        { 0x00465A63, 8, 21, 3, LOS_FEATURE, {   /* r = ecx */
+            0x0F, 0xBF, 0xCB, 0x2B, 0xCE, 0x8B, 0xB0, 0x80, 0x00, 0x00, 0x00, 0xC1,
+            0xFA, 0x05, 0xC1, 0xF9, 0x05, 0x3B, 0xD6, 0x73, 0x08, 0x3B, 0x88, 0x84,
+            0x00, 0x00, 0x00, 0x72, 0x0C } },
+        { 0x0047360C, 8, 28, 4, LOS_FX_473590, {   /* r = ecx */
+            0x0F, 0xBF, 0x48, 0x0E, 0x0F, 0xBF, 0x78, 0x06, 0xD1, 0xFB, 0x2B, 0xCB,
+            0x8B, 0x9A, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFF, 0x05, 0xC1, 0xF9, 0x05,
+            0x3B, 0xFB, 0x73, 0x21, 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x73, 0x19 } },
+        { 0x00473657, 8, 23, 4, LOS_FX_473590, {   /* r = ecx */
+            0x0F, 0xBF, 0x48, 0x0E, 0xD1, 0xFB, 0x2B, 0xCB, 0x8B, 0x5C, 0x24, 0x18,
+            0xC1, 0xF9, 0x05, 0x3B, 0x9A, 0x80, 0x00, 0x00, 0x00, 0x73, 0x08, 0x3B,
+            0x8A, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 } },
+        { 0x00473A94, 8, 24, 3, LOS_FX_473A00, {   /* r = eax */
+            0x0F, 0xBF, 0xC5, 0x0F, 0xBF, 0xCF, 0x2B, 0xC2, 0x8B, 0x96, 0x80, 0x00,
+            0x00, 0x00, 0xC1, 0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCA, 0x73, 0x23,
+            0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1B } },
+        { 0x00473AD3, 8, 24, 3, LOS_FX_473A00, {   /* r = eax */
+            0x0F, 0xBF, 0xC5, 0x0F, 0xBF, 0xFF, 0x2B, 0xC2, 0x8B, 0x96, 0x80, 0x00,
+            0x00, 0x00, 0xC1, 0xFF, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xFA, 0x73, 0x08,
+            0x3B, 0x86, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 } },
+        { 0x004741EC, 8, 28, 4, LOS_FX_474170, {   /* r = ecx */
+            0x0F, 0xBF, 0x48, 0x0E, 0x0F, 0xBF, 0x78, 0x06, 0xD1, 0xFB, 0x2B, 0xCB,
+            0x8B, 0x9A, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFF, 0x05, 0xC1, 0xF9, 0x05,
+            0x3B, 0xFB, 0x73, 0x21, 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x73, 0x19 } },
+        { 0x00474237, 8, 23, 4, LOS_FX_474170, {   /* r = ecx */
+            0x0F, 0xBF, 0x48, 0x0E, 0xD1, 0xFB, 0x2B, 0xCB, 0x8B, 0x5C, 0x24, 0x18,
+            0xC1, 0xF9, 0x05, 0x3B, 0x9A, 0x80, 0x00, 0x00, 0x00, 0x73, 0x08, 0x3B,
+            0x8A, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 } },
+        { 0x00474674, 8, 28, 4, LOS_FX_4745E0, {   /* r = ecx */
+            0x0F, 0xBF, 0x48, 0x0E, 0x0F, 0xBF, 0x70, 0x06, 0xD1, 0xFF, 0x2B, 0xCF,
+            0x8B, 0xBA, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFE, 0x05, 0xC1, 0xF9, 0x05,
+            0x3B, 0xF7, 0x73, 0x23, 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x73, 0x1B } },
+        { 0x004746BB, 8, 28, 4, LOS_FX_4745E0, {   /* r = ecx */
+            0x0F, 0xBF, 0x48, 0x0E, 0x0F, 0xBF, 0x58, 0x06, 0xD1, 0xFD, 0x2B, 0xCD,
+            0x8B, 0xAA, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFB, 0x05, 0xC1, 0xF9, 0x05,
+            0x3B, 0xDD, 0x73, 0x08, 0x3B, 0x8A, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 } },
+        { 0x0047551E, 8, 33, 5, LOS_FX_475470, {   /* r = eax */
+            0x0F, 0xBF, 0x44, 0x24, 0x1C, 0x0F, 0xBF, 0xCB, 0x0F, 0xBF, 0x5C, 0x24,
+            0x18, 0xD1, 0xFB, 0x2B, 0xC3, 0x8B, 0x9D, 0x80, 0x00, 0x00, 0x00, 0xC1,
+            0xF9, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xCB, 0x73, 0x23, 0x3B, 0x85, 0x84,
+            0x00, 0x00, 0x00, 0x73, 0x1B } },
+        { 0x0047556C, 8, 24, 5, LOS_FX_475470, {   /* r = eax */
+            0x0F, 0xBF, 0x44, 0x24, 0x1C, 0xD1, 0xFB, 0x2B, 0xC3, 0x8B, 0x5C, 0x24,
+            0x20, 0xC1, 0xF8, 0x05, 0x3B, 0x9D, 0x80, 0x00, 0x00, 0x00, 0x73, 0x08,
+            0x3B, 0x85, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 } },
+        { 0x0047D3B8, 12, 29, 5, LOS_BUILD, {   /* r = eax */
+            0x0F, 0xBF, 0x44, 0x24, 0x3A, 0xD1, 0xF9, 0x2B, 0xC1, 0x8B, 0x8F, 0x80,
+            0x00, 0x00, 0x00, 0xC1, 0xFA, 0x05, 0xC1, 0xF8, 0x05, 0x3B, 0xD1, 0x0F,
+            0x83, 0x57, 0x04, 0x00, 0x00, 0x3B, 0x87, 0x84, 0x00, 0x00, 0x00, 0x0F,
+            0x83, 0x4B, 0x04, 0x00, 0x00 } },
+        { 0x0047F431, 8, 28, 4, LOS_SOUND, {   /* r = ecx */
+            0x0F, 0xBF, 0x4E, 0x0A, 0x0F, 0xBF, 0x56, 0x02, 0xD1, 0xFF, 0x2B, 0xCF,
+            0x8B, 0xB8, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFA, 0x05, 0xC1, 0xF9, 0x05,
+            0x3B, 0xD7, 0x73, 0x21, 0x3B, 0x88, 0x84, 0x00, 0x00, 0x00, 0x73, 0x19 } },
+        { 0x0047F476, 8, 28, 4, LOS_SOUND, {   /* r = edx */
+            0x0F, 0xBF, 0x56, 0x0A, 0x0F, 0xBF, 0x7E, 0x02, 0xD1, 0xFB, 0x2B, 0xD3,
+            0x8B, 0x98, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFF, 0x05, 0xC1, 0xFA, 0x05,
+            0x3B, 0xFB, 0x73, 0x08, 0x3B, 0x90, 0x84, 0x00, 0x00, 0x00, 0x72, 0x04 } },
+    };
+    /* the radar rebuild's projectile loop, 0x4671C0..0x46742E */
+    static const unsigned char dots[623] = {
+        0x8D, 0x59, 0x0A, 0x89, 0x5C, 0x24, 0x18, 0xEB, 0x04, 0x8B, 0x4C, 0x24,
+        0x1C, 0x0F, 0xBF, 0x6B, 0xFC, 0x0F, 0xBF, 0x86, 0xEB, 0x42, 0x01, 0x00,
+        0x0F, 0xAF, 0xC5, 0x99, 0xF7, 0xBE, 0x2B, 0x42, 0x01, 0x00, 0x0F, 0xBF,
+        0x13, 0x0F, 0xBF, 0x7B, 0x04, 0xD1, 0xFA, 0x2B, 0xFA, 0x89, 0x44, 0x24,
+        0x20, 0x0F, 0xBF, 0x86, 0xED, 0x42, 0x01, 0x00, 0x0F, 0xAF, 0xC7, 0x99,
+        0xF7, 0xBE, 0x2F, 0x42, 0x01, 0x00, 0x89, 0x44, 0x24, 0x24, 0x8B, 0x01,
+        0x8B, 0x88, 0x11, 0x01, 0x00, 0x00, 0xF7, 0xC1, 0x00, 0x00, 0x00, 0x60,
+        0x0F, 0x85, 0xE6, 0x00, 0x00, 0x00, 0xF6, 0xC1, 0x40, 0x0F, 0x85, 0xE3,
+        0x01, 0x00, 0x00, 0x8A, 0x8E, 0x43, 0x2A, 0x00, 0x00, 0x81, 0xE1, 0xFF,
+        0x00, 0x00, 0x00, 0x8B, 0xD1, 0xC1, 0xE2, 0x05, 0x03, 0xD1, 0x8D, 0x04,
+        0x0E, 0x8D, 0x14, 0x92, 0x8D, 0x94, 0x50, 0x63, 0x1B, 0x00, 0x00, 0x8A,
+        0x86, 0x81, 0x42, 0x01, 0x00, 0x24, 0x02, 0x3C, 0x02, 0x75, 0x35, 0x8B,
+        0x82, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFD, 0x05, 0xC1, 0xFF, 0x05, 0x3B,
+        0xE8, 0x73, 0x21, 0x3B, 0xBA, 0x84, 0x00, 0x00, 0x00, 0x73, 0x19, 0x8B,
+        0x8A, 0x80, 0x00, 0x00, 0x00, 0x0F, 0xAF, 0xCF, 0x03, 0x4A, 0x7C, 0x80,
+        0x3C, 0x29, 0x00, 0x74, 0x07, 0xBA, 0x01, 0x00, 0x00, 0x00, 0xEB, 0x48,
+        0x33, 0xD2, 0xEB, 0x44, 0x8B, 0x82, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFD,
+        0x05, 0xC1, 0xFF, 0x05, 0x3B, 0xE8, 0x73, 0x08, 0x3B, 0xBA, 0x84, 0x00,
+        0x00, 0x00, 0x72, 0x04, 0x33, 0xD2, 0xEB, 0x28, 0x8B, 0x92, 0x80, 0x00,
+        0x00, 0x00, 0x8B, 0x86, 0x73, 0x42, 0x01, 0x00, 0x0F, 0xAF, 0xD7, 0x03,
+        0xD5, 0x33, 0xFF, 0x66, 0x8B, 0x3C, 0x50, 0xB8, 0x01, 0x00, 0x00, 0x00,
+        0xD3, 0xE0, 0x8B, 0xD7, 0x23, 0xD0, 0xF7, 0xDA, 0x1B, 0xD2, 0xF7, 0xDA,
+        0x85, 0xD2, 0x75, 0x11, 0x8A, 0x86, 0x43, 0x2A, 0x00, 0x00, 0x8A, 0x4B,
+        0x5C, 0x3A, 0xC8, 0x0F, 0x85, 0x29, 0x01, 0x00, 0x00, 0x8B, 0x54, 0x24,
+        0x14, 0x8B, 0x44, 0x24, 0x24, 0x33, 0xC9, 0x8A, 0x4A, 0x0E, 0x8B, 0x54,
+        0x24, 0x10, 0x51, 0x8B, 0x4C, 0x24, 0x24, 0x50, 0x51, 0x52, 0xE8, 0x65,
+        0x7B, 0x05, 0x00, 0xE9, 0x00, 0x01, 0x00, 0x00, 0x8A, 0x86, 0x43, 0x2A,
+        0x00, 0x00, 0x8B, 0xC8, 0x81, 0xE1, 0xFF, 0x00, 0x00, 0x00, 0x8B, 0xD1,
+        0xC1, 0xE2, 0x05, 0x03, 0xD1, 0x8D, 0x1C, 0x0E, 0x8D, 0x14, 0x92, 0x8D,
+        0x94, 0x53, 0x63, 0x1B, 0x00, 0x00, 0x8A, 0x9E, 0x81, 0x42, 0x01, 0x00,
+        0x80, 0xE3, 0x02, 0x80, 0xFB, 0x02, 0x75, 0x35, 0x8B, 0x8A, 0x80, 0x00,
+        0x00, 0x00, 0xC1, 0xFD, 0x05, 0xC1, 0xFF, 0x05, 0x3B, 0xE9, 0x73, 0x21,
+        0x3B, 0xBA, 0x84, 0x00, 0x00, 0x00, 0x73, 0x19, 0x8B, 0x8A, 0x80, 0x00,
+        0x00, 0x00, 0x0F, 0xAF, 0xCF, 0x03, 0x4A, 0x7C, 0x80, 0x3C, 0x29, 0x00,
+        0x74, 0x07, 0xBA, 0x01, 0x00, 0x00, 0x00, 0xEB, 0x48, 0x33, 0xD2, 0xEB,
+        0x44, 0x8B, 0x9A, 0x80, 0x00, 0x00, 0x00, 0xC1, 0xFD, 0x05, 0xC1, 0xFF,
+        0x05, 0x3B, 0xEB, 0x73, 0x08, 0x3B, 0xBA, 0x84, 0x00, 0x00, 0x00, 0x72,
+        0x04, 0x33, 0xD2, 0xEB, 0x28, 0x8B, 0x92, 0x80, 0x00, 0x00, 0x00, 0x33,
+        0xDB, 0x0F, 0xAF, 0xD7, 0x8B, 0xBE, 0x73, 0x42, 0x01, 0x00, 0x03, 0xD5,
+        0x66, 0x8B, 0x1C, 0x57, 0xBF, 0x01, 0x00, 0x00, 0x00, 0xD3, 0xE7, 0x8B,
+        0xD3, 0x23, 0xD7, 0xF7, 0xDA, 0x1B, 0xD2, 0xF7, 0xDA, 0x8B, 0x5C, 0x24,
+        0x18, 0x85, 0xD2, 0x75, 0x0B, 0x8B, 0x4B, 0x48, 0x38, 0x81, 0xFF, 0x00,
+        0x00, 0x00, 0x75, 0x4A, 0x8B, 0x54, 0x24, 0x24, 0x8B, 0x44, 0x24, 0x20,
+        0x33, 0xC9, 0x52, 0x8A, 0x4B, 0x5C, 0x50, 0x8B, 0xC1, 0xC1, 0xE0, 0x05,
+        0x03, 0xC1, 0x8D, 0x14, 0x80, 0x8B, 0xC6, 0x03, 0xC1, 0x8B, 0x8C, 0x50,
+        0x8A, 0x1B, 0x00, 0x00, 0x8B, 0x86, 0xE7, 0x47, 0x01, 0x00, 0x33, 0xD2,
+        0x8A, 0x91, 0x96, 0x00, 0x00, 0x00, 0x52, 0x50, 0xE8, 0x3B, 0x0B, 0x05,
+        0x00, 0x50, 0x8B, 0x4C, 0x24, 0x1C, 0x51, 0xE8, 0x90, 0x0B, 0x05, 0x00,
+        0x8B, 0x35, 0xE8, 0x1D, 0x51, 0x00, 0x8B, 0x44, 0x24, 0x28, 0x8B, 0x7C,
+        0x24, 0x1C, 0x8B, 0x8E, 0xF3, 0x41, 0x01, 0x00, 0x40, 0x83, 0xC7, 0x6B,
+        0x83, 0xC3, 0x6B, 0x3B, 0xC1, 0x89, 0x44, 0x24, 0x28, 0x89, 0x7C, 0x24,
+        0x1C, 0x89, 0x5C, 0x24, 0x18, 0x0F, 0x8C, 0x9A, 0xFD, 0xFF, 0xFF
+    };
+    static const unsigned int dotVa[4] = { 0x0046725F, 0x00467294, 0x00467340, 0x00467375 };
+    static const unsigned char lead[4] = { 0x8B, 0x5C, 0x24, 0x18 };   /* mov ebx,[esp+0x18] */
+    FIXSITE s[27];
+    int k;
+    for (k = 0; k < 23; k++)
+        if (memcmp((const void*)(size_t)(row[k].va - row[k].pre), row[k].stock,
+                   (size_t)(row[k].pre + row[k].n)) != 0)
+            return FIX_BYTES;
+    if (memcmp((const void*)0x004671C0, dots, sizeof dots) != 0) return FIX_BYTES;
+    for (k = 0; k < 27; k++) {
+        unsigned char* a;
+        int ok;
+        if (k < 23) {
+            if (!(a = fix_code(LOS_STUB_LEN(row[k].nz, 0)))) return FIX_STUB;
+            ok = los_row_stub(a, &row[k]);
+            s[k].va = row[k].va;
+            s[k].n = row[k].n;
+            memcpy(s[k].was, row[k].stock + row[k].pre, row[k].n);
+        } else {
+            const unsigned char* test = dots + (dotVa[k - 23] - 0x004671C0u);
+            int late = k >= 25;
+            if (!(a = fix_code(LOS_STUB_LEN(4, late ? 4 : 0)))) return FIX_STUB;
+            ok = los_stub(a, dotVa[k - 23], 8, test, dots + (0x004671E5u - 0x004671C0u), 4,
+                          late ? lead : NULL, late ? 4 : 0, LOS_RADAR);
+            s[k].va = dotVa[k - 23];
+            s[k].n = 8;
+            memcpy(s[k].was, test, 8);
+        }
+        if (!ok) return FIX_STUB;
+        fix_branch(&s[k], 0xE9, a);
+    }
+    return fix_write(s, 27);
 }
 
 static void patch_engine_defects(void)
@@ -2526,7 +3922,14 @@ static void patch_engine_defects(void)
     int oom  = fix_oom_message();
     int keys = fix_sync_keys();
     int wpn  = fix_weapon_ids();
-    char b[1536];
+    int caps = fix_victim_caps();
+    int flak = fix_flak_divides();
+    int edge = fix_last_cell();
+    int los  = fix_los_shear();
+    int losl = fix_los_local();
+    int pview = fix_projectile_view();
+    char b[2048], fn[LOS_NFN * 9 + 1];
+    int k;
 
     _snprintf(b, sizeof b,
               "enginefix: sort-buffer end bound 0x469807 %s; NULL-plot guard 0x421E60 %s; "
@@ -2537,10 +3940,39 @@ static void patch_engine_defects(void)
               "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70 0x4B90A0) %s; whole build lists "
               "(0x42DA58 0x42DAC7 0x42BEC3) %s; download menus past five entries (0x42DCF0) %s; "
               "the out-of-memory text (0x49E700) %s; unique unit sync keys (0x42BD29) %s; weapon IDs "
-              "bounded, feature hits told from sentinels (0x42E468 0x49D280 0x455FB8 0x424575) %s",
+              "bounded, feature hits told from sentinels (0x42E468 0x49D280 0x455FB8 0x424575) %s; "
+              "one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE) %s; flak's "
+              "divides (0x49CF18 0x42F314 0x42F32E) %s; the map's last row and column "
+              "(0x47CC8B 0x47CCA3 0x47CCA9) %s. Counters: unit repeats "
+              "refused at 0x%08X, "
+              "feature repeats "
+              "refused at 0x%08X, victims refused off their arrays at 0x%08X, list blocks run "
+              "unwrapped at 0x%08X, flak fallbacks at 0x%08X",
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
               fix_state(sfb), fix_state(rro), fix_state(scr), fix_state(list), fix_state(dl),
-              fix_state(oom), fix_state(keys), fix_state(wpn));
+              fix_state(oom), fix_state(keys), fix_state(wpn), fix_state(caps), fix_state(flak),
+              fix_state(edge),
+              (unsigned int)(size_t)&s_dmgUnitRepeats, (unsigned int)(size_t)&s_dmgFeatRepeats,
+              (unsigned int)(size_t)&s_dmgRefused, (unsigned int)(size_t)&s_dmgUnframed,
+              (unsigned int)(size_t)&s_flakFallbacks);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    for (k = 0; k < LOS_NFN; k++) _snprintf(fn + 9 * k, 10, " 0x%06X", s_losFn[k]);
+    fn[sizeof fn - 1] = 0;
+    _snprintf(b, sizeof b,
+              "enginefix: line of sight at the map's edge, in the table (0x465B6A 0x465C04 "
+              "0x465CA2 0x465D46 0x465DA9 0x408095 0x407F74; the sight emitter 0x482615; the order resolver 0x43F5D1 "
+              "0x43F631 0x43FC05 0x43FD1A 0x43FF85 0x4400AA; the view player's map 0x46778A "
+              "0x4677D0) %s; local (the cursor 0x43E69D 0x43E904 0x43EBC6 0x43ECDB 0x43EE94 "
+              "0x43EFA9; the build cursor 0x47D3B8; the feature helper 0x465942 0x46598A "
+              "0x465A17 0x465A63; the radar's projectile dots 0x46725F 0x467294 0x467340 "
+              "0x467375; the particles 0x47360C 0x473657 0x473A94 0x473AD3 0x4741EC 0x474237 "
+              "0x474674 0x4746BB 0x47551E 0x47556C; sound 0x47F431 0x47F476) %s; the projectile pass (0x49BEE8) %s. Own row "
+              "taken at 0x%08X, one LONG per function:%s. Stubs: %u of 4096 bytes at 0x%08X",
+              fix_state(los), fix_state(losl), fix_state(pview),
+              (unsigned int)(size_t)s_losOwnRow, fn, s_fixCodeUsed,
+              (unsigned int)(size_t)s_fixCode);
     b[sizeof b - 1] = 0;
     plog(b);
 }
@@ -2690,72 +4122,11 @@ void tagpu_apply_patches(void)
    The engine limits TADR raises -- the effect pools as its EngineLimits.cpp does, the unit
    limit and the pathfinding budget as its LimitCrack.cpp does -- re-derived from the
    pristine 3.1 image (research/notes/tadr-port/limits-evidence.md §1-6 holds every site's
-   disassembly). Every site goes into ONE table; the table is compared with the stock
-   bytes as a whole and written as a whole, or not at all.
+   disassembly). Every site goes into the fail-closed table (top of this file), with the
+   simulation fixes' sites, and is compared and written with them. */
 
-   WHY BEFORE ANYTHING RUNS: DllMain runs before TotalA.exe's entry point (ddraw.dll is its
-   first static import), so no game exists yet and no engine thread executes these bytes
-   while they change. Nothing here is ever put back: the patches last for the process. */
-
-#define LIM_MAXSITE  160
-#define LIM_MAXB     16
-
-typedef struct LIMSITE {
-    unsigned int  va;
-    unsigned char n;
-    unsigned char stock[LIM_MAXB];
-    unsigned char ours[LIM_MAXB];
-    unsigned char have[LIM_MAXB];   /* what the image held when compared            */
-    unsigned char differs;
-    const char*   name;
-} LIMSITE;
-
-static LIMSITE s_lim[LIM_MAXSITE];
-static int     s_nlim;
-static int     s_limState;           /* 0 not tried, 1 installed, -1 failed          */
-static int     s_limOverflow;        /* the table itself was too small: our bug      */
-static int     s_limNoStub;          /* a code stub could not be allocated           */
-static unsigned int s_limWriteFail;  /* the site VirtualProtect refused, 0 = none    */
 
 #ifndef TAGPU_LIMITS_STOCK
-
-static void lim_add(unsigned int va, int n, const unsigned char* stock,
-                    const unsigned char* ours, const char* name)
-{
-    LIMSITE* s;
-    if (s_nlim >= LIM_MAXSITE || n <= 0 || n > LIM_MAXB) { s_limOverflow = 1; return; }
-    s = &s_lim[s_nlim++];
-    memset(s, 0, sizeof *s);
-    s->va = va; s->n = (unsigned char)n; s->name = name;
-    memcpy(s->stock, stock, (size_t)n);
-    memcpy(s->ours, ours, (size_t)n);
-}
-
-static void lim_dword(unsigned int va, unsigned int stock, unsigned int ours, const char* name)
-{
-    lim_add(va, 4, (const unsigned char*)&stock, (const unsigned char*)&ours, name);
-}
-
-/* an instruction whose last four bytes are an address or an operand we choose */
-static void lim_op(unsigned int va, int n, const unsigned char* stock,
-                   const unsigned char* prefix, int np, unsigned int value, const char* name)
-{
-    unsigned char ours[LIM_MAXB];
-    int k;
-    if (np + 4 > n || n > LIM_MAXB) { s_limOverflow = 1; return; }
-    memcpy(ours, prefix, (size_t)np);
-    memcpy(ours + np, &value, 4);
-    for (k = np + 4; k < n; k++) ours[k] = 0x90;
-    lim_add(va, n, stock, ours, name);
-}
-
-/* E8/E9 rel32 at `va` to `target`, NOP-padded to n bytes */
-static void lim_branch(unsigned int va, int n, const unsigned char* stock, unsigned char op,
-                       unsigned int target, const char* name)
-{
-    unsigned int rel = target - (va + 5);
-    lim_op(va, n, stock, &op, 1, rel, name);
-}
 
 /* ---- the pools that move out of the engine ---------------------------------------------
    Process-lifetime statics: longer-lived than stock's per-level block, which is the better
@@ -3304,67 +4675,6 @@ static void lim_sites(void)
     }
 }
 
-/* one site's bytes, without trusting the page to be readable */
-static int lim_read(unsigned int va, unsigned char* out, int n)
-{
-    MEMORY_BASIC_INFORMATION mbi;
-    if (!VirtualQuery((const void*)(size_t)va, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT ||
-        (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
-        return 0;
-    if ((size_t)va + (size_t)n > (size_t)mbi.BaseAddress + mbi.RegionSize) return 0;
-    memcpy(out, (const void*)(size_t)va, (size_t)n);
-    return 1;
-}
-
-int tagpu_limits_install(void)
-{
-    int i, bad = 0, written;
-    if (s_limState) return s_limState > 0;
-    lim_sites();
-    if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be allocated"); return 0; }
-    if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
-
-    for (i = 0; i < s_nlim; i++) {
-        LIMSITE* s = &s_lim[i];
-        if (!lim_read(s->va, s->have, s->n) || memcmp(s->have, s->stock, s->n)) {
-            s->differs = 1;
-            bad++;
-        }
-    }
-    if (bad) {
-        s_limState = -1;
-        tagpu_logf("limits: FAILED -- %d of %d sites differ from stock 3.1, nothing written; "
-                   "the report shows at the first DirectDraw call", bad, s_nlim);
-        return 0;
-    }
-    for (written = 0; written < s_nlim; written++) {
-        LIMSITE* s = &s_lim[written];
-        if (!tagpu_detour_write(s->va, s->ours, s->n)) break;
-    }
-    if (written < s_nlim) {
-        /* PUT BACK WHAT WAS WRITTEN: the process ends at the report either way, but
-           nothing runs meanwhile on a half-raised engine. */
-        s_limWriteFail = s_lim[written].va;
-        while (written-- > 0) tagpu_detour_write(s_lim[written].va, s_lim[written].stock, s_lim[written].n);
-        s_limState = -1;
-        tagpu_logf("limits: FAILED -- the write at 0x%08X was refused; everything written was put back",
-                   s_limWriteFail);
-        return 0;
-    }
-    s_limState = 1;
-    /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
-    tagpu_logf("limits: installed %d sites -- projectiles %d, explosions %d at 0x%08X, "
-               "flying pieces %d at 0x%08X, debris records %d at 0x%08X, units %d a player, "
-               "pathfinding %d, particles %d a layer from a pool of %d, composite %d, "
-               "wreck records %d, unit types %d, weapons %d at 0x%08X", s_nlim,
-               TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
-               TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
-               TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
-               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE, TAGPU_LIM_WRECKS,
-               TAGPU_LIM_TYPES - 1, TAGPU_LIM_WEAPONS, (unsigned int)(size_t)s_weapons);
-    return 1;
-}
-
 const char* tagpu_limits_expl_pool(const char* ta)
 {
     return s_limState > 0 ? (const char*)&s_expl : ta + 0x1491B;
@@ -3394,15 +4704,6 @@ static int wpn_slots(void) { return s_limState > 0 ? TAGPU_LIM_WEAPONS : 256; }
 
 #else  /* TAGPU_LIMITS_STOCK */
 
-int tagpu_limits_install(void)
-{
-    plog("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
-         "flying pieces 100, debris records 300, units 250 a player up to 500, "
-         "pathfinding 1333, particles 400 a layer from a pool of 1000, composite 600, "
-         "wreck records 2048, unit types 511)");
-    return 0;
-}
-
 const char* tagpu_limits_expl_pool(const char* ta) { return ta + 0x1491B; }
 const void* const* tagpu_limits_psys_begin(void) { return (const void* const*)(size_t)0x00511DF0u; }
 const void* const* tagpu_limits_psys_end(void) { return (const void* const*)(size_t)0x00511F80u; }
@@ -3416,6 +4717,88 @@ char* tagpu_limits_weapon0(void)
 static int wpn_slots(void) { return TAGPU_LIM_WEAPONS; }
 
 #endif /* TAGPU_LIMITS_STOCK */
+
+/* Two sites of the table that cover one byte: two fixes, or a fix and a raised limit, would
+   each have been checked against stock bytes the other rewrites. Our bug, found before
+   anything is compared. */
+static int lim_overlap(void)
+{
+    int i, j;
+    for (i = 0; i < s_nlim; i++)
+        for (j = i + 1; j < s_nlim; j++)
+            if (s_lim[i].va < s_lim[j].va + s_lim[j].n && s_lim[j].va < s_lim[i].va + s_lim[i].n) {
+                s_limOverlapA = s_lim[i].va;
+                s_limOverlapB = s_lim[j].va;
+                return 1;
+            }
+    return 0;
+}
+
+int tagpu_limits_install(void)
+{
+    int i, bad = 0, written;
+    if (s_limState) return s_limState > 0;
+#ifndef TAGPU_LIMITS_STOCK
+    lim_sites();
+#endif
+    if (s_limNoStub) { s_limState = -1; plog("limits: FAILED -- a code stub could not be made"); return 0; }
+    if (s_limOverflow) { s_limState = -1; plog("limits: FAILED -- the site table is too small"); return 0; }
+    if (lim_overlap()) {
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- the sites at 0x%08X and 0x%08X overlap", s_limOverlapA,
+                   s_limOverlapB);
+        return 0;
+    }
+
+    for (i = 0; i < s_nlim; i++) {
+        LIMSITE* s = &s_lim[i];
+        if (!lim_read(s->va, s->have, s->n) || memcmp(s->have, s->stock, s->n)) {
+            s->differs = 1;
+            bad++;
+        }
+    }
+    if (bad) {
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- %d of %d sites differ from stock 3.1, nothing written; "
+                   "the report shows at the first DirectDraw call", bad, s_nlim);
+        return 0;
+    }
+    for (written = 0; written < s_nlim; written++) {
+        LIMSITE* s = &s_lim[written];
+        if (!tagpu_detour_write(s->va, s->ours, s->n)) break;
+    }
+    if (written < s_nlim) {
+        /* PUT BACK WHAT WAS WRITTEN: the process ends at the report either way, but
+           nothing runs meanwhile on a half-changed engine. */
+        s_limWriteFail = s_lim[written].va;
+        while (written-- > 0) tagpu_detour_write(s_lim[written].va, s_lim[written].stock, s_lim[written].n);
+        s_limState = -1;
+        tagpu_logf("limits: FAILED -- the write at 0x%08X was refused; everything written was put back",
+                   s_limWriteFail);
+        return 0;
+    }
+    s_limState = 1;
+#ifndef TAGPU_LIMITS_STOCK
+    /* the moved pools' addresses, for `tacli peek`: the explosion count is the first dword */
+    tagpu_logf("limits: installed %d sites, the simulation fixes' included -- projectiles %d, "
+               "explosions %d at 0x%08X, flying pieces %d at 0x%08X, debris records %d at 0x%08X, "
+               "units %d a player, pathfinding %d, particles %d a layer from a pool of %d, "
+               "composite %d, wreck records %d, unit types %d, weapons %d at 0x%08X", s_nlim,
+               TAGPU_LIM_PROJ, TAGPU_LIM_EXPL, (unsigned int)(size_t)&s_expl,
+               TAGPU_LIM_PSYS, (unsigned int)(size_t)s_psys,
+               TAGPU_LIM_AUX, (unsigned int)(size_t)s_aux, TAGPU_LIM_UNITS, TAGPU_LIM_PATH,
+               TAGPU_LIM_SFX, TAGPU_LIM_SFXPOOL, TAGPU_LIM_COMPOSITE, TAGPU_LIM_WRECKS,
+               TAGPU_LIM_TYPES - 1, TAGPU_LIM_WEAPONS, (unsigned int)(size_t)s_weapons);
+    return 1;
+#else
+    tagpu_logf("limits: stock build -- nothing raised (projectiles 300, explosions 300, "
+               "flying pieces 100, debris records 300, units 250 a player up to 500, "
+               "pathfinding 1333, particles 400 a layer from a pool of 1000, composite 600, "
+               "wreck records 2048, unit types 511); the simulation fixes' %d sites installed",
+               s_nlim);
+    return 1;
+#endif
+}
 
 int tagpu_limits_weapon_index(const void* weapon)
 {
@@ -3467,18 +4850,21 @@ static int lim_md5(const char* path, char out[33], unsigned long* size)
     return ok;
 }
 
-static void lim_hex(char* out, const unsigned char* b, int n)
+/* at most `max` bytes, then "..." -- the box shows a long site's head, the log all of it */
+static void lim_hex(char* out, const unsigned char* b, int n, int max)
 {
     int i;
     out[0] = 0;
-    for (i = 0; i < n; i++) sprintf(out + strlen(out), i ? " %02X" : "%02X", b[i]);
+    for (i = 0; i < n && i < max; i++) sprintf(out + strlen(out), i ? " %02X" : "%02X", b[i]);
+    if (n > max) strcat(out, " ...");
 }
 
 void tagpu_limits_report(void)
 {
     static char text[8192];
     static LONG once;
-    char exe[MAX_PATH], md5[33] = "unknown", line[256], want[64], have[64];
+    char exe[MAX_PATH], md5[33] = "unknown", line[768], want[3 * LIM_MAXB + 8],
+         have[3 * LIM_MAXB + 8];
     const char* base;
     const char* known = "none";
     const char* why;
@@ -3505,7 +4891,7 @@ void tagpu_limits_report(void)
     /* ONE LINE PER PARAGRAPH: the box wraps prose to its own width, and a hard break
        inside a paragraph wraps a second time into ragged half-lines. The report lines
        are kept short enough that the box never wraps them. */
-    if (s_limNoStub || s_limOverflow)
+    if (s_limNoStub || s_limOverflow || s_limOverlapA)
         why = "Impure failed on its own side before it compared anything: this is a bug in "
               "Impure, or the system is out of memory, not a problem with this TotalA.exe.";
     else if (s_limWriteFail)
@@ -3518,12 +4904,13 @@ void tagpu_limits_report(void)
         why = "This TotalA.exe is not the Total Annihilation 3.1 that Impure is built for.";
 
     _snprintf(text, sizeof text,
-        "Impure could not install its engine limits, so Total Annihilation will now "
-        "close. Nothing was changed.\r\n"
+        "Impure could not install its engine limits and fixes, so Total Annihilation will "
+        "now close. Nothing was changed.\r\n"
         "\r\n"
         "WHY\r\n"
-        "Impure raises the game's limits (units, projectiles, explosions...) by "
-        "rewriting its code in memory, and it checks every place first. %s Running "
+        "Impure raises the game's limits (units, projectiles, explosions...) and fixes "
+        "some of its defects by rewriting its code in memory, and it checks every place "
+        "first. %s Running "
         "anyway would let this game play by different rules from other players and "
         "break multiplayer without warning.\r\n"
         "\r\n"
@@ -3544,9 +4931,12 @@ void tagpu_limits_report(void)
     text[sizeof text - 1] = 0;
 
     if (s_limNoStub)
-        _snprintf(line, sizeof line, "result: a code stub could not be allocated, nothing written\r\n");
+        _snprintf(line, sizeof line, "result: a code stub could not be made, nothing written\r\n");
     else if (s_limOverflow)
         _snprintf(line, sizeof line, "result: the site table overflowed, nothing written\r\n");
+    else if (s_limOverlapA)
+        _snprintf(line, sizeof line, "result: the sites at 0x%08X and 0x%08X overlap, nothing "
+                  "written\r\n", s_limOverlapA, s_limOverlapB);
     else if (s_limWriteFail)
         _snprintf(line, sizeof line, "result: write refused at 0x%08X, all put back\r\n",
                   s_limWriteFail);
@@ -3564,8 +4954,8 @@ void tagpu_limits_report(void)
             strncat(text, line, sizeof text - strlen(text) - 1);
             break;
         }
-        lim_hex(want, s->stock, s->n);
-        lim_hex(have, s->have, s->n);
+        lim_hex(want, s->stock, s->n, 16);
+        lim_hex(have, s->have, s->n, 16);
         _snprintf(line, sizeof line, "0x%08X %s\r\n  want %s\r\n  have %s\r\n",
                   s->va, s->name, want, have);
         line[sizeof line - 1] = 0;
@@ -3577,8 +4967,8 @@ void tagpu_limits_report(void)
     for (i = 0; i < s_nlim; i++) {
         const LIMSITE* s = &s_lim[i];
         if (!s->differs) continue;
-        lim_hex(want, s->stock, s->n);
-        lim_hex(have, s->have, s->n);
+        lim_hex(want, s->stock, s->n, LIM_MAXB);
+        lim_hex(have, s->have, s->n, LIM_MAXB);
         tagpu_logf("limits:   0x%08X %s want %s have %s", s->va, s->name, want, have);
     }
     {

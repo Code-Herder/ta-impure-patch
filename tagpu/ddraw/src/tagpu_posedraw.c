@@ -16,8 +16,8 @@
                        toward SH_V, dotted with SH_L and quantised onto the
                        32-row SHD ramp
 
-   THREE RANGES, ONE PROGRAM, `uRange`. The bake lays the body, the slant and
-   the wire down in one buffer, so a range is a
+   THREE RANGES IN THE BAKE, TWO OF THEM THIS PROGRAM'S, `uRange`. The bake
+   lays the body, the slant and the wire down in one buffer, so a range is a
    different `first`/`count` on the same bind; what differs in the shader is
    small and explicit:
 
@@ -27,9 +27,12 @@
                  own per-piece rule — `(P_FLAGS & 3) == 3`, visible AND
                  `cached` — which the body's all-zero matrix cannot express
                  because such a piece still draws in the body range.
-     WIRE   (2)  the body projection, a LINE_LIST (tagpu_vk_unit.c's wire
-                 pipeline), one notch nearer (+0.15), and
-                 the nanoframe's animated blue from a uniform.
+
+   The WIRE range is the bake's vertex pairs, one per edge, and VS does not
+   draw it: tagpu_vk_unit.c poses each pair on the CPU into a line record --
+   two line-grid pixels decided by tagpu_line.h's rule, their depth keys one notch
+   nearer (+0.15), their heights -- and `WVS` below draws the records as bands
+   in the nanoframe's animated blue.
 
    THE SNAP ROUNDS ONTO THE 16.16 GRID FIRST, and that is the whole reason the
    slant can be ported at all. `xi = v[0] >> 16` is an arithmetic FLOOR of the
@@ -41,9 +44,11 @@
    with the same `floor(x*65536 + 0.5)`, so Gate B isolates the port with
    nothing of §5's residual in it, and against the engine itself it leaves only
    the reconstruction's residual rather than multiplying it by 65536. The body
-   and the wire are NOT rounded, deliberately: their projection is affine and
-   continuous in the value, so the same 2 LSB moves a vertex 3e-5 px and can
-   only flip a coverage sample.
+   and the wire do not NEED it the way the slant does: their projection is
+   affine and continuous in the value, so the same 2 LSB moves a vertex 3e-5
+   px. They take it anyway, because it is the vertex's representation -- VS
+   rounds before any range reads the vertex, and tagpu_vk_unit.c rounds the
+   wire's the same way on the CPU.
 
    16.16 is exactly representable in float32 while |model unit| < 128 (128 x
    65536 = 2^23, where the float32 spacing is still 0.5 and `+ 0.5` is exact);
@@ -99,6 +104,7 @@
 #include "tagpu_classicpp.h"
 #include "tagpu_vk.h"      /* tagpu_vk_armed(): whether to publish at all */
 #include "tagpu_pal.h"
+#include "tagpu_glsl.h"     /* TAGPU_GLSL_BAND_FN, for WVS */
 #include "tagpu_posebake.h"
 
 #define STR2(x) #x
@@ -114,7 +120,7 @@
 #define PD_FLAGV   TAGPU_PD_FLAGV
 #define PD_UNITMAX TAGPU_PD_UNITMAX
 
-/* `uRange`'s three values (BODY 0, SLANT 1, WIRE 2) have no macro: the Vulkan
+/* `uRange`'s two values (BODY 0, SLANT 1) have no macro: the Vulkan
    consumer writes the number itself (tagpu_vk_unit.c's `b.i[40]`), and the
    shader below is where `uRange` is defined and the only place it can be read. */
 
@@ -312,7 +318,8 @@ int  tagpu_posedraw_slant_take(void) { int v = s_slantDrew; s_slantDrew = 0; ret
    and tagpu_posedraw::DFS, and generates the SPIR-V the two posed pipelines
    are built from -- `pose_unit` pairs this vertex stage with
    tagpu_native::FS, `pose_depth` with the DFS below (spirv-gen.py's manifest).
-   `FXVS` further down is the third, `pose_fx`, with tagpu_native::FS again.
+   `FXVS` further down is the third, `pose_fx`, with tagpu_native::FS again,
+   and `WVS` the fourth, `pose_wire`, with it once more.
    Deleting either fails the build, and editing one edits the units the player
    sees. `tools/spirv-check.sh` re-extracts them through the preprocessor on
    every link and compares the hashes.
@@ -353,8 +360,8 @@ static const char* VS =
     "uniform vec3 uCast;\n"                  /* altitude, ground + throw, sv  */
     "uniform int uDepthPass;\n"
     "uniform mat4 uShadowMat;\n"
-    "uniform int uRange;\n"                 /* 0 body, 1 slant, 2 wire       */
-    "uniform float uWire;\n"                /* the nanoframe blue, idx/255   */
+    "uniform int uRange;\n"                 /* 0 body, 1 slant               */
+    "uniform float uWire;\n"                /* the nanoframe blue, idx/255: WVS's */
     /* this unit's three slices of `uPose`, in vec4: its first row, its first
        shaded word, its first visibility word */
     "uniform int uRowBase;\n"
@@ -362,6 +369,8 @@ static const char* VS =
     "uniform int uVisBase;\n"
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
+    /* the line test's two inputs, which only WVS turns on (tagpu_native.c FS) */
+    "flat out vec4 vLine; flat out int vLineOn;\n"
     /* tagpu_native.c's SH_V and SH_L, the engine's shading basis */
     "const vec3 SH_V = vec3(0.0, 0.8944, -0.4472);\n"
     "const vec3 SH_L = vec3(-0.35, 0.80, -0.49);\n"
@@ -375,7 +384,7 @@ static const char* VS =
        npose >= nparts). On data that passes both, every clamp is a no-op. */
     "  int pl = uPose.length() - 1;\n"
     "  int pb = clamp(uRowBase + pi * 3, 0, pl - 2);\n"
-    /* Three ways a vertex is not drawn, and all of them collapse the same way
+    /* Two ways a vertex is not drawn, and both collapse the same way
        — every vertex of the primitive carries the same answer, so the whole
        primitive lands outside the same clip plane and nothing survives.
 
@@ -388,19 +397,10 @@ static const char* VS =
        visible AND `cached`, which a COB's dont-cache clears (a wind
        generator's mast). It cannot ride the all-zero matrix the way body
        visibility does, because such a piece still draws in the BODY range and
-       needs its matrix there.
-
-       vis >= 1, the WIRE's: `P_FLAGS & 1`, the same rule the body has —
-       but the body expresses it as an all-zero matrix, which collapses a
-       triangle to zero AREA, and a triangle of zero area is guaranteed to
-       produce no fragments. A LINE of zero length is not: the rasterisation
-       rules do not promise it away, and one bright pixel per hidden edge would
-       land exactly on the unit's origin. So the wire is refused here instead
-       of relying on that. */
+       needs its matrix there. */
+    "  vLine = vec4(0.0); vLineOn = 0;\n"
     "  float pvis = uPose[clamp(uVisBase + (pi >> 2), 0, pl)][pi & 3];\n"
-    "  if (aSkip > 0.5 ||\n"
-    "      (uRange == 1 && pvis < 2.5) ||\n"
-    "      (uRange == 2 && pvis < 0.5)) {\n"
+    "  if (aSkip > 0.5 || (uRange == 1 && pvis < 2.5)) {\n"
     "    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);\n"
     "    vUV = vec2(0.0); vFC = vec2(0.0); vShade = 0.0; vWorld = vec2(0.0);\n"
     "    vEnc = 0.0; vVY = 0.0; vNrm = vec3(0.0, 1.0, 0.0); vShW = vec3(0.0);\n"
@@ -440,10 +440,7 @@ static const char* VS =
        added BEFORE the clamp, so no bias can carry a vertex out of the row's
        +-1.8 band into a neighbour's. */
     "  float md = clamp((2.0 * m.y - m.z) / 256.0 + uMdBias, -1.8, 1.8);\n"
-    /* the wire is emitted one notch NEARER than the surface it traces, so it
-       wins against the solid part of the model: md reaches +-1.8 and the bias
-       is 0.15, against the 2.0 half-gap between depth rows (emit_wire) */
-    "  float enc = uEnc + md + (uRange == 2 ? 0.15 : 0.0);\n"
+    "  float enc = uEnc + md;\n"
     /* the shade. The rest normal is unit length and the piece transform is a
        composition of rotations, so the posed normal is unit length too — but
        normalise anyway rather than rest the quantisation on that, since a
@@ -471,10 +468,7 @@ static const char* VS =
     "  vec2 p = (p0 + uOffset - uZoomC) * uZoom + uZoomC;\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
     "                     clamp(1.0 - enc/uDepthScale, 0.0, 1.0), 1.0);\n"
-    /* the wire's colour is per UNIT (the nanoframe's animated blue) and the
-       material stream is per type and owner, so it arrives as a uniform on the
-       flat path rather than baked; the key stays -1, as emit_wire writes it */
-    "  vUV = aUV; vFC = (uRange == 2) ? vec2(uWire, -1.0) : aFC;\n"
+    "  vUV = aUV; vFC = aFC;\n"
     "  vShade = shade;\n"
     "  vWorld = uAnchor.zw + vec2(px, py);\n"
     "  vEnc = enc; vVY = m.y; vNrm = un;\n"
@@ -514,7 +508,8 @@ static const char* VS =
      vVY        0, under uWaterT and uDigT of -1e9: no waterline, no clip
      vNrm, vShW the level normal and a point at the anchor: Classic++'s
                 lambert of the level normal is the constant a unit's is, and
-                no shadow is read (the record's uShadowOn is 0) */
+                no shadow is read (the record's uShadowOn is 0)
+     vLineOn    0: no line test */
 static const char* FXVS =
     "#version 330 core\n"
     "layout(std430) readonly buffer Pose {\n"
@@ -539,8 +534,10 @@ static const char* FXVS =
     "uniform int uVisBase;\n"
     "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
     "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
+    "flat out vec4 vLine; flat out int vLineOn;\n"
     "void main(){\n"
     "  int r = gl_VertexID / 6, c = gl_VertexID - r * 6;\n"
+    "  vLine = vec4(0.0); vLineOn = 0;\n"
     /* THE INDEX IS CLAMPED TO THE BOUND RANGE, as VS's are: the consumer
        refuses a record whose runs do not lie inside the copied arena
        (tagpu_vk_unit.c), so on data that reaches a draw this is a no-op */
@@ -559,6 +556,82 @@ static const char* FXVS =
     "  vWorld = uAnchor.zw;\n"
     "  vEnc = uEnc; vVY = 0.0; vNrm = vec3(0.0, 1.0, 0.0);\n"
     "  vShW = vec3(uAnchor.z, uCast.y, uAnchor.w + uCast.x * 0.5);\n"
+    "}\n";
+
+/* THE NANOFRAME WIRE'S VERTEX STAGE, paired with tagpu_native::FS as VS and
+   FXVS are, and declaring their uniforms and outputs in their order for the
+   same reason. Six vertices a record, a band over one edge (tagpu_glsl.h
+   `taBand`); the fragment stage keeps the line-grid pixels tagpu_line.h's
+   rule lights between the record's two ends (`vLineOn` 1) -- `0x4CC7AB`'s
+   walk on the world target's own pixels, thickened to `ss` of them.
+
+   A RECORD, three vec4 from `uRowBase + 3 * edge` in the pose buffer, made on
+   the CPU by tagpu_vk_unit.c from the bake's WIRE pairs, this unit's pose
+   and its visibility words -- only edges of visible pieces on painted faces
+   are there, so nothing here has to hide a vertex:
+     r0  the two ends' line-grid pixel centres after the zoom (tagpu_line.h)
+     r1  the two ends' depth keys, `uEnc + md + 0.15`, then their heights m.y
+     r2  the two ends' projected offsets from the anchor, (m.x, -m.z - m.y/2)
+   THE +0.15 puts the wire one notch NEARER than the surface it traces, so it
+   wins against the solid part of the model: md reaches +-1.8 and the bias is
+   0.15, against the 2.0 half-gap between depth rows (emit_wire).
+
+   EVERY PER-END VALUE IS CARRIED ALONG THE SEGMENT, NOT ACROSS IT. `taBand`
+   hands back each corner's position `t` along the segment (0 at end A's
+   centre, 1 at B's, outside [0, 1] past the ends), and the depth, the height
+   and the world point are the two ends' values mixed at `t`. Both corners of
+   one end of the band share a `t`, so each value is an affine function of
+   the position along the segment alone, and the rasteriser's interpolation
+   over the two triangles reproduces it exactly: a fragment's depth is the
+   segment's depth where the fragment projects onto it. */
+static const char* WVS =
+    "#version 330 core\n"
+    "layout(std430) readonly buffer Pose {\n"
+    "  vec4 uPose[];\n"
+    "};\n"
+    "uniform vec2 uGame;\n"
+    "uniform vec2 uOffset;\n"
+    "uniform float uZoom;\n"
+    "uniform vec2 uZoomC;\n"
+    "uniform float uDepthScale;\n"
+    "uniform vec4 uAnchor;\n"
+    "uniform float uEnc;\n"
+    "uniform float uMdBias;\n"
+    "uniform vec2 uShd;\n"
+    "uniform vec3 uCast;\n"
+    "uniform int uDepthPass;\n"
+    "uniform mat4 uShadowMat;\n"
+    "uniform int uRange;\n"
+    "uniform float uWire;\n"
+    "uniform int uRowBase;\n"             /* this unit's first wire record  */
+    "uniform int uFlagBase;\n"
+    "uniform int uVisBase;\n"
+    "out vec2 vUV; flat out vec2 vFC; flat out float vShade; out vec2 vWorld;\n"
+    "out float vEnc; out float vVY; flat out vec3 vNrm; out vec3 vShW;\n"
+    "flat out vec4 vLine; flat out int vLineOn;\n"
+    TAGPU_GLSL_BAND_FN
+    "void main(){\n"
+    "  int r = gl_VertexID / 6, c = gl_VertexID - r * 6;\n"
+    /* THE INDEX IS CLAMPED TO THE BOUND RANGE, as VS's are: the consumer
+       sizes the pose buffer to hold every record it writes, so on data that
+       reaches a draw this is a no-op */
+    "  int pl = uPose.length() - 1;\n"
+    "  int b = clamp(uRowBase + r * 3, 0, pl - 2);\n"
+    "  vec4 r0 = uPose[b], r1 = uPose[b + 1], r2 = uPose[b + 2];\n"
+    "  float t;\n"
+    "  vec2 p = taBand(r0.xy, r0.zw, c, t);\n"
+    "  float enc = mix(r1.x, r1.y, t);\n"
+    "  float vy = mix(r1.z, r1.w, t);\n"
+    "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
+    "                     clamp(1.0 - enc/uDepthScale, 0.0, 1.0), 1.0);\n"
+    /* the wire's colour is per UNIT (the nanoframe's animated blue), on the
+       flat path, on the neutral SHD row the bake gives every wire vertex */
+    "  vUV = vec2(-1.0); vFC = vec2(uWire, -1.0);\n"
+    "  vShade = uShd.x / 31.0;\n"
+    "  vWorld = uAnchor.zw + mix(r2.xy, r2.zw, t);\n"
+    "  vEnc = enc; vVY = vy; vNrm = vec3(0.0, 1.0, 0.0);\n"
+    "  vShW = vec3(vWorld.x, uCast.y + uCast.z * vy, vWorld.y + (uCast.x + vy) * 0.5);\n"
+    "  vLine = r0; vLineOn = 1;\n"
     "}\n";
 
 /* the depth stage writes no fragment at all and discards nothing, so a

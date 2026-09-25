@@ -372,7 +372,6 @@ typedef struct {
     int              vsync;
     int              devIndex;             /* into the cached name table, or -1 */
     int              flipok;               /* VK_KHR_maintenance1 was enabled   */
-    int              lineok;               /* VK_EXT_line_rasterization, bresenham */
     /* samplerAnisotropy, a CORE feature bit rather than an extension, and the
        largest ratio this device will apply. The Classic++ restored twins are
        the only textures this fork filters at all, and they are specified at
@@ -381,8 +380,6 @@ typedef struct {
        restored art differently from its specification. */
     int              anisook;
     float            maxAniso;
-    int              wideok;
-    float            maxLineWidth;
     int              rebuild;              /* the surface said its extent moved */
     int              cansrc;               /* the images carry TRANSFER_SRC     */
     unsigned         frame;
@@ -898,51 +895,12 @@ static int vk_load(void)
    and the bring-up worker; each destroys its own. */
 static VkInstance vk_instance(void)
 {
-    const char* iexts[3] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-                             NULL };
+    const char* iexts[2] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
     uint32_t niext = 2;
     VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
     VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
     VkInstance inst = VK_NULL_HANDLE;
     VkResult r;
-
-    /* VK_KHR_get_physical_device_properties2, WHEN THE LOADER HAS IT, AND IT IS
-       A DEPENDENCY RATHER THAN A WANT. This instance asks for Vulkan 1.0, where
-       VK_EXT_line_rasterization -- which the effects pass needs for the
-       diamond-exit line rule -- depends on it, and chaining
-       VkPhysicalDeviceLineRasterizationFeaturesEXT into VkDeviceCreateInfo is
-       only defined with it enabled. The reference setup's loader tolerates the
-       omission; a stricter one refuses vkCreateDevice, the retry there clears
-       `lineok`, and every frame with a laser in it is refused for the session
-       ON HARDWARE THAT SUPPORTS THE FEATURE.
-
-       ASKED FOR ONLY WHEN IT IS OFFERED: an instance extension the loader does
-       not have fails vkCreateInstance outright, which would cost the whole lane
-       to buy one pass's lines. Resolved at GLOBAL level (a NULL instance),
-       because this runs before there is one. */
-    {
-        PFN_vkEnumerateInstanceExtensionProperties eiep =
-            (PFN_vkEnumerateInstanceExtensionProperties)
-                s_gipa(NULL, "vkEnumerateInstanceExtensionProperties");
-        if (eiep) {
-            uint32_t ne = 0, k;
-            VkResult er = eiep(NULL, &ne, NULL);
-            VkExtensionProperties* ext = NULL;
-            if ((er == VK_SUCCESS || er == VK_INCOMPLETE) && ne)
-                ext = (VkExtensionProperties*)malloc((size_t)ne * sizeof *ext);
-            if (ext) {
-                er = eiep(NULL, &ne, ext);
-                if (er == VK_SUCCESS || er == VK_INCOMPLETE)
-                    for (k = 0; k < ne; k++)
-                        if (!strcmp(ext[k].extensionName,
-                                    VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME)) {
-                            iexts[niext++] = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME;
-                            break;
-                        }
-                free(ext);
-            }
-        }
-    }
 
     app.pApplicationName = "Total Annihilation (impure)";
     app.apiVersion = VK_API_VERSION_1_0;
@@ -2028,10 +1986,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
 
     {
         float prio = 1.0f;
-        const char* dexts[3] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL, NULL };
+        const char* dexts[2] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, NULL };
         uint32_t ndext = 1;
-        VkPhysicalDeviceLineRasterizationFeaturesEXT lrf =
-            { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT };
         VkDeviceQueueCreateInfo qci = { VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
         VkDeviceCreateInfo dci = { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         VkPhysicalDeviceFeatures feat;      /* must outlive every vkCreateDevice below */
@@ -2072,8 +2028,8 @@ static DWORD WINAPI up_worker(LPVOID arg)
                 er = vkEnumerateDeviceExtensionProperties(s_vk.pd, NULL, &ne, ext);
                 if (er == VK_SUCCESS || er == VK_INCOMPLETE)
                     for (k = 0; k < ne; k++) {
-                        /* BOUNDED, because the array is three long and two
-                           optional names can each append. The specification says
+                        /* BOUNDED, because the array is two long and one
+                           optional name appends. The specification says
                            a name is not enumerated twice; an ICD or layer that
                            does it anyway would write one past this array, and a
                            bound that costs one comparison is cheaper than
@@ -2082,63 +2038,6 @@ static DWORD WINAPI up_worker(LPVOID arg)
                         if (!strcmp(ext[k].extensionName, "VK_KHR_maintenance1")) {
                             dexts[ndext++] = "VK_KHR_maintenance1";
                             s_vk.flipok = 1;
-                        }
-                        /* VK_EXT_line_rasterization, AND IT BUYS EXACTLY ONE
-                           THING TOO: `BRESENHAM` line rasterisation, the
-                           diamond-exit rule the effects pass's lines are
-                           specified by. MEASURED 2026-09-15 against the OpenGL
-                           renderer this replaced, whose non-antialiased lines
-                           follow that rule: with Vulkan's DEFAULT mode the
-                           lasers came out a strict SUPERSET of GL's -- every
-                           one of its 126 pixels plus exactly one extra fragment
-                           at the end of each line segment, 4 px on the fixture.
-                           DEFAULT does not implement the diamond-exit rule and
-                           BRESENHAM does.
-                           A pass that draws lines refuses the frame when this is
-                           off rather than drawing those four pixels. */
-                        if (!strcmp(ext[k].extensionName,
-                                    VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME)) {
-                            /* THE DEVICE IS ASKED WHETHER IT HAS THE FEATURE,
-                               AND THAT ANSWER IS THE TEST. Offering the
-                               extension is not offering `bresenhamLines`, and
-                               inferring the feature from a vkCreateDevice that
-                               SUCCEEDED does not work: an ICD that does not
-                               consider the extension properly enabled is
-                               entitled to ignore the unrecognised pNext struct
-                               and return VK_SUCCESS, which is indistinguishable
-                               from having enabled it. The pass would then build
-                               its line pipeline with BRESENHAM chained on a
-                               device where the feature is off -- undefined
-                               behaviour rather than an error, and in practice
-                               the default line mode, which is the four-pixel
-                               superset this exists to avoid. So: query, and on
-                               no query, no lines. */
-                            PFN_vkGetPhysicalDeviceFeatures2KHR gpdf2 =
-                                (PFN_vkGetPhysicalDeviceFeatures2KHR)
-                                    s_gipa(s_vk.inst, "vkGetPhysicalDeviceFeatures2KHR");
-                            if (gpdf2) {
-                                VkPhysicalDeviceLineRasterizationFeaturesEXT q;
-                                VkPhysicalDeviceFeatures2 f2;
-                                memset(&q, 0, sizeof q);
-                                memset(&f2, 0, sizeof f2);
-                                q.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT;
-                                f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-                                f2.pNext = &q;
-                                gpdf2(s_vk.pd, &f2);
-                                if (q.bresenhamLines) {
-                                    dexts[ndext++] = VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME;
-                                    s_vk.lineok = 1;
-                                } else {
-                                    vklog("the device offers VK_EXT_line_rasterization but not "
-                                          "bresenhamLines - a ported pass that draws LINES will "
-                                          "stand down");
-                                }
-                            } else {
-                                vklog("VK_EXT_line_rasterization is offered but "
-                                      "vkGetPhysicalDeviceFeatures2KHR is not, so bresenhamLines "
-                                      "cannot be confirmed - a ported pass that draws LINES will "
-                                      "stand down rather than chain a mode the device may ignore");
-                            }
                         }
                     }
                 free(ext);
@@ -2149,10 +2048,6 @@ static DWORD WINAPI up_worker(LPVOID arg)
                   "the WORLD passes will draw (since landing 5b they need no flip), "
                   "but the GUI layer, the FPS readout and the scaffold overlay stay "
                   "down, so the frame is a world with no UI over it");
-        if (!s_vk.lineok)
-            vklog("VK_EXT_line_rasterization is not offered - a ported pass that "
-                  "draws LINES will stand down (its twin's rule is the diamond-exit "
-                  "one, and Vulkan's default mode is not it)");
 
         /* ANISOTROPY IS A CORE FEATURE BIT, so it goes in pEnabledFeatures and
            not in the pNext chain -- which is why it is not on the retry ladder
@@ -2176,71 +2071,14 @@ static DWORD WINAPI up_worker(LPVOID arg)
                       "twin is specified filtered 4x anisotropically and NOT doing "
                       "that is a different picture from our own oracle");
             }
-            /* `wideLines` IS A CORE FEATURE BIT TOO, so it sits beside
-               anisotropy for the same reason and is likewise NOT on the retry
-               ladder below -- the ladder drops EXTENSIONS, and this is asked
-               for only when the device has just said it has it.
-               WHY THE LANE WANTS IT: the world is drawn into a target `ss`
-               times the game resolution, so a line one game pixel wide has to
-               be `ss` pixels wide there. Without this the passes can only draw
-               a 1.0 line,
-               which is `ss` times too thin -- so tagpu_vk_fx.c and
-               tagpu_vk_mark.c refuse the whole pass instead, and on the
-               shipped default (`ss` = 2) the effects pass would drop every
-               frame that had a laser in it. */
-            if (have.wideLines) {
-                VkPhysicalDeviceProperties dp;
-                feat.wideLines = VK_TRUE;
-                s_vk.wideok = 1;
-                vkGetPhysicalDeviceProperties(s_vk.pd, &dp);
-                s_vk.maxLineWidth = dp.limits.lineWidthRange[1];
-            } else {
-                vklog("wideLines is not offered - a pass drawing lines into a "
-                      "supersampled world target will stand down, because a "
-                      "line is ss pixels wide there and a 1.0 line is a "
-                      "different picture from our own oracle");
-            }
             dci.pEnabledFeatures = &feat;
         }
         qci.queueFamilyIndex = s_vk.qfam; qci.queueCount = 1; qci.pQueuePriorities = &prio;
         dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = ndext; dci.ppEnabledExtensionNames = dexts;
-        /* THE FEATURE IS ENABLED, NOT MERELY THE EXTENSION. Which feature bits
-           the device actually has was settled above, by asking it; this only
-           turns the one we want on. The retry below is a fallback, NOT the test
-           -- a vkCreateDevice that succeeds proves nothing about a pNext struct
-           an ICD may have ignored. */
-        if (s_vk.lineok) {
-            lrf.bresenhamLines = VK_TRUE;
-            lrf.pNext = (void*)dci.pNext;
-            dci.pNext = &lrf;
-        }
         r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
-        /* THE LADDER DROPS THE CHEAPEST THING FIRST, and each rung REBUILDS
-           both the extension list and the pNext chain rather than unlinking one
-           struct out of the middle of it -- the same reason the list is rebuilt
-           rather than shortened. Line rasterisation costs the passes that draw
-           lines; the flip costs every pass. */
-        if (r != VK_SUCCESS && s_vk.lineok) {
-            /* Line rasterisation first: it is the one whose FEATURE can be
-               refused as well as its extension, and dropping it costs only the
-               passes that draw lines. */
-            vklog("vkCreateDevice refused VK_EXT_line_rasterization/bresenhamLines "
-                  "(%s) - retrying without it", res_name(r));
-            s_vk.lineok = 0;
-            dci.pNext = NULL;
-            /* THE LIST IS REBUILT, NOT SHORTENED. The optional extensions go in
-               in the order the DRIVER enumerates them, so `ndext - 1` would
-               drop whichever happened to be last -- maintenance1 on a driver
-               that lists it second, which costs every ported pass for a reason
-               that has nothing to do with lines. */
-            ndext = 1;
-            if (s_vk.flipok) dexts[ndext++] = "VK_KHR_maintenance1";
-            dci.enabledExtensionCount = ndext;
-            r = vkCreateDevice(s_vk.pd, &dci, NULL, &s_vk.dev);
-        }
         if (r != VK_SUCCESS && s_vk.flipok) {
-            /* Then the flip, which costs every ported pass. One retry each, so
+            /* THE ONE RUNG: the flip, which costs every ported pass. One retry, so
                this is a real fallback and not a loop. */
             vklog("vkCreateDevice refused VK_KHR_maintenance1 (%s) - retrying without it",
                   res_name(r));
@@ -2304,9 +2142,6 @@ static DWORD WINAPI up_worker(LPVOID arg)
     s_pass.flipok = s_vk.flipok;
     s_pass.anisook = s_vk.anisook;
     s_pass.maxAniso = s_vk.maxAniso;
-    s_pass.lineok = s_vk.lineok;
-    s_pass.wideok = s_vk.wideok;
-    s_pass.maxLineWidth = s_vk.maxLineWidth;
     s_pass.gipa = s_gipa;
     s_pass.gdpa = vkGetDeviceProcAddr;
     s_pass.log = passlog;
@@ -2615,12 +2450,11 @@ static int vk_present(void)
                 contract rather than a preference. It is not a pass and depends
                 on none of them -- it reads the geometry tagpu_native.c
                 published from this frame's gather -- but the passes depend on
-                IT: any pass that scales something by `ss` asks
-                `tagpu_vk_world_scale()` during its own `prepare`, and that
-                answer does not exist until this has run -- after them, the
-                effects and marker passes would set an `ss`-wide line from their
-                hand-over while the target might have refused and the world be
-                going into the swapchain image at 1:1.
+                IT: whether there is a target decides the extent every world
+                pass records into, and a pass that needs the grid it draws on
+                (the lines' test, tagpu_line.h) maps that extent onto its grid
+                rather than taking the hand-over's `ss` as the target's scale:
+                `ss` says what the gather was told, not whether the target stood.
                 It puts no pixel anywhere, so it is not counted in
                 `ndraw`/`nclaim` -- the shadow map's rule for its reason. 0 means
                 there is no target this frame and the world draws into the
