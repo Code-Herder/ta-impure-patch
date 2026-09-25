@@ -748,7 +748,8 @@ round-robin entry (the flag bit set unconditionally, `0x48B81B..0x48B84C`) for t
 the type word first (`0x48B222`), and for an empty slot nothing more (`0x48B227..0x48B22F`). The
 receiver `0x48B920` reads that flag (`0x48BA6A..0x48BA97`), takes the slot from the header's
 GameTime (`0x48B95A`) `% N` (`0x48BA9F..0x48BABA`) and hands it to `0x48B3F0`: a type 0 over an
-occupied slot sets `+0x110` bit 14, pending death (`0x48B415..0x48B42F`). The receiver's unit tick
+occupied slot sets `+0x110` bit 14, pending death (`0x48B415..0x48B42F`: an empty slot, `+0xA6` 0,
+leaves at `0x48B420`; the set itself is `0x48B426..0x48B42F`, `or ch,0x40`). The receiver's unit tick
 then calls `0x4864B0(unit, +0xF5)` for every unit with that bit (`0x48AFB9..0x48AFD1`), which
 destroys it (`0x4866D0` at `0x486679`) and sends a `0x0C` only when the unit's player is local
 (`0x48664B..0x48666D`, the image's one send of the `0x0C`'s 11 bytes). So a copy whose owner's
