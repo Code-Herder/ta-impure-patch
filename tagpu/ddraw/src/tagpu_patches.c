@@ -3360,6 +3360,392 @@ static void patch_engine_defects(void)
     plog(b);
 }
 
+/* ===== THE LOADERS AND TWO HUD DIVIDES =====================================================
+   Five stock defects outside the battle itself: the wind every peer draws for itself, a
+   yardmap parsed past the end of its string, the saved-game loader's order fallback, and two
+   divides in the HUD (research/notes/tadr-port/sim-fixes.md, landing B6). The wind and the
+   yardmaps change the simulation, so their sites are rows of the fail-closed table; the other
+   three are local, each checked, written and skipped on its own. */
+
+#define B6_MAIN        0x00511DE8u
+#define B6_PLAYERS     0x1B63u        /* main+ : PlayerStruct[10], stride 0x14B            */
+#define B6_PSTRIDE     0x14Bu
+#define B6_TNT         0x391E9u       /* main+ : GameingState*; its +0x204 the TNT path    */
+
+/* THE WIND [DISASSEMBLED]. The wind updater 0x490C40 has two callers: the level load
+   LoadGameData_Main 0x4917D0 at 0x491903, on the loader thread, and the tick 0x495490 at
+   0x49558F. While next (main+0x37EC4) >= GameTime (main+0x38A47) it clears the changed flag
+   +0x37EE2 and returns (0x490C51, 0x490D87). Otherwise it draws three values:
+     - the schedule, next += 30 * (5 + rand() * 10 / 0x8000), from the CRT's rand 0x4E4870
+       (0x490C60..0x490C8E);
+     - the speed +0x37EDA = min (main+0x1425B) + simrand(max (main+0x1425F) - min), from the
+       sim RNG 0x4B6C30, which answers 0 for an argument below 2 (0x4B6C35) (0x490C90..0x490CB7);
+     - when the speed is not 0, the heading +0x37ED8 = simrand(0x10000) (0x490CC8..0x490CDC);
+   then derives the components +0x37ECC and +0x37ED4 (0x490CE8..0x490D35) and the ratio
+   +0x37EDE, capped at 1.0, that a wind generator's energy follows (0x490D3B..0x490D7B, read
+   at 0x40156F). The loader 0x497180 seeds the sim RNG from QueryPerformanceCounter and the
+   CRT's from time(0), so each peer draws a wind of its own: MEASURED on two peers paused at
+   GameTime 825, speed 2525 heading 0xF5C6 on the host against 1498 and 0xC827 on the joiner.
+   The load's call finds next = 0 (0x4918FD) and GameTime 0 (0x4971BB), so it draws nothing;
+   the first draw is the first tick's.
+   THE FIX draws the three values from our own generator (splitmix64, its own state; neither
+   engine RNG) with stock's rules: next += 30 * (5 + r % 10); the speed min + r % (max - min),
+   or min when max - min, taken in 32 bits as 0x490CA1 takes it, is below 2; the heading
+   r % 0x10000, drawn only when the speed is not 0. A jmp at 0x490C5A, the draws' first
+   instruction (after 0x490C59's push esi), goes to a stub
+   that calls wind_draw and rejoins at 0x490CE8 with eax the main pointer, as stock's 0x490CE3
+   leaves it; esi, which stock points at `next`, is read after 0x490CE8 only by its pop at
+   0x490D85. The load's call at 0x491903 goes through a stub that seeds the generator first:
+   in a network game from the host's DirectPlay ID and a hash of the map's name, otherwise
+   from QueryPerformanceCounter, the counter stock seeds its own RNG with.
+   THE INVARIANT: in a network game every peer draws the same wind at the same GameTime. It
+   rests on
+     - the seed, the same on every peer and made again at every level load, so nothing crosses
+       from one game to the next: the host is the active human player numbered 1 (+0x0C), the
+       rule TADR uses — MEASURED, the host's record reads number 1 and the same DirectPlay ID
+       (+0x04) on both peers, the joiner's 2, and every single-player record reads 0 — and the
+       map is the TNT stem every peer loaded (GameingState +0x204, "Maps\Two Continents.TNT"
+       on both);
+     - the draws, made only by the tick's call, once for each GameTime value on every peer, each
+       consuming a number of values fixed by the map's range and the values drawn before it;
+     - an ordering: the seed is written on the loader thread before the loader's last store,
+       bit 1 of main+0x38D75 (0x497C62), and read only by the tick, which the game thread runs
+       after it has seen that bit (0x498342): the handshake every value of the load rests on.
+   CLASS: simulation, fail closed. A peer without it draws another wind. */
+static unsigned long long s_windState;          /* loader thread writes, then GAME THREAD   */
+static volatile LONG s_windLevels;              /* level loads seeded, peekable              */
+
+static unsigned int wind_next(void)
+{
+    unsigned long long z = (s_windState += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return (unsigned int)((z ^ (z >> 31)) >> 32);
+}
+
+/* the host's DirectPlay ID, or 0 outside a network game */
+static unsigned int wind_host(const char* ta)
+{
+    int i;
+    for (i = 0; i < 10; i++) {
+        const unsigned char* p = (const unsigned char*)ta + B6_PLAYERS + (unsigned int)i * B6_PSTRIDE;
+        unsigned int active, dpid;
+        memcpy(&active, p, 4);
+        memcpy(&dpid, p + 0x04, 4);
+        if (active && p[0x0C] == 1 && (p[0x73] == 1 || p[0x73] == 3) && dpid) return dpid;
+    }
+    return 0;
+}
+
+/* FNV-1a over the TNT path's stem, case folded: "Maps\Two Continents.TNT" -> "two continents" */
+static unsigned int wind_map_hash(const char* ta, char* stem, unsigned int room)
+{
+    const char* gs;
+    const char* s;
+    const char* q;
+    unsigned int h = 0x811C9DC5u, n = 0;
+    /* the load reads the same pointer as `this` for 0x435100 right after (0x491984) */
+    memcpy(&gs, ta + B6_TNT, sizeof gs);
+    stem[0] = 0;
+    if (!gs) return h;
+    s = gs + 0x204;
+    for (q = s; q < s + MAX_PATH && *q; q++)
+        if (*q == '\\' || *q == '/' || *q == ':') s = q + 1;
+    for (q = s; q < s + MAX_PATH && *q && *q != '.'; q++) {
+        char c = (*q >= 'A' && *q <= 'Z') ? (char)(*q + 32) : *q;
+        h = (h ^ (unsigned char)c) * 0x01000193u;
+        if (n + 1 < room) stem[n++] = c;
+    }
+    stem[n] = 0;
+    return h;
+}
+
+static void __cdecl wind_seed(void)
+{
+    const char* ta = *(const char* const*)(size_t)B6_MAIN;
+    char stem[48];
+    unsigned int host = wind_host(ta), map = wind_map_hash(ta, stem, sizeof stem);
+    LONG level = InterlockedIncrement(&s_windLevels);
+    if (host) {
+        s_windState = ((unsigned long long)host << 32) | map;
+    } else {
+        LARGE_INTEGER c;
+        QueryPerformanceCounter(&c);
+        s_windState = (unsigned long long)c.QuadPart ^ ((unsigned long long)map << 32);
+    }
+    wind_next();                                /* one step, so a seed of 0 is no special case */
+    if (host)
+        tagpu_logf("enginefix: wind: level %ld seeded from the host's DirectPlay ID 0x%08X and "
+                   "the map \"%s\" (0x%08X)", (long)level, host, stem, map);
+    else
+        tagpu_logf("enginefix: wind: level %ld seeded from the performance counter (no network "
+                   "host), map \"%s\"", (long)level, stem);
+}
+
+static void __cdecl wind_draw(void)
+{
+    char* ta = *(char* const*)(size_t)B6_MAIN;
+    unsigned int next, dir, lo, hi, speed;
+    int range;
+    memcpy(&next, ta + 0x37EC4, 4);
+    next += 30u * (5u + wind_next() % 10u);
+    memcpy(ta + 0x37EC4, &next, 4);
+    memcpy(&lo, ta + 0x1425B, 4);
+    memcpy(&hi, ta + 0x1425F, 4);
+    range = (int)(hi - lo);                        /* stock's 32-bit sub at 0x490CA1 */
+    speed = range < 2 ? lo : lo + wind_next() % (unsigned int)range;
+    memcpy(ta + 0x37EDA, &speed, 4);
+    if (speed != 0) {
+        unsigned short h;
+        dir = wind_next() % 0x10000u;
+        h = (unsigned short)dir;
+        memcpy(ta + 0x37ED8, &h, 2);
+    }
+}
+
+static int fix_wind(void)
+{
+    static const unsigned char test[26] = {
+        0xA1, 0xE8, 0x1D, 0x51, 0x00, 0x8B, 0x88, 0xC4, 0x7E, 0x03, 0x00, 0x8B, 0x90,
+        0x47, 0x8A, 0x03, 0x00, 0x3B, 0xCA, 0x0F, 0x83, 0x2E, 0x01, 0x00, 0x00, 0x56,
+    };
+    static const unsigned char join[13] = {
+        0x8B, 0x90, 0xDA, 0x7E, 0x03, 0x00, 0x66, 0x8B, 0x80, 0xD8, 0x7E, 0x03, 0x00,
+    };
+    static const unsigned char draws[6] = { 0x8D, 0xB0, 0xC4, 0x7E, 0x03, 0x00 };
+    static const unsigned char load[5]  = { 0xE8, 0x38, 0xF3, 0xFF, 0xFF };  /* call 0x490C40 */
+    unsigned char *a, *b, *p;
+    if (!(a = fix_code(24)) || !(b = fix_code(16))) { lim_no_stub(); return FIX_TABLE; }
+    p = a;
+    *p++ = 0x60;                                                /* pushad               */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_draw); p += 4;
+    *p++ = 0x61;                                                /* popad                */
+    *p++ = 0xA1;                                                /* mov eax,[0x511DE8]   */
+    *p++ = 0xE8; *p++ = 0x1D; *p++ = 0x51; *p++ = 0x00;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00490CE8);
+    p = b;
+    *p++ = 0x60;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_seed); p += 4;
+    *p++ = 0x61;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00490C40);
+    lim_same(0x00490C40, sizeof test, test, "wind: the schedule's test");
+    lim_branch(0x00490C5A, sizeof draws, draws, 0xE9, (unsigned int)(size_t)a,
+               "wind: the draws, from our generator");
+    lim_same(0x00490CE8, sizeof join, join, "wind: the components, where the draws rejoin");
+    lim_branch(0x00491903, sizeof load, load, 0xE8, (unsigned int)(size_t)b,
+               "wind: the level load's call, seeding first");
+    return FIX_TABLE;
+}
+
+/* A YARDMAP PARSED PAST ITS STRING [DISASSEMBLED]. For a def whose BMcode is 0 ([def+0x22F],
+   0x42CF30..0x42CF38) the unit-def loader reads the FBI's YardMap key with
+   GetString 0x4C48C0(buf, "YardMap", 0x400, "") into a 0x400-byte stack buffer at the call
+   site's [esp+0x128] (0x42CF3E..0x42CF59); GetString NUL-terminates inside that size, or copies
+   the "" default when the key is missing, and the return is ignored. The loader then allocates
+   footX * footZ bytes (+0x14A, +0x14C, words) at def+0x14E through 0x4D83B0 (0x42CF5E..0x42CF7A)
+   and fills them row by row (0x42CF9D..0x42D06B): a char of `.CGOYcfowy` writes one cell
+   (0x00 0x35 0x8F 0x2B 0x31 0x2D 0x6F 0x2F 0x37 0x29, the byte map 0x42D198 into the jump
+   table 0x42D16C) and moves on unless the NEXT char is the NUL, so a short string repeats its
+   last char; any other char, the NUL included, is skipped without filling a cell (0x42CFB5 ->
+   0x42D049). So a missing key, or a string that ends on an invalid char, walks past the NUL
+   into whatever the stack held and on up it until every cell has a byte: the yardmap decides
+   placement (0x47D2E0), occupancy (0x47CC30) and pathing, and each peer's stack is its own.
+   No retail unit reaches it (all 126 BMcode-0 units have a YardMap that ends on a valid char);
+   a mod does. TADR's fix leaves def+0x14E NULL, which six readers dereference unchecked.
+   THE FIX: a jmp at 0x42CF5E into yard_parse, which makes stock's allocation through the same
+   allocator and fills it by stock's table, skip rule and repeat rule, rejoining at 0x42D079,
+   where nothing the parse held is read again (ecx, eax, esi and edx are written first, ebx and
+   edi after 0x42D0E3). Where stock would step past the NUL with cells left, each remaining cell
+   takes the last valid char's byte, or 'o' (0x2F) when the string had none [DECIDED
+   2026-09-25].
+   THE INVARIANT: the parse reads only inside the string GetString wrote — never past its NUL,
+   never past the buffer's 0x400 bytes, whether or not a NUL is there — and writes only the
+   footX * footZ cells it allocated. Identical to stock for every string stock parses inside
+   its NUL, all 126 retail yardmaps among them.
+   CLASS: simulation, fail closed. A player without it builds by the bytes of its own stack. */
+#define YARD_BUF 0x400
+static volatile LONG s_yardFilled;              /* defs filled past their string, peekable   */
+
+static int yard_code(char c)
+{
+    switch (c) {
+    case '.': return 0x00;
+    case 'C': return 0x35;
+    case 'G': return 0x8F;
+    case 'O': return 0x2B;
+    case 'Y': return 0x31;
+    case 'c': return 0x2D;
+    case 'f': return 0x6F;
+    case 'o': return 0x2F;
+    case 'w': return 0x37;
+    case 'y': return 0x29;
+    default:  return -1;
+    }
+}
+
+static void __cdecl yard_parse(unsigned int* regs)
+{
+    unsigned char* def = (unsigned char*)(size_t)regs[PR_EBP];
+    const char* buf = (const char*)(size_t)(regs[PR_ESP] + 0x128);
+    const char* const end = buf + YARD_BUF;
+    const char* p = buf;
+    short fx, fz;
+    int cells, k, last = -1, past = 0;
+    unsigned char* map;
+    memcpy(&fx, def + 0x14A, 2);
+    memcpy(&fz, def + 0x14C, 2);
+    map = (unsigned char*)ENG_ALLOC((const char*)(size_t)0x00503978u,
+                                    (unsigned int)((int)fz * (int)fx));
+    memcpy(def + 0x14E, &map, sizeof map);
+    cells = (fx > 0 && fz > 0) ? (int)fx * (int)fz : 0;
+    for (k = 0; k < cells; ) {
+        int code;
+        if (p >= end || *p == 0) {                 /* stock would step past the string here */
+            map[k++] = (unsigned char)(last >= 0 ? last : 0x2F);
+            past++;
+            continue;
+        }
+        code = yard_code(*p);
+        if (code < 0) { p++; continue; }           /* skipped, the cell still to fill        */
+        map[k++] = (unsigned char)code;
+        last = code;
+        if (p + 1 < end && p[1] != 0) p++;         /* the last char before the NUL repeats   */
+    }
+    if (past) {
+        LONG n = InterlockedIncrement(&s_yardFilled);
+        if (n <= 32 || !(n & (n - 1)))
+            tagpu_logf("enginefix: yardmaps: %.32s: %d of its %d cells lie past its YardMap "
+                       "string and take 0x%02X (%ld so far)", (const char*)def, past, cells,
+                       last >= 0 ? last : 0x2F, (long)n);
+    }
+}
+
+static int fix_yardmap(void)
+{
+    static const unsigned char read[32] = {
+        0x8B, 0x4C, 0x24, 0x14, 0x68, 0xB8, 0x19, 0x51, 0x00, 0x68, 0x00, 0x04, 0x00, 0x00, 0x8D,
+        0x94, 0x24, 0x30, 0x01, 0x00, 0x00, 0x68, 0x88, 0x39, 0x50, 0x00, 0x52, 0xE8, 0x62, 0x79,
+        0x09, 0x00,
+    };
+    static const unsigned char parse[7] = { 0x0F, 0xBF, 0x85, 0x4C, 0x01, 0x00, 0x00 };
+    static const unsigned char join[7]  = { 0x0F, 0xBF, 0x8D, 0x4A, 0x01, 0x00, 0x00 };
+    unsigned char *a, *p;
+    if (!(a = fix_code(24))) { lim_no_stub(); return FIX_TABLE; }
+    p = fix_call_regs(a, yard_parse);
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0042D079);
+    lim_same(0x0042CF3E, sizeof read, read, "yardmaps: the key's read into its 0x400 bytes");
+    lim_branch(0x0042CF5E, sizeof parse, parse, 0xE9, (unsigned int)(size_t)a,
+               "yardmaps: the parse, inside the string");
+    lim_same(0x0042D079, sizeof join, join, "yardmaps: the footprint box, where the parse rejoins");
+    return FIX_TABLE;
+}
+
+/* THE SAVED-GAME LOADER'S ORDER FALLBACK [DISASSEMBLED]. The order loader 0x43A420 takes an
+   order's type from its `<key>_name` (0x43C6B0, then a strcmp against the table; not found ->
+   0x43A552, "Ready", dl = 0). A record without the name falls back to its stored index and
+   walks the order table 0x512344 counting records whose +0x14 bit 0 is clear
+   (0x43A556..0x43A58F): the walk runs while the record is <= the table's end 0x512348
+   (0x43A58B `cmp eax,esi; jbe 0x43A56D`), one record past it, and an index it does not meet
+   leaves dl at the count (0x43A58F -> 0x43A598 `mov dl,cl`), 68 or 69 against a table of 68
+   records: the order's type byte, and a wild dispatch on its first tick. This exe's writer
+   always stores the name (0x43AA90..0x43AAE3), so only a foreign or damaged save reaches it.
+   The table holds 68 records for the whole process (UIPipelinesInit 0x491200's one fill), so
+   the walk's first record, examined before the bound, is always a real one.
+   THE FIX, two bytes: `jbe` -> `jb` at 0x43A58D (the end is exclusive), and the not-found jmp
+   at 0x43A58F -> 0x43A552 (EB 07 -> EB C1), the by-name branch's own "Ready". ebx and the rest
+   reach 0x43A59A as they did; only dl differs, and only for an index the table does not hold.
+   THE INVARIANT: an order's type is an index below the table's count, or 0.
+   CLASS: local. A malformed save's fate, on one machine. */
+static int fix_save_order_fallback(void)
+{
+    FIXSITE site = { 0x0043A58D, 4, { 0x76, 0xDE, 0xEB, 0x07 }, { 0x72, 0xDE, 0xEB, 0xC1 } };
+    if (!fix_match(&site, 1)) return FIX_BYTES;
+    return fix_write(&site, 1);
+}
+
+/* THE STOCKPILE BAR'S DIVIDE [DISASSEMBLED]. 0x439D20(unit), called once at 0x46B446 for the
+   bottom panel, finds the unit's first order with +0x42 bit 19 (0x80000, the weapon build),
+   reads its slot index +0x36 and progress +0x3E, the slot's weapon [unit + 0x10 + idx * 0x1C]
+   (0x439D51) and the weapon's reload word +0xE4, and divides progress * 100 by it (0x439D65
+   `idiv esi`). Nothing bounds the index to the three inline slots, and nothing tests the
+   divisor: an unarmed slot holds &Weapons[0], whose +0xE4 is 0, and so does a stockpile weapon
+   with no reloadtime. No stock weapon reaches it (every stockpile weapon's reloadtime is
+   120-180); a mod, or a remote unit whose type differs on this peer, does. Side slots past the
+   third, which the extra-weapons module keeps in its own table, are not inline slots, and the
+   engine's bar has no reader for them.
+   THE FIX: a jmp at 0x439D41 (`mov ecx,[eax+0x36]; mov eax,[eax+0x3E]`) to a stub that takes
+   0x439D6B, the function's own `return 0`, for an index above 2, a NULL weapon or a zero
+   +0xE4, and otherwise repeats the two loads and rejoins at 0x439D47 with ecx the index and eax
+   the progress. esi, pushed at 0x439D24, is free until 0x439D47 rewrites it, and 0x439D6B
+   pops it.
+   THE INVARIANT: the divide at 0x439D65 sees a non-zero divisor read from an inline slot.
+   CLASS: local. A HUD draw. */
+static int fix_stockpile_bar(void)
+{
+    FIXSITE site = { 0x00439D41, 6, { 0x8B, 0x48, 0x36, 0x8B, 0x40, 0x3E }, { 0 } };
+    static const unsigned char stub[38] = {
+        0x8B, 0x48, 0x36,                               /* mov ecx,[eax+0x36]       */
+        0x83, 0xF9, 0x02,                               /* cmp ecx,2                */
+        0x77, 0x23,                                     /* ja zero                  */
+        0x8D, 0x34, 0xCD, 0x00, 0x00, 0x00, 0x00,       /* lea esi,[ecx*8]          */
+        0x2B, 0xF1,                                     /* sub esi,ecx: idx * 7     */
+        0x8B, 0x74, 0xB2, 0x10,                         /* mov esi,[edx+esi*4+0x10] */
+        0x85, 0xF6,                                     /* test esi,esi             */
+        0x74, 0x12,                                     /* jz zero                  */
+        0x66, 0x83, 0xBE, 0xE4, 0x00, 0x00, 0x00, 0x00, /* cmp word [esi+0xE4],0    */
+        0x74, 0x08,                                     /* je zero                  */
+        0x8B, 0x40, 0x3E,                               /* mov eax,[eax+0x3E]       */
+    };                                                  /* jmp 0x439D47; zero: jmp 0x439D6B */
+    unsigned char* a;
+    if (!fix_match(&site, 1)) return FIX_BYTES;
+    if (!(a = fix_code(sizeof stub + 10))) return FIX_STUB;
+    memcpy(a, stub, sizeof stub);
+    a[sizeof stub] = 0xE9;      tagpu_detour_rel(a + sizeof stub + 1, 0x00439D47);
+    a[sizeof stub + 5] = 0xE9;  tagpu_detour_rel(a + sizeof stub + 6, 0x00439D6B);
+    fix_branch(&site, 0xE9, a);
+    return fix_write(&site, 1);
+}
+
+/* A RANGE CIRCLE OF RADIUS 1 [DISASSEMBLED]. DrawRangeCircle 0x438EA0 returns at once for
+   radius 0 (0x438EAF), takes N = (int)(r * 2pi * 0.125) segments (the doubles 0x4FD2B0 and
+   0x4FD2B8, ftol 0x4E43A0), and divides 0x10000 by N at 0x438EEE. Its guard at 0x438EDE, `jl
+   0x43904D` after `cmp ecx,ebp` (ebp 0), catches only a negative N, and radius 1 gives N = 0: a
+   divide by zero. No stock unit has a range that small; a mod does. TADR's `jle` sends N = 0
+   to 0x43904D, which draws the circle's label at the screen's corner (0, 4).
+   THE FIX: the six-byte jl becomes a jmp to `jl 0x43904D; je 0x43908F; jmp 0x438EE4`, on the
+   flags of 0x438ED8's compare (the mov at 0x438EDA leaves them). N = 0 goes to 0x43908F, the
+   epilogue radius 0 takes, with the same stack; a negative N keeps stock's path.
+   THE INVARIANT: 0x438EEE divides by N >= 1.
+   CLASS: local. A HUD draw. */
+static int fix_range_circle(void)
+{
+    FIXSITE site = { 0x00438EDE, 6, { 0x0F, 0x8C, 0x69, 0x01, 0x00, 0x00 }, { 0 } };
+    unsigned char* a;
+    if (!fix_match(&site, 1)) return FIX_BYTES;
+    if (!(a = fix_code(17))) return FIX_STUB;
+    a[0] = 0x0F; a[1] = 0x8C;  tagpu_detour_rel(a + 2, 0x0043904D);    /* jl: stock's path  */
+    a[6] = 0x0F; a[7] = 0x84;  tagpu_detour_rel(a + 8, 0x0043908F);    /* je: no circle     */
+    a[12] = 0xE9;              tagpu_detour_rel(a + 13, 0x00438EE4);
+    fix_branch(&site, 0xE9, a);
+    return fix_write(&site, 1);
+}
+
+static void patch_loader_defects(void)
+{
+    int wind = fix_wind();
+    int yard = fix_yardmap();
+    int save = fix_save_order_fallback();
+    int bar  = fix_stockpile_bar();
+    int ring = fix_range_circle();
+    tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903) %s; yardmaps parsed "
+               "inside their string (0x42CF5E) %s; the saved-game order fallback (0x43A58D) %s; "
+               "the stockpile bar's divide (0x439D41) %s; a range circle of radius 1 "
+               "(0x438EDE) %s. Counters: levels seeded at 0x%08X, yardmaps filled past their "
+               "string at 0x%08X", fix_state(wind), fix_state(yard), fix_state(save),
+               fix_state(bar), fix_state(ring), (unsigned int)(size_t)&s_windLevels,
+               (unsigned int)(size_t)&s_yardFilled);
+}
+
 void tagpu_apply_patches(void)
 {
     /* Skip the startup "installed version of Microsoft DirectX may not function
@@ -3496,6 +3882,7 @@ void tagpu_apply_patches(void)
     }
 
     patch_engine_defects();
+    patch_loader_defects();
 }
 
 /* ===== THE RAISED LIMITS (tagpu_limits.h) ===================================================
