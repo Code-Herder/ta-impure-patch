@@ -818,9 +818,10 @@ sender's order, the open question below; B4 fixes the case that needs no answer 
 peer that is not the owner. B5's queue now holds `0x4A` companions refused in state 5, not bare
 `0x09`s.
 
-**B4 BUILT AHEAD (2026-09-25, `e10201f` on its own worktree from B3's `bd5582b`; reviewed at high by
-two reviewers, fix round `c9f939b`; not landed).** The first build's numbers follow; the fix
-round's are after them. As designed above; `fix_stale_hits` in `tagpu_patches.c`. The install line reads
+**B4 LANDED 2026-09-25** on local main (`e10201f` on its own worktree from B3's `bd5582b`; reviewed
+at high by two reviewers, fix rounds `c9f939b` and `3eb0237` each reviewed again, B3's final tip
+merged and the merge reviewed on its own). The first build's numbers follow; the fix round's and
+the merged build's are after them. As designed above; `fix_stale_hits` in `tagpu_patches.c`. The install line reads
 `limits: installed 189 sites` in the raised build (176 before: fourteen rows, less A′3's `0x455F90`
 row, which B4 now owns) and `the simulation fixes' 64 sites installed` in the stock-limits one;
 `tagpu_wirecheck.on` runs the rules' 16 cases, all OK.
@@ -907,6 +908,26 @@ undecidable ones, by definition not provably stale; the owner's rule is the one 
 death, and it applied none young. The fallback and the retry did not fire: both need a block
 with no unheld free slot, which eight minutes of four kbots at a time do not reach; they rest on the
 disassembly above and the self-check's cases.
+
+*The merged build, two peers* (`ae5e632`: B4 with B3's final tip; raised ddraw.dll md5
+`f2802b871fbeb515611e3453cd04a8d1`; Town & Country through `tools/mp_lobby.sh`, `limits-tier2-p0`/`p1`,
+1 499 units a side, about 3.5 minutes of battle, both peers paused at tick 7 838 / 7 844). Install:
+`limits: installed 197 sites` (B3's 183, fifteen rows, less A′3's `0x455F90`), stale hits in the
+fail-closed table (stubs 336 of 4 096 bytes), wire robustness ARMED, the shared stubs 4 016 bytes in
+one page; the rules' 23 cases and the wire's 33 all OK; the stock-limits build `the simulation
+fixes' 72 sites installed`, `hits: slots=2501`. Every `wire:` drop counter 0 on both peers, no bare
+`0x09`/`0x0B`, and each peer's hits sent are the other's received:
+
+| | host | joiner |
+|---|---|---|
+| `0x09` sent / received | 1 500 / 1 500 | 1 500 / 1 499 |
+| `0x0B` sent / received | 9 645 / 3 049 | 3 049 / 9 645 |
+| owner applied / refused, dead | 2 922 / 0, 127 | 9 008 / 0, 637 |
+| copies: exact / real lower bound | — / 0 | — / 1 |
+
+The joiner's one missing create is the host's commander, refused in the joiner's load and
+recreated by the round robin as a real lower bound (`gate=1`, `bound=1`, `rcreate=1`) — the ghost
+B5 closes; every `0x0B` received is accounted for (3 049 = 2 922 + 127; 9 645 = 9 008 + 637).
 
 **B5 — ghost commander.**
 
