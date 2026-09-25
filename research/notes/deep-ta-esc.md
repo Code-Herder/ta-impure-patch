@@ -38,7 +38,7 @@ data/script constructs:
 | Upgradable buildings | A cloaked, stealthed, `HideDamage=1` companion **unit** built onto the parent (`corfus_upgrade.fbi`: `Init_cloaked=1; Stealth=1; DamageModifier=0`) | [VERIFIED] FBI |
 | Adjacency bonuses | Same detect-and-modify script pattern over neighbouring buildings | [VERIFIED] changelog + script names |
 | Multi-unit air transports | COB transport scripting (credits thank Zwzsg for "especially transports") | [VERIFIED] credits |
-| Surfacable nuclear subs | **TADR's** `surfacefire=1` weapon TDF flag — 12 weapon entries incl. "Sub Starburst Missile" | [VERIFIED] |
+| Surfacable nuclear subs | **TADR's** `surfacefire=1` weapon TDF flag — 11 weapon sections incl. "Sub Starburst Missile", every one a `waterweapon` | [VERIFIED] |
 | Level 3 tier | Pure unit data + build menus | [VERIFIED] |
 
 Its `TAESC.ini` is the community patch's `Settings.ini`, rebranded: every entry is a TADR knob
@@ -158,9 +158,12 @@ exactly why *"Teleporters … are scripted specifically to each version of TA:ES
 **Authored by TA:ESC:** unit data (FBI/TDF), COB scripts, models, textures, GUI, AI, maps, balance.
 Nothing else.
 
-**Consumed from the community patch** — used, not written: `surfacefire=1` (12 weapons — this *is*
-the "surfacable nuclear subs"), `nottoair` (73 uses), `veterancythresholds` +
-`veterancyaccuracybuffrate` (146 FBIs each), plus the whole TADR limit/UI stack via `TAESC.ini`.
+**Consumed from the community patch** — used, not written: `surfacefire=1` (11 weapon sections — this
+*is* the "surfacable nuclear subs", and the D-guns' underwater fire), `nottoair` (73 uses),
+`veterancythresholds` + `veterancyaccuracybuffrate` (197 FBIs each), `PreviewPieces` (15) and
+`PreviewFaceOpponent` (12), plus the whole TADR limit/UI stack via `TAESC.ini`. Counts from the
+2026-09-25 census in [the section-C evidence](tadr-port/data-keys-evidence.md#part-5-what-escalations-content-uses),
+read from the archives' raw bytes.
 
 **Written by others *for* TA:ESC on request.** Upstream `tdraw.txt` gates four features to the
 escalation build — share-abuse guard, repair-rate exploit fix, aircraft wrecks falling, 32-tile
