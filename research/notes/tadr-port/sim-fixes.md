@@ -398,38 +398,46 @@ findings acted on in `49c640c` and `5193986`). What was done, and where it devia
   by it — each message is its own receive, and the splitter advances by the size it reads from the
   packet itself.
 - **The padding's size, by disassembly of every path past the last check.** Two stretches are read
-  by engine code whose width depends on the data, and neither loops on data it reads:
-  - a dirty entry's move-class payload `[vt+0x24]`, then the next delta (16) at `0x48BA19` before
-    the delta stub checks it. The move classes' vtables (`0x4FD458`, `0x4FD488`, `0x4FD980`,
-    `0x4FD9B0`, `0x4FD9E0`; no other table's `+0x24` reaches the reader) give `0x44EFD0` (reads
-    nothing), `0x44F5C0` (1 + 2 + 3 × 32 = 99: its loop runs a 2-bit count) and `0x490A10`
-    (2 + the larger of `0x44E080`'s 8 + 32 + 16 + 16 + 16 + 96 = 184 and `0x44E9C0`'s
-    1 + 6 × 32 + 16 = 209, + 2 = 213). 213 + 16 = **229 bits**.
-  - the round robin's tail after `0x48B40E`: 16 + 8 + 8 + 2 + 1 (`0x48B4A9..0x48B557`), then 15 + 8
-    or 32 × 3 + 16 × 3 (`0x48B56B..0x48B60F`), and 32 (`0x48B6F2`): at most 211. The calls on the
-    way (`0x48B090`, `0x48AB70`, `0x47D0E0`, `0x47CC30`, `0x4827B0`) read nothing from it.
-  - the header before the entry check: 56.
-  So at most 229 bits, 29 bytes, past the last checked bit. The message's end can sit 3 bytes into
-  a dword, and the reader `0x415DC0` also loads the next dword when a read reaches the end of one
-  (`0x415E0C..0x415E3E`): 29 + 3 + 8 = 40, rounded up to **48**. A `typedef` in
-  `tagpu_patches.c` fails the build if the padding falls below that sum.
+  by engine code whose width depends on the data, and neither loops on data it reads. A dirty
+  entry's move-class payload `[vt+0x24]` is followed by the next delta (16) at `0x48BA19` before the
+  delta stub checks it; the move classes' vtables (`0x4FD458`, `0x4FD488`, `0x4FD980`, `0x4FD9B0`,
+  `0x4FD9E0`; no other table's `+0x24` reaches the reader) give `0x44EFD0` (reads nothing),
+  `0x44F5C0` (1 + 2 + 3 × 32 = 99: its loop runs a 2-bit count) and `0x490A10` (2 + the larger of
+  `0x44E080`'s 8 + 32 + 16 + 16 + 16 + 96 = 184 and `0x44E9C0`'s 1 + 6 × 32 + 16 = 209, + 2 = 213),
+  so 213 + 16 = **229 bits**. The round robin's tail after `0x48B40E` reads 16 + 8 + 8 + 2 + 1
+  (`0x48B4A9..0x48B557`), then 15 + 8 or 32 × 3 + 16 × 3 (`0x48B56B..0x48B60F`), and 32
+  (`0x48B6F2`): at most 211; the calls on the way (`0x48B090`, `0x48AB70`, `0x47D0E0`, `0x47CC30`,
+  `0x4827B0`) read nothing from it. The header before the entry check is 56. So at most 229 bits,
+  29 bytes, past the last checked bit. The message's end can sit 3 bytes into a dword, and the
+  reader `0x415DC0` also loads the next dword when a read reaches the end of one
+  (`0x415E0C..0x415E3E`): 29 + 3 + 8 = 40, rounded up to **48**. A `typedef` in `tagpu_patches.c`
+  fails the build if the padding falls below that sum.
 - **The pump's message pointer follows the buffer.** The pump `0x453D40` takes its message pointer
   once, before its loop (`0x453D90` → `[esp+0x10]`; the back edge `0x455F59` re-enters at the call
-  `0x453D94`), and every dispatcher case reads it there; nothing else writes that slot or takes its
-  address. `0x4534E0` grows the buffer when a message outgrows it (`0x453565`, `0x4535EE`: `0x4D84A0`,
+  `0x453D94`), and the dispatcher's cases read the message there; nothing else writes that slot or
+  takes its address. `0x4534E0` grows the buffer when a message outgrows it (`0x453565`, `0x4535EE`: `0x4D84A0`,
   a realloc [INFERRED: block and size in, the block out]), so after a growth that moves the block,
   every later message of the same pump call was dispatched from the freed one. The fix is the
   small one: the note re-points the pump's `[esp+0x10]` at the buffer the message was just received
   into, after checking the return address `0x453D99` (its frame — `0x4534E0`'s one caller, its one
   push, the three argument pushes — is in the spans verified at install). It is the identity when
-  the buffer did not move, and `pump` counts the times it did.
+  the buffer did not move, and `pump` counts the times it did. **Well-formed traffic does not reach
+  it**: the buffer holds 0x2000 bytes from the main menu on, before any session (MEASURED
+  2026-09-25, `main+0x2A34`), and stayed there, at the same address, through a four-peer tier-2 game
+  on every peer (`pump` 0, below). On the transport the splitter's longest fixed-length message is
+  186 bytes (code `0x20`, the table `0x512AD8` read live) and a `0x2C` is capped near 0x200 bytes by
+  its sender (`0x48B7F6`), so only a malformed message — a `0x2C` whose size field runs past 8 KB
+  inside a large packet, or an oversized raw receive — grows the buffer. That makes it a
+  malformed-input fault, B3's class; the fix was built before the measurement answered and is
+  kept for that reason.
 - **The splitter ends a packet at a message too short to advance it** (`wire_split_*`). The
   splitter walks a packet by each message's length and advances by it, so a `0x2C` whose size is 0
   keeps its counting loop (`0x4638F0..0x463947`) on one message for good, and its third walk
   (`0x463AD3..0x463B8B`) queues that message until the 512-entry queue is full. Both take the
   length at one place (`0x463939`, `0x463B33`, after the `0x2C` and table paths join); a length of
   0, or a `0x2C` below its 7-byte header, ends the split there through the engine's own end for an
-  unknown code (`0x463949`; `0x463B91`), counted (`split`). The counting pass decides how many
+  unknown code (`0x463949`; `0x463B91`), counted (`split`). The length table itself holds 0 for
+  codes 4 and `0x2B` (read live 2026-09-25), so those stop the split too. The counting pass decides how many
   messages the queuing pass `0x4639BC` takes, so that pass never reaches it. A length of 0 hangs
   stock's counting loop whatever the code, so no packet stock survives carries one, and every
   sender writes a `0x2C` with its 7-byte header: it is the identity for a well-formed packet.
@@ -546,7 +554,32 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   reached either peer through the stat stream before its `0x09`, which in the four-peer game happened
   1–3 times a peer; the length checks on that path are the delta stub's, which every dirty entry
   passed, so a four-peer rerun would add a count, not a covered check. `rcreate` counted one on the
-  joiner. The in-play heartbeat line is now about 1 430 bytes of its 1 700.
+  joiner. The in-play heartbeat line was then about 1 430 bytes of its 1 700.
+- **The padded-copy round, four peers** (`60f49db`, raised ddraw.dll md5
+  `07bc42e798d9aed808a51651fc2e6c04`, stock-limits `dca01cc3987504b337c7fbe5a93624c3`; host with an AI
+  seat + three joiners, Town & Country, `limits-tier2-p0..p3` after `tools/mp_lobby.sh`, 1 499 units
+  each, the armies ordered onto the centre; every peer paused before reading). Install **ARMED**,
+  all 21 spans stock, 22/22 predicate cases OK; the new sites and stubs disassembled from the
+  running host — `0x48B92B` → the copy, drop `0x48BAC8`, the displaced `xor esi,esi; push 8;
+  lea ecx,[esp+0x14]` then `0x48B933`; `0x463939` → `0x463949` or `and eax,0xFFFF` then `0x46393E`;
+  `0x463B33` → `0x463B91` or `mov edx,eax; and edx,0xFFFF` then `0x463B3B` — each calling the
+  function its offset in an unstripped link of the same objects names. Stubs 480 bytes, the page
+  3 984 of 4 096. **PASS**: every drop counter 0 on every peer (`09 blk 0b 0c kill 2c len stale
+  nocopy 0d split`), `dcreate` above 0 on every peer, no ErrorLog, no crash:
+
+  | peer | ticks | in `09` | `0b` | `0c` | `0d` | `2c` | dirty | create | rr | morph | dcreate | rcreate | ghost | pump | noblock 09/dirty/rr | noarr |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | host | 7873 | 4497 | 24878 | 2957 | 38488 | 17883 | 516832 | 3 | 17883 | 0 | 3 | 0 | 0 | 0 | 0/0/0 | 0 |
+  | j1 | 2125 | 4501 | 13934 | 653 | 11378 | 8583 | 195663 | 2 | 8583 | 0 | 2 | 2 | 0 | 0 | 0/0/0 | 0 |
+  | j2 | 7883 | 4506 | 14331 | 2446 | 28442 | 25742 | 519805 | 1 | 25742 | 0 | 1 | 3 | 0 | 0 | 0/0/0 | 0 |
+  | j3 | 7878 | 4506 | 29475 | 2655 | 41555 | 25749 | 516065 | 3 | 25749 | 0 | 3 | 1 | 0 | 0 | 0/0/0 | 0 |
+
+  j1's commander died at tick 2125 and `MultiCommanderDeath` ended its game (ENDMSN), as in the
+  first four-peer run; its counters stop there. Every one of 77 957 `0x2C` messages was parsed from
+  its copy, and the length bound passed every dirty entry and round-robin entry; the nine dirty
+  creates are the path the plan's ghost commander takes, each passing the delta and type checks and
+  the after-create guard. The receive buffer held 0x2000 bytes at one address from the menu to the
+  pause on every peer. The in-play heartbeat line is now about 1 470 bytes of its 1 700.
 
 **B4 — stale hits.**
 
@@ -607,6 +640,13 @@ Measurements (2026-09-25, Xvfb `:79`, own instances `b3wc`, `b3h1`, `b3j1`, `b3j
   overload (`0x406789`) (evidence Part 4 §7).
 - Where stock acquisition stops aiming a flak gun upward. B1 measured that it never aimed above
   29.6°, far from the zero band, but did not disassemble the cut-off.
+- **A wire unit index B3 does not bound.** The move-class payload parser `0x44E080` (reached from a
+  dirty `0x2C` entry through `0x490A10`, the `0x4FD9E0` class) reads a `u16` unit index at
+  `0x44E0C8..0x44E0D0` and, when it is not 0, hands `first + idx·0x118` to `0x489690` unbounded
+  (`0x44E0DE..0x44E0FF`), which reads that record's `+0xA6` and writes its `+0xA2`. Found while
+  deriving the padding; a bound there is the same local shape as B3's others (`[1, max]`, else
+  NULL, which `0x44E0DA` already passes for index 0). Not built: the owner's call whether it rides
+  B3 or a later landing.
 
 ## Corrections this plan made
 
