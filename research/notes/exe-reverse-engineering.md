@@ -8350,7 +8350,9 @@ engine's allocator (`0x4D83B0` → the CRT's `malloc 0x4E8890`) keeps none we ca
 `0x4B6BA0(buf, size)` — a four-byte checksum, `stdcall`, `ret 8` (`0x4B6C1E`), that reads exactly
 `size` bytes (`0x4B6BC2..0x4B6BF0`) — is called with that pair at `0x4B2475..0x4B2477` and
 returns to `0x4B247C`. So the arguments of that one call are the block and its length, and the
-engine itself reads every byte of it there. `0x4B6BA0` has eleven callers; `tagpu_datakeys.c`
+engine itself reads every byte of it there. They are two opens of one file, so they agree while
+the game's files hold still: a loose script rewritten by another program between `0x4BBE50` and
+`0x4BBC40` would make the engine's own checksum read past its block first. `0x4B6BA0` has eleven callers; `tagpu_datakeys.c`
 observes its entry and keeps the pair only for the call that returns to `0x4B247C`, which is how
 the ghost mask bounds every read of a script by its own block.
 

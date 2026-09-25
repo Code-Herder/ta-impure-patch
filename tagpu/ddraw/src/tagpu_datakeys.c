@@ -77,7 +77,10 @@ static void unit_clear(DkUnit* r)
    0x4B6BA0(buf, size) at 0x4B2477, `size` being 0x4BBC40's answer for the
    same path -- the same lookup 0x4BBE50 sized the block with. So (buf, size)
    at that call is the block and its length, by the engine's own contract: it
-   reads every byte of it there. DISASSEMBLED.
+   reads every byte of it there. DISASSEMBLED. The two answers are two opens
+   of one file, so they agree while the game's files hold still; a loose
+   script rewritten by another program between them would make the engine's
+   own checksum read past the block before any read of ours.
 
    Keyed by the block's address, so a pointer that did not come out of
    0x4B2450 has no length and gets no mask. Emptied at the start of every

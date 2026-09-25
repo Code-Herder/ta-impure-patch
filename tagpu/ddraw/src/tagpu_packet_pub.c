@@ -2388,7 +2388,8 @@ static int gmask_type_cmp(const void* a, const void* b)
 
 /* The cursor's type is the packet's own `build_unit_id`, under the render
    thread's own test for drawing it (cursor mode 0x0E), so every packet the
-   cursor ghost is drawn from carries that type's row. */
+   cursor ghost is drawn from carries that type's row, or the table's
+   TAGPU_PK_TRUNC_GHOSTMASK bit, on which the ghost pass draws nothing. */
 static unsigned fill_ghostmask(TAGPU_PACKET* p, unsigned* cursor, int nb)
 {
     static unsigned short types[TAGPU_PK_MAX_BUILDS + 1];
@@ -2439,7 +2440,8 @@ static unsigned fill_builds(TAGPU_PACKET* p, unsigned* cursor)
     }
     /* THE MASKS ARE NOT GATED: the cursor ghost draws whenever its lever is
        on, whatever the poll has published yet, so its row rides every packet
-       that carries its type. What that costs a session with no ghost is one
+       that carries its type (a cut table sets its bit, and the ghost pass
+       then draws nothing). What that costs a session with no ghost is one
        cached lookup a frame while a build is on the cursor. */
     e = fill_ghostmask(p, cursor, n);
     if (e > need) need = e;

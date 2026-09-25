@@ -218,7 +218,11 @@ commit can change.
 - **Not covered:** the model template has no recorded length (`0x4CB560` passes none out of
   `0x4BBE50`), so the node names the mask compares are read with a 256-character cap, the type
   bound and the level lifetime, the terms every reader of the tree has, and not against the
-  template's block. The 102 structures without a row were not each drawn; they take the exact
+  template's block. The COB's length is the engine's second open of the file, which equals the
+  block only while the file holds still (a loose script rewritten by another program during the
+  load breaks the engine's own checksum first). A packet whose mask table is cut draws no ghost
+  that frame (`maskcut=` in the heartbeat) rather than one showing its hidden pieces. The 102
+  structures without a row were not each drawn; they take the exact
   path they took before the change (no row, no bit read), which ARMSOLAR, ARMVP and CORFUS show.
   The engine also hides a piece with fewer than three vertices (`0x45AF1B`); the ghost does not,
   and such a piece should cover no pixel, since no face on it has three distinct vertices

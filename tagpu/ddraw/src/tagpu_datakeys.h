@@ -10,8 +10,8 @@
    UnitDef slot. Observers at the unit-data load's start (0x42D2E0) and the
    loader's entry keep each record to its own load, and one on the checksum
    0x4B6BA0 records each COB block's length for the mask's bounds. Installed
-   at attach for the process, byte-matched; a mismatch leaves the image
-   untouched and logs.
+   at attach for the process, each site byte-matched; a mismatch leaves that
+   site untouched, skips the sites that rest on it, and logs.
 
    The build ghost's piece mask (C1): which pieces a type's ghost hides. By
    default the pieces its COB `Create()` hides before anything else runs; with

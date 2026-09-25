@@ -4272,8 +4272,9 @@ and the COB length (`0x4B6BA0`) for the `Create()` mask.
     fold; a list that names no piece of the model is ignored and logged).
 
   The cursor's row rides every packet with a build on the cursor (mode `0x0E`, the packet's own
-  `build_unit_id`), not the builds table's poll, so the cursor ghost never draws from a packet
-  without it. The bits are in the ghost's own walk order, and **both threads call one walk,
+  `build_unit_id`), not the builds table's poll; a packet whose mask table was cut or overflowed
+  (`TAGPU_PK_TRUNC_GHOSTMASK`) draws no ghost at all that frame, counted as `maskcut=` in the
+  heartbeat, so no ghost draws with the pieces it should hide. The bits are in the ghost's own walk order, and **both threads call one walk,
   `tagpu_model_walk` (`tagpu_model3do.h`)**, so the order cannot drift. `ghost_one` applies a row
   only when its root and piece count equal the template it walked — two values compared, never
   followed — and a hidden piece takes `posed_pose`'s form: an all-zero matrix and visibility 0.
@@ -4345,9 +4346,9 @@ and the COB length (`0x4B6BA0`) for the `Create()` mask.
   Same instance, same scenario, same camera, the two DLLs swapped under `--keep-dll`.
 - **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.40), re-read on the pass's own
   30-frame poll; the armed line and the `ghost: curs= queue= drawn= built= nobake= trunc=
-  masked= maskmiss= alpha=` heartbeat log only on change / every 300 frames. `nobake`, `trunc`
-  and `maskmiss` must stay 0; `built=` and `masked=` are counts, not alarms — `masked=` is the
-  ghosts drawn with a mask row. **It needs
+  masked= maskmiss= maskcut= alpha=` heartbeat log only on change / every 300 frames. `nobake`,
+  `trunc`, `maskmiss` and `maskcut` must stay 0; `built=` and `masked=` are counts, not alarms —
+  `masked=` is the ghosts drawn with a mask row. **It needs
   `tagpu_native.on`** — the ghost draws through the unit pass's view and program — and says so:
   armed without it the log reads `ghost: off — needs tagpu_native.on (it draws through the unit
   pass)` and the pass declines. **Since 2026-09-14 it IS a play default** and carries `needs

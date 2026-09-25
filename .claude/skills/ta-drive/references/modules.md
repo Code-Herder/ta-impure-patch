@@ -206,7 +206,8 @@ tools/tacli scenario load c1 ghost-mask
 tools/tacli log c1 -g datakeys            # every key read at load, every mask as it is computed
 ```
 
-- **`maskmiss=` in the ghost heartbeat must stay 0**; `masked=` counts the ghosts drawn with a mask.
+- **`maskmiss=` and `maskcut=` in the ghost heartbeat must stay 0**; `masked=` counts the ghosts
+  drawn with a mask.
 - **A queued site's ghost shows only with the order overlay**: select the builder and hold shift
   (`keys <i> down:shift`, shield on).
 - **Give `ui click <TYPE> --page <n>` the type's own page.** Walking the pages until a click

@@ -1370,6 +1370,7 @@ static unsigned s_ghostCurs = 0, s_ghostQueue = 0, s_ghostDrawn = 0;
 static unsigned s_ghostNoBake = 0, s_ghostTrunc = 0;
 static unsigned s_ghostMasked = 0;   /* ghosts drawn with a mask row          */
 static unsigned s_ghostMaskMiss = 0; /* rows refused: another root or count   */
+static unsigned s_ghostMaskCut = 0;  /* frames skipped: the mask table was cut */
 static unsigned s_ghostBuilt = 0;    /* queue sites already under construction */
 static int   s_ghostNoDraw = 0;      /* the missing prerequisite was logged */
 
@@ -1726,12 +1727,17 @@ static void ghost_record(const TAGPU_PACKET* pk, unsigned frame_counter,
         char b[224];
         _snprintf(b, sizeof b,
                   "ghost: curs=%u queue=%u drawn=%u built=%u nobake=%u trunc=%u"
-                  " masked=%u maskmiss=%u alpha=%.2f",
+                  " masked=%u maskmiss=%u maskcut=%u alpha=%.2f",
                   s_ghostCurs, s_ghostQueue, s_ghostDrawn, s_ghostBuilt,
                   s_ghostNoBake, s_ghostTrunc, s_ghostMasked, s_ghostMaskMiss,
-                  s_ghostAlpha);
+                  s_ghostMaskCut, s_ghostAlpha);
         nlog(b);
     }
+    /* THE MASKS ARE WHOLE OR THE FRAME HAS NO GHOST. A packet whose mask table
+       was cut, or held more masked types than its cap, lacks rows for types
+       that hide pieces, and a missing row reads as "hides nothing"; so no ghost
+       draws from it rather than one drawing its hidden pieces. */
+    if (pk->truncated & TAGPU_PK_TRUNC_GHOSTMASK) { s_ghostMaskCut++; return; }
     /* the cursor: the square's own gate — mode 14, and either the band bit or
        the mouse inside the rect the engine can NAME (gather_cursor's test) —
        plus a build type the udef bound accepts.
