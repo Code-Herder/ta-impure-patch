@@ -1557,6 +1557,22 @@ description.] The `CMD_LEVEL_DEBUG = 4` run level and the `+lostype` run-level b
 No evidence was found of a separate debug *build* ever leaking, nor of a graphical
 dev console — the chat bar is the console.
 
+**Which run level the chat bar grants** `[DISASSEMBLED 2026-09-25; MEASURED the same day]`.
+A chat line starting `+` (`0x493E04`) goes to `CallInternalCommandHandler 0x417B50(text,
+level)` with **level 1, or 7 when SoftwareDebugMode bit `0x2` is set** (`main+0x37F2F`,
+`0x493E14..0x493E20`; `tacli switches <i> cheats=on`), **OR 2 when `IsCheating 0x5091CC` is
+non-zero** (`0x493E25..0x493E2F`). The dispatcher `0x4B7900` runs a matched entry's handler only
+when `runLevel & level` is non-zero (`0x4B79CD..0x4B79D9`), and otherwise a fallback handler at
+`0x51FC90` with its level at `0x51FC94` (set by `0x4B78E0`, registered at `0x4195DD` as
+`0x417890`, level 4). The tables are registered at `0x4195C4..0x4195D8` (`0x501D38`, `0x501F48`,
+`0x501FD0`, through `InitInternalCommand 0x4B7760`). Every entry of the `0x501FD0` table read
+here — `PrintWeights`, `Profile`, `Reload`, `ReloadAIProfiles`, `Save` — is level 4, so it needs
+the SoftwareDebugMode bit. **`Reload`** is `{0x5021A8 "Reload", 0x417490, 4}` at `0x5020C0`: with
+an argument (`[argv+0xD0] > 1`) it resolves the unit name (`0x488B10`), calls `0x486E80(type)`
+`[not read]` and then the one-type reload `0x42D1F0(type)` (*The level's unit-data load*,
+below). Measured: `+reload armllt` without the bit left the type's record as it was (its
+ghost mask did not recompute); with it, `+reload ppllt` re-ran the FBI loader.
+
 ## Mapped internal data structures
 
 All from TADR's `tamem.h`, guarded by `static_assert` on field offsets and `sizeof` —
@@ -7467,6 +7483,40 @@ contract — one wrong frame, never a fault. `tagpu_native.c`'s `model_root` is 
 level teardown, so a reader also has to be outside that window. That is the render thread's
 `teardown_active()` gate, and its one hole is the pre hook's timeout (§6b).
 
+### `0x42D2E0` — the level's unit-data load, the FBI loader `0x42BF40`, and the one-type reload `0x42D1F0`
+
+`[DISASSEMBLED 2026-09-25, objdump of the pristine build; the reload MEASURED the same day]`
+Read for TADR section C ([data keys](tadr-port/data-keys.html)), whose unit-key reader hooks the
+FBI loader.
+
+- **`0x42D2E0` runs on the LOADER thread.** Its one caller is `0x4918CA`, inside
+  `LoadGameData_Main 0x4917D0`, which the loader body `0x497180` calls. Its per-type loop
+  (`esi = 1` while `esi < UNITINFOCount`, `0x42D6B6` / `0x42D915`) does three things per type, in
+  this order: the FBI — its path (`0x4290F0`), its size (`0x4BBC40`) and **the FBI loader
+  `0x42BF40(path, def)` at `0x42D722`**; the model — `0x4CB560` open, `0x4CB590` parse, `0x42A140`
+  texture-match, stored to `MODEL_PTRS[esi]` at `0x42D7A2` (the section above); and the script —
+  `scripts\<name>.COB` (`0x42D8E5`) through `0x4B2450` into **`def+0x18E`** at `0x42D8F4`.
+- **`0x42BF40(path, def)`** (`sub esp,0x518`) opens the file (`0x4C2F60`) and finds `[UNITINFO]`
+  (`0x4C3410` with `0x503914`); at `0x42BF8C..0x42BF93` it takes **`ebp = def`**
+  (`[esp+0x530]`) and **`ecx = the section`** (`[esp+0x14]`), and at `0x42BF97` begins its first
+  read, `UnitName` into `def+0x20` (`0x42BFA7`). Nothing has been read from the file at
+  `0x42BF97`, and the stolen `push 0x5119B8` carries no relative operand: that is
+  `tagpu_datakeys.c`'s observer. **Two callers**: `0x42D722` (above) and `0x42D269` (below).
+- **`0x4C48C0`, the TDF string reader**, `thiscall(section, buf, key, len, dflt)`, `ret 0x10`:
+  a binary search of the section's keys with `_stricmp 0x4F8A70`. Found: `strncpy` (`0x4E4760`)
+  of `len` bytes, then `buf[len-1] = 0`, and it returns 1 — a value that fills the buffer is cut
+  silently. Absent: an **unbounded** copy of `dflt` (`0x4C4963..0x4C4988`), and it returns 0.
+- **`0x42D1F0(type)`, the one-type reload**, `stdcall`, `ret 4`. It skips type 0 and a type
+  whose def lacks the in-play flag `0x800000` at `+0x241`, opens the def array (`0x4D8780`),
+  rebuilds the FBI path and re-runs **`0x42BF40` at `0x42D269`**, frees the COB (`0x4B2540`,
+  `0x42D275`), loads it anew (`0x42D294`) into `def+0x18E` (`0x42D299`), and closes the array
+  (`0x4D8710`). The model is **not** reloaded. Its one caller is `0x4174BE` in the console
+  command `Reload` (`0x417490`, *Built-in cheat/console command surface* above), so it runs on
+  the **GAME thread**, mid-play. The freed COB is reallocated at once, so it can come back at
+  the same address: a cache keyed on the COB pointer alone would not see the reload.
+  **MEASURED 2026-09-25**: `+reload ppllt` with SoftwareDebugMode `0x2` set re-ran the FBI loader
+  (`tagpu_datakeys`' reader logged it a second time), no crash.
+
 ### `0x42DB90` — the model templates are freed here, and only here
 
 `[BINARY-VERIFIED 2026-09-08]` Called once from the teardown cascade, `0x491C21`, the first call
@@ -7642,6 +7692,33 @@ A thread record's `+0x20` points at that `+0x04` field; when the thread's `RETUR
 engine calls `(*cb)->slot0(cb, value)` (`0x4B19E2..0x4B19E5`), and when a start is *refused* on
 a full pool it calls the same with `0` at once (`0x4B0B11..0x4B0B1D`) — so a refused
 `AimPrimary` reports "not aimed" immediately, which is why the stock loop retries it.
+
+### The loaded script — `0x4B2450` `[DISASSEMBLED 2026-09-25]`
+
+`stdcall(path)`, `ret 4`, called at `0x42D8EF` (the level's load) and `0x42D294` (the one-type
+reload). It reads the file whole (`0x4BBE50`), checksums it (`0x4B6BA0` over the size
+`0x4BBC40` gives), enters it in a map at `0x51FBC0` through `0x4B2850` with the checksum at the
+entry's `+0x10` `[role INFERRED]`, and then **relocates the header in place**
+(`0x4B24A7..0x4B2527`): each offset becomes a pointer, and so does every entry of the two name
+tables:
+
+| offset | field | relocated |
+|---|---|---|
+| `+0x00` | version, 4 | — |
+| `+0x04` / `+0x08` | script count / piece count | — |
+| `+0x0C` | code length, in dwords | — |
+| `+0x10` | static-variable count | — |
+| `+0x14` | the count of the `+0x28` table's 8-byte entries | — |
+| `+0x18` | the entry-point table: one dword a script, **a code offset in dwords** | the table pointer only |
+| `+0x1C` | script names, `char*` a script | the pointer **and every entry** |
+| `+0x20` | piece names, `char*` a piece | the pointer **and every entry** |
+| `+0x24` | the code, dwords | the pointer |
+| `+0x28` | 8-byte entries, the second dword a name `[INFERRED: the sound table]` | the pointer and each entry's second dword |
+
+**Nothing checks a count or an offset**, so every one of them is file data: a reader that
+follows them bounds each first (`tagpu_datakeys.c`'s `create_hides`). The script is freed by
+`0x4B2540` and lives from the level's load to its teardown (`0x42DC3C`, zeroed at `0x42DC41`),
+or to a console `Reload` of its type.
 
 ### The eight records — `cob+0x1C + slot × 0xA4`
 
@@ -7875,6 +7952,19 @@ That last line is why a unit's flares, wakes, thrust anchors and torpedo tubes a
 without any `hide` in its script: they are one- and two-vertex marker nodes. Measured against
 all eight fixtures that dumped a pose of their own unit — every `HIDDEN` piece is either such a
 node or one the unit's `Create` hides, with no exceptions and no false positives.
+
+**How COB piece *i* comes to name primitive *i*, exactly** `[DISASSEMBLED 2026-09-25]`. The count
+`0x45AE80` is `1 + count(child) + count(sibling)`, so it includes the root's own siblings.
+`0x45AEC0(o3, node, counter)` lays the primitives out in **pre-order**: the node at `[counter]`,
+then its child's whole subtree (`[ebp+0x30]`, `0x45AF44`), then its sibling's (`[ebp+0x2C]`,
+`0x45AF63`). Then `0x45A950`'s loop (`0x45A9E3..0x45AA70`) runs over the COB's pieces: for piece
+*i* below the primitive count (`0x45A9E8`), it searches the primitives **from index *i* up** for
+the first whose node name `_stricmp`s equal to COB piece *i*'s (`0x45A9FD`), and if that is at
+*j* ≠ *i* it swaps the two whole `0x36`-byte primitives (`0x45AA1A..0x45AA51`); `0x45AF90`
+relinks the tree afterwards (`0x45AA7E`). So a COB piece whose name no node carries drives
+whatever primitive sits at its index, and two nodes of one name go to the first one found at or
+after the index. `tagpu_datakeys.c` reproduces this to find the node a `Create()` `HIDE`
+reaches; on the stock structures it equals a by-name match.
 
 ### The repose, and the window it leaves open — `0x45AC20`, `0x45AB10`, `0x45B030`, `0x45B0A0`
 

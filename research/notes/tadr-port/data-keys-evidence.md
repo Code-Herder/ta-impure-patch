@@ -194,7 +194,8 @@ tag**. `ddraw.cpp` constructs all three modules in every build.
 
 #### Class, and rule 7
 
-Load-time, on the game thread, every peer. It changes nothing by itself. Rule 7 holds by
+Load-time, on the loader thread (the weapon load `0x4918BB` is inside `LoadGameData_Main
+0x4917D0`), every peer. It changes nothing by itself. Rule 7 holds by
 construction, since stock content carries none of the keys.
 
 #### TADR's safety argument, re-checked
@@ -240,9 +241,10 @@ construction, since stock content carries none of the keys.
   same ID replaces the earlier one's tags exactly as it replaces its record.
 - **Cleared at the wipe**, in both builds: the raised build's `wpn_wipe`, and a new stock-build
   site at the same place.
-- **An ordering, not a lock.** Both the writes and every reader run on the game thread. The
-  weapon load (`0x4918BB`) completes before that level's first tick. The render thread never reads
-  the table. Part 2's reload bar would carry its bit in the frame packet instead.
+- **An ordering, not a lock.** The writes run on the loader thread, inside the level's load
+  (`0x4918BB`, in `LoadGameData_Main 0x4917D0`), and every reader on the game thread after it: the
+  load completes before that level's first in-play draw, the ordering every game-thread read of
+  the engine's own weapon array rests on. The render thread never reads the table. Part 2's reload bar would carry its bit in the frame packet instead.
 - **Load-time diagnostics, per weapon, logged:** `surfacefire` without `waterweapon` (it has no
   effect), and both `notoverwater` and `notoverland` (the weapon can never fire).
 
@@ -1194,8 +1196,9 @@ this portable: the engine's own reader answers for any key.
 #### Class, and rule 7
 
 It is the mechanism, not a rule; each key's class is its consumer's. The one sim-relevant property
-is **when** it reads: at game start, on the game thread, for every def in play, before any tick
-(`0x42D2E0` numbers and then loads each def).
+is **when** it reads: at game start, on the loader thread, for every def in play, before any tick
+(`0x42D2E0`, called from `LoadGameData_Main 0x4917D0`, numbers and then loads each def); and once
+more on the game thread for one type, at the console's `Reload` (`0x42D1F0`, read for C1).
 
 #### TADR's safety argument, re-checked
 
@@ -1709,8 +1712,10 @@ unit-def reads: `0x4A26xx` walks a 0x15B-stride GUI gadget array.
 `def+0x18E` (`0x42D8F4`). The level teardown's `0x42DB90` (called at `0x491C21`) frees it (`0x4B2540`, `0x42DC3C`) and
 zeroes it (`0x42DC41`), just after it frees the type's yardmap (`0x42DC18..0x42DC2B`).
 The spawn's COB setup `0x485D40` reads it (`0x485D64`, `0x485DA5`, `0x485DB8`). The in-memory header
-is TADR's `CobHeader` (counts, then relocated pointers to entry points, names and bytecode) [SRC
-`tamem.h:857`; the relocation is INF until `0x4B2450` is read].
+is TADR's `CobHeader`: the file's counts, then its offsets turned into pointers in place, the two
+name tables entry by entry, the entry-point table's entries left as code offsets in dwords (DIS
+`0x4B24A7..0x4B2527`, read for C1; [the engine map](../exe-reverse-engineering.html), *The loaded
+script*).
 
 ### 1. `Rotations=` and the building rotation it switches on
 
@@ -2020,8 +2025,6 @@ that may disagree with the script) and TADR's rule (a documented leak).
 
 - **The remote-peer footprint defect in TADR (§1c.4)**: the mechanism is DIS; the stamped cells on
   a second peer were not measured.
-- **Whether `0x4B2450`'s in-memory COB matches TADR's `CobHeader`** (relocated pointers). §2's scan
-  needs it read before it is written.
 - **A spare field in the 0x56-byte order** for the facing, and the order's free site.
 - **Whether the `0x2C` round-robin create (`0x48B497`) can create a structure**, and from which
   position. The heading is not in `0x48B200`, but the caller's position source was not read.

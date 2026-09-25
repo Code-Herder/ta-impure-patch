@@ -4,8 +4,8 @@
 
 Section C brings the weapon and unit keys that TADR taught the engine to read into our stack, as
 our own code, over four landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**,
-in a grill that followed [the evidence pass](data-keys-evidence.md). **Nothing is built yet.** The
-rules shared by every group are in
+in a grill that followed [the evidence pass](data-keys-evidence.md). **C1 is built**; C2, C3 and C4
+are not. The rules shared by every group are in
 [the port overview](overview.md#standing-rules-decided-2026-09-23).
 
 The keys are not a blank slate. TA: Escalation, the largest live mod, ships TADR's DLL and uses
@@ -58,8 +58,10 @@ ill-defined, and each one is written down as a finding.
   weapon's validated ID (`tagpu_limits_weapon_index`, A′3's bound), written at A′3's loader site
   `0x42E468` and cleared at the weapon wipe. Unit keys: one fixed-size record per type, indexed by
   def and valid only when its stored def pointer matches (the `def_rec` rule `tagpu_weapons` uses),
-  written at the game-start loader `0x42BF97` for every def, keyed or not. Both are written and read
-  on the game thread; the render thread reads only the frame packet.
+  written at the game-start loader `0x42BF97` for every def, keyed or not. Both are written on the
+  loader thread inside the level's load (the unit records also on the game thread, at a console
+  `Reload`) and read on the game thread after it: the ordering the engine's own weapon and def
+  arrays rest on. The render thread reads only the frame packet.
 
 ### Sync
 
@@ -151,12 +153,9 @@ against the previous build where a number can be compared. A two-peer test (`a2n
 `:71`) runs where a decision or a message crosses peers. Measurement rounds are scoped to what each
 commit can change.
 
-1. **C1 — the ghost's piece mask.** Display only, touches nothing of section B's. `Create()`'s hides
-   by default, `PreviewPieces=` as the override; the unit-key reader it needs for that one key.
-   Pictures of ARMLLT, ARMHLT, ARMAP and CORMOHO's ghosts against the finished buildings, the 105
-   structures with no hidden piece pixel-identical, and a fixture whose `PreviewPieces=base` draws
-   the base only. Reviewed at `medium`, or `high` if the design ends up with a table that both
-   threads read (CLAUDE.md).
+1. **C1 — the ghost's piece mask. Built 2026-09-25.** Display only, touches nothing of section B's.
+   `Create()`'s hides by default, `PreviewPieces=` as the override; the unit-key reader it needs
+   for that one key. How it is built is in [C1, as built](#c1-as-built) below.
 2. **C2 — the weapon keys.** The weapon-key store; `nottoair`, `nottounderwater`, `surfacefire`,
    `notoverwater`, `notoverland`, with the extra-weapons module's C paths; `nomapweaponalert`'s
    silence. Sim sites fail closed, the silence skips and logs. The fixtures include the two
@@ -170,6 +169,44 @@ commit can change.
 4. **C4 — transported explosions**, after B4 has landed its companion messages. The per-slot mark,
    the pick at `0x49B017`, the fold, the "died carried" companion, and the two-peer test that the
    blast's damage and its picture agree on both. Reviewed at `high`.
+
+## C1, as built
+
+- **The unit-key reader** (`tagpu_datakeys.c`, a `publisher` on `thread-split.allow`): an observer
+  at `0x42BF97` inside the FBI loader `0x42BF40`, where `ebp` is the def and `ecx` the FBI's
+  `[UNITINFO]` section, byte-matched at attach, skip-and-log. It runs on the loader thread at the
+  level's load and on the game thread at the console's one-type `Reload` (`0x42D1F0`). It writes
+  one record per def slot, whether or not the file has a key, so every in-play row is fresh; a
+  reader takes a row only when its stored def pointer is the def it asks about. C1 reads one key,
+  `PreviewPieces=`, through the engine's own reader `0x4C48C0` with TADR's 1024-byte buffer.
+- **The mask**, on the game thread inside the packet fill, once per type per level: `Create()`'s
+  hides read and not run, with the engine's own piece match (`0x45A950`'s pre-order and swap,
+  [the engine map](../exe-reverse-engineering.html)), or every piece `PreviewPieces=` does not
+  name. The cache is keyed by the packet's level generation, the record's serial (a `Reload` can
+  bring the COB back at the same address) and the root and COB pointers. It reaches the render
+  thread as `TAGPU_PK_GHOSTMASK`, bits in the order of `tagpu_model_walk`, the one walk both
+  threads call; the ghost applies a row only to the template root and piece count it was written
+  for. Detail: [gpu-status §2.23](../gpu-status.html).
+- **Bad values, as decided:** a value that fills the reader's buffer, a name longer than 63
+  characters (TADR compares node names cut at 63, so it could never match) and an empty list are
+  ignored at load and logged; a list that names no piece of the model is ignored when the mask is
+  computed, logged, and `Create()`'s hides apply.
+- **Measured** (`scenarios/ghost-mask.json`, `tools/datakeys_fixture.py`, the cursor ghost at
+  zoom 2 against the same tree without the change): ARMLLT, ARMAP, ARMHLT, CORINT and CORMOHO
+  change only inside their hidden pieces (34, 177, 360, 395 and 1 121 px); CORDOOM, whose four
+  hidden pieces have no faces, and ARMSOLAR, ARMVP and CORFUS, which have no row, change by 0.
+  The masks the game computed match an offline reproduction of the rule over all 126 stock
+  structures: 24 get a row, 21 of them with a hidden piece that has faces, and the engine's
+  match equals a by-name one on every stock structure. The fixture's `PreviewPieces=base` draws
+  the base alone, `" Base ,<tab>TURRET"` the base and the turret, a name no piece has falls back
+  to `Create()`'s flare, and a 64-character name is refused at load. Queued ghosts take the mask
+  as the cursor's does, and `+reload` of a keyed type re-reads the key and recomputes the mask.
+  `nobake`, `trunc` and `maskmiss` stayed 0 throughout.
+- **Not covered:** the 102 structures without a row were not each drawn; they take the exact
+  path they took before the change (no row, no bit read), which ARMSOLAR, ARMVP and CORFUS show.
+  The engine also hides a piece with fewer than three vertices (`0x45AF1B`); the ghost does not,
+  and such a piece should cover no pixel, since no face on it has three distinct vertices
+  [INFERRED, not measured].
 
 ## Handed to other groups
 
