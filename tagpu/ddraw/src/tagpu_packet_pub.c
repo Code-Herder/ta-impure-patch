@@ -429,7 +429,15 @@ static volatile unsigned s_cMfCarried;
    load having happened to finish. Every join empties the slot before it
    builds (`mapfeat_unpark`), so a second load before the first list is
    adopted replaces it -- with its own list, or with nothing if its build
-   fails -- rather than racing it. */
+   fails -- rather than racing it.
+   THE LOCK'S CONTRACT, TO THE COMPILER AS WELL AS THE CPU: taken with
+   InterlockedCompareExchange (a `lock cmpxchg`, and a full barrier as the
+   __sync builtin it expands to), released with a RELEASE store, so every
+   store to the slot made under the lock is visible before the lock reads
+   free and none of them sinks past it -- nor past the free() of the list it
+   just unhooked. Not InterlockedExchange: mingw spells that
+   __sync_lock_test_and_set, whose documented contract is acquire-only
+   (tagpu_packet.c, "ORDERING", has the same gap and the same answer). */
 static volatile LONG     s_mfLock;
 static TAGPU_PK_MAPFEAT* s_mfLoadE;       /* malloc'd by the loader; freed by whoever
                                              replaces or adopts it                     */
@@ -653,7 +661,7 @@ void tagpu_packet_pub_mapfeat_loaded(TAGPU_PK_MAPFEAT* e, unsigned n, int trunc)
     old = s_mfLoadE;
     s_mfLoadE = e; s_mfLoadN = n; s_mfLoadTrunc = trunc;
     s_mfLoadLevel = s_levelGen; s_mfLoadHave = 1;
-    InterlockedExchange(&s_mfLock, 0);
+    __atomic_store_n(&s_mfLock, 0, __ATOMIC_RELEASE);
     free(old);
 }
 
@@ -674,7 +682,7 @@ static void mapfeat_unpark(void)
     while (InterlockedCompareExchange(&s_mfLock, 1, 0) != 0) SwitchToThread();
     old = s_mfLoadE;
     s_mfLoadE = NULL; s_mfLoadN = 0; s_mfLoadTrunc = 0; s_mfLoadHave = 0;
-    InterlockedExchange(&s_mfLock, 0);
+    __atomic_store_n(&s_mfLock, 0, __ATOMIC_RELEASE);
     free(old);
 }
 
@@ -695,7 +703,7 @@ static void mapfeat_adopt(void)
         s_mfLevel = s_levelGen; s_mfHeld = 1;
         e = s_mfLoadE; s_mfLoadE = NULL; s_mfLoadHave = 0;
     }
-    InterlockedExchange(&s_mfLock, 0);
+    __atomic_store_n(&s_mfLock, 0, __ATOMIC_RELEASE);
     free(e);
     if (s_mfHeld && s_mfLevel == s_levelGen) {
         char b[160];
@@ -2630,8 +2638,13 @@ static unsigned fill_frame(TAGPU_PACKET* p, void* ctx)
     if (e > need) need = e;
     /* ---- the map's own features, until the mirror holds them: inside the
        reserve's design point with the world tables (tagpu_packet.c), so a cut
-       never reaches them -- a mirror drawn without its trees is a different
-       picture, and this table rides only a level's first packets ---- */
+       reaches them only past that point -- unit or wreck models over the 36
+       and 19 pieces it assumes, or fog grids over the front's 512 KB
+       allowance. A cut costs the mirror
+       time, never trees: the table lands whole or `mapfeat_ok` stays 0, the
+       feature pass holds no copy, the sync answers 0 and the edge stays black
+       until a packet carries the table whole. It rides only a level's first
+       packets ---- */
     e = fill_mapfeat(p, &cursor);
     if (e > need) need = e;
     /* ---- the build-orders table (the ghost pass) ---- */

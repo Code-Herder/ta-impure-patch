@@ -377,7 +377,9 @@ static int pkx_publish(PKX* m, pkx_fill_fn fill, void* ctx, int force)
        stored after the fill that is kept. The fill reports the size of the
        whole fill, not the end of the table that ran out (tagpu_packet_pub.c,
        s_fillShort), so one refill fits unless an input the render thread
-       publishes (the fx, ghost and minimap wants) changed in between.
+       publishes (the fx, ghost and minimap wants, and the feature pass's
+       tagpu_feat_mapfeat_want/_holds that fill_mapfeat reads) changed in
+       between.
 
        THE LOOP KEYS ON WHAT slot_commit COMMITTED, NOT ON WHAT IT RETURNED.
        Past the reserve it commits the whole reserve and still returns 0

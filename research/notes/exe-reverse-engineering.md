@@ -4873,7 +4873,12 @@ features are down when the mask runs, so their ANCHORS survive it, but a footpri
 that the mask reaches becomes `0xFFFD`. A saved game's features are not down yet: the loader body
 `0x497180` calls `LoadGameData_Main 0x4917D0` at `0x497581` — which reaches LoadMap at `0x4918C0`,
 and the mask with it — and only later, at `0x497B29`, the game-load routine `0x432610` that restores
-them, all on the loader thread. So **a saved feature whose footprint touches a masked cell does not
+them, all on the loader thread. That call is conditional [DISASSEMBLED 2026-09-24,
+`0x497AEF..0x497B45`]: it runs when the saved game's TDF `main+0x38D6B` is loaded (non-zero) and
+`0x4B48F0` (a `thiscall` on that TDF, after `0x4B4560("summary")`) finds no `BetweenMissions` key
+(the string at `0x504924`, `test eax,eax; jne 0x497B40`). With the key, the loader calls `0x488310`
+and `0x41D1F0` instead and restores nothing; with no TDF at all (a new game) it asks `0x435100` of
+`main+0x391E9` and, on 1, calls the same two. So **a saved feature whose footprint touches a masked cell does not
 come back from a save at all** — a stock defect. MEASURED 2026-09-24 on Two Continents: after a save
 and its load, the cells (25, 0), (5, 1), (27, 2) and (33, 2), each a tree in the TNT and on the map
 before the save, read `0xFFFD` and draw nothing (the same under two builds of the DLL). The defect
