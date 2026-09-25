@@ -11,6 +11,7 @@
 #include "tagpu_detour.h"
 #include "tagpu_log.h"
 #include "tagpu_weapons.h"
+#include "tagpu_packet.h"   /* TAGPU_PK_DESIGN_SLOTS: the stale-hit stamps' arrays */
 #include "git.h"
 
 static void plog(const char* s)
@@ -2360,8 +2361,9 @@ static int __cdecl wpn_rx_intercept(unsigned int* regs)
     return i >= 0 && i < 256 && (unsigned int)i == m[0xD];
 }
 
-/* The dispatch table's 0x05 slot (0x455F90), ahead of stock's chat handler 0x45522E, which
-   still runs and returns at once for text that starts with a zero byte (0x463CA7). A
+/* Tag 0x49 of the 0x05 receiver (hit_rx_chat, which owns the dispatch table's 0x05 slot
+   0x455F90 in both builds), ahead of stock's chat handler 0x45522E, which still runs and
+   returns at once for text that starts with a zero byte (0x463CA7). A
    companion detonates, as stock's 0x49AF90 does, the first local projectile whose target point
    is the message's, with a weapon whose index is its ID.
 
@@ -2548,7 +2550,6 @@ static int wpn_build(WPNSITES* t)
             { 0xE8, 0x43, 0x76, 0xFB, 0xFF }, { 0xE8, 0x02, 0x76, 0xFB, 0xFF } };
         static const unsigned char icptCmp[11] = { 0x8B, 0x1E, 0x8A, 0x9B, 0x0A, 0x01, 0x00, 0x00,
                                                    0x3A, 0x5F, 0x0D };
-        static const unsigned char chat[4] = { 0x2E, 0x52, 0x45, 0x00 };            /* 0x45522E */
         static const struct { unsigned int va; unsigned char was[5]; } fired[5] = {
             { 0x0049D859, { 0xE8, 0x92, 0x45, 0xFB, 0xFF } },
             { 0x0049DB4D, { 0xE8, 0x9E, 0x42, 0xFB, 0xFF } },
@@ -2609,10 +2610,7 @@ static int wpn_build(WPNSITES* t)
         *wpn_call(a, (const void*)wpn_rx_intercept, -1, 1) = 0xC3;
         fix_branch(wpn_site(t, 0x0049AFC9, 11, icptCmp, "0x0E receiver, the match"), 0xE8, a);
 
-        if (!(a = fix_code(32))) return 0;
-        wpn_then(wpn_call(a, (const void*)wpn_rx_chat, -1, 0), 0x0045522E);
-        wpn_operand(wpn_site(t, 0x00455F90, 4, chat, "0x05 receiver, the companion"), 0,
-                    (unsigned int)(size_t)a);
+        /* the 0x05 receiver is B4's in both builds: hit_rx_chat hands this tag to wpn_rx_chat */
     }
 #endif
     return !t->over;
@@ -4447,6 +4445,572 @@ static int fix_los_local(void)
     return fix_write(s, 27);
 }
 
+/* ===== STALE HITS: THE INCARNATION ON THE WIRE, AND THE TWO-TICK HOLD ======================
+   Landing B4 of research/notes/tadr-port/sim-fixes.md ("B4 DESIGN" has the argument in full;
+   the addresses are in exe-reverse-engineering.md, "Unit identity on the wire").
+
+   THE DEFECT [DISASSEMBLED]. A hit is computed on the attacker's peer against its copy of the
+   victim and sent as a 0x0B naming the victim by SLOT alone (0x489BB0: the local apply at
+   0x489C89, the send at 0x489CB9 / 0x489CCD). The owner's allocator is first-free (0x486036), so
+   a slot freed by a death is taken by the owner's next create at once, and a hit still in
+   flight lands on the new unit, on the owner and on every bystander.
+
+   THE FIX, three parts.
+   - The incarnation: per slot, the owner's GameTime at the create, made strictly increasing
+     per slot (hit_next_birth), and a copy's stamp of it: exact for a copy made from the
+     owner's create message, a LOWER BOUND ("the unit in this slot at the owner's time g0",
+     bit 31) for a copy the 0x2C made, whose own header carries g0.
+   - Containment on the wire: the 0x09 and the 0x0B travel INSIDE tagged 0x05 messages that
+     carry the stamp in the same bytes (A′3's idiom), so no loss or reordering can separate a
+     record from its stamp. A bare 0x09 or 0x0B cannot come from this build and is dropped.
+   - The hold: a slot freed at GameTime f is not taken by first-free before f + 2.
+   THE RULES: the owner applies a hit iff its unit's birth <= the hit's stamp; a bystander iff
+   both stamps are exact and equal (hit_owner_accepts, hit_bystander_accepts).
+
+   CLASS: simulation, fail closed, both builds -- a peer without it applies hits this build
+   refuses. Every site is a row of the fail-closed table. */
+
+#define HIT_TAG_CREATE  0x4A                /* outside TADR's 0x2B..0x31 and 0x60, and A′3's 0x49 */
+#define HIT_TAG_HIT     0x4B
+#define HIT_LB          0x80000000u         /* a stamp's bit 31: a lower bound, not a birth     */
+#define HIT_UNKNOWN     HIT_LB              /* "the unit in this slot at time 0 or later"       */
+#define HIT_SLOTS       TAGPU_PK_DESIGN_SLOTS
+#define HIT_MSG         0x41                /* the 0x05 length, the table 0x512AD8 + 5*4         */
+#define HIT_DELAY_MAX   512
+#define HIT_GAMETIME(ta) (*(const unsigned int*)((ta) + 0x38A47))
+#define HIT_SEND(net, m, n) (((int (__stdcall*)(unsigned int, const void*, unsigned int))0x00451DF0)((net), (m), (n)))
+
+/* the engine's slot count is clamped to TAGPU_PK_DESIGN_SLOTS (tagpu_packet.h), so every slot
+   index the engine can form is an index of these arrays */
+typedef char hit_slots_check[(HIT_SLOTS >= 10u * TAGPU_LIM_UNITS + 1u) ? 1 : -1];
+
+/* GAME THREAD (or whichever thread the engine creates, frees and dispatches on, which is the
+   unit array's own discipline); reset with the unit array at 0x4854A0 */
+static unsigned int s_hitStamp[HIT_SLOTS];   /* a local unit's birth, or a copy's stamp       */
+static unsigned int s_hitFreed[HIT_SLOTS];   /* GameTime of the slot's last free + 1; 0 never  */
+static unsigned int s_hitLocal[HIT_SLOTS];   /* local GameTime at the create: the test oracle  */
+static const unsigned char* s_hitRec;        /* the carried record, for the stub's jump        */
+static unsigned int s_hitPendIdx, s_hitPendStamp, s_hitPendArmed;
+
+/* counters for the heartbeat's hits: section; u32, one writer thread */
+static unsigned int s_hitOutCreate, s_hitOutHit, s_hitOutBytes, s_hitStockBytes, s_hitTxUnknown;
+static unsigned int s_hitInCreate, s_hitInHit, s_hitStateRefused, s_hitMalformed;
+static unsigned int s_hitApplyOwner, s_hitApplyBy, s_hitRefuseOwner, s_hitRefuseBy, s_hitDead;
+static unsigned int s_hitBare09, s_hitBare0B, s_hitHeld;
+static unsigned int s_hitCreateExact, s_hitCreateLB, s_hitCreateUnknown;
+static unsigned int s_hitYoungOwner, s_hitYoungBy, s_hitDelayed, s_hitDelayOverflow;
+
+/* TEST LEVER tagpu_dmgdelay.on=K: every outgoing hit waits until GameTime has advanced K
+   ticks and leaves at the next send opportunity (an outgoing hit, an incoming companion on the
+   game thread). 0 is off. The oracle it feeds, per receiver: a hit applied to a unit whose
+   local create is younger than K ticks. */
+static unsigned int s_hitDelayK;
+static struct { unsigned int net, due; unsigned char m[HIT_MSG]; } s_hitDelay[HIT_DELAY_MAX];
+static unsigned int s_hitDelayHead, s_hitDelayCount;
+static unsigned int s_hitTakeNotes;          /* the lever's creation trace, capped */
+
+/* ---- the pure rules; tagpu_wirecheck.on exercises them on boundary values ------------------ */
+
+static int hit_owner_accepts(unsigned int birth, unsigned int stamp)
+{
+    return !(birth & HIT_LB) && birth <= (stamp & ~HIT_LB);
+}
+
+static int hit_bystander_accepts(unsigned int copy, unsigned int stamp)
+{
+    return !(copy & HIT_LB) && copy == stamp;
+}
+
+/* freed1 = the free's GameTime + 1, 0 for never; unsigned, so a stamp from before a GameTime
+   reset (now < f) never holds */
+static int hit_held(unsigned int freed1, unsigned int now)
+{
+    return freed1 != 0 && now - (freed1 - 1u) < 2u;
+}
+
+/* The next birth in a slot: its GameTime, and past the previous one. GameTime stays below
+   2^31 (a tick at speed 20 is 1/60 s: 414 days), and each create adds at most one, so a birth
+   never reaches bit 31. */
+static unsigned int hit_next_birth(unsigned int prev, unsigned int now)
+{
+    now &= ~HIT_LB;
+    if (!(prev & HIT_LB) && now <= prev) return prev + 1u;
+    return now;
+}
+
+/* ---- the engine side --------------------------------------------------------------------- */
+
+static int hit_slot_index(const char* ta, const char* slot, unsigned int* idx)
+{
+    const char* first = ta ? *(const char* const*)(ta + 0x14357) : NULL;
+    size_t off;
+    if (!first || !slot || slot < first) return 0;
+    off = (size_t)(slot - first);
+    if (off % 0x118 || off / 0x118 >= HIT_SLOTS) return 0;
+    *idx = (unsigned int)(off / 0x118);
+    return 1;
+}
+
+static void hit_delay_flush(unsigned int now)
+{
+    while (s_hitDelayCount && (int)(now - s_hitDelay[s_hitDelayHead].due) >= 0) {
+        HIT_SEND(s_hitDelay[s_hitDelayHead].net, s_hitDelay[s_hitDelayHead].m, HIT_MSG);
+        s_hitDelayHead = (s_hitDelayHead + 1u) % HIT_DELAY_MAX;
+        s_hitDelayCount--;
+    }
+}
+
+/* In place of 0x4854A0's first two instructions, before the unit array is allocated: every
+   stamp starts unknown with the array it describes, never keyed to GameTime. */
+static void __cdecl hit_reset(unsigned int* regs)
+{
+    unsigned int i;
+    (void)regs;
+    for (i = 0; i < HIT_SLOTS; i++) s_hitStamp[i] = HIT_UNKNOWN;
+    memset(s_hitFreed, 0, sizeof s_hitFreed);
+    memset(s_hitLocal, 0, sizeof s_hitLocal);
+    s_hitPendArmed = 0;
+    s_hitDelayHead = s_hitDelayCount = 0;
+}
+
+/* At 0x486036, a FREE candidate slot of first-free (esi; the stub has tested type 0). edx's
+   low word is 0x485F50's arg 8, the requested index: 0 is first-free, and only first-free
+   holds. 1 takes the slot and stamps its birth; 0 goes on as for an occupied slot. */
+static int __cdecl hit_take(unsigned int* r)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned int idx, now;
+    if (!hit_slot_index(ta, (const char*)(size_t)r[PR_ESI], &idx)) return 1;
+    now = HIT_GAMETIME(ta);
+    if ((r[PR_EDX] & 0xFFFF) == 0 && hit_held(s_hitFreed[idx], now)) {
+        s_hitHeld++;
+        return 0;
+    }
+    s_hitStamp[idx] = hit_next_birth(s_hitStamp[idx], now);
+    s_hitLocal[idx] = now;
+    if (s_hitDelayK && s_hitTakeNotes < 20000u) {
+        /* the test's creation trace: this take, and the slot stock's first-free would have
+           taken (the block's first type-0 slot from its start, ebx) */
+        const char* b = (const char*)(size_t)r[PR_EBX];
+        unsigned int stock = idx;
+        s_hitTakeNotes++;
+        if ((r[PR_EDX] & 0xFFFF) == 0)
+            for (; b && b < (const char*)(size_t)r[PR_ESI]; b += 0x118)
+                if (!*(const unsigned short*)(b + 0xA6) && hit_slot_index(ta, b, &stock)) break;
+        tagpu_logf("enginefix: stale hits: take %u (first-free %u) at %u", idx, stock, now);
+    }
+    return 1;
+}
+
+/* At 0x486DC1, the destructor's store of type 0 (esi the slot), local and remote alike. */
+static void __cdecl hit_freed(unsigned int* r)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned int idx;
+    if (hit_slot_index(ta, (const char*)(size_t)r[PR_ESI], &idx))
+        s_hitFreed[idx] = HIT_GAMETIME(ta) + 1u;
+}
+
+/* The owner's time g0 of the 0x2C being parsed, as a lower bound. A 0x2C's creates are in its
+   sender's block (a dirty entry at +0x67 + delta, the round robin at +0x67 + GameTime % N), so
+   the block's player record is the sender, whose +0x18 0x48B963 wrote from the header's [32]
+   field before the first entry. */
+static unsigned int hit_2c_bound(const char* ta, unsigned int idx)
+{
+    const char* first = *(const char* const*)(ta + 0x14357);
+    unsigned int n = *(const unsigned short*)(ta + 0x37EE6);
+    unsigned int k;
+    const char* rec;
+    if (!n || idx == 0) return HIT_UNKNOWN;
+    k = (idx - 1u) / n;
+    if (k >= 10u) return HIT_UNKNOWN;
+    rec = ta + 0x1B63 + k * 0x14B;
+    if (*(const char* const*)(rec + 0x67) != first + (size_t)(1u + k * n) * 0x118) return HIT_UNKNOWN;
+    return HIT_LB | (*(const unsigned int*)(rec + 0x18) & ~HIT_LB);
+}
+
+/* At CreateFromNetwork's success exit 0x48634F (esi the unit, its caller's return address at
+   the site's esp + 0x1C, as at 0x4861F7). 0x4553E9 is the carried 0x09 (a bare one is dropped
+   at the dispatch slot); 0x48BA05 and 0x48B49C are the 0x2C's dirty entry and round robin. */
+static void __cdecl hit_created(unsigned int* r)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned int ret = *(const unsigned int*)(WPN_ESP_JMP(r) + 0x1C);
+    unsigned int idx, stamp;
+    if (!hit_slot_index(ta, (const char*)(size_t)r[PR_ESI], &idx)) return;
+    if (ret == 0x004553E9u && s_hitPendArmed && s_hitPendIdx == idx) {
+        stamp = s_hitPendStamp;
+        s_hitCreateExact++;
+    } else if (ret == 0x0048BA05u || ret == 0x0048B49Cu) {
+        stamp = hit_2c_bound(ta, idx);
+        s_hitCreateLB++;
+    } else {
+        stamp = HIT_UNKNOWN;
+        s_hitCreateUnknown++;
+    }
+    if (ret == 0x004553E9u) s_hitPendArmed = 0;
+    s_hitStamp[idx] = stamp;
+    s_hitLocal[idx] = HIT_GAMETIME(ta);
+}
+
+/* In place of 0x456050's `call 0x451DF0` (0x4560AE), with its signature: the unit's 0x09,
+   carried with its birth. */
+static int __stdcall hit_tx_create(unsigned int net, const unsigned char* msg, unsigned int len)
+{
+    unsigned char m[HIT_MSG];
+    unsigned int idx = msg[3] | (unsigned int)msg[4] << 8;
+    unsigned int birth = idx < HIT_SLOTS ? s_hitStamp[idx] : HIT_UNKNOWN;
+    memset(m, 0, sizeof m);
+    m[0] = 0x05;
+    m[2] = HIT_TAG_CREATE;
+    memcpy(m + 3, msg, len < 23u ? len : 23u);
+    memcpy(m + 26, &birth, 4);
+    s_hitOutCreate++;
+    s_hitOutBytes += HIT_MSG;
+    s_hitStockBytes += len;
+    return HIT_SEND(net, m, sizeof m);
+}
+
+/* In place of 0x489BB0's two `call 0x451DF0` (0x489CB9, 0x489CCD), with its signature: the
+   0x0B, carried with this peer's stamp of its copy of the victim. */
+static int __stdcall hit_tx_hit(unsigned int net, const unsigned char* msg, unsigned int len)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned char m[HIT_MSG];
+    unsigned int vidx = msg[1] | (unsigned int)msg[2] << 8;
+    unsigned int stamp = vidx && vidx < HIT_SLOTS ? s_hitStamp[vidx] : HIT_UNKNOWN;
+    memset(m, 0, sizeof m);
+    m[0] = 0x05;
+    m[2] = HIT_TAG_HIT;
+    memcpy(m + 3, msg, len < 9u ? len : 9u);
+    memcpy(m + 12, &stamp, 4);
+    if (stamp == HIT_UNKNOWN) s_hitTxUnknown++;
+    s_hitOutHit++;
+    s_hitOutBytes += HIT_MSG;
+    s_hitStockBytes += len;
+    if (s_hitDelayK && ta) {
+        unsigned int now = HIT_GAMETIME(ta);
+        hit_delay_flush(now);
+        if (s_hitDelayCount < HIT_DELAY_MAX) {
+            unsigned int t = (s_hitDelayHead + s_hitDelayCount) % HIT_DELAY_MAX;
+            s_hitDelay[t].net = net;
+            s_hitDelay[t].due = now + s_hitDelayK;
+            memcpy(s_hitDelay[t].m, m, sizeof m);
+            s_hitDelayCount++;
+            s_hitDelayed++;
+            return 1;
+        }
+        s_hitDelayOverflow++;
+    }
+    return HIT_SEND(net, m, sizeof m);
+}
+
+/* The dispatcher's type gate (0x45473F), for the type a companion carries: the same table,
+   the same state bits. */
+static int hit_gate(const char* ta, unsigned int type)
+{
+    unsigned int state = *(const unsigned int*)(ta + 0x391F1);
+    unsigned int bits = *(const unsigned int*)(size_t)(0x00512BC0u + 4u * type);
+    if (state == 5) return (bits & 2) != 0;
+    if (state == 6) return (bits & 4) != 0;
+    return (bits & 1) != 0;
+}
+
+static int hit_young(const char* ta, unsigned int idx)
+{
+    return s_hitDelayK && HIT_GAMETIME(ta) - s_hitLocal[idx] < s_hitDelayK;
+}
+
+/* 0 stock's chat; 1 done; 2 CreateFromNetwork on s_hitRec; 3 0x489CE0 on s_hitRec */
+static int hit_rx_create(const char* ta, const unsigned char* m)
+{
+    unsigned int stamp;
+    if (m[3] != 0x09) { s_hitMalformed++; return 1; }
+    if (!hit_gate(ta, 0x09)) { s_hitStateRefused++; return 1; }
+    s_hitInCreate++;
+    memcpy(&stamp, m + 26, 4);
+    s_hitPendIdx = m[6] | (unsigned int)m[7] << 8;
+    s_hitPendStamp = stamp;
+    s_hitPendArmed = 1;
+    s_hitRec = m + 3;
+    return 2;
+}
+
+static int hit_rx_hit(const char* ta, const unsigned char* m)
+{
+    const char* first;
+    const char* last;
+    const char* slot;
+    const char* pl;
+    unsigned int vidx, stamp, flags;
+    if (m[3] != 0x0B) { s_hitMalformed++; return 1; }
+    if (!hit_gate(ta, 0x0B)) { s_hitStateRefused++; return 1; }
+    s_hitInHit++;
+    if (s_hitDelayK && GetCurrentThreadId() == s_wpnGameTid) hit_delay_flush(HIT_GAMETIME(ta));
+    s_hitRec = m + 3;
+    vidx = m[4] | (unsigned int)m[5] << 8;
+    memcpy(&stamp, m + 12, 4);
+    first = *(const char* const*)(ta + 0x14357);
+    last  = *(const char* const*)(ta + 0x1435B);
+    /* an index stock refuses (0), or past the array (B3's bound at 0x489CED): theirs to drop */
+    if (!first || last < first || vidx == 0 || vidx >= HIT_SLOTS ||
+        vidx > (unsigned int)(last - first) / 0x118)
+        return 3;
+    slot = first + (size_t)vidx * 0x118;
+    flags = *(const unsigned int*)(slot + 0x110);
+    if (!(flags & 0x10000000u) || (flags & 0x4000u)) { s_hitDead++; return 3; }   /* 0x489D45 */
+    pl = *(const char* const*)(slot + 0x96);
+    if (pl && *(const unsigned int*)pl && (pl[0x73] == 1 || pl[0x73] == 2)) {     /* 0x489EC6 */
+        if (!hit_owner_accepts(s_hitStamp[vidx], stamp)) { s_hitRefuseOwner++; return 1; }
+        s_hitApplyOwner++;
+        if (hit_young(ta, vidx)) s_hitYoungOwner++;
+    } else {
+        if (!hit_bystander_accepts(s_hitStamp[vidx], stamp)) { s_hitRefuseBy++; return 1; }
+        s_hitApplyBy++;
+        if (hit_young(ta, vidx)) s_hitYoungBy++;
+    }
+    return 3;
+}
+
+/* The dispatch table's 0x05 slot 0x455F90, entered by the dispatcher's `jmp [eax*4+0x455F84]`
+   with its frame: the message at the site's esp + 0x10. */
+static int __cdecl hit_rx_chat(unsigned int* regs)
+{
+    const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
+    const char* ta = *(const char* const*)0x00511DE8;
+    if (m[1] != 0 || !ta) return 0;
+    switch (m[2]) {
+#ifndef TAGPU_LIMITS_STOCK
+    case WPN_CHAT_TAG:   wpn_rx_chat(regs); return 0;
+#endif
+    case HIT_TAG_CREATE: return hit_rx_create(ta, m);
+    case HIT_TAG_HIT:    return hit_rx_hit(ta, m);
+    default:             return 0;
+    }
+}
+
+/* ---- stubs, in B4's own page ------------------------------------------------------------- */
+
+static unsigned char* s_hitCode;
+static unsigned int   s_hitCodeUsed;
+
+static unsigned char* hit_code(unsigned int n)
+{
+    unsigned char* p;
+    if (!s_hitCode)
+        s_hitCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
+                                                 PAGE_EXECUTE_READWRITE);
+    if (!s_hitCode || s_hitCodeUsed + n > 0x1000) return NULL;
+    p = s_hitCode + s_hitCodeUsed;
+    s_hitCodeUsed += (n + 15u) & ~15u;
+    return p;
+}
+
+static unsigned char* hit_jmp(unsigned char* p, unsigned char op, unsigned int target)
+{
+    *p++ = op;
+    tagpu_detour_rel(p, target);
+    return p + 4;
+}
+
+static unsigned char* hit_jcc(unsigned char* p, unsigned char cc, unsigned int target)
+{
+    *p++ = 0x0F;
+    *p++ = cc;
+    tagpu_detour_rel(p, target);
+    return p + 4;
+}
+
+static unsigned char* hit_abs(unsigned char* p, const void* a)
+{
+    unsigned int v = (unsigned int)(size_t)a;
+    memcpy(p, &v, 4);
+    return p + 4;
+}
+
+/* E8/E9 at `va` to `target`, NOP-padded to n, into the table */
+static void hit_site(unsigned int va, int n, const unsigned char* stock, unsigned char op,
+                     const void* target, const char* name)
+{
+    lim_branch(va, n, stock, op, (unsigned int)(size_t)target, name);
+}
+
+static void hit_slot(unsigned int va, unsigned int stock, const void* target, const char* name)
+{
+    unsigned int v = (unsigned int)(size_t)target;
+    lim_add(va, 4, (const unsigned char*)&stock, (const unsigned char*)&v, name);
+}
+
+static void hit_selfcheck(void)
+{
+    struct { const char* name; int got; int want; } t[16];
+    int n = 0, bad = 0, i;
+    t[n].name = "owner: birth = stamp";     t[n].got = hit_owner_accepts(100, 100);           t[n].want = 1; n++;
+    t[n].name = "owner: older stamp";       t[n].got = hit_owner_accepts(100, 99);            t[n].want = 0; n++;
+    t[n].name = "owner: bound after birth"; t[n].got = hit_owner_accepts(100, HIT_LB | 150);  t[n].want = 1; n++;
+    t[n].name = "owner: bound before";      t[n].got = hit_owner_accepts(100, HIT_LB | 99);   t[n].want = 0; n++;
+    t[n].name = "owner: unknown, first";    t[n].got = hit_owner_accepts(0, HIT_UNKNOWN);     t[n].want = 1; n++;
+    t[n].name = "owner: unknown, later";    t[n].got = hit_owner_accepts(5, HIT_UNKNOWN);     t[n].want = 0; n++;
+    t[n].name = "owner: own stamp unknown"; t[n].got = hit_owner_accepts(HIT_UNKNOWN, 7);     t[n].want = 0; n++;
+    t[n].name = "bystander: equal";         t[n].got = hit_bystander_accepts(42, 42);         t[n].want = 1; n++;
+    t[n].name = "bystander: differ";        t[n].got = hit_bystander_accepts(42, 43);         t[n].want = 0; n++;
+    t[n].name = "bystander: hit bound";     t[n].got = hit_bystander_accepts(42, HIT_LB | 42); t[n].want = 0; n++;
+    t[n].name = "bystander: copy bound";    t[n].got = hit_bystander_accepts(HIT_LB | 42, HIT_LB | 42); t[n].want = 0; n++;
+    t[n].name = "hold: same tick";          t[n].got = hit_held(10 + 1, 10);                  t[n].want = 1; n++;
+    t[n].name = "hold: next tick";          t[n].got = hit_held(10 + 1, 11);                  t[n].want = 1; n++;
+    t[n].name = "hold: two ticks on";       t[n].got = hit_held(10 + 1, 12);                  t[n].want = 0; n++;
+    t[n].name = "hold: never / reset";      t[n].got = hit_held(0, 3) || hit_held(50 + 1, 3); t[n].want = 0; n++;
+    t[n].name = "birth: rises per slot";    t[n].got = hit_next_birth(HIT_UNKNOWN, 7) == 7 &&
+                                                       hit_next_birth(7, 7) == 8 && hit_next_birth(8, 20) == 20 &&
+                                                       hit_next_birth(20, 3) == 21;           t[n].want = 1; n++;
+    for (i = 0; i < n; i++) {
+        if (t[i].got != t[i].want) bad++;
+        tagpu_logf("enginefix: hitcheck %-26s got=%d want=%d %s",
+                   t[i].name, t[i].got, t[i].want, t[i].got == t[i].want ? "OK" : "FAIL");
+    }
+    tagpu_logf("enginefix: hitcheck %d rule cases, %d failed", n, bad);
+}
+
+static void hit_read_lever(void)
+{
+    FILE* f = fopen("tagpu_dmgdelay.on", "rb");
+    char b[16] = { 0 };
+    unsigned int k;
+    if (!f) return;
+    fread(b, 1, sizeof b - 1, f);
+    fclose(f);
+    k = (unsigned int)strtoul(b, NULL, 10);
+    s_hitDelayK = k ? (k > 3600u ? 3600u : k) : 30u;
+    tagpu_logf("enginefix: stale hits: TEST LEVER tagpu_dmgdelay.on -- every outgoing hit is "
+               "held %u ticks", s_hitDelayK);
+}
+
+static int fix_stale_hits(void)
+{
+    static const unsigned char take[10]  = { 0x66, 0x83, 0xBE, 0xA6, 0x00, 0x00, 0x00, 0x00,
+                                             0x74, 0x1D };                   /* 0x486036 */
+    static const unsigned char freed[6]  = { 0x8B, 0xAE, 0x10, 0x01, 0x00, 0x00 };
+    static const unsigned char exitCfn[5] = { 0x8B, 0xC6, 0x5F, 0x5E, 0x5D };
+    static const unsigned char alloc[8]  = { 0x83, 0xEC, 0x30, 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
+    static const unsigned char tx09[5]   = { 0xE8, 0x3D, 0xBD, 0xFF, 0xFF };
+    static const unsigned char tx0bA[5]  = { 0xE8, 0x32, 0x81, 0xFC, 0xFF };
+    static const unsigned char tx0bB[5]  = { 0xE8, 0x1E, 0x81, 0xFC, 0xFF };
+    static const unsigned char back09[5] = { 0xE9, 0x62, 0x0B, 0x00, 0x00 };  /* 0x4553E9 */
+    static const unsigned char back0b[5] = { 0xE9, 0x34, 0x0B, 0x00, 0x00 };  /* 0x455417 */
+    static const unsigned char len09[2]  = { 0x6A, 0x17 };                    /* 0x45605C */
+    static const unsigned char len0b[2]  = { 0x6A, 0x09 };                    /* 0x489CA8 */
+    unsigned char *aTake, *aFree, *aExit, *aAlloc, *aChat, *aBare09, *aBare0B, *p, *doCreate,
+                  *doHit, *jCreate, *jHit;
+
+    hit_reset(NULL);
+    hit_read_lever();
+    if (GetFileAttributesA("tagpu_wirecheck.on") != INVALID_FILE_ATTRIBUTES) hit_selfcheck();
+
+    if (!(aTake = hit_code(64)) || !(aFree = hit_code(32)) || !(aExit = hit_code(32)) ||
+        !(aAlloc = hit_code(32)) || !(aChat = hit_code(96)) || !(aBare09 = hit_code(16)) ||
+        !(aBare0B = hit_code(16))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+
+    /* 0x486036: cmp word [esi+0xA6],0; jne 0x486040; take it or go on as occupied */
+    p = aTake;
+    memcpy(p, take, 8); p += 8;
+    p = hit_jcc(p, 0x85, 0x00486040);
+    *p++ = 0x60; *p++ = 0x54;
+    p = hit_jmp(p, 0xE8, (unsigned int)(size_t)hit_take);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x85; *p++ = 0xC0;
+    *p++ = 0x61;
+    p = hit_jcc(p, 0x84, 0x00486040);
+    hit_jmp(p, 0xE9, 0x0048605D);
+
+    /* 0x486DC1: stamp the free, then stock's mov ebp,[esi+0x110] */
+    p = fix_call_regs(aFree, hit_freed);
+    memcpy(p, freed, 6); p += 6;
+    hit_jmp(p, 0xE9, 0x00486DC7);
+
+    /* 0x48634F: stamp the copy, then stock's mov eax,esi; pop edi; pop esi; pop ebp */
+    p = fix_call_regs(aExit, hit_created);
+    memcpy(p, exitCfn, 5); p += 5;
+    hit_jmp(p, 0xE9, 0x00486354);
+
+    /* 0x4854A0: reset with the array, then stock's sub esp,0x30; mov eax,[0x511DE8] */
+    p = fix_call_regs(aAlloc, hit_reset);
+    memcpy(p, alloc, 8); p += 8;
+    hit_jmp(p, 0xE9, 0x004854A8);
+
+    /* the 0x05 slot: 0 stock chat, 1 the loop, 2 the carried 0x09, 3 the carried 0x0B, each
+       entered with the return address stock's own case pushes */
+    p = aChat;
+    *p++ = 0x60; *p++ = 0x54;
+    p = hit_jmp(p, 0xE8, (unsigned int)(size_t)hit_rx_chat);
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x02;                /* cmp eax,2          */
+    *p++ = 0x74; jCreate = p++;                          /* je do_create       */
+    *p++ = 0x83; *p++ = 0xF8; *p++ = 0x03;                /* cmp eax,3          */
+    *p++ = 0x74; jHit = p++;                             /* je do_hit          */
+    *p++ = 0x85; *p++ = 0xC0;                            /* test eax,eax       */
+    *p++ = 0x61;                                         /* popad              */
+    p = hit_jcc(p, 0x84, 0x0045522E);                    /* jz stock's chat    */
+    p = hit_jmp(p, 0xE9, 0x00455F50);                    /* the loop           */
+    doCreate = p;
+    *p++ = 0x61;                                         /* popad              */
+    *p++ = 0xA1; p = hit_abs(p, &s_hitRec);              /* mov eax,[s_hitRec] */
+    *p++ = 0x8B; *p++ = 0x4C; *p++ = 0x24; *p++ = 0x14;  /* mov ecx,[esp+0x14] */
+    *p++ = 0x50; *p++ = 0x51;                            /* push eax; push ecx */
+    *p++ = 0x68; p = hit_abs(p, (const void*)0x004553E9); /* push 0x4553E9     */
+    p = hit_jmp(p, 0xE9, 0x004861D0);
+    doHit = p;
+    *p++ = 0x61;                                         /* popad              */
+    *p++ = 0xFF; *p++ = 0x35; p = hit_abs(p, &s_hitRec); /* push [s_hitRec]    */
+    *p++ = 0x68; p = hit_abs(p, (const void*)0x00455417); /* push 0x455417     */
+    hit_jmp(p, 0xE9, 0x00489CE0);
+    *jCreate = (unsigned char)(doCreate - (jCreate + 1));
+    *jHit = (unsigned char)(doHit - (jHit + 1));
+
+    /* a bare 0x09 / 0x0B: counted, and the loop goes on */
+    p = aBare09;
+    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitBare09);
+    hit_jmp(p, 0xE9, 0x00455F50);
+    p = aBare0B;
+    *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitBare0B);
+    hit_jmp(p, 0xE9, 0x00455F50);
+
+    hit_site(0x00486036, 10, take, 0xE9, aTake, "stale hits: the hold, first-free's free test");
+    hit_site(0x00486DC1, 6, freed, 0xE9, aFree, "stale hits: the free's stamp");
+    hit_site(0x0048634F, 5, exitCfn, 0xE9, aExit, "stale hits: a copy's stamp, CreateFromNetwork's exit");
+    hit_site(0x004854A0, 8, alloc, 0xE9, aAlloc, "stale hits: the reset, with the unit array");
+    hit_site(0x004560AE, 5, tx09, 0xE8, (const void*)hit_tx_create, "stale hits: the 0x09 sent carried");
+    hit_site(0x00489CB9, 5, tx0bA, 0xE8, (const void*)hit_tx_hit, "stale hits: the 0x0B sent carried");
+    hit_site(0x00489CCD, 5, tx0bB, 0xE8, (const void*)hit_tx_hit, "stale hits: the 0x0B sent carried, no attacker");
+    hit_slot(0x00455F90, 0x0045522Eu, aChat, "stale hits: the 0x05 receiver");
+    hit_slot(0x00455FA0, 0x004553DAu, aBare09, "stale hits: a bare 0x09 dropped");
+    hit_slot(0x00455FA8, 0x0045540Du, aBare0B, "stale hits: a bare 0x0B dropped");
+    lim_same(0x004553E9, 5, back09, "stale hits: the 0x09 case's continuation");
+    lim_same(0x00455417, 5, back0b, "stale hits: the 0x0B case's continuation");
+    lim_same(0x0045605C, 2, len09, "stale hits: the 0x09's length");
+    lim_same(0x00489CA8, 2, len0b, "stale hits: the 0x0B's length");
+    return FIX_TABLE;
+}
+
+/* the heartbeat's hits section (tagpu_packet_pub.c): DLL counters only. owner= and by= are
+   applied/refused; B= is the companions' bytes and stockB= what the bare messages would have
+   been; copy= counts the stamps CreateFromNetwork's exit took, by kind. */
+int tagpu_hits_format(char* buf, unsigned int cap)
+{
+    return _snprintf(buf, cap,
+                     " | hits: out 09=%u 0b=%u B=%u stockB=%u unk=%u in 09=%u 0b=%u"
+                     " owner=%u/%u by=%u/%u dead=%u gate=%u bad=%u bare 09=%u 0b=%u"
+                     " copy exact=%u bound=%u unk=%u held=%u delay=%u q=%u over=%u"
+                     " young owner=%u by=%u",
+                     s_hitOutCreate, s_hitOutHit, s_hitOutBytes, s_hitStockBytes, s_hitTxUnknown,
+                     s_hitInCreate, s_hitInHit, s_hitApplyOwner, s_hitRefuseOwner, s_hitApplyBy,
+                     s_hitRefuseBy, s_hitDead, s_hitStateRefused, s_hitMalformed, s_hitBare09,
+                     s_hitBare0B, s_hitCreateExact, s_hitCreateLB, s_hitCreateUnknown, s_hitHeld,
+                     s_hitDelayK, s_hitDelayed, s_hitDelayOverflow, s_hitYoungOwner, s_hitYoungBy);
+}
+
 static void patch_engine_defects(void)
 {
     int sort = fix_sort_buffer_end();
@@ -4469,6 +5033,7 @@ static void patch_engine_defects(void)
     int losl = fix_los_local();
     int pview = fix_projectile_view();
     int wire = fix_wire_bounds();
+    int hits = fix_stale_hits();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -4517,6 +5082,16 @@ static void patch_engine_defects(void)
               fix_state(los), fix_state(losl), fix_state(pview),
               (unsigned int)(size_t)s_losOwnRow, fn, s_fixCodeUsed,
               (unsigned int)(size_t)s_fixCode);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: stale hits %s: the 0x09 and 0x0B carried in tagged 0x05s with the "
+              "victim's incarnation (0x4560AE 0x489CB9 0x489CCD; the receiver 0x455F90; bare ones "
+              "dropped 0x455FA0 0x455FA8), a copy's stamp at CreateFromNetwork's exit (0x48634F), "
+              "the two-tick hold (0x486036 0x486DC1), reset with the unit array (0x4854A0). "
+              "Counters on the heartbeat's 'hits:' section. Stubs: %u of 4096 bytes at 0x%08X",
+              fix_state(hits), s_hitCodeUsed, (unsigned int)(size_t)s_hitCode);
     b[sizeof b - 1] = 0;
     plog(b);
 

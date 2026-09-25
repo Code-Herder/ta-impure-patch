@@ -1,0 +1,24 @@
+{
+  "format": "ta-scenario/1",
+  "description": "B4 stale hits, the victims' half: four construction kbots (ARMCK: unarmed, so the towers stand) on hold 200 world units east of b4-guns' towers, owned by the peer that applies it. Applied again every few seconds it is the churn: each apply creates into the lowest free slots of the owner's block, which are the ones the towers' kills have just freed -- the slot recycling a factory under fire produces, without a build queue (queues are outside the scenario format).",
+  "seed": 20260925,
+  "on_error": "abort",
+  "setup": {
+    "map": "Town & Country",
+    "res": "1024x768",
+    "clear_existing": false,
+    "switches": { "shootall": true, "noshake": true }
+  },
+  "groups": [
+    {
+      "id": "ck",
+      "owner": 0,
+      "at": [5185, 6983],
+      "pattern": { "kind": "grid", "cols": 2, "spacing": 32, "jitter": 2 },
+      "composition": [ { "type": "ARMCK", "count": 4 } ],
+      "facing": 270,
+      "stance": "hold"
+    }
+  ],
+  "camera": { "at": [5085, 6983] }
+}
