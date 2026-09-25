@@ -324,7 +324,7 @@ made, or its page cannot be made writable. Each of the nineteen, and why:
 | weapon IDs `0x42E468`, `0x49D280`, `0x424575`, `0x455FB8` | simulation | the `0x0F` hit flag is a wire format; in the raised build these are the raise's own rows |
 | one hit a victim an explosion `0x49A0A9`, `0x49A109`, `0x49A262`, `0x49A5CE` | simulation | who is damaged, and how much |
 | the map's last column and row `0x47CC8B`, `0x47CCA3`, `0x47CCA9` | simulation | who can be hit |
-| line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440` (fifteen sites in 22 rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps |
+| line of sight at the map's edge: `UnitInPlayerLOS`, `0x408090`, the AI probe, the order resolver `0x43F0E0`, the view player's map `0x467440`, the sight emitter `0x4825B0` (sixteen sites in 25 rows; the census is under "Line of sight at the map's edge") | simulation | what is acquired, the order resolved, what the AI probe keeps, what a unit sees |
 | line of sight in local code: the cursor picker, the build cursor's site test, the feature helper, the radar rebuild's projectile dots, five particle leaves, positional sound (27 sites) | local | a cursor, a draw, a sound |
 | the projectile pass's view `0x49BEE8` | local | a draw: whether the engine's frame shows and poses a projectile |
 
@@ -1772,16 +1772,27 @@ there while `north` hovered on station for about 7 s at 150 of 150 HP, in range 
 spotter's lit radius; when the AI dragged it south past z 84 the flak swung north and shot it within
 0.6 s.
 
-**The census** [DISASSEMBLED 2026-09-25]. The read is inlined far beyond `0x465AC0`. Every bound
-of a row against a player's grid height is a compare with `+0x84`, so the census is those compares,
-**exhaustive by construction**: a byte scan of `.text` for `3B` or `39` with a disp32 of `0x84`
-(`cmp r,[g+0x84]`, `cmp [g+0x84],r`, 47 and 3) finds 50, each at an instruction boundary. **45**
-are the read — a world point placed at `(z − y/2) >> 5` against one player's grid, then that
-player's LOS grid (`+0x7C`) or the shared mapped grid `main+0x14273` at the player's bit — and 43 of
-them are patched: 15 in the table, 28 local. Two are the dead `0x474B80`'s. Of the other five, two
-re-test a row already bounded and three compare another structure's `+0x84` with zero. A search by
-the shear's shape alone missed eight of the 45, which reuse a `y >> 1` computed far above the
-subtraction; the compare is what every copy has to make.
+**The census** [DISASSEMBLED 2026-09-25], by the data rather than by one instruction's shape. The
+read is inlined far beyond `0x465AC0`, and every row bound reads a grid's height, so the census is
+every instruction of `.text` that reads one: the player's `+0x84` (its LOS grid's rows, and the rows
+the shared mapped grid `main+0x14273` is read by), the sight grid's `main+0x14297`, and `[r+8]`
+through a pointer to either struct (`lea` of `main+0x1428F` or of `+0x7C`, `add r,0x7C`) — and every
+compare with a register loaded from one of them. **57 compares** read such a height: 50 memory
+compares with a disp32 of `0x84` (`cmp r,[g+0x84]` 47, `cmp [g+0x84],r` 3), and 7 against the sight
+grid's height (`0x482663` against `main+0x14297`, six through a pointer to `main+0x1428F`). The 13
+compares with a register loaded from some `+0x84` are other structures' counts and loop bounds
+(`0x428D48`, `0x428D6F`, `0x428DE8`, `0x47BE7D`, `0x48DFFA`, `0x48FE4E`, `0x48FEBE`, `0x48FF4D`,
+`0x48FFAF`, `0x490495`, `0x490509`, `0x490569`, `0x4905C9`); no other load of such a height reaches
+a compare (the rest are tests with zero, increments of the field and call arguments). **46** of the 57 are the read — a point
+placed at `(z − h/2) >> 5` against one player's grid, then that player's LOS grid (`+0x7C`) or the
+shared mapped grid at the player's bit — and 44 of them are patched: 16 in the table, 28 local. Two
+are the dead `0x474B80`'s. Of the other eleven, three re-test the row the sight emitter stored, three
+bound a ray's cell, two re-test a row already bounded, and three compare another structure's `+0x84`
+with zero. **A second, independent scan**, of the shear's arithmetic (a halving subtracted from a z,
+then `>> 5`), finds 38 computations, every one feeding a compare among the 46; the rest of the 46
+reuse a `y >> 1` computed far above the subtraction (`0x4658E0`'s second corner, `0x466DC0`'s dots,
+`0x473A00`). The first census, of the `+0x84` compares alone, missed the sight emitter, whose bound
+is `main+0x14297`.
 
 | compare | function | what the answer decides | grid | verdict |
 |---|---|---|---|---|
@@ -1832,6 +1843,13 @@ subtraction; the compare is what every copy has to make.
 | `0x47D44E` | the site test | as `0x47D41A`, before reading the mapped grid | mapped grid | **not a separate shear**: it follows `0x47D3B8`'s row |
 | `0x47F431` | positional sound `0x47F300` | whether a sound plays for this player | LOS grid | sheared, patched: local |
 | `0x47F476` | positional sound | as above | mapped grid | sheared, patched: local |
+| `0x4819B7` | the mapped stamp `0x481930` | re-tests the row the sight emitter stored (`0x481982`) | sight grid | **not a separate shear**: the emitter's row |
+| `0x481B0B` | the mapped stamp | bounds one ray's cell, the stored centre plus a step | sight grid | **not the shear**: a ray's clip |
+| `0x481DE4` | the removal `0x481D50` | re-tests the stored row (`0x481DB0`) | sight grid | **not a separate shear**: the emitter's row |
+| `0x481F15` | the removal | bounds one ray's cell | sight grid | **not the shear**: a ray's clip |
+| `0x482304` | the stamp `0x482270` | re-tests the stored row (`0x4822D0`) | sight grid | **not a separate shear**: the emitter's row |
+| `0x482435` | the stamp | bounds one ray's cell | sight grid | **not the shear**: a ray's clip |
+| `0x482663` | the sight emitter `0x4825B0` (below) | whether a unit stamps its sight at all, and where | sight grid (`main+0x14297`) | sheared, patched: table (`0x482615..0x48261E`) |
 | `0x48E9A8` | `cmp [ebp+0x84],ebx` in `0x48E010` [function start from the preceding padding] | another structure's `+0x84`, compared with zero | — | **not the shear**: no grid |
 | `0x49BF08` | the projectile draw pass `0x49BE60` | whether the frame shows, and poses, a projectile | LOS grid | sheared, patched: local (hand stub over `0x49BEE8..0x49BF0F`) |
 | `0x4B4FF8` | `cmp [esi+0x84],edi` at the top of `0x4B4FF0` | another structure's `+0x84`, compared with zero | — | **not the shear**: no grid |
@@ -1839,11 +1857,14 @@ subtraction; the compare is what every copy has to make.
 Readers of `main+0x14273` that no `+0x84` compare bounds — `0x40D817`, `0x466D01` and `0x47E37B`,
 which halve a coordinate to scale it; `0x4816CC`, `0x481A48`, `0x481B58`, `0x481CAA`, `0x483E69`,
 `0x484F8B`, `0x484FEE` and `0x485460` — index it by a cell or a scaled minimap coordinate, not by a
-world point's row, and `0x49C1B1` is a screen projection. **The site test's accumulator** `0x51E688`
-(zeroed at `0x47D2F4`, summed at `0x47D4E7`) is also read by AI code, `0x40A76A`, through the getter
-`0x47C770`, after `0x47DB70`, whose `[+0x22F]` path returns 1 without calling the site test — so the
-value can be one the build cursor left, a per-peer leak stock already has. The fix changes only its
-value at the north edge (the footprint's sum instead of 0), no new kind of divergence, so the site
+world point's row. `0x49C1B1`, a screen projection, reads neither it nor a grid. **The site test's
+accumulator** `0x51E688` (zeroed at `0x47D2F4`, summed at `0x47D4E7`) is also read by AI code through
+the getter `0x47C770`: at `0x40A4D6` and `0x40A4E5`, right after their own call of the site test
+(`0x40A4CD`), which passes no player, so the test reads no grid and the fix cannot change what they
+see; and at `0x40A76A`, after `0x47DB70`,
+whose `[+0x22F]` path returns 1 without calling the site test — so that value can be one the build
+cursor left, a per-peer leak stock already has. The fix changes the accumulator only
+at the north edge (the footprint's sum instead of 0), no new kind of divergence, so the site
 test stays local.
 
 **The fix** (`fix_los_shear`, simulation, fail closed; `fix_los_local` and `fix_projectile_view`,
@@ -1852,7 +1873,7 @@ local): at every patched copy, when the sheared row is outside the grid and the 
 map's edge stays unseen — TADR's margin there is a gameplay change, not a defect. **The invariant**:
 the grid is read only at a column and a row inside it; exact whenever stock's row is inside.
 
-- **Nine hand stubs** over whole blocks: the eight first found (43, 43, 49, 34, 34, 44, 40 and 40
+- **Ten hand stubs** over whole blocks: the eight first found (43, 43, 49, 34, 34, 44, 40 and 40
   bytes), each computing stock's column and sheared row and leaving at stock's read (`0x465B95`,
   `0x465C2F`, `0x465CD3`, `0x465D68`, `0x465DE0`, `0x4080C7`, `0x407F9C`, `0x49BF10`) or its "not
   visible"; and `0x43F631..0x43F654` (36 bytes), the order resolver's second read, whose point
@@ -1861,7 +1882,7 @@ the grid is read only at a column and a row inside it; exact whenever stock's ro
   dead on both exits. `ebx` is dead on both exits of the AI probe's copy (the read writes it at
   `0x407F9C`; past `0x408002` it is written at `0x40803E` or popped at `0x408081`) and of the
   projectile pass's (`0x49BF10` writes it; the other exit reaches the loop's top `0x49BEA3`, which
-  writes it before any read, or its pop at `0x49C07D`).
+  writes it before any read, or its pop at `0x49C07D`). The tenth is the sight emitter's, below.
 - **Thirty-four generic stubs** (7 in the table, 27 local) at lone row tests, `cmp r,[g+0x84]` and a
   `jae` or `jb` (8 bytes, or 12 with a near branch): the same compare and `jb` to stock's read; else
   `movsx r,<z>` — the instruction that loaded the point's z word for the shear — `sar r,5`, the
@@ -1880,9 +1901,44 @@ the grid is read only at a column and a row inside it; exact whenever stock's ro
 No branch from outside lands inside any replaced range or any compared span (a `rel8`/`rel32` scan
 of `.text`: every hit is an operand byte, and the one literal equal to a site, `0x474674`, is the
 text `"tFG"` in `.data`), and no absolute pointer into one is in the image. **Every stub counts**
-the times it takes the own row, one interlocked `LONG` per function (sixteen), the second
+the times it takes the own row, one interlocked `LONG` per function (seventeen), the second
 `enginefix:` line printing the array's address and order — the path only the fix runs, so a count
 above zero is that function's stub at work.
+
+**The sight emitter** `0x4825B0(record)` (`__stdcall`, `ret 4`) is the observer's side of the same
+defect. Its callers: `0x481836` in the all-units rebuild (after clearing every player's grid, the loop
+from `0x481796` over the unit array zeroes each unit's height byte, under `LosType` bit `0x2`, before
+emitting), `0x482824` in `0x4827B0` — which builds a unit's record on its stack: the player `+0x96`, a
+pointer to the unit's stored column and row `+0x7A`/`+0x7C`, the def's `+0x202` and `+0x170`, a
+pointer to the height byte `+0xF8`, and the unit's x, y, z (`+0x6A`, 16.16) with y raised to at least
+the sea level `main+0x1427F` plus one — itself called at `0x43DA59`, `0x464DBF`, `0x465053`,
+`0x48AAA0` and `0x48B6BF`, then `0x482868` in `0x482830`, `0x4829F4` and `0x482B5E`. Under the ray fan
+(`LosType` bit `0x4`) it takes the column `x >> 5`, a height `h` = the def's `+0x170` byte plus y's
+integer part, clamped to [0, 255], and the row `(z − h/2) >> 5` (`0x482615..0x48261E`); if the stored
+column and row are unchanged and `h` is within 5 of the height byte it returns
+(`0x48261F..0x48262E`); otherwise it removes the old stamp through `0x481D50`
+when the old height byte is non-zero and `LosType` bit `0x2` is set (`0x482634..0x482644`), stores the
+column and row (`0x48264C`, `0x482652`), and bounds them (`0x48265B`, `0x482663`): inside, it stores
+`h` in the height byte and stamps through `0x482270` (bit `0x2`) and `0x481930` (bit `0x1`); outside,
+it zeroes the height byte and stamps nothing (`0x4826A9`). So an aircraft whose sheared row leaves the
+grid near the north edge reveals nothing to its owner. The circle (bit `0x4` clear) places sight at
+its corner, `(z >> 5) − (y >> 6)` less the circle's offset (`0x4826B7`), and the stamp clips each
+row (`0x4824F8..0x482547`), so nothing there is dropped.
+
+- **The stamp and its removal read the stored words**: `0x482270` at `0x4822CD`/`0x4822D0`,
+  `0x481930` at `0x48197F`/`0x481982`, `0x481D50` at `0x481DAD`/`0x481DB0`, each re-testing the row
+  (`0x482304`, `0x4819B7`, `0x481DE4`); and the height byte decides whether there is a stamp to
+  remove. Nothing else writes the stored words in the ray-fan mode: the create writes 0
+  (`0x485C0A`, `0x485C0E`), a saved game's restore writes back the saved pair and height byte
+  together (`0x48724D`, `0x4872BF`), and the circle's placements (`0x4818C4`, `0x482766`,
+  `0x48277C`, `0x4828EC`, `0x482A7C`, `0x482BE8`) run only with bit `0x4` clear.
+- **The fix** (in `fix_los_shear`, the table): the row is fixed once, at `0x482615`, before it is
+  compared with the stored one and stored — so every stamp and its later removal use one row by
+  construction. The stub keeps stock's order of work and changes only `edi`: it saves `eax` (the
+  height difference `0x48262B` reads), computes the own row `z >> 5` from `edi` before the shear,
+  then stock's sheared row; if that is outside `main+0x14297` and the own row inside, it takes the
+  own row and counts; then `movsx ecx,[edx]` as stock and back to `0x48261F`. The point's bytes
+  `0x4825D4..0x482614` and the bound it mirrors `0x48265B..0x48266A` are compared with the patch.
 
 **Two properties of the projection** follow from the same arithmetic. The cursor picker's point is
 not the hovered unit but the world point under the pointer (`main+0x2CAA`, filled by `0x484B50`),
@@ -1922,6 +1978,21 @@ LOS grid inline), the AI probe `0x407E90`, the order resolver (the AI's targets 
 units, well inside the grid, and the human could not point at `north`), the cursor picker (above),
 the site test, the feature helper, positional sound, and the leaves `0x473590`, `0x473A00` and
 `0x4745E0`.
+
+**MEASURED, the sight emitter** (`scenarios/b1-los-emit.json` on Two Continents, True line of sight:
+a human ARMATLAS held by patrol at (400, 40), altitude 175, an AI CORSOLAR below it, the human's other
+unit far south; the human's LOS map, 336 × 400 cells, read through the player record). Previous build
+(`d87e506`): the atlas stores column 12, row −2, height byte 0, and rows 0–9 of the map are all 0 —
+the atlas sees nothing. Build `3aaee36`: column 12, row 1 (its own), height byte 183, and 111 lit
+cells in rows 0–9, the ray fan; the table installs 179 sites (the stock-limits build, to the menu:
+53), every one of the 44 patched sites reads back from the running process as intended, and the
+emitter's counter read 747. **Pairing**: the atlas then shuttled twelve times between z 250 and z 30
+(the stored row moving between stock's in-bounds rows and the own row the fix takes) and was sent to
+z 1100; with it at z 1055, rows 0–13 were all 0 and no cell of the map held 200 or more — a removal
+without its stamp would wrap a cell's count below zero, a stamp without its removal would leave the
+edge lit. A second game with four atlases, five ARMPW and an ARMFLEA shuttling by the north edge for
+about a minute, then sent south, left lit only columns 16–29 of rows 0–8, the ARMFLEA's own stamp (it
+did not move: stored at column 24, row 0, stock's row), and no cell at 200 or more.
 
 ## Built-in cheat/console command surface
 

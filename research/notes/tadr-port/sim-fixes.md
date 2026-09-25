@@ -155,10 +155,11 @@ the plan below:
   what the routine keeps depends on it, and the projectile draw pass's (`0x49BEE8`, `0x49BE60`) is a
   local fix, `fix_projectile_view` — the pass still runs, the engine's frame being the golden
   source.
-- **Changed: the defect is the read, wherever it is inlined — 45 copies, not four.** Every bound of
-  a row against a player's grid height is a compare with `+0x84`; `.text` holds 50, and 45 are the
-  read, each the same world point against one player's LOS or mapped grid (a search by the shear's
-  shape alone found 37: eight reuse a `y >> 1` computed far above). Beyond the eight above: the order resolver `0x43F0E0` (six) and the view player's map build
+- **Changed: the defect is the read, wherever it is inlined — 46 copies, not four.** The census is
+  by the data: every compare in `.text` with a grid's height — a player's `+0x84`, the sight grid's
+  `main+0x14297`, or `+8` through a pointer to either — holds 57, and 46 are the read, each a world
+  point sheared by its altitude against one player's grid (a search by the shear's shape alone finds
+  38: eight reuse a `y >> 1` computed far above). Beyond the eight above: the order resolver `0x43F0E0` (six) and the view player's map build
   `0x467440` (two, which mark units seen for the acquisition) join the table; the cursor picker
   `0x43E490` (six), the build cursor's site test `0x47D2E0` (one), the feature helper `0x4658E0`
   (four), the radar rebuild `0x466DC0`'s projectile dots (four), the particle leaves `0x473590`,
@@ -168,8 +169,17 @@ the plan below:
   generic stub built from the site's stock bytes; the order resolver's second read, whose point
   register stock overwrites first, is a hand stub over its block. Every stub counts its own rows per
   function, an interlocked `LONG` each. What each generic stub relies on is compared: the bytes from
-  its z load through its row test (the radar's whole loop for its dots). 176 sites in the raised
-  build, 50 in the stock-limits build (MEASURED from the log lines).
+  its z load through its row test (the radar's whole loop for its dots). 179 sites in the raised
+  build, 53 in the stock-limits build (MEASURED from the log lines).
+- **Added: the observer's side, the sight emitter `0x4825B0`.** Under the ray fan (True and
+  Permanent line of sight) a unit's sight is stamped from the same sheared row, stored in the unit
+  and bounded against the sight grid; off it, the unit stamps nothing, so an aircraft by the north
+  edge revealed nothing to its owner (MEASURED on the previous build: stored row −2, rows 0–9 of the
+  owner's map unlit). A census keyed on `+0x84` alone missed it, which is why the census is now by
+  the data. The table's hand stub fixes the row once, before stock compares it with the stored row
+  and stores it, so the stamp and its later removal — both read the stored words — use one row by
+  construction; measured paired (twelve crossings of the boundary, the edge rows all 0 afterwards,
+  no count wrapped).
 - **Added: a bound on the sort bucket** (`0x47CCA9`). Settling the plan's question showed the bucket
   is indexed from the unit's position with no bound: inside the grid for every footprint of width 1
   or more once `jg` holds, one past it for width 0, and stock already reaches one before it for
@@ -186,7 +196,7 @@ the plan below:
   The weapon IDs join the table in the stock-limits build too.
 - **The install.** One table, `tagpu_limits_install`, in both builds: it now refuses two rows over
   one byte as well, and the report says "engine limits and fixes" ([the failure
-  report](raised-limits.md#the-failure-report)). 176 sites in the raised build (130 + 46), 50 in the
+  report](raised-limits.md#the-failure-report)). 179 sites in the raised build (130 + 49), 53 in the
   stock-limits build.
 - **Measured** on the new build, one peer, the raised and the stock-limits builds alike where both
   ran: every CORFLAK of `b1-victim-units` lost one hit (the unit-repeat counter 48, the 16 past the
