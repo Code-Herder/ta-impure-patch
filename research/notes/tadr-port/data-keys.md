@@ -1,0 +1,185 @@
+# C. New data keys — the plan
+
+## Summary
+
+Section C brings the weapon and unit keys that TADR taught the engine to read into our stack, as
+our own code, over four landings. The owner decided every choice below on 2026-09-25 **[DECIDED]**,
+in a grill that followed [the evidence pass](data-keys-evidence.md). **Nothing is built yet.** The
+rules shared by every group are in
+[the port overview](overview.md#standing-rules-decided-2026-09-23).
+
+The keys are not a blank slate. TA: Escalation, the largest live mod, ships TADR's DLL and uses
+`nottoair` on 73 weapons, `surfacefire` on 12, and both veterancy keys on 146 unit files
+([deep-ta-esc](../deep-ta-esc.md)). So each key is a contract with mod authors that already exists,
+and C keeps it.
+
+Four findings shaped the plan:
+
+- **The lobby's sync already covers the keys' content.** A unit's sync value is a checksum of its
+  whole FBI file, and a weapon section's is a checksum of its raw text, unknown keys included. Two
+  players whose files differ only in a C key lose that type from the game, exactly as for any other
+  edit. Only a key that names *another* file's content needs a fold: `TransportedExplodeAs=` and
+  `TransportedSelfDestructAs=`.
+- **Every key is decided on one peer.** Targeting and firing run on the unit's owner, a hit's
+  damage on the firer's peer, a death explosion on the dying unit's owner. A peer without a key
+  plays different rules for its own units without desyncing anyone: the case rule 3 exists for.
+- **TADR's documentation and its code disagree for three keys**, and in each case the code does
+  more than the documentation says. `nottoair` blocks acquisition only. `surfacefire` also engages
+  aircraft. `nomapweaponalert` deletes the whole hit where it promises to silence an alert.
+- **Several of TADR's designs fail by construction.** Its `surfacefire` is built from jumps between
+  the engine's own branch targets and froze the game once. Its terrain gate skips the per-tick
+  target read and reopens the stale-target class. Its veterancy cap makes a unit immortal, even to
+  self-destruct. Its transported explosions hold a passenger list that expires by timing. And
+  **our own build ghost shows pieces a building's `Create()` script hides, on 21 of the 126 stock
+  structures.**
+
+## Decisions
+
+### The contract
+
+**TADR's key names and meanings.** Same names, same defaults, same meaning, so content written for
+TADR plays the same here. **Where TADR's documentation and its code disagree, the documentation is
+the meaning, unless real content relies on the code**; that case follows the code, and the
+divergence is recorded. A deviation is made only where TADR's meaning is itself unsafe or
+ill-defined, and each one is written down as a finding.
+
+### How C keys are held
+
+- **Installed at attach, always, in both builds** (`ddraw.dll` and `ddraw-stocklimits.dll`). TADR
+  installs a key's hooks the first time a mod uses it; rule 2 writes every patch once, at attach.
+- **A key that changes the simulation fails closed; a display key skips and logs**, by section B's
+  test: fail closed when a peer without it would play different rules for its units or compute
+  different shared state; a difference only in a picture, a message or a crash is local. No runtime
+  opt-out (rule 4).
+- **Stock content runs stock's bytes, by construction.** Each store carries a "has this key" bit per
+  weapon or per type. A hook whose bit is clear runs the engine's own instructions, so rule 7 holds
+  by construction, not by equal arithmetic. No retail weapon or unit carries any C key.
+- **Two stores, both bounded by construction.** Weapon keys: one byte a weapon, indexed by the
+  weapon's validated ID (`tagpu_limits_weapon_index`, A′3's bound), written at A′3's loader site
+  `0x42E468` and cleared at the weapon wipe. Unit keys: one fixed-size record per type, indexed by
+  def and valid only when its stored def pointer matches (the `def_rec` rule `tagpu_weapons` uses),
+  written at the game-start loader `0x42BF97` for every def, keyed or not. Both are written and read
+  on the game thread; the render thread reads only the frame packet.
+
+### Sync
+
+**A mismatch in a key is caught exactly as stock catches any edit: the type silently leaves the
+game on both peers.** C adds only the folds it needs, for the two keys that name another weapon,
+into `CRC_weapons` at `0x42B019`, with a mix distinct from stock's terms. A file without the key
+folds nothing, so stock content syncs exactly as today. A visible mismatch report is TADR's CRC
+report, a group E feature.
+
+### Bad values
+
+**A malformed or out-of-range value is treated as absent and logged**: the type or weapon plays
+stock for that key, and the log names the file, the key and the reason, once per type. A list is
+accepted whole or not at all: no partial lists, no token skipping, no clamping. The sync fold uses
+what the game will play.
+
+### Scope
+
+C plans the keys that are the whole feature. **Keys that only switch on a group D feature go with
+that feature:** `reloadbar=` with the reload bars, `Rotations=` with building rotation. The
+`Preview*` keys stay in C because our build ghost already exists. The evidence for the D items is
+kept in the evidence pass.
+
+### The items
+
+- **`nottoair`: the weapon never targets or fires at a flying unit.** A verdict filter on the
+  can-engage test `0x49ABB0` (the engine's own airborne test, `+0x110 & 3 == 2`), the order action
+  refusing it where stock refuses a `toairweapon` (`0x43F1D4`), and at the fire gate a held target
+  that has taken off is dropped as `0x48A1E0` drops a dead one. Our table, not TADR's bit 31.
+- **`nottounderwater`: the same filter against a target whose top is at or below sea**, and the order
+  action's submerged branch (`0x43F21B`). On a non-water weapon it is the identity: stock already
+  refuses those targets.
+- **`surfacefire`: a water weapon may engage surface units, never aircraft.** Inside the same
+  filter, a water-path rejection becomes stock's own range test, so no ordering between flags can
+  loop; the order action's hover refusal (`0x43F24F`); guidance (`0x49B9EB`). TADR's can-aim hook
+  is not ported. On a weapon without `waterweapon`: see [open questions](#open-questions).
+- **`notoverwater` / `notoverland`: the gate sits at `0x49E1FD`, after the per-tick target read.**
+  The weapon keeps reloading and spends nothing, and a dead target is still dropped every tick, so
+  B4's two-tick hold keeps its meaning. Off the map the weapon is not gated, as TADR.
+- **Every weapon flag also applies to slots 3..N.** `tagpu_weapons.c` runs those slots in C
+  (`my_CheckUnitWeapon`, `my_AutoAim`), and exactly one module owns `0x49ABB0`'s entry, decided at
+  attach.
+- **`nomapweaponalert`: a silence, not a deletion.** For a hit with no attacker, a weapon kind, and
+  the level's meteor weapon carrying the key with default damage 0: no "Under Attack"
+  (its one site `0x4071D8`, and `my_Retaliate`), no alarm, no blink of the hit unit's minimap dot,
+  and the loader sets the weapon's `noradar` bit so its projectile draws no dot. The hit is applied
+  exactly as stock applies it. Display only.
+- **Veterancy: TADR's levels, bounded per effect.** Levels are the count of thresholds at or below
+  the kill count (u16, as stock). Damage taken: up to 25 levels for weapon hits, as TADR documents,
+  so a unit at 25 takes no weapon damage; **a kill-outright call (30 000 or more) uses stock's level,
+  so self-destruct, defeat and a dying transport kill every unit stock kills**. Damage dealt:
+  saturated at 32 767 for keyed types. Reload: up to 16 levels, the largest with a positive
+  multiplier. Accuracy: `kills / rate`, 0 = off. Capture: both formulas (`0x4043D8` and `0x438650`,
+  which TADR misses), the level capped at stock's own maximum, 13 107. The panel shows "VetN" on
+  every unit, as TADR. Our C copy of the reload formula in `tagpu_weapons.c` takes the same level.
+- **Transported explosions: carried at death, decided inside the death itself.** A per-slot byte
+  set and consumed within one death: carried when the transporter link `+0x86` is set before the
+  detach (`0x4867BA`), or when the death's kind is 6, which only the cargo loop passes; a passenger
+  already dying when its transport dies, or of a self-destructing transport, is marked in the cargo
+  loop on its owner's peer, **and the owner sends "died carried" in a companion message beside the
+  passenger's `0x0C`**, so every screen draws the same blast. Names resolved once at load; the fold
+  above.
+- **The ghost: the hides of `Create()` by default, `PreviewPieces=` as the override.** At level load,
+  on the game thread, `Create()`'s prologue is read, not run, with `tools/ta3do`'s conservative rule
+  (it stops at the first opcode whose length is not certain; every operand bounded by the COB's own
+  counts). The result is a per-type mask in the ghost's own walk order, computed by the same walk
+  `ghost_pieces` uses, carried to the render thread through the packet, and applied only when its
+  piece count matches. No file change is needed for stock content.
+- **`PreviewObject3D=`: parked** until a mod the owner plays uses it. **`PreviewFaceOpponent=`: waits
+  for rotation**; its premise needs a COB getter no stack here implements, and TADR's version reads
+  fogged enemy positions.
+
+## The landings
+
+Each landing merges main before its review, lands its documentation before its review, and is
+reviewed in a dedicated read-only context. Sites are DIS in [the evidence](data-keys-evidence.md);
+each landing re-reads them before writing.
+
+**The evidence bar.** A key is shown working on a generated fixture (`tools/weaponids_fixture.py`
+is the pattern: a `.ufo` of clones built in a scratch folder, never committed) on the new build.
+Stock content is shown unchanged: every gate counter stays 0 through a skirmish on retail content,
+against the previous build where a number can be compared. A two-peer test (`a2net0`/`a2net1` on
+`:71`) runs where a decision or a message crosses peers. Measurement rounds are scoped to what each
+commit can change.
+
+1. **C1 — the ghost's piece mask.** Display only, touches nothing of section B's. `Create()`'s hides
+   by default, `PreviewPieces=` as the override; the unit-key reader it needs for that one key.
+   Pictures of ARMLLT, ARMHLT, ARMAP and CORMOHO's ghosts against the finished buildings, the 105
+   structures with no hidden piece pixel-identical, and a fixture whose `PreviewPieces=base` draws
+   the base only. Reviewed at `medium`, or `high` if the design ends up with a table that both
+   threads read (CLAUDE.md).
+2. **C2 — the weapon keys.** The weapon-key store; `nottoair`, `nottounderwater`, `surfacefire`,
+   `notoverwater`, `notoverland`, with the extra-weapons module's C paths; `nomapweaponalert`'s
+   silence. Sim sites fail closed, the silence skips and logs. Reviewed at `high`.
+3. **C3 — the unit-key store and veterancy.** Every effect site and the panels, the fold site C4
+   will use, the saturation for keyed types. It measures what the evidence left open: kill counts
+   equal on two peers after a paused fight, and whether a loaded saved game runs `0x42D2E0` with
+   its keys. Reviewed at `high`.
+4. **C4 — transported explosions**, after B4 has landed its companion messages. The per-slot mark,
+   the pick at `0x49B017`, the fold, the "died carried" companion, and the two-peer test that the
+   blast's damage and its picture agree on both. Reviewed at `high`.
+
+## Handed to other groups
+
+- **Group D:** building rotation with `Rotations=`, the per-facing `PreviewPiecesS/E/N/W=` and
+  `PreviewFaceOpponent=` (about 25–30 sites, a wire field, two DLL tables; TADR's version fails by
+  construction five ways: [evidence Part 4 §1](data-keys-evidence.md#1-rotations-and-the-building-rotation-it-switches-on));
+  the reload bars with `reloadbar=` (the engine's stored reload recorded where it is made, drawn in
+  our marker pass: [evidence Part 2 §2](data-keys-evidence.md#2-reloadbar)). Their questions are
+  recorded there for D's plan.
+- **Section B, as B7, measured first:** a hit above 32 767 wrapping the HP word; kill-outright
+  sparing a veteran above 24 000 HP (a vet-5 `CORKROG` survives its own self-destruct, INF); the
+  NULL read at `0x4673B1` for an attacker-less targetable projectile out of sight; whether a meteor
+  hits once per peer in a network game. B's plan page records them when that branch next lands.
+
+## Open questions
+
+- **`surfacefire` on a weapon without `waterweapon`.** The documentation defines it for water
+  weapons; TADR's code also lets a non-water weapon skip the firer-above-water check in its can-aim
+  hook. Escalation names 12 `surfacefire` weapons, one a "Sub Starburst Missile". If they are not
+  water weapons, the documentation rule's exception applies (real content relying on the code). A
+  census of Escalation 10.2.0's files settles it.
+- **`PreviewObject3D=`** stays parked unless the same census finds it in use.
