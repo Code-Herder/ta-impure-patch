@@ -284,7 +284,8 @@ from B1's tip at the time), awaiting its review; not landed.** What was built, a
 from the plan below:
 
 - **Built as planned:** the wind and the yardmaps as rows of the fail-closed table (four and three
-  rows: 168 sites in the raised build), and the three local fixes, each checked and skipped alone.
+  rows: 168 sites in the raised build and 42 in the stock-limits build, both MEASURED at launch),
+  and the three local fixes, each checked and skipped alone.
   The engine map's *The wind*, *A yardmap parsed past its string*, *The saved-game loader's order
   fallback*, *The stockpile bar's divide* and *A range circle of radius 1* have the disassembly.
 - **The host is found by its record, not through the lobby's player info.** It is the active
