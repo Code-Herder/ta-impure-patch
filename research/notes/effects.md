@@ -176,14 +176,17 @@ Armed by `tagpu_fx.on` (tokens `log`, `nolines`, `nomodels`, `nosprites`, `noexp
   pass is drawing, so neither shows a frame's effects without the other. The unit pass never
   refuses or stands down for an effect — models it cannot carry (past the run budget, or
   buffers it cannot allocate) are dropped and its units drawn, and that frame shows no
-  effects. It is asked before the gather whether this frame's models can be drawn
-  (`modelsOn`, `tagpu_vk_unit_fx_ready`), and on a no only the records that carry a model
-  are taken back and every other effect draws: a no when it has refused or has no effects
-  pipeline, when it did not draw the last hand-over it took, and when the frame's forecast
-  stands it down — cast shadows without a linear depth filter, draws the hand-over will not
-  carry, a fog grid it could not carry, the scaffold armed. So those stand-downs cost no
-  frame of effects, and any other costs the frame it begins on
-  ([gpu-status](gpu-status.html) §2.89 has the one residual, a view of models with no unit).
+  effects — so it then owes that share, and until every slot holds it the frames after take
+  back only their model records. It is asked before the gather whether this frame's models
+  can be drawn (`modelsOn`, `tagpu_vk_unit_fx_ready`), and on a no only the records that
+  carry a model are taken back and every other effect draws: a no when it has refused or has
+  no effects pipeline, when it did not draw the last hand-over it took, while it owes a
+  models' share, and when the frame's forecast stands it down — cast shadows without a
+  linear depth filter, draws the hand-over will not carry, a fog grid it could not carry,
+  the scaffold armed, a texel mirror not there yet. So those stand-downs cost no frame of
+  effects (the frame after uncarried draws stop takes its models back once more), and any
+  other costs the frame it begins on ([gpu-status](gpu-status.html) §2.89 has what a view
+  of models with no unit costs).
 - **The paint order is a sequence of keys.** The engine paints with no depth: every
   projectile record in turn (shadow, lines, model or sprite), the debris, every explosion's
   flash, then each explosion's body and sprite. Model `k` of the frame takes `encFx +
@@ -231,13 +234,14 @@ game paused):
 
 | check | result |
 | --- | --- |
-| model pixels at 1×, Classic | `fx-rockets` 28 of 28, 18 of 18, 2 of 2, 15 of 15, 19 of 19, 20 of 20, 13 of 13 exact; `big-battle` 1292 of 1352, 487 of 492, 587 of 588, 968 of 968, 1381 of 1459, the others under a health bar or at a sprite's edge the engine draws later |
+| model pixels at 1×, Classic | `fx-rockets` 28 of 28, 18 of 18, 2 of 2, 15 of 15, 19 of 19, 20 of 20, 13 of 13, 28 of 28 exact; `big-battle` 1292 of 1352, 487 of 492, 587 of 588, 968 of 968, 1381 of 1459, the others under a health bar or at a sprite's edge the engine draws later |
 | the band order, in the presented frame | where only a model has ink the frame shows it, 857 of 857; where a model and a sprite overlap, the frame shows whichever the engine painted last, 247 of 257 — the 10 others sit under a flash and take its additive RGB approximation of the engine's LHT remap |
 | Classic++ | the same pixels covered; the models take the restored unit art, 812 of 1192 pixels a new colour |
 | zoom 0.49× and 2.35× | every model where the world's own zoom transform puts it, within 0.15 px at 0.49× and under 1 px at 2.35× |
-| a forced texel loss (a test build whose unit atlas answers "not painted yet" for every other GAF frame, then "refused" for all of them, 22 s each on `big-battle`) | 38 106 and 50 534 records taken back whole, 60 628 and 127 767 on the review build, 48 282 and 59 001 on the final one; records left half-drawn **0** |
+| a forced texel loss (a test build whose unit atlas answers "not painted yet" for every other GAF frame, then "refused" for all of them, 22 s each on `big-battle`) | 38 106 and 50 534 records taken back whole, 60 628 and 127 767 on the review build, 48 282 and 59 001 on the two-block one; records left half-drawn **0** |
 | forced overflows and a forced refusal (the same test build, `big-battle` in play) | the model tables held small, the slot cut at them, the run budget held to 256: records taken back whole, half-drawn **0**, no packet refused; the unit pass's own budget and sizing forced to fail: its units drawn and those frames' effects not; the unit pass refused: every effect without a model still drawn |
-| forced stand-downs (the final build, `big-battle` in play, every frame whose models were carried and not drawn counted) | the scaffold armed: **0** such frames, the sprites drawn and the models taken back; a draw the hand-over does not carry, counted before the gather: **0**; the same counted after it: **1**, the frame it began on, then the models held back |
+| a forced models' growth failure and a held-back mirror (the final build, `big-battle`) | the slot's growth for the models failing, retries included: 1 frame without effects, then the sprites drawn with the model records taken back, and the models back once it grew; the unit atlas's mirror held back on a view of models alone: no frame without effects after the onset, where the forecast blind to it lost every other one |
+| forced stand-downs (the two-block build, `big-battle` in play, every frame whose models were carried and not drawn counted) | the scaffold armed: **0** such frames, the sprites drawn and the models taken back; a draw the hand-over does not carry, counted before the gather: **0**; the same counted after it: **1**, the frame it began on, then the models held back |
 | the publisher in play (the posing, once a tick) | `big-battle` at the battle p50 128–182 µs, p99 183–257 µs; `limits-flood`'s first volley, about 1100 models a tick, p50 1.22 ms, p99 1.92 ms ([gpu-status](gpu-status.html) §2.89 has the whole fill and the comparison without models) |
 | the GPU frame, `big-battle` paused, `--maxfps 0`, two launches each | p50 2.40–2.47 ms against 1.83–2.40 ms without the models |
 

@@ -475,9 +475,11 @@ static int          s_fxHold;
    owed, `tagpu_vk_unit_fx_ready` answers no, so the frame it failed on is the
    only one that loses its effects and the frames after it take back only
    their model records. Every frame that draws units grows its own slot by the
-   same share (`s_fxShortOk`, a bit a slot, cleared when a slot is given back),
-   and once every slot holds it the models are asked for again -- no slot left
-   that the share has not been allocated in. */
+   same share (`s_fxShortOk`, a bit a slot, cleared when a slot is given back
+   or its growth fails), and once every slot holds it the models are asked for
+   again -- no slot left that the share has not been allocated in. A view of
+   models alone draws no unit, so there the models stay out until one is in
+   view. */
 static VkDeviceSize s_fxShortU, s_fxShortP;
 static unsigned     s_fxShortN, s_fxShortOk;
 static int          s_fxShort;
