@@ -1584,10 +1584,12 @@ static int fix_sync_keys(void)
    THE WIRE, twelve bits of ID:
    - 0x0D, weapon fired, 36 bytes: bits 8..11 in the high nibble of the slot byte +0x23. Stock's
      unit senders write `and dl,3` there and the extra-weapons module bits 0..3.
-   - 0x0F, feature hit, 6 bytes: bits 8..11 in bits 12..15 of the cell x, and bit 11 of x marks
-     the three sentinels 0xFD..0xFF. A weapon whose ID byte is 0xFD..0xFF is then damage, not
-     "feature destroyed / burned / reclaimed", which stock misreads it as on every other peer.
-     A cell is a 16.16 position >> 20 on the map, so x < 0x800.
+   - 0x0F, feature hit, 6 bytes: bits 8..11 in bits 12..15 of the cell x. Stock's receiver reads
+     the bytes 0xFD..0xFF as "feature destroyed / burned / reclaimed", so a weapon's hit whose
+     byte is one of them is flagged by bit 11 of x and read as the hit. The three sentinels go
+     out as stock sends them: with weapons below 253 every 0x0F is stock's, byte for byte, and a
+     peer on another build reads it as stock does. A cell is a 16.16 position >> 20 on the map,
+     so x < 0x800.
    - 0x0E, interceptor detonation, 14 bytes, has no room. IDs below 256 send stock's message;
      IDs from 256 up send a companion, a tagged 0x05 message: `05 00 49`, the target point, a
      u16 ID. Stock's receiver matches only projectiles of a weapon below 256 and the companion's
@@ -1595,7 +1597,7 @@ static int fix_sync_keys(void)
 
    BOTH BUILDS carry the loader's bound (a weapon whose ID is outside the array is skipped and
    logged), the 0x0D receiver's bound on its shooter and target indexes (u16 * 0x118 into the
-   unit array, unbounded in stock), the 0x0F sentinel flag, and the 0x0F receiver's refusal of
+   unit array, unbounded in stock), the 0x0F hit flag, and the 0x0F receiver's refusal of
    a cell off the map (stock reads through 0x481550's NULL). The stock build installs them as
    one fix; the raised build installs them with the raise, all or nothing. */
 
@@ -1606,7 +1608,7 @@ static int fix_sync_keys(void)
 #define WPN_MODEL      0x74               /* the 3DO, perhaps an earlier weapon's            */
 #define WPN_MODELNAME  0x80               /* empty in a weapon that borrowed its model       */
 #define WPN_CHAT_TAG   0x49               /* outside TADR's tags, 0x2B..0x31 and 0x60         */
-#define WPN_SENTINEL   0x800              /* 0x0F: bit 11 of the cell x                       */
+#define WPN_HITFLAG    0x800              /* 0x0F: bit 11 of the cell x, a hit, not a sentinel */
 #define WPN_MAXSITE    32
 
 #define E_SEND(net, m, n)         (((void (__stdcall*)(unsigned int, const void*, unsigned int))0x00451DF0)((net), (m), (n)))
@@ -1696,60 +1698,49 @@ static int __cdecl wpn_rx_fired(unsigned int* regs)
 }
 
 /* In place of the 0x0F sender's `call 0x451BC0` at 0x424575: the packet is the send's third
-   argument and the weapon is 0x4244B0's fourth, at the send's esp+0x38. The flag and the ID's
-   high bits share x with the cell, so an x from 0x800 is not sent; none is reachable, since
-   0x4244B0's caller found the cell on the map. */
+   argument and the weapon is 0x4244B0's fourth, at the send's esp+0x38. The byte is the index
+   from the weapon's pointer, not its ID byte, which a saved game can leave stale. The flag and
+   the ID's high bits share x with the cell, so an x from 0x800 is not sent; none is reachable,
+   since 0x4244B0's caller found the cell on the map. */
 static int __cdecl wpn_tx_feature(unsigned int* regs)
 {
     unsigned char* pkt = (unsigned char*)(size_t)regs[PR_RET + 3];
     unsigned int x = pkt[2] | (unsigned int)pkt[3] << 8;
-    if (x >= WPN_SENTINEL) { wpn_note("a feature hit at cell x >= 0x800 is not sent", x, pkt[1]); return 0; }
-#ifndef TAGPU_LIMITS_STOCK
-    {
-        int i = tagpu_limits_weapon_index(*(const char* const*)(WPN_ESP_CALL(regs) + 0x38));
-        if (i >= 0) {
-            x |= (unsigned int)(i >> 8) << 12;
-            pkt[1] = (unsigned char)i;
-            pkt[2] = (unsigned char)x;
-            pkt[3] = (unsigned char)(x >> 8);
-        }
+    int i = tagpu_limits_weapon_index(*(const char* const*)(WPN_ESP_CALL(regs) + 0x38));
+    if (x >= WPN_HITFLAG) { wpn_note("a feature hit at cell x >= 0x800 is not sent", x, pkt[1]); return 0; }
+    if (i >= 0) {
+        x |= (unsigned int)(i >> 8) << 12;
+        if ((i & 0xFF) >= 0xFD) x |= WPN_HITFLAG;
+        pkt[1] = (unsigned char)i;
+        pkt[2] = (unsigned char)x;
+        pkt[3] = (unsigned char)(x >> 8);
     }
-#endif
-    return 1;
-}
-
-/* In place of the sentinel senders' `call 0x451DF0`, the packet its second argument:
-   0x42469A (0xFD, destroyed), 0x423537 (0xFE, burned), 0x4239A4 (0xFF, reclaimed). */
-static int __cdecl wpn_tx_sentinel(unsigned int* regs)
-{
-    unsigned char* pkt = (unsigned char*)(size_t)regs[PR_RET + 2];
-    unsigned int x = pkt[2] | (unsigned int)pkt[3] << 8;
-    if (x >= WPN_SENTINEL) { wpn_note("a feature sentinel at cell x >= 0x800 is not sent", x, pkt[1]); return 0; }
-    pkt[3] |= WPN_SENTINEL >> 8;
     return 1;
 }
 
 /* The dispatch table's 0x0F slot (0x455FB8), in place of stock's handler 0x45544D; the stub
    goes on to the dispatcher's continuation 0x455F50. The message is the handler's [esp+0x10].
-   The cell must be on the map (0x481550 bounds x and y), then: flagged, one of stock's three
-   sentinel calls; unflagged, the weapon's hit, 0x4244B0. */
+   The cell must be on the map (0x481550 bounds x and y), then: 0xFD..0xFF unflagged, one of
+   stock's three sentinel calls; otherwise the weapon's hit, 0x4244B0, the flag set exactly when
+   the byte is 0xFD..0xFF. */
 static int __cdecl wpn_rx_feature(unsigned int* regs)
 {
     const unsigned char* m = *(const unsigned char* const*)(WPN_ESP_JMP(regs) + 0x10);
     unsigned int b = m[1], x = m[2] | (unsigned int)m[3] << 8, y = m[4] | (unsigned int)m[5] << 8;
-    unsigned int cx = x & (WPN_SENTINEL - 1), id = b;
+    unsigned int cx = x & (WPN_HITFLAG - 1), id = b;
+    int hit = (x & WPN_HITFLAG) != 0;
     char* base = tagpu_limits_weapon0();
     char* cell;
     if (!base) return 0;
     cell = E_CELL((int)cx, (int)y);
     if (!cell) { wpn_note("a feature message names a cell off the map; dropped", cx, y); return 0; }
-    if (x & WPN_SENTINEL) {
+    if (b >= 0xFD && !hit) {
         if (b == 0xFD)      E_FEATURE_DIE((int)cx, (int)y, 0);
         else if (b == 0xFE) E_FEATURE_BURN((int)cx, (int)y, 1);
-        else if (b == 0xFF) E_FEATURE_DIE((int)cx, (int)y, 1);
-        else wpn_note("a feature message is flagged but names no sentinel; dropped", b, x);
+        else                E_FEATURE_DIE((int)cx, (int)y, 1);
         return 0;
     }
+    if (b < 0xFD && hit) { wpn_note("a feature hit is flagged but its byte is below 0xFD; dropped", b, x); return 0; }
 #ifndef TAGPU_LIMITS_STOCK
     id |= (x >> 12) << 8;
 #else
@@ -1984,14 +1975,8 @@ static int wpn_build(WPNSITES* t)
                                                0x8D, 0x34, 0x49, 0x8B, 0x0D, 0xE8, 0x1D, 0x51 };
     static const unsigned char rxFeature[4] = { 0x4D, 0x54, 0x45, 0x00 };           /* 0x45544D */
     static const unsigned char txFeature[5] = { 0xE8, 0x46, 0xD6, 0x02, 0x00 };     /* 0x451BC0 */
-    static const struct { unsigned int va; unsigned char was[5]; const char* name; } sentinel[3] = {
-        { 0x0042469A, { 0xE8, 0x51, 0xD7, 0x02, 0x00 }, "0x0F sender, destroyed" },
-        { 0x00423537, { 0xE8, 0xB4, 0xE8, 0x02, 0x00 }, "0x0F sender, burned" },
-        { 0x004239A4, { 0xE8, 0x47, 0xE4, 0x02, 0x00 }, "0x0F sender, reclaimed" },
-    };
     FIXSITE* s;
     unsigned char* a;
-    int k;
 
     t->n = 0;
     t->over = 0;
@@ -2016,11 +2001,6 @@ static int wpn_build(WPNSITES* t)
     if (!(a = fix_code(32))) return 0;
     wpn_send_or_skip(wpn_call(a, (const void*)wpn_tx_feature, -1, 0), 0x00451BC0, 0x10);
     fix_branch(wpn_site(t, 0x00424575, 5, txFeature, "0x0F sender, a weapon's hit"), 0xE8, a);
-
-    if (!(a = fix_code(32))) return 0;
-    wpn_send_or_skip(wpn_call(a, (const void*)wpn_tx_sentinel, -1, 0), 0x00451DF0, 0x0C);
-    for (k = 0; k < 3; k++)
-        fix_branch(wpn_site(t, sentinel[k].va, 5, sentinel[k].was, sentinel[k].name), 0xE8, a);
 
 #ifndef TAGPU_LIMITS_STOCK
     {
@@ -2052,6 +2032,7 @@ static int wpn_build(WPNSITES* t)
         const unsigned int less = (unsigned int)(size_t)s_weapons - WPN_MAIN;
         const unsigned int bound = TAGPU_LIM_WEAPONS * WPN_REC;
         unsigned char* p;
+        int k;
 
         /* `mov reg,[main]` that feeds only a weapon address: the same length as an immediate */
         s = wpn_site(t, 0x0042CDCD, 5, movEax, "unit loader, Weapons[0] for a missing name");
@@ -2144,7 +2125,7 @@ static void patch_engine_defects(void)
               "(0x4589C0 0x45A470 0x45A790 0x459830 0x459C70 0x4B90A0) %s; whole build lists "
               "(0x42DA58 0x42DAC7 0x42BEC3) %s; download menus past five entries (0x42DCF0) %s; "
               "the out-of-memory text (0x49E700) %s; unique unit sync keys (0x42BD29) %s; weapon IDs "
-              "bounded, the feature sentinels flagged (0x42E468 0x49D280 0x455FB8 0x424575) %s",
+              "bounded, feature hits told from sentinels (0x42E468 0x49D280 0x455FB8 0x424575) %s",
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
               fix_state(scr), fix_state(list), fix_state(dl), fix_state(oom), fix_state(keys),
               fix_state(wpn));

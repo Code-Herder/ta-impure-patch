@@ -19,8 +19,9 @@ Weapons, in weapons/weaponids.tdf:
                    cells: 1 damage below 256 and 5000 above, so a feature hit read as the wrong
                    weapon, or as a sentinel, ends differently
     WID_RKT250, WID_RKT3322
-                   ARMTRUCK_ROCKET, the Merl's, made targetable, as IDs 250 and 3322: one low
-                   byte, 0xFA
+                   ARMTRUCK_ROCKET, the Merl's, as IDs 250 and 3322, one low byte, 0xFA: made
+                   targetable, and slow, so an interceptor catches one long before its target and
+                   the peer that fired it still has it in flight when the detonation arrives
     WID_AMD3000    AMD_ROCKET as ID 3000, a missile stocked every three seconds for little
 
 Units: WIDAMD is an ARMAMD firing WID_AMD3000, with ARMAMD's build page, whose ARMMAKEANTI
@@ -106,7 +107,9 @@ def main():
            weapon(msl, "WID_MSL5000", 5000)]
     tdf += [weapon(las, f"WID_LAS{i}", i, {"areaofeffect": 96}, damage=1 if i < 256 else 5000)
             for i in (253, 254, 255, 3581, 3582, 3583)]
-    tdf += [weapon(rkt, f"WID_RKT{i}", i, {"targetable": 1}) for i in (250, 3322)]
+    tdf += [weapon(rkt, f"WID_RKT{i}", i, {"targetable": 1, "weaponvelocity": 120,
+                                              "weaponacceleration": 10, "flighttime": 20})
+            for i in (250, 3322)]
     tdf += [weapon(amd, "WID_AMD3000", 3000, {"energypershot": 100, "metalpershot": 5, "reloadtime": 3})]
 
     llt, llt_cob = arc.read("units/armllt.fbi").decode("latin-1"), arc.read("scripts/armllt.cob")
