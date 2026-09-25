@@ -1,7 +1,7 @@
 # Modules with their own workflow
 
-Extra weapons, the COB trace, multiplayer, many unit types, weapons past 256, the render-options
-screen with its GPU row, and a remote Windows machine. Each is driven through `tacli`; what
+Extra weapons, the COB trace, multiplayer, many unit types, weapons past 256, the new data keys,
+the render-options screen with its GPU row, and a remote Windows machine. Each is driven through `tacli`; what
 differs is the setup around it.
 
 1. [Extra weapons](#extra-weapons)
@@ -9,8 +9,9 @@ differs is the setup around it.
 3. [Multiplayer: two to ten instances in one game](#multiplayer-two-to-ten-instances-in-one-game)
 4. [Many unit types: the synthetic mod](#many-unit-types-the-synthetic-mod)
 5. [Weapons past 256: the test weapons](#weapons-past-256-the-test-weapons)
-6. [The render-options screen and the GPU row](#the-render-options-screen-and-the-gpu-row)
-7. [A remote Windows machine](#a-remote-windows-machine)
+6. [The new data keys: the key fixtures](#the-new-data-keys-the-key-fixtures)
+7. [The render-options screen and the GPU row](#the-render-options-screen-and-the-gpu-row)
+8. [A remote Windows machine](#a-remote-windows-machine)
 
 ## Extra weapons
 
@@ -193,6 +194,33 @@ tools/tacli log w1 -n 1000 -g "enginefix: weapon"      # 5000 and the ID-less on
   it, which is ahead of the host's copy by the link's delay: a fast rocket caught near its target
   has often already hit there. The fixture's rockets are slow for that reason.
 
+## The new data keys: the key fixtures
+
+TADR section C's keys (`research/notes/tadr-port/data-keys.md`). `tools/datakeys_fixture.py`
+writes stock units under new names, each carrying a key; for the ghost's `PreviewPieces=`, four
+ARMLLT clones on the Commander's fourth build page (the docstring lists them).
+`scenarios/ghost-mask.json` is the ghost's oracle: four finished structures whose `Create()` hides
+a piece, and the builders that place their ghosts.
+
+```bash
+tools/datakeys_fixture.py tagpu/instances/c1/gamedir/zzkeys.ufo
+tools/tacli arm c1 'ghost.on=alpha=1.0'   # with the default arm set; opaque, so the silhouette reads
+tools/tacli scenario load c1 ghost-mask
+tools/tacli log c1 -g datakeys            # every key read at load, every mask as it is computed
+```
+
+- **`maskmiss=` and `maskcut=` in the ghost heartbeat must stay 0**; `masked=` counts the ghosts
+  drawn with a mask.
+- **A queued site's ghost shows only with the order overlay**: select the builder and hold shift
+  (`keys <i> down:shift`, shield on).
+- **Give `ui click <TYPE> --page <n>` the type's own page.** Walking the pages until a click
+  succeeds ends on a download page whose name carries no number (`ARMDL`), which `--page` cannot
+  page away from; `ui click ARMPREV` returns to a numbered one.
+- **`+reload <unit>` re-reads one type's FBI and COB mid-game, and runs only with `tacli switches
+  <i> cheats=on`**: the chat grants the debug run level only with that bit.
+- **Type into the chat bar a few characters per `keys` call and read the line back** (`import
+  -window`): a long `char:` run loses characters.
+
 ## The render-options screen and the GPU row
 
 `tagpu_menu.c` adds our rows to **Options → Visuals**: the frame-rate readout (`VFPS`), the GPU
@@ -321,6 +349,14 @@ tools/tacli rm w1                                 # deletes the test folder and 
 - **Nothing tacli replaces is lost.** Before a file of the player's copy is first replaced or
   deleted in the test folder, its original, as `remote add` copied it (by SHA-256), is kept
   beside it as `<name>.tacli-original`.
+- **Comparing with the reference setup.** The store is the player's key, so the skirmish values
+  are theirs: pass `--los 0 --mapping 1`, the reference prefixes' values, or line-of-sight fog
+  and unmapped ground differ between the machines (`--mapping 0` blacks the terrain out). Health
+  bars need `damagebars` 1 in the store, and no launch flag sets it; a stopped instance's store
+  is changed through `_remote_store_update` in `tools/tacli`. Nothing writes `tagpu_zoom.txt`
+  there, so the captures are at 1×. `ab` refuses a frame two passes drew into: the effects alone
+  need `fx.on=nomodels`, since their 3D models are the unit pass's. A shadow cannot be captured,
+  because a one-pass frame has nothing under it.
 - **Read the result with `log`**: the `vk:` lines name the device, its depth format and each
   missing extension; each refusal says which pass stood down and why; the `vk: census` line says
   which passes drew. `crash` reads the test folder's `ErrorLog.txt`.

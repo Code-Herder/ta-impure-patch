@@ -1,7 +1,7 @@
 # Hardware portability: depth, lines, and a remote Windows test — the plan (G21)
 
-**Written** 2026-09-25. G21a is built on its branch and waits for the owner; G21c is built
-(§3); the rest is not built. This plan is for the Vulkan renderer to draw every
+**Written** 2026-09-25. G21a, G21c and G21b landed on main that day, and G21d, the Windows gate,
+ran on them the same day (§3). This plan is for the Vulkan renderer to draw every
 pass on the GPUs players actually have. Today it requires three things that a common class of
 card does not offer, and when one is missing the passes that need it stand down. When a gate
 here closes, its facts move to [GPU status](gpu-status.html), and this note is folded into it
@@ -176,7 +176,8 @@ worktree. The fourth follows once they are on main.
     engine's own frame at 1×: closer to it, further from it, or neither.
   - The report goes to the owner, who decides whether it lands.
   - Frame time is compared too: GPU p50 and p99 at 1080p.
-- **Status: BUILT 2026-09-25, not landed** — the owner decides on the numbers below.
+- **Status: LANDED 2026-09-25** (`c225c3c..2dc4a75`). The owner saw the numbers below and chose
+  float first.
   [GPU status](gpu-status.html) §2.91 has the whole of it.
 - **The result [MEASURED].** 0 changed pixels on every capture a paused frame repeats: terrain,
   features, units and markers one pass at a time, and the presented frame with `shadows=hard`,
@@ -205,14 +206,14 @@ worktree. The fourth follows once they are on main.
   where D24 exists. Preferring D24 and falling back to float would draw the same on any
   rasteriser that computes depth as a float32, and cost nothing where D24 exists; what it would
   give up is one format on every GPU. That is the owner's call.
-- **Not covered:** a rasteriser other than the reference setup's under float depth, which is
-  G21d's Windows card.
+- **Another rasteriser under float depth** is G21d's: on the Windows card, Classic terrain came
+  out 0 px from the reference setup's and features 12 px by one level (G21d, below).
 - Review: medium (`tagpu/ddraw/**`, no engine state, no thread synchronisation).
 
 ### G21b — lines as triangles
 
-**[DECIDED 2026-09-25: one rule, smooth when supersampled, parity at `ss = 1`; BUILT 2026-09-25
-on its branch, not landed]**
+**[DECIDED 2026-09-25: one rule, smooth when supersampled, parity at `ss = 1`; LANDED 2026-09-25,
+`31f9a99..e8e3e8b`]**
 
 - **What it is.** Every line kind of decision 4 is an instanced record drawn as a six-vertex
   band (`tagpu_glsl.h` `taBand`, radius 2 game px round the ends' pixel centres) whose fragment
@@ -329,7 +330,7 @@ on its branch, not landed]**
 
 ### G21c — `tacli` remote instances
 
-**Built 2026-09-25; not landed.** The first build met the gate. The high landing review moved
+**Landed 2026-09-25 (`2dc4a75..31f9a99`).** The first build met the gate. The high landing review moved
 TA's registry key into a launch wrapper, and the high re-review found the gap no save-and-restore
 design closes (decision 5). **[DECIDED 2026-09-25] In test mode TA's settings key is never
 written:** the registry is a file in the test folder, and there is no wrapper, no export and no
@@ -502,6 +503,32 @@ On the Windows test setup, through a remote instance, with main carrying G21a–
 Cross-GPU pixel identity is not an exit criterion, since two vendors' rasterisers need not agree
 on float depth. Where a Windows capture and a reference-setup capture of the same scene differ,
 the difference is counted and reported, not gated.
+
+**Ran 2026-09-25 on main at `e8e3e8b` plus the fix below; the captures are with the owner.**
+[GPU status](gpu-status.html) §2.94 has the whole of it.
+
+- **Met.** The log names `D32_SFLOAT_S8_UINT (130)`. With the play arm set the census reads six
+  passes drawing (`terr=1 feat=1 unit=1 fx=1 mark=1 gui=1`). GPU frame time at 1920 × 1080,
+  `ss=2`: Classic p50 1.68 ms, p99 1.84; Classic++ p50 2.64, p99 2.66. The captures of G21a's
+  fixtures, plus `fx-lasers` and `nanoframe-ladder` for G21b's lines, went to the owner beside
+  the reference setup's.
+- **The one refusal it found, fixed.** The restorer refused the card: `restorevk: uniform block
+  -1 < one k-block`. The driver reports `maxUniformBufferRange` as `UINT32_MAX`, and an `(int)`
+  cast made it -1. `tagpu_rcore_pick_nk` takes the limits unsigned now, and after the fix the
+  card's log holds no refusal.
+- **Counted, not gated.** Against the reference setup, each machine's own floor 0:
+  - Classic terrain 0 px of 7.3 M, features 12 px by one level, markers 0.
+  - Classic++ terrain within one level at the 99th percentile.
+  - Units differ in 2.4 % of their pixels, along polygon edges.
+  - Classic++ features carried off-hue specks on the AMD card, 2 388 pixels past 32 levels of
+    hue. The restorer caused them, and it damaged the restored UI and team colours the same
+    way: the card's driver drops the render-pass dependencies between the restorer's passes.
+    An explicit pipeline barrier after each of them fixes it. After the fix the restored
+    feature atlas is byte-identical to the reference setup's, and the capture differs by one
+    level at most ([GPU status](gpu-status.html) §2.95).
+  - G21b's nanoframe wire has the same shape on both (13 px).
+- **Not covered.** The hard shadows' picture (drawn and logged, but a one-pass capture has
+  nothing under them), and the 0.877× zoom.
 
 ---
 

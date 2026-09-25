@@ -71,8 +71,8 @@ const TAGPU_ROPT*   tagpu_rcore_opt(void);
    draw can bind, clamped down to a power of two, and overridden by `nk=N` when
    that is no larger. 0, with the reason logged, when not even one k-block fits
    the uniform block -- the backend then cannot restore at all. */
-int tagpu_rcore_pick_nk(TAGPU_RSCHED* s, int maxUniformBlockBytes,
-                        int maxAttachments);
+int tagpu_rcore_pick_nk(TAGPU_RSCHED* s, unsigned maxUniformBlockBytes,
+                        unsigned maxAttachments);
 
 /* ---- a job, as the core sees it ---- */
 

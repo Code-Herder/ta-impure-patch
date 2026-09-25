@@ -2030,6 +2030,9 @@ so the module is accounted for — it reads no engine state and writes none. Pla
 | **the frame packet's header and its four world tables** — the header: `main+0x38A47` (`GameTime`), `+0x38A4D` (the live speed), `+0x38A51` (paused), `+0x38D75` (the load flags), `+0x1431F`/`+0x14323` (eye), `+0x14327`/`+0x1432B` (scroll target), `+0x37E1F`/`+0x37E23` (screen), `+0x37E27..+0x37E33` (the rect the engine can name, since landing 2), `+0x1422B`/`+0x1422F`, `+0x14233`/`+0x14237` (the scroll extent — the map less 32 and 128 px — and the map in cells), `+0x1423B`/`+0x1423F` (view cells), `+0x1438F` (`UNITINFOCount`), `+0x14351` (unit slots), `+0x14281` (`LosType`), `+0x37F06`, `+0x37F2F`, `+0x2A43`, `+0x2A42`, `+0x1427F`, `+0x143A7` (the palette table, 1 KB, since landing 2), `[0x51FBD0]+0x614` (gamma, bounded, since landing 2); **since landing 3** also `+0x0DCB` (the GUI colour array), `+0x2C76`/`+0x2C7A` (the dispatched mouse point), `+0x2C92..+0x2CA6` (the build cursor's two corners), `+0x2CC3`/`+0x2CC6` (the cursor mode and region flags), `+0x1424B`/`+0x1424F` (the feature sweep), `+0x14253` (`NumFeatureDefs`) and `[0x51FBD0]+0xC4` (the 32×256 shade table, which the unit pass turns into its face-shade multipliers, §2.88); `[0x51FBD0]+0xCC`, the grey band's 256-byte remap, is **not** copied since G20d — the grey is computed in RGB. **The three per-map BASES are deliberately NOT in it** — `+0x1426F` (FeatureDefs), `+0x1420B` (wreck records) and `+0x14377` (`MODEL_PTRS`) are read live, at every use, on the render thread: the teardown frees each and then NULLS it (`0x4221F8`→`0x422214`, `0x42227D`→`0x42228B`, `0x42DCCB`→`0x42DCD8`), so the null is what refuses the walk, and a copy taken at publish time and held for a frame reads straight past it. **[CORRECTED 2026-09-12 by a landing review, which found the copies.]** The tables: the unit array walked to `+0x14351`'s count, each record's `+0x64..+0x110` fields, its `UnitDef`'s `+0x20`/`+0x1FA`/`+0x241`, its `Object3do`'s `+0x00`/`+0x10`/`+0x18`/`+0x1E` and every `+0x22 + i·0x36` piece, the feature grid `+0x14287` over the widest zoom rect plus the lead (`tagpu_zoom_pub_window`), and the wreck records the anchors name ([engine map](exe-reverse-engineering.html), "What the frame packet's publisher copies") | **Read only, on the GAME THREAD**, from the `after` of the `DrawGameScreen` observer on in-play frames only, and COPIED into the packet every presented frame (§2.16, §2.17; the addresses live in `inc/tagpu_engine.h`). **Since landing 2 the packet's `vp`, `eye` (plus the unacknowledged anchor deltas), `vp_addr`, `pal` and `gamma` ARE the view every pass draws from** — the native pass, the scaffold, the marker pass's build-cursor gate and the palette module read no engine field for any of them. (The GL UI's layer draw was the fifth until the clean cut deleted it — §2.81) |
 | **the effects models** — a weapon's `+0x74` node and its `+0x30` child, an explosion's `+0x00` body, a flying piece's `*(sys+0x2C)` node; per node `+0x04`, `+0x08`, `+0x0C`, `+0x24`, `+0x28`, `+0x30`; per face `+0x00`, `+0x04`, `+0x0C`, `+0x10`, `+0x18`, `+0x1C`; a sequence's `u16` count and its `+0x28` frames; for a piece's team face `sys+0` → `+0x96` → `+0x27` → `+0x96` | **Read only, on the GAME THREAD**, by the frame packet's publisher (`tagpu_packet_pub.c` `fx_model`) in the same `after` as the tables above, and COPIED: posed by the engine's own `0x4B6CC0` into a `dst` of the publisher's, every count and index bounded before it is used — the vertex and face counts, each face index by its node's vertex count, each frame index by its sequence's count, the piece's unit a stride-aligned member of the unit array inside the slot count and its player one of the ten `main+0x1B63` records — into the packet's five model tables. The render thread reads the copies (`tagpu_fxmodel.c`) and the unit atlas's own mirror, never a model (§2.89) |
 | **order node `+0x32`, `+0x34`, `+0x42`** | **the target sprite's last-seen cache. WRITTEN, on the GAME THREAD, at the instant the engine's own drawer would have written it.** It is the only sim-side field this stack writes for a marker, and it is not optional: the cache is what stops a waypoint marker following a target that has left LOS, so a port that drops it leaks the target's live position (`tagpu_order.c`, `resolve_sprite`) |
+| `UnitDef+0x18E` → the type's COB, and the template's node names `node+0x1C` | **the build ghost's mask** (§2.23). Read only, **on the GAME thread**, inside the in-play packet fill, once per type per level: the COB's header, its script and piece name tables, `Create()`'s entry and bytecode as `0x4B2450` left them relocated, each table and each name bounded by the block's own length (the size `0x4B6BA0` checksums it with, recorded by an observer); the template tree under `MODEL_PTRS[type]`, the type bounded by `UNITINFOCount`, with no length to bound its node pointers against (`exe-reverse-engineering.md`, *The loaded script*). Both are per-LEVEL: `0x42D2E0` loads them on the LOADER thread before the level's first in-play draw, the teardown frees them on the game thread (the COB at `0x42DC3C`, the template in `0x42DB90`), and a console `Reload` frees the type's COB and loads it anew on the game thread itself (`0x42D275` / `0x42D294`) |
+| the FBI section at `0x42BF97`, through `0x4C48C0` | **`PreviewPieces=`**, read by `tagpu_datakeys.c`'s observer inside the FBI loader `0x42BF40`, on the LOADER thread (the level's load) and on the game thread (the console `Reload`). Observers at the unit-data load's start `0x42D2E0` and the loader's entry (its `def` argument) keep each record to its own load. The records it writes are ours; nothing is written into the engine |
+| `0x4B6BA0`'s stack arguments `(buf, size)`, for the call that returns to `0x4B247C` | **each COB block's address and length**, recorded by `tagpu_datakeys.c`'s observer on the checksum's entry, on the thread that loads the script (the loader's, or the game thread's at a `Reload`); the bound on every read of that script. The other ten callers are ignored |
 | **`Object3do+0x08`** | **the pose-dirty flag, and the interlock the unit pass reads it as.** Read only, on the render thread, on either side of every piece's posed-vertex copy: the engine rewrites `prim+0x22` in place and in two stages, and this field is 1 for exactly that window ([engine map](exe-reverse-engineering.html) "The repose"). Non-zero on either side means the buffer may be mid-rewrite and the pass emits the piece from the pose fields instead (§2.9) |
 | `Object3do+0x18/+0x1A/+0x1C` | the CACHED body turn — `unit+0x64` (about Z), `unit+0x66` (the heading, about Y), `unit+0x68` (about X), copied at `0x45AC7C` when any axis moves ≥ 8. Read only, and read in preference to the live `unit+0x64..` on the reconstruction path, because this copy is the one the compose baked into the vertices. **`[MEASURED 2026-09-08]` "In preference" is not a nicety: on a bomber the cached triple read `(0, 16128, 3)` against a live `(0, 44767, 65508)` — 157° of heading apart — and the drawn geometry followed the CACHED one.** On a tank the two were identical; which of them moves is not established. Anything folding `unit+0x64..` instead draws the unit at the wrong attitude, which is what `pose_dump` and `tacob pose-check` did until 2026-09-08 and `hires_pose` until 2026-09-09 |
 | the **level generation** (the frame packet's `level_gen`) | not an engine field — our own counter, bumped on the game thread at every level end and carried to the render thread inside the packet. It is how a cache keyed on a **model template** pointer (`s_aabb`, `s_sbox`, `s_pmap`, and the geometry bake's) learns the level ended: the template tree is shared by every unit of a type and is NOT freed through `FreeObjectState`, so the deferral covers units and not it. Before 2026-09-08 nothing dropped those three at all — a second level reusing an address served the first level's answer, silently, for the life of the process ([thread-safe destruction](thread-safe-destruction.html) §6a). **[CORRECTED 2026-09-12, a landing review]** between then and landing 3 the counter read was `tagpu_reclaim_level_gen()`, which is bumped only in reclaim's teardown post hook — so under `tagpu_reclaim.off`, or any of reclaim's four other ways not to arm, it never moved and the caches were exactly as stale as before 2026-09-08. The publisher owns the counter now and advances it whichever provider publishes the level-end packet |
@@ -4244,8 +4247,10 @@ A translucent copy of the building under the placement cursor and of every queue
 pass is showing a site rect for, drawn through the posed program in the **model's own colours**
 at the ghost's alpha, over the footprint squares exactly as the mark and order passes draw them.
 The squares alone carry the green/blocked distinction; the ghost reads no colour at all. Nothing
-about the squares changes; no new engine hook and no engine write: the ghost is a posed body draw
-whose DATA arrives entirely in the frame packet.
+about the squares changes and nothing is written into the engine: the ghost is a posed body draw
+whose DATA arrives entirely in the frame packet. The engine hooks it depends on are TADR section
+C's observers (`tagpu_datakeys.c`): the FBI reader (`0x42BF40`, `0x42BF97`) for `PreviewPieces=`,
+and the COB length (`0x4B6BA0`) for the `Create()` mask.
 
 - **The data.** `TAGPU_PK_BUILD`, a build-orders table the publisher copies out of the order
   pass's own game-thread snapshot — the same records `draw_build` draws the squares from, under
@@ -4269,6 +4274,40 @@ whose DATA arrives entirely in the frame packet.
   player's own team colour — exactly what the built unit will look like. An earlier cut tinted
   it green/red (`uGhostTint`); the owner dropped the tint (2026-09-12): translucency alone, the
   existing `uAlpha` blend the cloak already rides.
+- **THE PIECES THE FINISHED BUILDING HIDES, THE GHOST HIDES** (TADR section C, landing C1,
+  [data keys](tadr-port/data-keys.html)). A structure's COB `Create()` hides pieces the moment the
+  unit exists — muzzle flares, a radar dish, a moho's rotary — and no script runs for a preview, so
+  the ghost used to show them: 21 of the 126 stock structures hide a piece with faces. The mask is
+  computed on the GAME thread by `tagpu_datakeys.c`, once per type per level, and published as
+  `TAGPU_PK_GHOSTMASK`: type, piece count, template root, 256 bits, one row per type a ghost may
+  draw this frame that hides anything, sorted by type (validated in `frame_valid`). What it hides:
+  - **by default, `Create()`'s hides, read and not run** — from the entry point, through the
+    opcodes whose length is certain (`tools/ta3do`'s `COB_PROLOGUE`), `HIDE` sets and `SHOW`
+    clears a COB piece; the walk stops at the first opcode it cannot size. Every read of the COB
+    is bounded by the block's own length: the size `0x4B2450` checksums the block with
+    (`0x4B6BA0(buf, size)`, the call that returns to `0x4B247C`), which an observer records. A
+    script with no recorded length gets no row. The template's node names have no such length;
+    they are read under the type bound and the level lifetime, as every reader of the tree is.
+  - **matched to the model as the engine matches it**: `0x45A950` builds the primitives in
+    `0x45AEC0`'s pre-order, then for COB piece *i* swaps in the first primitive at an index ≥ *i*
+    whose node name `_stricmp`-matches. `tagpu_datakeys.c` reproduces that, so COB piece *k* names
+    the node the engine will hide (on stock content it equals a by-name match).
+  - **with `PreviewPieces=` in the FBI**, every piece the list does not name (TADR's split and
+    fold; a list that names no piece of the model is ignored and logged).
+
+  The cursor's row rides every packet with a build on the cursor (mode `0x0E`, the packet's own
+  `build_unit_id`), not the builds table's poll; a packet whose mask table was cut or overflowed
+  (`TAGPU_PK_TRUNC_GHOSTMASK`) draws no ghost at all that frame, counted as `maskcut=` in the
+  heartbeat, so no ghost draws with the pieces it should hide. The bits are in the ghost's own walk order, and **both threads call one walk,
+  `tagpu_model_walk` (`tagpu_model3do.h`)**, so the order cannot drift. `ghost_one` applies a row
+  only when its root and piece count equal the template it walked — two values compared, never
+  followed — and a hidden piece takes `posed_pose`'s form: an all-zero matrix and visibility 0.
+  A type with no row takes exactly the path it took before. **Measured** with
+  `scenarios/ghost-mask.json` against the same tree without the mask, the cursor ghost at zoom 2:
+  ARMLLT differs by 34 px, ARMAP 177, ARMHLT 360, CORINT 395, CORMOHO 1 121, each inside the hidden
+  piece; CORDOOM (four hidden pieces, none with faces) and the no-row ARMSOLAR, ARMVP and CORFUS
+  by 0; two shots of one build 0 in every case. `tools/datakeys_fixture.py`'s clones show
+  `PreviewPieces=base` drawing the base alone.
 - **The cache key — and the leak it closed.** The synthesised run walks the tree in *its* order,
   which is not the prim order a live unit's packet run carries, and the bake lays the VBO's
   per-vertex piece indices and `parent[]` out in run order. So the ghost's bake is keyed apart
@@ -4330,9 +4369,10 @@ whose DATA arrives entirely in the frame packet.
   — and the fixed ghost matches the `0x8000` one, band at the top and ramps at the bottom.
   Same instance, same scenario, same camera, the two DLLs swapped under `--keep-dll`.
 - **The lever.** `tagpu_ghost.on` (tokens: `alpha=<f>`, default 0.40), re-read on the pass's own
-  30-frame poll; the armed line and the `ghost: curs= queue= drawn= built= nobake= trunc= alpha=`
-  heartbeat log only on change / every 300 frames. `nobake` and `trunc` must stay 0; `built=` is
-  a count, not an alarm — it is non-zero whenever anything is being built. **It needs
+  30-frame poll; the armed line and the `ghost: curs= queue= drawn= built= nobake= trunc=
+  masked= maskmiss= maskcut= alpha=` heartbeat log only on change / every 300 frames. `nobake`,
+  `trunc`, `maskmiss` and `maskcut` must stay 0; `built=` and `masked=` are counts, not alarms —
+  `masked=` is the ghosts drawn with a mask row. **It needs
   `tagpu_native.on`** — the ghost draws through the unit pass's view and program — and says so:
   armed without it the log reads `ghost: off — needs tagpu_native.on (it draws through the unit
   pass)` and the pass declines. **Since 2026-09-14 it IS a play default** and carries `needs
@@ -9354,7 +9394,9 @@ silently.
    consumer's own render pass. `TRANSFER` is in both scopes because the dump's copy is exactly the
    reader a dependency naming only the sampling consumer would have left out. Not `BY_REGION`: a
    conv draw reads a 3×3 neighbourhood and OUT reads a different image entirely, so neither read is
-   framebuffer-local.
+   framebuffer-local. The dependencies are what the spec requires, but not every driver honours
+   them. AMD's Windows driver drops them for these passes, so `end_pass` records the same ordering
+   again as a pipeline barrier (§2.95).
 2. **`dst_ready` transitioned the destination from `UNDEFINED` unconditionally, including on a
    repaint** — which licenses the driver to discard every texel of the atlas the repaint exists to
    recolour *in place*. It would have blanked exactly the world it was added to avoid blanking. The
@@ -10406,8 +10448,9 @@ Two forms, then: **a GL handle used as a validity test**, and **a construction r
 through one**. Both are invisible while one backend exists, because the handle is always there.
 
 **The counterpart rule that came out of it**: a device limit belongs to the device that will
-consume it. `tagpu_vk_max_image_dim()` and `tagpu_vk_max_uniform_range()` read
-`maxImageDimension2D` and `maxUniformBufferRange` from the physical device actually bound, and
+consume it. `tagpu_vk_max_image_dim()` and `tagpu_vk_max_storage_range()` read
+`maxImageDimension2D` and `maxStorageBufferRange` from the physical device actually bound (the
+storage range capped at `INT_MAX`, since a driver may report `UINT32_MAX`; §2.94), and
 both return **0 for "no device yet" rather than a default** — the lane takes ~200 ms to come up
 while the gathers run from the first frame, so a pass that read 0 as a bound would cache a ruined
 atlas for the life of the process. That is measured, not hypothetical: it is what
@@ -18640,3 +18683,185 @@ no switch for it. The wire's rule is the walk, not the engine's polygon edge wal
 steep edges and differ on shallow ones, where the engine lights two pixels a scanline and the
 walk a full run (hardware-portability.md, G21b). The clip at 8× was measured under the
 game-pixel rule the branch had before and not re-run under this one.
+
+### 2.94 The Windows gate: every pass on an AMD GCN card, and the restorer's unsigned limits (`tagpu_restore_core.c`, `tagpu_vk_restore.c`) — G21d
+
+The plan is [hardware portability](hardware-portability.html) §3 G21d. It ran on the Windows test
+setup (an AMD Radeon R9 200-series card on its Windows driver, 1920 × 1080) through a `tacli`
+remote instance (§2.92), with main carrying G21a–c, and beside the reference setup on a private
+1920 × 1080 Xvfb display. Both ran the same DLL at `ss=2`.
+
+**What the card does now [MEASURED 2026-09-25].** The log names `vk: depth format:
+D32_SFLOAT_S8_UINT (130)`; the world target, terrain, features, units (`hard shadows on
+(stencil-masked), nanoframe wire on`) and markers come up on it; and with the play arm set on
+`feat-forest` the census reads `6 pass(es) drew … (terr=1 feat=1 unit=1 fx=1 mark=1 scaf=0 gui=1
+fps=0)`. G21b's device asks for no line extension, and none is logged missing. GPU frame time
+(`ftime.on`, paused, `maxfps` uncapped, four reports of 256 frames each): Classic p50 1.68 ms,
+p99 1.84 ms; Classic++ p50 2.64 ms, p99 2.66 ms. The Classic++ terrain restore ran 5 062 frames
+in 10.6 s of wall time and 7.0 s of GPU time at NK=8.
+
+**The one refusal the run found, and its fix [SOURCE].** Before the fix the log read
+`restorevk: uniform block -1 < one k-block (9472)`, and the terrain, feature, unit and effects
+lanes each logged that they draw their base atlas: Classic++ restored nothing on that card. The driver reports
+`maxUniformBufferRange` as `UINT32_MAX` (the restorer's own line prints it as `4194303 KB`). The
+Vulkan backend passed it to `tagpu_rcore_pick_nk` through an `(int)` cast, where it became -1,
+less than one k-block. `tagpu_rcore_pick_nk` now takes both limits as `unsigned`, as Vulkan
+reports them, and clamps the quotient to `TAGPU_R_MAXNK` before narrowing it; the call passes
+them uncast. Below 2³¹ the arithmetic is unchanged, so no device that restored before picks a
+different NK. The other device limits read into an `int` are bounded first:
+`tagpu_vk_max_storage_range` caps `maxStorageBufferRange` at `INT_MAX`, and
+`tagpu_vk_max_image_dim` returns 0 ("no device yet") for a dimension above it. After the fix, the card's log holds no
+refusal line.
+
+**Its pictures against the reference setup [MEASURED].** These are the `.ab` world captures of
+G21a's fixtures and two of G21b's, at 1× in both presets, one pass at a time, 3840 × 2160 target
+pixels. They ran with `--los 0 --mapping 1` on both machines, because a remote test folder's
+store carries the player's own skirmish values. Every capture was taken twice, and each
+machine's own run-to-run floor is 0 everywhere, so every count below is a difference between
+the two GPUs:
+
+| capture | differ (of drawn) | > 8 levels | > 32 | largest |
+|---|---|---|---|---|
+| terrain, Classic | 0 of 7 282 264 | 0 | 0 | 0 |
+| features, Classic | 12 of 926 348 | 0 | 0 | 1 |
+| markers (health bars), both presets | 0 of 1 080 | 0 | 0 | 0 |
+| terrain, Classic++ | 180 359 (2.5 %) | 474 | 0 | 29 |
+| features, Classic++ | 216 876 (23 %) | 89 864 | 4 320 | 64 |
+| units, both presets | 1 207 (2.4 %) | 280 | 158 | 240 |
+
+- **Units**: 12 pixels are drawn on one GPU only; the 158 over 32 levels fall in 50 spots of at
+  most 33 pixels, single rows and short runs along polygon edges. The two rasterisers round a
+  triangle's edge differently. The Classic++ row matches the Classic one because on each machine
+  the two presets' unit captures are identical (0 px): the unit pass drew its base atlas. On the
+  AMD card its log gives the reason — the restored twin was published for 1.0× anisotropic
+  (`classicpp.cfg=aniso=1`, the A/B's setting) after its sampler was built for 4.0×, and a
+  sampler is not rebuilt mid-frame; the reference setup's log of that run was not kept.
+- **Classic++ terrain** is the same picture: mean 0.03 levels over the drawn pixels, 99th
+  percentile 1, differences along texel edges.
+- **Classic++ features** hold the one visible difference: on the AMD card the restored trees
+  carry a few off-hue specks (dim magenta, red, blue) near trunks and edges. 2 388 pixels
+  change hue by more than 32; the mean is 2.2 levels and the 99th percentile 27. The restorer
+  itself caused them: the card's driver dropped the render-pass dependencies between its
+  passes. §2.95 has the diagnosis and the fix; with it, this capture differs by one level at
+  most.
+- **The nanoframe ladder** (G21b's wire): 13 of 74 931 pixels are drawn on one GPU only, so the
+  line rule draws the same shape on both. Colours differ by up to 180 because the build colour
+  pulses with game time and the two games paused at different ticks.
+- **Timing, not the GPU**: `shadow-lab`'s units (the dish and turrets stand at other angles),
+  `fx-lasers` and `fx-rockets` are live and paused at different ticks. The reference setup's
+  rockets had not fired when it paused, so `fx-rockets` has a Windows capture only.
+- The effects captures need `fx.on=nomodels`: the effects' 3D models are drawn by the unit pass,
+  and a one-pass capture refuses a frame two passes drew into.
+
+**Not covered.** The hard shadows' picture: they are drawn (logged, stencil-masked), but a
+one-pass capture has black under them, and there is no presented-frame capture on a remote
+instance. The 0.877× zoom, since a remote instance cannot write `tagpu_zoom.txt`. The validation
+layer on either machine. (Restored units across the two GPUs are measured in §2.95.)
+
+### 2.95 The restorer's passes and a driver that drops their render-pass dependencies (`tagpu_vk_restore.c` `end_pass`) — G21d
+
+**What was wrong.** On the Windows test setup's AMD card (§2.94), Classic++ damaged restored,
+keyed art. The owner saw it in the UI first: the Impure menu's gear icon, colour smears on the
+main menu's buttons, and the team colours. The feature pass showed off-hue specks on trees. All
+three lanes are keyed, and all three go through the same restorer passes.
+
+**How it was isolated [MEASURED 2026-09-25].** The captures used `restoredump.on` on
+`feat-forest`, with Classic++ armed before launch and the game paused. The dumps are byte
+dumps of the feature lane's base atlas and its restored twin, taken on both machines.
+
+- **The input is identical.** The base atlas is the same bytes on both machines.
+- **The output is not.** The restored twin differs in 2 807 texels (up to 179 levels), in 6 of
+  its 24 frames.
+- **The damage follows the slot grid.** A per-frame map of the batches (frame → batch → slot)
+  puts every damaged frame in a block of its batch's slot grid, mostly the grid's bottom row.
+  That row is the part of the full-viewport draw that the GPU rasterises last. Frames in the
+  other slots of the same batches are byte-identical to the reference setup's.
+- **The block edges are sharp.** In one 37 × 60 frame, rows 31–48 are wrong and every other
+  row is exact. A fault inside the network would spread one texel per layer, so the damage
+  enters at the last layers.
+- **It is a hazard, not arithmetic.** The damaged texels are the same set in every run, but
+  their values change: two runs of the same build differ from each other in 544 of them.
+
+Each variant below was run on the card and compared with the reference setup:
+
+| variant on the AMD card | texels unlike the reference setup |
+|---|---|
+| as shipped (NK 8) | 2 807 |
+| NK 4 | 2 461 |
+| NK 1 (179 render passes a batch, against NK 8's 25) | 3 605 |
+| slicing budget 100 ms (no batch split across frames) | 2 807, the same texels |
+| fp16 activations (against the reference setup's fp16 run) | 5 595 |
+| `LOAD` instead of `DONT_CARE` on the activation attachments | 2 807 |
+| a full pipeline barrier after every restorer render pass | **0** |
+
+On the reference setup, a 0.5 ms budget, which splits every batch across frames, changes
+nothing (0 texels).
+
+**The cause and the fix [SOURCE + MEASURED].** Every restorer pass states its ordering as
+subpass dependencies (`rp_deps`):
+
+- **incoming:** `EXTERNAL → 0`, from fragment-shader reads, colour writes and transfers, to
+  colour writes;
+- **outgoing:** `0 → EXTERNAL`, from colour writes, to fragment-shader reads, colour writes and
+  transfers.
+
+By the spec, that orders FILL → CONV × depth → OUT → the consumer's sample. The card's driver
+does not honour it for these passes.
+
+What sets FILL and CONV apart from the rest of the backend is that their attachments never
+change layout. The activations stay `GENERAL` at both ends and inside the subpass, while OUT and
+the mip pass transition their attachments. That this is why the driver skips the dependencies
+is **[INFERRED]**. Whether the driver honours the backend's other passes,
+which do transition, is not isolated either: none of §2.94's captures shows a hazard in them,
+and the owner's review of those captures found none.
+
+`end_pass` now ends every render pass in the file (FILL, CONV, OUT and the mip chain). It
+records the same ordering again as a `vkCmdPipelineBarrier`:
+
+- **source:** `COLOR_ATTACHMENT_OUTPUT | FRAGMENT_SHADER`, access colour write;
+- **destination:** `FRAGMENT_SHADER | COLOR_ATTACHMENT_OUTPUT | TRANSFER`, access shader read,
+  colour read and write, and transfer read and write.
+
+A pipeline barrier's scopes are the whole queue in submission order, so the barrier covers:
+
+- the next pass's sample (RAW);
+- the next pass's write of the same attachment (WAW);
+- a later pass writing what this one sampled (WAR, through the fragment-shader source stage);
+- `dump_step`'s copy.
+
+The subpass dependencies stay. They are what the spec requires, and the OUT and mip passes'
+layout transitions hang on them. `dst_ready`'s last barrier before a job's first OUT names
+OUT's own stage and accesses (colour-attachment output, read and write) as well as the
+consumer's sample, so the cleared destination does not rely on OUT's incoming dependency
+either.
+
+**With the fix [MEASURED 2026-09-25, the same scenes on both machines].**
+
+- **Features.** The restored twin is byte-identical to the reference setup's at NK 8 and at
+  NK 1. The reference setup's own output is unchanged by the barrier (0 texels).
+- **The rendered feature pass.** Its `.ab` capture differs from the reference setup's in
+  22 672 of 927 200 pixels, by one level at most. Before the fix: 217 004 pixels, 6 252 of them
+  past 32 levels, up to 84. The one-level residue is the twin's filtering, which Classic
+  features show too (§2.94).
+- **Units** (`nanoframe-ladder`, `native.on=all wrecks`, 60 frames restored). The base atlas is
+  identical on both machines. The restored twin plus its mip chain (22 MB) differs in 11
+  bytes: four texels of level 0 by one level, plus the border copies and mip texels built from
+  them. This is float rounding between the two GPUs.
+- **GUI.** The UI atlas fills lazily and packs in a different order on each machine, so its
+  texels are compared by content. A texel is matched to one in the other atlas whose 25 × 25
+  source window — the network's receptive field — has the same indices.
+  - Of 99 268 matched texels, 98 730 are identical, 336 differ by one level, and 202 by two to
+    six.
+  - The bug's damage ran to 216 levels, in blocks.
+  - The small residue lies where a matching window can still differ: the frame's rect decides
+    the zero padding, and the colour-key fill searches the whole frame **[INFERRED]**.
+
+**The cost.** On the reference setup, the four feature batches of the first restore take
+8 slices both before and after the fix. On the AMD card they take 16 slices of the 12 ms budget
+(246 ms of wall time). That is paid once per atlas fill, and a settled scene restores nothing.
+
+**Not covered.**
+- A before/after of the shell menus' own pictures. The owner's report is the before; the
+  after is theirs to look at.
+- Other AMD cards and driver versions.
+- The validation layer on either machine.

@@ -271,6 +271,37 @@ nothing sizes or indexes, so raising it costs time, not memory. The raised limit
 TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame.
 
+### The recorder's patch sites — `tplayx.dll` 3.9.2.416 [DISASSEMBLED 2026-09-25]
+
+TADR's demo recorder patches the engine as well, through its Delphi plugins. These are the sites of
+the build players run (Escalation's `eplayx.dll`), each checked in the pristine exe and its immediate
+found in that binary. What each feature does, and what to port, is in the
+[merge exploration](tadr-merge-exploration.md#the-shipped-features-by-port-group). The recorder
+writes some sites at a transient splice of the entry point `0x4E6FA0` (`push ebp; mov ebp,esp`), and
+the rest at the game's first call into a DirectPlay export.
+
+| VA | Stock code there | The recorder's patch |
+|---|---|---|
+| `0x491640`, `0x491659`, `0x491666` | the unit-cap default and ceiling (*The per-player unit cap* above) | 2-byte operand writes: 1500 |
+| `0x447D87` | `jne` after `call 0x457B90` (the count of controller-2 players) in the battleroom's Multi handler | NOP 6: several AIs in one game |
+| `0x45130F` | `push ecx; push "AI:%s"` and the `sprintf` that names an AI | a 16-character name buffer |
+| `0x490DF9` | inside `SetGameSpeed 0x490DF0`, which clamps to [1, 20] (`cmp ebx,0x14`); the speed packet handler calls it too (`0x455952`) | clamp to the speed lock's range instead |
+| `0x4965B3`, `0x496559` | the + and − keys' speed tests | the same clamp |
+| `0x496099` | the in-game key handler's pause case | a jump created disabled and never written; tdraw's `LagSwitchGuard` hooks the same site |
+| `0x480770` | COB `get` (`vt+0x44`) | a jump to the eight extra getters |
+| `0x416BBB` | inside `+View` (`0x416B50`), before it writes `main+0x2A43` at `0x416BC1` | line-of-sight bookkeeping |
+| `0x452B54`, `0x452B5E` | the two epilogues of the alliance setter | mark "alliances changed" |
+| `0x46555F` | in the per-tick player loop `0x464F80` | after a change, run the full rebuild `Game_SetLOSState 0x4816A0` once |
+| `0x481D63` (epilogues `0x481FAF`, `0x48207B`) | the sight removal `0x481D50` | repeat it for each ally |
+| `0x482283` (epilogues `0x4824CF`, `0x482597`) | the true-LOS stamp `0x482270` | repeat it for each ally |
+| `0x465AD4` | `UnitInPlayerLOS 0x465AC0`: its owner == player test | an allied owner answers "visible", before the cloak and submerged tests |
+| `0x48BC3D` | the HotUnits cull `0x48BAE0` | NOP 0x13 bytes: the own-player shortcut |
+| `0x4674AB`, `0x46750E`, `0x46782F` | the view player's radar scan `0x467440` | re-run passes 2–4 per ally, writing each into `main+0x2A43` |
+| `0x466E6F` | the minimap rebuild `0x466DC0` | draw allied units |
+| `0x46AC85`, `0x46B013`, `0x46B10E` | the unit panel's owner tests | show allied units' details |
+| `0x4D989B` | the crash writer: `push esi; call [0x4FC0EC]` (`CloseHandle`) | append a module list |
+| `0x417B9B` | `call 0x4B7900`, the console command interpreter | a command table, empty in the shipped build |
+
 ## Engine defects we patch — mapped by us [DISASSEMBLED + MEASURED 2026-09-23..25]
 
 Seven places where the retail 3.1 image writes or reads memory it does not own (the fourth is the
@@ -2405,6 +2436,22 @@ description.] The `CMD_LEVEL_DEBUG = 4` run level and the `+lostype` run-level b
 No evidence was found of a separate debug *build* ever leaking, nor of a graphical
 dev console — the chat bar is the console.
 
+**Which run level the chat bar grants** `[DISASSEMBLED 2026-09-25; MEASURED the same day]`.
+A chat line starting `+` (`0x493E04`) goes to `CallInternalCommandHandler 0x417B50(text,
+level)` with **level 1, or 7 when SoftwareDebugMode bit `0x2` is set** (`main+0x37F2F`,
+`0x493E14..0x493E20`; `tacli switches <i> cheats=on`), **OR 2 when `IsCheating 0x5091CC` is
+non-zero** (`0x493E25..0x493E2F`). The dispatcher `0x4B7900` runs a matched entry's handler only
+when `runLevel & level` is non-zero (`0x4B79CD..0x4B79D9`), and otherwise a fallback handler at
+`0x51FC90` with its level at `0x51FC94` (set by `0x4B78E0`, registered at `0x4195DD` as
+`0x417890`, level 4). The tables are registered at `0x4195C4..0x4195D8` (`0x501D38`, `0x501F48`,
+`0x501FD0`, through `InitInternalCommand 0x4B7760`). Every entry of the `0x501FD0` table read
+here — `PrintWeights`, `Profile`, `Reload`, `ReloadAIProfiles`, `Save` — is level 4, so it needs
+the SoftwareDebugMode bit. **`Reload`** is `{0x5021A8 "Reload", 0x417490, 4}` at `0x5020C0`: with
+an argument (`[argv+0xD0] > 1`) it resolves the unit name (`0x488B10`), calls `0x486E80(type)`
+`[not read]` and then the one-type reload `0x42D1F0(type)` (*The level's unit-data load*,
+below). Measured: `+reload armllt` without the bit left the type's record as it was (its
+ghost mask did not recompute); with it, `+reload ppllt` re-ran the FBI loader.
+
 ## Mapped internal data structures
 
 All from TADR's `tamem.h`, guarded by `static_assert` on field offsets and `sizeof` —
@@ -2983,7 +3030,7 @@ Clears `cells*2` bytes, then walks the map cells `[col0, col0+cols) × [row0, ro
 
 | Where | What it reads |
 | --- | --- |
-| `0x4843CD` | `main+0x2A43` — the **LOCAL** player id (not `+0x2A42`, the watched one). `mask = 1 << id` |
+| `0x4843CD` | `main+0x2A43` — the **viewed** player id, whose sight the screen shows (not `+0x2A42`, the controlled one; see *The order-marker chain*, "`+0x2A42` is the controlled player"). `mask = 1 << id` |
 | `0x4843F0` | `ebp = main + 0x1B63 + id*0x14B + 0x7C` — that player's LOS block: `{u8* counters; i32 w; i32 h}` at `+0`/`+4`/`+8` |
 | `0x48442D..0x484485` | `col0 = eyeX/32 − (eyeX % 32 < 16)`, `row0` the same from `eyeY`. Equivalently **origin = `32·col0 + 16`** |
 | `0x4844B9`/`0x4844C7` | `cx`/`cy` bounded against the LOS block's own `w`/`h`, **unsigned**, so a negative index is skipped |
@@ -4352,13 +4399,15 @@ independently — `0x416B25` and `0x416B38`, from two separate calls in one load
 function — so the two can hold different values, and code that reproduces either
 loop has to use the byte that loop uses.
 
-**Which of the pair is "watched" and which "local" is NOT established here, and
-this note's own pages disagree** [INFERRED, unresolved]: `ui-markers.md`'s
-appendix calls `+0x2A42` watched and `+0x2A43` local, while `effects.md`,
-`features.md` and `line-of-sight.md` all call `+0x2A43` the local player and the
-"Mapped internal data structures" table below calls `+0x2A42` the local player
-index. Nothing in this landing needed the names — only the addresses — so the
-question is left open rather than guessed at.
+**`+0x2A42` is the controlled player and `+0x2A43` the viewed one** [DISASSEMBLED 2026-09-25]. The
+two writers are the cheat commands in the table at `0x501D80`: `+Control N` (`0x416AB0`, run level 4)
+writes N to both bytes (`0x416B25`, `0x416B38`), and `+View N` (`0x416B50`, run level 2) writes only
+`+0x2A43` (`0x416BC1`). The LOS bit test at `0x43EBF4` shifts by `+0x2A43` (`0x43EBE5`). So `+0x2A42`
+is the player whose units the order driver and the selection use, and `+0x2A43` the player whose line
+of sight, fog and bars the screen shows. TADR names them the same way (`tamem.h`:
+`LocalHumanPlayer_PlayerID`, `LOS_Sight_PlayerID`). They are equal in ordinary play [INFERRED]. Some
+notes and code comments still call `+0x2A43` "local" and `+0x2A42` "watched"; the addresses in the
+code are right, only those names are wrong.
 
 Two further things are not obvious and both matter to a port. **The squad tag is
 tested as a DWORD** — `mov ecx,[edi+0xac]; test ecx,ecx` at both `0x469C55` and `0x469CD1` — and only
@@ -5390,7 +5439,7 @@ seven by driving the game and reading `main+0x2CBE` back, and `cursormove` and
 | `main+0x2C8E` / `+0x2C90` | the map cell pair, `world >> 0x14` |
 | `main+0x391F1` / `+0x391F5` | input mode, and the handler pointer for it |
 | `main+0x14903` | the `cursors` GAF handle |
-| `main+0x2A42` / `+0x2A43` | local player index, and the player's LOS bit (`shl 1, cl` at `0x43EBF4`) |
+| `main+0x2A42` / `+0x2A43` | the controlled player index / the viewed player index, whose LOS bit `0x43EBF4` tests (`shl 1, cl`, `cl` = `+0x2A43` at `0x43EBE5`); `+View` writes only `+0x2A43` |
 
 **Negative results worth the line.**
 
@@ -8420,6 +8469,54 @@ contract — one wrong frame, never a fault. `tagpu_native.c`'s `model_root` is 
 level teardown, so a reader also has to be outside that window. That is the render thread's
 `teardown_active()` gate, and its one hole is the pre hook's timeout (§6b).
 
+### `0x42D2E0` — the level's unit-data load, the FBI loader `0x42BF40`, and the one-type reload `0x42D1F0`
+
+`[DISASSEMBLED 2026-09-25, objdump of the pristine build; the reload MEASURED the same day]`
+Read for TADR section C ([data keys](tadr-port/data-keys.html)), whose unit-key reader hooks the
+FBI loader.
+
+- **`0x42D2E0` runs on the LOADER thread.** Its one caller is `0x4918CA`, inside
+  `LoadGameData_Main 0x4917D0`, which the loader body `0x497180` calls. Its per-type loop
+  (`esi = 1` while `esi < UNITINFOCount`, `0x42D6B6` / `0x42D915`) does three things per type, in
+  this order: the FBI — its path (`0x4290F0`), its size (`0x4BBC40`) and, **only when that
+  finds the file** (`0x42D71A` jumps past it on 0), **the FBI loader `0x42BF40(path, def)` at
+  `0x42D722`**; the model — `0x4CB560` open, `0x4CB590` parse, `0x42A140`
+  texture-match, stored to `MODEL_PTRS[esi]` at `0x42D7A2` (the section above); and the script —
+  `scripts\<name>.COB` (`0x42D8E5`) through `0x4B2450` into **`def+0x18E`** at `0x42D8F4`.
+- **`0x42BF40(path, def)`** (`sub esp,0x518`) opens the file (`0x4C2F60`) and finds `[UNITINFO]`
+  (`0x4C3410` with `0x503914`); at `0x42BF8C..0x42BF93` it takes **`ebp = def`**
+  (`[esp+0x530]`) and **`ecx = the section`** (`[esp+0x14]`), and at `0x42BF97` begins its first
+  read, `UnitName` into `def+0x20` (`0x42BFA7`). Nothing has been read from the file at
+  `0x42BF97`, and the stolen `push 0x5119B8` carries no relative operand: that is
+  `tagpu_datakeys.c`'s observer. **Two callers**: `0x42D722` (above) and `0x42D269` (below).
+- **`0x4C48C0`, the TDF string reader**, `thiscall(section, buf, key, len, dflt)`, `ret 0x10`:
+  a binary search of the section's keys with `_stricmp 0x4F8A70`. Found: `strncpy` (`0x4E4760`)
+  of `len` bytes, then `buf[len-1] = 0`, and it returns 1 — a value that fills the buffer is cut
+  silently. Absent: an **unbounded** copy of `dflt` (`0x4C4963..0x4C4988`), and it returns 0.
+- **`0x42D1F0(type)`, the one-type reload**, `stdcall`, `ret 4`. It skips type 0 and a type
+  whose def lacks the in-play flag `0x800000` at `+0x241`, makes the def array writable
+  (`0x4D8780`: `PAGE_READWRITE` over its heap block, through `0x4D8720` → `0x4D86B0`; the array
+  is read-only in play), rebuilds the FBI path, and — **only when `0x4BBC40` finds the file**
+  (`0x42D261`; otherwise it re-protects and returns, `0x42D2BF`) — re-runs **`0x42BF40` at
+  `0x42D269`**, frees the COB (`0x4B2540`, `0x42D275`) whether or not that loader got as far as
+  reading anything, loads it anew (`0x42D294`) into `def+0x18E` (`0x42D299`), and seals the array
+  again (`0x4D8710`: `PAGE_READONLY`). The model is **not** reloaded. Its one caller is `0x4174BE` in the console
+  command `Reload` (`0x417490`, *Built-in cheat/console command surface* above), so it runs on
+  the **GAME thread**, mid-play. The freed COB is reallocated at once, so it can come back at
+  the same address: a cache keyed on the COB pointer alone would not see the reload.
+  **MEASURED 2026-09-25**: `+reload ppllt` with SoftwareDebugMode `0x2` set re-ran the FBI loader
+  (`tagpu_datakeys`' reader logged it a second time), no crash.
+- **A table keyed on the def pointer alone can outlive its game.** The teardown frees the def
+  array (`0x42DCCB`) and the menu-time loader `0x42A8D0` allocates it again from the same count
+  before the next game (`0x42AA8A`), so the address can repeat; and the FBI loader can stop before it reads anything (the open at
+  `0x42BF66`, no `[UNITINFO]` at `0x42BF7C`) or not run for a slot at all (`0x42D71A`). A row
+  written for slot *k* in one game then answers for slot *k*'s def in the next.
+  `tagpu_datakeys.c` closes it by observing the two entries as well: `0x42D2E0`'s (`sub
+  esp,0x610`) empties its records at every unit-data load, and `0x42BF40`'s (`sub esp,0x518`)
+  resets the slot's record with a fresh serial before the open, so the read site fills only a
+  record its own call reset. `tagpu_weapons.c`'s `def_rec` keys on the def pointer alone and has
+  the same gap for a slot whose FBI the loader skips or fails to open.
+
 ### `0x42DB90` — the model templates are freed here, and only here
 
 `[BINARY-VERIFIED 2026-09-08]` Called once from the teardown cascade, `0x491C21`, the first call
@@ -8596,6 +8693,55 @@ engine calls `(*cb)->slot0(cb, value)` (`0x4B19E2..0x4B19E5`), and when a start 
 a full pool it calls the same with `0` at once (`0x4B0B11..0x4B0B1D`) — so a refused
 `AimPrimary` reports "not aimed" immediately, which is why the stock loop retries it.
 
+### The loaded script — `0x4B2450` `[DISASSEMBLED 2026-09-25]`
+
+`stdcall(path)`, `ret 4`, called at `0x42D8EF` (the level's load) and `0x42D294` (the one-type
+reload). It reads the file whole (`0x4BBE50`), checksums it (`0x4B6BA0` over the size
+`0x4BBC40` gives), enters it in a map at `0x51FBC0` through `0x4B2850` with the checksum at the
+entry's `+0x10` `[role INFERRED]`, and then **relocates the header in place**
+(`0x4B24A7..0x4B2527`): each offset becomes a pointer, and so does every entry of the two name
+tables:
+
+| offset | field | relocated |
+|---|---|---|
+| `+0x00` | version, 4 | — |
+| `+0x04` / `+0x08` | script count / piece count | — |
+| `+0x0C` | code length, in dwords | — |
+| `+0x10` | static-variable count | — |
+| `+0x14` | the count of the `+0x28` table's 8-byte entries | — |
+| `+0x18` | the entry-point table: one dword a script, **a code offset in dwords** | the table pointer only |
+| `+0x1C` | script names, `char*` a script | the pointer **and every entry** |
+| `+0x20` | piece names, `char*` a piece | the pointer **and every entry** |
+| `+0x24` | the code, dwords | the pointer |
+| `+0x28` | 8-byte entries, the second dword a name `[INFERRED: the sound table]` | the pointer and each entry's second dword |
+
+**Nothing checks a count or an offset**, so every one of them is file data: a reader that
+follows them bounds each first (`tagpu_datakeys.c`'s `create_hides`). The script is freed by
+`0x4B2540` and lives from the level's load to its teardown (`0x42DC3C`, zeroed at `0x42DC41`),
+or to a console `Reload` of its type.
+
+**The block's length is the checksum's.** The loaded script does not record its size, and the
+engine's allocator (`0x4D83B0` → the CRT's `malloc 0x4E8890`) keeps none we can read. But
+`0x4BBE50(path, 0)` sizes the block from the file's archive entry (`[[h+8]+4]`) or its
+`filelength` (`0x4E79D0`), and `0x4BBC40(path)` answers the same lookup the same way
+(`0x4BB2E0` with the same mode `0x505F10`, `0x4BBC5A..0x4BBC7E` against `0x4BBE9A..0x4BBEBC`);
+`0x4B6BA0(buf, size)` — a four-byte checksum, `stdcall`, `ret 8` (`0x4B6C1E`), that reads exactly
+`size` bytes (`0x4B6BC2..0x4B6BF0`) — is called with that pair at `0x4B2475..0x4B2477` and
+returns to `0x4B247C`. So the arguments of that one call are the block and its length, and the
+engine itself reads every byte of it there. They are two opens of one file, so they agree while
+the game's files hold still: a loose script rewritten by another program between `0x4BBE50` and
+`0x4BBC40` would make the engine's own checksum read past its block first. `0x4B6BA0` has eleven callers; `tagpu_datakeys.c`
+observes its entry and keeps the pair only for the call that returns to `0x4B247C`, which is how
+the ghost mask bounds every read of a script by its own block.
+
+**The model template has no such length.** `0x4CB560(path)` reads the `.3do` whole through the
+same `0x4BBE50` but passes no size out (`push 0`, `0x4CB565`), relocates it in place
+(`0x4CB4C0`: the name `+0x1C`, `+0x20`, the vertices `+0x24`, the faces `+0x28`, the sibling
+`+0x2C` and the child `+0x30`, recursively, and each face's pointers), and returns the block,
+which is the root node itself: `MODEL_PTRS[type]` is the file's first byte. So a reader of the
+tree (the pose bake, the native pass, the ghost's walk and its name compares) has the type bound
+and the level lifetime, and no length to bound a node's pointers against.
+
 ### The eight records — `cob+0x1C + slot × 0xA4`
 
 | Offset | Field | Established |
@@ -8608,7 +8754,7 @@ a full pool it calls the same with `0` at once (`0x4B0B11..0x4B0B1D`) — so a r
 | `+0x18` | the child slot a `call-script` waits on — **`-1` when the child was refused** | `0x4B1965` |
 | `+0x1C` | signal mask; `1` at alloc, inherited from the parent by START/CALL | `0x4B091A`, `0x4B18F4`, `0x4B1961`, `0x4B1B14` |
 | `+0x20` | completion callback object pointer (above), `0` at alloc | `0x4B0913`, `0x4B0B37`, `0x4B0C69` |
-| `+0x24` | the stack, 32 words to the end of the record | every push |
+| `+0x24` | the stack, 32 words to the end of the record. **`PUSH` has no bound**: `0x4B13CF..0x4B13D9` increments `+0x08` and stores, so a thread that holds more than 32 words writes into the next record, and past the eighth into the COB object. Stock content peaks at 11 words; three Escalation scripts need 54 to 85 ([merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)) [DISASSEMBLED 2026-09-25] | every push |
 
 **`COBEngine_AllocThread 0x4B08C0`** — `thiscall(cob, scriptIndex)` → slot 0..7 or `-1`: rejects an
 index outside `0..nscripts-1` (`0x4B08C5..0x4B08D0`) — so **the engine asking for a script the
@@ -8829,6 +8975,22 @@ without any `hide` in its script: they are one- and two-vertex marker nodes. Mea
 all eight fixtures that dumped a pose of their own unit — every `HIDDEN` piece is either such a
 node or one the unit's `Create` hides, with no exceptions and no false positives.
 
+**How COB piece *i* comes to name primitive *i*, exactly** `[DISASSEMBLED 2026-09-25]`. The count
+`0x45AE80` is `1 + count(child) + count(sibling)`, so it includes the root's own siblings.
+`0x45AEC0(o3, node, parent)` lays the primitives out in **pre-order**: the node at the index
+the count at `o3+0x00` holds (read `0x45AECA`, incremented `0x45AF35`), its parent primitive
+stored at `+0x32` (`0x45AF6B` / `0x45AF77`), then its child's whole subtree with itself as the
+parent (`[ebp+0x30]`, `0x45AF41..0x45AF44`), then its sibling's with its own parent
+(`[ebp+0x2C]`, `0x45AF60..0x45AF63`); it returns the primitive, stored as the child link `+0x2E`
+and the sibling link `+0x2A`. Then `0x45A950`'s loop (`0x45A9E3..0x45AA70`) runs over the COB's pieces: for piece
+*i* below the primitive count (`0x45A9E8`), it searches the primitives **from index *i* up** for
+the first whose node name `_stricmp`s equal to COB piece *i*'s (`0x45A9FD`), and if that is at
+*j* ≠ *i* it swaps the two whole `0x36`-byte primitives (`0x45AA1A..0x45AA51`); `0x45AF90`
+relinks the tree afterwards (`0x45AA7E`). So a COB piece whose name no node carries drives
+whatever primitive sits at its index, and two nodes of one name go to the first one found at or
+after the index. `tagpu_datakeys.c` reproduces this to find the node a `Create()` `HIDE`
+reaches; on the stock structures it equals a by-name match.
+
 ### The repose, and the window it leaves open — `0x45AC20`, `0x45AB10`, `0x45B030`, `0x45B0A0`
 
 The posed vertex buffers (`prim+0x22`) are not built once. **They are rewritten in place, on the
@@ -8925,6 +9087,8 @@ else nulls `o3+0x10`, not because this test fires; the repose above runs in `Dra
 **`0x480B20`**. Both are `thiscall(cob, id, a, b, c, d)` / `thiscall(cob, id, value)` and both
 open with `lea eax,[ecx-1]; cmp eax,0x13; ja` — so **the value ids really are 1..20** and
 anything else returns 0 / does nothing. `esi` is the unit, taken as `[[cob+0x540]+0x0C]`.
+TADR's recorder takes over `get` with a jump at `0x480770` and answers ids 32 and 69–75 as well; it
+never hooks `set` ([merge exploration §F](tadr-merge-exploration.md#f-the-cob-getters)).
 Read out of the binary at the addresses below; the arithmetic is what `tools/tacob`'s
 `EditorWorld` reproduces, and `tools/test_tacob.py` §`ValueIds` pins it.
 

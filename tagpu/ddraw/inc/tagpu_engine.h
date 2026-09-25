@@ -192,6 +192,10 @@
 #define UD_NAME            0x20        /* char UnitName[], inline               */
 #define UD_MAXHP           0x1FA       /* read as the engine's own divisor does */
 #define UD_TYPEMASK        0x241       /* u32 FBI booleans                      */
+#define UD_COB             0x18E       /* the type's COB, relocated in place by */
+                                       /* 0x4B2450; stored at 0x42D8F4 by the   */
+                                       /* level's unit-data load, freed and     */
+                                       /* zeroed by the teardown's 0x42DB90     */
 #define OFF_MODELPTRS      0x14377     /* Model3DONode*[UNITINFOCount]          */
 
 #define O3_NUMPARTS        0x00        /* u16                                   */

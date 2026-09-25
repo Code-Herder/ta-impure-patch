@@ -591,7 +591,11 @@ static int layer_view(const TAGPU_VKPASS* d, VkImage img, VkFormat fmt, int laye
    `BY_REGION` is deliberately NOT set. A conv draw reads a 3x3 neighbourhood
    of its input, and OUT reads the activation at the destination texel's own
    position in a DIFFERENT image; neither is a framebuffer-local read, and a
-   by-region dependency would promise exactly the locality these do not have. */
+   by-region dependency would promise exactly the locality these do not have.
+
+   THESE DEPENDENCIES ARE WHAT THE SPEC ASKS FOR, AND NOT WHAT EVERY DRIVER
+   DOES -- which is why `end_pass` below also records the same ordering as a
+   pipeline barrier. */
 static void rp_deps(VkSubpassDependency dep[2], int out)
 {
     VkPipelineStageFlags fs = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
@@ -621,6 +625,43 @@ static void rp_deps(VkSubpassDependency dep[2], int out)
     dep[1].dstStageMask = fs | co | tr;
     dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                            VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+}
+
+/* EVERY RENDER PASS IN THIS FILE ENDS HERE, and what it adds is the ordering
+   `rp_deps` states, recorded a second time as a pipeline barrier between this
+   pass and whatever the command buffer records next.
+
+   WHY BOTH. The subpass dependencies are sufficient by the spec, and a driver
+   can still drop them: AMD's Windows driver on an R9 200 series card does
+   (MEASURED 2026-09-25). There the next pass read the activations before this
+   one had finished writing them. The feature atlas came out with 2 807 texels
+   in 6 of 24 frames unlike the reference setup's. The damage sat in blocks of
+   a batch's slot grid, mostly its bottom row, which the GPU rasterises last,
+   and its values changed from run to run. With this barrier the atlas is
+   byte-identical. What sets FILL and CONV apart from the rest of the backend
+   is that their attachments never change layout -- the activations stay
+   GENERAL -- which is the likeliest reason the driver skips their dependencies
+   [INFERRED]. `gpu-status.md` §2.95 has the numbers and the variants that
+   ruled out everything else.
+
+   A pipeline barrier is the ordering primitive every driver is exercised on,
+   and its scopes are the whole queue in submission order, like the outgoing
+   dependency's: RAW for the next pass's sample and the dump's copy, WAW for
+   the next pass's write of the same attachment, WAR (the FRAGMENT_SHADER source
+   stage) for a pass that writes what this one sampled. */
+static void end_pass(VkCommandBuffer cb)
+{
+    VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+    vkCmdEndRenderPass(cb);
+    mb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                       VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cb,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &mb, 0, NULL, 0, NULL);
 }
 
 /* A RENDER PASS PER USED ATTACHMENT COUNT. The subpass always declares NK
@@ -859,9 +900,10 @@ static int build_rp_mip(const TAGPU_VKPASS* d)
     sp.colorAttachmentCount = 1;
     sp.pColorAttachments = &ref;
     /* `out` 0: this pass never reads its attachment. The dependency pair still
-       names FRAGMENT_SHADER on both sides, which is what orders level L-1's
-       write against level L's READ of it -- consecutive render passes over
-       levels of one image, and the hazard the whole reduction turns on. */
+       names FRAGMENT_SHADER on both sides, because level L reads what level
+       L-1 wrote -- consecutive render passes over levels of one image, and the
+       hazard the whole reduction turns on. `end_pass` records the same
+       ordering as a barrier, which is the half every driver honours. */
     rp_deps(dep, 0);
     rci.attachmentCount = 1; rci.pAttachments = &at;
     rci.subpassCount = 1; rci.pSubpasses = &sp;
@@ -1031,7 +1073,7 @@ static int build_shared(const TAGPU_VKPASS* d)
     {
         uint32_t att = s_dev.maxColour < s_dev.maxFragOut ? s_dev.maxColour : s_dev.maxFragOut;
         s_sched.be = &s_be;
-        nk = tagpu_rcore_pick_nk(&s_sched, (int)s_dev.maxUniformRange, (int)att);
+        nk = tagpu_rcore_pick_nk(&s_sched, s_dev.maxUniformRange, att);
     }
     if (!nk) return 0;
     s_wrange = (VkDeviceSize)s_sched.wmax * 64;
@@ -1647,6 +1689,14 @@ static void dst_ready(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
     VkImageMemoryBarrier mb = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     VkClearColorValue cc;
     VkImageSubresourceRange rg;
+    /* READY MEANS READY FOR BOTH READERS: the consumer's sample and the OUT
+       pass, which LOADS the attachment and writes it. The OUT render pass's
+       incoming dependency says the same, but that dependency is the half a
+       driver can drop (`end_pass`), so the barrier names OUT's stage itself. */
+    const VkPipelineStageFlags readyStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    const VkAccessFlags readyAccess = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     if (g->dstReady) return;
     memset(&cc, 0, sizeof cc);
     memset(&rg, 0, sizeof rg);
@@ -1659,20 +1709,19 @@ static void dst_ready(const TAGPU_VKPASS* d, struct TAGPU_VKRJOB* g)
     mb.srcAccessMask = g->dstHas ? VK_ACCESS_SHADER_READ_BIT : 0;
     mb.newLayout = g->clearDue ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    mb.dstAccessMask = g->clearDue ? VK_ACCESS_TRANSFER_WRITE_BIT : VK_ACCESS_SHADER_READ_BIT;
+    mb.dstAccessMask = g->clearDue ? VK_ACCESS_TRANSFER_WRITE_BIT : readyAccess;
     vkCmdPipelineBarrier(s_cb,
                          g->dstHas ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
                                    : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         g->clearDue ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         g->clearDue ? VK_PIPELINE_STAGE_TRANSFER_BIT : readyStage,
                          0, 0, NULL, 0, NULL, 1, &mb);
     if (g->clearDue) {
         vkCmdClearColorImage(s_cb, g->dstImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cc, 1, &rg);
         mb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         mb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        mb.dstAccessMask = readyAccess;
+        vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_TRANSFER_BIT, readyStage,
                              0, 0, NULL, 0, NULL, 1, &mb);
         g->clearDue = 0;
     }
@@ -1810,7 +1859,7 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
         vkCmdBindDescriptorSets(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploFill, 0, 1,
                                 &g->setFill, 1, dyn);
         vkCmdDraw(s_cb, 3, 1, 0, 0);
-        vkCmdEndRenderPass(s_cb);
+        end_pass(s_cb);
         return 1;
     }
 
@@ -1838,7 +1887,7 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
         vkCmdBindDescriptorSets(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploConv, 0, 1,
                                 &g->setConv[r->srcAct], 2, dyn);
         vkCmdDraw(s_cb, 3, 1, 0, 0);
-        vkCmdEndRenderPass(s_cb);
+        end_pass(s_cb);
         return 1;
     }
 
@@ -1895,7 +1944,7 @@ static int vk_draw(const TAGPU_RDRAWREQ* r)
                                 &g->setOut[r->srcAct], 2, dyn);
         vkCmdBindVertexBuffers(s_cb, 0, 1, &s_vbuf, &voff);
         vkCmdDraw(s_cb, (uint32_t)r->nv, 1, 0, 0);
-        vkCmdEndRenderPass(s_cb);
+        end_pass(s_cb);
     }
     return 1;
 }
@@ -2494,7 +2543,7 @@ static void chain_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, struct TAGPU_V
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_ploMip, 0, 1,
                                 &g->chainSet[L - 1], 1, &goff);
         vkCmdDraw(cb, 3, 1, 0, 0);
-        vkCmdEndRenderPass(cb);
+        end_pass(cb);
     }
     g->chainPainted = painted;
     g->chainDone = 1;
@@ -2527,8 +2576,8 @@ void tagpu_vk_restore_step(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t s
        of the slice; and the levels have to be right before the frame that
        samples them, which is this one. It runs outside every render pass the
        slice began, in the same command buffer and after the last OUT, so the
-       render pass dependency chain orders level 0's write against level 1's
-       read for us. */
+       barrier `end_pass` records after that OUT orders level 0's write against
+       level 1's read. */
     {
         int i;
         for (i = 0; i < TAGPU_R_MAXJOBS; i++) chain_step(d, cb, &s_vjob[i]);
