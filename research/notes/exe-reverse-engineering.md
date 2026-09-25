@@ -281,10 +281,11 @@ where it takes a player's payment and does not deliver (a feature reclaimed or d
 the wreck pool is full, and a feature reclaimed twice through a cell that is not its anchor), one
 where a network game can never start (two unit types with one unit-sync key), one where the peers
 of a network game disagree (a weapon with the ID 253, 254 or 255 hitting a feature, which rides
-with the seventh), and the out-of-memory text, which blames the disk. `tagpu_patches.c`
-(`patch_engine_defects`) patches all of them, eleven fixes, at every attach, in both builds:
-`ddraw.dll` is a static
-import of the exe, so `DllMain` runs before the exe's entry point. The eleven are independent. Each is skipped, with
+with the seventh), one where a saved game loads without the features on the map's border (the
+border mask runs before the restore), and the out-of-memory text, which blames the disk.
+`tagpu_patches.c` (`patch_engine_defects`) patches all of them, twelve fixes, at every attach, in
+both builds: `ddraw.dll` is a static
+import of the exe, so `DllMain` runs before the exe's entry point. The twelve are independent. Each is skipped, with
 its reason in the `enginefix:` log line, only when its bytes differ from the retail exe, its stub
 cannot be allocated, or its page cannot be made writable. The weapon IDs' fix is the one exception
 in the raised build: the raise rewrites the same sites, so there they are rows of the limits table,
@@ -298,9 +299,9 @@ Lava Run, Coast To Coast and Dark Side at 1920×1080 to 3840×2160, on the camer
 for the terrain pass, on Town & Country at 1024×768 for the two feature fixes, on Two
 Continents at 1024×768 for the composite scratch, with oversized units made locally from stock
 models (never committed), on Core Prime Industrial Area with the unit types
-`tools/unittypes_fixture.py` generates for the four large-mod fixes, and on Two Continents with the
-weapons `tools/weaponids_fixture.py` generates for the weapon IDs. Each compares against a build
-without the patch.
+`tools/unittypes_fixture.py` generates for the four large-mod fixes, on Two Continents with the
+weapons `tools/weaponids_fixture.py` generates for the weapon IDs, and on Two Continents with a save
+and its load for the border features. Each compares against a build without the patch.
 
 ### The unit sort's append can run past its buffer — `0x469807..0x469825` in `DrawGameScreen 0x468CF0`
 
@@ -744,7 +745,7 @@ record exactly once.
 | `0x424050` | the records' update, one caller `0x495585` [the game tick, INFERRED]; walks the **active** list only, moves a settled record to `+0x14217` (`0x4242B8`), and swaps a feature whose sequence has ended (`0x424495`) | — |
 | `0x4237D0` the reclaim completion `(who, pos)` [the first argument INFERRED] | stdcall, `ret 8`, returns 1 when reclaimed. A GAF feature whose cell is marked returns 0 before anything is paid (`0x423892` the cell's flags bit 0, `0x423898` the def's `+0xFE` bit 0) — **but stock tests the targeted cell, and `FeatureDie` marks only the anchor**, so a reclaim that lands on any other cell of a multi-cell feature while its sequence plays is paid again; the fork's engine fix makes `0x423892` test the anchor ([below](#the-reclaim-paid-twice)). Pays FeatureDef `+0xEC` **energy** (`0x4238FF`, or `0x4238EF` on a branch that scales it by one of two constants chosen by `main+0x37EEE`, for a player whose `+0x73` is 2 [INFERRED: a computer player, by difficulty]) and `+0xF0` **metal** (`0x42395B`, both branches; the order is TADR's `FeatureDefStruct` and our `tagpu_cat.c`, and MEASURED: `Building15` reads energy 0, metal 2900, and pays 2900 metal), **then** calls `FeatureDie(x, y, 1)` (`0x423965`), then, in a network game (`0x435100` = 3), sends `0x0F, 0xFF, x, y` (6 bytes, `0x4239A4`) | — |
 | `0x4244B0`, a feature taking damage [INFERRED; callers `0x49A626` (a projectile's impact) and the network handler] | calls `FeatureDie(x, y, 0)` at `0x424628`/`0x42465A` and sends subtype `0xFD` | — |
-| `0x424C00` the save-game loader's feature half (one caller, `0x43265A` in the game-load routine `0x432610`) | restores a feature's sequence with `FeatureDie(x, y, 1)` (`0x42507E`), `FeatureDie(x, y, 0)` (`0x42509D`) or `0x4233A0(x, y, 0)` (`0x4250BB`), then writes the record the cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26`, the low word of `+0x04`, `+0x2E`) **without checking that one was taken** | a load that finds the pool full writes into record 0, in stock and with the fix alike; a save holds no more records than its own pool, so only a save loaded into a smaller pool gets there |
+| `0x424C00` the save-game loader's feature half (one caller, `0x43265A` in the game-load routine `0x432610`, which the border fix wraps: "A saved game's features on the map's border") | restores a feature's sequence with `FeatureDie(x, y, 1)` (`0x42507E`), `FeatureDie(x, y, 0)` (`0x42509D`) or `0x4233A0(x, y, 0)` (`0x4250BB`), then writes the record the cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26`, the low word of `+0x04`, `+0x2E`) **without checking that one was taken** | a load that finds the pool full writes into the record the refused cell's `+0x0A` names, a word LoadMap never initialises — record 0 when the grid's block is fresh ("A saved game's features on the map's border") — in stock and with the fix alike; a save holds no more records than its own pool, so only a save loaded into a smaller pool gets there |
 | `0x455xxx` the feature event handler | subtype `0xFF` → `FeatureDie(x, y, 1)` (`0x4554B0`), `0xFE` → `0x4233A0(x, y, 1)` (`0x4554CA`), `0xFD` → `FeatureDie(x, y, 0)` (`0x4554E4`) | the receiver's own pool decides |
 
 **The defect.** With the pool empty, `FeatureDie` does nothing, and nothing tells its callers. The
@@ -1239,6 +1240,134 @@ both peers held the same wrecks cell for cell and the same units at the same hea
 stock-limits build, on the fixture's `--low` half, the same. The previous build, on the same
 `--low` run of 60 s: the host held 35 feature cells and the joiner 87, the three wrecks the
 lasers hit gone from the host alone.
+
+### A saved game's features on the map's border — `0x4833B0` before `0x424C00`, wrapped at `0x43265A` [DISASSEMBLED + MEASURED 2026-09-25]
+
+**The mask.** LoadMap's last write to the feature grid is `0x4833B0`, called at `0x483CF1` after
+the feature join: over a fixed set of cells it writes `0xFFFD` on a cell that is EMPTY (`0xFFFF`) or
+a footprint cell (`0xFFFE`) and leaves an anchor alone. The passes and their five stores are in
+"LoadMap's feature placement, and a saved game" (below). It is the only producer of `0xFFFD` in
+the grid: no other `0xFFFD` immediate in `.text` writes a def word (`0x446EAF`'s `mov ebx,0xfffd`
+is a bit mask applied to `+0x9D` of another structure).
+
+**What `0xFFFD` means to the engine** [DISASSEMBLED]. No reader tests `0xFFFD` alone; each treats it
+as one of the values at `0xFFFB` and up, which means one of three things:
+
+| meaning | readers |
+|---|---|
+| **blocked**: building and movement. Five readers share one rule: `0xFFFF` is free; a def below `0xFFFB` is blocked when FeatureDef `+0xFE` bit 6 is set, or when the def is at or past the def count; `0xFFFE` is resolved to its anchor and tested the same way; `0xFFFB`..`0xFFFD` are blocked | the yardmap placement test `0x47D2E0` (`0x47D57F`, fails at `0x47D80F`; callers `0x40A4CD`, `0x4198C6`, `0x47DBE5`); the footprint placement test `0x47DB70` (`0x47DC86`, fails at `0x47DD99`; nine callers, among them `0x402899`, `0x43D912`, `0x465321`, `0x481412`); per-cell passability for a movement class `0x47DE60(class, cell)` (`0x47DE7C`, returns 0); rect passability `0x47DFC0` (`0x47E090`), which the pathing refresh reaches through `0x47E1F0`; a transport's unload test `0x47E2D0(unit, pos)` (`0x47E449`; callers `0x40F417`, `0x40F57C`), which tests only the cells the player can see (`[main+0x14273]`) |
+| **refused**: no feature may be placed | `SpawnFeatureOnMap 0x423C50`: its footprint loop (`0x423D5F`) hands every cell that is not `0xFFFF` to `FEATURES_Destroy 0x4246B0` (`0x423D6A`), which refuses a def at `0xFFFB` and up (`0x4246EC`, returns 0 at `0x4246F2`), and the spawn abandons (`0x423D6F`/`0x423D71` → `0x423DE7`, returns 0). The feature spread in the tick `0x424050` moves only onto a cell that is exactly `0xFFFF` with no unit on it (`0x42418F`) |
+| **no feature**, the same as `0xFFFF` | `0x421DA0` and `GetGridPosFeature 0x421E60` (return `0xFFFF`); the order step `0x405141`; the AI's whole-map metal scan `0x40A7B0`; the cursor's feature word `0x4163A0`; the metal footprint `0x422040` (called once, at `0x483D7D`, after the mask); the burn `0x4233A0` (returns at `0x42353C`); `FeatureDie 0x423550` (returns at `0x4236F7`); the swap `0x423710`; the reclaim completion `0x4237D0`; the fire spread `0x4239C0`; the tick's one-cell sweep `0x424050`; `0x4244B0`; destroy-all `0x424840`; the save writer `0x424890`, which saves anchors only; the cursor chooser `0x43E490` and the order-for-target `0x43F0E0`; the feature draw in `DrawGameScreen` `0x468CF0` (`0x4698AA`, anchors only); the area reclaim scan `0x47EA40`; the projectile and feature-hit checks `0x49A120`, `0x49B284` |
+
+So the mask closes the border to building, to movement and to feature spawns, and to nothing else.
+
+**The pathing maps** [DISASSEMBLED]. 32 movement classes at `0x512358`, `0x20` bytes each:
+`+0x00` present, `+0x04`/`+0x06` the class's footprint (`s16`, [INFERRED] from its use as the
+refresh's margin), `+0x10`/`+0x14` the map's W and H,
+`+0x18` the map — two bits a cell, `((H + 15) / 16) · W` dwords — and `+0x1C` a tick the unit
+refreshes `0x440A70`/`0x440AF0` compare. `0x440940` builds them: for each present class it frees the
+old map, allocates the new one and fills it (`0x440500`), and it runs once a load, at `0x4918E3` in
+`LoadGameData_Main`, after LoadMap (`0x4918C0`): after the mask and before any saved feature is
+back. After that they change only through `0x440A40(xy, wh)` (stdcall, `ret 8`, `xy = x | y << 16`,
+`wh = w | h << 16`), which runs `0x440830` for each present class over the cells
+`[x − fw, x + w] × [y − fh, y + h]` clamped to the map, each through `0x47E1F0`. Its callers are
+`SpawnFeatureOnMap` (`0x424031`, with the anchor and FeatureDef `+0x94`), `FEATURES_Destroy`
+(`0x424822`), and the placement code at `0x47CEAD`, `0x47DB0A`, `0x47DB58`. The mask never calls it.
+
+**The restore.** `0x424C00(tdf)` (stdcall, `ret 4`) has one caller, `0x43265A`, in the game-load
+routine `0x432610`, which has one caller, `0x497B29` in the loader body (the condition is in
+"LoadMap's feature placement, and a saved game"). `0x432610` restores, in order: `Players`
+(`0x466050`), `Camera` (`0x41D2B0`), the features (`0x424C00`), `Metal`/`Plotmap` (`0x484D60`, the
+save's byte into cell `+0x07` for every cell), `PlayerFeatures` (`0x484E80`, bits 3–6 of cell
+`+0x0C`), `Mapping` (`0x484FA0`), `Units` (`0x486FD0`, at `0x432672`), `Meteor` (`0x438250`), then
+`0x48FE60`. The features' TDF section maps the save's type
+names to defs first (`Feature Type Names`; a name not loaded goes to `LoadFeature 0x4224B0`), then
+three loops place the records with `0x481550` and `SpawnFeatureOnMap(cell, def, …, 0xA)`, and **none
+tests the spawn's result**:
+
+| section | record | after the spawn |
+|---|---|---|
+| `Normal Features` (the spawn at `0x424FBF`) | 8 bytes: `x`, `y`, type, `+6` | `+6` into the cell's `+0x0A` (`0x424FC9`) |
+| `Animating Features` (`0x425050`) | 10 bytes: `x`, `y`, type, `+6`, `+8`, `+9` | by `+9`'s low nibble, the burn `0x4233A0(x, y, 0)` (`0x4250BB`), `FeatureDie(x, y, 0)` (`0x42509D`) or `FeatureDie(x, y, 1)` (`0x42507E`); then the wreck record the cell's `+0x0A` names takes `+6` at `+0x26` (`0x4250DF`), `+8` at `+0x04` (`0x4250E9`) and `+9`'s high nibble at `+0x2E` (`0x4250F4`) |
+| `3D Features` (`0x425180`) | `0x1A` bytes: `x`, `y`, type, `+6`, the position and the turn (passed to the spawn by pointer) | the wreck record the cell's `+0x0A` names takes `+6` at `+0x26` (`0x4251A2`) |
+
+Metal and energy are the def's (FeatureDef `+0xEC`/`+0xF0`); no record carries them.
+
+**The defect.** On a saved game the grid is masked while it holds no feature, so a saved feature
+whose anchor or any footprint cell the mask reaches is refused, where on the new game it stood:
+the TNT's features are down before the mask there, and the mask leaves anchors. And the restore
+carries on as though the spawn had succeeded. The spawn writes `+0x0A` only when it succeeds
+(the wreck index for a 3DO def at `0x423ED5`, 0 for a GAF def at `0x423EE9`, the row offset in a
+footprint cell at `0x423F52`), and nothing else ever writes `+0x0A`/`+0x0B` of a masked cell:
+LoadMap's grid comes from `0x4D83B0` (`W·H·13` bytes at `0x48399D`, CRT malloc with no fill outside
+the allocator's debug mode) and its init loop `0x4839D5..0x4839ED` writes `+0x00`, `+0x02`, `+0x07`,
+`+0x08` and two bits of `+0x0C`. So a refused `Animating` or `3D` record is written into the wreck
+record an uninitialised word names: record 0 when the grid's block is fresh from the system, which a
+block this large usually is [INFERRED: the heap hands a block over 508 KB out of `VirtualAlloc`,
+zero-filled], and any record, or up to `0xFFFF · 0x30` bytes (3 MB) past the pool's base, when the
+block reuses freed memory. MEASURED on the stock build, Two Continents (672 × 800 cells, 4 893 features), a save
+at 14 s and its load: **51 features do not come back**, four in rows 0–2 — the trees at (25, 0),
+(5, 1), (27, 2), (33, 2) — and 47 in rows 794–797, every one a one-cell feature that the new
+game's mask had left standing, each cell reading `0xFFFD` after the load. The write through `+0x0A`
+is disassembled, not measured.
+
+**The fix** (`fix_saved_features_border`, always on) retargets the call at `0x43265A` (its five
+bytes compared first) to `features_restore_under_mask`. It opens the mask for the restore and
+shuts it after: every cell holding `0xFFFD` is noted in a bitmap and set EMPTY, `0x424C00` runs
+unchanged, and every noted cell that is then EMPTY or `0xFFFE` is set back to `0xFFFD` — the mask's
+own rule over the mask's own cells, without recomputing which cells those are. The restore's
+spawns have refreshed the pathing maps over each feature's rectangle while the mask was open, so
+once it is shut every anchor's rectangle is refreshed again with `0x440A40`, the call and the
+arguments the spawn uses.
+
+**The invariant**: the grid after the restore is the mask applied to the restored features, as a
+new game's is the mask applied to the TNT's (a restored feature keeps its anchor on a masked cell
+and loses its masked footprint cells; every other masked cell reads `0xFFFD` again), and the
+pathing maps are that grid's — an entry inside a restored feature's rectangle is computed again
+from it, and an entry outside every such rectangle reads no feature cell and no cell the mask did
+not shut again, so it is the build's. It rests on a bound and an ordering. The mask is opened only
+when the grid holds no feature (no def below `0xFFFB`, no `0xFFFE`), which is the state `0x424C00`
+is called in (on every load measured, the check passed), so no cell it opens is under a feature, every anchor afterwards is a restored one,
+and nothing but the restore sees a cell open. The grid is read as LoadMap sized it (`W · H`,
+`main+0x14233`/`+0x14237` refused outside 1..4096), and it is shut only when its pointer and both
+counts are what they were before the restore. A def reaches its FeatureDef only below the def
+count `main+0x14253`. Everything runs on the loader thread inside the level load, where the engine
+writes the grid and the pathing maps itself, before any unit is restored. A grid out of range, a
+feature already down, or no memory for the bitmap leaves the restore to stock, logged
+(`savedfeat: … the restore ran with the border mask shut`). Identity on a new game, whose load never
+reaches `0x424C00`, and on every saved game with no feature on a masked cell. The log line of a
+load it changes: `savedfeat: the restore ran with the border mask open: 5938 cells opened, 5887
+shut again, 51 hold a restored feature's anchor; 4893 rectangles of the pathing maps refreshed in
+30 ms` (Two Continents; 28–33 ms over four loads).
+
+**MEASURED 2026-09-25**, Two Continents at 1024×768 on a private X server, a four-player
+skirmish, with a diagnostic build (never committed) that writes the grid's 13-byte cells to a file
+on a trigger:
+
+- **The fix's own save and load** (a save at 9 s): 4 893 features at the save and after the load,
+  and the whole grid — all 13 bytes of all 537 600 cells — byte-identical with the grid at the save.
+- **The stock build's save, loaded by the fixed build**: byte-identical, all 13 bytes of every cell,
+  with the stock build's grid at the moment it saved.
+- **A new game** under the two builds: the def words identical cell for cell, and no `savedfeat:`
+  line. The only bytes that differ are `+0x00`/`+0x01` and bit 1 of `+0x0C` under the footprints of
+  AI commanders and one structure, which moved or were started between the two dumps.
+- **The pathing maps**, by a diagnostic oracle that copies all 15 present classes' maps,
+  recomputes the whole map with `0x440A40(0, W | H << 16)` and counts the dwords that change: 0 on
+  a new game; 0 after a load from the main menu, under both builds. After a load from inside a
+  running game, 10 dwords of class 2 change at x 20–24, y 464–495, under **both** builds alike: a
+  stock property of an in-game load, away from every masked cell.
+
+**Multiplayer.** The fix sends nothing, and it changes the simulation: the restored features block
+building and movement, burn, take hits and pay out when reclaimed. On a saved multiplayer game
+loaded by peers with and without the fix, the fixed peers have the border features and the others
+do not, so the peers disagree wherever play reaches those cells; a feature event (`0x0F`) for one
+of them does nothing on a peer that has `0xFFFD` there (`FeatureDie` returns at `0x4236F7`). Every
+peer of a saved game should run the same build.
+
+**Not closed.** The write through an uninitialised `+0x0A` is still reachable by a refusal the
+mask does not cause — a record on a void cell, a footprint past the map, or a wreck pool that runs
+out (a save from a build with the raised limits, loaded with stock ones) — for an animating or a 3D
+feature. The in-game load's class-2 pathing difference is stock's and is not investigated here.
 
 ## Built-in cheat/console command surface
 
@@ -4878,11 +5007,11 @@ them, all on the loader thread. That call is conditional [DISASSEMBLED 2026-09-2
 `0x4B48F0` (a `thiscall` on that TDF, after `0x4B4560("summary")`) finds no `BetweenMissions` key
 (the string at `0x504924`, `test eax,eax; jne 0x497B40`). With the key, the loader calls `0x488310`
 and `0x41D1F0` instead and restores nothing; with no TDF at all (a new game) it asks `0x435100` of
-`main+0x391E9` and, on 1, calls the same two. So **a saved feature whose footprint touches a masked cell does not
-come back from a save at all** — a stock defect. MEASURED 2026-09-24 on Two Continents: after a save
-and its load, the cells (25, 0), (5, 1), (27, 2) and (33, 2), each a tree in the TNT and on the map
-before the save, read `0xFFFD` and draw nothing (the same under two builds of the DLL). The defect
-is the engine's and is left as it is here; the mirror does not depend on it (below).
+`main+0x391E9` and, on 1, calls the same two. So **a saved feature whose footprint touches a masked
+cell does not come back from a save at all** — a stock defect, patched: "Engine defects we patch",
+"A saved game's features on the map's border", which has the readers of `0xFFFD`, the restore's
+records and the measurements (on Two Continents, 51 of 4 893 features lost by the stock build, among
+them the trees at (25, 0), (5, 1), (27, 2) and (33, 2)). The mirror does not depend on it (below).
 
 **The mirror's list** (`tagpu_packet_pub.c` `mapfeat_at_load`, a stub at the join) replays the
 paths above on a private `W × H` grid: v2's void markers first, then the TNT's features in row
