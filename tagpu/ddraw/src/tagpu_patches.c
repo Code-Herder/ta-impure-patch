@@ -2096,8 +2096,9 @@ static void wpn_note_in(volatile LONG* budget, const char* what, unsigned int a,
 
 /* B3's diverged-0x0D drop counter, incremented in wpn_rx_fired above and reported by
    the wire-robustness block below (its own enginefix line). It is defined here so the
-   0x0D fix that owns wpn_rx_fired keeps counting it whichever build is compiled. */
-static unsigned int s_wireWpnxDrops;
+   0x0D fix that owns wpn_rx_fired keeps counting it whichever build is compiled. The
+   accepted count is the check run and passed on a live shooter: evidence the bound ran. */
+static unsigned int s_wireWpnxDrops, s_wireIn0D;
 
 /* In place of `mov edx,[main]` at 0x42E468, after the loader read `ID` into eax (-1 when the
    section has none) and the section's name into edi. edx is the base the loader's own
@@ -2187,6 +2188,7 @@ static int __cdecl wpn_rx_fired(unsigned int* regs)
                              id, pkt[0x23]);
                     return 0;
                 }
+                s_wireIn0D++;
             }
         }
     }
@@ -2697,10 +2699,21 @@ static int wire_block_ok(const char* first, const char* last, const char* begin,
    rather than a plain 0x09; ghost = the engine's own ghost sweep firing (a round-robin type 0
    over an occupied slot). Observe-only, reported on the heartbeat. */
 static unsigned int s_wireMorph, s_wireRecreate, s_wireGhost;
-/* drop counters, per message, in the enginefix line */
+/* drop counters, per message */
 static unsigned int s_wire09, s_wire0C, s_wire0Ckill, s_wire0B, s_wire2C;
-/* AI-seat observe: a wire 0x09 whose unit index is not inside its named owner's own block */
-static unsigned int s_wireBlockObs;
+/* records accepted off the wire, per receiver: evidence each bound ran on real traffic (the
+   same role as the line-of-sight own-row counters). 0x0B and 0x0C count only the dispatcher's
+   call (return 0x455417 / 0x455428), not the local kill and damage paths that share the
+   function; 0x2C counts messages, dirty entries, dirty creates and round-robin entries. */
+static unsigned int s_wireIn09, s_wireIn0B, s_wireIn0C;
+static unsigned int s_wireIn2C, s_wireIn2CDirty, s_wireIn2CCreate, s_wireIn2CRR;
+/* the sender-block observe (the plan's 0x09 rule, not enforced): for a wire 0x09, whether the
+   created slot lies in the TRANSPORT SENDER's own block. The sender is the dispatcher's edi (its
+   player record, the one the 0x2C and 0x0D cases pass), which CreateFromNetwork saves with its
+   last push (0x4861EC), so it is [esp+0] at 0x4861F7; it is bounded as one of the ten records at
+   main+0x1B63, stride 0x14B (the loop at 0x406E05 counts ten). argdiff counts a create whose
+   player argument is not the sender; unk a sender pointer that is no player record. */
+static unsigned int s_wireSendIn, s_wireSendOut, s_wireArgDiff, s_wireSendUnk, s_wireSendSeen;
 /* the type carried from the type check to the after-create check, game thread only */
 static int s_wire_2c_type, s_wire_rr_type;
 /* the stop path's zero dword: a misframed 0x2C reader points here so its flag bit reads 0 */
@@ -2749,9 +2762,30 @@ static int __cdecl wire_s09(unsigned int* r)
         if (ret == 0x0048BA00u || ret == 0x0048B497u) {
             s_wireRecreate++;
         } else if (ret == 0x004553E9u) {
-            const char* bfirst = *(const char* const*)(ta + 0x1BCA + r[PR_EDX]);  /* owner +0x67 */
-            const char* blast  = *(const char* const*)(ta + 0x1BCE + r[PR_EDX]);  /* owner +0x6B */
-            if (bfirst && blast && (slot < bfirst || slot > blast)) s_wireBlockObs++;
+            const char* players = ta + 0x1B63;
+            const char* snd = *(const char* const*)sp;     /* the dispatcher's edi */
+            s_wireIn09++;
+            if (snd >= players && snd < players + 10 * 0x14B && (snd - players) % 0x14B == 0) {
+                unsigned int si = (unsigned int)(snd - players) / 0x14B;
+                const char* sf = *(const char* const*)(snd + 0x67);
+                const char* sl = *(const char* const*)(snd + 0x6B);
+                int in = sf && sl && slot >= sf && slot <= sl;
+                if (in) s_wireSendIn++;
+                else s_wireSendOut++;
+                if (r[PR_EDX] != si * 0x14B) s_wireArgDiff++;
+                if (!(s_wireSendSeen & (1u << si)) || (!in && InterlockedIncrement(&s_wireNotes) <= 64)) {
+                    s_wireSendSeen |= 1u << si;
+                    tagpu_logf("enginefix: wire robustness: 0x09 from sender %u (type %u, '%.30s'), "
+                               "player arg %u, slot %u, sender block %u..%u: %s", si,
+                               (unsigned int)*(const unsigned char*)(snd + 0x73), snd + 0x2B,
+                               r[PR_EDX] / 0x14B, idx,
+                               sf ? (unsigned int)(sf - first) / 0x118 : 0,
+                               sl ? (unsigned int)(sl - first) / 0x118 : 0,
+                               in ? "in the sender's block" : "OUTSIDE the sender's block");
+                }
+            } else {
+                s_wireSendUnk++;
+            }
         }
         r[PR_ESI] = (unsigned int)(size_t)slot;
         *(unsigned int*)(sp + 0x20) = r[PR_EDX];   /* stock's mov [esp+0x20],edx at 0x4861FE */
@@ -2779,6 +2813,7 @@ static int __cdecl wire_s0c(unsigned int* r)
         wire_drop(&s_wire0C, "a unit-destroy names a unit past the array; dropped", idx, max);
         return 0;
     }
+    if (*(const unsigned int*)(WPN_ESP_JMP(r) + 0x78) == 0x00455428u) s_wireIn0C++;
     r[PR_ESI] = (unsigned int)(size_t)((char*)first + (size_t)idx * 0x118);
     return 1;
 }
@@ -2832,6 +2867,7 @@ static int __cdecl wire_s0b(unsigned int* r)
                   vidx > aidx ? vidx : aidx, max);
         return 0;
     }
+    if (*(const unsigned int*)(WPN_ESP_JMP(r) + 0x0C) == 0x00455417u) s_wireIn0B++;
     r[PR_ESI] = vidx ? (unsigned int)(size_t)((char*)first + (size_t)vidx * 0x118) : 0;
     r[PR_EBX] = aidx ? (unsigned int)(size_t)((char*)first + (size_t)aidx * 0x118) : 0;
     return 1;
@@ -2864,6 +2900,7 @@ static int __cdecl wire_s2c_entry(unsigned int* r)
                   0, n);
         return 0;
     }
+    s_wireIn2C++;
     return 1;
 }
 
@@ -2885,6 +2922,7 @@ static int __cdecl wire_s2c_delta(unsigned int* r)
                   (unsigned int)delta, n);
         return 0;
     }
+    s_wireIn2CDirty++;
     r[PR_ESI] = (unsigned int)(size_t)(bfirst + (size_t)delta * 0x118);
     r[PR_EAX] = (unsigned int)(size_t)ta;
     return 1;
@@ -2915,7 +2953,9 @@ static int __cdecl wire_s2c_type(unsigned int* r)
         return 0;
     }
     s_wire_2c_type = (int)type;
-    return (*(const unsigned short*)(slot + 0xA6) == (unsigned short)type) ? 2 : 1;
+    if (*(const unsigned short*)(slot + 0xA6) == (unsigned short)type) return 2;
+    s_wireIn2CCreate++;
+    return 1;
 }
 
 /* 0x2C after the dirty create, branch at 0x48BA05. esi = the slot. Requires the slot now holds
@@ -2959,6 +2999,7 @@ static int __cdecl wire_s2c_rr(unsigned int* r)
     r[PR_EBP] = 0;
     if (type == 0) {
         if (slot && *(const unsigned short*)(slot + 0xA6)) s_wireGhost++;
+        s_wireIn2CRR++;
         return 1;
     }
     if (!wire_type_ok(type, count)) {
@@ -2971,6 +3012,7 @@ static int __cdecl wire_s2c_rr(unsigned int* r)
         return 0;
     }
     s_wire_rr_type = (int)type;
+    s_wireIn2CRR++;
     return 2;
 }
 
@@ -3207,12 +3249,19 @@ static int fix_wire_bounds(void)
     return FIX_PROTECT;
 }
 
-/* the heartbeat's three oracle counters (§10), read by tagpu_packet_pub.c's extra() */
-void tagpu_wire_counters(unsigned int* morph, unsigned int* recreate, unsigned int* ghost)
+/* the heartbeat's wire section, read by tagpu_packet_pub.c's extra() on the render thread:
+   DLL counters only, each a u32 the game thread alone writes */
+int tagpu_wire_format(char* buf, unsigned int cap)
 {
-    if (morph)    *morph    = s_wireMorph;
-    if (recreate) *recreate = s_wireRecreate;
-    if (ghost)    *ghost    = s_wireGhost;
+    return _snprintf(buf, cap,
+                     " | wire: in 09=%u 0b=%u 0c=%u 0d=%u 2c=%u dirty=%u create=%u rr=%u"
+                     " drop 09=%u 0b=%u 0c=%u kill=%u 2c=%u 0d=%u"
+                     " morph=%u recreate=%u ghost=%u send in=%u out=%u argdiff=%u unk=%u",
+                     s_wireIn09, s_wireIn0B, s_wireIn0C, s_wireIn0D, s_wireIn2C, s_wireIn2CDirty,
+                     s_wireIn2CCreate, s_wireIn2CRR,
+                     s_wire09, s_wire0B, s_wire0C, s_wire0Ckill, s_wire2C, s_wireWpnxDrops,
+                     s_wireMorph, s_wireRecreate, s_wireGhost,
+                     s_wireSendIn, s_wireSendOut, s_wireArgDiff, s_wireSendUnk);
 }
 
 /* tagpu_wirecheck.on: a unit test of the predicates on boundary values (0, the last valid
@@ -4478,13 +4527,10 @@ static void patch_engine_defects(void)
               "(0x4866E5 0x486753), 0x0B damage (0x489CED), 0x2C stat/move -- block, delta, type, "
               "move class, after-create, and the unsigned round-robin remainder (0x48B960 0x48B985 "
               "0x48B9AD 0x48BA05 0x48B40E 0x48B49C 0x48BA9F); the diverged 0x0D dropped in "
-              "wpn_rx_fired (0x49D280). Drops: 0x09=%u 0x0C=%u killer=%u 0x0B=%u 0x2C=%u 0x0D=%u. "
-              "Oracles (heartbeat): morph=%u recreate=%u ghost=%u; wire 0x09 out of owner block=%u. "
+              "wpn_rx_fired (0x49D280). Records accepted, drops, the morph/recreate/ghost oracles "
+              "and the sender-block observe are on the heartbeat's 'wire:' section. "
               "Stubs: %u of 4096 bytes at 0x%08X",
-              fix_state(wire),
-              s_wire09, s_wire0C, s_wire0Ckill, s_wire0B, s_wire2C, s_wireWpnxDrops,
-              s_wireMorph, s_wireRecreate, s_wireGhost, s_wireBlockObs,
-              s_wireCodeUsed, (unsigned int)(size_t)s_wireCode);
+              fix_state(wire), s_wireCodeUsed, (unsigned int)(size_t)s_wireCode);
     b[sizeof b - 1] = 0;
     plog(b);
 }

@@ -6,7 +6,8 @@
    left untouched. The exe on disk is never modified. */
 void tagpu_apply_patches(void);
 
-/* The wire-robustness landing's three observe-only oracle counters (morph, recreate, ghost;
-   sim-fixes.md B3, evidence §10), read by the heartbeat. Zero until the game runs. */
-void tagpu_wire_counters(unsigned int* morph, unsigned int* recreate, unsigned int* ghost);
+/* The wire-robustness landing's heartbeat section (sim-fixes.md B3): records accepted per
+   receiver, drops, the morph/recreate/ghost oracles (evidence §10) and the sender-block observe.
+   DLL counters only; returns _snprintf's count. */
+int tagpu_wire_format(char* buf, unsigned int cap);
 #endif
