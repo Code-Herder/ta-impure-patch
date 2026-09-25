@@ -18781,7 +18781,7 @@ Each variant below was run on the card and compared with the reference setup:
 |---|---|
 | as shipped (NK 8) | 2 807 |
 | NK 4 | 2 461 |
-| NK 1 (four times the render-pass boundaries) | 3 605 |
+| NK 1 (179 render passes a batch, against NK 8's 25) | 3 605 |
 | slicing budget 100 ms (no batch split across frames) | 2 807, the same texels |
 | fp16 activations (against the reference setup's fp16 run) | 5 595 |
 | `LOAD` instead of `DONT_CARE` on the activation attachments | 2 807 |
@@ -18801,9 +18801,10 @@ subpass dependencies (`rp_deps`):
 By the spec, that orders FILL → CONV × depth → OUT → the consumer's sample. The card's driver
 does not honour it for these passes.
 
-What sets them apart from the rest of the backend is that their attachments never change
-layout. The activations stay `GENERAL` at both ends and inside the subpass. That this is why the
-driver skips them is **[INFERRED]**. Whether the driver honours the backend's other passes,
+What sets FILL and CONV apart from the rest of the backend is that their attachments never
+change layout. The activations stay `GENERAL` at both ends and inside the subpass, while OUT and
+the mip pass transition their attachments. That this is why the driver skips the dependencies
+is **[INFERRED]**. Whether the driver honours the backend's other passes,
 which do transition, is not isolated either: none of §2.94's captures shows a hazard in them,
 and the owner's review of those captures found none.
 
@@ -18822,7 +18823,10 @@ A pipeline barrier's scopes are the whole queue in submission order, so the barr
 - `dump_step`'s copy.
 
 The subpass dependencies stay. They are what the spec requires, and the OUT and mip passes'
-layout transitions hang on them.
+layout transitions hang on them. `dst_ready`'s last barrier before a job's first OUT names
+OUT's own stage and accesses (colour-attachment output, read and write) as well as the
+consumer's sample, so the cleared destination does not rely on OUT's incoming dependency
+either.
 
 **With the fix [MEASURED 2026-09-25, the same scenes on both machines].**
 
