@@ -15,4 +15,9 @@ int tagpu_wire_format(char* buf, unsigned int cap);
    owner's and the bystanders' verdicts, bare messages dropped, copies' stamps, the hold, and
    the tagpu_dmgdelay.on oracle. DLL counters only; returns _snprintf's count. */
 int tagpu_hits_format(char* buf, unsigned int cap);
+
+/* The ghost-commander landing's heartbeat section (sim-fixes.md B5): creates held during the
+   load, replayed or dropped at the in-play entry, and the dirty creates' positions by kind.
+   DLL counters only; returns _snprintf's count. */
+int tagpu_ghost_format(char* buf, unsigned int cap);
 #endif
