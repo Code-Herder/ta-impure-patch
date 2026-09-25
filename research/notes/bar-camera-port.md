@@ -300,16 +300,26 @@ tile taken from the reflected cell and its flip bits in spare bits of the instan
 
 **What the build added to the plan** [BUILT 2026-09-24, [GPU status](gpu-status.html) §2.89]:
 
-* **The map's own features come from a snapshot**, the whole feature grid read on the game thread
-  at the level's first in-play draw, before the scenario applier can run, and carried to the render
-  thread as the packet's last table. "The TNT's anchors" is not something the game keeps apart from
-  a scenario's, so the snapshot is how the mirror tells them apart.
-* **Ground and trees switch on together**: the terrain mirrors only while the feature pass holds
-  this level's copy.
-* **A flipped axis nudges the other way.** The half-texel nudge that breaks a tie between two texels
-  breaks it toward the previous texel once reflected, so at 0.25×, where every sample is a tie, the
-  mirror was the flipped art one texel out of phase. The game corrects it; the lab does not, and its
+* **The map's own features come from the TNT.** No moment of a saved game's load has them in the
+  feature grid, so the game rebuilds them on the loader thread, inside LoadMap, by LoadMap's own
+  placement rules, and hands them to the game thread under a lock; the render thread gets them in
+  the level's first packets. The mirror is a pristine copy of the map: nothing play, a save or a
+  scenario does to the map reaches it, and a map with no features mirrors its ground.
+* **Ground and trees switch on together**: while the feature pass draws features, the terrain
+  mirrors only once that pass holds this level's copy.
+* **The map's own features keep main's depth keys**; a mirrored one takes a key that continues the
+  painter's order across the edge without moving any of them. The lab takes one key rect for both,
+  which the game cannot: it would move an on-map tree past a 3D wreck of its row.
+* **A flipped quad nudges the other way.** The nudge that breaks a tie between two texels breaks it
+  toward the previous texel once reflected, so at 0.25×, where every sample is a tie, a mirror
+  nudged like the map is the flipped art one texel out of phase. The game nudges a flipped quad
+  the other way and keeps the map's nudge at the corners on a fold, so every sample lands in the
+  quad that owns its texel, the seams between flipped cells included; the lab does not, and its
   0.25× mirror is not an exact reflection (below).
+* **A turned feature at 0.25× is not an exact reflection.** A feature sprite is not nudged on the map
+  (main's), so its ties at 0.25× fall to the interpolation's rounding, and a turned copy rounds
+  differently: 7 % of the side strip's lit samples, open ([GPU status](gpu-status.html) §2.89, *What it
+  does not do*).
 * **The grid's origin is a floor**, in the game and in the lab. The engine's toward-zero division
   left up to 31 px of the view's leading edge with no cell past the top or left edge, which the
   mirror showed as a band of clear colour ([terrain depth](terrain-depth.html)).

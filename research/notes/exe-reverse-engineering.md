@@ -731,7 +731,7 @@ record exactly once.
 | `0x424050` | the records' update, one caller `0x495585` [the game tick, INFERRED]; walks the **active** list only, moves a settled record to `+0x14217` (`0x4242B8`), and swaps a feature whose sequence has ended (`0x424495`) | — |
 | `0x4237D0` the reclaim completion `(who, pos)` [the first argument INFERRED] | stdcall, `ret 8`, returns 1 when reclaimed. A GAF feature whose cell is marked returns 0 before anything is paid (`0x423892` the cell's flags bit 0, `0x423898` the def's `+0xFE` bit 0) — **but stock tests the targeted cell, and `FeatureDie` marks only the anchor**, so a reclaim that lands on any other cell of a multi-cell feature while its sequence plays is paid again; the fork's engine fix makes `0x423892` test the anchor ([below](#the-reclaim-paid-twice)). Pays FeatureDef `+0xEC` **energy** (`0x4238FF`, or `0x4238EF` on a branch that scales it by one of two constants chosen by `main+0x37EEE`, for a player whose `+0x73` is 2 [INFERRED: a computer player, by difficulty]) and `+0xF0` **metal** (`0x42395B`, both branches; the order is TADR's `FeatureDefStruct` and our `tagpu_cat.c`, and MEASURED: `Building15` reads energy 0, metal 2900, and pays 2900 metal), **then** calls `FeatureDie(x, y, 1)` (`0x423965`), then, in a network game (`0x435100` = 3), sends `0x0F, 0xFF, x, y` (6 bytes, `0x4239A4`) | — |
 | `0x4244B0`, a feature taking damage [INFERRED; callers `0x49A626` (a projectile's impact) and the network handler] | calls `FeatureDie(x, y, 0)` at `0x424628`/`0x42465A` and sends subtype `0xFD` | — |
-| `0x424890` the save-game loader [INFERRED from what it restores] | restores a feature's sequence with `FeatureDie(x, y, 1)` (`0x42507E`), `FeatureDie(x, y, 0)` (`0x42509D`) or `0x4233A0(x, y, 0)` (`0x4250BB`), then writes the record the cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26`, the low word of `+0x04`, `+0x2E`) **without checking that one was taken** | a load that finds the pool full writes into record 0, in stock and with the fix alike; a save holds no more records than its own pool, so only a save loaded into a smaller pool gets there |
+| `0x424C00` the save-game loader's feature half (one caller, `0x43265A` in the game-load routine `0x432610`) | restores a feature's sequence with `FeatureDie(x, y, 1)` (`0x42507E`), `FeatureDie(x, y, 0)` (`0x42509D`) or `0x4233A0(x, y, 0)` (`0x4250BB`), then writes the record the cell's `+0x0A` names (`0x4250C0..0x4250F4`: `+0x26`, the low word of `+0x04`, `+0x2E`) **without checking that one was taken** | a load that finds the pool full writes into record 0, in stock and with the fix alike; a save holds no more records than its own pool, so only a save loaded into a smaller pool gets there |
 | `0x455xxx` the feature event handler | subtype `0xFF` → `FeatureDie(x, y, 1)` (`0x4554B0`), `0xFE` → `0x4233A0(x, y, 1)` (`0x4554CA`), `0xFD` → `FeatureDie(x, y, 0)` (`0x4554E4`) | the receiver's own pool decides |
 
 **The defect.** With the pool empty, `FeatureDie` does nothing, and nothing tells its callers. The
@@ -4374,20 +4374,71 @@ its bound.
 | the feature grid | `main+0x14287`, `0x0D` per cell: `+0x04` height, `+0x08` def index, `+0x0A` wreck index, `+0x0C` flags | the rect is clamped to `main+0x14233`/`+0x14237`; a def index `≥ 0xFFFB` is not an anchor |
 | a wreck record | `main+0x1420B + idx·0x30`: `+0x04` Object3do, `+0x08/+0x0C/+0x10` the 16.16 position | reached only from an anchor whose FeatureDef row is inside `main+0x14253` and whose `FeatureMask` bit 0 is clear — **and whose cell index is under the pool's count** (`WR_COUNT` = `TAGPU_LIM_WRECKS`: 2048 in stock, 8192 under the raised limits), the pool `0x421F29` allocates. **[ADDED 2026-09-12, a landing review]** the index had no bound at all before, and this walk is not the engine's: the engine's own read at `0x46A6C4` is equally unbounded but only ever forms the address for a cell it is drawing, where the publisher covers the zoom-floor rect plus a 32-cell margin. The allocator `0x4232A0` returns the count itself when the free list is empty, so the count is the engine's own "no record" value as well as the array's length |
 | the frame's option bytes | `main+0x0DCB` the GUI colour array — **256 bytes, not 64** [CORRECTED 2026-09-12, landing 4a: `0x4AC7D0` rebuilds it from `guipal` and its loop at `0x4AC7FF..0x4AC88F` writes exactly `0x100` of them], `+0x2C76`/`+0x2C7A` the dispatched mouse point, `+0x2C92..+0x2CA6` the build cursor's two corners, `+0x2CC3` the cursor mode, `+0x2CC6` the region flags, `+0x37F06` the option byte (damagebars, Shadow, TShadow, FShadow), `+0x1424B`/`+0x1424F` the feature sweep | none needed: they are values, and every consumer of them already treated them as such |
-| the feature grid, WHOLE, once a level | `main+0x14287` over all `main+0x14233` × `main+0x14237` cells: `+0x08` def index, `+0x0C` flags (bit 0 only), `+0x04` height of the cell and of its right, lower and lower-right neighbours | the map's own features for the map edge's mirror (`mapfeat_snapshot`, `TAGPU_PK_MAPFEAT`, [GPU status](gpu-status.html) §2.89). The dimensions must be 1..4096 and `NumFeatureDefs` (`main+0x14253`) 1..4096; a def index is kept only under that count and a cell with flags bit 0 is skipped, being the wreck pool's; the neighbours take the anchor scan's edge clamps; the table stops at 65 536 entries and says so (`TAGPU_PK_TRUNC_MAPFEAT`). Taken on the level's first in-play draw only — see the ordering below |
+| the map's own features, once a load | **not read by the publisher**: built on the LOADER thread at LoadMap's join `0x483B53` from the TNT's own records, and adopted by the publisher from a hand-over under a lock — see "LoadMap's feature placement, and a saved game" below | the TNT's version, records and threshold from LoadMap's frame; `main+0x14233`/`+0x14237` 1..4096; `NumFeatureDefs` 0..4096 and a def read only under it; the heights of the grid LoadMap has just written; 65 536 entries at most (`TAGPU_PK_TRUNC_MAPFEAT`) |
 | the shade table | `[0x51FBD0]+0xC4`, 32 × 256 bytes | the FORMAT is the bound: `0x459C70`'s Gouraud path indexes it with a 5-bit row and a byte, so a copy of exactly that size reads what the rasteriser reads. The unit lane does not remap through it: `tagpu_render3do.c` fits one RGB multiplier per row from it (`shade_k_build`, [GPU status](gpu-status.html) §2.88) |
 
-**The map's own features are taken before any scenario can touch the grid** [VERIFIED 2026-09-24,
-`objdump` of the pristine build at `0x4969CB..0x4969D7`]. The played frame is `push ebx; push
-ebx; call 0x468CF0` at `0x4969CD`, and the instruction after it, `0x4969D2` (`A1 E8 1D 51 00`,
-`mov eax, ds:0x511DE8`), is where the scenario applier's tick stub lands its `jmp` — the applier
-creates its units, features and wrecks from there and from nowhere else (`tagpu_scenario.c`).
-The publisher's observer on `DrawGameScreen` runs its `after` when that call returns, before
-control reaches `0x4969D2`. So the `after` of a level's first in-play draw precedes the first run
-of the stub in that level, whatever the applier has queued, and the whole-grid snapshot taken
-there is the grid the map's load left (`tagpu_packet_pub.c` `after_draw`, the snapshot above the
-publish and outside its FRESH gate, because a publish can be skipped and this must not be). Its
-cost is one `u16` load per cell on that one frame and was not measured.
+### LoadMap's feature placement, and a saved game [DISASSEMBLED 2026-09-24, objdump of the pristine build]
+
+The map edge's mirror draws the map as its TNT lays it out ([GPU status](gpu-status.html) §2.89),
+and **no moment of a saved game's load has that in the feature grid**. So the list is built from
+the TNT itself, by LoadMap's own placement rules, at the one point every path reaches.
+
+**LoadMap `0x483610`** runs on the loader thread; its one caller is `0x4918C0`. After
+`0x421F20` has loaded the map's FeatureDefs (called at `0x4839F4`; `main+0x14253` is their count,
+and `0x4224B0` only ever appends a def, so an index never changes meaning), it takes one of two
+paths by the TNT's version, `[esp+0x18]` (`0x1020` or `0x2000`):
+
+| path | records | always | a new game only |
+| --- | --- | --- | --- |
+| v1, `[esp+0x48]` | 8 bytes a cell: height `+0`, feature `u8` at `+2` | the height loop `0x483A14..0x483A31` | `0x483A3E`/`0x483A44`: `main+0x38D6B` non-zero jumps to the join; else every cell whose feature is below `[esp+0x50]` (`0xFC`) is spawned, `0x483A7E` |
+| v2, `[esp+0x4C]` | 4 bytes a cell: height `+0`, feature `u16` at `+1` | the height loop `0x483AB9..0x483AF2`, which also spawns `0xFFFC` — the void marker — on every cell whose feature is `0xFFFC` (`0x483ACA..0x483ADE`) | `0x483B02`/`0x483B0A`: the same test; else every cell whose feature is below `[esp+0x50]` (`0xFFFB`) is spawned, `0x483B38`, and then `0x423160` adds the schema's own features (`0x483B4E`) |
+
+Every spawn is `SpawnFeatureOnMap 0x423C50(cell, def, 0, 0, 0xA)` in row order, and **every branch
+of both paths lands on `0x483B53`** (`mov edx,[esp+0x40]; shl edx,0xa`, seven position-independent
+bytes whose flags the `shl` overwrites), before the TNT buffer is freed at `0x483BA6`. The frame
+slots above are LoadMap's at that address. `main+0x38D6B` is the saved game being loaded: set at
+`0x492655`, cleared at `0x4915F4`. `0x423160` walks the schema's list at `[main+0x391E9]+0xDBC`,
+count `+0xDC0`, `0x88`-byte records — features the `.ota` places, which are not the TNT's.
+
+**`SpawnFeatureOnMap 0x423C50`**: a footprint (`FeatureDef+0x94` × `+0x96`, 16-px cells, from the
+anchor right and down) that runs past the map is refused. Then, footprint cell by footprint cell,
+anything not empty (`0xFFFF`) goes to `FEATURES_Destroy 0x4246B0(cell, 0)`, and a refusal
+abandons the spawn **keeping whatever it destroyed so far**. A 3DO def (`+0xFE` bit 0 clear) then
+takes a wreck-pool record, and none left abandons it too. The anchor takes the def, every other
+footprint cell `0xFFFE` with its offset back to the anchor in `+0x0A` (dz) and `+0x0B` (dx).
+**`FEATURES_Destroy 0x4246B0`** resolves a `0xFFFE` cell to its anchor; a def at `0xFFFB` or above
+is refused (the void and border markers), and so is a def with `+0xFF` bit 1; otherwise it frees a
+3DO feature's record, clears the anchor and every `0xFFFE` cell of the def's rectangle, and calls
+`0x440A40`.
+
+**A saved game's features come back later**, from the save: `0x424C00`, called at `0x43265A` from
+the game-load routine `0x432610`, calls `LoadFeature 0x4224B0` (`0x424DE1`)
+and places each record with `GetGridPosPLOT 0x481550` and `SpawnFeatureOnMap` (`0x424FBF`,
+`0x425050`), then restores its sequence (the calls at `0x42507E`, `0x42509D`, `0x4250BB`, below).
+**Between the two, `0x4833B0` masks the border** (called at `0x483CF1`, after the join): every cell
+the projection pushes off the map, and every lava cell ([terrain depth](terrain-depth.html)), that is
+still EMPTY becomes `0xFFFD` (the `cmp dx,0xffff` at
+`0x483432`, `0x48344E` and `0x4834C5` before each store), and a spawn onto `0xFFFD` is refused by
+`FEATURES_Destroy`. A new game's TNT features are already down when the mask runs, so they survive
+it; **a saved game's are not, so a feature on a masked cell does not come back from a save at
+all** — a stock defect. MEASURED 2026-09-24 on Two Continents: after a save and its load, the
+cells (25, 0), (5, 1), (27, 2) and (33, 2), each a tree in the TNT and on the map before the save,
+read `0xFFFD` and draw nothing (the same under two builds of the DLL).
+
+**The mirror's list** (`tagpu_packet_pub.c` `mapfeat_at_load`, a stub at the join) replays the
+paths above on a private `W × H` grid: v2's void markers first, then the TNT's features in row
+order, with the spawn's refusals, its destroys, their resolution through the anchor offsets and
+the pool count (`WR_COUNT`) as LoadMap applies them. What it keeps is every GAF anchor that
+survives, row-major, with the anchor scan's height term from the grid's heights (written on both
+paths before the join). It never places the schema's features, which the TNT does not hold.
+MEASURED 2026-09-24 against the engine's own grid at the join, on a new game of each map (a
+diagnostic build, not the shipped one): Two Continents 4 893 of 4 893, Pincushion 1 536 (68
+spawns refused, as the engine refuses them), Lava Alley 800 (15 refused), Town & Country 6 206,
+Eastside Westside 3 001, Core Prime 0 — identical cell by cell; Steel Jungle and King of the Hill
+3 779 and 859 alike, the grid holding one and eight features more, which are the schema's. On a
+saved game the list is the same as on the new one, by construction. **Its cost**, once a load on
+the loader thread: 1.86–2.18 ms on Two Continents (672 × 800 cells), 6.89 ms on Seven Islands
+(1280 × 1280, the largest stock map), built only when the session draws with Vulkan.
 
 ### The effects: the four per-frame arrays [VERIFIED 2026-09-12, landing 4a, objdump of the pristine build]
 
