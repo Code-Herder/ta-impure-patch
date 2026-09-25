@@ -5088,13 +5088,18 @@ static int fix_stale_hits(void)
     *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitBare0B);
     hit_jmp(p, 0xE9, 0x00455F50);
 
-    /* 0x4653DE, after the players phase's create 0x4653D9, whose unit it uses at 0x465414 with
-       no test: stock's mov esi,eax; xor eax,eax; mov edi,[esp+0x34] when there is one. With
-       none -- the block full, or every free slot freed in this tick -- the countdown the create
-       ran on (main+0x39239, fired at -1) is set back to 0, so the next tick's decrement fires
-       it again, where the slots freed in this tick are the fallback's; and the block's own end
-       0x4654FB is taken, whose stack is this site's (0x496E90 ret 0xC, 0x4816A0 and 0x48D630
-       ret 4) and which restores edi, bl and ebp. */
+    /* 0x4653DE, after the Deathmatch respawn's create 0x4653D9, whose unit it uses at 0x465414
+       with no test: stock's mov esi,eax; xor eax,eax; mov edi,[esp+0x34] when there is one.
+       With none, the block's own end 0x4654FB is taken, whose stack is this site's (0x496E90
+       ret 0xC, 0x4816A0 and 0x48D630 ret 4) and which restores edi, bl and ebp. NULL comes from
+       the block with no free slot, from the hold (every free slot freed in this tick), and --
+       below the cap too, stock faulting here on each -- from a type 0 (0x485F7C), a type
+       without def+0x241 bit 0x800000 (0x485FAA) and the type's own limit def+0x15A (0x485FE4).
+       NOTHING IS WRITTEN: the countdown main+0x39239 stays at -1, as stock's fire leaves it, so
+       every reader of it (0x46554F, which gates 0x401360, above all) sees stock's own sequence, and
+       while the respawn's trigger still holds, its own countdown reloads (0x46518B) and fires
+       again six of the controlled player's passes later -- the retry, with its placement
+       search. */
     p = aSpawn;
     *p++ = 0x8B; *p++ = 0xF0;                            /* mov esi,eax        */
     *p++ = 0x85; *p++ = 0xF6;                            /* test esi,esi       */
@@ -5104,9 +5109,6 @@ static int fix_stale_hits(void)
     p = hit_jmp(p, 0xE9, 0x004653E6);
     *jNone = (unsigned char)(p - (jNone + 1));
     *p++ = 0xFF; *p++ = 0x05; p = hit_abs(p, &s_hitRetry);          /* inc [s_hitRetry] */
-    *p++ = 0xA1; p = hit_abs(p, (const void*)0x00511DE8);           /* mov eax,[main]   */
-    *p++ = 0x66; *p++ = 0xC7; *p++ = 0x80;                          /* mov word [eax+   */
-    p = hit_abs(p, (const void*)0x00039239); *p++ = 0x00; *p++ = 0x00; /*  0x39239],0     */
     hit_jmp(p, 0xE9, 0x004654FB);
 
     hit_site(0x00486036, 10, take, 0xE9, aTake, "stale hits: the hold, first-free's free test");
@@ -5116,7 +5118,7 @@ static int fix_stale_hits(void)
     hit_site(0x004560AE, 5, tx09, 0xE8, (const void*)hit_tx_create, "stale hits: the 0x09 sent carried");
     hit_site(0x00489CB9, 5, tx0bA, 0xE8, (const void*)hit_tx_hit, "stale hits: the 0x0B sent carried");
     hit_site(0x00489CCD, 5, tx0bB, 0xE8, (const void*)hit_tx_hit, "stale hits: the 0x0B sent carried, no attacker");
-    hit_site(0x004653DE, 8, spawn, 0xE9, aSpawn, "stale hits: the players phase's create, retried");
+    hit_site(0x004653DE, 8, spawn, 0xE9, aSpawn, "stale hits: the Deathmatch respawn's create, tested");
     hit_slot(0x00455F90, 0x0045522Eu, aChat, "stale hits: the 0x05 receiver");
     hit_slot(0x00455FA0, 0x004553DAu, aBare09, "stale hits: a bare 0x09 dropped");
     hit_slot(0x00455FA8, 0x0045540Du, aBare0B, "stale hits: a bare 0x0B dropped");
@@ -5132,7 +5134,7 @@ static int fix_stale_hits(void)
    the companions' bytes and stockB= what the bare messages would have been; copy= counts the
    stamps CreateFromNetwork's exit took, by kind; held= creates the hold moved to an unheld
    slot, fallback= to a slot freed in the last tick, holdfail= creates it failed, retry= the
-   players phase's creates put off a tick. */
+   Deathmatch respawns that found no slot and wait for their countdown's next fire. */
 int tagpu_hits_format(char* buf, unsigned int cap)
 {
     const struct hit_tab* t = s_hit;
@@ -5229,7 +5231,7 @@ static void patch_engine_defects(void)
               "victim's incarnation (0x4560AE 0x489CB9 0x489CCD; the receiver 0x455F90; bare ones "
               "dropped 0x455FA0 0x455FA8), a copy's stamp at CreateFromNetwork's exit (0x48634F), "
               "the two-tick hold (0x486036 0x486DC1), reset with the unit array (0x4854A0), "
-              "the players phase's create retried (0x4653DE). "
+              "the Deathmatch respawn's create tested (0x4653DE). "
               "Counters on the heartbeat's 'hits:' section. Stubs: %u of 4096 bytes at 0x%08X",
               fix_state(hits), s_hitCodeUsed, (unsigned int)(size_t)s_hitCode);
     b[sizeof b - 1] = 0;
