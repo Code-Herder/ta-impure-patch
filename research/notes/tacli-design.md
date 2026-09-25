@@ -588,24 +588,31 @@ carries `shield: ARMED (hardware input blocked)`. An injected `ctrl+a` was polle
 
 ### What the live gates measured [MEASURED 2026-09-25, the Windows test setup]
 
-**The registry store** (this design; the DLL built from this branch before the `-r` closure,
-md5 `806fa9bb…`):
+**The registry store** (this design; the DLL built from this branch with the token and the
+fail-closed decision, md5 `c80a6083…`):
 
-- `remote add` copied 94 files (1051 MB) in 14 s and seeded the store with 3 keys and 79 values.
-- `launch`: `registry: TEST MODE -- TotalA.exe's registry is tacli-state\registry.txt: 3 keys, 79
-  values loaded; hooks: TotalA.exe 9 of 9 registry imports, win32.dll 2 of 2`. The launch
-  reported `TotalA.exe runs at priority Normal`, and `Get-Process` read `Normal` on the game of
-  the `scenario load` that followed.
+- `remote add` copied 94 files (1051 MB) in 12 s and seeded the store with 3 keys and 79 values.
+- `launch`: `registry: TEST MODE, entered by the -xtacli-test token and the tacli-state folder
+  -- TotalA.exe's registry is tacli-state\registry.txt: 3 keys, 79 values loaded; hooks:
+  TotalA.exe 9 of 9 registry imports, win32.dll 2 of 2`, then `the -r switch (DirectPlay
+  registration through dsetup.dll) is ignored`. The launch reported `TotalA.exe runs at
+  priority Normal`.
 - `scenario load cob-building --restart` clicked through the skirmish menu into a game. The store
-  served 47 writes. The file then differed from the player's key in `launch`'s test values and
-  in the three the game changed (`SingleMapping`, `SingleLineOfSight`, `SkirmishMapping`), and
-  in nothing else. The counters: `the real registry was asked for 1 read-only opens, 1
+  served 47 writes and the file was written 3 times. The file then differed from the player's
+  key in `launch`'s eight test values (`Interface Type`, the six sound values, `SkirmishMap`)
+  and in the three the game changed (`SingleMapping`, `SingleLineOfSight`, `SkirmishMapping`),
+  and in nothing else. The counters: `the real registry was asked for 1 read-only opens, 1
   reads and 1 closes, and for no write ... 1 writes were refused` (the DirectX version check,
-  and the CD autoplay key `HKLM\SOFTWARE\Classes\AudioCD\shell`).
+  and the CD autoplay key `HKLM\SOFTWARE\Classes\AudioCD\shell`). `tacli-state\` then held
+  `registry.txt` and `copied.txt` only, and the test folder no `.tacli-old` or temporary file.
 - After `stop`, and again after `rm`: `HKCU\Software\Cavedog Entertainment` exported
   byte-identical to its export before `remote add` (22 990 bytes), and so did the Indeo codecs'
   `HKCU\…\Drivers32` (452 bytes). Every file of the player's folder had the same SHA-256, size
-  and write time (94 files). `rm` left no test folder, no `\tacli\` task and no metadata.
+  and write time (94 files). `rm` reported `the task folder \tacli\ removed, as it held no other
+  task`, the scheduler's root listed no `\tacli` folder afterwards, and no test folder and no
+  metadata were left.
+- The fail-closed paths were run under wine, not on that machine: the plan's G21c block has
+  the lines and the call counts.
 - `Get-ScheduledTaskInfo` reads `LastTaskResult` as a signed number (a game ended by
   `Stop-Process` reads `-1`); `task_status` takes it as its 32 bits. A task that does not exist
   answers nothing under `-ErrorAction SilentlyContinue`.
@@ -634,8 +641,8 @@ unit-tested against a model of PowerShell that runs the generated lines. Also no
 live: `ui` verbs beyond the snapshot and the clicks of the `scenario load` path; a non-ASCII
 path (carried in base64 and unit-tested, not run); a store seeded from a key with non-ASCII
 names or strings. Two tacli commands driving one remote instance at once are not supported:
-the key-file protocol assumes one writer. `rm` leaves the empty `<user profile>\tacli` folder
-and the Task Scheduler folder `\tacli\` behind.
+the key-file protocol assumes one writer (the metadata itself stays whole: each save has its own
+temporary file). `rm` leaves the empty `<user profile>\tacli` folder behind.
 
 ## Why (constraints that shaped it)
 

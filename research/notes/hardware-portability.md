@@ -308,27 +308,29 @@ the plan's shape and what the work settled.
       runs;
     - `TotalA.exe -r` by hand (tacli refuses the switch) in the test-mode instance: `the -r
       switch (DirectPlay registration through dsetup.dll) is ignored`, and the game stayed in
-      its front end until stopped 45 s later, where stock quits. The live gate below ran the
-      DLL from before this closure; the Windows test setup's `TotalA.exe` has the pristine
-      exe's SHA-256 (the player's folder manifest), so the byte-matched patch meets the same
-      bytes there.
-  - **Live, on the Windows test setup** (this branch's DLL, before the `-r` closure):
+      its front end until stopped 45 s later, where stock quits.
+  - **Live, on the Windows test setup** (this branch's DLL with the token and the fail-closed
+    decision; the fail-closed paths themselves were run only under wine, above):
     - `remote add`: 94 files copied, the store seeded with 3 keys and 79 values;
-    - `launch`: the log reads `registry: TEST MODE ... 3 keys, 79 values loaded; hooks:
-      TotalA.exe 9 of 9 registry imports, win32.dll 2 of 2`, and `TotalA.exe runs at priority
-      Normal` (`Get-Process` agrees);
-    - `scenario load cob-building`, which clicks through the skirmish menu: the store served
-      the game's 47 writes, `MixingBuffers` among them (the save `0x430F00`), and the file holds
-      the three that changed a value (`SingleMapping`, `SingleLineOfSight`, `SkirmishMapping`)
-      beside `launch`'s test values. The last count reads `the real registry was asked for 1
-      read-only opens, 1 reads and 1 closes, and for no write ... 1 writes were refused`: the
-      DirectX version check, and the CD autoplay key;
+    - `launch`: the log reads `registry: TEST MODE, entered by the -xtacli-test token and the
+      tacli-state folder -- ... 3 keys, 79 values loaded; hooks: TotalA.exe 9 of 9 registry
+      imports, win32.dll 2 of 2`, then the `-r` closure's line (the byte-matched patch met the
+      same bytes in that machine's `TotalA.exe`), and `TotalA.exe runs at priority Normal`;
+    - `scenario load cob-building --restart`, which clicks through the skirmish menu: the store
+      served the game's 47 writes, `MixingBuffers` among them (the save `0x430F00`), and the
+      file then differed from the player's key in `launch`'s eight test values and in the three
+      the game changed (`SingleMapping`, `SingleLineOfSight`, `SkirmishMapping`), nothing else.
+      The last count reads `the real registry was asked for 1 read-only opens, 1 reads and 1
+      closes, and for no write ... 1 writes were refused`: the DirectX version check, and the
+      CD autoplay key. No `.tacli-old` or temporary file was left in the test folder;
     - after `stop`, and again after `rm`: `HKCU\Software\Cavedog Entertainment` exported
       byte-identical to its export before the add (22 990 bytes), and so was the Indeo codecs'
       `Drivers32` key; all 94 files of the player's folder had identical hashes, sizes and
-      write times; `rm` left no test folder, no task and no metadata.
-  - The same launch's log previews G21d on that card: `vk: depth format: D32_SFLOAT_S8_UINT
-    (130)`.
+      write times. `rm` reported `the task folder \tacli\ removed, as it held no other task`,
+      and the scheduler's root then listed no `\tacli` folder; no test folder and no metadata
+      were left.
+  - The first live gate's log (the DLL before the `-r` closure) previews G21d on that card:
+    `vk: depth format: D32_SFLOAT_S8_UINT (130)`.
 - **Not closed.** Nothing hooks the system DLLs that call the registry for the game
   (DirectPlay, DirectSound), what `ShellExecuteA` starts, `online.dll`'s extension DLLs or the
   processes it starts, or a DLL the game loads after attach; which of them write during a test
