@@ -62,9 +62,9 @@ int  tagpu_mark_gather(const TAGPU_FXVIEW* v);
    a PALETTE index, as gui[] holds — not a GUI slot number. 0 = the bucket is
    full and nothing was emitted, so the caller can count the drop.
 
-   A line is `0x4CC7AB`'s Bresenham on the game-pixel grid, one game pixel
-   wide at any zoom and any `ss`: its ends are quantised AFTER the wheel zoom
-   by tagpu_line.h's rule, so a caller hands the end it means -- an engine
+   A line is `0x4CC7AB`'s walk on the line grid (the world target's pixels),
+   one game pixel wide at any zoom and any `ss`: its ends are quantised AFTER
+   the wheel zoom by tagpu_line.h's rule, so a caller hands the end it means -- an engine
    pixel's CENTRE where the engine draws the line from integers, the
    fractional position where the geometry is ours. Triangles carry no such
    rule and must be sized by the caller. */

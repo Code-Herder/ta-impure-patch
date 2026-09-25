@@ -157,8 +157,9 @@ int  tagpu_fog_at(const unsigned short* grid, int cols, int rows, int cells,
    pass that reads them share this header, and a vertex layout copied into a
    second file is two things that can drift. Each entry is {location,
    components, byte offset}. The LINES bucket holds line RECORDS in the same
-   layout, one a line: end A's game pixel after the zoom in x,y, end B's in
-   u,v (tagpu_fx.c `emit_line`), read once per instance. */
+   layout, one a line: the centre of end A's line-grid pixel after the zoom,
+   in game units, in x,y, end B's in u,v (tagpu_fx.c `emit_line`,
+   tagpu_line.h `tagpu_line_centre`), read once per instance. */
 #define TAGPU_FX_VST    9          /* x,y,enc, u,v, c,mode, wx,wz            */
 #define TAGPU_FX_NATTR  4
 #define TAGPU_FX_ATTRS  { {0,3,0}, {1,2,12}, {2,2,20}, {3,2,28} }

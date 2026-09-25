@@ -31,8 +31,8 @@
       unit -- and a line wider than one target pixel needs `wideLines`. So a
       laser or a lightning segment is one record in the LINES bucket, drawn as
       an instance of tagpu_fx.c's LVS/LFS: a band of two triangles round the
-      segment whose fragment stage keeps exactly the game pixels `0x4CC7AB`
-      would plot, each one whole (tagpu_line.h, tagpu_glsl.h). No device
+      segment whose fragment stage keeps exactly the line-grid pixels of
+      `0x4CC7AB`'s walk, `ss` wide (tagpu_line.h, tagpu_glsl.h). No device
       feature is asked for and none can refuse the lines.
 
    3. THE FLASH LIGHT TABLE IS A THREE-BYTE FORMAT, AND VULKAN DOES NOT HAVE
