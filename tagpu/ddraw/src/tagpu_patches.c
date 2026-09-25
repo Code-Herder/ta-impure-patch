@@ -1554,24 +1554,55 @@ static int fix_composite_scratch(void)
 #define ENG_ALLOC(name, size) (((void* (__cdecl*)(const char*, unsigned int))0x004D83B0)((name), (size)))
 #define ENG_FREE(p)           (((void (__cdecl*)(void*))0x004D85A0)(p))
 
+/* The engine's allocator with its out-of-memory exit made unconditional [DISASSEMBLED].
+   0x4D83C0 calls the new handler at [0x5289BC] when malloc fails (0x4D8409..0x4D8412), inside
+   the allocator's critical section, and returns NULL when the slot is empty. The slot is
+   process-global and its setter 0x4D8E50 is called around some of the engine's own
+   allocations -- 0x495ABE until 0x49E6F0 (from 0x495AFD) puts 0x49E700 back, 0x4B3B75 until
+   0x4B3B8F, 0x4B4146 until 0x4B422B -- so a failure on another thread inside such a window
+   returns NULL. On NULL this calls the installed handler 0x49E700 itself (through the
+   out-of-memory text's stub when that fix is armed), which ends the process and never returns;
+   TerminateProcess stands behind it, so nothing after a failed allocation ever runs. */
+static void* eng_alloc_or_exit(const char* name, unsigned int size)
+{
+    void* p = ENG_ALLOC(name, size);
+    if (!p) {
+        ((void (__cdecl*)(void))0x0049E700)();
+        TerminateProcess(GetCurrentProcess(), 3);
+    }
+    return p;
+}
+
 /* pushad's registers, as a stub hands them to C; PR_RET is the return address when the site
    is a call, so the site's own esp is regs + PR_RET + 1 */
 enum { PR_EDI, PR_ESI, PR_EBP, PR_ESP, PR_EBX, PR_EDX, PR_ECX, PR_EAX, PR_RET };
 
 typedef struct FIXSITE { unsigned int va; int n; unsigned char was[20]; unsigned char now[20]; } FIXSITE;
 
-static unsigned char* s_fixCode;
-static unsigned int   s_fixCodeUsed;
+/* The fixes' stubs, each contiguous inside one page. A stub that does not fit the rest of the
+   current page opens another, so no fix fails for want of room; every page is kept for the
+   process, since the patched sites jump into them. */
+static unsigned char* s_fixCode;              /* the page stubs are placed in now             */
+static unsigned int   s_fixCodeUsed;          /* its bytes taken                              */
+static unsigned int   s_fixPages;             /* pages made                                   */
+static unsigned int   s_fixBytes;             /* bytes taken over every page                  */
 
 static unsigned char* fix_code(unsigned int n)
 {
+    unsigned int take = (n + 15u) & ~15u;
     unsigned char* p;
-    if (!s_fixCode)
-        s_fixCode = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
-                                                 PAGE_EXECUTE_READWRITE);
-    if (!s_fixCode || s_fixCodeUsed + n > 0x1000) return NULL;
+    if (!n || take > 0x1000u) return NULL;
+    if (!s_fixCode || s_fixCodeUsed + n > 0x1000u) {
+        unsigned char* page = (unsigned char*)VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE,
+                                                           PAGE_EXECUTE_READWRITE);
+        if (!page) return NULL;
+        s_fixCode = page;
+        s_fixCodeUsed = 0;
+        s_fixPages++;
+    }
     p = s_fixCode + s_fixCodeUsed;
-    s_fixCodeUsed += (n + 15u) & ~15u;
+    s_fixCodeUsed += take;
+    s_fixBytes += take;
     return p;
 }
 
@@ -2691,8 +2722,9 @@ static int fix_weapon_ids(void)
        remote player], and the dispatcher passes a code in state 5 only with bit 1 of its
        entry in the table 0x512BC0 (0x454758), which is filled at run time -- but neither fact
        is what keeps two threads apart; the TLS slot is.
-   The sets grow through the engine's allocator 0x4D83B0, whose failure is the engine's own
-   out-of-memory exit, so no answer is ever given from a set that could not hold it.
+   The sets grow through eng_alloc_or_exit, whose failure is the engine's own out-of-memory
+   exit whatever the handler slot holds, so no answer is ever given from a set that could not
+   hold it.
    A list block with no frame cannot run: both calls of 0x49A120 and both blocks are rows of the
    one fail-closed table, written together or not at all, and nothing else calls 0x49A120. If
    it ever did, the block counts it, logs it once and damages as though the victim were new.
@@ -2756,7 +2788,7 @@ static unsigned int dmg_hash(unsigned int key, unsigned int mask)
 static void dmg_set_grow(DMGSET* t)
 {
     unsigned int cap = t->cap * 2u, i, j;
-    unsigned int* key = (unsigned int*)ENG_ALLOC(s_dmgTag, cap * 4u); /* NULL: the engine's OOM exit */
+    unsigned int* key = (unsigned int*)eng_alloc_or_exit(s_dmgTag, cap * 4u);
     memset(key, 0, cap * 4u);
     for (i = 0; i < t->cap; i++) {
         if (!t->key[i]) continue;
@@ -2925,8 +2957,9 @@ static int fix_victim_caps(void)
    state +0x110 has (& 3) == 1 in slot A and one with == 2 -- airborne -- in slot B
    (0x47CF98), and a contested slot keeps one of them (the loser gets +0x110 bit 27). Area
    damage reads only the two slots of each cell (above), and so does the direct-hit test
-   0x49B090. So of several aircraft over one spot, only the ones holding a slot inside the blast
-   are ever found: the others take no splash at all. MEASURED on the previous build: ten
+   0x49B090. So of several aircraft over one spot, only the ones an in-rect slot names are ever
+   found: the others -- holding no cell, or holding cells only outside the rect while others
+   hold the ones inside it -- take no splash at all. MEASURED on the previous build: ten
    ARMATLAS ordered to one point, up to seven held no cell; a CORFLAK's first burst took the
    four holders from 150 HP to 5-11 and left the five holding none, each within a cell of
    them, at 150. On this build the same burst took all ten, six holding none, to 10-16.
@@ -2948,12 +2981,22 @@ static int fix_victim_caps(void)
    already holds is never offered, so an aircraft stock found (it holds a slot the walk
    visited) is left to stock and a served one is damaged once.
 
-   WHICH AIRCRAFT. air_first builds this call's list from the pool (below): an aircraft is a
-   candidate when its slot in the unit array holds a unit whose +0x110 has the alive bit
-   0x10000000 and (& 3) == 2, whose cargo link +0x86 is 0, whose model +0x9E is not NULL (the
-   engine map's death guard: 0x486D9E frees it before the alive bit clears), whose sort bucket
-   +0x82 is not the off-map bucket *(main+0x142B7), whose footprint +0x76/+0x78, +0x7E/+0x80
-   is at least one cell each way and meets the blast's rect, and which this call has not seen.
+   WHICH AIRCRAFT. air_first builds this call's list from the pool (below). A slot is a
+   candidate when the unit in it
+     - has the alive bit 0x10000000 and (& 3) == 2, and not bit 29 -- slot B's own rule: the
+       stamp sends a bit-29 unit down its yardmap path to slot A (0x47CD5A) whatever its & 3;
+     - is in the grid: its sort bucket +0x82 is neither NULL nor the off-map bucket
+       *(main+0x142B7), and it is not pending death (bit 14). Stock never offers a dying
+       aircraft to its own death explosion: the destructor's grid clear 0x47CBD0 (called at
+       0x48682D) empties its cells and sets +0x82 to NULL (0x47CC19) before the explosion
+       0x49B000 it calls at 0x486D50, whose projectile has no shooter (proj+0x52 = 0,
+       0x49B03E), so the shooter's skip 0x49A259 would not keep it out. Either test excludes it;
+       bit 14 alone would not on a peer that does not own it, where 0x489CE0 never sets it
+       (0x489EDC..0x489EE5, a local owner only);
+     - is not carried (+0x86 is 0) and has its model (+0x9E not NULL: the engine map's death
+       guard, 0x486D9E frees it before the alive bit clears);
+     - has a footprint +0x76/+0x78, +0x7E/+0x80 of at least one cell each way that meets the
+       blast's rect, and is not in this call's unit set.
    The rect is 0x49A120's own: the radius (u16)w[+0xD6] >> 1, c = radius/16 + 1 cells about the
    blast point's cell (x, z of `at` +0x02/+0x0A, each truncated /16 as cdq/and 15/add/sar 4
    do), the low ends raised to 0 and the high ends lowered to W, H (0x49A149..0x49A1C7).
@@ -2967,9 +3010,12 @@ static int fix_victim_caps(void)
    it, and the stamp's airborne path adds each unit it files. So at any explosion the pool
    holds every unit that is airborne and was stamped since the step began, and every unit that
    was airborne when it began: the unit tick's death explosions, the projectile tick 0x49B720,
-   the fire spread and the interceptor tail all see it. What it can miss: a unit whose state
-   turned airborne mid-step through a writer of +0x110 that is not followed by the stamp; such
-   a unit holds no slot either, so it is stock's result for the rest of that step.
+   the fire spread and the interceptor tail all see it. The network pump at 0x4954C8 runs
+   before the rebuild, so an explosion from its 0x0E receiver sees the previous step's pool
+   plus the units stamped since. What it can miss: a unit whose state turned airborne through
+   a writer of +0x110 that is not followed by the stamp, since the last rebuild; such a unit
+   holds no slot either, so it is stock's result until the next rebuild. A stale pool can only
+   miss a victim, never offer a wrong one: air_unit decides every hand-over on the live unit.
 
    THE INVARIANT: every unit handed to the engine was validated alive, airborne, uncarried, on
    the map and inside the rect in this call, at the moment it was handed over, and every index
@@ -2981,8 +3027,10 @@ static int fix_victim_caps(void)
        runs from the network pump and from a saved game's restore on the loader thread, and is
        read by air_first on whatever thread runs area damage; s_airLock covers every read and
        write of it and of s_airIn, and is held only inside this C code, never across engine
-       code. The one engine call made under it is the allocator 0x4D83B0 growing a call's list,
-       and the allocator's own lock is never held while it calls anything that takes this one;
+       code but one: the allocator 0x4D83B0 growing a call's list, which takes its own critical
+       section and calls nothing that takes this one. The lock order is s_airLock, then the
+       allocator's, and never the reverse; the out-of-memory handler 0x49E700 runs inside the
+       allocator's section, or after it from eng_alloc_or_exit, and ends the process;
      - a lifetime: a call's list lives in its frame (the wrapper above), which exists exactly
        while that call runs, so nesting (the interceptor tail at 0x49A764 re-enters area damage
        after the serving is done) gets a list of its own.
@@ -3017,11 +3065,11 @@ static const unsigned char* air_unit(unsigned int slot, const DMGAIR* r)
     if (!u || slot >= count) return NULL;
     u += (size_t)slot * DMG_UNIT_STRIDE;
     memcpy(&st, u + 0x110, 4);
-    if ((st & 0x10000003u) != 0x10000002u) return NULL;
+    if ((st & 0x30004003u) != 0x10000002u) return NULL;
     memcpy(&cargo, u + 0x86, 4);
     if (cargo || !*(void* const*)(u + 0x9E)) return NULL;
     memcpy(&bucket, u + 0x82, 4);
-    if (bucket == *(const unsigned int*)(ta + 0x142B7)) return NULL;
+    if (!bucket || bucket == *(const unsigned int*)(ta + 0x142B7)) return NULL;
     memcpy(&x, u + 0x76, 2); memcpy(&z, u + 0x78, 2);
     memcpy(&fw, u + 0x7E, 2); memcpy(&fh, u + 0x80, 2);
     if (fw <= 0 || fh <= 0) return NULL;
@@ -3083,7 +3131,7 @@ static const unsigned char* __stdcall air_first(const unsigned char* proj, const
         if (!air_unit(slot, &f->air) || dmg_set_has(&f->unit, slot)) continue;
         if (f->air.n == f->air.cap) {
             unsigned int cap = f->air.cap * 2u;
-            unsigned short* p = (unsigned short*)ENG_ALLOC(s_dmgTag, cap * 2u); /* NULL: the engine's OOM exit */
+            unsigned short* p = (unsigned short*)eng_alloc_or_exit(s_dmgTag, cap * 2u);
             memcpy(p, f->air.idx, f->air.n * 2u);
             if (f->air.idx != f->air.inl) ENG_FREE(f->air.idx);
             f->air.idx = p;
@@ -3125,7 +3173,7 @@ static void __cdecl air_rebuild(void)
     s_airN = 0;
     for (i = 0; begin && i < count; i++) {
         memcpy(&st, begin + (size_t)i * DMG_UNIT_STRIDE + 0x110, 4);
-        if ((st & 0x10000003u) == 0x10000002u) {
+        if ((st & 0x30000003u) == 0x10000002u) {
             s_airIn[i] = 1;
             s_airPool[s_airN++] = (unsigned short)i;
         }
@@ -4290,10 +4338,9 @@ static void patch_engine_defects(void)
               "0x465A17 0x465A63; the radar's projectile dots 0x46725F 0x467294 0x467340 "
               "0x467375; the particles 0x47360C 0x473657 0x473A94 0x473AD3 0x4741EC 0x474237 "
               "0x474674 0x4746BB 0x47551E 0x47556C; sound 0x47F431 0x47F476) %s; the projectile pass (0x49BEE8) %s. Own row "
-              "taken at 0x%08X, one LONG per function:%s. Stubs: %u of 4096 bytes at 0x%08X",
+              "taken at 0x%08X, one LONG per function:%s",
               fix_state(los), fix_state(losl), fix_state(pview),
-              (unsigned int)(size_t)s_losOwnRow, fn, s_fixCodeUsed,
-              (unsigned int)(size_t)s_fixCode);
+              (unsigned int)(size_t)s_losOwnRow, fn);
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -4302,6 +4349,11 @@ static void patch_engine_defects(void)
               "0x49A415; the pool: the stamp 0x47CF98, the unit tick's call 0x4954ED) %s. "
               "Aircraft served, counted at 0x%08X",
               fix_state(air), (unsigned int)(size_t)&s_airServed);
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b, "enginefix: the fixes' stubs take %u bytes in %u page(s) of 4096",
+              s_fixBytes, s_fixPages);
     b[sizeof b - 1] = 0;
     plog(b);
 }
