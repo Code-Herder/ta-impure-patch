@@ -2729,7 +2729,13 @@ static int fix_weapon_ids(void)
        (a SIGNED idiv, 0x48BAAB) are likewise unbounded, and whose player block pointer is
        trusted. Its bit reader 0x415DC0 has no end, and the receiver discards the message's own
        [16] size at 0x48B944, so a message with no 0xFFFF inside it is parsed from whatever
-       follows it in the receive buffer.
+       follows it in the receive buffer. Two more unit indices ride inside it, each an optional
+       reference whose 0 the engine takes as no unit: the 0x4FD9E0 move class's payload names
+       a target (u16 at 0x44E0D0, handed to the reference set 0x489690 at 0x44E0FF), and the
+       round robin's full state names the unit's carrier (15 bits at 0x48B56B, the parent of
+       the attach record 0x48AB70 applies at 0x48B58B).
+   The 0x0A attach receiver (the dispatcher's case 0x4553FE -> 0x48AB70) takes both of its
+   record's ids unbounded too (0x48AB8A, 0x48ABAF); no stub here covers it.
 
    THE FIX bounds each value before use. Every stub is entered by a jmp at a clean 5-byte
    boundary, verifies the whole stock span first (all-or-nothing: one non-stock span leaves the
@@ -2757,6 +2763,12 @@ static int wire_index_ok(unsigned int idx, unsigned int max)  { return idx >= 1u
 static int wire_killer_ok(unsigned int idx, unsigned int max) { return idx == 0u || idx <= max; }
 static int wire_type_ok(unsigned int type, unsigned int count){ return type >= 1u && type < count; }
 static int wire_delta_ok(int delta, int n)                    { return delta >= 0 && delta < n; }
+/* an optional unit reference, as the index the engine should see: 0 (no unit) stays 0, a slot
+   stays itself, and an index past the array becomes 0, the engine's own "no unit" */
+static unsigned int wire_ref_idx(unsigned int idx, unsigned int max)
+{
+    return wire_index_ok(idx, max) ? idx : 0u;
+}
 static int wire_bits_ok(unsigned long long pos, unsigned int need, unsigned long long end)
 {
     return pos + need <= end;
@@ -2801,6 +2813,8 @@ static unsigned int s_wireNoBlk09, s_wireNoBlkDirty, s_wireNoBlkRR, s_wireNoArr;
 /* drop counters, per message */
 static unsigned int s_wire09, s_wire09Blk, s_wire0C, s_wire0Ckill, s_wire0B, s_wire2C;
 static unsigned int s_wire2CLen, s_wire2CStale, s_wire2CNoCopy;
+/* a 0x2C reference past the array, made no unit: the move payload's target, the carrier */
+static unsigned int s_wire2CTarget, s_wire2CCarrier;
 /* the splitter's stops and the pump's re-pointed message pointer run on whichever thread pumps */
 static volatile LONG s_wireSplit, s_wirePump;
 /* records accepted off the wire, per receiver: evidence each bound ran on real traffic (the
@@ -3351,6 +3365,60 @@ static int __cdecl wire_s2c_rr_after(unsigned int* r)
     return 1;
 }
 
+/* the unit array's first slot, and its last valid index in *max (0 when there is no array) */
+static const char* wire_units(const char* ta, unsigned int* max)
+{
+    const char* first = ta ? *(const char* const*)(ta + 0x14357) : 0;
+    const char* last  = ta ? *(const char* const*)(ta + 0x1435B) : 0;
+    *max = (first && last >= first) ? (unsigned int)(last - first) / 0x118 : 0u;
+    return first;
+}
+
+/* 0x2C move payload's target, branch at 0x44E0DE in 0x44E080, the payload parse of the
+   0x4FD9E0 move class (a dirty entry's [vt+0x24] 0x490A10 calls it at 0x490A4F), after stock's
+   own test has sent index 0 to 0x44E0DA. ax = the index, nonzero; the sender writes its
+   target's own +0xA8, or 0 for none (0x44DDEC..0x44DDF9). Continue -> 0x44E0FC (push eax; the
+   reference set 0x489690) with eax = the slot, or for an index past the array NULL, counted:
+   0x44E0DA's own value, which 0x489690 takes as no unit (0x4896C3 -> 0x4896E6 clears the
+   reference). ecx and edx as stock leaves them (index*35, main). */
+static int __cdecl wire_2c_target(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned int idx = r[PR_EAX] & 0xFFFF, max, keep;
+    const char* first = wire_units(ta, &max);
+    keep = wire_ref_idx(idx, max);
+    if (keep != idx)
+        wire_drop(&s_wire2CTarget, "a 0x2C move payload names a target past the array; no target",
+                  idx, max);
+    r[PR_EAX] = keep ? (unsigned int)(size_t)(first + (size_t)keep * 0x118) : 0u;
+    r[PR_ECX] = idx * 35u;
+    r[PR_EDX] = (unsigned int)(size_t)ta;
+    return 1;
+}
+
+/* 0x2C round-robin carrier, branch at 0x48B574 in the round robin's full-state tail, in place
+   of stock's mov [esp+0x17],ax. ax = the 15-bit carrier index read at 0x48B56B; the sender
+   writes its carrier's own +0xA8 (0x48B300..0x48B321). The tail packs it as the parent id (+3)
+   of the attach record that 0x48AB70 applies at 0x48B58B and scales into the array unbounded
+   (0x48ABAF..0x48ABC4); its 0 is 0x48AB70's own no parent (0x48ABA9), the detach the tail
+   itself builds at 0x48B5B5. Writes the record's word as stock does -- the index, or for one
+   past the array 0, counted -- leaves the same in ax, and continues -> 0x48B579. */
+static int __cdecl wire_2c_carrier(unsigned int* r)
+{
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned int idx = r[PR_EAX] & 0xFFFF, max, keep;
+    unsigned short word;
+    wire_units(ta, &max);
+    keep = wire_ref_idx(idx, max);
+    if (keep != idx)
+        wire_drop(&s_wire2CCarrier, "a 0x2C round robin names a carrier past the array; no "
+                  "carrier", idx, max);
+    word = (unsigned short)keep;
+    memcpy(WPN_ESP_JMP(r) + 0x17, &word, sizeof word);
+    r[PR_EAX] = (r[PR_EAX] & 0xFFFF0000u) | keep;
+    return 1;
+}
+
 /* ---- stub emission, into fix_code's pages ------------------------------------------------ */
 
 enum {
@@ -3496,6 +3564,17 @@ static int fix_wire_bounds(void)
     static const unsigned char ksw[8]  = { 0x8B,0xD0,0x81,0xE2,0xFF,0xFF,0x00,0x00 };
     static const unsigned char kscode[8] = { 0x8A,0x06,0x3C,0x01,0x88,0x44,0x24,0x28 };
     static const unsigned char kswcode[8] = { 0x8A,0x06,0x3C,0x01,0x88,0x44,0x24,0x2C };
+    /* the move payload's target, from stock's zero test to the reference set's call */
+    static const unsigned char ktg[47] = {
+        0x66,0x3B,0xC5,0x75,0x04,0x33,0xC0,0xEB,0x1E,0x8B,0x15,0xE8,0x1D,0x51,0x00,0x25,
+        0xFF,0xFF,0x00,0x00,0x8B,0xC8,0xC1,0xE0,0x03,0x2B,0xC1,0x8D,0x0C,0x80,0x8B,0x82,
+        0x57,0x43,0x01,0x00,0x8D,0x04,0xC8,0x50,0x8B,0xCB,0xE8,0x8C,0xB5,0x03,0x00 };
+    /* the round robin's attach record, from the child id to the call of 0x48AB70 */
+    static const unsigned char kcr[53] = {
+        0x66,0x8B,0x8F,0xA8,0x00,0x00,0x00,0x6A,0x0F,0x66,0x89,0x4C,0x24,0x15,0x8B,0xCE,
+        0xE8,0x50,0xA8,0xF8,0xFF,0x6A,0x08,0x8B,0xCE,0x66,0x89,0x44,0x24,0x17,0xE8,0xE2,
+        0xA8,0xF8,0xFF,0x8D,0x54,0x24,0x10,0x88,0x5C,0x24,0x16,0x52,0x88,0x44,0x24,0x19,
+        0xE8,0xE0,0xF5,0xFF,0xFF };
     static const WIRESPAN span[] = {
         { 0x004861F7, 41, k09 }, { 0x004866E0, 38, k0c }, { 0x00486753, 37, k0ck },
         { 0x00489CED, 74, k0b }, { 0x0048B960, 14, ken }, { 0x0048B985, 24, kdl },
@@ -3504,6 +3583,7 @@ static int fix_wire_bounds(void)
         { 0x00453585, 21, krx1 }, { 0x0045360F, 21, krx2 }, { 0x004534E0, 1, kpro },
         { 0x00453D90,  9, kpump }, { 0x0048B92B,  8, kcp }, { 0x00463939,  5, ksc },
         { 0x00463B33,  8, ksw }, { 0x004638F0,  8, kscode }, { 0x00463AD5,  8, kswcode },
+        { 0x0044E0D5, 47, ktg }, { 0x0048B55B, 53, kcr },
     };
     static const unsigned char loads[8] = { 0x8B,0x4C,0x24,0x18,0x8B,0x44,0x24,0x10 };
     /* S8, the unsigned remainder, patched in place (movzx ecx,[edx+0x37EE6]; mov eax,ebp;
@@ -3512,8 +3592,8 @@ static int fix_wire_bounds(void)
         0x0F,0xB7,0x8A,0xE6,0x7E,0x03,0x00,0x8B,0xC5,0x33,0xD2,0xF7,0xF1,0x90 };
 
     unsigned char *stop, *a09, *a0c, *a0ck, *a0b, *aen, *adl, *aty, *aaf, *arr, *arra, *afl, *arx;
-    unsigned char *acp, *asc, *asw;
-    FIXSITE s[18];
+    unsigned char *acp, *asc, *asw, *atg, *acr;
+    FIXSITE s[20];
     int i, n = 0;
 
     for (i = 0; i < (int)(sizeof span / sizeof span[0]); i++)
@@ -3536,7 +3616,8 @@ static int fix_wire_bounds(void)
         !(aaf = wire_code(WIRE_EMIT2_LEN)) || !(arr = wire_code(WIRE_EMIT3_LEN)) ||
         !(arra = wire_code(WIRE_EMIT2_LEN)) || !(afl = wire_code(WIRE_TAIL_LEN + 8)) ||
         !(arx = wire_code(WIRE_EMIT1_LEN)) || !(acp = wire_code(WIRE_TAIL_LEN + 8)) ||
-        !(asc = wire_code(WIRE_TAIL_LEN + 5)) || !(asw = wire_code(WIRE_TAIL_LEN + 8)))
+        !(asc = wire_code(WIRE_TAIL_LEN + 5)) || !(asw = wire_code(WIRE_TAIL_LEN + 8)) ||
+        !(atg = wire_code(WIRE_EMIT1_LEN)) || !(acr = wire_code(WIRE_EMIT1_LEN)))
         return FIX_STUB;
     wire_emit_stop(stop);
     wire_emit2(a09, wire_s09, 0x0048622Bu, 0x00486220u);
@@ -3554,6 +3635,8 @@ static int fix_wire_bounds(void)
     wire_emit_tail(acp, wire_s2c_copy, 0x0048BAC8u, kcp, 8, 0x0048B933u);
     wire_emit_tail(asc, wire_split_count, 0x00463949u, ksc, 5, 0x0046393Eu);
     wire_emit_tail(asw, wire_split_walk, 0x00463B91u, ksw, 8, 0x00463B3Bu);
+    wire_emit1(atg, wire_2c_target, 0x0044E0FCu);
+    wire_emit1(acr, wire_2c_carrier, 0x0048B579u);
 
     /* the branch each site takes, at its clean boundary; the stock bytes were verified above */
 #define WIRE_SITE(va_, n_, op_, to_) \
@@ -3575,6 +3658,8 @@ static int fix_wire_bounds(void)
     WIRE_SITE(0x0048B92B, 8, 0xE9, acp);
     WIRE_SITE(0x00463939, 5, 0xE9, asc);
     WIRE_SITE(0x00463B33, 8, 0xE9, asw);
+    WIRE_SITE(0x0044E0DE, 5, 0xE9, atg);
+    WIRE_SITE(0x0048B574, 5, 0xE9, acr);
 #undef WIRE_SITE
     s[n].va = 0x0048BA9F; s[n].n = 14;                         /* S8, in place */
     memcpy(s[n].was, krem, 14); memcpy(s[n].now, remNow, 14); n++;
@@ -3588,14 +3673,14 @@ int tagpu_wire_format(char* buf, unsigned int cap)
     return _snprintf(buf, cap,
                      " | wire: in 09=%u 0b=%u 0c=%u 0d=%u 2c=%u dirty=%u create=%u rr=%u"
                      " drop 09=%u blk=%u 0b=%u 0c=%u kill=%u 2c=%u len=%u stale=%u nocopy=%u"
-                     " 0d=%u split=%u"
+                     " 0d=%u split=%u target=%u carrier=%u"
                      " morph=%u dcreate=%u rcreate=%u ghost=%u argdiff=%u pump=%u"
                      " noblock 09=%u dirty=%u rr=%u noarr=%u",
                      s_wireIn09, s_wireIn0B, s_wireIn0C, s_wireIn0D, s_wireIn2C, s_wireIn2CDirty,
                      s_wireIn2CCreate, s_wireIn2CRR,
                      s_wire09, s_wire09Blk, s_wire0B, s_wire0C, s_wire0Ckill, s_wire2C,
                      s_wire2CLen, s_wire2CStale, s_wire2CNoCopy, s_wireWpnxDrops,
-                     (unsigned int)s_wireSplit,
+                     (unsigned int)s_wireSplit, s_wire2CTarget, s_wire2CCarrier,
                      s_wireMorph, s_wireDCreate, s_wireRCreate, s_wireGhost, s_wireArgDiff,
                      (unsigned int)s_wirePump,
                      s_wireNoBlk09, s_wireNoBlkDirty, s_wireNoBlkRR, s_wireNoArr);
@@ -3607,7 +3692,7 @@ int tagpu_wire_format(char* buf, unsigned int cap)
    else: the stubs and the drop paths rest on the disassembly. */
 static void wire_selfcheck(void)
 {
-    struct { const char* name; int got; int want; } t[24];
+    struct { const char* name; int got; int want; } t[32];
     int n = 0, bad = 0, i;
     t[n].name = "index 0 rejected";        t[n].got = wire_index_ok(0, 100);      t[n].want = 0; n++;
     t[n].name = "index 1 accepted";        t[n].got = wire_index_ok(1, 100);      t[n].want = 1; n++;
@@ -3630,6 +3715,12 @@ static void wire_selfcheck(void)
     t[n].name = "split length 1 accepted";  t[n].got = wire_split_ok(0x0B, 1);     t[n].want = 1; n++;
     t[n].name = "split 0x2C of 6 rejected"; t[n].got = wire_split_ok(0x2C, 6);     t[n].want = 0; n++;
     t[n].name = "split 0x2C of 7 accepted"; t[n].got = wire_split_ok(0x2C, 7);     t[n].want = 1; n++;
+    t[n].name = "ref 0 stays no unit";      t[n].got = (int)wire_ref_idx(0, 100);      t[n].want = 0; n++;
+    t[n].name = "ref 1 kept";               t[n].got = (int)wire_ref_idx(1, 100);      t[n].want = 1; n++;
+    t[n].name = "ref max kept";             t[n].got = (int)wire_ref_idx(100, 100);    t[n].want = 100; n++;
+    t[n].name = "ref max+1 made no unit";   t[n].got = (int)wire_ref_idx(101, 100);    t[n].want = 0; n++;
+    t[n].name = "ref 0xFFFF made no unit";  t[n].got = (int)wire_ref_idx(0xFFFF, 100); t[n].want = 0; n++;
+    t[n].name = "ref with no array no unit"; t[n].got = (int)wire_ref_idx(1, 0);       t[n].want = 0; n++;
     {   /* the block-shape predicate on a synthetic array: begin, N=4, two players */
         char base[1];
         const char* begin = base;
@@ -5342,7 +5433,8 @@ static void patch_engine_defects(void)
               "(the receive's 0x453595 0x45361F, which also keeps the pump's message pointer on "
               "the buffer), block, delta, type, dirty-list move class, after-create, the "
               "round-robin flag and type, and the unsigned round-robin remainder (0x48B960 "
-              "0x48B985 0x48B9AD 0x48BA05 0x48BA5E 0x48B40E 0x48B49C 0x48BA9F); the splitter's "
+              "0x48B985 0x48B9AD 0x48BA05 0x48BA5E 0x48B40E 0x48B49C 0x48BA9F), a move "
+              "payload's target and the round robin's carrier (0x44E0DE 0x48B574); the splitter's "
               "short messages (0x463939 0x463B33); the diverged 0x0D dropped in wpn_rx_fired "
               "(0x49D280). Records accepted, drops, the morph/dcreate/rcreate/ghost oracles and "
               "CreateFromNetwork's no-block refusals are on the heartbeat's 'wire:' section. "
