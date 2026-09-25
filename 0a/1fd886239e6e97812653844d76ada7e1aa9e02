@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=ff1af9c..0a1fd88 findings=3 acted=3 rejected=0 date=2026-09-25 (focused re-review of the first review's fixes: the three new observer sites verified against the exe; acted: no ghost from a cut mask table (maskcut=), the attach/header comments, the COB length's two-opens residual stated)
